@@ -181,6 +181,12 @@ def repair_answer_parts(
     record: Callable[[BaseModel, str], None],
 ) -> tuple[BaseModel, dict[str, Any]]:
     """本文と補助表示を同じ枠内で復旧し、正常な単位は変更しない。"""
+    if getattr(type(value), "_uses_full_answer", False):
+        from rag_engine.generation.full_answer_text_quality import repair_full_answer
+
+        return repair_full_answer(
+            value, original_prompt=original_prompt, original_system=original_system, budget=budget, read=read, record=record
+        )
     if not getattr(type(value), "_uses_typed_answer_parts", False) or _contains_replacement(original_system + original_prompt):
         return value, {}
     value, diagnostic = _repair_primary_parts(

@@ -29,7 +29,7 @@ from app.rag.wiki_models import (
     WikiReadPlan,
     scoped_plan,
 )
-from app.rag.wiki_navigation import PlanningHandles, terminal_sections
+from app.rag.wiki_navigation import PlanningHandles, section_frontier
 from app.schemas.search import RetrievedChunk
 
 FILE_PROMPT = """## Step 1: 質問と文書の案内を読む
@@ -305,21 +305,24 @@ class WikiRetriever:
                     for did in files.document_ids
                 ]
                 read_candidates = interleave(ranking, opts.rag_wiki_candidates)
-                section_members, section_cards = terminal_sections(file_pages)
                 ranked_ids = {page.unit.unit_id: i for i, page in enumerate(read_candidates)}
+                section_members, section_cards = section_frontier(
+                    file_pages, limit=opts.rag_wiki_section_catalog_limit, ranked_ids=ranked_ids
+                )
                 sections = sorted(
                     section_cards,
                     key=lambda sid: min(
                         (ranked_ids.get(uid, len(ranked_ids)) for uid in section_members[sid]),
                         default=len(ranked_ids),
                     ),
-                )[: opts.rag_wiki_section_catalog_limit]
+                )
                 section_inputs = [
                     {
                         **section_cards[sid],
                         "original_chars": sum(
                             len(pages[uid].unit.text) for uid in section_members[sid]
                         ),
+                        "original_units": len(section_members[sid]),
                         "context_preview": pages[section_members[sid][0]].navigation.context[
                             : opts.rag_wiki_section_preview_chars
                         ],

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.rag.wiki_models import WikiDependency, WikiFilePlan, scoped_plan
-from app.rag.wiki_navigation import PlanningHandles, terminal_sections
+from app.rag.wiki_navigation import PlanningHandles, section_frontier
 from tests.test_wiki_retrieval import retriever
 
 
@@ -32,7 +32,7 @@ def test_handles_preserve_question_and_restore_only_bound_ids() -> None:
         handles.decode({"document_ids": ["D2"]})
 
 
-def test_terminal_sections_never_expand_a_common_ancestor() -> None:
+def test_section_frontier_splits_a_common_ancestor_when_the_catalog_fits() -> None:
     search, store, _, _ = retriever()
     pages = [
         page.model_copy(
@@ -42,11 +42,78 @@ def test_terminal_sections_never_expand_a_common_ancestor() -> None:
         )
         for i, page in enumerate(store.pages)
     ]
-    members, cards = terminal_sections(pages)
+    members, cards = section_frontier(pages, limit=len(pages), ranked_ids={})
     assert len(members) == 2
     assert all(len(ids) == 2 for ids in members.values())
     assert all(len(card["path"]) == 3 for card in cards.values())
     assert set(uid for ids in members.values() for uid in ids) == {p.unit.unit_id for p in pages}
+
+
+def test_section_catalog_keeps_direct_parent_content_without_expanding_descendants() -> None:
+    _, store, _, _ = retriever()
+    pages = [
+        page.model_copy(
+            update={
+                "unit": page.unit.model_copy(
+                    update={"section_path": ["文書", "章"] + (["節"] if i else [])}
+                )
+            }
+        )
+        for i, page in enumerate(store.pages)
+    ]
+    members, cards = section_frontier(pages, limit=len(pages), ranked_ids={})
+    represented = {uid for ids in members.values() for uid in ids}
+    assert represented == {p.unit.unit_id for p in pages}
+    parent = next(sid for sid, card in cards.items() if card["path"] == ["文書", "章"])
+    assert members[parent] == [pages[0].unit.unit_id]
+    assert not set(members[parent]).intersection(p.unit.unit_id for p in pages[1:])
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3, 10])
+def test_bounded_section_frontier_covers_all_original_units(limit: int) -> None:
+    _, store, _, _ = retriever()
+    template = store.pages[0]
+    pages = [
+        template.model_copy(
+            update={
+                "unit": template.unit.model_copy(
+                    update={
+                        "unit_id": f"unit-{i}",
+                        "section_path": ["文書", f"章{i // 3}", f"節{i}"],
+                    }
+                )
+            }
+        )
+        for i in range(12)
+    ]
+    members, cards = section_frontier(pages, limit=limit, ranked_ids={"unit-11": 0})
+    assert len(cards) <= limit
+    ids = [uid for units in members.values() for uid in units]
+    assert len(ids) == len(set(ids)) == len(pages)
+    assert set(ids) == {p.unit.unit_id for p in pages}
+    for sid, units in members.items():
+        path = cards[sid]["path"]
+        assert all(
+            p.unit.section_path[: len(path)] == path for p in pages if p.unit.unit_id in units
+        )
+
+
+def test_section_frontier_keeps_document_and_saved_version_boundaries() -> None:
+    _, store, _, _ = retriever()
+    pages = [
+        page.model_copy(
+            update={"unit": page.unit.model_copy(update={"chunk_set_id": f"saved-{i % 2}"})}
+        )
+        for i, page in enumerate(store.pages)
+    ]
+    members, _ = section_frontier(pages, limit=2, ranked_ids={})
+    for ids in members.values():
+        assert (
+            len({(p.unit.document_id, p.unit.chunk_set_id) for p in pages if p.unit.unit_id in ids})
+            == 1
+        )
+    with pytest.raises(ValueError, match="保存版数"):
+        section_frontier(pages, limit=1, ranked_ids={})
 
 
 @pytest.mark.asyncio

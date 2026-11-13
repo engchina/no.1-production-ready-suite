@@ -114,7 +114,7 @@ def test_nested_retry_scopes_share_budget_and_restore_on_exit():
 
 @pytest.mark.parametrize("recover", [True, False])
 def test_product_answer_retains_clean_part_and_discloses_partial_failure(recover):
-    from test_answer_flow_single_generation import OTHER, ROW, _answer, _ids, _settings, _source, _units, _unused
+    from test_answer_flow_single_generation import OTHER, ROW, _settings, _units, _unused
     from test_grounded_answer import context, record
 
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -125,21 +125,18 @@ def test_product_answer_retains_clean_part_and_discloses_partial_failure(recover
 
     def model(system, prompt, settings, schema, **kwargs):
         calls.append(schema.__name__)
-        if schema.__name__ == "AnswerPartTextRepair":
+        if schema.__name__ == "SupportingTextRepair":
             targets = json.loads(prompt.rsplit("\n", 1)[-1])["targets"]
             assert [row["index"] for row in targets] == [1]
             if recover:
-                targets[0]["part"]["answer"]["reasoning"] = "原文の記載を読む。"
+                targets[0]["part"] = "年1回の点検です。[C2]"
             return schema.model_validate({"items": targets})
         units = _units(prompt)
         return schema.model_validate(
             {
                 "response_kind": "answered",
-                "answer_parts": [
-                    _source(_ids(question)[0], "保存年数", units[ROW]),
-                    _answer(_ids(question)[0], "点検", units[OTHER], "説明�", "年1回の点検です。"),
-                ],
-                "summary_part_indexes": [0],
+                "answer_body": "保存年数は5年です。[C1]\n\n説明�[C2]",
+                "citations": [{"unit_ids": [units[ROW]]}, {"unit_ids": [units[OTHER]]}],
                 "confidence": "high",
             }
         )
@@ -151,8 +148,8 @@ def test_product_answer_retains_clean_part_and_discloses_partial_failure(recover
             _settings(),
             image_prompt_mode="text_only",
         ).response
-    assert calls == ["GroundedDraftWire", "AnswerPartTextRepair"]
-    assert ROW in response.answer_text and "�" not in response.answer_text
+    assert calls[0] == "FullAnswerWire" and set(calls[1:]) == {"SupportingTextRepair"}
+    assert "保存年数は5年です。" in response.answer_text and "�" not in response.answer_text
     diagnostic = response.generation_trace["generation_text_quality"]
     assert diagnostic["status"] == ("recovered" if recover else "partial_failure")
     if not recover:
@@ -184,7 +181,7 @@ def test_repair_cannot_reassign_the_part_to_another_subquestion():
 
 
 def test_all_failed_product_output_keeps_input_receipt_and_has_a_specific_failure_code():
-    from test_answer_flow_single_generation import ROW, _answer, _ids, _settings, _units, _unused
+    from test_answer_flow_single_generation import ROW, _settings, _units, _unused
     from test_grounded_answer import context, record
 
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -195,14 +192,14 @@ def test_all_failed_product_output_keeps_input_receipt_and_has_a_specific_failur
 
     def model(system, prompt, settings, schema, **kwargs):
         calls.append(schema.__name__)
-        if schema.__name__ == "AnswerPartTextRepair":
+        if schema.__name__ == "SupportingTextRepair":
             return schema.model_validate({"items": json.loads(prompt.rsplit("\n", 1)[-1])["targets"]})
         units = _units(prompt)
         return schema.model_validate(
             {
                 "response_kind": "answered",
-                "answer_parts": [_answer(_ids(question)[0], "保存年数", units[ROW], "説明�", "5年です。")],
-                "summary_part_indexes": [0],
+                "answer_body": "説明�[C1]",
+                "citations": [{"unit_ids": [units[ROW]]}],
                 "confidence": "high",
             }
         )
@@ -211,7 +208,7 @@ def test_all_failed_product_output_keeps_input_receipt_and_has_a_specific_failur
         response = synthesize_grounded_answer(
             question, context(record(0, ROW, "合成資料", source="synthetic.md")), _settings(), image_prompt_mode="text_only"
         ).response
-    assert calls == ["GroundedDraftWire", "AnswerPartTextRepair"]
+    assert calls[0] == "FullAnswerWire" and set(calls[1:]) == {"SupportingTextRepair"}
     assert response.generation_trace["generation_failure"]["category"] == "answer_part_text_quality"
     assert not response.generation_trace["escalation_signals"]
     assert ROW in response.answer_text and "�" not in response.answer_text

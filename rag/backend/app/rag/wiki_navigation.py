@@ -89,27 +89,52 @@ class PlanningHandles:
         return result
 
 
-def terminal_sections(
-    pages: Sequence[WikiPage],
+def section_frontier(
+    pages: Sequence[WikiPage], *, limit: int, ranked_ids: Mapping[str, int]
 ) -> tuple[dict[str, list[str]], dict[str, dict[str, Any]]]:
-    """子章節のある広い祖先は読取対象にせず、末端章節は全単位を含める。"""
-    keys = {
-        (p.unit.document_id, p.unit.chunk_set_id, tuple(p.unit.section_path))
-        for p in pages
-        if p.unit.section_path
-    }
-    ancestors = {
-        (did, saved, path[:depth]) for did, saved, path in keys for depth in range(1, len(path))
-    }
-    leaves = keys - ancestors
-    members: dict[str, list[str]] = {}
-    cards: dict[str, dict[str, Any]] = {}
+    """原文全体を覆う章節の境界を予算内で細かくする。末尾の章節を捨てない。"""
+    grouped: dict[tuple[str, str], list[WikiPage]] = {}
     for page in pages:
-        unit = page.unit
-        key = unit.document_id, unit.chunk_set_id, tuple(unit.section_path)
-        if key not in leaves:
-            continue
-        sid = fingerprint([unit.document_id, unit.chunk_set_id, unit.section_path])
-        members.setdefault(sid, []).append(unit.unit_id)
-        cards[sid] = {"section_id": sid, "document_id": unit.document_id, "path": unit.section_path}
+        grouped.setdefault((page.unit.document_id, page.unit.chunk_set_id), []).append(page)
+    frontier = list(grouped.values())
+    if len(frontier) > limit:
+        raise ValueError("章節候補の上限は、選択した文書の保存版数以上にしてください。")
+
+    def common_path(group: Sequence[WikiPage]) -> tuple[str, ...]:
+        paths = [p.unit.section_path for p in group]
+        shared: list[str] = []
+        for column in zip(*paths, strict=False):
+            if len(set(column)) != 1:
+                break
+            shared.append(column[0])
+        return tuple(shared)
+
+    while True:
+        options = []
+        for index, group in enumerate(frontier):
+            prefix = common_path(group)
+            children: dict[str | None, list[WikiPage]] = {}
+            for page in group:
+                path = page.unit.section_path
+                child = path[len(prefix)] if len(path) > len(prefix) else None
+                children.setdefault(child, []).append(page)
+            if len(children) <= 1 or len(frontier) - 1 + len(children) > limit:
+                continue
+            rank = min(
+                (ranked_ids.get(p.unit.unit_id, len(ranked_ids)) for p in group),
+                default=len(ranked_ids),
+            )
+            options.append(((len(prefix), rank, index), index, list(children.values())))
+        if not options:
+            break
+        _, index, children = min(options, key=lambda value: value[0])
+        frontier[index : index + 1] = children
+
+    members, cards = {}, {}
+    for group in frontier:
+        first = group[0].unit
+        path = list(common_path(group))
+        sid = fingerprint([first.document_id, first.chunk_set_id, path])
+        members[sid] = [p.unit.unit_id for p in group]
+        cards[sid] = {"section_id": sid, "document_id": first.document_id, "path": path}
     return members, cards
