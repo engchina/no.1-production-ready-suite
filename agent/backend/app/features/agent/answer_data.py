@@ -391,6 +391,11 @@ class DataIndex:
             raise DataReferenceError(str(exc)) from exc
 
 
+def has_data_reference(text: str) -> bool:
+    """回答の形式契約にあるデータ参照を含むか。実在はDataIndexで別途検証する。"""
+    return _REFERENCE.search(text) is not None
+
+
 def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) -> DataIndex:
     cells: dict[str, Any] = {}
     tables: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}

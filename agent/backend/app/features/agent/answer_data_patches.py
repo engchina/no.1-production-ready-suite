@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from copy import copy
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +39,7 @@ class PatchTarget:
     end: int
     text: str
     error: str
+    required_references: tuple[str, ...] = ("data",)
 
 
 @dataclass(frozen=True)
@@ -53,11 +54,23 @@ class PatchPlan:
     def payload(self) -> dict[str, Any]:
         return {
             "targets": [
-                {"target_id": t.target_id, "text": t.text, "error": t.error} for t in self.targets
+                {
+                    "target_id": t.target_id,
+                    "text": t.text,
+                    "error": t.error,
+                    "required_references": list(t.required_references),
+                }
+                for t in self.targets
             ],
         }
 
-    def apply(self, response: ReferencePatches, *, current_answer: str) -> str:
+    def apply(
+        self,
+        response: ReferencePatches,
+        *,
+        current_answer: str,
+        references: Callable[[str], Collection[str]],
+    ) -> str:
         if hashlib.sha256(current_answer.encode("utf-8")).hexdigest() != self.sha256:
             raise DataReferenceError("参照修正の対象の回答が一致しません。")
         patches = {item.target_id: item.replacement for item in response.patches}
@@ -74,7 +87,12 @@ class PatchPlan:
                 or self.answer[target.start : target.end] != target.text
             ):
                 raise DataReferenceError("参照修正の対象の範囲が一致しません。")
-            parts.extend((self.answer[cursor : target.start], patches[target.target_id]))
+            replacement = patches[target.target_id]
+            if not replacement.strip() or not set(target.required_references).issubset(
+                references(replacement)
+            ):
+                raise DataReferenceError("修正箇所には対応する種類の取得済み参照を残してください。")
+            parts.extend((self.answer[cursor : target.start], replacement))
             cursor = target.end
         return "".join([*parts, self.answer[cursor:]])
 
@@ -117,10 +135,24 @@ def plan_patches(answer: str, validate: Callable[[str], Any]) -> PatchPlan:
     return PatchPlan(
         answer,
         tuple(
-            PatchTarget(f"P{number}", start, end, answer[start:end], error)
+            PatchTarget(
+                f"P{number}",
+                start,
+                end,
+                answer[start:end],
+                error,
+                _required_references(answer[start:end], table=(start, end) in tables),
+            )
             for number, (start, end, error) in enumerate(ranges, start=1)
         ),
     )
+
+
+def _required_references(text: str, *, table: bool) -> tuple[str, ...]:
+    kinds: set[str] = {"data"} if table else set()
+    for marker in _MARKER.finditer(text):
+        kinds.add("source" if marker[0].startswith(("[[cite:", "【根拠:")) else "data")
+    return tuple(sorted(kinds))
 
 
 PATCH_INSTRUCTIONS = (
