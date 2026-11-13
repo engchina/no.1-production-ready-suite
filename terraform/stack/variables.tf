@@ -1,6 +1,7 @@
 variable "region" {
-  description = "Deployment region supplied by Resource Manager; required explicitly for CLI execution."
+  description = "Deployment region selected in the Resource Manager form and used by the provider and runtime clients."
   type        = string
+  default     = "ap-osaka-1"
 
   # Compute の image（schema.yaml の instance_image_source_id）を用意しているリージョンだけを許す（#660）。
   validation {
