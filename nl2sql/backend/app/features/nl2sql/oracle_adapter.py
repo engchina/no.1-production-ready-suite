@@ -25,6 +25,7 @@ from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.model_usage import UNMEASURED_SOURCE_ATTRIBUTE
 from pr_backend_core.observability.tracing import observed_span
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
+from pr_backend_core.oracle_errors import is_oracle_connection_error
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
 from pr_backend_core.oracle_session import init_oracle_session, local_session_time_zone
 from pr_backend_core.timezones import session_time_zone_offset
@@ -70,6 +71,27 @@ logger = logging.getLogger(__name__)
 
 class OracleAdapterError(RuntimeError):
     """Oracle adapter の実行時エラー。"""
+
+
+class OracleSelectPreparationError(OracleAdapterError):
+    """SELECT の非実行解析で得た Oracle 診断。分類不能な失敗は修正対象にしない。"""
+
+    def __init__(self, message: str, *, code: int = 0, offset: int = 0) -> None:
+        super().__init__(f"{message} (offset={offset})")
+        self.code = code
+        self.offset = offset
+
+    @property
+    def allows_generation_repair(self) -> bool:
+        # ORA-00942 は存在しない表と権限不足を区別できないため、生成の修正へ渡さない。
+        cause: BaseException | None = self
+        seen: set[int] = set()
+        while cause is not None and id(cause) not in seen and len(seen) < 10:
+            seen.add(id(cause))
+            if is_oracle_connection_error(cause):
+                return False
+            cause = cause.__cause__ or cause.__context__
+        return 900 <= self.code <= 999 and self.code != 942
 
 
 class SelectAiFeedbackNotFoundError(OracleAdapterError):
@@ -1807,6 +1829,38 @@ class OracleNl2SqlAdapter:
                 raise
             raise OracleAdapterError(f"生成用サンプルの取得に失敗しました: {exc}") from exc
         return samples, warnings
+
+    def prepare_select(self, sql: str) -> None:
+        """安全性・対象範囲を確認済みの SELECT を、実行と同じ actor の接続で解析する。
+
+        parse は DDL を実行し得るため、ここでも SELECT 系の単一 AST に限定する。
+        行の取得や実行はしない。接続の取得・権限・timeout の失敗は SQL 修正で隠さない。
+        """
+        from .sql_semantics import parse_oracle_sql
+
+        if parse_oracle_sql(sql).graph is None:
+            raise OracleAdapterError("SELECT の単一文だけを実行前に解析できます。")
+        try:
+            with (
+                self.user_data_connection(read_only=True) as conn,
+                self._business_session_time_zone(conn, admin_control_plane=False),
+                conn.cursor() as cursor,
+            ):
+                try:
+                    cursor.parse(sql)
+                except Exception as exc:
+                    error = exc.args[0] if exc.args else None
+                    code = getattr(error, "code", 0)
+                    offset = getattr(error, "offset", 0)
+                    raise OracleSelectPreparationError(
+                        f"SELECT の実行前解析に失敗しました: {exc}",
+                        code=code if isinstance(code, int) else 0,
+                        offset=offset if isinstance(offset, int) else 0,
+                    ) from exc
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            raise OracleAdapterError(f"SELECT の実行前解析に失敗しました: {exc}") from exc
 
     def execute_select(
         self,

@@ -459,6 +459,7 @@ from .ontology_service import BUSINESS_SCOPE_CHANGED_CODE, OntologyGateBlockedEr
 from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
+    OracleSelectPreparationError,
     SelectAiCredentialMissingError,
     SelectAiFeedbackNotFoundError,
     TabularImportValidationError,
@@ -24333,6 +24334,8 @@ class Nl2SqlService:
                 ontology_context=ontology_context,
                 use_glossary=request.use_glossary,
                 sql_requirement=request.sql_requirement,
+                prepare_for_execution=not request.generation_only,
+                before_attempt=partial(self._raise_if_job_cancelled, job_id),
             )
             stage_trace.set_display(details=_job_progress_generate_details(generated))
             stage_trace.set_call_output(
@@ -24988,6 +24991,8 @@ class Nl2SqlService:
         *,
         use_glossary: bool = False,
         sql_requirement: SqlRequirementSpec | None = None,
+        prepare_for_execution: bool = False,
+        before_attempt: Callable[[], None] | None = None,
     ) -> GeneratedSql:
         if (
             self._incremental_repository is None
@@ -25009,6 +25014,8 @@ class Nl2SqlService:
             allow_deterministic_fallback=engine != Nl2SqlEngine.SELECT_AI_AGENT,
             engine_timings=engine_timings,
             sql_requirement=sql_requirement,
+            prepare_for_execution=prepare_for_execution,
+            before_attempt=before_attempt,
         )
 
     def _generate_sql(
@@ -25028,6 +25035,8 @@ class Nl2SqlService:
         runtime_max_retries: int | None = None,
         engine_timings: list[dict[str, Any]] | None = None,
         sql_requirement: SqlRequirementSpec | None = None,
+        prepare_for_execution: bool = False,
+        before_attempt: Callable[[], None] | None = None,
     ) -> GeneratedSql:
         """SQL を生成する（3 つの生成方法と deterministic の共通の出口）。
 
@@ -25038,6 +25047,8 @@ class Nl2SqlService:
         feedback: dict[str, Any] | None = None
         rejected_sql = ""
         for attempt in range(2):
+            if before_attempt is not None:
+                before_attempt()
             generated = self._generate_sql_with_engine(
                 engine,
                 question,
@@ -25080,11 +25091,39 @@ class Nl2SqlService:
                 if semantic.graph is not None:
                     findings.extend(
                         column_binding_violations(
-                            generated.generated_sql,
+                            validation_sql(generated.generated_sql),
                             generated.schema_catalog.tables if generated.schema_catalog else [],
                             owner=self._current_schema_owner(),
                         )
                     )
+            if (
+                not findings
+                and prepare_for_execution
+                and generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+                and self._use_oracle_runtime()
+            ):
+                analysis = self.analyze_sql(
+                    generated.generated_sql,
+                    allowed,
+                    row_limit,
+                    catalog=generated.schema_catalog,
+                    engine=generated.engine,
+                )
+                if analysis.safety.is_safe and analysis.safety.safety_checked:
+                    if before_attempt is not None:
+                        before_attempt()
+                    composed, _binds = executable_with_attachments(
+                        normalize_executable_sql(generated.generated_sql)
+                    )
+                    try:
+                        self._oracle_adapter.prepare_select(composed)
+                    except OracleSelectPreparationError as exc:
+                        if not exc.allows_generation_repair:
+                            raise
+                        findings.append(
+                            f"SQL_ORACLE_PARSE_INVALID: ORA-{exc.code:05d} "
+                            f"offset={exc.offset}: {exc}"
+                        )
             if not findings:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
                     generated.engine_meta["sql_validation_attempts"] = attempt + 1
