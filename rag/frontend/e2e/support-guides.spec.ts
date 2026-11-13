@@ -1105,8 +1105,6 @@ test("貼り付けた回答の過程のテキストからも下書きを作れ�
   await question.pressSequentially("合成の質問の第二行");
   await expect(question).toHaveValue("合成の質問の第一行\n合成の質問の第二行");
   expect(api.requests.filter((item) => item.path.endsWith("/import/process/preview"))).toHaveLength(0);
-  await question.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("multiline-process-import-question.png") });
   await process.getByRole("textbox", { name: "回答の過程" }).fill("【回答の手順】\n設定画面Aを開く");
   await process.getByRole("button", { name: "AI で下書きを作る" }).click();
   await expect(process.getByText("1 行のうち 1 件を下書きにできます。")).toBeVisible();
@@ -1115,6 +1113,8 @@ test("貼り付けた回答の過程のテキストからも下書きを作れ�
     rows: [{ row: 1, question: "合成の質問の第一行\n合成の質問の第二行", process: "【回答の手順】\n設定画面Aを開く" }],
   });
   await expectNoPageOverflow(page);
+  await question.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath("multiline-process-import-question.png") });
 });
 
 async function useTheme(page: Page, theme: "light" | "dark") {
