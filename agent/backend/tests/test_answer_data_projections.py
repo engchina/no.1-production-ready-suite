@@ -222,8 +222,17 @@ def test_runtime_repairs_to_projection_once_without_replaying_tools(
         assert refs["column_refs"]["CHANGE"] == 3
         return [
             assistant_message(
-                "結果\n[[table:T1:rows=1-8:cols=2,1,3]]\n\n項目\n"
-                "[[table:T1:rows=1:cols=3:layout=vertical]]"
+                json.dumps(
+                    {
+                        "patches": [
+                            {
+                                "target_id": "P1",
+                                "replacement": "結果\n[[table:T1:rows=1-8:cols=2,1,3]]\n\n項目\n"
+                                "[[table:T1:rows=1:cols=3:layout=vertical]]",
+                            }
+                        ]
+                    }
+                )
             )
         ]
 

@@ -293,7 +293,13 @@ def test_runtime_keeps_selected_rows_and_repairs_only_typed_reference_format(
             if isinstance(item, dict) and item.get("type") == "function_call_output"
         ]
         refs = outputs[-1]["answer_data"]
-        quantity = refs["cells"][0]["CHANGE"] + "%" if invalid else refs["quantities"][0]["CHANGE"]
+        quantity = refs["cells"][0]["CHANGE"] if invalid else refs["quantities"][0]["CHANGE"]
+        if repair_first and not invalid:
+            return [
+                assistant_message(
+                    json.dumps({"patches": [{"target_id": "P1", "replacement": quantity}]})
+                )
+            ]
         return [
             assistant_message(
                 "選択した行\n" + _matrix(refs, list(range(8))) + "\n\n値は" + quantity + "。"

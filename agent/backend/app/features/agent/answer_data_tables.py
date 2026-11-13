@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +29,35 @@ def _parts(line: str) -> list[str]:
     return [part.strip() for part in re.split(r"(?<!\\)\|", text)]
 
 
+def table_spans(answer: str) -> Iterator[tuple[int, int]]:
+    """同じ表構文の境界を、元テキストのcodepoint位置で返す。"""
+    lines = answer.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    index = 0
+    while index + 1 < len(lines):
+        end = _table_end(lines, index)
+        if end is not None:
+            yield offsets[index], offsets[end]
+            index = end
+        else:
+            index += 1
+
+
+def _table_end(lines: list[str], index: int) -> int | None:
+    if index + 1 >= len(lines):
+        return None
+    rule = _parts(lines[index + 1])
+    syntax = len(rule) > 1 or bool(_PIPE.search(lines[index]) or _PIPE.search(lines[index + 1]))
+    if not (syntax and rule and all(_RULE.fullmatch(part) for part in rule)):
+        return None
+    end = index + 2
+    while end < len(lines) and "|" in lines[end] and lines[end].strip():
+        end += 1
+    return end
+
+
 def render_reference_tables(
     answer: str,
     *,
@@ -41,21 +70,13 @@ def render_reference_tables(
     rendered: list[str] = []
     index = 0
     while index < len(lines):
-        if index + 1 < len(lines):
-            rule = _parts(lines[index + 1])
-            table_syntax = len(rule) > 1 or bool(
-                _PIPE.search(lines[index]) or _PIPE.search(lines[index + 1])
-            )
-            if table_syntax and rule and all(_RULE.fullmatch(part) for part in rule):
-                end = index + 2
-                body: list[list[str]] = []
-                while end < len(lines) and "|" in lines[end] and lines[end].strip():
-                    body.append(_parts(lines[end]))
-                    end += 1
-                if any(is_reference_data(part) for row in body for part in row):
-                    rendered.append(_matrix(_parts(lines[index]), body, resolve, markdown))
-                    index = end
-                    continue
+        end = _table_end(lines, index)
+        if end is not None:
+            body = [_parts(line) for line in lines[index + 2 : end]]
+            if any(is_reference_data(part) for row in body for part in row):
+                rendered.append(_matrix(_parts(lines[index]), body, resolve, markdown))
+                index = end
+                continue
         # 展開済みの値をもう一度参照として解釈しない。
         rendered.append(render_scalar(lines[index]))
         index += 1
