@@ -433,7 +433,7 @@ test("索引が参照する過去版は現在の履歴ページに無くても I
 });
 
 
-for (const key of ["answer_evidence_budget_limited", "answer_part_generation_failed"]) {
+for (const key of ["answer_evidence_budget_limited", "answer_part_generation_failed"] as const) {
   test(`${key} の案内を名前と説明で編集できる`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     const text = key === "answer_evidence_budget_limited"
       ? "入力の上限により {count} 件の根拠を省略しました。"

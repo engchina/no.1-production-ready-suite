@@ -88,6 +88,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         # 生成に渡す根拠の原文の文字予算(#3776)。
         "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
+        "batch_read_workers": resolved_settings.rag_batch_read_workers,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
         # 回答の LLM の時間の短縮(#1499)。

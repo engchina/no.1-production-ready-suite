@@ -40,4 +40,8 @@ Wiki が未準備・失敗・時間切れの場合は `diagnostics.wiki` と縮�
 
 通信・構造化出力・文字が破損した回答単位の再試行は同じ生成の予算を共有する。同一応答の完了本文が破損していて、出典の一致する完全本文の event があるときは既存のストリーム復旧を使う。それでも残った文字の破損は、同じ原文を再利用して影響を受けた回答・参考資料などの単位だけを再試行する。正常な単位は保ち、復旧できなかった単位は部分失敗として明示する。schema と引用の検査は継続し、文字の破損だけで構造化出力全体を拒否しない。
 
+## 既存環境への切替前の確認
+
+部分失敗の表示に `answer_labels.answer_part_generation_failed` を追加する。保存済みの言語資源にこの項目がない場合は、Wiki を無効にしていても現行の完全な保存契約に合わない。merge・配備前に[言語資源のデータ準備の門禁](language-pack-current-contract.md#配備前のデータ準備の門禁)に従って保存原値を読み取りだけで確認する。必要な修復は同文書の `language_pack_repair_cli` の dry-run で候補と取込 hash の不変を確かめ、許可を受けて新しい公開版を発行する。既存の公開版・hash・履歴は書き換えず、読み取り時の暗黙の補完は追加しない。
+
 考え方の参照: [Anthropic Contextual Retrieval](https://www.anthropic.com/research/contextual-retrieval) の事前文脈化、[Microsoft の文書分割](https://learn.microsoft.com/en-us/azure/search/vector-search-how-to-chunk-documents) の構造単位とメタデータ、LLM Wiki の蓄積した案内から原文へ辿る考え方。別の SaaS・LLM provider・vector DB は導入しない。
