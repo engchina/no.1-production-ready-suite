@@ -28,3 +28,24 @@ def test_oracle_prepare_alias_and_pseudocolumn() -> None:
         "SELECT 1 AS A FROM DUAL UNION ALL SELECT 2 AS B FROM DUAL",
     ]:
         adapter.prepare_select(sql)
+
+
+@pytest.mark.parametrize("literal", ["あ", "😀", "あ😀"])
+def test_unicode_native_offset_maps_to_actual_token(literal: str) -> None:
+    from app.features.nl2sql.oracle_sql_diagnostics import oracle_parse_diagnostic
+
+    sql = f"SELECT '{literal}' AS LEVEL FROM DUAL"
+    adapter = OracleNl2SqlAdapter(get_settings())
+    with pytest.raises(OracleSelectPreparationError) as failure:
+        adapter.prepare_select(sql)
+    error = failure.value
+    expected = sql.index("LEVEL")
+    assert error.offset == len(sql[:expected].encode("utf-8"))
+    diagnostic = oracle_parse_diagnostic(
+        sql, code=error.code, offset=error.offset, offset_basis=error.offset_basis
+    )
+    location = diagnostic["location"]
+    assert location is not None
+    assert location["character_offset"] == expected
+    assert location["line_1_based"] == 1 and location["column_1_based"] == expected + 1
+    assert location["token"] is not None and location["token"]["text"] == "LEVEL"

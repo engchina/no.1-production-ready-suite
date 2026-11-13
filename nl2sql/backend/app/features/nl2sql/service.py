@@ -466,6 +466,7 @@ from .oracle_adapter import (
     select_ai_object_list_entry,
 )
 from .oracle_dialect import OracleConversion, normalize_generated_grouping
+from .oracle_sql_diagnostics import OracleSqlDiagnostic, oracle_parse_diagnostic
 from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
     QUESTION_TO_SQL_PROMPT,
@@ -25080,6 +25081,7 @@ class Nl2SqlService:
                     generated.generated_sql = normalized
 
             findings: list[str] = []
+            oracle_diagnostics: list[OracleSqlDiagnostic] = []
             if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
                 semantic = parse_oracle_sql(generated.generated_sql)
                 findings.extend(
@@ -25123,13 +25125,32 @@ class Nl2SqlService:
                             f"SQL_ORACLE_PARSE_INVALID: ORA-{exc.code:05d} "
                             f"offset={exc.offset}: {exc}"
                         )
+                        try:
+                            diagnostic = oracle_parse_diagnostic(
+                                composed,
+                                code=exc.code,
+                                offset=exc.offset,
+                                offset_basis=exc.offset_basis,
+                            )
+                        except Exception:
+                            # 補足の診断が作れなくても、元の解析エラーと修正回数を保持する。
+                            # SQL 片を含み得る診断の例外をログやメッセージへ出さない。
+                            diagnostic = None
+                        if diagnostic is not None:
+                            oracle_diagnostics.append(diagnostic)
             if not findings:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
                     generated.engine_meta["sql_validation_attempts"] = attempt + 1
                     generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
                 return generated
             rejected_sql = generated.generated_sql
-            feedback = {"rejected_sql": rejected_sql, "violations": findings}
+            feedback = {
+                "operation": "repair_rejected_sql",
+                "rejected_sql": rejected_sql,
+                "violations": findings,
+            }
+            if oracle_diagnostics:
+                feedback["oracle_diagnostics"] = oracle_diagnostics
         raise SqlGenerationValidationError(" / ".join(findings))
 
     def _generate_sql_with_engine(
