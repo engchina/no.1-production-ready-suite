@@ -1,0 +1,63 @@
+{
+  "contract": {
+    "mode": "referenced_report",
+    "budget": {
+      "metric": "expanded_markdown_without_citation_markers_codepoints",
+      "soft_target": 30,
+      "hard_max": null
+    }
+  },
+  "ledger": {
+    "schema_version": 1,
+    "run_id": "run-legacy",
+    "contract_digest": "75741f9cd9d2e2c29aa0cc469fa9e6f45ad5d706e4879b42a3bca5835799018e",
+    "next_number": 2,
+    "records": [
+      {
+        "preview_id": "A1",
+        "operation_key": "operation-legacy",
+        "plan": {
+          "blocks": [
+            {
+              "kind": "narrative",
+              "text": "合成の要約。【根拠: chunk-a】"
+            },
+            {
+              "kind": "table",
+              "table": "T1",
+              "rows": null,
+              "cols": null,
+              "layout": "horizontal"
+            }
+          ]
+        },
+        "plan_digest": "3984a21d81cb0d0e078417e452514169e0128549766d43424ea39c1b06977386",
+        "body": "合成の要約。【根拠: chunk-a】\n\n| 項目 | 値 |\n| --- | --- |\n| A | 【根拠: literal-in-cell】 |\n",
+        "evidence_text": "【根拠: chunk-a】",
+        "source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "body_digest": "2f25b91d25ea433875e56adbb96ad5b08657f0c4e2e7bbf5c247ca3c1b16648c",
+        "block_costs": [
+          {
+            "index": 1,
+            "kind": "narrative",
+            "expanded_codepoints": 19
+          },
+          {
+            "index": 2,
+            "kind": "table",
+            "expanded_codepoints": 54
+          }
+        ],
+        "composition_delta_chars": 3,
+        "total_codepoints": 76,
+        "remaining_target": -33,
+        "remaining_hard": null,
+        "status": "OVER_TARGET",
+        "incomplete": false,
+        "record_digest": "194beff2685ad73ced9a447844eea6ce00f1a86186b27fbb85e7dbb30aae553a"
+      }
+    ]
+  },
+  "budget_codepoints": 63,
+  "citation_marker_codepoints": 13
+}

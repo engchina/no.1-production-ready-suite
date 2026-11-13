@@ -700,6 +700,157 @@ def test_program_literals_and_newline_separators_are_not_discounted() -> None:
     )
     assert preview.result.citation_marker_codepoints == len(marker)
     assert preview.result.budget_codepoints == 2 + 2 * len(marker) + 4
+    assert preview.result.budget_block_costs is None
+
+
+@pytest.mark.parametrize("discount", [False, True])
+@pytest.mark.parametrize("delta", [-1, 4])
+def test_measured_blocks_use_the_budget_metric_and_reuse_frozen_measurements(
+    discount: bool, delta: int
+) -> None:
+    marker = "【根拠: source-a】"
+    texts = ["本文" + marker + marker, marker, marker]
+    body = "".join(texts) + ("\n" * delta if delta > 0 else "")
+    if delta < 0:
+        body = body[1:]
+    plan = AnswerPlan(
+        blocks=(
+            NarrativeBlock(text="本文[[cite:1]][[cite:1]]"),
+            TableBlock(table="T1"),
+            ConfirmationSection(items=[]),
+        )
+    )
+    mode = ReportOutputContract(
+        budget=AnswerBudget(
+            metric=CITATION_METRIC if discount else "expanded_markdown_codepoints", soft_target=1
+        )
+    )
+    costs = tuple(
+        RenderedBlockCost(
+            index=i,
+            kind=block.kind,
+            expanded_codepoints=len(texts[i - 1]),
+            citation_marker_codepoints=2 * len(marker) if i == 1 else 0,
+        )
+        for i, block in enumerate(plan.blocks, 1)
+    )
+    created = create_preview(
+        None,
+        run_id="run-a",
+        operation_key="op-a",
+        plan=plan,
+        contract=mode,
+        render_body=lambda _: RenderedReport(
+            body=body,
+            evidence_text=marker + "\n\n" + marker,
+            source_digest="a" * 64,
+            block_costs=costs,
+            composition_delta_chars=delta,
+        ),
+    )
+    result = created.result
+    assert result.budget_block_costs is not None
+    assert result.block_costs_metric == "expanded_markdown_codepoints"
+    assert [c.budget_codepoints for c in result.budget_block_costs] == [
+        len(texts[0]) - (2 * len(marker) if discount else 0),
+        len(marker),
+        len(marker),
+    ]
+    assert (
+        sum(c.budget_codepoints for c in result.budget_block_costs) + delta
+        == result.budget_codepoints
+    )
+    assert result.status == "OVER_TARGET"
+
+    def forbidden(_: AnswerPlan) -> RenderedReport:
+        pytest.fail("保存済みの回答案を再描画してはいけません")
+
+    restored = json.loads(json.dumps(created.ledger))
+    reused = create_preview(
+        restored,
+        run_id="run-a",
+        operation_key="op-a",
+        plan=plan,
+        contract=mode,
+        render_body=forbidden,
+    )
+    assert reused.ledger == restored
+    assert reused.result.budget_block_costs == result.budget_block_costs
+    selected = select_preview(
+        restored, run_id="run-a", selection=FinalSelection(preview_id="A1"), contract=mode
+    )
+    assert selected.body == body
+
+
+@pytest.mark.parametrize("values", [(None, 0), (0, None), (1, 0), (0, 1), (100, 0)])
+def test_partial_or_inconsistent_block_citation_measurement_is_rejected(
+    values: tuple[int | None, int | None],
+) -> None:
+    plan = AnswerPlan(blocks=(NarrativeBlock(text="本文"), TableBlock(table="T1")))
+    with pytest.raises(ReportPreviewError, match="引用とブロック"):
+        create_preview(
+            None,
+            run_id="run-a",
+            operation_key="op-a",
+            plan=plan,
+            contract=ReportOutputContract(),
+            render_body=lambda _: RenderedReport(
+                body="本文\n\n表",
+                source_digest="a" * 64,
+                composition_delta_chars=2,
+                block_costs=tuple(
+                    RenderedBlockCost(
+                        index=i,
+                        kind=block.kind,
+                        expanded_codepoints=2 if i == 1 else 1,
+                        citation_marker_codepoints=values[i - 1],
+                    )
+                    for i, block in enumerate(plan.blocks, 1)
+                ),
+            ),
+        )
+
+
+def test_legacy_unmeasured_costs_are_known_when_no_marker_is_excluded() -> None:
+    mode = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, soft_target=100))
+    result = _citation_preview("本文", "", mode).result
+    assert result.budget_block_costs is not None
+    assert result.budget_block_costs[0].budget_codepoints == 2
+
+
+@pytest.mark.parametrize("table_cost", [0, 1])
+def test_matching_total_cannot_hide_invalid_per_block_citation_attribution(table_cost: int) -> None:
+    marker = "【根拠: source-a】"
+    # 合計が一致していても、表への帰属とブロック長を超える費用は受け付けない。
+    narrative_length = 1 if table_cost == 0 else len(marker)
+    plan = AnswerPlan(blocks=(NarrativeBlock(text="文"), TableBlock(table="T1")))
+    with pytest.raises(ReportPreviewError, match="引用とブロック"):
+        create_preview(
+            None,
+            run_id="run-a",
+            operation_key="op-a",
+            plan=plan,
+            contract=ReportOutputContract(),
+            render_body=lambda _: RenderedReport(
+                body=marker + "文",
+                evidence_text=marker,
+                source_digest="a" * 64,
+                block_costs=(
+                    RenderedBlockCost(
+                        index=1,
+                        kind="narrative",
+                        expanded_codepoints=narrative_length,
+                        citation_marker_codepoints=len(marker) - table_cost,
+                    ),
+                    RenderedBlockCost(
+                        index=2,
+                        kind="table",
+                        expanded_codepoints=len(marker) + 1 - narrative_length,
+                        citation_marker_codepoints=table_cost,
+                    ),
+                ),
+            ),
+        )
 
 
 @pytest.mark.parametrize("evidence", ["", "\n\n"])
