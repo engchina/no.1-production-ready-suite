@@ -870,7 +870,7 @@ import { SearchField } from "@production-ready/ui";
 
 ### `ListDetailLayout`（新規）— ★ 一覧は狭く、詳細は広く。xl 未満は 1 ペイン（#2281）
 
-`ListDetailLayout` の `listVariant="table"` は、1 ペインの主一覧を標準の表として出す。見出しと件数は `listHeader` の `Section` / `ListToolbar`、表の枠と高さは `DataTable` の `visibleRows`、ページ送りは `listFooter` が持つ。外側のカードと固定の高さは付けず、選択・詳細・戻るときのフォーカスの復元は従来どおりとする。2 ペインでは従来の一覧列の構成を使う（#3749）。
+`ListDetailLayout` の `listVariant="table"` は、1 ペインの主一覧を標準の表として出す。見出しと件数は `listHeader` の `Section` / `ListToolbar`、表の枠と高さは `DataTable` の `visibleRows`、ページ送りは `listFooter` が持つ。見出し・件数・表・ページ送りは共有カードの背景・枠・内側の余白にまとめる。固定の高さは外側に付けず、選択・詳細・戻るときのフォーカスの復元は従来どおりとする（#5043）。2 ペインでは従来の一覧列の構成を使う（#3749）。
 
 `ListDetailLayout layout="single"` は、幅に関わらず全幅の一覧から全幅の詳細へ切り替える選択肢です。既定の `responsive` は xl 以上で分割します。戻る操作は画面の `PageHeader` が持ち、URL の選択は `useUrlSelection` の `singlePane: true` とそろえます（#3635）。
 

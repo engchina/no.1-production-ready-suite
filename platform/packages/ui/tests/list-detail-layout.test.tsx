@@ -108,7 +108,10 @@ describe("ListDetailLayout（#2281）", () => {
   it("表の主一覧でも行から詳細へ進み、戻ると選んだ行にフォーカスを戻す", () => {
     act(() => root.render(<Harness single table />));
     expect(listColumn().classList.contains("sticky")).toBe(false);
-    expect(listColumn().classList.contains("border")).toBe(false);
+    const card = listColumn().querySelector("[data-list-detail-card]");
+    expect(card?.classList.contains("border")).toBe(true);
+    expect(card?.contains($('[data-testid="search"]'))).toBe(true);
+    expect(card?.contains(itemButton("beta"))).toBe(true);
     const beta = itemButton("beta");
     act(() => beta.focus());
     click(beta);

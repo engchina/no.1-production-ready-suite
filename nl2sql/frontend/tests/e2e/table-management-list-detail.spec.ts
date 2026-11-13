@@ -139,6 +139,12 @@ test.describe("テーブルの管理の全幅の一覧 → 全幅の詳細（Lis
     await expect(rowButton(page, "TABLE_01")).toBeVisible();
     await expect(grid.locator("tbody tr")).toHaveCount(12);
     await expect(list).toBeVisible();
+    // 検索・表・ページ送りが共有カードの同じ面に含まれる（#5043）。
+    const card = list.locator("[data-list-detail-card]");
+    await expect(card).toBeVisible();
+    await expect(card).toHaveCSS("border-top-width", "1px");
+    await expect(card.locator("[data-list-detail-body]")).toBeVisible();
+    await expect(card.locator("[data-list-detail-footer]")).toBeVisible();
     await expect(detail).toBeHidden();
     await expect(page.getByTestId("list-detail-table-management-resizer")).toHaveCount(0);
     await expect(page.getByTestId("list-detail-table-management-toggle")).toHaveCount(0);
@@ -395,6 +401,7 @@ test.describe("ビューの管理の全幅の一覧 → 全幅の詳細（#4645�
     const grid = page.getByTestId("view-management-grid");
     await expect(page.getByTestId("list-detail-view-management")).toHaveAttribute("data-list-detail-layout", "single");
     await expect(grid.locator("tbody tr")).toHaveCount(4);
+    await expect(page.getByTestId("list-detail-view-management-list").locator("[data-list-detail-card]")).toHaveCSS("border-top-width", "1px");
     await expect(grid.getByRole("columnheader", { name: "行数" })).toHaveCount(0);
     await expect(page.getByTestId("view-management-row-actions-APP.VIEW_01-trigger")).toBeVisible();
     if (isNarrow(page)) {
