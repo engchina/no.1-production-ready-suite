@@ -335,10 +335,6 @@ class Settings:
     llm_max_retries: int = 1
     # 止まったとする無音の秒数（最初の event を含む）。送り直しはやり直しの共通の枠で数える。
     llm_stall_idle_seconds: float = 120.0
-    # streaming で受ける呼び出しで、出力が同じ並びの繰り返し・空白だけで続いたら打ち切って送り直す(#2966。既定 off。
-    # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。streaming しない呼び出しは、出力の上限で未完了の
-    # 応答に同じ暴走があれば、上限を広げずに同じ送り直しにする(#3835)。
-    llm_runaway_detection: bool = False
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
     # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
     known_conditions: tuple[tuple[str, str], ...] = ()
@@ -551,7 +547,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_max_retries=max(0, _env_int(env, "RAG_ENGINE_LLM_MAX_RETRIES", 1)),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 120.0)),
-        llm_runaway_detection=_env_bool(env, "RAG_ENGINE_LLM_RUNAWAY_DETECTION", False),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
             DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,

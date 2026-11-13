@@ -73,12 +73,9 @@ _VALIDATION_TYPES = {
 }
 _PROVIDER_STATUSES = {"incomplete", "completed", "failed", "cancelled", "queued", "in_progress"}
 _INCOMPLETE_REASONS = {"max_output_tokens", "content_filter"}
-# 出力の暴走で呼び出しを打ち切った理由（`rag_engine.adapters.oci.LlmRunawayOutput.reason`。#2966・#3835）。
-_CUTOFF_REASONS = {"runaway_whitespace", "runaway_repetition"}
 _SUMMARY_FIELDS = (
     "provider_status",
     "incomplete_reason",
-    "cutoff_reason",
     "contract_code",
     "stream_trace",
     "provider_error_kind",
@@ -141,7 +138,6 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
     provider_status / incomplete_reason、または response.status /
     response.incomplete_details.reason はアダプターが得た実際の状態だけを渡す。
     code / failure_code は定義済みの決定論的な契約違反に限って採用する。
-    出力の暴走で打ち切った呼び出しは、打ち切りの理由（``cutoff_reason``）と分類 ``runaway_output`` を残す（#3835）。
     """
     root = schema.model_json_schema() if isinstance(schema, type) and issubclass(schema, BaseModel) else schema or {}
     chain: list[BaseException] = []
@@ -171,16 +167,13 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
     contract_code = None
     status = None
     reason = None
-    cutoff = None
     stream_trace = None
     for cause in chain:
         invalid_json = invalid_json or isinstance(cause, JSONDecodeError)
         candidate_trace = _get(cause, "stream_trace")
         if stream_trace is None and isinstance(candidate_trace, Mapping):
             stream_trace = dict(candidate_trace)
-        candidate_cutoff = _get(cause, "reason")
-        if cutoff is None and isinstance(candidate_cutoff, str) and candidate_cutoff in _CUTOFF_REASONS:
-            cutoff = candidate_cutoff
+
         for attr in ("failure_code", "code"):
             code = _get(cause, attr)
             if isinstance(code, str) and code in _CONTRACT_CODES and contract_code is None:
@@ -207,10 +200,7 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
         result["provider_status"] = status
     if status == "incomplete" and reason is not None:
         result["incomplete_reason"] = reason
-    if cutoff is not None:
-        result["cutoff_reason"] = cutoff
-        result["category"] = "runaway_output"
-    elif status == "incomplete":
+    if status == "incomplete":
         result["category"] = "truncated_output" if reason == "max_output_tokens" else "incomplete_output"
     elif contract_code is not None:
         result["category"] = "request_id_contract" if "request_id" in contract_code else "evidence_binding"

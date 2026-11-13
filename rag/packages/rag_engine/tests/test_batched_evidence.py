@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamOutputMissing
+from rag_engine.adapters.oci import LlmStreamOutputMissing
 from rag_engine.config import get_settings
 from rag_engine.generation.answering import _invalid_structured_output
 from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence, verified_candidate
@@ -412,10 +412,6 @@ def test_stream_output_missing_in_single_generation_keeps_reference_and_failure_
 UNREADABLE = "合成の読めない本文。"
 
 
-def _raise_runaway(schema):
-    raise LlmRunawayOutput("合成の反復", "runaway_repetition", None)
-
-
 def _raise_output_missing(schema):
     raise LlmStreamOutputMissing("合成の本文の無い応答", None, {"events": []})
 
@@ -424,7 +420,7 @@ def _raise_invalid_schema(schema):
     return schema.model_validate({})
 
 
-@pytest.mark.parametrize("unreadable", [_raise_runaway, _raise_output_missing, _raise_invalid_schema])
+@pytest.mark.parametrize("unreadable", [_raise_output_missing, _raise_invalid_schema])
 def test_one_unreadable_batch_keeps_its_inputs_and_the_other_batches_are_used(unreadable):
     """#4229: 1 つの組の出力を使えなくても、その組の原文を残し、ほかの組の読取結果と合わせて続ける。"""
     inputs = [span(0, UNREADABLE * 300), span(1, "合成の読める本文。" * 300)]
@@ -462,7 +458,7 @@ def test_unreadable_batch_does_not_fall_back_the_whole_answer():
 
     def read(values):
         if any(UNREADABLE in value["text"] for value in values):
-            _raise_runaway(None)
+            _raise_output_missing(None)
         return [finding(values[0], answer="合成の回答")]
 
     result, generated, _ = _synthesize(records, read, budget=6000)
@@ -474,15 +470,10 @@ def test_unreadable_batch_does_not_fall_back_the_whole_answer():
 def test_batch_failure_summary_keeps_the_last_reason_and_shared_fields() -> None:
     """検証の失敗の後に別の理由で終わった組は最後の理由を残し、概要の項目は生成の経路と同じにする（#4197）。"""
     from rag_engine.generation.batch_output_repair import batch_failure_summary
-    from rag_engine.generation.grounded import generation_failure_detail
 
     receipt = {"index": 2, "input_count": 3, "input_chars": 40, "validation_failures": [{"category": "invalid_json"}]}
     missing = batch_failure_summary(receipt, LlmStreamOutputMissing("合成", None, {"events": []}))
     assert (missing["category"], missing["stream_trace"], missing["invalid_attempts"]) == ("stream_output_missing", {"events": []}, 1)
-
-    runaway = LlmRunawayOutput("合成", "runaway_repetition", None)
-    summary = batch_failure_summary({"index": 1, "input_count": 1, "input_chars": 1}, runaway)
-    assert summary["cutoff_reason"] == generation_failure_detail(runaway)["cutoff_reason"] == "runaway_repetition"
 
     invalid = _validation_error()
     with_attempt = {"index": 1, "input_count": 1, "input_chars": 1, "validation_failures": [{"category": "schema_field"}]}

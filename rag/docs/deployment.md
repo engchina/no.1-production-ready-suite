@@ -2276,3 +2276,14 @@ cd rag/backend
 
 OS・サービス起動環境に`RAG_HYBRID_SEARCH_BACKEND`を直接設定している場合も、同じ表の現在の値へ更新してから起動する。
 更新後は「検索方法」の実行方式を確認する。APIで明示指定するクライアントも現在の値へ更新する。
+
+
+## 回答streamの内容判定の廃止（#5041）
+
+本文の反復や空白数だけを理由とした中止と専用の再送を削除した。旧設定 `RAG_LLM_RUNAWAY_DETECTION_ENABLED` と、standalone engineの `RAG_ENGINE_LLM_RUNAWAY_DETECTION` は読まない。保存済み環境ファイルに残る場合は削除できる。旧値を新しい設定へ移す互換動作は設けない。
+
+全体の期限、無応答timeout、取消、providerの出力上限・失敗状態、型検証は維持する。DB migrationや既存の回答の書き換えは不要。repoの直下で通常の更新を行う。
+
+```bash
+sudo -n ./platform/deploy/suite-update.sh
+```

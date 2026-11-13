@@ -346,10 +346,9 @@ def test_when_every_range_is_rejected_and_the_inputs_do_not_fit_the_failure_is_t
 
 def test_a_failure_without_validation_detail_still_has_a_class():
     receipt = {"index": 2, "input_count": 3, "input_chars": 90, "status": "failed"}
-    summary = batch_failure_summary(receipt, oci.LlmRunawayOutput("合成", "runaway_repetition", None))
+    summary = batch_failure_summary(receipt, RuntimeError("合成"))
     assert summary == {
-        "category": "runaway_output",
-        "cutoff_reason": "runaway_repetition",
+        "category": "structure_unknown",
         "batch_index": 2,
         "input_count": 3,
         "input_chars": 90,

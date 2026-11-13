@@ -1603,9 +1603,9 @@ def _invalid_structured_output(exc: Exception) -> bool:
 
     完了の event の応答に本文が無いまま送り直しも尽きたとき（#4197）も、使える出力が無い点は同じなので含める。
     """
-    from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamOutputMissing, is_invalid_structured_output
+    from rag_engine.adapters.oci import LlmStreamOutputMissing, is_invalid_structured_output
 
-    return isinstance(exc, LlmRunawayOutput | LlmStreamOutputMissing) or is_invalid_structured_output(exc)
+    return isinstance(exc, LlmStreamOutputMissing) or is_invalid_structured_output(exc)
 
 
 def synthesize_grounded_answer(
