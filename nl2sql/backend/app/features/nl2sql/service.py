@@ -162,6 +162,11 @@ from .enterprise_ai_client import (
     enterprise_ai_configuration_failure_message,
     find_enterprise_ai_error,
 )
+from .generation_diagnostics import (
+    BindingDiagnostic,
+    build_generation_diagnostics,
+    unavailable_generation_diagnostics,
+)
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
     SCHEMA_REFRESH_ERRORS,
@@ -479,7 +484,7 @@ from .reverse_prompts import (
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
 from .schema_constraint_context import schema_constraint_context
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
-from .sql_binding import SqlGenerationValidationError, column_binding_violations
+from .sql_binding import SqlGenerationValidationError, column_binding_findings
 from .sql_lexing import prepare_oracle_query, use_session_current_datetime
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore
@@ -25047,6 +25052,7 @@ class Nl2SqlService:
         """
         feedback: dict[str, Any] | None = None
         rejected_sql = ""
+        rejected_bindings: list[BindingDiagnostic] | None = None
         for attempt in range(2):
             if before_attempt is not None:
                 before_attempt()
@@ -25083,6 +25089,8 @@ class Nl2SqlService:
 
             findings: list[str] = []
             oracle_diagnostics: list[OracleSqlDiagnostic] = []
+            binding_diagnostics: list[BindingDiagnostic] = []
+            had_binding_findings = False
             if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
                 semantic = parse_oracle_sql(generated.generated_sql)
                 findings.extend(
@@ -25091,12 +25099,20 @@ class Nl2SqlService:
                     if finding.code == "SQL_WINDOW_PLACEMENT_INVALID"
                 )
                 if semantic.graph is not None:
-                    findings.extend(
-                        column_binding_violations(
-                            validation_sql(generated.generated_sql),
-                            generated.schema_catalog.tables if generated.schema_catalog else [],
-                            owner=self._current_schema_owner(),
-                        )
+                    binding_findings = column_binding_findings(
+                        validation_sql(generated.generated_sql),
+                        generated.schema_catalog.tables if generated.schema_catalog else [],
+                        owner=self._current_schema_owner(),
+                        candidate_tables=self._binding_candidate_tables(
+                            profile, allowed, generated.schema_catalog
+                        ),
+                    )
+                    had_binding_findings = bool(binding_findings)
+                    findings.extend(finding.message for finding in binding_findings)
+                    binding_diagnostics.extend(
+                        diagnostic
+                        for finding in binding_findings
+                        for diagnostic in finding.diagnostics
                     )
             if (
                 not findings
@@ -25160,8 +25176,22 @@ class Nl2SqlService:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
                     generated.engine_meta["sql_validation_attempts"] = attempt + 1
                     generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
+                    if rejected_bindings is not None:
+                        try:
+                            diagnostics = build_generation_diagnostics(
+                                rejected_sql, generated.generated_sql, rejected_bindings
+                            )
+                        except Exception:
+                            diagnostics = unavailable_generation_diagnostics(
+                                "diagnostic_build_failed"
+                            )
+                        generated.engine_meta["generation_diagnostics"] = diagnostics.model_dump(
+                            mode="json"
+                        )
                 return generated
             rejected_sql = generated.generated_sql
+            if had_binding_findings:
+                rejected_bindings = binding_diagnostics
             feedback = {
                 "operation": "repair_rejected_sql",
                 "rejected_sql": rejected_sql,
@@ -25169,6 +25199,8 @@ class Nl2SqlService:
             }
             if oracle_diagnostics:
                 feedback["oracle_diagnostics"] = oracle_diagnostics
+            if binding_diagnostics:
+                feedback["binding_diagnostics"] = binding_diagnostics
         raise SqlGenerationValidationError(" / ".join(findings))
 
     def _generate_sql_with_engine(
@@ -25706,6 +25738,78 @@ class Nl2SqlService:
             fallback_reason="; ".join(fallback_messages),
             schema_catalog=catalog,
         )
+
+    def _binding_candidate_tables(
+        self,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        catalog: SchemaCatalog | None,
+    ) -> list[SchemaTable]:
+        """同回の snapshot を、profile・request・非公開 object・列の交差へ限定する。"""
+        if catalog is None:
+            return []
+        try:
+            # 旧 profile の移行や未限定名の解決で、別の広い catalog を読まない。
+            visible_tables = [
+                table for table in filter_user_visible_catalog(catalog).tables if table.owner
+            ]
+            names = {
+                qualified_object_name(table.owner, table.table_name) for table in visible_tables
+            }
+
+            def resolve(value: str) -> str:
+                parts = object_name_tokens(value)
+                if len(parts) == 2:
+                    return canonical_qualified_name(value)
+                matches = {
+                    name
+                    for table in visible_tables
+                    if len(parts) == 1 and format_object_part(table.table_name) == parts[0]
+                    for name in [qualified_object_name(table.owner, table.table_name)]
+                }
+                if len(matches) != 1:
+                    raise ValueError("同回の schema で scope を一意に確認できません。")
+                return next(iter(matches))
+
+            profile_scope = {
+                resolve(name) for name in [*profile.allowed_tables, *profile.allowed_views]
+            }
+            requested_scope = (
+                {resolve(name) for name in allowed.table_names}
+                if allowed.table_names or allowed.enforce_table_scope
+                else profile_scope
+            )
+            visible_scope = profile_scope & requested_scope & names
+            columns: dict[str, set[str]] = {}
+            for name, allowed_columns in allowed.columns.items():
+                # 空 list は既存契約どおり追加制限なし。別表記の非空制限は交差する。
+                if not allowed_columns:
+                    continue
+                key = resolve(name)
+                column_tokens = {_column_identifier_token(column) for column in allowed_columns}
+                columns[key] = columns[key] & column_tokens if key in columns else column_tokens
+            result: list[SchemaTable] = []
+            for table in visible_tables:
+                name = qualified_object_name(table.owner, table.table_name)
+                if name not in visible_scope:
+                    continue
+                restriction = columns.get(name)
+                result.append(
+                    table.model_copy(
+                        update={
+                            "columns": [
+                                column
+                                for column in table.columns
+                                if restriction is None
+                                or catalog_match_key(column.column_name) in restriction
+                            ]
+                        }
+                    )
+                )
+            return result
+        except ValueError:
+            # scope の解釈が保証できない場合は、候補の元となる情報を返さない。
+            return []
 
     def _enterprise_ai_schema_context(
         self,

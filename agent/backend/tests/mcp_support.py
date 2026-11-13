@@ -186,7 +186,7 @@ class Nl2SqlRecommendProfileIn(_ContractInput):
 
 
 # NL2SQL の MCP の出力の形の版（nl2sql-tools.json の schema_version。#3240）。
-NL2SQL_OUTPUT_SCHEMA_VERSION = 2
+NL2SQL_OUTPUT_SCHEMA_VERSION = 3
 
 
 def nl2sql_requirement(status: str = "applied", **extra: Any) -> dict[str, Any]:

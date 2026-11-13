@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import OptimizeError, SqlglotError
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, traverse_scope
 from sqlglot.schema import MappingSchema
 
+from .generation_diagnostics import BindingDiagnostic, ExactColumnCandidate, MissingPhysicalColumn
 from .models import SchemaTable
 from .oracle_dialect import OracleConversion
 
@@ -20,7 +23,29 @@ class SqlGenerationValidationError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class ColumnBindingFinding:
+    message: str
+    diagnostics: list[BindingDiagnostic] = field(default_factory=list)
+
+
+_MAX_EXACT_CANDIDATES = 16
+_MAX_BINDING_DIAGNOSTICS = 16
+
+
 def column_binding_violations(sql: str, tables: Sequence[SchemaTable], *, owner: str) -> list[str]:
+    """既存の違反文字列を保つ。候補用の権限が不明な呼出しには候補を付けない。"""
+    return [finding.message for finding in column_binding_findings(sql, tables, owner=owner)]
+
+
+def column_binding_findings(
+    sql: str,
+    tables: Sequence[SchemaTable],
+    *,
+    owner: str,
+    candidate_tables: Sequence[SchemaTable] = (),
+) -> list[ColumnBindingFinding]:
+    """候補だけに、呼出元が object・column の可視性を確認した同回の snapshot を使う。"""
     schema = MappingSchema(dialect=OracleConversion, normalize=False)
     for table in tables:
         schema.add_table(
@@ -41,6 +66,7 @@ def column_binding_violations(sql: str, tables: Sequence[SchemaTable], *, owner:
             )
     try:
         tree = sqlglot.parse_one(sql, read=OracleConversion)
+        original_tree = tree.copy()
         # 自動の表別名が引用名を大文字に変えないよう、検証用 AST だけに同名の別名を置く。
         for source in tree.find_all(exp.Table):
             if not source.args.get("alias") and isinstance(source.this, exp.Identifier):
@@ -52,12 +78,92 @@ def column_binding_violations(sql: str, tables: Sequence[SchemaTable], *, owner:
             schema=schema if tables else None,
             validate_qualify_columns=True,
         )
-        return _set_operation_violations(tree) or _derived_column_violations(tree)
+        return [
+            ColumnBindingFinding(message=message)
+            for message in (_set_operation_violations(tree) or _derived_column_violations(tree))
+        ]
     except OptimizeError as exc:
-        return ["SQL_COLUMN_BINDING_INVALID: " + str(exc)] if tables else []
+        if not tables:
+            return []
+        try:
+            diagnostics = _missing_physical_columns(
+                original_tree, tables, candidate_tables=candidate_tables, owner=owner
+            )
+        except Exception:
+            # 補足候補の作成失敗で、元の検査結果や SQL 本文を変更しない。
+            diagnostics = []
+        return [ColumnBindingFinding("SQL_COLUMN_BINDING_INVALID: " + str(exc), diagnostics)]
     except SqlglotError:
         return []  # 構文の検査は parse_oracle_sql が担当する。
     return []
+
+
+def _missing_physical_columns(
+    tree: exp.Expr,
+    tables: Sequence[SchemaTable],
+    *,
+    candidate_tables: Sequence[SchemaTable],
+    owner: str,
+) -> list[BindingDiagnostic]:
+    """例外文を解析せず、ローカル scope の確定した物理列だけを観測する。"""
+    if not candidate_tables:
+        return []
+    normalized = normalize_identifiers(tree.copy(), dialect=OracleConversion)
+    visible = {(table.owner, table.table_name): table for table in candidate_tables}
+    physical = {(table.owner, table.table_name): table for table in tables}
+    diagnostics: list[BindingDiagnostic] = []
+    seen: set[tuple[str, str, str]] = set()
+    for scope in traverse_scope(normalized):
+        for column in scope.columns:
+            if column.find_ancestor(exp.Select) is not scope.expression:
+                continue
+            # CTE/派生列、無修飾列、外側の scope はここで推測しない。
+            source = scope.sources.get(column.table) if column.table else None
+            if not isinstance(source, exp.Table) or source.catalog or source.args.get("pivots"):
+                continue
+            table = visible.get((source.db or owner, source.name))
+            if table is None or column.is_star:
+                continue
+            original = physical.get((table.owner, table.table_name))
+            if original is None or column.name in {item.column_name for item in original.columns}:
+                continue
+            if not isinstance(column.this, exp.Identifier):
+                continue
+            key = (table.owner, table.table_name, column.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates = [
+                ExactColumnCandidate(
+                    owner=candidate.owner,
+                    table=candidate.table_name,
+                    column=item.column_name,
+                    sql_identifier=".".join(
+                        exp.Identifier(this=name, quoted=True).sql(dialect=OracleConversion)
+                        for name in (candidate.owner, candidate.table_name, item.column_name)
+                    ),
+                )
+                for candidate in candidate_tables
+                for item in candidate.columns
+                if item.column_name == column.name
+            ]
+            # 同名候補のどれが意味上正しいかは決めず、安定した順序で有界に返す。
+            candidates.sort(key=lambda item: (item["owner"], item["table"], item["column"]))
+            diagnostics.append(
+                BindingDiagnostic(
+                    source="schema_catalog",
+                    reference=MissingPhysicalColumn(
+                        qualifier=column.table,
+                        column=column.name,
+                        quoted=bool(column.this.args.get("quoted")),
+                    ),
+                    exact_candidates=candidates[:_MAX_EXACT_CANDIDATES],
+                    truncated=len(candidates) > _MAX_EXACT_CANDIDATES,
+                )
+            )
+            if len(diagnostics) == _MAX_BINDING_DIAGNOSTICS:
+                return diagnostics
+    return diagnostics
 
 
 def _derived_column_violations(tree: exp.Expr) -> list[str]:

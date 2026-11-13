@@ -95,6 +95,7 @@ def test_db_admin_chat_turn_gets_notice_and_follow_up_context_does_not(
 
 def _job(status: JobStatus, notice: str | None) -> Any:
     result = SimpleNamespace(
+        engine_meta={},
         safety=SimpleNamespace(blocked_reason="", warnings=[], is_safe=True, safety_checked=True),
         generated_sql="SELECT 1 FROM DUAL",
         executable_sql="SELECT 1 FROM DUAL",
