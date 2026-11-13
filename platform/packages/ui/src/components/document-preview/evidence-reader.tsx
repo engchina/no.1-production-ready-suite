@@ -137,9 +137,9 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
     </Disclosure> : null}
     {state.key === readingKey && state.notice ? <p role="status" className="text-sm text-fg-muted" data-testid="evidence-reader-location">{state.notice}</p> : null}
     {state.error ? <ApiErrorState error={state.error} fallback="引用の前後を読み込めませんでした。" onRetry={() => setRequest(old => ({ ...old, serial: old.serial + 1 }))} retryLabel={labels.retry} /> : null}
-    {state.pending ? <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} testId="evidence-reader-loading"><Skeleton className="h-16 w-full" /></TimedLoadingState> : null}
+    {state.pending ? <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} testId="evidence-reader-loading">{!blocks.length ? <Skeleton className="h-16 w-full" /> : null}</TimedLoadingState> : null}
     <Button variant="secondary" size="sm" disabled={!first?.previous_cursor || state.pending} onClick={() => read({ cursor: first!.previous_cursor!, direction: "before" })}><ArrowLeft size={14} aria-hidden />{labels.before}</Button>
-    <div ref={viewport} role="region" aria-label={labels.body} tabIndex={0} className="min-h-[min(16rem,30dvh)] flex-1 space-y-4 overflow-y-auto overscroll-contain [overflow-anchor:none]" data-testid="evidence-reader-content">
+    <div ref={viewport} role="region" aria-label={labels.body} tabIndex={0} aria-busy={state.pending} data-surface-tint={state.pending ? "neutral" : undefined} className={`min-h-[min(16rem,30dvh)] flex-1 space-y-4 overflow-y-auto overscroll-contain [overflow-anchor:none] ${state.pending ? "bg-surface-sunken" : ""}`} data-testid="evidence-reader-content">
       {blocks.map(block => <section key={`${block.id}:${block.offset}`} data-reader-block={`${block.id}:${block.offset}`} data-reader-cited={block.cited} data-reader-current={Boolean(state.notice && state.target === `${block.id}:${block.offset}`)} className="space-y-1">
         <p className="text-xs text-fg-muted">{state.notice && state.target === `${block.id}:${block.offset}` ? `${labels.current} · ` : ""}{block.cited ? purpose === "selection" ? "選択した原文の記録" : labels.cited : labels.context}</p>
         {block.heading?.length ? <p className="text-sm font-semibold">{block.heading.join(" › ")}</p> : null}
