@@ -466,6 +466,7 @@ from .oracle_adapter import (
     select_ai_object_list_entry,
 )
 from .oracle_dialect import OracleConversion, normalize_generated_grouping
+from .oracle_keyword_metadata import unavailable_native_keyword_metadata
 from .oracle_sql_diagnostics import OracleSqlDiagnostic, oracle_parse_diagnostic
 from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
@@ -25137,6 +25138,23 @@ class Nl2SqlService:
                             # SQL 片を含み得る診断の例外をログやメッセージへ出さない。
                             diagnostic = None
                         if diagnostic is not None:
+                            if attempt == 0:
+                                location = diagnostic["location"]
+                                token = location["token"] if location is not None else None
+                                if token is not None and not token["text_truncated"]:
+                                    if before_attempt is not None:
+                                        before_attempt()
+                                    try:
+                                        native = self._oracle_adapter.read_native_keyword_metadata(
+                                            token["text"]
+                                        )
+                                    except Exception:
+                                        native = unavailable_native_keyword_metadata("query_failed")
+                                else:
+                                    native = unavailable_native_keyword_metadata(
+                                        "token_unavailable"
+                                    )
+                                diagnostic["native_keyword_metadata"] = native
                             oracle_diagnostics.append(diagnostic)
             if not findings:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:

@@ -63,6 +63,12 @@ from .object_visibility import (
     is_user_visible_schema_object,
     user_visible_object_sql_predicate,
 )
+from .oracle_keyword_metadata import (
+    MAX_NATIVE_KEYWORD_ROWS,
+    NativeKeywordMetadata,
+    native_keyword_metadata_from_rows,
+    unavailable_native_keyword_metadata,
+)
 from .oracle_lob import configure_clob_fetch_as_text, configure_connection_clob_fetch_as_text
 from .oracle_sql_diagnostics import OracleOffsetBasis
 from .sql_lexing import _tokens as sql_tokens
@@ -1838,6 +1844,23 @@ class OracleNl2SqlAdapter:
                 raise
             raise OracleAdapterError(f"生成用サンプルの取得に失敗しました: {exc}") from exc
         return samples, warnings
+
+    def read_native_keyword_metadata(self, keyword: str) -> NativeKeywordMetadata:
+        """同じ actor のデータ接続で native の事実だけを読む。別の権限へ切り替えない。"""
+        try:
+            with self.user_data_connection(read_only=True) as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT KEYWORD, RESERVED, RES_TYPE, RES_ATTR, RES_SEMI "
+                    "FROM SYS.V_$RESERVED_WORDS WHERE KEYWORD = :keyword "
+                    "ORDER BY KEYWORD, RESERVED, RES_TYPE, RES_ATTR, RES_SEMI",
+                    {"keyword": keyword.upper()},
+                )
+                columns = [column[0] for column in cursor.description or []]
+                rows = cursor.fetchmany(MAX_NATIVE_KEYWORD_ROWS + 1)
+            return native_keyword_metadata_from_rows(keyword, columns, rows)
+        except Exception:
+            # 補助参照の失敗は元の parse エラーを隠さず、本文や接続情報も出さない。
+            return unavailable_native_keyword_metadata("query_failed")
 
     def prepare_select(self, sql: str) -> None:
         """安全性・対象範囲を確認済みの SELECT を、実行と同じ actor の接続で解析する。

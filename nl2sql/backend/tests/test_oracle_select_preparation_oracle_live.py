@@ -49,3 +49,20 @@ def test_unicode_native_offset_maps_to_actual_token(literal: str) -> None:
     assert location["character_offset"] == expected
     assert location["line_1_based"] == 1 and location["column_1_based"] == expected + 1
     assert location["token"] is not None and location["token"]["text"] == "LEVEL"
+
+
+def test_native_keyword_metadata_is_bounded_and_never_grants_access() -> None:
+    # CI 用 DB の辞書参照権限も変えない。参照不可なら N 等の事実を捏造しない。
+    adapter = OracleNl2SqlAdapter(get_settings())
+    result = adapter.read_native_keyword_metadata("LEVEL")
+    assert result["source"] == "SYS.V_$RESERVED_WORDS"
+    if result["availability"] == "unavailable":
+        assert result["unavailable_reason"] == "query_failed" and result["rows"] == []
+    else:
+        assert result["availability"] == "available"
+        assert 0 < len(result["rows"]) <= 16
+        for row in result["rows"]:
+            assert row["KEYWORD"] == "LEVEL"
+            assert all(
+                row[name] in {"Y", "N"} for name in ("RESERVED", "RES_TYPE", "RES_ATTR", "RES_SEMI")
+            )

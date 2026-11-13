@@ -19,6 +19,7 @@ from app.features.nl2sql.chat_attachments import (
 )
 from app.features.nl2sql.models import AllowedObjects, Nl2SqlEngine
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter, OracleSelectPreparationError
+from app.features.nl2sql.oracle_keyword_metadata import unavailable_native_keyword_metadata
 from app.features.nl2sql.oracle_sql_diagnostics import oracle_parse_diagnostic
 from app.features.nl2sql.service import GeneratedSql
 from app.features.nl2sql.sql_binding import SqlGenerationValidationError
@@ -201,6 +202,11 @@ def test_only_repair_feedback_receives_actual_prepared_source_location(
     monkeypatch.setattr(service, "_generate_sql_with_engine", generate)
     monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
     monkeypatch.setattr(service._oracle_adapter, "prepare_select", prepare)
+    monkeypatch.setattr(
+        service._oracle_adapter,
+        "read_native_keyword_metadata",
+        lambda keyword: unavailable_native_keyword_metadata("query_failed"),
+    )
     context = (
         AttachmentContext(
             tables=(
@@ -246,6 +252,9 @@ def test_only_repair_feedback_receives_actual_prepared_source_location(
     assert feedback["operation"] == "repair_rejected_sql"
     diagnostic = feedback["oracle_diagnostics"][0]
     assert feedback["rejected_sql"] == sql
+    assert diagnostic.pop("native_keyword_metadata") == unavailable_native_keyword_metadata(
+        "query_failed"
+    )
     assert diagnostic == oracle_parse_diagnostic(
         prepared[0],
         code=923,
