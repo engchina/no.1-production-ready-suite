@@ -2,6 +2,7 @@ import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import { measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
+  expectEvaluationCard,
   chooseEvaluationProfile,
   mockEvaluationProfiles,
   evaluationImportResult,
@@ -21,6 +22,32 @@ test.beforeEach(async ({ page }) => {
   await mockEvaluationSuiteSettings(page, "standard");
   await mockEvaluationJobList(page);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`評価結果と読み込み中を共有カードへ収める (${theme})`, { tag: "@responsive" }, async ({ page }, info) => {
+    await page.addInitScript((value) => {
+      localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+    }, theme);
+    const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
+    await page.goto("/evaluation");
+    await prepareEvaluationRun(page);
+    await page.getByRole("button", { name: "評価実行", exact: true }).click();
+    const loading = page.getByTestId("evaluation-result-loading");
+    await expectEvaluationCard(page, loading);
+    await loading.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath(`result-loading-${theme}.png`) });
+    jobs.complete();
+    const result = page.getByTestId("evaluation-result-card");
+    await expectEvaluationCard(page, result);
+    await expect(result.getByRole("heading", { name: "評価結果", exact: true })).toBeVisible();
+    await expect(result.getByTestId("evaluation-case-scroll-region")).toHaveCount(1);
+    await expectNoPageOverflow(page);
+    const notices = page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true });
+    while (await notices.count()) await notices.first().click();
+    await result.getByRole("heading", { name: "評価結果", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath(`result-card-${theme}.png`) });
+  });
+}
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
@@ -537,6 +564,7 @@ test("失敗した評価でも、終わったケースの結果を表示して�
   ).toBeVisible();
   await expect(panel.getByText("途中までの結果なので、合否は判定していません。")).toBeVisible();
   await expect(page.getByTestId("evaluation-case-scroll-region")).toBeVisible();
+  await expectEvaluationCard(page, page.getByTestId("evaluation-result-card"));
   await expectNoPageOverflow(page);
 
   const exportRequests: string[] = [];

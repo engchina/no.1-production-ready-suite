@@ -199,20 +199,25 @@ export function EvaluationJobError({
 /** 実行中の結果の領域。結果の形の Skeleton で寸法を予約する（経過時間は実行状況に出す）。 */
 export function EvaluationResultSkeleton() {
   return (
-    <section
-      className="min-w-0 space-y-4"
+    <Card
+      className="min-w-0"
+      role="region"
       aria-busy="true"
       aria-label={t("evaluation.actions.running")}
       data-testid="evaluation-result-loading"
     >
-      <Skeleton className="h-6 w-40" aria-hidden="true" />
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Skeleton className="h-20 w-full" aria-hidden="true" />
-        <Skeleton className="h-20 w-full" aria-hidden="true" />
-        <Skeleton className="h-20 w-full" aria-hidden="true" />
-        <Skeleton className="h-20 w-full" aria-hidden="true" />
-      </div>
-      <Skeleton className="h-48 w-full" aria-hidden="true" />
-    </section>
+      <CardHeader>
+        <Skeleton className="h-6 w-40" aria-hidden="true" />
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Skeleton className="h-20 w-full" aria-hidden="true" />
+          <Skeleton className="h-20 w-full" aria-hidden="true" />
+          <Skeleton className="h-20 w-full" aria-hidden="true" />
+          <Skeleton className="h-20 w-full" aria-hidden="true" />
+        </div>
+        <Skeleton className="h-48 w-full" aria-hidden="true" />
+      </CardContent>
+    </Card>
   );
 }
