@@ -75,6 +75,19 @@ export function LanguagePackOverridesFieldset({
     onChange(overrides);
   };
 
+  const reset = (key: string) => {
+    const field = fields.find((item) => textKey(item) === key);
+    if (!field) return;
+    const section = { ...value[field.section] };
+    delete section[field.key];
+    const overrides = { ...value, [field.section]: section };
+    if (!Object.keys(section).length) delete overrides[field.section];
+    const nextTexts = { ...draft.texts };
+    delete nextTexts[key];
+    setDraft({ key: JSON.stringify(overrides), texts: nextTexts });
+    onChange(overrides);
+  };
+
   if (query.isPending) {
     return (
       <TimedLoadingState
@@ -109,6 +122,7 @@ export function LanguagePackOverridesFieldset({
         disabled={disabled}
         profileOverrides={value}
         onChange={update}
+        onReset={reset}
       />
       <Disclosure
         summary={t("searchAnswerProfiles.languagePack.title")}
@@ -137,6 +151,8 @@ export function LanguagePackOverridesFieldset({
           changedLabel={t("searchAnswerProfiles.languagePack.changed")}
           resetLabel={t("searchAnswerProfiles.languagePack.reset")}
           onChange={update}
+          onReset={reset}
+          overrides={value}
         />
       </Disclosure>
     </div>

@@ -1701,3 +1701,73 @@ async function mockProfileLanguagePackSuccess(page: Page) {
   ];
   await page.route("**/api/settings/language-pack", route => route.fulfill({ json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "synthetic-published" }, error_messages: [], warning_messages: [] } }));
 }
+
+
+test("固定返信の保存済みBOMは保持し、NEL編集と個別の継承復元を区別する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body = null as Record<string, unknown> | null;
+  const globalLabels = { insufficient_evidence_summary: "\uFEFF合成の公開済み前置き。\uFEFF", empty_search_guidance: "\uFEFF合成の全体案内。\uFEFF", abstention_guidance: "\uFEFF合成の汎用全体案内。\uFEFF" };
+  const savedGuidance = "\uFEFF合成の保存済み上書き。\uFEFF";
+  const unrelated = { answer_check_cues: { related_stopwords: ["合成の保持語"] }, answer_labels: { abstention_guidance: "\uFEFF合成の維持する別案内。\uFEFF" } };
+  await mockDefaultSearchAnswerProfile(page, value => { body = value; }, {}, { language_pack: { ...unrelated, answer_labels: { ...unrelated.answer_labels, empty_search_guidance: savedGuidance } } });
+  const effective = { answer_labels: globalLabels, answer_check_cues: { related_stopwords: ["全体の語"] } };
+  const fields = [
+    ...Object.keys(globalLabels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 })),
+    { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
+  ];
+  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "synthetic-BOM-published" }, error_messages: [], warning_messages: [] } }));
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const section = page.getByTestId("empty-evidence-response-settings");
+  const summary = section.getByLabel("根拠不足の前置き", { exact: true });
+  const guidance = section.getByLabel("検索で根拠がないときの確認案内", { exact: true });
+  const preview = section.getByTestId("empty-evidence-response-preview");
+  await expect(summary).toHaveValue(globalLabels.insufficient_evidence_summary);
+  await expect(guidance).toHaveValue(savedGuidance);
+  // Python stripはBOMを除去しない。未編集の保存値へJavaScript trimを再適用しない。
+  await expect(preview).toHaveJSProperty("textContent", globalLabels.insufficient_evidence_summary + savedGuidance);
+  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(1);
+  await expect(section.getByText("このプロファイルで上書き", { exact: true })).toHaveCount(1);
+  const edited = "\u0085合成の編集中前置き。\u0085";
+  await summary.fill(edited);
+  await expect(preview).toHaveJSProperty("textContent", "合成の編集中前置き。" + savedGuidance);
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成のUnicode境界の確認。");
+  const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
+  await save.click();
+  // NELは現在の保存用JS trimでは残り、backendで本文にする際だけ除去される。
+  await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual({ ...unrelated, answer_labels: { ...unrelated.answer_labels, insufficient_evidence_summary: edited, empty_search_guidance: savedGuidance } });
+  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).nth(0).click();
+  await expect(summary).toHaveValue(globalLabels.insufficient_evidence_summary);
+  await expect(preview).toHaveJSProperty("textContent", globalLabels.insufficient_evidence_summary + savedGuidance);
+  await save.click();
+  await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual({ ...unrelated, answer_labels: { ...unrelated.answer_labels, empty_search_guidance: savedGuidance } });
+  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).click();
+  await save.click();
+  await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual(unrelated);
+  await page.reload();
+  await expect(summary).toHaveValue(globalLabels.insufficient_evidence_summary);
+  await expect(guidance).toHaveValue(globalLabels.empty_search_guidance);
+  await expect(preview).toHaveJSProperty("textContent", globalLabels.insufficient_evidence_summary + globalLabels.empty_search_guidance);
+  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(2);
+  await expect(section.getByRole("button", { name: "全体の値に戻す", exact: true })).toHaveCount(0);
+  // 高度な一覧の同じ復元操作も、保存済みBOMを再直列化せずキーだけを削除する。
+  const advanced = page.getByTestId("search-answer-profile-language-pack");
+  await advanced.locator("summary").click();
+  await advanced.getByRole("tab", { name: "回答の表示", exact: true }).click();
+  const generic = advanced.getByLabel("回答できないときの確認案内", { exact: true });
+  await expect(generic).toHaveValue(unrelated.answer_labels.abstention_guidance);
+  const restore = advanced.getByRole("button", { name: "全体の値に戻す", exact: true });
+  await expect(restore).toHaveCount(1);
+  await restore.click();
+  await expect(generic).toHaveValue(globalLabels.abstention_guidance);
+  await save.click();
+  await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual({ answer_check_cues: unrelated.answer_check_cues });
+  await page.reload();
+  await advanced.locator("summary").click();
+  await advanced.getByRole("tab", { name: "回答の表示", exact: true }).click();
+  await expect(generic).toHaveValue(globalLabels.abstention_guidance);
+  await expect(restore).toHaveCount(0);
+  await expect(summary).toHaveValue(globalLabels.insufficient_evidence_summary);
+  await expect(preview).toHaveJSProperty("textContent", globalLabels.insufficient_evidence_summary + globalLabels.empty_search_guidance);
+  await expectNoPageOverflow(page);
+  await section.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("empty-evidence-saved-BOM-restored.png"), fullPage: true });
+});

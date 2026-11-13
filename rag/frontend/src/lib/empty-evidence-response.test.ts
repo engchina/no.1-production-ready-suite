@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyEvidenceResponsePreview, isEmptyEvidenceResponseField } from "./empty-evidence-response";
+import { emptyEvidenceResponsePreview, effectiveEmptyEvidenceResponsePreview, isEmptyEvidenceResponseField } from "./empty-evidence-response";
 import { overridesFromTexts } from "./language-pack";
 import type { LanguagePackField } from "./api";
 
@@ -8,6 +8,17 @@ const fields: LanguagePackField[] = ["insufficient_evidence_summary", "empty_sea
 }));
 
 describe("根拠なし固定返信の基本本文", () => {
+  it("プロファイルは未編集の継承値と保存済み上書きを再度フロントの trim に通さない", () => {
+    const baseline = { answer_labels: { insufficient_evidence_summary: "\uFEFFA\uFEFF", empty_search_guidance: "G" } };
+    expect(effectiveEmptyEvidenceResponsePreview(baseline)).toBe("\uFEFFA\uFEFFG");
+    expect(effectiveEmptyEvidenceResponsePreview(baseline, { answer_labels: { insufficient_evidence_summary: "\uFEFFB\uFEFF" } })).toBe("\uFEFFB\uFEFFG");
+    const payload = overridesFromTexts(fields, {
+      "answer_labels.insufficient_evidence_summary": "\u0085\uFEFFC\uFEFF\u0085",
+      "answer_labels.empty_search_guidance": "G",
+    }, baseline);
+    expect(effectiveEmptyEvidenceResponsePreview(baseline, payload)).toBe("\uFEFFC\uFEFFG");
+  });
+
   it.each([
     ["\u0085A\u0085", "A"],
     ["\u001c\u001dA\u001e\u001f", "A"],

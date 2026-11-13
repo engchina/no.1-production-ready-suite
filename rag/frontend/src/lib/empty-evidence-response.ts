@@ -1,4 +1,4 @@
-import type { LanguagePackField } from "./api";
+import type { LanguagePackField, LanguagePackSections } from "./api";
 import type { LanguagePackTexts } from "./language-pack";
 
 export const EMPTY_EVIDENCE_RESPONSE_KEYS = [
@@ -10,9 +10,9 @@ export function isEmptyEvidenceResponseField(field: Pick<LanguagePackField, "sec
   return field.section === "answer_labels" && EMPTY_EVIDENCE_RESPONSE_KEYS.some((key) => key === field.key);
 }
 
-/** フロントの保存用 trim の後、backend の Python str.strip と同じ順序で除去する。 */
-function effectiveSavedText(text: string): string {
-  const characters = [...text.trim()];
+/** backend の Python str.strip が除く境界の空白だけを扱う。 */
+function backendStrip(text: string): string {
+  const characters = [...text];
   const isWhitespace = (character: string): boolean => {
     const codePoint = character.codePointAt(0)!;
     return /^\p{White_Space}$/u.test(character) || (codePoint >= 0x1c && codePoint <= 0x1f);
@@ -26,5 +26,12 @@ function effectiveSavedText(text: string): string {
 
 /** 保存後の実効値から、正常な根拠なし応答の本文を区切りなしで組み立てる。 */
 export function emptyEvidenceResponsePreview(texts: LanguagePackTexts): string {
-  return EMPTY_EVIDENCE_RESPONSE_KEYS.map((key) => effectiveSavedText(texts[`answer_labels.${key}`] ?? "")).join("");
+  return EMPTY_EVIDENCE_RESPONSE_KEYS.map((key) => backendStrip((texts[`answer_labels.${key}`] ?? "").trim())).join("");
+}
+
+/** 保存済み実効値に現在の payload を重ねる。未編集の値を再度フロントの trim に通さない。 */
+export function effectiveEmptyEvidenceResponsePreview(baseline: LanguagePackSections, overrides: LanguagePackSections = {}): string {
+  return EMPTY_EVIDENCE_RESPONSE_KEYS.map((key) => backendStrip(String(
+    overrides.answer_labels?.[key] ?? baseline.answer_labels?.[key] ?? "",
+  ))).join("");
 }

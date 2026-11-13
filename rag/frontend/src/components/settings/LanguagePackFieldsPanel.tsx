@@ -61,6 +61,8 @@ export function LanguagePackFieldsPanel({
   changedLabel,
   resetLabel,
   onChange,
+  onReset,
+  overrides,
 }: {
   idPrefix: string;
   fields: LanguagePackField[];
@@ -72,6 +74,8 @@ export function LanguagePackFieldsPanel({
   changedLabel: string;
   resetLabel: string;
   onChange: (key: string, value: string) => void;
+  onReset?: (key: string) => void;
+  overrides?: LanguagePackSections;
 }) {
   const sections = [...new Set(allFields.map((field) => field.section))];
   const groups = groupSections(sections);
@@ -98,6 +102,8 @@ export function LanguagePackFieldsPanel({
       changedLabel={changedLabel}
       resetLabel={resetLabel}
       onChange={(value) => onChange(textKey(field), value)}
+      onReset={onReset ? () => onReset(textKey(field)) : undefined}
+      overridden={overrides ? Object.hasOwn(overrides[field.section] ?? {}, field.key) : undefined}
     />
   );
   // 上の段（使い道の組）と下の段（節）は、どちらも選んだタブの panel を共有の TabPanel で描く（タブの aria-controls が
@@ -191,8 +197,10 @@ export function LanguageField({
   unchangedLabel,
   overridden,
   onChange,
+  onReset,
 }: {
   id: string;
+  onReset?: () => void;
   unchangedLabel?: string;
   overridden?: boolean;
   field: LanguagePackField;
@@ -217,7 +225,7 @@ export function LanguageField({
         variant="ghost"
         icon={RotateCcw}
         disabled={disabled}
-        onClick={() => onChange(Array.isArray(base) ? base.join("\n") : (base ?? ""))}
+        onClick={onReset ?? (() => onChange(Array.isArray(base) ? base.join("\n") : (base ?? "")))}
       >
         {resetLabel}
       </Button>

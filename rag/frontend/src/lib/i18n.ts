@@ -426,7 +426,7 @@ export const ja = {
   "settings.language.emptyEvidence.globalSave": "全体設定は草稿を保存し、公開すると適用されます。プロファイルで個別に上書きできます。",
   "settings.language.emptyEvidence.profileSave": "このプロファイルを保存すると適用されます。各項目を全体の値に戻すと、全体設定を継承します。",
   "settings.language.emptyEvidence.preview": "基本本文のプレビュー",
-  "settings.language.emptyEvidence.previewHelp": "保存時と同じく各項目の前後の空白を除き、区切りを加えずにつなぎます。問い合わせ先・取得状況などの追加案内は含みません。",
+  "settings.language.emptyEvidence.previewHelp": "保存後に使われる2項目を、区切りを加えずにつないだ本文です。問い合わせ先・取得状況などの追加案内は含みません。",
   "settings.language.emptyEvidence.inherited": "全体設定を継承",
   "settings.language.emptyEvidence.overridden": "このプロファイルで上書き",
   "settings.language.emptyEvidence.builtin": "組み込みの値",

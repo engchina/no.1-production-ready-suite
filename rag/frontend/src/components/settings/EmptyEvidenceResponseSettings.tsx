@@ -2,13 +2,13 @@ import { FormGrid, resolveContentLang } from "@production-ready/ui";
 
 import { LanguageField, languagePackFieldId } from "./LanguagePackFieldsPanel";
 import type { LanguagePackField, LanguagePackSections } from "@/lib/api";
-import { EMPTY_EVIDENCE_RESPONSE_KEYS, emptyEvidenceResponsePreview, isEmptyEvidenceResponseField } from "@/lib/empty-evidence-response";
+import { EMPTY_EVIDENCE_RESPONSE_KEYS, emptyEvidenceResponsePreview, effectiveEmptyEvidenceResponsePreview, isEmptyEvidenceResponseField } from "@/lib/empty-evidence-response";
 import { t } from "@/lib/i18n";
 import type { LanguagePackTexts } from "@/lib/language-pack";
 
 /** 全体とプロファイルで共通の、根拠がないときの基本本文の編集と確認。 */
 export function EmptyEvidenceResponseSettings({
-  idPrefix, fields, baseline, texts, errors, disabled, profileOverrides, onChange,
+  idPrefix, fields, baseline, texts, errors, disabled, profileOverrides, previewValues, onChange, onReset,
 }: {
   idPrefix: string;
   fields: LanguagePackField[];
@@ -17,11 +17,14 @@ export function EmptyEvidenceResponseSettings({
   errors: Record<string, string>;
   disabled: boolean;
   profileOverrides?: LanguagePackSections;
+  previewValues?: LanguagePackSections;
   onChange: (key: string, value: string) => void;
+  onReset?: (key: string) => void;
 }) {
   const profile = profileOverrides !== undefined;
   const id = `${idPrefix}-empty-evidence-response`;
-  const preview = emptyEvidenceResponsePreview(texts);
+  const preview = profile ? effectiveEmptyEvidenceResponsePreview(baseline, profileOverrides)
+    : previewValues ? effectiveEmptyEvidenceResponsePreview(previewValues) : emptyEvidenceResponsePreview(texts);
   return (
     <section aria-labelledby={id} className="space-y-4" data-testid="empty-evidence-response-settings">
       <div className="space-y-2">
@@ -47,6 +50,7 @@ export function EmptyEvidenceResponseSettings({
             unchangedLabel={t(profile ? "settings.language.emptyEvidence.inherited" : "settings.language.emptyEvidence.builtin")}
             resetLabel={t(profile ? "searchAnswerProfiles.languagePack.reset" : "settings.language.resetField")}
             onChange={(value) => onChange(key, value)}
+            onReset={onReset ? () => onReset(key) : undefined}
           />;
         })}
       </FormGrid>

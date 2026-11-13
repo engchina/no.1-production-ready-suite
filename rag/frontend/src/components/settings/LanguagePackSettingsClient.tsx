@@ -160,6 +160,7 @@ export function LanguagePackSettingsClient() {
             texts={texts}
             errors={errors}
             disabled={save.isPending}
+            previewValues={dirty ? undefined : (draft.data?.draft_effective ?? data.effective)}
             onChange={update}
           />
           <LanguagePackFieldsPanel
