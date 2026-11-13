@@ -626,24 +626,34 @@ class EvaluationRunner:
             "answer_text": response.answer,
         }
         runs = list(turn_runs or [_TurnRun(response=response, conditions={})])
-        expectations = [
+        actual_responses = [
             {
                 "question": case.query if index == 0 else case.turns[index - 1].reply,
                 "answer_text": run.response.answer,
+            }
+            for index, run in enumerate(runs)
+        ]
+        expectations = [
+            {
+                "turn": index,
                 "expected_decisions": sorted(
                     expected_decisions(
                         expectation.expected_response_decision, expectation.expected_outcomes
                     )
                 ),
             }
-            for index, (expectation, run) in enumerate(zip([case, *case.turns], runs, strict=False))
+            for index, expectation in enumerate([case, *case.turns])
             if expected_decisions(
                 expectation.expected_response_decision, expectation.expected_outcomes
             )
         ]
         if not standard_answer and not expectations:
             return None
-        evaluation_input = {**evaluation_input, "response_expectations": expectations}
+        evaluation_input = {
+            **evaluation_input,
+            "actual_responses": actual_responses,
+            "response_expectations": expectations,
+        }
         if self._answer_judge is None:
             return None
         remaining = _remaining_seconds(deadline)

@@ -64,7 +64,7 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
     assert json.loads(prompt) == {
         "question": "今回の取込失敗の原因は？",
         "standard_answer": "ログを確認して原因を特定する。",
-        "answer_text": "ログを確認して原因を特定します。",
+        "actual_responses": [{"question": "今回の取込失敗の原因は？", "answer_text": "ログを確認して原因を特定します。"}],
         "response_expectations": [],
     }
     assert result == {

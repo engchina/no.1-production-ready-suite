@@ -58,7 +58,7 @@
 
 ### 判定の呼び出しの形（#5037）
 
-回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`、`rubric_version=29`）は、1件の評価でモデルを1回呼びます。質問・標準回答・実際の本文・期待する対応を渡し、全体の正確性と対応の適切さ、それらの理由を構造化出力で受け取ります。逐片段の番号転記や全片段の対応付けは要求しません。
+回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`、`rubric_version=30`）は、1件の評価でモデルを1回呼びます。質問・標準回答・実際の本文・期待する対応を渡し、全体の正確性と対応の適切さ、それらの理由を構造化出力で受け取ります。逐片段の番号転記や全片段の対応付けは要求しません。`actual_responses` は実際の対話、`response_expectations` は対応の期待値だけとし、実際の回答を期待する正解として混在させません。引用の表示行は実回答から同じ方法で除いて評価します（#5039）。
 
 - 正確性は `correct` / `incorrect` / `unassessed` / `not_applicable`。正しい部分回答を少答だけで矛盾とせず、述べた内容を比較します。
 - 対応の適切さは `appropriate` / `inappropriate` / `unassessed` / `not_applicable`。資料不足を適切に説明する返信も正常な回答です。生成モデルの自己申告 `outcome` を期待ラベルと直接比較して減点しません。対話は同じ一回の評価へまとめます。
