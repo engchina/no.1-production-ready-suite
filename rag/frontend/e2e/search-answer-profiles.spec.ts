@@ -1394,6 +1394,7 @@ test("確定の行はフォームの末尾に置き、スクロールしても�
   page,
 }) => {
   await mockSearchAnswerProfiles(page, [accountingView]);
+  await mockProfileLanguagePackSuccess(page);
   await page.goto("/search-answer-profiles?id=bv-1");
   const actions = page.getByRole("group", { name: "確定の操作" });
   await expect(actions.getByRole("button")).toHaveText(["保存", "変更を破棄"]);
@@ -1405,6 +1406,8 @@ test("確定の行はフォームの末尾に置き、スクロールしても�
 
   // フォームの末尾（最後の設定の行。言語資源の上書き。#2181）の直下に行がある。
   const lastRow = page.getByTestId("search-answer-profile-language-pack");
+  await expect(lastRow).toBeVisible();
+  await expect(page.getByTestId("empty-evidence-response-settings")).toBeVisible();
   await actions.scrollIntoViewIfNeeded();
   const save = actions.getByRole("button", { name: "保存", exact: true });
   const [rowBox, barBox, saveBox, nameBox] = await Promise.all([
@@ -1550,6 +1553,7 @@ test("主一覧は高い画面の余白へ拡張し、ページ送りを維持�
 
 test("プロファイルの知識の Tab は段階順で、質問の理解を出さない", { tag: "@responsive" }, async ({ page }) => {
   await mockDefaultSearchAnswerProfile(page, () => {});
+  await mockProfileLanguagePackSuccess(page);
   await page.goto("/search-answer-profiles?id=bv-default");
   const tabs = page.getByRole("tablist", { name: "プロファイルの知識", exact: true });
   await expect(tabs.getByRole("tab")).toHaveText(["登録済みQ&A", "用語・同義語", "業務ガイド", "ドメインキーワード"]);
@@ -1683,3 +1687,17 @@ test("固定返信の読込みと再試行は折り畳みの外に出し、再�
   await expect(section.getByLabel("検索で根拠がないときの確認案内", { exact: true })).toHaveValue(labels.empty_search_guidance);
   await expectNoPageOverflow(page);
 });
+
+
+/** 成功状態のフォーム構造を検査するテスト用。未モック API の 404 を成功状態と混ぜない。 */
+async function mockProfileLanguagePackSuccess(page: Page) {
+  const effective = {
+    answer_labels: { insufficient_evidence_summary: "合成の前置き。", empty_search_guidance: "合成の確認案内。" },
+    answer_check_cues: { related_stopwords: ["合成の語"] },
+  };
+  const fields = [
+    ...Object.keys(effective.answer_labels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 1000 })),
+    { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
+  ];
+  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "synthetic-published" }, error_messages: [], warning_messages: [] } }));
+}
