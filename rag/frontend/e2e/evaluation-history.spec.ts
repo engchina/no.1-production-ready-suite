@@ -182,7 +182,7 @@ for (const viewport of [
       await expect(panel).toContainText("実行者: 利用者 B");
       await expect(panel).toContainText("検索・回答プロファイル: プロファイル A");
       await expect(page.getByRole("button", { name: "取り消し" })).toHaveCount(0);
-      const result = page.locator('section[aria-labelledby="evaluation-result-title"]');
+      const result = page.getByRole("region", { name: "評価結果", exact: true });
       await expect(result.getByText("要改善", { exact: true })).toBeVisible();
       const cases = page.getByTestId("evaluation-case-scroll-region");
       await expect(cases.getByText("2 行目")).toBeVisible();
@@ -204,7 +204,7 @@ for (const viewport of [
       await shared.goto("/evaluation?job=jobmine");
       await expect(shared.getByTestId("evaluation-run-job")).toContainText("完了");
       await expect(
-        shared.locator('section[aria-labelledby="evaluation-result-title"]').getByText("合格", { exact: true })
+        shared.getByRole("region", { name: "評価結果", exact: true }).getByText("合格", { exact: true })
       ).toBeVisible();
       await expect(shared.getByTestId("evaluation-case-scroll-region").getByText("2 行目")).toBeVisible();
       await expect(shared.getByTestId("evaluation-history-row-jobmine").getByRole("link")).toHaveAttribute("aria-current", "true");
