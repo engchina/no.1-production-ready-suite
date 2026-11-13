@@ -1,3 +1,4 @@
+import { editThreeLineProse } from "./_multiline-prose";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -1146,4 +1147,22 @@ test("主一覧は高い画面の余白へ拡張し、ページ送りを維持�
   await mockKnowledgeBaseApi(page, state);
   await page.goto("/knowledge-bases");
   await expectGrowingList(page, testInfo, "knowledge-bases");
+});
+
+test("ナレッジベースの説明は3行で編集し、Enterで作成せず内部改行を保存して再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const state = createKnowledgeBaseState();
+  await mockKnowledgeBaseApi(page, state);
+  await page.goto("/knowledge-bases?id=new");
+  await page.getByRole("textbox", { name: "名前", exact: true }).fill("合成の対象 A");
+  const description = page.getByRole("textbox", { name: "説明", exact: true });
+  const text = await editThreeLineProse(description);
+  expect(state.knowledgeBases).toHaveLength(1);
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
+  await expect.poll(() => state.knowledgeBases.at(-1)?.description).toBe(text);
+  await expect(page).toHaveURL(/\/knowledge-bases\/kb-2$/);
+  await page.reload();
+  await expect(description).toHaveValue(text);
+  await expectNoPageOverflow(page);
+  await description.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("multiline-knowledge-base-description.png") });
 });

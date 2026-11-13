@@ -56,7 +56,7 @@ import {
   Skeleton,
   Spinner,
   TimedLoadingState,
-  TextField,
+  TextareaField,
   surfaceTintFor,
 } from "@production-ready/ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -72,7 +72,6 @@ import {
   type IngestionJobPhase,
   type SearchResponse,
 } from "@/lib/api";
-import { isSubmitEnter } from "@/lib/keyboard";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
@@ -940,17 +939,15 @@ function RecipeComparison({
               </Button>
             }
           >
-            <TextField
+            <TextareaField
               id="recipe-compare-query"
+              rows={3}
               width="full"
               label={t("documents.experiment.compare.queryLabel")}
               required
               value={query}
               onValueChange={setQuery}
               placeholder={t("documents.experiment.compare.placeholder")}
-              onKeyDown={(event) => {
-                if (isSubmitEnter(event)) void run();
-              }}
             />
           </FieldActionRow>
           {error ? <FormStatus tone="danger" message={error} /> : null}

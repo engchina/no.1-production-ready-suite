@@ -109,6 +109,37 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
+test("KB の長い質問は3行で折り返し、Enterでは検索せずボタンで1回だけ実行する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKbPage(page, 1);
+  const requests: Record<string, unknown>[] = [];
+  await page.route("**/api/search/stream", route => {
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body: searchStreamBody() });
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const input = page.getByPlaceholder("このナレッジベースに質問してみる…");
+  await expect(input).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(input).toHaveAttribute("rows", "3");
+  const firstLine = "合成の対象について、比較条件と確認する項目を詳しく説明してください。".repeat(6);
+  await input.fill(firstLine);
+  await input.press("End");
+  await input.press("Enter");
+  await input.pressSequentially("合成の末尾。");
+  const question = firstLine + "\n合成の末尾。";
+  await expect(input).toHaveValue(question);
+  expect(requests).toEqual([]);
+  const scroll = await input.evaluate(el => ({ wraps: getComputedStyle(el).whiteSpace, horizontal: el.scrollWidth <= el.clientWidth + 1, vertical: el.scrollHeight > el.clientHeight, resize: getComputedStyle(el).resize }));
+  expect(scroll.horizontal).toBe(true);
+  expect(scroll.vertical).toBe(true);
+  expect(scroll.resize).toBe("vertical");
+  await input.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("kb-long-question.png") });
+  await page.getByRole("button", { name: "検索テスト", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({ query: question });
+});
+
 test("KB 詳細の検索テストで検索・回答プロファイル無しに回答と引用を確認できる", async ({ page }) => {
   await mockKbPage(page, 1);
   let streamRequestBody: Record<string, unknown> | null = null;

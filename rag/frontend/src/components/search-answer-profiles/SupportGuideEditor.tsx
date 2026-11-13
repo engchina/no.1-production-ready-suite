@@ -570,8 +570,9 @@ function SupportGuideForm({
               error={errorAt("title")}
               onChange={(event) => update({ title: event.target.value })}
             />
-            <TextField
+            <TextareaField
               id={domId("goal.expected_result")}
+              rows={3}
               className="col-span-full"
               width="full"
               label={t("supportGuides.field.expectedResult")}
@@ -760,8 +761,9 @@ function SupportGuideForm({
                   onValueChange={(value) => updateRow("conditions", index, { unknownHandling: value })}
                 />
                 <div className="col-span-full">
-                  <TextField
+                  <TextareaField
                     id={domId(path("question"))}
+                    rows={3}
                     width="full"
                     label={t("supportGuides.field.question")}
                     helper={t("supportGuides.field.questionHelp")}
@@ -1107,9 +1109,11 @@ function SupportGuideForm({
                   error={errorAt(path("goto_step"))}
                   onValueChange={(value) => updateRow("branches", index, { gotoStep: value })}
                 />
-                <TextField
+                <TextareaField
                   id={domId(path("note"))}
-                  width="lg"
+                  rows={3}
+                  className="col-span-full"
+                  width="full"
                   label={t("supportGuides.field.note")}
                   value={row.note}
                   maxLength={200}
@@ -1233,8 +1237,9 @@ function SupportGuideForm({
                   error={errorAt(path("id"))}
                   onChange={(event) => updateRow("completion", index, { id: event.target.value })}
                 />
-                <TextField
+                <TextareaField
                   id={domId(path("description"))}
+                  rows={3}
                   className="col-span-full"
                   width="full"
                   label={t("supportGuides.field.completionDescription")}
@@ -1245,8 +1250,9 @@ function SupportGuideForm({
                   onChange={(event) => updateRow("completion", index, { description: event.target.value })}
                 />
                 <div className="col-span-full">
-                  <TextField
+                  <TextareaField
                     id={domId(path("check_method"))}
+                    rows={3}
                     width="full"
                     label={t("supportGuides.field.checkMethod")}
                     value={row.checkMethod}

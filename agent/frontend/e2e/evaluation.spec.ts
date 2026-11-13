@@ -807,3 +807,34 @@ test("詳細の読み取り失敗を対象なしと見せず、再試行で回�
   await expect(page.getByRole("heading", { name: "合成の評価セット A", level: 1 })).toBeVisible();
   await expectNoPageHorizontalOverflow(page);
 });
+
+test("評価の自由入力回答は3行で長文を折り返し、Enterで保存せず内部改行を保持する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedSet(mockApi);
+  await page.goto(`/evaluation?id=${SET.id}`);
+  const item = page.getByTestId("evaluation-case-2");
+  await item.getByRole("button", { name: "答えを追加" }).click();
+  const field = page.getByTestId("evaluation-case-2-answer-1").getByLabel("その他（自由入力）");
+  await expect(field).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(field).toHaveAttribute("rows", "3");
+  await expect(field).toHaveCSS("resize", "vertical");
+  const text = "合成の回答を折り返して読みます。".repeat(24);
+  await field.fill(text);
+  await field.press("End");
+  await field.press("Enter");
+  await field.pressSequentially("合成の最終行。");
+  const expected = `${text}\n合成の最終行。`;
+  await expect(field).toHaveValue(expected);
+  expect(mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)).toBeUndefined();
+  await field.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  expect(await field.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  expect(await field.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  await expectNoPageHorizontalOverflow(page);
+  await field.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("evaluation-multiline-answer.png"), fullPage: true });
+  await page.getByRole("button", { name: "保存", exact: true }).first().click();
+  await expect(page.getByText("評価セットを保存しました")).toBeVisible();
+  const request = mockApi.lastRequest("PUT", `/api/evaluation-sets/${SET.id}`)?.body as { cases: Array<{ clarification_answers: Array<{ other_text: string }> }> };
+  expect(request.cases[1].clarification_answers[0].other_text).toBe(expected);
+  await page.reload();
+  await expect(page.getByTestId("evaluation-case-2-answer-1").getByLabel("その他（自由入力）")).toHaveValue(expected);
+});

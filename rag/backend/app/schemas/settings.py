@@ -584,6 +584,7 @@ class LanguagePackFieldData(BaseModel):
     max_chars: int
     # 数値マッピングの値の下限。
     min_value: int = 0
+    multiline: bool = False
 
 
 class LanguagePackData(BaseModel):

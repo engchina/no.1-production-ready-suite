@@ -368,8 +368,9 @@ export function RuntimeKnowledgeManager({ searchAnswerProfileId }: { searchAnswe
           <p className="text-xs leading-relaxed text-fg-muted">
             {t("searchAnswerProfiles.runtime.previewHelp.terms")}
           </p>
-          <TextField
+          <TextareaField
             id="runtime-knowledge-question"
+            rows={3}
             // 質問の文は文章（全幅。#1891）。
             width="full"
             label={t("searchAnswerProfiles.runtime.previewQuestion")}

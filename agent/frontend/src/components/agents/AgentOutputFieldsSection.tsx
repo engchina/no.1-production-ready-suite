@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
-import { Button, Card, CardContent, EmptyState, Section, SelectField, Switch, TextField } from "@production-ready/ui";
+import { Button, Card, CardContent, EmptyState, Section, SelectField, Switch, TextareaField, TextField } from "@production-ready/ui";
 
 import type { AgentOutputField, AgentOutputFieldMatch, AgentOutputFieldType } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -141,8 +141,9 @@ export function AgentOutputFieldsSection({
                       onValueChange={(match) => update(index, { match })}
                     />
                   ) : null}
-                  <TextField
+                  <TextareaField
                     id={`${fieldId}-output-${index}-description`}
+                    rows={3}
                     label={t("agent.output.fieldDescription")}
                     helper={t("agent.output.fieldDescriptionHelper")}
                     width="full"

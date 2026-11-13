@@ -24,8 +24,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   FieldActionRow,
-  isImeComposing,
-  TextField,
+  TextareaField,
   ListScrollRegion,
   ListToolbar,
   Skeleton,
@@ -947,7 +946,7 @@ export function OntologyQueryPlayground({
               runQuestion();
             }}
           >
-            {/* 主な問い合わせの行なので、質問欄と操作をすべて lg（40px、タッチ端末は 44px）にそろえる（#613）。 */}
+            {/* 質問は改行できる本文欄とし、実行は下端にそろえたボタンから行う。 */}
             <FieldActionRow
               actions={
                 <>
@@ -984,19 +983,15 @@ export function OntologyQueryPlayground({
               }
             >
               {/* 質問が空では実行できない（disabled={!question.trim()}）ので必須として示す（#531）。 */}
-              <TextField
+              <TextareaField
                 id="ontology-playground-question"
                 label={t("ontologyPlayground.questionLabel")}
                 required
-                size="lg"
+                rows={3}
                 // 質問は文章なので full（下の操作と端をそろえる。#1891）。
                 width="full"
                 value={question}
                 onValueChange={handleQuestionChange}
-                onKeyDown={(event) => {
-                  // IME の変換を確定する Enter でフォームを送信しない（重い問い合わせは明示的に実行する。#535）。
-                  if (event.key === "Enter" && isImeComposing(event)) event.preventDefault();
-                }}
                 placeholder={t("ontologyPlayground.questionPlaceholder")}
                 data-testid="ontology-playground-question"
               />

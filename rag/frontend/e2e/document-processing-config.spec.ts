@@ -710,7 +710,7 @@ test("権限のない設定画面へのグローバル設定のリンクは出�
   await expect(editor.getByRole("link", { name: / のグローバル設定を開く$/ })).toHaveCount(1);
 });
 
-test("レシピ比較で空の引用を理由付きの状態として表示する", async ({ page }) => {
+test("レシピ比較で空の引用を理由付きの状態として表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockWorkspace(page, { recipeCount: 2 });
   const searchRequests: Array<Record<string, unknown>> = [];
   await page.route("**/api/search", (route) => {
@@ -729,7 +729,16 @@ test("レシピ比較で空の引用を理由付きの状態として表示す�
   await page.goto("/documents/doc-1");
 
   await page.getByRole("button", { name: "検索結果を横並びで比較" }).click();
-  await page.getByLabel("比較する質問").fill("承認条件を教えて");
+  const question = page.getByLabel("比較する質問");
+  await expect(question).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(question).toHaveAttribute("rows", "3");
+  await question.fill("合成の比較条件を教えてください。");
+  await question.press("End");
+  await question.press("Enter");
+  await question.pressSequentially("合成の追加条件。");
+  expect(searchRequests).toEqual([]);
+  await expect(question).toHaveValue("合成の比較条件を教えてください。\n合成の追加条件。");
+  await page.screenshot({ path: testInfo.outputPath("recipe-question-multiline.png") });
   await page.getByRole("button", { name: "比較", exact: true }).click();
 
   await expect(page.getByText("一致する根拠が見つかりませんでした。")).toHaveCount(2);
@@ -741,6 +750,7 @@ test("レシピ比較で空の引用を理由付きの状態として表示す�
       .map((request) => (request.filters as Record<string, string>).chunk_set_id)
       .sort()
   ).toEqual(["chunk-set-recipe-1", "chunk-set-recipe-2"]);
+  expect(searchRequests.map(request => request.query)).toEqual(["合成の比較条件を教えてください。\n合成の追加条件。", "合成の比較条件を教えてください。\n合成の追加条件。"]);
   // 引用の候補を比べるので、回答は作らずに検索だけを頼む（#593）。
   expect(searchRequests.map((request) => request.retrieval_only)).toEqual([true, true]);
   await expectNoPageOverflow(page);
