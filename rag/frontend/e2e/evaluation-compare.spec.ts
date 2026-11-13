@@ -21,6 +21,49 @@ import {
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
 
+test("候補の後続ページの失敗から再試行し、末尾を主条件と比較条件へ選べる", { tag: "@responsive" }, async ({ page }, info) => {
+  test.setTimeout(60_000);
+  const items = Array.from({ length: 52 }, (_, index) => ({
+    id: `synthetic-profile-${index}`, name: `合成プロファイル ${String(index + 1).padStart(3, "0")}`,
+    description: "", status: "ACTIVE", knowledge_base_count: 1,
+    created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z", archived_at: null,
+  }));
+  let failing = true;
+  const offsets: number[] = [];
+  await page.route("**/api/search-answer-profiles**", route => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    offsets.push(offset);
+    if (failing && offset > 0) return route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の後続ページの失敗"] } });
+    return route.fulfill({ json: envelope({ items: items.slice(offset, offset + limit), offset, limit, total: items.length, has_next: offset + limit < items.length }) });
+  });
+  await page.goto("/evaluation");
+  const failure = page.getByTestId("evaluation-profiles-load-failed");
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  failing = false;
+  await failure.getByRole("button", { name: "再試行", exact: true }).click();
+  await page.locator("#evaluation-profile").click();
+  await page.getByRole("listbox").getByRole("option", { name: /合成プロファイル 052/ }).click();
+  await page.getByRole("switch", { name: "別の検索・回答プロファイルでも評価して比較する" }).click();
+  await page.locator("#evaluation-compare-profile").click();
+  await expect(page.getByRole("listbox").getByRole("option", { name: /合成プロファイル 052/ })).toHaveCount(0);
+  await page.getByRole("listbox").getByRole("option", { name: /合成プロファイル 051/ }).click();
+  expect(offsets).toContain(50);
+  await expect(page.locator("#evaluation-profile")).toContainText("合成プロファイル 052");
+  await expect(page.locator("#evaluation-compare-profile")).toContainText("合成プロファイル 051");
+  await page.screenshot({ path: info.outputPath("all-profile-choices.png"), fullPage: true });
+  failing = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#evaluation-profile")).toContainText("合成プロファイル 052");
+  await expect(page.locator("#evaluation-compare-profile")).toContainText("合成プロファイル 051");
+  failing = false;
+  await failure.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(failure).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);

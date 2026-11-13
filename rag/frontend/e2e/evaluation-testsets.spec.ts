@@ -22,6 +22,43 @@ async function referenceTab(page: Page) {
   if (await tab.isVisible()) await tab.click();
 }
 
+test("長い質問の選択ラベルを裁切せず、全文と確認状態をキーボードで確認できる", { tag: "@responsive" }, async ({ page }, info) => {
+  const state = await mockTestSetPage(page, 6);
+  await createFromResults(page);
+  const saved = state.getSaved()!;
+  const items = saved.items.map((item, index) => ({ ...item,
+    question: `合成の長い質問 ${index + 1}。${"複数の条件と確認手順を含む説明です。".repeat(12)}`,
+    confirmed: index % 2 === 0, standard_answer: index % 2 === 0 ? "合成の標準回答" : "",
+  }));
+  state.setSaved({ ...saved, items });
+  await page.reload();
+  await expect(page.locator("#testset-question")).toHaveValue(items[1].question);
+  if ((page.viewportSize()?.width ?? 1440) > 1024) {
+    const nav = page.locator(".testset-item-nav");
+    const button = nav.getByRole("button", { name: `1. ${items[0].question}`, exact: true });
+    await button.focus();
+    await expect(page.getByRole("tooltip")).toContainText(items[0].question);
+    const bounds = await button.evaluate(element => {
+      const range = document.createRange(); range.selectNodeContents(element.querySelector("span") ?? element);
+      const text = range.getBoundingClientRect(); const box = element.getBoundingClientRect();
+      return { textTop: text.top, textBottom: text.bottom, top: box.top, bottom: box.bottom };
+    });
+    expect(bounds.textTop).toBeGreaterThanOrEqual(bounds.top);
+    expect(bounds.textBottom).toBeLessThanOrEqual(bounds.bottom);
+    await button.press("Enter");
+    await expect(button).toHaveAttribute("aria-current", "true");
+    await expect(nav.getByText("確認済み", { exact: true })).toHaveCount(3);
+    await expect(nav.getByText("未確認", { exact: true })).toHaveCount(3);
+    expect(await nav.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  } else {
+    await chooseSelectFieldOption(page.locator("#testset-item-picker"), new RegExp(`^1\\. ${items[0].question}`));
+  }
+  await expect(page.locator("#testset-question")).toHaveValue(items[0].question);
+  await expect(page.locator("#testset-standard")).toHaveValue("合成の標準回答");
+  await page.screenshot({ path: info.outputPath("long-question-navigation.png"), fullPage: true });
+  await expectNoPageOverflow(page);
+});
+
 for (const theme of ["light", "dark"] as const) {
   test(`保存と確認を分けた三欄の編集・参考の切替・直接評価 (${theme})`, { tag: "@responsive" }, async ({ page }, info) => {
     const state = await mockTestSetPage(page);
