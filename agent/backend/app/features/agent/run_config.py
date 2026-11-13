@@ -55,6 +55,7 @@ def run_configuration(
     model: Mapping[str, Any],
     data_scopes: Any,
     sdk_version: str,
+    output_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run の構成（hash の参照）と指紋。
 
@@ -120,18 +121,30 @@ def run_configuration(
         "data_scopes": {"sha256": sha256(scopes) if scopes is not None else None},
         "sdk_version": sdk_version,
     }
+    if output_contract is not None:
+        config["output_contract"] = dict(output_contract)
     config["fingerprint"] = fingerprint(config)
     return config
 
 
 def fingerprint(config: Mapping[str, Any]) -> str:
-    return sha256({part: config.get(part) for part in FINGERPRINT_PARTS})[:FINGERPRINT_CHARS]
+    parts = (
+        (*FINGERPRINT_PARTS, "output_contract")
+        if "output_contract" in config
+        else FINGERPRINT_PARTS
+    )
+    return sha256({part: config.get(part) for part in parts})[:FINGERPRINT_CHARS]
 
 
 def config_differences(base: Mapping[str, Any], target: Mapping[str, Any]) -> list[str]:
     """2 つの構成で違う部分（指紋に入る部分の名前と、ツール・接続は名前の差）。"""
     differences: list[str] = []
-    for part in FINGERPRINT_PARTS:
+    parts = (
+        (*FINGERPRINT_PARTS, "output_contract")
+        if "output_contract" in base or "output_contract" in target
+        else FINGERPRINT_PARTS
+    )
+    for part in parts:
         if base.get(part) == target.get(part):
             continue
         if part == "tools":

@@ -16,6 +16,7 @@ class _Wire(BaseModel):
 
 
 class _Column(_Wire):
+    field_ref: str | None = Field(default=None, pattern=r"^S[1-9][0-9]*:F[1-9][0-9]*$")
     name: str = Field(min_length=1, max_length=512)
     data_type: str = Field(min_length=1, max_length=512)
     nullable: bool
@@ -36,6 +37,8 @@ class _Object(_Wire):
 
 
 class _Schema(_Wire):
+    schema_ref: str | None = Field(default=None, pattern=r"^S[1-9][0-9]*$")
+    descriptions_omitted: Literal[True] | None = None
     schema_version: Literal[4]
     profile_id: str = Field(min_length=1, max_length=128)
     source: Literal["cached"]
@@ -77,6 +80,26 @@ def profile_schema_summary(value: Any) -> dict[str, Any] | None:
         return _unavailable(value)
 
     summary = parsed.model_dump(mode="json")
+    if summary["descriptions_omitted"] is None:
+        summary.pop("descriptions_omitted")
+    if summary["schema_ref"] is None:
+        summary.pop("schema_ref")
+    for obj in summary["objects"]:
+        for column in obj["columns"]:
+            if column["field_ref"] is None:
+                column.pop("field_ref")
+
+    def omit_descriptions() -> None:
+        summary["descriptions_omitted"] = True
+        summary["truncated"] = True
+        summary["page_complete"] = False
+        for obj in summary["objects"]:
+            for entry in [obj, *obj["columns"]]:
+                for key in ("logical_name", "description", "description_truncated"):
+                    entry.pop(key, None)
+
+    if parsed.descriptions_omitted:
+        omit_descriptions()
 
     def size() -> int:
         return len(json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
@@ -93,6 +116,8 @@ def profile_schema_summary(value: Any) -> dict[str, Any] | None:
                 column["description_truncated"] = True
         summary["truncated"] = True
         summary["page_complete"] = False
+    if summary.get("schema_ref") and size() > _MAX_SUMMARY_CHARS:
+        omit_descriptions()
     while size() > _MAX_SUMMARY_CHARS:
         tail_object = next((obj for obj in reversed(summary["objects"]) if obj["columns"]), None)
         if tail_object is not None:
