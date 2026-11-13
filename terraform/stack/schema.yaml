@@ -8,6 +8,7 @@ variableGroups:
   - title: "配備先"
     visible: true
     variables:
+      - region
       - compartment_ocid
 
   - title: Autonomous AI Database
@@ -147,7 +148,6 @@ variableGroups:
   - title: "Hidden"
     visible: false
     variables:
-      - region
       - adb_compute_model
       - application_git_url
       - application_git_ref
@@ -166,10 +166,15 @@ variableGroups:
 variables:
   region:
     title: Region
-    description: "対応リージョンは大阪（ap-osaka-1）、東京（ap-tokyo-1）、Chicago（us-chicago-1）です。Resource Manager の stack を作成するリージョンを使用します。"
-    type: oci:identity:region:name
+    description: "配備先のリージョンを選択します。ap-tokyo-1、ap-osaka-1、us-chicago-1 に対応し、ADB・Compute・ネットワークの候補と配備にはこの選択値を使います。"
+    type: enum
     required: true
-    visible: false
+    visible: true
+    enum:
+      - "ap-tokyo-1"
+      - "ap-osaka-1"
+      - "us-chicago-1"
+    default: "ap-osaka-1"
 
   compartment_ocid:
     type: oci:identity:compartment:id
@@ -194,6 +199,7 @@ variables:
     title: "VCN"
     description: "Select an existing virtual cloud network."
     dependsOn:
+      region: ${region}
       compartmentId: ${compartment_ocid}
 
   application_git_url:
@@ -274,6 +280,7 @@ variables:
     title: "既存のAutonomous AI Database"
     description: "選択したコンパートメント内の既存ADBを選択します。TerraformがWalletを生成し、接続設定をplatform/.env（3製品共通の設定）へ反映します。"
     dependsOn:
+      region: ${region}
       compartmentId: ${adb_compartment_ocid}
 
   existing_adb_admin_password:
@@ -475,6 +482,7 @@ variables:
     title: "仮想クラウド・ネットワーク"
     description: "Autonomous AI Databaseのプライベート・エンドポイントで使用するVCNを選択します。"
     dependsOn:
+      region: ${region}
       compartmentId: ${adb_private_endpoint_vcn_compartment_id}
 
   adb_private_endpoint_subnet_compartment_id:
@@ -498,6 +506,7 @@ variables:
     title: "サブネット"
     description: "Autonomous AI Databaseのプライベート・エンドポイントをアタッチするサブネットを選択します。"
     dependsOn:
+      region: ${region}
       compartmentId: ${adb_private_endpoint_subnet_compartment_id}
       vcnId: ${adb_private_endpoint_vcn_id}
 
@@ -544,6 +553,7 @@ variables:
     title: "許可する仮想クラウド・ネットワーク"
     description: "Service Gateway経由でAutonomous AI Databaseへのアクセスを許可するVCNを選択します。"
     dependsOn:
+      region: ${region}
       compartmentId: ${adb_acl_vcn_compartment_id}
 
   adb_acl_subnet_compartment_id:
@@ -575,6 +585,7 @@ variables:
     title: "許可するサブネット（オプション）"
     description: "選択したサブネットのCIDRをVCNアクセス制御ルールへ追加します。未選択の場合はVCN全体を許可します。"
     dependsOn:
+      region: ${region}
       compartmentId: ${adb_acl_subnet_compartment_id}
       vcnId: ${adb_acl_vcn_id}
 
@@ -685,6 +696,7 @@ variables:
     title: "Compute subnet"
     description: "Subnet of the Compute instance. Select a public or private subnet; public IP assignment is detected automatically. Allow the public port (https_port, default 443; http_port when HTTPS is off) in its security list. With a private endpoint ADB, allow TCP 1522 from this subnet's CIDR in the ADB subnet's security list."
     dependsOn:
+      region: ${region}
       compartmentId: ${compartment_ocid}
       vcnId: ${vcn_ai_vcn_id}
 
@@ -738,6 +750,7 @@ variables:
     visible: bastion_enabled
     title: "Bastion VCN"
     dependsOn:
+      region: ${region}
       compartmentId: ${compartment_ocid}
 
   bastion_shape:
@@ -806,6 +819,7 @@ variables:
     title: "Bastion subnet"
     description: "bastion 専用の subnet を選びます。主 Compute の subnet は使いません。管理者の CIDR から TCP 22 と 5901 を許可してください。"
     dependsOn:
+      region: ${region}
       compartmentId: ${compartment_ocid}
       vcnId: ${bastion_vcn_id}
 

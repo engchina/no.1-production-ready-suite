@@ -92,18 +92,48 @@ class StackInputTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("Invalid value for variable", result.stdout)
 
-    def test_region_has_no_default_and_is_required(self) -> None:
+    def test_region_is_first_visible_field_with_requested_choices_and_default(
+        self,
+    ) -> None:
         schema = (ROOT / "terraform/stack/schema.yaml").read_text()
-        variables = (ROOT / "terraform/stack/variables.tf").read_text()
-        self.assertNotRegex(_schema_variable(schema, "region"), r"(?m)^\s*default:")
-        self.assertNotRegex(
-            _terraform_variable(variables, "region"), r"(?m)^\s*default\s*="
+        groups = _schema_groups(schema)
+        self.assertEqual(next(iter(groups)), "配備先")
+        self.assertEqual(
+            sum(members.count("region") for _, members in groups.values()), 1
         )
-        self.assertIn("visible: false", _schema_variable(schema, "region"))
+        self.assertEqual(groups["配備先"], ("true", ["region", "compartment_ocid"]))
+        block = _schema_variable(schema, "region")
+        self.assertIn("type: enum", block)
+        self.assertIn("visible: true", block)
+        self.assertIn('default: "ap-osaka-1"', block)
+        self.assertEqual(
+            re.findall(r'^      - "([^"]+)"$', block, re.MULTILINE),
+            ["ap-tokyo-1", "ap-osaka-1", "us-chicago-1"],
+        )
         result = self.plan(region=None)
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("No value for required variable", result.stdout)
-        self.assertIn('"region"', result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertRegex(result.stdout, r'region\s*= "ap-osaka-1"')
+
+    def test_regional_candidates_follow_selected_region(self) -> None:
+        schema = (ROOT / "terraform/stack/schema.yaml").read_text()
+        for name in (
+            "availability_domain",
+            "vcn_ai_vcn_id",
+            "subnet_ai_subnet_id",
+            "bastion_availability_domain",
+            "bastion_vcn_id",
+            "bastion_subnet_id",
+            "existing_adb_ocid",
+            "adb_private_endpoint_vcn_id",
+            "adb_subnet_id",
+            "adb_acl_vcn_id",
+            "adb_acl_subnet_id",
+        ):
+            with self.subTest(field=name):
+                self.assertIn("region: ${region}", _schema_variable(schema, name))
+        self.assertIn(
+            "region = var.region", (ROOT / "terraform/stack/provider.tf").read_text()
+        )
 
     def test_supported_regions(self) -> None:
         for region in ("ap-osaka-1", "ap-tokyo-1", "us-chicago-1"):
