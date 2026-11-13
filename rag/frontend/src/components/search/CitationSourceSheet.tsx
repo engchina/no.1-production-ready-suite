@@ -18,7 +18,7 @@ import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
  * `chunk` は閉じる間も前の根拠を渡す（`useEvidenceSource` の `shown`）。
  *
  * 本文の根拠の行が指す箇所を確定できないとき（`position` が `unresolved`。#2710）は、要約の上に「位置は確定して
- * いない」ことと候補の数を出し、原文のプレビューは頁へ移るだけで箇所を強調しない（別の箇所を正しい位置に見せない）。
+ * いない」ことと候補の数を出す。テキストの原文は reader が確認した引用位置を強調し、回答行の対応とは区別する。
  */
 export function CitationSourceSheet({
   chunk,
@@ -105,7 +105,8 @@ function CitationSourcePreview({
   const source = useDocumentPreviewSource(open && office ? chunk.document_id : null, recipeId, chunkSetId);
   const focus = evidencePreviewFocus(chunk.metadata);
   if (source.data?.is_structured_records || /\.(?:txt|csv|tsv|md|markdown|json|jsonl|xml|html?|eml|log)$/i.test(previewFileName)) {
-    return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} loadOriginal={/\.(?:json|html?)$/i.test(previewFileName) ? loadOriginal : undefined} enabled={open} highlight={highlight} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
+    // 回答行の対応と原文内の位置は別に判定する。reader の確認済み範囲を表示する。
+    return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} loadOriginal={/\.(?:json|html?)$/i.test(previewFileName) ? loadOriginal : undefined} enabled={open} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
   }
   if (office) {
     if (!recipeId || !chunkSetId) return <FormStatus tone="warning" message={t("search.previewSource.missing")} />;

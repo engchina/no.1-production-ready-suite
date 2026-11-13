@@ -280,13 +280,13 @@ test("原本ノードは展開時だけ取得し、版と対応範囲を保持�
 });
 
 
-for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json", "html", "htm"]) {
+for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md", "csv", "xlsx", "docx", "json", "html", "htm"]) {
   test(`Chatの原文の段落を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
     await mockDatabaseReady(page); await mockLocalAuth(page);
     const name = `synthetic.${extension}`;
     const structured = extension === "csv" || extension === "xlsx" || extension === "docx" ? structuredSource[extension] : null;
 
-    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:structured?.window.blocks.find(block=>block.cited)?.text ?? "見出し\n合成😀の本文です。",score:1,metadata:{recipe_id:"r1",chunk_set_id:"cs1",element_ids:structured ? [structured.element_id] : ["h","a"],context_role:"evidence",answer_citation_lines:[1],answer_citation_provenance:"child"}};
+    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:structured?.window.blocks.find(block=>block.cited)?.text ?? "見出し\n合成😀の本文です。",score:1,metadata:{recipe_id:"r1",chunk_set_id:"cs1",element_ids:structured ? [structured.element_id] : ["h","a"],context_role:"evidence",answer_citation_lines:extension.endsWith(".md") ? [] : [1],answer_citation_candidate_lines:extension.endsWith(".md") ? [1] : [],answer_citation_provenance:"child"}};
     await page.route("**/api/search-answer-profiles**", route => route.fulfill({json:{data:{items:[PROFILE],total:1,limit:50,offset:0,has_next:false},error_messages:[],warning_messages:[]}}));
     await page.route("**/api/chat/conversations**", route => {
       const detail = {id:"c-text",search_answer_profile_id:PROFILE.id,title:"合成の原文確認",status:"ACTIVE",owned:true,message_count:2,created_at:"2026-11-01T00:00:00Z",updated_at:"2026-11-01T00:00:00Z",messages:[
@@ -295,9 +295,9 @@ for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json",
       ]};
       return route.fulfill({json:{data:new URL(route.request().url()).pathname.endsWith("/c-text") ? detail : {items:[{...detail,messages:undefined}],total:1,offset:0,limit:25,has_next:false},error_messages:[],warning_messages:[]}});
     });
-    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],blocks:[
-      {id:"h",text:"見出し",offset:0,highlights:[[0,3]],cited:true},
-      {id:"a",text:"合成😀の本文です。",offset:0,highlights:[[0,9]],cited:true},
+    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:extension === "unresolved.md" ? "unresolved" : "exact",section_path:[],blocks:[
+      {id:"h",text:"見出し",offset:0,highlights:extension === "unresolved.md" ? [] : [[0,3]],cited:true},
+      {id:"a",text:"合成😀の本文です。",offset:0,highlights:extension === "unresolved.md" ? [] : [[0,9]],cited:true},
       {id:"other",text:"別の文脈です。",offset:0,highlights:[],cited:false},
     ],outline:[],previous_cursor:extension === "md" ? "before" : null,next_cursor:extension === "md" ? "after" : null,scope:"paragraph"},error_messages:[],warning_messages:[]}}));
     if(structured) {
@@ -319,8 +319,14 @@ for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json",
       await expect(reader.locator("[data-source-record]")).not.toHaveCount(0);
       await expect(reader.locator("mark").first()).toBeVisible();
       await expect(reader.getByRole("table").last()).toBeVisible();
-    } else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
+    } else if (extension === "unresolved.md") await expect(reader.locator("mark")).toHaveCount(0);
+    else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
     await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
+    if (extension.endsWith(".md")) {
+      await expect(page.getByTestId("evidence-source-notice")).toContainText("この行との対応が確定したことは示しません");
+      if (extension === "candidate.md") await expect(reader).not.toContainText("引用位置を確定できないため");
+      else await expect(page.getByTestId("evidence-reader")).toContainText("引用位置を確定できないため");
+    }
     if (extension === "md") {
       let release!: () => void;
       let fail = false;
