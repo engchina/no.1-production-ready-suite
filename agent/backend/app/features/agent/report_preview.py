@@ -9,7 +9,14 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+)
 
 from app.features.agent.report_contract import (
     AnswerPlan,
@@ -42,6 +49,22 @@ class RenderedBlockCost(_Model):
     index: int = Field(ge=1)
     kind: Literal["narrative", "table", "confirmation_section"]
     expanded_codepoints: int = Field(ge=0)
+    # None はこの測定を保存していない旧レコード。引用がないという意味ではない。
+    citation_marker_codepoints: int | None = Field(default=None, ge=0)
+
+    @model_serializer(mode="wrap")
+    def _preserve_unmeasured_record(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        result: dict[str, Any] = handler(self)
+        # 旧 v1 レコードの hash と再保存内容を変えない。他の None 項目は除去しない。
+        if self.citation_marker_codepoints is None:
+            result.pop("citation_marker_codepoints", None)
+        return result
+
+
+class BudgetBlockCost(_Model):
+    index: int = Field(ge=1)
+    kind: Literal["narrative", "table", "confirmation_section"]
+    budget_codepoints: int = Field(ge=0)
 
 
 class RenderedReport(_Model):
@@ -62,6 +85,9 @@ class PreviewSummary(_Model):
     budget_codepoints: int
     citation_marker_codepoints: int
     block_costs: tuple[RenderedBlockCost, ...]
+    block_costs_metric: Literal["expanded_markdown_codepoints"] = "expanded_markdown_codepoints"
+    # 旧レコードで引用の帰属が未測定なら、推測せず全体の計数だけを返す。
+    budget_block_costs: tuple[BudgetBlockCost, ...] | None = None
     composition_delta_chars: int
     total_codepoints: int
     remaining_target: int | None
@@ -190,6 +216,55 @@ def _check_costs(
         )
 
 
+def _check_citation_costs(
+    costs: list[RenderedBlockCost] | tuple[RenderedBlockCost, ...], marker_cost: int
+) -> None:
+    measured = [cost.citation_marker_codepoints for cost in costs]
+    if all(value is None for value in measured):
+        return
+    if (
+        any(value is None for value in measured)
+        or sum(value for value in measured if value is not None) != marker_cost
+        or any(
+            value is not None
+            and (value > cost.expanded_codepoints or (cost.kind != "narrative" and value != 0))
+            for cost, value in zip(costs, measured, strict=True)
+        )
+    ):
+        raise ReportPreviewError(
+            "runtime.report_render_invalid", "回答案の引用とブロック別文字数が一致しません。"
+        )
+
+
+def _budget_block_costs(
+    record: _Record, metric: ReportBudgetMetric, marker_cost: int, budget_cost: int
+) -> tuple[BudgetBlockCost, ...] | None:
+    excluded = metric == "expanded_markdown_without_citation_markers_codepoints"
+    if (
+        excluded
+        and marker_cost
+        and any(cost.citation_marker_codepoints is None for cost in record.block_costs)
+    ):
+        return None
+    costs = tuple(
+        BudgetBlockCost(
+            index=cost.index,
+            kind=cost.kind,
+            budget_codepoints=cost.expanded_codepoints
+            - ((cost.citation_marker_codepoints or 0) if excluded else 0),
+        )
+        for cost in record.block_costs
+    )
+    if (
+        sum(cost.budget_codepoints for cost in costs) + record.composition_delta_chars
+        != budget_cost
+    ):
+        raise ReportPreviewError(
+            "runtime.report_render_invalid", "回答案の予算とブロック別文字数が一致しません。"
+        )
+    return costs
+
+
 def _bounded(value: Mapping[str, Any]) -> None:
     try:
         size = len(
@@ -261,6 +336,9 @@ def _load(value: Mapping[str, Any] | None, run_id: str, contract: ReportOutputCo
                 "runtime.report_preview_invalid", "保存した回答案の内容が一致しません。"
             )
         _check_costs(record.plan, record.body, record.block_costs, record.composition_delta_chars)
+        _check_citation_costs(
+            record.block_costs, _budget_measurement(record.body, record.evidence_text, contract)[2]
+        )
     return ledger
 
 
@@ -277,6 +355,7 @@ def _summary(
         citation_marker_codepoints=marker_cost,
         preview_id=record.preview_id,
         block_costs=tuple(record.block_costs),
+        budget_block_costs=_budget_block_costs(record, metric, marker_cost, budget_cost),
         composition_delta_chars=record.composition_delta_chars,
         total_codepoints=record.total_codepoints,
         remaining_target=record.remaining_target,
@@ -337,7 +416,10 @@ def create_preview(
         )
     _check_costs(frozen_plan, rendered.body, rendered.block_costs, rendered.composition_delta_chars)
     total = len(rendered.body)
-    _, budget_cost, _ = _budget_measurement(rendered.body, rendered.evidence_text, contract)
+    _, budget_cost, marker_cost = _budget_measurement(
+        rendered.body, rendered.evidence_text, contract
+    )
+    _check_citation_costs(rendered.block_costs, marker_cost)
     status, target, hard = _budget_values(budget_cost, contract)
     record = _Record(
         preview_id=f"A{current.next_number}",

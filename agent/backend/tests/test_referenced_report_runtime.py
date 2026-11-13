@@ -475,13 +475,28 @@ def test_program_values_do_not_become_source_citations(repo: AgentRuntimeReposit
     )
     rendered = builtin_runtime._render_report_body(saved, no_cite, None)
     assert chunk in rendered.body and rendered.evidence_text == ""
+    assert [cost.citation_marker_codepoints for cost in rendered.block_costs] == [0, 0, 0]
     assert answer_evidence(saved.steps, rendered.evidence_text)["cited"] == 0
     explicit = AnswerPlan.model_validate(
         {"blocks": [{"kind": "narrative", "text": "出典 [[cite:1]]"}]}
     )
     cited = builtin_runtime._render_report_body(saved, explicit, None)
     assert cited.evidence_text == "【根拠: " + chunk + "】"
+    assert cited.block_costs[0].citation_marker_codepoints == len(cited.evidence_text)
     assert answer_evidence(saved.steps, cited.evidence_text)["cited"] == 1
+    repeated = AnswerPlan.model_validate(
+        {
+            "blocks": [
+                {"kind": "narrative", "text": "出典 [[cite:1]] [[cite:1]] 値 [[cell:T1:R1:C1]]"},
+                {"kind": "table", "table": "T1"},
+            ]
+        }
+    )
+    repeated_render = builtin_runtime._render_report_body(saved, repeated, None)
+    assert [cost.citation_marker_codepoints for cost in repeated_render.block_costs] == [
+        2 * len(cited.evidence_text),
+        0,
+    ]
 
 
 def test_runtime_preview_persists_and_reuses_without_render(tmp_path: Any) -> None:

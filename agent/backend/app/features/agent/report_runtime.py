@@ -35,12 +35,14 @@ DRAFT_REPORT_TOOL = "draft_report"
 REPORT_RENDERER_REVISION = 1
 REPORT_DATA_INSTRUCTIONS = (
     "## Step 1: 回答の構成を選ぶ\n"
+    "結論と必要な集計・行列を本文に選び、取得済みの詳しい明細は保存した結果表から確認できるようにします。"
     "表はTableBlockのtableにT番号を指定します。"
     "全表はrowsとcolsをnullにし、一部はrowsに行番号、colsにcolumn_refsの列番号を指定します。"
     "行列は1始まり、*は全件、範囲とカンマ列挙は指定順です。縦表はlayout=verticalにします。"
     "Narrativeの値はquantitiesの[[quantity:T1:R2:C3]]、その他はcellsの[[cell:T1:R2:C3]]を使います。\n"
-    "## Step 2: 列の確認状況を構成する\n"
-    "列の確認状況はConfirmationSectionでfield_refを選び、状態はプログラムに任せます。"
+    "## Step 2: 必要な確認状況を選ぶ\n"
+    "ConfirmationSectionは任意です。回答に必要な列の確認状況を示す場合だけfield_refを選び、"
+    "状態はプログラムに任せます。"
     "Narrativeに別の可用性判定を書かないでください。"
 )
 _CANONICAL_CITATION = re.compile(r"【根拠: ([^\r\n】]*)】")
@@ -88,6 +90,7 @@ def render_plan(
     model_parts: list[str] = []
     available_sources = {item["chunk_id"] for item in passed_evidence(run.steps, limit=None)}
     for number, block in enumerate(plan.blocks, 1):
+        citation_cost = 0
         if isinstance(block, TableBlock):
             rendered = index.render(render_sources(block.marker()))
         elif isinstance(block, NarrativeBlock):
@@ -108,13 +111,21 @@ def render_plan(
             selected_answer_evidence(run.steps, explicit)
             if explicit:
                 model_parts.append(explicit)
+                citation_cost = sum(
+                    len(match[0]) for match in _CANONICAL_CITATION.finditer(explicit)
+                )
             rendered = index.render(source_text)
         else:
             # 取得件数/NULL件数などはモデルのliteralではなく、プログラムが計算した値。
             rendered = render_confirmation(run.metadata, block, data_index=index)
         parts.append(rendered)
         costs.append(
-            RenderedBlockCost(index=number, kind=block.kind, expanded_codepoints=len(rendered))
+            RenderedBlockCost(
+                index=number,
+                kind=block.kind,
+                expanded_codepoints=len(rendered),
+                citation_marker_codepoints=citation_cost,
+            )
         )
     evidence_text = "\n\n".join(model_parts)
     body = finalize("\n\n".join(parts), evidence_text)
@@ -157,6 +168,10 @@ def draft_report_tool(
         description=(
             "## Step 1: 回答案を確認する\n"
             "構成を渡すと、参照を展開した分量と表示の準備状態を返します。\n"
+            "budget_block_costsはmetricと同じ数え方です。各budget_codepointsと"
+            "composition_delta_charsの合計が全体のbudget_codepointsです。"
+            "block_costsは引用印を含む展開後の文字数です。"
+            "budget_block_costsがnullの既存案では全体の計数を使います。\n"
             "## Step 2: 回答案を選ぶ\n"
             "返された分量の状態を確認し、最終出力は選んだpreview_idだけを返す。\n"
             "分量設定: "
