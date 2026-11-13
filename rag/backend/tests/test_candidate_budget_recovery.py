@@ -137,6 +137,20 @@ def _settings(**overrides: Any) -> Settings:
 
 def _llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
     """渡された根拠に必要な原文があるときだけ、その原文を引いて答える（無ければ推測しない）。"""
+    if getattr(schema, "_uses_full_answer", False):
+        selected = [
+            uid
+            for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)
+            if NEEDED_TEXT in text
+        ]
+        return cast(Any, schema).model_validate(
+            {
+                "answer_body": NEEDED_TEXT + "[C1]" if selected else "合成の資料が不足しています。",
+                "response_kind": "answered" if selected else "insufficient_evidence",
+                "confidence": "high" if selected else "low",
+                "citations": [{"unit_ids": selected}] if selected else [],
+            }
+        )
     if not issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
         return _fake_llm(system, prompt, settings, schema, **options)
     match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(NEEDED_TEXT), prompt, re.DOTALL)

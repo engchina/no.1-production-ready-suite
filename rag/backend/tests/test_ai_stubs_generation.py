@@ -63,12 +63,11 @@ def test_stub_completes_a_generation_round_with_a_verified_citation(model_view: 
         parse_images=lambda *args, **kwargs: pytest.fail("画像は不要"),
     )
 
-    assert schemas[0] == "GroundedDraftWire"
-    assert result.draft.answer_parts
-    # 決定論スタブは原文の写しを返すので、選んだ ID の原文を直接の記載にする（導出を作らない）。
-    assert result.draft.answer_parts[0].result_kind == "direct"
+    assert schemas[0] == "FullAnswerWire"
+    assert result.draft._full_answer
+    assert not result.draft.answer_parts
     assert not result.applications
-    assert result.timing["answer_parts"]["status"] == "linked"
+    assert "answer_parts" not in result.timing
     assert len(result.checked) == 1
     citation = result.checked[0].item.citations[0]
     assert citation.evidence_id == spans[0]["evidence_id"]

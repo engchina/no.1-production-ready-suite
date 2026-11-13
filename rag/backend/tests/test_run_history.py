@@ -1057,13 +1057,13 @@ async def test_compared_columns_keep_their_own_usage(monkeypatch: MonkeyPatch) -
 async def test_failed_run_keeps_the_calls_it_made_as_partial(monkeypatch: MonkeyPatch) -> None:
     """失敗した実行は、失敗までの呼び出しを数え、利用量の無い呼び出しがあれば一部計測にする。"""
     import rag_engine.adapters.oci as engine_oci
-    from rag_engine.generation.citation_wire import generation_draft_wire_model
+    from rag_engine.generation.full_answer_wire import FullAnswerWire
 
     # 生成専用の実送信schemaで失敗させ、監査の保留とは区別する。
     monkeypatch.setattr(
         engine_oci,
         "parse_text_response",
-        _fake_llm_with_usage("model-a", fail_on=generation_draft_wire_model()),
+        _fake_llm_with_usage("model-a", fail_on=FullAnswerWire),
     )
     store = RecordingStore()
     tracker = RecordingTrace("f" * 32)
