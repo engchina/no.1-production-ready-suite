@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "./fixtures/test";
 
 import {
+  expectEvaluationCard,
   chooseEvaluationProfile,
   mockEvaluationProfiles,
   evaluationImportResult,
@@ -231,7 +232,7 @@ for (const viewport of [
 ]) {
   test(`回答の過程の下書きを確かめて足し、プロファイルと比べた結果と案内した画面を出す (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
-  }) => {
+  }, info) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockEvaluationImport(page, () => importWithProcess());
     const draftRequests = await mockProcessDrafts(page);
@@ -319,6 +320,10 @@ for (const viewport of [
 
     // 比べる表: 差はポイントと文言（色だけに頼らない）。低いほどよい指標は向きを逆にする。
     const table = page.getByTestId("evaluation-compare-table");
+    const comparison = page.getByTestId("evaluation-comparison-card");
+    await expectEvaluationCard(page, comparison);
+    await expectEvaluationCard(page, page.getByTestId("evaluation-result-card"));
+    await expect(comparison.getByTestId("evaluation-result-card")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "検索・回答プロファイルの比較" })).toBeVisible();
     const correctnessRow=table.getByRole("row",{name:/回答の正確性/});
     await expect(correctnessRow).toContainText("+100pt");
@@ -333,7 +338,12 @@ for (const viewport of [
     await expect(page.getByTestId("evaluation-metric-claim_support_rate")).toHaveCount(0);
     await page.getByRole("tab",{name:"検索・回答プロファイル: プロファイル B"}).click();
     await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("100%");
+    await expectEvaluationCard(page, page.getByTestId("evaluation-result-card"));
     await expectNoPageOverflow(page);
+    const notices = page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true });
+    while (await notices.count()) await notices.first().click();
+    await comparison.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath("comparison-cards.png"), fullPage: true });
   });
 }
 
