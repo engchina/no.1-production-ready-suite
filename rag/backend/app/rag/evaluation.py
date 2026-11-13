@@ -31,7 +31,6 @@ from pr_evaluation_scoring import (
     overall_passed,
     precision_at_k,
     reciprocal_rank,
-    response_decision,
     rouge_l,
     rouge_n,
     rounded_mean,
@@ -594,6 +593,7 @@ class EvaluationRunner:
             deadline,
             caller,
             judge_model_id=_judge_model_id(self._settings, final_response, answer_settings),
+            turn_runs=turn_runs,
         )
         return _case_result(case, final_response, judgement, turn_runs=turn_runs)
 
@@ -605,8 +605,9 @@ class EvaluationRunner:
         caller: BoundedCaller | None = None,
         *,
         judge_model_id: str,
+        turn_runs: Sequence[_TurnRun] | None = None,
     ) -> EvaluationAnswerJudgement | None:
-        """標準回答のあるケースを LLM で評価する。標準回答が無ければ None。
+        """標準回答または期待する対応のあるケースを、本文全体で独立評価する。
 
         ``judge_model_id`` は判定のモデル(#3574)。判定を完了できなかったケースにも残す。
         """
@@ -620,12 +621,29 @@ class EvaluationRunner:
                 ],
             )
         )
-        if not standard_answer:
-            return None
         evaluation_input = response.evaluation_input or {
             "question": case.query,
             "answer_text": response.answer,
         }
+        runs = list(turn_runs or [_TurnRun(response=response, conditions={})])
+        expectations = [
+            {
+                "question": case.query if index == 0 else case.turns[index - 1].reply,
+                "answer_text": run.response.answer,
+                "expected_decisions": sorted(
+                    expected_decisions(
+                        expectation.expected_response_decision, expectation.expected_outcomes
+                    )
+                ),
+            }
+            for index, (expectation, run) in enumerate(zip([case, *case.turns], runs, strict=False))
+            if expected_decisions(
+                expectation.expected_response_decision, expectation.expected_outcomes
+            )
+        ]
+        if not standard_answer and not expectations:
+            return None
+        evaluation_input = {**evaluation_input, "response_expectations": expectations}
         if self._answer_judge is None:
             return None
         remaining = _remaining_seconds(deadline)
@@ -668,7 +686,10 @@ class EvaluationRunner:
                 judge_model_id=judge_model_id,
             )
         return summarize_answer_judgement(evaluation).model_copy(
-            update={"judge_model_id": judge_model_id}
+            update={
+                "judge_model_id": judge_model_id,
+                **({"answer_correctness": None} if not standard_answer else {}),
+            }
         )
 
 
@@ -771,6 +792,10 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
         status="completed",
         passed=passed if isinstance(passed, bool) else None,
         answer_correctness=_optional_float(evaluation.get("answer_correctness")),
+        response_decision_accuracy=_optional_float(evaluation.get("response_decision_accuracy")),
+        reason=str(evaluation["correctness_reason"])
+        if evaluation.get("correctness_reason")
+        else None,
         message=str(message) if message else None,
         judge_diagnostics=diagnostics,
     )
@@ -962,7 +987,6 @@ def _case_result(
     observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
 
     expectations_by_turn = [case, *case.turns]
-    decisions = []
     turn_results = []
     case_decisions: set[str] = set()
     for index, (expectation, run) in enumerate(zip(expectations_by_turn, runs, strict=False)):
@@ -972,10 +996,9 @@ def _case_result(
         actual = observed_outcome(
             run.response.diagnostics.answer, abstained=is_abstained(run.response)
         )
-        correct = response_decision(actual.outcome) in expected if expected else None
-        if correct is not None:
-            decisions.append(correct)
-            case_decisions.update(expected)
+        # 自己申告の応答ラベルは記録にだけ残す。本文の採点は独立した全体評価が持つ。
+        correct = None
+        case_decisions.update(expected)
         turn_results.append(
             EvaluationTurnResult(
                 turn=index,
@@ -992,7 +1015,10 @@ def _case_result(
         failure_reasons.append("evidence_miss")
     if relevant and not hits and not _skips_retrieval(response):
         failure_reasons.append("retrieval_miss")
-    if decisions and not all(decisions):
+    decision_accuracy = (
+        judgement.response_decision_accuracy if judgement and case_decisions else None
+    )
+    if decision_accuracy is not None and decision_accuracy < 1:
         failure_reasons.append("unexpected_handling")
     if judgement is not None:
         if judgement.status != "completed":
@@ -1014,7 +1040,7 @@ def _case_result(
         hit_document_ids=unique_in_order(hits),
         mrr=rank,
         answer_correctness=judgement.answer_correctness if judgement else None,
-        response_decision_accuracy=_bool_value(all(decisions)) if decisions else None,
+        response_decision_accuracy=decision_accuracy,
         expected_decisions=sorted(case_decisions),
         observed_outcome=observed.outcome,
         outcome_source=observed.source,

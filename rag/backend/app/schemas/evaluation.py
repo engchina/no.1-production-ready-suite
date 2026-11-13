@@ -129,7 +129,7 @@ EvaluationFailureReason = Literal[
 ]
 
 # 評価の指標(#591)。閾値で合否を決める 4 つ（検索 2・回答の正確性・応答の判断）。
-EVALUATION_METRICS_VERSION = "four_metrics_v1"
+EVALUATION_METRICS_VERSION = "four_metrics_v2"
 EvaluationMetricName = Literal[
     "required_evidence_recall",
     "mrr",
@@ -505,6 +505,8 @@ class EvaluationAnswerJudgement(BaseModel):
     status: str
     passed: bool | None = None
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
+    response_decision_accuracy: float | None = Field(default=None, ge=0, le=1)
+    reason: str | None = None
     message: str | None = None
     # 判定の診断（呼び出しの数・出力の誤りで再試行した回数）。
     # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。

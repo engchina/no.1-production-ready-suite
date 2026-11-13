@@ -54,19 +54,62 @@ def test_required_fragments_and_document_ranks_are_independent() -> None:
     assert len(EVALUATION_METRIC_NAMES) == 4
 
 
-@pytest.mark.parametrize("expected", ["answer", "clarify", "hold"])
-@pytest.mark.parametrize(
-    "actual,outcome",
-    [("answer", "answered"), ("clarify", "needs_clarification"), ("hold", "insufficient_evidence")],
-)
-def test_three_way_decision(expected: Any, actual: str, outcome: str) -> None:
-    case = EvaluationCase(id="synthetic", query="合成の質問", expected_response_decision=expected)
-    scored = score_case_answers(case, [(response(outcome), {})])
-    assert scored.response_decision_accuracy == float(expected == actual)
-    metrics = summarize_case_results([scored])
-    assert (
-        metrics.decision_breakdown[expected].metric_case_counts["response_decision_accuracy"] == 1
+@pytest.mark.parametrize("outcome", ["answered", "needs_clarification", "insufficient_evidence"])
+@pytest.mark.parametrize("quality", [0.0, 1.0, None])
+def test_decision_score_uses_independent_body_judgement_not_declared_label(
+    outcome: str, quality: float | None
+) -> None:
+    case = EvaluationCase(id="synthetic", query="合成の質問", expected_response_decision="hold")
+    judgement = EvaluationAnswerJudgement(
+        status="completed", response_decision_accuracy=quality, reason="本文と期待する対応を比較"
     )
+    scored = score_case_answers(case, [(response(outcome), {})], judgement)
+    assert scored.response_decision_accuracy == quality
+    assert scored.observed_outcome == outcome
+    assert scored.expected_decisions == ["hold"]
+    metrics = summarize_case_results([scored])
+    assert metrics.metric_case_counts["response_decision_accuracy"] == int(quality is not None)
+
+
+async def test_reasonable_inability_is_judged_even_without_standard_answer() -> None:
+    captured = []
+
+    class Pipeline:
+        async def run(
+            self, request: Any, trace_id: Any = None, progress_callback: Any = None, **kwargs: Any
+        ) -> SearchResponse:
+            return response("answered").model_copy(
+                update={"answer": "資料に記載がないため、値を確認できません。"}
+            )
+
+    async def judge(**kwargs: Any) -> dict[str, Any]:
+        captured.append(kwargs)
+        return {
+            "status": "completed",
+            "answer_correctness": None,
+            "response_decision_accuracy": 1,
+            "correctness_reason": "資料にない値を作らず、適切に説明している。",
+        }
+
+    metrics = await EvaluationRunner(
+        pipeline=Pipeline(), answer_judge=judge, settings=Settings()
+    ).run(
+        [
+            EvaluationCase(
+                id="synthetic", query="資料にない項目の値は？", expected_response_decision="hold"
+            )
+        ],
+        top_k=3,
+    )
+    assert len(captured) == 1
+    data = captured[0]["evaluation_input"]
+    assert data["response_expectations"][0]["expected_decisions"] == ["hold"]
+    assert "確認できません" in data["response_expectations"][0]["answer_text"]
+    assert "outcome" not in data["response_expectations"][0]
+    assert metrics.response_decision_accuracy == 1
+    assert metrics.answer_correctness is None
+    assert metrics.case_results[0].observed_outcome == "answered"
+    assert metrics.case_results[0].failure_reasons == []
 
 
 def test_missing_materials_are_not_zero_or_passed() -> None:

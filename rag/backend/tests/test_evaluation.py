@@ -96,7 +96,9 @@ class StubPipeline:
 class FakeJudge:
     """標準回答による評価(evaluate_answer_record)の決定論スタブ。"""
 
-    def __init__(self, result: Mapping[str, object] | Exception) -> None:
+    def __init__(
+        self, result: Mapping[str, object] | Exception | Sequence[Mapping[str, object]]
+    ) -> None:
         self.result = result
         self.calls: list[dict[str, object]] = []
 
@@ -120,6 +122,8 @@ class FakeJudge:
         )
         if isinstance(self.result, Exception):
             raise self.result
+        if isinstance(self.result, Sequence):
+            return self.result[len(self.calls) - 1]
         return self.result
 
 
@@ -128,6 +132,7 @@ def _completed_judgement(*, passed: bool = True) -> dict[str, object]:
         "status": "completed",
         "passed": passed,
         "answer_correctness": 1.0 if passed else 0.0,
+        "response_decision_accuracy": 1.0,
         "message": "",
     }
 
@@ -400,7 +405,9 @@ class NoResultsPipeline:
 
 @pytest.mark.parametrize("suite", ["standard", "strict"])
 async def test_expected_refusal_case_passes_every_suite(suite: str) -> None:
-    runner = EvaluationRunner(pipeline=NoResultsPipeline())
+    runner = EvaluationRunner(
+        pipeline=NoResultsPipeline(), answer_judge=FakeJudge(_completed_judgement())
+    )
     metrics = await runner.run(
         cases=[
             EvaluationCase(
@@ -425,7 +432,10 @@ async def test_expected_refusal_case_passes_every_suite(suite: str) -> None:
 
 
 async def test_answerable_case_with_no_results_counts_unexpected_refusal() -> None:
-    metrics = await EvaluationRunner(pipeline=NoResultsPipeline()).run(
+    metrics = await EvaluationRunner(
+        pipeline=NoResultsPipeline(),
+        answer_judge=FakeJudge({**_completed_judgement(), "response_decision_accuracy": 0}),
+    ).run(
         cases=[
             EvaluationCase(
                 id="positive",
@@ -442,7 +452,10 @@ async def test_answerable_case_with_no_results_counts_unexpected_refusal() -> No
 
 
 async def test_unanswerable_case_answered_counts_unexpected_answer() -> None:
-    metrics = await EvaluationRunner(pipeline=StubPipeline()).run(
+    metrics = await EvaluationRunner(
+        pipeline=StubPipeline(),
+        answer_judge=FakeJudge({**_completed_judgement(), "response_decision_accuracy": 0}),
+    ).run(
         cases=[
             EvaluationCase(id="negative", query="合成の質問", expected_response_decision="hold")
         ],
@@ -453,7 +466,12 @@ async def test_unanswerable_case_answered_counts_unexpected_answer() -> None:
 
 
 async def test_category_breakdown_summarizes_results_per_category() -> None:
-    metrics = await EvaluationRunner(pipeline=StubPipeline()).run(
+    metrics = await EvaluationRunner(
+        pipeline=StubPipeline(),
+        answer_judge=FakeJudge(
+            [_completed_judgement(), {**_completed_judgement(), "response_decision_accuracy": 0}]
+        ),
+    ).run(
         cases=[
             EvaluationCase(
                 id="answer",
@@ -551,7 +569,7 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
     assert len(judge.calls) == 1
     call = judge.calls[0]
     assert call["trace_id"] == pipeline.trace_ids[0]
-    assert call["evaluation_input"] == EVALUATION_INPUT
+    assert call["evaluation_input"] == {**EVALUATION_INPUT, "response_expectations": []}
     assert call["standard_answer"] == "合成の標準回答"
     assert call["timeout_seconds"] == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
     assert metrics.answer_correctness == 1
@@ -596,7 +614,7 @@ async def test_incorrect_judgement_fails_the_case_and_the_threshold() -> None:
     ids=["timeout", "exception", "input_too_large"],
 )
 async def test_incomplete_judgement_is_not_counted_and_fails_the_gate(
-    judge_result: Mapping[str, object] | Exception, status: str
+    judge_result: Mapping[str, object] | Exception | Sequence[Mapping[str, object]], status: str
 ) -> None:
     """標準回答で評価できなかったケースは指標に入れず、評価を合格にしない。"""
     runner = EvaluationRunner(pipeline=StubPipeline(), answer_judge=FakeJudge(judge_result))
@@ -637,7 +655,7 @@ async def test_judgement_is_unavailable_without_answer_record_input() -> None:
     # 回答の記録の入力が無いときは、質問と回答の本文だけを渡す。
     evaluation_input = judge.calls[0]["evaluation_input"]
     assert isinstance(evaluation_input, dict)
-    assert set(evaluation_input) == {"question", "answer_text"}
+    assert set(evaluation_input) == {"question", "answer_text", "response_expectations"}
     assert metrics.metric_case_counts["answer_correctness"] == 1
 
 
@@ -647,7 +665,7 @@ def test_saved_legacy_metrics_still_validate() -> None:
 
     metrics = EvaluationMetrics(case_count=1, mrr=1.0)
     payload = metrics.model_dump()
-    assert payload["metrics_version"] == "four_metrics_v1"
+    assert payload["metrics_version"] == "four_metrics_v2"
     assert set(EVALUATION_METRIC_NAMES) <= payload.keys()
     assert payload["answer_correctness"] is None
     assert payload["response_decision_accuracy"] is None
@@ -1162,6 +1180,9 @@ def test_evaluation_api_runs_against_local_pipeline(monkeypatch: MonkeyPatch) ->
         )
 
     monkeypatch.setattr(AnswerEngine, "run", refuse)
+    monkeypatch.setattr(
+        "app.rag.evaluation._settings_judge", lambda settings: FakeJudge(_completed_judgement())
+    )
     response = client.post(
         "/api/evaluation/run",
         json={
@@ -1342,7 +1363,12 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
             expected_response_decision="clarify",
         ),
     ]
-    judge = FakeJudge(_completed_judgement(passed=False))
+    judge = FakeJudge(
+        [
+            _completed_judgement(passed=False),
+            {**_completed_judgement(), "response_decision_accuracy": 0},
+        ]
+    )
     metrics = await EvaluationRunner(pipeline=StubPipeline(), answer_judge=judge).run(
         cases=cases, top_k=5
     )
@@ -1671,7 +1697,9 @@ def _multi_turn_case(**overrides: Any) -> EvaluationCase:
 
 async def test_runner_sends_conditions_and_runs_turns_in_order_with_history() -> None:
     pipeline = ConversationPipeline()
-    metrics = await EvaluationRunner(pipeline=pipeline).run(cases=[_multi_turn_case()], top_k=5)
+    metrics = await EvaluationRunner(
+        pipeline=pipeline, answer_judge=FakeJudge(_completed_judgement())
+    ).run(cases=[_multi_turn_case()], top_k=5)
 
     first, second = pipeline.calls
     # 最初の質問は既知の条件だけ、返答は前の往復の履歴と、足した条件で送る。
@@ -1694,13 +1722,13 @@ async def test_runner_sends_conditions_and_runs_turns_in_order_with_history() ->
     clarify, answer = result.turn_results
     assert (clarify.observed_outcome, clarify.response_decision_accuracy) == (
         "needs_clarification",
-        1.0,
+        None,
     )
     assert clarify.expected_decisions == ["clarify"]
     # 最初の質問で聞いた target は、まだ渡していない条件なので聞き直しではない。
     assert clarify.turn == 0
     # 「権限タブ」は「「権限」タブ」と一致しないが、別解（詳細画面 → 付与）で満点になる。
-    assert answer.response_decision_accuracy == 1.0
+    assert answer.response_decision_accuracy is None
     assert answer.expected_decisions == ["answer"]
     # ケースの採点: 対応はすべての往復で正しい、検索・根拠は最後の回答で測る。
     assert result.observed_outcome == "answered"
@@ -1716,12 +1744,13 @@ async def test_runner_sends_conditions_and_runs_turns_in_order_with_history() ->
 
 
 async def test_runner_flags_reasked_known_condition() -> None:
-    metrics = await EvaluationRunner(pipeline=ConversationPipeline(reask=True)).run(
-        cases=[_multi_turn_case()], top_k=5
-    )
+    metrics = await EvaluationRunner(
+        pipeline=ConversationPipeline(reask=True),
+        answer_judge=FakeJudge({**_completed_judgement(), "response_decision_accuracy": 0}),
+    ).run(cases=[_multi_turn_case()], top_k=5)
     result = metrics.case_results[0]
     assert result.turn_results[1].observed_outcome == "needs_clarification"
-    assert result.turn_results[1].response_decision_accuracy == 0.0
+    assert result.turn_results[1].response_decision_accuracy is None
     assert result.response_decision_accuracy == 0.0
     assert "unexpected_handling" in result.failure_reasons
 
@@ -1766,7 +1795,17 @@ async def test_split_breakdown_reports_metrics_per_split() -> None:
             ("u1", None, "hold"),
         ]
     ]
-    metrics = await EvaluationRunner(pipeline=StubPipeline()).run(cases=cases, top_k=5)
+    metrics = await EvaluationRunner(
+        pipeline=StubPipeline(),
+        answer_judge=FakeJudge(
+            [
+                _completed_judgement(),
+                {**_completed_judgement(), "response_decision_accuracy": 0},
+                _completed_judgement(),
+                {**_completed_judgement(), "response_decision_accuracy": 0},
+            ]
+        ),
+    ).run(cases=cases, top_k=5)
     assert set(metrics.split_breakdown) == {"dev", "holdout", "unassigned"}
     dev = metrics.split_breakdown["dev"]
     assert (dev.case_count, dev.error_count) == (2, 0)
@@ -1776,9 +1815,17 @@ async def test_split_breakdown_reports_metrics_per_split() -> None:
     assert metrics.split_breakdown["holdout"].metrics["response_decision_accuracy"] == 1
     assert metrics.split_breakdown["unassigned"].metrics["response_decision_accuracy"] == 0
     assert [result.split for result in metrics.case_results] == ["dev", "dev", "holdout", None]
-    plain = await EvaluationRunner(pipeline=StubPipeline()).run(
-        cases=[EvaluationCase(id="p", query="合成の質問")], top_k=5
-    )
+    plain = await EvaluationRunner(
+        pipeline=StubPipeline(),
+        answer_judge=FakeJudge(
+            [
+                _completed_judgement(),
+                {**_completed_judgement(), "response_decision_accuracy": 0},
+                _completed_judgement(),
+                {**_completed_judgement(), "response_decision_accuracy": 0},
+            ]
+        ),
+    ).run(cases=[EvaluationCase(id="p", query="合成の質問")], top_k=5)
     assert plain.split_breakdown == {}
 
 

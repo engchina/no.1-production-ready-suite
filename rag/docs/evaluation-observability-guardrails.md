@@ -56,17 +56,16 @@
 - 判定の LLM は、判定のモデルの接続・入力の上限・推論の量で呼びます（回答のモデルの切り替えと同じ `build_engine_settings`。解決は platform の `enterprise_ai_judge_model_id` だけ）。
 - 判定に使ったモデルは、ケースの結果の `answer_evaluation.judge_model_id`（判定を完了できなかったケースにも残す）と、判定の診断の `judge_diagnostics.judge_model_id`（回答の記録にも保存）に残ります。
 
-### 判定の呼び出しの形（#4781）
+### 判定の呼び出しの形（#5037）
 
-回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`。判定の版 `rubric_version` 25）は、1 件の評価で LLM を 1 回だけ呼び、標準回答に照らした正確性（`correct` / `incorrect` / `unassessed` と日本語の理由）を構造化出力で受け取ります。閾値による合否はコード（`score_answer_evaluation`）が付けます。
+回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`、`rubric_version=29`）は、1件の評価でモデルを1回呼びます。質問・標準回答・実際の本文・期待する対応を渡し、全体の正確性と対応の適切さ、それらの理由を構造化出力で受け取ります。逐片段の番号転記や全片段の対応付けは要求しません。
 
-| 判定 | モデルに渡すもの | 指示 |
-|---|---|---|
-| 正確性 | 質問・標準回答（確認済みの必須要点と条件を足したもの）・出典の行を除いた回答の本文 | `CORRECTNESS_PROMPT`（設定「評価の基準」で編集できる） |
-
-- 出力の形の誤り（schema 違反・構造化出力として読めない）だけ、違反の内容を指摘して 1 回だけ出し直させます。判定の診断（`judge_diagnostics`）の `judge_calls`・`judge_retries`・`retry_reasons` に呼び出しの数と再試行を残します。
-- 入力が判定のモデルの入力の上限（`answer_max_input_tokens` の 50%）を超えたら判定せず `input_too_large` にします。判定の失敗は `error` で、ケースの失敗の理由（`answer_evaluation_error`）になります。
-- 標準回答・必須要点が無いケースはモデルを呼ばず、正確性は未評価です。
+- 正確性は `correct` / `incorrect` / `unassessed` / `not_applicable`。正しい部分回答を少答だけで矛盾とせず、述べた内容を比較します。
+- 対応の適切さは `appropriate` / `inappropriate` / `unassessed` / `not_applicable`。資料不足を適切に説明する返信も正常な回答です。生成モデルの自己申告 `outcome` を期待ラベルと直接比較して減点しません。対話は同じ一回の評価へまとめます。
+- 標準回答がなくても期待する対応があれば評価します。両方なければ呼び出さず、測れない値を0や1で補いません。
+- プロンプトは既存の `evaluation.correctness` で編集できます。保存済みのカスタム指示を使う場合は、新しい全体判定のschemaと整合することを確認してください。既存のカスタム文を自動で上書きしません。
+- 入力予算、Pydanticによる型検証、技術失敗の記録を維持します。技術的な再試行は共有adapterの枠内だけで、採点結果を理由とした回答の再検索・再生成は行いません。
+- 指標の版は `four_metrics_v2`。自己申告ラベルの一致を採点した旧結果は再計算せず、保存した版と値を残します。
 
 ### 保存済みの古い結果（#4781）
 

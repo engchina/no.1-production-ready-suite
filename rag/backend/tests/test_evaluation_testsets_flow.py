@@ -177,6 +177,7 @@ class SyntheticJudge:
             "status": "completed",
             "passed": True,
             "answer_correctness": 1.0,
+            "response_decision_accuracy": 1.0,
         }
 
 

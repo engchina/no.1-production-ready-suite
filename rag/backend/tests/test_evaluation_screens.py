@@ -13,6 +13,7 @@ from app.main import app
 from app.rag.evaluation import EvaluationRunner, score_case_answers
 from app.rag.pipeline import SearchStageProgressCallback
 from app.schemas.evaluation import (
+    EvaluationAnswerJudgement,
     EvaluationCase,
     EvaluationMetrics,
     EvaluationRunRequest,
@@ -65,6 +66,7 @@ def test_case_scoring_refusal_is_not_matched_and_clarification_is_not_measured()
     refused = score_case_answers(
         _case(SCREEN_A, expected_response_decision="answer"),
         [(_response("確認できません", answer_details={"outcome": "insufficient_evidence"}), {})],
+        EvaluationAnswerJudgement(status="completed", response_decision_accuracy=0),
     )
     clarification = SearchResponse(
         answer="どちらの場合ですか？",
@@ -74,7 +76,9 @@ def test_case_scoring_refusal_is_not_matched_and_clarification_is_not_measured()
         diagnostics=SearchDiagnostics(answer={"outcome": "needs_clarification"}),
     )
     asked = score_case_answers(
-        _case(SCREEN_A, expected_response_decision="clarify"), [(clarification, {})]
+        _case(SCREEN_A, expected_response_decision="clarify"),
+        [(clarification, {})],
+        EvaluationAnswerJudgement(status="completed", response_decision_accuracy=1),
     )
     assert refused.response_decision_accuracy == 0
     assert "unexpected_handling" in refused.failure_reasons

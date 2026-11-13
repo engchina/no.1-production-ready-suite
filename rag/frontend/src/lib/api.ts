@@ -2035,6 +2035,9 @@ export interface EvaluationAnswerJudgement {
   /** 正確性が評価の基準の閾値以上か（#680）。保存済みの古い結果は保存した合否のまま。 */
   passed: boolean | null;
   answer_correctness?: number | null;
+  /** 実際の本文と期待する対応を独立して評価した値。自己申告ラベルの一致ではない。 */
+  response_decision_accuracy?: number | null;
+  reason?: string | null;
   message: string | null;
 }
 

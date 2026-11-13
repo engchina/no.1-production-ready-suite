@@ -135,7 +135,12 @@ async def test_evaluation_runs_cases_with_answer_engine() -> None:
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
-    runner = EvaluationRunner(pipeline=pipeline, settings=Settings())
+
+    async def judge(**kwargs: Any) -> dict[str, object]:
+        assert "登録ボタン" in str(kwargs["evaluation_input"])
+        return {"status": "completed", "response_decision_accuracy": 1.0}
+
+    runner = EvaluationRunner(pipeline=pipeline, settings=Settings(), answer_judge=judge)
 
     metrics = await runner.run(
         [
