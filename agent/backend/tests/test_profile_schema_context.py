@@ -225,3 +225,40 @@ def test_redundant_descriptions_are_removed_before_canonical_column_names(level:
     assert restored["objects"][0]["columns_complete"]
     assert restored["truncated"] and not restored["page_complete"]
     assert all("description" not in column for column in restored["objects"][0]["columns"])
+
+
+def test_optional_short_refs_do_not_expand_legacy_payloads_with_nulls() -> None:
+    old = _schema()
+    summary = profile_schema_summary(old)
+    assert summary == old
+    assert summary is not None and "schema_ref" not in summary
+    assert all("field_ref" not in column for column in summary["objects"][0]["columns"])
+    new = deepcopy(old)
+    new["schema_ref"] = "S2"
+    for i, column in enumerate(new["objects"][0]["columns"], 1):
+        column["field_ref"] = f"S2:F{i}"
+    assert profile_schema_summary(new) == new
+
+
+def test_invalid_short_ref_does_not_become_a_valid_schema_reference() -> None:
+    payload = _schema()
+    payload["objects"][0]["columns"][0]["field_ref"] = "long-value-not-a-field-ref"
+    summary = profile_schema_summary(payload)
+    assert summary is not None and summary["status"] == "unavailable"
+
+
+@pytest.mark.parametrize("level", [1, 2, 3, 4])
+def test_report_short_refs_aggregate_description_flags_before_losing_columns(level: int) -> None:
+    payload = _schema(126)
+    payload["schema_ref"] = "S1"
+    for i, col in enumerate(payload["objects"][0]["columns"], 1):
+        col.update(
+            name=f"VALUE_WITH_LONG_CANONICAL_NAME_{i}", field_ref=f"S1:F{i}", description="d" * 256
+        )
+    compacted = json.loads(compact_output(json.dumps(payload), level))
+    again = json.loads(compact_output(json.dumps(compacted), 4))
+    assert len(again["objects"][0]["columns"]) == 126
+    assert again["descriptions_omitted"]
+    assert all("description_truncated" not in c for c in again["objects"][0]["columns"])
+    assert again["truncated"] and not again["page_complete"]
+    assert len(json.dumps(again, ensure_ascii=False, separators=(",", ":"))) < 16_500
