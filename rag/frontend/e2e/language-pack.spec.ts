@@ -36,7 +36,7 @@ function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
 }
 
-async function mockLanguagePack(page: Page, builtin: Record<string, Record<string, unknown>> = BUILTIN, fields = FIELDS, published = builtin) {
+async function mockLanguagePack(page: Page, builtin: Record<string, Record<string, unknown>> = BUILTIN, fields = FIELDS, published = builtin, normalizeDraft?: (value: Record<string, Record<string, unknown>>) => Record<string, Record<string, unknown>>) {
   const saved: { overrides: Record<string, Record<string, unknown>> | null } = { overrides: null };
   const previews: Record<string, unknown>[] = [];
   const restored: string[] = [];
@@ -54,6 +54,7 @@ async function mockLanguagePack(page: Page, builtin: Record<string, Record<strin
       saved.overrides = payload.overrides;
       draftEffective = structuredClone(builtin);
       for (const [section, values] of Object.entries(saved.overrides!)) Object.assign(draftEffective[section], values);
+      if (normalizeDraft) draftEffective = normalizeDraft(draftEffective);
       revision += 1;
     }
     await route.fulfill({ json: envelope(state()) });
@@ -462,6 +463,7 @@ test("導出結論の見出しと根拠不足の定型文はラベルと説明�
   for (const key of Object.keys(values) as (keyof typeof values)[]) {
     const value = values[key];
     const field = page.getByLabel(t(`settings.language.field.${key}`), { exact: true });
+    await expect(field).toHaveCount(1);
     await expect(field).toHaveValue(value);
     await expect(field).toHaveAccessibleDescription(t(`settings.language.field.${key}.help`));
   }
@@ -532,3 +534,84 @@ for (const width of [1440, 375]) {
     });
   }
 }
+
+
+test("根拠がないときの固定返信は基礎本文だけをプレビューし、草稿保存後の公開で反映する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const labels = { insufficient_evidence_summary: "合成の要約。", empty_search_guidance: "合成の確認案内。", applications_section: "合成の別見出し" };
+  const fields = Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 }));
+  const mock = await mockLanguagePack(page, { ...BUILTIN, answer_labels: labels }, [...FIELDS, ...fields]);
+  await page.goto("/settings/language-pack");
+  const section = page.getByTestId("empty-evidence-response-settings");
+  const preview = section.getByTestId("empty-evidence-response-preview");
+  const summary = section.getByLabel(t("settings.language.field.insufficient_evidence_summary"), { exact: true });
+  const guidance = section.getByLabel(t("settings.language.field.empty_search_guidance"), { exact: true });
+  await expect(section).toBeVisible();
+  await expect(preview).toHaveJSProperty("textContent", labels.insufficient_evidence_summary + labels.empty_search_guidance);
+  await summary.fill("変更した合成の要約。");
+  await guidance.fill("変更した合成の確認案内。");
+  await expect(preview).toHaveJSProperty("textContent", "変更した合成の要約。変更した合成の確認案内。");
+  await expect(preview).not.toContainText("参考情報");
+  // 汎用編集のタブへ移っても、同じ field/id を複製しない。
+  await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "回答を確かめて表す" }).click();
+  await expect(page.locator("#language-answer-labels-insufficient-evidence-summary")).toHaveCount(1);
+  await expect(page.locator("#language-answer-labels-empty-search-guidance")).toHaveCount(1);
+  expect(mock.publications).toEqual([]);
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
+  await expect.poll(() => mock.saved.overrides).toEqual({ answer_labels: { insufficient_evidence_summary: "変更した合成の要約。", empty_search_guidance: "変更した合成の確認案内。" } });
+  expect(mock.readState().current.effective.answer_labels).toEqual(labels);
+  expect(mock.publications).toEqual([]);
+  await page.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await page.getByRole("button", { name: "公開する", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "公開する", exact: true }).click();
+  await expect(page.getByText("現在使用中 v3")).toBeVisible();
+  expect(mock.publications).toHaveLength(1);
+  expect(mock.readState().current.effective.answer_labels).toEqual({ ...labels, insufficient_evidence_summary: "変更した合成の要約。", empty_search_guidance: "変更した合成の確認案内。" });
+  await section.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("empty-evidence-global-published.png"), fullPage: true });
+});
+
+
+test("固定返信の保存済み草稿BOMはそのまま表示し、NEL編集の保存と公開を経ても正確な本文を示す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const labels = { insufficient_evidence_summary: "\uFEFF合成の保存済み前置き。\uFEFF", empty_search_guidance: "\uFEFF合成の保存済み案内。\uFEFF" };
+  const edited = { insufficient_evidence_summary: "\u0085\uFEFF合成の変更前置き。\uFEFF\u0085", empty_search_guidance: "\u0085\uFEFF合成の変更案内。\uFEFF\u0085" };
+  const stored = { insufficient_evidence_summary: "\uFEFF合成の変更前置き。\uFEFF", empty_search_guidance: "\uFEFF合成の変更案内。\uFEFF" };
+  const fields = Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 }));
+  const builtin = { ...BUILTIN, answer_labels: labels };
+  const mock = await mockLanguagePack(page, builtin, [...FIELDS, ...fields], builtin, value => {
+    // 保存APIのPython stripをこの匿名fixtureのNELだけに適用する。BOMは残す。
+    expect(value.answer_labels).toEqual(edited);
+    return { ...value, answer_labels: stored };
+  });
+  await page.goto("/settings/language-pack");
+  const section = page.getByTestId("empty-evidence-response-settings");
+  const preview = section.getByTestId("empty-evidence-response-preview");
+  const summary = section.getByLabel(t("settings.language.field.insufficient_evidence_summary"), { exact: true });
+  const guidance = section.getByLabel(t("settings.language.field.empty_search_guidance"), { exact: true });
+  await expect(summary).toHaveValue(labels.insufficient_evidence_summary);
+  await expect(guidance).toHaveValue(labels.empty_search_guidance);
+  await expect(preview).toHaveJSProperty("textContent", labels.insufficient_evidence_summary + labels.empty_search_guidance);
+  await summary.fill(edited.insufficient_evidence_summary);
+  await guidance.fill(edited.empty_search_guidance);
+  await expect(preview).toHaveJSProperty("textContent", stored.insufficient_evidence_summary + stored.empty_search_guidance);
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
+  await expect.poll(() => mock.saved.overrides).toEqual({ answer_labels: edited });
+  await expect(summary).toHaveValue(stored.insufficient_evidence_summary);
+  await expect(guidance).toHaveValue(stored.empty_search_guidance);
+  await expect(preview).toHaveJSProperty("textContent", stored.insufficient_evidence_summary + stored.empty_search_guidance);
+  expect(mock.readState().current.effective.answer_labels).toEqual(labels);
+  expect(mock.publications).toEqual([]);
+  await page.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await page.getByRole("button", { name: "公開する", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "公開する", exact: true }).click();
+  await expect(page.getByText("現在使用中 v3")).toBeVisible();
+  expect(mock.publications).toHaveLength(1);
+  expect(mock.readState().current.effective.answer_labels).toEqual(stored);
+  await page.reload();
+  await expect(preview).toHaveJSProperty("textContent", stored.insufficient_evidence_summary + stored.empty_search_guidance);
+  await expect(summary).toHaveValue(stored.insufficient_evidence_summary);
+  await expect(guidance).toHaveValue(stored.empty_search_guidance);
+  await expectNoPageOverflow(page);
+  await section.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("empty-evidence-global-saved-BOM.png"), fullPage: true });
+});

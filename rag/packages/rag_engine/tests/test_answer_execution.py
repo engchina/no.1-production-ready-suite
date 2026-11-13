@@ -289,6 +289,22 @@ class AnswerExecutionTests(unittest.TestCase):
         zero = result.generation_trace["zero_evidence"]
         self.assertEqual((zero["stage"], zero["candidate_count"]), ("retrieval", 0))
 
+    def test_empty_retrieval_preserves_the_configured_fixed_body_without_generation(self):
+        from rag_parser_core.language import bind_pack, current_pack, resolve
+
+        summary = "合成の固定前置き。\n"
+        guidance = "合成の確認案内。"
+        effective = resolve(
+            current_pack(),
+            {"answer_labels": {"insufficient_evidence_summary": summary, "empty_search_guidance": guidance}},
+        )
+        self.search.return_value = generation.AnswerContext(records=[], text="")
+        with bind_pack(effective):
+            result = self.run_answer()
+        # 保存時の前後空白の除去を反映し、2項目の間に区切りを追加しない。
+        self.assertEqual(result.answer_text, "合成の固定前置き。合成の確認案内。")
+        self.parse.assert_not_called()
+
     def test_zero_evidence_records_the_same_retrieval_counts_shape(self):
         # 候補 0 件でも通常の回答と同じ形で残す（基準で全部消えたときは絞り込む前の数が残る。#4735）。
         self.search.return_value = generation.AnswerContext(records=[], text="", candidate_count=12)

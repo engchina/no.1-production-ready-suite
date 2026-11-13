@@ -61,6 +61,8 @@ export function LanguagePackFieldsPanel({
   changedLabel,
   resetLabel,
   onChange,
+  onReset,
+  overrides,
 }: {
   idPrefix: string;
   fields: LanguagePackField[];
@@ -72,6 +74,8 @@ export function LanguagePackFieldsPanel({
   changedLabel: string;
   resetLabel: string;
   onChange: (key: string, value: string) => void;
+  onReset?: (key: string) => void;
+  overrides?: LanguagePackSections;
 }) {
   const sections = [...new Set(allFields.map((field) => field.section))];
   const groups = groupSections(sections);
@@ -98,6 +102,8 @@ export function LanguagePackFieldsPanel({
       changedLabel={changedLabel}
       resetLabel={resetLabel}
       onChange={(value) => onChange(textKey(field), value)}
+      onReset={onReset ? () => onReset(textKey(field)) : undefined}
+      overridden={overrides ? Object.hasOwn(overrides[field.section] ?? {}, field.key) : undefined}
     />
   );
   // 上の段（使い道の組）と下の段（節）は、どちらも選んだタブの panel を共有の TabPanel で描く（タブの aria-controls が
@@ -179,7 +185,7 @@ export function LanguagePackFieldsPanel({
   );
 }
 
-function LanguageField({
+export function LanguageField({
   id,
   field,
   baseline,
@@ -188,9 +194,15 @@ function LanguageField({
   disabled,
   changedLabel,
   resetLabel,
+  unchangedLabel,
+  overridden,
   onChange,
+  onReset,
 }: {
   id: string;
+  onReset?: () => void;
+  unchangedLabel?: string;
+  overridden?: boolean;
   field: LanguagePackField;
   baseline: LanguagePackSections;
   texts: LanguagePackTexts;
@@ -203,7 +215,7 @@ function LanguageField({
   const key = textKey(field);
   const label = t(`settings.language.field.${field.key}` as I18nKey);
   const helper = t(`settings.language.field.${field.key}.help` as I18nKey);
-  const changed = isChanged(field, texts, baseline);
+  const changed = overridden ?? isChanged(field, texts, baseline);
   const base = baseline[field.section]?.[field.key];
   const resetRow = changed ? (
     <div className="flex flex-wrap items-center gap-2">
@@ -213,12 +225,12 @@ function LanguageField({
         variant="ghost"
         icon={RotateCcw}
         disabled={disabled}
-        onClick={() => onChange(Array.isArray(base) ? base.join("\n") : (base ?? ""))}
+        onClick={onReset ?? (() => onChange(Array.isArray(base) ? base.join("\n") : (base ?? "")))}
       >
         {resetLabel}
       </Button>
     </div>
-  ) : null;
+  ) : unchangedLabel ? <StatusBadge variant="neutral" icon={false} label={unchangedLabel} /> : null;
   if (field.kind === "text") {
     return (
       <div className="space-y-2">
