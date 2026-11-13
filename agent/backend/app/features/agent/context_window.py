@@ -365,7 +365,14 @@ def _typed_column_summary(value: Any) -> list[dict[str, Any]]:
 def _reference_summary(value: Mapping[str, Any], *, prefix_only: bool) -> dict[str, Any]:
     kept = {
         key: value[key]
-        for key in ("table", "columns", "column_refs", "row_count", "quantity_columns")
+        for key in (
+            "table",
+            "columns",
+            "column_refs",
+            "row_count",
+            "quantity_columns",
+            "render_chars",
+        )
         if key in value
     }
     quantities = value.get("quantities")
