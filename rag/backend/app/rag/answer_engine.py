@@ -593,9 +593,6 @@ def build_engine_settings(
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
         "RAG_ENGINE_LLM_MAX_RETRIES": str(settings.rag_llm_max_retries),
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
-        "RAG_ENGINE_LLM_RUNAWAY_DETECTION": "1"
-        if settings.rag_llm_runaway_detection_enabled
-        else "0",
         # 業務ガイドの手順の段のために最初の章節の拡張が残す入力の割合(#2816)。
         "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": str(
             settings.rag_section_expansion_followup_reserve_percent

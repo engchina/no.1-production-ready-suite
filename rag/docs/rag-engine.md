@@ -187,19 +187,7 @@ token を出す。
 （`incomplete_responses`・`incomplete_reasons`）も、起きたときだけ `llm_usage` と log（`llm_incomplete_reason`・
 `llm_attempt`・`llm_max_output_tokens`）に残す（#1527）。
 
-**暴走した出力の打ち切り（#2966）**: 出力は速く続くのに、同じ並びの繰り返し・空白だけを出力の上限（32,768 tokens）まで書き続ける
-生成がある（記録: 1 回目が 200 秒で上限に届いて未完了、推論の量を下げた送り直しは 2 秒で完了）。停滞の検出（event の間隔・速さ）
-では見分けられないので、streaming で受ける呼び出し（下の停滞の検出が ON のとき）は出力の文（`response.output_text.delta`）の
-末尾を確かめ、末尾の 2,400 文字が周期 300 文字以下の完全な繰り返し（`runaway_repetition`）か、空白が 2,000 文字続いた
-（`runaway_whitespace`）ら stream を閉じ、推論の量を 1 段下げて（下げられなければそのまま）1 回だけ送り直す（`oci._RunawayMonitor`。
-`RAG_LLM_RUNAWAY_DETECTION_ENABLED=false` で切れる）。行ごとに値が変わる表・一覧は打ち切らない。打ち切った呼び出しは
-`incomplete_reasons` に理由、送り直しは `runaway_resends` に残る。工程の記録は呼び出しの回数（`llm_calls`）と API への送信の
-回数（`llm_sends`。送り直しで多いときだけ）を分け、画面は「LLM 1 回・送信 2 回」と示す。
-streaming しない呼び出し（停滞の検出が OFF・回答の期限が無い文脈）は途中で打ち切れないので、出力の上限で未完了になった応答の
-出力の文に同じ基準の暴走（空白が 2,000 文字続いた箇所・末尾の繰り返し）があれば、上限を 2 倍に広げる送り直しをせず、streaming と
-同じく推論の量を下げて 1 回だけ送り直す（#3835。広げても空白・繰り返しが続くだけ。`oci._runaway_response_reason`）。理由は同じく
-`incomplete_reasons` に残り、送り直しても暴走した呼び出しの失敗の詳細は分類 `runaway_output` と
-打ち切りの理由（`cutoff_reason`）を持つ。
+**本文の反復・空白による中止の廃止（#5041）**: 単一の回答streamを文字の周期や空白の長さで中止しません。合法な同値表でも途中の文字列が反復するためです。providerの完了/未完了・失敗event、全体の期限、無応答timeout、取消、出力token上限と型検証で処理します。内容反復を契機とした再送や推論設定の変更も行いません。
 
 **無音で止まった LLM の呼び出しの送り直し（#1926・#4736）**: 回答の期限がある文脈では LLM の呼び出しを streaming で受け
 （`rag_engine.adapters.oci._stream_parsed`）、応答の event（最初の event を含む）が `RAG_LLM_STALL_IDLE_SECONDS`（既定 120 秒。httpx の
@@ -211,14 +199,14 @@ log に最初の event までの秒（`llm_first_event_seconds`）・出力の�
 `llm_usage` にその工程の最大の待ち（`first_event_seconds_max`）と最も遅い速さ（`delta_rate_min`）を残す。
 
 **LLM の 1 回の呼び出しのやり直しの枠（#4736）**: やり直しは 1 回の呼び出し（`_parse_with_retry`）で最大 2 回（`LLM_CALL_MAX_RETRIES`。送信は最大
-3 回）。通信系の失敗・止まった stream・失敗の event・暴走（`LlmRunawayOutput`）・不正な出力・`U+FFFD`・出力の上限での送り直しをすべてこの枠で
+3 回）。通信系の失敗・止まった stream・失敗の event・不正な出力・`U+FFFD`・出力の上限での送り直しをすべてこの枠で
 数え、`_parse_with_retry` と `_openai_parsed` の間で枠を共有するので、外側のやり直しで数が 0 に戻らない。待ちは通信系と止まった stream だけで
-1 秒・2 秒、`Retry-After` があれば 30 秒まで従う（待ちの間の取り消しはすぐに効く）。モデルの出力の不合格（不正な出力・`U+FFFD`・暴走・上限）は
+1 秒・2 秒、`Retry-After` があれば 30 秒まで従う（待ちの間の取り消しはすぐに効く）。モデルの出力の不合格（不正な出力・`U+FFFD`・上限）は
 待たずに送り直す。SDK の再試行は切っている。試行の span は `pr.call.retry_group`（同じ呼び出しで同じ値）を持ち、やり直す試行は
 `pr.retry.scheduled` を持つ。利用者の処理の経過は、後の試行で回復した試行を赤の失敗にせず「再試行して成功」と出す（技術の一覧は実際の状態のまま）。
 
 **stream の受け方（#4197）**: SDK の組み立て（`responses.stream`）を通さず、`responses.create(stream=True)` の event をそのまま読む。
-delta は停滞・暴走の検出と途中経過の記録にだけ使い、応答は完了の event（`response.completed` / `response.incomplete`）が持つ全体を
+delta は無音の検出と途中経過の記録にだけ使い、応答は完了の event（`response.completed` / `response.incomplete`）が持つ全体を
 使う。本文の検証は応答の状態を確かめてからコードで行うので、provider の event の順（項目の開始より前の content_part・delta など）
 では失敗しない。順の違いは `llm_unordered_events` と WARNING（本文なし）に残す。完了の event に本文も拒否も無いときは
 `LlmStreamOutputMissing` で送り直し、尽きたら原文の提示へ退避して、`generation_failure` の `category=stream_output_missing` と

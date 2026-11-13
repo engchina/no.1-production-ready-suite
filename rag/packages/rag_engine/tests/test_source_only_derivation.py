@@ -15,7 +15,7 @@ import pytest
 from citation_unit_support import legacy_generation_output_model
 from pydantic import ValidationError
 
-from rag_engine.adapters.oci import LlmRunawayOutput
+from rag_engine.adapters.oci import InvalidStructuredOutput
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
@@ -144,7 +144,7 @@ def run(name: str, *, repair: str = "derive"):
         with pytest.raises(ValidationError):
             schema.model_validate(_derivation(prompt, IDENTIFIER_REQUIREMENT))
         if repair == "invalid":
-            raise LlmRunawayOutput("合成の反復", "runaway_repetition", None)
+            raise InvalidStructuredOutput("合成の形式不正")
         return schema.model_validate(_derivation(prompt, _first_requirement(name)))
 
     def unexpected(*args, **kwargs):
