@@ -433,19 +433,23 @@ test("索引が参照する過去版は現在の履歴ページに無くても I
 });
 
 
-test("入力上限で省略した根拠の案内を名前と説明で編集できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const key = "answer_evidence_budget_limited";
-  const text = "入力の上限により {count} 件の根拠を省略しました。";
-  await mockLanguagePack(page, { ...BUILTIN, answer_labels: { [key]: text } }, [
-    ...FIELDS, { section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 1000 },
-  ]);
-  await page.goto("/settings/language-pack");
-  await page.getByRole("searchbox", { name: "項目を探す" }).fill("入力の上限で省略した根拠の案内");
-  await expect(page.getByLabel("入力の上限で省略した根拠の案内", { exact: true })).toHaveValue(text);
-  await expect(page.getByText("回答への入力の上限で根拠を省いたときの案内です。{count} を省略した件数に置き換えます。", { exact: true })).toBeVisible();
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath(`budget-language-${testInfo.project.name}.png`), fullPage: true });
-});
+for (const key of ["answer_evidence_budget_limited", "answer_part_generation_failed"]) {
+  test(`${key} の案内を名前と説明で編集できる`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const text = key === "answer_evidence_budget_limited"
+      ? "入力の上限により {count} 件の根拠を省略しました。"
+      : "一部の回答（{count} 件）を生成できませんでした。";
+    await mockLanguagePack(page, { ...BUILTIN, answer_labels: { [key]: text } }, [
+      ...FIELDS, { section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 1000 },
+    ]);
+    await page.goto("/settings/language-pack");
+    const label = t(`settings.language.field.${key}`);
+    await page.getByRole("searchbox", { name: "項目を探す" }).fill(label);
+    await expect(page.getByLabel(label, { exact: true })).toHaveValue(text);
+    await expect(page.getByText(t(`settings.language.field.${key}.help`), { exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`budget-language-${testInfo.project.name}.png`), fullPage: true });
+  });
+}
 
 
 test("導出結論の見出しと根拠不足の定型文はラベルと説明で編集でき、草稿に保存される", { tag: "@responsive" }, async ({ page }) => {

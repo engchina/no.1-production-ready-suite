@@ -1203,6 +1203,8 @@ class Settings(
     rag_wiki_unit_preview_chars: int = Field(default=500, ge=100, le=4000)
     rag_wiki_section_preview_chars: int = Field(default=240, ge=100, le=2000)
     rag_wiki_section_catalog_limit: int = Field(default=48, ge=1, le=200)
+    rag_wiki_dependency_depth: int = Field(default=1, ge=0, le=8)
+    rag_wiki_lookup_workers: int = Field(default=2, ge=1, le=8)
     rag_wiki_query_timeout_seconds: float = Field(default=180, ge=10, le=1800)
     # 文書全体の要約（#4793）。取込の後に 1 文書につき 1 回、文書の説明を作る。
     rag_document_summary_enabled: bool = Field(
@@ -1804,6 +1806,12 @@ class Settings(
             "入力 token の上限で別に数え、生成時はこの文字上限とモデルの入力予算の両方に収める。"
             "使った予算と送った根拠の文字数は回答の診断の evidence_budget に残る。"
         ),
+    )
+    rag_batch_read_workers: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        description="同じ質問の独立した原文の分割読取を並行に呼ぶ上限。1 は順次実行。",
     )
     rag_answer_timeout_seconds: float = Field(
         default=600.0,

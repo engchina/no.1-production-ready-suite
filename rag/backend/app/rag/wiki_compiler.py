@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
+from pydantic import ValidationError
 from rag_parser_core.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
     sdk_retries_disabled,
@@ -129,10 +130,18 @@ async def compile_pages(
             await batch(missing[:middle])
             await batch(missing[middle:])
             return
-        decoder = json.JSONDecoder()
-        start = raw.find("{")
-        parsed, _ = decoder.raw_decode(raw[start:] if start >= 0 else raw)
-        output: WikiContexts = schema.model_validate(parsed)
+        try:
+            decoder = json.JSONDecoder()
+            start = raw.find("{")
+            parsed, _ = decoder.raw_decode(raw[start:] if start >= 0 else raw)
+            output: WikiContexts = schema.model_validate(parsed)
+        except (json.JSONDecodeError, ValidationError):
+            if len(missing) == 1:
+                raise
+            middle = len(missing) // 2
+            await batch(missing[:middle])
+            await batch(missing[middle:])
+            return
         completed = [
             WikiPage(unit=expected[item.unit_id], navigation=item, input_fingerprint=version)
             for item in output.items

@@ -516,7 +516,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 174
+    assert len(statements) == 175
     assert all(
         statement.startswith(
             (
@@ -533,6 +533,20 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
         )
         for statement in statements
     )
+
+
+def test_document_scope_index_migration_only_creates_missing_index() -> None:
+    """既存環境にも文書を先頭列とする索引だけを冪等に追加する（#4955）。"""
+    section = next(
+        item
+        for item in oracle_schema.oracle_schema_migration_sections()
+        if item.name == "20261112_4955_chunk_document_index"
+    )
+    assert "index_name = 'RAG_CHUNKS_DOCUMENT_IDX'" in section.sql
+    assert "IF v_count = 0 THEN" in section.sql
+    assert "CREATE INDEX rag_chunks_document_idx" in section.sql
+    assert "ON rag_chunks (document_id, chunk_index)" in section.sql
+    assert all(word not in section.sql for word in ("DROP ", "DELETE ", "UPDATE "))
 
 
 def test_oracle_schema_migration_manifest_is_deterministic() -> None:
@@ -663,6 +677,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261110_4799_search_answer_profile_runtime_rules",
         "20261110_4811_evaluation_job_visibility",
         "20261110_4793_document_summaries",
+        "20261112_4955_chunk_document_index",
         "20261112_4941_document_wiki",
     ]
 

@@ -219,6 +219,7 @@ def render_citations(
     available_sources: Collection[tuple[str, str]] | None = None,
 ) -> str:
     """引用の短い番号だけを取得済みの片段IDへ還元する。本文のIDを一括置換しない。"""
+    _entries(metadata)
     if "[[cite:" in _CITATION.sub("", answer):
         raise SourceHandleError("根拠参照の形式が不正です。取得結果のcitationを使用してください。")
 

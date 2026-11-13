@@ -14,11 +14,12 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
-from uuid import uuid4
 
 from pr_backend_core.bounded_calls import ErrorKind, classify_error, parse_retry_after
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
@@ -72,6 +73,8 @@ from rag_engine.resources.deadline import (
     remaining_seconds,
 )
 from rag_engine.resources.external_calls import send_http
+from rag_engine.resources.llm_retry_budget import LlmRetryBudget as _LlmRetryBudget
+from rag_engine.resources.llm_retry_budget import retry_budget_context as _llm_retry_budget
 from rag_engine.resources.llm_usage import (
     record_llm_effort_retry,
     record_llm_output_retry,
@@ -454,27 +457,6 @@ EMBEDDING_RETRY_INITIAL_WAIT_SECONDS = 1.0
 EMBEDDING_RETRY_MAX_WAIT_SECONDS = 16.0
 
 
-@dataclass
-class _LlmRetryBudget:
-    """1 回の LLM の呼び出しのやり直しの回数。内側（`_openai_parsed`）と外側（`_parse_with_retry`）で共有する。"""
-
-    used: int = 0
-    max_retries: int = LLM_CALL_MAX_RETRIES
-
-    @property
-    def available(self) -> bool:
-        return self.used < self.max_retries
-
-    def take(self) -> bool:
-        if not self.available:
-            return False
-        self.used += 1
-        return True
-
-
-_llm_retry_budget: ContextVar[_LlmRetryBudget | None] = ContextVar("rag_engine_llm_retry_budget", default=None)
-
-
 def _wait_before_retry(exc: Exception, retry: int, *, initial_wait_seconds: float = 1.0, max_wait_seconds: float = 16.0) -> None:
     """指数 backoff と full jitter で待つ。Retry-After は下限とし、期限や取消を優先する。"""
     cap = min(max_wait_seconds, initial_wait_seconds * (2 ** max(0, retry - 1)))
@@ -514,10 +496,10 @@ def _parse_with_retry[StructuredOutputT: BaseModel](
     """
     from rag_engine.resources.call_context import call_context, update_call_context
 
-    retry_budget = _LlmRetryBudget(max_retries=settings.llm_max_retries)
+    retry_budget = _llm_retry_budget.get() or _LlmRetryBudget(max_retries=settings.llm_max_retries)
     token = _llm_retry_budget.set(retry_budget)
     try:
-        with call_context({"pr.call.retry_group": uuid4().hex}):
+        with call_context({"pr.call.retry_group": retry_budget.group_id}):
             while True:
                 # 回答の期限を過ぎた・取り消された後は、次の呼び出し・やり直しをしない (#1422)。
                 check_deadline()
@@ -1097,15 +1079,20 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 raise
             record_usage()
             _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
-            # 入力に無い置換文字を含む生成文は、破損した構造化出力として既存の上限内で再取得する。
-            # 原文に元からある文字は改変しない。削除や推測による文字の補完もしない。
+            # 文字の品質は schema の違反と区別する。回答の要点の復旧は生成側で行う。
             if "\ufffd" not in json.dumps(input_messages, ensure_ascii=False) and "\ufffd" in parsed.model_dump_json():
-                # どの欄に出たか（JSON の path。本文は残さない）を例外と log に残す（#3849。退けた出力の原文は残らない）。
-                observation_attributes(observation, {"pr.call.validation_status": "rejected", **_retry_scheduled(retry_budget.available)})
                 paths = replacement_char_paths(parsed.model_dump(mode="json"))
-                _log_rejected_output(provider, text_format, response, reason="replacement_character", paths=paths)
-                raise InvalidStructuredOutput(
-                    f"生成文に入力にはない Unicode の置換文字が含まれています（欄: {', '.join(paths) or '不明'}）。再生成してください。"
+                observation_attributes(observation, {"pr.call.output_quality": "replacement_character"})
+                logging.getLogger(__name__).warning(
+                    "LLM の生成文に文字品質の警告があります: model=%s schema=%s paths=%s",
+                    provider.model,
+                    text_format.__name__,
+                    ",".join(paths),
+                    extra={
+                        "event": "llm_output_quality_warning",
+                        "llm_quality_paths": paths,
+                        "llm_quality_reason": "replacement_character",
+                    },
                 )
             observation_attributes(observation, {"pr.call.validation_status": "accepted"})
             return parsed
@@ -1389,6 +1376,88 @@ def _stall_detection_enabled(settings: Settings) -> bool:
     return bool(getattr(settings, "llm_stall_detection", False)) and current_deadline() is not None
 
 
+class _StreamTextRecovery:
+    """同じ応答の完全本文だけを保持し、最終スナップショットの置換文字破損を復旧する。"""
+
+    def __init__(self) -> None:
+        self.response_id: str | None = None
+        self.invalid = False
+        self.closed = False
+        self.texts: dict[tuple[str, int, int], str | None] = {}
+
+    def feed(self, kind: str, event: Any) -> None:
+        if self.closed:
+            return
+        response = _value(event, "response")
+        if response is not None:
+            response_id = _value(response, "id")
+            if not isinstance(response_id, str) or not response_id:
+                self.invalid = True
+            elif self.response_id is None and kind == "response.created":
+                self.response_id = response_id
+            elif response_id != self.response_id:
+                self.invalid = True
+        if kind in {"response.completed", "response.incomplete", "response.failed", "error"}:
+            self.closed = True
+        if kind != "response.output_text.done" or self.response_id is None:
+            return
+        item_id = _value(event, "item_id")
+        output_index = _value(event, "output_index")
+        content_index = _value(event, "content_index")
+        text = _value(event, "text")
+        if (
+            not isinstance(item_id, str)
+            or not item_id
+            or type(output_index) is not int
+            or type(content_index) is not int
+            or output_index < 0
+            or content_index < 0
+            or not isinstance(text, str)
+        ):
+            return
+        key = (item_id, output_index, content_index)
+        self.texts[key] = text if key not in self.texts or self.texts[key] == text else None
+
+    def recover(self, final: Any) -> Any:
+        if (
+            self.invalid
+            or self.response_id is None
+            or _value(final, "id") != self.response_id
+            or _value(final, "status") != "completed"
+            or _value(final, "error")
+            or _value(final, "incomplete_details")
+            or _response_refusal(final)
+            or "\ufffd" not in _response_output_text(final)
+        ):
+            return final
+        recovered = deepcopy(final.model_dump(mode="python") if isinstance(final, BaseModel) else final)
+        changed = 0
+        for output_index, item in enumerate(_value(recovered, "output", []) or []):
+            if _value(item, "type") != "message" or _value(item, "status") != "completed":
+                continue
+            for content_index, part in enumerate(_value(item, "content", []) or []):
+                if _value(part, "type") != "output_text":
+                    continue
+                damaged = _value(part, "text")
+                clean = self.texts.get((_value(item, "id"), output_index, content_index))
+                if not isinstance(damaged, str) or not clean or "\ufffd" not in damaged or "\ufffd" in clean:
+                    continue
+                differences = SequenceMatcher(None, damaged, clean).get_opcodes()
+                if any(tag != "equal" and (tag != "replace" or set(damaged[a:b]) != {"\ufffd"}) for tag, a, b, _, _ in differences):
+                    continue
+                part["text"] = clean
+                changed += 1
+        if not changed:
+            return final
+        # SDK の便利属性が存在しても、本文の正本と食い違わせない。元の event は診断用に保持する。
+        if "output_text" in recovered:
+            recovered["output_text"] = "".join(
+                str(_value(part, "text") or "") for part in _iter_response_content(recovered) if _value(part, "type") == "output_text"
+            )
+        _logger.warning("LLM stream text recovered from matching done events: parts=%d", changed)
+        return recovered
+
+
 def _stream_parsed(
     client: Any,
     request: dict[str, Any],
@@ -1402,7 +1471,8 @@ def _stream_parsed(
     """Responses API を streaming で呼び、完了（または未完了）の event の応答と時刻を返す（#1926）。
 
     SDK の組み立て（`responses.stream`）を通さず、event をそのまま読む。応答は完了の event が持つ全体を使うので、provider の
-    event の順（項目の開始より前の content_part・delta など）では失敗しない（#4197）。``request`` は wire の形（schema は ``text``）。
+    event の順（項目の開始より前の content_part・delta など）では失敗しない（#4197）。同じ item/content の完全本文が届いていれば、
+    完了本文の置換文字だけが破損した場合に限り復旧する。``request`` は wire の形（schema は ``text``）。
 
     1 回の待ちの上限（httpx の read timeout。event の間隔）は ``idle_seconds``（検出しないときの None は全体の上限）。
     全体の上限（LLM 1 回の timeout と回答の期限の残りの短いほう）と取り消しは event ごとに確かめる。無音を検出したら
@@ -1423,6 +1493,7 @@ def _stream_parsed(
     idle_bound = idle_seconds is not None and idle_seconds < total
     timing = _StreamTiming()
     trail = _StreamEventTrail(timing)
+    text_recovery = _StreamTextRecovery()
     draft_arrays = isinstance(text_format, type) and issubclass(text_format, GroundedDraft)
     monitor = _RunawayMonitor(draft_arrays=draft_arrays) if runaway else None
     final: Any = None
@@ -1442,6 +1513,7 @@ def _stream_parsed(
                     timing.first_event_seconds = elapsed
                 kind = str(_value(event, "type") or "")
                 trail.feed(kind, event)
+                text_recovery.feed(kind, event)
                 if kind.endswith(".delta"):
                     timing.deltas += 1
                     timing.last_delta_seconds = elapsed
@@ -1485,7 +1557,7 @@ def _stream_parsed(
         trace = trail.trace(final)
         _logger.warning("LLM stream completed without output: trace=%s", json.dumps(trace, ensure_ascii=False))
         raise LlmStreamOutputMissing("LLM の応答の完了の event に本文がありません。", timing, trace)
-    return final, timing
+    return text_recovery.recover(final), timing
 
 
 def _is_stream_error_event(exc: BaseException) -> bool:

@@ -11,13 +11,13 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from test_llm_stall_resend import PROVIDER, USAGE, _Client, _Clock, _script
 
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
 from rag_engine.models.llm import TextOutput
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline
 from rag_engine.resources.llm_usage import LlmUsage, llm_usage
-from tests.test_llm_stall_resend import PROVIDER, USAGE, _Client, _Clock, _script
 
 FAILED_EVENT = SimpleNamespace(type="response.failed", response=SimpleNamespace(error=SimpleNamespace(message="overloaded")))
 
@@ -120,17 +120,11 @@ class SharedBudgetTest(_Base):
         self.assertEqual(len(client.streams), 6)
         self.assertEqual(sum(self.waits()), 15.5)
 
-    def test_replacement_character_is_counted(self):
-        """U+FFFD の検査とやり直しは残し、同じ枠で数える。"""
-        client = _Client(self.clock, [_script(1, 200.0, final=_completed_event(REPLACEMENT)) for _ in range(7)])
-        with self.assertRaises(oci.InvalidStructuredOutput):
-            self.call(client, self.stream_settings)
-        self.assertEqual(len(client.streams), 6)
-
-    def test_replacement_character_recovers_within_budget(self):
-        client = _Client(self.clock, [_script(1, 200.0, final=_completed_event(REPLACEMENT)), _script(1, 200.0)])
-        self.assertEqual(self.call(client, self.stream_settings).text, "ok")
-        self.assertEqual(len(client.streams), 2)
+    def test_character_quality_warning_does_not_consume_transport_retries(self):
+        client = _Client(self.clock, [_script(1, 200.0, final=_completed_event(REPLACEMENT))])
+        result = self.call(client, self.stream_settings)
+        self.assertIn("�", result.text)
+        self.assertEqual(len(client.streams), 1)
 
     def test_output_limit_stops_after_transport_retry(self):
         """通信の再試行は残し、その後の出力上限では追加要求を送らない。"""

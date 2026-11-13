@@ -10,6 +10,8 @@ No.1 Production Ready Suite（`platform/`・`rag/`・`nl2sql/`・`agent/`）が�
 
 Unstructured parser のセキュリティ更新（#3957）では、`pyasn1` 0.6.5（BSD-2-Clause）と `pypdf` 6.21.4（BSD-3-Clause）を PyPI の配布 metadata で確認しました。新たな copyleft の部品は追加していません。これらも再配布する場合は、配布物のライセンス原文を保持してください。
 
+soupsieve のセキュリティ更新（#4992）では、4.1 の PyPI 配布 metadata で MIT と Python >=3.11.5 を確認しました。rag/backend の optional extra・rag_engine・Docling / Unstructured parser の lock を更新し、新たな部品は追加していません。再配布時は配布物のライセンス原文を保持してください。
+
 ## 入手の経路と再配布
 
 この repo と、その release（`suite-v*` の Terraform stack の zip）は、自前のソースと配備のスクリプトだけを含み、下の表の第三者の binary を含みません。配備のスクリプトは、配備先の Compute で次のとおり第三者の部品を取得します。

@@ -134,7 +134,7 @@ from rag_engine.generation.answer_records import (
     validate_run_id,
 )
 from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
-from rag_engine.generation.citation_unit_ids import SentUnitCatalog
+from rag_engine.generation.citation_unit_ids import SentUnitCatalog, citation_snapshot_span
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.evidence_merge import merge_evidence
 from rag_engine.generation.execution_record import (
@@ -1294,7 +1294,7 @@ def _grounded_spans(
             {"stage": "generation_evidence_preparation", "input_stage": "prepared_for_generation", "groups": preparation}
         )
     spans = form_field_kinds.with_field_kind_evidence(form_field_kinds.question_field_kinds(question, context), spans)
-    return tag_spans(spans)
+    return tag_spans(spans, build_check_context=False)
 
 
 def _grounded_prompt(
@@ -1538,11 +1538,10 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
 
 # tag_spans が検査用に span へ付ける、同じ機能・文書・隣接ページの本文の複製。span 数 n に対して O(n²) の本文になるため
 # 回答 JSON と UI へ渡す trace には残さない (#829)。読み手（answer_payload・viewer）は evidence_id / source_id / text / page を使う。
-_CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
 
 
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
+    return citation_snapshot_span(span)
 
 
 def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None, spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -1741,11 +1740,12 @@ def synthesize_grounded_answer(
                     unusable_output=_invalid_structured_output,
                     render=render_generation,
                     evidence_text=grounded.evidence_block_text,
-                    tag=grounded.tag_spans,
+                    tag=lambda values: grounded.tag_spans(values, build_check_context=False),
                     system=generation_system,
                     schema_for=selected_generation_schema,
                     provider_id=provider,
                     source_scores=_source_question_scores(context),
+                    evidence_size_lower_bound=grounded.evidence_text_lower_bound,
                 )
             else:
                 spans, prompt, input_diagnostic = select_evidence(
@@ -1794,7 +1794,8 @@ def synthesize_grounded_answer(
                 raise
             generation_failure = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
             generation_failure_stage = "evidence.select" if selecting_evidence else "answer.generate"
-            if invalid_draft and not input_limited:
+            quality_failed = isinstance(exc, grounded.DraftGenerationInvalid) and "text_quality" in exc.detail
+            if invalid_draft and not input_limited and not quality_failed:
                 structured_output_failed = True
                 if escalation_probe:
                     raise model_cascade.EscalationRequested((SIGNAL_STRUCTURED_OUTPUT_INVALID,)) from exc
@@ -1812,6 +1813,8 @@ def synthesize_grounded_answer(
                 json.dumps(generation_failure_detail, ensure_ascii=False),
             )
             current = grounded.timed_out_round(question)
+            if isinstance(exc, grounded.DraftGenerationInvalid) and exc.citation_trace:
+                current.citation_trace = exc.citation_trace
             step.fail("回答文を生成できなかったため、質問に関係する資料の記載だけを示します", reason_code="answer_generation_failed")
             step.output({"error_type": type(exc).__name__, "input_budget": input_diagnostic})
         else:
@@ -1833,6 +1836,11 @@ def synthesize_grounded_answer(
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
     unread = [*unread_view.lines, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())]
+    text_quality = current.timing.get("text_quality", {})
+    failed_parts = [*text_quality.get("failed_indexes", []), *text_quality.get("failed_units", [])]
+    quality_notice = (
+        current_pack().text("answer_labels", "answer_part_generation_failed").format(count=len(failed_parts)) if failed_parts else ""
+    )
     if excluded_count := input_diagnostic.get("excluded_span_count", 0):
         unread.append(current_pack().text("answer_labels", "answer_evidence_budget_limited").format(count=excluded_count))
     settled = grounded.settle_confirmations(
@@ -1866,12 +1874,14 @@ def synthesize_grounded_answer(
         guide_notes=guide_notes,
         guide_notes_first=guide_notes_first,
     )
+    if quality_notice:
+        rendered.text = quality_notice + "\n\n" + rendered.text
     unsupported_parts = sum(1 for note in current.dropped if not note.get("ignored")) + sum(
         1 for entry in current.applications if not entry.published
     )
     confidence = "low" if not published else current.draft.confidence
     unsettled = [e for e in published if e.item.applies != "matched"]
-    if confidence == "high" and (gaps or unsettled or unread or unsupported_parts):
+    if confidence == "high" and (gaps or unsettled or unread or unsupported_parts or quality_notice):
         confidence = "medium"
     from rag_engine.generation.provided_scope import capture_provided_scope
 
@@ -1884,6 +1894,7 @@ def synthesize_grounded_answer(
         "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
         "generation_input_budget": input_diagnostic,
         "same_unit_fill": unit_fill,
+        **({"generation_text_quality": text_quality} if text_quality else {}),
         "retrieval_counts": _retrieval_counts(context, spans),
         "rounds": rounds,
         "escalation_signals": list(escalation_reasons((SIGNAL_STRUCTURED_OUTPUT_INVALID,) if structured_output_failed else ())),

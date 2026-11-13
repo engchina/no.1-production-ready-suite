@@ -25,6 +25,7 @@ from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.model_usage import UNMEASURED_SOURCE_ATTRIBUTE
 from pr_backend_core.observability.tracing import observed_span
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
+from pr_backend_core.oracle_errors import is_oracle_connection_error
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
 from pr_backend_core.oracle_session import init_oracle_session, local_session_time_zone
 from pr_backend_core.timezones import session_time_zone_offset
@@ -62,7 +63,14 @@ from .object_visibility import (
     is_user_visible_schema_object,
     user_visible_object_sql_predicate,
 )
+from .oracle_keyword_metadata import (
+    MAX_NATIVE_KEYWORD_ROWS,
+    NativeKeywordMetadata,
+    native_keyword_metadata_from_rows,
+    unavailable_native_keyword_metadata,
+)
 from .oracle_lob import configure_clob_fetch_as_text, configure_connection_clob_fetch_as_text
+from .oracle_sql_diagnostics import OracleOffsetBasis
 from .sql_lexing import _tokens as sql_tokens
 
 logger = logging.getLogger(__name__)
@@ -70,6 +78,35 @@ logger = logging.getLogger(__name__)
 
 class OracleAdapterError(RuntimeError):
     """Oracle adapter の実行時エラー。"""
+
+
+class OracleSelectPreparationError(OracleAdapterError):
+    """SELECT の非実行解析で得た Oracle 診断。分類不能な失敗は修正対象にしない。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int = 0,
+        offset: int = 0,
+        offset_basis: OracleOffsetBasis | None = None,
+    ) -> None:
+        super().__init__(f"{message} (offset={offset})")
+        self.code = code
+        self.offset = offset
+        self.offset_basis = offset_basis
+
+    @property
+    def allows_generation_repair(self) -> bool:
+        # ORA-00942 は存在しない表と権限不足を区別できないため、生成の修正へ渡さない。
+        cause: BaseException | None = self
+        seen: set[int] = set()
+        while cause is not None and id(cause) not in seen and len(seen) < 10:
+            seen.add(id(cause))
+            if is_oracle_connection_error(cause):
+                return False
+            cause = cause.__cause__ or cause.__context__
+        return 900 <= self.code <= 999 and self.code != 942
 
 
 class SelectAiFeedbackNotFoundError(OracleAdapterError):
@@ -1807,6 +1844,64 @@ class OracleNl2SqlAdapter:
                 raise
             raise OracleAdapterError(f"生成用サンプルの取得に失敗しました: {exc}") from exc
         return samples, warnings
+
+    def read_native_keyword_metadata(self, keyword: str) -> NativeKeywordMetadata:
+        """同じ actor のデータ接続で native の事実だけを読む。別の権限へ切り替えない。"""
+        try:
+            with self.user_data_connection(read_only=True) as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT KEYWORD, RESERVED, RES_TYPE, RES_ATTR, RES_SEMI "
+                    "FROM SYS.V_$RESERVED_WORDS WHERE KEYWORD = :keyword "
+                    "ORDER BY KEYWORD, RESERVED, RES_TYPE, RES_ATTR, RES_SEMI",
+                    {"keyword": keyword.upper()},
+                )
+                columns = [column[0] for column in cursor.description or []]
+                rows = cursor.fetchmany(MAX_NATIVE_KEYWORD_ROWS + 1)
+            return native_keyword_metadata_from_rows(keyword, columns, rows)
+        except Exception:
+            # 補助参照の失敗は元の parse エラーを隠さず、本文や接続情報も出さない。
+            return unavailable_native_keyword_metadata("query_failed")
+
+    def prepare_select(self, sql: str) -> None:
+        """安全性・対象範囲を確認済みの SELECT を、実行と同じ actor の接続で解析する。
+
+        parse は DDL を実行し得るため、ここでも SELECT 系の単一 AST に限定する。
+        行の取得や実行はしない。接続の取得・権限・timeout の失敗は SQL 修正で隠さない。
+        """
+        from .sql_semantics import parse_oracle_sql
+
+        if parse_oracle_sql(sql).graph is None:
+            raise OracleAdapterError("SELECT の単一文だけを実行前に解析できます。")
+        try:
+            with (
+                self.user_data_connection(read_only=True) as conn,
+                self._business_session_time_zone(conn, admin_control_plane=False),
+                conn.cursor() as cursor,
+            ):
+                try:
+                    connection_mode = getattr(conn, "thin", None)
+                except Exception:
+                    connection_mode = None
+                try:
+                    cursor.parse(sql)
+                except Exception as exc:
+                    error = exc.args[0] if exc.args else None
+                    code = getattr(error, "code", 0)
+                    offset = getattr(error, "offset", 0)
+                    # Thin の wire SQL と Thick の statement buffer は UTF-8。
+                    # 両 driver は server / ODPI の byte offset をそのまま返す。
+                    raise OracleSelectPreparationError(
+                        f"SELECT の実行前解析に失敗しました: {exc}",
+                        code=code if isinstance(code, int) else 0,
+                        offset=offset if isinstance(offset, int) else 0,
+                        offset_basis=(
+                            "utf8_bytes_zero_based" if isinstance(connection_mode, bool) else None
+                        ),
+                    ) from exc
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            raise OracleAdapterError(f"SELECT の実行前解析に失敗しました: {exc}") from exc
 
     def execute_select(
         self,

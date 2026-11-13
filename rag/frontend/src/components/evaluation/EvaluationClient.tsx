@@ -67,7 +67,7 @@ import {
   useEvaluationJob,
   useEvaluationSettings,
   useImportEvaluationCases,
-  useSearchAnswerProfiles,
+  useAllSearchAnswerProfiles,
   useSubmitRunEvaluationJob,
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -231,7 +231,7 @@ export function EvaluationClient() {
     false,
     isBoolean
   );
-  const profilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
+  const profilesQuery = useAllSearchAnswerProfiles({ status: "ACTIVE" });
   const profiles = profilesQuery.data?.items ?? [];
   // 選んだファイル（プロファイルを変えたときに検証し直す）。再読込の後は無い（検証の結果だけが残る）。
   const [file, setFile] = useState<File | null>(null);
@@ -444,7 +444,16 @@ export function EvaluationClient() {
                   >
                     <SearchAnswerProfileSelectSkeleton />
                   </TimedLoadingState>
-                ) : profilesQuery.isError ? (
+                ) : <>
+                  {(!profilesQuery.isError || profilesQuery.data) ? <SearchAnswerProfileSelect
+                    id="evaluation-profile"
+                    items={profiles}
+                    value={profileId}
+                    onChange={changeProfile}
+                    disabled={runActive}
+                    error={profileError ?? undefined}
+                  /> : null}
+                  {profilesQuery.isError ? (
                   // 候補を読み取れなかったことを、候補なしと分けて再試行と一緒に出す（#4222）。
                   <DataLoadFailure
                     error={profilesQuery.error}
@@ -453,16 +462,8 @@ export function EvaluationClient() {
                     layout="field"
                     testId="evaluation-profiles-load-failed"
                   />
-                ) : (
-                  <SearchAnswerProfileSelect
-                    id="evaluation-profile"
-                    items={profiles}
-                    value={profileId}
-                    onChange={changeProfile}
-                    disabled={runActive}
-                    error={profileError ?? undefined}
-                  />
-                )}
+                  ) : null}
+                </>}
                 <p className="mt-1 text-xs text-fg-muted">{t("evaluation.knowledgeBaseScope.helper")}</p>
               </div>
 
@@ -880,7 +881,7 @@ function CompareOption({
   onEnabledChange: (enabled: boolean) => void;
   profileId: string | null;
   onProfileChange: (id: string) => void;
-  query: ReturnType<typeof useSearchAnswerProfiles>;
+  query: ReturnType<typeof useAllSearchAnswerProfiles>;
   baseProfileId: string | null;
   error: string | null;
   disabled: boolean;
@@ -914,16 +915,8 @@ function CompareOption({
           >
             <SearchAnswerProfileSelectSkeleton />
           </TimedLoadingState>
-        ) : query.isError ? (
-          <DataLoadFailure
-            error={query.error}
-            fallback={t("evaluation.compare.profilesLoadError")}
-            onRetry={() => void query.refetch()}
-            layout="field"
-            testId="evaluation-compare-profiles-load-failed"
-          />
-        ) : (
-          <SearchAnswerProfileSelect
+        ) : <>
+          {(!query.isError || query.data) ? <SearchAnswerProfileSelect
             id={COMPARE_PROFILE_ID}
             label={t("evaluation.compare.profileLabel")}
             items={(query.data?.items ?? []).filter((profile) => profile.id !== baseProfileId)}
@@ -931,8 +924,17 @@ function CompareOption({
             onChange={onProfileChange}
             disabled={disabled}
             error={error ?? undefined}
+          /> : null}
+          {query.isError ? (
+          <DataLoadFailure
+            error={query.error}
+            fallback={t("evaluation.compare.profilesLoadError")}
+            onRetry={() => void query.refetch()}
+            layout="field"
+            testId="evaluation-compare-profiles-load-failed"
           />
-        )
+          ) : null}
+        </>
       ) : null}
     </div>
   );

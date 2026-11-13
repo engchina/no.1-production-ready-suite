@@ -12,6 +12,13 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
+
+
+def citation_snapshot_span(span: Mapping[str, Any]) -> dict[str, Any]:
+    """原文と属性を保存し、他の根拠の本文を複製した検査用キャッシュは保存しない。"""
+    return {key: value for key, value in span.items() if key not in CHECK_ONLY_SPAN_KEYS}
+
 
 def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -60,7 +67,7 @@ class EvidenceUnitSnapshot:
         snapshot_id = "S" + _digest(identity)
         return cls(
             snapshot_id,
-            json.dumps(dict(span), ensure_ascii=False, sort_keys=True),
+            json.dumps(citation_snapshot_span(span), ensure_ascii=False, sort_keys=True),
             contract,
             normalized,
             tuple("U" + _digest([snapshot_id, start, end])[:24] for start, end in normalized),

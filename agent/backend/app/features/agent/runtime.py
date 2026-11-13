@@ -59,7 +59,7 @@ from app.features.agent import (
     storage_backend,
 )
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
-from app.features.agent.answer_data import register_data_result
+from app.features.agent.answer_data import DataReferenceError, register_data_result
 from app.features.agent.chat_progress import note_run_span
 from app.features.agent.clarification_cancel import (
     CANCEL_METADATA_KEY,
@@ -85,6 +85,15 @@ from app.features.agent.confirmation import (
 from app.features.agent.confirmation import METADATA_KEYS as CONFIRMATION_METADATA_KEYS
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
 from app.features.agent.output_fields import AgentOutputField, validate_output_fields
+from app.features.agent.report_contract import AnswerPlan, ReportOutputContract
+from app.features.agent.report_fields import REPORT_FIELDS_KEY, register_report_step
+from app.features.agent.report_preview import (
+    REPORT_PREVIEWS_METADATA_KEY,
+    RenderedReport,
+    ReportPreviewError,
+    create_preview,
+    selectable_previews,
+)
 from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.skills import (
@@ -259,6 +268,7 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
     "clarification_max_rounds",
     "skill_policy",
     "output_fields",
+    "output_contract",
 )
 
 
@@ -286,6 +296,14 @@ class AgentVersion(BaseModel):
     skill_policy: SkillPolicy = SKILL_POLICY_PINNED
     # 出力の項目（#2549）。
     output_fields: list[AgentOutputField] = Field(default_factory=list)
+    output_contract: ReportOutputContract | None = None
+
+    @model_validator(mode="after")
+    def _exclusive_output_contract(self) -> AgentVersion:
+        if self.output_contract is not None and self.output_fields:
+            raise ValueError("参照付きレポートと出力の項目は同時に指定できません。")
+        return self
+
     note: str = ""
     published_at: datetime = Field(default_factory=_now)
     published_by: str | None = None
@@ -355,6 +373,7 @@ class AgentProfile(BaseModel):
     skill_policy: SkillPolicy = SKILL_POLICY_PINNED
     # 出力の項目（#2549。key・表示名・型・必須。Run に `record_output` を渡す）。
     output_fields: list[AgentOutputField] = Field(default_factory=list)
+    output_contract: ReportOutputContract | None = None
     # 使うツールは持たない（スキルの `mcp_requirements` からだけ決める。#3240）。直接の指定は
     # 作成・変更の API が 422 で拒み（`reject_direct_tool_fields`）、保存済みの旧い値
     # （`tool_names`・`migration_required`）は読むときに無視する（未リリースのため互換を持たない）。
@@ -385,6 +404,12 @@ class AgentProfile(BaseModel):
     # Run が使うスキルの宣言（Agent 主体の根拠の取得。#2651）に従ってよいか（`agent_for_run` が
     # 入れる。保存・応答には出さない）。固定の中身の無い公開の版は宣言を確かめられないので False。
     caller_planning_allowed: bool = Field(default=True, exclude=True)
+
+    @model_validator(mode="after")
+    def _exclusive_output_contract(self) -> AgentProfile:
+        if self.output_contract is not None and self.output_fields:
+            raise ValueError("参照付きレポートと出力の項目は同時に指定できません。")
+        return self
 
     @field_validator("output_fields")
     @classmethod
@@ -507,6 +532,7 @@ class AgentProfilePatch(BaseModel):
     )
     skill_policy: SkillPolicy | None = None
     output_fields: list[AgentOutputField] | None = None
+    output_contract: ReportOutputContract | None = None
     enabled: bool | None = None
 
     @model_validator(mode="before")
@@ -686,6 +712,8 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         "replayed_from_run_id",
         # 実行構成の指紋（#2585）。Runtime が書き、利用者の値で上書きさせない。
         "run_config",
+        REPORT_PREVIEWS_METADATA_KEY,
+        REPORT_FIELDS_KEY,
         # 品質評価が外す実行補助（#2587。評価の Run だけが読む）。利用者が付けて外せないようにする。
         "evaluation_disabled_aids",
         # 確認の取り消し（#1441・#1445）。`RunCreateRequest.clarification_cancel` から作る。
@@ -1433,7 +1461,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     def start_builtin_tool_step(
         self, run_id: str, call: ToolCall, *, cleanup: bool = False
     ) -> tuple[str, ToolInvocationContext]: ...
-    def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None: ...
+    def finish_builtin_tool_step(
+        self, run_id: str, step_id: str, result: ToolResult, *, trusted_report_source: bool = False
+    ) -> None: ...
     def request_builtin_approvals(
         self,
         run_id: str,
@@ -1482,6 +1512,18 @@ class AgentRuntimeRepositoryContract(Protocol):
     def thread_history(self, run_id: str) -> list[ChatHistoryTurn]: ...
     def thread_previous_runs(self, run_id: str) -> list[RunState]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
+    def register_report_preview(
+        self,
+        run_id: str,
+        *,
+        operation_key: str,
+        plan: AnswerPlan,
+        contract: ReportOutputContract,
+        renderer: Callable[[RunState, AnswerPlan], RenderedReport],
+    ) -> JsonObject: ...
+    def report_selection_ids(
+        self, run_id: str, contract: ReportOutputContract
+    ) -> tuple[str, ...]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
         self, run_id: str, *, kind: str, name: str, content: JsonObject
@@ -2493,14 +2535,22 @@ class AgentRuntimeRepository:
             attachments=list(attachments or []),
             status=RunStatus.QUEUED,
             metadata={
-                **request.metadata,
+                **{
+                    key: value
+                    for key, value in request.metadata.items()
+                    if key not in {REPORT_PREVIEWS_METADATA_KEY, REPORT_FIELDS_KEY}
+                },
                 "agent_version": used_version,
                 **(
                     {CANCEL_METADATA_KEY: [button_record(request.clarification_cancel)]}
                     if request.clarification_cancel is not None
                     else {}
                 ),
-                **deepcopy(extra_metadata or {}),
+                **{
+                    key: value
+                    for key, value in deepcopy(extra_metadata or {}).items()
+                    if key not in {REPORT_PREVIEWS_METADATA_KEY, REPORT_FIELDS_KEY}
+                },
             },
         )
         if request.thread_id is not None:
@@ -2632,6 +2682,66 @@ class AgentRuntimeRepository:
                 abandoned,
                 thread_id=run.thread_id,
                 owner_user_uuid=owner,
+            )
+
+    def register_report_preview(
+        self,
+        run_id: str,
+        *,
+        operation_key: str,
+        plan: AnswerPlan,
+        contract: ReportOutputContract,
+        renderer: Callable[[RunState, AnswerPlan], RenderedReport],
+    ) -> JsonObject:
+        """同じ実行だけの不変previewを、claim・設定・保存状態とまとめて確定する。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.status != RunStatus.RUNNING or self._stale_execution_locked(
+                run, "report_preview", segment_end=False
+            ):
+                raise ReportPreviewError(
+                    "report.run_inactive", "終了した実行には回答案を保存できません。"
+                )
+            agent = self._agents.get(run.agent_id)
+            if agent is None or agent_for_run(agent, run).output_contract != contract:
+                raise ReportPreviewError(
+                    "report.contract_mismatch", "この実行の出力設定と回答案が一致しません。"
+                )
+            creation = create_preview(
+                run.metadata.get(REPORT_PREVIEWS_METADATA_KEY),
+                run_id=run.id,
+                operation_key=operation_key,
+                plan=plan,
+                contract=contract,
+                render_body=lambda selected: renderer(run.model_copy(deep=True), selected),
+            )
+            run.metadata[REPORT_PREVIEWS_METADATA_KEY] = creation.ledger
+            self._mark_run_changed(run)
+            self._persist_locked()
+            return creation.result.model_dump(mode="json")
+
+    def report_selection_ids(self, run_id: str, contract: ReportOutputContract) -> tuple[str, ...]:
+        """実行の所有権・公開版・根拠を同じlockで確認して選択候補を読む。"""
+        from app.features.agent.report_runtime import source_digest
+
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.status != RunStatus.RUNNING or self._stale_execution_locked(
+                run, "report_selection", segment_end=False
+            ):
+                raise ReportPreviewError(
+                    "report.run_inactive", "実行中の回答案だけを選択できます。"
+                )
+            agent = self._agents.get(run.agent_id)
+            if agent is None or agent_for_run(agent, run).output_contract != contract:
+                raise ReportPreviewError(
+                    "report.contract_mismatch", "この実行の出力設定と回答案が一致しません。"
+                )
+            return selectable_previews(
+                run.metadata.get(REPORT_PREVIEWS_METADATA_KEY),
+                run_id=run.id,
+                contract=contract,
+                source_digest=source_digest(run),
             )
 
     def save_builtin_artifact(
@@ -2997,7 +3107,9 @@ class AgentRuntimeRepository:
 
             return step.id, context
 
-    def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None:
+    def finish_builtin_tool_step(
+        self, run_id: str, step_id: str, result: ToolResult, *, trusted_report_source: bool = False
+    ) -> None:
         """ツールの結果を step・イベント・成果物に記録する。
 
         失敗しても Run は続ける（結果を受け取ったモデルが判断する）。取消の前に送った操作の結果が
@@ -3005,6 +3117,7 @@ class AgentRuntimeRepository:
         Run の状態（`run_status`）を残す（#2609）。取消で打ち切った呼び出し（#2691。
         `TOOL_CALL_ABORTED_CODE`）は、失敗ではなく取消の step にする。
         """
+        report_error: DataReferenceError | None = None
         with self._lock:
             run = self._require_run(run_id)
             step = self._require_step(run, step_id)
@@ -3030,6 +3143,23 @@ class AgentRuntimeRepository:
                     "nl2sql_get_job",
                 } and isinstance(result.output, dict):
                     register_data_result(run.metadata, step.id, result.output)
+                profile = self._agents.get(run.agent_id)
+                if (
+                    profile is not None
+                    and agent_for_run(profile, run).output_contract is not None
+                    and isinstance(result.output, dict)
+                ):
+                    try:
+                        register_report_step(
+                            run.metadata,
+                            step.id,
+                            call_name,
+                            result.output,
+                            trusted_builtin=trusted_report_source,
+                        )
+                    except DataReferenceError as exc:
+                        report_error = exc
+
                 if mcp_base_tool_name(call_name) in source_handles.SOURCE_TOOLS and isinstance(
                     result.output, dict
                 ):
@@ -3077,6 +3207,8 @@ class AgentRuntimeRepository:
                 )
             run.updated_at = _now()
             self._persist_locked()
+        if report_error is not None:
+            raise report_error
 
     def request_builtin_approvals(
         self,
@@ -3980,19 +4112,16 @@ class AgentRuntimeRepository:
             agent = self._agents.get(agent_id)
             if agent is None:
                 raise KeyError(agent_id)
-            # 送られた項目を検証済みの型のまま入れる（`model_dump` の dict にしない）。
-            # AgentProfile は代入を検証しないので、dict にするとデータの範囲・出力の項目が
-            # モデルでなくなり、属性で読む処理（次の保存の範囲の確認・record_output）が
-            # 失敗する（#2559・#2694）。
-            data: dict[str, Any] = {
-                key: deepcopy(getattr(patch, key)) for key in patch.model_fields_set
-            }
-            skill_ids = data.get("skill_ids")
-            if isinstance(skill_ids, list):
-                self._validate_agent_skills(skill_ids)
+            # PATCH の省略用 nullable 型ではなく、保存する全体の型と組合せを先に確かめる。
+            # 除外フィールドと既存のモデル型も保つため、model_dump で dict に変換しない。
+            values = {key: deepcopy(getattr(agent, key)) for key in AgentProfile.model_fields}
+            values.update({key: deepcopy(getattr(patch, key)) for key in patch.model_fields_set})
+            candidate = AgentProfile.model_validate(values)
+            if "skill_ids" in patch.model_fields_set:
+                self._validate_agent_skills(candidate.skill_ids)
             before = {field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS}
-            for key, value in data.items():
-                setattr(agent, key, value)
+            agent = candidate
+            self._agents[agent_id] = candidate
             agent.updated_at = _now()
             # 有効 / 無効の切り替えなど、版の項目を変えない保存では下書きの時刻を進めない（#2519）。
             if any(getattr(agent, field) != before[field] for field in AGENT_VERSIONED_FIELDS):

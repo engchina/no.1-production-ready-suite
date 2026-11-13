@@ -490,12 +490,18 @@ def _verify_schema(schema: str, variables: str) -> None:
     if schema_names - terraform_names:
         raise AssertionError(f"schema variables missing from Terraform: {sorted(schema_names - terraform_names)}")
 
+    region_schema = _schema_variable(schema, "region")
+    _require_all(region_schema, ["type: enum", "visible: true", 'default: "ap-osaka-1"'], context="region selector")
+    if re.findall(r'^      - "([^"]+)"$', region_schema, re.MULTILINE) != ["ap-tokyo-1", "ap-osaka-1", "us-chicago-1"]:
+        raise AssertionError("region selector must offer Tokyo, Osaka and Chicago in order")
     groups = _schema_groups(schema)
+    if next(iter(groups)) != "配備先" or groups["配備先"] != ("true", ["region", "compartment_ocid"]):
+        raise AssertionError("region must be the first deployment field")
     grouped = [name for _, members in groups.values() for name in members]
     duplicated = sorted({name for name in grouped if grouped.count(name) > 1})
     if duplicated:
         raise AssertionError(f"variables listed in multiple groups: {duplicated}")
-    ungrouped = sorted((terraform_names - {"region"}) - set(grouped))
+    ungrouped = sorted(terraform_names - set(grouped))
     if ungrouped:
         raise AssertionError(f"variables not listed in any variable group: {ungrouped}")
 
@@ -739,7 +745,10 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "subnet_id                                      = local.adb_private_endpoint_enabled ? var.adb_subnet_id : null",
             "whitelisted_ips                                = local.adb_secure_acl_enabled ? local.adb_whitelisted_ips : null",
             "compartment_id                                 = var.adb_compartment_ocid",
-            "self.compartment_id == trimspace(var.adb_compartment_ocid)",
+            'try(trimspace(self.id) != "", false)',
+            'try(trimspace(self.compartment_id) != "", false)',
+            'try(trimspace(self.db_name) != "", false)',
+            'try(trimspace(self.compartment_id), "") == "" ? true : self.compartment_id == trimspace(var.adb_compartment_ocid)',
             'resource "oci_database_autonomous_database_wallet"',
             # ADB の入力と製品の選択は、常に1つ作る Wallet の precondition で1回だけ検証する。
             "condition     = length(local.selected_products) > 0",

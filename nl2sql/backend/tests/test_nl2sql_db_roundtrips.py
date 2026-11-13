@@ -5,7 +5,7 @@
 fake で、次を数える。
 
 - 新しい接続: `oracledb.connect()` と、pool が新しく張る接続（借りるだけなら数えない）
-- 往復: execute / executemany / callproc / commit / rollback / LOB の read / prefetch 0 の
+- 往復: parse / execute / executemany / callproc / commit / rollback / LOB の read / prefetch 0 の
   fetch（`autocommit` の execute は commit を同じ往復に載せる。CLOB を文字列で fetch すると
   LOB の read は起きない。python-oracledb Thin と同じ数え方）
 
@@ -59,7 +59,7 @@ from app.settings import Settings, get_settings
 
 # 往復に数える操作。
 _ROUND_TRIP_OPS = frozenset(
-    {"execute", "executemany", "callproc", "commit", "rollback", "lob_read", "fetch"}
+    {"parse", "execute", "executemany", "callproc", "commit", "rollback", "lob_read", "fetch"}
 )
 
 
@@ -188,6 +188,9 @@ class FakeCursor:
         self._rows = [tuple(self._value(value) for value in row) for row in rows]
         self.rowcount = len(rows)
         self._fetched = False
+
+    def parse(self, sql: str) -> None:
+        self._record("parse", sql)
 
     def executemany(self, sql: str, rows: Any, **_kwargs: Any) -> None:
         self._record("executemany", sql)
@@ -822,7 +825,9 @@ def test_sql_generation_job_db_round_trips(
     assert submit.total_new_connections == 0
     assert run.total_new_connections == 0
     assert submit.total_round_trips <= submit_limit
-    assert run.total_round_trips <= run_limit
+    # Direct の非実行解析は parse と時間帯の往復 2 回、直前の取消確認 1 回だけを追加する。
+    preparation_overhead = 4 if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT else 0
+    assert run.total_round_trips - preparation_overhead <= run_limit
     # 1 回目でも、業務データ・Select AI の新しい接続は pool の 1 本だけ。
     assert cold_run.new_connections.get("app-connect", 0) == 0
     assert cold_run.new_connections.get("runtime-admin", 0) <= 1
@@ -832,6 +837,31 @@ def test_sql_generation_job_db_round_trips(
     # commit は最後の文の実行に載せ、pool に返す接続の autocommit は元に戻す。
     assert not [c for c in calls if c.plane == "state-pool" and c.op == "commit"]
     assert all(not connection.autocommit for connection in h.state.created_connections())
+
+
+def test_preparation_has_only_the_required_fixed_round_trips(
+    harness: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = harness()
+    request = _sql_job(Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
+    h.measure(request)
+    started = h.recorder.mark()
+    _, prepared, _ = h.measure(request)
+    calls = h.recorder.window(started)
+    assert len([call for call in calls if call.op == "parse"]) == 1
+    original = h.service._generate_sql
+
+    def without_preparation(*args: Any, **kwargs: Any) -> Any:
+        kwargs["prepare_for_execution"] = False
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(h.service, "_generate_sql", without_preparation)
+    _, baseline, _ = h.measure(request)
+    # 同じ actor / pool の parse + 時間帯設定 / 復元の 3 往復と、直前の取消確認 1 往復。
+    assert prepared.round_trips["runtime-admin"] - baseline.round_trips["runtime-admin"] == 3
+    assert prepared.round_trips["state-pool"] - baseline.round_trips["state-pool"] == 1
+    assert prepared.total_round_trips - baseline.total_round_trips == 4
+    assert prepared.total_new_connections == baseline.total_new_connections == 0
 
 
 def test_trace_span_writes_do_not_add_job_round_trips(harness: Callable[..., Harness]) -> None:
@@ -873,7 +903,9 @@ def test_chat_turn_db_round_trips_do_not_grow_with_turns(
     submits: list[int] = []
     runs: list[int] = []
     for turn in range(2, 7):
+        started = h.recorder.mark()
         submit, run, job = h.measure(_chat_turn(engine, previous))
+        assert not [call for call in h.recorder.window(started) if call.op == "parse"]
         previous = job.job_id
         print(f"\n[{engine.value}] チャット {turn} ターン目 投入: {submit.describe()}")
         print(f"[{engine.value}] チャット {turn} ターン目 worker: {run.describe()}")
@@ -947,6 +979,10 @@ def test_business_sql_connection_follows_job_actor(
         business = [c for c in calls if c.op == "execute" and c.detail == _BUSINESS_SQL]
         assert [c.plane for c in business] == [business_plane]
         connections_by_kind[is_system_admin].update(c.connection_id for c in business)
+        prepared = [c for c in calls if c.op == "parse" and c.detail == _BUSINESS_SQL]
+        assert [c.plane for c in prepared] == (
+            [business_plane] if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT else []
+        )
         if engine == Nl2SqlEngine.SELECT_AI:
             # Select AI の生成は今までどおりアプリの接続（利用者の context を使わない）。actor の
             # 種類ごとに別の pool。
@@ -961,10 +997,18 @@ def test_business_sql_connection_follows_job_actor(
             (c.op, c.detail)
             for c in calls
             if c.plane.startswith("deepsec")
-            and (c.op == "callproc" or (c.op == "execute" and not c.detail.startswith("ALTER")))
+            and (
+                c.op in {"callproc", "parse"}
+                or (c.op == "execute" and not c.detail.startswith("ALTER"))
+            )
         ]
         if business_plane == "deepsec-data":
-            assert deepsec_calls == [
+            preparation = (
+                [("callproc", _SET_CONTEXT), ("parse", _BUSINESS_SQL), ("callproc", _CLEAR_CONTEXT)]
+                if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+                else []
+            )
+            assert deepsec_calls == preparation + [
                 ("callproc", _SET_CONTEXT),
                 ("execute", _BUSINESS_SQL),
                 ("callproc", _CLEAR_CONTEXT),
@@ -996,12 +1040,11 @@ def test_business_sql_connection_follows_job_actor(
         # 設定し、返す前に消す。
         data_connections = h.deepsec.created_connections()
         assert len(data_connections) == 1
-        assert data_connections[0].callprocs == [
-            (_SET_CONTEXT, ["user-a"]),
-            (_CLEAR_CONTEXT, []),
-            (_SET_CONTEXT, ["user-b"]),
-            (_CLEAR_CONTEXT, []),
-        ]
+        acquisitions = 2 if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT else 1
+        assert data_connections[0].callprocs == (
+            [(_SET_CONTEXT, ["user-a"]), (_CLEAR_CONTEXT, [])] * acquisitions
+            + [(_SET_CONTEXT, ["user-b"]), (_CLEAR_CONTEXT, [])] * acquisitions
+        )
     # アプリの接続の pool では DeepSec の context を一度も設定しない。
     assert all(
         not connection.callprocs

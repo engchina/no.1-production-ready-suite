@@ -106,3 +106,37 @@ def test_wire_conversion_preserves_private_raw_but_does_not_invent_missing_raw()
     canonical = canonical_generation_draft(value)
     assert canonical._provider_output_text == value._provider_output_text
     assert "合成の原始応答" not in canonical.model_dump_json()
+
+
+def test_neighbor_text_caches_are_not_duplicated_into_citation_snapshots():
+    import json
+
+    from rag_engine.generation.citation_unit_ids import CHECK_ONLY_SPAN_KEYS, EvidenceUnitSnapshot
+
+    original = span()
+    baseline_prompt = grounded.evidence_block_text([original])
+    baseline_ids = grounded.generation_unit_catalog([original]).unit_ids
+    copied = {**original, **{key: ["合成の隣接本文。" * 100] * 100 for key in CHECK_ONLY_SPAN_KEYS}}
+    assert grounded.evidence_block_text([copied]) == baseline_prompt
+    catalog = grounded.generation_unit_catalog([copied])
+    assert catalog.unit_ids == baseline_ids
+    view = grounded._CITATION_VIEWS.get()[id(copied)][1]
+    assert not CHECK_ONLY_SPAN_KEYS.intersection(json.loads(view.span_json))
+    snapshot = EvidenceUnitSnapshot.create(copied, view.units, view.contract_version)
+    assert not CHECK_ONLY_SPAN_KEYS.intersection(snapshot.span())
+    assert snapshot.span()["text"] == original["text"]
+    assert snapshot.span()["child_ranges"] == original["child_ranges"]
+    copied["text"] = "変更後の別本文"
+    assert snapshot.span()["text"] == original["text"]
+
+
+def test_generation_tags_skip_unused_related_text_copies_without_changing_prompt(monkeypatch):
+    values = [span(1), span(2, "結果を確認します。")]
+    legacy = grounded.tag_spans(values)
+    expected_prompt = grounded.evidence_block_text(legacy)
+    expected_ids = grounded.generation_unit_catalog(legacy).unit_ids
+    monkeypatch.setattr(grounded, "_same_function_scope", lambda *args: pytest.fail("不要な文書内の総当たり"))
+    current = grounded.tag_spans(values, build_check_context=False)
+    assert grounded.evidence_block_text(current) == expected_prompt
+    assert grounded.generation_unit_catalog(current).unit_ids == expected_ids
+    assert [item["text"] for item in current] == [item["text"] for item in values]

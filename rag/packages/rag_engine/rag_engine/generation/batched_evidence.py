@@ -30,6 +30,7 @@ from rag_engine.generation.document_inputs import document_groups, document_key,
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
+from rag_engine.generation.parallel_read import ordered_parallel_results
 from rag_engine.resources.call_context import call_context, update_call_context
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.rerank_scores import rerank_first_key
@@ -164,6 +165,7 @@ def prepare_batched_evidence(
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
     failed_batches: list[dict[str, Any]] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
+    evidence_size_lower_bound: Callable[[Sequence[dict[str, Any]], int], int] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。
 
@@ -199,6 +201,14 @@ def prepare_batched_evidence(
         return prompt
 
     def final_measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+        if evidence_size_lower_bound is not None:
+            minimum = evidence_size_lower_bound(values, settings.evidence_budget_chars)
+            if minimum > settings.evidence_budget_chars:
+                return "", {
+                    "fits": False,
+                    "rendered_chars_at_least": minimum,
+                    "measurement": "evidence_lower_bound_exceeds_limit",
+                }
         prompt = final_prompt(values)
         measured = model_input_measurement(
             settings, system, prompt, schema_for(values) if schema_for is not None else schema, provider_id=provider_id
@@ -237,6 +247,11 @@ def prepare_batched_evidence(
         )
 
     def fits(values: Sequence[dict[str, Any]]) -> bool:
+        if (
+            evidence_size_lower_bound is not None
+            and evidence_size_lower_bound(values, settings.evidence_budget_chars) > settings.evidence_budget_chars
+        ):
+            return False
         # 修復の指摘の上限まで含めて測る。どの組も、読取の不合格を指摘する再試行が入力の予算に必ず入る（#4229）。
         if (
             len(evidence_text(values)) + sum(len(value.get(CONTINUED_TABLE_HEADER_KEY, "")) for value in values)
@@ -433,13 +448,24 @@ def prepare_batched_evidence(
             if not selected or remaining_passes <= 0:
                 stop_reduction("batch_reduction_did_not_fit")
             remaining_passes -= 1
-            previous_size = len(prompt)
+            previous_size = sum(len(value["text"]) for value in selected) if evidence_size_lower_bound is not None else len(prompt)
             reduced: dict[tuple[str, int, int], dict[str, Any]] = {}
             pass_batches = list(partition(selected))
-            for batch_index, batch in enumerate(pass_batches, 1):
+            batch_offset = len(batches)
+
+            def read_batch(
+                item: tuple[int, list[dict[str, Any]]],
+                *,
+                batch_offset: int = batch_offset,
+                pass_index: int = pass_index,
+                pass_batches: Sequence[list[dict[str, Any]]] = pass_batches,
+            ) -> tuple[
+                dict[str, Any], Mapping[str, Any], BatchReading | None, BatchRangeInvalid | None, Exception | None, Exception | None
+            ]:
+                batch_index, batch = item
                 payload = read_prompt(batch)
                 receipt: dict[str, Any] = {
-                    "index": len(batches) + 1,
+                    "index": batch_offset + batch_index,
                     "pass_index": pass_index,
                     "batch_index": batch_index,
                     "batch_count": len(pass_batches),
@@ -462,7 +488,6 @@ def prepare_batched_evidence(
                         for value in batch
                     ],
                 }
-                batches.append(receipt)
                 reading_model = _reading_model(batch)
                 reading_schema = reading_model.model_json_schema()
 
@@ -470,7 +495,7 @@ def prepare_batched_evidence(
                     error: Exception,
                     will_retry: bool,
                     *,
-                    original: str = payload,
+                    original_prompt: str = payload,
                     batch_schema: Mapping[str, Any] = reading_schema,
                     batch_receipt: dict[str, Any] = receipt,
                 ) -> str | None:
@@ -488,10 +513,13 @@ def prepare_batched_evidence(
                     batch_receipt.setdefault("validation_failures", []).append(detail)
                     if not will_retry:
                         return None
-                    corrected = batch_repair_prompt(original, detail)
-                    batch_receipt["repair_input"] = {"original_prompt_chars": len(original), "retry_prompt_chars": len(corrected)}
+                    corrected = batch_repair_prompt(original_prompt, detail)
+                    batch_receipt["repair_input"] = {"original_prompt_chars": len(original_prompt), "retry_prompt_chars": len(corrected)}
                     return corrected
 
+                reading: BatchReading | None = None
+                range_error: Exception | None = None
+                read_error: Exception | None = None
                 try:
                     mismatch: BatchRangeInvalid | None = None
                     with (
@@ -513,56 +541,74 @@ def prepare_batched_evidence(
                             if mismatch is None:
                                 raise
                             reading = mismatch.reading
-                            unverified_failure = (exc, receipt)
-                    by_id = {f"B{index}": value for index, value in enumerate(batch, 1)}
-                    unit_counts = reading_unit_counts(batch)
-                    for finding in reading.findings:
-                        if range_error_reason(finding.start_line, finding.end_line, unit_counts) is not None:
-                            # 再試行の後も無効な範囲は、その answer ごと使わない（範囲を推測で直さない）。
-                            if mismatch is not None:
-                                continue
-                            raise ValueError(RANGE_INVALID_CODE)
-                        evidence_id, first, last = parse_line_range(finding.start_line, finding.end_line)
-                        original = by_id[evidence_id]
-                        units = reading_units(original)
-                        # 原文と座標は番号からコードが切り出す。モデルの文字列を原文として受け取らない。
-                        excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
-                        key = (excerpt["source_id"], excerpt["start"], excerpt["end"])
-                        answers = (reduced.get(key, {}).get("batch_answer"), verified_candidate(finding.answer, excerpt["text"]))
-                        answer = "\n".join(item for item in answers if item)
-                        if answer:
-                            excerpt["batch_answer"] = answer
-                        reduced[key] = excerpt
-                        receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
-                    if mismatch is not None:
-                        # 不合格の範囲を組から入力へ絞る（#4090）。その finding を採らず、その入力の原文を残す。
-                        retained = [by_id[key] for key in mismatch.diagnostic["retained_evidence_ids"]]
-                        retain_whole(retained, reduced)
-                        receipt["range_unverified"] = {
-                            "unmatched_count": mismatch.diagnostic["unmatched_count"],
-                            "reasons": mismatch.diagnostic["reasons"],
-                            "retained_input_count": len(retained),
-                        }
-                    read_sources.update(value["source_id"] for value in batch)
-                    unverified = mismatch.diagnostic["unmatched_count"] if mismatch is not None else 0
-                    receipt.update(status="completed", finding_count=len(reading.findings) - unverified)
+                            range_error = exc
                 except Exception as exc:
-                    receipt.update(status="failed", error=type(exc).__name__)
-                    if isinstance(exc, ValidationError) and not receipt.get("validation_failures"):
-                        receipt["validation_failures"] = [batch_validation_detail(exc, reading_schema)]
-                    if not unusable_output(exc):
-                        if failed_batches is not None:
-                            failed_batches.append(receipt)
-                        raise
-                    # 使える出力が得られなかった組で問の全体をあきらめない（#4229）。その組の原文を残し、ほかの組の結果と合わせて続ける。
-                    retain_whole(batch, reduced)
-                    receipt["retained_input_count"] = len(batch)
-                    unverified_failure = (exc, receipt)
-                finally:
-                    record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
+                    read_error = exc
+                return receipt, reading_schema, reading, mismatch, range_error, read_error
+
+            items = list(enumerate(pass_batches, 1))
+            with ordered_parallel_results(read_batch, items, workers=settings.batch_read_workers) as outcomes:
+                for (_batch_index, batch), outcome in zip(items, outcomes, strict=True):
+                    receipt, reading_schema, reading, mismatch, range_error, read_error = outcome
+                    batches.append(receipt)
+                    try:
+                        if read_error is not None:
+                            raise read_error
+                        if reading is None:
+                            raise RuntimeError("分割読取の出力がありません。")
+                        if range_error is not None:
+                            unverified_failure = (range_error, receipt)
+                        by_id = {f"B{index}": value for index, value in enumerate(batch, 1)}
+                        unit_counts = reading_unit_counts(batch)
+                        for finding in reading.findings:
+                            if range_error_reason(finding.start_line, finding.end_line, unit_counts) is not None:
+                                # 再試行の後も無効な範囲は、その answer ごと使わない（範囲を推測で直さない）。
+                                if mismatch is not None:
+                                    continue
+                                raise ValueError(RANGE_INVALID_CODE)
+                            evidence_id, first, last = parse_line_range(finding.start_line, finding.end_line)
+                            original = by_id[evidence_id]
+                            units = reading_units(original)
+                            # 原文と座標は番号からコードが切り出す。モデルの文字列を原文として受け取らない。
+                            excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
+                            key = (excerpt["source_id"], excerpt["start"], excerpt["end"])
+                            answers = (reduced.get(key, {}).get("batch_answer"), verified_candidate(finding.answer, excerpt["text"]))
+                            answer = "\n".join(item for item in answers if item)
+                            if answer:
+                                excerpt["batch_answer"] = answer
+                            reduced[key] = excerpt
+                            receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
+                        if mismatch is not None:
+                            # 不合格の範囲を組から入力へ絞る（#4090）。その finding を採らず、その入力の原文を残す。
+                            retained = [by_id[key] for key in mismatch.diagnostic["retained_evidence_ids"]]
+                            retain_whole(retained, reduced)
+                            receipt["range_unverified"] = {
+                                "unmatched_count": mismatch.diagnostic["unmatched_count"],
+                                "reasons": mismatch.diagnostic["reasons"],
+                                "retained_input_count": len(retained),
+                            }
+                        read_sources.update(value["source_id"] for value in batch)
+                        unverified = mismatch.diagnostic["unmatched_count"] if mismatch is not None else 0
+                        receipt.update(status="completed", finding_count=len(reading.findings) - unverified)
+                    except Exception as exc:
+                        receipt.update(status="failed", error=type(exc).__name__)
+                        if isinstance(exc, ValidationError) and not receipt.get("validation_failures"):
+                            receipt["validation_failures"] = [batch_validation_detail(exc, reading_schema)]
+                        if not unusable_output(exc):
+                            if failed_batches is not None:
+                                failed_batches.append(receipt)
+                            raise
+                        # 使える出力が得られなかった組の原文を残し、
+                        # ほかの組の結果と合わせて続ける（#4229）。
+                        retain_whole(batch, reduced)
+                        receipt["retained_input_count"] = len(batch)
+                        unverified_failure = (exc, receipt)
+                    finally:
+                        record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
             selected = order_document_spans(tag(list(reduced.values())), priority=document_order)
             prompt, measurement = final_measure(selected)
-            if not measurement["fits"] and len(prompt) >= previous_size:
+            current_size = sum(len(value["text"]) for value in selected) if evidence_size_lower_bound is not None else len(prompt)
+            if not measurement["fits"] and current_size >= previous_size:
                 stop_reduction("batch_reduction_did_not_shrink")
         selected, prompt, measurement, reduction = fill_to_budget(selected)
     selected = order_document_spans(selected, priority=document_order)

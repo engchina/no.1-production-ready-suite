@@ -92,6 +92,7 @@ from app.features.nl2sql.db_admin_chat_corrections import (
     record_failures,
     sql_identity,
 )
+from app.features.nl2sql.profile_schema import ProfileSchemaInput, ProfileSchemaPage, schema_page
 from app.security.request_actor import (
     actor_scope,
     current_actor_context,
@@ -161,6 +162,11 @@ from .enterprise_ai_client import (
     OciEnterpriseAiDirectClient,
     enterprise_ai_configuration_failure_message,
     find_enterprise_ai_error,
+)
+from .generation_diagnostics import (
+    BindingDiagnostic,
+    build_generation_diagnostics,
+    unavailable_generation_diagnostics,
 )
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
@@ -459,12 +465,15 @@ from .ontology_service import BUSINESS_SCOPE_CHANGED_CODE, OntologyGateBlockedEr
 from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
+    OracleSelectPreparationError,
     SelectAiCredentialMissingError,
     SelectAiFeedbackNotFoundError,
     TabularImportValidationError,
     select_ai_object_list_entry,
 )
 from .oracle_dialect import OracleConversion, normalize_generated_grouping
+from .oracle_keyword_metadata import unavailable_native_keyword_metadata
+from .oracle_sql_diagnostics import OracleSqlDiagnostic, oracle_parse_diagnostic
 from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
     QUESTION_TO_SQL_PROMPT,
@@ -476,7 +485,7 @@ from .reverse_prompts import (
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
 from .schema_constraint_context import schema_constraint_context
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
-from .sql_binding import SqlGenerationValidationError, column_binding_violations
+from .sql_binding import SqlGenerationValidationError, column_binding_findings
 from .sql_lexing import prepare_oracle_query, use_session_current_datetime
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore
@@ -8738,7 +8747,11 @@ class Nl2SqlService:
         return self.update_profile(profile_id, lambda p: p.model_copy(update={"archived": False}))
 
     def get_profile(
-        self, profile_id: str | None, *, include_archived: bool = False
+        self,
+        profile_id: str | None,
+        *,
+        include_archived: bool = False,
+        migrate_legacy_scope: bool = True,
     ) -> Nl2SqlProfile:
         if self._incremental_repository is not None:
             resolved_id = profile_id or "default"
@@ -8751,7 +8764,11 @@ class Nl2SqlService:
             if isinstance(cached, Nl2SqlProfile):
                 if cached.archived and not include_archived:
                     raise ProfileNotFoundError(resolved_id)
-                return self._profile_scope_for_read(cached, persist_migration=True)
+                return (
+                    self._profile_scope_for_read(cached, persist_migration=True)
+                    if migrate_legacy_scope
+                    else cached.model_copy(deep=True)
+                )
             try:
                 profile = self._incremental_repository.get_profile(resolved_id)
             except Exception as exc:
@@ -8762,7 +8779,11 @@ class Nl2SqlService:
                 )
             if profile is None or (profile.archived and not include_archived):
                 raise ProfileNotFoundError(resolved_id)
-            profile = self._profile_scope_for_read(profile, persist_migration=True)
+            profile = (
+                self._profile_scope_for_read(profile, persist_migration=True)
+                if migrate_legacy_scope
+                else profile.model_copy(deep=True)
+            )
             self._profile_cache.put(resolved_id, profile)
             return profile
         with self._lock:
@@ -8770,7 +8791,11 @@ class Nl2SqlService:
             profile = self._profiles.get(resolved_id)
             if profile is None or (profile.archived and not include_archived):
                 raise ProfileNotFoundError(resolved_id)
-            return self._profile_scope_for_read(profile, persist_migration=True)
+            return (
+                self._profile_scope_for_read(profile, persist_migration=True)
+                if migrate_legacy_scope
+                else profile.model_copy(deep=True)
+            )
 
     def _refresh_cache_token(
         self,
@@ -24258,6 +24283,18 @@ class Nl2SqlService:
             _log_job_stage_step_finished(
                 job_id, "prepare_context", "ontology_context", started=step_started, attempt=attempt
             )
+            unit_definitions: list[Any] = []
+            if request.use_ontology_context and business_release_id:
+                try:
+                    from .ontology_router import ontology_runtime
+                    from .result_units import published_unit_definitions
+
+                    unit_definitions = published_unit_definitions(
+                        ontology_runtime, profile.id, business_release_id
+                    )
+                except Exception:
+                    # 単位を確認できない場合も数値は保持し、未確認のまま明示する。
+                    logger.info("nl2sql_result_units_unavailable", exc_info=True)
             stage_trace.set_display(
                 details=_job_progress_prepare_details(
                     request.generation_question, rewritten, row_limit
@@ -24288,7 +24325,6 @@ class Nl2SqlService:
                 elapsed_ms=stage_elapsed,
                 running_stage="generate_sql",
             )
-            self._raise_if_job_cancelled(job_id)
             stage_started = time.monotonic()
             generation_question = self._chat_generation_question(
                 request,
@@ -24321,6 +24357,8 @@ class Nl2SqlService:
                 ontology_context=ontology_context,
                 use_glossary=request.use_glossary,
                 sql_requirement=request.sql_requirement,
+                prepare_for_execution=not request.generation_only,
+                before_attempt=partial(self._raise_if_job_cancelled, job_id),
             )
             stage_trace.set_display(details=_job_progress_generate_details(generated))
             stage_trace.set_call_output(
@@ -24587,6 +24625,16 @@ class Nl2SqlService:
                 created_at=job.created_at,
                 started_at=job.started_at,
                 stage_timings=stage_timings,
+            )
+            from .result_units import result_column_metadata
+
+            target_results = chat_execution.results if chat_execution is not None else results
+            target_results.column_metadata = result_column_metadata(
+                executable,
+                target_results.columns,
+                definitions=unit_definitions,
+                allowed=allowed,
+                release_id=business_release_id or "",
             )
             interpretation: Nl2SqlInterpretationArtifact | None = None
             # include_interpretation は処理手順、ontology_grounding_requested は Ontology
@@ -24966,6 +25014,8 @@ class Nl2SqlService:
         *,
         use_glossary: bool = False,
         sql_requirement: SqlRequirementSpec | None = None,
+        prepare_for_execution: bool = False,
+        before_attempt: Callable[[], None] | None = None,
     ) -> GeneratedSql:
         if (
             self._incremental_repository is None
@@ -24987,6 +25037,8 @@ class Nl2SqlService:
             allow_deterministic_fallback=engine != Nl2SqlEngine.SELECT_AI_AGENT,
             engine_timings=engine_timings,
             sql_requirement=sql_requirement,
+            prepare_for_execution=prepare_for_execution,
+            before_attempt=before_attempt,
         )
 
     def _generate_sql(
@@ -25006,6 +25058,8 @@ class Nl2SqlService:
         runtime_max_retries: int | None = None,
         engine_timings: list[dict[str, Any]] | None = None,
         sql_requirement: SqlRequirementSpec | None = None,
+        prepare_for_execution: bool = False,
+        before_attempt: Callable[[], None] | None = None,
     ) -> GeneratedSql:
         """SQL を生成する（3 つの生成方法と deterministic の共通の出口）。
 
@@ -25015,7 +25069,10 @@ class Nl2SqlService:
         """
         feedback: dict[str, Any] | None = None
         rejected_sql = ""
+        rejected_bindings: list[BindingDiagnostic] | None = None
         for attempt in range(2):
+            if before_attempt is not None:
+                before_attempt()
             generated = self._generate_sql_with_engine(
                 engine,
                 question,
@@ -25048,6 +25105,9 @@ class Nl2SqlService:
                     generated.generated_sql = normalized
 
             findings: list[str] = []
+            oracle_diagnostics: list[OracleSqlDiagnostic] = []
+            binding_diagnostics: list[BindingDiagnostic] = []
+            had_binding_findings = False
             if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
                 semantic = parse_oracle_sql(generated.generated_sql)
                 findings.extend(
@@ -25056,20 +25116,108 @@ class Nl2SqlService:
                     if finding.code == "SQL_WINDOW_PLACEMENT_INVALID"
                 )
                 if semantic.graph is not None:
-                    findings.extend(
-                        column_binding_violations(
-                            generated.generated_sql,
-                            generated.schema_catalog.tables if generated.schema_catalog else [],
-                            owner=self._current_schema_owner(),
-                        )
+                    binding_findings = column_binding_findings(
+                        validation_sql(generated.generated_sql),
+                        generated.schema_catalog.tables if generated.schema_catalog else [],
+                        owner=self._current_schema_owner(),
+                        candidate_tables=self._binding_candidate_tables(
+                            profile, allowed, generated.schema_catalog
+                        ),
                     )
+                    had_binding_findings = bool(binding_findings)
+                    findings.extend(finding.message for finding in binding_findings)
+                    binding_diagnostics.extend(
+                        diagnostic
+                        for finding in binding_findings
+                        for diagnostic in finding.diagnostics
+                    )
+            if (
+                not findings
+                and prepare_for_execution
+                and generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+                and self._use_oracle_runtime()
+            ):
+                analysis = self.analyze_sql(
+                    generated.generated_sql,
+                    allowed,
+                    row_limit,
+                    catalog=generated.schema_catalog,
+                    engine=generated.engine,
+                )
+                if analysis.safety.is_safe and analysis.safety.safety_checked:
+                    if before_attempt is not None:
+                        before_attempt()
+                    composed, _binds = executable_with_attachments(
+                        normalize_executable_sql(generated.generated_sql)
+                    )
+                    try:
+                        self._oracle_adapter.prepare_select(composed)
+                    except OracleSelectPreparationError as exc:
+                        if not exc.allows_generation_repair:
+                            raise
+                        findings.append(
+                            f"SQL_ORACLE_PARSE_INVALID: ORA-{exc.code:05d} "
+                            f"offset={exc.offset}: {exc}"
+                        )
+                        try:
+                            diagnostic = oracle_parse_diagnostic(
+                                composed,
+                                code=exc.code,
+                                offset=exc.offset,
+                                offset_basis=exc.offset_basis,
+                            )
+                        except Exception:
+                            # 補足の診断が作れなくても、元の解析エラーと修正回数を保持する。
+                            # SQL 片を含み得る診断の例外をログやメッセージへ出さない。
+                            diagnostic = None
+                        if diagnostic is not None:
+                            if attempt == 0:
+                                location = diagnostic["location"]
+                                token = location["token"] if location is not None else None
+                                if token is not None and not token["text_truncated"]:
+                                    if before_attempt is not None:
+                                        before_attempt()
+                                    try:
+                                        native = self._oracle_adapter.read_native_keyword_metadata(
+                                            token["text"]
+                                        )
+                                    except Exception:
+                                        native = unavailable_native_keyword_metadata("query_failed")
+                                else:
+                                    native = unavailable_native_keyword_metadata(
+                                        "token_unavailable"
+                                    )
+                                diagnostic["native_keyword_metadata"] = native
+                            oracle_diagnostics.append(diagnostic)
             if not findings:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
                     generated.engine_meta["sql_validation_attempts"] = attempt + 1
                     generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
+                    if rejected_bindings is not None:
+                        try:
+                            diagnostics = build_generation_diagnostics(
+                                rejected_sql, generated.generated_sql, rejected_bindings
+                            )
+                        except Exception:
+                            diagnostics = unavailable_generation_diagnostics(
+                                "diagnostic_build_failed"
+                            )
+                        generated.engine_meta["generation_diagnostics"] = diagnostics.model_dump(
+                            mode="json"
+                        )
                 return generated
             rejected_sql = generated.generated_sql
-            feedback = {"rejected_sql": rejected_sql, "violations": findings}
+            if had_binding_findings:
+                rejected_bindings = binding_diagnostics
+            feedback = {
+                "operation": "repair_rejected_sql",
+                "rejected_sql": rejected_sql,
+                "violations": findings,
+            }
+            if oracle_diagnostics:
+                feedback["oracle_diagnostics"] = oracle_diagnostics
+            if binding_diagnostics:
+                feedback["binding_diagnostics"] = binding_diagnostics
         raise SqlGenerationValidationError(" / ".join(findings))
 
     def _generate_sql_with_engine(
@@ -25607,6 +25755,176 @@ class Nl2SqlService:
             fallback_reason="; ".join(fallback_messages),
             schema_catalog=catalog,
         )
+
+    def get_profile_schema(self, arguments: ProfileSchemaInput) -> ProfileSchemaPage:
+        """SQL 生成と同じ保存済み catalog を許可範囲内で返す。refresh はしない。"""
+        stored_profile = self.get_profile(arguments.profile_id, migrate_legacy_scope=False)
+        profile = stored_profile.model_copy(
+            update={
+                "allowed_tables": [
+                    name
+                    for name in stored_profile.allowed_tables
+                    if is_user_visible_object_name(name)
+                ],
+                "allowed_views": [
+                    name
+                    for name in stored_profile.allowed_views
+                    if is_user_visible_object_name(name)
+                ],
+            }
+        )
+        unavailable = ProfileSchemaPage(profile_id=arguments.profile_id)
+        if not profile.allowed_tables and not profile.allowed_views:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        # 初期化されていない catalog を、空の完全な schema として返さない。
+        before = self.get_catalog_head()
+        if before.catalog_version <= 0 or not before.refreshed_at:
+            return unavailable
+        requested = arguments.allowed_objects
+        if requested.enforce_table_scope and not requested.table_names:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        # 同じ表の別表記を last-wins で広げないため、request 列は正規化前に交差する。
+        allowed = AllowedObjects(
+            table_names=requested.table_names or [*profile.allowed_tables, *profile.allowed_views],
+            columns=requested.columns,
+            enforce_table_scope=True,
+        )
+        try:
+            profile_names = {
+                canonical_qualified_name(name)
+                for name in [*profile.allowed_tables, *profile.allowed_views]
+            }
+            requested_names = {canonical_qualified_name(name) for name in allowed.table_names}
+            if not requested_names <= profile_names:
+                return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+            if arguments.object_names:
+                selected_names = {canonical_qualified_name(name) for name in arguments.object_names}
+                if not selected_names <= requested_names:
+                    return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+                allowed = allowed.model_copy(update={"table_names": sorted(selected_names)})
+        except ValueError:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        if len(allowed.table_names) > 2048:
+            return unavailable.model_copy(update={"unavailable_reason": "metadata_limit"})
+        try:
+            catalog = self._generation_schema_catalog(profile, allowed, strict_scope=True)
+        except (SchemaCatalogEmptyError, ValueError):
+            return unavailable
+        after = self.get_catalog_head()
+        if (
+            before != after
+            or self.get_profile(arguments.profile_id, migrate_legacy_scope=False) != stored_profile
+        ):
+            return unavailable.model_copy(
+                update={"status": "stale", "unavailable_reason": "snapshot_changed"}
+            )
+        tables = self._binding_candidate_tables(profile, allowed, catalog)
+        if not tables:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        # 未取得の許可 object を黙って除いた page は完全と扱わない。
+        expected_requested_names = allowed.table_names
+        available_names = {qualified_object_name(t.owner, t.table_name) for t in tables}
+        try:
+            expected_names = {canonical_qualified_name(name) for name in expected_requested_names}
+            if not expected_names <= available_names:
+                return unavailable.model_copy(update={"unavailable_reason": "schema_unavailable"})
+            if arguments.object_names:
+                selected_names = {canonical_qualified_name(name) for name in arguments.object_names}
+                if not selected_names <= available_names:
+                    return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+                tables = [
+                    t
+                    for t in tables
+                    if qualified_object_name(t.owner, t.table_name) in selected_names
+                ]
+        except ValueError:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        tables = sorted(tables, key=lambda t: (t.owner, t.table_name))
+        return schema_page(
+            profile_id=profile.id,
+            tables=tables,
+            refreshed_at=catalog.refreshed_at,
+            scope_binding=[
+                stored_profile.model_dump(mode="json"),
+                requested.model_dump(mode="json"),
+                sorted(arguments.object_names),
+            ],
+            snapshot_binding=after.model_dump(mode="json"),
+            cursor=arguments.cursor,
+            page_size=arguments.page_size,
+        )
+
+    def _binding_candidate_tables(
+        self,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        catalog: SchemaCatalog | None,
+    ) -> list[SchemaTable]:
+        """同回の snapshot を、profile・request・非公開 object・列の交差へ限定する。"""
+        if catalog is None:
+            return []
+        try:
+            # 旧 profile の移行や未限定名の解決で、別の広い catalog を読まない。
+            visible_tables = [
+                table for table in filter_user_visible_catalog(catalog).tables if table.owner
+            ]
+            names = {
+                qualified_object_name(table.owner, table.table_name) for table in visible_tables
+            }
+
+            def resolve(value: str) -> str:
+                parts = object_name_tokens(value)
+                if len(parts) == 2:
+                    return canonical_qualified_name(value)
+                matches = {
+                    name
+                    for table in visible_tables
+                    if len(parts) == 1 and format_object_part(table.table_name) == parts[0]
+                    for name in [qualified_object_name(table.owner, table.table_name)]
+                }
+                if len(matches) != 1:
+                    raise ValueError("同回の schema で scope を一意に確認できません。")
+                return next(iter(matches))
+
+            profile_scope = {
+                resolve(name) for name in [*profile.allowed_tables, *profile.allowed_views]
+            }
+            requested_scope = (
+                {resolve(name) for name in allowed.table_names}
+                if allowed.table_names or allowed.enforce_table_scope
+                else profile_scope
+            )
+            visible_scope = profile_scope & requested_scope & names
+            columns: dict[str, set[str]] = {}
+            for name, allowed_columns in allowed.columns.items():
+                # 空 list は既存契約どおり追加制限なし。別表記の非空制限は交差する。
+                if not allowed_columns:
+                    continue
+                key = resolve(name)
+                column_tokens = {_column_identifier_token(column) for column in allowed_columns}
+                columns[key] = columns[key] & column_tokens if key in columns else column_tokens
+            result: list[SchemaTable] = []
+            for table in visible_tables:
+                name = qualified_object_name(table.owner, table.table_name)
+                if name not in visible_scope:
+                    continue
+                restriction = columns.get(name)
+                result.append(
+                    table.model_copy(
+                        update={
+                            "columns": [
+                                column
+                                for column in table.columns
+                                if restriction is None
+                                or catalog_match_key(column.column_name) in restriction
+                            ]
+                        }
+                    )
+                )
+            return result
+        except ValueError:
+            # scope の解釈が保証できない場合は、候補の元となる情報を返さない。
+            return []
 
     def _enterprise_ai_schema_context(
         self,
@@ -26218,6 +26536,8 @@ class Nl2SqlService:
         self,
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
+        *,
+        strict_scope: bool = False,
     ) -> SchemaCatalog:
         """SQL 生成で使う Profile scope 限定の schema snapshot を構築する。"""
 
@@ -26257,7 +26577,7 @@ class Nl2SqlService:
                     exc=exc,
                     operation_error_code="schema_object_detail_failed",
                 )
-            if detail is None:
+            if detail is None and not strict_scope:
                 try:
                     page = repository.search_schema_objects(
                         cursor=None,

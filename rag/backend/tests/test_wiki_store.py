@@ -128,12 +128,134 @@ def _originals() -> list[dict[str, Any]]:
     ]
 
 
+@pytest.mark.asyncio
+async def test_batched_text_rankings_cap_each_document_without_hydrating() -> None:
+    class Oracle:
+        calls = 0
+
+        async def _fetch_all(self, sql: str, binds: Any) -> Any:
+            self.calls += 1
+            assert "kb-a" in binds.values() and "wiki_build_enabled" in sql
+            assert "compiler-a" in binds.values() and "w.status='READY'" in sql
+            assert all(did in binds.values() for did in ["document-a", "document-b"])
+            assert "page_json" not in sql and "FETCH FIRST" not in sql
+            assert "ORDER BY p.document_id,text_score DESC,p.unit_id" in sql
+            return [
+                {"document_id": did, "unit_id": f"{did}-{i}", "text_score": 10 - i}
+                for did in ["document-a", "document-b"]
+                for i in range(3)
+            ]
+
+    oracle = Oracle()
+    store = WikiStore(cast(Any, oracle))
+    assert await store.text_page_rankings(
+        "synthetic",
+        {"knowledge_base_id": "kb-a"},
+        compiler="compiler-a",
+        limit=2,
+        document_ids=["document-a", "document-b"],
+    ) == {did: [f"{did}-0", f"{did}-1"] for did in ["document-a", "document-b"]}
+    assert oracle.calls == 1
+
+    assert not await store.text_page_rankings(
+        "synthetic",
+        {},
+        compiler="compiler-a",
+        limit=2,
+        document_ids=[],
+    )
+    assert not await store.text_page_rankings(
+        "synthetic",
+        {},
+        compiler="compiler-a",
+        limit=0,
+        document_ids=["document-a"],
+    )
+    assert oracle.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_vector_ranking_reads_only_top_ids_then_hydrates_in_rank_order() -> None:
+    pages = [
+        WikiPage(
+            unit=unit,
+            navigation=WikiContext(
+                unit_id=unit.unit_id,
+                context="合成の案内",
+                possible_questions=[],
+                dependencies=[],
+                unresolved=[],
+            ),
+            input_fingerprint="input-a",
+        )
+        for unit in units()[:2]
+    ]
+
+    class Oracle:
+        calls = 0
+
+        async def _fetch_all(self, sql: str, binds: Any) -> Any:
+            self.calls += 1
+            assert "kb-a" in binds.values() and "wiki_build_enabled" in sql
+            assert "compiler-a" in binds.values()
+            if self.calls == 1:
+                assert "SELECT p.unit_id" in sql and "p.page_json" not in sql
+                assert "VECTOR_DISTANCE" in sql and binds["wiki_limit"] == 2
+                return [{"unit_id": page.unit.unit_id} for page in reversed(pages)]
+            assert "SELECT p.page_json" in sql and "VECTOR_DISTANCE" not in sql
+            assert "p.unit_id IN" in sql and "FETCH FIRST" not in sql
+            return [{"page_json": page.model_dump()} for page in pages]
+
+    oracle = Oracle()
+    actual = await WikiStore(cast(Any, oracle)).available_pages(
+        {"knowledge_base_id": "kb-a"},
+        query_vector=[1.0, 0.0],
+        limit=2,
+        compiler_fingerprint="compiler-a",
+    )
+    assert oracle.calls == 2
+    assert actual == list(reversed(pages))
+
+
 class _OriginalStore:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self.rows = rows
 
     async def _fetch_all(self, sql: str, binds: Any) -> Any:
         return self.rows
+
+
+@pytest.mark.asyncio
+async def test_catalog_keeps_source_revisions_distinct_without_guessing_dates() -> None:
+    rows = [
+        {
+            "document_id": "document-a",
+            "file_name": "same.json",
+            "source_key": "source-a",
+            "revision_key": "revision-old",
+            "effective_date": "2020-01-01",
+        },
+        {
+            "document_id": "document-b",
+            "file_name": "same.json",
+            "source_key": "source-a",
+            "revision_key": "revision-new",
+            "effective_date": "2024-01-01",
+        },
+        {
+            "document_id": "document-a",
+            "file_name": "same.json",
+            "source_key": "source-a",
+            "revision_key": "revision-old",
+            "effective_date": "2020-01-01",
+        },
+    ]
+    catalog = await WikiStore(cast(Any, _OriginalStore(rows))).catalog({}, "compiler-a")
+    assert len(catalog) == 2
+    assert catalog[0]["source_identities"] == [
+        {"source_key": "source-a", "revision_key": "revision-old", "effective_date": "2020-01-01"}
+    ]
+    assert catalog[1]["source_identities"][0]["revision_key"] == "revision-new"
 
 
 @pytest.mark.asyncio

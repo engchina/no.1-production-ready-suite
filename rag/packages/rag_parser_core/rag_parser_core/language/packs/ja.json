@@ -1232,6 +1232,7 @@
     ]
   },
   "answer_labels": {
+    "answer_part_generation_failed": "一部の回答（{count} 件）を生成できませんでした。ほかの回答は以下に示します。失敗した部分は再試行してください。",
     "answer_evidence_budget_limited": "回答への入力の上限により、取得した根拠のうち {count} 件を回答の材料から省略しました。",
     "rules_section": "資料により確認できた事項",
     "applications_section": "資料をもとに導いた結論",

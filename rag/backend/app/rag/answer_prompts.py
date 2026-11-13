@@ -182,6 +182,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "generation",
         (
             ("batchReading", "rag_engine.generation.batched_evidence:BATCH_READING_PROMPT"),
+            ("partTextRepair", "rag_engine.generation.answer_text_quality:REPAIR_PROMPT"),
             # system = 編集できる役割の文 + 必ず足す固定の部分（+ 未確定の前提）（#4782）。
             ("role", "rag_engine.generation.grounded:GENERATION_ROLE_PROMPT"),
             ("fixed", "rag_engine.generation.grounded:GENERATION_FIXED_PROMPT"),

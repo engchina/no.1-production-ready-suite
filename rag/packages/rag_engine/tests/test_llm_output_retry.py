@@ -94,41 +94,22 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertEqual(usage["incomplete_reasons"], {"content_filter": 1})
         self.assertNotIn("output_retries", usage)
 
-    def test_corrupted_generated_text_retries_without_repairing_characters(self):
-        corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="説明\ufffd").model_dump_json(), usage=USAGE)
-        client = _Client([corrupted, _completed()])
-        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
-        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client):
-            result = oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
-        self.assertEqual(result.text, "ok")
-        self.assertEqual(len(client.budgets), 2)
-
-    def test_repeated_corruption_fails_with_existing_retry_limit(self):
-        corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="説明\ufffd").model_dump_json(), usage=USAGE)
-        client = _Client([corrupted] * (1 + oci.LLM_CALL_MAX_RETRIES))
-        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
-        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertRaises(oci.InvalidStructuredOutput):
-            oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
-        self.assertEqual(len(client.budgets), 1 + oci.LLM_CALL_MAX_RETRIES)
-
-    def test_rejected_corruption_names_the_fields_but_not_the_text(self):
-        # 退けた出力の原文は残らないので、どの欄に置換文字があったかを例外と log に残す（#3849）。本文は残さない。
+    def test_generated_replacement_character_warns_without_global_rejection(self):
         corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="合成の説明�").model_dump_json(), usage=USAGE)
-        client = _Client([corrupted] * (1 + oci.LLM_CALL_MAX_RETRIES))
+        client = _Client([corrupted])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with (
             mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
             self.assertLogs(oci.__name__, level="WARNING") as logs,
-            self.assertRaises(oci.InvalidStructuredOutput) as raised,
         ):
-            oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
-        self.assertIn("欄: text", str(raised.exception))
-        self.assertNotIn("合成の説明", str(raised.exception))
-        rejected = [record for record in logs.records if getattr(record, "event", "") == "llm_output_rejected"]
-        self.assertEqual(len(rejected), 1 + oci.LLM_CALL_MAX_RETRIES)
-        self.assertEqual(rejected[0].llm_rejected_paths, ["text"])
-        self.assertEqual(rejected[0].llm_rejected_reason, "replacement_character")
-        self.assertNotIn("合成の説明", rejected[0].getMessage())
+            result = oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
+        self.assertEqual(result.text, "合成の説明�")
+        self.assertEqual(len(client.budgets), 1)
+        warnings = [record for record in logs.records if getattr(record, "event", "") == "llm_output_quality_warning"]
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0].llm_quality_paths, ["text"])
+        self.assertEqual(warnings[0].llm_quality_reason, "replacement_character")
+        self.assertNotIn("合成の説明", warnings[0].getMessage())
 
     def test_replacement_char_paths_point_into_nested_lists(self):
         value = {"request_coverage": [{"evidence_scope": [{"target": "a"}, {"target": "b�"}]}], "items": [{"text": "�"}]}
@@ -450,8 +431,8 @@ def test_invalid_json_in_a_completed_response_stays_a_validation_error(monkeypat
 
 
 def test_streamed_output_stops_once_and_keeps_reasoning(monkeypatch):
-    from tests.test_llm_stall_resend import _Client as StreamClient
-    from tests.test_llm_stall_resend import _Clock, _script
+    from test_llm_stall_resend import _Client as StreamClient
+    from test_llm_stall_resend import _Clock, _script
 
     clock = _Clock()
     monkeypatch.setattr(oci.time, "monotonic", clock)

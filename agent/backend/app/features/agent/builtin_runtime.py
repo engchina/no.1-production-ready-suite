@@ -30,6 +30,7 @@ import functools
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext, suppress
 from contextvars import ContextVar
@@ -117,6 +118,8 @@ from app.features.agent import (
     call_abort,
     data_scope,
     external_writes,
+    report_fields,
+    report_runtime,
     run_budget,
     run_claim,
     run_config,
@@ -128,7 +131,14 @@ from app.features.agent.answer_data import (
     DATA_INSTRUCTIONS,
     DataReferenceError,
     data_index,
+    has_data_reference,
     model_data_references,
+)
+from app.features.agent.answer_data_patches import (
+    PATCH_INSTRUCTIONS,
+    ReferencePatches,
+    applied_result,
+    plan_patches,
 )
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
@@ -142,6 +152,8 @@ from app.features.agent.answer_notice import answer_takes_notice, current_answer
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.answer_passages import is_clarification_only
 from app.features.agent.answer_references import (
+    cited_chunk_ids,
+    evidence_refs,
     without_lookup_notes,
 )
 from app.features.agent.chat_progress import (
@@ -231,6 +243,13 @@ from app.features.agent.output_fields import (
     without_output_record_sections,
 )
 from app.features.agent.rag_retrieval_state import retrieval_notice
+from app.features.agent.report_contract import AnswerPlan, FinalSelection, ReportOutputContract
+from app.features.agent.report_preview import (
+    REPORT_PREVIEWS_METADATA_KEY,
+    RenderedReport,
+    ReportPreviewError,
+    select_preview,
+)
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.section_coverage import (
     COVERAGE_INCOMPLETE,
@@ -346,6 +365,8 @@ set_tracing_disabled(True)
 CONTEXT_OVERFLOW_CODE = "runtime.context_overflow"
 # 業務 Agent（SDK の Agent）に付ける、入力を収める上限（`ContextLimits`）の属性の名前。
 _CONTEXT_LIMITS_ATTR = "_agent_context_limits"
+_REPORT_CONTRACT_ATTR = "_agent_report_contract"
+_REPORT_SELECTION_MODEL_ATTR = "_agent_report_selection_model"
 # 業務 Agent（SDK の Agent）に付ける、指示の変わらない部分（Run の状態を足す前の指示）の属性の
 # 名前（#2583。モデルの呼び出しの span の指紋と構成の見積もりに使う）。
 _STATIC_INSTRUCTIONS_ATTR = "_agent_static_instructions"
@@ -1608,6 +1629,7 @@ class _ToolRecorder:
         # 進展の無い呼び出しが上限に達した（#2580。以降の呼び出しは実行しない）。
         self.loop_stop: tool_loop_guard.LoopFinding | None = None
         # モデルが画像の入力に対応するか（#2650。対応しなければ結果の画像を添付しない）。
+        self.report_enabled = False
         self.image_input = False
         # 回答前の確認（#3352）: 確認の呼び出しで中断するか（呼び出し ID → 判断。応答ごとに 1 回
         # 決める）と、その判断を返す関数（`_approval_gate` が置く）。
@@ -2127,6 +2149,10 @@ class _ToolRecorder:
                 )
                 if references is not None:
                     output = {**output, "answer_data": references}
+            if self.report_enabled and isinstance(output, dict):
+                output = report_fields.model_report_fields(
+                    runtime_repository.get_run(self.run_id).metadata, step_id, output
+                )
             if base in source_handles.SOURCE_TOOLS and isinstance(output, dict):
                 output = source_handles.encode_output(
                     runtime_repository.get_run(self.run_id).metadata,
@@ -2518,7 +2544,21 @@ class _ToolRecorder:
                     }
                 )
         result = self.deliver_images(call, result)
-        runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
+        if self.report_enabled:
+            trusted = False
+            if (
+                definition is not None
+                and definition.mcp_server_id == data_scope.NL2SQL_CONNECTION_ID
+            ):
+                with suppress(KeyError):
+                    trusted = (
+                        runtime_config_store.get_mcp(definition.mcp_server_id).source == "builtin"
+                    )
+            runtime_repository.finish_builtin_tool_step(
+                self.run_id, step_id, result, trusted_report_source=trusted
+            )
+        else:
+            runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
         return result
 
     def deliver_images(self, call: ToolCall, result: ToolResult) -> ToolResult:
@@ -2779,6 +2819,7 @@ def build_function_tools(
     output_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
     caller_planned_connections: Collection[str] = (),
     image_input: bool = False,
+    report_enabled: bool = False,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
 
@@ -2791,6 +2832,7 @@ def build_function_tools(
     recorder = _ToolRecorder(run_id, budget)
     recorder.image_input = image_input
     recorder.data_scopes = dict(data_scopes or {})
+    recorder.report_enabled = report_enabled
     recorder.caller_planned_connections = frozenset(caller_planned_connections)
     recorder.confirmation = confirmation
     entries: list[tuple[ToolDefinition, ToolHandler | None]] = []
@@ -2939,6 +2981,8 @@ def build_sdk_agent(
     confirmation_response: Mapping[str, Any] | None = None,
     thread_id: str | None = None,
     output_fields: Sequence[AgentOutputField] = (),
+    output_contract: ReportOutputContract | None = None,
+    report_task: _SupportTaskRun | None = None,
     caller_planning: bool = True,
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
@@ -2977,6 +3021,20 @@ def build_sdk_agent(
             "必要な MCP 接続を利用できません。" + "\n" + "\n".join(warnings),
         )
     output_entries = [record_output_tool(run_id, output_fields)] if output_fields else []
+    if output_contract is not None:
+        if output_fields:
+            raise BuiltinRuntimeError(
+                "runtime.output_contract_invalid",
+                "参照付きレポートと出力の項目は同時に指定できません。",
+            )
+        output_entries.append(
+            report_runtime.draft_report_tool(
+                run_id,
+                output_contract,
+                lambda current, plan: _render_report_body(current, plan, report_task),
+            )
+        )
+
     # ツールの表示名（MCP の `title`）は、画面の処理の段階の名前に使う（モデルには渡さない）。
     runtime_repository.note_builtin_tool_titles(
         run_id,
@@ -3003,6 +3061,7 @@ def build_sdk_agent(
             else None
         ),
         output_entries=output_entries or None,
+        report_enabled=output_contract is not None,
         caller_planned_connections=(
             agent_caller_planned_connections(skill_ids) if caller_planning else frozenset()
         ),
@@ -3018,7 +3077,9 @@ def build_sdk_agent(
         scope_names = instruction_tool_names(skill_ids, exposed, origins)
         composed = f"{composed}\n\n{render_tool_names(scope_text, scope_names)}"
     # ここまでが業務 Agent の版で決まる部分。後ろに Run の状態を足す（#2583 の指紋と見積もり）。
-    if any(mcp_base_tool_name(name) in {NL2SQL_QUERY, "nl2sql_get_job"} for name in exposed):
+    if output_contract is not None:
+        composed += "\n\n" + report_runtime.REPORT_DATA_INSTRUCTIONS
+    elif any(mcp_base_tool_name(name) in {NL2SQL_QUERY, "nl2sql_get_job"} for name in exposed):
         composed += "\n\n" + DATA_INSTRUCTIONS
     if any(mcp_base_tool_name(name) in source_handles.SOURCE_TOOLS for name in exposed):
         composed += "\n\n" + source_handles.SOURCE_INSTRUCTIONS
@@ -3056,6 +3117,25 @@ def build_sdk_agent(
         model_settings=model_settings_for(target),
         hooks=_ConfirmationTurnHooks(recorder) if recorder is not None else None,
     )
+    if output_contract is not None:
+        from app.features.agent.report_selection import ReportSelectionModel
+
+        def available_previews() -> tuple[str, ...]:
+            from app.features.agent.runtime import runtime_repository
+
+            return runtime_repository.report_selection_ids(run_id, output_contract)
+
+        if not isinstance(sdk_agent.model, Model):
+            raise BuiltinRuntimeError(
+                "runtime.report_incomplete", "回答案を選択するモデルがありません。"
+            )
+        setattr(
+            sdk_agent,
+            _REPORT_SELECTION_MODEL_ATTR,
+            ReportSelectionModel(sdk_agent.model, available_previews),
+        )
+        sdk_agent.output_type = FinalSelection
+        setattr(sdk_agent, _REPORT_CONTRACT_ATTR, output_contract)
     # 入力を収める上限（#2383。`_run_config` の `_ContextWindow` が読む）。
     setattr(
         sdk_agent,
@@ -3069,7 +3149,7 @@ def build_sdk_agent(
     )
     setattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, static_instructions)
     config = _run_configuration(
-        skill_ids, static_instructions, tools, mcp_tools, target, data_scopes
+        skill_ids, static_instructions, tools, mcp_tools, target, data_scopes, output_contract
     )
     # Run の無い組み立て（設定の確認など）では残さない。
     with suppress(KeyError):
@@ -3084,6 +3164,7 @@ def _run_configuration(
     mcp_tools: Sequence[McpRuntimeTool],
     target: ModelTarget,
     data_scopes: data_scope.AgentDataScopes | None,
+    output_contract: ReportOutputContract | None = None,
 ) -> dict[str, Any]:
     """Run の実行構成の指紋（#2585。本文・資格情報は入れない）。"""
     skills: list[dict[str, Any]] = []
@@ -3116,6 +3197,15 @@ def _run_configuration(
         },
         data_scopes=data_scopes,
         sdk_version=sdk_version(),
+        output_contract=(
+            {
+                "contract": output_contract.model_dump(mode="json"),
+                "renderer_revision": report_runtime.REPORT_RENDERER_REVISION,
+                "final_schema": FinalSelection.model_json_schema(),
+            }
+            if output_contract is not None
+            else None
+        ),
     )
 
 
@@ -3581,11 +3671,15 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
                 raise _run_budget_stop(run_id, budget, exceeded)
         return model_data
 
-    return RunConfig(
+    config = RunConfig(
         tool_not_found_behavior="return_error_to_model",
         tool_error_formatter=format_error,
         call_model_input_filter=model_input,
     )
+    selected_model = getattr(sdk_agent, _REPORT_SELECTION_MODEL_ATTR, None)
+    if isinstance(selected_model, Model):
+        config.model = selected_model
+    return config
 
 
 async def _run_sdk(
@@ -4062,24 +4156,30 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     confirmation_response=task.response,
                     thread_id=run.thread_id,
                     output_fields=agent.output_fields,
+                    output_contract=agent.output_contract,
+                    report_task=task,
                     caller_planning=agent.caller_planning_allowed,
                 )
                 result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
                 result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+                result = _resolve_report_result(run.id, result, agent.output_contract)
                 result, refused = await _require_tool_grounding(
                     run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
                 )
+                result = _resolve_report_result(run.id, result, agent.output_contract)
                 if not refused:
                     _raise_on_grounding_failure(run.id, result)
                     result = await _require_hops(
                         run, sdk_agent, result, agent.data_scopes, task=task
                     )
+                    result = _resolve_report_result(run.id, result, agent.output_contract)
                     result = await _require_output(
                         run, sdk_agent, result, agent.data_scopes, agent.output_fields
                     )
-                    result = await _require_data_references(
-                        run, sdk_agent, result, agent.data_scopes
-                    )
+                    if agent.output_contract is None:
+                        result = await _require_data_references(
+                            run, sdk_agent, result, agent.data_scopes
+                        )
                 _record_usage(run_id, result, agent.model_id)
                 await _finish(
                     run_id,
@@ -4087,6 +4187,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     task,
                     data_scopes=agent.data_scopes,
                     refusal=_refusal_text(agent, sdk_agent) if refused else None,
+                    output_contract=agent.output_contract,
                 )
             except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
                 _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
@@ -4167,6 +4268,8 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     confirmation_response=task.response,
                     thread_id=run.thread_id,
                     output_fields=agent.output_fields,
+                    output_contract=agent.output_contract,
+                    report_task=task,
                     caller_planning=agent.caller_planning_allowed,
                 )
                 rejected = not all(decisions.values())
@@ -4190,20 +4293,24 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     )
                     return
                 result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+                result = _resolve_report_result(run.id, result, agent.output_contract)
                 result, refused = await _require_tool_grounding(
                     run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
                 )
+                result = _resolve_report_result(run.id, result, agent.output_contract)
                 if not refused:
                     _raise_on_grounding_failure(run.id, result)
                     result = await _require_hops(
                         run, sdk_agent, result, agent.data_scopes, task=task
                     )
+                    result = _resolve_report_result(run.id, result, agent.output_contract)
                     result = await _require_output(
                         run, sdk_agent, result, agent.data_scopes, agent.output_fields
                     )
-                    result = await _require_data_references(
-                        run, sdk_agent, result, agent.data_scopes
-                    )
+                    if agent.output_contract is None:
+                        result = await _require_data_references(
+                            run, sdk_agent, result, agent.data_scopes
+                        )
                 _record_usage(run_id, result, agent.model_id)
                 await _finish(
                     run_id,
@@ -4211,6 +4318,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     task,
                     data_scopes=agent.data_scopes,
                     refusal=_refusal_text(agent, sdk_agent) if refused else None,
+                    output_contract=agent.output_contract,
                 )
             except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
                 _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
@@ -4563,6 +4671,62 @@ def _answer_text(output: object) -> str:
     )
 
 
+def _resolve_report_result(run_id: str, result: Any, contract: ReportOutputContract | None) -> Any:
+    """生のSDK応答は残し、公開/履歴の回答だけを固定previewへ置き換える。"""
+    if contract is None or list(getattr(result, "interruptions", []) or []):
+        return result
+    from app.features.agent.runtime import runtime_repository
+
+    current = runtime_repository.get_run(run_id)
+    try:
+        identifier = getattr(result, "_report_preview_id", None)
+        selection = (
+            FinalSelection(preview_id=identifier)
+            if identifier is not None
+            else FinalSelection.model_validate(result.final_output)
+        )
+        selected = select_preview(
+            current.metadata.get(REPORT_PREVIEWS_METADATA_KEY),
+            run_id=run_id,
+            selection=selection,
+            contract=contract,
+            source_digest=report_runtime.source_digest(current),
+        )
+        if selected.status != "complete" or selected.body is None:
+            raise ReportPreviewError(
+                "report.incomplete",
+                "回答案が厳密な分量上限を超えています。確認済みの回答を確定できませんでした。",
+            )
+        canonical = applied_result(result, result, selected.body)
+        canonical._report_preview_id = selection.preview_id
+        canonical._report_evidence_text = selected.evidence_text
+        return canonical
+    except (ValueError, TypeError) as exc:
+        raise BuiltinRuntimeError(
+            "runtime.report_incomplete",
+            "確認済みの回答案を確定できませんでした。"
+            + (" " + str(exc) if isinstance(exc, ReportPreviewError) else ""),
+        ) from exc
+
+
+def _render_report_body(run: Any, plan: AnswerPlan, task: _SupportTaskRun | None) -> RenderedReport:
+    def finalize(body: str, evidence_text: str) -> str:
+        answer = body
+        coverage = _coverage(run, evidence_text, task)
+        if coverage is not None and coverage["status"] == COVERAGE_INCOMPLETE:
+            answer = with_unread_sections_notice(answer, coverage["sections"])
+        selected_answer_evidence(run.steps, evidence_text)
+        return answer
+
+    return report_runtime.render_plan(
+        run,
+        plan,
+        trusted_sources=_citable_source_ids(run),
+        render_sources=lambda text: _render_source_citations(run, text),
+        finalize=finalize,
+    )
+
+
 def _assumes(budget: ConfirmationBudget | None) -> bool:
     """利用者に確認しない Run か（方針「前提を示して回答」・「確認せずに回答」を選んだ。#1903）。
 
@@ -4673,6 +4837,9 @@ async def _require_tool_grounding(
             context=context,
         )
         result = await _unattended_approvals(run, sdk_agent, result, data_scopes)
+        result = _resolve_report_result(
+            run.id, result, getattr(sdk_agent, _REPORT_CONTRACT_ATTR, None)
+        )
     return result, False
 
 
@@ -4823,6 +4990,41 @@ def _render_source_citations(run: Any, answer: str) -> str:
     return source_handles.render_citations(run.metadata, answer, available_sources=available)
 
 
+def _citable_source_ids(run: Any) -> frozenset[str]:
+    """実取得とcitable対応表が一致し、出典を一意に特定できるIDだけを返す。"""
+    available: set[tuple[str, str]] = set()
+    for step in run.steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or step.status != "completed" or not result.success:
+            continue
+        if isinstance(result.output, dict):
+            available.update(
+                reference
+                for reference, *_ in evidence_refs(
+                    mcp_base_tool_name(call.name), result.output, original_only=True
+                )
+            )
+    rows = run.metadata.get(source_handles.REGISTRY_KEY, [])
+    if not isinstance(rows, list):
+        raise source_handles.SourceHandleError("保存した根拠参照の対応表が不正です。")
+    citable = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("kind") == "chunk"
+        and row.get("citable") is True
+        and isinstance(row.get("value"), str)
+    ]
+    counts = Counter(row["value"] for row in citable)
+    return frozenset(
+        row["value"]
+        for row in citable
+        if counts[row["value"]] == 1
+        and isinstance(row.get("document"), str)
+        and (row["document"], row["value"]) in available
+    )
+
+
 async def _require_data_references(
     run: Any, sdk_agent: Agent[Any], result: Any, data_scopes: data_scope.AgentDataScopes | None
 ) -> Any:
@@ -4836,33 +5038,60 @@ async def _require_data_references(
     if isinstance(record, dict) and record.get("data_reference_retry"):
         return result
     answer = _answer_text(result.final_output)
-    try:
-        resolved = _render_source_citations(current, answer)
-        data_index(current.steps, current.metadata).render(resolved)
+    # 対応表の不正は回答の編集では修復しない。
+    available_chunks = [item["chunk_id"] for item in passed_evidence(current.steps, limit=None)]
+    index = data_index(
+        current.steps, current.metadata, trusted_sources=_citable_source_ids(current)
+    )
+    _render_source_citations(current, "")
+
+    def validate_source(text: str) -> str:
+        resolved = _render_source_citations(current, text)
         selected_answer_evidence(current.steps, resolved)
+        return resolved
+
+    def validate(text: str) -> frozenset[str]:
+        resolved = validate_source(text)
+        index.render(resolved)
+        kinds: set[str] = set()
+        if has_data_reference(text):
+            kinds.add("data")
+        if cited_chunk_ids(resolved, tuple(available_chunks)):
+            kinds.add("source")
+        return frozenset(kinds)
+
+    try:
+        validate(answer)
         return result
-    except DataReferenceError as exc:
-        reason = str(exc)
+    except DataReferenceError:
+        plan = plan_patches(answer, index.render, validate_source=validate_source)
     runtime_repository.record_tool_grounding(run.id, "data_reference_retry", answer)
     context: RunContextWrapper[Any] = RunContextWrapper(context=result.context_wrapper.context)
     context.usage.add(result.context_wrapper.usage)
     repair_agent = copy(sdk_agent)
     repair_agent.tools = []
-    result = await _run_sdk(
+    repair_agent.output_type = ReferencePatches
+    repaired = await _run_sdk(
         run.id,
         repair_agent,
         tool_grounding.retry_input(
             result.to_input_list(),
-            answer,
-            head="## Step 1: データ参照の形式を直す\n"
-            + reason
-            + "\n## Step 2: 取得済みの参照から回答する\n"
-            "数値の表はanswer_dataのtable参照を単独行にし、本文の値は対応するcells参照を使用してください。"
-            "根拠の出典には取得結果のcitation参照を使用してください。",
+            "",
+            head=PATCH_INSTRUCTIONS + "\n" + json.dumps(plan.payload(), ensure_ascii=False),
         ),
         context=context,
     )
-    return await _unattended_approvals(run, sdk_agent, result, data_scopes)
+    # 適用時に失敗しても、修正呼び出しの累計usageを失わない。
+    result.context_wrapper = repaired.context_wrapper
+    try:
+        response = ReferencePatches.model_validate(repaired.final_output)
+    except ValueError as exc:
+        raise DataReferenceError("参照修正の応答形式が不正です。") from exc
+    patched = plan.apply(
+        response, current_answer=_answer_text(result.final_output), references=validate
+    )
+    validate(patched)
+    return applied_result(result, repaired, patched)
 
 
 def _tool_budget_exhausted(budget: SupportTaskBudget | None) -> bool:
@@ -5021,6 +5250,7 @@ async def _finish(
     *,
     data_scopes: data_scope.AgentDataScopes | None = None,
     refusal: str | None = None,
+    output_contract: ReportOutputContract | None = None,
 ) -> None:
     """Run を承認待ちにするか、回答を確定する。
 
@@ -5064,10 +5294,36 @@ async def _finish(
             notice=current_answer_notice(),
         )
         return
+    if output_contract is not None:
+        selected_result = _resolve_report_result(run_id, result, output_contract)
+        answer = _answer_text(selected_result.final_output)
+        if answer != _answer_text(result.final_output):
+            raise BuiltinRuntimeError(
+                "runtime.report_incomplete", "確認済みの回答案と最終出力が一致しません。"
+            )
+        tool_confirmations = _tool_confirmations(task, state_content)
+        evidence_text = getattr(selected_result, "_report_evidence_text", "")
+        _save_answer_evidence(run_id, evidence_text)
+        runtime_repository.complete_builtin_run(
+            run_id,
+            answer,
+            outcome=_answer_outcome(run_id, answer, None),
+            confirmations=tool_confirmations,
+            notice=current_answer_notice()
+            if answer_takes_notice(
+                _answer_outcome(run_id, answer, None), confirmations=bool(tool_confirmations)
+            )
+            else None,
+        )
+        return
     answer = _answer_text(result.final_output)
     data_run = runtime_repository.get_run(run_id)
     answer = _render_source_citations(data_run, answer)
-    answer = data_index(data_run.steps, data_run.metadata).render(answer)
+    answer = data_index(
+        data_run.steps,
+        data_run.metadata,
+        trusted_sources=_citable_source_ids(data_run),
+    ).render(answer)
     tool_confirmations = _tool_confirmations(task, state_content)
     if tool_confirmations and is_confirmation_payload(answer):
         # 確認のツールの引数の JSON を本文に書いた（#2236）。カードの問いの文にする。
@@ -5349,6 +5605,9 @@ def _record_failure(run_id: str, exc: Exception) -> None:
         return
     if isinstance(exc, BuiltinRuntimeError):
         code, message = exc.code, exc.message
+    elif isinstance(exc, ReportPreviewError):
+        code = "runtime.report_incomplete"
+        message = "確認済みの回答案を選択できないため、回答を確定しませんでした。 " + str(exc)
     elif isinstance(exc, source_handles.SourceHandleError):
         code = "runtime.answer_source_invalid"
         message = "取得済みの根拠への参照を検証できないため、回答を確定しませんでした。"

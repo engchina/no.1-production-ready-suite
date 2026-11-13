@@ -4591,6 +4591,19 @@ BEGIN
 END;
 /
 
+-- migration: 20261112_4955_chunk_document_index
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_CHUNKS_DOCUMENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunks_document_idx '
+            || 'ON rag_chunks (document_id, chunk_index)';
+    END IF;
+END;
+/
+
 -- migration: 20261112_4941_document_wiki
 DECLARE existing_column NUMBER;
         BEGIN

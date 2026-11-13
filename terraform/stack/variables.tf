@@ -1,5 +1,5 @@
 variable "region" {
-  description = "OCI region used by Resource Manager and runtime clients."
+  description = "Deployment region selected in the Resource Manager form and used by the provider and runtime clients."
   type        = string
   default     = "ap-osaka-1"
 

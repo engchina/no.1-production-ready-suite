@@ -1,0 +1,151 @@
+"""保存済みの行列参照だけから、部分表の値と見出しを展開する。"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable, Collection, Iterator
+from dataclasses import dataclass
+from typing import Any
+
+_RULE = re.compile(r"\s*:?-+:?\s*")
+_PIPE = re.compile(r"(?<!\\)(?:\\\\)*\|")
+
+_SOURCE_MARKER = re.compile(
+    r"\[\[cite:(?P<short>[1-9][0-9]*)\]\]"
+    r"|【根拠:(?P<canonical>[^】\r\n]*)】",
+    re.MULTILINE,
+)
+
+
+def data_detection_text(
+    text: str,
+    *,
+    trusted_sources: Collection[str] = (),
+    allow_unresolved_short: bool = False,
+) -> str:
+    """信頼済み根拠IDだけを数値検出から除く。元の参照本文は変更しない。
+
+    未解決の短番号を除く指定は、独立したsource検証を伴う修正対象の検出だけに使う。
+    """
+
+    def replace(marker: re.Match[str]) -> str:
+        canonical = marker["canonical"]
+        if (
+            canonical is not None
+            and (canonical in trusted_sources or canonical.removeprefix(" ") in trusted_sources)
+        ) or (allow_unresolved_short and marker["short"] is not None):
+            return "source"
+        return marker[0]
+
+    return _SOURCE_MARKER.sub(replace, text)
+
+
+class ReferenceTableError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class BoundCell:
+    table: str
+    row: int
+    column: str
+    value: Any
+    unit: str | None
+
+
+def _parts(line: str) -> list[str]:
+    text = line.strip().removeprefix("|").removesuffix("|")
+    return [part.strip() for part in re.split(r"(?<!\\)\|", text)]
+
+
+def table_spans(answer: str) -> Iterator[tuple[int, int]]:
+    """同じ表構文の境界を、元テキストのcodepoint位置で返す。"""
+    lines = answer.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    index = 0
+    while index + 1 < len(lines):
+        end = _table_end(lines, index)
+        if end is not None:
+            yield offsets[index], offsets[end]
+            index = end
+        else:
+            index += 1
+
+
+def _table_end(lines: list[str], index: int) -> int | None:
+    if index + 1 >= len(lines):
+        return None
+    rule = _parts(lines[index + 1])
+    syntax = len(rule) > 1 or bool(_PIPE.search(lines[index]) or _PIPE.search(lines[index + 1]))
+    if not (syntax and rule and all(_RULE.fullmatch(part) for part in rule)):
+        return None
+    end = index + 2
+    while end < len(lines) and "|" in lines[end] and lines[end].strip():
+        end += 1
+    return end
+
+
+def render_reference_tables(
+    answer: str,
+    *,
+    resolve: Callable[[str], BoundCell],
+    render_scalar: Callable[[str], str],
+    markdown: Callable[[Any], str],
+    is_reference_data: Callable[[str], bool],
+) -> str:
+    lines = answer.splitlines()
+    rendered: list[str] = []
+    index = 0
+    while index < len(lines):
+        end = _table_end(lines, index)
+        if end is not None:
+            body = [_parts(line) for line in lines[index + 2 : end]]
+            if any(is_reference_data(part) for row in body for part in row):
+                rendered.append(_matrix(_parts(lines[index]), body, resolve, markdown))
+                index = end
+                continue
+        # 展開済みの値をもう一度参照として解釈しない。
+        rendered.append(render_scalar(lines[index]))
+        index += 1
+    return "\n".join(rendered)
+
+
+def _matrix(
+    headers: list[str],
+    rows: list[list[str]],
+    resolve: Callable[[str], BoundCell],
+    markdown: Callable[[Any], str],
+) -> str:
+    columns: list[tuple[str, str]] | None = None
+    names: list[str] = []
+    rendered: list[list[str]] = []
+    seen_rows: set[tuple[str, int]] = set()
+    for row in rows:
+        if len(row) != len(headers):
+            raise ReferenceTableError("参照の表は各行の列数をそろえてください。")
+        bound = [resolve(part) for part in row]
+        identities = {(cell.table, cell.row) for cell in bound}
+        if len(identities) != 1:
+            raise ReferenceTableError("同じ表示行には同じ結果の同じ行の参照を使用してください。")
+        identity = next(iter(identities))
+        if identity in seen_rows:
+            raise ReferenceTableError("同じ元行を表に重ねて指定しないでください。")
+        seen_rows.add(identity)
+        current = [(cell.table, cell.column) for cell in bound]
+        if len(set(current)) != len(current):
+            raise ReferenceTableError("同じ元列を表に重ねて指定しないでください。")
+        if columns is None:
+            columns = current
+            names = [cell.column for cell in bound]
+        elif columns != current:
+            raise ReferenceTableError("同じ表示列には同じ元列の参照を使用してください。")
+        rendered.append([markdown(cell.value) for cell in bound])
+    return "\n".join(
+        [
+            "| " + " | ".join(markdown(name) for name in names) + " |",
+            "| " + " | ".join("---" for _name in names) + " |",
+            *("| " + " | ".join(row) + " |" for row in rendered),
+        ]
+    )

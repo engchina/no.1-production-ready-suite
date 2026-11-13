@@ -399,6 +399,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "empty_search_guidance",
         "abstention_guidance",
         "answer_evidence_budget_limited",
+        "answer_part_generation_failed",
         "citation_prefix",
         "deadline_summary",
         "operation_steps_heading",

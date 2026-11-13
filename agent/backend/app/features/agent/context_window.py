@@ -54,6 +54,8 @@ from typing import Any
 from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, online_output_budget
 from pr_system_settings.model import estimate_input_tokens
 
+from app.features.agent.generation_diagnostics import generation_diagnostics_summary
+from app.features.agent.profile_schema_context import profile_schema_summary
 from app.features.agent.tool_media import (
     MAX_IMAGES_IN_INPUT,
     ToolImage,
@@ -328,6 +330,8 @@ def _state_list(key: object, value: object) -> list[str] | None:
 
 def _id_ref(item: Mapping[str, Any]) -> dict[str, Any]:
     """ID と作業の状態だけの参照（一覧の項目を縮めるときに残す）。"""
+    if (schema := profile_schema_summary(item)) is not None:
+        return schema
     ref: dict[str, Any] = {}
     for key, value in item.items():
         identifier = is_id_key(key) and isinstance(value, str | int) and not isinstance(value, bool)
@@ -335,6 +339,10 @@ def _id_ref(item: Mapping[str, Any]) -> dict[str, Any]:
             ref[key] = value
         elif (texts := _state_list(key, value)) is not None:
             ref[key] = texts
+        elif key == "generation_diagnostics":
+            summary = generation_diagnostics_summary(value)
+            if summary is not None:
+                ref[key] = summary
     return ref
 
 
@@ -350,6 +358,37 @@ def _clip(text: str, chars: int, stats: _Stats) -> str:
         return text
     stats.clipped += 1
     return text[:chars] + "…"
+
+
+def _typed_column_summary(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {key: item[key] for key in ("name", "unit", "unit_status") if key in item}
+        for item in value
+        if isinstance(item, dict)
+    ]
+
+
+def _reference_summary(value: Mapping[str, Any], *, prefix_only: bool) -> dict[str, Any]:
+    kept = {
+        key: value[key]
+        for key in (
+            "table",
+            "columns",
+            "column_refs",
+            "row_count",
+            "quantity_columns",
+            "render_chars",
+        )
+        if key in value
+    }
+    quantities = value.get("quantities")
+    if isinstance(quantities, list):
+        # 先頭部分だけを残しても、参照内の元の行番号は変更しない。
+        prefix = _LEVELS[2][1]
+        kept["quantities"] = quantities[:prefix] if prefix_only else quantities
+    return kept
 
 
 def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> Any:
@@ -372,14 +411,32 @@ def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> 
             shrunk.append(_shrink(item, level=level, stats=stats, in_list=True))
         return shrunk
     if isinstance(value, dict):
+        if (schema := profile_schema_summary(value)) is not None:
+            return schema
         clipped = stats.clipped
         result = {
-            key: item
+            key: generation_diagnostics_summary(item)
+            if key == "generation_diagnostics"
+            else _typed_column_summary(item)
+            if key == "column_metadata"
+            else item
             if is_id_key(key) or _is_state(key, item) or _state_list(key, item) == item
             else _shrink(item, level=level, stats=stats, in_list=in_list)
             for key, item in value.items()
             if key != COMPACTION_KEY
         }
+        original_references = value.get("answer_data")
+        compacted_references = result.get("answer_data")
+        if isinstance(original_references, dict) and isinstance(compacted_references, dict):
+            compacted_references.update(
+                {
+                    key: item
+                    for key, item in _reference_summary(
+                        original_references, prefix_only=False
+                    ).items()
+                    if key != "quantities"
+                }
+            )
         if isinstance(result.get("truncated"), bool) and stats.clipped > clipped:
             result["truncated"] = True
         return result
@@ -388,9 +445,19 @@ def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> 
 
 def _ids_only(value: Any, stats: _Stats) -> Any:
     if isinstance(value, dict):
+        if (schema := profile_schema_summary(value)) is not None:
+            return schema
         kept: dict[str, Any] = _id_ref(value)
         for key, item in value.items():
             if key in kept or key == COMPACTION_KEY:
+                continue
+            if key == "generation_diagnostics":
+                summary = generation_diagnostics_summary(item)
+                if summary is not None:
+                    kept[key] = summary
+                continue
+            if key == "column_metadata":
+                kept[key] = _typed_column_summary(item)
                 continue
             if (
                 key == "answer_data"
@@ -398,7 +465,7 @@ def _ids_only(value: Any, stats: _Stats) -> Any:
                 and isinstance(item.get("table"), str)
             ):
                 # 省いた行の位置を作り直さず、保存済みの表全体を参照できるようにする。
-                kept[key] = {"table": item["table"]}
+                kept[key] = _reference_summary(item, prefix_only=True)
                 continue
             if isinstance(item, dict | list):
                 nested = _ids_only(item, stats)

@@ -136,8 +136,8 @@
     },
     {
       "name": "chunks",
-      "sha256": "ad05e03f30fffc2c883f34946f9917e3f8ddd1491c36e4994cd42f6afa50ee1a",
-      "statement_count": 7,
+      "sha256": "6391595e5e37ed4059b1babbd42610b8b455a40f9179032161233891d78be058",
+      "statement_count": 8,
       "table_name": "rag_chunks"
     },
     {
@@ -279,8 +279,8 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "8d8eede27a68c9d900e6e13e679a6eb966497acf1b519273a912a5589a332b6d",
-  "statement_count": 169,
+  "sha256": "4234ce814d6d47bb33879133a5a47c47763a99595855a78469434720ec5c62ae",
+  "statement_count": 170,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {
     "distance": "COSINE",

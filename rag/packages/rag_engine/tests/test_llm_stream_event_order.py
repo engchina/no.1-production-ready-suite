@@ -85,6 +85,96 @@ def _delta(index: int, text: str = OUTPUT) -> dict[str, Any]:
     }
 
 
+def _text_done(index: int, text: str = OUTPUT) -> dict[str, Any]:
+    return {
+        "type": "response.output_text.done",
+        "output_index": index,
+        "content_index": 0,
+        "item_id": "msg-1",
+        "text": text,
+        "logprobs": [],
+    }
+
+
+def test_completed_snapshot_reuses_clean_done_without_resending(send, caplog: pytest.LogCaptureFixture) -> None:
+    broken = OUTPUT.replace("本", "\ufffd" * 3)
+    events = [_created(), _delta(0), _text_done(0), _completed(_message(broken))]
+    bodies: list[dict[str, Any]] = []
+    with caplog.at_level(logging.INFO, logger=oci.__name__):
+        result = send([events], bodies)
+    assert result.text == "合成の本文"
+    assert len(bodies) == 1
+    usage = next(record for record in caplog.records if record.__dict__.get("event") == "llm_call_usage")
+    assert usage.__dict__["output_tokens"] == 11
+    assert "合成の本文" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "variant", ["missing", "delta_only", "item", "output", "content", "response", "conflict", "meaning", "broken", "created"]
+)
+def test_untrusted_done_does_not_replace_completed(send, variant: str) -> None:
+    broken = OUTPUT.replace("本", "\ufffd" * 3)
+    done = _text_done(0)
+    middle = [done]
+    start = [_created()]
+    if variant == "missing":
+        middle = []
+    elif variant == "delta_only":
+        middle = [_delta(0)]
+    elif variant in {"item", "output", "content"}:
+        field, value = {"item": ("item_id", "msg-other"), "output": ("output_index", 1), "content": ("content_index", 1)}[variant]
+        done[field] = value
+    elif variant == "response":
+        other = _created()
+        other["response"]["id"] = "resp-other"
+        middle.append(other)
+    elif variant == "conflict":
+        middle.extend([_text_done(0, OUTPUT.replace("合成", "別の合成")), _text_done(0)])
+    elif variant == "meaning":
+        done["text"] = OUTPUT.replace("合成", "別の合成")
+    elif variant == "broken":
+        done["text"] = broken
+    elif variant == "created":
+        start = []
+    bodies: list[dict[str, Any]] = []
+    result = send([start + middle + [_completed(_message(broken))]], bodies)
+    # 復旧の出典が一致しない場合は完了本文を保ち、回答単位の再試行へ渡す。
+    assert result.text == json.loads(broken)["text"]
+    assert len(bodies) == 1
+
+
+def test_clean_final_wins_over_different_done(send) -> None:
+    bodies: list[dict[str, Any]] = []
+    result = send([[_created(), _text_done(0, OUTPUT.replace("合成", "別の合成")), _completed(_message())]], bodies)
+    assert result.text == "合成の本文"
+
+
+def test_recovered_text_still_requires_valid_schema(send) -> None:
+    clean = '{"text":123,"label":"本"}'
+    broken = clean.replace("本", "\ufffd" * 3)
+    bodies: list[dict[str, Any]] = []
+    with pytest.raises(ValidationError):
+        send([[_created(), _text_done(0, clean), _completed(_message(broken))]], bodies)
+    assert len(bodies) == 1
+
+
+def test_multiple_content_parts_bind_to_final_indices(send) -> None:
+    parts = ['{"text":"合成の', '本文"}']
+    message = _message()
+    message["content"] = [{"type": "output_text", "text": text.replace("本", "\ufffd" * 3), "annotations": []} for text in parts]
+    done = [{**_text_done(1, text), "content_index": index} for index, text in enumerate(parts)]
+    bodies: list[dict[str, Any]] = []
+    result = send([[_created(), *done, _completed(REASONING, message)]], bodies)
+    assert result.text == "合成の本文"
+    assert len(bodies) == 1
+
+
+def test_refusal_does_not_use_received_clean_done(send) -> None:
+    refusal = {**_message(), "content": [{"type": "refusal", "refusal": "合成の拒否"}]}
+    with pytest.raises(RuntimeError, match="拒否"):
+        send([[_created(), _text_done(0), _completed(refusal)]], [])
+
+
 def _sse(events: list[dict[str, Any]]) -> httpx.Response:
     numbered = [{**event, "sequence_number": number} for number, event in enumerate(events)]
     body = "".join(f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n" for event in numbered)

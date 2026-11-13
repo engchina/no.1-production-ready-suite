@@ -850,6 +850,8 @@ export const ja = {
   "settings.language.field.confirmation_only_summary.help": "資料だけでは回答を確定できないときの前置きです。",
   "settings.language.field.answer_evidence_budget_limited": "入力の上限で省略した根拠の案内",
   "settings.language.field.answer_evidence_budget_limited.help": "回答への入力の上限で根拠を省いたときの案内です。{count} を省略した件数に置き換えます。",
+  "settings.language.field.answer_part_generation_failed": "一部の回答を生成できないときの案内",
+  "settings.language.field.answer_part_generation_failed.help": "生成できなかった回答だけを案内します。{count} を生成できなかった件数に置き換えます。",
   "settings.language.field.insufficient_evidence_summary": "根拠不足の前置き",
   "settings.language.field.insufficient_evidence_summary.help": "回答を裏付ける根拠がなく、回答できないときの前置きです。",
   "settings.language.field.empty_search_guidance": "検索で根拠がないときの確認案内",
@@ -3689,14 +3691,6 @@ export const ja = {
   "search.answerText.citationPart": "箇所 {number}/{total}：{citation}",
   "search.answerText.citationCandidates": "位置未確定の候補：{citation}",
   "search.answerText.openCitation": "{citation} の原文を開く",
-  // 本文の根拠の行が指す箇所を確定できないとき（#2710）。
-  "search.citationPosition.unresolvedTitle": "この根拠の行の位置は確定していません",
-  "search.citationPosition.candidatesBody":
-    "回答が同じまとまりを参照したため、行が指す箇所を 1 つに決められません（候補 {count} 件）。表示中の 1 件の原文は強調しません。根拠の一覧で候補を確かめてください。",
-  "search.citationPosition.singleCandidateBody":
-    "回答はこの箇所を含むまとまりを参照しました。候補はこの 1 件だけですが、行の内容がこの箇所にあることは確かめられていないため、原文は強調しません。",
-  "search.citationPosition.legacyBody":
-    "この回答の記録は、行が同じ文書・頁のどの箇所を指すかを持っていません（文書名と頁が合う箇所 {count} 件）。表示中の 1 件の原文は強調しません。",
   // 「回答に未反映の関連章節」の行から章節の原文を開く（#2040）。読み上げの名前は見える文言を含める。
   "search.answerText.tableName": "回答の表",
   "search.answerText.tableNameIndexed": "回答の表 {number}",
@@ -3924,6 +3918,7 @@ export const ja = {
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ システムプロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.batchReading": "根拠を分割して読み、引用付きの回答候補を作る指示（単回の容量を超える場合）",
+  "settings.answerPrompts.part.partTextRepair": "文字が破損した回答単位を修復する指示",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",

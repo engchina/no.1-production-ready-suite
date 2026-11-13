@@ -586,6 +586,7 @@ def build_engine_settings(
         ),
         # 生成に渡す根拠の原文の文字予算(#3776。全体設定だけで決める)。
         "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
+        "RAG_ENGINE_BATCH_READ_WORKERS": str(settings.rag_batch_read_workers),
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": str(settings.rag_max_anchors_per_document),
         # 回答文の生成の推論の量(#1499。model は空 = モデルの登録値のまま)。

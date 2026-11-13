@@ -22,7 +22,15 @@ data "oci_database_autonomous_database" "selected_existing_adb" {
 
   lifecycle {
     postcondition {
-      condition     = self.compartment_id == trimspace(var.adb_compartment_ocid)
+      condition = (
+        try(trimspace(self.id) != "", false)
+        && try(trimspace(self.compartment_id) != "", false)
+        && try(trimspace(self.db_name) != "", false)
+      )
+      error_message = "既存のAutonomous AI Databaseの情報を取得できませんでした。選択したリージョンとADBのOCID、Resource Managerの実行主体の参照権限を確認してください。"
+    }
+    postcondition {
+      condition     = try(trimspace(self.compartment_id), "") == "" ? true : self.compartment_id == trimspace(var.adb_compartment_ocid)
       error_message = "選択した既存のAutonomous AI Databaseは、ADBのコンパートメントに属している必要があります。"
     }
   }

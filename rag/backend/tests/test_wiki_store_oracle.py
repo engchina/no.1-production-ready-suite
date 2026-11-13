@@ -110,9 +110,18 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert len(
         await store.text_pages("syntheticnavigation", filters, compiler=compiler, limit=10)
     ) == len(pages)
+    expected_rank = await store.text_pages(
+        "syntheticnavigation", filters, compiler=compiler, limit=2
+    )
+    assert await store.text_page_rankings(
+        "syntheticnavigation", filters, compiler=compiler, limit=2, document_ids=[did]
+    ) == {did: [page.unit.unit_id for page in expected_rank]}
     assert len(await store.read_sources(pages, filters)) == len(pages)
     await store.set_enabled(first.id, False)
     assert not await store.available_pages(filters)
+    assert not await store.text_page_rankings(
+        "syntheticnavigation", filters, compiler=compiler, limit=2, document_ids=[did]
+    )
     other = {"knowledge_base_id": second.id}
     assert len(await store.available_pages(other)) == len(pages)
     assert (await store.status_counts(filters))["READY"] == 1

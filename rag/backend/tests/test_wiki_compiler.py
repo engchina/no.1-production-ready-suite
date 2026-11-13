@@ -141,6 +141,44 @@ async def test_invalid_dependency_is_not_checkpointed() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["json", "dependency"])
+async def test_invalid_large_output_is_recovered_without_accepting_invalid_ids(
+    failure: str,
+) -> None:
+    class LargeInvalidModel(Model):
+        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+            large = len(json.loads(context)["target_unit_ids"]) > 1
+            self.invalid = large and failure == "dependency"
+            raw = await super().generate(prompt, context, **kwargs)
+            return "invalid-json" if large and failure == "json" else raw
+
+    model, saved = LargeInvalidModel(), []
+
+    async def authorize() -> None:
+        pass
+
+    async def save(pages: Any) -> None:
+        saved.extend(pages)
+
+    result = await compile_pages(
+        units(),
+        model=model,
+        model_id="synthetic",
+        max_input_chars=2000,
+        batch_size=4,
+        authorize=authorize,
+        checkpoint=save,
+    )
+    assert len(result) == len(saved) == 4
+    assert len(model.calls) == 7
+    assert all(
+        dependency.unit_id == "unit-1"
+        for page in result
+        for dependency in page.navigation.dependencies
+    )
+
+
+@pytest.mark.asyncio
 async def test_authorization_change_after_generation_prevents_checkpoint() -> None:
     calls, saved = 0, []
 

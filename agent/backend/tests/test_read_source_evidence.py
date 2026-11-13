@@ -159,53 +159,28 @@ def test_explicit_citations_alone_over_the_limit_fail_instead_of_losing_sources(
         answer_evidence(many_sources(), answer)
 
 
-async def test_evidence_overflow_uses_only_one_tool_free_format_repair(
+async def test_evidence_overflow_without_local_target_stops_without_rewriting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from types import SimpleNamespace
 
     from agents import Agent
-    from agents.usage import Usage
 
     from app.features.agent import builtin_runtime as runtime
-    from app.features.agent import tool_grounding
     from app.features.agent.runtime import runtime_repository
 
     answer = "\n".join(f"【根拠: chunk-{i:04d}】" for i in range(MAX_ANSWER_EVIDENCE + 1))
     current = SimpleNamespace(id="run-synthetic", metadata={}, steps=many_sources())
-    result = SimpleNamespace(
-        final_output=answer,
-        interruptions=[],
-        context_wrapper=SimpleNamespace(context={}, usage=Usage()),
-        to_input_list=lambda: [{"role": "assistant", "content": answer}],
-    )
-    repaired = SimpleNamespace(final_output="【根拠: chunk-0000】")
-    calls = []
+    result = SimpleNamespace(final_output=answer, interruptions=[])
 
-    async def run_sdk(run_id: str, agent: Agent[Any], inputs: Any, *, context: Any) -> Any:
-        calls.append((run_id, agent.tools, inputs))
-        return repaired
-
-    async def approvals(run: Any, agent: Any, value: Any, scopes: Any) -> Any:
-        return value
-
-    def record(run_id: str, key: str, value: str) -> None:
-        current.metadata[tool_grounding.METADATA_KEY] = {key: True}
+    async def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("対象の無い回答全体を再生成してはいけません。")
 
     monkeypatch.setattr(runtime_repository, "get_run", lambda _: current)
-    monkeypatch.setattr(runtime_repository, "record_tool_grounding", record)
-    monkeypatch.setattr(runtime, "_run_sdk", run_sdk)
-    monkeypatch.setattr(runtime, "_unattended_approvals", approvals)
-    assert (
+    monkeypatch.setattr(runtime, "_run_sdk", forbidden)
+    with pytest.raises(DataReferenceError, match="修正範囲"):
         await runtime._require_data_references(current, Agent(name="合成の検証"), result, None)
-        is repaired
-    )
-    assert len(calls) == 1 and calls[0][1] == []
-    assert (
-        await runtime._require_data_references(current, Agent(name="合成の検証"), result, None)
-        is result
-    )
-    assert len(calls) == 1
+    assert result.final_output == answer
 
 
 def test_old_citable_metadata_cannot_replace_missing_actual_source_output() -> None:

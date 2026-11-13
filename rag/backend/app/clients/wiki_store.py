@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from rag_parser_core.xml_tree_json import XML_TREE_DOCUMENT_ARTIFACT_KEY
+
 from app.clients.oracle import (
     OracleClient,
     _execute,
@@ -228,23 +230,44 @@ class WikiStore:
             {"id": document_id},
         )
 
-    async def catalog(self, filters: dict[str, str], compiler: str) -> list[dict[str, str]]:
+    async def catalog(self, filters: dict[str, str], compiler: str) -> list[dict[str, Any]]:
         where, binds = wiki_scope(filters)
         rows = await self.oracle._fetch_all(
-            f"""SELECT DISTINCT d.document_id,d.file_name
+            f"""SELECT DISTINCT d.document_id,d.file_name,
+            JSON_VALUE(ex.extraction_json,
+                '$.parser_artifacts.{XML_TREE_DOCUMENT_ARTIFACT_KEY}.document_id') source_key,
+            JSON_VALUE(ex.extraction_json,
+                '$.parser_artifacts.{XML_TREE_DOCUMENT_ARTIFACT_KEY}.revision_id') revision_key,
+            JSON_VALUE(ex.extraction_json,
+                '$.parser_artifacts.{XML_TREE_DOCUMENT_ARTIFACT_KEY}.revision_date') effective_date,
+            JSON_VALUE(ex.extraction_json,
+                '$.parser_artifacts.{XML_TREE_DOCUMENT_ARTIFACT_KEY}.revision_status') source_status
             FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
             JOIN rag_wiki_documents w ON w.document_id=c.document_id
             JOIN rag_wiki_pages p ON p.source_chunk_id=c.chunk_id
               AND p.chunk_set_id=c.chunk_set_id AND p.source_fingerprint=w.published_fingerprint
+            JOIN rag_chunk_sets catalog_set ON catalog_set.chunk_set_id=c.chunk_set_id
+            LEFT JOIN rag_document_extractions ex ON ex.document_id=c.document_id
+              AND ex.extraction_recipe_id=catalog_set.extraction_recipe_id
             WHERE {where} AND w.status='READY' AND w.compiler_fingerprint=:wiki_compiler
             AND w.source_fingerprint=w.published_fingerprint AND {CURRENT_WIKI_SOURCE_SQL}
             ORDER BY d.document_id""",
             {**binds, "wiki_compiler": compiler},
         )
-        return [
-            {"document_id": str(row["document_id"]), "title": str(row.get("file_name") or "")}
-            for row in rows
-        ]
+        documents: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            did = str(row["document_id"])
+            card = documents.setdefault(
+                did, {"document_id": did, "title": str(row.get("file_name") or "")}
+            )
+            identity = {
+                key: str(row[key])
+                for key in ["source_key", "revision_key", "effective_date", "source_status"]
+                if row.get(key)
+            }
+            if identity and identity not in card.setdefault("source_identities", []):
+                card["source_identities"].append(identity)
+        return list(documents.values())
 
     async def status_counts(self, filters: dict[str, str]) -> dict[str, int]:
         where, binds = _oracle_retrieval_where(
@@ -563,8 +586,11 @@ class WikiStore:
         if limit is not None:
             binds["wiki_limit"] = limit
             tail = "FETCH FIRST :wiki_limit ROWS ONLY"
+        # ベクトル順位には本文が不要。上位 ID を確定してから必要な CLOB だけを読む。
+        rank_first = query_vector is not None and limit is not None
+        projection = "p.unit_id" if rank_first else "p.page_json"
         rows = await self.oracle._fetch_all(
-            f"""SELECT p.page_json FROM rag_wiki_pages p
+            f"""SELECT {projection} FROM rag_wiki_pages p
             JOIN rag_wiki_documents w ON w.document_id=p.document_id
             JOIN rag_chunks c ON c.chunk_id=p.source_chunk_id AND c.chunk_set_id=p.chunk_set_id
             JOIN rag_documents d ON d.document_id=c.document_id
@@ -574,6 +600,18 @@ class WikiStore:
             ORDER BY {order} {tail}""",
             binds,
         )
+        if rank_first:
+            ids = [str(row["unit_id"]) for row in rows]
+            if not ids:
+                return []
+            hydrated = await self.available_pages(
+                filters,
+                unit_ids=ids,
+                document_ids=document_ids,
+                compiler_fingerprint=compiler_fingerprint,
+            )
+            pages = {page.unit.unit_id: page for page in hydrated}
+            return [pages[uid] for uid in ids if uid in pages]
         return [WikiPage.model_validate(_json_loads(row["page_json"])) for row in rows]
 
     async def text_pages(
@@ -618,6 +656,44 @@ class WikiStore:
         )
         pages = {page.unit.unit_id: page for page in hydrated}
         return [pages[uid] for uid in ids if uid in pages]
+
+    async def text_page_rankings(
+        self,
+        question: str,
+        filters: dict[str, str],
+        *,
+        compiler: str,
+        limit: int,
+        document_ids: Sequence[str],
+    ) -> dict[str, list[str]]:
+        """選択済み文書の順位を同じ検索式で取得し、本文は再取得しない。"""
+        expression = _oracle_text_query(question)
+        if not expression or not document_ids or limit <= 0:
+            return {}
+        where, binds = wiki_scope(filters)
+        clause, values = _oracle_in_predicate("c.document_id", "wiki_text_doc", document_ids)
+        rows = await self.oracle._fetch_all(
+            f"""SELECT /*+ DOMAIN_INDEX_SORT LEADING(p) USE_HASH(w c d) */
+            p.document_id,p.unit_id,SCORE(1) AS text_score FROM rag_wiki_pages p
+            JOIN rag_wiki_documents w ON w.document_id=p.document_id
+            JOIN rag_chunks c ON c.chunk_id=p.source_chunk_id AND c.chunk_set_id=p.chunk_set_id
+            JOIN rag_documents d ON d.document_id=c.document_id
+            WHERE CONTAINS(p.search_text,:wiki_text,1)>0
+              AND {where} AND {clause}
+              AND w.status='READY' AND w.compiler_fingerprint=:wiki_compiler
+              AND w.published_fingerprint=w.source_fingerprint
+              AND p.source_fingerprint=w.published_fingerprint AND {CURRENT_WIKI_SOURCE_SQL}
+            ORDER BY p.document_id,text_score DESC,p.unit_id""",
+            {**binds, **values, "wiki_text": expression, "wiki_compiler": compiler},
+        )
+        # 全体の上限で少数文書へ候補を偏らせず、既存と同じ文書別の上限を適用する。
+        # 対象はすでに本文を読んだ選択文書だけであり、全 KB の本文は取得しない。
+        rankings: dict[str, list[str]] = {}
+        for row in rows:
+            group = rankings.setdefault(str(row["document_id"]), [])
+            if len(group) < limit:
+                group.append(str(row["unit_id"]))
+        return rankings
 
     async def read_sources(
         self, pages: Sequence[WikiPage], filters: dict[str, str]

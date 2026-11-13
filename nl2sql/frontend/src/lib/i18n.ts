@@ -1139,6 +1139,7 @@ const nl2sqlJa = {
   "ontologyResults.field.physical_type": "物理の型（Physical Type）",
   "ontologyResults.field.required": "必須（Required）",
   "ontologyResults.field.unit": "単位（Unit）",
+  "ontologyResults.field.difference_unit": "差分の単位（Difference Unit）",
   "ontologyResults.field.currency": "通貨（Currency）",
   "ontologyResults.field.timezone": "タイムゾーン（Time Zone）",
   "ontologyResults.field.allowed_values": "許可する値（Allowed Values）",

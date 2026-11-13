@@ -28,7 +28,7 @@
 .testset-mobile-tools { display: none; }
 @media (max-width: 64rem) {
   .testset-review-workspace { grid-template-columns: minmax(0, 1fr); }
-  .testset-mobile-tools { display: grid; gap: 1rem; }
+  .testset-mobile-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
   .testset-item-nav, .testset-editor-pane, .testset-reference-pane { display: none; }
   .testset-mobile-active { display: block; }
   .testset-review-workspace > * { max-height: none; overflow: visible; }

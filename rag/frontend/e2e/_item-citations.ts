@@ -44,7 +44,7 @@ export async function expectItemCitationSources(page: Page, answer: Locator) {
   const candidate = mixed.getByRole("button", { name: /位置未確定の候補/ });
   await candidate.click();
   const sheet = page.getByRole("dialog", { name: "回答の根拠", exact: true });
-  await expect(sheet.getByText("この根拠の行の位置は確定していません", { exact: true })).toBeVisible();
+  await expect(sheet.getByTestId("evidence-source-notice")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(candidate).toBeFocused();
 }

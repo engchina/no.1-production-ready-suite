@@ -51,6 +51,9 @@ class Store:
     async def text_pages(self, question: str, filters: Any, **kwargs: Any) -> Any:
         return []
 
+    async def text_page_rankings(self, question: str, filters: Any, **kwargs: Any) -> Any:
+        return {}
+
     async def read_sources(self, pages: Any, filters: Any) -> Any:
         self.reads.append(filters)
         return (
@@ -96,7 +99,11 @@ class Model:
         self.calls.append(data)
         if "files" in data:
             return json.dumps(
-                {"document_ids": ["document-a"], "search_expressions": [], "unresolved": []}
+                {
+                    "document_ids": [data["files"][0]["document_id"]],
+                    "search_expressions": [],
+                    "unresolved": [],
+                }
             )
         return json.dumps(
             {"unit_ids": [], "section_ids": [data["sections"][0]["section_id"]], "unresolved": []}
@@ -211,3 +218,229 @@ async def test_product_evidence_flow_unions_originals_without_calling_a_planner(
     assert len(outcome.citations) > 1
     assert outcome.diagnostics["wiki"]["model_calls"] == 0
     assert calls[0]["allow_planning"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_second", [False, True])
+async def test_file_rankings_are_batched_without_reordering(
+    fail_second: bool,
+) -> None:
+    class ConcurrentStore(Store):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pages += [
+                page.model_copy(
+                    update={
+                        "unit": page.unit.model_copy(
+                            update={
+                                "unit_id": "b-" + page.unit.unit_id,
+                                "document_id": "document-b",
+                                "source_chunk_ids": [
+                                    "b-" + uid for uid in page.unit.source_chunk_ids
+                                ],
+                            }
+                        )
+                    }
+                )
+                for page in self.pages
+            ]
+            self.queries: list[tuple[str, list[str]]] = []
+
+        async def catalog(self, filters: Any, compiler: str) -> Any:
+            return [
+                {"document_id": did, "title": "合成資料"} for did in ["document-a", "document-b"]
+            ]
+
+        async def text_page_rankings(self, question: str, filters: Any, **kwargs: Any) -> Any:
+            self.queries.append((question, kwargs["document_ids"]))
+            if fail_second and len(self.queries) == 2:
+                raise RuntimeError("合成の読み取り失敗")
+            return {
+                did: [p.unit.unit_id for p in reversed(self.pages) if p.unit.document_id == did]
+                for did in kwargs["document_ids"]
+            }
+
+    class TwoFiles(Model):
+        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+            data = json.loads(context)
+            if "files" in data:
+                self.calls.append(data)
+                return json.dumps(
+                    {
+                        "document_ids": [row["document_id"] for row in data["files"]],
+                        "search_expressions": ["合成の表現A", "合成の表現B"],
+                        "unresolved": [],
+                    }
+                )
+            return await super().generate(prompt, context, **kwargs)
+
+    store, model = ConcurrentStore(), TwoFiles()
+    search = WikiRetriever(
+        Settings(rag_wiki_search_enabled=True),
+        cast(Any, Oracle()),
+        cast(Any, Genai()),
+        store=cast(Any, store),
+        model=model,
+    )
+    if fail_second:
+        with pytest.raises(RuntimeError, match="合成の読み取り失敗"):
+            await search.search(
+                "合成の質問", profile_id="profile-a", filters={}, allow_planning=True
+            )
+        assert 2 <= len(store.queries) <= 3 and len(model.calls) == 1
+    else:
+        result = await search.search(
+            "合成の質問", profile_id="profile-a", filters={}, allow_planning=True
+        )
+        assert result.trace["status"] == "ready" and len(model.calls) == 2
+        assert store.queries == [
+            (text, ["document-a", "document-b"])
+            for text in ["合成の質問", "合成の表現A", "合成の表現B"]
+        ]
+        from app.rag.wiki_retrieval import interleave
+
+        groups = [
+            interleave(
+                [
+                    store.pages[:1] if did == "document-a" else [],
+                    [p for p in reversed(store.pages) if p.unit.document_id == did],
+                    [p for p in store.pages if p.unit.document_id == did],
+                ]
+            )
+            for did in ["document-a", "document-b"]
+        ]
+        assert [unit["path"] for unit in model.calls[1]["units"]] == [
+            page.unit.section_path for page in interleave(groups)
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["source", "profile"])
+async def test_reused_pages_are_revalidated_after_ranking(changed: str) -> None:
+    search, store, oracle, model = retriever()
+
+    async def rank(*args: Any, **kwargs: Any) -> Any:
+        if changed == "source":
+            store.ready = False
+        else:
+            oracle.enabled = False
+        return {}
+
+    store.text_page_rankings = rank
+    with pytest.raises(WikiSourceChanged):
+        await search.search("合成の質問", profile_id="profile-a", filters={}, allow_planning=True)
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_batched_ranking_does_not_start_read_planning() -> None:
+    import asyncio
+
+    search, store, _, model = retriever()
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def rank(*args: Any, **kwargs: Any) -> Any:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    store.text_page_rankings = rank
+    task = asyncio.create_task(
+        search.search("合成の質問", profile_id="profile-a", filters={}, allow_planning=True)
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled.is_set() and len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_read_planner_cannot_drop_every_candidate_from_a_located_file() -> None:
+    search, store, _, model = retriever()
+    page = store.pages[-1]
+    store.pages[-1] = page.model_copy(
+        update={"unit": page.unit.model_copy(update={"document_id": "document-b"})}
+    )
+
+    async def catalog(filters: Any, compiler: str) -> Any:
+        return [{"document_id": did, "title": "合成の資料"} for did in ["document-a", "document-b"]]
+
+    async def omit_all(prompt: str, context: str, **kwargs: Any) -> str:
+        data = json.loads(context)
+        if "files" in data:
+            return json.dumps(
+                {
+                    "document_ids": [row["document_id"] for row in data["files"]],
+                    "search_expressions": [],
+                    "unresolved": [],
+                }
+            )
+        return json.dumps({"unit_ids": [], "section_ids": [], "unresolved": []})
+
+    store.catalog = catalog
+    model.generate = omit_all
+    result = await search.search(
+        "合成の質問", profile_id="profile-a", filters={}, allow_planning=True
+    )
+    assert {c.document_id for c in result.chunks} == {"document-a", "document-b"}
+    assert "chunk-3" in {c.chunk_id for c in result.chunks}
+    assert result.trace["selected_units"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 429, 503])
+async def test_planning_retry_is_transient_only_and_shared_across_steps(status: int) -> None:
+    import httpx
+
+    search, _, _, model = retriever()
+    search.settings = search.settings.model_copy(update={"rag_llm_max_retries": 1})
+    original = model.generate
+    calls = 0
+
+    async def flaky(prompt: str, context: str, **kwargs: Any) -> str:
+        nonlocal calls
+        calls += 1
+        data = json.loads(context)
+        if calls == 1 or "units" in data:
+            request = httpx.Request("POST", "https://example.invalid/responses")
+            response = httpx.Response(status, request=request)
+            raise httpx.HTTPStatusError("合成の通信失敗", request=request, response=response)
+        result = await original(prompt, context, **kwargs)
+        assert isinstance(result, str)
+        return result
+
+    model.generate = flaky
+    with pytest.raises(httpx.HTTPStatusError):
+        await search.search("合成の質問", profile_id="profile-a", filters={}, allow_planning=True)
+    assert calls == (1 if status == 401 else 3)
+
+
+@pytest.mark.asyncio
+async def test_planning_retry_recovers_with_the_exact_same_scoped_input() -> None:
+    import httpx
+
+    search, _, _, model = retriever()
+    original = model.generate
+    attempts = []
+
+    async def flaky(prompt: str, context: str, **kwargs: Any) -> str:
+        attempts.append((prompt, context, kwargs))
+        if len(attempts) == 1:
+            request = httpx.Request("POST", "https://example.invalid/responses")
+            raise httpx.HTTPStatusError(
+                "合成の一時障害", request=request, response=httpx.Response(503, request=request)
+            )
+        result = await original(prompt, context, **kwargs)
+        assert isinstance(result, str)
+        return result
+
+    model.generate = flaky
+    result = await search.search(
+        "合成の質問", profile_id="profile-a", filters={}, allow_planning=True
+    )
+    assert attempts[0] == attempts[1]
+    assert result.trace["planning_retry_count"] == 1 and result.trace["model_calls"] == 3
+    assert len(result.chunks) == 4

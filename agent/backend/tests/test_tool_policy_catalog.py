@@ -74,6 +74,10 @@ def test_lists_mcp_connection_tools_with_the_default_decision(
     cancel = tools["nl2sql__nl2sql_cancel_requirement"]
     assert (cancel["default_decision"], cancel["default_reason"]) == ("ask", "default_mode")
     assert tools["nl2sql__nl2sql_get_job"]["default_decision"] == "allow"
+    metadata = tools["nl2sql__nl2sql_get_profile_schema"]
+    assert metadata["default_decision"] == "allow"
+    assert metadata["default_reason"] == "read_only"
+    assert metadata["permission_level"] == "read" and metadata["side_effects"] is False
     # RAG の標準の接続は読み取り専用（承認なし）。
     assert tools["rag__rag_search"]["default_decision"] == "allow"
     connections = {item["server_id"]: item for item in data["connections"]}
@@ -83,7 +87,7 @@ def test_lists_mcp_connection_tools_with_the_default_decision(
         "configured": True,
         # 標準の接続はツールの注釈を常に使う（#1832）。
         "trust_tool_annotations": True,
-        "tool_count": 6,
+        "tool_count": 7,
         "error": None,
     }
 
@@ -99,6 +103,7 @@ def test_default_mode_deny_changes_the_default_decision(
 
     assert tools["nl2sql__nl2sql_cancel_requirement"]["default_decision"] == "deny"
     assert tools["nl2sql__nl2sql_query"]["default_decision"] == "allow"
+    assert tools["nl2sql__nl2sql_get_profile_schema"]["default_decision"] == "allow"
     assert tools["rag__rag_search"]["default_decision"] == "allow"
 
 

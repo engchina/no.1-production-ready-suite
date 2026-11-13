@@ -29,10 +29,15 @@ env:
 
 jobs:
   oracle:
-    name: Oracle integration
+    name: Oracle integration (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # cleanup は同じ schema の行を消すため、RAG は独立した DB container で分割する。
+        shard: ${{ fromJSON(inputs.product == 'rag' && '[0,1]' || '[0]') }}
     runs-on: ubuntu-24.04
-    # 実測で job 全体は約 12〜15 分。image の取得は通常 1〜2 分だが、registry が遅いと 13 分以上かかる
-    # ことがある（1 回 8 分まで、3 回まで）ので、その分も見込む。
+    # RAG のテストは独立 DB に分割する。上限には registry の遅延と image 取得の retry
+    # （1 回 8 分、最大 3 回）も含める。通常の所要時間は CI の step と --durations で確認する。
     timeout-minutes: 45
     defaults:
       run:
@@ -58,6 +63,7 @@ jobs:
       # 標準版の image と DB の初期作成に必要な空きを確保する（#4014）。
       # 使い捨ての hosted runner の未使用 SDK だけを対象にし、Python・uv・Docker は保持する。
       - name: Free disk space
+        if: inputs.product == 'rag'
         working-directory: .
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -107,6 +113,7 @@ jobs:
         if: inputs.product == 'rag'
         env:
           RAG_TEST_REQUIRE_ORACLE: "1"
+          ORACLE_TEST_SHARD_INDEX: ${{ matrix.shard }}
         run: |
           set -a
           # shellcheck source=/dev/null
@@ -114,7 +121,9 @@ jobs:
           set +a
           mapfile -t files < <(grep -rlE --include='test_*.py' 'oracle_db|_oracle_test_db' tests | sort)
           printf '%s\n' "${files[@]}"
-          uv run pytest -n auto -rs --junitxml="${RUNNER_TEMP}/junit.xml" "${files[@]}"
+          export PYTHONPATH="${GITHUB_WORKSPACE}/.github/scripts${PYTHONPATH:+:${PYTHONPATH}}"
+          uv run pytest -p oracle_ci_shard --oracle-shard-count 2 --oracle-shard-index "${ORACLE_TEST_SHARD_INDEX}" \
+            -n auto -rs --durations=20 --junitxml="${RUNNER_TEMP}/junit.xml" "${files[@]}"
           python3 ../../.github/scripts/pytest-skip-gate.py "${RUNNER_TEMP}/junit.xml"
 
       # NL2SQL: Oracle の明示 opt-in のテスト。Free に無い ADB の機能を使うもの（Select AI の
@@ -136,6 +145,7 @@ jobs:
           set +a
           uv run pytest -rs --junitxml="${RUNNER_TEMP}/junit.xml" \
             tests/test_domain_management_oracle_live.py \
+            tests/test_oracle_select_preparation_oracle_live.py \
             tests/test_nl2sql_admin_audit_oracle_live.py \
             tests/test_nl2sql_db_admin_chat_history_oracle_live.py \
             tests/test_nl2sql_history_sort_oracle_live.py \

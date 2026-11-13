@@ -21,7 +21,7 @@ from test_sql_chat import ChatFixture, request, run
 from test_sql_chat import chat as chat  # noqa: F401 - fixture
 
 from app.features.mcp import tools as mcp_tools
-from app.features.nl2sql.models import JobStatus
+from app.features.nl2sql.models import JobStatus, QueryResults
 from app.security.service import get_security_service, reset_security_service
 
 
@@ -95,11 +95,12 @@ def test_db_admin_chat_turn_gets_notice_and_follow_up_context_does_not(
 
 def _job(status: JobStatus, notice: str | None) -> Any:
     result = SimpleNamespace(
+        engine_meta={},
         safety=SimpleNamespace(blocked_reason="", warnings=[], is_safe=True, safety_checked=True),
         generated_sql="SELECT 1 FROM DUAL",
         executable_sql="SELECT 1 FROM DUAL",
         explanation="説明",
-        results=SimpleNamespace(
+        results=QueryResults(
             columns=[], rows=[], returned_count=0, total=0, has_more=False, truncated=False
         ),
         history_id="h-1",
@@ -127,7 +128,9 @@ def test_mcp_returns_notice_only_to_api_key_callers() -> None:
     assert mcp_tools.called_with_api_key(_request_with()) is False
 
     done = _job(JobStatus.DONE, "注意書き")
-    assert mcp_tools._job_result(done, include_notice=True).notice == "注意書き"
+    output = mcp_tools._job_result(done, include_notice=True)
+    assert output.notice == "注意書き"
+    assert output.column_metadata == []
     assert mcp_tools._job_result(done).notice is None
     # 答えていない job（実行中・失敗）には付けない。
     assert (
