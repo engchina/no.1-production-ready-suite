@@ -104,7 +104,8 @@ async def test_reasonable_inability_is_judged_even_without_standard_answer() -> 
     assert len(captured) == 1
     data = captured[0]["evaluation_input"]
     assert data["response_expectations"][0]["expected_decisions"] == ["hold"]
-    assert "確認できません" in data["response_expectations"][0]["answer_text"]
+    assert "確認できません" in data["actual_responses"][0]["answer_text"]
+    assert set(data["response_expectations"][0]) == {"turn", "expected_decisions"}
     assert "outcome" not in data["response_expectations"][0]
     assert metrics.response_decision_accuracy == 1
     assert metrics.answer_correctness is None

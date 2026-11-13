@@ -569,7 +569,13 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
     assert len(judge.calls) == 1
     call = judge.calls[0]
     assert call["trace_id"] == pipeline.trace_ids[0]
-    assert call["evaluation_input"] == {**EVALUATION_INPUT, "response_expectations": []}
+    assert call["evaluation_input"] == {
+        **EVALUATION_INPUT,
+        "response_expectations": [],
+        "actual_responses": [
+            {"question": "合成の質問", "answer_text": EVALUATION_INPUT["answer_text"]}
+        ],
+    }
     assert call["standard_answer"] == "合成の標準回答"
     assert call["timeout_seconds"] == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
     assert metrics.answer_correctness == 1
@@ -655,7 +661,12 @@ async def test_judgement_is_unavailable_without_answer_record_input() -> None:
     # 回答の記録の入力が無いときは、質問と回答の本文だけを渡す。
     evaluation_input = judge.calls[0]["evaluation_input"]
     assert isinstance(evaluation_input, dict)
-    assert set(evaluation_input) == {"question", "answer_text", "response_expectations"}
+    assert set(evaluation_input) == {
+        "question",
+        "answer_text",
+        "actual_responses",
+        "response_expectations",
+    }
     assert metrics.metric_case_counts["answer_correctness"] == 1
 
 
