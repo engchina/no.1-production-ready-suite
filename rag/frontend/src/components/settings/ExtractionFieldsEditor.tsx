@@ -5,6 +5,7 @@ import {
   SelectField,
   type SelectFieldOption,
   TextField,
+  TextareaField,
   TimedLoadingState,
 } from "@production-ready/ui";
 import type { UseMutationResult } from "@tanstack/react-query";
@@ -247,8 +248,9 @@ export function ExtractionFieldsForm({
                     error={error ? t(`settings.extractionFields.error.${error}`) : undefined}
                     onValueChange={(name) => edit(row.key, { name })}
                   />
-                  <TextField
+                  <TextareaField
                     id={`${row.key}-description`}
+                    rows={3}
                     width="full"
                     label={t("settings.extractionFields.fieldDescription")}
                     value={row.description}

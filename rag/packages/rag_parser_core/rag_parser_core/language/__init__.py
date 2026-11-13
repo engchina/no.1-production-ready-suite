@@ -107,6 +107,8 @@ class FieldSpec:
     max_chars: int = MAX_ITEM_CHARS
     # 数値マッピングの値の下限（除数に使う倍率は正の数）。
     min_value: int = 0
+    # 編集欄で段落を扱うか。値・検証・言語資源の hash には含めない。
+    multiline: bool = False
 
 
 def _fields(section: str, kind: FieldKind, *keys: str, **options: Any) -> tuple[FieldSpec, ...]:
@@ -251,9 +253,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         _T,
         "default_document_type",
         "whole_document",
-        "graph_contains",
-        "graph_document",
-        "graph_section",
         "main_part",
         "original_supplement",
         "remarks",
@@ -273,6 +272,14 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "field_abbrev",
         "field_category",
         "field_revision_date",
+    ),
+    *_fields(
+        "labels",
+        _T,
+        "graph_contains",
+        "graph_document",
+        "graph_section",
+        multiline=True,
     ),
     *_fields("labels", _P, "label_brackets"),
     # 表・図の内容のラベル（chunk の本文と検索の文に入る）。変えたら文書の分割し直しが要る。
@@ -388,20 +395,11 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "rules_section",
         "applications_section",
         "quote_only_section",
-        "quote_only_note",
         "gaps_section",
         "unverified_section",
         "deadline_section",
         "confirmations_section",
-        "confirmation_only_summary",
-        "neutral_summary",
-        "insufficient_evidence_summary",
-        "empty_search_guidance",
-        "abstention_guidance",
-        "answer_evidence_budget_limited",
-        "answer_part_generation_failed",
         "citation_prefix",
-        "deadline_summary",
         "operation_steps_heading",
         "confirmation_steps_heading",
         "page_location",
@@ -411,15 +409,31 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "quote_template",
         "subquestion_heading_template",
         "guide_notes_section",
+        "table_source_column",
+        "document_summary_location",
+        ingest=False,
+        max_chars=MAX_SENTENCE_CHARS,
+    ),
+    *_fields(
+        "answer_labels",
+        _T,
+        "quote_only_note",
+        "confirmation_only_summary",
+        "neutral_summary",
+        "insufficient_evidence_summary",
+        "empty_search_guidance",
+        "abstention_guidance",
+        "answer_evidence_budget_limited",
+        "answer_part_generation_failed",
+        "deadline_summary",
         "guide_notes_note_template",
         "guide_handoff_template",
         "guide_approval_template",
         "guide_acquisition_incomplete_template",
-        "table_source_column",
         "table_above_note",
-        "document_summary_location",
         ingest=False,
         max_chars=MAX_SENTENCE_CHARS,
+        multiline=True,
     ),
     # 回答の検査の手がかり（確定の操作・限定の語と、引用・手順の形の手がかり）。
     *_fields(

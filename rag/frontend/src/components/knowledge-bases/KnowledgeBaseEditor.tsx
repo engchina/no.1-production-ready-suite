@@ -13,6 +13,7 @@ import {
   SaveErrorBanner,
   StatusBadge,
   TextField,
+  TextareaField,
 } from "@production-ready/ui";
 import { Database, Library, RotateCcw, Save } from "lucide-react";
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -251,8 +252,9 @@ export function KnowledgeBaseEditor({
                   autoFocus={!initial}
                   inputClassName={isDefault || isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
-                <TextField
+                <TextareaField
                   id={DESCRIPTION_FIELD_ID}
+                  rows={3}
                   className="col-span-full"
                   width="full"
                   label={t("knowledgeBases.field.description")}
@@ -266,7 +268,7 @@ export function KnowledgeBaseEditor({
                   helper={t("knowledgeBases.field.descriptionHelper")}
                   error={descriptionError ?? undefined}
                   maxLength={DESCRIPTION_MAX_LENGTH}
-                  inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
+                  textareaClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
               </FormGrid>
               {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}

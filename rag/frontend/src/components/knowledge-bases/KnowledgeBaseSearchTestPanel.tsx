@@ -11,13 +11,12 @@ import {
   CardHeader,
   CardTitle,
   FieldActionRow,
-  TextField,
+  TextareaField,
   RunStopButton,
 } from "@production-ready/ui";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { type RetrievedChunk } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
-import { isSubmitEnter } from "@/lib/keyboard";
 import { citationCountLabel } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 
@@ -149,8 +148,7 @@ export function KnowledgeBaseSearchTestPanel({
           />
         ) : (
           <>
-            {/* 検索テストと停止は同じボタン。実行中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
-                主な問い合わせの行なので入力欄とボタンを同じ lg にする（README §4「操作部品の高さと幅」、#613）。 */}
+            {/* 質問は改行でき、検索テストと停止は同じボタンから操作する。 */}
             <FieldActionRow
               actions={
                 <RunStopButton
@@ -166,20 +164,15 @@ export function KnowledgeBaseSearchTestPanel({
                 />
               }
             >
-              {/* 入力欄の Enter は実行だけ（実行中の Enter は submit が無視する）。 */}
-              <TextField
+              <TextareaField
                 id={inputId}
                 label={t("knowledgeBases.searchTest.title")}
                 labelHidden
                 width="full"
-                size="lg"
+                rows={3}
                 value={query}
                 onValueChange={setQuery}
-                onKeyDown={(e) => {
-                  if (isSubmitEnter(e)) void submit();
-                }}
                 placeholder={t("knowledgeBases.searchTest.placeholder")}
-                leadingIcon={SearchIcon}
               />
             </FieldActionRow>
 

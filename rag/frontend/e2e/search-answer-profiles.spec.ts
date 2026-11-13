@@ -1,3 +1,4 @@
+import { editThreeLineProse } from "./_multiline-prose";
 import AxeBuilder from "@axe-core/playwright";
 
 import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
@@ -1587,7 +1588,7 @@ test("固定返信は公開済み全体値を継承し、二欄を別々に戻�
   const labels = { insufficient_evidence_summary: "公開済みの合成要約。", empty_search_guidance: "公開済みの合成案内。", abstention_guidance: "全体の別案内。" };
   const effective = { answer_labels: labels, answer_check_cues: { related_stopwords: ["全体の語"] }, question_cues: { subquestion_reference_followers: ["合成の印"] } };
   const fields = [
-    ...Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 })),
+    ...Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", multiline: true, choices: [], ingest: false, max_chars: 2000 })),
     { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
     { section: "question_cues", key: "subquestion_reference_followers", kind: "words", choices: [], ingest: false, max_chars: 40 },
   ];
@@ -1649,7 +1650,7 @@ test("固定返信は公開済み全体値を継承し、二欄を別々に戻�
 test("固定返信の読込みと再試行は折り畳みの外に出し、再取得失敗でも編集中の値を失わない", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockDefaultSearchAnswerProfile(page, () => {});
   const labels = { insufficient_evidence_summary: "合成の公開済み要約。", empty_search_guidance: "合成の公開済み案内。" };
-  const fields = Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 }));
+  const fields = Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", multiline: true, choices: [], ingest: false, max_chars: 2000 }));
   let release = () => {};
   const pending = new Promise<void>(resolve => { release = resolve; });
   let fail = false;
@@ -1713,7 +1714,7 @@ async function mockProfileLanguagePackSuccess(page: Page) {
     answer_check_cues: { related_stopwords: ["合成の語"] },
   };
   const fields = [
-    ...Object.keys(effective.answer_labels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 1000 })),
+    ...Object.keys(effective.answer_labels).map(key => ({ section: "answer_labels", key, kind: "text", multiline: true, choices: [], ingest: false, max_chars: 1000 })),
     { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
   ];
   await page.route("**/api/settings/language-pack", route => route.fulfill({ json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "synthetic-published" }, error_messages: [], warning_messages: [] } }));
@@ -1728,7 +1729,7 @@ test("固定返信の保存済みBOMは保持し、NEL編集と個別の継承�
   await mockDefaultSearchAnswerProfile(page, value => { body = value; }, {}, { language_pack: { ...unrelated, answer_labels: { ...unrelated.answer_labels, empty_search_guidance: savedGuidance } } });
   const effective = { answer_labels: globalLabels, answer_check_cues: { related_stopwords: ["全体の語"] } };
   const fields = [
-    ...Object.keys(globalLabels).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 })),
+    ...Object.keys(globalLabels).map(key => ({ section: "answer_labels", key, kind: "text", multiline: true, choices: [], ingest: false, max_chars: 2000 })),
     { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
   ];
   await page.route("**/api/settings/language-pack", route => route.fulfill({ json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "synthetic-BOM-published" }, error_messages: [], warning_messages: [] } }));
@@ -1787,4 +1788,51 @@ test("固定返信の保存済みBOMは保持し、NEL編集と個別の継承�
   await expectNoPageOverflow(page);
   await section.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("empty-evidence-saved-BOM-restored.png"), fullPage: true });
+});
+
+test("プロファイルの説明は3行で編集し、Enterで保存せず内部改行を保存して再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const updates: Record<string, unknown>[] = [];
+  await mockDefaultSearchAnswerProfile(page, (body) => updates.push(body));
+  await mockProfileLanguagePackSuccess(page);
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const description = page.getByRole("textbox", { name: "説明", exact: true });
+  const text = await editThreeLineProse(description);
+  expect(updates).toHaveLength(0);
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => updates.at(-1)?.description).toBe(text);
+  await page.reload();
+  await expect(description).toHaveValue(text);
+  await expectNoPageOverflow(page);
+  await description.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("multiline-profile-description.png") });
+});
+
+test("固定返信の本文は3行で編集し、改行を保存して再表示し全体へ復帰できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const updates: Record<string, unknown>[] = [];
+  await mockDefaultSearchAnswerProfile(page, (body) => updates.push(body));
+  await mockProfileLanguagePackSuccess(page);
+  await page.goto("/search-answer-profiles?id=bv-default");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の説明。");
+  const section = page.getByTestId("empty-evidence-response-settings");
+  const summary = section.getByLabel("根拠不足の前置き", { exact: true });
+  const guidance = section.getByLabel("検索で根拠がないときの確認案内", { exact: true });
+  const text = await editThreeLineProse(summary);
+  await expect(guidance).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(guidance).toHaveAttribute("rows", "3");
+  expect(updates).toHaveLength(0);
+  const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
+  await save.click();
+  await expect.poll(() => updates.at(-1)?.config).toMatchObject({ language_pack: { answer_labels: { insufficient_evidence_summary: text } } });
+  await page.reload();
+  await expect(summary).toHaveValue(text);
+  await expect(section.getByTestId("empty-evidence-response-preview")).toHaveJSProperty("textContent", text + "合成の確認案内。");
+  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).click();
+  await save.click();
+  await expect.poll(() => (updates.at(-1)?.config as { language_pack?: unknown })?.language_pack).toEqual({});
+  await page.reload();
+  await expect(summary).toHaveValue("合成の前置き。");
+  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(2);
+  await expectNoPageOverflow(page);
+  await section.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("multiline-fixed-response-profile.png") });
 });

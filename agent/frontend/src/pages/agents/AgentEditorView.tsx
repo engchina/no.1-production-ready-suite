@@ -689,8 +689,9 @@ export function AgentEditorView({
                         setNameError(null);
                       }}
                     />
-                    <TextField
+                    <TextareaField
                       id={`${fieldId}-agent-description`}
+                      rows={3}
                       label={t("agent.description")}
                       width="full"
                       className="col-span-full"

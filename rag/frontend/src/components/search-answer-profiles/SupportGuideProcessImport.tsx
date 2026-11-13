@@ -323,8 +323,9 @@ export function SupportGuideProcessImport({
           </>
         ) : (
           <>
-            <TextField
+            <TextareaField
               id="support-guide-process-question"
+              rows={3}
               label={t("supportGuides.processImport.question")}
               width="full"
               required

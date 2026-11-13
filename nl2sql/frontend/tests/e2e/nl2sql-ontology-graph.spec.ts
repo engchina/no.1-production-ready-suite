@@ -369,9 +369,11 @@ async function expectQuestionActionLayoutWithClear(page: Page, playground: Locat
   expect(inputBox).not.toBeNull();
   expect(runBox).not.toBeNull();
   expect(clearBox).not.toBeNull();
-  // 質問の行は lg（40px）。タッチ端末（pointer: coarse）では 44px（#613）。
+  // 質問は3行の本文欄。操作ボタンは lg を維持して欄の下端にそろえる。
   const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
-  for (const box of [inputBox, runBox, clearBox]) {
+  await expect(input).toHaveAttribute("rows", "3");
+  expect(inputBox!.height).toBeGreaterThan(runBox!.height);
+  for (const box of [runBox, clearBox]) {
     expect(box!.height).toBeGreaterThanOrEqual(coarse ? 43 : 39);
     expect(box!.height).toBeLessThanOrEqual(coarse ? 45 : 41);
   }
@@ -380,8 +382,8 @@ async function expectQuestionActionLayoutWithClear(page: Page, playground: Locat
   if (viewportWidth >= 640) {
     expect(runBox!.x).toBeGreaterThan(inputBox!.x + inputBox!.width);
     expect(clearBox!.x).toBeGreaterThan(runBox!.x + runBox!.width);
-    expect(Math.abs(runBox!.y - inputBox!.y)).toBeLessThanOrEqual(1);
-    expect(Math.abs(clearBox!.y - inputBox!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(runBox!.y + runBox!.height - inputBox!.y - inputBox!.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(clearBox!.y + clearBox!.height - inputBox!.y - inputBox!.height)).toBeLessThanOrEqual(1);
     return;
   }
 
@@ -906,6 +908,38 @@ test("質問接地グラフで選択した物理オブジェクトの ER 詳細�
   await expect(playground.getByTestId("ontology-node-card-employee-department-id")).toBeVisible();
   await expect(details).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+test("接地確認の長い質問は3行で折り返し、Enterでは実行せずボタンで1回だけ送信する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockApi(page);
+  const requests: Record<string, unknown>[] = [];
+  await page.route("**/api/nl2sql/profiles/*/ontology-context/search", route => {
+    requests.push(route.request().postDataJSON());
+    return fulfillJson(route, { profile_id: "default", profile_view_id: "v", ontology_revision_id: "rev1", hits: [], nodes: [], edges: [], mermaid: "", llm_markdown: "", context_hash: "synthetic-context" });
+  });
+  await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+  const input = playground.getByTestId("ontology-playground-question");
+  await expect(input).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(input).toHaveAttribute("rows", "3");
+  const first = "合成の対象と関連する項目について、確認条件を詳しく説明してください。".repeat(7);
+  await input.fill(first);
+  await input.press("End");
+  await input.press("Enter");
+  await input.pressSequentially("合成の末尾。");
+  await input.dispatchEvent("keydown", { key: "Enter", isComposing: true });
+  await expect(input).toHaveValue(first + "\n合成の末尾。");
+  expect(requests).toEqual([]);
+  await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
+  const dimensions = await input.evaluate(el => ({ horizontal: el.scrollWidth <= el.clientWidth + 1, vertical: el.scrollHeight > el.clientHeight, resize: getComputedStyle(el).resize }));
+  expect(dimensions).toEqual({ horizontal: true, vertical: true, resize: "vertical" });
+  await input.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("ontology-long-question.png") });
+  await playground.getByTestId("ontology-playground-server-search").click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({ question: first + "\n合成の末尾。" });
 });
 
 test("質問を接地すると分類とグラフ強調が表示され、入力削除とクリアで reset できる", { tag: "@responsive" }, async ({

@@ -2641,6 +2641,7 @@ export interface LanguagePackField {
   max_chars: number;
   /** 数値マッピングの値の下限。 */
   min_value?: number;
+  multiline?: boolean;
 }
 
 export type LanguagePackValue = string[] | string;

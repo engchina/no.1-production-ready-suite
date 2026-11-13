@@ -67,3 +67,34 @@ test("スキルの編集指示は所属カードの全幅を使う", { tag: "@re
     }
   }
 });
+
+test("スキルの長い説明は3行で折り返し、Enterで保存せず内部改行を保持する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  await page.goto("/skills?id=new");
+  await page.locator("#skill-id").fill("synthetic-multiline");
+  await page.locator("#skill-name").fill("合成スキル M");
+  await page.locator("#skill-instructions").fill("合成の指示。");
+  const description = page.locator("#skill-description");
+  await expect(description).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(description).toHaveAttribute("rows", "3");
+  await expect(description).toHaveCSS("resize", "vertical");
+  const text = "合成の説明を折り返して読みます。".repeat(24);
+  await description.fill(text);
+  await description.press("End");
+  await description.press("Enter");
+  await description.pressSequentially("合成の最終行。");
+  const expected = `${text}\n合成の最終行。`;
+  await expect(description).toHaveValue(expected);
+  expect(mockApi.lastRequest("POST", "/api/skills")).toBeUndefined();
+  await description.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  expect(await description.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  expect(await description.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  await expectNoPageHorizontalOverflow(page);
+  await description.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("skill-multiline-description.png"), fullPage: true });
+  await page.getByRole("button", { name: "作成", exact: true }).click();
+  await expect.poll(() => (mockApi.lastRequest("POST", "/api/skills")?.body as { description?: string } | undefined)?.description).toBe(expected);
+  await expect(page.locator("#skill-description")).toHaveValue(expected);
+  await page.goto("/skills?id=synthetic-multiline");
+  await page.reload();
+  await expect(page.locator("#skill-description")).toHaveValue(expected);
+});

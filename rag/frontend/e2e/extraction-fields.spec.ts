@@ -1,3 +1,4 @@
+import { editThreeLineProse } from "./_multiline-prose";
 import { expect, type Page, type Route, test } from "./fixtures/test";
 
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
@@ -239,4 +240,21 @@ test("数値でない値の条件は誤りを出して検索しない", async ({
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "項目" })).toBeFocused();
   expect(bodies).toEqual([]);
+});
+
+test("抽出する項目の説明は3行で編集し、Enterで保存せず内部改行を保存して再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const puts = await mockKnowledgeBase(page);
+  await page.goto("/knowledge-bases/kb-1");
+  const section = page.getByTestId("knowledge-base-extraction-fields");
+  await section.getByRole("button", { name: "既定をもとに項目を定義" }).click();
+  const description = section.getByRole("textbox", { name: "説明", exact: true }).first();
+  const text = await editThreeLineProse(description);
+  expect(puts).toHaveLength(1);
+  await section.getByRole("button", { name: "項目の定義を保存" }).click();
+  await expect.poll(() => puts.at(-1)).toMatchObject({ fields: [{ description: text }] });
+  await page.reload();
+  await expect(description).toHaveValue(text);
+  await expectNoPageOverflow(page);
+  await section.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("multiline-extraction-description.png") });
 });

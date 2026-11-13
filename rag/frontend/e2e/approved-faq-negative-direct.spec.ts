@@ -39,7 +39,7 @@ test.describe("登録済みQ&A の当てはめない質問とそのまま返す�
     await expectNoPageOverflow(page);
   });
 
-  test("追加のときに当てはめない質問を 1 行に 1 つ送り、上限を超えると欄の下に出して送らない", async ({ page }) => {
+  test("追加のときに当てはめない質問を 1 行に 1 つ送り、上限を超えると欄の下に出して送らない", { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockFaqScopeApi(page, { records: [] });
     const added: Record<string, unknown>[] = [];
     await page.route("**/api/search-answer-profiles/bv-1/approved-faq", async (route) => {
@@ -49,7 +49,14 @@ test.describe("登録済みQ&A の当てはめない質問とそのまま返す�
     });
 
     await page.goto("/search-answer-profiles?id=bv-1");
-    await page.locator("#approved-faq-question").fill("合成の質問");
+    const question = page.locator("#approved-faq-question");
+    await expect(question).toHaveJSProperty("tagName", "TEXTAREA");
+    await expect(question).toHaveAttribute("rows", "3");
+    await question.fill("合成の質問。");
+    await question.press("End");
+    await question.press("Enter");
+    await question.pressSequentially("合成の追加条件。");
+    expect(added).toEqual([]);
     await page.locator("#approved-faq-answer").fill("合成の回答");
     const negative = page.locator("#approved-faq-negative");
     await expect(negative).toHaveAccessibleDescription(/この Q&A を当てたくない質問の例/);
@@ -62,6 +69,8 @@ test.describe("登録済みQ&A の当てはめない質問とそのまま返す�
     await page.getByRole("button", { name: "追加", exact: true }).click();
     await expect.poll(() => added.length).toBe(1);
     expect(added[0].negative_questions).toEqual([NEGATIVE, "合成の設定 A を止めたい"]);
+    expect(added[0]).toMatchObject({ question: "合成の質問。\n合成の追加条件。" });
+    await page.screenshot({ path: testInfo.outputPath("faq-question-multiline.png") });
     await expect(negative).toHaveValue("");
     await expectNoPageOverflow(page);
   });

@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
-import { Button, Fieldset, FormGrid, TextField } from "@production-ready/ui";
+import { Button, Fieldset, FormGrid, TextareaField, TextField } from "@production-ready/ui";
 
 import type { EvaluationClarificationAnswer } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -110,8 +110,9 @@ export function ClarificationAnswersField({
                   error={invalid ? t("evaluation.clarification.answerRequired") : undefined}
                   onValueChange={(value) => update(item.key, { options: value })}
                 />
-                <TextField
+                <TextareaField
                   id={`${item.key}-other`}
+                  rows={3}
                   label={t("evaluation.clarification.otherText")}
                   helper={t("evaluation.clarification.otherTextHelper")}
                   maxLength={2000}
