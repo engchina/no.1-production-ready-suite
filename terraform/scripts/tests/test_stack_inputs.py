@@ -50,7 +50,7 @@ class StackInputTests(unittest.TestCase):
         )
 
     def plan(
-        self, workload: str | None = None, *, region: str | None = None
+        self, workload: str | None = None, *, region: str | None = "us-chicago-1"
     ) -> subprocess.CompletedProcess[str]:
         args = ["plan", "-input=false", "-lock=false", "-no-color"]
         if workload is not None:
@@ -72,7 +72,7 @@ class StackInputTests(unittest.TestCase):
         result = self.plan()
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn('workload = "LH"', result.stdout)
-        self.assertRegex(result.stdout, r'region\s*= "ap-osaka-1"')
+        self.assertRegex(result.stdout, r'region\s*= "us-chicago-1"')
 
     def test_supported_workloads(self) -> None:
         for workload in ("OLTP", "AJD", "LH"):
@@ -91,6 +91,19 @@ class StackInputTests(unittest.TestCase):
         result = self.plan("INVALID")
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("Invalid value for variable", result.stdout)
+
+    def test_region_has_no_default_and_is_required(self) -> None:
+        schema = (ROOT / "terraform/stack/schema.yaml").read_text()
+        variables = (ROOT / "terraform/stack/variables.tf").read_text()
+        self.assertNotRegex(_schema_variable(schema, "region"), r"(?m)^\s*default:")
+        self.assertNotRegex(
+            _terraform_variable(variables, "region"), r"(?m)^\s*default\s*="
+        )
+        self.assertIn("visible: false", _schema_variable(schema, "region"))
+        result = self.plan(region=None)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("No value for required variable", result.stdout)
+        self.assertIn('"region"', result.stdout)
 
     def test_supported_regions(self) -> None:
         for region in ("ap-osaka-1", "ap-tokyo-1", "us-chicago-1"):

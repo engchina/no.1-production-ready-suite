@@ -170,7 +170,6 @@ variables:
     type: oci:identity:region:name
     required: true
     visible: false
-    default: "ap-osaka-1"
 
   compartment_ocid:
     type: oci:identity:compartment:id
