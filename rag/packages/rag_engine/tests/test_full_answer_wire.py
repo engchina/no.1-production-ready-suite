@@ -146,3 +146,21 @@ def test_inline_citations_do_not_split_a_sentence_or_a_table_row():
     assert result.text.startswith("値は12 Vです。\n根拠：")
     assert "| 項目 | 値 |\n| --- | --- |\n| A | 12 V |\n根拠：" in result.text
     assert len(result.citation_lines) == 2
+
+
+def test_literal_source_line_does_not_shift_the_bound_citation_ordinal():
+    units, unit = catalog()
+    wire = full_answer_model(units).model_validate(
+        {
+            "answer_body": "根拠：本文に書かれたラベル\n\n入力電圧は12 Vです。[C1]",
+            "response_kind": "answered",
+            "confidence": "high",
+            "citations": [{"unit_ids": [unit]}],
+        }
+    )
+    draft = canonical_full_answer(wire, units)
+    checked, _ = grounded.verify("入力電圧は？", draft, [units.snapshots[0].span()])
+    rendered = render_full_answer(draft, checked)
+    assert rendered.citation_lines[0] == {}
+    assert rendered.citation_lines[1]["scope_source_ids"] == ["child-a"]
+    assert rendered.text.count(grounded.answer_labels().citation_prefix) == 2

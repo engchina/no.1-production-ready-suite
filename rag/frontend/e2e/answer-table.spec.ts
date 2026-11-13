@@ -91,7 +91,7 @@ function citation(document: string, file: string, page: number, lines: number[])
   };
 }
 
-async function ask(page: Page, answerText = ANSWER) {
+async function ask(page: Page, answerText = ANSWER, firstFile = "文書 A.pdf") {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -122,7 +122,7 @@ async function ask(page: Page, answerText = ANSWER) {
         })}\n\n`,
         `event: delta\ndata: ${JSON.stringify({ text: answerText })}\n\n`,
         `event: citations\ndata: ${JSON.stringify([
-          citation("doc-a", "文書 A.pdf", 3, [1, 3, 4, 5]),
+          citation("doc-a", firstFile, 3, [1, 3, 4, 5]),
           citation("doc-b", "文書 B.pdf", 5, [2]),
         ])}\n\n`,
         `event: done\ndata: ${JSON.stringify({ trace_id: "trace-table" })}\n\n`,
@@ -142,14 +142,23 @@ async function ask(page: Page, answerText = ANSWER) {
 
 test.describe("回答の本文の表（issue 4734・4812・4822）", { tag: "@responsive" }, () => {
   test("定型の節が無い完成本文の根拠を開ける", async ({ page }, testInfo) => {
-    const answer = await ask(page, "保存年数は5年です。\n根拠：文書 A.pdf p.3");
+    await page.route("**/api/feedback/current?**", route => route.fulfill({ json: envelope(null) }));
+    await page.route("**/api/documents/doc-a/content**", route => route.fulfill({ contentType: "text/plain; charset=utf-8", body: CITATION_TEXT }));
+    await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill({ json: envelope({
+      revision: "synthetic-v1", anchor_status: "exact", section_path: [], scope: "paragraph",
+      blocks: [{ id: "anchor", text: CITATION_TEXT, offset: 0, highlights: [[0, CITATION_TEXT.length]], cited: true }],
+      previous_cursor: null, next_cursor: null, outline: [],
+    }) }));
+    const answer = await ask(page, "保存年数は5年です。\n根拠：synthetic-a.txt p.3", "synthetic-a.txt");
     await expect(answer).toContainText("保存年数は5年です。");
-    const citation = answer.getByRole("button", { name: "[1] 根拠：文書 A.pdf p.3 の原文を開く", exact: true });
+    const citation = answer.getByRole("button", { name: "[1] 根拠：synthetic-a.txt p.3 の原文を開く", exact: true });
     await expect(citation).toBeVisible();
     await citation.click();
     const source = page.getByRole("dialog", { name: "回答の根拠" });
     await expect(source).toBeVisible();
-    await expect(source).toContainText(CITATION_TEXT);
+    const highlight = source.getByTestId("evidence-reader").locator("mark");
+    await expect(highlight).toHaveText(CITATION_TEXT);
+    await expect(highlight).toBeInViewport();
     await page.screenshot({ path: testInfo.outputPath("full-answer-citation.png") });
     await page.keyboard.press("Escape");
     await expect(citation).toBeFocused();

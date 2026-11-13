@@ -112,7 +112,11 @@ def render_full_answer(draft: GroundedDraft, checked: Sequence[Any]) -> Any:
             return ""
 
         # 表の行や文末の句読点を途中で割らず、原文参照だけを行・表の後ろへ出す。
-        output.append(CITATION_MARKER.sub(replace_marker, line))
+        displayed = CITATION_MARKER.sub(replace_marker, line)
+        output.append(displayed)
+        if displayed.strip().startswith(grounded.answer_labels().citation_prefix):
+            # 本文に書かれた出典の見た目は、選択した ID に結ばない。後続の正式な引用番号だけを保つ。
+            lines.append({})
         if not table_line:
             append_references()
     append_references()
