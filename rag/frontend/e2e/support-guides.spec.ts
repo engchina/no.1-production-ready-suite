@@ -1,3 +1,4 @@
+import { editThreeLineProse } from "./_multiline-prose";
 import { readFile } from "node:fs/promises";
 import { expect, type Locator, type Page, type Route, test } from "./fixtures/test";
 import { findClippedPlaceholders, findToolbarMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
@@ -1086,7 +1087,7 @@ test(
   },
 );
 
-test("貼り付けた回答の過程のテキストからも下書きを作れる（#2397）", async ({ page }) => {
+test("貼り付けた回答の過程のテキストからも下書きを作れる（#2397）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const api = await openSupportGuides(page);
   await page.getByRole("button", { name: "取り込み" }).click();
   const panel = page.getByTestId("support-guide-import");
@@ -1095,14 +1096,25 @@ test("貼り付けた回答の過程のテキストからも下書きを作れ�
   await process.getByRole("button", { name: "テキストを貼り付ける" }).click();
   await process.getByRole("button", { name: "AI で下書きを作る" }).click();
   await expect(process.getByText("質問を入れてください。")).toBeVisible();
-  await process.getByRole("textbox", { name: "質問" }).fill("画面Aで通知が出ない");
+  const question = process.getByRole("textbox", { name: "質問", exact: true });
+  await expect(question).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(question).toHaveAttribute("rows", "3");
+  await question.fill("合成の質問の第一行");
+  await question.press("End");
+  await question.press("Enter");
+  await question.pressSequentially("合成の質問の第二行");
+  await expect(question).toHaveValue("合成の質問の第一行\n合成の質問の第二行");
+  expect(api.requests.filter((item) => item.path.endsWith("/import/process/preview"))).toHaveLength(0);
+  await question.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("multiline-process-import-question.png") });
   await process.getByRole("textbox", { name: "回答の過程" }).fill("【回答の手順】\n設定画面Aを開く");
   await process.getByRole("button", { name: "AI で下書きを作る" }).click();
   await expect(process.getByText("1 行のうち 1 件を下書きにできます。")).toBeVisible();
   const preview = api.requests.find((item) => item.path.endsWith("/import/process/preview"));
   expect(preview?.body).toMatchObject({
-    rows: [{ row: 1, question: "画面Aで通知が出ない", process: "【回答の手順】\n設定画面Aを開く" }],
+    rows: [{ row: 1, question: "合成の質問の第一行\n合成の質問の第二行", process: "【回答の手順】\n設定画面Aを開く" }],
   });
+  await expectNoPageOverflow(page);
 });
 
 async function useTheme(page: Page, theme: "light" | "dark") {
@@ -1398,4 +1410,31 @@ test("道具の許可の対象を説明し、外部 Agent 用の選択を保存�
   await page.getByRole("button", { name: "ガイド A を編集", exact: true }).click();
   await expect(tools.getByRole("checkbox", { name: "データを問い合わせる（NL2SQL）" })).toBeChecked();
   await expect(tools.getByRole("checkbox", { name: "資料を検索する", exact: true })).not.toBeChecked();
+});
+
+test("ガイドの段落は3行で編集し、Enterで保存せず内部改行を保存して再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const guide = guideWithConditionDraft();
+  guide.draft = {
+    ...guide.draft, title: "合成のガイド A",
+    branches: [{ id: "branch-a", when: { condition_id: "account", operator: "equals", values: ["社員"] }, goto_step: "step1", note: "合成のメモ" }],
+    completion: [{ id: "done-a", description: "合成の完了内容", check_method: "合成の確認方法" }],
+  };
+  const api = await openSupportGuides(page, [guide]);
+  await page.getByRole("button", { name: "合成のガイド A を編集", exact: true }).click();
+  const editor = page.getByTestId("support-guide-editor");
+  const labels = ["期待する結果", "確かめる問い", "メモ", "内容", "確かめ方"];
+  let text = "";
+  for (const label of labels) text = await editThreeLineProse(editor.getByRole("textbox", { name: label, exact: true }));
+  expect(api.requests.filter((row) => row.method === "PUT")).toHaveLength(0);
+  await editor.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => api.guides[0].draft).toMatchObject({
+    goal: { expected_result: text }, conditions: [{ question: text }], branches: [{ note: text }], completion: [{ description: text, check_method: text }],
+  });
+  await page.reload();
+  await page.getByRole("tab", { name: "業務ガイド", exact: true }).click();
+  await page.getByRole("button", { name: "合成のガイド A を編集", exact: true }).click();
+  for (const label of labels) await expect(editor.getByRole("textbox", { name: label, exact: true })).toHaveValue(text);
+  await expectNoPageOverflow(page);
+  await editor.getByRole("textbox", { name: "期待する結果", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("multiline-guide-prose.png") });
 });

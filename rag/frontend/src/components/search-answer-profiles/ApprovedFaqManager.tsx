@@ -17,7 +17,6 @@ import {
   StatusBadge,
   TableSkeleton,
   TextareaField,
-  TextField,
   Switch,
   TimedLoadingState,
   toast,
@@ -495,8 +494,9 @@ export function ApprovedFaqManager({
           </h4>
           {/* 質問・回答は文章（全幅。#1891）。 */}
           <FormGrid columns={1}>
-          <TextField
+          <TextareaField
             id="approved-faq-question"
+            rows={3}
             width="full"
             label={t("searchAnswerProfiles.faq.question")}
             value={question}

@@ -113,6 +113,39 @@ async function mockSearchAnswerProfileApi(
   });
 }
 
+test("用語の照合テストは長い質問を3行で編集し、Enterで送らず内部改行を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockCommon(page);
+  await mockSearchAnswerProfileApi(page);
+  const labels = { insufficient_evidence_summary: "合成の根拠不足案内。", empty_search_guidance: "合成の確認案内。" };
+  const effective = { answer_labels: labels };
+  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: envelope({ fields: Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", multiline: true, choices: [], ingest: false, max_chars: 200 })), builtin: effective, effective, overrides: {}, hash: "synthetic-language-pack" }) }));
+  const requests: Record<string, unknown>[] = [];
+  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge/preview", route => {
+    const body = route.request().postDataJSON() as { question: string };
+    requests.push(body);
+    return route.fulfill({ json: envelope({ matched_terms: [], expanded_question: body.question }) });
+  });
+  await page.goto("/search-answer-profiles?id=bv-1");
+  await page.getByRole("tab", { name: "用語・同義語", exact: true }).click();
+  const input = page.locator("#runtime-knowledge-question");
+  await expect(input).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(input).toHaveAttribute("rows", "3");
+  const first = "合成の対象と関連する確認条件について説明してください。".repeat(6);
+  await input.fill(first);
+  await input.press("End");
+  await input.press("Enter");
+  await input.pressSequentially("合成の末尾。");
+  const question = first + "\n合成の末尾。";
+  await expect(input).toHaveValue(question);
+  expect(requests).toEqual([]);
+  await input.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("runtime-long-question.png") });
+  await page.getByRole("button", { name: "照合する", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toEqual({ question });
+});
+
 for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },

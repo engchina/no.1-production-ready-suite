@@ -458,8 +458,9 @@ function SkillEditor({
                         setFieldErrors((current) => ({ ...current, name: undefined }));
                       }}
                     />
-                    <TextField
+                    <TextareaField
                       id="skill-description"
+                      rows={3}
                       width="full"
                       label={t("agent.description")}
                       className="col-span-full"

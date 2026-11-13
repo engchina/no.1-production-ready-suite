@@ -234,7 +234,17 @@ export function LanguageField({
   if (field.kind === "text") {
     return (
       <div className="space-y-2">
-        <TextField
+        {field.multiline ? <TextareaField
+          id={id}
+          label={label}
+          helper={helper}
+          error={error}
+          value={texts[key] ?? ""}
+          rows={3}
+          width="full"
+          disabled={disabled}
+          onValueChange={onChange}
+        /> : <TextField
           id={id}
           label={label}
           helper={helper}
@@ -244,7 +254,7 @@ export function LanguageField({
           width={field.max_chars > 40 ? "full" : "md"}
           disabled={disabled}
           onValueChange={onChange}
-        />
+        />}
         {resetRow}
       </div>
     );

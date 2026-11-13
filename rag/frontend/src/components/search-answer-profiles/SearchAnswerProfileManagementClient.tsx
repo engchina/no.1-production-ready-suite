@@ -36,6 +36,7 @@ import {
   ClearActionButton,
   SearchField,
   TextField,
+  TextareaField,
   ListToolbar,
   FormGrid,
   type FieldWidth,
@@ -882,8 +883,9 @@ function SearchAnswerProfileEditor({
                   maxLength={NAME_MAX_LENGTH}
                   inputClassName={isDefault || isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
-                <TextField
+                <TextareaField
                   id="search-answer-profile-description"
+                  rows={3}
                   width="full"
                   label={t("searchAnswerProfiles.field.description")}
                   required={!isArchived}
@@ -896,7 +898,7 @@ function SearchAnswerProfileEditor({
                   helper={t("searchAnswerProfiles.field.descriptionHelper")}
                   error={descriptionError || undefined}
                   maxLength={DESCRIPTION_MAX_LENGTH}
-                  inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
+                  textareaClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
               </FormGrid>
 
