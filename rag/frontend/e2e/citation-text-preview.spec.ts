@@ -280,13 +280,13 @@ test("原本ノードは展開時だけ取得し、版と対応範囲を保持�
 });
 
 
-for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json", "html", "htm"]) {
+for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md", "csv", "xlsx", "docx", "json", "html", "htm"]) {
   test(`Chatの原文の段落を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
     await mockDatabaseReady(page); await mockLocalAuth(page);
     const name = `synthetic.${extension}`;
     const structured = extension === "csv" || extension === "xlsx" || extension === "docx" ? structuredSource[extension] : null;
 
-    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:structured?.window.blocks.find(block=>block.cited)?.text ?? "見出し\n合成😀の本文です。",score:1,metadata:{recipe_id:"r1",chunk_set_id:"cs1",element_ids:structured ? [structured.element_id] : ["h","a"],context_role:"evidence",answer_citation_lines:[1],answer_citation_provenance:"child"}};
+    const cited = {document_id:"doc-text",chunk_id:"chunk-text",file_name:name,text:structured?.window.blocks.find(block=>block.cited)?.text ?? "見出し\n合成😀の本文です。",score:1,metadata:{recipe_id:"r1",chunk_set_id:"cs1",element_ids:structured ? [structured.element_id] : ["h","a"],context_role:"evidence",answer_citation_lines:extension.endsWith(".md") ? [] : [1],answer_citation_candidate_lines:extension.endsWith(".md") ? [1] : [],answer_citation_provenance:"child"}};
     await page.route("**/api/search-answer-profiles**", route => route.fulfill({json:{data:{items:[PROFILE],total:1,limit:50,offset:0,has_next:false},error_messages:[],warning_messages:[]}}));
     await page.route("**/api/chat/conversations**", route => {
       const detail = {id:"c-text",search_answer_profile_id:PROFILE.id,title:"合成の原文確認",status:"ACTIVE",owned:true,message_count:2,created_at:"2026-11-01T00:00:00Z",updated_at:"2026-11-01T00:00:00Z",messages:[
@@ -295,11 +295,11 @@ for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json",
       ]};
       return route.fulfill({json:{data:new URL(route.request().url()).pathname.endsWith("/c-text") ? detail : {items:[{...detail,messages:undefined}],total:1,offset:0,limit:25,has_next:false},error_messages:[],warning_messages:[]}});
     });
-    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],blocks:[
-      {id:"h",text:"見出し",offset:0,highlights:[[0,3]],cited:true},
-      {id:"a",text:"合成😀の本文です。",offset:0,highlights:[[0,9]],cited:true},
+    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:extension === "unresolved.md" ? "unresolved" : "exact",section_path:extension === "md" ? ["合成の章", "合成の節"] : [],blocks:[
+      {id:"h",text:"見出し",offset:0,highlights:extension === "unresolved.md" ? [] : [[0,3]],cited:true},
+      {id:"a",text:"合成😀の本文です。",offset:0,highlights:extension === "unresolved.md" ? [] : [[0,9]],cited:true},
       {id:"other",text:"別の文脈です。",offset:0,highlights:[],cited:false},
-    ],outline:[],previous_cursor:null,next_cursor:null,scope:"paragraph"},error_messages:[],warning_messages:[]}}));
+    ],outline:[],previous_cursor:extension === "md" ? "before" : null,next_cursor:extension === "md" ? "after" : null,scope:"paragraph"},error_messages:[],warning_messages:[]}}));
     if(structured) {
       await page.route("**/api/documents/doc-text/recipes/r1/preview-source?**",route=>route.fulfill({json:{data:{file_name:"synthetic.jsonl",content_type:"application/vnd.production-ready.structured-records+jsonl",is_pdf:false,is_structured_records:true}}}));
       await page.route("**/api/documents/doc-text/reader?**",route=>route.fulfill({json:{data:{...structured.window,revision:"cs1"}}}));
@@ -319,8 +319,59 @@ for (const extension of ["txt", "md", "markdown", "csv", "xlsx", "docx", "json",
       await expect(reader.locator("[data-source-record]")).not.toHaveCount(0);
       await expect(reader.locator("mark").first()).toBeVisible();
       await expect(reader.getByRole("table").last()).toBeVisible();
-    } else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
+    } else if (extension === "unresolved.md") await expect(reader.locator("mark")).toHaveCount(0);
+    else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
     await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
+    if (extension.endsWith(".md")) {
+      await expect(page.getByTestId("evidence-source-notice")).toHaveCount(0);
+      if (extension === "candidate.md") await expect(reader).not.toContainText("引用位置を確定できないため");
+      else await expect(page.getByTestId("evidence-reader")).toContainText("引用位置を確定できないため");
+    }
+    if (extension === "md") {
+      let release!: () => void;
+      let fail = false;
+      await page.route("**/api/documents/doc-text/reader?**", async route => {
+        await new Promise<void>(resolve => { release = resolve; });
+        if (fail) await route.fulfill({status:500,json:{error_messages:["合成の取得失敗"]}});
+        else await route.fulfill({json:{data:readerWindow("合成😀の本文です。",new URL(route.request().url()).searchParams)}});
+      });
+      const root = page.getByTestId("evidence-reader");
+      for (const direction of ["前文を読む", "後文を読む"]) {
+        fail = direction === "後文を読む";
+        await root.getByRole("button",{name:direction,exact:true}).click();
+        const loading = root.getByTestId("evidence-reader-loading");
+        await expect(loading).toBeVisible();
+        const afterButton = root.getByRole("button",{name:"後文を読む",exact:true});
+        const afterBox = (await afterButton.boundingBox())!;
+        expect(afterBox.y + afterBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+        await expect(afterButton).toBeInViewport();
+        await expect(reader).toHaveAttribute("aria-busy","true");
+        await expect(reader).toHaveClass(/bg-surface-sunken/);
+        await expect(loading.locator(".animate-pulse")).toHaveCount(0);
+        await expect(loading.locator("[data-processing-label]")).toBeVisible();
+        expect((await loading.boundingBox())!.height).toBeLessThan(120);
+        await expect(loading).toContainText("00:01",{timeout:4000});
+        await page.screenshot({path:testInfo.outputPath(`markdown-loading-${direction}-${testInfo.project.name}.png`)});
+        release();
+        await expect(reader).toHaveAttribute("aria-busy","false");
+        await expect(reader).not.toHaveClass(/bg-surface-sunken/);
+        if (fail) {
+          await expect(root).toContainText("合成の取得失敗");
+          fail = false;
+          await root.getByRole("button",{name:"再試行",exact:true}).click();
+          await expect(reader).toHaveAttribute("aria-busy","true");
+          await expect(loading).toBeVisible();
+        const afterButton = root.getByRole("button",{name:"後文を読む",exact:true});
+        const afterBox = (await afterButton.boundingBox())!;
+        expect(afterBox.y + afterBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+        await expect(afterButton).toBeInViewport();
+          release();
+          await expect(reader).toHaveAttribute("aria-busy","false");
+          await expect(reader).toContainText("合成の続き");
+        }
+        else await expect(reader).toContainText("合成の前文");
+      }
+    }
     if (genericOriginal) {
       const panel = page.getByTestId("original-source-panel").first();
       await panel.locator("summary").focus();
