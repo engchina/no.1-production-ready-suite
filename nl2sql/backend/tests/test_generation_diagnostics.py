@@ -359,7 +359,7 @@ def test_result_dto_json_roundtrip_and_mcp_query_get_share_validated_substructur
             token=token,
         )
     )
-    assert not error and query["schema_version"] == 3
+    assert not error and query["schema_version"] == 4
     assert query["generation_diagnostics"] == diagnostic
     job = fake_service.get_job(query["job_id"], actor_user_uuid=user.user_uuid)
     assert job is not None

@@ -55,6 +55,7 @@ from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, onli
 from pr_system_settings.model import estimate_input_tokens
 
 from app.features.agent.generation_diagnostics import generation_diagnostics_summary
+from app.features.agent.profile_schema_context import profile_schema_summary
 from app.features.agent.tool_media import (
     MAX_IMAGES_IN_INPUT,
     ToolImage,
@@ -329,6 +330,8 @@ def _state_list(key: object, value: object) -> list[str] | None:
 
 def _id_ref(item: Mapping[str, Any]) -> dict[str, Any]:
     """ID と作業の状態だけの参照（一覧の項目を縮めるときに残す）。"""
+    if (schema := profile_schema_summary(item)) is not None:
+        return schema
     ref: dict[str, Any] = {}
     for key, value in item.items():
         identifier = is_id_key(key) and isinstance(value, str | int) and not isinstance(value, bool)
@@ -408,6 +411,8 @@ def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> 
             shrunk.append(_shrink(item, level=level, stats=stats, in_list=True))
         return shrunk
     if isinstance(value, dict):
+        if (schema := profile_schema_summary(value)) is not None:
+            return schema
         clipped = stats.clipped
         result = {
             key: generation_diagnostics_summary(item)
@@ -440,6 +445,8 @@ def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> 
 
 def _ids_only(value: Any, stats: _Stats) -> Any:
     if isinstance(value, dict):
+        if (schema := profile_schema_summary(value)) is not None:
+            return schema
         kept: dict[str, Any] = _id_ref(value)
         for key, item in value.items():
             if key in kept or key == COMPACTION_KEY:

@@ -78,6 +78,7 @@ READ_ONLY = {
     "rag_read_section": True,
     "nl2sql_query": False,
     "nl2sql_get_job": True,
+    "nl2sql_get_profile_schema": True,
 }
 ALLOW_ALL = ToolPolicy(
     allow={

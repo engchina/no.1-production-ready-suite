@@ -92,6 +92,7 @@ from app.features.nl2sql.db_admin_chat_corrections import (
     record_failures,
     sql_identity,
 )
+from app.features.nl2sql.profile_schema import ProfileSchemaInput, ProfileSchemaPage, schema_page
 from app.security.request_actor import (
     actor_scope,
     current_actor_context,
@@ -25739,6 +25740,87 @@ class Nl2SqlService:
             schema_catalog=catalog,
         )
 
+    def get_profile_schema(self, arguments: ProfileSchemaInput) -> ProfileSchemaPage:
+        """SQL 生成と同じ保存済み catalog を許可範囲内で返す。refresh はしない。"""
+        profile = self.get_profile(arguments.profile_id)
+        unavailable = ProfileSchemaPage(profile_id=arguments.profile_id)
+        if not profile.allowed_tables and not profile.allowed_views:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        # 初期化されていない catalog を、空の完全な schema として返さない。
+        before = self.get_catalog_head()
+        if before.catalog_version <= 0 or not before.refreshed_at:
+            return unavailable
+        requested = arguments.allowed_objects
+        if requested.enforce_table_scope and not requested.table_names:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        # 同じ表の別表記を last-wins で広げないため、request 列は正規化前に交差する。
+        allowed = AllowedObjects(
+            table_names=requested.table_names or self.profile_allowed_object_names(profile),
+            columns=requested.columns,
+            enforce_table_scope=True,
+        )
+        try:
+            profile_names = {
+                canonical_qualified_name(name)
+                for name in self.profile_allowed_object_names(profile)
+            }
+            requested_names = {canonical_qualified_name(name) for name in allowed.table_names}
+            if not requested_names <= profile_names:
+                return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+            if arguments.object_names:
+                selected_names = {canonical_qualified_name(name) for name in arguments.object_names}
+                if not selected_names <= requested_names:
+                    return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+                allowed = allowed.model_copy(update={"table_names": sorted(selected_names)})
+        except ValueError:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        if len(allowed.table_names) > 2048:
+            return unavailable.model_copy(update={"unavailable_reason": "metadata_limit"})
+        try:
+            catalog = self._generation_schema_catalog(profile, allowed, strict_scope=True)
+        except (SchemaCatalogEmptyError, ValueError):
+            return unavailable
+        after = self.get_catalog_head()
+        if before != after or self.get_profile(arguments.profile_id) != profile:
+            return unavailable.model_copy(
+                update={"status": "stale", "unavailable_reason": "snapshot_changed"}
+            )
+        tables = self._binding_candidate_tables(profile, allowed, catalog)
+        if not tables:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        # 未取得の許可 object を黙って除いた page は完全と扱わない。
+        expected_requested_names = allowed.table_names
+        available_names = {qualified_object_name(t.owner, t.table_name) for t in tables}
+        try:
+            expected_names = {canonical_qualified_name(name) for name in expected_requested_names}
+            if not expected_names <= available_names:
+                return unavailable.model_copy(update={"unavailable_reason": "schema_unavailable"})
+            if arguments.object_names:
+                selected_names = {canonical_qualified_name(name) for name in arguments.object_names}
+                if not selected_names <= available_names:
+                    return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+                tables = [
+                    t
+                    for t in tables
+                    if qualified_object_name(t.owner, t.table_name) in selected_names
+                ]
+        except ValueError:
+            return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
+        tables = sorted(tables, key=lambda t: (t.owner, t.table_name))
+        return schema_page(
+            profile_id=profile.id,
+            tables=tables,
+            refreshed_at=catalog.refreshed_at,
+            scope_binding=[
+                profile.model_dump(mode="json"),
+                requested.model_dump(mode="json"),
+                sorted(arguments.object_names),
+            ],
+            snapshot_binding=after.model_dump(mode="json"),
+            cursor=arguments.cursor,
+            page_size=arguments.page_size,
+        )
+
     def _binding_candidate_tables(
         self,
         profile: Nl2SqlProfile,
@@ -26421,6 +26503,8 @@ class Nl2SqlService:
         self,
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
+        *,
+        strict_scope: bool = False,
     ) -> SchemaCatalog:
         """SQL 生成で使う Profile scope 限定の schema snapshot を構築する。"""
 
@@ -26460,7 +26544,7 @@ class Nl2SqlService:
                     exc=exc,
                     operation_error_code="schema_object_detail_failed",
                 )
-            if detail is None:
+            if detail is None and not strict_scope:
                 try:
                     page = repository.search_schema_objects(
                         cursor=None,

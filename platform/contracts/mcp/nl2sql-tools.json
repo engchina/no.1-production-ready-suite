@@ -46,7 +46,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -111,7 +111,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -741,7 +741,7 @@
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -987,6 +987,285 @@
       }
     },
     {
+      "name": "nl2sql_get_profile_schema",
+      "title": "許可済みの表・列の確認",
+      "description": "業務プロファイルで使える表・列の名前・型・既存の説明を確認します。照会結果にない列が利用可能か調べるときに使います。データ行は返しません。",
+      "inputSchema": {
+        "$defs": {
+          "AllowedObjects": {
+            "description": "ユーザーが今回の質問で許可する table / column 範囲。",
+            "properties": {
+              "table_names": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Table Names",
+                "type": "array"
+              },
+              "columns": {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": "Columns",
+                "type": "object"
+              },
+              "enforce_table_scope": {
+                "default": false,
+                "title": "Enforce Table Scope",
+                "type": "boolean"
+              }
+            },
+            "title": "AllowedObjects",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "description": "nl2sql_list_profiles の業務プロファイル ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "object_names": {
+            "description": "所有者付きの正確な表・ビュー名。省略すると許可範囲全体。",
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Object Names",
+            "type": "array"
+          },
+          "allowed_objects": {
+            "$ref": "#/$defs/AllowedObjects",
+            "description": "必要ならプロファイル内の表・列をさらに限定する。"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "同じ条件の前ページの next_cursor。初回は省略。",
+            "title": "Cursor"
+          },
+          "page_size": {
+            "default": 200,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Page Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "title": "ProfileSchemaInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "ProfileSchemaColumn": {
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "data_type": {
+                "title": "Data Type",
+                "type": "string"
+              },
+              "nullable": {
+                "title": "Nullable",
+                "type": "boolean"
+              },
+              "logical_name": {
+                "title": "Logical Name",
+                "type": "string"
+              },
+              "description": {
+                "title": "Description",
+                "type": "string"
+              },
+              "description_truncated": {
+                "default": false,
+                "title": "Description Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "data_type",
+              "nullable",
+              "logical_name",
+              "description"
+            ],
+            "title": "ProfileSchemaColumn",
+            "type": "object"
+          },
+          "ProfileSchemaObject": {
+            "properties": {
+              "owner": {
+                "title": "Owner",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "object_type": {
+                "title": "Object Type",
+                "type": "string"
+              },
+              "logical_name": {
+                "title": "Logical Name",
+                "type": "string"
+              },
+              "description": {
+                "title": "Description",
+                "type": "string"
+              },
+              "description_truncated": {
+                "default": false,
+                "title": "Description Truncated",
+                "type": "boolean"
+              },
+              "columns": {
+                "items": {
+                  "$ref": "#/$defs/ProfileSchemaColumn"
+                },
+                "title": "Columns",
+                "type": "array"
+              },
+              "columns_complete": {
+                "default": false,
+                "title": "Columns Complete",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "owner",
+              "name",
+              "object_type",
+              "logical_name",
+              "description"
+            ],
+            "title": "ProfileSchemaObject",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "source": {
+            "const": "cached",
+            "default": "cached",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "default": "unavailable",
+            "enum": [
+              "available",
+              "unavailable",
+              "stale"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "schema_unavailable",
+                  "scope_unresolved",
+                  "snapshot_changed",
+                  "invalid_cursor",
+                  "metadata_limit"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "schema_unavailable",
+            "title": "Unavailable Reason"
+          },
+          "refreshed_at": {
+            "default": "",
+            "title": "Refreshed At",
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/$defs/ProfileSchemaObject"
+            },
+            "title": "Objects",
+            "type": "array"
+          },
+          "page_complete": {
+            "default": false,
+            "title": "Page Complete",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "total_objects": {
+            "default": 0,
+            "title": "Total Objects",
+            "type": "integer"
+          },
+          "total_columns": {
+            "default": 0,
+            "title": "Total Columns",
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": 4,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile_id"
+        ],
+        "title": "ProfileSchemaOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "nl2sql_list_profiles",
       "title": "業務プロファイルの一覧",
       "description": "利用者が使える業務プロファイル（SQL を生成する対象の範囲）を一覧します。",
@@ -1055,7 +1334,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1780,7 +2059,7 @@
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2114,7 +2393,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 3,
+            "default": 4,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

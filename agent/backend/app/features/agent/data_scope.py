@@ -82,7 +82,10 @@ _PRODUCT_LABELS: dict[str, str] = {
 
 # プロファイルを引数に取るツール → 引数の名前。
 _PROFILE_ARGUMENTS: dict[str, dict[str, str]] = {
-    NL2SQL_CONNECTION_ID: {"nl2sql_query": "profile_id"},
+    NL2SQL_CONNECTION_ID: {
+        "nl2sql_query": "profile_id",
+        "nl2sql_get_profile_schema": "profile_id",
+    },
     RAG_CONNECTION_ID: {
         "rag_search": "search_answer_profile_id",
         "rag_retrieve_evidence": "search_answer_profile_id",

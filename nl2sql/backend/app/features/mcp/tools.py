@@ -99,6 +99,7 @@ from app.features.nl2sql.profile_access import (
     principal_from_request,
     profile_access_denied,
 )
+from app.features.nl2sql.profile_schema import ProfileSchemaInput, ProfileSchemaPage
 from app.features.nl2sql.router import _with_requirement
 from app.features.nl2sql.select_ai_readiness import select_ai_credential_missing_message
 from app.features.nl2sql.service import (
@@ -125,7 +126,8 @@ SERVER_NAME = "production-ready-nl2sql"
 # 1: すべてのツールの出力に schema_version を足した（#3240）。
 # 2: ジョブを取り消すツール（nl2sql_cancel_job）を足した（#3318）。
 # 3: 実際の修正の候補と形式的な投影変化を generation_diagnostics に追加。
-MCP_OUTPUT_SCHEMA_VERSION = 3
+# 4: 許可済みキャッシュ schema を読み取るツールを追加。
+MCP_OUTPUT_SCHEMA_VERSION = 4
 # 業務プロファイルを自動で 1 つに決められなかった nl2sql_query のエラー（#2355）。
 PROFILE_NOT_SELECTED_CODE = "NL2SQL_PROFILE_NOT_SELECTED"
 # そのエラーの message に示す推薦の候補の数。
@@ -195,6 +197,10 @@ _INSTRUCTIONS = (
 
 class _Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ProfileSchemaOutput(ProfileSchemaPage):
+    schema_version: int = MCP_OUTPUT_SCHEMA_VERSION
 
 
 class ListProfilesInput(_Input):
@@ -895,6 +901,18 @@ def build_mcp_server(request: Request) -> McpServer:
             await asyncio.sleep(min(JOB_POLL_INTERVAL_SECONDS, remaining))
 
     @_translate_domain_errors
+    async def get_profile_schema(arguments: ProfileSchemaInput) -> ProfileSchemaOutput:
+        def run() -> ProfileSchemaOutput:
+            scoped = scope()
+            if scoped is not None and arguments.profile_id not in scoped:
+                raise _profile_scope_forbidden(arguments.profile_id)
+            assert_profile_access(request, arguments.profile_id)
+            page = nl2sql_service.get_profile_schema(arguments)
+            return ProfileSchemaOutput.model_validate(page.model_dump())
+
+        return await run_sync_io(run)
+
+    @_translate_domain_errors
     async def list_profiles(arguments: ListProfilesInput) -> ListProfilesOutput:
         def run() -> ListProfilesOutput:
             page = nl2sql_service.search_profiles(
@@ -1369,6 +1387,21 @@ def build_mcp_server(request: Request) -> McpServer:
             handler=list_profiles,
             output_model=ListProfilesOutput,
             permissions=(frozenset({PROFILE_READ_PERMISSION}),),
+        ),
+        McpTool(
+            name="nl2sql_get_profile_schema",
+            title="許可済みの表・列の確認",
+            description=(
+                "業務プロファイルで使える表・列の名前・型・既存の説明を確認します。"
+                "照会結果にない列が利用可能か調べるときに使います。データ行は返しません。"
+            ),
+            input_model=ProfileSchemaInput,
+            handler=get_profile_schema,
+            output_model=ProfileSchemaOutput,
+            permissions=(
+                frozenset({QUERY_GENERATE_PERMISSION}),
+                frozenset({SQL_EXECUTE_PERMISSION}),
+            ),
         ),
         McpTool(
             name="nl2sql_recommend_profile",
