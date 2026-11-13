@@ -127,8 +127,8 @@ def section_frontier(
             options.append(((len(prefix), rank, index), index, list(children.values())))
         if not options:
             break
-        _, index, children = min(options, key=lambda value: value[0])
-        frontier[index : index + 1] = children
+        _, index, replacements = min(options, key=lambda value: value[0])
+        frontier[index : index + 1] = replacements
 
     members, cards = {}, {}
     for group in frontier:
