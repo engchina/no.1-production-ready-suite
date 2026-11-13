@@ -383,3 +383,127 @@ def test_strict_cache_lookup_does_not_search_another_owner(monkeypatch: pytest.M
     monkeypatch.setattr(obj, "_refresh_cache_token", lambda *a, **kw: None)
     result = obj.get_profile_schema(ProfileSchemaInput(profile_id="p"))
     assert result.status == "unavailable" and looked == [("APP", "TABLE_A")]
+
+
+def test_legacy_empty_memory_scope_is_not_migrated_or_saved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = MemoryNl2SqlStore()
+    obj = Nl2SqlService(store=store)
+    obj._catalog = SchemaCatalog(refreshed_at="a", tables=[table()], current_owner="APP")
+    legacy = Nl2SqlProfile(id="legacy", name="Legacy", object_scope_version=1)
+    obj._profiles[legacy.id] = legacy
+    before = store.load_snapshot()
+    saves = []
+    original = store.save_snapshot
+
+    def save(snapshot: dict[str, Any]) -> None:
+        saves.append(snapshot)
+        original(snapshot)
+
+    monkeypatch.setattr(store, "save_snapshot", save)
+    result = obj.get_profile_schema(ProfileSchemaInput(profile_id=legacy.id))
+    assert result.status == "unavailable" and result.unavailable_reason == "scope_unresolved"
+    assert obj._profiles[legacy.id] == legacy and store.load_snapshot() == before and not saves
+    # 既存の既定の互換移行はそのまま残す。
+    assert obj.get_profile(legacy.id).allowed_views == ["APP.TABLE_A"]
+    assert len(saves) == 1
+
+
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_legacy_empty_incremental_scope_is_not_migrated_or_saved(
+    monkeypatch: pytest.MonkeyPatch, cache_hit: bool
+) -> None:
+    from types import SimpleNamespace
+    from typing import cast
+
+    obj = Nl2SqlService(store=MemoryNl2SqlStore())
+    obj._catalog = SchemaCatalog(refreshed_at="a", tables=[table()], current_owner="APP")
+    legacy = Nl2SqlProfile(id="legacy", name="Legacy", object_scope_version=1)
+    reads = []
+
+    def get_profile(profile_id: str) -> Nl2SqlProfile:
+        reads.append(profile_id)
+        return legacy
+
+    repo = SimpleNamespace(
+        get_profile=get_profile,
+        save_profile=lambda *a, **kw: pytest.fail("読み取りから移行保存しない"),
+        get_catalog_head=lambda: pytest.fail("空scopeでcatalogを読まない"),
+    )
+    monkeypatch.setattr(obj, "_incremental_repository", cast(Any, repo))
+    monkeypatch.setattr(obj, "_refresh_cache_token", lambda *a, **kw: None)
+    if cache_hit:
+        obj._profile_cache.put(legacy.id, legacy)
+    result = obj.get_profile_schema(ProfileSchemaInput(profile_id=legacy.id))
+    assert result.status == "unavailable" and not result.objects
+    assert reads == ([] if cache_hit else [legacy.id])
+    assert obj._profile_cache.get(legacy.id) == legacy and legacy.object_scope_version == 1
+
+
+def test_schema_reads_nonmigrating_profile_before_and_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    obj = Nl2SqlService(store=MemoryNl2SqlStore())
+    obj._catalog = SchemaCatalog(refreshed_at="a", tables=[table()], current_owner="APP")
+    stored = Nl2SqlProfile(id="p", name="P", allowed_views=["APP.TABLE_A"], object_scope_version=2)
+    obj._profiles[stored.id] = stored
+    calls = []
+    original = obj.get_profile
+
+    def read_profile(profile_id: str, **kwargs: Any) -> Nl2SqlProfile:
+        calls.append(kwargs)
+        return original(profile_id, **kwargs)
+
+    monkeypatch.setattr(obj, "get_profile", read_profile)
+    result = obj.get_profile_schema(ProfileSchemaInput(profile_id=stored.id))
+    assert result.status == "available" and result.page_complete
+    assert calls == [{"migrate_legacy_scope": False}, {"migrate_legacy_scope": False}]
+
+
+@pytest.mark.parametrize("explicit_request", [False, True])
+def test_legacy_hidden_only_scope_never_expands(
+    monkeypatch: pytest.MonkeyPatch, explicit_request: bool
+) -> None:
+    obj = Nl2SqlService(store=MemoryNl2SqlStore())
+    obj._catalog = SchemaCatalog(refreshed_at="a", tables=[table()], current_owner="APP")
+    legacy = Nl2SqlProfile(
+        id="legacy", name="Legacy", object_scope_version=1, allowed_tables=["APP.AGENT_INTERNAL"]
+    )
+    obj._profiles[legacy.id] = legacy
+    monkeypatch.setattr(
+        obj,
+        "_generation_schema_catalog",
+        lambda *a, **kw: pytest.fail("非公開だけの範囲から catalog を広げない"),
+    )
+    monkeypatch.setattr(obj, "_persist_state", lambda **kw: pytest.fail("読み取りから保存しない"))
+    args = ProfileSchemaInput(
+        profile_id=legacy.id,
+        allowed_objects=AllowedObjects(table_names=["APP.TABLE_A"])
+        if explicit_request
+        else AllowedObjects(),
+    )
+    result = obj.get_profile_schema(args)
+    assert result.status == "unavailable" and not result.objects
+    assert obj._profiles[legacy.id] == legacy
+
+
+def test_legacy_nonempty_visible_scope_does_not_add_other_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    obj = Nl2SqlService(store=MemoryNl2SqlStore())
+    obj._catalog = SchemaCatalog(
+        refreshed_at="a", tables=[table(), table("TABLE_B")], current_owner="APP"
+    )
+    legacy = Nl2SqlProfile(
+        id="legacy",
+        name="Legacy",
+        object_scope_version=1,
+        allowed_views=["APP.TABLE_A"],
+        allowed_tables=["APP.AGENT_INTERNAL"],
+    )
+    obj._profiles[legacy.id] = legacy
+    monkeypatch.setattr(obj, "_persist_state", lambda **kw: pytest.fail("読み取りから保存しない"))
+    result = obj.get_profile_schema(ProfileSchemaInput(profile_id=legacy.id))
+    assert result.status == "available" and [o.name for o in result.objects] == ["TABLE_A"]
+    assert obj._profiles[legacy.id] == legacy

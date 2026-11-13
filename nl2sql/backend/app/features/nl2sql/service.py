@@ -8747,7 +8747,11 @@ class Nl2SqlService:
         return self.update_profile(profile_id, lambda p: p.model_copy(update={"archived": False}))
 
     def get_profile(
-        self, profile_id: str | None, *, include_archived: bool = False
+        self,
+        profile_id: str | None,
+        *,
+        include_archived: bool = False,
+        migrate_legacy_scope: bool = True,
     ) -> Nl2SqlProfile:
         if self._incremental_repository is not None:
             resolved_id = profile_id or "default"
@@ -8760,7 +8764,11 @@ class Nl2SqlService:
             if isinstance(cached, Nl2SqlProfile):
                 if cached.archived and not include_archived:
                     raise ProfileNotFoundError(resolved_id)
-                return self._profile_scope_for_read(cached, persist_migration=True)
+                return (
+                    self._profile_scope_for_read(cached, persist_migration=True)
+                    if migrate_legacy_scope
+                    else cached.model_copy(deep=True)
+                )
             try:
                 profile = self._incremental_repository.get_profile(resolved_id)
             except Exception as exc:
@@ -8771,7 +8779,11 @@ class Nl2SqlService:
                 )
             if profile is None or (profile.archived and not include_archived):
                 raise ProfileNotFoundError(resolved_id)
-            profile = self._profile_scope_for_read(profile, persist_migration=True)
+            profile = (
+                self._profile_scope_for_read(profile, persist_migration=True)
+                if migrate_legacy_scope
+                else profile.model_copy(deep=True)
+            )
             self._profile_cache.put(resolved_id, profile)
             return profile
         with self._lock:
@@ -8779,7 +8791,11 @@ class Nl2SqlService:
             profile = self._profiles.get(resolved_id)
             if profile is None or (profile.archived and not include_archived):
                 raise ProfileNotFoundError(resolved_id)
-            return self._profile_scope_for_read(profile, persist_migration=True)
+            return (
+                self._profile_scope_for_read(profile, persist_migration=True)
+                if migrate_legacy_scope
+                else profile.model_copy(deep=True)
+            )
 
     def _refresh_cache_token(
         self,
@@ -25742,7 +25758,21 @@ class Nl2SqlService:
 
     def get_profile_schema(self, arguments: ProfileSchemaInput) -> ProfileSchemaPage:
         """SQL 生成と同じ保存済み catalog を許可範囲内で返す。refresh はしない。"""
-        profile = self.get_profile(arguments.profile_id)
+        stored_profile = self.get_profile(arguments.profile_id, migrate_legacy_scope=False)
+        profile = stored_profile.model_copy(
+            update={
+                "allowed_tables": [
+                    name
+                    for name in stored_profile.allowed_tables
+                    if is_user_visible_object_name(name)
+                ],
+                "allowed_views": [
+                    name
+                    for name in stored_profile.allowed_views
+                    if is_user_visible_object_name(name)
+                ],
+            }
+        )
         unavailable = ProfileSchemaPage(profile_id=arguments.profile_id)
         if not profile.allowed_tables and not profile.allowed_views:
             return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
@@ -25755,14 +25785,14 @@ class Nl2SqlService:
             return unavailable.model_copy(update={"unavailable_reason": "scope_unresolved"})
         # 同じ表の別表記を last-wins で広げないため、request 列は正規化前に交差する。
         allowed = AllowedObjects(
-            table_names=requested.table_names or self.profile_allowed_object_names(profile),
+            table_names=requested.table_names or [*profile.allowed_tables, *profile.allowed_views],
             columns=requested.columns,
             enforce_table_scope=True,
         )
         try:
             profile_names = {
                 canonical_qualified_name(name)
-                for name in self.profile_allowed_object_names(profile)
+                for name in [*profile.allowed_tables, *profile.allowed_views]
             }
             requested_names = {canonical_qualified_name(name) for name in allowed.table_names}
             if not requested_names <= profile_names:
@@ -25781,7 +25811,10 @@ class Nl2SqlService:
         except (SchemaCatalogEmptyError, ValueError):
             return unavailable
         after = self.get_catalog_head()
-        if before != after or self.get_profile(arguments.profile_id) != profile:
+        if (
+            before != after
+            or self.get_profile(arguments.profile_id, migrate_legacy_scope=False) != stored_profile
+        ):
             return unavailable.model_copy(
                 update={"status": "stale", "unavailable_reason": "snapshot_changed"}
             )
@@ -25812,7 +25845,7 @@ class Nl2SqlService:
             tables=tables,
             refreshed_at=catalog.refreshed_at,
             scope_binding=[
-                profile.model_dump(mode="json"),
+                stored_profile.model_dump(mode="json"),
                 requested.model_dump(mode="json"),
                 sorted(arguments.object_names),
             ],
