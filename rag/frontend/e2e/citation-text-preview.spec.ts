@@ -295,7 +295,7 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
       ]};
       return route.fulfill({json:{data:new URL(route.request().url()).pathname.endsWith("/c-text") ? detail : {items:[{...detail,messages:undefined}],total:1,offset:0,limit:25,has_next:false},error_messages:[],warning_messages:[]}});
     });
-    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:extension === "unresolved.md" ? "unresolved" : "exact",section_path:[],blocks:[
+    await page.route("**/api/documents/doc-text/reader?**", route => route.fulfill({json:{data:{revision:"v1",anchor_status:extension === "unresolved.md" ? "unresolved" : "exact",section_path:extension === "md" ? ["合成の章", "合成の節"] : [],blocks:[
       {id:"h",text:"見出し",offset:0,highlights:extension === "unresolved.md" ? [] : [[0,3]],cited:true},
       {id:"a",text:"合成😀の本文です。",offset:0,highlights:extension === "unresolved.md" ? [] : [[0,9]],cited:true},
       {id:"other",text:"別の文脈です。",offset:0,highlights:[],cited:false},
@@ -341,6 +341,10 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
         await root.getByRole("button",{name:direction,exact:true}).click();
         const loading = root.getByTestId("evidence-reader-loading");
         await expect(loading).toBeVisible();
+        const afterButton = root.getByRole("button",{name:"後文を読む",exact:true});
+        const afterBox = (await afterButton.boundingBox())!;
+        expect(afterBox.y + afterBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+        await expect(afterButton).toBeInViewport();
         await expect(reader).toHaveAttribute("aria-busy","true");
         await expect(reader).toHaveClass(/bg-surface-sunken/);
         await expect(loading.locator(".animate-pulse")).toHaveCount(0);
@@ -357,6 +361,10 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
           await root.getByRole("button",{name:"再試行",exact:true}).click();
           await expect(reader).toHaveAttribute("aria-busy","true");
           await expect(loading).toBeVisible();
+        const afterButton = root.getByRole("button",{name:"後文を読む",exact:true});
+        const afterBox = (await afterButton.boundingBox())!;
+        expect(afterBox.y + afterBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+        await expect(afterButton).toBeInViewport();
           release();
           await expect(reader).toHaveAttribute("aria-busy","false");
           await expect(reader).toContainText("合成の続き");
