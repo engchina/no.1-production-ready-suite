@@ -299,3 +299,50 @@ def test_diagnostic_failure_does_not_mask_original_parse_error(
         )
     assert len(calls) == 2 and "oracle_diagnostics" not in calls[1]["generation_feedback"]
     assert "private_diagnostic_literal" not in str(failure.value) + caplog.text
+
+
+@pytest.mark.parametrize("initially_unavailable", [False, True])
+def test_mode_getter_failure_cannot_mask_original_parse_error(
+    monkeypatch: pytest.MonkeyPatch, initially_unavailable: bool
+) -> None:
+    adapter = OracleNl2SqlAdapter(get_settings())
+    closed = False
+
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def parse(self, sql: str) -> None:
+            nonlocal closed
+            closed = True
+            raise RuntimeError(SimpleNamespace(code=3113, offset=14))
+
+    class Connection:
+        @property
+        def thin(self) -> bool:
+            if closed or initially_unavailable:
+                raise RuntimeError("private_mode_getter_detail")
+            return True
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    @contextmanager
+    def connection(*, read_only: bool = False) -> Iterator[Any]:
+        yield Connection()
+
+    monkeypatch.setattr(adapter, "user_data_connection", connection)
+    monkeypatch.setattr(
+        adapter, "_business_session_time_zone", lambda *args, **kwargs: nullcontext()
+    )
+    with pytest.raises(OracleSelectPreparationError) as failure:
+        adapter.prepare_select("SELECT 'A' AS LEVEL FROM DUAL")
+    assert failure.value.code == 3113 and failure.value.offset == 14
+    assert failure.value.offset_basis == (
+        None if initially_unavailable else "utf8_bytes_zero_based"
+    )
+    assert "private_mode_getter_detail" not in str(failure.value)
+    assert not failure.value.allows_generation_repair

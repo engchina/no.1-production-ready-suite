@@ -1856,6 +1856,10 @@ class OracleNl2SqlAdapter:
                 conn.cursor() as cursor,
             ):
                 try:
+                    connection_mode = getattr(conn, "thin", None)
+                except Exception:
+                    connection_mode = None
+                try:
                     cursor.parse(sql)
                 except Exception as exc:
                     error = exc.args[0] if exc.args else None
@@ -1868,9 +1872,7 @@ class OracleNl2SqlAdapter:
                         code=code if isinstance(code, int) else 0,
                         offset=offset if isinstance(offset, int) else 0,
                         offset_basis=(
-                            "utf8_bytes_zero_based"
-                            if isinstance(getattr(conn, "thin", None), bool)
-                            else None
+                            "utf8_bytes_zero_based" if isinstance(connection_mode, bool) else None
                         ),
                     ) from exc
         except OracleAdapterError:
