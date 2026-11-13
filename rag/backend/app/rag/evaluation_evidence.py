@@ -39,7 +39,9 @@ def used_evidence_lines(citations: Sequence[Mapping[str, Any]]) -> str:
             meta.get("answer_citation_lines") and meta.get("answer_citation_provenance") == "child"
         ):
             continue
-        name = str(meta.get("file_name") or citation.get("source") or "").strip()
+        name = str(
+            citation.get("file_name") or meta.get("file_name") or citation.get("source") or ""
+        ).strip()
         document_id = str(citation.get("document_id") or "").strip()
         if not name and not document_id:
             continue
