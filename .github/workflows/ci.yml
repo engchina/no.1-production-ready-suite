@@ -423,6 +423,7 @@ jobs:
               - ".github/workflows/oracle-integration.yml"
               - ".github/scripts/oracle-free-ci.sh"
               - ".github/scripts/oracle-free-pull.sh"
+              - ".github/scripts/oracle_ci_shard.py"
               - ".github/scripts/pytest-skip-gate.py"
               - "platform/packages/backend_core/src/pr_backend_core/oracle_*.py"
               - "platform/packages/backend_core/src/pr_backend_core/observability/trace_bodies.py"
@@ -2037,6 +2038,9 @@ jobs:
       # 実 Oracle の結合テストの skip の監視（oracle-integration.yml。#1595）。runner の python3 で動く。
       - name: Test pytest-skip-gate
         run: bash scripts/tests/pytest-skip-gate.test.sh
+
+      - name: Test Oracle CI sharding
+        run: python3 -m unittest discover -s scripts/tests -p 'test_oracle_ci_shard.py' -v
 
       # Oracle の image の取得の時間切れと再試行（oracle-free-pull.sh。#4708）。偽の docker で確かめる。
       - name: Test oracle-free-pull
