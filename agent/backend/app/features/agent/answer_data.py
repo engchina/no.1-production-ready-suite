@@ -28,6 +28,8 @@ DATA_INSTRUCTIONS = (
     "一部の行・列は [[table:T1:rows=1-8:cols=1,2,4]] の投影参照で選びます。"
     "行・列は1始まりで、*は全件、昇順の範囲やカンマ列挙は指定順に表示します。"
     "列番号はcolumn_refsを使います。"
+    "render_charsのwholeは全表のMarkdown文字数、columnsは列番号順のheader文字数と"
+    "values合計文字数（罫線・区切りを除く）です。画面の字数やtoken数ではありません。"
     "項目を縦に並べる表は [[table:T1:rows=1:cols=2-4:layout=vertical]] と指定します。"
     "値・見出し・項目名を手書きせず表の参照を優先してください。\n"
     "## Step 2: 本文の値を参照する\n"
@@ -148,6 +150,7 @@ def model_data_references(
         "columns": columns,
         "column_refs": {column: index + 1 for index, column in enumerate(columns)},
         "row_count": len(rows),
+        "render_chars": _render_chars(columns, rows),
         "cells": [
             {
                 column: (
@@ -244,6 +247,21 @@ def _table(
             ),
         ]
     )
+
+
+def _render_chars(columns: list[str], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """表のMarkdownだけをUnicode符号位置で数え、列ごとの合計を付ける。"""
+    return {
+        "metric": "markdown_codepoints",
+        "whole": len(_table(columns, rows)),
+        "columns": [
+            {
+                "header": len(_markdown(column)),
+                "values": sum(len(_markdown(row.get(column))) for row in rows),
+            }
+            for column in columns
+        ],
+    }
 
 
 @dataclass(frozen=True)
