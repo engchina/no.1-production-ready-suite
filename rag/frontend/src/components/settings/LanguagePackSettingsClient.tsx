@@ -24,6 +24,8 @@ import { Link } from "react-router-dom";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
+import { EmptyEvidenceResponseSettings } from "@/components/settings/EmptyEvidenceResponseSettings";
+import { isEmptyEvidenceResponseField } from "@/lib/empty-evidence-response";
 import { LanguagePackHistoryCard } from "@/components/settings/LanguagePackHistoryCard";
 import {
   api,
@@ -151,9 +153,19 @@ export function LanguagePackSettingsClient() {
           <CardDescription>{t("settings.language.fields.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <LanguagePackFieldsPanel
+          <EmptyEvidenceResponseSettings
             idPrefix="language"
             fields={data.fields}
+            baseline={data.builtin}
+            texts={texts}
+            errors={errors}
+            disabled={save.isPending}
+            previewValues={dirty ? undefined : (draft.data?.draft_effective ?? data.effective)}
+            onChange={update}
+          />
+          <LanguagePackFieldsPanel
+            idPrefix="language"
+            fields={data.fields.filter((field) => !isEmptyEvidenceResponseField(field))}
             baseline={data.builtin}
             texts={texts}
             errors={errors}

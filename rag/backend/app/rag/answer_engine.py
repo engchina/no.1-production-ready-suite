@@ -4786,6 +4786,7 @@ def _with_citation_lines(
     決まっていなければ、どの子も確定の位置にしない（引用一覧の並び・回答に使った印・頁の
     一致で 1 つを選ばない。#2710）。候補（rag_engine の ``candidate_source_ids``。無ければ
     その親の子のうち出典行の頁に重なるもの）に候補の番号を付ける。
+    親へ昇格していない原文は、木の唯一の子と出典の ID が同じ場合に直接結ぶ。
     """
     if not isinstance(refs, list) or not refs or not citations:
         return citations
@@ -4809,6 +4810,21 @@ def _with_citation_lines(
         if not isinstance(ref, Mapping):
             continue
         exact = _known_ids(ref.get("scope_source_ids"), pages)
+        sources = ref.get("source_ids")
+        source_ids = sources if isinstance(sources, list) and sources else [ref.get("source_id")]
+        # 同じ ID の原文をそのまま引用した場合だけ。別の子を持つ親や、頁の一致では確定しない。
+        exact = list(
+            dict.fromkeys(
+                [
+                    *exact,
+                    *(
+                        source_id
+                        for source_id in _known_ids(source_ids, pages)
+                        if children_by_parent.get(source_id) == [source_id]
+                    ),
+                ]
+            )
+        )
         for chunk_id in exact:
             lines.setdefault(chunk_id, []).append(ordinal)
             # 終頁のある記録だけを確定した頁範囲として渡す。旧記録の先頭頁を単頁確定と扱わない。
