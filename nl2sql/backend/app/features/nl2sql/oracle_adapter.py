@@ -64,6 +64,7 @@ from .object_visibility import (
     user_visible_object_sql_predicate,
 )
 from .oracle_lob import configure_clob_fetch_as_text, configure_connection_clob_fetch_as_text
+from .oracle_sql_diagnostics import OracleOffsetBasis
 from .sql_lexing import _tokens as sql_tokens
 
 logger = logging.getLogger(__name__)
@@ -76,10 +77,18 @@ class OracleAdapterError(RuntimeError):
 class OracleSelectPreparationError(OracleAdapterError):
     """SELECT の非実行解析で得た Oracle 診断。分類不能な失敗は修正対象にしない。"""
 
-    def __init__(self, message: str, *, code: int = 0, offset: int = 0) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int = 0,
+        offset: int = 0,
+        offset_basis: OracleOffsetBasis | None = None,
+    ) -> None:
         super().__init__(f"{message} (offset={offset})")
         self.code = code
         self.offset = offset
+        self.offset_basis = offset_basis
 
     @property
     def allows_generation_repair(self) -> bool:
@@ -1847,15 +1856,24 @@ class OracleNl2SqlAdapter:
                 conn.cursor() as cursor,
             ):
                 try:
+                    connection_mode = getattr(conn, "thin", None)
+                except Exception:
+                    connection_mode = None
+                try:
                     cursor.parse(sql)
                 except Exception as exc:
                     error = exc.args[0] if exc.args else None
                     code = getattr(error, "code", 0)
                     offset = getattr(error, "offset", 0)
+                    # Thin の wire SQL と Thick の statement buffer は UTF-8。
+                    # 両 driver は server / ODPI の byte offset をそのまま返す。
                     raise OracleSelectPreparationError(
                         f"SELECT の実行前解析に失敗しました: {exc}",
                         code=code if isinstance(code, int) else 0,
                         offset=offset if isinstance(offset, int) else 0,
+                        offset_basis=(
+                            "utf8_bytes_zero_based" if isinstance(connection_mode, bool) else None
+                        ),
                     ) from exc
         except OracleAdapterError:
             raise
