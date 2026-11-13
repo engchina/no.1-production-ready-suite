@@ -99,7 +99,10 @@ def test_report_real_SDK_and_canonical_history(
     completed = run(repo, agent)
     assert completed.status == RunStatus.COMPLETED and answer(completed) == "確認できた内容です。"
     assert len(model.calls) == 2 and any(t.name == "draft_report" for t in model.calls[0].tools)
-    assert model.calls[0].output_schema is not None
+    assert model.calls[0].output_schema is None
+    assert model.calls[0].model_settings.tool_choice == "required"
+    assert model.calls[1].output_schema is not None
+    assert model.calls[1].output_schema.json_schema()["properties"]["preview_id"]["enum"] == ["A1"]
     assert REPORT_PREVIEWS_METADATA_KEY in completed.metadata
     follow = repo.create_builtin_run(
         RunCreateRequest(goal="続けてください。", agent_id=agent, thread_id=completed.thread_id),

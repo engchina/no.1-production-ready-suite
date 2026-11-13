@@ -369,6 +369,22 @@ def create_preview(
     return PreviewCreation(ledger=value, result=_summary(record, contract))
 
 
+def selectable_previews(
+    ledger: Mapping[str, Any] | None,
+    *,
+    run_id: str,
+    contract: ReportOutputContract,
+    source_digest: str,
+) -> tuple[str, ...]:
+    """同じ根拠と出力設定に結び付き、公開できる保存済み番号だけを返す。"""
+    current = _load(ledger, run_id, contract)
+    return tuple(
+        record.preview_id
+        for record in current.records
+        if not record.incomplete and record.source_digest == source_digest
+    )
+
+
 def select_preview(
     ledger: Mapping[str, Any] | None,
     *,

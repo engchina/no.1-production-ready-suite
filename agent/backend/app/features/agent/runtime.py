@@ -92,6 +92,7 @@ from app.features.agent.report_preview import (
     RenderedReport,
     ReportPreviewError,
     create_preview,
+    selectable_previews,
 )
 from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
 from app.features.agent.run_claim import RunClaim
@@ -1520,6 +1521,9 @@ class AgentRuntimeRepositoryContract(Protocol):
         contract: ReportOutputContract,
         renderer: Callable[[RunState, AnswerPlan], RenderedReport],
     ) -> JsonObject: ...
+    def report_selection_ids(
+        self, run_id: str, contract: ReportOutputContract
+    ) -> tuple[str, ...]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def save_builtin_artifact(
         self, run_id: str, *, kind: str, name: str, content: JsonObject
@@ -2715,6 +2719,30 @@ class AgentRuntimeRepository:
             self._mark_run_changed(run)
             self._persist_locked()
             return creation.result.model_dump(mode="json")
+
+    def report_selection_ids(self, run_id: str, contract: ReportOutputContract) -> tuple[str, ...]:
+        """実行の所有権・公開版・根拠を同じlockで確認して選択候補を読む。"""
+        from app.features.agent.report_runtime import source_digest
+
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.status != RunStatus.RUNNING or self._stale_execution_locked(
+                run, "report_selection", segment_end=False
+            ):
+                raise ReportPreviewError(
+                    "report.run_inactive", "実行中の回答案だけを選択できます。"
+                )
+            agent = self._agents.get(run.agent_id)
+            if agent is None or agent_for_run(agent, run).output_contract != contract:
+                raise ReportPreviewError(
+                    "report.contract_mismatch", "この実行の出力設定と回答案が一致しません。"
+                )
+            return selectable_previews(
+                run.metadata.get(REPORT_PREVIEWS_METADATA_KEY),
+                run_id=run.id,
+                contract=contract,
+                source_digest=source_digest(run),
+            )
 
     def save_builtin_artifact(
         self, run_id: str, *, kind: str, name: str, content: JsonObject

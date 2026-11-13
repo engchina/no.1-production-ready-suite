@@ -366,6 +366,7 @@ CONTEXT_OVERFLOW_CODE = "runtime.context_overflow"
 # 業務 Agent（SDK の Agent）に付ける、入力を収める上限（`ContextLimits`）の属性の名前。
 _CONTEXT_LIMITS_ATTR = "_agent_context_limits"
 _REPORT_CONTRACT_ATTR = "_agent_report_contract"
+_REPORT_SELECTION_MODEL_ATTR = "_agent_report_selection_model"
 # 業務 Agent（SDK の Agent）に付ける、指示の変わらない部分（Run の状態を足す前の指示）の属性の
 # 名前（#2583。モデルの呼び出しの span の指紋と構成の見積もりに使う）。
 _STATIC_INSTRUCTIONS_ATTR = "_agent_static_instructions"
@@ -3117,6 +3118,22 @@ def build_sdk_agent(
         hooks=_ConfirmationTurnHooks(recorder) if recorder is not None else None,
     )
     if output_contract is not None:
+        from app.features.agent.report_selection import ReportSelectionModel
+
+        def available_previews() -> tuple[str, ...]:
+            from app.features.agent.runtime import runtime_repository
+
+            return runtime_repository.report_selection_ids(run_id, output_contract)
+
+        if not isinstance(sdk_agent.model, Model):
+            raise BuiltinRuntimeError(
+                "runtime.report_incomplete", "回答案を選択するモデルがありません。"
+            )
+        setattr(
+            sdk_agent,
+            _REPORT_SELECTION_MODEL_ATTR,
+            ReportSelectionModel(sdk_agent.model, available_previews),
+        )
         sdk_agent.output_type = FinalSelection
         setattr(sdk_agent, _REPORT_CONTRACT_ATTR, output_contract)
     # 入力を収める上限（#2383。`_run_config` の `_ContextWindow` が読む）。
@@ -3654,11 +3671,15 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
                 raise _run_budget_stop(run_id, budget, exceeded)
         return model_data
 
-    return RunConfig(
+    config = RunConfig(
         tool_not_found_behavior="return_error_to_model",
         tool_error_formatter=format_error,
         call_model_input_filter=model_input,
     )
+    selected_model = getattr(sdk_agent, _REPORT_SELECTION_MODEL_ATTR, None)
+    if isinstance(selected_model, Model):
+        config.model = selected_model
+    return config
 
 
 async def _run_sdk(
@@ -5584,6 +5605,9 @@ def _record_failure(run_id: str, exc: Exception) -> None:
         return
     if isinstance(exc, BuiltinRuntimeError):
         code, message = exc.code, exc.message
+    elif isinstance(exc, ReportPreviewError):
+        code = "runtime.report_incomplete"
+        message = "確認済みの回答案を選択できないため、回答を確定しませんでした。 " + str(exc)
     elif isinstance(exc, source_handles.SourceHandleError):
         code = "runtime.answer_source_invalid"
         message = "取得済みの根拠への参照を検証できないため、回答を確定しませんでした。"
