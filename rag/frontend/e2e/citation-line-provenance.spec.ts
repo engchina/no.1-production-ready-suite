@@ -200,7 +200,7 @@ test.describe("本文の根拠の行と根拠の一覧の対応（issue 2710）"
     const opened = await openedSheet(page);
     const notice = opened.sheet.getByTestId("evidence-source-notice");
     await expect(notice).toBeVisible();
-    await expect(notice).toContainText("この根拠の行の位置は確定していません");
+    await expect(notice).toContainText("回答行とこの引用の対応は未確認です");
     await expect(notice).toContainText("候補 2 件");
     // 案内は要約の上。
     const [noticeBox, summaryBox] = await Promise.all([
@@ -218,7 +218,7 @@ test.describe("本文の根拠の行と根拠の一覧の対応（issue 2710）"
     const opened = await openedSheet(page);
     expect(opened.excerpt).toBe(OPERATION);
     const notice = opened.sheet.getByTestId("evidence-source-notice");
-    await expect(notice).toContainText("この根拠の行の位置は確定していません");
+    await expect(notice).toContainText("回答行とこの引用の対応は未確認です");
     await expect(notice).toContainText("候補はこの 1 件だけですが");
     await expect(notice).not.toContainText("1 つに決められません");
     await expect(notice).not.toContainText("候補 1 件");
@@ -233,7 +233,7 @@ test.describe("本文の根拠の行と根拠の一覧の対応（issue 2710）"
     // 保存した対応（H）は書き換えない。
     expect(opened.excerpt).toBe(HEADING);
     const notice = opened.sheet.getByTestId("evidence-source-notice");
-    await expect(notice).toContainText("この根拠の行の位置は確定していません");
+    await expect(notice).toContainText("回答行とこの引用の対応は未確認です");
     await expect(notice).toContainText("この回答の記録は");
     await expect(notice).toContainText("文書名と頁が合う箇所 3 件");
   });

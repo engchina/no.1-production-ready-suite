@@ -3672,7 +3672,7 @@ export const ja = {
   "search.answerText.citationCandidates": "位置未確定の候補：{citation}",
   "search.answerText.openCitation": "{citation} の原文を開く",
   // 本文の根拠の行が指す箇所を確定できないとき（#2710）。
-  "search.citationPosition.unresolvedTitle": "この根拠の行の位置は確定していません",
+  "search.citationPosition.unresolvedTitle": "回答行とこの引用の対応は未確認です",
   "search.citationPosition.candidatesBody":
     "回答が同じまとまりを参照したため、行が指す箇所を 1 つに決められません（候補 {count} 件）。テキストの原文で位置を確認できた引用箇所を強調しますが、この行との対応が確定したことは示しません。根拠の一覧で候補を確かめてください。",
   "search.citationPosition.singleCandidateBody":
