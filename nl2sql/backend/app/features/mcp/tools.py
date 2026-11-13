@@ -67,6 +67,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.api.concurrency import run_sync_io
 from app.features.nl2sql import ontology_router
+from app.features.nl2sql.generation_diagnostics import (
+    GenerationDiagnostics,
+    recorded_generation_diagnostics,
+)
 from app.features.nl2sql.models import (
     JobCreateRequest,
     JobData,
@@ -120,7 +124,8 @@ SERVER_NAME = "production-ready-nl2sql"
 # ツールの出力の版（出力の形を変えたら上げる。3 製品の MCP の出力の外枠をそろえる）。
 # 1: すべてのツールの出力に schema_version を足した（#3240）。
 # 2: ジョブを取り消すツール（nl2sql_cancel_job）を足した（#3318）。
-MCP_OUTPUT_SCHEMA_VERSION = 2
+# 3: 実際の修正の候補と形式的な投影変化を generation_diagnostics に追加。
+MCP_OUTPUT_SCHEMA_VERSION = 3
 # 業務プロファイルを自動で 1 つに決められなかった nl2sql_query のエラー（#2355）。
 PROFILE_NOT_SELECTED_CODE = "NL2SQL_PROFILE_NOT_SELECTED"
 # そのエラーの message に示す推薦の候補の数。
@@ -526,6 +531,7 @@ class Nl2SqlJobResult(VersionedOutput):
             "SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）"
         ),
     )
+    generation_diagnostics: GenerationDiagnostics | None = None
     column_metadata: list[ResultColumnMetadata] = Field(default_factory=list)
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
@@ -704,6 +710,9 @@ def _job_result(job: JobData, *, include_notice: bool = False) -> Nl2SqlJobResul
     output.is_safe = safety.is_safe
     output.safety_issues = [*issues, *safety.warnings]
     output.safety_check = "checked" if safety.safety_checked else "skipped"
+    output.generation_diagnostics = recorded_generation_diagnostics(
+        result.engine_meta.get("generation_diagnostics")
+    )
     output.column_metadata = list(result.results.column_metadata)
     output.columns = list(result.results.columns)
     output.rows = list(result.results.rows)

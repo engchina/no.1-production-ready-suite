@@ -162,6 +162,11 @@ from .enterprise_ai_client import (
     enterprise_ai_configuration_failure_message,
     find_enterprise_ai_error,
 )
+from .generation_diagnostics import (
+    BindingDiagnostic,
+    build_generation_diagnostics,
+    unavailable_generation_diagnostics,
+)
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
     SCHEMA_REFRESH_ERRORS,
@@ -479,7 +484,7 @@ from .reverse_prompts import (
 from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
 from .schema_constraint_context import schema_constraint_context
 from .select_ai_readiness import SELECT_AI_CREDENTIAL_ENGINES, assert_select_ai_credential_ready
-from .sql_binding import BindingDiagnostic, SqlGenerationValidationError, column_binding_findings
+from .sql_binding import SqlGenerationValidationError, column_binding_findings
 from .sql_lexing import prepare_oracle_query, use_session_current_datetime
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore
@@ -25047,6 +25052,7 @@ class Nl2SqlService:
         """
         feedback: dict[str, Any] | None = None
         rejected_sql = ""
+        rejected_bindings: list[BindingDiagnostic] | None = None
         for attempt in range(2):
             if before_attempt is not None:
                 before_attempt()
@@ -25084,6 +25090,7 @@ class Nl2SqlService:
             findings: list[str] = []
             oracle_diagnostics: list[OracleSqlDiagnostic] = []
             binding_diagnostics: list[BindingDiagnostic] = []
+            had_binding_findings = False
             if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT:
                 semantic = parse_oracle_sql(generated.generated_sql)
                 findings.extend(
@@ -25100,6 +25107,7 @@ class Nl2SqlService:
                             profile, allowed, generated.schema_catalog
                         ),
                     )
+                    had_binding_findings = bool(binding_findings)
                     findings.extend(finding.message for finding in binding_findings)
                     binding_diagnostics.extend(
                         diagnostic
@@ -25168,8 +25176,22 @@ class Nl2SqlService:
                 if generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and rejected_sql:
                     generated.engine_meta["sql_validation_attempts"] = attempt + 1
                     generated.engine_meta["sql_validation_rejected_sql"] = rejected_sql
+                    if rejected_bindings is not None:
+                        try:
+                            diagnostics = build_generation_diagnostics(
+                                rejected_sql, generated.generated_sql, rejected_bindings
+                            )
+                        except Exception:
+                            diagnostics = unavailable_generation_diagnostics(
+                                "diagnostic_build_failed"
+                            )
+                        generated.engine_meta["generation_diagnostics"] = diagnostics.model_dump(
+                            mode="json"
+                        )
                 return generated
             rejected_sql = generated.generated_sql
+            if had_binding_findings:
+                rejected_bindings = binding_diagnostics
             feedback = {
                 "operation": "repair_rejected_sql",
                 "rejected_sql": rejected_sql,

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
 
 import sqlglot
 from sqlglot import exp
@@ -15,32 +14,13 @@ from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, traverse_scope
 from sqlglot.schema import MappingSchema
 
+from .generation_diagnostics import BindingDiagnostic, ExactColumnCandidate, MissingPhysicalColumn
 from .models import SchemaTable
 from .oracle_dialect import OracleConversion
 
 
 class SqlGenerationValidationError(ValueError):
     pass
-
-
-class ExactColumnCandidate(TypedDict):
-    owner: str
-    table: str
-    column: str
-    sql_identifier: str
-
-
-class MissingPhysicalColumn(TypedDict):
-    qualifier: str
-    column: str
-    quoted: bool
-
-
-class BindingDiagnostic(TypedDict):
-    source: Literal["schema_catalog"]
-    reference: MissingPhysicalColumn
-    exact_candidates: list[ExactColumnCandidate]
-    truncated: bool
 
 
 @dataclass(frozen=True)

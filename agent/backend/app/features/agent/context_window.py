@@ -54,6 +54,7 @@ from typing import Any
 from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, online_output_budget
 from pr_system_settings.model import estimate_input_tokens
 
+from app.features.agent.generation_diagnostics import generation_diagnostics_summary
 from app.features.agent.tool_media import (
     MAX_IMAGES_IN_INPUT,
     ToolImage,
@@ -335,6 +336,10 @@ def _id_ref(item: Mapping[str, Any]) -> dict[str, Any]:
             ref[key] = value
         elif (texts := _state_list(key, value)) is not None:
             ref[key] = texts
+        elif key == "generation_diagnostics":
+            summary = generation_diagnostics_summary(value)
+            if summary is not None:
+                ref[key] = summary
     return ref
 
 
@@ -405,7 +410,9 @@ def _shrink(value: Any, *, level: int, stats: _Stats, in_list: bool = False) -> 
     if isinstance(value, dict):
         clipped = stats.clipped
         result = {
-            key: _typed_column_summary(item)
+            key: generation_diagnostics_summary(item)
+            if key == "generation_diagnostics"
+            else _typed_column_summary(item)
             if key == "column_metadata"
             else item
             if is_id_key(key) or _is_state(key, item) or _state_list(key, item) == item
@@ -436,6 +443,11 @@ def _ids_only(value: Any, stats: _Stats) -> Any:
         kept: dict[str, Any] = _id_ref(value)
         for key, item in value.items():
             if key in kept or key == COMPACTION_KEY:
+                continue
+            if key == "generation_diagnostics":
+                summary = generation_diagnostics_summary(item)
+                if summary is not None:
+                    kept[key] = summary
                 continue
             if key == "column_metadata":
                 kept[key] = _typed_column_summary(item)

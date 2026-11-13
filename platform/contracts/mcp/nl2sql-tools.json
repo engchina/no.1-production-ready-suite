@@ -46,7 +46,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -111,7 +111,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -207,6 +207,313 @@
               "method"
             ],
             "title": "AutoSelectedProfile",
+            "type": "object"
+          },
+          "BindingDiagnostic": {
+            "properties": {
+              "source": {
+                "const": "schema_catalog",
+                "title": "Source",
+                "type": "string"
+              },
+              "reference": {
+                "$ref": "#/$defs/MissingPhysicalColumn"
+              },
+              "exact_candidates": {
+                "items": {
+                  "$ref": "#/$defs/ExactColumnCandidate"
+                },
+                "maxItems": 16,
+                "title": "Exact Candidates",
+                "type": "array"
+              },
+              "truncated": {
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "source",
+              "reference",
+              "exact_candidates",
+              "truncated"
+            ],
+            "title": "BindingDiagnostic",
+            "type": "object"
+          },
+          "ExactColumnCandidate": {
+            "properties": {
+              "owner": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Owner",
+                "type": "string"
+              },
+              "table": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Table",
+                "type": "string"
+              },
+              "column": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Column",
+                "type": "string"
+              },
+              "sql_identifier": {
+                "maxLength": 512,
+                "minLength": 1,
+                "title": "Sql Identifier",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "table",
+              "column",
+              "sql_identifier"
+            ],
+            "title": "ExactColumnCandidate",
+            "type": "object"
+          },
+          "GenerationDiagnostics": {
+            "properties": {
+              "schema_version": {
+                "const": 1,
+                "default": 1,
+                "title": "Schema Version",
+                "type": "integer"
+              },
+              "status": {
+                "default": "recorded",
+                "enum": [
+                  "recorded",
+                  "unavailable"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "unavailable_reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "invalid_saved_diagnostics",
+                      "diagnostic_build_failed",
+                      "diagnostic_size_exceeded"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unavailable Reason"
+              },
+              "repairs": {
+                "items": {
+                  "$ref": "#/$defs/GenerationRepair"
+                },
+                "maxItems": 1,
+                "title": "Repairs",
+                "type": "array"
+              },
+              "truncated": {
+                "default": false,
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "title": "GenerationDiagnostics",
+            "type": "object"
+          },
+          "GenerationRepair": {
+            "properties": {
+              "rejected_attempt": {
+                "const": 1,
+                "default": 1,
+                "title": "Rejected Attempt",
+                "type": "integer"
+              },
+              "accepted_attempt": {
+                "const": 2,
+                "default": 2,
+                "title": "Accepted Attempt",
+                "type": "integer"
+              },
+              "reason_codes": {
+                "default": [
+                  "SQL_COLUMN_BINDING_INVALID"
+                ],
+                "items": {
+                  "const": "SQL_COLUMN_BINDING_INVALID",
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "title": "Reason Codes",
+                "type": "array"
+              },
+              "binding_diagnostics": {
+                "items": {
+                  "$ref": "#/$defs/BindingDiagnostic"
+                },
+                "maxItems": 16,
+                "title": "Binding Diagnostics",
+                "type": "array"
+              },
+              "projection_changes": {
+                "$ref": "#/$defs/ProjectionChanges"
+              }
+            },
+            "required": [
+              "projection_changes"
+            ],
+            "title": "GenerationRepair",
+            "type": "object"
+          },
+          "MissingPhysicalColumn": {
+            "properties": {
+              "qualifier": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Qualifier",
+                "type": "string"
+              },
+              "column": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Column",
+                "type": "string"
+              },
+              "quoted": {
+                "title": "Quoted",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "qualifier",
+              "column",
+              "quoted"
+            ],
+            "title": "MissingPhysicalColumn",
+            "type": "object"
+          },
+          "ProjectionChange": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "expression_changed",
+                  "position_changed",
+                  "output_name_changed"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "before": {
+                "$ref": "#/$defs/ProjectionReference"
+              },
+              "after": {
+                "$ref": "#/$defs/ProjectionReference"
+              }
+            },
+            "required": [
+              "kind",
+              "before",
+              "after"
+            ],
+            "title": "ProjectionChange",
+            "type": "object"
+          },
+          "ProjectionChanges": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "compared",
+                  "unavailable"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "unavailable_reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "unsupported_projection_scope",
+                      "projection_comparison_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unavailable Reason"
+              },
+              "removed": {
+                "items": {
+                  "$ref": "#/$defs/ProjectionReference"
+                },
+                "maxItems": 16,
+                "title": "Removed",
+                "type": "array"
+              },
+              "added": {
+                "items": {
+                  "$ref": "#/$defs/ProjectionReference"
+                },
+                "maxItems": 16,
+                "title": "Added",
+                "type": "array"
+              },
+              "changed": {
+                "items": {
+                  "$ref": "#/$defs/ProjectionChange"
+                },
+                "maxItems": 16,
+                "title": "Changed",
+                "type": "array"
+              },
+              "truncated": {
+                "default": false,
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "title": "ProjectionChanges",
+            "type": "object"
+          },
+          "ProjectionReference": {
+            "properties": {
+              "ordinal": {
+                "maximum": 4096,
+                "minimum": 1,
+                "title": "Ordinal",
+                "type": "integer"
+              },
+              "output_name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Output Name",
+                "type": "string"
+              },
+              "expression_kind": {
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Expression Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "ordinal",
+              "output_name",
+              "expression_kind"
+            ],
+            "title": "ProjectionReference",
             "type": "object"
           },
           "QueryStatus": {
@@ -434,7 +741,7 @@
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -537,6 +844,17 @@
             "default": null,
             "description": "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）",
             "title": "Safety Check"
+          },
+          "generation_diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GenerationDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "column_metadata": {
             "items": {
@@ -737,7 +1055,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -928,6 +1246,313 @@
               "method"
             ],
             "title": "AutoSelectedProfile",
+            "type": "object"
+          },
+          "BindingDiagnostic": {
+            "properties": {
+              "source": {
+                "const": "schema_catalog",
+                "title": "Source",
+                "type": "string"
+              },
+              "reference": {
+                "$ref": "#/$defs/MissingPhysicalColumn"
+              },
+              "exact_candidates": {
+                "items": {
+                  "$ref": "#/$defs/ExactColumnCandidate"
+                },
+                "maxItems": 16,
+                "title": "Exact Candidates",
+                "type": "array"
+              },
+              "truncated": {
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "source",
+              "reference",
+              "exact_candidates",
+              "truncated"
+            ],
+            "title": "BindingDiagnostic",
+            "type": "object"
+          },
+          "ExactColumnCandidate": {
+            "properties": {
+              "owner": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Owner",
+                "type": "string"
+              },
+              "table": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Table",
+                "type": "string"
+              },
+              "column": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Column",
+                "type": "string"
+              },
+              "sql_identifier": {
+                "maxLength": 512,
+                "minLength": 1,
+                "title": "Sql Identifier",
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "table",
+              "column",
+              "sql_identifier"
+            ],
+            "title": "ExactColumnCandidate",
+            "type": "object"
+          },
+          "GenerationDiagnostics": {
+            "properties": {
+              "schema_version": {
+                "const": 1,
+                "default": 1,
+                "title": "Schema Version",
+                "type": "integer"
+              },
+              "status": {
+                "default": "recorded",
+                "enum": [
+                  "recorded",
+                  "unavailable"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "unavailable_reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "invalid_saved_diagnostics",
+                      "diagnostic_build_failed",
+                      "diagnostic_size_exceeded"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unavailable Reason"
+              },
+              "repairs": {
+                "items": {
+                  "$ref": "#/$defs/GenerationRepair"
+                },
+                "maxItems": 1,
+                "title": "Repairs",
+                "type": "array"
+              },
+              "truncated": {
+                "default": false,
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "title": "GenerationDiagnostics",
+            "type": "object"
+          },
+          "GenerationRepair": {
+            "properties": {
+              "rejected_attempt": {
+                "const": 1,
+                "default": 1,
+                "title": "Rejected Attempt",
+                "type": "integer"
+              },
+              "accepted_attempt": {
+                "const": 2,
+                "default": 2,
+                "title": "Accepted Attempt",
+                "type": "integer"
+              },
+              "reason_codes": {
+                "default": [
+                  "SQL_COLUMN_BINDING_INVALID"
+                ],
+                "items": {
+                  "const": "SQL_COLUMN_BINDING_INVALID",
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "title": "Reason Codes",
+                "type": "array"
+              },
+              "binding_diagnostics": {
+                "items": {
+                  "$ref": "#/$defs/BindingDiagnostic"
+                },
+                "maxItems": 16,
+                "title": "Binding Diagnostics",
+                "type": "array"
+              },
+              "projection_changes": {
+                "$ref": "#/$defs/ProjectionChanges"
+              }
+            },
+            "required": [
+              "projection_changes"
+            ],
+            "title": "GenerationRepair",
+            "type": "object"
+          },
+          "MissingPhysicalColumn": {
+            "properties": {
+              "qualifier": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Qualifier",
+                "type": "string"
+              },
+              "column": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Column",
+                "type": "string"
+              },
+              "quoted": {
+                "title": "Quoted",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "qualifier",
+              "column",
+              "quoted"
+            ],
+            "title": "MissingPhysicalColumn",
+            "type": "object"
+          },
+          "ProjectionChange": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "expression_changed",
+                  "position_changed",
+                  "output_name_changed"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "before": {
+                "$ref": "#/$defs/ProjectionReference"
+              },
+              "after": {
+                "$ref": "#/$defs/ProjectionReference"
+              }
+            },
+            "required": [
+              "kind",
+              "before",
+              "after"
+            ],
+            "title": "ProjectionChange",
+            "type": "object"
+          },
+          "ProjectionChanges": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "compared",
+                  "unavailable"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "unavailable_reason": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "unsupported_projection_scope",
+                      "projection_comparison_failed"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unavailable Reason"
+              },
+              "removed": {
+                "items": {
+                  "$ref": "#/$defs/ProjectionReference"
+                },
+                "maxItems": 16,
+                "title": "Removed",
+                "type": "array"
+              },
+              "added": {
+                "items": {
+                  "$ref": "#/$defs/ProjectionReference"
+                },
+                "maxItems": 16,
+                "title": "Added",
+                "type": "array"
+              },
+              "changed": {
+                "items": {
+                  "$ref": "#/$defs/ProjectionChange"
+                },
+                "maxItems": 16,
+                "title": "Changed",
+                "type": "array"
+              },
+              "truncated": {
+                "default": false,
+                "title": "Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "title": "ProjectionChanges",
+            "type": "object"
+          },
+          "ProjectionReference": {
+            "properties": {
+              "ordinal": {
+                "maximum": 4096,
+                "minimum": 1,
+                "title": "Ordinal",
+                "type": "integer"
+              },
+              "output_name": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Output Name",
+                "type": "string"
+              },
+              "expression_kind": {
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Expression Kind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "ordinal",
+              "output_name",
+              "expression_kind"
+            ],
+            "title": "ProjectionReference",
             "type": "object"
           },
           "QueryStatus": {
@@ -1155,7 +1780,7 @@
         "description": "契約の `Nl2SqlJobResult`（Agent の `external_nl2sql_*` がそのまま通す）。",
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1258,6 +1883,17 @@
             "default": null,
             "description": "SQL の安全確認。checked（確かめた）/ skipped（Select AI・Select AI Agent が生成した SELECT 文のため省略。業務プロファイルの表・列の範囲の照合も行わない）",
             "title": "Safety Check"
+          },
+          "generation_diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GenerationDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "column_metadata": {
             "items": {
@@ -1478,7 +2114,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 3,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
