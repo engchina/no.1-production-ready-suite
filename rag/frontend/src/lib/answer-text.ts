@@ -103,7 +103,7 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
   const lines = text.split("\n");
   const citation = format?.citation_prefix ? new RegExp("^" + escapePattern(format.citation_prefix)) : CITATION;
   const bullet = format?.item_bullet ? new RegExp("^" + escapePattern(format.item_bullet)) : BULLET;
-  if (!lines.some((line) => sectionTitle(line.trim(), format))) return null;
+  if (!lines.some((line) => sectionTitle(line.trim(), format) || citation.test(line.trim()))) return null;
   const blocks: AnswerTextBlock[] = [];
   let section: Extract<AnswerTextBlock, { kind: "section" }> | null = null;
   let paragraph: string[] = [];

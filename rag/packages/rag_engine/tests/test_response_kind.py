@@ -4,7 +4,7 @@ from typing import get_args
 
 import pytest
 from pydantic import ValidationError
-from test_answer_flow_single_generation import ROW, _ids, _run, _source, context, record
+from test_answer_flow_single_generation import ROW, _run, context, record
 from test_answer_parts_wire import case
 
 from rag_engine.generation.answer_envelope import AnswerOutcome
@@ -20,15 +20,14 @@ def test_declared_kind_preserves_reference_answer_and_does_not_repeat_generation
         context(record(0, ROW, "合成資料", source="synthetic.md")),
         lambda units: {
             "response_kind": kind,
-            "answer_parts": [_source(_ids(question)[0], "合成の要求", units[ROW])],
-            "summary_part_indexes": [0],
+            "answer_body": ROW + "[C1]",
+            "citations": [{"unit_ids": [units[ROW]]}],
             "confidence": "high",
-            "reference_materials": ["合成の補足資料"],
         },
     )
     assert response.envelope["outcome"] == kind
     assert ROW in response.answer_text
-    assert calls == ["GroundedDraftWire"]
+    assert calls == ["FullAnswerWire"]
 
 
 def test_new_generation_requires_an_explicit_existing_kind():
@@ -69,35 +68,3 @@ def test_configured_secondary_model_does_not_add_another_generation(monkeypatch)
     )
     assert returned is result
     assert calls == ["primary"]
-
-
-@pytest.mark.parametrize(
-    "mixed,declared,expected",
-    [
-        (False, "answered", "insufficient_evidence"),
-        (True, "answered", "conditional"),
-        (False, "conditional", "insufficient_evidence"),
-        (False, "needs_environment_data", "needs_environment_data"),
-    ],
-)
-def test_declared_answered_does_not_disagree_with_its_own_explicit_gap_parts(mixed, declared, expected):
-    from test_answer_flow_single_generation import _gap
-
-    question = "項目Aと項目Cの値を教えてください。"
-    gap = "項目Cは資料に記載されていません。"
-
-    def parts(units):
-        selected = [_gap(_ids(question)[0], "合成の不足", gap)]
-        if mixed:
-            selected.append(_source(_ids(question)[0], "合成の回答", units[ROW]))
-        return {"response_kind": declared, "answer_parts": selected, "summary_part_indexes": [], "confidence": "high"}
-
-    response, calls = _run(question, context(record(0, ROW, "合成資料", source="synthetic.md")), parts)
-    assert response.envelope["outcome"] == expected
-    assert gap in response.answer_text
-    assert response.generation_trace["response_kind"] == {
-        "declared": declared,
-        "recorded": expected,
-        "source": "typed_answer_parts" if declared != expected else "declared",
-    }
-    assert calls == ["GroundedDraftWire"]

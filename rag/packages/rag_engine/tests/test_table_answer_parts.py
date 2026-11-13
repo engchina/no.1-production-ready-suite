@@ -13,15 +13,15 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from test_answer_flow_single_generation import _ids, _run, _source
+from test_answer_flow_single_generation import _ids, _run
 from test_grounded_answer import context, record
 
 from rag_engine.generation.answer_labels import answer_labels
+from rag_engine.generation.answer_parts_wire import answer_parts_model
 from rag_engine.generation.answer_table import table_markdown
 from rag_engine.generation.applications import CheckedApplication, render_lines, table_block_lines
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.citation_wire import canonical_generation_draft
-from rag_engine.generation.grounded import generation_output_model
+from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
 from rag_engine.models.llm import AnswerTable, GroundedApplication
 
 FIRST = "合成の処理 A は応答が 30 秒ない要求を失敗とする。"
@@ -40,7 +40,7 @@ def catalog_case() -> tuple[Any, SentUnitCatalog, EvidenceUnitSnapshot]:
     span = {"label": "E1", "evidence_id": "source-r", "source_id": "s-r", "source": "synthetic.txt", "text": TEXT}
     snapshot = EvidenceUnitSnapshot.create(span, [(0, len(FIRST)), (len(FIRST) + 1, len(TEXT))], "explicit_units_v5")
     catalog = SentUnitCatalog([snapshot])
-    return generation_output_model(QUESTION, unit_catalog=catalog), catalog, snapshot
+    return answer_parts_model(generation_draft_wire_model(), catalog), catalog, snapshot
 
 
 def table_part(rows: list[tuple[list[str], list[str]]], columns: tuple[str, ...] = ("項目", "扱い")) -> dict[str, Any]:
@@ -213,34 +213,23 @@ def _table_parts(units: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def test_answer_text_shows_the_table_once_with_the_source_column_and_citation_lines_below() -> None:
-    ctx = context(
-        record(0, FIRST, "合成の文書", page=1, source="synthetic.txt"), record(1, SECOND, "合成の文書", page=2, source="synthetic.txt")
+def test_complete_markdown_table_is_preserved_once():
+    ctx = context(record(0, FIRST, "合成の文書", page=1, source="synthetic.txt"))
+    body = "\n".join(TABLE_LINES)
+    response, calls = _run(
+        QUESTION,
+        ctx,
+        lambda units: {
+            "answer_body": body + "\n[C1]",
+            "response_kind": "answered",
+            "confidence": "high",
+            "citations": [{"unit_ids": [units[FIRST]]}],
+        },
     )
-    response, calls = _run(QUESTION, ctx, _table_parts)
-    assert calls == ["GroundedDraftWire"]
-    text = response.answer_text
-    labels = answer_labels()
-    column = labels.table_source_column
-    # 冒頭の回答の段落: 題・出典の列つきの表・行ごとの出典行（表の行の順に番号を振る）。
-    head = text.split("\n\n", 1)[0].splitlines()
-    assert head == [
-        "合成の処理 A の再試行の扱い",
-        f"| 項目 | 扱い | {column} |",
-        "| --- | --- | --- |",
-        "| 失敗の判定 | 応答が 30 秒ない要求を失敗とする | [1] |",
-        "| 再試行の回数 | 最大 5 回 | [2] |",
-        f"{labels.citation_prefix}synthetic.txt p.1",
-        f"{labels.citation_prefix}synthetic.txt p.2",
-    ]
-    # 表は 1 回だけ。「資料をもとに導いた結論」には題と上の表の案内だけを出す。
-    assert sum(line.startswith("| ---") for line in text.splitlines()) == 1
-    applications = text.split(labels.applications_section, 1)[1].strip().split("\n\n", 1)[0]
-    assert applications.splitlines() == ["・合成の処理 A の再試行の扱い", labels.table_above_note]
-    # 本文の出典行の n 番目が citation_lines の n 番目（画面はこの対応で印から根拠を開く）。表の下の出典行が先頭。
-    lines = response.generation_trace["citation_lines"]
-    assert text.count(labels.citation_prefix) == len(lines)
-    assert [row["page"] for row in lines[:2]] == [1, 2]
+    assert calls == ["FullAnswerWire"]
+    assert response.answer_text.startswith(body)
+    assert response.answer_text.count("| --- |") == 1
+    assert len(response.generation_trace["citation_lines"]) == 1
 
 
 def test_a_question_without_a_table_request_keeps_the_answer_shape() -> None:
@@ -250,8 +239,8 @@ def test_a_question_without_a_table_request_keeps_the_answer_shape() -> None:
         context(record(0, SECOND, "合成の文書", source="synthetic.txt")),
         lambda units: {
             "response_kind": "answered",
-            "answer_parts": [_source(_ids(question)[0], "再試行の回数", units[SECOND])],
-            "summary_part_indexes": [0],
+            "answer_body": SECOND + "[C1]",
+            "citations": [{"unit_ids": [units[SECOND]]}],
             "confidence": "high",
         },
     )

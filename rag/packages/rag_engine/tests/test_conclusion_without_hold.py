@@ -31,29 +31,7 @@ def _answer() -> tuple[Any, list[str]]:
             raise AssertionError(f"生成と説明のほかの呼び出し: {schema.__name__}")
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
         return schema.model_validate(
-            {
-                "response_kind": "answered",
-                "request_coverage": [
-                    {
-                        "request_id": "Q1",
-                        "evidence_scope": [{"evidence_id": "E1", "target": "項目A", "relation": "direct", "link": None}],
-                    }
-                ],
-                "answer_parts": [
-                    {
-                        "request_id": "Q1",
-                        "requirement": "保存年数を答える",
-                        "answer": {
-                            "kind": "answer",
-                            "basis": {"unit_ids": [units[ROW]]},
-                            "reasoning": "表の項目Aの行の保存年数を読む。",
-                            "result": RESULT,
-                        },
-                    }
-                ],
-                "summary_part_indexes": [0],
-                "confidence": "high",
-            }
+            {"answer_body": RESULT + "[C1]", "response_kind": "answered", "confidence": "high", "citations": [{"unit_ids": [units[ROW]]}]}
         )
 
     def unused(*_args: Any, **_kwargs: Any) -> Any:
@@ -70,11 +48,11 @@ def test_conclusion_and_summary_stay_when_the_evidence_has_a_table() -> None:
     response, _calls = _answer()
     assert response.answer_text.startswith(RESULT)
     assert answer_labels().neutral_summary not in response.answer_text
-    assert response.generation_trace["applications"][0]["published"]
+    assert response.cited_evidence
 
 
 def test_answered_request_is_not_listed_as_unconfirmed() -> None:
     response, _calls = _answer()
     assert answer_labels().gaps_section not in response.answer_text
-    assert response.generation_trace["rounds"][0]["timing"]["answer_parts"]["status"] == "linked"
+    assert response.envelope["outcome"] == "answered"
     assert response.insufficient_reason in (None, "")

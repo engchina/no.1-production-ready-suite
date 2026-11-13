@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from citation_unit_support import legacy_generation_output_model
 from pydantic import ValidationError
 
 from rag_engine.adapters.oci import LlmRunawayOutput
@@ -21,7 +22,6 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_parts_wire import DERIVATION_QUESTION_TYPES
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.grounded import generation_output_model
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "source_only_derivation_outputs.json").read_text(encoding="utf-8"))
 QUESTION = "属性A〜Hは有です。属性Iは無です。確定した合計点と区分を教えてください。"
@@ -176,7 +176,7 @@ def _single_unit_case(question_type: list[str]):
     span = {"label": "E1", "evidence_id": "source-a", "source_id": "s-a", "source": "synthetic.txt", "text": text}
     snapshot = EvidenceUnitSnapshot.create(span, [(0, len(text))], "explicit_units_v5")
     catalog = SentUnitCatalog([snapshot])
-    model = generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
+    model = legacy_generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
     value = model.model_validate(
         {
             "response_kind": "answered",

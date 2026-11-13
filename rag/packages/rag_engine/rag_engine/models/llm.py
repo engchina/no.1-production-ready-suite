@@ -479,6 +479,7 @@ class GroundedDraft(_StrictModel):
     # 新wireの摘要は既出出力の選択だけ。依存が非公開になれば機械的に保留する。
     _composed_summary: bool = PrivateAttr(default=False)
     # 新しい生成の自己申告。本文を公開する条件には使わず、既存の履歴は未宣言のまま読む。
+    _full_answer: dict[str, Any] | None = PrivateAttr(default=None)
     _response_kind: str | None = PrivateAttr(default=None)
     _declared_response_kind: str | None = PrivateAttr(default=None)
 

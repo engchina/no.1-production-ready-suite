@@ -116,12 +116,12 @@ def test_subquestion_label_is_a_closed_set_in_the_generation_schema() -> None:
         schema.model_validate(raw)
 
 
-def test_generation_schema_has_the_subquestion_field_only_for_questions_with_subquestions() -> None:
+def test_generation_schema_does_not_require_a_second_classification_per_subquestion() -> None:
     plain = grounded.generation_output_model(PLAIN_QUESTION, unit_catalog=SentUnitCatalog([snapshot()])).model_json_schema()
     assert "subquestion" not in str(plain)
     enumerated = grounded.generation_output_model(SUBQUESTIONS, unit_catalog=SentUnitCatalog([snapshot()])).model_json_schema()
-    assert "subquestion" in str(enumerated)
-    assert "(3)" in str(enumerated)
+    assert "subquestion" not in str(enumerated)
+    assert "answer_body" in enumerated["properties"]
 
 
 def test_recorded_output_without_the_subquestion_field_still_parses() -> None:

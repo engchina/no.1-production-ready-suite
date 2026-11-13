@@ -165,7 +165,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
     if schema.__name__ == "QuestionMentionAnchors":
         # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
         return cast(Any, schema).model_validate({"mentions": []})
-    if issubclass(
+    if getattr(schema, "_uses_full_answer", False) or issubclass(
         schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
     ):
         body = "受注番号を入力し、登録ボタンを押します。"
@@ -184,6 +184,10 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             "items": [{"kind": "rule", "text": body, "citations": citations}] if citations else [],
             "confidence": "high",
         }
+        if getattr(schema, "_uses_full_answer", False):
+            from tests.generation_fixtures import generation_result
+
+            return generation_result(schema, prompt, payload)
         if getattr(schema, "_uses_typed_answer_parts", False):
             scopes = [
                 {"evidence_id": label, "target": "合成の操作", "relation": "direct", "link": None}

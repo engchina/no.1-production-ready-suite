@@ -214,7 +214,9 @@ def deterministic_parse_text_response(
             {"summary": "決定論スタブの回答", "items": items, "confidence": "high"}
         )
     # 生成は実際に提示された単位 ID を返す。旧整数 schema の直接検証も残す。
-    if issubclass(text_format, generation_draft_wire_model()):
+    if getattr(text_format, "_uses_full_answer", False) or issubclass(
+        text_format, generation_draft_wire_model()
+    ):
         evidence = _first_evidence(prompt)
         items = []
         if evidence:
@@ -233,6 +235,10 @@ def deterministic_parse_text_response(
                     else [{"evidence_id": evidence_id, "line_start": number, "line_end": number}],
                 }
             ]
+        if getattr(text_format, "_uses_full_answer", False):
+            from tests.generation_fixtures import generation_result
+
+            return generation_result(text_format, prompt, {"items": items, "confidence": "high"})
         if getattr(text_format, "_uses_typed_answer_parts", False):
             answer = (
                 {"kind": "source", "basis": {"unit_ids": [unit.group(1)]}}

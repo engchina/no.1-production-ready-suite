@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 import pytest
+from citation_unit_support import legacy_generation_output_model
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -69,7 +70,7 @@ def test_generation_schema_has_no_plan():
 def test_generation_derives_one_plan_per_request_whatever_plan_rows_the_model_returned(coverage):
     """要求が 1 つの質問。モデルが計画の行を返しても（無い・繰り返し・別の要求）、計画は basis から 1 件だけ導く。"""
     units, snapshot = catalog()
-    model = generation_output_model(QUESTION, unit_catalog=units)
+    model = legacy_generation_output_model(QUESTION, unit_catalog=units)
     canonical = canonical_generation_draft(model.model_validate(draft(coverage, snapshot)), unit_catalog=units)
     assert [entry.request_id for entry in canonical.request_coverage] == ["Q1"]
     assert canonical.request_coverage[0].evidence_ids == ["E1"]
@@ -114,7 +115,7 @@ def test_generation_call_sends_no_plan_schema():
         pytest.raises(RuntimeError, match="schema を確かめたら止める"),
     ):
         synthesize_grounded_answer(QUESTION, AnswerContext(records=[record], text=TEXT), settings, image_prompt_mode="text_only")
-    generation = [schema for schema in captured if getattr(schema, "_uses_typed_answer_parts", False)]
+    generation = [schema for schema in captured if getattr(schema, "_uses_full_answer", False)]
     assert generation
     assert all("request_coverage" not in schema.model_json_schema()["properties"] for schema in generation)
 
@@ -138,7 +139,7 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
     units = SentUnitCatalog([table_units, rule_units])
     mapping = {"{header}": table_units.unit_ids[0], "{rule}": rule_units.unit_ids[0], "{E:table}": "E1", "{E:rule}": "E2"}
     mapping.update({f"{{row:{number}}}": table_units.unit_ids[number] for number in range(1, len(lines))})
-    model = generation_output_model(TABLE_QUESTION, unit_catalog=units)
+    model = legacy_generation_output_model(TABLE_QUESTION, unit_catalog=units)
 
     def replay(name: str) -> dict[str, Any]:
         text = json.dumps(FIXTURE["outputs"][name], ensure_ascii=False)

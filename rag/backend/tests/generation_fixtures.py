@@ -8,6 +8,27 @@ from pydantic import BaseModel
 
 
 def generation_result(schema: type[BaseModel], prompt: str, payload: dict[str, Any]) -> BaseModel:
+    if getattr(schema, "_uses_full_answer", False):
+        if "answer_body" in payload:
+            return schema.model_validate(payload)
+        citations = []
+        paragraphs = []
+        for item in payload.get("items", []):
+            text = item["text"]
+            for citation in item.get("citations", []):
+                citations.append(citation)
+                text += f"[C{len(citations)}]"
+            paragraphs.append(text)
+        return schema.model_validate(
+            {
+                "answer_body": "\n\n".join(paragraphs)
+                or payload.get("summary")
+                or "合成の資料が不足しています。",
+                "response_kind": payload.get("response_kind", "answered"),
+                "confidence": payload.get("confidence", "high"),
+                "citations": citations,
+            }
+        )
     if not getattr(schema, "_uses_typed_answer_parts", False):
         return schema.model_validate(payload)
     result = deepcopy(payload)

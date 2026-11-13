@@ -136,11 +136,26 @@ async function ask(page: Page, answerText = ANSWER) {
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   const answer = page.getByTestId("answer-text");
-  await expect(answer.getByRole("heading", { name: "資料により確認できた事項" })).toBeVisible();
+  await expect(answer).toBeVisible();
   return answer;
 }
 
 test.describe("回答の本文の表（issue 4734・4812・4822）", { tag: "@responsive" }, () => {
+  test("定型の節が無い完成本文の根拠を開ける", async ({ page }, testInfo) => {
+    const answer = await ask(page, "保存年数は5年です。\n根拠：文書 A.pdf p.3");
+    await expect(answer).toContainText("保存年数は5年です。");
+    const citation = answer.getByRole("button", { name: "[1] 根拠：文書 A.pdf p.3 の原文を開く", exact: true });
+    await expect(citation).toBeVisible();
+    await citation.click();
+    const source = page.getByRole("dialog", { name: "回答の根拠" });
+    await expect(source).toBeVisible();
+    await expect(source).toContainText(CITATION_TEXT);
+    await page.screenshot({ path: testInfo.outputPath("full-answer-citation.png") });
+    await page.keyboard.press("Escape");
+    await expect(citation).toBeFocused();
+    await expectNoPageOverflow(page);
+  });
+
   test("HTML 表の引用のパイプとバックスラッシュを値のまま 2 列で表示する", async ({ page }, testInfo) => {
     const answer = await ask(page, [
       "資料により確認できた事項", "", "・合成の表題",

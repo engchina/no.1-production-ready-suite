@@ -3,18 +3,18 @@
 from copy import deepcopy
 
 import pytest
+from citation_unit_support import legacy_generation_output_model
 from pydantic import ValidationError
 
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft
-from rag_engine.generation.grounded import generation_output_model
 
 
 def case(text: str = "項目Aは12です。"):
     span = {"label": "E1", "evidence_id": "source-a", "source_id": "s-a", "source": "synthetic.txt", "text": text}
     snapshot = EvidenceUnitSnapshot.create(span, [(0, len(text))], "explicit_units_v5")
     catalog = SentUnitCatalog([snapshot])
-    model = generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
+    model = legacy_generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
     raw = {
         "response_kind": "answered",
         "answer_parts": [
@@ -78,7 +78,7 @@ def two_unit_case():
     span = {"label": "E1", "evidence_id": "source-b", "source_id": "s-b", "source": "synthetic.txt", "text": text}
     snapshot = EvidenceUnitSnapshot.create(span, [(0, 9), (10, len(text))], "explicit_units_v5")
     catalog = SentUnitCatalog([snapshot])
-    model = generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
+    model = legacy_generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
     return model, catalog, snapshot
 
 
@@ -120,7 +120,7 @@ def test_answer_citing_two_documents_stays_derived_even_when_one_contains_the_re
         {"label": "E2", "evidence_id": "b", "source_id": "b", "source": "b.txt", "text": "条件Cの場合に限ります。"}, [(0, 12)], "u"
     )
     catalog = SentUnitCatalog([first, second])
-    model = generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
+    model = legacy_generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
     raw = readback([first.unit_ids[0], second.unit_ids[0]], "12です")
     draft = canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
     assert draft.answer_parts[0].result_kind == "derived"
@@ -171,7 +171,7 @@ def test_source_preserves_long_original_and_repeated_selection_without_rewriting
 
 
 def test_empty_catalog_keeps_only_gap():
-    model = generation_output_model("記録値を教えてください。", unit_catalog=SentUnitCatalog(()))
+    model = legacy_generation_output_model("記録値を教えてください。", unit_catalog=SentUnitCatalog(()))
     raw = {
         "response_kind": "answered",
         "answer_parts": [{"request_id": "Q1", "requirement": "資料の値", "answer": {"kind": "gap", "text": "資料が必要です。"}}],

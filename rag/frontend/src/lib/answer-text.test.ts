@@ -626,3 +626,11 @@ describe("parseAnswerText の表の行（issue 4734）", () => {
     });
   });
 });
+
+
+it("定型の節が無い完成本文でも引用の行を段落へ結ぶ", () => {
+  expect(parseAnswerText("保存年数は5年です。\n根拠：synthetic.txt\n\n資料の条件を確認してください。\n根拠：synthetic.txt")).toEqual([
+    { kind: "paragraph", text: "保存年数は5年です。", citations: ["根拠：synthetic.txt"], citationLines: [1] },
+    { kind: "paragraph", text: "資料の条件を確認してください。", citations: ["根拠：synthetic.txt"], citationLines: [2] },
+  ]);
+});
