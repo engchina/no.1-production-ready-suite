@@ -1437,4 +1437,6 @@ test("ガイドの段落は3行で編集し、Enterで保存せず内部改行�
   await expectNoPageOverflow(page);
   await editor.getByRole("textbox", { name: "期待する結果", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("multiline-guide-prose.png") });
+  await editor.getByRole("textbox", { name: "メモ", exact: true }).evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.screenshot({ path: testInfo.outputPath("multiline-guide-note.png") });
 });

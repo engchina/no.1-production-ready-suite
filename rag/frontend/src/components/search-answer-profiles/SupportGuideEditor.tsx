@@ -1112,6 +1112,7 @@ function SupportGuideForm({
                 <TextareaField
                   id={domId(path("note"))}
                   rows={3}
+                  className="col-span-full"
                   width="full"
                   label={t("supportGuides.field.note")}
                   value={row.note}

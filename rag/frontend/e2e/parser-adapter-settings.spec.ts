@@ -420,9 +420,11 @@ test("項目抽出の項目の定義を追加・検証・保存できる", { tag
   await definitions.click();
   const editor = page.getByTestId("extraction-fields-editor");
   await expect(editor.getByLabel("項目名")).toHaveValue("請求書番号");
+  await expect(editor.getByLabel("説明", { exact: true })).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(editor.getByLabel("説明", { exact: true })).toHaveAttribute("rows", "3");
   const layout = await editor.evaluate(node => {
     const row = node.querySelector("ol > li")!;
-    const description = node.querySelector<HTMLInputElement>('input[id$="-description"]')!;
+    const description = node.querySelector<HTMLTextAreaElement>('textarea[id$="-description"]')!;
     return { container: node.clientWidth, row: row.getBoundingClientRect().width, description: description.getBoundingClientRect().width,
       name: node.querySelector('input[id$="-name"]')!.getBoundingClientRect().width };
   });
