@@ -415,8 +415,22 @@ class WikiRetriever:
         expected = {sid for page in required for sid in page.unit.source_chunk_ids}
         if {chunk.chunk_id for chunk in originals} != expected:
             raise WikiSourceChanged("Wiki の原文保存版が変更されました。")
+        identities = {
+            row["document_id"]: row.get("source_identities", [])
+            for row in await self.store.catalog(scoped, compiler)
+        }
+        if {chunk.document_id for chunk in originals} - identities.keys():
+            raise WikiSourceChanged("原文を取得した後に文書の可視範囲が変更されました。")
         chunks = tuple(
-            chunk.model_copy(update={"metadata": {**chunk.metadata, "wiki_source": True}})
+            chunk.model_copy(
+                update={
+                    "metadata": {
+                        **chunk.metadata,
+                        "wiki_source": True,
+                        "source_identities": identities.get(chunk.document_id, []),
+                    }
+                }
+            )
             for chunk in originals
         )
         return WikiSearchResult(

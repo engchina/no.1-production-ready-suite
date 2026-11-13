@@ -3887,6 +3887,11 @@ def _stored_child(
     metadata = _engine_metadata(chunk)
     if chunk.metadata.get("wiki_source") is True:
         metadata["wiki_source"] = True
+    identities = chunk.metadata.get("source_identities")
+    if isinstance(identities, list) and all(isinstance(identity, dict) for identity in identities):
+        metadata["source_identities"] = [
+            dict(identity) for identity in identities if isinstance(identity, dict)
+        ]
     if _unprojected_vision_chunk(chunk, metadata):
         raise UnprojectedVisionSourceError((_document_display_name(chunk),))
     if isinstance(document := metadata.get("document"), dict) and "first_page_context" in document:

@@ -14,6 +14,9 @@ def source_context(record: Any) -> dict[str, Any]:
     if isinstance(path, str):
         path = [part.strip() for part in path.split(" > ") if part.strip()]
     context: dict[str, Any] = {"document_name": str(getattr(record, "source", "") or "")}
+    identities = metadata.get("source_identities")
+    if identities and isinstance(identities, list) and all(isinstance(identity, dict) for identity in identities):
+        context["source_identities"] = [dict(identity) for identity in identities]
     if isinstance(path, (list, tuple)):
         context["section_path"] = [str(part) for part in path]
     header = metadata.get("context_header")

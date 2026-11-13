@@ -165,13 +165,14 @@ async def test_read_planner_retains_selected_document_identity_metadata() -> Non
         return [{"document_id": "document-a", "title": "合成資料", "source_identities": identities}]
 
     store.catalog = catalog
-    await search.search(
+    result = await search.search(
         "合成資料の版を比較する質問", profile_id="profile-a", filters={}, allow_planning=True
     )
     documents = model.calls[1]["documents"]
     assert documents[0]["source_identities"] == identities
     assert documents[0]["title"] == "合成資料"
     assert documents[0]["document_id"] == model.calls[1]["units"][0]["document_id"]
+    assert result.chunks[0].metadata["source_identities"] == identities
 
 
 @pytest.mark.asyncio
