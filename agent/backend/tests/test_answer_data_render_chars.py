@@ -87,6 +87,15 @@ def test_column_costs_reconstruct_all_rows_column_projection_and_vertical_length
         vertical = values + headers + (count + 1) * (3 * width + 2) + (6 * width + 1)
         assert vertical == len(index.render(marker + ":layout=vertical]]"))
     assert index.render(refs["quantities"][0]["VALUE (N)"]) == "12 N"
+    single_output = {**output, "rows": output["rows"][:1]}
+    single_step = _step("nl2sql_query", single_output)
+    single_refs = model_data_references(single_step.id, single_output)
+    assert single_refs is not None
+    single_costs = single_refs["render_chars"]["columns"]
+    values = sum(cost["header"] + cost["values"] for cost in single_costs)
+    vertical = values + len("項目") + len("値") + (len(single_costs) + 1) * 8 + 13
+    marker = single_refs["table"][:-2] + ":rows=*:cols=*:layout=vertical]]"
+    assert vertical == len(data_index([single_step]).render(marker))
 
 
 def test_render_cost_is_complete_after_compaction_and_checkpoint_restore() -> None:
