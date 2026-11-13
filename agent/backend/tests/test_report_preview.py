@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -589,3 +589,181 @@ def test_hard_max_does_not_publish_the_separate_evidence_view() -> None:
     assert (
         selected.status == "incomplete" and selected.body is None and selected.evidence_text == ""
     )
+
+
+CITATION_METRIC: Literal["expanded_markdown_without_citation_markers_codepoints"] = (
+    "expanded_markdown_without_citation_markers_codepoints"
+)
+
+
+def _citation_preview(
+    body: str,
+    evidence: str,
+    contract: ReportOutputContract,
+) -> Any:
+    return create_preview(
+        None,
+        run_id="run-a",
+        operation_key="op-a",
+        plan=AnswerPlan(blocks=(NarrativeBlock(text="構成を指定"),)),
+        contract=contract,
+        render_body=lambda _plan: RenderedReport(
+            body=body,
+            evidence_text=evidence,
+            source_digest="a" * 64,
+            block_costs=(
+                RenderedBlockCost(index=1, kind="narrative", expanded_codepoints=len(body)),
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize("kind", ["soft_target", "hard_max"])
+@pytest.mark.parametrize("limit", [2, 3, 4])
+@pytest.mark.parametrize("discount", [False, True])
+def test_budget_uses_selected_metric_but_raw_body_and_total_are_unchanged(
+    kind: str, limit: int, discount: bool
+) -> None:
+    marker = "【根拠: 原文🌸】"
+    body = "本文" + marker + marker + "\n"
+    contract = ReportOutputContract(
+        budget=AnswerBudget.model_validate(
+            {"metric": CITATION_METRIC if discount else "expanded_markdown_codepoints", kind: limit}
+        )
+    )
+    preview = _citation_preview(body, marker + "\n\n" + marker, contract)
+    result = preview.result
+    expected = 3 if discount else len(body)
+    assert result.total_codepoints == len(body)
+    assert result.budget_codepoints == expected
+    assert result.citation_marker_codepoints == 2 * len(marker)
+    assert contract.budget is not None
+    assert result.metric == contract.budget.metric
+    assert (
+        result.remaining_target if kind == "soft_target" else result.remaining_hard
+    ) == limit - expected
+    expected_status = (
+        "WITHIN_BUDGET"
+        if expected <= limit
+        else "OVER_TARGET"
+        if kind == "soft_target"
+        else "REJECTED_HARD_MAX"
+    )
+    assert result.status == expected_status
+    restored = json.loads(json.dumps(preview.ledger, ensure_ascii=False))
+    selected = select_preview(
+        restored, run_id="run-a", selection=FinalSelection(preview_id="A1"), contract=contract
+    )
+    assert selected.total_codepoints == len(body)
+    assert selected.body == (None if expected_status == "REJECTED_HARD_MAX" else body)
+    assert selected.budget_status == expected_status
+    assert "budget_codepoints" not in restored["records"][0]
+    assert "citation_marker_codepoints" not in restored["records"][0]
+
+
+def test_no_budget_keeps_raw_policy_and_reports_real_marker_cost() -> None:
+    marker = "【根拠: source-a】"
+    preview = _citation_preview("本文" + marker, marker, ReportOutputContract())
+    assert preview.result.total_codepoints == preview.result.budget_codepoints == 2 + len(marker)
+    assert preview.result.citation_marker_codepoints == len(marker)
+    assert preview.result.status == "WITHIN_BUDGET"
+
+
+def test_program_literals_and_newline_separators_are_not_discounted() -> None:
+    marker = "【根拠: source-a】"
+    texts = ["本文" + marker, marker, marker]
+    body = "\n\n".join(texts)
+    contract = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, soft_target=1000))
+    plan = AnswerPlan(
+        blocks=(
+            NarrativeBlock(text="本文[[cite:1]]"),
+            TableBlock(table="T1"),
+            ConfirmationSection(items=[]),
+        )
+    )
+    preview = create_preview(
+        None,
+        run_id="run-a",
+        operation_key="op-a",
+        plan=plan,
+        contract=contract,
+        render_body=lambda _plan: RenderedReport(
+            body=body,
+            evidence_text=marker,
+            source_digest="a" * 64,
+            block_costs=tuple(
+                RenderedBlockCost(index=i, kind=b.kind, expanded_codepoints=len(texts[i - 1]))
+                for i, b in enumerate(plan.blocks, 1)
+            ),
+            composition_delta_chars=4,
+        ),
+    )
+    assert preview.result.citation_marker_codepoints == len(marker)
+    assert preview.result.budget_codepoints == 2 + 2 * len(marker) + 4
+
+
+@pytest.mark.parametrize("evidence", ["", "\n\n"])
+def test_empty_citation_manifest_counts_entire_body(evidence: str) -> None:
+    body = "本文【根拠: source-a】"
+    contract = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, soft_target=100))
+    preview = _citation_preview(body, evidence, contract)
+    assert preview.result.citation_marker_codepoints == 0
+    assert preview.result.budget_codepoints == len(body)
+
+
+@pytest.mark.parametrize("evidence", ["未解決の印", "[[cite:1]]", "【根拠: source-a】別の文"])
+def test_new_metric_refuses_noncanonical_manifest(evidence: str) -> None:
+    contract = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, soft_target=100))
+    with pytest.raises(ReportPreviewError, match="引用計測"):
+        _citation_preview("本文" + evidence, evidence, contract)
+
+
+def test_finalized_body_must_keep_every_explicit_marker_occurrence() -> None:
+    marker = "【根拠: source-a】"
+    contract = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, soft_target=100))
+    with pytest.raises(ReportPreviewError, match="一致"):
+        _citation_preview("本文" + marker, marker + "\n" + marker, contract)
+
+
+def test_citation_grammar_matches_actual_report_renderer() -> None:
+    from app.features.agent import report_runtime
+
+    assert report_preview._CANONICAL_CITATION.pattern == report_runtime._CANONICAL_CITATION.pattern
+
+
+@pytest.mark.parametrize("field", ["evidence_text", "remaining_target", "status"])
+def test_citation_budget_tampering_is_rejected_on_restore(field: str) -> None:
+    marker = "【根拠: source-a】"
+    contract = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, soft_target=3))
+    preview = _citation_preview("本文" + marker, marker, contract)
+    value = deepcopy(preview.ledger)
+    value["records"][0][field] = {
+        "evidence_text": "",
+        "remaining_target": -99,
+        "status": "OVER_TARGET",
+    }[field]
+    with pytest.raises(ReportPreviewError):
+        select_preview(
+            value, run_id="run-a", selection=FinalSelection(preview_id="A1"), contract=contract
+        )
+
+
+def test_null_evidence_is_not_treated_as_zero_cost() -> None:
+    contract = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, hard_max=10))
+    with pytest.raises(ReportPreviewError, match="形式"):
+        _citation_preview("本文", cast(Any, None), contract)
+
+
+def test_existing_ledger_cannot_silently_change_budget_metric() -> None:
+    marker = "【根拠: source-a】"
+    original = ReportOutputContract(budget=AnswerBudget(soft_target=100))
+    changed = ReportOutputContract(budget=AnswerBudget(metric=CITATION_METRIC, soft_target=100))
+    preview = _citation_preview("本文" + marker, marker, original)
+    with pytest.raises(ReportPreviewError) as error:
+        select_preview(
+            preview.ledger,
+            run_id="run-a",
+            selection=FinalSelection(preview_id="A1"),
+            contract=changed,
+        )
+    assert error.value.code == "runtime.report_contract_changed"

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "run_id": "run-legacy",
+  "contract_digest": "51aa2804dca5da6953e3597a3ba65c03247bd526bd5cad6fabb92fe54cfa9fa0",
+  "next_number": 2,
+  "records": [
+    {
+      "preview_id": "A1",
+      "operation_key": "operation-legacy",
+      "plan": {
+        "blocks": [
+          {
+            "kind": "narrative",
+            "text": "合成の本文【根拠: source-a】"
+          }
+        ]
+      },
+      "plan_digest": "0df571c4b4b1f1cc50cb4bff338b5fb8467cf2f952bc34ce37a68df693d7937b",
+      "body": "合成の本文【根拠: source-a】",
+      "evidence_text": "【根拠: source-a】",
+      "source_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "body_digest": "771ee0e3fbae6e62ae06d0098dabf5da6778ec6600b954277ec30f4b9c3b6ef2",
+      "block_costs": [
+        {
+          "index": 1,
+          "kind": "narrative",
+          "expanded_codepoints": 19
+        }
+      ],
+      "composition_delta_chars": 0,
+      "total_codepoints": 19,
+      "remaining_target": 0,
+      "remaining_hard": null,
+      "status": "WITHIN_BUDGET",
+      "incomplete": false,
+      "record_digest": "46f9283e3a9cd4b228a02c81ea76afc08525baae7c46a96ae5e0b15309a92ee6"
+    }
+  ]
+}
