@@ -91,12 +91,12 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
 
     generate = grounded.generation_system_prompt()
-    section = generate.split("引用する原文を選ぶ", 1)[1].split("## Step ", 1)[0]
-    assert "文書ごとにその文書の原文を basis に選ぶ" in section
+    section = generate.split("本文を完成させて引用を選ぶ", 1)[1].split("## Step ", 1)[0]
+    assert "文書ごとに引用する" in section
     # 別の対象の根拠を basis に選ばない判断は basis の選び方に置く（生成の出力に計画の行は無い。#4611）。
-    assert "別の対象・独立した操作の原文は選ばない" in section
+    assert "無関係な原文を引用しない" in section
     assert "言い換えていても省かず" in section
-    assert "説明の内容を支えない原文は、質問に関係していても出典にしない" in section
+    assert "説明の内容を支えない原文は出典にしない" in section
     # 1つの説明を実際の引用集合で共同支持し、未引用の資料で不足を埋めない。
     citations = GroundedItem.model_json_schema()["properties"]["citations"]["description"]
     assert "指定した出典の原文の集合で text 全体を支える" in citations

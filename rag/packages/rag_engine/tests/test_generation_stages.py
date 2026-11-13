@@ -111,4 +111,4 @@ def test_generation_without_guide_requirements_never_shows_guide_coverage() -> N
     for question in (QUESTION, TEXTS[0] + "について教えてください。"):
         assert "guide_coverage" not in grounded.generation_system_prompt()
         assert "guide_coverage" not in json.dumps(grounded.generation_output_model(question).model_json_schema())
-        assert "guide_coverage" in grounded.generation_output_model(question, guided=True).model_json_schema()["properties"]
+        assert "guide_coverage" not in grounded.generation_output_model(question, guided=True).model_json_schema()["properties"]

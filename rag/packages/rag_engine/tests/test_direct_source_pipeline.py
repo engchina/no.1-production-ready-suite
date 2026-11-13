@@ -32,13 +32,10 @@ def run(*, derived: bool, readback: str | None = None):
             )
         return schema.model_validate(
             {
+                "answer_body": text + ("\n24です。" if derived else "") + "[C1]",
                 "response_kind": "answered",
-                "answer_parts": parts,
-                "summary_part_indexes": list(range(len(parts))),
-                "request_coverage": [
-                    {"request_id": "Q1", "evidence_scope": [{"evidence_id": "E1", "target": "項目A", "relation": "direct", "link": None}]}
-                ],
                 "confidence": "high",
+                "citations": [{"unit_ids": ids}],
             }
         )
 
@@ -72,10 +69,8 @@ def run(*, derived: bool, readback: str | None = None):
 
 def test_source_formal_flow_publishes_original_without_derivation_call():
     response, calls = run(derived=False)
-    assert calls == ["GroundedDraftWire"]
+    assert calls == ["FullAnswerWire"]
     assert "項目Aは12です。" in response.answer_text
     assert not response.generation_trace["applications"]
-    draft = response.generation_trace["rounds"][0]["draft"]
-    assert draft["answer_parts"][0]["result_kind"] == "direct"
-    assert draft["summary_item_indexes"] == [0]
-    assert draft["summary_application_indexes"] == []
+    assert response.generation_trace["citation_lines"]
+    assert response.envelope["outcome"] == "answered"

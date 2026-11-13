@@ -1,11 +1,15 @@
 """回答の引用元は ID と範囲だけで決まり、引用文から別の原文を探さない。"""
 
 import pytest
-from citation_unit_support import selected_answer_payload
 
 from rag_engine.generation import grounded
-from rag_engine.generation.citation_wire import canonical_generation_draft
+from rag_engine.generation.full_answer_wire import canonical_full_answer
 from rag_engine.models.llm import GroundedCitation, GroundedItem
+
+
+def selected_answer_payload(ids, **_unused):
+    return {"answer_body": "合成の説明[C1]", "response_kind": "answered", "confidence": "high", "citations": [{"unit_ids": ids}]}
+
 
 SOURCE = "合成の設定画面を開きます。\n合成の内容を入力して保存します。"
 
@@ -46,7 +50,7 @@ def test_discontinuous_units_are_extracted_separately_without_the_gap():
     assert len(catalog.unit_ids) == 3
     schema = grounded.generation_output_model("合成の設定は？", unit_catalog=catalog)
     output = schema.model_validate(selected_answer_payload([catalog.unit_ids[0], catalog.unit_ids[2]]))
-    draft = canonical_generation_draft(output, unit_catalog=catalog)
+    draft = canonical_full_answer(output, catalog)
     checked, dropped = grounded.verify("合成の設定は？", draft, evidence)
     own = [citation for entry in checked for citation in grounded.item_citations(entry)]
     assert not dropped
@@ -63,7 +67,7 @@ def test_real_generation_schema_selects_one_of_identical_sources_by_unit_id(sele
     schema = grounded.generation_output_model("合成の設定は？", unit_catalog=catalog)
     chosen = catalog.snapshots[selected].unit_ids[0]
     output = schema.model_validate(selected_answer_payload([chosen], evidence_ids=(evidence[selected]["label"],)))
-    draft = canonical_generation_draft(output, unit_catalog=catalog)
+    draft = canonical_full_answer(output, catalog)
     checked, dropped = grounded.verify("合成の設定は？", draft, evidence)
     assert not dropped
     assert checked[0].span["source_id"] == evidence[selected]["source_id"]

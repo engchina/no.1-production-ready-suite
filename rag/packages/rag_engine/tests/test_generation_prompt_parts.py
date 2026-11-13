@@ -12,7 +12,6 @@ from openai.lib._parsing._responses import type_to_text_format_param
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import AnswerContext, _grounded_prompt
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.models.llm import ExternalDataItem, GroundedDraft
 
 QUESTION = "項目Aの設定を確認する手順を教えてください。"
 
@@ -72,7 +71,7 @@ def test_common_reading_rules_are_always_in_the_generation_system_prompt() -> No
     """共通の 3 行は生成の system に 1 回だけ置く（1 つの規則は 1 つの層）。"""
     for line in (
         "答えを終える前に、事実の主張が根拠で支えられているか、完了したことと残っていることを分けているかを確かめる。",
-        "各根拠は、その根拠の本文だけを裏付ける。",
+        "説明の内容を支えない原文は出典にしない。",
         "資料が述べていることと、自分の推論を分ける。",
     ):
         assert grounded.generation_system_prompt().count(line) == 1
@@ -123,7 +122,7 @@ def test_required_rules_stay_in_the_system_prompt() -> None:
         "OR・AND・否定・例外",
         "結果にも条件を残す",
         # 多段
-        "各段を述べる原文の単位を basis に選び",
+        "各段を支える原文を引用する",
         # 資料どうしの矛盾
         "日付・適用範囲・出所を比べて説明する",
     ):
@@ -134,16 +133,9 @@ def test_rules_moved_to_the_schema_reach_the_model() -> None:
     """応答 schema へ移した規則が、実際に送る schema（text.format）に残る。"""
     model = grounded.generation_language_schema(grounded.generation_output_model(QUESTION), QUESTION)
     wire = json.dumps(type_to_text_format_param(model), ensure_ascii=False)
-    assert "案内の適用業務・画面・版が未確定なら high にしない" in wire  # confidence
-    assert "冒頭に示す要点のindexを最大2つ選ぶ" in wire  # summary
-    assert "要点と結果を別々に重複して生成しない" in wire  # 要点
-    assert "引用原文と逐語で示す語句は原文の表記と言語のままにする" in wire  # 回答言語
-    assert "名称・版・所在・URL・内容を創作しない" in wire  # 別の資料
-    assert "反例:" in wire  # who_can_answer の反例は 1 つ
-    assert wire.count("反例:") == 1
-    assert "true の点は聞き直さない" in wire  # already_known
-    assert "個案判断に必要な実値や別資料が未閲覧という理由だけで low にしない" in GroundedDraft.model_fields["confidence"].description
-    assert ExternalDataItem.model_fields["who_can_answer"].description.count("反例:") == 1
+    assert "answer_body" in wire and "citations" in wire
+    assert "summary_part_indexes" not in wire and "answer_parts" not in wire
+    assert "引用原文と逐語で示す語句は原文の表記と言語のままにする" in wire
 
 
 def _steps(prompt: str) -> dict[int, str]:

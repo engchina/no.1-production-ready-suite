@@ -1864,22 +1864,30 @@ def synthesize_grounded_answer(
         if not summary and not published and not any(entry.published for entry in current.applications):
             summary = grounded.answer_labels().insufficient_evidence_summary
         rendered_items = current.checked
-    rendered = grounded.render_answer(
-        summary if published or not confirmation_section else grounded.answer_labels().confirmation_only_summary,
-        rendered_items,
-        confirmation_section,
-        unverified=unread,
-        applications=current.applications,
-        subquestions=[unit for unit in current.requests if unit.get("subquestion")],
-        guide_notes=guide_notes,
-        guide_notes_first=guide_notes_first,
-    )
+    if current.draft._full_answer is not None:
+        from rag_engine.generation.full_answer_wire import render_full_answer
+
+        rendered = render_full_answer(current.draft, current.checked)
+        notices = grounded.render_answer("", (), (), unverified=unread, guide_notes=guide_notes, guide_notes_first=guide_notes_first)
+        if notices.text:
+            rendered.text += "\n\n" + notices.text
+    else:
+        rendered = grounded.render_answer(
+            summary if published or not confirmation_section else grounded.answer_labels().confirmation_only_summary,
+            rendered_items,
+            confirmation_section,
+            unverified=unread,
+            applications=current.applications,
+            subquestions=[unit for unit in current.requests if unit.get("subquestion")],
+            guide_notes=guide_notes,
+            guide_notes_first=guide_notes_first,
+        )
     if quality_notice:
         rendered.text = quality_notice + "\n\n" + rendered.text
     unsupported_parts = sum(1 for note in current.dropped if not note.get("ignored")) + sum(
         1 for entry in current.applications if not entry.published
     )
-    confidence = "low" if not published else current.draft.confidence
+    confidence = current.draft.confidence if current.draft._full_answer is not None or published else "low"
     unsettled = [e for e in published if e.item.applies != "matched"]
     if confidence == "high" and (gaps or unsettled or unread or unsupported_parts or quality_notice):
         confidence = "medium"

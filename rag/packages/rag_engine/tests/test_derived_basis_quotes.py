@@ -3,6 +3,8 @@
 import re
 from types import SimpleNamespace
 
+from citation_unit_support import legacy_generation_output_model
+
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
@@ -10,7 +12,7 @@ from rag_engine.generation.answer_parts import check_answer_parts
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft
-from rag_engine.generation.grounded import CheckedItem, generation_output_model
+from rag_engine.generation.grounded import CheckedItem
 
 RULE = "申請は開始日の10日前までに行います。"
 EXCEPTION = "区分Bの場合は3日前までです。"
@@ -23,7 +25,7 @@ def catalog_case():
     span = {"label": "E1", "evidence_id": "source-r", "source_id": "s-r", "source": "synthetic.txt", "text": TEXT}
     snapshot = EvidenceUnitSnapshot.create(span, [(0, len(RULE)), (len(RULE) + 1, len(TEXT))], "explicit_units_v5")
     catalog = SentUnitCatalog([snapshot])
-    return generation_output_model("申請の期限はいつですか。", unit_catalog=catalog), catalog, snapshot
+    return legacy_generation_output_model("申請の期限はいつですか。", unit_catalog=catalog), catalog, snapshot
 
 
 def part(kind, unit_ids, requirement="期限", result=DROPPED):

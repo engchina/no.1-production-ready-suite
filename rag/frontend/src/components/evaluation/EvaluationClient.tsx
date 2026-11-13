@@ -965,72 +965,76 @@ function EvaluationComparisonResult({
     { id: "compared", label: t("evaluation.compare.tab.compared", { name }) },
   ];
   return (
-    <section className="min-w-0 space-y-4" aria-labelledby="evaluation-compare-title">
-      <div className="space-y-1">
-        <h2 id="evaluation-compare-title" className="text-base font-semibold text-fg">
-          {t("evaluation.compare.title")}
-        </h2>
-        <p className="text-xs text-fg-muted">
-          {t("evaluation.compare.description", { name, baseName: baseName ?? "" })}
-        </p>
-      </div>
-      <div data-testid="evaluation-compare-table">
-        <DataTable<EvaluationComparisonRow> visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
-          ariaLabel={t("evaluation.compare.title")}
-          rows={rows}
-          getRowKey={(row) => row.metric}
-          columns={[
-            {
-              key: "metric",
-              header: t("evaluation.compare.column.metric"),
-              rowHeader: true,
-              className: "min-w-[9rem] font-medium text-fg",
-              render: (row) => (
-                <span className="grid gap-0.5">
-                  <span>{metricLabel(row.metric)}</span>
-                  {LOWER_IS_BETTER_METRICS.has(row.metric) ? (
-                    <span className="text-xs font-normal text-fg-muted">
-                      {t("evaluation.compare.lowerIsBetter")}
+    <div className="min-w-0 space-y-4">
+      <Card className="min-w-0" role="region" aria-labelledby="evaluation-compare-title" data-testid="evaluation-comparison-card">
+        <CardHeader>
+          <CardTitle id="evaluation-compare-title">
+            {t("evaluation.compare.title")}
+          </CardTitle>
+          <CardDescription>
+            {t("evaluation.compare.description", { name, baseName: baseName ?? "" })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div data-testid="evaluation-compare-table">
+            <DataTable<EvaluationComparisonRow> visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader
+              ariaLabel={t("evaluation.compare.title")}
+              rows={rows}
+              getRowKey={(row) => row.metric}
+              columns={[
+                {
+                  key: "metric",
+                  header: t("evaluation.compare.column.metric"),
+                  rowHeader: true,
+                  className: "min-w-[9rem] font-medium text-fg",
+                  render: (row) => (
+                    <span className="grid gap-0.5">
+                      <span>{metricLabel(row.metric)}</span>
+                      {LOWER_IS_BETTER_METRICS.has(row.metric) ? (
+                        <span className="text-xs font-normal text-fg-muted">
+                          {t("evaluation.compare.lowerIsBetter")}
+                        </span>
+                      ) : null}
                     </span>
-                  ) : null}
-                </span>
-              ),
-            },
-            {
-              key: "base",
-              header: t("evaluation.compare.column.base", { name: baseName ?? "" }),
-              className: "tnum whitespace-nowrap",
-              render: (row) => formatMetricValue(row.base),
-            },
-            {
-              key: "compared",
-              header: t("evaluation.compare.column.compared", { name }),
-              className: "tnum whitespace-nowrap",
-              render: (row) => formatMetricValue(row.compared),
-            },
-            {
-              key: "delta",
-              header: t("evaluation.compare.column.delta"),
-              className: "whitespace-nowrap",
-              render: (row) => <DeltaCell delta={row.delta} direction={row.direction} />,
-            },
-          ]}
-        />
-      </div>
-      <Tabs
-        items={tabs}
-        value={tab}
-        onChange={setTab}
-        ariaLabel={t("evaluation.compare.tabsLabel")}
-        idPrefix="evaluation-compare"
-      />
+                  ),
+                },
+                {
+                  key: "base",
+                  header: t("evaluation.compare.column.base", { name: baseName ?? "" }),
+                  className: "tnum whitespace-nowrap",
+                  render: (row) => formatMetricValue(row.base),
+                },
+                {
+                  key: "compared",
+                  header: t("evaluation.compare.column.compared", { name }),
+                  className: "tnum whitespace-nowrap",
+                  render: (row) => formatMetricValue(row.compared),
+                },
+                {
+                  key: "delta",
+                  header: t("evaluation.compare.column.delta"),
+                  className: "whitespace-nowrap",
+                  render: (row) => <DeltaCell delta={row.delta} direction={row.direction} />,
+                },
+              ]}
+            />
+          </div>
+          <Tabs
+            items={tabs}
+            value={tab}
+            onChange={setTab}
+            ariaLabel={t("evaluation.compare.tabsLabel")}
+            idPrefix="evaluation-compare"
+          />
+        </CardContent>
+      </Card>
       <TabPanel id="base" value={tab} idPrefix="evaluation-compare">
         <EvaluationResult metrics={metrics} caseLabels={caseLabels} />
       </TabPanel>
       <TabPanel id="compared" value={tab} idPrefix="evaluation-compare">
         <EvaluationResult metrics={compared} caseLabels={caseLabels} />
       </TabPanel>
-    </section>
+    </div>
   );
 }
 
@@ -1077,11 +1081,11 @@ function EvaluationResult({
     (entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0
   );
   return (
-    <section className="min-w-0 space-y-4" aria-labelledby="evaluation-result-title">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="evaluation-result-title" className="text-base font-semibold text-fg">
+    <Card className="min-w-0" role="region" aria-labelledby="evaluation-result-title" data-testid="evaluation-result-card">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+        <CardTitle id="evaluation-result-title">
           {t("evaluation.result.title")}
-        </h2>
+        </CardTitle>
         <div className="flex flex-wrap items-center gap-2">
           {metrics.evaluation_suite ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs font-medium text-fg-muted">
@@ -1100,42 +1104,43 @@ function EvaluationResult({
           ) : null}
           <PassedBadge passed={metrics.passed} />
         </div>
-      </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {EVALUATION_PERSPECTIVES.filter((perspective) => isPerspectiveShown(metrics, perspective)).map((perspective) => (
+          <MetricGroup
+            key={perspective.id}
+            groupId={perspective.id}
+            title={perspectiveLabel(perspective.id)}
+            description={perspectiveDescription(perspective.id)}
+            metricNames={perspective.metrics}
+            metrics={metrics}
+            failedMetrics={failedMetrics}
+          />
+        ))}
 
-      {EVALUATION_PERSPECTIVES.filter((perspective) => isPerspectiveShown(metrics, perspective)).map((perspective) => (
-        <MetricGroup
-          key={perspective.id}
-          groupId={perspective.id}
-          title={perspectiveLabel(perspective.id)}
-          description={perspectiveDescription(perspective.id)}
-          metricNames={perspective.metrics}
-          metrics={metrics}
-          failedMetrics={failedMetrics}
-        />
-      ))}
+        <ReferenceMetrics metrics={metrics} />
+        <CategoryBreakdown metrics={metrics} />
+        <DecisionBreakdown metrics={metrics} />
 
-      <ReferenceMetrics metrics={metrics} />
-      <CategoryBreakdown metrics={metrics} />
-      <DecisionBreakdown metrics={metrics} />
+        {failureReasons.length ? (
+          <div className="rounded-md border border-border bg-surface p-4 text-sm">
+            <p className="font-medium text-fg">{t("evaluation.failureReasons")}</p>
+            <ul className="mt-3 flex flex-wrap gap-2" data-testid="evaluation-failure-reasons">
+              {failureReasons.map(([reason, count]) => (
+                <li
+                  key={reason}
+                  className="rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs text-fg-muted"
+                >
+                  {failureReasonLabel(reason)}: <span className="tnum">{count}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
-      {failureReasons.length ? (
-        <div className="rounded-md border border-border bg-surface p-4 text-sm">
-          <p className="font-medium text-fg">{t("evaluation.failureReasons")}</p>
-          <ul className="mt-3 flex flex-wrap gap-2" data-testid="evaluation-failure-reasons">
-            {failureReasons.map(([reason, count]) => (
-              <li
-                key={reason}
-                className="rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs text-fg-muted"
-              >
-                {failureReasonLabel(reason)}: <span className="tnum">{count}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <CaseTable metrics={metrics} caseLabels={caseLabels} />
-    </section>
+        <CaseTable metrics={metrics} caseLabels={caseLabels} />
+      </CardContent>
+    </Card>
   );
 }
 

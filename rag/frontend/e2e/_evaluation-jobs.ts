@@ -1,4 +1,23 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
+
+/** 条件カードと同じテーマの外枠を持ち、結果だけ背景へ裸で出ない。 */
+export async function expectEvaluationCard(page: Page, panel: Locator) {
+  const frame = (element: HTMLElement) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      border: style.borderTopWidth,
+      radius: style.borderTopLeftRadius,
+      shadow: style.boxShadow,
+    };
+  };
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute("role", "region");
+  const actual = await panel.evaluate(frame);
+  expect(actual).toEqual(await page.getByTestId("evaluation-conditions").evaluate(frame));
+  expect(Number.parseFloat(actual.border)).toBeGreaterThan(0);
+  expect(Number.parseFloat(actual.radius)).toBeGreaterThan(0);
+}
 
 type JobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 

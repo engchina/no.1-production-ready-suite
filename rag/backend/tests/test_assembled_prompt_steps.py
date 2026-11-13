@@ -99,7 +99,9 @@ async def test_generation_system_with_assumptions_keeps_continuous_steps(
     systems: list[str] = []
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
+        if getattr(schema, "_uses_full_answer", False) or issubclass(
+            schema, (GroundedDraft, generation_draft_wire_model())
+        ):
             systems.append(system)
         return _fake_llm(system, prompt, settings, schema, **options)
 

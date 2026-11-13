@@ -166,12 +166,14 @@ def test_generated_answer_still_has_a_length_limit_separate_from_source_length()
         schema.model_validate(raw)
 
 
-def test_formal_generation_entry_uses_answer_parts_and_keeps_every_plan_hidden():
+def test_formal_generation_entry_uses_a_complete_body_without_per_part_types():
     from rag_engine.generation import grounded
 
     _, _, catalog = case()
     schema = grounded.generation_output_model("対象の値は何ですか。", unit_catalog=catalog)
-    assert schema._uses_typed_answer_parts
+    assert schema._uses_full_answer
+    assert "answer_body" in schema.model_json_schema()["properties"]
+    assert "answer_parts" not in schema.model_json_schema()["properties"]
     assert "items" not in schema.model_json_schema()["properties"]
     assert "request_coverage" not in schema.model_json_schema()["properties"]
 

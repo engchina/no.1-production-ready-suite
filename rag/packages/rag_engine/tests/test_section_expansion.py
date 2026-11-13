@@ -352,7 +352,7 @@ def test_unread_sections_make_the_answer_conditional():
     }
 
     def model(system, prompt, settings, schema, **options):
-        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
+        if getattr(schema, "_uses_full_answer", False) or issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
             return canonical_fixture(draft)
         return schema.model_validate(audit)

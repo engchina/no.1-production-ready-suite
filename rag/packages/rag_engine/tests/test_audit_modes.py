@@ -51,7 +51,7 @@ def test_refusal_without_assumption_is_not_redrafted_in_none_mode():
 
     result, _ = _assume_run(model, assume=False)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraftWire"]
+    assert [name for name, _prompt in model.prompts] == ["FullAnswerWire"]
     assert result.envelope["outcome"] == "insufficient_evidence"
 
 
@@ -62,4 +62,4 @@ def test_assumed_answer_with_cited_evidence_is_not_redrafted():
 
     _assume_run(model, assume=True)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraftWire"]
+    assert [name for name, _prompt in model.prompts] == ["FullAnswerWire"]

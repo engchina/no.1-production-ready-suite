@@ -189,7 +189,7 @@ async def test_section_text_is_added_to_generation(
     prompts: list[str] = []
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if issubclass(
+        if getattr(schema, "_uses_full_answer", False) or issubclass(
             schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
         ):
             prompts.append(prompt)
@@ -356,7 +356,7 @@ async def test_section_completion_reaches_generation(
     prompts: list[str] = []
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if issubclass(
+        if getattr(schema, "_uses_full_answer", False) or issubclass(
             schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
         ):
             prompts.append(prompt)

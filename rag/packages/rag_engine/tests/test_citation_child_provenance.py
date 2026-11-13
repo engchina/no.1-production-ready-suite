@@ -71,7 +71,7 @@ class _Model:
         self.draft, self.audit = draft, audit
 
     def __call__(self, system, prompt, settings, schema, **options):
-        if issubclass(schema, generation_draft_wire_model()):
+        if getattr(schema, "_uses_full_answer", False) or issubclass(schema, generation_draft_wire_model()):
             return generated_fixture(schema, prompt, self.draft)
         return schema.model_validate(self.audit)
 
