@@ -323,7 +323,7 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
     else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
     await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
     if (extension.endsWith(".md")) {
-      await expect(page.getByTestId("evidence-source-notice")).toContainText("この行との対応が確定したことは示しません");
+      await expect(page.getByTestId("evidence-source-notice")).toHaveCount(0);
       if (extension === "candidate.md") await expect(reader).not.toContainText("引用位置を確定できないため");
       else await expect(page.getByTestId("evidence-reader")).toContainText("引用位置を確定できないため");
     }

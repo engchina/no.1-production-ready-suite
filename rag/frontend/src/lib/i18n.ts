@@ -3671,14 +3671,6 @@ export const ja = {
   "search.answerText.citationPart": "箇所 {number}/{total}：{citation}",
   "search.answerText.citationCandidates": "位置未確定の候補：{citation}",
   "search.answerText.openCitation": "{citation} の原文を開く",
-  // 本文の根拠の行が指す箇所を確定できないとき（#2710）。
-  "search.citationPosition.unresolvedTitle": "回答行とこの引用の対応は未確認です",
-  "search.citationPosition.candidatesBody":
-    "回答が同じまとまりを参照したため、行が指す箇所を 1 つに決められません（候補 {count} 件）。テキストの原文で位置を確認できた引用箇所を強調しますが、この行との対応が確定したことは示しません。根拠の一覧で候補を確かめてください。",
-  "search.citationPosition.singleCandidateBody":
-    "回答はこの箇所を含むまとまりを参照しました。候補はこの 1 件だけですが、行の内容とこの箇所の対応は未確認です。テキストの原文で位置を確認できた引用箇所を強調しますが、この行との対応が確定したことは示しません。",
-  "search.citationPosition.legacyBody":
-    "この回答の記録は、行が同じ文書・頁のどの箇所を指すかを持っていません（文書名と頁が合う箇所 {count} 件）。テキストの原文で位置を確認できた引用箇所を強調しますが、この行との対応が確定したことは示しません。",
   // 「回答に未反映の関連章節」の行から章節の原文を開く（#2040）。読み上げの名前は見える文言を含める。
   "search.answerText.tableName": "回答の表",
   "search.answerText.tableNameIndexed": "回答の表 {number}",

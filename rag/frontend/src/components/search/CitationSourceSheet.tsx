@@ -17,8 +17,7 @@ import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
  * #349 / #442）を出す。根拠のカードの「根拠を表示」・回答本文の根拠の行（#657）から開く。
  * `chunk` は閉じる間も前の根拠を渡す（`useEvidenceSource` の `shown`）。
  *
- * 本文の根拠の行が指す箇所を確定できないとき（`position` が `unresolved`。#2710）は、要約の上に「位置は確定して
- * いない」ことと候補の数を出す。テキストの原文は reader が確認した引用位置を強調し、回答行の対応とは区別する。
+ * テキストの原文は reader が確認した引用位置を強調し、回答行の対応とは区別する。
  */
 export function CitationSourceSheet({
   chunk,
@@ -60,21 +59,6 @@ export function CitationSourceSheet({
       labels={title ? {...EVIDENCE_LABELS, sourceTitle: title, sourceTitleSearch: title} : EVIDENCE_LABELS}
       kind={kind}
       showScores={showScores}
-      notice={
-        unresolved
-          ? {
-              title: t("search.citationPosition.unresolvedTitle"),
-              body: t(
-                unresolved.reason === "legacy"
-                  ? "search.citationPosition.legacyBody"
-                  : unresolved.candidates.length === 1
-                    ? "search.citationPosition.singleCandidateBody"
-                    : "search.citationPosition.candidatesBody",
-                { count: unresolved.candidates.length },
-              ),
-            }
-          : undefined
-      }
     >
       {chunk ? <CitationSourcePreview chunk={chunk} open={open} highlight={!unresolved} /> : empty}
     </EvidenceSourceSheet>
