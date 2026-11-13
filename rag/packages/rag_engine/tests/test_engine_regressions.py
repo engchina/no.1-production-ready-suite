@@ -80,7 +80,11 @@ class GeneratorEvidenceTests(TestCase):
         with TemporaryDirectory() as directory, create_oracle_application(directory) as app:
             with patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model) as parse:
                 app.generator.generate(GenerationRequest("question", evidence))
-            prompts = [call.args[1] for call in parse.call_args_list if issubclass(call.args[3], generation_draft_wire_model())]
+            prompts = [
+                call.args[1]
+                for call in parse.call_args_list
+                if getattr(call.args[3], "_uses_full_answer", False) or issubclass(call.args[3], generation_draft_wire_model())
+            ]
             self.assertEqual(len(prompts), 1)
             for item in evidence:
                 # 長い根拠は行番号を付けて示す（#2830）。番号の付いた全文が 1 回の prompt に入る。
@@ -99,7 +103,11 @@ class GeneratorEvidenceTests(TestCase):
             with self.subTest(count=len(evidence)), TemporaryDirectory() as directory, create_oracle_application(directory) as app:
                 with patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model) as parse:
                     app.generator.generate(GenerationRequest("question", evidence))
-                prompts = [call.args[1] for call in parse.call_args_list if issubclass(call.args[3], generation_draft_wire_model())]
+                prompts = [
+                    call.args[1]
+                    for call in parse.call_args_list
+                    if getattr(call.args[3], "_uses_full_answer", False) or issubclass(call.args[3], generation_draft_wire_model())
+                ]
                 self.assertEqual(len(prompts), 1)
                 for item in evidence:
                     self.assertIn(numbered_text(item.text), prompts[0])

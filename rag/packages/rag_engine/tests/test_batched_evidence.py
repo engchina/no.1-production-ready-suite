@@ -303,7 +303,6 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
     """#4090: 1 件の範囲の不合格で組全体を退避にせず、原文を根拠に最終生成へ進む。不合格の answer は渡さない。"""
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation import answering
-    from rag_engine.generation.citation_wire import generation_draft_wire_model
 
     records = [
         answering.AnswerRecord(
@@ -333,13 +332,13 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
                     else [finding(row) for row in values]
                 }
             )
-        assert issubclass(schema, generation_draft_wire_model())
+        assert getattr(schema, "_uses_full_answer", False)
         generated.append(prompt)
         return schema.model_validate(
             {
                 "response_kind": "answered",
-                "answer_parts": [{"request_id": "Q1", "requirement": "合成の要求", "answer": {"kind": "gap", "text": "合成の不足"}}],
-                "summary_part_indexes": [],
+                "answer_body": "合成の不足",
+                "citations": [],
                 "confidence": "low",
             }
         )
@@ -389,7 +388,7 @@ def test_stream_output_missing_in_single_generation_keeps_reference_and_failure_
     trace = {"events": [{"type": "response.completed", "output_index": None, "content_index": None}], "final_output_types": []}
 
     def model(system, prompt, settings, schema, **kwargs):
-        assert getattr(schema, "_uses_typed_answer_parts", False)
+        assert getattr(schema, "_uses_full_answer", False)
         raise LlmStreamOutputMissing("合成の本文の無い応答", None, trace)
 
     def unused(*args, **kwargs):
@@ -520,7 +519,6 @@ def _synthesize(records, read_findings, *, budget=12000):
     """読取は ``read_findings`` を返す。最終生成の入力と呼び出しの種類を記録する。"""
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation import answering
-    from rag_engine.generation.citation_wire import generation_draft_wire_model
 
     generated, calls = [], []
 
@@ -528,13 +526,13 @@ def _synthesize(records, read_findings, *, budget=12000):
         calls.append(schema.__name__)
         if issubclass(schema, BatchReading):
             return schema(findings=read_findings(json.loads(prompt)["evidence"]))
-        assert issubclass(schema, generation_draft_wire_model())
+        assert getattr(schema, "_uses_full_answer", False)
         generated.append(prompt)
         return schema.model_validate(
             {
                 "response_kind": "answered",
-                "answer_parts": [{"request_id": "Q1", "requirement": "合成の要求", "answer": {"kind": "gap", "text": "合成の不足"}}],
-                "summary_part_indexes": [],
+                "answer_body": "合成の不足",
+                "citations": [],
                 "confidence": "low",
             }
         )
@@ -599,7 +597,7 @@ def test_budget_selection_preserves_available_conditions_and_reports_omissions(l
     else:
         assert EXCEPTION in generated[0]
     assert "generation_failure" not in result.generation_trace
-    assert calls == ["GroundedDraftWire"]
+    assert calls == ["FullAnswerWire"]
     budget = result.generation_trace["generation_input_budget"]
     assert budget["batch_count"] == 0
     assert budget["excluded_span_count"] > 0

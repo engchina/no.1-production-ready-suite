@@ -3,7 +3,6 @@
 from copy import deepcopy
 
 import pytest
-from citation_unit_support import selected_answer_payload
 from pydantic import ValidationError
 
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
@@ -119,15 +118,22 @@ def test_generation_binding_keeps_original_source_after_new_display_labels():
     from test_citation_view_snapshots import span
 
     from rag_engine.generation import grounded
-    from rag_engine.generation.citation_wire import canonical_generation_draft
+    from rag_engine.generation.full_answer_wire import canonical_full_answer
 
     first, other = span(), span(2, "別の本文です。" * 60)
     grounded.format_functions([first])
     catalog = grounded.generation_unit_catalog([first])
     model = grounded.generation_output_model("合成の質問", unit_catalog=catalog)
-    draft = canonical_generation_draft(
-        model.model_validate(selected_answer_payload([catalog.snapshots[0].unit_ids[1]])),
-        unit_catalog=catalog,
+    draft = canonical_full_answer(
+        model.model_validate(
+            {
+                "answer_body": "合成の回答[C1]",
+                "response_kind": "answered",
+                "confidence": "high",
+                "citations": [{"unit_ids": [catalog.snapshots[0].unit_ids[1]]}],
+            }
+        ),
+        catalog,
     )
     relabeled = dict(other, label="E1")
     grounded.format_functions([relabeled])

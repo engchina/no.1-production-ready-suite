@@ -58,6 +58,15 @@ def generated_output(schema: type[BaseModel], prompt: str, *, text: str, first: 
     """単一根拠の合成応答。本文の unit ID をそのまま使い、自由な原文位置を返さない。"""
     units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
     assert 1 <= first <= last <= len(units)
+    if getattr(schema, "_uses_full_answer", False):
+        return schema.model_validate(
+            {
+                "answer_body": text + "[C1]",
+                "response_kind": "answered",
+                "confidence": "medium",
+                "citations": [{"unit_ids": units[first - 1 : last]}],
+            }
+        )
     if getattr(schema, "_uses_typed_answer_parts", False):
         return schema.model_validate(selected_answer_payload(units[first - 1 : last], text=text))
     return schema.model_validate(
@@ -77,6 +86,17 @@ def without_unit_annotations(prompt: str) -> str:
 def generated_fixture(schema: type[BaseModel], prompt: str, payload: dict[str, Any]) -> Any:
     """既存の合成 fixture の範囲・引用文を、実提示 ID を選ぶ合成応答へ移す。"""
     from copy import deepcopy
+
+    if getattr(schema, "_uses_full_answer", False):
+        # 旧 fixture は履歴の形式で再生する。新規 wire の検証は test_full_answer_wire で行う。
+        from rag_engine.generation import grounded
+        from rag_engine.generation.citation_wire import canonical_generation_draft
+
+        spans = [pair[0] for pair in (grounded._CITATION_VIEWS.get() or {}).values()]
+        catalog = grounded.generation_unit_catalog(spans, sent_only=True)
+        old = legacy_generation_output_model("", unit_catalog=catalog)
+        output = old.model_validate(payload) if "answer_parts" in payload else generated_fixture(old, prompt, payload)
+        return canonical_generation_draft(output, unit_catalog=catalog)
 
     blocks = {}
     for label, body in re.findall(r"(?ms)^\[(E\d+)\][^\n]*\n(.*?)^\[/\1\]", prompt):
@@ -167,3 +187,17 @@ def canonical_fixture(payload: dict[str, Any]) -> Any:
             citation._wire_range = (selected[0] + 1, selected[-1] + 1)
             citation.lines = str(selected[0] + 1) if selected[0] == selected[-1] else f"{selected[0] + 1}-{selected[-1] + 1}"
     return result
+
+
+def legacy_generation_output_model(question, *, unit_catalog):
+    """旧形式の保存記録の再生専用。現在のオンライン生成の契約とは区別する。"""
+    from rag_engine.generation.answer_parts_wire import answer_parts_model
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+    from rag_engine.generation.grounded import generation_request_ids, generation_subquestions
+
+    return answer_parts_model(
+        generation_draft_wire_model(),
+        unit_catalog,
+        request_ids=generation_request_ids(question),
+        subquestions=generation_subquestions(question),
+    )

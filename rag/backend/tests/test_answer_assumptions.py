@@ -147,13 +147,19 @@ async def test_final_answer_generation_receives_assumptions(
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         output = _fake_llm(system, prompt, settings, schema, **options)
-        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
+        if getattr(schema, "_uses_full_answer", False) or issubclass(
+            schema, (GroundedDraft, generation_draft_wire_model())
+        ):
             prompts.append(system)
-            assert system.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume")
+            assert system.endswith(ASSUMPTION_SYSTEM_PROMPT.split("\n", 2)[2]) is (
+                policy == "assume"
+            )
             if policy == "assume":
                 assert str(PENDING["question"]).replace("？", "?") in prompt
                 assert "対象 A" in prompt and "対象 B" in prompt
-                if getattr(schema, "_uses_typed_answer_parts", False):
+                if getattr(schema, "_uses_full_answer", False):
+                    output.answer_body = "前提: 設定の対象は未確定です。"
+                elif getattr(schema, "_uses_typed_answer_parts", False):
                     output.answer_parts[0].answer.result = "前提: 設定の対象は未確定です。"
                 else:
                     output.summary = "前提: 設定の対象は未確定です。"
@@ -169,5 +175,6 @@ async def test_final_answer_generation_receives_assumptions(
     assert prompts
     assert ("前提: 設定の対象は未確定です。" in outcome.answer) is (policy == "assume")
     assert all(
-        prompt.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume") for prompt in prompts
+        prompt.endswith(ASSUMPTION_SYSTEM_PROMPT.split("\n", 2)[2]) is (policy == "assume")
+        for prompt in prompts
     )

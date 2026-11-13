@@ -62,7 +62,11 @@ class FakeModel:
         observed = schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
-        is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft
+        is_generation = (
+            bool(getattr(schema, "_uses_full_answer", False))
+            or issubclass(schema, generation_draft_wire_model())
+            or schema is GroundedDraft
+        )
         source = self.drafts if is_generation else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         # 既存のquote/lines fixtureをcanonicalの履歴として再生する。wire型を検証したとは扱わない。
@@ -187,7 +191,7 @@ class GroundedAnswerTest(unittest.TestCase):
             [audit()],
         )
         result = run(model, ctx)
-        first_prompt = next(prompt for name, prompt in model.prompts if name == "GroundedDraftWire")
+        first_prompt = next(prompt for name, prompt in model.prompts if name == "FullAnswerWire")
         self.assertIn("④出荷数量を0にします。", first_prompt)  # 全角の数字はそろえ、丸数字は残す (#1350)
         self.assertNotIn("得意先区分を通常に変更します。", first_prompt)
         self.assertEqual(result.response.generation_trace["same_unit_fill"]["added_chunk_ids"], ["run:r1"])
@@ -408,7 +412,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 方針は items 向けに書く (#960)。本文の構成を述べる「別の節にする」は残さず、未確認事項・条件・実データの行き先だけ対応付ける。
         self.assertNotIn("別の節にする", prompt)
         mapping = prompt.split("## Step 3:", 1)[1]
-        for field in ("kind=gap", "結果にも条件", "external_data_items"):
+        for field in ("answer_body", "結果にも条件", "実環境の確認"):
             self.assertIn(field, mapping)
 
     def test_generation_prompt_names_only_fields_the_model_can_write_or_read(self):
@@ -453,17 +457,12 @@ class GroundedAnswerTest(unittest.TestCase):
         from test_citation_unit_ids import snapshot
 
         from rag_engine.generation.citation_unit_ids import SentUnitCatalog
-        from rag_engine.models.llm import MAX_ANSWER_PARTS, GroundedApplication
 
         schema = grounded.generation_output_model(QUESTION, unit_catalog=SentUnitCatalog([snapshot()])).model_json_schema()
-        self.assertEqual(schema["properties"]["answer_parts"]["maxItems"], MAX_ANSWER_PARTS)
-        generated = schema["$defs"]["SupportedAnswerPart"]["properties"]
-        for field in ("result", "reasoning"):
-            limit = next(m.max_length for m in GroundedApplication.model_fields[field].metadata if hasattr(m, "max_length"))
-            self.assertEqual(generated[field]["maxLength"], limit)
-        self.assertNotIn("items", schema["properties"])
-        self.assertNotIn("summary", schema["properties"])
-        self.assertNotIn("items は最大", grounded.generation_system_prompt())
+        self.assertEqual(schema["properties"]["answer_body"]["minLength"], 1)
+        self.assertIn("citations", schema["properties"])
+        for field in ("answer_parts", "items", "summary", "request_coverage"):
+            self.assertNotIn(field, schema["properties"])
         self.assertNotIn("全体が破棄される", grounded.generation_system_prompt())
 
     def test_document_context_is_shown_under_its_own_evidence_as_not_quotable(self):
@@ -496,7 +495,7 @@ class GroundedAnswerTest(unittest.TestCase):
         refusal = draft({"kind": "gap", "text": "削除の手順は資料から確認できません。"}, summary="", confidence="low")
         result = run(FakeModel([refusal], [audit()]), ctx).response
         # prompt は「根拠が無ければ summary は空、不足は gap に書く」と指示する。公開される本文もその形になる。
-        self.assertIn("冒頭の選択を空にする", grounded.generation_system_prompt())
+        self.assertIn("答えられる範囲を先に述べる", grounded.generation_system_prompt())
         self.assertTrue(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない"))
         self.assertIn("削除の手順は資料から確認できません。", result.answer_text)
 
@@ -1213,7 +1212,7 @@ class ScreenExampleValueTest(unittest.TestCase):
         with_value = draft(item(eid, "ユーザIDに demo01 を入力します。", "①ユーザIDとパスワードを入力します。"))
         model = FakeModel([with_value, with_value], [audit((0, "supported", "matched", "")), audit((0, "supported", "matched", ""))])
         run(model, ctx, question)
-        prompts = [p for name, p in model.prompts if name == "GroundedDraftWire"]
+        prompts = [p for name, p in model.prompts if name == "FullAnswerWire"]
         self.assertEqual(len(prompts), 1)
         self.assertNotIn("値を書かず、項目名だけで手順を書く", prompts[0])
 

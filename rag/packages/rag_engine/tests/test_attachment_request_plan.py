@@ -106,6 +106,6 @@ def test_plan_selection_does_not_exclude_cited_source():
     settled["request_coverage"][0]["evidence_ids"] = [labels[ROWS]]
     result, model = _run([settled])
 
-    assert len([schema for schema, _prompt in model.prompts if schema == "GroundedDraftWire"]) == 1
+    assert len([schema for schema, _prompt in model.prompts if schema == "FullAnswerWire"]) == 1
     assert ROWS_ITEM in result.answer_text
     assert RULE_ITEM in result.answer_text
