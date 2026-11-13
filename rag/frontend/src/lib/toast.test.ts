@@ -33,10 +33,10 @@ describe("toast store", () => {
     expect(useToastStore.getState().toasts).toHaveLength(0);
   });
 
-  it("action 付きは自動消滅しない", () => {
+  it("action 付きも既定時間で自動消滅する", () => {
     toast.success("削除しました", { action: { label: "元に戻す", onClick: () => {} } });
-    vi.advanceTimersByTime(60_000);
-    expect(useToastStore.getState().toasts).toHaveLength(1);
+    vi.advanceTimersByTime(4000);
+    expect(useToastStore.getState().toasts).toHaveLength(0);
   });
 
   it("duration 0 は自動消滅しない", () => {

@@ -96,9 +96,8 @@ export const useToastStore = create<ToastStore>((set, get) => ({
     const id = nextId();
     set((state) => ({ toasts: [...state.toasts, { ...item, id }] }));
 
-    // action 付き、または duration 明示 0 のときは自動消滅させない。
-    const duration =
-      item.duration ?? (item.action ? 0 : DEFAULT_DURATION[item.tone]);
+    // action の有無で表示時間を変えず、明示された duration だけを優先する。
+    const duration = item.duration ?? DEFAULT_DURATION[item.tone];
     if (duration > 0) {
       const timer: ToastTimer = { remaining: duration, startedAt: Date.now() };
       timers.set(id, timer);

@@ -45,10 +45,12 @@ describe("toast の既定の表示時間（messaging.md §3.1）", () => {
     expect(ids()).toEqual([]);
   });
 
-  it("action 付きの通知は自動では消えない", () => {
-    const id = toast.success("削除しました", { action: { label: "元に戻す", onClick: () => {} } });
-    vi.advanceTimersByTime(60_000);
+  it.each(["success", "info", "warning", "error"] as const)("action 付きの %s もトーンの既定時間で消える", (tone) => {
+    const id = toast[tone]("操作が完了しました", { action: { label: "元に戻す", onClick: () => {} } });
+    vi.advanceTimersByTime(tone === "error" ? 7999 : 3999);
     expect(ids()).toEqual([id]);
+    vi.advanceTimersByTime(1);
+    expect(ids()).toEqual([]);
   });
 });
 

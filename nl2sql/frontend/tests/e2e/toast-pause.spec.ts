@@ -102,3 +102,40 @@ for (const theme of ["light", "dark"] as const) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
   });
 }
+
+for (const theme of ["light", "dark"] as const) {
+  test(`${theme}: 操作付き通知も自動消去し、フォーカス中は止まり操作と閉じるも使える`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await openFixture(page, theme);
+    const trigger = page.getByRole("button", { name: "操作付き通知", exact: true });
+    const notice = page.getByRole("status").filter({ hasText: "合成の完了通知" });
+    await trigger.click();
+    await expect(notice).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`action-toast-before-${theme}.png`) });
+    await page.clock.runFor(3999);
+    await expect(notice).toBeVisible();
+    await page.clock.runFor(1);
+    await expect(notice).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`action-toast-after-${theme}.png`) });
+    await trigger.click();
+    await page.clock.runFor(3000);
+    await notice.getByRole("button", { name: "結果を開く" }).focus();
+    await page.clock.runFor(10000);
+    await expect(notice).toBeVisible();
+    await trigger.focus();
+    await page.mouse.move(0, 0);
+    await page.clock.runFor(1000);
+    await expect(notice).toHaveCount(0);
+    await trigger.click();
+    await notice.getByRole("button", { name: "結果を開く" }).click();
+    await expect(page.getByText("合成の結果を開きました", { exact: true })).toBeVisible();
+    await expect(notice).toHaveCount(0);
+    await trigger.click();
+    await notice.getByRole("button", { name: "閉じる" }).click();
+    await expect(notice).toHaveCount(0);
+    await trigger.click();
+    await page.mouse.move(0, 0);
+    await trigger.focus();
+    await page.clock.runFor(4000);
+    await expect(notice).toHaveCount(0);
+  });
+}

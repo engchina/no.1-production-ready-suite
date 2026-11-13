@@ -654,18 +654,24 @@ test("役に立った回答の詳細には評価ケースへの追加を出さ�
   await expect(detail.getByTestId("feedback-add-case-toggle")).toHaveCount(0);
 });
 
-test("Run の詳細の管理者の評価の下から評価ケースに追加できる", async ({ page, mockApi }) => {
+test("Run の詳細の管理者の評価の下から評価ケースに追加でき、通知は自動で消える", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
   seedDislikedRun(mockApi);
   seedEvaluationSets(mockApi);
   await page.goto("/runs?id=run-dislike-810");
   await page.getByTestId("run-add-case-toggle").click();
   const form = page.getByTestId("run-add-case-form");
   await expect(form.getByLabel("質問")).toHaveValue(DISLIKED_QUESTION);
+  await page.clock.install();
   await form.getByRole("button", { name: "評価ケースに追加" }).click();
   await expect(page.getByText("「月次の評価」に評価ケースを追加しました")).toBeVisible();
   expect(mockApi.lastRequest("POST", "/api/evaluation-sets/evset-open/cases")?.body).toMatchObject({
     source_run_id: "run-dislike-810",
   });
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: testInfo.outputPath("evaluation-added-before-dismiss.png") });
+  await page.clock.runFor(4001);
+  await expect(page.getByText("「月次の評価」に評価ケースを追加しました")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("evaluation-added-after-dismiss.png") });
 });
 
 
@@ -720,6 +726,8 @@ for (const resize of [false, true]) {
     await detail.getByTestId("feedback-add-case-toggle").click();
     const form = detail.getByTestId("feedback-add-case-form");
     await form.locator("#feedback-add-case-new-set-name").fill("架空の検証用・長い名前を持つフィードバック確認の評価セット");
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
     await form.getByTestId("feedback-add-case-submit").click();
     const notification = page.getByRole("region", { name: "通知", exact: true });
     await expect(notification).toContainText("評価ケースを追加しました");

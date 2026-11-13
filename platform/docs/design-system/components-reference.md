@@ -1035,7 +1035,7 @@ export declare function SecretField(props: SecretFieldProps): JSX.Element;
 | 決めたこと | 理由 |
 |---|---|
 | 既定の表示時間は success / info / warning が 4 秒、danger（`toast.error`）が 8 秒。ホバー・フォーカス中は止まる。`duration` を渡せば上書きできる | messaging §3.1。#351 で danger を閉じるまで残したが、画面を移っても古いエラーが残り続けたため 8 秒に戻した（#2470）。対処が続く失敗は固定の面に出す |
-| `action` 付きの通知は自動では消えない（従来どおり） | 「元に戻す」を押す前に消さない |
+| `action` 付きの通知もトーンの既定時間で消える（#5046） | 操作ボタンだけで通知を永久表示にしない。操作中は hover / focus の一時停止を使う |
 | いずれかの通知にポインタが乗っている間、または通知の中にフォーカスがある間は、**すべての**通知の自動消滅を止め、離れたら残り時間から再開する | 読んでいる・押そうとしている途中で消さない（WCAG 2.2.1 の考え方、Radix / Sonner の通例）。通知ごとに止めると、下の通知が消えて読んでいる通知の位置がずれる |
 | 残り時間は store（`useToastStore`）が持つ。`pause()` / `resume()` と `paused` を公開する | 表示の部品を作り直しても残り時間が失われない。単体テストでタイマーを検証できる |
 | ホバー・フォーカス中の通知が閉じられて DOM から外れたときは、その通知の一時停止を解除する | 外れた要素からは `pointerleave` / `blur` が届かず、止まったままになるのを防ぐ |
@@ -1074,7 +1074,7 @@ E2E は 3 製品の同じ内容の helper（RAG `e2e/_toast-placement.ts`・Agen
 export interface ToastOptions {
   description?: string;
   action?: { label: string; onClick: () => void };
-  /** 自動消滅までの ms。0 で自動消滅しない。未指定はトーンの既定（danger は 0、他は 4000）。 */
+  /** 自動消滅までの ms。0 で自動消滅しない。未指定はトーンの既定（danger は 8000、他は 4000。action の有無は問わない）。 */
   duration?: number;
 }
 
