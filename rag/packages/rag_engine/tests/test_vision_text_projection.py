@@ -116,7 +116,7 @@ def test_child_parent_answer_units_cannot_select_search_only_fields():
         assert chunk.metadata["answer_text_projection"]["body_sha256"]
 
 
-def test_native_text_named_search_words_keeps_old_answer_and_index_contract():
+def test_native_text_named_search_words_keeps_literal_body():
     from rag_engine.generation.answer_records import _chunk_answer_record
 
     text = "「検索語」と「言い換え」は画面の項目です。"
@@ -124,7 +124,26 @@ def test_native_text_named_search_words_keeps_old_answer_and_index_contract():
         assert text in chunk.text and text in chunk.retrieval_text
         assert "answer_text_projection" not in chunk.metadata
         if chunk.chunk_level == "child":
-            assert _chunk_answer_record(chunk).text == chunk.retrieval_text
+            assert _chunk_answer_record(chunk).text == chunk.text
+
+
+def test_native_reference_search_excerpt_cannot_be_cited_at_the_origin():
+    from rag_engine.generation.answer_records import _chunk_answer_record
+    from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot
+    from rag_engine.generation.grounded import citation_units
+
+    original = "対象 A の本文です。参照先は別の節です。"
+    for chunk in chunks_for([record("Text", original)]):
+        chunk.retrieval_text += "\n参照先:\n- 別節: 参照先だけに存在する文章。"
+        answer = _chunk_answer_record(chunk)
+        assert original in answer.text
+        assert "参照先だけに存在する文章" not in answer.text
+        snapshot = EvidenceUnitSnapshot.create(
+            {"source_id": chunk.chunk_id, "text": answer.text},
+            citation_units(answer.text),
+            "synthetic-v1",
+        )
+        assert "参照先だけに存在する文章" not in snapshot.prompt_record()["text"]
 
 
 def test_table_supplement_and_contained_picture_keep_index_only_text_outside_body():

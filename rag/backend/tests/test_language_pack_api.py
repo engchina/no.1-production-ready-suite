@@ -41,11 +41,13 @@ def test_get_returns_complete_published_snapshot() -> None:
     assert data["current_release"]["version"] == 1
 
 
-def test_paragraph_editor_metadata_preserves_multiline_values_and_published_pack() -> None:
+@pytest.mark.parametrize("key", ["insufficient_evidence_summary", "answer_part_generation_failed"])
+def test_paragraph_editor_metadata_preserves_multiline_values_and_published_pack(key: str) -> None:
     before = client.get("/api/settings/language-pack").json()["data"]
     fields = {(item["section"], item["key"]): item for item in before["fields"]}
     assert fields["answer_labels", "insufficient_evidence_summary"]["multiline"] is True
     assert fields["answer_labels", "empty_search_guidance"]["multiline"] is True
+    assert fields["answer_labels", "answer_part_generation_failed"]["multiline"] is True
     assert fields["answer_labels", "applications_section"]["multiline"] is False
     assert fields["labels", "graph_section"]["multiline"] is True
     assert fields["labels", "field_id"]["multiline"] is False
@@ -54,15 +56,12 @@ def test_paragraph_editor_metadata_preserves_multiline_values_and_published_pack
     response = client.put(
         "/api/settings/language-pack/draft",
         json={
-            "overrides": {"answer_labels": {"insufficient_evidence_summary": body}},
+            "overrides": {"answer_labels": {key: body}},
             "expected_revision": 1,
         },
     )
     assert response.status_code == 200
-    assert (
-        response.json()["data"]["draft_effective"]["answer_labels"]["insufficient_evidence_summary"]
-        == body
-    )
+    assert response.json()["data"]["draft_effective"]["answer_labels"][key] == body
     assert client.get("/api/settings/language-pack").json()["data"] == before
 
 

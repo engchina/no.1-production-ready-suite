@@ -95,6 +95,34 @@ def test_short_input_uses_one_normal_generation_without_reader():
     assert prompt == block(inputs)
 
 
+@pytest.mark.parametrize("offset", [0, 700])
+@pytest.mark.parametrize("overlapping", [False, True])
+def test_full_source_restoration_counts_replaced_excerpts_once(offset, overlapping):
+    inputs = [span(0, "A" * 1000 + "\n" + "Z" * 600), span(1, "B" * 1400 + "\n" + "Y" * 1800)]
+    inputs[0].update(start=offset, end=offset + len(inputs[0]["text"]))
+
+    def read(system, prompt, schema):
+        findings = []
+        for value in json.loads(prompt)["evidence"]:
+            if value["source"] == "p0":
+                findings.append(finding(value, last=3))
+                if overlapping:
+                    findings.append(finding(value, first=2, last=4))
+            else:
+                findings.append(finding(value, last=1 if overlapping else 4))
+        return schema.model_validate({"findings": findings})
+
+    selected, _, diagnostic = prepare(inputs, read)
+    restored = next(value for value in selected if value["source_id"] == "p0")
+    assert restored["text"] == inputs[0]["text"]
+    assert restored["start"] == offset
+    assert restored["end"] == offset + len(inputs[0]["text"])
+    assert restored["evidence_id"] == inputs[0]["evidence_id"]
+    assert sum(value["source_id"] == "p0" for value in selected) == 1
+    assert len(block(selected)) <= config().evidence_budget_chars
+    assert diagnostic["fits"] is True
+
+
 @pytest.mark.parametrize("failure", ["missing", "invalid_range", "exception"])
 def test_failed_batch_does_not_become_success(failure):
     def read(system, prompt, schema):
@@ -349,11 +377,15 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
     settings = replace(config(), evidence_budget_chars=12000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
-            "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
+            "各資料の条件を教えてください。",
+            answering.AnswerContext(records=records, text="", independent_sources_merged=True),
+            settings,
+            image_prompt_mode="text_only",
         ).response
 
     assert "generation_failure" not in result.generation_trace
     assert generated
+    assert batches > 0
     assert "採らない合成の回答" not in generated[0]
     assert "条件0は値0です。" in generated[0]
 

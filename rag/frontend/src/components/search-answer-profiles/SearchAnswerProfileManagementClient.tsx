@@ -1030,6 +1030,13 @@ function SearchAnswerProfileEditor({
                       className="shrink-0"
                     />
                   </div>
+                  <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3" data-testid="search-answer-profile-wiki">
+                    <div className="min-w-0 space-y-1">
+                      <h3 className="text-sm font-medium text-fg">{t("wiki.search")}</h3>
+                      <p id="wiki-search-help" className="text-xs leading-relaxed text-fg-muted">{t("wiki.searchHelp")}</p>
+                    </div>
+                    <Switch aria-label={t("wiki.search")} aria-describedby="wiki-search-help" checked={config.query.wiki_search_enabled === true} disabled={locked} onCheckedChange={(value) => updateQuery({ wiki_search_enabled: value })} className="shrink-0" />
+                  </div>
                 </div>
               </fieldset>
               {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。ルールごとの確認は下の「プロファイルの知識」。 */}

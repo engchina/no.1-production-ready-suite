@@ -40,6 +40,7 @@ from rag_engine.config import (
 )
 from rag_engine.dependencies import (
     check_adb_hybrid_search_ready,
+    injected_additional_sources,
     injected_context_chunks,
     injected_embedder,
     parse_multimodal_response,
@@ -133,7 +134,7 @@ from rag_engine.generation.answer_records import (
     validate_run_id,
 )
 from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
-from rag_engine.generation.citation_unit_ids import SentUnitCatalog
+from rag_engine.generation.citation_unit_ids import SentUnitCatalog, citation_snapshot_span
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.evidence_merge import merge_evidence
 from rag_engine.generation.execution_record import (
@@ -1293,7 +1294,7 @@ def _grounded_spans(
             {"stage": "generation_evidence_preparation", "input_stage": "prepared_for_generation", "groups": preparation}
         )
     spans = form_field_kinds.with_field_kind_evidence(form_field_kinds.question_field_kinds(question, context), spans)
-    return tag_spans(spans)
+    return tag_spans(spans, build_check_context=False)
 
 
 def _grounded_prompt(
@@ -1537,11 +1538,10 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
 
 # tag_spans が検査用に span へ付ける、同じ機能・文書・隣接ページの本文の複製。span 数 n に対して O(n²) の本文になるため
 # 回答 JSON と UI へ渡す trace には残さない (#829)。読み手（answer_payload・viewer）は evidence_id / source_id / text / page を使う。
-_CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
 
 
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
+    return citation_snapshot_span(span)
 
 
 def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None, spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -1721,17 +1721,44 @@ def synthesize_grounded_answer(
                     question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
                 ).model_json_schema()
 
-            spans, prompt, input_diagnostic = select_evidence(
-                spans,
-                generation_settings,
-                render=render_generation,
-                evidence_text=grounded.evidence_block_text,
-                tag=grounded.tag_spans,
-                system=generation_system,
-                schema_for=selected_generation_schema,
-                provider_id=provider,
-                source_scores=_source_question_scores(context),
-            )
+            if context.independent_sources_merged:
+                from rag_engine.generation.batched_evidence import prepare_batched_evidence
+
+                spans, prompt, input_diagnostic = prepare_batched_evidence(
+                    spans,
+                    generation_settings,
+                    question=question,
+                    schema={},  # schema_for が入力ごとの実在する引用 ID に限定する。
+                    read=lambda system, prompt, schema: parse_text_response(
+                        system,
+                        prompt,
+                        generation_settings,
+                        schema,
+                        provider_id=provider,
+                        purpose="evidence.read_batch",
+                    ),
+                    unusable_output=_invalid_structured_output,
+                    render=render_generation,
+                    evidence_text=grounded.evidence_block_text,
+                    tag=lambda values: grounded.tag_spans(values, build_check_context=False),
+                    system=generation_system,
+                    schema_for=selected_generation_schema,
+                    provider_id=provider,
+                    source_scores=_source_question_scores(context),
+                    evidence_size_lower_bound=grounded.evidence_text_lower_bound,
+                )
+            else:
+                spans, prompt, input_diagnostic = select_evidence(
+                    spans,
+                    generation_settings,
+                    render=render_generation,
+                    evidence_text=grounded.evidence_block_text,
+                    tag=grounded.tag_spans,
+                    system=generation_system,
+                    schema_for=selected_generation_schema,
+                    provider_id=provider,
+                    source_scores=_source_question_scores(context),
+                )
             selecting_evidence = False
             current = grounded.run_round(
                 question,
@@ -1758,7 +1785,7 @@ def synthesize_grounded_answer(
         except Exception as exc:
             timed_out = deadline_cut_short()
             input_limited = isinstance(exc, GenerationInputBudgetExceeded)
-            if input_limited:
+            if isinstance(exc, GenerationInputBudgetExceeded):
                 input_diagnostic = exc.diagnostic
             invalid_draft = not timed_out and (
                 isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc) or input_limited
@@ -1767,7 +1794,8 @@ def synthesize_grounded_answer(
                 raise
             generation_failure = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
             generation_failure_stage = "evidence.select" if selecting_evidence else "answer.generate"
-            if invalid_draft and not input_limited:
+            quality_failed = isinstance(exc, grounded.DraftGenerationInvalid) and "text_quality" in exc.detail
+            if invalid_draft and not input_limited and not quality_failed:
                 structured_output_failed = True
                 if escalation_probe:
                     raise model_cascade.EscalationRequested((SIGNAL_STRUCTURED_OUTPUT_INVALID,)) from exc
@@ -1785,6 +1813,8 @@ def synthesize_grounded_answer(
                 json.dumps(generation_failure_detail, ensure_ascii=False),
             )
             current = grounded.timed_out_round(question)
+            if isinstance(exc, grounded.DraftGenerationInvalid) and exc.citation_trace:
+                current.citation_trace = exc.citation_trace
             step.fail("回答文を生成できなかったため、質問に関係する資料の記載だけを示します", reason_code="answer_generation_failed")
             step.output({"error_type": type(exc).__name__, "input_budget": input_diagnostic})
         else:
@@ -1806,6 +1836,11 @@ def synthesize_grounded_answer(
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
     unread = [*unread_view.lines, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())]
+    text_quality = current.timing.get("text_quality", {})
+    failed_parts = [*text_quality.get("failed_indexes", []), *text_quality.get("failed_units", [])]
+    quality_notice = (
+        current_pack().text("answer_labels", "answer_part_generation_failed").format(count=len(failed_parts)) if failed_parts else ""
+    )
     if excluded_count := input_diagnostic.get("excluded_span_count", 0):
         unread.append(current_pack().text("answer_labels", "answer_evidence_budget_limited").format(count=excluded_count))
     settled = grounded.settle_confirmations(
@@ -1847,12 +1882,14 @@ def synthesize_grounded_answer(
             guide_notes=guide_notes,
             guide_notes_first=guide_notes_first,
         )
+    if quality_notice:
+        rendered.text = quality_notice + "\n\n" + rendered.text
     unsupported_parts = sum(1 for note in current.dropped if not note.get("ignored")) + sum(
         1 for entry in current.applications if not entry.published
     )
     confidence = current.draft.confidence if current.draft._full_answer is not None or published else "low"
     unsettled = [e for e in published if e.item.applies != "matched"]
-    if confidence == "high" and (gaps or unsettled or unread or unsupported_parts):
+    if confidence == "high" and (gaps or unsettled or unread or unsupported_parts or quality_notice):
         confidence = "medium"
     from rag_engine.generation.provided_scope import capture_provided_scope
 
@@ -1865,6 +1902,7 @@ def synthesize_grounded_answer(
         "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
         "generation_input_budget": input_diagnostic,
         "same_unit_fill": unit_fill,
+        **({"generation_text_quality": text_quality} if text_quality else {}),
         "retrieval_counts": _retrieval_counts(context, spans),
         "rounds": rounds,
         "escalation_signals": list(escalation_reasons((SIGNAL_STRUCTURED_OUTPUT_INVALID,) if structured_output_failed else ())),
@@ -3139,7 +3177,30 @@ def answer_question_result(
                     retrieval_top_k=chunk_top_k,
                 )
             )
+
+        def append_independent_sources(candidate: AnswerContext, *, allow_planning: bool) -> AnswerContext:
+            from rag_engine.generation.answer_records import _stored_chunk_answer_record
+            from rag_engine.generation.evidence_union import source_identity, union_sources
+
+            additional = [_stored_chunk_answer_record(chunk) for chunk in injected_additional_sources(allow_planning=allow_planning)]
+            if not additional:
+                return candidate
+            native_ids = {source_identity(record) for record in candidate.records}
+            wiki_ids = {source_identity(record) for record in additional}
+            record_retrieval_stage(
+                {
+                    "stage": "wiki_union",
+                    "native_only": len(native_ids - wiki_ids),
+                    "wiki_only": len(wiki_ids - native_ids),
+                    "both": len(native_ids & wiki_ids),
+                    "fusion": "set_union",
+                    "source_count": len(native_ids | wiki_ids),
+                }
+            )
+            return union_sources(candidate, additional)
+
         if not complete_evidence:
+            context = append_independent_sources(context, allow_planning=False)
             # 業務 Agent の根拠の取得: 主の文書の検索の後で止める（根拠の補いは呼び出し元がする）。
             flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
             return evidence_result(context)
@@ -3389,6 +3450,8 @@ def answer_question_result(
                     for step_id, title, sources in runtime_knowledge.guide_steps
                 ),
             )
+        context, section_expansion = complete_sections(context, "request_coverage")
+        context = append_independent_sources(context, allow_planning=True)
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
@@ -3432,7 +3495,6 @@ def answer_question_result(
                 )
             )
 
-        context, section_expansion = complete_sections(context, "request_coverage")
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = {
             "query_overflow": overflow_trace,

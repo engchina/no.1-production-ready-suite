@@ -137,8 +137,9 @@ def test_untrusted_done_does_not_replace_completed(send, variant: str) -> None:
     elif variant == "created":
         start = []
     bodies: list[dict[str, Any]] = []
-    with pytest.raises(oci.InvalidStructuredOutput):
-        send([start + middle + [_completed(_message(broken))]], bodies)
+    result = send([start + middle + [_completed(_message(broken))]], bodies)
+    # 復旧の出典が一致しない場合は完了本文を保ち、回答単位の再試行へ渡す。
+    assert result.text == json.loads(broken)["text"]
     assert len(bodies) == 1
 
 

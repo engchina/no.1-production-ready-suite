@@ -4603,3 +4603,89 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261112_4941_document_wiki
+DECLARE existing_column NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO existing_column FROM user_tab_columns
+          WHERE table_name='RAG_KNOWLEDGE_BASES' AND column_name='WIKI_BUILD_ACTOR_UUID';
+          IF existing_column=0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_knowledge_bases '
+              || 'ADD wiki_build_actor_uuid VARCHAR2(64)';
+          END IF;
+        END;
+        /
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_WIKI_DOCUMENTS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_wiki_documents ( '
+            || 'document_id VARCHAR2(64) PRIMARY KEY, '
+            || 'source_fingerprint CHAR(64) NOT NULL, '
+            || 'compiler_fingerprint CHAR(64), '
+            || 'revision_fingerprint CHAR(64), '
+            || 'chunk_sets_json JSON, '
+            || 'owner_user_uuid VARCHAR2(64), '
+            || 'published_fingerprint CHAR(64), '
+            || 'status VARCHAR2(16) DEFAULT ''QUEUED'' NOT NULL, '
+            || 'lease_token VARCHAR2(64), '
+            || 'lease_until TIMESTAMP WITH TIME ZONE, '
+            || 'failure_code VARCHAR2(64), '
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_wiki_doc_fk FOREIGN KEY (document_id) '
+            || 'REFERENCES rag_documents(document_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_wiki_status_ck CHECK (status IN (''QUEUED'',''RUNNING'',''READY'',''FAILED'')) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_WIKI_PAGES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_wiki_pages ( '
+            || 'page_id VARCHAR2(64) PRIMARY KEY, '
+            || 'document_id VARCHAR2(64) NOT NULL, '
+            || 'chunk_set_id VARCHAR2(64) NOT NULL, '
+            || 'source_chunk_id VARCHAR2(128) NOT NULL, '
+            || 'unit_id VARCHAR2(64) NOT NULL, '
+            || 'source_fingerprint CHAR(64) NOT NULL, '
+            || 'page_json CLOB CHECK (page_json IS JSON), '
+            || 'search_text CLOB, '
+            || 'embedding VECTOR(1536, FLOAT32), '
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_wiki_page_doc_fk FOREIGN KEY (document_id) '
+            || 'REFERENCES rag_documents(document_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_wiki_page_set_fk FOREIGN KEY (chunk_set_id) '
+            || 'REFERENCES rag_chunk_sets(chunk_set_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_wiki_page_chunk_fk FOREIGN KEY (source_chunk_id) '
+            || 'REFERENCES rag_chunks(chunk_id) ON DELETE CASCADE '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_PAGE_DOC_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_page_doc_idx ON rag_wiki_pages(document_id,source_fingerprint)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_PAGE_SET_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_page_set_idx ON rag_wiki_pages(chunk_set_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_PAGE_CHUNK_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_page_chunk_idx ON rag_wiki_pages(source_chunk_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_QUEUE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_queue_idx ON rag_wiki_documents(status,lease_until)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_PAGE_TEXT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text) '
+            || 'INDEXTYPE IS CTXSYS.CONTEXT PARAMETERS (''LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)'')';
+    END IF;
+END;
+/

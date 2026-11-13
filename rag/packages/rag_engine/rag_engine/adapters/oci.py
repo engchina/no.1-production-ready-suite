@@ -19,7 +19,6 @@ from difflib import SequenceMatcher
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
-from uuid import uuid4
 
 from pr_backend_core.bounded_calls import ErrorKind, classify_error, parse_retry_after
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
@@ -72,6 +71,8 @@ from rag_engine.resources.deadline import (
     remaining_seconds,
 )
 from rag_engine.resources.external_calls import send_http
+from rag_engine.resources.llm_retry_budget import LlmRetryBudget as _LlmRetryBudget
+from rag_engine.resources.llm_retry_budget import retry_budget_context as _llm_retry_budget
 from rag_engine.resources.llm_usage import (
     record_llm_effort_retry,
     record_llm_output_retry,
@@ -453,27 +454,6 @@ EMBEDDING_RETRY_INITIAL_WAIT_SECONDS = 1.0
 EMBEDDING_RETRY_MAX_WAIT_SECONDS = 16.0
 
 
-@dataclass
-class _LlmRetryBudget:
-    """1 回の LLM の呼び出しのやり直しの回数。内側（`_openai_parsed`）と外側（`_parse_with_retry`）で共有する。"""
-
-    used: int = 0
-    max_retries: int = LLM_CALL_MAX_RETRIES
-
-    @property
-    def available(self) -> bool:
-        return self.used < self.max_retries
-
-    def take(self) -> bool:
-        if not self.available:
-            return False
-        self.used += 1
-        return True
-
-
-_llm_retry_budget: ContextVar[_LlmRetryBudget | None] = ContextVar("rag_engine_llm_retry_budget", default=None)
-
-
 def _wait_before_retry(exc: Exception, retry: int, *, initial_wait_seconds: float = 1.0, max_wait_seconds: float = 16.0) -> None:
     """指数 backoff と full jitter で待つ。Retry-After は下限とし、期限や取消を優先する。"""
     cap = min(max_wait_seconds, initial_wait_seconds * (2 ** max(0, retry - 1)))
@@ -513,10 +493,10 @@ def _parse_with_retry[StructuredOutputT: BaseModel](
     """
     from rag_engine.resources.call_context import call_context, update_call_context
 
-    retry_budget = _LlmRetryBudget(max_retries=settings.llm_max_retries)
+    retry_budget = _llm_retry_budget.get() or _LlmRetryBudget(max_retries=settings.llm_max_retries)
     token = _llm_retry_budget.set(retry_budget)
     try:
-        with call_context({"pr.call.retry_group": uuid4().hex}):
+        with call_context({"pr.call.retry_group": retry_budget.group_id}):
             while True:
                 # 回答の期限を過ぎた・取り消された後は、次の呼び出し・やり直しをしない (#1422)。
                 check_deadline()
@@ -1034,15 +1014,20 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 raise
             record_usage()
             _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
-            # 入力に無い置換文字を含む生成文は、破損した構造化出力として既存の上限内で再取得する。
-            # 原文に元からある文字は改変しない。削除や推測による文字の補完もしない。
+            # 文字の品質は schema の違反と区別する。回答の要点の復旧は生成側で行う。
             if "\ufffd" not in json.dumps(input_messages, ensure_ascii=False) and "\ufffd" in parsed.model_dump_json():
-                # どの欄に出たか（JSON の path。本文は残さない）を例外と log に残す（#3849。退けた出力の原文は残らない）。
-                observation_attributes(observation, {"pr.call.validation_status": "rejected", **_retry_scheduled(retry_budget.available)})
                 paths = replacement_char_paths(parsed.model_dump(mode="json"))
-                _log_rejected_output(provider, text_format, response, reason="replacement_character", paths=paths)
-                raise InvalidStructuredOutput(
-                    f"生成文に入力にはない Unicode の置換文字が含まれています（欄: {', '.join(paths) or '不明'}）。再生成してください。"
+                observation_attributes(observation, {"pr.call.output_quality": "replacement_character"})
+                logging.getLogger(__name__).warning(
+                    "LLM の生成文に文字品質の警告があります: model=%s schema=%s paths=%s",
+                    provider.model,
+                    text_format.__name__,
+                    ",".join(paths),
+                    extra={
+                        "event": "llm_output_quality_warning",
+                        "llm_quality_paths": paths,
+                        "llm_quality_reason": "replacement_character",
+                    },
                 )
             observation_attributes(observation, {"pr.call.validation_status": "accepted"})
             return parsed

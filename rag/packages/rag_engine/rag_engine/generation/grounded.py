@@ -48,7 +48,7 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_content import structure_only_quote, table_html_as_rows
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators, replace_evidence_labels
-from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
+from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, citation_snapshot_span
 from rag_engine.generation.citation_wire import (
     bind_wire_range,
     canonical_generation_draft,
@@ -246,13 +246,15 @@ def function_key(span: dict) -> tuple[str, ...]:
 # 機能ラベルの形（「統計-(3)年次調査根拠データ作成」）。`operation_labels` と同じ判定。
 
 
-def tag_spans(spans: Sequence[dict]) -> list[dict]:
+def tag_spans(spans: Sequence[dict], *, build_check_context: bool = True) -> list[dict]:
     """入力を変更せず、形から分かる印（画像由来）と機能キーを付けた写しを返す。"""
     tagged: list[dict] = []
     for span in spans:
         tags = ["image_generated"] if not span.get("document_background_only") and _image_generated(span) else []
         tagged.append({**span, "tags": tags, "function": function_key(span), "label": f"E{len(tagged) + 1}"})
     _unify_prefixed_function_labels(tagged)
+    if not build_check_context:
+        return tagged
     for span in tagged:
         # 画面キャプチャの説明。画面に表示されるキー番号とボタン名の対応（実行(F5)）は本文に書かれないことが
         # 多く、その画面の説明だけが根拠になる (#637)。span 自身が画面説明の場合もその text を含める。
@@ -1934,7 +1936,7 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
         rendered,
         hashlib.sha256(displayed.encode()).hexdigest(),
         displayed,
-        span_json=json.dumps(dict(span), ensure_ascii=False, sort_keys=True),
+        span_json=json.dumps(citation_snapshot_span(span), ensure_ascii=False, sort_keys=True),
     )
 
 
@@ -2415,6 +2417,24 @@ def guide_notice_lines(
     return lines
 
 
+def evidence_text_lower_bound(spans: Sequence[dict[str, Any]], stop_after: int) -> int:
+    """必ず提示する本文だけを数え、超過が確定したら止める。収容可否の承認には使わない。"""
+    total = 0
+    for span in spans:
+        text = str(span.get("text") or "")
+        units = (
+            ()
+            if span.get("document_background_only")
+            else citation_units(text, contract_version=CITATION_UNIT_CONTRACT, image_text=_image_text(span))
+        )
+        pieces = (text[start:end] for start, end in units) if units else (text,)
+        for piece in pieces:
+            total += len(neutralize_boundary_markers(fold_width(piece)).strip())
+            if total > stop_after:
+                return total
+    return total
+
+
 def evidence_block_text(spans: Sequence[dict]) -> str:
     """生成の入力の根拠ブロック（``build_context_block`` の境界の内側）の本文。文字予算の診断も同じ本文で数える (#3776)。"""
     return neutralize_boundary_markers(format_functions(spans, model_view=True))
@@ -2519,9 +2539,9 @@ def run_round(
     confirmed_premises: Sequence[tuple[str, str]] = (),
     confirmed_premise_sources: Sequence[tuple[str, str, str]] = (),
 ) -> Round:
-    """生成を 1 回行い、引用の実在と形式だけを確かめる。
+    """通常は 1 回生成し、引用の実在と形式を確かめる。
 
-    生成の後に意味を採点せず、作り直さない（#4714）。``image_paths`` はモデルへ添付する画像。
+    入力にない置換文字を含む回答単位だけは、同じ根拠と共有予算で再取得する。意味の採点は行わない（#4714）。``image_paths`` はモデルへ添付する画像。
     ``invalid_output`` は構造化出力の契約を満たさなかった例外か（再試行の後も）の判定。画像を添付した生成がこれで
     失敗したら、画像を添付しない生成で 1 回だけ呼ぶ（#2772）。それでも失敗したら `DraftGenerationInvalid` を送出する
     （#3849。呼び出し側が、草稿の無い round で確定する）。
@@ -2655,30 +2675,70 @@ def run_round(
         )
         return canonical
 
-    try:
+    from rag_engine.generation.answer_text_quality import AllAnswerPartsFailed, repair_answer_parts
+    from rag_engine.resources.llm_retry_budget import llm_retry_scope
+
+    def generate(user_prompt: str, schema: type[BaseModel]) -> BaseModel:
+        ensure_model_input(settings, generation_system, user_prompt, schema.model_json_schema(), provider_id=provider_id)
         if image_paths:
-            draft = call_with_model_purpose(
+            return call_with_model_purpose(
                 "answer.generate",
                 parse_images,
                 generation_system,
-                prompt,
+                user_prompt,
                 list(image_paths),
                 settings,
-                generation_model,
+                schema,
                 provider_id=provider_id,
             )
-        else:
-            draft = call_with_model_purpose(
-                "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
+        return call_with_model_purpose(
+            "answer.generate", parse_text, generation_system, user_prompt, settings, schema, provider_id=provider_id
+        )
+
+    def record_repair(value: BaseModel, repair_prompt: str) -> None:
+        generation_outputs.append(
+            {
+                "purpose": "answer.part_text_repair",
+                "input_system_prompt": generation_system,
+                "input_prompt": repair_prompt,
+                "input_prompt_sha256": hashlib.sha256(repair_prompt.encode()).hexdigest(),
+                "raw_output_status": "not_recorded",
+                "parsed_output_representation": "indexed_answer_parts",
+                "parsed_output": value.model_dump(mode="json"),
+            }
+        )
+
+    with llm_retry_scope(settings.llm_max_retries) as retry_budget:
+        try:
+            wire = generate(prompt, generation_model)
+        except Exception as exc:
+            if invalid_output is None or not invalid_output(exc):
+                raise
+            raise DraftGenerationInvalid(type(exc).__name__) from exc
+        draft = canonicalize_output(wire, "answer.generate", prompt)
+        try:
+            repaired, text_quality = repair_answer_parts(
+                wire,
+                original_prompt=prompt,
+                original_system=generation_system,
+                budget=retry_budget,
+                read=generate,
+                record=record_repair,
             )
-    except Exception as exc:
-        if invalid_output is None or not invalid_output(exc):
-            raise
-        # 再実行の後も出力が構造化出力の契約を満たさず、草稿が無い（#3849）。呼び出し側が、草稿の無い round
-        # （関係する資料の記載だけ）で確定できるよう、ほかの失敗と分けて送出する。
-        raise DraftGenerationInvalid(type(exc).__name__) from exc
-    draft = canonicalize_output(draft, "answer.generate", prompt)
-    generation_calls = 1
+        except AllAnswerPartsFailed as exc:
+            raise DraftGenerationInvalid(
+                exc.code,
+                detail={"text_quality": exc.diagnostic},
+                citation_trace={
+                    "capture_scope": "generation_citation_trace",
+                    "input": input_snapshot,
+                    "outputs": generation_outputs,
+                    "final_draft": {},
+                },
+            ) from exc
+        if repaired is not wire:
+            draft = canonicalize_output(repaired, "answer.part_text_merge", prompt)
+    generation_calls = 1 + len(text_quality.get("attempts", []))
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     draft = _without_evidence_labels(draft, question, spans)
     # 推導の文の、送った根拠の表示 ID は出典の名前にする（#4626）。
@@ -2688,6 +2748,7 @@ def run_round(
         "prompt_chars": len(prompt),
         "items": len(draft.items),
         "generation_calls": generation_calls,
+        **({"text_quality": text_quality} if text_quality else {}),
     }
     citation_trace = {
         "capture_scope": "generation_citation_trace",
@@ -2771,9 +2832,16 @@ class DraftGenerationInvalid(RuntimeError):
     ``detail`` は契約違反の内訳の件数（#4091）と計画の作り直しの記録（#4098）。
     """
 
-    def __init__(self, failure: str, *, detail: Mapping[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        failure: str,
+        *,
+        detail: Mapping[str, Any] | None = None,
+        citation_trace: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(failure)
         self.detail = dict(detail or {})
+        self.citation_trace = citation_trace or {}
 
 
 def generation_failure_detail(exc: Exception) -> dict[str, Any]:
@@ -2781,6 +2849,8 @@ def generation_failure_detail(exc: Exception) -> dict[str, Any]:
 
     ``model`` は検証に失敗した型の名前。モデルの出力の型でなければ、出力の不合格ではなく実装の不具合を疑う手がかり。
     """
+    from rag_engine.generation.answer_text_quality import AllAnswerPartsFailed
+
     details = structured_failure_details(exc)
     invalid = exc if isinstance(exc, DraftGenerationInvalid) else None
     source = invalid.__cause__ if invalid is not None and invalid.__cause__ is not None else exc
@@ -2788,6 +2858,8 @@ def generation_failure_detail(exc: Exception) -> dict[str, Any]:
         "category": str(invalid) if invalid is not None and source is invalid else details["category"],
         **failure_summary_fields(details),
     }
+    if isinstance(source, AllAnswerPartsFailed):
+        result["category"] = source.code
     if isinstance(source, ValidationError):
         result["model"] = source.title
         result["validation_error_types"] = dict(Counter(row["type"] for row in details.get("validation_errors", ())))

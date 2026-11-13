@@ -17676,6 +17676,7 @@ CREATE TABLE {knowledge_base_table} (
     status                VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
     default_search_mode   VARCHAR2(16) DEFAULT 'hybrid' NOT NULL,
     retrieval_config      JSON,
+    wiki_build_actor_uuid VARCHAR2(64),
     extraction_fields     JSON,
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
@@ -19043,6 +19044,7 @@ def _to_knowledge_base_detail(
         if isinstance(structure_override, bool)
         else None,
         structure_index_global_enabled=get_settings().rag_graph_profile == "entities",
+        wiki_build_enabled=knowledge_base.retrieval_config.get("wiki_build_enabled") is True,
     )
 
 

@@ -67,6 +67,7 @@ def test_query_has_only_the_applied_fields() -> None:
     assert set(KnowledgeBaseQueryConfig.model_fields) == {
         "max_anchors_per_document",
         "support_guide_enabled",
+        "wiki_search_enabled",
     }
 
 
@@ -99,7 +100,11 @@ def test_saved_persona_is_ignored_on_load_and_dropped_on_save() -> None:
     dumped = dump_search_answer_profile_config(config)
     assert "system_prompt" not in dumped
     assert "default_language" not in dumped
-    assert dumped["query"] == {"max_anchors_per_document": 5, "support_guide_enabled": None}
+    assert dumped["query"] == {
+        "max_anchors_per_document": 5,
+        "support_guide_enabled": None,
+        "wiki_search_enabled": None,
+    }
 
 
 def test_dump_parse_roundtrip() -> None:

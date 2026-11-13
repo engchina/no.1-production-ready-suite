@@ -103,6 +103,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         maintenance_stop = asyncio.Event()
         # 取込を止めた環境でも文書の削除・更新は行われる。leaseで多重実行を防ぐ。
         maintenance_task = asyncio.create_task(run_native_maintenance_loop(maintenance_stop))
+        from app.rag.wiki_jobs import wiki_jobs
+
+        wiki_stop = asyncio.Event()
+        wiki_task = asyncio.create_task(wiki_jobs.run_forever(wiki_stop))
         worker_task: asyncio.Task[None] | None = None
         worker_stop: asyncio.Event | None = None
         if (
@@ -157,6 +161,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from app.rag.structure_index_jobs import structure_index_jobs
 
             await structure_index_jobs.shutdown()
+            wiki_stop.set()
+            wiki_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await wiki_task
+            await wiki_jobs.shutdown()
             # このプロセスで作成中のチャットの回答を打ち切り、中断として保存する（#1175）。
             await get_chat_answer_run_service().shutdown()
             if worker_task is not None:
@@ -259,6 +268,15 @@ def create_app() -> FastAPI:
         )
 
     from app.rag.search_answer_profile_config import ProfileAnswerModelUnavailableError
+    from app.rag.wiki_retrieval import WikiSourceChanged
+
+    @app.exception_handler(WikiSourceChanged)
+    async def wiki_source_changed_handler(request: Request, exc: WikiSourceChanged) -> JSONResponse:
+        return api_error_response(
+            409,
+            ["回答に使う文書または検索設定が変更されました。もう一度検索してください。"],
+            request_id=_response_request_id(request),
+        )
 
     @app.exception_handler(ProfileAnswerModelUnavailableError)
     async def profile_answer_model_handler(

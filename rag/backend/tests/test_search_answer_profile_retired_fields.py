@@ -100,7 +100,11 @@ def test_only_retired_fields_are_removed_and_kept_values_do_not_change() -> None
     assert db.updates == 2
     # 消した後の値は、今の定義で検証エラーにならずに読める。
     config = SearchAnswerProfileConfig.model_validate(_profiles(db)[0])
-    assert config.model_dump(mode="json") == {**_KEPT_PROFILE, "escalation_model_id": None}
+    assert config.model_dump(mode="json") == {
+        **_KEPT_PROFILE,
+        "escalation_model_id": None,
+        "query": {**_KEPT_PROFILE["query"], "wiki_search_enabled": None},
+    }
     restored = parse_adapter_config(db.tables["RAG_KNOWLEDGE_BASES"][0]["retrieval_config"])
     assert restored.ingestion.chunk_size == 1200
 

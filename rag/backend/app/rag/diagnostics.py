@@ -88,6 +88,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         # 生成に渡す根拠の原文の文字予算(#3776)。
         "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
+        "batch_read_workers": resolved_settings.rag_batch_read_workers,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
         # 回答の LLM の時間の短縮(#1499)。
@@ -148,5 +149,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "support_guide_close_match_margin": resolved_settings.rag_support_guide_close_match_margin,
         # 最終照合の入力の分け方(#4141)。
     }
+    payload["wiki"] = resolved_settings.model_dump(
+        mode="json", include={key for key in Settings.model_fields if key.startswith("rag_wiki_")}
+    )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

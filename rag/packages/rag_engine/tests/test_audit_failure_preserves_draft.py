@@ -3,6 +3,7 @@
 import pytest
 from test_grounded_answer import FakeModel, context, draft, ids, item, record
 
+from rag_engine.config import get_settings
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
 
@@ -26,7 +27,7 @@ def run_failed_audit(monkeypatch, error, *, deadline=None):
     current = grounded.run_round(
         QUESTION,
         _grounded_spans(QUESTION, ctx, (), None),
-        None,
+        get_settings(environ={}),
         prompt="p",
         image_paths=[],
         provider_id=None,
@@ -44,5 +45,7 @@ def test_generation_failure_is_outside_audit_fallback(monkeypatch):
         raise RuntimeError("generation failed")
 
     with pytest.raises(RuntimeError, match="generation failed"):
-        grounded.run_round(QUESTION, [], None, prompt="p", image_paths=[], provider_id=None, parse_text=fail, parse_images=None)
+        grounded.run_round(
+            QUESTION, [], get_settings(environ={}), prompt="p", image_paths=[], provider_id=None, parse_text=fail, parse_images=None
+        )
     assert calls == [True]

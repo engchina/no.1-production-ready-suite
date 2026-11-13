@@ -20,6 +20,65 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
+test("Wiki の構築を保存し、待機・失敗と無効時のキャッシュ保持を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const fixtures = defaultKnowledgeBases();
+  fixtures[0].name = "ナレッジベース A";
+  fixtures[0].description = "合成の資料";
+  await mockKnowledgeBases(page, fixtures);
+  await mockDocuments(page);
+  await page.route("**/api/knowledge-bases/kb-1/extraction-fields", (route) => route.fulfill(envelope({ inherits_default: true, fields: [] })));
+  let enabled = false;
+  const writes: boolean[] = [];
+  const counts = { READY: 2, FAILED: 1, QUEUED: 0 };
+  await page.route("**/api/knowledge-bases/kb-1/wiki**", async (route) => {
+    if (route.request().method() === "PUT") {
+      enabled = route.request().postDataJSON().enabled;
+      writes.push(enabled);
+    }
+    if (route.request().url().endsWith("/retry")) {
+      counts.FAILED = 0;
+      counts.QUEUED = 1;
+    }
+    await route.fulfill(envelope({ enabled, counts, cache_policy: "retain_on_disable" }));
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const panel = page.getByTestId("knowledge-base-wiki");
+  const toggle = panel.getByRole("switch", { name: "Wiki を自動構築する" });
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await expect(panel).toContainText("準備済み 2 件");
+  await panel.getByRole("button", { name: "失敗した構築を再試行" }).click();
+  await expect(panel).toContainText("待機 1 件");
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("wiki-enabled.png"), fullPage: true });
+  await toggle.click();
+  await expect(panel).toContainText("保存済みの案内は保持しています");
+  await expect(panel).toContainText("準備済み 2 件");
+  expect(writes).toEqual([true, false]);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("wiki-disabled.png"), fullPage: true });
+});
+
+test("Wiki の状態読込の失敗を再試行でき、アーカイブ済みでは構築設定を変えない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKnowledgeBases(page, defaultKnowledgeBases());
+  await mockDocuments(page);
+  let failing = true;
+  await page.route("**/api/knowledge-bases/kb-old/wiki", (route) => failing
+    ? route.fulfill({ status: 503, json: { data: null, error_messages: ["合成の読込失敗"], warning_messages: [] } })
+    : route.fulfill(envelope({ enabled: false, counts: {}, cache_policy: "retain_on_disable" })));
+  await page.goto("/knowledge-bases/kb-old");
+  const panel = page.getByTestId("knowledge-base-wiki");
+  await expect(panel.getByRole("button", { name: "再試行", exact: true })).toBeVisible({ timeout: 15000 });
+  failing = false;
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel.getByRole("switch", { name: "Wiki を自動構築する" })).toBeDisabled();
+  await expect(panel).toContainText("検索可能な文書を追加すると構築が始まります");
+  await expectNoPageOverflow(page);
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("wiki-archived.png"), fullPage: true });
+});
+
 test("検索・回答プロファイルの一覧は、参照 KB にアーカイブ済み・見つからないものがある行を要確認で示す", async ({
   page,
 }) => {

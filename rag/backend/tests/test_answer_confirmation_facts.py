@@ -56,3 +56,13 @@ def test_stored_child_marks_superseded_documents_for_the_engine() -> None:
     current = _stored_child(_chunk(superseded=False), rrf_score=0.1).metadata
     assert superseded["document_superseded"] is True
     assert "document_superseded" not in current
+
+
+def test_stored_child_retains_original_source_identity_attributes() -> None:
+    identities = [{"source_key": "synthetic-source", "revision_key": "synthetic-v2"}]
+    chunk = _chunk(superseded=False).model_copy(
+        update={"metadata": {"source_identities": identities}}
+    )
+    child = _stored_child(chunk, rrf_score=0.1)
+    assert child.metadata["source_identities"] == identities
+    assert child.text == chunk.text

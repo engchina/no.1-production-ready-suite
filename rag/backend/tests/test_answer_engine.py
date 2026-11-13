@@ -2945,3 +2945,15 @@ def test_build_engine_settings_passes_online_budget_without_changing_fixed_budge
     assert configured.online_max_output_tokens == 24576
     assert configured.answer_max_tokens == default.answer_max_tokens == 32768
     assert configured.llm_providers == default.llm_providers
+
+
+def test_build_engine_settings_passes_batch_read_workers(tmp_path: Any) -> None:
+    from app.rag.answer_engine import build_engine_settings
+
+    assert build_engine_settings(Settings(), output_dir=tmp_path).batch_read_workers == 1
+    assert (
+        build_engine_settings(
+            Settings(rag_batch_read_workers=4), output_dir=tmp_path
+        ).batch_read_workers
+        == 4
+    )

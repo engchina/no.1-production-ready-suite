@@ -75,6 +75,7 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
+from app.clients.wiki_store import wiki_schema_sql
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
     RETIRED_4784_FIELDS,
@@ -403,7 +404,10 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_recipe_version_log",
             sql=recipe_version_log_schema_sql(),
         ),
-        # 文書全体の要約（#4793）。文書を参照する。
+        # Wiki の案内は解析済みの原文だけを参照し、本文の処理方式を変えない。
+        OracleSchemaSection(
+            name="document_wiki", table_name="rag_wiki_documents", sql=wiki_schema_sql()
+        ),
         OracleSchemaSection(
             name="document_summaries",
             table_name="rag_document_summaries",
@@ -1139,6 +1143,23 @@ END;
             sql=_create_missing_objects_sql(
                 oracle_chunk_document_index_sql() + ";", "文書の chunk"
             ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261112_4941_document_wiki",
+            table_name="rag_wiki_documents",
+            sql="""DECLARE existing_column NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO existing_column FROM user_tab_columns
+          WHERE table_name='RAG_KNOWLEDGE_BASES' AND column_name='WIKI_BUILD_ACTOR_UUID';
+          IF existing_column=0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_knowledge_bases '
+              || 'ADD wiki_build_actor_uuid VARCHAR2(64)';
+          END IF;
+        END;
+        /\n"""
+            + _create_missing_objects_sql(wiki_schema_sql(), "文書 Wiki"),
         )
     )
     return sections

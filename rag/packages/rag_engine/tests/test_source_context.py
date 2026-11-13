@@ -172,3 +172,18 @@ def test_html_roles_and_table_captions_reach_prompt_without_changing_citation_bo
     assert "footer" in grounded.evidence_block_text(spans)
     assert "原文の表題" in grounded.evidence_block_text(spans)
     assert {span["text"] for span in spans} == {footer.text, table.text}
+
+
+def test_source_identity_attributes_reach_prompt_separately_from_original_body():
+    identities = [
+        {"source_key": "synthetic-source", "revision_key": "synthetic-v2", "effective_date": "2025-01-01", "source_status": "active"}
+    ]
+    record = replace(make_record(1, ["合成の節"]), metadata={"source_identities": identities})
+    spans = evidence_spans("合成の質問", [record], budget=10000)
+    for index, span in enumerate(spans, 1):
+        span.update(label=f"E{index}", function=("synthetic.txt", "節"), tags=[])
+    rendered = grounded.evidence_block_text(spans)
+    assert "synthetic-v2" in rendered
+    assert "2025-01-01" in rendered
+    assert spans[0]["text"] == record.text
+    assert "synthetic-v2" not in spans[0]["text"]

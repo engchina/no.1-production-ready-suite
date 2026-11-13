@@ -14,7 +14,7 @@ import {
 } from "./_helpers";
 
 /** 検索・回答プロファイルの query が持つ欄（ほかの欄は backend が検証エラーにする。#4784）。 */
-const PROFILE_QUERY_FIELDS = ["max_anchors_per_document", "support_guide_enabled"];
+const PROFILE_QUERY_FIELDS = ["max_anchors_per_document", "support_guide_enabled", "wiki_search_enabled"];
 
 // #3719: 空・単一ページでも表示し、3一覧のページ操作と作業状態を確かめる。
 for (const [tab, paginationId, kind] of [
@@ -95,6 +95,22 @@ test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockKnowledgeBases(page);
+});
+
+test("Wiki 検索は既定で無効で、プロファイルに明示した使用設定を保存する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body: Record<string, unknown> | null = null;
+  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const toggle = page.getByRole("switch", { name: "Wiki 検索を使用する" });
+  await expect(toggle).not.toBeChecked();
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の Wiki 設定の検証用");
+  await toggle.click();
+  await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true }).click();
+  await expect(toggle).toBeChecked();
+  await expect.poll(() => (body?.config as { query?: { wiki_search_enabled?: boolean } })?.query?.wiki_search_enabled).toBe(true);
+  await toggle.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("wiki-profile.png"), fullPage: true });
 });
 
 test("言語資源の上書き（検索・回答の項目だけ）を検索・回答プロファイルに保存できる (#2181)", { tag: "@responsive" }, async ({
@@ -187,6 +203,7 @@ for (const viewport of [
       // 出力の検査を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
       "出力の検査を通らなかったときのモデル",
       "業務ガイドを使用する",
+      "Wiki 検索を使用する",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
     // 品質評価は検索・回答プロファイルで上書きしない(評価はグローバル設定だけで決まる。#301)。

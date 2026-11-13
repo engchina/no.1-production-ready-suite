@@ -158,6 +158,7 @@ CREATE TABLE rag_knowledge_bases (
     status                VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
     default_search_mode   VARCHAR2(16) DEFAULT 'hybrid' NOT NULL,
     retrieval_config      JSON,
+    wiki_build_actor_uuid VARCHAR2(64),
     extraction_fields     JSON,
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
@@ -1325,6 +1326,49 @@ CREATE INDEX rag_recipe_version_log_rcp_idx
 
 CREATE INDEX rag_recipe_version_log_doc_idx
     ON rag_recipe_version_log (document_id);
+
+-- section: document_wiki
+CREATE TABLE rag_wiki_documents (
+    document_id VARCHAR2(64) PRIMARY KEY,
+    source_fingerprint CHAR(64) NOT NULL,
+    compiler_fingerprint CHAR(64),
+    revision_fingerprint CHAR(64),
+    chunk_sets_json JSON,
+    owner_user_uuid VARCHAR2(64),
+    published_fingerprint CHAR(64),
+    status VARCHAR2(16) DEFAULT 'QUEUED' NOT NULL,
+    lease_token VARCHAR2(64),
+    lease_until TIMESTAMP WITH TIME ZONE,
+    failure_code VARCHAR2(64),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_wiki_doc_fk FOREIGN KEY (document_id)
+        REFERENCES rag_documents(document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_status_ck CHECK (status IN ('QUEUED','RUNNING','READY','FAILED'))
+);
+CREATE TABLE rag_wiki_pages (
+    page_id VARCHAR2(64) PRIMARY KEY,
+    document_id VARCHAR2(64) NOT NULL,
+    chunk_set_id VARCHAR2(64) NOT NULL,
+    source_chunk_id VARCHAR2(128) NOT NULL,
+    unit_id VARCHAR2(64) NOT NULL,
+    source_fingerprint CHAR(64) NOT NULL,
+    page_json CLOB CHECK (page_json IS JSON),
+    search_text CLOB,
+    embedding VECTOR(1536, FLOAT32),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_wiki_page_doc_fk FOREIGN KEY (document_id)
+        REFERENCES rag_documents(document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_page_set_fk FOREIGN KEY (chunk_set_id)
+        REFERENCES rag_chunk_sets(chunk_set_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_page_chunk_fk FOREIGN KEY (source_chunk_id)
+        REFERENCES rag_chunks(chunk_id) ON DELETE CASCADE
+);
+CREATE INDEX rag_wiki_page_doc_idx ON rag_wiki_pages(document_id,source_fingerprint);
+CREATE INDEX rag_wiki_page_set_idx ON rag_wiki_pages(chunk_set_id);
+CREATE INDEX rag_wiki_page_chunk_idx ON rag_wiki_pages(source_chunk_id);
+CREATE INDEX rag_wiki_queue_idx ON rag_wiki_documents(status,lease_until);
+CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text)
+    INDEXTYPE IS CTXSYS.CONTEXT PARAMETERS ('LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)');
 
 -- section: document_summaries
 CREATE TABLE rag_document_summaries (

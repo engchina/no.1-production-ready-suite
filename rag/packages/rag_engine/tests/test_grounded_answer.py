@@ -735,7 +735,7 @@ class ImageGenerationFallbackTest(unittest.TestCase):
         return grounded.run_round(
             QUESTION,
             self.spans,
-            None,
+            get_settings(environ={}, dotenv_path=None),
             prompt="p",
             image_paths=["image.png"],
             provider_id=None,
