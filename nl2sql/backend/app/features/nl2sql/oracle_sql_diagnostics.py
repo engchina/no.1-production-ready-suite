@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from sqlglot.errors import TokenError
 
 from .oracle_dialect import OracleConversion
+from .oracle_keyword_metadata import NativeKeywordMetadata
 
 OracleOffsetBasis = Literal["utf8_bytes_zero_based"]
 _CONTEXT_CHARACTERS = 80
@@ -15,6 +16,7 @@ _TOKEN_CHARACTERS = 160
 
 class SqlTokenLocation(TypedDict):
     kind: str
+    lexer_source: Literal["sqlglot.OracleConversion"]
     text: str
     text_truncated: bool
     start_character: int
@@ -41,6 +43,7 @@ class OracleSqlDiagnostic(TypedDict):
     sql_source: Literal["prepared_sql"]
     location: SqlErrorLocation | None
     unavailable_reason: str | None
+    native_keyword_metadata: NotRequired[NativeKeywordMetadata]
 
 
 def oracle_parse_diagnostic(
@@ -89,6 +92,7 @@ def oracle_parse_diagnostic(
                     text = prepared_sql[token.start : token.end + 1]
                     token_location = {
                         "kind": token.token_type.name,
+                        "lexer_source": "sqlglot.OracleConversion",
                         "text": text[:_TOKEN_CHARACTERS],
                         "text_truncated": len(text) > _TOKEN_CHARACTERS,
                         "start_character": token.start,
