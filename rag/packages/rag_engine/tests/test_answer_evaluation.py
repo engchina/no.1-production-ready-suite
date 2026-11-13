@@ -38,18 +38,7 @@ def payload():
 
 
 def verdict(value="correct"):
-    return AnswerCorrectnessOutput(
-        comparisons=[
-            {
-                "answer_unit_id": "A1",
-                "standard_unit_ids": ["S1"],
-                "relation": {"correct": "consistent", "incorrect": "contradicts", "unassessed": "unassessed"}[value],
-                "reason": "理由",
-            }
-        ],
-        uncovered_points=[],
-        reason="理由",
-    )
+    return AnswerCorrectnessOutput(correctness=value, response_appropriateness="not_applicable", reason="理由")
 
 
 def broken_output():
@@ -74,8 +63,9 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
     # 渡すのは質問・標準回答・出典の行を除いた回答の本文だけ（取得した根拠は渡さない）。
     assert json.loads(prompt) == {
         "question": "今回の取込失敗の原因は？",
-        "standard_answer": [{"id": "S1", "text": "ログを確認して原因を特定する。"}],
-        "answer_text": [{"id": "A1", "text": "ログを確認して原因を特定します。"}],
+        "standard_answer": "ログを確認して原因を特定する。",
+        "answer_text": "ログを確認して原因を特定します。",
+        "response_expectations": [],
     }
     assert result == {
         "rubric_version": RUBRIC_VERSION,
@@ -84,18 +74,8 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
         "judge_diagnostics": {"judge_calls": 1, "judge_retries": 0, "retry_reasons": []},
         "answer_correctness": score,
         "correctness_reason": "理由",
-        "claim_comparisons": [
-            {
-                "answer_unit_id": "A1",
-                "standard_unit_ids": ["S1"],
-                "relation": {"correct": "consistent", "incorrect": "contradicts", "unassessed": "unassessed"}[value],
-                "reason": "理由",
-                "input_role": "content",
-                "answer_text": "ログを確認して原因を特定します。",
-                "standard_texts": ["ログを確認して原因を特定する。"],
-            }
-        ],
-        "uncovered_points": [],
+        "response_decision_accuracy": None,
+        "response_decision_reason": "理由",
         "status": "completed",
         "message": "",
     }

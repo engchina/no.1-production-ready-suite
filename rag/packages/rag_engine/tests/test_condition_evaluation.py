@@ -1,4 +1,4 @@
-"""述べた内容の矛盾、標準回答の未回答、未評価の回答単位を分ける。"""
+"""本文全体の独立判定を保持し、不要な片段番号や自己申告ラベルに依存しない。"""
 
 import json
 from pathlib import Path
@@ -6,126 +6,59 @@ from unittest.mock import patch
 
 import pytest
 
-from rag_engine.evaluation.answer_eval import RUBRIC_VERSION, AnswerCorrectnessOutput, evaluate_answer_payload
+from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput, evaluate_answer_payload
 
 PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
-DATA = {
-    "question": "項目Aと項目Bの値を教えてください。",
-    "standard_answer": "項目Aは5です。\n項目Bは8です。",
-    "answer_text": "項目Aは5です。\n項目Bは3です。",
-}
-
-
-def row(answer, reference, relation):
-    return {"answer_unit_id": answer, "standard_unit_ids": reference, "relation": relation, "reason": "合成の比較理由"}
-
-
-def evaluate(data, rows, missing=()):
-    output = AnswerCorrectnessOutput(comparisons=rows, uncovered_points=list(missing), reason="合成の全体理由")
-    with patch(PARSE, return_value=output) as model:
-        result = evaluate_answer_payload(data, object())
-    assert model.call_count == 1
-    return result
-
-
-def test_one_contradiction_cannot_be_overridden_by_a_free_overall_reason():
-    result = evaluate(DATA, [row("A1", ["S1"], "consistent"), row("A2", ["S2"], "contradicts")])
-    assert result["answer_correctness"] == 0
-    assert result["claim_comparisons"][1]["answer_text"] == "項目Bは3です。"
-    assert result["claim_comparisons"][1]["standard_texts"] == ["項目Bは8です。"]
-    assert result["rubric_version"] == RUBRIC_VERSION == 28
-
-
-def test_correct_partial_answer_records_missing_point_without_factual_failure():
-    result = evaluate(
-        DATA | {"answer_text": "項目Aは5です。"}, [row("A1", ["S1"], "consistent")], [{"standard_unit_id": "S2", "reason": "項目Bは未回答"}]
-    )
-    assert result["answer_correctness"] == 1
-    assert result["uncovered_points"][0]["standard_text"] == "項目Bは8です。"
-
-
-def test_unassessed_answer_tail_is_not_silently_a_correct_whole_answer():
-    result = evaluate(DATA, [row("A1", ["S1"], "consistent")])
-    assert result["answer_correctness"] is None
-    assert result["status"] == "completed"
-
-
-@pytest.mark.parametrize("rows", [[row("A9", ["S1"], "consistent")], [row("A1", ["S9"], "contradicts")], [row("A1", [], "consistent")]])
-def test_unknown_or_missing_source_references_are_evaluation_errors_without_another_judge(rows):
-    result = evaluate(DATA, rows)
-    assert result["status"] == "error"
-    assert result["judge_diagnostics"]["judge_calls"] == 1
-    assert result["judge_diagnostics"]["judge_retries"] == 0
-
-
-def test_insufficient_comparison_material_is_unassessed_without_rewriting_the_answer():
-    result = evaluate(DATA, [row("A1", [], "unassessed"), row("A2", [], "unassessed")])
-    assert result["answer_correctness"] is None
-    assert result["status"] == "completed"
 
 
 @pytest.mark.parametrize(
     "case", json.loads((Path(__file__).with_name("fixtures") / "condition_evaluation_cases.json").read_text()), ids=lambda case: case["id"]
 )
-def test_fixed_synthetic_inputs_are_preserved_in_the_reference_units(case):
-    with patch(PARSE, return_value=AnswerCorrectnessOutput(comparisons=[], uncovered_points=[], reason="未判定")) as model:
+def test_fixed_synthetic_inputs_are_passed_as_complete_text(case):
+    output = AnswerCorrectnessOutput(correctness="unassessed", response_appropriateness="not_applicable", reason="比較材料の確認")
+    with patch(PARSE, return_value=output) as model:
         result = evaluate_answer_payload(case, object())
     inputs = json.loads(model.call_args.args[1])
-    for field in ("standard_answer", "answer_text"):
-        assert "".join("".join(unit["text"].split()) for unit in inputs[field]) == "".join(case[field].split())
-    assert inputs["question"] == case["question"]
+    for field in ("question", "standard_answer", "answer_text"):
+        assert inputs[field] == case[field]
     assert result["answer_correctness"] is None
     assert model.call_count == 1
 
 
-@pytest.mark.parametrize("section", ["gaps_section", "unverified_section", "deadline_section"])
-def test_substantive_claims_under_notes_are_not_hidden_from_the_judge(section):
-    from rag_engine.generation.answer_labels import answer_labels
-
-    text = "項目Aは5です。\n\n" + getattr(answer_labels(), section) + "\n\n項目Bは3です。"
-    with patch(PARSE, return_value=AnswerCorrectnessOutput(comparisons=[], uncovered_points=[], reason="未判定")) as model:
-        result = evaluate_answer_payload(DATA | {"answer_text": text}, object())
-    inputs = json.loads(model.call_args.args[1])
-    assert "".join("".join(unit["text"].split()) for unit in inputs["answer_text"]) == "".join(text.split())
+@pytest.mark.parametrize("kind,score", [("appropriate", 1), ("inappropriate", 0), ("unassessed", None)])
+def test_expected_handling_is_scored_from_body_with_no_reference_answer(kind, score):
+    data = {
+        "question": "合成の資料にない項目の値は？",
+        "standard_answer": "",
+        "answer_text": "資料から値を確認できません。",
+        "response_expectations": [
+            {"question": "合成の質問", "answer_text": "資料から値を確認できません。", "expected_decisions": ["hold"]}
+        ],
+    }
+    output = AnswerCorrectnessOutput(correctness="not_applicable", response_appropriateness=kind, reason="本文と期待する対応の比較")
+    with patch(PARSE, return_value=output) as model:
+        result = evaluate_answer_payload(data, object())
+    assert result["status"] == "completed"
     assert result["answer_correctness"] is None
+    assert result["response_decision_accuracy"] == score
     assert model.call_count == 1
+    schema = model.call_args.args[3].model_json_schema()
+    assert set(schema["properties"]) == {"correctness", "response_appropriateness", "reason"}
+    assert "answer_unit_id" not in json.dumps(schema)
 
 
-@pytest.mark.parametrize("context", ["資料により確認できた事項", "合成資料の説明"])
-def test_presentation_units_are_recorded_separately_without_becoming_unassessed(context):
-    result = evaluate(
-        DATA | {"answer_text": context + "\n\n項目Aは5です。"}, [row("A1", [], "not_applicable"), row("A2", ["S1"], "consistent")]
-    )
-    assert result["answer_correctness"] == 1
-    assert result["claim_comparisons"][0]["relation"] == "not_applicable"
-    assert result["claim_comparisons"][0]["answer_text"] == context
-
-
-def test_presentation_only_is_not_a_correct_answer():
-    result = evaluate(DATA | {"answer_text": "資料により確認できた事項"}, [row("A1", [], "not_applicable")])
-    assert result["answer_correctness"] is None
-
-
-def test_wrong_claim_after_a_note_heading_still_dominates_the_score():
-    text = "資料から確認できなかった事項\n\n項目Bは3です。"
-    result = evaluate(DATA | {"answer_text": text}, [row("A1", [], "not_applicable"), row("A2", ["S2"], "contradicts")])
-    assert result["answer_correctness"] == 0
-
-
-def test_material_claim_without_comparison_is_still_unassessed():
-    result = evaluate(DATA, [row("A1", ["S1"], "consistent"), row("A2", [], "unassessed")])
-    assert result["answer_correctness"] is None
-
-
-@pytest.mark.parametrize("field", ["rules_section", "applications_section", "gaps_section"])
-def test_known_presentation_heading_cannot_turn_correct_content_unassessed(field):
+@pytest.mark.parametrize("verdict,expected", [("correct", 1), ("incorrect", 0), ("unassessed", None)])
+def test_model_whole_body_verdict_is_not_reinterpreted_by_coverage_or_headings(verdict, expected):
     from rag_engine.generation.answer_labels import answer_labels
 
-    heading = getattr(answer_labels(), field)
-    result = evaluate(
-        DATA | {"answer_text": heading + "\n\n項目Aは5です。"}, [row("A1", [], "unassessed"), row("A2", ["S1"], "consistent")]
-    )
-    assert result["answer_correctness"] == 1
-    assert result["claim_comparisons"][0]["input_role"] == "heading"
-    assert result["claim_comparisons"][0]["relation"] == "unassessed"
-    assert result["claim_comparisons"][1]["input_role"] == "content"
+    data = {
+        "question": "合成の値は？",
+        "standard_answer": "項目Aは5です。項目Bは8です。",
+        "answer_text": answer_labels().gaps_section + "\n項目Aは5です。",
+    }
+    output = AnswerCorrectnessOutput(correctness=verdict, response_appropriateness="not_applicable", reason="本文の意味に基づく判定")
+    with patch(PARSE, return_value=output) as model:
+        result = evaluate_answer_payload(data, object())
+    assert json.loads(model.call_args.args[1])["answer_text"] == data["answer_text"]
+    assert result["answer_correctness"] == expected
+    assert model.call_count == 1
