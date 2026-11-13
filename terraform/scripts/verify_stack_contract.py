@@ -739,7 +739,10 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
             "subnet_id                                      = local.adb_private_endpoint_enabled ? var.adb_subnet_id : null",
             "whitelisted_ips                                = local.adb_secure_acl_enabled ? local.adb_whitelisted_ips : null",
             "compartment_id                                 = var.adb_compartment_ocid",
-            "self.compartment_id == trimspace(var.adb_compartment_ocid)",
+            'try(trimspace(self.id) != "", false)',
+            'try(trimspace(self.compartment_id) != "", false)',
+            'try(trimspace(self.db_name) != "", false)',
+            'try(trimspace(self.compartment_id), "") == "" ? true : self.compartment_id == trimspace(var.adb_compartment_ocid)',
             'resource "oci_database_autonomous_database_wallet"',
             # ADB の入力と製品の選択は、常に1つ作る Wallet の precondition で1回だけ検証する。
             "condition     = length(local.selected_products) > 0",
