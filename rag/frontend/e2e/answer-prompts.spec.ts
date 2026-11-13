@@ -14,6 +14,9 @@ test("回答単位の文字修復の指示は日本語のラベルで読み取�
   const generation = stages.find((stage) => stage.id === "generation");
   expect(generation).toBeDefined();
   generation!.prompts.push({ id: "partTextRepair", content: "## Step 1: 合成の回答単位を修復する" });
+  await page.route("**/api/settings/answering", (route) =>
+    route.fulfill({ json: { data: { runtime_terms_answer_enabled: true, config_source: "runtime" } } })
+  );
   await page.route("**/api/settings/answer-prompts**", (route) =>
     route.fulfill({ json: answerPromptsEnvelope(DEFAULT_ROLE, false, stages) })
   );
@@ -22,8 +25,10 @@ test("回答単位の文字修復の指示は日本語のラベルで読み取�
   const field = page.getByRole("textbox", { name: "文字が破損した回答単位を修復する指示", exact: true });
   await expect(field).toHaveAttribute("readonly", "");
   await expect(field).toHaveValue("## Step 1: 合成の回答単位を修復する");
+  await expect(page.locator("main")).not.toContainText("e2e unmocked API");
   await expectNoPageOverflow(page);
-  await testInfo.attach("answer-unit-repair", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await field.scrollIntoViewIfNeeded();
+  await testInfo.attach("answer-unit-repair", { body: await page.screenshot(), contentType: "image/png" });
 });
 
 /** 生成の段を開き、役割の文の編集欄を返す。 */
