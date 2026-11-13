@@ -12,7 +12,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from .answer_data import DataReferenceError
-from .answer_data_tables import table_spans
+from .answer_data_tables import data_detection_text, table_spans
+from .source_handles import SourceHandleError
 
 _MARKER = re.compile(
     r"\[\[(?:cell|quantity|table|cite):[^\r\n]*?(?:\]\]|(?=\r?$))"
@@ -97,15 +98,43 @@ class PatchPlan:
         return "".join([*parts, self.answer[cursor:]])
 
 
-def plan_patches(answer: str, validate: Callable[[str], Any]) -> PatchPlan:
-    """既存の形式検証を各構文領域へ適用する。意味の判定や参照先の推測はしない。"""
-    invalid: list[tuple[int, int, str]] = []
+def _is_source_marker(text: str) -> bool:
+    return text.startswith(("[[cite:", "【根拠:"))
+
+
+def plan_patches(
+    answer: str,
+    validate_data: Callable[[str], Any],
+    *,
+    validate_source: Callable[[str], Any] | None = None,
+) -> PatchPlan:
+    """元のmarkerと、独立した形式検証の失敗層から修正対象を決める。"""
+    invalid: list[tuple[int, int, str, frozenset[str]]] = []
     tables = list(table_spans(answer))
+
+    def failures(text: str) -> tuple[str, frozenset[str]] | None:
+        errors: list[str] = []
+        kinds: set[str] = set()
+        validators = [("data", validate_data)]
+        if validate_source is not None:
+            validators.append(("source", validate_source))
+        for kind, validator in validators:
+            candidate = (
+                data_detection_text(text, allow_unresolved_short=True)
+                if kind == "data" and validate_source is not None
+                else text
+            )
+            try:
+                validator(candidate)
+            except DataReferenceError as exc:
+                kinds.add("source" if isinstance(exc, SourceHandleError) else kind)
+                errors.append(str(exc))
+        return ("\n".join(errors), frozenset(kinds)) if errors else None
+
     for start, end in tables:
-        try:
-            validate(answer[start:end])
-        except DataReferenceError as exc:
-            invalid.append((start, end, str(exc)))
+        failed = failures(answer[start:end])
+        if failed is not None:
+            invalid.append((start, end, *failed))
     for marker in _MARKER.finditer(answer):
         start, end = marker.span()
         if any(left <= start < right for left, right in tables):
@@ -116,19 +145,20 @@ def plan_patches(answer: str, validate: Callable[[str], Any]) -> PatchPlan:
             newline = answer.find("\n", end)
             right = len(answer) if newline < 0 else newline
             if answer[left:right].strip() != marker[0]:
-                invalid.append((start, end, "table参照は単独の行に置いてください。"))
+                invalid.append(
+                    (start, end, "table参照は単独の行に置いてください。", frozenset({"data"}))
+                )
                 continue
-        try:
-            validate(answer[start:end])
-        except DataReferenceError as exc:
-            invalid.append((start, end, str(exc)))
-    ranges: list[tuple[int, int, str]] = []
-    for start, end, error in sorted(invalid):
+        failed = failures(answer[start:end])
+        if failed is not None:
+            invalid.append((start, end, *failed))
+    ranges: list[tuple[int, int, str, frozenset[str]]] = []
+    for start, end, error, kinds in sorted(invalid, key=lambda item: (item[0], item[1])):
         if ranges and start < ranges[-1][1]:
-            left, right, previous = ranges[-1]
-            ranges[-1] = (left, max(right, end), previous)
+            left, right, previous, previous_kinds = ranges[-1]
+            ranges[-1] = (left, max(right, end), previous, previous_kinds | kinds)
         else:
-            ranges.append((start, end, error))
+            ranges.append((start, end, error, kinds))
     if not ranges:
         # 対応表・集約上限など、編集対象を特定できない失敗を本文の再生成で隠さない。
         raise DataReferenceError("不正な参照の修正範囲を特定できませんでした。")
@@ -141,17 +171,17 @@ def plan_patches(answer: str, validate: Callable[[str], Any]) -> PatchPlan:
                 end,
                 answer[start:end],
                 error,
-                _required_references(answer[start:end], table=(start, end) in tables),
+                _required_references(answer[start:end], failed=kinds),
             )
-            for number, (start, end, error) in enumerate(ranges, start=1)
+            for number, (start, end, error, kinds) in enumerate(ranges, start=1)
         ),
     )
 
 
-def _required_references(text: str, *, table: bool) -> tuple[str, ...]:
-    kinds: set[str] = {"data"} if table else set()
+def _required_references(text: str, *, failed: frozenset[str]) -> tuple[str, ...]:
+    kinds = set(failed)
     for marker in _MARKER.finditer(text):
-        kinds.add("source" if marker[0].startswith(("[[cite:", "【根拠:")) else "data")
+        kinds.add("source" if _is_source_marker(marker[0]) else "data")
     return tuple(sorted(kinds))
 
 

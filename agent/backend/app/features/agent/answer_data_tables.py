@@ -3,12 +3,41 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 _RULE = re.compile(r"\s*:?-+:?\s*")
 _PIPE = re.compile(r"(?<!\\)(?:\\\\)*\|")
+
+_SOURCE_MARKER = re.compile(
+    r"\[\[cite:(?P<short>[1-9][0-9]*)\]\]"
+    r"|【根拠:(?P<canonical>[^】\r\n]*)】",
+    re.MULTILINE,
+)
+
+
+def data_detection_text(
+    text: str,
+    *,
+    trusted_sources: Collection[str] = (),
+    allow_unresolved_short: bool = False,
+) -> str:
+    """信頼済み根拠IDだけを数値検出から除く。元の参照本文は変更しない。
+
+    未解決の短番号を除く指定は、独立したsource検証を伴う修正対象の検出だけに使う。
+    """
+
+    def replace(marker: re.Match[str]) -> str:
+        canonical = marker["canonical"]
+        if (
+            canonical is not None
+            and (canonical in trusted_sources or canonical.removeprefix(" ") in trusted_sources)
+        ) or (allow_unresolved_short and marker["short"] is not None):
+            return "source"
+        return marker[0]
+
+    return _SOURCE_MARKER.sub(replace, text)
 
 
 class ReferenceTableError(ValueError):

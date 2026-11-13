@@ -5,13 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from numbers import Number
 from typing import Any
 
 from .answer_data_projection import TableProjectionError, selected_positions
-from .answer_data_tables import BoundCell, ReferenceTableError, render_reference_tables
+from .answer_data_tables import (
+    BoundCell,
+    ReferenceTableError,
+    data_detection_text,
+    render_reference_tables,
+)
 
 _REFERENCE = re.compile(
     r"\[\[(cell|quantity|table):((?:[a-f0-9]{24}|T[1-9]\d*)"
@@ -274,6 +279,7 @@ class DataIndex:
 
     units: dict[str, str] = field(default_factory=dict)
     positions: dict[str, tuple[str, int, str]] = field(default_factory=dict)
+    trusted_sources: frozenset[str] = field(default_factory=frozenset)
 
     def _cell(self, marker: re.Match[str]) -> tuple[str, Any]:
         kind, alias = marker.groups()
@@ -384,7 +390,8 @@ class DataIndex:
                 render_scalar=lambda text: _REFERENCE.sub(replace, text),
                 markdown=_markdown,
                 is_reference_data=lambda text: bool(
-                    _NUMBER.search(text) or _REFERENCE.search(text)
+                    _NUMBER.search(data_detection_text(text, trusted_sources=self.trusted_sources))
+                    or _REFERENCE.search(text)
                 ),
             )
         except ReferenceTableError as exc:
@@ -396,7 +403,12 @@ def has_data_reference(text: str) -> bool:
     return _REFERENCE.search(text) is not None
 
 
-def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) -> DataIndex:
+def data_index(
+    steps: Sequence[Any],
+    metadata: Mapping[str, Any] | None = None,
+    *,
+    trusted_sources: Collection[str] = (),
+) -> DataIndex:
     cells: dict[str, Any] = {}
     tables: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}
     aliases: dict[str, str] = {}
@@ -451,4 +463,5 @@ def data_index(steps: Sequence[Any], metadata: Mapping[str, Any] | None = None) 
         aliases=aliases,
         units=units,
         positions=positions,
+        trusted_sources=frozenset(trusted_sources),
     )
