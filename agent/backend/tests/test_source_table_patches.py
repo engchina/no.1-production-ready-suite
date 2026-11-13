@@ -261,3 +261,54 @@ def test_runtime_trusted_sources_exclude_unconfirmed_or_ambiguous_registry_entri
     raw = "| 出典 |\n|---|\n| 【根拠: 123】 |\n"
     with pytest.raises(DataReferenceError):
         data_index(current.steps, current.metadata, trusted_sources=trusted).render(raw)
+
+
+@pytest.mark.parametrize("with_data", [False, True])
+@pytest.mark.parametrize("citation", ["[[cite:1]]", "【根拠: derived-a】"])
+async def test_existing_citable_derived_source_patch_policy_is_not_numeric_mask_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    with_data: bool,
+    citation: str,
+) -> None:
+    from app.features.agent import builtin_runtime as runtime
+    from app.features.agent import tool_grounding
+    from app.features.agent.runtime import runtime_repository
+
+    current, _, _, _ = fixture(with_data, "derived-a")
+    output = current.steps[0].tool_result.output
+    output["evidence"][0]["origin"] = "derived"
+    current.metadata[source_handles.REGISTRY_KEY] = []
+    source_handles.register_output(current.metadata, "rag", output, tool="rag_retrieve_evidence")
+    assert any(
+        row.get("citable")
+        for row in current.metadata[source_handles.REGISTRY_KEY]
+        if row["kind"] == "chunk"
+    )
+    assert runtime._citable_source_ids(current) == frozenset()
+    bad = "保持\n\n| 項目 | 出典 |\n|---|---|\n| 合成 | [[cite:99]] |\n\n終了"
+    fixed_table = f"| 項目 | 出典 |\n|---|---|\n| 合成 | {citation} |\n"
+    original = sdk_result(bad)
+    calls: list[int] = []
+
+    async def run_sdk(run_id: str, agent: Agent[Any], inputs: Any, *, context: Any) -> Any:
+        calls.append(1)
+        assert agent.tools == []
+        result = sdk_result("patch")
+        result.final_output = ReferencePatches(
+            patches=[ReferencePatch(target_id="P1", replacement=fixed_table)]
+        )
+        return result
+
+    def record(run_id: str, key: str, value: str) -> None:
+        current.metadata[tool_grounding.METADATA_KEY] = {key: True}
+
+    monkeypatch.setattr(runtime_repository, "get_run", lambda _: current)
+    monkeypatch.setattr(runtime_repository, "record_tool_grounding", record)
+    monkeypatch.setattr(runtime, "_run_sdk", run_sdk)
+    result = await runtime._require_data_references(current, Agent(name="合成"), original, None)
+    assert result.final_output == bad.replace("[[cite:99]]", citation) and len(calls) == 1
+    resolved = runtime._render_source_citations(current, result.final_output)
+    rendered = data_index(
+        current.steps, current.metadata, trusted_sources=runtime._citable_source_ids(current)
+    ).render(resolved)
+    assert "【根拠: derived-a】" in rendered and "[[cite:" not in rendered

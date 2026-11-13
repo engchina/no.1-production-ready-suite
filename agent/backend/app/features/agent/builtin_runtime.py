@@ -4882,8 +4882,10 @@ async def _require_data_references(
         return result
     answer = _answer_text(result.final_output)
     # 対応表の不正は回答の編集では修復しない。
-    available_chunks = _citable_source_ids(current)
-    index = data_index(current.steps, current.metadata, trusted_sources=available_chunks)
+    available_chunks = [item["chunk_id"] for item in passed_evidence(current.steps, limit=None)]
+    index = data_index(
+        current.steps, current.metadata, trusted_sources=_citable_source_ids(current)
+    )
     _render_source_citations(current, "")
 
     def validate_source(text: str) -> str:
