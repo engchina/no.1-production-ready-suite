@@ -179,7 +179,7 @@ export function LanguagePackFieldsPanel({
   );
 }
 
-function LanguageField({
+export function LanguageField({
   id,
   field,
   baseline,
@@ -188,9 +188,13 @@ function LanguageField({
   disabled,
   changedLabel,
   resetLabel,
+  unchangedLabel,
+  overridden,
   onChange,
 }: {
   id: string;
+  unchangedLabel?: string;
+  overridden?: boolean;
   field: LanguagePackField;
   baseline: LanguagePackSections;
   texts: LanguagePackTexts;
@@ -203,7 +207,7 @@ function LanguageField({
   const key = textKey(field);
   const label = t(`settings.language.field.${field.key}` as I18nKey);
   const helper = t(`settings.language.field.${field.key}.help` as I18nKey);
-  const changed = isChanged(field, texts, baseline);
+  const changed = overridden ?? isChanged(field, texts, baseline);
   const base = baseline[field.section]?.[field.key];
   const resetRow = changed ? (
     <div className="flex flex-wrap items-center gap-2">
@@ -218,7 +222,7 @@ function LanguageField({
         {resetLabel}
       </Button>
     </div>
-  ) : null;
+  ) : unchangedLabel ? <StatusBadge variant="neutral" icon={false} label={unchangedLabel} /> : null;
   if (field.kind === "text") {
     return (
       <div className="space-y-2">
