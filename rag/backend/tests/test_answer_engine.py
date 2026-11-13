@@ -162,15 +162,14 @@ class FakeGenAi:
         return [(index, 1.0 - index * 0.1) for index in range(len(documents))][:top_n]
 
 
-def _fake_llm(
-    system: str, prompt: str, settings: Any, schema: type[BaseModel], **options: Any
-) -> Any:
+def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
     if schema.__name__ == "QuestionMentionAnchors":
         # 質問の対象の抽出(#4351)の録画応答: 名前の提及が無い(役割の段は呼ばれない)。
         return cast(Any, schema).model_validate({"mentions": []})
     if getattr(schema, "_uses_full_answer", False) or issubclass(
         schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
     ):
+        schema = cast(type[BaseModel], schema)
         body = "受注番号を入力し、登録ボタンを押します。"
         if getattr(schema, "_uses_unit_ids", False):
             # 実際の送信にある引用単位だけを、生成の返却 schema で選択する。
