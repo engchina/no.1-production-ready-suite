@@ -23,9 +23,7 @@ LIMIT = 1000
 # 「confidence」の値の前で空白と改行だけが続いた出力（出力の上限まで終わらない）。
 STALLED_PREFIX = '{"answer_body": "合成の本文", "response_kind": "answered",\n  "confidence":'
 # 本文の中のエスケープしていない引用符で文字列が閉じ、空白とタブが続いた後に完了した出力。
-CLOSED_EARLY = (
-    '{"answer_body": "合成の本文の「`"' + " \t" * 1116 + ',\n  "response_kind": "answered",\n  "confidence": "high",\n  "citations": []\n}'
-)
+CLOSED_EARLY = '{"answer_body": "合成の本文の「`"' + " \t" * 1116 + ',\n  "response_kind": "answered",\n  "confidence": "high"\n}'
 
 
 def _schema():
@@ -33,7 +31,7 @@ def _schema():
 
 
 def _valid_raw(body: str = "合成の本文") -> str:
-    return _schema()(answer_body=body, response_kind="answered", confidence="high", citations=[]).model_dump_json()
+    return _schema()(answer_body=body, response_kind="answered", confidence="high").model_dump_json()
 
 
 def _chunks(text: str, size: int) -> list[str]:
@@ -198,7 +196,7 @@ def test_stream_whitespace_loop_fails_as_invalid_output_when_retries_are_used_up
 
 def test_limit_comes_from_settings():
     clock = _Clock()
-    text = STALLED_PREFIX + " " * 300 + ' "high", "citations": []}'
+    text = STALLED_PREFIX + " " * 300 + ' "high"}'
     assert json.loads(text)["confidence"] == "high"
     client = _StreamClient(clock, [_script(text), _script(_valid_raw())])
     _result, usage = _call(client, _settings(llm_json_whitespace_run_limit=200))
