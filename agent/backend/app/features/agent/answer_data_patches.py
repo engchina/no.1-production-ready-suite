@@ -188,7 +188,7 @@ def _required_references(text: str, *, failed: frozenset[str]) -> tuple[str, ...
 PATCH_INSTRUCTIONS = (
     "## Step 1: 指定された範囲の参照形式を直す\n"
     "targetsのtextだけを、取得済みの参照を使う形式に直してください。"
-    "表は投影参照、または値をquantity/cellで参照する箇条書きにできます。\n"
+    "表は投影参照、または値をcellで参照する箇条書きにできます。\n"
     "## Step 2: 修正箇所を返す\n"
     "全target_idをそのまま返し、各replacementに置換文を入れてください。"
 )

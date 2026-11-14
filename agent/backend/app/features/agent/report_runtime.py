@@ -39,7 +39,7 @@ REPORT_DATA_INSTRUCTIONS = (
     "表はTableBlockのtableにT番号を指定します。"
     "全表はrowsとcolsをnullにし、一部はrowsに行番号、colsにcolumn_refsの列番号を指定します。"
     "行列は1始まり、*は全件、範囲とカンマ列挙は指定順です。縦表はlayout=verticalにします。"
-    "Narrativeの値はquantitiesの[[quantity:T1:R2:C3]]、その他はcellsの[[cell:T1:R2:C3]]を使います。\n"
+    "Narrativeの値はcellsの[[cell:T1:R2:C3]]を使います。\n"
     "## Step 2: 必要な確認状況を選ぶ\n"
     "ConfirmationSectionは任意です。回答に必要な列の確認状況を示す場合だけfield_refを選び、"
     "状態はプログラムに任せます。"

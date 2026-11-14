@@ -1,4 +1,4 @@
-"""参照行列と単位付き値が、保存済み位置からだけ表示されることを確かめる。"""
+"""参照行列と元の値が、保存済み位置からだけ表示されることを確かめる。"""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def _matrix(refs: dict[str, Any], rows: list[int]) -> str:
     return "| 表示順 | 名称 | 差 |\n|---|---|---|\n" + "\n".join(
         "| "
         + " | ".join(
-            [refs["cells"][i]["ORDER"], refs["cells"][i]["LABEL"], refs["quantities"][i]["CHANGE"]]
+            [refs["cells"][i]["ORDER"], refs["cells"][i]["LABEL"], refs["cells"][i]["CHANGE"]]
         )
         + " |"
         for i in rows
@@ -81,12 +81,13 @@ def test_projection_keeps_selected_eight_rows_instead_of_replacing_with_whole_ta
     assert reordered.index("record-8") < reordered.index("record-1")
 
 
-def test_known_unit_is_rendered_by_program_and_raw_cell_requires_quantity() -> None:
+def test_known_unit_metadata_does_not_change_scalar_or_adjacent_text() -> None:
     step, metadata, refs = _fixture()
     index = data_index([step], metadata)
-    assert index.render(refs["quantities"][0]["CHANGE"]) == "0.25 パーセントポイント"
-    with pytest.raises(DataReferenceError, match="quantities"):
-        index.render(refs["cells"][0]["CHANGE"] + "%")
+    assert index.render(refs["cells"][0]["CHANGE"]) == "0.25"
+    assert index.render(refs["cells"][0]["CHANGE"] + "%") == "0.25%"
+    assert index.render("[[quantity:T1:R1:C3]]") == "0.25"
+    assert "quantities" not in refs
     assert index.render(refs["cells"][0]["ORDER"]) == "1"
     with pytest.raises(DataReferenceError):
         index.render("[[quantity:T1:R1:C2]]")
@@ -131,14 +132,11 @@ def test_units_are_bound_to_result_revision_and_survive_snapshot_and_compaction(
     )
     restored = RunState.model_validate_json(run.model_dump_json())
     compact_output(json.dumps({**_output(step), "answer_data": refs}), OLDER_MAX_LEVEL)
-    assert (
-        data_index(restored.steps, restored.metadata).render(refs["quantities"][1]["CHANGE"])
-        == "0.5 パーセントポイント"
-    )
+    assert data_index(restored.steps, restored.metadata).render(refs["cells"][1]["CHANGE"]) == "0.5"
     changed = deepcopy(step)
     _output(changed)["column_metadata"][2]["unit"] = "%"
     with pytest.raises(DataReferenceError):
-        data_index([changed], metadata).render(refs["quantities"][1]["CHANGE"])
+        data_index([changed], metadata).render(refs["cells"][1]["CHANGE"])
 
 
 def test_null_unknown_units_legacy_snapshots_and_source_text_are_not_reinterpreted() -> None:
@@ -149,7 +147,7 @@ def test_null_unknown_units_legacy_snapshots_and_source_text_are_not_reinterpret
     register_data_result(metadata, step.id, _output(step))
     refs = _references(step.id, _output(step), metadata=metadata)
     index = data_index([step], metadata)
-    assert index.render(refs["quantities"][0]["CHANGE"]) == "NULL"
+    assert index.render(refs["cells"][0]["CHANGE"]) == "NULL"
     rendered = index.render(_matrix(refs, [0]))
     assert "[[cell:T1:R2:C2]]" in rendered
     legacy = _step("nl2sql_query", {"status": "done", "rows": [{"X": 0.25}]})
@@ -190,12 +188,8 @@ def test_compaction_keeps_typed_reference_space_and_original_row_numbers() -> No
         assert compacted["answer_data"]["quantity_columns"] == {
             "CHANGE": {"column": 3, "unit": "パーセントポイント"}
         }
-        assert len(compacted["answer_data"]["quantities"]) == 5
-        assert compacted["answer_data"]["quantities"][4]["CHANGE"] == "[[quantity:T1:R5:C3]]"
-        assert (
-            data_index([step], metadata).render("[[quantity:T1:R10:C3]]")
-            == "2.5 パーセントポイント"
-        )
+        assert "quantities" not in compacted["answer_data"]
+        assert data_index([step], metadata).render("[[quantity:T1:R10:C3]]") == "2.5"
 
 
 def test_unknown_units_and_mcp_result_normalizer_preserve_compatibility() -> None:
@@ -233,7 +227,7 @@ def test_canonical_headers_do_not_collide_with_original_column_names_or_swallow_
     assert "| 1 | [[table:T9]] |" in table
     matrix = (
         "| 誤った見出し | 任意 |\n|---|---|\n| "
-        + refs["quantities"][0]["VALUE"]
+        + refs["cells"][0]["VALUE"]
         + " | "
         + refs["cells"][0]["VALUE (%)"]
         + " |"
@@ -293,16 +287,16 @@ def test_runtime_keeps_selected_rows_and_repairs_only_typed_reference_format(
             if isinstance(item, dict) and item.get("type") == "function_call_output"
         ]
         refs = outputs[-1]["answer_data"]
-        quantity = refs["cells"][0]["CHANGE"] if invalid else refs["quantities"][0]["CHANGE"]
+        cell = "[[cell:T1:R99:C3]]" if invalid else refs["cells"][0]["CHANGE"]
         if repair_first and not invalid:
             return [
                 assistant_message(
-                    json.dumps({"patches": [{"target_id": "P1", "replacement": quantity}]})
+                    json.dumps({"patches": [{"target_id": "P1", "replacement": cell}]})
                 )
             ]
         return [
             assistant_message(
-                "選択した行\n" + _matrix(refs, list(range(8))) + "\n\n値は" + quantity + "。"
+                "選択した行\n" + _matrix(refs, list(range(8))) + "\n\n値は" + cell + "。"
             )
         ]
 
@@ -328,7 +322,7 @@ def test_runtime_keeps_selected_rows_and_repairs_only_typed_reference_format(
         answer = run_answer_text(actual)
         assert answer is not None
         assert "record-8" in answer and "record-9" not in answer and "record-10" not in answer
-        assert "値は0.25 パーセントポイント。" in answer
+        assert "値は0.25。" in answer
         assert len(actual.steps) == 1
         if repair_first:
             assert not model.calls[-1].tools
@@ -344,26 +338,25 @@ def test_hashed_quantity_reference_is_bound_to_unit_metadata_revision() -> None:
     revised = deepcopy(step)
     _output(revised)["column_metadata"][2]["unit"] = "%"
     with pytest.raises(DataReferenceError):
-        data_index([revised]).render(refs["quantities"][0]["CHANGE"])
+        data_index([revised]).render(refs["cells"][0]["CHANGE"].replace("[[cell:", "[[quantity:"))
 
 
 @pytest.mark.parametrize(
     "value", ["9007199254740993123456789", "-9007199254740993123456789", "1.2300", "1.23E+100"]
 )
-def test_exact_numeric_strings_from_result_serialization_keep_units_without_float_conversion(
+def test_exact_numeric_strings_from_result_serialization_are_not_converted_to_float(
     value: str,
 ) -> None:
     step, _metadata, _refs = _fixture()
     _output(step)["rows"][0]["CHANGE"] = value
     refs = _references(step.id, _output(step))
-    assert (
-        data_index([step]).render(refs["quantities"][0]["CHANGE"]) == value + " パーセントポイント"
-    )
-    with pytest.raises(DataReferenceError):
-        data_index([step]).render(refs["cells"][0]["CHANGE"])
+    assert data_index([step]).render(refs["cells"][0]["CHANGE"]) == value
+    legacy = refs["cells"][0]["CHANGE"].replace("[[cell:", "[[quantity:")
+    assert data_index([step]).render(legacy) == value
 
 
-def test_decimal_and_big_integer_roundtrip_keeps_exact_quantity_text() -> None:
+@pytest.mark.parametrize("kind", ["cell", "quantity"])
+def test_decimal_and_big_integer_roundtrip_keeps_exact_scalar_text(kind: str) -> None:
     from decimal import Decimal
 
     for value in [Decimal("1.23000000000000000001"), "9007199254740993123456789"]:
@@ -372,8 +365,9 @@ def test_decimal_and_big_integer_roundtrip_keeps_exact_quantity_text() -> None:
         metadata: dict[str, Any] = {}
         register_data_result(metadata, step.id, _output(step))
         refs = _references(step.id, _output(step), metadata=metadata)
-        expected = str(value) + " パーセントポイント"
-        assert data_index([step], metadata).render(refs["quantities"][0]["CHANGE"]) == expected
+        expected = str(value)
+        marker = refs["cells"][0]["CHANGE"].replace("[[cell:", "[[" + kind + ":")
+        assert data_index([step], metadata).render(marker) == expected
         run = RunState(
             id=step.run_id,
             goal="合成精度検証",
@@ -384,10 +378,7 @@ def test_decimal_and_big_integer_roundtrip_keeps_exact_quantity_text() -> None:
             metadata=metadata,
         )
         restored = RunState.model_validate_json(run.model_dump_json())
-        assert (
-            data_index(restored.steps, restored.metadata).render(refs["quantities"][0]["CHANGE"])
-            == expected
-        )
+        assert data_index(restored.steps, restored.metadata).render(marker) == expected
 
 
 @pytest.mark.parametrize("value", [True, False, "001", "1 unit", "", "NaN"])
@@ -395,4 +386,9 @@ def test_non_numeric_strings_and_booleans_do_not_become_quantities(value: Any) -
     step, _metadata, _refs = _fixture()
     _output(step)["rows"][0]["CHANGE"] = value
     refs = _references(step.id, _output(step))
-    assert "CHANGE" not in refs["quantities"][0]
+    assert "quantities" not in refs
+    assert data_index([step]).render(refs["cells"][0]["CHANGE"]) == (
+        "true" if value is True else "false" if value is False else value
+    )
+    with pytest.raises(DataReferenceError):
+        data_index([step]).render(refs["cells"][0]["CHANGE"].replace("[[cell:", "[[quantity:"))

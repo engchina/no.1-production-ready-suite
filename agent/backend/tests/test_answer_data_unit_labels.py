@@ -1,4 +1,4 @@
-"""単位の表示名を形式だけで組み立て、保存した列名・参照を維持する。"""
+"""単位情報があっても、保存した列名・値・参照を維持する。"""
 
 from __future__ import annotations
 
@@ -40,10 +40,10 @@ def test_source_column_label_is_preserved_in_all_table_paths(
     before = deepcopy((output, metadata))
     refs = model_data_references(step.id, output, metadata=metadata)
     assert refs is not None
-    cell = refs["quantities" if unit else "cells"][0][column]
+    cell = refs["cells"][0][column]
     index = data_index([step], metadata)
-    if unit:
-        assert index.render(cell) == f"12 {unit}"
+    assert index.render(cell) == "12"
+    assert "quantities" not in refs
     expected = f"| {label} |\n| --- |\n| 12 |"
     assert index.render(refs["table"]) == expected
     assert index.render("[[table:T1:rows=1:cols=1]]") == expected
