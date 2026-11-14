@@ -1455,6 +1455,9 @@ class Nl2SqlResult(BaseModel):
     executable_sql: str
     explanation: str
     safety: SafetyReport
+    # 説明の文の安全チェック（OCI Guardrails）の警告（伏せた・止めた。#5063）。
+    # 結果の表は検査しない。
+    guardrail_warnings: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     repaired_sql: str = ""
     optimization_hints: list[str] = Field(default_factory=list)

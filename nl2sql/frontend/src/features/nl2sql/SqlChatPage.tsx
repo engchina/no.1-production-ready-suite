@@ -1151,6 +1151,11 @@ function SqlChatTurn({
               {result.explanation ? (
                 <MessageText text={result.explanation} />
               ) : null}
+              {result.guardrail_warnings?.length ? (
+                <Banner severity="warning">
+                  {t("chat.guardrail")}: {result.guardrail_warnings.join(" / ")}
+                </Banner>
+              ) : null}
               {executable && !canExecuteSql && !readOnly ? (
                 <p className="text-xs text-fg-muted">
                   {t("chat.execute.permissionRequired")}

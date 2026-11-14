@@ -168,6 +168,7 @@ from .generation_diagnostics import (
     build_generation_diagnostics,
     unavailable_generation_diagnostics,
 )
+from .guardrails import checked_explanation, checked_question
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
     SCHEMA_REFRESH_ERRORS,
@@ -8934,6 +8935,9 @@ class Nl2SqlService:
         # 生成の方式を省略したジョブ（Agent の MCP の nl2sql_query など）は業務プロファイルの既定の
         # 生成方式にする（#1524）。保存するジョブ・再送の照合は決めた方式で行う。
         request = request.with_profile_default_engine(profile.default_engine)
+        # 質問は保存・生成の前に安全チェックを当てる。止めた質問は保存しない（400）。
+        # 個人情報は伏せた文で続ける（#5063）。
+        request = request.model_copy(update={"question": checked_question(request.question)})
         self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         if request.client_job_id is not None:
             # 応答が届かなかった送信の再送は、作成済みのジョブを返す（二重に生成しない。#900）。
@@ -18690,6 +18694,8 @@ class Nl2SqlService:
         self._require_db_admin_chat_permission()
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
+        # 質問は保存・生成の前に安全チェックを当てる。止めた質問は保存しない（#5063）。
+        question = checked_question(request.question)
         store = self._db_admin_chat_store
         turn_id = str(request.client_turn_id)
         conversation_id = request.conversation_id.strip() or turn_id
@@ -18719,8 +18725,9 @@ class Nl2SqlService:
         ]
         sent_at = _utc_now()
         generated = self.generate_db_admin_chat_sql(
-            request.question, history, operation_id=turn_id, actor_user_uuid=actor
+            question, history, operation_id=turn_id, actor_user_uuid=actor
         )
+        explanation_check = checked_explanation(generated.explanation)
         if keep_result is not None and not keep_result():
             logger.info(
                 "nl2sql_db_admin_chat_generation_discarded",
@@ -18729,11 +18736,11 @@ class Nl2SqlService:
             return None
         turn = DbAdminChatTurn(
             turn_id=turn_id,
-            question=request.question,
+            question=question,
             created_at=sent_at,
             generated_at=_utc_now(),
-            explanation=generated.explanation,
-            warnings=generated.warnings,
+            explanation=explanation_check.sanitized_text,
+            warnings=[*generated.warnings, *explanation_check.warnings],
             context_tables=generated.context_tables,
             model=generated.model,
             plan=generated.plan,
@@ -18748,7 +18755,7 @@ class Nl2SqlService:
             store.create_conversation(
                 conversation_id,
                 owner_user_uuid=actor,
-                title=request.question[:_DB_ADMIN_CHAT_DEFAULT_TITLE_CHARS],
+                title=question[:_DB_ADMIN_CHAT_DEFAULT_TITLE_CHARS],
             )
         store.append_turn(conversation_id, turn)
         saved = store.get_conversation(conversation_id)
@@ -24719,6 +24726,8 @@ class Nl2SqlService:
                         warnings=[str(exc)],
                     )
             history_id = str(uuid.uuid4())
+            # 説明の文に安全チェックを当てる。結果の表の値は OCI へ送らない（#5063）。
+            explanation_check = checked_explanation(generated.explanation)
             result = Nl2SqlResult(
                 business_release_id=business_release_id,
                 history_id=history_id,
@@ -24729,7 +24738,8 @@ class Nl2SqlService:
                 rewritten_question=rewritten,
                 generated_sql=generated.generated_sql,
                 executable_sql=executable,
-                explanation=generated.explanation,
+                explanation=explanation_check.sanitized_text,
+                guardrail_warnings=explanation_check.warnings,
                 safety=safety,
                 recommendations=analysis.recommendations,
                 repaired_sql=analysis.repaired_sql,

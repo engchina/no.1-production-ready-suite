@@ -1,4 +1,8 @@
-import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
+import type {
+  GuardrailSettingsData,
+  GuardrailSettingsUpdate,
+  TraceRecordingSettingsData,
+} from "@production-ready/system-settings";
 import {
   confirmDatabaseUnavailable,
   isDatabaseReadinessRequest,
@@ -996,6 +1000,14 @@ export const api = {
       method: "DELETE",
     }),
   // 運用設定: チャットの添付（設定は製品ごと。#2517）
+  getGuardrailSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<GuardrailSettingsData>("/api/settings/guardrail", { signal: options.signal }),
+  updateGuardrailSettings: (body: GuardrailSettingsUpdate) =>
+    settingsRequest<GuardrailSettingsData>("/api/settings/guardrail", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getTraceRecordingSettings: (options: ApiRequestOptions = {}) =>
     settingsRequest<TraceRecordingSettingsData>("/api/settings/trace-recording", { signal: options.signal }),
   updateTraceRecordingSettings: (body: { enabled: boolean }) =>

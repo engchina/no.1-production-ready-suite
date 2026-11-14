@@ -22,6 +22,7 @@ from pr_backend_core.observability.model_purpose import async_call_with_model_pu
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.chat_attachments import build_chat_attachment_settings_router
 from pr_system_settings.database import build_database_router
+from pr_system_settings.guardrails import build_guardrail_router
 from pr_system_settings.model import build_model_router
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
@@ -127,6 +128,13 @@ router.include_router(
     build_answer_notice_router(
         load=lambda: get_security_service().load_answer_notice(),
         save=lambda record: get_security_service().save_answer_notice(record),
+    )
+)
+# 安全チェック（OCI Guardrails）の有効化は3製品で1つの設定（platform/.env。#5061・#5063）。
+router.include_router(
+    build_guardrail_router(
+        get_settings=lambda: get_settings(),
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
     )
 )
 router.include_router(

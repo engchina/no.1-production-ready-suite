@@ -173,6 +173,9 @@ const SelectAiCredentialCard = lazy(() =>
     default: module.SelectAiCredentialCard,
   }))
 );
+const GuardrailSettingsClient = lazy(() =>
+  import("@/components/settings/GuardrailSettingsClient").then((module) => ({default: module.GuardrailSettingsClient})),
+);
 const TraceRecordingSettingsClient = lazy(() =>
   import("@/components/settings/TraceRecordingSettingsClient").then((module) => ({default: module.TraceRecordingSettingsClient})),
 );
@@ -370,6 +373,7 @@ function AuthorizedApplication() {
             <Route path={APP_ROUTES.account} element={<AccountRoute />} />
             <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
             <Route path={APP_ROUTES.securityDeepSec} element={<SecurityDeepSecPage />} />
+            <Route path={APP_ROUTES.settingsGuardrail} element={<SettingsGuardrailRoute />} />
             <Route
               path={APP_ROUTES.legacyNl2sqlModelLearning}
               element={<Navigate to={`${APP_ROUTES.profiles}#profile-select-ai`} replace />}
@@ -528,6 +532,15 @@ function SettingsOciRoute() {
     <>
       <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
+    </>
+  );
+}
+
+function SettingsGuardrailRoute() {
+  return (
+    <>
+      <PageHeader wide title={t("nav.settingsGuardrail")} subtitle={t("settings.guardrail.subtitle")} />
+      <GuardrailSettingsClient />
     </>
   );
 }

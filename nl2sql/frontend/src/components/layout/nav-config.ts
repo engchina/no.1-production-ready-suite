@@ -31,6 +31,7 @@ import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import type { I18nKey } from "@/lib/i18n";
 import {
   ANSWER_NOTICE_NAV_ITEM,
+  GUARDRAIL_SETTINGS_NAV_ITEM,
   TRACE_RECORDING_SETTINGS_NAV_ITEM,
   CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   SYSTEM_SETTINGS_NAV_ITEMS,
@@ -141,6 +142,8 @@ export const NAV_SECTIONS: NavSection[] = [
     defaultCollapsed: true,
     items: [
       { href: APP_ROUTES.securityPermissions, labelKey: "nav.securityPermissions", icon: LockKeyhole, permission: MENU_PERMISSIONS.securityPermissions },
+      // 安全チェック（3製品で共通の設定。権限管理の下。#5063）
+      { href: APP_ROUTES.settingsGuardrail, labelKey: "nav.settingsGuardrail", icon: GUARDRAIL_SETTINGS_NAV_ITEM.icon as LucideIcon, permission: MENU_PERMISSIONS.settingsGuardrail },
       { href: APP_ROUTES.securityDeepSec, labelKey: "nav.securityDeepSec", icon: ShieldCheck, permission: MENU_PERMISSIONS.securityDeepSec },
     ],
   },

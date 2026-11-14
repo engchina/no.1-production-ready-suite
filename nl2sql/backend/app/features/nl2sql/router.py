@@ -63,6 +63,7 @@ from .enterprise_ai_client import (
     EnterpriseAiDirectError,
     enterprise_ai_configuration_failure_message,
 )
+from .guardrails import GuardrailBlockedError
 from .incremental_store import (
     HISTORY_SORT_DIRECTIONS,
     HISTORY_SORT_KEYS,
@@ -3462,6 +3463,9 @@ def db_admin_chat_generate(
         )
     except DbAdminChatGenerationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except GuardrailBlockedError as exc:
+        # 安全チェックで止めた質問は保存しない（#5063）。
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DbAdminChatConversationFullError as exc:
         raise HTTPException(
             status_code=409,
