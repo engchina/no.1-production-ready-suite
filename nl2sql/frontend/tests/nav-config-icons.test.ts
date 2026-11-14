@@ -64,6 +64,8 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.evaluation", "FlaskConical"],
   // セキュリティ設定（固有。#206。セクション名は 3 製品で同じ。#658）
   ["nav.securityPermissions", "LockKeyhole"],
+  // 安全チェック（3製品で共通の設定。権限管理の下。#5063）
+  ["nav.settingsGuardrail", "ShieldAlert"],
   ["nav.securityDeepSec", "ShieldCheck"],
   // ユーザーとロール（3製品共通。#206）
   ["nav.securityUsers", "Users"],

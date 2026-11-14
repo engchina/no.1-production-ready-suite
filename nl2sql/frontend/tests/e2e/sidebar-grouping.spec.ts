@@ -118,8 +118,9 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
   // AI 活用の先頭にチャットを足した（#871）。ユーザーとロールの末尾の API キー（#1805）、データ準備の
-  // DB 管理チャット（#2264）、運用設定の回答の注意書き（#2405・#2449）とチャットの添付（#2517）と軌跡の記録（#3901）を足して 36 項目。
-  expect(menuIconSignatures).toHaveLength(36);
+  // DB 管理チャット（#2264）、運用設定の回答の注意書き（#2405・#2449）とチャットの添付（#2517）と軌跡の記録（#3901）、
+  // セキュリティ設定の安全チェック（#5063）を足して 37 項目。
+  expect(menuIconSignatures).toHaveLength(37);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
   for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
@@ -214,7 +215,8 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
 
   // 「API キー」（全員のキーの管理。RAG / NL2SQL だけ。#1805）はユーザーとロールの末尾。アカウント欄の
   // 「API キー」（自分のキー。ボタン）と区別するため、ナビのリンクで探す。
-  const securityLabels = ["権限管理", "Deep Data Security", "ユーザー管理", "ロール管理", "API キー"];
+  // 安全チェックは 3 製品で共通の設定で、権限管理の下（#5063）。
+  const securityLabels = ["権限管理", "安全チェック", "Deep Data Security", "ユーザー管理", "ロール管理", "API キー"];
   const securityItemBoxes = await Promise.all(
     securityLabels.map(async (label) => {
       const item = sidebar.getByRole("link", { name: label, exact: true });
@@ -367,6 +369,7 @@ test("セクション折りたたみで所属項目だけを隠し、他セク�
 
   await sidebar.getByRole("button", { name: "セキュリティ設定 を展開" }).click();
   await expect(sidebar.getByText("権限管理", { exact: true })).toBeVisible();
+  await expect(sidebar.getByText("安全チェック", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("Deep Data Security", { exact: true })).toBeVisible();
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
   await expect(sidebar.getByText("テーブルの管理", { exact: true })).toBeVisible();
