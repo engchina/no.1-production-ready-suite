@@ -15,6 +15,7 @@ from .env import (
     settings_env_name,
     settings_env_names,
 )
+from .guardrails import GuardrailSettings
 from .runtime import AuthMode, Environment, RuntimeSettings
 from .timezone import TimezoneSettings
 from .tracing import TracingSettings
@@ -26,6 +27,7 @@ __all__ = [
     "PLATFORM_ENV_FILE_ENV",
     "PLATFORM_SETTING_FIELDS",
     "BaseServiceSettings",
+    "GuardrailSettings",
     "TimezoneSettings",
     "TracingSettings",
     "EnvFieldReloader",

@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 from pr_backend_core.chat_history import CHAT_HISTORY_TRUNCATION_MARKER, ChatHistoryBudget
+from pr_system_settings.guardrails import GuardrailPolicy
 from pytest import MonkeyPatch
 
 from app.api.routes import chat as chat_route
@@ -28,7 +29,6 @@ from app.main import app
 from app.rag import chat_answer_runs, oracle_schema
 from app.rag.answer_timeout import answer_timeout_message
 from app.rag.chat_answer_runs import ChatAnswerRunService
-from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import (
     ChatTurn,
     _format_chat_history,
@@ -553,8 +553,8 @@ def test_build_history_takes_first_assistant_per_turn() -> None:
             messages,
             GuardrailPolicy(
                 Settings(
-                    rag_guardrails_input_enabled=False,
-                    rag_guardrails_output_enabled=False,
+                    guardrails_input_enabled=False,
+                    guardrails_output_enabled=False,
                 )
             ),
         )
@@ -1203,8 +1203,8 @@ def test_safe_history_skips_blocked_turn_and_sanitizes_legacy_content(
             messages,
             GuardrailPolicy(
                 Settings(
-                    rag_guardrails_input_enabled=True,
-                    rag_guardrails_output_enabled=True,
+                    guardrails_input_enabled=True,
+                    guardrails_output_enabled=True,
                 )
             ),
         )

@@ -5,12 +5,12 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
+from pr_system_settings.guardrails import GuardrailPolicy
 
 from app.api.routes import chat
 from app.clients.oracle import StoredConversation, StoredMessage
 from app.config import Settings
 from app.rag.chat_question_token import context_digest, issue_question_token, read_question_token
-from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import RagPipeline
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 
@@ -390,7 +390,7 @@ async def test_clarification_is_skipped_when_faq_answer_is_returned_directly(
 async def test_blocked_confirmation_also_excludes_assistant_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.rag.guardrails import GuardrailResult
+    from pr_system_settings.guardrails import GuardrailResult
 
     policy = GuardrailPolicy(Settings())
     monkeypatch.setattr(

@@ -31,6 +31,7 @@ from pr_backend_core.chat_history_window import (
     CHAT_HISTORY_DEFAULT_DAYS,
 )
 from pr_backend_core.config import (
+    GuardrailSettings,
     PlatformEnvSourcesMixin,
     RuntimeSettings,
     TimezoneSettings,
@@ -501,6 +502,7 @@ class Settings(
     ModelSecretStateMixin,
     TracingSettings,
     TimezoneSettings,
+    GuardrailSettings,
     BaseSettings,
 ):
     """環境変数ベースの設定。旧名（属性名と同じ環境変数名）は読まない（#211）。"""
@@ -1925,32 +1927,6 @@ class Settings(
             "最後の再試行でも失敗した件があれば取込を失敗にする（#2002）。既定は偽で、"
             "その件を「説明できなかった」などとして記録し、取込を続ける。"
         ),
-    )
-    rag_guardrails_input_enabled: bool = Field(
-        default=False, description="OCI Guardrails で質問を検査する。無効時は質問を送信しない。"
-    )
-    rag_guardrails_output_enabled: bool = Field(
-        default=False, description="OCI Guardrails で回答を検査する。無効時は回答を送信しない。"
-    )
-    oci_guardrails_compartment_id: str = Field(
-        default="",
-        description="OCI Guardrails の compartment OCID。空欄時は oci_compartment_id を使う。",
-    )
-    oci_guardrails_endpoint: str = Field(
-        default="",
-        description="OCI Generative AI Inference のサービスエンドポイント上書き(空欄は SDK 既定)。",
-    )
-    oci_guardrails_prompt_injection_threshold: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="prompt injection の risk score をブロック扱いにする閾値(0.0–1.0)。",
-    )
-    oci_guardrails_timeout_seconds: float = Field(
-        default=5.0,
-        gt=0.0,
-        le=30.0,
-        description="OCI Guardrails 検査の接続・読取 timeout 秒。",
     )
     rag_evaluation_job_timeout_seconds: int = Field(
         default=3600,

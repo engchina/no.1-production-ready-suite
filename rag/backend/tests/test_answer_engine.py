@@ -447,8 +447,9 @@ async def test_pipeline_blocked_query_does_not_run_answer_flow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """質問の安全チェックで止めた質問は回答フローを動かさず、監査に blocked を残す。"""
+    from pr_system_settings.guardrails import GuardrailFinding, GuardrailResult
+
     import app.rag.pipeline as pipeline_module
-    from app.rag.guardrails import GuardrailFinding, GuardrailResult
 
     audits: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -1019,8 +1020,8 @@ async def _run_chat(
     oracle = QueryRecordingOracle()
     pipeline = RagPipeline(
         settings=Settings(
-            rag_guardrails_input_enabled=guardrails_input_enabled,
-            rag_guardrails_output_enabled=guardrails_input_enabled,
+            guardrails_input_enabled=guardrails_input_enabled,
+            guardrails_output_enabled=guardrails_input_enabled,
         ),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
@@ -1293,7 +1294,7 @@ async def test_answer_engine_uses_masked_question_for_search_llm_and_saved_recor
     monkeypatch.setattr(engine_oci, "parse_text_response", recording_llm)
     oracle = SavingQueryOracle()
     pipeline = RagPipeline(
-        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True),
+        settings=Settings(guardrails_input_enabled=True, guardrails_output_enabled=True),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )

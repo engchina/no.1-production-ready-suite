@@ -20,7 +20,6 @@ import {
   Scissors,
   Search,
   Server,
-  ShieldAlert,
   TableProperties,
   Tags,
   ThumbsUp,
@@ -31,6 +30,7 @@ import {
 
 import {
   ANSWER_NOTICE_NAV_ITEM,
+  GUARDRAIL_SETTINGS_NAV_ITEM,
   TRACE_RECORDING_SETTINGS_NAV_ITEM,
   CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   SYSTEM_SETTINGS_NAV_ITEMS,
@@ -214,13 +214,6 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: MENU_PERMISSIONS.settingsPrompts,
       },
       {
-        href: APP_ROUTES.settingsGuardrail,
-        labelKey: "nav.settingsGuardrail",
-        sidebarLabelKey: "nav.settingsGuardrail.sidebar",
-        icon: ShieldAlert,
-        permission: MENU_PERMISSIONS.settingsGuardrail,
-      },
-      {
         href: APP_ROUTES.settingsEvaluation,
         labelKey: "nav.settingsEvaluation",
         sidebarLabelKey: "nav.settingsEvaluation.sidebar",
@@ -251,6 +244,13 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.securityPermissions",
         icon: LockKeyhole,
         permission: MENU_PERMISSIONS.securityPermissions,
+      },
+      // 安全チェック（3製品で共通の設定。権限管理の下。#5061）
+      {
+        href: GUARDRAIL_SETTINGS_NAV_ITEM.href,
+        labelKey: "nav.settingsGuardrail",
+        icon: GUARDRAIL_SETTINGS_NAV_ITEM.icon as LucideIcon,
+        permission: MENU_PERMISSIONS.settingsGuardrail,
       },
     ],
   },

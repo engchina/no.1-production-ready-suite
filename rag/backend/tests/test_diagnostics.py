@@ -11,8 +11,8 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
     """検索 diagnostics は回答の経路と設定の fingerprint を示し、secret 値を含めない。"""
     settings = Settings(
         oracle_password="super-secret-password",
-        rag_guardrails_input_enabled=True,
-        rag_guardrails_output_enabled=True,
+        guardrails_input_enabled=True,
+        guardrails_output_enabled=True,
     )
     request = SearchRequest(
         query="承認条件",

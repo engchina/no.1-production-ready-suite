@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_system_settings import database as shared_database
+from pr_system_settings import guardrails as platform_guardrails
 from pr_system_settings import oci_connectivity
 from pr_system_settings.model import ModelSettingsTestRequest
 from pr_system_settings.model_test_input import MODEL_TEST_IMAGE_BYTES
@@ -982,7 +983,7 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
 
 def test_guardrail_settings_exposes_independent_switches(monkeypatch: MonkeyPatch) -> None:
     for side in ("input", "output"):
-        monkeypatch.setattr(get_settings(), f"rag_guardrails_{side}_enabled", False)
+        monkeypatch.setattr(get_settings(), f"guardrails_{side}_enabled", False)
     body = client.get("/api/settings/guardrail").json()["data"]
     assert body["input_enabled"] is False and body["output_enabled"] is False
     assert set(body) == {
@@ -990,7 +991,6 @@ def test_guardrail_settings_exposes_independent_switches(monkeypatch: MonkeyPatc
         "output_enabled",
         "oci_configured",
         "oci_warning_code",
-        "config_source",
     }
 
 
@@ -1000,18 +1000,19 @@ def test_guardrail_switches_persist_env(
     monkeypatch: MonkeyPatch, tmp_path: Path, input_enabled: bool, output_enabled: bool
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrails_input_enabled", not input_enabled)
-    monkeypatch.setattr(settings, "rag_guardrails_output_enabled", not output_enabled)
-    monkeypatch.setattr(settings_routes, "_oci_guardrails_readiness_code", lambda _: None)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "guardrails_input_enabled", not input_enabled)
+    monkeypatch.setattr(settings, "guardrails_output_enabled", not output_enabled)
+    monkeypatch.setattr(platform_guardrails, "guardrail_readiness_code", lambda _: None)
+    env_file = _platform_env_file(monkeypatch, tmp_path)
     body = {"input_enabled": input_enabled, "output_enabled": output_enabled}
     response = client.patch("/api/settings/guardrail", json=body)
     assert response.status_code == 200
     for side, enabled in (("input", input_enabled), ("output", output_enabled)):
         assert response.json()["data"][f"{side}_enabled"] is enabled
-        assert getattr(settings, f"rag_guardrails_{side}_enabled") is enabled
+        assert getattr(settings, f"guardrails_{side}_enabled") is enabled
         assert (
-            f"RAG_GUARDRAILS_{side.upper()}_ENABLED={str(enabled).lower()}" in env_file.read_text()
+            f"PLATFORM_GUARDRAILS_{side.upper()}_ENABLED={str(enabled).lower()}"
+            in env_file.read_text()
         )
 
 
@@ -1020,22 +1021,25 @@ def test_guardrail_on_rejects_missing_oci_configuration(
     monkeypatch: MonkeyPatch, side: str
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_guardrails_input_enabled", False)
-    monkeypatch.setattr(settings, "rag_guardrails_output_enabled", False)
-    monkeypatch.setattr(settings, "oci_guardrails_compartment_id", "")
+    monkeypatch.setattr(settings, "guardrails_input_enabled", False)
+    monkeypatch.setattr(settings, "guardrails_output_enabled", False)
     monkeypatch.setattr(settings, "oci_compartment_id", "")
     body = {"input_enabled": False, "output_enabled": False, f"{side}_enabled": True}
     assert client.patch("/api/settings/guardrail", json=body).status_code == 422
-    assert not settings.rag_guardrails_input_enabled and not settings.rag_guardrails_output_enabled
+    assert not settings.guardrails_input_enabled and not settings.guardrails_output_enabled
 
 
 def test_guardrail_off_does_not_require_oci_configuration(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(get_settings(), "rag_guardrails_input_enabled", True)
-    monkeypatch.setattr(get_settings(), "rag_guardrails_output_enabled", True)
-    monkeypatch.setattr(settings_routes, "_oci_guardrails_readiness_code", lambda _: "missing")
-    _settings_env_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(get_settings(), "guardrails_input_enabled", True)
+    monkeypatch.setattr(get_settings(), "guardrails_output_enabled", True)
+    monkeypatch.setattr(
+        platform_guardrails,
+        "guardrail_readiness_code",
+        lambda _: "oci_guardrails_compartment_missing",
+    )
+    _platform_env_file(monkeypatch, tmp_path)
     response = client.patch(
         "/api/settings/guardrail", json={"input_enabled": False, "output_enabled": False}
     )

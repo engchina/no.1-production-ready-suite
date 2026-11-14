@@ -4,13 +4,19 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .env import PlatformEnvSourcesMixin
+from .guardrails import GuardrailSettings
 from .runtime import RuntimeSettings
 from .timezone import TimezoneSettings
 from .tracing import TracingSettings
 
 
 class BaseServiceSettings(
-    PlatformEnvSourcesMixin, RuntimeSettings, TracingSettings, TimezoneSettings, BaseSettings
+    PlatformEnvSourcesMixin,
+    RuntimeSettings,
+    TracingSettings,
+    TimezoneSettings,
+    GuardrailSettings,
+    BaseSettings,
 ):
     """3 サービス共通の最小設定。
 

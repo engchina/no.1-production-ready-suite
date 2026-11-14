@@ -42,7 +42,6 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
     "検索インデックス",
     "検索方法",
     "回答プロンプト",
-    "安全チェック",
     "評価の基準",
   ]) {
     await expect(pipelineSection.getByText(label, { exact: true })).toBeVisible();
@@ -67,9 +66,14 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
     "nav-section-nav-section-settings",
   ]);
 
-  // セキュリティ設定は権限管理だけ、ユーザーとロールは3製品共通の2項目と、RAG / NL2SQL の API キー（#1805）を持つ。
+  // セキュリティ設定は権限管理と安全チェック、ユーザーとロールは3製品共通の2項目と、RAG / NL2SQL の API キー（#1805）を持つ。
   await expect(sidebar.getByText("セキュリティ設定", { exact: true })).toBeVisible();
-  await expect(sidebar.locator("#nav-section-nav-section-security").getByRole("link")).toHaveCount(1);
+  // 安全チェックは 3 製品で共通の設定で、権限管理の下（#5061）。
+  await expect(sidebar.locator("#nav-section-nav-section-security").getByRole("link")).toHaveText([
+    "権限管理",
+    "安全チェック",
+  ]);
+  await expect(pipelineSection.getByText("安全チェック", { exact: true })).toHaveCount(0);
   const userRolesSection = sidebar.locator("#nav-section-nav-section-userRoles");
   await expect(userRolesSection.getByRole("link")).toHaveCount(3);
   for (const label of ["ユーザー管理", "ロール管理", "API キー"]) {

@@ -14,6 +14,7 @@
 - ロールの基本情報は共通のロール管理が、ロールの権限は製品の権限管理が扱う（共通のロール API は権限を変えない）。
 - **権限管理のメニューの一覧は左のナビを正本にする**: 製品の `nav-config.ts` から `permissionNavSections` / `arrangePermissionsByNav`（製品の `PERMISSIONS_API.permissions` を通す）で作り、backend の `group` / `label` を画面に使わない（名前はサイドナビの表示名。`sidebarLabelKey` があればそれ）。ナビに無い capability はナビの後ろに置く。画面のあるメニュー権限は必ずナビの項目にし、ずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。
 
+- **安全チェック（OCI Guardrails）は3製品で1つの設定**（セキュリティ設定 › 安全チェック。権限管理の下。#5061）。入力・出力の検査の有効化は `platform/.env` の `PLATFORM_GUARDRAILS_INPUT_ENABLED` / `PLATFORM_GUARDRAILS_OUTPUT_ENABLED`（既定は無効）、判定・OCI の呼出・設定の API は `pr_system_settings.guardrails`、画面は `packages/system-settings` の `GuardrailSettingsPage`。扱いは 3 製品で同じ（個人情報はマスク、プロンプト攻撃・不適切な内容と検査できないときは停止）。画面とナビは、検査を組み込んだ製品にだけ出す（NL2SQL #5063・Agent #5062）。
 - **軌跡の本文記録は3製品で1つの設定**（運用設定 › 軌跡の記録。システムテーブルの直下。#3901）。既定は無効で、共有 API と `PLATFORM_TRACE_RECORDING_SETTINGS` の単一行で管理する。新しい呼び出しの開始時に判断し、入力・出力・返却された思考・Schema・本文の診断詳細を対象とする。本文を止めても時刻・状態・階層・モデル・usage は残し、既存の trace と通常の業務記録は削除しない。
 
 ## 3 製品で同じ機能の説明の文

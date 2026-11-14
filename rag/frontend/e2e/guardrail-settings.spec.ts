@@ -9,7 +9,7 @@ for (const width of [1280, 375]) {
     const bodies: unknown[] = [];
     await page.route("**/api/settings/guardrail", async route => {
       if (route.request().method() === "PATCH") { state = route.request().postDataJSON(); bodies.push(state); }
-      await route.fulfill({ json: { data: { ...state, oci_configured: true, oci_warning_code: null, config_source: "runtime" }, error_messages: [], warning_messages: [] } });
+      await route.fulfill({ json: { data: { ...state, oci_configured: true, oci_warning_code: null }, error_messages: [], warning_messages: [] } });
     });
     await page.goto("/settings/guardrail");
     await expect(page.getByText(/OCI の検出結果に基づき/)).toBeVisible();

@@ -33,6 +33,7 @@ from pr_system_settings.auth.visibility import (
     OTHERS_CONTENT_FORBIDDEN_STATUS,
 )
 from pr_system_settings.chat_attachments import ChatAttachmentReference
+from pr_system_settings.guardrails import GuardrailPolicy, GuardrailResult
 from starlette.concurrency import run_in_threadpool
 
 from app.api.routes.search import (
@@ -79,7 +80,6 @@ from app.rag.chat_question_token import (
     read_question_context,
 )
 from app.rag.faq_direct_answer import approved_faq_direct_score
-from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (

@@ -5,9 +5,9 @@ import hashlib
 import logging
 from typing import Literal
 
+from pr_system_settings.guardrails import GuardrailFinding
 from pydantic import BaseModel, Field
 
-from app.rag.guardrails import GuardrailFinding
 from app.rag.request_context import current_audit_request_context
 from app.schemas.search import (
     RetrievedChunk,
