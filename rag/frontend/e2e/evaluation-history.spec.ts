@@ -50,6 +50,8 @@ interface SyntheticJob {
   job_id: string;
   status: "RUNNING" | "SUCCEEDED";
   passed: boolean | null;
+  /** 比べた条件の判定（比べた評価だけ。#5074）。 */
+  comparePassed?: boolean;
   profile: string | null;
   actor: string | null;
   owned: boolean;
@@ -58,7 +60,7 @@ interface SyntheticJob {
 
 const JOBS: SyntheticJob[] = [
   { job_id: "jobmine", status: "SUCCEEDED", passed: true, profile: "プロファイル A", actor: "利用者 A", owned: true, created_at: "2026-11-09T03:00:00Z" },
-  { job_id: "jobother", status: "SUCCEEDED", passed: false, profile: "プロファイル A", actor: "利用者 B", owned: false, created_at: "2026-11-09T02:00:00Z" },
+  { job_id: "jobother", status: "SUCCEEDED", passed: false, comparePassed: false, profile: "プロファイル A", actor: "利用者 B", owned: false, created_at: "2026-11-09T02:00:00Z" },
   { job_id: "jobrunning", status: "RUNNING", passed: null, profile: "プロファイル A", actor: "利用者 B", owned: false, created_at: "2026-11-09T01:00:00Z" },
   { job_id: "joblegacy", status: "SUCCEEDED", passed: true, profile: null, actor: null, owned: true, created_at: "2026-11-08T01:00:00Z" },
 ];
@@ -73,10 +75,11 @@ function summary(job: SyntheticJob) {
     created_at: job.created_at,
     finished_at: job.status === "SUCCEEDED" ? job.created_at : null,
     passed: job.passed,
+    compare_passed: job.comparePassed ?? null,
     search_answer_profile_id: job.profile ? "profile-base" : null,
-    compare_search_answer_profile_id: null,
+    compare_search_answer_profile_id: job.comparePassed === undefined ? null : "profile-compare",
     search_answer_profile_name: job.profile,
-    compare_search_answer_profile_name: null,
+    compare_search_answer_profile_name: job.comparePassed === undefined ? null : "プロファイル B",
     actor_display_name: job.actor,
     owned: job.owned,
     can_cancel: job.owned,
@@ -84,7 +87,7 @@ function summary(job: SyntheticJob) {
 }
 
 function detail(job: SyntheticJob) {
-  const { case_count: _count, passed: _passed, ...rest } = summary(job);
+  const { case_count: _count, passed: _passed, compare_passed: _comparePassed, ...rest } = summary(job);
   return {
     ...rest,
     kind: "run",
@@ -163,12 +166,17 @@ for (const viewport of [
           await expect(header.getByRole("columnheader", { name: column })).toBeVisible();
         }
         await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("要改善");
+        // 比べた評価は、比べた条件の判定も並べる（#5074）。
+        await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("比較: 要改善");
+        await expect(page.getByTestId("evaluation-history-row-jobmine")).not.toContainText("比較:");
         await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("利用者 B");
         // 実行者もプロファイルも分からない古い評価は「—」。
         await expect(page.getByTestId("evaluation-history-row-joblegacy")).toContainText("—");
       } else {
         // 375px は列を畳み、日時の下にプロファイル・状態・判定をまとめる。
-        await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("プロファイル A · 完了 · 要改善");
+        await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText(
+          "プロファイル A（比較: プロファイル B） · 完了 · 要改善 · 比較: 要改善"
+        );
       }
       await expectNoPageOverflow(page);
 

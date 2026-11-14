@@ -138,6 +138,7 @@ export function EvaluationHistory({
                         <span className="lg:hidden">
                           {evaluationHistoryProfileLabel(job)} · {evaluationJobStatusLabel(job.status)}
                           {job.passed === null ? "" : ` · ${passedLabel(job.passed)}`}
+                          {job.compare_passed == null ? "" : ` · ${t("evaluation.history.comparePassed", { label: passedLabel(job.compare_passed) })}`}
                         </span>
                       }
                       href={evaluationJobHref(job.job_id)}
@@ -180,14 +181,23 @@ export function EvaluationHistory({
                   header: t("evaluation.history.column.passed"),
                   headerClassName: "hidden md:table-cell",
                   className: "hidden whitespace-nowrap align-top md:table-cell",
+                  // 比べた評価は、比べた条件の判定（技術エラー・閾値の不合格）も並べる（#5074）。
                   render: (job) =>
                     job.passed === null ? (
                       "—"
                     ) : (
-                      <StatusBadge
-                        variant={job.passed ? "success" : "danger"}
-                        label={passedLabel(job.passed)}
-                      />
+                      <span className="inline-flex flex-wrap gap-1.5">
+                        <StatusBadge
+                          variant={job.passed ? "success" : "danger"}
+                          label={passedLabel(job.passed)}
+                        />
+                        {job.compare_passed == null ? null : (
+                          <StatusBadge
+                            variant={job.compare_passed ? "success" : "danger"}
+                            label={t("evaluation.history.comparePassed", { label: passedLabel(job.compare_passed) })}
+                          />
+                        )}
+                      </span>
                     ),
                 },
                 {

@@ -2157,6 +2157,8 @@ export interface EvaluationJobSummary {
   created_at: string;
   finished_at: string | null;
   passed: boolean | null;
+  /** 比べた検索・回答プロファイルの判定（比べた成功の評価だけ。#5074）。 */
+  compare_passed?: boolean | null;
   search_answer_profile_id: string | null;
   compare_search_answer_profile_id: string | null;
   search_answer_profile_name: string | null;
