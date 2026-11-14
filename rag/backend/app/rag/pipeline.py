@@ -884,8 +884,9 @@ class RagPipeline:
                 progress_callback=stage_callback,
                 result_details=lambda result: answer_guardrail_details(result, outcome.answer),
                 result_outcome=guardrail_stage_outcome,
+                # 回答本文は伏せる前の値なので写さない。適用後の本文は結果の記録にある（#5065）。
                 request_snapshot=lambda: {
-                    "回答本文": outcome.answer,
+                    "回答本文の文字数": len(outcome.answer),
                     "渡した根拠本文": outcome.context_text,
                     "出力検査の設定": self._settings.rag_guardrails_output_enabled,
                 },
@@ -907,6 +908,8 @@ class RagPipeline:
         if final_answer != outcome.answer:
             outcome.diagnostics["needs_human_review"] = True
             outcome.diagnostics["confidence"] = "low"
+            # 出力の検査で伏せた値を、診断の記録の生成の回答の写しにも残さない（#5065）。
+            withhold_generated_answer_copies(outcome.diagnostics, final_answer)
         # 回答の注意書き（#2405）。回答の確定の後に、本文とは別の項目として付ける。
         # 窓口の案内は検索・回答プロファイルの上書きと業務ガイドの引き継ぎで決める（#2400）。
         notice = (
@@ -1329,6 +1332,30 @@ class RagPipeline:
 async def _completed[T](value: T) -> T:
     """済んだ処理の結果を、工程の記録（``_observe_stage``）へ渡す awaitable にする。"""
     return value
+
+
+def withhold_generated_answer_copies(diagnostics: dict[str, Any], masked_answer: str) -> None:
+    """生成の記録の生の応答を捨て、解析した回答の本文を伏せた後の本文に置き換える（#5065）。
+
+    資料の原文（モデルへの入力・根拠の本文）は変えない。生の応答は文字の位置が本文と違うため、
+    位置で伏せずに保存をやめる。
+    """
+    traces = diagnostics.get("generation_citation_traces")
+    if not isinstance(traces, list):
+        return
+    for trace in traces:
+        outputs = trace.get("outputs") if isinstance(trace, dict) else None
+        for output in outputs if isinstance(outputs, list) else ():
+            if not isinstance(output, dict):
+                continue
+            output["provider_output_text"] = None
+            output["raw_output_status"] = "withheld_by_guardrail"
+            parsed = output.get("parsed_output")
+            output["parsed_output"] = (
+                {"answer_body": masked_answer}
+                if isinstance(parsed, dict) and "answer_body" in parsed
+                else {"withheld_by_guardrail": True}
+            )
 
 
 def guardrail_stage_outcome(result: GuardrailResult) -> Literal["success", "skipped", "error"]:

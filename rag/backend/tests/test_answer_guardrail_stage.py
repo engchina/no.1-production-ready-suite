@@ -148,6 +148,18 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
             context_text="合成の資料",
             diagnostics={
                 "outcome": "answered",
+                "generation_citation_traces": [
+                    {
+                        "outputs": [
+                            {
+                                "input_prompt": "合成の資料",
+                                "raw_output_status": "recorded",
+                                "provider_output_text": '{"answer_body":"合成の回答"}',
+                                "parsed_output": {"answer_body": "合成の回答"},
+                            }
+                        ]
+                    }
+                ],
             },
             evaluation_input={"answer_text": "合成の回答", "evidence_items": []},
         )
@@ -177,7 +189,7 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
     assert step.details and step.details.call
     call = step.details.call
     assert json.loads(call.input.text) == {
-        "回答本文": "合成の回答",
+        "回答本文の文字数": len("合成の回答"),
         "渡した根拠本文": "合成の資料",
         "出力検査の設定": False,
     }
@@ -185,6 +197,16 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
     assert response.answer == final_text == oracle.saved[-1]["answer"]
     assert response.diagnostics.answer is not None
     assert oracle.saved[-1]["evaluation_input"]["answer_text"] == final_text
+    # 伏せた値は診断の記録の生成の回答の写しにも残さない。資料の原文は変えない（#5065）。
+    output = oracle.saved[-1]["diagnostics"]["generation_citation_traces"][0]["outputs"][0]
+    assert output["input_prompt"] == "合成の資料"
+    if changed:
+        assert output["provider_output_text"] is None
+        assert output["raw_output_status"] == "withheld_by_guardrail"
+        assert output["parsed_output"] == {"answer_body": final_text}
+    else:
+        assert output["provider_output_text"] == '{"answer_body":"合成の回答"}'
+        assert output["parsed_output"] == {"answer_body": "合成の回答"}
 
 
 @pytest.mark.parametrize("enabled", [True, False])
