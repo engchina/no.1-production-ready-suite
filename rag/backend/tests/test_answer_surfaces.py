@@ -138,7 +138,7 @@ async def test_evaluation_runs_cases_with_answer_engine() -> None:
 
     async def judge(**kwargs: Any) -> dict[str, object]:
         assert "登録ボタン" in str(kwargs["evaluation_input"])
-        return {"status": "completed", "response_decision_accuracy": 1.0}
+        return {"status": "completed", "answer_correctness": 1.0, "correctness_reason": "一致"}
 
     runner = EvaluationRunner(pipeline=pipeline, settings=Settings(), answer_judge=judge)
 
@@ -149,7 +149,6 @@ async def test_evaluation_runs_cases_with_answer_engine() -> None:
                 query="受注の登録方法は？",
                 relevant_document_ids=["doc-1"],
                 required_answer_points=["登録ボタン"],
-                expected_response_decision="answer",
             )
         ],
         top_k=5,
@@ -157,8 +156,7 @@ async def test_evaluation_runs_cases_with_answer_engine() -> None:
 
     assert metrics.case_count == 1
     assert metrics.error_count == 0
-    assert metrics.response_decision_accuracy == 1.0
+    assert metrics.answer_correctness == 1.0
     assert metrics.mrr == 1.0
     # 回答の記録(引用・根拠・実行記録)から測る指標も求まる(#591)。
     assert metrics.required_evidence_recall is None
-    assert metrics.answer_correctness is None

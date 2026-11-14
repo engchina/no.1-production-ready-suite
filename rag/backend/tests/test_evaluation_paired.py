@@ -53,7 +53,7 @@ def _metric(result: EvaluationPairedComparison, name: str) -> EvaluationPairedMe
 
 
 def test_all_equal_cases_are_unchanged() -> None:
-    cases = [_case(f"c{i}", mrr=0.5, response_decision_accuracy=1.0) for i in range(12)]
+    cases = [_case(f"c{i}", mrr=0.5) for i in range(12)]
 
     result = compare_paired(_metrics(cases), _metrics(cases))
 
@@ -64,18 +64,16 @@ def test_all_equal_cases_are_unchanged() -> None:
 
 
 def test_all_cases_improving_binary_metric_is_significant() -> None:
-    base = [_case(f"c{i}", response_decision_accuracy=0.0) for i in range(12)]
-    target = [_case(f"c{i}", response_decision_accuracy=1.0) for i in range(12)]
+    base = [_case(f"c{i}", answer_correctness=0.0) for i in range(12)]
+    target = [_case(f"c{i}", answer_correctness=1.0) for i in range(12)]
 
-    decision = _metric(
-        compare_paired(_metrics(base), _metrics(target)), "response_decision_accuracy"
-    )
+    correctness = _metric(compare_paired(_metrics(base), _metrics(target)), "answer_correctness")
 
-    assert decision.binary is True
-    assert decision.method == "exact_sign_test"
-    assert (decision.improved, decision.regressed, decision.paired_cases) == (12, 0, 12)
-    assert decision.p_value == pytest.approx(2 / 2**12)
-    assert decision.verdict == "improved"
+    assert correctness.binary is True
+    assert correctness.method == "exact_sign_test"
+    assert (correctness.improved, correctness.regressed, correctness.paired_cases) == (12, 0, 12)
+    assert correctness.p_value == pytest.approx(2 / 2**12)
+    assert correctness.verdict == "improved"
 
 
 def test_small_sample_is_not_judged() -> None:
@@ -153,15 +151,15 @@ def test_condition_differences_and_old_results() -> None:
 
 
 def test_threshold_failure_fails_gate_even_when_improved() -> None:
-    base = [_case(f"c{i}", response_decision_accuracy=0.0) for i in range(12)]
-    target = [_case(f"c{i}", response_decision_accuracy=1.0) for i in range(12)]
+    base = [_case(f"c{i}", answer_correctness=0.0) for i in range(12)]
+    target = [_case(f"c{i}", answer_correctness=1.0) for i in range(12)]
     failure = EvaluationThresholdFailure(metric="mrr", actual=0.1, threshold=0.5)
 
     result = compare_paired(
         _metrics(base), _metrics(target, threshold_failures=[failure], passed=False)
     )
 
-    assert _metric(result, "response_decision_accuracy").verdict == "improved"
+    assert _metric(result, "answer_correctness").verdict == "improved"
     assert result.target_gate_failed is True
     assert result.target_threshold_failures == [failure]
 
@@ -174,8 +172,8 @@ def _write(path: Path, metrics: EvaluationMetrics) -> Path:
 def test_cli_compare_prints_table_and_exit_code(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    base = [_case(f"c{i}", response_decision_accuracy=0.0) for i in range(12)]
-    target = [_case(f"c{i}", response_decision_accuracy=1.0) for i in range(12)]
+    base = [_case(f"c{i}", answer_correctness=0.0) for i in range(12)]
+    target = [_case(f"c{i}", answer_correctness=1.0) for i in range(12)]
     left = _write(tmp_path / "base.json", _metrics(base))
     right = _write(tmp_path / "target.json", _metrics(target))
     output = tmp_path / "paired.json"
@@ -183,7 +181,7 @@ def test_cli_compare_prints_table_and_exit_code(
     assert evaluation_run_cli.main(["compare", str(left), str(right), "--output", str(output)]) == 0
     printed = capsys.readouterr().out
     assert "seed 20260" in printed
-    assert "response_decision_accuracy" in printed
+    assert "answer_correctness" in printed
     assert "improved" in printed
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "compared"
     # 逆向き（悪化）は終了コード 1。
@@ -196,7 +194,7 @@ async def test_profile_comparison_in_job_has_paired_result(monkeypatch: MonkeyPa
     class Runner:
         async def run(self, **kwargs: object) -> EvaluationMetrics:
             value = 1.0 if kwargs.get("search_answer_profile_id") else 0.0
-            cases = [_case(f"c{i}", response_decision_accuracy=value) for i in range(12)]
+            cases = [_case(f"c{i}", answer_correctness=value) for i in range(12)]
             return EvaluationMetrics(case_count=12, passed=True, case_results=cases)
 
     monkeypatch.setattr(evaluation_route, "EvaluationRunner", Runner)
@@ -213,4 +211,4 @@ async def test_profile_comparison_in_job_has_paired_result(monkeypatch: MonkeyPa
     assert metrics.comparison is not None
     paired = metrics.comparison.paired
     assert paired is not None
-    assert _metric(paired, "response_decision_accuracy").verdict == "improved"
+    assert _metric(paired, "answer_correctness").verdict == "improved"

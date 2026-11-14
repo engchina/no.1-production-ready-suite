@@ -308,12 +308,10 @@ GRANT_CASE: dict[str, Any] = {
     "split": "dev",
     "query": "権限を付けたいのですが、手順を教えてください。",
     "relevant_document_ids": ["doc-manual"],
-    "expected_outcomes": ["needs_clarification", "conditional"],
     "turns": [
         {
             "reply": "個別の利用者に付けます。",
             "conditions": {"target": "個別"},
-            "expected_outcomes": ["answered", "conditional"],
         }
     ],
     "required_evidence": [
@@ -360,13 +358,12 @@ def test_multi_turn_case_follows_the_thread() -> None:
     ]
     result = record.report.case_results[0]
     assert result.status == "success"
-    assert result.response_decision_accuracy == 1
     assert [turn.observed_outcome for turn in result.turn_results] == [
         "needs_clarification",
         "answered",
     ]
     assert result.required_evidence_recall == 1.0
-    assert record.report.metrics_version == "six_metrics_v1+agent_v3"
+    assert record.report.metrics_version == "five_metrics_v1+agent_v3"
     assert [run["agent_version"] for run in record.target["runs"]] == [3, 3]
     # 観測は公開の出力そのものを保存する（採点し直せる）。
     turn = record.observations[0].turns[1]
@@ -405,7 +402,6 @@ def test_pre_answer_confirmation_is_answered_with_the_next_reply() -> None:
         ("needs_clarification", "agent_confirmation"),
         ("answered", "agent_answer"),
     ]
-    assert result.response_decision_accuracy == 1.0
     assert result.required_evidence_recall == 1.0
     assert [turn.status for turn in record.observations[0].turns] == ["confirmation", "completed"]
 
@@ -413,15 +409,14 @@ def test_pre_answer_confirmation_is_answered_with_the_next_reply() -> None:
 def test_confirmation_without_a_next_reply_ends_the_case_and_cancels_the_run() -> None:
     waiting = _run("run-1", answer="", status="waiting_confirmation", confirmation=CONFIRMATION)
     fake = FakeAgentMcp([([waiting], None)])
-    case = {"id": "one-shot", "query": "権限の付け方は？", "expected_outcomes": ["answered"]}
+    case = {"id": "one-shot", "query": "権限の付け方は？"}
     record = _evaluate(fake, [case])
     assert fake.cancelled == ["run-1"]
     result = record.report.case_results[0]
-    # 確認で終わった（期待は回答）ので、判断の誤り（ケースの失敗ではない）。
+    # 確認で終わった Run はケースの失敗にしない（自己申告の対応は記録するだけで、期待と比べない）。
     assert result.status == "success"
     assert result.observed_outcome == "needs_clarification"
-    assert result.response_decision_accuracy == 0.0
-    assert result.failure_reasons == ["unexpected_handling"]
+    assert result.failure_reasons == []
     assert record.observations[0].turns[0].refs["cancel_result"] == "cancelled"
 
 
@@ -493,7 +488,6 @@ def test_known_conditions_are_added_to_the_first_question_with_guide_labels() ->
         "id": "known",
         "query": "権限を付与したいです。どの画面で操作しますか？",
         "conditions": {"target": "グループ"},
-        "expected_outcomes": ["answered", "conditional"],
     }
     run = _run("run-1", answer="グループの詳細画面で付与します。")
     observation = _observation(
@@ -504,10 +498,9 @@ def test_known_conditions_are_added_to_the_first_question_with_guide_labels() ->
     chat = next(args for tool, args in fake.calls if tool == "agent_chat")
     assert chat["question"].endswith("（既知の条件: 付与先は「グループ」）")
     assert known_conditions_text({"approved": "はい"}, {}) == "（既知の条件: approvedは「はい」）"
-    # outcome の無い完了の Run は、既定では推定せず判断の正しさを評価不能にする。
+    # outcome の無い完了の Run は、既定では対応を推定しない。
     result = record.report.case_results[0]
     assert (result.observed_outcome, result.outcome_source) == (None, None)
-    assert result.metric_status["response_decision_accuracy"].reason == "outcome_missing"
 
 
 @pytest.mark.parametrize(
@@ -533,14 +526,14 @@ def test_legacy_outcome_inference(answer: str, with_evidence: bool, expected: st
     record = _evaluate(fake, [{"id": "a", "query": "q"}], infer_missing_outcome=True)
     result = record.report.case_results[0]
     assert (result.observed_outcome, result.outcome_source) == (expected, "inferred")
-    assert record.report.metrics_version == "six_metrics_v1+agent_v3+legacy_outcome"
+    assert record.report.metrics_version == "five_metrics_v1+agent_v3+legacy_outcome"
 
 
 def test_outcome_outside_the_vocabulary_is_not_used() -> None:
     fake = FakeAgentMcp(
         [([_run("run-1", answer="付与先は？", outcome="maybe")], _observation("run-1"))]
     )
-    record = _evaluate(fake, [{"id": "a", "query": "q", "expected_outcomes": ["answered"]}])
+    record = _evaluate(fake, [{"id": "a", "query": "q"}])
     assert record.report.case_results[0].observed_outcome is None
 
 
@@ -553,9 +546,9 @@ def test_failed_timed_out_and_waiting_runs_are_case_errors() -> None:
     record = _evaluate(
         fake,
         [
-            {"id": "a", "query": "q1", "expected_outcomes": ["answered"]},
-            {"id": "b", "query": "q2", "expected_outcomes": ["answered"]},
-            {"id": "c", "query": "q3", "expected_outcomes": ["answered"]},
+            {"id": "a", "query": "q1"},
+            {"id": "b", "query": "q2"},
+            {"id": "c", "query": "q3"},
         ],
         timeout=150,
         api_clock=lambda: float(next(ticks)),
@@ -578,7 +571,7 @@ def test_failed_timed_out_and_waiting_runs_are_case_errors() -> None:
 def test_run_that_skipped_an_approval_tool_is_a_case_error() -> None:
     run = _run("run-1", answer="記録しました。", outcome="answered", skipped=["ext__write"])
     fake = FakeAgentMcp([([run], _observation("run-1"))])
-    record = _evaluate(fake, [{"id": "a", "query": "q", "expected_outcomes": ["answered"]}])
+    record = _evaluate(fake, [{"id": "a", "query": "q"}])
     result = record.report.case_results[0]
     assert (result.status, result.error_type, result.error_stage) == (
         "error",
@@ -751,23 +744,28 @@ def test_withheld_evidence_makes_misses_unevaluable() -> None:
 
 def test_thresholded_metric_with_unevaluable_cases_does_not_pass() -> None:
     fakes: list[tuple[list[dict[str, Any]], dict[str, Any] | None]] = [
-        ([_run("run-1", answer="答え", outcome="answered")], _observation("run-1")),
+        (
+            [_run("run-1", answer="答え", outcome="answered")],
+            _observation("run-1", evidence=[ANSWER_EVIDENCE]),
+        ),
+        # outcome も引用も無い Run は、検索の指標を評価不能（outcome_missing）にする。
         ([_run("run-2", answer="答え")], _observation("run-2")),
     ]
     config = AgentTargetConfig(mcp_url=URL, agent_id="agent-1")
     target = AgentMcpTarget(AgentMcp(_mcp(FakeAgentMcp(fakes))), config)
     cases = [
-        {"id": "a", "query": "q", "expected_outcomes": ["answered"]},
-        {"id": "b", "query": "q", "expected_outcomes": ["answered"]},
+        {"id": "a", "query": "q", "relevant_document_ids": ["doc-manual"]},
+        {"id": "b", "query": "q", "relevant_document_ids": ["doc-manual"]},
     ]
     record = run_experiment(
-        _dataset(cases, {"response_decision_accuracy": 0.5}),
+        _dataset(cases, {"mrr": 0.5}),
         target,
         target_config=config.provenance(),
         scorer=ScorerConfig(),
         log=lambda _: None,
     )
-    assert record.report.response_decision_accuracy == 1.0
+    assert record.report.mrr == 1.0
+    assert record.report.denominators.metrics["mrr"].unevaluable == 1
     assert record.report.passed is None
 
 
@@ -785,13 +783,11 @@ def _golden(tmp_path: Path) -> Path:
                         "split": "dev",
                         "query": "q",
                         "relevant_document_ids": ["file:m.pdf"],
-                        "expected_outcomes": ["answered"],
                     },
                     {
                         "id": "b",
                         "split": "holdout",
                         "query": "q",
-                        "expected_outcomes": ["answered"],
                     },
                 ]
             }

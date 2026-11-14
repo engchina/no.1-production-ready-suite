@@ -65,25 +65,38 @@ def test_screen_line_reads_name_and_aliases() -> None:
 
 def test_workbook_reads_screens_and_answer_process_columns() -> None:
     parsed = parse_evaluation_workbook(
-        _workbook([["通知が出ない", None, None, "設定画面A\n画面B", "回答", PROCESS_TEXT]])
+        _workbook([["通知が出ない", None, None, "設定画面A\n画面B", PROCESS_TEXT]])
     )
 
     assert parsed.issues == []
     row = parsed.rows[0]
-    assert row.response_decision == "answer"
     assert row.screen_lines == ("設定画面A", "画面B")
     assert row.answer_process == PROCESS_TEXT
     built = build_evaluation_cases(parsed.rows, [])
-    assert built.cases[0].expected_response_decision == "answer"
     # 回答の過程はケースの期待にしない（下書きにして確かめてから足す）。
     assert built.cases[0].required_answer_points == ["設定画面A", "画面B"]
 
 
-def test_workbook_reports_unreadable_screen_line_with_row_and_column() -> None:
-    parsed = parse_evaluation_workbook(_workbook([["質問", None, None, "画面A", "不明な判断"]]))
-    assert parsed.rows == []
-    assert parsed.issues[0].row == 2
-    assert parsed.issues[0].column == "期待する応答の判断"
+def test_workbook_ignores_a_removed_column_like_any_unknown_column() -> None:
+    """削除した列（期待する応答の判断）は、ほかの知らない列と同じく読まない。"""
+    book = Workbook()
+    sheet = book.active
+    sheet.title = CASES_SHEET_TITLE
+    sheet.append([*HEADERS[:4], "期待する応答の判断", "知らない列", HEADERS[4]])
+    sheet.append(
+        ["合成の質問", None, "資料に記載がないため答えられない。", None, "保留", "x", "過程"]
+    )
+    buffer = BytesIO()
+    book.save(buffer)
+
+    parsed = parse_evaluation_workbook(buffer.getvalue())
+
+    assert parsed.issues == []
+    row = parsed.rows[0]
+    assert row.standard_answer == "資料に記載がないため答えられない。"
+    assert row.answer_process == "過程"
+    case = build_evaluation_cases(parsed.rows, []).cases[0]
+    assert "expected_response_decision" not in case.model_dump()
 
 
 class _FakeOracle:
@@ -107,7 +120,7 @@ def test_import_api_returns_screens_and_process_in_preview(monkeypatch: MonkeyPa
         files={
             "file": (
                 "cases.xlsx",
-                _workbook([["通知が出ない", None, None, "設定画面A", "回答", PROCESS_TEXT]]),
+                _workbook([["通知が出ない", None, None, "設定画面A", PROCESS_TEXT]]),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         },
@@ -143,7 +156,7 @@ def test_page_range_reads_written_pages() -> None:
 
 
 def test_process_draft_maps_guide_draft_to_evaluation_expectations() -> None:
-    """業務ガイドの下書き（録画の応答）を、手順・条件・対応・根拠の期待にする。"""
+    """業務ガイドの下書き（録画の応答）を、手順・条件・根拠の期待にする。"""
     item = build_item(
         SupportGuideProcessRow(row=2, question="画面Aで通知が出ない", process=PROCESS_TEXT),
         parse_draft_output(RECORDED),
@@ -159,8 +172,8 @@ def test_process_draft_maps_guide_draft_to_evaluation_expectations() -> None:
         "通知の設定を有効にする — 注意: 保存を押すまで反映されない",
     ]
     assert draft.required_conditions == ["利用者が管理者か"]
-    # 手順があり、窓口への引き継ぎがある。
-    assert draft.expected_outcomes == ["answered", "conditional", "needs_human"]
+    # 対応の期待は作らない（確認・保留の期待は標準回答に書く）。
+    assert "expected_outcomes" not in draft.model_dump()
     assert draft.relevant_document_ids == ["doc-a"]
     evidence = draft.required_evidence[0]
     assert (evidence.document_id, evidence.page_start, evidence.page_end) == ("doc-a", 12, 14)

@@ -374,3 +374,43 @@ def test_list_permission_is_registered() -> None:
     from app.security.permissions import MENU_EVALUATION, permission_for_route
 
     assert permission_for_route("GET", "/evaluation/jobs") == frozenset({MENU_EVALUATION})
+
+
+async def test_list_returns_compared_profile_verdict_apart_from_base(
+    service: EvaluationJobService,
+    store: MemoryEvaluationJobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """比べた条件の不合格（技術エラー・閾値）を、主条件の判定と分けて一覧に返す（#5074）。"""
+    now = datetime.now(UTC)
+    await store.create(_record("job-compare", compare="profile-b", created_at=now))
+    await store.finish(
+        "job-compare",
+        lease_owner=_LEASE,
+        status="SUCCEEDED",
+        result={"passed": True, "comparison": {"metrics": {"passed": False, "error_count": 2}}},
+        error_message=None,
+        evaluation_run_id=None,
+    )
+    await _seed(store, _record("job-single", created_at=now - timedelta(hours=1)))
+
+    _as_viewer(monkeypatch, _SYSTEM_ADMIN)
+    items, _ = await service.list_jobs(offset=0, limit=25)
+    by_id = {item.job_id: item for item in items}
+    assert (by_id["job-compare"].passed, by_id["job-compare"].compare_passed) == (True, False)
+    assert (by_id["job-single"].passed, by_id["job-single"].compare_passed) == (True, None)
+
+
+def test_record_from_row_reads_compared_verdict() -> None:
+    """一覧の行は結果の本体を読まず、JSON から取り出した二つの判定だけを持つ（#5074）。"""
+    row = {
+        "job_id": "job-row",
+        "status": "SUCCEEDED",
+        "total_cases": 4,
+        "completed_cases": 4,
+        "time_limit_seconds": 3600,
+        "passed": "true",
+        "compare_passed": "false",
+    }
+    record = evaluation_jobs._record_from_row(row)  # noqa: SLF001
+    assert (record.passed, record.compare_passed) == (True, False)

@@ -15,9 +15,6 @@
     "query": "合成の質問 4: 処理 V の方法は？",
     "relevant_document_ids": [
       "doc-f"
-    ],
-    "expected_outcomes": [
-      "answered"
     ]
   },
   "turns": [
@@ -46,10 +43,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": 0.0,
-      "expected_decisions": [
-        "answer"
-      ],
       "observed_outcome": "needs_clarification",
       "outcome_source": "inferred",
       "missing_evidence": [],
@@ -57,8 +50,7 @@
       "answer_evaluation": null,
       "guardrail_warnings": [],
       "failure_reasons": [
-        "retrieval_miss",
-        "unexpected_handling"
+        "retrieval_miss"
       ],
       "elapsed_ms": 1250.0,
       "error_type": null,
@@ -129,10 +121,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "answer"
-        ],
         "observed_outcome": null,
         "outcome_source": null,
         "missing_evidence": [],
@@ -152,10 +140,6 @@
           "mrr": {
             "status": "scored",
             "reason": null
-          },
-          "response_decision_accuracy": {
-            "status": "unevaluable",
-            "reason": "outcome_missing"
           },
           "answer_correctness": {
             "status": "not_applicable",

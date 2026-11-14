@@ -11,8 +11,8 @@ export async function mockTestSetPage(page: Page, itemCount = 2) {
   const inputs: TestSetItem[] = Array.from({ length: itemCount }, (_, index) => ({
     item_id: `item-${index}`, source_job_id: index % 2 ? "job-two" : "job-one", source_case_id: "row-2", source_pass: 0,
     question: "合成の同じ質問", standard_answer: "", evidence: [], required_answer_points: [],
-    response_decision: "answer", answer_process: "", confirmed: false, source_notice: null,
-    original: { question: "合成の同じ質問", standard_answer: "", evidence: [], required_answer_points: [], response_decision: "answer", answer_process: "" },
+    answer_process: "", confirmed: false, source_notice: null,
+    original: { question: "合成の同じ質問", standard_answer: "", evidence: [], required_answer_points: [], answer_process: "" },
     reference_answer: "未確認の合成回答", reference_evidence: [],
   }));
   await page.route("**/api/evaluation/testsets**", async route => {
@@ -34,7 +34,7 @@ export async function mockTestSetPage(page: Page, itemCount = 2) {
       const body = route.request().postDataJSON();
       saved = { ...saved, ...body, revision: saved.revision + 1, items: body.items.map((value: TestSetItem) => {
         const previous = saved?.items.find(entry => entry.item_id === value.item_id);
-        const base: TestSetItem = previous ?? { ...inputs[0], source_kind: "manual", source_job_id: "", source_case_id: "", reference_answer: "", reference_evidence: [], original: { question: value.question, standard_answer: value.standard_answer, evidence: value.evidence, required_answer_points: value.required_answer_points, response_decision: value.response_decision, answer_process: value.answer_process } };
+        const base: TestSetItem = previous ?? { ...inputs[0], source_kind: "manual", source_job_id: "", source_case_id: "", reference_answer: "", reference_evidence: [], original: { question: value.question, standard_answer: value.standard_answer, evidence: value.evidence, required_answer_points: value.required_answer_points, answer_process: value.answer_process } };
         return { ...base, ...value, confirmed: body.confirm_item_ids?.includes(value.item_id) || value.confirmed };
       }) };
       return reply(saved);

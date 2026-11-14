@@ -7542,14 +7542,16 @@ class OracleClient:
     ) -> tuple[list[dict[str, object]], int]:
         """見る利用者が見られる品質評価の job を新しい順に返す（#4811）。
 
-        結果の本体（`result_json`）は読まず、全体の判定（`$.passed`）だけを読む。件数も返す。
+        結果の本体（`result_json`）は読まず、全体の判定（`$.passed`）と比べた条件の判定
+        （`$.comparison.metrics.passed`。#5074）だけを読む。件数も返す。
         """
         visible, binds = evaluation_job_visibility_sql(viewer)
         rows = await self._fetch_all(
             f"""
             SELECT
                 {_EVALUATION_JOB_COLUMNS},
-                JSON_VALUE(result_json, '$.passed') AS passed
+                JSON_VALUE(result_json, '$.passed') AS passed,
+                JSON_VALUE(result_json, '$.comparison.metrics.passed') AS compare_passed
             FROM rag_evaluation_jobs
             WHERE {visible}
             ORDER BY created_at DESC, job_id DESC

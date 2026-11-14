@@ -8,10 +8,7 @@
   "case": {
     "id": "run-create-error",
     "split": "holdout",
-    "query": "合成の質問 12",
-    "expected_outcomes": [
-      "answered"
-    ]
+    "query": "合成の質問 12"
   },
   "turns": [
     {
@@ -35,10 +32,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": null,
-      "expected_decisions": [
-        "answer"
-      ],
       "observed_outcome": null,
       "outcome_source": null,
       "missing_evidence": [],
@@ -81,10 +74,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "answer"
-        ],
         "observed_outcome": null,
         "outcome_source": null,
         "missing_evidence": [],

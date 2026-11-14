@@ -23,20 +23,17 @@ for (const viewport of [
     await expect(page.getByRole("radio")).toHaveCount(2);
     await expect(page.getByRole("radio", { name: /標準/ })).toBeChecked();
     await expect(page.getByRole("radio", { name: /厳格/ })).toBeVisible();
-    // 選んだ基準の閾値を、検索・回答・応答の判断の観点ごとに指標の意味と一緒に出す。
+    // 選んだ基準の閾値を、検索・回答の観点ごとに指標の意味と一緒に出す（応答の判断の観点は無い。#5068）。
     const metrics = page.getByTestId("settings-evaluation-metrics");
     await expect(metrics.getByRole("heading", { name: "標準の指標と閾値" })).toBeVisible();
-    for (const perspective of ["検索", "回答", "応答の判断"]) {
+    for (const perspective of ["検索", "回答"]) {
       await expect(metrics.getByRole("heading", { name: perspective, exact: true })).toBeVisible();
     }
+    await expect(metrics.getByRole("heading", { name: "応答の判断", exact: true })).toHaveCount(0);
     const search = await metrics.getByRole("heading", { name: "検索", exact: true }).locator("..").boundingBox();
     const answer = await metrics.getByRole("heading", { name: "回答", exact: true }).locator("..").boundingBox();
-    const decision = await metrics.getByRole("heading", { name: "応答の判断", exact: true }).locator("..").boundingBox();
     expect(search).not.toBeNull();
     expect(answer).not.toBeNull();
-    expect(decision).not.toBeNull();
-    expect(decision!.x).toBe(answer!.x);
-    expect(decision!.y).toBeGreaterThanOrEqual(answer!.y + answer!.height);
     if (viewport.name === "desktop") {
       expect(answer!.x).toBeGreaterThan(search!.x);
       expect(answer!.y).toBe(search!.y);
@@ -45,8 +42,8 @@ for (const viewport of [
       expect(answer!.y).toBeGreaterThan(search!.y);
     }
     await metrics.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath("evaluation-decision-under-answer.png") });
-    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(4);
+    await page.screenshot({ path: testInfo.outputPath("evaluation-metrics-perspectives.png") });
+    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(3);
     await expect(page.getByTestId("settings-evaluation-metric-required_evidence_recall")).toContainText(
       "閾値 90%"
     );
@@ -171,7 +168,6 @@ async function collapseSidebar(page: Page) {
 function evaluationEnvelope(suite: string) {
   const thresholds = (strict: boolean) => ({
  required_evidence_recall:strict?1:0.9,mrr:strict?0.8:0.6,answer_correctness:strict?1:0.9,
- response_decision_accuracy:strict?1:0.9,
   });
   const specs = [
     { name: "standard", thresholds: thresholds(false) },

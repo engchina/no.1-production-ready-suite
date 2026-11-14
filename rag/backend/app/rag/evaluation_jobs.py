@@ -237,6 +237,7 @@ class EvaluationJobRecord:
     user_uuid: str | None = None
     # 一覧の行だけが持つ全体の判定（結果の本体は読まない。#4811）。
     passed: bool | None = None
+    compare_passed: bool | None = None
     # 終わった job を読むときだけ入れる、保存したケースの結果（#4208）。
     case_rows: list[EvaluationJobCaseRow] = field(default_factory=list, repr=False)
 
@@ -664,6 +665,7 @@ def _record_from_row(row: Mapping[str, object]) -> EvaluationJobRecord:
     """表の行を job にする。一覧の行は結果の本体を読まず、全体の判定（`passed`）だけを持つ。"""
     result = row.get("result_json")
     passed = row.get("passed")
+    compare_passed = row.get("compare_passed")
     return EvaluationJobRecord(
         job_id=str(row["job_id"]),
         kind="run",
@@ -685,6 +687,7 @@ def _record_from_row(row: Mapping[str, object]) -> EvaluationJobRecord:
         compare_search_answer_profile_id=_optional_str(row.get("compare_search_answer_profile_id")),
         user_uuid=_optional_str(row.get("user_uuid")),
         passed=None if passed is None else passed in (True, 1, "true"),
+        compare_passed=None if compare_passed is None else compare_passed in (True, 1, "true"),
         started_at=_optional_datetime(row.get("started_at")),
         finished_at=_optional_datetime(row.get("finished_at")),
     )
@@ -779,6 +782,13 @@ def evaluation_job_summary(
     if passed is None and record.result is not None:
         value = record.result.get("passed")
         passed = value if isinstance(value, bool) else None
+    # 比べた条件の判定は主条件の判定と分けて返す（技術エラー・閾値の不合格を一覧で見せる。#5074）。
+    compare_passed = record.compare_passed
+    if compare_passed is None and record.result is not None:
+        comparison = record.result.get("comparison")
+        metrics = comparison.get("metrics") if isinstance(comparison, Mapping) else None
+        value = metrics.get("passed") if isinstance(metrics, Mapping) else None
+        compare_passed = value if isinstance(value, bool) else None
     return EvaluationJobSummary(
         job_id=record.job_id,
         status=record.status,
@@ -788,6 +798,11 @@ def evaluation_job_summary(
         created_at=record.created_at,
         finished_at=record.finished_at,
         passed=passed if record.status == "SUCCEEDED" else None,
+        compare_passed=(
+            compare_passed
+            if record.status == "SUCCEEDED" and record.compare_search_answer_profile_id
+            else None
+        ),
         search_answer_profile_id=record.search_answer_profile_id,
         compare_search_answer_profile_id=record.compare_search_answer_profile_id,
         actor_user_uuid=record.user_uuid,

@@ -1,6 +1,6 @@
 """評価結果から作るテストセットの下書きと確認状態。"""
 
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -10,14 +10,13 @@ from app.schemas.support_guide import PROCESS_IMPORT_TEXT_MAX_CHARS
 
 
 class TestSetFields(BaseModel):
-    """既存テンプレートの六列を編集する。コードによる正解の推測はしない。"""
+    """既存テンプレートの五列を編集する。コードによる正解の推測はしない。"""
 
     model_config = ConfigDict(extra="forbid")
     question: str = Field(default="", max_length=2000)
     standard_answer: str = Field(default="", max_length=STANDARD_ANSWER_MAX_CHARS)
     evidence: list[str] = Field(default_factory=list, max_length=30)
     required_answer_points: list[str] = Field(default_factory=list, max_length=30)
-    response_decision: Literal["answer", "clarify", "hold"] = "answer"
     answer_process: str = Field(default="", max_length=PROCESS_IMPORT_TEXT_MAX_CHARS)
 
     @field_validator("evidence")
@@ -28,21 +27,33 @@ class TestSetFields(BaseModel):
         return values
 
 
+def confirmation_issue(question: str, standard_answer: str) -> str | None:
+    """収録を確認できない理由。確認には質問と標準回答の両方が要る。"""
+    if not question.strip():
+        return "収録の確認には質問が必要です。"
+    if not standard_answer.strip():
+        return (
+            "収録の確認には標準回答が必要です。"
+            "確認や保留を期待する項目も、期待する返し方を標準回答に書いてください。"
+        )
+    return None
+
+
 class TestSetEdit(TestSetFields):
     item_id: str = Field(min_length=1, max_length=64)
     confirmed: bool = False
 
     @model_validator(mode="after")
     def confirmation(self) -> Self:
-        if self.confirmed:
-            if not self.question.strip():
-                raise ValueError("収録の確認には質問が必要です。")
-            if self.response_decision == "answer" and not self.standard_answer.strip():
-                raise ValueError("回答を期待する項目は標準回答を入力してから確認してください。")
+        if self.confirmed and (issue := confirmation_issue(self.question, self.standard_answer)):
+            raise ValueError(issue)
         return self
 
 
 class TestSetItem(TestSetEdit):
+    """保存済みの項目。今の列に無い項目は読み捨て、確認の条件を満たさない項目は未確認で読む。"""
+
+    model_config = ConfigDict(extra="ignore")
     source_kind: Literal["evaluation", "manual", "excel"] = "evaluation"
     source_job_id: str = ""
     source_case_id: str = ""
@@ -51,6 +62,21 @@ class TestSetItem(TestSetEdit):
     reference_evidence: list[dict[str, object]] = Field(default_factory=list)
     original: TestSetFields
     source_notice: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_stored(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        original = data.get("original")
+        if isinstance(original, dict):
+            fields = TestSetFields.model_fields
+            data = {**data, "original": {k: v for k, v in original.items() if k in fields}}
+        if data.get("confirmed") and confirmation_issue(
+            str(data.get("question") or ""), str(data.get("standard_answer") or "")
+        ):
+            data = {**data, "confirmed": False}
+        return data
 
 
 class TestSetDraft(BaseModel):

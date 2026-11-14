@@ -1,7 +1,7 @@
-"""業務支援の評価の採点（対応・手順・危険な回答・条件。#1231）。
+"""業務支援の評価の採点（手順・危険な回答・条件。#1231）と、回答の対応の記録。
 
-評価のケースが期待する対応（`expected_outcomes`）・手順（`required_answer_points`）・勧めてはいけない操作
-（`forbidden_phrases`）・触れるべき条件（`required_conditions`）を、回答の記録と照らして採点する。
+評価のケースが期待する手順（`required_answer_points`）・勧めてはいけない操作（`forbidden_phrases`）・
+触れるべき条件（`required_conditions`）を、回答の記録と照らして採点する。
 どれも LLM を呼ばない決定的な判定で、語の照合は NFKC・大小文字・空白を無視する（全角・半角の違いと
 改行・空白の入り方で一致が変わらないようにする。照合は platform の採点の部品
 `pr_evaluation_scoring`。#3240）。期待する手順の別解（`acceptable_alternatives`。#1284）は、いちばん点の高い列で採点する。

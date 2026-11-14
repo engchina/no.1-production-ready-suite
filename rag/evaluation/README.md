@@ -26,9 +26,9 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run` は、外部から直接呼ぶ
 利用のために残していますが、評価全体を 600 秒で打ち切ります（#383）。
 
-## 評価の四指標
+## 評価の指標
 
-「検索2・回答1・応答の判断1」の順に統一します。定義・閾値・Excelの入力は
+「検索2・回答1」の順に統一します。定義・閾値・Excelの入力は
 [評価・観測性・ガードレール](../docs/evaluation-observability-guardrails.md#評価)が正本です。
 
 | 分類 | 指標 | 評価入力 |
@@ -36,14 +36,12 @@ job 全体の時間の上限は、投入時の回答の回数（ケース × 往
 | 検索 | `required_evidence_recall` | 必要な本文・位置を指定した `required_evidence` |
 | 検索 | `mrr` | `relevant_document_ids`。重複を除いた引用文書の最初の正解の順位 |
 | 回答 | `answer_correctness` | 標準回答または確認済みの `required_answer_points` |
-| 応答の判断 | `response_decision_accuracy` | `expected_response_decision`: `answer` / `clarify` / `hold` |
 
 前提不足は `null`（未評価）で、0点や合格にしません。`metric_case_counts`が指標ごとの対象件数です。
-標準回答や根拠が空でも、保留を期待するとは推定しません。判断の期待は明示します。
-`expected_outcomes`を使う場合も、明示値を三つの判断へまとめます。
+確認・保留を期待するケースは、期待する返し方（例: 資料に記載がないため答えられないと伝える）を標準回答に文で書き、
+回答の正確性で採点します。標準回答・必須要点の無いケースは採点の LLM を呼ばず、正確性は未評価です。
 
-`reasoning_type_breakdown`・`hops_breakdown`・`split_breakdown`・`category_breakdown`も同じ四指標と件数です。
-`decision_breakdown`で期待する回答・確認・保留ごとの内訳を確認できます。
+`reasoning_type_breakdown`・`hops_breakdown`・`split_breakdown`・`category_breakdown`も同じ指標と件数です。
 `reasoning_type`・`hops`・`conditions`・`turns`・`include_superseded`は検索と会話の条件として使います。
 実行の失敗は平均に入れず`error_count`で数え、合格にしません。評価の未完了も合格にしません。
 総合状態`passed`は残る指標から導き、CLIは未評価・不合格・実行エラーを成功扱いにしません。
@@ -130,8 +128,8 @@ uv run python -m app.rag.evaluation_run_cli compare ../../tmp/eval/before.json .
 
 - 対にするのは両方で測れたケースだけです。片方でもエラーのケース（誤り）・測れなかったケース（欠測）は平均から除き、
   改善にも悪化にも数えません。
-- 二値の指標（値が 0 / 1 だけ。応答の判断の正解など）は改善・悪化の件数の正確な符号検定（McNemar の正確検定）の
-  p 値で、ほかの指標（MRR・回答の正確性など）は seed を固定した配対 bootstrap（ケースを単位に復元抽出）の
+- 二値の指標（値が 0 / 1 だけ。正解・不正解だけの回答の正確性など）は改善・悪化の件数の正確な符号検定（McNemar の
+  正確検定）の p 値で、ほかの指標（MRR など）は seed を固定した配対 bootstrap（ケースを単位に復元抽出）の
   percentile 区間で、差の向きを判定します。区間はどちらにも出します。同じ結果・seed・反復数なら同じ区間です。
 - 判定: `improved` / `regressed`（差の向きが確か）、`unchanged`（全ケースが同値）、`inconclusive`（区間が 0 を
   またぐ・p 値が大きい）、`insufficient_cases`（対が `--min-cases`〔既定 10〕未満の小標本）、`not_measured`。

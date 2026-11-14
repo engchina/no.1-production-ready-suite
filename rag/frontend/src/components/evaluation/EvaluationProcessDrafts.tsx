@@ -15,7 +15,6 @@ import { t } from "@/lib/i18n";
 import { useDraftEvaluationProcess } from "@/lib/queries";
 
 import { evaluationCaseRowLabel } from "./evaluation-input";
-import { outcomeLabel } from "./evaluation-metrics";
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 
@@ -205,13 +204,6 @@ function ProcessDraftTable({ drafts }: { drafts: EvaluationProcessDraft[] }) {
               )}
             />
           ),
-        },
-        {
-          key: "outcomes",
-          header: t("evaluation.process.column.outcomes"),
-          headerClassName: "hidden md:table-cell",
-          className: "hidden break-words text-xs text-fg md:table-cell",
-          render: (draft) => <Lines items={draft.expected_outcomes.map(outcomeLabel)} />,
         },
         {
           key: "warnings",

@@ -239,7 +239,7 @@ for (const viewport of [
       .getByTestId("evaluation-suite-thresholds")
       .locator("li")
       .evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().top)));
-    expect(chipTops).toHaveLength(4);
+    expect(chipTops).toHaveLength(3);
     if (viewport.maxChipRows !== null) {
       expect(new Set(chipTops).size).toBeLessThanOrEqual(viewport.maxChipRows);
     }
@@ -364,7 +364,7 @@ for (const viewport of [
 
       const ready = page.getByTestId("evaluation-import-ready");
       await expect(ready).toContainText("cases.xlsx: 2 件のケースを評価できます。");
-      await expect(ready).toContainText("回答を期待 1 件・保留を期待 1 件・標準回答あり 1 件");
+      await expect(ready).toContainText("標準回答あり 1 件・標準回答なし 1 件（回答の正確性は未評価）");
       const preview = page.getByTestId("evaluation-import-preview");
       await expect(preview.getByRole("row", { name: /経費精算の締め日/ })).toContainText("経費精算規程.pdf | p.3");
       await expect(preview.getByRole("row", { name: /社員食堂/ })).toContainText("必要な根拠の取得率は未評価");
@@ -413,7 +413,8 @@ for (const viewport of [
       await expect(evidence.getByRole("listitem").filter({ hasText: "出張旅費規程.docx" })).toContainText(
         "見つからない"
       );
-      await expect(table.getByRole("columnheader", {name:/応答の判断/})).toBeVisible();
+      // 応答の判断の列は無い（保留・確認の期待は標準回答に書き、回答の正確性で採点する。#5068）。
+      await expect(table.getByRole("columnheader", {name:/応答の判断/})).toHaveCount(0);
       await expectNoPageOverflow(page);
     }
   );
@@ -703,7 +704,7 @@ async function mockEvaluationSuiteSettings(page: Page, suite: string) {
 }
 
 function evaluationSuiteEnvelope(suite: string) {
-  const thresholds=(strict:boolean)=>({required_evidence_recall:strict?1:0.9,mrr:strict?0.8:0.6,answer_correctness:strict?1:0.9,response_decision_accuracy:strict?1:0.9});
+  const thresholds=(strict:boolean)=>({required_evidence_recall:strict?1:0.9,mrr:strict?0.8:0.6,answer_correctness:strict?1:0.9});
   const specs = [
     { name: "standard", thresholds: thresholds(false) },
     { name: "strict", thresholds: thresholds(true) },
@@ -729,18 +730,17 @@ function evaluationSuiteEnvelope(suite: string) {
 function evaluationMetrics(suite:string) {
  return {
  case_count:2,error_count:0,evaluation_suite:suite,passed:null,
- required_evidence_recall:1,mrr:0.5,answer_correctness:null,response_decision_accuracy:1,
- metric_case_counts:{required_evidence_recall:1,mrr:1,answer_correctness:0,response_decision_accuracy:2},
+ required_evidence_recall:1,mrr:0.5,answer_correctness:null,
+ metric_case_counts:{required_evidence_recall:1,mrr:1,answer_correctness:0},
  threshold_failures:[],failure_reason_counts:{},category_breakdown:{},
- decision_breakdown:{clarify:{case_count:1,error_count:0,metrics:{response_decision_accuracy:1},metric_case_counts:{response_decision_accuracy:1}}},
- case_results:[{case_id:"row-2",trace_id:"trace-1",status:"success",retrieved_document_ids:["doc-1"],relevant_document_ids:["doc-1"],hit_document_ids:["doc-1"],required_evidence_recall:1,mrr:1,answer_correctness:null,response_decision_accuracy:1,guardrail_warnings:[],missing_evidence:["evidence-2"],failure_reasons:[],diagnostics:{},elapsed_ms:1,error_type:null,error_message:null}],
+ case_results:[{case_id:"row-2",trace_id:"trace-1",status:"success",retrieved_document_ids:["doc-1"],relevant_document_ids:["doc-1"],hit_document_ids:["doc-1"],required_evidence_recall:1,mrr:1,answer_correctness:null,guardrail_warnings:[],missing_evidence:["evidence-2"],failure_reasons:[],diagnostics:{},elapsed_ms:1,error_type:null,error_message:null}],
  };
 }
 
 function evaluationMetricsWithTimedOutCase() {
   const metrics = evaluationMetrics("standard");
   const [success] = metrics.case_results;
-  const refusal={...success,case_id:"row-3",trace_id:"trace-hold",required_evidence_recall:null,mrr:null,response_decision_accuracy:1};
+  const refusal={...success,case_id:"row-3",trace_id:"trace-hold",required_evidence_recall:null,mrr:null};
   return {
     ...metrics,
     case_count: 2,
@@ -775,12 +775,12 @@ function evaluationMetricsWithTimedOutCase() {
 }
 
 for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
- test(`四指標は検索二・回答一・応答判断一で結果とケースに表示する (${viewport.name})`, async ({page}, testInfo)=>{
+ test(`三指標は検索二・回答一で結果とケースに表示する (${viewport.name})`, async ({page}, testInfo)=>{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
   await mockEvaluationJobs(page,{runResult:()=>evaluationMetrics("standard"),autoComplete:true});
   await page.goto("/evaluation");await prepareEvaluationRun(page);
   await page.getByRole("button",{name:"評価実行"}).click();
-  for (const [id,label,count] of [["retrieval","検索",2],["answer","回答",1],["decision","応答の判断",1]] as const) {
+  for (const [id,label,count] of [["retrieval","検索",2],["answer","回答",1]] as const) {
    const group=page.getByTestId(`evaluation-perspective-${id}`);
    await expect(group.getByRole("heading",{name:label,exact:true})).toBeVisible();
    await expect(group.locator("[data-testid^='evaluation-metric-']")).toHaveCount(count);
@@ -792,7 +792,8 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await expect(page.getByTestId("evaluation-metric-claim_support_rate")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-grounding")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);
-  await expect(page.getByTestId("evaluation-decision-breakdown")).toContainText("確認");
+  await expect(page.getByTestId("evaluation-perspective-decision")).toHaveCount(0);
+  await expect(page.getByTestId("evaluation-decision-breakdown")).toHaveCount(0);
   await expectNoPageOverflow(page);
   await page.screenshot({path:testInfo.outputPath("six-metrics.png"),fullPage:true});
  });
@@ -819,12 +820,12 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
 }
 
 for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
- test(`四指標の閾値未達・対象件数・分類別内訳を表示する (${viewport.name})`,async({page})=>{
+ test(`三指標の閾値未達・対象件数・分類別内訳を表示する (${viewport.name})`,async({page})=>{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
   const base=evaluationMetrics("standard");
-  const values={required_evidence_recall:0.5,mrr:0.5,answer_correctness:0,response_decision_accuracy:0};
+  const values={required_evidence_recall:0.5,mrr:0.5,answer_correctness:0};
   const counts=Object.fromEntries(Object.keys(values).map(key=>[key,1]));
-  await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,...values,passed:false,metric_case_counts:counts,threshold_failures:[{metric:"mrr",actual:0.5,threshold:0.6}],failure_reason_counts:{unexpected_handling:1},category_breakdown:{clarification_required:{case_count:1,error_count:0,metrics:values,metric_case_counts:counts}}})});
+  await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,...values,passed:false,metric_case_counts:counts,threshold_failures:[{metric:"mrr",actual:0.5,threshold:0.6}],failure_reason_counts:{retrieval_miss:1},category_breakdown:{clarification_required:{case_count:1,error_count:0,metrics:values,metric_case_counts:counts}}})});
   await page.goto("/evaluation");await prepareEvaluationRun(page);await page.getByRole("button",{name:"評価実行"}).click();
   const mrr=page.getByTestId("evaluation-metric-mrr");
   await expect(page.getByTestId("evaluation-threshold-mrr")).toHaveText(" / 60%");
@@ -838,14 +839,14 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
 }
 
 
-test("Excel の六列を全幅で表示し、長い 1 行も表の中で縦横スクロールする", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("Excel の五列を全幅で表示し、長い 1 行も表の中で縦横スクロールする", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const evidence = Array.from({length:30}, (_, i) => ({id:`e-${i}`,document_id:"doc-a",label:`資料 A.pdf | p.${i+1}`,page_start:i+1}));
   const standard = "合成の標準回答です。\n".repeat(60) + "標準回答の末尾";
   const process = "合成の回答手順です。\n".repeat(30) + "回答の過程の末尾";
   await mockEvaluationImport(page, () => evaluationImportResult({
     row_count:1,
     cases:[{id:"row-2",query:"合成の質問",relevant_document_ids:["doc-a"],required_evidence:evidence,standard_answer:standard}],
-    rows:[{row:2,case_id:"row-2",question:"合成の質問",evidence:evidence.map(e=>e.label),standard_answer_preview:"短いプレビュー",has_standard_answer:true,required_answer_points:["合成の要点"],expected_response_decision:"answer",answer_process:process}],
+    rows:[{row:2,case_id:"row-2",question:"合成の質問",evidence:evidence.map(e=>e.label),standard_answer_preview:"短いプレビュー",has_standard_answer:true,required_answer_points:["合成の要点"],answer_process:process}],
     document_names:{"doc-a":"資料 A.pdf"},
   }));
   const metrics = evaluationMetrics("standard");
@@ -855,9 +856,10 @@ test("Excel の六列を全幅で表示し、長い 1 行も表の中で縦横�
   await uploadEvaluationExcel(page);
   const preview=page.getByTestId("evaluation-import-preview");
   await expect(preview).toBeVisible();
-  for(const name of ["質問","期待する根拠","標準回答","必須の回答要点","期待する応答の判断","回答の過程"]) {
+  for(const name of ["質問","期待する根拠","標準回答","必須の回答要点","回答の過程"]) {
     await expect(preview.getByRole("columnheader",{name,exact:true})).toBeAttached();
   }
+  await expect(preview.getByRole("columnheader")).toHaveCount(6);
   await expect(preview).toContainText("標準回答の末尾");
   await expect(preview).toContainText("回答の過程の末尾");
   const uploadBox=await page.getByTestId("evaluation-request-upload").boundingBox();

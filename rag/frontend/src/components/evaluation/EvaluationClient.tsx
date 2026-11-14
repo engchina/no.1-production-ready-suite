@@ -974,6 +974,11 @@ function EvaluationComparisonResult({
           <CardDescription>
             {t("evaluation.compare.description", { name, baseName: baseName ?? "" })}
           </CardDescription>
+          {/* 指標の差は技術エラーを除いて計算するので、各条件の判定と技術エラーを見出しに分けて示す（#5074）。 */}
+          <div className="flex flex-wrap items-center gap-2" data-testid="evaluation-compare-verdicts">
+            <ComparisonVerdict label={t("evaluation.compare.verdict.base", { name: baseName ?? "" })} metrics={metrics} />
+            <ComparisonVerdict label={t("evaluation.compare.verdict.compared", { name })} metrics={compared} />
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div data-testid="evaluation-compare-table">
@@ -1120,7 +1125,6 @@ function EvaluationResult({
 
         <ReferenceMetrics metrics={metrics} />
         <CategoryBreakdown metrics={metrics} />
-        <DecisionBreakdown metrics={metrics} />
 
         {failureReasons.length ? (
           <div className="rounded-md border border-border bg-surface p-4 text-sm">
@@ -1476,6 +1480,22 @@ function EvidenceCell({
  * 業務支援の採点（#1231）。回答の対応と期待どおりか（アイコンと文言）、不足の手順・危険な表現・
  * 触れていない条件。推定した対応は「（推定）」を付ける。
  */
+/** 比較の 1 条件の判定と技術エラー（見出しの状態。色だけでなく文字で示す。#5074）。 */
+function ComparisonVerdict({ label, metrics }: { label: string; metrics: EvaluationMetrics }) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
+      <span>{label}</span>
+      <PassedBadge passed={metrics.passed} />
+      {metrics.error_count > 0 ? (
+        <StatusBadge
+          variant="danger"
+          label={t("evaluation.errors", { count: metrics.error_count, total: metrics.case_count })}
+        />
+      ) : null}
+    </span>
+  );
+}
+
 function PassedBadge({ passed }: { passed: boolean | null }) {
   if (passed === null) return <StatusBadge variant="neutral" label={t("evaluation.metric.unassessed")} />;
   return (
@@ -1523,20 +1543,6 @@ function CategoryBreakdown({ metrics }: { metrics: EvaluationMetrics }) {
       />
     </div>
   );
-}
-
-function DecisionBreakdown({metrics}:{metrics:EvaluationMetrics}) {
- const rows=Object.entries(metrics.decision_breakdown ?? {}).flatMap(([decision,summary])=>summary?[{decision,...summary}]:[]);
- if (!rows.length) return null;
- const labels={answer:"evaluation.decision.answer",clarify:"evaluation.decision.clarify",hold:"evaluation.decision.hold"} as const;
- return <section className="space-y-2" data-testid="evaluation-decision-breakdown">
-   <h3 className="text-sm font-semibold text-fg">{t("evaluation.decision.breakdown")}</h3>
-   <DataTable visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader ariaLabel={t("evaluation.decision.breakdown")} rows={rows} getRowKey={row=>row.decision} columns={[
-     {key:"decision",header:t("evaluation.perspective.decision"),render:row=>row.decision in labels?t(labels[row.decision as keyof typeof labels]):row.decision},
-     {key:"count",header:t("evaluation.category.column.count"),render:row=>String(row.metric_case_counts.response_decision_accuracy ?? 0)},
-     {key:"score",header:metricLabel("response_decision_accuracy"),render:row=>formatMetricValue(row.metrics.response_decision_accuracy)},
-   ]}/>
- </section>;
 }
 
 const CATEGORY_KEYS = {

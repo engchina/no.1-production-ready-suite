@@ -192,7 +192,8 @@ export function FeedbackManagementPage() {
   const [appProfiles, setAppProfiles] = useState<ProfileSummary[]>([]);
   // フィードバック履歴で選んだ履歴は URL の `?feedback=` が唯一の情報源（共有 ListDetailLayout。#2283）。
   // 先頭の行を自動で選ばない。keep-alive の間はほかの画面の URL を読まない（useWorkspaceUrlSelection）。
-  const selection = useWorkspaceUrlSelection("feedback");
+  // すべての幅で全幅の一覧 → 全幅の詳細（ユーザー管理・Agent / RAG のフィードバックと同じ。#5071）。
+  const selection = useWorkspaceUrlSelection("feedback", { singlePane: true });
   const selectedFeedbackId = selection.selectedId ?? "";
   const [adminFeedbackRating, setAdminFeedbackRating] = useState<FeedbackRating>("good");
   const [adminFeedbackContent, setAdminFeedbackContent] = useState("");
@@ -821,9 +822,9 @@ export function FeedbackManagementPage() {
       <PageHeader wide
         title={t("nav.feedbackManagement")}
         subtitle={t("feedbackManagement.subtitle")}
-        // 1 ペイン（xl 未満）でフィードバック履歴の詳細を開いているときだけ、左上に「一覧へ戻る」（#2283）。
+        // フィードバック履歴の詳細を開いているときだけ、左上に「一覧へ戻る」（#2283・#5071）。
         back={
-          activeView === "appFeedback" && !selection.split && selectedFeedbackId
+          activeView === "appFeedback" && selectedFeedbackId
             ? {
                 label: t("common.backToList"),
                 onClick: () => void backToFeedbackList(),
@@ -1182,10 +1183,12 @@ export function FeedbackManagementPage() {
             // 一覧と詳細の列がそれぞれ枠を持つので、外側の枠を付けない（#2281・#2283）。
             framed={false}
           >
-            {/* フィードバック履歴の一覧 + 管理者レビュー（B 型。共有 ListDetailLayout。#2283）。xl 以上は
-                「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン（一覧 → 詳細 → 「一覧へ戻る」）。 */}
+            {/* フィードバック履歴の全幅の一覧 → 全幅の管理者レビュー（共有 ListDetailLayout の single。#5071）。
+                一覧 → 詳細 → 「一覧へ戻る」をすべての幅で同じにする。 */}
             <ListDetailLayout
               id={APP_FEEDBACK_LIST_DETAIL_ID}
+              layout="single"
+              listVariant="table"
               listLabel={t("feedbackManagement.appFeedback.historyList")}
               detailLabel={t("feedbackManagement.appFeedback.detailLabel")}
               storagePrefix={LIST_DETAIL_STORAGE_PREFIX}
@@ -1197,7 +1200,7 @@ export function FeedbackManagementPage() {
                   </h2>
                   {/* 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。
                       「絞り込み」ボタンを置かない。#535）。検索・絞り込み・件数は共通の ListToolbar（#1891）。
-                      一覧の列は 28rem 未満なので縦に積み、絞り込みは「絞り込み（N）」のシート（#1933）。 */}
+                      絞り込みは「絞り込み（N）」のシート（#1933）。 */}
                   <ListToolbar
                     testId="feedback-app-filters"
                     count={
@@ -2012,9 +2015,8 @@ function FeedbackEntryDetailSkeleton() {
 }
 
 /**
- * フィードバック履歴の一覧の列（ListDetailLayout の狭い列。#2283）。質問（2 行まで）と補足 1 行（評価の日時・
- * 利用者評価・管理者レビュー）だけにし、実行エンジン・処理時間・業務プロファイル・コメントは詳細で見る
- * （page-archetypes.md §1 B「一覧の行」）。行は列の残りの高さの中で縦にスクロールする。
+ * フィードバック履歴の全幅の一覧（#5071）。desktop は質問・評価（利用者評価と管理者レビュー）・フィードバック日時を
+ * 列に分け、狭い画面は質問の下へ補足をまとめる。実行エンジン・処理時間・業務プロファイル・コメントは詳細で見る。
  */
 function FeedbackHistoryList({
   items,
@@ -2025,9 +2027,20 @@ function FeedbackHistoryList({
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
+  const ratedAt = (item: FeedbackRecord) => formatDateTime(item.feedback_updated_at || item.created_at);
+  const badges = (item: FeedbackRecord) => (
+    <>
+      <StatusBadge
+        variant={item.feedback_rating ? "success" : "neutral"}
+        label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
+      />
+      <StatusBadge
+        variant={item.admin_feedback_rating === "good" ? "success" : "neutral"}
+        label={adminFeedbackReviewBadgeLabel(item.admin_feedback_rating)}
+      />
+    </>
+  );
   return (
-    // 一覧 + 詳細（ListDetailLayout）の一覧の列の表で、高さは列の残りの高さ（page-archetypes.md の例外。#4636）。
-    // oxlint-disable-next-line design-system/list-height -- 一覧 + 詳細の一覧の列（高さは列が決める）
     <DataTable<FeedbackRecord>
       columns={[
         {
@@ -2035,24 +2048,16 @@ function FeedbackHistoryList({
           header: t("feedbackManagement.appFeedback.history"),
           rowHeader: true,
           className: "py-2.5 align-top",
+          headerClassName: "lg:w-[50%]",
           render: (item) => (
             <RowTitleButton
               title={<span data-testid="feedback-history-question">{item.question}</span>}
               fullTitle={item.question}
               maxLines={2}
               subtitle={
-                <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="font-sans tabular-nums text-fg">
-                    {formatDateTime(item.feedback_updated_at || item.created_at)}
-                  </span>
-                  <StatusBadge
-                    variant={item.feedback_rating ? "success" : "neutral"}
-                    label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
-                  />
-                  <StatusBadge
-                    variant={item.admin_feedback_rating === "good" ? "success" : "neutral"}
-                    label={adminFeedbackReviewBadgeLabel(item.admin_feedback_rating)}
-                  />
+                <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 lg:hidden">
+                  <span className="font-sans tabular-nums text-fg">{ratedAt(item)}</span>
+                  {badges(item)}
                 </span>
               }
               current={item.id === selectedId}
@@ -2061,6 +2066,20 @@ function FeedbackHistoryList({
               data-testid="feedback-history-row"
             />
           ),
+        },
+        {
+          key: "rating",
+          header: t("feedbackManagement.appFeedback.rating"),
+          headerClassName: "hidden lg:table-cell lg:w-[32%]",
+          className: "hidden lg:table-cell align-top",
+          render: (item) => <span className="flex flex-wrap gap-1">{badges(item)}</span>,
+        },
+        {
+          key: "createdAt",
+          header: t("feedbackManagement.appFeedback.createdAt"),
+          headerClassName: "hidden lg:table-cell lg:w-[18%]",
+          className: "hidden lg:table-cell align-top tabular-nums",
+          render: ratedAt,
         },
       ]}
       rows={items}
@@ -2071,8 +2090,7 @@ function FeedbackHistoryList({
       ariaLabel={t("feedbackManagement.appFeedback.historyList")}
       scrollTestId="feedback-history-list"
       stickyHeader
-      // 一覧の列の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
-      className="min-h-0 rounded-none border-0"
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       tableClassName="w-full table-fixed"
     />
   );

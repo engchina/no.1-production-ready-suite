@@ -116,7 +116,7 @@ def test_multi_hop_set_has_every_reasoning_type_and_both_splits() -> None:
     assert any(case.reasoning_type == "bridge" and (case.hops or 0) >= 3 for case in cases)
     for case in cases:
         assert case.hops is not None and case.required_evidence, case.id
-        assert case.required_answer_points and case.expected_outcomes, case.id
+        assert case.required_answer_points, case.id
         # 正解の文書は、必要な根拠の文書と同じ（多段は複数の文書をまたぐ）。
         assert set(case.relevant_document_ids) == {
             item.document_id for item in case.required_evidence

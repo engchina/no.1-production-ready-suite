@@ -464,7 +464,6 @@ def _preview_row(row: EvaluationExcelRow) -> EvaluationImportRow:
             else None
         ),
         has_standard_answer=answer is not None,
-        expected_response_decision=row.response_decision,
         required_answer_points=list(row.screen_lines),
         answer_process=row.answer_process,
     )
@@ -934,7 +933,6 @@ def _case_summary(case: EvaluationCase) -> dict[str, Any]:
         "query_chars": len(case.query),
         "relevant_document_ids": case.relevant_document_ids,
         "required_answer_point_count": len(case.required_answer_points),
-        "expected_response_decision": case.expected_response_decision,
         # 標準回答の本文は残さない(有無と hash だけ。#591)。
         "standard_answer_hash": (
             _hash_text(case.standard_answer) if case.standard_answer is not None else None

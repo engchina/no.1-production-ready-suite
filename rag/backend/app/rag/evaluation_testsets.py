@@ -28,6 +28,7 @@ from app.schemas.evaluation_testsets import (
     TestSetFields,
     TestSetItem,
     TestSetSaveRequest,
+    confirmation_issue,
 )
 
 
@@ -92,7 +93,6 @@ def _fields(row: EvaluationExcelRow) -> TestSetFields:
         standard_answer=row.standard_answer or "",
         evidence=[value.line for value in row.evidence],
         required_answer_points=list(row.screen_lines),
-        response_decision=row.response_decision or "answer",
         answer_process=row.answer_process or "",
     )
 
@@ -202,6 +202,8 @@ def edited_draft(previous: TestSetDraft, body: TestSetSaveRequest) -> TestSetDra
         confirmed = edit.item_id in body.confirm_item_ids or (
             edit.item_id in originals and edit.confirmed and not changed
         )
+        if confirmed and (issue := confirmation_issue(fields.question, fields.standard_answer)):
+            raise TestSetError(issue)
         items.append(old.model_copy(update={**fields.model_dump(), "confirmed": confirmed}))
     if confirmed_items := [item for item in items if item.confirmed]:
         validate_templates(confirmed_items)
@@ -223,7 +225,6 @@ def template_row(item: TestSetFields) -> EvaluationTemplateRow:
         evidence=item.evidence,
         standard_answer=item.standard_answer,
         required_answer_points=item.required_answer_points,
-        response_decision=item.response_decision,
         answer_process=item.answer_process,
     )
 

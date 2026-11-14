@@ -143,7 +143,6 @@ async function mockProcessDrafts(page: Page) {
             row: 2,
             required_answer_points: ["設定画面A", "通知の設定"],
             required_conditions: ["利用者が管理者か"],
-            expected_outcomes: ["answered", "conditional"],
             relevant_document_ids: ["doc-a"],
             required_evidence: [
               { id: "p1", document_id: "doc-a", page_start: 12, page_end: 14, label: "操作手順書A.pdf | p.12-14" },
@@ -211,11 +210,9 @@ function metrics(overrides: Record<string, unknown>, caseOverrides: Record<strin
     evaluation_suite: "standard",
     required_evidence_recall: 1,
     mrr: 1,
-    response_decision_accuracy: 1,
     metric_case_counts: {
       required_evidence_recall: 1,
       mrr: 1,
-      response_decision_accuracy: 1,
       answer_correctness: 1,
     },
     passed: true,
@@ -254,7 +251,8 @@ for (const viewport of [
         comparison: {
           search_answer_profile_id: "profile-1",
           metrics: metrics(
-            { answer_correctness: 1, requirement_coverage: 1, claim_support_rate: 1 },
+            // 比較対象の判定は要改善・技術エラー 1 件（指標の差とは別に見出しで示す。#5074）。
+            { answer_correctness: 1, requirement_coverage: 1, claim_support_rate: 1, passed: false, error_count: 1 },
             {
               trace_id: "trace-b",
               screen_match: true,
@@ -325,13 +323,20 @@ for (const viewport of [
     await expectEvaluationCard(page, page.getByTestId("evaluation-result-card"));
     await expect(comparison.getByTestId("evaluation-result-card")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "検索・回答プロファイルの比較" })).toBeVisible();
+    // 各条件の判定と技術エラーは、指標の差の表とは分けて見出しに出す（#5074）。
+    const verdicts = comparison.getByTestId("evaluation-compare-verdicts");
+    await expect(verdicts).toContainText("主条件「");
+    await expect(verdicts).toContainText("合格");
+    await expect(verdicts).toContainText("比較対象「プロファイル B」");
+    await expect(verdicts).toContainText("要改善");
+    await expect(verdicts).toContainText("失敗したケース 1 / 1 件");
     const correctnessRow=table.getByRole("row",{name:/回答の正確性/});
     await expect(correctnessRow).toContainText("+100pt");
     await expect(correctnessRow).toContainText("改善");
     // 古い結果に残る網羅・裏付けの値は、比べる表にも指標の欄にも出さない（#4781）。
     await expect(table.getByRole("row",{name:/回答の網羅性|根拠への忠実性/})).toHaveCount(0);
     await expect(table.getByRole("row",{name:/必要な根拠の取得率/})).toContainText("変化なし");
-    await expect(table.getByRole("row")).toHaveCount(5);
+    await expect(table.getByRole("row")).toHaveCount(4); // 見出し＋三指標（#5068）
     await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);
     await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("0%");
     await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toHaveCount(0);

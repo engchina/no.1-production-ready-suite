@@ -1,5 +1,5 @@
 {
-  "description": "評価セットごとの集計の基線。case_fixtures は cases/ の fixture の id（この順に流す）。expected.metrics・denominators・cli は段 2（rag の比較評価の CLI。採点の版 six_metrics_v1+agent_v2）の値で、suite の tests/test_baseline.py が旧形式の推定（--infer-missing-outcome）で同じ値になることを確かめる。expected.v3 は suite の既定（推定しない。six_metrics_v1+agent_v3）の集計と分母。",
+  "description": "評価セットごとの集計の基線。case_fixtures は cases/ の fixture の id（この順に流す）。expected.metrics・denominators・cli は段 2（rag の比較評価の CLI。採点の版 six_metrics_v1+agent_v2）の値で、suite の tests/test_baseline.py が旧形式の推定（--infer-missing-outcome）で同じ値になることを確かめる。expected.v3 は suite の既定（推定しない。five_metrics_v1+agent_v3）の集計と分母。",
   "suites": [
     {
       "id": "all",
@@ -23,8 +23,7 @@
       ],
       "thresholds": {
         "required_evidence_recall": 0.9,
-        "mrr": 0.9,
-        "response_decision_accuracy": 0.8
+        "mrr": 0.9
       },
       "expected": {
         "metrics": {
@@ -37,14 +36,12 @@
           "answer_correctness": null,
           "requirement_coverage": null,
           "claim_support_rate": null,
-          "response_decision_accuracy": 0.8571428571428571,
           "metric_case_counts": {
             "required_evidence_recall": 3,
             "mrr": 5,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 7
+            "claim_support_rate": 0
           },
           "passed": false,
           "threshold_failures": [
@@ -62,7 +59,6 @@
           "failure_reason_counts": {
             "evidence_miss": 1,
             "retrieval_miss": 1,
-            "unexpected_handling": 1,
             "case_error": 7
           },
           "category_breakdown": {
@@ -74,16 +70,14 @@
                 "mrr": 0.25,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.5
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 2,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             },
             "clarification_required": {
@@ -94,16 +88,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             },
             "environment_data_required": {
@@ -114,16 +106,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "knowledge_missing": {
@@ -134,16 +124,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "conflicting_sources": {
@@ -154,16 +142,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "uncategorized": {
@@ -174,16 +160,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": null
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 0
+                "claim_support_rate": 0
               }
             }
           },
@@ -196,16 +180,14 @@
                 "mrr": 0.8333333333333334,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 2,
                 "mrr": 3,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 3
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {
                 "evidence_miss": 1,
@@ -220,16 +202,14 @@
                     "mrr": 0.5,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "single_hop": {
@@ -240,16 +220,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "unspecified": {
@@ -260,16 +238,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 0,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 }
               },
@@ -282,16 +258,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "2": {
@@ -302,16 +276,14 @@
                     "mrr": 0.5,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "unspecified": {
@@ -322,16 +294,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 0,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 }
               }
@@ -344,20 +314,17 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.75
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 2,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 4
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {
                 "retrieval_miss": 1,
-                "unexpected_handling": 1,
                 "case_error": 2
               },
               "reasoning_type_breakdown": {},
@@ -371,16 +338,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": null
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 0
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {
                 "case_error": 1
@@ -398,16 +363,14 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "single_hop": {
@@ -418,16 +381,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "unspecified": {
@@ -438,16 +399,14 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 3,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 5
+                "claim_support_rate": 0
               }
             }
           },
@@ -460,16 +419,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "2": {
@@ -480,16 +437,14 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "unspecified": {
@@ -500,48 +455,14 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 3,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 5
-              }
-            }
-          },
-          "decision_breakdown": {
-            "answer": {
-              "case_count": 12,
-              "error_count": 7,
-              "metrics": {
-                "response_decision_accuracy": 0.8
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 5
-              }
-            },
-            "clarify": {
-              "case_count": 3,
-              "error_count": 1,
-              "metrics": {
-                "response_decision_accuracy": 1.0
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 2
-              }
-            },
-            "hold": {
-              "case_count": 2,
-              "error_count": 0,
-              "metrics": {
-                "response_decision_accuracy": 1.0
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             }
           },
@@ -563,16 +484,14 @@
             "mrr": 5,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 7
+            "claim_support_rate": 0
           },
           "not_evaluable": {
             "required_evidence_recall": 5,
             "mrr": 3,
             "answer_correctness": 8,
             "requirement_coverage": 8,
-            "claim_support_rate": 8,
-            "response_decision_accuracy": 1
+            "claim_support_rate": 8
           }
         },
         "cli": {
@@ -584,7 +503,6 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": 0.8571428571428571,
             "dangerous_case_count": null,
             "dangerous_case_ids": [],
             "failed_case_ids": [
@@ -606,7 +524,6 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": 1.0,
                 "reasoning_types": {
                   "bridge": {
                     "case_count": 2,
@@ -615,8 +532,7 @@
                     "mrr": 0.5,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "single_hop": {
                     "case_count": 1,
@@ -625,8 +541,7 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "unspecified": {
                     "case_count": 4,
@@ -635,8 +550,7 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   }
                 }
               },
@@ -648,7 +562,6 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": 0.75,
                 "reasoning_types": {}
               },
               "unassigned": {
@@ -659,34 +572,7 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": null,
                 "reasoning_types": {}
-              }
-            },
-            "categories": {
-              "document_answerable": {
-                "case_count": 5,
-                "handling_correct_rate": 0.5
-              },
-              "clarification_required": {
-                "case_count": 4,
-                "handling_correct_rate": 1.0
-              },
-              "environment_data_required": {
-                "case_count": 1,
-                "handling_correct_rate": 1.0
-              },
-              "knowledge_missing": {
-                "case_count": 1,
-                "handling_correct_rate": 1.0
-              },
-              "conflicting_sources": {
-                "case_count": 1,
-                "handling_correct_rate": 1.0
-              },
-              "uncategorized": {
-                "case_count": 3,
-                "handling_correct_rate": null
               }
             },
             "reasoning_types": {
@@ -697,8 +583,7 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "single_hop": {
                 "case_count": 1,
@@ -707,8 +592,7 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "unspecified": {
                 "case_count": 12,
@@ -717,8 +601,7 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               }
             },
             "hops": {
@@ -729,8 +612,7 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "2": {
                 "case_count": 2,
@@ -739,8 +621,7 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "unspecified": {
                 "case_count": 12,
@@ -749,8 +630,7 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               }
             }
           },
@@ -762,7 +642,6 @@
             "| 回答の正確性 | - |",
             "| 回答の網羅性 | - |",
             "| 根拠への忠実性 | - |",
-            "| 回答・確認・保留の判断の正しさ | 0.86 |",
             "| 危険な回答のケース | - |",
             "| 失敗したケース | 7 |",
             "| 1 問の時間の中央値（秒） | 1.10 |",
@@ -771,64 +650,49 @@
             "| dev: 回答の正確性 | - |",
             "| dev: 回答の網羅性 | - |",
             "| dev: 根拠への忠実性 | - |",
-            "| dev: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| holdout: 必要な根拠の取得率 | 1.00 |",
             "| holdout: 正解文書の順位（MRR） | 0.50 |",
             "| holdout: 回答の正確性 | - |",
             "| holdout: 回答の網羅性 | - |",
             "| holdout: 根拠への忠実性 | - |",
-            "| holdout: 回答・確認・保留の判断の正しさ | 0.75 |",
             "| unassigned: 必要な根拠の取得率 | - |",
             "| unassigned: 正解文書の順位（MRR） | - |",
             "| unassigned: 回答の正確性 | - |",
             "| unassigned: 回答の網羅性 | - |",
             "| unassigned: 根拠への忠実性 | - |",
-            "| unassigned: 回答・確認・保留の判断の正しさ | - |",
             "| bridge: 必要な根拠の取得率 | 0.50 |",
             "| bridge: 正解文書の順位（MRR） | 0.50 |",
             "| bridge: 回答の正確性 | - |",
             "| bridge: 回答の網羅性 | - |",
             "| bridge: 根拠への忠実性 | - |",
-            "| bridge: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| single_hop: 必要な根拠の取得率 | 1.00 |",
             "| single_hop: 正解文書の順位（MRR） | 1.00 |",
             "| single_hop: 回答の正確性 | - |",
             "| single_hop: 回答の網羅性 | - |",
             "| single_hop: 根拠への忠実性 | - |",
-            "| single_hop: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| unspecified: 必要な根拠の取得率 | 1.00 |",
             "| unspecified: 正解文書の順位（MRR） | 0.67 |",
             "| unspecified: 回答の正確性 | - |",
             "| unspecified: 回答の網羅性 | - |",
             "| unspecified: 根拠への忠実性 | - |",
-            "| unspecified: 回答・確認・保留の判断の正しさ | 0.80 |",
             "| 1 段: 必要な根拠の取得率 | 1.00 |",
             "| 1 段: 正解文書の順位（MRR） | 1.00 |",
             "| 1 段: 回答の正確性 | - |",
             "| 1 段: 回答の網羅性 | - |",
             "| 1 段: 根拠への忠実性 | - |",
-            "| 1 段: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| 2 段: 必要な根拠の取得率 | 0.50 |",
             "| 2 段: 正解文書の順位（MRR） | 0.50 |",
             "| 2 段: 回答の正確性 | - |",
             "| 2 段: 回答の網羅性 | - |",
             "| 2 段: 根拠への忠実性 | - |",
-            "| 2 段: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| unspecified 段: 必要な根拠の取得率 | 1.00 |",
             "| unspecified 段: 正解文書の順位（MRR） | 0.67 |",
             "| unspecified 段: 回答の正確性 | - |",
             "| unspecified 段: 回答の網羅性 | - |",
             "| unspecified 段: 根拠への忠実性 | - |",
-            "| unspecified 段: 回答・確認・保留の判断の正しさ | 0.80 |",
             "| dev / bridge: 必要な根拠の取得率 | 0.50 |",
             "| dev / single_hop: 必要な根拠の取得率 | 1.00 |",
-            "| dev / unspecified: 必要な根拠の取得率 | - |",
-            "| clarification_required: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| conflicting_sources: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| document_answerable: 回答・確認・保留の判断の正しさ | 0.50 |",
-            "| environment_data_required: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| knowledge_missing: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| uncategorized: 回答・確認・保留の判断の正しさ | - |"
+            "| dev / unspecified: 必要な根拠の取得率 | - |"
           ],
           "outcome_sources": {
             "agent_answer": 5,
@@ -844,7 +708,7 @@
         },
         "v3": {
           "metrics": {
-            "metrics_version": "six_metrics_v1+agent_v3",
+            "metrics_version": "five_metrics_v1+agent_v3",
             "case_count": 15,
             "error_count": 7,
             "required_evidence_recall": 0.8333333333333334,
@@ -852,14 +716,12 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": 1.0,
             "metric_case_counts": {
               "required_evidence_recall": 3,
               "mrr": 5,
               "answer_correctness": 0,
               "requirement_coverage": 0,
-              "claim_support_rate": 0,
-              "response_decision_accuracy": 2
+              "claim_support_rate": 0
             },
             "passed": false,
             "threshold_failures": [
@@ -888,16 +750,14 @@
                   "mrr": 0.25,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 2,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "clarification_required": {
@@ -908,16 +768,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "environment_data_required": {
@@ -928,16 +786,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "knowledge_missing": {
@@ -948,16 +804,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "conflicting_sources": {
@@ -968,16 +822,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "uncategorized": {
@@ -988,16 +840,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               }
             },
@@ -1010,16 +860,14 @@
                   "mrr": 0.8333333333333334,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 2,
                   "mrr": 3,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {
                   "evidence_miss": 1,
@@ -1034,16 +882,14 @@
                       "mrr": 0.5,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": 1.0
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 1
+                      "claim_support_rate": 0
                     }
                   },
                   "single_hop": {
@@ -1054,16 +900,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   },
                   "unspecified": {
@@ -1074,16 +918,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 0,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   }
                 },
@@ -1096,16 +938,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   },
                   "2": {
@@ -1116,16 +956,14 @@
                       "mrr": 0.5,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": 1.0
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 1
+                      "claim_support_rate": 0
                     }
                   },
                   "unspecified": {
@@ -1136,16 +974,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 0,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   }
                 }
@@ -1158,16 +994,14 @@
                   "mrr": 0.5,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 2,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {
                   "retrieval_miss": 1,
@@ -1184,16 +1018,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {
                   "case_error": 1
@@ -1211,16 +1043,14 @@
                   "mrr": 0.5,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "single_hop": {
@@ -1231,16 +1061,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "unspecified": {
@@ -1251,16 +1079,14 @@
                   "mrr": 0.6666666666666666,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 3,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               }
             },
@@ -1273,16 +1099,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "2": {
@@ -1293,16 +1117,14 @@
                   "mrr": 0.5,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "unspecified": {
@@ -1313,48 +1135,14 @@
                   "mrr": 0.6666666666666666,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 3,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
-                }
-              }
-            },
-            "decision_breakdown": {
-              "answer": {
-                "case_count": 12,
-                "error_count": 7,
-                "metrics": {
-                  "response_decision_accuracy": 1.0
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 1
-                }
-              },
-              "clarify": {
-                "case_count": 3,
-                "error_count": 1,
-                "metrics": {
-                  "response_decision_accuracy": 1.0
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 1
-                }
-              },
-              "hold": {
-                "case_count": 2,
-                "error_count": 0,
-                "metrics": {
-                  "response_decision_accuracy": null
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               }
             }
@@ -1394,28 +1182,26 @@
               },
               "answer_correctness": {
                 "scored": 0,
-                "not_applicable": 8,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
+                "not_applicable": 4,
+                "unevaluable": 4,
+                "unevaluable_reasons": {
+                  "answer_judge_unavailable": 4
+                }
               },
               "requirement_coverage": {
                 "scored": 0,
-                "not_applicable": 8,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
+                "not_applicable": 4,
+                "unevaluable": 4,
+                "unevaluable_reasons": {
+                  "answer_judge_unavailable": 4
+                }
               },
               "claim_support_rate": {
                 "scored": 0,
-                "not_applicable": 8,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
-              },
-              "response_decision_accuracy": {
-                "scored": 2,
-                "not_applicable": 1,
-                "unevaluable": 5,
+                "not_applicable": 4,
+                "unevaluable": 4,
                 "unevaluable_reasons": {
-                  "outcome_missing": 5
+                  "answer_judge_unavailable": 4
                 }
               }
             }
@@ -1438,8 +1224,7 @@
       ],
       "thresholds": {
         "required_evidence_recall": 0.9,
-        "mrr": 0.9,
-        "response_decision_accuracy": 0.8
+        "mrr": 0.9
       },
       "expected": {
         "metrics": {
@@ -1452,14 +1237,12 @@
           "answer_correctness": null,
           "requirement_coverage": null,
           "claim_support_rate": null,
-          "response_decision_accuracy": 0.8571428571428571,
           "metric_case_counts": {
             "required_evidence_recall": 3,
             "mrr": 5,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 7
+            "claim_support_rate": 0
           },
           "passed": false,
           "threshold_failures": [
@@ -1476,8 +1259,7 @@
           ],
           "failure_reason_counts": {
             "evidence_miss": 1,
-            "retrieval_miss": 1,
-            "unexpected_handling": 1
+            "retrieval_miss": 1
           },
           "category_breakdown": {
             "document_answerable": {
@@ -1488,16 +1270,14 @@
                 "mrr": 0.25,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.5
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 2,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             },
             "clarification_required": {
@@ -1508,16 +1288,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             },
             "environment_data_required": {
@@ -1528,16 +1306,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "knowledge_missing": {
@@ -1548,16 +1324,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "conflicting_sources": {
@@ -1568,16 +1342,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "uncategorized": {
@@ -1588,16 +1360,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": null
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 0
+                "claim_support_rate": 0
               }
             }
           },
@@ -1610,16 +1380,14 @@
                 "mrr": 0.8333333333333334,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 2,
                 "mrr": 3,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 3
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {
                 "evidence_miss": 1
@@ -1633,16 +1401,14 @@
                     "mrr": 0.5,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "single_hop": {
@@ -1653,16 +1419,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "unspecified": {
@@ -1673,16 +1437,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 0,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 }
               },
@@ -1695,16 +1457,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "2": {
@@ -1715,16 +1475,14 @@
                     "mrr": 0.5,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 },
                 "unspecified": {
@@ -1735,16 +1493,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 0,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 }
               }
@@ -1757,20 +1513,17 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.75
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 2,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 4
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {
-                "retrieval_miss": 1,
-                "unexpected_handling": 1
+                "retrieval_miss": 1
               },
               "reasoning_type_breakdown": {},
               "hops_breakdown": {}
@@ -1783,16 +1536,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": null
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 0
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {},
               "reasoning_type_breakdown": {},
@@ -1808,16 +1559,14 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "single_hop": {
@@ -1828,16 +1577,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "unspecified": {
@@ -1848,16 +1595,14 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 3,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 5
+                "claim_support_rate": 0
               }
             }
           },
@@ -1870,16 +1615,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "2": {
@@ -1890,16 +1633,14 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "unspecified": {
@@ -1910,48 +1651,14 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 3,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 5
-              }
-            }
-          },
-          "decision_breakdown": {
-            "answer": {
-              "case_count": 5,
-              "error_count": 0,
-              "metrics": {
-                "response_decision_accuracy": 0.8
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 5
-              }
-            },
-            "clarify": {
-              "case_count": 2,
-              "error_count": 0,
-              "metrics": {
-                "response_decision_accuracy": 1.0
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 2
-              }
-            },
-            "hold": {
-              "case_count": 2,
-              "error_count": 0,
-              "metrics": {
-                "response_decision_accuracy": 1.0
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             }
           },
@@ -1968,16 +1675,14 @@
             "mrr": 5,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 7
+            "claim_support_rate": 0
           },
           "not_evaluable": {
             "required_evidence_recall": 5,
             "mrr": 3,
             "answer_correctness": 8,
             "requirement_coverage": 8,
-            "claim_support_rate": 8,
-            "response_decision_accuracy": 1
+            "claim_support_rate": 8
           }
         },
         "cli": {
@@ -1989,7 +1694,6 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": 0.8571428571428571,
             "dangerous_case_count": null,
             "dangerous_case_ids": [],
             "failed_case_ids": [],
@@ -2003,7 +1707,6 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": 1.0,
                 "reasoning_types": {
                   "bridge": {
                     "case_count": 1,
@@ -2012,8 +1715,7 @@
                     "mrr": 0.5,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "single_hop": {
                     "case_count": 1,
@@ -2022,8 +1724,7 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "unspecified": {
                     "case_count": 1,
@@ -2032,8 +1733,7 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   }
                 }
               },
@@ -2045,7 +1745,6 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": 0.75,
                 "reasoning_types": {}
               },
               "unassigned": {
@@ -2056,34 +1755,7 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": null,
                 "reasoning_types": {}
-              }
-            },
-            "categories": {
-              "document_answerable": {
-                "case_count": 2,
-                "handling_correct_rate": 0.5
-              },
-              "clarification_required": {
-                "case_count": 2,
-                "handling_correct_rate": 1.0
-              },
-              "environment_data_required": {
-                "case_count": 1,
-                "handling_correct_rate": 1.0
-              },
-              "knowledge_missing": {
-                "case_count": 1,
-                "handling_correct_rate": 1.0
-              },
-              "conflicting_sources": {
-                "case_count": 1,
-                "handling_correct_rate": 1.0
-              },
-              "uncategorized": {
-                "case_count": 1,
-                "handling_correct_rate": null
               }
             },
             "reasoning_types": {
@@ -2094,8 +1766,7 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "single_hop": {
                 "case_count": 1,
@@ -2104,8 +1775,7 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "unspecified": {
                 "case_count": 6,
@@ -2114,8 +1784,7 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               }
             },
             "hops": {
@@ -2126,8 +1795,7 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "2": {
                 "case_count": 1,
@@ -2136,8 +1804,7 @@
                 "mrr": 0.5,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "unspecified": {
                 "case_count": 6,
@@ -2146,8 +1813,7 @@
                 "mrr": 0.6666666666666666,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 0.8
+                "claim_support_rate": null
               }
             }
           },
@@ -2159,7 +1825,6 @@
             "| 回答の正確性 | - |",
             "| 回答の網羅性 | - |",
             "| 根拠への忠実性 | - |",
-            "| 回答・確認・保留の判断の正しさ | 0.86 |",
             "| 危険な回答のケース | - |",
             "| 失敗したケース | 0 |",
             "| 1 問の時間の中央値（秒） | 1.10 |",
@@ -2168,64 +1833,49 @@
             "| dev: 回答の正確性 | - |",
             "| dev: 回答の網羅性 | - |",
             "| dev: 根拠への忠実性 | - |",
-            "| dev: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| holdout: 必要な根拠の取得率 | 1.00 |",
             "| holdout: 正解文書の順位（MRR） | 0.50 |",
             "| holdout: 回答の正確性 | - |",
             "| holdout: 回答の網羅性 | - |",
             "| holdout: 根拠への忠実性 | - |",
-            "| holdout: 回答・確認・保留の判断の正しさ | 0.75 |",
             "| unassigned: 必要な根拠の取得率 | - |",
             "| unassigned: 正解文書の順位（MRR） | - |",
             "| unassigned: 回答の正確性 | - |",
             "| unassigned: 回答の網羅性 | - |",
             "| unassigned: 根拠への忠実性 | - |",
-            "| unassigned: 回答・確認・保留の判断の正しさ | - |",
             "| bridge: 必要な根拠の取得率 | 0.50 |",
             "| bridge: 正解文書の順位（MRR） | 0.50 |",
             "| bridge: 回答の正確性 | - |",
             "| bridge: 回答の網羅性 | - |",
             "| bridge: 根拠への忠実性 | - |",
-            "| bridge: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| single_hop: 必要な根拠の取得率 | 1.00 |",
             "| single_hop: 正解文書の順位（MRR） | 1.00 |",
             "| single_hop: 回答の正確性 | - |",
             "| single_hop: 回答の網羅性 | - |",
             "| single_hop: 根拠への忠実性 | - |",
-            "| single_hop: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| unspecified: 必要な根拠の取得率 | 1.00 |",
             "| unspecified: 正解文書の順位（MRR） | 0.67 |",
             "| unspecified: 回答の正確性 | - |",
             "| unspecified: 回答の網羅性 | - |",
             "| unspecified: 根拠への忠実性 | - |",
-            "| unspecified: 回答・確認・保留の判断の正しさ | 0.80 |",
             "| 1 段: 必要な根拠の取得率 | 1.00 |",
             "| 1 段: 正解文書の順位（MRR） | 1.00 |",
             "| 1 段: 回答の正確性 | - |",
             "| 1 段: 回答の網羅性 | - |",
             "| 1 段: 根拠への忠実性 | - |",
-            "| 1 段: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| 2 段: 必要な根拠の取得率 | 0.50 |",
             "| 2 段: 正解文書の順位（MRR） | 0.50 |",
             "| 2 段: 回答の正確性 | - |",
             "| 2 段: 回答の網羅性 | - |",
             "| 2 段: 根拠への忠実性 | - |",
-            "| 2 段: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| unspecified 段: 必要な根拠の取得率 | 1.00 |",
             "| unspecified 段: 正解文書の順位（MRR） | 0.67 |",
             "| unspecified 段: 回答の正確性 | - |",
             "| unspecified 段: 回答の網羅性 | - |",
             "| unspecified 段: 根拠への忠実性 | - |",
-            "| unspecified 段: 回答・確認・保留の判断の正しさ | 0.80 |",
             "| dev / bridge: 必要な根拠の取得率 | 0.50 |",
             "| dev / single_hop: 必要な根拠の取得率 | 1.00 |",
-            "| dev / unspecified: 必要な根拠の取得率 | - |",
-            "| clarification_required: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| conflicting_sources: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| document_answerable: 回答・確認・保留の判断の正しさ | 0.50 |",
-            "| environment_data_required: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| knowledge_missing: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| uncategorized: 回答・確認・保留の判断の正しさ | - |"
+            "| dev / unspecified: 必要な根拠の取得率 | - |"
           ],
           "outcome_sources": {
             "agent_answer": 4,
@@ -2241,7 +1891,7 @@
         },
         "v3": {
           "metrics": {
-            "metrics_version": "six_metrics_v1+agent_v3",
+            "metrics_version": "five_metrics_v1+agent_v3",
             "case_count": 8,
             "error_count": 0,
             "required_evidence_recall": 0.8333333333333334,
@@ -2249,14 +1899,12 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": 1.0,
             "metric_case_counts": {
               "required_evidence_recall": 3,
               "mrr": 5,
               "answer_correctness": 0,
               "requirement_coverage": 0,
-              "claim_support_rate": 0,
-              "response_decision_accuracy": 2
+              "claim_support_rate": 0
             },
             "passed": false,
             "threshold_failures": [
@@ -2284,16 +1932,14 @@
                   "mrr": 0.25,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 2,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "clarification_required": {
@@ -2304,16 +1950,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "environment_data_required": {
@@ -2324,16 +1968,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "knowledge_missing": {
@@ -2344,16 +1986,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "conflicting_sources": {
@@ -2364,16 +2004,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "uncategorized": {
@@ -2384,16 +2022,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               }
             },
@@ -2406,16 +2042,14 @@
                   "mrr": 0.8333333333333334,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 2,
                   "mrr": 3,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {
                   "evidence_miss": 1
@@ -2429,16 +2063,14 @@
                       "mrr": 0.5,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": 1.0
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 1
+                      "claim_support_rate": 0
                     }
                   },
                   "single_hop": {
@@ -2449,16 +2081,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   },
                   "unspecified": {
@@ -2469,16 +2099,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 0,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   }
                 },
@@ -2491,16 +2119,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   },
                   "2": {
@@ -2511,16 +2137,14 @@
                       "mrr": 0.5,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": 1.0
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 1
+                      "claim_support_rate": 0
                     }
                   },
                   "unspecified": {
@@ -2531,16 +2155,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 0,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   }
                 }
@@ -2553,16 +2175,14 @@
                   "mrr": 0.5,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 2,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {
                   "retrieval_miss": 1
@@ -2578,16 +2198,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {},
                 "reasoning_type_breakdown": {},
@@ -2603,16 +2221,14 @@
                   "mrr": 0.5,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "single_hop": {
@@ -2623,16 +2239,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "unspecified": {
@@ -2643,16 +2257,14 @@
                   "mrr": 0.6666666666666666,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 3,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               }
             },
@@ -2665,16 +2277,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "2": {
@@ -2685,16 +2295,14 @@
                   "mrr": 0.5,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               },
               "unspecified": {
@@ -2705,48 +2313,14 @@
                   "mrr": 0.6666666666666666,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 3,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
-                }
-              }
-            },
-            "decision_breakdown": {
-              "answer": {
-                "case_count": 5,
-                "error_count": 0,
-                "metrics": {
-                  "response_decision_accuracy": 1.0
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 1
-                }
-              },
-              "clarify": {
-                "case_count": 2,
-                "error_count": 0,
-                "metrics": {
-                  "response_decision_accuracy": 1.0
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 1
-                }
-              },
-              "hold": {
-                "case_count": 2,
-                "error_count": 0,
-                "metrics": {
-                  "response_decision_accuracy": null
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               }
             }
@@ -2773,28 +2347,26 @@
               },
               "answer_correctness": {
                 "scored": 0,
-                "not_applicable": 8,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
+                "not_applicable": 4,
+                "unevaluable": 4,
+                "unevaluable_reasons": {
+                  "answer_judge_unavailable": 4
+                }
               },
               "requirement_coverage": {
                 "scored": 0,
-                "not_applicable": 8,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
+                "not_applicable": 4,
+                "unevaluable": 4,
+                "unevaluable_reasons": {
+                  "answer_judge_unavailable": 4
+                }
               },
               "claim_support_rate": {
                 "scored": 0,
-                "not_applicable": 8,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
-              },
-              "response_decision_accuracy": {
-                "scored": 2,
-                "not_applicable": 1,
-                "unevaluable": 5,
+                "not_applicable": 4,
+                "unevaluable": 4,
                 "unevaluable_reasons": {
-                  "outcome_missing": 5
+                  "answer_judge_unavailable": 4
                 }
               }
             }
@@ -2811,8 +2383,7 @@
       ],
       "thresholds": {
         "required_evidence_recall": 1.0,
-        "mrr": 1.0,
-        "response_decision_accuracy": 1.0
+        "mrr": 1.0
       },
       "expected": {
         "metrics": {
@@ -2825,14 +2396,12 @@
           "answer_correctness": null,
           "requirement_coverage": null,
           "claim_support_rate": null,
-          "response_decision_accuracy": 1.0,
           "metric_case_counts": {
             "required_evidence_recall": 1,
             "mrr": 1,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 2
+            "claim_support_rate": 0
           },
           "passed": true,
           "threshold_failures": [],
@@ -2846,16 +2415,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             }
           },
@@ -2868,16 +2435,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {},
               "reasoning_type_breakdown": {
@@ -2889,16 +2454,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 }
               },
@@ -2911,16 +2474,14 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   },
                   "metric_case_counts": {
                     "required_evidence_recall": 1,
                     "mrr": 1,
                     "answer_correctness": 0,
                     "requirement_coverage": 0,
-                    "claim_support_rate": 0,
-                    "response_decision_accuracy": 1
+                    "claim_support_rate": 0
                   }
                 }
               }
@@ -2933,16 +2494,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               },
               "failure_reason_counts": {},
               "reasoning_type_breakdown": {},
@@ -2958,16 +2517,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "unspecified": {
@@ -2978,16 +2535,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             }
           },
@@ -3000,16 +2555,14 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 1,
                 "mrr": 1,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
+                "claim_support_rate": 0
               }
             },
             "unspecified": {
@@ -3020,38 +2573,14 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "metric_case_counts": {
                 "required_evidence_recall": 0,
                 "mrr": 0,
                 "answer_correctness": 0,
                 "requirement_coverage": 0,
-                "claim_support_rate": 0,
-                "response_decision_accuracy": 1
-              }
-            }
-          },
-          "decision_breakdown": {
-            "answer": {
-              "case_count": 1,
-              "error_count": 0,
-              "metrics": {
-                "response_decision_accuracy": 1.0
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 1
-              }
-            },
-            "clarify": {
-              "case_count": 2,
-              "error_count": 0,
-              "metrics": {
-                "response_decision_accuracy": 1.0
-              },
-              "metric_case_counts": {
-                "response_decision_accuracy": 2
+                "claim_support_rate": 0
               }
             }
           },
@@ -3068,16 +2597,14 @@
             "mrr": 1,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 2
+            "claim_support_rate": 0
           },
           "not_evaluable": {
             "required_evidence_recall": 1,
             "mrr": 1,
             "answer_correctness": 2,
             "requirement_coverage": 2,
-            "claim_support_rate": 2,
-            "response_decision_accuracy": 0
+            "claim_support_rate": 2
           }
         },
         "cli": {
@@ -3089,7 +2616,6 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": 1.0,
             "dangerous_case_count": null,
             "dangerous_case_ids": [],
             "failed_case_ids": [],
@@ -3103,7 +2629,6 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": 1.0,
                 "reasoning_types": {
                   "single_hop": {
                     "case_count": 1,
@@ -3112,8 +2637,7 @@
                     "mrr": 1.0,
                     "answer_correctness": null,
                     "requirement_coverage": null,
-                    "claim_support_rate": null,
-                    "response_decision_accuracy": 1.0
+                    "claim_support_rate": null
                   }
                 }
               },
@@ -3125,14 +2649,7 @@
                 "answer_correctness": null,
                 "requirement_coverage": null,
                 "claim_support_rate": null,
-                "response_decision_accuracy": 1.0,
                 "reasoning_types": {}
-              }
-            },
-            "categories": {
-              "clarification_required": {
-                "case_count": 2,
-                "handling_correct_rate": 1.0
               }
             },
             "reasoning_types": {
@@ -3143,8 +2660,7 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "unspecified": {
                 "case_count": 1,
@@ -3153,8 +2669,7 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               }
             },
             "hops": {
@@ -3165,8 +2680,7 @@
                 "mrr": 1.0,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               },
               "unspecified": {
                 "case_count": 1,
@@ -3175,8 +2689,7 @@
                 "mrr": null,
                 "answer_correctness": null,
                 "requirement_coverage": null,
-                "claim_support_rate": null,
-                "response_decision_accuracy": 1.0
+                "claim_support_rate": null
               }
             }
           },
@@ -3188,7 +2701,6 @@
             "| 回答の正確性 | - |",
             "| 回答の網羅性 | - |",
             "| 根拠への忠実性 | - |",
-            "| 回答・確認・保留の判断の正しさ | 1.00 |",
             "| 危険な回答のケース | - |",
             "| 失敗したケース | 0 |",
             "| 1 問の時間の中央値（秒） | 2.10 |",
@@ -3197,39 +2709,32 @@
             "| dev: 回答の正確性 | - |",
             "| dev: 回答の網羅性 | - |",
             "| dev: 根拠への忠実性 | - |",
-            "| dev: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| holdout: 必要な根拠の取得率 | - |",
             "| holdout: 正解文書の順位（MRR） | - |",
             "| holdout: 回答の正確性 | - |",
             "| holdout: 回答の網羅性 | - |",
             "| holdout: 根拠への忠実性 | - |",
-            "| holdout: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| single_hop: 必要な根拠の取得率 | 1.00 |",
             "| single_hop: 正解文書の順位（MRR） | 1.00 |",
             "| single_hop: 回答の正確性 | - |",
             "| single_hop: 回答の網羅性 | - |",
             "| single_hop: 根拠への忠実性 | - |",
-            "| single_hop: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| unspecified: 必要な根拠の取得率 | - |",
             "| unspecified: 正解文書の順位（MRR） | - |",
             "| unspecified: 回答の正確性 | - |",
             "| unspecified: 回答の網羅性 | - |",
             "| unspecified: 根拠への忠実性 | - |",
-            "| unspecified: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| 1 段: 必要な根拠の取得率 | 1.00 |",
             "| 1 段: 正解文書の順位（MRR） | 1.00 |",
             "| 1 段: 回答の正確性 | - |",
             "| 1 段: 回答の網羅性 | - |",
             "| 1 段: 根拠への忠実性 | - |",
-            "| 1 段: 回答・確認・保留の判断の正しさ | 1.00 |",
             "| unspecified 段: 必要な根拠の取得率 | - |",
             "| unspecified 段: 正解文書の順位（MRR） | - |",
             "| unspecified 段: 回答の正確性 | - |",
             "| unspecified 段: 回答の網羅性 | - |",
             "| unspecified 段: 根拠への忠実性 | - |",
-            "| unspecified 段: 回答・確認・保留の判断の正しさ | 1.00 |",
-            "| dev / single_hop: 必要な根拠の取得率 | 1.00 |",
-            "| clarification_required: 回答・確認・保留の判断の正しさ | 1.00 |"
+            "| dev / single_hop: 必要な根拠の取得率 | 1.00 |"
           ],
           "outcome_sources": {
             "inferred": 1,
@@ -3243,7 +2748,7 @@
         },
         "v3": {
           "metrics": {
-            "metrics_version": "six_metrics_v1+agent_v3",
+            "metrics_version": "five_metrics_v1+agent_v3",
             "case_count": 2,
             "error_count": 0,
             "required_evidence_recall": 1.0,
@@ -3251,16 +2756,14 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": 1.0,
             "metric_case_counts": {
               "required_evidence_recall": 1,
               "mrr": 1,
               "answer_correctness": 0,
               "requirement_coverage": 0,
-              "claim_support_rate": 0,
-              "response_decision_accuracy": 1
+              "claim_support_rate": 0
             },
-            "passed": null,
+            "passed": true,
             "threshold_failures": [],
             "failure_reason_counts": {},
             "category_breakdown": {
@@ -3272,16 +2775,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               }
             },
@@ -3294,16 +2795,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {},
                 "reasoning_type_breakdown": {
@@ -3315,16 +2814,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   }
                 },
@@ -3337,16 +2834,14 @@
                       "mrr": 1.0,
                       "answer_correctness": null,
                       "requirement_coverage": null,
-                      "claim_support_rate": null,
-                      "response_decision_accuracy": null
+                      "claim_support_rate": null
                     },
                     "metric_case_counts": {
                       "required_evidence_recall": 1,
                       "mrr": 1,
                       "answer_correctness": 0,
                       "requirement_coverage": 0,
-                      "claim_support_rate": 0,
-                      "response_decision_accuracy": 0
+                      "claim_support_rate": 0
                     }
                   }
                 }
@@ -3359,16 +2854,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 },
                 "failure_reason_counts": {},
                 "reasoning_type_breakdown": {},
@@ -3384,16 +2877,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "unspecified": {
@@ -3404,16 +2895,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               }
             },
@@ -3426,16 +2915,14 @@
                   "mrr": 1.0,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": null
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 1,
                   "mrr": 1,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 0
+                  "claim_support_rate": 0
                 }
               },
               "unspecified": {
@@ -3446,38 +2933,14 @@
                   "mrr": null,
                   "answer_correctness": null,
                   "requirement_coverage": null,
-                  "claim_support_rate": null,
-                  "response_decision_accuracy": 1.0
+                  "claim_support_rate": null
                 },
                 "metric_case_counts": {
                   "required_evidence_recall": 0,
                   "mrr": 0,
                   "answer_correctness": 0,
                   "requirement_coverage": 0,
-                  "claim_support_rate": 0,
-                  "response_decision_accuracy": 1
-                }
-              }
-            },
-            "decision_breakdown": {
-              "answer": {
-                "case_count": 1,
-                "error_count": 0,
-                "metrics": {
-                  "response_decision_accuracy": null
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 0
-                }
-              },
-              "clarify": {
-                "case_count": 2,
-                "error_count": 0,
-                "metrics": {
-                  "response_decision_accuracy": 1.0
-                },
-                "metric_case_counts": {
-                  "response_decision_accuracy": 1
+                  "claim_support_rate": 0
                 }
               }
             }
@@ -3504,28 +2967,26 @@
               },
               "answer_correctness": {
                 "scored": 0,
-                "not_applicable": 2,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
+                "not_applicable": 0,
+                "unevaluable": 2,
+                "unevaluable_reasons": {
+                  "answer_judge_unavailable": 2
+                }
               },
               "requirement_coverage": {
                 "scored": 0,
-                "not_applicable": 2,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
+                "not_applicable": 0,
+                "unevaluable": 2,
+                "unevaluable_reasons": {
+                  "answer_judge_unavailable": 2
+                }
               },
               "claim_support_rate": {
                 "scored": 0,
-                "not_applicable": 2,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
-              },
-              "response_decision_accuracy": {
-                "scored": 1,
                 "not_applicable": 0,
-                "unevaluable": 1,
+                "unevaluable": 2,
                 "unevaluable_reasons": {
-                  "outcome_missing": 1
+                  "answer_judge_unavailable": 2
                 }
               }
             }
@@ -3553,14 +3014,12 @@
           "answer_correctness": null,
           "requirement_coverage": null,
           "claim_support_rate": null,
-          "response_decision_accuracy": null,
           "metric_case_counts": {
             "required_evidence_recall": 0,
             "mrr": 0,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 0
+            "claim_support_rate": 0
           },
           "passed": null,
           "threshold_failures": [],
@@ -3569,7 +3028,6 @@
           "split_breakdown": {},
           "reasoning_type_breakdown": {},
           "hops_breakdown": {},
-          "decision_breakdown": {},
           "comparison": null
         },
         "denominators": {
@@ -3583,16 +3041,14 @@
             "mrr": 0,
             "answer_correctness": 0,
             "requirement_coverage": 0,
-            "claim_support_rate": 0,
-            "response_decision_accuracy": 0
+            "claim_support_rate": 0
           },
           "not_evaluable": {
             "required_evidence_recall": 1,
             "mrr": 1,
             "answer_correctness": 1,
             "requirement_coverage": 1,
-            "claim_support_rate": 1,
-            "response_decision_accuracy": 1
+            "claim_support_rate": 1
           }
         },
         "cli": {
@@ -3604,13 +3060,11 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": null,
             "dangerous_case_count": null,
             "dangerous_case_ids": [],
             "failed_case_ids": [],
             "median_elapsed_seconds": 0.2,
             "splits": {},
-            "categories": {},
             "reasoning_types": {},
             "hops": {}
           },
@@ -3622,7 +3076,6 @@
             "| 回答の正確性 | - |",
             "| 回答の網羅性 | - |",
             "| 根拠への忠実性 | - |",
-            "| 回答・確認・保留の判断の正しさ | - |",
             "| 危険な回答のケース | - |",
             "| 失敗したケース | 0 |",
             "| 1 問の時間の中央値（秒） | 0.20 |"
@@ -3638,7 +3091,7 @@
         },
         "v3": {
           "metrics": {
-            "metrics_version": "six_metrics_v1+agent_v3",
+            "metrics_version": "five_metrics_v1+agent_v3",
             "case_count": 1,
             "error_count": 0,
             "required_evidence_recall": null,
@@ -3646,14 +3099,12 @@
             "answer_correctness": null,
             "requirement_coverage": null,
             "claim_support_rate": null,
-            "response_decision_accuracy": null,
             "metric_case_counts": {
               "required_evidence_recall": 0,
               "mrr": 0,
               "answer_correctness": 0,
               "requirement_coverage": 0,
-              "claim_support_rate": 0,
-              "response_decision_accuracy": 0
+              "claim_support_rate": 0
             },
             "passed": null,
             "threshold_failures": [],
@@ -3661,8 +3112,7 @@
             "category_breakdown": {},
             "split_breakdown": {},
             "reasoning_type_breakdown": {},
-            "hops_breakdown": {},
-            "decision_breakdown": {}
+            "hops_breakdown": {}
           },
           "denominators": {
             "case_count": 1,
@@ -3697,12 +3147,6 @@
                 "unevaluable_reasons": {}
               },
               "claim_support_rate": {
-                "scored": 0,
-                "not_applicable": 1,
-                "unevaluable": 0,
-                "unevaluable_reasons": {}
-              },
-              "response_decision_accuracy": {
                 "scored": 0,
                 "not_applicable": 1,
                 "unevaluable": 0,

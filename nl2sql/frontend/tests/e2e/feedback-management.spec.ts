@@ -1,6 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
-import { expectListColumnFitsViewport } from "./_helpers/list-detail-fit";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 import { closeListToolbarFilters, listToolbarUsesSheet, openListToolbarFilters } from "./_helpers/db-object-toolbar";
 import {
@@ -188,22 +187,18 @@ async function mockFeedbackApi(page: Page, options: MockOptions = {}) {
   return state;
 }
 
-/** フィードバック履歴の一覧の列（共有 ListDetailLayout。#2283）。検索・件数・行・ページ送りを持つ。 */
+/** フィードバック履歴の全幅の一覧（共有 ListDetailLayout の single。#5071）。検索・件数・行・ページ送りを持つ。 */
 function historyList(page: Page) {
   return page.getByTestId("list-detail-feedback-management-list");
 }
 
 test("履歴検索は一覧の読み込み中もフォーカスを保ち、続けて入力できる (#968)", async ({ page }) => {
-  // 一覧（検索欄）と管理者レビューの欄を同時に見る 2 ペインの幅で確かめる（xl 未満は 1 ペイン。#2283）。
-  await page.setViewportSize({ width: 1280, height: 900 });
   const state = await mockFeedbackApi(page, { feedbackDelayMs: 600 });
   await page.goto("/feedback-management?tab=appFeedback");
   const rows = page.getByTestId("feedback-history-row");
   await expect(rows).toHaveCount(1);
-  // 先頭の行を自動で選ばない（#2283）。行を選ぶと管理者レビューの欄が出る。
+  // 先頭の行を自動で選ばない（#2283）。
   await expect(page.getByRole("button", { name: "フィードバック保存" })).toHaveCount(0);
-  await rows.first().click();
-  await expect(page).toHaveURL(/feedback=hist-sales-1/);
 
   const search = page.getByTestId("feedback-app-filters").getByRole("searchbox", { name: "履歴検索" });
   await search.click();
@@ -212,16 +207,15 @@ test("履歴検索は一覧の読み込み中もフォーカスを保ち、続�
   await expect(page.getByTestId("app-feedback-load-processing")).toBeVisible();
   await expect(search).toBeEnabled();
   await expect(search).toBeFocused();
-  // 読み込み中は一覧の行と編集欄を操作させない（読み込みの後に対象の履歴が変わることがあるため）。
+  // 読み込み中は一覧の行を操作させない（読み込みの後に対象の履歴が変わることがあるため）。
   await expect(rows.first()).toBeDisabled();
-  await expect(page.getByRole("button", { name: "フィードバック保存" })).toBeDisabled();
 
   await page.keyboard.type("額");
   await expect(search).toHaveValue("売上額");
   await expect(rows).toContainText("売上額 の推移を確認したい");
   await expect(search).toBeFocused();
   expect(state.feedbackQueries.at(-1)).toBe("売上額");
-  await expect(page.getByRole("button", { name: "フィードバック保存" })).toBeEnabled();
+  await expect(rows.first()).toBeEnabled();
 });
 
 test("ベクトルインデックスと類似検索の数値欄にキーボードで値を入力できる (#968)", async ({ page }) => {
@@ -316,22 +310,31 @@ async function box(locator: Locator) {
   return value!;
 }
 
-test("フィードバック履歴の行は質問（2 行まで）と補足 1 行の狭い一覧で、質問を切り詰めずに読める (#1764・#2283)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("フィードバック履歴は全幅の表で、desktop は質問・評価・日時の列、狭い画面は質問の下に補足を並べ、質問を切り詰めずに読める (#1764・#5071)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockFeedbackApi(page, { items: () => manyFeedbackItems(3) });
   await page.goto("/feedback-management?tab=appFeedback");
   const rows = page.getByTestId("feedback-history-row");
   await expect(rows).toHaveCount(3);
+  const wide = (page.viewportSize()?.width ?? 0) >= 1024;
+  const table = page.getByRole("table", { name: "フィードバック履歴" });
+  await expect(table.getByRole("columnheader", { name: "評価", exact: true })).toHaveCount(wide ? 1 : 0);
+  await expect(table.getByRole("columnheader", { name: "フィードバック日時", exact: true })).toHaveCount(wide ? 1 : 0);
+  // ユーザー管理と同じく、xl 以上でも分割しない（一覧は全幅、詳細は行を選んでから全幅）。
+  await expect(page.getByTestId("list-detail-feedback-management")).toHaveAttribute("data-list-detail-layout", "single");
+  await expect(page.getByTestId("list-detail-feedback-management-detail")).toBeHidden();
 
   for (const index of [0, 1, 2]) {
     const row = rows.nth(index);
     const question = row.getByTestId("feedback-history-question");
-    // 質問は 1 行目に行の全幅で出し（2 行まで折り返す）、評価のバッジは質問の下の補足の行に並べる。
+    // 質問は 1 行目に列の全幅で出し（2 行まで折り返す）。狭い画面は評価のバッジを質問の下の補足の行に並べる。
     await expect(question.locator("xpath=..")).toHaveCSS("-webkit-line-clamp", "2");
     const questionBox = await box(question.locator("xpath=.."));
     const rowBox = await box(row);
     expect(questionBox.width).toBeGreaterThanOrEqual(rowBox.width - 1);
-    const badge = row.getByText(/^利用者評価: /);
-    expect((await box(badge)).y).toBeGreaterThanOrEqual(questionBox.y + questionBox.height - 1);
+    if (!wide) {
+      const badge = row.getByText(/^利用者評価: /);
+      expect((await box(badge)).y).toBeGreaterThanOrEqual(questionBox.y + questionBox.height - 1);
+    }
     // 質問は 1〜2 文字に切り詰めず、2 行まで（2 行に収まるなら全文）見える。
     const lines = await question.locator("xpath=..").evaluate((node) => {
       const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight);
@@ -341,16 +344,16 @@ test("フィードバック履歴の行は質問（2 行まで）と補足 1 行
   }
   // コメント・実行エンジンは一覧の行に出さず、選んだ詳細で読む。
   await expect(rows.first()).not.toContainText("集計条件が違います");
-  // 一覧の行は一覧の列の中で縦にスクロールする（列は sticky で画面の高さまで）。
-  await expect(historyList(page).locator("[data-list-detail-body]")).toHaveCSS("overflow-y", "auto");
   await rows.first().click();
+  await expect(page.getByTestId("list-detail-feedback-management-list")).toBeHidden();
+  await expect(page.getByTestId("app-feedback-detail-back")).toBeVisible();
   await expect(page.getByTestId("app-feedback-selected-engine")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "利用者コメント（feedback_content）" })).toHaveValue("集計条件が違います");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("feedback-history-rows.png"), fullPage: true });
 });
 
-test("フィードバック履歴は 26 件以上で 25 件ずつのページを一覧の直下で移り、ページを作業状態に残す (#1764)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("フィードバック履歴は 26 件以上で 25 件ずつのページを一覧の直下で移り、ページを作業状態に残す (#1764)", { tag: "@responsive" }, async ({ page }) => {
   const state = await mockFeedbackApi(page, { items: () => manyFeedbackItems(27) });
   await page.goto("/feedback-management?tab=appFeedback");
   const pane = historyList(page);
@@ -360,13 +363,11 @@ test("フィードバック履歴は 26 件以上で 25 件ずつのページを
   expect(state.feedbackRequests[0]?.searchParams.get("limit")).toBe("25");
   await expect(pagination).toContainText("1–25 / 27 件");
   await expect(pagination).toContainText("1 / 2 ページ");
-  // ページ送りは一覧の列の下（行の直下）。
-  const surface = await box(pane.locator("[data-list-detail-body]"));
+  // ページ送りは一覧の表の直下。
+  const surface = await box(pane.getByTestId("feedback-history-list"));
   const pager = await box(pagination);
   expect(pager.y).toBeGreaterThanOrEqual(surface.y + surface.height - 1);
   expect(pager.y - (surface.y + surface.height)).toBeLessThanOrEqual(24);
-  // 2 ペインでは一覧の列が画面の高さに収まり、ページ送りは本文をスクロールせずに見える（#2330）。
-  if (testInfo.project.name === "desktop") await expectListColumnFitsViewport(page, "feedback-management");
 
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(rows).toHaveCount(2);
@@ -375,7 +376,7 @@ test("フィードバック履歴は 26 件以上で 25 件ずつのページを
   await expect(rows.first()).not.toHaveAttribute("aria-current", /.*/);
   await rows.first().click();
   await expect(page.getByTestId("app-feedback-selected-question")).toContainText("26:");
-  if (await page.getByTestId("app-feedback-detail-back").isVisible()) await page.getByTestId("app-feedback-detail-back").click();
+  await page.getByTestId("app-feedback-detail-back").click();
 
   await page.reload();
   await expect(rows).toHaveCount(2);
@@ -508,9 +509,9 @@ test("履歴の絞り込みは FilterSelect で 1 行にそろい、狭い画面
       const toolbar = page.getByTestId("feedback-app-filters");
       await expect(toolbar.getByRole("searchbox", { name: "履歴検索" })).toBeVisible();
       await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
-      // 検索・利用者評価・業務プロファイルの 3 つ。ツールバーが 28rem 未満ならシートにまとめる
-      // （一覧の列は既定 20rem なので、広い画面でもシート。#2283）。
-      expect(await listToolbarUsesSheet(toolbar), `${width}px`).toBe(true);
+      // 検索・利用者評価・業務プロファイルの 3 つ。全幅の一覧（#5071）なので、広い画面はツールバーに並べ、
+      // 狭い画面（ツールバーが 28rem 未満）はシートにまとめる。
+      expect(await listToolbarUsesSheet(toolbar), `${width}px`).toBe(width < 768);
       expect(await findToolbarMisalignment(page), `${width}px・${theme}`).toEqual([]);
       expect(await findToolbarFieldWidthMismatch(page), `${width}px・${theme}`).toEqual([]);
       expect(await findClippedPlaceholders(page), `${width}px・${theme}`).toEqual([]);
@@ -518,8 +519,10 @@ test("履歴の絞り込みは FilterSelect で 1 行にそろい、狭い画面
     }
   }
 
+  // 条件の操作と「絞り込み（N）」の表示はシートの幅で確かめる。
+  await page.setViewportSize({ width: 375, height: 900 });
   const toolbar = page.getByTestId("feedback-app-filters");
-  const clear = toolbar.getByRole("button", { name: "条件をクリア", exact: true });
+  const clear =toolbar.getByRole("button", { name: "条件をクリア", exact: true });
   await expect(clear).toHaveCount(0);
   const filters = await openListToolbarFilters(toolbar);
   const rating = filters.getByRole("combobox", { name: "利用者評価", exact: true });

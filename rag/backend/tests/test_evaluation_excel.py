@@ -81,7 +81,6 @@ def test_template_has_headers_guide_examples_and_document_sheets() -> None:
         "期待する根拠",
         "標準回答",
         "必須の回答要点",
-        "期待する応答の判断",
         "回答の過程",
     ]
     # 見出しのセルに意味・必須か任意か・書き方を注記する（形式ごとの位置の書き方も短く）。
@@ -738,7 +737,7 @@ def test_import_api_returns_cases_preview_and_document_names(
     assert preview["evidence"] == ["経費精算規程.pdf | p.3"]
     assert preview["has_standard_answer"] is True
     assert preview["standard_answer_preview"].endswith("…")
-    assert data["rows"][1]["expected_response_decision"] is None
+    assert "expected_response_decision" not in data["rows"][1]
     assert data["max_rows"] == EVALUATION_EXCEL_MAX_ROWS
 
 
@@ -860,7 +859,7 @@ def test_template_document_names_and_evidence_are_literal_text() -> None:
     assert built.cases[0].relevant_document_ids == [document.document_id]
 
 
-def test_template_examples_keep_all_six_case_columns_and_round_trip() -> None:
+def test_template_examples_keep_all_five_case_columns_and_round_trip() -> None:
     book = load_workbook(BytesIO(template_xlsx()))
     assert book.sheetnames == [
         CASES_SHEET_TITLE,
@@ -875,8 +874,7 @@ def test_template_examples_keep_all_six_case_columns_and_round_trip() -> None:
     assert tuple(cell.value for cell in examples[1]) == (*HEADERS[:3], "この例の説明", *HEADERS[3:])
     rows = list(examples.iter_rows(min_row=2, values_only=True))
     assert any(row[4] for row in rows)
-    assert {row[5] for row in rows if row[5]} == {"回答", "確認", "保留"}
-    assert any(row[6] for row in rows)
+    assert any(row[5] for row in rows)
     assert not any("別名:" in str(value) for row in rows for value in row if value)
     for row in rows:
         cases.append([*row[:3], *row[4:]])
@@ -885,11 +883,8 @@ def test_template_examples_keep_all_six_case_columns_and_round_trip() -> None:
     parsed = parse_evaluation_workbook(buffer.getvalue())
     assert parsed.issues == []
     assert len(parsed.rows) == len(rows)
-    assert {row.response_decision for row in parsed.rows if row.response_decision} == {
-        "answer",
-        "clarify",
-        "hold",
-    }
+    # 確認・保留の期待は標準回答の文で書く例がある。
+    assert sum(bool(row.standard_answer) for row in parsed.rows) >= 3
     assert any(row.screen_lines for row in parsed.rows)
     assert any(row.answer_process for row in parsed.rows)
     documents = [
@@ -908,16 +903,14 @@ def test_template_examples_keep_all_six_case_columns_and_round_trip() -> None:
     assert built.issues == []
     assert len(built.cases) == len(rows)
     assert any(case.required_answer_points for case in built.cases)
-    assert {
-        case.expected_response_decision for case in built.cases if case.expected_response_decision
-    } == {"answer", "clarify", "hold"}
 
 
 def test_template_guide_describes_current_metrics_and_unassessed_results() -> None:
     book = load_workbook(BytesIO(template_xlsx()))
     rows = list(book[GUIDE_SHEET_TITLE].iter_rows(values_only=True))
-    metrics = [row for row in rows if row[0] in {"検索", "回答", "応答の判断"}]
-    assert [row[0] for row in metrics] == ["検索", "検索", "回答", "応答の判断"]
+    metrics = [row for row in rows if row[0] in {"検索", "回答"}]
+    assert [row[0] for row in metrics] == ["検索", "検索", "回答"]
+    assert not [row for row in rows if row and row[0] == "応答の判断"]
     assert all(row[2] and row[3] for row in metrics)
     text = "\n".join(str(value) for row in rows for value in row if value)
     for phrase in [

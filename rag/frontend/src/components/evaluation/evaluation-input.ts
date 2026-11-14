@@ -42,14 +42,13 @@ export function evaluationImportIssueLocation(issue: EvaluationImportIssue): str
     : t("evaluation.import.issue.row", { row: issue.row });
 }
 
-/** 検証した Excel の件数の内訳（答えるべき質問・資料に答えが無い質問・標準回答のある行）。 */
+/** 検証した Excel の件数の内訳（標準回答のある行・無い行。無い行は回答の正確性が未評価）。 */
 export function evaluationImportCounts(result: Pick<EvaluationImportResult, "rows">) {
-  const answerable = result.rows.filter((row) => row.expected_response_decision === "answer").length;
+  const withStandardAnswer = result.rows.filter((row) => row.has_standard_answer).length;
   return {
     total: result.rows.length,
-    answerable,
-    unanswerable: result.rows.filter((row) => row.expected_response_decision === "hold").length,
-    withStandardAnswer: result.rows.filter((row) => row.has_standard_answer).length,
+    withStandardAnswer,
+    withoutStandardAnswer: result.rows.length - withStandardAnswer,
   };
 }
 
@@ -174,9 +173,6 @@ export function applyProcessDrafts<
     return {
       ...item,
       required_answer_points: [...new Set([...(item.required_answer_points ?? []), ...draft.required_answer_points])],
-      expected_outcomes: item.expected_outcomes?.length
-        ? item.expected_outcomes
-        : draft.expected_outcomes,
       required_conditions: [
         ...new Set([...(item.required_conditions ?? []), ...draft.required_conditions]),
       ],
