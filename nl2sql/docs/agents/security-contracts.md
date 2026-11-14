@@ -16,8 +16,8 @@
 
 - `SYSTEM_ADMIN` 以外が role を更新するとき、追加される実効権限 `expand_permissions(new) - expand_permissions(current)` は actor 自身の実効権限の部分集合でなければならず、違反は `403` で拒否する。暗黙 permission と `grants_all_profile_access` 相当の profile 管理権限も展開後に評価し、自分・他人いずれの role 経由でも権限昇格を許可しない。未保持の既存権限を削除する操作は妨げない。
 - role 作成は未割当のため現行どおり許可できるが、user への role 割当では既存の実効権限部分集合 check を必須とする。role/assignment 変更が次 request から再計算される前提で、変更直後の許可・拒否まで API 回帰テストに含める。
+- **安全チェック（OCI Guardrails。#5063）**: 3 製品で共通の設定（`PLATFORM_GUARDRAILS_INPUT_ENABLED` / `PLATFORM_GUARDRAILS_OUTPUT_ENABLED`、画面は「セキュリティ設定 › 安全チェック」）。判定は `pr_system_settings.guardrails`、NL2SQL の入口は `app/features/nl2sql/guardrails.py`。質問は保存・生成の前（回答前の確認の開始・確認への自由入力・ジョブの開始・DB 管理チャット。MCP も同じ service を通る）に検査し、止めた質問は保存しない（確認と DB 管理チャットは 422、ジョブは 400、code `GUARDRAIL_BLOCKED`）。個人情報は伏せた文で続ける。SQL と一緒に生成した説明の文（`explanation`）も検査し、警告は `guardrail_warnings`（DB 管理チャットは `warnings`）に出す。結果の表の値（DB の実データ）は OCI へ送らない（DB の権限と接続の分離で守る）。会話の履歴の前の質問は、保存時に検査・マスク済みのものを使い、再検査はしない。
 
 ### 状態保持の実装範囲
 
 - 保存の namespace・期限・対象画面・検証の spec は [docs/frontend-workspace-state-spec.md](../../docs/frontend-workspace-state-spec.md) に書く。SQL・生成 SQL・`ADMIN_EXECUTE` などの確認語は共通契約の「入力」「生成した結果」「確認語」として扱う。
-- **安全チェック（OCI Guardrails。#5063）**: 3 製品で共通の設定（`PLATFORM_GUARDRAILS_INPUT_ENABLED` / `PLATFORM_GUARDRAILS_OUTPUT_ENABLED`、画面は「セキュリティ設定 › 安全チェック」）。判定は `pr_system_settings.guardrails`、NL2SQL の入口は `app/features/nl2sql/guardrails.py`。質問は保存・生成の前（回答前の確認の開始・確認への自由入力・ジョブの開始・DB 管理チャット。MCP も同じ service を通る）に検査し、止めた質問は保存しない（確認と DB 管理チャットは 422、ジョブは 400、code `GUARDRAIL_BLOCKED`）。個人情報は伏せた文で続ける。SQL と一緒に生成した説明の文（`explanation`）も検査し、警告は `guardrail_warnings`（DB 管理チャットは `warnings`）に出す。結果の表の値（DB の実データ）は OCI へ送らない（DB の権限と接続の分離で守る）。会話の履歴の前の質問は、保存時に検査・マスク済みのものを使い、再検査はしない。
