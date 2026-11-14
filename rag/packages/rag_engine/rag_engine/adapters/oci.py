@@ -847,6 +847,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     （#4736。止まった判定は無音だけで、遅いだけの出力は打ち切らない）。打ち切った呼び出しは理由を未完了の理由として残す。
     stream が失敗の event で終わった呼び出し（`LlmStreamFailed`。理由は `stream_error`）と、完了の event の応答に本文が無い
     呼び出し（`LlmStreamOutputMissing`。#4197）も、同じ要求を送り直す（#2814）。
+    出力の JSON の文字列の外で空白が設定の文字数続いた呼び出し（`LlmJsonWhitespaceRun`。#5077）は、streaming なら途中で、
+    streaming しないなら返った出力の文で見分け、出力の不合格として `_parse_with_retry` の共通の枠で送り直す。
     """
     budget = llm_output_token_limit(settings, provider)
     # 役目に合わせた上限（`bind_output_cap`）があれば、それで抑えて広げない。
@@ -942,7 +944,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     observation,
                     {
                         "pr.call.transport_status": "failed",
-                        **_retry_scheduled(retry_budget.available and _is_retryable_error(exc)),
+                        **_retry_scheduled(retry_budget.available and (is_invalid_structured_output(exc) or _is_retryable_error(exc))),
                     },
                 )
                 _record_failed_call(
@@ -975,6 +977,9 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 timing=timing,
             )
             try:
+                if not streamed and _JsonWhitespaceRun(_json_whitespace_run_limit(settings)).feed(_response_output_text(response)):
+                    # streaming しない呼び出しは途中で打ち切れないので、返った出力の文で同じ基準を確かめる（#5077）。
+                    raise LlmJsonWhitespaceRun(_json_whitespace_run_limit(settings))
                 parsed = _parsed_response(response, text_format, provider)
             except IncompleteResponse as exc:
                 observation_attributes(observation, {"pr.call.validation_status": "incomplete"})
@@ -1143,6 +1148,59 @@ class LlmStreamOutputMissing(LlmStreamFailed):
         self.stream_trace = stream_trace
 
 
+class LlmJsonWhitespaceRun(InvalidStructuredOutput):
+    """構造化出力の JSON の文字列の外で、空白が設定の文字数（`settings.llm_json_whitespace_run_limit`）続いた（#5077）。
+
+    provider の制約付き生成は値と値の間の空白を制限しないので、モデルが空白だけを出し続けて出力の上限まで終わらない、
+    または文字列が途中で閉じた後に空白を出してから完了することがある。出力の不合格として、やり直しの共通の枠
+    （`_parse_with_retry`）で送り直す。streaming で打ち切った呼び出しは ``timing`` を持つ。
+    """
+
+    def __init__(self, limit: int, timing: _StreamTiming | None = None) -> None:
+        super().__init__(f"LLM の構造化出力の JSON の文字列の外で、空白が {limit} 文字続きました。出力を作り直してください。")
+        self.limit = limit
+        self.timing = timing
+
+
+_JSON_WHITESPACE = frozenset(" \t\r\n")
+
+
+class _JsonWhitespaceRun:
+    """JSON の字句の状態（文字列の内か外か・エスケープ）を追い、文字列の外の空白の連続を数える（#5077）。
+
+    文字列の中（回答の本文など）の空白・反復は数えない（#5041）。意味は判定せず、形式だけを見る。
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = max(1, int(limit))
+        self.in_string = False
+        self.escaped = False
+        self.run = 0
+
+    def feed(self, text: str) -> bool:
+        """出力の続き ``text`` を足し、文字列の外の空白が上限に届いたら True。"""
+        for char in text:
+            if self.in_string:
+                if self.escaped:
+                    self.escaped = False
+                elif char == "\\":
+                    self.escaped = True
+                elif char == '"':
+                    self.in_string = False
+            elif char in _JSON_WHITESPACE:
+                self.run += 1
+                if self.run >= self.limit:
+                    return True
+            else:
+                self.run = 0
+                self.in_string = char == '"'
+        return False
+
+
+def _json_whitespace_run_limit(settings: Settings) -> int:
+    return max(1, int(getattr(settings, "llm_json_whitespace_run_limit", 1000) or 1000))
+
+
 # 本文を除いた event の記録の上限（delta は数えるだけで並びに残さない）。
 STREAM_EVENT_TRAIL_LIMIT = 40
 
@@ -1284,7 +1342,8 @@ def _stream_parsed(
     全体の上限（LLM 1 回の timeout と回答の期限の残りの短いほう）と取り消しは event ごとに確かめる。無音を検出したら
     stream を閉じて（接続を切って）`LlmStreamStalled` を送出する（#4736。出力の速さでは打ち切らない）。
     失敗のeventと完了eventなしの切断は `LlmStreamFailed`、完了eventに本文も拒否もなければ
-    `LlmStreamOutputMissing`。本文の反復や空白の量では中止せず、providerの状態と型を確認する。
+    `LlmStreamOutputMissing`。出力の文（JSON）の字句の状態を追い、文字列の外の空白が設定の文字数続いたら stream を
+    閉じて `LlmJsonWhitespaceRun` を送出する（#5077）。文字列の中（本文）の反復や空白の量では中止しない（#5041）。
     """
     import httpx
 
@@ -1299,6 +1358,8 @@ def _stream_parsed(
     timing = _StreamTiming()
     trail = _StreamEventTrail(timing)
     text_recovery = _StreamTextRecovery()
+    whitespace_limit = _json_whitespace_run_limit(settings)
+    whitespace = _JsonWhitespaceRun(whitespace_limit)
     final: Any = None
     last = started
     try:
@@ -1322,6 +1383,8 @@ def _stream_parsed(
                     timing.last_delta_seconds = elapsed
                     if timing.first_delta_seconds is None:
                         timing.first_delta_seconds = elapsed
+                    if kind == "response.output_text.delta" and whitespace.feed(str(_value(event, "delta") or "")):
+                        raise LlmJsonWhitespaceRun(whitespace_limit, timing)
                 elif kind in {"response.completed", "response.incomplete"}:
                     final = _value(event, "response")
                 elif kind in {"response.failed", "error"}:
@@ -1329,7 +1392,7 @@ def _stream_parsed(
                 check_deadline()
                 if elapsed >= total:
                     raise TimeoutError(f"LLM の応答が {total:.0f} 秒で終わりませんでした。")
-    except (LlmStreamStalled, LlmStreamFailed, DeadlineExceeded):
+    except (LlmStreamStalled, LlmStreamFailed, LlmJsonWhitespaceRun, DeadlineExceeded):
         raise
     except Exception as exc:
         if idle_bound and _is_read_timeout(exc):
