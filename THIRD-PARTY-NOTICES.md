@@ -12,6 +12,8 @@ Unstructured parser のセキュリティ更新（#3957）では、`pyasn1` 0.6.
 
 soupsieve のセキュリティ更新（#4992）では、4.1 の PyPI 配布 metadata で MIT と Python >=3.11.5 を確認しました。rag/backend の optional extra・rag_engine・Docling / Unstructured parser の lock を更新し、新たな部品は追加していません。再配布時は配布物のライセンス原文を保持してください。
 
+OpenTelemetry のセキュリティ更新（#5049・#5050・#5051）では、`opentelemetry-api` / `opentelemetry-sdk` 1.45.2 と、両者に対応する `opentelemetry-semantic-conventions` 0.66b2 の PyPI 配布 metadata で Apache-2.0 と Python >=3.10 を確認しました。3 製品の backend と RAG の package / service の 15 個の lock を更新し、新たな部品は追加していません。再配布時は配布物のライセンス原文・通知を保持してください。
+
 ## 入手の経路と再配布
 
 この repo と、その release（`suite-v*` の Terraform stack の zip）は、自前のソースと配備のスクリプトだけを含み、下の表の第三者の binary を含みません。配備のスクリプトは、配備先の Compute で次のとおり第三者の部品を取得します。
