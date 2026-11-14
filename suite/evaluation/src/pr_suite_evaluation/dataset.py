@@ -19,31 +19,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from pr_evaluation_scoring import OUTCOMES
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 FILE_REFERENCE_PREFIX = "file:"
-# 採点する指標（製品の評価の六指標と同じ名前・同じ意味。#591）。
+# 採点する指標（製品の評価の指標と同じ名前・同じ意味。#591）。
 METRIC_NAMES: tuple[str, ...] = (
     "required_evidence_recall",
     "mrr",
     "answer_correctness",
     "requirement_coverage",
     "claim_support_rate",
-    "response_decision_accuracy",
 )
 MAX_TURNS = 5
 MAX_CONDITIONS = 30
 
-Outcome = Literal[
-    "answered",
-    "conditional",
-    "needs_clarification",
-    "needs_environment_data",
-    "needs_human",
-    "insufficient_evidence",
-]
-Decision = Literal["answer", "clarify", "hold"]
 CaseCategory = Literal[
     "document_answerable",
     "clarification_required",
@@ -76,17 +65,10 @@ def _clean_conditions(value: Mapping[str, str]) -> dict[str, str]:
     return cleaned
 
 
-class Expectation(BaseModel):
-    """往復の期待（回答・確認・保留の判断か、受け入れる対応）。"""
+class Turn(BaseModel):
+    """確認の質問への返答の 1 往復（返答の文と、返答で分かった条件）。"""
 
     model_config = ConfigDict(extra="ignore")
-
-    expected_response_decision: Decision | None = None
-    expected_outcomes: list[Outcome] = Field(default_factory=list, max_length=len(OUTCOMES))
-
-
-class Turn(Expectation):
-    """確認の質問への返答の 1 往復（返答の文と、返答で分かった条件）。"""
 
     reply: str = Field(..., min_length=1, max_length=8000)
     conditions: dict[str, str] = Field(default_factory=dict, max_length=MAX_CONDITIONS)
@@ -142,14 +124,18 @@ class Evidence(BaseModel):
         return self
 
 
-class Case(Expectation):
+class Case(BaseModel):
     """評価の 1 ケース。"""
+
+    model_config = ConfigDict(extra="ignore")
 
     id: str = Field(..., min_length=1, max_length=200)
     query: str = Field(..., min_length=1)
     relevant_document_ids: list[str] = Field(default_factory=list)
     equivalent_document_ids: dict[str, list[str]] = Field(default_factory=dict)
-    # 標準回答（suite は本文を採点に使わない。回答の指標を「評価不能」にするかの判断だけに使う）。
+    # 標準回答。確認の質問・保留（資料に無い）など期待する返し方もここに文で書く。決定的な
+    # 採点は本文を使わず、回答の指標を「評価不能」にするかの判断だけに使う（本文は LLM による
+    # 判定が読む）。
     standard_answer: str | None = None
     category: CaseCategory | None = None
     split: CaseSplit | None = None
@@ -192,10 +178,6 @@ class Case(Expectation):
             if document_id in others:
                 return canonical
         return document_id
-
-    def expectations(self) -> list[Expectation]:
-        """往復ごとの期待（最初の質問・返答の順）。"""
-        return [self, *self.turns]
 
 
 class Dataset(BaseModel):

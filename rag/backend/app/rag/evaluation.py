@@ -1,7 +1,7 @@
-"""RAG の四指標評価。検索二・回答一・応答の判断一を独立して集計する。
+"""RAG の評価。検索二・回答一の指標を独立して集計する。
 
 必要な根拠は本文・位置、MRR は重複を除いた引用文書の順位、回答は標準回答に照らした意味上の
-正確性を測る。期待する応答の判断は明示入力だけを使う。前提不足は None とし平均に入れない。
+正確性を測る（回答・確認・保留の期待も標準回答の文で比べる）。前提不足は None とし平均に入れない。
 会話の履歴・条件・区分・種類別の内訳を保ち、実行エラーと評価の未完了を合格にしない。"""
 
 import asyncio
@@ -26,14 +26,12 @@ from pr_evaluation_scoring import (
     bleu,
     count_reasons,
     evidence_matches,
-    expected_decisions,
     ndcg_at_k,
     overall_passed,
     precision_at_k,
     reciprocal_rank,
     rouge_l,
     rouge_n,
-    rounded_mean,
     skips_retrieval,
     threshold_failures,
     unique_in_order,
@@ -607,7 +605,9 @@ class EvaluationRunner:
         judge_model_id: str,
         turn_runs: Sequence[_TurnRun] | None = None,
     ) -> EvaluationAnswerJudgement | None:
-        """標準回答または期待する対応のあるケースを、本文全体で独立評価する。
+        """標準回答（必須要点・条件を含む）のあるケースを、本文全体で独立評価する。
+
+        標準回答の無いケースは判定を呼ばず、回答の正確性は未評価にする。
 
         ``judge_model_id`` は判定のモデル(#3574)。判定を完了できなかったケースにも残す。
         """
@@ -633,27 +633,9 @@ class EvaluationRunner:
             }
             for index, run in enumerate(runs)
         ]
-        expectations = [
-            {
-                "turn": index,
-                "expected_decisions": sorted(
-                    expected_decisions(
-                        expectation.expected_response_decision, expectation.expected_outcomes
-                    )
-                ),
-            }
-            for index, expectation in enumerate([case, *case.turns])
-            if expected_decisions(
-                expectation.expected_response_decision, expectation.expected_outcomes
-            )
-        ]
-        if not standard_answer and not expectations:
+        if not standard_answer:
             return None
-        evaluation_input = {
-            **evaluation_input,
-            "actual_responses": actual_responses,
-            "response_expectations": expectations,
-        }
+        evaluation_input = {**evaluation_input, "actual_responses": actual_responses}
         if self._answer_judge is None:
             return None
         remaining = _remaining_seconds(deadline)
@@ -802,7 +784,6 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
         status="completed",
         passed=passed if isinstance(passed, bool) else None,
         answer_correctness=_optional_float(evaluation.get("answer_correctness")),
-        response_decision_accuracy=_optional_float(evaluation.get("response_decision_accuracy")),
         reason=str(evaluation["correctness_reason"])
         if evaluation.get("correctness_reason")
         else None,
@@ -876,7 +857,6 @@ def summarize_case_results(
     failures = _threshold_failures(thresholds, aggregate_values)
     return EvaluationMetrics(
         metrics_version=EVALUATION_METRICS_VERSION,
-        decision_breakdown=decision_breakdown(results),
         case_count=len(results),
         error_count=error_count,
         category_breakdown=category_breakdown(results),
@@ -912,8 +892,8 @@ def score_case_answers(
 ) -> EvaluationCaseResult:
     """得た RAG の回答を、評価ランナーと同じ採点にかける（ケースの採点の入口）。
 
-    `answers` は最初の質問から順の（回答, その発話までに渡した既知の条件）。採点（対応・手順と別解・
-    危険な回答・条件・正解の文書・必要な根拠）は `EvaluationRunner.run` のケースと同じ関数で行う。
+    `answers` は最初の質問から順の（回答, その発話までに渡した既知の条件）。採点（回答の正確性・
+    正解の文書・必要な根拠）は `EvaluationRunner.run` のケースと同じ関数で行う。
     製品横断の評価（業務 Agent の Run の採点）は suite（`suite/evaluation`。#3240）が持ち、ここは
     RAG の回答（`SearchResponse`）だけを扱う。
     """
@@ -923,18 +903,6 @@ def score_case_answers(
         _TurnRun(response=response, conditions=dict(conditions)) for response, conditions in answers
     ]
     return _case_result(case, runs[-1].response, judgement, turn_runs=runs)
-
-
-def _expected_case_decisions(case: EvaluationCase) -> list[str]:
-    return sorted(
-        {
-            decision
-            for expectation in [case, *case.turns]
-            for decision in expected_decisions(
-                expectation.expected_response_decision, expectation.expected_outcomes
-            )
-        }
-    )
 
 
 def _ranking_metrics(retrieved_ids: list[str], relevant: set[str]) -> dict[str, float]:
@@ -996,27 +964,18 @@ def _case_result(
     evidence_recall, missing_evidence = _evidence_scores(case, response)
     observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
 
-    expectations_by_turn = [case, *case.turns]
     turn_results = []
-    case_decisions: set[str] = set()
-    for index, (expectation, run) in enumerate(zip(expectations_by_turn, runs, strict=False)):
-        expected = expected_decisions(
-            expectation.expected_response_decision, expectation.expected_outcomes
-        )
+    for index, run in enumerate(runs):
         actual = observed_outcome(
             run.response.diagnostics.answer, abstained=is_abstained(run.response)
         )
         # 自己申告の応答ラベルは記録にだけ残す。本文の採点は独立した全体評価が持つ。
-        correct = None
-        case_decisions.update(expected)
         turn_results.append(
             EvaluationTurnResult(
                 turn=index,
                 trace_id=run.response.trace_id,
                 observed_outcome=actual.outcome,
                 outcome_source=actual.source,
-                response_decision_accuracy=_bool_value(correct),
-                expected_decisions=sorted(expected),
                 elapsed_ms=run.response.elapsed_ms,
             )
         )
@@ -1025,11 +984,6 @@ def _case_result(
         failure_reasons.append("evidence_miss")
     if relevant and not hits and not _skips_retrieval(response):
         failure_reasons.append("retrieval_miss")
-    decision_accuracy = (
-        judgement.response_decision_accuracy if judgement and case_decisions else None
-    )
-    if decision_accuracy is not None and decision_accuracy < 1:
-        failure_reasons.append("unexpected_handling")
     if judgement is not None:
         if judgement.status != "completed":
             failure_reasons.append("answer_evaluation_error")
@@ -1050,8 +1004,6 @@ def _case_result(
         hit_document_ids=unique_in_order(hits),
         mrr=rank,
         answer_correctness=judgement.answer_correctness if judgement else None,
-        response_decision_accuracy=decision_accuracy,
-        expected_decisions=sorted(case_decisions),
         observed_outcome=observed.outcome,
         outcome_source=observed.source,
         required_evidence_recall=evidence_recall,
@@ -1141,7 +1093,6 @@ def _accumulate_case_metrics(aggregate: MetricAggregate, result: EvaluationCaseR
     aggregate.add("required_evidence_recall", result.required_evidence_recall)
     aggregate.add("mrr", result.mrr)
     aggregate.add("answer_correctness", result.answer_correctness)
-    aggregate.add("response_decision_accuracy", result.response_decision_accuracy)
     for name in EVALUATION_REPORT_ONLY_METRIC_NAMES:
         aggregate.add(name, getattr(result, name))
 
@@ -1194,7 +1145,6 @@ def _case_error_result(
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
-        expected_decisions=_expected_case_decisions(case),
         failure_reasons=["case_error"],
         elapsed_ms=elapsed,
         error_type=error_type or type(error).__name__,
@@ -1224,7 +1174,6 @@ def _case_skipped_result(
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
-        expected_decisions=_expected_case_decisions(case),
         failure_reasons=["case_error"],
         elapsed_ms=0.0,
         error_type=EVALUATION_TIME_BUDGET_ERROR_TYPE,
@@ -1285,35 +1234,8 @@ def _optional_float(value: object) -> float | None:
         return None
 
 
-def _bool_value(value: bool | None) -> float | None:
-    return None if value is None else (1.0 if value else 0.0)
-
-
-def decision_breakdown(
-    results: list[EvaluationCaseResult],
-) -> dict[str, EvaluationReasoningSummary]:
-    """期待する回答・確認・保留ごとの、測定可能なケースの内訳。"""
-    result = {}
-    for decision in ("answer", "clarify", "hold"):
-        cases = [item for item in results if decision in item.expected_decisions]
-        if not cases:
-            continue
-        values = [
-            item.response_decision_accuracy
-            for item in cases
-            if item.response_decision_accuracy is not None
-        ]
-        result[decision] = EvaluationReasoningSummary(
-            case_count=len(cases),
-            error_count=sum(item.status == "error" for item in cases),
-            metrics={"response_decision_accuracy": rounded_mean(values)},
-            metric_case_counts={"response_decision_accuracy": len(values)},
-        )
-    return result
-
-
 def category_breakdown(results: list[EvaluationCaseResult]) -> dict[str, EvaluationCategorySummary]:
-    """ケース分類別の件数。指標は四指標の集計に統一する。"""
+    """ケース分類別の件数。指標は全体の指標の集計に統一する。"""
     if not any(item.category for item in results):
         return {}
     grouped: dict[str, list[EvaluationCaseResult]] = {}

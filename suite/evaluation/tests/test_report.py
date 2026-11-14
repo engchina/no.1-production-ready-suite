@@ -27,9 +27,10 @@ def test_summary_of_a_suite_report_shows_reasoning_and_split_rows() -> None:
     summary = summarize_result(report.model_dump(mode="json"))
     assert summary["reasoning_types"]
     assert summary["hops"]
-    assert summary["unevaluable"]["response_decision_accuracy"] == 5
+    # 標準回答のあるケースは、回答の判定を suite が行わないので回答の指標が評価不能。
+    assert summary["unevaluable"]["answer_correctness"] == 4
     table = summary_markdown({"D": summary})
-    assert "| 評価不能のケース: 回答・確認・保留の判断の正しさ | 5 |" in table
+    assert "| 評価不能のケース: 回答の正確性 | 4 |" in table
     assert any(line.startswith("| dev / ") for line in table.splitlines())
 
 
@@ -37,7 +38,6 @@ def test_summary_compares_results_in_a_markdown_table() -> None:
     data: dict[str, Any] = {
         "case_count": 2,
         "error_count": 0,
-        "response_decision_accuracy": 0.5,
         "claim_support_rate": 0.5,
         "case_results": [
             {"case_id": "a", "status": "success", "elapsed_ms": 1000.0, "failure_reasons": []},
@@ -59,31 +59,23 @@ def test_summary_compares_results_in_a_markdown_table() -> None:
             "holdout": {
                 "case_count": 1,
                 "error_count": 0,
-                "metrics": {"response_decision_accuracy": 0.0},
+                "metrics": {"claim_support_rate": 0.0},
             }
         },
-        "category_breakdown": {
-            "clarification_required": {
-                "case_count": 2,
-                "error_count": 0,
-                "metrics": {"response_decision_accuracy": 0.5},
-            }
-        },
-        "denominators": {"metrics": {"response_decision_accuracy": {"unevaluable": 3}}},
+        "denominators": {"metrics": {"claim_support_rate": {"unevaluable": 3}}},
     }
     summary = summarize_result(data)
     assert summary["median_elapsed_seconds"] == 2.0
     assert summary["dangerous_case_count"] == 1
     assert summary["dangerous_case_ids"] == ["b"]
     assert summary["failed_case_ids"] == ["c"]
-    assert summary["categories"]["clarification_required"]["handling_correct_rate"] == 0.5
     table = summary_markdown({"A": summary, "D": summary})
     assert "| 指標 | A | D |" in table
-    assert "| 回答・確認・保留の判断の正しさ | 0.50 | 0.50 |" in table
-    assert "| 評価不能のケース: 回答・確認・保留の判断の正しさ | 3 | 3 |" in table
+    assert "| 根拠への忠実性 | 0.50 | 0.50 |" in table
+    assert "| 評価不能のケース: 根拠への忠実性 | 3 | 3 |" in table
     assert "| 危険な回答のケース | 1 | 1 |" in table
-    assert "| holdout: 回答・確認・保留の判断の正しさ | 0.00 | 0.00 |" in table
-    assert "| clarification_required: 回答・確認・保留の判断の正しさ | 0.50 | 0.50 |" in table
+    assert "| holdout: 根拠への忠実性 | 0.00 | 0.00 |" in table
+    assert "判断の正しさ" not in table
     assert "| 1 問の時間の中央値（秒） | 2.00 | 2.00 |" in table
 
 
@@ -116,7 +108,7 @@ def test_compare_reads_suite_records_and_shows_the_target(
     assert main(["compare", f"D={first}", f"E={second}"]) == 0
     out = capsys.readouterr().out
     assert "| 対象 | agent_mcp | agent_mcp |" in out
-    assert "| 採点の版 | six_metrics_v1+agent_v3 | six_metrics_v1+agent_v3 |" in out
+    assert "| 採点の版 | five_metrics_v1+agent_v3 | five_metrics_v1+agent_v3 |" in out
 
 
 def test_compare_rejects_other_datasets_and_product_results(

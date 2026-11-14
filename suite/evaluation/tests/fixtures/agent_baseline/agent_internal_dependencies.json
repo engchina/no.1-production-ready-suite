@@ -83,7 +83,6 @@
       "used_by": [
         "observed_outcome",
         "outcome_source",
-        "response_decision_accuracy",
         "拒答の判定（insufficient_evidence）",
         "検索の指標の対象外の判定（needs_clarification / needs_human で引用が無い）による mrr・required_evidence_recall の分母"
       ],
@@ -99,7 +98,6 @@
         "score_changes": [
           "mrr",
           "required_evidence_recall",
-          "response_decision_accuracy",
           "observed_outcome",
           "outcome_source",
           "missing_evidence",

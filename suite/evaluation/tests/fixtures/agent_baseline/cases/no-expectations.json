@@ -34,8 +34,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": null,
-      "expected_decisions": [],
       "observed_outcome": "answered",
       "outcome_source": "agent_answer",
       "missing_evidence": [],
@@ -110,8 +108,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [],
         "observed_outcome": "answered",
         "outcome_source": "agent_answer",
         "missing_evidence": [],
@@ -127,10 +123,6 @@
             "reason": null
           },
           "mrr": {
-            "status": "not_applicable",
-            "reason": null
-          },
-          "response_decision_accuracy": {
             "status": "not_applicable",
             "reason": null
           },

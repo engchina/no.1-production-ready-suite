@@ -10,15 +10,12 @@ from pr_evaluation_scoring import (
     OUTCOMES,
     MetricAggregate,
     ThresholdFailure,
-    all_correct,
     contains_normalized,
     document_hits,
     evidence_matches,
-    expected_decisions,
     location_matches,
     overall_passed,
     reciprocal_rank,
-    response_decision,
     rounded_mean,
     skips_retrieval,
     table_row_texts,
@@ -56,17 +53,6 @@ def test_outcome_vocabulary_and_decisions() -> None:
         "needs_human",
         "insufficient_evidence",
     )
-    assert [response_decision(item) for item in OUTCOMES] == [
-        "answer",
-        "answer",
-        "clarify",
-        "hold",
-        "hold",
-        "hold",
-    ]
-    assert expected_decisions("hold", ["answered"]) == {"hold"}
-    assert expected_decisions(None, ["answered", "needs_clarification"]) == {"answer", "clarify"}
-    assert expected_decisions(None, []) == set()
 
 
 def test_skips_retrieval_only_without_citations() -> None:
@@ -74,17 +60,6 @@ def test_skips_retrieval_only_without_citations() -> None:
     assert not skips_retrieval("needs_clarification", has_citations=True)
     assert not skips_retrieval("answered", has_citations=False)
     assert not skips_retrieval(None, has_citations=False)
-
-
-@pytest.mark.parametrize(
-    ("values", "expected"),
-    [([True, True], True), ([True, None], None), ([None, False], False), ([], None)],
-    ids=["all-true", "unknown", "false-wins", "empty"],
-)
-def test_all_correct_is_a_three_valued_and(
-    values: list[bool | None], expected: bool | None
-) -> None:
-    assert all_correct(values) is expected
 
 
 def test_retrieval_rank_and_hits() -> None:

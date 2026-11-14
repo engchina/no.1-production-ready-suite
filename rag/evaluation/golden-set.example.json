@@ -26,6 +26,7 @@
     {
       "id": "out-of-scope-refusal",
       "query": "社員食堂の来月の献立を教えてください。",
+      "standard_answer": "資料に記載がないため答えられないと伝える。",
       "answerable": false
     }
   ],
@@ -40,7 +41,6 @@
   "thresholds": {
     "required_evidence_recall": 0.9,
     "mrr": 0.6,
-    "answer_correctness": 0.9,
-    "response_decision_accuracy": 0.9
+    "answer_correctness": 0.9
   }
 }

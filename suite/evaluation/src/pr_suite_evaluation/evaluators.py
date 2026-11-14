@@ -1,11 +1,11 @@
 """Evaluator: 採点の入力（`CaseView`）を、評価セットの期待と照らして採点する（#3240）。
 
-指標は製品の評価の六指標と同じ名前・同じ意味で、照合・順位・判断は platform の採点の部品
+指標は製品の評価の指標と同じ名前・同じ意味で、照合・順位は platform の採点の部品
 （`pr_evaluation_scoring`）を使う。各指標は使う観測を宣言し（`METRIC_REQUIREMENTS`）、指標ごとに
 次のどれかを記録する。
 
 - scored: 測れた（値は 0〜1）。
-- not_applicable: ケースに期待が無い（正解の文書・必要な根拠・期待する対応・標準回答が無い）か、
+- not_applicable: ケースに期待が無い（正解の文書・必要な根拠・標準回答が無い）か、
   検索をしない回答（引用の無い確認の質問・人への引き継ぎ）で、指標の対象外。
 - unevaluable: 期待はあるが、観測に必要な値が無いので測れない（理由を `reason` に残す）。成功や
   推測の点数に置き換えず、平均にも分母にも入れない。
@@ -25,12 +25,9 @@ from collections.abc import Sequence
 from typing import Literal
 
 from pr_evaluation_scoring import (
-    all_correct,
     document_hits,
-    expected_decisions,
     location_matches,
     reciprocal_rank,
-    response_decision,
     skips_retrieval,
     text_matches,
     unique_in_order,
@@ -40,7 +37,7 @@ from pydantic import BaseModel, Field
 from pr_suite_evaluation.dataset import Case, CaseCategory, CaseSplit, ReasoningType
 from pr_suite_evaluation.views import CaseView, Citation, TurnView
 
-EVALUATORS_VERSION = "six_metrics_v1"
+EVALUATORS_VERSION = "five_metrics_v1"
 OUTCOME_MISSING = "outcome_missing"
 EVIDENCE_TEXT_OMITTED = "evidence_text_omitted"
 EVIDENCE_WITHHELD = "evidence_withheld"
@@ -50,7 +47,6 @@ ANSWER_METRICS = ("answer_correctness", "requirement_coverage", "claim_support_r
 METRIC_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "required_evidence_recall": ("citations.document_id", "citations.locator", "citations.text"),
     "mrr": ("citations.document_id", "outcome"),
-    "response_decision_accuracy": ("outcome",),
     "answer_correctness": ("answer_judgement",),
     "requirement_coverage": ("answer_judgement",),
     "claim_support_rate": ("answer_judgement",),
@@ -65,14 +61,12 @@ class MetricStatus(BaseModel):
 
 
 class TurnScore(BaseModel):
-    """往復ごとの応答の判断。"""
+    """往復ごとの観測（自己申告の対応と時間。期待と比べて点数にしない）。"""
 
     turn: int
     trace_id: str
     observed_outcome: str | None = None
     outcome_source: str | None = None
-    response_decision_accuracy: float | None = None
-    expected_decisions: list[str] = Field(default_factory=list)
     elapsed_ms: float
 
 
@@ -94,8 +88,6 @@ class CaseScore(BaseModel):
     answer_correctness: float | None = None
     requirement_coverage: float | None = None
     claim_support_rate: float | None = None
-    response_decision_accuracy: float | None = None
-    expected_decisions: list[str] = Field(default_factory=list)
     observed_outcome: str | None = None
     outcome_source: str | None = None
     missing_evidence: list[str] = Field(default_factory=list)
@@ -108,22 +100,6 @@ class CaseScore(BaseModel):
     error_type: str | None = None
     error_stage: str | None = None
     error_message: str | None = None
-
-
-def case_expected_decisions(case: Case) -> list[str]:
-    return sorted(
-        {
-            decision
-            for expectation in case.expectations()
-            for decision in expected_decisions(
-                expectation.expected_response_decision, expectation.expected_outcomes
-            )
-        }
-    )
-
-
-def _bool_value(value: bool | None) -> float | None:
-    return None if value is None else (1.0 if value else 0.0)
 
 
 def _scored() -> MetricStatus:
@@ -164,33 +140,17 @@ def _evidence_state(case: Case, citations: Sequence[Citation]) -> tuple[list[str
     return missing, undetermined
 
 
-def _turn_scores(
-    case: Case, views: Sequence[TurnView]
-) -> tuple[list[TurnScore], list[bool | None], set[str]]:
-    scores: list[TurnScore] = []
-    decisions: list[bool | None] = []
-    judged: set[str] = set()
-    for expectation, view in zip(case.expectations(), views, strict=False):
-        expected = expected_decisions(
-            expectation.expected_response_decision, expectation.expected_outcomes
+def _turn_scores(views: Sequence[TurnView]) -> list[TurnScore]:
+    return [
+        TurnScore(
+            turn=view.turn,
+            trace_id=view.trace_id,
+            observed_outcome=view.outcome,
+            outcome_source=view.outcome_source,
+            elapsed_ms=view.elapsed_ms,
         )
-        correct: bool | None = None
-        if expected:
-            judged.update(expected)
-            correct = None if view.outcome is None else response_decision(view.outcome) in expected
-            decisions.append(correct)
-        scores.append(
-            TurnScore(
-                turn=view.turn,
-                trace_id=view.trace_id,
-                observed_outcome=view.outcome,
-                outcome_source=view.outcome_source,
-                response_decision_accuracy=_bool_value(correct),
-                expected_decisions=sorted(expected),
-                elapsed_ms=view.elapsed_ms,
-            )
-        )
-    return scores, decisions, judged
+        for view in views
+    ]
 
 
 def score_case(case: Case, view: CaseView) -> CaseScore:
@@ -206,7 +166,6 @@ def score_case(case: Case, view: CaseView) -> CaseScore:
             hops=case.hops,
             status="error",
             relevant_document_ids=list(case.relevant_document_ids),
-            expected_decisions=case_expected_decisions(case),
             failure_reasons=["case_error"],
             elapsed_ms=view.elapsed_ms,
             error_type=failure.error_type if failure else "TargetError",
@@ -261,17 +220,6 @@ def score_case(case: Case, view: CaseView) -> CaseScore:
             if missing:
                 failure_reasons.insert(0, "evidence_miss")
 
-    turn_scores, decisions, judged = _turn_scores(case, view.turns)
-    decision = all_correct(decisions)
-    if not decisions:
-        status["response_decision_accuracy"] = _not_applicable()
-    elif decision is None:
-        status["response_decision_accuracy"] = _unevaluable(OUTCOME_MISSING)
-    else:
-        status["response_decision_accuracy"] = _scored()
-        if not decision:
-            failure_reasons.append("unexpected_handling")
-
     for name in ANSWER_METRICS:
         status[name] = (
             _unevaluable(ANSWER_JUDGE_UNAVAILABLE) if case.standard_answer else _not_applicable()
@@ -289,13 +237,11 @@ def score_case(case: Case, view: CaseView) -> CaseScore:
         hit_document_ids=hits,
         required_evidence_recall=recall,
         mrr=mrr,
-        response_decision_accuracy=_bool_value(decision),
-        expected_decisions=sorted(judged),
         observed_outcome=final.outcome,
         outcome_source=final.outcome_source,
         missing_evidence=missing,
         undetermined_evidence=undetermined,
-        turn_results=turn_scores if case.turns else [],
+        turn_results=_turn_scores(view.turns) if case.turns else [],
         failure_reasons=failure_reasons,
         metric_status={name: status[name] for name in METRIC_REQUIREMENTS},
         elapsed_ms=view.elapsed_ms,

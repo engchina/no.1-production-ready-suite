@@ -1206,7 +1206,6 @@ def _fake_evaluation_llm(
     json.loads(prompt)
     return AnswerCorrectnessOutput(
         correctness="correct",
-        response_appropriateness="not_applicable",
         reason="標準回答と一致",
     )
 

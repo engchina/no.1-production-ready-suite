@@ -132,7 +132,6 @@ def _completed_judgement(*, passed: bool = True) -> dict[str, object]:
         "status": "completed",
         "passed": passed,
         "answer_correctness": 1.0 if passed else 0.0,
-        "response_decision_accuracy": 1.0,
         "message": "",
     }
 
@@ -148,7 +147,6 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
                 query="承認条件",
                 relevant_document_ids=["doc-1"],
                 required_evidence=[EvaluationEvidence(id="e1", document_id="doc-1", text="120000")],
-                expected_response_decision="answer",
                 standard_answer="合成の標準回答",
             )
         ],
@@ -158,7 +156,6 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
     assert metrics.required_evidence_recall == 1.0
     assert metrics.mrr == 1.0
     assert metrics.answer_correctness == 1.0
-    assert metrics.response_decision_accuracy == 1.0
     assert metrics.metric_case_counts == {
         "precision_at_10": 1,
         "ndcg_at_3": 1,
@@ -173,7 +170,6 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "required_evidence_recall": 1,
         "mrr": 1,
         "answer_correctness": 1,
-        "response_decision_accuracy": 1,
     }
     assert set(metrics.metric_case_counts) == {
         *EVALUATION_METRIC_NAMES,
@@ -194,7 +190,6 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
     assert result.required_evidence_recall == 1.0
     assert result.mrr == 1.0
     assert result.answer_correctness == 1.0
-    assert result.response_decision_accuracy == 1.0
     assert result.answer_evaluation is not None
     assert result.failure_reasons == []
     assert pipeline.requests[0].top_k == 5
@@ -257,7 +252,7 @@ async def test_metrics_skip_cases_without_expectations() -> None:
     assert metrics.mrr == 0.5
     assert metrics.case_results[1].required_evidence_recall is None
     assert metrics.case_results[1].failure_reasons == ["retrieval_miss"]
-    assert metrics.response_decision_accuracy is None
+    assert metrics.answer_correctness is None
 
 
 class DuplicateChunkPipeline:
@@ -411,65 +406,71 @@ async def test_expected_refusal_case_passes_every_suite(suite: str) -> None:
     metrics = await runner.run(
         cases=[
             EvaluationCase(
-                id="case-negative", query="合成の質問", expected_response_decision="hold"
+                id="case-negative",
+                query="合成の質問",
+                standard_answer="資料に記載がないため答えられないと伝える。",
             )
         ],
         top_k=5,
         thresholds=EvaluationThresholds(
-            response_decision_accuracy=resolve_evaluation_suite(suite).response_decision_accuracy
+            answer_correctness=resolve_evaluation_suite(suite).answer_correctness
         ),
     )
     assert metrics.threshold_failures == []
     assert metrics.passed is True
-    assert metrics.response_decision_accuracy == 1
+    assert metrics.answer_correctness == 1
     assert metrics.required_evidence_recall is None
     assert metrics.mrr is None
     assert metrics.failure_reason_counts == {}
     result = metrics.case_results[0]
     assert result.observed_outcome == "insufficient_evidence"
-    assert result.response_decision_accuracy == 1
+    assert result.answer_correctness == 1
     assert result.failure_reasons == []
 
 
 async def test_answerable_case_with_no_results_counts_unexpected_refusal() -> None:
     metrics = await EvaluationRunner(
         pipeline=NoResultsPipeline(),
-        answer_judge=FakeJudge({**_completed_judgement(), "response_decision_accuracy": 0}),
+        answer_judge=FakeJudge({**_completed_judgement(), "answer_correctness": 0}),
     ).run(
         cases=[
             EvaluationCase(
                 id="positive",
                 query="合成の質問",
                 relevant_document_ids=["doc-a"],
-                expected_response_decision="answer",
+                standard_answer="合成の標準回答",
             )
         ],
         top_k=5,
     )
     assert metrics.mrr == 0
-    assert metrics.response_decision_accuracy == 0
-    assert metrics.case_results[0].failure_reasons == ["retrieval_miss", "unexpected_handling"]
+    assert metrics.answer_correctness == 0
+    assert metrics.case_results[0].failure_reasons == ["retrieval_miss", "answer_failed"]
 
 
 async def test_unanswerable_case_answered_counts_unexpected_answer() -> None:
     metrics = await EvaluationRunner(
         pipeline=StubPipeline(),
-        answer_judge=FakeJudge({**_completed_judgement(), "response_decision_accuracy": 0}),
+        answer_judge=FakeJudge({**_completed_judgement(), "answer_correctness": 0}),
     ).run(
         cases=[
-            EvaluationCase(id="negative", query="合成の質問", expected_response_decision="hold")
+            EvaluationCase(
+                id="negative",
+                query="合成の質問",
+                standard_answer="資料に記載がないため答えられないと伝える。",
+            )
         ],
         top_k=5,
     )
-    assert metrics.response_decision_accuracy == 0
-    assert metrics.case_results[0].failure_reasons == ["unexpected_handling"]
+    assert metrics.answer_correctness == 0
+    assert metrics.case_results[0].failure_reasons == ["answer_failed"]
 
 
 async def test_category_breakdown_summarizes_results_per_category() -> None:
     metrics = await EvaluationRunner(
         pipeline=StubPipeline(),
         answer_judge=FakeJudge(
-            [_completed_judgement(), {**_completed_judgement(), "response_decision_accuracy": 0}]
+            [_completed_judgement(), {**_completed_judgement(), "answer_correctness": 0}]
         ),
     ).run(
         cases=[
@@ -477,13 +478,13 @@ async def test_category_breakdown_summarizes_results_per_category() -> None:
                 id="answer",
                 query="合成の質問",
                 category="document_answerable",
-                expected_response_decision="answer",
+                standard_answer="合成の標準回答",
             ),
             EvaluationCase(
                 id="hold",
                 query="合成の質問",
                 category="knowledge_missing",
-                expected_response_decision="hold",
+                standard_answer="資料に記載がないため答えられないと伝える。",
             ),
             EvaluationCase(id="none", query="合成の質問"),
         ],
@@ -495,13 +496,9 @@ async def test_category_breakdown_summarizes_results_per_category() -> None:
         None,
     ]
     assert metrics.category_breakdown["document_answerable"].case_count == 1
-    assert (
-        metrics.category_breakdown["document_answerable"].metrics["response_decision_accuracy"] == 1
-    )
-    assert (
-        metrics.category_breakdown["knowledge_missing"].metrics["response_decision_accuracy"] == 0
-    )
-    assert metrics.category_breakdown["uncategorized"].metrics["response_decision_accuracy"] is None
+    assert metrics.category_breakdown["document_answerable"].metrics["answer_correctness"] == 1
+    assert metrics.category_breakdown["knowledge_missing"].metrics["answer_correctness"] == 0
+    assert metrics.category_breakdown["uncategorized"].metrics["answer_correctness"] is None
     assert set(metrics.category_breakdown["uncategorized"].metrics) == {
         *EVALUATION_METRIC_NAMES,
         *EVALUATION_REPORT_ONLY_METRIC_NAMES,
@@ -571,7 +568,6 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
     assert call["trace_id"] == pipeline.trace_ids[0]
     assert call["evaluation_input"] == {
         **EVALUATION_INPUT,
-        "response_expectations": [],
         "actual_responses": [
             {"question": "合成の質問", "answer_text": EVALUATION_INPUT["answer_text"]}
         ],
@@ -665,13 +661,12 @@ async def test_judgement_is_unavailable_without_answer_record_input() -> None:
         "question",
         "answer_text",
         "actual_responses",
-        "response_expectations",
     }
     assert metrics.metric_case_counts["answer_correctness"] == 1
 
 
 def test_saved_legacy_metrics_still_validate() -> None:
-    """新規の結果 schema は四指標だけを出力する。"""
+    """新規の結果 schema は今の指標だけを出力し、保存済みの削除した指標は読み捨てる。"""
     from app.schemas.evaluation import EVALUATION_METRIC_NAMES
 
     metrics = EvaluationMetrics(case_count=1, mrr=1.0)
@@ -679,8 +674,20 @@ def test_saved_legacy_metrics_still_validate() -> None:
     assert payload["metrics_version"] == "four_metrics_v2"
     assert set(EVALUATION_METRIC_NAMES) <= payload.keys()
     assert payload["answer_correctness"] is None
-    assert payload["response_decision_accuracy"] is None
-    assert not {"context_recall", "faithfulness", "answer_keyword_hit_rate"} & payload.keys()
+    assert (
+        not {
+            "context_recall",
+            "faithfulness",
+            "answer_keyword_hit_rate",
+            "response_decision_accuracy",
+            "decision_breakdown",
+        }
+        & payload.keys()
+    )
+    legacy = EvaluationMetrics.model_validate(
+        {"case_count": 1, "response_decision_accuracy": 1.0, "decision_breakdown": {}}
+    )
+    assert "response_decision_accuracy" not in legacy.model_dump()
     assert metrics.case_results == []
     assert metrics.threshold_failures == []
 
@@ -1198,9 +1205,13 @@ def test_evaluation_api_runs_against_local_pipeline(monkeypatch: MonkeyPatch) ->
         "/api/evaluation/run",
         json={
             "cases": [
-                {"id": "empty-store", "query": "合成の質問", "expected_response_decision": "hold"}
+                {
+                    "id": "empty-store",
+                    "query": "合成の質問",
+                    "standard_answer": "資料に記載がないため答えられないと伝える。",
+                }
             ],
-            "thresholds": {"response_decision_accuracy": 1},
+            "thresholds": {"answer_correctness": 1},
             "top_k": 5,
             "knowledge_base_ids": ["kb-eval-empty-isolated"],
             "suite": "strict",
@@ -1212,7 +1223,7 @@ def test_evaluation_api_runs_against_local_pipeline(monkeypatch: MonkeyPatch) ->
     assert data["case_count"] == 1
     assert data["evaluation_suite"] == "strict"
     # 答えるべきでない質問に答えなかったので合格(#301)。
-    assert data["response_decision_accuracy"] == 1.0
+    assert data["answer_correctness"] == 1.0
     assert data["required_evidence_recall"] is None
     assert data["passed"] is True
     assert data["threshold_failures"] == []
@@ -1251,7 +1262,7 @@ def test_run_evaluation_applies_suite_thresholds_when_request_omits(
 
     assert resp.status_code == 200
     assert resp.json()["data"]["evaluation_suite"] == "strict"
-    assert captured["thresholds"].response_decision_accuracy == 1.0
+    assert captured["thresholds"].answer_correctness == 1.0
 
 
 def test_run_evaluation_request_thresholds_take_precedence_over_suite(
@@ -1272,7 +1283,7 @@ def test_run_evaluation_request_thresholds_take_precedence_over_suite(
     assert resp.status_code == 200
     assert resp.json()["data"]["evaluation_suite"] == "strict"
     assert captured["thresholds"].mrr == 0.42
-    assert captured["thresholds"].response_decision_accuracy is None
+    assert captured["thresholds"].answer_correctness is None
 
     resp = client.post("/api/evaluation/run", json={**_eval_run_body(), "thresholds": {}})
     assert resp.status_code == 200
@@ -1363,7 +1374,6 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
             id="answer",
             query="合成の質問",
             category="document_answerable",
-            expected_response_decision="answer",
             required_answer_points=["合成の要点"],
             required_conditions=["合成の条件"],
         ),
@@ -1371,13 +1381,13 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
             id="clarify",
             query="合成の質問",
             category="clarification_required",
-            expected_response_decision="clarify",
+            standard_answer="条件を確認してから案内する。",
         ),
     ]
     judge = FakeJudge(
         [
             _completed_judgement(passed=False),
-            {**_completed_judgement(), "response_decision_accuracy": 0},
+            {**_completed_judgement(), "answer_correctness": 0},
         ]
     )
     metrics = await EvaluationRunner(pipeline=StubPipeline(), answer_judge=judge).run(
@@ -1385,18 +1395,15 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
     )
     first, second = metrics.case_results
     assert (first.observed_outcome, first.outcome_source) == ("answered", "inferred")
-    assert first.response_decision_accuracy == 1
     assert first.answer_correctness == 0
     assert "answer_failed" in first.failure_reasons
-    assert second.response_decision_accuracy == 0
-    assert "unexpected_handling" in second.failure_reasons
-    assert second.answer_correctness is None
-    assert metrics.response_decision_accuracy == 0.5
-    assert metrics.metric_case_counts["answer_correctness"] == 1
-    assert (
-        metrics.category_breakdown["clarification_required"].metrics["response_decision_accuracy"]
-        == 0
-    )
+    # 確認の期待は標準回答の文として正確性で採点する。
+    assert second.answer_correctness == 0
+    assert "answer_failed" in second.failure_reasons
+    assert judge.calls[1]["standard_answer"] == "条件を確認してから案内する。"
+    assert metrics.answer_correctness == 0
+    assert metrics.metric_case_counts["answer_correctness"] == 2
+    assert metrics.category_breakdown["clarification_required"].metrics["answer_correctness"] == 0
     assert "合成の条件" in str(judge.calls[0]["standard_answer"])
 
 
@@ -1465,7 +1472,7 @@ def test_clarification_is_not_a_refusal_or_retrieval_miss() -> None:
     assert is_abstained(clarify) is False
     result = _case_result(case, clarify, None)
     assert result.required_evidence_recall is None
-    assert result.response_decision_accuracy is None
+    assert result.answer_correctness is None
     assert "retrieval_miss" not in result.failure_reasons
     assert "unexpected_refusal" not in result.failure_reasons
 
@@ -1509,7 +1516,6 @@ def test_case_schema_accepts_conditions_turns_alternatives_split_and_evidence() 
             "split": "holdout",
             "conditions": {" target ": " 個別 ", "empty": " "},
             "required_answer_points": ["詳細画面", "付与"],
-            "expected_response_decision": "answer",
             "required_evidence": [
                 {"id": "e1", "document_id": "file:manual.pdf", "text": " 個別の利用者 "},
                 {"id": "e2", "document_id": " ", "text": "付与"},
@@ -1518,7 +1524,6 @@ def test_case_schema_accepts_conditions_turns_alternatives_split_and_evidence() 
                 {
                     "reply": "  個別の利用者です ",
                     "conditions": {"approved": "はい"},
-                    "expected_outcomes": ["answered"],
                 }
             ],
         }
@@ -1526,7 +1531,6 @@ def test_case_schema_accepts_conditions_turns_alternatives_split_and_evidence() 
     assert case.split == "holdout"
     assert case.conditions == {"target": "個別"}
     assert case.required_answer_points == ["詳細画面", "付与"]
-    assert case.expected_response_decision == "answer"
     assert case.turns[0].reply == "個別の利用者です"
     assert case.required_evidence[0].text == "個別の利用者"
     assert case.required_evidence[1].document_id is None
@@ -1549,7 +1553,7 @@ def test_case_schema_accepts_conditions_turns_alternatives_split_and_evidence() 
     "payload",
     [
         {"split": "train"},
-        {"expected_response_decision": "invalid"},
+        {"turns": [{"reply": "はい", "expected_outcomes": ["answered"]}]},
         {"turns": [{"reply": "はい", "unknown": 1}]},
         {"turns": [{"reply": " "}]},
         {"turns": [{"reply": "はい"}] * 6},
@@ -1561,7 +1565,7 @@ def test_case_schema_accepts_conditions_turns_alternatives_split_and_evidence() 
     ],
     ids=[
         "unknown-split",
-        "invalid-response-decision",
+        "turn-removed-outcomes",
         "turn-extra-field",
         "blank-reply",
         "too-many-turns",
@@ -1686,7 +1690,6 @@ def _multi_turn_case(**overrides: Any) -> EvaluationCase:
         "split": "dev",
         "relevant_document_ids": ["doc-manual"],
         "conditions": {"scope": "本番"},
-        "expected_outcomes": ["needs_clarification"],
         "required_conditions": ["個別", "グループ"],
         "required_evidence": [
             {"id": "grant-individual", "document_id": "doc-manual", "text": "個別の利用者に付与"},
@@ -1696,9 +1699,7 @@ def _multi_turn_case(**overrides: Any) -> EvaluationCase:
             {
                 "reply": "個別の利用者に付けます",
                 "conditions": {"target": "個別"},
-                "expected_outcomes": ["answered", "conditional"],
                 "required_answer_points": ["権限タブ", "付与"],
-                "expected_response_decision": "answer",
             }
         ],
     }
@@ -1731,19 +1732,13 @@ async def test_runner_sends_conditions_and_runs_turns_in_order_with_history() ->
     assert result.status == "success"
     assert [turn.turn for turn in result.turn_results] == [0, 1]
     clarify, answer = result.turn_results
-    assert (clarify.observed_outcome, clarify.response_decision_accuracy) == (
-        "needs_clarification",
-        None,
-    )
-    assert clarify.expected_decisions == ["clarify"]
-    # 最初の質問で聞いた target は、まだ渡していない条件なので聞き直しではない。
+    # 往復ごとの対応は記録だけ（採点しない）。
+    assert clarify.observed_outcome == "needs_clarification"
     assert clarify.turn == 0
-    # 「権限タブ」は「「権限」タブ」と一致しないが、別解（詳細画面 → 付与）で満点になる。
-    assert answer.response_decision_accuracy is None
-    assert answer.expected_decisions == ["answer"]
-    # ケースの採点: 対応はすべての往復で正しい、検索・根拠は最後の回答で測る。
+    assert answer.observed_outcome == "answered"
+    # ケースの採点: 正確性は対話の全体を標準回答と比べ、検索・根拠は最後の回答で測る。
     assert result.observed_outcome == "answered"
-    assert result.response_decision_accuracy == 1.0
+    assert result.answer_correctness == 1.0
     assert result.trace_id == second["trace_id"]
     assert result.mrr == 1.0
     assert result.elapsed_ms == 20.0
@@ -1751,19 +1746,18 @@ async def test_runner_sends_conditions_and_runs_turns_in_order_with_history() ->
     assert result.failure_reasons == ["evidence_miss"]
     assert metrics.required_evidence_recall == 0.5
     assert metrics.metric_case_counts["required_evidence_recall"] == 1
-    assert metrics.response_decision_accuracy == 1.0
+    assert metrics.answer_correctness == 1.0
 
 
 async def test_runner_flags_reasked_known_condition() -> None:
     metrics = await EvaluationRunner(
         pipeline=ConversationPipeline(reask=True),
-        answer_judge=FakeJudge({**_completed_judgement(), "response_decision_accuracy": 0}),
+        answer_judge=FakeJudge({**_completed_judgement(), "answer_correctness": 0}),
     ).run(cases=[_multi_turn_case()], top_k=5)
     result = metrics.case_results[0]
     assert result.turn_results[1].observed_outcome == "needs_clarification"
-    assert result.turn_results[1].response_decision_accuracy is None
-    assert result.response_decision_accuracy == 0.0
-    assert "unexpected_handling" in result.failure_reasons
+    assert result.answer_correctness == 0.0
+    assert "answer_failed" in result.failure_reasons
 
 
 async def test_runner_turn_failure_fails_the_case() -> None:
@@ -1796,14 +1790,12 @@ async def test_profile_evaluation_passes_prior_questions_as_guide_context() -> N
 
 async def test_split_breakdown_reports_metrics_per_split() -> None:
     cases = [
-        EvaluationCase(
-            id=identifier, query="合成の質問", split=split, expected_response_decision=decision
-        )
-        for identifier, split, decision in [
-            ("d1", "dev", "answer"),
-            ("d2", "dev", "hold"),
-            ("h1", "holdout", "answer"),
-            ("u1", None, "hold"),
+        EvaluationCase(id=identifier, query="合成の質問", split=split, standard_answer=answer)
+        for identifier, split, answer in [
+            ("d1", "dev", "合成の標準回答"),
+            ("d2", "dev", "資料に記載がないため答えられないと伝える。"),
+            ("h1", "holdout", "合成の標準回答"),
+            ("u1", None, "資料に記載がないため答えられないと伝える。"),
         ]
     ]
     metrics = await EvaluationRunner(
@@ -1811,29 +1803,29 @@ async def test_split_breakdown_reports_metrics_per_split() -> None:
         answer_judge=FakeJudge(
             [
                 _completed_judgement(),
-                {**_completed_judgement(), "response_decision_accuracy": 0},
+                {**_completed_judgement(), "answer_correctness": 0},
                 _completed_judgement(),
-                {**_completed_judgement(), "response_decision_accuracy": 0},
+                {**_completed_judgement(), "answer_correctness": 0},
             ]
         ),
     ).run(cases=cases, top_k=5)
     assert set(metrics.split_breakdown) == {"dev", "holdout", "unassigned"}
     dev = metrics.split_breakdown["dev"]
     assert (dev.case_count, dev.error_count) == (2, 0)
-    assert dev.metrics["response_decision_accuracy"] == 0.5
-    assert dev.metric_case_counts["response_decision_accuracy"] == 2
-    assert dev.failure_reason_counts == {"unexpected_handling": 1}
-    assert metrics.split_breakdown["holdout"].metrics["response_decision_accuracy"] == 1
-    assert metrics.split_breakdown["unassigned"].metrics["response_decision_accuracy"] == 0
+    assert dev.metrics["answer_correctness"] == 0.5
+    assert dev.metric_case_counts["answer_correctness"] == 2
+    assert dev.failure_reason_counts == {"answer_failed": 1}
+    assert metrics.split_breakdown["holdout"].metrics["answer_correctness"] == 1
+    assert metrics.split_breakdown["unassigned"].metrics["answer_correctness"] == 0
     assert [result.split for result in metrics.case_results] == ["dev", "dev", "holdout", None]
     plain = await EvaluationRunner(
         pipeline=StubPipeline(),
         answer_judge=FakeJudge(
             [
                 _completed_judgement(),
-                {**_completed_judgement(), "response_decision_accuracy": 0},
+                {**_completed_judgement(), "answer_correctness": 0},
                 _completed_judgement(),
-                {**_completed_judgement(), "response_decision_accuracy": 0},
+                {**_completed_judgement(), "answer_correctness": 0},
             ]
         ),
     ).run(cases=[EvaluationCase(id="p", query="合成の質問")], top_k=5)

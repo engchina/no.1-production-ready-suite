@@ -24,9 +24,6 @@
         "doc-a-copy"
       ]
     },
-    "expected_outcomes": [
-      "answered"
-    ],
     "required_evidence": [
       {
         "id": "ev-limit",
@@ -73,10 +70,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": 1.0,
-      "expected_decisions": [
-        "answer"
-      ],
       "observed_outcome": "answered",
       "outcome_source": "agent_answer",
       "missing_evidence": [
@@ -165,10 +158,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": 1.0,
-        "expected_decisions": [
-          "answer"
-        ],
         "observed_outcome": "answered",
         "outcome_source": "agent_answer",
         "missing_evidence": [
@@ -188,10 +177,6 @@
             "reason": null
           },
           "mrr": {
-            "status": "scored",
-            "reason": null
-          },
-          "response_decision_accuracy": {
             "status": "scored",
             "reason": null
           },

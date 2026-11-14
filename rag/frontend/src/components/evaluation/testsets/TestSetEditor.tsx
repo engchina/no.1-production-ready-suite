@@ -8,7 +8,7 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { blankTestSetItem, testsetApi, type TestSetDraft, type TestSetItem } from "@/lib/testset-api";
 import { toast } from "@/lib/toast";
 
-const valid = (item: TestSetItem) => Boolean(item.question.trim() && (item.response_decision !== "answer" || item.standard_answer.trim()));
+const valid = (item: TestSetItem) => Boolean(item.question.trim() && item.standard_answer.trim());
 
 /** 入力は全項目を保持し、参考と編集を切り替えても破棄しない。 */
 export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { initial: TestSetDraft; onClose: () => void; onEvaluate: () => void; loadNotice?: ReactNode }) {
@@ -77,10 +77,9 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
             {item ? <FormGrid columns={1}>
               {item.source_notice ? <Banner severity="warning">{item.source_notice}</Banner> : null}
               <TextareaField width="full" id="testset-question" required label={t("evaluation.testsets.question")} rows={3} maxLength={2000} disabled={save.isPending} value={item.question} onChange={event => change({ question: event.target.value })} />
-              <TextareaField width="full" id="testset-standard" required={item.response_decision === "answer"} label={t("evaluation.testsets.standard")} helper={t("evaluation.testsets.standardHelp")} rows={7} maxLength={8000} disabled={save.isPending} value={item.standard_answer} onChange={event => change({ standard_answer: event.target.value })} />
+              <TextareaField width="full" id="testset-standard" required label={t("evaluation.testsets.standard")} helper={t("evaluation.testsets.standardHelp")} rows={7} maxLength={8000} disabled={save.isPending} value={item.standard_answer} onChange={event => change({ standard_answer: event.target.value })} />
               <TextareaField width="full" id="testset-evidence" label={t("evaluation.testsets.evidence")} helper={t("evaluation.testsets.evidenceHelp")} rows={3} disabled={save.isPending} value={item.evidence.join("\n")} onChange={event => change({ evidence: event.target.value.split("\n") })} />
               <Disclosure summary={t("evaluation.testsets.advanced")}><FormGrid columns={1}>
-                <SelectField width="full" id="testset-decision" label={t("evaluation.testsets.decision")} disabled={save.isPending} value={item.response_decision} options={(["answer", "clarify", "hold"] as const).map(value => ({ value, label: t(`evaluation.testsets.decision.${value}`) }))} onValueChange={value => change({ response_decision: value as TestSetItem["response_decision"] })} />
                 <TextareaField width="full" id="testset-points" label={t("evaluation.testsets.points")} rows={3} disabled={save.isPending} value={item.required_answer_points.join("\n")} onChange={event => change({ required_answer_points: event.target.value.split("\n") })} />
                 <TextareaField width="full" id="testset-process" label={t("evaluation.testsets.process")} rows={4} maxLength={8000} disabled={save.isPending} value={item.answer_process} onChange={event => change({ answer_process: event.target.value })} />
               </FormGrid></Disclosure>

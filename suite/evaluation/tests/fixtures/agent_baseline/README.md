@@ -16,11 +16,11 @@
 
 ## 保証すること
 
-- **採点**: ケースの結果のうち Agent の Run の ID と本文を含まない項目（六指標・引用の文書・正解の文書・取れなかった根拠・対応と出所・往復ごとの判断・失敗の理由・失敗の種類と段・時間）。段 2 の結果にあった RAG の評価だけの項目（`answer_evaluation`・`guardrail_warnings`。Agent の経路ではいつも空）は suite に無い。
-- **集計**: 六指標の平均（成功したケースのうち測れたものだけ）、`metric_case_counts`、`error_count`、区分・分類・種類・段の数・期待する判断ごとの内訳、閾値の判定（`threshold_failures`・`passed`）、採点の版。段 2 の結果にあった RAG の評価だけの項目（`evaluation_suite`・`comparison`）は suite に無い。
+- **採点**: ケースの結果のうち Agent の Run の ID と本文を含まない項目（指標・引用の文書・正解の文書・取れなかった根拠・対応と出所・往復ごとの対応・失敗の理由・失敗の種類と段・時間）。段 2 の結果にあった RAG の評価だけの項目（`answer_evaluation`・`guardrail_warnings`。Agent の経路ではいつも空）は suite に無い。
+- **集計**: 指標の平均（成功したケースのうち測れたものだけ）、`metric_case_counts`、`error_count`、区分・分類・種類・段の数ごとの内訳、閾値の判定（`threshold_failures`・`passed`）、採点の版。段 2 の結果にあった RAG の評価だけの項目（`evaluation_suite`・`comparison`）は suite に無い。
 - **分母**: 段 2 の形（ケースの数・失敗の数・最後の往復の観測の種類ごとの数・指標ごとの測れた数と測れなかった数）と、suite の形（`denominators`: 最後の往復の状態・失敗の種類・指標ごとの測れた / 対象外 / 評価不能の数と評価不能の理由）。失敗は指標の分母に入らず、失敗が 1 つでもあれば `passed=false`。どの指標も測れなければ `passed=null`。
 - **失敗の扱い**: failed・cancelled・waiting_approval・時間切れ（取り消す）・承認の要るツールを呼ばずに完了した Run（`skipped_approval_tools`・観測の `tool_calls[].status=approval_skipped`。#3240 の Q7）・Run を作れない（HTTP の失敗・ツールのエラー・知らない `schema_version`）は、どれもケースの失敗（`case_error`）。複数往復の途中で失敗したら、それまでの往復を採点せずケースの失敗にする（`error_stage=turn_<n>`、時間は往復の和）。
-- **旧形式の扱い**: 公開の `outcome` が null の完了の Run は、既定では対応を推定せず、判断の正しさを評価不能（`outcome_missing`）にする。`--infer-missing-outcome` を選ぶと段 2 と同じく回答の文から推定する（最終の検証の定型の注記と Agent の回答の節を除いた最後の行が問いなら確認の質問、引用の無い回答は拒答。`outcome_source=inferred`）。`rag_search` の outcome は公開しないので使わない。
+- **旧形式の扱い**: 公開の `outcome` が null の完了の Run は、既定では対応を推定せず、引用も無ければ検索の指標を評価不能（`outcome_missing`）にする。`--infer-missing-outcome` を選ぶと段 2 と同じく回答の文から推定する（最終の検証の定型の注記と Agent の回答の節を除いた最後の行が問いなら確認の質問、引用の無い回答は拒答。`outcome_source=inferred`）。`rag_search` の outcome は公開しないので使わない。
 - **保存した観測からの採点**: 結果のファイルの観測だけから採点し直すと、流したときと同じ集計になる。推定の有無を変えた採点し直しは、その設定で流したときと同じ集計になる（Target を呼ばない）。
 
 ## 再生の条件
@@ -42,7 +42,7 @@
 |---|---|---|
 | 根拠の `document_id`・`chunk_id` | MRR・必要な根拠の取得率・引用の文書・`retrieval_miss` / `evidence_miss`・引用の重複の除去 | `agent_get_run_observation.evidence[].document_id` / `chunk_id`（`rank` の順） |
 | 根拠の構造の場所（頁・章節・シート・行） | 必要な根拠の取得率（場所の条件の付いた根拠） | `evidence[].locator`（RAG の `EvidenceLocator` と同じ名前） |
-| 回答の対応 | 対応・出所・判断の正しさ・拒答の判定・検索の指標の対象外の判定 | `agent_get_run.outcome` |
+| 回答の対応 | 対応・出所・拒答の判定・検索の指標の対象外の判定 | `agent_get_run.outcome` |
 | 最終の検証の状態 | Run の記録の `validation_status` | `agent_get_run_observation.validation_status` |
 | モデルの呼び出しの数 | Run の記録の `model_requests` | `agent_get_run_observation.usage.requests` |
 | 旧版も検索したか | Run の記録の `superseded_searches`・旧版を検索したケース | `tool_calls[].include_superseded`（真偽だけ） |
@@ -91,6 +91,15 @@ CLI は Agent の画面の API（`POST /api/runs`・`GET /api/runs/{id}`）と R
 - **outcome の無い完了の Run は判断の正しさを評価不能にする**（`outcome_missing`）: `legacy-inferred-abstained`・`legacy-inferred-question`・`legacy-rag-search-outcome`・`unknown-outcome-vocabulary` の `observed_outcome`・`outcome_source` が null、`response_decision_accuracy` が null（`legacy-inferred-question` は推定が誤っていた `unexpected_handling` も付かない）。`multi-turn-clarify-then-answer` は 1 往復目が評価不能なので、ケースの判断も評価不能（2 往復目は answered で正しい）。
 - その結果、`response_decision_accuracy` の測れた数が減り（`all`・`completed` は 7 → 2、`passing` は 2 → 1）、平均は 1.0。`passing` は閾値を付けた判断の正しさに評価不能のケースがあるので、合格にしない（`passed` が true → null）。検索の指標（MRR・必要な根拠の取得率）は、引用がある Run なので変わらない。
 - 回答の前の確認（`agent_answer_confirmation` で答える）・本文を省かれた根拠（`evidence_text_omitted`）・見られない根拠（`evidence_withheld`）の規則は、共有の fixture にその Run が無いので基線の値は変わらない（合成の出力のテストで確かめる）。
+
+### #5068: 判断の期待と判断の正しさを削除した（採点の版 `five_metrics_v1+agent_v3`）
+
+評価セットの判断の期待（`expected_response_decision`・`expected_outcomes`）と、そこから作る指標（`response_decision_accuracy`・`expected_decisions`・`decision_breakdown`・失敗の理由 `unexpected_handling`・比較の要約の分類ごとの `handling_correct_rate`）を削除した。期待する返し方は標準回答に文で書き、内容の採点で判定する（自己申告の outcome を期待と直接比べない）。指標の集合が変わるので、この節に限り段 2 の値（`expected.scores`・`expected.metrics`・`expected.denominators`・`expected.cli`）からも削除した指標の項目を消した（ほかの値は変えていない。`passing` の段 2 の `passed` は true のまま）。
+
+- `cases/<id>.json` の `case`: 判断の期待を消した。確認・保留などの期待を残す 5 ケース（`clarification-skips-retrieval`・`multi-turn-clarify-then-answer`・`failed-second-turn`・`legacy-inferred-abstained`・`legacy-rag-search-outcome`）は、期待する返し方を合成の標準回答（`standard_answer`）に書いた。そのほかの期待は「答える」だけなので、標準回答を足していない。
+- `expected.v3`: 指標・判断の項目が無くなり、標準回答を足した 5 ケースの回答の指標（`answer_correctness`・`requirement_coverage`・`claim_support_rate`）が対象外 → 評価不能（`answer_judge_unavailable`）。`passing` は閾値を付けた判断の正しさが無くなり、閾値の指標（MRR・必要な根拠の取得率）に評価不能のケースが無いので、`passed` が null → true。
+- `summaries.json` の閾値から `response_decision_accuracy` を、`summary_markdown` から判断の正しさの行（全体・区分・種類・段・分類）を消した。
+- `agent_internal_dependencies.json`: 回答の対応を消したときに変わる採点の項目から `response_decision_accuracy` を消した。
 
 ## 基線を作り直すとき
 

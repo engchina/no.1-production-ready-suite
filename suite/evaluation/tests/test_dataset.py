@@ -38,7 +38,7 @@ RAW: dict[str, Any] = {
             "relevant_document_ids": ["file:manual.pdf"],
             "equivalent_document_ids": {"file:manual.pdf": ["file:manual-copy.pdf"]},
             "required_evidence": [{"id": "e1", "document_id": "file:ledger.xlsx", "sheet": "表"}],
-            "expected_outcomes": ["answered"],
+            "standard_answer": "合成の標準回答",
             # suite が読まない項目（製品の評価だけが使う）は無視する。
             "required_answer_points": ["手順"],
         }

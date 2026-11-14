@@ -1,4 +1,4 @@
-"""四指標の評価情報・独立性・応答判断を合成データで検証する。"""
+"""評価の指標の評価情報・独立性と、確認・保留の期待を標準回答で採点することを合成データで検証する。"""
 
 from typing import Any
 
@@ -51,27 +51,28 @@ def test_required_fragments_and_document_ranks_are_independent() -> None:
         *EVALUATION_METRIC_NAMES,
         *EVALUATION_REPORT_ONLY_METRIC_NAMES,
     }
-    assert len(EVALUATION_METRIC_NAMES) == 4
+    assert len(EVALUATION_METRIC_NAMES) == 3
 
 
 @pytest.mark.parametrize("outcome", ["answered", "needs_clarification", "insufficient_evidence"])
 @pytest.mark.parametrize("quality", [0.0, 1.0, None])
-def test_decision_score_uses_independent_body_judgement_not_declared_label(
+def test_correctness_uses_independent_body_judgement_not_declared_label(
     outcome: str, quality: float | None
 ) -> None:
-    case = EvaluationCase(id="synthetic", query="合成の質問", expected_response_decision="hold")
+    case = EvaluationCase(
+        id="synthetic", query="合成の質問", standard_answer="資料に記載がないため答えられない。"
+    )
     judgement = EvaluationAnswerJudgement(
-        status="completed", response_decision_accuracy=quality, reason="本文と期待する対応を比較"
+        status="completed", answer_correctness=quality, reason="本文と標準回答を比較"
     )
     scored = score_case_answers(case, [(response(outcome), {})], judgement)
-    assert scored.response_decision_accuracy == quality
+    assert scored.answer_correctness == quality
     assert scored.observed_outcome == outcome
-    assert scored.expected_decisions == ["hold"]
     metrics = summarize_case_results([scored])
-    assert metrics.metric_case_counts["response_decision_accuracy"] == int(quality is not None)
+    assert metrics.metric_case_counts["answer_correctness"] == int(quality is not None)
 
 
-async def test_reasonable_inability_is_judged_even_without_standard_answer() -> None:
+async def test_hold_expectation_in_standard_answer_is_judged_as_correctness() -> None:
     captured = []
 
     class Pipeline:
@@ -86,9 +87,8 @@ async def test_reasonable_inability_is_judged_even_without_standard_answer() -> 
         captured.append(kwargs)
         return {
             "status": "completed",
-            "answer_correctness": None,
-            "response_decision_accuracy": 1,
-            "correctness_reason": "資料にない値を作らず、適切に説明している。",
+            "answer_correctness": 1,
+            "correctness_reason": "資料にない値を作らず、答えられないと説明している。",
         }
 
     metrics = await EvaluationRunner(
@@ -96,19 +96,19 @@ async def test_reasonable_inability_is_judged_even_without_standard_answer() -> 
     ).run(
         [
             EvaluationCase(
-                id="synthetic", query="資料にない項目の値は？", expected_response_decision="hold"
+                id="synthetic",
+                query="資料にない項目の値は？",
+                standard_answer="資料に記載がないため答えられないと伝える。",
             )
         ],
         top_k=3,
     )
     assert len(captured) == 1
+    assert captured[0]["standard_answer"] == "資料に記載がないため答えられないと伝える。"
     data = captured[0]["evaluation_input"]
-    assert data["response_expectations"][0]["expected_decisions"] == ["hold"]
     assert "確認できません" in data["actual_responses"][0]["answer_text"]
-    assert set(data["response_expectations"][0]) == {"turn", "expected_decisions"}
-    assert "outcome" not in data["response_expectations"][0]
-    assert metrics.response_decision_accuracy == 1
-    assert metrics.answer_correctness is None
+    assert "response_expectations" not in data
+    assert metrics.answer_correctness == 1
     assert metrics.case_results[0].observed_outcome == "answered"
     assert metrics.case_results[0].failure_reasons == []
 
@@ -166,6 +166,7 @@ async def test_case_without_standard_answer_is_not_judged() -> None:
         "faithfulness",
         "answer_pass_rate",
         "handling_accuracy",
+        "response_decision_accuracy",
         "step_order_score",
         "safe_answer_rate",
     ],
@@ -175,10 +176,10 @@ def test_removed_thresholds_are_rejected(name: str) -> None:
         EvaluationThresholds.model_validate({name: 1})
 
 
-def test_failed_case_stays_in_expected_decision_breakdown() -> None:
+def test_failed_case_is_counted_as_error_and_not_passed() -> None:
     from app.rag.evaluation import _case_error_result
 
-    case = EvaluationCase(id="failed", query="合成の質問", expected_response_decision="hold")
+    case = EvaluationCase(id="failed", query="合成の質問", standard_answer="合成の標準回答")
     failed = _case_error_result(
         case=case,
         trace_id="synthetic",
@@ -186,10 +187,9 @@ def test_failed_case_stays_in_expected_decision_breakdown() -> None:
         error=TimeoutError("合成の失敗"),
     )
     result = summarize_case_results([failed])
-    breakdown = result.decision_breakdown["hold"]
-    assert (breakdown.case_count, breakdown.error_count) == (1, 1)
-    assert breakdown.metric_case_counts["response_decision_accuracy"] == 0
-    assert result.response_decision_accuracy is None
+    assert result.error_count == 1
+    assert result.metric_case_counts["answer_correctness"] == 0
+    assert result.answer_correctness is None
     assert result.passed is False
 
 

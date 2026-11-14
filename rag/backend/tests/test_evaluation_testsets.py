@@ -76,13 +76,40 @@ def test_confirm_edit_revokes_and_reference_is_never_promoted() -> None:
     assert edited_draft(changed, body(changed, confirmed=True)).items[0].confirmed
 
 
-@pytest.mark.parametrize("decision", ["clarify", "hold"])
-def test_clarification_hold_allow_empty_standard(decision: str) -> None:
+def test_empty_standard_answer_cannot_be_confirmed() -> None:
+    """標準回答の空欄の項目は、確認済みにできない（確認・保留の期待も標準回答に書く）。"""
     draft = new_draft("合成", [item()])
-    updated = edited_draft(draft, body(draft, standard_answer="", response_decision=decision))
+    updated = edited_draft(draft, body(draft, standard_answer=""))
+    assert not updated.items[0].confirmed
+    with pytest.raises(ValidationError, match="標準回答"):
+        body(updated, confirmed=True)
+    payload = body(updated)
+    with pytest.raises(DraftError, match="標準回答"):
+        edited_draft(
+            updated, payload.model_copy(update={"confirm_item_ids": [updated.items[0].item_id]})
+        )
+
+
+def test_hold_expectation_written_in_standard_answer_round_trips() -> None:
+    draft = new_draft("合成", [item()])
+    hold = "資料に記載がないため答えられないと伝える。"
+    updated = edited_draft(draft, body(draft, standard_answer=hold))
     confirmed = edited_draft(updated, body(updated, confirmed=True))
     row = parse_evaluation_workbook(export_draft(confirmed)).rows[0]
-    assert row.standard_answer is None and row.response_decision == decision
+    assert row.standard_answer == hold
+
+
+def test_stored_item_drops_removed_fields_and_unconfirms_incomplete_items() -> None:
+    """保存済みの項目の今の列に無い値は読み捨て、確認の条件を満たさない項目は未確認で読む。"""
+    stored = item().model_dump(mode="json")
+    stored |= {"response_decision": "hold", "standard_answer": "", "confirmed": True}
+    stored["original"] |= {"response_decision": "hold"}
+
+    loaded = DraftItem.model_validate(stored)
+
+    assert not loaded.confirmed
+    assert "response_decision" not in loaded.model_dump()
+    assert "response_decision" not in loaded.original.model_dump()
 
 
 def test_answer_requires_standard_and_unconfirmed_cannot_export() -> None:
@@ -103,7 +130,6 @@ def test_all_columns_locations_and_literal_text_roundtrip() -> None:
                 evidence=[evidence, table],
                 standard_answer="=合成の回答",
                 required_answer_points=["合成の要点"],
-                response_decision="answer",
                 answer_process="合成の手順",
             )
         ]
@@ -126,7 +152,6 @@ def test_all_columns_locations_and_literal_text_roundtrip() -> None:
     )
     assert not built.issues
     case = built.cases[0]
-    assert case.expected_response_decision == "answer"
     assert case.required_evidence[0].page_start == 2 and case.required_evidence[0].page_end == 4
     assert (
         case.required_evidence[1].sheet == "合成シート" and case.required_evidence[1].row_end == 12
@@ -323,7 +348,6 @@ def test_import_is_pending_and_keeps_all_six_columns() -> None:
                 standard_answer="合成の回答",
                 evidence=[],
                 required_answer_points=["合成の要点"],
-                response_decision="answer",
                 answer_process="合成の手順",
             )
         ]
