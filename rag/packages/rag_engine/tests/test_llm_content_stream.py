@@ -54,11 +54,13 @@ def test_valid_full_answer_survives_repeated_content_and_all_chunk_sizes(chunk_s
 
 def test_provider_output_limit_is_still_incomplete_and_not_a_success():
     clock = _Clock()
+    # 本文（JSON の文字列の中）の空白は打ち切らず、provider の未完了の理由で終わる（#5077 の文字列の外の空白とは別）。
+    partial = '{"answer_body": "' + " " * 3000
     final = SimpleNamespace(
-        status="incomplete", incomplete_details=SimpleNamespace(reason="max_output_tokens"), output_text=" " * 3000, usage=USAGE
+        status="incomplete", incomplete_details=SimpleNamespace(reason="max_output_tokens"), output_text=partial, usage=USAGE
     )
     events = [
-        (0.1, SimpleNamespace(type="response.output_text.delta", delta=" " * 3000)),
+        (0.1, SimpleNamespace(type="response.output_text.delta", delta=partial)),
         (0.2, SimpleNamespace(type="response.incomplete", response=final)),
     ]
     client = _Client(clock, [events])

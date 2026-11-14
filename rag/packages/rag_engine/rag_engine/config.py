@@ -335,6 +335,9 @@ class Settings:
     llm_max_retries: int = 1
     # 止まったとする無音の秒数（最初の event を含む）。送り直しはやり直しの共通の枠で数える。
     llm_stall_idle_seconds: float = 120.0
+    # 構造化出力の JSON の文字列の外で、空白(空白・タブ・改行)がこの文字数続いたら、その出力を不合格にして
+    # やり直しの共通の枠で送り直す(#5077)。文字列の中(回答の本文)の空白・反復は数えない。正当な整形では届かない長さにする。
+    llm_json_whitespace_run_limit: int = 1000
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
     # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
     known_conditions: tuple[tuple[str, str], ...] = ()
@@ -547,6 +550,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_max_retries=max(0, _env_int(env, "RAG_ENGINE_LLM_MAX_RETRIES", 1)),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 120.0)),
+        llm_json_whitespace_run_limit=max(1, _env_int(env, "RAG_ENGINE_LLM_JSON_WHITESPACE_RUN_LIMIT", 1000)),
         text_search_tokenizer_sudachi_dict=env.get(
             "TEXT_SEARCH_TOKENIZER_SUDACHI_DICT",
             DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,

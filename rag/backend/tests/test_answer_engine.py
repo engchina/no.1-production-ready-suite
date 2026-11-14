@@ -1787,17 +1787,20 @@ def test_build_engine_settings_passes_llm_stall_detection(tmp_path: Any) -> None
     assert default.llm_stall_detection is True
     assert default.llm_stall_idle_seconds == 120.0
     assert default.llm_max_retries == 1
+    assert default.llm_json_whitespace_run_limit == 1000
     changed = build_engine_settings(
         Settings(
             rag_llm_stall_detection_enabled=False,
             rag_llm_stall_idle_seconds=45,
             rag_llm_max_retries=0,
+            rag_llm_json_whitespace_run_limit=4000,
         ),
         output_dir=tmp_path,
     )
     assert changed.llm_stall_detection is False
     assert changed.llm_stall_idle_seconds == 45.0
     assert changed.llm_max_retries == 0
+    assert changed.llm_json_whitespace_run_limit == 4000
 
 
 def _engine_effort(value: str) -> str:
