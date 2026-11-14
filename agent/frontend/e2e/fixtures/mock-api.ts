@@ -828,6 +828,8 @@ function createState() {
     // チャットの添付を使うか（#2517。既定は無効）。
     chatAttachmentsEnabled: false,
     traceRecordingEnabled: false,
+    guardrailInputEnabled: false,
+    guardrailOutputEnabled: false,
     ociSettings: d.ociSettings as Json,
     // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
@@ -3013,6 +3015,18 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         effective_text: state.answerNotice.text ?? defaultText,
         max_chars: 500,
         updated_at: null,
+      };
+    }
+    if (at("settings", "guardrail")) {
+      if (method === "PATCH") {
+        state.guardrailInputEnabled = Boolean(body.input_enabled);
+        state.guardrailOutputEnabled = Boolean(body.output_enabled);
+      }
+      return {
+        input_enabled: state.guardrailInputEnabled,
+        output_enabled: state.guardrailOutputEnabled,
+        oci_configured: true,
+        oci_warning_code: null,
       };
     }
     if (at("settings", "trace-recording")) {

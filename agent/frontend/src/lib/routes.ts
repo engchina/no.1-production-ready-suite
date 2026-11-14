@@ -3,6 +3,7 @@ import {
   API_KEY_PATHS,
   ANSWER_NOTICE_PATH,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  GUARDRAIL_SETTINGS_PATH,
   TRACE_RECORDING_SETTINGS_PATH,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_PATHS,
@@ -50,6 +51,8 @@ export const APP_ROUTES = {
   securityRoles: USER_ROLE_PATHS.roles,
   securityApiKeys: API_KEY_PATHS.admin,
   securityPermissions: "/settings/security/permissions",
+  // 安全チェック（3製品で1つの設定。#5062）
+  settingsGuardrail: GUARDRAIL_SETTINGS_PATH,
   // アカウントの画面（API キー / パスワード変更のタブ。3 製品で同じ。#1873）。サイドナビのアカウントの欄から開き、
   // メニュー権限を問わない。
   account: ACCOUNT_PATH,

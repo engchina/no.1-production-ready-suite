@@ -79,6 +79,7 @@ from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
     build_database_status_router,
 )
+from pr_system_settings.guardrails import build_guardrail_router
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
     EnterpriseAiConnection,
@@ -219,6 +220,7 @@ from app.features.agent.feedback import (
     FeedbackReport,
     build_feedback_report,
 )
+from app.features.agent.guardrails import GuardrailBlockedError, checked_goal
 from app.features.agent.mcp_url import (
     mask_url_credentials,
     url_credential_error,
@@ -741,6 +743,15 @@ router.include_router(
     build_answer_notice_router(
         load=lambda: get_security_service().load_answer_notice(),
         save=lambda record: get_security_service().save_answer_notice(record),
+        write_dependencies=[Depends(require_system_settings_write)],
+    ),
+    prefix="/settings",
+)
+# 安全チェック（OCI Guardrails）の有効化は3製品で1つの設定（platform/.env。#5061・#5062）。
+router.include_router(
+    build_guardrail_router(
+        get_settings=lambda: get_settings(),
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         write_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",
@@ -1987,6 +1998,9 @@ async def create_run(
             _may_continue_thread, request, run_request.thread_id
         ):
             _raise_others_content_forbidden()
+        # 入力（目標・チャットの発言）は Run を作る前に安全チェックを当てる。止めた入力では Run を
+        # 作らず（ツールもモデルも呼ばない）、個人情報は伏せた文で続ける（#5062）。
+        run_request = run_request.model_copy(update={"goal": checked_goal(run_request.goal)})
         # 添付（#2517）は Run を作る前に確かめ（見えない添付は 404・別の会話の添付は 409）、会話が
         # 決まった後に会話へ結び付ける（新しい会話の ID は Run を作るときに決まる）。
         attachments: list[ChatAttachmentReference] = []
@@ -2036,6 +2050,10 @@ async def create_run(
                     "新しい会話で質問してください。"
                 ),
             },
+        ) from exc
+    except GuardrailBlockedError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
         ) from exc
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc

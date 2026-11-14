@@ -1291,27 +1291,6 @@ _BEARER_TOKEN_PATTERN = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNO
 _EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _CREDIT_CARD_CANDIDATE_PATTERN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
-_PROMPT_INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    (
-        "prompt_injection.ignore_instructions",
-        re.compile(r"ignore (all )?(previous|prior) instructions", re.IGNORECASE),
-    ),
-    (
-        "prompt_injection.system_prompt",
-        re.compile(r"(system|developer) (prompt|message|instruction)", re.IGNORECASE),
-    ),
-    (
-        "prompt_injection.tool_control",
-        re.compile(r"(call|invoke|execute).{0,24}(tool|command|shell)", re.IGNORECASE),
-    ),
-    (
-        "prompt_injection.data_exfiltration",
-        re.compile(
-            r"(exfiltrate|leak|dump).{0,24}(secret|token|credential|data)",
-            re.IGNORECASE,
-        ),
-    ),
-)
 _NON_READONLY_SQL_PATTERN = re.compile(
     r"\b(insert|update|delete|drop|alter|truncate|merge|create|grant|revoke)\b",
     re.IGNORECASE,
@@ -1383,9 +1362,6 @@ def _sanitize_value(value: Any, warnings: set[str], *, error_text: bool = False)
     if isinstance(value, list):
         return [_sanitize_value(item, warnings, error_text=error_text) for item in value]
     if isinstance(value, str):
-        for code, pattern in _PROMPT_INJECTION_PATTERNS:
-            if pattern.search(value):
-                warnings.add(code)
         if error_text:
             # 例外の文には接続の URL が入ることがある（userinfo・資格情報らしい query を伏せる）。
             masked_urls = mask_urls_in_text(value)
@@ -1402,7 +1378,6 @@ def sensitive_findings(value: Any, *, field_names: bool = True) -> list[str]:
     機微な名前の項目は、文字の値のときだけ数える（`max_output_tokens` のような数の設定は資格情報
     ではない）。`field_names=False` は名前を見ず、値の形（Bearer・URL の資格情報・メールなど）
     だけで数える（Run の記録の承認の理由・実行の token のような、機微な名前の正当な項目を除く）。
-    指示の注入の疑い（`prompt_injection.*`）は機微情報ではないので含めない。
     """
     warnings: set[str] = set()
 
