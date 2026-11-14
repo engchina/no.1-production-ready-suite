@@ -12,6 +12,7 @@ import {
   DataTable,
   EmptyState,
   INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   ListDetailLayout,
   ListDetailPager,
   ListToolbar,
@@ -20,6 +21,7 @@ import {
   PageHeader,
   PAGE_SIZE_OPTIONS,
   RowTitleButton,
+  Section,
   FilterSelect,
   Skeleton,
   StatusBadge,
@@ -29,7 +31,6 @@ import {
   type DataTableColumn,
   adjacentListItems,
   useActionPending,
-  useListDetailSplit,
   useUrlSelection,
 } from "@production-ready/ui";
 
@@ -122,10 +123,9 @@ export function FeedbackPage() {
   const setPage = ratingPaging.setPage;
   const setSignalPage = signalPaging.setPage;
   // 一覧 + 詳細の選択は URL が唯一の情報源。利用者の評価は `?feedback=`、
-  // 確かめるべき実行は `?signal=`（どちらも Run の ID）。先頭の行を自動で選ばない。1 ペインで一覧から
-  // 詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
-  const split = useListDetailSplit();
-  const ratingSelection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: !split });
+  // 確かめるべき実行は `?signal=`（どちらも Run の ID）。先頭の行を自動で選ばない。どちらも全幅の一覧から
+  // 全幅の詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る（#5071）。
+  const ratingSelection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: true });
   const signalSelection = useUrlSelection({ param: "signal", searchParams, setSearchParams, singlePane: true });
   const viewSelection = view === "signals" ? signalSelection : ratingSelection;
   const queryClient = useQueryClient();
@@ -253,7 +253,7 @@ export function FeedbackPage() {
         subtitle={t("page.feedback.subtitle")}
         // 確かめるべき実行は全幅の詳細、利用者の評価は xl 未満の詳細で「一覧へ戻る」。
         back={
-          (view === "signals" || !split) && viewSelection.selectedId
+          viewSelection.selectedId
             ? { label: t("common.backToList"), onClick: viewSelection.clear, testId: "feedback-detail-back" }
             : undefined
         }
@@ -375,6 +375,7 @@ export function FeedbackPage() {
             }}
             labels={listToolbarLabels()}
             testId="feedback-filters"
+            className={ratingSelection.selectedId ? "hidden" : undefined}
           />
           {agentFilterFailure}
           <QueryState
@@ -464,7 +465,7 @@ function FeedbackContent({
   }
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className={selectedId ? "hidden" : undefined}>
         <CardHeader>
           <CardTitle>{t("feedback.summary.title")}</CardTitle>
           <CardDescription>{t("feedback.summary.description")}</CardDescription>
@@ -511,18 +512,19 @@ function FeedbackContent({
           </CardContent>
         </Card>
       ) : (
-        // B 型の一覧 + 詳細（共有 ListDetailLayout。#2283）。xl 以上は「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン。
+        // 質問と評価を全幅の一覧で比較し、選んだ評価は全幅の詳細で読む（確かめるべき実行と同じ。#5071）。
         <ListDetailLayout
           id="feedback-ratings"
+          layout="single"
+          listVariant="table"
           listLabel={t("feedback.list.title")}
           detailLabel={t("feedback.detail.title")}
           storagePrefix={AGENT_LIST_DETAIL_STORAGE_PREFIX}
           listHeader={
-            <div className="grid gap-2">
-              <h2 className="text-sm font-semibold text-fg">{t("feedback.list.title")}</h2>
+            <Section title={t("feedback.list.title")}>
               {/* 件数: 絞り込み（評価・理由）中は「N 件（全 M 件）」。M は期間・業務 Agent の評価の全件（#1891）。 */}
               <ListToolbar count={listCount(summary.rated_runs, report.total, filtered)} testId="feedback-list-toolbar" />
-            </div>
+            </Section>
           }
           list={
             report.items.length ? (
@@ -606,8 +608,8 @@ function ReasonCounts({ summary }: { summary: FeedbackSummary }) {
 }
 
 /**
- * 一覧の列（ListDetailLayout の狭い列。#2283）の行。質問（2 行まで）と補足 1 行（本人の評価・管理者の評価・評価日時）
- * だけにし、理由・業務 Agent・利用者は詳細で見る（page-archetypes.md §1 B「一覧の行」）。
+ * 全幅の比較一覧。desktop は質問・評価（本人と管理者）・評価日時を列に分け、狭い画面は質問の下へ補足をまとめる。
+ * 理由・業務 Agent・利用者は詳細で見る。
  */
 function FeedbackList({
   items,
@@ -624,19 +626,14 @@ function FeedbackList({
       header: t("feedback.column.question"),
       rowHeader: true,
       className: "py-2.5 align-top",
+      headerClassName: "lg:w-[50%]",
       render: (item) => (
         <RowTitleButton
           title={item.question}
           maxLines={2}
           subtitle={
-            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-              {item.feedback ? <RatingBadge rating={item.feedback.rating} /> : null}
-              {item.admin_review ? (
-                <StatusBadge
-                  variant={item.admin_review.rating === "helpful" ? "success" : "danger"}
-                  label={t("feedback.list.adminBadge", { rating: ratingLabel(item.admin_review.rating) })}
-                />
-              ) : null}
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 lg:hidden">
+              <RatingBadges item={item} />
               <span className="tabular-nums">{formatDateTime(item.updated_at)}</span>
             </span>
           }
@@ -646,10 +643,26 @@ function FeedbackList({
         />
       ),
     },
+    {
+      key: "ratings",
+      header: t("feedback.column.ratings"),
+      headerClassName: "hidden lg:table-cell lg:w-[32%]",
+      className: "hidden lg:table-cell align-top",
+      render: (item) => (
+        <span className="flex flex-wrap gap-1">
+          <RatingBadges item={item} />
+        </span>
+      ),
+    },
+    {
+      key: "updated_at",
+      header: t("feedback.column.ratedAt"),
+      headerClassName: "hidden lg:table-cell lg:w-[18%]",
+      className: "hidden lg:table-cell align-top tabular-nums",
+      render: (item) => formatDateTime(item.updated_at),
+    },
   ];
   return (
-    // 一覧 + 詳細（ListDetailLayout）の一覧の列の表で、高さは列の残りの高さ（page-archetypes.md の例外。#4636）。
-    // eslint-disable-next-line no-restricted-syntax -- 一覧 + 詳細の一覧の列（高さは列が決める）
     <DataTable<FeedbackItem>
       rows={items}
       columns={columns}
@@ -660,10 +673,24 @@ function FeedbackList({
       ariaLabel={t("feedback.list.label")}
       scrollAriaLabel={listScrollLabel(t("feedback.list.label"))}
       stickyHeader
-      // 一覧の列の高さの中で縦にスクロールし、表頭を固定する。列の枠と二重にしない。
-      className="min-h-0 rounded-none border-0"
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       tableClassName="w-full table-fixed"
     />
+  );
+}
+
+/** 一覧の行の評価（本人の評価と管理者の評価のバッジ）。 */
+function RatingBadges({ item }: { item: FeedbackItem }) {
+  return (
+    <>
+      {item.feedback ? <RatingBadge rating={item.feedback.rating} /> : null}
+      {item.admin_review ? (
+        <StatusBadge
+          variant={item.admin_review.rating === "helpful" ? "success" : "danger"}
+          label={t("feedback.list.adminBadge", { rating: ratingLabel(item.admin_review.rating) })}
+        />
+      ) : null}
+    </>
   );
 }
 
