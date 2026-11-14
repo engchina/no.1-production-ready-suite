@@ -251,7 +251,8 @@ for (const viewport of [
         comparison: {
           search_answer_profile_id: "profile-1",
           metrics: metrics(
-            { answer_correctness: 1, requirement_coverage: 1, claim_support_rate: 1 },
+            // 比較対象の判定は要改善・技術エラー 1 件（指標の差とは別に見出しで示す。#5074）。
+            { answer_correctness: 1, requirement_coverage: 1, claim_support_rate: 1, passed: false, error_count: 1 },
             {
               trace_id: "trace-b",
               screen_match: true,
@@ -322,6 +323,13 @@ for (const viewport of [
     await expectEvaluationCard(page, page.getByTestId("evaluation-result-card"));
     await expect(comparison.getByTestId("evaluation-result-card")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "検索・回答プロファイルの比較" })).toBeVisible();
+    // 各条件の判定と技術エラーは、指標の差の表とは分けて見出しに出す（#5074）。
+    const verdicts = comparison.getByTestId("evaluation-compare-verdicts");
+    await expect(verdicts).toContainText("主条件「");
+    await expect(verdicts).toContainText("合格");
+    await expect(verdicts).toContainText("比較対象「プロファイル B」");
+    await expect(verdicts).toContainText("要改善");
+    await expect(verdicts).toContainText("失敗したケース 1 / 1 件");
     const correctnessRow=table.getByRole("row",{name:/回答の正確性/});
     await expect(correctnessRow).toContainText("+100pt");
     await expect(correctnessRow).toContainText("改善");

@@ -943,6 +943,8 @@ class EvaluationJobSummary(BaseModel):
     finished_at: UtcDatetime | None = None
     # 全体の判定（成功した job だけ。閾値の判定が無い・終わっていない job は None）。
     passed: bool | None = None
+    # 比べた検索・回答プロファイルの判定（比べた成功の job だけ。#5074）。
+    compare_passed: bool | None = None
     search_answer_profile_id: str | None = None
     compare_search_answer_profile_id: str | None = None
     search_answer_profile_name: str | None = None

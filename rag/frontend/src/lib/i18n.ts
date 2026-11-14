@@ -4339,6 +4339,7 @@ export const ja = {
   "evaluation.history.column.actor": "実行者",
   "evaluation.history.cases": "{count} 件",
   "evaluation.history.profileWithCompare": "{profile}（比較: {compare}）",
+  "evaluation.history.comparePassed": "比較: {label}",
   "evaluation.toast.started": "評価を開始しました。進み具合はこの画面で確認できます。",
   "evaluation.toast.succeeded": "評価が終わりました。",
   "evaluation.toast.failed": "評価を最後まで実行できませんでした。理由は実行状況を確認してください。",
@@ -4521,6 +4522,8 @@ export const ja = {
   "evaluation.compare.profileRequired": "比べる検索・回答プロファイルを選んでください。",
   "evaluation.compare.profilesLoadError": "検索・回答プロファイルを読み込めませんでした。",
   "evaluation.compare.title": "検索・回答プロファイルの比較",
+  "evaluation.compare.verdict.base": "主条件「{name}」",
+  "evaluation.compare.verdict.compared": "比較対象「{name}」",
   "evaluation.compare.description":
     "同じ評価セットを、検索・回答プロファイル「{baseName}」と「{name}」で評価した結果です。差は比較対象 − 主条件（ポイント）です。",
   "evaluation.compare.column.metric": "指標",
