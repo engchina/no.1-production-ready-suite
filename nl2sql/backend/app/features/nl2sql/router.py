@@ -753,6 +753,9 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         raise _select_ai_credential_missing_exception(exc) from exc
     except JobIdConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GuardrailBlockedError as exc:
+        # 安全チェックで止めた質問は 400 にせず、DB 管理のチャットと同じ 422（#5081）。
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValidationError:
         # 保存した値（添付など）を読めないのは入力の誤りではない。pydantic の原文を 400 の本文に
         # 出さず、想定外のエラーとして返す（#2548）。

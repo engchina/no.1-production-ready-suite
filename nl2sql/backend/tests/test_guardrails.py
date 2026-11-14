@@ -84,3 +84,32 @@ def test_disabled_guardrails_do_not_call_oci(chat: ChatFixture) -> None:  # noqa
     assert job.question == f"{EMAIL} の注文一覧"
     assert job.result is not None and job.result.explanation == f"担当 {EMAIL}"
     assert job.result.guardrail_warnings == []
+
+
+def test_blocked_job_api_returns_422_not_bad_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SQL 生成のジョブで止めた質問は、DB 管理のチャットと同じ 422 にする（#5081）。"""
+    import asyncio
+
+    import httpx
+
+    from app.features.nl2sql.service import nl2sql_service
+    from app.main import app
+
+    def blocked(*_: object, **__: object) -> None:
+        raise GuardrailBlockedError(
+            GUARDRAIL_BLOCKED_ERROR_CODE,
+            "安全チェックにより処理を停止しました。プロンプト攻撃を検出しました。",
+        )
+
+    monkeypatch.setattr(nl2sql_service, "start_job", blocked)
+
+    async def post() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                "/api/nl2sql/jobs", json={"question": "合成の質問", "generation_only": True}
+            )
+
+    response = asyncio.run(post())
+    assert response.status_code == 422, response.text
+    assert "プロンプト攻撃" in response.text
