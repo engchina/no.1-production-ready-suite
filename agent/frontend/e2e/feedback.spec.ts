@@ -142,7 +142,7 @@ for (const viewport of VIEWPORTS) {
         "管理者の評価: 3 件（うち役に立たなかった 1 件）"
       )
 
-      // 一覧の列（狭い列）の行は質問と補足 1 行（本人の評価・管理者の評価・評価日時）。理由・利用者は詳細で見る（#2283）。
+      // 一覧の行は質問・評価（本人と管理者）・評価日時。理由・利用者は詳細で見る（#5071）。
       const table = page.getByRole("table", { name: "フィードバックの一覧" });
       const bad = table.getByRole("row", { name: /run-a/ });
       await expect(bad).toContainText("役に立たなかった");
@@ -151,7 +151,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoPageHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-${viewport.name}-${theme}.png`), fullPage: true });
 
-      // 行から詳細（質問・回答・理由・コメント）を一覧 + 詳細の詳細の列で開く（モーダルにしない）。
+      // 行から詳細（質問・回答・理由・コメント）を全幅の詳細で開く（モーダルにしない）。
       await bad.getByRole("button", { name: /run-a の質問/ }).click();
       await expect(page).toHaveURL(/feedback=run-a/);
       const detail = page.getByRole("region", { name: "フィードバックの詳細" });
@@ -207,80 +207,54 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
-/** 一覧 + 詳細（共有 ListDetailLayout。#2283）の幅と開閉の保存を、spec の最初の 1 回だけ消す（再読込では残す）。 */
-async function clearListDetailStorage(page: Page) {
-  await page.addInitScript(() => {
-    if (window.sessionStorage.getItem("feedback-list-detail-cleared")) return;
-    window.localStorage.removeItem("production-ready-agent.listDetail.feedback-ratings");
-    window.sessionStorage.setItem("feedback-list-detail-cleared", "true");
-  });
-}
-
-test("xl 以上は「狭い一覧 | 広い詳細」で、先頭を自動で選ばず、選択を URL の ?feedback= に持ち、前へ / 次へで移る", async ({ page, mockApi }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "2 ペインは xl 以上の幅で確かめる");
-  await clearListDetailStorage(page);
-  seedReport(mockApi);
-  await openRatings(page);
-  const layout = page.getByTestId("list-detail-feedback-ratings");
-  const list = page.getByTestId("list-detail-feedback-ratings-list");
-  const detail = page.getByRole("region", { name: "フィードバックの詳細" });
-  await expect(layout).toHaveAttribute("data-list-detail-layout", "split");
-  await expect(detail).toContainText("フィードバックを選んでください");
-  await expect(page).not.toHaveURL(/feedback=/);
-  const [listBox, layoutBox] = await Promise.all([list.boundingBox(), layout.boundingBox()]);
-  expect(listBox!.width).toBeCloseTo(280, 0);
-  expect(layoutBox!.width - listBox!.width).toBeGreaterThan(listBox!.width * 2);
-  // 件数は一覧の列の上の 1 か所（期間・業務 Agent の評価の全件。#1891）。
-  await expect(list.getByTestId("feedback-list-toolbar")).toContainText("全 10 件");
-
-  const first = page.getByRole("button", { name: "run-a の質問：今月の契約件数は？ の詳細を表示" });
-  const second = page.getByRole("button", { name: "run-b の質問：今月の契約件数は？ の詳細を表示" });
-  await first.click();
-  await expect(page).toHaveURL(/feedback=run-a/);
-  await expect(first).toHaveAttribute("aria-current", "true");
-  await expect(detail).toContainText("先月との比較が無い。");
-  // 再読込しても URL から同じ評価を開く。
-  await page.reload();
-  await expect(page.getByRole("region", { name: "フィードバックの詳細" })).toContainText("先月との比較が無い。");
-  // 前へ / 次へ（詳細の上端の行）は一覧の今の並びの前後へ移る。
-  await expect(page.getByTestId("feedback-detail-pager-previous")).toBeDisabled();
-  await page.getByTestId("feedback-detail-pager-next").click();
-  await expect(page).toHaveURL(/feedback=run-b/);
-  await expect(second).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("feedback-detail-pager-next")).toBeDisabled();
-  // ↑ / ↓ で一覧の行の間を移る。
-  await second.focus();
-  await page.keyboard.press("ArrowUp");
-  await expect(first).toBeFocused();
-  await expectNoPageHorizontalOverflow(page);
-});
-
-test("xl 未満は 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」とブラウザの「戻る」で一覧に戻り、選んだ行へフォーカスを戻す", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
-  if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 1024, height: 900 });
+test("すべての幅で全幅の一覧 → 全幅の詳細: 先頭を自動で選ばず、選択を URL の ?feedback= に持ち、前へ / 次へで移り、「一覧へ戻る」とブラウザの「戻る」で選んだ行へ戻る", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
   seedReport(mockApi);
   await openRatings(page);
   const layout = page.getByTestId("list-detail-feedback-ratings");
   const list = page.getByTestId("list-detail-feedback-ratings-list");
   const detail = page.getByTestId("list-detail-feedback-ratings-detail");
+  const summary = page.getByTestId("feedback-summary");
+  // ユーザー管理・確かめるべき実行と同じく、xl 以上でも分割しない（#5071）。
   await expect(layout).toHaveAttribute("data-list-detail-layout", "single");
   await expect(list).toBeVisible();
   await expect(detail).toBeHidden();
+  await expect(page).not.toHaveURL(/feedback=/);
   await expect(page.getByTestId("feedback-detail-back")).toHaveCount(0);
+  // 件数は一覧の見出しの下の 1 か所（期間・業務 Agent の評価の全件。#1891）。
+  await expect(list.getByTestId("feedback-list-toolbar")).toContainText("全 10 件");
+  // desktop は質問・評価・評価日時の列。狭い画面は質問の下に評価と日時をまとめる。
+  const table = page.getByRole("table", { name: "フィードバックの一覧" });
+  const wide = (page.viewportSize()?.width ?? 0) >= 1024;
+  await expect(table.getByRole("columnheader", { name: "評価", exact: true })).toHaveCount(wide ? 1 : 0);
+  await expect(table.getByRole("columnheader", { name: "評価日時", exact: true })).toHaveCount(wide ? 1 : 0);
+  const [listBox, layoutBox] = await Promise.all([list.boundingBox(), layout.boundingBox()]);
+  expect(listBox!.width).toBeCloseTo(layoutBox!.width, 0);
 
   const first = page.getByRole("button", { name: "run-a の質問：今月の契約件数は？ の詳細を表示" });
   await first.click();
   await expect(page).toHaveURL(/feedback=run-a/);
   await expect(list).toBeHidden();
+  await expect(summary).toBeHidden();
+  await expect(page.getByTestId("feedback-filters")).toBeHidden();
   await expect(detail).toBeVisible();
   await expect(detail).toBeFocused();
   await expect(detail).toContainText("先月との比較が無い。");
   await expectNoPageHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath(`feedback-single-detail-${testInfo.project.name}.png`), fullPage: true });
+  // 再読込しても URL から同じ評価を開く。
+  await page.reload();
+  await expect(detail).toContainText("先月との比較が無い。");
+  // 前へ / 次へ（詳細の上端の行）は一覧の今の並びの前後へ移る。
+  await expect(page.getByTestId("feedback-detail-pager-previous")).toBeDisabled();
+  await page.getByTestId("feedback-detail-pager-next").click();
+  await expect(page).toHaveURL(/feedback=run-b/);
+  await expect(page.getByTestId("feedback-detail-pager-next")).toBeDisabled();
 
   await page.getByTestId("feedback-detail-back").click();
   await expect(page).not.toHaveURL(/feedback=/);
   await expect(list).toBeVisible();
-  await expect(first).toBeFocused();
+  await expect(summary).toBeVisible();
+  await expect(page.getByRole("button", { name: "run-b の質問：今月の契約件数は？ の詳細を表示" })).toBeFocused();
 
   // ブラウザの「戻る」でも一覧へ戻る（一覧から入るときは履歴に積む）。
   await first.click();
@@ -289,13 +263,6 @@ test("xl 未満は 1 ペイン: 選ぶと詳細だけ、「一覧へ戻る」と
   await expect(list).toBeVisible();
   await expect(page).not.toHaveURL(/feedback=/);
   await expect(first).toBeFocused();
-
-  // URL から直接開いた詳細から戻っても、その行へフォーカスを戻す。
-  await page.goto("/feedback?feedback=run-b");
-  await page.getByRole("tab", { name: "利用者の評価" }).click();
-  await expect(detail).toBeVisible();
-  await page.getByTestId("feedback-detail-back").click();
-  await expect(page.getByRole("button", { name: "run-b の質問：今月の契約件数は？ の詳細を表示" })).toBeFocused();
   await expectNoPageHorizontalOverflow(page);
 });
 

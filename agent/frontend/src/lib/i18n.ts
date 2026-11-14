@@ -162,6 +162,7 @@ const agentJa = {
   "feedback.column.ratedAt": "評価日時",
   "feedback.column.agent": "業務 Agent",
   "feedback.column.question": "質問",
+  "feedback.column.ratings": "評価",
   "feedback.column.rating": "本人の評価",
   "feedback.column.adminReview": "管理者の評価",
   "feedback.summary.admin": "管理者の評価: {count} 件（うち役に立たなかった {notHelpful} 件）",
