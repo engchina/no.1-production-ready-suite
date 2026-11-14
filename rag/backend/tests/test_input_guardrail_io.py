@@ -76,12 +76,20 @@ async def test_query_guardrail_actual_io(
         item for item in summary.spans if item.attributes.get("pr.stage") == "query_guardrail"
     )
     assert span.status == (
-        "failed"
-        if mode in {"error", "degraded"}
-        else "skipped"
-        if mode in {"disabled", "reused"}
-        else "done"
+        "failed" if mode in {"error", "degraded"} else "skipped" if mode == "disabled" else "done"
     )
+    # 受付時の結果の再利用は検査済みとして完了にし、詳細で再利用を示す（#5064）。
+    labels = (
+        {field.label: field.value for field in span.display.details.fields}
+        if span.display and span.display.details
+        else {}
+    )
+    if enabled and mode != "error":
+        assert ("検査の実施" in labels) is (mode == "reused")
+        if mode == "reused":
+            assert labels["結果"] == "問題なし"
+        if mode == "disabled":
+            assert labels["結果"] == "無効のため省略"
     assert call.capture_enabled is enabled
     assert "private-error-marker" not in call.model_dump_json()
     if enabled:
