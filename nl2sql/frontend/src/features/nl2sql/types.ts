@@ -597,6 +597,8 @@ export interface Nl2SqlResult {
   executable_sql: string;
   explanation: string;
   safety: SafetyReport;
+  /** 説明の文の安全チェック（OCI Guardrails）の警告（伏せた・止めた。#5063）。 */
+  guardrail_warnings?: string[];
   recommendations: string[];
   repaired_sql: string;
   optimization_hints: string[];

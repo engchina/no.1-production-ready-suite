@@ -231,6 +231,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 権限管理と DeepSec は NL2SQL 固有。ユーザー管理・ロール管理は3製品共通の画面（#206）。
     # セクション名「セキュリティ設定」は 3 製品で同じ（#658）。
     _menu_permission("menu.security_permissions", "セキュリティ設定", "権限管理"),
+    # 安全チェック（OCI Guardrails）は 3 製品で共通の設定。権限管理の下（#5061・#5063）。
+    _menu_permission("menu.settings_guardrail", "セキュリティ設定", "安全チェック"),
     _menu_permission("menu.security_deepsec", "セキュリティ設定", "Deep Data Security"),
     # 並びはサイドナビと同じ
     # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
@@ -787,6 +789,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
     ("PUT", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
     # ---- 運用設定: チャットの添付（設定は製品ごと。#2517） ----
+    ("GET", "/settings/guardrail"): _allowed("menu.settings_guardrail"),
+    ("PATCH", "/settings/guardrail"): _allowed("menu.settings_guardrail"),
     ("GET", "/settings/trace-recording"): _allowed("menu.settings_trace_recording"),
     ("PUT", "/settings/trace-recording"): _allowed("menu.settings_trace_recording"),
     ("GET", "/settings/chat-attachments"): _allowed("menu.settings_chat_attachments"),

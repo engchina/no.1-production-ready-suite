@@ -321,6 +321,8 @@ const nl2sqlJa = {
   "nav.settingsAnswerNotice": "回答の注意書き",
   "nav.settingsTraceRecording": "軌跡の記録",
   "settings.traceRecording.subtitle": "軌跡に入力・結果の本文を残すかを3製品で共通に設定します。",
+  "chat.guardrail": "安全チェック",
+  "settings.guardrail.subtitle": "OCI Guardrails による質問と回答の安全チェックを有効・無効にします。",
   "nav.settingsChatAttachments": "チャットの添付",
   "settings.chatAttachments.subtitle":
     "チャットで利用者がファイルを添付して質問できるかを設定します。NL2SQL のチャットだけに使い、RAG・Agent はそれぞれの画面で設定します。",
@@ -353,6 +355,7 @@ const nl2sqlJa = {
   "nav.securityApiKeys": "API キー",
   "nav.securityPermissions": "権限管理",
   "nav.securityDeepSec": "Deep Data Security",
+  "nav.settingsGuardrail": "安全チェック",
 
 
   "common.backToList": "一覧へ戻る",

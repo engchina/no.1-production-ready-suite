@@ -29,6 +29,7 @@ export const MENU_PERMISSIONS = {
   securityApiKeys: "menu.security_api_keys",
   securityPermissions: "menu.security_permissions",
   securityDeepSec: "menu.security_deepsec",
+  settingsGuardrail: "menu.settings_guardrail",
   settingsOci: "menu.settings_oci",
   settingsUploadStorage: "menu.settings_upload_storage",
   settingsModel: "menu.settings_model",

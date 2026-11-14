@@ -3,6 +3,7 @@ import {
   ANSWER_NOTICE_PATH,
   API_KEY_PATHS,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  GUARDRAIL_SETTINGS_PATH,
   TRACE_RECORDING_SETTINGS_PATH,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_PATHS,
@@ -60,6 +61,8 @@ export const APP_ROUTES = {
   account: ACCOUNT_PATH,
   securityPermissions: "/settings/security/permissions",
   securityDeepSec: "/settings/security/deepsec",
+  // 安全チェック（3製品で1つの設定。#5063）
+  settingsGuardrail: GUARDRAIL_SETTINGS_PATH,
   /** 旧「NL2SQL モデル学習」URL。業務プロファイルの Select AI 設定へ転送する。 */
   legacyNl2sqlModelLearning: "/settings/nl2sql-model",
 } as const;

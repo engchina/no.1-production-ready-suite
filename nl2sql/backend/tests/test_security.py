@@ -2373,9 +2373,10 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     # 実行履歴の 1 行（全幅の詳細。#1955）は一覧と同じ権限。DB 管理チャット（#2264）の生成・実行・
     # 失敗の分析と会話の履歴（#2319）は menu.db_admin_chat だけ。回答の注意書きの取得・保存
     # （#2405）は menu.settings_answer_notice。チャットの添付（#2517）は生成の権限、使うかの設定は
-    # menu.settings_chat_attachments。軌跡の本文記録は menu.settings_trace_recording。
-    assert len(mounted) == 310
-    assert len(ROUTE_PERMISSIONS) == 298
+    # menu.settings_chat_attachments。軌跡の本文記録は menu.settings_trace_recording。安全チェック
+    # （#5063）は menu.settings_guardrail。
+    assert len(mounted) == 312
+    assert len(ROUTE_PERMISSIONS) == 300
     assert ROUTE_PERMISSIONS[("GET", "/nl2sql/select-ai/credential-readiness")] == frozenset(
         {
             "nl2sql.profiles.manage",
