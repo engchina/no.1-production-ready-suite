@@ -118,6 +118,32 @@ def faq_direct_details(match: Any) -> dict[str, Any] | None:
     )
 
 
+def query_guardrail_details(result: Any, *, reused: bool) -> dict[str, Any] | None:
+    """質問の安全チェックの結果。受付時の結果を使った段は、検査済みであることを示す（#5064）。"""
+
+    findings = list(getattr(result, "findings", ()) or ())
+    skipped_reason = getattr(result, "skipped_reason", None)
+    if skipped_reason is not None:
+        verdict = {
+            "disabled": "無効のため省略",
+            "empty_text": "検査する質問がないため省略",
+            "client_unavailable": "検査の接続がないため省略",
+        }.get(skipped_reason, "省略")
+    elif getattr(result, "backend_degraded", False):
+        verdict = "安全検査を完了できず、処理を止めました"
+    elif not getattr(result, "allowed", True):
+        verdict = "処理を止めました"
+    elif findings:
+        verdict = f"警告 {len(findings)} 件（処理は続けます）"
+    else:
+        verdict = "問題なし"
+    fields: list[tuple[str, object]] = [("結果", verdict)]
+    if reused and skipped_reason is None:
+        fields.append(("検査の実施", "受付時に検査済み（結果を再利用）"))
+    messages = dict.fromkeys(str(getattr(item, "message", "") or "") for item in findings)
+    return pipeline_step_details(fields=fields, lines=[message for message in messages if message])
+
+
 def answer_guardrail_details(result: Any, answer: str) -> dict[str, Any] | None:
     """回答の安全チェックの結果（止めた・警告の件数・指摘・伏せた箇所）。"""
 
