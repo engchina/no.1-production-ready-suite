@@ -36,6 +36,7 @@ export const MENU_PERMISSIONS = {
   securityRoles: "menu.security_roles",
   securityApiKeys: "menu.security_api_keys",
   securityPermissions: "menu.security_permissions",
+  settingsGuardrail: "menu.settings_guardrail",
 } as const;
 
 export const CAPABILITY_PERMISSIONS = {

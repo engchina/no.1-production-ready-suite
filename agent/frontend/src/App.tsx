@@ -52,6 +52,9 @@ const OciSettingsClient = lazy(() =>
 const AnswerNoticeSettingsClient = lazy(() =>
   import("@/components/settings/AnswerNoticeSettingsClient").then((module) => ({ default: module.AnswerNoticeSettingsClient }))
 );
+const GuardrailSettingsClient = lazy(() =>
+  import("@/components/settings/GuardrailSettingsClient").then((module) => ({default: module.GuardrailSettingsClient})),
+);
 const TraceRecordingSettingsClient = lazy(() =>
   import("@/components/settings/TraceRecordingSettingsClient").then((module) => ({default: module.TraceRecordingSettingsClient})),
 );
@@ -192,6 +195,7 @@ export function App() {
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
         <Route path={APP_ROUTES.securityApiKeys} element={<SecurityApiKeysPage />} />
         <Route path={APP_ROUTES.securityPermissions} element={<SecurityPermissionsPage />} />
+        <Route path={APP_ROUTES.settingsGuardrail} element={<SettingsGuardrailRoute />} />
         {/* アカウントの画面（API キー / パスワード変更のタブ。#1873）。ログインだけで開ける。 */}
         <Route path={APP_ROUTES.account} element={<AccountRoute />} />
         <Route path="*" element={<EntryRedirect />} />
@@ -308,6 +312,15 @@ function SettingsAnswerNoticeRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsAnswerNotice")} subtitle={t("settings.answerNotice.subtitle")} />
       <AnswerNoticeSettingsClient />
+    </div>
+  );
+}
+
+function SettingsGuardrailRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsGuardrail")} subtitle={t("settings.guardrail.subtitle")} />
+      <GuardrailSettingsClient />
     </div>
   );
 }

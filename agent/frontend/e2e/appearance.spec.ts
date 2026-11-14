@@ -161,8 +161,10 @@ for (const viewport of [
     const operations = sidebar.locator("#nav-section-nav-section-operations");
     const userRoles = sidebar.locator("#nav-section-nav-section-userRoles");
     const settings = sidebar.locator("#nav-section-nav-section-settings");
-    await expect(security.getByRole("link")).toHaveCount(1);
+    // 安全チェックは 3 製品で共通の設定で、権限管理の下（#5062）。
+    await expect(security.getByRole("link")).toHaveCount(2);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
+    await expect(security.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/guardrail");
     await expect(operations.getByRole("link")).toHaveCount(6);
     // 運用設定の先頭はシステムテーブル、その下にチャットの添付（#2517・#2546）と回答の注意書き（RAG / NL2SQL と同じ。#2449）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");

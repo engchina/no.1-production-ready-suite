@@ -227,6 +227,7 @@ from app.features.agent.context_window import (
     tools_text,
 )
 from app.features.agent.evaluation_aids import aid_enabled
+from app.features.agent.guardrails import checked_answer
 from app.features.agent.guide_steps import unresolved_guide_steps, unresolved_guide_steps_message
 from app.features.agent.job_cancel import (
     NL2SQL_CANCEL_JOB_TOOL,
@@ -5304,6 +5305,7 @@ async def _finish(
         tool_confirmations = _tool_confirmations(task, state_content)
         evidence_text = getattr(selected_result, "_report_evidence_text", "")
         _save_answer_evidence(run_id, evidence_text)
+        answer = _guarded_answer(run_id, answer)
         runtime_repository.complete_builtin_run(
             run_id,
             answer,
@@ -5352,6 +5354,7 @@ async def _finish(
         )
     _save_answer_evidence(run_id, answer)
     outcome = _answer_outcome(run_id, model_answer, coverage)
+    answer = _guarded_answer(run_id, answer)
     runtime_repository.complete_builtin_run(
         run_id,
         answer,
@@ -5365,6 +5368,17 @@ async def _finish(
             else None
         ),
     )
+
+
+def _guarded_answer(run_id: str, answer: str) -> str:
+    """最終回答に安全チェックを当てる（#5062）。個人情報は伏せ、攻撃・不適切な内容は停止の文にする。"""
+    checked, warnings = checked_answer(answer)
+    if warnings:
+        logger.info(
+            "builtin_runtime_answer_guardrail",
+            extra={"run_id": run_id, "warnings": warnings, "changed": checked != answer},
+        )
+    return checked
 
 
 def _save_answer_evidence(run_id: str, answer: str) -> None:

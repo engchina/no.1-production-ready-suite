@@ -2989,11 +2989,12 @@ def test_global_tool_call_audit_filters_guardrail_warnings() -> None:
     assert data["total"] == 1
     record = data["items"][0]
     assert record["run_id"] == run["id"]
-    assert "prompt_injection.ignore_instructions" in record["guardrail_warnings"]
+    # 語の言い回しでプロンプト攻撃を判定する正規表現は持たない（#5062）。形式によるマスクだけ残す。
+    assert not any(code.startswith("prompt_injection.") for code in record["guardrail_warnings"])
     assert "sensitive_field_masked:api_key" in record["guardrail_warnings"]
 
 
-def test_tool_guardrail_masks_sensitive_fields_and_audits_injection(
+def test_tool_guardrail_masks_sensitive_fields_without_phrase_rules(
     monkeypatch: MonkeyPatch,
 ) -> None:
     fake_product_mcp(
@@ -3034,8 +3035,7 @@ def test_tool_guardrail_masks_sensitive_fields_and_audits_injection(
     assert result.output is not None
     assert result.output["rows"][0]["api_key"] == "***MASKED***"
     assert "nl2sql.non_readonly_sql_returned_as_audit_only" in result.guardrail_warnings
-    assert "prompt_injection.ignore_instructions" in result.guardrail_warnings
-    assert "prompt_injection.tool_control" in result.guardrail_warnings
+    assert not any(code.startswith("prompt_injection.") for code in result.guardrail_warnings)
     metadata = result.output["metadata"]
     assert "sensitive_field_masked:api_key" in metadata["agent_guardrail_warnings"]
 

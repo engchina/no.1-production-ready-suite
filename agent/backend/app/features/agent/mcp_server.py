@@ -77,6 +77,7 @@ from app.features.agent.confirmation import (
     ConfirmationRequest,
 )
 from app.features.agent.evidence_access import unreadable_documents
+from app.features.agent.guardrails import GuardrailBlockedError, checked_goal
 from app.features.agent.run_facts import run_answer_outcome, run_finished_at
 from app.features.agent.run_observation import (
     ObservedEvidenceItem,
@@ -1339,9 +1340,14 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             )
         _require_run_budget(request)
         try:
+            # 質問は Run を作る前に安全チェックを当てる（画面と同じ。#5062）。
+            question = checked_goal(arguments.question)
+        except GuardrailBlockedError as exc:
+            raise McpToolError(exc.code, str(exc), status=422) from exc
+        try:
             run = runtime_repository.create_builtin_run(
                 RunCreateRequest(
-                    goal=arguments.question,
+                    goal=question,
                     agent_id=agent.id,
                     thread_id=arguments.thread_id,
                 ),

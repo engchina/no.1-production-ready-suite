@@ -79,6 +79,8 @@ MENU_SETTINGS_DATABASE = "menu.settings_database"
 MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
 # チャットの添付を使うか（設定は製品ごと。運用設定のシステムテーブルの下。#2517・#2546）。
 MENU_SETTINGS_TRACE_RECORDING = "menu.settings_trace_recording"
+# 安全チェック（OCI Guardrails。3 製品で共通の設定。セキュリティ設定の権限管理の下。#5062）
+MENU_SETTINGS_GUARDRAIL = "menu.settings_guardrail"
 MENU_SETTINGS_CHAT_ATTACHMENTS = "menu.settings_chat_attachments"
 # 回答の注意書き（設定は製品ごと。運用設定のチャットの添付の下。#2405・#2449・#2546）。
 MENU_SETTINGS_ANSWER_NOTICE = "menu.settings_answer_notice"
@@ -170,6 +172,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_AUDIT, _GROUP_IMPROVE, "監査ログ"),
     # 権限管理は Agent 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
     _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
+    _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_SECURITY, "安全チェック"),
     # 並びはサイドナビと同じ
     # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
@@ -553,6 +556,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     ("PUT", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     # チャットの添付を使うか（設定は製品ごと。#2517）。
+    ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
+    ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("GET", "/settings/trace-recording"): _any(MENU_SETTINGS_TRACE_RECORDING),
     ("PUT", "/settings/trace-recording"): _any(MENU_SETTINGS_TRACE_RECORDING),
     ("GET", "/settings/chat-attachments"): _any(MENU_SETTINGS_CHAT_ATTACHMENTS),
