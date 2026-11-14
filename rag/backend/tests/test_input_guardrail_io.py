@@ -11,10 +11,10 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
     shutdown_tracing,
 )
+from pr_system_settings.guardrails import GuardrailResult
 
 from app.config import Settings
 from app.rag import pipeline as module
-from app.rag.guardrails import GuardrailResult
 from app.rag.pipeline import RagPipeline
 from tests.test_validation_stage_io import call_of
 

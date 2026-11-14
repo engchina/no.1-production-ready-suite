@@ -1976,7 +1976,6 @@ uv run python -m app.rag.file_processing_staging_cli \
   - ケースが終わるたびに結果を `rag_evaluation_job_case_results` に 1 行保存する（#4208。回答の診断は外す）。job が失敗・取り消しになったら、保存した行を `partial_result` で返し、画面と Excel に終わったケースまでを出す（合否は判定しない）。
   - 以前の同期の `/api/evaluation/run` は、外部から直接呼ぶ利用のために残している。評価全体を 600 秒で打ち切り、Nginx は 660 秒待つ（#383）。
 - `RAG_SEARCH_TIMEOUT_SECONDS`（品質評価の 1 ケースの上限、既定 30 秒）は #383 で削除した。品質評価の 1 ケースも `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切る。既存の `rag/backend/.env` に残っていても読まれない（害はない）ので、次に編集するときに消す。
-- `RAG_OCI_GUARDRAILS_TIMEOUT_SECONDS`: OCI Guardrails 検査の timeout。既定 5 秒。障害時は `regulated` が fail-closed、その他はローカル検査へ縮退し、非機密 warning と metrics / audit code を残す。
 - `RAG_ORACLE_VECTOR_TARGET_ACCURACY`: Oracle AI Vector Search の問い合わせ側 `FETCH APPROX ... WITH TARGET ACCURACY`。既定は 95。staging / golden set で召回率とレイテンシを見ながら調整する。
 - `RAG_ORACLE_POOL_MAX`: backend（と取込 worker）の Oracle の接続 pool の上限。既定は 16（#1490 で 4 から変更）。回答の検索は 1 問の中で、検索文をまとめた vector の SQL と keyword の SQL を並行に読み（#1498。以前は検索文ごとに 2 本）、前後の文脈・参照先などは順に読むため、1 問で使う接続は 2 本程度。同時に答える問の数 × 2〜4 を目安にする。接続は要るときに 1 本ずつ増え、ADB の session の上限（3 製品で共有）を超えないようにする。
 - `RAG_ORACLE_POOL_MIN`: backend（API）の起動時に開いておく Oracle の接続の数（接続 pool の min。#1498）。既定は 4。起動直後の問で接続の作成（1 本 0.5〜1 秒）を待たないよう、起動時に pool を作り、あわせて vector index の検索の設定（target accuracy）を解決しておく（起動は待たせない）。`RAG_ORACLE_POOL_MAX` より大きければ `RAG_ORACLE_POOL_MAX` にする。取込の job のプロセスは 1 本から始める（このプロセスの数だけ ADB の session を開いたままにしない）。
@@ -2057,12 +2056,10 @@ uv run python -m app.rag.file_processing_staging_cli \
   同時実行数から決める。Uvicorn の worker では Gunicorn の `--timeout` は worker の生存確認で、1 件の request の長さ（`RAG_ANSWER_TIMEOUT_SECONDS` まで）を打ち切らない。
 - `RAG_TRACE_EXPORT_HTTP_ENDPOINT`: 空なら構造化ログ + Prometheus のみ。設定時は `rag.trace_span` event を OpenTelemetry / Langfuse gateway へ非同期 POST する。query 本文、context 本文、OCR 原文、prompt、例外 message は送らない。
 - `RAG_TRACE_EXPORT_HTTP_BEARER_TOKEN` / `RAG_TRACE_EXPORT_HTTP_TIMEOUT_SECONDS` / `RAG_TRACE_EXPORT_QUEUE_SIZE`: trace export の認証、送信 timeout、queue 上限。queue full や送信失敗は `rag_trace_export_dropped` / `rag_trace_export_failed` として記録し、RAG request は失敗させない。
-- `RAG_GUARDRAIL_MAX_QUERY_CHARS`: UI 側の入力制限と合わせる。
 - `RAG_RATE_LIMIT_ENABLED`: 高コスト API の app 内 limiter。外部 API Gateway / Ingress limiter と併用できる。
 - `RAG_RATE_LIMIT_WINDOW_SECONDS`: fixed-window limiter の窓幅。
 - `RAG_RATE_LIMIT_SEARCH_REQUESTS` / `RAG_RATE_LIMIT_EVALUATION_RUNS` / `RAG_RATE_LIMIT_UPLOADS` / `RAG_RATE_LIMIT_INGEST_REQUESTS`: tenant/user hash 単位の窓内上限。OCI / Oracle / LLM の quota と業務ピークに合わせて調整する。
 - `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names`: `PLATFORM_AUTH_MODE=local` のときだけ使う、認証ゲートウェイまたはアプリケーション権限層が認可済み scope として backend へ付与する request header（`production` ではログインした利用者の権限から範囲を決め、この header は使わない。#214）。backend は raw 値を監査ログへ出さず、document 一覧、詳細、chunk count、retrieval に deny-by-default の scope filter として適用する。外部クライアントから直接信頼しない。
-- `RAG_GUARDRAIL_MASK_SENSITIVE_IDENTIFIERS`: query / answer 内の個人番号、口座番号、電話番号、メールアドレスらしき値を `[機微情報]` にマスクする。外部 DLP と責務分担する場合だけ無効化を検討する。
 
 安全チェックを含むリリースは、コード展開後に `uv run python -m app.rag.chat_history_sanitization --dry-run --format json` を実行し、Oracle バックアップを取得してから `--apply` する。適用後は `rag_guardrail_findings_total` の `guardrail_backend_unavailable` / `prompt_injection` / `low_groundedness` と阻止率を監視する。CLI は冪等で、原文の別バックアップをアプリ DB 内には作成しない。
 
@@ -2119,10 +2116,13 @@ schema の更新と backend の更新を合わせて行ってください。フ�
 「既定に戻す」を使います。外部根拠を囲む `BEGIN_UNTRUSTED_RETRIEVED_CONTEXT` /
 `END_UNTRUSTED_RETRIEVED_CONTEXT` は引き続きモデルへ送信します。
 
-### 安全チェックを OCI Guardrails のスイッチへ更新（#2863）
+### 安全チェックの設定を 3 製品共通の platform/.env へ移す（#5061）
 
-更新時に `python -m app.rag.guardrail_settings_migration --env-file .env` を実行し、
-回答 backend を再読み込みします。旧 OCI 選択は on、Local 選択は off へ移ります。
+安全チェックの有効化は `platform/.env` の `PLATFORM_GUARDRAILS_INPUT_ENABLED` / `PLATFORM_GUARDRAILS_OUTPUT_ENABLED` になり、
+`RAG_GUARDRAILS_*` は読まない。再配備（`sudo -n ./platform/deploy/suite-update.sh`）の `init_script.sh` がサービスの起動前に
+`python -m app.rag.guardrail_settings_migration --env-file .env --platform-env-file <platform/.env>` を実行し、`backend/.env` の値を
+`platform/.env` へ移して旧い行を消す（`platform/.env` に値があればそちらを残す）。手で更新する環境は同じコマンドを実行してから
+backend を再起動する。`RAG_OCI_GUARDRAILS_*`（compartment・endpoint・閾値・timeout）は廃止し、compartment は `PLATFORM_OCI_COMPARTMENT_ID` を使う。
 設定・障害時の扱いは [安全チェック](evaluation-observability-guardrails.md) を参照してください。
 
 ## 外部 DomainProfile の読込の廃止（#3668）

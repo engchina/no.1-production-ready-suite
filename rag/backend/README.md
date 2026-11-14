@@ -223,7 +223,7 @@ Hybrid retrieval は Reciprocal Rank Fusion を使います。`RAG_RRF_K` で RR
 
 `RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒で上限と同じ。#1425）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search`・品質評価の 1 ケース）の pipeline 実行時間を制限します（#375 / #383）。回答フローが質問の理解・回答の生成・監査で LLM を複数回呼ぶためです（以前の検索だけの上限 `RAG_SEARCH_TIMEOUT_SECONDS` は #383 で削除しました）。品質評価はケースの時間切れを工程とともにケースの結果に残して評価を続け、評価全体を job の上限（回答の回数 × `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`〔最小値。既定 3600 秒〕の大きいほうで、86400 秒まで。#1430。同期の API は 600 秒）で打ち切ります（`docs/evaluation-observability-guardrails.md`）。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 回答フローの「文書検索（1回目）」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
 
-安全チェックは `RAG_GUARDRAILS_INPUT_ENABLED`（質問）と `RAG_GUARDRAILS_OUTPUT_ENABLED`（回答）を独立に選びます。既定は両方 false で、有効な側だけ OCI Guardrails を呼びます。PII の検出位置はアプリでマスクし、攻撃・不適切な内容・検査失敗は処理を止めます。Local 検査と根拠の一致率による方針は使いません。詳しくは `docs/evaluation-observability-guardrails.md` を参照してください。
+安全チェックは `PLATFORM_GUARDRAILS_INPUT_ENABLED`（質問）と `PLATFORM_GUARDRAILS_OUTPUT_ENABLED`（回答）を独立に選びます。既定は両方 false で、有効な側だけ OCI Guardrails を呼びます。PII の検出位置はアプリでマスクし、攻撃・不適切な内容・検査失敗は処理を止めます。Local 検査と根拠の一致率による方針は使いません。詳しくは `docs/evaluation-observability-guardrails.md` を参照してください。
 
 ## 評価
 

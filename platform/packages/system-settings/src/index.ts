@@ -6,6 +6,8 @@ export {
   ANSWER_NOTICE_PATH,
   CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  GUARDRAIL_SETTINGS_NAV_ITEM,
+  GUARDRAIL_SETTINGS_PATH,
   TRACE_RECORDING_SETTINGS_PATH,
   TRACE_RECORDING_SETTINGS_NAV_ITEM,
   API_KEY_ADMIN_NAV_ITEM,
@@ -478,4 +480,13 @@ export {
 
 export { TraceRecordingSettingsPage, type TraceRecordingSettingsPageProps } from "./trace-recording/TraceRecordingSettingsPage";
 export { TRACE_RECORDING_SETTINGS_MESSAGES } from "./trace-recording/messages";
+// 安全チェック（OCI Guardrails。3製品で1つ。#5061）
+export { GuardrailSettingsPage, type GuardrailSettingsPageProps } from "./guardrails/GuardrailSettingsPage";
+export { GUARDRAIL_SETTINGS_MESSAGES, type GuardrailSettingsMessages } from "./guardrails/messages";
+export {
+  GUARDRAIL_SETTINGS_QUERY_KEY,
+  type GuardrailSettingsApi,
+  type GuardrailSettingsData,
+  type GuardrailSettingsUpdate,
+} from "./guardrails/types";
 export { TRACE_RECORDING_SETTINGS_QUERY_KEY, type TraceRecordingSettingsData, type TraceRecordingSettingsApi } from "./trace-recording/types";

@@ -1,6 +1,10 @@
 import type { FailureDiagnosis } from "@production-ready/ui";
 import type { EvidenceReadingInput, EvidenceReadingWindow, OriginalSourceInput, OriginalSourceWindow } from "@production-ready/ui";
-import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
+import type {
+  GuardrailSettingsData,
+  GuardrailSettingsUpdate,
+  TraceRecordingSettingsData,
+} from "@production-ready/system-settings";
 /**
  * バックエンド API クライアント。
  *
@@ -2787,19 +2791,6 @@ export interface KnowledgeBaseExtractionFieldsData {
   fields: ExtractionFieldDefinition[];
 }
 
-export interface GuardrailSettingsData {
-  input_enabled: boolean;
-  output_enabled: boolean;
-  oci_configured: boolean;
-  oci_warning_code: string | null;
-  config_source: "runtime";
-}
-
-export interface GuardrailSettingsUpdate {
-  input_enabled: boolean;
-  output_enabled: boolean;
-}
-
 // --- 設定: Vector Index アダプター ---
 export type VectorIndexProfileName = "balanced" | "accurate" | "fast";
 /** 実際の索引と推奨ビルドの比較結果(backend の判定。#562)。unknown = 実際の値を確認できない。 */
@@ -4627,8 +4618,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  getGuardrailSettings: () =>
-    request<GuardrailSettingsData>("/api/settings/guardrail"),
+  getGuardrailSettings: (options: SettingsRequestOptions = {}) =>
+    request<GuardrailSettingsData>("/api/settings/guardrail", { signal: options.signal }),
   updateGuardrailSettings: (body: GuardrailSettingsUpdate) =>
     request<GuardrailSettingsData>("/api/settings/guardrail", {
       method: "PATCH",

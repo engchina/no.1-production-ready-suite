@@ -4,6 +4,7 @@ import json
 from typing import Any, cast
 
 import pytest
+from pr_system_settings.guardrails import GuardrailPolicy
 
 from app.api.routes import chat
 from app.config import Settings
@@ -13,7 +14,6 @@ from app.rag.chat_question_token import (
     issue_question_token,
     read_question_context,
 )
-from app.rag.guardrails import GuardrailPolicy
 from app.rag.history_question import HistoryConfirmation
 from app.rag.pipeline import (
     ChatTurn,
@@ -208,7 +208,7 @@ async def test_structured_confirmation_input_uses_existing_history_budget() -> N
 async def test_guardrail_checks_each_structured_field_before_reuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.rag.guardrails import GuardrailResult
+    from pr_system_settings.guardrails import GuardrailResult
 
     oracle = ContextOracle()
     oracle.messages[0].clarification = {
@@ -233,7 +233,7 @@ async def test_masked_question_uses_stable_identity_when_later_skipped(
 ) -> None:
     from dataclasses import replace
 
-    from app.rag.guardrails import GuardrailResult
+    from pr_system_settings.guardrails import GuardrailResult
 
     oracle = ContextOracle()
     first = oracle.messages[0]

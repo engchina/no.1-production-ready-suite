@@ -126,9 +126,11 @@ production（`PLATFORM_AUTH_MODE=authenticated`）では client の `X-Tenant-ID
 
 ## ガードレール
 
-「取込・検索・回答設定 > 安全チェック」で入力と出力の検査を個別に選びます。
-全体の設定であり、検索・回答プロファイルでは上書きしません。
-`RAG_GUARDRAILS_INPUT_ENABLED` と `RAG_GUARDRAILS_OUTPUT_ENABLED` の既定は両方 `false` です。
+「セキュリティ設定 > 安全チェック」（権限管理の下）で入力と出力の検査を個別に選びます。
+3 製品で共通の全体の設定（`platform/.env`。#5061）であり、検索・回答プロファイルでは上書きしません。
+`PLATFORM_GUARDRAILS_INPUT_ENABLED` と `PLATFORM_GUARDRAILS_OUTPUT_ENABLED` の既定は両方 `false` です。
+判定・OCI の呼出・設定の API は platform の `pr_system_settings.guardrails` にあり、RAG はチャットの受付時の検査と
+会話の履歴の再検査を持ちます。
 
 選択した側だけ、質問または回答のテキストを OCI Generative AI の `ApplyGuardrails` API に送り、
 PII・プロンプト攻撃・不適切な内容を検出します。API は検出結果を返し、アプリが PII の位置を
@@ -149,12 +151,13 @@ backend の更新前に設定ファイルを安全な場所へバックアップ
 
 ```bash
 cd rag/backend
-uv run python -m app.rag.guardrail_settings_migration --env-file .env
+uv run python -m app.rag.guardrail_settings_migration --env-file .env --platform-env-file ../../platform/.env
 ```
 
-再配備でもサービスの起動前に同じ移行を行います。旧単一スイッチの値を入力・出力の両方へ移し、旧 OCI 選択は両方有効、旧 Local 選択は両方無効へ移します。すでに新しいスイッチを明示した場合は
-その値を保持します。旧方針・ローカル検査の環境変数は削除し、実行時に互換読み込みしません。
-保存済みプロファイルの旧 `guardrail_policy` は読み捨て、次に保存すると除外します。
+再配備（`init_script.sh`）でもサービスの起動前に同じ移行を行います。`backend/.env` の
+`RAG_GUARDRAILS_INPUT_ENABLED` / `RAG_GUARDRAILS_OUTPUT_ENABLED` を `platform/.env` の
+`PLATFORM_GUARDRAILS_*` へ移し、`RAG_GUARDRAIL` で始まる旧い行を消します。`platform/.env` に値が
+あればそちらを残します。実行時に旧名は読みません。
 独立した旧ステージのサービス基盤は残しますが、RAG の安全チェックからは呼びません。
 
 冒頭要約は、回答が使う既知の本文見出しより前の段落を対象にします。出典のある本文の段落 ID と、その原文の ID を `judge_diagnostics.summary_citation_candidates` に残します。これは支持の確定ではなく意味判定へ渡す候補です。要約の主張そのものを原文で判断し、本文を事実の出典にしません。通常の本文の無引用段落や、警告・除外の節へこの対応を広げません。候補が入力予算に収まらないときは要約を未評価にし、合格にしません。

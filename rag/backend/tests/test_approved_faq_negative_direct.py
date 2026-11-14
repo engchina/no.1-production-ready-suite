@@ -13,12 +13,12 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
     shutdown_tracing,
 )
+from pr_system_settings.guardrails import GuardrailResult
 
 from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.answer_engine import AnswerEngine, AnswerOutcome, AnswerScope
-from app.rag.guardrails import GuardrailResult
 from app.rag.pipeline import ChatTurn, PreparedHistoryRewrite, RagPipeline
 from app.rag.search_answer_profile_knowledge import (
     FAQ_DIRECT_ANSWER_ENABLED_KEY,

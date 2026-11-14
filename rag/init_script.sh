@@ -689,9 +689,9 @@ migrate_saved_settings() {
   # Settingsを読む処理より先に旧い検索方式の値を移す。失敗したら配備を止める。
   run_as_service_user_in_dir "${BACKEND_DIR}" \
     ".venv/bin/python -m app.rag.hybrid_search_settings_migration --env-file .env --apply" || return 1
-  # 入出力のチェックを分ける前の値を、サービスの起動前に一度だけ移す。
+  # 安全チェックの有効化（RAG_GUARDRAILS_*）を、3製品共通の platform/.env へサービスの起動前に移す（#5061）。
   run_as_service_user_in_dir "${BACKEND_DIR}" \
-    ".venv/bin/python -m app.rag.guardrail_settings_migration --env-file .env"
+    ".venv/bin/python -m app.rag.guardrail_settings_migration --env-file .env --platform-env-file '${PLATFORM_ENV_FILE}'"
   if ! run_as_service_user_in_dir "${BACKEND_DIR}" \
     ".venv/bin/python -m app.rag.structured_records_settings_migration --apply"; then
     log "WARNING: The saved RAG settings could not be migrated. See docs/deployment.md (#2457)."

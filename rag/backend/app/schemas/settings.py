@@ -1041,21 +1041,3 @@ class GraphSettingsUpdate(BaseModel):
     """関係情報設定の更新 payload。"""
 
     profile: GraphProfileName
-
-
-class GuardrailSettingsData(BaseModel):
-    """OCI Guardrails の有効状態と設定の準備状況。"""
-
-    input_enabled: bool
-    output_enabled: bool
-    oci_configured: bool
-    oci_warning_code: str | None = None
-    config_source: str = "runtime"
-
-
-class GuardrailSettingsUpdate(BaseModel):
-    """OCI Guardrails の有効・無効だけを更新する。"""
-
-    model_config = ConfigDict(extra="forbid")
-    input_enabled: bool
-    output_enabled: bool

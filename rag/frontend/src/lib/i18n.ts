@@ -243,7 +243,6 @@ export const ja = {
   "nav.settingsPrompts": "回答プロンプト",
   "nav.settingsPrompts.sidebar": "回答プロンプト",
   "nav.settingsGuardrail": "安全チェック",
-  "nav.settingsGuardrail.sidebar": "安全チェック",
   "nav.settingsVectorIndex": "検索インデックス",
   "nav.settingsVectorIndex.sidebar": "検索インデックス",
   // 評価を実行する「品質評価」（改善・運用）と区別する（#409）。
@@ -1425,32 +1424,6 @@ export const ja = {
   // 回答の場所の処理の段階（3 製品共通の ChatProgress。#1145 / #1146）。実行中は「〜しています」、完了は「〜しました」、
   // 失敗は「〜できませんでした」、未実行は名詞（NL2SQL・Agent と同じ）。
   "chat.progress.submit.running": "質問を送信しています",
-  "settings.guardrail.overview.title": "安全チェック",
-  "settings.guardrail.overview.description":
-    "全体の設定です。保存すると次の質問・回答から使います。",
-  "settings.guardrail.ociLabel": "OCI Guardrails",
-  "settings.guardrail.ociDescription": "入力と出力を個別に選択できます。選択したテキストだけを OCI Guardrails に送信します。",
-  "settings.guardrail.selection": "検査するテキスト（既定は両方とも未選択）",
-  "settings.guardrail.input": "入力を検査する",
-  "settings.guardrail.output": "出力を検査する",
-  "settings.guardrail.input.description": "質問を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは、この検査のために質問を OCI Guardrails へ送信しません。",
-  "settings.guardrail.output.description": "回答を OCI Guardrails に送信し、個人情報・プロンプト攻撃・不適切な内容を検査します。未選択のときは、この検査のために回答を OCI Guardrails へ送信しません。",
-  "settings.guardrail.resultHandling": "OCI の検出結果に基づき、個人情報として返された位置の文字をアプリでマスクします。プロンプト攻撃・不適切な内容を検出したとき、または検査を完了できないときは、処理・回答の表示を停止します。",
-  "settings.guardrail.officialDocs": "OCI Guardrails の公式ドキュメント（新しいタブで開きます）",
-  "settings.guardrail.ociSettingsLink": "OCI 認証設定を開く",
-  "settings.guardrail.actions.label": "安全チェックの設定の操作",
-  "settings.guardrail.actions.save": "保存",
-  "settings.guardrail.actions.saved": "安全チェックを保存しました。",
-  "settings.guardrail.actions.reset": "変更を破棄",
-  "settings.guardrail.actions.unsaved": "未保存の変更があります。",
-  "settings.guardrail.loadError": "安全チェック設定を取得できませんでした。",
-  "settings.guardrail.saveError": "安全チェック設定を保存できませんでした。",
-  "settings.guardrail.ociWarning.compartmentMissing":
-    "OCI Guardrails の compartment が未設定です。保存する前に OCI 認証設定を完了してください。",
-  "settings.guardrail.ociWarning.credentialsInvalid":
-    "OCI API キー認証を利用できません。config・profile・秘密鍵とファイル権限を確認してください。",
-  "settings.guardrail.ociWarning.unavailable":
-    "OCI Guardrails の設定を確認してください。内部診断コードは監査ログで確認できます。",
   "settings.vectorIndex.subtitle":
     "検索時の精度とレイテンシのバランスを選択します。",
   "settings.vectorIndex.overview.title": "検索インデックス",
