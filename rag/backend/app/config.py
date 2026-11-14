@@ -1612,6 +1612,17 @@ class Settings(
             "全体の上限は rag_answer_timeout_seconds。"
         ),
     )
+    rag_llm_json_whitespace_run_limit: int = Field(
+        default=1000,
+        ge=200,
+        le=100_000,
+        description=(
+            "(#5077)LLM の構造化出力の JSON の文字列の外で、空白(空白・タブ・改行)が"
+            "この文字数続いたら、その出力を不合格にして送り直す(やり直しの共通の枠で数える)。"
+            "文字列の中(回答の本文)の空白・反復した表は数えない。"
+            "正当な JSON の整形(インデント)では届かない長さにする。"
+        ),
+    )
     rag_section_expansion_followup_reserve_percent: int = Field(
         default=20,
         ge=0,
