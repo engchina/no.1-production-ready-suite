@@ -1,73 +1,41 @@
-"""旧設定を移行しても、他の設定・明示値・アクセス権を保持する。"""
+"""安全チェックの有効化を platform/.env へ移しても、他の設定と明示値を保つ（#5061）。"""
 
-import stat
 from pathlib import Path
-
-import pytest
 
 from app.rag.guardrail_settings_migration import migrate_env
 
 
-@pytest.mark.parametrize(("backend", "expected"), [("local", "false"), ("oci_guardrails", "true")])
-def test_migrate_backend_and_remove_policy_once(
-    tmp_path: Path, backend: str, expected: str
-) -> None:
-    path = tmp_path / ".env"
-    path.write_text(
-        f"# 設定\nRAG_GUARDRAIL_BACKEND={backend}\n"
-        "RAG_GUARDRAIL_POLICY=strict\nRAG_CHUNK_SIZE=800\n"
+def test_moves_switches_to_platform_and_removes_old_keys(tmp_path: Path) -> None:
+    backend = tmp_path / "backend.env"
+    platform = tmp_path / "platform.env"
+    backend.write_text(
+        "RAG_CHUNK_SIZE=800\nRAG_GUARDRAIL_POLICY=strict\nRAG_GUARDRAIL_SERVICE_URL=http://x\n"
+        "RAG_GUARDRAILS_INPUT_ENABLED=true\nRAG_GUARDRAILS_OUTPUT_ENABLED=false\n"
     )
-    path.chmod(0o600)
-    assert migrate_env(path)
-    result = path.read_text()
-    assert (
-        result == f"# 設定\nRAG_CHUNK_SIZE=800\nRAG_GUARDRAILS_INPUT_ENABLED={expected}\n"
-        f"RAG_GUARDRAILS_OUTPUT_ENABLED={expected}\n"
-    )
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert not migrate_env(path)
-    assert path.read_text() == result
+    platform.write_text("PLATFORM_TIMEZONE=UTC\n")
+    assert migrate_env(backend, platform)
+    assert "RAG_GUARDRAILS_" not in backend.read_text()
+    assert "RAG_GUARDRAIL_POLICY" not in backend.read_text()
+    # 明示した変数だけを消す（別の機能の変数は残す）。
+    assert "RAG_GUARDRAIL_SERVICE_URL=http://x" in backend.read_text()
+    assert "RAG_CHUNK_SIZE=800" in backend.read_text()
+    text = platform.read_text()
+    assert "PLATFORM_TIMEZONE=UTC" in text
+    assert "PLATFORM_GUARDRAILS_INPUT_ENABLED=true" in text
+    assert "PLATFORM_GUARDRAILS_OUTPUT_ENABLED=false" in text
+    # 2 回目は何もしない（冪等）。
+    assert not migrate_env(backend, platform)
 
 
-def test_explicit_switch_is_preserved(tmp_path: Path) -> None:
-    path = tmp_path / ".env"
-    path.write_text("RAG_GUARDRAIL_BACKEND=oci_guardrails\nRAG_GUARDRAILS_ENABLED=false\n")
-    migrate_env(path)
-    assert (
-        path.read_text()
-        == "\nRAG_GUARDRAILS_INPUT_ENABLED=false\nRAG_GUARDRAILS_OUTPUT_ENABLED=false\n"
-    )
+def test_existing_platform_value_wins(tmp_path: Path) -> None:
+    backend = tmp_path / "backend.env"
+    platform = tmp_path / "platform.env"
+    backend.write_text("RAG_GUARDRAILS_INPUT_ENABLED=true\n")
+    platform.write_text("PLATFORM_GUARDRAILS_INPUT_ENABLED=false\n")
+    assert migrate_env(backend, platform)
+    assert "PLATFORM_GUARDRAILS_INPUT_ENABLED=false" in platform.read_text()
+    assert "PLATFORM_GUARDRAILS_INPUT_ENABLED=true" not in platform.read_text()
 
 
-def test_existing_staging_file_is_not_overwritten_or_removed(tmp_path: Path) -> None:
-    path = tmp_path / ".env"
-    before = "RAG_GUARDRAIL_BACKEND=oci_guardrails\n"
-    path.write_text(before)
-    staging = path.with_name(".env.guardrails-migration")
-    staging.write_text("別の処理の内容")
-    with pytest.raises(FileExistsError):
-        migrate_env(path)
-    assert path.read_text() == before
-    assert staging.read_text() == "別の処理の内容"
-
-
-@pytest.mark.parametrize("enabled", ["true", "false"])
-def test_single_switch_migrates_both_sides_preserving_explicit_value(
-    tmp_path: Path, enabled: str
-) -> None:
-    path = tmp_path / ".env"
-    path.write_text(f"RAG_GUARDRAILS_ENABLED={enabled}\nRAG_GUARDRAILS_OUTPUT_ENABLED=false\n")
-    assert migrate_env(path)
-    assert "RAG_GUARDRAILS_ENABLED=" not in path.read_text()
-    assert f"RAG_GUARDRAILS_INPUT_ENABLED={enabled}" in path.read_text()
-    assert "RAG_GUARDRAILS_OUTPUT_ENABLED=false" in path.read_text()
-    assert not migrate_env(path)
-
-
-def test_invalid_switch_is_not_changed(tmp_path: Path) -> None:
-    path = tmp_path / ".env"
-    before = "RAG_GUARDRAILS_ENABLED=unknown\n"
-    path.write_text(before)
-    with pytest.raises(ValueError):
-        migrate_env(path)
-    assert path.read_text() == before
+def test_missing_backend_env_is_unchanged(tmp_path: Path) -> None:
+    assert not migrate_env(tmp_path / "missing.env", tmp_path / "platform.env")

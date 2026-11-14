@@ -31,9 +31,9 @@ def test_query_overrides_apply() -> None:
     merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
     assert merged.rag_max_anchors_per_document == 2
-    assert merged.rag_guardrails_input_enabled is settings.rag_guardrails_input_enabled
+    assert merged.guardrails_input_enabled is settings.guardrails_input_enabled
     # グローバルは破壊しない。
-    assert settings.rag_guardrails_input_enabled is merged.rag_guardrails_input_enabled
+    assert settings.guardrails_input_enabled is merged.guardrails_input_enabled
 
 
 # 定義から消した欄(#4784)。全体の設定だけで決まる欄・画面に無い業務ガイドの照合の 2 欄・旧データ用の

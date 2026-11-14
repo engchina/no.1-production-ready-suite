@@ -4,9 +4,9 @@ import json
 from datetime import UTC, datetime
 
 import pytest
+from pr_system_settings.guardrails import GuardrailInspection, OciGuardrailsClient, PiiSpan
 from pytest import MonkeyPatch
 
-from app.clients.oci_guardrails import GuardrailInspection, OciGuardrailsClient, PiiSpan
 from app.clients.oracle import StoredConversation, StoredMessage
 from app.config import Settings
 from app.rag import chat_history_sanitization
@@ -78,7 +78,7 @@ async def test_chat_history_sanitization_dry_run_never_writes(monkeypatch: Monke
     counts = await sanitize_chat_history(
         apply=False,
         oracle=oracle,  # type: ignore[arg-type]
-        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True),
+        settings=Settings(guardrails_input_enabled=True, guardrails_output_enabled=True),
     )
 
     assert counts.scanned == 3
@@ -97,7 +97,7 @@ async def test_chat_history_sanitization_apply_writes_only_sanitized_values(
     counts = await sanitize_chat_history(
         apply=True,
         oracle=oracle,  # type: ignore[arg-type]
-        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True),
+        settings=Settings(guardrails_input_enabled=True, guardrails_output_enabled=True),
     )
 
     assert counts.updated == 3
@@ -136,7 +136,7 @@ async def test_inspection_failure_preserves_entire_conversation(
     counts = await sanitize_chat_history(
         apply=apply,
         oracle=oracle,  # type: ignore[arg-type]
-        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True),
+        settings=Settings(guardrails_input_enabled=True, guardrails_output_enabled=True),
     )
 
     assert counts.scanned == counts.failed == 3
@@ -152,10 +152,9 @@ def test_unconfigured_oci_cli_fails_without_writing(
 ) -> None:
     oracle = FakeMigrationOracle()
     settings = Settings(
-        rag_guardrails_input_enabled=True,
-        rag_guardrails_output_enabled=True,
+        guardrails_input_enabled=True,
+        guardrails_output_enabled=True,
         oci_compartment_id="",
-        oci_guardrails_compartment_id="",
     )
     monkeypatch.setattr(chat_history_sanitization, "OracleClient", lambda: oracle)
     monkeypatch.setattr(chat_history_sanitization, "get_settings", lambda: settings)
@@ -176,7 +175,7 @@ async def test_retry_after_inspection_recovery_sanitizes_original_messages(
     failed = await sanitize_chat_history(
         apply=True,
         oracle=oracle,  # type: ignore[arg-type]
-        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True),
+        settings=Settings(guardrails_input_enabled=True, guardrails_output_enabled=True),
     )
     assert failed.failed == 3
     assert oracle.updates == []
@@ -185,7 +184,7 @@ async def test_retry_after_inspection_recovery_sanitizes_original_messages(
     recovered = await sanitize_chat_history(
         apply=True,
         oracle=oracle,  # type: ignore[arg-type]
-        settings=Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True),
+        settings=Settings(guardrails_input_enabled=True, guardrails_output_enabled=True),
     )
     assert recovered.failed == 0
     assert recovered.updated == 3

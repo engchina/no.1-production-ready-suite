@@ -241,7 +241,13 @@ SETTINGS_FILES = {
 # pr_backend_core.BaseServiceSettings の共通 field（各製品の Settings には書かれていない）。
 BASE_SETTINGS_FIELDS = {"app_version", "log_level", "environment", "cors_origins"}
 # 3 製品の Settings が pr_backend_core.config の mixin から受け継ぐ共通の属性（時間帯の TimezoneSettings。#3255）。
-MIXIN_SETTINGS_FIELDS = {"timezone", "auth_mode", "app_auth_cookie_secure"}
+MIXIN_SETTINGS_FIELDS = {
+    "timezone",
+    "auth_mode",
+    "app_auth_cookie_secure",
+    "guardrails_input_enabled",
+    "guardrails_output_enabled",
+}
 
 # 1 台の Compute の配備（platform/deploy/suite-init.sh が呼ぶ。#1316。製品は単独では配備しない）の契約。
 # 製品の init_script.sh は Nginx の site を書かず、/<製品>/ を base に frontend を build し、backend/.env は製品ごとの元から作る。

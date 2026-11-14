@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 from pr_backend_core.observability.model_usage import run_usage_totals
+from pr_system_settings.guardrails import GuardrailResult
 from pytest import MonkeyPatch
 from rag_engine.resources.tracing import observe_call
 
@@ -30,7 +31,6 @@ from app.clients.oracle_run_history import RunHistoryStore, run_history_list_whe
 from app.config import EnterpriseAiConfiguredModel, Settings, get_settings
 from app.main import app
 from app.rag import run_history as run_history_module
-from app.rag.guardrails import GuardrailResult
 from app.rag.pipeline import RagPipeline
 from app.rag.request_context import (
     AuditRequestContext,

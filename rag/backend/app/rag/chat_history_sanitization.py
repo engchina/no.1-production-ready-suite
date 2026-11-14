@@ -8,10 +8,11 @@ import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 
+from pr_system_settings.guardrails import GuardrailPolicy, GuardrailResult
+
 from app.api.routes.chat import BLOCKED_MESSAGE_PLACEHOLDER
 from app.clients.oracle import OracleClient, StoredMessage
 from app.config import Settings, get_settings
-from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.request_context import with_system_access
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 

@@ -31,6 +31,7 @@ from pr_backend_core.observability.tracing import (
     observed_span,
     operation_trace,
 )
+from pr_system_settings.guardrails import GuardrailPolicy, GuardrailResult
 from pydantic import ValidationError
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.runtime import resolve_prompt
@@ -58,7 +59,6 @@ from app.rag.degraded_steps import DegradedSteps, ReportDegraded, not_recorded
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.faq_direct_answer import FAQ_DIRECT_STAGE, direct_faq_snapshot
 from app.rag.faq_direct_answer import direct_faq_outcome as direct_faq_outcome_from
-from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.history_question import (
     EMPTY_CONVERSATION_HISTORY,
     HistoryConfirmation,
@@ -889,7 +889,7 @@ class RagPipeline:
                 request_snapshot=lambda: {
                     "回答本文の文字数": len(outcome.answer),
                     "渡した根拠本文": outcome.context_text,
-                    "出力検査の設定": self._settings.rag_guardrails_output_enabled,
+                    "出力検査の設定": self._settings.guardrails_output_enabled,
                 },
                 result_snapshot=asdict,
             )
@@ -1163,7 +1163,7 @@ class RagPipeline:
                 lambda: {
                     "確認対象": purpose,
                     "質問": query,
-                    "入力検査の設定": self._settings.rag_guardrails_input_enabled,
+                    "入力検査の設定": self._settings.guardrails_input_enabled,
                     "既存結果の再利用": prechecked is not None,
                 },
                 restricted=True,

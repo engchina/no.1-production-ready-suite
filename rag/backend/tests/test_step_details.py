@@ -5,10 +5,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from pr_system_settings.guardrails import GuardrailPolicy, OciGuardrailsClient
 
-from app.clients.oci_guardrails import OciGuardrailsClient
 from app.config import Settings
-from app.rag.guardrails import GuardrailPolicy
 from app.rag.step_details import (
     answer_guardrail_details,
     history_rewrite_details,
@@ -146,7 +145,7 @@ def test_actual_oci_failure_does_not_claim_local_inspection_or_masking(
     monkeypatch.setattr(OciGuardrailsClient, "inspect_text", fail)
     answer = "合成の正常な回答"
     result = GuardrailPolicy(
-        Settings(rag_guardrails_input_enabled=True, rag_guardrails_output_enabled=True)
+        Settings(guardrails_input_enabled=True, guardrails_output_enabled=True)
     ).validate_answer(answer)
     details = answer_guardrail_details(result, answer)
     assert result.backend_degraded and not result.allowed

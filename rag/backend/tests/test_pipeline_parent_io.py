@@ -13,11 +13,11 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
     shutdown_tracing,
 )
+from pr_system_settings.guardrails import GuardrailResult
 
 from app.config import Settings
 from app.rag import chat_attachments
 from app.rag.answer_engine import AnswerEngine, AnswerOutcome
-from app.rag.guardrails import GuardrailResult
 from app.rag.pipeline import ChatTurn, RagPipeline
 from app.schemas.search import RetrievedChunk, SearchRequest
 from tests.test_answer_engine import FakeGenAi, SavingOracle

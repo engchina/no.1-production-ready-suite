@@ -16,6 +16,7 @@ from pr_system_settings.answer_notice import (
     AnswerNoticeParts,
     AnswerNoticeRecord,
 )
+from pr_system_settings.guardrails import GuardrailPolicy
 from pytest import MonkeyPatch
 
 import app.rag.pipeline as pipeline_module
@@ -25,7 +26,6 @@ from app.clients.oracle import StoredMessage
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.answer_notice import answer_outcome_takes_notice
-from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import RagPipeline
 from app.schemas.search import SearchRequest
 from app.security.service import SecurityService, set_security_service

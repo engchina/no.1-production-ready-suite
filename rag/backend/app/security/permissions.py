@@ -146,7 +146,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "文書構造索引"),
     _menu_permission(MENU_SETTINGS_RETRIEVAL, _GROUP_PIPELINE, "検索方法"),
     _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
-    _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_PIPELINE, "安全チェック"),
     _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "評価の基準"),
     _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
     _permission(
@@ -159,6 +158,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     ),
     # 権限管理は RAG 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
     _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
+    # 安全チェックの有効化は 3 製品共通の設定（platform/.env。#5061）。
+    _menu_permission(MENU_SETTINGS_GUARDRAIL, _GROUP_SECURITY, "安全チェック"),
     # 並びはサイドナビと同じ
     # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),

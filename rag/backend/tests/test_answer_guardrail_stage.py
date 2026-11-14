@@ -13,10 +13,9 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
     shutdown_tracing,
 )
+from pr_system_settings.guardrails import GuardrailInspection, GuardrailPolicy
 
-from app.clients.oci_guardrails import GuardrailInspection
 from app.config import Settings
-from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import SearchStageProgress, _observe_stage, guardrail_stage_outcome
 from app.rag.step_details import answer_guardrail_details
 from tests.span_progress_support import RecordingTrace
@@ -49,7 +48,7 @@ async def test_inspection_outcome_reaches_progress_chat_and_trace(
             return inspection
 
     policy = GuardrailPolicy(
-        Settings(rag_guardrails_input_enabled=False, rag_guardrails_output_enabled=enabled),
+        Settings(guardrails_input_enabled=False, guardrails_output_enabled=enabled),
         Client(),
     )
     events: list[SearchStageProgress] = []
@@ -133,8 +132,9 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
     allowed: bool,
     changed: bool,
 ) -> None:
+    from pr_system_settings.guardrails import GuardrailResult
+
     from app.rag.answer_engine import AnswerEngine, AnswerOutcome
-    from app.rag.guardrails import GuardrailResult
     from app.rag.pipeline import RagPipeline
     from app.schemas.search import SearchRequest
     from tests.test_answer_engine import FakeGenAi, SavingOracle
@@ -177,7 +177,7 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
     oracle = SavingOracle()
     tracker = RecordingTrace(model_id="synthetic")
     response = await RagPipeline(
-        settings=Settings(rag_guardrails_input_enabled=False),
+        settings=Settings(guardrails_input_enabled=False),
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
     ).run(SearchRequest(query="合成の質問", knowledge_base_ids=["kb-1"]), trace=tracker)

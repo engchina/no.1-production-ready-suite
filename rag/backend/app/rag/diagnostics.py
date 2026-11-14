@@ -41,8 +41,8 @@ def build_search_diagnostics(
     return SearchDiagnostics(
         retrieval_strategy="hybrid",
         retrieval_strategy_adapter=retrieval_strategy_adapter,
-        guardrails_input_enabled=resolved_settings.rag_guardrails_input_enabled,
-        guardrails_output_enabled=resolved_settings.rag_guardrails_output_enabled,
+        guardrails_input_enabled=resolved_settings.guardrails_input_enabled,
+        guardrails_output_enabled=resolved_settings.guardrails_output_enabled,
         guardrail_degraded=guardrail_degraded,
         filter_keys=sorted(request.filters),
         knowledge_base_count=len(request.knowledge_base_ids),
@@ -94,8 +94,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "generation_reasoning_effort": resolved_settings.rag_generation_reasoning_effort,
         "history_rewrite_enabled": resolved_settings.rag_history_rewrite_enabled,
         "search_top_k_default": resolved_settings.rag_search_top_k_default,
-        "guardrails_input_enabled": resolved_settings.rag_guardrails_input_enabled,
-        "guardrails_output_enabled": resolved_settings.rag_guardrails_output_enabled,
+        "guardrails_input_enabled": resolved_settings.guardrails_input_enabled,
+        "guardrails_output_enabled": resolved_settings.guardrails_output_enabled,
         # 検索の経路と候補の予算(#4141。rerank に進む候補の数が変わる)。
         "hybrid_search_backend": resolved_settings.rag_hybrid_search_backend,
         "native_vector_exact_max_chunks": resolved_settings.rag_native_vector_exact_max_chunks,

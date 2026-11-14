@@ -3,6 +3,7 @@ import {
   ANSWER_NOTICE_PATH,
   API_KEY_PATHS,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  GUARDRAIL_SETTINGS_PATH,
   TRACE_RECORDING_SETTINGS_PATH,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_PATHS,
@@ -42,7 +43,8 @@ export const APP_ROUTES = {
   settingsFileTypeDefaults: "/settings/file-type-defaults",
   settingsLanguagePack: "/settings/language-pack",
   settingsRetrieval: "/settings/retrieval",
-  settingsGuardrail: "/settings/guardrail",
+  // 安全チェック（3製品で1つの設定。#5061）
+  settingsGuardrail: GUARDRAIL_SETTINGS_PATH,
   settingsVectorIndex: "/settings/vector-index",
   settingsEvaluation: "/settings/evaluation",
   settingsEntityIndex: "/settings/entity-index",

@@ -12,12 +12,12 @@ from uuid import uuid4
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_system_settings.guardrails import GuardrailFinding
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field
 
 from app.clients.http_retry import HttpRetryConfig, request_with_retry, retry_config_from_settings
 from app.config import Settings
-from app.rag.guardrails import GuardrailFinding
 
 trace_logger = logging.getLogger("app.trace")
 TraceOutcome = Literal["success", "error", "cancelled", "skipped"]

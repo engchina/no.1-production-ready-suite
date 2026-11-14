@@ -82,7 +82,11 @@ describe("権限コードの対応表", () => {
       [APP_ROUTES.settingsServices, MENU_PERMISSIONS.settingsServices],
     ]);
     const security = NAV_SECTIONS.find((section) => section.titleKey === "nav.section.security");
-    expect(security?.items.map((item) => item.href)).toEqual([APP_ROUTES.securityPermissions]);
+    // 安全チェックは権限管理の下（3製品で同じ位置。#5061）。
+    expect(security?.items.map((item) => item.href)).toEqual([
+      APP_ROUTES.securityPermissions,
+      APP_ROUTES.settingsGuardrail,
+    ]);
     const userRoles = NAV_SECTIONS.find((section) => section.titleKey === "nav.section.userRoles");
     expect(userRoles?.items.map((item) => [item.href, item.permission])).toEqual([
       [APP_ROUTES.securityUsers, MENU_PERMISSIONS.securityUsers],

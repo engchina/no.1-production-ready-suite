@@ -13,10 +13,10 @@ from pr_backend_core.observability.tracing import (
     operation_trace,
     shutdown_tracing,
 )
+from pr_system_settings.guardrails import GuardrailResult
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, AnswerOutcome
-from app.rag.guardrails import GuardrailResult
 from app.rag.history_question import HistoryConfirmation
 from app.rag.pipeline import ChatTurn, PreparedHistoryRewrite, RagPipeline
 from app.schemas.search import SearchRequest

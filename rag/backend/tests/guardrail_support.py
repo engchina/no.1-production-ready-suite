@@ -1,10 +1,10 @@
 """合成入力への OCI 応答を返す検証用クライアント。"""
 
+from pr_system_settings import guardrails
+from pr_system_settings.guardrails import GuardrailInspection, PiiSpan
 from pytest import MonkeyPatch
 
-from app.clients.oci_guardrails import GuardrailInspection, PiiSpan
 from app.config import get_settings
-from app.rag import guardrails
 
 
 class RecordedGuardrails:
@@ -26,6 +26,6 @@ class RecordedGuardrails:
 
 
 def enable_oci_stub(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "rag_guardrails_input_enabled", True)
-    monkeypatch.setattr(get_settings(), "rag_guardrails_output_enabled", True)
+    monkeypatch.setattr(get_settings(), "guardrails_input_enabled", True)
+    monkeypatch.setattr(get_settings(), "guardrails_output_enabled", True)
     monkeypatch.setattr(guardrails, "OciGuardrailsClient", lambda settings: RecordedGuardrails())

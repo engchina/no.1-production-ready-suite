@@ -3,10 +3,10 @@
 import logging
 from typing import Any, cast
 
+from pr_system_settings.guardrails import GuardrailFinding
 from pytest import LogCaptureFixture
 
 from app.rag.audit import record_rag_ingestion_audit, record_rag_search_audit
-from app.rag.guardrails import GuardrailFinding
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
