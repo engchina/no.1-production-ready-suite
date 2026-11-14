@@ -94,6 +94,7 @@ from app.rag.step_details import (
     answer_guardrail_details,
     faq_direct_details,
     history_rewrite_details,
+    query_guardrail_details,
     step_details_model,
 )
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
@@ -1169,7 +1170,13 @@ class RagPipeline:
             )
             try:
                 result = prechecked if prechecked is not None else await asyncio.to_thread(inspect)
-                outcome = "skipped" if prechecked is not None else guardrail_stage_outcome(result)
+                # 受付時の結果の再利用は検査済み。スキップは検査していないときだけ（#5064）。
+                outcome = guardrail_stage_outcome(result)
+                details = step_details_model(
+                    query_guardrail_details(result, reused=prechecked is not None)
+                )
+                if details is not None:
+                    span.set_display(details=details)
                 if outcome == "skipped":
                     span.set_status("skipped")
                 elif outcome == "error":
