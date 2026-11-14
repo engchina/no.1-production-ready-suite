@@ -105,6 +105,18 @@ describe("評価 job の表示（Issue 390）", () => {
         error_message: null,
       })
     ).toEqual({ stageLabel: null, message: "EvaluationTimeBudgetExceeded" });
+    // 回答の工程の記録の名前（接頭辞の無い工程の名前）も「処理中」にせず、実行の詳細と同じ工程の表示名で出す（#5073）。
+    expect(
+      evaluationCaseErrorSummary({
+        status: "error",
+        error_type: "AnswerIncomplete",
+        error_stage: "回答文の生成と引用の確認",
+        error_message: "回答が出力の上限に達したため、完了できませんでした。",
+      })
+    ).toEqual({
+      stageLabel: "回答文を作る",
+      message: "回答が出力の上限に達したため、完了できませんでした。",
+    });
     expect(
       evaluationCaseErrorSummary({
         status: "success",

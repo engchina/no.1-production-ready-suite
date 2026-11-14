@@ -11,8 +11,8 @@ import type {
   EvaluationJobSummary,
   EvaluationMetrics,
 } from "@/lib/api";
-import { answerStageLabel } from "@/lib/answer-progress";
 import { t, type I18nKey } from "@/lib/i18n";
+import { failedStageLabel } from "@/lib/process-failure";
 
 import { evaluationCaseRowLabel } from "./evaluation-input";
 
@@ -119,7 +119,8 @@ export function evaluationCaseErrorSummary(
 ): EvaluationCaseErrorSummary | null {
   if (result.status !== "error") return null;
   return {
-    stageLabel: result.error_stage ? answerStageLabel(result.error_stage) : null,
+    // 失敗の工程は実行の詳細と同じ表示名にする（工程の名前そのままの値も読む。#5073）。
+    stageLabel: result.error_stage ? failedStageLabel(result.error_stage) : null,
     message: result.error_message || result.error_type || t("evaluation.case.errorUnknown"),
   };
 }
