@@ -1,7 +1,7 @@
 """製品の評価と suite の評価が共有する、決定的な採点の部品（#3240）。
 
 - `text`: 語の照合の正規化（NFKC・大小文字・空白を無視）。
-- `outcomes`: 回答の対応の語彙と、回答・確認・保留の判断。
+- `outcomes`: 回答の対応の語彙と、検索の指標の対象外の判定。
 - `evidence`: 必要な根拠と引用の chunk の照合（文書・ページ・シート・行・章節・本文・表の行）。
 - `retrieval`: 正解の文書の順位（MRR・Precision@k・NDCG@k・MAP）と取れた文書。
 - `overlap`: 回答と標準回答の語の重なり（BLEU・ROUGE。分割は使う側が行う）。
@@ -63,13 +63,8 @@ from pr_evaluation_scoring.labeling import (
     pairwise_agreement,
 )
 from pr_evaluation_scoring.outcomes import (
-    DECISIONS,
     NO_RETRIEVAL_OUTCOMES,
     OUTCOMES,
-    Decision,
-    all_correct,
-    expected_decisions,
-    response_decision,
     skips_retrieval,
 )
 from pr_evaluation_scoring.overlap import bleu, rouge_l, rouge_n
@@ -132,27 +127,22 @@ __all__ = [
     "agreement",
     "calibration_failures",
     "cohen_kappa",
-    "DECISIONS",
     "NO_RETRIEVAL_OUTCOMES",
     "OUTCOMES",
-    "Decision",
     "exact_sign_test",
     "paired_bootstrap_interval",
     "EvidenceCriteria",
     "MetricAggregate",
     "ThresholdFailure",
-    "all_correct",
     "contains_normalized",
     "count_reasons",
     "document_hits",
     "evidence_matches",
-    "expected_decisions",
     "location_matches",
     "normalize_for_match",
     "normalize_name",
     "overall_passed",
     "reciprocal_rank",
-    "response_decision",
     "rounded_mean",
     "skips_retrieval",
     "table_row_texts",

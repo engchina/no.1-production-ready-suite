@@ -40,7 +40,6 @@ SOURCES_DIRNAME = "sources"
 GOLDEN_SET_NAME = "multi-hop.json"
 # 評価セットの検索の件数（RAG の既定の top_k）。資料はこの件数で全部が文脈に入らない大きさにする。
 TOP_K = 20
-EXPECTED_OUTCOMES = ("answered", "conditional")
 
 LEDGER = "system-ledger.xlsx"
 ORGANIZATION = "organization-rules.pdf"
@@ -2427,7 +2426,6 @@ def _case_payload(spec: CaseSpec, evidence: Mapping[str, tuple[str, str]]) -> di
         "query": spec.query,
         "relevant_document_ids": documents,
         "required_answer_points": list(spec.keywords),
-        "expected_outcomes": list(EXPECTED_OUTCOMES),
         "required_evidence": [
             {"id": key, "document_id": f"file:{evidence[key][0]}", "text": evidence[key][1]}
             for key in spec.evidence

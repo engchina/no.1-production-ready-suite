@@ -14,21 +14,16 @@
     "reasoning_type": "bridge",
     "hops": 2,
     "query": "合成の質問 11: 設定 S の手順は？",
+    "standard_answer": "最初は対象の区分を確かめる質問を返す。区分 Q と分かった後は、資料にもとづいて設定 S の手順を答える。",
     "relevant_document_ids": [
       "doc-c"
-    ],
-    "expected_outcomes": [
-      "needs_clarification"
     ],
     "turns": [
       {
         "reply": "区分 Q です。",
         "conditions": {
           "scope": "Q"
-        },
-        "expected_outcomes": [
-          "answered"
-        ]
+        }
       }
     ]
   },
@@ -61,11 +56,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": null,
-      "expected_decisions": [
-        "answer",
-        "clarify"
-      ],
       "observed_outcome": null,
       "outcome_source": null,
       "missing_evidence": [],
@@ -152,11 +142,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "answer",
-          "clarify"
-        ],
         "observed_outcome": null,
         "outcome_source": null,
         "missing_evidence": [],

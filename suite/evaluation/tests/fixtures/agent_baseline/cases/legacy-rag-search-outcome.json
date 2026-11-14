@@ -11,12 +11,9 @@
     "category": "environment_data_required",
     "split": "holdout",
     "query": "合成の質問 3: 項目 Z の今の値は？",
+    "standard_answer": "項目 Z の今の値は現場の記録で確かめる必要があると伝え、資料から分かる範囲は条件を示して答える。",
     "relevant_document_ids": [
       "doc-d"
-    ],
-    "expected_outcomes": [
-      "needs_environment_data",
-      "conditional"
     ],
     "required_evidence": [
       {
@@ -54,11 +51,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": 1.0,
-      "expected_decisions": [
-        "answer",
-        "hold"
-      ],
       "observed_outcome": "answered",
       "outcome_source": "inferred",
       "missing_evidence": [],
@@ -136,11 +128,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "answer",
-          "hold"
-        ],
         "observed_outcome": null,
         "outcome_source": null,
         "missing_evidence": [],
@@ -159,21 +146,17 @@
             "status": "scored",
             "reason": null
           },
-          "response_decision_accuracy": {
-            "status": "unevaluable",
-            "reason": "outcome_missing"
-          },
           "answer_correctness": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "requirement_coverage": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "claim_support_rate": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           }
         }
       }

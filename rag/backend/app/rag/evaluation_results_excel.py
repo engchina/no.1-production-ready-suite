@@ -31,7 +31,6 @@ METRICS = (
     ("required_evidence_recall", "required_evidence_recall", "必要な根拠の取得率"),
     ("mrr", "mrr", "正解文書の順位（MRR）"),
     ("answer_correctness", "answer_correctness", "回答の正確性"),
-    ("response_decision_accuracy", "response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
     ("precision_at_10", "precision_at_10", "Precision@10（参考）"),
     ("ndcg_at_3", "ndcg_at_3", "NDCG@3（参考）"),
     ("ndcg_at_10", "ndcg_at_10", "NDCG@10（参考）"),
@@ -43,16 +42,7 @@ METRICS = (
     ("rouge_2", "rouge_2", "ROUGE-2（参考）"),
     ("rouge_l", "rouge_l", "ROUGE-L（参考）"),
 )
-DECISIONS = {"answer": "回答", "clarify": "確認", "hold": "保留"}
-# 画面（`evaluation.outcome.*`・`evaluation.failureReason.*`）と同じ文言。無い値は値のまま出す。
-OUTCOMES = {
-    "answered": "回答",
-    "conditional": "条件付きの回答",
-    "needs_clarification": "回答前の確認",
-    "needs_environment_data": "現場のデータが必要",
-    "needs_human": "人への引き継ぎ",
-    "insufficient_evidence": "根拠不足（回答を控えた）",
-}
+# 画面（`evaluation.failureReason.*`）と同じ文言。無い値は値のまま出す。
 FAILURE_REASONS = {
     "retrieval_miss": "正解の文書を取れなかった",
     "partial_recall": "正解の文書の一部だけ取れた",
@@ -69,7 +59,6 @@ FAILURE_REASONS = {
     "answer_generation_fallback": "回答文を生成できず参考情報を返した",
     "guardrail_warning": "安全チェックの警告",
     "case_error": "ケースの実行に失敗",
-    "unexpected_handling": "対応が期待と違う",
     "step_missing": "手順の不足・順序の誤り",
     "forbidden_action": "危険な操作を提示",
     "condition_missing": "条件に触れていない",
@@ -82,7 +71,7 @@ CASE_STATUSES = {"success": "成功", "error": "失敗"}
 NOT_RUN_LABEL = "未実行"
 UNASSESSED_LABEL = "未評価"
 ANSWER_RECORD_MISSING_LABEL = "（回答の記録がありません）"
-_RESULT_COLUMN_WIDTHS = {"answer": 60, "decision": 20, "status": 12, "failure": 36, "trace": 36}
+_RESULT_COLUMN_WIDTHS = {"answer": 60, "status": 12, "failure": 36, "trace": 36}
 _ERROR_COLUMN_WIDTH = 48
 _METRIC_COLUMN_WIDTH = 14
 
@@ -166,7 +155,6 @@ def evaluation_results_xlsx(
                 "期待する根拠",
                 "標準回答",
                 "必須の回答要点",
-                "期待する応答の判断",
                 "回答の過程",
                 *[label for _, _, label in METRICS],
                 "状態",
@@ -194,17 +182,6 @@ def evaluation_results_xlsx(
                         if row
                         else []
                     ),
-                    DECISIONS.get(
-                        (
-                            case.expected_response_decision
-                            if case
-                            else row.expected_response_decision
-                            if row
-                            else None
-                        )
-                        or "",
-                        "未評価",
-                    ),
                     row.answer_process or "" if row else "",
                     *[
                         getattr(item, key) if getattr(item, key) is not None else "未評価"
@@ -219,9 +196,9 @@ def evaluation_results_xlsx(
                     (evidence or {}).get(item.trace_id, ""),
                 ],
             )
-            for cell in sheet[sheet.max_row][7:13]:
+            for cell in sheet[sheet.max_row][6:12]:
                 cell.number_format = "0.0%"
-        _format(sheet, [24, 48, 40, 60, 40, 20, 60, *([20] * len(METRICS)), 12, 36, 36, 48, 60])
+        _format(sheet, [24, 48, 40, 60, 40, 60, *([20] * len(METRICS)), 12, 36, 36, 48, 60])
     _format(overview, [36, *([36] * len(groups))])
     for row in overview.iter_rows(min_row=3, min_col=2):
         for cell in row:
@@ -234,7 +211,6 @@ def evaluation_results_xlsx(
 def _result_columns(prefix: str) -> list[AppendedColumn]:
     return [
         AppendedColumn(f"{prefix}: 回答", width=_RESULT_COLUMN_WIDTHS["answer"]),
-        AppendedColumn(f"{prefix}: 応答の判断", width=_RESULT_COLUMN_WIDTHS["decision"]),
         *[
             AppendedColumn(f"{prefix}: {label}", kind="percent", width=_METRIC_COLUMN_WIDTH)
             for _, _, label in METRICS
@@ -252,7 +228,7 @@ def _result_values(
 ) -> list[CellValue]:
     if item is None:
         # 途中までの結果（#4208）で実行していない行。
-        blank: list[CellValue] = [None] * (2 + len(METRICS))
+        blank: list[CellValue] = [None] * (1 + len(METRICS))
         return [*blank, NOT_RUN_LABEL, None, None, None, None]
     answer: str | None = answers.get(item.trace_id)
     if answer is None and item.status == "success":
@@ -263,7 +239,6 @@ def _result_values(
     ]
     return [
         answer,
-        OUTCOMES.get(item.observed_outcome or "", item.observed_outcome),
         *metrics,
         CASE_STATUSES.get(item.status, item.status),
         "\n".join(FAILURE_REASONS.get(reason, reason) for reason in item.failure_reasons) or None,

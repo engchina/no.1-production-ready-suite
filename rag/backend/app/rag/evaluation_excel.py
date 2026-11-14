@@ -1,7 +1,7 @@
-"""品質評価の Excel 入力。質問・根拠・標準回答・必須要点・期待する応答判断・回答の過程を読む。
+"""品質評価の Excel 入力。質問・根拠・標準回答・必須要点・回答の過程を読む。
 
 本文と位置を指定した根拠は取得率、文書だけの指定は MRR の評価入力にする。
-判断は明示値だけを使い、未指定を推定しない。構造の検証とナレッジベース内の文書の解決を分ける。
+構造の検証とナレッジベース内の文書の解決を分ける。
 """
 
 from __future__ import annotations
@@ -59,14 +59,12 @@ QUESTION_HEADER = "質問"
 EVIDENCE_HEADER = "期待する根拠"
 STANDARD_ANSWER_HEADER = "標準回答"
 SCREENS_HEADER = "必須の回答要点"
-DECISION_HEADER = "期待する応答の判断"
 PROCESS_HEADER = "回答の過程"
 HEADERS = (
     QUESTION_HEADER,
     EVIDENCE_HEADER,
     STANDARD_ANSWER_HEADER,
     SCREENS_HEADER,
-    DECISION_HEADER,
     PROCESS_HEADER,
 )
 TEMPLATE_FILE_NAME = "evaluation_request_template.xlsx"
@@ -94,7 +92,6 @@ _HEADER_ALIASES: dict[str, tuple[str, ...]] = {
         "standard_answer",
     ),
     "screens": (SCREENS_HEADER, "required_answer_points"),
-    "response_decision": (DECISION_HEADER, "expected_response_decision"),
     "answer_process": (PROCESS_HEADER, "回答過程", "answer_process", "process"),
 }
 _COLUMN_LABELS = {
@@ -102,7 +99,6 @@ _COLUMN_LABELS = {
     "evidence": EVIDENCE_HEADER,
     "standard_answer": STANDARD_ANSWER_HEADER,
     "screens": SCREENS_HEADER,
-    "response_decision": DECISION_HEADER,
     "answer_process": PROCESS_HEADER,
 }
 # 画面の別名の接頭辞と、別名の区切り（読点・カンマ）。
@@ -218,7 +214,6 @@ class EvaluationExcelRow:
     question: str
     evidence: tuple[EvidenceSpec, ...] = ()
     standard_answer: str | None = None
-    response_decision: str | None = None
     # 案内すべき画面と、書いた元の行（#2402）。
     screens: tuple[EvaluationScreen, ...] = ()
     screen_lines: tuple[str, ...] = ()
@@ -453,15 +448,6 @@ def _parse_row(
         )
     screen_lines = [line.strip() for line in cells.get("screens", "").split("\n") if line.strip()]
     screens: list[EvaluationScreen] = []
-    decision_text = cells.get("response_decision", "").strip()
-    response_decision = {"回答": "answer", "確認": "clarify", "保留": "hold"}.get(
-        decision_text, decision_text
-    ) or None
-    if response_decision not in {None, "answer", "clarify", "hold"}:
-        issue(
-            "response_decision",
-            "回答・確認・保留（answer・clarify・hold）のいずれかを指定してください。",
-        )
     lines = [line.strip() for line in cells.get("evidence", "").split("\n") if line.strip()]
     if len(lines) > EVALUATION_EVIDENCE_MAX_LINES:
         issue(
@@ -485,7 +471,6 @@ def _parse_row(
             question=question,
             evidence=tuple(evidence),
             standard_answer=standard_answer,
-            response_decision=response_decision,
             screens=tuple(screens),
             screen_lines=tuple(screen_lines),
             answer_process=answer_process,
@@ -797,7 +782,6 @@ def build_evaluation_cases(
                     required_evidence=required,
                     standard_answer=row.standard_answer,
                     required_answer_points=list(row.screen_lines),
-                    expected_response_decision=row.response_decision,
                 )
             )
         except ValidationError as exc:
@@ -922,11 +906,8 @@ _HEADER_NOTES = {
     ),
     STANDARD_ANSWER_HEADER: (
         "任意。期待する回答を書き、正確性を意味に基づいて採点します。"
-        "標準回答・必須要点や、確認して適用した下書きの期待が無い場合、正確性は未評価です。"
-    ),
-    DECISION_HEADER: (
-        "任意。回答・確認・保留（answer・clarify・hold）を指定します。"
-        "空欄で、評価に適用した回答の過程の下書きにも判断の期待が無ければ未評価です。"
+        "確認や保留を期待するときも、期待する返し方を文で書きます"
+        "（例: 資料に記載がないため答えられないと伝える）。空欄の行の正確性は未評価です。"
     ),
     SCREENS_HEADER: (
         "任意。回答で説明すべき必須要点を 1 行に 1 つ書きます。"
@@ -934,10 +915,10 @@ _HEADER_NOTES = {
     ),
     PROCESS_HEADER: (
         "任意。回答の過程（回答の手順・確認事項・検索する資料と頁など）を書きます。"
-        "画面で期待（手順・条件・根拠・対応）の下書きにし、確かめてから評価に使います。"
+        "画面で期待（手順・条件・根拠）の下書きにし、確かめてから評価に使います。"
     ),
 }
-_COLUMN_WIDTHS = (48, 56, 64, 48, 28, 64)
+_COLUMN_WIDTHS = (48, 56, 64, 48, 64)
 _GUIDE_HEADINGS = frozenset(
     {
         "指標と必要な入力",
@@ -972,20 +953,16 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         STANDARD_ANSWER_HEADER,
         "任意",
-        "期待する回答。reference / ground_truth にあたります。",
-        f"{STANDARD_ANSWER_MAX_CHARS} 文字まで。書くと、回答をこの文と比べて採点します（正確性）。",
+        "期待する回答。reference / ground_truth にあたります。"
+        "確認や保留を期待するときも、期待する返し方を文で書きます。",
+        f"{STANDARD_ANSWER_MAX_CHARS} 文字まで。書くと、回答をこの文と比べて採点します（正確性）。"
+        "空欄の行の正確性は未評価です。",
     ),
     (
         SCREENS_HEADER,
         "任意",
         "回答で説明すべき必須要点を 1 行に 1 つ書きます。条件・例外・手順も含められます。",
         "意味上の正確性の比較に使います。",
-    ),
-    (
-        DECISION_HEADER,
-        "任意",
-        "回答・確認・保留を指定します。標準回答は不要です。",
-        "空欄で、確認して評価に適用した回答の過程の下書きにも判断の期待が無ければ未評価です。",
     ),
     (
         PROCESS_HEADER,
@@ -1012,14 +989,8 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         "回答",
         "回答の正確性",
-        "標準回答または必須の回答要点。確認済みの下書きから追加した要点も使います。",
+        "標準回答（必須の回答要点・確認済みの下書きから追加した要点もあわせて使います）。",
         "期待する内容に対して回答が意味上正しいかを判定します。",
-    ),
-    (
-        "応答の判断",
-        "回答・確認・保留の判断の正しさ",
-        "期待する応答の判断、または確認して評価に適用した下書きの判断の期待。",
-        "回答する・確認する・保留するという判断が期待に合うかを測ります。",
     ),
     (),
     ("合否と未評価",),
@@ -1069,7 +1040,7 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         "根拠も標準回答も空",
         "",
-        "前提情報がない指標は未評価です。期待する判断を保留と指定すれば保留の判断を測れます。",
+        "前提情報がない指標は未評価です。保留を期待するなら、その返し方を標準回答に書きます。",
         "例: 来月の天気を教えてください。",
     ),
     (),
@@ -1147,9 +1118,8 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "初期設定の手順を教えてください。",
         "製品マニュアル.pdf | p.12 | 章節: 初期設定",
         "電源を入れ、画面の案内に従って言語と時刻を設定します。",
-        "PDF の位置、標準回答、必須要点と回答の判断を指定する例。",
+        "PDF の位置、標準回答と必須要点を指定する例。",
         "電源を入れる\n言語と時刻を設定する",
-        "回答",
         "",
     ),
     (
@@ -1158,17 +1128,15 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "",
         "必須要点と回答の過程。過程は画面で下書きを確認し、適用してから評価します。",
         "設定画面を開く\n通知を有効にする",
-        "回答",
         "【回答の手順】\n1. 設定画面を開く\n2. 通知を有効にする\n"
         "【検索する資料】\n操作手順.docx p.8",
     ),
     (
         "操作対象を指定せずに変更を依頼した場合はどうしますか？",
         "",
+        "どの対象を変更するかを利用者に確認してから案内します。",
+        "先に確認すべき質問の例。確認を期待する返し方を標準回答に書きます。",
         "",
-        "先に確認すべき質問の例。標準回答なしでも確認の判断を評価できます。",
-        "",
-        "確認",
         "",
     ),
     (
@@ -1176,7 +1144,6 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "操作手順.docx | p.3 | 抜粋: 申請の前に",
         "",
         "Word（PDF にしたもの）のページと本文の抜粋。",
-        "",
         "",
         "",
     ),
@@ -1187,14 +1154,12 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "PowerPoint のスライドの番号。",
         "",
         "",
-        "",
     ),
     (
         "プラン B の月額はいくらですか？",
         "料金表.xlsx | シート: 料金 | 行: 10-12",
         "",
         "表計算のシートと行。",
-        "",
         "",
         "",
     ),
@@ -1205,7 +1170,6 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "Markdown の章節と抜粋。セル内の改行で根拠を二つ指定します。",
         "",
         "",
-        "",
     ),
     (
         "保証の期間はどれくらいですか？",
@@ -1214,15 +1178,13 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "文書 ID で同じ名前の文書を区別します。実際の ID は文書一覧で確認してください。",
         "",
         "",
-        "",
     ),
     (
         "来月の天気を教えてください。",
         "",
+        "資料に記載がないため答えられないと伝えます。",
+        "保留を期待する例。答えられない旨の返し方を標準回答に書きます。",
         "",
-        "期待する判断を保留と指定し、標準回答なしで保留の判断を評価する例。",
-        "",
-        "保留",
         "",
     ),
 )
@@ -1240,13 +1202,12 @@ def template_xlsx(documents: Sequence[EvaluationDocumentRef] = ()) -> bytes:
 
 @dataclass(frozen=True)
 class EvaluationTemplateRow:
-    """既存テンプレート六列。位置のある根拠は reader が受け付ける原文行のまま保持する。"""
+    """既存テンプレート五列。位置のある根拠は reader が受け付ける原文行のまま保持する。"""
 
     question: str
     evidence: Sequence[str] = ()
     standard_answer: str | None = None
     required_answer_points: Sequence[str] = ()
-    response_decision: Literal["answer", "clarify", "hold"] | None = None
     answer_process: str = ""
 
 
@@ -1262,9 +1223,6 @@ def evaluation_cases_xlsx(
     _write_header(sheet, HEADERS, notes=_HEADER_NOTES)
     for value in rows:
         row = value if isinstance(value, EvaluationTemplateRow) else EvaluationTemplateRow(*value)
-        decision = {"answer": "回答", "clarify": "確認", "hold": "保留"}.get(
-            row.response_decision or "", ""
-        )
         _append_text_row(
             sheet,
             [
@@ -1272,7 +1230,6 @@ def evaluation_cases_xlsx(
                 "\n".join(row.evidence),
                 row.standard_answer or "",
                 "\n".join(row.required_answer_points),
-                decision,
                 row.answer_process,
             ],
         )
@@ -1311,7 +1268,7 @@ def evaluation_cases_xlsx(
     _set_widths(guide, (28, 32, 64, 56))
 
     examples = book.create_sheet(EXAMPLES_SHEET_TITLE)
-    # 説明の列だけを挟み、六つのケース列の値をすべて保持する。
+    # 説明の列だけを挟み、五つのケース列の値をすべて保持する。
     _write_header(examples, (*HEADERS[:3], _EXAMPLE_NOTE_HEADER, *HEADERS[3:]))
     for example in _EXAMPLE_ROWS:
         _append_text_row(examples, example)

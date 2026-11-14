@@ -109,8 +109,7 @@
 - 必要な根拠の語句は、指した資料の原稿に実際に書いてある文です（テストが原稿と同梱の PDF / xlsx で照合します）。
   台帳（xlsx）の根拠は、行を指すシステム ID のセル（`SYS-101` など）にしています。前処理 `excel_to_jsonl` は 1 行を
   1 記録にするため、その行を引用で取れたかを測れます。
-- 対応（`expected_outcomes`）は、すべて答えられる質問なので `answered` / `conditional` を受け入れます（拒答は失敗）。
-  確認済みの必須要点（`required_answer_points`）は、正確性の意味上の比較に使います。
+- すべて答えられる質問です。確認済みの必須要点（`required_answer_points`）は、正確性の意味上の比較に使います。
 
 ## 章節の読み切り（#1438）
 
@@ -159,9 +158,9 @@
 
 ## 指標
 
-[../README.md](../README.md#評価の四指標)と同じ四指標だけを使います。
+[../README.md](../README.md#評価の指標)と同じ指標だけを使います。
 必要な根拠は `required_evidence_recall`、回答の要点は意味上の正確性で測ります。
-`reasoning_type_breakdown` / `hops_breakdown`と`split_breakdown`の内訳も同じ四指標と対象件数です。
+`reasoning_type_breakdown` / `hops_breakdown`と`split_breakdown`の内訳も同じ指標と対象件数です。
 
 ## 資料を作り直す
 
@@ -232,7 +231,7 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 ```
 
 `evaluation_cli` は、終わったときに標準エラーへ全体の指標と、`required_evidence`・`reasoning_type=<種類>`・
-`hops=<段の数>` の行（四指標と対象件数）を
+`hops=<段の数>` の行（指標と対象件数）を
 出します。閾値を下回ると終了コード 1 を返しますが、結果の JSON は書きます。質問ごとに回答（モデルの呼び出し
 3〜5 回）を作るため、dev の 40 問で 40 分前後かかります（#1335 の 33 問の実測から見積もり）。
 

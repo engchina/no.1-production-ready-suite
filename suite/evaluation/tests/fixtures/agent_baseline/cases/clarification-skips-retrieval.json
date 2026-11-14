@@ -1,6 +1,6 @@
 {
   "id": "clarification-skips-retrieval",
-  "description": "公開の outcome が needs_clarification で引用が無い回答は、検索の指標（MRR・必要な根拠）の対象外（None）。対応の判断だけを測る。",
+  "description": "公開の outcome が needs_clarification で引用が無い回答は、検索の指標（MRR・必要な根拠）の対象外（None）。確認の質問を返す期待は標準回答に書く（決定的な採点は本文を照合しない）。",
   "covers": [
     "outcome:agent_answer",
     "skips_retrieval",
@@ -12,11 +12,9 @@
     "category": "clarification_required",
     "split": "holdout",
     "query": "合成の質問 14: 設定 R はどう変える？",
+    "standard_answer": "設定 R の対象を確かめる質問を返し、この時点では手順を答えない。",
     "relevant_document_ids": [
       "doc-i"
-    ],
-    "expected_outcomes": [
-      "needs_clarification"
     ],
     "required_evidence": [
       {
@@ -50,10 +48,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": 1.0,
-      "expected_decisions": [
-        "clarify"
-      ],
       "observed_outcome": "needs_clarification",
       "outcome_source": "agent_answer",
       "missing_evidence": [],
@@ -128,10 +122,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": 1.0,
-        "expected_decisions": [
-          "clarify"
-        ],
         "observed_outcome": "needs_clarification",
         "outcome_source": "agent_answer",
         "missing_evidence": [],
@@ -150,21 +140,17 @@
             "status": "not_applicable",
             "reason": null
           },
-          "response_decision_accuracy": {
-            "status": "scored",
-            "reason": null
-          },
           "answer_correctness": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "requirement_coverage": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "claim_support_rate": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           }
         }
       }

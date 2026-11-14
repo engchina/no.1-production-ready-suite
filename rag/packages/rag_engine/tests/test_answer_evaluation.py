@@ -38,7 +38,7 @@ def payload():
 
 
 def verdict(value="correct"):
-    return AnswerCorrectnessOutput(correctness=value, response_appropriateness="not_applicable", reason="理由")
+    return AnswerCorrectnessOutput(correctness=value, reason="理由")
 
 
 def broken_output():
@@ -65,7 +65,6 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
         "question": "今回の取込失敗の原因は？",
         "standard_answer": "ログを確認して原因を特定する。",
         "actual_responses": [{"question": "今回の取込失敗の原因は？", "answer_text": "ログを確認して原因を特定します。"}],
-        "response_expectations": [],
     }
     assert result == {
         "rubric_version": RUBRIC_VERSION,
@@ -74,8 +73,6 @@ def test_one_call_judges_correctness_from_question_standard_and_answer_body(valu
         "judge_diagnostics": {"judge_calls": 1, "judge_retries": 0, "retry_reasons": []},
         "answer_correctness": score,
         "correctness_reason": "理由",
-        "response_decision_accuracy": None,
-        "response_decision_reason": "理由",
         "status": "completed",
         "message": "",
     }

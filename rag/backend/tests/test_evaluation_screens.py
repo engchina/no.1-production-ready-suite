@@ -62,11 +62,12 @@ def _case(*screens: EvaluationScreen, **kwargs: Any) -> EvaluationCase:
 # ---- ケースの採点と集計 --------------------------------------------------------------------
 
 
-def test_case_scoring_refusal_is_not_matched_and_clarification_is_not_measured() -> None:
+def test_case_scoring_records_outcome_and_scores_only_correctness() -> None:
+    """自己申告の対応は記録だけにし、確認・保留の期待は標準回答の正確性で採点する。"""
     refused = score_case_answers(
-        _case(SCREEN_A, expected_response_decision="answer"),
+        _case(SCREEN_A, standard_answer="画面A で設定を変えます。"),
         [(_response("確認できません", answer_details={"outcome": "insufficient_evidence"}), {})],
-        EvaluationAnswerJudgement(status="completed", response_decision_accuracy=0),
+        EvaluationAnswerJudgement(status="completed", answer_correctness=0),
     )
     clarification = SearchResponse(
         answer="どちらの場合ですか？",
@@ -76,14 +77,17 @@ def test_case_scoring_refusal_is_not_matched_and_clarification_is_not_measured()
         diagnostics=SearchDiagnostics(answer={"outcome": "needs_clarification"}),
     )
     asked = score_case_answers(
-        _case(SCREEN_A, expected_response_decision="clarify"),
+        _case(SCREEN_A, standard_answer="どちらの場合かを確認してから案内します。"),
         [(clarification, {})],
-        EvaluationAnswerJudgement(status="completed", response_decision_accuracy=1),
+        EvaluationAnswerJudgement(status="completed", answer_correctness=1),
     )
-    assert refused.response_decision_accuracy == 0
-    assert "unexpected_handling" in refused.failure_reasons
-    assert asked.response_decision_accuracy == 1
-    assert asked.answer_correctness is None
+    assert refused.answer_correctness == 0
+    assert "answer_failed" in refused.failure_reasons
+    assert refused.observed_outcome == "insufficient_evidence"
+    assert asked.answer_correctness == 1
+    assert "answer_failed" not in asked.failure_reasons
+    assert asked.observed_outcome == "needs_clarification"
+    assert "response_decision_accuracy" not in asked.model_dump()
 
 
 class _ScreenPipeline:
@@ -153,7 +157,7 @@ def test_compare_api_runs_both_profiles(monkeypatch: MonkeyPatch) -> None:
         async def run(self, **kwargs: Any) -> EvaluationMetrics:
             runs.append(kwargs)
             rate = 0.5 if kwargs["search_answer_profile_id"] == "profile-1" else 0.25
-            return EvaluationMetrics(case_count=1, response_decision_accuracy=rate)
+            return EvaluationMetrics(case_count=1, answer_correctness=rate)
 
     class FakeOracleClient:
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
@@ -174,9 +178,9 @@ def test_compare_api_runs_both_profiles(monkeypatch: MonkeyPatch) -> None:
 
     assert response.status_code == 200, response.text
     data = response.json()["data"]
-    assert data["response_decision_accuracy"] == 0.25
+    assert data["answer_correctness"] == 0.25
     assert data["comparison"]["search_answer_profile_id"] == "profile-1"
-    assert data["comparison"]["metrics"]["response_decision_accuracy"] == 0.5
+    assert data["comparison"]["metrics"]["answer_correctness"] == 0.5
     assert [run["search_answer_profile_id"] for run in runs] == ["profile-base", "profile-1"]
     assert runs[0]["knowledge_base_ids"] == []
     # プロファイルの範囲は、プロファイルの参照 KB で決める（KB の指定は渡さない）。

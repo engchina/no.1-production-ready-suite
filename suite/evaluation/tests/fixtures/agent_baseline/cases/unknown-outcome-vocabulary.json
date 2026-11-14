@@ -15,9 +15,6 @@
     "query": "合成の質問 6: 項目 T は旧版から変わった？",
     "relevant_document_ids": [
       "doc-g"
-    ],
-    "expected_outcomes": [
-      "conditional"
     ]
   },
   "turns": [
@@ -49,10 +46,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": 1.0,
-      "expected_decisions": [
-        "answer"
-      ],
       "observed_outcome": "answered",
       "outcome_source": "inferred",
       "missing_evidence": [],
@@ -131,10 +124,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "answer"
-        ],
         "observed_outcome": null,
         "outcome_source": null,
         "missing_evidence": [],
@@ -152,10 +141,6 @@
           "mrr": {
             "status": "scored",
             "reason": null
-          },
-          "response_decision_accuracy": {
-            "status": "unevaluable",
-            "reason": "outcome_missing"
           },
           "answer_correctness": {
             "status": "not_applicable",

@@ -195,7 +195,6 @@ export type EvaluationFailureReason =
   | "answer_evaluation_error"
   | "answer_generation_fallback"
   | "guardrail_warning"
-  | "unexpected_handling"
   | "step_missing"
   | "forbidden_action"
   | "condition_missing"
@@ -204,10 +203,10 @@ export type EvaluationFailureReason =
   | "screen_missing"
   | "wrong_screen"
   | "case_error";
-/** 評価の指標（#591）。閾値で合否を決める 4 つ（検索 2・回答の正確性・応答の判断）。 */
-export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness" | "response_decision_accuracy";
+/** 評価の指標（#591）。閾値で合否を決める 3 つ（検索 2・回答の正確性）。 */
+export type EvaluationMetricName = "required_evidence_recall" | "mrr" | "answer_correctness";
 
-/** 回答の対応（#1231）。評価のケースは受け入れる対応を複数持てる。 */
+/** 回答の対応（#1231）。回答の記録の自己申告のラベル（observed_outcome）に使う。 */
 export type EvaluationOutcome =
   | "answered"
   | "conditional"
@@ -1865,9 +1864,7 @@ export interface EvaluationCase {
   answerable?: boolean | null;
   /** 分類（#1226）。結果の分類ごとの内訳に使う。 */
   category?: EvaluationCaseCategory | null;
-  /** 業務支援の採点（#1231）。受け入れる対応・手順の語（順）・勧めてはいけない表現・触れるべき条件。 */
-  expected_response_decision?: "answer" | "clarify" | "hold" | null;
-  expected_outcomes?: EvaluationOutcome[];
+  /** 業務支援の採点（#1231）。必須の回答要点。 */
   required_answer_points?: string[];
   /** required_answer_points と同等の別の手順の列（#1284）。いちばん点の高い列で採点する。 */
   required_conditions?: string[];
@@ -1895,8 +1892,6 @@ export type EvaluationCaseSplit = "dev" | "holdout";
 export interface EvaluationTurn {
   reply: string;
   conditions?: Record<string, string>;
-  expected_response_decision?: "answer" | "clarify" | "hold" | null;
-  expected_outcomes?: EvaluationOutcome[];
   required_answer_points?: string[];
   required_conditions?: string[];
 }
@@ -1934,8 +1929,6 @@ export interface EvaluationImportRow {
   evidence: string[];
   standard_answer_preview: string | null;
   has_standard_answer: boolean;
-  /** 根拠も標準回答も無い行は false（資料に答えが無い質問として、回答を控えたかを測る）。 */
-  expected_response_decision?: "answer" | "clarify" | "hold" | null;
   /** 案内すべき画面（Excel に書いた元の行。#2402。古い作業状態には無い）。 */
   required_answer_points?: string[];
   /** 回答の過程（#2402）。期待の下書きを作るときに下書きの API へ渡す。 */
@@ -1971,7 +1964,6 @@ export interface EvaluationProcessDraft {
   row: number;
   required_answer_points: string[];
   required_conditions: string[];
-  expected_outcomes: EvaluationOutcome[];
   relevant_document_ids: string[];
   required_evidence: EvaluationEvidence[];
   references: EvaluationProcessReference[];
@@ -2035,8 +2027,6 @@ export interface EvaluationAnswerJudgement {
   /** 正確性が評価の基準の閾値以上か（#680）。保存済みの古い結果は保存した合否のまま。 */
   passed: boolean | null;
   answer_correctness?: number | null;
-  /** 実際の本文と期待する対応を独立して評価した値。自己申告ラベルの一致ではない。 */
-  response_decision_accuracy?: number | null;
   reason?: string | null;
   message: string | null;
 }
@@ -2087,7 +2077,7 @@ export interface EvaluationCaseResult extends Partial<Record<EvaluationMetricNam
   case_id: string; trace_id: string; status: "success"|"error";
   category?: EvaluationCaseCategory|null; split?: EvaluationCaseSplit|null;
   retrieved_document_ids: string[]; relevant_document_ids:string[]; hit_document_ids:string[];
-  expected_decisions?: string[]; observed_outcome?: EvaluationOutcome|null; outcome_source?:string|null;
+  observed_outcome?: EvaluationOutcome|null; outcome_source?:string|null;
   missing_evidence?:string[]; answer_evaluation?:EvaluationAnswerJudgement|null;
   guardrail_warnings:string[]; failure_reasons:string[]; diagnostics:SearchDiagnostics;
   elapsed_ms:number; error_type:string|null; error_stage?:string|null; error_message:string|null;
@@ -2109,7 +2099,6 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName | Evaluation
  threshold_failures:EvaluationThresholdFailure[]; failure_reason_counts:Partial<Record<string,number>>;
  category_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;
  split_breakdown?:Partial<Record<string,EvaluationSplitSummary>>;
- decision_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;
  case_results:EvaluationCaseResult[]; comparison?:EvaluationComparison|null;
 };
 

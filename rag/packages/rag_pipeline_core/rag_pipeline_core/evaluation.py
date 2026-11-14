@@ -37,7 +37,6 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
             "required_evidence_recall": 0.9,
             "mrr": 0.6,
             "answer_correctness": 0.9,
-            "response_decision_accuracy": 0.9,
         },
     ),
     "strict": EvaluationSpec(
@@ -48,7 +47,6 @@ EVALUATION_SPECS: dict[str, EvaluationSpec] = {
             "required_evidence_recall": 1.0,
             "mrr": 0.8,
             "answer_correctness": 1.0,
-            "response_decision_accuracy": 1.0,
         },
     ),
 }

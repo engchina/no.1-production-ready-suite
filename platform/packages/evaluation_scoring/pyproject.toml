@@ -1,7 +1,7 @@
 [project]
 name = "production-ready-evaluation-scoring"
 version = "0.1.0"
-description = "Deterministic scoring primitives shared by the product evaluations and the suite evaluation (text matching, evidence location, retrieval rank, response decision, metric aggregation) for the No.1 Production Ready product family."
+description = "Deterministic scoring primitives shared by the product evaluations and the suite evaluation (text matching, evidence location, retrieval rank, outcome vocabulary, metric aggregation) for the No.1 Production Ready product family."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }

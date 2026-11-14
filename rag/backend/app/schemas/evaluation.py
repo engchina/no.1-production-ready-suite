@@ -111,7 +111,6 @@ EvaluationFailureReason = Literal[
     "answer_failed",
     "answer_evaluation_error",
     "guardrail_warning",
-    "unexpected_handling",
     "step_missing",
     "forbidden_action",
     "condition_missing",
@@ -128,19 +127,17 @@ EvaluationFailureReason = Literal[
     "case_error",
 ]
 
-# 評価の指標(#591)。閾値で合否を決める 4 つ（検索 2・回答の正確性・応答の判断）。
+# 評価の指標(#591)。閾値で合否を決める 3 つ（検索 2・回答の正確性）。
 EVALUATION_METRICS_VERSION = "four_metrics_v2"
 EvaluationMetricName = Literal[
     "required_evidence_recall",
     "mrr",
     "answer_correctness",
-    "response_decision_accuracy",
 ]
 EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "required_evidence_recall",
     "mrr",
     "answer_correctness",
-    "response_decision_accuracy",
 )
 # 合否と閾値には使わない参考の指標（#4341）。
 # 順位の指標は引用の文書列で、語の重なりは標準回答との比較で計算する（#4714）。
@@ -183,10 +180,11 @@ def _clean_alternatives(value: list[list[str]]) -> list[list[str]]:
 
 
 class EvaluationHandlingExpectation(BaseModel):
-    """意味による網羅の確認に使う必須要点と、応答の期待値。"""
+    """意味による網羅の確認に使う必須要点と、確かめる条件。
 
-    expected_response_decision: Literal["answer", "clarify", "hold"] | None = None
-    expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list, max_length=6)
+    回答・確認・保留のどれを期待するかは標準回答に文で書き、回答の正確性で採点する（#5068）。
+    """
+
     required_answer_points: list[str] = Field(default_factory=list, max_length=30)
     required_conditions: list[str] = Field(default_factory=list, max_length=30)
 
@@ -196,8 +194,7 @@ class EvaluationTurn(EvaluationHandlingExpectation):
 
     ランナーはチャットと同じく、`reply` を次の質問にし、前の往復（質問と回答）を会話の履歴として
     渡す。`conditions` は返答で分かった条件の値で、前までの条件に足して渡す（チャットの確認の答え・
-    MCP の `conditions` と同じ）。期待（対応・手順・危険な表現・条件）は、この往復の回答だけを採点
-    する。
+    MCP の `conditions` と同じ）。期待（手順・条件）は、この往復の回答だけを採点する。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -352,10 +349,10 @@ class EvaluationScreen(BaseModel):
 
 
 class EvaluationCase(EvaluationHandlingExpectation):
-    """四指標の評価入力。本文・位置の根拠、正解文書、標準回答・必須要点、応答の期待を持つ。
+    """評価入力。本文・位置の根拠、正解文書、標準回答・必須要点を持つ。
 
-    複数往復では各往復の明示的な応答判断を評価し、検索と回答の意味上の評価は最後の回答を使う。
-    評価情報がない指標は未評価とし、標準回答の有無から応答の期待を推定しない。
+    検索と回答の意味上の評価は最後の回答を使う。評価情報がない指標は未評価とする
+    （標準回答の無いケースは回答の正確性を採点しない）。
     """
 
     # 結果の表・job の実行中のケース（`rag_evaluation_jobs.current_case_id` は 200 文字）で
@@ -505,7 +502,6 @@ class EvaluationAnswerJudgement(BaseModel):
     status: str
     passed: bool | None = None
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
-    response_decision_accuracy: float | None = Field(default=None, ge=0, le=1)
     reason: str | None = None
     message: str | None = None
     # 判定の診断（呼び出しの数・出力の誤りで再試行した回数）。
@@ -516,19 +512,17 @@ class EvaluationAnswerJudgement(BaseModel):
 
 
 class EvaluationTurnResult(BaseModel):
-    """往復ごとの応答の判断。"""
+    """往復ごとの回答の記録（回答の自己申告の対応）。"""
 
     turn: int
     trace_id: str
     observed_outcome: EvaluationOutcome | None = None
     outcome_source: str | None = None
-    response_decision_accuracy: float | None = None
-    expected_decisions: list[str] = Field(default_factory=list)
     elapsed_ms: float
 
 
 class EvaluationCaseResult(BaseModel):
-    """成功したケースの四指標。資料不足は None。"""
+    """成功したケースの指標。資料不足は None。"""
 
     case_id: str
     trace_id: str
@@ -543,7 +537,6 @@ class EvaluationCaseResult(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
-    response_decision_accuracy: float | None = None
     precision_at_10: float | None = None
     ndcg_at_3: float | None = None
     ndcg_at_10: float | None = None
@@ -554,7 +547,6 @@ class EvaluationCaseResult(BaseModel):
     rouge_1: float | None = None
     rouge_2: float | None = None
     rouge_l: float | None = None
-    expected_decisions: list[str] = Field(default_factory=list)
     observed_outcome: EvaluationOutcome | None = None
     outcome_source: str | None = None
     missing_evidence: list[str] = Field(default_factory=list)
@@ -578,7 +570,7 @@ class EvaluationThresholdFailure(BaseModel):
 
 
 class EvaluationCategorySummary(BaseModel):
-    """ケースの分類ごとの四指標と対象数。"""
+    """ケースの分類ごとの指標と対象数。"""
 
     case_count: int
     error_count: int = 0
@@ -621,7 +613,7 @@ class EvaluationSplitSummary(BaseModel):
 
 
 class EvaluationMetrics(BaseModel):
-    """検索二・回答一・応答判断一の四指標。対象外は None。"""
+    """検索二・回答一の指標。対象外は None。"""
 
     metrics_version: str = EVALUATION_METRICS_VERSION
     case_count: int
@@ -630,7 +622,6 @@ class EvaluationMetrics(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
-    response_decision_accuracy: float | None = None
     precision_at_10: float | None = None
     ndcg_at_3: float | None = None
     ndcg_at_10: float | None = None
@@ -650,7 +641,6 @@ class EvaluationMetrics(BaseModel):
     split_breakdown: dict[str, EvaluationSplitSummary] = Field(default_factory=dict)
     reasoning_type_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
     hops_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
-    decision_breakdown: dict[str, EvaluationReasoningSummary] = Field(default_factory=dict)
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
     comparison: "EvaluationComparison | None" = None
     # 評価の実行条件（#59。`app.rag.evaluation_manifest`）。#59 より前の結果は None。
@@ -738,13 +728,12 @@ EvaluationMetrics.model_rebuild()
 
 
 class EvaluationThresholds(BaseModel):
-    """現行の四指標にだけ適用する最低値。"""
+    """現行の指標にだけ適用する最低値。"""
 
     model_config = ConfigDict(extra="forbid")
     required_evidence_recall: float | None = Field(default=None, ge=0, le=1)
     mrr: float | None = Field(default=None, ge=0, le=1)
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
-    response_decision_accuracy: float | None = Field(default=None, ge=0, le=1)
 
 
 class EvaluationRagOverrides(BaseModel):
@@ -985,7 +974,6 @@ class EvaluationImportRow(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     standard_answer_preview: str | None = None
     has_standard_answer: bool = False
-    expected_response_decision: Literal["answer", "clarify", "hold"] | None = None
     required_answer_points: list[str] = Field(default_factory=list)
     # 回答の過程（#2402）。期待の下書きを作るときに、この全文を下書きの API に渡す。
     answer_process: str | None = None
@@ -1030,7 +1018,7 @@ class EvaluationProcessDraftRequest(BaseModel):
 class EvaluationProcessDraft(BaseModel):
     """1 行の回答の過程から作った評価の期待の下書き（#2402。保存しない）。
 
-    画面で確かめてから、ケースの期待（手順・条件・対応・正解の文書・必要な根拠）に足す。`references`
+    画面で確かめてから、ケースの期待（手順・条件・正解の文書・必要な根拠）に足す。`references`
     は回答の過程に書いた資料と文書の対応、`warnings` は解決できない資料など、`error` は下書きを
     作れなかった理由（そのときは期待は空）。
     """
@@ -1039,7 +1027,6 @@ class EvaluationProcessDraft(BaseModel):
     row: int
     required_answer_points: list[str] = Field(default_factory=list)
     required_conditions: list[str] = Field(default_factory=list)
-    expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
     required_evidence: list[EvaluationEvidence] = Field(default_factory=list)
     references: list[SupportGuideProcessReference] = Field(default_factory=list)

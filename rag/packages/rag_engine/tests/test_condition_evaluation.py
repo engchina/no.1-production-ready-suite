@@ -15,7 +15,7 @@ PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
     "case", json.loads((Path(__file__).with_name("fixtures") / "condition_evaluation_cases.json").read_text()), ids=lambda case: case["id"]
 )
 def test_fixed_synthetic_inputs_are_passed_as_complete_text(case):
-    output = AnswerCorrectnessOutput(correctness="unassessed", response_appropriateness="not_applicable", reason="比較材料の確認")
+    output = AnswerCorrectnessOutput(correctness="unassessed", reason="比較材料の確認")
     with patch(PARSE, return_value=output) as model:
         result = evaluate_answer_payload(case, object())
     inputs = json.loads(model.call_args.args[1])
@@ -26,23 +26,23 @@ def test_fixed_synthetic_inputs_are_passed_as_complete_text(case):
     assert model.call_count == 1
 
 
-@pytest.mark.parametrize("kind,score", [("appropriate", 1), ("inappropriate", 0), ("unassessed", None)])
-def test_expected_handling_is_scored_from_body_with_no_reference_answer(kind, score):
+@pytest.mark.parametrize("verdict,score", [("correct", 1), ("incorrect", 0), ("unassessed", None)])
+def test_hold_expectation_written_in_standard_answer_is_scored_as_correctness(verdict, score):
     data = {
         "question": "合成の資料にない項目の値は？",
-        "standard_answer": "",
+        "standard_answer": "資料に記載がないため答えられないと伝える。",
         "answer_text": "資料から値を確認できません。",
-        "response_expectations": [{"turn": 0, "expected_decisions": ["hold"]}],
     }
-    output = AnswerCorrectnessOutput(correctness="not_applicable", response_appropriateness=kind, reason="本文と期待する対応の比較")
+    output = AnswerCorrectnessOutput(correctness=verdict, reason="本文と標準回答の比較")
     with patch(PARSE, return_value=output) as model:
         result = evaluate_answer_payload(data, object())
     assert result["status"] == "completed"
-    assert result["answer_correctness"] is None
-    assert result["response_decision_accuracy"] == score
+    assert result["answer_correctness"] == score
     assert model.call_count == 1
+    inputs = json.loads(model.call_args.args[1])
+    assert set(inputs) == {"question", "standard_answer", "actual_responses"}
     schema = model.call_args.args[3].model_json_schema()
-    assert set(schema["properties"]) == {"correctness", "response_appropriateness", "reason"}
+    assert set(schema["properties"]) == {"correctness", "reason"}
     assert "answer_unit_id" not in json.dumps(schema)
 
 
@@ -55,7 +55,7 @@ def test_model_whole_body_verdict_is_not_reinterpreted_by_coverage_or_headings(v
         "standard_answer": "項目Aは5です。項目Bは8です。",
         "answer_text": answer_labels().gaps_section + "\n項目Aは5です。",
     }
-    output = AnswerCorrectnessOutput(correctness=verdict, response_appropriateness="not_applicable", reason="本文の意味に基づく判定")
+    output = AnswerCorrectnessOutput(correctness=verdict, reason="本文の意味に基づく判定")
     with patch(PARSE, return_value=output) as model:
         result = evaluate_answer_payload(data, object())
     assert json.loads(model.call_args.args[1])["actual_responses"][0]["answer_text"] == data["answer_text"]
@@ -63,22 +63,20 @@ def test_model_whole_body_verdict_is_not_reinterpreted_by_coverage_or_headings(v
     assert model.call_count == 1
 
 
-def test_actual_citations_cannot_become_expected_response_requirements():
+def test_actual_citations_are_removed_from_the_compared_body():
     actual = "合成の値は24です。\n根拠：synthetic.csv p.1"
     data = {
         "question": "合成の値は？",
         "standard_answer": "合成の値は24です。",
         "answer_text": actual,
         "actual_responses": [{"question": "合成の値は？", "answer_text": actual}],
-        "response_expectations": [{"turn": 0, "expected_decisions": ["answer"]}],
     }
-    output = AnswerCorrectnessOutput(correctness="correct", response_appropriateness="appropriate", reason="正しい値を回答している。")
+    output = AnswerCorrectnessOutput(correctness="correct", reason="正しい値を回答している。")
     with patch(PARSE, return_value=output) as model:
         result = evaluate_answer_payload(data, object())
     inputs = json.loads(model.call_args.args[1])
     assert inputs["actual_responses"] == [{"question": "合成の値は？", "answer_text": "合成の値は24です。"}]
-    assert inputs["response_expectations"] == [{"turn": 0, "expected_decisions": ["answer"]}]
     assert "answer_text" not in inputs
     assert "synthetic.csv" not in model.call_args.args[1]
-    assert result["response_decision_accuracy"] == 1
+    assert result["answer_correctness"] == 1
     assert model.call_count == 1

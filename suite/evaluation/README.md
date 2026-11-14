@@ -1,6 +1,6 @@
 # suite/evaluation（`pr_suite_evaluation`）
 
-製品横断の評価の CLI（`suite-evaluation`。#3240）。評価セットを製品の**公開の MCP の契約だけ**で流し、観測を保存して、製品の評価と同じ六指標で採点する。Target は RAG の検索・回答（RAG の公開の MCP の `rag_search`。#3417）と業務 Agent（Agent の公開の MCP）で、どちらも同じ Evaluator・Report で採点する。
+製品横断の評価の CLI（`suite-evaluation`。#3240）。評価セットを製品の**公開の MCP の契約だけ**で流し、観測を保存して、製品の評価と同じ指標で採点する。Target は RAG の検索・回答（RAG の公開の MCP の `rag_search`。#3417）と業務 Agent（Agent の公開の MCP）で、どちらも同じ Evaluator・Report で採点する。
 
 ## 置き場所と依存の向き
 
@@ -24,7 +24,7 @@
 | Observation | `observation.py` | 往復ごとの外枠（状態・時間・参照・読んだ出力の版・失敗）と、公開の出力そのもの（`payload`） |
 | Evaluator | `evaluators.py` | 観測から作った採点の入力（`views.py`）を、評価セットの期待と照らして採点する。指標ごとに scored / not_applicable / unevaluable と理由 |
 | Experiment | `experiment.py` | 流す・採点する・保存した観測から採点し直す。評価セット・対象構成・採点の版と hash を記録する |
-| Report | `report.py` | 集計（六指標・内訳・分母・合否）と、結果の比較の表 |
+| Report | `report.py` | 集計（指標・内訳・分母・合否）と、結果の比較の表 |
 
 旧形式（#1305 より前の outcome の無い Run・#2738 より前の回答の節）の扱いは `targets/agent_legacy.py` にだけ置く。
 
@@ -71,12 +71,14 @@ uv run suite-evaluation compare A=../../tmp/eval/a.json C=../../tmp/eval/c.json 
 
 ## 採点の規則
 
-指標は製品の評価の六指標（`required_evidence_recall`・`mrr`・`answer_correctness`・`requirement_coverage`・`claim_support_rate`・`response_decision_accuracy`）と同じ名前・同じ意味。平均は成功したケースのうち測れたものだけで、失敗したケースは分母に入らない。
+指標は製品の評価の指標（`required_evidence_recall`・`mrr`・`answer_correctness`・`requirement_coverage`・`claim_support_rate`）と同じ名前・同じ意味。平均は成功したケースのうち測れたものだけで、失敗したケースは分母に入らない。
+
+- **期待する返し方**（確認の質問を返す・資料に無いので保留する など）は標準回答（`standard_answer`）に文で書き、回答の内容の採点（LLM による判定）で判定する。回答の自己申告の対応（`outcome`。往復ごとの `turn_results[].observed_outcome`）は記録と検索の指標の対象外の判定にだけ使い、期待と直接比べて点数にしない（#5068）。
 
 - **ケースの失敗**（`status=error`・`case_error`）: Run の failed・cancelled・承認待ち・時間切れ（取り消す）・承認の要るツールを呼ばずに完了した Run（#3240 の Q7）・MCP を呼べない / 知らない `schema_version`。途中の往復で失敗したら、それまでの往復を採点しない（`error_stage=turn_<n>`、時間は往復の和）。
-- **回答の前の確認**（`waiting_confirmation`）: 次の返答（評価セットの `turns[].reply`）を `agent_answer_confirmation` で答える（分かった条件の値と同じ名前の選択肢があれば選び、無ければ返答の文を自由入力にする）。確認の往復は「利用者に条件を確かめた」（needs_clarification）として採点する。次の返答が無ければ、確認で終わったケースとして Run を取り消す。
+- **回答の前の確認**（`waiting_confirmation`）: 次の返答（評価セットの `turns[].reply`）を `agent_answer_confirmation` で答える（分かった条件の値と同じ名前の選択肢があれば選び、無ければ返答の文を自由入力にする）。確認の往復は「利用者に条件を確かめた」（needs_clarification）として記録する。次の返答が無ければ、確認で終わったケースとして Run を取り消す。
 - **評価不能**（`metric_status.<指標>.status=unevaluable`。平均・分母に入れない。`denominators.metrics` に数と理由）:
-  - `outcome_missing`: `outcome` の無い完了の Run。判断の正しさは測らず、引用も無ければ検索の指標も測らない（`--infer-missing-outcome` で旧形式の推定を選べる）。
+  - `outcome_missing`: `outcome` の無い完了の Run で引用も無い。検索の指標の対象外かを判定できないので測らない（`--infer-missing-outcome` で旧形式の推定を選べる）。
   - `evidence_text_omitted`: 場所の条件に合う根拠の本文が省かれていて（`text_omitted`）、本文の条件を照合できない。
   - `evidence_withheld`: 見る人の今の権限で見られない根拠があり（`withheld_evidence_count`）、取れなかった根拠・1 位でない順位がその根拠のせいかを確かめられない。
   - `answer_judge_unavailable`: 標準回答はあるが、決定的な採点では回答の判定（LLM）を行わない（LLM による判定は下の「LLM による判定と校正」で別に記録する）。
@@ -133,7 +135,8 @@ uv run suite-evaluation compare A=../../tmp/eval/a.judged.json C=../../tmp/eval/
 
 ## 版と記録
 
-- `metrics_version`: Evaluator の版 `six_metrics_v1` に Target の規則の版を足す。業務 Agent は `six_metrics_v1+agent_v3`（`--infer-missing-outcome` では `+legacy_outcome` を足す）、RAG は `six_metrics_v1+rag_v1`（公開の `rag_search` の出力だけで採点する最初の版。#3417）。
+- `metrics_version`: Evaluator の版 `five_metrics_v1` に Target の規則の版を足す。業務 Agent は `five_metrics_v1+agent_v3`（`--infer-missing-outcome` では `+legacy_outcome` を足す）、RAG は `five_metrics_v1+rag_v1`（公開の `rag_search` の出力だけで採点する最初の版。#3417）。
+  - `five_metrics_v1`: 回答・確認・保留の判断の正しさ（`response_decision_accuracy`）と、評価セットの判断の期待（`expected_response_decision`・`expected_outcomes`）を削除した版（#5068）。前の版は `six_metrics_v1`。
   - `agent_v1`: 段 1（rag の CLI。Agent の画面の API と Run の内部の記録）。
   - `agent_v2`: 段 2（rag の CLI。公開の Agent MCP の出力だけ。承認の要るツールを呼ばなかった Run を失敗にする）。
   - `agent_v3`: suite へ移した版。回答の前の確認に答える・`outcome` の無い Run と本文を省かれた根拠と見られない根拠を評価不能にする・Run を作れなかった往復にも `error_stage` を付ける。

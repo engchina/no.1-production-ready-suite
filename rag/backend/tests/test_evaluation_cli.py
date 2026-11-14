@@ -59,7 +59,7 @@ def test_evaluation_gate_cli_passes_and_writes_output_file(
     assert exit_code == 0
     assert captured.out == ""
     assert "評価 gate passed" in captured.err
-    assert "response_decision_accuracy=1.0" in captured.err
+    assert "answer_correctness=1.0" in captured.err
     assert "tenant-secret" not in captured.err
     assert "user-secret" not in captured.err
     assert observed["api_url"] == "http://rag.example.test/api/evaluation/run"
@@ -335,7 +335,6 @@ def _write_golden_set(tmp_path: Path) -> Path:
                     "required_evidence_recall": 0.8,
                     "mrr": 0.7,
                     "answer_correctness": 0.8,
-                    "response_decision_accuracy": 0.9,
                 },
             },
             ensure_ascii=False,
@@ -363,7 +362,6 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
         "faithfulness": 0.8,
         "citation_traceability_coverage": 1.0 if passed else 0.5,
         "answer_correctness": 1.0,
-        "response_decision_accuracy": 1.0 if passed else 0.0,
         "metric_case_counts": {"required_evidence_recall": 1, "answer_correctness": 1},
         "passed": passed,
         "threshold_failures": failures,
