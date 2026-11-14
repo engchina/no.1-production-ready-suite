@@ -188,12 +188,10 @@ CASE: dict[str, Any] = {
     "split": "dev",
     "conditions": {"mode": "標準"},
     "relevant_document_ids": ["doc-manual"],
-    "expected_outcomes": ["needs_clarification"],
     "turns": [
         {
             "reply": "個別の利用者です。",
             "conditions": {"target": "個別"},
-            "expected_outcomes": ["answered"],
         }
     ],
     "required_evidence": [
@@ -249,11 +247,10 @@ def test_multi_turn_case_sends_conditions_and_scores_with_the_same_evaluator() -
         ("needs_clarification", "rag_answer"),
         ("answered", "rag_answer"),
     ]
-    assert result.response_decision_accuracy == 1.0
     assert result.retrieved_document_ids == ["doc-other", "doc-manual"]
     assert result.mrr == 0.5
     assert result.required_evidence_recall == 1.0
-    assert record.report.metrics_version == "six_metrics_v1+rag_v1"
+    assert record.report.metrics_version == "five_metrics_v1+rag_v1"
     assert record.provenance["target"]["kind"] == "rag_mcp"
     assert record.target["runs"][0]["clarification_conditions"] == ["target"]
     assert record.observations[0].turns[1].payload["rag_search"]["trace_id"] == "trace-2"
@@ -318,7 +315,7 @@ def test_omitted_evidence_text_is_unevaluable() -> None:
 def test_tool_errors_are_case_errors(override: dict[str, Any], expected: str) -> None:
     fake = FakeRagMcp([])
     fake.overrides = override
-    record = _evaluate(fake, [{"id": "a", "query": "q", "expected_outcomes": ["answered"]}])
+    record = _evaluate(fake, [{"id": "a", "query": "q"}])
     result = record.report.case_results[0]
     assert (result.status, result.error_type, result.error_stage) == (
         "error",
@@ -347,7 +344,6 @@ def _golden(tmp_path: Path) -> Path:
                         "id": "a",
                         "query": "q",
                         "relevant_document_ids": ["file:m.pdf"],
-                        "expected_outcomes": ["answered"],
                     }
                 ]
             }
@@ -420,7 +416,7 @@ def test_main_runs_a_and_c_and_compares_them(
     assert main([*args, "--output", str(rescored)]) == 0
     assert len(fake.calls) == calls
     record = ExperimentRecord.model_validate_json(rescored.read_text(encoding="utf-8"))
-    assert record.report.metrics_version == "six_metrics_v1+rag_v1"
+    assert record.report.metrics_version == "five_metrics_v1+rag_v1"
 
 
 def test_main_requires_a_knowledge_base_or_a_profile(
@@ -466,7 +462,7 @@ def test_rag_and_agent_results_of_the_same_dataset_are_compared(
     assert main(["compare", f"A={a}", f"D={d}"]) == 0
     out = capsys.readouterr().out
     assert "| 対象 | rag_mcp | agent_mcp |" in out
-    assert "| 採点の版 | six_metrics_v1+rag_v1 | six_metrics_v1+agent_v3 |" in out
+    assert "| 採点の版 | five_metrics_v1+rag_v1 | five_metrics_v1+agent_v3 |" in out
     with pytest.raises(ValueError, match="採点の設定"):
         run_experiment(
             dataset,

@@ -1,4 +1,4 @@
-"""評価のケースの「回答の過程」を、評価の期待（手順・条件・根拠・対応）の下書きにする（#2402）。
+"""評価のケースの「回答の過程」を、評価の期待（手順・条件・根拠）の下書きにする（#2402）。
 
 構造化は業務ガイドの取り込み（#2397。`support_guide_process_import`）と同じ部品を使う: 見出しの語
 （言語資源の `guide_import_cues.process_headings`）で節に分け、同じ LLM の呼び出しで業務ガイドの
@@ -9,8 +9,6 @@
 - 確認事項 → `required_conditions`: 条件の名前。
 - 資料と頁 → 解決できた資料は正解の文書（`relevant_document_ids`）にし、頁・章節があれば必要な根拠
   （`required_evidence`）にする。解決できない・複数に当たる資料は下書きの警告にする。
-- 対応 → `expected_outcomes`: 手順があれば回答・条件付きの回答、利用者に確かめる条件があれば回答前の
-  確認、窓口への引き継ぎがあれば人への引き継ぎを受け入れる。
 
 下書きは保存しない。画面で確かめてから評価のケースに足す。
 """
@@ -25,7 +23,6 @@ from pydantic import ValidationError
 
 from app.schemas.evaluation import (
     EvaluationEvidence,
-    EvaluationOutcome,
     EvaluationProcessDraft,
     EvaluationProcessRow,
 )
@@ -79,22 +76,6 @@ def _step_terms(content: SupportGuideContent) -> list[str]:
         if term and term not in terms:
             terms.append(term)
     return terms[:30]
-
-
-def _outcomes(content: SupportGuideContent) -> list[EvaluationOutcome]:
-    outcomes: list[EvaluationOutcome] = []
-    if content.steps:
-        outcomes += ["answered", "conditional"]
-    if any(condition.unknown_handling == "ask" for condition in content.conditions):
-        outcomes.append("needs_clarification")
-    handoff = bool(content.handoff.contact.strip() or content.handoff.conditions) or any(
-        condition.unknown_handling == "handoff" for condition in content.conditions
-    )
-    if handoff:
-        outcomes.append("needs_human")
-        if "conditional" not in outcomes:
-            outcomes.append("conditional")
-    return outcomes
 
 
 def _evidence(
@@ -164,7 +145,6 @@ def process_draft(
         required_conditions=list(
             dict.fromkeys(condition.label.strip() for condition in content.conditions)
         )[:30],
-        expected_outcomes=_outcomes(content),
         relevant_document_ids=relevant,
         required_evidence=evidence,
         references=item.references,

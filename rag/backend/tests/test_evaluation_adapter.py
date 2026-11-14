@@ -16,7 +16,7 @@ def test_default_suite_is_standard_with_thresholds() -> None:
     params = resolve_evaluation_adapter(Settings())
     assert params.suite == "standard"
     assert params.thresholds.required_evidence_recall == 0.9
-    assert params.thresholds.response_decision_accuracy == 0.9
+    assert params.thresholds.answer_correctness == 0.9
 
 
 def test_presets_cover_every_metric_and_strict_is_stricter() -> None:

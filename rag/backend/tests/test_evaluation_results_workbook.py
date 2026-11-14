@@ -322,7 +322,8 @@ def test_results_follow_the_row_number_even_when_questions_repeat() -> None:
     assert sheet.cell(3, correctness).value == 0.25
     # 網羅・裏付けの列は出さない（#4781）。
     assert not [name for name in columns if "網羅" in name or "裏付け" in name]
-    assert sheet.cell(2, columns["評価結果: 応答の判断"]).value == "回答"
+    # 期待・実際の応答の判断の列は出さない（#5068）。
+    assert not [name for name in columns if "判断" in name]
     assert sheet.cell(2, columns["評価結果: 状態"]).value == "成功"
     assert sheet.cell(2, columns["評価結果: Trace"]).value == "trace-row-2"
 

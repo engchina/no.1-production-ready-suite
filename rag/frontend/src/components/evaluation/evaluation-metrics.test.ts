@@ -2,10 +2,10 @@ import {describe, expect, it} from "vitest";
 import type {EvaluationMetrics} from "@/lib/api";
 import {EVALUATION_METRIC_NAMES, EVALUATION_PERSPECTIVES, STANDARD_ANSWER_METRICS, comparisonRows, metricCaseCount, metricValue, metricLabel, formatMetricValue, orderedThresholdEntries} from "./evaluation-metrics";
 const result = (values:Partial<EvaluationMetrics>={}):EvaluationMetrics => ({case_count:1,error_count:0,evaluation_suite:"standard",passed:null,threshold_failures:[],failure_reason_counts:{},case_results:[],...values});
-describe("四指標の共通契約",()=>{
- it("両ページで検索二・回答一・応答判断一の順を使う",()=>{
-  expect(EVALUATION_PERSPECTIVES.map(({id,metrics})=>[id,metrics.length])).toEqual([["retrieval",2],["answer",1],["decision",1]]);
-  expect(EVALUATION_METRIC_NAMES.map(metricLabel)).toEqual(["必要な根拠の取得率","正解文書の順位（MRR）","回答の正確性","回答・確認・保留の判断の正しさ"]);
+describe("三指標の共通契約",()=>{
+ it("両ページで検索二・回答一の順を使う",()=>{
+  expect(EVALUATION_PERSPECTIVES.map(({id,metrics})=>[id,metrics.length])).toEqual([["retrieval",2],["answer",1]]);
+  expect(EVALUATION_METRIC_NAMES.map(metricLabel)).toEqual(["必要な根拠の取得率","正解文書の順位（MRR）","回答の正確性"]);
   expect([...STANDARD_ANSWER_METRICS]).toEqual(["answer_correctness"]);
  });
  it("未評価を0点や合格と混同しない",()=>{
@@ -22,16 +22,16 @@ describe("四指標の共通契約",()=>{
  });
 });
 
-it("比較は四指標の順で差と向きを計算する",()=>{
- const a=result({mrr:0.8,answer_correctness:1,response_decision_accuracy:0.5});
- const b=result({mrr:0.4,answer_correctness:1,response_decision_accuracy:0.75});
- expect(comparisonRows(a,b).filter(row=>row.delta!==null).map(row=>[row.metric,row.delta,row.direction])).toEqual([["mrr",-0.4,"worse"],["answer_correctness",0,"same"],["response_decision_accuracy",0.25,"better"]]);
+it("比較は三指標の順で差と向きを計算する",()=>{
+ const a=result({required_evidence_recall:0.5,mrr:0.8,answer_correctness:1});
+ const b=result({required_evidence_recall:0.75,mrr:0.4,answer_correctness:1});
+ expect(comparisonRows(a,b).filter(row=>row.delta!==null).map(row=>[row.metric,row.delta,row.direction])).toEqual([["required_evidence_recall",0.25,"better"],["mrr",-0.4,"worse"],["answer_correctness",0,"same"]]);
 });
 it("片側だけ未評価なら差も改善判定も付けない",()=>{
  expect(comparisonRows(result(),result({answer_correctness:0})).filter(row=>row.metric==="answer_correctness")).toEqual([{metric:"answer_correctness",base:null,compared:0,delta:null,direction:null}]);
 });
-it("両側とも未評価でも四指標を表示する",()=>{
- const rows=comparisonRows(result(),result()); expect(rows).toHaveLength(4);expect(rows.every(row=>row.base===null && row.compared===null && row.direction===null)).toBe(true);
+it("両側とも未評価でも三指標を表示する",()=>{
+ const rows=comparisonRows(result(),result()); expect(rows).toHaveLength(3);expect(rows.every(row=>row.base===null && row.compared===null && row.direction===null)).toBe(true);
 });
 it("全閾値を共通の表示順に並べる",()=>{
  expect(orderedThresholdEntries(Object.fromEntries([...EVALUATION_METRIC_NAMES].reverse().map(name=>[name,0.9]))).map(([name])=>name)).toEqual(EVALUATION_METRIC_NAMES);

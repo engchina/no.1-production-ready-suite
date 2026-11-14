@@ -17,25 +17,19 @@
     "reasoning_type": "single_hop",
     "hops": 1,
     "query": "合成の質問 2: 設定 Y を変える手順は？",
+    "standard_answer": "最初は対象の区分を確かめる質問を返す。区分 P と分かった後は、資料の「手順」の章節にもとづいて区分 P の手順を答える。",
     "conditions": {
       "mode": "標準"
     },
     "relevant_document_ids": [
       "doc-c"
     ],
-    "expected_outcomes": [
-      "needs_clarification"
-    ],
     "turns": [
       {
         "reply": "対象は区分 P です。",
         "conditions": {
           "scope": "P"
-        },
-        "expected_outcomes": [
-          "answered",
-          "conditional"
-        ]
+        }
       }
     ],
     "required_evidence": [
@@ -80,11 +74,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": 1.0,
-      "expected_decisions": [
-        "answer",
-        "clarify"
-      ],
       "observed_outcome": "answered",
       "outcome_source": "agent_answer",
       "missing_evidence": [],
@@ -93,20 +82,12 @@
           "turn": 0,
           "observed_outcome": "needs_clarification",
           "outcome_source": "inferred",
-          "response_decision_accuracy": 1.0,
-          "expected_decisions": [
-            "clarify"
-          ],
           "elapsed_ms": 1000.0
         },
         {
           "turn": 1,
           "observed_outcome": "answered",
           "outcome_source": "agent_answer",
-          "response_decision_accuracy": 1.0,
-          "expected_decisions": [
-            "answer"
-          ],
           "elapsed_ms": 2250.0
         }
       ],
@@ -214,11 +195,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "answer",
-          "clarify"
-        ],
         "observed_outcome": "answered",
         "outcome_source": "agent_answer",
         "missing_evidence": [],
@@ -227,20 +203,12 @@
             "turn": 0,
             "observed_outcome": null,
             "outcome_source": null,
-            "response_decision_accuracy": null,
-            "expected_decisions": [
-              "clarify"
-            ],
             "elapsed_ms": 1000.0
           },
           {
             "turn": 1,
             "observed_outcome": "answered",
             "outcome_source": "agent_answer",
-            "response_decision_accuracy": 1.0,
-            "expected_decisions": [
-              "answer"
-            ],
             "elapsed_ms": 2250.0
           }
         ],
@@ -258,21 +226,17 @@
             "status": "scored",
             "reason": null
           },
-          "response_decision_accuracy": {
-            "status": "unevaluable",
-            "reason": "outcome_missing"
-          },
           "answer_correctness": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "requirement_coverage": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "claim_support_rate": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           }
         }
       }

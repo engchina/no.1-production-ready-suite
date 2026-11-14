@@ -64,8 +64,6 @@ SCORE_FIELDS: tuple[str, ...] = (
     "answer_correctness",
     "requirement_coverage",
     "claim_support_rate",
-    "response_decision_accuracy",
-    "expected_decisions",
     "observed_outcome",
     "outcome_source",
     "missing_evidence",
@@ -84,8 +82,8 @@ STAGE2_DIFFS: dict[str, dict[str, tuple[Any, Any]]] = {
     "run-create-error": {"error_stage": (None, "turn_0")},
 }
 STAGE2_VERSION = "six_metrics_v1+agent_v2"
-LEGACY_VERSION = "six_metrics_v1+agent_v3+legacy_outcome"
-V3_VERSION = "six_metrics_v1+agent_v3"
+LEGACY_VERSION = "five_metrics_v1+agent_v3+legacy_outcome"
+V3_VERSION = "five_metrics_v1+agent_v3"
 
 
 def _case_fixture_path(fixture_id: str) -> Path:
@@ -477,7 +475,7 @@ def test_every_dependency_names_its_public_fields_and_an_ablation() -> None:
 def test_scores_depend_only_on_public_agent_mcp_fields(dependency: dict[str, Any]) -> None:
     """公開の Agent MCP の項目を消すと、一覧に書いた項目（だけ）が変わる（旧形式の推定を選んだとき。
 
-    段 2 と同じ規則で比べる。既定〔推定しない〕では outcome を消すと判断の正しさが評価不能になる）。
+    段 2 と同じ規則で比べる）。
     """
     witness = dependency["witness"]
     fixture = CASE_FIXTURES[witness["fixture"]]
@@ -495,15 +493,15 @@ def test_scores_depend_only_on_public_agent_mcp_fields(dependency: dict[str, Any
         ], field
 
 
-def test_without_outcome_the_decision_is_unevaluable_by_default() -> None:
-    """outcome を消した Run は、既定では判断の正しさを推定せず評価不能（理由つき）にする。"""
-    fixture = CASE_FIXTURES["answered-agent-outcome"]
+def test_without_outcome_and_citations_retrieval_is_unevaluable_by_default() -> None:
+    """outcome も引用も無い Run は、既定では対応を推定せず、検索の指標を評価不能にする。"""
+    fixture = CASE_FIXTURES["clarification-skips-retrieval"]
     ablated = replay([fixture], runs=_ablated_runs(fixture, "strip_answer_outcome")).record
     result = ablated.report.case_results[0]
     assert result.status == "success"
-    assert result.response_decision_accuracy is None
-    assert result.metric_status["response_decision_accuracy"].model_dump() == {
+    assert (result.observed_outcome, result.mrr) == (None, None)
+    assert result.metric_status["mrr"].model_dump() == {
         "status": "unevaluable",
         "reason": "outcome_missing",
     }
-    assert ablated.report.denominators.metrics["response_decision_accuracy"].unevaluable == 1
+    assert ablated.report.denominators.metrics["mrr"].unevaluable == 1

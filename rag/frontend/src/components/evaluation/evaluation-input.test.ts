@@ -47,7 +47,6 @@ const IMPORT: Pick<EvaluationImportResult, "cases" | "rows" | "document_names"> 
       evidence: ["経費精算規程.PDF", "出張旅費規程.docx | p.4"],
       standard_answer_preview: "毎月 25 日です。",
       has_standard_answer: true,
-      expected_response_decision: "answer",
     },
     {
       row: 3,
@@ -56,7 +55,6 @@ const IMPORT: Pick<EvaluationImportResult, "cases" | "rows" | "document_names"> 
       evidence: [],
       standard_answer_preview: null,
       has_standard_answer: false,
-      expected_response_decision: "hold",
     },
   ],
   document_names: { "doc-expense": "経費精算規程.pdf", "doc-travel": "出張旅費規程.docx" },
@@ -83,9 +81,8 @@ describe("Excel の検証の結果の表示", () => {
   it("件数の内訳を数える", () => {
     expect(evaluationImportCounts(IMPORT)).toEqual({
       total: 2,
-      answerable: 1,
-      unanswerable: 1,
       withStandardAnswer: 1,
+      withoutStandardAnswer: 1,
     });
   });
 
@@ -146,7 +143,6 @@ describe("process drafts (issue 2402)", () => {
     row: 3,
     required_answer_points: ["画面A"],
     required_conditions: ["条件X"],
-    expected_outcomes: ["answered", "conditional"],
     relevant_document_ids: ["doc-a", "doc-b"],
     required_evidence: [
       { id: "p1", document_id: "doc-a", page_start: 2, label: "資料A.pdf | p.2" },
@@ -207,7 +203,6 @@ describe("process drafts (issue 2402)", () => {
     expect(target).toMatchObject({
       required_answer_points: ["画面A"],
       required_conditions: ["条件X"],
-      expected_outcomes: ["answered", "conditional"],
       relevant_document_ids: ["doc-a", "doc-b"],
     });
     expect(target?.required_evidence?.map((item) => item.id)).toEqual(["p1"]);

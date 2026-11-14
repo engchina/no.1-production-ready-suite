@@ -76,7 +76,6 @@ def workbook(standard: str = STANDARD) -> bytes:
                 evidence=EVIDENCE,
                 standard_answer=standard,
                 required_answer_points=["合成の要点"],
-                response_decision="answer",
                 answer_process="合成の確認をしてから保存する。",
             )
         ]
@@ -177,7 +176,6 @@ class SyntheticJudge:
             "status": "completed",
             "passed": True,
             "answer_correctness": 1.0,
-            "response_decision_accuracy": 1.0,
         }
 
 
@@ -324,7 +322,7 @@ async def test_workbook_snapshot_preserves_six_columns_and_survives_source_delet
     assert second["standard_answer"] == "別の合成の標準回答"
     assert first["evidence"] == EVIDENCE
     assert first["required_answer_points"] == ["合成の要点"]
-    assert first["response_decision"] == "answer"
+    assert "response_decision" not in first
     assert first["answer_process"] == "合成の確認をしてから保存する。"
     assert not first["confirmed"] and not second["confirmed"]
     assert first["reference_answer"] == "未確認の参考回答"
@@ -346,7 +344,7 @@ async def test_workbook_snapshot_preserves_six_columns_and_survives_source_delet
     row = parsed.rows[0]
     assert row.question == QUESTION and row.standard_answer == STANDARD
     assert [spec.line for spec in row.evidence] == EVIDENCE
-    assert row.screen_lines == ("合成の要点",) and row.response_decision == "answer"
+    assert row.screen_lines == ("合成の要点",)
     assert row.answer_process == "合成の確認をしてから保存する。"
 
 
@@ -360,7 +358,7 @@ async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flo
     imported = await import_bytes(flow.client, download.content)
     case = imported["cases"][0]
     assert case["standard_answer"] == STANDARD and case["required_answer_points"] == ["合成の要点"]
-    assert case["expected_response_decision"] == "answer"
+    assert "expected_response_decision" not in case
     assert case["required_evidence"][0]["page_start"] == 2
     assert case["required_evidence"][0]["page_end"] == 4
     assert case["required_evidence"][1]["sheet"] == "表A"
@@ -390,7 +388,7 @@ async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flo
     assert result["case_count"] == 1 and result["error_count"] == 0
     assert result["required_evidence_recall"] == result["mrr"] == 1.0
     assert result["answer_correctness"] == 1.0
-    assert result["response_decision_accuracy"] == 1.0
+    assert "response_decision_accuracy" not in result
     assert result["case_results"][0]["status"] == "success"
     assert len(flow.artifacts) == 1
     assert flow.artifacts[0]["result_summary"]["case_count"] == 1

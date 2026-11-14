@@ -1,6 +1,6 @@
 """LLM による判定（LLM-as-judge）: 回答を rubric の観点ごとに判定する（#3418・#2577）。
 
-- 判定の結果は決定的な採点（六指標の report）と分けて記録する（`JudgeRun`）。決定的な report の回
+- 判定の結果は決定的な採点（report の指標）と分けて記録する（`JudgeRun`）。決定的な report の回
   答の指標（`answer_correctness` など）は埋めない。
 - 判定の出力は構造化出力（rubric の JSON schema）で受け、Pydantic で確かめる。形の違う出力は決めら
   れた回数だけ呼び直し、それでも違えば評価不能（`judge_invalid_output`）。呼べなければ評価不能

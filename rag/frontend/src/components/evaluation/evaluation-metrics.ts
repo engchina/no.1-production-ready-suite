@@ -1,18 +1,16 @@
 import type {
   EvaluationMetricName,
   EvaluationMetrics,
-  EvaluationOutcome,
   EvaluationReferenceMetricName,
   EvaluationSuiteName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
-/** 四指標の分類・順序は評価の基準と品質評価で共有する。 */
-export type EvaluationPerspective = "retrieval" | "answer" | "decision";
+/** 三指標の分類・順序は評価の基準と品質評価で共有する。 */
+export type EvaluationPerspective = "retrieval" | "answer";
 export const EVALUATION_PERSPECTIVES: ReadonlyArray<{id: EvaluationPerspective; metrics: readonly EvaluationMetricName[]}> = [
   {id:"retrieval", metrics:["required_evidence_recall", "mrr"]},
   {id:"answer", metrics:["answer_correctness"]},
-  {id:"decision", metrics:["response_decision_accuracy"]},
 ];
 export const EVALUATION_METRIC_NAMES: readonly EvaluationMetricName[] = EVALUATION_PERSPECTIVES.flatMap(item => item.metrics);
 /** 合否と閾値に使わない参考の指標。 */
@@ -45,7 +43,6 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   answer_evaluation_error: "evaluation.failureReason.answer_evaluation_error",
   answer_generation_fallback: "evaluation.failureReason.answer_generation_fallback",
   guardrail_warning: "evaluation.failureReason.guardrail_warning",
-  unexpected_handling: "evaluation.failureReason.unexpected_handling",
   step_missing: "evaluation.failureReason.step_missing",
   forbidden_action: "evaluation.failureReason.forbidden_action",
   condition_missing: "evaluation.failureReason.condition_missing",
@@ -133,7 +130,7 @@ export function metricCaseCount(
   return typeof count === "number" ? count : null;
 }
 
-/** 閾値の dict を、指標の並び順（観点の順）で返す。四指標以外は含めない。 */
+/** 閾値の dict を、指標の並び順（観点の順）で返す。三指標以外は含めない。 */
 export function orderedThresholdEntries(
   thresholds: Partial<Record<string, number | null>> | null | undefined
 ): Array<[string, number]> {
@@ -153,19 +150,6 @@ export function orderedThresholdEntries(
  */
 export function isPerspectiveShown(_metrics: EvaluationMetrics, _perspective: (typeof EVALUATION_PERSPECTIVES)[number]): boolean { return true; }
 
-const OUTCOME_KEYS: Record<EvaluationOutcome, I18nKey> = {
-  answered: "evaluation.outcome.answered",
-  conditional: "evaluation.outcome.conditional",
-  needs_clarification: "evaluation.outcome.needs_clarification",
-  needs_environment_data: "evaluation.outcome.needs_environment_data",
-  needs_human: "evaluation.outcome.needs_human",
-  insufficient_evidence: "evaluation.outcome.insufficient_evidence",
-};
-
-/** 回答の対応の表示名（未知の値は原文のまま）。 */
-export function outcomeLabel(outcome: string): string {
-  return outcome in OUTCOME_KEYS ? t(OUTCOME_KEYS[outcome as EvaluationOutcome]) : outcome;
-}
 
 
 export type ComparisonDirection = "better" | "worse" | "same";
@@ -181,7 +165,7 @@ export interface EvaluationComparisonRow {
 
 /**
  * ナレッジベースの範囲と検索・回答プロファイルの範囲の結果を、指標ごとに並べる（#2402）。
- * 両側とも未評価でも四指標を表示し、差を未評価として扱う。
+ * 両側とも未評価でも三指標を表示し、差を未評価として扱う。
  */
 export function comparisonRows(
   base: EvaluationMetrics,

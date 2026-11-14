@@ -1,4 +1,4 @@
-"""Report: ケースの採点の集計（六指標・内訳・分母・合否）と、評価の結果の比較（#3240）。
+"""Report: ケースの採点の集計（指標・内訳・分母・合否）と、評価の結果の比較（#3240）。
 
 集計の意味は製品の評価と同じ（成功したケースのうち測れたものだけの平均。失敗したケースは指標の
 分母に入れず、1 つでもあれば合格にしない）。suite は加えて、指標ごとに測れた / 対象外 / 評価不能の
@@ -14,11 +14,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from pr_evaluation_scoring import (
-    DECISIONS,
     MetricAggregate,
     count_reasons,
     overall_passed,
-    rounded_mean,
     threshold_failures,
 )
 from pydantic import BaseModel, Field
@@ -82,7 +80,6 @@ class Report(BaseModel):
     answer_correctness: float | None = None
     requirement_coverage: float | None = None
     claim_support_rate: float | None = None
-    response_decision_accuracy: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool | None = None
     threshold_failures: list[ThresholdFailureItem] = Field(default_factory=list)
@@ -91,7 +88,6 @@ class Report(BaseModel):
     split_breakdown: dict[str, SplitSummary] = Field(default_factory=dict)
     reasoning_type_breakdown: dict[str, GroupSummary] = Field(default_factory=dict)
     hops_breakdown: dict[str, GroupSummary] = Field(default_factory=dict)
-    decision_breakdown: dict[str, GroupSummary] = Field(default_factory=dict)
     denominators: Denominators
     case_results: list[CaseScore] = Field(default_factory=list)
 
@@ -160,27 +156,6 @@ def split_breakdown(results: Sequence[CaseScore]) -> dict[str, SplitSummary]:
             failure_reason_counts=reasons,
             reasoning_type_breakdown=reasoning_type_breakdown(members),
             hops_breakdown=hops_breakdown(members),
-        )
-    return breakdown
-
-
-def decision_breakdown(results: Sequence[CaseScore]) -> dict[str, GroupSummary]:
-    """期待する回答・確認・保留ごとの、判断の正しさ（測れたケースだけ）。"""
-    breakdown: dict[str, GroupSummary] = {}
-    for decision in DECISIONS:
-        members = [item for item in results if decision in item.expected_decisions]
-        if not members:
-            continue
-        values = [
-            item.response_decision_accuracy
-            for item in members
-            if item.response_decision_accuracy is not None
-        ]
-        breakdown[decision] = GroupSummary(
-            case_count=len(members),
-            error_count=sum(1 for item in members if item.status == "error"),
-            metrics={"response_decision_accuracy": rounded_mean(values)},
-            metric_case_counts={"response_decision_accuracy": len(values)},
         )
     return breakdown
 
@@ -255,7 +230,6 @@ def build_report(
         split_breakdown=split_breakdown(items),
         reasoning_type_breakdown=reasoning_type_breakdown(items),
         hops_breakdown=hops_breakdown(items),
-        decision_breakdown=decision_breakdown(items),
         denominators=counts,
         case_results=items,
         **values,
@@ -270,7 +244,6 @@ SUMMARY_METRICS: tuple[tuple[str, str], ...] = (
     ("answer_correctness", "回答の正確性"),
     ("requirement_coverage", "回答の網羅性"),
     ("claim_support_rate", "根拠への忠実性"),
-    ("response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
 )
 # 勧めてはいけない操作を回答が勧めた、という失敗の理由（製品の評価の失敗の理由の語彙）。
 FORBIDDEN_ACTION_REASON = "forbidden_action"
@@ -304,7 +277,7 @@ def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
     """suite の結果の report（製品の評価の結果と同じ名前の項目）の比較用の要約。"""
     cases = _records(data.get("case_results"))
     succeeded = [case for case in cases if case.get("status", "success") == "success"]
-    # 危険な回答のケースは、失敗の理由に勧めてはいけない操作が付いた成功のケース。六指標の採点は
+    # 危険な回答のケースは、失敗の理由に勧めてはいけない操作が付いた成功のケース。決定的な採点は
     # この理由を付けないため、該当が無ければ 0 ではなく測れない（None）とする。
     dangerous = [
         case.get("case_id")
@@ -324,7 +297,6 @@ def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
             [float(case["elapsed_ms"]) for case in succeeded if case.get("elapsed_ms") is not None]
         ),
         "splits": {},
-        "categories": {},
         "reasoning_types": _breakdown_summary(data.get("reasoning_type_breakdown")),
         "hops": _breakdown_summary(data.get("hops_breakdown")),
     }
@@ -340,15 +312,6 @@ def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
                 **{metric: (metrics or {}).get(metric) for metric, _ in SUMMARY_METRICS},
                 "reasoning_types": _breakdown_summary(item.get("reasoning_type_breakdown")),
             }
-    categories = data.get("category_breakdown")
-    if isinstance(categories, Mapping):
-        for category, item in categories.items():
-            if isinstance(item, Mapping):
-                metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
-                summary["categories"][category] = {
-                    "case_count": item.get("case_count"),
-                    "handling_correct_rate": (metrics or {}).get("response_decision_accuracy"),
-                }
     denominator = data.get("denominators")
     if isinstance(denominator, Mapping) and isinstance(denominator.get("metrics"), Mapping):
         summary["unevaluable"] = {
@@ -438,18 +401,4 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
                 f"{split} / {name}: 必要な根拠の取得率",
                 [groups[label].get(name, {}).get("required_evidence_recall") for label in labels],
             )
-    categories = sorted(
-        {category for summary in summaries.values() for category in summary.get("categories", {})}
-    )
-    for category in categories:
-        row(
-            f"{category}: 回答・確認・保留の判断の正しさ",
-            [
-                summaries[label]
-                .get("categories", {})
-                .get(category, {})
-                .get("handling_correct_rate")
-                for label in labels
-            ],
-        )
     return "\n".join(rows) + "\n"

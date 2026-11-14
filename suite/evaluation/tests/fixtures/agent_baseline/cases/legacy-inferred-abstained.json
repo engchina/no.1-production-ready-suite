@@ -12,9 +12,7 @@
     "category": "knowledge_missing",
     "split": "holdout",
     "query": "合成の質問 5: 資料に無い項目 U の値は？",
-    "expected_outcomes": [
-      "insufficient_evidence"
-    ]
+    "standard_answer": "項目 U の値は資料に記載が無いため答えられないと伝え、推測の値を答えない。"
   },
   "turns": [
     {
@@ -38,10 +36,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": 1.0,
-      "expected_decisions": [
-        "hold"
-      ],
       "observed_outcome": "insufficient_evidence",
       "outcome_source": "inferred",
       "missing_evidence": [],
@@ -109,10 +103,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "hold"
-        ],
         "observed_outcome": null,
         "outcome_source": null,
         "missing_evidence": [],
@@ -131,21 +121,17 @@
             "status": "not_applicable",
             "reason": null
           },
-          "response_decision_accuracy": {
-            "status": "unevaluable",
-            "reason": "outcome_missing"
-          },
           "answer_correctness": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "requirement_coverage": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           },
           "claim_support_rate": {
-            "status": "not_applicable",
-            "reason": null
+            "status": "unevaluable",
+            "reason": "answer_judge_unavailable"
           }
         }
       }

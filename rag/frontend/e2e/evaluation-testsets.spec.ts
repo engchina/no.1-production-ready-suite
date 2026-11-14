@@ -124,6 +124,31 @@ test("空のセットへ項目を追加し、変更を保持して参考と編�
   await expect.poll(() => state.getSaved()?.items.length).toBe(0);
 });
 
+test("標準回答が空欄の項目は、個別でも一括でも確認済みにできない", { tag: "@responsive" }, async ({ page }) => {
+  const state = await mockTestSetPage(page);
+  await page.goto("/evaluation?tab=testsets&set=new");
+  await page.locator("#testset-name").fill("手入力の合成セット");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "作成方法" }), "空のテストセットから作る");
+  await page.getByRole("button", { name: "テストセットを保存", exact: true }).click();
+  await page.getByRole("button", { name: "質問を追加", exact: true }).click();
+  await page.locator("#testset-question").fill("手入力した合成の質問");
+  // 標準回答はすべての項目で必須。保留・確認の期待も標準回答に文で書く（#5068）。
+  await expect(page.locator("#testset-standard")).toHaveAttribute("aria-required", "true");
+  await expect(page.getByText("保留・確認を期待する質問は、期待する返し方を文で書きます", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存して確認し、次へ" })).toBeDisabled();
+  await page.getByText("詳細設定", { exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "期待する応答の判断" })).toHaveCount(0);
+  await page.getByRole("button", { name: "下書きだけ保存", exact: true }).click();
+  await expect.poll(() => state.getSaved()?.items.length).toBe(1);
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "選択", exact: true }), /1\./);
+  await page.getByRole("button", { name: "選んだ項目を確認済みにする", exact: true }).click();
+  await expect(page.getByText("選んだ項目すべてに、質問と標準回答を入力してください。")).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(state.getSaved()?.items.every(value => !value.confirmed)).toBe(true);
+  await page.locator("#testset-standard").fill("資料に記載がないため答えられないと示す。");
+  await expect(page.getByRole("button", { name: "保存して確認し、次へ" })).toBeEnabled();
+});
+
 test("Excel はプレビュー後も未確認で、明示選択した件数を確認して一括確認する", { tag: "@responsive" }, async ({ page }, info) => {
   const state = await mockTestSetPage(page);
   await page.goto("/evaluation?tab=testsets&set=new");

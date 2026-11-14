@@ -225,7 +225,6 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
         json.loads(prompt)
         return AnswerCorrectnessOutput(
             correctness="correct",
-            response_appropriateness="not_applicable",
             reason="一致",
         )
 

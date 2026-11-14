@@ -24,10 +24,6 @@
       "required_answer_points": [
         "5年"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ap-record",
@@ -48,10 +44,6 @@
       ],
       "required_answer_points": [
         "7年"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -75,10 +67,6 @@
         "翌営業日",
         "担当部署"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "in-c",
@@ -101,10 +89,6 @@
         "AMS",
         "情"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-107",
@@ -126,10 +110,6 @@
       ],
       "required_answer_points": [
         "極秘"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -158,10 +138,6 @@
       "required_answer_points": [
         "総"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "mt-doc",
@@ -189,10 +165,6 @@
         "人事評価システム",
         "予算管理システム"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-103",
@@ -219,10 +191,6 @@
       ],
       "required_answer_points": [
         "受発注管理システム"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -252,10 +220,6 @@
         "資産管理システム",
         "社外秘"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "org-code-jo",
@@ -284,10 +248,6 @@
       "required_answer_points": [
         "管理本部長",
         "5営業日"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -326,10 +286,6 @@
       ],
       "required_answer_points": [
         "3営業日"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -370,10 +326,6 @@
         "営業本部長",
         "5営業日"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-104",
@@ -411,10 +363,6 @@
       "required_answer_points": [
         "総務部"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-106",
@@ -442,10 +390,6 @@
       "required_answer_points": [
         "10年"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-103",
@@ -472,10 +416,6 @@
       ],
       "required_answer_points": [
         "3年"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -505,10 +445,6 @@
       "required_answer_points": [
         "30分",
         "管理本部長"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -547,10 +483,6 @@
       "required_answer_points": [
         "1営業日"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-107",
@@ -578,10 +510,6 @@
       ],
       "required_answer_points": [
         "第2土曜"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -615,10 +543,6 @@
       ],
       "required_answer_points": [
         "最終金曜"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -658,10 +582,6 @@
       "required_answer_points": [
         "第4日曜"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-104",
@@ -694,10 +614,6 @@
       "required_answer_points": [
         "管理本部長"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-106",
@@ -729,10 +645,6 @@
       ],
       "required_answer_points": [
         "担当役員"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -775,10 +687,6 @@
       "required_answer_points": [
         "催促"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ap-overdue-ref",
@@ -804,10 +712,6 @@
       ],
       "required_answer_points": [
         "最終金曜"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -835,10 +739,6 @@
       "required_answer_points": [
         "切り戻し"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ch-items-ref",
@@ -864,10 +764,6 @@
       ],
       "required_answer_points": [
         "#incident"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -896,10 +792,6 @@
         "24時間",
         "事後"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ap-emergency-ref",
@@ -926,10 +818,6 @@
       "required_answer_points": [
         "承認",
         "総務部"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -963,10 +851,6 @@
       ],
       "required_answer_points": [
         "経費精算ポータル"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1026,10 +910,6 @@
         "人事評価システム",
         "10年"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-103",
@@ -1066,10 +946,6 @@
       "required_answer_points": [
         "HRM"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "mt-hrm",
@@ -1097,10 +973,6 @@
       "required_answer_points": [
         "人事評価システム",
         "30分"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1139,10 +1011,6 @@
       "required_answer_points": [
         "ドキュメントポータル",
         "1営業日"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1183,10 +1051,6 @@
         "生産本部長",
         "5営業日"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-124",
@@ -1226,10 +1090,6 @@
         "担当役員",
         "7営業日"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-137",
@@ -1267,10 +1127,6 @@
       "required_answer_points": [
         "購買部"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-127",
@@ -1298,10 +1154,6 @@
       ],
       "required_answer_points": [
         "第1火曜"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1336,10 +1188,6 @@
       "required_answer_points": [
         "第3木曜"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-119",
@@ -1372,10 +1220,6 @@
       "required_answer_points": [
         "10年"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-129",
@@ -1404,10 +1248,6 @@
       "required_answer_points": [
         "30分",
         "情報セキュリティ部長"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1445,10 +1285,6 @@
       ],
       "required_answer_points": [
         "代表取締役"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1493,10 +1329,6 @@
       "required_answer_points": [
         "営業企画部"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "guide-121-link",
@@ -1529,10 +1361,6 @@
       "required_answer_points": [
         "2回"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-140",
@@ -1561,10 +1389,6 @@
       "required_answer_points": [
         "法務部長",
         "情報セキュリティ部長"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1607,10 +1431,6 @@
       "required_answer_points": [
         "購買管理システム"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-119",
@@ -1644,10 +1464,6 @@
       "required_answer_points": [
         "製造実行システム",
         "5営業日"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1707,10 +1523,6 @@
         "5営業日",
         "7営業日"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ap-honbucho",
@@ -1740,10 +1552,6 @@
       "required_answer_points": [
         "倉庫管理システム",
         "物流部"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1776,10 +1584,6 @@
       "required_answer_points": [
         "運行管理システム"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "lg-ledger-201",
@@ -1801,10 +1605,6 @@
       ],
       "required_answer_points": [
         "在庫管理システム"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1832,10 +1632,6 @@
       "required_answer_points": [
         "情シス"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "bk-restore-ref",
@@ -1861,10 +1657,6 @@
       ],
       "required_answer_points": [
         "半年"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1892,10 +1684,6 @@
       "required_answer_points": [
         "担当役員"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "pu-exec",
@@ -1919,10 +1707,6 @@
       "required_answer_points": [
         "管理本部長",
         "5営業日"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -1963,10 +1747,6 @@
         "労務部長",
         "3営業日"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-111",
@@ -2005,10 +1785,6 @@
       "required_answer_points": [
         "第1日曜"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-128",
@@ -2041,10 +1817,6 @@
       ],
       "required_answer_points": [
         "最終金曜"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2083,10 +1855,6 @@
       "required_answer_points": [
         "3年"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-122",
@@ -2114,10 +1882,6 @@
       "required_answer_points": [
         "1回"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-160",
@@ -2144,10 +1908,6 @@
       ],
       "required_answer_points": [
         "生産本部長"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2182,10 +1942,6 @@
       "required_answer_points": [
         "製造部"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "guide-124-link",
@@ -2217,10 +1973,6 @@
       ],
       "required_answer_points": [
         "運行管理課長"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2254,10 +2006,6 @@
       "required_answer_points": [
         "問い合わせ管理システム",
         "10年"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2297,10 +2045,6 @@
         "資金管理システム",
         "4時間"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "ledger-122",
@@ -2339,10 +2083,6 @@
         "第1土曜",
         "第2土曜"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "mt-hrm",
@@ -2371,10 +2111,6 @@
       "required_answer_points": [
         "ID 管理システム",
         "ログ監視システム"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2410,10 +2146,6 @@
         "製造実行システム",
         "製造部"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "mt-mes",
@@ -2445,10 +2177,6 @@
       "required_answer_points": [
         "購買部"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "pu-overdue-ref",
@@ -2475,10 +2203,6 @@
       "required_answer_points": [
         "毎週日曜"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "bk-c",
@@ -2501,10 +2225,6 @@
         "入室の予約",
         "監視の一時停止",
         "予備部品"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2539,10 +2259,6 @@
         "27",
         "緑の範囲"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "sv-power-range",
@@ -2575,10 +2291,6 @@
         "氏名",
         "交換した部品"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "sv-record-name",
@@ -2606,10 +2318,6 @@
         "漏水",
         "警報"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "sv-stop-leak",
@@ -2636,10 +2344,6 @@
       "required_answer_points": [
         "監視の再開",
         "補充"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2671,10 +2375,6 @@
         "警報",
         "バッテリー",
         "1 人"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {
@@ -2724,10 +2424,6 @@
         "3 営業日",
         "10 営業日"
       ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
-      ],
       "required_evidence": [
         {
           "id": "sv-prep-reserve",
@@ -2772,10 +2468,6 @@
         "見つけた場所と時刻",
         "入室・退室の時刻と氏名",
         "提出した日"
-      ],
-      "expected_outcomes": [
-        "answered",
-        "conditional"
       ],
       "required_evidence": [
         {

@@ -11,9 +11,6 @@
     "query": "合成の質問: waiting-approval-run",
     "relevant_document_ids": [
       "doc-a"
-    ],
-    "expected_outcomes": [
-      "answered"
     ]
   },
   "turns": [
@@ -40,10 +37,6 @@
       "answer_correctness": null,
       "requirement_coverage": null,
       "claim_support_rate": null,
-      "response_decision_accuracy": null,
-      "expected_decisions": [
-        "answer"
-      ],
       "observed_outcome": null,
       "outcome_source": null,
       "missing_evidence": [],
@@ -107,10 +100,6 @@
         "answer_correctness": null,
         "requirement_coverage": null,
         "claim_support_rate": null,
-        "response_decision_accuracy": null,
-        "expected_decisions": [
-          "answer"
-        ],
         "observed_outcome": null,
         "outcome_source": null,
         "missing_evidence": [],

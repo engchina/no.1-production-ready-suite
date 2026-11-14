@@ -75,7 +75,6 @@ def _metrics_json(case_count: int = 1) -> dict[str, Any]:
         "required_evidence_recall": 1.0,
         "mrr": 1.0,
         "answer_correctness": 1.0,
-        "response_decision_accuracy": 1.0,
     }
 
 

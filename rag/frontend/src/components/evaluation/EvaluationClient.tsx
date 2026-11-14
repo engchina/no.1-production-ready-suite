@@ -1120,7 +1120,6 @@ function EvaluationResult({
 
         <ReferenceMetrics metrics={metrics} />
         <CategoryBreakdown metrics={metrics} />
-        <DecisionBreakdown metrics={metrics} />
 
         {failureReasons.length ? (
           <div className="rounded-md border border-border bg-surface p-4 text-sm">
@@ -1523,20 +1522,6 @@ function CategoryBreakdown({ metrics }: { metrics: EvaluationMetrics }) {
       />
     </div>
   );
-}
-
-function DecisionBreakdown({metrics}:{metrics:EvaluationMetrics}) {
- const rows=Object.entries(metrics.decision_breakdown ?? {}).flatMap(([decision,summary])=>summary?[{decision,...summary}]:[]);
- if (!rows.length) return null;
- const labels={answer:"evaluation.decision.answer",clarify:"evaluation.decision.clarify",hold:"evaluation.decision.hold"} as const;
- return <section className="space-y-2" data-testid="evaluation-decision-breakdown">
-   <h3 className="text-sm font-semibold text-fg">{t("evaluation.decision.breakdown")}</h3>
-   <DataTable visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} stickyHeader ariaLabel={t("evaluation.decision.breakdown")} rows={rows} getRowKey={row=>row.decision} columns={[
-     {key:"decision",header:t("evaluation.perspective.decision"),render:row=>row.decision in labels?t(labels[row.decision as keyof typeof labels]):row.decision},
-     {key:"count",header:t("evaluation.category.column.count"),render:row=>String(row.metric_case_counts.response_decision_accuracy ?? 0)},
-     {key:"score",header:metricLabel("response_decision_accuracy"),render:row=>formatMetricValue(row.metrics.response_decision_accuracy)},
-   ]}/>
- </section>;
 }
 
 const CATEGORY_KEYS = {

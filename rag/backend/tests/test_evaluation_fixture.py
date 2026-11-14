@@ -60,12 +60,20 @@ def test_business_support_set_covers_every_category_and_its_corpus_exists() -> N
         "knowledge_missing",
         "conflicting_sources",
     }
-    assert all(case.expected_outcomes for case in request.cases)
-    # 資料に答えの無い質問は、拒答か人への引き継ぎだけを正しいとする。
+    # 確認・現場のデータ・資料に答えが無い分類は、期待する返し方を標準回答に書く。
     for case in request.cases:
+        if (
+            case.category
+            in {
+                "clarification_required",
+                "environment_data_required",
+                "knowledge_missing",
+            }
+            and not case.conditions
+        ):
+            assert case.standard_answer, case.id
         if case.category == "knowledge_missing":
             assert case.answerable is False
-            assert set(case.expected_outcomes) <= {"insufficient_evidence", "needs_human"}
     names = referenced_files(payload)
     assert names
     assert all((corpus / name).is_file() for name in names)

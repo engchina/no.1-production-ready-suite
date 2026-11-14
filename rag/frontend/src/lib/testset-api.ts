@@ -6,7 +6,6 @@ export interface TestSetFields {
   standard_answer: string;
   evidence: string[];
   required_answer_points: string[];
-  response_decision: "answer" | "clarify" | "hold";
   answer_process: string;
 }
 export interface TestSetItem extends TestSetFields {
@@ -52,20 +51,20 @@ export const testsetApi = {
   sources: () => request<TestSetSource[]>(`${ROOT}/sources`),
   candidates: (job_ids: string[]) => request<TestSetItem[]>(`${ROOT}/sources/items`, json("POST", { job_ids })),
   create: (name: string, job_ids: string[], item_ids: string[]) => request<TestSetDraft>(ROOT, json("POST", { name, job_ids, item_ids })),
-  createInput: (name: string, source_kind: "manual" | "excel", items: TestSetFields[] = []) => request<TestSetDraft>(ROOT, json("POST", { name, source_kind, items: items.map(({ question, standard_answer, evidence, required_answer_points, response_decision, answer_process }) => ({ question, standard_answer, evidence, required_answer_points, response_decision, answer_process })) })),
+  createInput: (name: string, source_kind: "manual" | "excel", items: TestSetFields[] = []) => request<TestSetDraft>(ROOT, json("POST", { name, source_kind, items: items.map(({ question, standard_answer, evidence, required_answer_points, answer_process }) => ({ question, standard_answer, evidence, required_answer_points, answer_process })) })),
   import: (file: File) => { const body = new FormData(); body.append("file", file); return request<TestSetItem[]>(`${ROOT}/import`, { method: "POST", body }); },
   prepare: (id: string, revision: number, search_answer_profile_id: string) => request<EvaluationImportResult>(`${ROOT}/${encodeURIComponent(id)}/prepare`, json("POST", { revision, search_answer_profile_id })),
   get: (id: string) => request<TestSetDraft>(`${ROOT}/${encodeURIComponent(id)}`),
   save: (draft: TestSetDraft, confirm_item_ids: string[] = []) => request<TestSetDraft>(`${ROOT}/${encodeURIComponent(draft.draft_id)}`, json("PUT", {
     name: draft.name, revision: draft.revision, confirm_item_ids,
-    items: draft.items.map(({ item_id, question, standard_answer, evidence, required_answer_points, response_decision, answer_process, confirmed }) => ({
-      item_id, question, standard_answer, evidence, required_answer_points, response_decision, answer_process, confirmed,
+    items: draft.items.map(({ item_id, question, standard_answer, evidence, required_answer_points, answer_process, confirmed }) => ({
+      item_id, question, standard_answer, evidence, required_answer_points, answer_process, confirmed,
     })),
   })),
   download: (draft: TestSetDraft) => requestFile(`${ROOT}/${encodeURIComponent(draft.draft_id)}/export.xlsx?revision=${draft.revision}`, "evaluation_testset.xlsx"),
 };
 
 export function blankTestSetItem(): TestSetItem {
-  const fields: TestSetFields = { question: "", standard_answer: "", evidence: [], required_answer_points: [], response_decision: "answer", answer_process: "" };
+  const fields: TestSetFields = { question: "", standard_answer: "", evidence: [], required_answer_points: [], answer_process: "" };
   return { ...fields, item_id: crypto.randomUUID(), confirmed: false, source_kind: "manual", source_job_id: "", source_case_id: "", source_pass: 0, original: { ...fields }, reference_answer: "", reference_evidence: [], source_notice: null };
 }
