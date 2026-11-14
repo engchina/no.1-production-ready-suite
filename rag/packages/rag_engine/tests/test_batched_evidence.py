@@ -45,7 +45,7 @@ def span(index, text):
 
 def body(value):
     """入力の本文から行頭の番号を除く（改行を含む単位の間は問わない）。"""
-    return "".join(re.sub(r"^\[U[0-9a-f]{24}\] ", "", line.split("| ", 1)[1]) for line in value["text"].split("\n"))
+    return "".join(re.sub(r"^\[[A-Z][0-9]+\.[0-9]+\] ", "", line.split("| ", 1)[1]) for line in value["text"].split("\n"))
 
 
 # 内容語の無い文。原文の照合に関係しないテストの回答候補に使う。
@@ -53,7 +53,7 @@ NO_TERM_ANSWER = "そのとおりです。"
 
 
 def finding(value, answer=NO_TERM_ANSWER, first=1, last=None):
-    ids = re.findall(r"(?m)^B\d+-\d+\| \[(U[0-9a-f]{24})\] ", value["text"])
+    ids = re.findall(r"(?m)^B\d+-\d+\| \[([A-Z][0-9]+\.[0-9]+)\] ", value["text"])
     if ids:
         selected = ids[first - 1 : first if last is None else last]
         return {"unit_ids": selected or ["unknown-unit"], "answer": answer}
@@ -338,7 +338,6 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
             {
                 "response_kind": "answered",
                 "answer_body": "合成の不足",
-                "citations": [],
                 "confidence": "low",
             }
         )
@@ -523,7 +522,6 @@ def _synthesize(records, read_findings, *, budget=12000):
             {
                 "response_kind": "answered",
                 "answer_body": "合成の不足",
-                "citations": [],
                 "confidence": "low",
             }
         )

@@ -50,12 +50,12 @@ def test_schema_has_only_units_that_were_sent_and_rejects_free_ranges():
     original = snapshot()
     catalog = SentUnitCatalog([original])
     model = catalog.selection_model()
-    assert model.model_validate({"unit_ids": [original.unit_ids[0]]}).unit_ids == [original.unit_ids[0]]
+    assert model.model_validate({"unit_ids": [original.unit_labels[0]]}).unit_ids == [original.unit_labels[0]]
     for value in (
         {"unit_ids": ["unknown"]},
         {"unit_ids": []},
-        {"unit_ids": [snapshot(source_id="other").unit_ids[0]]},
-        {"unit_ids": [original.unit_ids[0]], "line_start": 1, "line_end": 3},
+        {"unit_ids": [snapshot(label="E2").unit_labels[0]]},
+        {"unit_ids": [original.unit_labels[0]], "line_start": 1, "line_end": 3},
     ):
         with pytest.raises(ValidationError):
             model.model_validate(value)
@@ -65,10 +65,10 @@ def test_schema_has_only_units_that_were_sent_and_rejects_free_ranges():
 def test_non_adjacent_selection_does_not_invent_middle_text():
     original = snapshot()
     catalog = SentUnitCatalog([original])
-    selected = catalog.bind([original.unit_ids[2], original.unit_ids[0], original.unit_ids[0]])
+    selected = catalog.bind([original.unit_labels[2], original.unit_labels[0], original.unit_labels[0]])
     assert [part.text for part in selected] == ["単位A", "単位C"]
     assert [(part.first, part.last) for part in selected] == [(0, 0), (2, 2)]
-    adjacent = catalog.bind(original.unit_ids[:2])
+    adjacent = catalog.bind(original.unit_labels[:2])
     assert len(adjacent) == 1 and adjacent[0].text == "単位A\n単位B"
 
 
@@ -79,12 +79,12 @@ def test_snapshot_is_independent_of_later_mutation_and_relabel():
     source["text"] = "別の本文"
     source["document_scope"]["version"] = "v9"
     assert original.span() == copy
-    assert SentUnitCatalog([original]).bind(original.unit_ids)[0].text == "単位A"
+    assert SentUnitCatalog([original]).bind(original.unit_labels)[0].text == "単位A"
 
 
 def test_foreign_or_missing_unit_is_not_repaired_by_guessing():
     catalog = SentUnitCatalog([snapshot()])
-    for ids in ([], ["unknown"], [snapshot(source_id="other").unit_ids[0]]):
+    for ids in ([], ["unknown"], [snapshot(label="E2").unit_labels[0]]):
         with pytest.raises(ValueError):
             catalog.bind(ids)
 
@@ -100,7 +100,7 @@ def test_generation_contract_has_no_free_source_or_range():
     selection = schema["$defs"]["CitationUnitSelection"]["properties"]
     assert set(selection) == {"unit_ids"}
     data = {
-        "items": [{"kind": "rule", "text": "合成の説明", "citations": [{"unit_ids": [original.unit_ids[0], original.unit_ids[2]]}]}],
+        "items": [{"kind": "rule", "text": "合成の説明", "citations": [{"unit_ids": [original.unit_labels[0], original.unit_labels[2]]}]}],
         "summary": "",
         "confidence": "low",
     }
@@ -127,10 +127,9 @@ def test_generation_binding_keeps_original_source_after_new_display_labels():
     draft = canonical_full_answer(
         model.model_validate(
             {
-                "answer_body": "合成の回答[C1]",
+                "answer_body": f"合成の回答[{catalog.snapshots[0].unit_labels[1]}]",
                 "response_kind": "answered",
                 "confidence": "high",
-                "citations": [{"unit_ids": [catalog.snapshots[0].unit_ids[1]]}],
             }
         ),
         catalog,
@@ -201,8 +200,8 @@ def test_catalog_uses_presented_snapshot_after_input_dictionary_mutation():
     selected = grounded.generation_unit_catalog([original]).snapshots[0]
     assert selected == initial
     assert selected.span() == {**before, "function": list(before["function"]), "source_order": list(before["source_order"])}
-    assert all(uid in prompt for uid in selected.unit_ids)
-    assert SentUnitCatalog([selected]).bind(selected.unit_ids[:1])[0].text in before["text"]
+    assert all(uid in prompt for uid in selected.unit_labels)
+    assert SentUnitCatalog([selected]).bind(selected.unit_labels[:1])[0].text in before["text"]
 
 
 def test_repair_prompt_decodes_each_snapshot_once(monkeypatch):
@@ -219,7 +218,7 @@ def test_repair_prompt_decodes_each_snapshot_once(monkeypatch):
     assert calls == [original.snapshot_id]
     assert record["snapshot_id"] == original.snapshot_id
     assert record["source"] == "synthetic.txt"
-    assert all(uid in record["text"] for uid in original.unit_ids)
+    assert all(uid in record["text"] for uid in original.unit_labels)
     assert "単位A" in record["text"] and "単位C" in record["text"]
 
 
@@ -232,6 +231,6 @@ def test_annotation_does_not_replace_number_like_content_inside_a_unit():
     units = [(0, boundary), (boundary, len(text))]
     snapshot = EvidenceUnitSnapshot.create(span, units, grounded.CITATION_UNIT_CONTRACT)
     rendered = grounded._rendered_evidence_span(span, units=units, numbered=True)
-    assert f"1| [{snapshot.unit_ids[0]}] 原文の最初。" in rendered
+    assert f"1| [{snapshot.unit_labels[0]}] 原文の最初。" in rendered
     assert "\n2| 原文内の番号。" in rendered
-    assert f"2| [{snapshot.unit_ids[1]}] 次の単位。" in rendered
+    assert f"2| [{snapshot.unit_labels[1]}] 次の単位。" in rendered

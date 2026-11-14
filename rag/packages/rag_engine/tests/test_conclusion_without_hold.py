@@ -29,10 +29,8 @@ def _answer() -> tuple[Any, list[str]]:
         calls.append(schema.__name__)
         if not getattr(schema, "_uses_unit_ids", False):
             raise AssertionError(f"生成と説明のほかの呼び出し: {schema.__name__}")
-        units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
-        return schema.model_validate(
-            {"answer_body": RESULT + "[C1]", "response_kind": "answered", "confidence": "high", "citations": [{"unit_ids": [units[ROW]]}]}
-        )
+        units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[([A-Z][0-9]+\.[0-9]+)\] (.*)$", prompt)}
+        return schema.model_validate({"answer_body": RESULT + f"[{units[ROW]}]", "response_kind": "answered", "confidence": "high"})
 
     def unused(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("不要な外部呼出")

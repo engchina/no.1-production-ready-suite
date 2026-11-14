@@ -54,11 +54,11 @@ def run_round(spans: list[dict[str, Any]], prompt: str, parse: Any = None) -> gr
         assert issubclass(args[3], generation_draft_wire_model())
         data = wire_value(spans[0]["label"])
         catalog = grounded.generation_unit_catalog(spans, sent_only=True)
-        if not catalog.unit_ids:
+        if not catalog.unit_labels:
             # 未送達の旧引用の再生を検査する。新 producer の空集合契約は別の回帰で検査する。
             return generation_draft_wire_model().model_validate(data)
         if getattr(args[3], "_uses_unit_ids", False):
-            data = {**selected_answer_payload([catalog.snapshots[0].unit_ids[1]]), "request_coverage": data["request_coverage"]}
+            data = {**selected_answer_payload([catalog.snapshots[0].unit_labels[1]]), "request_coverage": data["request_coverage"]}
         return args[3].model_validate(data)
 
     return grounded.run_round(

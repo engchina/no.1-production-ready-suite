@@ -57,7 +57,7 @@ def _placeholders(prompt: str) -> dict[str, str]:
     for line in prompt.splitlines():
         if found := re.match(r"\[(E\d+)\]", line):
             label = found.group(1)
-        if not (found := re.match(r"\d+\| \[(U[0-9a-f]{24})\] (.*)", line)):
+        if not (found := re.match(r"\d+\| \[([A-Z][0-9]+\.[0-9]+)\] (.*)", line)):
             continue
         unit, text = found.groups()
         if row := re.match(r"\| A(\d) \|", text):
@@ -184,7 +184,7 @@ def _single_unit_case(question_type: list[str]):
                 {
                     "request_id": "Q1",
                     "requirement": "項目Aの値",
-                    "answer": {"kind": "source", "basis": {"unit_ids": list(snapshot.unit_ids)}},
+                    "answer": {"kind": "source", "basis": {"unit_ids": list(snapshot.unit_labels)}},
                 }
             ],
             "question_type": question_type,

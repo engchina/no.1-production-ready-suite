@@ -1,4 +1,9 @@
-"""送達した原文の引用単位を、表示番号から独立した ID へ結ぶ。"""
+"""送達した原文の引用単位を、表示番号から独立した ID へ結ぶ。
+
+モデルに見せて選ばせるのは単位のラベル（根拠のラベルと単位の順番。``E2.1``）だけにする。単位の ID
+（原文の版から決まる hash）は版の同一性と出典の記録に使い、モデルの入力には出さない。根拠を指す書き方を、
+根拠のブロックのラベルとそれを延ばした単位のラベルの 1 つの体系にするため（#5078）。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import GenericAlias
 from typing import Annotated, Any, Literal, cast
 
@@ -26,6 +31,8 @@ class EvidenceUnitSnapshot:
     contract: str
     units: tuple[tuple[int, int], ...]
     unit_ids: tuple[str, ...]
+    # モデルに見せる単位のラベル（``unit_label``）。表示の名前なので、版の同一性の比較には使わない。
+    unit_labels: tuple[str, ...] = field(default=(), compare=False)
 
     @classmethod
     def create(cls, span: Mapping[str, Any], units: Sequence[tuple[int, int]], contract: str) -> EvidenceUnitSnapshot:
@@ -58,13 +65,22 @@ class EvidenceUnitSnapshot:
             "contract": contract,
         }
         snapshot_id = "S" + _digest(identity)
+        unit_ids = tuple("U" + _digest([snapshot_id, start, end])[:24] for start, end in normalized)
+        label = str(span.get("label") or "")
         return cls(
             snapshot_id,
             json.dumps(dict(span), ensure_ascii=False, sort_keys=True),
             contract,
             normalized,
-            tuple("U" + _digest([snapshot_id, start, end])[:24] for start, end in normalized),
+            unit_ids,
+            # ラベルの無い根拠はモデルに示さないので、選択の名前には版の ID をそのまま使う。
+            tuple(unit_label(label, index) for index in range(1, len(normalized) + 1)) if label else unit_ids,
         )
+
+    @property
+    def label(self) -> str:
+        """モデルに示した根拠のブロックのラベル（``E2``）。"""
+        return str(self.span().get("label") or "")
 
     def span(self) -> dict[str, Any]:
         return json.loads(self.span_json)
@@ -76,8 +92,13 @@ class EvidenceUnitSnapshot:
         return {
             "snapshot_id": self.snapshot_id,
             "source": str(original.get("source") or ""),
-            "text": "\n".join(f"[{uid}] {text[start:end]}" for (start, end), uid in zip(self.units, self.unit_ids, strict=True)),
+            "text": "\n".join(f"[{name}] {text[start:end]}" for (start, end), name in zip(self.units, self.unit_labels, strict=True)),
         }
+
+
+def unit_label(block_label: str, index: int) -> str:
+    """根拠のブロックのラベルと、その中の単位の順番（1 始まり）から作る単位のラベル（``E2`` の 1 番目は ``E2.1``）。"""
+    return f"{block_label}.{index}"
 
 
 @dataclass(frozen=True)
@@ -102,26 +123,39 @@ class SentUnitCatalog:
     def __init__(self, snapshots: Sequence[EvidenceUnitSnapshot]) -> None:
         self.snapshots = tuple(snapshots)
         self._units: dict[str, tuple[EvidenceUnitSnapshot, int]] = {}
+        self._blocks: dict[str, tuple[str, ...]] = {}
         for snapshot in snapshots:
-            for index, unit_id in enumerate(snapshot.unit_ids):
-                existing = self._units.get(unit_id)
+            for index, name in enumerate(snapshot.unit_labels):
+                existing = self._units.get(name)
                 if existing is not None and (existing[0].snapshot_id, existing[1]) != (snapshot.snapshot_id, index):
-                    raise ValueError("異なる原文単位の ID が重複しています。")
-                self._units.setdefault(unit_id, (snapshot, index))
+                    raise ValueError("異なる原文単位のラベルが重複しています。")
+                self._units.setdefault(name, (snapshot, index))
+            if (block := snapshot.label) and snapshot.unit_labels:
+                self._blocks.setdefault(block, snapshot.unit_labels)
 
     @property
-    def unit_ids(self) -> tuple[str, ...]:
+    def unit_labels(self) -> tuple[str, ...]:
+        """この送信で選べる単位のラベル。"""
         return tuple(self._units)
 
-    def bind(self, unit_ids: Sequence[str]) -> tuple[BoundUnitRange, ...]:
+    @property
+    def block_labels(self) -> tuple[str, ...]:
+        """引用できる単位を持つ根拠のブロックのラベル。"""
+        return tuple(self._blocks)
+
+    def block_units(self, block_label: str) -> tuple[str, ...]:
+        """根拠のブロックのすべての単位のラベル。"""
+        return self._blocks[block_label]
+
+    def bind(self, unit_labels: Sequence[str]) -> tuple[BoundUnitRange, ...]:
         """同じ版の隣接単位だけを組にする。未選択の間の単位は引用しない。"""
-        if not unit_ids:
+        if not unit_labels:
             raise ValueError("引用単位が選択されていません。")
         grouped: dict[str, tuple[EvidenceUnitSnapshot, set[int]]] = {}
-        for unit_id in unit_ids:
-            if unit_id not in self._units:
+        for name in unit_labels:
+            if name not in self._units:
                 raise ValueError("今回の送信にない引用単位です。")
-            snapshot, index = self._units[unit_id]
+            snapshot, index = self._units[name]
             grouped.setdefault(snapshot.snapshot_id, (snapshot, set()))[1].add(index)
         bound = []
         for snapshot, selected in grouped.values():
@@ -138,13 +172,13 @@ class SentUnitCatalog:
         return tuple(bound)
 
     def selection_model(self) -> type[BaseModel]:
-        """自由な起止整数を持たず、実提示 ID の列挙から選ぶ契約。"""
-        if not self.unit_ids:
+        """自由な起止整数を持たず、実提示の単位のラベルの列挙から選ぶ契約。"""
+        if not self.unit_labels:
             empty_fields: dict[str, Any] = {"unit_ids": (list[str], Field(max_length=0))}
             return create_model("NoCitationUnits", __config__=ConfigDict(extra="forbid"), **empty_fields)
-        unit_type = Literal.__getitem__(self.unit_ids)
+        unit_type = Literal.__getitem__(self.unit_labels)
         fields: dict[str, Any] = {
-            "unit_ids": (GenericAlias(list, unit_type), Field(min_length=1, description="今回の入力に表示された引用単位 ID。")),
+            "unit_ids": (GenericAlias(list, unit_type), Field(min_length=1, description="今回の入力に表示された引用単位のラベル。")),
         }
         return create_model("CitationUnitSelection", __config__=ConfigDict(extra="forbid"), **fields)
 
@@ -204,7 +238,7 @@ def unit_generation_model(base: type[BaseModel], catalog: SentUnitCatalog) -> ty
 
     item_base = get_args(base.model_fields["items"].annotation)[0]
     citation_info = deepcopy(item_base.model_fields["citations"])
-    if not catalog.unit_ids:
+    if not catalog.unit_labels:
         citation_info = Field(default_factory=list, max_length=0, description=citation_info.description)
     item_fields: dict[str, Any] = {"citations": (GenericAlias(list, catalog.selection_model()), citation_info)}
     item = create_model("UnitGroundedItemWire", __base__=item_base, **item_fields)

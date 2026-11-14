@@ -229,9 +229,9 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
     from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 
     schema = _reading_model([{"text": "合成の本文。", "source_id": "source-a"}])
-    actual_id = reading_unit_catalog([{"text": "合成の本文。", "source_id": "source-a"}]).unit_ids[
-        0
-    ]
+    actual_id = reading_unit_catalog(
+        [{"text": "合成の本文。", "source_id": "source-a"}]
+    ).unit_labels[0]
     foreign_id = "U" + "f" * 24
     assert actual_id != foreign_id
     sent: list[dict[str, Any]] = []

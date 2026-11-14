@@ -105,7 +105,7 @@ def test_sql_bind_read_answer_units_and_render_keep_search_metadata_outside_quot
         units = grounded.citation_units(record.text, image_text=True)
         snapshot = EvidenceUnitSnapshot.create(span, units, "synthetic-v1")
         catalog = SentUnitCatalog([snapshot])
-        bindings = catalog.bind(snapshot.unit_ids)
+        bindings = catalog.bind(snapshot.unit_labels)
         assert bindings and all("索引専用甲" not in b.text for b in bindings)
         item = grounded._quote_item(span, 0, len(record.text))
         rendered, refs = grounded.render_with_citations("", [item])
@@ -123,7 +123,7 @@ def test_identical_text_from_foreign_document_cannot_reuse_unit_ids() -> None:
         snapshots.append(EvidenceUnitSnapshot.create(span, [(0, len(record.text))], "synthetic-v1"))
     assert snapshots[0].unit_ids != snapshots[1].unit_ids
     with pytest.raises(ValueError, match="今回の送信にない"):
-        SentUnitCatalog([snapshots[0]]).bind(snapshots[1].unit_ids)
+        SentUnitCatalog([snapshots[0]]).bind(snapshots[1].unit_labels)
 
 
 def test_same_config_cannot_reuse_old_vision_parse_or_chunk_identity(

@@ -63,7 +63,7 @@ def draft_of(part: dict[str, Any]) -> Any:
 
 
 def two_rows(snapshot: EvidenceUnitSnapshot) -> list[tuple[list[str], list[str]]]:
-    first, second = snapshot.unit_ids
+    first, second = snapshot.unit_labels
     return [(["失敗の判定", "応答が 30 秒ない要求を失敗とする"], [first]), (["再試行の回数", "最大 5 回"], [second])]
 
 
@@ -117,7 +117,7 @@ def test_markdown_adds_the_source_column_with_marks_per_row() -> None:
 
 def test_row_with_more_cells_than_columns_is_rejected_with_how_to_fix() -> None:
     model, _, snapshot = catalog_case()
-    part = table_part([(["失敗の判定", "30 秒", "余分"], [snapshot.unit_ids[0]])])
+    part = table_part([(["失敗の判定", "30 秒", "余分"], [snapshot.unit_labels[0]])])
     with pytest.raises(ValidationError, match="1 行目の cells が 3 個で、columns の 2 個より多い"):
         model.model_validate({"response_kind": "answered", "answer_parts": [part], "summary_part_indexes": [0], "confidence": "medium"})
 
@@ -220,10 +220,9 @@ def test_complete_markdown_table_is_preserved_once():
         QUESTION,
         ctx,
         lambda units: {
-            "answer_body": body + "\n[C1]",
+            "answer_body": body + f"\n[{units[FIRST]}]",
             "response_kind": "answered",
             "confidence": "high",
-            "citations": [{"unit_ids": [units[FIRST]]}],
         },
     )
     assert calls == ["FullAnswerWire"]
@@ -239,8 +238,7 @@ def test_a_question_without_a_table_request_keeps_the_answer_shape() -> None:
         context(record(0, SECOND, "合成の文書", source="synthetic.txt")),
         lambda units: {
             "response_kind": "answered",
-            "answer_body": SECOND + "[C1]",
-            "citations": [{"unit_ids": [units[SECOND]]}],
+            "answer_body": SECOND + f"[{units[SECOND]}]",
             "confidence": "high",
         },
     )

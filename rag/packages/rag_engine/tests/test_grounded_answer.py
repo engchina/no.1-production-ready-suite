@@ -460,8 +460,7 @@ class GroundedAnswerTest(unittest.TestCase):
 
         schema = grounded.generation_output_model(QUESTION, unit_catalog=SentUnitCatalog([snapshot()])).model_json_schema()
         self.assertEqual(schema["properties"]["answer_body"]["minLength"], 1)
-        self.assertIn("citations", schema["properties"])
-        for field in ("answer_parts", "items", "summary", "request_coverage"):
+        for field in ("citations", "answer_parts", "items", "summary", "request_coverage"):
             self.assertNotIn(field, schema["properties"])
         self.assertNotIn("全体が破棄される", grounded.generation_system_prompt())
 

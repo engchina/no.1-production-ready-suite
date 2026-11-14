@@ -133,7 +133,7 @@ def test_rules_moved_to_the_schema_reach_the_model() -> None:
     """応答 schema へ移した規則が、実際に送る schema（text.format）に残る。"""
     model = grounded.generation_language_schema(grounded.generation_output_model(QUESTION), QUESTION)
     wire = json.dumps(type_to_text_format_param(model), ensure_ascii=False)
-    assert "answer_body" in wire and "citations" in wire
+    assert "answer_body" in wire and "citations" not in wire
     assert "summary_part_indexes" not in wire and "answer_parts" not in wire
     assert "引用原文と逐語で示す語句は原文の表記と言語のままにする" in wire
 

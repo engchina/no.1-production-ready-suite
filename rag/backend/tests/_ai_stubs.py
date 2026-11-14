@@ -223,7 +223,9 @@ def deterministic_parse_text_response(
             evidence_id, line = evidence
             numbered = _NUMBERED_LINE.match(line)
             number = int(numbered.group(1)) if numbered else None
-            unit = re.match(r"\[(U[0-9a-f]{24})\] (.*)", numbered.group(2)) if numbered else None
+            unit = (
+                re.match(r"\[([A-Z][0-9]+\.[0-9]+)\] (.*)", numbered.group(2)) if numbered else None
+            )
             if getattr(text_format, "_uses_unit_ids", False):
                 assert unit is not None
             items = [

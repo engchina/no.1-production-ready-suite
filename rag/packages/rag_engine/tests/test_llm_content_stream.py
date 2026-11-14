@@ -20,7 +20,7 @@ from rag_engine.resources.llm_usage import LlmUsage, llm_usage
 def test_valid_full_answer_survives_repeated_content_and_all_chunk_sizes(chunk_size, kind):
     schema = full_answer_model(SentUnitCatalog([]))
     body = "| column A | column B |\n| --- | --- |\n" + "| same | same |\n" * 200 if kind == "same_rows" else "始め" + " " * 3000 + "終わり"
-    expected = schema(answer_body=body, response_kind="answered", confidence="high", citations=[])
+    expected = schema(answer_body=body, response_kind="answered", confidence="high")
     raw = expected.model_dump_json()
     schema.model_validate_json(raw)
     chunks = [raw[i : i + chunk_size] for i in range(0, len(raw), chunk_size)]

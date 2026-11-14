@@ -25,7 +25,7 @@ OTHER = "委託先は年1回の点検を行う。"
 
 
 def _units(prompt: str) -> dict[str, str]:
-    return {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
+    return {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[([A-Z][0-9]+\.[0-9]+)\] (.*)$", prompt)}
 
 
 def _ids(question: str) -> list[str]:
@@ -83,7 +83,7 @@ def test_keeps_the_complete_body_without_another_generation(body):
     response, calls = _run(
         "保存年数は？",
         context(record(0, ROW, "合成の規則", source="synthetic.md")),
-        lambda _units: {"answer_body": body, "response_kind": "answered", "confidence": "high", "citations": []},
+        lambda _units: {"answer_body": body, "response_kind": "answered", "confidence": "high"},
     )
     assert calls == ["FullAnswerWire"]
     assert response.answer_text == body
@@ -104,10 +104,9 @@ def test_same_reference_can_be_used_twice_without_losing_the_body():
         "保存年数は？",
         context(record(0, ROW, "合成の規則", source="synthetic.md")),
         lambda units: {
-            "answer_body": "保存年数は5年です。[C1]\n同じ規則を確認できます。[C1]",
+            "answer_body": f"保存年数は5年です。[{units[ROW]}]\n同じ規則を確認できます。[{units[ROW]}]",
             "response_kind": "answered",
             "confidence": "high",
-            "citations": [{"unit_ids": [units[ROW]]}],
         },
     )
     assert calls == ["FullAnswerWire"]
@@ -124,8 +123,7 @@ def test_retrieval_counts_separate_found_and_passed() -> None:
         ctx,
         lambda units: {
             "response_kind": "answered",
-            "answer_body": ROW + "[C1]",
-            "citations": [{"unit_ids": [units[ROW]]}],
+            "answer_body": ROW + f"[{units[ROW]}]",
             "confidence": "high",
         },
     )
@@ -143,8 +141,7 @@ def test_retrieval_counts_keep_the_candidates_before_the_threshold() -> None:
         ctx,
         lambda units: {
             "response_kind": "answered",
-            "answer_body": ROW + "[C1]",
-            "citations": [{"unit_ids": [units[ROW]]}],
+            "answer_body": ROW + f"[{units[ROW]}]",
             "confidence": "high",
         },
     )
@@ -164,8 +161,7 @@ def test_guide_steps_stay_as_instructions_and_coverage_is_not_judged() -> None:
         return schema.model_validate(
             {
                 "response_kind": "answered",
-                "answer_body": ROW + "[C1]",
-                "citations": [{"unit_ids": [_units(prompt)[ROW]]}],
+                "answer_body": ROW + f"[{_units(prompt)[ROW]}]",
                 "confidence": "high",
             }
         )
@@ -188,3 +184,24 @@ def test_audit_settings_are_gone() -> None:
     assert not hasattr(_settings(), "answer_audit_mode")
     assert not hasattr(_settings(), "answer_max_correction_rounds")
     assert replace(_settings()) is not None
+
+
+def test_generation_input_shows_only_the_evidence_labels_as_references() -> None:
+    """モデルの入力で根拠を指す書き方はラベルだけ。単位の版の ID（hash）と別の番号の体系は出さない。"""
+    seen: list[tuple[str, str]] = []
+
+    def model(system: str, prompt: str, _settings: Any, schema: Any, **_kwargs: Any) -> Any:
+        seen.append((system, prompt))
+        assert "citations" not in schema.model_json_schema()["properties"]
+        return schema.model_validate({"answer_body": ROW + f"[{_units(prompt)[ROW]}]", "response_kind": "answered", "confidence": "high"})
+
+    with bind_dependencies(AnswerDependencies(_unused, _unused, model, _unused, _unused)):
+        response = synthesize_grounded_answer(
+            "保存年数は？", context(record(0, ROW, "合成の規則", source="synthetic.md")), _settings(), image_prompt_mode="text_only"
+        ).response
+    system, prompt = seen[0]
+    assert re.search(r"\[U[0-9a-f]{24}\]", prompt) is None
+    assert "[C1]" not in system and "[C1]" not in prompt
+    assert re.search(r"(?m)^1\| \[E1\.1\] ", prompt)
+    assert "[E1" not in response.answer_text
+    assert response.generation_trace["citation_lines"]

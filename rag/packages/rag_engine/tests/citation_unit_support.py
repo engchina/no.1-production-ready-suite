@@ -10,7 +10,7 @@ from pydantic import BaseModel
 def repair_output(schema: type[BaseModel], prompt: str, *ranges: tuple[int, int, str | None, int, int]) -> Any:
     """テストが指定した位置の、入力に存在する ID を返却契約で検証する。"""
     payload = json.loads(prompt.split("\n", 1)[1])
-    sources = {row["snapshot_id"]: re.findall(r"\[(U[0-9a-f]{24})\]", row["text"]) for row in payload["citation_sources"]}
+    sources = {row["snapshot_id"]: re.findall(r"\[([A-Z][0-9]+\.[0-9]+)\]", row["text"]) for row in payload["citation_sources"]}
     targets = {(row["item_index"], row["citation_index"]): row for row in payload["targets"]}
     updates = []
     for item_index, citation_index, label, first, last in ranges:
@@ -56,15 +56,14 @@ def selected_answer_payload(
 
 def generated_output(schema: type[BaseModel], prompt: str, *, text: str, first: int = 1, last: int = 1) -> Any:
     """単一根拠の合成応答。本文の unit ID をそのまま使い、自由な原文位置を返さない。"""
-    units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
+    units = re.findall(r"(?m)^\d+\| \[([A-Z][0-9]+\.[0-9]+)\]", prompt)
     assert 1 <= first <= last <= len(units)
     if getattr(schema, "_uses_full_answer", False):
         return schema.model_validate(
             {
-                "answer_body": text + "[C1]",
+                "answer_body": text + "".join(f"[{name}]" for name in units[first - 1 : last]),
                 "response_kind": "answered",
                 "confidence": "medium",
-                "citations": [{"unit_ids": units[first - 1 : last]}],
             }
         )
     if getattr(schema, "_uses_typed_answer_parts", False):
@@ -80,7 +79,7 @@ def generated_output(schema: type[BaseModel], prompt: str, *, text: str, first: 
 
 def without_unit_annotations(prompt: str) -> str:
     """原文の分割・空白の既存回帰は ID 注記だけを外して比較する。"""
-    return re.sub(r"(?m)^(\d+\| )\[U[0-9a-f]{24}\] ", r"\1", prompt)
+    return re.sub(r"(?m)^(\d+\| )\[[A-Z][0-9]+\.[0-9]+\] ", r"\1", prompt)
 
 
 def generated_fixture(schema: type[BaseModel], prompt: str, payload: dict[str, Any]) -> Any:
@@ -100,7 +99,7 @@ def generated_fixture(schema: type[BaseModel], prompt: str, payload: dict[str, A
 
     blocks = {}
     for label, body in re.findall(r"(?ms)^\[(E\d+)\][^\n]*\n(.*?)^\[/\1\]", prompt):
-        units = re.findall(r"(?ms)^\d+\| \[(U[0-9a-f]{24})\] (.*?)(?=^\d+\| \[U[0-9a-f]{24}\]|\Z)", body)
+        units = re.findall(r"(?ms)^\d+\| \[([A-Z][0-9]+\.[0-9]+)\] (.*?)(?=^\d+\| \[[A-Z][0-9]+\.[0-9]+\]|\Z)", body)
         blocks[label] = [(uid, text.rstrip("\n")) for uid, text in units]
     result = deepcopy(payload)
     for item in result.get("items", []):

@@ -94,14 +94,13 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
 def echo_model(system, prompt, settings, schema, **options):
     """最初の根拠の先頭行をそのまま引用する。実際の生成経路で prompt の内容を確認する用途。"""
     if getattr(schema, "_uses_full_answer", False):
-        match = re.search(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)
+        match = re.search(r"(?m)^\d+\| \[([A-Z][0-9]+\.[0-9]+)\] (.*)$", prompt)
         assert match is not None
         return schema.model_validate(
             {
-                "answer_body": match.group(2) + "[C1]",
+                "answer_body": match.group(2) + f"[{match.group(1)}]",
                 "response_kind": "answered",
                 "confidence": "high",
-                "citations": [{"unit_ids": [match.group(1)]}],
             }
         )
     if schema is GroundedDraft or issubclass(schema, generation_draft_wire_model()):

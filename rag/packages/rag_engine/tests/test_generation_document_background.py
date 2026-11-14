@@ -112,7 +112,7 @@ def test_full_page_is_independent_of_metadata_budget_and_not_a_chunk_citation():
     assert "first_page_context" in context.records[0].metadata["document"]
     _, spans, _ = reader.append("条件は？", stripped, selected(stripped.records[0]))
     normal = [value for value in spans if not value.get(BACKGROUND_ONLY)]
-    assert set(generation_unit_catalog(spans).unit_ids) == set(generation_unit_catalog(normal).unit_ids)
+    assert set(generation_unit_catalog(spans).unit_labels) == set(generation_unit_catalog(normal).unit_labels)
     assert "全体の前提。" in format_functions(spans) and "Chunkの引用対象外" in format_functions(spans)
 
 
