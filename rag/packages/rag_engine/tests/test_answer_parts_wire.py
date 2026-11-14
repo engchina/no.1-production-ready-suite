@@ -24,7 +24,7 @@ def case():
                 "requirement": "元の値",
                 "answer": {
                     "kind": "answer",
-                    "basis": {"unit_ids": [original.unit_ids[0]]},
+                    "basis": {"unit_ids": [original.unit_labels[0]]},
                     "reasoning": "原文の記載を示す。",
                     "result": "単位A",
                 },
@@ -34,7 +34,7 @@ def case():
                 "requirement": "導出結果",
                 "answer": {
                     "kind": "answer",
-                    "basis": {"unit_ids": [original.unit_ids[0]]},
+                    "basis": {"unit_ids": [original.unit_labels[0]]},
                     "result": "導いた結果",
                     "reasoning": "資料の値から導く。",
                 },
@@ -150,7 +150,7 @@ def test_selected_long_original_is_preserved_instead_of_rejected_or_truncated():
     schema = answer_parts_model(generation_draft_wire_model(), catalog)
     raw, _, _ = case()
     raw["answer_parts"] = raw["answer_parts"][:1]
-    raw["answer_parts"][0]["answer"]["basis"]["unit_ids"] = list(source.unit_ids)
+    raw["answer_parts"][0]["answer"]["basis"]["unit_ids"] = list(source.unit_labels)
     raw["summary_part_indexes"] = [0]
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert draft.items[0].text == text
@@ -187,7 +187,7 @@ def test_selected_facts_are_not_limited_by_the_number_of_generated_parts(request
     schema = answer_parts_model(generation_draft_wire_model(), catalog)
     raw, _, _ = case()
     part = raw["answer_parts"][0]
-    part["answer"]["basis"]["unit_ids"] = [source.unit_ids[0] for source in sources]
+    part["answer"]["basis"]["unit_ids"] = [source.unit_labels[0] for source in sources]
     raw["answer_parts"] = []
     for index in range(request_count):
         current = deepcopy(part)

@@ -21,7 +21,7 @@ def case(text: str = "項目Aは12です。"):
             {
                 "request_id": "Q1",
                 "requirement": "資料の記録値",
-                "answer": {"kind": "source", "basis": {"unit_ids": list(snapshot.unit_ids)}},
+                "answer": {"kind": "source", "basis": {"unit_ids": list(snapshot.unit_labels)}},
             }
         ],
         "summary_part_indexes": [0],
@@ -104,7 +104,7 @@ def readback(unit_ids, result, reasoning="選択した原文を示す。"):
 )
 def test_answer_needing_more_than_one_copied_original_stays_derived(result):
     model, catalog, snapshot = two_unit_case()
-    raw = readback(list(snapshot.unit_ids), result, reasoning="12＋8＝20")
+    raw = readback(list(snapshot.unit_labels), result, reasoning="12＋8＝20")
     draft = canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
     assert draft.answer_parts[0].result_kind == "derived"
     assert draft.applications[0].result == result
@@ -121,7 +121,7 @@ def test_answer_citing_two_documents_stays_derived_even_when_one_contains_the_re
     )
     catalog = SentUnitCatalog([first, second])
     model = legacy_generation_output_model("項目Aの値を教えてください。", unit_catalog=catalog)
-    raw = readback([first.unit_ids[0], second.unit_ids[0]], "12です")
+    raw = readback([first.unit_labels[0], second.unit_labels[0]], "12です")
     draft = canonical_generation_draft(model.model_validate(raw), unit_catalog=catalog)
     assert draft.answer_parts[0].result_kind == "derived"
     assert len(draft.applications) == 1

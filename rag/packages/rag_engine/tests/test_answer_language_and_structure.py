@@ -73,19 +73,34 @@ def _subquestion_case() -> tuple[dict[str, Any], type, SentUnitCatalog]:
                 "request_id": "Q1",
                 "requirement": "(1) の値",
                 "subquestion": "(1)",
-                "answer": {"kind": "answer", "basis": {"unit_ids": [original.unit_ids[0]]}, "reasoning": "原文の値。", "result": "結論1"},
+                "answer": {
+                    "kind": "answer",
+                    "basis": {"unit_ids": [original.unit_labels[0]]},
+                    "reasoning": "原文の値。",
+                    "result": "結論1",
+                },
             },
             {
                 "request_id": "Q1",
                 "requirement": "(2) の条件",
                 "subquestion": "(2)",
-                "answer": {"kind": "answer", "basis": {"unit_ids": [original.unit_ids[1]]}, "reasoning": "原文の条件。", "result": "結論2"},
+                "answer": {
+                    "kind": "answer",
+                    "basis": {"unit_ids": [original.unit_labels[1]]},
+                    "reasoning": "原文の条件。",
+                    "result": "結論2",
+                },
             },
             {
                 "request_id": "Q1",
                 "requirement": "(3) の手順",
                 "subquestion": "(3)",
-                "answer": {"kind": "answer", "basis": {"unit_ids": [original.unit_ids[2]]}, "reasoning": "原文の手順。", "result": "結論3"},
+                "answer": {
+                    "kind": "answer",
+                    "basis": {"unit_ids": [original.unit_labels[2]]},
+                    "reasoning": "原文の手順。",
+                    "result": "結論3",
+                },
             },
         ],
         "summary_part_indexes": [0, 1],
@@ -222,8 +237,8 @@ def test_a_source_part_of_only_a_heading_is_not_used_as_the_summary() -> None:
     raw = {
         "response_kind": "answered",
         "answer_parts": [
-            {"request_id": "Q1", "requirement": "見出し", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_ids[0]]}}},
-            {"request_id": "Q1", "requirement": "本文", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_ids[1]]}}},
+            {"request_id": "Q1", "requirement": "見出し", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_labels[0]]}}},
+            {"request_id": "Q1", "requirement": "本文", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_labels[1]]}}},
         ],
         "summary_part_indexes": [0, 1],
         "confidence": "high",
@@ -237,7 +252,7 @@ def test_summary_keeps_a_heading_part_when_no_other_part_is_chosen() -> None:
     raw = {
         "response_kind": "answered",
         "answer_parts": [
-            {"request_id": "Q1", "requirement": "見出し", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_ids[0]]}}},
+            {"request_id": "Q1", "requirement": "見出し", "answer": {"kind": "source", "basis": {"unit_ids": [original.unit_labels[0]]}}},
         ],
         "summary_part_indexes": [0],
         "confidence": "high",

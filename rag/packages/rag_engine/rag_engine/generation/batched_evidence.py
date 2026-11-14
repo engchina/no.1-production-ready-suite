@@ -108,8 +108,8 @@ def _labeled_text(label: str, value: Mapping[str, Any]) -> str:
     text = str(value["text"])
     snapshot = EvidenceUnitSnapshot.create({**value, "label": label}, reading_units(value), "batch_read_units_v1")
     return "\n".join(
-        f"{label}-{number}| [{unit_id}] {text[start:end]}"
-        for number, ((start, end), unit_id) in enumerate(zip(snapshot.units, snapshot.unit_ids, strict=True), 1)
+        f"{label}-{number}| [{name}] {text[start:end]}"
+        for number, ((start, end), name) in enumerate(zip(snapshot.units, snapshot.unit_labels, strict=True), 1)
     )
 
 
@@ -117,7 +117,7 @@ def _reading_model(values: Sequence[Mapping[str, Any]]) -> type[BatchReading]:
     catalog = reading_unit_catalog(values)
     fields: dict[str, Any] = {"answer": (str, Field(min_length=1, description="選択した原文が支える局所的な回答。条件と例外を保持する。"))}
     finding = create_model("UnitBatchFinding", __base__=catalog.selection_model(), **fields)
-    finding_info = Field(description="原文で裏付けた回答候補。該当がなければ空。") if catalog.unit_ids else Field(max_length=0)
+    finding_info = Field(description="原文で裏付けた回答候補。該当がなければ空。") if catalog.unit_labels else Field(max_length=0)
     model_fields: dict[str, Any] = {"findings": (GenericAlias(list, finding), finding_info)}
     model = create_model("BatchReading", __base__=BatchReading, **model_fields)
     cast(Any, model)._uses_unit_ids = True

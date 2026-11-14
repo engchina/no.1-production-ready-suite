@@ -160,7 +160,7 @@ def answer_parts_model(
             Field(default="", description="この要点が答える小問の印を、原質問の表記のまま選ぶ。", json_schema_extra=_without_default),
         )
     part: Any
-    if direct_source and catalog.unit_ids:
+    if direct_source and catalog.unit_labels:
         # 要点の役割（導出か記載か）を答えの型より先に決めさせ、導出の要点では source 型を選べなくする（#4611。#4586 の
         # 「導出が要るのに原文の提示だけ」を schema で起こさない）。記載の要点は従来どおり 3 つの型から選ぶ。mode の無い
         # 出力（録画など）は記載の要点として読む。
@@ -191,7 +191,7 @@ def answer_parts_model(
             "RequiredAnswerPart",
             __config__=ConfigDict(extra="forbid"),
             **common,
-            answer=(cast(Any, Union.__getitem__((derived, table, gap)) if catalog.unit_ids else gap), Field()),
+            answer=(cast(Any, Union.__getitem__((derived, table, gap)) if catalog.unit_labels else gap), Field()),
         )
     question_types = cast(Any, Literal)[(*DERIVATION_QUESTION_TYPES, *STATED_QUESTION_TYPES)]
     fields: dict[str, Any] = {

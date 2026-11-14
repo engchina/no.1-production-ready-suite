@@ -30,7 +30,7 @@ def test_original_order_across_sections_preserves_selected_document_rank_and_uni
     ]
     ordered = order_document_spans(values)
     assert [value["label"] for value in ordered] == ["E1", "E2", "E3", "E4"]
-    assert set(generation_unit_catalog(values).unit_ids) == set(generation_unit_catalog(ordered).unit_ids)
+    assert set(generation_unit_catalog(values).unit_labels) == set(generation_unit_catalog(ordered).unit_labels)
     for model_view in (False, True):
         rendered = format_functions(values, model_view=model_view)
         positions = [rendered.index(f"[E{i}]") for i in range(1, 5)]

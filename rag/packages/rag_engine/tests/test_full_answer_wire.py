@@ -20,17 +20,15 @@ def catalog():
         "scope_source_ids": ["child-a"],
     }
     snapshot = EvidenceUnitSnapshot.create(span, [(0, len(text))], "synthetic")
-    return SentUnitCatalog([snapshot]), snapshot.unit_ids[0]
+    return SentUnitCatalog([snapshot]), snapshot.unit_labels[0]
 
 
 @pytest.mark.parametrize("kind", ["answered", "insufficient_evidence", "conditional", "needs_clarification", "needs_environment_data"])
 @pytest.mark.parametrize("cited", [False, True])
 def test_preserves_complete_body_regardless_of_type_or_citation_count(kind, cited):
     units, unit = catalog()
-    body = "入力電圧は12 Vです。" + ("[C1]" if cited else "")
-    wire = full_answer_model(units).model_validate(
-        {"answer_body": body, "response_kind": kind, "confidence": "high", "citations": [{"unit_ids": [unit]}] if cited else []}
-    )
+    body = "入力電圧は12 Vです。" + (f"[{unit}]" if cited else "")
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": kind, "confidence": "high"})
     draft = canonical_full_answer(wire, units)
     checked, dropped = grounded.verify("入力電圧は？", draft, [units.snapshots[0].span()])
     result = render_full_answer(draft, checked)
@@ -43,32 +41,40 @@ def test_preserves_complete_body_regardless_of_type_or_citation_count(kind, cite
         assert result.citation_lines[0]["scope_source_ids"] == ["child-a"]
 
 
-def test_unused_references_are_not_recorded_as_adopted_evidence():
-    units, unit = catalog()
+def test_body_without_a_label_adopts_no_evidence():
+    """引用は本文の印だけで受ける。印の無い本文は根拠を採用せず、本文をそのまま返す。"""
+    units, _unit = catalog()
     wire = full_answer_model(units).model_validate(
-        {
-            "answer_body": "資料に記載がなく、回答できません。",
-            "response_kind": "insufficient_evidence",
-            "confidence": "low",
-            "citations": [{"unit_ids": [unit]}],
-        }
+        {"answer_body": "資料に記載がなく、回答できません。", "response_kind": "insufficient_evidence", "confidence": "low"}
     )
     draft = canonical_full_answer(wire, units)
     assert draft.items == []
     assert render_full_answer(draft, []).text == wire.answer_body
 
 
-def test_unavailable_unit_is_a_format_failure():
-    units, _unit = catalog()
+def test_citation_list_outside_the_body_is_not_part_of_the_contract():
+    units, unit = catalog()
     with pytest.raises(ValidationError):
         full_answer_model(units).model_validate(
-            {
-                "answer_body": "合成の回答[C1]",
-                "response_kind": "answered",
-                "confidence": "high",
-                "citations": [{"unit_ids": ["U-not-sent"]}],
-            }
+            {"answer_body": "合成の回答", "response_kind": "answered", "confidence": "high", "citations": [{"unit_ids": [unit]}]}
         )
+    assert "citations" not in full_answer_model(units).model_json_schema()["properties"]
+
+
+def test_unavailable_unit_is_a_format_failure():
+    units, _unit = catalog()
+    with pytest.raises(ValidationError) as rejected:
+        full_answer_model(units).model_validate({"answer_body": "合成の回答[E1.9]", "response_kind": "answered", "confidence": "high"})
+    assert "[E1.9]" in str(rejected.value)
+
+
+def test_label_of_evidence_not_sent_stays_as_text():
+    """今回送っていない根拠のラベルは印にしない（本文の字として残し、意味は解析しない）。"""
+    units, _unit = catalog()
+    wire = full_answer_model(units).model_validate({"answer_body": "合成の回答[E7]", "response_kind": "answered", "confidence": "high"})
+    draft = canonical_full_answer(wire, units)
+    assert draft.items == []
+    assert render_full_answer(draft, []).text == "合成の回答[E7]"
 
 
 def test_shared_entry_keeps_body_with_an_explicit_reference():
@@ -78,12 +84,7 @@ def test_shared_entry_keeps_body_with_an_explicit_reference():
     response, calls = _run(
         "保存年数は？",
         context(record(0, ROW, "合成の規則", source="synthetic.md")),
-        lambda units: {
-            "answer_body": body + "[C1]",
-            "response_kind": "answered",
-            "confidence": "high",
-            "citations": [{"unit_ids": [units[ROW]]}],
-        },
+        lambda units: {"answer_body": body + f"[{units[ROW]}]", "response_kind": "answered", "confidence": "high"},
     )
     assert calls == ["FullAnswerWire"]
     assert body in response.answer_text
@@ -120,14 +121,7 @@ def test_replays_the_correct_text_misclassified_as_a_gap_before_the_new_contract
     assert old._response_kind == "insufficient_evidence"
     new_schema = full_answer_model(units)
     new = canonical_full_answer(
-        new_schema.model_validate(
-            {
-                "answer_body": correct,
-                "response_kind": "answered",
-                "confidence": "high",
-                "citations": [],
-            }
-        ),
+        new_schema.model_validate({"answer_body": correct, "response_kind": "answered", "confidence": "high"}),
         units,
     )
     assert new._response_kind == "answered"
@@ -136,10 +130,8 @@ def test_replays_the_correct_text_misclassified_as_a_gap_before_the_new_contract
 
 def test_inline_citations_do_not_split_a_sentence_or_a_table_row():
     units, unit = catalog()
-    body = "値は12 Vです[C1]。\n\n| 項目 | 値 |\n| --- | --- |\n| A | 12 V[C1] |"
-    wire = full_answer_model(units).model_validate(
-        {"answer_body": body, "response_kind": "answered", "confidence": "high", "citations": [{"unit_ids": [unit]}]}
-    )
+    body = f"値は12 Vです[{unit}]。\n\n| 項目 | 値 |\n| --- | --- |\n| A | 12 V[{unit}] |"
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
     draft = canonical_full_answer(wire, units)
     checked, _ = grounded.verify("入力電圧は？", draft, [units.snapshots[0].span()])
     result = render_full_answer(draft, checked)
@@ -151,12 +143,7 @@ def test_inline_citations_do_not_split_a_sentence_or_a_table_row():
 def test_literal_source_line_does_not_shift_the_bound_citation_ordinal():
     units, unit = catalog()
     wire = full_answer_model(units).model_validate(
-        {
-            "answer_body": "根拠：本文に書かれたラベル\n\n入力電圧は12 Vです。[C1]",
-            "response_kind": "answered",
-            "confidence": "high",
-            "citations": [{"unit_ids": [unit]}],
-        }
+        {"answer_body": f"根拠：本文に書かれたラベル\n\n入力電圧は12 Vです。[{unit}]", "response_kind": "answered", "confidence": "high"}
     )
     draft = canonical_full_answer(wire, units)
     checked, _ = grounded.verify("入力電圧は？", draft, [units.snapshots[0].span()])
@@ -164,3 +151,83 @@ def test_literal_source_line_does_not_shift_the_bound_citation_ordinal():
     assert rendered.citation_lines[0] == {}
     assert rendered.citation_lines[1]["scope_source_ids"] == ["child-a"]
     assert rendered.text.count(grounded.answer_labels().citation_prefix) == 2
+
+
+def records_catalog():
+    """合成の CSV の根拠: 複数の記録を持つ根拠 1 つと、記録 1 つずつの根拠。記録には資料の番号（R01 など）がある。"""
+    records = [f"資料ID: R{number:02d} / 本文: 合成の記録{number}の説明です。" for number in range(1, 41)]
+    spans = [
+        {"text": "\n".join(records[:10]), "label": "E1", "number_of_units": 10},
+        *({"text": records[index], "label": f"E{index - 8}", "number_of_units": 1} for index in range(10, 40)),
+    ]
+    snapshots = []
+    for position, span in enumerate(spans):
+        text = span["text"]
+        lines = text.split("\n")
+        offsets, cursor = [], 0
+        for line in lines:
+            offsets.append((cursor, cursor + len(line)))
+            cursor += len(line) + 1
+        snapshots.append(
+            EvidenceUnitSnapshot.create(
+                {
+                    "text": text,
+                    "label": span["label"],
+                    "evidence_id": f"synthetic-{position}",
+                    "source_id": f"synthetic-{position}",
+                    "source": "synthetic.csv",
+                    "page": 1,
+                    "scope_source_ids": [f"synthetic-{position}"],
+                },
+                offsets,
+                "synthetic",
+            )
+        )
+    return SentUnitCatalog(snapshots)
+
+
+def test_replayed_output_that_cites_the_evidence_labels_adopts_the_selected_units():
+    """記録した出力の形（本文の末尾に、選んだ根拠のラベルを書いた）を再生する。内部のラベルは利用者に出ず、選んだ根拠を採用する。"""
+    units = records_catalog()
+    for marks in ("[E2.1][E3.1]", "[E2][E3]"):
+        body = "1. 合成の手順の一つ目です。\n2. 合成の手順の二つ目です。" + marks
+        wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+        draft = canonical_full_answer(wire, units)
+        assert [item.text for item in draft.items] == [
+            "資料ID: R11 / 本文: 合成の記録11の説明です。",
+            "資料ID: R12 / 本文: 合成の記録12の説明です。",
+        ]
+        checked, dropped = grounded.verify("合成の手順は？", draft, [snapshot.span() for snapshot in units.snapshots])
+        rendered = render_full_answer(draft, checked)
+        assert dropped == []
+        assert "[E2" not in rendered.text and "[E3" not in rendered.text
+        assert rendered.text.startswith("1. 合成の手順の一つ目です。\n2. 合成の手順の二つ目です。\n根拠：")
+        assert len(rendered.citation_lines) == 2
+
+
+def test_unit_labels_are_named_by_the_block_and_do_not_reuse_document_numbers():
+    """単位のラベルは根拠のラベルと順番だけで作り、資料の番号や hash の数字の並びを持たない。"""
+    units = records_catalog()
+    document_numbers = {f"R{number:02d}" for number in range(1, 41)}
+    assert units.unit_labels[:3] == ("E1.1", "E1.2", "E1.3")
+    for snapshot in units.snapshots:
+        assert all(name.startswith(snapshot.label + ".") for name in snapshot.unit_labels)
+        assert not any(name.split(".")[0] in document_numbers for name in snapshot.unit_labels)
+    # 記録 R17 は根拠 E8 の行。本文の印 [E8.1] はその行に結ぶ（ほかの記録の単位を補完しない）。
+    wire = full_answer_model(units).model_validate(
+        {"answer_body": "合成の値です。[E8.1]", "response_kind": "answered", "confidence": "high"}
+    )
+    draft = canonical_full_answer(wire, units)
+    assert [item.text for item in draft.items] == ["資料ID: R17 / 本文: 合成の記録17の説明です。"]
+
+
+def test_consecutive_unit_labels_are_one_reference_and_reused_labels_are_not_duplicated():
+    units = records_catalog()
+    body = "一つ目です。[E1.2][E1.3]\n二つ目です。[E1.2][E1.3]\n三つ目です。[E1.5]"
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+    draft = canonical_full_answer(wire, units)
+    assert [citation.lines for item in draft.items for citation in item.citations] == ["2-3", "5"]
+    checked, _ = grounded.verify("合成の質問", draft, [snapshot.span() for snapshot in units.snapshots])
+    rendered = render_full_answer(draft, checked)
+    assert "[E1" not in rendered.text
+    assert len(rendered.citation_lines) == 3

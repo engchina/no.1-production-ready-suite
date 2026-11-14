@@ -11,13 +11,12 @@ def generation_result(schema: type[BaseModel], prompt: str, payload: dict[str, A
     if getattr(schema, "_uses_full_answer", False):
         if "answer_body" in payload:
             return schema.model_validate(payload)
-        citations = []
         paragraphs = []
         for item in payload.get("items", []):
             text = item["text"]
             for citation in item.get("citations", []):
-                citations.append(citation)
-                text += f"[C{len(citations)}]"
+                # 引用は本文の印（入力に表示した単位のラベル）だけで渡す。
+                text += "".join(f"[{name}]" for name in citation["unit_ids"])
             paragraphs.append(text)
         return schema.model_validate(
             {
@@ -26,7 +25,6 @@ def generation_result(schema: type[BaseModel], prompt: str, payload: dict[str, A
                 or "合成の資料が不足しています。",
                 "response_kind": payload.get("response_kind", "answered"),
                 "confidence": payload.get("confidence", "high"),
-                "citations": citations,
             }
         )
     if not getattr(schema, "_uses_typed_answer_parts", False):

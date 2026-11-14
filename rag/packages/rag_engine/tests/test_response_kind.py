@@ -20,8 +20,7 @@ def test_declared_kind_preserves_reference_answer_and_does_not_repeat_generation
         context(record(0, ROW, "合成資料", source="synthetic.md")),
         lambda units: {
             "response_kind": kind,
-            "answer_body": ROW + "[C1]",
-            "citations": [{"unit_ids": [units[ROW]]}],
+            "answer_body": ROW + f"[{units[ROW]}]",
             "confidence": "high",
         },
     )

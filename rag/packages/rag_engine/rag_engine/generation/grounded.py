@@ -127,7 +127,7 @@ GENERATION_FIXED_PROMPT = """
 
 ## Step 6: 本文を完成させて引用を選ぶ
 - 質問に答える完成した本文を answer_body に書く。資料で言える結論と条件、分からない点を本文で説明する。根拠をつないだ推論は直接の記載と区別する。
-- 説明を支える原文の単位を citations に選び、対応する本文の段落の末尾に [C1] の形式で引用を付ける。番号は citations の順（1始まり）。同じ文書・頁にあるだけの無関係な原文を引用しない。
+- 説明を支える原文を選び、対応する本文の段落の末尾に、入力のラベルを角括弧ごと書いて引用する。行を指すときは各行の `[E2.1]` の形のラベル（続く行は `[E2.1][E2.2]`）、根拠の全体を指すときは根拠のラベル `[E2]` を書く。同じ文書・頁にあるだけの無関係な原文を引用しない。
 - 複数の文書が説明を支えるなら文書ごとに引用する。規則の原文は手順書が同じ内容を言い換えていても省かず、説明の内容を支えない原文は出典にしない。
 - 複数の根拠をつないだ結論では、各段を支える原文を引用する。途中の説明が最終の答えではないことだけを理由に拒答しない。資料の不足する点は推測で埋めず、答えられる範囲を先に述べる。
 - 回答の確定に別の資料や実環境の確認が必要なら、対象と確認の目的を本文に書く。取得・確認済みと偽らず、資料名・所在を創作しない。
@@ -2187,8 +2187,8 @@ def _rendered_evidence_span(
     snapshot = EvidenceUnitSnapshot.create(span, selected_units, CITATION_UNIT_CONTRACT)
     if numbered is True or numbered is None and _numbered(text, selected_units):
         body = "\n".join(
-            f"{index}| [{unit_id}] {text[start:end]}"
-            for index, ((start, end), unit_id) in enumerate(zip(selected_units, snapshot.unit_ids, strict=True), 1)
+            f"{index}| [{name}] {text[start:end]}"
+            for index, ((start, end), name) in enumerate(zip(selected_units, snapshot.unit_labels, strict=True), 1)
         )
     else:
         body = text
@@ -2484,7 +2484,7 @@ def build_context_block(
             if guide_contracts
             else "",
             ("業務ガイドの手順ごとの根拠（手順の案内はその手順の根拠から書く）:\n" + "\n".join(step_lines)) if step_lines else "",
-            "機能別の根拠（各根拠は `[番号]` の行から `[/番号]` の行まで。"
+            "機能別の根拠（各根拠はラベルの行（`[E1] …`）から `[/E1]` の行まで。行の `[E1.2]` はその行のラベル。"
             "`=== 機能 … ===` の機能見出しは文書の節名で、開く画面やメニューとは限らない）:\n"
             "BEGIN_UNTRUSTED_RETRIEVED_CONTEXT\n" + evidence_text + "\nEND_UNTRUSTED_RETRIEVED_CONTEXT",
         )

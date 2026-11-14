@@ -40,7 +40,7 @@ def draft(coverage: list[dict[str, Any]], snapshot: EvidenceUnitSnapshot) -> dic
             {
                 "request_id": "Q1",
                 "requirement": "項目Aの値",
-                "answer": {"kind": "source", "basis": {"unit_ids": list(snapshot.unit_ids)}},
+                "answer": {"kind": "source", "basis": {"unit_ids": list(snapshot.unit_labels)}},
             }
         ],
         "summary_part_indexes": [0],
@@ -137,8 +137,8 @@ def test_recorded_repetitive_output_keeps_one_derived_plan():
     table_units = EvidenceUnitSnapshot.create(table, lines, "explicit_units_v5")
     rule_units = EvidenceUnitSnapshot.create(rule, [(0, len(RULE))], "explicit_units_v5")
     units = SentUnitCatalog([table_units, rule_units])
-    mapping = {"{header}": table_units.unit_ids[0], "{rule}": rule_units.unit_ids[0], "{E:table}": "E1", "{E:rule}": "E2"}
-    mapping.update({f"{{row:{number}}}": table_units.unit_ids[number] for number in range(1, len(lines))})
+    mapping = {"{header}": table_units.unit_labels[0], "{rule}": rule_units.unit_labels[0], "{E:table}": "E1", "{E:rule}": "E2"}
+    mapping.update({f"{{row:{number}}}": table_units.unit_labels[number] for number in range(1, len(lines))})
     model = legacy_generation_output_model(TABLE_QUESTION, unit_catalog=units)
 
     def replay(name: str) -> dict[str, Any]:

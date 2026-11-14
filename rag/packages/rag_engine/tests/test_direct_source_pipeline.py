@@ -14,7 +14,7 @@ def run(*, derived: bool, readback: str | None = None):
 
     def parse(system, prompt, config, schema, **options):
         calls.append(schema.__name__)
-        ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
+        ids = re.findall(r"(?m)^\d+\| \[([A-Z][0-9]+\.[0-9]+)\]", prompt)
         assert ids
         direct = (
             {"kind": "source", "basis": {"unit_ids": ids}}
@@ -32,10 +32,9 @@ def run(*, derived: bool, readback: str | None = None):
             )
         return schema.model_validate(
             {
-                "answer_body": text + ("\n24です。" if derived else "") + "[C1]",
+                "answer_body": text + ("\n24です。" if derived else "") + "".join(f"[{name}]" for name in ids),
                 "response_kind": "answered",
                 "confidence": "high",
-                "citations": [{"unit_ids": ids}],
             }
         )
 

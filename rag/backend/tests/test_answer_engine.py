@@ -173,7 +173,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
         body = "受注番号を入力し、登録ボタンを押します。"
         if getattr(schema, "_uses_unit_ids", False):
             # 実際の送信にある引用単位だけを、生成の返却 schema で選択する。
-            units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)
+            units = re.findall(r"(?m)^\d+\| \[([A-Z][0-9]+\.[0-9]+)\] (.*)$", prompt)
             selected = [uid for uid, original in units if body in original]
             assert len(selected) <= 1
             citations: list[dict[str, Any]] = [{"unit_ids": selected}] if selected else []
