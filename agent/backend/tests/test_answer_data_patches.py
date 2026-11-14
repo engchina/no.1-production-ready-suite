@@ -159,7 +159,7 @@ def test_invalid_matrix_is_one_target_valid_external_quantity_unchanged() -> Non
     step = _step("nl2sql_query", output)
     refs = model_data_references(step.id, output)
     assert refs is not None
-    quantity = refs["quantities"][0]["VALUE"]
+    quantity = refs["cells"][0]["VALUE"].replace("[[cell:", "[[quantity:")
     index = data_index([step])
     matrix = f"| 項目 | 値 |\r\n|---|---|\r\n| A | {quantity} |\r\n"
     answer = f"正しい値 {quantity}。\r\n" + matrix + "\r\n末尾"
@@ -171,7 +171,7 @@ def test_invalid_matrix_is_one_target_valid_external_quantity_unchanged() -> Non
         references=accepted_references,
     )
     assert patched.startswith(f"正しい値 {quantity}。\r\n") and patched.endswith("\r\n末尾")
-    assert "2.5 m" in index.render(patched)
+    assert "2.5。" in index.render(patched)
 
 
 def test_unlocatable_aggregate_failure_does_not_rewrite_answer() -> None:

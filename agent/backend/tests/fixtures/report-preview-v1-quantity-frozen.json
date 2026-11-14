@@ -1,0 +1,46 @@
+{
+  "contract": {
+    "mode": "referenced_report",
+    "budget": null
+  },
+  "ledger": {
+    "schema_version": 1,
+    "run_id": "run-old-quantity",
+    "contract_digest": "c5d4ec135c974e2309cd035d6c5a8d45e12975206b901906626f996c612f8955",
+    "next_number": 2,
+    "records": [
+      {
+        "preview_id": "A1",
+        "operation_key": "operation-old-quantity",
+        "plan": {
+          "blocks": [
+            {
+              "kind": "narrative",
+              "text": "値は[[quantity:T1:R1:C1]]kg。"
+            }
+          ]
+        },
+        "plan_digest": "5117425ec9e8c6c5c39a804e03dca2410e126059a60985527f2ddd0866d7a0d3",
+        "body": "値は12 kgkg。",
+        "evidence_text": "",
+        "source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "body_digest": "bf6dfcfbec991163b20cba0aa2725ad35f5491475d0955107aa94b8565a58183",
+        "block_costs": [
+          {
+            "index": 1,
+            "kind": "narrative",
+            "expanded_codepoints": 10
+          }
+        ],
+        "composition_delta_chars": 0,
+        "total_codepoints": 10,
+        "remaining_target": null,
+        "remaining_hard": null,
+        "status": "WITHIN_BUDGET",
+        "incomplete": false,
+        "record_digest": "e44ee272922dec9279e5106918aeaf592748903e3051099d11f96ccc5e31a49f"
+      }
+    ]
+  },
+  "expected_body": "値は12 kgkg。"
+}

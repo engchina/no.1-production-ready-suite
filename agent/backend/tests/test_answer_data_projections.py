@@ -345,7 +345,7 @@ def test_single_column_literal_table_is_rejected_but_pure_reference_is_rendered(
     )
     with pytest.raises(DataReferenceError):
         data_index([numeric]).render("| VALUE |\n|---|\n| 999 |")
-    pure = "| model label |\n|---|\n| " + refs["quantities"][0]["CHANGE"] + " |"
+    pure = "| model label |\n|---|\n| " + refs["cells"][0]["CHANGE"] + " |"
     assert index.render(pure) == index.render("[[table:T1:rows=1:cols=3]]")
     assert index.render("[[table:T1:rows=1:cols=3:layout=vertical]]").endswith("| CHANGE | 0.25 |")
 

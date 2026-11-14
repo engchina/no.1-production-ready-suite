@@ -39,8 +39,7 @@ DATA_INSTRUCTIONS = (
     "項目を縦に並べる表は [[table:T1:rows=1:cols=2-4:layout=vertical]] と指定します。"
     "値・見出し・項目名を手書きせず表の参照を優先してください。\n"
     "## Step 2: 本文の値を参照する\n"
-    "quantitiesがある値は [[quantity:T1:R2:C3]] で数値と単位を表示します。"
-    "それ以外はcellsの [[cell:T1:R2:C3]] を使ってください。"
+    "cellsの [[cell:T1:R2:C3]] を使って値を表示します。"
 )
 
 
@@ -182,26 +181,6 @@ def model_data_references(
             column: {"column": columns.index(column) + 1, "unit": unit}
             for column, unit in units.items()
         }
-        references["quantities"] = [
-            {
-                column: (
-                    f"[[quantity:T{number}:R{index + 1}:C{columns.index(column) + 1}]]"
-                    if number is not None
-                    else "[[quantity:"
-                    + _cell_key(
-                        step_id,
-                        index,
-                        column,
-                        value,
-                        key if output.get("column_metadata") else None,
-                    )
-                    + "]]"
-                )
-                for column, value in row.items()
-                if column in units and _quantity_value(value)
-            }
-            for index, row in enumerate(rows)
-        ]
     return references
 
 
@@ -290,16 +269,12 @@ class DataIndex:
         has_unit = key in self.units and _quantity_value(value)
         if kind == "quantity" and not has_unit:
             raise DataReferenceError("単位が確定していない値です。cellsの参照を使用してください。")
-        if kind == "cell" and has_unit and value is not None:
-            raise DataReferenceError("単位のある値には対応するquantitiesの参照を使用してください。")
         return key, value
 
     def _bound_cell(self, text: str) -> BoundCell:
         marker = _REFERENCE.fullmatch(text.strip())
         if marker is None or marker[1] == "table":
-            raise DataReferenceError(
-                "表の各セルにはcellsかquantitiesの参照だけを使用してください。"
-            )
+            raise DataReferenceError("表の各セルにはcellsの参照だけを使用してください。")
         key, value = self._cell(marker)
         if key not in self.positions:
             raise DataReferenceError("表の参照に対応する元の位置がありません。")
@@ -375,13 +350,8 @@ class DataIndex:
             kind, alias = marker.groups()
             if kind == "table":
                 return self._render_table(alias)
-            key, value = self._cell(marker)
-            rendered = _markdown(value)
-            return (
-                rendered + " " + _markdown(self.units[key])
-                if kind == "quantity" and value is not None
-                else rendered
-            )
+            _key, value = self._cell(marker)
+            return _markdown(value)
 
         try:
             return render_reference_tables(

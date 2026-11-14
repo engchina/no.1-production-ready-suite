@@ -86,7 +86,7 @@ def test_column_costs_reconstruct_all_rows_column_projection_and_vertical_length
         headers = len("項目") + sum(len(f"R{i}") for i in range(1, row_count + 1))
         vertical = values + headers + (count + 1) * (3 * width + 2) + (6 * width + 1)
         assert vertical == len(index.render(marker + ":layout=vertical]]"))
-    assert index.render(refs["quantities"][0]["VALUE (N)"]) == "12 N"
+    assert index.render(refs["cells"][0]["VALUE (N)"]) == "12"
     single_output = {**output, "rows": output["rows"][:1]}
     single_step = _step("nl2sql_query", single_output)
     single_refs = model_data_references(single_step.id, single_output)
