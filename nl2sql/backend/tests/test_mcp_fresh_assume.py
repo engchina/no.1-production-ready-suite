@@ -137,7 +137,7 @@ def test_explicit_session_is_not_bypassed_under_assume(
     else:
         answered = []
 
-        def answer(session_id: str, payload: Any) -> Any:
+        def answer(session_id: str, payload: Any, **_kwargs: Any) -> Any:
             answered.append(payload)
             return runtime.get_session(session_id)
 

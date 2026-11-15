@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse
 from app.api.problems import api_problem_response, request_id_for, validation_field_problems
 from app.api.router import api_router
 from app.clients.oracle_runtime import close_oracle_pools
+from app.features.nl2sql.guardrails import GuardrailBlockedError
 from app.features.nl2sql.ontology_definition_data_validation import shutdown_validation_jobs
 from app.features.nl2sql.ontology_markdown_workspace import shutdown_markdown_preparations
 from app.features.nl2sql.ontology_router import (
@@ -173,6 +174,14 @@ async def others_content_forbidden_handler(
         request,
         status_code=OTHERS_CONTENT_FORBIDDEN_STATUS,
         detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE,
+    )
+
+
+@app.exception_handler(GuardrailBlockedError)
+async def guardrail_blocked_handler(request: Request, exc: GuardrailBlockedError) -> JSONResponse:
+    """安全チェックで止めた入力は、どの入口でも route と同じ形の 422 にする（#5081・#5110）。"""
+    return await http_exception_problem_handler(
+        request, StarletteHTTPException(status_code=422, detail=str(exc))
     )
 
 

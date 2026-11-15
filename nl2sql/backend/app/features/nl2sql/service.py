@@ -168,7 +168,7 @@ from .generation_diagnostics import (
     build_generation_diagnostics,
     unavailable_generation_diagnostics,
 )
-from .guardrails import checked_explanation, checked_question
+from .guardrails import check_job_input, checked_explanation, checked_question
 from .incremental_observability import (
     SCHEMA_CHANGED_OBJECTS,
     SCHEMA_REFRESH_ERRORS,
@@ -8923,10 +8923,13 @@ class Nl2SqlService:
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
         origin: JobOrigin | None = None,
+        input_checked: bool = False,
     ) -> JobCreateData:
         """ジョブを投入する。
 
         `origin` は実行のきっかけ（MCP の入口だけが渡す。画面は None。#1986）。
+        `input_checked` は、入口が質問と追加の指示の安全チェックを済ませた（`check_job_input`）
+        ことを示す。済ませていなければここで検査する（#5110）。
         """
         # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
         # error へ隠さない。
@@ -8935,9 +8938,10 @@ class Nl2SqlService:
         # 生成の方式を省略したジョブ（Agent の MCP の nl2sql_query など）は業務プロファイルの既定の
         # 生成方式にする（#1524）。保存するジョブ・再送の照合は決めた方式で行う。
         request = request.with_profile_default_engine(profile.default_engine)
-        # 質問は保存・生成の前に安全チェックを当てる。止めた質問は保存しない（400）。
+        # 質問と追加の指示は保存・生成の前に安全チェックを当てる。止めた質問は保存しない（422）。
         # 個人情報は伏せた文で続ける（#5063）。
-        request = request.model_copy(update={"question": checked_question(request.question)})
+        if not input_checked:
+            request = check_job_input(request)
         self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         if request.client_job_id is not None:
             # 応答が届かなかった送信の再送は、作成済みのジョブを返す（二重に生成しない。#900）。

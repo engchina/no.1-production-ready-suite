@@ -154,6 +154,7 @@ class _FakeNl2SqlService:
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
         origin: JobOrigin | None = None,
+        input_checked: bool = False,
     ) -> JobCreateData:
         job_id = str(uuid.uuid4())
         # 実装と同じく、生成の方式を省略したジョブは業務プロファイルの既定にする（#1524）。
@@ -282,6 +283,7 @@ class _ReadyRequirementRuntime:
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
         profile_confirmed: bool = False,
+        input_checked: bool = False,
     ) -> QuerySessionData:
         assert profile_confirmed is True
         assert request.clarification_mode == ClarificationMode.GUIDED

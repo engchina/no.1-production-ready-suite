@@ -28,6 +28,7 @@ from pr_backend_core.observability.request_context import bind_log_context
 from app.settings import get_settings
 
 from .ai_calls import stage_concurrency, sync_ai_caller
+from .guardrails import GuardrailBlockedError, checked_fields
 from .models import AllowedObjects, Nl2SqlEngine
 from .quality_evaluation_models import (
     QualityEvaluationCapabilities,
@@ -224,6 +225,23 @@ EngineRunner = Callable[[str, Nl2SqlEngine, str], GeneratedSql | str]
 JudgeRunner = Callable[
     [str, str, str, str, QualityEvaluationDeterministicAnalysis], QualityEvaluationJudge
 ]
+
+
+def _checked_cases(cases: list[QualityEvaluationCase]) -> list[QualityEvaluationCase]:
+    """評価セットの質問を、保存と SQL の生成・判定の前に安全チェックにかける（#5110）。
+
+    止めた行は入力の誤り（422）にしてジョブを作らない。個人情報は伏せた質問で保存する。
+    """
+    checked: list[QualityEvaluationCase] = []
+    errors: list[str] = []
+    for case in cases:
+        try:
+            checked.append(checked_fields(case, "question"))
+        except GuardrailBlockedError as exc:
+            errors.append(f"行 {case.excel_row}: {exc.message_ja}")
+    if errors:
+        raise QualityEvaluationValidationError(errors)
+    return checked
 
 
 class QualityEvaluationService:
@@ -485,6 +503,7 @@ class QualityEvaluationService:
                     f"{capabilities.limits.max_attempts} 回を超えています。"
                 ]
             )
+        cases = _checked_cases(cases)
         now = _utc_now()
         job = QualityEvaluationJobRecord(
             job_id=str(uuid.uuid4()),
