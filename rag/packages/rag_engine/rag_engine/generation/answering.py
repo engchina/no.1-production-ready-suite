@@ -234,8 +234,6 @@ from rag_engine.retrieval.scope import (
 )
 from rag_engine.retrieval.task_contract import (
     REQUIRED_ASPECTS,
-    filter_queries,
-    query_rejection_reason,
     task_contract,
 )
 from rag_engine.retrieval.text_search_tokenizer import (
@@ -1075,16 +1073,11 @@ def build_adb_hybrid_answer_context(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     pinned_chunk_run_id: str | None = None,
-    runtime_knowledge: RuntimeKnowledgeContext | None = None,
     query_embedder: Callable[[str, Settings], list[float]] | None = None,
     vector_only_queries: Sequence[str] = (),
     page_ranges: Sequence[Mapping[str, Any]] = (),
-    trusted_queries: Sequence[str] = (),
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
-
-    trusted_queries は retrieval_queries のうち呼び出し元が作った検索文（#2651）。原質問との照合
-    （LLM の言い換えの逸脱を外す）で外さない。
 
     page_ranges は検索を絞る文書の頁の範囲（{document_id, page_start, page_end} の列。業務ガイドの手順の参照。
     #2395）。空なら絞らない。絞り込みは注入された検索実装が行う。
@@ -1111,22 +1104,7 @@ def build_adb_hybrid_answer_context(
     if scope == RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN and chunk_run is None:
         raise AdbHybridSearchUnavailable("No chunk run was found. Run chunking, then create and save embeddings to ADB.")
 
-    # SDK・評価からの直接呼出では未指定。回答入口の各回は読込済みの結果を渡す。
-    runtime = (
-        runtime_knowledge
-        or build_runtime_knowledge_context(
-            question,
-            settings.output_dir,
-            settings.runtime_knowledge_path,
-            terms_search_enabled=settings.runtime_terms_search_enabled,
-            terms_answer_enabled=settings.runtime_terms_answer_enabled,
-        )
-    ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
-    grounded = " ".join(label for term in runtime.retrieval_terms for label in term.labels())
-    candidate_queries = _retrieval_queries(question, retrieval_queries)
-    queries, rejected = filter_queries(question, candidate_queries, grounded_text=grounded)
-    if trusted_queries:
-        queries, _ = _keep_trusted_queries(candidate_queries, queries, rejected, trusted_queries)
+    queries = _retrieval_queries(question, retrieval_queries)
     if getattr(settings, "original_query_only", False):
         # 拡張の寄与を測る比較実験用。原質問は _retrieval_queries が常に先頭へ置く。
         queries = queries[:1]
@@ -2145,7 +2123,6 @@ def _cover_guide_steps(
             rerank_enabled=rerank_enabled,
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
-            runtime_knowledge=runtime_knowledge,
             page_ranges=page_ranges,
         )
 
@@ -2760,24 +2737,6 @@ def answer_question(
     ).answer
 
 
-def _keep_trusted_queries(
-    candidates: Sequence[str],
-    accepted: Sequence[str],
-    rejected: Sequence[dict[str, str]],
-    trusted: Sequence[str],
-) -> tuple[tuple[str, ...], tuple[dict[str, str], ...]]:
-    """原質問との照合で外した検索文のうち、呼び出し元が作ったものを候補の順のまま戻す（#2651）。
-
-    照合は RAG の LLM が作った言い換えの逸脱を外すためのもので、呼び出し元が明示した検索文には当てない。
-    """
-    trusted_keys = {_dedupe_query_key(query) for query in trusted}
-    kept = {_dedupe_query_key(query) for query in accepted} | trusted_keys
-    return (
-        tuple(query for query in candidates if _dedupe_query_key(query) in kept),
-        tuple(item for item in rejected if _dedupe_query_key(item.get("query", "")) not in trusted_keys),
-    )
-
-
 def _record_runtime_knowledge_load(step: _ExecutionStep, runtime_knowledge: RuntimeKnowledgeContext) -> bool:
     """用語・同義語の読み込みの失敗を工程に記録する。読めていれば True（工程の結果と詳細を続けて書く）。
 
@@ -2948,11 +2907,7 @@ def answer_question_result(
             runtime_knowledge.expanded_question,
             *expansion.retrieval_queries,
         )
-        grounded = " ".join(_term_labels(runtime_knowledge))
-        retrieval_queries, rejected = filter_queries(normalized_question, candidate_queries, grounded_text=grounded)
-        if trusted_queries:
-            retrieval_queries, rejected = _keep_trusted_queries(candidate_queries, retrieval_queries, rejected, trusted_queries)
-        keyword_trace["combined_rejections"] = list(rejected)
+        retrieval_queries = candidate_queries
         if getattr(settings, "original_query_only", False):
             # 比較実験用。検索直前にも同じ絞り込みがあるが、ここで適用しないと記録が実際の検索と食い違う。
             retrieval_queries = (normalized_question,)
@@ -3006,8 +2961,6 @@ def answer_question_result(
                 for number, query in enumerate(retrieval_queries, 1)
             ),
         )
-        if rejected:
-            step.add(f"      原質問から外れるため使わない検索文: {len(rejected)} 本")
         if note := _text_search_limit_note(_text_search_variants(retrieval_queries, expansion), settings):
             step.add(note)
         _add_text_search_details(step, text_search_info)
@@ -3018,7 +2971,6 @@ def answer_question_result(
         step.output(
             {
                 "採用した検索文": [{"本文": query, "出どころ": list(query_sources[query])} for query in retrieval_queries],
-                "除外した検索文": list(rejected),
                 "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
                 "全文検索の入力": asdict(text_search_info),
             }
@@ -3116,8 +3068,6 @@ def answer_question_result(
                     rerank_enabled=effective_rerank_enabled,
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
-                    runtime_knowledge=runtime_knowledge,
-                    trusted_queries=trusted_queries,
                 )
                 retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
                 _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
@@ -3183,7 +3133,6 @@ def answer_question_result(
                 rerank_enabled=effective_rerank_enabled,
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,
-                runtime_knowledge=runtime_knowledge,
             )
 
         with _execution_step(
