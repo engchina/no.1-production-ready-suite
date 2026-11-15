@@ -134,36 +134,3 @@ def request_units(question: str) -> list[dict[str, str]]:
     if markers:
         return _subquestion_units(question, markers)
     return [{"id": "Q1", "text": question}] if question.strip() else []
-
-
-def query_rejection_reason(question: str, query: str, *, grounded_text: str = "") -> str:
-    """原質問・明示別名にない業務 ID を含む検索文を拒否する。grounded_text は検証済み別名のみ。
-
-    日付や一文字の版名は ID と扱わず、一般的な言い換えは保持する。
-    モデル自身が生成した説明を grounded_text へ渡してはいけない。
-    """
-    source, value = _text(question), _text(query)
-    if source == value:
-        return ""
-    # 日付・版ではなく業務 ID を対象にする。明示別名以外の新しい ID は推測で追加しない。
-    identifiers = re.findall(r"(?<![a-z0-9_])[a-z]{2,}[a-z0-9_-]*\d[a-z0-9_-]*", value)
-    support = _text(question + " " + grounded_text)
-    if any(not re.search(r"(?<![a-z0-9_])" + re.escape(identifier) + r"(?![a-z0-9_])", support) for identifier in identifiers):
-        return "原質問・明示別名にない業務識別子"
-    return ""
-
-
-def filter_queries(question: str, queries: Sequence[str], *, grounded_text: str = "") -> tuple[tuple[str, ...], tuple[dict[str, str], ...]]:
-    """採用検索文と、理由付きの不採用検索文を返す。入力は変更しない。"""
-    accepted, rejected = [], []
-    for query in queries:
-        reason = query_rejection_reason(question, query, grounded_text=grounded_text)
-        if reason:
-            rejected.append({"query": query, "reason": reason})
-        else:
-            accepted.append(query)
-    return tuple(accepted), tuple(rejected)
-
-
-def _text(value: str) -> str:
-    return unicodedata.normalize("NFKC", value).lower()
