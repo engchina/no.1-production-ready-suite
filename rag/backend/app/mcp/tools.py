@@ -303,9 +303,9 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 43: 検索・回答プロファイルの登録ルールを削除した（#4799）。rag_search・rag_retrieve_evidence の
 #     skip_clarification と rule: の条件、rag_retrieve_evidence の clarifications、
 #     profile_knowledge の rules・rules_omitted を外した。
-# 44: 回答の前に承認済み FAQ（登録済みの Q&A）の候補を返し、選んだ Q&A の回答をそのまま返すツール
-#     （rag_approved_faq）を足した（#5107）。
-MCP_OUTPUT_SCHEMA_VERSION = 44
+# （版を変えない追加）回答の前に承認済み FAQ（登録済みの Q&A）の候補を返し、選んだ Q&A の回答を
+#     そのまま返すツール（rag_approved_faq）を足した。既存のツールの出力の形は変えない（#5107）。
+MCP_OUTPUT_SCHEMA_VERSION = 43
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
