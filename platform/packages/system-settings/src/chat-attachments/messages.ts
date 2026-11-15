@@ -12,6 +12,7 @@ export const CHAT_ATTACHMENT_SETTINGS_MESSAGES = {
   enabledLabel: "チャットでファイルを添付できるようにする",
   enabledHint:
     "無効にすると、入力欄に「ファイルを添付」を出さず、添付を受け付けません。会話に残っている添付も回答に使いません。",
+  roadmapHint: "準備中のため、有効にできません。",
   limitsTitle: "上限",
   limitsDescription: "上限はシステムの設定（platform/.env）で決まり、この画面では変えません。",
   maxBytes: "1 つのファイルの大きさ",
