@@ -116,7 +116,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -227,7 +227,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -837,7 +837,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1007,7 +1007,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1419,7 +1419,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1888,7 +1888,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2675,7 +2675,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2924,7 +2924,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3058,7 +3058,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3095,31 +3095,17 @@
     {
       "name": "rag_retrieve_evidence",
       "title": "根拠の取得",
-      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。",
+      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。図の根拠は画像を返さず image_ref を返します。図を見るときは、その document_id・chunk_id で rag_read_source を include_image=true で呼びます。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "根拠の収集の条件（rag_search の項目に、検索文を作る主体の指定を足す）。",
+        "description": "根拠の収集の条件。",
         "properties": {
           "query": {
-            "description": "検索文。planning=caller はこの文と queries だけで検索する（言い換えない）。planning=rag は質問文でよい。",
+            "description": "1 つの質問（利用者の質問か、そこから分けた 1 つの問い）。複数の問いを 1 つの query にまとめない。",
             "maxLength": 8000,
             "minLength": 1,
             "title": "Query",
             "type": "string"
-          },
-          "original_question": {
-            "anyOf": [
-              {
-                "maxLength": 8000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "利用者の元の質問。query を検索用に短く言い換えたときに渡す。profile_knowledge の用語の照合に使う（検索は query で行う）。",
-            "title": "Original Question"
           },
           "search_answer_profile_id": {
             "anyOf": [
@@ -3189,41 +3175,6 @@
             "maxProperties": 30,
             "title": "Conditions",
             "type": "object"
-          },
-          "planning": {
-            "default": "rag",
-            "description": "検索文を作る主体。rag=RAG が質問と用語の別名で検索する。caller=呼び出し元が作った query と queries だけで検索し、RAG は質問に応じた AI の処理をしない（用語の別名・rerank・前後の文脈の取得は同じ）。",
-            "enum": [
-              "rag",
-              "caller"
-            ],
-            "title": "Planning",
-            "type": "string"
-          },
-          "queries": {
-            "description": "query に足す検索文（planning=caller のときだけ）。同じ根拠を別の観点・別表記・資料の表記で言い表した文。最大 5 本。",
-            "items": {
-              "maxLength": 1000,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 5,
-            "title": "Queries",
-            "type": "array"
-          },
-          "request_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "呼び出し元の追跡 ID（結果の request_id にそのまま返す）。",
-            "title": "Request Id"
           }
         },
         "required": [
@@ -3881,15 +3832,6 @@
                 "description": "照合した用語・同義語の登録の版（登録の内容の sha256 の先頭。読めなければ null）。",
                 "title": "Revision"
               },
-              "matched_on": {
-                "description": "照合に使った文（original_question があればそれ、無ければ query）。",
-                "enum": [
-                  "original_question",
-                  "query"
-                ],
-                "title": "Matched On",
-                "type": "string"
-              },
               "terms": {
                 "description": "当たった用語と説明（一致の強い順）。資料の原文ではない。",
                 "items": {
@@ -3913,7 +3855,6 @@
             "required": [
               "search_answer_profile_id",
               "revision",
-              "matched_on",
               "terms",
               "terms_omitted"
             ],
@@ -4303,7 +4244,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4384,29 +4325,6 @@
             "default": null,
             "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
           },
-          "planning": {
-            "default": "rag",
-            "description": "検索文を作った主体（入力の planning）。",
-            "enum": [
-              "rag",
-              "caller"
-            ],
-            "title": "Planning",
-            "type": "string"
-          },
-          "request_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "入力の request_id。",
-            "title": "Request Id"
-          },
           "profile_knowledge": {
             "anyOf": [
               {
@@ -4417,7 +4335,7 @@
               }
             ],
             "default": null,
-            "description": "検索・回答プロファイルに登録・承認された用語の説明（terms）のうち、利用者の元の質問に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として引用しない。根拠の読み方と回答の判断に使う。上限（用語 8 件・文字の合計 4000 字）を超えた分は terms_omitted に数える。検索・回答プロファイルを使わない検索・当たるものが無いときは null。"
+            "description": "検索・回答プロファイルに登録・承認された用語の説明（terms）のうち、query に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として引用しない。根拠の読み方と回答の判断に使う。上限（用語 8 件・文字の合計 4000 字）を超えた分は terms_omitted に数える。検索・回答プロファイルを使わない検索・当たるものが無いときは null。"
           }
         },
         "required": [
@@ -4436,7 +4354,7 @@
       "description": "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・回答に使ったか付き）と回答を返します。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "検索・回答の条件。旧 scope を含む未定義項目は拒否する。",
+        "description": "検索・回答の条件（回答の要求の単位に使う元の質問を足す）。",
         "properties": {
           "query": {
             "description": "質問文。",
@@ -4444,20 +4362,6 @@
             "minLength": 1,
             "title": "Query",
             "type": "string"
-          },
-          "original_question": {
-            "anyOf": [
-              {
-                "maxLength": 8000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに根拠を確かめて作る。",
-            "title": "Original Question"
           },
           "search_answer_profile_id": {
             "anyOf": [
@@ -4527,6 +4431,20 @@
             "maxProperties": 30,
             "title": "Conditions",
             "type": "object"
+          },
+          "original_question": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに根拠を確かめて作る。",
+            "title": "Original Question"
           }
         },
         "required": [
@@ -5769,7 +5687,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 43,
+            "default": 44,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

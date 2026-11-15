@@ -1,8 +1,8 @@
 """MCP の入口(``POST /api/mcp``)から、呼び出し元が指定した条件・基準日・
 サービストークンの範囲(検索・回答プロファイルと KB)が残ることを確かめる(#3260)。
 
-``rag_search``(回答あり)と ``rag_retrieve_evidence``(planning=rag /
-caller。#2651)を、サービストークン(claim ``profile_ids``。#1379)で呼ぶ。検索 API の解決・
+``rag_search``(回答あり)と ``rag_retrieve_evidence``(根拠だけ)を、サービストークン
+(claim ``profile_ids``。#1379)で呼ぶ。検索 API の解決・
 ``RagPipeline``・``AnswerEngine`` は本物を動かし、Oracle・embedding・LLM と実体・関係情報の拡張の
 計画だけを決定論の代役にする(内容は合成)。
 
@@ -70,12 +70,7 @@ TODAY = date(2026, 4, 1)
 QUESTION = "sample.pdf の12ページの登録手順は？"
 TOOLS = [
     pytest.param("rag_search", {}, id="rag_search"),
-    pytest.param("rag_retrieve_evidence", {}, id="retrieve-planning-rag"),
-    pytest.param(
-        "rag_retrieve_evidence",
-        {"planning": "caller", "queries": ["登録 手順"]},
-        id="retrieve-planning-caller",
-    ),
+    pytest.param("rag_retrieve_evidence", {}, id="retrieve"),
 ]
 
 
@@ -267,10 +262,8 @@ def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     manual = (MANUAL_FIELD.name, MANUAL_FIELD.value)
     # 項目の条件は呼び出し元が明示したものだけ（質問から条件を足さない）。
     assert _field_values(first) == [manual]
-    # どの検索も同じ条件で検索する(caller の追加の検索文を含む)。
+    # どの検索も同じ条件で検索する。
     assert all(item == first for item in oracle.filters)
-    if extra.get("planning") == "caller":
-        assert "登録 手順" in oracle.queries
     # どの検索にも、呼び出し元の条件・KB・基準日が残る。
     scalar = {key: value for key, value in expected.items() if key != "extraction_fields"}
     for item in oracle.filters:

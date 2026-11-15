@@ -602,12 +602,15 @@ def test_business_rag_research_instructions_cover_hop_queries() -> None:
     assert skill is not None
     # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
     instructions = skill.instructions.replace("`", "")
-    # 段の query は実体と属性だけ・件数は既定より小さくしない・言い換えは 2 回まで・
+    # 1 回の呼び出しは 1 つの問い・段の query はその段の問いだけ（#5125）・件数は既定より
+    # 小さくしない・言い換えは 2 回まで・
     # 台帳を示されたらその実体で台帳を引く（#1351）。Runtime の案内（record_codes・repeated_query・
     # superseded_versions・section_reads）は、それぞれ結果の中の next_step に次の手を持つので、
     # 本文は「next_step に従う」の 1 か所だけにする（#2269。契約は test_skill_md_spec.py）。
     for phrase in (
-        "実体（前の段で分かった正式名・略号・ID・役職名を根拠の表記のまま）と引く属性だけ",
+        "段ごとに rag_retrieve_evidence を 1 回呼ぶ。複数の段・小問を 1 回の呼び出しにまとめない。",
+        "段・小問ならその段の問いだけにする。前の段で分かった正式名・略号・ID・役職名は根拠の表記のまま"
+        "入れる。",
         "件数（top_k・evidence_limit）は既定より小さくしない（多段の質問では省略する）",
         "1 回目の結果だけで答えず、その意味を次の段で引く",
         "言い換えて 2 回引いても根拠が出なければ",

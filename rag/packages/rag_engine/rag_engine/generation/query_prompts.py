@@ -19,8 +19,6 @@ def _text_search_query_source(runtime_knowledge: RuntimeKnowledgeContext, expans
     parts = ["原質問"]
     if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
         parts.extend(runtime_knowledge.expansion_sources)
-    if expansion.generated_queries:
-        parts.append("呼び出し元の検索文")
     return " + ".join(parts)
 
 

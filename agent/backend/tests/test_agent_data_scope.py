@@ -48,9 +48,8 @@ AGENT_ID = "test1378-agent"
 USER_UUID = "13781378-2222-3333-4444-555555555555"
 
 
-# Control Plane が決定的に付ける引数（利用者の元の質問。#2261。根拠の取得の検索文を作る主体と
-# 追跡 ID。#2651）。
-_RUNTIME_ARGUMENTS = frozenset({"original_question", "planning", "request_id"})
+# Control Plane が決定的に付ける引数（rag_search への利用者の元の質問。#2261）。
+_RUNTIME_ARGUMENTS = frozenset({"original_question"})
 
 
 def _scope_arguments(call: dict[str, Any]) -> dict[str, Any]:

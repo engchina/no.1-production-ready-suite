@@ -1,6 +1,6 @@
 """根拠の取得が返す検索・回答プロファイルの用語を、回答を作るモデルへ引き継ぐ（#2701）。
 
-RAG は Agent 主体の取得（planning=caller）で回答を作らないので、承認済みの用語の説明は
+RAG は根拠の取得（`rag_retrieve_evidence`）で回答を作らないので、承認済みの用語の説明は
 根拠の取得の結果（`profile_knowledge`）で Agent に届く。組み込み Runtime はそれを根拠
 （`evidence`）と分けたままモデルへ渡し、回答の根拠（AI に渡した根拠・引用）の根拠には
 入れない。渡したことは Run の step とログに残る。合成の設定・根拠で、モデルは台本（ScriptedModel）。
@@ -39,7 +39,6 @@ ANSWER = "機器 A の合成手続きアルファは受付から 5 営業日以�
 KNOWLEDGE = {
     "search_answer_profile_id": "bv-1",
     "revision": "0123456789abcdef",
-    "matched_on": "original_question",
     "terms": [
         {
             "term": "合成手続きアルファ",
@@ -64,11 +63,7 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             name="根拠の取得の Skill",
             instructions="rag_retrieve_evidence で根拠を集め、根拠から答える。",
             mcp_requirements=[
-                SkillMcpRequirement(
-                    server_id="rag",
-                    tool_names=["rag_retrieve_evidence"],
-                    evidence_planning="caller",
-                )
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_retrieve_evidence"])
             ],
         )
     )
@@ -137,9 +132,9 @@ def test_profile_knowledge_reaches_the_model_apart_from_the_evidence(
     finished = runtime_repository.get_run(run.id)
     assert finished.status == RunStatus.COMPLETED, finished.events[-1].message
     [call] = mcp.calls_of("rag_retrieve_evidence")
-    assert call["arguments"]["planning"] == "caller"
-    # 照合に使う利用者の元の質問は実行環境が付ける。RAG に回答を作らせない。
-    assert call["arguments"]["original_question"] == GOAL
+    # 1 回の呼び出しは 1 つの質問で、実行環境は引数を足さない（#5125）。RAG に回答を作らせない。
+    assert call["arguments"]["query"] == "期限"
+    assert not {"planning", "request_id", "original_question"} & set(call["arguments"])
     assert mcp.calls_of("rag_search") == []
 
     # モデルへの入力: 用語は根拠と別の項目のまま届き、根拠の一覧には入らない。
@@ -177,7 +172,6 @@ def test_profile_knowledge_summary_counts_without_the_text() -> None:
     assert summary == {
         "search_answer_profile_id": "bv-1",
         "revision": "0123456789abcdef",
-        "matched_on": "original_question",
         "terms": 1,
         "terms_omitted": 1,
         "load_failed": False,

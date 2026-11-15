@@ -30,7 +30,7 @@ _FIELDS = {
     "parent_section_id": "section",
 }
 # 本文・自由入力を識別子として走査しない。
-_CONTENT = frozenset({"text", "excerpt", "answer", "parent_text", "profile_knowledge", "planning"})
+_CONTENT = frozenset({"text", "excerpt", "answer", "parent_text", "profile_knowledge"})
 _SCHEMES = ("doc://", "chunk://", "section://")
 _HANDLE = re.compile(r"(?:doc|chunk|section)://[1-9][0-9]*\Z")
 _CITATION = re.compile(r"\[\[cite:([1-9][0-9]*)\]\]")

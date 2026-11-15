@@ -411,7 +411,6 @@ class RagPipeline:
         attachment_conversation_id: str | None = None,
         history_question_prepared: bool = False,
         prepared_history_rewrite: PreparedHistoryRewrite | None = None,
-        caller_queries: Sequence[str] | None = None,
         complete_evidence: bool = True,
     ) -> None:
         self._settings = settings or get_settings()
@@ -444,9 +443,6 @@ class RagPipeline:
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 会話履歴による補完が分けた最新の発話の種類（#4787。補完しなければ search）。
         self._history_intent: HistoryIntent = "search"
-        # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
-        # 使い、質問に応じた推論の LLM を呼ばない。
-        self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         # 回答を作らない検索で根拠の補いまでするか（#3506。`AnswerEngine` の同名の引数）。False は
         # 業務 Agent の根拠の取得（MCP の rag_retrieve_evidence）だけが渡す。
         self._complete_evidence = complete_evidence
@@ -517,10 +513,6 @@ class RagPipeline:
         """
         started_at = perf_counter()
         trace_id = trace_id or new_trace_id()
-        if self._caller_queries is not None and (request.generate_answer or history):
-            raise ValueError(
-                "呼び出し元の検索文は、会話の履歴の無い、回答を作らない検索だけに使います。"
-            )
         query_guardrail = await self._check_query(
             request.query, purpose="search_question", prechecked=query_guardrail_result
         )
@@ -711,11 +703,6 @@ class RagPipeline:
                 result_snapshot=lambda outcome: {"回答": outcome.answer},
             )
         skips_search = faq_outcome is not None
-        caller_queries = (
-            await self._checked_caller_queries(self._caller_queries)
-            if self._caller_queries is not None
-            else None
-        )
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
         if not skips_search and self._attachment_conversation_id:
@@ -763,7 +750,6 @@ class RagPipeline:
             answer_model_id=self._answer_model_id,
             scope=effective_scope,
             attachment_chunks=attachment_chunks,
-            caller_queries=caller_queries,
             degraded=degraded,
             complete_evidence=self._complete_evidence,
         )
@@ -803,7 +789,6 @@ class RagPipeline:
                 request_snapshot=lambda: {
                     "検索要求": request.model_dump(mode="json"),
                     "添付の根拠": _trace_chunks(attachment_chunks),
-                    "呼出元の検索文": caller_queries,
                     "根拠補完有効": self._complete_evidence,
                 },
                 result_snapshot=lambda result: {
@@ -1154,21 +1139,6 @@ class RagPipeline:
                         "例外の型": error_type,
                     }
                 )
-
-    async def _checked_caller_queries(self, queries: Sequence[str]) -> list[str]:
-        """呼び出し元の検索文に、質問と同じ安全チェックを当てる(#2651)。
-
-        機微情報は質問と同じく伏せた文で検索し、拒否された検索文は使わない(残りの検索文で続ける)。
-        """
-        checked: list[str] = []
-        for query in queries:
-            result = await self._check_query(query, purpose="caller_search")
-            record_guardrail_findings(
-                "query", result.findings, "blocked" if not result.allowed else "warning"
-            )
-            if result.allowed and result.sanitized_text.strip():
-                checked.append(result.sanitized_text)
-        return checked
 
     async def _safe_rewritten_query(
         self,

@@ -1,6 +1,6 @@
 """根拠の取得（rag_retrieve_evidence）が返す検索・回答プロファイルの用語（#2701）のテスト。
 
-RAG が回答を作らない取得では、回答を作る呼び出し元（業務 Agent）へ、利用者の元の質問に当たる
+RAG が回答を作らない取得では、回答を作る呼び出し元（業務 Agent）へ、query に当たる
 承認済みの用語の説明を、資料の根拠（evidence）と分けて返す。合成のプロファイルで、
 無効・未承認・別のプロファイルの登録が届かないこと、payload に残った登録ルールを返さないこと、件数・
 字数の上限で省いた数を示すこと、読めなかったことを当たるものが無いことと区別することを確かめる。
@@ -134,24 +134,20 @@ def _retrieve(auth: ProductionAuth, **arguments: Any) -> dict[str, Any]:
     return body
 
 
-def test_caller_retrieval_returns_approved_terms_matched_by_the_original_question(
+def test_retrieval_returns_approved_terms_matched_by_the_query(
     auth: ProductionAuth, searches: list[SearchRequest]
 ) -> None:
-    # 呼び出し元の短い検索文は照合の語を含まない。照合は利用者の元の質問で行う。
-    body = _retrieve(
-        auth, query="期限", planning="caller", queries=["受付 期限"], original_question=QUESTION
-    )
+    # 照合は渡された query で行う（1 回の呼び出しは 1 つの質問。#5125）。
+    body = _retrieve(auth, query=QUESTION)
 
     knowledge = body["profile_knowledge"]
     assert knowledge["search_answer_profile_id"] == PROFILE
-    assert knowledge["matched_on"] == "original_question"
     assert knowledge["load_failed"] is False
     assert knowledge["revision"]
     # 承認済みの用語だけ（下書きの用語・残った登録ルールは渡さない）。
     assert set(knowledge) == {
         "search_answer_profile_id",
         "revision",
-        "matched_on",
         "terms",
         "terms_omitted",
         "load_failed",
@@ -161,19 +157,8 @@ def test_caller_retrieval_returns_approved_terms_matched_by_the_original_questio
     assert knowledge["terms_omitted"] == 0
     assert LEFTOVER_POLICY not in str(body)
     assert [item["chunk_id"] for item in body["evidence"]] == ["c1"]
-    # 検索は呼び出し元の検索文のまま（用語で検索文を変えない）。
-    assert searches[0].query == "期限"
-
-
-def test_rag_planning_also_returns_the_profile_knowledge(
-    auth: ProductionAuth, searches: list[SearchRequest]
-) -> None:
-    """回答を作らない取得は、どちらの主体でも回答を作る側へ渡す。query で照合する。"""
-    body = _retrieve(auth, query=QUESTION)
-
-    knowledge = body["profile_knowledge"]
-    assert knowledge["matched_on"] == "query"
-    assert [term["term"] for term in knowledge["terms"]] == ["合成手続きアルファ"]
+    # 検索は渡された query のまま（用語で検索文を変えない）。
+    assert searches[0].query == QUESTION
 
 
 def test_other_profile_terms_are_not_mixed(
@@ -181,9 +166,7 @@ def test_other_profile_terms_are_not_mixed(
 ) -> None:
     body = _retrieve(
         auth,
-        query="期限",
-        planning="caller",
-        original_question=QUESTION,
+        query=QUESTION,
         search_answer_profile_id=OTHER_PROFILE,
     )
 
@@ -193,14 +176,14 @@ def test_other_profile_terms_are_not_mixed(
 @pytest.mark.parametrize(
     "arguments",
     [
-        pytest.param({"original_question": "関係の無い質問"}, id="no-match"),
-        pytest.param({"search_answer_profile_id": None}, id="no-profile"),
+        pytest.param({"query": "関係の無い質問"}, id="no-match"),
+        pytest.param({"query": QUESTION, "search_answer_profile_id": None}, id="no-profile"),
     ],
 )
 def test_no_profile_knowledge_without_a_match_or_profile(
     auth: ProductionAuth, searches: list[SearchRequest], arguments: dict[str, Any]
 ) -> None:
-    body = _retrieve(auth, query="期限", planning="caller", **arguments)
+    body = _retrieve(auth, **arguments)
 
     assert body["profile_knowledge"] is None
     assert body["evidence"]
@@ -212,7 +195,7 @@ def test_profile_outside_the_user_scope_returns_no_knowledge(
     """利用者の範囲外のプロファイル（fake では無いもの）の登録は渡さない。"""
     monkeypatch.setattr(_KnowledgeOracle, "usable", frozenset({OTHER_PROFILE}))
 
-    body = _retrieve(auth, query="期限", planning="caller", original_question=QUESTION)
+    body = _retrieve(auth, query=QUESTION)
 
     assert body["profile_knowledge"] is None
 
@@ -238,9 +221,7 @@ def test_limits_report_the_omitted_terms(
     }
     question = " ".join(f"合成手続きアルファ{index}" for index in range(count))
 
-    knowledge = _retrieve(auth, query="期限", planning="caller", original_question=question)[
-        "profile_knowledge"
-    ]
+    knowledge = _retrieve(auth, query=question)["profile_knowledge"]
 
     returned_chars = sum(
         len(term["term"])
@@ -259,7 +240,7 @@ def test_load_failure_is_reported_and_the_evidence_is_still_returned(
 ) -> None:
     _KnowledgeOracle.fail = True
 
-    body = _retrieve(auth, query="期限", planning="caller", original_question=QUESTION)
+    body = _retrieve(auth, query=QUESTION)
 
     assert body["profile_knowledge"]["load_failed"] is True
     assert body["profile_knowledge"]["terms"] == []
@@ -274,13 +255,11 @@ def test_profile_knowledge_respects_the_answer_switch(
     terms: bool,
 ) -> None:
     monkeypatch.setattr(get_settings(), "rag_runtime_terms_answer_enabled", terms)
-    body = _retrieve(
-        auth, query="期限", planning="caller", queries=["受付 期限"], original_question=QUESTION
-    )
+    body = _retrieve(auth, query=QUESTION)
     knowledge = body.get("profile_knowledge")
     if not terms:
         assert knowledge is None
     else:
         assert isinstance(knowledge, dict)
         assert knowledge["terms"]
-    assert searches and searches[-1].query == "期限"
+    assert searches and searches[-1].query == QUESTION

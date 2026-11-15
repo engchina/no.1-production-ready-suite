@@ -6,7 +6,6 @@ license: MIT
 metadata:
   production-ready-display-name: "資料とデータの横断調査"
   production-ready-mcp-tools: "rag:rag_retrieve_evidence rag:rag_recommend_search_answer_profile rag:rag_list_search_answer_profiles nl2sql:nl2sql_query nl2sql:nl2sql_get_job nl2sql:nl2sql_list_profiles nl2sql:nl2sql_recommend_profile"
-  production-ready-evidence-planning: "rag:caller"
   production-ready-tags: "rag nl2sql business-data"
 ---
 業務 RAG（資料。MCP サーバー `rag`）と NL2SQL（業務データ。MCP サーバー `nl2sql`）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。
@@ -27,7 +26,7 @@ metadata:
 
 ## Step 3: 足りないものに合うツールを呼ぶ
 
-- 資料の根拠が要る → `rag_retrieve_evidence`（`query` はその根拠の実体と引く属性。RAG は回答を作らず根拠を返すので、答えは根拠から自分で書く）
+- 資料の根拠が要る → `rag_retrieve_evidence`（`query` はその根拠を求める 1 つの問い。問いが複数なら問いごとに呼ぶ。RAG は回答を作らず根拠を返すので、答えは根拠から自分で書く）
   - 検索・回答プロファイル（`search_answer_profile_id`）が決まっていなければ、最初に 1 回 `rag_recommend_search_answer_profile` で選び、以後も同じものを使う（業務 Agent にデータの範囲があれば、その範囲の中から選ぶ）。`recommended_profile_id` が null で候補が 2 件以上なら、候補の名前を選択肢にして利用者に確かめる。候補が無ければ `rag_list_search_answer_profiles` で選ぶ。
 - 業務データの値が要る → `nl2sql_query`（`nl2sql_query` が先でもよい）
 - どちらで調べるかは、値がどこに載っているかで決める。1 つの質問に、資料の値と業務データの値の両方が要ることがある。
