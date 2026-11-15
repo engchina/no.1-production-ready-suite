@@ -11,6 +11,7 @@ import {
   FormSkeleton,
   FormStatus,
   PageBody,
+  RoadmapBadge,
   Switch,
   TimedLoadingState,
   formatAttachmentSize,
@@ -24,6 +25,10 @@ import { formatMessage } from "../auth/messages";
 import { useSettingsDraftGuard, type DraftGuardMessages } from "../guards/useSettingsDraftGuard";
 import { CHAT_ATTACHMENT_SETTINGS_MESSAGES, type ChatAttachmentSettingsMessages } from "./messages";
 import { CHAT_ATTACHMENT_SETTINGS_QUERY_KEY, type ChatAttachmentSettingsApi } from "./types";
+
+// 準備中（ロードマップ。#5103）。切り替えを OFF のまま操作させず、保存の操作を出さない。
+// 添付の内容が入力の安全チェックを通るように作り直したら（#5101）false にする。
+const CHAT_ATTACHMENTS_ROADMAP = true;
 
 export interface ChatAttachmentSettingsPageProps {
   /** 製品の API 関数（GET / PUT /api/settings/chat-attachments）。 */
@@ -40,6 +45,7 @@ export interface ChatAttachmentSettingsPageProps {
  * チャットの添付の設定（画面は 3 製品で共通。設定は製品ごと。#2517）。
  *
  * - 「チャットでファイルを添付できるようにする」を切り替えて保存する（既定は無効）。
+ *   準備中（`CHAT_ATTACHMENTS_ROADMAP`）の間は OFF のまま操作させない。
  * - 上限（大きさ・件数・期限）は共通の `.env` の値を読み取り専用で示す。
  */
 export function ChatAttachmentSettingsPage({
@@ -151,6 +157,7 @@ export function ChatAttachmentSettingsPage({
               <CardTitle className="flex items-center gap-2">
                 <Paperclip size={16} className="text-accent-fg" aria-hidden />
                 {m.settingsTitle}
+                {CHAT_ATTACHMENTS_ROADMAP ? <RoadmapBadge /> : null}
               </CardTitle>
               <CardDescription>{m.settingsDescription}</CardDescription>
             </CardHeader>
@@ -161,11 +168,12 @@ export function ChatAttachmentSettingsPage({
                     {m.enabledLabel}
                   </p>
                   <p id={enabledHintId} className="text-xs leading-relaxed text-fg-muted">
-                    {m.enabledHint}
+                    {CHAT_ATTACHMENTS_ROADMAP ? m.roadmapHint : m.enabledHint}
                   </p>
                 </div>
                 <Switch
-                  checked={enabled}
+                  checked={CHAT_ATTACHMENTS_ROADMAP ? false : enabled}
+                  disabled={CHAT_ATTACHMENTS_ROADMAP}
                   aria-labelledby={enabledLabelId}
                   aria-describedby={enabledHintId}
                   onCheckedChange={(value) => {
@@ -192,11 +200,13 @@ export function ChatAttachmentSettingsPage({
                   ))}
                 </dl>
               </section>
-              <FormActionBar
-                ariaLabel={m.actionsLabel}
-                primaryActions={[{ id: "save", type: "submit", label: m.save, icon: Save, loading: save.isPending }]}
-                status={save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-              />
+              {CHAT_ATTACHMENTS_ROADMAP ? null : (
+                <FormActionBar
+                  ariaLabel={m.actionsLabel}
+                  primaryActions={[{ id: "save", type: "submit", label: m.save, icon: Save, loading: save.isPending }]}
+                  status={save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
+                />
+              )}
             </CardContent>
           </Card>
         </fieldset>

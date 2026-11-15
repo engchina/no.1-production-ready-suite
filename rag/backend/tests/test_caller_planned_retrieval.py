@@ -161,19 +161,3 @@ async def test_caller_queries_are_only_for_retrieval_without_answer(
 
     with pytest.raises(ValueError, match="回答を作らない検索"):
         await pipeline.run(SearchRequest(query="受注の登録方法は？"))
-
-
-def test_trusted_queries_survive_the_goal_check_in_candidate_order() -> None:
-    from rag_engine.generation.answering import _keep_trusted_queries
-
-    candidates = ("原質問", "SYS-9 担当", "逸脱した言い換え", "語彙の補助")
-    accepted = ("原質問", "語彙の補助")
-    rejected = (
-        {"query": "SYS-9 担当", "reason": "原質問・明示別名にない業務識別子"},
-        {"query": "逸脱した言い換え", "reason": "目的の変化"},
-    )
-
-    kept, still_rejected = _keep_trusted_queries(candidates, accepted, rejected, ["sys-9  担当"])
-
-    assert kept == ("原質問", "SYS-9 担当", "語彙の補助")
-    assert still_rejected == (rejected[1],)

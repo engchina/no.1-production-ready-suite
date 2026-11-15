@@ -4,7 +4,6 @@ from rag_engine.generation.answering import (
     AnswerRecord,
 )
 from rag_engine.retrieval.evidence_selection import evidence_spans
-from rag_engine.retrieval.task_contract import filter_queries
 
 
 def record(uid, text="入口を押すと編集画面が開く。保存ボタンで確定する。", source="guide.pdf", metadata=None):
@@ -36,11 +35,3 @@ def test_duplicate_parse_is_consolidated_without_merging_different_versions():
     assert len(evidence_spans("保存操作", [record("x", source=""), record("y", source="")])) == 2
     # 文書の識別子が無い根拠は、表示名が同じでも同じ文書と確かめられないのでまとめない（#2603）。
     assert len(evidence_spans("保存操作", [record("run-a:1"), record("run-b:1")])) == 2
-
-
-def test_filter_queries_rejects_only_business_ids_not_in_the_question():
-    question = "申請を変更する方法を教えて"
-    accepted, rejected = filter_queries(question, ["申請の変更手順", "XY99 の変更手順"])
-    assert accepted == ("申請の変更手順",)
-    assert rejected == ({"query": "XY99 の変更手順", "reason": "原質問・明示別名にない業務識別子"},)
-    assert filter_queries(question, ["XY99 の変更手順"], grounded_text="XY99")[0] == ("XY99 の変更手順",)

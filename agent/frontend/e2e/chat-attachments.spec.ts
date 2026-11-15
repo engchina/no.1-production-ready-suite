@@ -107,16 +107,15 @@ test.describe("チャットの添付", { tag: "@responsive" }, () => {
   });
 });
 
-test("運用設定でチャットの添付を有効にする", { tag: "@responsive" }, async ({ page, mockApi }) => {
+test("運用設定のチャットの添付は準備中で OFF のまま操作できない（#5103）", { tag: "@responsive" }, async ({ page }) => {
   await page.goto("/settings/chat-attachments");
   await expect(page.getByRole("heading", { name: "チャットの添付", level: 1 })).toBeVisible();
+  await expect(page.getByText("準備中（ロードマップ）")).toBeVisible();
   const toggle = page.getByTestId("chat-attachments-enabled");
   await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(toggle).toBeDisabled();
   await expect(page.getByTestId("chat-attachments-limits")).toContainText("20 MB");
-  await toggle.click();
-  await page.getByRole("button", { name: "保存" }).click();
-  await expect.poll(() => mockApi.state.chatAttachmentsEnabled).toBe(true);
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
