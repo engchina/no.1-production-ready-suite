@@ -1,7 +1,5 @@
 """Approved FAQ の embedding 意味照合(rag_poc semantic index)。"""
 
-import pytest
-
 from app.rag.search_answer_profile_knowledge import (
     FAQ_SEMANTIC_CACHE_KEY,
     add_approved_faq,
@@ -9,8 +7,9 @@ from app.rag.search_answer_profile_knowledge import (
 )
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
-# FAQ は対象の KB を使える利用者にだけ使う(#4621)。範囲の制限の無い context で照合だけを確かめる。
-pytestmark = pytest.mark.usefixtures("system_access")
+# 意味照合の比較には低い下限で全候補を見る。
+MIN_SCORE = 0.1
+LIMIT = 3
 
 
 class StubEmbedder:
@@ -36,9 +35,17 @@ async def test_semantic_match_finds_paraphrased_question_and_reuses_cache() -> N
     )
     embed = StubEmbedder()
 
-    text_only = await suggest_approved_faq(store, "bv-1", "注文のキャンセル方法")
+    text_only = await suggest_approved_faq(
+        store, "bv-1", "注文のキャンセル方法", min_score=MIN_SCORE, limit=LIMIT
+    )
     semantic = await suggest_approved_faq(
-        store, "bv-1", "注文のキャンセル方法", embed=embed, embedding_dimensions=4
+        store,
+        "bv-1",
+        "注文のキャンセル方法",
+        embed=embed,
+        embedding_dimensions=4,
+        min_score=MIN_SCORE,
+        limit=LIMIT,
     )
 
     assert not any(item.match_method == "semantic" for item in text_only)
@@ -48,7 +55,13 @@ async def test_semantic_match_finds_paraphrased_question_and_reuses_cache() -> N
     assert [input_type for _, input_type in embed.calls] == ["SEARCH_DOCUMENT", "SEARCH_QUERY"]
 
     await suggest_approved_faq(
-        store, "bv-1", "注文のキャンセル方法", embed=embed, embedding_dimensions=4
+        store,
+        "bv-1",
+        "注文のキャンセル方法",
+        embed=embed,
+        embedding_dimensions=4,
+        min_score=MIN_SCORE,
+        limit=LIMIT,
     )
     # FAQ が変わらなければ index を再利用し、質問だけを embedding する。
     assert [input_type for _, input_type in embed.calls][2:] == ["SEARCH_QUERY"]
@@ -62,7 +75,13 @@ async def test_semantic_failure_falls_back_to_text_match() -> None:
         raise RuntimeError("embedding unavailable")
 
     result = await suggest_approved_faq(
-        store, "bv-1", "受注を取り消すには？", embed=broken, embedding_dimensions=4
+        store,
+        "bv-1",
+        "受注を取り消すには？",
+        embed=broken,
+        embedding_dimensions=4,
+        min_score=MIN_SCORE,
+        limit=LIMIT,
     )
 
     assert result and result[0].score >= 0.92

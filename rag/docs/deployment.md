@@ -221,6 +221,32 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5107 承認済み FAQ を質問と回答だけにする）
+
+承認済み FAQ（登録済みQ&A）の項目を質問と回答だけにし、当てはめない質問・対象のナレッジベース・引用した文書の状態・
+承認の記録と、一致度が高いときに回答を自動で返す設定を削除した。「回答の前に関連するQ&Aを提示する」がオンのプロファイルは、
+一致度が下限以上の Q&A を候補に出し、利用者が選んだ Q&A の回答をそのまま返す（LLM と検索を呼ばない）。選んだ Q&A を
+LLM に渡して回答を作る経路と、その指示（`faq_answer.system`）も削除した。
+
+1. **データを削除する migration `20261115_5107_approved_faq_fields`・`20261115_5107_faq_answer_prompt` を含むので、
+   承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る**（下の「既存環境の更新手順の共通の注意」）。
+   `RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE` の `KIND = 'approved_faq'` の行の `PAYLOAD_JSON` から、FAQ ごとの
+   `negative_questions`・`target_knowledge_base_ids`・`source_documents`・`approval` と、`direct_answer_enabled`・
+   `semantic_index_cache`（次の照合で作り直す）を消し、`RAG_ANSWER_PROMPTS` の `faq_answer.system` の行を消す。
+   質問・回答・提示の設定（`enabled`）は変えない。消す値を残す場合は、適用の前に同列を書き出す。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+2. `backend/.env` の `RAG_APPROVED_FAQ_SUGGESTION_MIN_SCORE`・`RAG_APPROVED_FAQ_SUGGESTION_MAX_GAP`・
+   `RAG_APPROVED_FAQ_NEGATIVE_MIN_SCORE`・`RAG_APPROVED_FAQ_DIRECT_ANSWER_MIN_SCORE` は読まない（消してよい）。
+   候補の一致度の下限は `RAG_APPROVED_FAQ_MIN_SCORE`（既定 `0.92`。0.90〜0.99）、最大件数は
+   `RAG_APPROVED_FAQ_MAX_SUGGESTIONS`（既定 `3`）に書く。
+3. MCP の出力の版は 44 になる。`rag_search` は Q&A の候補があれば検索せずに `outcome=approved_faq_suggestions` と
+   `faq_suggestions`・`next_step` を返し、入力の `approved_faq_id`（選んだ Q&A の回答を返す）・
+   `approved_faq_declined`（候補を出さずに検索・回答する）で呼び直す。
+
 ## 既存環境の更新手順（#4793 取込の後の文書全体の要約）
 
 取込（分割・埋め込み・索引）が終わって検索に出した後に、文書全体の要約を 1 文書につき 1 回の LLM（OCI Enterprise AI。既定のテキストモデル）で作り、文書の詳細に出す。要約の chunk（`content_kind=document_summary`）を有効な chunk_set に 1 つ入れ、文書全体を問う質問の検索に当てる。既定で有効（`RAG_DOCUMENT_SUMMARY_ENABLED=true`）。

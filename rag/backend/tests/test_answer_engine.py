@@ -2309,71 +2309,6 @@ async def test_pipeline_does_not_read_field_conditions_from_the_question(
     assert all("extraction_fields" not in item for item in oracle.filters)
 
 
-async def test_answer_engine_answers_only_from_selected_approved_faq(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """類似問を選んだら検索せず、質問・類似問・承認済みの回答だけを LLM に渡す(#702)。"""
-    import json
-
-    import rag_engine.adapters.oci as engine_oci
-    import rag_engine.generation.answering as answering
-    from rag_engine.generation.faq_answer import FaqAnswerDraft
-
-    prompts: list[dict[str, Any]] = []
-
-    def fake_llm(system: str, prompt: str, settings: Any, schema: type, **_: Any) -> Any:
-        assert schema is FaqAnswerDraft
-        prompts.append(json.loads(prompt))
-        return FaqAnswerDraft(answer="宿泊出張の日当は 1 泊 2,000 円です。")
-
-    def no_search(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("類似問を選んだときは検索しない")
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", fake_llm)
-    monkeypatch.setattr(answering, "answer_question_result", no_search)
-    oracle = FakeOracle()
-    engine = AnswerEngine(
-        Settings(),
-        oracle=oracle,  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-        approved_faq=("出張の日当はいくらですか？", "一般は 1 泊 2,000 円です。"),
-    )
-
-    events: list[tuple[str, str, float, object]] = []
-
-    async def step_callback(name: str, status: str, elapsed: float, record: object) -> None:
-        events.append((name, status, elapsed, record))
-
-    outcome = await engine.run(
-        SearchRequest(query="出張したら日当は何円？"), step_callback=step_callback
-    )
-
-    assert prompts == [
-        {
-            "question": "出張したら日当は何円？",
-            "approved_faq": {
-                "question": "出張の日当はいくらですか？",
-                "answer": "一般は 1 泊 2,000 円です。",
-            },
-        }
-    ]
-    assert outcome.answer.startswith("宿泊出張の日当は 1 泊 2,000 円です。")
-    assert "登録済みQ&A「出張の日当はいくらですか？」" in outcome.answer
-    assert outcome.citations == []
-    assert outcome.diagnostics["answer_source"] == "approved_faq"
-    # 根拠として出す FAQ の原文(回答した時点のもの。#737)。
-    assert outcome.diagnostics["approved_faq_question"] == "出張の日当はいくらですか？"
-    assert outcome.diagnostics["approved_faq_answer"] == "一般は 1 泊 2,000 円です。"
-    assert not oracle.filters
-    assert outcome.diagnostics["models"]["embedding"] == ""
-    assert outcome.diagnostics["models"]["rerank"] == ""
-    steps = outcome.diagnostics["execution_steps"]
-    assert steps[0]["name"] == "承認済み FAQ からの回答"
-    assert steps[0]["llm_calls"] == 1
-    assert steps[0]["elapsed_seconds"] >= 0
-    assert [event[1] for event in events] == ["started", "success"]
-
-
 async def test_answer_engine_passes_the_clarification_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2738,42 +2673,6 @@ async def test_history_rewrite_preserves_full_question_or_falls_back(
     assert HISTORY_REWRITE_SYSTEM_PROMPT.count(CHAT_HISTORY_UNTRUSTED_NOTE) == 1
     # 出力の言語は最新の質問に合わせる。指示で特定の言語に固定しない（#4785）。
     assert "日本語" not in HISTORY_REWRITE_SYSTEM_PROMPT
-
-
-@pytest.mark.parametrize("fails", [False, True])
-async def test_approved_faq_generation_reports_usage_and_failure(
-    monkeypatch: pytest.MonkeyPatch, fails: bool
-) -> None:
-    import rag_engine.generation.faq_answer as faq
-    from rag_engine.resources.llm_usage import record_llm_usage
-
-    def answer(*args: object) -> str:
-        record_llm_usage({"input_tokens": 42, "output_tokens": 8})
-        if fails:
-            raise ValueError("合成の生成失敗")
-        return "設定 A の回答です。"
-
-    monkeypatch.setattr(faq, "answer_from_approved_faq", answer)
-    events: list[tuple[str, str, float, Mapping[str, Any]]] = []
-
-    async def notify(name: str, state: str, elapsed: float, record: Mapping[str, Any]) -> None:
-        events.append((name, state, elapsed, record))
-
-    engine = AnswerEngine(
-        Settings(),
-        oracle=FakeOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-        approved_faq=("設定 A は？", "設定 A の回答です。"),
-    )
-    if fails:
-        with pytest.raises(ValueError, match="合成の生成失敗"):
-            await engine.run(SearchRequest(query="設定 A"), step_callback=notify)
-    else:
-        result = await engine.run(SearchRequest(query="設定 A"), step_callback=notify)
-        assert result.diagnostics["execution_steps"][0]["llm_usage"]["input_tokens"] == 42
-    assert [item[1] for item in events] == ["started", "error" if fails else "success"]
-    assert events[-1][2] > 0
-    assert events[-1][3]["llm_usage"]["calls"] == 1
 
 
 @pytest.mark.parametrize("engine", [True, False])

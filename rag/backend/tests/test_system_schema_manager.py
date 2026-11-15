@@ -768,6 +768,8 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261110_4784_language_pack_retired_unread",
         "20261110_4782_remove_raptor",
         "20261110_4799_search_answer_profile_runtime_rules",
+        "20261115_5107_approved_faq_fields",
+        "20261115_5107_faq_answer_prompt",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

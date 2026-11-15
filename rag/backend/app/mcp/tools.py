@@ -46,6 +46,7 @@ from typing import Annotated, Any, Literal, cast, get_args
 from fastapi import HTTPException, Request
 from pr_backend_core.api import OffsetParams
 from pr_backend_core.api.validation import validation_tool_errors
+from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.mcp import (
     TOOL_ARGUMENTS_INVALID_CODE,
     TOOL_FORBIDDEN_CODE,
@@ -4061,15 +4062,20 @@ async def _approved_faq_suggestions(request: SearchRequest) -> list[ApprovedFaqS
     """回答の前に提示する承認済み FAQ の候補（プロファイルが無い・見えない・アーカイブ済みは空）。
 
     プロファイルの解決の誤り（404・409）は検索の側が同じ規則で返すので、ここでは止めない。
+    候補は補助なので、読めなければ候補なしとして検索・回答に進む。
     """
     profile_id = str(request.search_answer_profile_id)
-    oracle = OracleClient()
-    view = await oracle.get_search_answer_profile(profile_id)
-    if view is None or view.status == SearchAnswerProfileStatus.ARCHIVED:
+    try:
+        oracle = OracleClient()
+        view = await oracle.get_search_answer_profile(profile_id)
+        if view is None or view.status == SearchAnswerProfileStatus.ARCHIVED:
+            return []
+        suggestions, _ = await approved_faq_candidates(
+            oracle, profile_id, request.query, get_settings()
+        )
+    except Exception as exc:  # noqa: BLE001 - 候補は補助。いつもの検索・回答に進む。
+        logger.warning("rag_mcp_approved_faq_suggest_failed", extra=safe_exception_fields(exc))
         return []
-    suggestions, _ = await approved_faq_candidates(
-        oracle, profile_id, request.query, get_settings()
-    )
     return [
         ApprovedFaqSuggestionItem(
             id=item.record.id,
