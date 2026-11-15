@@ -43,6 +43,7 @@ class RecordingPipeline:
         progress_callback: object | None = None,
         token_callback: object | None = None,
         trace: object | None = None,
+        query_guardrail_result: object | None = None,
     ) -> SearchResponse:
         _ = progress_callback, token_callback
         RecordingPipeline.captured_request = request

@@ -115,6 +115,8 @@ async def test_token_selection_reaches_generation_scope_and_preserves_original(
         return {"schema_version": 1, "terms": []}
 
     async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
+        if (gate := kwargs.get("question_gate")) is not None:
+            request = await gate(request, effective) or request
         return request, effective, None, None
 
     async def append(message: Any) -> Any:

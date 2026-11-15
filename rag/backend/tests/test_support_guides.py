@@ -791,6 +791,8 @@ def test_try_draft_returns_the_ai_api_failure_reason_instead_of_500(
             raise error from cause
 
     async def resolved(request: SearchRequest, settings: Any, **_kwargs: Any) -> tuple[Any, ...]:
+        if (gate := _kwargs.get("question_gate")) is not None:
+            request = await gate(request, settings) or request
         return request, settings, None, None
 
     monkeypatch.setattr(search_route, "_resolve_query_context", resolved)

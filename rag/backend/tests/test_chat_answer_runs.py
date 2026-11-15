@@ -85,6 +85,12 @@ class _GatedPipeline(_FakePipeline):
         return self._response(request, trace_id)
 
 
+@pytest.fixture(autouse=True)
+def no_history_rewrite(monkeypatch: MonkeyPatch) -> None:
+    """RagPipeline を fake に置き換えるので、送信の準備の補完（#5100）は通さない。"""
+    monkeypatch.setattr(get_settings(), "rag_history_rewrite_enabled", False)
+
+
 @pytest.fixture
 def service(monkeypatch: MonkeyPatch) -> ChatAnswerRunService:
     fresh = ChatAnswerRunService(worker_id="pytest-worker")

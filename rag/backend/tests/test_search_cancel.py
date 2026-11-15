@@ -73,6 +73,7 @@ def _pipeline(flow: _Flow) -> type:
             trace_id: str,
             progress_callback: Any,
             trace: Any = None,
+            query_guardrail_result: Any | None = None,
         ) -> Any:
             await progress_callback(
                 SearchStageProgress(
@@ -93,6 +94,8 @@ def audits(monkeypatch: MonkeyPatch) -> list[dict[str, Any]]:
     recorded: list[dict[str, Any]] = []
 
     async def resolve(request: SearchRequest, settings: Any, **_kwargs: Any) -> Any:
+        if (gate := _kwargs.get("question_gate")) is not None:
+            request = await gate(request, settings) or request
         return request, settings, None, None
 
     monkeypatch.setattr(search_route, "_resolve_query_context", resolve)

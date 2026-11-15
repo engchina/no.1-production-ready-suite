@@ -488,6 +488,7 @@ class SlowPipeline:
         progress_callback: Any | None = None,
         token_callback: object | None = None,
         trace: Any | None = None,
+        query_guardrail_result: Any | None = None,
     ) -> SearchResponse:
         _ = token_callback
         assert trace_id
@@ -513,6 +514,7 @@ class RealtimeStreamingPipeline:
         progress_callback: object | None = None,
         token_callback: Any | None = None,
         trace: Any | None = None,
+        query_guardrail_result: Any | None = None,
     ) -> SearchResponse:
         _ = progress_callback
         assert trace_id
@@ -544,6 +546,7 @@ class RealtimeMaskingPipeline:
         progress_callback: object | None = None,
         token_callback: Any | None = None,
         trace: Any | None = None,
+        query_guardrail_result: Any | None = None,
     ) -> SearchResponse:
         _ = progress_callback
         assert trace_id
@@ -573,6 +576,7 @@ class AuditingPipeline:
         progress_callback: object | None = None,
         token_callback: object | None = None,
         trace: Any | None = None,
+        query_guardrail_result: Any | None = None,
     ) -> SearchResponse:
         _ = progress_callback, token_callback
         assert trace_id

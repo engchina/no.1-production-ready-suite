@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from time import perf_counter
 from typing import Annotated
@@ -15,6 +15,7 @@ from pr_backend_core.mcp import report_tool_progress
 from pr_backend_core.observability.trace_bodies import BodyPage
 from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.auth.errors import SecurityApiError
+from pr_system_settings.guardrails import GuardrailResult
 from starlette.concurrency import run_in_threadpool
 
 from app.api.errors import AnswerModelNotRegisteredError, DocumentReprocessRequiredError
@@ -27,6 +28,7 @@ from app.config import (
     enterprise_ai_model_catalog,
     enterprise_ai_vision_model_id,
     get_settings,
+    settings_today,
 )
 from app.rag.answer_assumptions import with_answer_assumptions
 from app.rag.answer_engine import AnswerScope
@@ -50,6 +52,7 @@ from app.rag.answer_timeout import (
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
+from app.rag.input_guardrail import check_search_question
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -313,15 +316,23 @@ async def stream_search(
     # 検索・回答プロファイル・KB の解決（404 / 403）は s
     # tream を始める前に行い、HTTP の status で返す。
     #
-    resolved = await _resolve_query_context(request, get_settings())
+    resolved, query_guardrail = await _checked_query_context(request, get_settings())
     return StreamingResponse(
-        _stream_search_events_with_timeout(resolved, run_recorder=_search_run_recorder(request)),
+        _stream_search_events_with_timeout(
+            resolved,
+            query_guardrail=query_guardrail,
+            run_recorder=_search_run_recorder(request),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# 質問の文を使う最初の処理（入力の安全チェック・チャットの補完）。止めた質問は None（#5099）。
+QuestionGate = Callable[[SearchRequest, Settings], Awaitable[SearchRequest | None]]
 
 
 async def _resolve_query_context(
@@ -331,8 +342,13 @@ async def _resolve_query_context(
     guide_context: Sequence[str] = (),
     interactive: bool = False,
     guide_preview: GuidePreview | None = None,
+    question_gate: QuestionGate | None = None,
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
+
+    入口の処理の順（#5099・#5100）: 基準日 → 検索・回答プロファイルの解決（質問の文を使わない）→
+    ``question_gate``（入力の安全チェック・チャットの補完など、質問の文を使う最初の処理）→ 業務
+    ガイドの照合。``question_gate`` が None を返したら（止めた質問）、業務ガイドを照合せずに返す。
 
     解決順は Search Answer Profile > グローバル既定。
     検索・回答プロファイル指定時は参照 KB 群を検索対象へ展開し、その回答の設定を適用する。
@@ -348,6 +364,12 @@ async def _resolve_query_context(
     # 明示した回答のモデルが未登録なら、DB・モデルを使う前に 422 にする（#4582）。
     if explicit_model := _answer_model_id(request):
         ensure_answer_models_registered([explicit_model], global_settings)
+    # 基準日を 1 回の回答の最初に 1 回だけ決める（#2602・#5099）。
+    global_settings = global_settings.model_copy(
+        update={
+            "rag_answer_as_of": global_settings.rag_answer_as_of or settings_today().isoformat()
+        }
+    )
     oracle = OracleClient()
     settings = global_settings
     if request.search_answer_profile_id:
@@ -399,6 +421,18 @@ async def _resolve_query_context(
             runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
                 view.id, RUNTIME_KNOWLEDGE_KIND
             )
+            applied_view = view.id if (applied or kb_ids) else None
+            if question_gate is not None:
+                gated = await question_gate(effective_request, settings)
+                if gated is None:
+                    return effective_request, settings, None, applied_view
+                effective_request = gated
+                request = request.model_copy(
+                    update={
+                        "query": gated.query,
+                        "original_question": gated.original_question,
+                    }
+                )
             if guide_preview is not None:
                 # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
                 settings = settings.model_copy(update={"rag_support_guide_enabled": True})
@@ -536,10 +570,13 @@ async def _resolve_query_context(
                 )
             if runtime_knowledge:
                 settings = settings.model_copy(update={"rag_runtime_knowledge": runtime_knowledge})
-            applied_view = view.id if (applied or kb_ids) else None
             return effective_request, settings, None, applied_view
 
     request = _scope_request_knowledge_bases(request)
+    if question_gate is not None:
+        gated = await question_gate(request, settings)
+        if gated is not None:
+            request = gated
     return request, settings, None, None
 
 
@@ -720,6 +757,30 @@ async def _report_tool_progress(progress: SearchStageProgress) -> None:
 
 
 @capture_trace_bodies
+async def _checked_query_context(
+    request: SearchRequest,
+    global_settings: Settings,
+    *,
+    guide_preview: GuidePreview | None = None,
+) -> tuple[tuple[SearchRequest, Settings, str | None, str | None], GuardrailResult]:
+    """検索の入口の処理（基準日 → プロファイルの解決 → 入力の安全チェック → 業務ガイド）を行う。
+
+    業務ガイドの照合（埋め込み・LLM）は伏せた後の質問で行い、止めた質問は照合しない。止めた結果は
+    回答の工程へ渡し、回答の工程が止めた応答を作る（#5099）。
+    """
+    checked: list[GuardrailResult] = []
+
+    async def gate(gated: SearchRequest, _settings: Settings) -> SearchRequest | None:
+        gated, result = await check_search_question(gated, global_settings)
+        checked.append(result)
+        return gated if result.allowed else None
+
+    resolved = await _resolve_query_context(
+        request, global_settings, guide_preview=guide_preview, question_gate=gate
+    )
+    return resolved, checked[0]
+
+
 async def _run_search_with_timeout(
     request: SearchRequest,
     *,
@@ -741,7 +802,7 @@ async def _run_search_with_timeout(
     rag_retrieve_evidence。根拠の補いは呼び出し元がする。#3506）。RAG 検索の画面は既定の True で、
     チャットと同じ流れで根拠を集めて回答の生成の手前で止める。
     """
-    request, settings, applied_kb, applied_view = await _resolve_query_context(
+    (request, settings, applied_kb, applied_view), query_guardrail = await _checked_query_context(
         request, get_settings(), guide_preview=guide_preview
     )
     started_at = perf_counter()
@@ -775,6 +836,7 @@ async def _run_search_with_timeout(
                 request,
                 trace_id=trace_id,
                 progress_callback=tracker,
+                query_guardrail_result=query_guardrail,
                 trace=trace,
             ),
             settings,
@@ -938,6 +1000,7 @@ async def run_guide_preview(request: SearchRequest, preview: GuidePreview) -> Se
 async def _stream_search_events_with_timeout(
     resolved: tuple[SearchRequest, Settings, str | None, str | None],
     *,
+    query_guardrail: GuardrailResult | None = None,
     run_recorder: RunRecorder | None = None,
 ) -> AsyncIterator[str]:
     """処理の経過を即時 SSE で返しながら検索 pipeline を実行する。
@@ -994,6 +1057,7 @@ async def _stream_search_events_with_timeout(
                     request,
                     trace_id=trace_id,
                     progress_callback=tracker,
+                    query_guardrail_result=query_guardrail,
                     trace=trace,
                 ),
                 settings,

@@ -32,7 +32,7 @@ from pytest import MonkeyPatch
 
 from app.api.routes import chat as chat_route
 from app.clients.oracle import StoredConversation, StoredMessage
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.main import app
 from app.rag import chat_attachments
 from app.rag.chat_attachments import (
@@ -81,6 +81,8 @@ def _upload(service: ChatAttachmentService, name: str, data: str, conversation_i
 
 @pytest.fixture
 def service(monkeypatch: MonkeyPatch) -> Iterator[ChatAttachmentService]:
+    # 送信の準備の補完（#5100）は test_chat_question_context で確かめ、ここでは通さない。
+    monkeypatch.setattr(get_settings(), "rag_history_rewrite_enabled", False)
     created = _service()
     chat_attachments.set_chat_attachment_service(created)
     yield created

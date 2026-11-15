@@ -33,8 +33,9 @@ class RecordingPipeline:
         progress_callback: object | None = None,
         token_callback: object | None = None,
         trace: object | None = None,
+        query_guardrail_result: object | None = None,
     ) -> SearchResponse:
-        _ = progress_callback, token_callback
+        _ = progress_callback, token_callback, query_guardrail_result
         assert trace_id
         # 実 pipeline は adapter を self._settings から解決して diagnostics へ渡す。
         settings = self._settings

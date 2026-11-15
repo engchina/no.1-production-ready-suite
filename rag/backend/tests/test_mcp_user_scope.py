@@ -121,6 +121,8 @@ def auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
         monkeypatch.setattr(settings, name, value)
     monkeypatch.setattr(profile_scope, "OracleClient", lambda *_a, **_k: ScopedViewOracle(VIEWS))
     monkeypatch.setattr(answer_engine, "_today", lambda: TODAY)
+    # 基準日は入口で 1 回だけ決める（#5099）。
+    monkeypatch.setattr(search_route, "settings_today", lambda: TODAY)
     return production
 
 

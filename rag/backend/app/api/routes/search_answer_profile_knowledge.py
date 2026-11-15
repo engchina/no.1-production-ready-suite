@@ -27,6 +27,7 @@ from app.rag.domain_keyword_import import (
     import_keywords,
     read_keyword_excel,
 )
+from app.rag.input_guardrail import check_question_text
 from app.rag.profile_language import profile_language_scope
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
@@ -523,6 +524,11 @@ async def suggest_search_answer_profile_approved_faq(
         view.config.normalized_knowledge_base_ids()
     )
     settings = get_settings()
+    # 質問の文を使う最初の処理として入力の安全チェックを行い、止めた質問は照合しない（#5099）。
+    checked = await check_question_text(request.query, settings)
+    if not checked.allowed:
+        return ApiResponse(data=ApprovedFaqSuggestionsData())
+    request = request.model_copy(update={"query": checked.sanitized_text})
     snapshot = await load_approved_faq_snapshot(oracle, search_answer_profile_id)
     ranking = await rank_approved_faq(
         oracle,
@@ -654,14 +660,20 @@ async def post_clarification_suggest(
     from app.api.routes.chat import _guide_user_context, prepare_chat_question
 
     settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+    # 質問の文を使う最初の処理として入力の安全チェックを行い、止めた質問は補完・照合しない
+    # （#5099）。送信の側も同じ伏せた後の文で補完の token を照合する。
+    checked = await check_question_text(request.query, settings)
+    if not checked.allowed:
+        return ApiResponse(data=ClarificationSuggestionsData())
     with profile_language_scope(settings):
         query, context_token = await prepare_chat_question(
             oracle,
             request.conversation_id,
             search_answer_profile_id,
-            request.query,
+            checked.sanitized_text,
             settings,
             force_token=True,
+            prechecked=checked,
         )
 
         def response(

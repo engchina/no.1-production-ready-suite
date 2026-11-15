@@ -150,6 +150,7 @@ from app.rag.figure_url import (
     FigureUrlUnavailableError,
     issue_figure_token,
 )
+from app.rag.input_guardrail import check_question_text
 from app.rag.profile_language import profile_language_scope
 from app.rag.profile_recommendation import (
     RECOMMEND_LIMIT_DEFAULT,
@@ -4240,6 +4241,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             view, arguments.search_answer_profile_id
         )
         settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+        # 質問の文を使う最初の処理として入力の安全チェックを行い、止めた質問は照合しない（#5099）。
+        checked = await check_question_text(arguments.query, settings)
+        if not checked.allowed:
+            return LookupGuidesOutput(guides=[])
+        arguments = arguments.model_copy(update={"query": checked.sanitized_text})
         with profile_language_scope(settings):
             if not settings.rag_support_guide_enabled:
                 return LookupGuidesOutput(guides=[])
