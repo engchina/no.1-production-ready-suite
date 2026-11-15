@@ -1770,15 +1770,14 @@ const faqSuggestions = [1, 2, 3].map((index) => ({
   question: `経費の上限について ${index}`,
   matched_question: `経費の上限について ${index}`,
   answer: `承認済みの回答 ${index}`,
-  score: 0.8 - index / 100,
-  direct: false,
+  score: 0.95 - index / 100,
 }));
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`近い登録済みQ&Aがあれば、類似問か「どれでもない」を選んでから回答する（#684） (${viewport.name})`, async ({
+  test(`近い登録済みQ&Aがあれば、Q&Aか「どれでもない」を選んでから回答する（#684・#5107） (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1787,7 +1786,22 @@ for (const viewport of [
     await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
       suggestQueries.push(route.request().postDataJSON() as Record<string, unknown>);
       await route.fulfill({
-        json: { data: { suggestions: faqSuggestions }, error_messages: [], warning_messages: [] },
+        json: {
+          data: { suggestions: faqSuggestions, question_context_token: "faq-token" },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+    });
+    const clarifyQueries: Record<string, unknown>[] = [];
+    await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
+      clarifyQueries.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.fulfill({
+        json: {
+          data: { suggestion: null, question_context_token: "faq-token" },
+          error_messages: [],
+          warning_messages: [],
+        },
       });
     });
     const streamBodies: Record<string, unknown>[] = [];
@@ -1803,7 +1817,7 @@ for (const viewport of [
     await composer.fill("経費の上限は？");
     await page.getByRole("button", { name: "送信" }).click();
 
-    // 回答を作る前に、最大 3 件の類似問と「どれでもない」を出す。選ぶまで送らない（飛ばす操作は無い）。
+    // 回答を作る前に、Q&A の候補と「どれでもない」を出す。選ぶまで送らない（飛ばす操作は無い）。
     const choice = page.getByTestId("chat-approved-faq-choice");
     await expect(choice).toContainText("経費の上限は？");
     await expect(choice.getByRole("button", { name: "このQ&Aで回答する" })).toHaveCount(3);
@@ -1811,7 +1825,8 @@ for (const viewport of [
       choice.getByRole("button", { name: "どれでもない（資料を検索する）" })
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
-    expect(suggestQueries).toEqual([{ query: "経費の上限は？", purpose: "chat" }]);
+    // 会話を確定してから照会し、backend が補完した質問で照合する（#5107）。
+    expect(suggestQueries).toEqual([{ query: "経費の上限は？", conversation_id: expect.any(String) }]);
     expect(streamBodies).toEqual([]);
     await expectNoPageOverflow(page);
 
@@ -1821,28 +1836,35 @@ for (const viewport of [
     await expect(choice.getByRole("button", { name: "このQ&Aで回答する" })).toHaveCount(3);
     expect(suggestQueries).toHaveLength(1);
 
-    // 選んだ類似問の id を質問と一緒に送る。
+    // 選んだ Q&A の id を、照会で済ませた補完の token と一緒に送る（確認の照会はしない）。
     await choice.getByRole("listitem").nth(1).getByRole("button").click();
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
     await expect(choice).toHaveCount(0);
-    expect(streamBodies[0]).toMatchObject({ content: "経費の上限は？", approved_faq_id: "faq-2" });
-    expect(streamBodies[0]).not.toHaveProperty("approved_faq_declined");
+    expect(streamBodies[0]).toMatchObject({
+      content: "経費の上限は？",
+      approved_faq_id: "faq-2",
+      question_context_token: "faq-token",
+    });
+    expect(clarifyQueries).toEqual([]);
 
-    // 「どれでもない」は類似問を使わずに送る。
+    // 「どれでもない」は Q&A を使わずに、確認の照会に補完の token を渡してから送る。
     await composer.fill("交通費は？");
     await page.getByRole("button", { name: "送信" }).click();
     await page
       .getByRole("button", { name: "どれでもない（資料を検索する）" })
       .click();
     await expect.poll(() => streamBodies.length).toBe(2);
-    // 候補を断った質問には、Q&A の回答をそのまま返さないよう伝える（#4788）。
-    expect(streamBodies[1]).toMatchObject({ content: "交通費は？", approved_faq_declined: true });
+    expect(clarifyQueries).toEqual([
+      { query: "交通費は？", conversation_id: expect.any(String), question_context_token: "faq-token" },
+    ]);
+    expect(streamBodies[1]).toMatchObject({ content: "交通費は？", question_context_token: "faq-token" });
     expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
+    expect(streamBodies[1]).not.toHaveProperty("approved_faq_declined");
   });
 }
 
-// #4788: 一致度が下限以上の質問は候補を選ばせずに送り、登録済みQ&Aの回答をそのまま返した回答に案内と照合の段を出す。
-test("登録済みQ&Aの回答をそのまま返した回答は、案内と照合の段を出し、候補を選ばせない（#4788）", { tag: "@responsive" }, async ({ page }) => {
+// #5107: 選んだ登録済みQ&Aの回答は原文のまま返り、案内と Q&A の段を出す（自動でそのまま返すことは無い）。
+test("選んだ登録済みQ&Aの回答は、案内と Q&A の段を出す（#5107）", { tag: "@responsive" }, async ({ page }) => {
   const at = (seconds: number) => new Date(Date.parse("2026-01-01T00:00:01Z") + seconds * 1000).toISOString();
   let seq = 0;
   const step = (stepId: string, kind: string, start: number, end: number, details?: Record<string, unknown>) => ({
@@ -1871,11 +1893,10 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
         { label: "結果", value: "書き換えなし（元の質問のまま）" },
       ],
     }),
-    step("s2", "faq_direct_match", 1.2, 1.5, {
+    step("s2", "approved_faq_answer", 1.2, 1.5, {
       fields: [
-        { label: "結果", value: "登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）" },
-        { label: "一致した Q&A", value: faqQuestion },
-        { label: "一致度", value: "1.00（下限 0.92）" },
+        { label: "結果", value: "選んだ登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）" },
+        { label: "選んだ Q&A", value: faqQuestion },
       ],
     }),
     { schema_version: 1, seq: ++seq, target_id: "a1", attempt: 0, emitted_at: at(1.5), type: "terminal", status: "done" },
@@ -1884,12 +1905,13 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
   const answerDiagnostics = {
     answer_source: "approved_faq",
     outcome: "answered",
+    approved_faq_id: "faq-1",
     approved_faq_question: faqQuestion,
     approved_faq_answer: faqAnswer,
-    approved_faq_direct: { faq_id: "faq-1", matched_question: faqQuestion, score: 1, min_score: 0.92, match_method: "text" },
     models: { embedding: "", rerank: "" },
   };
-  const answerText = `${faqAnswer}\n\n（出典: 登録済みQ&A「${faqQuestion}」）`;
+  // 登録された回答を原文のまま返す（出典の行も付けない）。
+  const answerText = faqAnswer;
   const streamBody = [
     sseStart,
     `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: answerText })}\n\n`,
@@ -1901,7 +1923,7 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
     "ready",
     [
       { ...userMessage, content: faqQuestion },
-      { ...assistantMessage, content: answerText, citations: [], progress, approved_faq_direct_score: 1, notice: NOTICE },
+      { ...assistantMessage, content: answerText, citations: [], progress, approved_faq_answer: true, notice: NOTICE },
     ],
     { streamBody },
   );
@@ -1909,7 +1931,14 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
   await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
     suggestQueries.push(route.request().postDataJSON() as Record<string, unknown>);
     await route.fulfill({
-      json: { data: { suggestions: [], direct_answer: true }, error_messages: [], warning_messages: [] },
+      json: {
+        data: {
+          suggestions: [{ id: "faq-1", question: faqQuestion, matched_question: faqQuestion, answer: faqAnswer, score: 0.97 }],
+          question_context_token: "faq-token",
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
     });
   });
   const streamBodies: Record<string, unknown>[] = [];
@@ -1927,66 +1956,73 @@ test("登録済みQ&Aの回答をそのまま返した回答は、案内と照�
     await expect(page.getByRole("dialog", { name: "会話の履歴" })).toHaveCount(0);
   }
 
-  // 保存済みの回答: 本文は登録された回答そのままで、末尾に出典の行。見出しはモデル名ではなく Q&A の回答と示し、
-  // 直下に、検索と生成をしていない案内を出す（色だけにしない: 見出しと文）。処理の経過に照合の段と結果を出す。
+  // 保存済みの回答: 本文は登録された回答そのまま。見出しはモデル名ではなく Q&A の回答と示し、
+  // 直下に、検索と生成をしていない案内を出す（色だけにしない: 見出しと文）。処理の経過に Q&A の段と結果を出す。
   await expect(page.getByText(faqAnswer).first()).toBeVisible();
-  await expect(page.getByRole("region", { name: "回答", exact: true })).toContainText(`出典: 登録済みQ&A「${faqQuestion}」`);
+  await expect(page.getByRole("region", { name: "回答", exact: true })).not.toContainText("出典: 登録済みQ&A");
   await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
   await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
   const notice = page.getByTestId("answer-faq-direct");
   await expect(notice).toContainText("登録済みQ&Aの回答をそのまま表示しています");
   await expect(notice).toContainText(
-    "質問が登録済みQ&Aと一致したため（一致度 100%）、資料の検索と回答の生成はしていません。引用はありません。",
+    "選んだ登録済みQ&Aの回答をそのまま返しました。資料の検索と回答の生成はしていません。引用はありません。",
   );
   const summary = page.getByTestId("chat-answer-progress-summary");
   await expect(summary).toHaveText("処理の経過（2 ステップ・1.5 秒）");
   await summary.click();
-  await expect(page.getByTestId("chat-answer-progress-step-s2")).toContainText("登録済みQ&Aと照合する");
+  await expect(page.getByTestId("chat-answer-progress-step-s2")).toContainText("選んだ登録済みQ&Aの回答を返す");
   await expect(page.getByRole("region", { name: "処理の経過" }).locator("[data-run-result-summary]")).toHaveText([
     "書き換えなし（元の質問のまま）",
-    "登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）",
+    "選んだ登録済みQ&Aの回答をそのまま返しました（検索と回答の生成はしていません）",
   ]);
   // 検索していないので、根拠の一覧（AI に渡した件数）は出ない。
   await expect(page.locator("summary").filter({ hasText: /AI に渡した/ })).toHaveCount(0);
   await expectNoPageOverflow(page);
 
-  // 送信の前の照会が「そのまま返す見込み」を返したら、候補を選ばせずに送る。
+  // 一致度が高くても自動では返さない。候補を選ぶと、その Q&A を指定して送る。
   await page.getByRole("textbox", { name: "質問", exact: true }).fill("合成の設定 A はどこ？");
   await page.getByRole("button", { name: "送信" }).click();
+  const choice = page.getByTestId("chat-approved-faq-choice");
+  await expect(choice.getByRole("button", { name: "このQ&Aで回答する" })).toHaveCount(1);
+  expect(streamBodies).toEqual([]);
+  expect(suggestQueries).toEqual([{ query: "合成の設定 A はどこ？", conversation_id: expect.any(String) }]);
+  await choice.getByRole("button", { name: "このQ&Aで回答する" }).click();
   await expect.poll(() => streamBodies.length).toBe(1);
-  await expect(page.getByTestId("chat-approved-faq-choice")).toHaveCount(0);
-  expect(suggestQueries).toEqual([{ query: "合成の設定 A はどこ？", purpose: "chat" }]);
+  await expect(choice).toHaveCount(0);
   // 届いた回答にも、同じ見出しと案内を出す（配信の診断から読む）。
   await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true }).last()).toBeVisible();
   await expect(page.getByTestId("answer-faq-direct").last()).toBeVisible();
   await expect(page.getByRole("heading", { name: /^回答モデル/ })).toHaveCount(0);
   await expect(page.getByText("この回答は AI が生成したものです。", { exact: false })).toHaveCount(0);
   await expectNoPageOverflow(page);
-  expect(streamBodies[0]).toMatchObject({ content: "合成の設定 A はどこ？" });
-  expect(streamBodies[0]).not.toHaveProperty("approved_faq_id");
-  expect(streamBodies[0]).not.toHaveProperty("approved_faq_declined");
+  expect(streamBodies[0]).toMatchObject({
+    content: "合成の設定 A はどこ？",
+    approved_faq_id: "faq-1",
+    question_context_token: "faq-token",
+  });
 });
 
 
-// #737: 登録済みQ&Aから回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。
+// #737・#5107: 登録済みQ&Aの回答は原文のまま返り、見出しで Q&A の回答と示す（根拠の構成は出さない）。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`登録済みQ&Aの回答では、FAQ の質問と承認済みの回答の原文を出典に出す (${viewport.name})`, async ({
+  test(`登録済みQ&Aの回答は原文のまま出し、見出しで示す (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const answerDiagnostics = {
       answer_source: "approved_faq",
+      approved_faq_id: "faq-1",
       approved_faq_question: "経費精算の上限はいくらですか？",
       approved_faq_answer: "1 回の申請の上限は 10 万円です。\n超える場合は部長の承認が必要です。",
       models: { llm: { model_id: "m1", label: "MODEL 1" }, attached_images: 0, embedding: "", rerank: "" },
     };
     const streamBody = [
       sseStart,
-      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は 10 万円です。\n\n（出典: 登録済みQ&A「経費精算の上限はいくらですか？」）" })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "1 回の申請の上限は 10 万円です。\n超える場合は部長の承認が必要です。" })}\n\n`,
       `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
       `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
     ].join("");
@@ -2002,7 +2038,8 @@ for (const viewport of [
     await expect(panel.getByText("登録済みQ&Aから回答")).toHaveCount(0);
     await expect(panel.getByRole("region", { name: "回答の出典: 登録済みQ&A" })).toHaveCount(0);
     await expect(panel.locator("[data-process-identifier]")).toHaveCount(3);
-    await expect(page.getByRole("region", {name: "回答", exact: true})).toContainText("出典: 登録済みQ&A");
+    await expect(page.getByRole("region", {name: "回答", exact: true})).toContainText("1 回の申請の上限は 10 万円です。");
+    await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答", exact: true })).toBeVisible();
     // 文書を検索していないので、空の「根拠の構成」は出さない。
     await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
     await expectNoPageOverflow(page);
@@ -2387,8 +2424,16 @@ for (const viewport of [
 // 別の会話・検索・回答プロファイルへ移ったら前の送信を打ち切り、「送信」に戻す（移った先で送れなくしない）。
 test("類似問の照会中に別の会話を選んでも、送信中のまま残らず送信できる", async ({ page }) => {
   await mockChat(page, "ready", [userMessage, assistantMessage]);
-  // 類似問の照会は中止できないので、応答しないまま別の会話へ移る。
+  // 類似問の照会は中止できないので、応答しないまま別の会話へ移る。照会の前に送信の会話を作る（#5107）。
   await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", () => new Promise<void>(() => undefined));
+  const created = { ...conversationDetail([], null), id: "conv-new" };
+  await page.route("**/api/chat/conversations", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await route.fulfill({ json: { data: created, error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/chat/conversations/conv-new", (route) =>
+    route.fulfill({ json: { data: created, error_messages: [], warning_messages: [] } })
+  );
 
   await page.goto("/chat");
   await selectSearchAnswerProfile(page, "経理アシスタント");

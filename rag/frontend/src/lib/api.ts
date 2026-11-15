@@ -1514,6 +1514,8 @@ export interface SearchRequestBody {
   generate_answer?: boolean;
   /** 回答のモデル（既定のテキストモデルか既定の Vision モデル。未指定はテキスト。#675）。 */
   model_id?: string;
+  /** 利用者が選んだ登録済みQ&A の id。付けると検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
+  approved_faq_id?: string;
 }
 
 export interface RetrievedChunk {
@@ -1567,8 +1569,8 @@ export interface ChatMessage {
    * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
    */
   answer_attached_images?: number;
-  /** 登録済みQ&A の回答をそのまま返した回答の一致度（それ以外の回答は null / 未指定。#4788）。 */
-  approved_faq_direct_score?: number | null;
+  /** 利用者が選んだ登録済みQ&A の回答をそのまま返した ASSISTANT の回答か（#5107）。 */
+  approved_faq_answer?: boolean;
 }
 
 export interface ConversationSummary {
@@ -1603,10 +1605,8 @@ export interface ChatMessageRequestBody {
   question_context_token?: string;
   model_ids?: string[];
   top_k?: number;
-  /** 利用者が選んだ類似の承認済み FAQ の id。質問と一緒に LLM へ渡す（#684）。 */
+  /** 利用者が選んだ登録済みQ&A の id。検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
   approved_faq_id?: string;
-  /** 利用者が類似問の候補を「どれでもない」と断った質問（FAQ の回答をそのまま返さない。#4788）。 */
-  approved_faq_declined?: boolean;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
   clarification?: GuideConditionAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
@@ -3980,25 +3980,11 @@ export const api = {
     body: {
       question: string;
       answer: string;
-      target_knowledge_base_ids: string[];
-      negative_questions?: string[];
     },
   ) =>
     request<ApprovedFaqMutationData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
       jsonBody(body),
-    ),
-  /** FAQ の対象の KB と根拠を確かめ直し、承認者と時刻を記録する（要確認からの復帰。#4621）。 */
-  confirmApprovedFaq: (id: string, faqId: string, targetKnowledgeBaseIds: string[]) =>
-    request<ApprovedFaqListData>(
-      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/${encodeURIComponent(faqId)}/confirm`,
-      jsonBody({ target_knowledge_base_ids: targetKnowledgeBaseIds }),
-    ),
-  /** FAQ の否定の質問（この FAQ を当てたくない質問の例）を置き換える（#4788）。 */
-  setApprovedFaqNegativeQuestions: (id: string, faqId: string, negativeQuestions: string[]) =>
-    request<ApprovedFaqListData>(
-      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/${encodeURIComponent(faqId)}/negative-questions`,
-      { ...jsonBody({ negative_questions: negativeQuestions }), method: "PUT" },
     ),
   deleteApprovedFaq: (id: string, ids: string[]) =>
     request<ApprovedFaqMutationData>(
@@ -4013,53 +3999,52 @@ export const api = {
       { method: "POST", body: form },
     );
   },
-  importApprovedFaq: (
-    id: string,
-    file: File,
-    mode: ApprovedFaqImportMode,
-    targetKnowledgeBaseIds: string[],
-  ) => {
+  importApprovedFaq: (id: string, file: File, mode: ApprovedFaqImportMode) => {
     const form = new FormData();
     form.append("file", file);
     form.append("mode", mode);
-    for (const knowledgeBaseId of targetKnowledgeBaseIds) {
-      form.append("target_knowledge_base_ids", knowledgeBaseId);
-    }
     return request<ApprovedFaqMutationData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/import`,
       { method: "POST", body: form },
     );
   },
+  /** 登録済みQ&A の Excel 取込のテンプレート（QUESTION・ANSWER の 2 列だけ。#5107）。 */
+  downloadApprovedFaqTemplate: (id: string) =>
+    requestFile(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/import/template`,
+      "approved_faq_template.xlsx",
+    ),
   /**
-   * purpose="chat" はチャットの提示（一致度の下限が高く、最大 3 件。#684）。
+   * 質問に近い登録済みQ&A（一致度の下限以上・最大件数は backend が決める）。`conversationId`（チャット）を渡すと、
+   * backend が補完した質問で照合し、補完の token を返す（確認の照会・送信に渡すと補完を呼び直さない。#5107）。
    * `signal` は RAG 検索の「停止」で照会を止めるのに使う（#915）。
    */
   suggestApprovedFaq: (
     id: string,
     query: string,
-    purpose: "search" | "chat" = "search",
+    conversationId?: string | null,
     signal?: AbortSignal,
   ) =>
     request<ApprovedFaqSuggestionsData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/suggest`,
-      { ...jsonBody({ query, purpose }), signal },
+      { ...jsonBody({ query, ...(conversationId ? { conversation_id: conversationId } : {}) }), signal },
     ),
-  /** `approvedFaqDeclined` は、利用者が類似問の候補を「どれでもない」と断った質問（#4788）。 */
+  /** `questionContextToken` は Q&A の照会で済ませた補完の token（補完を呼び直さない。#5107）。 */
   suggestClarification: (
     id: string,
     query: string,
     conversationId?: string | null,
-    approvedFaqDeclined = false,
+    questionContextToken?: string | null,
   ) =>
     request<{ suggestion: ClarificationSuggestionData | null; question_context_token?: string | null }>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/clarifications/suggest`,
       jsonBody({
         query,
         ...(conversationId ? { conversation_id: conversationId } : {}),
-        ...(approvedFaqDeclined ? { approved_faq_declined: true } : {}),
+        ...(questionContextToken ? { question_context_token: questionContextToken } : {}),
       }),
     ),
-  /** プロファイルごとの FAQ の設定を保存する（送った項目だけを変える。#684・#4788）。 */
+  /** プロファイルごとの Q&A の設定（回答の前に提示するか）を保存する（#684）。 */
   setApprovedFaqSettings: (id: string, settings: ApprovedFaqSettingsUpdate) =>
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/settings`,
@@ -4710,56 +4695,27 @@ export interface DomainKeywordImportData extends DomainKeywordsData {
 // --- 検索・回答プロファイルの知識: Approved FAQ(類似問) ---
 export type ApprovedFaqImportMode = "INSERT" | "DELETE_THEN_INSERT";
 
-/** 停止（要確認）の理由（#4621）。 */
-export type ApprovedFaqReviewReason =
-  | "no_target_knowledge_bases"
-  | "knowledge_base_removed"
-  | "source_document_missing";
-
+/** 登録済みQ&A 1 件（質問と回答だけ。#5107）。 */
 export interface ApprovedFaqRecordData {
   id: string;
   question: string;
   answer: string;
-  alternate_questions: string[];
-  /** 否定の質問（この FAQ を当てたくない質問の例。当たったら候補から外す。#4788）。 */
-  negative_questions: string[];
-  status: string;
-  /** FAQ を使える範囲（この KB をすべて使える利用者だけに提示・回答で使う。#4621）。 */
-  target_knowledge_base_ids: string[];
-  /** 回答の根拠にした文書。 */
-  source_document_ids: string[];
-  /** 承認（保存・確かめ直し）した利用者の表示名と時刻。引けない利用者は null。 */
-  approved_by: string | null;
-  approved_at: string | null;
-  /** 空でなければ停止中（要確認）。 */
-  review_reasons: ApprovedFaqReviewReason[];
-  /** 引用した文書が承認の後に新しい版になった（使い続ける）。 */
-  source_updated: boolean;
-}
-
-/** 対象の KB の選択肢・表示名（in_profile=false はプロファイルから外れた KB）。 */
-export interface ApprovedFaqKnowledgeBaseData {
-  id: string;
-  name: string;
-  in_profile: boolean;
 }
 
 export interface ApprovedFaqListData {
   search_answer_profile_id: string;
   records: ApprovedFaqRecordData[];
-  /** 回答の前に類似問を提示するか（検索・回答プロファイルごと。未設定はオン。#684）。 */
+  /** 回答の前に関連するQ&A を提示するか（検索・回答プロファイルごと。未設定はオン。#684）。 */
   enabled: boolean;
-  /** 一致度が下限以上のとき、チャットで FAQ の回答をそのまま返すか（未設定はオフ。#4788）。 */
-  direct_answer_enabled: boolean;
-  /** そのまま返す一致度の下限（全体設定の値。説明に出す）。 */
-  direct_answer_min_score: number;
-  knowledge_bases: ApprovedFaqKnowledgeBaseData[];
+  /** 候補に出す一致度の下限（0〜1。`.env` の RAG_APPROVED_FAQ_MIN_SCORE。説明に出す）。 */
+  min_score: number;
+  /** 候補の最大件数（`.env` の RAG_APPROVED_FAQ_MAX_SUGGESTIONS。説明に出す）。 */
+  max_suggestions: number;
 }
 
-/** FAQ の設定の変更（送った項目だけを変える）。 */
+/** Q&A の設定の変更。 */
 export interface ApprovedFaqSettingsUpdate {
-  enabled?: boolean;
-  direct_answer_enabled?: boolean;
+  enabled: boolean;
 }
 
 export interface ApprovedFaqMutationData extends ApprovedFaqListData {
@@ -4769,7 +4725,7 @@ export interface ApprovedFaqMutationData extends ApprovedFaqListData {
 
 export interface ApprovedFaqImportPreviewData {
   total: number;
-  rows: { question: string; answer: string; row: number; negative_questions?: string[] }[];
+  rows: { question: string; answer: string; row: number }[];
 }
 
 /** 文書の章節（章節ナビゲーション。#713）。並び順 + 階層（1〜6）で木を表す。 */
@@ -4865,13 +4821,12 @@ export interface ApprovedFaqSuggestionData {
   matched_question: string;
   answer: string;
   score: number;
-  direct: boolean;
 }
 
 export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
-  /** チャットで、送信の後に FAQ の回答をそのまま返す見込み（候補を出さずに送る。#4788）。 */
-  direct_answer?: boolean;
+  /** `conversation_id` を渡した照会で backend が済ませた補完の token（使える Q&A が無ければ null。#5107）。 */
+  question_context_token?: string | null;
 }
 
 // --- 検索・回答プロファイルの知識: 用語・同義語(runtime knowledge) ---

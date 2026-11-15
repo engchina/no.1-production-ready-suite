@@ -43,23 +43,13 @@ const faqSuggestion = {
   matched_question: "受注を取り消すには？",
   answer: "受注一覧で取消ボタンを押します。",
   score: 0.97,
-  direct: true,
 };
 
-// 登録済みQ&A の一覧の 1 件（対象と根拠の状態は #4621）。
+// 登録済みQ&A の一覧の 1 件（質問と回答だけ。#5107）。
 const faqRecord = {
   id: "faq-1",
   question: faqSuggestion.question,
   answer: faqSuggestion.answer,
-  alternate_questions: [],
-  negative_questions: [],
-  status: "approved",
-  target_knowledge_base_ids: ["kb-1"],
-  source_document_ids: [],
-  approved_by: null,
-  approved_at: null,
-  review_reasons: [],
-  source_updated: false,
 };
 
 async function mockCommon(page: Page) {
@@ -92,7 +82,8 @@ async function mockSearchAnswerProfileApi(
           search_answer_profile_id: "bv-1",
           records: [faqRecord],
           enabled: true,
-          knowledge_bases: [{ id: "kb-1", name: "受注マニュアル", in_profile: true }],
+          min_score: 0.92,
+          max_suggestions: 3,
         }),
       });
     }
@@ -233,22 +224,34 @@ test("質問履歴の候補を取得せず、質問欄から検索できる", as
   expect(candidateRequests).toEqual([]);
   await expectNoPageOverflow(page);
 });
-test("類似する登録済みQ&Aを提示し、FAQ の回答を LLM なしで表示する", async ({ page }) => {
+test("類似する登録済みQ&Aを提示し、選んだ Q&A を付けて検索すると回答を原文のまま表示する（#5107）", async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
-  let streamed = false;
+  const bodies: Record<string, unknown>[] = [];
   await page.route("**/api/search/stream", (route) => {
-    streamed = true;
-    return route.fulfill({ status: 500 });
+    bodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    const events = [
+      ["metadata", { trace_id: "faq-run", elapsed_ms: 3, guardrail_warnings: [], diagnostics: { answer: { answer_source: "approved_faq", approved_faq_id: faqSuggestion.id, approved_faq_question: faqSuggestion.question, approved_faq_answer: faqSuggestion.answer } } }],
+      ["delta", { text: faqSuggestion.answer }],
+      ["citations", []],
+      ["done", { trace_id: "faq-run" }],
+    ] as const;
+    return route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(""),
+    });
   });
 
   await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
 
   await expect(page.getByRole("heading", { name: "質問に近い登録済みQ&Aがあります" })).toBeVisible();
+  expect(bodies).toHaveLength(0);
   await page.getByRole("button", { name: "このQ&Aで回答する" }).click();
-  await expect(page.getByRole("heading", { name: "登録済みQ&Aの回答" })).toBeVisible();
-  await expect(page.getByText(faqSuggestion.answer)).toBeVisible();
-  expect(streamed).toBe(false);
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toMatchObject({ query: "受注を取り消すには？", approved_faq_id: faqSuggestion.id });
+  await expect(page.getByText(faqSuggestion.answer, { exact: true })).toBeVisible();
+  await expect(page.getByTestId("answer-faq-direct")).toBeVisible();
 });
 
 test("類似問を使わない場合は回答と根拠パネルを表示する", { tag: "@responsive" }, async ({ page }) => {
@@ -432,7 +435,8 @@ test("検索・回答プロファイルごとに類似問の提示をオン / �
         search_answer_profile_id: "bv-1",
         records: [faqRecord],
         enabled: body.enabled,
-        knowledge_bases: [{ id: "kb-1", name: "受注マニュアル", in_profile: true }],
+        min_score: 0.92,
+        max_suggestions: 3,
       }),
     });
   });

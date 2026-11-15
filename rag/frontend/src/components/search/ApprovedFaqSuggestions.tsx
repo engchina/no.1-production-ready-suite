@@ -14,9 +14,9 @@ import type { ApprovedFaqSuggestionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /**
- * 回答前に提示する類似の承認済み FAQ。
- * RAG 検索（search）は選ぶと LLM を使わず FAQ の回答を表示する。チャット（chat）は選んだ類似問を質問と
- * 一緒に LLM へ渡して回答する（#684）。どちらも「類似問を使わない」以外に飛ばす操作は無い。
+ * 回答の前に提示する、質問に近い登録済みQ&A（一致度の下限以上・最大件数は backend が絞る）。
+ * RAG 検索（search）もチャット（chat）も、選ぶと資料の検索と回答の生成をせず、Q&A の回答をそのまま返す（#5107）。
+ * 「どれでもない」は Q&A を使わずに資料を検索して回答する。
  */
 export function ApprovedFaqSuggestions({
   suggestions,
@@ -55,7 +55,7 @@ export function ApprovedFaqSuggestions({
                   {suggestion.answer}
                 </p>
                 <StatusBadge
-                  variant={suggestion.direct ? "success" : "neutral"}
+                  variant="neutral"
                   label={t(`${mode}.faq.score`, {
                     value: Math.round(suggestion.score * 100),
                   })}
@@ -63,7 +63,7 @@ export function ApprovedFaqSuggestions({
               </div>
               <Button
                 size="sm"
-                variant={suggestion.direct ? "primary" : "secondary"}
+                variant="secondary"
                 className="shrink-0"
                 disabled={disabled}
                 onClick={() => onUse(suggestion)}
@@ -82,33 +82,6 @@ export function ApprovedFaqSuggestions({
         >
           {t(`${mode}.faq.skip`)}
         </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-/** 選んだ承認済み FAQ の回答(LLM 不使用)。 */
-export function ApprovedFaqAnswer({
-  suggestion,
-}: {
-  suggestion: ApprovedFaqSuggestionData;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <BookCheck size={16} className="text-accent-fg" aria-hidden />
-          {t("search.faq.answerTitle")}
-        </CardTitle>
-        <CardDescription>{t("search.faq.answerDescription")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <p className="break-words text-xs text-fg-muted">
-          {t("search.faq.matched", { question: suggestion.question })}
-        </p>
-        <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
-          {suggestion.answer}
-        </p>
       </CardContent>
     </Card>
   );

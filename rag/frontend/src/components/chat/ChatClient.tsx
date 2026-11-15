@@ -86,7 +86,7 @@ import {
   type ChatStreamHandlers,
 } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
-import { answerAttachedImages, answerFaqDirectScore, answerModelHeading, unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { answerAttachedImages, answerFromApprovedFaq, answerModelHeading, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
@@ -194,9 +194,8 @@ type ColumnFailureDetail = Pick<ChatAnswerFailureInfo, "errorType" | "errorCode"
 interface DeliverRequest {
   content: string;
   questionContextToken?: string;
+  /** 選んだ登録済みQ&A。backend は検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
   approvedFaqId?: string;
-  /** 類似問の候補を「どれでもない」と断った質問（Q&A の回答をそのまま返さない。#4788）。 */
-  approvedFaqDeclined?: boolean;
   clarification?: GuideConditionAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
   skippedGuideConditionId?: string;
@@ -377,7 +376,7 @@ function AssistantColumn({
   // 回答は列のモデルだけで作る（#3444）。そのモデルへ根拠の画像を添付した回答は、見出しにそのことを添える。
   const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
   // 登録済みQ&A の回答をそのまま返した回答は、モデルが作っていないので見出しをモデル名にしない（#4788）。
-  const faqDirect = finished && answerFaqDirectScore(answerDiagnostics, passageSource) !== null;
+  const faqDirect = finished && answerFromApprovedFaq(answerDiagnostics, passageSource);
   const heading = faqDirect ? t("chat.column.faqDirect") : answerModelHeading(label, attachedImages);
   const listId = useId();
   const answerBody = (
@@ -1103,8 +1102,9 @@ export function ChatClient() {
   /**
    * 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。
    * 送った質問は、類似問・確認の照会や会話の作成を待たずにすぐ会話の欄へ出し、入力欄を空にする（#907）。
-   * 検索・回答プロファイルの類似問の提示がオンで近い承認済み FAQ があれば、回答を作る前に最大 3 件と「どれでもない」を
-   * 出し、どれかを選ぶまで送らない（#684）。照会に失敗したときは類似問を使わずに送る。
+   * 検索・回答プロファイルの Q&A の提示がオンで、補完した質問に近い登録済みQ&A があれば、回答を作る前に候補と
+   * 「どれでもない」を出し、どれかを選ぶまで送らない（#684・#5107）。Q&A の照会は会話を確定してから行い、backend が
+   * 済ませた補完の token を確認の照会と送信に渡す（補完を呼び直さない）。照会に失敗したときは Q&A を使わずに送る。
    */
   async function send(retryContent?: string) {
     const content = (retryContent ?? composer).trim();
@@ -1132,39 +1132,62 @@ export function ChatClient() {
     setLiveTurn(newLiveTurn({ content }));
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();
+    // Q&A の照会は会話の履歴で補完した質問で行うので、先に会話を確定する（#5107）。
+    const conversationId = await ensureConversation(controller);
+    if (!conversationId || controller.signal.aborted) return;
     let suggestions: ApprovedFaqSuggestionData[] = [];
+    let questionContextToken: string | undefined;
     try {
-      suggestions = (await api.suggestApprovedFaq(searchAnswerProfileId, content, "chat")).suggestions ?? [];
+      const found = await api.suggestApprovedFaq(searchAnswerProfileId, content, conversationId);
+      suggestions = found.suggestions ?? [];
+      questionContextToken = found.question_context_token ?? undefined;
     } catch {
-      // 類似問は補助。照会できなくても回答は作る。
+      // Q&A は補助。照会できなくても回答は作る。
     }
     if (controller.signal.aborted) return;
     if (suggestions.length > 0) {
-      // 選ぶまで送らない。質問は類似問の選択と一緒に同じ位置へ出す。
+      // 選ぶまで送らない。質問は Q&A の選択と一緒に同じ位置へ出す。
       setLiveTurn(null);
-      setFaqChoice({ content, retryContent, suggestions });
+      setFaqChoice({ content, retryContent, suggestions, questionContextToken });
       releaseController(controller);
       return;
     }
-    await clarifyOrDeliver(content, controller);
+    await clarifyOrDeliver(content, controller, undefined, questionContextToken);
   }
 
-  /** 類似問の選択を確定して送る（`faqId` が無ければ「どれでもない」）。 */
+  /** Q&A の選択を確定して送る（`faqId` が無ければ「どれでもない」）。 */
   function chooseFaq(faqId?: string) {
     if (!faqChoice) return;
-    const { content, retryContent } = faqChoice;
+    const { content, retryContent, questionContextToken } = faqChoice;
     setFaqChoice(null);
     setSending(true);
-    // 類似問を選ぶと資料を検索しないので、確認の質問は「どれでもない」のときだけ出す（#717）。
+    // Q&A を選ぶと backend は Q&A の回答をそのまま返す（資料を検索しない）ので、確認の質問は「どれでもない」の
+    // ときだけ出す（#717・#5107）。
     if (faqId) {
-      void deliver({ content, approvedFaqId: faqId });
+      void deliver({ content, approvedFaqId: faqId, questionContextToken });
       return;
     }
     const controller = new AbortController();
     abortRef.current = controller;
     setLiveTurn(newLiveTurn({ content }));
-    // 候補を断った質問には、Q&A の回答をそのまま返さない（資料を検索して回答する。#4788）。
-    void clarifyOrDeliver(content, controller, retryContent, true);
+    void clarifyOrDeliver(content, controller, retryContent, questionContextToken);
+  }
+
+  /** 会話を確定する。作れなかったときは送った質問を失敗にして null（#907）。 */
+  async function ensureConversation(controller: AbortController): Promise<string | null> {
+    try {
+      return await conversationForSend(controller);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setLiveTurn((current) => current ? {
+          ...current,
+          pending: withOptimisticChatStatus(current.pending, "failed"),
+          failureMessage: error instanceof ApiError ? error.message : t("chat.error.send"),
+        } : current);
+        releaseController(controller);
+      }
+      return null;
+    }
   }
 
   /** 確認と正式送信が同じ会話を使うよう、文脈の準備より前に会話を確定する。 */
@@ -1182,64 +1205,51 @@ export function ChatClient() {
 
   /**
    * 質問が検索・回答プロファイルのルールの確認に当たれば、回答の前に確認の質問を出す（#717）。1 つの質問で聞き返すのは
-   * 1 回だけ。照会に失敗したときは確認を使わずに送る。
+   * 1 回だけ。照会に失敗したときは確認を使わずに送る。`preparedToken` は Q&A の照会で済ませた補完の token（#5107）。
    */
   async function clarifyOrDeliver(
     content: string,
     controller: AbortController,
     retryContent?: string,
-    approvedFaqDeclined = false,
+    preparedToken?: string,
   ) {
     if (!searchAnswerProfileId) return;
-    let conversationId: string | null;
-    try {
-      conversationId = await conversationForSend(controller);
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setLiveTurn((current) => current ? {
-          ...current,
-          pending: withOptimisticChatStatus(current.pending, "failed"),
-          failureMessage: error instanceof ApiError ? error.message : t("chat.error.send"),
-        } : current);
-        releaseController(controller);
-      }
-      return;
-    }
+    const conversationId = await ensureConversation(controller);
     if (!conversationId || controller.signal.aborted) return;
     let suggestion: ClarificationSuggestionData | null = null;
-    let questionContextToken: string | undefined;
+    let questionContextToken = preparedToken;
     try {
       const prepared = await api.suggestClarification(
         searchAnswerProfileId,
         content,
         conversationId,
-        approvedFaqDeclined,
+        preparedToken,
       );
       suggestion = prepared.suggestion ?? null;
-      questionContextToken = prepared.question_context_token ?? undefined;
+      questionContextToken = prepared.question_context_token ?? preparedToken;
     } catch {
       // 確認は補助。照会できなくても回答は作る。
     }
     if (controller.signal.aborted) return;
     if (suggestion) {
       setLiveTurn(null);
-      setClarifyChoice({ content, retryContent, suggestion, questionContextToken, approvedFaqDeclined });
+      setClarifyChoice({ content, retryContent, suggestion, questionContextToken });
       releaseController(controller);
       return;
     }
-    await deliver({ content, questionContextToken, approvedFaqDeclined }, controller);
+    await deliver({ content, questionContextToken }, controller);
   }
 
   /** 確認の答えを確定して送る（`answer` が無ければ「確認せずに回答」。前提を示して回答する。#1839）。 */
   function chooseClarification(answer?: GuideConditionAnswer) {
     if (!clarifyChoice) return;
-    const { content, suggestion, questionContextToken, approvedFaqDeclined } = clarifyChoice;
+    const { content, suggestion, questionContextToken } = clarifyChoice;
     setClarifyChoice(null);
     setSending(true);
     void deliver(
       answer
-        ? { content, clarification: answer, questionContextToken, approvedFaqDeclined }
-        : { content, skippedGuideConditionId: suggestion.guide_condition_id, questionContextToken, approvedFaqDeclined }
+        ? { content, clarification: answer, questionContextToken }
+        : { content, skippedGuideConditionId: suggestion.guide_condition_id, questionContextToken }
     );
   }
 
@@ -1265,7 +1275,6 @@ export function ChatClient() {
     const {
       content,
       approvedFaqId,
-      approvedFaqDeclined,
       clarification,
       skippedGuideConditionId,
       questionContextToken,
@@ -1393,7 +1402,6 @@ export function ChatClient() {
         client_message_id: clientMessageId,
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
-        ...(approvedFaqDeclined ? { approved_faq_declined: true } : {}),
         ...(clarification ? { clarification } : {}),
         ...(skippedGuideConditionId
           ? { skipped_guide_condition_id: skippedGuideConditionId }
@@ -1924,6 +1932,8 @@ interface FaqChoice {
   content: string;
   retryContent?: string;
   suggestions: ApprovedFaqSuggestionData[];
+  /** Q&A の照会で backend が済ませた補完の token（確認の照会・送信に渡す。#5107）。 */
+  questionContextToken?: string;
 }
 
 /** 保存した類似問の選択待ちが今の形か（古い版・壊れた値は捨てる。#702）。 */
@@ -1934,6 +1944,7 @@ function isFaqChoice(value: unknown): value is FaqChoice | null {
   return (
     typeof choice.content === "string" &&
     (choice.retryContent === undefined || typeof choice.retryContent === "string") &&
+    (choice.questionContextToken === undefined || typeof choice.questionContextToken === "string") &&
     Array.isArray(choice.suggestions) &&
     choice.suggestions.every(
       (item) =>
@@ -1952,8 +1963,6 @@ interface ClarifyChoice {
   questionContextToken?: string;
   retryContent?: string;
   suggestion: ClarificationSuggestionData;
-  /** この質問の類似問の候補を「どれでもない」と断ったか（#4788）。 */
-  approvedFaqDeclined?: boolean;
 }
 
 /** 保存した確認の選択待ちが今の形か（古い版・壊れた値は捨てる。#717）。 */
@@ -1965,7 +1974,7 @@ function isClarifyChoice(value: unknown): value is ClarifyChoice | null {
   return (
     typeof choice.content === "string" &&
     (choice.retryContent === undefined || typeof choice.retryContent === "string") &&
-    (choice.approvedFaqDeclined === undefined || typeof choice.approvedFaqDeclined === "boolean") &&
+    (choice.questionContextToken === undefined || typeof choice.questionContextToken === "string") &&
     typeof suggestion === "object" &&
     suggestion !== null &&
     typeof suggestion.guide_condition_id === "string" &&
