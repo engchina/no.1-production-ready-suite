@@ -39,7 +39,7 @@ class _ContractInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class RagSearchIn(_ContractInput):
+class _RagScopeIn(_ContractInput):
     query: str
     search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] | None = None
@@ -50,17 +50,17 @@ class RagSearchIn(_ContractInput):
     include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
-    # 利用者の元の質問（条の選択に使う。#2261）。
+
+
+class RagSearchIn(_RagScopeIn):
+    # 利用者の元の質問（回答の要求の単位に使う。#2261）。
     original_question: str | None = None
 
 
-class RagRetrieveEvidenceIn(RagSearchIn):
-    # 根拠の収集は検索する件数（top_k の既定 30）と同じ件数を既定で返す（#1365）。
+class RagRetrieveEvidenceIn(_RagScopeIn):
+    # 1 回の呼び出しは 1 つの質問（#5125）。根拠の収集は検索する件数（top_k の既定 30）と同じ件数を
+    # 既定で返す（#1365）。
     evidence_limit: int = Field(default=30, ge=1, le=50)
-    # 検索文を作る主体と、呼び出し元の検索文・追跡 ID（#2651）。
-    planning: Literal["rag", "caller"] = "rag"
-    queries: list[str] = Field(default_factory=list, max_length=5)
-    request_id: str | None = Field(default=None, max_length=128)
 
 
 class RagLookupGuidesIn(_ContractInput):

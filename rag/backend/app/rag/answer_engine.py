@@ -698,20 +698,14 @@ class AnswerEngine:
         entity_store: EntityExpansionStore | None = None,
         graph_store: GraphExpansionStore | None = None,
         attachment_chunks: Sequence[RetrievedChunk] = (),
-        caller_queries: Sequence[str] | None = None,
         degraded: DegradedSteps | None = None,
         complete_evidence: bool = True,
     ) -> None:
         # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し）までするか
-        # （#3506）。False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いは Agent が
-        # MCP でする）。
+        # （#3506）。False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いと図の
+        # 画像は Agent が MCP で読む）。
         # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
         self._complete_evidence = complete_evidence
-        # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
-        # 根拠の
-        # 画像の切り出しを設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
-        # hybrid search・rerank・親子と前後の文脈・交差参照・実体の拡張）は通常の検索と同じ。
-        self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         if not settings.rag_support_guide_enabled:
             settings = settings.model_copy(update={"rag_support_guide": {}})
         self._settings = settings
@@ -728,8 +722,8 @@ class AnswerEngine:
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
         self._answer_model_id = answer_model_id or None
         # 回答のモデルが画像を読めるなら、根拠の chunk の画像を切り出して回答の入力に添付する
-        # (#3444)。回答を作らない検索(呼び出し元の検索文)は切り出さない。
-        self._attach_images = self._caller_queries is None and answer_model_reads_images(
+        # (#3444)。業務 Agent の根拠の取得(complete_evidence=False)は切り出さない(#5125)。
+        self._attach_images = complete_evidence and answer_model_reads_images(
             settings, self._answer_model_id or enterprise_ai_default_model_id(settings)
         )
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
@@ -1024,9 +1018,8 @@ class AnswerEngine:
                     else None
                 ),
                 guide_plan=guide_step_plan(self._settings.rag_support_guide),
-                caller_queries=self._caller_queries,
-                # 呼び出し元が検索文を言い換えたときの元の質問(#2665)。回答の要求の単位・要求ごとの
-                # 根拠の確認・回答の生成と検査に使い、検索は request.query で行う。
+                # rag_search の呼び出し元が検索文を言い換えたときの元の質問(#2665)。回答の要求の
+                # 単位・要求ごとの根拠の確認・回答の生成と検査に使い、検索は request.query で行う。
                 request_question=request.original_question,
             )
 

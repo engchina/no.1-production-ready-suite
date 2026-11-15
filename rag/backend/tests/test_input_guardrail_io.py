@@ -107,29 +107,3 @@ async def test_query_guardrail_actual_io(
         assert call.visibility == "system_admin"
     else:
         assert call.input.text == call.output.text == ""
-
-
-async def test_caller_queries_keep_actual_checks_and_filtering() -> None:
-    seen: list[str] = []
-
-    class Policy:
-        def validate_query(self, question: str) -> GuardrailResult:
-            seen.append(question)
-            return GuardrailResult(
-                allowed=question != "合成の拒否",
-                sanitized_text="合成のマスク後" if question != "合成の拒否" else "停止",
-                findings=[],
-            )
-
-    pipeline = RagPipeline(settings=Settings(_env_file=None), guardrails=cast(Any, Policy()))
-    with (
-        call_content_policy(lambda: True),
-        operation_trace("rag.search", operation_id="synthetic") as summary,
-    ):
-        assert await pipeline._checked_caller_queries(["合成の許可", "合成の拒否"]) == [
-            "合成のマスク後"
-        ]
-    assert seen == ["合成の許可", "合成の拒否"]
-    spans = [item for item in summary.spans if item.attributes.get("pr.stage") == "query_guardrail"]
-    assert len(spans) == 2
-    assert all(item.status == "done" for item in spans)

@@ -37,12 +37,11 @@ def search_overflow_requests(
     searched_queries: Sequence[str] = (),
     allow_split: bool = True,
     initial_query_overflowed: bool = False,
-    skip_reason: str = "caller_planned",
     clock: Callable[[], float] = monotonic,
 ) -> tuple[list[OverflowSearch], dict[str, Any]]:
     """元の ID・前置きを保った検索を、追加検索の同じ回数・期限の中で行う。"""
     if not allow_split:
-        return [], {"schema_version": 1, "triggered": False, "skipped": skip_reason, "requests": [], "llm_calls": 0}
+        return [], {"schema_version": 1, "triggered": False, "skipped": "original_query_only", "requests": [], "llm_calls": 0}
     try:
         original = tokenize(question)
     except Exception as exc:  # noqa: BLE001 - 語の抽出の失敗で既存根拠を失わない。

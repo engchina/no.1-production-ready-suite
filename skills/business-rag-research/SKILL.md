@@ -6,7 +6,6 @@ license: MIT
 metadata:
   production-ready-display-name: "業務 RAG 調査"
   production-ready-mcp-tools: "rag:rag_retrieve_evidence rag:rag_recommend_search_answer_profile rag:rag_list_search_answer_profiles rag:rag_read_source rag:rag_lookup_guides rag:rag_outline rag:rag_read_document rag:rag_read_section"
-  production-ready-evidence-planning: "rag:caller"
   production-ready-tags: "rag research business-data"
 ---
 資料の根拠を `rag_retrieve_evidence` で集め、集めた根拠（evidence）から自分で答える（MCP サーバー `rag`。RAG は根拠を返し、回答は作らない）。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。
@@ -29,7 +28,7 @@ metadata:
 
 ## Step 3: 段ごとに根拠を集める
 
-段ごとに `rag_retrieve_evidence` を呼ぶ。
+段ごとに `rag_retrieve_evidence` を 1 回呼ぶ。複数の段・小問を 1 回の呼び出しにまとめない。
 
 - 検索・回答プロファイルが決まっていない（業務 Agent のデータの範囲で決まっていない・質問にも名前が無い）ときは、最初の段の前に 1 回だけ `rag_recommend_search_answer_profile` に質問を渡して選び、全部の段で同じプロファイルを使う。
   - `recommended_profile_id` があればそれを使う。ほかのプロファイルを順に試さない。
@@ -39,9 +38,9 @@ metadata:
 - 手順を案内する依頼では、先に `rag_lookup_guides` で業務ガイド（確かめる条件・手順の順・影響範囲・引き継ぎ先）を確かめ、影響範囲が広い操作や承認が要る操作はその旨を示す。
   - 業務ガイドの `steps` は、それぞれを 1 つの段として順に引く。手順ごとに、その段の実体に手順の `retrieval_hints`（無ければ `title`）を足した `query` で `rag_retrieve_evidence` を呼び、手順の `references` の頁は `rag_read_document`（`document_id` と `page`）で読む。手順の `done_when` と `completion` を満たす根拠がそろったら Step 4 へ進み、根拠の無い手順は確かめられなかった手順として示す。
 - 旧版・変更点・改定前との違いを尋ねる質問と、旧版の年度・版を名指しする質問（「2025 年度と 2026 年度では」）では、`include_superseded: true` を渡して旧版も検索する。
-- `query` は質問全体や問いの文ではなく、その段の実体（前の段で分かった正式名・略号・ID・役職名を根拠の表記のまま）と引く属性だけにする。RAG は `query` を言い換えない。
-  - 例: 「経費精算ポータル 担当部署」
-  - 同じ根拠を別の言葉で書いていそうなとき（略称・別表記・規程の用語）は、言い換えを `queries` に入れて同じ呼び出しで引く。比べる質問は実体ごとに引く。
+- `query` は、単純な質問なら利用者の質問のまま、段・小問ならその段の問いだけにする。前の段で分かった正式名・略号・ID・役職名は根拠の表記のまま入れる。
+  - 例: 「経費精算ポータルの担当部署は？」
+  - 同じ根拠を別の言葉で書いていそうなとき（略称・別表記・規程の用語）は、言い換えた問いで別に呼ぶ。比べる質問は実体ごとに呼ぶ。
 - 件数（`top_k`・`evidence_limit`）は既定より小さくしない（多段の質問では省略する）。
 - 根拠が答えのある台帳・一覧・別の規程を示したら（「担当部署はシステム台帳で確かめる」など）、一般の規則や表で済ませず、その台帳・一覧の名前と実体と属性で次の段を引く。
   - 根拠の `references` に別の文書（`document_title`）があれば、その文書名と `label` で次の段を引く。
@@ -60,7 +59,7 @@ metadata:
 
 - 根拠の本文が省かれている（`text_omitted`）か切られている（`truncated`）とき、または前後の条件・例外を確かめるときは、`rag_read_source` に `document_id` と `chunk_id` を渡して本文を読む。
 - 根拠の `origin` が `derived`（取込が原文から作った要約・抽出した値）なら、それを原文として引用せず、`rag_read_source` か `rag_read_section` で原文を読んでから、読んだ原文を根拠にする。
-- 答えが図の中の値・配置・矢印・画面の項目に依り、根拠が `evidence_type` の `figure_description`（図を AI が読んだ説明）で `image_ref` を持つときは、`rag_read_source` に `document_id`・`chunk_id` と `include_image: true` を渡して元の図を見て確かめる。図に依らない質問では図を読まない。
+- 答えが図の中の値・配置・矢印・画面の項目に依り、根拠が `evidence_type` の `figure_description`（図を AI が読んだ説明）で `image_ref` を持つときは、`rag_read_source` で元の図を見て確かめる。図に依らない質問では図を読まない。
 - 質問が手順・一覧・条件のまとまり（「手順をすべて」「確認する項目」「条件の一覧」など）を求め、根拠の章節（`section`。`section_id`・頁の範囲・文字数・親の章節）の文字数（`section.chars`）が抜粋より長いときは、抜粋だけで答えず、`rag_read_section` に `document_id` と根拠の `chunk_id`（または `section_id`）を渡して章節を終わりまで読む。
   - `section_complete` が `false` なら `next_cursor` で続きを読む。
   - 章節を読んでも手順・条件が足りなければ、`up` を 1 ずつ増やして親の章節を読む。

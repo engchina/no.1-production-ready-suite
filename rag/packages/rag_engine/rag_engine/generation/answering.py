@@ -2763,7 +2763,6 @@ def answer_question_result(
     complete_evidence: bool = True,
     scope: tuple[str, Sequence[str]] | None = None,
     guide_plan: GuidePlan | None = None,
-    caller_queries: Sequence[str] | None = None,
     request_question: str | None = None,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
@@ -2783,11 +2782,6 @@ def answer_question_result(
     ADB の準備不足や空検索は
     未実行工程を明示した結果を返し、回答 LLM を呼ばない。記録は呼び出しごとに分離する。
 
-    ``caller_queries`` は呼び出し元（業務 Agent）が作った検索文（#2651）。渡すと検索文は ``question`` と
-    これだけになり、追加の推論の LLM を呼ばない。
-    ``generate_answer=False`` とだけ組み合わせる。規則による質問の理解・用語の別名の検索文・
-    hybrid search・rerank・親子と前後の文脈は通常の検索と同じに行う。
-
     ``request_question`` は利用者の元の質問（呼び出し元が ``question`` を検索用に言い換えたとき。#2665）。渡すと、
     回答の要求の単位（``task_contract``）・要求ごとの根拠の確認と欠けた要求の探し直し・回答の生成と検査は
     この質問で行い、``question`` は検索（質問の理解・検索文・章節の拡張・業務ガイドの手順の検索）にだけ使う。
@@ -2799,28 +2793,14 @@ def answer_question_result(
         raise ValueError("質問を入力してください。")
     # 回答の対象と要求の単位の正本（#2665）。検索の文（normalized_question）とは分ける。
     request_text = extract_original_question(request_question or "") or normalized_question
-    caller_planned = caller_queries is not None
-    if caller_planned and generate_answer:
-        raise ValueError("呼び出し元の検索文（caller_queries）は回答を作らない検索（generate_answer=False）だけに使います。")
     if generate_answer and not complete_evidence:
         raise ValueError("根拠の補いを省く検索（complete_evidence=False）は回答を作らない検索だけに使います。")
-    trusted_queries: tuple[str, ...] = ()
-    if caller_planned:
-        question_key = _dedupe_query_key(normalized_question)
-        trusted_queries = _dedupe_queries(
-            tuple(query.strip() for query in caller_queries or () if query.strip() and _dedupe_query_key(query) != question_key)
-        )
-        # 質問に応じて LLM を呼ぶ検索の補助は、設定に関わらずこの経路では使わない。
     # 章節の拡張（#1436）の時間の上限は、回答の開始から数える。
     answer_started_at = monotonic()
 
     effective_rerank_enabled = bool(settings.default_rerank_enabled) if rerank_enabled is None else bool(rerank_enabled)
     selected_retrieval_scope = normalize_retrieval_scope(retrieval_scope)
     selected_classification_filter = classification_filter or classification_filter_from_values()
-    if caller_planned:
-        # 呼び出し元が検索文を作った検索（#2651）は、質問に応じた推論の LLM（章節の抜き出し）を呼ばない。
-        complete_evidence = False
-
     question_plan = plan_question(normalized_question)
     # 検索・回答プロファイルの知識の「用語・同義語」は 1 回だけ読む。用語の照合は検索・回答の工程で行う（#3451）。
     runtime_knowledge = build_runtime_knowledge_context(
@@ -2837,7 +2817,7 @@ def answer_question_result(
     if scope is not None:
         runtime_knowledge = runtime_knowledge.with_scope(*scope)
 
-    base_expansion = QueryExpansionResult(original_question=normalized_question, generated_queries=trusted_queries)
+    base_expansion = QueryExpansionResult(original_question=normalized_question)
     # 検索語は検索文の確定後に確定する。準備不足で中止した場合は検索していないため記録しない。
     text_search_info = QuestionTextSearchInfo(query_source=runtime_knowledge.query_source)
 
@@ -2913,14 +2893,10 @@ def answer_question_result(
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
             # 出どころは実際に語を足したもの（用語・同義語 / 業務ガイド / 確認で選んだ条件。#3490）。
             sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
-        for query in expansion.generated_queries:
-            sources.setdefault(_dedupe_query_key(query), "呼び出し元")
         query_sources: dict[str, tuple[str, ...]] = {}
         for query in retrieval_queries:
             key = _dedupe_query_key(query)
             labels = [sources.get(key, "追加検索文")]
-            if any(_dedupe_query_key(item) == key for item in expansion.generated_queries):
-                labels.append("呼び出し元")
             if (
                 runtime_knowledge.expanded_question != runtime_knowledge.original_question
                 and _dedupe_query_key(runtime_knowledge.expanded_question) == key
@@ -3050,7 +3026,6 @@ def answer_question_result(
                         "起点数": chunk_top_k,
                         "前後それぞれのChunk数": chunk_neighbor_count,
                         "再ランキング": effective_rerank_enabled,
-                        "呼出側の検索文": tuple(trusted_queries),
                     }
                 )
                 context = build_adb_hybrid_answer_context(
@@ -3143,7 +3118,6 @@ def answer_question_result(
                     "追加検索予算": extra_budget.to_payload(),
                     "要求別の予算": asdict(_request_coverage_budget(settings)),
                     "使用済みの要求別予算": asdict(coverage_usage),
-                    "呼出側で計画済み": caller_planned,
                     "原質問のみ": bool(getattr(settings, "retrieval_original_query_only", False)),
                     "検索範囲": selected_retrieval_scope,
                     "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
@@ -3160,8 +3134,7 @@ def answer_question_result(
                 usage=coverage_usage,
                 searched_queries=retrieval_queries,
                 initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
-                allow_split=not caller_planned and not getattr(settings, "retrieval_original_query_only", False),
-                skip_reason="caller_planned" if caller_planned else "original_query_only",
+                allow_split=not getattr(settings, "retrieval_original_query_only", False),
             )
             overflow_added: set[str] = set()
             existing_overflow_ids = {record.chunk_uid or record.id for record in context.records}
@@ -3224,7 +3197,6 @@ def answer_question_result(
             else:
                 overflow_step.skip(
                     {
-                        "caller_planned": "呼出側が検索文を計画済みのため、要求別には分割しません。",
                         "original_query_only": "原質問のみを検索する設定のため、要求別には分割しません。",
                         "tokenization_failed": "検索語の抽出に失敗したため、補完検索を実行していません。",
                     }.get(str(overflow_trace.get("skipped") or ""), "語数上限の超過がないため追加検索は不要です。")

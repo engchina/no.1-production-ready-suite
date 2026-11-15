@@ -6,14 +6,13 @@ license: MIT
 metadata:
   production-ready-display-name: "条の目録から根拠を探す"
   production-ready-mcp-tools: "rag:rag_retrieve_evidence rag:rag_outline rag:rag_read_section"
-  production-ready-evidence-planning: "rag:caller"
   production-ready-tags: "rag research articles"
 ---
 検索で当たらない根拠の条を、文書の条の目録から選んで読む（MCP サーバー `rag`）。ツールは MCP の素の名前で書く（Agent によって `mcp__rag__` などの前置きが付く）。
 
 ## Step 1: 条の目録から根拠の条を選んで読む
 
-1. いつもどおり `rag_retrieve_evidence` で調べる。根拠に答えを直接決める条があれば、ここで終える。
+1. いつもどおり `rag_retrieve_evidence` で問いごとに調べる。根拠に答えを直接決める条があれば、ここで終える。
 2. 根拠に出た文書のうち、章節の名前が「第◯条」の形の文書を、根拠の順に 3 つまで選ぶ。
 3. 文書ごとに `rag_outline` を `format: "compact"` で呼び、`lines` から根拠になりそうな条を 8 つまで選ぶ。
    - 事例の言葉ではなく、条の見出しの概念（資格・届出・期限・免除・時効・訂正・範囲・特例など）に置き換えて選ぶ。

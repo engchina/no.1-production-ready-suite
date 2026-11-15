@@ -305,7 +305,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     profile_knowledge の rules・rules_omitted を外した。
 # （版を変えない追加）回答の前に承認済み FAQ（登録済みの Q&A）の候補を返し、選んだ Q&A の回答を
 #     そのまま返すツール（rag_approved_faq）を足した。既存のツールの出力の形は変えない（#5107）。
-MCP_OUTPUT_SCHEMA_VERSION = 43
+# 44: rag_retrieve_evidence の planning・queries・original_question・request_id（入力）、
+#     planning・request_id と profile_knowledge の matched_on（出力）を削除した（1 回の呼び出しは
+#     1 つの質問。#5125）。
+MCP_OUTPUT_SCHEMA_VERSION = 44
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
@@ -329,10 +332,6 @@ def _retrieve_evidence_default_schema(schema: dict[str, Any]) -> None:
     schema["default"] = _retrieve_evidence_default()
 
 
-# rag_retrieve_evidence の planning=caller（呼び出し元が検索文を作る。#2651）で query に足せる
-# 検索文の本数と 1 本の長さの上限（全文検索に使う検索文の本数の上限 6 に、query を合わせて収める）。
-CALLER_QUERIES_MAX = 5
-CALLER_QUERY_MAX_CHARS = 1000
 # rag_retrieve_evidence が返す検索・回答プロファイルの用語（profile_knowledge。#2701）の
 # 上限。件数は RAG が回答を作るときに prompt へ入れる件数と同じ。字数は用語・別名・説明など
 # 返す文字の合計で、超える項目は返さずに省いた数へ数える。
@@ -527,21 +526,15 @@ class RecommendSearchAnswerProfileInput(BaseModel):
         return ids
 
 
-class SearchInput(BaseModel):
-    """検索・回答の条件。旧 scope を含む未定義項目は拒否する。"""
+class SearchScopeInput(BaseModel):
+    """検索の条件（rag_search と rag_retrieve_evidence で共通）。
+
+    旧 scope を含む未定義項目は拒否する。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1, max_length=8000, description="質問文。")
-    original_question: OptionalText = Field(
-        default=None,
-        max_length=8000,
-        description=(
-            "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す"
-            "（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに"
-            "根拠を確かめて作る。"
-        ),
-    )
     search_answer_profile_id: OptionalText = Field(
         default=None,
         max_length=128,
@@ -618,51 +611,33 @@ class SearchInput(BaseModel):
         return value
 
 
-# 呼び出し元（業務 Agent）が検索文を作る契約（planning=caller。#2651）は、入力を役割で分ける:
-# 元の質問（original_question）・呼び出し元の検索文（query と queries）・対象（検索・回答
-# プロファイル / ナレッジベース）・フィルター（filters・include_superseded）・件数（top_k・
-# evidence_limit）・追跡 ID（request_id）。対象と認可は RAG が強制し、渡した対象を広げない。
-class RetrieveEvidenceInput(SearchInput):
-    """根拠の収集の条件（rag_search の項目に、検索文を作る主体の指定を足す）。"""
+class SearchInput(SearchScopeInput):
+    """検索・回答の条件（回答の要求の単位に使う元の質問を足す）。"""
+
+    original_question: OptionalText = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す"
+            "（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに"
+            "根拠を確かめて作る。"
+        ),
+    )
+
+
+# 1 回の呼び出しは 1 つの質問（#5125）。何を調べるかは呼び出し元が決め、RAG は渡された query で
+# 通常どおり検索し（用語の照合も query）、回答は作らずに根拠だけを返す。
+class RetrieveEvidenceInput(SearchScopeInput):
+    """根拠の収集の条件。"""
 
     query: str = Field(
         ...,
         min_length=1,
         max_length=8000,
         description=(
-            "検索文。planning=caller はこの文と queries だけで検索する（言い換えない）。"
-            "planning=rag は質問文でよい。"
+            "1 つの質問（利用者の質問か、そこから分けた 1 つの問い）。"
+            "複数の問いを 1 つの query にまとめない。"
         ),
-    )
-    # 回答を作らないので、元の質問は用語の照合にだけ使う（rag_search と説明を分ける。#2665）。
-    original_question: OptionalText = Field(
-        default=None,
-        max_length=8000,
-        description=(
-            "利用者の元の質問。query を検索用に短く言い換えたときに渡す。profile_knowledge の"
-            "用語の照合に使う（検索は query で行う）。"
-        ),
-    )
-    planning: Literal["rag", "caller"] = Field(
-        default="rag",
-        description=(
-            "検索文を作る主体。rag=RAG が質問と用語の別名で"
-            "検索する。caller=呼び出し元が作った query と queries だけで検索し、RAG は質問に"
-            "応じた AI の処理をしない（用語の別名・rerank・前後の文脈の取得は同じ）。"
-        ),
-    )
-    queries: list[Annotated[str, Field(min_length=1, max_length=CALLER_QUERY_MAX_CHARS)]] = Field(
-        default_factory=list,
-        max_length=CALLER_QUERIES_MAX,
-        description=(
-            "query に足す検索文（planning=caller のときだけ）。同じ根拠を別の観点・別表記・資料の"
-            f"表記で言い表した文。最大 {CALLER_QUERIES_MAX} 本。"
-        ),
-    )
-    request_id: OptionalText = Field(
-        default=None,
-        max_length=128,
-        description="呼び出し元の追跡 ID（結果の request_id にそのまま返す）。",
     )
     evidence_limit: int = Field(
         default_factory=_retrieve_evidence_default,
@@ -675,17 +650,6 @@ class RetrieveEvidenceInput(SearchInput):
             "検索で当たった根拠を全部返す。"
         ),
     )
-
-    @model_validator(mode="after")
-    def _queries_need_caller_planning(self) -> RetrieveEvidenceInput:
-        # planning=rag は RAG が検索文を足すので、呼び出し元の検索文を黙って捨てず・混ぜずに
-        # 直し方を返す（#2651）。
-        if self.queries and self.planning != "caller":
-            raise ValueError(
-                "queries は planning=caller のときだけ渡せます。"
-                "planning に caller を渡すか、queries を外して呼び直してください。"
-            )
-        return self
 
 
 class LookupGuidesInput(BaseModel):
@@ -1924,9 +1888,6 @@ class ProfileKnowledge(BaseModel):
             "照合した用語・同義語の登録の版（登録の内容の sha256 の先頭。読めなければ null）。"
         )
     )
-    matched_on: Literal["original_question", "query"] = Field(
-        description="照合に使った文（original_question があればそれ、無ければ query）。"
-    )
     terms: list[ProfileKnowledgeTerm] = Field(
         description="当たった用語と説明（一致の強い順）。資料の原文ではない。"
     )
@@ -1964,15 +1925,11 @@ class RetrieveEvidenceOutput(VersionedOutput):
     auto_selected_search_answer_profile: AutoSelectedProfile | None = Field(
         default=None, description=AUTO_SELECTED_PROFILE_DESCRIPTION
     )
-    planning: Literal["rag", "caller"] = Field(
-        default="rag", description="検索文を作った主体（入力の planning）。"
-    )
-    request_id: str | None = Field(default=None, description="入力の request_id。")
     profile_knowledge: ProfileKnowledge | None = Field(
         default=None,
         description=(
             "検索・回答プロファイルに登録・承認された用語の説明（terms）のうち、"
-            "利用者の元の質問に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として"
+            "query に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として"
             "引用しない。根拠の読み方と回答の判断に使う。上限（用語 "
             f"{PROFILE_KNOWLEDGE_TERMS_MAX} 件・文字の合計 {PROFILE_KNOWLEDGE_MAX_CHARS} 字）を"
             "超えた分は terms_omitted に数える。"
@@ -3705,13 +3662,13 @@ async def read_source(
     return McpToolResult(output=output, content=blocks) if blocks else output
 
 
-def _search_request(arguments: SearchInput) -> SearchRequest:
+def _search_request(arguments: SearchScopeInput) -> SearchRequest:
     payload: dict[str, Any] = {
         "query": arguments.query,
         "knowledge_base_ids": arguments.knowledge_base_ids,
         "filters": arguments.filters,
     }
-    if arguments.original_question is not None:
+    if isinstance(arguments, SearchInput) and arguments.original_question is not None:
         payload["original_question"] = arguments.original_question
     if arguments.include_superseded:
         # 検索の要求の中では旧版の扱いは filters の 1 つ（画面の検索と同じ。#1248）。
@@ -3734,7 +3691,7 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
 
 
 async def _older_versions(
-    arguments: SearchInput, request: SearchRequest, citations: Sequence[RetrievedChunk]
+    arguments: SearchScopeInput, request: SearchRequest, citations: Sequence[RetrievedChunk]
 ) -> list[OlderVersion]:
     """根拠の文書（今の版）を置き換えた旧版（#1405。旧版を検索しなかったときだけ）。
 
@@ -3798,21 +3755,18 @@ def _knowledge_revision(payload: Mapping[str, object]) -> str:
 
 
 async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowledge | None:
-    """元の質問に当たる検索・回答プロファイルの承認済みの用語の説明（#2701）。
+    """query に当たる検索・回答プロファイルの承認済みの用語の説明（#2701）。
 
     RAG が回答を作らない根拠の取得では、回答を作る呼び出し元（業務 Agent）へ渡す。照合は回答の
-    生成と同じ（有効な登録だけ・語の一致。LLM は呼ばない）で、呼び出し元が言い換えた検索文では
-    なく利用者の元の質問に当てる。対象は検索に使った検索・回答プロファイルだけ（利用者の範囲外は
+    生成と同じ（有効な登録だけ・語の一致。LLM は呼ばない）で、渡された query に当てる（#5125）。
+    対象は検索に使った検索・回答プロファイルだけ（利用者の範囲外は
     無いものになる）。件数・字数の上限で切り、省いた数を示す。読めなければ
     ``load_failed`` を返す（当たるものが無いこと〔null〕と区別する）。
     """
     profile_id = arguments.search_answer_profile_id
     if profile_id is None:
         return None
-    question = arguments.original_question or arguments.query
-    matched_on: Literal["original_question", "query"] = (
-        "original_question" if arguments.original_question else "query"
-    )
+    question = arguments.query
     try:
         oracle = OracleClient()
         view = await oracle.get_search_answer_profile(profile_id)
@@ -3829,7 +3783,6 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
         return ProfileKnowledge(
             search_answer_profile_id=profile_id,
             revision=None,
-            matched_on=matched_on,
             terms=[],
             terms_omitted=0,
             load_failed=True,
@@ -3850,7 +3803,6 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
     return ProfileKnowledge(
         search_answer_profile_id=profile_id,
         revision=_knowledge_revision(payload),
-        matched_on=matched_on,
         terms=terms,
         terms_omitted=len(context.answer_terms) - len(terms),
     )
@@ -3863,7 +3815,6 @@ def _profile_knowledge_log(knowledge: ProfileKnowledge | None) -> dict[str, obje
     return {
         "profile_knowledge": {
             "revision": knowledge.revision,
-            "matched_on": knowledge.matched_on,
             "terms": len(knowledge.terms),
             "terms_omitted": knowledge.terms_omitted,
             "load_failed": knowledge.load_failed,
@@ -3975,7 +3926,7 @@ def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
     return FigureUrlRequest(subject=subject, base_url=str(http_request.base_url))
 
 
-def _check_search_scope(scope: ProfileScope | None, arguments: SearchInput) -> None:
+def _check_search_scope(scope: ProfileScope | None, arguments: SearchScopeInput) -> None:
     check_search(scope, arguments.search_answer_profile_id, arguments.knowledge_base_ids)
 
 
@@ -4162,21 +4113,20 @@ def _selection_error(
     return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
 
 
-def _with_profile_selection[A: SearchInput, R: SearchOutput | RetrieveEvidenceOutput](
+def _with_profile_selection[A: SearchScopeInput, R: SearchOutput | RetrieveEvidenceOutput](
     handler: Callable[[A], Awaitable[R]],
 ) -> Callable[[A], Awaitable[R]]:
     """検索・回答プロファイルの id を誤ったときに、自動で選んで続ける（#2355）。
 
     モデルが推測した id で失敗させない: 見つからない・使えない id なら、使えるプロファイルが
-    1 つならそれを、そうでなければ質問（original_question、無ければ query）の推薦が決めたものを
-    使い、結果の auto_selected_search_answer_profile に示す。決まらなければ、推薦の候補と次の手の
-    付いたエラーにする。
+    1 つならそれを、そうでなければ質問（rag_search の original_question、無ければ query）の
+    推薦が決めたものを使い、結果の auto_selected_search_answer_profile に示す。決まらなければ、
+    推薦の候補と次の手の付いたエラーにする。
     """
 
     async def run_selected(arguments: A, requested: str | None) -> R:
-        selected, usable, candidates = await _select_profile(
-            arguments.original_question or arguments.query
-        )
+        question = arguments.original_question if isinstance(arguments, SearchInput) else None
+        selected, usable, candidates = await _select_profile(question or arguments.query)
         if selected is None:
             raise _selection_error(requested, usable, candidates)
         selected = selected.model_copy(update={"requested_id": requested})
@@ -4395,30 +4345,18 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         )
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
-        # planning=rag: 検索の画面・チャットと同じ流れで質問の理解・拡張・文書の検索（rerank
-        # を含む）まで行い、その後の根拠の補い（章節の拡張・要求ごとの探し直し）と回答の
-        # 生成はしない（補いは Agent が rag_read_section などで行う。#3506）。planning=caller
-        # （#2651）: 呼び出し元の検索文で検索し、質問に応じた推論の LLM / VLM も呼ばない
-        # （hybrid search・rerank・文脈の取得は同じ）。
+        # 検索の画面・チャットと同じ流れで質問の理解・用語の別名・文書の検索（rerank を含む）
+        # まで行い、その後の根拠の補い（章節の拡張・要求ごとの探し直し）・図の画像の切り出しと
+        # 回答の生成はしない（補いは Agent が rag_read_section など、図は rag_read_source で
+        # 行う。#3506・#5125）。
         request = _search_request(arguments).model_copy(update={"generate_answer": False})
         enforce_rate_limit("search", http_request)
-        echo = {"planning": arguments.planning, "request_id": arguments.request_id}
-        if arguments.planning == "caller":
-            result = await _run_search(
-                request, caller_queries=list(arguments.queries), complete_evidence=False
-            )
-        else:
-            result = await _run_search(request, complete_evidence=False)
-        # 回答を作る呼び出し元へ、元の質問に当たる承認済みの用語の説明を渡す（#2701）。
+        result = await _run_search(request, complete_evidence=False)
+        # 回答を作る呼び出し元へ、query に当たる承認済みの用語の説明を渡す（#2701）。
         knowledge = await _profile_knowledge(arguments)
         logger.info(
             "rag_mcp_retrieve_evidence",
-            extra={
-                **echo,
-                "trace_id": result.trace_id,
-                "queries": len(arguments.queries),
-                **_profile_knowledge_log(knowledge),
-            },
+            extra={"trace_id": result.trace_id, **_profile_knowledge_log(knowledge)},
         )
         limit = retrieve_evidence_limit(arguments)
         # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。
@@ -4436,12 +4374,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
             profile_knowledge=knowledge,
-            **echo,
         )
         evidence, text_omitted = _fit_evidence(
             citations,
             sections,
-            queries=[arguments.query, arguments.original_question, *arguments.queries],
+            queries=[arguments.query],
             reserved_tokens=_output_tokens(output),
         )
         return output.model_copy(
@@ -4535,6 +4472,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 description=(
                     "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
                     "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
+                    "図の根拠は画像を返さず image_ref を返します。図を見るときは、その"
+                    " document_id・chunk_id で rag_read_source を include_image=true で呼びます。"
                 ),
                 input_model=RetrieveEvidenceInput,
                 handler=scoped(_with_profile_selection(retrieve_evidence), _check_search_scope),

@@ -176,7 +176,7 @@ def test_failed_queries_are_not_executed_again_for_another_request():
     assert budget.remaining == 7
 
 
-def test_caller_planned_queries_are_not_implicitly_expanded():
+def test_original_query_only_is_not_implicitly_expanded():
     def tokenize(text):
         raise AssertionError("呼び出さない")
 
@@ -190,7 +190,7 @@ def test_caller_planned_queries_are_not_implicitly_expanded():
         allow_split=False,
     )
     assert results == []
-    assert trace["skipped"] == "caller_planned"
+    assert trace["skipped"] == "original_query_only"
 
 
 def test_exhausted_evidence_budget_does_not_spend_queries():

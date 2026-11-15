@@ -635,7 +635,6 @@ def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
     return {
         "search_answer_profile_id": knowledge.get("search_answer_profile_id"),
         "revision": knowledge.get("revision"),
-        "matched_on": knowledge.get("matched_on"),
         "terms": len(terms),
         "terms_omitted": knowledge.get("terms_omitted"),
         "load_failed": knowledge.get("load_failed") is True,
@@ -1286,69 +1285,18 @@ def adjusted_search_limits(
     return adjusted
 
 
-# 組み込み Runtime が RAG の根拠の取得に決める引数（#2651）。検索文はモデル（業務 Agent）が作り、
-# RAG には質問に応じた推論を重ねさせない（planning=caller）。追跡 ID は
-# Run と呼び出しから決める。どちらもモデルに見せず、渡されても上書きする。
-CALLER_PLANNING = "caller"
-CALLER_PLANNED_ARGUMENTS = ("planning", "request_id")
-REQUEST_ID_MAX_CHARS = 128
+# 画像を読めないモデルに見せない、図の画像を読む引数（#5125）。本文の読み取りはそのまま使える。
+IMAGE_INPUT_ARGUMENTS = ("include_image",)
 
 
-def caller_planned(function_name: str, input_schema: JsonObject | None) -> bool:
-    """呼び先の契約が呼び出し元の検索文の契約を持つ根拠の取得か（古い RAG には送らない）。"""
-    if mcp_base_tool_name(function_name) != RAG_RETRIEVE_EVIDENCE:
-        return False
-    properties = (input_schema or {}).get("properties")
-    planning = properties.get("planning") if isinstance(properties, dict) else None
-    if not isinstance(planning, dict):
-        return False
-    choices = planning.get("enum")
-    return not isinstance(choices, list) or CALLER_PLANNING in choices
-
-
-def caller_planned_arguments(
-    function_name: str, input_schema: JsonObject | None, *, run_id: str, call_id: str
-) -> JsonObject:
-    """根拠の取得に実行環境が決める引数（呼び出し元の検索文の契約が無ければ空）。"""
-    if not caller_planned(function_name, input_schema):
-        return {}
-    properties = (input_schema or {}).get("properties")
-    arguments: JsonObject = {"planning": CALLER_PLANNING}
-    if isinstance(properties, dict) and "request_id" in properties:
-        request_id = f"{run_id}:{call_id}" if call_id else run_id
-        arguments["request_id"] = request_id[:REQUEST_ID_MAX_CHARS]
-    return arguments
-
-
-def caller_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
-    """モデルに見せる根拠の取得の schema から、実行環境が決める引数を外す（#2651）。"""
-    if not caller_planned(function_name, schema):
+def image_input_schema(function_name: str, schema: JsonObject) -> JsonObject:
+    """画像を読めないモデルに見せる `rag_read_source` の schema から、図の画像の引数を外す。"""
+    properties = schema.get("properties")
+    if mcp_base_tool_name(function_name) != RAG_READ_SOURCE or not isinstance(properties, dict):
         return schema
-    return _without_properties(schema, CALLER_PLANNED_ARGUMENTS)
-
-
-# Agent 主体の取得を許さない接続（#2676）の根拠の取得で、モデルに見せず、渡されても呼び先へ送らない
-# 引数。planning と追跡 ID は実行環境だけが決め、queries は planning=caller の
-# ときだけ効く（送らなければ RAG の既定の rag が検索文を計画する）。schema に無い追加の項目として
-# 引数の誤りにすると、caller の手順を書いたスキルの Run が引数の誤りの上限で止まりうるので、
-# 誤りにせずに外す。
-RAG_PLANNED_ARGUMENTS = ("planning", "request_id", "queries")
-
-
-def rag_planned_schema(function_name: str, schema: JsonObject) -> JsonObject:
-    """Agent 主体の取得を許さない接続のモデルに見せる根拠の取得の schema（#2676）。"""
-    if not caller_planned(function_name, schema):
+    if not any(name in properties for name in IMAGE_INPUT_ARGUMENTS):
         return schema
-    return _without_properties(schema, RAG_PLANNED_ARGUMENTS)
-
-
-def rag_planned_arguments(
-    function_name: str, input_schema: JsonObject | None, arguments: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Agent 主体の取得を許さない接続の根拠の取得から、caller の引数を除く（#2676）。"""
-    if not caller_planned(function_name, input_schema):
-        return dict(arguments)
-    return {key: value for key, value in arguments.items() if key not in RAG_PLANNED_ARGUMENTS}
+    return _without_properties(schema, IMAGE_INPUT_ARGUMENTS)
 
 
 def _without_properties(schema: JsonObject, names: Collection[str]) -> JsonObject:

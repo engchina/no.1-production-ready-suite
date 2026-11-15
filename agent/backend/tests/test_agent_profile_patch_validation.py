@@ -76,7 +76,6 @@ def test_valid_patch_keeps_typed_fields_and_internal_excluded_values() -> None:
             output_contract=ReportOutputContract(),
             data_scopes={"nl2sql": AgentDataScope(profile_ids=["profile-a"])},
             pinned_skills=[PinnedSkill(id="pinned-a", name="固定スキル")],
-            caller_planning_allowed=False,
         )
     )
     previous = profile(repository)
@@ -93,7 +92,6 @@ def test_valid_patch_keeps_typed_fields_and_internal_excluded_values() -> None:
     assert isinstance(changed.data_scopes["nl2sql"], AgentDataScope)
     assert changed.data_scopes == previous.data_scopes
     assert changed.pinned_skills == previous.pinned_skills
-    assert changed.caller_planning_allowed is False
     assert changed.versions == previous.versions and changed.created_at == previous.created_at
     assert changed.draft_updated_at == changed.updated_at
 
