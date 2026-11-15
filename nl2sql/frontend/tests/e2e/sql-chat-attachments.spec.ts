@@ -134,19 +134,18 @@ test.describe("SQL チャットの添付", { tag: "@responsive" }, () => {
   });
 });
 
-test("運用設定でチャットの添付を有効にする", { tag: "@responsive" }, async ({ page }) => {
+test("運用設定のチャットの添付は準備中で OFF のまま操作できない（#5103）", { tag: "@responsive" }, async ({ page }) => {
   await mockDatabaseGateReady(page);
-  let enabled = false;
   await page.route("**/api/settings/chat-attachments", async (route) => {
-    if (route.request().method() === "PUT") enabled = Boolean((route.request().postDataJSON() as { enabled: boolean }).enabled);
     await route.fulfill({
-      json: { data: { enabled, updated_at: null, max_bytes: LIMITS.max_bytes, max_files: 10, ttl_hours: 24 } },
+      json: { data: { enabled: true, updated_at: null, max_bytes: LIMITS.max_bytes, max_files: 10, ttl_hours: 24 } },
     });
   });
   await page.goto("/settings/chat-attachments");
   await expect(page.getByRole("heading", { name: "チャットの添付", level: 1 })).toBeVisible();
+  await expect(page.getByText("準備中（ロードマップ）")).toBeVisible();
   const toggle = page.getByTestId("chat-attachments-enabled");
-  await toggle.click();
-  await page.getByRole("button", { name: "保存" }).click();
-  await expect.poll(() => enabled).toBe(true);
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(toggle).toBeDisabled();
+  await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
 });

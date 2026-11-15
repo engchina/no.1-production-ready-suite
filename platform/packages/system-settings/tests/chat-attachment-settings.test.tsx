@@ -62,21 +62,21 @@ async function renderPage(api: ChatAttachmentSettingsApi) {
 const toggle = () => host.querySelector<HTMLButtonElement>('[data-testid="chat-attachments-enabled"]')!;
 
 describe("ChatAttachmentSettingsPage", () => {
-  it("既定の無効と上限を出し、有効にして保存する", async () => {
+  it("準備中（#5103）は保存済みの値に関わらず OFF のまま操作させず、保存を出さない", async () => {
     const update = vi.fn(async ({ enabled }: { enabled: boolean }) => settings({ enabled }));
-    await renderPage({ get: async () => settings(), update });
+    await renderPage({ get: async () => settings({ enabled: true }), update });
     expect(toggle().getAttribute("aria-checked")).toBe("false");
+    expect(toggle().disabled).toBe(true);
+    expect(host.querySelector("[data-roadmap-badge]")?.textContent).toContain("準備中（ロードマップ）");
+    expect(host.textContent).toContain("準備中のため、有効にできません。");
+    expect(host.querySelector('button[type="submit"]')).toBeNull();
     const limits = host.querySelector('[data-testid="chat-attachments-limits"]')!.textContent ?? "";
     expect(limits).toContain("20 MB");
     expect(limits).toContain("10 件");
     expect(limits).toContain("最後に使ってから 24 時間");
     await act(async () => toggle().click());
-    expect(toggle().getAttribute("aria-checked")).toBe("true");
-    await act(async () => {
-      host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    });
-    await flush();
-    expect(update).toHaveBeenCalledWith({ enabled: true });
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("ナビの項目は運用設定の Paperclip", () => {
