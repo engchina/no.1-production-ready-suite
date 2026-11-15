@@ -12,6 +12,8 @@ A（業務ガイドなし。ナレッジベースを指定）と C（業務ガ�
   質問と、返答までに分かった条件で呼び直す（契約の「clarifications に答えた値を conditions に
   入れて呼び直す」）。
 - 旧版も検索して答えるケース（`include_superseded`）は `include_superseded: true` を渡す。
+- 承認済み FAQ（登録済みの Q&A）の候補は返させない（`skip_approved_faq: true`。評価するのは
+  検索・回答。#5134）。
 - 引用は `rag_search` の `evidence[]`（AI に渡した資料の箇所。返った順。`evidence_limit` は既定で
   契約の上限 50）。本文は `excerpt`（`text_omitted` は本文を省いた根拠）、場所は `locator`。
 
@@ -45,8 +47,9 @@ TOOL = "rag_search"
 # 〔rag_search の出力の形は 38 と同じ〕）、#4714 で rag_validate_answer を削除して 40、
 # 段落の印を削除して 41、根拠の table_binding を削除して 42、登録ルールを削除して 43、
 # #5125 で rag_retrieve_evidence の planning の契約を削除して 44
-# 〔rag_search の出力の形は 38 と同じ〕）。
-RAG_SEARCH_SCHEMA_VERSION = 44
+# 〔rag_search の出力の形は 38 と同じ〕）、#5134 で承認済み FAQ を rag_search に統合して 45
+# （評価は skip_approved_faq で呼び、候補の状態は受け取らない）。
+RAG_SEARCH_SCHEMA_VERSION = 45
 # 返す根拠の上限（契約の evidence_limit の maximum）。
 DEFAULT_EVIDENCE_LIMIT = 50
 MAX_EVIDENCE_LIMIT = 50
@@ -136,7 +139,11 @@ class RagMcpTarget:
         self._clock = clock
 
     def _arguments(self, case: Case, query: str, conditions: Mapping[str, str]) -> dict[str, Any]:
-        arguments: dict[str, Any] = {"query": query, "evidence_limit": self._config.evidence_limit}
+        arguments: dict[str, Any] = {
+            "query": query,
+            "evidence_limit": self._config.evidence_limit,
+            "skip_approved_faq": True,
+        }
         if query != case.query:
             arguments["original_question"] = query
         if self._config.search_answer_profile_id:

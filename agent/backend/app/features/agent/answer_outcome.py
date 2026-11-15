@@ -22,7 +22,10 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 
-1. `empty_answer`: 回答が空 → insufficient_evidence
+1. `approved_faq_candidates`: 最後の `rag_search` が承認済み FAQ の候補だけを返した（利用者が選ぶ
+   確認のカードになる。検索・回答はしていないので、失敗・根拠不足ではない。#5134）
+   → needs_clarification
+   `empty_answer`: 回答が空 → insufficient_evidence
 2. `nl2sql_clarification`: 最後の `nl2sql_query` が SQL の生成前の確認の項目を返した
    → needs_clarification
    `clarification_question`: 確認の質問だけの回答（`is_clarification_only`）→ needs_clarification
@@ -59,6 +62,7 @@ from app.features.agent.rag_retrieval_state import degraded_retrieval
 from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
+    approved_faq_candidates_step,
     is_environment_data_tool,
     nl2sql_clarification_pending,
 )
@@ -92,6 +96,7 @@ ANSWER_OUTCOMES = frozenset(
 BASIS_EMPTY_ANSWER = "empty_answer"
 BASIS_CLARIFICATION = "clarification_question"
 BASIS_NL2SQL_CLARIFICATION = "nl2sql_clarification"
+BASIS_APPROVED_FAQ_CANDIDATES = "approved_faq_candidates"
 BASIS_RAG_SEARCH = "rag_search"
 BASIS_ENVIRONMENT_TOOLS = "environment_tools"
 BASIS_GUIDE_HANDOFF = "guide_handoff"
@@ -233,6 +238,14 @@ def answer_outcome(
     """
     last_search = _last_rag_search(steps)
     rag_outcome = last_search[1] if last_search else None
+    if approved_faq_candidates_step(steps) is not None:
+        # 候補を利用者が選ぶ確認のカードが答え（回答の本文が空でも、失敗・根拠不足ではない）。
+        return _content(
+            NEEDS_CLARIFICATION,
+            BASIS_APPROVED_FAQ_CANDIDATES,
+            rag_outcome=rag_outcome,
+            signals={SIGNAL_QUESTION},
+        )
     if not answer.strip():
         return _content(
             INSUFFICIENT_EVIDENCE, BASIS_EMPTY_ANSWER, rag_outcome=rag_outcome, signals=set()
