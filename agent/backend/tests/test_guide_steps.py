@@ -248,7 +248,7 @@ def test_support_task_state_keeps_step_evidence() -> None:
         thread_id=None,
         owner_user_uuid=USER_UUID,
         goal=GOAL,
-        max_rag_calls_per_run=6,
+        run_limits={"rag": 6, "nl2sql": 6},
         max_tool_calls_per_task=40,
     )
 

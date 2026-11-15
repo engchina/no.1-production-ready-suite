@@ -244,7 +244,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_snapshot_path: str | None = None
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
-    agent_max_tool_calls_per_run: int = 20
+    # 1 回の実行（開始・承認後の再開）のツールの呼び出しの上限。SDK の max_turns（モデルの呼び出しの
+    # 回数）をこの値 + 1 にし、超えたら Run を runtime.max_turns_exceeded で失敗にする。
+    agent_max_tool_calls_per_run: int = 100
     # モデルに渡す入力を、モデルの入力の上限に収める（#2383。`context_window`）。予算は登録モデルの
     # 入力の上限（max_input_tokens）から出力の上限と余白（入力の上限 × 割合）を引いた token の数で、
     # 超えるときは古いツールの結果から縮める。token の見積もりは platform の
@@ -254,13 +256,16 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_context_safety_margin_ratio: float = Field(default=0.05, ge=0.0, le=0.5)
     # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
     # 知らせる（Run は失敗にしない）。0 以下は上限なし。
-    # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence。1 回が重い検索と回答の生成）。
-    # 既定 6 は 5 段の多段の質問（段ごとに 1 回）と 1 回の言い換え（#1345）。
+    # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence の合計。1 回が重い検索と回答の
+    # 生成）。既定 30 は、多段の質問・条件の多い質問で段・条件ごとに検索し直しても足りる回数。
     # 本文を読むツール（rag_read_source・rag_outline・rag_read_document・rag_read_section）は
     # 数えない（ツールの呼び出しの上限には数える）。
-    agent_max_rag_calls_per_run: int = 6
+    agent_max_rag_calls_per_run: int = 30
+    # Run ごとの NL2SQL の問い合わせ（nl2sql_query。1 回が SQL の生成と実行のジョブ）。結果の取得
+    # （nl2sql_get_job）・プロファイルの一覧・推薦は数えない（ツールの呼び出しの上限には数える）。
+    agent_max_nl2sql_calls_per_run: int = 30
     # 同じ会話（thread）の通しのツールの呼び出し。前の Run の支援タスクの状態に積む。
-    agent_max_tool_calls_per_task: int = 60
+    agent_max_tool_calls_per_task: int = 1000
     # Run 全体の実行予算（#2599。`run_budget`）。最初の実行・差し戻し・承認や確認の後の再開を通した
     # モデルの呼び出しの回数・token（実測。usage の無い呼び出しは入力の見積もり）・稼働時間（秒。
     # 人の待ちを除く）。上限に達したら新しいツールを実行せず、次のモデルの呼び出しの前に Run を
@@ -272,7 +277,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 品質評価の 1 ケースの上限時間（秒。Run の実行。判定は別。#1432）。0 以下（既定）は自動で、
     # 接続 `rag` の待ち時間 ×（Run の RAG の予算〔agent_max_rag_calls_per_run。0 以下なら
     # agent_max_tool_calls_per_run〕+ 1）にする。+1 はモデルの推論の分。
-    # 既定では 630 ×（6 + 1）= 4410 秒。300 秒〜86400 秒に収める。
+    # 既定では 630 ×（30 + 1）= 19530 秒。300 秒〜86400 秒に収める。
     agent_evaluation_case_timeout_seconds: float = 0.0
     # 品質評価で同時に実行するケースの数の上限（#2004）。判定（LLM-as-judge）は job の中で 1 つの
     # 上限つきの並行の実行器（pr_backend_core.bounded_calls）を共有し、429 を受けたら全体で待って

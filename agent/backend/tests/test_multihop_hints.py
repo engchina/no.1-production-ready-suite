@@ -290,9 +290,9 @@ def test_no_budget_means_no_remaining_count(monkeypatch: MonkeyPatch, mcp: FakeP
     assert "references" not in seen
 
 
-def test_default_rag_budget_covers_five_hops_and_a_rephrase() -> None:
-    # 5 段の橋渡し（段ごとに 1 回の rag_retrieve_evidence）と 1 回の言い換え（#1345）。
-    assert Settings.model_fields["agent_max_rag_calls_per_run"].default == 6
+def test_default_rag_budget_covers_multihop_questions() -> None:
+    # 多段・条件の多い質問で段・条件ごとに検索し直しても足りる回数（#5120）。
+    assert Settings.model_fields["agent_max_rag_calls_per_run"].default == 30
 
 
 # ---- 段の検索（#1351） --------------------------------------------------------------------------

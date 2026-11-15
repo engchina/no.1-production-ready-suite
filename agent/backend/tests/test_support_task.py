@@ -38,7 +38,9 @@ from app.features.agent.support_task import (
     GUIDE_CHECK_TRACE_PREFIX,
     SUPPORT_TASK_KIND,
     SUPPORT_TASK_NAME,
+    SupportTaskBudget,
     abandoned_run_consumption,
+    budget_exceeded_message,
     build_support_task,
     support_task_instructions,
 )
@@ -47,10 +49,11 @@ from app.features.agent.tools import (
     ToolDefinition,
     ToolInvocationContext,
     ToolPermissionLevel,
+    ToolPolicy,
     ToolResult,
     tool_registry,
 )
-from app.settings import get_settings
+from app.settings import Settings, get_settings
 
 LOOKUP = "test1243_lookup"
 WRITE = "test1243_write"
@@ -289,7 +292,7 @@ def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
     assert "kind: 「契約の種類は何ですか？」 選択肢: 「年間」 / 「月額」" in instructions
     assert "guide_id=guide-1、版 2" in instructions
     assert "「更新の期限」" in instructions
-    assert "残り 59 回（上限 60 回）" in instructions
+    assert "残り 999 回（上限 1000 回）" in instructions
     assert "rag_search の conditions" in instructions
     # モデルは利用者の答えを conditions に入れて呼び直した。
     assert env.mcp.calls_of("rag_search")[1]["arguments"]["conditions"] == {"kind": "年間"}
@@ -389,11 +392,163 @@ def test_rag_calls_over_the_run_budget_return_budget_exceeded(
     assert state["budget"]["run"]["tool_calls"] == 2
     assert state["budget"]["run"]["rag_calls"] == 1
     assert state["budget"]["run"]["budget_exceeded"] == 1
-    assert state["budget"]["limits"] == {"rag_calls_per_run": 1, "tool_calls_per_task": 60}
+    assert state["budget"]["limits"] == {
+        "rag_calls_per_run": 1,
+        "nl2sql_calls_per_run": 30,
+        "tool_calls_per_task": 1000,
+    }
     # 業務ガイドの項目の無い（#1238 より前の）RAG の出力でも状態を作る。
     assert state["guide"] is None
     assert state["pending_clarifications"] == []
     assert state["outcome"] == "answered"
+
+
+NL2SQL_SKILL_ID = "test5120-nl2sql-skill"
+NL2SQL_AGENT_ID = "test5120-nl2sql-agent"
+
+
+@pytest.fixture
+def nl2sql_env(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
+    """NL2SQL（fake の MCP）の nl2sql_query・nl2sql_get_job を使う業務 Agent。"""
+    mcp = fake_product_mcp(monkeypatch)
+    # nl2sql_query は承認が要る（readOnlyHint=false）。予算の確認では承認なしで呼ぶ。
+    monkeypatch.setattr(
+        builtin_runtime,
+        "_active_policy",
+        lambda: ToolPolicy(allow={"nl2sql__nl2sql_query", "nl2sql__nl2sql_get_job"}),
+    )
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=NL2SQL_SKILL_ID,
+            name="データの Skill",
+            instructions="数値は nl2sql_query で調べる。",
+            mcp_requirements=[
+                SkillMcpRequirement(
+                    server_id="nl2sql", tool_names=["nl2sql_query", "nl2sql_get_job"]
+                ),
+            ],
+        )
+    )
+    runtime_repository.create_agent(
+        AgentProfile(id=NL2SQL_AGENT_ID, name="データの業務 Agent", skill_ids=[NL2SQL_SKILL_ID])
+    )
+    try:
+        yield mcp
+    finally:
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            for run_id in [
+                run_id
+                for run_id, run in repository._runs.items()
+                if run.agent_id == NL2SQL_AGENT_ID
+            ]:
+                repository._runs.pop(run_id)
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(NL2SQL_AGENT_ID)
+        with contextlib.suppress(KeyError, ValueError):
+            skill_registry.remove(NL2SQL_SKILL_ID)
+
+
+def test_nl2sql_queries_over_the_run_budget_return_budget_exceeded(
+    monkeypatch: MonkeyPatch, nl2sql_env: FakeProductMcp
+) -> None:
+    """NL2SQL の問い合わせ（nl2sql_query）も RAG と同じ形で Run ごとの上限に数える（#5120）。"""
+    monkeypatch.setattr(get_settings(), "agent_max_nl2sql_calls_per_run", 1)
+    model = _script(
+        monkeypatch,
+        [function_call("nl2sql__nl2sql_query", {"question": "部門別の件数"}, call_id="call-1")],
+        # 結果の取得は NL2SQL の上限に数えない。
+        [function_call("nl2sql__nl2sql_get_job", {"job_id": "job-1"}, call_id="call-2")],
+        [function_call("nl2sql__nl2sql_query", {"question": "月別の件数"}, call_id="call-3")],
+        [assistant_message("集めた結果で回答します。")],
+    )
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="部門別の件数は？", agent_id=NL2SQL_AGENT_ID),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, run.id)
+    run = runtime_repository.get_run(run.id)
+
+    # 上限で止めても Run は失敗にしない。
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(nl2sql_env.calls_of("nl2sql_query")) == 1
+    assert len(nl2sql_env.calls_of("nl2sql_get_job")) == 1
+    assert [step.status for step in run.steps] == ["completed", "completed", "failed"]
+    blocked = run.steps[2].tool_result
+    assert blocked is not None
+    assert blocked.error_code == "budget_exceeded"
+    assert blocked.error_details == {"budget": {"scope": "run_nl2sql_calls", "limit": 1, "used": 1}}
+    # モデルには例外ではなく、ツールの結果として予算の上限を返す。
+    assert "budget_exceeded" in str(model.calls[3].input)
+    assert "NL2SQL の問い合わせが上限（1 回）" in str(model.calls[3].input)
+    state = _state(run)
+    assert state["budget"]["run"]["tool_calls"] == 2
+    assert state["budget"]["run"]["nl2sql_calls"] == 1
+    assert state["budget"]["run"]["rag_calls"] == 0
+    assert state["budget"]["run"]["budget_exceeded"] == 1
+    assert state["budget"]["task"]["nl2sql_calls"] == 1
+    assert state["budget"]["limits"]["nl2sql_calls_per_run"] == 1
+
+
+def _default_budget() -> SupportTaskBudget:
+    settings = Settings(_env_file=None)
+    return SupportTaskBudget.for_run(
+        [],
+        None,
+        run_limits={
+            "rag": settings.agent_max_rag_calls_per_run,
+            "nl2sql": settings.agent_max_nl2sql_calls_per_run,
+        },
+        max_tool_calls_per_task=settings.agent_max_tool_calls_per_task,
+    )
+
+
+def test_default_nl2sql_budget_allows_thirty_queries_per_run() -> None:
+    """既定では nl2sql_query を 30 回まで実行し、31 回目は実行しない。
+
+    結果の取得（nl2sql_get_job）は数えない。
+    """
+    budget = _default_budget()
+    for _ in range(30):
+        assert budget.reserve("nl2sql__nl2sql_query") is None
+        assert budget.reserve("nl2sql__nl2sql_get_job") is None
+    exceeded = budget.reserve("nl2sql__nl2sql_query")
+    assert exceeded == {"scope": "run_nl2sql_calls", "limit": 30, "used": 30}
+    assert budget_exceeded_message("nl2sql__nl2sql_query", exceeded).startswith(
+        "この実行の NL2SQL の問い合わせが上限（30 回）に達したため、nl2sql__nl2sql_query を"
+    )
+    # 結果の取得・プロファイルの一覧・RAG の検索は、NL2SQL の上限に達した後も呼べる。
+    assert budget.reserve("nl2sql__nl2sql_get_job") is None
+    assert budget.reserve("nl2sql__nl2sql_list_profiles") is None
+    assert budget.reserve("rag__rag_search") is None
+    assert budget.run_calls == {"rag": 1, "nl2sql": 30}
+    assert budget.run_tool_calls == 63
+
+
+def test_default_rag_budget_allows_thirty_searches_per_run() -> None:
+    """既定では rag_search・rag_retrieve_evidence の合計を 30 回まで実行する。"""
+    budget = _default_budget()
+    for index in range(30):
+        tool = "rag__rag_search" if index % 2 else "rag__rag_retrieve_evidence"
+        assert budget.reserve(tool) is None
+        assert budget.reserve("rag__rag_read_source") is None
+    assert budget.rag_calls_remaining == 0
+    assert budget.reserve("rag__rag_search") == {
+        "scope": "run_rag_calls",
+        "limit": 30,
+        "used": 30,
+    }
+    assert budget.reserve("nl2sql__nl2sql_query") is None
+
+
+def test_run_budget_of_zero_or_less_has_no_limit() -> None:
+    budget = SupportTaskBudget.for_run(
+        [], None, run_limits={"rag": 0, "nl2sql": -1}, max_tool_calls_per_task=0
+    )
+    for _ in range(200):
+        assert budget.reserve("nl2sql__nl2sql_query") is None
+        assert budget.reserve("rag__rag_search") is None
+    assert budget.rag_calls_remaining is None
 
 
 def test_task_budget_accumulates_across_runs_in_the_thread(
@@ -470,8 +625,10 @@ def test_resume_after_approval_keeps_the_consumption(monkeypatch: MonkeyPatch, e
         "runs": 1,
         "tool_calls": 2,
         "rag_calls": 0,
+        "nl2sql_calls": 0,
         "tool_seconds": state["budget"]["task"]["tool_seconds"],
         "rag_seconds": 0.0,
+        "nl2sql_seconds": 0.0,
     }
 
 
@@ -592,7 +749,7 @@ def _build(previous: dict[str, Any] | None, steps: list[RunStep]) -> dict[str, A
         thread_id="thread-1",
         owner_user_uuid=USER_UUID,
         goal="経費精算の締め日は？",
-        max_rag_calls_per_run=5,
+        run_limits={"rag": 5, "nl2sql": 5},
         max_tool_calls_per_task=60,
     )
 
@@ -601,7 +758,7 @@ def _instructions(state: dict[str, Any], fixed: tuple[str, ...] = ()) -> str:
     return support_task_instructions(
         state,
         goal="経費精算の締め日は？",
-        max_rag_calls_per_run=5,
+        run_limits={"rag": 5, "nl2sql": 5},
         max_tool_calls_per_task=60,
         fixed_profile_connections=fixed,
     )
