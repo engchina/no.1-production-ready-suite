@@ -31,7 +31,6 @@ def test_channels_use_provenance_not_words(
 ) -> None:
     assert expression_channels("合成追加", "合成原質問", {"合成追加": labels}) == expected
     assert expression_channels("Ａ", "a", {"Ａ": labels}) == ("hybrid",)
-    assert expression_channels("追加", "原", {"追加": labels}, vector_only=True) == ("vector",)
 
 
 async def test_term_expanded_query_uses_native_hybrid_and_semantic_stays_vector() -> None:

@@ -444,7 +444,6 @@ async def _degraded_search(
         SearchRequest(query=queries[0]),
         state,
         retrieval_queries=queries,
-        vector_only_queries=["仮説の文"],
         settings=_QUERY_SOURCES,
         expand_references=False,
     )
