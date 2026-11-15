@@ -637,7 +637,7 @@ class RetrieveEvidenceInput(SearchInput):
     planning: Literal["rag", "caller"] = Field(
         default="rag",
         description=(
-            "検索文を作る主体。rag=RAG が質問に応じて言い換え（AI）を足して"
+            "検索文を作る主体。rag=RAG が質問と用語の別名で"
             "検索する。caller=呼び出し元が作った query と queries だけで検索し、RAG は質問に"
             "応じた AI の処理をしない（用語の別名・rerank・前後の文脈の取得は同じ）。"
         ),
