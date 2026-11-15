@@ -71,6 +71,7 @@ from app.features.nl2sql.generation_diagnostics import (
     GenerationDiagnostics,
     recorded_generation_diagnostics,
 )
+from app.features.nl2sql.guardrails import checked_fields
 from app.features.nl2sql.models import (
     JobCreateRequest,
     JobData,
@@ -980,6 +981,8 @@ def build_mcp_server(request: Request) -> McpServer:
 
     @_translate_domain_errors
     async def recommend_profile(arguments: RecommendProfileInput) -> RecommendProfileOutput:
+        # 質問を使う最初の処理は安全チェック（#5110。止めたらツールのエラー GUARDRAIL_BLOCKED）。
+        arguments = await run_sync_io(checked_fields, arguments, "question")
         return await run_sync_io(recommend_for, arguments.question, arguments.profile_ids)
 
     def profile_usable(profile_id: str) -> bool:
@@ -1084,6 +1087,8 @@ def build_mcp_server(request: Request) -> McpServer:
                 actor_is_system_admin=actor_is_system_admin,
                 # 実行履歴の種類（MCP・品質評価）。呼び出し元の認証の結果から決める（#1986）。
                 origin=_job_origin(request),
+                # 質問は入口（nl2sql_query）で検査済み。確認の後は確認で伏せた質問（#5110）。
+                input_checked=True,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1091,6 +1096,9 @@ def build_mcp_server(request: Request) -> McpServer:
 
     @_translate_domain_errors
     async def query(arguments: QueryInput) -> Nl2SqlJobResult:
+        # 質問と確認への自由入力の答えを使う最初の処理は安全チェック（#5110）。業務プロファイルの
+        # 推薦・確認の工程の記録・確認・ジョブには伏せた後の文を渡し、同じ文を検査し直さない。
+        arguments = await run_sync_io(checked_fields, arguments, "question", "answer.free_text")
         profile_id, selected = await resolve_query_profile(arguments)
         result = await run_query(arguments, profile_id)
         result.auto_selected_profile = selected
@@ -1118,6 +1126,7 @@ def build_mcp_server(request: Request) -> McpServer:
                     actor_user_uuid=actor_user_uuid,
                     actor_is_system_admin=actor_is_system_admin,
                     profile_confirmed=True,
+                    input_checked=True,
                 )
             data = own_session(arguments.requirement_session_id, adding=True)
             if data.session.profile_id != profile_id:
@@ -1144,6 +1153,7 @@ def build_mcp_server(request: Request) -> McpServer:
                     selected_candidate_ids=list(dict.fromkeys(answer.selected_candidate_ids)),
                     free_text=answer.free_text.strip(),
                 ),
+                input_checked=True,
             )
 
         async def confirm_requirement(

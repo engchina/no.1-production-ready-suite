@@ -42,7 +42,7 @@ from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
 from .chat_attachments import AttachmentContext
-from .guardrails import GuardrailBlockedError, checked_question
+from .guardrails import GuardrailBlockedError, checked_fields
 from .models import (
     AllowedObjects,
     ExplainPlanData,
@@ -2926,12 +2926,16 @@ class OntologyApiRuntime:
         actor_user_uuid: str = "",
         actor_is_system_admin: bool = False,
         profile_confirmed: bool = False,
+        input_checked: bool = False,
     ) -> QuerySessionData:
         """`profile_confirmed` は、呼び出し元が業務プロファイルを明示して選んだ（MCP の
-        `nl2sql_query` の `profile_id`。#1441）ときに、推薦の確認（確認の token）を省く。"""
+        `nl2sql_query` の `profile_id`。#1441）ときに、推薦の確認（確認の token）を省く。
+        `input_checked` は、入口（MCP の `nl2sql_query`）が質問の安全チェックを済ませたことを示す
+        （#5110。同じ質問を検査し直さない）。"""
 
         # 質問は LLM に入る前に安全チェックを当てる。止めた質問は保存しない（#5063）。
-        request = request.model_copy(update={"question": checked_question(request.question)})
+        if not input_checked:
+            request = checked_fields(request, "question")
         # スナップショット(ロック下)→ LLM 解釈(ロック外)→ 書き戻し(ロック下+再検証)。
         # Enterprise AI 呼び出し中にグローバルロックを保持すると、1 つのハング呼び出しが
         # 全 ontology API を最大 timeout×retry 分塞ぐため、HTTP はロック外で行う。
@@ -4144,12 +4148,17 @@ class OntologyApiRuntime:
         self,
         session_id: str,
         request: ClarificationAnswerRequest,
+        *,
+        input_checked: bool = False,
     ) -> QuerySessionData:
-        """1 つの項目への回答を反映する。全部の質問に答えたら、LLM で要件のまとめを再検査する。"""
+        """1 つの項目への回答を反映する。全部の質問に答えたら、LLM で要件のまとめを再検査する。
 
-        if request.free_text.strip():
+        `input_checked` は、入口（MCP の `nl2sql_query`）が自由入力の安全チェックを済ませたことを
+        示す（#5110）。"""
+
+        if not input_checked:
             # 自由入力の回答も質問と同じ安全チェックを当てる（#5063）。
-            request = request.model_copy(update={"free_text": checked_question(request.free_text)})
+            request = checked_fields(request, "free_text")
         with self._lock:
             self._ensure_store()
             current = self._ensure_session_loaded(session_id)
@@ -6585,6 +6594,8 @@ def recommend_ontology_profile(
     http_request: Request,
 ) -> ApiResponse[OntologyProfileRecommendationData]:
     try:
+        # 質問を使う最初の処理は安全チェック（#5110。止めたら 422）。
+        request = checked_fields(request, "question")
         return ApiResponse(
             data=OntologyProfileRecommendationData(
                 recommendation=_run_runtime_sync(
@@ -6635,6 +6646,8 @@ def search_profile_ontology_context(
 ) -> ApiResponse[OntologyContextSearchResult]:
     assert_profile_access(http_request, profile_id)
     try:
+        # 質問を使う最初の処理は安全チェック（#5110。止めたら 422）。
+        request = checked_fields(request, "question")
         return ApiResponse(
             data=_run_runtime_sync(
                 ontology_runtime.search_ontology_context,

@@ -63,7 +63,7 @@ from .enterprise_ai_client import (
     EnterpriseAiDirectError,
     enterprise_ai_configuration_failure_message,
 )
-from .guardrails import GuardrailBlockedError
+from .guardrails import GuardrailBlockedError, check_job_input, checked_fields
 from .incremental_store import (
     HISTORY_SORT_DIRECTIONS,
     HISTORY_SORT_KEYS,
@@ -617,6 +617,8 @@ def is_select_only(sql: str) -> bool:
 def preview(req: PreviewRequest, request: Request) -> ApiResponse[PreviewData]:
     """自然言語から SQL を生成して実行せずに safety / engine meta を返す。"""
     _assert_profile_access(request, req.profile_id, default_profile=True)
+    # 質問を使う最初の処理は安全チェック（#5110。止めたら 422）。
+    req = check_job_input(req)
     try:
         return ApiResponse(data=nl2sql_service.preview(req))
     except SchemaCatalogEmptyError:
@@ -733,7 +735,9 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         # チャットは実行の権限が無ければ生成だけにする（画面は実行しない理由を出す。#1176）。
         req = req.model_copy(update={"generation_only": True})
     _assert_profile_access(request, req.profile_id, default_profile=True)
-    req = _with_requirement(req, principal)
+    # 質問を使う最初の処理は安全チェック（#5110）。回答前の確認の照合（`_with_requirement`）は、
+    # 確認で伏せた質問と比べるので、伏せた後の質問で行う。止めたら 422（app の exception handler）。
+    req = _with_requirement(check_job_input(req), principal)
     try:
         actor_user_uuid = str(getattr(principal, "user_uuid", ""))
         return ApiResponse(
@@ -741,6 +745,7 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
                 req,
                 actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
+                input_checked=True,
             )
         )
     except OthersContentForbiddenError as exc:
@@ -1778,6 +1783,7 @@ def add_select_ai_feedback(
     req: SelectAiFeedbackAddRequest,
 ) -> ApiResponse[SelectAiFeedbackAddData]:
     """Oracle DBMS_CLOUD_AI profile feedback entry を追加する。"""
+    req = checked_fields(req, "question", "feedback_content")
     return ApiResponse(data=nl2sql_service.add_select_ai_feedback(req))
 
 
@@ -1893,6 +1899,7 @@ def run_select_ai_agent_team(
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent team を実行する。"""
     _assert_select_ai_credential_ready()
+    req = checked_fields(req, "prompt")
     try:
         return ApiResponse(data=nl2sql_service.run_select_ai_agent_team(req))
     except OracleAdapterError as exc:
@@ -1905,6 +1912,7 @@ def run_select_ai_agent_tool(
 ) -> ApiResponse[AgentTeamRunData]:
     """Oracle Select AI Agent tool を明示名で実行する。"""
     _assert_select_ai_credential_ready()
+    req = checked_fields(req, "prompt")
     try:
         return ApiResponse(data=nl2sql_service.run_select_ai_agent_tool(req))
     except OracleAdapterError as exc:
@@ -2254,6 +2262,8 @@ def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData
     評価できるのは実行した本人だけ（#3244）。見える他の利用者の履歴（system_admin）は 403、
     見えない履歴は 404。評価した人を履歴の `feedback_actor_user_uuid` に残す。
     """
+    # 利用者のコメントは保存の後に類似履歴の embedding へ入るので、先に安全チェック（#5110）。
+    req = checked_fields(req, "comment")
     try:
         access = _ai_use_access(request)
         data = nl2sql_service.save_feedback(
@@ -2286,6 +2296,7 @@ def admin_review_feedback(
     request: Request,
 ) -> ApiResponse[AdminFeedbackReviewData]:
     """管理者 review を保存し、必要な場合だけ Select AI feedback へ登録する。"""
+    req = checked_fields(req, "feedback_content")
     try:
         data = nl2sql_service.save_admin_feedback_review(
             req,
@@ -2693,6 +2704,7 @@ def predict_classifier(
     req: ClassifierPredictRequest,
 ) -> ApiResponse[ClassifierPredictionData]:
     """質問を classifier category/profile 候補へ分類する。"""
+    req = checked_fields(req, "question")
     return ApiResponse(data=nl2sql_service.predict_classifier(req))
 
 
@@ -2703,6 +2715,9 @@ def similar_history(
     """質問に近い履歴を few-shot / feedback 学習候補として返す。"""
     if req.profile_id:
         _assert_profile_access(request, req.profile_id)
+    # 入力途中の候補（debounce）も、質問を使う最初の処理は安全チェック（#5110。止めたら 422 で、
+    # 画面は候補を出さない）。
+    req = checked_fields(req, "question")
     return ApiResponse(
         data=nl2sql_service.similar_history(
             req,
@@ -2719,6 +2734,9 @@ def recommend_profile(
     """質問から profile / schema 範囲と query rewrite を推薦する。"""
     if req.current_profile_id:
         _assert_profile_access(request, req.current_profile_id)
+    # 入力途中の推薦（debounce）と「自動で選ぶ」の操作。質問を使う最初の処理は安全チェック（#5110。
+    # 止めたら 422 で、入力途中なら画面は推薦を出さず、操作なら止めた理由を出す）。
+    req = checked_fields(req, "question")
     try:
         return ApiResponse(
             data=nl2sql_service.recommend_profile(
@@ -2736,6 +2754,7 @@ def recommend_profile(
 def rewrite(req: RewriteRequest, request: Request) -> ApiResponse[RewriteData]:
     """用語・schema・追加指示を使って質問を書き換える。"""
     _assert_profile_access(request, req.profile_id, default_profile=True)
+    req = checked_fields(req, "question")
     return ApiResponse(data=nl2sql_service.rewrite(req))
 
 
@@ -2984,6 +3003,7 @@ def structure_to_sql(
 def question_to_sql(req: QuestionToSqlRequest, request: Request) -> ApiResponse[StructureToSqlData]:
     """表示中の自然言語質問から SQL を生成する。実行・履歴保存は行わない。"""
     _assert_profile_access(request, req.profile_id, default_profile=True)
+    req = checked_fields(req, "question")
     try:
         return ApiResponse(data=nl2sql_service.question_to_sql(req))
     except EnterpriseAiDirectError as exc:
@@ -3005,6 +3025,8 @@ def generate_comment_sql(
     req: MetadataSqlGenerateRequest,
 ) -> ApiResponse[MetadataSqlGenerateData]:
     """SQL Assist コメント管理互換の COMMENT ON SQL を生成する。"""
+    # 追加入力だけが利用者の文（構造・サンプルの欄は DB の値なので検査に送らない。#5110）。
+    req = checked_fields(req, "extra_text")
     try:
         return ApiResponse(data=nl2sql_service.generate_comment_sql(req))
     except ValueError as exc:
@@ -3039,6 +3061,8 @@ def generate_annotation_sql(
     req: MetadataSqlGenerateRequest,
 ) -> ApiResponse[MetadataSqlGenerateData]:
     """SQL Assist アノテーション管理互換の ALTER ... ANNOTATIONS SQL を生成する。"""
+    # 追加入力だけが利用者の文（構造・サンプルの欄は DB の値なので検査に送らない。#5110）。
+    req = checked_fields(req, "extra_text")
     try:
         return ApiResponse(data=nl2sql_service.generate_annotation_sql(req))
     except ValueError as exc:
@@ -3065,6 +3089,8 @@ def generate_domain_sql(
     req: MetadataSqlGenerateRequest,
 ) -> ApiResponse[MetadataSqlGenerateData]:
     """ドメイン管理の CREATE DOMAIN / ALTER TABLE ... MODIFY (... DOMAIN ...) SQL を生成する。"""
+    # 追加入力だけが利用者の文（構造・サンプルの欄は DB の値なので検査に送らない。#5110）。
+    req = checked_fields(req, "extra_text")
     try:
         return ApiResponse(data=nl2sql_service.generate_domain_sql(req))
     except ValueError as exc:
