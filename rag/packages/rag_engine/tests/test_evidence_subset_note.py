@@ -32,7 +32,9 @@ def test_no_rule_when_all_candidates_are_shown() -> None:
 
 def test_rule_carries_the_counted_numbers_when_only_a_subset_is_shown() -> None:
     rule = evidence_subset_reading_rule(3, 10)
-    assert "候補 10 件のうち上位 3 件" in rule
+    assert "候補 10 件の一部だけ" in rule
+    # 渡したブロックの数と単位が違う「上位 N 件」の数は文に書かない（#5088）。
+    assert "上位" not in rule and "3 件" not in rule
     assert rule.startswith("### 根拠の範囲")
 
 
