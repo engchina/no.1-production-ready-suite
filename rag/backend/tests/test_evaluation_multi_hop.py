@@ -17,10 +17,10 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from pr_evaluation_scoring import contains_normalized
 from pydantic import ValidationError
 
 from app.rag.evaluation import _case_error_result, score_case_answers, summarize_case_results
-from app.rag.evaluation_handling import contains_normalized
 from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,

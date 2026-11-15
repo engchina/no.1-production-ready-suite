@@ -12,6 +12,7 @@ import json
 from typing import Any, cast
 
 import pytest
+from pr_evaluation_scoring import contains_normalized
 
 from app.config import Settings
 from app.rag.chunking import Chunk
@@ -27,7 +28,6 @@ from app.rag.entity_index import (
     entity_key,
     record_fields,
 )
-from app.rag.evaluation_handling import contains_normalized
 from app.schemas.search import RetrievedChunk
 from tests.entity_layer_support import (
     CHUNK_SET_ID,

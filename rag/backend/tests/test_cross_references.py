@@ -1199,7 +1199,7 @@ async def test_multi_hop_common_window_reference_reaches_chapter_two(resolved_at
     #1362 の評価で A(実体のレシピあり)が欠けた根拠 4 件(`mt-common`)の型。第 1 章だけが
     検索に当たっても、同じ文書の同じ版の第 2 章を足し、旧版(2025 年度)の第 2 章は足さない。
     """
-    from app.rag.evaluation_handling import contains_normalized
+    from pr_evaluation_scoring import contains_normalized
 
     current = _plan_chunks("maintenance-plan.pdf", "doc-plan", "cs-plan")
     old = _plan_chunks("maintenance-plan-2025.pdf", "doc-plan-2025", "cs-old")
@@ -1442,7 +1442,7 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
     まま改善しなかった型(#1400)。参照先は同じナレッジベースの今の版の定期保守計画だけで、
     その中の質問に関連の高い chunk(rerank の順)を足す。旧版・別の KB の同じ名前の文書は足さない。
     """
-    from app.rag.evaluation_handling import contains_normalized
+    from pr_evaluation_scoring import contains_normalized
 
     case = _sales_case()
     window, sections = _change_window_corpus(resolved_at)

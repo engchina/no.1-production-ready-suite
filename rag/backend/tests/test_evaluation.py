@@ -1339,13 +1339,8 @@ def test_threshold_skips_unmeasured_metrics() -> None:
 # ---- 業務支援の採点（#1231） ------------------------------------------------------------
 
 
-def test_handling_helpers_score_outcome_steps_forbidden_and_conditions() -> None:
-    from app.rag.evaluation_handling import (
-        condition_coverage,
-        forbidden_hits,
-        observed_outcome,
-        step_order_score,
-    )
+def test_observed_outcome_prefers_explicit_and_infers_from_details() -> None:
+    from app.rag.evaluation_handling import observed_outcome
 
     assert observed_outcome({"outcome": "needs_human"}, abstained=True).source == "explicit"
     assert observed_outcome({}, abstained=True).outcome == "insufficient_evidence"
@@ -1356,16 +1351,6 @@ def test_handling_helpers_score_outcome_steps_forbidden_and_conditions() -> None
     assert observed_outcome(None, abstained=False).outcome == "answered"
     # 未知の対応の値は推定に戻す。
     assert observed_outcome({"outcome": "other"}, abstained=False).source == "inferred"
-
-    answer = "1. アカウントを登録する。2. 権限を付与する。3. 通知を設定する。"
-    assert step_order_score(answer, ["登録", "権限", "通知"]) == (1.0, [])
-    score, missing = step_order_score(answer, ["通知", "登録", "承認"])
-    assert (round(score, 4), missing) == (0.3333, ["承認"])
-    assert step_order_score(answer, []) == (1.0, [])
-    assert forbidden_hits("グループ　に付与してください", ["グループに付与", "削除"]) == [
-        "グループに付与"
-    ]
-    assert condition_coverage(answer, ["権限", "対象の利用者"]) == (0.5, ["対象の利用者"])
 
 
 async def test_business_support_cases_score_handling_metrics_and_reasons() -> None:
@@ -1576,30 +1561,6 @@ def test_case_schema_accepts_conditions_turns_alternatives_split_and_evidence() 
 def test_case_schema_rejects_invalid_contract(payload: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         EvaluationCase.model_validate({"id": "x", "query": "q", **payload})
-
-
-def test_nfkc_matching_ignores_width_case_and_whitespace() -> None:
-    from app.rag.evaluation_handling import (
-        best_step_order_score,
-        contains_normalized,
-        forbidden_hits,
-    )
-
-    answer = "ＡＵＴＨ．ＬＯＧ を確認し、\n すぐに　削除して ください。"
-    assert forbidden_hits(answer, ["すぐに削除してください", "auth.log", "承認は不要"]) == [
-        "すぐに削除してください",
-        "auth.log",
-    ]
-    assert contains_normalized("最長 ３０ 日です", "最長30日")
-    assert not contains_normalized("本文", " ")
-    # 別解のうち、いちばん点の高い列で採点する（同点なら期待する手順）。
-    text = "再ログインしてください。"
-    assert best_step_order_score(text, [["ログアウト", "ログインし直"], ["再ログイン"]]) == (
-        1.0,
-        [],
-    )
-    assert best_step_order_score(text, [["ログアウト"], ["サインアウト"]]) == (0.0, ["ログアウト"])
-    assert best_step_order_score(text, []) == (1.0, [])
 
 
 def _turn_response(
