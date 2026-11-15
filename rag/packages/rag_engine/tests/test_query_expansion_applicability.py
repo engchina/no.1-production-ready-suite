@@ -5,7 +5,6 @@ import json
 import pytest
 
 from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_context
-from rag_engine.retrieval.task_contract import filter_queries
 
 
 @pytest.mark.parametrize(
@@ -42,13 +41,3 @@ def test_explicit_glossary_alias_remains_supported(tmp_path):
     )
     result = build_runtime_knowledge_context("在庫検索の方法", tmp_path, terms_search_enabled=True)
     assert "STK100" in result.expanded_question
-    accepted, rejected = filter_queries(
-        result.original_question, [result.expanded_question], grounded_text=" ".join(result.matched_terms[0].labels())
-    )
-    assert accepted and not rejected
-
-
-def test_rewrite_guard_keeps_original_and_synonym_but_rejects_new_identifier():
-    accepted, rejected = filter_queries("在庫照会 STK100", ["在庫照会 STK100", "在庫検索", "給与 PAY900"])
-    assert accepted == ("在庫照会 STK100", "在庫検索")
-    assert rejected == ({"query": "給与 PAY900", "reason": "原質問・明示別名にない業務識別子"},)

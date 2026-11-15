@@ -2322,3 +2322,102 @@ def test_definition_change_cancels_other_running_cases(
         item.status == CaseStatus.DEFINITION_CHANGED
         for item in evaluation_store.get(job.id).results
     )
+
+
+# ---- 入力の安全チェック（合成の入力と決定論のスタブ。#5109） ------------------------------------
+
+
+def test_guardrail_checks_case_questions_before_the_run_and_the_judge(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """評価ケースの質問も Run を作る前に検査する。止めたケースは Run も判定も呼ばずに「実行の
+    失敗」にして job を続け、伏せた質問は Run にも判定のモデルにも伏せた文で渡す。"""
+    from guardrail_support import ATTACK, EMAIL, MASKED, enable_guardrails
+
+    del agent
+    model = _script(
+        monkeypatch,
+        [assistant_message("今月の売上は 300 万円です。")],
+        _judgement("correct", 1.0, "要点を満たしています。"),
+    )
+    oci = enable_guardrails(monkeypatch)
+    job = _job(
+        _case("blocked", ATTACK, "答えない"),
+        _case("masked", f"{EMAIL} の今月の売上は？", "300 万円"),
+    )
+
+    anyio.run(run_evaluation_job, job.id)
+
+    blocked, masked = evaluation_store.get(job.id).results
+    assert (blocked.status, blocked.run_id) == (CaseStatus.RUN_FAILED, None)
+    assert blocked.error and "安全チェック" in blocked.error
+    assert masked.status == CaseStatus.JUDGED
+    assert runtime_repository.get_run(str(masked.run_id)).goal == f"{MASKED} の今月の売上は？"
+    # モデルは通ったケースの回答と判定の 2 回だけ。どちらにも元の文を渡さない。
+    assert len(model.calls) == 2
+    sent = json.dumps([call.input for call in model.calls], ensure_ascii=False, default=str)
+    assert EMAIL not in sent and ATTACK not in sent
+    assert f"## 質問\\n{MASKED} の今月の売上は？" in str(model.calls[1].input)
+    assert oci.calls == [ATTACK, f"{EMAIL} の今月の売上は？"]
+
+
+def test_guardrail_checks_clarification_answers_before_the_next_run(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """問い返しへの答え（評価ケースの自由入力）も次の Run を作る前に検査し、伏せた文を送る。"""
+    from guardrail_support import EMAIL, MASKED, enable_guardrails
+
+    del agent
+    model = _script(
+        monkeypatch,
+        [assistant_message("どの表の売上を使いますか？")],
+        [assistant_message("今月の売上は 300 万円です。")],
+        _judgement("correct", 1.0, "要点を満たしています。"),
+    )
+    _patch_pending(monkeypatch, {"今月の売上は？": _NL2SQL_PENDING})
+    enable_guardrails(monkeypatch)
+    case = EvaluationCase(
+        id="clarified",
+        question="今月の売上は？",
+        expected="300 万円",
+        clarification_answers=[_answer(other=f"{EMAIL} の表")],
+    )
+    job = _job(case)
+
+    anyio.run(run_evaluation_job, job.id)
+
+    [result] = evaluation_store.get(job.id).results
+    assert result.status == CaseStatus.JUDGED
+    [round_] = result.clarification_rounds
+    assert round_.message == f"対象の表: {MASKED} の表"
+    assert runtime_repository.get_run(str(result.run_id)).goal == round_.message
+    assert EMAIL not in json.dumps(
+        [call.input for call in model.calls], ensure_ascii=False, default=str
+    )
+
+
+def test_guardrail_blocked_clarification_answer_stops_the_case(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """止めた問い返しへの答えでは次の Run を作らず、ケースを「実行の失敗」にする。"""
+    from guardrail_support import ATTACK, enable_guardrails
+
+    del agent
+    model = _script(monkeypatch, [assistant_message("どの表の売上を使いますか？")])
+    _patch_pending(monkeypatch, {"今月の売上は？": _NL2SQL_PENDING})
+    enable_guardrails(monkeypatch)
+    case = EvaluationCase(
+        id="clarified",
+        question="今月の売上は？",
+        expected="300 万円",
+        clarification_answers=[_answer(other=ATTACK)],
+    )
+    job = _job(case)
+
+    anyio.run(run_evaluation_job, job.id)
+
+    [result] = evaluation_store.get(job.id).results
+    assert result.status == CaseStatus.RUN_FAILED
+    assert result.error and "安全チェック" in result.error
+    assert result.clarification_rounds == []
+    assert len(model.calls) == 1

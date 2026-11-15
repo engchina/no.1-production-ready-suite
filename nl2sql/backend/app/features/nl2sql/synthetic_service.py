@@ -23,6 +23,7 @@ from app.security.request_actor import actor_scope
 from app.security.service import SecurityApiError, get_security_service
 from app.settings import Settings, get_settings
 
+from .guardrails import checked_fields
 from .models import SyntheticDataGenerateRequest
 from .oracle_adapter import OracleNl2SqlAdapter
 from .synthetic_models import TERMINAL, SyntheticRun, SyntheticRunRequest, SyntheticTarget, now
@@ -185,6 +186,9 @@ class SyntheticService:
             raise HTTPException(
                 400, "実行確認語が対象と一致しません。確認して入力し直してください。"
             )
+        # 生成の指示を使う最初の処理（受付の照合・保存・worker の生成）の前に安全チェック（#5110。
+        # 止めたら 422。個人情報は伏せた指示で受け付ける）。
+        request = checked_fields(request, "user_prompt", "extra_prompt")
         payload = request.model_dump(exclude={"confirmation", "idempotency_key"})
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()

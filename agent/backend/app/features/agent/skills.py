@@ -30,8 +30,8 @@ from app.features.agent.profile_name_migration import migrate_tool_name
 
 JsonObject = dict[str, Any]
 
-# 根拠の取得（`rag_retrieve_evidence`）の検索文を作る主体（#2651）。rag = RAG が質問に応じて
-# 言い換え・条の選択を足す（今までのスキル）/ caller = スキルの指示に沿ってモデルが検索文を作り、
+# 根拠の取得（`rag_retrieve_evidence`）の検索文を作る主体（#2651）。rag = RAG が質問と用語の別名で
+# 検索する / caller = スキルの指示に沿ってモデルが検索文を作り、
 # RAG は推論を重ねない（組み込み Runtime が `planning=caller` を付ける）。
 EvidencePlanning = Literal["rag", "caller"]
 EVIDENCE_PLANNING_RAG: EvidencePlanning = "rag"
