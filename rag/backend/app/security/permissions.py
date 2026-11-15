@@ -455,7 +455,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/search-answer-profiles"): _SEARCH_ANSWER_PROFILE_READ,
     ("POST", "/search-answer-profiles"): _any(SEARCH_ANSWER_PROFILES_MANAGE),
     # 実体の索引を持つ文書の数（拡張の開閉の案内。#1388）。
-    ("POST", "/search-answer-profiles/entity-index-coverage"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # プロファイルとガイドが継承するシステム設定の窓口（読み取りだけ。#2683）。
     ("GET", "/search-answer-profiles/inherited-contact"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", "/search-answer-profiles/answer-models"): _any(MENU_SEARCH_ANSWER_PROFILES),
