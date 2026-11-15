@@ -205,6 +205,26 @@ def test_replayed_output_that_cites_the_evidence_labels_adopts_the_selected_unit
         assert len(rendered.citation_lines) == 2
 
 
+def test_full_width_brackets_are_read_as_the_same_label_marks():
+    """全角の括弧で書いた印も同じ印として読み、内部のラベルを利用者に出さない（#5091）。"""
+    units = records_catalog()
+    for marks in ("【E2.1】【E3.1】", "［E2］［E3］", "[E2.1]【E3.1】"):
+        body = "1. 合成の手順の一つ目です。\n2. 合成の手順の二つ目です。" + marks
+        wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+        draft = canonical_full_answer(wire, units)
+        assert len(draft.items) == 2
+        checked, dropped = grounded.verify("合成の手順は？", draft, [snapshot.span() for snapshot in units.snapshots])
+        rendered = render_full_answer(draft, checked)
+        assert dropped == []
+        assert not any(mark in rendered.text for mark in ("E2", "E3", "【", "［"))
+        assert len(rendered.citation_lines) == 2
+    # 存在しない行のラベルは、全角でも形式の誤りとして拒む。
+    with pytest.raises(ValidationError):
+        full_answer_model(units).model_validate(
+            {"answer_body": "合成の値です。【E1.999】", "response_kind": "answered", "confidence": "high"}
+        )
+
+
 def test_unit_labels_are_named_by_the_block_and_do_not_reuse_document_numbers():
     """単位のラベルは根拠のラベルと順番だけで作り、資料の番号や hash の数字の並びを持たない。"""
     units = records_catalog()

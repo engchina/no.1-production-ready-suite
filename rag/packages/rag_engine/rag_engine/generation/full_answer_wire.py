@@ -29,16 +29,23 @@ class FullAnswerWire(BaseModel):
     confidence: Literal["high", "medium", "low"] = Field(description="回答の確かさの自己申告。")
 
 
+# 印の角括弧として読む文字（半角・全角・隅付き括弧。#5091）。
+_OPEN = "[\\[［【]"
+_CLOSE = "[\\]］】]"
+
+
 def citation_marker(catalog: SentUnitCatalog) -> re.Pattern[str] | None:
     """本文の引用の印: この入力の根拠のラベル（``[E2]``）か単位のラベル（``[E2.1]``）を角括弧で囲んだもの。
 
     印はモデルが入力の根拠で見たラベルそのもので、別の番号の体系を持たない（#5078）。今回送っていない根拠の
     ラベルは印にしない（本文の字として残す）。自然言語の意味は解析しない。
+
+    角括弧は文字の種類だけを形式として揃え、全角の ``［］`` と ``【】`` も同じ印として読む（#5091）。
     """
     if not catalog.block_labels:
         return None
     blocks = "|".join(re.escape(label) for label in sorted(catalog.block_labels, key=len, reverse=True))
-    return re.compile(rf"\[({blocks})(?:\.([1-9][0-9]*))?\]")
+    return re.compile(rf"{_OPEN}({blocks})(?:\.([1-9][0-9]*))?{_CLOSE}")
 
 
 def _marker_run(marker: re.Pattern[str]) -> re.Pattern[str]:
