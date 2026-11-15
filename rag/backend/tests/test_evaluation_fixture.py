@@ -88,7 +88,7 @@ def test_business_support_set_has_splits_turns_and_evidence_from_its_corpus() ->
     """区分・往復・既知の条件・必要な根拠（#1284）は、同梱の資料だけを使う。"""
     import re
 
-    from app.rag.evaluation_handling import contains_normalized
+    from pr_evaluation_scoring import contains_normalized
 
     corpus = Path(__file__).resolve().parents[2] / "evaluation/business-support"
     payload = json.loads((corpus / "business-support.json").read_text(encoding="utf-8"))
