@@ -34,6 +34,12 @@ cat > "${work}/skip.xml" <<'XML'
   <testcase classname="tests.test_select_ai" name="test_live"><skipped message="isolated Select AI opt-in"/></testcase>
 </testsuite></testsuites>
 XML
+cat > "${work}/xfail.xml" <<'XML'
+<testsuites><testsuite name="pytest" tests="2">
+  <testcase classname="tests.test_a" name="test_one"/>
+  <testcase classname="tests.test_a" name="test_known"><skipped type="pytest.xfail" message="#1 の既知の不具合"/></testcase>
+</testsuite></testsuites>
+XML
 cat > "${work}/empty.xml" <<'XML'
 <testsuites><testsuite name="pytest" tests="0"></testsuite></testsuites>
 XML
@@ -43,6 +49,7 @@ check "許可していない skip は失敗" 1 "${work}/skip.xml"
 check "許可した skip は成功" 0 "${work}/skip.xml" --allow "test_select_ai::test_live"
 check "別のテストの許可では失敗" 1 "${work}/skip.xml" --allow "test_other"
 check "0 件は失敗" 1 "${work}/empty.xml"
+check "xfail は skip に数えない" 0 "${work}/xfail.xml"
 
 if grep -q "::error::許可していない skip: tests.test_select_ai::test_live（isolated Select AI opt-in）" \
   < <(python3 "${gate}" "${work}/skip.xml" 2>&1 || true); then
