@@ -6,6 +6,8 @@
 pytest の JUnit XML（`--junitxml`）を読み、次のときに失敗する:
   - 実行したテストが 0 件。
   - 許可の一覧（--allow。test の `<classname>::<name>` に含まれる文字列）に無いテストが skip された。
+`xfail` の事例（JUnit XML では `type="pytest.xfail"` の skipped）は、実行して期待どおりに失敗したものなので
+skip に数えない（既知の不具合を `xfail(strict=True, raises=AssertionError)` で残す結合テスト。#5116）。
 
 使い方: pytest-skip-gate.py <junit.xml> [--allow <文字列>]...
 標準ライブラリだけを使う（runner の python3 で動く）。
@@ -28,9 +30,13 @@ def main(argv: list[str] | None = None) -> int:
     cases = list(root.iter("testcase"))
     unexpected: list[str] = []
     allowed: list[str] = []
+    xfailed = 0
     for case in cases:
         skipped = case.find("skipped")
         if skipped is None:
+            continue
+        if skipped.get("type") == "pytest.xfail":
+            xfailed += 1
             continue
         test_id = f"{case.get('classname', '')}::{case.get('name', '')}"
         reason = (skipped.get("message") or skipped.text or "").strip()
@@ -40,7 +46,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             unexpected.append(line)
 
-    print(f"テスト {len(cases)} 件、許可した skip {len(allowed)} 件、許可していない skip {len(unexpected)} 件")
+    print(
+        f"テスト {len(cases)} 件（うち xfail {xfailed} 件）、許可した skip {len(allowed)} 件、"
+        f"許可していない skip {len(unexpected)} 件"
+    )
     for line in allowed:
         print(f"  許可した skip: {line}")
     if not cases:

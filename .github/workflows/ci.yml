@@ -440,6 +440,8 @@ jobs:
               - "rag/backend/tests/test_approved_faq_sources_oracle.py"
               - "rag/artifacts/oracle-schema-migration.*"
               - "rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py"
+              # 全文検索の索引に入れる文字列の正規化（質問の側との対応は実 Oracle で確かめる。#5116）。
+              - "rag/packages/rag_engine/rag_engine/retrieval/character_forms.py"
               - "rag/backend/app/rag/system_schema*.py"
               - "rag/backend/app/rag/oracle_schema.py"
               - "rag/backend/app/rag/schema_migrations/**"
