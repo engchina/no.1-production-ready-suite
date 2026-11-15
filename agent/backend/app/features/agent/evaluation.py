@@ -91,6 +91,7 @@ from app.features.agent.evaluation_aids import (
     EVALUATION_AIDS,
     EvaluationAid,
 )
+from app.features.agent.guardrails import GuardrailBlockedError
 from app.features.agent.output_fields import (
     EVALUATION_EXPECTED_OUTPUT_ROWS_MAX,
     OUTPUT_KIND,
@@ -2537,7 +2538,15 @@ async def _run_case(
         )
         return run
 
-    run = create_run(case.question, thread_id=None, round_number=0)
+    # 質問の安全チェックは Run を作る共通の経路が当てる（利用者のチャットと同じ）。止めた質問は
+    # Run を作らず「実行の失敗」にして job を続け、判定のモデルにも検査の後の（伏せた）質問を
+    # 渡す（#5109）。
+    try:
+        run = create_run(case.question, thread_id=None, round_number=0)
+    except GuardrailBlockedError as exc:
+        finish(CaseStatus.RUN_FAILED, error=str(exc))
+        return
+    case = case.model_copy(update={"question": run.goal})
     store.update_result(job.id, index, run_id=run.id)
     timeout_seconds = case_timeout_seconds()
     runs: list[RunState] = []
@@ -2571,8 +2580,20 @@ async def _run_case(
         answered = answer_clarifications(case, settled, used)
         if answered is None:
             break
-        rounds.append(answered)
-        run = create_run(answered.message, thread_id=settled.thread_id, round_number=len(rounds))
+        try:
+            run = create_run(
+                answered.message, thread_id=settled.thread_id, round_number=len(rounds) + 1
+            )
+        except GuardrailBlockedError as exc:
+            finish(
+                CaseStatus.RUN_FAILED,
+                error=str(exc),
+                tool_calls=_tool_calls(*runs),
+                clarification_rounds=rounds,
+            )
+            return
+        # 判定のモデルにも、送った（検査の後の）文を渡す。
+        rounds.append(answered.model_copy(update={"message": run.goal}))
         store.update_result(job.id, index, run_id=run.id, clarification_rounds=list(rounds))
     tool_calls = _tool_calls(*runs)
     blocked_tools = list(

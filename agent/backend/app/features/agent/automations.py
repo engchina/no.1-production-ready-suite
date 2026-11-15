@@ -32,6 +32,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.features.agent import builtin_runtime
+from app.features.agent.guardrails import GuardrailBlockedError
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
     RunCreateRequest,
@@ -445,14 +446,19 @@ def fire(
     reason = agent_unavailable_reason(agents.get(item.agent_id))
     if reason is not None:
         return record("failed_to_start", reason)
-    run = runtime_repository.create_builtin_run(
-        RunCreateRequest(
-            goal=item.goal,
-            agent_id=item.agent_id,
-            metadata={"automation_id": item.id, "automation_trigger": trigger},
-        ),
-        created_by_user_uuid=item.run_as_user_uuid,
-    )
+    try:
+        # 目標の安全チェックは Run を作る共通の経路が当てる（止めたら Run を作らない。#5109）。
+        run = runtime_repository.create_builtin_run(
+            RunCreateRequest(
+                goal=item.goal,
+                agent_id=item.agent_id,
+                metadata={"automation_id": item.id, "automation_trigger": trigger},
+            ),
+            created_by_user_uuid=item.run_as_user_uuid,
+        )
+    except GuardrailBlockedError as exc:
+        logger.warning("agent_automation_guardrail_blocked", extra={"automation_id": item.id})
+        return record("failed_to_start", str(exc))
     _schedule_execution(run)
     return record("created", "実行を作りました。", run.id)
 

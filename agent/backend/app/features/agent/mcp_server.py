@@ -77,7 +77,7 @@ from app.features.agent.confirmation import (
     ConfirmationRequest,
 )
 from app.features.agent.evidence_access import unreadable_documents
-from app.features.agent.guardrails import GuardrailBlockedError, checked_goal
+from app.features.agent.guardrails import GuardrailBlockedError
 from app.features.agent.run_facts import run_answer_outcome, run_finished_at
 from app.features.agent.run_observation import (
     ObservedEvidenceItem,
@@ -1340,20 +1340,19 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             )
         _require_run_budget(request)
         try:
-            # 質問は Run を作る前に安全チェックを当てる（画面と同じ。#5062）。
-            question = checked_goal(arguments.question)
-        except GuardrailBlockedError as exc:
-            raise McpToolError(exc.code, str(exc), status=422) from exc
-        try:
+            # 質問の安全チェックは Run を作る共通の経路が先に当てる（画面と同じ。止めた質問では
+            # Run を作らない。#5062・#5109）。
             run = runtime_repository.create_builtin_run(
                 RunCreateRequest(
-                    goal=question,
+                    goal=arguments.question,
                     agent_id=agent.id,
                     thread_id=arguments.thread_id,
                 ),
                 created_by_user_uuid=caller.user_uuid,
                 extra_metadata=_key_metadata(request),
             )
+        except GuardrailBlockedError as exc:
+            raise McpToolError(exc.code, str(exc), status=422) from exc
         except ThreadNotFoundError as exc:
             # 他人の会話（system_admin でないキー）・別の業務 Agent の会話も「無い」として
             # 扱う（存在を漏らさない）。
@@ -1434,6 +1433,9 @@ def build_agent_mcp_server(request: Request) -> McpServer:
                 "agent_get_run で今の状態を読んでください。",
                 status=409,
             ) from exc
+        except GuardrailBlockedError as exc:
+            # 答えの自由入力を安全チェックで止めた（画面と同じ。答えは記録しない。#5109）。
+            raise McpToolError(exc.code, str(exc), status=422) from exc
         except ConfirmationAnswerError as exc:
             raise McpToolError(CONFIRMATION_ANSWER_INVALID_CODE, str(exc), status=422) from exc
         except AgentNotPublishedError as exc:
