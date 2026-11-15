@@ -3047,7 +3047,7 @@
           },
           "planning": {
             "default": "rag",
-            "description": "検索文を作る主体。rag=RAG が質問に応じて言い換え（AI）を足して検索する。caller=呼び出し元が作った query と queries だけで検索し、RAG は質問に応じた AI の処理をしない（用語の別名・rerank・前後の文脈の取得は同じ）。",
+            "description": "検索文を作る主体。rag=RAG が質問と用語の別名で検索する。caller=呼び出し元が作った query と queries だけで検索し、RAG は質問に応じた AI の処理をしない（用語の別名・rerank・前後の文脈の取得は同じ）。",
             "enum": [
               "rag",
               "caller"
