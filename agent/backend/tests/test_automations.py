@@ -295,6 +295,29 @@ def test_owner_that_cannot_run_the_agent_does_not_start(
     assert automation_store.get(automation["id"]).last_result == "failed_to_start"
 
 
+def test_goal_blocked_by_the_guardrail_does_not_start(
+    store: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """保存した目標は発火のたびに Run を作る前に検査し、止めたら Run を作らない（#5109）。"""
+    from guardrail_support import ATTACK, enable_guardrails
+
+    del store
+    automation = client.post("/api/automations", json={**BODY, "goal": ATTACK}).json()["data"]
+    oci = enable_guardrails(monkeypatch)
+    before = len(runtime_repository.list_runs())
+
+    fired = client.post(f"/api/automations/{automation['id']}/run").json()["data"]
+    _due(automation["id"])
+    [scheduled] = scheduler_tick()
+
+    for result in (fired, scheduled.model_dump()):
+        assert (result["result"], result["run_id"]) == ("failed_to_start", None)
+        assert "安全チェック" in result["message"]
+    assert oci.calls == [ATTACK, ATTACK]
+    assert len(runtime_repository.list_runs()) == before
+    assert automation_store.get(automation["id"]).last_result == "failed_to_start"
+
+
 def test_manual_run(store: Path) -> None:
     del store
     automation = client.post("/api/automations", json=BODY).json()["data"]

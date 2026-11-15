@@ -220,7 +220,7 @@ from app.features.agent.feedback import (
     FeedbackReport,
     build_feedback_report,
 )
-from app.features.agent.guardrails import GuardrailBlockedError, checked_goal
+from app.features.agent.guardrails import GuardrailBlockedError, checked_input
 from app.features.agent.mcp_url import (
     mask_url_credentials,
     url_credential_error,
@@ -1998,9 +1998,6 @@ async def create_run(
             _may_continue_thread, request, run_request.thread_id
         ):
             _raise_others_content_forbidden()
-        # 入力（目標・チャットの発言）は Run を作る前に安全チェックを当てる。止めた入力では Run を
-        # 作らず（ツールもモデルも呼ばない）、個人情報は伏せた文で続ける（#5062）。
-        run_request = run_request.model_copy(update={"goal": checked_goal(run_request.goal)})
         # 添付（#2517）は Run を作る前に確かめ（見えない添付は 404・別の会話の添付は 409）、会話が
         # 決まった後に会話へ結び付ける（新しい会話の ID は Run を作るときに決まる）。
         attachments: list[ChatAttachmentReference] = []
@@ -2013,6 +2010,8 @@ async def create_run(
             )
         # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。Run は操作した
         # 利用者として実行し、続ける会話は自分の会話だけ（他の利用者の会話は保存先も 404。#3244）。
+        # 入力（目標・チャットの発言）の安全チェックは Run を作る共通の経路が先に当てる（ここまでの
+        # 権限・会話・添付の確かめは文を使わない）。止めた入力では Run を作らない（#5062・#5109）。
         run = await run_in_threadpool(
             runtime_repository.create_builtin_run,
             run_request,
@@ -3660,6 +3659,11 @@ async def decide_confirmation(
                 ),
             },
         ) from exc
+    except GuardrailBlockedError as exc:
+        # 答えの自由入力を安全チェックで止めた（答えは記録せず、Run も作らない。#5109）。
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     except ConfirmationAnswerError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except AgentNotPublishedError as exc:
@@ -3773,6 +3777,11 @@ async def replay_run(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
+    except GuardrailBlockedError as exc:
+        # 保存した目標も、今の安全チェックで止めたら再実行しない（`POST /runs` と同じ。#5109）。
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     except ValueError as exc:
         # 確かめた後に Agent が無効・非公開になった（AgentNotPublishedError を含む）。
         raise HTTPException(
@@ -3971,7 +3980,16 @@ async def suggest_agent_draft_from_description(
 
     候補は有効なスキルと、**編集者**が使えるプロファイル（データの範囲の候補と同じ取得）。候補を
     取得できない接続は使わずに提案し、その理由を `notices` に返す。
+
+    説明は、候補の取得とモデルの呼び出しより先に安全チェックを当てる。止めたら 422（Run の作成と
+    同じ形）、個人情報は伏せた文でモデルに渡す（#5109）。
     """
+    try:
+        description = checked_input(payload.description)
+    except GuardrailBlockedError as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
     skills = [skill for skill in skill_registry.list() if skill.enabled]
     user_uuid = _run_creator_user_uuid(request)
     candidates: dict[str, tuple[str, list[DataScopeCandidate]]] = {}
@@ -3987,7 +4005,7 @@ async def suggest_agent_draft_from_description(
         candidates[connection] = (data.label, data.profiles)
     try:
         suggestion = await suggest_agent_draft(
-            payload.description, skills=skills, candidates=candidates, notices=notices
+            description, skills=skills, candidates=candidates, notices=notices
         )
     except AgentDraftError as exc:
         raise HTTPException(

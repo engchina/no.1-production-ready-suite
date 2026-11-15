@@ -934,3 +934,40 @@ def test_agent_chat_blocks_attacks_before_creating_a_run(
     assert result["isError"] is True
     assert "guardrail_blocked" in str(result)
     assert len(runtime_repository.list_runs()) == before
+
+
+def test_answer_confirmation_checks_the_free_text_before_resuming(
+    agents: None, monkeypatch: MonkeyPatch
+) -> None:
+    """MCP の確認の自由入力も、記録してモデルに渡す前に安全チェックを当てる（#5109）。"""
+    from guardrail_support import ATTACK, enable_guardrails
+
+    del agents
+    model = _script(
+        monkeypatch,
+        [function_call(CONFIRMATION_TOOL, ASK_ARGUMENTS, call_id="call-ask")],
+        [assistant_message("回答します。")],
+    )
+    output = _call("agent_chat", {"agent_id": AGENT_ID, "question": "経費を教えて"})[
+        "structuredContent"
+    ]
+    confirmation = output["confirmation"]
+    oci = enable_guardrails(monkeypatch)
+
+    blocked = _call(
+        "agent_answer_confirmation",
+        {
+            "run_id": output["run_id"],
+            "confirmation_id": confirmation["id"],
+            "answers": [{"item_id": confirmation["items"][0]["id"], "other_text": ATTACK}],
+        },
+    )
+
+    assert blocked["isError"] is True
+    assert "guardrail_blocked" in str(blocked)
+    assert oci.calls == [ATTACK]
+    run = runtime_repository.get_run(output["run_id"])
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    assert run.confirmations[0].status == "pending"
+    # 止めた答えではモデルを呼び直さない（確認を出した 1 回だけ）。
+    assert len(model.calls) == 1

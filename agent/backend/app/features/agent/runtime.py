@@ -84,6 +84,7 @@ from app.features.agent.confirmation import (
 )
 from app.features.agent.confirmation import METADATA_KEYS as CONFIRMATION_METADATA_KEYS
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
+from app.features.agent.guardrails import checked_confirmation_answers, checked_input
 from app.features.agent.output_fields import AgentOutputField, validate_output_fields
 from app.features.agent.report_contract import AnswerPlan, ReportOutputContract
 from app.features.agent.report_fields import REPORT_FIELDS_KEY, register_report_step
@@ -2307,7 +2308,13 @@ class AgentRuntimeRepository:
 
         確認が無ければ KeyError、答えていない確認でなければ ConfirmationClosedError、答えが
         確認事項に合わなければ `ConfirmationAnswerError`。
+
+        答えの自由入力は、記録する前（lock の外）に安全チェックを当てる（画面と MCP の共通の
+        経路）。止めた答えは記録せず（`GuardrailBlockedError`）、個人情報は伏せた文で記録して
+        モデル・次の Run に渡す（#5109）。
         """
+        if action == "answer":
+            answers = checked_confirmation_answers(answers)
         with self._lock:
             run = self._require_run(run_id)
             confirmation = next(
@@ -2466,7 +2473,12 @@ class AgentRuntimeRepository:
         予約の metadata（回答前の確認の答え。#1839）。続ける会話（`thread_id`）は
         `created_by_user_uuid` の会話だけ（ほかは `ThreadNotFoundError`。#3244）。`all_users` は
         持ち主の確かめを呼ぶ側が済ませたときだけ渡す（会話の持ち主は変えない）。
+
+        目標は、Run を作る前（lock の外）に安全チェックを当てる。利用者の文を使う最初の処理で、
+        Run を作るすべての入口（チャット・MCP・自動実行・品質評価・再実行）がここを通る。止めた
+        目標では Run を作らず（`GuardrailBlockedError`）、個人情報は伏せた文で作る（#5109）。
         """
+        request = request.model_copy(update={"goal": checked_input(request.goal)})
         with self._lock:
             run = self._create_builtin_run_locked(
                 request,

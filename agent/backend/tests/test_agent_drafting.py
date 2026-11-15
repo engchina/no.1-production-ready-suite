@@ -290,6 +290,59 @@ def test_suggestion_failure_returns_reason(monkeypatch: MonkeyPatch) -> None:
     assert "下書きを提案できませんでした" in response.json()["error_messages"][0]
 
 
+def test_suggestion_checks_the_description_before_candidates_and_the_model(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """説明は候補の取得とモデルの呼び出しより先に安全チェックを当てる（#5109）。"""
+    from guardrail_support import ATTACK, EMAIL, MASKED, enable_guardrails
+
+    events: list[str] = []
+    oci = enable_guardrails(monkeypatch, events=events)
+
+    def candidates(connection: str, *, user_uuid: str | None) -> DataScopeCandidatesData:
+        events.append(f"candidates:{connection}")
+        return DataScopeCandidatesData(connection=connection, label=connection, profiles=[])
+
+    monkeypatch.setattr(agent_router, "list_candidates", candidates)
+    model = _script(
+        monkeypatch,
+        [
+            assistant_message(
+                json.dumps(
+                    {
+                        "name": "資料を調べる Agent",
+                        "description": "資料を調べて答える",
+                        "instructions": "根拠を示して答える。",
+                        "skill_ids": [],
+                        "data_scopes": [],
+                        "output_fields": [],
+                        "evaluation_cases": [],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        ],
+    )
+
+    blocked = client.post("/api/agents/draft-suggestion", json={"description": ATTACK})
+
+    assert blocked.status_code == 422, blocked.text
+    assert "guardrail_blocked" in blocked.text
+    assert events == ["guardrail"]
+    model_calls_when_blocked = len(model.calls)
+    assert model_calls_when_blocked == 0
+
+    masked = client.post(
+        "/api/agents/draft-suggestion", json={"description": f"{EMAIL} からの申請を確かめる業務"}
+    )
+
+    assert masked.status_code == 200, masked.text
+    assert events[1] == "guardrail" and events[2].startswith("candidates:")
+    sent = str(model.calls[0].input)
+    assert EMAIL not in sent and f"{MASKED} からの申請を確かめる業務" in sent
+    assert oci.calls == [ATTACK, f"{EMAIL} からの申請を確かめる業務"]
+
+
 def test_suggestion_needs_description() -> None:
     response = client.post("/api/agents/draft-suggestion", json={"description": "   "})
     assert response.status_code == 422
