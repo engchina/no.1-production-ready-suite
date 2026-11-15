@@ -757,40 +757,6 @@ async def test_chat_attachments_failure_reaches_answer_diagnostics(
     assert SECRET not in json.dumps(answer, ensure_ascii=False, default=str)
 
 
-async def test_pre_answer_degraded_steps_reach_approved_faq_answer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """承認済み FAQ から答えるときも、前の段の縮退を回答の診断に出す。"""
-    import rag_engine.adapters.oci as engine_oci
-    from rag_engine.generation.faq_answer import FaqAnswerDraft
-
-    from app.rag.degraded_steps import DegradedSteps
-
-    monkeypatch.setattr(
-        engine_oci,
-        "parse_text_response",
-        lambda *args, **kwargs: FaqAnswerDraft(answer="日当は 1 泊 2,000 円です。"),
-    )
-    degraded = DegradedSteps()
-    degraded.record_degraded("history_rewrite", Boom(SECRET))
-    engine = AnswerEngine(
-        Settings(),
-        oracle=FakeOracle(),  # type: ignore[arg-type]
-        genai=FakeGenAi(),  # type: ignore[arg-type]
-        approved_faq=("出張の日当はいくらですか？", "一般は 1 泊 2,000 円です。"),
-        degraded=degraded,
-    )
-
-    outcome = await engine.run(SearchRequest(query="出張したら日当は何円？"))
-
-    assert outcome.diagnostics["degraded_steps"] == [
-        {"kind": "history_rewrite", "count": 1, "exc_type": "Boom"}
-    ]
-
-
-# ---- rerank の失敗と診断のモデル(#3286) ----
-
-
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "ok"])
 async def test_rerank_failure_does_not_show_the_rerank_model(
     monkeypatch: pytest.MonkeyPatch, fail: bool

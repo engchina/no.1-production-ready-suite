@@ -1408,49 +1408,23 @@ class Settings(
     )
     rag_approved_faq_semantic_enabled: bool = Field(
         default=True,
-        description=(
-            "Approved FAQ(類似問)の照合に embedding の意味類似度を加える(rag_poc と同じ既定 ON)。"
-        ),
+        description=("承認済み FAQ の候補の照合に embedding の意味類似度を加える(既定 ON)。"),
     )
-    rag_approved_faq_suggestion_min_score: float = Field(
-        default=0.75,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "チャットと RAG 検索で類似問を提示する一致度の下限(0〜1。#684 / #709)。"
-            "低いと弱い候補が毎回出て、"
-            "利用者に毎回「どれでもない」を選ばせることになる。"
-        ),
-    )
-    rag_approved_faq_suggestion_max_gap: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "チャットと RAG 検索で類似問を提示するとき、1 位の一致度からこの差より離れた候補を"
-            "出さない(#709)。"
-            "1 位とほぼ同じくらい近い候補だけを並べ、遠い 2・3 位で迷わせない。"
-        ),
-    )
-    rag_approved_faq_negative_min_score: float = Field(
-        default=0.75,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "承認済み FAQ の否定の質問(その FAQ を当てたくない質問の例)に当たったとみなす"
-            "一致度の下限(0〜1。#4788)。質問と否定の質問の一致度がこの値以上で、FAQ の質問との"
-            "一致度以上のとき、その FAQ を候補から外す。"
-        ),
-    )
-    rag_approved_faq_direct_answer_min_score: float = Field(
+    rag_approved_faq_min_score: float = Field(
         default=0.92,
-        ge=0.0,
-        le=1.0,
+        ge=0.90,
+        le=0.99,
         description=(
-            "承認済み FAQ の回答をそのまま返す一致度の下限(0〜1。全体設定だけの値。#4788)。"
-            "そのまま返すかどうかは、検索・回答プロファイルの FAQ の設定(既定はオフ)が持つ。"
-            "類似問の候補の「そのまま使える一致度」の印にも同じ値を使う。"
+            "「回答の前に関連するQ&Aを提示する」がオンの検索・回答プロファイルで、回答の前に出す"
+            "承認済み FAQ の候補の一致度の下限(0.90〜0.99。#5107)。下限未満の FAQ は出さない。"
+            "利用者が選んだ FAQ の回答はそのまま返す(LLM と検索を呼ばない)。"
         ),
+    )
+    rag_approved_faq_max_suggestions: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="回答の前に出す承認済み FAQ の候補の最大件数(#5107)。",
     )
     # 回答は rag_poc の根拠付き回答だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
@@ -1741,6 +1715,14 @@ class Settings(
         description=(
             "リクエスト単位で解決した検索・回答プロファイルの版（id・更新時刻・設定の sha256。"
             "#1276）。回答の記録の provenance に残すだけで、検索・回答の挙動は変えない。"
+        ),
+    )
+    rag_approved_faq_selected: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "リクエスト単位で、利用者が選んだ承認済み FAQ（id・question・answer。#5107）。入口で"
+            "プロファイルの FAQ から引き直す。値があれば回答の工程は検索・回答の生成をせず、FAQ の"
+            "回答をそのまま返す。"
         ),
     )
     rag_answer_as_of: str = Field(

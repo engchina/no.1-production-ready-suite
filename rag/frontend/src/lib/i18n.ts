@@ -1797,26 +1797,13 @@ export const ja = {
   "searchAnswerProfiles.faq.title": "登録済みQ&A",
   "searchAnswerProfiles.faq.enabled.label": "回答の前に関連するQ&Aを提示する",
   "searchAnswerProfiles.faq.enabled.help":
-    "チャットでは、質問に近い登録済みQ&Aを最大 3 件と「どれでもない」を出し、選んでから回答します。選んだQ&Aは質問と一緒に LLM に渡します。RAG 検索でも候補を出します。",
-  "searchAnswerProfiles.faq.enabled.error": "類似問の提示の設定を保存できませんでした。",
-  "searchAnswerProfiles.faq.directAnswer.label": "一致度が高いときは、Q&A の回答をそのまま返す",
-  "searchAnswerProfiles.faq.directAnswer.help":
-    "チャットで、質問が登録済みQ&Aの質問と下限以上の一致度で一致したとき、資料の検索と回答の生成をせずに、登録された回答をそのまま返します（LLM を使いません）。下限に届かないときは、候補を出して選ぶ流れのままです。「回答の前に関連するQ&Aを提示する」がオンのときに使えます。",
-  "searchAnswerProfiles.faq.directAnswer.error": "Q&A の回答をそのまま返す設定を保存できませんでした。",
-  "searchAnswerProfiles.faq.directAnswer.minScore": "一致度の下限は {value}% です（全体設定）。",
-  "searchAnswerProfiles.faq.negative.label": "当てはめない質問",
-  "searchAnswerProfiles.faq.negative.help":
-    "この Q&A を当てたくない質問の例を、1 行に 1 つ書きます（20 件まで）。質問がこの例に近いときは、この Q&A を候補に出さず、回答にも使いません。",
-  "searchAnswerProfiles.faq.negative.tooMany": "当てはめない質問は 20 件までです。",
-  "searchAnswerProfiles.faq.negative.tooLong": "当てはめない質問は 1 件 1000 文字までです。",
-  "searchAnswerProfiles.faq.negative.summary": "当てはめない質問: {count} 件",
-  "searchAnswerProfiles.faq.negative.edit.action": "当てはめない質問を編集",
-  "searchAnswerProfiles.faq.negative.edit.title": "当てはめない質問を編集",
-  "searchAnswerProfiles.faq.negative.edit.close": "閉じる",
-  "searchAnswerProfiles.faq.negative.edit.submit": "保存",
-  "searchAnswerProfiles.faq.negative.edit.cancel": "キャンセル",
-  "searchAnswerProfiles.faq.negative.edit.done": "当てはめない質問を保存しました。",
-  "searchAnswerProfiles.faq.negative.edit.error": "当てはめない質問を保存できませんでした。",
+    "チャットと RAG 検索で、質問に近い登録済みQ&A（一致度 {min}% 以上・最大 {count} 件）を回答の前に提示します。選んだQ&Aの回答をそのまま返し、資料の検索と回答の生成はしません。当てはまるQ&Aが無ければ候補を出さずに回答します。オフにするとQ&Aを使いません。",
+  "searchAnswerProfiles.faq.enabled.helpLoading":
+    "チャットと RAG 検索で、質問に近い登録済みQ&Aを回答の前に提示します。選んだQ&Aの回答をそのまま返し、資料の検索と回答の生成はしません。オフにするとQ&Aを使いません。",
+  // 見える範囲（#5107）。プロファイルの権限だけで判定し、ナレッジベースの権限では見せ分けない。
+  "searchAnswerProfiles.faq.visibility":
+    "この検索・回答プロファイルの権限を持つ人は、全員ここのQ&Aを見られます（ナレッジベースの権限では判定しません）。ナレッジベースの権限で見せ分けたい内容は、ここに入れないでください。Q&Aの Excel は、文書としてナレッジベースに登録することもできます。",
+  "searchAnswerProfiles.faq.enabled.error": "Q&A の提示の設定を保存できませんでした。",
   "searchAnswerProfiles.faq.question": "質問（QUESTION）",
   "searchAnswerProfiles.faq.answer": "回答（ANSWER）",
   "searchAnswerProfiles.faq.error.questionRequired": "質問を入力してください。",
@@ -1826,17 +1813,22 @@ export const ja = {
   "searchAnswerProfiles.faq.deleted": "Q&A を削除しました。",
   "searchAnswerProfiles.faq.deleteConfirm.title": "この Q&A を削除しますか？",
   "searchAnswerProfiles.faq.deleteConfirm.description":
-    "「{question}」を登録済みQ&Aから削除します。検索の類似問の候補に出なくなります。",
+    "「{question}」を登録済みQ&Aから削除します。チャットと RAG 検索の候補に出なくなります。",
   "searchAnswerProfiles.faq.add": "追加",
   "searchAnswerProfiles.faq.added": "Q&A を追加しました。",
   "searchAnswerProfiles.faq.addTitle": "Q&A を追加",
   "searchAnswerProfiles.faq.saveError": "Q&A を保存できませんでした。",
   "searchAnswerProfiles.faq.empty": "登録済みQ&Aはまだありません",
   "searchAnswerProfiles.faq.emptyHint":
-    "追加または Excel 取込で登録すると、検索時に類似問として提示されます。",
+    "追加または Excel 取込で登録すると、チャットと RAG 検索で回答の前に候補として提示されます。",
   "searchAnswerProfiles.faq.importTitle": "Excel 取込",
   "searchAnswerProfiles.faq.importHelp":
-    "1 行目に QUESTION と ANSWER の列を持つ Excel（.xlsx / .xls）を選ぶと、先頭 10 件をプレビューします。任意の NEGATIVE_QUESTIONS 列には、当てはめない質問をセル内で改行して入力できます。",
+    "1 行目に QUESTION と ANSWER の列を持つ Excel（.xlsx / .xls）を選ぶと、先頭 10 件をプレビューします。読み込むのは QUESTION 列と ANSWER 列だけで、ほかの列は無視します。",
+  "searchAnswerProfiles.faq.template": "テンプレートをダウンロード",
+  "searchAnswerProfiles.faq.templateHint": "QUESTION・ANSWER の 2 列だけの Excel です。",
+  "searchAnswerProfiles.faq.templateDone": "テンプレートをダウンロードしました。",
+  "searchAnswerProfiles.faq.templateError":
+    "テンプレートをダウンロードできませんでした。時間をおいて、もう一度試してください。",
   "searchAnswerProfiles.faq.importFile": "取込む Excel ファイル",
   "searchAnswerProfiles.faq.importModeLabel": "取込モード",
   "searchAnswerProfiles.faq.importMode.INSERT": "追加（同じ質問はスキップ）",
@@ -1846,39 +1838,6 @@ export const ja = {
   "searchAnswerProfiles.faq.import": "取込",
   "searchAnswerProfiles.faq.importing": "Q&A を取り込んでいます",
   "searchAnswerProfiles.faq.imported": "取込みました（追加 {inserted} 件 / 置換で削除 {deleted} 件）",
-  // 対象のナレッジベース・根拠の状態・承認者（#4621）。
-  "searchAnswerProfiles.faq.targets.label": "対象のナレッジベース",
-  "searchAnswerProfiles.faq.targets.placeholder": "検索して選ぶ…",
-  "searchAnswerProfiles.faq.targets.help":
-    "選んだナレッジベースをすべて使える利用者にだけ、この Q&A を提示・回答に使います。既定はプロファイルの全ナレッジベースです。",
-  "searchAnswerProfiles.faq.targets.importHelp":
-    "取り込む Q&A の対象です。選んだナレッジベースをすべて使える利用者にだけ提示・回答に使います。",
-  "searchAnswerProfiles.faq.targets.required": "対象のナレッジベースを 1 つ以上選んでください。",
-  "searchAnswerProfiles.faq.targets.summary": "対象: {names}",
-  "searchAnswerProfiles.faq.targets.none": "対象: なし",
-  "searchAnswerProfiles.faq.targets.removedName": "{name}（プロファイルから外れた）",
-  "searchAnswerProfiles.faq.approval.summary": "承認: {name}・{time}",
-  "searchAnswerProfiles.faq.approval.none": "承認: 記録なし",
-  "searchAnswerProfiles.faq.approval.unknownUser": "（削除済みのユーザー）",
-  "searchAnswerProfiles.faq.state.needsReview": "要確認",
-  "searchAnswerProfiles.faq.state.sourceUpdated": "原文が更新されました",
-  "searchAnswerProfiles.faq.reason.no_target_knowledge_bases":
-    "対象のナレッジベースがありません。確かめ直すまで提示・回答に使いません。",
-  "searchAnswerProfiles.faq.reason.knowledge_base_removed":
-    "対象のナレッジベースがプロファイルから外れました。確かめ直すまで提示・回答に使いません。",
-  "searchAnswerProfiles.faq.reason.source_document_missing":
-    "根拠の文書が削除されたか、対象のナレッジベースから外れました。確かめ直すまで提示・回答に使いません。",
-  "searchAnswerProfiles.faq.sourceUpdatedHelp":
-    "根拠の文書が新しい版になりました。提示・回答には使い続けます。内容を確かめたら確かめ直してください。",
-  "searchAnswerProfiles.faq.confirm.action": "対象を確かめ直す",
-  "searchAnswerProfiles.faq.confirm.title": "対象を確かめ直す",
-  "searchAnswerProfiles.faq.confirm.close": "閉じる",
-  "searchAnswerProfiles.faq.confirm.description":
-    "対象のナレッジベースを選び直して承認します。今も対象のナレッジベースにある根拠の文書は今の版で記録し直し、無くなった文書は根拠から外します。",
-  "searchAnswerProfiles.faq.confirm.submit": "確かめて承認",
-  "searchAnswerProfiles.faq.confirm.cancel": "キャンセル",
-  "searchAnswerProfiles.faq.confirm.done": "Q&A の対象を確かめ直しました。",
-  "searchAnswerProfiles.faq.confirm.error": "Q&A の対象を確かめ直せませんでした。",
   "searchAnswerProfiles.runtime.kind.terms": "用語・同義語",
   "searchAnswerProfiles.runtime.terms.hint":
     "質問に用語か同義語が含まれると、同義語を検索文に足して検索を広げ、用語の説明を回答の生成に渡します。",
@@ -3609,7 +3568,7 @@ export const ja = {
   "search.answer": "回答",
   "search.faq.title": "質問に近い登録済みQ&Aがあります",
   "search.faq.description":
-    "登録済みの類似問が見つかりました。Q&A の回答を使うか、類似問を使わずに検索を続けるかを選んでください。",
+    "選んだQ&Aの回答をそのまま返します（資料の検索と回答の生成はしません）。当てはまるものが無ければ「どれでもない」を選ぶと、資料を検索して回答します。",
   "search.faq.score": "一致度 {value}%",
   "search.faq.use": "このQ&Aで回答する",
   // 回答の末尾の窓口の案内（#2400）
@@ -3640,14 +3599,11 @@ export const ja = {
     "前提を示すときは確認事項を出さず、決まらない点を前提として示して回答します。",
   "chat.faq.title": "質問に近い登録済みQ&Aがあります",
   "chat.faq.description":
-    "質問と同じ趣旨の類似問を選ぶと、資料を検索せずに、その登録された回答をもとに回答します。当てはまるものが無ければ「どれでもない」を選ぶと、資料を検索して回答します。",
+    "選んだQ&Aの回答をそのまま返します（資料の検索と回答の生成はしません）。当てはまるものが無ければ「どれでもない」を選ぶと、資料を検索して回答します。",
   "chat.faq.score": "一致度 {value}%",
   "chat.faq.use": "このQ&Aで回答する",
   "chat.faq.skip": "どれでもない（資料を検索する）",
   "search.faq.skip": "どれでもない（資料を検索する）",
-  "search.faq.answerTitle": "登録済みQ&Aの回答",
-  "search.faq.answerDescription": "LLM を使わず、検索・回答プロファイルに登録された登録された回答を表示しています。",
-  "search.faq.matched": "一致した Q&A: {question}",
   "search.answerDetails.models": "使用したモデル",
   "search.answerDetails.questionType": "問い合わせ型: {value}",
   "search.answerText.citationPart": "箇所 {number}/{total}：{citation}",
@@ -3748,16 +3704,9 @@ export const ja = {
   "search.answerDetails.guideLoadFailed.body":
     "業務ガイドの条件を確かめずに、資料だけで回答しました。時間をおいて質問し直すと、業務ガイドに沿って回答します。",
   "search.answerDetails.humanReview": "人手確認が必要",
-  "search.answerDetails.faqSource.badge": "登録済みQ&Aから回答",
-  "search.answerDetails.faqSource.title": "回答の出典: 登録済みQ&A",
-  "search.answerDetails.faqSource.question": "Q&A の質問",
-  "search.answerDetails.faqSource.answer": "登録された回答（原文）",
-  "search.answerDetails.faqSource.answerMissing": "この回答の記録には、登録された回答の原文が残っていません。",
-  "search.answerDetails.faqSource.note":
-    "回答は、この登録された回答だけをもとに作成しました。表示は回答した時点の内容です。",
   "search.answerDetails.faqDirect.title": "登録済みQ&Aの回答をそのまま表示しています",
   "search.answerDetails.faqDirect.body":
-    "質問が登録済みQ&Aと一致したため（一致度 {score}%）、資料の検索と回答の生成はしていません。引用はありません。",
+    "選んだ登録済みQ&Aの回答をそのまま返しました。資料の検索と回答の生成はしていません。引用はありません。",
   "search.history.loadError": "保存された回答を読み込めませんでした。",
   "search.previewSource.loading": "引用した版のファイルを確認しています",
   "search.previewSource.error": "引用した版のファイルを確認できませんでした。",
@@ -3790,7 +3739,7 @@ export const ja = {
   "settings.retrieval.prompts.description": "質問の解釈と検索のそれぞれで、使う条件とモデルに渡す指示を確認できます。表示順は処理の目安です。設定や検索結果によって省略される場合があります。指示は読み取り専用です。",
   "settings.answerPrompts.stages.title": "処理の各段のプロンプト",
   "settings.answerPrompts.stages.description":
-    "回答生成の工程ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理で、Q&A は検索による回答とは別の経路です。編集できるのは「役割と回答の書き方」と登録済みQ&Aの指示で、ほかは読み取り専用です。",
+    "回答生成の工程ごとに、使う条件と指示を示します。設定や判定によって省略・再生成される場合があります。検索関連の指示は「検索方法」、品質評価の指示は「評価の基準」、文書解析・文書分割の指示は各設定画面で確認します。各段の中はモデルへ渡す順です。業務ガイドの準備は独立した処理です。選んだ登録済みQ&Aは LLM を使わずに回答をそのまま返すので、指示はありません。編集できるのは「役割と回答の書き方」で、ほかは読み取り専用です。",
   "settings.answerPrompts.phase.ingestion": "文書解析",
   "settings.answerPrompts.phase.question": "質問の解釈",
   "settings.answerPrompts.phase.retrieval": "検索",
@@ -3801,7 +3750,7 @@ export const ja = {
   "settings.answerPrompts.phase.knowledge.description": "回答で使う業務ガイドを準備する独立した処理です。文書の取込ごとに実行するものではありません。",
   "settings.answerPrompts.phase.question.description": "業務ガイドの条件確認、会話を踏まえた書き換えの順です。対象外の段は省略します。",
   "settings.answerPrompts.phase.retrieval.description": "検索候補を集めた後、必要に応じて画面の目録から根拠を足します。",
-  "settings.answerPrompts.phase.generation.description": "登録済みQ&Aを選んだ場合は Q&A の経路、それ以外は検索した根拠による生成です。後者は、編集できる「役割と回答の書き方」に固定の指示を必ず足してシステムプロンプトにします。",
+  "settings.answerPrompts.phase.generation.description": "検索した根拠による生成です。編集できる「役割と回答の書き方」に固定の指示を必ず足してシステムプロンプトにします。登録済みQ&Aを選んだときは LLM を使わず、Q&A の回答をそのまま返します。",
   "settings.evaluation.prompts.title": "品質評価のプロンプト",
   "settings.evaluation.prompts.description": "品質評価と保存した回答の評価で使う指示を編集・保存します。",
   "settings.answerPrompts.phase.evaluation.description": "品質評価では、利用できる標準回答・必須要点に応じて、モデルが回答の正確性を判定します。標準回答・必須要点が無いときや判定を完了できないときは未評価です。検索の指標はコードで計算します。",
@@ -3851,11 +3800,9 @@ export const ja = {
   "settings.answerPrompts.stage.history_rewrite.condition": "会話を踏まえた質問の書き換えを有効にしたとき、チャットの毎回の発話で 1 回（会話の最初の発話も含む）。検索用の質問を作り、検索が要らない挨拶・雑談かを分けます",
   "settings.answerPrompts.stage.small_talk": "挨拶・雑談への応答",
   "settings.answerPrompts.stage.small_talk.condition": "会話を踏まえた質問の書き換えが、発話を挨拶・雑談と分けたとき（検索しない）",
-  "settings.answerPrompts.stage.faq_answer": "登録済みQ&Aからの回答",
-  "settings.answerPrompts.stage.faq_answer.condition": "チャットで近い登録済みQ&Aを選んだとき（検索しない）",
   "settings.answerPrompts.stage.generation": "回答の生成",
   "settings.answerPrompts.stage.generation.condition":
-    "検索した根拠から回答を生成するとき。検索だけの実行、回答前の確認、登録済みQ&Aの経路では使いません",
+    "検索した根拠から回答を生成するとき。検索だけの実行、回答前の確認、登録済みQ&Aを選んだときは使いません",
   "settings.answerPrompts.stage.evaluation": "回答の品質評価",
   "settings.answerPrompts.stage.evaluation.condition":
     "品質評価と保存した回答の評価。正確性は標準回答や必須要点などの期待があるときに測ります",
@@ -4140,7 +4087,7 @@ export const ja = {
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "質問を補い、検索が要るかを分ける",
   "search.stage.smallTalkReply": "検索せずに短く応じる",
-  "search.stage.faqDirectMatch": "登録済みQ&Aと照合する",
+  "search.stage.approvedFaqAnswer": "選んだ登録済みQ&Aの回答を返す",
   "search.stage.attachmentEvidence": "会話の添付から根拠を選ぶ",
   "search.stage.answer": "質問の条件を整理して回答を作る",
   // 回答を作らない RAG 検索（チャットと同じ流れを回答の生成の手前で止める。#3506）

@@ -4603,3 +4603,28 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261115_5107_approved_faq_fields
+UPDATE rag_search_answer_profile_knowledge
+SET payload_json = JSON_TRANSFORM(
+    payload_json,
+    REMOVE '$.direct_answer_enabled',
+    REMOVE '$.semantic_index_cache',
+    REMOVE '$.records[*].negative_questions',
+    REMOVE '$.records[*].target_knowledge_base_ids',
+    REMOVE '$.records[*].source_documents',
+    REMOVE '$.records[*].approval'
+),
+    revision = revision + 1,
+    updated_at = SYSTIMESTAMP
+WHERE kind = 'approved_faq'
+  AND (JSON_EXISTS(payload_json, '$.direct_answer_enabled')
+   OR JSON_EXISTS(payload_json, '$.semantic_index_cache')
+   OR JSON_EXISTS(payload_json, '$.records[*].negative_questions')
+   OR JSON_EXISTS(payload_json, '$.records[*].target_knowledge_base_ids')
+   OR JSON_EXISTS(payload_json, '$.records[*].source_documents')
+   OR JSON_EXISTS(payload_json, '$.records[*].approval'));
+
+-- migration: 20261115_5107_faq_answer_prompt
+DELETE FROM RAG_ANSWER_PROMPTS
+WHERE PROMPT_KEY = 'faq_answer.system';

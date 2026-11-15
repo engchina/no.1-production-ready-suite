@@ -17,7 +17,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 略号 | 場所 | コード |
 |---|---|---|
-| `DS` | 回答の診断の `degraded_steps`（処理の種類・回数・例外の型の名前。#3259）。根拠 0 件のときは `zero_evidence.degraded_steps` にも入る。回答エンジンの前の段（`pipeline.py`）の縮退も、同じ記録を回答エンジンへ渡して入れる（承認済み FAQ からの回答にも入る。#3286） | `rag/backend/app/rag/degraded_steps.py::DegradedSteps`・`rag/backend/app/rag/answer_engine.py::_SearchState.record_degraded`・`rag/packages/rag_engine/rag_engine/dependencies.py::report_degraded` |
+| `DS` | 回答の診断の `degraded_steps`（処理の種類・回数・例外の型の名前。#3259）。根拠 0 件のときは `zero_evidence.degraded_steps` にも入る。回答エンジンの前の段（`pipeline.py`）の縮退も、同じ記録を回答エンジンへ渡して入れる | `rag/backend/app/rag/degraded_steps.py::DegradedSteps`・`rag/backend/app/rag/answer_engine.py::_SearchState.record_degraded`・`rag/packages/rag_engine/rag_engine/dependencies.py::report_degraded` |
 | `ZE` | 根拠 0 件の診断 `zero_evidence`（0 件になった段・検索の記録・効いていた自動の条件） | `rag/backend/app/rag/answer_engine.py::_zero_evidence_diagnostics` |
 | `GD` | 検索の診断の `guardrail_degraded`（OCI Guardrails で検査できなかった） | `rag/backend/app/schemas/search.py::SearchDiagnostics`・`platform/packages/system_settings_backend/src/pr_system_settings/guardrails.py::GuardrailResult` |
 | `DX` | 回答の診断のその能力の項目（`graph_expansion`・`section_expansion`・`request_coverage`・`strategy` など） | `rag/backend/app/rag/answer_engine.py::_outcome_from_result` |
@@ -39,7 +39,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 回答の安全チェック（OCI Guardrails） | 任意（設定 `PLATFORM_GUARDRAILS_OUTPUT_ENABLED`）。有効なら必須 | 有効で検査が失敗 → **拒否**（回答を止める文に置き換える） | `GD`・`SP`（`answer_guardrail` が `error`。`guardrail_stage_outcome`） | 見せない | `rag/backend/app/rag/pipeline.py::guardrail_stage_outcome` |
 | 呼び出し元の検索文の安全チェック（#2651） | 任意（呼び出し元が検索文を渡したとき） | 拒否された検索文（検査できなかったものを含む）を外し、残りの検索文で続ける | metrics の `record_guardrail_findings` だけ。`GD` には入れない | 見せない（外した検索文では検索しない）。外した数は診断に出ない | `rag/backend/app/rag/pipeline.py::_checked_caller_queries` |
 | 会話の履歴での質問の書き換えと発話の種類の判定（チャットの毎回の発話で 1 回。#4787） | 任意（設定 `RAG_HISTORY_REWRITE_ENABLED`） | LLM の失敗・書き換えの安全チェックの拒否 → 元の質問で続ける。発話の分類だけでは検索を省かない | LLM の失敗: `DS`（`history_rewrite`）。安全チェックの拒否は `LOG` だけ（例外ではないので `DS` に入れない）。`SP` の `history_rewrite` は成功のまま | 見せない（元の質問で答える） | `rag/backend/app/rag/pipeline.py::_rewrite_query_with_history`・`_safe_rewritten_query` |
-| 承認済み FAQ の回答をそのまま返す（検索を飛ばす。#4788） | 任意（検索・回答プロファイルの FAQ の「そのまま返す」がオンのチャット。上の書き換えの後、補完した質問を FAQ と照合する。利用者が類似問を選んだ・断った発話、確認への回答、呼び出し元の検索文には使わない） | 一致度が下限未満・否定の質問に当たった FAQ だけ → 検索して回答する。FAQ の読み込み・照合の失敗 → 照合せずに検索して回答する。embedding の失敗 → 文字列の照合で続ける | 照合の失敗: `LOG`（段は残さない）。照合した結果は `SP` の `faq_direct_match`（一致度と下限・否定の質問で外した FAQ）。そのまま返した回答は診断の `answer_source`・`approved_faq_direct` | 見せる（処理の経過に「登録済みQ&Aと照合する」と結果。回答の下に、登録済みQ&Aの回答をそのまま表示している案内） | `rag/backend/app/rag/pipeline.py::RagPipeline._run_engine`・`rag/backend/app/rag/faq_direct_answer.py`・`rag/backend/app/rag/search_answer_profile_knowledge.py::match_direct_approved_faq` |
+| 選んだ承認済み FAQ の回答をそのまま返す（検索を飛ばす。#5107） | 任意（「回答の前に関連するQ&Aを提示する」がオンのプロファイルで、利用者が候補から Q&A を選んだ送信。入口が補完の後に Q&A を引き直す） | Q&A が無い・提示がオフ → 送信を 422 で断る（発話は保存しない）。候補の照会の失敗 → 候補なしで送る | 段 `approved_faq_answer`（選んだ Q&A）。回答の診断の `answer_source`・`approved_faq_id` | 見せる（処理の経過に「選んだ登録済みQ&Aの回答を返す」。回答の見出しを「登録済みQ&Aの回答」にし、検索と回答の生成をしていない案内） | `rag/backend/app/api/routes/search.py::_resolve_query_context`・`rag/backend/app/rag/approved_faq_answer.py`・`rag/backend/app/rag/pipeline.py::RagPipeline._run_engine` |
 | 会話の添付の根拠（#2517） | 任意 | 添付を読めない → 根拠に入れない。rerank の失敗 → 語の一致で選ぶ | `DS`（`chat_attachments`・`chat_attachment_rerank`）。添付が無いときは記録しない | 見せない | `rag/backend/app/rag/chat_attachments.py::attachment_evidence`・`attachment_units`・`select_attachment_units` |
 | 保存した回答の指示の読み取り（#1276） | 必須（未編集の空設定は有効） | 読めない → 通常回答の生成前に例外で停止。固定済みの要求snapshotは再読しない | 例外を呼び出し元へ伝播し、`DS` にしない | 見せない（生成前に停止） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
 
@@ -101,7 +101,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 回答の生成（OCI Enterprise AI） | 必須 | 生成の失敗・回答の期限切れ → 質問に関係する資料の記載だけを示す（エラーにしない） | `SP`・`DX`（`generation_failure`） | 見せない（期限で切れた回答は時間切れの回答として示す） | `rag/packages/rag_engine/rag_engine/generation/answering.py` |
 | モデルのカスケード（#4581） | 任意（検索・回答プロファイルの「出力の検査を通らなかったときのモデル」。空は使わない。質問でモデルを選んだ実行には使わない） | 1 つ目のモデルの構造化出力が形式の検査を通らない → 取得した根拠のまま生成の段を 2 つ目のモデルでやり直す（1 回の質問で 1 回だけ）。2 つ目も通らない → 既存の失敗の扱い。接続・429・5xx の失敗は昇格せず従来どおり | `ST`（工程「高性能モデルで回答し直す」）・`DX`（`model_cascade`。昇格しなかった実行も記録）・`RT`（`escalation_signals`）・実行履歴の `usage.by_model` | 本文に出さない。「処理の詳細」に 1 行と理由 | `platform/packages/backend_core/src/pr_backend_core/model_cascade.py`・`rag/packages/rag_engine/rag_engine/generation/model_cascade.py`・`answering.py::synthesize_with_model_cascade` |
 | 根拠の画像の添付 | 任意（回答モデルが「画像入力に対応」のときだけ。設定の項目は無い。#3444） | 回答モデルが画像を読めない・画像ファイルが無い → 添付せず、取り込み時の図の説明（根拠の本文）で答える。添付した生成の出力が壊れた → 同じモデルで画像なしで作り直す。どの場合も既定の Vision モデルへは切り替えない | `ST`（工程「回答に添付する画像」）・`DX`（`models.attached_images`）・`RT`（`image_fallback`） | 見出しに「（画像も参照）」（添付した回答だけ） | `rag/packages/rag_engine/rag_engine/generation/answer_images.py::_image_prompt_mode`・`rag/backend/app/rag/answer_engine.py::answer_model_reads_images`・`AnswerEngine._materialize_image_evidence` |
-| 承認済み FAQ からの回答（#702） | 必須（FAQ を選んだとき） | LLM の失敗 → **エラー** | span の失敗・工程の `error` | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._answer_from_approved_faq` |
 | 回答の注意書きの設定 | 任意 | 読めない → 既定の注意書き | `LOG` | 見せない | `rag/backend/app/rag/answer_notice.py::current_answer_notice` |
 | 回答の記録の保存 | 任意（回答は返す） | 失敗 → 応答の `storage_failures` に残す | `SP`（`ANSWER_RECORD_SAVE_STAGE` が `error`）・応答の `storage_failures` | 見せない | `rag/backend/app/rag/pipeline.py::RagPipeline._run_engine` |
 | 評価の入力の組み立て | 任意 | 失敗 → 評価の入力なし（回答は返す） | `LOG` | 見せない | `rag/backend/app/rag/answer_engine.py::_evaluation_input` |
@@ -144,7 +143,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 ## 一覧から分かったこと
 
-- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、vector 検索（embedding を作れたとき）、全文検索の SQL、引用ラベルの検索、前後の文脈・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）、承認済み FAQ からの回答。主の検索（Oracle の SQL）の失敗は 0 件にせずエラーにする（#3259 のテスト）。質問の embedding の失敗はエラーにせず全文検索へ縮退する（#4663）。
+- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、vector 検索（embedding を作れたとき）、全文検索の SQL、引用ラベルの検索、前後の文脈・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）。主の検索（Oracle の SQL）の失敗は 0 件にせずエラーにする（#3259 のテスト）。質問の embedding の失敗はエラーにせず全文検索へ縮退する（#4663）。
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
 - **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・会話の書き換え・会話の添付・Sudachi・章節の子の並べ替え）は `DS` に入れた。例外ではない縮退（書き換えの安全チェックの拒否・呼び出し元の検索文の拒否）は `DS` に入れない。
 - **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・同義語の読み込みは、例外の型の名前だけにした（#3284）。

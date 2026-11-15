@@ -49,6 +49,7 @@ from app.rag.answer_timeout import (
     answer_stage_label,
     run_answer_with_timeout,
 )
+from app.rag.approved_faq_answer import APPROVED_FAQ_NOT_FOUND_MESSAGE, selected_approved_faq
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
@@ -73,6 +74,7 @@ from app.rag.search_answer_profile_config import (
 )
 from app.rag.search_answer_profile_knowledge import (
     RUNTIME_KNOWLEDGE_KIND,
+    find_approved_faq,
     load_domain_keywords,
 )
 from app.rag.stored_answer import stored_citation_metadata
@@ -433,6 +435,16 @@ async def _resolve_query_context(
                         "original_question": gated.original_question,
                     }
                 )
+            if request.approved_faq_id:
+                # 利用者が選んだ承認済み FAQ（#5107）。プロファイルの FAQ から引き直し、業務ガイド
+                # 以降を通さずに回答の工程が FAQ の回答をそのまま返す。
+                selected_faq = await _selected_approved_faq(
+                    oracle, view.id, request.approved_faq_id, request
+                )
+                settings = settings.model_copy(
+                    update={"rag_approved_faq_selected": selected_faq, "rag_support_guide": {}}
+                )
+                return effective_request, settings, None, applied_view
             if guide_preview is not None:
                 # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
                 settings = settings.model_copy(update={"rag_support_guide_enabled": True})
@@ -575,9 +587,28 @@ async def _resolve_query_context(
     request = _scope_request_knowledge_bases(request)
     if question_gate is not None:
         gated = await question_gate(request, settings)
-        if gated is not None:
-            request = gated
+        if gated is None:
+            return request, settings, None, None
+        request = gated
+    if request.approved_faq_id:
+        # 承認済み FAQ は検索・回答プロファイルごと。プロファイルの無い検索では選べない。
+        raise HTTPException(status_code=422, detail=APPROVED_FAQ_NOT_FOUND_MESSAGE)
     return request, settings, None, None
+
+
+async def _selected_approved_faq(
+    oracle: OracleClient, search_answer_profile_id: str, faq_id: str, request: SearchRequest
+) -> dict[str, str]:
+    """選んだ承認済み FAQ を引き直す（回答を作る検索だけ。無い・提示がオフの FAQ は 422）。"""
+    if not request.generate_answer or request.retrieval_only:
+        raise HTTPException(
+            status_code=422,
+            detail="選んだQ&Aの回答は、回答を作る検索でだけ返せます。",
+        )
+    record = await find_approved_faq(oracle, search_answer_profile_id, faq_id)
+    if record is None:
+        raise HTTPException(status_code=422, detail=APPROVED_FAQ_NOT_FOUND_MESSAGE)
+    return selected_approved_faq(record)
 
 
 async def load_published_guides(
@@ -831,7 +862,6 @@ async def _run_search_with_timeout(
                 answer_notice=current_answer_notice,
                 caller_queries=caller_queries,
                 complete_evidence=complete_evidence,
-                direct_faq_answer=True,
             ).run(
                 request,
                 trace_id=trace_id,
@@ -1052,7 +1082,6 @@ async def _stream_search_events_with_timeout(
                     answer_model_id=answer_model_id,
                     run_recorder=run_recorder,
                     answer_notice=current_answer_notice,
-                    direct_faq_answer=True,
                 ).run(
                     request,
                     trace_id=trace_id,

@@ -53,12 +53,15 @@ from app.rag.answer_engine import (
 )
 from app.rag.answer_notice import AnswerNoticeSource, compose_rag_answer_notice
 from app.rag.answer_route import answer_route
+from app.rag.approved_faq_answer import (
+    APPROVED_FAQ_ANSWER_STAGE,
+    approved_faq_outcome,
+    approved_faq_snapshot,
+)
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.chat_question_token import context_digest
 from app.rag.degraded_steps import DegradedSteps, ReportDegraded, not_recorded
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.faq_direct_answer import FAQ_DIRECT_STAGE, direct_faq_snapshot
-from app.rag.faq_direct_answer import direct_faq_outcome as direct_faq_outcome_from
 from app.rag.history_question import (
     EMPTY_CONVERSATION_HISTORY,
     HistoryConfirmation,
@@ -78,10 +81,6 @@ from app.rag.observability import (
 )
 from app.rag.profile_language import profile_language_scope
 from app.rag.run_history import RunRecorder
-from app.rag.search_answer_profile_knowledge import (
-    load_direct_faq_snapshot,
-    match_direct_approved_faq,
-)
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
     ANSWER_STEP_KIND,
@@ -92,7 +91,7 @@ from app.rag.span_display import (
 )
 from app.rag.step_details import (
     answer_guardrail_details,
-    faq_direct_details,
+    approved_faq_answer_details,
     history_rewrite_details,
     query_guardrail_details,
     step_details_model,
@@ -406,14 +405,12 @@ class RagPipeline:
         settings: Settings | None = None,
         *,
         answer_model_id: str | None = None,
-        approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
         run_recorder: RunRecorder | None = None,
         answer_notice: AnswerNoticeSource | None = None,
         attachment_conversation_id: str | None = None,
         history_question_prepared: bool = False,
         prepared_history_rewrite: PreparedHistoryRewrite | None = None,
-        direct_faq_answer: bool = False,
         caller_queries: Sequence[str] | None = None,
         complete_evidence: bool = True,
     ) -> None:
@@ -427,8 +424,6 @@ class RagPipeline:
         # 回答フローの回答のモデル。チャットのモデル比較で ``llm`` と同じモデルを渡す(#593)。
         # None は既定のモデル。
         self._answer_model_id = answer_model_id or None
-        # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答。チャット。#684)。
-        self._approved_faq = approved_faq
         # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
         self._scope = scope
         # 実行履歴(#1890)。チャットと RAG 検索の画面の実行だけが渡す(品質評価・MCP は渡さない)。
@@ -449,10 +444,6 @@ class RagPipeline:
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 会話履歴による補完が分けた最新の発話の種類（#4787。補完しなければ search）。
         self._history_intent: HistoryIntent = "search"
-        # 補完した質問が承認済み FAQ に下限以上で一致したら、FAQ の回答をそのまま返すか（#4788）。
-        # チャットの送信だけが渡す（類似問を選んだ・断った発話と確認に答えた発話は渡さない）。
-        # プロファイルの設定がオフなら照合しない。
-        self._direct_faq_answer = direct_faq_answer
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら回答を作らない検索だけに
         # 使い、質問に応じた推論の LLM を呼ばない。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
@@ -705,51 +696,21 @@ class RagPipeline:
                 request = request.model_copy(
                     update={"query": rewritten_query, "original_question": original_query}
                 )
-        # 補完した質問が承認済み FAQ に下限以上で一致したら、検索・会話の添付の根拠・回答の生成を
-        # 通さず、FAQ の回答をそのまま返す（#4788。モデルを呼ばない）。照合できなければ、いつもの
-        # 検索と回答に進む。
-        direct_faq_outcome: AnswerOutcome | None = None
-        if (
-            self._direct_faq_answer
-            and request.generate_answer
-            and request.search_answer_profile_id
-            and self._approved_faq is None
-            and self._scope is None
-            and self._caller_queries is None
-        ):
-            profile_id = str(request.search_answer_profile_id)
-            faq_snapshot = await load_direct_faq_snapshot(self._oracle, profile_id)
-            if faq_snapshot is not None:
-                # 設定がオンで使える FAQ があるプロファイルだけ、照合を段として残す。
-                direct_faq = await _observe_stage(
-                    trace_id,
-                    FAQ_DIRECT_STAGE,
-                    match_direct_approved_faq(
-                        self._oracle,
-                        profile_id,
-                        request.query,
-                        self._settings,
-                        lambda: self._genai,
-                        snapshot=faq_snapshot,
-                    ),
-                    progress_callback=stage_callback,
-                    result_details=lambda match: (
-                        faq_direct_details(match) if match is not None else None
-                    ),
-                    result_outcome=lambda match: "success" if match is not None else "error",
-                    request_snapshot=lambda: {
-                        "質問": request.query,
-                        "検索・回答プロファイル ID": profile_id,
-                    },
-                    result_snapshot=lambda match: (
-                        direct_faq_snapshot(match) if match is not None else None
-                    ),
-                )
-                if direct_faq is not None:
-                    direct_faq_outcome = direct_faq_outcome_from(
-                        direct_faq, embedding_model=self._settings.oci_genai_embedding_model
-                    )
-        skips_search = direct_faq_outcome is not None
+        # 利用者が選んだ承認済み FAQ（入口で引き直した。#5107）は、検索・会話の添付の根拠・回答の
+        # 生成を通さず、FAQ の回答を原文のまま返す（モデルを呼ばない）。
+        faq_outcome: AnswerOutcome | None = None
+        selected_faq = self._settings.rag_approved_faq_selected
+        if selected_faq and request.generate_answer:
+            faq_outcome = await _observe_stage(
+                trace_id,
+                APPROVED_FAQ_ANSWER_STAGE,
+                _completed(approved_faq_outcome(selected_faq)),
+                progress_callback=stage_callback,
+                result_details=lambda _outcome: approved_faq_answer_details(selected_faq),
+                request_snapshot=lambda: approved_faq_snapshot(selected_faq),
+                result_snapshot=lambda outcome: {"回答": outcome.answer},
+            )
+        skips_search = faq_outcome is not None
         caller_queries = (
             await self._checked_caller_queries(self._caller_queries)
             if self._caller_queries is not None
@@ -757,7 +718,7 @@ class RagPipeline:
         )
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
-        if not skips_search and self._attachment_conversation_id and self._approved_faq is None:
+        if not skips_search and self._attachment_conversation_id:
             from app.rag.chat_attachments import attachment_evidence, chat_attachment_service
 
             attachment_status = chat_attachment_service().reading_status()
@@ -800,7 +761,6 @@ class RagPipeline:
             genai=self._genai,
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
             answer_model_id=self._answer_model_id,
-            approved_faq=self._approved_faq,
             scope=effective_scope,
             attachment_chunks=attachment_chunks,
             caller_queries=caller_queries,
@@ -826,9 +786,9 @@ class RagPipeline:
         # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
         # 入れ子の工程として出す（#593）。回答を作らない RAG 検索は同じ流れを回答の生成の手前で
         # 止め、全体の工程を「質問の理解から根拠の検索まで」（evidence）にする（#649・#3506）。
-        if direct_faq_outcome is not None:
-            outcome = direct_faq_outcome
-        elif request.generate_answer and guide.get("short_answer") and self._approved_faq is None:
+        if faq_outcome is not None:
+            outcome = faq_outcome
+        elif request.generate_answer and guide.get("short_answer"):
             # 業務ガイドの必要な条件が分からず、確かめるか人へ引き継ぐ（#1238）。
             # 回答（モデル）は作らない。
             outcome = guide_short_circuit_outcome(guide)

@@ -5,8 +5,8 @@
 `details`）を付ける。種類と値は、画面の工程の定義（`frontend/src/lib/chat-progress.ts`
 の `CHAT_PROGRESS_DEFINITIONS`）が名前・計測値を付けるときの key で、次の 2 つにする。
 
-- 回答フローの工程（`rag_engine` の `_execution_step` の span `rag.engine.stage`、
-  承認済み FAQ からの回答）: 種類 ``answer_step``。値は工程名 ``name``・
+- 回答フローの工程（`rag_engine` の `_execution_step` の span `rag.engine.stage`）:
+  種類 ``answer_step``。値は工程名 ``name``・
   LLM の回数 ``llm_calls``（送り直しで送信が多ければ ``llm_sends``）・結果の説明
   ``note``（「該当なし」など）。
 - 回答フローの外の工程（会話を踏まえた質問の書き換え・質問から条件の読み取り・
@@ -39,7 +39,7 @@ PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
     {
         "history_rewrite",
         "small_talk_reply",
-        "faq_direct_match",
+        "approved_faq_answer",
         "query_guardrail",
         "answer_guardrail",
         "answer_record_save",
@@ -69,7 +69,7 @@ ANSWER_STAGE_LABELS: dict[str, str] = {
     "retrieval": "文書から根拠の候補を検索する",
     "history_rewrite": "質問を補い、検索が要るかを分ける",
     "small_talk_reply": "検索せずに短く応じる",
-    "faq_direct_match": "登録済みQ&Aと照合する",
+    "approved_faq_answer": "選んだ登録済みQ&Aの回答を返す",
     "attachment_evidence": "会話の添付から根拠を選ぶ",
     "answer": "質問の条件を整理して回答を作る",
     "evidence": "質問の条件を整理して根拠を探す",

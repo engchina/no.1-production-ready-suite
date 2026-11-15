@@ -356,72 +356,33 @@ async def test_clarification_api_matches_resolved_question(
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("case", ["direct", "declined", "guides-off"])
-async def test_clarification_is_skipped_when_faq_answer_is_returned_directly(
-    context_setup: Any, monkeypatch: pytest.MonkeyPatch, case: str
+async def test_clarification_reuses_the_token_of_the_faq_suggestion(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """補完した質問が承認済み FAQ に下限以上で一致するなら、確認を出さない（#4788）。"""
-    from rag_engine.knowledge.approved_faq import ApprovedFaqRecord, ApprovedFaqSuggestion
-
+    """FAQ の候補の照会が済ませた補完の token を渡すと、確認の照会は補完を呼び直さない（#5107）。"""
     from app.api.routes import search_answer_profile_knowledge as route
-    from app.rag.search_answer_profile_knowledge import DirectFaqMatch
     from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
 
-    oracle, settings, _calls = context_setup
-    guides_enabled = case != "guides-off"
-    settings.rag_support_guide_enabled = guides_enabled
-    oracle.view.config.query.support_guide_enabled = guides_enabled
-    matched: list[str] = []
-    guide_queries: list[str] = []
+    oracle, settings, calls = context_setup
+    settings.rag_support_guide_enabled = False
+    oracle.view.config.query.support_guide_enabled = False
     monkeypatch.setattr(route, "OracleClient", lambda: oracle)
     monkeypatch.setattr(route, "get_settings", lambda: settings)
-
-    async def empty(*args: Any) -> dict[str, Any]:
-        return {}
-
-    async def no_guides(*args: Any) -> list[Any]:
-        return []
-
-    async def direct(_store: Any, _profile: str, query: str, *args: Any) -> DirectFaqMatch:
-        matched.append(query)
-        record = ApprovedFaqRecord(id="faq-a", question=query, approved_answer="合成の回答")
-        return DirectFaqMatch(
-            min_score=0.92,
-            best=ApprovedFaqSuggestion(record=record, matched_question=query, score=1.0),
-        )
-
-    async def guide_query(*args: Any) -> str:
-        guide_queries.append(args[4])
-        return str(args[4])
-
-    async def no_context(*args: Any) -> None:
-        return None
-
-    async def unchanged(selected: Any, *args: Any) -> Any:
-        return selected
-
-    monkeypatch.setattr(route, "load_runtime_knowledge_payload", empty)
-    monkeypatch.setattr(route, "_published_guides", no_guides)
-    monkeypatch.setattr(route, "match_direct_approved_faq", direct)
-    monkeypatch.setattr(route, "build_guide_query", guide_query)
-    monkeypatch.setattr(route, "support_guide_context", no_context)
-    monkeypatch.setattr(route, "select_guide", lambda *args, **kwargs: None)
-    monkeypatch.setattr(route, "resolve_text_conditions", unchanged)
-    result = await route.post_clarification_suggest(
-        "profile-a",
-        ClarificationSuggestRequest(
-            query="その手順は？ 条件 B との違いは？",
-            conversation_id="conversation-a",
-            approved_faq_declined=case == "declined",
-        ),
+    request = ClarificationSuggestRequest(
+        query="その手順は？ 条件 B との違いは？", conversation_id="conversation-a"
     )
-    resolved = "対象 A の手順は？ 条件 B との違いは？"
-    # 照合するのは補完した質問。利用者が類似問を断った質問は照合せず、いつもの確認に進む。
-    # 確認を出さないプロファイル（業務ガイドを使わない）では、照合もしない。
-    assert matched == ([resolved] if case == "direct" else [])
-    assert guide_queries == ([resolved] if case == "declined" else [])
-    assert result.data is not None and result.data.suggestion is None
-    assert result.data.question_context_token
+
+    first = await route.post_clarification_suggest("profile-a", request)
+    assert first.data is not None and first.data.question_context_token
+    assert len(calls) == 1
+    again = await route.post_clarification_suggest(
+        "profile-a",
+        request.model_copy(update={"question_context_token": first.data.question_context_token}),
+    )
+
+    assert again.data is not None
+    assert again.data.question_context_token == first.data.question_context_token
+    assert len(calls) == 1
 
 
 async def test_blocked_confirmation_also_excludes_assistant_reply(

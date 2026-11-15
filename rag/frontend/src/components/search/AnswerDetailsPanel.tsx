@@ -1,5 +1,5 @@
 import { Banner, RunUsedModels } from "@production-ready/ui";
-import { answerFaqDirectScore, parseAnswerDiagnostics, type AnswerDiagnostics } from "@/lib/answer-diagnostics";
+import { answerFromApprovedFaq, parseAnswerDiagnostics, type AnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { answerModelCascadeView } from "@/lib/model-cascade";
 
@@ -59,18 +59,18 @@ export function AnswerDetailsPanel({ diagnostics, recordedModels = [] }: { diagn
  */
 export function AnswerNotices({ diagnostics, savedMessage = null }: { diagnostics: unknown; savedMessage?: unknown }) {
   const data = parseAnswerDiagnostics(diagnostics);
-  // 登録済みQ&A の回答をそのまま返した回答（保存した回答は会話のメッセージから読む。#4788）。
-  const faqDirectScore = answerFaqDirectScore(diagnostics, savedMessage);
+  // 利用者が選んだ登録済みQ&A の回答をそのまま返した回答（保存した回答は会話のメッセージから読む。#5107）。
+  const fromFaq = answerFromApprovedFaq(diagnostics, savedMessage);
   const notices = data && (data.guideLoadFailed || data.externalDataRequired || data.externalDataItems.length > 0);
-  if (!notices && faqDirectScore === null) return null;
+  if (!notices && !fromFaq) return null;
   return (
     <div className="space-y-2">
-      {faqDirectScore !== null ? (
+      {fromFaq ? (
         // 検索と回答の生成をしていないこと（引用が無い理由）を、見出しと文で示す。
         <div data-testid="answer-faq-direct">
           <Banner severity="info" title={t("search.answerDetails.faqDirect.title")}>
             <p className="break-words">
-              {t("search.answerDetails.faqDirect.body", { score: Math.round(faqDirectScore * 100) })}
+              {t("search.answerDetails.faqDirect.body")}
             </p>
           </Banner>
         </div>

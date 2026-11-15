@@ -162,11 +162,6 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         (("system", "app.rag.history_question:HISTORY_REWRITE_SYSTEM_PROMPT"),),
     ),
     PromptStage(
-        "faq_answer",
-        "generation",
-        (("system", "rag_engine.generation.faq_answer:SYSTEM_PROMPT"),),
-    ),
-    PromptStage(
         "generation",
         "generation",
         (
@@ -190,9 +185,9 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
 )
 
 
-# 段の部分のうち編集できるもの（#4782）。生成は役割と回答の書き方、FAQ は回答の指示だけ。
+# 段の部分のうち編集できるもの（#4782）。生成は役割と回答の書き方だけ。
 # 信頼の境界・出力の形・引用の決まりと、質問・検索の内部の段の文は編集させない。
-_EDITABLE_STAGE_PARTS = frozenset({"generation.role", "faq_answer.system"})
+_EDITABLE_STAGE_PARTS = frozenset({"generation.role"})
 
 # 実行の段に対応する、編集できる自然言語の指示。既存の解析設定の key は維持する。
 STAGE_PROMPT_REFS = {

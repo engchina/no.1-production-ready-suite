@@ -62,7 +62,6 @@ from app.clients.recipe_version_log import (
 )
 from app.config import Settings, get_settings, settings_today
 from app.rag.answer_prompts import EDITABLE_PROMPT_KEYS
-from app.rag.approved_faq_scope import FaqSourceDocumentState, document_version
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
 from app.rag.extraction_field_adapter import (
@@ -407,9 +406,9 @@ class StoredMessage:
     # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
     # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
-    # 承認済み FAQ の回答をそのまま返した回答の一致度（ASSISTANT の回答だけ。回答の記録の診断の
-    # ``approved_faq_direct.score``。#4788）。それ以外の回答・記録の無い回答は None。
-    approved_faq_direct_score: float | None = None
+    # 利用者が選んだ承認済み FAQ の回答をそのまま返した回答か（ASSISTANT の回答だけ。回答の記録の
+    # 診断の ``answer_source`` が ``approved_faq``。#5107）。
+    approved_faq_answer: bool = False
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -5298,8 +5297,7 @@ class OracleClient:
                     AS answer_format_json,
                 JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
                     AS answer_attached_images,
-                JSON_VALUE(r.diagnostics_json, '$.approved_faq_direct.score' RETURNING NUMBER)
-                    AS approved_faq_direct_score
+                JSON_VALUE(r.diagnostics_json, '$.answer_source') AS answer_source
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -9773,48 +9771,6 @@ class OracleClient:
                 KnowledgeBaseRef(id=str(row["knowledge_base_id"]), name=str(row["name"]))
             )
         return refs_by_document_id
-
-    async def approved_faq_source_document_states(
-        self, document_ids: Sequence[str]
-    ) -> dict[str, FaqSourceDocumentState]:
-        """承認済み FAQ が引用した文書の今の版の印と所属 KB（#4621）。
-
-        利用者から見える文書だけを返す（無い ID は削除・範囲外）。版の印は検索に出す版の切替
-        （``indexed_at``）と新しい版の文書の設定（``superseded_by_document_id``）で変わる。
-        """
-        unique_document_ids = _unique_optional_sequence(document_ids)
-        states: dict[str, FaqSourceDocumentState] = {}
-        # Oracle の IN の上限（1000）より小さい単位で読む。
-        for start in range(0, len(unique_document_ids), 500):
-            document_filter_sql, document_binds = _oracle_in_predicate(
-                "d.document_id", "document_id", unique_document_ids[start : start + 500]
-            )
-            rows = await self._fetch_all(
-                _render_sql(
-                    """
-                SELECT d.document_id, d.indexed_at, d.superseded_by_document_id
-                FROM rag_documents d
-                WHERE {document_filter_sql}
-                  AND {document_access_sql}
-                """,
-                    document_filter_sql=document_filter_sql,
-                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind(document_binds),
-            )
-            refs = await self._document_knowledge_base_refs_by_document_id_with_oracle(
-                [str(row["document_id"]) for row in rows]
-            )
-            for row in rows:
-                document_id = str(row["document_id"])
-                states[document_id] = FaqSourceDocumentState(
-                    version=document_version(
-                        _optional_datetime(row.get("indexed_at")),
-                        _optional_str(row.get("superseded_by_document_id")),
-                    ),
-                    knowledge_base_ids=frozenset(ref.id for ref in refs.get(document_id, [])),
-                )
-        return states
 
     async def _attach_knowledge_base_refs_to_documents(
         self,
@@ -16700,7 +16656,7 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         ),
         answer_format=answer_format_record(_json_loads(row.get("answer_format_json"))),
         answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
-        approved_faq_direct_score=_optional_float(row.get("approved_faq_direct_score")),
+        approved_faq_answer=row.get("answer_source") == "approved_faq",
     )
 
 

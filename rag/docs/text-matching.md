@@ -61,7 +61,7 @@ UI の検索欄や認可の filter、SQL の文法解析を同じ照合器で置
 | RAG `runtime_knowledge._matched_rules` | 質問と業務ガイドのルール（`pinned`）。各 32 trigger、通常 6 候補 | NFKC・casefold・空白、ASCII 語境界と部分一致。適用・権限は呼出側 | **接続済み**。`test_rule_matching` / `test_runtime_knowledge*` |
 | RAG `_matched_terms` | 最大 1000 用語、各 32 別名、通常 8 候補 | 正式名と別名で重みが異なる。検索語の展開が目的 | **正規化キーだけ共通化**。順位の移行は別評価が必要。`test_runtime_knowledge*` |
 | RAG `domain_keywords._keyword_matches` | 管理語最大 1000、抽出上限 16 | 語境界・長い語優先、包含語の抑制 | **保留**。抽出契約をルールの候補順位へ変えない。`test_domain_keywords` |
-| RAG `approved_faq._best_question_match` / `_similarity_score` | 質問と FAQ 質問群、候補数と閾値は既存設定 | lower・空白除去・末尾句読点・包含比・n-gram。任意の embedding と scope の寄与は別層 | **保留**。直接回答の閾値と意味照合を維持。`test_approved_faq*` |
+| RAG `approved_faq._similarity_score` | 質問と FAQ の質問、候補数と下限は既存設定（`RAG_APPROVED_FAQ_MIN_SCORE`・`RAG_APPROVED_FAQ_MAX_SUGGESTIONS`） | lower・空白除去・末尾句読点・包含比・n-gram。任意の embedding は別層 | **保留**。候補の下限と意味照合を維持。`test_approved_faq*` |
 | RAG `support_guide_runtime.score_guide` / `support_guide_query` | 許可された公開ガイドの語・別名・質問例と質問。例の類似度・任意の embedding | 空白除去の NFKC・casefold。公開版・条件・分岐・既知条件で最終決定 | **保留**。空白除去と例の類似度を同じ語照合に置換しない。`test_support_guide_matching` |
 | RAG `text_search_tokenizer` / `OracleClient` | 検索文・言語資源から Oracle Text の問い合わせと順位付き chunk | 既存 Sudachi / stemming / 検索文 escaping、ACL・KB・active chunk_set の絞り込み | **変更なし**。DB 索引と検索文は既存基盤。`test_text_search_tokenizer` / Oracle の統合テスト |
 | Agent `evidence_match.matched_features` / `order_weights` | 回答の ID・コード・引用・章節と、今回許可された根拠 | NFKC・空白除去、型別に特徴を集めて出典の順を決める | **対象外**。ルール候補と異なる証拠契約。`test_answer_evidence` / `test_validation_evidence_order` |

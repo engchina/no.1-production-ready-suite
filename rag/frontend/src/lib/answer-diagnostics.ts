@@ -80,14 +80,12 @@ export type AnswerDiagnostics = {
   /** 問い合わせ型（回答モデルが付けた質問の種類の語。#651）。 */
   questionType: string[];
   /**
-   * 利用者が選んだ承認済み FAQ だけから回答したときの出典（回答した時点の原文。#737）。
-   * answer は変更前に保存した回答では空。FAQ から回答していなければ null。
+   * 利用者が選んだ登録済みQ&A の回答をそのまま返したときの Q&A（回答した時点の原文。#737・#5107）。
+   * answer は変更前に保存した回答では空。Q&A の回答でなければ null。
    */
   approvedFaq: {
     question: string;
     answer: string;
-    /** 一致度が下限以上で、FAQ の回答をそのまま返した回答（LLM を使っていない。#4788）。 */
-    direct?: { score: number | null };
   } | null;
   /** チャットで会話履歴から書き換えた質問(書き換えなしは空)。 */
   rewrittenQuestion: string;
@@ -225,9 +223,6 @@ export function parseAnswerDiagnostics(
         ? {
             question: String(raw.approved_faq_question ?? ""),
             answer: String(raw.approved_faq_answer ?? ""),
-            ...(raw.approved_faq_direct && typeof raw.approved_faq_direct === "object"
-              ? { direct: { score: num(record(raw.approved_faq_direct).score) } }
-              : {}),
           }
         : null,
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
@@ -368,15 +363,12 @@ export function answerAttachedImages(diagnostics: unknown, savedMessage: unknown
 }
 
 /**
- * 登録済みQ&A の回答をそのまま返した回答の一致度（0〜1。#4788）。作成した直後の回答は配信の診断の
- * `approved_faq_direct.score`、保存した回答は会話のメッセージの `approved_faq_direct_score`（回答の記録の診断の
- * 同じ値）から読む。そのまま返した回答でなければ null。
+ * 利用者が選んだ登録済みQ&A の回答をそのまま返した回答か（#5107）。作成した直後の回答は配信の診断の
+ * `answer_source`、保存した回答は会話のメッセージの `approved_faq_answer` から読む。
  */
-export function answerFaqDirectScore(diagnostics: unknown, savedMessage: unknown): number | null {
-  const live = parseAnswerDiagnostics(diagnostics)?.approvedFaq?.direct?.score;
-  if (typeof live === "number") return live;
-  const saved = record(savedMessage).approved_faq_direct_score;
-  return typeof saved === "number" && Number.isFinite(saved) ? saved : null;
+export function answerFromApprovedFaq(diagnostics: unknown, savedMessage: unknown): boolean {
+  if (parseAnswerDiagnostics(diagnostics)?.approvedFaq) return true;
+  return record(savedMessage).approved_faq_answer === true;
 }
 
 /**

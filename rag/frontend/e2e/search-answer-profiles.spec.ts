@@ -28,19 +28,16 @@ for (const [tab, paginationId, kind] of [
     const rows = () => Array.from({ length: count }, (_, index) => {
       const name = `項目 ${String(index + 1).padStart(3, "0")}`;
       return {
-        id: `item-${index}`, question: name, answer: "合成の回答", alternate_questions: [], negative_questions: [],
+        id: `item-${index}`, question: name, answer: "合成の回答",
         term: name, aliases: [], description: "合成の説明", title: name, content: "合成の指示",
         triggers: [], status: kind === "guides" ? "active" : "approved",
         guide_id: `guide-${index}`, published_revision: null, draft_revision: 1,
         has_unpublished_changes: true, updated_at: "2026-10-01T00:00:00Z", updated_by: null,
-        // 承認済み FAQ の対象と根拠の状態（#4621）。
-        target_knowledge_base_ids: [], source_document_ids: [], approved_by: null, approved_at: null,
-        review_reasons: [], source_updated: false,
       };
     });
     const response = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
     await page.route("**/api/search-answer-profiles/bv-default/approved-faq", (route) =>
-      route.fulfill(response({ records: kind === "faq" ? rows() : [], enabled: true, knowledge_bases: [] })));
+      route.fulfill(response({ records: kind === "faq" ? rows() : [], enabled: true, min_score: 0.92, max_suggestions: 3 })));
     await page.route("**/api/search-answer-profiles/bv-default/runtime-knowledge", (route) =>
       route.fulfill(response({ terms: kind === "terms" ? rows() : [] })));
     await page.route("**/api/search-answer-profiles/bv-default/support-guides**", (route) =>

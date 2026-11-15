@@ -67,7 +67,6 @@ async def _run(
     settings: Settings | None = None,
     prepared: PreparedHistoryRewrite | None = None,
     scope: AnswerScope | None = None,
-    approved_faq: tuple[str, str] | None = None,
     history: list[ChatTurn] | None = HISTORY,
 ) -> tuple[Any, TraceSummary, list[str]]:
     engine_queries: list[str] = []
@@ -87,7 +86,6 @@ async def _run(
         history_question_prepared=prepared is not None,
         prepared_history_rewrite=prepared,
         scope=scope,
-        approved_faq=approved_faq,
     )
     request = SearchRequest(query="合成の挨拶", search_answer_profile_id="profile-a")
     with (

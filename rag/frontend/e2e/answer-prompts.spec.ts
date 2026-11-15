@@ -276,18 +276,3 @@ test("編集・読み取り専用のプロンプトは所属区画の全幅を�
     }
   }
 });
-
-
-test("登録済み FAQ の編集プロンプトも全幅を使う", { tag: "@responsive" }, async ({ page }) => {
-  await mockEditableStage(page, "faq_answer", "generation", "system");
-  await page.goto("/settings/prompts");
-  await page.getByTestId("answer-prompt-stage-faq_answer").locator("summary").click();
-  const field = page.getByTestId("answer-prompt-stage-faq_answer").locator("textarea:not([readonly])");
-  await expect(field).toBeEditable();
-  const delta = await field.evaluate(node => {
-    const parent = node.closest("[data-form-grid]")!.parentElement!;
-    const style = getComputedStyle(parent);
-    return node.getBoundingClientRect().width - (parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
-  });
-  expect(Math.abs(delta)).toBeLessThanOrEqual(2);
-});

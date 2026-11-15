@@ -27,7 +27,7 @@ def test_migration_is_registered_as_destructive_and_removes_no_editable_key() ->
     assert section.destructive_note
     assert set(REMOVED_PROMPT_KEYS).isdisjoint(EDITABLE_PROMPT_KEYS)
     # 段の一覧にある部分で編集欄の無いものは、取込の key で保存する部分を除いてすべて消す対象。
-    for key in ("generation.role", "faq_answer.system", "image_retrieval"):
+    for key in ("generation.role", "image_retrieval"):
         assert key in EDITABLE_PROMPT_KEYS
     listed = {f"{stage.id}.{part}" for stage in PROMPT_STAGES for part, _ref in stage.parts}
     assert {key for key in REMOVED_PROMPT_KEYS if "." in key} - listed == {

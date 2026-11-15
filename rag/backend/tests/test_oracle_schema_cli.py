@@ -515,7 +515,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 173
+    assert len(statements) == 175
     assert all(
         statement.startswith(
             (
@@ -677,6 +677,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261110_4811_evaluation_job_visibility",
         "20261110_4793_document_summaries",
         "20261112_4955_chunk_document_index",
+        "20261115_5107_approved_faq_fields",
+        "20261115_5107_faq_answer_prompt",
     ]
 
 

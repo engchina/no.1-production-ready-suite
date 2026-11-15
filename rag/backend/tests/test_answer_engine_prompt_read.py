@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 import rag_engine.generation.answering as answering
-import rag_engine.generation.faq_answer as faq
 from rag_engine.resources.runtime import (
     bind_prompt_overrides,
     resolve_prompt,
@@ -23,12 +22,11 @@ from tests.test_answer_engine import FakeGenAi, FakeOracle
 ROLE_KEY = "generation.role"
 
 
-def _engine(oracle: Any, *, approved_faq: tuple[str, str] | None = None) -> AnswerEngine:
+def _engine(oracle: Any) -> AnswerEngine:
     return AnswerEngine(
         Settings(),
         oracle=cast(OracleClient, oracle),
         genai=cast(OciGenAiClient, FakeGenAi()),
-        approved_faq=approved_faq,
     )
 
 
@@ -103,15 +101,3 @@ async def test_bound_snapshot_is_not_read_again(
     reader.assert_not_awaited()
     assert generation == [overrides.get(ROLE_KEY, default_prompt(ROLE_KEY))]
     assert saved_prompt_overrides() is None
-
-
-async def test_approved_faq_early_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    oracle = FakeOracle()
-    reader = AsyncMock(side_effect=RuntimeError("not on this path"))
-    monkeypatch.setattr(oracle, "answer_prompt_overrides", reader)
-    monkeypatch.setattr(faq, "answer_from_approved_faq", lambda *args: "設定 A を有効にします。")
-    result = await _engine(oracle, approved_faq=("設定 A は？", "設定 A を有効にします。")).run(
-        SearchRequest(query="設定 A の操作を教えてください。")
-    )
-    assert result.answer == "設定 A を有効にします。\n\n（出典: 登録済みQ&A「設定 A は？」）"
-    reader.assert_not_awaited()

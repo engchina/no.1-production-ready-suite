@@ -8,7 +8,7 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -277,7 +277,7 @@ class FakeChatOracle:
         current.elapsed_ms = message.elapsed_ms
         current.progress = message.progress
         current.answer_format = message.answer_format
-        current.approved_faq_direct_score = message.approved_faq_direct_score
+        current.approved_faq_answer = message.approved_faq_answer
         current.heartbeat_at = datetime.now(UTC)
         return True
 
@@ -627,22 +627,22 @@ class _FakePipeline:
     # 作られた pipeline の回答のモデル(回答フローへ渡す列のモデル。#593)。
     answer_model_ids: list[object] = []
 
-    # 作られた pipeline に渡した類似の承認済み FAQ(#684)。
+    # 作られた pipeline に渡した、利用者が選んだ承認済み FAQ(入口で引き直した値。#5107)。
     approved_faqs: list[object] = []
     # 作られた pipeline に渡した確認の条件と、検索の絞り込み(#717)。
     scopes: list[object] = []
     filters: list[dict[str, str]] = []
     # 作られた pipeline に渡した検索する件数(#3512)。
     top_ks: list[int] = []
-    # 作られた pipeline に渡した、承認済み FAQ の回答をそのまま返してよいか(#4788)。
-    direct_faq_answers: list[object] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
         _FakePipeline.answer_model_ids.append(kwargs.get("answer_model_id"))
-        _FakePipeline.approved_faqs.append(kwargs.get("approved_faq"))
+        settings = kwargs.get("settings")
+        _FakePipeline.approved_faqs.append(
+            getattr(settings, "rag_approved_faq_selected", None) or None
+        )
         _FakePipeline.scopes.append(kwargs.get("scope"))
-        _FakePipeline.direct_faq_answers.append(kwargs.get("direct_faq_answer"))
 
     async def run(  # type: ignore[no-untyped-def]
         self,
@@ -774,15 +774,15 @@ def test_generated_answer_format_reaches_saved_chat_response(monkeypatch: Monkey
     assert detail["messages"][-1]["answer_format"] == answer_format
 
 
-def test_direct_faq_answer_score_reaches_saved_chat_response(monkeypatch: MonkeyPatch) -> None:
-    """FAQ の回答をそのまま返した回答の一致度を、開き直した会話へ渡す（#4788）。"""
+def test_approved_faq_answer_mark_reaches_saved_chat_response(monkeypatch: MonkeyPatch) -> None:
+    """選んだ FAQ の回答をそのまま返した回答の印を、開き直した会話へ渡す（#5107）。"""
 
-    class DirectFaqPipeline(_FakePipeline):
+    class FaqAnswerPipeline(_FakePipeline):
         def _response(self, request: Any, trace_id: str | None) -> SearchResponse:
             response = super()._response(request, trace_id)
             response.diagnostics.answer = {
                 "answer_source": "approved_faq",
-                "approved_faq_direct": {"faq_id": "faq-a", "score": 0.95, "min_score": 0.92},
+                "approved_faq_id": "faq-a",
             }
             return response
 
@@ -792,12 +792,12 @@ def test_direct_faq_answer_score_reaches_saved_chat_response(monkeypatch: Monkey
     url = "/api/chat/conversations/conv-faq/messages/stream"
     # いつもの回答には付かない。
     assert client.post(url, json={"content": "合成の質問 A"}).status_code == 200
-    monkeypatch.setattr(chat_route, "RagPipeline", DirectFaqPipeline)
+    monkeypatch.setattr(chat_route, "RagPipeline", FaqAnswerPipeline)
     assert client.post(url, json={"content": "合成の質問 B"}).status_code == 200
 
     detail = client.get("/api/chat/conversations/conv-faq").json()["data"]
     answers = [m for m in detail["messages"] if m["role"] == "ASSISTANT"]
-    assert [m["approved_faq_direct_score"] for m in answers] == [None, 0.95]
+    assert [m["approved_faq_answer"] for m in answers] == [False, True]
 
 
 def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:
@@ -1369,7 +1369,7 @@ def test_stream_returns_prepare_errors_before_starting_the_stream(
 def test_stream_message_passes_selected_approved_faq_from_the_search_answer_profile(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """選んだ類似問は検索・回答プロファイルの FAQ から引き直して回答の pipeline へ渡す(#684)。"""
+    """選んだ FAQ は入口が補完の後に検索・回答プロファイルの FAQ から引き直す(#5107)。"""
     from rag_engine.knowledge.approved_faq import ApprovedFaqRecord
 
     fake = FakeChatOracle()
@@ -1383,7 +1383,6 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
     fake.messages["conv-x"] = []
     _stub_stream(monkeypatch, fake, ["m1"])
     monkeypatch.setattr(_FakePipeline, "approved_faqs", [])
-    monkeypatch.setattr(_FakePipeline, "direct_faq_answers", [])
     record = ApprovedFaqRecord(
         id="faq-1", question="住宅ローンの特典は？", approved_answer="QUO カード", status="approved"
     )
@@ -1393,22 +1392,34 @@ def test_stream_message_passes_selected_approved_faq_from_the_search_answer_prof
         looked_up.append((search_answer_profile_id, faq_id))
         return record if faq_id == "faq-1" else None
 
-    monkeypatch.setattr(chat_route, "find_approved_faq", find)
+    monkeypatch.setattr(search_route, "find_approved_faq", find)
+
+    async def resolve(request, settings, **kwargs):  # type: ignore[no-untyped-def]
+        # 入口と同じ順: 安全チェック・補完（gate）の後に、選んだ FAQ を引き直す。
+        gated = await kwargs["question_gate"](request, settings) or request
+        if gated.approved_faq_id:
+            selected = await search_route._selected_approved_faq(
+                cast(Any, fake), "bv-1", gated.approved_faq_id, gated
+            )
+            settings = settings.model_copy(update={"rag_approved_faq_selected": selected})
+        return gated, settings, None, "bv-1"
+
+    monkeypatch.setattr(chat_route, "_resolve_query_context", resolve)
     url = "/api/chat/conversations/conv-x/messages/stream"
 
     resp = client.post(url, json={"content": "特典は?", "approved_faq_id": "faq-1"})
     assert resp.status_code == 200
     assert looked_up == [("bv-1", "faq-1")]
-    assert _FakePipeline.approved_faqs == [("住宅ローンの特典は？", "QUO カード")]
-    # 類似問を選んだ質問には、FAQ の回答をそのまま返す段を通さない(選んだ FAQ から回答する。#4788)。
-    assert _FakePipeline.direct_faq_answers == [False]
-    # 選ばなかったときは渡さない。
+    assert _FakePipeline.approved_faqs == [
+        {"id": "faq-1", "question": "住宅ローンの特典は？", "answer": "QUO カード"}
+    ]
+    # 選ばなかったときは渡さない（自動で FAQ の回答を返す経路は無い）。
     client.post(url, json={"content": "特典は?"})
     assert _FakePipeline.approved_faqs[-1] is None
-    assert _FakePipeline.direct_faq_answers[-1] is True
-    # 類似問を「どれでもない」と断った質問にも、そのまま返さない。
-    client.post(url, json={"content": "特典は?", "approved_faq_declined": True})
-    assert _FakePipeline.direct_faq_answers[-1] is False
+    # 断った印は無い（候補を断った質問は、選ばなかった質問と同じ。未定義の項目は読み捨てる）。
+    declined = client.post(url, json={"content": "特典は?", "approved_faq_declined": True})
+    assert declined.status_code == 200
+    assert _FakePipeline.approved_faqs[-1] is None
     # 検索・回答プロファイルに無い(またはオフ)の FAQ は、発話を保存する前に 422 で断る。
     saved = len(fake.messages["conv-x"])
     missing = client.post(url, json={"content": "特典は?", "approved_faq_id": "other"})

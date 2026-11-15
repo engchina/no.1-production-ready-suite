@@ -1,6 +1,6 @@
 "use client";
 
-import { answerFaqDirectScore } from "@/lib/answer-diagnostics";
+import { answerFromApprovedFaq } from "@/lib/answer-diagnostics";
 
 import {
   AnswerFooter,
@@ -64,7 +64,7 @@ import { answerAttachedImages, answerModelHeading, parseAnswerDiagnostics, unrea
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerText } from "./AnswerText";
-import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
+import { ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 import { ExtractionFieldFilters } from "./ExtractionFieldFilters";
 import {
   EXTRACTION_FIELD_FILTER_KEY,
@@ -116,6 +116,8 @@ interface SearchRequestSnapshot {
   searchAnswerProfileId: string;
   generateAnswer: boolean;
   filters: Record<string, string>;
+  /** 利用者が選んだ登録済みQ&A。付けると backend は検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
+  approvedFaqId?: string;
 }
 
 /**
@@ -200,7 +202,6 @@ export function SearchClient() {
   // 外した「自動」の条件（#652）もここに持ち、入力欄から新しく検索するたびに空に戻す。
   const [lastRequest, setLastRequest] = useState<SearchRequestSnapshot | null>(null);
   const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
-  const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
   const searchAnswerProfilesQuery = useAllSearchAnswerProfiles({ status: "ACTIVE" });
@@ -297,7 +298,6 @@ export function SearchClient() {
     setSubmittedQuery(request.query);
     setLastSkipFaq(skipFaq);
     setFaqSuggestions(null);
-    setFaqAnswer(null);
     setPhase("streaming");
     setAnswer("");
     setCitations([]);
@@ -315,15 +315,15 @@ export function SearchClient() {
     });
 
     try {
-      if (!skipFaq) {
-        // 検索・回答プロファイルの承認済み FAQ に類似問があれば、回答生成の前に提示する(rag_poc の類似問)。
+      // 回答を作る検索だけ、質問に近い登録済みQ&A を回答の前に提示する（選んだら Q&A の回答をそのまま返す。#5107）。
+      if (!skipFaq && !request.approvedFaqId && request.generateAnswer) {
         let suggestions: ApprovedFaqSuggestionData[] = [];
         try {
           suggestions = (
             await api.suggestApprovedFaq(
               request.searchAnswerProfileId,
               request.query,
-              "search",
+              null,
               controller.signal
             )
           ).suggestions ?? [];
@@ -346,6 +346,7 @@ export function SearchClient() {
           search_answer_profile_id: request.searchAnswerProfileId,
           generate_answer: request.generateAnswer,
           ...(Object.keys(request.filters).length ? { filters: request.filters } : {}),
+          ...(request.approvedFaqId ? { approved_faq_id: request.approvedFaqId } : {}),
         },
         {
           onRun: ({ trace_id }) =>
@@ -407,10 +408,10 @@ export function SearchClient() {
    * 表示中の結果（エラー・類似 FAQ の提示）を出した検索を、同じ条件で送り直す。入力欄・選択を書き換えて
    * いても使わない（#914）。
    */
-  const resubmit = (skipFaq: boolean) =>
+  const resubmit = (skipFaq: boolean, approvedFaqId?: string) =>
     guardSubmit(async () => {
       if (!lastRequest) return;
-      await runRequest(lastRequest, skipFaq);
+      await runRequest(approvedFaqId ? { ...lastRequest, approvedFaqId } : lastRequest, skipFaq);
     });
 
   const cancel = () => {
@@ -753,14 +754,10 @@ export function SearchClient() {
           {faqSuggestions ? (
             <ApprovedFaqSuggestions
               suggestions={faqSuggestions}
-              onUse={(suggestion) => {
-                setFaqSuggestions(null);
-                setFaqAnswer(suggestion);
-              }}
+              // 選んだ Q&A を付けて同じ条件で送り直す（回答は backend が Q&A の原文のまま返し、実行履歴にも残る）。
+              onUse={(suggestion) => void resubmit(true, suggestion.id)}
               onSkip={() => void resubmit(true)}
             />
-          ) : faqAnswer ? (
-            <ApprovedFaqAnswer suggestion={faqAnswer} />
           ) : phase === "idle" ? (
             <Card>
               <CardContent className="pt-5">
@@ -833,7 +830,7 @@ export function SearchClient() {
                       page-archetypes.md §6.1）。
                     */}
                     <AnswerFooter
-                      notice={meta && phase === "done" && answerFaqDirectScore(meta.diagnostics?.answer, null) === null ? meta.notice : null}
+                      notice={meta && phase === "done" && !answerFromApprovedFaq(meta.diagnostics?.answer, null) ? meta.notice : null}
                       noticeLabel={t("answer.notice.label")}
                       evidence={
                         <AnswerCitations
@@ -885,7 +882,7 @@ export function SearchClient() {
               {/* 引用 / no-results */}
               {phase === "done" && awaitingClarification ? (
                 <Banner severity="info">{t("search.clarificationHint")}</Banner>
-              ) : noResults && answerFaqDirectScore(meta?.diagnostics?.answer, null) === null ? (
+              ) : noResults && !answerFromApprovedFaq(meta?.diagnostics?.answer, null) ? (
                 <Card>
                   <CardContent className="pt-5">
                     <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />

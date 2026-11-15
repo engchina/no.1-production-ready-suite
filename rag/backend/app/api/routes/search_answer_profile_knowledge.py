@@ -5,53 +5,45 @@ KB・文書レシピには持たせず、検索時は検索・回答プロファ
 """
 
 import asyncio
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.concurrency import run_in_threadpool
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
+from pr_system_settings.guardrails import GuardrailResult
 from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow
 
 from app.api.routes.search import (
     _published_guides,
-    ensure_search_answer_profile_knowledge_bases_permitted,
     profile_scope_filters,
     support_guide_context,
 )
-from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
-from app.rag.approved_faq_scope import ApprovedFaqScopeState
+from app.rag.approved_faq_answer import PrepareQuestion, approved_faq_candidates
 from app.rag.domain_keyword_import import (
     PREVIEW_ROWS,
     KeywordImportMode,
     import_keywords,
     read_keyword_excel,
 )
+from app.rag.evaluation_excel import XLSX_MEDIA_TYPE
 from app.rag.input_guardrail import check_question_text
 from app.rag.profile_language import profile_language_scope
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
-    FAQ_DIRECT_ANSWER_ENABLED_KEY,
-    FAQ_ENABLED_KEY,
+    APPROVED_FAQ_TEMPLATE_FILE_NAME,
     ApprovedFaqMutation,
     add_approved_faq,
-    approved_faq_direct_answer_enabled,
     approved_faq_enabled,
-    approved_faq_match_options,
-    confirm_approved_faq,
+    approved_faq_template_xlsx,
     delete_approved_faq,
     edit_runtime_knowledge,
     import_approved_faq,
-    is_direct_faq_match,
-    load_approved_faq_snapshot,
+    load_approved_faq,
     load_domain_keywords,
     load_runtime_knowledge_payload,
-    match_direct_approved_faq,
     preview_runtime_knowledge,
-    rank_approved_faq,
     read_approved_faq_excel,
-    save_approved_faq_negative_questions,
     save_approved_faq_settings,
     save_domain_keywords,
     suggest_domain_keywords,
@@ -68,16 +60,12 @@ from app.schemas.common import ApiResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.schemas.search_answer_profile_knowledge import (
     ApprovedFaqAddRequest,
-    ApprovedFaqConfirmRequest,
     ApprovedFaqDeleteRequest,
     ApprovedFaqImportPreviewData,
     ApprovedFaqImportRowData,
-    ApprovedFaqKnowledgeBaseData,
     ApprovedFaqListData,
     ApprovedFaqMutationData,
-    ApprovedFaqNegativeQuestionsRequest,
     ApprovedFaqRecordData,
-    ApprovedFaqReviewReason,
     ApprovedFaqSettingsRequest,
     ApprovedFaqSuggestionData,
     ApprovedFaqSuggestionsData,
@@ -97,10 +85,6 @@ from app.schemas.search_answer_profile_knowledge import (
     RuntimeKnowledgePreviewData,
     RuntimeKnowledgePreviewRequest,
 )
-from app.security.user_names import user_display_names
-
-# チャットで提示する類似問の上限(rag_poc の候補の上限は 5。チャットは 3 ＋「どれでもない」。#684)。
-CHAT_APPROVED_FAQ_LIMIT = 3
 
 router = APIRouter()
 MAX_FAQ_EXCEL_BYTES = 10 * 1024 * 1024
@@ -244,71 +228,26 @@ async def suggest_search_answer_profile_domain_keywords(
     )
 
 
-# --- Approved FAQ(類似問)-----------------------------------------------------
-
-
-def _faq_record_data(
-    state: ApprovedFaqScopeState, approver_names: dict[str, str]
-) -> ApprovedFaqRecordData:
-    record = state.record
-    approval = record.approval
-    return ApprovedFaqRecordData(
-        id=record.id,
-        question=record.question,
-        answer=record.approved_answer,
-        alternate_questions=list(record.alternate_questions),
-        negative_questions=list(record.negative_questions),
-        status=record.status,
-        target_knowledge_base_ids=list(record.target_knowledge_base_ids or ()),
-        source_document_ids=[source.document_id for source in record.source_documents],
-        approved_by=approver_names.get(approval.approved_by) if approval else None,
-        approved_at=(approval.approved_at or None) if approval else None,
-        review_reasons=[cast(ApprovedFaqReviewReason, reason) for reason in state.review_reasons],
-        source_updated=state.source_updated,
-    )
+# --- 承認済み FAQ（質問と回答。#5107）---------------------------------------------
 
 
 async def _faq_list_data(
     oracle: OracleClient, search_answer_profile_id: str
 ) -> ApprovedFaqListData:
-    """FAQ の一覧と今の根拠の状態・承認者の表示名・対象の KB の名前(#4621)。"""
-    snapshot = await load_approved_faq_snapshot(oracle, search_answer_profile_id)
-    approvers = sorted(
-        {state.record.approval.approved_by for state in snapshot.states if state.record.approval}
-        - {""}
-    )
-    approver_names = await run_in_threadpool(user_display_names, approvers) if approvers else {}
-    profile_kbs = snapshot.profile_knowledge_base_ids
-    kb_ids = list(
-        dict.fromkeys(
-            [
-                *profile_kbs,
-                *(
-                    knowledge_base_id
-                    for record in snapshot.records
-                    for knowledge_base_id in record.target_knowledge_base_ids or ()
-                ),
-            ]
-        )
-    )
-    names = (
-        {kb.id: kb.name for kb in await oracle.list_knowledge_bases(knowledge_base_ids=kb_ids)}
-        if kb_ids
-        else {}
-    )
+    """FAQ の一覧・提示の設定と、候補の一致度の下限・件数（全体設定。画面の説明に出す）。"""
+    payload, records = await load_approved_faq(oracle, search_answer_profile_id)
+    settings = get_settings()
     return ApprovedFaqListData(
         search_answer_profile_id=search_answer_profile_id,
-        records=[_faq_record_data(state, approver_names) for state in snapshot.states],
-        enabled=approved_faq_enabled(snapshot.payload),
-        # スイッチの保存値をそのまま返す(類似問の提示がオフの間は使わないが、設定は残す)。
-        direct_answer_enabled=(snapshot.payload or {}).get(FAQ_DIRECT_ANSWER_ENABLED_KEY) is True,
-        direct_answer_min_score=get_settings().rag_approved_faq_direct_answer_min_score,
-        knowledge_bases=[
-            ApprovedFaqKnowledgeBaseData(
-                id=kb_id, name=names.get(kb_id, kb_id), in_profile=kb_id in profile_kbs
+        records=[
+            ApprovedFaqRecordData(
+                id=record.id, question=record.question, answer=record.approved_answer
             )
-            for kb_id in kb_ids
+            for record in records
         ],
+        enabled=approved_faq_enabled(payload),
+        min_score=settings.rag_approved_faq_min_score,
+        max_suggestions=settings.rag_approved_faq_max_suggestions,
     )
 
 
@@ -328,33 +267,9 @@ async def _faq_mutation_data(
     response_model=ApiResponse[ApprovedFaqListData],
 )
 async def get_approved_faq(search_answer_profile_id: str) -> ApiResponse[ApprovedFaqListData]:
-    """検索・回答プロファイルの承認済み FAQ 一覧を返す(根拠の状態・承認者・対象の KB を含む)。"""
+    """検索・回答プロファイルの承認済み FAQ（質問と回答）の一覧と提示の設定を返す。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
-    return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
-
-
-@router.post(
-    "/{search_answer_profile_id}/approved-faq/{faq_id}/confirm",
-    response_model=ApiResponse[ApprovedFaqListData],
-)
-async def confirm_search_answer_profile_approved_faq(
-    search_answer_profile_id: str, faq_id: str, request: ApprovedFaqConfirmRequest
-) -> ApiResponse[ApprovedFaqListData]:
-    """FAQ の対象の KB と根拠を確かめ直し、承認者と時刻を記録する(要確認からの復帰。#4621)。"""
-    oracle = OracleClient()
-    await _require_search_answer_profile(oracle, search_answer_profile_id)
-    try:
-        await confirm_approved_faq(
-            oracle,
-            search_answer_profile_id,
-            faq_id,
-            target_knowledge_base_ids=request.target_knowledge_base_ids,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="FAQ が見つかりません。") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
 
 
@@ -365,41 +280,11 @@ async def confirm_search_answer_profile_approved_faq(
 async def put_approved_faq_settings(
     search_answer_profile_id: str, request: ApprovedFaqSettingsRequest
 ) -> ApiResponse[ApprovedFaqListData]:
-    """プロファイルごとの FAQ の設定を保存する(送った項目だけ。#684・#4788)。
-
-    類似問を提示するか・一致度が下限以上のとき FAQ の回答をそのまま返すか。
-    """
+    """プロファイルごとの FAQ の設定（回答の前に候補を提示するか）を保存する(#684)。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
-    changes: dict[str, bool] = {}
-    if request.enabled is not None:
-        changes[FAQ_ENABLED_KEY] = request.enabled
-    if request.direct_answer_enabled is not None:
-        changes[FAQ_DIRECT_ANSWER_ENABLED_KEY] = request.direct_answer_enabled
-    if changes:
-        await save_approved_faq_settings(oracle, search_answer_profile_id, changes)
+    await save_approved_faq_settings(oracle, search_answer_profile_id, enabled=request.enabled)
     return await get_approved_faq(search_answer_profile_id)
-
-
-@router.put(
-    "/{search_answer_profile_id}/approved-faq/{faq_id}/negative-questions",
-    response_model=ApiResponse[ApprovedFaqListData],
-)
-async def put_approved_faq_negative_questions(
-    search_answer_profile_id: str, faq_id: str, request: ApprovedFaqNegativeQuestionsRequest
-) -> ApiResponse[ApprovedFaqListData]:
-    """FAQ の否定の質問(この FAQ を当てたくない質問の例)を置き換える(#4788)。"""
-    oracle = OracleClient()
-    await _require_search_answer_profile(oracle, search_answer_profile_id)
-    try:
-        await save_approved_faq_negative_questions(
-            oracle, search_answer_profile_id, faq_id, request.negative_questions
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="FAQ が見つかりません。") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
 
 
 @router.post(
@@ -409,17 +294,12 @@ async def put_approved_faq_negative_questions(
 async def post_approved_faq(
     search_answer_profile_id: str, request: ApprovedFaqAddRequest
 ) -> ApiResponse[ApprovedFaqMutationData]:
-    """FAQ を 1 件追加する(同じ質問は追加しない)。対象の KB の未指定はプロファイルの全 KB。"""
+    """FAQ を 1 件追加する(同じ質問は追加しない)。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     try:
         mutation = await add_approved_faq(
-            oracle,
-            search_answer_profile_id,
-            question=request.question,
-            answer=request.answer,
-            target_knowledge_base_ids=request.target_knowledge_base_ids,
-            negative_questions=request.negative_questions,
+            oracle, search_answer_profile_id, question=request.question, answer=request.answer
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -453,6 +333,20 @@ async def _excel_rows(file: UploadFile) -> list[ApprovedFaqImportRow]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/{search_answer_profile_id}/approved-faq/import/template")
+async def download_approved_faq_template(search_answer_profile_id: str) -> Response:
+    """FAQ の取込のテンプレート(QUESTION・ANSWER の 2 列の見出しだけの Excel)。"""
+    await _require_search_answer_profile(OracleClient(), search_answer_profile_id)
+    content = await asyncio.to_thread(approved_faq_template_xlsx)
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{APPROVED_FAQ_TEMPLATE_FILE_NAME}"'
+        },
+    )
+
+
 @router.post(
     "/{search_answer_profile_id}/approved-faq/import/preview",
     response_model=ApiResponse[ApprovedFaqImportPreviewData],
@@ -460,7 +354,7 @@ async def _excel_rows(file: UploadFile) -> list[ApprovedFaqImportRow]:
 async def preview_approved_faq_import(
     search_answer_profile_id: str, file: Annotated[UploadFile, File()]
 ) -> ApiResponse[ApprovedFaqImportPreviewData]:
-    """Excel(QUESTION / ANSWER 列)の取込内容を先頭 10 件だけ返す(保存しない)。"""
+    """Excel(QUESTION / ANSWER 列だけを読む)の取込内容を先頭 10 件だけ返す(保存しない)。"""
     await _require_search_answer_profile(OracleClient(), search_answer_profile_id)
     rows = await _excel_rows(file)
     return ApiResponse(
@@ -468,10 +362,7 @@ async def preview_approved_faq_import(
             total=len(rows),
             rows=[
                 ApprovedFaqImportRowData(
-                    question=row.question,
-                    answer=row.approved_answer,
-                    row=row.row,
-                    negative_questions=list(row.negative_questions),
+                    question=row.question, answer=row.approved_answer, row=row.row
                 )
                 for row in rows[:APPROVED_FAQ_PREVIEW_ROWS]
             ],
@@ -487,23 +378,13 @@ async def import_search_answer_profile_approved_faq(
     search_answer_profile_id: str,
     file: Annotated[UploadFile, File()],
     mode: Annotated[str, Form()] = "INSERT",
-    target_knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
 ) -> ApiResponse[ApprovedFaqMutationData]:
-    """Excel から FAQ を取り込む。INSERT は同じ質問をスキップ、DELETE_THEN_INSERT は置き換え。
-
-    取り込む FAQ の対象の KB は ``target_knowledge_base_ids``(未指定はプロファイルの全 KB)。
-    """
+    """Excel から FAQ を取り込む。INSERT は同じ質問をスキップ、DELETE_THEN_INSERT は置き換え。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     rows = await _excel_rows(file)
     try:
-        mutation = await import_approved_faq(
-            oracle,
-            search_answer_profile_id,
-            rows,
-            mode=mode,
-            target_knowledge_base_ids=target_knowledge_base_ids,
-        )
+        mutation = await import_approved_faq(oracle, search_answer_profile_id, rows, mode=mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=await _faq_mutation_data(oracle, search_answer_profile_id, mutation))
@@ -516,63 +397,49 @@ async def import_search_answer_profile_approved_faq(
 async def suggest_search_answer_profile_approved_faq(
     search_answer_profile_id: str, request: ApprovedFaqSuggestRequest
 ) -> ApiResponse[ApprovedFaqSuggestionsData]:
-    """質問に近い承認済み FAQ(類似問)を返す。回答前の提示に使う。"""
+    """回答の前に提示する承認済み FAQ の候補を返す(#5107)。
+
+    権限は検索・回答プロファイルの権限だけで判定する（ナレッジベースの権限では判定しない）。
+    ``conversation_id``（チャット）を渡すと、安全チェックの後に質問を会話の履歴で補完してから
+    照合し、補完の token を返す（確認の照会と送信が補完を呼び直さない）。
+    """
     oracle = OracleClient()
     view = await _require_search_answer_profile(oracle, search_answer_profile_id)
-    # 検索・チャットと同じく、参照 KB を 1 つも使えない利用者には FAQ の回答を返さない(403。#4618)。
-    ensure_search_answer_profile_knowledge_bases_permitted(
-        view.config.normalized_knowledge_base_ids()
-    )
     settings = get_settings()
-    # 質問の文を使う最初の処理として入力の安全チェックを行い、止めた質問は照合しない（#5099）。
-    checked = await check_question_text(request.query, settings)
-    if not checked.allowed:
-        return ApiResponse(data=ApprovedFaqSuggestionsData())
-    request = request.model_copy(update={"query": checked.sanitized_text})
-    snapshot = await load_approved_faq_snapshot(oracle, search_answer_profile_id)
-    ranking = await rank_approved_faq(
-        oracle,
-        search_answer_profile_id,
-        request.query,
-        # チャットは最大 3 件 ＋「どれでもない」を出し、どれかを選ぶまで回答しない(#684)。
-        limit=min(request.limit, CHAT_APPROVED_FAQ_LIMIT)
-        if request.purpose == "chat"
-        else request.limit,
-        min_score=settings.rag_approved_faq_suggestion_min_score,
-        snapshot=snapshot,
-        **approved_faq_match_options(settings, lambda: OciGenAiClient(settings=settings)),
+    prepare: PrepareQuestion | None = None
+    if request.conversation_id is not None:
+        from app.api.routes.chat import prepare_chat_question
+
+        conversation_id = request.conversation_id
+        profile_settings, _ = resolve_search_answer_profile_settings(settings, view.config)
+
+        async def prepare(question: str, checked: GuardrailResult) -> tuple[str, str | None]:
+            with profile_language_scope(profile_settings):
+                return await prepare_chat_question(
+                    oracle,
+                    conversation_id,
+                    search_answer_profile_id,
+                    question,
+                    profile_settings,
+                    force_token=True,
+                    prechecked=checked,
+                )
+
+    suggestions, context_token = await approved_faq_candidates(
+        oracle, search_answer_profile_id, request.query, settings, prepare=prepare
     )
-    suggestions = list(ranking.suggestions)
-    direct_min_score = settings.rag_approved_faq_direct_answer_min_score
-    if (
-        suggestions
-        and approved_faq_direct_answer_enabled(snapshot.payload)
-        and is_direct_faq_match(suggestions[0], direct_min_score)
-    ):
-        # 一致度が下限以上のチャットの質問は、候補を選ばせずに送る。送信の後、補完した質問で
-        # 照合し直して FAQ の回答をそのまま返す(#4788)。
-        return ApiResponse(data=ApprovedFaqSuggestionsData(direct_answer=True))
-    if suggestions:
-        # 1 位とほぼ同じくらい近い候補だけを出す(#709)。
-        top = max(item.score for item in suggestions)
-        suggestions = [
-            item
-            for item in suggestions
-            if item.score >= top - settings.rag_approved_faq_suggestion_max_gap
-        ]
     return ApiResponse(
         data=ApprovedFaqSuggestionsData(
             suggestions=[
                 ApprovedFaqSuggestionData(
                     id=item.record.id,
                     question=item.record.question,
-                    matched_question=item.matched_question,
                     answer=item.record.approved_answer,
                     score=round(item.score, 4),
-                    direct=is_direct_faq_match(item, direct_min_score),
                 )
                 for item in suggestions
-            ]
+            ],
+            question_context_token=context_token,
         )
     )
 
@@ -666,12 +533,14 @@ async def post_clarification_suggest(
     if not checked.allowed:
         return ApiResponse(data=ClarificationSuggestionsData())
     with profile_language_scope(settings):
+        # FAQ の候補の照会が済ませた補完の token があれば、補完を呼び直さない（#5107）。
         query, context_token = await prepare_chat_question(
             oracle,
             request.conversation_id,
             search_answer_profile_id,
             checked.sanitized_text,
             settings,
+            token=request.question_context_token,
             force_token=True,
             prechecked=checked,
         )
@@ -689,18 +558,6 @@ async def post_clarification_suggest(
         # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
         if not settings.rag_support_guide_enabled:
             return response(ClarificationSuggestionsData())
-        # 補完した質問が承認済み FAQ に下限以上で一致するなら、送信の側が FAQ の回答をそのまま返す
-        # ので確認も出さない(#4788。利用者が類似問を「どれでもない」と断った質問は照合しない)。
-        if not request.approved_faq_declined:
-            direct = await match_direct_approved_faq(
-                oracle,
-                search_answer_profile_id,
-                query,
-                settings,
-                lambda: OciGenAiClient(settings=settings),
-            )
-            if direct is not None and direct.answer is not None:
-                return response(ClarificationSuggestionsData())
         payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
         guides = await _published_guides(oracle, search_answer_profile_id)
         # 文面の補完を OFF にしても、ガイドの既存の利用者履歴の照合は維持する。
