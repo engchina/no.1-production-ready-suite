@@ -46,6 +46,8 @@ const SCREENS: Screen[] = [
   { path: "/usage" },
   { path: "/audit" },
   { path: "/settings/security/permissions" },
+  // 安全チェックは 3 製品で共通の画面で、セキュリティ設定の権限管理の下（#5061・#5085）。
+  { path: "/settings/guardrail" },
   { path: "/settings/security/users" },
   { path: "/settings/security/roles" },
   { path: "/settings/security/api-keys", setup: seedApiKeys },
