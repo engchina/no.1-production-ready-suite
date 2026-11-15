@@ -69,7 +69,6 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
         request,
         state,
         retrieval_queries=["合成項目", "追加検索文"],
-        vector_only_queries=["合成項目", "追加検索文"],
         expand_references=False,
     )
     assert {chunk.metadata["document_id"] for chunk in result.child_chunks} == set(doc_ids[:2])
@@ -98,7 +97,6 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
             scoped_request,
             _SearchState(),
             retrieval_queries=["合成項目"],
-            vector_only_queries=["合成項目"],
             expand_references=False,
         )
         assert {chunk.metadata["document_id"] for chunk in result.child_chunks} == {doc_ids[0]}

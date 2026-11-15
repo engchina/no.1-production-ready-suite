@@ -106,8 +106,8 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(ids["chunk-7"].metadata["adb_hybrid"]["reserved_by"], ["vector:q3"])
         self.assertEqual(ids["chunk-1"].metadata["adb_hybrid"]["reserved_by"], [])
 
-    def test_vector_only_queries_skip_text_search_but_keep_vector_search(self):
-        # HyDE の仮説文は embedding だけに使い、Oracle Text の CONTAINS には使わない (#911)。
+    def test_additional_queries_without_terms_skip_text_search_but_keep_vector_search(self):
+        # 用語・同義語を足していない追加検索文は embedding だけに使い、Oracle Text の CONTAINS には使わない。
         settings = replace(
             get_settings(), hybrid_search_backend="oracle_separate_sql", embedding_output_dimensions=1536, image_embedding_enabled=False
         )
@@ -124,7 +124,6 @@ class AdbVectorStoreTests(unittest.TestCase):
             search_adb_hybrid_chunks(
                 chunk_run_id="run-1",
                 retrieval_queries=["原質問 出力", "仮説文 出力 条件", "派生 出力"],
-                vector_only_queries=["仮説文 出力 条件"],
                 settings=settings,
                 query_embedder=lambda *_: [0.1] * 1536,
                 candidate_limit=5,
@@ -188,17 +187,22 @@ class AdbVectorStoreTests(unittest.TestCase):
             )
             self.assertEqual(text.call_count, 1)
             self.assertEqual(load.call_count, 1)
-            # 読み込み済みの対象は再利用として記録し、DBは読み直さない。全文検索の入力が無ければその工程は出さない。
+            # 読み込み済みの対象は再利用として記録し、DBは読み直さない。
             observed.clear()
-            search(retrieval_queries=["仮説文 出力"], vector_only_queries=["仮説文 出力"])
+            search(retrieval_queries=["原質問 出力"])
             self.assertEqual(
                 [entry[2] for entry in observed if entry[0] == "start"],
-                [adb_vector_store.CHUNK_POOL_LOAD_STAGE, adb_vector_store.VECTOR_SEARCH_STAGE, "検索結果の統合（RRF）"],
+                [
+                    adb_vector_store.CHUNK_POOL_LOAD_STAGE,
+                    adb_vector_store.VECTOR_SEARCH_STAGE,
+                    adb_vector_store.TEXT_SEARCH_STAGE,
+                    "検索結果の統合（RRF）",
+                ],
             )
             self.assertEqual(load.call_count, 1)
 
     def test_text_search_limit_counts_only_text_candidates(self):
-        # 上限は vector 専用の検索文を除いてから数える (#921)。
+        # 上限は vector だけで検索する検索文を除いてから数える (#921)。
         settings = replace(
             get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False, text_search_query_variant_limit=2
         )
@@ -215,7 +219,6 @@ class AdbVectorStoreTests(unittest.TestCase):
             search_adb_hybrid_chunks(
                 chunk_run_id="run-1",
                 retrieval_queries=["原質問 出力", "仮説文 出力 条件", "派生 出力 手順"],
-                vector_only_queries=["仮説文 出力 条件"],
                 settings=settings,
                 query_embedder=lambda *_: [0.1] * 1536,
                 candidate_limit=5,

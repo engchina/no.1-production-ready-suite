@@ -25,12 +25,12 @@ def test_one_additional_expression_exact_weights():
 
 def test_empty_failure_and_vector_only_do_not_redistribute():
     w = RrfWeights(vector=3, keyword=1, original=1, additional=1)
-    s = source_weights(["q", "hyde"], w)
+    s = source_weights(["q", "extra"], w)
     result = fuse_rankings(
         [
             RankedList("q", "vector", (), status="failed", error="TimeoutError"),
             RankedList("q", "keyword", ()),
-            RankedList("hyde", "vector", ("a", "a", "b")),
+            RankedList("extra", "vector", ("a", "a", "b")),
         ],
         s,
         w,

@@ -1077,7 +1077,6 @@ def build_adb_hybrid_answer_context(
     pinned_chunk_run_id: str | None = None,
     runtime_knowledge: RuntimeKnowledgeContext | None = None,
     query_embedder: Callable[[str, Settings], list[float]] | None = None,
-    vector_only_queries: Sequence[str] = (),
     page_ranges: Sequence[Mapping[str, Any]] = (),
     trusted_queries: Sequence[str] = (),
 ) -> AnswerContext:
@@ -1090,7 +1089,6 @@ def build_adb_hybrid_answer_context(
     #2395）。空なら絞らない。絞り込みは注入された検索実装が行う。
 
     query_embedder は索引と同じ embedder を使う SDK 用。未指定なら検索実装の既定（OCI）を使う。
-    vector_only_queries は retrieval_queries のうち全文検索に使わない検索文（HyDE の仮説文。#911）。
 
     pinned_chunk_run_id 指定時は保存済み実行を直接読み、latest 更新による評価条件の変化を防ぐ。
     存在しない実行は AdbHybridSearchUnavailable とする。ADB と必要に応じ reranker に接続する。
@@ -1140,7 +1138,6 @@ def build_adb_hybrid_answer_context(
         "classification_filter": classification_filter,
         # 注入された検索実装の既存シグネチャを壊さないよう、指定時だけ渡す。
         **({"query_embedder": query_embedder} if query_embedder is not None else {}),
-        **({"vector_only_queries": tuple(vector_only_queries)} if vector_only_queries else {}),
         **({"page_ranges": [dict(item) for item in page_ranges]} if page_ranges else {}),
     }
     # 業務語は #848 で SQL の除外条件から融合後の加点に変わったため、0 件時の再検索（#818）は不要になった。

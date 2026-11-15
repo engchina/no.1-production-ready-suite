@@ -813,15 +813,12 @@ def search_adb_hybrid_chunks(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     extra_text_queries: Sequence[str] = (),
-    vector_only_queries: Sequence[str] = (),
 ) -> HybridSearchResult:
     """text vector、Oracle Text、任意 image vector を RRF で融合してチャンクを検索します。
 
     extra_text_queries は組み立て済みの Oracle Text 検索式（`{基準月}` など。#730 の対象語の部分語）。
     質問文の変種とは別に Oracle Text だけで検索し、派生検索文と同じ重みで融合する。各式の上位
     `RESERVED_CANDIDATES_PER_QUERY` 件は候補に確保される。
-    vector_only_queries は retrieval_queries のうち vector（image vector を含む）検索だけに使い、
-    Oracle Text 検索には使わない検索文（HyDE の仮説文。#911）。融合の重みは検索文の位置で決まり変わらない。
     """
     if settings.hybrid_search_backend == "oracle_hybrid_index":
         from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable
@@ -830,7 +827,6 @@ def search_adb_hybrid_chunks(
             "Oracle原生hybrid検索はRAG backendの検索入口を使用してください。旧独立schemaのadapterへは切り替えません。"
         )
     queries = _dedupe_queries(retrieval_queries)
-    vector_only_keys = {_query_key(query) for query in vector_only_queries}
     if not queries:
         return HybridSearchResult(child_chunks=[], all_chunks=[])
     preferred_engine_ids = tuple(preferred_engine_ids)
@@ -918,10 +914,7 @@ def search_adb_hybrid_chunks(
             # 検索の中の今の作業を末端の段として出す。#3436）。
             from rag_engine.retrieval.query_channels import expression_channels
 
-            channels = {
-                q: expression_channels(q, queries[0], settings.retrieval_query_sources, vector_only=_query_key(q) in vector_only_keys)
-                for q in queries
-            }
+            channels = {q: expression_channels(q, queries[0], settings.retrieval_query_sources) for q in queries}
             vectors = dict(zip(queries, _query_vectors(queries, settings, query_embedder), strict=True))
             with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
                 if getattr(vector_observation, "capture_enabled", True):
@@ -1007,7 +1000,7 @@ def search_adb_hybrid_chunks(
             )
             tokenizer_config = _text_search_tokenizer_config(settings)
             query_keywords = {_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
-            # 全文検索の上限は vector 専用の検索文（HyDE の仮説文）を除いてから数える (#921)。重みは元の位置で決める。
+            # 全文検索の上限は vector だけで検索する検索文を除いてから数える (#921)。重みは元の位置で決める。
             text_candidates = [
                 (index, query) for index, query in enumerate(queries) if any(c in {"hybrid", "keyword"} for c in channels[query])
             ]

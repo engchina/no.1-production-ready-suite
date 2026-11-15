@@ -1140,7 +1140,6 @@ class AnswerEngine:
         *,
         retrieval_queries: Sequence[str],
         candidate_limit: int = 24,
-        vector_only_queries: Sequence[str] = (),
         settings: Any = None,
         expand_references: bool = True,
         defer_context: bool = False,
@@ -1164,7 +1163,6 @@ class AnswerEngine:
             expand_references = False
             if not _with_page_ranges(state.filters, page_ranges):
                 return HybridSearchResult(child_chunks=[], all_chunks=[])
-        vector_only = {query.strip() for query in vector_only_queries}
         depth = self._read_depth(candidate_limit)
         from rag_engine.retrieval.query_channels import expression_channels
         from rag_engine.retrieval.weighted_rrf import query_key
@@ -1176,13 +1174,7 @@ class AnswerEngine:
             )
         original_query = state.original_retrieval_query
         channels = {
-            query: expression_channels(
-                query,
-                original_query,
-                query_sources,
-                vector_only=query_key(query) in {query_key(q) for q in vector_only},
-            )
-            for query in queries
+            query: expression_channels(query, original_query, query_sources) for query in queries
         }
         embedded = await self._query_embeddings(state, queries)
         embeddings: dict[str, list[float]] = {}
@@ -1338,8 +1330,6 @@ class AnswerEngine:
         citation_search = getattr(self._oracle, "citation_label_search", None)
         if citation_search is not None:
             for query in queries:
-                if query in vector_only:
-                    continue
                 hits = await citation_search(
                     query,
                     filters=(_with_page_ranges(state.filters, page_ranges) or {})

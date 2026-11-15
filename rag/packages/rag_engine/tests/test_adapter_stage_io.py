@@ -55,7 +55,6 @@ def test_search_snapshots_match_actual_rankings_and_failures(monkeypatch, enable
             arguments = dict(
                 chunk_run_id="synthetic-run",
                 retrieval_queries=["合成質問", "合成仮説"],
-                vector_only_queries=["合成仮説"],
                 extra_text_queries=["{追加}"],
                 candidate_limit=2,
                 query_embedder=lambda *args: [0.1] * 1536,

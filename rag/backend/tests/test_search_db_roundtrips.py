@@ -891,15 +891,14 @@ class _OneHitPerQueryOracle(_SearchOracle):
         return [_hit(self.hits[query], 1.0, mode=mode.value)]
 
 
-async def test_vector_only_queries_share_the_additional_budget() -> None:
-    """vector 専用も追加検索文の予算を分け合い、全文の重みを再配分しない。"""
+async def test_vector_queries_share_the_additional_budget() -> None:
+    """vector だけで検索する追加検索文も予算を分け合い、全文の重みを再配分しない。"""
     oracle = _OneHitPerQueryOracle({"原": "c-0", "派生 1": "c-1", "派生 2": "c-2", "規定": "c-3"})
     engine = AnswerEngine(Settings(), oracle=oracle, genai=_GenAi())  # type: ignore[arg-type]
     result = await engine._search(
         SearchRequest(query="原", filters={"knowledge_base_id": "kb-1"}),
         _SearchState(),
         retrieval_queries=["原", "派生 1", "派生 2", "規定"],
-        vector_only_queries=["規定"],
         candidate_limit=6,
         expand_references=False,
     )
@@ -1289,7 +1288,6 @@ async def test_weighted_rrf_uses_raw_lists_once_and_records_actual_contributions
         SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"}),
         state,
         retrieval_queries=["q", "a", "b", "a", "q"],
-        vector_only_queries=["b"],
         expand_references=False,
     )
     record = next(s for s in state.retrieval_stages if s["stage"] == "candidate_fusion")["rrf"]
