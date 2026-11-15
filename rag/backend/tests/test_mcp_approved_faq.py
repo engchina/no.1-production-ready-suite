@@ -1,4 +1,4 @@
-"""MCP の rag_search の承認済み FAQ（登録済みの Q&A）: 候補・選んだ Q&A の回答・候補の省略（#5134）。"""
+"""MCP の rag_search の承認済み FAQ（登録済みの Q&A）: 候補・選んだ回答・候補の省略（#5134）。"""
 
 from __future__ import annotations
 
@@ -62,8 +62,8 @@ def _candidates(monkeypatch: MonkeyPatch, suggestions: list[ApprovedFaqSuggestio
     return queries
 
 
-def _searcher(auth: Any) -> dict[str, str]:
-    user = auth.user_with_permissions("searcher", ["menu.search"])
+def _searcher(production_auth: Any) -> dict[str, str]:
+    user = production_auth.user_with_permissions("searcher", ["menu.search"])
     return _token(user.user_uuid)
 
 
