@@ -40,7 +40,6 @@ const detail = {
 const faqSuggestion = {
   id: "faq-1",
   question: "受注を取り消すには？",
-  matched_question: "受注を取り消すには？",
   answer: "受注一覧で取消ボタンを押します。",
   score: 0.97,
 };

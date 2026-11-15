@@ -61,6 +61,7 @@ from app.rag.answer_engine import AnswerScope
 from app.rag.answer_failure import describe_answer_failure
 from app.rag.answer_notice import current_answer_notice
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
+from app.rag.approved_faq_answer import is_approved_faq_answer
 from app.rag.chat_answer_runs import (
     CHAT_ANSWER_CANCELLED_MESSAGE,
     CHAT_ANSWER_HEARTBEAT_LOST,
@@ -79,7 +80,6 @@ from app.rag.chat_question_token import (
     read_history_rewrite_elapsed,
     read_question_context,
 )
-from app.rag.faq_direct_answer import approved_faq_direct_score
 from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.input_guardrail import combine_question_results
 from app.rag.observability import elapsed_ms, new_trace_id
@@ -100,10 +100,7 @@ from app.rag.request_context import (
 from app.rag.run_history import RunRecorder
 from app.rag.saved_evidence import readable_document_ids, visible_citations
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
-from app.rag.search_answer_profile_knowledge import (
-    find_approved_faq,
-    load_runtime_knowledge_payload,
-)
+from app.rag.search_answer_profile_knowledge import load_runtime_knowledge_payload
 from app.rag.signed_url import SignedUrlUnavailableError
 from app.rag.stored_answer import (
     answer_format_record,
@@ -279,9 +276,7 @@ def _to_chat_message(
             message.answer_attached_images if message.status == "COMPLETE" else 0
         ),
         answer_format=(message.answer_format if message.status == "COMPLETE" else None),
-        approved_faq_direct_score=(
-            message.approved_faq_direct_score if message.status == "COMPLETE" else None
-        ),
+        approved_faq_answer=message.approved_faq_answer and message.status == "COMPLETE",
     )
 
 
@@ -835,15 +830,11 @@ class PreparedChatTurn:
     query_guardrail: GuardrailResult
     history: list[ChatTurn]
     user_message: StoredMessage
-    # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答。#684)。
-    approved_faq: tuple[str, str] | None = None
     # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
     scope: AnswerScope | None = None
     history_question_prepared: bool = False
     # 送信の前（確認の提案）に済ませた履歴による補完。処理の経過に同じ段として残す（#4794）。
     prepared_history_rewrite: PreparedHistoryRewrite | None = None
-    # 補完した質問が承認済み FAQ に下限以上で一致したら、FAQ の回答をそのまま返してよいか（#4788）。
-    direct_faq_answer: bool = False
 
 
 async def _prepare_chat_turn(
@@ -862,15 +853,6 @@ async def _prepare_chat_turn(
     保存し、回答の工程が止めた応答を作る。
     """
     guardrails = GuardrailPolicy(settings)
-    approved_faq: tuple[str, str] | None = None
-    if request.approved_faq_id:
-        record = await find_approved_faq(oracle, search_answer_profile_id, request.approved_faq_id)
-        if record is None:
-            raise HTTPException(
-                status_code=422,
-                detail="選んだ類似問が見つかりません。もう一度送信して選び直してください。",
-            )
-        approved_faq = (record.question, record.approved_answer)
     guide_reply = (
         request.clarification is not None
         and request.clarification.guide_condition_id.startswith(GUIDE_CLARIFICATION_PREFIX)
@@ -1014,6 +996,8 @@ async def _prepare_chat_turn(
             top_k=request.top_k,
             search_answer_profile_id=search_answer_profile_id,
             conditions=conditions,
+            # 利用者が選んだ承認済み FAQ（#5107）。入口が補完の後に引き直し、回答をそのまま返す。
+            approved_faq_id=request.approved_faq_id,
         ),
         settings,
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
@@ -1082,14 +1066,7 @@ async def _prepare_chat_turn(
         # 補完は送信の準備で済ませる（#5100）。回答の工程では補完し直さない。
         history_question_prepared=True,
         prepared_history_rewrite=prepared_history_rewrite,
-        approved_faq=approved_faq,
         scope=scope,
-        # 利用者が類似問を選んだ・断った発話と、確認に答えた発話には、そのまま返さない。
-        direct_faq_answer=(
-            approved_faq is None
-            and not request.approved_faq_declined
-            and request.clarification is None
-        ),
     )
 
 
@@ -1146,7 +1123,6 @@ async def _generate_chat_answer(
             llm=llm,
             guardrails=turn.guardrails,
             answer_model_id=model_id or None,
-            approved_faq=turn.approved_faq,
             scope=turn.scope,
             run_recorder=run_recorder,
             answer_notice=current_answer_notice,
@@ -1154,7 +1130,6 @@ async def _generate_chat_answer(
             attachment_conversation_id=turn.conversation_id,
             history_question_prepared=turn.history_question_prepared,
             prepared_history_rewrite=turn.prepared_history_rewrite,
-            direct_faq_answer=turn.direct_faq_answer,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(
@@ -1188,7 +1163,7 @@ async def _generate_chat_answer(
             answer_format=answer_format_record(
                 (result.diagnostics.answer or {}).get("answer_format")
             ),
-            approved_faq_direct_score=approved_faq_direct_score(result.diagnostics.answer),
+            approved_faq_answer=is_approved_faq_answer(result.diagnostics.answer),
         )
     except Exception as exc:
         await run_recorder.record(

@@ -813,10 +813,24 @@
       "sha256": "45d4a4a4797a4b00c308ac0df220ff844d2a91d02c8d9ab66703ff44ef925cfe",
       "statement_count": 1,
       "table_name": "rag_chunks"
+    },
+    {
+      "destructive": true,
+      "name": "20261115_5107_approved_faq_fields",
+      "sha256": "be6c89de8aa4bc15ca1b3991a2960440bc380eeb224d21c9d3d2b43d1f4151f1",
+      "statement_count": 1,
+      "table_name": "rag_search_answer_profile_knowledge"
+    },
+    {
+      "destructive": true,
+      "name": "20261115_5107_faq_answer_prompt",
+      "sha256": "5d20390933d01d088c321c6701e7c77225a882f9be1e0c998ecf923b139bd7fe",
+      "statement_count": 1,
+      "table_name": "rag_answer_prompts"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "dc84a266bdc3306ab2f2cbaef66c800b5b4c6c93c91d62e66eb5de40741b7293",
-  "statement_count": 173
+  "sha256": "5fb75fbfbeb40c031c3056a09ea638a2e2724ba68568e8640244e6e5782b69c3",
+  "statement_count": 175
 }

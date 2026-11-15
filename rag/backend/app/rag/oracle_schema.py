@@ -75,6 +75,10 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
+from app.rag.approved_faq_5107_migration import (
+    removed_approved_faq_fields_sql,
+    removed_faq_answer_prompt_sql,
+)
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
     RETIRED_4784_FIELDS,
@@ -1138,6 +1142,39 @@ END;
             table_name="rag_chunks",
             sql=_create_missing_objects_sql(
                 oracle_chunk_document_index_sql() + ";", "文書の chunk"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261115_5107_approved_faq_fields",
+            table_name="rag_search_answer_profile_knowledge",
+            sql=removed_approved_faq_fields_sql(),
+            destructive_note=(
+                "承認済み FAQ を質問と回答だけにしたため、検索・回答プロファイルの知識"
+                "（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が approved_faq の行の"
+                " PAYLOAD_JSON）から、FAQ ごとの当てはめない質問（negative_questions）・"
+                "対象のナレッジベース"
+                "（target_knowledge_base_ids）・引用した文書と版（source_documents）・承認者と時刻"
+                "（approval）と、プロファイルの「一致度が高いときは回答をそのまま返す」の設定"
+                "（direct_answer_enabled）と、意味照合の index の cache（semantic_index_cache。次の"
+                "照合で作り直す）を削除します。質問・回答・回答の前に提示するかの設定（enabled）と"
+                "ほかの種別の行は変えません。消す値を残す必要があれば、適用前に同列を export して"
+                "ください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261115_5107_faq_answer_prompt",
+            table_name="rag_answer_prompts",
+            sql=removed_faq_answer_prompt_sql(),
+            destructive_note=(
+                "選んだ承認済み FAQ の回答をそのまま返すようにし、FAQ から回答を作る LLM の指示を"
+                "なくしたため、RAG_ANSWER_PROMPTS の PROMPT_KEY が faq_answer.system の行（編集した"
+                "FAQ の回答の指示）を削除します。ほかの行は変えません。編集した文を残す必要が"
+                "あれば、適用前に該当の行の CONTENT を export してください。"
+                "削除後は復元できません。"
             ),
         )
     )

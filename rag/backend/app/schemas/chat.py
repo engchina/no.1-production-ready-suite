@@ -100,10 +100,9 @@ class ChatMessage(BaseModel):
     # 出す。
     # 画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
-    # 承認済み FAQ の回答をそのまま返した回答の一致度（ASSISTANT の終わった回答だけ。回答の記録の
-    # 診断の ``approved_faq_direct.score``。#4788）。値があれば、回答の見出しと案内に、検索と回答の
-    # 生成をしていないことを出す。それ以外の回答・記録の無い回答は None。
-    approved_faq_direct_score: float | None = None
+    # 利用者が選んだ承認済み FAQ の回答をそのまま返した回答か（ASSISTANT の終わった回答だけ。
+    # #5107）。true なら、回答の見出しと案内に、検索と回答の生成をしていないことを出す。
+    approved_faq_answer: bool = False
 
 
 class ChatAnswerCancelResult(BaseModel):
@@ -194,14 +193,9 @@ class ChatMessageRequest(BaseModel):
         le=SEARCH_TOP_K_MAX,
         json_schema_extra=search_top_k_schema,
     )
-    # 利用者が選んだ類似の承認済み FAQ の id(#684)。b
-    # ackend が検索・回答プロファイルの FAQ から引き直し、
-    #
-    # 質問と一緒に回答の LLM へ渡す。利用者の送った文を FAQ として扱わない。
+    # 利用者が回答の前の候補から選んだ承認済み FAQ の id(#5107)。backend が検索・回答プロファイルの
+    # FAQ から引き直し、検索・回答の生成をせずに FAQ の回答をそのまま返す。
     approved_faq_id: str | None = Field(default=None, min_length=1, max_length=200)
-    # 利用者が類似問の候補を「どれでもない」と断った質問。断った質問には、承認済み FAQ の回答を
-    # そのまま返さない（資料を検索して回答する。#4788）。
-    approved_faq_declined: bool = False
     # 利用者が業務ガイドの条件の確認に答えた内容。
     clarification: GuideConditionAnswer | None = None
     # 確認を飛ばした条件の id。会話に確認せずに回答したことを残すため、業務ガイドから引き直す。

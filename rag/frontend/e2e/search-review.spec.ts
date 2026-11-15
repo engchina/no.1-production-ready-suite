@@ -843,7 +843,7 @@ test("選んだ登録済みQ&Aを付けて検索し、Q&A の回答を原文の�
     route.fulfill(
       envelope({
         suggestions: [
-          { id: "faq-1", question: "合成の質問 A", matched_question: "合成の質問 A", answer: "合成の登録回答 A", score: 0.97 },
+          { id: "faq-1", question: "合成の質問 A", answer: "合成の登録回答 A", score: 0.97 },
         ],
       })
     )

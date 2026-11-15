@@ -4818,7 +4818,6 @@ export interface DocumentSectionRevisionDiff {
 export interface ApprovedFaqSuggestionData {
   id: string;
   question: string;
-  matched_question: string;
   answer: string;
   score: number;
 }

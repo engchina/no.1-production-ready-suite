@@ -1,7 +1,5 @@
 """検索・回答プロファイル単位の知識(ドメインキーワード等)の API schema。"""
 
-from typing import Annotated, Literal
-
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.schemas.common import JsonValue
@@ -49,85 +47,35 @@ class DomainKeywordSuggestionData(BaseModel):
     processed_chunk_count: int = 0
 
 
-ApprovedFaqReviewReason = Literal[
-    "no_target_knowledge_bases", "knowledge_base_removed", "source_document_missing"
-]
-
-
 class ApprovedFaqRecordData(BaseModel):
-    """承認済み FAQ 1 件(rag_poc ApprovedFaqRecord の表示用射影と、今の根拠の状態。#4621)。"""
+    """承認済み FAQ 1 件(質問と回答。#5107)。"""
 
     id: str
     question: str
     answer: str
-    alternate_questions: list[str] = Field(default_factory=list)
-    # 否定の質問(この FAQ を当てたくない質問の例。当たったら候補から外す。#4788)。
-    negative_questions: list[str] = Field(default_factory=list)
-    status: str = ""
-    # FAQ を使える範囲(この KB をすべて使える利用者だけに提示・回答で使う)。
-    target_knowledge_base_ids: list[str] = Field(default_factory=list)
-    # 回答の根拠にした文書(フィードバックからの昇格は回答の引用)。
-    source_document_ids: list[str] = Field(default_factory=list)
-    # 承認(保存・確かめ直し)した利用者の表示名と時刻。引けない利用者は None。
-    approved_by: str | None = None
-    approved_at: str | None = None
-    # 空でなければ停止中(要確認。提示・回答に使わない)。
-    review_reasons: list[ApprovedFaqReviewReason] = Field(default_factory=list)
-    # 引用した文書が承認の後に新しい版になった(使い続ける)。
-    source_updated: bool = False
-
-
-class ApprovedFaqKnowledgeBaseData(BaseModel):
-    """対象の KB の選択肢・表示名(プロファイルの参照 KB と、FAQ の対象に残る KB)。"""
-
-    id: str
-    name: str
-    in_profile: bool
 
 
 class ApprovedFaqListData(BaseModel):
     search_answer_profile_id: str
     records: list[ApprovedFaqRecordData] = Field(default_factory=list)
-    # 回答の前に類似問を提示するか(検索・回答プロファイルごと。未設定はオン。#684)。
+    # 回答の前に FAQ の候補を提示するか(検索・回答プロファイルごと。未設定はオン。#684)。
     enabled: bool = True
-    # 一致度が下限以上のとき、チャットで FAQ の回答をそのまま返すか(未設定はオフ。#4788)。
-    direct_answer_enabled: bool = False
-    # そのまま返す一致度の下限(全体設定の値。画面の説明に出す)。
-    direct_answer_min_score: float = 0.0
-    knowledge_bases: list[ApprovedFaqKnowledgeBaseData] = Field(default_factory=list)
+    # 候補の一致度の下限と最大件数(全体設定 RAG_APPROVED_FAQ_MIN_SCORE / MAX_SUGGESTIONS の値。
+    # 画面の説明に出す。#5107)。
+    min_score: float
+    max_suggestions: int
 
 
 class ApprovedFaqSettingsRequest(BaseModel):
-    """プロファイルごとの FAQ の設定。送った項目だけを変える。"""
+    """プロファイルごとの FAQ の設定。"""
 
-    enabled: bool | None = None
-    direct_answer_enabled: bool | None = None
-
-
-class ApprovedFaqNegativeQuestionsRequest(BaseModel):
-    """FAQ の否定の質問の全置換(空は全部消す)。空白だけの行と重複は保存時に除く。"""
-
-    negative_questions: list[Annotated[str, Field(max_length=1000)]] = Field(
-        default_factory=list, max_length=20
-    )
-
-
-class ApprovedFaqConfirmRequest(BaseModel):
-    """FAQ の対象の KB と根拠を確かめ直す。未指定はプロファイルの全 KB(最も厳しい)。"""
-
-    target_knowledge_base_ids: list[str] | None = Field(default=None, max_length=200)
+    enabled: bool
 
 
 class ApprovedFaqAddRequest(BaseModel):
     # 空・空白だけは画面の欄の下と同じ文言で拒否する（#541）。前後の空白は画面と同じく除く。
     question: str = Field(max_length=1000)
     answer: str = Field(max_length=20000)
-    # 対象のナレッジベース(未指定はプロファイルの全 KB。#4621)。
-    target_knowledge_base_ids: list[str] | None = Field(default=None, max_length=200)
-    # 否定の質問(この FAQ を当てたくない質問の例。#4788)。
-    negative_questions: list[Annotated[str, Field(max_length=1000)]] = Field(
-        default_factory=list, max_length=20
-    )
 
     @field_validator("question", "answer")
     @classmethod
@@ -149,7 +97,6 @@ class ApprovedFaqMutationData(ApprovedFaqListData):
 
 
 class ApprovedFaqImportRowData(BaseModel):
-    negative_questions: list[str] = Field(default_factory=list)
     question: str
     answer: str
     row: int = 0
@@ -163,27 +110,24 @@ class ApprovedFaqImportPreviewData(BaseModel):
 
 
 class ApprovedFaqSuggestRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=2000)
-    limit: int = Field(default=5, ge=1, le=20)
-    # chat はチャットの提示(一致度の下限 RAG_APPROVED_FAQ_SUGGESTION_MIN_SCORE。#684)。
-    purpose: Literal["search", "chat"] = "search"
+    query: str = Field(min_length=1, max_length=8000)
+    # チャットの会話(#5107)。渡すと、質問を会話の履歴で補完してから照合し、補完の token を返す。
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ApprovedFaqSuggestionData(BaseModel):
-    """類似問候補。direct=true は FAQ 回答をそのまま使える一致度(そのまま返す一致度の下限以上)。"""
+    """回答の前に提示する FAQ の候補(一致度は 0〜1)。"""
 
     id: str
     question: str
-    matched_question: str
     answer: str
     score: float
-    direct: bool
 
 
 class ApprovedFaqSuggestionsData(BaseModel):
     suggestions: list[ApprovedFaqSuggestionData] = Field(default_factory=list)
-    # チャットで、送信の後に FAQ の回答をそのまま返す見込み(候補を出さずに送る。#4788)。
-    direct_answer: bool = False
+    # conversation_id を渡した照会で済ませた補完の token(確認の照会と送信に渡す。#5107)。
+    question_context_token: str | None = None
 
 
 class RuntimeKnowledgeData(BaseModel):
@@ -274,8 +218,8 @@ class GuideConditionClarification(BaseModel):
 class ClarificationSuggestRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = Field(default=None, min_length=1, max_length=200)
-    # 利用者が類似問の候補を「どれでもない」と断った質問(FAQ の回答をそのまま返さない。#4788)。
-    approved_faq_declined: bool = False
+    # FAQ の候補の照会が返した補完の token(#5107)。渡すと補完を呼び直さない。
+    question_context_token: str | None = Field(default=None, min_length=1, max_length=300000)
 
 
 class ClarificationSuggestionData(BaseModel):

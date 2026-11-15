@@ -1768,7 +1768,6 @@ test("会話を選ばずに送信すると会話を作って回答する（#664�
 const faqSuggestions = [1, 2, 3].map((index) => ({
   id: `faq-${index}`,
   question: `経費の上限について ${index}`,
-  matched_question: `経費の上限について ${index}`,
   answer: `承認済みの回答 ${index}`,
   score: 0.95 - index / 100,
 }));
@@ -1933,7 +1932,7 @@ test("選んだ登録済みQ&Aの回答は、案内と Q&A の段を出す（#51
     await route.fulfill({
       json: {
         data: {
-          suggestions: [{ id: "faq-1", question: faqQuestion, matched_question: faqQuestion, answer: faqAnswer, score: 0.97 }],
+          suggestions: [{ id: "faq-1", question: faqQuestion, answer: faqAnswer, score: 0.97 }],
           question_context_token: "faq-token",
         },
         error_messages: [],

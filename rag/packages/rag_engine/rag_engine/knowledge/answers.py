@@ -1,4 +1,4 @@
-"""通常回答と FAQ 直答の保存・履歴管理を共有する。"""
+"""回答の保存・履歴管理を共有する。"""
 
 from __future__ import annotations
 
@@ -9,109 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from rag_engine.knowledge.approved_faq import (
-    APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-    DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
-    ApprovedFaqSuggestion,
-)
 from rag_engine.ports import ArtifactStore
 from rag_engine.resources.filesystem import FileArtifactStore
-
-APPROVED_FAQ_DIRECT_ANSWER_FLOW = "approved_faq_direct"
-
-APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE_LABEL = "Approved FAQ"
-
-
-def _approved_faq_direct_answer_run_id(suggestion: ApprovedFaqSuggestion, question: str) -> str:
-    seed = f"{suggestion.record.id}\0{question}".encode()
-    return f"approved-faq-{hashlib.sha256(seed).hexdigest()[:16]}"
-
-
-def _approved_faq_direct_answer_payload(
-    suggestion: ApprovedFaqSuggestion,
-    *,
-    answer_id: str,
-    run_id: str,
-    question: str,
-    standard_answer: str,
-    classification_filter: Any,
-) -> dict[str, Any]:
-    record = suggestion.record
-    question_text = str(question or record.question).strip()
-    answer_text = record.approved_answer.strip()
-    classification_metadata = (
-        classification_filter.to_metadata() if hasattr(classification_filter, "to_metadata") else dict(classification_filter or {})
-    )
-    match_summary = (
-        f"Approved FAQ ID: {record.id} / matched QUESTION: {suggestion.matched_question} "
-        f"/ method: {suggestion.match_method} / score: {suggestion.score:.2f} "
-        f"/ threshold: {DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE:.2f}"
-    )
-    return {
-        "schema_version": 1,
-        "answer_id": answer_id,
-        "run_id": run_id,
-        "question": question_text,
-        "question_display": question_text,
-        "standard_answer": str(standard_answer or ""),
-        "answer": answer_text,
-        "answer_text": answer_text,
-        "confidence": "approved_faq",
-        "question_type": ["approved_faq"],
-        "cited_evidence_ids": [],
-        "cited_evidence": [],
-        "image_evidence": [],
-        "image_prompt_mode": "text_only",
-        "primary_source_run_id": "",
-        "reasoning_summary": match_summary,
-        "insufficient_reason": "",
-        "needs_human_review": False,
-        "answer_flow": APPROVED_FAQ_DIRECT_ANSWER_FLOW,
-        "retrieval_scope": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-        "retrieval_scope_label": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE_LABEL,
-        "classification_filter": classification_metadata,
-        "generated_queries": [question_text],
-        "query_expansion_summary": "",
-        "question_plan": {},
-        "runtime_knowledge": {},
-        "text_search_tokenizer": "",
-        "text_search_tokenizer_label": "",
-        "text_search_tokenizer_fingerprint": "",
-        "text_search_tokens": [],
-        "text_search_query": "",
-        "text_search_queries": [question_text],
-        "text_search_query_source": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-        "text_search_tokenization_error": "",
-        "prompt_injection_risk": False,
-        "prompt_injection_warnings": [],
-        "rerank_scores": [],
-        "retrieval_query_plan": {
-            "source": APPROVED_FAQ_DIRECT_RETRIEVAL_SCOPE,
-            "direct_match_min_score": DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
-            "matched_record_id": record.id,
-            "matched_question": suggestion.matched_question,
-            "match_method": suggestion.match_method,
-            "score": suggestion.score,
-            "text_score": suggestion.text_score,
-            "semantic_score": suggestion.semantic_score,
-            "scope_score": suggestion.scope_score,
-            "scope_matches": list(suggestion.scope_matches),
-        },
-        "approved_faq_match": {
-            "record_id": record.id,
-            "question": record.question,
-            "matched_question": suggestion.matched_question,
-            "match_method": suggestion.match_method,
-            "score": suggestion.score,
-            "text_score": suggestion.text_score,
-            "semantic_score": suggestion.semantic_score,
-            "scope_score": suggestion.scope_score,
-            "scope_matches": list(suggestion.scope_matches),
-            "source": record.source or {},
-        },
-        "evaluation": {"status": "not_evaluated", "message": "Approved FAQ の直接回答は自動評価の対象外です。"},
-        "evidence_items": [],
-    }
 
 
 def _create_answer_id(run_id: str, question: str) -> str:
@@ -211,22 +110,3 @@ def save_answer_result(
         )
     write_answer_payload(settings.output_dir, source_id, payload, store=store)
     return SavedAnswer(source_id, answer_id, payload)
-
-
-def save_faq_answer(
-    suggestion: ApprovedFaqSuggestion, settings, *, question: str, standard_answer: str = "", classification_filter=None
-) -> SavedAnswer:
-    """FAQ の直答を既存形式で保存する。RAG や回答モデルは呼び出さない。"""
-    run_id = _approved_faq_direct_answer_run_id(suggestion, question)
-    answer_id = _create_answer_id(run_id, question)
-    payload = _approved_faq_direct_answer_payload(
-        suggestion,
-        answer_id=answer_id,
-        run_id=run_id,
-        question=question,
-        standard_answer=standard_answer,
-        classification_filter=classification_filter,
-    )
-    write_answer_payload(settings.output_dir, run_id, payload)
-
-    return SavedAnswer(run_id, answer_id, payload)

@@ -272,6 +272,15 @@ class SearchRequest(BaseModel):
             "(#3506)。"
         ),
     )
+    approved_faq_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "利用者が回答の前の候補から選んだ承認済み FAQ の id(#5107)。検索・回答プロファイルの"
+            "FAQ から引き直し、検索・回答の生成をせずに FAQ の回答をそのまま返す。回答を作る検索だけ。"
+        ),
+    )
     model_id: str | None = Field(
         default=None,
         max_length=256,

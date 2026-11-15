@@ -34,12 +34,10 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
-from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.output_budget import configured_online_output_tokens
 from pr_backend_core.timezones import configured_timezone_name
 from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
-from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.resources.deadline import check_deadline, current_deadline
@@ -130,7 +128,6 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
-from app.rag.span_display import ANSWER_STEP_KIND, answer_step_params
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
@@ -219,18 +216,6 @@ def answer_step_stage(name: str) -> str:
     return f"{ANSWER_STEP_STAGE_PREFIX}{name}"
 
 
-def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
-    """回答フローの外で行う回答の工程（承認済み FAQ からの回答）の span（#3226）。
-
-    `rag_engine` の工程（`rag.engine.stage`）と同じ名前・種類にし、処理の経過の行にする。
-    """
-    return observed_span(
-        "rag.engine.stage",
-        attributes={"pr.stage": name},
-        display=SpanDisplay(kind=ANSWER_STEP_KIND, params={"name": name}),
-    )
-
-
 @dataclass(frozen=True)
 class AnswerOutcome:
     """回答の本文・引用・診断(非機密)。"""
@@ -241,11 +226,6 @@ class AnswerOutcome:
     context_text: str
     # 標準回答による LLM 評価(evaluate_answer_payload)の入力。回答記録に保存する。
     evaluation_input: dict[str, Any] | None = None
-
-
-def approved_faq_answer_text(answer: str, faq_question: str) -> str:
-    """承認済み FAQ からの回答の本文（末尾に出典の行。選んだ FAQ・そのまま返す FAQ で同じ形）。"""
-    return f"{answer}\n\n（出典: 登録済みQ&A「{faq_question}」）"
 
 
 # evaluate_answer_payload が読む回答 payload のキー(answer_result_payload の部分集合)。
@@ -714,7 +694,6 @@ class AnswerEngine:
         genai: OciGenAiClient,
         runtime_knowledge_payload: Mapping[str, object] | None = None,
         answer_model_id: str | None = None,
-        approved_faq: tuple[str, str] | None = None,
         scope: AnswerScope | None = None,
         entity_store: EntityExpansionStore | None = None,
         graph_store: GraphExpansionStore | None = None,
@@ -754,9 +733,6 @@ class AnswerEngine:
             settings, self._answer_model_id or enterprise_ai_default_model_id(settings)
         )
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
-        # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。選んだときは検索せず、質問と FAQ
-        # だけから回答する(#684 / #702)。
-        self._approved_faq = approved_faq
         # 利用者が確認の質問で選んだ条件と対象範囲(#717)。範囲での絞り込みは request.filters の
         # page_ranges が行い、ここでは回答の前提・検索に足す語・回答の末尾の表示に使う。
         self._scope = scope
@@ -769,8 +745,6 @@ class AnswerEngine:
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
     ) -> AnswerOutcome:
         """回答する。``step_callback`` は回答フローの各工程の開始・終了を受け取る(進捗。#593)。"""
-        if self._approved_faq is not None:
-            return await self._answer_from_approved_faq(request, step_callback=step_callback)
         # 回答の中の読み取りは、chunk の本文(CLOB)を行ごとに読み直さず値で受け取る(#1490)。
         with read_lobs_as_values():
             return await self._run(request, step_callback=step_callback)
@@ -876,83 +850,6 @@ class AnswerEngine:
         ):
             outcome.diagnostics["zero_evidence"] = zero_evidence
         return outcome
-
-    async def _answer_from_approved_faq(
-        self, request: SearchRequest, *, step_callback: StepCallback | None = None
-    ) -> AnswerOutcome:
-        """利用者が選んだ類似問の承認済み FAQ だけから回答する(検索しない。#702)。"""
-        from rag_engine.generation.faq_answer import answer_from_approved_faq
-        from rag_engine.resources.llm_usage import bind_llm_usage
-
-        assert self._approved_faq is not None
-        faq_question, faq_answer = self._approved_faq
-        name = "承認済み FAQ からの回答"
-        started = time.monotonic()
-        if step_callback is not None:
-            await step_callback(name, "started", 0.0, {})
-        status = "success"
-        # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
-        with _answer_step_span(name) as span, bind_llm_usage() as usage:
-            span.set_call_input(
-                lambda: {
-                    "質問": request.query,
-                    "選択した FAQ の質問": faq_question,
-                    "選択した FAQ の回答": faq_answer,
-                    "指定モデル": self._answer_model_id,
-                    "既定テキストモデル": enterprise_ai_default_model_id(self._settings),
-                },
-                restricted=True,
-            )
-            try:
-                with tempfile.TemporaryDirectory(prefix="rag-engine-faq-") as work:
-                    engine_settings = build_engine_settings(
-                        self._settings,
-                        output_dir=Path(work),
-                        runtime_knowledge_path=None,
-                        answer_model_id=self._answer_model_id,
-                    )
-                    answer = await run_answer_in_thread(
-                        answer_from_approved_faq,
-                        request.query,
-                        faq_question,
-                        faq_answer,
-                        engine_settings,
-                    )
-                    span.set_call_output(lambda: {"返却された回答": answer})
-            except BaseException:
-                status = "error"
-                raise
-            finally:
-                elapsed = time.monotonic() - started
-                metrics = {"llm_calls": 1, "llm_usage": usage.snapshot()}
-                span.set_display(params=answer_step_params({"llm_calls": 1}))
-                if step_callback is not None:
-                    await step_callback(name, status, elapsed, metrics)
-        models = self._models_used()
-        models["embedding"] = ""
-        models["rerank"] = ""
-        # 回答エンジンの前の段(会話の履歴での書き換え・抽出項目の条件)の縮退(#3286)。
-        degraded = self._degraded.steps() if self._degraded is not None else []
-        return AnswerOutcome(
-            answer=approved_faq_answer_text(answer, faq_question),
-            citations=[],
-            diagnostics={
-                "answer_source": "approved_faq",
-                # 承認済みの回答をそのまま使うので、対応は「答えた」（#1235）。
-                "outcome": "answered",
-                "envelope": {"schema_version": ENVELOPE_SCHEMA_VERSION, "outcome": "answered"},
-                "approved_faq_question": faq_question,
-                # 回答した時点の承認済みの回答。FAQ が変わっても根拠の原文を出せる(#737)。
-                "approved_faq_answer": faq_answer,
-                "models": models,
-                "execution_steps": [
-                    {"name": name, "status": "complete", "elapsed_seconds": elapsed, **metrics}
-                ],
-                **({"degraded_steps": degraded} if degraded else {}),
-            },
-            # 回答の安全チェックが照合する根拠は、選んだ FAQ だけ。
-            context_text=f"類似問: {faq_question}\n承認済みの回答: {faq_answer}",
-        )
 
     def _models_used(
         self, *, attached_images: int = 0, rerank_failed: bool = False
