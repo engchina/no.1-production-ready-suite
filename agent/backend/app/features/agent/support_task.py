@@ -10,8 +10,9 @@
   `rag_read_source` が改めて権限を確かめる）。
 - 状態は Run の step（ツールの引数と結果）から作る。承認待ちから再開しても、同じ Run の step を
   数え直すので消費は 0 に戻らない。
-- 予算: Run ごとの RAG の呼び出し（`agent_max_rag_calls_per_run`）と、同じ会話の通しのツールの
-  呼び出し（`agent_max_tool_calls_per_task`）。超える呼び出しは実行せず、ツールの結果
+- 予算: Run ごとの RAG の呼び出し（`agent_max_rag_calls_per_run`）・NL2SQL の問い合わせ
+  （`agent_max_nl2sql_calls_per_run`）と、同じ会話の通しのツールの呼び出し
+  （`agent_max_tool_calls_per_task`）。超える呼び出しは実行せず、ツールの結果
   （`budget_exceeded`）でモデルに知らせる（Run は失敗にしない）。
 - ツールは MCP 接続の名前（`<接続>__<ツール>`）のツールの部分で判定する（接続の名前に依らない）。
 - 失敗・取消の Run（#1277）は状態を残さないが、消費は次の Run の会話の通しの予算に数える
@@ -96,6 +97,19 @@ _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # ある（#1441）。
 NL2SQL_QUERY = "nl2sql_query"
 NL2SQL_NEEDS_CLARIFICATION = "needs_clarification"
+# Run ごとの上限に数えるツール（予算の種類 → ツールの素の名前）。1 回が重い呼び出しだけを数える。
+# NL2SQL は SQL の生成・実行のジョブを始める nl2sql_query だけで、結果の取得（nl2sql_get_job）・
+# プロファイルの一覧・推薦は数えない（タスクの通しの上限には数える）。上限は種類ごとに
+# `run_limits`（種類 → 回数。0 以下は上限なし）で渡し、消費は `<種類>_calls` / `<種類>_seconds`。
+RUN_BUDGET_TOOLS: dict[str, frozenset[str]] = {
+    KIND_RAG: RAG_BUDGET_TOOLS,
+    KIND_NL2SQL: frozenset({NL2SQL_QUERY}),
+}
+# 予算の上限で呼ばなかったことをモデルに伝える文の、種類ごとの呼び出しの名前。
+_RUN_BUDGET_LABELS: dict[str, str] = {
+    KIND_RAG: "RAG の呼び出し",
+    KIND_NL2SQL: "NL2SQL の問い合わせ",
+}
 # 前の Run で使ったプロファイル（#1880）: プロファイルを引数に取るツール → 種類と引数の名前。
 # 成功した呼び出しの値を、MCP 接続ごとに最後の値として状態の `profiles` に残す（会話の続きの
 # 質問で同じプロファイルを使わせ、指示語のままの質問で推薦し直させない）。
@@ -1762,10 +1776,18 @@ def _budget_blocked(step: RunStep) -> bool:
     return step.tool_result is not None and step.tool_result.error_code == BUDGET_EXCEEDED_CODE
 
 
+def run_budget_kind(tool_name: str) -> str | None:
+    """Run ごとの上限に数えるツールなら予算の種類（`RUN_BUDGET_TOOLS`）、数えなければ None。"""
+    base = mcp_base_tool_name(tool_name)
+    return next((kind for kind, tools in RUN_BUDGET_TOOLS.items() if base in tools), None)
+
+
 def run_consumption(steps: list[RunStep]) -> JsonObject:
-    """Run の予算の消費（実行したツール・RAG の呼び出しの回数と時間、予算の上限で止めた回数）。"""
-    tool_calls = rag_calls = blocked = 0
-    tool_ms = rag_ms = 0
+    """Run の予算の消費（実行したツール・種類ごとの呼び出しの回数と時間、上限で止めた回数）。"""
+    tool_calls = blocked = 0
+    tool_ms = 0
+    calls = dict.fromkeys(RUN_BUDGET_TOOLS, 0)
+    ms = dict.fromkeys(RUN_BUDGET_TOOLS, 0)
     for step in steps:
         if _budget_blocked(step):
             blocked += 1
@@ -1775,16 +1797,30 @@ def run_consumption(steps: list[RunStep]) -> JsonObject:
         duration = max(step.tool_result.duration_ms, 0)
         tool_calls += 1
         tool_ms += duration
-        if mcp_base_tool_name(step.tool_call.name) in RAG_BUDGET_TOOLS:
-            rag_calls += 1
-            rag_ms += duration
-    return {
-        "tool_calls": tool_calls,
-        "rag_calls": rag_calls,
-        "tool_seconds": round(tool_ms / 1000, 1),
-        "rag_seconds": round(rag_ms / 1000, 1),
-        "budget_exceeded": blocked,
-    }
+        if (kind := run_budget_kind(step.tool_call.name)) is not None:
+            calls[kind] += 1
+            ms[kind] += duration
+    consumed: JsonObject = {"tool_calls": tool_calls, "tool_seconds": round(tool_ms / 1000, 1)}
+    for kind in RUN_BUDGET_TOOLS:
+        consumed[f"{kind}_calls"] = calls[kind]
+        consumed[f"{kind}_seconds"] = round(ms[kind] / 1000, 1)
+    consumed["budget_exceeded"] = blocked
+    return consumed
+
+
+# 会話の通しの消費に積む項目（回数と時間）。
+_TASK_COUNTS = ("tool_calls", *(f"{kind}_calls" for kind in RUN_BUDGET_TOOLS))
+_TASK_SECONDS = ("tool_seconds", *(f"{kind}_seconds" for kind in RUN_BUDGET_TOOLS))
+
+
+def _add_consumption(before: JsonObject, runs: int, added: list[JsonObject]) -> JsonObject:
+    """前までの会話の通しの消費に、Run の消費を足す。"""
+    task: JsonObject = {"runs": before["runs"] + runs}
+    for key in _TASK_COUNTS:
+        task[key] = before[key] + sum(item[key] for item in added)
+    for key in _TASK_SECONDS:
+        task[key] = round(before[key] + sum(item[key] for item in added), 1)
+    return task
 
 
 def previous_task_consumption(previous: JsonObject | None) -> JsonObject:
@@ -1792,13 +1828,12 @@ def previous_task_consumption(previous: JsonObject | None) -> JsonObject:
     budget = previous.get("budget") if isinstance(previous, dict) else None
     task = budget.get("task") if isinstance(budget, dict) else None
     task = task if isinstance(task, dict) else {}
-    return {
-        "runs": _int(task.get("runs")),
-        "tool_calls": _int(task.get("tool_calls")),
-        "rag_calls": _int(task.get("rag_calls")),
-        "tool_seconds": _float(task.get("tool_seconds")),
-        "rag_seconds": _float(task.get("rag_seconds")),
-    }
+    consumed: JsonObject = {"runs": _int(task.get("runs"))}
+    for key in _TASK_COUNTS:
+        consumed[key] = _int(task.get(key))
+    for key in _TASK_SECONDS:
+        consumed[key] = _float(task.get(key))
+    return consumed
 
 
 def _in_flight(step: RunStep) -> bool:
@@ -1821,8 +1856,8 @@ def abandoned_run_consumption(steps: list[RunStep]) -> JsonObject:
         if not _in_flight(step) or step.tool_call is None:
             continue
         consumed["tool_calls"] += 1
-        if mcp_base_tool_name(step.tool_call.name) in RAG_BUDGET_TOOLS:
-            consumed["rag_calls"] += 1
+        if (kind := run_budget_kind(step.tool_call.name)) is not None:
+            consumed[f"{kind}_calls"] += 1
     return consumed
 
 
@@ -1853,17 +1888,7 @@ def with_abandoned_consumption(
     before = previous_task_consumption(state)
     budget = state.get("budget")
     budget = dict(budget) if isinstance(budget, dict) else {}
-    budget["task"] = {
-        "runs": before["runs"] + len(abandoned),
-        "tool_calls": before["tool_calls"] + sum(item["tool_calls"] for item in abandoned),
-        "rag_calls": before["rag_calls"] + sum(item["rag_calls"] for item in abandoned),
-        "tool_seconds": round(
-            before["tool_seconds"] + sum(item["tool_seconds"] for item in abandoned), 1
-        ),
-        "rag_seconds": round(
-            before["rag_seconds"] + sum(item["rag_seconds"] for item in abandoned), 1
-        ),
-    }
+    budget["task"] = _add_consumption(before, len(abandoned), abandoned)
     state["budget"] = budget
     return state
 
@@ -1873,22 +1898,23 @@ class SupportTaskBudget:
 
     回数は Run の step と前の Run までの状態から作るため、承認待ちから再開しても 0 に戻らない。
     `reserve` は呼び出しの前に（await の前に）数えるので、同じ応答の並列の呼び出しでも超えない。
-    上限が 0 以下なら、その上限は数えない。
+    Run ごとの上限は予算の種類（`RUN_BUDGET_TOOLS`）ごとに数える。上限が 0 以下なら、その上限は
+    数えない。
     """
 
     def __init__(
         self,
         *,
         run_tool_calls: int,
-        run_rag_calls: int,
+        run_calls: Mapping[str, int],
         task_tool_calls_before: int,
-        max_rag_calls_per_run: int,
+        run_limits: Mapping[str, int],
         max_tool_calls_per_task: int,
     ) -> None:
         self.run_tool_calls = run_tool_calls
-        self.run_rag_calls = run_rag_calls
+        self.run_calls = {kind: int(run_calls.get(kind, 0)) for kind in RUN_BUDGET_TOOLS}
         self.task_tool_calls_before = task_tool_calls_before
-        self.max_rag_calls_per_run = max_rag_calls_per_run
+        self.run_limits = {kind: int(run_limits.get(kind, 0)) for kind in RUN_BUDGET_TOOLS}
         self.max_tool_calls_per_task = max_tool_calls_per_task
 
     @classmethod
@@ -1897,15 +1923,15 @@ class SupportTaskBudget:
         steps: list[RunStep],
         previous: JsonObject | None,
         *,
-        max_rag_calls_per_run: int,
+        run_limits: Mapping[str, int],
         max_tool_calls_per_task: int,
     ) -> SupportTaskBudget:
         consumed = run_consumption(steps)
         return cls(
             run_tool_calls=consumed["tool_calls"],
-            run_rag_calls=consumed["rag_calls"],
+            run_calls={kind: consumed[f"{kind}_calls"] for kind in RUN_BUDGET_TOOLS},
             task_tool_calls_before=previous_task_consumption(previous)["tool_calls"],
-            max_rag_calls_per_run=max_rag_calls_per_run,
+            run_limits=run_limits,
             max_tool_calls_per_task=max_tool_calls_per_task,
         )
 
@@ -1916,39 +1942,43 @@ class SupportTaskBudget:
     @property
     def rag_calls_remaining(self) -> int | None:
         """この Run で残る RAG の検索の回数（上限が無ければ None。#1345）。"""
-        if self.max_rag_calls_per_run <= 0:
+        limit = self.run_limits[KIND_RAG]
+        if limit <= 0:
             return None
-        return max(self.max_rag_calls_per_run - self.run_rag_calls, 0)
+        return max(limit - self.run_calls[KIND_RAG], 0)
 
     def reserve(self, tool_name: str) -> JsonObject | None:
         """呼び出しを 1 回数える。上限を超えるなら数えずに、超えた上限（scope・limit・used）を返す。
 
         上限が 0 以下なら、その上限は数えない。
         """
-        is_rag = mcp_base_tool_name(tool_name) in RAG_BUDGET_TOOLS
+        kind = run_budget_kind(tool_name)
         if 0 < self.max_tool_calls_per_task <= self.task_tool_calls:
             return {
                 "scope": "task_tool_calls",
                 "limit": self.max_tool_calls_per_task,
                 "used": self.task_tool_calls,
             }
-        if is_rag and 0 < self.max_rag_calls_per_run <= self.run_rag_calls:
+        if kind is not None and 0 < self.run_limits[kind] <= self.run_calls[kind]:
             return {
-                "scope": "run_rag_calls",
-                "limit": self.max_rag_calls_per_run,
-                "used": self.run_rag_calls,
+                "scope": f"run_{kind}_calls",
+                "limit": self.run_limits[kind],
+                "used": self.run_calls[kind],
             }
         self.run_tool_calls += 1
-        if is_rag:
-            self.run_rag_calls += 1
+        if kind is not None:
+            self.run_calls[kind] += 1
         return None
 
 
 def budget_exceeded_message(tool_name: str, exceeded: JsonObject) -> str:
     """予算の上限で呼ばなかったことをモデルに伝える文（日本語）。"""
     limit = exceeded.get("limit")
-    if exceeded.get("scope") == "run_rag_calls":
-        reason = f"この実行の RAG の呼び出しが上限（{limit} 回）に達した"
+    kind = next(
+        (kind for kind in RUN_BUDGET_TOOLS if exceeded.get("scope") == f"run_{kind}_calls"), None
+    )
+    if kind is not None:
+        reason = f"この実行の {_RUN_BUDGET_LABELS[kind]}が上限（{limit} 回）に達した"
     else:
         reason = f"この会話（支援タスク）のツールの呼び出しが上限（{limit} 回）に達した"
     return (
@@ -2206,7 +2236,7 @@ def build_support_task(
     thread_id: str | None,
     owner_user_uuid: str | None,
     goal: str,
-    max_rag_calls_per_run: int,
+    run_limits: Mapping[str, int],
     max_tool_calls_per_task: int,
     now: datetime | None = None,
     cancellations: list[JsonObject] | None = None,
@@ -2272,14 +2302,7 @@ def build_support_task(
             item for item in builder.pending if clarification_kind(item) != KIND_NL2SQL
         ]
     run = run_consumption(steps)
-    before = previous_task_consumption(previous)
-    task = {
-        "runs": before["runs"] + 1,
-        "tool_calls": before["tool_calls"] + run["tool_calls"],
-        "rag_calls": before["rag_calls"] + run["rag_calls"],
-        "tool_seconds": round(before["tool_seconds"] + run["tool_seconds"], 1),
-        "rag_seconds": round(before["rag_seconds"] + run["rag_seconds"], 1),
-    }
+    task = _add_consumption(previous_task_consumption(previous), 1, [run])
     return {
         "schema_version": SUPPORT_TASK_SCHEMA_VERSION,
         "thread_id": thread_id,
@@ -2302,7 +2325,7 @@ def build_support_task(
             "run": run,
             "task": task,
             "limits": {
-                "rag_calls_per_run": max_rag_calls_per_run,
+                **{f"{kind}_calls_per_run": run_limits.get(kind, 0) for kind in RUN_BUDGET_TOOLS},
                 "tool_calls_per_task": max_tool_calls_per_task,
             },
         },
@@ -2351,7 +2374,7 @@ def support_task_instructions(
     state: JsonObject | None,
     *,
     goal: str,
-    max_rag_calls_per_run: int,
+    run_limits: Mapping[str, int],
     max_tool_calls_per_task: int,
     fixed_profile_connections: Collection[str] = (),
 ) -> str:
@@ -2428,6 +2451,7 @@ def support_task_instructions(
             "（本文は持たない。引用するときは rag_read_source で読み直す）"
         )
     used = previous_task_consumption(state)["tool_calls"]
+    max_rag_calls_per_run = run_limits.get(KIND_RAG, 0)
     budget = (
         [f"この実行の RAG の検索は {max_rag_calls_per_run} 回まで"]
         if max_rag_calls_per_run > 0

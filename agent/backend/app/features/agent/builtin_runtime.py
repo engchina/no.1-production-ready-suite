@@ -3872,7 +3872,8 @@ class _SupportTaskRun:
     previous: dict[str, Any] | None
     budget: SupportTaskBudget
     instructions: str
-    max_rag_calls_per_run: int
+    # Run ごとの上限（予算の種類 → 回数。support_task.RUN_BUDGET_TOOLS）。
+    run_limits: dict[str, int]
     max_tool_calls_per_task: int
     # 回答前の確認（#1839）: 往復の残り・カードの答え（次の Run の metadata）・答えた RAG の条件。
     confirmation: ConfirmationBudget | None = None
@@ -3921,7 +3922,10 @@ def _support_task_run(run: Any, agent: Any = None) -> _SupportTaskRun:
     from app.features.agent.runtime import runtime_repository
 
     settings = get_settings()
-    max_rag = int(settings.agent_max_rag_calls_per_run)
+    run_limits: dict[str, int] = {
+        KIND_RAG: int(settings.agent_max_rag_calls_per_run),
+        KIND_NL2SQL: int(settings.agent_max_nl2sql_calls_per_run),
+    }
     max_task = int(settings.agent_max_tool_calls_per_task)
     goal, previous = runtime_repository.support_task_context(run.id)
     response = run.metadata.get(RESPONSE_METADATA_KEY) if isinstance(run.metadata, dict) else None
@@ -3932,20 +3936,20 @@ def _support_task_run(run: Any, agent: Any = None) -> _SupportTaskRun:
         budget=SupportTaskBudget.for_run(
             list(run.steps),
             previous,
-            max_rag_calls_per_run=max_rag,
+            run_limits=run_limits,
             max_tool_calls_per_task=max_task,
         ),
         instructions=support_task_instructions(
             previous,
             goal=goal,
-            max_rag_calls_per_run=max_rag,
+            run_limits=run_limits,
             max_tool_calls_per_task=max_task,
             # 範囲で 1 つに決まっている接続は、前のプロファイルを出さない（#1880）。
             fixed_profile_connections=data_scope.fixed_profile_connections(
                 getattr(agent, "data_scopes", None)
             ),
         ),
-        max_rag_calls_per_run=max_rag,
+        run_limits=run_limits,
         max_tool_calls_per_task=max_task,
         confirmation=confirmation_budget(run, agent) if agent is not None else None,
         response=response,
@@ -3978,7 +3982,7 @@ def _save_support_task(run_id: str, task: _SupportTaskRun) -> dict[str, Any] | N
             # 状態は会話の持ち主のもの（system_admin が続けた Run も同じ会話の状態。#1928）。
             owner_user_uuid=run_thread_owner(run),
             goal=task.goal,
-            max_rag_calls_per_run=task.max_rag_calls_per_run,
+            run_limits=task.run_limits,
             max_tool_calls_per_task=task.max_tool_calls_per_task,
             cancellations=cancellations,
             answered_conditions=task.answered_conditions,

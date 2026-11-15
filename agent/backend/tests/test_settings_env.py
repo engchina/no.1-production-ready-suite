@@ -145,6 +145,25 @@ def test_evaluation_case_timeout_is_explicit_in_env_example() -> None:
     )
 
 
+def test_run_call_limits_defaults_match_env_example() -> None:
+    """Run の呼び出しの上限の既定と、`.env.example` の雛形の値が一致する（#5120）。"""
+    settings = Settings(_env_file=None)
+    expected = {
+        "AGENT_MAX_TOOL_CALLS_PER_RUN": 100,
+        "AGENT_MAX_RAG_CALLS_PER_RUN": 30,
+        "AGENT_MAX_NL2SQL_CALLS_PER_RUN": 30,
+        "AGENT_MAX_TOOL_CALLS_PER_TASK": 1000,
+    }
+    assert {name: getattr(settings, name.lower()) for name in expected} == expected
+    lines = (Path(__file__).resolve().parents[1] / ".env.example").read_text(encoding="utf-8")
+    entries = dict(
+        line.removeprefix("# ").split("=", 1)
+        for line in lines.splitlines()
+        if line.removeprefix("# ").split("=", 1)[0] in expected
+    )
+    assert {name: int(value) for name, value in entries.items()} == expected
+
+
 def test_get_settings_picks_up_upload_storage_saved_by_another_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
