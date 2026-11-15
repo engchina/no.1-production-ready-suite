@@ -13,6 +13,7 @@ from pytest import MonkeyPatch
 from app.api.routes import search as search_route
 from app.config import get_settings
 from app.rag.answer_engine import AS_OF_FILTER_KEY, _with_effective_as_of
+from app.rag.support_guide_query import build_guide_query
 from app.schemas.search import SearchRequest
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 from tests.test_support_guide_runtime import GUIDES
@@ -32,11 +33,10 @@ def _install(monkeypatch: MonkeyPatch, order: list[str]) -> None:
     fake = FakeKnowledgeOracle(support_guide_enabled=True)
     monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
     monkeypatch.setattr(search_route, "SupportGuideStore", _Store)
-    build = search_route.build_guide_query
 
     async def spy_build(*args: Any, **kwargs: Any) -> Any:
         order.append(f"guide:{args[4].splitlines()[-1]}")
-        return await build(*args, **kwargs)
+        return await build_guide_query(*args, **kwargs)
 
     monkeypatch.setattr(search_route, "build_guide_query", spy_build)
 
