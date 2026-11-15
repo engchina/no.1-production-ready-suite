@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app import config
 from app.config import Settings
-from app.mcp.tools import EVIDENCE_LIMIT_MAX, RetrieveEvidenceInput, SearchArguments, SearchInput
+from app.mcp.tools import EVIDENCE_LIMIT_MAX, RetrieveEvidenceInput, SearchInput
 from app.schemas.chat import ChatMessageRequest
 from app.schemas.search import SearchRequest
 
@@ -18,7 +18,7 @@ def test_omitted_top_k_and_public_schema_use_current_setting(
 ) -> None:
     settings = Settings(_env_file=None, rag_search_top_k_default=value)
     monkeypatch.setattr(config, "get_settings", lambda: settings)
-    requests: list[SearchRequest | ChatMessageRequest | SearchArguments] = [
+    requests: list[SearchRequest | ChatMessageRequest | SearchInput] = [
         SearchRequest(query="q"),
         ChatMessageRequest(content="q"),
         SearchInput(query="q"),

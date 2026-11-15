@@ -413,9 +413,6 @@
       "confirmations": [],
       "clarifications": [],
       "guide": null,
-      "faq_suggestions": [],
-      "approved_faq": null,
-      "next_step": null,
       "insufficient_reason": null,
       "needs_human_review": false,
       "degraded_steps": [],
@@ -495,6 +492,18 @@
       "provenance": null,
       "auto_selected_search_answer_profile": null,
       "notice": null
+    },
+    "rag_approved_faq": {
+      "schema_version": 44,
+      "suggestions": [
+        {
+          "id": "faq-1",
+          "question": "合成の質問",
+          "answer": "合成の回答",
+          "score": 0.95
+        }
+      ],
+      "answer": null
     }
   }
 }

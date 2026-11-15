@@ -243,9 +243,8 @@ LLM に渡して回答を作る経路と、その指示（`faq_answer.system`）
    `RAG_APPROVED_FAQ_NEGATIVE_MIN_SCORE`・`RAG_APPROVED_FAQ_DIRECT_ANSWER_MIN_SCORE` は読まない（消してよい）。
    候補の一致度の下限は `RAG_APPROVED_FAQ_MIN_SCORE`（既定 `0.92`。0.90〜0.99）、最大件数は
    `RAG_APPROVED_FAQ_MAX_SUGGESTIONS`（既定 `3`）に書く。
-3. MCP の出力の版は 44 になる。`rag_search` は Q&A の候補があれば検索せずに `outcome=approved_faq_suggestions` と
-   `faq_suggestions`・`next_step` を返し、入力の `approved_faq_id`（選んだ Q&A の回答を返す）・
-   `approved_faq_declined`（候補を出さずに検索・回答する）で呼び直す。
+3. MCP の出力の版は 44 になる。登録済みの Q&A の候補を返し、選んだ Q&A の回答をそのまま返すツール
+   `rag_approved_faq` を足した（`rag_search`・`rag_retrieve_evidence` の入力・出力は変えない）。
 
 ## 既存環境の更新手順（#4793 取込の後の文書全体の要約）
 
