@@ -2438,12 +2438,16 @@ def evidence_reading_rules(spans: Sequence[dict[str, Any]], *, attached_images: 
 
 
 def evidence_subset_reading_rule(shown: int, candidates: int) -> str:
-    """渡した根拠が検索の候補の一部のときだけ渡す読み方。数はコードが数えた値で、語で質問を判定しない。"""
+    """渡した根拠が検索の候補の一部のときだけ渡す読み方。数はコードが数えた値で、語で質問を判定しない。
+
+    ``shown`` は渡す条件にだけ使い、文には書かない。渡すブロックには検索で当たった単位の前後・章節の原文も
+    入り、当たった単位の数とブロックの数は単位が違うため（#5088）。
+    """
     if shown <= 0 or candidates <= shown:
         return ""
     return (
         "### 根拠の範囲\n"
-        f"- 根拠は検索の候補 {candidates} 件のうち上位 {shown} 件だけである。"
+        f"- 根拠は検索の候補 {candidates} 件の一部だけである。"
         "質問が件数や全件の一覧を求めるなら、回答の要点にこの範囲であることを書き、根拠の件数を全体の件数として扱わない。"
         "それ以外の質問では、このことの注記を足さずに答える。\n"
     )
