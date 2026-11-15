@@ -198,6 +198,8 @@ class _EvidenceChatOracle(OwnedChatOracle):
 @pytest.fixture
 def chat_oracle(monkeypatch: MonkeyPatch) -> _EvidenceChatOracle:
     fake = _EvidenceChatOracle()
+    # 送信の準備の補完（#5100）は test_chat_question_context で確かめ、ここでは通さない。
+    monkeypatch.setattr(get_settings(), "rag_history_rewrite_enabled", False)
     monkeypatch.setattr(chat_route, "OracleClient", lambda *a, **k: fake)
     return fake
 

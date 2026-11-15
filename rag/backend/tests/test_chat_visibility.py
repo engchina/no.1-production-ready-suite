@@ -29,6 +29,7 @@ from app.clients.oracle import (
     _oracle_conversation_where,
     _with_conversation_access_bind,
 )
+from app.config import get_settings
 from app.main import app
 from app.rag import chat_attachments
 from app.rag.request_context import (
@@ -122,6 +123,8 @@ def auth(monkeypatch: MonkeyPatch) -> Iterator[ProductionAuth]:
 @pytest.fixture
 def oracle(monkeypatch: MonkeyPatch) -> OwnedChatOracle:
     fake = OwnedChatOracle()
+    # 送信の準備の補完（#5100）は test_chat_question_context で確かめ、ここでは通さない。
+    monkeypatch.setattr(get_settings(), "rag_history_rewrite_enabled", False)
     monkeypatch.setattr(chat_route, "OracleClient", lambda *a, **k: fake)
     return fake
 
