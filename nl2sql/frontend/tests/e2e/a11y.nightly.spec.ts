@@ -172,6 +172,8 @@ const SCREENS: Screen[] = [
   { path: "/question-classifier-models" },
   { path: "/evaluation" },
   { path: "/settings/security/permissions" },
+  // 安全チェックは 3 製品で共通の画面で、セキュリティ設定の権限管理の下（#5061・#5085）。
+  { path: "/settings/guardrail" },
   { path: "/settings/security/deepsec" },
   { path: "/settings/security/users" },
   { path: "/settings/security/roles" },

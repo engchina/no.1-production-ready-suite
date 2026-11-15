@@ -377,11 +377,12 @@ const SCREENS: Screen[] = [
   { path: "/settings/graph" },
   { path: "/settings/retrieval" },
   { path: "/settings/prompts" },
-  { path: "/settings/guardrail" },
   { path: "/settings/evaluation" },
   { path: "/evaluation" },
   { path: "/feedback" },
   { path: "/settings/security/permissions" },
+  // 安全チェックは 3 製品で共通の画面で、セキュリティ設定の権限管理の下（#5061・#5085）。
+  { path: "/settings/guardrail" },
   { path: "/settings/security/users" },
   { path: "/settings/security/roles" },
   { path: "/settings/security/api-keys" },
