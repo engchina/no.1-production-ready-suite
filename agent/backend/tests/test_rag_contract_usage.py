@@ -17,7 +17,13 @@ from typing import Any
 
 import jsonschema
 import pytest
-from mcp_support import DEFAULT_OUTPUTS, RAG_OUTPUT_SCHEMA_VERSION, RAG_OUTPUTS_FIXTURE
+from mcp_support import (
+    DEFAULT_OUTPUTS,
+    RAG_OUTPUT_SCHEMA_VERSION,
+    RAG_OUTPUTS_FIXTURE,
+    rag_approved_faq_answer,
+    rag_approved_faq_candidates,
+)
 
 from app.features.agent import evidence_access, rag_figures, section_coverage, support_task
 from app.features.agent.answer_passage_vocabulary import vocabulary
@@ -113,6 +119,22 @@ def test_shared_rag_outputs_follow_the_contract_output_schema() -> None:
         assert not errors, (name, [error.message for error in errors[:5]])
         assert output["schema_version"] == schema["properties"]["schema_version"]["default"]
     assert fixture["schema_version"] == RAG_OUTPUT_SCHEMA_VERSION
+
+
+def test_approved_faq_names_come_from_the_contract() -> None:
+    """承認済み FAQ（#5134）の状態の値・引数の名前は契約の rag_search にあり、Agent のテストの
+    候補・選んだ Q&A の回答の出力は契約の outputSchema に合う。"""
+    tool = _tools()[support_task.RAG_SEARCH]
+    assert set(support_task.APPROVED_FAQ_ARGUMENTS) <= set(tool["inputSchema"]["properties"])
+    status = tool["outputSchema"]["properties"]["status"]
+    assert support_task.RAG_APPROVED_FAQ_CANDIDATES in status["enum"]
+    schema = _closed(copy.deepcopy(tool["outputSchema"]))
+    for output in (
+        rag_approved_faq_candidates(("faq-1", "合成の質問", 0.95)),
+        rag_approved_faq_answer("faq-1", "合成の質問", "合成の回答"),
+    ):
+        errors = list(jsonschema.Draft202012Validator(schema).iter_errors(output))
+        assert not errors, [error.message for error in errors[:5]]
 
 
 def test_fake_rag_default_outputs_are_the_shared_fixture() -> None:

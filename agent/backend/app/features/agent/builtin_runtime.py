@@ -191,15 +191,19 @@ from app.features.agent.clarification_cancel import (
 )
 from app.features.agent.config import runtime_config_store
 from app.features.agent.confirmation import (
+    APPROVED_FAQ_ID_ARGUMENT,
     CONFIRMATION_TOOL,
     POLICY_ASSUME,
     RESPONSE_METADATA_KEY,
+    SKIP_APPROVED_FAQ_ARGUMENT,
     SOURCE_AGENT,
     SOURCE_NL2SQL,
     SOURCE_RAG,
     ConfirmationBudget,
     ConfirmationRequest,
     agent_confirmation_skipped,
+    approved_faq_choice,
+    approved_faq_request,
     card_answer,
     confirmation_gate,
     confirmation_tool,
@@ -267,6 +271,7 @@ from app.features.agent.skills import (
 )
 from app.features.agent.support_task import (
     ADJUSTED_LIMITS_HINT,
+    APPROVED_FAQ_ARGUMENTS,
     BUDGET_EXCEEDED_CODE,
     DATA_LOOKUP_HINT,
     GUIDE_CHECK_TRACE_PREFIX,
@@ -282,6 +287,8 @@ from app.features.agent.support_task import (
     SupportTaskBudget,
     adjusted_search_limits,
     agent_confirmation_answers,
+    approved_faq_candidates_step,
+    approved_faq_schema,
     assume_step,
     budget_exceeded_message,
     build_support_task,
@@ -1598,6 +1605,9 @@ class _ToolRecorder:
         # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
         # 答える」に変える。
         self.confirmation: ConfirmationBudget | None = None
+        # 承認済み FAQ の確認への利用者の選択（#5134。`confirmation.approved_faq_choice`）。この Run
+        # の `rag_search` に実行環境が付ける。
+        self.approved_faq_choice: dict[str, Any] | None = None
         # モデルに渡したツール（名前 → 定義・handler・モデルに見せた schema。#2630）。
         self.entries: dict[str, _ToolEntry] = {}
         # 進展の無い呼び出しが上限に達した（#2580。以降の呼び出しは実行しない）。
@@ -1676,6 +1686,56 @@ class _ToolRecorder:
         if not isinstance(properties, dict) or "original_question" not in properties:
             return None
         return self.goal.strip()[:_ORIGINAL_QUESTION_MAX_CHARS]
+
+    def _approved_faq_arguments(
+        self, name: str, definition: ToolDefinition | None, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`rag_search` に承認済み FAQ の引数を付ける（#5134。モデルに見せない引数）。
+
+        - 利用者が確認で Q&A を選んだ Run: その Run の最初の `rag_search`（候補を返した接続）に
+          `approved_faq_id` と候補を返した検索・回答プロファイル。2 回目からは `skip_approved_faq`。
+        - 「どれでもない」を選んだ Run と、利用者に確認しない Run（前提を示す方針・上限・無人の
+          Run・「確認せずに回答」）: `skip_approved_faq`（候補を選ぶ人がいない）。
+        - それ以外: 付けない（候補があれば RAG が候補を返し、確認のカードになる）。
+        モデルが渡した同じ名前の引数は使わない。
+        """
+        if definition is None or mcp_base_tool_name(name) != RAG_SEARCH:
+            return arguments
+        properties = (definition.input_schema or {}).get("properties")
+        if not isinstance(properties, dict) or not all(
+            argument in properties for argument in APPROVED_FAQ_ARGUMENTS
+        ):
+            return arguments
+        cleaned = {
+            key: value for key, value in arguments.items() if key not in APPROVED_FAQ_ARGUMENTS
+        }
+        choice = self.approved_faq_choice
+        faq_id = choice.get(APPROVED_FAQ_ID_ARGUMENT) if choice is not None else None
+        if (
+            choice is not None
+            and isinstance(faq_id, str)
+            and choice.get("tool") in {"", name}
+            and not self._approved_faq_sent()
+        ):
+            profile = choice.get("search_answer_profile_id")
+            if isinstance(profile, str) and profile:
+                cleaned["search_answer_profile_id"] = profile
+            return {**cleaned, APPROVED_FAQ_ID_ARGUMENT: faq_id}
+        if choice is not None or self.confirmation is None or not self.confirmation.asks:
+            return {**cleaned, SKIP_APPROVED_FAQ_ARGUMENT: True}
+        return cleaned
+
+    def _approved_faq_sent(self) -> bool:
+        """この Run で、利用者が選んだ Q&A を `rag_search` に渡したか（再開した Run も step で
+        数える）。"""
+        from app.features.agent.runtime import runtime_repository
+
+        return any(
+            step.tool_call is not None
+            and mcp_base_tool_name(step.tool_call.name) == RAG_SEARCH
+            and step.tool_call.arguments.get(APPROVED_FAQ_ID_ARGUMENT)
+            for step in runtime_repository.get_run(self.run_id).steps
+        )
 
     def _without_asking(self, next_step: dict[str, Any] | None) -> dict[str, Any] | None:
         if self.confirmation is None or self.confirmation.asks:
@@ -1923,6 +1983,9 @@ class _ToolRecorder:
                         "profile_id": resolved["id"],
                     },
                 )
+        # 承認済み FAQ の選択（#5134）は、データの範囲で確かめる前に付ける（選んだ Q&A の検索・
+        # 回答プロファイルも範囲で確かめる）。
+        call_arguments = self._approved_faq_arguments(name, definition, call_arguments)
         # データの範囲（#1378）: プロファイルを埋める・上書きする・範囲外を拒否する。MCP 接続の
         # ツールだけ（Control Plane のツールは範囲の対象ではない）。
         scoped = (
@@ -2771,6 +2834,7 @@ def build_function_tools(
     output_entries: list[tuple[ToolDefinition, ToolHandler]] | None = None,
     image_input: bool = False,
     report_enabled: bool = False,
+    approved_faq_choice: Mapping[str, Any] | None = None,
 ) -> list[FunctionTool]:
     """ツールを function tool にする。
 
@@ -2779,9 +2843,12 @@ def build_function_tools(
     渡し、呼び出しごとに中断するか（利用者の答えを待つか）を往復の残りで決める。
     `image_input` はモデルが画像の入力に対応するか（#2650。ツールの結果の画像を添付するか。
     対応しなければ `rag_read_source` の `include_image` もモデルに見せない。#5125）。
+    `approved_faq_choice` は承認済み FAQ の確認への利用者の選択（#5134。`rag_search` に実行環境が
+    付ける）。
     """
     policy = _active_policy()
     recorder = _ToolRecorder(run_id, budget)
+    recorder.approved_faq_choice = dict(approved_faq_choice) if approved_faq_choice else None
     recorder.image_input = image_input
     recorder.data_scopes = dict(data_scopes or {})
     recorder.report_enabled = report_enabled
@@ -2842,6 +2909,8 @@ def build_function_tools(
         if not image_input:
             schema = image_input_schema(definition.name, schema)
         schema = search_limit_schema(definition.name, schema)
+        # 承認済み FAQ の選択の引数は実行環境が付ける（#5134。モデルに見せない）。
+        schema = approved_faq_schema(definition.name, schema)
         tool = FunctionTool(
             name=definition.name,
             description=definition.description,
@@ -3007,6 +3076,7 @@ def build_sdk_agent(
         output_entries=output_entries or None,
         report_enabled=output_contract is not None,
         image_input=target.vision_enabled,
+        approved_faq_choice=approved_faq_choice(confirmation_response),
     )
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
@@ -5244,7 +5314,9 @@ async def _finish(
             raise BuiltinRuntimeError(
                 "runtime.report_incomplete", "確認済みの回答案と最終出力が一致しません。"
             )
-        tool_confirmations = _tool_confirmations(task, state_content)
+        tool_confirmations = _tool_confirmations(
+            task, state_content, runtime_repository.get_run(run_id).steps
+        )
         evidence_text = getattr(selected_result, "_report_evidence_text", "")
         _save_answer_evidence(run_id, evidence_text)
         answer = _guarded_answer(run_id, answer)
@@ -5268,7 +5340,7 @@ async def _finish(
         data_run.metadata,
         trusted_sources=_citable_source_ids(data_run),
     ).render(answer)
-    tool_confirmations = _tool_confirmations(task, state_content)
+    tool_confirmations = _tool_confirmations(task, state_content, data_run.steps)
     if tool_confirmations and is_confirmation_payload(answer):
         # 確認のツールの引数の JSON を本文に書いた（#2236）。カードの問いの文にする。
         answer = card_answer(tool_confirmations)
@@ -5411,7 +5483,9 @@ def _pending_key(entry: Mapping[str, Any]) -> tuple[str, str, str]:
 
 
 def _tool_confirmations(
-    task: _SupportTaskRun | None, content: Mapping[str, Any] | None
+    task: _SupportTaskRun | None,
+    content: Mapping[str, Any] | None,
+    steps: Sequence[Any] = (),
 ) -> list[ConfirmationRequest]:
     """この Run のツールの結果が返した確認事項を、画面の回答前の確認にする（#1839）。
 
@@ -5425,13 +5499,12 @@ def _tool_confirmations(
     `skip_clarification` で呼び直さなかったときも、カードで聞き直さない）。
     """
     budget = task.confirmation if task is not None else None
-    if (
-        task is None
-        or budget is None
-        or budget.unattended
-        or budget.skipped
-        or not isinstance(content, Mapping)
-    ):
+    if task is None or budget is None or budget.unattended or budget.skipped:
+        return []
+    faq = _approved_faq_confirmation(budget, steps)
+    if faq is not None:
+        return [faq]
+    if not isinstance(content, Mapping):
         return []
     previous = task.previous.get("pending_clarifications") if task.previous else None
     seen = {_pending_key(entry) for entry in previous or [] if isinstance(entry, Mapping)}
@@ -5466,6 +5539,31 @@ def _tool_confirmations(
                 )
             ]
     return []
+
+
+def _approved_faq_confirmation(
+    budget: ConfirmationBudget, steps: Sequence[Any]
+) -> ConfirmationRequest | None:
+    """この Run の最後の `rag_search` が返した承認済み FAQ の候補を、利用者が選ぶ確認にする
+    （#5134）。
+
+    利用者に確認できる Run だけ（確認しない Run は `skip_approved_faq` を付けるので、候補は
+    返らない）。
+    """
+    if not budget.asks:
+        return None
+    step = approved_faq_candidates_step(list(steps))
+    if step is None or step.tool_call is None or step.tool_result is None:
+        return None
+    output = step.tool_result.output
+    profile = step.tool_call.arguments.get("search_answer_profile_id")
+    return approved_faq_request(
+        output if isinstance(output, Mapping) else {},
+        tool_name=step.tool_call.name,
+        search_answer_profile_id=profile if isinstance(profile, str) else "",
+        round_=budget.used + 1,
+        max_rounds=budget.max_rounds,
+    )
 
 
 def _answer_outcome(

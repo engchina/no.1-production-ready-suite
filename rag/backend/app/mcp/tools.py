@@ -308,7 +308,11 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 44: rag_retrieve_evidence の planning・queries・original_question・request_id（入力）、
 #     planning・request_id と profile_knowledge の matched_on（出力）を削除した（1 回の呼び出しは
 #     1 つの質問。#5125）。
-MCP_OUTPUT_SCHEMA_VERSION = 44
+# 45: rag_approved_faq を削除し、承認済み FAQ を rag_search に統合した（#5134）。rag_search に
+#     approved_faq_id・skip_approved_faq（入力）と status・approved_faq_candidates・approved_faq
+#     （出力）を足し、候補だけを返すとき（status=approved_faq_candidates）は outcome を null に
+#     した。
+MCP_OUTPUT_SCHEMA_VERSION = 45
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
@@ -426,7 +430,10 @@ GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした�
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
 
-APPROVED_FAQ_TOOL = "rag_approved_faq"
+# rag_search の状態（#5134）。completed=検索・回答をした（選んだ承認済み FAQ の回答を含む）/
+# approved_faq_candidates=承認済み FAQ の候補だけを返した（検索・回答はしていない）。
+SearchStatus = Literal["completed", "approved_faq_candidates"]
+APPROVED_FAQ_CANDIDATES_STATUS: SearchStatus = "approved_faq_candidates"
 
 # 処理順の Step 形式（docs/agents/prompts.md。#3830）。
 INSTRUCTIONS = (
@@ -436,11 +443,12 @@ INSTRUCTIONS = (
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
     "確かめる）、その id を rag_search に渡してください。名前で探すときは"
     " rag_list_search_answer_profiles を使います。\n\n"
+    # 承認済み FAQ の候補（#5134）。引数の意味は approved_faq_id・skip_approved_faq の説明にある。
+    "## Step 2: 登録済みの Q&A の候補を利用者に選んでもらう\n"
+    f"rag_search が status={APPROVED_FAQ_CANDIDATES_STATUS} を返したら、approved_faq_candidates の"
+    "質問を利用者に示して選んでもらってから呼び直してください（候補を自分で選ばない）。"
+    "選ばれた Q&A は approved_faq_id に、どれでもなければ skip_approved_faq に渡します。\n\n"
     # 回答前の確認（業務ガイドの条件）。引数の組み立ては conditions の説明にある。
-    "## Step 2: 登録済みの Q&A を確かめる\n"
-    f"rag_search の前に {APPROVED_FAQ_TOOL} に質問を渡してください。suggestions があれば、その"
-    "質問を利用者に示して選んでもらい、選んだ Q&A の id を approved_faq_id に入れて呼び直して"
-    "ください。suggestions が空か、どれも当たらなければ rag_search で検索します。\n\n"
     "## Step 3: 回答前の確認に答える\n"
     "rag_search が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
     "利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
@@ -623,6 +631,34 @@ class SearchInput(SearchScopeInput):
             "根拠を確かめて作る。"
         ),
     )
+    # 承認済み FAQ（#5134）。候補の提示と選んだ Q&A の回答は画面と同じ規則（#5107）。
+    approved_faq_id: OptionalText = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、その Q&A の登録済みの"
+            "回答をそのまま返す（検索・回答の生成はしない）。search_answer_profile_id が要る。"
+        ),
+    )
+    skip_approved_faq: bool = Field(
+        default=False,
+        description=(
+            "true なら登録済みの Q&A の候補を返さずに検索・回答する（利用者が候補のどれも選ば"
+            "なかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索・回答の前に"
+            "その候補だけを返す。"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _one_approved_faq_choice(self) -> SearchInput:
+        if self.approved_faq_id is not None and self.skip_approved_faq:
+            raise ValueError("approved_faq_id と skip_approved_faq は一緒に渡さないでください。")
+        if self.approved_faq_id is not None and self.search_answer_profile_id is None:
+            raise ValueError(
+                "approved_faq_id を渡すときは、候補を返した search_answer_profile_id も渡して"
+                "ください。"
+            )
+        return self
 
 
 # 1 回の呼び出しは 1 つの質問（#5125）。何を調べるかは呼び出し元が決め、RAG は渡された query で
@@ -665,25 +701,6 @@ class LookupGuidesInput(BaseModel):
         default_factory=dict, max_length=30, description="分かっている条件の値（条件の id → 値）。"
     )
     limit: int = Field(default=3, ge=1, le=10, description="返す業務ガイドの最大件数。")
-
-
-class ApprovedFaqInput(BaseModel):
-    """回答の前の承認済み FAQ（登録済みの Q&A）の照会と、選んだ Q&A の回答の条件。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    question: str = Field(..., min_length=1, max_length=8000, description="利用者の質問。")
-    search_answer_profile_id: str = Field(
-        ..., min_length=1, max_length=128, description="検索・回答プロファイルの id。"
-    )
-    approved_faq_id: OptionalText = Field(
-        default=None,
-        max_length=200,
-        description=(
-            "suggestions から利用者が選んだ Q&A の id。渡すとその Q&A の登録済みの回答をそのまま"
-            "返す（検索・回答の生成はしない）。省略すると質問に近い Q&A の候補を返す。"
-        ),
-    )
 
 
 class ReadSourceInput(BaseModel):
@@ -1649,14 +1666,49 @@ GUARDRAIL_DEGRADED_DESCRIPTION = (
 )
 
 
+class ApprovedFaqCandidate(BaseModel):
+    """検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。"""
+
+    id: str = Field(description="Q&A の id（利用者が選んだら approved_faq_id に渡す）。")
+    question: str = Field(description="登録済みの質問。")
+    score: float = Field(description="質問との一致度（0〜1）。")
+
+
+class ApprovedFaqRef(BaseModel):
+    """回答に使った承認済み FAQ（回答は登録済みの回答をそのまま返したもの）。"""
+
+    id: str
+    question: str = Field(description="登録済みの質問。")
+
+
 class SearchOutput(VersionedOutput):
+    status: SearchStatus = Field(
+        default="completed",
+        description=(
+            "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みの Q&A の"
+            "候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、"
+            "outcome は null）。"
+        ),
+    )
+    approved_faq_candidates: list[ApprovedFaqCandidate] = Field(
+        default_factory=list,
+        description="status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。",
+    )
+    approved_faq: ApprovedFaqRef | None = Field(
+        default=None,
+        description=(
+            "approved_faq_id で選んだ Q&A の登録済みの回答を answer に返したとき、その Q&A"
+            "（根拠の evidence は空）。それ以外は null。"
+        ),
+    )
     answer: str
     trace_id: str
     guardrail_warnings: list[str]
     guardrail_degraded: bool = Field(default=False, description=GUARDRAIL_DEGRADED_DESCRIPTION)
-    outcome: AnswerOutcome = Field(
+    outcome: AnswerOutcome | None = Field(
         description=(
-            "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / "
+            "回答の対応（status=approved_faq_candidates のときは null）。answered=資料で答えた / "
+            "conditional=条件・不足を示して答えた / "
             "needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / "
             "insufficient_evidence=資料から答えられない。needs_clarification / needs_human は"
             "利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを"
@@ -1831,38 +1883,6 @@ class LookupGuidesOutput(VersionedOutput):
             "質問に当たり、適用範囲の手がかりと合う公開の業務ガイド（照合の点の高い順）。"
             "無ければ空。"
         )
-    )
-
-
-class ApprovedFaqSuggestionItem(BaseModel):
-    """回答の前に利用者に示す承認済み FAQ の候補。"""
-
-    id: str = Field(description="Q&A の id（選んだら approved_faq_id に渡す）。")
-    question: str = Field(description="登録済みの質問。")
-    answer: str = Field(description="登録済みの回答。")
-    score: float = Field(description="質問との一致度（0〜1）。")
-
-
-class ApprovedFaqAnswerItem(BaseModel):
-    """選んだ承認済み FAQ と、その登録済みの回答（原文のまま）。"""
-
-    id: str
-    question: str
-    answer: str
-    trace_id: str = Field(description="回答の記録の trace id。")
-
-
-class ApprovedFaqOutput(VersionedOutput):
-    suggestions: list[ApprovedFaqSuggestionItem] = Field(
-        default_factory=list,
-        description=(
-            "質問に近い登録済みの Q&A（一致度の順）。approved_faq_id を渡したとき・当たる Q&A が"
-            "無いとき・検索・回答プロファイルで Q&A の提示がオフのときは空。"
-        ),
-    )
-    answer: ApprovedFaqAnswerItem | None = Field(
-        default=None,
-        description="approved_faq_id を渡したとき、選んだ Q&A の登録済みの回答。それ以外は null。",
     )
 
 
@@ -3670,6 +3690,8 @@ def _search_request(arguments: SearchScopeInput) -> SearchRequest:
     }
     if isinstance(arguments, SearchInput) and arguments.original_question is not None:
         payload["original_question"] = arguments.original_question
+    if isinstance(arguments, SearchInput) and arguments.approved_faq_id is not None:
+        payload["approved_faq_id"] = arguments.approved_faq_id
     if arguments.include_superseded:
         # 検索の要求の中では旧版の扱いは filters の 1 つ（画面の検索と同じ。#1248）。
         payload["filters"] = {**arguments.filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
@@ -3934,10 +3956,6 @@ def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput
     check_profile(scope, arguments.search_answer_profile_id)
 
 
-def _check_approved_faq_scope(scope: ProfileScope | None, arguments: ApprovedFaqInput) -> None:
-    check_profile(scope, arguments.search_answer_profile_id)
-
-
 LIST_PROFILES_TOOL = "rag_list_search_answer_profiles"
 RECOMMEND_PROFILE_TOOL = "rag_recommend_search_answer_profile"
 QUERY_UNMATCHED_NEXT_STEP = (
@@ -4113,6 +4131,45 @@ def _selection_error(
     return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
 
 
+async def _approved_faq_suggestions(arguments: SearchInput) -> list[ApprovedFaqCandidate]:
+    """rag_search の前に示す承認済み FAQ の候補（#5134。画面の照会と同じ規則。#5107）。
+
+    検索・回答プロファイルを指定した検索だけ。プロファイルが無い・使えない（アーカイブ済み）
+    ときは候補を返さず、検索の側のエラー（プロファイルの自動の選択を含む）に任せる。照合は
+    利用者の元の質問（無ければ query）で行う。
+    """
+    profile_id = arguments.search_answer_profile_id
+    if profile_id is None:
+        return []
+    oracle = OracleClient()
+    view = await oracle.get_search_answer_profile(profile_id)
+    if view is None:
+        return []
+    status = getattr(view, "status", None)
+    if getattr(status, "value", status) == SearchAnswerProfileStatus.ARCHIVED.value:
+        return []
+    suggestions, _ = await approved_faq_candidates(
+        oracle, view.id, arguments.original_question or arguments.query, get_settings()
+    )
+    return [
+        ApprovedFaqCandidate(
+            id=item.record.id, question=item.record.question, score=round(item.score, 4)
+        )
+        for item in suggestions
+    ]
+
+
+def _approved_faq_ref(result: SearchResponse) -> ApprovedFaqRef | None:
+    """選んだ承認済み FAQ の回答をそのまま返した検索なら、その Q&A（それ以外は None）。"""
+    diagnostics = _answer_diagnostics(result)
+    if not is_approved_faq_answer(diagnostics):
+        return None
+    return ApprovedFaqRef(
+        id=str(diagnostics.get("approved_faq_id") or ""),
+        question=str(diagnostics.get("approved_faq_question") or ""),
+    )
+
+
 def _with_profile_selection[A: SearchScopeInput, R: SearchOutput | RetrieveEvidenceOutput](
     handler: Callable[[A], Awaitable[R]],
 ) -> Callable[[A], Awaitable[R]]:
@@ -4223,6 +4280,21 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
     async def search(arguments: SearchInput) -> SearchOutput:
         request = _search_request(arguments)
         enforce_rate_limit("search", http_request)
+        if arguments.approved_faq_id is None and not arguments.skip_approved_faq:
+            # 検索・回答の前に承認済み FAQ の候補を照会し、あれば候補だけを返す（#5134。画面と
+            # 同じ入口の順: 安全チェック → 照合）。
+            candidates = await _approved_faq_suggestions(arguments)
+            if candidates:
+                return SearchOutput(
+                    status=APPROVED_FAQ_CANDIDATES_STATUS,
+                    approved_faq_candidates=candidates,
+                    answer="",
+                    trace_id="",
+                    guardrail_warnings=[],
+                    outcome=None,
+                    evidence=[],
+                    evidence_omitted=0,
+                )
         result = await _run_search(request)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
@@ -4232,6 +4304,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         sections = await _chunk_sections(returned)
         output = SearchOutput(
             **_answer_fields(result, arguments.evidence_limit),
+            approved_faq=_approved_faq_ref(result),
             older_versions=await _older_versions(arguments, request, citations),
             notice=result.notice if called_with_api_key(http_request) else None,
         )
@@ -4292,57 +4365,6 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 )
                 matches = [item for item in resolved if isinstance(item, GuideMatch)]
             return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
-
-    async def approved_faq(arguments: ApprovedFaqInput) -> ApprovedFaqOutput:
-        """回答の前の承認済み FAQ の候補か、選んだ Q&A の回答（#5107。画面と同じ規則）。"""
-        oracle = OracleClient()
-        view = await oracle.get_search_answer_profile(arguments.search_answer_profile_id)
-        if view is None:
-            raise await profile_not_found_error(arguments.search_answer_profile_id)
-        search_route.ensure_search_answer_profile_not_archived(
-            view, arguments.search_answer_profile_id
-        )
-        if arguments.approved_faq_id is None:
-            # 入口の順は画面と同じ（安全チェック → 照合。下限以上を最大件数まで）。
-            suggestions, _ = await approved_faq_candidates(
-                oracle, view.id, arguments.question, get_settings()
-            )
-            return ApprovedFaqOutput(
-                suggestions=[
-                    ApprovedFaqSuggestionItem(
-                        id=item.record.id,
-                        question=item.record.question,
-                        answer=item.record.approved_answer,
-                        score=round(item.score, 4),
-                    )
-                    for item in suggestions
-                ]
-            )
-        # 選んだ Q&A は検索・回答と同じ入口（安全チェック → Q&A の引き直し）を通し、記録に残す。
-        enforce_rate_limit("search", http_request)
-        result = await _run_search(
-            SearchRequest(
-                query=arguments.question,
-                search_answer_profile_id=view.id,
-                approved_faq_id=arguments.approved_faq_id,
-            )
-        )
-        diagnostics = _answer_diagnostics(result)
-        if not is_approved_faq_answer(diagnostics):
-            # 安全チェックで止めた質問（回答の工程が止めた応答を作る）。
-            raise McpToolError(
-                TOOL_ARGUMENTS_INVALID_CODE,
-                result.answer,
-                details={"guardrail_warnings": list(result.guardrail_warnings)},
-            )
-        return ApprovedFaqOutput(
-            answer=ApprovedFaqAnswerItem(
-                id=str(diagnostics.get("approved_faq_id") or ""),
-                question=str(diagnostics.get("approved_faq_question") or ""),
-                answer=result.answer,
-                trace_id=result.trace_id,
-            )
-        )
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
         # 検索の画面・チャットと同じ流れで質問の理解・用語の別名・文書の検索（rerank を含む）
@@ -4434,7 +4456,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 title="ナレッジベースの検索",
                 description=(
                     "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・"
-                    "回答に使ったか付き）と回答を返します。"
+                    "回答に使ったか付き）と回答を返します。質問に近い登録済みの Q&A があるときは、"
+                    "検索・回答の前にその候補だけを返します（status=approved_faq_candidates）。"
                 ),
                 input_model=SearchInput,
                 handler=scoped(_with_profile_selection(search), _check_search_scope),
@@ -4452,18 +4475,6 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=LookupGuidesInput,
                 handler=scoped(lookup_guides, _check_guides_scope),
                 output_model=LookupGuidesOutput,
-                permissions=(SEARCH_PERMISSIONS,),
-            ),
-            McpTool(
-                name=APPROVED_FAQ_TOOL,
-                title="登録済みの Q&A の照会",
-                description=(
-                    "検索・回答プロファイルの登録済みの Q&A から、質問に近いものの候補を返します。"
-                    "選んだ Q&A の id を渡すと、その登録済みの回答をそのまま返します。"
-                ),
-                input_model=ApprovedFaqInput,
-                handler=scoped(approved_faq, _check_approved_faq_scope),
-                output_model=ApprovedFaqOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(

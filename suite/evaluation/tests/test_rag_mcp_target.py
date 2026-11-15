@@ -229,6 +229,7 @@ def test_multi_turn_case_sends_conditions_and_scores_with_the_same_evaluator() -
         {
             "query": "権限の付け方は？",
             "evidence_limit": 50,
+            "skip_approved_faq": True,
             "knowledge_base_ids": ["kb-1"],
             "conditions": {"mode": "標準"},
         },
@@ -236,6 +237,7 @@ def test_multi_turn_case_sends_conditions_and_scores_with_the_same_evaluator() -
             "query": "権限の付け方は？\n個別の利用者です。",
             "original_question": "権限の付け方は？\n個別の利用者です。",
             "evidence_limit": 50,
+            "skip_approved_faq": True,
             "knowledge_base_ids": ["kb-1"],
             "conditions": {"mode": "標準", "target": "個別"},
         },
@@ -265,6 +267,7 @@ def test_profile_and_superseded_cases_are_passed_to_rag_search() -> None:
         {
             "query": "旧版との違いは？",
             "evidence_limit": 50,
+            "skip_approved_faq": True,
             "search_answer_profile_id": "profile-1",
             "top_k": 20,
             "include_superseded": True,

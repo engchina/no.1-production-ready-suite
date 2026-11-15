@@ -55,6 +55,9 @@ class _RagScopeIn(_ContractInput):
 class RagSearchIn(_RagScopeIn):
     # 利用者の元の質問（回答の要求の単位に使う。#2261）。
     original_question: str | None = None
+    # 承認済み FAQ（#5134）: 利用者が選んだ Q&A の id と、候補を返さずに検索・回答する指定。
+    approved_faq_id: str | None = Field(default=None, max_length=200)
+    skip_approved_faq: bool = False
 
 
 class RagRetrieveEvidenceIn(_RagScopeIn):
@@ -368,6 +371,51 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "status": "cancelled",
     },
 }
+
+
+def rag_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str, Any]:
+    """`rag_search` が承認済み FAQ の候補だけを返した出力（#5134。契約の形の合成の値）。
+
+    `candidates` は（id, 質問, 一致度）。検索・回答はしていないので answer は空、outcome は null。
+    """
+    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_search"])
+    output.update(
+        status="approved_faq_candidates",
+        approved_faq_candidates=[
+            {"id": faq_id, "question": question, "score": score}
+            for faq_id, question, score in candidates
+        ],
+        approved_faq=None,
+        answer="",
+        trace_id="",
+        outcome=None,
+        requests=[],
+        conditions=[],
+        gaps=[],
+        confirmations=[],
+        evidence=[],
+        evidence_omitted=0,
+        evidence_text_omitted=0,
+        provenance=None,
+    )
+    return output
+
+
+def rag_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str, Any]:
+    """`rag_search` が選んだ承認済み FAQ の登録済みの回答をそのまま返した出力（#5134）。"""
+    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_search"])
+    output.update(
+        status="completed",
+        approved_faq_candidates=[],
+        approved_faq={"id": faq_id, "question": question},
+        answer=answer,
+        outcome="answered",
+        evidence=[],
+        evidence_omitted=0,
+        evidence_text_omitted=0,
+    )
+    return output
+
 
 Product = Literal["rag", "nl2sql"]
 ToolOutput = dict[str, Any] | Exception | Callable[[BaseModel], dict[str, Any]]
