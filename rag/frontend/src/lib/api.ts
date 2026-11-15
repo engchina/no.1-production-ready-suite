@@ -1210,11 +1210,6 @@ export interface InheritedAnswerContactData {
   contact: string;
 }
 
-/** 参照するナレッジベースで実体・別名索引を持つ文書の数(#1388)。 */
-export interface EntityIndexCoverageData {
-  document_count: number;
-}
-
 /** KB 単位の構築設定。 */
 export interface KnowledgeBaseAdapterConfig {
   version: number;
@@ -3928,12 +3923,6 @@ export const api = {
   /** 継承するシステム設定の窓口（プロファイルの画面の権限で読む。#2683）。 */
   getInheritedAnswerContact: () =>
     request<InheritedAnswerContactData>("/api/search-answer-profiles/inherited-contact"),
-  /** 参照するナレッジベースで実体・別名索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
-  entityIndexCoverage: (knowledgeBaseIds: string[]) =>
-    request<EntityIndexCoverageData>(
-      "/api/search-answer-profiles/entity-index-coverage",
-      jsonBody({ knowledge_base_ids: knowledgeBaseIds }),
-    ),
   createSearchAnswerProfile: (body: SearchAnswerProfileCreateRequest) =>
     request<SearchAnswerProfileDetail>("/api/search-answer-profiles", jsonBody(body)),
   updateSearchAnswerProfile: (id: string, body: SearchAnswerProfileUpdateRequest) =>
