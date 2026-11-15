@@ -181,6 +181,8 @@ async def test_prepared_query_reaches_search_while_original_is_saved(
     captured = []
 
     async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
+        if (gate := kwargs.get("question_gate")) is not None:
+            request = await gate(request, effective) or request
         captured.append(request)
         return request, effective, None, None
 
@@ -202,6 +204,39 @@ async def test_prepared_query_reaches_search_while_original_is_saved(
     assert turn.user_message.content == query
     assert turn.history_question_prepared
     assert calls == [query]
+
+
+async def test_send_without_token_rewrites_once_before_the_guide(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """token の無い送信も、入力の安全チェックの後・業務ガイドの照合の前に 1 回だけ補う（#5100）。"""
+    from app.schemas.chat import ChatMessageRequest
+
+    oracle, settings, calls = context_setup
+    query = "その手順は？ 条件 B との違いは？"
+    captured: list[Any] = []
+
+    async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
+        # 業務ガイドの照合は gate の後に、gate が返した質問で行う。
+        gated = await kwargs["question_gate"](request, effective)
+        captured.append(gated)
+        return gated, effective, None, None
+
+    async def append(message: StoredMessage) -> StoredMessage:
+        oracle.messages.append(message)
+        return message
+
+    monkeypatch.setattr(chat, "_resolve_query_context", resolve)
+    monkeypatch.setattr(oracle, "append_message", append, raising=False)
+    turn = await chat._prepare_chat_turn(
+        oracle, "conversation-a", "profile-a", ChatMessageRequest(content=query), settings
+    )
+    assert calls == [query]
+    assert captured[0].query != query
+    assert captured[0].original_question == query
+    assert turn.history_question_prepared
+    assert turn.prepared_history_rewrite is not None
+    assert turn.user_message.content == query
 
 
 @pytest.mark.parametrize("case", ["rewritten", "disabled", "answered"])
@@ -229,6 +264,8 @@ async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     assert (elapsed is None) is (case == "disabled")
 
     async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
+        if (gate := kwargs.get("question_gate")) is not None:
+            request = await gate(request, effective) or request
         return request, effective, None, None
 
     async def append(message: StoredMessage) -> StoredMessage:

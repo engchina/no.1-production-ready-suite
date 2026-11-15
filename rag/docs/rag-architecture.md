@@ -101,6 +101,7 @@
    - Memory Router / Retrieval Plan・Resolver / Verifier・Context Builder・Agent Memory（`rag_agent_memories` への検索と writeback）は #595 で削除し、テーブルは #596 で削除した。監査の列は既存の監査の行を変えないため残す。
 
 10. 回答生成
+   - **入口の処理の順（#5099・#5100）**: 検索・検索の stream・チャットの送信・MCP（`rag_search` / `rag_retrieve_evidence`）は同じ `_resolve_query_context`（`app/api/routes/search.py`）を通り、(1) 基準日（`as_of`。1 回の回答で 1 回だけ決め、`Settings.rag_answer_as_of` で回答エンジンへ渡す）→ (2) 検索・回答プロファイルの解決（権限・参照 KB の展開・ドメインキーワード・用語・同義語。質問の文を使わない）→ (3) 質問の文を使う最初の処理（`question_gate`。入力の安全チェック、チャットは続けて質問の補完）→ (4) 業務ガイドの照合、の順に動く。安全チェックで止めた質問は業務ガイドを照合せず、回答の工程が止めた応答を作る。通った質問は伏せた後の文だけを後へ渡し、回答の工程は入口の結果を使って質問を検査し直さない（原文は回答の工程でも検査する）。チャットは token の有無にかかわらず送信の準備で 1 回だけ補完し、回答の工程では補完し直さない。FAQ の類似問・確認の候補・MCP の `lookup_guides` も、プロファイルを読んだ後・質問の文を使う処理の前に安全チェックを行う（`app/rag/input_guardrail.py`）。
    - LLM は **OCI Enterprise AI**。回答フローが、small-to-big で復元した根拠の文脈を回答生成のプロンプト（取込・検索・回答設定 > 回答プロンプト。`rag_answer_prompts`）で渡して回答を生成する。追加の LLM provider は導入しない。
    - チャットでは、毎回の発話で LLM を 1 回呼び（会話の最初の発話も含む）、会話履歴から質問を単独で意味が通る形に書き換え、検索の要らない発話（挨拶・雑談）かを分けてから回答する（`RAG_HISTORY_REWRITE_ENABLED`）。書き換えた質問も安全チェックを通す。挨拶・雑談は検索を飛ばし、根拠なしの短い応答にする（引用なし。分からないときは検索する。#4787）。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。

@@ -1743,6 +1743,13 @@ class Settings(
             "#1276）。回答の記録の provenance に残すだけで、検索・回答の挙動は変えない。"
         ),
     )
+    rag_answer_as_of: str = Field(
+        default="",
+        description=(
+            "リクエスト単位で入口の最初に決めた基準日（YYYY-MM-DD。#5099）。1 回の回答の検索は"
+            "すべてこの日で文書の有効期間を判定する。空なら回答エンジンが今日にする。"
+        ),
+    )
     rag_domain_keywords: list[str] = Field(
         default_factory=list,
         description=(

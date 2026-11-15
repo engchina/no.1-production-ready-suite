@@ -781,7 +781,7 @@ class AnswerEngine:
         loop = asyncio.get_running_loop()
         requested = request
         # 基準日を 1 回の回答で 1 回だけ決め、主検索と拡張の検索で同じ日を使う(#2602)。
-        request = _with_effective_as_of(request)
+        request = _with_effective_as_of(request, self._settings.rag_answer_as_of)
         state = _SearchState(
             requested_as_of=requested.filters.get(AS_OF_FILTER_KEY, ""),
             degraded=self._degraded if self._degraded is not None else DegradedSteps(),
@@ -1001,7 +1001,7 @@ class AnswerEngine:
             degraded=self._degraded if self._degraded is not None else DegradedSteps()
         )
         # 主検索と同じ基準日で読む(#2602。この経路は拡張しないが、条件の決め方をそろえる)。
-        request = _with_effective_as_of(request)
+        request = _with_effective_as_of(request, self._settings.rag_answer_as_of)
         with read_lobs_as_values():
             result = await self._search(
                 request,
@@ -3540,17 +3540,18 @@ def _today() -> date:
     return settings_today()
 
 
-def _with_effective_as_of(request: SearchRequest) -> SearchRequest:
+def _with_effective_as_of(request: SearchRequest, as_of: str = "") -> SearchRequest:
     """検索の基準日(as_of)を決めた要求(#2602)。
 
     基準日の無い要求は今日にする(``OracleClient`` の有効期間の判定の既定と同じ日)。主検索・先読み・
     交差参照・実体・関係情報の拡張・章節の読み取りはこの要求の条件を使うので、回答の途中で
     日付が変わっても、すべての検索が同じ日で有効期間を判定する。明示した基準日は変えない。
+    ``as_of`` は入口の最初に決めた日（``Settings.rag_answer_as_of``。#5099）。
     """
     if (request.filters.get(AS_OF_FILTER_KEY) or "").strip():
         return request
     return request.model_copy(
-        update={"filters": {**request.filters, AS_OF_FILTER_KEY: _today().isoformat()}}
+        update={"filters": {**request.filters, AS_OF_FILTER_KEY: as_of or _today().isoformat()}}
     )
 
 

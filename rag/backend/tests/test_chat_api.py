@@ -316,6 +316,9 @@ def chat_answer_service(monkeypatch: MonkeyPatch) -> ChatAnswerRunService:
     """テストごとに新しい回答の作成の service（作成中の run をテストの間で共有しない。#1175）。"""
     service = ChatAnswerRunService(worker_id="pytest-worker")
     monkeypatch.setattr(chat_answer_runs, "_SERVICE", service)
+    # このファイルは RagPipeline を fake に置き換える。送信の準備の補完（#5100）は
+    # test_chat_question_context で確かめ、ここでは補完を通さない。
+    monkeypatch.setattr(get_settings(), "rag_history_rewrite_enabled", False)
     return service
 
 
@@ -685,6 +688,8 @@ def _stub_stream(monkeypatch: MonkeyPatch, fake: FakeChatOracle, models: list[st
     monkeypatch.setattr(chat_route, "RagPipeline", _FakePipeline)
 
     async def fake_resolve(request, settings, **_kwargs):  # type: ignore[no-untyped-def]
+        if (gate := _kwargs.get("question_gate")) is not None:
+            request = await gate(request, settings) or request
         return request, settings, None, None
 
     monkeypatch.setattr(chat_route, "_resolve_query_context", fake_resolve)

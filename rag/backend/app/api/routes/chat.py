@@ -81,6 +81,7 @@ from app.rag.chat_question_token import (
 )
 from app.rag.faq_direct_answer import approved_faq_direct_score
 from app.rag.history_question import HistoryConfirmation, HistoryIntent
+from app.rag.input_guardrail import combine_question_results
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (
     ChatTurn,
@@ -706,8 +707,15 @@ async def prepare_chat_question(
     token: str | None = None,
     confirmed_facts: list[HistoryConfirmation] | None = None,
     force_token: bool = False,
+    prechecked: GuardrailResult | None = None,
+    prepared_rewrites: list[PreparedHistoryRewrite] | None = None,
 ) -> tuple[str, str | None]:
-    """現在の権限で文脈を読み、確認と検索が使う質問を一度だけ補完する。"""
+    """現在の権限で文脈を読み、確認と検索が使う質問を一度だけ補完する。
+
+    ``prechecked`` は入口で済ませた ``query`` の安全チェックの結果（#5099。検査し直さない）。
+    ``prepared_rewrites`` には、補完の結果（所要時間・採用した確認回答・発話の種類）を入れる。
+    token の有無にかかわらず、送信の側が回答の工程へ渡して補完を呼び直さないため（#5100）。
+    """
     query = query.strip()
     messages: list[StoredMessage] = []
     owner: str | None = None
@@ -744,7 +752,11 @@ async def prepare_chat_question(
             ),
         }
         guardrails = GuardrailPolicy(settings)
-        checked = await asyncio.to_thread(guardrails.validate_query, query)
+        checked = (
+            prechecked
+            if prechecked is not None
+            else await asyncio.to_thread(guardrails.validate_query, query)
+        )
         if not checked.allowed:
             return query, None
         history = await _build_safe_history(messages, guardrails)
@@ -763,6 +775,15 @@ async def prepare_chat_question(
                 ) from exc
             if confirmed_facts is not None:
                 confirmed_facts.extend(facts[identity] for identity in selected)
+            elapsed = read_history_rewrite_elapsed(settings.app_service_token_secret, token)
+            if prepared_rewrites is not None and elapsed is not None:
+                prepared_rewrites.append(
+                    PreparedHistoryRewrite(
+                        elapsed_seconds=elapsed,
+                        confirmed_facts=tuple(facts[identity] for identity in selected),
+                        intent=read_history_intent(settings.app_service_token_secret, token),
+                    )
+                )
             return question, token
         question = checked.sanitized_text
         selected_facts: tuple[HistoryConfirmation, ...] = ()
@@ -778,6 +799,14 @@ async def prepare_chat_question(
             history_intent = pipeline._history_intent
         if confirmed_facts is not None:
             confirmed_facts.extend(selected_facts)
+        if prepared_rewrites is not None and rewrite_elapsed is not None:
+            prepared_rewrites.append(
+                PreparedHistoryRewrite(
+                    elapsed_seconds=rewrite_elapsed,
+                    confirmed_facts=selected_facts,
+                    intent=history_intent,
+                )
+            )
         # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
         if not settings.app_service_token_secret:
             return question, None
@@ -826,7 +855,13 @@ async def _prepare_chat_turn(
     *,
     attachments: list[ChatAttachmentReference] | None = None,
 ) -> PreparedChatTurn:
-    """検索・回答プロファイルの設定を解決し、発話を検査して USER メッセージを保存する。"""
+    """検索・回答プロファイルの設定を解決し、発話を検査・補完して USER メッセージを保存する。
+
+    入口の処理の順は検索と同じ（``_resolve_query_context``。#5099・#5100）: 基準日 → プロファイルの
+    解決 → 入力の安全チェック → 質問の補完 → 業務ガイドの照合。止めた発話は補完・照合をせずに
+    保存し、回答の工程が止めた応答を作る。
+    """
+    guardrails = GuardrailPolicy(settings)
     approved_faq: tuple[str, str] | None = None
     if request.approved_faq_id:
         record = await find_approved_faq(oracle, search_answer_profile_id, request.approved_faq_id)
@@ -902,32 +937,6 @@ async def _prepare_chat_turn(
             status_code=422,
             detail="選んだ確認の答えが見つかりません。もう一度送信して選び直してください。",
         )
-    inherited_facts: list[HistoryConfirmation] = []
-    prepared_question, _ = (
-        await prepare_chat_question(
-            oracle,
-            conversation_id,
-            search_answer_profile_id,
-            request.content,
-            settings,
-            token=request.question_context_token,
-            confirmed_facts=inherited_facts,
-        )
-        if request.question_context_token
-        else (request.content, None)
-    )
-    prepared_rewrite_elapsed = (
-        read_history_rewrite_elapsed(
-            settings.app_service_token_secret, request.question_context_token
-        )
-        if request.question_context_token
-        else None
-    )
-    if request.question_context_token and request.clarification is not None:
-        # token の準備後に新しく答えた条件を、以前の補完句と古い事実で上書きしない。
-        prepared_question = request.content
-        inherited_facts = []
-        prepared_rewrite_elapsed = None
     # 同輪の明示回答は履歴より優先する。設定文や展示用 context は読み取らない。
     if scope is not None and guide_reply and clarification_log is not None:
         current_confirmation = ChatClarificationRecord.model_validate(clarification_log)
@@ -942,58 +951,90 @@ async def _prepare_chat_turn(
                 if entry.selected or entry.other_text
             ),
         )
-    reset_questions: set[str] = set()
-    if clarification_log is not None and clarification_log.get("outcome") == "skipped":
-        reset_questions = {
-            context_digest(entry.prompt)
-            for entry in ChatClarificationRecord.model_validate(clarification_log).entries
-        }
-        inherited_facts = [
-            fact for fact in inherited_facts if (fact.key or fact.question) not in reset_questions
-        ]
-    prepared_history_rewrite = (
-        PreparedHistoryRewrite(
-            elapsed_seconds=prepared_rewrite_elapsed,
-            confirmed_facts=tuple(inherited_facts),
-            intent=read_history_intent(
-                settings.app_service_token_secret, str(request.question_context_token)
-            ),
-        )
-        if prepared_rewrite_elapsed is not None
-        else None
-    )
-    scope = scope_with_history_confirmations(scope, inherited_facts)
-    base_request = SearchRequest(
-        query=prepared_question,
-        original_question=request.content if prepared_question != request.content else None,
-        model_id=request.model_ids[0] if request.model_ids else None,
-        top_k=request.top_k,
-        search_answer_profile_id=search_answer_profile_id,
-        conditions=conditions,
-    )
     # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
     prior_messages = await oracle.list_messages(conversation_id)
+    # 質問の文を使う最初の処理（プロファイルの解決の後・業務ガイドの照合の前）。入力の安全チェックの
+    # 後に質問を 1 回だけ補完し（#5100。token が無い送信もここで補う）、回答の工程では補完し
+    # 直さない。
+    content = request.content
+    blocked = GuardrailResult(allowed=False, sanitized_text="", findings=[])
+    original_guardrail = blocked
+    query_guardrail = blocked
+    inherited_facts: list[HistoryConfirmation] = []
+    rewrites: list[PreparedHistoryRewrite] = []
+
+    async def gate(gated: SearchRequest, _settings: Settings) -> SearchRequest | None:
+        nonlocal content, original_guardrail, query_guardrail
+        original_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
+        query_guardrail = original_guardrail
+        if not original_guardrail.allowed:
+            return None
+        content = original_guardrail.sanitized_text
+        prepared_question = content
+        if request.question_context_token or settings.rag_history_rewrite_enabled:
+            prepared_question, _ = await prepare_chat_question(
+                oracle,
+                conversation_id,
+                search_answer_profile_id,
+                content,
+                settings,
+                token=request.question_context_token,
+                confirmed_facts=inherited_facts,
+                force_token=True,
+                prechecked=original_guardrail,
+                prepared_rewrites=rewrites,
+            )
+        if request.question_context_token and request.clarification is not None:
+            # token の準備後に新しく答えた条件を、以前の補完句と古い事実で上書きしない。
+            prepared_question = content
+            inherited_facts.clear()
+            rewrites.clear()
+        if prepared_question == content:
+            return gated.model_copy(update={"query": content, "original_question": None})
+        # 補った質問も外部の入力から作った文なので、元の発話と別に検査する。
+        query_guardrail = combine_question_results(
+            await asyncio.to_thread(guardrails.validate_query, prepared_question),
+            original_guardrail,
+        )
+        if not query_guardrail.allowed:
+            return None
+        return gated.model_copy(
+            update={"query": query_guardrail.sanitized_text, "original_question": content}
+        )
+
     (
         effective_request,
         effective_settings,
         _applied_kb,
         _applied_view,
     ) = await _resolve_query_context(
-        base_request,
+        SearchRequest(
+            query=request.content,
+            model_id=request.model_ids[0] if request.model_ids else None,
+            top_k=request.top_k,
+            search_answer_profile_id=search_answer_profile_id,
+            conditions=conditions,
+        ),
         settings,
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
+        # 補完した質問は前の発話の文脈を含むので、補完が有効なら足さない。
         guide_context=()
-        if request.question_context_token and settings.rag_history_rewrite_enabled
+        if settings.rag_history_rewrite_enabled
         else _guide_user_context(prior_messages),
         interactive=True,
+        question_gate=gate,
     )
-    guardrails = GuardrailPolicy(effective_settings)
-    original_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
-    query_guardrail = (
-        await asyncio.to_thread(guardrails.validate_query, prepared_question)
-        if original_guardrail.allowed
-        else original_guardrail
+    reset_questions: set[str] = set()
+    if clarification_log is not None and clarification_log.get("outcome") == "skipped":
+        reset_questions = {
+            context_digest(entry.prompt)
+            for entry in ChatClarificationRecord.model_validate(clarification_log).entries
+        }
+    facts = [fact for fact in inherited_facts if (fact.key or fact.question) not in reset_questions]
+    prepared_history_rewrite = (
+        replace(rewrites[0], confirmed_facts=tuple(facts)) if rewrites else None
     )
+    scope = scope_with_history_confirmations(scope, facts)
     if request.client_message_id and any(
         message.id == request.client_message_id for message in prior_messages
     ):
@@ -1018,13 +1059,7 @@ async def _prepare_chat_turn(
             id=request.client_message_id or uuid4().hex,
             conversation_id=conversation_id,
             role="USER",
-            content=(
-                original_guardrail.sanitized_text
-                if query_guardrail.allowed and prepared_question != request.content
-                else query_guardrail.sanitized_text
-                if query_guardrail.allowed
-                else BLOCKED_MESSAGE_PLACEHOLDER
-            ),
+            content=content if query_guardrail.allowed else BLOCKED_MESSAGE_PLACEHOLDER,
             guardrail_warnings=query_guardrail.warnings,
             status="COMPLETE" if query_guardrail.allowed else "ERROR",
             created_at=now,
@@ -1044,7 +1079,8 @@ async def _prepare_chat_turn(
         query_guardrail=query_guardrail,
         history=history,
         user_message=user_message,
-        history_question_prepared=request.question_context_token is not None,
+        # 補完は送信の準備で済ませる（#5100）。回答の工程では補完し直さない。
+        history_question_prepared=True,
         prepared_history_rewrite=prepared_history_rewrite,
         approved_faq=approved_faq,
         scope=scope,

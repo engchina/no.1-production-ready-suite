@@ -584,6 +584,8 @@ async def test_master_off_ignores_a_previous_guide_confirmation(
         raise AssertionError("OFF へ切替後は過去のガイドの確認も適用しない")
 
     async def resolve(request: SearchRequest, settings: Any, **kwargs: Any) -> Any:
+        if (gate := kwargs.get("question_gate")) is not None:
+            request = await gate(request, settings) or request
         return request, settings, None, "bv-1"
 
     monkeypatch.setattr(chat_route, "_published_guides", forbidden)
@@ -608,7 +610,8 @@ async def test_master_off_ignores_a_previous_guide_confirmation(
         conversation.id,
         "bv-1",
         request,
-        get_settings(),
+        # 会話の持ち主の文脈を持たない直接の呼び出しなので、送信の準備の補完（#5100）は通さない。
+        get_settings().model_copy(update={"rag_history_rewrite_enabled": False}),
     )
     assert prepared.scope is None
     assert prepared.request.conditions == {}
