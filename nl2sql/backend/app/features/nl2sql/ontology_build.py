@@ -2079,8 +2079,7 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "主識別子 primary_key/properties は所属する Property の api_name を参照し、"
     "grain_ja は業務上の粒度、mappings は根拠のある物理表・列を設定する。"
     "JSON Schema の required はキーの出力要件であり、すべての値が業務上必須という意味ではない。"
-    "title_property は任意で、根拠のある同じオブジェクトの表示用 Property がなければ空文字にする。"
-    "title_property の未設定を warnings_ja や missing_information_ja に記録しない。"
+    # title_property の書き方は ObjectTypeDefinition の項目の説明にだけ書く（#5250）。
     "必須項目の不足は対象定義の missing_information_ja に具体的なフィールド名と理由を記録し、"
     "キーが required という理由だけで不足を推測しない。必須判定の正本は型と後段の機械的検証である。"
     "資料にない任意の概念・契約を生成しなかったことや既存 ID の再利用などの"

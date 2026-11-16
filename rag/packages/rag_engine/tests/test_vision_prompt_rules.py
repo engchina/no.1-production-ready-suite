@@ -182,7 +182,6 @@ def test_required_rules_stay_in_every_default_prompt():
             "項目名や値から推測しない",
             # 読めないときの約束
             "読めない文字は推測せず空欄にし",
-            "目測を確定値にしない",
             "飾りの画像（decorative / background / watermark、読める文字の無い logo）は visual_kind と短い main_topic",
             "見た目の描写や画像に無い語で項目を埋めない",
             "必須キーを埋めるために情報を創作しない",
@@ -216,6 +215,26 @@ def test_output_fields_are_unchanged_and_each_has_a_description_in_the_response_
     }.items():
         for field in fields:
             assert contract["$defs"][model]["properties"][field].get("description"), (model, field)
+
+
+def test_field_rules_are_sent_once_from_the_response_schema():
+    """項目の値の書き方は応答 schema の説明にだけ置き、読取方針に重ねない（#5250）。"""
+    from pr_backend_core.response_schema import with_schema_field_guide
+
+    from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT
+
+    contract = picture_response_schema()
+    prompt = _prompt({})
+    guided, _stripped = with_schema_field_guide(VISION_SYSTEM_PROMPT, contract)
+    # (定義の名前, 項目, 説明の規則, 読取方針に書かない語句)
+    for model, field, rule, absent in (
+        ("ChartSeriesOutput", "values", "目測値は入れない", "目測"),
+        (None, "visible_buttons", "ボタン、リンク、タブ、メニュー項目", "ボタン・リンク・タブ・メニュー項目"),
+    ):
+        node = contract["$defs"][model] if model else contract
+        assert rule in node["properties"][field]["description"], field
+        assert absent not in prompt, field
+        assert guided.count(rule) == 1, field
 
 
 def test_decorative_output_with_only_main_topic_still_has_a_description():

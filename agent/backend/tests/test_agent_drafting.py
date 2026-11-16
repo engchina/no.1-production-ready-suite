@@ -654,3 +654,30 @@ def test_publish_gate_checks_skill_only_changes(agent: None, monkeypatch: Monkey
         assert _publish().status_code == 200
     finally:
         skill_registry.remove(skill.id)
+
+
+@pytest.mark.parametrize(
+    ("rule", "layer"),
+    [
+        # 項目の書き方は項目の説明（送る時に指示の最後の Step になる）にだけ置く。
+        ("日本語の短い名前", "description"),
+        ("答える範囲と範囲の外の質問への対応", "description"),
+        ("利用者が実際に聞きそうな質問", "description"),
+        ("回答が満たすべき要点", "description"),
+        # 資料の中身を作らない規則は instructions と evaluation_cases にまたがるので本文。
+        ("人や部署の名前", "instructions"),
+        ("文はすべて日本語で書く", "instructions"),
+    ],
+)
+def test_draft_rules_are_sent_once_from_one_layer(rule: str, layer: str) -> None:
+    """同じ規則を指示の本文と応答 schema の項目の説明の両方に書かない（#5250）。"""
+    from pr_backend_core.response_schema import with_schema_field_guide
+
+    from app.features.agent.drafting import DRAFT_INSTRUCTIONS, _ModelProposal
+
+    schema = _ModelProposal.model_json_schema()
+    guided, _stripped = with_schema_field_guide(DRAFT_INSTRUCTIONS, schema)
+    in_schema = rule in json.dumps(schema, ensure_ascii=False)
+    assert (rule in DRAFT_INSTRUCTIONS) == (layer == "instructions")
+    assert in_schema == (layer == "description")
+    assert guided.count(rule) == 1

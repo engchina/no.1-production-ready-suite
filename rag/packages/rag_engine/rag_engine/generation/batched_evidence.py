@@ -42,10 +42,11 @@ question は完全な原質問です。generation_context の条件・否定・�
 
 ## Step 2: 根拠付きの回答候補を作る
 各対象・小問について、その入力の判断に必要な前提を含む原文の引用単位 ID を選んでください。
-その範囲が支える回答を answer に書いてください。
-条件、例外、否定、数値、比較対象の違いを保ってください。回答候補自体を事実の出典にはせず、evidence の原文で確かめてください。
+回答候補自体を事実の出典にはせず、evidence の原文で確かめてください。
 一つの結論に離れた箇所が必要なら、それぞれの引用単位 ID を選んでください。
 """
+# 読取の回答候補の項目の説明。値の書き方はここにだけ書き、読取の指示（BATCH_READING_PROMPT）に重ねない（#5250）。
+READING_ANSWER_DESCRIPTION = "選択した原文が支える局所的な回答。条件、例外、否定、数値、比較対象の違いを保つ。"
 # 句点も改行も無い長い行を、番号で選べる大きさに分ける上限（読取の入力だけ。最終生成の引用単位は変えない）。
 READING_UNIT_MAX_CHARS = 400
 
@@ -54,7 +55,7 @@ class BatchFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     start_line: str = Field(min_length=1, description="回答を支える本文の最初の行の、行頭の番号（例: B1-3）。")
     end_line: str = Field(min_length=1, description="同じ入力の最後の行の、行頭の番号（例: B1-5）。単一の行は最初の行と同じ番号。")
-    answer: str = Field(min_length=1, description="この範囲が支える局所的な回答。条件と例外を保持する。")
+    answer: str = Field(min_length=1, description="この範囲が支える局所的な回答。条件、例外、否定、数値、比較対象の違いを保つ。")
 
 
 class BatchReading(BaseModel):
@@ -117,7 +118,7 @@ def _labeled_text(label: str, value: Mapping[str, Any]) -> str:
 
 def _reading_model(values: Sequence[Mapping[str, Any]]) -> type[BatchReading]:
     catalog = reading_unit_catalog(values)
-    fields: dict[str, Any] = {"answer": (str, Field(min_length=1, description="選択した原文が支える局所的な回答。条件と例外を保持する。"))}
+    fields: dict[str, Any] = {"answer": (str, Field(min_length=1, description=READING_ANSWER_DESCRIPTION))}
     finding = create_model("UnitBatchFinding", __base__=catalog.selection_model(), **fields)
     finding_info = Field(description="原文で裏付けた回答候補。該当がなければ空。") if catalog.unit_labels else Field(max_length=0)
     model_fields: dict[str, Any] = {"findings": (GenericAlias(list, finding), finding_info)}

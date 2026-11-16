@@ -832,3 +832,21 @@ def _passes_of(inputs, read):
 
     prepare(inputs, spy)
     return seen
+
+
+def test_reading_answer_rule_is_sent_once_from_the_schema():
+    """読取の回答候補の書き方は項目の説明にだけ置き、読取の指示に重ねない（#5250）。"""
+    from openai.lib._parsing._responses import type_to_text_format_param
+    from pr_backend_core.response_schema import with_schema_field_guide
+
+    from rag_engine.generation.batched_evidence import BATCH_READING_PROMPT, READING_ANSWER_DESCRIPTION, _reading_model
+
+    text = "合成の規則 A は 3 日とする。\nただし、例外 B では 5 日とする。"
+    value = {"source_id": "doc#0", "text": text, "source": "合成の資料 A", "page": 1}
+    schema = type_to_text_format_param(_reading_model([value]))["schema"]
+    guided, _stripped = with_schema_field_guide(BATCH_READING_PROMPT, schema)
+    rule = "条件、例外、否定、数値、比較対象の違いを保つ"
+    assert rule in READING_ANSWER_DESCRIPTION
+    assert "条件、例外、否定、数値、比較対象の違い" not in BATCH_READING_PROMPT
+    assert "answer" not in BATCH_READING_PROMPT
+    assert guided.count(rule) == 1

@@ -168,7 +168,7 @@ def test_gleaning_completes_existing_fields_keeps_conflicts_and_warning(
             self, *, prompt: str, context: str, system_prompt: str, response_format: Any = None
         ) -> str:
             self.calls.append(prompt)
-            assert "title_property は任意" in system_prompt
+            assert "JSON Schema の required はキーの出力要件" in system_prompt
             assert set(response_format["schema"]["properties"]) == {
                 "definitions",
                 "coverage",
