@@ -50,8 +50,9 @@ DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS = 1536
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_IMAGE_EMBEDDING_RRF_WEIGHT = 0.75
 DEFAULT_MAX_ANCHORS_PER_PARENT = 2
-# rerank の後、起点（上位 top_k）に採る同じ文書の child の上限（#2167）。0 は上限なし（SDK の既定）。
-DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
+# rerank の後、1 つの文書から起点に採る child の上限（#2167・#5170）。0 は上限なし。
+# backend の rag_max_anchors_per_document の既定と同じ値（一致は backend の tests/test_anchor_document_cap_settings.py で確認する）。
+DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 5
 # 検索の起点 child 数（UI の既定値）、context に入れる parent 数、生成に渡す原文の総予算（文字）の既定値 (#1054)。
 # chunking.constants.DEFAULT_RETRIEVAL_TOP_K / answer_records.MAX_CONTEXT_RECORDS / evidence_selection.EVIDENCE_BUDGET_CHARS
 # と同じ値（循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。

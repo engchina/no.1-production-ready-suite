@@ -1117,12 +1117,12 @@ class Settings(
         ),
     )
     rag_max_anchors_per_document: int = Field(
-        default=0,
+        default=5,
         ge=0,
         le=20,
         description=(
             "rerank の後、1 つの文書から回答の根拠の起点に採る chunk の上限(#2167・#5165。"
-            "既定 0 は上限なし)。超えた chunk は根拠に使わない。検索・回答プロファイルの"
+            "既定 5。0 は上限なし)。超えた chunk は根拠に使わない。検索・回答プロファイルの"
             "max_anchors_per_document で上書きできる。"
         ),
     )

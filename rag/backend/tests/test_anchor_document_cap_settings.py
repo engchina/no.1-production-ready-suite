@@ -1,6 +1,6 @@
-"""1 つの文書から採る chunk の上限(#2167・#5165)の設定。
+"""1 つの文書から採る chunk の上限(#2167・#5165・#5170)の設定。
 
-既定 0、.env とプロファイルで選び、engine へ渡す。
+既定 5(backend と engine で同じ)、.env とプロファイルで選び、engine へ渡す。
 """
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from rag_engine.config import DEFAULT_MAX_ANCHORS_PER_DOCUMENT
 
 from app.config import Settings
 from app.rag.answer_engine import build_engine_settings
@@ -17,11 +18,18 @@ from app.rag.search_answer_profile_config import (
 )
 
 
-def test_default_is_unlimited_and_env_selects_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_is_five_in_backend_and_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RAG_MAX_ANCHORS_PER_DOCUMENT", raising=False)
-    assert Settings(_env_file=None).rag_max_anchors_per_document == 0
+    assert Settings(_env_file=None).rag_max_anchors_per_document == 5
+    assert DEFAULT_MAX_ANCHORS_PER_DOCUMENT == 5
+
+
+def test_env_selects_the_limit_and_zero_means_unlimited(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RAG_MAX_ANCHORS_PER_DOCUMENT", "3")
     assert Settings(_env_file=None).rag_max_anchors_per_document == 3
+    # 既存の .env に 0 が書かれていれば 0(上限なし)のまま扱う。
+    monkeypatch.setenv("RAG_MAX_ANCHORS_PER_DOCUMENT", "0")
+    assert Settings(_env_file=None).rag_max_anchors_per_document == 0
 
 
 def test_profile_selects_the_limit_and_engine_receives_it(tmp_path: Any) -> None:
