@@ -1831,7 +1831,9 @@ def synthesize_grounded_answer(
     unsupported_parts = sum(1 for note in current.dropped if not note.get("ignored")) + sum(
         1 for entry in current.applications if not entry.published
     )
-    confidence = current.draft.confidence if current.draft._full_answer is not None or published else "low"
+    # 根拠に結べた引用が 1 つも無い回答は、全文の回答でも宣言の確かさを使わない（本文の印が読めないまま
+    # high で返さない。#5186）。本文と回答の種別は書き換えない。
+    confidence = current.draft.confidence if published else "low"
     unsettled = [e for e in published if e.item.applies != "matched"]
     if confidence == "high" and (gaps or unsettled or unread or unsupported_parts):
         confidence = "medium"

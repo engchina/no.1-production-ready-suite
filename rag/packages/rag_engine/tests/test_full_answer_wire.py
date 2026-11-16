@@ -251,3 +251,70 @@ def test_consecutive_unit_labels_are_one_reference_and_reused_labels_are_not_dup
     rendered = render_full_answer(draft, checked)
     assert "[E1" not in rendered.text
     assert len(rendered.citation_lines) == 3
+
+
+@pytest.mark.parametrize(
+    "marks",
+    [
+        "[E2.1][E3.1]",
+        "[ E2.1 ][ E3.1 ]",
+        "[　E2.1　]　[　E3.1　]",
+        "[​E2.1][E3.1​]",
+        "[﻿E2.1﻿] [⁠E3.1]",
+        "［ E2 ］［ E3 ］",
+        "【​ E2.1 】【E3】",
+    ],
+    ids=["plain", "ascii-space", "ideographic-space", "zwsp", "bom-and-word-joiner", "full-width-block", "lenticular-mixed"],
+)
+def test_marks_with_spaces_or_format_characters_inside_brackets_bind_the_same_units(marks):
+    """括弧の内側の空白（半角・全角）と書式文字（ZWSP・BOM など）は形式として読み、同じ単位に結ぶ（#5186）。"""
+    units = records_catalog()
+    body = "1. 合成の手順の一つ目です。\n2. 合成の手順の二つ目です。" + marks
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+    draft = canonical_full_answer(wire, units)
+    assert [item.text for item in draft.items] == [
+        "資料ID: R11 / 本文: 合成の記録11の説明です。",
+        "資料ID: R12 / 本文: 合成の記録12の説明です。",
+    ]
+    checked, dropped = grounded.verify("合成の手順は？", draft, [snapshot.span() for snapshot in units.snapshots])
+    rendered = render_full_answer(draft, checked)
+    assert dropped == []
+    assert not any(mark in rendered.text for mark in ("E2", "E3", "[", "【", "［", "​", "﻿", "⁠"))
+    assert rendered.text.startswith("1. 合成の手順の一つ目です。\n2. 合成の手順の二つ目です。\n根拠：")
+    assert len(rendered.citation_lines) == 2
+
+
+def test_padded_marks_still_reject_units_not_sent_and_keep_labels_not_sent_as_text():
+    """空白を許しても、今回の根拠に無い行のラベルは形式の誤り、送っていない根拠のラベルは本文の字のまま（#5186）。"""
+    units, _unit = catalog()
+    for body in ("合成の回答[ E1.9 ]", "合成の回答[​E1.9]", "合成の回答［　E1.9　］"):
+        with pytest.raises(ValidationError):
+            full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+    wire = full_answer_model(units).model_validate({"answer_body": "合成の回答[ E7 ]", "response_kind": "answered", "confidence": "high"})
+    draft = canonical_full_answer(wire, units)
+    assert draft.items == []
+    assert render_full_answer(draft, []).text == "合成の回答[ E7 ]"
+
+
+def test_answer_without_any_bound_citation_is_not_reported_with_the_declared_confidence():
+    """本文の印が 1 つも根拠に結ばれない回答は、ほかの経路と同じく引用の無い回答として確かさを low にする（#5186）。"""
+    from test_answer_flow_single_generation import ROW, _run, context, record
+
+    body = "保存年数は5年です。"
+    response, _calls = _run(
+        "保存年数は？",
+        context(record(0, ROW, "合成の規則", source="synthetic.md")),
+        lambda _units: {"answer_body": body + "[ E99 ]", "response_kind": "answered", "confidence": "high"},
+    )
+    assert body in response.answer_text
+    assert not response.cited_evidence
+    assert response.confidence == "low"
+    # 空白を入れた印は根拠に結ばれ、宣言どおりの確かさを保つ。
+    response, _calls = _run(
+        "保存年数は？",
+        context(record(0, ROW, "合成の規則", source="synthetic.md")),
+        lambda units: {"answer_body": body + f"[ {units[ROW]} ]", "response_kind": "answered", "confidence": "high"},
+    )
+    assert response.cited_evidence
+    assert response.confidence == "high"
+    assert "[" not in response.answer_text.split("根拠：")[0]
