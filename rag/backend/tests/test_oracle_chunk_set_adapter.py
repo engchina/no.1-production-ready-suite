@@ -9,6 +9,7 @@ import json
 from uuid import uuid4
 
 import pytest
+from rag_parser_core.extraction import EXTRACTED_FIELD_CONTENT_KIND
 
 from app.clients.oracle import OracleClient
 from app.rag.chunking import Chunk
@@ -416,7 +417,7 @@ async def test_first_chunk_skips_derived_chunks_and_reads_first_body_chunk() -> 
             text="合成の抽出値",
             start_offset=0,
             end_offset=6,
-            metadata={**page, "content_kind": "extracted_field"},
+            metadata={**page, "content_kind": EXTRACTED_FIELD_CONTENT_KIND},
         ),
         Chunk(index=2, text="合成の本文の先頭", start_offset=0, end_offset=8, metadata=dict(page)),
         Chunk(index=3, text="合成の本文の後続", start_offset=9, end_offset=17, metadata=dict(page)),
