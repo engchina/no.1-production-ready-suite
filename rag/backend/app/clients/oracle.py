@@ -8288,6 +8288,12 @@ class OracleClient:
         範囲の解決と検索は別の文なので、間に切替が commit されると、検索は範囲の外の新版を読まず、
         対象の文書の根拠が欠ける。範囲ごとに 1 行あるかだけを索引で確かめる。確認に失敗しても、
         読めた結果を捨てない。
+
+        検索の条件は ``CASE`` の中に置き、範囲の行を ``native_scope_id`` の索引から引いて、条件を
+        満たす最初の行で止まる計画に固定する(#5237)。条件を WHERE に並べると、optimizer が
+        文書の副問い合わせを展開して文書の側から chunk を引く計画を選ぶことがあり(統計の見積もり
+        次第。ADB は hint を無視する)、範囲 60 個・3 万 chunk で文書 × 文書の直積から 178 万
+        logical reads になった。``CASE`` の中の副問い合わせは展開されず、行ごとの FILTER になる。
         """
         if scope is None or not scope.scope_ids:
             return False
@@ -8299,7 +8305,8 @@ class OracleClient:
                         COLUMNS (scope_id NUMBER PATH '$')) s
                     WHERE NOT EXISTS (
                         SELECT 1 {_NATIVE_SCOPE_JOINS}
-                        WHERE {where} AND c.native_scope_id = s.scope_id)""",
+                        WHERE c.native_scope_id = s.scope_id
+                          AND CASE WHEN {where} THEN 1 ELSE 0 END = 1)""",
                     {**binds, "native_checked_scope_ids": json.dumps(list(scope.scope_ids))},
                 )
         except Exception as exc:
