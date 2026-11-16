@@ -13,6 +13,7 @@ from pr_backend_core.oracle_errors import is_oracle_connection_error, is_oracle_
 from pydantic import ValidationError
 
 from app.api.errors import (
+    CodedApiError,
     DatabaseReadFailedError,
     DatabaseReadTimeoutError,
     DatabaseUnavailableError,
@@ -56,8 +57,20 @@ async def read_or_raise[T](
             log_label,
             extra={"exception_type": type(exc).__name__},
         )
-        if is_oracle_pool_wait_timeout(exc):
-            raise DatabaseReadTimeoutError() from exc
-        if is_oracle_connection_error(exc):
-            raise DatabaseUnavailableError() from exc
-        raise DatabaseReadFailedError() from exc
+        raise database_read_failure(exc) from exc
+
+
+def database_read_failure(exc: BaseException) -> CodedApiError:
+    """DB の読み取りの例外を、原因ごとの API の失敗にする。
+
+    一覧の読み取りと検索の失敗で共有する（#5233）。
+
+    - pool の待ちの timeout: `DatabaseReadTimeoutError`（混雑の可能性）
+    - 接続の失敗: `DatabaseUnavailableError`
+    - それ以外: `DatabaseReadFailedError`（接続できないと言い切らない）
+    """
+    if is_oracle_pool_wait_timeout(exc):
+        return DatabaseReadTimeoutError()
+    if is_oracle_connection_error(exc):
+        return DatabaseUnavailableError()
+    return DatabaseReadFailedError()

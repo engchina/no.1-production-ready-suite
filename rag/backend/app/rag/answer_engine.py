@@ -1185,7 +1185,16 @@ class AnswerEngine:
             observation.response(response)
             if raw_lists and all(r.status == "failed" for r in raw_lists):
                 observation.display(params={"status": "failed"})
-                raise RuntimeError("すべての検索一覧の取得に失敗しました。")
+                # 最初の失敗を原因に結ぶ。呼び出し側が DB の失敗を原因ごとに返す（#5233）。
+                cause = next(
+                    (
+                        failure
+                        for hits in all_hits
+                        if isinstance(failure := getattr(hits, "failure", None), BaseException)
+                    ),
+                    None,
+                )
+                raise RuntimeError("すべての検索一覧の取得に失敗しました。") from cause
         if len(state.search_log) < _ZERO_EVIDENCE_SEARCH_LOG_LIMIT:
             state.search_log.append(
                 {
