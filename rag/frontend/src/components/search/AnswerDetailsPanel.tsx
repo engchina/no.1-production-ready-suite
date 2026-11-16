@@ -1,5 +1,5 @@
-import { Banner, RunUsedModels } from "@production-ready/ui";
-import { answerFromApprovedFaq, parseAnswerDiagnostics, type AnswerDiagnostics } from "@/lib/answer-diagnostics";
+import { Banner, CombinedBanner, RunUsedModels, type CombinedBannerItem } from "@production-ready/ui";
+import { answerFromApprovedFaq, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { answerModelCascadeView } from "@/lib/model-cascade";
 
@@ -54,46 +54,57 @@ export function AnswerDetailsPanel({ diagnostics, recordedModels = [] }: { diagn
 }
 
 /**
- * 回答を読むときに要る案内（公開の業務ガイドを読めなかった・資料では決まらない値がある）。
- * 回答の本文の下に出す（「詳細」に畳まない。#2096）。
+ * 回答を読むときに要る案内（登録済み Q&A の回答・公開の業務ガイドを読めなかった・資料では決まらない値がある）。
+ * 回答の本文の下に出す（「詳細」に畳まない。#2096）。同じ回答の案内（安全チェックの注意など）は `extra` で渡し、
+ * 1 つの枠にまとめる（同じ回答の案内の枠は 1 つ。messaging.md §3.4.3。#5183）。
  */
-export function AnswerNotices({ diagnostics, savedMessage = null }: { diagnostics: unknown; savedMessage?: unknown }) {
+export function AnswerNotices({
+  diagnostics,
+  savedMessage = null,
+  extra = [],
+}: {
+  diagnostics: unknown;
+  savedMessage?: unknown;
+  extra?: ReadonlyArray<CombinedBannerItem | null | false | undefined>;
+}) {
+  return <CombinedBanner testId="answer-notices" items={[...answerNoticeItems(diagnostics, savedMessage), ...extra]} />;
+}
+
+/** 回答の診断から、回答を読むときに要る案内の項目を作る。 */
+export function answerNoticeItems(diagnostics: unknown, savedMessage: unknown = null): CombinedBannerItem[] {
   const data = parseAnswerDiagnostics(diagnostics);
   // 利用者が選んだ登録済みQ&A の回答をそのまま返した回答（保存した回答は会話のメッセージから読む。#5107）。
   const fromFaq = answerFromApprovedFaq(diagnostics, savedMessage);
-  const notices = data && (data.guideLoadFailed || data.externalDataRequired || data.externalDataItems.length > 0);
-  if (!notices && !fromFaq) return null;
-  return (
-    <div className="space-y-2">
-      {fromFaq ? (
-        // 検索と回答の生成をしていないこと（引用が無い理由）を、見出しと文で示す。
-        <div data-testid="answer-faq-direct">
-          <Banner severity="info" title={t("search.answerDetails.faqDirect.title")}>
-            <p className="break-words">
-              {t("search.answerDetails.faqDirect.body")}
-            </p>
-          </Banner>
-        </div>
-      ) : null}
-      {notices && data ? <AnswerNoticeBanners data={data} /> : null}
-    </div>
-  );
-}
-
-function AnswerNoticeBanners({ data }: { data: AnswerDiagnostics }) {
-  return (
-    <>
-      {data.guideLoadFailed ? (
-        // 公開の業務ガイドを読めず、使わずに答えた（ガイドが無かったときと区別する。#1278 / #1287）。
-        <div data-testid="answer-guide-load-failed">
-          <Banner severity="warning" title={t("search.answerDetails.guideLoadFailed.title")}>
-            <p>{t("search.answerDetails.guideLoadFailed.body")}</p>
-          </Banner>
-        </div>
-      ) : null}
-      {data.externalDataRequired || data.externalDataItems.length ? (
-        // 資料では決まらない値（rag_poc の「外部データ確認」。#651）。
-        <Banner severity="warning" title={t("search.answerDetails.externalData.title")}>
+  const items: CombinedBannerItem[] = [];
+  if (fromFaq) {
+    // 検索と回答の生成をしていないこと（引用が無い理由）を、見出しと文で示す。
+    items.push({
+      id: "faq-direct",
+      severity: "info",
+      title: t("search.answerDetails.faqDirect.title"),
+      testId: "answer-faq-direct",
+      children: <p className="break-words">{t("search.answerDetails.faqDirect.body")}</p>,
+    });
+  }
+  if (data?.guideLoadFailed) {
+    // 公開の業務ガイドを読めず、使わずに答えた（ガイドが無かったときと区別する。#1278 / #1287）。
+    items.push({
+      id: "guide-load-failed",
+      severity: "warning",
+      title: t("search.answerDetails.guideLoadFailed.title"),
+      testId: "answer-guide-load-failed",
+      children: <p>{t("search.answerDetails.guideLoadFailed.body")}</p>,
+    });
+  }
+  if (data && (data.externalDataRequired || data.externalDataItems.length)) {
+    // 資料では決まらない値（rag_poc の「外部データ確認」。#651）。
+    items.push({
+      id: "external-data",
+      severity: "warning",
+      title: t("search.answerDetails.externalData.title"),
+      testId: "answer-external-data",
+      children: (
+        <>
           <p>{t("search.answerDetails.externalData.hint")}</p>
           {data.externalDataItems.length ? (
             <ul className="mt-1 list-disc pl-5">
@@ -102,8 +113,9 @@ function AnswerNoticeBanners({ data }: { data: AnswerDiagnostics }) {
               ))}
             </ul>
           ) : null}
-        </Banner>
-      ) : null}
-    </>
-  );
+        </>
+      ),
+    });
+  }
+  return items;
 }

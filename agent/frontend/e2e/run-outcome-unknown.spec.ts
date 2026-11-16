@@ -69,8 +69,10 @@ for (const width of [1280, 1920]) {
     await expect(notice).toContainText("外部への書き込みの結果が不明です");
     await expect(notice).toContainText("同じ操作を再実行すると重複する可能性があります");
     await expect(notice.getByRole("listitem")).toHaveText([`起票（操作の ID: ${OPERATION_ID}）`]);
-    // 状態は色だけに頼らない（共有の Banner のアイコン）。
-    await expect(notice.locator("svg").first()).toBeVisible();
+    // 状態は色だけに頼らない（共有の Banner のアイコン）。案内は概要の 1 つの枠の項目で、アイコンは枠に 1 つ（#5183）。
+    const frame = page.getByTestId("run-status-notice");
+    await expect(frame.locator(":scope > span svg")).toBeVisible();
+    await expect(frame).toHaveAttribute("role", "status");
     await expectNoHorizontalOverflow(page);
     if (SCREENSHOT_DIR) {
       await page.getByTestId("run-summary").screenshot({ path: `${SCREENSHOT_DIR}/agent-run-outcome-unknown-${width}.png` });

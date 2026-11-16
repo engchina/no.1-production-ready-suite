@@ -302,6 +302,10 @@ test.describe("AI Agent Control Plane", () => {
     // 警告（warning の Banner。アイコン付き）で、見出しと理由を出す。
     await expect(page.getByText("業務 Agent を実行できません")).toBeVisible();
     await expect(page.getByText(/既定のテキストモデルを設定してください。/)).toBeVisible();
+    // フォームの案内は 1 つの枠（同じ区画の案内の枠は 1 つ。#5183）。
+    const notice = page.getByTestId("run-form-notice");
+    await expect(notice).toHaveCount(1);
+    await expect(notice).toContainText("業務 Agent を実行できません");
   });
 
   for (const viewport of [

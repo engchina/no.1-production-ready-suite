@@ -14,6 +14,8 @@ import {
   PageHeader,
   Button,
   Banner,
+  CombinedBanner,
+  type CombinedBannerItem,
   ProcessFailureNotice,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
@@ -392,6 +394,23 @@ function AssistantColumn({
       }
     />
   );
+  // 安全チェックの注意（個人情報のマスクなど）。回答の案内と同じ枠に入れる（#5183）。
+  const guardrailItem: CombinedBannerItem | null =
+    guardrailWarnings.length > 0
+      ? {
+          id: "guardrail",
+          severity: "warning",
+          testId: "chat-guardrail-warning",
+          children: (
+            <>
+              <span className="font-medium">{t("chat.guardrail")}: </span>
+              {guardrailWarnings.join(" / ")}
+            </>
+          ),
+        }
+      : null;
+  // 回答の本文と案内を出す場合（停止・失敗・回答待ちでないとき）。
+  const showsAnswerNotices = !stoppedMessage && !errorMessage && !waitingForAnswer;
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)} progress={<>
@@ -493,18 +512,15 @@ function AssistantColumn({
             ChatAnswerBody。#3433）。本文の届く前（カーソルだけ）は出さない。
           */}
           {answer.trim() ? <ChatAnswerBody testId="chat-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
-          {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
-          {finished && (answerDiagnostics || passageSource) ? (
-            <AnswerNotices diagnostics={answerDiagnostics} savedMessage={passageSource} />
+          {/* 回答を読むときに要る案内（資料では決まらない値・安全チェックの注意など）は回答の本文の直下に、
+              回答ごとに 1 つの枠で出す（#2096。messaging.md §3.4.3。#5183）。 */}
+          {finished ? (
+            <AnswerNotices diagnostics={answerDiagnostics} savedMessage={passageSource} extra={[guardrailItem]} />
           ) : null}
         </>
       )}
-      {guardrailWarnings.length > 0 ? (
-        <Banner severity="warning">
-          <span className="font-medium">{t("chat.guardrail")}: </span>
-          {guardrailWarnings.join(" / ")}
-        </Banner>
-      ) : null}
+      {/* 回答の本文が無いとき（停止・失敗・待ち）の安全チェックの注意は、ここに 1 つだけ出す。 */}
+      {guardrailItem && !(showsAnswerNotices && finished) ? <CombinedBanner items={[guardrailItem]} /> : null}
       {citations.length > 0 ||
       withheldCount > 0 ||
       (finished && (traceId || answerDiagnostics || progress || notice)) ? (

@@ -73,10 +73,12 @@ test("permission editor keeps the role list when the profile catalog fails", () 
   assert.match(nl2sqlPermissionsSource, /loadWarning: t\("security\.roles\.profileAccessLoadWarning"\)/u);
   assert.match(permissionsPageSource, /\.catch\(\(cause: unknown\) => \{\s*if \(isAbortError\(cause\)\) throw cause;/u);
   assert.match(permissionsPageSource, /warning: formatMessage\(target\.messages\.loadWarning, \{ message \}\)/u);
+  // 対象ごとの読み込みの警告は、画面の 1 つの枠（CombinedBanner）の項目にする（#5211）。
   assert.match(
     permissionsPageSource,
-    /<Banner key=\{target\.key\} severity="warning">\s*\{targetLoadWarnings\[target\.key\]\}\s*<\/Banner>/u
+    /\{ id: `target-\$\{target\.key\}`, severity: "warning" as const, children: targetLoadWarnings\[target\.key\] \}/u
   );
+  assert.match(permissionsPageSource, /<CombinedBanner items=\{loadItems\} \/>/u);
 });
 
 test("permission editor saves profile access and supports bulk selection", () => {
