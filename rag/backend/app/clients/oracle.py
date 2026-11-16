@@ -52,6 +52,7 @@ from rag_parser_core.xml_tree_json import query_citation_keys
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
+    db_call_label,
     lobs_as_values_enabled,
     read_rows_per_round_trip,
     rows_per_round_trip,
@@ -1286,11 +1287,13 @@ class OracleClient:
         """命中した成果物から、親の出典復元用または前後補完用の原文を読む。"""
         if max_chunks_per_group <= 0 or not anchors:
             return []
-        return await self._context_group_siblings_with_oracle(
-            anchors,
-            max_chunks_per_group=max_chunks_per_group,
-            neighbor_child_count=neighbor_child_count,
-        )
+        # SQL の種類ごとの回数・時間の label(#5184)。
+        with db_call_label("context_siblings"):
+            return await self._context_group_siblings_with_oracle(
+                anchors,
+                max_chunks_per_group=max_chunks_per_group,
+                neighbor_child_count=neighbor_child_count,
+            )
 
     async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
         """検索と同じ条件(KB・分類・文書名など)の文書に保存済みの大分類を DISTINCT で返す。
@@ -7966,22 +7969,24 @@ class OracleClient:
             NativeHybridUnavailable,
         )
 
-        rows = await self._fetch_all(
-            """
-            SELECT i.index_name FROM user_indexes i
-            WHERE i.index_name = :native_index AND i.index_type = 'DOMAIN'
-              AND i.status = 'VALID'
-              AND NVL(i.domidx_status, 'VALID') = 'VALID'
-              AND NVL(i.domidx_opstatus, 'VALID') = 'VALID'
-              AND EXISTS (SELECT 1 FROM user_objects t
-                          WHERE t.object_name = 'RAG_CHUNKS_HYBRID_SYNC'
-                            AND t.object_type = 'TRIGGER' AND t.status = 'VALID')
-              AND EXISTS (SELECT 1 FROM user_triggers t
-                          WHERE t.trigger_name = 'RAG_CHUNKS_HYBRID_SYNC'
-                            AND t.status = 'ENABLED')
-            """,
-            {"native_index": NATIVE_HYBRID_INDEX},
-        )
+        # SQL の種類ごとの回数・時間の label(#5184)。
+        with db_call_label("native_ready"):
+            rows = await self._fetch_all(
+                """
+                SELECT i.index_name FROM user_indexes i
+                WHERE i.index_name = :native_index AND i.index_type = 'DOMAIN'
+                  AND i.status = 'VALID'
+                  AND NVL(i.domidx_status, 'VALID') = 'VALID'
+                  AND NVL(i.domidx_opstatus, 'VALID') = 'VALID'
+                  AND EXISTS (SELECT 1 FROM user_objects t
+                              WHERE t.object_name = 'RAG_CHUNKS_HYBRID_SYNC'
+                                AND t.object_type = 'TRIGGER' AND t.status = 'VALID')
+                  AND EXISTS (SELECT 1 FROM user_triggers t
+                              WHERE t.trigger_name = 'RAG_CHUNKS_HYBRID_SYNC'
+                                AND t.status = 'ENABLED')
+                """,
+                {"native_index": NATIVE_HYBRID_INDEX},
+            )
         if not rows:
             raise NativeHybridUnavailable(
                 "Oracle原生hybrid索引が未準備です。システムテーブルの更新と索引の同期を確認してください。"
@@ -8137,6 +8142,11 @@ class OracleClient:
         全行が許可された chunk set は件数だけで分かるので、chunk ID を読まない(範囲が数万件のとき
         ID の転送だけで数十秒かかる)。ページ・行単位の制限がある集合と、集合の無い行だけ ID を読む。
         """
+        with db_call_label("native_scope"):
+            return await self._read_native_scope(filters)
+
+    async def _read_native_scope(self, filters: dict[str, str]) -> _NativeScope | None:
+        """``_resolve_native_scope`` の本体。"""
         where, binds = _oracle_retrieval_where(filters)
         allowed = await self._fetch_all(
             "SELECT c.native_scope_id, COUNT(*) AS allowed_count, "
@@ -8241,14 +8251,15 @@ class OracleClient:
             return False
         where, binds = _oracle_retrieval_where(filters)
         try:
-            stale = await self._fetch_all(
-                f"""SELECT s.scope_id FROM JSON_TABLE(:native_checked_scope_ids, '$[*]'
-                    COLUMNS (scope_id NUMBER PATH '$')) s
-                WHERE NOT EXISTS (
-                    SELECT 1 {_NATIVE_SCOPE_JOINS}
-                    WHERE {where} AND c.native_scope_id = s.scope_id)""",
-                {**binds, "native_checked_scope_ids": json.dumps(list(scope.scope_ids))},
-            )
+            with db_call_label("scope_stale"):
+                stale = await self._fetch_all(
+                    f"""SELECT s.scope_id FROM JSON_TABLE(:native_checked_scope_ids, '$[*]'
+                        COLUMNS (scope_id NUMBER PATH '$')) s
+                    WHERE NOT EXISTS (
+                        SELECT 1 {_NATIVE_SCOPE_JOINS}
+                        WHERE {where} AND c.native_scope_id = s.scope_id)""",
+                    {**binds, "native_checked_scope_ids": json.dumps(list(scope.scope_ids))},
+                )
         except Exception as exc:
             logger.warning("native_scope_check_failed", extra=oracle_error_log_fields(exc))
             return False
@@ -8303,7 +8314,7 @@ class OracleClient:
             statement, scope_binds = _native_exact_vector_statement(
                 where=where, scope=scope, top_k=top_k
             )
-            with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
+            with read_rows_per_round_trip(_SEARCH_FETCH_ROWS), db_call_label("vector_exact"):
                 return await self._fetch_all(
                     statement,
                     {**binds, **scope_binds, "native_embedding": _to_vector_bind(vector)},
@@ -8434,10 +8445,13 @@ class OracleClient:
                 ORDER BY n.position
             """
         semaphore = asyncio.Semaphore(NATIVE_FILTER_CONCURRENCY)
+        # SQL の種類の label(#5184)。batch ごとの SQL を 1 回ずつ数える(回数 = 読んだ batch の数)。
+        label = {"keyword": "keyword", "vector": "vector_native"}.get(channel, "hybrid_native")
 
         async def read_batch(spec: str) -> list[dict[str, object]]:
             async with semaphore:
-                return await self._fetch_all(statement, {**native_binds, "native_spec": spec})
+                with db_call_label(label):
+                    return await self._fetch_all(statement, {**native_binds, "native_spec": spec})
 
         async def read_all(batch_specs: list[str]) -> list[list[dict[str, object]]]:
             if len(batch_specs) == 1:

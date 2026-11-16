@@ -64,6 +64,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, bind_text_query_keywords
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
+    db_call_label,
     read_lobs_as_values,
 )
 from app.config import (
@@ -955,7 +956,7 @@ class AnswerEngine:
             bind_dependencies(dependencies),
             prompt_overrides(overrides or {}),
             bind_step_listener(notify_step if step_callback is not None else None),
-            bind_step_metrics(db_stats.snapshot if db_stats is not None else None),
+            bind_step_metrics(db_stats.step_snapshot if db_stats is not None else None),
         ):
             return answer_question_result(
                 request.query,
@@ -1363,17 +1364,18 @@ class AnswerEngine:
                             "起点の融合スコア": fused,
                         }
                     )
-                references = await self._reference_expansion(
-                    request,
-                    state,
-                    anchors,
-                    existing=source_ids,
-                    question=(queries[0], embeddings[queries[0]])
-                    if queries[0] in embeddings
-                    else None,
-                    scores=fused,
-                    receipt=receipt,
-                )
+                with db_call_label("reference"):
+                    references = await self._reference_expansion(
+                        request,
+                        state,
+                        anchors,
+                        existing=source_ids,
+                        question=(queries[0], embeddings[queries[0]])
+                        if queries[0] in embeddings
+                        else None,
+                        scores=fused,
+                        receipt=receipt,
+                    )
                 if observation is not None:
                     observation.response(
                         lambda: {
@@ -1422,7 +1424,8 @@ class AnswerEngine:
                             "最大追加 Chunk 数": self._settings.rag_entity_expansion_max_chunks,
                         }
                     )
-                entity_chunks = await self._entity_expansion(request, state, anchors)
+                with db_call_label("entity"):
+                    entity_chunks = await self._entity_expansion(request, state, anchors)
                 _expansion_stage_outcome(
                     observation,
                     chunks=entity_chunks,
@@ -1473,12 +1476,13 @@ class AnswerEngine:
                             "最大追加 Chunk 数": self._settings.rag_graph_expansion_max_chunks,
                         }
                     )
-                graph_chunks = await self._graph_expansion(
-                    request,
-                    state,
-                    anchors,
-                    exclude=graph_exclude,
-                )
+                with db_call_label("graph"):
+                    graph_chunks = await self._graph_expansion(
+                        request,
+                        state,
+                        anchors,
+                        exclude=graph_exclude,
+                    )
                 _expansion_stage_outcome(
                     observation,
                     chunks=graph_chunks,
@@ -1822,7 +1826,11 @@ class AnswerEngine:
                         "融合スコア": dict(fused),
                     }
                 )
-            result = await self._resolve_original_anchors(state, anchors, fused, filters=filters)
+            # SQL の種類ごとの回数・時間の label(#5184)。
+            with db_call_label("original_anchor"):
+                result = await self._resolve_original_anchors(
+                    state, anchors, fused, filters=filters
+                )
             if observation is not None:
                 observation.response(
                     lambda: {
@@ -4130,6 +4138,26 @@ def _answer_use(child: Mapping[str, Any]) -> str | None:
     return value if value in ANSWER_USES else None
 
 
+def _step_db_labels(value: object) -> dict[str, dict[str, int | float]]:
+    """工程の記録の ``db_by_label``(label → 回数・秒)を、数値だけの形にそろえる(#5184)。"""
+    if not isinstance(value, Mapping):
+        return {}
+    labels: dict[str, dict[str, int | float]] = {}
+    for name, totals in value.items():
+        if not isinstance(name, str) or not isinstance(totals, Mapping):
+            continue
+        count, seconds = totals.get("count"), totals.get("seconds")
+        if (
+            isinstance(count, int)
+            and not isinstance(count, bool)
+            and count > 0
+            and isinstance(seconds, int | float)
+            and not isinstance(seconds, bool)
+        ):
+            labels[name] = {"count": count, "seconds": seconds}
+    return labels
+
+
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
     tree: list[dict[str, Any]] = []
@@ -4274,6 +4302,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                 for key, value in step.items()
                 if key in _STEP_DB_METRIC_KEYS and isinstance(value, int | float)
             },
+            # SQL の種類(label)ごとの回数・秒(#5184)。SQL の本文・bind は持たない。
+            **(
+                {"db_by_label": labels}
+                if (labels := _step_db_labels(step.get("db_by_label")))
+                else {}
+            ),
             # LLM の token の数（入力・出力・推論）と呼び出しの秒の和(#1516)。
             **(
                 {"llm_usage": dict(step["llm_usage"])}
