@@ -48,10 +48,75 @@ END;
 """.strip()
 
 
+CHUNK_EMBEDDINGS_TABLE = "RAG_CHUNK_EMBEDDINGS"
+EMBEDDING_HYBRID_TRIGGER = "RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC"
+
+
+def hybrid_payload_sql(text_sql: str, embedding_sql: str) -> str:
+    """原生索引に入れる JSON(本文と埋め込み)。埋め込みが NULL なら本文だけになる。"""
+    return (
+        f"JSON_OBJECT('text' VALUE {text_sql},\n"
+        f"        'embedding' VALUE JSON(VECTOR_SERIALIZE({embedding_sql} RETURNING CLOB))\n"
+        "        ABSENT ON NULL RETURNING JSON)"
+    )
+
+
+def chunk_embedding_trigger_sql() -> str:
+    """埋め込みは別表にある(#5241)。chunk の行の作成・本文の変更では、別表の埋め込みを読んで
+    JSON を作り、埋め込みの作成・変更では、別表の trigger が chunk の行の JSON を作り直す。
+
+    chunk の行の trigger は本文の変更のときだけ別表を読む(別表の trigger が JSON だけを更新する
+    ときは読まない。読むと ORA-04091 になる)。別表の行を直接消したときは、呼出し側が JSON を
+    作り直す(cascade の削除の中では chunk の表を読めない)。
+    """
+    payload = hybrid_payload_sql(":NEW.search_text", "e.embedding")
+    refreshed = hybrid_payload_sql("c.search_text", ":NEW.embedding")
+    return f"""
+BEGIN
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER {NATIVE_HYBRID_TRIGGER}
+BEFORE INSERT OR UPDATE ON rag_chunks FOR EACH ROW
+BEGIN
+    IF INSERTING OR UPDATING('SEARCH_TEXT') THEN
+        SELECT {payload}
+        INTO :NEW.hybrid_payload
+        FROM dual LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = :NEW.chunk_id;
+    END IF;
+END;~';
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER {EMBEDDING_HYBRID_TRIGGER}
+AFTER INSERT OR UPDATE ON rag_chunk_embeddings FOR EACH ROW
+BEGIN
+    UPDATE rag_chunks c SET c.hybrid_payload = {refreshed}
+    WHERE c.chunk_id = :NEW.chunk_id;
+END;~';
+END;
+/
+""".strip()
+
+
+def native_hybrid_preference_sql() -> str:
+    return f"""
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM ctx_user_preferences
+    WHERE pre_name = '{NATIVE_HYBRID_PREFERENCE}';
+    IF v_count = 0 THEN
+        DBMS_VECTOR_CHAIN.CREATE_PREFERENCE(
+            '{NATIVE_HYBRID_PREFERENCE}', DBMS_VECTOR_CHAIN.VECTORIZER,
+            JSON('{{"vector_idxtype":"ivf","distance":"COSINE","paths":[{{"type":"VECTOR","path_list":["$.embedding"]}}]}}')
+        );
+    END IF;
+END;
+/
+""".strip()
+
+
 def native_hybrid_objects_sql() -> str:
     """管理対象のpreference・同期trigger・原生索引を作る。"""
     return f"""
-{_native_hybrid_setup_sql(sync_changed_columns=True)}
+{native_hybrid_preference_sql()}
+
+{chunk_embedding_trigger_sql()}
 
 CREATE HYBRID VECTOR INDEX {NATIVE_HYBRID_INDEX}
     ON rag_chunks (hybrid_payload)
@@ -165,13 +230,19 @@ END;
 """.strip()
 
 _NATIVE_SCOPE_INDEX_SQL = "CREATE INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX ON rag_chunks(native_scope_id)"
+# 現行の定義(#5241)。距離順の読み(vector_exact)が範囲の chunk を表の行を読まずに選べるよう、
+# 範囲の中の番号・ID・文書を含める。
+NATIVE_SCOPE_COVER_INDEX_SQL = (
+    "CREATE INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX"
+    " ON rag_chunks(native_scope_id, chunk_index, chunk_id, document_id)"
+)
 
 
 def native_hybrid_scope_objects_sql() -> str:
     """新規作成は schema manifest が検査できる通常の DDL とする。"""
     return (
         f"{_NATIVE_SCOPE_TABLE_SQL};\n\n{_NATIVE_SCOPE_COLUMN_SQL}\n\n"
-        f"{_NATIVE_SCOPE_INDEX_SQL};\n\n{_NATIVE_SCOPE_TRIGGER_SQL}"
+        f"{NATIVE_SCOPE_COVER_INDEX_SQL};\n\n{_NATIVE_SCOPE_TRIGGER_SQL}"
     )
 
 

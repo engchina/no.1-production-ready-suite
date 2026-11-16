@@ -4628,3 +4628,116 @@ WHERE kind = 'approved_faq'
 -- migration: 20261115_5107_faq_answer_prompt
 DELETE FROM RAG_ANSWER_PROMPTS
 WHERE PROMPT_KEY = 'faq_answer.system';
+
+-- migration: 20261117_5241_chunk_embeddings
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_CHUNK_EMBEDDINGS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_chunk_embeddings ( '
+            || 'chunk_id  VARCHAR2(128) PRIMARY KEY, '
+            || 'embedding VECTOR(1536, FLOAT32) NOT NULL, '
+            || 'CONSTRAINT rag_chunk_embeddings_chunk_fk '
+            || 'FOREIGN KEY (chunk_id) REFERENCES rag_chunks (chunk_id) ON DELETE CASCADE '
+            || ') NOCOMPRESS';
+    END IF;
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'EMBEDDING';
+    IF v_count = 1 THEN
+        SELECT COUNT(*) INTO v_count FROM user_triggers
+        WHERE trigger_name = 'RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC';
+        IF v_count = 1 THEN
+            EXECUTE IMMEDIATE 'ALTER TRIGGER RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC DISABLE';
+        END IF;
+        EXECUTE IMMEDIATE q'~INSERT INTO rag_chunk_embeddings (chunk_id, embedding)
+            SELECT c.chunk_id, c.embedding FROM rag_chunks c
+            WHERE c.embedding IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM rag_chunk_embeddings e WHERE e.chunk_id = c.chunk_id)~';
+        COMMIT;
+        SELECT COUNT(*) INTO v_count FROM user_indexes
+        WHERE index_name = 'RAG_CHUNKS_EMBEDDING_HNSW_IDX' AND table_name = 'RAG_CHUNKS';
+        IF v_count = 1 THEN
+            EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_EMBEDDING_HNSW_IDX';
+        END IF;
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks DROP COLUMN embedding';
+    END IF;
+END;
+/
+
+BEGIN
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC
+BEFORE INSERT OR UPDATE ON rag_chunks FOR EACH ROW
+BEGIN
+    IF INSERTING OR UPDATING('SEARCH_TEXT') THEN
+        SELECT JSON_OBJECT('text' VALUE :NEW.search_text,
+        'embedding' VALUE JSON(VECTOR_SERIALIZE(e.embedding RETURNING CLOB))
+        ABSENT ON NULL RETURNING JSON)
+        INTO :NEW.hybrid_payload
+        FROM dual LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = :NEW.chunk_id;
+    END IF;
+END;~';
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC
+AFTER INSERT OR UPDATE ON rag_chunk_embeddings FOR EACH ROW
+BEGIN
+    UPDATE rag_chunks c SET c.hybrid_payload = JSON_OBJECT('text' VALUE c.search_text,
+        'embedding' VALUE JSON(VECTOR_SERIALIZE(:NEW.embedding RETURNING CLOB))
+        ABSENT ON NULL RETURNING JSON)
+    WHERE c.chunk_id = :NEW.chunk_id;
+END;~';
+END;
+/
+
+BEGIN
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_NATIVE_MAINT
+FOR DELETE OR UPDATE ON rag_chunks
+COMPOUND TRIGGER
+    v_dirty BOOLEAN := FALSE;
+    BEFORE EACH ROW IS
+    BEGIN
+        IF NOT v_dirty
+            AND (DELETING OR UPDATING('SEARCH_TEXT') OR UPDATING('HYBRID_PAYLOAD'))
+            AND JSON_EXISTS(:OLD.hybrid_payload, '$.embedding') THEN
+            v_dirty := TRUE;
+        END IF;
+    END BEFORE EACH ROW;
+    AFTER STATEMENT IS
+    BEGIN
+        IF v_dirty THEN
+            INSERT INTO RAG_NATIVE_INDEX_EVENTS (event_id) VALUES (RAWTOHEX(SYS_GUID()));
+        END IF;
+    END AFTER STATEMENT;
+END;~';
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_ind_columns
+    WHERE index_name = 'RAG_CHUNKS_DOCUMENT_IDX';
+    IF v_count NOT IN (0, 5) THEN
+        EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_DOCUMENT_IDX';
+        v_count := 0;
+    END IF;
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_chunks_document_idx     ON rag_chunks (document_id, chunk_index, chunk_set_id, native_scope_id, chunk_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_ind_columns
+    WHERE index_name = 'RAG_CHUNKS_NATIVE_SCOPE_IDX';
+    IF v_count NOT IN (0, 4) THEN
+        EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX';
+        v_count := 0;
+    END IF;
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX ON rag_chunks(native_scope_id, chunk_index, chunk_id, document_id)';
+    END IF;
+END;
+/

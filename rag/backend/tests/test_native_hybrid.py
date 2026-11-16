@@ -559,7 +559,9 @@ class ExactScopeOracle(OracleClient):
         if "FROM user_indexes" in sql:
             return [{"index_name": "RAG_CHUNKS_HYBRID_IDX"}]
         if "allowed_count" in sql:
-            assert "c.embedding IS NOT NULL" in sql
+            # 埋め込みの有無は別表で数える(#5241)。
+            assert "COUNT(e.chunk_id) AS vector_count" in sql
+            assert "LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id" in sql
             return [{"native_scope_id": 7, "allowed_count": 5, "vector_count": self.vector_chunks}]
         if "COUNT(*) AS chunk_count" in sql:
             return [{"native_scope_id": 7, "chunk_count": 5}]
@@ -632,7 +634,9 @@ async def test_vector_channel_reads_scope_rows_in_distance_order_without_search(
     assert "candidate.native_scope_id IN (" in sql
     assert sql.index("FETCH EXACT FIRST 3 ROWS ONLY") < sql.index(":filter_document_id")
     assert "is_active = 1" in sql and "d.status = 'INDEXED'" in sql
-    assert "candidate.embedding IS NOT NULL" in sql
+    # 埋め込みは別表の行だけを読む(#5241)。
+    assert "JOIN rag_chunk_embeddings e ON e.chunk_id = candidate.chunk_id" in sql
+    assert "VECTOR_DISTANCE(e.embedding, :native_embedding, COSINE)" in sql
     assert "DR$" not in sql
     assert client.exact_binds[0]["filter_document_id"] == "doc-a"
     assert isinstance(rows, NativeSearchRows)

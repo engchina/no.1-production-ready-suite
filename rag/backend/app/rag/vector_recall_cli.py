@@ -132,7 +132,7 @@ def percentile(values: Sequence[float], q: float) -> float | None:
 
 
 _FIRST_INNER_SELECT = re.compile(r"^\s*SELECT \* FROM \(\s*SELECT\b")
-FORCE_VECTOR_INDEX_HINT = f"/*+ VECTOR_INDEX_TRANSFORM(c {INDEX_NAME.lower()}) */"
+FORCE_VECTOR_INDEX_HINT = f"/*+ VECTOR_INDEX_TRANSFORM(e {INDEX_NAME.lower()}) */"
 
 
 def force_vector_index_hint(statement: str, *, filter_type: str | None = None) -> str:
@@ -145,7 +145,7 @@ def force_vector_index_hint(statement: str, *, filter_type: str | None = None) -
     hint = (
         FORCE_VECTOR_INDEX_HINT
         if filter_type is None
-        else f"/*+ VECTOR_INDEX_TRANSFORM(c {INDEX_NAME.lower()} {filter_type}) */"
+        else f"/*+ VECTOR_INDEX_TRANSFORM(e {INDEX_NAME.lower()} {filter_type}) */"
     )
     hinted, count = _FIRST_INNER_SELECT.subn(f"SELECT * FROM ( SELECT {hint}", statement, count=1)
     if count != 1:
@@ -556,9 +556,7 @@ async def index_state(client: OracleClient) -> dict[str, object]:
         "AND index_name = :index_name",
         {"index_name": INDEX_NAME},
     )
-    counts = await client._fetch_all(
-        "SELECT COUNT(*) AS chunk_rows FROM rag_chunks WHERE embedding IS NOT NULL", {}
-    )
+    counts = await client._fetch_all("SELECT COUNT(*) AS chunk_rows FROM rag_chunk_embeddings", {})
     state: dict[str, object] = {"chunk_rows": counts[0]["chunk_rows"] if counts else None}
     state.update({key: value for key, value in (rows[0] if rows else {}).items()})
     return state

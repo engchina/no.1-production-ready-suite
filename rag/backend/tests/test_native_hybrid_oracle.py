@@ -244,7 +244,7 @@ async def _empty_native_scope_diagnostics(
         """SELECT
             (SELECT COUNT(*) FROM DR$RAG_CHUNKS_HYBRID_IDX$VR) AS stored_vectors,
             (SELECT COUNT(*) FROM RAG_CHUNKS_HYBRID_IDX$VECTORS) AS visible_vectors,
-            (SELECT COUNT(*) FROM rag_chunks WHERE embedding IS NOT NULL) AS source_vectors
+            (SELECT COUNT(*) FROM rag_chunk_embeddings) AS source_vectors
         FROM dual"""
     )
     return {
@@ -867,12 +867,16 @@ async def test_native_cosine_threshold_preserves_independent_text_and_actual_rrf
 
     def update_vectors(connection: OracleConnectionProtocol) -> None:
         for index, vector in enumerate(vectors):
+            if vector is None:
+                continue
+            # 埋め込みは別表(#5241)。別表の trigger が原生索引の JSON に足す。
             _execute(
                 connection,
-                "UPDATE rag_chunks SET embedding=:embedding "
+                "INSERT INTO rag_chunk_embeddings (chunk_id, embedding) "
+                "SELECT chunk_id, :embedding FROM rag_chunks "
                 "WHERE document_id=:document_id AND chunk_index=:chunk_index",
                 {
-                    "embedding": array("f", vector) if vector is not None else None,
+                    "embedding": array("f", vector),
                     "document_id": document_id,
                     "chunk_index": index,
                 },

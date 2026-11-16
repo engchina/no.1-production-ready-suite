@@ -142,6 +142,11 @@ def writer(
     return client, pool, document
 
 
+def chunk_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """chunk の表に入れる行(埋め込みは別表に入れる。#5241)。"""
+    return [{key: value for key, value in row.items() if key != "embedding"} for row in rows]
+
+
 def writes(pool: FakeOraclePool) -> list[Any]:
     return [
         c
@@ -179,7 +184,7 @@ async def test_actual_writer_checks_same_saved_source_before_first_write(
             document.id, extraction, chunks, [None] * len(chunks), chunk_set_id="synthetic-set"
         )
         assert len(saved) == len(chunks)
-        assert pool.connection.many_calls[0].rows == expected
+        assert pool.connection.many_calls[0].rows == chunk_rows(expected)
         assert pool.connection.commits == 1
         assert pool.connection.rollbacks == 0
 
@@ -214,7 +219,7 @@ async def test_native_ocr_and_html_without_map_are_noop(
     client, pool, doc = writer(monkeypatch)
     expected = client._chunk_insert_rows(doc.id, doc, chunks, [None] * len(chunks))
     await client._save_index_with_oracle(doc.id, extraction, chunks, [None] * len(chunks))
-    assert pool.connection.many_calls[0].rows == expected
+    assert pool.connection.many_calls[0].rows == chunk_rows(expected)
     assert chunks == before
 
 
@@ -236,7 +241,7 @@ async def test_partial_chunks_and_same_text_distinct_sources_stay_valid(
     expected = client._chunk_insert_rows(doc.id, doc, chunks, [None] * len(chunks))
     await client._save_index_with_oracle(doc.id, extraction, chunks, [None] * len(chunks))
     assert chunks == before
-    assert pool.connection.many_calls[0].rows == expected
+    assert pool.connection.many_calls[0].rows == chunk_rows(expected)
 
 
 async def test_source_is_resolved_once_for_multiple_partial_chunks(
@@ -359,7 +364,7 @@ async def test_existing_layout_small_to_big_without_element_map_stays_valid(
     client, pool, doc = writer(monkeypatch)
     expected = client._chunk_insert_rows(doc.id, doc, chunks, [None] * len(chunks))
     await client._save_index_with_oracle(doc.id, extraction, chunks, [None] * len(chunks))
-    assert pool.connection.many_calls[0].rows == expected
+    assert pool.connection.many_calls[0].rows == chunk_rows(expected)
 
 
 @pytest.mark.parametrize("strategy", CHUNKING_STRATEGIES)
@@ -404,7 +409,7 @@ async def test_native_table_and_image_supplement_remain_separate(
     client, pool, doc = writer(monkeypatch)
     expected = client._chunk_insert_rows(doc.id, doc, chunks, [None] * len(chunks))
     await client._save_index_with_oracle(doc.id, extraction, chunks, [None] * len(chunks))
-    assert pool.connection.many_calls[0].rows == expected
+    assert pool.connection.many_calls[0].rows == chunk_rows(expected)
 
 
 async def test_existing_structure_parent_image_map_stays_valid(
@@ -418,4 +423,4 @@ async def test_existing_structure_parent_image_map_stays_valid(
     client, pool, doc = writer(monkeypatch)
     expected = client._chunk_insert_rows(doc.id, doc, chunks, [None] * len(chunks))
     await client._save_index_with_oracle(doc.id, extraction, chunks, [None] * len(chunks))
-    assert pool.connection.many_calls[0].rows == expected
+    assert pool.connection.many_calls[0].rows == chunk_rows(expected)

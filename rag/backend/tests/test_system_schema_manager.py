@@ -303,6 +303,8 @@ class _FakeCursor:
             self.database.objects[("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER")] = None
         if "CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC" in upper:
             self.database.objects[("RAG_CHUNKS_HYBRID_SYNC", "TRIGGER")] = None
+        if "CREATE OR REPLACE TRIGGER RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC" in upper:
+            self.database.objects[("RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC", "TRIGGER")] = None
         if "DBMS_VECTOR_CHAIN.DROP_PREFERENCE" in upper:
             self.database.objects.pop(("RAG_CHUNKS_HYBRID_PREF", "VECTORIZER_PREFERENCE"), None)
             return
@@ -325,6 +327,8 @@ class _FakeCursor:
             self.database.objects.pop((name, "TABLE"), None)
             if name == "RAG_CHUNKS":
                 self.database.objects.pop(("RAG_CHUNKS_HYBRID_SYNC", "TRIGGER"), None)
+            if name == "RAG_CHUNK_EMBEDDINGS":
+                self.database.objects.pop(("RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC", "TRIGGER"), None)
             self.database.foreign_keys = {
                 key: value
                 for key, value in self.database.foreign_keys.items()
@@ -770,6 +774,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261110_4799_search_answer_profile_runtime_rules",
         "20261115_5107_approved_faq_fields",
         "20261115_5107_faq_answer_prompt",
+        "20261117_5241_chunk_embeddings",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

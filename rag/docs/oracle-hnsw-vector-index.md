@@ -14,13 +14,15 @@
 
 ## 推奨 DDL
 
+埋め込みは chunk の行ではなく細い表 `rag_chunk_embeddings`（`chunk_id`・`embedding`）にある（#5241）。索引の名前は従来の `rag_chunks_embedding_hnsw_idx` のまま、この表に作る。
+
 値は既定の検索精度「高精度」（`accurate`）の推奨ビルドで、システムテーブルの作成（新しい環境・全再作成）の DDL も同じ値で索引を作る（#1990。DDL と契約 `VECTOR_INDEX_CONTRACT` は `app/rag/vector_index_adapter.py` の `default_vector_index_build()` から作る）。ほかの検索精度にするときは、下の「Vector Index アダプター」の表の値に置き換える。
 
 メンテナンス時間帯など、通常のオフライン作成でよい場合:
 
 ```sql
 CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
-ON rag_chunks (embedding)
+ON rag_chunk_embeddings (embedding)
 ORGANIZATION INMEMORY NEIGHBOR GRAPH
 DISTANCE COSINE
 WITH TARGET ACCURACY 98
@@ -36,7 +38,7 @@ PARALLEL 8;
 
 ```sql
 CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
-ON rag_chunks (embedding)
+ON rag_chunk_embeddings (embedding)
 ORGANIZATION INMEMORY NEIGHBOR GRAPH
 DISTANCE COSINE
 WITH TARGET ACCURACY 98
@@ -48,23 +50,7 @@ PARAMETERS (
 ONLINE;
 ```
 
-テナント、ステータス、文書 ID などで絞り込む検索が多い場合は、`INCLUDE` によるカバリング列を評価する:
-
-```sql
-CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
-ON rag_chunks (embedding)
-INCLUDE (tenant_id_hash, document_id)
-ORGANIZATION INMEMORY NEIGHBOR GRAPH
-DISTANCE COSINE
-WITH TARGET ACCURACY 98
-PARAMETERS (
-  TYPE HNSW,
-  NEIGHBORS 48,
-  EFCONSTRUCTION 800
-);
-```
-
-`INCLUDE` はフィルタや列取得時のベース表アクセスを減らせる可能性がある。一方で、Oracle では included columns を持つ HNSW 索引の `ONLINE` 作成は現在サポートされていない。実運用では、実際の検索条件と実行計画で効果を確認してから採用する。
+テナント・文書 ID などの絞り込みの列は `rag_chunks` にあり、埋め込みの表には無いので、`INCLUDE` によるカバリング列は使えない（#5241）。絞り込みは `rag_chunks` と結んで行う。
 
 ## 検索 SQL
 
@@ -72,13 +58,14 @@ PARAMETERS (
 
 ```sql
 SELECT
-  chunk_id,
-  document_id,
-  chunk_text,
-  VECTOR_DISTANCE(embedding, :query_vector, COSINE) AS distance
-FROM rag_chunks
-WHERE tenant_id_hash = :tenant_id_hash
-ORDER BY VECTOR_DISTANCE(embedding, :query_vector, COSINE)
+  c.chunk_id,
+  c.document_id,
+  c.chunk_text,
+  VECTOR_DISTANCE(e.embedding, :query_vector, COSINE) AS distance
+FROM rag_chunks c
+JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id
+WHERE c.tenant_id_hash = :tenant_id_hash
+ORDER BY VECTOR_DISTANCE(e.embedding, :query_vector, COSINE)
 FETCH APPROX FIRST 20 ROWS ONLY WITH TARGET ACCURACY 95;
 ```
 

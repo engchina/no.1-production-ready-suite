@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.clients.oracle import oracle_vector_schema_sql
+from app.clients.oracle import oracle_chunk_embedding_schema_sql
 from app.config import Settings
 from app.rag.oracle_schema import VECTOR_INDEX_CONTRACT, vector_index_reindex_sql
 from app.rag.vector_index_adapter import (
@@ -123,7 +123,7 @@ def test_create_ddl_and_contract_use_default_profile_build() -> None:
         efconstruction=build.efconstruction,
         distance=build.distance,
     ).split("\n", 1)[1]
-    assert reindex_create in oracle_vector_schema_sql()
+    assert reindex_create in oracle_chunk_embedding_schema_sql()
     # 作成の DDL どおりの索引なら、既定の設定で「一致」(再作成は不要)。
     runtime = vector_index_adapter_runtime_settings(
         Settings(), (build.neighbors, build.efconstruction)

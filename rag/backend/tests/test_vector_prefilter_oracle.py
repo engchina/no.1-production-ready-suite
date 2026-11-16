@@ -176,9 +176,10 @@ async def test_vector_search_with_the_index_is_not_starved_by_inactive_chunk_set
         client,
         f"""
         SELECT c.chunk_id FROM rag_chunks c
+        JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id
         JOIN rag_documents d ON d.document_id = c.document_id
         WHERE {where_sql}
-        ORDER BY VECTOR_DISTANCE(c.embedding, :embedding, COSINE), c.chunk_id
+        ORDER BY VECTOR_DISTANCE(e.embedding, :embedding, COSINE), c.chunk_id
         FETCH EXACT FIRST {_TOP_K} ROWS ONLY
         """,
         reference_binds,

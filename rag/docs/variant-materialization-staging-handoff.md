@@ -35,7 +35,7 @@
 1. **Camp B**: 文書↔KB は N:N、chunk は共有(不要に複製しない)、**embedding は OCI Cohere v4 / 1536 グローバル固定**。
    チャンク構成は **同一 1536 空間内**で chunk 集合を増やすだけ。per-KB embedding / per-KB 物理表(Camp A)にしない。
 2. **確定スタック**: OCI Enterprise AI / OCI GenAI Cohere / Oracle AI Database。外部ベクトル DB・別 LLM provider を入れない。
-3. **VECTOR 索引は単一・共有**: `rag_chunks.embedding` の HNSW は 1 本のまま。`chunk_set_id` は**フィルタ列**であって索引を分割しない。
+3. **VECTOR 索引は単一・共有**: `rag_chunk_embeddings.embedding`（#5241 で `rag_chunks` から分けた）の HNSW は 1 本のまま。`chunk_set_id` は**フィルタ列**であって索引を分割しない。
 4. **版管理 DDL は自動変更しない**: スキーマ追加は DDL artifact(下記)へ明示追加し、`requires_reprovision` 扱い。
 5. **2 段階処理**: parse → 人手プレビュー確認 → index。チャンク構成の materialize は **index 段**に入る。同じ extraction recipe だけ parse artifact を共有・再利用する。
 

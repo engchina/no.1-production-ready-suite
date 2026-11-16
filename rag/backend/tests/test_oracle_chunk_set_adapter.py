@@ -322,8 +322,9 @@ async def test_saved_embedding_commit_updates_search_text_and_preserves_original
         # 別 transaction で読むため、commit 前の COUNT だけを成功の証拠にしない。
         counts = await client._fetch_one(
             """
-            SELECT COUNT(*) AS vector_count FROM rag_chunks
-            WHERE chunk_set_id = :chunk_set_id AND embedding IS NOT NULL
+            SELECT COUNT(*) AS vector_count FROM rag_chunks c
+            JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id
+            WHERE c.chunk_set_id = :chunk_set_id
             """,
             {"chunk_set_id": chunk_set_id},
         )

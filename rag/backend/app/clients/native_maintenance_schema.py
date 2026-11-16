@@ -34,7 +34,7 @@ CREATE INDEX RAG_NATIVE_INDEX_EVENTS_TIME ON {EVENTS_TABLE} (created_at, event_i
 """.strip()
 
 
-def native_maintenance_activation_sql() -> str:
+def _maintenance_trigger_sql(dirty_condition: str) -> str:
     return f"""
 BEGIN
     EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER {MAINTENANCE_TRIGGER}
@@ -43,8 +43,7 @@ COMPOUND TRIGGER
     v_dirty BOOLEAN := FALSE;
     BEFORE EACH ROW IS
     BEGIN
-        IF (DELETING OR UPDATING('SEARCH_TEXT') OR UPDATING('EMBEDDING')
-            OR UPDATING('HYBRID_PAYLOAD')) AND :OLD.embedding IS NOT NULL THEN
+        IF {dirty_condition} THEN
             v_dirty := TRUE;
         END IF;
     END BEFORE EACH ROW;
@@ -57,7 +56,10 @@ COMPOUND TRIGGER
 END;~';
 END;
 /
+""".strip()
 
+
+_BOOTSTRAP_SQL = f"""
 MERGE INTO {STATE_TABLE} s
 USING (SELECT '{STATE_KEY}' state_key FROM dual) v ON (s.state_key=v.state_key)
 WHEN NOT MATCHED THEN INSERT (state_key) VALUES (v.state_key);
@@ -69,3 +71,27 @@ WHERE state_key='{STATE_KEY}' AND bootstrap_requested=0;
 UPDATE {STATE_TABLE} SET bootstrap_requested=1
 WHERE state_key='{STATE_KEY}' AND bootstrap_requested=0;
 """.strip()
+
+# 旧 schema(埋め込みが rag_chunks の列)の条件。適用済みの migration の checksum を保つ。
+_LEGACY_DIRTY_CONDITION = """(DELETING OR UPDATING('SEARCH_TEXT') OR UPDATING('EMBEDDING')
+            OR UPDATING('HYBRID_PAYLOAD')) AND :OLD.embedding IS NOT NULL"""
+# 埋め込みは別表にある(#5241)。原生索引の JSON に埋め込みがあった行の削除・JSON の書き換えを
+# 整理の要求にする(初めて埋め込みを入れる書き換えは要求にしない)。別表は cascade の削除で読めない
+# ため JSON を見る。最初の 1 行で決まれば、残りの行の JSON は読まない。
+_DIRTY_CONDITION = """NOT v_dirty
+            AND (DELETING OR UPDATING('SEARCH_TEXT') OR UPDATING('HYBRID_PAYLOAD'))
+            AND JSON_EXISTS(:OLD.hybrid_payload, '$.embedding')"""
+
+
+def native_maintenance_activation_sql() -> str:
+    """旧 schema の migration(``20261102_004``)の SQL。checksum を保つため変えない。"""
+    return f"{_maintenance_trigger_sql(_LEGACY_DIRTY_CONDITION)}\n\n{_BOOTSTRAP_SQL}"
+
+
+def native_maintenance_trigger_sql() -> str:
+    return _maintenance_trigger_sql(_DIRTY_CONDITION)
+
+
+def native_maintenance_current_activation_sql() -> str:
+    """作成の DDL(#5241 の schema)。"""
+    return f"{native_maintenance_trigger_sql()}\n\n{_BOOTSTRAP_SQL}"
