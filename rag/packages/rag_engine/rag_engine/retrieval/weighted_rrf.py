@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import math
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+
+from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key
 
 
 @dataclass(frozen=True)
@@ -38,15 +39,13 @@ def _ratio(left: float, right: float) -> tuple[float, float]:
 
 
 def query_key(query: str) -> str:
-    return "".join(unicodedata.normalize("NFKC", query).casefold().split())
+    """検索文の同一性のキー（`query_identity.dedupe_query_key` と同じ）。"""
+    return dedupe_query_key(query)
 
 
 def unique_queries(queries: Sequence[str]) -> list[str]:
-    selected: dict[str, str] = {}
-    for query in queries:
-        if key := query_key(query):
-            selected.setdefault(key, query.strip())
-    return list(selected.values())
+    """`query_identity.dedupe_queries` の結果を list で返す。"""
+    return list(dedupe_queries(queries))
 
 
 def source_weights(queries: Sequence[str], weights: RrfWeights) -> dict[str, float]:
