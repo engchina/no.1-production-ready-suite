@@ -14,6 +14,7 @@ from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
 
+from rag_engine.resources.deadline import DEFAULT_GENERATION_ROUND_SECONDS
 from rag_engine.retrieval.text_search_tokenizer import (
     DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
     DEFAULT_TEXT_SEARCH_MAX_TOKENS,
@@ -315,6 +316,9 @@ class Settings:
     section_expansion_enabled: bool = True
     section_expansion_max_levels: int = 4
     section_expansion_input_token_percent: int = 50
+    # 生成の 1 回の見積もり（秒。#5184）。章節の拡張は、次の段を読む前にこの値と回答の確定の分を生成に残す。
+    # backend が .env の RAG_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS を RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS で渡す。
+    answer_generation_round_estimate_seconds: float = DEFAULT_GENERATION_ROUND_SECONDS
     # 回答のモデルの入力の上限（tokens。#1437）。backend が共通のモデル設定の登録モデルの値を
     # `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で渡す（platform の enterprise_ai_max_input_tokens。既定 128000）。
     # 章節の拡張の根拠の入力の上限をこの割合で決める。
@@ -550,6 +554,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         section_expansion_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXPANSION", True),
         section_expansion_max_levels=max(0, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS", 4)),
         section_expansion_input_token_percent=max(1, min(100, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT", 50))),
+        answer_generation_round_estimate_seconds=max(
+            0.0, _env_float(env, "RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS", DEFAULT_GENERATION_ROUND_SECONDS)
+        ),
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),

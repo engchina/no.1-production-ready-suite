@@ -86,6 +86,10 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "section_expansion_input_token_percent": (
             resolved_settings.rag_section_expansion_input_token_percent
         ),
+        # 章節の拡張が次の段を読む前に生成に残す、生成の 1 回の見積もり(#5184。読む段の数が変わる)。
+        "answer_generation_round_estimate_seconds": (
+            resolved_settings.rag_answer_generation_round_estimate_seconds
+        ),
         # 生成に渡す根拠の原文の文字予算(#3776)。
         "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。

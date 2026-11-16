@@ -251,23 +251,49 @@ def test_answer_deadline_also_limits_time():
     assert result.stop_reason == sections.STOP_TIME_LIMIT and stub.read_calls == []
 
 
+def _climbs(settings: SimpleNamespace, remaining: float) -> bool:
+    """回答の期限の残りが ``remaining`` 秒のとき、1 段目（所有の章節）を読むか。"""
+    stub = SectionStub()
+    result = _expand(
+        _seed_context("c31a"),
+        settings,
+        stub,
+        started_at=0.0,
+        clock=lambda: 10.0,
+        deadline_remaining=lambda: remaining,
+    )
+    climbs = stub.read_calls != []
+    if not climbs:
+        assert result.stop_reason == sections.STOP_TIME_LIMIT and result.levels == 0
+    return climbs
+
+
 def test_answer_deadline_leaves_one_generation_round():
-    """回答の期限の残りが、1 段の分と生成の分（1 組の見積もり + 確定の分。#1516）より少なければ上がらない。"""
-    reserve = sections.GENERATION_RESERVE_SECONDS
-    assert reserve == 240.0 + 30.0
-    for remaining, climbs in ((reserve + sections.DEFAULT_LEVEL_SECONDS - 1.0, False), (reserve + sections.DEFAULT_LEVEL_SECONDS, True)):
-        stub = SectionStub()
-        result = _expand(
-            _seed_context("c31a"),
-            _settings(),
-            stub,
-            started_at=0.0,
-            clock=lambda: 10.0,
-            deadline_remaining=lambda remaining=remaining: remaining,
-        )
-        assert (stub.read_calls != []) is climbs, remaining
-        if not climbs:
-            assert result.stop_reason == sections.STOP_TIME_LIMIT
+    """回答の期限の残りが、1 段の分（20 秒）と生成の分（1 回の見積もり + 確定の 30 秒）より少なければ上がらない。
+
+    生成の 1 回の見積もりの既定は 120 秒（#5184）なので、境界は 20 + 120 + 30 = 170 秒。
+    """
+    settings = _settings()
+    assert sections.SectionExpansionLimits.from_settings(settings).generation_reserve_seconds == 120.0 + 30.0
+    assert sections.DEFAULT_LEVEL_SECONDS == 20.0
+    assert not _climbs(settings, 169.0)
+    assert _climbs(settings, 170.0)
+    # 総期限 600 秒で文書検索に 424 秒・327 秒かかった後の残り（176 秒・273 秒）でも、1 段目を読む。
+    # 以前の固定の見積もり 240 秒（境界 290 秒）では、どちらも読まずに止まった。
+    assert _climbs(settings, 600.0 - 424.0)
+    assert _climbs(settings, 600.0 - 327.0)
+
+
+def test_generation_round_estimate_comes_from_settings():
+    """生成に残す分は設定の answer_generation_round_estimate_seconds で決まる（#5184。固定の値を使わない）。"""
+    slow = _settings(answer_generation_round_estimate_seconds=240.0)
+    assert sections.SectionExpansionLimits.from_settings(slow).generation_reserve_seconds == 240.0 + 30.0
+    assert not _climbs(slow, 289.0)
+    assert _climbs(slow, 290.0)
+    assert not _climbs(slow, 600.0 - 327.0)
+    fast = _settings(answer_generation_round_estimate_seconds=60.0)
+    assert not _climbs(fast, 109.0)
+    assert _climbs(fast, 110.0)
 
 
 def test_disabled_setting_does_nothing():
@@ -369,6 +395,14 @@ def test_engine_settings_read_section_expansion_environment():
     ) == (False, 2, 30)
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.section_expansion_enabled and defaults.section_expansion_max_levels == 4
+
+
+def test_engine_settings_read_generation_round_estimate_environment():
+    """生成の 1 回の見積もりは backend が RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS で渡す（#5184。既定 120）。"""
+    assert get_settings(environ={}, dotenv_path=None).answer_generation_round_estimate_seconds == 120.0
+    settings = get_settings(environ={"RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS": "200"}, dotenv_path=None)
+    assert settings.answer_generation_round_estimate_seconds == 200.0
+    assert sections.SectionExpansionLimits.from_settings(settings).generation_reserve_seconds == 200.0 + 30.0
 
 
 OTHER_DOC = "doc-2"
