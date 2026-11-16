@@ -45,7 +45,7 @@ from rag_engine.resources.runtime import saved_prompt_overrides
 from rag_engine.resources.tracing import CallObservation, observe_call
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.evidence_selection import ARTICLE_UNIT_KEY
-from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, merge_expansions
+from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON
 from rag_engine.retrieval.search_stages import (
     CANDIDATE_DIVERSITY_STAGE,
     CONTEXT_SIBLINGS_STAGE,
@@ -181,7 +181,8 @@ _REFERENCE_DIAGNOSTICS_SEARCHES = 4
 _GRAPH_DIAGNOSTICS_ENTITIES = 10
 # 検索拡張の工程の記録の「最終採用」(#5162)。
 _EXPANSION_ADOPTION_NOTE = "rerank にかけず、rerank と起点の選択の後に最後の根拠へ合わせます。"
-# 検索拡張で最後の根拠の並びに足した根拠の引用の印(#5162)。MCP は evidence_limit に数えない。
+# 検索拡張・補いの検索で最後の根拠の並びに足した根拠の引用の印(#5162・#5173)。MCP は
+# evidence_limit に数えない。
 EVIDENCE_EXPANSION_KEY = "evidence_expansion"
 
 # 回答の記録の工程(execution_steps)に残す、工程の中の SQL の計測値(#1490。DbCallStats.snapshot)。
@@ -541,7 +542,6 @@ def build_engine_settings(
         else "0",
         "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES": str(settings.rag_guide_step_max_queries),
         "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP": str(settings.rag_guide_step_chunks_per_step),
-        "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS": str(settings.rag_guide_reference_max_chunks),
         "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS": str(settings.rag_guide_step_deadline_seconds),
         # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索方法の全体設定で選ぶ)。
         "RAG_ENGINE_SECTION_EXPANSION": "1" if settings.rag_section_expansion_enabled else "0",
@@ -564,10 +564,6 @@ def build_engine_settings(
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
         # 構造化出力の JSON の文字列の外の空白の連続の上限(#5077)。超えた出力は送り直す。
         "RAG_ENGINE_LLM_JSON_WHITESPACE_RUN_LIMIT": str(settings.rag_llm_json_whitespace_run_limit),
-        # 業務ガイドの手順の段のために最初の章節の拡張が残す入力の割合(#2816)。
-        "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": str(
-            settings.rag_section_expansion_followup_reserve_percent
-        ),
     }
     # 生成の出力が形式の確認を通らなかったときのモデル(モデルのカスケード。#4581)。
     environ.update(escalation_model_environ(settings, answer_model))
@@ -688,13 +684,11 @@ class AnswerEngine:
         graph_store: GraphExpansionStore | None = None,
         attachment_chunks: Sequence[RetrievedChunk] = (),
         degraded: DegradedSteps | None = None,
-        complete_evidence: bool = True,
+        materialize_images: bool = True,
     ) -> None:
-        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し）までするか
-        # （#3506）。False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いと図の
-        # 画像は Agent が MCP で読む）。
-        # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
-        self._complete_evidence = complete_evidence
+        # 根拠を集める流れは回答・回答を作らない検索・検索だけ・MCP で同じ(#5173)。経路で違うのは
+        # 図の画像の切り出しだけ: 業務 Agent の根拠の取得(MCP)と検索だけは切り出さない(#5125。
+        # 図は Agent が rag_read_source で読む)。
         if not settings.rag_support_guide_enabled:
             settings = settings.model_copy(update={"rag_support_guide": {}})
         self._settings = settings
@@ -711,8 +705,8 @@ class AnswerEngine:
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
         self._answer_model_id = answer_model_id or None
         # 回答のモデルが画像を読めるなら、根拠の chunk の画像を切り出して回答の入力に添付する
-        # (#3444)。業務 Agent の根拠の取得(complete_evidence=False)は切り出さない(#5125)。
-        self._attach_images = complete_evidence and answer_model_reads_images(
+        # (#3444)。
+        self._attach_images = materialize_images and answer_model_reads_images(
             settings, self._answer_model_id or enterprise_ai_default_model_id(settings)
         )
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
@@ -871,49 +865,15 @@ class AnswerEngine:
         }
 
     async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
-        """回答を作らずに検索だけを行い、候補の chunk を順位順に返す(#593)。
+        """回答を作らずに根拠だけを集め、根拠の並びの順に返す(#593)。
 
-        回答の検索(``_search``)を原質問 1 本で呼ぶ。質問の理解・rerank・回答の
-        生成は行わず、LLM を呼ばない(embedding と Oracle の検索だけ)。KB の検索テストとレシピの
-        検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
-
-        検索拡張(参照先・実体・関係情報)は回答と同じく行い、上位 ``top_k`` 件の候補の後に回答と
-        同じ規則(``rag_engine.retrieval.expansion_merge``)で合わせる(#5162)。拡張の根拠は
-        ``top_k`` に数えず、``evidence_expansion`` の印を付ける。
+        KB の検索テストとレシピの検索比較で、引用の候補を確かめるために使う。回答・RAG 検索の画面
+        (``generate_answer=false``)・MCP の ``rag_retrieve_evidence`` と同じ 1 つの流れ(主の検索 →
+        rerank → 切る → 検索拡張の合わせ込み → 補いの検索の合わせ込み → 文脈の補完)で集め(#5173)、
+        回答の生成の手前で止める。回答の LLM は呼ばない。件数(起点の数)は ``request.top_k``。
         """
-        state = _SearchState(
-            degraded=self._degraded if self._degraded is not None else DegradedSteps()
-        )
-        # 主検索と同じ基準日で読む(#2602)。
-        request = _with_effective_as_of(request, self._settings.rag_answer_as_of)
-        with read_lobs_as_values():
-            result = await self._search(
-                request,
-                state,
-                retrieval_queries=[request.query],
-                candidate_limit=max(1, int(request.top_k)),
-            )
-        merged = merge_expansions(
-            list(result.child_chunks),
-            list(result.expansion_chunks),
-            key=lambda child: str(child.chunk_uid),
-            document=lambda child: str(child.metadata.get("document_id") or ""),
-            seq=lambda child: int(child.chunk_seq or 0),
-        )
-        added = {child.chunk_uid for child in result.expansion_chunks} - {
-            child.chunk_uid for child in result.child_chunks
-        }
-        chunks: list[RetrievedChunk] = []
-        for child in merged:
-            chunk = state.chunks.get(child.chunk_uid)
-            if chunk is None:
-                continue
-            if child.chunk_uid in added:
-                chunk = chunk.model_copy(
-                    update={"metadata": {**chunk.metadata, EVIDENCE_EXPANSION_KEY: True}}
-                )
-            chunks.append(chunk)
-        return chunks
+        outcome = await self.run(request.model_copy(update={"generate_answer": False}))
+        return list(outcome.citations)
 
     def _answer_sync(
         self,
@@ -1006,10 +966,9 @@ class AnswerEngine:
                 chunk_neighbor_count=self._settings.rag_neighbor_child_count,
                 rerank_enabled=self._settings.rag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-                # RAG 検索の画面は回答を作らない(#649)。根拠はチャットと同じ流れで集め、回答の生成の
-                # 手前で止める(#3506)。業務 Agent の根拠の取得は主の文書の検索の後で止める。
+                # RAG 検索の画面・検索だけ・MCP の根拠の取得は回答を作らない(#649)。根拠はチャットと
+                # 同じ流れで集め、回答の生成の手前で止める(#3506・#5173)。
                 generate_answer=request.generate_answer,
-                complete_evidence=request.generate_answer or self._complete_evidence,
                 # 絞り込み自体は _search の hybrid_search(request.filters)が行う。
                 # ここでは回答のプロンプトと実行記録に条件を載せるために渡す。
                 classification_filter=classification_filter_from_values(
@@ -4253,10 +4212,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             "retrieved_anchor",
             "",
         }:
-            # 検索拡張で最後の根拠の並びに足した根拠(#5162)。MCP の evidence_limit に数えない。
+            # 検索拡張・補いの検索で最後の根拠の並びに足した根拠(#5162・#5173)。MCP の
+            # evidence_limit に数えない。
             metadata[EVIDENCE_EXPANSION_KEY] = True
         if retrieval_rank > 0:
-            # MCP の根拠は当たった子を関連度の順に先にする（画面の並びは変えない。#1348）。
+            # MCP の evidence_limit を超えたとき、当たった子を関連度の順に残す（並びは変えない。
+            # #1348・#5173）。
             metadata["evidence_retrieval_rank"] = retrieval_rank
         update: dict[str, Any] = {"metadata": metadata}
         if chunk_id in reranked:

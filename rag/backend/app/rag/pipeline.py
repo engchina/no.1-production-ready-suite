@@ -411,7 +411,7 @@ class RagPipeline:
         attachment_conversation_id: str | None = None,
         history_question_prepared: bool = False,
         prepared_history_rewrite: PreparedHistoryRewrite | None = None,
-        complete_evidence: bool = True,
+        materialize_images: bool = True,
     ) -> None:
         self._settings = settings or get_settings()
         if not self._settings.rag_support_guide_enabled:
@@ -443,9 +443,10 @@ class RagPipeline:
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 会話履歴による補完が分けた最新の発話の種類（#4787。補完しなければ search）。
         self._history_intent: HistoryIntent = "search"
-        # 回答を作らない検索で根拠の補いまでするか（#3506。`AnswerEngine` の同名の引数）。False は
-        # 業務 Agent の根拠の取得（MCP の rag_retrieve_evidence）だけが渡す。
-        self._complete_evidence = complete_evidence
+        # 根拠の図の画像を切り出すか（`AnswerEngine` の同名の引数）。False は業務 Agent の根拠の
+        # 取得（MCP の rag_retrieve_evidence。#5125）だけが渡す。根拠を集める流れは経路で変えない
+        # （#5173）。
+        self._materialize_images = materialize_images
         # 処理の経過の記録（`run(trace=...)`。回答の記録に trace id と工程の詳細を残す。#3226）。
         self._trace: AnswerTrace | None = None
 
@@ -751,7 +752,7 @@ class RagPipeline:
             scope=effective_scope,
             attachment_chunks=attachment_chunks,
             degraded=degraded,
-            complete_evidence=self._complete_evidence,
+            materialize_images=self._materialize_images,
         )
 
         async def emit_step(
@@ -789,7 +790,7 @@ class RagPipeline:
                 request_snapshot=lambda: {
                     "検索要求": request.model_dump(mode="json"),
                     "添付の根拠": _trace_chunks(attachment_chunks),
-                    "根拠補完有効": self._complete_evidence,
+                    "図の画像の切り出し": self._materialize_images,
                 },
                 result_snapshot=lambda result: {
                     "回答": result.answer,
@@ -977,17 +978,23 @@ class RagPipeline:
         query_guardrail: GuardrailResult,
         progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
-        """回答フローの検索だけを行い、回答を作らずに候補を引用として返す(#593)。
+        """回答と同じ流れで根拠を集め、回答を作らずに引用として返す(#593・#5173)。
 
-        KB の検索テストとレシピの検索比較が使う(``SearchRequest.retrieval_only``)。LLM を呼ばず、
-        回答記録・質問履歴も保存しない。回答側の安全チェックは回答が無いので行わない。
+        KB の検索テストとレシピの検索比較が使う(``SearchRequest.retrieval_only``)。回答の LLM を
+        呼ばず、回答記録・質問履歴も保存しない。回答側の安全チェックは回答が無いので行わない。
         """
         if request.query != query_guardrail.sanitized_text:
             request = request.model_copy(update={"query": query_guardrail.sanitized_text})
         # 検索だけの結果にも縮退を残す(全文のみの結果を見誤らないように。#4663)。
         degraded = DegradedSteps()
+        # 回答・RAG 検索の画面と同じ流れで根拠を集める（#5173）。図の画像は切り出さない。
         engine = AnswerEngine(
-            self._settings, oracle=self._oracle, genai=self._genai, degraded=degraded
+            self._settings,
+            oracle=self._oracle,
+            genai=self._genai,
+            runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
+            degraded=degraded,
+            materialize_images=False,
         )
         citations = await _observe_stage(
             trace_id,

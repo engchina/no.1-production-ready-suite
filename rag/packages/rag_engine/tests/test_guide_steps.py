@@ -13,13 +13,13 @@ from rag_engine.generation import answering as a
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.grounded import guide_step_evidence_lines
 from rag_engine.retrieval.context_builder import ContextParentEvidence
+from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, GUIDE_STEP_KEY
 from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
 from rag_engine.retrieval.guide_steps import (
     GuidePlan,
     StepSearch,
     planned_searches,
     run_step_searches,
-    select_step_parents,
     step_queries,
 )
 
@@ -140,44 +140,28 @@ def test_run_step_searches_records_errors_and_continues() -> None:
     assert [p.record.chunk_uid for p in results[1].parents] == ["run:b1"]
 
 
-def test_select_step_parents_links_existing_and_pins_reference_pages() -> None:
-    results = [
-        StepSearch("s1", "step", "q", ("q",), (parent("a1"), parent("a2"), parent("a3"))),
-        StepSearch("s2", "reference", "q", ("q",), (parent("b1"), parent("b2"), parent("b3"))),
-        StepSearch("s3", "reference", "q", ("q",), (parent("c1"),)),
-    ]
-
-    selection = select_step_parents(results, {"run:a1"}, chunks_per_step=2, reference_max_chunks=3)
-
-    # 既にある根拠は足さずに手順へ紐づける。1 手順は上位 2 件まで。
-    assert [(step, kind, p.record.chunk_uid) for step, kind, p in selection.added] == [
-        ("s1", "step", "run:a2"),
-        ("s2", "reference", "run:b1"),
-        ("s3", "reference", "run:c1"),
-        ("s2", "reference", "run:b2"),
-    ]
-    assert selection.step_sources == {"s1": ("run:a1", "run:a2"), "s2": ("run:b1", "run:b2"), "s3": ("run:c1",)}
-
-
 def _settings(**changes: Any) -> Any:
     return replace(get_settings(environ={}, dotenv_path=None), **changes)
 
 
 def _patch_search(monkeypatch: pytest.MonkeyPatch, results: dict[str, AnswerContext]) -> list[tuple[str, list[dict[str, Any]]]]:
     calls: list[tuple[str, list[dict[str, Any]]]] = []
+    options: list[dict[str, Any]] = []
 
     def fake_build(question: str, run_id: Any, engines: Any, settings: Any, **kwargs: Any) -> AnswerContext:
         page_ranges = list(kwargs.get("page_ranges") or [])
         calls.append((question, page_ranges))
+        options.append(kwargs)
         key = "reference" if page_ranges else question
         return results.get(key, context())
 
     monkeypatch.setattr(a, "build_adb_hybrid_answer_context", fake_build)
+    _patch_search.options = options  # type: ignore[attr-defined]
     return calls
 
 
-def _cover(ctx: AnswerContext, settings: Any, guide: GuidePlan, budget: ExtraRetrievalBudget | None = None) -> Any:
-    return a._cover_guide_steps(
+def _search(ctx: AnswerContext, settings: Any, guide: GuidePlan, budget: ExtraRetrievalBudget | None = None, **kwargs: Any) -> Any:
+    return a._search_guide_steps(
         QUESTION,
         ctx,
         settings,
@@ -185,16 +169,47 @@ def _cover(ctx: AnswerContext, settings: Any, guide: GuidePlan, budget: ExtraRet
         extra_budget=budget or ExtraRetrievalBudget.from_settings(settings),
         run_id="run",
         preferred_engines=["docling"],
-        top_k=8,
-        neighbor_child_count=0,
+        neighbor_child_count=1,
         rerank_enabled=False,
         retrieval_scope="knowledge_base",
         classification_filter=None,
-        runtime_knowledge=None,
+        **kwargs,
     )
 
 
-def test_cover_guide_steps_adds_step_b_evidence_and_reference_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+def _merged(*parents: ContextParentEvidence, added: tuple[str, ...] = ()) -> AnswerContext:
+    """主の検索の根拠に手順の根拠を合わせた後の文脈（合わせ込みと文脈の補完は ``fill_answer_context``）。"""
+    tree = []
+    for item in parents:
+        if item.record.chunk_uid in added:
+            marked = replace(item.record, metadata={**item.record.metadata, GUIDE_STEP_KEY: {"step_ids": ["s2"]}})
+            child = a.ContextChildEvidence(record=marked, role="retrieved_anchor", reason=EXPANSION_EVIDENCE_REASON)
+            item = replace(item, record=marked, reason=EXPANSION_EVIDENCE_REASON, children=(child,))
+        tree.append(item)
+    return AnswerContext(records=[item.record for item in tree], text="x", evidence_tree=tuple(tree))
+
+
+def _cover(ctx: AnswerContext, settings: Any, guide: GuidePlan, budget: ExtraRetrievalBudget | None = None) -> Any:
+    """手順の検索 → 切った根拠を主の検索の根拠の後に合わせる（並びにあるものは印だけ）→ 手順の根拠を決める。
+
+    合わせ込みの規則（同じ文書の位置・最後）と文脈の補完は ``fill_answer_context`` のテスト（test_expansion_merge）で
+    確かめる。ここでは文書の無い合成の根拠を使うので、足す根拠は最後に並ぶ。
+    """
+    results, acquisitions, trace = _search(ctx, settings, guide, budget)
+    supplements, _pool = a._guide_step_supplements(results)
+    present = {item.record.chunk_uid for item in ctx.evidence_tree}
+    added = tuple(item.chunk_uid for item in supplements if item.chunk_uid not in present)
+    merged = _merged(
+        *ctx.evidence_tree,
+        *(ContextParentEvidence(record=item, role="synthesis_parent", reason="top") for item in supplements if item.chunk_uid in added),
+        added=added,
+    )
+    trace, sources = a._finish_guide_steps(guide, results, acquisitions, trace, merged)
+    return merged, trace, sources
+
+
+def test_search_guide_steps_cuts_every_search_to_chunks_per_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    """手順の検索は検索ごとに rerank・下限の後で上位 ``guide_step_chunks_per_step`` 件に切り、文脈は補わない（#5173）。"""
     calls = _patch_search(
         monkeypatch,
         {
@@ -203,21 +218,63 @@ def test_cover_guide_steps_adds_step_b_evidence_and_reference_pages(monkeypatch:
             "reference": context(_paged("b-page", "doc-b", 5)),
         },
     )
-    ctx = context(parent("a1"), parent("other"))
 
-    merged, trace, sources = _cover(ctx, _settings(), plan(STEP_A, STEP_B))
+    results, acquisitions, trace = _search(
+        context(parent("a1"), parent("other")), _settings(guide_step_chunks_per_step=3), plan(STEP_A, STEP_B)
+    )
 
     assert [q for q, _ in calls] == [f"{QUESTION} 画面 A", f"{QUESTION} 画面 B 反映", f"{QUESTION} 画面 B 反映"]
-    # 既存の根拠を先に残し、手順 B の根拠と参照の頁の根拠を後ろに足す。
-    assert [r.chunk_uid for r in merged.records] == ["run:a1", "run:other", "run:b-page", "run:b-top"]
-    assert {p.reason for p in merged.evidence_tree[2:]} == {"guide_reference", "guide_step"}
+    options = _patch_search.options  # type: ignore[attr-defined]
+    assert {item["top_k"] for item in options} == {3}
+    assert all(item["fill"] is False and "max_records" not in item for item in options)
+    assert [(r.step_id, r.kind, r.lane) for r in results] == [
+        ("s1", "step", "required"),
+        ("s2", "reference", "required"),
+        ("s2", "step", "optional"),
+    ]
+    assert [row["execution"] for row in acquisitions] == ["completed", "completed"]
+    assert trace["llm_calls"] == 0 and trace["top_k"] == 3
+    assert trace["budget"]["used"] == {"guide_required": 2, "guide_steps": 1}
+
+
+def test_guide_step_supplements_mark_steps_in_search_order() -> None:
+    """手順の検索で切った根拠を検索の順で返し、同じ根拠を切った手順の印をつなぐ（#5173）。"""
+    results = [
+        StepSearch("s1", "step", "q", ("q",), (parent("a1"), parent("shared")), (record("pool-1"),)),
+        StepSearch("s2", "reference", "q", ("q",), (parent("shared"), parent("b1")), (record("pool-2"),), owner_ids=("s2", "s3")),
+    ]
+
+    supplements, pool = a._guide_step_supplements(results)
+
+    assert [item.chunk_uid for item in supplements] == ["run:a1", "run:shared", "run:b1"]
+    assert supplements[1].metadata[GUIDE_STEP_KEY] == {"step_ids": ["s1", "s2", "s3"], "kinds": ["step", "reference"]}
+    assert [item.chunk_uid for item in pool] == ["run:pool-1", "run:pool-2"]
+
+
+def test_finish_guide_steps_links_step_sources_after_the_merge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """合わせた後の根拠で、手順ごとの根拠・足した根拠・必須の取得を決める（#2706・#5173）。"""
+    _patch_search(
+        monkeypatch,
+        {
+            f"{QUESTION} 画面 A": context(parent("a1")),
+            f"{QUESTION} 画面 B 反映": context(parent("b-top")),
+            "reference": context(_paged("b-page", "doc-b", 5)),
+        },
+    )
+    guide = plan(STEP_A, STEP_B)
+    results, acquisitions, trace = _search(context(parent("a1"), parent("other")), _settings(), guide)
+    # 主の検索の根拠（a1・other）を外さず、手順の根拠を同じ規則で合わせた後の文脈。
+    merged = _merged(parent("a1"), parent("other"), _paged("b-page", "doc-b", 5), parent("b-top"), added=("run:b-page", "run:b-top"))
+
+    trace, sources = a._finish_guide_steps(guide, results, acquisitions, trace, merged)
+
     assert sources == (("s1", "画面 A で設定を変える", ("run:a1",)), ("s2", "画面 B で反映する", ("run:b-page", "run:b-top")))
-    assert trace["llm_calls"] == 0
+    assert trace["added_chunk_ids"] == ["run:b-page", "run:b-top"]
     step_b = trace["steps"][1]
     assert step_b["has_references"] is True and step_b["evidence_count"] == 2
     assert step_b["reference_chunk_count"] == 1
     assert [s["kind"] for s in step_b["searches"]] == ["reference", "step"]
-    assert trace["budget"]["used"] == {"guide_required": 2, "guide_steps": 1}
+    assert [row["retained_source_ids"] for row in trace["required_acquisition"]["targets"]] == [["run:a1"], ["run:b-page"]]
 
 
 def _paged(uid: str, document_id: str, page: int) -> ContextParentEvidence:
@@ -225,30 +282,19 @@ def _paged(uid: str, document_id: str, page: int) -> ContextParentEvidence:
     return ContextParentEvidence(record=rec, role="synthesis_parent", reason="top")
 
 
-def test_cover_guide_steps_links_reference_pages_of_steps_cut_by_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_guide_steps_link_reference_pages_of_steps_cut_by_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     """期限で手順 B を検索しなくても、手順 B の参照の頁の根拠（回答の材料にある）を手順 B の根拠にする（#2706）。"""
     step_a = {**STEP_A, "references": [{"document_id": "doc-b", "page_ranges": [{"page_start": 5, "page_end": 5}]}]}
     calls = _patch_search(monkeypatch, {"reference": context(_paged("shared", "doc-b", 5))})
     ctx = context(_paged("shared", "doc-b", 5), _paged("other", "doc-b", 9))
     # 開始・検索の開始・1 回目の期限の確認・1 回目の検索の開始は 0 秒、検索 1 回が 30 秒かかる。
     ticks = itertools.chain([0.0, 0.0, 0.0, 0.0], itertools.repeat(30.0))
+    guide = plan(step_a, STEP_B)
 
-    merged, trace, sources = a._cover_guide_steps(
-        QUESTION,
-        ctx,
-        _settings(guide_step_deadline_seconds=10.0),
-        plan(step_a, STEP_B),
-        extra_budget=ExtraRetrievalBudget.from_settings(_settings()),
-        run_id="run",
-        preferred_engines=["docling"],
-        top_k=8,
-        neighbor_child_count=0,
-        rerank_enabled=False,
-        retrieval_scope="knowledge_base",
-        classification_filter=None,
-        runtime_knowledge=None,
-        clock=lambda: next(ticks),
+    results, acquisitions, trace = _search(
+        ctx, _settings(guide_step_deadline_seconds=10.0), guide, ExtraRetrievalBudget.from_settings(_settings()), clock=lambda: next(ticks)
     )
+    trace, sources = a._finish_guide_steps(guide, results, acquisitions, trace, ctx)
 
     # 手順 A の参照の検索 1 回で期限。手順 B は検索していない。
     assert len(calls) == 1
@@ -259,18 +305,20 @@ def test_cover_guide_steps_links_reference_pages_of_steps_cut_by_the_deadline(mo
     assert sources == (("s1", "画面 A で設定を変える", ("run:shared",)), ("s2", "画面 B で反映する", ("run:shared",)))
     assert [step["referenced_count"] for step in trace["steps"]] == [1, 1]
     assert trace["required_acquisition"]["targets"][1]["scope_coverage"] == "unknown"
-    assert [r.chunk_uid for r in merged.records] == ["run:shared", "run:other"]
+    assert trace["added_chunk_ids"] == []
 
 
-def test_cover_guide_steps_respects_disabled_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_guide_steps_respects_disabled_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch_search(monkeypatch, {})
     ctx = context(parent("a1"))
 
-    merged, trace, sources = _cover(ctx, _settings(guide_step_retrieval_enabled=False), plan(STEP_A))
-    assert (merged, trace["skipped"], sources, calls) == (ctx, "disabled", (("s1", STEP_A["title"], ()),), [])
+    results, acquisitions, trace = _search(ctx, _settings(guide_step_retrieval_enabled=False), plan(STEP_A))
+    assert (results, acquisitions, trace["skipped"], calls) == ([], [], "disabled", [])
+    assert a._finish_guide_steps(plan(STEP_A), results, acquisitions, trace, ctx)[1] == (("s1", STEP_A["title"], ()),)
 
-    merged, trace, _ = _cover(ctx, _settings(extra_retrieval_max_queries=0), plan(STEP_A))
-    assert (merged, trace["stop_reason"], calls) == (ctx, "required_budget_exhausted", [])
+    results, acquisitions, trace = _search(ctx, _settings(extra_retrieval_max_queries=0), plan(STEP_A))
+    assert (results, trace["stop_reason"], calls) == ([], "required_budget_exhausted", [])
+    trace, _ = a._finish_guide_steps(plan(STEP_A), results, acquisitions, trace, ctx)
     assert trace["required_acquisition"]["incomplete_step_ids"] == ["s1"]
 
 
@@ -280,7 +328,7 @@ def test_guide_steps_and_request_coverage_share_one_budget(monkeypatch: pytest.M
     settings = _settings(extra_retrieval_max_queries=3, guide_step_max_queries=4)
     budget = ExtraRetrievalBudget.from_settings(settings)
 
-    _, trace, _ = _cover(context(parent("a1")), settings, plan(STEP_A, STEP_B, {"id": "s3", "title": "画面 C"}), budget)
+    _, _, trace = _search(context(parent("a1")), settings, plan(STEP_A, STEP_B, {"id": "s3", "title": "画面 C"}), budget)
 
     # 手順の検索は枠の 3 回まで（手順 B の 2 回目の検索は枠の外）。
     assert trace["stop_reason"] == "max_queries"
@@ -306,7 +354,6 @@ def test_engine_settings_default_and_env_for_guide_steps() -> None:
             "RAG_ENGINE_GUIDE_STEP_RETRIEVAL": "0",
             "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES": "2",
             "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP": "3",
-            "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS": "1",
             "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS": "2.5",
             "RAG_ENGINE_EXTRA_RETRIEVAL_MAX_QUERIES": "5",
         },
@@ -316,4 +363,6 @@ def test_engine_settings_default_and_env_for_guide_steps() -> None:
     assert (default.guide_step_retrieval_enabled, default.guide_step_max_queries, default.extra_retrieval_max_queries) == (True, 4, 8)
     assert default.guide_step_deadline_seconds == 60.0  # 期限の既定は上限の 60 秒（#2826）
     assert (custom.guide_step_retrieval_enabled, custom.guide_step_max_queries, custom.guide_step_chunks_per_step) == (False, 2, 3)
-    assert (custom.guide_reference_max_chunks, custom.guide_step_deadline_seconds, custom.extra_retrieval_max_queries) == (1, 2.5, 5)
+    assert (custom.guide_step_deadline_seconds, custom.extra_retrieval_max_queries) == (2.5, 5)
+    # 参照の頁の根拠の上限は削除した（手順の検索ごとに上位 guide_step_chunks_per_step 件で切る。#5173）。
+    assert not hasattr(custom, "guide_reference_max_chunks")

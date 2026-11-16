@@ -25,7 +25,7 @@ def _run(targets, *, retrieve=None, maximum=8, usage=None, deadline=10, clock=la
         results, trace = search_overflow_requests(
             "原質問",
             tokenize=tokenize,
-            retrieve=retrieve or (lambda text: SimpleNamespace(records=[text])),
+            retrieve=retrieve or (lambda text, top_k: SimpleNamespace(records=[text])),
             extra_budget=budget,
             coverage_budget=CoverageBudget(deadline_seconds=deadline),
             usage=used,
@@ -37,7 +37,7 @@ def _run(targets, *, retrieve=None, maximum=8, usage=None, deadline=10, clock=la
 def test_same_query_different_request_ids_reuses_result_and_budget():
     calls = []
 
-    def retrieve(query):
+    def retrieve(query, top_k):
         calls.append(query)
         return SimpleNamespace(records=["候補"])
 
@@ -64,7 +64,7 @@ def test_shared_budget_and_previously_searched_query_remain_visible():
 def test_failures_empty_results_and_deadline_are_distinct():
     times = iter([0, 0, 0, 11, 11, 11])
 
-    def retrieve(query):
+    def retrieve(query, top_k):
         if query == "失敗":
             raise RuntimeError("秘密の詳細")
         return SimpleNamespace(records=[])
@@ -107,7 +107,7 @@ def test_original_request_and_shared_preamble_are_used_without_model():
     results, trace = search_overflow_requests(
         question,
         tokenize=tokenize,
-        retrieve=lambda text: queries.append(text) or SimpleNamespace(records=[]),
+        retrieve=lambda text, top_k: queries.append(text) or SimpleNamespace(records=[]),
         extra_budget=ExtraRetrievalBudget(8),
         coverage_budget=CoverageBudget(),
         usage=CoverageUsage(),
@@ -119,50 +119,57 @@ def test_original_request_and_shared_preamble_are_used_without_model():
     assert trace["llm_calls"] == 0
 
 
-def test_answer_flow_keeps_scope_existing_evidence_and_overflow_trace(monkeypatch):
-    from grounded_stub import echo_model
-    from test_answer_generation import _chunk_run_stub
-    from test_request_coverage import context, parent
+def _uid(name):
+    return SimpleNamespace(chunk_uid=f"run:{name}")
 
-    from rag_engine.config import get_settings
-    from rag_engine.generation import answering as a
-    from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
-    # 検索用に言い換えた質問と利用者の元の質問が違うときだけ、元の質問は主検索で未検索になり、要求別補完が検索する。
-    question = "ID-123 の接続の手順と設定の確認方法"
-    request = "対象は ID-123 です。\n(1) 接続の手順を教えてください。\n(2) 設定の確認方法を教えてください。"
-    original = context(parent("old", "既存の根拠"))
-    retrieved = context(parent("new", "追加した操作手順の根拠"))
-    calls = []
+def test_each_request_search_is_cut_to_its_share_of_the_chunk_limit():
+    """要求ごとの検索の top_k は、足す根拠の上限を要求の数で割った件数（切り上げ）と残りの小さい方（#5173）。"""
+    cuts = []
 
-    def tokenize(text, **kwargs):
-        return TextSearchTokenizationResult(tokens=("語",), oracle_text_query="{語}", truncated_count=int(text == request))
+    def retrieve(query, top_k):
+        cuts.append((query, top_k))
+        return SimpleNamespace(records=[_uid(f"{query}-{n}") for n in range(top_k)])
 
-    def search(text, *args, **kwargs):
-        calls.append((text, args, kwargs))
-        return original if len(calls) == 1 else retrieved
+    targets = [_target("Q1", "要求A"), _target("Q2", "要求B"), _target("Q3", "要求C")]
+    budget = ExtraRetrievalBudget(8)
+    usage = CoverageUsage()
+    with patch("rag_engine.retrieval.query_overflow.coverage_targets", return_value=targets):
+        results, trace = search_overflow_requests(
+            "原質問",
+            tokenize=_tokens,
+            retrieve=retrieve,
+            extra_budget=budget,
+            coverage_budget=CoverageBudget(max_chunks=4),
+            usage=usage,
+        )
+    # 4 件を 3 要求で割って 2 件ずつ。3 つ目は残りの 0 件で検索しない。
+    assert cuts == [("要求A", 2), ("要求B", 2)]
+    assert [row["status"] for row in trace["requests"]] == ["candidate_found", "candidate_found", "unsearched_evidence_budget"]
+    assert [row["top_k"] for row in trace["requests"][:2]] == [2, 2]
+    assert usage.chunks == 4 and len(results) == 2
 
-    monkeypatch.setattr(a, "load_latest_or_source_chunk_run", lambda *a, **k: _chunk_run_stub())
-    monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda *a, **k: None)
-    monkeypatch.setattr(a, "tokenize_text_search_query_with_trace", tokenize)
-    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", search)
-    monkeypatch.setattr(a, "parse_text_response", echo_model)
-    result = a.answer_question_result(
-        question,
-        "abcdef",
-        ["docling"],
-        replace(get_settings(environ={}, dotenv_path=None), extra_retrieval_max_queries=1),
-        retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-        generate_answer=False,
-        request_question=request,
-    )
-    assert len(calls) == 2
-    assert calls[1][0] == request
-    assert calls[1][2]["retrieval_scope"] == RETRIEVAL_SCOPE_KNOWLEDGE_BASE
-    trace = result.generation_trace["query_overflow"]
-    assert [row["status"] for row in trace["requests"]] == ["candidate_found"]
-    assert trace["added_chunk_ids"] == ["run:new"]
-    assert {item["chunk_uid"] for item in result.evidence_items} >= {"run:old", "run:new"}
+
+def test_candidates_already_in_the_main_evidence_do_not_use_the_chunk_limit():
+    """主の検索の根拠にある候補は新しい根拠に数えない（合わせるときは印だけ。#5173）。"""
+
+    def retrieve(query, top_k):
+        return SimpleNamespace(records=[_uid("old"), _uid(f"{query}-new")][:top_k])
+
+    usage = CoverageUsage()
+    with patch("rag_engine.retrieval.query_overflow.coverage_targets", return_value=[_target("Q1", "要求A"), _target("Q2", "要求B")]):
+        _results, trace = search_overflow_requests(
+            "原質問",
+            tokenize=_tokens,
+            retrieve=retrieve,
+            extra_budget=ExtraRetrievalBudget(8),
+            coverage_budget=CoverageBudget(max_chunks=2),
+            usage=usage,
+            existing_keys={"run:old"},
+        )
+    assert [row["new_candidates"] for row in trace["requests"]] == [0, 0]
+    assert [row["top_k"] for row in trace["requests"]] == [1, 1]
+    assert usage.chunks == 0
 
 
 def test_answer_flow_does_not_search_multiline_question_again(monkeypatch):
@@ -210,7 +217,7 @@ def test_answer_flow_does_not_search_multiline_question_again(monkeypatch):
 def test_failed_queries_are_not_executed_again_for_another_request():
     calls = []
 
-    def retrieve(query):
+    def retrieve(query, top_k):
         calls.append(query)
         raise RuntimeError("詳細は公開しない")
 
@@ -227,7 +234,7 @@ def test_original_query_only_is_not_implicitly_expanded():
     results, trace = search_overflow_requests(
         "原質問",
         tokenize=tokenize,
-        retrieve=lambda _: None,
+        retrieve=lambda _query, _top_k: None,
         extra_budget=ExtraRetrievalBudget(8),
         coverage_budget=CoverageBudget(),
         usage=CoverageUsage(),
@@ -250,7 +257,7 @@ def test_alias_expansion_overflow_can_search_the_unexpanded_original_request():
         results, trace = search_overflow_requests(
             "元の要求",
             tokenize=lambda text: replace(_tokens(text), truncated_count=0),
-            retrieve=lambda text: queries.append(text) or SimpleNamespace(records=["根拠"]),
+            retrieve=lambda text, top_k: queries.append(text) or SimpleNamespace(records=["根拠"]),
             extra_budget=ExtraRetrievalBudget(8),
             coverage_budget=CoverageBudget(),
             usage=CoverageUsage(),

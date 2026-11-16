@@ -7,7 +7,7 @@ from rag_engine.generation import answering as a
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-@pytest.mark.parametrize("mode", ["answer", "retrieval", "partial", "empty_answer", "empty_retrieval", "unavailable"])
+@pytest.mark.parametrize("mode", ["answer", "retrieval", "empty_answer", "empty_retrieval", "unavailable"])
 def test_flow_snapshot_matches_every_return_path(monkeypatch, enabled, mode):
     recorder = PolicyRecorder(enabled)
 
@@ -22,7 +22,6 @@ def test_flow_snapshot_matches_every_return_path(monkeypatch, enabled, mode):
         monkeypatch,
         recorder,
         generate=generate,
-        complete=mode != "partial",
         search=unavailable if mode == "unavailable" else empty if mode.startswith("empty") else None,
     )
     stage = recorder.stage("回答生成フロー" if generate else a.EVIDENCE_FLOW_STEP)
@@ -30,7 +29,8 @@ def test_flow_snapshot_matches_every_return_path(monkeypatch, enabled, mode):
         assert stage["input"] == stage["output"] == {}
         return
     assert stage["input"]["回答生成の要求"] is generate
-    assert stage["input"]["根拠補完の要求"] is (mode != "partial")
+    # 根拠を集める流れは回答の有無で分けない（途中で止める経路は無い。#5173）。
+    assert "根拠補完の要求" not in stage["input"]
     assert stage["input"]["分類条件"]["large_category"] == "synthetic-category"
     assert stage["output"]["回答本文"] == result.answer_text
     assert stage["output"]["回答の構造"] == result.envelope

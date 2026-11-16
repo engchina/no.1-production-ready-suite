@@ -905,6 +905,30 @@ def test_removed_rerank_order_settings_are_not_read(monkeypatch: pytest.MonkeyPa
         assert not hasattr(engine, name)
 
 
+def test_removed_supplement_settings_are_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """参照の頁の根拠の上限と、後の段のための章節の拡張の予約は削除した(#5173)。
+
+    補いの検索は検索ごとに上位 RAG_GUIDE_STEP_CHUNKS_PER_STEP 件で切って主の検索の根拠へ合わせ、
+    章節の拡張は合わせた後に 1 回だけ行う。旧変数が残っていても読まない。
+    """
+    from rag_engine.config import get_settings as get_engine_settings
+
+    monkeypatch.setenv("RAG_GUIDE_REFERENCE_MAX_CHUNKS", "9")
+    monkeypatch.setenv("RAG_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT", "30")
+    backend = Settings(_env_file=None)
+    assert not hasattr(backend, "rag_guide_reference_max_chunks")
+    assert not hasattr(backend, "rag_section_expansion_followup_reserve_percent")
+    engine = get_engine_settings(
+        environ={
+            "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS": "9",
+            "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": "30",
+        },
+        dotenv_path=None,
+    )
+    assert not hasattr(engine, "guide_reference_max_chunks")
+    assert not hasattr(engine, "section_expansion_followup_reserve_percent")
+
+
 def test_rag_rrf_k_is_bounded() -> None:
     """Hybrid retrieval の RRF 定数は正の安全な範囲に制限する。"""
     assert Settings().rag_rrf_k == 60

@@ -105,7 +105,7 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 - **推奨の待ち時間は 660 秒**（`MCP_TOOL_TIMEOUT=660000`）。サーバーの上限（600 秒）より長くし、時間切れはサーバーのエラー（どの工程で切れたか付き）で受け取る。配備の Nginx の待ち時間（660 秒）と同じ。
 - **Claude Code の待ち時間**: `MCP_TOOL_TIMEOUT` の全体の既定は `100000000` ミリ秒（約 28 時間）。60 秒なのは HTTP の 1 要求の最初の応答までのタイマーで、`MCP_TOOL_TIMEOUT` を 60000 より大きくするとこのタイマーも延びる。SSE の進み具合があれば、既定でも 60 秒では切れない。`MCP_TOOL_TIMEOUT` は進み具合では延びない固定の上限。
 - **進み具合の通知（progress）**: client が `tools/call` に `_meta.progressToken` を付け、`Accept` に `text/event-stream` を含めると、応答は SSE になり、10 秒ごとと工程が変わるたびに `notifications/progress`（`message` は「経過 30 秒: 根拠確認（1回目）」の形）を送ってから結果を送る。進み具合を受けて待ち時間を延ばす client（MCP の SDK の `resetTimeoutOnProgress`）なら、待ち時間が短くても切れない。
-- 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。モデルを呼ばない。4〜8 秒）で根拠を集める。
+- 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。回答のモデルを呼ばない）で根拠を集める。
 
 ## 業務 Agent を専門家として呼ぶ（Agent の MCP）
 

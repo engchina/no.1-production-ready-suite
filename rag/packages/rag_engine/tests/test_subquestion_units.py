@@ -11,10 +11,6 @@ from rag_engine.generation import grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.context_builder import ContextParentEvidence
-from rag_engine.retrieval.request_coverage import (
-    TargetedRetrieval,
-    select_new_parents,
-)
 from rag_engine.retrieval.task_contract import request_units, subquestion_markers
 
 PREAMBLE = "システムAの画面Bについて教えてください。"
@@ -141,15 +137,6 @@ def parent(uid: str, text: str) -> ContextParentEvidence:
 
 def context(*parents: ContextParentEvidence) -> AnswerContext:
     return AnswerContext(records=[p.record for p in parents], text="x", evidence_tree=tuple(parents))
-
-
-def test_select_new_parents_keeps_shared_cap_for_missing_requests() -> None:
-    sub = TargetedRetrieval("Q2", ("a",), tuple(parent(f"a{n}", "x") for n in range(3)), chunk_cap=1)
-    missing = TargetedRetrieval("Q5", ("b",), tuple(parent(f"b{n}", "x") for n in range(3)))
-
-    selected = select_new_parents([sub, missing], set(), max_chunks=2)
-
-    assert [(rid, p.record.chunk_uid) for rid, p in selected] == [("Q2", "run:a0"), ("Q5", "run:b0"), ("Q5", "run:b1")]
 
 
 # ---- 回答の見出し ---------------------------------------------------------------------------------

@@ -20,7 +20,7 @@ from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.context_fill import consolidate_evidence_tree
 from rag_engine.retrieval.evidence_cues import evidence_cues
-from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, EXPANSION_KEYS, merge_expansions
+from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, MERGE_MARK_KEYS, merge_expansions
 from rag_engine.retrieval.metadata_context import answer_metadata_context, with_child_contexts
 from rag_engine.retrieval.operation_context import operation_labels
 
@@ -219,6 +219,9 @@ class ContextBuildRequest:
     # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。起点・親・前後の文脈が決まった後に、
     # ``expansion_merge`` の規則で 1 回だけ合わせる。``top_k``・``max_records`` に数えない。
     expansion_children: Sequence[Any] = ()
+    # 補いの検索（要求別の補完・業務ガイドの手順ごとの検索。#5173）で rerank・下限・``top_k`` の切りを通した根拠。
+    # 検索拡張の根拠の後に、同じ規則で合わせる。``top_k``・``max_records`` に数えず、並びの根拠を外さない。
+    supplement_children: Sequence[Any] = ()
     # 章節で文脈を補う起点の ID（chunk_uid か id。#5168）。前後の chunk を足さない（補い方は起点ごとに 1 つ。
     # ``context_fill``）。章節の本文は呼び出し元の章節の拡張が足す。
     section_anchor_ids: frozenset[str] = frozenset()
@@ -250,7 +253,8 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         for record in request.ranked_children
         if record_context_key(record) in active_ids and str(getattr(record, "chunk_level", "") or "") == CHILD_CHUNK_LEVEL
     ]
-    if not ranked_children:
+    # 主の検索の起点が無くても、補いの検索の根拠だけで根拠を作れる（#5173）。
+    if not ranked_children and not request.supplement_children:
         return ContextBundle(
             records=[],
             text="",
@@ -444,13 +448,18 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             selected.append(group)
             selected_keys.add(key)
             visual_added += 1
-    # 検索拡張の根拠（#5162）は、根拠の並び（起点・添付・前後の文脈・図の原文）が決まった後に合わせる。
-    expansion_children = [
-        record
-        for record in request.expansion_children
-        if record_context_key(record) in active_ids and str(getattr(record, "chunk_level", "") or "") == CHILD_CHUNK_LEVEL
-    ]
-    if expansion_children:
+
+    # 検索拡張の根拠（#5162）は、根拠の並び（起点・添付・前後の文脈・図の原文）が決まった後に合わせる。補いの検索の
+    # 根拠（#5173）は、その後に同じ規則で合わせる。
+    def merge_after_cut(candidates: Sequence[Any]) -> None:
+        nonlocal selected
+        merged_children = [
+            record
+            for record in candidates
+            if record_context_key(record) in active_ids and str(getattr(record, "chunk_level", "") or "") == CHILD_CHUNK_LEVEL
+        ]
+        if not merged_children:
+            return
         added: list[_ParentEvidenceBuilder] = []
         added_ids: set[int] = set()
 
@@ -462,7 +471,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             group.children.clear()
             return group
 
-        for child in expansion_children:
+        for child in merged_children:
             key = record_context_key(child)
             # 1. 同じ chunk が並びにある: 印だけを付ける。
             holder = next((group for group in (*selected, *added) if key in group.children), None)
@@ -482,7 +491,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             add_child(group, child, "retrieved_anchor", EXPANSION_EVIDENCE_REASON)
             added.append(group)
             added_ids.add(id(group))
-        # 拡張の根拠の単位は検索で当たった chunk と同じ（親子の分割なら親、そうでなければ前後の文脈）。
+        # 合わせた根拠の単位は検索で当たった chunk と同じ（親子の分割なら親、そうでなければ前後の文脈）。
         present = {record_context_key(entry.record) for entry in (*selected, *added)}
         for group in tuple(added):
             for anchor in tuple(group.children.values()):
@@ -506,6 +515,10 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
                     added_ids.add(id(neighbor_group))
                     present.add(key)
         selected = merge_expansions(selected, added, key=lambda group: str(id(group)), document=_group_document, seq=_group_seq)
+        selected_groups.update(id(group) for group in added)
+
+    merge_after_cut(request.expansion_children)
+    merge_after_cut(request.supplement_children)
     evidence_tree = _finalize_parent_evidence(selected)
     if not request.select_anchors_only:
         # 補った後に 1 回だけ、重なる根拠をまとめ、前後の文脈を起点のかたまりへ置く（#5168）。
@@ -519,8 +532,8 @@ def fill_anchor_id(record: Any) -> str:
 
 
 def _with_expansion_marks(record: Any, expansion: Any) -> Any:
-    """並びにある根拠へ、拡張の印（足した理由）を写す。関連度などの並びの値はそのまま残す。"""
-    marks = {key: value for key, value in (getattr(expansion, "metadata", None) or {}).items() if key in EXPANSION_KEYS}
+    """並びにある根拠へ、拡張・補いの検索の印（足した理由）を写す。関連度などの並びの値はそのまま残す。"""
+    marks = {key: value for key, value in (getattr(expansion, "metadata", None) or {}).items() if key in MERGE_MARK_KEYS}
     if not marks or not is_dataclass(record) or isinstance(record, type):
         return record
     return replace(record, metadata={**(getattr(record, "metadata", None) or {}), **marks})

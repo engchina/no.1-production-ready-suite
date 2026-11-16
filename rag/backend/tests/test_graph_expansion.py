@@ -370,14 +370,21 @@ async def test_search_caches_the_plan_skips_when_disabled_and_expands_search_onl
     )
     assert [child.chunk_uid for child in disabled.child_chunks] == [a[16]]
     assert off_store.calls == []
-    # 検索だけ（KB の検索テストなど）も回答と同じく拡張し、top_k に数えずに同じ文書の chunk の順で
-    # 合わせる（#5162）。
+    # 検索だけ（KB の検索テストなど）も回答と同じ流れで拡張し、top_k に数えずに同じ文書の
+    # chunk の順で合わせる（#5162・#5173）。足した根拠の前後の文脈も補うので、前後の文脈には
+    # 印が無い。
     retrieved_only = await engine.retrieve(request.model_copy(update={"top_k": 1}))
     ids = [chunk.chunk_id for chunk in retrieved_only]
     assert a[16] in ids and len(ids) > 1
-    added = [chunk for chunk in retrieved_only if chunk.chunk_id != a[16]]
-    assert all(GRAPH_EXPANSION_KEY in chunk.metadata for chunk in added)
-    assert all(chunk.metadata.get("evidence_expansion") is True for chunk in added)
+    added = [chunk for chunk in retrieved_only if chunk.metadata.get("evidence_expansion") is True]
+    assert added and all(GRAPH_EXPANSION_KEY in chunk.metadata for chunk in added)
+    assert {
+        chunk.metadata.get("evidence_role") for chunk in retrieved_only if chunk not in added
+    } <= {
+        "retrieved_anchor",
+        "neighbor_context",
+        "parent_context",
+    }
 
 
 async def test_search_continues_when_the_graph_tables_cannot_be_read() -> None:

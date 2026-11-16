@@ -1430,7 +1430,11 @@ class Settings(
         default=4,
         ge=0,
         le=12,
-        description="根拠の無い要求の再検索で回答の材料に足す根拠(親 chunk)の数の上限(#1279)。",
+        description=(
+            "全文検索の語数上限を超えた質問の要求別の補完で、回答の材料に足す根拠の数の上限"
+            "(#1279)。要求ごとの検索は、これを要求の数で割った件数(切り上げ)で rerank・関連度の"
+            "下限の後に切る(#5173)。"
+        ),
     )
     rag_request_coverage_deadline_seconds: float = Field(
         default=10.0,
@@ -1487,16 +1491,10 @@ class Settings(
         default=2,
         ge=1,
         le=5,
-        description="業務ガイドの手順ごとの検索で、1 手順に確保する根拠(親 chunk)の数(#2395)。",
-    )
-    rag_guide_reference_max_chunks: int = Field(
-        default=4,
-        ge=0,
-        le=12,
         description=(
-            "業務ガイドの手順が参照する資料の頁から、検索の順位に関係なく回答の材料に入れる根拠"
-            "(親 chunk)の追加数の上限。必須の取得対象ごとの最低1件は別に確保し、"
-            "全体の本文予算は増やさない(#3795)。"
+            "業務ガイドの手順ごとの検索(参照の頁に絞った検索を含む)の 1 回で、rerank・関連度の"
+            "下限の後に上位から採る根拠の数(#2395・#5173)。採った根拠は主の検索の根拠へ同じ規則で"
+            "合わせる。"
         ),
     )
     rag_guide_step_deadline_seconds: float = Field(
@@ -1550,16 +1548,6 @@ class Settings(
             "この文字数続いたら、その出力を不合格にして送り直す(やり直しの共通の枠で数える)。"
             "文字列の中(回答の本文)の空白・反復した表は数えない。"
             "正当な JSON の整形(インデント)では届かない長さにする。"
-        ),
-    )
-    rag_section_expansion_followup_reserve_percent: int = Field(
-        default=20,
-        ge=0,
-        le=50,
-        description=(
-            "業務ガイドの手順ごとの検索が後に来る回答で、最初の章節の拡張が使わずに残す入力の割合"
-            "(#2816。章節の拡張の根拠の入力の上限に対する %。既定 20、0 は残さない)。"
-            "手順の根拠から広げる章節の分を残す。"
         ),
     )
     rag_answer_record_retention_days: int = Field(

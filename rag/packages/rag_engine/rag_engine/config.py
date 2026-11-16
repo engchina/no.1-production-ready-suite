@@ -303,11 +303,11 @@ class Settings:
     # 合計の枠 (#2395)。種類ごとの上限はこの枠の中で数える（`retrieval.extra_retrieval`）。
     extra_retrieval_max_queries: int = 8
     # 業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に入れる (#2395)。LLM は呼ばない。
-    # 必須対象は追加検索の合計枠を先に確保する。回数はその後の補助検索、参照数は最低1件以外の追加候補を制限する。
+    # 必須対象は追加検索の合計枠を先に確保する。回数はその後の補助検索の上限。検索ごとに rerank・下限の後、
+    # 上位 guide_step_chunks_per_step 件で切り、主の検索の根拠へ合わせる（#5173）。
     guide_step_retrieval_enabled: bool = True
     guide_step_max_queries: int = 4
     guide_step_chunks_per_step: int = 2
-    guide_reference_max_chunks: int = 4
     guide_step_deadline_seconds: float = 60.0
     # 当たった chunk の章節から親の章節へ段階的に広げて文脈に入れる (#1436)。章節と chunk の対応を注入した
     # 呼び出し元（`AnswerDependencies.section_outline` / `section_chunks`）でだけ動く。上限は、根拠の入力 token
@@ -315,8 +315,6 @@ class Settings:
     section_expansion_enabled: bool = True
     section_expansion_max_levels: int = 4
     section_expansion_input_token_percent: int = 50
-    # 業務ガイドの手順ごとの検索の後に広げる段のために、最初の段で使わずに残す入力の割合（上の入力の上限に対する %。#2816）。
-    section_expansion_followup_reserve_percent: int = 20
     # 回答のモデルの入力の上限（tokens。#1437）。backend が共通のモデル設定の登録モデルの値を
     # `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で渡す（platform の enterprise_ai_max_input_tokens。既定 128000）。
     # 章節の拡張の根拠の入力の上限をこの割合で決める。
@@ -548,14 +546,10 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         guide_step_retrieval_enabled=_env_bool(env, "RAG_ENGINE_GUIDE_STEP_RETRIEVAL", True),
         guide_step_max_queries=max(0, _env_int(env, "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES", 4)),
         guide_step_chunks_per_step=max(1, _env_int(env, "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP", 2)),
-        guide_reference_max_chunks=max(0, _env_int(env, "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS", 4)),
         guide_step_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS", 60.0)),
         section_expansion_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXPANSION", True),
         section_expansion_max_levels=max(0, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS", 4)),
         section_expansion_input_token_percent=max(1, min(100, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT", 50))),
-        section_expansion_followup_reserve_percent=max(
-            0, min(50, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT", 20))
-        ),
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),

@@ -306,7 +306,8 @@ def test_added_expansions_are_returned_regardless_of_relevance_or_seed() -> None
 
     returned, omitted = mcp_evidence([*hits, chunk_row, question_row], 20)
 
-    assert _ids(returned)[20:] == ["ledger-named", "ledger-listed"]
+    # 上限に数えず、citations の順のまま返す（#5173）。
+    assert _ids(returned)[20:] == ["ledger-listed", "ledger-named"]
     assert omitted == 3
 
 

@@ -32,9 +32,7 @@ class PolicyRecorder(Recorder):
         return observe()
 
 
-def run(
-    monkeypatch, recorder, *, question="合成の質問", guide=None, generate=False, complete=True, settings=None, search=None, request=None
-):
+def run(monkeypatch, recorder, *, question="合成の質問", guide=None, generate=False, settings=None, search=None, request=None):
     original = context(parent("old", "合成本文"))
     monkeypatch.setattr(a, "load_latest_or_source_chunk_run", lambda *args, **kwargs: _chunk_run_stub())
     monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda *args, **kwargs: None)
@@ -48,7 +46,6 @@ def run(
             settings or _rerank_ready_settings(),
             guide_plan=guide,
             generate_answer=generate,
-            complete_evidence=complete,
             classification_filter=ClassificationFilter(large_category="synthetic-category"),
             request_question=request,
         )
@@ -93,7 +90,7 @@ def test_overflow_records_actual_returned_and_adopted_evidence(monkeypatch, enab
         assert call["input"]["原質問"] == request
         assert call["input"]["分類条件"]["large_category"] == "synthetic-category"
         assert call["input"]["使用済みの要求別予算"]["queries"] == 0
-        assert call["output"]["新規採用ID"] == ([] if failed else ["run:new"])
+        assert call["output"]["合わせる根拠ID"] == ([] if failed else ["run:new"])
         assert call["output"]["検索結果"] == result.generation_trace["query_overflow"]
         if failed:
             assert call["output"]["要求ごとの返却根拠"] == []
@@ -109,10 +106,10 @@ def test_no_overflow_has_real_skip_and_retains_context(monkeypatch):
     result = run(monkeypatch, recorder)
     call = recorder.stage("検索上限の要求別補完")
     assert call["output"]["検索結果"]["triggered"] is False
-    assert call["output"]["新規採用ID"] == []
+    assert call["output"]["合わせる根拠ID"] == []
     step = next(item for item in result.execution_steps if item["name"] == "検索上限の要求別補完")
     assert step["status"] == "skipped"
-    assert [item["ID"] for item in call["output"]["処理後の根拠"]] == ["run:old"]
+    assert [item["chunk_uid"] for item in result.evidence_items] == ["run:old"]
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -123,8 +120,9 @@ def test_guide_actual_plan_settings_and_result_are_associated(monkeypatch, enabl
     call = recorder.stage("業務ガイドの手順ごとの検索")
     assert call["input"]["手順計画"]["guide_id"] == guide.guide_id
     assert call["input"]["設定"]["guide_step_retrieval_enabled"] is enabled
-    assert call["output"]["検索と取得の記録"] == result.generation_trace["guide_steps"]
-    assert call["output"]["手順と根拠の対応"][0][0] == "s1"
+    assert call["output"]["検索と取得の記録"]["guide_id"] == result.generation_trace["guide_steps"]["guide_id"]
+    if enabled:
+        assert result.generation_trace["guide_steps"]["steps"][0]["id"] == "s1"
     step = next(item for item in result.execution_steps if item["name"] == "業務ガイドの手順ごとの検索")
     assert (step["status"] == "skipped") is (not enabled)
     assert call["input"]["既存根拠"][0]["ID"] == "run:old"

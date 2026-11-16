@@ -1,8 +1,13 @@
-"""全文検索の超限を原要求の単位で補う。根拠の十分性は判断しない。"""
+"""全文検索の超限を原要求の単位で補う。根拠の十分性は判断しない。
+
+要求ごとの検索は、主の検索と同じく「検索 → rerank → 下限 → 文書ごとの上限 → ``top_k`` で切る」だけを行う（#5173）。
+``top_k`` は、足す根拠の上限（``RAG_REQUEST_COVERAGE_MAX_CHUNKS``）を要求の数で割った件数（切り上げ）と、上限の残りの
+小さい方。切った根拠は呼び出し元が主の検索の根拠へ合わせる（``expansion_merge`` の規則。主の検索の根拠を外さない）。
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any
@@ -26,20 +31,29 @@ def _key(query: str) -> str:
     return " ".join(normalize_text_search_text(query).split()).rstrip("。?？!！")
 
 
+def _record_key(record: Any) -> str:
+    return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
+
+
 def search_overflow_requests(
     question: str,
     *,
     tokenize: Callable[[str], TextSearchTokenizationResult],
-    retrieve: Callable[[str], Any],
+    retrieve: Callable[[str, int], Any],
     extra_budget: ExtraRetrievalBudget,
     coverage_budget: CoverageBudget,
     usage: CoverageUsage,
     searched_queries: Sequence[str] = (),
+    existing_keys: Iterable[str] = (),
     allow_split: bool = True,
     initial_query_overflowed: bool = False,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[list[OverflowSearch], dict[str, Any]]:
-    """元の ID・前置きを保った検索を、追加検索の同じ回数・期限の中で行う。"""
+    """元の ID・前置きを保った検索を、追加検索の同じ回数・期限の中で行う。
+
+    ``retrieve(query, top_k)`` は ``top_k`` で切った起点（records）を返す。``existing_keys`` は主の検索の根拠の key で、
+    新しい根拠の数（上限の使用量）にはそれ以外だけを数える。
+    """
     if not allow_split:
         return [], {"schema_version": 1, "triggered": False, "skipped": "original_query_only", "requests": [], "llm_calls": 0}
     try:
@@ -63,6 +77,8 @@ def search_overflow_requests(
     rows = trace["requests"]
     results: list[OverflowSearch] = []
     initial_keys = {_key(query) for query in (*searched_queries, *usage.searched_queries)}
+    seen = {key for key in existing_keys if key}
+    share = -(-max(0, coverage_budget.max_chunks) // max(1, len(targets)))
     cache: dict[str, Any] = {}
     deadline = usage.remaining(coverage_budget).deadline_seconds
     for target in targets:
@@ -106,18 +122,23 @@ def search_overflow_requests(
         if deadline <= 0 or clock() - started >= deadline:
             row["status"] = "unsearched_deadline"
             continue
+        top_k = max(1, min(share, coverage_budget.max_chunks - usage.chunks))
         extra_budget.take(OVERFLOW_KIND)
         usage.queries += 1
         usage.searched_queries.append(query)
         cache[key] = None
         try:
-            result = retrieve(query)
+            result = retrieve(query, top_k)
         except Exception as exc:  # noqa: BLE001 - 失敗を根拠なしにせず記録し、既存の検索結果を維持する。
-            row.update(status="failed", error_type=type(exc).__name__)
+            row.update(status="failed", error_type=type(exc).__name__, top_k=top_k)
             continue
         cache[key] = result
-        count = len(getattr(result, "records", ()) or ())
-        row.update(status="candidate_found" if count else "no_candidates", candidates=count)
+        records = list(getattr(result, "records", ()) or ())
+        fresh = [record_key for record in records if (record_key := _record_key(record)) and record_key not in seen]
+        seen.update(fresh)
+        usage.chunks += len(fresh)
+        count = len(records)
+        row.update(status="candidate_found" if count else "no_candidates", candidates=count, top_k=top_k, new_candidates=len(fresh))
         results.append(OverflowSearch(target.id, query, result))
     usage.elapsed_seconds += max(0.0, clock() - started)
     trace["budget"] = extra_budget.to_payload()

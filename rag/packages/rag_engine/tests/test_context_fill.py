@@ -25,7 +25,7 @@ from rag_engine.retrieval.context_fill import (
     consolidate_evidence_tree,
     context_fill_mode,
 )
-from rag_engine.retrieval.expansion_merge import ENTITY_EXPANSION_KEY, EXPANSION_EVIDENCE_REASON
+from rag_engine.retrieval.expansion_merge import ENTITY_EXPANSION_KEY, EXPANSION_EVIDENCE_REASON, QUERY_OVERFLOW_KEY
 
 
 def _stored(uid: str, seq: int, document: str, *, strategy: str = "fixed", parent: str = "", level: str = "child") -> StoredChunk:
@@ -311,3 +311,68 @@ def test_fill_without_an_anchor_in_the_document_keeps_its_position():
     lone = _record("f5", 5, "F")
     merged = consolidate_evidence_tree((_group(lone, _fill(lone), reason="adjacent_child"), _group(a, _anchor(a, 1))))
     assert [item.record.chunk_uid for item in merged] == ["f5", "a1"]
+
+
+def test_supplement_is_merged_after_expansions_with_the_same_rule():
+    """補いの検索の根拠（#5173）は検索拡張の後に同じ規則で合わせ、主の検索の起点を外さない。"""
+    chunks = {**_flat("C", 3), **_flat("D", 4), **_flat("E", 2)}
+    records = {uid: _stored_chunk_answer_record(chunk) for uid, chunk in chunks.items()}
+    expansion = replace(records["E1"], metadata={**records["E1"].metadata, ENTITY_EXPANSION_KEY: {"hop": 1}})
+    supplement = replace(records["D4"], metadata={**records["D4"].metadata, QUERY_OVERFLOW_KEY: {"request_ids": ["Q1"]}})
+    covered = replace(records["C3"], metadata={**records["C3"].metadata, QUERY_OVERFLOW_KEY: {"request_ids": ["Q1"]}})
+    dependencies = AnswerDependencies(unused, unused, unused, unused, unused, context_chunks=lambda **_: [])
+    with bind_dependencies(dependencies), recorded():
+        bundle = answering._bundle_context(
+            "合成の質問",
+            [records["C2"]],
+            list(records.values()),
+            _settings(),
+            top_k=1,
+            neighbor_child_count=1,
+            max_records=3,
+            max_chars=100_000,
+            expansions=[expansion],
+            supplements=[supplement, covered],
+        )
+    # 起点 C2 と前後の文脈はそのまま。拡張の根拠（E1）の後に補いの根拠（D4 と前後の D3）を最後に置く。
+    # C3 は起点の前後の文脈にあるので印だけ。拡張・補いの根拠は上限（max_records=3）に数えない。
+    assert [item.record.chunk_uid for item in bundle.evidence_tree] == ["C1", "C2", "C3", "E1", "E2", "D3", "D4"]
+    c3 = next(child for item in bundle.evidence_tree for child in item.children if child.record.chunk_uid == "C3")
+    assert c3.role == "neighbor_context" and QUERY_OVERFLOW_KEY in c3.record.metadata
+    d4 = next(child for item in bundle.evidence_tree for child in item.children if child.record.chunk_uid == "D4")
+    assert d4.role == "retrieved_anchor" and d4.reason == EXPANSION_EVIDENCE_REASON
+
+
+def _unread_state(stub: Sections, read: bool) -> dict[str, Any]:
+    reader = sections.SectionReader(read_chunks=stub.read, known_ids=set())
+    if read:
+        reader.read_sections.add(("A", "set-A", "s1"))
+    return {"reader": reader, "outlines": {}, "result": sections.SectionExpansionResult(context=AnswerContext(records=[], text=""))}
+
+
+def test_anchor_whose_section_was_not_read_falls_back_to_neighbors():
+    """章節で補う起点の所有の章節を読めなかったときは、前後 N 件で補う（#5173）。"""
+    chunks, ranked, active = _three_documents()
+    stub = Sections(chunks)
+    context, _step, _calls = _build(stub, ranked, active)
+    assert "A1" not in _ids(context)  # 章節で補う起点は前後を読んでいない
+    context = replace(context, expansion_records=tuple(active))
+    state = _unread_state(stub, read=False)
+    dependencies = AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.read)
+    with bind_dependencies(dependencies):
+        filled = answering._fill_unread_section_anchors(context, _settings(), state, neighbor_child_count=1)
+    assert _ids(filled) == ["A1", "A2", "A3", "PB", "C1", "C2", "C3"]
+    roles = {child.record.chunk_uid: child.role for parent in filled.evidence_tree for child in parent.children}
+    assert roles["A2"] == "retrieved_anchor" and roles["A1"] == roles["A3"] == "neighbor_context"
+    assert state["result"].trace["unread_section_fallback"] == {"anchor_ids": ["A2"], "neighbor_chunk_ids": ["A1", "A3"]}
+
+
+def test_anchor_whose_section_was_read_is_not_filled_again():
+    chunks, ranked, active = _three_documents()
+    stub = Sections(chunks)
+    context, _step, _calls = _build(stub, ranked, active)
+    context = replace(context, expansion_records=tuple(active))
+    dependencies = AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.read)
+    with bind_dependencies(dependencies):
+        filled = answering._fill_unread_section_anchors(context, _settings(), _unread_state(stub, read=True), neighbor_child_count=1)
+    assert filled is context

@@ -37,6 +37,9 @@ rerank の後の工程は次の順で 1 回ずつ行い、以後は足すだけ�
 4. 起点数（`top_k`）で 1 回だけ切る（context の組み立て。親の枠 `RAG_ENGINE_MAX_CONTEXT_RECORDS` と同じ親の起点の
    上限は context の組み立ての規則のまま）。
 5. 検索拡張の根拠を合わせる（下の「検索拡張の根拠の合わせ方」）。
+6. 補いの検索（語数上限の要求別の補完・業務ガイドの手順の検索）の根拠を同じ規則で合わせる（下の「補いの検索と
+   3 つの経路」）。
+7. 文脈を補う（下の「文脈の補完」。章節の拡張を含む）。
 
 rerank の入力の文は「文書の名前・章節の見出し・当たった chunk の原文」だけで、検索文の文脈行（親の要約・キーワード・
 分類など）・引用の ID・前後の文脈は入れない（`answer_records._rerank_document`）。派生の chunk（章節の要約・項目抽出の値）は
@@ -69,11 +72,42 @@ rerank が無効・失敗・有効な点が 1 件も無いときは、並べ替�
   読取が選ばなかったときも最終生成へ補う順の先頭にする（`select_evidence` の `protected_sources`。
   [reference-answer-flow.md](./reference-answer-flow.md)「原文の選択と分割読取」）。
 - 回答・検索だけ（`generate_answer=false` と `AnswerEngine.retrieve`）・MCP（`rag_search` /
-  `rag_retrieve_evidence` の `mcp_evidence`）は同じ処理を呼ぶ。検索だけと MCP の引用では、足した根拠に
-  `evidence_expansion` の印を付ける。
+  `rag_retrieve_evidence`）は同じ流れで合わせる（#5173）。引用では、足した根拠に `evidence_expansion` の印を付ける
+  （MCP の `evidence_limit` に数えない）。
 - 章節の拡張の後のまとめ（下の「文脈の補完」）で、足した根拠がほかの根拠（章節で読んだ本文を含む）に含まれるか、
   ほかの根拠のかたまりに入ったときは、重ねて置かずに印だけを残す（起点の役割を外す）。
-- 要求ごとの補いの検索・業務ガイドの手順の検索が足す根拠の扱いは今のまま（後続の整理の対象）。
+- 補いの検索の根拠も同じ規則で、検索拡張の後に合わせる（下の「補いの検索と 3 つの経路」）。
+
+## 補いの検索と 3 つの経路（#5173）
+
+主の検索の後に足す検索（全文検索の語数上限を超えた質問の要求別の補完「検索上限の要求別補完」・業務ガイドの
+手順ごとの検索）は、主の検索と同じ切りと検索拡張と同じ合わせ込みにする（`rag_engine/generation/answering.py`）。
+
+- 検索ごとに「検索 → rerank → 関連度の下限 → 文書ごとの上限 → `top_k` で切る」だけを行う（文脈は補わない。
+  `build_adb_hybrid_answer_context(fill=False)`）。切る件数は既存の補いの設定の上限:
+  - 要求別の補完: `RAG_REQUEST_COVERAGE_MAX_CHUNKS`（足す根拠の合計）を要求の数で割った件数（切り上げ）と、合計の
+    残りの小さい方。主の検索の根拠にある候補は合計に数えない。
+  - 業務ガイドの手順: 検索ごとに `RAG_GUIDE_STEP_CHUNKS_PER_STEP`（参照の頁に絞った検索も同じ）。
+- 切った根拠は、検索拡張の根拠の後に同じ規則（`expansion_merge.merge_expansions`）で主の検索の根拠へ合わせる:
+  並びにある・並びの親や前後の文脈に含まれる → 印（`query_overflow` / `guide_step`）だけ／同じ文書の根拠がある →
+  文書の chunk の順の位置／無い → 最後。`top_k`・context の親の枠・MCP の `evidence_limit` に数えない。
+- 主の検索の根拠は外さない（主の検索の起点は同じ規則で選び直すので同じものになる。外れる結果は使わず、
+  `query_overflow.rejected` に残す）。合わせた後に文脈の補完（章節の拡張を含む）を 1 回だけ行う。
+- 削除した規則: 要求の間で交互に選ぶ（`select_new_parents`）、手順の必須の対象の 1 件目の確保・手順ごとの上位の
+  選択・参照の頁の根拠を手順の間で交互に選ぶ（`select_step_parents`。`RAG_GUIDE_REFERENCE_MAX_CHUNKS`）、
+  検索ごとに文脈を補った根拠を `merge_evidence` で並びの最後に足す処理、後の段のために最初の章節の拡張が入力を
+  残す予約（`RAG_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT`。章節の拡張は 1 回になった）。
+
+回答・検索だけ（KB の検索テスト・レシピの検索比較。`retrieval_only` / `AnswerEngine.retrieve`）・RAG 検索の画面
+（`generate_answer=false`）・MCP の `rag_retrieve_evidence` は、同じ 1 つの流れで根拠を集める: 主の検索 → rerank →
+切る → 検索拡張の合わせ込み → 補いの検索の合わせ込み → 文脈の補完。経路で残る違いは次だけ。
+
+- 回答だけ: 回答の生成・引用した根拠を引用の先頭に出す並び・業務ガイドの確かめる条件と引き継ぎの短い回答
+  （回答を作らないので要らない）。
+- 図の画像の切り出し: 回答と RAG 検索の画面だけ。検索だけと MCP は切り出さない（MCP は `rag_read_source` で読む。
+  #5125）。
+- MCP の `evidence_limit`: 上限を超えたときに残す根拠を選ぶ（回答に使った根拠 → 当たった根拠（関連度の順）→ 前後の
+  文脈）。並びは変えない。
 
 ## 文脈の補完（#5168）
 
@@ -88,9 +122,11 @@ rerank の後に決まった根拠（起点。検索拡張の根拠も同じ）�
 
 - 親子分割の当たった chunk は、章節の対応があっても親を根拠の単位にする（章節の読み込みは章節の親を読むので、
   章節で補った結果は親を含む。章節を読めなかったときも親の本文は残る）。
-- 章節で補うのは、後で章節の拡張を行う経路（回答と RAG 検索の画面の `generate_answer=false`。主の検索・語数上限の
-  要求別の補完・業務ガイドの手順の検索の根拠）だけ。章節の拡張が無効・章節の読み込みが無い・MCP の
-  `rag_retrieve_evidence`（`complete_evidence=False`。主の検索の後で止める）は、親か前後で補う。
+- 3 つの経路（回答・検索だけ・MCP）はどれも章節の拡張を行う（#5173）。章節の拡張が無効・章節の読み込みが無いときは、
+  親か前後で補う。
+- 章節の拡張が予算・時間の上限・読み取りの失敗で起点の所有の章節（かその上の章節）を読めなかったときは、その起点を
+  次の補い方で補う（親子分割は親が起点の単位なので補い済み、それ以外は前後 N 件。#5173）。補った起点と前後の
+  chunk は `section_expansion.unread_section_fallback` に残す。
 - 補った後に 1 回だけまとめる（文脈の組み立ての最後と、章節の拡張で本文を足した後）:
   - 同じ根拠・互いに含む根拠（chunk の集合が他方に含まれる）・重なりの大きい根拠（半分を超える chunk が他方に
     ある）は 1 つにまとめ、先にある方の位置に置く。
@@ -219,18 +255,16 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_EVIDENCE_BUDGET_CHARS` | `40000` | 1 回の回答生成に渡す根拠ブロック（本文・補助情報・書式）の文字上限。全体設定のみ。選択済みの親本文は長さで除外せず、全件が 1 回に入らない場合は章節（無ければ見出し）・段落・文の順の区切りで分割読取し（表は行の途中で切らず、続きの組には表頭を添える）、原文引用付きの局所回答を最終生成で統合する。各呼出で system・schema・出力予約込みのモデル入力 token 上限も守る（読取の組は修復の指摘の上限の分も先に確保する）。使える出力が得られなかった組は原文を残して続け、読取結果がまだ大きければ段階的に統合し、縮約不能・読取漏れ・不正な引用・時間切れを成功扱いしない。`generation_input_budget` に各バッチの原文座標・状態・件数と最終入力の測定値を記録する。短い入力は追加呼出なし。文書レシピ・KB membership・検索候補数は変更しない |
 | `RAG_GUIDE_STEP_RETRIEVAL_ENABLED` | `true` | 業務ガイドの手順ごとの検索（#2395。静的な多段）。照合した業務ガイドの手順（分かっている条件で外れた分岐の手順を除く）ごとに「質問 + 手順の検索の手がかり（無ければ題名）」で検索し、手順が参照する資料と頁（`steps[].references`。表計算の資料は頁ではなくシートと行の `sheet_ranges` で、chunk のシート名と行の範囲で絞る。#2663）があれば、その範囲に絞った検索も行う（`rag_engine/retrieval/guide_steps.py`。LLM は呼ばない。文書の選択は使わない）。各手順に 1 回を先に割り当て、残りで参照のある手順の絞らない検索をする。手順の上位の根拠と参照の頁の根拠を既存の根拠の後ろに足し（既存の根拠は減らさない）、回答の生成には手順の id ごとの根拠（Evidence の表示 ID）を渡す。工程の名前は「業務ガイドの手順ごとの検索」、記録は `diagnostics.answer.guide.step_retrieval`（手順ごとの検索文・取れた根拠の件数・参照の頁の有無・足した根拠）。同じ業務ガイドの記録に、回答の手順ごとの充足 `step_coverage`（手順の id・状態・必須か）と、手順の対応付けの embedding の呼び出し `step_embedding`（回数・文の数・時間・失敗か）も残す（#2686。下書きで試した回答の応答 `steps` にも手順ごとの状態を返す）。全体設定だけで決め、検索・回答プロファイルでは上書きしない（回数の上限 `RAG_GUIDE_STEP_MAX_QUERIES` と期限 `RAG_GUIDE_STEP_DEADLINE_SECONDS` も同じ。#3523） |
 | `RAG_GUIDE_STEP_MAX_QUERIES` | `4` | 手順ごとの検索の回数の上限（参照の頁に絞った検索を含む、0〜10）。全体設定だけで決め、検索・回答プロファイルでは上書きしない（#3523） |
-| `RAG_GUIDE_STEP_CHUNKS_PER_STEP` | `2` | 1 手順の絞らない検索から手順の根拠にする親 chunk の数（1〜5） |
-| `RAG_GUIDE_REFERENCE_MAX_CHUNKS` | `4` | 参照の頁に絞った検索から、順位に関係なく回答の材料に入れる親 chunk の数の合計（0〜12）。手順の間で交互に選ぶ |
+| `RAG_GUIDE_STEP_CHUNKS_PER_STEP` | `2` | 業務ガイドの手順ごとの検索（参照の頁に絞った検索を含む）の 1 回で、rerank・関連度の下限の後に上位から採る根拠の数（1〜5。#2395・#5173）。採った根拠は主の検索の根拠へ検索拡張と同じ規則で合わせる（上の「補いの検索と 3 つの経路」） |
 | `RAG_GUIDE_STEP_DEADLINE_SECONDS` | `60` | 手順ごとの検索の期限（秒、0〜60。#2826 で 10 → 60。手順の多い業務ガイドで後ろの手順が検索されずに残るため。早く終われば待たない）。全体設定だけで決め、検索・回答プロファイルでは上書きしない（#3523） |
 | `RAG_REQUEST_COVERAGE_MAX_QUERIES` | `2` | 根拠の無い要求の再検索の回数の上限（1 要求 1 回、0〜5） |
-| `RAG_REQUEST_COVERAGE_MAX_CHUNKS` | `4` | 再検索で回答の材料に足す根拠（親 chunk）の数の上限（0〜12）。要求ごとに順番に 1 件ずつ選ぶ |
+| `RAG_REQUEST_COVERAGE_MAX_CHUNKS` | `4` | 全文検索の語数上限を超えた質問の要求別の補完で、回答の材料に足す根拠の数の合計（0〜12。#1279）。要求ごとの検索は、これを要求の数で割った件数（切り上げ）と合計の残りの小さい方で rerank・関連度の下限の後に切り、主の検索の根拠へ検索拡張と同じ規則で合わせる（#5173）。主の検索の根拠にある候補は数えない |
 | `RAG_REQUEST_COVERAGE_DEADLINE_SECONDS` | `10` | 再検索の期限（秒、0〜60）。過ぎたら次の要求の検索を始めない（実行中の 1 回は止めない） |
 | `RAG_REQUEST_COVERAGE_MAX_SUBQUESTIONS` | `5` | 小問ごとの検索をする小問の数の上限（1 小問 1 回、0〜10。0 はしない。#2399）。丸数字・(1) などで並べた小問（言語資源の `question_cues` の小問の印。資料の手順の印 `markers.circled_numbers` とは別）は、小問ごとに 1 つの要求単位になり（小問の前の前置きは背景の単位にし、各小問に `preamble` として付ける）、根拠が「なし」か「一部」の小問ごとに、前置き＋小問の文で検索する。小問の検索を先に、根拠の無い要求の再検索を後に、同じ期限（`RAG_REQUEST_COVERAGE_DEADLINE_SECONDS`）で行い、検索の枠は `request_coverage.plan_targeted_retrievals` の 1 か所で数える。回答の本文は小問ごとの見出し（言語資源の `answer_labels.subquestion_heading_template`）で分け、根拠の無い小問だけを「確認できませんでした」にする |
 | `RAG_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION` | `2` | 小問ごとの検索で、小問ごとに回答の材料に確保する根拠（親 chunk）の数（0〜6。0 は小問ごとの検索をしない）。根拠の無い要求の再検索の `RAG_REQUEST_COVERAGE_MAX_CHUNKS` とは別に数える |
 | `RAG_EXTRA_RETRIEVAL_MAX_QUERIES` | `8` | 主の検索の後に足す検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の合計の枠（0〜20）。種類ごとの上限（`RAG_GUIDE_STEP_MAX_QUERIES`・`RAG_REQUEST_COVERAGE_MAX_SUBQUESTIONS`・`RAG_REQUEST_COVERAGE_MAX_QUERIES`）はこの枠の中で数える（`rag_engine/retrieval/extra_retrieval.py` の 1 か所）。手順ごとの検索を先に、小問ごとの検索、根拠の無い要求の再検索の順に、枠の残りの中で行う |
 | `RAG_GENERATION_REASONING_EFFORT` | `model` | 回答文の生成の LLM の呼び出しの推論の量（#1499。値は上と同じ）。工程の記録（「回答文の生成と引用の確認」）に「生成の推論の量」を残す。`rag_overrides` の `generation_reasoning_effort` |
 | `RAG_QUESTION_SUBJECT_ROLE_MODEL` | `xai.grok-4.7` | 段ごとのモデル（この行と下の 3 つ。`app/rag/step_models.py` の表 `STEP_MODEL_SETTINGS` と rag_engine の `STEP_LLM_PROVIDERS` が同じ段を持つ）の 1 つ目: 質問の対象の名前の役割（問い・前提・例）の判定の段（#4351）。値はシステム設定 › モデル に登録したモデルの ID で、空は回答のモデル。登録モデルの接続・推論の量・入出力の上限を `RAG_ENGINE_<段>_*` で rag_engine へ渡す。登録していないモデルは接続を渡さず（段の provider は model だけ）、その段は失敗・省略として扱って回答は続ける（回答のモデルへ暗黙に切り替えない。#3240 と同じ）。4 つとも検索方法の画面（回答の検索と生成 › 生成後の回答確認）で選べ、回答の診断の `models` に段ごとに残る。この段の失敗では名前の照合を飛ばす |
-| `RAG_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT` | `20` | 業務ガイドの手順ごとの検索（`guide_step_retrieval_enabled`）が後に来る回答で、最初の章節の拡張（`section_expansion.phases[].phase` の `main`）が使わずに残す入力の割合（章節の拡張の根拠の入力の上限に対する %。0〜50。#2816）。手順の根拠から広げる段（`guide_steps`）は上限の全体を使い、前の段で起点にしなかった起点の章節を先に広げる。残した分は診断の `reserved_tokens` |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | Q&A の候補の照合に embedding の意味類似度を加える |
 | `RAG_APPROVED_FAQ_MIN_SCORE` | `0.92` | 「回答の前に関連するQ&Aを提示する」がオンのプロファイルで、回答の前に出す Q&A の候補の一致度の下限（0.90〜0.99。#5107）。下限未満は出さない |
 | `RAG_APPROVED_FAQ_MAX_SUGGESTIONS` | `3` | 回答の前に出す Q&A の候補の最大件数（1〜10。#5107） |
@@ -438,7 +472,7 @@ ai-foundations-lab の検証との照合（#512）:
 standard の回答エンジンを消す（#592）前に、standard だけが持っていた次の機能を用意した。standard の挙動と既定は変えていない。
 
 - **チャットのモデル比較**: チャットは比較の列ごとのモデルを `RagPipeline(answer_model_id=...)` で渡し、`AnswerEngine` → `build_engine_settings(answer_model_id=...)` がそのモデル（とその接続）で回答する。以前は列がすべて既定のモデルで答えていた。Vision のモデルは比較の対象ではなく、常に既定の Vision モデルを使う。
-- **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`AnswerEngine.retrieve` が回答の検索（`_search`）を原質問 1 本で呼び、候補を引用として返す（回答は空）。質問の理解・rerank・回答の生成は行わず、LLM を呼ばない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答していた（`retrieval_only` を無視する。#594 で standard は呼ばれなくなった）。
+- **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`AnswerEngine.retrieve` が回答と同じ流れ（`generate_answer=false`。主の検索 → rerank → 切る → 検索拡張・補いの検索の合わせ込み → 文脈の補完。#5173）で根拠を集め、引用として返す（回答は空）。回答の生成はせず、回答の LLM を呼ばない。図の画像は切り出さない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答していた（`retrieval_only` を無視する。#594 で standard は呼ばれなくなった）。
 - **全体既定の画面**: 根拠の前後から加える数・Rerankの全体既定を、取込・検索・回答設定 > 検索方法「回答の検索と生成」で変えられる（`GET` / `PATCH /api/settings/answering`。権限は `menu.settings_retrieval`）。回答の記録の保存期間と質問履歴のカードも同じ画面へ移した（API の権限も `menu.settings_retrieval` に変えた）。
 - **回答フローの進捗**: 回答フローの各工程（`rag_engine.generation.execution_record._execution_step`。質問の理解・文書検索（1回目）など）は工程の観測（`observe_call("stage", 工程名)`）の span で、開始で種類 `answer_step` と工程名、終わりで LLM の回数・結果の説明・工程の詳細を観測の `display` に渡す（画面の処理の経過は trace の投影。#3226）。開始と終了は `answer` の中の入れ子の工程の知らせ（`answer_step:<工程名>`。`ANSWER_STEP_STAGE_PREFIX`）にもし、時間切れの文言・MCP の進み具合に使う。
 - **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（検索・回答プロファイルの用語・同義語、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。#595 で `query_transform.py` ごと削除した。
@@ -480,13 +514,12 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
   全量の読了にしない。読めなかった範囲は消さず条件つきの回答にする。
 - RAG 検索の画面の回答を作らない検索（`generate_answer=False`）は、チャットと同じ流れでこの補完まで行い、回答の
   生成の手前で止める（#3506。処理の経過の工程・入れ子・LLM の呼び出しもチャットと同じ）。
-- MCP の根拠取得（`rag_retrieve_evidence`。`complete_evidence=False`）は同じ流れの主の文書の検索の後で止め、
-  自動補完しない。返された章節・chunk の ID から呼び出し側が `rag_read_section(up=...)` を使う。回答生成する
-  RAG 内部と Agent 側で二重に読む契約にしない。
+- MCP の根拠取得（`rag_retrieve_evidence`）・検索だけ（`retrieval_only`）も同じ流れでこの補完まで行う（#5173）。
+  さらに広い範囲が要るときは、返された章節・chunk の ID から呼び出し側が `rag_read_section(up=...)` を使う。
 
 診断は `section_expansion.stop_reason`（`disabled` / `not_configured` / `no_sections` / `scope_read` / 各上限など）、
 `minimum_scope_complete`、`judgement`（`llm` / `not_requested`）、`completed_sections`、`unmapped_seeds`、
-`unread` を分ける。`phases` に主検索・手順別・不足要求検索後それぞれの実行を残す。
+`unread` を分ける。章節の拡張は補いの検索の根拠を合わせた後に 1 回だけ行う（`phases` は `main` の 1 件。#5173）。
 既存の近傍・親子 chunk の役割と `section_context` は別に記録する。章節の対応がある起点には前後の chunk を足さない
 （文脈の補完。#5168）。
 

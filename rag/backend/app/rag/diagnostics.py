@@ -117,9 +117,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
             resolved_settings.rag_candidate_diversity_present_document
         ),
         # 段ごとの追加の検索の予算(#4141)。
-        "section_expansion_followup_reserve_percent": (
-            resolved_settings.rag_section_expansion_followup_reserve_percent
-        ),
         "request_coverage_chunks_per_subquestion": (
             resolved_settings.rag_request_coverage_chunks_per_subquestion
         ),
@@ -133,7 +130,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         "guide_step_chunks_per_step": resolved_settings.rag_guide_step_chunks_per_step,
         "guide_step_deadline_seconds": resolved_settings.rag_guide_step_deadline_seconds,
-        "guide_reference_max_chunks": resolved_settings.rag_guide_reference_max_chunks,
         # 用語・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
         "runtime_terms_search_enabled": resolved_settings.rag_runtime_terms_search_enabled,
         "runtime_terms_answer_enabled": resolved_settings.rag_runtime_terms_answer_enabled,

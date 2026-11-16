@@ -189,6 +189,7 @@ from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
     MAX_ANCHORS_PER_PARENT,
     ContextBuildRequest,
+    ContextChildEvidence,
     ContextParentEvidence,
     build_chunk_context_bundle,
     context_bundle_from_parent_evidence,
@@ -200,27 +201,23 @@ from rag_engine.retrieval.context_fill import consolidate_evidence_tree, context
 from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records
 from rag_engine.retrieval.evidence_selection import EVIDENCE_BUDGET_CHARS, evidence_spans
 from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
+from rag_engine.retrieval.expansion_merge import GUIDE_STEP_KEY, QUERY_OVERFLOW_KEY, SUPPLEMENT_KEYS
 from rag_engine.retrieval.extra_retrieval import GUIDE_STEPS_KIND, REQUEST_COVERAGE_KIND, ExtraRetrievalBudget
 from rag_engine.retrieval.guide_steps import (
     GUIDE_STEP_TRACE_SCHEMA_VERSION,
     GuidePlan,
+    StepSearch,
     reference_step_sources,
     required_guide_targets,
     run_required_guide_searches,
     run_step_searches,
-    select_step_parents,
     target_records,
     unsearched_steps,
 )
 from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key, normalized_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
-from rag_engine.retrieval.request_coverage import (
-    CoverageBudget,
-    CoverageUsage,
-    TargetedRetrieval,
-    select_new_parents,
-)
+from rag_engine.retrieval.request_coverage import CoverageBudget, CoverageUsage
 from rag_engine.retrieval.rerank_order import order_reranked_candidates
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
 from rag_engine.retrieval.scope import (
@@ -709,11 +706,14 @@ def _bundle_context(
     max_records: int,
     max_chars: int,
     expansions: Sequence[AnswerRecord] = (),
+    supplements: Sequence[AnswerRecord] = (),
     section_fill: bool = False,
 ):
-    """rerank 済みの child を起点に文脈を補って context bundle を作る（検索と復元で共用。文脈の補完 #5168）。
+    """rerank 済みの child を起点に文脈を補って context bundle を作る（文脈の補完 #5168）。
 
     expansions は検索拡張の根拠（#5162）。起点・親・前後の文脈を決めた後に最後の根拠の並びへ合わせる。
+    supplements は補いの検索の根拠（#5173。検索ごとに rerank・下限・``top_k`` の切りを通したもの）。検索拡張の後に
+    同じ規則で合わせる。
     section_fill は、この後に章節の拡張（``_expand_context_by_sections``）を行う経路か。そのとき章節の対応が
     ある起点は章節で補い、前後の chunk を読まない（補い方は起点ごとに 1 つ。章節 > 親 > 前後）。
     """
@@ -728,6 +728,7 @@ def _bundle_context(
         max_records=max_records,
         max_chars=max_chars,
         expansion_children=list(expansions),
+        supplement_children=list(supplements),
     )
     # 同じ起点選択を先に行い、未採用の候補の親本文・近傍を読まない。文字予算は原文の取得後に適用する。
     provisional = build_chunk_context_bundle(replace(request, max_chars=2**31 - 1, select_anchors_only=True))
@@ -739,7 +740,9 @@ def _bundle_context(
     }
     selected = list(
         {
-            retrieval_record_id(record): record for record in (*ranked_children, *expansions) if retrieval_record_id(record) in anchor_ids
+            retrieval_record_id(record): record
+            for record in (*ranked_children, *expansions, *supplements)
+            if retrieval_record_id(record) in anchor_ids
         }.values()
     )
     sectioned = _sectioned_anchor_ids(selected, settings) if section_fill else frozenset()
@@ -782,6 +785,7 @@ def _bundle_context(
                 request,
                 ranked_children=[fresh.get(retrieval_record_id(record), record) for record in ranked_children],
                 expansion_children=[fresh.get(retrieval_record_id(record), record) for record in expansions],
+                supplement_children=[_with_fresh_source(record, fresh) for record in supplements],
             )
             # 呼出元が保持する回復候補にも、実際に読み取った原文を残す。
             if isinstance(active_records, list):
@@ -855,6 +859,16 @@ def _bundle_context(
     return bundle
 
 
+def _with_fresh_source(record: AnswerRecord, fresh: Mapping[str, AnswerRecord]) -> AnswerRecord:
+    """読み直した原文に、補いの検索の印と並べ替えの点数を残す（#5173）。"""
+    loaded = fresh.get(retrieval_record_id(record))
+    if loaded is None:
+        return record
+    metadata = {**(loaded.metadata or {}), **{key: value for key, value in (record.metadata or {}).items() if key not in loaded.metadata}}
+    metadata.update({key: record.metadata[key] for key in (*SUPPLEMENT_KEYS, "rerank", "rrf_score") if key in (record.metadata or {})})
+    return replace(loaded, metadata=metadata)
+
+
 def _sectioned_anchor_ids(anchors: Sequence[AnswerRecord], settings: Settings) -> frozenset[str]:
     """章節の対応がある起点（章節で文脈を補う起点。#5168）。章節の拡張が無効・未設定なら空。
 
@@ -902,6 +916,7 @@ def build_adb_hybrid_answer_context(
     page_ranges: Sequence[Mapping[str, Any]] = (),
     text_queries: Mapping[str, str] | None = None,
     section_fill: bool = False,
+    fill: bool = True,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
 
@@ -913,7 +928,11 @@ def build_adb_hybrid_answer_context(
 
     query_embedder は索引と同じ embedder を使う SDK 用。未指定なら検索実装の既定（OCI）を使う。
 
-    section_fill は、この後に章節の拡張を行う経路（回答・根拠の補完をする検索）か（#5168。``_bundle_context``）。
+    section_fill は、この後に章節の拡張を行う経路か（#5168。``_bundle_context``）。
+
+    fill=False は文脈を補わずに、検索 → rerank → 下限 → 文書ごとの上限 → ``top_k`` で切った起点だけを返す（#5173。
+    回答の流れの主の検索と補いの検索）。records と根拠の木は起点（rerank の後の順）、expansion_records は検索の候補の
+    原文、expansion_candidates は検索拡張の根拠。文脈は ``fill_answer_context`` で、補いの検索の根拠と一緒に 1 回補う。
 
     pinned_chunk_run_id 指定時は保存済み実行を直接読み、latest 更新による評価条件の変化を防ぐ。
     存在しない実行は AdbHybridSearchUnavailable とする。ADB と必要に応じ reranker に接続する。
@@ -993,6 +1012,104 @@ def build_adb_hybrid_answer_context(
             step.input({"候補": candidate_snapshot(ranked_children), "起点数": top_k, "文書ごとの上限": settings.max_anchors_per_document})
             kept_children = cap_anchors_per_document(ranked_children, settings, top_k=top_k, step=step)
             step.output({"処理後の候補": candidate_snapshot(kept_children)})
+    anchors = AnswerContext(
+        records=[],
+        text="",
+        expansion_records=tuple(active_records),
+        ranked_candidates=tuple(ranked_children),
+        candidate_count=candidate_count,
+        expansion_candidates=expansion_candidates,
+    )
+    if fill:
+        return fill_answer_context(
+            question,
+            anchors,
+            settings,
+            top_k=top_k,
+            neighbor_child_count=neighbor_child_count,
+            max_records=max_records,
+            max_chars=max_chars,
+            section_fill=section_fill,
+        )
+    selected = _cut_anchors(question, kept_children, active_records, settings, top_k=top_k, max_records=max_records)
+    tree = tuple(
+        ContextParentEvidence(
+            record=record,
+            role="child_fallback",
+            reason="retrieved_chunk",
+            children=(ContextChildEvidence(record=record, role="retrieved_anchor", reason="top_retrieved_child", retrieval_rank=rank),),
+        )
+        for rank, record in enumerate(selected, start=1)
+    )
+    return replace(anchors, records=list(selected), text="\n".join(record.text for record in selected), evidence_tree=tree)
+
+
+def _cut_anchors(
+    question: str,
+    kept_children: Sequence[AnswerRecord],
+    active_records: Sequence[AnswerRecord],
+    settings: Settings,
+    *,
+    top_k: int,
+    max_records: int,
+) -> list[AnswerRecord]:
+    """``top_k`` で切った起点（文脈の補完と同じ起点の選び方。rerank の後の順。#5173）。"""
+    provisional = build_chunk_context_bundle(
+        ContextBuildRequest(
+            question=question,
+            ranked_children=list(kept_children),
+            active_records=list(active_records),
+            top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
+            neighbor_child_count=0,
+            max_anchors_per_parent=_max_anchors_per_parent(settings),
+            max_records=max_records,
+            max_chars=2**31 - 1,
+            select_anchors_only=True,
+        )
+    )
+    anchor_ids = {
+        retrieval_record_id(child.record)
+        for parent in provisional.evidence_tree
+        for child in parent.children
+        if child.role == "retrieved_anchor"
+    }
+    return list({retrieval_record_id(record): record for record in kept_children if retrieval_record_id(record) in anchor_ids}.values())
+
+
+def fill_answer_context(
+    question: str,
+    anchors: AnswerContext,
+    settings: Settings,
+    *,
+    top_k: int,
+    neighbor_child_count: int,
+    max_records: int | None = None,
+    max_chars: int = MAX_CONTEXT_CHARS,
+    supplements: Sequence[AnswerRecord] = (),
+    supplement_pool: Sequence[AnswerRecord] = (),
+    section_fill: bool = False,
+) -> AnswerContext:
+    """主の検索の起点に検索拡張と補いの検索の根拠を合わせ、文脈を補う（#5162・#5168・#5173）。
+
+    anchors は ``build_adb_hybrid_answer_context`` の結果（文脈を補った後でもよい）。rerank の後の候補
+    （``ranked_candidates``）から同じ規則（文書ごとの上限・``top_k``）で起点を選び直すので、主の検索の起点は同じものに
+    なり外れない。supplements は補いの検索の根拠（印つき）、supplement_pool はその検索の候補の原文。
+    """
+    max_records = _max_context_records(settings) if max_records is None else max_records
+    # 文書ごとの上限（#5165）は主の検索の工程で記録済み。同じ規則で同じ候補を残す。
+    kept_children = cap_anchors_per_document(list(anchors.ranked_candidates), settings, top_k=top_k)
+    pool = {retrieval_record_id(record): record for record in (*anchors.expansion_records, *supplement_pool)}
+    active_records = list(pool.values())
+    if not kept_children and not supplements:
+        return replace(
+            anchors,
+            records=[],
+            text="",
+            evidence=(),
+            evidence_tree=(),
+            status="insufficient",
+            insufficient_reason=anchors.insufficient_reason or "retrieval returned no active child chunks",
+        )
     bundle = _bundle_context(
         question,
         kept_children,
@@ -1002,7 +1119,8 @@ def build_adb_hybrid_answer_context(
         neighbor_child_count=neighbor_child_count,
         max_records=max_records,
         max_chars=max_chars,
-        expansions=expansion_candidates,
+        expansions=anchors.expansion_candidates,
+        supplements=supplements,
         section_fill=section_fill,
     )
     return AnswerContext(
@@ -1013,9 +1131,9 @@ def build_adb_hybrid_answer_context(
         expansion_records=tuple(active_records),
         status=bundle.status,
         insufficient_reason=bundle.insufficient_reason,
-        ranked_candidates=tuple(ranked_children),
-        candidate_count=candidate_count,
-        expansion_candidates=expansion_candidates,
+        ranked_candidates=anchors.ranked_candidates,
+        candidate_count=anchors.candidate_count,
+        expansion_candidates=anchors.expansion_candidates,
     )
 
 
@@ -1820,7 +1938,46 @@ def _request_coverage_budget(settings: Settings) -> CoverageBudget:
     )
 
 
-def _cover_guide_steps(
+def _merged_supplement_keys(context: AnswerContext, mark: str) -> list[str]:
+    """補いの検索（``mark`` の印）で新しく足した根拠の key（根拠の木の親。#5173）。並びにあって印だけのものは数えない。"""
+    from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON
+
+    return list(
+        dict.fromkeys(
+            parent.record.chunk_uid or parent.record.id
+            for parent in context.evidence_tree
+            for child in parent.children
+            if child.role == "retrieved_anchor"
+            and child.reason == EXPANSION_EVIDENCE_REASON
+            and isinstance((child.record.metadata or {}).get(mark), dict)
+        )
+    )
+
+
+def _with_supplement_mark(record: AnswerRecord, mark: str, payload: Mapping[str, Any]) -> AnswerRecord:
+    """補いの検索の根拠に印を付ける（同じ根拠の印は値の列をつなぐ。#5173）。"""
+    metadata = dict(record.metadata or {})
+    current = metadata.get(mark)
+    merged = dict(current) if isinstance(current, dict) else {}
+    for key, value in payload.items():
+        values = [*merged.get(key, ()), *(value if isinstance(value, (list, tuple)) else (value,))]
+        merged[key] = list(dict.fromkeys(values))
+    metadata[mark] = merged
+    return replace(record, metadata=metadata)
+
+
+def _context_owner_keys(context: AnswerContext) -> dict[str, str]:
+    """根拠の木の chunk の key → それを持つ根拠（親）の key。"""
+    owners: dict[str, str] = {}
+    for parent in context.evidence_tree:
+        parent_key = parent.record.chunk_uid or parent.record.id
+        owners.setdefault(parent_key, parent_key)
+        for child in parent.children:
+            owners.setdefault(child.record.chunk_uid or child.record.id, parent_key)
+    return owners
+
+
+def _search_guide_steps(
     question: str,
     context: AnswerContext,
     settings: Settings,
@@ -1829,19 +1986,16 @@ def _cover_guide_steps(
     extra_budget: ExtraRetrievalBudget,
     run_id: Any,
     preferred_engines: Sequence[str],
-    top_k: int,
     neighbor_child_count: int,
     rerank_enabled: bool,
     retrieval_scope: str,
     classification_filter: ClassificationFilter | None,
-    runtime_knowledge: RuntimeKnowledgeContext | None,
     clock: Callable[[], float] = monotonic,
-) -> tuple[AnswerContext, dict[str, Any], tuple[tuple[str, str, tuple[str, ...]], ...]]:
-    """業務ガイドの手順ごとに検索し、手順の根拠と参照の頁の根拠を回答の材料に足す (#2395)。
+) -> tuple[list[StepSearch], list[dict[str, Any]], dict[str, Any]]:
+    """業務ガイドの手順ごとに検索する (#2395)。戻り値は (検索の結果, 必須の取得の記録, 記録)。
 
-    検索は embedding・hybrid 検索・rerank だけ。
-    足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。戻り値は (回答に渡す context, 記録,
-    手順ごとの根拠（手順 id, 題名, 根拠の chunk_uid の列）)。
+    検索ごとに「検索 → rerank → 下限 → 文書ごとの上限 → ``top_k``（``guide_step_chunks_per_step``）で切る」だけを行い
+    （#5173）、切った根拠を返す。主の検索の根拠への合わせ込みと文脈の補完は呼び出し元が主の検索と一緒に行う。
     """
     targets = required_guide_targets(plan)
     trace: dict[str, Any] = {
@@ -1850,7 +2004,6 @@ def _cover_guide_steps(
         "revision": plan.revision,
         "llm_calls": 0,
     }
-    titles = {step.step_id: step.title for step in plan.steps}
     if not bool(getattr(settings, "guide_step_retrieval_enabled", False)):
         extra_budget.reserve_required(0)
         trace.update(
@@ -1874,11 +2027,9 @@ def _cover_guide_steps(
             },
             budget=extra_budget.to_payload(),
         )
-        return context, trace, tuple((step.step_id, step.title, ()) for step in plan.steps)
+        return [], [], trace
 
     per_step = max(1, int(getattr(settings, "guide_step_chunks_per_step", 1) or 1))
-    reference_cap = max(0, int(getattr(settings, "guide_reference_max_chunks", 0) or 0))
-    per_query = max(1, min(int(top_k), max(per_step, reference_cap)))
 
     def retrieve(text: str, queries: tuple[str, ...], page_ranges: list[dict[str, Any]]) -> AnswerContext:
         return build_adb_hybrid_answer_context(
@@ -1886,17 +2037,15 @@ def _cover_guide_steps(
             run_id,
             preferred_engines,
             settings,
-            top_k=per_query,
+            top_k=per_step,
             neighbor_child_count=neighbor_child_count,
-            max_records=per_query,
             retrieval_queries=queries,
             rerank_phase="guide_step",
             rerank_enabled=rerank_enabled,
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
             page_ranges=page_ranges,
-            # 手順の根拠は後の章節の拡張（guide_steps の段）で章節を補う。
-            section_fill=True,
+            fill=False,
         )
 
     started = clock()
@@ -1924,63 +2073,71 @@ def _cover_guide_steps(
     )
     extra_budget.take(GUIDE_STEPS_KIND, len(optional_results))
     results.extend(optional_results)
-    stop = stop or optional_stop
-    existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
-    selection = select_step_parents(results, existing, chunks_per_step=per_step, reference_max_chunks=reference_cap)
-    added_keys: set[str] = set()
-    rejected = ""
-    if selection.added:
-        parents = tuple(replace(parent, reason=f"guide_{kind}") for _, kind, parent in selection.added)
-        added = context_bundle_from_parent_evidence(parents, max_chars=MAX_CONTEXT_CHARS)
-        visible = list(context.records)
-        candidate = merge_evidence(
-            context,
-            AnswerContext(records=list(added.records), text=added.text, evidence=added.evidence, evidence_tree=added.evidence_tree),
-            question,
-            # 既存の根拠と足す根拠がすべて収まる件数（手順の根拠で既存の根拠を追い出さない）。
-            max_records=max(1, len(visible) + len(added.records)),
-            max_chars=MAX_CONTEXT_CHARS * 2,
-        )
-        merged_keys = {r.chunk_uid or r.id for r in candidate.records}
-        if visible and not {r.chunk_uid or r.id for r in visible} <= merged_keys:
-            rejected = "would_drop_existing_evidence"
-        else:
-            added_keys = {key for key in merged_keys - existing if key}
-            pool = {r.chunk_uid or r.id: r for r in (*context.expansion_records, *(r for res in results for r in res.expansion_records))}
-            context = replace(
-                candidate,
-                expansion_records=tuple(pool.values()),
-                preferred_child_ids=context.preferred_child_ids,
-                ranked_candidates=context.ranked_candidates,
-            )
-    in_context = {r.chunk_uid or r.id for r in context.records}
-    # 手順の根拠は、手順ごとの検索の結果に、手順の参照の頁に当たる回答の材料の根拠を足したもの（#2706）。期限で検索
-    # しなかった手順の根拠と、同じ根拠を参照する手順どうしの共有が、検索の打ち切りで見えなくならないようにする。
+    trace.update(
+        {
+            "stop_reason": stop or optional_stop,
+            "unsearched_step_ids": list(unsearched_steps(plan, results)),
+            "elapsed_ms": int((clock() - started) * 1000),
+            "top_k": per_step,
+            "budget": extra_budget.to_payload(),
+        }
+    )
+    return results, acquisitions, trace
+
+
+def _guide_step_supplements(results: Sequence[StepSearch]) -> tuple[list[AnswerRecord], list[AnswerRecord]]:
+    """手順の検索で切った根拠（印つき。検索の順）と、その検索の候補の原文（#5173）。"""
+    supplements: dict[str, AnswerRecord] = {}
+    pool: list[AnswerRecord] = []
+    for result in results:
+        pool.extend(result.expansion_records)
+        for parent in result.parents:
+            record = parent.record
+            key = record.chunk_uid or record.id
+            if not key:
+                continue
+            mark = {"step_ids": list(result.owner_ids or (result.step_id,)), "kinds": [result.kind]}
+            supplements[key] = _with_supplement_mark(supplements.get(key, record), GUIDE_STEP_KEY, mark)
+    return list(supplements.values()), pool
+
+
+def _finish_guide_steps(
+    plan: GuidePlan,
+    results: Sequence[StepSearch],
+    acquisitions: list[dict[str, Any]],
+    trace: dict[str, Any],
+    context: AnswerContext,
+) -> tuple[dict[str, Any], tuple[tuple[str, str, tuple[str, ...]], ...]]:
+    """文脈を補った後の根拠で、手順ごとの根拠と必須の取得の記録を決める（#2706・#5173）。"""
+    if trace.get("skipped"):
+        return trace, tuple((step.step_id, step.title, ()) for step in plan.steps)
+    targets = {target.target_id: target for target in required_guide_targets(plan)}
+    titles = {step.step_id: step.title for step in plan.steps}
+    owners = _context_owner_keys(context)
+    in_context = {record.chunk_uid or record.id for record in context.records}
+    added_keys = set(_merged_supplement_keys(context, GUIDE_STEP_KEY))
+
+    def located(parent: Any) -> str:
+        key = parent.record.chunk_uid or parent.record.id
+        return owners.get(key, key)
+
+    # 手順の根拠は、手順ごとの検索で切った根拠に、手順の参照の頁に当たる回答の材料の根拠を足したもの（#2706）。
     referenced = reference_step_sources(plan, context.records)
+    searched: dict[str, list[str]] = {}
+    for result in results:
+        for owner in result.owner_ids or (result.step_id,):
+            searched.setdefault(owner, []).extend(located(parent) for parent in result.parents)
     step_sources = tuple(
         (
             step.step_id,
             step.title,
-            tuple(
-                key
-                for key in dict.fromkeys((*selection.step_sources.get(step.step_id, ()), *referenced.get(step.step_id, ())))
-                if key in in_context
-            ),
+            tuple(key for key in dict.fromkeys((*searched.get(step.step_id, ()), *referenced.get(step.step_id, ()))) if key in in_context),
         )
         for step in plan.steps
     )
-    # 期限・回数の上限で検索しなかった（検索がすべて失敗した）手順。根拠の無いことを「資料に無い」と区別する（#2706）。
-    unsearched = unsearched_steps(plan, results)
-    added_by_step: dict[str, list[str]] = {}
-    for step_id, kind, parent in selection.added:
-        key = parent.record.chunk_uid or parent.record.id
-        if key in added_keys:
-            added_by_step.setdefault(f"{step_id}:{kind}", []).append(key)
-    sources = dict((step_id, keys) for step_id, _, keys in step_sources)
-    by_target = {target.target_id: target for target in targets}
     for acquisition in acquisitions:
-        target = by_target[acquisition["target_id"]]
-        candidates = set(acquisition["candidate_source_ids"])
+        target = targets[acquisition["target_id"]]
+        candidates = {owners.get(key, key) for key in acquisition["candidate_source_ids"]}
         retained = [record for record in target_records(target, context.records) if (record.chunk_uid or record.id) in candidates]
         acquisition["retained_source_ids"] = list(dict.fromkeys(record.chunk_uid or record.id for record in retained))
         acquisition["retained_body_chars"] = sum(len(str(getattr(record, "body_text", "") or record.text).strip()) for record in retained)
@@ -1992,12 +2149,9 @@ def _cover_guide_steps(
     incomplete_steps = list(
         dict.fromkeys(owner for row in acquisitions if row["target_id"] in incomplete_targets for owner in row["step_ids"])
     )
+    sources = dict((step_id, keys) for step_id, _, keys in step_sources)
     trace.update(
         {
-            "stop_reason": stop or ("rejected:" + rejected if rejected else ""),
-            "unsearched_step_ids": list(unsearched),
-            "elapsed_ms": int((clock() - started) * 1000),
-            "budget": extra_budget.to_payload(),
             "required_acquisition": {
                 "planned_targets": len(targets),
                 "logical_attempts": sum(row["execution"] in {"completed", "error"} for row in acquisitions),
@@ -2019,7 +2173,7 @@ def _cover_guide_steps(
                             "kind": result.kind,
                             "queries": list(result.queries),
                             "candidates": len(result.parents),
-                            "added_chunk_ids": added_by_step.get(f"{step.step_id}:{result.kind}", []),
+                            "added_chunk_ids": sorted({located(parent) for parent in result.parents} & added_keys),
                             "elapsed_ms": result.elapsed_ms,
                             **({"error": result.error} if result.error else {}),
                         }
@@ -2027,7 +2181,15 @@ def _cover_guide_steps(
                         if step.step_id in (result.owner_ids or (result.step_id,))
                     ],
                     "evidence_count": len(sources.get(step.step_id, ())),
-                    "reference_chunk_count": len(added_by_step.get(f"{step.step_id}:reference", [])),
+                    "reference_chunk_count": len(
+                        {
+                            located(parent)
+                            for result in results
+                            if result.kind == "reference" and step.step_id in (result.owner_ids or (result.step_id,))
+                            for parent in result.parents
+                        }
+                        & added_keys
+                    ),
                     # 手順の参照の頁に当たる回答の材料の根拠の数（検索の結果に関係なく手順に紐づける。#2706）。
                     "referenced_count": len(referenced.get(step.step_id, ())),
                 }
@@ -2036,7 +2198,7 @@ def _cover_guide_steps(
             "added_chunk_ids": sorted(added_keys),
         }
     )
-    return context, trace, step_sources
+    return trace, step_sources
 
 
 def _with_guide_acquisition_notices(response: AnswerResponse, knowledge: RuntimeKnowledgeContext | None) -> AnswerResponse:
@@ -2508,7 +2670,6 @@ def answer_question_result(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     generate_answer: bool = True,
-    complete_evidence: bool = True,
     scope: tuple[str, Sequence[str]] | None = None,
     guide_plan: GuidePlan | None = None,
     request_question: str | None = None,
@@ -2523,9 +2684,8 @@ def answer_question_result(
 
     ``generate_answer=False`` は回答を作らない（RAG 検索の画面。#3506）。根拠を集め終えるまで（回答フロー・章節の拡張・
     業務ガイドの手順ごとの検索・要求ごとの根拠の確認）は回答と同じ 1 つの流れで、工程・入れ子・LLM の呼び出しも同じ。
-    回答に添付する画像と回答の生成の手前で止め、集めた根拠を返す（本文は空）。``complete_evidence=False`` は、その流れの
-    主の文書の検索の後で止める（業務 Agent の根拠の取得。根拠の補い（章節を読む・探し直す）は呼び出し元がする）。
-    ``generate_answer=False`` とだけ組み合わせる。
+    回答に添付する画像と回答の生成の手前で止め、集めた根拠を返す（本文は空）。検索だけ（``retrieval_only``）と MCP の
+    ``rag_retrieve_evidence`` も同じ流れを使う（#5173）。
     空質問は ValueError、処理失敗は中断記録付きの AnswerExecutionError を送出する。
     ADB の準備不足や空検索は
     未実行工程を明示した結果を返し、回答 LLM を呼ばない。記録は呼び出しごとに分離する。
@@ -2541,8 +2701,6 @@ def answer_question_result(
         raise ValueError("質問を入力してください。")
     # 回答の対象と要求の単位の正本（#2665）。検索の文（normalized_question）とは分ける。
     request_text = extract_original_question(request_question or "") or normalized_question
-    if generate_answer and not complete_evidence:
-        raise ValueError("根拠の補いを省く検索（complete_evidence=False）は回答を作らない検索だけに使います。")
     # 章節の拡張（#1436）の時間の上限は、回答の開始から数える。
     answer_started_at = monotonic()
 
@@ -2744,16 +2902,17 @@ def answer_question_result(
                 "検索範囲": selected_retrieval_scope,
                 "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
                 "回答生成の要求": generate_answer,
-                "根拠補完の要求": complete_evidence,
                 "起点数": chunk_top_k,
                 "前後それぞれのChunk数": chunk_neighbor_count,
                 "再ランキング": effective_rerank_enabled,
             }
         )
         extra_budget = ExtraRetrievalBudget.from_settings(settings)
-        if complete_evidence and guide_plan is not None and settings.guide_step_retrieval_enabled:
+        if guide_plan is not None and settings.guide_step_retrieval_enabled:
             extra_budget.reserve_required(len(required_guide_targets(guide_plan)))
         coverage_usage = CoverageUsage()
+        # 根拠の流れは回答・回答を作らない検索・検索だけ・MCP で同じ（#5173）: 主の検索 → rerank → 切る → 検索拡張の
+        # 合わせ込み → 補いの検索（要求別の補完・業務ガイドの手順）の合わせ込み → 文脈の補完（章節の拡張を含む）。
         try:
             with _execution_step("文書検索", _SEARCH_PURPOSE) as retrieval_step:
                 retrieval_step.input(
@@ -2781,8 +2940,7 @@ def answer_question_result(
                     rerank_enabled=effective_rerank_enabled,
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
-                    # 根拠を補う経路だけが後で章節の拡張を行う（業務 Agent の根拠の取得は主の検索で止める）。
-                    section_fill=complete_evidence,
+                    section_fill=True,
                 )
                 retrieval_step.field("全文検索の文", text_source)
                 _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
@@ -2804,27 +2962,27 @@ def answer_question_result(
                     retrieval_top_k=chunk_top_k,
                 )
             )
-        if not complete_evidence:
-            # 業務 Agent の根拠の取得: 主の文書の検索の後で止める（根拠の補いは呼び出し元がする）。
-            flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
-            return evidence_result(context)
         section_state: dict[str, Any] = {}
         # 業務ガイドの手順が参照する文書と頁（#2828）。章節の拡張はこの範囲の起点を先に広げ、回答の「回答に未反映の
         # 関連章節」はこの文書の章節を残す。
         guide_ranges = guide_plan.reference_ranges if guide_plan is not None else ()
+        # 主の検索の根拠（文脈を補った後の chunk と親）。補いの検索の新しい根拠の数は、これ以外だけを数える。
+        main_keys = set(_context_owner_keys(context)) | {record.chunk_uid or record.id for record in context.records}
+        supplements: dict[str, AnswerRecord] = {}
+        supplement_pool: list[AnswerRecord] = []
 
-        def complete_sections(candidate: AnswerContext, phase: str, *, reserve: bool = False) -> tuple[AnswerContext, Any]:
-            return _expand_context_by_sections(
-                normalized_question,
-                candidate,
-                settings,
-                rerank_enabled=effective_rerank_enabled,
-                started_at=answer_started_at,
-                state=section_state,
-                phase=phase,
-                reserve=reserve,
-                priority=guide_ranges,
-            )
+        def add_supplements(records: Iterable[AnswerRecord]) -> None:
+            for record in records:
+                key = record.chunk_uid or record.id
+                if not key:
+                    continue
+                previous = supplements.get(key)
+                # 同じ根拠を 2 つの補いの検索が切ったときは、両方の印を残す（位置は先の検索の順）。
+                supplements[key] = (
+                    record
+                    if previous is None
+                    else replace(previous, metadata={**(record.metadata or {}), **{k: v for k, v in (previous.metadata or {}).items()}})
+                )
 
         # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
         overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
@@ -2834,20 +2992,20 @@ def answer_question_result(
             else load_domain_keywords(settings.output_dir)
         )
 
-        def overflow_retrieve(query: str) -> AnswerContext:
+        def overflow_retrieve(query: str, top_k: int) -> AnswerContext:
             return build_adb_hybrid_answer_context(
                 query,
                 run_id,
                 preferred_engine_ids,
                 settings,
-                top_k=chunk_top_k,
+                top_k=top_k,
                 neighbor_child_count=chunk_neighbor_count,
                 retrieval_queries=(query,),
                 rerank_phase="missing_requirement",
                 rerank_enabled=effective_rerank_enabled,
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,
-                section_fill=True,
+                fill=False,
             )
 
         with _execution_step(
@@ -2880,48 +3038,20 @@ def answer_question_result(
                 coverage_budget=_request_coverage_budget(settings),
                 usage=coverage_usage,
                 searched_queries=(*retrieval_queries, *text_queries.values()),
+                existing_keys=main_keys,
                 initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
                 allow_split=not getattr(settings, "retrieval_original_query_only", False),
             )
-            overflow_added: set[str] = set()
-            existing_overflow_ids = {record.chunk_uid or record.id for record in context.records}
-            overflow_parents = select_new_parents(
-                [TargetedRetrieval(result.request_id, (result.query,), result.context.evidence_tree) for result in overflow_results],
-                existing_overflow_ids,
-                _request_coverage_budget(settings).max_chunks,
+            for result in overflow_results:
+                supplement_pool.extend(result.context.expansion_records)
+                add_supplements(
+                    _with_supplement_mark(record, QUERY_OVERFLOW_KEY, {"request_ids": [result.request_id], "queries": [result.query]})
+                    for record in result.context.records
+                )
+            overflow_candidates = list(
+                dict.fromkeys(record.chunk_uid or record.id for result in overflow_results for record in result.context.records)
             )
-            if overflow_parents:
-                bundle = context_bundle_from_parent_evidence(
-                    tuple(replace(parent, reason="query_overflow") for _, parent in overflow_parents), max_chars=MAX_CONTEXT_CHARS
-                )
-                candidate = merge_evidence(
-                    context,
-                    AnswerContext(
-                        records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree
-                    ),
-                    normalized_question,
-                    max_records=len(context.records) + len(bundle.records),
-                    max_chars=MAX_CONTEXT_CHARS * 2,
-                )
-                merged_ids = {record.chunk_uid or record.id for record in candidate.records}
-                if existing_overflow_ids <= merged_ids:
-                    context = replace(
-                        candidate,
-                        expansion_records=tuple(
-                            dict(
-                                (record.chunk_uid or record.id, record)
-                                for record in (
-                                    *context.expansion_records,
-                                    *(record for result in overflow_results for record in result.context.expansion_records),
-                                )
-                            ).values()
-                        ),
-                        preferred_child_ids=context.preferred_child_ids,
-                        ranked_candidates=context.ranked_candidates,
-                    )
-                    overflow_added = merged_ids - existing_overflow_ids
-            coverage_usage.chunks += len(overflow_added)
-            overflow_trace["added_chunk_ids"] = sorted(overflow_added)
+            overflow_trace["candidate_chunk_ids"] = overflow_candidates
             overflow_step.output(
                 lambda: {
                     "検索結果": overflow_trace,
@@ -2929,13 +3059,15 @@ def answer_question_result(
                         {"要求ID": item.request_id, "検索文": item.query, "候補": candidate_snapshot(item.context.records)}
                         for item in overflow_results
                     ],
-                    "新規採用ID": sorted(overflow_added),
-                    "処理後の根拠": candidate_snapshot(context.records),
+                    "合わせる根拠ID": overflow_candidates,
                 }
             )
             if overflow_trace.get("triggered"):
                 statuses = [str(row["status"]) for row in overflow_trace["requests"]]
-                overflow_step.result(f"要求 {len(statuses)} 件、新しい根拠 {len(overflow_added)} 件")
+                overflow_step.result(
+                    f"要求 {len(statuses)} 件、合わせる根拠 {len(overflow_candidates)} 件"
+                    f"（うち主の検索に無いもの {sum(key not in main_keys for key in overflow_candidates)} 件）"
+                )
                 overflow_step.field("追加検索の残り", str(extra_budget.remaining))
                 overflow_step.field("未検索", str(sum(status.startswith("unsearched_") for status in statuses)))
                 overflow_step.field("失敗", str(statuses.count("failed")))
@@ -2946,11 +3078,9 @@ def answer_question_result(
                         "tokenization_failed": "検索語の抽出に失敗したため、補完検索を実行していません。",
                     }.get(str(overflow_trace.get("skipped") or ""), "語数上限の超過がないため追加検索は不要です。")
                 )
-        # 業務ガイドの手順が後に来るなら、その根拠から広げる分の入力を残す。
-        context, section_expansion = complete_sections(
-            context, "main", reserve=guide_plan is not None and bool(getattr(settings, "guide_step_retrieval_enabled", False))
-        )
         guide_step_trace: dict[str, Any] | None = None
+        guide_results: list[StepSearch] = []
+        guide_acquisitions: list[dict[str, Any]] = []
         if guide_plan is not None:
             # 業務ガイドの案内（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
             from rag_engine.generation.grounded import guide_notice_lines
@@ -2981,7 +3111,6 @@ def answer_question_result(
                         "追加検索予算": extra_budget.to_payload(),
                         "検索範囲": selected_retrieval_scope,
                         "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
-                        "起点数": chunk_top_k,
                         "前後それぞれのChunk数": chunk_neighbor_count,
                         "再ランキング": effective_rerank_enabled,
                         "設定": {
@@ -2991,12 +3120,11 @@ def answer_question_result(
                                 "guide_step_max_queries",
                                 "guide_step_chunks_per_step",
                                 "guide_step_deadline_seconds",
-                                "guide_reference_max_chunks",
                             )
                         },
                     }
                 )
-                context, guide_step_trace, step_sources = _cover_guide_steps(
+                guide_results, guide_acquisitions, guide_step_trace = _search_guide_steps(
                     normalized_question,
                     context,
                     settings,
@@ -3004,44 +3132,70 @@ def answer_question_result(
                     extra_budget=extra_budget,
                     run_id=run_id,
                     preferred_engines=preferred_engine_ids,
-                    top_k=chunk_top_k,
                     neighbor_child_count=chunk_neighbor_count,
                     rerank_enabled=effective_rerank_enabled,
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
-                    runtime_knowledge=runtime_knowledge,
                 )
-                runtime_knowledge = replace(
-                    runtime_knowledge,
-                    guide_steps=step_sources,
-                    guide_optional_steps=guide_plan.optional_step_ids,
-                    guide_step_terms=guide_plan.step_terms,
-                    guide_step_contracts=guide_plan.step_contracts,
-                    guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
-                    guide_acquisition=tuple((guide_step_trace.get("required_acquisition") or {}).get("targets") or ()),
-                    guide_acquisition_notices=_guide_acquisition_notices(guide_step_trace),
-                )
+                guide_records, guide_pool = _guide_step_supplements(guide_results)
+                supplement_pool.extend(guide_pool)
+                add_supplements(guide_records)
                 guide_step.output(
                     lambda: {
                         "検索と取得の記録": guide_step_trace,
-                        "手順と根拠の対応": step_sources,
-                        "処理後の根拠": candidate_snapshot(context.records),
-                        "新規採用ID": list(guide_step_trace.get("added_chunk_ids") or ()),
+                        "合わせる根拠ID": [record.chunk_uid or record.id for record in guide_records],
                     }
                 )
                 skipped = str(guide_step_trace.get("skipped") or "")
                 if skipped:
                     guide_step.skip(_GUIDE_STEP_SKIP_LABELS.get(skipped, f"しない（{skipped}）"))
                 else:
-                    steps = guide_step_trace.get("steps") or []
                     guide_step.result(
-                        f"手順 {len(steps)} 件のうち根拠あり {sum(1 for item in steps if item['evidence_count'])} 件",
-                        *_guide_step_lines(guide_step_trace),
+                        f"検索 {len(guide_results)} 回、合わせる根拠 {len(guide_records)} 件"
+                        f"（うち主の検索に無いもの {sum((record.chunk_uid or record.id) not in main_keys for record in guide_records)} 件）"
                     )
-                    if guide_step_trace.get("added_chunk_ids"):
-                        guide_step.impact(f"手順の根拠 {len(guide_step_trace['added_chunk_ids'])} 件を回答の材料に加えます。")
-        # 手順別の検索で新たに得た根拠も、要求ごとの判定に渡す前に最低範囲を読む。
-        context, section_expansion = complete_sections(context, "guide_steps")
+        if supplements:
+            # 主の検索の起点・検索拡張の根拠に補いの検索の根拠を同じ規則で合わせ、文脈を補い直す（#5162・#5168・
+            # #5173）。主の検索の起点は同じ選び方で同じものになる。主の検索の根拠が 1 つでも外れる結果は使わない。
+            merged = fill_answer_context(
+                normalized_question,
+                context,
+                settings,
+                top_k=chunk_top_k,
+                neighbor_child_count=chunk_neighbor_count,
+                supplements=tuple(supplements.values()),
+                supplement_pool=supplement_pool,
+                section_fill=True,
+            )
+            if set(_context_owner_keys(context)) <= set(_context_owner_keys(merged)):
+                context = merged
+            else:
+                overflow_trace["rejected"] = "would_drop_existing_evidence"
+        overflow_trace["added_chunk_ids"] = _merged_supplement_keys(context, QUERY_OVERFLOW_KEY)
+        context, section_expansion = _expand_context_by_sections(
+            normalized_question,
+            context,
+            settings,
+            rerank_enabled=effective_rerank_enabled,
+            started_at=answer_started_at,
+            state=section_state,
+            phase="main",
+            priority=guide_ranges,
+        )
+        # 章節の拡張が所有の章節を読めなかった起点は、次の補い方（親 → 前後）で補う（#5173）。
+        context = _fill_unread_section_anchors(context, settings, section_state, neighbor_child_count=chunk_neighbor_count)
+        if guide_plan is not None and guide_step_trace is not None:
+            guide_step_trace, step_sources = _finish_guide_steps(guide_plan, guide_results, guide_acquisitions, guide_step_trace, context)
+            runtime_knowledge = replace(
+                runtime_knowledge,
+                guide_steps=step_sources,
+                guide_optional_steps=guide_plan.optional_step_ids,
+                guide_step_terms=guide_plan.step_terms,
+                guide_step_contracts=guide_plan.step_contracts,
+                guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
+                guide_acquisition=tuple((guide_step_trace.get("required_acquisition") or {}).get("targets") or ()),
+                guide_acquisition_notices=_guide_acquisition_notices(guide_step_trace),
+            )
         if guide_plan is not None and runtime_knowledge is not None and runtime_knowledge.guide_steps:
             # 章節の拡張が child を parent に置き換えた後の ID も、参照の頁から手順に結び直す。
             expanded_sources = reference_step_sources(guide_plan, context.records)
@@ -3095,7 +3249,6 @@ def answer_question_result(
                 )
             )
 
-        context, section_expansion = complete_sections(context, "request_coverage")
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = {
             "query_overflow": overflow_trace,
@@ -3241,14 +3394,12 @@ def _expand_context_by_sections(
     started_at: float,
     state: dict[str, Any] | None = None,
     phase: str = "main",
-    reserve: bool = False,
     priority: Sequence[tuple[str, int | None, int | None]] = (),
 ) -> tuple[AnswerContext, Any]:
     """当たった chunk の章節から親の章節へ段階的に広げる (#1436。`section_expansion`)。
 
     最低範囲（列挙の問は文書全体）までの原文を決定的に足す。state は1回答内で共有し、追加検索後も同じ原文・根拠入力の
     予算・回答全体の期限を使う。無効と読み込み未設定は診断で区別する。
-    ``reserve`` は、後の段のために入力の一部（``section_expansion_followup_reserve_percent``）を残す（#2816）。
     ``priority`` は先に広げる範囲（業務ガイドの手順の参照の文書, 始まりの頁, 終わりの頁。#2828）。
     """
     from rag_engine.dependencies import section_dependencies
@@ -3349,7 +3500,6 @@ def _expand_context_by_sections(
             deadline_remaining=remaining_seconds,
             clock=monotonic,
             reader=state["reader"],
-            reserve_tokens=sections.SectionExpansionLimits.from_settings(settings).followup_reserve_tokens if reserve else 0,
             priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
         )
         if result.context is not context:
@@ -3442,6 +3592,92 @@ def _expand_context_by_sections(
     state["result"] = result
     state["signature"] = signature_of(result.context)
     return result.context, result
+
+
+def _fill_unread_section_anchors(
+    context: AnswerContext, settings: Settings, state: Mapping[str, Any], *, neighbor_child_count: int
+) -> AnswerContext:
+    """章節の拡張が所有の章節を読めなかった起点を、次の補い方（親 → 前後 N 件）で補う（#5173）。
+
+    章節で補う起点（#5168）は前後の chunk を読まない。予算・時間の上限・読み取りの失敗で所有の章節（かその上の章節）を
+    読めなかった起点は、親子分割なら親（起点の単位が親なので補い済み）、そうでなければ前後 N 件を読み、
+    ``consolidate_context`` で起点のかたまりへ入れる。章節の拡張をしなかった回答（無効・未設定）は、文脈の補完で
+    前後か親を補い済みなので何もしない。
+    """
+    from rag_engine.dependencies import section_dependencies
+    from rag_engine.generation.section_expansion import SectionOutline
+
+    reader = state.get("reader")
+    ports = section_dependencies()
+    if reader is None or ports is None:
+        return context
+    outlines = state.get("outlines") or {}
+    targets: list[AnswerRecord] = []
+    for parent in context.evidence_tree:
+        for child in parent.children:
+            if child.role != "retrieved_anchor" or uses_parent_context(child.record):
+                continue
+            uid = retrieval_record_id(child.record)
+            outline = outlines.get(uid)
+            if outline is None:
+                try:
+                    outline = ports[0](chunk_uid=uid)
+                except Exception:  # noqa: BLE001 - 対応を読めない起点は文脈の補完で前後を補い済み
+                    continue
+            if not isinstance(outline, SectionOutline) or not outline.chain():
+                continue
+            if any(reader.section_key(outline, section) in reader.read_sections for section in outline.chain()):
+                continue
+            targets.append(child.record)
+    targets = list({retrieval_record_id(record): record for record in targets}.values())
+    if not targets:
+        return context
+    loaded = injected_context_chunks(anchors=targets, settings=settings)
+    pool = {
+        retrieval_record_id(record): record
+        for record in (
+            *context.expansion_records,
+            *(map(_stored_chunk_answer_record, loaded) if loaded is not None else ()),
+            *targets,
+        )
+    }
+    filled = build_chunk_context_bundle(
+        ContextBuildRequest(
+            question="",
+            ranked_children=targets,
+            active_records=list(pool.values()),
+            top_k=len(targets),
+            neighbor_child_count=neighbor_child_count,
+            max_anchors_per_parent=len(targets),
+            max_records=len(targets) * (2 * max(1, neighbor_child_count) + 1),
+            max_chars=2**31 - 1,
+        )
+    )
+    adopted = sorted(
+        {
+            retrieval_record_id(child.record)
+            for parent in filled.evidence_tree
+            for child in parent.children
+            if child.role == "neighbor_context"
+        }
+    )
+    result = state.get("result")
+    if result is not None:
+        result.trace["unread_section_fallback"] = {
+            "anchor_ids": [retrieval_record_id(record) for record in targets],
+            "neighbor_chunk_ids": adopted,
+        }
+    if not adopted:
+        return context
+    tree = (*context.evidence_tree, *filled.evidence_tree)
+    return consolidate_context(
+        replace(
+            context,
+            records=[item.record for item in tree],
+            evidence_tree=tree,
+            expansion_records=tuple(pool.values()),
+        )
+    )
 
 
 def consolidate_context(context: AnswerContext) -> AnswerContext:

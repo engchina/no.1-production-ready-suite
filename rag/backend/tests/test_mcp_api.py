@@ -638,8 +638,9 @@ def test_search_maps_evidence_and_uses_token_user_context(
         captured["context"] = current_audit_request_context()
         return SearchResponse(
             answer="回答",
+            # 回答に使った根拠は citations の先頭に来る（answer_engine の並び。MCP は並びを
+            # 変えない）。
             citations=[
-                _chunk("c-unused", used=False, evidence_role="retrieved_anchor"),
                 _chunk(
                     "c1",
                     text="長" * 1500,
@@ -658,6 +659,7 @@ def test_search_maps_evidence_and_uses_token_user_context(
                     content_kind="text",
                     rerank_score=0.9,
                 ),
+                _chunk("c-unused", used=False, evidence_role="retrieved_anchor"),
             ],
             trace_id="trace-1",
             guardrail_warnings=["注意"],
@@ -732,7 +734,7 @@ def test_search_maps_evidence_and_uses_token_user_context(
         [],
     )
     assert body["evidence_omitted"] == 0
-    # 回答に使った根拠を先にする。
+    # 並びは citations（回答に使った根拠が先）のまま。
     assert [item["chunk_id"] for item in body["evidence"]] == ["c1", "c-unused"]
     evidence = body["evidence"][0]
     assert evidence["evidence_id"] == "c1"
@@ -1518,8 +1520,8 @@ def test_retrieve_evidence_searches_the_query_and_marks_rank_and_origin(
     )["structuredContent"]
 
     assert captured == {
-        # 根拠の補いと図の画像は Agent が読む（主の文書の検索の後で止める。#3506・#5125）。
-        "complete_evidence": False,
+        # 根拠は回答と同じ流れで集め（#5173）、図の画像だけ切り出さない（Agent が読む。#5125）。
+        "materialize_images": False,
         "generate_answer": False,
         "query": "経費精算 期限",
     }
@@ -1575,8 +1577,9 @@ def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) 
     body = _call("rag_search", {"query": "規程", "evidence_limit": 3}, _token(user.user_uuid))[
         "structuredContent"
     ]
-    # 回答に使った c0・c3 を先に（検索の順のまま）、残りの枠に使っていない根拠を入れる。
-    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c3", "c1"]
+    # 回答に使った c0・c3 を先に残し、残りの枠に使っていない根拠を入れる。並びは citations の
+    # 順のまま。
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "c3"]
     assert body["evidence_omitted"] == 3
     assert (body["insufficient_reason"], body["needs_human_review"]) == (None, False)
     # 構造の無い回答は、引用があり人の確認が要らなければ answered。印の記録の無い回答の印は空。
@@ -1607,10 +1610,12 @@ def _approval_citations(used: frozenset[str] = frozenset()) -> list[Any]:
     return citations
 
 
-def test_retrieve_evidence_returns_retrieved_anchors_before_context(
+def test_retrieve_evidence_keeps_anchors_within_the_limit_in_the_evidence_order(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
-    """当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切る（#1348）。"""
+    """上限を超えるときは当たった chunk を関連度の順に先に残し（#1348）、並びは回答と同じ
+    まま（#5173）。
+    """
 
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
@@ -1625,15 +1630,14 @@ def test_retrieve_evidence_returns_retrieved_anchors_before_context(
         {"query": "承認の記録の保存", "evidence_limit": 5},
         _token(user.user_uuid),
     )["structuredContent"]
-    # かたまりの 6 番目の「第 5 章」も上限の中に入る。文脈はその後ろに citations の順で入る。
+    # かたまりの 6 番目の「第 5 章」も上限の中に残る。残した根拠は citations の順のまま返す。
     assert [item["chunk_id"] for item in body["evidence"]] == [
+        "approval-preface",
+        "approval-ch1",
+        "approval-ch2",
         "approval-ch5-records",
         "other-anchor",
-        "approval-ch1",
-        "approval-preface",
-        "approval-ch2",
     ]
-    assert [item["role"] for item in body["evidence"][:3]] == ["retrieved_anchor"] * 3
     assert body["evidence_omitted"] == 3
 
 
@@ -1734,7 +1738,10 @@ def test_rag_search_keeps_its_evidence_limit_default() -> None:
 def test_search_orders_used_then_anchors_then_context(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
-    """rag_search は回答に使った根拠、当たった chunk（関連度の順）、前後の文脈の順（#1348）。"""
+    """rag_search は回答に使った根拠、当たった chunk（関連度の順）、前後の文脈の順に残す（#1348）。
+
+    並びは citations（回答に使った根拠が先、残りは根拠の並び）のまま（#5173）。
+    """
 
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
@@ -1755,15 +1762,18 @@ def test_search_orders_used_then_anchors_then_context(
     assert [(item["chunk_id"], item["used_in_answer"]) for item in body["evidence"]] == [
         ("approval-ch4", True),
         ("approval-ch1", True),
+        ("approval-preface", False),
         ("approval-ch5-records", False),
         ("other-anchor", False),
-        ("approval-preface", False),
     ]
     assert body["evidence_omitted"] == 3
 
 
 def test_mcp_evidence_keeps_unranked_hits_and_unknown_roles() -> None:
-    """順位の無い当たり・役割の無い根拠は順位のある当たりの後ろで citations の順（#1348）。"""
+    """残す順: 順位の無い当たり・役割の無い根拠は順位のある当たりの後ろで citations の順（#1348）。
+
+    返す並びは citations の順のまま（#5173）。
+    """
     citations = [
         _chunk("context", evidence_role="neighbor_context"),
         _chunk("no-role"),
@@ -1771,13 +1781,18 @@ def test_mcp_evidence_keeps_unranked_hits_and_unknown_roles() -> None:
         _chunk("anchor-2", evidence_role="retrieved_anchor", evidence_retrieval_rank=2),
         _chunk("anchor-1", evidence_role="retrieved_anchor", evidence_retrieval_rank="1"),
     ]
-    assert [chunk.chunk_id for chunk in mcp_tools.mcp_evidence(citations)[0]] == [
+    assert [chunk.chunk_id for chunk in mcp_tools.mcp_hit_order(citations)] == [
         "anchor-1",
         "anchor-2",
         "no-role",
         "anchor-unranked",
         "context",
     ]
+    assert [chunk.chunk_id for chunk in mcp_tools.mcp_evidence(citations)[0]] == [
+        chunk.chunk_id for chunk in citations
+    ]
+    kept, omitted = mcp_tools.mcp_evidence(citations, 3)
+    assert ([chunk.chunk_id for chunk in kept], omitted) == (["no-role", "anchor-2", "anchor-1"], 2)
 
 
 _FIGURE_PAGE: dict[str, Any] = {
@@ -2858,7 +2873,7 @@ def test_evidence_shows_the_section_of_the_chunk(
 
     async def fake_search(request: SearchRequest, **options: object) -> SearchResponse:
         del request
-        assert options == {"complete_evidence": False}
+        assert options == {"materialize_images": False}
         return SearchResponse(answer="", citations=[hit, other], trace_id="t-1", elapsed_ms=1.0)
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_search)
