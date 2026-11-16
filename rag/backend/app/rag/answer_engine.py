@@ -1054,7 +1054,6 @@ class AnswerEngine:
             if not _with_page_ranges(state.filters, page_ranges):
                 return HybridSearchResult(child_chunks=[], all_chunks=[])
         depth = self._read_depth(candidate_limit)
-        from rag_engine.retrieval.query_channels import expression_channels
         from rag_engine.retrieval.weighted_rrf import query_key
 
         query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
@@ -1063,19 +1062,19 @@ class AnswerEngine:
                 (q for q, labels in query_sources.items() if "原質問" in labels), queries[0]
             )
         original_query = state.original_retrieval_query
-        channels = {
-            query: expression_channels(query, original_query, query_sources) for query in queries
-        }
         embedded = await self._query_embeddings(state, queries)
         embeddings: dict[str, list[float]] = {}
+        # どの検索文も vector と全文(hybrid)で検索する。embedding に失敗したら全文だけで検索する。
+        modes: tuple[SearchMode, ...]
         if embedded is None:
-            # 全文を使う検索文だけを全文のみで検索する(ベクトルのみの検索文は全文に使わない)。
-            channels = {
-                query: ("keyword",) if {"hybrid", "keyword"} & set(used) else ()
-                for query, used in channels.items()
-            }
+            modes = (SearchMode.KEYWORD,)
         else:
             embeddings = dict(zip(queries, embedded, strict=True))
+            modes = (
+                (SearchMode.HYBRID,)
+                if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index"
+                else (SearchMode.VECTOR, SearchMode.KEYWORD)
+            )
         k = float(self._settings.rag_rrf_k)
         from rag_engine.retrieval.weighted_rrf import (
             RankedList,
@@ -1090,24 +1089,9 @@ class AnswerEngine:
         )
         budgets = source_weights([original_query, *queries], weights)
         query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
-        searches: list[tuple[str, list[float], SearchMode]] = []
-        for query in queries:
-            for channel in channels[query]:
-                if (
-                    channel == "hybrid"
-                    and self._settings.rag_hybrid_search_backend != "oracle_hybrid_index"
-                ):
-                    searches.extend(
-                        (query, embeddings[query], mode)
-                        for mode in (SearchMode.VECTOR, SearchMode.KEYWORD)
-                    )
-                else:
-                    mode = {
-                        "hybrid": SearchMode.HYBRID,
-                        "vector": SearchMode.VECTOR,
-                        "keyword": SearchMode.KEYWORD,
-                    }[channel]
-                    searches.append((query, embeddings.get(query, []), mode))
+        searches: list[tuple[str, list[float], SearchMode]] = [
+            (query, embeddings.get(query, []), mode) for query in queries for mode in modes
+        ]
         fused: dict[str, float] = {}
         rankings: list[list[str]] = []
         keywords_by_query = {

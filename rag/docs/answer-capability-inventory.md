@@ -46,7 +46,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
-| 質問の embedding（OCI Generative AI） | 任意（全文検索へ縮退。#4663） | 失敗 → 原質問と、ベクトルと全文の両方を使う検索文を全文のみで検索し、ベクトルのみの検索文は外す。全文検索が 1 本も走らないときはエラーにせず 0 件にし、根拠 0 件の経路で終える。失敗は 1 回の回答の中で覚え、検索のたびに呼び直さない | `DS`（`query_embedding`）。検索だけの経路（`retrieval_only`）は `diagnostics.answer.degraded_steps` | 見せない（回答の本文に注意書きを出さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._search`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
+| 質問の embedding（OCI Generative AI） | 任意（全文検索へ縮退。#4663） | 失敗 → どの検索文も全文のみで検索する。全文検索が 1 本も走らないときはエラーにせず 0 件にし、根拠 0 件の経路で終える。失敗は 1 回の回答の中で覚え、検索のたびに呼び直さない | `DS`（`query_embedding`）。検索だけの経路（`retrieval_only`）は `diagnostics.answer.degraded_steps` | 見せない（回答の本文に注意書きを出さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._search`・`rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
 | vector 検索（Oracle AI Vector Search） | 必須 | 例外を送出 → **エラー** | `SP` | 見せない | `rag/backend/app/clients/oracle.py::OracleClient.search_many`・`_read_vector_branch` |
 | 全文検索（Oracle Text） | 必須（hybrid の方式で検索するとき） | SQL の失敗は例外を送出 → **エラー**。質問から検索語が作れないとき（`_oracle_text_query` が `None`）は全文検索を飛ばす（失敗ではない） | `SP` | 見せない | `rag/backend/app/clients/oracle.py::_read_keyword_branch`・`_oracle_text_query` |
 | 全文検索の語の分割（Sudachi） | 任意 | Sudachi・辞書が使えない・分割に失敗 → 文字種の区切りだけで検索語を作る | `DS`（`text_search_tokenizer`。使えないときは回答ごとに 1 回、分割の失敗は 1 回ごと）。使えるかの確認は process ごとに 1 回（例外を cache する） | 見せない（縮退は `DS` で分かる） | `rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py::_sudachi_failure`・`sudachi_unavailable`・`_content_terms`・`rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
@@ -119,7 +119,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | kind | 処理 | 記録する箇所 |
 |---|---|---|
 | `retrieval` | ランキング一覧の取得に失敗。成功した一覧だけを元の重みで使い、全失敗なら検索の失敗を返す | `rag/backend/app/rag/answer_engine.py::_search`・`rag/packages/rag_engine/rag_engine/adapters/oracle/store.py::search_adb_hybrid_chunks` |
-| `query_embedding` | 質問の embedding に失敗し、全文のみの検索で続行（ベクトルのみの検索文は外し、同じ回答では呼び直さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
+| `query_embedding` | 質問の embedding に失敗し、全文のみの検索で続行（同じ回答では呼び直さない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._query_embeddings` |
 | `evidence_section_paths` | 長い根拠を分ける区切りに使う今の章節の読み出しに失敗し、取込の章節で区切って続行 | `rag/backend/app/rag/answer_engine.py` |
 | `runtime_terms` | 登録用語の照合に失敗し、その追加検索文なしで続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |

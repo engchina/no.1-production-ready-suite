@@ -427,8 +427,8 @@ class _SearchLog(FakeOracle):
 _QUERY_SOURCES = SimpleNamespace(
     retrieval_query_sources={
         "原質問": ("原質問",),
-        "用語の検索文": (TERMS_SOURCE_LABEL, "言い換え"),
-        "言い換えの検索文": ("言い換え",),
+        "用語の検索文": (f"原質問 + {TERMS_SOURCE_LABEL}",),
+        "ガイドの検索文": ("原質問 + 業務ガイド",),
     }
 )
 
@@ -451,41 +451,30 @@ async def _degraded_search(
 
 @pytest.mark.parametrize("backend", ["oracle_hybrid_index", "oracle_separate_sql"])
 async def test_query_embedding_failure_falls_back_to_keyword_only(backend: str) -> None:
-    """全文を使う検索文を全文のみで検索し、全文を使わない検索文は外す。検索を重ねても呼び直さない。"""
+    """どの検索文も全文のみで検索する（足した語の出どころによらない。#5151）。検索を重ねても呼び直さない。"""
     oracle = _SearchLog()
     genai = _EmbedFails()
     state = _SearchState()
-    queries = ["原質問", "用語の検索文", "言い換えの検索文", "仮説の文"]
+    queries = ["原質問", "用語の検索文", "ガイドの検索文", "出どころの無い検索文"]
 
     first = await _degraded_search(oracle, genai, state, queries, rag_hybrid_search_backend=backend)
     await _degraded_search(oracle, genai, state, queries, rag_hybrid_search_backend=backend)
 
     assert [child.chunk_uid for child in first.child_chunks] == ["doc-1:c1"]
-    assert oracle.searches == [("原質問", "keyword", 0), ("用語の検索文", "keyword", 0)]
+    assert oracle.searches == [(query, "keyword", 0) for query in queries]
     assert genai.calls == 1
     _assert_degraded(state, "query_embedding")
 
 
-@pytest.mark.parametrize(
-    ("queries", "status", "searched"),
-    [
-        (["仮説の文"], "", []),
-        (["言い換えの検索文"], "", []),
-        (["原質問"], "not_executed", [("原質問", "keyword", 0)]),
-    ],
-    ids=["vector-only", "vector-only-by-source", "no-text-query"],
-)
-async def test_query_embedding_failure_without_keyword_search_returns_no_chunks(
-    queries: list[str], status: str, searched: list[tuple[str, str, int]]
-) -> None:
+async def test_query_embedding_failure_without_keyword_search_returns_no_chunks() -> None:
     """全文検索が 1 本も走らないときは、エラーにせず 0 件で終える。"""
     state = _SearchState(original_retrieval_query="原質問")
-    oracle = _SearchLog(status)
+    oracle = _SearchLog("not_executed")
 
-    result = await _degraded_search(oracle, _EmbedFails(), state, queries)
+    result = await _degraded_search(oracle, _EmbedFails(), state, ["原質問"])
 
     assert result.child_chunks == []
-    assert oracle.searches == searched
+    assert oracle.searches == [("原質問", "keyword", 0)]
     _assert_degraded(state, "query_embedding")
 
 
