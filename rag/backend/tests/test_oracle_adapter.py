@@ -22,6 +22,7 @@ from app.clients.oracle import (
     OracleWalletPasswordRequiredError,
     _datetime_value,
     _test_oracle_connection_sync,
+    oracle_chunk_embedding_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_feedback_details_schema_sql,
@@ -2483,7 +2484,12 @@ async def test_oci_save_index_replaces_existing_chunks_and_binds_vectors() -> No
     assert inserted["chunk_id"] == "doc-1:0"
     assert inserted["chunk_text"] == "社内規程"
     assert inserted["search_text"] == "社内規程.pdf > 経費申請 > 承認\n社内規程"
-    assert inserted["embedding"] == array("f", [1.0, 0.0, 0.0])
+    # 埋め込みは chunk の行の後に別表へ入れる(#5241)。
+    assert "embedding" not in inserted
+    assert "INSERT INTO rag_chunk_embeddings" in pool.connection.many_calls[1].statement
+    assert pool.connection.many_calls[1].rows == [
+        {"chunk_id": "doc-1:0", "embedding": array("f", [1.0, 0.0, 0.0])}
+    ]
     metadata = json.loads(str(inserted["metadata_json"]))
     assert metadata["document_id"] == "doc-1"
     assert metadata["chunk_id"] == "doc-1:0"
@@ -2520,7 +2526,7 @@ async def test_oci_save_index_replaces_chunks_atomically() -> None:
     assert any("DELETE FROM rag_chunks" in statement for statement in statements)
     inserted = pool.connection.many_calls[0].rows[0]
     assert inserted["chunk_id"] == "doc-1:0"
-    assert inserted["embedding"] == array("f", [0.1, 0.2, 0.3])
+    assert pool.connection.many_calls[1].rows[0]["embedding"] == array("f", [0.1, 0.2, 0.3])
 
 
 async def test_save_index_new_chunk_set_exists_before_chunk_insert(
@@ -3109,12 +3115,18 @@ def test_oracle_ingestion_segment_schema_includes_checkpoint_table() -> None:
 def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     """chunk/vector DDL 例は tenant filter 用の列と索引を含む。"""
     ddl = oracle_vector_schema_sql()
+    embedding_ddl = oracle_chunk_embedding_schema_sql()
 
     assert "tenant_id_hash  CHAR(64)" in ddl
     assert "search_text     CLOB NOT NULL" in ddl
-    assert "embedding       VECTOR(1536, FLOAT32)," in ddl
-    assert "embedding       VECTOR(1536, FLOAT32) NOT NULL" not in ddl
+    # 埋め込みは細い別表(#5241)。chunk の行は範囲の列を索引だけで読める。
+    assert "VECTOR(" not in ddl
+    assert "(document_id, chunk_index, chunk_set_id, native_scope_id, chunk_id)" in ddl
+    assert "embedding VECTOR(1536, FLOAT32) NOT NULL" in embedding_ddl
+    assert "REFERENCES rag_chunks (chunk_id) ON DELETE CASCADE" in embedding_ddl
+    ddl = f"{ddl}\n{embedding_ddl}"
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in ddl
+    assert "ON rag_chunk_embeddings (embedding)" in ddl
     assert "ORGANIZATION INMEMORY NEIGHBOR GRAPH" in ddl
     assert "DISTANCE COSINE" in ddl
     # 既定の検索精度「高精度」の推奨ビルド(#1990)。
@@ -3132,7 +3144,9 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
         in ddl
     )
     assert "CREATE INDEX rag_chunks_document_idx" in ddl
-    assert "ON rag_chunks (document_id, chunk_index)" in ddl
+    assert (
+        "ON rag_chunks (document_id, chunk_index, chunk_set_id, native_scope_id, chunk_id)" in ddl
+    )
     assert "rag_chunks_tenant_document_idx" in ddl
     assert "ON rag_chunks (tenant_id_hash, document_id, chunk_index)" in ddl
     assert "INDEXTYPE IS CTXSYS.CONTEXT" in ddl

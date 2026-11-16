@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.api.routes.search import _resolve_query_context
+from app.clients.native_hybrid_schema import hybrid_payload_sql
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.rag.answer_engine import AnswerEngine, _SearchState
@@ -29,7 +30,10 @@ class _Embedding:
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_document_scope_index_is_visible_and_document_first() -> None:
-    """tenant の指定なしでも文書を先頭列で検索できる索引を配備する（#4955）。"""
+    """tenant の指定なしでも文書を先頭列で検索できる索引を配備する（#4955）。
+
+    範囲の解決が表の行を読まないよう、範囲の列も含める（#5241）。
+    """
     oracle = OracleClient()
     rows = await oracle._fetch_all(
         "SELECT i.status, i.visibility, c.column_name, c.column_position "
@@ -39,6 +43,9 @@ async def test_document_scope_index_is_visible_and_document_first() -> None:
     assert [(row["column_name"], row["column_position"]) for row in rows] == [
         ("DOCUMENT_ID", 1),
         ("CHUNK_INDEX", 2),
+        ("CHUNK_SET_ID", 3),
+        ("NATIVE_SCOPE_ID", 4),
+        ("CHUNK_ID", 5),
     ]
     assert all(row["status"] == "VALID" and row["visibility"] == "VISIBLE" for row in rows)
 
@@ -244,7 +251,7 @@ async def _empty_native_scope_diagnostics(
         """SELECT
             (SELECT COUNT(*) FROM DR$RAG_CHUNKS_HYBRID_IDX$VR) AS stored_vectors,
             (SELECT COUNT(*) FROM RAG_CHUNKS_HYBRID_IDX$VECTORS) AS visible_vectors,
-            (SELECT COUNT(*) FROM rag_chunks WHERE embedding IS NOT NULL) AS source_vectors
+            (SELECT COUNT(*) FROM rag_chunk_embeddings) AS source_vectors
         FROM dual"""
     )
     return {
@@ -867,15 +874,35 @@ async def test_native_cosine_threshold_preserves_independent_text_and_actual_rrf
 
     def update_vectors(connection: OracleConnectionProtocol) -> None:
         for index, vector in enumerate(vectors):
+            binds: dict[str, object] = {"document_id": document_id, "chunk_index": index}
+            chunk = (
+                "SELECT chunk_id FROM rag_chunks "
+                "WHERE document_id=:document_id AND chunk_index=:chunk_index"
+            )
+            # 埋め込みは別表(#5241)。別表の trigger が原生索引の JSON を作り直す。別表の行を
+            # 直接消すときは、取込の初期化と同じく JSON を本文だけにする。
+            if vector is None:
+                _execute(
+                    connection,
+                    f"DELETE FROM rag_chunk_embeddings WHERE chunk_id IN ({chunk})",
+                    binds,
+                )
+                _execute(
+                    connection,
+                    "UPDATE rag_chunks c SET c.hybrid_payload = "
+                    f"{hybrid_payload_sql('c.search_text', 'NULL')} "
+                    "WHERE c.document_id=:document_id AND c.chunk_index=:chunk_index",
+                    binds,
+                )
+                continue
             _execute(
                 connection,
-                "UPDATE rag_chunks SET embedding=:embedding "
-                "WHERE document_id=:document_id AND chunk_index=:chunk_index",
-                {
-                    "embedding": array("f", vector) if vector is not None else None,
-                    "document_id": document_id,
-                    "chunk_index": index,
-                },
+                f"MERGE INTO rag_chunk_embeddings e USING ({chunk}) s "
+                "ON (e.chunk_id = s.chunk_id) "
+                "WHEN MATCHED THEN UPDATE SET e.embedding = :embedding "
+                "WHEN NOT MATCHED THEN INSERT (chunk_id, embedding) "
+                "VALUES (s.chunk_id, :embedding)",
+                {**binds, "embedding": array("f", vector)},
             )
 
     await oracle._run_transaction(update_vectors)

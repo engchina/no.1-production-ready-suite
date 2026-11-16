@@ -176,13 +176,20 @@ CREATE TABLE rag_chunks (
     chunk_index     NUMBER NOT NULL,
     chunk_text      CLOB NOT NULL,
     metadata_json   JSON,
-    embedding       VECTOR(1536, FLOAT32),
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
+-- 埋め込みは細い別表（#5241。1 行が 1 block に収まり、範囲の判定が埋め込みを読まない）
+CREATE TABLE rag_chunk_embeddings (
+    chunk_id  VARCHAR2(128) PRIMARY KEY,
+    embedding VECTOR(1536, FLOAT32) NOT NULL,
+    CONSTRAINT rag_chunk_embeddings_chunk_fk
+        FOREIGN KEY (chunk_id) REFERENCES rag_chunks (chunk_id) ON DELETE CASCADE
+) NOCOMPRESS;
+
 -- 既定の検索精度「高精度」（accurate）の推奨ビルド（#1990）
 CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
-    ON rag_chunks (embedding)
+    ON rag_chunk_embeddings (embedding)
     ORGANIZATION INMEMORY NEIGHBOR GRAPH
     DISTANCE COSINE
     WITH TARGET ACCURACY 98

@@ -672,23 +672,11 @@ CREATE TABLE rag_chunks (
     chunk_text      CLOB NOT NULL,
     search_text     CLOB NOT NULL,
     metadata_json   JSON,
-    embedding       VECTOR(1536, FLOAT32),
     hybrid_payload  JSON,
     chunk_set_id    VARCHAR2(64),
     native_scope_id NUMBER,
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
-
-CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
-    ON rag_chunks (embedding)
-    ORGANIZATION INMEMORY NEIGHBOR GRAPH
-    DISTANCE COSINE
-    WITH TARGET ACCURACY 98
-    PARAMETERS (
-        TYPE HNSW,
-        NEIGHBORS 48,
-        EFCONSTRUCTION 800
-    );
 
 CREATE INDEX rag_chunks_text_idx
     ON rag_chunks (search_text)
@@ -699,10 +687,29 @@ CREATE INDEX rag_chunks_tenant_document_idx
     ON rag_chunks (tenant_id_hash, document_id, chunk_index);
 
 CREATE INDEX rag_chunks_document_idx
-    ON rag_chunks (document_id, chunk_index);
+    ON rag_chunks (document_id, chunk_index, chunk_set_id, native_scope_id, chunk_id);
 
 CREATE INDEX rag_chunks_chunk_set_idx
     ON rag_chunks (chunk_set_id, chunk_index);
+
+-- section: chunk_embeddings
+CREATE TABLE rag_chunk_embeddings (
+    chunk_id  VARCHAR2(128) PRIMARY KEY,
+    embedding VECTOR(1536, FLOAT32) NOT NULL,
+    CONSTRAINT rag_chunk_embeddings_chunk_fk
+        FOREIGN KEY (chunk_id) REFERENCES rag_chunks (chunk_id) ON DELETE CASCADE
+) NOCOMPRESS;
+
+CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
+    ON rag_chunk_embeddings (embedding)
+    ORGANIZATION INMEMORY NEIGHBOR GRAPH
+    DISTANCE COSINE
+    WITH TARGET ACCURACY 98
+    PARAMETERS (
+        TYPE HNSW,
+        NEIGHBORS 48,
+        EFCONSTRUCTION 800
+    );
 
 -- section: native_hybrid
 DECLARE
@@ -716,21 +723,29 @@ BEGIN
             JSON('{"vector_idxtype":"ivf","distance":"COSINE","paths":[{"type":"VECTOR","path_list":["$.embedding"]}]}')
         );
     END IF;
-    SELECT COUNT(*) INTO v_count FROM user_tab_columns
-    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'HYBRID_PAYLOAD';
-    IF v_count = 1 THEN
-        EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC
+END;
+/
+
+BEGIN
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC
 BEFORE INSERT OR UPDATE ON rag_chunks FOR EACH ROW
 BEGIN
-    IF INSERTING OR UPDATING('SEARCH_TEXT') OR UPDATING('EMBEDDING') THEN
-    SELECT JSON_OBJECT(
-        'text' VALUE :NEW.search_text,
-        'embedding' VALUE JSON(VECTOR_SERIALIZE(:NEW.embedding RETURNING CLOB))
-        ABSENT ON NULL RETURNING JSON
-    ) INTO :NEW.hybrid_payload FROM dual;
+    IF INSERTING OR UPDATING('SEARCH_TEXT') THEN
+        SELECT JSON_OBJECT('text' VALUE :NEW.search_text,
+        'embedding' VALUE JSON(VECTOR_SERIALIZE(e.embedding RETURNING CLOB))
+        ABSENT ON NULL RETURNING JSON)
+        INTO :NEW.hybrid_payload
+        FROM dual LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = :NEW.chunk_id;
     END IF;
 END;~';
-    END IF;
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC
+AFTER INSERT OR UPDATE ON rag_chunk_embeddings FOR EACH ROW
+BEGIN
+    UPDATE rag_chunks c SET c.hybrid_payload = JSON_OBJECT('text' VALUE c.search_text,
+        'embedding' VALUE JSON(VECTOR_SERIALIZE(:NEW.embedding RETURNING CLOB))
+        ABSENT ON NULL RETURNING JSON)
+    WHERE c.chunk_id = :NEW.chunk_id;
+END;~';
 END;
 /
 
@@ -877,8 +892,9 @@ COMPOUND TRIGGER
     v_dirty BOOLEAN := FALSE;
     BEFORE EACH ROW IS
     BEGIN
-        IF (DELETING OR UPDATING('SEARCH_TEXT') OR UPDATING('EMBEDDING')
-            OR UPDATING('HYBRID_PAYLOAD')) AND :OLD.embedding IS NOT NULL THEN
+        IF NOT v_dirty
+            AND (DELETING OR UPDATING('SEARCH_TEXT') OR UPDATING('HYBRID_PAYLOAD'))
+            AND JSON_EXISTS(:OLD.hybrid_payload, '$.embedding') THEN
             v_dirty := TRUE;
         END IF;
     END BEFORE EACH ROW;
@@ -922,7 +938,7 @@ BEGIN
 END;
 /
 
-CREATE INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX ON rag_chunks(native_scope_id);
+CREATE INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX ON rag_chunks(native_scope_id, chunk_index, chunk_id, document_id);
 
 BEGIN
     EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_NATIVE_SCOPE_SYNC

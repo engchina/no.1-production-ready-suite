@@ -732,7 +732,8 @@ def test_vector_search_decides_the_document_set_before_the_nearest_neighbors() -
         fetch_clause=oracle_module._oracle_vector_fetch_clause(top_k=10, target_accuracy=90),
     )
     assert "WHERE c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE " in statement
-    assert "ORDER BY VECTOR_DISTANCE(c.embedding, :embedding, COSINE)\n" in statement
+    assert "ORDER BY VECTOR_DISTANCE(e.embedding, :embedding, COSINE)\n" in statement
+    assert "JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id" in statement
 
 
 def test_keyword_search_reads_scoped_scores_directly() -> None:

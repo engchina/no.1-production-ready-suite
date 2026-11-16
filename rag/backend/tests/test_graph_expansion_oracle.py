@@ -339,7 +339,9 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
     assert await structure_index_targets(client, doc, default=False) == [b.id]
     before_a = await _visible_graph(client, a.id)
     before = await client._fetch_all(
-        "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
+        "SELECT c.chunk_id,c.chunk_text,e.embedding FROM rag_chunks c "
+        "LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id WHERE c.chunk_set_id=:id",
+        {"id": cs},
     )
     one = await rebuild_document_structure_index(client, b.id, doc)
     two = await rebuild_document_structure_index(client, b.id, doc)
@@ -377,7 +379,9 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
     assert await _visible_graph(client, a.id) == before_a
     assert (await _visible_graph(client, b.id))[0]
     after = await client._fetch_all(
-        "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
+        "SELECT c.chunk_id,c.chunk_text,e.embedding FROM rag_chunks c "
+        "LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id WHERE c.chunk_set_id=:id",
+        {"id": cs},
     )
     assert before == after
     state = await client.get_chunk_set(cs)

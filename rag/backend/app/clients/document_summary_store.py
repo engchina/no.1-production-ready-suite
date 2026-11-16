@@ -29,6 +29,7 @@ from app.clients.oracle import (
     _optional_int,
     _optional_str,
     _select_document_state,
+    insert_chunk_rows,
 )
 from app.rag.chunking import Chunk
 
@@ -297,20 +298,7 @@ class DocumentSummaryStore:
                 row = self._oracle._chunk_insert_rows(
                     document_id, document, [placed], [embedding], chunk_set_id=chunk_set_id
                 )[0]
-                _execute(
-                    connection,
-                    """
-                    INSERT INTO rag_chunks (
-                        chunk_id, document_id, tenant_id_hash, chunk_index, chunk_text,
-                        search_text, metadata_json, embedding, chunk_set_id
-                    ) VALUES (
-                        :chunk_id, :document_id, :tenant_id_hash, :chunk_index, :chunk_text,
-                        :search_text, :metadata_json, :embedding, :chunk_set_id
-                    )
-                    """,
-                    row,
-                    input_sizes=_json_input_sizes("metadata_json"),
-                )
+                insert_chunk_rows(connection, [row])
                 # chunk の数の記録を、要約の chunk を入れた後の行の数に合わせる。
                 _execute(
                     connection,

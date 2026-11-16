@@ -40,7 +40,8 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "-- section: ingestion_segments" in sql
     assert "CREATE TABLE rag_ingestion_segments" in sql
     assert "CREATE TABLE rag_chunks" in sql
-    assert "embedding       VECTOR(1536, FLOAT32)" in sql
+    assert "CREATE TABLE rag_chunk_embeddings" in sql
+    assert "embedding VECTOR(1536, FLOAT32) NOT NULL" in sql
     assert "chunk_set_id    VARCHAR2(64)" in sql
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in sql
     assert "CTX_DDL.CREATE_PREFERENCE('RAG_TEXT_WORLD_LEXER', 'WORLD_LEXER')" in sql
@@ -129,6 +130,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "ingestion_jobs",
         "ingestion_segments",
         "chunks",
+        "chunk_embeddings",
         "native_hybrid",
         "chunk_sets",
         "native_maintenance",
@@ -515,7 +517,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 175
+    assert len(statements) == 180
     assert all(
         statement.startswith(
             (
@@ -679,6 +681,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261112_4955_chunk_document_index",
         "20261115_5107_approved_faq_fields",
         "20261115_5107_faq_answer_prompt",
+        "20261117_5241_chunk_embeddings",
     ]
 
 
@@ -771,7 +774,7 @@ def test_vector_index_reindex_sql_reflects_profile_build_params() -> None:
 
     assert "DROP INDEX rag_chunks_embedding_hnsw_idx;" in sql
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in sql
-    assert "ON rag_chunks (embedding)" in sql
+    assert "ON rag_chunk_embeddings (embedding)" in sql
     assert "WITH TARGET ACCURACY 98" in sql
     assert "NEIGHBORS 48" in sql
     assert "EFCONSTRUCTION 800" in sql

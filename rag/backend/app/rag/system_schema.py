@@ -45,7 +45,7 @@ from rag_engine.adapters.oracle.native_hybrid import (
     NATIVE_HYBRID_PREFERENCE,
 )
 
-from app.clients.native_hybrid_schema import NATIVE_HYBRID_TRIGGER
+from app.clients.native_hybrid_schema import EMBEDDING_HYBRID_TRIGGER, NATIVE_HYBRID_TRIGGER
 from app.clients.native_maintenance_schema import MAINTENANCE_TRIGGER
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER_PREFERENCE,
@@ -154,6 +154,8 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_INGESTION_JOBS",
     "RAG_INGESTION_SEGMENTS",
     "RAG_CHUNKS",
+    # chunk の埋め込み（#5241）。RAG_CHUNKS を参照する。
+    "RAG_CHUNK_EMBEDDINGS",
     "RAG_CHUNK_SETS",
     "RAG_NATIVE_SEARCH_SCOPES",
     "RAG_NATIVE_INDEX_MAINTENANCE",
@@ -321,6 +323,7 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "INDEX") for name in MANAGED_INDEXES),
     *MANAGED_TEXT_OBJECTS,
     (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+    (EMBEDDING_HYBRID_TRIGGER, "TRIGGER"),
     (MAINTENANCE_TRIGGER, "TRIGGER"),
     ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
     (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
@@ -381,6 +384,7 @@ def managed_manifest_from_schema(
         objects.update(
             {
                 (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+                (EMBEDDING_HYBRID_TRIGGER, "TRIGGER"),
                 (MAINTENANCE_TRIGGER, "TRIGGER"),
                 ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
                 (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
@@ -665,6 +669,9 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             [
                 "ALTER TRIGGER RAG_CHUNKS_HYBRID_SYNC COMPILE",
                 "ALTER TRIGGER RAG_CHUNKS_HYBRID_SYNC ENABLE",
+                # 埋め込みの移行は写す間だけこの trigger を止める（#5241）。
+                f"ALTER TRIGGER {EMBEDDING_HYBRID_TRIGGER} COMPILE",
+                f"ALTER TRIGGER {EMBEDDING_HYBRID_TRIGGER} ENABLE",
             ],
         )
         self._apply_missing_indexes(connection)

@@ -136,14 +136,20 @@
     },
     {
       "name": "chunks",
-      "sha256": "6391595e5e37ed4059b1babbd42610b8b455a40f9179032161233891d78be058",
-      "statement_count": 8,
+      "sha256": "7a4957c8908cdd5f3d980e5998290310c5359cc90f7823877f4f1bc3d28627e4",
+      "statement_count": 7,
       "table_name": "rag_chunks"
     },
     {
-      "name": "native_hybrid",
-      "sha256": "49e4121ec836ffcbb1a680f112276a0ecae0caf5aed6f4a7ab8d90fc83b9b3f9",
+      "name": "chunk_embeddings",
+      "sha256": "29c40a319dafe3989cbb3ec5be787ec3990c0c202819680283d62b225723f445",
       "statement_count": 2,
+      "table_name": "rag_chunk_embeddings"
+    },
+    {
+      "name": "native_hybrid",
+      "sha256": "bcdfcf44a8be3d70aa8c0817e48b03f3166f293ce551e4185d6dd596a86e8781",
+      "statement_count": 3,
       "table_name": "rag_chunks"
     },
     {
@@ -154,13 +160,13 @@
     },
     {
       "name": "native_maintenance",
-      "sha256": "bc95b9b96cbe52abbca2732ad4ad070ba5b04e0c76759aa689f8c1c591eb2bab",
+      "sha256": "38e9e76ec1a004809c633f2992a970d0bc46a9610069570b2f02ad78b14e9ce6",
       "statement_count": 7,
       "table_name": "rag_native_index_maintenance"
     },
     {
       "name": "native_search_scopes",
-      "sha256": "db25cb7b589c678270c3553e2d7147a3c88b7467b359be600b99d3ec58b198fc",
+      "sha256": "8e65cf704bd428d5be8bbeb66a5a649b05a5180850197c0855cfbee4c75863d7",
       "statement_count": 4,
       "table_name": "rag_native_search_scopes"
     },
@@ -273,8 +279,8 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "2a5204b2688edce0c12d02d0552897bc37a5eca4f9ee25826ece9fa548d8db64",
-  "statement_count": 163,
+  "sha256": "13c1cc83fb8e09f567de65e696eab73a54a37ad73ae452ba4f04406a4a1e2548",
+  "statement_count": 165,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {
     "distance": "COSINE",

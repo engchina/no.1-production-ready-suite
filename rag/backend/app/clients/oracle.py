@@ -54,6 +54,7 @@ from rag_parser_core.extraction import (
 from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
+from app.clients.native_hybrid_schema import hybrid_payload_sql
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
     db_call_label,
@@ -705,9 +706,10 @@ def _native_exact_vector_statement(
             100 / (1 + nearest.distance) AS native_vector_score
         FROM (
             SELECT candidate.chunk_id, candidate.document_id, candidate.chunk_index,
-                VECTOR_DISTANCE(candidate.embedding, :native_embedding, COSINE) AS distance
+                VECTOR_DISTANCE(e.embedding, :native_embedding, COSINE) AS distance
             FROM rag_chunks candidate
-            WHERE candidate.embedding IS NOT NULL AND {allowed_sql}
+            JOIN rag_chunk_embeddings e ON e.chunk_id = candidate.chunk_id
+            WHERE {allowed_sql}
             ORDER BY distance ASC, candidate.document_id ASC, candidate.chunk_index ASC,
                 candidate.chunk_id ASC
             {fetch_clause}
@@ -4100,7 +4102,7 @@ class OracleClient:
                     """
                 INSERT INTO rag_chunks (
                     chunk_id, document_id, tenant_id_hash, chunk_index,
-                    chunk_text, search_text, metadata_json, embedding, chunk_set_id
+                    chunk_text, search_text, metadata_json, chunk_set_id
                 )
                 SELECT c.document_id || ':' || :target || ':' || TO_CHAR(c.chunk_index),
                     c.document_id, c.tenant_id_hash, c.chunk_index, c.chunk_text, c.search_text,
@@ -4108,7 +4110,7 @@ class OracleClient:
                         'chunk_id' VALUE c.document_id || ':' || :target || ':'
                             || TO_CHAR(c.chunk_index),
                         'chunk_set_id' VALUE :target RETURNING CLOB
-                    ) RETURNING CLOB), NULL, :target
+                    ) RETURNING CLOB), :target
                 FROM rag_chunks c
                 JOIN rag_chunk_sets src ON src.chunk_set_id = c.chunk_set_id
                 JOIN rag_chunk_sets dst ON dst.chunk_set_id = :target
@@ -8200,9 +8202,11 @@ class OracleClient:
         """``_resolve_native_scope`` の本体。"""
         where, binds = _oracle_retrieval_where(filters)
         allowed = await self._fetch_all(
+            # 埋め込みの有無は別表の主キーの索引で数える(#5241)。chunk の列は索引だけで読む。
             "SELECT c.native_scope_id, COUNT(*) AS allowed_count, "
-            "SUM(CASE WHEN c.embedding IS NOT NULL THEN 1 ELSE 0 END) AS vector_count "
-            f"{_NATIVE_SCOPE_JOINS} WHERE {where} GROUP BY c.native_scope_id",
+            "COUNT(e.chunk_id) AS vector_count "
+            f"{_NATIVE_SCOPE_JOINS} LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id "
+            f"WHERE {where} GROUP BY c.native_scope_id",
             binds,
         )
         if not allowed:
@@ -8486,6 +8490,7 @@ class OracleClient:
         if channel != "keyword":
             similarity_sql = _vector_score_sql("native_embedding")
             native_binds["native_embedding"] = _to_vector_bind(vector)
+            joins = f"{joins}\n            {_EMBEDDING_JOIN}"
         statement = f"""
                 SELECT {_SEARCH_HIT_COLUMNS}, {score} AS score,
                     {similarity_sql} AS native_similarity,
@@ -11470,7 +11475,6 @@ class OracleClient:
             {
                 "chunk_id": chunk_id_for(chunk),
                 "chunk_set_id": chunk_set_id,
-                "embedding": _to_vector_bind(embedding),
                 "search_text": _chunk_search_text(chunk),
                 "metadata_json": _json_dumps(
                     {
@@ -11480,17 +11484,26 @@ class OracleClient:
                     }
                 ),
             }
-            for chunk, embedding in zip(chunks, embeddings, strict=True)
+            for chunk in chunks
+        ]
+        embedding_rows = [
+            {
+                "chunk_id": row["chunk_id"],
+                "chunk_set_id": chunk_set_id,
+                "embedding": _to_vector_bind(embedding),
+            }
+            for row, embedding in zip(rows, embeddings, strict=True)
         ]
 
         def operation(connection: OracleConnectionProtocol) -> None:
             if rows:
+                # 本文を先に書き、埋め込みを後に書く(埋め込みの表の trigger が原生索引の JSON に
+                # 埋め込みを足す。#5241)。初めて埋め込みを入れる行は索引の整理を要求しない。
                 _executemany(
                     connection,
                     """
                     UPDATE rag_chunks
-                    SET embedding = :embedding,
-                        search_text = :search_text,
+                    SET search_text = :search_text,
                         metadata_json = :metadata_json
                     WHERE chunk_id = :chunk_id
                       AND chunk_set_id = :chunk_set_id
@@ -11498,13 +11511,27 @@ class OracleClient:
                     rows,
                     input_sizes=_json_input_sizes("metadata_json"),
                 )
+                _executemany(
+                    connection,
+                    """
+                    MERGE INTO rag_chunk_embeddings e
+                    USING (
+                        SELECT c.chunk_id FROM rag_chunks c
+                        WHERE c.chunk_id = :chunk_id AND c.chunk_set_id = :chunk_set_id
+                    ) s ON (e.chunk_id = s.chunk_id)
+                    WHEN MATCHED THEN UPDATE SET e.embedding = :embedding
+                    WHEN NOT MATCHED THEN INSERT (chunk_id, embedding)
+                        VALUES (s.chunk_id, :embedding)
+                    """,
+                    embedding_rows,
+                )
             count_rows = _fetch_all(
                 connection,
                 """
                 SELECT COUNT(*) AS cnt
-                FROM rag_chunks
-                WHERE chunk_set_id = :chunk_set_id
-                  AND embedding IS NOT NULL
+                FROM rag_chunks c
+                JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id
+                WHERE c.chunk_set_id = :chunk_set_id
                 """,
                 {"chunk_set_id": chunk_set_id},
             )
@@ -11914,9 +11941,25 @@ class OracleClient:
                 ),
                 _with_tenant_bind({"document_id": document_id}),
             )
+            # 埋め込みを消し、原生索引の JSON を本文だけにする(別表の行を直接消すときは、
+            # 呼出し側が JSON を作り直す。#5241)。
             _execute(
                 connection,
-                "UPDATE rag_chunks SET embedding = NULL WHERE document_id = :document_id",
+                """
+                DELETE FROM rag_chunk_embeddings e
+                WHERE e.chunk_id IN (
+                    SELECT c.chunk_id FROM rag_chunks c WHERE c.document_id = :document_id
+                )
+                """,
+                {"document_id": document_id},
+            )
+            text_only_payload = hybrid_payload_sql("c.search_text", "NULL")
+            _execute(
+                connection,
+                f"""
+                UPDATE rag_chunks c SET c.hybrid_payload = {text_only_payload}
+                WHERE c.document_id = :document_id
+                """,
                 {"document_id": document_id},
             )
             _execute(
@@ -12131,35 +12174,7 @@ class OracleClient:
             rows = self._chunk_insert_rows(
                 document_id, document, chunks, embeddings, chunk_set_id=chunk_set_id
             )
-            if rows:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_chunks (
-                        chunk_id,
-                        document_id,
-                        tenant_id_hash,
-                        chunk_index,
-                        chunk_text,
-                        search_text,
-                        metadata_json,
-                        embedding,
-                        chunk_set_id
-                    ) VALUES (
-                        :chunk_id,
-                        :document_id,
-                        :tenant_id_hash,
-                        :chunk_index,
-                        :chunk_text,
-                        :search_text,
-                        :metadata_json,
-                        :embedding,
-                        :chunk_set_id
-                    )
-                    """,
-                    rows,
-                    input_sizes=_json_input_sizes("metadata_json"),
-                )
+            insert_chunk_rows(connection, rows)
             if first_page_context is not None:
                 _execute(
                     connection,
@@ -12909,6 +12924,43 @@ def _executemany(
         cursor.executemany(_normalize_sql(statement), rows)
     finally:
         cursor.close()
+
+
+def insert_chunk_rows(
+    connection: OracleConnectionProtocol, rows: Sequence[Mapping[str, object]]
+) -> None:
+    """``OracleClient._chunk_insert_rows`` の行を chunk の表と埋め込みの表へ入れる(#5241)。
+
+    chunk の行を先に入れ、埋め込みのある行だけ埋め込みの表へ入れる(埋め込みの表の trigger が
+    原生索引の JSON に埋め込みを足す)。
+    """
+    if not rows:
+        return
+    _executemany(
+        connection,
+        """
+        INSERT INTO rag_chunks (
+            chunk_id, document_id, tenant_id_hash, chunk_index, chunk_text,
+            search_text, metadata_json, chunk_set_id
+        ) VALUES (
+            :chunk_id, :document_id, :tenant_id_hash, :chunk_index, :chunk_text,
+            :search_text, :metadata_json, :chunk_set_id
+        )
+        """,
+        [{key: value for key, value in row.items() if key != "embedding"} for row in rows],
+        input_sizes=_json_input_sizes("metadata_json"),
+    )
+    embedded = [
+        {"chunk_id": row["chunk_id"], "embedding": row["embedding"]}
+        for row in rows
+        if row.get("embedding") is not None
+    ]
+    if embedded:
+        _executemany(
+            connection,
+            "INSERT INTO rag_chunk_embeddings (chunk_id, embedding) VALUES (:chunk_id, :embedding)",
+            embedded,
+        )
 
 
 def delete_document_rows(connection: OracleConnectionProtocol, document_id: str) -> bool:
@@ -16063,8 +16115,12 @@ _SEARCH_HIT_COLUMNS = """
 _SEARCH_FETCH_ROWS = 1000
 
 
+# 埋め込みは別表(#5241)。``_vector_score_sql`` を使う SQL は ``e`` をこの形で結ぶ。
+_EMBEDDING_JOIN = "LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id"
+
+
 def _vector_score_sql(embedding_bind: str) -> str:
-    return f"1 - VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE)"
+    return f"1 - VECTOR_DISTANCE(e.embedding, :{embedding_bind}, COSINE)"
 
 
 def _vector_search_sql(
@@ -16085,17 +16141,18 @@ def _vector_search_sql(
         """
         SELECT * FROM (
             SELECT {select_list},
-                VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE) AS vector_sort_key,
+                VECTOR_DISTANCE(e.embedding, :{embedding_bind}, COSINE) AS vector_sort_key,
                 c.document_id AS vector_document_id,
                 c.chunk_index AS vector_chunk_index,
                 c.chunk_id AS vector_chunk_id
             FROM rag_chunks c
+            JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id
             JOIN rag_documents d ON d.document_id = c.document_id
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
             WHERE c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})
               AND {chunk_sql}
-            ORDER BY VECTOR_DISTANCE(c.embedding, :{embedding_bind}, COSINE)
+            ORDER BY VECTOR_DISTANCE(e.embedding, :{embedding_bind}, COSINE)
             {fetch_clause}
         )
         WHERE 1 - vector_sort_key >= :min_similarity
@@ -18118,7 +18175,7 @@ CREATE INDEX {table_name}_recipe_status_idx
 
 def oracle_vector_index_create_sql(
     *,
-    table: str = "rag_chunks",
+    table: str = "rag_chunk_embeddings",
     index: str = "rag_chunks_embedding_hnsw_idx",
     target_accuracy: int | None = None,
     neighbors: int | None = None,
@@ -18150,10 +18207,11 @@ def oracle_vector_index_create_sql(
 
 
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
-    """Oracle AI Database VECTOR(1536, FLOAT32) + HNSW index の DDL を返す。
+    """chunk の行(本文・metadata・範囲の列)の DDL を返す。埋め込みは別表(#5241)。
 
-    HNSW 索引は既定の検索精度の推奨ビルドで作る(#1990)。既存の環境の索引は作り直さない
-    (システムテーブルの更新は無い索引だけを作る。再作成は画面の SQL を DBA が適用する)。"""
+    範囲の解決と距離順の読みが目的の列のために行の全 piece を読まないよう、行を細く保ち、範囲の
+    列は索引だけで読めるようにする(``rag_chunks_document_idx``・``RAG_CHUNKS_NATIVE_SCOPE_IDX``)。
+    """
     return f"""
 {oracle_text_preferences_sql()}
 
@@ -18165,14 +18223,11 @@ CREATE TABLE {table_name} (
     chunk_text      CLOB NOT NULL,
     search_text     CLOB NOT NULL,
     metadata_json   JSON,
-    embedding       VECTOR(1536, FLOAT32),
     hybrid_payload  JSON,
     chunk_set_id    VARCHAR2(64),
     native_scope_id NUMBER,
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
-
-{oracle_vector_index_create_sql(table=table_name, index=f"{table_name}_embedding_hnsw_idx")}
 
 CREATE INDEX {table_name}_text_idx
     ON {table_name} (search_text)
@@ -18182,16 +18237,51 @@ CREATE INDEX {table_name}_text_idx
 CREATE INDEX {table_name}_tenant_document_idx
     ON {table_name} (tenant_id_hash, document_id, chunk_index);
 
-{oracle_chunk_document_index_sql(table_name)};
+{oracle_chunk_scope_document_index_sql(table_name)};
 
 CREATE INDEX {table_name}_chunk_set_idx
     ON {table_name} (chunk_set_id, chunk_index);
 """.strip()
 
 
+def oracle_chunk_embedding_schema_sql() -> str:
+    """chunk の埋め込みの表と HNSW 索引の DDL を返す(#5241)。
+
+    埋め込み(VECTOR(1536, FLOAT32) は約 6KB)を chunk の行から外し、1 行が 1 block に収まる
+    細い表にする。埋め込みの無い chunk は行を持たない。chunk の行を消すと一緒に消える。
+    ``NOCOMPRESS`` を明示する: Autonomous AI Database の既定(``COLUMN STORE COMPRESS FOR QUERY
+    HIGH``)では、移行の ``INSERT ... SELECT`` が行を圧縮の単位にまとめ、1 行の埋め込みを読むたびに
+    約 10 の piece をたどる(合成の 2,000 行で 1 行あたり 14 block。行ごとの挿入と NOCOMPRESS は
+    3 block)。距離順の読みは主キーで 1 行ずつ読むので、圧縮しない。
+    HNSW 索引は既定の検索精度の推奨ビルドで作る(#1990)。既存の環境の索引は作り直さない
+    (システムテーブルの更新は無い索引だけを作る。再作成は画面の SQL を DBA が適用する)。
+    """
+    return f"""
+CREATE TABLE rag_chunk_embeddings (
+    chunk_id  VARCHAR2(128) PRIMARY KEY,
+    embedding VECTOR(1536, FLOAT32) NOT NULL,
+    CONSTRAINT rag_chunk_embeddings_chunk_fk
+        FOREIGN KEY (chunk_id) REFERENCES rag_chunks (chunk_id) ON DELETE CASCADE
+) NOCOMPRESS;
+
+{oracle_vector_index_create_sql(index="rag_chunks_embedding_hnsw_idx")}
+""".strip()
+
+
 def oracle_chunk_document_index_sql(table_name: str = "rag_chunks") -> str:
     """tenant 条件のない文書スコープも、chunk の全表走査を避けて読む（#4955）。"""
     return f"CREATE INDEX {table_name}_document_idx\n    ON {table_name} (document_id, chunk_index)"
+
+
+def oracle_chunk_scope_document_index_sql(table_name: str = "rag_chunks") -> str:
+    """文書スコープの索引に範囲の列を含め、範囲の解決を表の行を読まずに済ませる(#5241)。
+
+    ``rag_chunks_document_idx`` の現行の定義。先頭は #4955 と同じ ``document_id, chunk_index``。
+    """
+    return (
+        f"CREATE INDEX {table_name}_document_idx\n"
+        f"    ON {table_name} (document_id, chunk_index, chunk_set_id, native_scope_id, chunk_id)"
+    )
 
 
 def oracle_text_preferences_sql(

@@ -576,11 +576,12 @@ async def _chunk_snapshot(client: OracleClient, document_id: str) -> list[dict[s
     metadata は VARCHAR2、embedding は次元の数とノルムで比べる。
     """
     rows = await client._fetch_all(
-        """SELECT chunk_id,chunk_set_id,chunk_text,
-        JSON_SERIALIZE(metadata_json RETURNING VARCHAR2(4000)) AS metadata_text,
-        VECTOR_DIMENSION_COUNT(embedding) AS embedding_dimensions,
-        VECTOR_NORM(embedding) AS embedding_norm
-        FROM rag_chunks WHERE document_id=:id ORDER BY chunk_set_id,chunk_index""",
+        """SELECT c.chunk_id,c.chunk_set_id,c.chunk_text,
+        JSON_SERIALIZE(c.metadata_json RETURNING VARCHAR2(4000)) AS metadata_text,
+        VECTOR_DIMENSION_COUNT(e.embedding) AS embedding_dimensions,
+        VECTOR_NORM(e.embedding) AS embedding_norm
+        FROM rag_chunks c LEFT JOIN rag_chunk_embeddings e ON e.chunk_id = c.chunk_id
+        WHERE c.document_id=:id ORDER BY c.chunk_set_id,c.chunk_index""",
         {"id": document_id},
     )
     return [{key: str(value) for key, value in row.items()} for row in rows]

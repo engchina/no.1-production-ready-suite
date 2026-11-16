@@ -456,6 +456,8 @@ jobs:
               - "rag/backend/app/rag/evaluation_result_storage.py"
               - "rag/backend/tests/test_evaluation_result_storage_oracle.py"
               - "rag/backend/app/clients/native_hybrid_schema.py"
+              # 埋め込みの別表と原生索引の JSON・整理の要求の同期（#5241）。
+              - "rag/backend/tests/test_chunk_embeddings_oracle.py"
               - "rag/backend/app/clients/native_*maintenance*.py"
               - "rag/backend/app/rag/native_index_maintenance.py"
               - "rag/backend/tests/test_native_maintenance*.py"

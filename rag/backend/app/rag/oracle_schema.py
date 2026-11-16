@@ -24,6 +24,8 @@ from app.clients.extraction_revision_store import oracle_extraction_revision_sch
 from app.clients.graph_reference_store import graph_reference_schema_sql
 from app.clients.language_pack_release_store import language_pack_release_statements
 from app.clients.native_hybrid_schema import (
+    NATIVE_SCOPE_COVER_INDEX_SQL,
+    chunk_embedding_trigger_sql,
     native_hybrid_ivf_migration_sql,
     native_hybrid_migration_sql,
     native_hybrid_missing_scope_migration_sql,
@@ -35,12 +37,16 @@ from app.clients.native_hybrid_schema import (
 )
 from app.clients.native_maintenance_schema import (
     native_maintenance_activation_sql,
+    native_maintenance_current_activation_sql,
     native_maintenance_tables_sql,
+    native_maintenance_trigger_sql,
 )
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
     oracle_chunk_document_index_sql,
+    oracle_chunk_embedding_schema_sql,
+    oracle_chunk_scope_document_index_sql,
     oracle_chunk_set_schema_sql,
     oracle_conversation_schema_sql,
     oracle_document_recipe_schema_sql,
@@ -125,7 +131,7 @@ def vector_index_reindex_sql(
     neighbors: int,
     efconstruction: int,
     distance: str = "COSINE",
-    table: str = "rag_chunks",
+    table: str = "rag_chunk_embeddings",
     index: str = "rag_chunks_embedding_hnsw_idx",
 ) -> str:
     """選択 profile のビルド推奨値で HNSW 索引を再作成する DDL を返す。
@@ -133,7 +139,7 @@ def vector_index_reindex_sql(
     backend は実行時に DDL を実行しないため、ここでは適用用の SQL を生成するだけにする
     (DBA がレビュー済み artifact として適用する)。引数は ``resolve_vector_index_adapter``
     で解決済みの値を呼び出し側が渡す。
-    対象は主検索索引 rag_chunks だけ。
+    対象は主検索索引(rag_chunk_embeddings の埋め込み。#5241)だけ。
     """
     create_sql = oracle_vector_index_create_sql(
         table=table,
@@ -339,6 +345,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_chunks",
             sql=oracle_vector_schema_sql(),
         ),
+        # chunk の埋め込み（#5241）。rag_chunks を参照し、原生索引の同期 trigger が読む。
+        OracleSchemaSection(
+            name="chunk_embeddings",
+            table_name="rag_chunk_embeddings",
+            sql=oracle_chunk_embedding_schema_sql(),
+        ),
         OracleSchemaSection(
             name="native_hybrid", table_name="rag_chunks", sql=native_hybrid_objects_sql()
         ),
@@ -350,7 +362,9 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
         OracleSchemaSection(
             name="native_maintenance",
             table_name="rag_native_index_maintenance",
-            sql=native_maintenance_tables_sql() + "\n\n" + native_maintenance_activation_sql(),
+            sql=native_maintenance_tables_sql()
+            + "\n\n"
+            + native_maintenance_current_activation_sql(),
         ),
         OracleSchemaSection(
             name="native_search_scopes",
@@ -1178,7 +1192,91 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261117_5241_chunk_embeddings",
+            table_name="rag_chunk_embeddings",
+            sql=chunk_embeddings_migration_sql(),
+            destructive_note=(
+                "chunk の埋め込みを RAG_CHUNKS.EMBEDDING から新しい表 RAG_CHUNK_EMBEDDINGS へ写し、"
+                "RAG_CHUNKS の EMBEDDING 列と、その列の HNSW 索引"
+                "（RAG_CHUNKS_EMBEDDING_HNSW_IDX）を削除します（同じ名前の索引を新しい表に作り直します）。埋め込みの値は新しい表に残り、"
+                "再取込・再埋め込みは要りません。原生索引（RAG_CHUNKS_HYBRID_IDX）の内容は変えません。"
+                "列の削除は RAG_CHUNKS の全行を書き換えるため、取込を止めてから適用してください。"
+                "適用前に RAG_CHUNKS を export してください。列の削除は元に戻せません。"
+            ),
+        )
+    )
     return sections
+
+
+def chunk_embeddings_migration_sql() -> str:
+    """埋め込みを chunk の行から細い表へ移す（#5241）。途中で止まっても流し直せる。
+
+    原生索引の JSON には埋め込みが既にあるので、写す間は JSON を作り直す trigger を止める
+    （作り直すと全行の JSON と原生索引を書き換える）。trigger は後の文で作り直して有効にする。
+    範囲の解決・距離順の読みが表の行を読まないよう、2 つの索引を範囲の列を含む定義に作り直す。
+    HNSW 索引はシステムテーブルの更新が無い索引として新しい表に作る。
+    """
+    table_sql = split_sql_statements(oracle_chunk_embedding_schema_sql())[0]
+    document_index = oracle_chunk_scope_document_index_sql().replace("\n", " ")
+    return f"""
+{_create_missing_objects_sql(table_sql + ";", "chunk の埋め込み")}
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'EMBEDDING';
+    IF v_count = 1 THEN
+        SELECT COUNT(*) INTO v_count FROM user_triggers
+        WHERE trigger_name = 'RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC';
+        IF v_count = 1 THEN
+            EXECUTE IMMEDIATE 'ALTER TRIGGER RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC DISABLE';
+        END IF;
+        EXECUTE IMMEDIATE q'~INSERT INTO rag_chunk_embeddings (chunk_id, embedding)
+            SELECT c.chunk_id, c.embedding FROM rag_chunks c
+            WHERE c.embedding IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM rag_chunk_embeddings e WHERE e.chunk_id = c.chunk_id)~';
+        COMMIT;
+        SELECT COUNT(*) INTO v_count FROM user_indexes
+        WHERE index_name = 'RAG_CHUNKS_EMBEDDING_HNSW_IDX' AND table_name = 'RAG_CHUNKS';
+        IF v_count = 1 THEN
+            EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_EMBEDDING_HNSW_IDX';
+        END IF;
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks DROP COLUMN embedding';
+    END IF;
+END;
+/
+
+{chunk_embedding_trigger_sql()}
+
+{native_maintenance_trigger_sql()}
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_ind_columns
+    WHERE index_name = 'RAG_CHUNKS_DOCUMENT_IDX';
+    IF v_count NOT IN (0, 5) THEN
+        EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_DOCUMENT_IDX';
+        v_count := 0;
+    END IF;
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE '{document_index}';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_ind_columns
+    WHERE index_name = 'RAG_CHUNKS_NATIVE_SCOPE_IDX';
+    IF v_count NOT IN (0, 4) THEN
+        EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX';
+        v_count := 0;
+    END IF;
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE '{NATIVE_SCOPE_COVER_INDEX_SQL}';
+    END IF;
+END;
+/
+""".strip()
 
 
 def foreign_key_lock_index_sql() -> str:
