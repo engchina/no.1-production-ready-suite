@@ -1027,8 +1027,10 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
     runtime, _store, legacy = harness
     client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
-    # 抽出の指示（system prompt）が長くなった分の余裕を持たせる（#1720）。
-    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 32_000)
+    # 抽出の指示（system prompt）が長くなった分の余裕を持たせる（#1720）。組は上限まで詰める
+    # ので、指示の長さによっては詰めた組の取りこぼし確認が上限で打ち切られる。打ち切られない
+    # 値にする（#5250）。
+    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 33_000)
     qa_pairs = [
         QaPair(
             question=f"顧客別売上 {index}",

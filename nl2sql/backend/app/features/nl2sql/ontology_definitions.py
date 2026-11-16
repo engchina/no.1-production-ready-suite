@@ -142,10 +142,12 @@ class InterfaceImplementation(DefinitionContract):
 class ObjectTypeDefinition(DefinitionBase):
     kind: Literal["object_type"] = "object_type"
     primary_key: list[str] = Field(default_factory=list)
+    # 書き方はここにだけ書き、オントロジーの構築などの指示の本文に重ねない（#5250）。
     title_property: str = Field(
         default="",
         description="任意の表示用プロパティ参照。同じオブジェクトに属する property の api_name。"
-        "根拠がなければ空文字。JSON のキー出力は必須でも、値の設定は必須ではない。"
+        "根拠のある表示用の property があれば設定し、なければ空文字。"
+        "JSON のキー出力は必須でも、値の設定は必須ではない。"
         "未設定を資料不足・必須項目不足として報告しない。",
     )
     grain_ja: str = ""

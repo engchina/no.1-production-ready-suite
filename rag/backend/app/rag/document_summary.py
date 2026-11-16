@@ -83,10 +83,11 @@ class DocumentSummaryOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    summary: str = Field(
-        max_length=SUMMARY_MAX_CHARS,
-        description="文書の主題・主な内容・結論を、文書の本文と同じ言語でまとめた文。",
-    )
+    # summary の書き方（内容・文の数・言語）は、利用者が編集できる指示（DOCUMENT_SUMMARY_PROMPT）
+    # にだけ書く。topics の「本文の語のまま」は指示と説明の両方に置く: 片方だけにすると、話題の語を
+    # 本文の語のまま挙げた数が減った（#5250。xai.grok-4.7・合成の 5 文書 × 2 回で、両方 58/61、
+    # 説明だけ 49/61、指示だけ 51/61）。
+    summary: str = Field(max_length=SUMMARY_MAX_CHARS)
     topics: list[str] = Field(
         default_factory=list,
         description="この文書を探す人が使う話題の語。文書の本文の語のまま挙げる。",

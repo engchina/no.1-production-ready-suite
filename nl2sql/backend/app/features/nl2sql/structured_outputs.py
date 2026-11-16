@@ -28,9 +28,11 @@ class AnalysisOutput(BaseModel):
 # #2333）。
 # 項目の説明（Field の description）は、送る時に指示の最後の Step に移してモデルに渡す。型の説明
 # （docstring）はモデルに渡らない（enterprise_ai_client._with_field_guide。#5238）。
+# 項目の書き方・値の定義はここにだけ書き、指示の本文（prompts/db_admin_chat/*.txt）に重ねない
+# （#5250。実測で、片方だけにしても守られる数は変わらなかった）。
 class DbAdminChatSqlOutput(BaseModel):
     sql: str = Field(description="質問に答える・作業を行う Oracle の SQL（1 文以上）。")
-    explanation: str = Field(default="", description="SQL が何をするかの短い説明。")
+    explanation: str = Field(default="", description="SQL が何をするかの日本語の短い説明。")
 
 
 # DB 管理チャットの、存在しない列・object を参照する文の作り直し（#2352）。

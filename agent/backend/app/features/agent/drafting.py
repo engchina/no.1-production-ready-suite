@@ -71,14 +71,11 @@ class _ProposedScope(BaseModel):
     profile_ids: list[str]
 
 
-_NO_INVENTED_FACTS = "文書の章・条・節・頁、数値、日付、人や部署の名前を書かない"
-
-
+# 項目の書き方は Field の説明にだけ書き、DRAFT_INSTRUCTIONS の本文に重ねない。資料の中身を作らない
+# 規則は instructions と evaluation_cases にまたがるので、本文にだけ書く（#5250）。
 class _ProposedCase(BaseModel):
-    question: str = Field(description=f"利用者が実際に聞きそうな質問。{_NO_INVENTED_FACTS}。")
-    expected: str = Field(
-        description=f"回答が満たすべき要点（何を答え、何を根拠に示すか）。{_NO_INVENTED_FACTS}。"
-    )
+    question: str = Field(description="利用者が実際に聞きそうな質問。")
+    expected: str = Field(description="回答が満たすべき要点（何を答え、何を根拠に示すか）。")
 
 
 class _ProposedOutputField(BaseModel):
@@ -92,9 +89,16 @@ class _ProposedOutputField(BaseModel):
 class _ModelProposal(BaseModel):
     """モデルの出力（structured output。範囲の制約は schema に入れず、読んだ後にコードで外す）。"""
 
-    name: str = Field(description="日本語の短い名前")
+    name: str = Field(
+        description="業務 Agent の名前。何に答えるかが分かる日本語の短い名前"
+        f"（{MAX_NAME_CHARS} 文字以内）。"
+    )
     description: str
-    instructions: str = Field(description=f"業務 Agent への指示。{_NO_INVENTED_FACTS}。")
+    instructions: str = Field(
+        description="業務 Agent への指示。役割、答える範囲と範囲の外の質問への対応、答え方"
+        "（根拠の示し方・確かめられなかったときの扱い）を書く。ツールの呼び方や調べる手順は"
+        "スキルが持つので書かない。"
+    )
     skill_ids: list[str]
     data_scopes: list[_ProposedScope]
     output_fields: list[_ProposedOutputField]
@@ -123,10 +127,7 @@ DRAFT_INSTRUCTIONS = f"""あなたは業務 Agent の設計を手伝う担当者
 利用者が書いた業務の説明を読み、その業務に答える業務 Agent の下書きを提案します。
 業務 Agent は、社内の資料（RAG）と業務データ（NL2SQL）を、スキルの手順に沿って調べて答えます。
 
-- name: 業務 Agent の名前。何に答えるかが分かる日本語の短い名前（{MAX_NAME_CHARS} 文字以内）。
 - description: 利用者が業務 Agent を選ぶときに読む 1 文。
-- instructions: 業務 Agent への指示。役割、答える範囲と範囲の外の質問への対応、答え方
-  （根拠の示し方・確かめられなかったときの扱い）を書く。ツールの呼び方や調べる手順はスキルが持つので書かない。
 - skill_ids: 「使えるスキル」から、この業務に要るものの id を選ぶ。
 - data_scopes: 「使えるプロファイル」から、この業務に関係するものだけを接続ごとに選ぶ。関係する
   ものが無い接続は入れない。
@@ -134,7 +135,6 @@ DRAFT_INSTRUCTIONS = f"""あなたは業務 Agent の設計を手伝う担当者
   書かれているときだけ、その項目を提案する。質問に文で答える業務では空にする。1 つ目は行を見分ける
   項目にする。label は日本語の短い表示名、key はその意味の英語の識別子（半角英小文字と _）。
 - evaluation_cases: 公開の前に確かめる質問を {MIN_EVALUATION_CASES}〜{MAX_EVALUATION_CASES} 件。
-  question は利用者が実際に聞きそうな質問、expected は回答が満たすべき要点。
 
 資料と業務データの中身は分からない。文書の章・条・頁、数値、日付、人や部署の名前、表の列を
 作らず、何を答えるか・何を根拠に示すかだけを書く（instructions と evaluation_cases の両方）。

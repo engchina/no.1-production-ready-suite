@@ -304,8 +304,10 @@ class _Out(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
 
+# 項目の書き方・値の定義は Field の説明にだけ書き、GUIDE_DRAFT_PROMPT（入力の節と項目の対応・
+# 項目をまたぐ判断）に重ねない（#5250）。
 class DraftStep(_Out):
-    id: str = Field(description="手順の id（s1・s2…）。")
+    id: str = Field(description="手順の id（s1・s2… の順の番号）。")
     title: str = Field(description="手順の題名（画面・操作が分かる短い文）。")
     purpose: str = Field(default="", description="手順の目的・内容。")
     depends_on: list[str] = Field(default_factory=list, description="先に済ませる手順の id。")
@@ -316,7 +318,7 @@ class DraftStep(_Out):
 
 
 class DraftCondition(_Out):
-    id: str = Field(description="条件の id（c1・c2…）。")
+    id: str = Field(description="条件の id（c1・c2… の順の番号）。")
     label: str = Field(description="条件の名前。")
     type: Literal["enum", "boolean", "text"] = "enum"
     allowed_values: list[str] = Field(default_factory=list, description="選択肢（enum のとき）。")
@@ -351,15 +353,16 @@ class DraftReference(_Out):
     section: str = Field(default="", description="章節（書いたまま）。")
     step_ids: list[str] = Field(
         default_factory=list,
-        description="この資料を根拠にする手順の id（全手順に共通の資料なら空）。",
+        description="この資料を根拠にする手順の id（どの手順の根拠かが書いてあるとき。"
+        "全手順に共通の資料なら空）。",
     )
 
 
 class GuideDraftOutput(_Out):
     """LLM の応答（業務ガイドの下書き）。"""
 
-    title: str = Field(description="業務ガイドの題名（利用者がしたいこと）。")
-    expected_result: str = Field(description="案内のとおり進めたときの結果。")
+    title: str = Field(description="業務ガイドの題名（利用者がしたいことを表す短い名前）。")
+    expected_result: str = Field(description="案内の手順のとおり進めたときの結果。")
     match_terms: list[str] = Field(default_factory=list, description="照合の語（検索の語）。")
     steps: list[DraftStep] = Field(default_factory=list)
     conditions: list[DraftCondition] = Field(default_factory=list)
@@ -384,47 +387,24 @@ GUIDE_DRAFT_SYSTEM_PROMPT = (
 GUIDE_DRAFT_PROMPT = (
     "## Step 1: 入力の項目を確認する\n"
     "\n"
-    "入力の JSON は、利用者の質問（question）、回答の過程を見"
-    "出しで分けた節（sections）、任意の標準回答\n"
-    "（standard_answer）です。節の field は次の項目を"
-    "表します（null は見出しの無い文）。\n"
+    "入力の JSON は、利用者の質問（question）、回答の過程を見出しで分けた節（sections）、"
+    "任意の標準回答\n"
+    "（standard_answer）です。節の field は次の項目を表します（null は見出しの無い文）。\n"
     "\n"
     "## Step 2: 手順・条件・根拠を対応付ける\n"
-    "- steps（回答の手順）: steps に順に入れる。前の手順を済"
-    "ませてから行う手順は depends_on に前の手順の\n"
-    "  id を入れる。手順の画面名・機能名は retrieval_hin"
-    "ts に入れる。\n"
-    "- conditions（必要な確認事項）: 確かめる事項を cond"
-    "itions に、「X なら手順 P」を branches に入れる。"
-    "\n"
-    "  選択肢が決まっていれば type=enum（2 つ以上）、はい /"
-    " いいえなら boolean、それ以外は text。\n"
-    "  値ごとに案内する操作が違えば、値ごとに別の手順にして goto_s"
-    "tep を分け、その値の操作を\n"
-    "  operation に入れる（同じ手順に進めるのは、値に関わらず同"
-    "じ操作を案内するときだけ）。\n"
-    "  「窓口へ連絡」のような人へ引き継ぐ場合は handling=han"
-    "doff にし、handoff_contact に窓口の名前、\n"
-    "  handoff_conditions にその場合を入れる。利用者に"
-    "聞けば決まる事項は handling=ask と question を"
-    "\n"
+    "- steps（回答の手順）: steps に順に入れる。\n"
+    "- conditions（必要な確認事項）: 確かめる事項を conditions に、「X なら手順 P」を branches に"
+    "入れる。\n"
+    "  選択肢が決まっていれば type=enum（2 つ以上）、はい / いいえなら boolean、それ以外は text。\n"
+    "  値ごとに案内する操作が違えば、値ごとに別の手順にして goto_step を分け、その値の操作を\n"
+    "  operation に入れる（同じ手順に進めるのは、値に関わらず同じ操作を案内するときだけ）。\n"
+    "  「窓口へ連絡」のような人へ引き継ぐ場合は handling=handoff にし、handoff_contact に窓口の"
+    "名前、\n"
+    "  handoff_conditions にその場合を入れる。利用者に聞けば決まる事項は handling=ask と "
+    "question を\n"
     "  入れる。\n"
-    "- references（検索する資料と根拠の頁）: 資料の名前は書い"
-    "たまま document_name に、頁は pages、\n"
-    "  表計算のシート・行・セルの範囲は sheet_name・rows・"
-    "cells、章節は section に入れる。どの手順の\n"
-    "  根拠の資料かが書いてあれば、step_ids にその手順の id "
-    "を入れる（全手順に共通の資料なら空）。\n"
-    "- search_terms（検索の語）: match_terms と"
-    "、関係する手順の retrieval_hints に入れる。\n"
-    "- notes（補足）: 1 つの手順に係る注意はその手順の note"
-    " に入れる。\n"
-    "\n"
-    "## Step 3: 名前と識別子を設定する\n"
-    "title は利用者がしたいことを表す短い名前、expected_re"
-    "sult は手順のとおり進めたときの結果にします。\n"
-    "id は手順が s1・s2…、条件が c1・c2… の順の番号にします"
-    "。\n"
+    "- references（検索する資料と根拠の頁）: 資料ごとに references に入れる。\n"
+    "- search_terms（検索の語）: match_terms と、関係する手順の retrieval_hints に入れる。\n"
 )
 
 
