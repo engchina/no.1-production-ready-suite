@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import unicodedata
 from collections.abc import Sequence
 from typing import Any
@@ -11,7 +10,7 @@ from rag_engine.config import Settings
 from rag_engine.generation.answer_models import QueryExpansionResult
 from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key
+from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key, normalized_query_key
 
 MAX_GENERATED_QUERY_CHARS = 900
 
@@ -47,8 +46,7 @@ def _limited_text_search_query_variants(
 def _merge_retrieval_queries(*queries: str) -> tuple[str, ...]:
     """検索文を渡した順に並べ、空と重複を除く。
 
-    各検索文は NFKC・制御文字の除去・空白の正規化をした形にする（元の質問の先読みの検索と文書検索の先頭の検索文を
-    同じ形にし、検索の結果の cache に当てる）。
+    各検索文は ``_normalized_query_text`` の形（NFKC・空白の正規化・制御文字と書式文字の除去）にする。
     """
     merged: list[str] = []
     seen: set[str] = set()
@@ -63,9 +61,16 @@ def _merge_retrieval_queries(*queries: str) -> tuple[str, ...]:
 
 
 def _normalized_query_text(value: Any) -> str:
+    """NFKC にし、空白（改行・タブを含む）を 1 つの空白にまとめ、残りの制御文字・書式文字を除く。
+
+    改行・タブは語の区切りなので消さない（消すと前後の語がつながり、全文検索の語が変わる。#5160）。
+    空白の扱いは全文検索の語の正規化（``normalize_text_search_text``）・検索文の同一性のキーと同じ。
+    """
     normalized = unicodedata.normalize("NFKC", str(value or ""))
-    normalized = "".join(character for character in normalized if unicodedata.category(character) not in {"Cc", "Cf"})
-    return re.sub(r"\s+", " ", normalized).strip()
+    normalized = "".join(
+        character for character in normalized if character.isspace() or unicodedata.category(character) not in {"Cc", "Cf"}
+    )
+    return normalized_query_key(normalized)
 
 
 def _retrieval_queries(question: str, retrieval_queries: Sequence[str] | None) -> tuple[str, ...]:
