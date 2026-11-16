@@ -1,4 +1,4 @@
-"""引用発見・読取・依存選択を、合成文書だけで検証する。"""
+"""引用発見・読取・関連度の順の選択を、合成文書だけで検証する(#5243)。"""
 
 from typing import Any
 
@@ -42,7 +42,7 @@ async def test_discovers_entire_range_before_selecting_and_keeps_full_receipt() 
     oracle = ReferenceOracle(anchors, contents)
     state = _SearchState()
     receipt: dict[str, Any] = {}
-    result = await _engine(oracle, rag_reference_expansion_max_chunks=2)._reference_expansion(
+    result = await _engine(oracle)._reference_expansion(
         SearchRequest(query="合成の質問"),
         state,
         anchors,
@@ -50,15 +50,19 @@ async def test_discovers_entire_range_before_selecting_and_keeps_full_receipt() 
         scores={row.chunk_id: 10.0 if i == 11 else 1.0 for i, row in enumerate(anchors)},
         receipt=receipt,
     )
-    assert set(result) == {"a0", "a11"}
+    # 個数の上限で起点を選ばない(#5243): 12 の起点の参照先をすべて足す。
+    assert set(result) == {f"a{i}" for i in range(12)}
     assert len(oracle.reference_calls) == 12
     assert receipt["checked_sources"] == receipt["unique_targets"] == receipt["read_targets"] == 12
-    assert receipt["added_count"] == 2
-    assert len(receipt["sources"]) == len(receipt["targets"]) == 12
+    assert receipt["added_count"] == 12
+    assert len(receipt["sources"]) == len(receipt["targets"]) == len(receipt["added_chunks"]) == 12
     diagnostic_sources = state.reference_sources[0]["sources"]
     assert isinstance(diagnostic_sources, list)
     assert len(diagnostic_sources) == 10
-    assert receipt["stop_reasons"] == ["chunk_budget"]
+    added_chunks = state.reference_sources[0]["added_chunks"]
+    assert isinstance(added_chunks, list)
+    assert len(added_chunks) == 10
+    assert receipt["stop_reasons"] == ["declared_source_range_complete"]
 
 
 async def test_target_read_budget_is_independent_and_cache_reuse_is_measured() -> None:
@@ -87,7 +91,7 @@ async def test_shared_reference_preserves_both_dependencies_without_duplicate_ch
     oracle = ReferenceOracle(anchors, [chunk("x", "第2章"), chunk("y", "第2章")])
     state = _SearchState()
     receipt: dict[str, Any] = {}
-    result = await _engine(oracle, rag_reference_expansion_max_chunks=2)._reference_expansion(
+    result = await _engine(oracle)._reference_expansion(
         SearchRequest(query="合成の質問"),
         state,
         anchors,
@@ -224,3 +228,185 @@ def test_other_document_target_cache_is_bound_to_source_version() -> None:
     assert _reference_target_cache_key({}, a, reference, None, None) != _reference_target_cache_key(
         {}, b, reference, None, None
     )
+
+
+# ---- 個数の上限を外した選び方(#5243) ----
+
+
+async def test_many_section_references_are_all_added_in_relevance_order() -> None:
+    """節の参照の多い chunk(6 つの章)から、読めた章の chunk をすべて足し、点数の順に並べる。
+
+    旧来は依存群の新しい chunk(12 件)が上限(既定 4 件)を超えて、何も足さなかった。
+    """
+    from tests.test_cross_references import FakeGenAi
+
+    anchor = chunk("a", "起点", [target(n) for n in range(2, 8)])
+    contents = [
+        chunk(f"r{n}-{index}", f"第{n}章").model_copy(update={"text": f"第{n}章の本文{index}"})
+        for n in range(2, 8)
+        for index in range(2)
+    ]
+    genai = FakeGenAi({"第5章": 0.8, "第3章": 0.4})
+    state = _SearchState()
+    receipt: dict[str, Any] = {}
+
+    result = await _engine(ReferenceOracle([anchor], contents), genai)._reference_expansion(
+        SearchRequest(query="合成の質問"), state, [anchor], existing={"a"}, receipt=receipt
+    )
+
+    added = [row.chunk_id for row in result["a"]]
+    assert sorted(added) == sorted(row.chunk_id for row in contents)
+    assert added[:4] == ["r5-0", "r5-1", "r3-0", "r3-1"]
+    assert receipt["added_count"] == 12
+    assert receipt["sources"][0]["dependency_status"] == "satisfied"
+    assert receipt["stop_reasons"] == ["declared_source_range_complete"]
+    assert len(genai.rerank_calls) == 1
+
+
+async def test_many_document_name_references_are_all_added() -> None:
+    """文書名の参照の多い chunk(6 つの文書)から、各文書の質問に関連の高い chunk をすべて足す。"""
+    from tests.test_cross_references import FakeGenAi
+
+    names = [f"合成資料{letter}" for letter in "ABCDEF"]
+    references = [ReferenceTarget(name, "document", "", name, None) for name in names]
+    anchor = chunk("a", "起点", references)
+    contents = [
+        RetrievedChunk(
+            chunk_id=f"{name}-{index}",
+            document_id=f"doc-{name}",
+            file_name=f"{name}.pdf",
+            text=f"{name}の本文{index}",
+            score=1,
+            metadata={"chunk_set_id": f"set-{name}", "section_path": f"{name} > 節{index}"},
+        )
+        for name in names
+        for index in range(3)
+    ]
+    genai = FakeGenAi({"合成資料Dの本文2": 0.9})
+    receipt: dict[str, Any] = {}
+
+    result = await _engine(ReferenceOracle([anchor], contents), genai)._reference_expansion(
+        SearchRequest(query="合成の質問"),
+        _SearchState(),
+        [anchor],
+        existing={"a"},
+        question=("合成の質問", [0.1] * 4),
+        receipt=receipt,
+    )
+
+    added = [row.chunk_id for row in result["a"]]
+    assert sorted(added) == sorted(row.chunk_id for row in contents)
+    assert added[0] == "合成資料D-2"
+    assert {item["status"] for item in receipt["targets"]} == {"available"}
+    assert receipt["added_count"] == 18
+
+
+async def test_unreadable_target_does_not_drop_readable_targets(monkeypatch: Any) -> None:
+    """一部の参照先が読めなくても、読めた参照先は足す(すべてか無しかにしない)。"""
+    anchor = chunk("a", "起点", [target(2), target(3)])
+    engine = _engine(ReferenceOracle([anchor], [chunk("x", "第2章")]))
+    original = engine._reference_target_chunks
+
+    async def read(
+        scope: Any, state: Any, source: Any, reference: Any, **kwargs: Any
+    ) -> list[RetrievedChunk]:
+        if reference.key == "3":
+            raise RuntimeError("synthetic failure")
+        return await original(scope, state, source, reference, **kwargs)
+
+    monkeypatch.setattr(engine, "_reference_target_chunks", read)
+    receipt: dict[str, Any] = {}
+    result = await engine._reference_expansion(
+        SearchRequest(query="合成の質問"), _SearchState(), [anchor], existing={"a"}, receipt=receipt
+    )
+
+    assert [row.chunk_id for row in result["a"]] == ["x"]
+    assert receipt["sources"][0]["outcome"] == "added"
+    assert receipt["sources"][0]["dependency_status"] == "partial"
+    assert receipt["sources"][0]["dependency_reasons"] == ["read_error"]
+    assert receipt["partial_sources"] == 1
+    assert receipt["stop_reasons"] == ["read_error"]
+
+
+async def test_deadline_stops_new_target_reads_and_keeps_the_reason() -> None:
+    """回答の期限の残りが生成の予約(章節の拡張と同じ)より少なければ、新しい参照先を読まない。"""
+    from rag_engine.resources.deadline import Deadline
+
+    anchor = chunk("a", "起点", [target(2), target(3)])
+    oracle = ReferenceOracle([anchor], [chunk("x", "第2章"), chunk("y", "第3章")])
+    engine = _engine(oracle, rag_answer_generation_round_estimate_seconds=60)
+    state = _SearchState(deadline=Deadline(30))
+    receipt: dict[str, Any] = {}
+
+    result = await engine._reference_expansion(
+        SearchRequest(query="合成の質問"), state, [anchor], existing={"a"}, receipt=receipt
+    )
+
+    assert result == {}
+    assert oracle.reference_calls == []
+    assert {item["status"] for item in receipt["targets"]} == {"deadline"}
+    assert receipt["deadline_reserve_seconds"] == 90.0
+    assert receipt["unread_targets"] == 2
+    assert receipt["sources"][0]["dependency_status"] == "unsatisfied"
+    assert receipt["stop_reasons"] == ["deadline"]
+
+    # 残りが予約より多ければ読む。
+    state = _SearchState(deadline=Deadline(600))
+    result = await engine._reference_expansion(
+        SearchRequest(query="合成の質問"), state, [anchor], existing={"a"}
+    )
+    assert sorted(row.chunk_id for row in result["a"]) == ["x", "y"]
+
+
+async def test_rerank_failure_keeps_every_chunk_in_read_order() -> None:
+    """rerank に失敗しても足す chunk は減らさず、読んだ順のまま足す(点数の印は付けない)。"""
+    from app.rag.cross_references import REFERENCE_SCORE_KEY
+    from tests.test_cross_references import FakeGenAi
+
+    anchor = chunk("a", "起点", [target(2), target(3)])
+    state = _SearchState()
+    receipt: dict[str, Any] = {}
+    result = await _engine(
+        ReferenceOracle([anchor], [chunk("x", "第2章"), chunk("y", "第3章")]),
+        FakeGenAi(fail=True),
+    )._reference_expansion(
+        SearchRequest(query="合成の質問"), state, [anchor], existing={"a"}, receipt=receipt
+    )
+
+    assert [row.chunk_id for row in result["a"]] == ["x", "y"]
+    assert receipt["ranking"] == "rerank_failed"
+    assert REFERENCE_SCORE_KEY not in state.chunks["x"].metadata
+    assert state.degraded.failed("reference_rerank")
+
+
+def test_reference_score_is_passed_as_question_relevance_only() -> None:
+    """参照先の点数は原質問との点数として rag_engine へ渡し、並べ替えの点数にはしない。
+
+    回答の生成は原文をこの点数の順で根拠の文字の予算に入れ、入らない分を分割読取へ渡す。
+    """
+    from rag_engine.retrieval.rerank_scores import question_rerank_score, rerank_score
+
+    from app.rag.answer_engine import _stored_child
+    from app.rag.cross_references import (
+        REFERENCE_FROM_KEY,
+        REFERENCE_LABEL_KEY,
+        REFERENCE_SCORE_KEY,
+    )
+
+    base = chunk("x", "第2章")
+    marked = base.model_copy(
+        update={
+            "metadata": {
+                **base.metadata,
+                REFERENCE_FROM_KEY: "a",
+                REFERENCE_LABEL_KEY: "第2章",
+                REFERENCE_SCORE_KEY: 0.7,
+            }
+        }
+    )
+    stored = _stored_child(marked, rrf_score=0.0)
+    assert question_rerank_score(stored) == 0.7
+    assert rerank_score(stored) is None
+    assert stored.metadata["reference_expansion"]["from_chunk_uid"] == "a"
+    plain = _stored_child(base, rrf_score=0.0)
+    assert question_rerank_score(plain) is None

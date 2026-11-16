@@ -1,8 +1,9 @@
 """本文に拡張子つきのファイル名だけを書いた参照の発見・照合・補充(#5208)。
 
 一覧の資料が「ファイル名だけの行」や「A と B を参照」で同じナレッジベースの別の文書を指すとき、
-その文書を検索範囲(KB・権限・有効な版)の中のファイル名との完全一致で決め、既存の参照の補充
-(予算・依存群の選択は変えない)へ渡す。文書・語はすべて合成。
+その文書を検索範囲(KB・権限・有効な版)の中のファイル名との完全一致で決め、参照の補充へ渡す。
+読めた参照先は個数の上限で選ばずにすべて足し、原質問との rerank の点数の順に並べる(#5243)。
+文書・語はすべて合成。
 """
 
 from __future__ import annotations
@@ -248,11 +249,14 @@ def _corpus() -> list[RetrievedChunk]:
 
 
 async def _expand(
-    oracle: ReferenceOracle, anchors: list[RetrievedChunk], **settings: Any
+    oracle: ReferenceOracle,
+    anchors: list[RetrievedChunk],
+    genai: FakeGenAi | None = None,
+    **settings: Any,
 ) -> tuple[dict[str, list[RetrievedChunk]], dict[str, Any], _SearchState]:
     state = _SearchState()
     receipt: dict[str, Any] = {}
-    result = await _engine(oracle, FakeGenAi(), **settings)._reference_expansion(
+    result = await _engine(oracle, genai or FakeGenAi(), **settings)._reference_expansion(
         SearchRequest(query=_QUESTION, filters={"knowledge_base_id": _KB}),
         state,
         anchors,
@@ -388,19 +392,82 @@ async def test_unknown_file_name_does_not_block_section_reference() -> None:
     assert receipt["sources"][0]["dependency_status"] == "satisfied"
 
 
-async def test_file_name_references_respect_target_and_chunk_budgets() -> None:
-    """読む参照先の数・足す chunk の数の上限は従来どおり(超えた分は理由つきで足さない)。"""
+async def test_file_name_references_respect_target_read_limit() -> None:
+    """読む参照先の数の上限(読取の安全の上限)は残す。読めた参照先は足し、読まなかった理由を残す。"""
     anchor = _list_chunk()
     oracle = ReferenceOracle(
         [anchor], _corpus(), knowledge_bases={_KB: {"doc-list", "doc-a", "doc-b"}}
     )
 
     result, receipt, _state = await _expand(oracle, [anchor], rag_reference_expansion_max_targets=1)
-    assert result == {}
-    assert _statuses(receipt) == {"手順A.txt": "available", "手順B.txt": "target_limit"}
-    assert receipt["sources"][0]["dependency_reasons"] == ["target_limit"]
 
-    result, receipt, _state = await _expand(oracle, [anchor], rag_reference_expansion_max_chunks=2)
-    # 依存群(A と B の 4 件)を予算で切り離さず、足さない。
-    assert result == {}
-    assert receipt["stop_reasons"] == ["chunk_budget"]
+    # 一部の参照先を読めなくても、読めた参照先(手順 A)は足す(すべてか無しかにしない)。
+    assert [row.chunk_id for row in result[anchor.chunk_id]] == ["doc-a:cs-a:0", "doc-a:cs-a:1"]
+    assert _statuses(receipt) == {"手順A.txt": "available", "手順B.txt": "target_limit"}
+    assert receipt["sources"][0]["dependency_status"] == "partial"
+    assert receipt["sources"][0]["dependency_reasons"] == ["target_limit"]
+    assert receipt["stop_reasons"] == ["target_read_limit"]
+
+
+def _list_of(names: list[str]) -> RetrievedChunk:
+    return _list_chunk().model_copy(
+        update={"text": "作業の参照先\n" + "".join(f"  {name}\n" for name in names)}
+    )
+
+
+@pytest.mark.parametrize("count", [3, 4, 5], ids=["three", "four", "five"])
+async def test_list_of_many_file_names_adds_every_document_in_relevance_order(count: int) -> None:
+    """範囲の文書に当たるファイル名を 3〜5 件並べた一覧の chunk から、全部の文書を足す(#5243)。
+
+    個数の上限(旧 RAG_REFERENCE_EXPANSION_MAX_CHUNKS、既定 4)で依存群ごと捨てない。足す chunk は
+    1 回の rerank で原質問との点数の高い順に並べ、点数を印に残す(回答の生成が予算に入れる順)。
+    """
+    from app.rag.cross_references import REFERENCE_SCORE_KEY
+
+    letters = "ABCDE"[:count]
+    names = [f"手順{letter}.txt" for letter in letters]
+    corpus = [
+        row
+        for letter in letters
+        for row in _procedure(
+            f"doc-{letter.lower()}",
+            f"手順{letter}.txt",
+            f"cs-{letter.lower()}",
+            f"作業{letter}の操作",
+        )
+    ]
+    anchor = _list_of(names)
+    oracle = ReferenceOracle(
+        [anchor],
+        corpus,
+        knowledge_bases={_KB: {"doc-list", *(f"doc-{letter.lower()}" for letter in letters)}},
+    )
+    genai = FakeGenAi({"作業Cの操作": 0.9, "作業Aの操作": 0.5})
+
+    result, receipt, state = await _expand(oracle, [anchor], genai)
+
+    added = [row.chunk_id for row in result[anchor.chunk_id]]
+    expected = [
+        f"doc-{letter.lower()}:cs-{letter.lower()}:{index}"
+        for letter in letters
+        for index in (0, 1)
+    ]
+    assert sorted(added) == sorted(expected)
+    # 点数の高い順(C → A)、同点は読んだ順。
+    assert added[:4] == ["doc-c:cs-c:0", "doc-c:cs-c:1", "doc-a:cs-a:0", "doc-a:cs-a:1"]
+    assert state.chunks["doc-c:cs-c:0"].metadata[REFERENCE_SCORE_KEY] == 0.9
+    assert state.chunks["doc-b:cs-b:0"].metadata[REFERENCE_SCORE_KEY] == 0.0
+    # 参照先ごとでなく、足す chunk をまとめて 1 回だけ rerank する。
+    assert len(genai.rerank_calls) == 1
+    assert len(genai.rerank_calls[0][1]) == 2 * count
+    assert receipt["added_count"] == 2 * count
+    assert receipt["ranking"] == "rerank"
+    assert [item["relevance_rank"] for item in receipt["added_chunks"]] == list(
+        range(1, 2 * count + 1)
+    )
+    assert receipt["sources"][0]["dependency_status"] == "satisfied"
+    assert receipt["stop_reasons"] == ["declared_source_range_complete"]
+    # 参照先ごとの受領記録に、その参照先から足した chunk(関連度の順)を残す。
+    for item in receipt["targets"]:
+        prefix = f"doc-{item['target']['document_title'][2].lower()}:"
+        assert item["added_chunk_ids"] == [row for row in added if row.startswith(prefix)]

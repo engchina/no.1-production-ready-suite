@@ -1022,13 +1022,11 @@ class Settings(
         default=20,
         ge=1,
         le=120,
-        description="交差参照で1回の検索に新規読取する固有対象数。発見範囲・補充Chunk予算とは独立。既読cacheは消費しない。",
-    )
-    rag_reference_expansion_max_chunks: int = Field(
-        default=4,
-        ge=1,
-        le=20,
-        description="交差参照で 1 回の検索に足す参照先の chunk 数の上限(#1280)。",
+        description=(
+            "交差参照で 1 回の検索に新規に読む固有の参照先の数(読取の DB・OCI の呼び出しを"
+            "抑える安全の上限)。読めた参照先の chunk は個数の上限で選ばずにすべて足す(#5243)。"
+            "既読の cache は消費しない。"
+        ),
     )
     rag_entity_index_enabled: bool = Field(
         default=True,
