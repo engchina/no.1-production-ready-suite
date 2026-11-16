@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
@@ -62,25 +63,52 @@ REQUEST = "対象は合成A。\n(1) 合成の手順を教えてください。\n
 
 
 class Harness:
-    """検索文ごとの候補と、chunk ごとの rerank の点数を返すスタブ。"""
+    """検索文ごとの候補と、chunk ごとの rerank の点数を返すスタブ。
 
-    def __init__(self, candidates: dict[str, list[str]], scores: dict[str, float]) -> None:
+    pools は検索文ごとの検索の原文（``all_chunks``。既定はすべての chunk）。scoped は頁の範囲を絞った検索（業務ガイドの
+    手順の参照）の検索文ごとの候補で、backend と同じに候補へ範囲（``context_page_ranges``）を付け、原文は候補だけにする。
+    """
+
+    def __init__(
+        self,
+        candidates: dict[str, list[str]],
+        scores: dict[str, float],
+        *,
+        chunks: dict[str, Any] | None = None,
+        pools: dict[str, list[str]] | None = None,
+        scoped: dict[str, list[str]] | None = None,
+    ) -> None:
         self.candidates = candidates
         self.scores = scores
+        self.chunks = CHUNKS if chunks is None else chunks
+        self.pools = pools or {}
+        self.scoped = scoped or {}
         self.searches: list[tuple[str, dict[str, Any]]] = []
         self.reranked: list[list[str]] = []
 
     def search(self, **kwargs: Any) -> Any:
         query = kwargs["retrieval_queries"][0]
         self.searches.append((query, kwargs))
+        if kwargs.get("page_ranges"):
+            scope = json.dumps(kwargs["page_ranges"], ensure_ascii=False)
+            names = next((names for key, names in self.scoped.items() if key in query), [])
+            children = [_scoped(self.chunks[name], scope) for name in names]
+            return SimpleNamespace(child_chunks=children, all_chunks=list(children), expansion_chunks=[])
         names = next((names for key, names in self.candidates.items() if key in query), [])
-        children = [CHUNKS[name] for name in names]
-        return SimpleNamespace(child_chunks=children, all_chunks=list(CHUNKS.values()), expansion_chunks=[])
+        children = [self.chunks[name] for name in names]
+        pool = next((names for key, names in self.pools.items() if key in query), None)
+        all_chunks = list(self.chunks.values()) if pool is None else [self.chunks[name] for name in pool]
+        return SimpleNamespace(child_chunks=children, all_chunks=all_chunks, expansion_chunks=[])
 
     def rerank(self, question: str, documents: list[str], settings: Any, top_n: int | None = None) -> list[RerankTextRank]:
-        names = [next(name for name in CHUNKS if document.split("\n")[-1].startswith(f"{name} ")) for document in documents]
+        names = [next(name for name in self.chunks if document.split("\n")[-1].startswith(f"{name} ")) for document in documents]
         self.reranked.append(names)
         return [RerankTextRank(index, self.scores.get(name, 0.0)) for index, name in enumerate(names)]
+
+
+def _scoped(record: Any, scope: str) -> Any:
+    """頁の範囲で絞った検索・読み取りの原文（backend の ``_with_context_scope`` と同じに範囲の印を付ける）。"""
+    return replace(record, metadata={**(record.metadata or {}), "context_page_ranges": scope})
 
 
 def _run(
@@ -161,10 +189,18 @@ def test_request_supplements_skip_main_evidence_before_the_cut(monkeypatch: pyte
     # 一緒に）、別の文書の E1・D2 は前後の文脈と一緒に最後（合わせ込みの規則は #5173 と同じ）。
     assert _evidence(result) == ["A1", "A2", "A3", "A4", "A5", "A6", "C1", "C2", "C3", "E1", "E2", "D1", "D2", "D3"]
     assert _keeps_main_evidence(_evidence(result))
-    assert trace["added_chunk_ids"] == ["E1", "D2"]
+    # A5 は主の検索の根拠 A2 のかたまり（前後の文脈 A3 と隣り合う）にまとめられ、親の文脈の役割になるが、主の検索の根拠に
+    # 無かった本文なので新しく足した根拠に数える（#5185）。
+    assert trace["added_chunk_ids"] == ["A5", "E1", "D2"]
     children = {child["chunk_uid"]: child for item in result.evidence_items for child in item.get("children") or ()}
     assert children["A2"]["retrieval_role"] == "retrieved_anchor" and children["A2"]["context_reason"] == "top_retrieved_child"
     assert children["E1"]["retrieval_role"] == "retrieved_anchor" and children["E1"]["context_reason"] == EXPANSION_EVIDENCE_REASON
+    assert children["A5"]["retrieval_role"] == "parent_context" and children["A5"]["context_reason"] == EXPANSION_EVIDENCE_REASON
+    assert result.generation_trace["supplement_merge"] == {
+        "supplement_count": 3,
+        "rejected_count": 0,
+        "added_chunk_ids": ["A5", "E1", "D2"],
+    }
     assert "D9" not in _evidence(result)
 
 
@@ -237,3 +273,179 @@ def test_supplement_marks_are_kept_on_merged_records() -> None:
     assert marked.metadata[QUERY_OVERFLOW_KEY] == {"request_ids": ["Q1", "Q2"]}
     assert marked.metadata[GUIDE_STEP_KEY] == {"step_ids": ["s1"]}
     assert QUERY_OVERFLOW_KEY not in (record.metadata or {})
+
+
+# ---- 主の検索の根拠と前後の文脈を外さない（#5185） ----
+
+# 文書 A の要約の chunk（文書の中の位置を持たない派生の chunk。backend は前後を読まない #4793）を末尾の番号で持つ。
+SUMMARY_CHUNKS = {**CHUNKS, "AS": _chunk("AS", 7, "A")}
+
+
+def _reader(chunks: dict[str, Any], *, no_neighbors: frozenset[str] = frozenset({"AS"})) -> Any:
+    """backend の ``_context_chunks`` と同じに、起点ごとに起点の範囲で前後 1 件を読むスタブ（派生の chunk は前後を読まない）。"""
+    calls: list[list[str]] = []
+
+    def read(*, anchors: list[Any], settings: Any, section_anchor_ids: Any = ()) -> list[Any]:
+        calls.append([record.chunk_uid for record in anchors])
+        out: list[Any] = []
+        for anchor in anchors:
+            scope = str((anchor.metadata or {}).get("context_page_ranges") or "")
+            document = anchor.metadata["document_id"]
+            names = [anchor.chunk_uid]
+            if anchor.chunk_uid not in no_neighbors:
+                names += [
+                    name
+                    for name, record in chunks.items()
+                    if record.metadata["document_id"] == document
+                    and name not in no_neighbors
+                    and abs(record.chunk_seq - anchor.chunk_seq) == 1
+                ]
+            out.extend(_scoped(chunks[name], scope) if scope else chunks[name] for name in names)
+        return out
+
+    read.calls = calls  # type: ignore[attr-defined]
+    return read
+
+
+def _children(result: Any) -> dict[str, dict[str, Any]]:
+    return {child["chunk_uid"]: child for item in result.evidence_items for child in item.get("children") or ()}
+
+
+def _in_order(evidence: list[str], expected: list[str]) -> bool:
+    """expected がすべて evidence にあり、同じ順に並ぶか。"""
+    return [uid for uid in evidence if uid in expected] == expected
+
+
+def test_scoped_guide_supplement_keeps_main_anchor_and_its_neighbor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """頁の範囲を絞った手順の参照の検索が主の検索の起点と同じ chunk を返しても、主の検索の起点の原文・前後の文脈を変えない。
+
+    主の検索の起点 AS（文書 A の要約の chunk）の前後の文脈は主の検索の原文の A6。手順の参照の検索（文書 A に絞る）は AS と
+    A3 を範囲つきで返す。範囲つきの AS が主の検索の AS を置き換えると、AS の前後は範囲つきの原文（A2〜A4）から選ばれて A6
+    が外れ、保険の確認で補いの根拠がすべて捨てられていた（#5185）。
+    """
+    guide = GuidePlan.from_payload(
+        "g-1", 1, [{"id": "s1", "title": "合成の参照", "retrieval_hints": ["参照H"], "references": [{"document_id": "A"}]}]
+    )
+    assert guide is not None
+    harness = Harness({QUESTION: ["AS", "C2"]}, {"AS": 0.9, "C2": 0.7, "A3": 0.8}, chunks=SUMMARY_CHUNKS, scoped={"参照H": ["AS", "A3"]})
+    reader = _reader(SUMMARY_CHUNKS)
+    monkeypatch.setattr(a, "injected_context_chunks", reader)
+
+    result = _run(monkeypatch, harness, guide=guide, request=None, guide_step_chunks_per_step=2)
+
+    evidence = _evidence(result)
+    # 主の検索の根拠（AS と前後の文脈 A6、C2 と C1・C3）は 1 つも外れず、並びの順も同じ。
+    assert _in_order(evidence, ["A6", "AS", "C1", "C2", "C3"])
+    # 補いの根拠 A3 は前後の文脈（範囲の中で読んだ A2・A4）と一緒に入る。範囲つきの AS は主の検索の AS に印だけを付ける。
+    assert {"A2", "A3", "A4"} <= set(evidence)
+    assert evidence.count("AS") == 1
+    children = _children(result)
+    assert children["AS"]["retrieval_role"] == "retrieved_anchor" and children["AS"]["context_reason"] == "top_retrieved_child"
+    assert children["A3"]["context_reason"] == EXPANSION_EVIDENCE_REASON
+    merge = result.generation_trace["supplement_merge"]
+    assert merge["rejected_count"] == 0 and merge["added_chunk_ids"] == ["A3"]
+    assert result.generation_trace["guide_steps"]["added_chunk_ids"] == ["A3"]
+    # 主の検索の起点と補いの起点は分けて読む（補いの読み取りで主の検索の起点の原文を置き換えない）。
+    assert ["A3"] in reader.calls
+
+
+def test_supplement_records_do_not_change_main_neighbors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """補いの検索の原文が増えても、主の検索の根拠の前後の文脈は主の検索の原文だけから選ぶ。
+
+    前後は読んだ chunk の並びの位置で選ぶ。主の検索の原文に A5・A6 が無いと AS の前は A4。補いの検索の原文に A6 が入ると、
+    合わせ直しで AS の前が A6 に変わり A4 が外れていた（#5185）。
+    """
+    harness = Harness(
+        {QUESTION: ["AS", "C2"], "(1)": ["E1"]},
+        {"AS": 0.9, "C2": 0.7, "E1": 0.8},
+        chunks=SUMMARY_CHUNKS,
+        pools={QUESTION: [name for name in SUMMARY_CHUNKS if name not in {"A5", "A6"}], "(1)": ["E1", "E2", "A6"]},
+    )
+
+    result = _run(monkeypatch, harness, request_coverage_max_chunks=1)
+
+    evidence = _evidence(result)
+    assert _in_order(evidence, ["A4", "AS", "C1", "C2", "C3"])
+    assert "A6" not in evidence and {"E1", "E2"} <= set(evidence)
+    assert result.generation_trace["supplement_merge"]["rejected_count"] == 0
+    assert result.generation_trace["query_overflow"]["added_chunk_ids"] == ["E1"]
+
+
+def _dropping_main_evidence(monkeypatch: pytest.MonkeyPatch, *, when: str | None, drop: str = "A1") -> None:
+    """合わせ直しで、補いの根拠 when（None ならいつも）があると主の検索の根拠 drop を外す（保険の確認のためのスタブ）。"""
+    original = a.fill_answer_context
+
+    def fill(*args: Any, **kwargs: Any) -> Any:
+        merged = original(*args, **kwargs)
+        supplements = [record.chunk_uid for record in kwargs.get("supplements") or ()]
+        if supplements and (when is None or when in supplements):
+            tree = tuple(parent for parent in merged.evidence_tree if parent.record.chunk_uid != drop)
+            merged = replace(merged, evidence_tree=tree, records=[record for record in merged.records if record.chunk_uid != drop])
+        return merged
+
+    monkeypatch.setattr(a, "fill_answer_context", fill)
+
+
+def test_supplements_that_would_drop_main_evidence_are_left_out_one_document_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """保険の確認で外れたときは、外れた主の検索の根拠と同じ文書の補いの根拠だけを除き、ほかは合わせる（#5185）。"""
+    _dropping_main_evidence(monkeypatch, when="A5")
+    harness = Harness({QUESTION: ["A2", "C2"], "(1)": ["A5", "E1"]}, SCORES)
+
+    result = _run(monkeypatch, harness, request_coverage_max_chunks=2)
+
+    evidence = _evidence(result)
+    assert _keeps_main_evidence(evidence)
+    assert "E1" in evidence and "A5" not in evidence
+    merge = result.generation_trace["supplement_merge"]
+    assert merge["supplement_count"] == 2 and merge["rejected_count"] == 1
+    assert merge["rejected"] == [{"chunk_id": "A5", "kinds": [QUERY_OVERFLOW_KEY], "reason": a.SUPPLEMENT_REJECTED_DROPS_MAIN}]
+    assert merge["missing_main_chunk_ids"] == ["A1"]
+    assert merge["added_chunk_ids"] == ["E1"]
+    assert _step(result, "補いの検索の根拠の合わせ込み")["結果"] == (
+        "補いの根拠 2 件を合わせ、新しく足した根拠 1 件（主の検索の根拠が外れるため 1 件を使いませんでした）"
+    )
+
+
+def test_all_supplements_are_left_out_when_main_evidence_still_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同じ文書の補いの根拠を除いても外れるときだけ、補いの根拠をすべて使わず、件数と理由を残す（#5185）。"""
+    _dropping_main_evidence(monkeypatch, when=None)
+    harness = Harness({QUESTION: ["A2", "C2"], "(1)": ["A5", "E1"]}, SCORES)
+
+    result = _run(monkeypatch, harness, request_coverage_max_chunks=2)
+
+    assert _evidence(result) == MAIN
+    merge = result.generation_trace["supplement_merge"]
+    assert merge["rejected_count"] == 2 and [row["chunk_id"] for row in merge["rejected"]] == ["E1", "A5"]
+    assert merge["added_chunk_ids"] == []
+    assert result.generation_trace["query_overflow"]["added_chunk_ids"] == []
+    assert "主の検索の根拠が外れるため 2 件を使いませんでした" in _step(result, "補いの検索の根拠の合わせ込み")["結果"]
+
+
+def test_supplement_folded_into_main_block_keeps_mark_and_counts_as_added(monkeypatch: pytest.MonkeyPatch) -> None:
+    """主の検索の根拠のかたまりにまとめられて親の文脈の役割になった補いの根拠も、印と added_chunk_ids を残す（#5185）。"""
+    guide = GuidePlan.from_payload("g-1", 1, [{"id": "s1", "title": "合成の工程", "retrieval_hints": ["工程A"]}])
+    assert guide is not None
+    # A5 は主の検索の根拠 A2（前後の文脈 A1・A3）と、前後の文脈 A4 でつながるかたまりにまとめられる。
+    harness = Harness({"工程A": ["A5"], QUESTION: ["A2", "C2"]}, SCORES)
+    trees: list[Any] = []
+    original = a.fill_answer_context
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        merged = original(*args, **kwargs)
+        if kwargs.get("supplements"):
+            trees.append(merged.evidence_tree)
+        return merged
+
+    monkeypatch.setattr(a, "fill_answer_context", spy)
+    result = _run(monkeypatch, harness, guide=guide, request=None, guide_step_chunks_per_step=1)
+
+    assert _keeps_main_evidence(_evidence(result)) and "A5" in _evidence(result)
+    children = _children(result)
+    assert children["A5"]["retrieval_role"] == "parent_context" and children["A5"]["context_reason"] == EXPANSION_EVIDENCE_REASON
+    # 根拠の木の A5 の record に手順の検索の印が残る。
+    (tree,) = trees
+    a5 = next(child.record for parent in tree for child in parent.children if child.record.chunk_uid == "A5")
+    assert a5.metadata[GUIDE_STEP_KEY] == {"step_ids": ["s1"], "kinds": ["step"]}
+    guide_trace = result.generation_trace["guide_steps"]
+    assert guide_trace["added_chunk_ids"] == ["A5"]
+    assert guide_trace["steps"][0]["searches"][0]["added_chunk_ids"] == ["A5"]
