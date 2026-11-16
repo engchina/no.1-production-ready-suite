@@ -221,6 +221,40 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5165 rerank の後の並べ替えと件数の切りを 1 回ずつにする）
+
+rerank の後の工程を「rerank の点数の順（MMR）→ 関連度の下限 → 文書ごとの上限 → 起点数 `top_k` で 1 回だけ切る →
+検索拡張の根拠を合わせる」に固定した（[rag-engine.md の「rerank の後の並びと切り」](./rag-engine.md#rerank-の後の並びと切り5165)）。
+表・migration・API path は変えていない。未リリースのため互換は持たない。
+
+削除した設定（`backend/.env` に残っていても読まない。起動は止まらない）:
+
+| 設定 | 内容 | 代わり |
+|---|---|---|
+| `RAG_RERANK_SLOT_RATIO` | rerank の順と検索の順を枠で混ぜる並び（#4664） | rerank の点数の順（MMR）だけ |
+| `RAG_RERANK_TOP_N` | rerank の後の採用件数 | 起点数 `top_k` の 1 回だけ |
+| `RAG_ENGINE_DOCUMENT_SELECTION` / `RAG_ENGINE_DOCUMENT_SELECTION_SCORE_RATIO`（engine の直接の経路） | rerank の点数の低い文書の候補の後回しと、根拠の不足のときの戻し（#1028） | 無し（`RAG_MAX_ANCHORS_PER_DOCUMENT` の上限だけ） |
+| `RAG_ENGINE_RERANK_TOP_N`（engine の直接の経路） | 同上の Top-N | 無し |
+
+変えた動き:
+
+- rerank が成功して関連度の下限（`RAG_RERANK_MIN_RELEVANCE_SCORE`、既定 0.30）以上が 0 件なら根拠なし。全部が下限未満の
+  ときに下限を 0.7 倍にしてやり直す処理は削除した。rerank の失敗・無効のときは今までどおり検索の順で続ける。
+- 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`）は、超えた候補を後ろへ回さずに外す。既定を 5 から 0（上限なし）にし、
+  `backend/.env` から読むようにした（今までは検索・回答プロファイルでだけ変えられた）。プロファイルの
+  `query.max_anchors_per_document` の上書きはそのまま使える。
+- rerank の入力の文を「文書の名前・章節の見出し・当たった chunk の原文」にした（検索文の文脈行・引用の ID を入れない）。
+- 設定 API（`GET/PATCH /api/settings/answering`）から `rerank_top_n`・`rerank_slot_ratio` を外し、画面（取込・検索・回答設定 >
+  検索方法「回答の検索と生成」）の「再ランキング後の並びの比率」「再ランキング後の採用件数（Top-N）」の欄を削除した。
+  診断（`config_fingerprint` の元の値）からも外した。
+- 処理の経過の工程「文書の選択」「文書の選択の解除」は出なくなり、「文書ごとの起点の上限」は「文書ごとの上限」になった。
+
+1. `backend/.env` の `RAG_RERANK_SLOT_RATIO`・`RAG_RERANK_TOP_N` の行を消す（残しても読まないが、意味の無い行を残さない）。
+2. 文書ごとの上限を全体で付けたいときだけ、`backend/.env` に `RAG_MAX_ANCHORS_PER_DOCUMENT=<1〜20>` を足す。今までの既定（5）と
+   同じ動きにはならない（超えた候補を後ろへ回さず外す）。検索・回答プロファイルで値を保存していればその値が優先される。
+3. backend（と取込 worker）を再起動する。根拠の件数と並びは変わる（検索の順の候補が混ざらない・下限未満は根拠にならない・
+   文書の後回しが無い）。
+
 ## 既存環境の更新手順（#5097・#5162 検索拡張の根拠を rerank の後に合わせる）
 
 交差参照の参照先・実体・別名による検索拡張・文書構造による検索拡張で足す chunk を、rerank の前の候補に入れず、

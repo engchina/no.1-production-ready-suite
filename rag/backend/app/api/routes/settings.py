@@ -540,12 +540,10 @@ async def update_answering_settings(
         field: value
         for field, value in (
             ("rag_retrieval_query_limit", payload.retrieval_query_limit),
-            ("rag_rerank_top_n", payload.rerank_top_n),
             ("rag_min_similarity", payload.min_similarity),
             ("rag_rerank_min_relevance_score", payload.rerank_min_relevance_score),
             ("rag_hybrid_search_backend", payload.hybrid_search_backend),
             ("rag_rrf_method_ratio", payload.rrf_method_ratio),
-            ("rag_rerank_slot_ratio", payload.rerank_slot_ratio),
             ("rag_runtime_terms_search_enabled", payload.runtime_terms_search_enabled),
             ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
@@ -586,11 +584,9 @@ async def update_answering_settings(
                 ),
                 "RAG_HYBRID_SEARCH_BACKEND": candidate.rag_hybrid_search_backend,
                 "RAG_RETRIEVAL_QUERY_LIMIT": str(candidate.rag_retrieval_query_limit),
-                "RAG_RERANK_TOP_N": str(candidate.rag_rerank_top_n),
                 "RAG_MIN_SIMILARITY": str(candidate.rag_min_similarity),
                 "RAG_RERANK_MIN_RELEVANCE_SCORE": str(candidate.rag_rerank_min_relevance_score),
                 "RAG_RRF_METHOD_RATIO": json.dumps(candidate.rag_rrf_method_ratio),
-                "RAG_RERANK_SLOT_RATIO": json.dumps(candidate.rag_rerank_slot_ratio),
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
                 "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
@@ -608,14 +604,12 @@ async def update_answering_settings(
 def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
     return AnsweringSettingsData(
         retrieval_query_limit=settings.rag_retrieval_query_limit,
-        rerank_top_n=settings.rag_rerank_top_n,
         min_similarity=settings.rag_min_similarity,
         rerank_min_relevance_score=settings.rag_rerank_min_relevance_score,
         runtime_terms_search_enabled=settings.rag_runtime_terms_search_enabled,
         runtime_terms_answer_enabled=settings.rag_runtime_terms_answer_enabled,
         hybrid_search_backend=settings.rag_hybrid_search_backend,
         rrf_method_ratio=settings.rag_rrf_method_ratio,
-        rerank_slot_ratio=settings.rag_rerank_slot_ratio,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
         graph_expansion_enabled=settings.rag_graph_expansion_enabled,

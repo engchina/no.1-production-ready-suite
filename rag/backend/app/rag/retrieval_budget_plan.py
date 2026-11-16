@@ -109,7 +109,7 @@ def prepare_plan(
         "request_sha256": digest,
         "executed": False,
         "requires_effective_settings_snapshot": True,
-        "unavailable_controls": ["document_selection_disabled"],
+        "unavailable_controls": [],
         "variants": variants,
     }
 

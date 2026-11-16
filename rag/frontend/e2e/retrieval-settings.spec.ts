@@ -476,38 +476,6 @@ for (const theme of ["light", "dark"] as const) {
 
 
 for (const theme of ["light", "dark"] as const) {
-  test(`再ランキング後の並びの比率を検証して保存・再表示できる (${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
-    await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({state: {theme, sidebarCollapsed: true},version: 0})), theme);
-    await mockRetrievalCards(page);
-    const saved: unknown[] = [];
-    await mockAnsweringSettings(page, saved, {rerank_slot_ratio: undefined});
-    await page.goto("/settings/retrieval");
-    const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
-    const rerank = section.getByRole("spinbutton", {name:"再ランキングの順から取る件数",exact:true});
-    const search = section.getByRole("spinbutton", {name:"検索の順から取る件数",exact:true});
-    await expect(rerank).toHaveValue("7");
-    await expect(search).toHaveValue("3");
-    await expect(section).toContainText("Rerank が無効・失敗のときは適用しません");
-    await rerank.fill("0");
-    await search.fill("0");
-    await expect(section.getByRole("alert")).toContainText("少なくとも一方を 1 以上");
-    await expect(page.getByRole("button", {name:"回答の設定を保存",exact:true})).toBeDisabled();
-    await search.fill("1.5");
-    await expect(page.getByRole("button", {name:"回答の設定を保存",exact:true})).toBeDisabled();
-    await rerank.fill("4");
-    await search.fill("1");
-    await expect(section.getByRole("alert")).toHaveCount(0);
-    await section.screenshot({path:testInfo.outputPath(`rerank-slot-ratio-${theme}.png`)});
-    await page.getByRole("button", {name:"回答の設定を保存",exact:true}).click();
-    await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({rerank_slot_ratio:[4,1]});
-    await page.reload();
-    await expect(page.getByRole("spinbutton", {name:"再ランキングの順から取る件数",exact:true})).toHaveValue("4");
-    await expectNoPageOverflow(page);
-  });
-}
-
-for (const theme of ["light", "dark"] as const) {
 test(`RRF の比重が未指定の場合も新しい既定値と公式説明を表示する (${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
   await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({state: {sidebarCollapsed: true, theme},version: 0})), theme);
   await mockRetrievalCards(page);
@@ -640,7 +608,7 @@ test("実体・別名による検索拡張の上限は 1〜10 から選び、保
 });
 
 for (const theme of ["light", "dark"] as const) {
-  test(`検索候補数と重排後 Top-N を独立して検証・保存する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+  test(`検索候補数を検証・保存し、並びの比率と Top-N の欄は出さない (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme, sidebarCollapsed: true }, version: 0 })), theme);
     await mockRetrievalCards(page);
     const saved: Record<string, unknown>[] = [];
@@ -648,32 +616,31 @@ for (const theme of ["light", "dark"] as const) {
     await page.goto("/settings/retrieval");
     const card = page.getByTestId("answering-settings-card");
     const search = card.getByRole("spinbutton", { name: "検索候補数の上限", exact: true });
-    const topN = card.getByRole("spinbutton", { name: "再ランキング後の採用件数（Top-N）", exact: true });
     const min = card.getByRole("spinbutton", { name: "コサイン類似度の下限", exact: true });
     const score = card.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true });
     const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
     const reset = card.getByRole("button", { name: "変更を破棄", exact: true });
     await expect(search).toHaveValue("60");
-    await expect(topN).toHaveValue("60");
     await expect(min).toHaveValue("0.2");
     await expect(score).toHaveValue("0.3");
-    await expect(topN).toHaveAccessibleDescription(/0 は追加制限なし.*明示添付.*別枠/);
-    const boxes = await Promise.all([search.boundingBox(), min.boundingBox(), topN.boundingBox(), score.boundingBox()]);
+    // rerank の後は点数の順で並べ、件数は起点数で 1 回だけ切る（#5165）。並びの比率と Top-N の欄は無い。
+    await expect(card.getByRole("spinbutton", { name: "再ランキング後の採用件数（Top-N）", exact: true })).toHaveCount(0);
+    await expect(card.getByRole("spinbutton", { name: "再ランキングの順から取る件数", exact: true })).toHaveCount(0);
+    await expect(card.getByRole("spinbutton", { name: "検索の順から取る件数", exact: true })).toHaveCount(0);
+    await expect(score).toHaveAccessibleDescription(/下限以上の候補が無いときは根拠なし/);
+    const boxes = await Promise.all([search.boundingBox(), min.boundingBox()]);
     if ((page.viewportSize()?.width ?? 0) >= 1280) {
       expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThanOrEqual(2);
       expect(boxes[0]!.x).toBeGreaterThan(boxes[1]!.x);
-      expect(Math.abs(boxes[2]!.y - boxes[3]!.y)).toBeLessThanOrEqual(2);
-      expect(boxes[2]!.x).toBeGreaterThan(boxes[3]!.x);
     } else {
       expect(boxes[0]!.y).toBeGreaterThan(boxes[1]!.y);
-      expect(boxes[2]!.y).toBeGreaterThan(boxes[3]!.y);
     }
     const group = card.getByRole("region", { name: "検索の実行", exact: true });
     await group.scrollIntoViewIfNeeded();
     await group.screenshot({ path: testInfo.outputPath("retrieval-count.png") });
     const rerankGroup = card.getByTestId("answering-rerank-block");
     await rerankGroup.scrollIntoViewIfNeeded();
-    await rerankGroup.screenshot({ path: testInfo.outputPath("rerank-count.png") });
+    await rerankGroup.screenshot({ path: testInfo.outputPath("rerank-block.png") });
     for (const invalid of ["", "-1", "1.5", "2001"]) {
       await search.fill(invalid);
       await expect(save).toBeDisabled();
@@ -682,43 +649,34 @@ for (const theme of ["light", "dark"] as const) {
     await expect(save).toBeEnabled();
     await save.click();
     expect(saved.at(-1)).toMatchObject({retrieval_query_limit: 0});
+    expect(saved.at(-1)).not.toHaveProperty("rerank_top_n");
+    expect(saved.at(-1)).not.toHaveProperty("rerank_slot_ratio");
     // 保存後のフォームの再作成が終わってから次の編集を始める。
     await expect(search).toBeEnabled();
     await expect(reset).toBeDisabled();
     await expect(search).toHaveAccessibleDescription(/0 は追加制限なし/);
     await search.fill("150");
-    for (const invalid of ["", "-1", "1.5", "2001"]) {
-      await topN.fill(invalid);
-      await expect(save).toBeDisabled();
-    }
-    await topN.fill("2");
     await save.click();
     await expect(save).toBeDisabled();
-    expect(saved.at(-1)).toMatchObject({ retrieval_query_limit: 150, rerank_top_n: 2 });
-    await expect(search).toHaveValue("150");
-    await expect(topN).toHaveValue("2");
+    expect(saved.at(-1)).toMatchObject({ retrieval_query_limit: 150 });
     await page.reload();
     await expect(search).toHaveValue("150");
-    await expect(topN).toHaveValue("2");
     await page.route("**/api/settings/answering", async route => {
       if (route.request().method() !== "PATCH") return route.fallback();
       await route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の保存失敗"], warning_messages: [] } });
     });
     await search.fill("180");
-    await topN.fill("3");
     await save.click();
     await expect(card).toContainText("合成の保存失敗");
     await expect(search).toHaveValue("180");
-    await expect(topN).toHaveValue("3");
     await reset.click();
     await expect(search).toHaveValue("150");
-    await expect(topN).toHaveValue("2");
     const rerank = card.getByRole("switch", { name: "Rerank で検索候補を並べ替える", exact: true });
     await rerank.click();
-    await expect(topN).toBeDisabled();
+    await expect(score).toBeDisabled();
     await expect(search).toBeEnabled();
     await reset.click();
-    await expect(topN).toBeEnabled();
+    await expect(score).toBeEnabled();
     await expectNoPageOverflow(page);
 
   });

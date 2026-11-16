@@ -37,9 +37,7 @@ def context_snapshot(context: AnswerContext, **fields: Any) -> dict[str, Any]:
         "不足理由": context.insufficient_reason,
         "優先ID": list(context.preferred_child_ids),
         "検索候補": candidate_snapshot(context.ranked_candidates),
-        "後回し候補": candidate_snapshot(context.deferred_records),
         "展開用候補": candidate_snapshot(context.expansion_records),
-        "文書選択": dict(context.document_selection),
         "根拠の親子関係": [
             {
                 "親": candidate_snapshot([parent.record]),

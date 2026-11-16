@@ -783,14 +783,12 @@ class AnsweringSettingsData(BaseModel):
     """
 
     retrieval_query_limit: int = Field(default=60, ge=0, le=2000, strict=True)
-    rerank_top_n: int = Field(default=60, ge=0, le=2000, strict=True)
     min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
     hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
         "oracle_hybrid_index"
     )
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
-    rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
     neighbor_child_count: int = Field(ge=0, le=20)
@@ -809,23 +807,12 @@ class AnsweringSettingsUpdate(BaseModel):
     """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
 
     retrieval_query_limit: int | None = Field(default=None, ge=0, le=2000, strict=True)
-    rerank_top_n: int | None = Field(default=None, ge=0, le=2000, strict=True)
     min_similarity: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float | None = Field(
         default=None, ge=0.0, le=1.0, allow_inf_nan=False
     )
     hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] | None = None
     rrf_method_ratio: tuple[float, float] | None = None
-    rerank_slot_ratio: tuple[int, int] | None = None
-
-    @field_validator("rerank_slot_ratio")
-    @classmethod
-    def _rerank_slot_ratio(cls, value: tuple[int, int] | None) -> tuple[int, int] | None:
-        if value is None:
-            return None
-        from rag_engine.retrieval.rerank_order import validate_slot_ratio
-
-        return validate_slot_ratio(value)
 
     @field_validator("rrf_method_ratio")
     @classmethod

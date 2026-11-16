@@ -1,13 +1,13 @@
 """検索拡張（参照先・実体・関係情報）の根拠を、rerank の後に最後の根拠の並びへ合わせる（#5097・#5162）。
 
-拡張の根拠は rerank の候補に入れず、rerank・関連度の下限・Top-N・``top_k``・context の枠で消さず、最後の根拠の
+拡張の根拠は rerank の候補に入れず、rerank・関連度の下限・``top_k``・context の枠で消さず、最後の根拠の
 並びへ同じ規則で 1 回だけ合わせる（同じ chunk・親にあれば印だけ、同じ文書があれば文書の chunk の順、無ければ最後）。
 """
 
 from dataclasses import replace
 from types import SimpleNamespace
 
-from test_document_selection import child, parent
+from record_fixtures import child, parent
 
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
@@ -177,9 +177,7 @@ def test_answer_context_does_not_rerank_expansions_and_keeps_them_after_threshol
         "合成の質問",
         "synthetic-run",
         ["docling"],
-        replace(
-            get_settings(environ={}, dotenv_path=None), document_selection_enabled=False, rerank_min_relevance_score=0.4, rerank_top_n=1
-        ),
+        replace(get_settings(environ={}, dotenv_path=None), rerank_min_relevance_score=0.4),
         top_k=1,
         neighbor_child_count=0,
         retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -187,17 +185,6 @@ def test_answer_context_does_not_rerank_expansions_and_keeps_them_after_threshol
     # rerank には検索の候補 3 件だけを渡す（拡張の根拠は rerank にかけない）。
     assert reranked and all(len(documents) == 3 for documents in reranked)
     assert all("拡張の本文" not in document for documents in reranked for document in documents)
-    # 下限 0.4・Top-N 1・top_k 1 の後でも拡張の根拠は残り、別の文書なので最後に置く。
+    # 下限 0.4・top_k 1 の後でも拡張の根拠は残り、別の文書なので最後に置く。
     assert [record.id for record in context.records] == ["p0", "px1"]
     assert context.expansion_candidates == (expansion,)
-    # 後回しの文書を戻して作り直しても、拡張の根拠を同じ規則で合わせる。
-    restored = a._restore_deferred_context(
-        "合成の質問",
-        context,
-        get_settings(environ={}, dotenv_path=None),
-        top_k=1,
-        neighbor_child_count=0,
-        max_records=1,
-        max_chars=100_000,
-    )
-    assert [record.id for record in restored.records][-1] == "px1"

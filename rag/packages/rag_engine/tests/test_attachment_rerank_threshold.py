@@ -9,7 +9,7 @@ from rag_engine.generation import answering as a
 from rag_engine.generation.answer_records import _records_by_rerank_ranks
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
-from tests.test_document_selection import child, parent
+from tests.record_fixtures import child, parent
 
 
 def _candidates():
@@ -33,8 +33,7 @@ def test_low_scored_attachment_reaches_context(threshold):
     ranks = [RerankTextRank(0, 0.9), RerankTextRank(1, 0.8), RerankTextRank(2, 0.01)]
     ranked = _records_by_rerank_ranks(records, ranks, settings)
     assert [r.id for r in ranked] == ["a", "b", "attachment"]
-    selected, _, _ = a.select_documents(ranked, settings, top_k=2)
-    anchors = a.cap_anchors_per_document(selected, settings, top_k=2)
+    anchors = a.cap_anchors_per_document(ranked, settings, top_k=2)
     bundle = a._bundle_context(
         "添付の項目 A の値を資料と照合する",
         anchors,

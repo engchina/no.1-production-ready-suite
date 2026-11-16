@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from rag_engine.config import DEFAULT_EVIDENCE_BUDGET_CHARS
 
 from app import config as config_module
-from app.config import PROFILE_ONLY_SETTING_FIELDS, Settings
+from app.config import Settings
 from app.rag.answer_engine import build_engine_settings
 from app.rag.diagnostics import rag_config_fingerprint
 
@@ -17,7 +17,6 @@ from app.rag.diagnostics import rag_config_fingerprint
 def test_default_matches_the_engine_default() -> None:
     """既定は rag_engine の既定と同じ(既定の挙動を変えない)。"""
     assert Settings().rag_evidence_budget_chars == DEFAULT_EVIDENCE_BUDGET_CHARS == 40000
-    assert "rag_evidence_budget_chars" not in PROFILE_ONLY_SETTING_FIELDS
 
 
 def test_env_example_lists_the_default() -> None:

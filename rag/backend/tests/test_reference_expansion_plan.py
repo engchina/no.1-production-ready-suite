@@ -202,8 +202,6 @@ async def test_document_reference_without_search_input_is_not_counted_as_read() 
 
 
 async def test_existing_anchor_dependency_is_retained_without_spending_supplement_budget() -> None:
-    from rag_engine.retrieval.rerank_selection import select_reranked_candidates
-
     a, b = chunk("a", "起点", [target(2)]), chunk("b", "第2章")
     state = _SearchState()
     result = await _engine(ReferenceOracle([a, b], [b]))._search(
@@ -215,8 +213,6 @@ async def test_existing_anchor_dependency_is_retained_without_spending_supplemen
     assert result.expansion_chunks == []
     assert state.chunks["b"].metadata["reference_from_chunk_ids"] == ["a"]
     assert "reference_expansion" not in result.child_chunks[1].metadata
-    # 参照元・参照先を組にせず、候補の順で件数を選ぶ。
-    assert select_reranked_candidates(result.child_chunks, 1)[0] == [result.child_chunks[0]]
 
 
 def test_other_document_target_cache_is_bound_to_source_version() -> None:

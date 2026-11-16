@@ -22,7 +22,7 @@ def zero_evidence_stage(context: AnswerContext) -> dict[str, Any]:
     """根拠 0 件になった段と、その判断に使った件数を返す。
 
     - 検索の候補が 1 件も無い: ``retrieval``
-    - 候補はあるが、根拠の組み立て（文書の選択・文字数の上限など）で 0 件になった: ``context``
+    - 候補はあるが、根拠の組み立て（文書ごとの上限・文字数の上限など）で 0 件になった: ``context``
     """
     candidate_count = max(len(context.ranked_candidates), len(context.expansion_records))
     stage = "context" if candidate_count else "retrieval"

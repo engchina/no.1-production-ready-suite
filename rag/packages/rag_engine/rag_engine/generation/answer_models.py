@@ -114,13 +114,10 @@ class AnswerContext:
     preferred_child_ids: tuple[str, ...] = ()
     # 評価後の局所拡張用。生成 prompt へは選択済み根拠だけを渡す。
     expansion_records: tuple[AnswerRecord, ...] = ()
-    # 文書の選択 (#1028): rerank 後の全候補 child（順位順）、後回しにした文書の child、選択の trace。
-    # 不足時はこれらから後回しの文書を戻して再評価・再生成する。
+    # rerank の後の候補 child（関連度の下限を通った候補。並びの順）。処理の経過と件数の記録に使う。
     ranked_candidates: tuple[AnswerRecord, ...] = ()
-    # rerank の基準（関連度の下限・採用件数の上限）で絞り込む前の候補数（#4735）。基準で全部落ちたときも 0 にならない。
+    # rerank の基準（関連度の下限）で絞り込む前の候補数（#4735）。基準で全部落ちたときも 0 にならない。
     candidate_count: int = 0
-    deferred_records: tuple[AnswerRecord, ...] = ()
-    document_selection: dict[str, Any] = field(default_factory=dict)
     # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。rerank にかけず、context を作るたびに最後の根拠の並びへ合わせる。
     expansion_candidates: tuple[AnswerRecord, ...] = ()
 

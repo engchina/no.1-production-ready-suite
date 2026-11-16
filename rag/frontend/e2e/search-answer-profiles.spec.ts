@@ -262,7 +262,7 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("プロファイル A");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
   const perDocument = page.getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 }).locator("..");
-  await expect(perDocument.getByText(/^既定は 5 です。並べ替えの後、/)).toBeVisible();
+  await expect(perDocument.getByText(/^未指定のときは全体設定（既定は上限なし）です。並べ替えの後、/)).toBeVisible();
   await perDocument.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
   await perDocument.getByRole("combobox").click();
   await page.getByRole("option", { name: "上限なし" }).click();

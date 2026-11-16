@@ -8,7 +8,7 @@ import contextlib
 import logging
 import os
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date
@@ -91,7 +91,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource
+from pydantic_settings import BaseSettings, NoDecode
 from rag_parser_core.chunk_separators import DEFAULT_CHUNK_SEPARATORS
 from rag_parser_core.image_purpose import DEFAULT_IMAGE_PURPOSE, ImagePurpose
 from rag_parser_core.sheet_records import ExcelOptions
@@ -337,37 +337,6 @@ DEFAULT_FILE_TYPE_DEFAULTS_FILE = "file-type-defaults.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
-# 検索・回答プロファイル（と品質評価の rag_overrides）の値だけで決める Settings の項目（#1388）。
-# プロファイルの値は Settings に重ねて回答の検索へ渡す（``compose_query_settings``）ため Settings の
-# 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定）。値の範囲は
-# Settings の検証で持つ。プロファイルで上書きできる項目は ``KnowledgeBaseQueryConfig``
-# （``app/rag/kb_adapter_config.py``）が正本。
-PROFILE_ONLY_SETTING_FIELDS = frozenset(
-    {
-        # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
-        "rag_max_anchors_per_document",
-    }
-)
-
-
-def _without_profile_only_fields(
-    source: PydanticBaseSettingsSource,
-) -> Callable[[], dict[str, Any]]:
-    """環境変数 / .env の source から、プロファイルだけで決める項目を除く。"""
-    excluded = {
-        name.casefold()
-        for field in PROFILE_ONLY_SETTING_FIELDS
-        for name in (field, settings_env_name("RAG_", field))
-    }
-
-    def read() -> dict[str, Any]:
-        return {key: value for key, value in source().items() if key.casefold() not in excluded}
-
-    # pydantic-settings は source の名前ごとに読んだ値を持つ（debug の表示）。元の名前を保つ。
-    read.__name__ = type(source).__name__
-    return read
-
-
 # 形式別の既定（#4732）の種類。受け付ける形式（#4730）に合わせる。分類は
 # app.rag.file_type_defaults の 1 か所。
 FileType = Literal[
@@ -512,26 +481,6 @@ class Settings(
 
     # 「形式別の既定」の画面で保存した値（file-type-defaults.json。#4732）。
     _file_type_defaults: dict[str, FileTypeDefaultEntry] = PrivateAttr(default_factory=dict)
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[Any, ...]:
-        """共通の source（旧名を読まない）から、プロファイルだけで決める項目を除く（#1388）。"""
-        init, env, dotenv, secrets = super().settings_customise_sources(
-            settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
-        )
-        return (
-            init,
-            _without_profile_only_fields(env),
-            _without_profile_only_fields(dotenv),
-            secrets,
-        )
 
     # --- アプリ ---
     app_name: str = "production-ready-rag"
@@ -1168,13 +1117,13 @@ class Settings(
         ),
     )
     rag_max_anchors_per_document: int = Field(
-        default=5,
+        default=0,
         ge=0,
         le=20,
         description=(
-            "rerank の後、回答の根拠の起点(上位 top_k 件)に採る同じ文書の chunk の上限(#2167。"
-            "既定 5、0 は上限なし)。超えた chunk は落とさず後ろへ回し、別の文書の関連する chunk を"
-            "起点に入れる。検索・回答プロファイルの max_anchors_per_document で選ぶ。"
+            "rerank の後、1 つの文書から回答の根拠の起点に採る chunk の上限(#2167・#5165。"
+            "既定 0 は上限なし)。超えた chunk は根拠に使わない。検索・回答プロファイルの"
+            "max_anchors_per_document で上書きできる。"
         ),
     )
     rag_navigation_summary_enabled: bool = Field(
@@ -1338,15 +1287,6 @@ class Settings(
         RrfWeights(vector=value[0], keyword=value[1])
         return value
 
-    rag_rerank_slot_ratio: tuple[int, int] = (7, 3)
-
-    @field_validator("rag_rerank_slot_ratio")
-    @classmethod
-    def _rerank_slot_ratio(cls, value: tuple[int, int]) -> tuple[int, int]:
-        from rag_engine.retrieval.rerank_order import validate_slot_ratio
-
-        return validate_slot_ratio(value)
-
     rag_rrf_k: int = Field(
         default=60,
         ge=1,
@@ -1367,12 +1307,6 @@ class Settings(
             "融合順位から rerank へ進める基本候補の上限。回答起点数 top_k とは独立。"
             "選別は rerank の点数で行うので、融合の順位では費用を抑える上限としてだけ切る(#4114)。"
         ),
-    )
-    rag_rerank_top_n: int = Field(
-        default=60,
-        ge=0,
-        le=2000,
-        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付と参照先は別枠で保持する。",
     )
     rag_rerank_candidate_limit: int = Field(
         default=200,

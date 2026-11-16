@@ -2,7 +2,7 @@
 
 backend は回答の検索で、上位の候補から 3 つの拡張（交差参照の参照先 #1280・実体の 1 段 #1362・関係情報 #2055）で
 chunk を集め、metadata の ``reference_expansion`` / ``entity_expansion`` / ``graph_expansion`` に足した理由を付け、
-rerank の前の候補とは分けて渡す。拡張の根拠は rerank にかけず、全体の下限・Top-N・``top_k``・context の枠に数えない。
+rerank の前の候補とは分けて渡す。拡張の根拠は rerank にかけず、全体の下限・``top_k``・context の枠に数えない。
 rerank・下限・起点の選択が終わって最後の根拠の並びが決まった後に、回答・検索だけ・MCP の 3 つの経路がこの規則で
 1 回だけ合わせる。
 

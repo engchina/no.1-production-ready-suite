@@ -159,7 +159,6 @@ def test_answer_flow_keeps_scope_existing_evidence_and_overflow_trace(monkeypatc
     assert len(calls) == 2
     assert calls[1][0] == request
     assert calls[1][2]["retrieval_scope"] == RETRIEVAL_SCOPE_KNOWLEDGE_BASE
-    assert calls[1][1][2].document_selection_enabled is False
     trace = result.generation_trace["query_overflow"]
     assert [row["status"] for row in trace["requests"]] == ["candidate_found"]
     assert trace["added_chunk_ids"] == ["run:new"]

@@ -14,7 +14,7 @@ from rag_parser_core.vision_text import answer_text_from_projection, load_vision
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
 from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _normalize_text
-from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim_for_context
+from rag_engine.generation.answer_payload import _bbox_values, _int_value
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.models.storage import StoredChunk
 from rag_engine.parsing.content_labels import content_labels
@@ -37,8 +37,6 @@ MAX_CONTEXT_RECORDS = 12
 MAX_RECORD_TEXT_CHARS = 1200
 
 DEFAULT_RETRIEVAL_CANDIDATE_LIMIT = 140
-
-MAX_RERANK_METADATA_CHARS = 700
 
 
 def validate_run_id(run_id: Any) -> str:
@@ -456,94 +454,21 @@ def _retrieval_channels(record: AnswerRecord) -> tuple[str, ...]:
 
 
 def _rerank_document(record: AnswerRecord) -> str:
-    """本文を全量保持し、補足 metadata だけを文字数制限して再順位付けへ渡します。
+    """rerank に渡す文（文書の名前・章節の見出し・当たった chunk の原文。#5165）。
 
-    先頭に根拠の見出し（`section_path`）を置く。cross-encoder は文書の先頭に近い語を強く見るため、見出しが
-    長い本文の後ろにあると、質問の画面・機能との一致が順位に効きにくい。生成は先頭の機能ブロックを使う傾向が
-    強く、先頭は rerank の順位で決まる (#1118)。
+    検索文の文脈行（親の要約・キーワード・分類など）・引用の ID・前後の文脈は入れない（rerank は当たった chunk
+    そのものの関連度を測る）。見出しは本文の前に置く。cross-encoder は文書の先頭に近い語を強く見るため、見出しが
+    長い本文の後ろにあると、質問の画面・機能との一致が順位に効きにくい (#1118)。
     """
-    prefix = f"{record.citation} / {record.engine_label} / {record.category}"
-    path = (record.metadata or {}).get("section_path") if isinstance(record.metadata, dict) else None
-    heading = " > ".join(str(h) for h in path if str(h).strip()) if isinstance(path, list) else ""
-    parts = [f"見出し: {heading}"] if heading else []
-    parts.append(record.body_text or record.text)
-    visual_context = _rerank_visual_context(record)
-    metadata = [prefix]
-    if record.body_text and record.text != record.body_text:
-        # 旧 search text が途中で切れていても、保存済み body から末尾の根拠を復元する。
-        metadata.append(record.text.split("Child text:", 1)[0])
-    metadata.append(visual_context)
-    parts.append(_trim_for_context("\n".join(metadata), MAX_RERANK_METADATA_CHARS))
-    return "\n\n".join(part for part in parts if part)
-
-
-def _rerank_visual_context(record: AnswerRecord) -> str:
-    channels = tuple(channel for channel in _retrieval_channels(record) if channel.startswith("image_vector:"))
-    evidence = _rerank_image_evidence(record)
-    if not channels and not evidence:
-        return ""
-    lines: list[str] = []
-    if channels:
-        lines.append("Visual retrieval channels: " + ", ".join(channels))
-    lines.extend(evidence[:3])
-    return "\n".join(lines)
-
-
-def _rerank_image_evidence(record: AnswerRecord) -> list[str]:
     metadata = record.metadata if isinstance(record.metadata, dict) else {}
-    images: list[dict[str, Any]] = []
-    raw_images = metadata.get("image_evidence")
-    if isinstance(raw_images, list):
-        images.extend(image for image in raw_images if isinstance(image, dict))
-    table_context = metadata.get("table_context")
-    if isinstance(table_context, list):
-        for table in table_context:
-            if not isinstance(table, dict):
-                continue
-            raw_visuals = table.get("visual_evidence")
-            if isinstance(raw_visuals, list):
-                images.extend(image for image in raw_visuals if isinstance(image, dict))
-
-    lines: list[str] = []
-    for image in images:
-        image_id = str(image.get("image_id") or image.get("record_id") or "").strip()
-        page = str(image.get("page") or "").strip()
-        role = str(image.get("visual_role") or "").strip()
-        modality = str(image.get("embedding_modality") or "").strip()
-        text = _join_rerank_image_text(
-            image.get("text_preview"),
-            image.get("ocr_text"),
-            image.get("retrieval_text"),
-            image.get("visual_kind"),
-            image.get("visual_structure"),
-        )
-        descriptors = [
-            f"id={image_id}" if image_id else "",
-            f"page={page}" if page else "",
-            f"role={role}" if role else "",
-            f"modality={modality}" if modality else "",
-            text,
-        ]
-        line = "Image evidence: " + " / ".join(part for part in descriptors if part)
-        if line.strip() != "Image evidence:":
-            lines.append(line)
-    return lines
-
-
-def _join_rerank_image_text(*values: Any) -> str:
-    parts: list[str] = []
-    for value in values:
-        if isinstance(value, list):
-            candidates = value
-        elif isinstance(value, dict):
-            candidates = [json.dumps(value, ensure_ascii=False, separators=(",", ":"))]
-        else:
-            candidates = [value]
-        for candidate in candidates:
-            text = str(candidate or "").strip()
-            if text and text not in parts:
-                parts.append(text)
-    return " | ".join(parts)
+    path = metadata.get("section_path")
+    heading = " > ".join(str(h) for h in path if str(h).strip()) if isinstance(path, list) else ""
+    title = re.split(r"[\\/]", str(record.source or ""))[-1].strip()
+    parts = [f"文書: {title}"] if title else []
+    if heading:
+        parts.append(f"見出し: {heading}")
+    header = "\n".join(parts)
+    return "\n\n".join(part for part in (header, record.body_text or record.text) if part)
 
 
 def _records_by_rerank_ranks(
@@ -553,15 +478,10 @@ def _records_by_rerank_ranks(
     *,
     candidate_indices: Sequence[int] | None = None,
     decisions: list[dict[str, object]] | None = None,
-    min_score_override: float | None = None,
 ) -> list[AnswerRecord]:
     selected: list[AnswerRecord] = []
     seen: set[int] = set()
-    min_score = (
-        min_score_override
-        if min_score_override is not None
-        else max(0.0, float(getattr(settings, "rerank_min_relevance_score", 0.0) or 0.0))
-    )
+    min_score = max(0.0, float(getattr(settings, "rerank_min_relevance_score", 0.0) or 0.0))
     for rank_position, rank in enumerate(ranks, start=1):
         index = rank.index
         if index in seen or index < 0 or index >= len(records):
