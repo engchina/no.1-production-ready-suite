@@ -52,7 +52,9 @@ from app.rag.reference_grammar import NEXT_KEY, PREVIOUS_KEY, SAME_KEY, current_
 # chunk の metadata に参照先を載せる key(JSON の文字列。ChunkMetadata は scalar だけを持つ)。
 REFERENCE_TARGETS_KEY = "reference_targets_json"
 REFERENCE_RESOLUTION_VERSION_KEY = "reference_resolution_version"
-REFERENCE_RESOLUTION_VERSION = "unique-v1"
+# 参照先を決める規則の版。規則を変えたら上げる(古い印は回答のときに本文から解決し直す)。
+# unique-v2: 番号の無い単位の語だけの別紙の参照を、同じ名前の見出しがあるときだけ残す(#5251)。
+REFERENCE_RESOLUTION_VERSION = "unique-v2"
 # 回答で参照先として足した chunk に付ける印(起点の chunk_id と参照の表記)。
 REFERENCE_FROM_KEY = "reference_from_chunk_id"
 REFERENCE_LABEL_KEY = "reference_label"
@@ -1033,6 +1035,8 @@ def resolve_reference_specs(
     同じ文書の参照は ``index``(その文書の見出しの列)で節を決め、自分の節・祖先の節への参照は
     残さない。参照の文書名が ``document_title``(参照元の文書名)に当たれば同じ文書として扱う。
     他の文書への参照は文書名と節の表記だけを残す(回答のときに検索範囲から解決する)。
+    同じ文書の番号の無い単位の語だけの別紙(``unnumbered_appendix``)は、見出しに当たる節が無ければ
+    残さない(#5251)。
     """
     citing = tuple(citing_path)
     targets: list[ReferenceTarget] = []
@@ -1050,12 +1054,25 @@ def resolve_reference_specs(
             continue
         if spec.kind == "document":
             continue
-        path = index.resolve(spec, citing_path=citing)
+        candidates = index.resolve_candidates(spec, citing_path=citing)
+        if not candidates and unnumbered_appendix(spec):
+            # 見出しに同じ名前の節が無い番号の無い別紙は参照にしない(#5251)。
+            continue
+        path = candidates[0] if len(candidates) == 1 else None
         if path is not None and citing[: len(split_section_path(path))] == split_section_path(path):
             # 自分の節・祖先の節への参照は、根拠を足さないので残さない。
             continue
         targets.append(ReferenceTarget(spec.label, spec.kind, spec.key, None, path))
     return targets
+
+
+def unnumbered_appendix(spec: ReferenceSpec) -> bool:
+    """番号の無い単位の語だけの別紙の参照か(「…記録様式を参照」の「様式」。#5251)。
+
+    文書名の末尾の単位の語と区別できないので、同じ文書の見出しに同じ名前の節(``heading_keys``
+    の別紙の鍵が合う節)があるときだけ参照にする。語の境目は判定しない。
+    """
+    return spec.kind == "appendix" and spec.key.endswith(":")
 
 
 def reference_targets(metadata: Mapping[str, object]) -> list[ReferenceTarget]:
@@ -1099,4 +1116,5 @@ __all__ = [
     "split_section_path",
     "title_heading",
     "title_key",
+    "unnumbered_appendix",
 ]

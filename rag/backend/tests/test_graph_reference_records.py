@@ -323,3 +323,26 @@ def test_catalog_section_path_accepts_every_stored_json_shape(
     path: str | None, path_json: str | None, expected: str
 ) -> None:
     assert _catalog_section_path({"path": path, "path_json": path_json}) == expected
+
+
+def test_records_skip_unnumbered_appendix_without_same_name_heading() -> None:
+    """番号の無い単位の語だけの別紙の参照は、同じ文書の見出しに無ければ記録しない(#5251)。"""
+    text = "作業の記録は合成作業記録様式を参照する。様式1を参照する。"
+    chunks = [
+        Chunk(
+            text=text,
+            index=0,
+            start_offset=0,
+            end_offset=len(text),
+            metadata={"section_path": "第1条"},
+        )
+    ]
+    build = partial(build_reference_records, knowledge_base_id="kb", chunks=chunks, documents=())
+    missing = build(source=ReferenceDocument("source", "s1", "合成の起点.txt", ("第1条",)))
+    # 番号つきの「様式1」は見出しに無くても未解決として残す(従来どおり)。
+    assert [(record.key, record.status) for record in missing] == [("様式:1", "not_found")]
+    present = build(source=ReferenceDocument("source", "s1", "合成の起点.txt", ("第1条", "様式")))
+    assert sorted((record.key, record.status) for record in present) == [
+        ("様式:", "resolved"),
+        ("様式:1", "not_found"),
+    ]

@@ -11,6 +11,7 @@ from app.rag.cross_references import (
     extract_references,
     is_file_name_reference,
     reference_targets,
+    unnumbered_appendix,
 )
 from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
 
@@ -65,6 +66,13 @@ def build_reference_records(
                 spec.document_title or ""
             ):
                 # 範囲に無いファイル名の形は、範囲の文書への参照でないので記録しない(#5208)。
+                continue
+            if (
+                resolution.status == "not_found"
+                and not spec.document_title
+                and unnumbered_appendix(spec)
+            ):
+                # 見出しに同じ名前の節が無い番号の無い別紙は参照にしない(取込の注記と同じ。#5251)。
                 continue
             identity = "|".join(
                 (knowledge_base_id, chunk_id, spec.kind, spec.key, spec.document_title or "")
