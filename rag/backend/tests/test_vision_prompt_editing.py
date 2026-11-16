@@ -189,6 +189,7 @@ def test_vision_editor_requires_parser_settings_permission(
 async def test_saved_vision_instructions_reach_serialized_http_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from pr_backend_core.response_schema import with_schema_field_guide
     from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiClient, OciEnterpriseAiConfig
 
     from tests.test_oci_enterprise_ai import FakeEnterpriseAiTransport
@@ -227,15 +228,20 @@ async def test_saved_vision_instructions_reach_serialized_http_payload(
             rendered = _render_prompt({}, target_kind=target, template=BODY)
             await describer._describe([b"synthetic-image"], rendered, "")
             payload = transport.calls[-1]["payload"]
-            assert payload["instructions"] == saved["picture_description.system"]
+            # 項目の意味(Field の説明)の正本は応答の schema(#4782)。送る時は system の
+            # 最後の Step にして schema から外す(#5230)。
+            guided, sent_schema = with_schema_field_guide(
+                saved["picture_description.system"], picture_response_schema()
+            )
+            assert payload["instructions"] == guided
+            assert guided.startswith(saved["picture_description.system"] + "\n\n## Step 2: ")
             content = payload["input"][0]["content"]
             text = next(row["text"] for row in content if row["type"] == "input_text")
             # BODY は Step 1 だけなので、対象の指示と出力契約は Step 2・3 に振り直す(#3810)。
             assert _renumbered(saved[f"picture_description.{target}"], 2) in text
             assert saved["picture_description.rules"] in text
             assert text.endswith(_renumbered(_picture_output_contract(), 3))
-            # 項目の意味(Field の説明)は応答の schema だけで渡す(#4782)。
-            assert payload["text"]["format"]["schema"] == picture_response_schema()
+            assert payload["text"]["format"]["schema"] == sent_schema
             assert f"table_rows={MAX_TABLE_ROWS}" in text
     # HTTP transport は完全なスタブ。モデルの画像対応能力を実サービスで確認するテストではない。
     assert len(transport.calls) == 2

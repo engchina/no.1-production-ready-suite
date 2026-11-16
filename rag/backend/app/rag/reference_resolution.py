@@ -13,11 +13,10 @@ from app.rag.cross_references import (
     ReferenceSpec,
     SectionIndex,
     document_name_keys,
-    document_name_rank,
+    document_reference_rank,
     same_document_title,
     split_section_path,
     title_heading,
-    title_key,
 )
 
 
@@ -94,12 +93,12 @@ def resolve_scoped_reference(
     ):
         candidates = [source]
     else:
-        key = title_key(spec.document_title)
+        name = spec.document_title
         matches = [
             (score, item)
             for item in documents
             if item.document_id != source.document_id
-            and (score := document_name_rank(key, item.name_keys)) is not None
+            and (score := document_reference_rank(name, item.name, keys=item.name_keys)) is not None
         ]
         best = min((score for score, _item in matches), default=None)
         candidates = [item for score, item in matches if score == best]

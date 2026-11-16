@@ -717,3 +717,118 @@ def test_candidate_sentence_missing_from_the_source_does_not_reach_the_final_inp
     assert "合成の条件です。" in prompt
     assert "特例" not in prompt
     assert all("特例" not in str(value.get("batch_answer") or "") for value in selected)
+
+
+def _deadline_reader(calls):
+    """各組の入力の出典を記録し、各入力の最初の単位を回答候補にする読取のスタブ。"""
+
+    def read(system, prompt, schema):
+        values = json.loads(prompt)["evidence"]
+        calls.append([value["source"] for value in values])
+        return schema.model_validate({"findings": [finding(value) for value in values]})
+
+    return read
+
+
+def _remaining(monkeypatch, values):
+    """分割読取が各組の前に見る回答の期限の残り（秒）を、呼ばれた順に返す（最後の値を繰り返す）。"""
+    import rag_engine.generation.batched_evidence as module
+
+    queue = list(values)
+    seen = []
+
+    def remaining():
+        value = queue.pop(0) if len(queue) > 1 else queue[0]
+        seen.append(value)
+        return value
+
+    monkeypatch.setattr(module, "remaining_seconds", remaining)
+    return seen
+
+
+DEADLINE_INPUTS = [span(i, f"条件{i}。" + "補足本文。" * 120) for i in range(12)]
+
+
+def test_batches_are_all_read_while_the_deadline_leaves_the_final_generation(monkeypatch):
+    """期限の残りが最後の生成の見積もり + 確定の分以上なら、全部の組を読む（#5204）。"""
+    seen = _remaining(monkeypatch, [600.0])
+    calls = []
+    selected, _, diagnostic = prepare(DEADLINE_INPUTS, _deadline_reader(calls))
+    assert len(calls) == diagnostic["batch_count"] > 1 and len(seen) == len(calls)
+    assert "stop_reason" not in diagnostic and diagnostic["excluded_span_count"] == 0
+    assert diagnostic["read_source_count"] == 12
+
+
+def test_remaining_batches_are_not_read_when_only_the_final_generation_fits(monkeypatch):
+    """1 組を読んだ後に残りが 120 + 30 秒を切ったら、次の組から読まず、読んだ組と入る分の入力で確定する（#5204）。"""
+    _remaining(monkeypatch, [600.0, 149.0])
+    calls = []
+    selected, prompt, diagnostic = prepare(DEADLINE_INPUTS, _deadline_reader(calls))
+    assert len(calls) == diagnostic["batch_count"] == 1
+    assert diagnostic["stop_reason"] == "deadline"
+    stop = diagnostic["deadline"]
+    assert (stop["remaining_seconds"], stop["reserve_seconds"], stop["completed_batch_count"]) == (149.0, 150.0, 1)
+    assert stop["skipped_batch_count"] >= 1 and stop["pass_index"] == 1
+    # 読んだ組の出典は最終生成に入り、入力の上限を超えない。入らなかった出典の数を回答の未反映の案内に渡す。
+    assert set(calls[0]) <= {value["source"] for value in selected}
+    assert diagnostic["fits"] and len(block(selected)) <= 3500
+    assert diagnostic["excluded_span_count"] == 12 - len({value["source_id"] for value in selected})
+    assert diagnostic["excluded_span_count"] > 0
+
+
+def test_no_batch_is_read_when_the_deadline_is_already_short(monkeypatch):
+    """最初の組の前から残りが足りなければ LLM を呼ばず、入力を読取の優先の順に入る分だけ最終生成へ渡す（#5204）。"""
+    _remaining(monkeypatch, [100.0])
+    selected, _, diagnostic = prepare(DEADLINE_INPUTS, lambda *args: pytest.fail("期限の残りが足りない組を読まない"))
+    assert diagnostic["batch_count"] == 0 and diagnostic["stop_reason"] == "deadline"
+    assert diagnostic["deadline"]["completed_batch_count"] == 0
+    assert selected and diagnostic["fits"] and len(block(selected)) <= 3500
+    assert diagnostic["excluded_span_count"] == 12 - len({value["source_id"] for value in selected}) > 0
+
+
+@pytest.mark.parametrize(("left", "reads"), [(89.0, False), (90.0, True)], ids=["below", "boundary"])
+def test_batch_deadline_reserve_follows_the_generation_round_setting(monkeypatch, left, reads):
+    """予約は設定の生成の 1 回の見積もり + 確定の 30 秒（設定 60 秒なら 90 秒が境界。#5204）。"""
+    _remaining(monkeypatch, [left])
+    calls = []
+    _, _, diagnostic = prepare(DEADLINE_INPUTS, _deadline_reader(calls), answer_generation_round_estimate_seconds=60.0)
+    assert (len(calls) > 0) is reads
+    assert ("stop_reason" in diagnostic) is (not reads)
+
+
+def test_deadline_in_a_later_pass_keeps_the_first_pass_readings(monkeypatch):
+    """2 回目の読取の途中で期限に届いたら、1 回目の読取の結果（回答候補つきの範囲）を最終生成へ残す（#5204）。"""
+    inputs = [span(i, f"条件{i}です。" + "補足原文。" * 200) for i in range(12)]
+    passes = []
+
+    def read(system, prompt, schema):
+        values = json.loads(prompt)["evidence"]
+        reducing = any(value.get("batch_answer") for value in values)
+        passes.append(reducing)
+        return schema(
+            findings=[
+                finding(value, answer=body(value).split("。", 1)[0], last=1 if reducing else min(2, value["text"].count("\n") + 1))
+                for value in values
+            ],
+        )
+
+    # 期限なしで読んだときの 1 回目の読取の組の数。その次（2 回目の最初の組）の前で残りを足りなくする。
+    first_count = _passes_of(inputs, read).index(True)
+    passes.clear()
+    _remaining(monkeypatch, [600.0] * first_count + [10.0])
+    selected, _, diagnostic = prepare(inputs, read)
+    assert passes and not any(passes)
+    assert diagnostic["stop_reason"] == "deadline" and diagnostic["deadline"]["pass_index"] == 2
+    assert diagnostic["fits"] and any(value.get("batch_answer") for value in selected)
+
+
+def _passes_of(inputs, read):
+    """期限なしで読んだときの、各読取が 2 回目以降の読取か（回答候補つきの入力を読むか）。"""
+    seen = []
+
+    def spy(system, prompt, schema):
+        seen.append(any(value.get("batch_answer") for value in json.loads(prompt)["evidence"]))
+        return read(system, prompt, schema)
+
+    prepare(inputs, spy)
+    return seen

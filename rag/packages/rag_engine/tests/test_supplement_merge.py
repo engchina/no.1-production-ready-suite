@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from rag_parser_core.extraction import DOCUMENT_SUMMARY_CONTENT_KIND
 
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
@@ -278,7 +279,9 @@ def test_supplement_marks_are_kept_on_merged_records() -> None:
 # ---- 主の検索の根拠と前後の文脈を外さない（#5185） ----
 
 # 文書 A の要約の chunk（文書の中の位置を持たない派生の chunk。backend は前後を読まない #4793）を末尾の番号で持つ。
-SUMMARY_CHUNKS = {**CHUNKS, "AS": _chunk("AS", 7, "A")}
+# backend と同じに要約の印（``content_kind``）を付ける。
+_SUMMARY = _chunk("AS", 7, "A")
+SUMMARY_CHUNKS = {**CHUNKS, "AS": replace(_SUMMARY, metadata={**_SUMMARY.metadata, "content_kind": DOCUMENT_SUMMARY_CONTENT_KIND})}
 
 
 def _reader(chunks: dict[str, Any], *, no_neighbors: frozenset[str] = frozenset({"AS"})) -> Any:
@@ -316,12 +319,12 @@ def _in_order(evidence: list[str], expected: list[str]) -> bool:
     return [uid for uid in evidence if uid in expected] == expected
 
 
-def test_scoped_guide_supplement_keeps_main_anchor_and_its_neighbor(monkeypatch: pytest.MonkeyPatch) -> None:
-    """頁の範囲を絞った手順の参照の検索が主の検索の起点と同じ chunk を返しても、主の検索の起点の原文・前後の文脈を変えない。
+def test_scoped_guide_supplement_keeps_main_anchor_and_main_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """頁の範囲を絞った手順の参照の検索が主の検索の起点と同じ chunk を返しても、主の検索の起点の原文・根拠を変えない。
 
-    主の検索の起点 AS（文書 A の要約の chunk）の前後の文脈は主の検索の原文の A6。手順の参照の検索（文書 A に絞る）は AS と
-    A3 を範囲つきで返す。範囲つきの AS が主の検索の AS を置き換えると、AS の前後は範囲つきの原文（A2〜A4）から選ばれて A6
-    が外れ、保険の確認で補いの根拠がすべて捨てられていた（#5185）。
+    手順の参照の検索（文書 A に絞る）は主の検索の起点 AS（文書 A の要約の chunk）と A3 を範囲つきで返す。範囲つきの AS が
+    主の検索の AS を置き換えると、主の検索の根拠が変わり、保険の確認で補いの根拠がすべて捨てられていた（#5185）。
+    要約の chunk は文書の中の位置を持たないので前後の文脈を付けない（#5198）。
     """
     guide = GuidePlan.from_payload(
         "g-1", 1, [{"id": "s1", "title": "合成の参照", "retrieval_hints": ["参照H"], "references": [{"document_id": "A"}]}]
@@ -334,8 +337,8 @@ def test_scoped_guide_supplement_keeps_main_anchor_and_its_neighbor(monkeypatch:
     result = _run(monkeypatch, harness, guide=guide, request=None, guide_step_chunks_per_step=2)
 
     evidence = _evidence(result)
-    # 主の検索の根拠（AS と前後の文脈 A6、C2 と C1・C3）は 1 つも外れず、並びの順も同じ。
-    assert _in_order(evidence, ["A6", "AS", "C1", "C2", "C3"])
+    # 主の検索の根拠（AS、C2 と C1・C3）は 1 つも外れず、並びの順も同じ。要約の AS には前後の文脈（末尾の本文 A6）が付かない。
+    assert _in_order(evidence, ["AS", "C1", "C2", "C3"]) and "A6" not in evidence
     # 補いの根拠 A3 は前後の文脈（範囲の中で読んだ A2・A4）と一緒に入る。範囲つきの AS は主の検索の AS に印だけを付ける。
     assert {"A2", "A3", "A4"} <= set(evidence)
     assert evidence.count("AS") == 1
@@ -380,23 +383,44 @@ def test_scoped_guide_candidates_of_main_evidence_do_not_take_the_cut(monkeypatc
 def test_supplement_records_do_not_change_main_neighbors(monkeypatch: pytest.MonkeyPatch) -> None:
     """補いの検索の原文が増えても、主の検索の根拠の前後の文脈は主の検索の原文だけから選ぶ。
 
-    前後は読んだ chunk の並びの位置で選ぶ。主の検索の原文に A5・A6 が無いと AS の前は A4。補いの検索の原文に A6 が入ると、
-    合わせ直しで AS の前が A6 に変わり A4 が外れていた（#5185）。
+    前後は読んだ chunk の並びの位置で選ぶ。主の検索の原文に A5・A6 が無いと A4 の後ろは無い。補いの検索の原文に A5 が入ると、
+    合わせ直しで A4 の後ろに A5 が付き、主の検索の根拠が変わっていた（#5185）。
     """
     harness = Harness(
-        {QUESTION: ["AS", "C2"], "(1)": ["E1"]},
-        {"AS": 0.9, "C2": 0.7, "E1": 0.8},
-        chunks=SUMMARY_CHUNKS,
-        pools={QUESTION: [name for name in SUMMARY_CHUNKS if name not in {"A5", "A6"}], "(1)": ["E1", "E2", "A6"]},
+        {QUESTION: ["A4", "C2"], "(1)": ["E1"]},
+        {"A4": 0.9, "C2": 0.7, "E1": 0.8},
+        pools={QUESTION: [name for name in CHUNKS if name not in {"A5", "A6"}], "(1)": ["E1", "E2", "A5"]},
     )
 
     result = _run(monkeypatch, harness, request_coverage_max_chunks=1)
 
     evidence = _evidence(result)
-    assert _in_order(evidence, ["A4", "AS", "C1", "C2", "C3"])
-    assert "A6" not in evidence and {"E1", "E2"} <= set(evidence)
+    assert _in_order(evidence, ["A3", "A4", "C1", "C2", "C3"])
+    assert "A5" not in evidence and {"E1", "E2"} <= set(evidence)
     assert result.generation_trace["supplement_merge"]["rejected_count"] == 0
     assert result.generation_trace["query_overflow"]["added_chunk_ids"] == ["E1"]
+
+
+def test_summary_anchor_takes_no_neighbors_or_their_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    """文書全体の要約の chunk が起点でも、読んだ chunk の並びの位置で前後の文脈を付けない（#5198）。
+
+    要約の chunk の番号は本文の後に振られるので、位置で選ぶと文書の末尾の本文 A6 が「前」になり、文脈の最大レコード数の
+    枠を取ってほかの起点 C2 の前後 C3 が入らなかった。
+    """
+    harness = Harness({QUESTION: ["AS", "C2"]}, {"AS": 0.9, "C2": 0.7}, chunks=SUMMARY_CHUNKS)
+
+    result = _run(monkeypatch, harness, request=None, max_context_records=4)
+
+    assert _evidence(result) == ["AS", "C1", "C2", "C3"]
+
+
+def test_summary_is_not_a_neighbor_of_the_last_body_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """文書全体の要約の chunk は本文の並びに入らないので、末尾の本文の起点の前後の文脈にもならない（#5198）。"""
+    harness = Harness({QUESTION: ["A6", "C2"]}, {"A6": 0.9, "C2": 0.7}, chunks=SUMMARY_CHUNKS)
+
+    result = _run(monkeypatch, harness, request=None)
+
+    assert _evidence(result) == ["A5", "A6", "C1", "C2", "C3"]
 
 
 def _dropping_main_evidence(monkeypatch: pytest.MonkeyPatch, *, when: str | None, drop: str = "A1") -> None:

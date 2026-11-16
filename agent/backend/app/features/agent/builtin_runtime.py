@@ -95,6 +95,7 @@ from pr_backend_core.output_budget import (
     online_output_budget,
     output_limit_message,
 )
+from pr_backend_core.response_schema import with_schema_field_guide
 from pr_system_settings.enterprise_ai_errors import (
     EnterpriseAiIncomplete,
     enterprise_ai_incomplete_from_response,
@@ -546,9 +547,37 @@ def _omit_reasoning_text(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {**kwargs, "input": sanitized} if changed else kwargs
 
 
+def _schema_field_guide(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """構造化出力（`text.format` の JSON Schema）の項目の説明を、指示の最後の Step に移す（#5238）。
+
+    `text.format` の schema の説明は、モデルによっては読まれず形の制約にだけ使われる（2026-11-17
+    に `openai.gpt-oss-120b` で確認。function tool の引数の説明は読まれる）。全モデルに同じ Step
+    で渡し、schema からは説明を外す（`pr_backend_core.response_schema`）。SDK が作った引数は
+    書き換えない。
+    """
+    text = kwargs.get("text")
+    if not isinstance(text, Mapping):
+        return kwargs
+    format_ = text.get("format")
+    if not isinstance(format_, Mapping) or format_.get("type") != "json_schema":
+        return kwargs
+    schema = format_.get("schema")
+    if not isinstance(schema, Mapping):
+        return kwargs
+    instructions = kwargs.get("instructions")
+    guided, stripped = with_schema_field_guide(
+        instructions if isinstance(instructions, str) else "", schema
+    )
+    return {
+        **kwargs,
+        "instructions": guided,
+        "text": {**text, "format": {**format_, "schema": stripped}},
+    }
+
+
 def _oci_request(kwargs: dict[str, Any]) -> dict[str, Any]:
     """`responses.create` の引数を OCI Enterprise AI が受け付ける形にする。"""
-    return _omit_reasoning_text(_omit_empty_tools(kwargs))
+    return _schema_field_guide(_omit_reasoning_text(_omit_empty_tools(kwargs)))
 
 
 # OCI が「再試行してください」と返す、モデルの出力の一時的な失敗（400 `model_output_invalid`）を

@@ -61,7 +61,7 @@ from rag_parser_core.vision_text import (
 )
 
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import OracleClient, bind_text_query_keywords
+from app.clients.oracle import NativeScopeReuse, OracleClient, bind_text_query_keywords
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
     db_call_label,
@@ -95,9 +95,10 @@ from app.rag.cross_references import (
     REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     SectionIndex,
-    document_name_match,
     document_name_references,
+    document_reference_rank,
     extract_references,
+    is_file_name_reference,
     reference_targets,
     resolve_reference_specs,
     same_document_title,
@@ -300,6 +301,9 @@ class _SearchState:
     # 他の文書への参照の文書名に合う文書((範囲, 文書名の比較形) ごと。当たり方の順。#1400)。
     reference_documents: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
     reference_versions: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    # 他の文書への参照の文書を決められなかった理由((範囲, 参照元の文書, 文書名) ごと。#5208)。
+    # 範囲に無い(未登録と範囲・権限の外を区別しない)・同名が複数・有効な版が 1 つでない。
+    reference_document_outcomes: dict[tuple[str, str, str], str] = field(default_factory=dict)
     # 参照の文書名の照合の DB の行(同じ key。辿る前に候補の文書名をまとめて 1 回で読む。#2137)。
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
@@ -309,6 +313,9 @@ class _SearchState:
     search_hits: dict[
         tuple[str, str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]
     ] = field(default_factory=dict)
+    # 原生検索の準備の確認と範囲の解決(#5184)。要求ごとの補いの検索・業務ガイドの手順の検索で
+    # 読み直さない(1 回の回答の中だけ。範囲の古さは検索ごとに確かめる)。
+    native_scope_reuse: NativeScopeReuse = field(default_factory=NativeScopeReuse)
     # 章節の拡張(#1436)の章節の一覧((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
     # 利用者が明示した基準日(as_of。無ければ空)。検索の条件は 1 回の回答の初めに決めた基準日を
@@ -1939,7 +1946,7 @@ class AnswerEngine:
         embedding は検索文のもの(#5159)。まだ読んでいない検索は 1 回の SQL でまとめて読む
         (``OracleClient.search_many``。結果は検索文ごとの ``hybrid_search`` と同じ。#1498)。
         同じ回答の中で同じ検索文・渡す文・方式・条件・件数を読んだことがあれば、その結果を使う
-        (要求ごとの再検索)。
+        (要求ごとの再検索)。原生検索の準備の確認と範囲の解決も同じ回答の中で使い回す(#5184)。
         """
         filter_key = tuple(sorted(filters.items()))
         keys = [
@@ -1957,7 +1964,10 @@ class AnswerEngine:
             search_many = getattr(self._oracle, "search_many", None)
             if search_many is not None:
                 found = await search_many(
-                    list(missing.values()), candidate_limit, filters=dict(filters)
+                    list(missing.values()),
+                    candidate_limit,
+                    filters=dict(filters),
+                    reuse=state.native_scope_reuse,
                 )
             else:
                 # ``hybrid_search`` だけを持つ Oracle(テストの代役など)は 1 本ずつ読む。
@@ -2220,7 +2230,11 @@ class AnswerEngine:
                         scope, state, anchor, target, request=request, question=question
                     )
                     loaded[key] = chunks
-                    statuses[key] = "available" if chunks else "no_available_content"
+                    statuses[key] = (
+                        "available"
+                        if chunks
+                        else _reference_document_outcome(scope, state, anchor, target)
+                    )
                 except Exception as exc:  # noqa: BLE001 - この参照の未充足を記録して続ける。
                     state.record_degraded("reference_load", exc)
                     chunks = []
@@ -2236,12 +2250,22 @@ class AnswerEngine:
                     }
                 )
 
+        # 範囲に無いファイル名の形の参照(#5208)は、検索範囲の文書を指していないので依存に数えない
+        # (本文のファイル名らしい語で、同じ起点のほかの参照の補充を止めない)。受領記録には残す。
+        ignored = {
+            key
+            for key, status in statuses.items()
+            if status == "document_not_found"
+            and is_file_name_reference(targets[key][1].document_title or "")
+        }
         groups: list[ReferenceGroup] = []
         dependencies: dict[str, dict[str, tuple[RetrievedChunk, ReferenceTarget, int]]] = {}
         for anchor, position, entry, keys in plans:
             rows: dict[str, tuple[RetrievedChunk, ReferenceTarget, int]] = {}
             reasons: list[str] = []
             for key in keys:
+                if key in ignored:
+                    continue
                 if statuses[key] != "available":
                     reasons.append(statuses[key])
                     continue
@@ -2379,13 +2403,17 @@ class AnswerEngine:
                             *("resolution_error" for _ in range(resolution_errors)),
                             *(
                                 status
-                                for status in statuses.values()
-                                if status
+                                for key, status in statuses.items()
+                                if key not in ignored
+                                and status
                                 in {
                                     "read_error",
                                     "no_available_content",
                                     "missing_search_input",
                                     "unresolved_section",
+                                    "document_not_found",
+                                    "document_ambiguous",
+                                    "document_version_unconfirmed",
                                 }
                             ),
                         ]
@@ -2620,16 +2648,24 @@ class AnswerEngine:
             if document_id != anchor.document_id
             and (not scope.get("document_id") or document_id == scope["document_id"])
         }
+        scope_key = json.dumps(scope, ensure_ascii=False, sort_keys=True)
+        outcome_key = (scope_key, anchor.document_id, target.document_title or "")
         if len(identifiers) != 1:
+            state.reference_document_outcomes[outcome_key] = (
+                "document_ambiguous" if identifiers else "document_not_found"
+            )
             return None
         document_id = next(iter(identifiers))
-        key = (json.dumps(scope, ensure_ascii=False, sort_keys=True), document_id)
+        key = (scope_key, document_id)
         if key not in state.reference_versions:
             state.reference_versions[key] = await self._oracle.retrieval_reference_versions(
                 scope, document_id
             )
         versions = state.reference_versions[key]
-        return document_id if len(versions) == 1 and versions[0] else None
+        if len(versions) == 1 and versions[0]:
+            return document_id
+        state.reference_document_outcomes[outcome_key] = "document_version_unconfirmed"
+        return None
 
     async def _reference_documents(
         self, scope: dict[str, str], state: _SearchState, title: str
@@ -2637,13 +2673,17 @@ class AnswerEngine:
         """参照の文書名に合う、検索範囲の文書の (id, 文書名)。確かな当たり方、名前の短い順(#1400)。
 
         文書名(ファイル名)と文書のタイトル(番号の無い先頭の見出し)、それらの別名(年度・版・
-        括弧書きを外した形)と照合する(``document_name_match``。NFKC)。範囲は検索と同じ
+        括弧書きを外した形)と照合する(``document_reference_rank``。NFKC。拡張子つきのファイル名の形は
+        ファイル名の完全一致だけ。#5208)。範囲は検索と同じ
         (KB・利用者の権限・有効な chunk_set・旧版は既定で除く)。1 回の回答の中では cache する。
         """
         key = title_key(title)
-        cache_key = (json.dumps(scope, ensure_ascii=False, sort_keys=True), key)
-        if cache_key in state.reference_documents:
-            return state.reference_documents[cache_key]
+        scope_key = json.dumps(scope, ensure_ascii=False, sort_keys=True)
+        cache_key = (scope_key, key)
+        # ファイル名の形の参照は照合の規則が違うので、同じ比較形の文書名と結果を分ける(#5208)。
+        documents_key = (scope_key, f"file:{title}") if is_file_name_reference(title) else cache_key
+        if documents_key in state.reference_documents:
+            return state.reference_documents[documents_key]
         documents: list[tuple[str, str]] = []
         if len(key) >= 2:
             rows = state.reference_document_rows.get(cache_key)
@@ -2654,7 +2694,7 @@ class AnswerEngine:
             ranked = sorted(
                 (match, len(file_name), document_id, file_name)
                 for document_id, file_name, headings in rows
-                if (match := document_name_match(title, file_name, headings)) is not None
+                if (match := document_reference_rank(title, file_name, headings)) is not None
             )
             # 一致の強さで絞るが、同順位を名前の長さ・文書順で一つに決めない。
             documents = [
@@ -2662,7 +2702,7 @@ class AnswerEngine:
                 for match, _length, document_id, file_name in ranked
                 if match == ranked[0][0]
             ]
-        state.reference_documents[cache_key] = documents
+        state.reference_documents[documents_key] = documents
         return documents
 
     async def _document_reference_chunks(
@@ -3375,6 +3415,21 @@ def _reference_rerank_document(chunk: RetrievedChunk) -> str:
     """
     path = str(chunk.metadata.get("section_path") or "").strip()
     return f"見出し: {path}\n\n{chunk.text}" if path else chunk.text
+
+
+def _reference_document_outcome(
+    scope: Mapping[str, str], state: _SearchState, anchor: RetrievedChunk, target: ReferenceTarget
+) -> str:
+    """参照先を読んで何も無かったときの理由(他の文書を決められなかった理由。#5208)。"""
+    if target.document_title:
+        key = (
+            json.dumps(dict(scope), ensure_ascii=False, sort_keys=True),
+            anchor.document_id,
+            target.document_title,
+        )
+        if outcome := state.reference_document_outcomes.get(key):
+            return outcome
+    return "no_available_content"
 
 
 def _document_name_targets(

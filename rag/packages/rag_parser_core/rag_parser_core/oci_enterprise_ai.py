@@ -25,6 +25,7 @@ from typing import Any, Protocol
 import httpx
 import openai
 from pr_backend_core.llm_request_params_httpx import AsyncParameterDroppingClient
+from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import ValidationError
 
 from rag_parser_core.extraction import StructuredExtraction
@@ -1279,6 +1280,9 @@ def _build_images_text_payload(
         "max_output_tokens": _vision_output_token_limit(config),
     }
     schema_attached = _supports_responses_json_schema(model_id)
+    if response_schema:
+        # 項目の説明はシステムの文の Step にして送り、schema からは外す（#5230）。
+        system_prompt, response_schema = with_schema_field_guide(system_prompt, response_schema)
     if response_schema and not schema_attached:
         system_prompt = _with_schema_contract(system_prompt, response_schema)
     if system_prompt:
@@ -1306,6 +1310,9 @@ def _build_llm_payload(
 ) -> dict[str, Any]:
     """LLM endpoint へ送る payload を標準形または template から作る。"""
     model_id = config.default_model_id
+    if response_schema:
+        # 項目の説明はシステムの文の Step にして送り、schema からは外す（#5230）。
+        system_prompt, response_schema = with_schema_field_guide(system_prompt, response_schema)
     template = config.oci_enterprise_ai_llm_payload_template
     schema_attached = (
         "response_schema" in template

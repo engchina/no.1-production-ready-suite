@@ -410,23 +410,29 @@ def test_answer_without_any_bound_citation_is_not_reported_with_the_declared_con
     assert "[" not in response.answer_text.split("根拠：")[0]
 
 
-def test_response_kind_is_defined_once_in_the_instructions_and_declared_after_the_body():
-    """種別の各値の定義は、モデルが必ず読む生成の指示の 1 か所にあり、応答 schema の説明では繰り返さない（#5229）。
+def test_response_kind_is_defined_once_in_the_schema_and_declared_after_the_body():
+    """種別の各値の定義は応答 schema の項目の説明の 1 か所にあり、生成の指示の Step では繰り返さない（#5238）。
 
-    応答 schema の項目の説明は、モデルによっては構造の制約だけに使われて読まれないため、定義を schema に置かない。
+    説明は adapter が指示の最後の Step にして全モデルに送る（``pr_backend_core.response_schema``。#5230）。
     """
     from typing import get_args
 
+    from pr_backend_core.response_schema import with_schema_field_guide
+
     from rag_engine.generation.answer_envelope import AnswerOutcome
+    from rag_engine.generation.full_answer_wire import RESPONSE_KIND_DEFINITIONS
 
     kinds = get_args(AnswerOutcome)
-    assert set(grounded.RESPONSE_KIND_DEFINITIONS) == set(kinds)
-    system = grounded.generation_system_prompt()
-    for kind, definition in grounded.RESPONSE_KIND_DEFINITIONS.items():
-        assert system.count(f"- {kind}: {definition}") == 1
+    assert set(RESPONSE_KIND_DEFINITIONS) == set(kinds)
     units, _unit = catalog()
     schema = full_answer_model(units).model_json_schema()
     properties = list(schema["properties"])
     assert properties.index("answer_body") < properties.index("response_kind")
     description = schema["properties"]["response_kind"]["description"]
-    assert not any(kind in description for kind in kinds)
+    system = grounded.generation_system_prompt()
+    guided, _stripped = with_schema_field_guide(system, schema)
+    for kind, definition in RESPONSE_KIND_DEFINITIONS.items():
+        assert f"- {kind}: {definition}" in description
+        assert definition not in system
+        # モデルに送る指示（説明の Step を足した後）には 1 回だけ。
+        assert guided.count(f"- {kind}: {definition}") == 1

@@ -30,6 +30,7 @@ from pr_backend_core.observability.model_purpose import (
     model_purpose_attributes,
 )
 from pr_backend_core.output_budget import online_output_budget, output_limit_message
+from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import BaseModel
 
 from rag_engine.config import (
@@ -612,12 +613,27 @@ def is_invalid_structured_output(exc: Exception) -> bool:
 
 
 def _response_wire_request(request: dict[str, Any]) -> dict[str, Any]:
-    """SDK が送る structured output の schema を JSON にそろえる。"""
+    """SDK が送る structured output の schema を JSON にそろえる。
+
+    schema の項目の説明は、system の指示の最後の Step にして送り、schema からは外す（``with_schema_field_guide``。#5230）。
+    """
     from openai.lib._parsing._responses import type_to_text_format_param
 
+    text_format = dict(type_to_text_format_param(request["text_format"]))
+    messages = list(request["input"])
+    system_index = next(
+        (index for index, message in enumerate(messages) if message.get("role") == "system" and isinstance(message.get("content"), str)),
+        None,
+    )
+    instructions = str(messages[system_index]["content"]) if system_index is not None else ""
+    guided, text_format["schema"] = with_schema_field_guide(instructions, text_format["schema"])
+    if system_index is not None:
+        messages[system_index] = {**messages[system_index], "content": guided}
+    elif guided:
+        messages.insert(0, {"role": "system", "content": guided})
     return {
-        **{key: value for key, value in request.items() if key != "text_format"},
-        "text": {"format": type_to_text_format_param(request["text_format"])},
+        **{key: messages if key == "input" else value for key, value in request.items() if key != "text_format"},
+        "text": {"format": text_format},
     }
 
 

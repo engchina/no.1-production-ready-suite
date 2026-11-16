@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import threading
 from contextlib import suppress
 from time import monotonic
 from typing import Protocol, cast
@@ -33,10 +34,16 @@ LEASE_SECONDS = 600
 OPTIMIZE_CALL_TIMEOUT_MS = 180_000
 # 整理が返った後の件数検査の呼出しごとの上限。整理の残り時間とは別に持つ（#4097）。
 VERIFY_CALL_TIMEOUT_MS = 60_000
+# 整理の期限を過ぎても整理の呼出しが返らないとき、cancel を送るまでの猶予。driver の call_timeout
+# は受信ごとの socket の待ちで、期限を過ぎて正常に返った例がある(#5214)。期限の後の driver の
+# break の処理を待つ分だけ猶予を置き、それでも返らなければ別の thread から cancel を送る。
+OVERRUN_CANCEL_GRACE_SECONDS = 60.0
 
 
 class TimedMaintenanceConnection(OracleConnectionProtocol, Protocol):
     call_timeout: int
+
+    def cancel(self) -> object: ...
 
 
 class NativeMaintenanceStore:
@@ -248,10 +255,35 @@ class NativeMaintenanceStore:
             # 同じプロセスの要求の接続の取得（event loop の上の読み出しも）を止めた（#5181）。
             connection = cast(TimedMaintenanceConnection, self.oracle.open_dedicated_connection())
             previous_timeout = getattr(connection, "call_timeout", None)
+            # 期限で止める区間(整理まで)にいるか。整理が返った後の確定・件数の検査は止めない。
+            phase_lock = threading.Lock()
+            within_deadline = [True]
+            watchdog: threading.Timer | None = None
             try:
                 if not isinstance(previous_timeout, int):
                     raise RuntimeError("索引整理接続の呼出時間上限を設定できません。")
                 deadline = monotonic() + OPTIMIZE_CALL_TIMEOUT_MS / 1000
+
+                def cancel_overrun() -> None:
+                    with phase_lock:
+                        if not within_deadline[0]:
+                            return
+                        logger.warning(
+                            "native_index_maintenance_overrun_cancel",
+                            extra={
+                                "limit_seconds": OPTIMIZE_CALL_TIMEOUT_MS / 1000
+                                + OVERRUN_CANCEL_GRACE_SECONDS
+                            },
+                        )
+                        # server が break を処理すれば実行中の呼出しは例外で返る(要求は次回へ)。
+                        with suppress(Exception):
+                            connection.cancel()
+
+                watchdog = threading.Timer(
+                    OPTIMIZE_CALL_TIMEOUT_MS / 1000 + OVERRUN_CANCEL_GRACE_SECONDS, cancel_overrun
+                )
+                watchdog.daemon = True
+                watchdog.start()
 
                 def before_call() -> None:
                     remaining = deadline - monotonic()
@@ -260,6 +292,8 @@ class NativeMaintenanceStore:
                     connection.call_timeout = max(1, math.ceil(remaining * 1000))
 
                 def before_verify() -> None:
+                    with phase_lock:
+                        within_deadline[0] = False
                     connection.call_timeout = VERIFY_CALL_TIMEOUT_MS
 
                 # 接続待ちの間に失効した古いworkerは、索引操作を始めない。
@@ -307,6 +341,10 @@ class NativeMaintenanceStore:
                     },
                 )
             finally:
+                with phase_lock:
+                    within_deadline[0] = False
+                if watchdog is not None:
+                    watchdog.cancel()
                 # 専用の接続は pool へ返さず閉じる（呼出時間上限を戻す必要は無い）。切れた接続の
                 # close の失敗で、整理の結果・元の例外を隠さない。
                 try:

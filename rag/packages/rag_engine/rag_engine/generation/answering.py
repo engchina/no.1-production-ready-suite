@@ -660,9 +660,7 @@ def build_chunk_answer_context(
     )
 
 
-def cap_anchors_per_document(
-    ranked_children: Sequence[AnswerRecord], settings: Settings | None, *, top_k: int, step: Any | None = None
-) -> list[AnswerRecord]:
+def cap_anchors_per_document(ranked_children: Sequence[AnswerRecord], settings: Settings | None) -> list[AnswerRecord]:
     """1 つの文書から採る候補を `max_anchors_per_document` 件までにする（#2167・#5165。0 は上限なし）。
 
     rerank の後の並びの順に文書ごとに数え、上限を超えた候補は外す（後ろへ回して使い直さない）。会話の添付は
@@ -675,7 +673,6 @@ def cap_anchors_per_document(
         return list(ranked_children)
     counts: dict[tuple[str, ...], int] = {}
     kept: list[AnswerRecord] = []
-    dropped: list[AnswerRecord] = []
     for record in ranked_children:
         # 会話の添付（#3100）は数えない。
         if is_attachment_evidence(record):
@@ -685,20 +682,45 @@ def cap_anchors_per_document(
         if counts.get(key, 0) < limit:
             counts[key] = counts.get(key, 0) + 1
             kept.append(record)
-        else:
-            dropped.append(record)
-    if step is not None:
-        head = {id(record) for record in kept[:top_k]}
-        removed = [record for record in ranked_children[:top_k] if id(record) not in head]
-        step.result(f"文書ごとの上限 {limit} 件: {len(dropped)} 件を外しました（上位 {top_k} 件のうち {len(removed)} 件）")
-        # 外した候補と、代わりに起点に入った候補（#2341）。
-        if removed:
-            step.add("外した候補:", *numbered([record_label(record) for record in removed]))
-            original = {id(record) for record in ranked_children[:top_k]}
-            raised = [record for record in kept[:top_k] if id(record) not in original]
-            if raised:
-                step.add("代わりに起点に入った候補:", *numbered([record_label(record) for record in raised]))
     return kept
+
+
+def record_document_cap(
+    step: Any,
+    ranked_children: Sequence[AnswerRecord],
+    kept: Sequence[AnswerRecord],
+    settings: Settings,
+    *,
+    top_k: int,
+    max_records: int,
+    select_anchors: Callable[[Sequence[AnswerRecord]], Sequence[AnswerRecord]],
+) -> None:
+    """文書ごとの上限の結果（外した候補と、代わりに起点に入った候補）を工程の詳細に書く（#2341）。
+
+    起点は ``top_k`` に加えて親の枠（``max_records``）と同じ親の起点の上限でも切られる。代わりに起点に入った候補は、
+    上限の前後の候補から実際の起点の選び方（select_anchors）で選んだ起点を比べて出し、上位 ``top_k`` 件に繰り上がった
+    が起点に入らなかった候補は分けて書く（#5242）。
+    """
+    limit = int(getattr(settings, "max_anchors_per_document", 0) or 0)
+    head = {id(record) for record in kept[:top_k]}
+    removed = [record for record in ranked_children[:top_k] if id(record) not in head]
+    dropped = len(ranked_children) - len(kept)
+    step.result(f"文書ごとの上限 {limit} 件: {dropped} 件を外しました（上位 {top_k} 件のうち {len(removed)} 件）")
+    if removed:
+        step.add("外した候補:", *numbered([record_label(record) for record in removed]))
+    before = {retrieval_record_id(record) for record in select_anchors(ranked_children)}
+    after = {retrieval_record_id(record) for record in select_anchors(kept)}
+    raised = [record for record in kept if retrieval_record_id(record) in after - before]
+    if raised:
+        step.add("代わりに起点に入った候補:", *numbered([record_label(record) for record in raised]))
+    original = {id(record) for record in ranked_children[:top_k]}
+    held = [record for record in kept[:top_k] if id(record) not in original and retrieval_record_id(record) not in after]
+    if held:
+        per_parent = _max_anchors_per_parent(settings)
+        step.add(
+            f"上位 {top_k} 件に繰り上がったが起点に入らなかった候補（親の枠 {max_records} 件・同じ親の起点の上限 {per_parent} 件）:",
+            *numbered([record_label(record) for record in held]),
+        )
 
 
 def _bundle_context(
@@ -1144,7 +1166,18 @@ def build_adb_hybrid_answer_context(
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) > 0:
         with _execution_step("文書ごとの上限", "同じ文書の候補が起点を占めないよう、1 つの文書から採る候補を上限までにします。") as step:
             step.input({"候補": candidate_snapshot(ranked_children), "起点数": top_k, "文書ごとの上限": settings.max_anchors_per_document})
-            kept_children = cap_anchors_per_document(ranked_children, settings, top_k=top_k, step=step)
+            kept_children = cap_anchors_per_document(ranked_children, settings)
+            record_document_cap(
+                step,
+                ranked_children,
+                kept_children,
+                settings,
+                top_k=top_k,
+                max_records=max_records,
+                select_anchors=lambda records: _cut_anchors(
+                    question, records, active_records, settings, top_k=top_k, max_records=max_records
+                ),
+            )
             step.output({"処理後の候補": candidate_snapshot(kept_children)})
     anchors = AnswerContext(
         records=[],
@@ -1248,7 +1281,7 @@ def fill_answer_context(
     """
     max_records = _max_context_records(settings) if max_records is None else max_records
     # 文書ごとの上限（#5165）は主の検索の工程で記録済み。同じ規則で同じ候補を残す。
-    kept_children = cap_anchors_per_document(list(anchors.ranked_candidates), settings, top_k=top_k)
+    kept_children = cap_anchors_per_document(list(anchors.ranked_candidates), settings)
     main_pool = {record_context_key(record): record for record in anchors.expansion_records}
     active_records = list(main_pool.values())
     supplement_records = list({key: record for record in supplement_pool if (key := record_context_key(record)) not in main_pool}.values())
