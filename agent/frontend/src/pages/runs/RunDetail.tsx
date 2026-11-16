@@ -5,6 +5,7 @@ import { FileText, PlayCircle, RefreshCw } from "lucide-react";
 import {
   AnswerNotice,
   Banner,
+  CombinedBanner,
   Button,
   ChatSqlBlock,
   Disclosure,
@@ -13,7 +14,6 @@ import {
   ListSkeleton,
   ObjectActionBar,
   OpenConversationAction,
-  ProcessFailureNotice,
   RunDetailLayout,
   RunUsedModels,
   RunDetailSection,
@@ -32,6 +32,7 @@ import {
   CollapsedListToggle,
   useCollapsedList,
   operationTimestampMs,
+  processFailureBannerItem,
 } from "@production-ready/ui";
 import {
   agentApi,
@@ -236,42 +237,69 @@ export function RunDetail({
             alert={
               <>
                 <RunProgressIndicator run={run} steps={timelineSteps} />
-                {sseState.status === "failed" && CANCELLABLE_RUN_STATUSES.includes(run.status) ? <Banner severity="warning" title={t("run.stream.stoppedTitle")} action={<Button variant="secondary" size="sm" icon={RefreshCw} onClick={sseState.reconnect}>{t("run.stream.reconnect")}</Button>}>
-                  <span data-testid="run-stream-stopped">{t("run.stream.sseFailed")}</span>
-                </Banner> : null}
-                {waitingForExecutor ? (
-                  // 操作のボタンは出さず、待っている相手を出す（messaging.md §10。info の Banner。#1954）。
-                  <div data-testid="run-waiting-for-executor">
-                    <Banner severity="info" title={t("run.waitingForExecutor", { name: executorName })}>
-                      {t("run.waitingForExecutorDetail")}
-                    </Banner>
-                  </div>
-                ) : run.status === "waiting_approval" ? (
-                  <Banner severity="warning" title={t("run.waitingApproval")}>
-                    {pendingApproval?.tool_call.name}
-                  </Banner>
-                ) : null}
-                {failure ? (
-                  // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・「詳細」。#2342）。
-                  <ProcessFailureNotice failure={failure} labels={processFailureLabels()} testId="run-failure" />
-                ) : null}
-                {unknownWrites.length > 0 ? (
-                  <div data-testid="run-outcome-unknown">
-                    <Banner severity="warning" title={t("run.outcomeUnknown.title")}>
-                      <p>{t("run.outcomeUnknown.detail")}</p>
-                      <ul>
-                        {unknownWrites.map((item) => (
-                          <li key={item.stepId}>
-                            {t("run.outcomeUnknown.item", {
-                              tool: toolTitles[item.toolName] ?? item.toolName,
-                              key: item.operationKey,
-                            })}
-                          </li>
-                        ))}
-                      </ul>
-                    </Banner>
-                  </div>
-                ) : null}
+                {/* 実行の状況の案内（失敗・通知の途切れ・待ち・結果の不明な書き込み）は 1 つの枠（messaging.md §3.4.3。#5183）。
+                    失敗は 3 製品共通の失敗のカードの内容（チャットと同じ 1 文目・「詳細」。§9.1。#2342）を枠の項目にする（#5226）。 */}
+                <CombinedBanner
+                  testId="run-status-notice"
+                  items={[
+                    failure
+                      ? processFailureBannerItem({ failure, labels: processFailureLabels(), testId: "run-failure" })
+                      : null,
+                    sseState.status === "failed" && CANCELLABLE_RUN_STATUSES.includes(run.status)
+                      ? {
+                          id: "stream-stopped",
+                          severity: "warning",
+                          title: t("run.stream.stoppedTitle"),
+                          action: (
+                            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={sseState.reconnect}>
+                              {t("run.stream.reconnect")}
+                            </Button>
+                          ),
+                          children: <span data-testid="run-stream-stopped">{t("run.stream.sseFailed")}</span>,
+                        }
+                      : null,
+                    waitingForExecutor
+                      ? {
+                          // 操作のボタンは出さず、待っている相手を出す（messaging.md §10。info。#1954）。
+                          id: "waiting-for-executor",
+                          severity: "info",
+                          title: t("run.waitingForExecutor", { name: executorName }),
+                          children: t("run.waitingForExecutorDetail"),
+                          testId: "run-waiting-for-executor",
+                        }
+                      : run.status === "waiting_approval"
+                        ? {
+                            id: "waiting-approval",
+                            severity: "warning",
+                            title: t("run.waitingApproval"),
+                            children: pendingApproval?.tool_call.name,
+                          }
+                        : null,
+                    unknownWrites.length > 0
+                      ? {
+                          id: "outcome-unknown",
+                          severity: "warning",
+                          title: t("run.outcomeUnknown.title"),
+                          testId: "run-outcome-unknown",
+                          children: (
+                            <>
+                              <p>{t("run.outcomeUnknown.detail")}</p>
+                              <ul>
+                                {unknownWrites.map((item) => (
+                                  <li key={item.stepId}>
+                                    {t("run.outcomeUnknown.item", {
+                                      tool: toolTitles[item.toolName] ?? item.toolName,
+                                      key: item.operationKey,
+                                    })}
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
+                          ),
+                        }
+                      : null,
+                  ]}
+                />
 
               </>
             }

@@ -30,6 +30,9 @@ from .oci_auth import load_oci_config_without_prompt
 logger = logging.getLogger(__name__)
 
 SENSITIVE_VALUE_MASK = "[機微情報]"
+# 入力を止めたときの API の error code（3 製品で同じ値。画面は送信の失敗と分け、再送信を出さない。
+# MCP のツールのエラーも同じ値。#5191）。
+GUARDRAIL_BLOCKED_CODE = "GUARDRAIL_BLOCKED"
 # content moderation・prompt injection を検出とみなす score（OCI の応答は 0.0 / 1.0）。
 DETECTION_THRESHOLD = 0.5
 # 検査の待ち時間の上限（秒）。SDK の再試行は切るので、届かないときはこの時間で止める。

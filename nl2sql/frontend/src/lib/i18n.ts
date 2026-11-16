@@ -1667,6 +1667,8 @@ const nl2sqlJa = {
   "nl2sql.selectAiFeedbackAdd.failed": "フィードバック保存に失敗しました。入力内容と通信状態を確認して再試行してください。",
   "nl2sql.error.loadFailed": "NL2SQL データの読込に失敗しました。",
   "nl2sql.error.submitFailed": "SQL の生成と実行を開始できませんでした。",
+  "nl2sql.guardrail.queryGuidance":
+    "同じ質問のままでは、もう一度確認しても SQL を生成しても同じ結果になります。質問の欄で内容を書き換えてから、もう一度操作してください。",
   "nl2sql.error.previewFailed": "SQL プレビューの生成に失敗しました。",
   "nl2sql.error.executePreviewFailed": "プレビュー SQL の実行に失敗しました。",
   "nl2sql.error.executeSqlFailed": "SQL の実行に失敗しました。",

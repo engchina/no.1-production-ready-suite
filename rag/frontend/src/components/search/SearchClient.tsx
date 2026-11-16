@@ -8,6 +8,8 @@ import {
   PageBody,
   PageHeader,
   Banner,
+  CombinedBanner,
+  type CombinedBannerItem,
   Button,
   FieldActionRow,
   FormGrid,
@@ -446,6 +448,20 @@ export function SearchClient() {
   const awaitingClarification = answerOutcome === "needs_clarification";
   const noResults = phase === "done" && citations.length === 0 && !awaitingClarification && answerOutcome !== "needs_human";
   const answerMode = run?.generateAnswer ?? false;
+  // 安全チェックの注意（個人情報のマスクなど）。回答の案内と同じ枠に入れる（#5183）。
+  const guardrailItem: CombinedBannerItem | null = meta?.guardrail_warnings.length
+    ? {
+        id: "guardrail",
+        severity: "warning",
+        testId: "search-guardrail-warning",
+        children: (
+          <>
+            <span className="font-medium">{t("search.guardrail")}: </span>
+            {meta.guardrail_warnings.join(" / ")}
+          </>
+        ),
+      }
+    : null;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
   // 処理の経過の行（共通の span の表の snapshot を実行の trace の API で読む。チャットと同じ共通の組み立て。#3226）。
@@ -772,13 +788,8 @@ export function SearchClient() {
             />
           ) : (
             <>
-              {/* 安全チェック警告 */}
-              {meta?.guardrail_warnings.length ? (
-                <Banner severity="warning">
-                  <span className="font-medium">{t("search.guardrail")}: </span>
-                  {meta.guardrail_warnings.join(" / ")}
-                </Banner>
-              ) : null}
+              {/* 安全チェックの注意。回答を出したときは回答の案内と同じ枠（回答のカードの中。messaging.md §3.4.3。#5183）。 */}
+              {guardrailItem && !(answerMode && meta && phase === "done") ? <CombinedBanner items={[guardrailItem]} /> : null}
 
               {phase === "cancelled" ? (
                 <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg-muted" role="status">
@@ -823,7 +834,7 @@ export function SearchClient() {
                       }
                     />
                     {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下（「詳細」に畳まない。#2096）。 */}
-                    {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} /> : null}
+                    {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} extra={[guardrailItem]} /> : null}
                     {/*
                       回答の下は 3 製品のチャットと同じ共通の並び（#2707）: 回答の注意書き（#2405）→ 根拠の一覧 → 評価
                       （評価は回答の枠の最後。根拠を確かめてから評価できるよう、その後に置く。#1202 / #1420。

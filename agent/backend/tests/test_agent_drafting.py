@@ -327,7 +327,7 @@ def test_suggestion_checks_the_description_before_candidates_and_the_model(
     blocked = client.post("/api/agents/draft-suggestion", json={"description": ATTACK})
 
     assert blocked.status_code == 422, blocked.text
-    assert "guardrail_blocked" in blocked.text
+    assert "GUARDRAIL_BLOCKED" in blocked.text
     assert events == ["guardrail"]
     model_calls_when_blocked = len(model.calls)
     assert model_calls_when_blocked == 0

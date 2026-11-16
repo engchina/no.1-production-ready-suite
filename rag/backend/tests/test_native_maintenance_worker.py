@@ -181,3 +181,20 @@ async def test_stopped_background_loop_never_claims() -> None:
     store = QueueStore()
     await run_native_maintenance_loop(stop, store=store)
     assert store.optimize_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_failure_log_keeps_only_the_oracle_error_codes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """時間切れと他の失敗を見分けられるよう、コードだけを残し本文は残さない(#5199)。"""
+
+    class TimedOut(QueueStore):
+        async def optimize(self, lease: MaintenanceLease) -> None:
+            raise RuntimeError("DPY-4024: 合成の本文 secret-sql")
+
+    with caplog.at_level("WARNING", logger="app.rag.native_index_maintenance"):
+        assert await run_maintenance_once(TimedOut(), "worker-a") == "failed"
+    record = next(r for r in caplog.records if r.getMessage() == "native_index_maintenance_failed")
+    assert record.__dict__["oracle_error_codes"] == ["DPY-4024"]
+    assert "secret-sql" not in str(record.__dict__)

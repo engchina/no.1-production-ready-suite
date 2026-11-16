@@ -241,8 +241,10 @@ export {
   ProcessFailureNotice,
   failedStepName,
   processFailureDetails,
+  processFailureBannerItem,
   processFailureFacts,
   type ProcessFailure,
+  type ProcessFailureBannerItemOptions,
   type ProcessFailureLabels,
   type ProcessFailureNoticeProps,
 } from "./components/feedback/process-failure";
@@ -453,6 +455,13 @@ export {
 // チャットの回答のカードの末尾の並び（注意書き → 回答の根拠 → 評価。3 製品共通。#2707）
 export { AnswerFooter, type AnswerFooterProps } from "./components/chat/answer-footer";
 export {
+  ChatGuardrailNotice,
+  DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS,
+  type ChatGuardrailNoticeLabels,
+  type ChatGuardrailNoticeProps,
+} from "./components/chat/chat-guardrail-notice";
+export { GUARDRAIL_BLOCKED_CODE, isGuardrailBlockedError } from "./lib/guardrail";
+export {
   ChatAnswer,
   ChatPendingTurn,
   ChatTurn,
@@ -641,6 +650,8 @@ export {
 export { OneTimeSecret, type OneTimeSecretProps } from "./components/feedback/one-time-secret";
 export {
   PreconditionBanner,
+  preconditionBannerItem,
+  type PreconditionBannerItemOptions,
   type PreconditionBannerLink,
   type PreconditionBannerProps,
 } from "./components/feedback/precondition-banner";

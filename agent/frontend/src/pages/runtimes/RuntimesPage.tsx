@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Database, HardDrive, RefreshCw, Server, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import {
   Banner,
+  CombinedBanner,
   ButtonLink,
   Card,
   CardContent,
@@ -205,48 +206,56 @@ function StorageCard({ status }: { status: RuntimeStorageStatus }) {
             </>
           ) : null}
         </dl>
-        {skippedRuns + skippedAgents > 0 ? (
-          <Banner
-            severity="warning"
-            title={t("storage.skipped.title")}
-          >
-            <div className="space-y-2" data-testid="runtime-storage-skipped">
-              <p>{t("storage.skipped.body", { runs: skippedRuns, agents: skippedAgents })}</p>
-              <p>{t("storage.skipped.fix")}</p>
-            </div>
-          </Banner>
-        ) : null}
-        {!status.persistent ? (
-          <Banner
-            severity="warning"
-            title={t("storage.notice.title")}
-            action={
-              status.reason === "database_not_configured" && canOpenDatabase ? (
-                <ButtonLink
-                  to={APP_ROUTES.settingsDatabase}
-                  linkComponent={Link}
-                  size="sm"
-                  icon={Database}
-                  testId="runtime-storage-open-database-settings"
-                >
-                  {t("storage.fix.openDatabaseSettings")}
-                </ButtonLink>
-              ) : undefined
-            }
-          >
-            <div className="space-y-2" data-testid="runtime-storage-fix">
-              <p>{t(storageReasonKey(status))}</p>
-              <p>{t(storageFixKey(status))}</p>
-              {/* 既定（auto）なら設定は要らない。メモリなどを明示しているときだけ、直す値を出す。 */}
-              {status.configured_backend !== "auto" && status.reason !== "restart_required" ? (
-                <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  <span>{t("storage.fix.setting")}</span>
-                  <code className="break-all font-mono">{PERSISTENT_STORAGE_SETTING}</code>
-                </p>
-              ) : null}
-            </div>
-          </Banner>
-        ) : null}
+        {/* 保存先の案内は保存先のカードの 1 つの枠（読み込めなかった記録と保存しないことを並べる。messaging.md §3.4.3。#5183）。 */}
+        <CombinedBanner
+          items={[
+            skippedRuns + skippedAgents > 0
+              ? {
+                  id: "skipped",
+                  severity: "warning",
+                  title: t("storage.skipped.title"),
+                  children: (
+                    <div className="space-y-2" data-testid="runtime-storage-skipped">
+                      <p>{t("storage.skipped.body", { runs: skippedRuns, agents: skippedAgents })}</p>
+                      <p>{t("storage.skipped.fix")}</p>
+                    </div>
+                  ),
+                }
+              : null,
+            !status.persistent
+              ? {
+                  id: "not-persistent",
+                  severity: "warning",
+                  title: t("storage.notice.title"),
+                  action:
+                    status.reason === "database_not_configured" && canOpenDatabase ? (
+                      <ButtonLink
+                        to={APP_ROUTES.settingsDatabase}
+                        linkComponent={Link}
+                        size="sm"
+                        icon={Database}
+                        testId="runtime-storage-open-database-settings"
+                      >
+                        {t("storage.fix.openDatabaseSettings")}
+                      </ButtonLink>
+                    ) : undefined,
+                  children: (
+                    <div className="space-y-2" data-testid="runtime-storage-fix">
+                      <p>{t(storageReasonKey(status))}</p>
+                      <p>{t(storageFixKey(status))}</p>
+                      {/* 既定（auto）なら設定は要らない。メモリなどを明示しているときだけ、直す値を出す。 */}
+                      {status.configured_backend !== "auto" && status.reason !== "restart_required" ? (
+                        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                          <span>{t("storage.fix.setting")}</span>
+                          <code className="break-all font-mono">{PERSISTENT_STORAGE_SETTING}</code>
+                        </p>
+                      ) : null}
+                    </div>
+                  ),
+                }
+              : null,
+          ]}
+        />
       </CardContent>
     </Card>
   );

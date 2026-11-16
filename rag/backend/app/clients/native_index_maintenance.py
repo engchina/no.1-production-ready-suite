@@ -33,6 +33,8 @@ class MaintenanceCursor(Protocol):
 class MaintenanceConnection(Protocol):
     def cursor(self) -> MaintenanceCursor: ...
 
+    def commit(self) -> object: ...
+
 
 @dataclass(frozen=True, slots=True)
 class NativeVectorCounts:
@@ -94,18 +96,30 @@ def _verified_counts(
 
 
 def _optimize(
+    connection: MaintenanceConnection,
     cursor: MaintenanceCursor,
     statement: str,
     step: str,
     index_name: str,
     before_call: Callable[[], None],
+    before_verify: Callable[[], None],
 ) -> None:
+    """整理を 1 回実行し、返ったら確定する。
+
+    semantic(``SECTION_SEMANTIC_INDEX``)の OPTIMIZE_INDEX は transaction を開いたまま返る
+    (FULL は暗黙に commit する)。確定しないと接続の返却・close で rollback され、要求は完了に
+    なっても残骸は残り、次の回が同じ整理を最初からやり直す(#5199)。確定は整理が返った後の
+    呼出しなので、整理の期限ではなく ``before_verify`` の上限で行う。
+    """
     before_call()
     started = monotonic()
     cursor.execute(statement, {"index_name": index_name})
+    optimize_seconds = round(monotonic() - started, 1)
+    before_verify()
+    connection.commit()
     logger.info(
         "native_index_maintenance_optimize_returned",
-        extra={"step": step, "optimize_seconds": round(monotonic() - started, 1)},
+        extra={"step": step, "optimize_seconds": optimize_seconds},
     )
 
 
@@ -119,8 +133,8 @@ def maintain_native_vectors(
 ) -> NativeMaintenanceResult:
     """commit済みの変更だけを、業務接続とは別の接続で整理する。
 
-    OPTIMIZE_INDEX は暗黙commitを行うため、業務transactionや行lockを持つ
-    接続を渡さない。検索要求からは呼ばず、永続化した整理要求を消費する
+    整理の結果は整理ごとに commit で確定するため(FULL は暗黙にも commit する)、業務
+    transactionや行lockを持つ接続を渡さない。検索要求からは呼ばず、永続化した整理要求を消費する
     workerだけが呼ぶ。件数検査もそのworkerに限定する。
 
     検索の候補の不足を起こす $VR の残骸を先に片付ける(#4097)。呼出しの成功では完了とせず、
@@ -140,14 +154,30 @@ def maintain_native_vectors(
         after = before
         strategy = "full"
         if plan != "full":
-            _optimize(cursor, _SEMANTIC_OPTIMIZE_SQL, "semantic", index_name, before_call)
+            _optimize(
+                connection,
+                cursor,
+                _SEMANTIC_OPTIMIZE_SQL,
+                "semantic",
+                index_name,
+                before_call,
+                before_verify,
+            )
             after = _verified_counts(cursor, index_name, before_verify)
             strategy = "semantic"
         if plan != "semantic":
             # maxtimeで部分完了を正常終了させると、要求を誤って消すため指定しない。
             # 専用接続のcall_timeoutで時間を制限する。
             try:
-                _optimize(cursor, _FULL_OPTIMIZE_SQL, "full", index_name, before_call)
+                _optimize(
+                    connection,
+                    cursor,
+                    _FULL_OPTIMIZE_SQL,
+                    "full",
+                    index_name,
+                    before_call,
+                    before_verify,
+                )
             except Exception as exc:
                 if plan != "semantic_then_full" or after.has_deleted_vectors:
                     raise

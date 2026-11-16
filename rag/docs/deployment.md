@@ -221,6 +221,24 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5224 削除したファイル準備の変換方式が残る文書レシピの読み込み）
+
+削除したファイル準備の変換方式「PDF を画像として読み直す」（`pdf_to_page_images`。#3347）と「PIIマスク」（`pii_redact`。#3358）が
+文書レシピ・KB 構築設定・取込 job の `processing_config`・`RAG_PREPROCESS_PROFILE` に残っていると、読み込みの検証エラーで
+文書詳細のレシピ・chunk_set の一覧・再取込・実体・別名索引の作り直しの CLI などが失敗していた。#2042 の 2 つの方式と同じく、
+読み込み時に「変換なし」（`passthrough`）として扱うようにした（警告のログ `removed_preprocess_profile_normalized` を出し、
+次に保存すると旧値は消える）。DDL・データの移行は要らない。
+
+- 取込済みの chunk は今のまま。再処理すると「変換なし」で取り込み直す。PIIマスクの文書は、再処理するとマスクしないで取り込む
+  （PIIマスクは #3358 で削除済み。回答の安全チェックは変わらない）。マスクした内容のまま残したいときは、マスクしたファイルを
+  別の文書として取り込み直す。
+- 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` だけでよい。実体・別名索引の作り直し（#5178）で失敗していた
+  chunk_set は、`rag/backend` で次を実行すると対象に戻ったことを確かめられる。
+
+  ```bash
+  sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.entity_index_cli rebuild --all --dry-run
+  ```
+
 ## 既存環境の更新手順（#5187 実体・別名索引の構築と実体・別名による検索拡張を既定 ON にする）
 
 実体・別名索引の構築（`RAG_ENTITY_INDEX_ENABLED`）と、実体・別名による検索拡張（`RAG_ENTITY_EXPANSION_ENABLED`）の全体の
@@ -639,8 +657,8 @@ API（415）で「音声・動画のファイル（MP3・WAV・OGG・MP4 など�
 
 - **設定**: `RAG_PREPROCESS_PII_REDACT_SERVICE_URL` は読まない（`backend/.env` に残っていても無視する。消してよい）。
   `RAG_PREPROCESS_PROFILE=pii_redact` や、文書レシピ・KB 構築設定の `preprocess_profile` に `pii_redact` が残っていれば、
-  読み替えずに検証エラーになる。更新の前に別の変換方式（多くは「変換なし」）を選んで保存し直す。PIIマスクで取り込んだ文書の
-  chunk は今のまま（再処理すると、選び直した方式で取り込み直す）。
+  読み込み時に「変換なし」として扱う（#5224。それまでは検証エラーだった）。PIIマスクで取り込んだ文書の chunk は今のまま
+  （再処理すると、レシピで選んだ方式で取り込み直す）。
 - **データベース**: DDL・データの移行は要らない。
 - **本番（OCI Compute）**: `sudo platform/deploy/suite-update.sh` だけでよい。`rag/init_script.sh` は以前の stack が書いた
   `/u01/aipoc/props/rag_services.txt` の `preprocess-pii-redact` を読み飛ばして一覧を書き戻し、その unit を止めて
@@ -664,7 +682,7 @@ PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン D
 
 - **設定**: `RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL` は読まない（`backend/.env` に残っていても無視する。消してよい）。
   `RAG_PREPROCESS_PROFILE=pdf_to_page_images` や、文書レシピ・KB 構築設定の `preprocess_profile` に `pdf_to_page_images`
-  が残っていれば、読み替えずに検証エラーになる。更新の前に別の変換方式（多くは「変換なし」）を選んで保存し直す。
+  が残っていれば、読み込み時に「変換なし」として扱う（#5224。それまでは検証エラーだった）。
 - **データベース**: DDL・データの移行は要らない。
 - **本番（OCI Compute）**: `sudo platform/deploy/suite-update.sh` だけでよい。`rag/init_script.sh` は以前の stack が書いた
   `/u01/aipoc/props/rag_services.txt` の `preprocess-pdf-to-page-images` を読み飛ばして一覧を書き戻し、その unit を止めて

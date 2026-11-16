@@ -27,7 +27,7 @@ from app.rag.preprocess_strategy import (
     preprocess_runtime_settings,
     resolve_preprocess_profile,
 )
-from app.schemas.document import SourceModality, SourceProfile
+from app.schemas.document import DocumentProcessingConfig, SourceModality, SourceProfile
 from app.schemas.extraction import StructuredExtraction
 
 
@@ -106,11 +106,14 @@ def test_resolve_preprocess_profile_normalizes() -> None:
     )
 
 
-@pytest.mark.parametrize("removed", ["url_to_markdown", "image_enhance", " Image_Enhance "])
+@pytest.mark.parametrize(
+    "removed",
+    ["url_to_markdown", "image_enhance", " Image_Enhance ", "pdf_to_page_images", "pii_redact"],
+)
 def test_removed_preprocess_profiles_fall_back_to_passthrough(
     removed: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """削除した変換方式(#2042)が保存済みの設定・レシピに残っていても「変換なし」で読める。"""
+    """削除した変換方式(#2042・#3347・#3358)が保存済みの設定・レシピに残っていても「変換なし」で読める。"""
     with caplog.at_level("WARNING"):
         assert Settings(rag_preprocess_profile=removed).rag_preprocess_profile == "passthrough"
     assert "removed_preprocess_profile_normalized" in caplog.text
@@ -121,6 +124,12 @@ def test_removed_preprocess_profiles_fall_back_to_passthrough(
     )
     assert config.ingestion.preprocess_profile == "passthrough"
     assert config.ingestion.chunk_size == 900
+    # 文書レシピ(extra="forbid")も同じ読み込みの境界で読み替える(#5224)。
+    recipe = DocumentProcessingConfig.model_validate(
+        {"preprocess_profile": removed, "chunk_size": 900}
+    )
+    assert recipe.preprocess_profile == "passthrough"
+    assert recipe.chunk_size == 900
     names = [status.name for status in preprocess_runtime_settings(Settings()).profiles]
     assert removed.strip().casefold() not in names
 

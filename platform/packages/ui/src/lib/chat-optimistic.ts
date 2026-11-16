@@ -9,8 +9,11 @@
  * ここは 3 製品で同じ「仮のメッセージ」の形だけを持つ。
  */
 
-/** 仮のメッセージの状態。確定したら製品が仮のメッセージを外すので、`sent` は持たない。 */
-export type OptimisticChatStatus = "sending" | "failed" | "stopped";
+/**
+ * 仮のメッセージの状態。確定したら製品が仮のメッセージを外すので、`sent` は持たない。`blocked` は安全チェック
+ * （OCI Guardrails）が止めた質問（送り直しても同じ結果になるので、送信の失敗の `failed` と分ける。#5191）。
+ */
+export type OptimisticChatStatus = "sending" | "failed" | "blocked" | "stopped";
 
 export interface OptimisticChatMessage {
   /** 画面の中だけの ID（React の key・data 属性）。サーバーの ID ではない。 */

@@ -44,6 +44,7 @@ import {
 import { useNowMs } from "@/lib/use-now-ms";
 import {
   Banner,
+  CombinedBanner,
   Button,
   type EntityAction,
   FieldActionRow,
@@ -436,28 +437,31 @@ export function DocumentRecipeManager({
         <RecipeQueueWaitNote recipe={selected} />
         {languagePack?.(selected)}
 
-        {/* 作成後に項目の定義などが変わったレイヤー（#550）。自動では作り直さず、既存の「再処理」へ案内する。 */}
-        {layerRebuild.layers.length ? (
-          <div className="mt-3" data-testid="recipe-layer-rebuild">
-            <Banner severity="warning">
-              {t("documents.recipes.layerRebuildBanner", {
-                layers: layerRebuild.layers
-                  .map((layer) => t(LAYER_LABEL_KEYS[layer]))
-                  .join(t("documents.recipes.layerRebuildJoin")),
-                inputs: rebuildInputLabels(layerRebuild.inputs),
-              })}
-            </Banner>
-          </div>
-        ) : null}
-
-        {/* 失敗の原因本文は上部の状態メッセージスロット(DocumentWorkspace)が正本(messaging-spec §9 P2)。
-            ここは「検索は旧出力で継続中」という状況提示のみ残す。再処理の job が順番待ち・実行中の間は、
-            前回の失敗を出さない(#2687)。 */}
-        {selected.status === "ERROR" && selected.searchable && !recipeIsActive(selected) ? (
-          <Banner severity="warning" className="mt-3">
-            {t("documents.recipes.staleError")}
-          </Banner>
-        ) : null}
+        {/* 作成後に項目の定義などが変わったレイヤー（#550。自動では作り直さず、既存の「再処理」へ案内する）と、
+            検索は旧出力で継続中という状況は、レシピの区画の 1 つの枠（messaging.md §3.4.3。#5183）。
+            失敗の原因本文は上部の状態メッセージスロット(DocumentWorkspace)が正本(messaging-spec §9 P2)。
+            再処理の job が順番待ち・実行中の間は、前回の失敗を出さない(#2687)。 */}
+        <CombinedBanner
+          className="mt-3"
+          items={[
+            layerRebuild.layers.length
+              ? {
+                  id: "layer-rebuild",
+                  severity: "warning",
+                  testId: "recipe-layer-rebuild",
+                  children: t("documents.recipes.layerRebuildBanner", {
+                    layers: layerRebuild.layers
+                      .map((layer) => t(LAYER_LABEL_KEYS[layer]))
+                      .join(t("documents.recipes.layerRebuildJoin")),
+                    inputs: rebuildInputLabels(layerRebuild.inputs),
+                  }),
+                }
+              : null,
+            selected.status === "ERROR" && selected.searchable && !recipeIsActive(selected)
+              ? { id: "stale-error", severity: "warning", children: t("documents.recipes.staleError") }
+              : null,
+          ]}
+        />
         {processError ? (
           <FormStatus
             tone="danger"

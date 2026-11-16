@@ -6254,7 +6254,9 @@ def _load_authorized_query_session(
 
 
 def _raise_domain_error(exc: Exception) -> NoReturn:
-    if isinstance(exc, HTTPException):
+    if isinstance(exc, (HTTPException, GuardrailBlockedError)):
+        # 安全チェックの停止は app の exception handler が code（GUARDRAIL_BLOCKED）を残した 422 に
+        # する（#5191）。ここで文字列の detail にすると code が落ちる。
         raise exc
     if isinstance(exc, OthersContentForbiddenError):
         # 他の利用者の会話の続きで確認を始めた system_admin（#3244）。
@@ -6273,7 +6275,7 @@ def _raise_domain_error(exc: Exception) -> NoReturn:
         ),
     ):
         status_code = 409
-    elif isinstance(exc, (OntologyGateBlockedError, GuardrailBlockedError)):
+    elif isinstance(exc, OntologyGateBlockedError):
         status_code = 422
     elif isinstance(exc, RequirementAiUnavailableError):
         status_code = 503

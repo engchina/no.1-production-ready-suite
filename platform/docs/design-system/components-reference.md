@@ -1121,6 +1121,7 @@ interface CombinedBannerItem {
   action?: ReactNode;         // この項目の操作（導線・再試行）
   progress?: ReactNode;       // action で始めた処理の進行（Banner の progress と同じ）
   testId?: string;
+  elementId?: string;         // 項目の要素の DOM の id（aria-describedby の先）
 }
 
 interface CombinedBannerProps {
@@ -1139,10 +1140,11 @@ declare function combinedBannerItems(items: CombinedBannerProps["items"]): Combi
 | 項目は重い順、同じ重さは渡した順。最も重い項目の見出しが枠の先頭 | 最も重大で対処できる事柄を上に（messaging §9 P3） |
 | 項目が 1 つなら `Banner` と同じ形。2 つ以上なら `<ul>` の項目を、枠の色の区切り線（`divide-<tone>-border`）で並べる。項目ごとに見出し・本文・操作・進行 | 1 つの枠のまま、事柄の切れ目と数が見え、読み上げでも項目の数が分かる |
 | 見出しも本文も無い項目と偽の値は出さず、出す項目が無ければ何も描かない | 空の面を描かない（messaging §9 P4）。`cond && { … }` で渡せる |
-| 項目に role を持つ部品（`Banner`・`DatabaseUnavailableNotice` の banner）を入れない。DB の縮退の案内は `useDatabaseUnavailableBannerItem`（`@production-ready/system-settings`）で項目にする | 枠の中に live region を重ねない |
+| 項目に role を持つ部品（`Banner`・`ProcessFailureNotice`・`PreconditionBanner`・`DatabaseUnavailableNotice` の banner）を入れない。共有の案内は項目の形で入れる: 処理の失敗のカードは `processFailureBannerItem`、操作の前提の案内は `preconditionBannerItem`（#5226）、DB の縮退の案内は `useDatabaseUnavailableBannerItem`（`@production-ready/system-settings`） | 枠の中に live region を重ねない。項目の形は単独の部品と同じ関数が内容を作るので、製品で部品を書き直さない |
+| `elementId` は項目の要素（1 つなら `div`、2 つ以上なら `li`）の DOM の `id` | 押せなくした操作の `aria-describedby` を、枠の中の前提の項目に結ぶ |
 
 - 単体テストは `packages/ui/tests/combined-banner.test.tsx`。
-- 使う画面: 3 製品のシステムテーブルのカード（`SystemTablesCard`。状態・削除の migration・参照先のない行・前回 / 今回の失敗・再起動・閲覧専用・製品の案内（Agent の保存先））。
+- 使う画面: 3 製品のシステムテーブルのカード（`SystemTablesCard`。状態・削除の migration・参照先のない行・前回 / 今回の失敗・再起動・閲覧専用・製品の案内（Agent の保存先））、Agent の Run の詳細の概要（失敗・通知の途切れ・待ち・結果の不明な書き込み）、NL2SQL の SQL 生成評価（LLM Judge の案内と Select AI Credential の前提）、RAG のチャットの 1 つの回答（失敗・保存の失敗・回答の案内・安全チェックの注意）など。
 
 ---
 
@@ -2411,6 +2413,7 @@ messaging.md §9.1）。製品は自分の失敗の情報を `ProcessFailure` �
 | `ProcessFailureNotice` | `severity="danger"`（既定。結果が無い失敗。`role="alert"`、「詳細」は開く）/ `"warning"`（結果はあるが一部が欠けた。例: 作った回答を保存できなかった。「詳細」は閉じる）。原因が 1 文目と同じなら重ねない。値の無い「詳細」の項目は並べない |
 | `processFailureDetails(failure, labels)` | 「詳細」の並び（止まった段・エラーの種類・エラーコード・トレース ID・時刻・製品の項目） |
 | `processFailureFacts(failure, labels)` | 実行の詳細の技術的な詳細（`RunFactList`）に並べる事実。失敗のカードの「詳細」と同じ項目・同じ名前 |
+| `processFailureBannerItem(options)` | `ProcessFailureNotice` と同じ内容（見出し・原因・次の操作・「詳細」・操作）を `CombinedBannerItem` で返す。同じ区画にほかの案内があるときは、カードを並べず `CombinedBanner` の項目にする（messaging §3.4.3。#5226）。`ProcessFailureNotice` もこの関数の内容を描く |
 | `failedStepName(steps)` | 処理の経過の最後の失敗した段の名前。名前を状態で変える段階（「SQL を生成できませんでした」）は名詞の名前 `ChatProgressStep.name`（「SQL の生成」。`labelChatProgressSteps` が段階の定義の未実行の名前から付ける）を使う |
 
 - 処理の経過（`RunTimeline` / `ChatProgress`）は失敗した段を ✗ と「失敗」、失敗・停止の後に実行しなかった段を「未実行」と文字で出す（`ChatProgressLabels.notRun`）。
@@ -2474,7 +2477,8 @@ type PreconditionBannerProps = {
 | 「再試行」の `loading` は押したときだけ | 画面のフォーカスでの取り直しで回さない（buttons.md §8） |
 
 - 単体テストは `packages/ui/tests/precondition-banner.test.tsx`。
-- 使う画面: NL2SQL の Select AI Credential の事前条件（業務プロファイルの保存・SQL 生成・チャット・合成データ・SQL 生成評価。`SelectAiCredentialPrecondition`）。
+- 同じ区画にほかの案内があるときは `preconditionBannerItem(props)`（同じ props と項目の key の `itemId`）で `CombinedBanner` の項目にする（messaging §3.4.3。#5226）。`id` は項目の要素に付き、`aria-describedby` はそのまま結べる。`PreconditionBanner` もこの関数の内容を描く。
+- 使う画面: NL2SQL の Select AI Credential の事前条件（業務プロファイルの保存・SQL 生成・チャット・合成データ・SQL 生成評価。`SelectAiCredentialPrecondition`。項目の形は `selectAiCredentialPreconditionItem`。SQL 生成評価は LLM Judge の案内と 1 つの枠）。
 
 ---
 
@@ -3249,7 +3253,8 @@ function submit() {
 |---|---|
 | 送信中（`sending`）も吹き出しの見た目は送信後と同じ（薄くしない・スピナーを付けない） | ChatGPT・Claude・Gemini と同じ。待ちの表示は回答の場所の 1 つだけにする（messaging.md §3.7 の単一スピナー） |
 | 失敗（`failed`）は吹き出しの下に `failedLabel` を `AlertCircle` 付きで出す。原因と「再送信」は製品が Banner で出す | 質問の状態（送れていない）と原因・対処を分ける（messaging.md §9 P1 / P2）。色だけに頼らない |
-| 状態は `data-status`（`sending` / `sent` / `failed` / `stopped`）に出す | e2e で状態を確かめる |
+| 状態は `data-status`（`sending` / `sent` / `failed` / `blocked` / `stopped`）に出す | e2e で状態を確かめる |
+| 安全チェックが止めた質問（`blocked`。#5191）は吹き出しの下に `blockedLabel`（「安全チェックで停止しました」）を `ShieldAlert` 付きの `text-warning-fg` で出し、`failedLabel` は出さない | 送信の失敗ではない（送り直しても同じ結果）ことを、文とアイコンで分ける |
 | 仮の ID は `crypto.randomUUID` を使わず時刻と連番で作る | http の IP 直打ちなど安全でない文脈で `randomUUID` が無い |
 | `withOptimisticChatStatus(m, "sending")` は送信の時刻を数え直す。失敗・停止は送信の時刻を保つ | 再送信の経過時間を 0 から出す |
 | 会話の持ち主以外（#3244 より前の system_admin。#1928）が送った質問は `senderLabel`（`ChatTurn` は `questionSender`）に「〈名前〉 が送信」を渡し、吹き出しの上に `UserRound`（14px）付きの `text-xs text-fg-muted` の文で出す（`data-chat-sender`）。持ち主が送った質問には渡さない | 同じ会話に別の人の質問が混ざることを、色ではなく文で分かるようにする。持ち主だけの会話は今までと同じ見た目 |
@@ -3784,6 +3789,40 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
 - 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。
+- 安全チェック（OCI Guardrails）が止めた質問（API の error code が `GUARDRAIL_BLOCKED`。`isGuardrailBlockedError`）は、仮のメッセージを `withOptimisticChatStatus(m, "blocked")` にし、`failure` ではなく `blocked` に `ChatGuardrailNotice` を渡す（下の節。#5191）。
+
+## ChatGuardrailNotice / isGuardrailBlockedError — **新規**（#5191）
+
+安全チェック（OCI Guardrails）が止めた質問の、回答の場所の案内（3 製品共通）。振る舞いの規則は messaging.md §11.3。
+
+```tsx
+import { ChatGuardrailNotice, ChatPendingTurn, isGuardrailBlockedError, withOptimisticChatStatus } from "@production-ready/ui";
+
+onError: (error) => {
+  if (isGuardrailBlockedError(error)) {                      // error code だけで判定（説明の文は見ない）
+    setPending((p) => (p ? withOptimisticChatStatus(p, "blocked") : p));
+    if (!draft.trim()) setDraft(sentQuestion);              // 書き換えられるよう、空の入力欄に質問を戻す
+    return;
+  }
+  setPending((p) => (p ? withOptimisticChatStatus(p, "failed") : p));
+};
+
+<ChatPendingTurn
+  message={pending}
+  failedLabel={t("chat.sendFailed")}
+  blocked={<ChatGuardrailNotice message={sendError?.message} testId="chat-guardrail-notice" />}
+  …
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| warning の `Banner` 1 つに、理由（backend の文。無ければ既定の文）と「送り直しても同じ結果になる・書き換えて送る」の案内を出す。ボタンは置かない | 送信の失敗ではない。再送信・確認の省略は必ず同じ停止になるので出さない（messaging.md §11.3）。RAG の回答の安全チェックの警告と同じ warning |
+| 文言は `DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS`（状態の文・既定の理由・案内）。3 製品は既定の文を使う | 3 製品で同じ機能の文をそろえる（shared-features.md） |
+| 判定は `errorCode === GUARDRAIL_BLOCKED_CODE`（backend は `pr_system_settings.guardrails.GUARDRAIL_BLOCKED_CODE`） | 3 製品の `ApiError` はどれも `errorCode` を持つ。説明の文を解析しない（messaging.md §4.3） |
+| 回答前の確認への答え（自由入力）を止めたときは `subject="answer"`（`answerGuidance`「答えの内容を書き換えてから送信してください」）で確認のカードの `error` に置く。チャットではない画面（NL2SQL の SQL 生成）は `labels.guidance` を画面の操作に合わせて上書きする（#5205） | 止めた入力（質問・答え）と、書き換える場所を取り違えない |
+
+- 単体テストは `packages/ui/tests/chat-turn.test.tsx`。e2e は NL2SQL `tests/e2e/sql-chat.spec.ts`・Agent `e2e/chat.spec.ts` の「#5191」（desktop と 375px）。
 - 回答の本文は `ChatAnswerBody`（#3433）で包み、本文の前に見出し「回答」（既定 h3。`labels.heading`・`headingLevel` で変えられる）を出す。見出しは本文の中の節の見出しと同じ部品 `AnswerHeading`（`text-sm font-semibold text-fg`。`AnswerSections` の節の見出しも同じ）。回答の本文を描くときだけ使い、処理の経過だけの間・失敗・停止だけの枠・回答前の確認のカードには使わない。実行の詳細は `Section` の見出し「回答」を持つので使わない。使う所: RAG `AssistantColumn`、Agent `RunChatTurn`（NL2SQL の回答は SQL・説明・結果で、本文の節の見出しを持たないので使わない）。単体テストは `packages/ui/tests/answer-heading.test.tsx`。
 - 利用者の側が質問の文ではない往復（回答前の確認のカードで答えた往復。#1839）は、`userContent` に `ClarificationRecord`（`variant="bubble"`）を渡す。質問の吹き出しの代わりに出る。
 

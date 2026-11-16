@@ -410,6 +410,28 @@ def test_main_evidence_overlap_covers_same_chunk_parent_neighbors_and_section():
     }
 
 
+def test_main_evidence_overlap_matches_page_scoped_candidates_by_chunk():
+    """頁の範囲を絞った検索（業務ガイドの手順の参照）の候補も、同じ chunk・前後の文脈なら除く（#5197）。
+
+    合わせ込みは頁の範囲を除いた key（``chunk_identity_key``）で同じ chunk を判定し印だけにするため、除く判定も同じ key で
+    比べる。親子分割の親は合わせ込みと同じに範囲ごと（backend が範囲つきの親を別の親として読む）。
+    """
+    chunks, ranked, _active = _three_documents()
+    chunks["B3"] = _stored("B3", 3, "B", strategy="small_to_big", parent="PB")
+    records = {uid: _stored_chunk_answer_record(chunk) for uid, chunk in chunks.items()}
+    stub = Sections(chunks, document="none")
+    context, _step, _calls = _build(stub, ranked, list(records.values()))
+
+    def scoped(uid: str) -> Any:
+        return replace(records[uid], metadata={**(records[uid].metadata or {}), "context_page_ranges": '[{"start": 1, "end": 9}]'})
+
+    dependencies = AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.read)
+    with bind_dependencies(dependencies):
+        overlap = answering._main_evidence_overlap(context, _settings())
+        codes = {uid: overlap(scoped(uid)) for uid in ("C2", "C1", "B3")}
+    assert codes == {"C2": OVERLAP_SAME_CHUNK, "C1": OVERLAP_NEIGHBOR, "B3": ""}
+
+
 def test_main_evidence_overlap_without_section_map_reads_no_outline_for_other_documents():
     """章節で補う起点が無ければ、候補の章節の対応を読まない（#5175）。"""
     chunks = {**_flat("C", 3), **_flat("D", 2)}

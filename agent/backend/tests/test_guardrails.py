@@ -8,6 +8,7 @@ import anyio
 import pytest
 from agents.testing import ScriptedModel, assistant_message
 from guardrail_support import ATTACK, EMAIL, MASKED, RecordedOci, enable_guardrails
+from pr_system_settings.guardrails import GUARDRAIL_BLOCKED_CODE
 from security_support import client
 
 from app.features.agent import builtin_runtime, guardrails, runtime
@@ -29,7 +30,10 @@ def test_blocked_goal_does_not_create_a_run(oci: RecordedOci) -> None:
     before = len(runtime.runtime_repository.list_runs())
     response = client.post("/api/runs", json={"goal": ATTACK})
     assert response.status_code == 422, response.text
-    assert "guardrail_blocked" in response.text
+    # code は 3 製品で同じ値で、画面は送信の失敗と分けて再送信を出さない（#5191）。
+    body = response.json()
+    assert body["error_code"] == GUARDRAIL_BLOCKED_CODE == "GUARDRAIL_BLOCKED", body
+    assert "プロンプト攻撃" in body["error_messages"][0]
     assert len(runtime.runtime_repository.list_runs()) == before
 
 
@@ -115,7 +119,7 @@ def test_replay_checks_the_saved_goal_with_the_current_setting(
     response = client.post(f"/api/runs/{saved.id}/replay")
 
     assert response.status_code == 422, response.text
-    assert "guardrail_blocked" in response.text
+    assert GUARDRAIL_BLOCKED_CODE in response.text
     assert len(runtime.runtime_repository.list_runs()) == before
 
 
@@ -153,7 +157,7 @@ def test_confirmation_free_text_is_checked_before_it_is_recorded(
     )
 
     assert blocked.status_code == 422, blocked.text
-    assert "guardrail_blocked" in blocked.text
+    assert GUARDRAIL_BLOCKED_CODE in blocked.text
     run = runtime.runtime_repository.get_run(run_id)
     assert run.status == RunStatus.WAITING_CONFIRMATION
     assert run.confirmations[0].status == "pending"

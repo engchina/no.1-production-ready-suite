@@ -5,11 +5,12 @@ from uuid import uuid4
 import pytest
 
 from app.clients.chunk_set_retention_store import ChunkSetRetentionStore
-from app.clients.oracle import OracleClient, _NativeScope
+from app.clients.oracle import NativeScopeReuse, OracleClient, _NativeScope
 from app.config import get_settings
 from app.rag.chunking import Chunk
 from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
+from app.schemas.search import SearchMode
 
 
 async def _chunk_set(
@@ -179,3 +180,75 @@ async def test_native_search_finds_new_version_when_switch_commits_after_scope_r
 
     assert switched
     assert {hit.chunk_id.split(":")[1] for hit in hits} == {new_set}
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_reused_native_scope_finds_new_version_after_switch_between_searches() -> None:
+    """同じ回答の中で範囲を使い回しても、前の検索の後の切替で新版を返す（#4179・#5184）。"""
+    settings = get_settings().model_copy(
+        update={"rag_hybrid_search_backend": "oracle_hybrid_index"}
+    )
+    client = OracleClient(settings)
+    word = f"reuseword{uuid4().hex[:10]}"
+    kb = await client.create_knowledge_base(name=f"synthetic-reuse-{uuid4().hex[:8]}")
+    document = await client.create_document(
+        file_name="synthetic-reuse.txt",
+        object_storage_path="synthetic-reuse.txt",
+        content_type="text/plain",
+        knowledge_base_ids=[kb.id],
+    )
+    recipe = await client.ensure_default_document_recipe(document.id)
+    recipe_id = str(recipe["recipe_id"])
+    suffix = uuid4().hex[:12]
+    old_set, new_set = f"old_{suffix}", f"new_{suffix}"
+    extraction = StructuredExtraction(raw_text=word, confidence=0.9)
+
+    async def chunk_set(chunk_set_id: str) -> None:
+        await client.upsert_chunk_set(
+            chunk_set_id=chunk_set_id, document_id=document.id, recipe_id=recipe_id
+        )
+        await client.save_index(
+            document.id,
+            extraction,
+            [Chunk(index=0, text=f"{word} {chunk_set_id}", start_offset=0, end_offset=1)],
+            [[0.1] * 1536],
+            chunk_set_id=chunk_set_id,
+        )
+        await client.mark_chunk_set_indexed(
+            chunk_set_id=chunk_set_id, chunk_count=1, vector_count=1
+        )
+
+    await chunk_set(old_set)
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id, chunk_set_id=old_set, expected_base_chunk_set_id=None
+    )
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+    await chunk_set(new_set)
+
+    resolve = client._resolve_native_scope
+    resolves = 0
+
+    async def counted_resolve(filters: dict[str, str]) -> _NativeScope | None:
+        nonlocal resolves
+        resolves += 1
+        return await resolve(filters)
+
+    client._resolve_native_scope = counted_resolve  # type: ignore[method-assign]
+    reuse = NativeScopeReuse()
+    filters = {"knowledge_base_id": kb.id}
+    searches = [(word, [0.1] * 1536, SearchMode.HYBRID), (word, [0.1] * 1536, SearchMode.KEYWORD)]
+
+    async def served_sets() -> list[set[str]]:
+        results = await client.search_many(searches, 5, filters, reuse=reuse)
+        return [{hit.chunk_id.split(":")[1] for hit in hits} for hits in results]
+
+    assert await served_sets() == [{old_set}, {old_set}]
+    assert await served_sets() == [{old_set}, {old_set}]
+    assert resolves == 1
+
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id, chunk_set_id=new_set, expected_base_chunk_set_id=old_set
+    )
+    assert await served_sets() == [{new_set}, {new_set}]
+    assert await served_sets() == [{new_set}, {new_set}]
+    assert resolves == 2

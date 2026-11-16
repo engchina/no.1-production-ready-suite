@@ -43,7 +43,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { SelectAiCredentialPrecondition } from "../components/SelectAiCredentialPrecondition";
+import { selectAiCredentialPreconditionItem } from "../components/SelectAiCredentialPrecondition";
 import { enginesUseSelectAiCredential } from "../selectAiCredentialReadiness";
 import { useSelectAiCredentialReadiness } from "../useSelectAiCredentialReadiness";
 
@@ -665,7 +665,8 @@ export function EvaluationPage() {
                 </div>
               </div>
 
-              {/* LLM Judge の案内（使えない理由・判定の扱い）は開始の操作の前の 1 つの枠（messaging.md §3.4.3。#5192）。 */}
+              {/* 開始の操作の前の案内（LLM Judge の使えない理由・判定の扱いと、Select AI の Credential の事前条件。#1688）は
+                  1 つの枠（messaging.md §3.4.3。#5192 / #5226）。事前条件の項目の id を開始の操作の aria-describedby に結ぶ。 */}
               <div data-testid="quality-evaluation-judge-note">
                 <CombinedBanner
                   items={[
@@ -678,23 +679,22 @@ export function EvaluationPage() {
                           testId: "quality-evaluation-judge-unavailable",
                         }
                       : null,
+                    selectAiCredentialBlocked
+                      ? selectAiCredentialPreconditionItem({
+                          id: EVALUATION_CREDENTIAL_PRECONDITION_ID,
+                          testId: "quality-evaluation-credential-precondition",
+                          operation: t("selectAiCredential.precondition.operation.evaluation"),
+                          action: t("selectAiCredential.precondition.action.evaluationStart"),
+                          credentialName: selectAiCredential.credentialName,
+                          canOpenSettings: selectAiCredential.canOpenSettings,
+                          rechecking: selectAiCredential.rechecking,
+                          onRecheck: () => void selectAiCredential.recheck(),
+                        })
+                      : null,
                     { id: "judge-note", severity: "info", children: t("qualityEvaluation.judge.note") },
                   ]}
                 />
               </div>
-              {/* Select AI の Credential の事前条件（#1688）。開始の操作の直前に全幅で出す。 */}
-              {selectAiCredentialBlocked ? (
-                <SelectAiCredentialPrecondition
-                  id={EVALUATION_CREDENTIAL_PRECONDITION_ID}
-                  testId="quality-evaluation-credential-precondition"
-                  operation={t("selectAiCredential.precondition.operation.evaluation")}
-          action={t("selectAiCredential.precondition.action.evaluationStart")}
-          credentialName={selectAiCredential.credentialName}
-                  canOpenSettings={selectAiCredential.canOpenSettings}
-                  rechecking={selectAiCredential.rechecking}
-                  onRecheck={() => void selectAiCredential.recheck()}
-                />
-              ) : null}
               <div
                 className="grid min-w-0 justify-items-end gap-2 border-t border-border pt-4"
                 data-testid="quality-evaluation-action-footer"

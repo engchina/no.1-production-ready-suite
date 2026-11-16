@@ -12,6 +12,8 @@ import { Link } from "react-router-dom";
 import {
   compareNames,
   Banner,
+  CombinedBanner,
+  type CombinedBannerItem,
   BulkSelectionActions,
   Button,
   ButtonLink,
@@ -685,18 +687,16 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
     disabled: operationBusy,
     testId: "security-permissions-back",
   };
-  const banners = (
-    <>
-      {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
-      {targets.map((target) =>
-        targetLoadWarnings[target.key] ? (
-          <Banner key={target.key} severity="warning">
-            {targetLoadWarnings[target.key]}
-          </Banner>
-        ) : null,
-      )}
-    </>
-  );
+  // 画面の案内は 1 つの枠にまとめる（読み込みの失敗・対象ごとの読み込みの警告・ロールの状態。messaging.md §3.4.3。#5183）。
+  const loadItems: CombinedBannerItem[] = [
+    ...(loadError ? [{ id: "load-error", severity: "danger" as const, children: loadError }] : []),
+    ...targets.flatMap((target) =>
+      targetLoadWarnings[target.key]
+        ? [{ id: `target-${target.key}`, severity: "warning" as const, children: targetLoadWarnings[target.key] }]
+        : [],
+    ),
+  ];
+  const banners = <CombinedBanner items={loadItems} />;
 
   if (view === "missing") {
     return (
@@ -733,14 +733,18 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
           back={back}
         />
         <PageBody wide className="grid grid-cols-1 gap-5">
-          {banners}
-          {systemAdmin ? (
-            <Banner severity="info">{m.systemAdminNotice}</Banner>
-          ) : editingRole.archived ? (
-            <Banner severity="warning">{m.archivedPermissionNotice}</Banner>
-          ) : editingRole.is_built_in ? (
-            <Banner severity="info">{m.builtInReadonly}</Banner>
-          ) : null}
+          <CombinedBanner
+            items={[
+              ...loadItems,
+              systemAdmin
+                ? { id: "role", severity: "info", children: m.systemAdminNotice }
+                : editingRole.archived
+                  ? { id: "role", severity: "warning", children: m.archivedPermissionNotice }
+                  : editingRole.is_built_in
+                    ? { id: "role", severity: "info", children: m.builtInReadonly }
+                    : null,
+            ]}
+          />
           <form
             ref={formRef}
             className="grid gap-5"
