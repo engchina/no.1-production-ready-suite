@@ -442,6 +442,9 @@ class GroundedAnswerTest(unittest.TestCase):
         known.update(generated_schema["properties"])
         for definition in generated_schema.get("$defs", {}).values():
             known.update(definition.get("properties", {}))
+        # 指示が定義する欄の値（response_kind の各値など）は、schema が受け付ける値に限る（#5229）。
+        for field in (*generated_schema["properties"].values(), *generated_schema.get("$defs", {}).values()):
+            known.update(str(value) for value in field.get("enum", ()))
         named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.generation_system_prompt()))
         values = {
             "document_text",
