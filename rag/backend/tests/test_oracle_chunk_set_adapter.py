@@ -396,6 +396,45 @@ async def test_json_source_mapping_survives_oracle_and_extraction_validation() -
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_first_chunk_skips_derived_chunks_and_reads_first_body_chunk() -> None:
+    """#5240: 番号の最小が派生の chunk（章節の要約・抽出値）でも、本文の先頭の chunk を返す。"""
+    client = OracleClient()
+    document_id = await _new_document(client)
+    await client.update_document_status(document_id, FileStatus.INDEXED)
+    cs = _unique_id("cs_first_body")
+    page = {"page_number": 1, "page_start": 1, "page_end": 1}
+    chunks = [
+        Chunk(
+            index=0,
+            text="合成の章節の要約",
+            start_offset=0,
+            end_offset=8,
+            metadata={**page, "nav_summary": True},
+        ),
+        Chunk(
+            index=1,
+            text="合成の抽出値",
+            start_offset=0,
+            end_offset=6,
+            metadata={**page, "content_kind": "extracted_field"},
+        ),
+        Chunk(index=2, text="合成の本文の先頭", start_offset=0, end_offset=8, metadata=dict(page)),
+        Chunk(index=3, text="合成の本文の後続", start_offset=9, end_offset=17, metadata=dict(page)),
+    ]
+    await client.save_index(
+        document_id,
+        StructuredExtraction(raw_text="合成本文"),
+        chunks,
+        [_EMBEDDING] * len(chunks),
+        chunk_set_id=cs,
+    )
+    first = await client.retrieval_document_first_chunk(
+        {"chunk_set_id": cs}, document_id=document_id, chunk_set_id=cs
+    )
+    assert first is not None and first.text == "合成の本文の先頭"
+
+
+@pytest.mark.usefixtures("oracle_db")
 async def test_literal_first_chunk_does_not_move_to_first_in_page_scope() -> None:
     """先頭番号が0でなくても原本の先頭を読み、範囲外なら別Chunkへ代えない。"""
     client = OracleClient()

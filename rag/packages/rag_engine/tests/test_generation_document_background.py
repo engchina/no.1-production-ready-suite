@@ -8,8 +8,13 @@ from test_batched_evidence import body, config, finding
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.batched_evidence import prepare_batched_evidence
-from rag_engine.generation.document_background import BACKGROUND_ONLY, DocumentBackgroundReader, without_embedded_background
-from rag_engine.generation.document_inputs import document_key, document_priority, order_document_spans
+from rag_engine.generation.document_background import (
+    BACKGROUND_ONLY,
+    FIRST_CHUNK,
+    DocumentBackgroundReader,
+    without_embedded_background,
+)
+from rag_engine.generation.document_inputs import document_key, document_priority, order_document_spans, with_first_chunks
 from rag_engine.generation.grounded import format_functions, generation_unit_catalog, tag_spans
 from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_first_page_context
 from rag_engine.models.storage import StoredChunk
@@ -167,3 +172,87 @@ def test_document_rank_uses_best_valid_score():
     priority = document_priority(values, {"a1": 0.3, "b1": 0.1, "b2": 0.9, "d1": float("nan")})
     ordered = order_document_spans(values, priority=priority)
     assert list(dict.fromkeys(document_key(value) for value in ordered)) == [("b",), ("a",), ("c",), ("d",)]
+
+
+def first_chunk(original, *, chunk_seq=0, text="合成の文書の題名と前提。"):
+    return StoredChunk(
+        chunk_uid="first",
+        chunk_id="first",
+        chunk_level="child",
+        chunk_seq=chunk_seq,
+        parent_chunk_uid="",
+        parent_chunk_id="",
+        child_chunk_ids=(),
+        source_seq_ranges=(),
+        source_record_refs=(),
+        text=text,
+        retrieval_text=text,
+        source_run_id="run",
+        source_file_name="a.pdf",
+        source_engine_id="native",
+        source_engine_label="Native",
+        page_start=1,
+        page_end=1,
+        metadata=original.metadata,
+    )
+
+
+def test_first_chunk_is_citable_and_leads_its_document_in_the_generation_input():
+    """#5240: 本文の先頭の chunk は引用のラベルを持ち、原文の位置にかかわらずその文書の根拠の先頭に出る。"""
+    original = replace(record(), chunk_seq=0)
+    stored = first_chunk(original, chunk_seq=5)
+    context = AnswerContext([original], "本文。")
+    with bind_dependencies(deps(lambda **kw: [{"document_scope": list(document_context_key(original)), "first_chunk": stored}])):
+        _, spans, diagnostic = DocumentBackgroundReader().append("条件は？", context, selected(original))
+    added = [value for value in spans if value.get(FIRST_CHUNK)]
+    assert added and all(not value.get(BACKGROUND_ONLY) and value["label"].startswith("E") for value in added)
+    assert set(generation_unit_catalog(added).unit_labels)
+    rendered = format_functions(spans)
+    assert rendered.index("合成の文書の題名と前提。") < rendered.index("選択した本文。")
+    assert diagnostic["documents"][0]["first_chunk_id"] == "first"
+
+
+def test_first_chunk_already_in_evidence_is_kept_for_batches_but_sent_once():
+    """#5240: 根拠に先頭の chunk の原文が入っていれば、文脈と 1 回の入力には重ねず、分割読取の組に足せる全文だけを持つ。"""
+    original = replace(record(), id="first", chunk_uid="first", chunk_id="first", text="合成の文書の題名と前提。")
+    reader = DocumentBackgroundReader()
+    with bind_dependencies(
+        deps(lambda **kw: [{"document_scope": list(document_context_key(original)), "first_chunk": first_chunk(original)}])
+    ):
+        context, spans, diagnostic = reader.append("条件は？", AnswerContext([original], "本文。"), selected(original))
+    assert [value.chunk_uid for value in context.records] == ["first"]
+    assert diagnostic["documents"][0]["first_chunk_status"] == "already_included"
+    assert any(value.get(FIRST_CHUNK) for value in spans)
+    assert [value["text"] for value in with_first_chunks(spans)] == ["合成の文書の題名と前提。"]
+
+
+def test_batches_split_inside_one_document_each_carry_its_first_chunk():
+    """#5240: 1 つの文書の長い根拠を組に分けても、どの組にもその文書の先頭の chunk を入れ、最終生成にも 1 回だけ入れる。"""
+    original = replace(record(), text="".join(f"条件{index}は合成の値です。" + "補足本文。" * 100 + "\n\n" for index in range(10)))
+    with bind_dependencies(
+        deps(lambda **kw: [{"document_scope": list(document_context_key(original)), "first_chunk": first_chunk(original)}])
+    ):
+        _, spans, _ = DocumentBackgroundReader().append("条件は？", AnswerContext([original], "本文。"), selected(original))
+    seen: list[list[str]] = []
+
+    def read(system, prompt, schema):
+        values = json.loads(prompt)["evidence"]
+        seen.append([body(value) for value in values])
+        return schema.model_validate({"findings": [finding(value) for value in values]})
+
+    final, _, diagnostic = prepare_batched_evidence(
+        spans,
+        config(),
+        question="条件は？",
+        render=lambda values: format_functions(values, model_view=True),
+        evidence_text=format_functions,
+        system="指示",
+        schema={},
+        read=read,
+        unusable_output=lambda error: False,
+        tag=lambda values: tag_spans(values),
+    )
+    assert diagnostic["batch_count"] > 1
+    assert all(call.count("合成の文書の題名と前提。") == 1 for call in seen)
+    assert all(batch["first_chunk_source_ids"] == ["first"] for batch in diagnostic["batches"])
+    assert sum(value["text"] == "合成の文書の題名と前提。" for value in final) == 1
