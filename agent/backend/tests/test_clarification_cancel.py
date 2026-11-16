@@ -22,6 +22,7 @@ import anyio
 import pytest
 from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
+from clock_support import RuntimeClock
 from mcp_support import (
     DEFAULT_OUTPUTS,
     FakeProductMcp,
@@ -402,6 +403,7 @@ def test_cancelling_the_rag_clarification_continues_without_rag_with_the_same_re
     goal: str,
     cancel: str | None,
     trigger: str,
+    runtime_clock: RuntimeClock,
 ) -> None:
     _script(
         monkeypatch,
@@ -413,7 +415,10 @@ def test_cancelling_the_rag_clarification_continues_without_rag_with_the_same_re
     assert (pending["kind"], pending["condition_id"]) == ("rag", "screen")
 
     model = _script(monkeypatch, [assistant_message("一般的には、取り消しは管理者に依頼します。")])
+    # 前の Run の後に時計が戻っても、前の Run の確かめ中の問いを取り消す（#5150）。
+    runtime_clock.rewind(1)
     run = _run(goal, thread_id=first.thread_id, cancel=cancel)
+    assert run.created_at < first.created_at
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
     tools = _tool_names(model)
     assert "nl2sql__nl2sql_query" in tools

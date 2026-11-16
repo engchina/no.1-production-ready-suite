@@ -39,6 +39,7 @@ def _run(
     status: RunStatus = RunStatus.RUNNING,
     *,
     thread_id: str | None = None,
+    thread_seq: int = 1,
     user: str | None = None,
 ) -> RunState:
     return RunState(
@@ -48,6 +49,8 @@ def _run(
         runtime_id="builtin",
         status=status,
         thread_id=thread_id,
+        # 会話の中の番号（#5150。番号の無い既存の Run は読み込みで番号を振って書く）。
+        thread_seq=thread_seq if thread_id is not None else None,
         created_by_user_uuid=user,
     )
 
@@ -82,7 +85,7 @@ def test_small_change_writes_only_the_changed_runs() -> None:
     """Run が多くても、会話の削除は会話の Run の行と head だけを書く（全体を書き戻さない）。"""
     runs = [_run(f"run_{index:04d}", RunStatus.COMPLETED) for index in range(1000)]
     runs.append(_run("run_t1", RunStatus.COMPLETED, thread_id="thread_x", user="u1"))
-    runs.append(_run("run_t2", RunStatus.COMPLETED, thread_id="thread_x", user="u1"))
+    runs.append(_run("run_t2", RunStatus.COMPLETED, thread_id="thread_x", thread_seq=2, user="u1"))
     table = _table(*runs)
     repository = _process(table)
     table.calls.clear()

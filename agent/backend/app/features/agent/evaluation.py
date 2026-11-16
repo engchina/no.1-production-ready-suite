@@ -2581,8 +2581,13 @@ async def _run_case(
         if answered is None:
             break
         try:
-            run = create_run(
-                answered.message, thread_id=settled.thread_id, round_number=len(rounds) + 1
+            # 同じ会話の次の Run は、会話の中の番号を保存先とそろえて決める（保存先を待つので
+            # event loop の外で行う。#5150）。
+            run = await asyncio.to_thread(
+                create_run,
+                answered.message,
+                thread_id=settled.thread_id,
+                round_number=len(rounds) + 1,
             )
         except GuardrailBlockedError as exc:
             finish(

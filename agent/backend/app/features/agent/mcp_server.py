@@ -1342,7 +1342,10 @@ def build_agent_mcp_server(request: Request) -> McpServer:
         try:
             # 質問の安全チェックは Run を作る共通の経路が先に当てる（画面と同じ。止めた質問では
             # Run を作らない。#5062・#5109）。
-            run = runtime_repository.create_builtin_run(
+            # 続ける会話は、会話の中の番号を保存先とそろえて決める（保存先を待つので event loop の
+            # 外で行う。#5150）。
+            run = await run_in_threadpool(
+                runtime_repository.create_builtin_run,
                 RunCreateRequest(
                     goal=arguments.question,
                     agent_id=agent.id,
@@ -1411,7 +1414,9 @@ def build_agent_mcp_server(request: Request) -> McpServer:
             )
         _require_run_budget(request)
         try:
-            outcome = runtime_repository.decide_confirmation(
+            # 答えで同じ会話に次の Run を作る（保存先を待つので event loop の外で行う。#5150）。
+            outcome = await run_in_threadpool(
+                runtime_repository.decide_confirmation,
                 run.id,
                 arguments.confirmation_id,
                 action=arguments.action,
