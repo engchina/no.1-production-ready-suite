@@ -216,7 +216,7 @@ test("候補の絞り込みは FilterSelect で 1 行にそろい、狭い画面
   const filters = await openListToolbarFilters(toolbar);
   const status = filters.getByRole("combobox", { name: "状態", exact: true });
   await expect(status).toContainText(/状態:\s*すべて/);
-  await expect(filters.getByRole("combobox", { name: "業務プロファイル", exact: true })).toContainText(/業務プロファイル:\s*すべて/);
+  await expect(filters.getByRole("button", { name: /^業務プロファイル(?:\s|$)/ })).toContainText(/業務プロファイル:\s*すべて/);
   await chooseSelectFieldOption(status, "pending");
   await expect.poll(() => state.candidateRequests.at(-1)?.searchParams.get("status")).toBe("pending");
   await closeListToolbarFilters(page);

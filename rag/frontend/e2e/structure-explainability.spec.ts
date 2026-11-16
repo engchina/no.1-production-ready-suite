@@ -226,9 +226,9 @@ for (const viewport of [
     const save = page.getByRole("button", { name: "分類を保存" });
     await expect(save).toBeDisabled();
     // 分類は「文書の分類」の一覧から選ぶ（#2131）。中分類・小分類は上の段を選ぶまで選べない。
-    const large = page.getByRole("combobox", { name: "大分類" });
-    const middle = page.getByRole("combobox", { name: "中分類" });
-    const small = page.getByRole("combobox", { name: "小分類" });
+    const large = page.getByRole("button", { name: /^大分類 / });
+    const middle = page.getByRole("button", { name: /^中分類 / });
+    const small = page.getByRole("button", { name: /^小分類 / });
     await expect(middle).toBeDisabled();
     await expect(page.getByText("先に大分類を選びます。")).toBeVisible();
     await large.click();
@@ -287,7 +287,7 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await page.getByRole("button", { name: "詳細条件" }).press("Enter");
   await page.getByRole("button", { name: "文書の分類で絞り込む" }).press("Enter");
-  await page.getByRole("combobox", { name: "大分類" }).click();
+  await page.getByRole("button", { name: /^大分類 / }).click();
   await page.getByRole("option", { name: "10_業務A" }).click();
   await page.getByLabel("基準日").fill("2026-04-01");
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
@@ -697,7 +697,7 @@ for (const viewport of [
     // 見出しは欄ごとの文（何を読めなかったか）。backend の文は畳んだ「詳細」に入れる（#4817）。
     await expect(categoryFailure.getByRole("alert")).toHaveText("文書の分類の候補を読み込めませんでした。");
     await expect(categoryFailure.getByText("候補を読み取れませんでした。")).toBeHidden();
-    await expect(page.getByRole("combobox", { name: "大分類" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^大分類 / })).toBeVisible();
 
     // 新しい版: 欄に触れて候補を読み、失敗したら開いたパネルでも「候補がありません」と言わない。
     const section = page.getByTestId("document-version");
@@ -752,7 +752,7 @@ for (const viewport of [
     await retry.focus();
     await page.keyboard.press("Enter");
     await expect(categoryFailure).toHaveCount(0);
-    await page.getByRole("combobox", { name: "大分類" }).click();
+    await page.getByRole("button", { name: /^大分類 / }).click();
     await expect(page.getByRole("option")).toHaveText(["指定なし", "10_業務A", "20_業務B"]);
   });
 }

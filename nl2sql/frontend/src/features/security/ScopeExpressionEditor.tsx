@@ -43,8 +43,11 @@ const text = (key: string) => t(`security.deepsec.entitlements.${key}`);
 // 入力欄・選択欄は共有の SelectField / TextField（ラベル・高さ・幅・無効の見た目を共有する。#613 / #631）。
 // 読み取り専用のときは、囲む <fieldset disabled> がボタン（SelectField）と入力欄をネイティブに無効にする。
 // 欄には min-w-0 を付ける（grid の中で、選択中の長い表示名が欄の最小幅を押し広げて 375px ではみ出さないように）。
-/** 追加した条件・グループ・関連カードの最初の選択欄（SelectField のボタン）へフォーカスを移す。 */
-const SELECT_FIELD_SELECTOR = 'button[role="combobox"]';
+/**
+ * 追加した条件・グループ・関連カードの最初の選択欄へフォーカスを移す。固定の選択肢は SelectField のボタン
+ * （role=combobox）、データから来る選択肢（列・業務プロファイル・表）は検索つきの選択のボタン（aria-haspopup=dialog。#5266）。
+ */
+const SELECT_FIELD_SELECTOR = 'button[role="combobox"], button[aria-haspopup="dialog"]';
 function InlineError({ message, id }: { message: string; id?: string }) {
   const fallbackId = useId();
   return message ? (

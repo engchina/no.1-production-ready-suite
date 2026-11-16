@@ -3283,8 +3283,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
   await page.getByRole("textbox", { name: "表示名 3", exact: true }).fill("レビュー用");
   await page.getByRole("switch", { name: "画像入力に対応 3", exact: true }).click();
   // 既定の画像対応モデル（Vision 対応のモデルだけ）と既定のテキストモデルを別々に選ぶ（#499）。
-  const visionDefault = page.getByRole("combobox", { name: "既定の画像対応モデル" });
-  const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
+  const visionDefault = page.getByRole("button", { name: /^既定の画像対応モデル/ });
+  const textDefault = page.getByRole("button", { name: /^既定のテキストモデル/ });
   // 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順）で、2 つとも必須（#566）。
   const textBox = await textDefault.boundingBox();
   const visionBox = await visionDefault.boundingBox();
@@ -3292,8 +3292,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
   expect(
     Math.abs(textBox!.y - visionBox!.y) < 1 ? textBox!.x < visionBox!.x : textBox!.y < visionBox!.y
   ).toBe(true);
-  await expect(textDefault).toHaveAttribute("aria-required", "true");
-  await expect(visionDefault).toHaveAttribute("aria-required", "true");
+  await expect(textDefault).toHaveAccessibleName(/必須/);
+  await expect(visionDefault).toHaveAccessibleName(/必須/);
   await visionDefault.click();
   await page.getByRole("listbox", { name: "既定の画像対応モデル" }).getByRole("option", { name: /レビュー用/ }).click();
   await textDefault.click();
@@ -3336,8 +3336,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
   const textListbox = page.getByRole("listbox", { name: "既定のテキストモデル" });
   await expect(textListbox.getByRole("option", { name: "既定の画像対応モデルを使う" })).toHaveCount(0);
   await textListbox.getByRole("option", { name: /業務 NL2SQL 標準/ }).click();
-  await expect(visionDefault).toHaveAttribute("aria-invalid", "false");
-  await expect(textDefault).toHaveAttribute("aria-invalid", "false");
+  await expect(visionDefault).not.toHaveAttribute("aria-invalid", "true");
+  await expect(textDefault).not.toHaveAttribute("aria-invalid", "true");
   await page.getByRole("button", { name: "登録モデル: 保存", exact: true }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1].enterprise_ai.models).toHaveLength(2);

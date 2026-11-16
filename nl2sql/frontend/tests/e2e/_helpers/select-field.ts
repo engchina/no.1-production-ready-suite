@@ -44,7 +44,32 @@ export async function chooseSearchableSelectOption(button: Locator, option: stri
   await expect(popover).toBeHidden();
 }
 
-/** SelectField の選択中の値（ネイティブの `toHaveValue` の代わり）。 */
+/**
+ * SelectField の選択中の値（ネイティブの `toHaveValue` の代わり）。
+ * 検索つきの選択（SearchableSelectField）はボタンに値を持たないので、開いて選択中の候補（`aria-selected`）の
+ * `data-value` を確かめ、Esc で閉じる（#5266）。`""` は何も選んでいない（空の値の候補を選んでいるか、選択中が無い）。
+ * 無効の欄は開けないので、ボタンの文字に値が含まれることだけを確かめる（列名・表名のように名前が値を含む欄で使う）。
+ */
 export async function expectSelectFieldValue(combobox: Locator, value: string) {
+  if ((await combobox.getAttribute("aria-haspopup")) === "dialog") {
+    await expectSearchableSelectValue(combobox, value);
+    return;
+  }
   await expect(combobox).toHaveAttribute("data-value", value);
+}
+
+async function expectSearchableSelectValue(button: Locator, value: string) {
+  if (await button.isDisabled()) {
+    // 無効の欄は開けない。選択肢の名前が値を含む欄（列名・表名など）だけ、ボタンの文字で確かめる。
+    if (value !== "") await expect(button).toContainText(value);
+    return;
+  }
+  await button.click();
+  await expect(button).toHaveAttribute("aria-expanded", "true");
+  const popover = button.page().locator(`[id="${await button.getAttribute("aria-controls")}"]`);
+  const selected = popover.locator('[role="option"][aria-selected="true"]');
+  if (value === "") await expect(selected.and(popover.locator(':not([data-value=""])'))).toHaveCount(0);
+  else await expect(selected).toHaveAttribute("data-value", value);
+  await button.page().keyboard.press("Escape");
+  await expect(popover).toBeHidden();
 }
