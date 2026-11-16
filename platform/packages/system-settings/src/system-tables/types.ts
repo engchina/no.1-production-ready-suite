@@ -65,6 +65,8 @@ export interface SystemTableOperationState {
   operation_kind: "initialize" | "recreate" | null;
   lease_expires_at: string | null;
   last_error_code: string | null;
+  /** 前回の失敗の原因・影響・対処の説明（製品が分かる失敗だけに返す。例: RAG の vector memory の不足。#5261）。 */
+  last_error_detail?: string | null;
   schema_epoch: number;
   updated_at: string | null;
 }

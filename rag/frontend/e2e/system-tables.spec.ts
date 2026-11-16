@@ -811,3 +811,60 @@ for (const theme of ["light", "dark"] as const) {
     expect(mutations).toBe(1); // すべて合成route、実DDLなし。
   });
 }
+
+// ---- vector memory の不足で HNSW 索引だけを作れなかった（#5261） ------------------------
+
+for (const theme of ["light", "dark"] as const) {
+  test(`HNSW 索引を vector memory の不足で作れなかった前回の失敗に、原因・索引・既定の検索への影響を出す（#5261・${theme}）`, { tag: "@responsive" }, async ({
+    page,
+  }, testInfo) => {
+    await useTheme(page, theme);
+    const detail =
+      "vector memory の不足（ORA-51995）で HNSW 索引（RAG_CHUNKS_EMBEDDING_HNSW_IDX）を作れませんでした。" +
+      "ほかの表・索引と migration は適用済みです。既定の検索の実行方式（Oracle Hybrid Vector Index）は HNSW 索引を使わないため、この状態でも検索できます。";
+    await mockSettings(page, {
+      initialStatus: "partial",
+      statusExtra: {
+        applied_versions: ["20260703_002_feedback_details"],
+        existing_object_count: 96,
+        existing_table_count: 28,
+        missing_objects: [{ name: "RAG_CHUNKS_EMBEDDING_HNSW_IDX", object_type: "INDEX" }],
+        operation_state: {
+          status: "failed",
+          operation_kind: null,
+          lease_expires_at: null,
+          last_error_code: "ORA-51995",
+          last_error_detail: detail,
+          schema_epoch: 3,
+          updated_at: "2026-07-23T00:00:00+09:00",
+        },
+      },
+    });
+    await page.goto("/settings/system-tables");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(theme === "dark");
+    const card = page.locator("#system-tables");
+    await expect(card.getByText("一部不足", { exact: true }).first()).toBeVisible();
+    const failure = card.getByTestId("system-tables-previous-failure");
+    await expect(failure).toContainText(detail);
+    await expect(failure).toContainText("エラーコード: ORA-51995");
+    await expect(failure).not.toContainText("状態を再取得し、「作成・更新」で再試行してください。");
+
+    const contrast = await minimumTextContrast(page, "#system-tables [data-testid='system-tables-notice']");
+    expect(contrast.count).toBeGreaterThan(2);
+    expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(pageOverflow).toBeLessThanOrEqual(1);
+
+    const width = testInfo.project.name === "mobile" ? 375 : 1280;
+    await card.getByTestId("system-tables-notice").screenshot({
+      path: screenshotDir
+        ? `${screenshotDir}/system-tables-vector-memory-${theme}-${width}.png`
+        : testInfo.outputPath(`vector-memory-${theme}-${width}.png`),
+      animations: "disabled",
+    });
+  });
+}
