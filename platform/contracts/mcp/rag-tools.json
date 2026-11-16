@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1274,7 +1274,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1743,7 +1743,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2530,7 +2530,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2779,7 +2779,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2913,7 +2913,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2950,7 +2950,7 @@
     {
       "name": "rag_retrieve_evidence",
       "title": "根拠の取得",
-      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。図の根拠は画像を返さず image_ref を返します。図を見るときは、その document_id・chunk_id で rag_read_source を include_image=true で呼びます。",
+      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。質問に近い登録済みの Q&A があるときは、根拠を検索する前にその候補だけを返し（status=approved_faq_candidates）、選んだ Q&A では、その登録済みの回答を approved_faq に返します。図の根拠は画像を返さず image_ref を返します。図を見るときは、その document_id・chunk_id で rag_read_source を include_image=true で呼びます。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "根拠の収集の条件。",
@@ -3030,6 +3030,26 @@
             "maxProperties": 30,
             "title": "Conditions",
             "type": "object"
+          },
+          "approved_faq_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、検索をせずにその Q&A の登録済みの回答を返す。search_answer_profile_id が要る。",
+            "title": "Approved Faq Id"
+          },
+          "skip_approved_faq": {
+            "default": false,
+            "description": "true なら登録済みの Q&A の候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索の前にその候補だけを返す。",
+            "title": "Skip Approved Faq",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3043,6 +3063,59 @@
       },
       "outputSchema": {
         "$defs": {
+          "ApprovedFaqAnswer": {
+            "description": "利用者が選んだ承認済み FAQ と、その登録済みの回答（rag_retrieve_evidence。#5136）。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "question": {
+                "description": "登録済みの質問。",
+                "title": "Question",
+                "type": "string"
+              },
+              "answer": {
+                "description": "登録済みの回答（原文のまま）。",
+                "title": "Answer",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "question",
+              "answer"
+            ],
+            "title": "ApprovedFaqAnswer",
+            "type": "object"
+          },
+          "ApprovedFaqCandidate": {
+            "description": "検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。",
+            "properties": {
+              "id": {
+                "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
+                "title": "Id",
+                "type": "string"
+              },
+              "question": {
+                "description": "登録済みの質問。",
+                "title": "Question",
+                "type": "string"
+              },
+              "score": {
+                "description": "質問との一致度（0〜1）。",
+                "title": "Score",
+                "type": "number"
+              }
+            },
+            "required": [
+              "id",
+              "question",
+              "score"
+            ],
+            "title": "ApprovedFaqCandidate",
+            "type": "object"
+          },
           "AutoSelectedProfile": {
             "description": "id を誤ったときに自動で選んだ検索・回答プロファイル。",
             "properties": {
@@ -4099,10 +4172,40 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
+          },
+          "status": {
+            "default": "completed",
+            "description": "completed=根拠を検索した（approved_faq_id を渡したときは、選んだ Q&A を返した）/ approved_faq_candidates=質問に近い登録済みの Q&A の候補（approved_faq_candidates）だけを返した（根拠は検索していない。evidence は空）。",
+            "enum": [
+              "completed",
+              "approved_faq_candidates"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "approved_faq_candidates": {
+            "description": "status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。",
+            "items": {
+              "$ref": "#/$defs/ApprovedFaqCandidate"
+            },
+            "title": "Approved Faq Candidates",
+            "type": "array"
+          },
+          "approved_faq": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApprovedFaqAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "approved_faq_id で選んだ Q&A と、その登録済みの回答（根拠の evidence は空）。資料の根拠と同じく、回答の根拠に使う。それ以外は null。"
           },
           "trace_id": {
             "title": "Trace Id",
@@ -4287,6 +4390,26 @@
             "title": "Conditions",
             "type": "object"
           },
+          "approved_faq_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、検索をせずにその Q&A の登録済みの回答を返す。search_answer_profile_id が要る。",
+            "title": "Approved Faq Id"
+          },
+          "skip_approved_faq": {
+            "default": false,
+            "description": "true なら登録済みの Q&A の候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索の前にその候補だけを返す。",
+            "title": "Skip Approved Faq",
+            "type": "boolean"
+          },
           "original_question": {
             "anyOf": [
               {
@@ -4300,26 +4423,6 @@
             "default": null,
             "description": "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに根拠を確かめて作る。",
             "title": "Original Question"
-          },
-          "approved_faq_id": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、その Q&A の登録済みの回答をそのまま返す（検索・回答の生成はしない）。search_answer_profile_id が要る。",
-            "title": "Approved Faq Id"
-          },
-          "skip_approved_faq": {
-            "default": false,
-            "description": "true なら登録済みの Q&A の候補を返さずに検索・回答する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索・回答の前にその候補だけを返す。",
-            "title": "Skip Approved Faq",
-            "type": "boolean"
           }
         },
         "required": [
@@ -5609,7 +5712,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 45,
+            "default": 46,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"

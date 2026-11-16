@@ -35,4 +35,27 @@ describe("回答の根拠", () => {
     expect(attachment.item.usedInAnswer).toBe(false);
     expect(attachment.citationLocation).toBe("table-b · 1–2 行");
   });
+
+  it("利用者が選んだ登録済みの Q&A の根拠は「登録済みの Q&A」の印を付け、原文のプレビューを開かない", () => {
+    const data = answerEvidenceData({
+      items: [
+        {
+          document_id: "approved_faq:faq-1",
+          chunk_id: "approved_faq:faq-1",
+          file_name: "登録済みの Q&A",
+          excerpt: "合成の回答 A",
+          section_title: "合成の質問 A",
+          approved_faq_id: "faq-1",
+          cited: true,
+        },
+      ],
+    });
+    const [faq] = data.entries;
+    expect(faq.approvedFaq).toBe(true);
+    expect(faq.attachment).toBe(false);
+    expect(faq.item.sourceUnavailable).toBe(true);
+    expect(faq.item.tags?.map((tag) => tag.value)).toEqual(["登録済みの Q&A"]);
+    expect(faq.item.usedInAnswer).toBe(true);
+    expect(faq.citationLocation).toBe("合成の質問 A");
+  });
 });

@@ -48,8 +48,9 @@ TOOL = "rag_search"
 # 段落の印を削除して 41、根拠の table_binding を削除して 42、登録ルールを削除して 43、
 # #5125 で rag_retrieve_evidence の planning の契約を削除して 44
 # 〔rag_search の出力の形は 38 と同じ〕）、#5134 で承認済み FAQ を rag_search に統合して 45
-# （評価は skip_approved_faq で呼び、候補の状態は受け取らない）。
-RAG_SEARCH_SCHEMA_VERSION = 45
+# （評価は skip_approved_faq で呼び、候補の状態は受け取らない）、#5136 で承認済み FAQ を
+# rag_retrieve_evidence にも入れて 46〔rag_search の出力の形は 45 と同じ〕。
+RAG_SEARCH_SCHEMA_VERSION = 46
 # 返す根拠の上限（契約の evidence_limit の maximum）。
 DEFAULT_EVIDENCE_LIMIT = 50
 MAX_EVIDENCE_LIMIT = 50

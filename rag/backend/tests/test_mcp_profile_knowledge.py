@@ -119,6 +119,12 @@ def searches(monkeypatch: MonkeyPatch) -> list[SearchRequest]:
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
     monkeypatch.setattr(mcp_tools, "OracleClient", _KnowledgeOracle)
     monkeypatch.setattr(mcp_tools, "OciGenAiClient", _NoGenerationClient)
+
+    async def no_faq_candidates(_arguments: Any) -> list[Any]:
+        # 承認済み FAQ の候補の照会（#5136）は DB を読むので、候補なしにする。
+        return []
+
+    monkeypatch.setattr(mcp_tools, "_approved_faq_suggestions", no_faq_candidates)
     return captured
 
 

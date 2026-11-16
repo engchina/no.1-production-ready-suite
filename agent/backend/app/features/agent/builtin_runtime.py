@@ -277,6 +277,7 @@ from app.features.agent.support_task import (
     GUIDE_CHECK_TRACE_PREFIX,
     NL2SQL_NEEDS_CLARIFICATION,
     NL2SQL_QUERY,
+    RAG_APPROVED_FAQ_TOOLS,
     RAG_BUDGET_TOOLS,
     RAG_LOOKUP_GUIDES,
     RAG_READ_DOCUMENT,
@@ -288,13 +289,16 @@ from app.features.agent.support_task import (
     adjusted_search_limits,
     agent_confirmation_answers,
     approved_faq_candidates_step,
+    approved_faq_choice_step,
     approved_faq_schema,
     assume_step,
     budget_exceeded_message,
     build_support_task,
+    chosen_approved_faq,
     guide_check_note,
     has_support_task_activity,
     image_input_schema,
+    is_approved_faq_candidates,
     is_environment_tool,
     missing_data_lookup,
     nl2sql_next_step,
@@ -1690,16 +1694,18 @@ class _ToolRecorder:
     def _approved_faq_arguments(
         self, name: str, definition: ToolDefinition | None, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """`rag_search` に承認済み FAQ の引数を付ける（#5134。モデルに見せない引数）。
+        """RAG の検索（`rag_search` / `rag_retrieve_evidence`）に承認済み FAQ の引数を付ける
+        （#5134・#5136。モデルに見せない引数）。
 
-        - 利用者が確認で Q&A を選んだ Run: その Run の最初の `rag_search`（候補を返した接続）に
-          `approved_faq_id` と候補を返した検索・回答プロファイル。2 回目からは `skip_approved_faq`。
+        - 利用者が確認で Q&A を選んだ Run: その Run の最初の、候補を返したツール（同じ接続の同じ
+          名前）の呼び出しに `approved_faq_id` と候補を返した検索・回答プロファイル。それ以外の
+          呼び出しと 2 回目からは `skip_approved_faq`。
         - 「どれでもない」を選んだ Run と、利用者に確認しない Run（前提を示す方針・上限・無人の
           Run・「確認せずに回答」）: `skip_approved_faq`（候補を選ぶ人がいない）。
         - それ以外: 付けない（候補があれば RAG が候補を返し、確認のカードになる）。
         モデルが渡した同じ名前の引数は使わない。
         """
-        if definition is None or mcp_base_tool_name(name) != RAG_SEARCH:
+        if definition is None or mcp_base_tool_name(name) not in RAG_APPROVED_FAQ_TOOLS:
             return arguments
         properties = (definition.input_schema or {}).get("properties")
         if not isinstance(properties, dict) or not all(
@@ -1726,13 +1732,13 @@ class _ToolRecorder:
         return cleaned
 
     def _approved_faq_sent(self) -> bool:
-        """この Run で、利用者が選んだ Q&A を `rag_search` に渡したか（再開した Run も step で
+        """この Run で、利用者が選んだ Q&A を RAG の検索に渡したか（再開した Run も step で
         数える）。"""
         from app.features.agent.runtime import runtime_repository
 
         return any(
             step.tool_call is not None
-            and mcp_base_tool_name(step.tool_call.name) == RAG_SEARCH
+            and mcp_base_tool_name(step.tool_call.name) in RAG_APPROVED_FAQ_TOOLS
             and step.tool_call.arguments.get(APPROVED_FAQ_ID_ARGUMENT)
             for step in runtime_repository.get_run(self.run_id).steps
         )
@@ -2085,6 +2091,10 @@ class _ToolRecorder:
                 result.success
                 and base == RAG_RETRIEVE_EVIDENCE
                 and isinstance(result.output or {}, dict)
+                # 承認済み FAQ の候補・選んだ Q&A（#5136）は業務ガイドを照合しない（RAG の FAQ の
+                # 経路も業務ガイドを通さない）。
+                and not is_approved_faq_candidates(result.output)
+                and chosen_approved_faq(result.output) is None
             ):
                 guide_note = await self.check_guides(name, call.arguments)
 
@@ -2125,6 +2135,10 @@ class _ToolRecorder:
                     )
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
+            if base == RAG_RETRIEVE_EVIDENCE and is_approved_faq_candidates(output):
+                # 承認済み FAQ の候補（#5136）: rag_search と同じく確認のカードを待たせる。
+                next_step = self._without_asking(approved_faq_choice_step())
+                output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
                 knowledge = profile_knowledge_summary(output)
                 if knowledge is not None:
@@ -5544,8 +5558,8 @@ def _tool_confirmations(
 def _approved_faq_confirmation(
     budget: ConfirmationBudget, steps: Sequence[Any]
 ) -> ConfirmationRequest | None:
-    """この Run の最後の `rag_search` が返した承認済み FAQ の候補を、利用者が選ぶ確認にする
-    （#5134）。
+    """この Run の最後の RAG の検索（`rag_search` / `rag_retrieve_evidence`）が返した承認済み FAQ
+    の候補を、利用者が選ぶ確認にする（#5134・#5136）。
 
     利用者に確認できる Run だけ（確認しない Run は `skip_approved_faq` を付けるので、候補は
     返らない）。

@@ -11,10 +11,11 @@
   確認事項を返した回答で完了し、利用者の答え（確認事項の ID・選んだ選択肢の ID・自由入力）を
   構造化して次の Run に渡す（NL2SQL は `nl2sql_query` の `answer`、RAG は `rag_search` の
   `conditions`）。
-- RAG の承認済み FAQ の候補（`rag_search` の `status=approved_faq_candidates`。#5134）: 候補の
-  質問を選択肢にし、「どれでもない（通常どおり回答）」を足した確認事項にする（モデルに選ばせない）。
-  利用者の選択は次の Run でコードが `rag_search` の `approved_faq_id` か `skip_approved_faq` に
-  する（`approved_faq_choice`。モデルに id を写させない）。
+- RAG の承認済み FAQ の候補（`rag_search` / `rag_retrieve_evidence` の
+  `status=approved_faq_candidates`。#5134・#5136）: 候補の質問を選択肢にし、「どれでもない（通常
+  どおり回答）」を足した確認事項にする（モデルに選ばせない）。利用者の選択は次の Run でコードが
+  候補を返したツールの `approved_faq_id` か `skip_approved_faq` にする（`approved_faq_choice`。
+  モデルに id を写させない）。
 - Agent 自身（`agent`）: Control Plane のツール `ask_user_confirmation`。Run はそこで中断し
   （`waiting_confirmation`。承認待ちと同じく SDK の中断の状態を Run に保存する）、利用者の答え・
   スキップで同じ Run を再開する。ツールの結果が利用者の答えになる。
@@ -58,7 +59,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.features.agent.tools import ToolDefinition, ToolHandler, ToolInvocationContext
+from app.features.agent.tools import (
+    ToolDefinition,
+    ToolHandler,
+    ToolInvocationContext,
+    mcp_base_tool_name,
+)
 
 JsonObject = dict[str, Any]
 
@@ -630,6 +636,11 @@ APPROVED_FAQ_NONE_OPTION_ID = "approved_faq_none"
 APPROVED_FAQ_NONE_LABEL = "どれでもない（通常どおり回答）"
 APPROVED_FAQ_PROMPT = "質問に近い登録済みの Q&A があります。当てはまるものを選んでください。"
 APPROVED_FAQ_REASON = "選んだ Q&A は、登録済みの回答をそのまま示します。"
+# 根拠の取得（rag_retrieve_evidence。#5136）の候補: 選んだ Q&A の回答は、資料の根拠と同じく
+# モデルが回答に使う（そのままは示さない）。名前は support_task.RAG_RETRIEVE_EVIDENCE と同じ
+# （support_task がこの module を import するので写す）。
+APPROVED_FAQ_EVIDENCE_TOOL = "rag_retrieve_evidence"
+APPROVED_FAQ_EVIDENCE_REASON = "選んだ Q&A の登録済みの回答をもとに答えます。"
 # 確認の context の key（画面には出さない。次の Run で rag_search に渡す値を引き直す）。
 APPROVED_FAQ_CONTEXT_KEY = "approved_faq"
 APPROVED_FAQ_ID_ARGUMENT = "approved_faq_id"
@@ -674,7 +685,9 @@ def approved_faq_request(
             ConfirmationItem(
                 id=APPROVED_FAQ_ITEM_ID,
                 prompt=APPROVED_FAQ_PROMPT,
-                reason=APPROVED_FAQ_REASON,
+                reason=APPROVED_FAQ_EVIDENCE_REASON
+                if _faq_from_evidence(tool_name)
+                else APPROVED_FAQ_REASON,
                 options=options,
             )
         ],
@@ -692,6 +705,13 @@ def approved_faq_request(
     )
 
 
+def _faq_from_evidence(tool_name: object) -> bool:
+    """候補を返したのが根拠の取得（`rag_retrieve_evidence`）か（#5136）。"""
+    return (
+        isinstance(tool_name, str) and mcp_base_tool_name(tool_name) == APPROVED_FAQ_EVIDENCE_TOOL
+    )
+
+
 def _approved_faq_context(response: Mapping[str, Any]) -> Mapping[str, Any] | None:
     if response.get("source") != SOURCE_RAG:
         return None
@@ -701,10 +721,11 @@ def _approved_faq_context(response: Mapping[str, Any]) -> Mapping[str, Any] | No
 
 
 def approved_faq_choice(response: Mapping[str, Any] | None) -> JsonObject | None:
-    """承認済み FAQ の確認への利用者の選択（次の Run で `rag_search` に渡す引数。無ければ None）。
+    """承認済み FAQ の確認への利用者の選択（次の Run で RAG の検索に渡す引数。無ければ None）。
 
     Q&A を選んだら `approved_faq_id`（と候補を返した検索・回答プロファイル）、「どれでもない」・
-    自由入力だけの答え・スキップは `skip_approved_faq`。`tool` は候補を返した `rag_search` の名前。
+    自由入力だけの答え・スキップは `skip_approved_faq`。`tool` は候補を返したツール（`rag_search` /
+    `rag_retrieve_evidence`）の名前。
     """
     if not isinstance(response, Mapping):
         return None
@@ -845,6 +866,10 @@ APPROVED_FAQ_CHOSEN_INSTRUCTION = (
     "- 利用者は登録済みの Q&A「{label}」を選びました。前の質問のまま rag_search を呼び、"
     "結果の answer（登録済みの回答）をそのまま利用者に示してください。"
 )
+APPROVED_FAQ_CHOSEN_EVIDENCE_INSTRUCTION = (
+    "- 利用者は登録済みの Q&A「{label}」を選びました。前の質問のまま rag_retrieve_evidence を"
+    "呼び、結果の approved_faq（登録済みの Q&A と回答）を資料の根拠と同じく使って答えてください。"
+)
 APPROVED_FAQ_NONE_INSTRUCTION = (
     "- 利用者は登録済みの Q&A のどれも選びませんでした。前の質問に、いつもどおり rag_search などで"
     "調べて答えてください。"
@@ -865,7 +890,12 @@ def _approved_faq_instructions(choice: Mapping[str, Any], entries: Sequence[Any]
     lines: list[str] = []
     if choice.get(APPROVED_FAQ_ID_ARGUMENT):
         labels = [_text(value, 200) for value in entry.get("selected") or []]
-        lines.append(APPROVED_FAQ_CHOSEN_INSTRUCTION.format(label="、".join(labels)))
+        template = (
+            APPROVED_FAQ_CHOSEN_EVIDENCE_INSTRUCTION
+            if _faq_from_evidence(choice.get("tool"))
+            else APPROVED_FAQ_CHOSEN_INSTRUCTION
+        )
+        lines.append(template.format(label="、".join(labels)))
     else:
         lines.append(APPROVED_FAQ_NONE_INSTRUCTION)
     other = _text(entry.get("other_text"), 300)

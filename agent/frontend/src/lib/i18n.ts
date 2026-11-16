@@ -800,6 +800,7 @@ const agentJa = {
   "chat.clarificationCancel.note.nl2sql": "データベースを使わずに回答を続けます",
   "chat.clarificationCancel.note.rag": "資料を使わずに回答を続けます",
   "evidence.page": "p.{page}",
+  "evidence.approvedFaqSource": "登録済みの Q&A",
   "evidence.pageRange": "p.{start}–{end}",
   "evidence.pageWithLabel": "{page}（資料の表記: {label}）",
   "evidence.chip.sheet": "シート",

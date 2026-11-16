@@ -1,5 +1,5 @@
 import { evidenceLabels, type EvidenceChip, type EvidenceListItem } from "@production-ready/ui";
-import { Paperclip } from "lucide-react";
+import { MessageSquareText, Paperclip } from "lucide-react";
 
 import type { Artifact } from "@/lib/api";
 import { evidenceLocation } from "@/lib/rag-evidence";
@@ -24,6 +24,8 @@ export interface AnswerEvidenceEntry {
   citationLocation: string;
   /** 会話の添付の根拠か（#2554）。RAG の文書ではないので、原文のプレビューを開かない。 */
   attachment: boolean;
+  /** 利用者が選んだ登録済みの Q&A の根拠か（#5136）。RAG の文書ではないので、原文のプレビューを開かない。 */
+  approvedFaq: boolean;
 }
 
 export interface AnswerEvidenceMarker {
@@ -106,6 +108,8 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
     const page = pageLabel(locator);
     // 会話の添付の根拠（backend の `chat_attachment_id` の印。#2554）。RAG のチャットの添付の根拠と同じ扱い。
     const attachment = text(item.chat_attachment_id) !== "";
+    // 利用者が選んだ登録済みの Q&A（backend の `approved_faq_id` の印。#5136）。
+    const approvedFaq = text(item.approved_faq_id) !== "";
     return [
       {
         documentId,
@@ -116,6 +120,7 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
           strings(locator?.section_path).join(" > ") ||
           (attachment ? (evidenceLocation(locator) ?? "") : ""),
         attachment,
+        approvedFaq,
         item: {
           key: chunkId,
           fileName,
@@ -128,8 +133,12 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
           score: finite(item.score),
           rerankScore: finite(item.rerank_score),
           chips: chips(item),
-          tags: attachment ? [{ id: "attachment", value: t("chat.attachments.evidenceSource"), icon: Paperclip }] : [],
-          sourceUnavailable: attachment,
+          tags: attachment
+            ? [{ id: "attachment", value: t("chat.attachments.evidenceSource"), icon: Paperclip }]
+            : approvedFaq
+              ? [{ id: "approved_faq", value: t("evidence.approvedFaqSource"), icon: MessageSquareText }]
+              : [],
+          sourceUnavailable: attachment || approvedFaq,
         },
       },
     ];

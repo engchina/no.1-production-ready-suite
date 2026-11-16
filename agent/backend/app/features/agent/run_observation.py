@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-from app.features.agent.answer_evidence import ATTACHMENT_DOCUMENT_PREFIX
+from app.features.agent.answer_evidence import NON_RAG_DOCUMENT_PREFIXES
 from app.features.agent.data_scope import NL2SQL_CONNECTION_ID
 from app.features.agent.rag_figures import RAG_CONNECTION_ID
 from app.features.agent.rag_retrieval_state import (
@@ -162,7 +162,7 @@ def _records(value: object) -> list[Mapping[str, Any]]:
 def _rag_document(value: object) -> str | None:
     """RAG の文書の ID（会話の添付の根拠は RAG の文書ではないので None）。"""
     document_id = _str(value)
-    if document_id is None or document_id.startswith(ATTACHMENT_DOCUMENT_PREFIX):
+    if document_id is None or document_id.startswith(NON_RAG_DOCUMENT_PREFIXES):
         return None
     return document_id
 
