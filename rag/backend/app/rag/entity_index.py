@@ -22,6 +22,9 @@ LLM は使わない（チャンクごとに LLM で事件を抜き出す取込�
     ``通称「情シス」`` は別名。
   - ID の形（``SYS-104``）・英字の名前（``HRM``・``Document Portal``）・語尾がシステム / ポータル
     / 部 / 課 / 室 / 本部の語・かぎ括弧の語（2 文字以上）を「言及」（``mention``）にする。
+  - 大文字で始まる英字の語を名前にするのは、日本語の本文に混じるとき（前後のいちばん近い文字が日本
+    語の字）だけ。英語の本文の中では、文頭の語（``This``・``Every``）と区別できないため、大文字が 2
+    つ以上の語（``REST API``・``MaxRetryCount``）だけを名前にする（字の種類と大文字の形で決める）。
 - **見出し・列挙のラベル**（本文の「語＋1 文字の英字か 1〜2 桁の数字」。``原因 A``・``手順 1``・
   ``案 B``・``Step 2``）は、その文書の中だけで使う記号のことが多いため、それだけでは実体にしない。別
   名の種類を ``label`` にして保存し、検索のときは、別の文書が同じ別名をラベル以外の種類（表の値・定
@@ -110,6 +113,8 @@ class _EntityCues:
     line_subject: re.Pattern[str]
     subject_attribute: re.Pattern[str]
     latin_term: re.Pattern[str]
+    latin_cased_term: re.Pattern[str]
+    script_char: re.Pattern[str]
     suffix_term: re.Pattern[str]
     quoted_term: re.Pattern[str]
     entity_shaped: tuple[re.Pattern[str], ...]
@@ -169,7 +174,9 @@ def _build_entity_cues(pack: LanguagePack) -> _EntityCues:
         ),
         paren_alias=re.compile(
             rf"(?P<name>[{cjk}A-Za-z0-9][{cjk}A-Za-z0-9 \-]{{0,38}}[{cjk}A-Za-z0-9])"
-            rf"\({alt('paren_alias_words')}[:]?\s*[{opens}]?(?P<alias>[^){closes}]{{1,24}})[{closes}]?\)"
+            # 別名の語の後の区切り（「略称: 」「以下、」）は読み飛ばし、別名に入れない。
+            rf"\({alt('paren_alias_words')}\s*[:{chars('clause_marks')}]?\s*[{opens}]?"
+            rf"(?P<alias>[^){closes}]{{1,24}})[{closes}]?\)"
         ),
         nickname=re.compile(
             rf"{alt('nickname_words')}[{opens}](?P<alias>[^{closes}]{{1,24}})[{closes}]"
@@ -182,12 +189,20 @@ def _build_entity_cues(pack: LanguagePack) -> _EntityCues:
             rf"[^{marks}]{{1,16}}{alt('subject_topic_particles')}"
         ),
         # 英字の名前（「HRM」「Document Portal」「経費 Portal」）。前に付ける語はカナ・漢字だけ
-        # （「と C」を取らない）。ID の形の前半（「SYS-104」の「SYS」）は取らない。
+        # （「と C」を取らない）で、カナ・漢字の語の途中からは始めない（長い語は英字の部分だけを取
+        # る）。ID の形の前半（「SYS-104」の「SYS」）は取らない。
         latin_term=re.compile(
-            rf"(?<![A-Za-z0-9])(?:[{kana_kanji}]{{1,8}} ?)?[A-Z][A-Za-z0-9&]*"
+            rf"(?<![A-Za-z0-9])(?:(?<![{kana_kanji}])[{kana_kanji}]{{1,8}} ?)?[A-Z][A-Za-z0-9&]*"
             r"(?: [A-Z][A-Za-z0-9&]*){0,3}"
             r"(?![A-Za-z0-9]|-\d)"
         ),
+        # 英語の本文の中で名前にする英字の語（大文字が 2 つ以上: 「REST API」「MaxRetryCount」）。
+        latin_cased_term=re.compile(
+            r"(?<![A-Za-z0-9&])[A-Z][A-Za-z0-9&]*[A-Z][A-Za-z0-9&]*"
+            r"(?: [A-Z][A-Za-z0-9&]*[A-Z][A-Za-z0-9&]*){0,3}(?![A-Za-z0-9&])"
+        ),
+        # 日本語の字（英字の名前が日本語の本文に混じるかを、前後の字で決める）。
+        script_char=re.compile(rf"[{cjk}]"),
         suffix_term=re.compile(rf"[{kana_kanji}]{{1,14}}?{organizations}(?![{kana_kanji}])"),
         quoted_term=re.compile(rf"[{opens}](?P<term>[^{closes}\s]{{2,24}})[{closes}]"),
         # 実体として認める見出し・主語の形（定義の形の主語）。
@@ -581,9 +596,12 @@ def _index_subject_lines(builder: _Builder, chunk_id: str, text: str) -> None:
 def _index_mentions(builder: _Builder, chunk_id: str, text: str) -> None:
     folded = fold_text(text)
     terms: dict[str, str] = {}
-    for pattern in (_ID_TERM, _cues().latin_term, _cues().suffix_term):
+    for pattern in (_ID_TERM, _cues().suffix_term):
         for match in pattern.finditer(folded):
             terms.setdefault(entity_key(match.group(0)), match.group(0).strip())
+    for match in _cues().latin_term.finditer(folded):
+        for term in _latin_terms(folded, match):
+            terms.setdefault(entity_key(term), term.strip())
     for match in _cues().quoted_term.finditer(folded):
         terms.setdefault(entity_key(match.group("term")), match.group("term"))
     count = 0
@@ -596,6 +614,47 @@ def _index_mentions(builder: _Builder, chunk_id: str, text: str) -> None:
             continue
         builder.link(draft, chunk_id, ENTITY_ROLE_MENTION)
         count += 1
+
+
+def _latin_terms(text: str, match: re.Match[str]) -> list[str]:
+    """英字の名前の一致から、言及にする語を返す。
+
+    日本語の本文に混じる語（前に付けたカナ・漢字の語があるか、前後のいちばん近い文字が日本語の字）
+    はそのまま名前にする。英語の本文の中の語は、文頭の大文字の語と区別できないため、大文字が 2 つ以
+    上の語（``REST API``・``MaxRetryCount``）だけを名前にする。
+    """
+    term = match.group(0)
+    cues = _cues()
+    if cues.script_char.search(term) or _beside_script_text(text, match.start(), match.end()):
+        return [term]
+    return [found.group(0) for found in cues.latin_cased_term.finditer(term)]
+
+
+def _beside_script_text(text: str, start: int, end: int) -> bool:
+    """``text[start:end]`` の前後のいちばん近い文字（記号・数字・空白を除く）が日本語の字か。
+
+    まず同じ行で探し、行の中に前後どちらの文字も無い（見出しなどの 1 語だけの行）ときは、前後の行
+    まで探す。
+    """
+    nearest = [_nearest_letter(text, start - 1, -1), _nearest_letter(text, end, 1)]
+    if not any(nearest):
+        nearest = [
+            _nearest_letter(text, start - 1, -1, within_line=False),
+            _nearest_letter(text, end, 1, within_line=False),
+        ]
+    return any(char and _cues().script_char.match(char) for char in nearest)
+
+
+def _nearest_letter(text: str, index: int, step: int, *, within_line: bool = True) -> str:
+    """``index`` から ``step`` の向きに、最初の文字（``str.isalpha``）を返す。無ければ空。"""
+    while 0 <= index < len(text):
+        char = text[index]
+        if within_line and char == "\n":
+            return ""
+        if char.isalpha():
+            return char
+        index += step
+    return ""
 
 
 def _prose_alias_kind(text: str, kind: str) -> str:
