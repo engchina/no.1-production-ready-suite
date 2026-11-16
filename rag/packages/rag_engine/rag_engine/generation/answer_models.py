@@ -120,6 +120,9 @@ class AnswerContext:
     candidate_count: int = 0
     # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。rerank にかけず、context を作るたびに最後の根拠の並びへ合わせる。
     expansion_candidates: tuple[AnswerRecord, ...] = ()
+    # 補いの検索（``fill=False`` の切り）で、主の検索の根拠にすでにあるため切りの前に除いた候補と理由の
+    # コード（#5175。``context_builder.OVERLAP_*``）。切りの枠に数えず、根拠にも足さない。
+    covered_candidates: tuple[tuple[AnswerRecord, str], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,8 @@
 """全文検索の超限を原要求の単位で補う。根拠の十分性は判断しない。
 
 要求ごとの検索は、主の検索と同じく「検索 → rerank → 下限 → 文書ごとの上限 → ``top_k`` で切る」だけを行う（#5173）。
+ただし下限の後、文書ごとの上限の前に、主の検索の根拠にすでにある候補を除き、切りの枠を新しい根拠に使う（#5175。
+業務ガイドの手順の検索と同じ判定。除いた数は要求ごとの ``covered_candidates``）。
 ``top_k`` は、足す根拠の上限（``RAG_REQUEST_COVERAGE_MAX_CHUNKS``）を要求の数で割った件数（切り上げ）と、上限の残りの
 小さい方。切った根拠は呼び出し元が主の検索の根拠へ合わせる（``expansion_merge`` の規則。主の検索の根拠を外さない）。
 """
@@ -138,7 +140,13 @@ def search_overflow_requests(
         seen.update(fresh)
         usage.chunks += len(fresh)
         count = len(records)
-        row.update(status="candidate_found" if count else "no_candidates", candidates=count, top_k=top_k, new_candidates=len(fresh))
+        row.update(
+            status="candidate_found" if count else "no_candidates",
+            candidates=count,
+            top_k=top_k,
+            new_candidates=len(fresh),
+            covered_candidates=len(getattr(result, "covered_candidates", ()) or ()),
+        )
         results.append(OverflowSearch(target.id, query, result))
     usage.elapsed_seconds += max(0.0, clock() - started)
     trace["budget"] = extra_budget.to_payload()

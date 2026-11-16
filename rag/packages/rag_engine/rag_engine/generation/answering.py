@@ -188,12 +188,17 @@ from rag_engine.retrieval.candidate_budget import select_candidates, stage_limit
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
     MAX_ANCHORS_PER_PARENT,
+    OVERLAP_NEIGHBOR,
+    OVERLAP_PARENT,
+    OVERLAP_SAME_CHUNK,
+    OVERLAP_SECTION,
     ContextBuildRequest,
     ContextChildEvidence,
     ContextParentEvidence,
     build_chunk_context_bundle,
     context_bundle_from_parent_evidence,
     context_bundle_from_records,
+    evidence_overlap,
     record_has_image_evidence,
     uses_parent_context,
 )
@@ -870,7 +875,12 @@ def _with_fresh_source(record: AnswerRecord, fresh: Mapping[str, AnswerRecord]) 
 
 
 def _sectioned_anchor_ids(anchors: Sequence[AnswerRecord], settings: Settings) -> frozenset[str]:
-    """章節の対応がある起点（章節で文脈を補う起点。#5168）。章節の拡張が無効・未設定なら空。
+    """章節の対応がある起点（章節で文脈を補う起点。#5168）。章節の拡張が無効・未設定なら空。"""
+    return frozenset(_anchor_outlines(anchors, settings))
+
+
+def _anchor_outlines(anchors: Iterable[AnswerRecord], settings: Settings) -> dict[str, Any]:
+    """章節の対応がある起点の ID → 章節の一覧（``SectionOutline``。#5168）。章節の拡張が無効・未設定なら空。
 
     章節の拡張と同じ ``section_outline`` を読む（backend は起点ごとの結果を回答の中で使い回す）。
     """
@@ -883,8 +893,8 @@ def _sectioned_anchor_ids(anchors: Sequence[AnswerRecord], settings: Settings) -
         or not getattr(settings, "section_expansion_enabled", True)
         or SectionExpansionLimits.from_settings(settings).max_levels <= 0
     ):
-        return frozenset()
-    found: set[str] = set()
+        return {}
+    found: dict[str, Any] = {}
     for record in anchors:
         uid = retrieval_record_id(record)
         try:
@@ -892,8 +902,98 @@ def _sectioned_anchor_ids(anchors: Sequence[AnswerRecord], settings: Settings) -
         except Exception:  # noqa: BLE001 - 対応を読めない起点は章節で補わない（前後か親で補う）
             continue
         if isinstance(outline, SectionOutline) and outline.chain():
-            found.add(uid)
-    return frozenset(found)
+            found[uid] = outline
+    return found
+
+
+# 主の検索の根拠にすでにある候補の理由（#5175。工程の記録の言葉）。
+_OVERLAP_LABELS = {
+    OVERLAP_SAME_CHUNK: "主の検索の根拠と同じ chunk",
+    OVERLAP_PARENT: "主の検索の根拠の親の本文に含まれる",
+    OVERLAP_NEIGHBOR: "主の検索の根拠の前後の文脈に含まれる",
+    OVERLAP_SECTION: "主の検索の根拠を補う章節に含まれる",
+}
+
+
+def _main_evidence_overlap(context: AnswerContext, settings: Settings) -> Callable[[AnswerRecord], str]:
+    """主の検索の根拠にすでにある候補の理由のコードを返す関数（#5175。無ければ空）。
+
+    補いの検索（要求別の補完・業務ガイドの手順）は、rerank と下限の後、文書ごとの上限と ``top_k`` の切りの前に
+    これで候補を除き、切りの枠を新しい根拠に使う。同じ chunk・親の本文・前後の文脈は根拠の木で、章節は主の検索の
+    根拠を章節で補う起点の所有の章節（その下の章節を含む。根の章節＝文書全体は除く）で判定する。
+    """
+    from rag_engine.generation.section_expansion import ROOT_SECTION_ID
+
+    in_tree = evidence_overlap(context.evidence_tree)
+    anchors = [child.record for parent in context.evidence_tree for child in parent.children if child.role == "retrieved_anchor"]
+    owners: dict[str, set[str]] = {}
+    for outline in _anchor_outlines(anchors, settings).values():
+        if outline.owner_section_id and outline.owner_section_id != ROOT_SECTION_ID:
+            owners.setdefault(str(outline.chunk_set_id), set()).add(outline.owner_section_id)
+    documents = {str((record.metadata or {}).get("chunk_set_id") or "") for record in anchors}
+
+    def overlap(record: AnswerRecord) -> str:
+        if code := in_tree(record):
+            return code
+        # 章節で補う起点の文書の候補だけ、章節の対応を読む（別の文書の候補は読まない）。
+        if not owners or str((record.metadata or {}).get("chunk_set_id") or "") not in documents:
+            return ""
+        outline = next(iter(_anchor_outlines([record], settings).values()), None)
+        if outline is None:
+            return ""
+        sections = owners.get(str(outline.chunk_set_id), set())
+        return OVERLAP_SECTION if any(item.section_id in sections for item in outline.chain()) else ""
+
+    return overlap
+
+
+def _lazy_overlap(context: AnswerContext, settings: Settings) -> Callable[[AnswerRecord], str]:
+    """``_main_evidence_overlap`` を最初の補いの検索で 1 回だけ作る（補いの検索が無ければ章節の対応を読まない）。"""
+    built: list[Callable[[AnswerRecord], str]] = []
+
+    def overlap(record: AnswerRecord) -> str:
+        if not built:
+            built.append(_main_evidence_overlap(context, settings))
+        return built[0](record)
+
+    return overlap
+
+
+def _drop_covered_candidates(
+    ranked_children: Sequence[AnswerRecord], covered: Callable[[AnswerRecord], str]
+) -> tuple[list[AnswerRecord], tuple[tuple[AnswerRecord, str], ...]]:
+    """主の検索の根拠にすでにある候補を除く（#5175）。戻り値は (残りの候補（rerank の後の順）, 除いた候補と理由)。"""
+    with _execution_step(
+        "主の検索の根拠と重複する候補の除外", "主の検索の根拠にすでにある候補を切る前に除き、切る件数を新しい根拠に使います。"
+    ) as step:
+        step.input({"候補": candidate_snapshot(ranked_children)})
+        kept: list[AnswerRecord] = []
+        dropped: list[tuple[AnswerRecord, str]] = []
+        for record in ranked_children:
+            # 会話の添付（#3100）は主の検索の根拠と比べない。
+            code = "" if is_attachment_evidence(record) else covered(record)
+            if code:
+                dropped.append((record, code))
+            else:
+                kept.append(record)
+        codes = [code for _, code in dropped]
+        counts = {_OVERLAP_LABELS.get(code, code): codes.count(code) for code in dict.fromkeys(codes)}
+        step.output(
+            {
+                "除いた候補": [{"ID": retrieval_record_id(record), "理由": _OVERLAP_LABELS.get(code, code)} for record, code in dropped],
+                "理由ごとの件数": counts,
+                "残りの候補": candidate_snapshot(kept),
+            }
+        )
+        if dropped:
+            step.result(
+                f"主の検索の根拠と重複する {len(dropped)} 件を除きました（"
+                + "・".join(f"{label} {count} 件" for label, count in counts.items())
+                + f"）。残りの候補 {len(kept)} 件"
+            )
+        else:
+            step.result(f"主の検索の根拠と重複する候補はありません（候補 {len(kept)} 件）")
+    return kept, tuple(dropped)
 
 
 def build_adb_hybrid_answer_context(
@@ -917,6 +1017,7 @@ def build_adb_hybrid_answer_context(
     text_queries: Mapping[str, str] | None = None,
     section_fill: bool = False,
     fill: bool = True,
+    exclude: Callable[[AnswerRecord], str] | None = None,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
 
@@ -933,6 +1034,10 @@ def build_adb_hybrid_answer_context(
     fill=False は文脈を補わずに、検索 → rerank → 下限 → 文書ごとの上限 → ``top_k`` で切った起点だけを返す（#5173。
     回答の流れの主の検索と補いの検索）。records と根拠の木は起点（rerank の後の順）、expansion_records は検索の候補の
     原文、expansion_candidates は検索拡張の根拠。文脈は ``fill_answer_context`` で、補いの検索の根拠と一緒に 1 回補う。
+
+    exclude は補いの検索で、主の検索の根拠にすでにある候補の理由のコードを返す関数（#5175。``_main_evidence_overlap``）。
+    rerank と下限の後、文書ごとの上限と ``top_k`` の切りの前にその候補を除き（``covered_candidates`` に残す）、
+    切りの枠を新しい根拠に使う。
 
     pinned_chunk_run_id 指定時は保存済み実行を直接読み、latest 更新による評価条件の変化を防ぐ。
     存在しない実行は AdbHybridSearchUnavailable とする。ADB と必要に応じ reranker に接続する。
@@ -1006,6 +1111,10 @@ def build_adb_hybrid_answer_context(
     record_retrieval_stage({"stage": "post_rerank_policies", "selected_ids": [retrieval_record_id(record) for record in ranked_children]})
     # rerank の後は「並び（rerank の点数と MMR）→ 関連度の下限 → 文書ごとの上限 → top_k で切る → 検索拡張の合わせ込み」
     # の順で、以後は足すだけで削除・並べ替えをしない（#5165）。top_k の切りは context の組み立てで 1 回だけ行う。
+    # 補いの検索は、文書ごとの上限の前に主の検索の根拠にすでにある候補を除く（#5175）。
+    covered: tuple[tuple[AnswerRecord, str], ...] = ()
+    if exclude is not None:
+        ranked_children, covered = _drop_covered_candidates(ranked_children, exclude)
     kept_children = ranked_children
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) > 0:
         with _execution_step("文書ごとの上限", "同じ文書の候補が起点を占めないよう、1 つの文書から採る候補を上限までにします。") as step:
@@ -1019,6 +1128,7 @@ def build_adb_hybrid_answer_context(
         ranked_candidates=tuple(ranked_children),
         candidate_count=candidate_count,
         expansion_candidates=expansion_candidates,
+        covered_candidates=covered,
     )
     if fill:
         return fill_answer_context(
@@ -1990,12 +2100,14 @@ def _search_guide_steps(
     rerank_enabled: bool,
     retrieval_scope: str,
     classification_filter: ClassificationFilter | None,
+    exclude: Callable[[AnswerRecord], str] | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[list[StepSearch], list[dict[str, Any]], dict[str, Any]]:
     """業務ガイドの手順ごとに検索する (#2395)。戻り値は (検索の結果, 必須の取得の記録, 記録)。
 
     検索ごとに「検索 → rerank → 下限 → 文書ごとの上限 → ``top_k``（``guide_step_chunks_per_step``）で切る」だけを行い
     （#5173）、切った根拠を返す。主の検索の根拠への合わせ込みと文脈の補完は呼び出し元が主の検索と一緒に行う。
+    exclude は要求別の補完と同じ、主の検索の根拠にすでにある候補を切りの前に除く判定（#5175）。
     """
     targets = required_guide_targets(plan)
     trace: dict[str, Any] = {
@@ -2046,6 +2158,7 @@ def _search_guide_steps(
             classification_filter=classification_filter,
             page_ranges=page_ranges,
             fill=False,
+            exclude=exclude,
         )
 
     started = clock()
@@ -2118,15 +2231,20 @@ def _finish_guide_steps(
     added_keys = set(_merged_supplement_keys(context, GUIDE_STEP_KEY))
 
     def located(parent: Any) -> str:
-        key = parent.record.chunk_uid or parent.record.id
+        return located_record(parent.record)
+
+    def located_record(record: Any) -> str:
+        key = record.chunk_uid or record.id
         return owners.get(key, key)
 
-    # 手順の根拠は、手順ごとの検索で切った根拠に、手順の参照の頁に当たる回答の材料の根拠を足したもの（#2706）。
+    # 手順の根拠は、手順ごとの検索で切った根拠と、主の検索の根拠にあるため切りの前に除いた候補（#5175）に、
+    # 手順の参照の頁に当たる回答の材料の根拠を足したもの（#2706）。
     referenced = reference_step_sources(plan, context.records)
     searched: dict[str, list[str]] = {}
     for result in results:
         for owner in result.owner_ids or (result.step_id,):
             searched.setdefault(owner, []).extend(located(parent) for parent in result.parents)
+            searched[owner].extend(located_record(record) for record in result.covered)
     step_sources = tuple(
         (
             step.step_id,
@@ -2173,6 +2291,8 @@ def _finish_guide_steps(
                             "kind": result.kind,
                             "queries": list(result.queries),
                             "candidates": len(result.parents),
+                            # 主の検索の根拠にあるため切りの前に除いた候補の数（#5175）。
+                            "covered_candidates": len(result.covered),
                             "added_chunk_ids": sorted({located(parent) for parent in result.parents} & added_keys),
                             "elapsed_ms": result.elapsed_ms,
                             **({"error": result.error} if result.error else {}),
@@ -2968,6 +3088,8 @@ def answer_question_result(
         guide_ranges = guide_plan.reference_ranges if guide_plan is not None else ()
         # 主の検索の根拠（文脈を補った後の chunk と親）。補いの検索の新しい根拠の数は、これ以外だけを数える。
         main_keys = set(_context_owner_keys(context)) | {record.chunk_uid or record.id for record in context.records}
+        # 補いの検索は、主の検索の根拠にすでにある候補を切りの前に除く（#5175。要求別の補完と業務ガイドの手順で同じ判定）。
+        main_overlap = _lazy_overlap(context, settings)
         supplements: dict[str, AnswerRecord] = {}
         supplement_pool: list[AnswerRecord] = []
 
@@ -3006,6 +3128,7 @@ def answer_question_result(
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,
                 fill=False,
+                exclude=main_overlap,
             )
 
         with _execution_step(
@@ -3064,9 +3187,10 @@ def answer_question_result(
             )
             if overflow_trace.get("triggered"):
                 statuses = [str(row["status"]) for row in overflow_trace["requests"]]
+                covered_count = sum(int(row.get("covered_candidates") or 0) for row in overflow_trace["requests"])
                 overflow_step.result(
                     f"要求 {len(statuses)} 件、合わせる根拠 {len(overflow_candidates)} 件"
-                    f"（うち主の検索に無いもの {sum(key not in main_keys for key in overflow_candidates)} 件）"
+                    f"（主の検索の根拠と重複して除いた候補 {covered_count} 件）"
                 )
                 overflow_step.field("追加検索の残り", str(extra_budget.remaining))
                 overflow_step.field("未検索", str(sum(status.startswith("unsearched_") for status in statuses)))
@@ -3136,6 +3260,7 @@ def answer_question_result(
                     rerank_enabled=effective_rerank_enabled,
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
+                    exclude=main_overlap,
                 )
                 guide_records, guide_pool = _guide_step_supplements(guide_results)
                 supplement_pool.extend(guide_pool)
@@ -3152,7 +3277,7 @@ def answer_question_result(
                 else:
                     guide_step.result(
                         f"検索 {len(guide_results)} 回、合わせる根拠 {len(guide_records)} 件"
-                        f"（うち主の検索に無いもの {sum((record.chunk_uid or record.id) not in main_keys for record in guide_records)} 件）"
+                        f"（主の検索の根拠と重複して除いた候補 {sum(len(result.covered) for result in guide_results)} 件）"
                     )
         if supplements:
             # 主の検索の起点・検索拡張の根拠に補いの検索の根拠を同じ規則で合わせ、文脈を補い直す（#5162・#5168・

@@ -17,7 +17,14 @@ from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answer_records import _stored_chunk_answer_record
 from rag_engine.models.storage import StoredChunk
 from rag_engine.resources.tracing import bind_trace_observer
-from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
+from rag_engine.retrieval.context_builder import (
+    OVERLAP_NEIGHBOR,
+    OVERLAP_PARENT,
+    OVERLAP_SAME_CHUNK,
+    OVERLAP_SECTION,
+    ContextChildEvidence,
+    ContextParentEvidence,
+)
 from rag_engine.retrieval.context_fill import (
     FILL_NEIGHBORS,
     FILL_PARENT,
@@ -376,3 +383,48 @@ def test_anchor_whose_section_was_read_is_not_filled_again():
     with bind_dependencies(dependencies):
         filled = answering._fill_unread_section_anchors(context, _settings(), _unread_state(stub, read=True), neighbor_child_count=1)
     assert filled is context
+
+
+def test_main_evidence_overlap_covers_same_chunk_parent_neighbors_and_section():
+    """補いの検索が切りの前に除く候補（#5175）: 主の検索の根拠と同じ chunk・親の本文・前後の文脈・章節で補う起点の章節。"""
+    chunks, ranked, _active = _three_documents()
+    chunks["B3"] = _stored("B3", 3, "B", strategy="small_to_big", parent="PB")
+    chunks.update(_flat("D", 2))
+    records = {uid: _stored_chunk_answer_record(chunk) for uid, chunk in chunks.items()}
+    stub = Sections(chunks)
+    context, _step, _calls = _build(stub, ranked, list(records.values()))
+    dependencies = AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.read)
+    with bind_dependencies(dependencies):
+        overlap = answering._main_evidence_overlap(context, _settings())
+        codes = {uid: overlap(records[uid]) for uid in ("A2", "A3", "B2", "B3", "C1", "C2", "D1")}
+    assert codes == {
+        "A2": OVERLAP_SAME_CHUNK,
+        # A2 は章節で補う起点。同じ章節の A3 は、章節の拡張で読む本文に入る。
+        "A3": OVERLAP_SECTION,
+        "B2": OVERLAP_SAME_CHUNK,
+        # 親子分割の B3 は、並びにある親 PB の本文に含まれる。
+        "B3": OVERLAP_PARENT,
+        "C1": OVERLAP_NEIGHBOR,
+        "C2": OVERLAP_SAME_CHUNK,
+        "D1": "",
+    }
+
+
+def test_main_evidence_overlap_without_section_map_reads_no_outline_for_other_documents():
+    """章節で補う起点が無ければ、候補の章節の対応を読まない（#5175）。"""
+    chunks = {**_flat("C", 3), **_flat("D", 2)}
+    records = {uid: _stored_chunk_answer_record(chunk) for uid, chunk in chunks.items()}
+    stub = Sections(chunks, document="none")
+    context, _step, _calls = _build(stub, [records["C2"]], list(records.values()))
+    asked: list[str] = []
+
+    def outline(*, chunk_uid: str, **_: object):
+        asked.append(chunk_uid)
+        return stub.outline(chunk_uid=chunk_uid)
+
+    dependencies = AnswerDependencies(unused, unused, unused, unused, unused, section_outline=outline, section_chunks=stub.read)
+    with bind_dependencies(dependencies):
+        overlap = answering._main_evidence_overlap(context, _settings())
+        assert [overlap(records[uid]) for uid in ("C3", "D1")] == [OVERLAP_NEIGHBOR, ""]
+    # 主の検索の起点（C2）の対応だけを読み、候補（D1）の対応は読まない。
+    assert asked == ["C2"]
