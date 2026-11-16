@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import re
+import unicodedata
 from collections.abc import Sequence
 from typing import Any, Literal, cast
 
@@ -60,6 +61,15 @@ def citation_marker(catalog: SentUnitCatalog) -> re.Pattern[str] | None:
 def _marker_run(marker: re.Pattern[str]) -> re.Pattern[str]:
     """続けて書いた印（``[E2.1][E2.2]``）は 1 か所の引用として、隣り合う単位を 1 つの出典の行にまとめる。"""
     return re.compile(rf"(?:{marker.pattern})(?:{_padding()}(?:{marker.pattern}))*")
+
+
+# 文の中の丸括弧の 1 組（入れ子にしない）と、その前の改行を除く空白（#5231）。印の角括弧は含まない。
+_ROUND_GROUP = r"[^\S\n]*[（(][^（）()\n]*[）)]"
+
+
+def _has_text(value: str) -> bool:
+    """字（文字・数字・結合文字）を含むか。空白・区切りの記号・書式文字だけなら持たない（字種だけを見る）。"""
+    return any(unicodedata.category(char)[0] in "LNM" for char in value)
 
 
 def _cited_labels(run: str, marker: re.Pattern[str], catalog: SentUnitCatalog) -> tuple[str, ...]:
@@ -126,7 +136,13 @@ def canonical_full_answer(value: BaseModel, catalog: SentUnitCatalog) -> Grounde
 
 
 def render_full_answer(draft: GroundedDraft, checked: Sequence[Any]) -> Any:
-    """引用マーカーだけを既存の根拠行へ変換する。本文の主張はそのまま返す。"""
+    """引用マーカーだけを既存の根拠行へ変換する。本文の主張はそのまま返す。
+
+    印は段落・表の後ろの出典の行にして本文から外す。丸括弧の中の印は、外すと括弧や接続の字だけが残るので
+    （「資料（[E1] および [E2]）」）、括弧の中の字種だけで扱いを決める（#5231）: 印のほかに字が無い括弧は
+    括弧ごと外し、字がある括弧では印を出典の名前（出典の行と同じ書き方）に置き換える。どちらも出典の行と
+    引用の結び付きは変えない。文の意味（印を名詞として書いたか）は判定しない。
+    """
     from rag_engine.generation import grounded
 
     full = draft._full_answer
@@ -140,6 +156,8 @@ def render_full_answer(draft: GroundedDraft, checked: Sequence[Any]) -> Any:
     if marker is None or not marker.search(body):
         return grounded.RenderedAnswer(body, [])
     run_pattern = _marker_run(marker)
+    token = re.compile(rf"(?P<group>{_ROUND_GROUP})|{run_pattern.pattern}")
+    sources = grounded.sent_evidence_sources(catalog)
     output: list[str] = []
     pending: list[Any] = []
 
@@ -156,13 +174,30 @@ def render_full_answer(draft: GroundedDraft, checked: Sequence[Any]) -> Any:
             append_references()
         in_table = table_line
 
-        def replace_marker(match: re.Match[str]) -> str:
-            key = ",".join(_cited_labels(match.group(0), marker, catalog))
+        def cite(run: str) -> None:
+            key = ",".join(_cited_labels(run, marker, catalog))
             pending.extend(entries[index] for index in full["groups"].get(key, ()) if index in entries)
-            return ""
+
+        def source_names(match: re.Match[str]) -> str:
+            cite(match.group(0))
+            blocks = dict.fromkeys(found.group(1) for found in marker.finditer(match.group(0)))
+            return "、".join(sources[block].strip() for block in blocks if block in sources) or match.group(0)
+
+        def replace_marker(match: re.Match[str]) -> str:
+            if match.group("group") is None:
+                cite(match.group(0))
+                return ""
+            group = match.group(0)
+            if not run_pattern.search(group):
+                return group
+            if not _has_text(run_pattern.sub("", group)):
+                for run in run_pattern.finditer(group):
+                    cite(run.group(0))
+                return ""
+            return run_pattern.sub(source_names, group)
 
         # 表の行や文末の句読点を途中で割らず、原文参照だけを行・表の後ろへ出す。
-        displayed = run_pattern.sub(replace_marker, line)
+        displayed = token.sub(replace_marker, line)
         output.append(displayed)
         if displayed.strip().startswith(grounded.answer_labels().citation_prefix):
             # 本文に書かれた出典の見た目は、選択した ID に結ばない。後続の正式な引用番号だけを保つ。
