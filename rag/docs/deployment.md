@@ -247,8 +247,9 @@ chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`
       画面で別のビルドにしていた環境は、「取込・検索・回答設定 > 検索インデックス」の再作成の SQL を当て直す）。
    途中で止まっても、同じコマンドを流し直せば続きから進む（写した行は二重に入れない）。
 
-   所要時間の目安: テスト専用の DB ユーザー（合成の約 3.4 万 chunk、開発の ADB・OCPU 1）で、更新全体が約 12.5 分だった
-   （2・3 の写しと列の削除、5 の HNSW の作成が大半）。chunk の数にほぼ比例すると見込む（未確認）。
+   所要時間の目安: テスト専用の DB ユーザー（合成の約 3.4 万 chunk、開発の ADB・OCPU 1）で、更新全体が 12.5 分と 21 分
+   （2 回）。2・3 の写しと列の削除は 23 秒で、大半は 5 の HNSW の作成（2 回目は原生索引の整理の job と CPU を取り合った）。
+   chunk の数にほぼ比例すると見込む（未確認）。HNSW の作成中も検索は原生索引（既定）で動く。
 2. 確かめる: `system_schema_cli status` が `ready`、次の 2 つの件数が同じ（埋め込みのある chunk の数）。
 
    ```sql
@@ -275,6 +276,9 @@ chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`
    ```
 
    その後、旧版の backend を配置して `system_schema_cli initialize` を流す（旧版の trigger と `RAG_CHUNKS` の HNSW 索引を作り直す）。
+   書き戻しの `UPDATE` は、commit で原生索引（`RAG_CHUNKS_HYBRID_IDX`）の全行の再同期を起こす（`rag_chunks` の行の更新は、
+   更新した列によらず原生索引の同期の対象になる）。上のテスト専用の DB ユーザーでは、書き戻しと再同期で 1 時間を超え、
+   旧版の `initialize` に 21 分かかった。速く戻したいときは、適用の前に書き出したデータから復元する。
    列の削除の前に止まった場合（`RAG_CHUNKS.EMBEDDING` が残っている）は、`DROP TABLE rag_chunk_embeddings PURGE` と台帳の行の
    削除だけでよい。
 
