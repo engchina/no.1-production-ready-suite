@@ -226,3 +226,14 @@ def test_recipe_settings_follow_the_document_recipe() -> None:
     assert disabled.rag_entity_index_enabled is False
     assert enabled.rag_entity_index_enabled is True
     assert enabled.rag_entity_attribute_columns == ["担当部署"]
+
+
+@pytest.mark.parametrize("removed", ["pii_redact", "pdf_to_page_images"])
+def test_recipe_settings_read_a_removed_preprocess_profile_as_passthrough(removed: str) -> None:
+    """削除した変換方式が残るレシピも、作り直しの対象から落とさずに読める(#5224)。"""
+    settings = recipe_settings(
+        _target("doc-1", "cs-1", preprocess_profile=removed, entity_index_enabled=True)
+    )
+
+    assert settings.rag_preprocess_profile == "passthrough"
+    assert settings.rag_entity_index_enabled is True
