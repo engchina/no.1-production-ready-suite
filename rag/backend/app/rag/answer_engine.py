@@ -61,7 +61,7 @@ from rag_parser_core.vision_text import (
 )
 
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import OracleClient, bind_text_query_keywords
+from app.clients.oracle import NativeScopeReuse, OracleClient, bind_text_query_keywords
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
     db_call_label,
@@ -309,6 +309,9 @@ class _SearchState:
     search_hits: dict[
         tuple[str, str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]
     ] = field(default_factory=dict)
+    # 原生検索の準備の確認と範囲の解決(#5184)。要求ごとの補いの検索・業務ガイドの手順の検索で
+    # 読み直さない(1 回の回答の中だけ。範囲の古さは検索ごとに確かめる)。
+    native_scope_reuse: NativeScopeReuse = field(default_factory=NativeScopeReuse)
     # 章節の拡張(#1436)の章節の一覧((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
     # 利用者が明示した基準日(as_of。無ければ空)。検索の条件は 1 回の回答の初めに決めた基準日を
@@ -1939,7 +1942,7 @@ class AnswerEngine:
         embedding は検索文のもの(#5159)。まだ読んでいない検索は 1 回の SQL でまとめて読む
         (``OracleClient.search_many``。結果は検索文ごとの ``hybrid_search`` と同じ。#1498)。
         同じ回答の中で同じ検索文・渡す文・方式・条件・件数を読んだことがあれば、その結果を使う
-        (要求ごとの再検索)。
+        (要求ごとの再検索)。原生検索の準備の確認と範囲の解決も同じ回答の中で使い回す(#5184)。
         """
         filter_key = tuple(sorted(filters.items()))
         keys = [
@@ -1957,7 +1960,10 @@ class AnswerEngine:
             search_many = getattr(self._oracle, "search_many", None)
             if search_many is not None:
                 found = await search_many(
-                    list(missing.values()), candidate_limit, filters=dict(filters)
+                    list(missing.values()),
+                    candidate_limit,
+                    filters=dict(filters),
+                    reuse=state.native_scope_reuse,
                 )
             else:
                 # ``hybrid_search`` だけを持つ Oracle(テストの代役など)は 1 本ずつ読む。

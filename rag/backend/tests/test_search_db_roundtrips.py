@@ -470,14 +470,17 @@ class _ManySearchOracle(_SearchOracle):
     def __init__(self) -> None:
         super().__init__()
         self.batches: list[list[str]] = []
+        self.reuses: list[Any] = []
 
     async def search_many(
         self,
         searches: list[tuple[str, list[float], SearchMode]],
         top_k: int,
         filters: dict[str, str] | None = None,
+        reuse: Any = None,
     ) -> list[list[RetrievedChunk]]:
         self.batches.append([query for query, _, _ in searches])
+        self.reuses.append(reuse)
         return [
             await _SearchOracle.hybrid_search(self, query, embedding, top_k, mode, filters)
             for query, embedding, mode in searches
@@ -510,6 +513,23 @@ async def test_search_reuses_query_results_within_one_answer() -> None:
 
     assert oracle.batches == [["検索文 5"]]
     assert _dump(reused) == _dump(fresh)
+
+
+async def test_search_passes_one_native_scope_reuse_per_answer() -> None:
+    """同じ回答の後の検索は範囲の解決を使い回し、別の回答とは共有しない(#5184)。"""
+    oracle = _ManySearchOracle()
+
+    _, state = await _search(oracle, ["検索文 1"])
+    await _search(oracle, ["検索文 2"], state)
+    _, other = await _search(oracle, ["検索文 3"])
+
+    assert oracle.reuses == [
+        state.native_scope_reuse,
+        state.native_scope_reuse,
+        other.native_scope_reuse,
+    ]
+    assert isinstance(state.native_scope_reuse, oracle_module.NativeScopeReuse)
+    assert other.native_scope_reuse is not state.native_scope_reuse
 
 
 def test_pool_max_uses_setting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1373,7 +1393,9 @@ async def test_all_failed_rankings_record_failure_and_are_not_cached() -> None:
     from app.clients.oracle import SearchHits
 
     class FailedOracle(_SearchOracle):
-        async def search_many(self, searches: Any, top_k: int, filters: Any = None) -> Any:
+        async def search_many(
+            self, searches: Any, top_k: int, filters: Any = None, reuse: Any = None
+        ) -> Any:
             result = []
             for _ in searches:
                 hits = SearchHits()
@@ -1537,7 +1559,9 @@ async def test_separate_sql_keeps_tied_ranks_and_matches_native_fusion(
 
 async def test_answer_fusion_keeps_keyword_original_ranks() -> None:
     class TiedOracle(_SearchOracle):
-        async def search_many(self, searches: Any, top_k: int, filters: Any = None) -> Any:
+        async def search_many(
+            self, searches: Any, top_k: int, filters: Any = None, reuse: Any = None
+        ) -> Any:
             return [
                 [
                     _hit(f"c-{n}", 0.8, mode="keyword").model_copy(
