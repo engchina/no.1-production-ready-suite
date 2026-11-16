@@ -30,7 +30,6 @@ import time
 from collections.abc import Callable, Collection
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Literal
 
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
@@ -74,9 +73,6 @@ _lock = threading.Lock()
 _ready = False
 _control_plane_restored = False
 _interrupted_runs_checked = False
-# このプロセスの起動の時刻（import の時刻）。これより前に作った・変えた `running` / `queued` の
-# Run は前のプロセスが実行していたもので、このプロセスでは続かない（#1894）。
-_process_started_at: datetime = datetime.now(UTC)
 # 直前の失敗（時刻・利用者に返す理由）。
 _failure: tuple[float, str] | None = None
 _monotonic: Callable[[], float] = time.monotonic
@@ -156,8 +152,12 @@ def _fail_interrupted_runs(repository: runtime.AgentRuntimeRepositoryContract) -
 
     in_process では Run の実行は backend のプロセスの asyncio の task だけで、再起動で task が
     消えると Run は `running` / `queued` のまま終わらない（チャットは待ち続け、自動実行は前回の
-    Run の終わりを待って次を作らない）。このプロセスの起動より前に作った・変えた Run だけを
-    対象にする（起動の後の Run は、このプロセスが始めたものか、別のプロセスが動かしている途中）。
+    Run の終わりを待って次を作らない）。
+
+    この判定はプロセスで 1 回だけ、保存先の所有（`storage_owner`。#4216）を取った後・読み込みが済む
+    （`is_ready()`）前に行う。Run を作る経路（業務の API・MCP・スケジューラ）は読み込みが済むまで
+    待つので、この時点の `running` / `queued` の Run はすべて前のプロセスのもの。時刻の大小で前後を
+    決めない（OS の時計が戻ると前のプロセスの Run を見落とす。#5179）。
     承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。
 
     external（runtime-dispatcher）のときは触らない（dispatcher が lease で claim する）。
@@ -167,7 +167,7 @@ def _fail_interrupted_runs(repository: runtime.AgentRuntimeRepositoryContract) -
     if get_settings().agent_runtime_dispatch_mode.strip().lower() != "in_process":
         return
     try:
-        run_ids = repository.fail_interrupted_runs(updated_before=_process_started_at)
+        run_ids = repository.fail_interrupted_runs()
     except Exception:  # noqa: BLE001 - メモリの Run は失敗にした。保存は次の変更で書かれる
         logger.exception("agent_interrupted_runs_not_saved")
         return

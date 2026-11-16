@@ -553,7 +553,8 @@ def evidence_overlap(tree: Sequence[ContextParentEvidence]) -> Callable[[Any], s
 
     合わせ込み（``merge_after_cut``）で印だけになる候補と同じ範囲: 同じ chunk が並びにある（``OVERLAP_SAME_CHUNK``）、
     前後の文脈にある（``OVERLAP_NEIGHBOR``）、親子分割の child で親が並びにある（``OVERLAP_PARENT``）。章節に含まれるかは
-    章節の対応を読む呼び出し元が判定する（``OVERLAP_SECTION``）。
+    章節の対応を読む呼び出し元が判定する（``OVERLAP_SECTION``）。同じ chunk・前後の文脈は合わせ込みと同じに頁の範囲を
+    除いた key（``chunk_identity_key``）で、親は合わせ込みと同じに範囲ごとに比べる（#5197）。
     """
     reasons: dict[str, str] = {}
     parent_keys: set[str] = set()
@@ -561,14 +562,14 @@ def evidence_overlap(tree: Sequence[ContextParentEvidence]) -> Callable[[Any], s
         if parent.role == "synthesis_parent" and (key := record_context_key(parent.record)):
             parent_keys.add(key)
         for child in parent.children:
-            if key := record_context_key(child.record):
+            if key := chunk_identity_key(child.record):
                 code = OVERLAP_NEIGHBOR if child.role == "neighbor_context" else OVERLAP_SAME_CHUNK
                 # 同じ chunk が起点と前後の文脈の両方にあれば、起点（同じ chunk）を残す。
                 if reasons.get(key) != OVERLAP_SAME_CHUNK:
                     reasons[key] = code
 
     def overlap(record: Any) -> str:
-        if code := reasons.get(record_context_key(record), ""):
+        if code := reasons.get(chunk_identity_key(record), ""):
             return code
         if _uses_parent_context(record) and _record_parent_context_key(record) in parent_keys:
             return OVERLAP_PARENT

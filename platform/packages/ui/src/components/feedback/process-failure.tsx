@@ -4,7 +4,7 @@ import type { ApiErrorDetail } from "../../lib/api-error";
 import { cn } from "../../lib/utils";
 import type { RunFact } from "../data/run-detail";
 import { formatRunDateTime } from "../data/run-history";
-import { Banner } from "../ui/banner";
+import { Banner, type CombinedBannerItem } from "../ui/banner";
 import { ApiErrorDetailList } from "./api-error-banner";
 
 /*
@@ -161,46 +161,72 @@ export interface ProcessFailureNoticeProps {
   testId?: string;
 }
 
+export interface ProcessFailureBannerItemOptions extends Omit<ProcessFailureNoticeProps, "className"> {
+  /** 枠の中の項目の key（既定 `process-failure`）。 */
+  id?: string;
+}
+
+/**
+ * 処理の失敗のカードの内容を、`CombinedBanner` の項目にする（UX 契約 messaging.md §3.4.3 / §9.1。#5226）。
+ *
+ * 同じ区画（1 つの回答・1 つの実行の詳細の概要）にほかの案内（安全チェックの注意・結果の不明な書き込み・回答の
+ * 案内など）があるときは、失敗のカードを別の枠で並べず、この項目を同じ `CombinedBanner` に入れる。見出し（何が
+ * 起きたか）→ 原因 → 次の操作 →「詳細」の並びは `ProcessFailureNotice` と同じ（同じ関数が作る）。
+ */
+export function processFailureBannerItem({
+  failure,
+  severity = "danger",
+  action,
+  detailsDefaultOpen,
+  labels,
+  testId,
+  id = "process-failure",
+}: ProcessFailureBannerItemOptions): CombinedBannerItem {
+  const resolved = resolveLabels(labels);
+  const details = processFailureDetails(failure, resolved);
+  const cause = present(failure.cause) && failure.cause.trim() !== failure.summary.trim() ? failure.cause : null;
+  const explanation = present(failure.explanation) ? failure.explanation : null;
+  const next = present(failure.nextAction) ? failure.nextAction : null;
+  return {
+    id,
+    severity,
+    title: failure.summary,
+    action,
+    testId,
+    children:
+      cause || explanation || next || details.length ? (
+        <div className="min-w-0 space-y-2">
+          {cause ? (
+            <p className="whitespace-pre-line break-words [overflow-wrap:anywhere]" data-process-failure-cause="">
+              {cause}
+            </p>
+          ) : null}
+          {explanation ? <p data-process-failure-explanation="">{explanation}</p> : null}
+          {next ? <p data-process-failure-next="">{next}</p> : null}
+          <ApiErrorDetailList
+            details={details}
+            label={resolved.details}
+            defaultOpen={detailsDefaultOpen ?? severity === "danger"}
+          />
+        </div>
+      ) : undefined,
+  };
+}
+
 /**
  * 処理の失敗のカード（3 製品のチャットの回答の場所・実行の詳細の概要。#2342）。
  *
  * - 1 文目（title）は何が起きたか（止まった段を含む）。トレース ID だけの表示にしない。
  * - 本文は原因 → 次の操作の順。技術的な詳細は「詳細」（`Disclosure`）に畳み、本文に混ぜない。
  * - 状態は色だけでなくトーンのアイコンと文字で示す。danger は `role="alert"`（`Banner`）。
+ * - 同じ区画にほかの案内があるときは、このカードを並べず `processFailureBannerItem` で同じ枠の項目にする。
  */
-export function ProcessFailureNotice({
-  failure,
-  severity = "danger",
-  action,
-  detailsDefaultOpen,
-  labels,
-  className,
-  testId,
-}: ProcessFailureNoticeProps) {
-  const resolved = resolveLabels(labels);
-  const details = processFailureDetails(failure, resolved);
-  const cause = present(failure.cause) && failure.cause.trim() !== failure.summary.trim() ? failure.cause : null;
-  const explanation = present(failure.explanation) ? failure.explanation : null;
-  const next = present(failure.nextAction) ? failure.nextAction : null;
+export function ProcessFailureNotice({ className, testId, ...options }: ProcessFailureNoticeProps) {
+  const item = processFailureBannerItem(options);
   return (
-    <div className={cn("min-w-0", className)} data-testid={testId} data-process-failure={severity}>
-      <Banner severity={severity} title={failure.summary} action={action}>
-        {cause || explanation || next || details.length ? (
-          <div className="min-w-0 space-y-2">
-            {cause ? (
-              <p className="whitespace-pre-line break-words [overflow-wrap:anywhere]" data-process-failure-cause="">
-                {cause}
-              </p>
-            ) : null}
-            {explanation ? <p data-process-failure-explanation="">{explanation}</p> : null}
-            {next ? <p data-process-failure-next="">{next}</p> : null}
-            <ApiErrorDetailList
-              details={details}
-              label={resolved.details}
-              defaultOpen={detailsDefaultOpen ?? severity === "danger"}
-            />
-          </div>
-        ) : null}
+    <div className={cn("min-w-0", className)} data-testid={testId} data-process-failure={item.severity}>
+      <Banner severity={item.severity} title={item.title} action={item.action}>
+        {item.children}
       </Banner>
     </div>
   );

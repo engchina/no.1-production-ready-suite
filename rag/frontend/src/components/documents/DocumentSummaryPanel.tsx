@@ -1,4 +1,4 @@
-import { Banner, Button, ProcessingIndicator, Skeleton, StatusBadge, TimedLoadingState } from "@production-ready/ui";
+import { Button, CombinedBanner, ProcessingIndicator, Skeleton, StatusBadge, TimedLoadingState } from "@production-ready/ui";
 import { RefreshCw, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -76,18 +76,44 @@ export function DocumentSummaryPanel({
               testId="document-summary-generating"
             />
           ) : null}
-          {regenerate.isError ? (
-            <Banner severity="danger" title={t("documents.summary.regenerateError")}>
-              {regenerate.error instanceof ApiError ? regenerate.error.message : t("documents.summary.failure.unknown")}
-            </Banner>
-          ) : null}
+          {/* 作り直しの失敗と、前回の生成の失敗は 1 つの枠（messaging.md §3.4.3。#5183）。 */}
+          <CombinedBanner
+            testId="document-summary-notice"
+            items={[
+              regenerate.isError
+                ? {
+                    id: "regenerate-error",
+                    severity: "danger",
+                    title: t("documents.summary.regenerateError"),
+                    children:
+                      regenerate.error instanceof ApiError ? regenerate.error.message : t("documents.summary.failure.unknown"),
+                  }
+                : null,
+              view.kind === "ready" && summary && view.failure && !busy
+                ? {
+                    id: "regenerate-failed",
+                    severity: "warning",
+                    title: t("documents.summary.regenerateFailedTitle"),
+                    children: t(view.failure),
+                  }
+                : null,
+              view.kind === "failed" && !busy
+                ? {
+                    id: "failed",
+                    severity: "warning",
+                    title: t("documents.summary.failedTitle"),
+                    children: (
+                      <div className="space-y-1">
+                        <p>{t(view.failure)}</p>
+                        {state.enabled && canRegenerate ? <p>{t("documents.summary.failedHint")}</p> : null}
+                      </div>
+                    ),
+                  }
+                : null,
+            ]}
+          />
           {view.kind === "ready" && summary ? (
             <div className="space-y-3">
-              {view.failure && !busy ? (
-                <Banner severity="warning" title={t("documents.summary.regenerateFailedTitle")}>
-                  {t(view.failure)}
-                </Banner>
-              ) : null}
               <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg" data-testid="document-summary-text">
                 {summary.text}
               </p>
@@ -107,14 +133,7 @@ export function DocumentSummaryPanel({
                 {summary.input_truncated ? <p>{t("documents.summary.truncated")}</p> : null}
               </div>
             </div>
-          ) : view.kind === "failed" && !busy ? (
-            <Banner severity="warning" title={t("documents.summary.failedTitle")}>
-              <div className="space-y-1">
-                <p>{t(view.failure)}</p>
-                {state.enabled && canRegenerate ? <p>{t("documents.summary.failedHint")}</p> : null}
-              </div>
-            </Banner>
-          ) : view.kind === "empty" && !busy ? (
+          ) : view.kind === "failed" ? null : view.kind === "empty" && !busy ? (
             <p className="text-sm text-fg-muted" data-testid="document-summary-empty">
               {!state.enabled
                 ? t("documents.summary.disabled")

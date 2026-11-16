@@ -5,6 +5,7 @@ import { FlaskConical, Rocket, RotateCcw, Save } from "lucide-react";
 import {
   FieldSkeleton,
   Banner,
+  CombinedBanner,
   Button,
   ButtonLink,
   Card,
@@ -615,57 +616,69 @@ export function AgentEditorView({
                 {t("agent.version.saveBeforePublish")}
               </p>
             ) : null}
-            {agent.published_version !== null && agent.skill_updates?.length ? (
-              // 公開中の版に固定したスキルが変わった（#1855）。利用者の Run は固定した中身で動く。
-              <div data-testid="agent-skills-updated">
-                <Banner severity="warning" title={t("agent.version.skillsUpdated")}>
-                  <div className="min-w-0 space-y-2">
-                    <p>
-                      {t("agent.version.skillsUpdatedHint", {
-                        version: agent.published_version,
-                        skills: agent.skill_updates
-                          .map((id) => availableSkills.find((skill) => skill.id === id)?.name ?? id)
-                          .join("、"),
-                      })}
-                    </p>
-                    {/* 差分 → 評価で比べる → スキルの更新だけを公開（#1867）。 */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      {!readOnly ? (
-                        <Button
-                          size="sm"
-                          icon={Rocket}
-                          loading={publishSkillUpdates.isPending}
-                          onClick={() => publishSkillUpdates.mutate([agent.id])}
-                          data-testid="agent-publish-skill-updates"
-                        >
-                          {t("agent.skillUpdates.publishOne")}
-                        </Button>
-                      ) : null}
-                      <ButtonLink
-                        to={evaluationHref(agent.id)}
-                        linkComponent={Link}
-                        variant="secondary"
-                        size="sm"
-                        icon={FlaskConical}
-                        testId="agent-skill-updates-evaluate"
-                      >
-                        {t("agent.skillUpdates.evaluateShort")}
-                      </ButtonLink>
-                    </div>
-                    <SkillUpdateDiffDisclosure agentId={agent.id} testId="agent-skill-updates-diff" />
-                  </div>
-                </Banner>
-              </div>
-            ) : null}
-            {agent.published_version !== null && agent.skills_pinned === false ? (
-              <div data-testid="agent-skills-not-pinned">
-                <Banner severity="info">{t("agent.version.skillsNotPinned", { version: agent.published_version })}</Banner>
-              </div>
-            ) : null}
-            {agent.published_version === null ? (
-              // 公開するまで利用者のチャット・Run には使えない（管理者は Run の画面の「下書きで実行」で試せる）。
-              <Banner severity="info">{t("agent.version.unpublishedHint")}</Banner>
-            ) : null}
+            {/* 公開の状態の案内は版の区画の 1 つの枠（messaging.md §3.4.3。#5183）。 */}
+            <CombinedBanner
+              items={[
+                agent.published_version !== null && agent.skill_updates?.length
+                  ? {
+                      // 公開中の版に固定したスキルが変わった（#1855）。利用者の Run は固定した中身で動く。
+                      id: "skills-updated",
+                      severity: "warning",
+                      title: t("agent.version.skillsUpdated"),
+                      testId: "agent-skills-updated",
+                      children: (
+                      <div className="min-w-0 space-y-2">
+                        <p>
+                          {t("agent.version.skillsUpdatedHint", {
+                            version: agent.published_version,
+                            skills: agent.skill_updates
+                              .map((id) => availableSkills.find((skill) => skill.id === id)?.name ?? id)
+                              .join("、"),
+                          })}
+                        </p>
+                        {/* 差分 → 評価で比べる → スキルの更新だけを公開（#1867）。 */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {!readOnly ? (
+                            <Button
+                              size="sm"
+                              icon={Rocket}
+                              loading={publishSkillUpdates.isPending}
+                              onClick={() => publishSkillUpdates.mutate([agent.id])}
+                              data-testid="agent-publish-skill-updates"
+                            >
+                              {t("agent.skillUpdates.publishOne")}
+                            </Button>
+                          ) : null}
+                          <ButtonLink
+                            to={evaluationHref(agent.id)}
+                            linkComponent={Link}
+                            variant="secondary"
+                            size="sm"
+                            icon={FlaskConical}
+                            testId="agent-skill-updates-evaluate"
+                          >
+                            {t("agent.skillUpdates.evaluateShort")}
+                          </ButtonLink>
+                        </div>
+                        <SkillUpdateDiffDisclosure agentId={agent.id} testId="agent-skill-updates-diff" />
+                      </div>
+                      ),
+                    }
+                  : null,
+                agent.published_version !== null && agent.skills_pinned === false
+                  ? {
+                      id: "skills-not-pinned",
+                      severity: "info",
+                      testId: "agent-skills-not-pinned",
+                      children: t("agent.version.skillsNotPinned", { version: agent.published_version }),
+                    }
+                  : null,
+                // 公開するまで利用者のチャット・Run には使えない（管理者は Run の画面の「下書きで実行」で試せる）。
+                agent.published_version === null
+                  ? { id: "unpublished", severity: "info", children: t("agent.version.unpublishedHint") }
+                  : null,
+              ]}
+            />
           </Section>
         ) : null}
         {sharing}

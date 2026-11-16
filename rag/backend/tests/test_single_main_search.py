@@ -45,6 +45,7 @@ class _RecordingOracle:
         searches: list[tuple[str, list[float], SearchMode]],
         top_k: int,
         filters: dict[str, str] | None = None,
+        reuse: Any = None,
     ) -> list[list[RetrievedChunk]]:
         self.searches.extend(searches)
         self.keywords.append(dict(oracle_module._TEXT_QUERY_KEYWORDS.get() or {}))

@@ -191,9 +191,15 @@ async def test_delete_reinsert_queue_restores_native_candidates(
                 assert await search_count("vector") == 2, "initial-vector-baseline"
         # 間隔の内は semantic だけ。残骸が残れば要求を残すだけで、FULL を始めない(#4214)。
         plans.clear()
+        results.clear()
         semantic_outcome = await run_maintenance_once(store, "synthetic-worker")
         assert semantic_outcome in {"complete", "failed"}
         assert plans == ["semantic"]
+        if results:
+            # semantic の整理は transaction を開いたまま返る。確定していれば、整理の接続を閉じた
+            # 後も別の接続から同じ件数が見える(close の rollback で戻らない。#5199)。
+            durable = await oracle._fetch_all(f"SELECT COUNT(*) AS stored FROM DR${index}$VR", {})
+            assert int(str(durable[0]["stored"])) == results[-1].after.stored
         assert await run_maintenance_once(store, "synthetic-worker") == "idle"
         assert plans == ["semantic"]
         # 間隔が過ぎたら、新しい要求が無くても FULL で収束する。

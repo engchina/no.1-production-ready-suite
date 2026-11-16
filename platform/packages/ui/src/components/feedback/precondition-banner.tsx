@@ -1,7 +1,7 @@
 import { ArrowRight, RefreshCw, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { Banner } from "../ui/banner";
+import { Banner, type CombinedBannerItem } from "../ui/banner";
 import { Button } from "../ui/button";
 import { ButtonLink, type ButtonLinkComponent } from "../ui/button-link";
 
@@ -41,20 +41,21 @@ export interface PreconditionBannerProps {
   className?: string;
 }
 
+export interface PreconditionBannerItemOptions extends Omit<PreconditionBannerProps, "className"> {
+  /** 枠の中の項目の key（既定 `precondition`）。DOM の `id` は `id`（`aria-describedby` の先）。 */
+  itemId?: string;
+}
+
 /**
- * 操作の前提（設定・資源）が足りないので、その操作ができないことを示す常設の案内（#1688）。
- * UX 契約 messaging.md §3.4（「設定が終わっていないので機能が使えない」状況の Banner）と §3.4.1
- * （導線はその画面を開ける利用者だけ・導線 → 再試行の順・開けない利用者には管理者への連絡）を、
- * ページ全体ではなく 1 つの操作に当てはめたもの。ページ全体が使えないときは `BlockedPageNotice`。
+ * 操作の前提の案内の内容を、`CombinedBanner` の項目にする（UX 契約 messaging.md §3.4.2 / §3.4.3。#5226）。
  *
- * - warning の `Banner`（`role="status"`）。閉じる × は付けない（前提を満たすまで残す）。
- * - 操作の区画の先頭（押せなくした操作の直前）に全幅で置き、操作は `disabled` にして `id` を
- *   `aria-describedby` で結ぶ（README §4: `disabled` のボタンはフォーカスを受けないので理由を文言で示す）。
- * - 導線は `ButtonLink`（secondary・sm・移動先のナビのアイコン・`ArrowRight`）、続けて「再試行」
- *   （secondary・sm・`RefreshCw`）。DB の縮退の Banner（`DatabaseUnavailableNotice` の `mode="banner"`）と同じ形。
+ * 同じ区画（操作のフォーム）にほかの案内（判定の扱い・使えない理由など）があるときは、前提の案内を別の枠で
+ * 並べず、この項目を同じ `CombinedBanner` に入れる。見出し・本文・導線 → 再試行の並びは `PreconditionBanner` と
+ * 同じ（同じ関数が作る）。`id` は項目の要素に付くので、押せなくした操作の `aria-describedby` はそのまま結べる。
  */
-export function PreconditionBanner({
+export function preconditionBannerItem({
   id,
+  itemId = "precondition",
   title,
   message,
   settingsLink,
@@ -63,8 +64,7 @@ export function PreconditionBanner({
   retrying = false,
   retryTestId,
   testId,
-  className,
-}: PreconditionBannerProps) {
+}: PreconditionBannerItemOptions): CombinedBannerItem {
   const actions =
     settingsLink || onRetry ? (
       <>
@@ -96,10 +96,28 @@ export function PreconditionBanner({
         ) : null}
       </>
     ) : undefined;
+  return { id: itemId, elementId: id, severity: "warning", title, children: message, action: actions, testId };
+}
+
+/**
+ * 操作の前提（設定・資源）が足りないので、その操作ができないことを示す常設の案内（#1688）。
+ * UX 契約 messaging.md §3.4（「設定が終わっていないので機能が使えない」状況の Banner）と §3.4.1
+ * （導線はその画面を開ける利用者だけ・導線 → 再試行の順・開けない利用者には管理者への連絡）を、
+ * ページ全体ではなく 1 つの操作に当てはめたもの。ページ全体が使えないときは `BlockedPageNotice`。
+ *
+ * - warning の `Banner`（`role="status"`）。閉じる × は付けない（前提を満たすまで残す）。
+ * - 操作の区画の先頭（押せなくした操作の直前）に全幅で置き、操作は `disabled` にして `id` を
+ *   `aria-describedby` で結ぶ（README §4: `disabled` のボタンはフォーカスを受けないので理由を文言で示す）。
+ * - 導線は `ButtonLink`（secondary・sm・移動先のナビのアイコン・`ArrowRight`）、続けて「再試行」
+ *   （secondary・sm・`RefreshCw`）。DB の縮退の Banner（`DatabaseUnavailableNotice` の `mode="banner"`）と同じ形。
+ * - 同じ区画にほかの案内があるときは、この案内を並べず `preconditionBannerItem` で同じ枠の項目にする（§3.4.3）。
+ */
+export function PreconditionBanner({ id, testId, className, ...options }: PreconditionBannerProps) {
+  const item = preconditionBannerItem(options);
   return (
     <div id={id} data-testid={testId} className={className}>
-      <Banner severity="warning" title={title} action={actions}>
-        {message}
+      <Banner severity={item.severity} title={item.title} action={item.action}>
+        {item.children}
       </Banner>
     </div>
   );

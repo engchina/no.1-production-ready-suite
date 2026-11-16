@@ -65,6 +65,11 @@ interface ChatRequirementFlowOptions {
   ) => void;
   /** 確認を中止した（送った質問を入力欄に戻す）。 */
   onCancelled: (check: ChatRequirementCheck) => void;
+  /**
+   * 安全チェックが質問を止めた（`GUARDRAIL_BLOCKED`。#5191）。確認のカード（もう一度確認・確認せずに生成）を
+   * 出さず、止めた質問として出す。
+   */
+  onBlocked: (check: ChatRequirementCheck, cause: unknown) => void;
   /** 画面が表示されている（keep-alive で隠れている間は検査を始めない）。 */
   enabled: boolean;
 }
@@ -74,6 +79,7 @@ export function useChatRequirementFlow({
   setCheck,
   onSubmit,
   onCancelled,
+  onBlocked,
   enabled,
 }: ChatRequirementFlowOptions): ChatRequirementFlow {
   const controller = useRequirementSession();
@@ -87,9 +93,11 @@ export function useChatRequirementFlow({
   const abandonedRef = useRef(new Set<string>());
   const checkRef = useRef(check);
   const onSubmitRef = useRef(onSubmit);
+  const onBlockedRef = useRef(onBlocked);
   useLayoutEffect(() => {
     checkRef.current = check;
     onSubmitRef.current = onSubmit;
+    onBlockedRef.current = onBlocked;
   });
   const clientJobId = check?.request.client_job_id ?? "";
 
@@ -115,6 +123,8 @@ export function useChatRequirementFlow({
         isCurrent,
         // OCI Enterprise AI が無い環境では要件の検査を使えないので、確認せずに SQL を作る。
         onUnavailable: current.sessionId ? undefined : () => onSubmitRef.current(current, null),
+        // 安全チェックが止めた質問は、送り直しても・確認を飛ばしても同じ結果なので確認のカードを出さない（#5191）。
+        onBlocked: (cause) => onBlockedRef.current(current, cause),
       }
     ).then(async (loaded) => {
       if (!loaded) return;

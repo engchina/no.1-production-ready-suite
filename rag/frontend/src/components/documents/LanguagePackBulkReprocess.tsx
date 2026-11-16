@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ListRestart, RefreshCw } from "lucide-react";
-import { Banner, Button, Card, CardContent, CardHeader, CardTitle, DataTable, DEFAULT_PAGE_SIZE, FormStatus, INFORMATION_TABLE_VISIBLE_ROWS, SideSheet, ListToolbar, Pagination, SelectField, Skeleton, TimedLoadingState, useConfirm, usePagination } from "@production-ready/ui";
+import { Banner, Button, CombinedBanner, Card, CardContent, CardHeader, CardTitle, DataTable, DEFAULT_PAGE_SIZE, FormStatus, INFORMATION_TABLE_VISIBLE_ROWS, SideSheet, ListToolbar, Pagination, SelectField, Skeleton, TimedLoadingState, useConfirm, usePagination } from "@production-ready/ui";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { api, type IngestionJobPhase, type LanguagePackReleaseComparison } from "@/lib/api";
@@ -78,10 +78,13 @@ export function LanguagePackBulkReprocess({ disabled, expectedReleaseId, loadDoc
         <div><Button variant="secondary" disabled={selection.count === 0 || execute.isPending} onClick={() => setReviewedKey(reviewKey)}>{t("settings.language.release.reviewSelected")}</Button></div>
         {reviewedKey === reviewKey && comparisons.isPending && selection.count > 0 ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="language-bulk-diff"><Skeleton className="h-20 w-full" /></TimedLoadingState> : null}
         {reviewedKey === reviewKey && comparisons.isError ? <ApiErrorState error={comparisons.error} fallback={t("settings.language.history.loadError")} onRetry={() => void comparisons.refetch()} /> : null}
-        {reviewed ? <>{selectedRows.some(row => !row.used_release_id) ? <Banner severity="warning" title={t("settings.language.release.relation.unrecorded")}>{t("settings.language.release.unrecordedHelp")}</Banner> : null}{unreadableRows.length ? <Banner severity="warning" title={t("settings.language.release.unreadableBulkTitle", { count: unreadableRows.length })}>
-          <p>{t("settings.language.release.unreadableBulkHelp")}</p>
-          <p className="mt-2 break-words text-xs">{unreadableRows.map(row => `${row.file_name} / ${t("documents.recipes.name", { slot: row.slot_no })}`).join("、")}</p>
-        </Banner> : null}{comparisons.data?.results.map(comparison => <section key={comparison.before_id} className="space-y-3" aria-label={t("settings.language.release.diff")}>
+        {reviewed ? <>{/* 見比べた結果の案内は 1 つの枠（messaging.md §3.4.3。#5183）。 */}<CombinedBanner items={[
+          selectedRows.some(row => !row.used_release_id) ? { id: "unrecorded", severity: "warning", title: t("settings.language.release.relation.unrecorded"), children: t("settings.language.release.unrecordedHelp") } : null,
+          unreadableRows.length ? { id: "unreadable", severity: "warning", title: t("settings.language.release.unreadableBulkTitle", { count: unreadableRows.length }), children: <>
+            <p>{t("settings.language.release.unreadableBulkHelp")}</p>
+            <p className="mt-2 break-words text-xs">{unreadableRows.map(row => `${row.file_name} / ${t("documents.recipes.name", { slot: row.slot_no })}`).join("、")}</p>
+          </> } : null,
+        ]} />{comparisons.data?.results.map(comparison => <section key={comparison.before_id} className="space-y-3" aria-label={t("settings.language.release.diff")}>
           <h3 className="text-sm font-semibold">{t("settings.language.release.sameVersionTargets", { count: selectedRows.filter(row => row.used_release_id === comparison.before_id).length })}</h3>
           <p className="break-words text-xs text-fg-muted">{selectedRows.filter(row => row.used_release_id === comparison.before_id).map(row => `${row.file_name} / ${t("documents.recipes.name", { slot: row.slot_no })}`).join("、")}</p>
           <LanguagePackComparison comparison={comparison} />

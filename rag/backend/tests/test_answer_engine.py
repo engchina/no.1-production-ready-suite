@@ -1215,7 +1215,7 @@ def _fake_evaluation_llm(
     assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
     json.loads(prompt)
     return AnswerCorrectnessOutput(
-        correctness="correct",
+        correctness="consistent",
         reason="標準回答と一致",
     )
 

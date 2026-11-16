@@ -43,6 +43,11 @@ interface GuidedClarificationPanelProps {
    * 入力した質問のまま SQL を生成する。
    */
   onSkip: () => void;
+  /**
+   * 安全チェックが質問を止めた（`GUARDRAIL_BLOCKED`。#5205）。もう一度確認しても・確認を飛ばしても同じ結果なので、
+   * 検査の失敗のカード（もう一度確認・確認せずに SQL を生成）を出さず、画面がパネルを閉じて書き換えを案内する。
+   */
+  onBlocked: (cause: unknown) => void;
 }
 
 /**
@@ -58,6 +63,7 @@ export function GuidedClarificationPanel({
   allowedObjects,
   onApplyRequirement,
   onSkip,
+  onBlocked,
 }: GuidedClarificationPanelProps) {
   const controller = useRequirementSession();
   const { session, busyAction, setError } = controller;
@@ -151,8 +157,10 @@ export function GuidedClarificationPanel({
 
   // 開始は 1 回だけ。最新の startSession を commit 時に ref へ入れて呼ぶ（startSession は毎レンダーで作り直される）。
   const startSessionRef = useRef(startSession);
+  const onBlockedRef = useRef(onBlocked);
   useLayoutEffect(() => {
     startSessionRef.current = startSession;
+    onBlockedRef.current = onBlocked;
   });
   /** 検査を始める（業務プロファイルの推薦 → 確定 → session の作成）。「もう一度確認」も同じ処理。 */
   const beginCheck = () => {
@@ -175,7 +183,7 @@ export function GuidedClarificationPanel({
         }
         await startSessionRef.current(result, profileId, abort.signal);
       },
-      { isCurrent: () => !abort.signal.aborted }
+      { isCurrent: () => !abort.signal.aborted, onBlocked: (cause) => onBlockedRef.current(cause) }
     ).finally(() => {
       if (startControllerRef.current === abort) startControllerRef.current = null;
     });
@@ -197,6 +205,7 @@ export function GuidedClarificationPanel({
     setError("");
     await runCheck(() => startSession(recommendation, selectedProfileId, abort.signal), {
       isCurrent: () => !abort.signal.aborted,
+      onBlocked,
     });
     if (startControllerRef.current === abort) startControllerRef.current = null;
   };

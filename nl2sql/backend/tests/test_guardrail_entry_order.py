@@ -256,6 +256,16 @@ def _record_downstream(
     return received
 
 
+def _assert_guardrail_blocked(response: httpx.Response) -> None:
+    """停止の 422 は code を残し、送り直しても変わらないので retryable ではない（#5191）。"""
+    body = response.json()
+    assert body["error_code"] == GUARDRAIL_BLOCKED_ERROR_CODE, body
+    assert body["problem"]["code"] == GUARDRAIL_BLOCKED_ERROR_CODE
+    assert body["problem"]["retryable"] is False
+    assert "プロンプト攻撃" in body["problem"]["detail"]
+    assert body["error_messages"] == [body["problem"]["detail"]]
+
+
 @pytest.fixture
 def no_select_ai_credential_check(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(router, "_assert_select_ai_credential_ready", lambda: None)
@@ -276,7 +286,7 @@ def test_http_entry_blocks_before_downstream(
     response = _post(path, body(BLOCKED_TEXT))
 
     assert response.status_code == 422, response.text
-    assert "プロンプト攻撃" in response.text
+    _assert_guardrail_blocked(response)
     assert BLOCKED_TEXT in oci.calls
     assert received == []
     assert "downstream" not in events
@@ -345,7 +355,60 @@ def test_job_entry_checks_before_requirement_match_and_does_not_recheck(
     matched.clear()
     response = _post("/api/nl2sql/jobs", {"question": BLOCKED_TEXT, "generation_only": True})
     assert response.status_code == 422, response.text
+    _assert_guardrail_blocked(response)
     assert events == ["guardrail"] and matched == []
+
+
+def _raise_blocked(*_args: object, **_kwargs: object) -> object:
+    raise GuardrailBlockedError(
+        GUARDRAIL_BLOCKED_ERROR_CODE,
+        "安全チェックにより処理を停止しました。 OCI Guardrails がプロンプト攻撃を検出しました。",
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "headers", "target"),
+    [
+        (
+            "/api/nl2sql/query-sessions",
+            {
+                "question": BLOCKED_TEXT,
+                "profile_id": "default",
+                "chat": True,
+                "clarification_mode": "guided",
+            },
+            {"Idempotency-Key": "guardrail-blocked-1"},
+            _runtime_target("create_session_idempotent"),
+        ),
+        (
+            "/api/nl2sql/db-admin-chat/generate",
+            {"question": BLOCKED_TEXT, "client_turn_id": "6f1c1c1e-0000-4000-8000-000000000001"},
+            {},
+            _service_target("send_db_admin_chat_question"),
+        ),
+    ],
+    ids=["query-sessions", "db-admin-chat"],
+)
+def test_route_wrapping_keeps_guardrail_code(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    body: dict[str, Any],
+    headers: dict[str, str],
+    target: Callable[[], tuple[object, str]],
+) -> None:
+    """例外を写し直す入口（回答前の確認・DB 管理のチャット）も code を落とさない（#5191）。"""
+    owner, name = target()
+    monkeypatch.setattr(owner, name, _raise_blocked)
+
+    async def send() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(path, json=body, headers=headers)
+
+    response = asyncio.run(send())
+
+    assert response.status_code == 422, response.text
+    _assert_guardrail_blocked(response)
 
 
 def test_start_job_does_not_recheck_checked_input(

@@ -349,6 +349,34 @@ def test_scoped_guide_supplement_keeps_main_anchor_and_its_neighbor(monkeypatch:
     assert ["A3"] in reader.calls
 
 
+def test_scoped_guide_candidates_of_main_evidence_do_not_take_the_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """頁の範囲を絞った手順の参照の検索の候補が主の検索の根拠と同じ chunk・前後の文脈なら、切りの前に除く（#5197）。
+
+    範囲つきの候補は ``record_context_key`` が別の key になり、除外に掛からず切りの枠（1 件）を占めて、新しい根拠 A5 が
+    入らなかった。
+    """
+    guide = GuidePlan.from_payload(
+        "g-1", 1, [{"id": "s1", "title": "合成の参照", "retrieval_hints": ["参照H"], "references": [{"document_id": "A"}]}]
+    )
+    assert guide is not None
+    # A2 は主の検索の起点、A3 はその前後の文脈、A5 は新しい根拠。
+    harness = Harness({QUESTION: ["A2", "C2"]}, {**SCORES, "A2": 0.95, "A3": 0.9, "A5": 0.8}, scoped={"参照H": ["A2", "A3", "A5"]})
+    monkeypatch.setattr(a, "injected_context_chunks", _reader(CHUNKS, no_neighbors=frozenset()))
+
+    result = _run(monkeypatch, harness, guide=guide, request=None, guide_step_chunks_per_step=1)
+
+    search = result.generation_trace["guide_steps"]["steps"][0]["searches"][0]
+    assert search["covered_candidates"] == 2 and search["candidates"] == 1
+    assert _step(result, "主の検索の根拠と重複する候補の除外")["結果"] == (
+        "主の検索の根拠と重複する 2 件を除きました（主の検索の根拠と同じ chunk 1 件・主の検索の根拠の前後の文脈に含まれる 1 件）。"
+        "残りの候補 1 件"
+    )
+    assert result.generation_trace["guide_steps"]["added_chunk_ids"] == ["A5"]
+    evidence = _evidence(result)
+    assert _keeps_main_evidence(evidence) and "A5" in evidence
+    assert evidence.count("A2") == 1 and evidence.count("A3") == 1
+
+
 def test_supplement_records_do_not_change_main_neighbors(monkeypatch: pytest.MonkeyPatch) -> None:
     """補いの検索の原文が増えても、主の検索の根拠の前後の文脈は主の検索の原文だけから選ぶ。
 

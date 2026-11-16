@@ -37,7 +37,7 @@ def payload():
     }
 
 
-def verdict(value="correct"):
+def verdict(value="consistent"):
     return AnswerCorrectnessOutput(correctness=value, reason="理由")
 
 
@@ -52,7 +52,7 @@ def generated_answer(**fields):
     )
 
 
-@pytest.mark.parametrize(("value", "score"), [("correct", 1.0), ("incorrect", 0.0), ("unassessed", None)])
+@pytest.mark.parametrize(("value", "score"), [("consistent", 1.0), ("contradicts", 0.0), ("unassessed", None)])
 def test_one_call_judges_correctness_from_question_standard_and_answer_body(value, score):
     with patch(PARSE, return_value=verdict(value)) as parse:
         result = evaluate_answer_payload(payload(), object(), provider_id="chosen")

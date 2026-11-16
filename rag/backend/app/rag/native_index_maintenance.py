@@ -10,6 +10,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from pr_backend_core.oracle_errors import oracle_error_codes
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,8 +83,13 @@ async def run_maintenance_once(
         except Exception as exc:
             # SQLや接続先を含み得る例外本文はログや状態へ保存しない。
             await store.fail(lease, type(exc).__name__)
+            # 時間切れ(DPY-4024)と接続の失敗などを分けて見るため、コードだけを残す(#5199)。
             logger.warning(
-                "native_index_maintenance_failed", extra={"error_type": type(exc).__name__}
+                "native_index_maintenance_failed",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "oracle_error_codes": oracle_error_codes(exc),
+                },
             )
             return "failed"
         if lease_lost or not await store.complete(lease):

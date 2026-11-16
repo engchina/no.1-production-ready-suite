@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import {
   ApiErrorBanner,
+  ChatGuardrailNotice,
   ClarificationCard,
   ClarificationRecord,
+  isGuardrailBlockedError,
   type ClarificationBusyAction,
 } from "@production-ready/ui";
 
@@ -59,7 +61,7 @@ export function PendingConfirmationCard({
       disabled={disabled}
       onConfirm={(answers) => onDecide("answer", confirmationAnswers(answers))}
       onSkip={confirmation.can_skip ? () => onDecide("skip") : undefined}
-      error={error ? <ApiErrorBanner error={error} fallback={t("chat.confirmation.failed")} testId="chat-confirmation-error" /> : null}
+      error={<ConfirmationError error={error} />}
       actions={actions}
       autoFocus={autoFocus}
       idPrefix={`chat-${confirmation.id}`}
@@ -77,4 +79,21 @@ export function PendingConfirmationCard({
 /** 回答前に確認した内容（会話の利用者の側。3 製品共通の `ClarificationRecord` の吹き出し）。 */
 export function ConfirmationRecordBubble({ record, testId }: { record: ConfirmationRecordView; testId: string }) {
   return <ClarificationRecord entries={record.entries} outcome={record.outcome} variant="bubble" testId={testId} />;
+}
+
+/**
+ * 確認への答えの失敗。答え（自由入力）を安全チェックが止めたときは、送り直しても同じなので答えの書き換えを
+ * 案内する（汎用の失敗にしない。#5205）。
+ */
+function ConfirmationError({ error }: { error: unknown }) {
+  if (!error) return null;
+  if (isGuardrailBlockedError(error))
+    return (
+      <ChatGuardrailNotice
+        message={error instanceof Error ? error.message : null}
+        subject="answer"
+        testId="chat-confirmation-guardrail-notice"
+      />
+    );
+  return <ApiErrorBanner error={error} fallback={t("chat.confirmation.failed")} testId="chat-confirmation-error" />;
 }

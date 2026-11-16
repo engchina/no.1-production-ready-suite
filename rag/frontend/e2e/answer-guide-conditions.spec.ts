@@ -78,7 +78,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
   }, theme);
 }
 
-async function mockApi(page: Page, answer: Record<string, unknown>, citations: unknown[]) {
+async function mockApi(page: Page, answer: Record<string, unknown>, citations: unknown[], guardrailWarnings: string[] = []) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -98,7 +98,7 @@ async function mockApi(page: Page, answer: Record<string, unknown>, citations: u
         `event: metadata\ndata: ${JSON.stringify({
           trace_id: "trace-guide",
           elapsed_ms: 20,
-          guardrail_warnings: [],
+          guardrail_warnings: guardrailWarnings,
           diagnostics: {
             search_answer_profile_applied: "bv-1",
             retrieval_strategy: "hybrid",
@@ -209,6 +209,26 @@ for (const theme of ["light", "dark"] as const) {
     await screenshot(panel, `answer-guide-load-failed-${theme}`, testInfo.project.name);
   });
 }
+
+test("回答の案内（業務ガイド・資料で決まらない値・安全チェック）は回答のカードの 1 つの枠にまとめる（#5183）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockApi(
+    page,
+    { outcome: "answered", guide_load_failed: true, external_data_required: true, external_data_items: ["値 A"] },
+    [citation("doc-1:cs_1:0", { page_start: 2, page_end: 2 })],
+    ["個人情報をマスクしました"],
+  );
+  await ask(page);
+  const notices = page.getByTestId("answer-notices");
+  await expect(notices).toHaveCount(1);
+  await expect(notices.getByTestId("answer-guide-load-failed")).toBeVisible();
+  await expect(notices.getByTestId("answer-external-data")).toContainText("値 A");
+  await expect(notices.getByTestId("search-guardrail-warning")).toContainText("個人情報をマスクしました");
+  // 安全チェックの注意を結果の先頭に別の枠で出さない。枠の role は 1 か所。
+  await expect(page.getByTestId("search-guardrail-warning")).toHaveCount(1);
+  await expect(notices.locator("[role]")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await screenshot(notices, "answer-notices-combined", testInfo.project.name);
+});
 
 test("処理の詳細の診断は識別子とモデルに統一する", { tag: "@responsive" }, async ({ page }) => {
   await mockApi(page, {}, []);

@@ -61,9 +61,10 @@ from rag_parser_core.vision_text import (
 )
 
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import OracleClient, bind_text_query_keywords
+from app.clients.oracle import NativeScopeReuse, OracleClient, bind_text_query_keywords
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
+    db_call_label,
     read_lobs_as_values,
 )
 from app.config import (
@@ -312,6 +313,9 @@ class _SearchState:
     search_hits: dict[
         tuple[str, str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]
     ] = field(default_factory=dict)
+    # 原生検索の準備の確認と範囲の解決(#5184)。要求ごとの補いの検索・業務ガイドの手順の検索で
+    # 読み直さない(1 回の回答の中だけ。範囲の古さは検索ごとに確かめる)。
+    native_scope_reuse: NativeScopeReuse = field(default_factory=NativeScopeReuse)
     # 章節の拡張(#1436)の章節の一覧((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
     # 利用者が明示した基準日(as_of。無ければ空)。検索の条件は 1 回の回答の初めに決めた基準日を
@@ -963,7 +967,7 @@ class AnswerEngine:
             bind_dependencies(dependencies),
             prompt_overrides(overrides or {}),
             bind_step_listener(notify_step if step_callback is not None else None),
-            bind_step_metrics(db_stats.snapshot if db_stats is not None else None),
+            bind_step_metrics(db_stats.step_snapshot if db_stats is not None else None),
         ):
             return answer_question_result(
                 request.query,
@@ -1188,7 +1192,16 @@ class AnswerEngine:
             observation.response(response)
             if raw_lists and all(r.status == "failed" for r in raw_lists):
                 observation.display(params={"status": "failed"})
-                raise RuntimeError("すべての検索一覧の取得に失敗しました。")
+                # 最初の失敗を原因に結ぶ。呼び出し側が DB の失敗を原因ごとに返す（#5233）。
+                cause = next(
+                    (
+                        failure
+                        for hits in all_hits
+                        if isinstance(failure := getattr(hits, "failure", None), BaseException)
+                    ),
+                    None,
+                )
+                raise RuntimeError("すべての検索一覧の取得に失敗しました。") from cause
         if len(state.search_log) < _ZERO_EVIDENCE_SEARCH_LOG_LIMIT:
             state.search_log.append(
                 {
@@ -1371,17 +1384,18 @@ class AnswerEngine:
                             "起点の融合スコア": fused,
                         }
                     )
-                references = await self._reference_expansion(
-                    request,
-                    state,
-                    anchors,
-                    existing=source_ids,
-                    question=(queries[0], embeddings[queries[0]])
-                    if queries[0] in embeddings
-                    else None,
-                    scores=fused,
-                    receipt=receipt,
-                )
+                with db_call_label("reference"):
+                    references = await self._reference_expansion(
+                        request,
+                        state,
+                        anchors,
+                        existing=source_ids,
+                        question=(queries[0], embeddings[queries[0]])
+                        if queries[0] in embeddings
+                        else None,
+                        scores=fused,
+                        receipt=receipt,
+                    )
                 if observation is not None:
                     observation.response(
                         lambda: {
@@ -1430,7 +1444,8 @@ class AnswerEngine:
                             "最大追加 Chunk 数": self._settings.rag_entity_expansion_max_chunks,
                         }
                     )
-                entity_chunks = await self._entity_expansion(request, state, anchors)
+                with db_call_label("entity"):
+                    entity_chunks = await self._entity_expansion(request, state, anchors)
                 _expansion_stage_outcome(
                     observation,
                     chunks=entity_chunks,
@@ -1481,12 +1496,13 @@ class AnswerEngine:
                             "最大追加 Chunk 数": self._settings.rag_graph_expansion_max_chunks,
                         }
                     )
-                graph_chunks = await self._graph_expansion(
-                    request,
-                    state,
-                    anchors,
-                    exclude=graph_exclude,
-                )
+                with db_call_label("graph"):
+                    graph_chunks = await self._graph_expansion(
+                        request,
+                        state,
+                        anchors,
+                        exclude=graph_exclude,
+                    )
                 _expansion_stage_outcome(
                     observation,
                     chunks=graph_chunks,
@@ -1830,7 +1846,11 @@ class AnswerEngine:
                         "融合スコア": dict(fused),
                     }
                 )
-            result = await self._resolve_original_anchors(state, anchors, fused, filters=filters)
+            # SQL の種類ごとの回数・時間の label(#5184)。
+            with db_call_label("original_anchor"):
+                result = await self._resolve_original_anchors(
+                    state, anchors, fused, filters=filters
+                )
             if observation is not None:
                 observation.response(
                     lambda: {
@@ -1926,7 +1946,7 @@ class AnswerEngine:
         embedding は検索文のもの(#5159)。まだ読んでいない検索は 1 回の SQL でまとめて読む
         (``OracleClient.search_many``。結果は検索文ごとの ``hybrid_search`` と同じ。#1498)。
         同じ回答の中で同じ検索文・渡す文・方式・条件・件数を読んだことがあれば、その結果を使う
-        (要求ごとの再検索)。
+        (要求ごとの再検索)。原生検索の準備の確認と範囲の解決も同じ回答の中で使い回す(#5184)。
         """
         filter_key = tuple(sorted(filters.items()))
         keys = [
@@ -1944,7 +1964,10 @@ class AnswerEngine:
             search_many = getattr(self._oracle, "search_many", None)
             if search_many is not None:
                 found = await search_many(
-                    list(missing.values()), candidate_limit, filters=dict(filters)
+                    list(missing.values()),
+                    candidate_limit,
+                    filters=dict(filters),
+                    reuse=state.native_scope_reuse,
                 )
             else:
                 # ``hybrid_search`` だけを持つ Oracle(テストの代役など)は 1 本ずつ読む。
@@ -4183,6 +4206,26 @@ def _answer_use(child: Mapping[str, Any]) -> str | None:
     return value if value in ANSWER_USES else None
 
 
+def _step_db_labels(value: object) -> dict[str, dict[str, int | float]]:
+    """工程の記録の ``db_by_label``(label → 回数・秒)を、数値だけの形にそろえる(#5184)。"""
+    if not isinstance(value, Mapping):
+        return {}
+    labels: dict[str, dict[str, int | float]] = {}
+    for name, totals in value.items():
+        if not isinstance(name, str) or not isinstance(totals, Mapping):
+            continue
+        count, seconds = totals.get("count"), totals.get("seconds")
+        if (
+            isinstance(count, int)
+            and not isinstance(count, bool)
+            and count > 0
+            and isinstance(seconds, int | float)
+            and not isinstance(seconds, bool)
+        ):
+            labels[name] = {"count": count, "seconds": seconds}
+    return labels
+
+
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
     tree: list[dict[str, Any]] = []
@@ -4327,6 +4370,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
                 for key, value in step.items()
                 if key in _STEP_DB_METRIC_KEYS and isinstance(value, int | float)
             },
+            # SQL の種類(label)ごとの回数・秒(#5184)。SQL の本文・bind は持たない。
+            **(
+                {"db_by_label": labels}
+                if (labels := _step_db_labels(step.get("db_by_label")))
+                else {}
+            ),
             # LLM の token の数（入力・出力・推論）と呼び出しの秒の和(#1516)。
             **(
                 {"llm_usage": dict(step["llm_usage"])}

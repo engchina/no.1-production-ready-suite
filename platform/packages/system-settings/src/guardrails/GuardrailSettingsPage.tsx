@@ -1,4 +1,5 @@
 import {
+  Banner,
   ButtonLink,
   Card,
   CardContent,
@@ -116,12 +117,16 @@ export function GuardrailSettingsPage({ api, errorMessage, messages, draftGuardM
               {m.officialDocs}
             </a>
           </p>
-          <FormStatus tone="info" message={m.overview} />
+          {/* 設定の範囲と効く時期は常設の補足（messaging.md §3.8）。案内の枠はカードに 1 つで、OCI の不足だけを出す
+              （§3.4.3。#5183）。未保存の変更は確定の行の FormStatus（起点の状態。枠ではない）。 */}
+          <p className="text-sm leading-relaxed text-fg-muted">{m.overview}</p>
           {warning ? (
-            <div className="space-y-2">
-              <FormStatus tone="warning" message={warning} />
-              <ButtonLink to={SYSTEM_SETTINGS_PATHS.oci} variant="secondary">{m.ociSettingsLink}</ButtonLink>
-            </div>
+            <Banner
+              severity="warning"
+              action={<ButtonLink to={SYSTEM_SETTINGS_PATHS.oci} variant="secondary" size="sm">{m.ociSettingsLink}</ButtonLink>}
+            >
+              {warning}
+            </Banner>
           ) : null}
           <FormActionBar
             ariaLabel={m.actionsLabel}

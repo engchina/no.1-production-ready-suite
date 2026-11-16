@@ -618,10 +618,12 @@ Run の repository → 中断した Run の失敗（`in_process` だけ。#1894�
 backfill）の順に 1 回だけ読み込む。
 
 - **再起動で中断した Run**（#1894）: `in_process` の Run の実行は backend のプロセスの asyncio の task だけで、再起動
-  （`--reload`・配備の更新・異常終了）で task が消えると拾い直す仕組みが無い。読み込みで、このプロセスの起動（module の
-  import）の時刻より前に作った・変えた `running` / `queued` の Run を `failed` にする（Event `runtime.failed`、
+  （`--reload`・配備の更新・異常終了）で task が消えると拾い直す仕組みが無い。読み込みで、保存先の所有（`storage_owner`。
+  #4216）を取った後・読み込みが済む前に、`running` / `queued` の Run を `failed` にする（Event `runtime.failed`、
   `error_code=runtime.interrupted`、`payload.source="startup"`、文「サーバーの再起動で実行が中断されました。もう一度送信して
-  ください。」。途中の step も `failed`）。起動の後の Run は触らない（このプロセスが始めたものか、別のプロセスが動かしている途中）。
+  ください。」。途中の step も `failed`）。Run を作る経路（業務の API・MCP・スケジューラ）は読み込みが済むまで待つので、
+  この時点の `running` / `queued` はすべて前のプロセスのもの。時刻（前のプロセスの `updated_at` とこのプロセスの起動の時刻）の
+  大小では選ばない（OS の時計が戻ると前のプロセスの Run を見落とす。#5179）。
   承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。dispatcher（`in_process` 以外）のときは触らない
   （dispatcher が lease で claim する）。チャットは Run の失敗の文をそのまま出し、自動実行は前回の Run が終わったので次を
   作れる。品質評価の job は `evaluation_store.restore` が中断として終える（#1432）。読み込み（`rewrite_saved_data` の読み直しを

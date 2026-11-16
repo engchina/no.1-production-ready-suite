@@ -10,10 +10,12 @@ import {
   ApiErrorBanner,
   Banner,
   Button,
+  ChatGuardrailNotice,
   ClarificationCard,
   clarificationLabels,
   Disclosure,
   DisclosureChevron,
+  isGuardrailBlockedError,
   ProcessingIndicator,
   StatusBadge,
   type ClarificationBusyAction,
@@ -406,14 +408,19 @@ export interface RequirementCheckRunner {
   /**
    * 検査を行う。成功したら結果を返し、失敗は `checkError` に入れて null を返す。`isCurrent` が false になった
    * （中止した・別の送信に移った）ときは状態を変えずに null を返す。OCI Enterprise AI が無い
-   * （`REQUIREMENT_AI_NOT_CONFIGURED`）ときは `onUnavailable` を呼ぶ（確認せずに SQL を作る）。
+   * （`REQUIREMENT_AI_NOT_CONFIGURED`）ときは `onUnavailable` を呼ぶ（確認せずに SQL を作る）。安全チェックが
+   * 質問を止めた（`GUARDRAIL_BLOCKED`）ときに `onBlocked` があれば、失敗にせずそれを呼ぶ（チャットは確認の
+   * カードを出さずに、止めた質問として出す。#5191）。
    */
-  run: <T>(
-    task: () => Promise<T>,
-    options?: { isCurrent?: () => boolean; onUnavailable?: () => void }
-  ) => Promise<T | null>;
+  run: <T>(task: () => Promise<T>, options?: RequirementCheckOptions) => Promise<T | null>;
   /** 検査の表示を外す（中止・別の送信に移ったとき）。 */
   reset: () => void;
+}
+
+export interface RequirementCheckOptions {
+  isCurrent?: () => boolean;
+  onUnavailable?: () => void;
+  onBlocked?: (cause: unknown) => void;
 }
 
 export function useRequirementCheck(initialChecking = false): RequirementCheckRunner {
@@ -422,7 +429,7 @@ export function useRequirementCheck(initialChecking = false): RequirementCheckRu
   const run = useCallback(
     async <T,>(
       task: () => Promise<T>,
-      options: { isCurrent?: () => boolean; onUnavailable?: () => void } = {}
+      options: RequirementCheckOptions = {}
     ): Promise<T | null> => {
       const isCurrent = options.isCurrent ?? (() => true);
       setCheckError(null);
@@ -438,6 +445,10 @@ export function useRequirementCheck(initialChecking = false): RequirementCheckRu
         if (isAbortError(cause)) return null;
         if (options.onUnavailable && isRequirementCheckUnavailable(cause)) {
           options.onUnavailable();
+          return null;
+        }
+        if (options.onBlocked && isGuardrailBlockedError(cause)) {
+          options.onBlocked(cause);
           return null;
         }
         setCheckError(cause);
@@ -515,7 +526,25 @@ export function RequirementCheckFailure({
 export function RequirementErrorBanner({ error }: { error: unknown }) {
   if (!error) return null;
   if (typeof error === "string") return <Banner severity="danger">{error}</Banner>;
+  // 確認への答え（自由入力）を安全チェックが止めた案内は、答えの欄のあるカードの中に出す（`RequirementGuardrailNotice`。
+  // 起点の直下。#5205）。ここでは重ねない。
+  if (isGuardrailBlockedError(error)) return null;
   return <ApiErrorBanner error={error} fallback={t("nl2sql.requirementFailure.fallback")} />;
+}
+
+/**
+ * 確認への答え（自由入力）を安全チェックが止めたときの案内（#5205）。送り直しても同じなので、汎用の失敗にせず
+ * 答えの書き換えを案内する。確認のカードの `error`（答えの操作の直前）に置く（Agent の確認のカードと同じ）。
+ */
+function RequirementGuardrailNotice({ error }: { error: unknown }) {
+  if (!isGuardrailBlockedError(error)) return null;
+  return (
+    <ChatGuardrailNotice
+      message={error instanceof Error ? error.message : null}
+      subject="answer"
+      testId="nl2sql-clarification-guardrail-notice"
+    />
+  );
 }
 
 export function RequirementStateBanners({ state, unresolvedCount }: { state: RequirementState | null; unresolvedCount: number }) {
@@ -731,6 +760,7 @@ export function RequirementCard({
           idPrefix={`${idPrefix}-clarification`}
           testId="nl2sql-clarification-card"
           items={[item]}
+          error={<RequirementGuardrailNotice error={controller.error} />}
           value={{ [activeItem.id]: { optionIds: selectedCandidateIds, otherText: freeText } }}
           onValueChange={(draft) => {
             const entry = draft[activeItem.id];
@@ -800,6 +830,7 @@ export function RequirementCard({
         idPrefix={`${idPrefix}-confirm`}
         testId="nl2sql-clarification-card"
         items={[item]}
+        error={<RequirementGuardrailNotice error={controller.error} />}
         value={{
           [item.id]: { optionIds: confirmTarget && checkedId ? [checkedId] : [], otherText: freeText },
         }}
