@@ -6,6 +6,7 @@
 
 - 業務ガイドの必須取得（`guide_required`）と任意の手順検索（`guide_steps`）
 - 小問ごとの検索と根拠の無い要求の再検索（`request_coverage`。#2399・#1279）
+- 補いの検索で当たった文書全体の要約の、その文書の本文に絞った検索し直し（`summary_body`。#5244）
 
 種類ごとの上限は任意の検索に適用する。必須取得も予約数と総枠を超えて実行しない。
 回数を数えるのはこの module の `ExtraRetrievalBudget` だけにし、種類を足すときも同じ枠から取る。
@@ -20,6 +21,7 @@ from typing import Any
 GUIDE_STEPS_KIND = "guide_steps"
 GUIDE_REQUIRED_KIND = "guide_required"
 REQUEST_COVERAGE_KIND = "request_coverage"
+SUMMARY_BODY_KIND = "summary_body"
 
 
 @dataclass
@@ -90,4 +92,4 @@ class ExtraRetrievalBudget:
         return payload
 
 
-__all__ = ["GUIDE_REQUIRED_KIND", "GUIDE_STEPS_KIND", "REQUEST_COVERAGE_KIND", "ExtraRetrievalBudget"]
+__all__ = ["GUIDE_REQUIRED_KIND", "GUIDE_STEPS_KIND", "REQUEST_COVERAGE_KIND", "SUMMARY_BODY_KIND", "ExtraRetrievalBudget"]
