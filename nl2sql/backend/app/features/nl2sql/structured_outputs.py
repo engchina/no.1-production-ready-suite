@@ -26,7 +26,8 @@ class AnalysisOutput(BaseModel):
 
 # DB 管理チャットの SQL の生成（#2264）。質問には SQL で答える（SQL の無い応答は作り直させる。
 # #2333）。
-# docstring は JSON schema の description としてモデルに渡るので、経緯はこのコメントに書く。
+# 項目の説明（Field の description）は、送る時に指示の最後の Step に移してモデルに渡す。型の説明
+# （docstring）はモデルに渡らない（enterprise_ai_client._with_field_guide。#5238）。
 class DbAdminChatSqlOutput(BaseModel):
     sql: str = Field(description="質問に答える・作業を行う Oracle の SQL（1 文以上）。")
     explanation: str = Field(default="", description="SQL が何をするかの短い説明。")

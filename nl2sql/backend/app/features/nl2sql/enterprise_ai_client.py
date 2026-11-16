@@ -25,6 +25,7 @@ from pr_backend_core.output_budget import (
     online_output_budget,
     output_limit_message,
 )
+from pr_backend_core.response_schema import with_schema_field_guide
 from pr_system_settings.enterprise_ai_errors import (
     ENTERPRISE_AI_RETRYABLE_STATUS_CODES,
     EnterpriseAiCallFailureKind,
@@ -756,6 +757,7 @@ def _build_payload(
             "指定された JSON object だけを返す。"
             "SQL・Markdown・自然言語は対応する文字列 field 内に格納する。"
         )
+        system_prompt, response_format = _with_field_guide(system_prompt, response_format)
     values: dict[str, Any] = {
         "model": model_id,
         "prompt": prompt,
@@ -804,6 +806,7 @@ def _build_image_payload(
             "\n出力形式は text.format の JSON Schema を最優先する。"
             "抽出した全文を text に格納した JSON object だけを返す。"
         )
+        prompt, response_format = _with_field_guide(prompt, response_format)
     image_base64 = b64encode(image_bytes).decode("ascii")
     data_url = f"data:{mime_type};base64,{image_base64}"
     values: dict[str, Any] = {
@@ -846,6 +849,22 @@ def _build_image_payload(
         ),
         response_format,
     )
+
+
+def _with_field_guide(
+    instructions: str, response_format: Mapping[str, Any]
+) -> tuple[str, Mapping[str, Any]]:
+    """応答 schema の項目の説明を指示の最後の Step に移し、説明を外した形式を返す（#5238）。
+
+    ``text.format`` の schema の説明は、モデルによっては読まれず形の制約にだけ使われるため、
+    全モデルに同じ Step で渡す（``pr_backend_core.response_schema``）。呼び出し側の形式は
+    書き換えない（応答の検査は元の schema で行う）。
+    """
+    schema = response_format.get("schema")
+    if not isinstance(schema, Mapping):
+        return instructions, response_format
+    guided, stripped = with_schema_field_guide(instructions, schema)
+    return guided, {**response_format, "schema": stripped}
 
 
 def _with_reasoning_effort(payload: Mapping[str, Any], effort: str) -> Mapping[str, Any]:

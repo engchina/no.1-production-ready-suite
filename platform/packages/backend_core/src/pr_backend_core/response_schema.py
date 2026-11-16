@@ -1,9 +1,10 @@
-"""構造化出力の応答 schema の項目の説明を、指示の文の Step にして渡す（#5230）。
+"""構造化出力の応答 schema の項目の説明を、指示の文の Step にして渡す（#5230・#5238）。
 
 項目の意味（Pydantic の ``Field(description=...)``）の正本は応答 schema のまま変えない。
 Responses API の ``text.format`` の JSON Schema の説明は、モデルによっては読まれず、出力の形の
 制約にだけ使われる。そこで送る時に説明を指示の文の最後の Step に移し、schema からは説明を外す。
 全モデルに同じ入力を送り、同じ説明を 2 回渡さない（モデルごとの分岐はしない）。
+3 製品の Enterprise AI の adapter（RAG・NL2SQL・Agent）が、schema を送る直前に使う。
 
 型の説明（model の docstring 由来の説明）は実装の説明なので、モデルへ渡さない
 （画像の説明の schema と同じ扱い。#4782）。
@@ -16,7 +17,7 @@ import json
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from rag_parser_core.prompt_steps import continue_prompt_steps
+from pr_backend_core.prompt_steps import continue_prompt_steps
 
 FIELD_GUIDE_HEADING = "## Step 1: 応答の各項目を書く"
 FIELD_GUIDE_LEAD = "応答の JSON の各項目は、次の説明に従って書く。"

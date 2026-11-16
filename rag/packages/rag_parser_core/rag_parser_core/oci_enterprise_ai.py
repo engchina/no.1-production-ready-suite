@@ -25,10 +25,10 @@ from typing import Any, Protocol
 import httpx
 import openai
 from pr_backend_core.llm_request_params_httpx import AsyncParameterDroppingClient
+from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import ValidationError
 
 from rag_parser_core.extraction import StructuredExtraction
-from rag_parser_core.response_schema import with_schema_field_guide
 from rag_parser_core.text_encoding import detect_text_match
 
 DEFAULT_LLM_PATH = "/responses"
