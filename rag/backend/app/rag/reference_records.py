@@ -7,7 +7,11 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.rag.cross_references import extract_references, reference_targets
+from app.rag.cross_references import (
+    extract_references,
+    is_file_name_reference,
+    reference_targets,
+)
 from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
 
 
@@ -57,6 +61,11 @@ def build_reference_records(
             resolution = resolve_scoped_reference(
                 spec, source=source, citing_path=path, documents=documents
             )
+            if resolution.status == "not_found" and is_file_name_reference(
+                spec.document_title or ""
+            ):
+                # 範囲に無いファイル名の形は、範囲の文書への参照でないので記録しない(#5208)。
+                continue
             identity = "|".join(
                 (knowledge_base_id, chunk_id, spec.kind, spec.key, spec.document_title or "")
             )

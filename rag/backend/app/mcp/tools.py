@@ -117,8 +117,8 @@ from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
     REFERENCE_RANK_KEY,
-    document_name_match,
     document_name_references,
+    document_reference_rank,
     reference_targets,
     section_path_within,
     split_section_path,
@@ -2503,7 +2503,7 @@ def _referenced_by_name(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
     質問に関連の高い順に選んだもの。起点が別の候補でも、文書名で参照する当たった chunk の参照の
     先として確保する。確保するのは参照先 1 つにつき最も関連の高い 1 件（``reference_rank`` が 1）
     だけ（2 件目は質問と関係の薄い節・台帳の別の行が多く、当たった chunk を上限の外へ押し出す）。
-    文書は文書名とタイトル（見出しの列の先頭）で照合する（``document_name_match``）。
+    文書は文書名とタイトル（見出しの列の先頭）で照合する（``document_reference_rank``）。
     """
     if (
         context.document_id == hit.document_id
@@ -2513,7 +2513,7 @@ def _referenced_by_name(hit: RetrievedChunk, context: RetrievedChunk) -> bool:
         return False
     root = split_section_path(context.metadata.get("section_path"))[:1]
     return any(
-        document_name_match(name, context.file_name or "", root) is not None
+        document_reference_rank(name, context.file_name or "", root) is not None
         for name in _referenced_document_names(hit)
     )
 
