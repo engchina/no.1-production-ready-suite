@@ -36,6 +36,39 @@ class StepMetricsTests(unittest.TestCase):
         self.assertEqual(by_name["回答生成フロー"]["depth"], 0)
         self.assertEqual(by_name["文書検索"]["depth"], 1)
 
+    def test_nested_metrics_keep_only_kinds_that_grew_in_the_step(self):
+        # SQL の種類ごとの回数・秒（#5184）。工程で増えた種類だけを、回数と秒の両方で残す。
+        counters = {
+            "db_execute_count": 1,
+            "db_by_label": {"native_ready": {"count": 1, "seconds": 0.5}},
+        }
+
+        def body():
+            with _execution_step("文書検索"):
+                counters["db_execute_count"] += 3
+                counters["db_by_label"] = {
+                    "native_ready": {"count": 1, "seconds": 0.5},
+                    "keyword": {"count": 2, "seconds": 0.75},
+                    "vector_exact": {"count": 1, "seconds": 0.0},
+                }
+            with _execution_step("回答生成"):
+                pass
+
+        def provider():
+            return {"db_execute_count": counters["db_execute_count"], "db_by_label": counters["db_by_label"], "ignored": "text"}
+
+        steps = self._run(provider, body)
+        by_name = {step["name"]: step for step in steps}
+        self.assertEqual(by_name["文書検索"]["db_execute_count"], 3)
+        self.assertEqual(
+            by_name["文書検索"]["db_by_label"],
+            {"keyword": {"count": 2, "seconds": 0.75}, "vector_exact": {"count": 1, "seconds": 0.0}},
+        )
+        self.assertNotIn("ignored", by_name["文書検索"])
+        # SQL の無い工程は、合計の 0 だけを残し種類ごとの値を足さない。
+        self.assertEqual(by_name["回答生成"]["db_execute_count"], 0)
+        self.assertNotIn("db_by_label", by_name["回答生成"])
+
     def test_without_provider_step_has_no_metrics(self):
         steps = []
         token = _structured_steps.set(steps)

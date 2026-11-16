@@ -1,6 +1,7 @@
-"""原生索引の整理は実残数を確認し、業務transactionを扱わない。"""
+"""原生索引の整理は実残数を確認し、整理の結果を確定し、業務transactionを扱わない。"""
 
 from collections.abc import Mapping
+from typing import Literal
 
 import pytest
 
@@ -37,7 +38,8 @@ class IndexConnection:
         self.calls.append("close")
 
     def commit(self) -> None:
-        raise AssertionError("業務transactionをcommitしない")
+        # 整理だけの接続。確定するのは OPTIMIZE_INDEX が開いた transaction(#5199)。
+        self.calls.append("commit")
 
     def rollback(self) -> None:
         raise AssertionError("業務transactionをrollbackしない")
@@ -148,7 +150,8 @@ def test_verification_uses_its_own_hook_after_optimizer_returns() -> None:
         connection, before_call=before_call, before_verify=before_verify
     )
     assert result.after.stored == 2
-    assert order == ["call", "call", "call", "verify", "verify"]
+    # 整理の確定(#5199)と件数の検査は、整理の期限ではなく検査の上限で行う。
+    assert order == ["call", "call", "call", "verify", "verify", "verify"]
 
 
 def test_verification_failure_is_distinct_from_optimizer_failure() -> None:
@@ -172,3 +175,44 @@ def test_index_identifier_is_validated_before_database_access(index_name: str) -
     with pytest.raises(ValueError, match="索引名"):
         maintain_native_vectors(connection, index_name=index_name)
     assert not connection.calls
+
+
+@pytest.mark.parametrize(
+    ("plan", "counts", "optimizers"),
+    [
+        ("semantic", [(12, 2), (2, 2)], ["semantic"]),
+        ("semantic_then_full", [(12, 2), (2, 2), (2, 2)], ["semantic", "full"]),
+        ("full", [(12, 2), (2, 2)], ["full"]),
+    ],
+    ids=["semantic", "semantic-then-full", "full"],
+)
+def test_each_optimizer_is_committed_before_verification(
+    plan: Literal["semantic", "semantic_then_full", "full"],
+    counts: list[tuple[int, int]],
+    optimizers: list[str],
+) -> None:
+    """semantic の OPTIMIZE_INDEX は transaction を開いたまま返る(実 DB で確認)。確定しないと
+    接続の返却・close で rollback され、整理が毎回やり直しになる(#5199)。"""
+    connection = IndexConnection(counts)
+    maintain_native_vectors(connection, plan=plan)
+    assert connection.optimizers() == optimizers
+    for position, call in enumerate(connection.calls):
+        if "OPTIMIZE_INDEX" in call:
+            assert connection.calls[position + 1] == "commit"
+    assert connection.calls.count("commit") == len(optimizers)
+
+
+def test_failed_optimizer_is_not_committed() -> None:
+    connection = IndexConnection([(12, 2)], fail=True)
+    with pytest.raises(RuntimeError, match="合成の整理失敗"):
+        maintain_native_vectors(connection)
+    assert "commit" not in connection.calls
+
+
+def test_failed_full_keeps_the_committed_semantic_cleanup() -> None:
+    connection = IndexConnection([(12, 2), (2, 2)], fail_full=True)
+    result = maintain_native_vectors(connection, plan="semantic_then_full")
+    assert result.strategy == "semantic"
+    semantic = next(i for i, sql in enumerate(connection.calls) if "SECTION_SEMANTIC" in sql)
+    assert connection.calls[semantic + 1] == "commit"
+    assert connection.calls.count("commit") == 1

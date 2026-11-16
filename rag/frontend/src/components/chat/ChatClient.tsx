@@ -14,7 +14,9 @@ import {
   PageHeader,
   Button,
   Banner,
-  ProcessFailureNotice,
+  CombinedBanner,
+  type CombinedBannerItem,
+  processFailureBannerItem,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
   useChatHistoryActions,
@@ -50,7 +52,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { AnswerCitations } from "@/components/search/CitationList";
-import { AnswerNotices } from "@/components/search/AnswerDetailsPanel";
+import { answerNoticeItems } from "@/components/search/AnswerDetailsPanel";
 import { AnswerProcess } from "@/components/search/AnswerProcess";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -392,6 +394,62 @@ function AssistantColumn({
       }
     />
   );
+  // 安全チェックの注意（個人情報のマスクなど）。回答の案内と同じ枠に入れる（#5183）。
+  const guardrailItem: CombinedBannerItem | null =
+    guardrailWarnings.length > 0
+      ? {
+          id: "guardrail",
+          severity: "warning",
+          testId: "chat-guardrail-warning",
+          children: (
+            <>
+              <span className="font-medium">{t("chat.guardrail")}: </span>
+              {guardrailWarnings.join(" / ")}
+            </>
+          ),
+        }
+      : null;
+  // 回答の本文と案内を出す場合（停止・失敗・回答待ちでないとき）。
+  const showsAnswerNotices = !stoppedMessage && !errorMessage && !waitingForAnswer;
+  // 1 つの回答の案内は 1 つの枠（messaging.md §3.4.3。#5183）。失敗（§9.1 の失敗のカード）・作った回答を保存
+  // できなかったこと・回答を読むときに要る案内（資料では決まらない値など）・安全チェックの注意を同じ枠の項目にする
+  // （#5226）。
+  const failureItem = errorMessage
+    ? processFailureBannerItem({
+        failure: chatAnswerFailure({ message: errorMessage, traceId, ...failure }),
+        labels: processFailureLabels(),
+        testId: "chat-answer-failure",
+        action: onRetry ? (
+          <Button type="button" variant="secondary" size="sm" icon={RotateCcw} onClick={onRetry}>
+            {t("chat.error.retry")}
+          </Button>
+        ) : undefined,
+      })
+    : null;
+  const storageItem =
+    showsAnswerNotices && finished && storageNotice
+      ? processFailureBannerItem({
+          failure: storageNotice,
+          severity: "warning",
+          labels: processFailureLabels(),
+          testId: "chat-answer-storage-failure",
+          id: "storage-failure",
+        })
+      : null;
+  const notices = (
+    <CombinedBanner
+      testId="answer-notices"
+      items={[
+        failureItem,
+        storageItem,
+        ...(showsAnswerNotices && finished ? answerNoticeItems(answerDiagnostics, passageSource) : []),
+        guardrailItem,
+      ]}
+    />
+  );
+  // 失敗・保存の失敗は、回答を読む前に分かるよう本文の上（処理の経過の直下）に出す（§9.1）。それ以外の案内は
+  // 回答の本文の直下（#2096）。
+  const noticesBeforeAnswer = Boolean(failureItem || storageItem);
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)} progress={<>
@@ -454,57 +512,18 @@ function AssistantColumn({
           <Square size={14} aria-hidden="true" />
           {stoppedMessage}
         </p>
-      ) : errorMessage ? (
-        // 失敗は 3 製品共通の失敗のカード（何が起きたか → 原因 → 次の操作 →「詳細」。#2342）。
-        <ProcessFailureNotice
-          failure={chatAnswerFailure({ message: errorMessage, traceId, ...failure })}
-          labels={processFailureLabels()}
-          testId="chat-answer-failure"
-          action={
-            onRetry ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                icon={RotateCcw}
-                onClick={onRetry}
-              >
-                {t("chat.error.retry")}
-              </Button>
-            ) : undefined
-          }
-        />
-      ) : waitingForAnswer ? null : (
+      ) : null}
+      {noticesBeforeAnswer ? notices : null}
+      {showsAnswerNotices ? (
         <>
-          {/*
-            作った回答を保存できなかった（#2342）。回答は出したまま、読む前に欠けたもの（読み込み直すと消える等）と
-            理由が分かるよう、処理の経過の直下・回答の本文の上に 1 つだけ出す。
-          */}
-          {finished && storageNotice ? (
-            <ProcessFailureNotice
-              failure={storageNotice}
-              severity="warning"
-              labels={processFailureLabels()}
-              testId="chat-answer-storage-failure"
-            />
-          ) : null}
           {/*
             回答の本文が届いたら、本文の前に見出し「回答」を出す（本文の中の節の見出しと同じ書式。3 製品共通の
             ChatAnswerBody。#3433）。本文の届く前（カーソルだけ）は出さない。
           */}
           {answer.trim() ? <ChatAnswerBody testId="chat-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
-          {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
-          {finished && (answerDiagnostics || passageSource) ? (
-            <AnswerNotices diagnostics={answerDiagnostics} savedMessage={passageSource} />
-          ) : null}
         </>
-      )}
-      {guardrailWarnings.length > 0 ? (
-        <Banner severity="warning">
-          <span className="font-medium">{t("chat.guardrail")}: </span>
-          {guardrailWarnings.join(" / ")}
-        </Banner>
       ) : null}
+      {noticesBeforeAnswer ? null : notices}
       {citations.length > 0 ||
       withheldCount > 0 ||
       (finished && (traceId || answerDiagnostics || progress || notice)) ? (

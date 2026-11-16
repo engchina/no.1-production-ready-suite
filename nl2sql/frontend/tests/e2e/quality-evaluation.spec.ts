@@ -1446,6 +1446,13 @@ test("Select AI Credential が無いと Select AI の評価の開始を止めて
   await expect(precondition).toContainText("作成するまで評価を開始できません。");
   await expect(start).toBeDisabled();
   await expect(start).toHaveAttribute("aria-describedby", "quality-evaluation-credential-precondition");
+  // LLM Judge の案内と同じ 1 つの枠の項目（同じ区画の案内の枠は 1 つ。messaging.md §3.4.3。#5226）。
+  const notice = page.getByTestId("quality-evaluation-judge-note");
+  await expect(notice.getByTestId("quality-evaluation-credential-precondition")).toBeVisible();
+  await expect(notice.locator('[role="alert"], [role="status"]')).toHaveCount(1);
+  await expect(notice.getByRole("status")).toHaveAttribute("data-surface-tint", "warning");
+  await expect(page.locator("#quality-evaluation-credential-precondition")).toContainText("Select AI Credential が作成されていません");
+  await expect(precondition.getByRole("button", { name: "再試行" })).toBeVisible();
   // 開始の操作の行（区切り線の上）の直前に出す。
   const noticeBox = await visibleBox(precondition);
   const footerBox = await visibleBox(page.getByTestId("quality-evaluation-action-footer"));
@@ -1455,6 +1462,11 @@ test("Select AI Credential が無いと Select AI の評価の開始を止めて
   ).toBe(true);
   await precondition.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("evaluation-credential-missing.png") });
+  if (process.env.NL2SQL_E2E_SCREENSHOT_DIR) {
+    await notice.screenshot({
+      path: `${process.env.NL2SQL_E2E_SCREENSHOT_DIR}/nl2sql-evaluation-notice-${testInfo.project.name}.png`,
+    });
+  }
 
   // Enterprise AI だけなら Credential を使わないので開始できる。
   await page.getByRole("checkbox").nth(0).uncheck();

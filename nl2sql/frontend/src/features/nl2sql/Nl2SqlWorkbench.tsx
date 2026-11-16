@@ -2,6 +2,8 @@ import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadState
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, useWorkspaceActive, useTransientDraftGuard, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import {
   Button,
+  ChatGuardrailNotice,
+  isGuardrailBlockedError,
   Banner,
   toast,
   StatusBadge,
@@ -264,6 +266,11 @@ function ExecutableNl2SqlWorkbench() {
   const importingSample = Boolean(sampleImport?.importing);
   const [detecting, setDetecting] = useState(false);
   const [guidedClarificationOpen, setGuidedClarificationOpen] = useState(false);
+  // 安全チェックが質問を止めた理由（#5205）。送り直しても同じなので、再試行・確認の省略を出さず、質問の欄の下に
+  // 書き換えの案内を出す。質問を書き換えたら外す。
+  const [guardrailBlocked, setGuardrailBlocked] = useState<unknown>(null);
+  // 回答前の確認の検査で止まったら、パネルを閉じて欄の無効が解けた後に質問の欄へフォーカスを戻す。
+  const focusQuestionAfterBlockRef = useRef(false);
   // 回答前の確認で反映した要件（#1439）。質問の文（利用者の入力）と業務プロファイルが確かめた時のままなら、
   // job の作成で session の ID を送り、サーバーが構造化した要件と確かめた質問の文を SQL の生成に渡す。
   // 確かめた質問の文（clarifiedQuestion）は要件の表示にだけ出し、質問の欄は書き換えない（#1727）。
@@ -695,6 +702,11 @@ function ExecutableNl2SqlWorkbench() {
   const showJobStorageWarning = jobStorageUnavailable && jobActive;
   useTransientDraftGuard(showJobStorageWarning);
   const active = jobActive || detecting || guidedClarificationOpen;
+  useEffect(() => {
+    if (active || !guardrailBlocked || !focusQuestionAfterBlockRef.current) return;
+    focusQuestionAfterBlockRef.current = false;
+    questionTextareaRef.current?.focus();
+  }, [active, guardrailBlocked]);
   const actionBusy = submitting;
   const showSimilarHistoryPanel =
     engineUsesSimilarHistoryFewShot(engine) &&
@@ -1132,6 +1144,7 @@ function ExecutableNl2SqlWorkbench() {
     if (!trimmed || busy || !profileSelectionReady || selectAiCredentialBlocked) return;
     beginActionFeedback();
     clearGeneratedOutput();
+    setGuardrailBlocked(null);
     setSubmitting(true);
     const startedAt = Date.now();
     try {
@@ -1151,7 +1164,8 @@ function ExecutableNl2SqlWorkbench() {
       // 成功した job の追跡まで破棄されるため、try 節は job 作成までとする。
       trackJob(data, startedAt);
     } catch (err) {
-      showActionError(err, t("nl2sql.error.submitFailed"));
+      if (isGuardrailBlockedError(err)) setGuardrailBlocked(err);
+      else showActionError(err, t("nl2sql.error.submitFailed"));
       selectAiCredential.refreshAfterError(err);
       clearTrackedJob();
     } finally {
@@ -1163,6 +1177,12 @@ function ExecutableNl2SqlWorkbench() {
   const skipGuidedClarification = () => {
     setGuidedClarificationOpen(false);
     void submit({ closingClarification: true });
+  };
+  // 回答前の確認の検査で安全チェックが質問を止めた（#5205）。パネルを閉じて質問の欄を書けるようにし、欄へ戻す。
+  const blockGuidedClarification = (cause: unknown) => {
+    focusQuestionAfterBlockRef.current = true;
+    setGuidedClarificationOpen(false);
+    setGuardrailBlocked(cause);
   };
   // 「回答前の確認」を押せない理由（未入力）。操作前の案内なので赤いエラーにしない。質問が SQL の文でも押せる
   // （利用者の明示の操作なので確かめる。SQL の文で確認を飛ばすのはチャットの送信だけ。#1727）。
@@ -1574,6 +1594,7 @@ function ExecutableNl2SqlWorkbench() {
                             setQuestion(event.currentTarget.value);
                             setRewriteData(null);
                             setActionError("");
+                            setGuardrailBlocked(null);
                           }}
                           disabled={active}
                           // 質問の入力欄は 3 製品で 3.5 行（#2008）。
@@ -1583,6 +1604,13 @@ function ExecutableNl2SqlWorkbench() {
                           textareaClassName="max-h-[16.625rem]"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
+                        {guardrailBlocked && !guidedClarificationOpen ? (
+                          <ChatGuardrailNotice
+                            message={guardrailBlocked instanceof Error ? guardrailBlocked.message : null}
+                            labels={{ guidance: t("nl2sql.guardrail.queryGuidance") }}
+                            testId="nl2sql-guardrail-notice"
+                          />
+                        ) : null}
                         {guidedClarificationOpen ? (
                           <GuidedClarificationPanel
                             question={question.trim()}
@@ -1591,6 +1619,7 @@ function ExecutableNl2SqlWorkbench() {
                             allowedObjects={toAllowedObjects(selection)}
                             onApplyRequirement={handleApplyRequirement}
                             onSkip={skipGuidedClarification}
+                            onBlocked={blockGuidedClarification}
                           />
                         ) : (
                           <div className="flex flex-wrap items-center gap-2">
@@ -1603,6 +1632,7 @@ function ExecutableNl2SqlWorkbench() {
                               aria-describedby={guidedClarificationHintId}
                               onClick={() => {
                                 setActionError("");
+                                setGuardrailBlocked(null);
                                 setGuidedClarificationOpen(true);
                               }} icon={Sparkles}>
                               <span>{t("nl2sql.clarification.start")}</span>
@@ -2027,6 +2057,7 @@ function ExecutableNl2SqlWorkbench() {
                         setPageError(null);
                         setSchemaDetailError("");
                         setActionError("");
+                        setGuardrailBlocked(null);
                         setGuidedClarificationOpen(false);
                         setAppliedRequirement(null);
                       }} icon={RotateCcw}>

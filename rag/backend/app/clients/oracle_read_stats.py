@@ -3,6 +3,9 @@
 - ``track_db_calls()`` の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を数える。
   入れ子にでき、内側で数えた分は外側にも足す(工程の span と、回答の中の工程の両方に出す)。
   値は ``contextvars`` で渡すため、``asyncio.to_thread`` / ``asyncio.gather`` の中の SQL も数える。
+- ``db_call_label(name)`` の中で実行した SQL は、SQL の種類(label)ごとの回数・時間にも足す(#5184)。
+  label も ``contextvars`` で渡すので、並行に読む別の経路の label と混ざらない(各 SQL の時間はその
+  SQL の実行の前後で測る)。入れ子の label は ``外側.内側`` にする。label の無い SQL は ``other``。
 - ``read_lobs_as_values()`` の中の読み取り(``_fetch_all``)は、CLOB を str・BLOB を bytes で
   受け取る(``fetch_lobs=False``)。LOB のロケータを行ごとに ``.read()`` する往復が無くなる。
   結果の値は従来(``.read()`` した値)と同じ。書き込み・LOB のロケータを使う経路には効かない。
@@ -19,6 +22,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
+# label の無い SQL の label(#5184)。
+OTHER_DB_CALL_LABEL = "other"
+
 
 @dataclass
 class DbCallStats:
@@ -28,17 +34,26 @@ class DbCallStats:
     row_count: int = 0
     lob_read_count: int = 0
     seconds: float = 0.0
+    # SQL の種類(label)ごとの [回数, 秒](#5184)。
+    by_label: dict[str, list[float]] = field(default_factory=dict)
     parent: DbCallStats | None = field(default=None, repr=False, compare=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
-    def record_execute(self, *, rows: int, seconds: float) -> None:
-        """SQL を 1 回実行した(``rows`` 行を読んだ)ことを、この範囲と外側の範囲に足す。"""
+    def record_execute(self, *, rows: int, seconds: float, label: str | None = None) -> None:
+        """SQL を 1 回実行した(``rows`` 行を読んだ)ことを、この範囲と外側の範囲に足す。
+
+        ``label`` を省くと、いまの ``db_call_label`` の label に足す。
+        """
+        name = label or current_db_call_label()
         stats: DbCallStats | None = self
         while stats is not None:
             with stats._lock:
                 stats.execute_count += 1
                 stats.row_count += rows
                 stats.seconds += seconds
+                totals = stats.by_label.setdefault(name, [0, 0.0])
+                totals[0] += 1
+                totals[1] += seconds
             stats = stats.parent
 
     def record_lob_read(self) -> None:
@@ -63,9 +78,24 @@ class DbCallStats:
                 "db_seconds": round(self.seconds, 3),
             }
 
+    def label_snapshot(self) -> dict[str, dict[str, int | float]]:
+        """SQL の種類(label)ごとの回数(``count``)と秒(``seconds``)。SQL の本文・bind は持たない。"""
+        with self._lock:
+            return {
+                name: {"count": int(count), "seconds": round(seconds, 3)}
+                for name, (count, seconds) in sorted(self.by_label.items())
+            }
+
+    def step_snapshot(self) -> dict[str, object]:
+        """回答の工程の記録に出す値(``snapshot`` と、label ごとの値 ``db_by_label``。#5184)。"""
+        return {**self.snapshot(), "db_by_label": self.label_snapshot()}
+
 
 _CURRENT_DB_CALL_STATS: ContextVar[DbCallStats | None] = ContextVar(
     "rag_oracle_db_call_stats", default=None
+)
+_CURRENT_DB_CALL_LABEL: ContextVar[str | None] = ContextVar(
+    "rag_oracle_db_call_label", default=None
 )
 _READ_LOBS_AS_VALUES: ContextVar[bool] = ContextVar("rag_oracle_read_lobs_as_values", default=False)
 _ROWS_PER_ROUND_TRIP: ContextVar[int | None] = ContextVar(
@@ -87,6 +117,22 @@ def track_db_calls() -> Iterator[DbCallStats]:
         yield stats
     finally:
         _CURRENT_DB_CALL_STATS.reset(token)
+
+
+def current_db_call_label() -> str:
+    """いまの SQL の種類の label(無ければ ``other``)。"""
+    return _CURRENT_DB_CALL_LABEL.get() or OTHER_DB_CALL_LABEL
+
+
+@contextmanager
+def db_call_label(name: str) -> Iterator[None]:
+    """この中で実行した SQL を、``name`` の label で数える(外側の label があれば ``外側.name``)。"""
+    outer = _CURRENT_DB_CALL_LABEL.get()
+    token = _CURRENT_DB_CALL_LABEL.set(f"{outer}.{name}" if outer else name)
+    try:
+        yield
+    finally:
+        _CURRENT_DB_CALL_LABEL.reset(token)
 
 
 def lobs_as_values_enabled() -> bool:

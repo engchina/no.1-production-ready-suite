@@ -4,6 +4,7 @@ import { Check, PlayCircle, RefreshCw, X } from "lucide-react";
 import {
   FieldSkeleton,
   Banner,
+  CombinedBanner,
   Card,
   CardContent,
   CardDescription,
@@ -603,14 +604,25 @@ export function RunsPage() {
                         }
                       }}
                     />
-                    {/* 組み込み Runtime が実行できないとき（モデル未設定など）は、理由と直す場所を知らせる。 */}
-                    {runtimeStatus.data && !runtimeStatus.data.ready ? (
-                      <Banner severity="warning" title={t("runtime.builtin.notReadyTitle")}>
-                        <p>{runtimeStatus.data.message ?? t("runtime.builtin.notReadyDefault")}</p>
-                      </Banner>
-                    ) : null}
-                    {!runnableAgents.length ? <Banner severity="warning">{t("run.noRunnableAgents")}</Banner> : null}
-                    {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
+                    {/* 実行できない理由（組み込み Runtime が実行できない・実行できる業務 Agent が無い）と下書きの保存の失敗は、
+                        フォームの 1 つの枠にまとめる（messaging.md §3.4.3。#5183）。 */}
+                    <CombinedBanner
+                      testId="run-form-notice"
+                      items={[
+                        runtimeStatus.data && !runtimeStatus.data.ready
+                          ? {
+                              id: "runtime-not-ready",
+                              severity: "warning",
+                              title: t("runtime.builtin.notReadyTitle"),
+                              children: <p>{runtimeStatus.data.message ?? t("runtime.builtin.notReadyDefault")}</p>,
+                            }
+                          : null,
+                        !runnableAgents.length
+                          ? { id: "no-runnable-agents", severity: "warning", children: t("run.noRunnableAgents") }
+                          : null,
+                        !goalSaved ? { id: "draft-not-saved", severity: "warning", children: t("workspace.draftNotSaved") } : null,
+                      ]}
+                    />
                     {/* 工程を進める主操作は区切り線の下の lg、失敗はその操作の行に出す（buttons.md §5.2.1、messaging.md §3.3）。 */}
                     <FormActionBar
                       ariaLabel={t("run.form.actions")}

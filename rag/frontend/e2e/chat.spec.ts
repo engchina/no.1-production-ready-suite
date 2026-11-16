@@ -2526,7 +2526,8 @@ const unsavedStreamBody = [
     message_id: "a1",
     trace_id: "t1",
     elapsed_ms: 5,
-    guardrail_warnings: [],
+    // 同じ回答の安全チェックの注意も、保存の失敗と同じ 1 つの枠の項目になる（#5226）。
+    guardrail_warnings: ["機微情報をマスクしました。"],
     storage_failures: [
       { step: "answer_record_save", error_type: "DatabaseError", error_code: "ORA-03146" },
       { step: "chat_message_save", error_type: "DatabaseError", error_code: "ORA-40441" },
@@ -2558,7 +2559,10 @@ for (const viewport of [
     await composer.press("Enter");
 
     const failure = page.getByTestId("chat-answer-failure");
-    await expect(failure.getByRole("alert")).toContainText("「検索文から根拠の候補を集める」で処理が止まりました。");
+    // 失敗は回答の案内の枠（回答ごとに 1 つ。messaging.md §3.4.3）の項目で、枠は danger の alert（#5226）。
+    await expect(page.getByTestId("answer-notices")).toHaveAttribute("role", "alert");
+    await expect(page.getByTestId("answer-notices")).toHaveCount(1);
+    await expect(failure).toContainText("「検索文から根拠の候補を集める」で処理が止まりました。");
     await expect(failure).toContainText("検索処理中にエラーが発生しました。");
     await expect(failure).toContainText("もう一度送信してください。");
     // 技術的な詳細は「詳細」（失敗では開いて出す）。取り直した会話の回答にも引き継ぐ。
@@ -2597,7 +2601,22 @@ for (const viewport of [
     const storage = live.getByTestId("chat-answer-storage-failure");
     await expect(storage).toContainText("回答は表示していますが、一部を保存できませんでした。");
     await expect(storage).toContainText("会話に保存できなかったため");
-    await expect(storage.getByRole("alert")).toHaveCount(0);
+    // 保存の失敗と安全チェックの注意は、同じ回答の 1 つの warning の枠（role=status）の項目。枠は回答の本文の上（#5226）。
+    const notices = live.getByTestId("answer-notices");
+    await expect(notices).toHaveCount(1);
+    await expect(notices).toHaveAttribute("role", "status");
+    await expect(notices.getByTestId("chat-answer-storage-failure")).toBeVisible();
+    await expect(notices.getByTestId("chat-guardrail-warning")).toContainText("機微情報をマスクしました。");
+    await expect(live.locator('[role="alert"], [role="status"][data-surface-tint]')).toHaveCount(1);
+    const noticesBox = await notices.boundingBox();
+    const bodyBox = await live.getByTestId("chat-answer-body").boundingBox();
+    expect(noticesBox && bodyBox && noticesBox.y + noticesBox.height <= bodyBox.y).toBe(true);
+    if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+      // 上端のツールバーと下端の入力欄に重ならないよう、幅はそのまま高さだけ広げて撮る。
+      await page.setViewportSize({ width: viewport.width, height: 1600 });
+      await notices.evaluate((node) => node.scrollIntoView({ block: "center" }));
+      await notices.screenshot({ path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/rag-chat-storage-notice-${viewport.name}.png` });
+    }
     await storage.getByText("詳細", { exact: true }).click();
     await expect(storage).toContainText("ORA-40441");
     // 取り直した後も作った回答を出したまま（保存できなかった理由の文に置き換えない）。

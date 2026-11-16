@@ -13,6 +13,7 @@ import {
   RunProgressCard,
   AnswerFooter,
   Banner,
+  CombinedBanner,
   ProcessFailureNotice,
   Button,
   ChatComposer,
@@ -1243,36 +1244,44 @@ function RunChatTurn({
           </div>
         ) : null}
 
-        {(waitingFor !== undefined ? [] : pendingApprovals).map((approval) => (
-          <Banner key={approval.id} severity="warning" title={t("chat.approval.title")}>
-            <div className="space-y-2">
-              <p className="break-words">
-                {t("chat.approval.message", { tool: approval.tool_call.name })}
-              </p>
-              <pre className="max-h-40 overflow-auto rounded-sm bg-surface-sunken p-2 text-xs">
-                {JSON.stringify(approval.tool_call.arguments ?? {}, null, 2)}
-              </pre>
-              {canDecide ? (
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" icon={Check} disabled={deciding} onClick={() => onDecide(approval, true)}>
-                    {t("chat.approval.approve")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    icon={X}
-                    disabled={deciding}
-                    onClick={() => onDecide(approval, false)}
-                  >
-                    {t("chat.approval.reject")}
-                  </Button>
-                </div>
-              ) : (
-                <p className="text-xs">{t("chat.approval.waiting")}</p>
-              )}
-            </div>
-          </Banner>
-        ))}
+        {/* 承認待ちのツールの呼び出しは、回答の中の 1 つの枠に並べる（同じ回答の案内の枠は 1 つ。messaging.md §3.4.3。#5183）。 */}
+        <CombinedBanner
+          testId={`chat-approvals-${run.id}`}
+          items={(waitingFor !== undefined ? [] : pendingApprovals).map((approval, index) => ({
+            id: approval.id,
+            severity: "warning" as const,
+            // 見出しは枠の先頭に 1 回だけ（項目ごとに同じ見出しを繰り返さない）。
+            title: index === 0 ? t("chat.approval.title") : undefined,
+            children: (
+              <div className="space-y-2">
+                <p className="break-words">
+                  {t("chat.approval.message", { tool: approval.tool_call.name })}
+                </p>
+                <pre className="max-h-40 overflow-auto rounded-sm bg-surface-sunken p-2 text-xs">
+                  {JSON.stringify(approval.tool_call.arguments ?? {}, null, 2)}
+                </pre>
+                {canDecide ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" icon={Check} disabled={deciding} onClick={() => onDecide(approval, true)}>
+                      {t("chat.approval.approve")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon={X}
+                      disabled={deciding}
+                      onClick={() => onDecide(approval, false)}
+                    >
+                      {t("chat.approval.reject")}
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-xs">{t("chat.approval.waiting")}</p>
+                )}
+              </div>
+            ),
+          }))}
+        />
 
         {cancelKinds.length > 0 ? (
           <ClarificationCancelActions

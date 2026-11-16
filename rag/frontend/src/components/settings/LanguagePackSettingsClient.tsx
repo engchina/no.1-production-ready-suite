@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Banner,
+  CombinedBanner,
   Button,
   ButtonLink,
   Card,
@@ -134,16 +134,23 @@ export function LanguagePackSettingsClient() {
 
   return (
     <PageBody wide>
-      {data.current_release ? <div className="space-y-3">
-        {data.outdated_documents ? <Banner severity="warning" title={t("settings.language.release.differentCount", { count: data.outdated_documents })}>
-          <p>{t("settings.language.release.differentHelp")}</p>
-          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_status=different&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
-        </Banner> : null}
-        {data.unrecorded_documents ? <Banner severity="info" title={t("settings.language.release.unrecordedCount", { count: data.unrecorded_documents })}>
-          <p>{t("settings.language.release.unrecordedHelp")}</p>
-          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_status=unrecorded&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
-        </Banner> : null}
-      </div> : null}
+      {/* 言語資源の版と文書の状態の案内は 1 つの枠（messaging.md §3.4.3。#5183）。 */}
+      {data.current_release ? <CombinedBanner items={[
+        data.outdated_documents ? {
+          id: "outdated",
+          severity: "warning",
+          title: t("settings.language.release.differentCount", { count: data.outdated_documents }),
+          children: <p>{t("settings.language.release.differentHelp")}</p>,
+          action: <ButtonLink linkComponent={Link} variant="secondary" size="sm" to={`${APP_ROUTES.fileList}?language_pack_status=different&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>,
+        } : null,
+        data.unrecorded_documents ? {
+          id: "unrecorded",
+          severity: "info",
+          title: t("settings.language.release.unrecordedCount", { count: data.unrecorded_documents }),
+          children: <p>{t("settings.language.release.unrecordedHelp")}</p>,
+          action: <ButtonLink linkComponent={Link} variant="secondary" size="sm" to={`${APP_ROUTES.fileList}?language_pack_status=unrecorded&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>,
+        } : null,
+      ]} /> : null}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

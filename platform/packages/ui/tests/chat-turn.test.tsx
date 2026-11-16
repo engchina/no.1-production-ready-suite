@@ -125,6 +125,13 @@ describe("安全チェックが止めた質問（#5191）", () => {
     expect(notice.querySelector("button")).toBeNull();
   });
 
+  it("答えを止めたときは答えの書き換えを案内する（#5205）", () => {
+    act(() => root.render(<ChatGuardrailNotice message="合成の理由。" subject="answer" testId="notice" />));
+    const notice = host.querySelector('[data-testid="notice"]')!;
+    expect(notice.textContent).toContain(DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.answerGuidance);
+    expect(notice.textContent).not.toContain(DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.guidance);
+  });
+
   it("理由の文が無ければ既定の理由を出す", () => {
     act(() => root.render(<ChatGuardrailNotice message="  " testId="notice" />));
     expect(host.querySelector('[data-testid="notice"]')!.textContent).toContain(

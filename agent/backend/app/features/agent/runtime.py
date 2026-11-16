@@ -1520,7 +1520,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         actor_user_uuid: str | None = None,
     ) -> ConfirmationOutcome: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
-    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]: ...
+    def fail_interrupted_runs(self) -> list[str]: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def note_builtin_tool_titles(self, run_id: str, titles: Mapping[str, str]) -> None: ...
     def note_run_config(self, run_id: str, config: JsonObject) -> None: ...
@@ -3445,12 +3445,12 @@ class AgentRuntimeRepository:
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
 
-    def fail_interrupted_runs(self, *, updated_before: datetime) -> list[str]:
+    def fail_interrupted_runs(self) -> list[str]:
         """前のプロセスが実行していた `running` / `queued` の Run を失敗にする（#1894）。
 
-        in_process の backend の起動で、保存先を読み込んだ後に 1 回だけ呼ぶ（呼び出しは
-        `storage_bootstrap`）。`updated_before`（このプロセスの起動の時刻）より後に作った・
-        変えた Run は、このプロセスか別のプロセスが動かしている途中かもしれないので触らない。
+        in_process の backend の起動で、保存先の所有を取って読み込んだ後・Run を受け付ける前に
+        1 回だけ呼ぶ（呼び出しは `storage_bootstrap`）。その時点の `running` / `queued` の Run は
+        すべて前のプロセスのもので、時刻の大小では選ばない（OS の時計が戻ると見落とす。#5179）。
         承認待ち・確認待ちは保存した SDK の状態から再開できるので触らない。
         失敗にした Run の ID を返す。
         """
@@ -3459,7 +3459,6 @@ class AgentRuntimeRepository:
                 run
                 for run in self._sorted_runs_locked()
                 if run.status in {RunStatus.RUNNING, RunStatus.QUEUED}
-                and _aware(run.updated_at) < _aware(updated_before)
             ]
             for run in interrupted:
                 self._fail_interrupted_locked(run)

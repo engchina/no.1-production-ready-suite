@@ -2,7 +2,8 @@
 
 in_process の組み込み Runtime は Run を backend のプロセスの asyncio の task で実行する。再起動で
 task が消えると Run は `running` / `queued` のまま終わらず、チャットは待ち続ける。起動で保存先を
-読み込んだ後に、このプロセスの起動より前の `running` / `queued` の Run を失敗にする。
+読み込んだ後・Run を受け付ける前に、`running` / `queued` の Run を失敗にする（時刻の大小に
+依らない。#5179）。
 承認待ち・確認待ちは保存した SDK の状態から再開できるので残し、external の dispatcher では触らない。
 """
 
@@ -33,9 +34,8 @@ from app.features.agent.runtime import (
 from app.features.agent.tools import ToolCall
 from app.settings import get_settings
 
-# 前のプロセスが Run を最後に変えた時刻と、このプロセスの起動の時刻。
+# 前のプロセスが Run を最後に変えた時刻。
 _BEFORE_RESTART = datetime(2026, 10, 14, 19, 18, 21, tzinfo=UTC)
-_STARTED_AT = datetime(2026, 10, 14, 19, 18, 28, tzinfo=UTC)
 
 
 def _run(run_id: str, status: RunStatus, *, updated_at: datetime = _BEFORE_RESTART) -> RunState:
@@ -110,12 +110,10 @@ def test_running_and_queued_runs_before_the_start_fail_and_are_saved(tmp_path: P
             _run("run_queued", RunStatus.QUEUED),
             _run("run_waiting", RunStatus.WAITING_APPROVAL),
             _run("run_done", RunStatus.COMPLETED),
-            # このプロセスの起動の後に作った Run（このプロセスか別のプロセスが動かしている）。
-            _run("run_new", RunStatus.RUNNING, updated_at=_STARTED_AT + timedelta(seconds=1)),
         ],
     )
 
-    failed = repository.fail_interrupted_runs(updated_before=_STARTED_AT)
+    failed = repository.fail_interrupted_runs()
 
     assert sorted(failed) == ["run_queued", "run_running"]
     # 次の起動で読んでも失敗のまま（保存した）。
@@ -126,7 +124,6 @@ def test_running_and_queued_runs_before_the_start_fail_and_are_saved(tmp_path: P
         "run_queued": RunStatus.FAILED,
         "run_waiting": RunStatus.WAITING_APPROVAL,
         "run_done": RunStatus.COMPLETED,
-        "run_new": RunStatus.RUNNING,
     }
     running = reloaded.get_run("run_running")
     assert _failure_event_payload(running) == {
@@ -152,7 +149,7 @@ def test_nothing_to_fail_does_not_save(tmp_path: Path) -> None:
     repository = _saved_repository(path, [_run("run_done", RunStatus.COMPLETED)])
     saved = path.read_text(encoding="utf-8")
 
-    assert repository.fail_interrupted_runs(updated_before=_STARTED_AT) == []
+    assert repository.fail_interrupted_runs() == []
     assert path.read_text(encoding="utf-8") == saved
 
 
@@ -165,7 +162,6 @@ def restarted(monkeypatch: MonkeyPatch, tmp_path: Path) -> Iterator[AgentRuntime
     )
     previous = runtime._repository
     runtime.set_runtime_repository(repository)
-    monkeypatch.setattr(storage_bootstrap, "_process_started_at", _STARTED_AT)
     monkeypatch.setattr(control_plane_store, "restore_control_plane", lambda: {})
     monkeypatch.setattr(storage_bootstrap, "_prepare_history", lambda: None)
     storage_bootstrap.reset()
@@ -183,10 +179,13 @@ def test_in_process_startup_fails_the_interrupted_runs_once(
     assert restarted.get_run("run_running").status == RunStatus.FAILED
     assert restarted.get_run("run_waiting").status == RunStatus.WAITING_APPROVAL
     # 読み込みは 1 回だけ（済んだ後に別の Run が古い時刻で残っていても、もう触らない）。
-    calls: list[datetime] = []
-    monkeypatch.setattr(
-        restarted, "fail_interrupted_runs", lambda *, updated_before: calls.append(updated_before)
-    )
+    calls: list[str] = []
+
+    def spy() -> list[str]:
+        calls.append("called")
+        return []
+
+    monkeypatch.setattr(restarted, "fail_interrupted_runs", spy)
     storage_bootstrap.ensure_ready()
     assert calls == []
 
@@ -207,7 +206,7 @@ def test_failure_to_save_does_not_block_the_load(
 ) -> None:
     monkeypatch.setattr(get_settings(), "agent_runtime_dispatch_mode", "in_process")
 
-    def broken(*, updated_before: datetime) -> list[str]:
+    def broken() -> list[str]:
         raise RuntimeError("保存できません")
 
     monkeypatch.setattr(restarted, "fail_interrupted_runs", broken)
@@ -215,3 +214,38 @@ def test_failure_to_save_does_not_block_the_load(
     storage_bootstrap.ensure_ready()
 
     assert storage_bootstrap.is_ready() is True
+
+
+def test_startup_fails_the_previous_runs_even_when_the_clock_went_back(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """前のプロセスの最後の更新の後に OS の時計が戻っても、起動で前のプロセスの Run を失敗にする。
+
+    #5179。
+
+    前のプロセスの時計の読み（`updated_at`）が、このプロセスの起動の時刻より後になる場合。起動の判定は
+    保存先の読み込みで 1 回だけ、Run を受け付ける前に行うので、時計の大小で前後を決めない。
+    """
+    ahead = datetime.now(UTC) + timedelta(hours=1)
+    repository = _saved_repository(
+        tmp_path / "runtime.json",
+        [
+            _run("run_running", RunStatus.RUNNING, updated_at=ahead),
+            _run("run_queued", RunStatus.QUEUED, updated_at=ahead),
+            _run("run_waiting", RunStatus.WAITING_APPROVAL, updated_at=ahead),
+        ],
+    )
+    previous = runtime._repository
+    runtime.set_runtime_repository(repository)
+    monkeypatch.setattr(control_plane_store, "restore_control_plane", lambda: {})
+    monkeypatch.setattr(storage_bootstrap, "_prepare_history", lambda: None)
+    monkeypatch.setattr(get_settings(), "agent_runtime_dispatch_mode", "in_process")
+    storage_bootstrap.reset()
+    try:
+        storage_bootstrap.ensure_ready()
+    finally:
+        runtime.set_runtime_repository(previous)
+
+    assert repository.get_run("run_running").status == RunStatus.FAILED
+    assert repository.get_run("run_queued").status == RunStatus.FAILED
+    assert repository.get_run("run_waiting").status == RunStatus.WAITING_APPROVAL

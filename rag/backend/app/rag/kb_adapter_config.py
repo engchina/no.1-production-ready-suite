@@ -188,7 +188,7 @@ def _clean_persisted_ingestion_config(data: object) -> object:
             backend,
         )
         cleaned["parser_adapter_backend"] = None
-    # 削除したファイル準備の変換方式(#2042)は「変換なし」へ寄せる(ログに出す)。
+    # 削除したファイル準備の変換方式は「変換なし」へ寄せる(ログに出す)。
     if "preprocess_profile" in cleaned:
         cleaned["preprocess_profile"] = normalize_removed_preprocess_profile(
             cleaned["preprocess_profile"]
