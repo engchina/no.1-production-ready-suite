@@ -705,21 +705,28 @@ import { SearchField } from "@production-ready/ui";
 - **adherence の lint が、`type="search"` の `TextField` / `<input>` を検出します。** 一覧の絞り込みは `SearchField` で作ってください。重い検索（LLM・ベクトル検索・SQL の生成）の質問欄は `type="search"` にせず、`TextField` と明示的な実行（ボタンと `isSubmitEnter` の Enter）で作ります。
 - IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` も `@production-ready/ui` から使います（RAG の `@/lib/keyboard` は再 export）。
 
-### `SearchableSelectField` の閉じたボタン（変更）— ★ 虫眼鏡はパネルの中の検索欄だけ（#1771）
+### 検索して選ぶ選択欄（変更）— ★ 単一・複数とも「ボタン ＋ 上の層の popover」、検索は popover の中に統一（#1771・#5267）
 
-検索して選ぶ単一選択（`SearchableSelectField`）の閉じたボタンに、虫眼鏡（`Search`）を付ける画面（RAG の検索・回答プロファイル、NL2SQL のチャットの業務プロファイル。`leadingIcon={Search}`）と付けない画面（Agent のチャットの業務 Agent など）がありました。付ける画面では、開くとボタンの虫眼鏡とパネルの中の検索欄の虫眼鏡が 2 つ縦に並びました。
+検索して選ぶ単一選択（`SearchableSelectField`）と複数選択（`SearchableMultiSelect`）は、同じ形にします。以前は単一選択が「ボタン → 層の中で検索」、複数選択が「欄そのものが検索欄（autocomplete）で、一覧は通常の流れの中に出て下を押し下げる」と、2 つの形を意図して分けていました（#1771・#2091）。複数選択は開くと欄の見た目と高さが変わり、chip と下の内容が動きました。
 
 ```jsx
-// ボタン: 選んだ値（未選択は placeholder）と開閉の印だけ。開くとパネルの先頭の SearchField（虫眼鏡つき）へフォーカスが移る
+// ボタン: 値（単一は選んだ名前、複数は「A、B 他 3 件」の 1 行の要約。未選択は placeholder・「未選択」）と開閉の印だけ。
+// 開くと上の層（Portal）の popover の最上部の SearchField（虫眼鏡つき）へフォーカスが移る。
 <SearchableSelectField id="sql-chat-profile" label="業務プロファイル" required width="full"
   placeholder="業務プロファイルを検索して選択…" value={id} options={options} onValueChange={setId} />
+<SearchableMultiSelect id="kb-scope" label="参照するナレッジベース" required width="lg"
+  options={options} value={ids} onValueChange={setIds} />
 ```
 
 | 決めたこと | 理由 |
 |---|---|
-| **閉じたボタンは選んだ値と開閉の印（`ChevronDown`）だけ。虫眼鏡は開いたパネルの中の検索欄（`SearchField`）だけが持つ** | 「ボタンで開き、パネルの中で検索する」選択欄の業界の一般的な形（shadcn/ui の Combobox（Popover + Command）・Radix・MUI の Select）。ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え（押すまで打てない）、開くと虫眼鏡が 2 つ並ぶ。検索できることは placeholder（「〜を検索して選択…」）と、開いた後の検索欄で伝わる |
-| 欄そのものに文字を打てる autocomplete（`SearchableMultiSelect` の検索欄、一覧の絞り込みの `SearchField`、質問欄の `TextField`）は、従来どおり先頭に虫眼鏡を置く | 入力欄そのものが検索なので、虫眼鏡が「ここに打つ」の印になる |
-| `leadingIcon` は残し、**対象の種類を表すアイコン（`Database`・`Bot` など）にだけ使う**。`Search` 系のアイコンを渡すと adherence の lint が検出する（`SearchableSelectField` の `leadingIcon` の中の `Search` / `SearchIcon` / `TextSearch` などの識別子） | アイコンの用途を 1 つに決めて、画面ごとの差を出さない。TypeScript の型ではアイコンを区別できない（lucide のアイコンはどれも `LucideIcon`）ので lint で守る |
+| **トリガーは `button`（`aria-haspopup="dialog"`）で、開いても大きさ・位置・見た目は変わらない。** 候補の一覧は Portal で上の層に浮かべ（`role="dialog"`、非モーダル）、下の内容（chip・次の欄）を押さない | 開閉で欄の形が変わり下が動くと、どこを操作しているか見失う。「ボタンで開き、層の中で検索する」選択欄の業界の一般的な形（shadcn/ui の Combobox（Popover + Command）・Radix・MUI の Select） |
+| **検索欄は popover の最上部に置き、開いたらそこへフォーカスする。** 閉じたボタンは値と開閉の印（`ChevronDown`）だけで、虫眼鏡は popover の中の検索欄（`SearchField`）だけが持つ | ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え（押すまで打てない）、開くと虫眼鏡が 2 つ並ぶ。検索できることは placeholder と開いた後の検索欄で伝わる |
+| popover は単一・複数で共有する（`SearchablePopover`。内部の部品）。単一選択は 1 回押すと選んで閉じる。複数選択は選んでも閉じず、下部に「N 件選択中 / 表示中をすべて選択 / クリア / 完了」を置く | 枠・幅・位置・検索欄の規則を 1 か所にする。複数選択は続けて選べる |
+| **popover の幅はトリガーと同じ幅を 20〜40rem に収める**（`SEARCHABLE_POPOVER_WIDTH_REM`）。40rem を超えるトリガーではトリガーの左端にそろえて 40rem。sm（640px）未満は画面の幅から左右の余白（1rem）を引いた幅。RAG 検索・チャットのトリガーは #635 どおり `full` のまま | `full` の欄で popover が画面いっぱいに広がると、候補の名前と右端の件数が離れて読みにくい。狭い欄（チャットのツールバー）でも候補の名前が入る幅を保つ |
+| 複数選択のボタンは 1 行の要約（先頭 2 件の名前と「他 N 件」）で、名前が入らなければ省略し（「他 N 件」は残す）、高さは固定。ボタンの下の chip は残し、× で 1 件ずつ外せる（popover は上の層なので、開いても chip を押さない） | ボタンの形を変えずに、選んだものの数と先頭が分かる。全部は chip と `title` で読める |
+| 検索は今までどおり（`remote` が無ければブラウザの中の絞り込み、`remote` ならサーバー） | 絞り込みの規則（#535・#578）は変えない |
+| `leadingIcon`（単一選択）は残し、**対象の種類を表すアイコン（`Database`・`Bot` など）にだけ使う**。`Search` 系のアイコンを渡すと adherence の lint が検出する（`SearchableSelectField` の `leadingIcon` の中の `Search` / `SearchIcon` / `TextSearch` などの識別子） | アイコンの用途を 1 つに決めて、画面ごとの差を出さない。TypeScript の型ではアイコンを区別できない（lucide のアイコンはどれも `LucideIcon`）ので lint で守る |
 
 ### 操作部品の角丸（新設）— `--radius-control`（#384）
 
@@ -1457,6 +1464,8 @@ QA に事前共有してください。**189点あります。**
 | 203 | **Agent の「利用者の評価」と NL2SQL のフィードバック履歴が、全幅の表 → 全幅の詳細になる**（#5071。`ListDetailLayout` の `layout="single"`・`listVariant="table"`、`useUrlSelection` / `useWorkspaceUrlSelection` の `singlePane`） | xl 以上は「狭い一覧（20rem。質問 2 行 + 補足 1 行の 1 列の表） \| 広い詳細」の 2 ペインで、未選択の詳細に空の状態が大きく残った。同じ画面の「確かめるべき実行」と RAG のフィードバックは全幅の型で、型がそろっていなかった → すべての幅で全幅の一覧（desktop は質問・評価・日時の 3 列、狭い画面は質問の下に評価のバッジと日時）→ 行を選ぶと全幅の詳細（左上に「一覧へ戻る」、上端に前へ / 次へ）。Agent は詳細を開いている間、集計と絞り込みを隠す。NL2SQL の絞り込みは広い画面でツールバーに並ぶ（狭い画面はシート） | ユーザー管理・ロール管理と同じ一覧・詳細の形にそろえる（利用者の指示）。3 製品のフィードバックが同じ型になる |
 | 204 | **同じ区画の案内が 1 つの枠にまとまる**（#5183。`CombinedBanner`） | システムテーブルのカード: 状態の Banner（見出しは見出しのバッジと同じ「一部不足」「更新必要」）・削除の migration・参照先のない行・前回の失敗（danger）・閲覧専用・再起動が必要（操作の行の下）が、それぞれ別の枠で縦に積み重なる。Agent のシステムテーブルの画面は、ページの先頭の保存先の案内とカードの中の DB の案内が別の枠 → カードの案内は操作の行の直前の 1 つの枠。色は最も重い項目（前回の失敗があれば danger）、見出しは最も重い事柄（「データを削除する更新があります」など。バッジの文字を繰り返さない）、事柄は区切り線で分けた項目。Agent の保存先の案内もカードの枠の項目になる | 同じ区画に枠を積まず、最も重い事柄から読めるようにする（UX 契約 messaging.md §3.4.3） |
 | 205 | **失敗のカードと前提の案内も、同じ区画の案内と 1 つの枠になる**（#5226。`processFailureBannerItem`・`preconditionBannerItem`） | Agent の Run の詳細の概要: 失敗のカード（danger）と結果の不明な書き込みなどの状況の枠が縦に 2 つ。NL2SQL の SQL 生成評価: LLM Judge の案内の枠と Select AI Credential の前提の枠が開始の操作の前に 2 つ。RAG のチャットの回答: 保存の失敗のカード（本文の上）と回答の案内の枠（本文の下）、失敗のカードと安全チェックの注意の枠がそれぞれ 2 つ → どれも 1 つの枠の項目。色・アイコン・role は最も重い項目（失敗があれば danger の alert）、失敗・保存の失敗があるときは枠を回答の本文の上に置く | 同じ区画に枠を積まない規則（messaging.md §3.4.3）の残りの例外をなくす。内容は単独の部品と同じ関数が作る |
+| 206 | **検索つきの複数選択（`SearchableMultiSelect`）が単一選択と同じ「ボタン ＋ 上の層の popover」になり、検索つきの選択の popover の幅がトリガーに合わせて 20〜40rem になる**（#5267） | 複数選択は欄そのものが検索欄（先頭に虫眼鏡・右に開閉のボタン）で、開くと一覧が通常の流れの中に出て下の内容（補足・chip・次の欄）を押し下げ、一覧は欄より広く（36rem まで）左へずれることがあった。単一選択の popover は最小がボタンの幅で、RAG 検索の `full` の欄では画面いっぱいに広がった → 複数選択もボタン（「A、B 他 3 件」の 1 行の要約、未選択は「未選択」、高さ固定）で、押すと上の層に popover（最上部に検索欄・候補・下部の「N 件選択中 / 表示中をすべて選択 / クリア / 完了」）を開く。chip はボタンの下に残り、開いても動かない。popover の幅は単一・複数ともトリガーと同じ幅を 20〜40rem に収め（40rem を超えるトリガーは左端をそろえて 40rem）、375px は画面の幅から左右の 1rem を引いた幅。画面の空きが足りないときは候補の一覧だけが縮む | 開閉で欄の形と下の内容が動かず、単一・複数の「検索して選ぶ」欄が 1 つの形になる（§4「検索して選ぶ選択欄」）。#1771・#2091 の「2 つの形を意図して分ける」を改めた |
+| 207 | **幅の狭い `SelectField` の一覧で、選択肢の名前が省略されない**（#5264） | 一覧の幅は欄の幅と同じで、`xs` の欄（RAG の Excel の読み方の「表を分ける空の行」「表を分ける空の列」）では選択の印の分だけ狭く「1 行…」と切れた → 一覧の幅は欄の幅以上で、選択肢の名前が入る幅（上限は画面の幅。補足・選べない理由・`wrapOptions` の名前は幅に数えない）。左端は欄にそろえ、画面に入らなければ左へずらす | 選択肢の意味（「N 行以上」）を開いた一覧で読める。製品ごとに幅を書かない |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 
@@ -1533,6 +1542,7 @@ QA に事前共有してください。**189点あります。**
 | `SelectField` / `SearchableSelectField` / `FieldActionRow`（#631） | 追加のみ（既存の props・id・aria は変えない）。`SelectField` に `disabled`（ネイティブの disabled。開かない・Tab で止まらない・typeahead も効かない）・`labelHidden`・`data-testid`（ボタン）を追加し、ボタンと選択肢に値の `data-value` を出す。`SearchableSelectField` は無効のときのホバー・シェブロン・文字の色と「開いているときに無効になったら閉じる」を `SelectField` にそろえた。`FieldActionRow` は `actions` が null / false なら操作の列を描かない |
 | `SelectField` / `SearchableSelectField`（#647） | 追加のみ（既存の props・id・aria は変えない）。`SelectField` に `emptyOptionLabel`（任意の欄で未選択へ戻す、先頭の空の値の選択肢。`required` の欄・`options` に空の値がある欄では出さない。値の型 `T` が `""` を含むときだけ渡せる）を追加。`SelectField` / `SearchableSelectField` に `describedBy`（欄の外の説明の id。`helper`・`error` の id の後ろに足して `aria-describedby` に渡す）を追加 |
 | `SearchableSelectField` / `SearchableMultiSelect`（#578） | **新規 export。** `SearchableSelectField` / `SearchableSelectFieldProps` / `SearchableMultiSelect` / `SearchableMultiSelectProps` / `SearchableSelectOption` / `SearchableSelectRemote` / `SearchableSelectLabels` / `SearchableMultiSelectLabels` / `DEFAULT_SEARCHABLE_SELECT_LABELS` / `filterSearchableOptions`。既存の部品の props は変えない |
+| `SearchableMultiSelect` / `SearchableMultiSelectLabels`（#5267） | **非互換。** `id` は検索欄（combobox）ではなく開閉のボタンの id になり、検索欄は開いた popover の中にだけある（名前は `labels.searchLabel(label)`）。`labels.toggleList`（検索欄の右の開閉ボタン）を**削除**し、`noneSelected`・`summaryRest`・`summarySeparator`（ボタンの要約。既定「未選択」「他 N 件」「、」）を追加。`required` はボタンに `aria-required` を付けず、ラベルの「必須」のタグで読む。props の名前は変えない |
 | `SearchableSelectField`（#635） | `leadingIcon?: LucideIcon` を追加（任意。ボタンの先頭の 16px のアイコン、読み上げない）。渡さなければ見た目は変わらない |
 | `SearchableSelectField`（#1595） | `required` のときボタンに `aria-required` を付けない（ボタンは `aria-required` を持てず、axe の `aria-allowed-attr`（critical）になった）。代わりにラベルの「必須」のタグを読み上げ対象に残し、ボタンの名前（`aria-labelledby` のラベルと値）に「必須」が入る（`FieldLabel` の `requiredAnnouncedByControl={false}` と同じ扱い）。見た目と props は変えない。e2e は `aria-required` ではなく名前の「必須」で確かめる |
 | `RunStopButton` / `FeedbackControls`（#805） | **新規 export。** `RunStopButton` / `RunStopButtonProps` / `runStopClickAction` / `isRepeatedActivationKey` / `RunStopAction`（RAG の `components/RunStopButton.tsx` と `lib/run-stop.ts` から移した）と、`FeedbackControls` / `FeedbackControlsProps` / `FeedbackControlsLabels` / `FeedbackControlsValue` / `FeedbackControlsSubmission` / `FeedbackRating` / `FeedbackReasonOption` / `isSameFeedback`。既存の部品の props は変えない |

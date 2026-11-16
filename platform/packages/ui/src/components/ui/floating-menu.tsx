@@ -15,9 +15,14 @@ const MENU_GAP = 4;
 const MENU_VIEWPORT_PADDING = 8;
 /** `--z-dropdown` を読めないとき（テスト環境など）の既定値。elevation.css と同じ値。 */
 const DEFAULT_DROPDOWN_Z_INDEX = 850;
+/** 狭い画面の境目（Tailwind の sm = 40rem。メディアクエリの rem はブラウザの既定の 16px なので 640px）。 */
+const NARROW_VIEWPORT_PX = 640;
 
 export type FloatingMenuPlacement = "top" | "bottom";
-/** start / end は左右の端をトリガーに合わせる。stretch はトリガーと同じ幅にする（SelectField）。 */
+/**
+ * start / end は左右の端をトリガーに合わせる。stretch はトリガーの幅以上で、選択肢の文言が入る幅にする
+ * （左端はトリガーに合わせ、画面に入らなければ左へずらす。SelectField。#5264）。
+ */
 export type FloatingMenuAlign = "start" | "end" | "stretch";
 /**
  * 上下の空きを測る範囲。scroll-ancestor はトリガーを含むスクロール枠の内側（操作メニュー）、
@@ -33,13 +38,35 @@ type FloatingMenuPosition = {
   style: CSSProperties;
 };
 
+export interface SearchablePopoverWidthRange {
+  min: number;
+  max: number;
+  /** 画面の左右の余白（px）。 */
+  gutter: number;
+  /** この幅（px）未満の画面では、画面の幅から左右の余白を引いた幅にする。 */
+  narrowBelow: number;
+}
+
+/** トリガーの幅に合わせた popover の幅（`widthRange`。DOM を読まない）。 */
+export function rangedMenuWidth(triggerWidth: number, viewportWidth: number, range: SearchablePopoverWidthRange) {
+  const available = Math.max(0, viewportWidth - range.gutter * 2);
+  if (viewportWidth < range.narrowBelow) return Math.floor(available);
+  return Math.floor(Math.min(available, Math.max(range.min, Math.min(range.max, triggerWidth))));
+}
+
 type RectLike = Pick<DOMRect, "top" | "bottom" | "left" | "right" | "width">;
 
 export interface FloatingMenuLayoutInput {
   align: FloatingMenuAlign;
   triggerRect: RectLike;
-  /** メニューの幅（stretch のときはトリガーの幅を使うので無視する）。 */
+  /** メニューの幅（中身の幅。stretch ではトリガーの幅より狭ければトリガーの幅にする。widthRange のときは使わない）。 */
   menuWidth: number;
+  /**
+   * トリガーの幅に合わせ、決まった範囲に収める幅（px。検索つきの選択の popover。#5267）。
+   * 幅は「トリガーの幅を min〜max に収めた値」、`narrowBelow` 未満の画面では画面の幅から左右の `gutter` を引いた値。
+   * 左端はトリガーに合わせ、画面（左右の `gutter` の内側）に入らなければずらす。
+   */
+  widthRange?: SearchablePopoverWidthRange;
   /** 中身をすべて出したときの高さ（枠線を含む）。 */
   naturalHeight: number;
   /** 空きが十分でも超えない高さ（SelectField の 16rem）。 */
@@ -76,13 +103,20 @@ export function computeFloatingMenuLayout({
   align,
   triggerRect,
   menuWidth: measuredMenuWidth,
+  widthRange,
   naturalHeight,
   maxHeight,
   viewportWidth,
   viewportHeight,
   boundaryRect,
 }: FloatingMenuLayoutInput): FloatingMenuPosition {
-  const menuWidth = align === "stretch" ? Math.round(triggerRect.width) : measuredMenuWidth;
+  const horizontalPadding = widthRange ? widthRange.gutter : MENU_VIEWPORT_PADDING;
+  const triggerWidth = Math.round(triggerRect.width);
+  const menuWidth = widthRange
+    ? rangedMenuWidth(triggerRect.width, viewportWidth, widthRange)
+    : align === "stretch"
+      ? Math.min(Math.max(triggerWidth, measuredMenuWidth), Math.max(0, viewportWidth - MENU_VIEWPORT_PADDING * 2))
+      : measuredMenuWidth;
   const menuHeight = maxHeight ? Math.min(naturalHeight, maxHeight) : naturalHeight;
   const maxViewportHeight = Math.max(0, viewportHeight - MENU_VIEWPORT_PADDING * 2);
   const boundaryTop = boundaryRect
@@ -113,8 +147,8 @@ export function computeFloatingMenuLayout({
     Math.max(MENU_VIEWPORT_PADDING, unclampedTop),
     Math.max(MENU_VIEWPORT_PADDING, viewportHeight - MENU_VIEWPORT_PADDING - renderedHeight)
   );
-  const minLeft = MENU_VIEWPORT_PADDING;
-  const maxLeft = Math.max(MENU_VIEWPORT_PADDING, viewportWidth - MENU_VIEWPORT_PADDING - menuWidth);
+  const minLeft = horizontalPadding;
+  const maxLeft = Math.max(horizontalPadding, viewportWidth - horizontalPadding - menuWidth);
   const leftFor = (edge: FloatingMenuAlign) =>
     edge === "end" ? triggerRect.right - menuWidth : triggerRect.left;
   const fitsHorizontally = (value: number) => value >= minLeft && value <= maxLeft;
@@ -135,9 +169,14 @@ export function computeFloatingMenuLayout({
     style: {
       left: Math.round(left),
       ...(constrained ? { maxHeight: Math.floor(renderedHeight) } : {}),
-      maxWidth: `calc(100vw - ${MENU_VIEWPORT_PADDING * 2}px)`,
       top: Math.round(top),
-      ...(align === "stretch" ? { width: menuWidth } : {}),
+      ...(widthRange
+        ? { width: menuWidth }
+        : {
+            maxWidth: `calc(100vw - ${MENU_VIEWPORT_PADDING * 2}px)`,
+            // stretch はトリガーの幅を下限にし、幅は中身（選択肢の文言）に任せる（#5264）。
+            ...(align === "stretch" ? { minWidth: triggerWidth } : {}),
+          }),
       transformOrigin: `${placement === "top" ? "bottom" : "top"} ${horizontalOrigin}`,
     },
   };
@@ -184,6 +223,7 @@ export function useFloatingMenuPosition({
   align = "end",
   boundary = "scroll-ancestor",
   maxHeightRem,
+  widthRangeRem,
   menuRef,
   open,
   triggerRef,
@@ -192,11 +232,15 @@ export function useFloatingMenuPosition({
   boundary?: FloatingMenuBoundary;
   /** 空きが十分でも超えない高さ（rem）。 */
   maxHeightRem?: number;
+  /** トリガーの幅に合わせて収める幅の範囲（rem。検索つきの選択の popover。`computeFloatingMenuLayout` の `widthRange`）。 */
+  widthRangeRem?: { min: number; max: number };
   menuRef: RefObject<HTMLElement | null>;
   open: boolean;
   triggerRef: RefObject<HTMLElement | null>;
 }) {
   const [position, setPosition] = useState<FloatingMenuPosition | undefined>();
+  const widthRangeMin = widthRangeRem?.min;
+  const widthRangeMax = widthRangeRem?.max;
 
   const updatePosition = useCallback((event?: Event | number) => {
     const trigger = triggerRef.current;
@@ -220,6 +264,15 @@ export function useFloatingMenuPosition({
       triggerRect,
       menuWidth: Math.ceil(menu.offsetWidth),
       naturalHeight: Math.ceil(Math.max(menuRect.height, menu.scrollHeight + menuBorderHeight)),
+      widthRange: widthRangeRem
+        ? {
+            min: widthRangeRem.min * rootFontSize,
+            max: widthRangeRem.max * rootFontSize,
+            // 本文の左右の余白（PageBody の px-4）と同じ 1rem。
+            gutter: rootFontSize,
+            narrowBelow: NARROW_VIEWPORT_PX,
+          }
+        : undefined,
       maxHeight: maxHeightRem ? maxHeightRem * rootFontSize : undefined,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
@@ -229,7 +282,7 @@ export function useFloatingMenuPosition({
     setPosition(
       zIndex === undefined ? layout : { ...layout, style: { ...layout.style, zIndex } }
     );
-  }, [align, boundary, maxHeightRem, menuRef, open, triggerRef]);
+  }, [align, boundary, maxHeightRem, menuRef, open, triggerRef, widthRangeMin, widthRangeMax]);
 
   useLayoutEffect(() => {
     if (!open) {

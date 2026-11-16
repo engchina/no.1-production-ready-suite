@@ -352,13 +352,10 @@ export function SystemTablesCard({
                   // 本文は原因と対処だけにし、エラーコードは「詳細」に分ける（失敗なので開いて出す。messaging.md §10.3。#722）。
                   children: (
                     <div className="space-y-2">
-                      {/* 製品が失敗の原因と対処を返したときはそれを出す（vector memory の不足など。#5261）。
-                          長い識別子（索引の名前・文書のパス）は 375px で折り返す。 */}
-                      <p className="[overflow-wrap:anywhere]">
-                        {data.operation_state.last_error_detail ||
-                          (data.operation_state.last_error_code === "ORA-00054"
-                            ? text("settings.database.systemTables.previousFailureLockDetail")
-                            : text("settings.database.systemTables.previousFailureDetail"))}
+                      <p>
+                        {data.operation_state.last_error_code === "ORA-00054"
+                          ? text("settings.database.systemTables.previousFailureLockDetail")
+                          : text("settings.database.systemTables.previousFailureDetail")}
                       </p>
                       {data.operation_state.last_error_code ? (
                         <Disclosure

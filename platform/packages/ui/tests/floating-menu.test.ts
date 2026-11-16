@@ -84,15 +84,36 @@ describe("操作メニューの左右の位置（computeFloatingMenuLayout）", 
     expect(layout.style).toMatchObject({ left: 16, top: 740 - 4 - 120, transformOrigin: "bottom left" });
   });
 
-  it("stretch（SelectField）は左右を反転せず、トリガーと同じ幅・左端のまま", () => {
+  it("stretch（SelectField）は左右を反転せず、トリガーの幅を下限にして左端をそろえる", () => {
     const layout = computeFloatingMenuLayout({
       ...phone,
       align: "stretch",
       triggerRect: trigger(16, 359),
-      menuWidth: 999,
+      menuWidth: 120,
       naturalHeight: 120,
     });
     expect(layout.align).toBe("stretch");
-    expect(layout.style).toMatchObject({ left: 16, width: 343 });
+    expect(layout.style).toMatchObject({ left: 16, minWidth: 343 });
+    expect(layout.style.width).toBeUndefined();
+  });
+
+  it("stretch は選択肢の文言が欄より広ければその幅まで広げ、画面に入らなければ左へずらす（#5264）", () => {
+    // 幅 112px の欄（xs）の一覧に 150px の文言の選択肢。画面の右端の近くでは左へずらす。
+    const near = computeFloatingMenuLayout({
+      ...phone,
+      align: "stretch",
+      triggerRect: trigger(250, 362),
+      menuWidth: 150,
+      naturalHeight: 120,
+    });
+    expect(near.style).toMatchObject({ left: 375 - 8 - 150, minWidth: 112 });
+    const wide = computeFloatingMenuLayout({
+      ...phone,
+      align: "stretch",
+      triggerRect: trigger(16, 128),
+      menuWidth: 999,
+      naturalHeight: 120,
+    });
+    expect(wide.style).toMatchObject({ left: 8, maxWidth: "calc(100vw - 16px)" });
   });
 });

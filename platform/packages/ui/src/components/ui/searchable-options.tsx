@@ -67,8 +67,12 @@ export interface SearchableSelectLabels {
 
 /** 複数選択だけで使う文言。 */
 export interface SearchableMultiSelectLabels extends SearchableSelectLabels {
-  /** 一覧の開閉ボタンの読み上げ名と Tooltip。 */
-  toggleList: string;
+  /** 何も選んでいないときのボタンの文言（#5267）。 */
+  noneSelected: string;
+  /** ボタンの要約の、名前を出さなかった残りの件数（例:「他 3 件」。#5267）。 */
+  summaryRest: (count: number) => string;
+  /** ボタンの要約の名前の区切り（例:「、」。#5267）。 */
+  summarySeparator: string;
   /** 選択中の件数。 */
   selectedCount: (count: number) => string;
   /** 選択済みの chip の一覧の読み上げ名。 */
@@ -79,7 +83,7 @@ export interface SearchableMultiSelectLabels extends SearchableSelectLabels {
   selectAllVisible: string;
   /** 選択をすべて外す。 */
   clear: string;
-  /** 一覧を閉じて検索欄へ戻る（選択は選ぶたびに反映済み）。 */
+  /** popover を閉じてボタンへ戻る（選択は選ぶたびに反映済み）。 */
   done: string;
   /** hideable な候補を隠すチェックボックス（任意。渡したときだけ出す）。 */
   hideHideable?: string;
@@ -98,7 +102,9 @@ export const DEFAULT_SEARCHABLE_SELECT_LABELS: SearchableMultiSelectLabels = {
   empty: "候補がありません。",
   searching: "検索しています…",
   loadMore: "さらに表示",
-  toggleList: "一覧を開閉",
+  noneSelected: "未選択",
+  summaryRest: (count) => `他 ${count} 件`,
+  summarySeparator: "、",
   selectedCount: (count) => `${count} 件選択中`,
   selectedList: (label) => `選択中の${label}`,
   removeChip: (name) => `${name} を選択から外す`,

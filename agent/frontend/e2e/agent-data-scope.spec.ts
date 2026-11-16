@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
-import { measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
+import { expectedSearchablePopoverWidth, measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
 import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
@@ -87,8 +87,9 @@ test("業務プロファイルを複数選んで既定を決め、検索・回�
   await expect(page.getByRole("button", { name: "変更を破棄" })).toBeDisabled();
 });
 
-// #2091: データの範囲の検索つきの複数選択は、開いた一覧の下部（N 件選択中・表示中をすべて選択・クリア・完了）が
-// 1 行に並び（375px は件数の文と操作の組の 2 段まで、操作の組は分けない）、画面からはみ出さない。
+// #2091・#5267: データの範囲の検索つきの複数選択は、ボタンで上の層に popover を開き、幅はボタン（lg 28rem）に合わせる
+// （375px は画面の幅から左右の 1rem を引いた幅）。下部（N 件選択中・表示中をすべて選択・クリア・完了）は 28rem 以上なら
+// 1 行に並び（狭いときは件数の文と操作の組の 2 段まで、操作の組は分けない）、画面からはみ出さない。
 test("データの範囲の開いた一覧の下部が 1 行に並び、画面からはみ出さない", { tag: "@responsive" }, async ({
   page,
   mockApi,
@@ -97,7 +98,10 @@ test("データの範囲の開いた一覧の下部が 1 行に並び、画面�
   await openAgent(page);
   const wide = (page.viewportSize()?.width ?? 0) >= 640;
   for (const connection of ["nl2sql", "rag"]) {
-    await page.locator(`#${AGENT_ID}-data-scope-${connection}`).click();
+    const trigger = page.locator(`#${AGENT_ID}-data-scope-${connection}`);
+    await trigger.scrollIntoViewIfNeeded();
+    const closedBox = await trigger.boundingBox();
+    await trigger.click();
     const footer = page.locator("[data-searchable-panel-footer]");
     await expect(footer).toContainText(/\d+ 件選択中/);
     const panels = await measureSearchablePanels(page);
@@ -106,9 +110,11 @@ test("データの範囲の開いた一覧の下部が 1 行に並び、画面�
     expect(panel, JSON.stringify(panel)).toMatchObject({
       countWrapped: false,
       actionsSplit: false,
-      ...(wide ? { footerOneRow: true } : {}),
+      ...(panel.panelWidth >= 28 * panel.rem - 1 ? { footerOneRow: true } : {}),
     });
-    expect(panel.panelWidth).toBeGreaterThanOrEqual(panel.fieldWidth);
+    expect(Math.abs(panel.panelWidth - expectedSearchablePopoverWidth(panel)), JSON.stringify(panel)).toBeLessThanOrEqual(2);
+    // 開いてもボタンの大きさ・位置は変わらない（popover は上の層）。
+    expect(await trigger.boundingBox()).toEqual(closedBox);
     expect(panel.left).toBeGreaterThanOrEqual(0);
     expect(panel.right).toBeLessThanOrEqual(panel.viewport);
     await expectNoPageHorizontalOverflow(page);
@@ -194,7 +200,7 @@ test("使えるプロファイルが無いときは空の候補を出し、使�
   await expectNoPageHorizontalOverflow(page);
 
   // 使えない ID を外して保存すると、範囲なしに戻る。
-  await rag.getByRole("button", { name: /bv-gone/ }).click();
+  await rag.getByRole("button", { name: /bv-gone.*外す/ }).click();
   await expect(rag).toContainText("範囲なし");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("Agent を保存しました")).toBeVisible();
@@ -220,7 +226,8 @@ test(
 
     const rag = page.getByTestId("agent-data-scope-rag");
     await page.locator(`#${AGENT_ID}-data-scope-rag`).click();
-    const panel = rag.locator("[data-searchable-panel]");
+    // 開いた popover は上の層（body）に描かれ、幅はボタン（lg）に合わせて左端をそろえる（#5267）。
+    const panel = page.locator("[data-searchable-select-popover]");
     await expect(panel.getByRole("option", { name: /多段の質問/ })).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
     const cardBox = await rag.boundingBox();

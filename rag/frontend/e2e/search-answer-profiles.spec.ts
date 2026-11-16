@@ -10,6 +10,8 @@ import {
   expectSearchablePanelFits,
   mockDatabaseReady,
   mockLocalAuth,
+  openSearchableMultiSelect,
+  searchableMultiSelectTrigger,
   selectSearchAnswerProfile,
 } from "./_helpers";
 
@@ -173,8 +175,8 @@ for (const viewport of [
     await expect(page.getByRole("navigation", { name: "パンくず" })).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: "名前", exact: true })).toBeVisible();
     await expect(page.getByText("参照するナレッジベース", { exact: false }).first()).toBeVisible();
-    // ナレッジベースはコンボボックスを開くと候補として現れる。
-    await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+    // ナレッジベースはボタンで開いた popover の候補として現れる。
+    await openSearchableMultiSelect(page, "参照するナレッジベース");
     await expect(page.getByRole("option", { name: /社内規程/ })).toBeVisible();
     const settings = page.locator("fieldset").filter({ hasText: "検索・回答設定" });
     // 検索方法・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt・既定言語）は削除した(#595)。
@@ -217,9 +219,9 @@ test("検索・回答プロファイルを作成すると参照 KB と方針を�
   await page.getByRole("button", { name: "新規作成" }).click();
   await expect(page).toHaveURL(/\/search-answer-profiles\?id=new$/);
 
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await openSearchableMultiSelect(page, "参照するナレッジベース");
   await page.getByRole("option", { name: /社内規程/ }).click();
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
+  await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("経理ビュー");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経理規程の問い合わせに回答します");
   await expect(page.getByRole("heading", { name: "安全チェック", level: 3 })).toHaveCount(0);
@@ -256,9 +258,9 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   let body = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (value) => { body = value; });
   await page.goto("/search-answer-profiles?id=new");
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await openSearchableMultiSelect(page, "参照するナレッジベース");
   await page.getByRole("option", { name: /社内規程/ }).click();
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
+  await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("プロファイル A");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
   const perDocument = page.getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 }).locator("..");
@@ -285,9 +287,9 @@ test("出力の検査を通らなかったときのモデルは既定で使わ�
   let body = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (value) => { body = value; });
   await page.goto("/search-answer-profiles?id=new");
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await openSearchableMultiSelect(page, "参照するナレッジベース");
   await page.getByRole("option", { name: /社内規程/ }).click();
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
+  await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("プロファイル A");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
   const model = page.getByRole("heading", { name: "回答モデル", level: 3 }).locator("..");
@@ -488,18 +490,18 @@ for (const viewport of [
 
     await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
     await expect(page.getByText("DEFAULT の名前は変更できません。")).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "参照するナレッジベース" })).toBeDisabled();
+    const kbTrigger = searchableMultiSelectTrigger(page, "参照するナレッジベース");
+    await expect(kbTrigger).toBeDisabled();
     await expect(page.getByText(/DEFAULT ナレッジベースだけを参照します/)).toBeVisible();
-    const field = page.locator("[data-searchable-multi-select]").filter({ has: page.getByRole("combobox", { name: "参照するナレッジベース" }) });
+    const field = kbTrigger.locator("..");
     for (const width of viewport.name === "desktop" ? [1280, 1920] : [375]) {
       await page.setViewportSize({ width, height: viewport.height });
     for (const theme of ["light", "dark"]) {
       await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
-      await expect.poll(() => field.evaluate(element => {
-        const input = element.querySelector("input")!;
-        const button = element.querySelector("[data-text-field-slot='trailing'] button")!;
-        const inputStyle = getComputedStyle(input), buttonStyle = getComputedStyle(button);
-        return buttonStyle.borderLeftColor === "rgba(0, 0, 0, 0)" && inputStyle.backgroundColor === buttonStyle.backgroundColor && inputStyle.borderLeftColor !== "rgba(0, 0, 0, 0)";
+      // 無効のボタンは無効の地（TextField の disabled と同じ）で、枠線は残す（#5267）。
+      await expect.poll(() => kbTrigger.evaluate(element => {
+        const style = getComputedStyle(element);
+        return style.cursor === "not-allowed" && style.borderLeftColor !== "rgba(0, 0, 0, 0)";
       })).toBe(true);
       await field.screenshot({ path: test.info().outputPath(`disabled-kb-${width}-${theme}.png`) });
     }
@@ -727,7 +729,7 @@ test("検索・回答プロファイルの編集: 参照するナレッジベー
   await page.goto("/search-answer-profiles?id=bv-1");
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue(accountingView.name);
 
-  await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
+  await openSearchableMultiSelect(page, "参照するナレッジベース");
   await expect(page.locator("[data-searchable-panel-footer]")).toContainText(/\d+ 件選択中/);
   await expectSearchablePanelFits(page);
   await expectNoPageOverflow(page);

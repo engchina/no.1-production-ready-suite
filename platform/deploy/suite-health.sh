@@ -38,10 +38,6 @@ SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS="${SUITE_SCHEMA_CHECK_TIMEOUT_SECONDS:-120}"
 # schema の確認を飛ばす（skip だけを認める。CI の DB の無い配備の通し用。#1656）。既定は確かめる。
 SUITE_CHECK_SCHEMA="${SUITE_CHECK_SCHEMA:-check}"
 SUITE_PRODUCT_LOG_DIR="${SUITE_PRODUCT_LOG_DIR:-/var/log}"
-# 製品の init_script.sh の main が最初に出す行（log の接頭辞 `[<製品>-init] ` の後）。schema の確認は
-# 最後のこの行より後だけから初期化のエラーを取る（#5260）。init_script.sh の行を変えるときはここも直す
-# （platform/deploy/tests/suite-health.test.sh が 3 製品の行と合うかを確かめる）。
-SUITE_INIT_RUN_START_PATTERN='Starting (direct )?Compute initialization'
 SUITE_UNIT_PATTERN="production-ready-*.service"
 SUITE_TLS_RENEW_SERVICE="production-ready-suite-tls-renew.service"
 
@@ -225,7 +221,7 @@ suite_run_schema_check() {
 # NG のときは、製品の初期化の log の最後の ORA / PLS のコードと、権限の不足の手がかりも出す。
 _suite_check_schema() {
   local product="$1"
-  local output summary status=0 log_file last_error="" run_start
+  local output summary status=0 log_file last_error
   output="$(suite_run_schema_check "${product}")" || status=$?
   summary="$(printf '%s\n' "${output}" | sed '/^[[:space:]]*$/d' | tail -n 1)"
   if [ "${status}" -eq 0 ]; then
@@ -241,13 +237,7 @@ _suite_check_schema() {
   fi
   _SUITE_CHECK_LINES+=("check: ${product} schema NG（${summary}）")
   log_file="${SUITE_PRODUCT_LOG_DIR}/${product}-init.log"
-  # log は配備のたびに追記される。最後の実行（init_script.sh の main の開始の行。
-  # SUITE_INIT_RUN_START_PATTERN）より後だけから取り、過去の実行の ORA を出さない（#5260）。
-  run_start="$(grep -nE "^\[${product}-init\] ${SUITE_INIT_RUN_START_PATTERN}" "${log_file}" 2>/dev/null \
-    | tail -n 1 | cut -d: -f1 || true)"
-  if [ -n "${run_start}" ]; then
-    last_error="$(tail -n "+${run_start}" "${log_file}" | grep -oE '(ORA|PLS)-[0-9]{5}' | tail -n 1 || true)"
-  fi
+  last_error="$(grep -oE '(ORA|PLS)-[0-9]{5}' "${log_file}" 2>/dev/null | tail -n 1 || true)"
   if [ -n "${last_error}" ]; then
     _SUITE_CHECK_LINES+=("check: ${product} の初期化の log（${log_file}）の最後のエラー: ${last_error}")
   fi

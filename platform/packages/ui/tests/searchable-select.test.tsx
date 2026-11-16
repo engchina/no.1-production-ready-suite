@@ -114,7 +114,17 @@ function MultiHarness({
 
 function mountMulti(props: Parameters<typeof MultiHarness>[0] = {}) {
   act(() => root.render(<MultiHarness {...props} />));
-  return host.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+  return host.querySelector<HTMLButtonElement>("#kb")!;
+}
+
+/** ボタンを押して popover を開き、最上部の検索欄を返す。 */
+function openMulti(button: HTMLButtonElement) {
+  click(button);
+  return searchInput();
+}
+
+function buttonByText(text: string) {
+  return Array.from(document.querySelectorAll("button")).find((button) => button.textContent === text)!;
 }
 
 describe("filterSearchableOptions", () => {
@@ -133,48 +143,63 @@ describe("filterSearchableOptions", () => {
 describe("SearchableMultiSelect", () => {
   it("creatable は候補に無い検索語を選択の末尾に足し、検索語を消す（#4733）", () => {
     const onChange = vi.fn();
-    const input = mountMulti({ creatable: true, initial: ["kb-1"], onChange });
-    act(() => input.focus());
+    const input = openMulti(mountMulti({ creatable: true, initial: ["kb-1"], onChange }));
     type(input, "独自の値");
-    act(() => vi.advanceTimersByTime(SEARCH_FIELD_DEBOUNCE_MS));
-    const add = Array.from(host.querySelectorAll("button")).find(
-      (button) => button.textContent === "「独自の値」を追加"
-    )!;
-    act(() => add.click());
+    advance(SEARCH_FIELD_DEBOUNCE_MS);
+    click(buttonByText("「独自の値」を追加"));
     expect(onChange).toHaveBeenLastCalledWith(["kb-1", "独自の値"]);
     expect(input.value).toBe("");
   });
 
   it("creatable でなければ追加のボタンを出さない（#4733）", () => {
-    const input = mountMulti();
-    act(() => input.focus());
+    const input = openMulti(mountMulti());
     type(input, "独自の値");
-    act(() => vi.advanceTimersByTime(SEARCH_FIELD_DEBOUNCE_MS));
-    expect(host.textContent).not.toContain("を追加");
+    advance(SEARCH_FIELD_DEBOUNCE_MS);
+    expect(document.body.textContent).not.toContain("を追加");
   });
 
-  it("検索欄は combobox で、ラベル・必須・一覧との結び付きを持つ。フォーカスで一覧を開く", () => {
-    const input = mountMulti({ required: true });
-    expect(input.getAttribute("aria-labelledby")).toBeTruthy();
-    expect(document.getElementById(input.getAttribute("aria-labelledby")!)?.textContent).toContain("ナレッジベース");
-    expect(input.getAttribute("aria-required")).toBe("true");
-    expect(input.getAttribute("aria-expanded")).toBe("false");
-    expect(input.getAttribute("aria-autocomplete")).toBe("list");
+  it("閉じた欄は単一選択と同じボタンで、ラベルと要約で読み上げ、必須はラベルのタグで伝える（#5267）", () => {
+    const button = mountMulti({ required: true });
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    // ボタンは aria-required を持てない（axe の aria-allowed-attr）。必須はラベルのタグとして読む（#1595）。
+    expect(button.hasAttribute("aria-required")).toBe(false);
+    const [labelId, valueId] = button.getAttribute("aria-labelledby")!.split(" ");
+    expect(document.getElementById(labelId)?.textContent).toBe("ナレッジベース必須");
+    expect(document.getElementById(valueId)?.textContent).toBe("未選択");
+    // 開くまで検索欄・一覧は無い（下の内容を押さない）。
     expect(document.querySelector('[role="listbox"]')).toBeNull();
+    expect(document.querySelector('input[role="combobox"]')).toBeNull();
+  });
 
-    focus(input);
+  it("開くと上の層（body の popover）に検索欄・一覧を出し、検索欄へフォーカスする。ボタンの中身は変わらない", () => {
+    const button = mountMulti();
+    const before = button.innerHTML;
+    const input = openMulti(button);
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][data-searchable-select-popover]')!;
+    expect(dialog.parentElement).toBe(document.body);
+    expect(host.contains(dialog)).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(button.getAttribute("aria-controls")).toBe(dialog.id);
+    expect(document.activeElement).toBe(input);
+    // 検索欄は popover の最上部。
+    expect(dialog.firstElementChild?.contains(input)).toBe(true);
     const listbox = document.querySelector('[role="listbox"]')!;
-    expect(input.getAttribute("aria-expanded")).toBe("true");
     expect(input.getAttribute("aria-controls")).toBe(listbox.id);
+    expect(input.getAttribute("aria-autocomplete")).toBe("list");
     expect(listbox.getAttribute("aria-multiselectable")).toBe("true");
     expect(listbox.getAttribute("aria-label")).toBe("ナレッジベース");
-    expect(host.textContent).toContain("300 / 300 件");
+    expect(dialog.textContent).toContain("300 / 300 件");
+    // 開閉の印の向き（class）以外のボタンの中身は変わらない。
+    expect(button.querySelector("[data-searchable-summary]")?.outerHTML).toBe(
+      new DOMParser().parseFromString(before, "text/html").querySelector("[data-searchable-summary]")?.outerHTML
+    );
   });
 
   it("入力が止まって 300ms で画面側を絞り込み、件数を読み上げる", () => {
     const onQueryChange = vi.fn();
-    const input = mountMulti({ onQueryChange });
-    focus(input);
+    const input = openMulti(mountMulti({ onQueryChange }));
     type(input, "-12");
     advance(SEARCH_FIELD_DEBOUNCE_MS - 1);
     expect(options()).toHaveLength(300);
@@ -182,14 +207,14 @@ describe("SearchableMultiSelect", () => {
     // -12, -120〜-129 の 11 件
     expect(options()).toHaveLength(11);
     expect(onQueryChange).toHaveBeenLastCalledWith("-12");
-    const status = host.querySelector('[role="status"][data-search-field-status]');
+    const status = document.querySelector('[role="status"][data-search-field-status]');
     expect(status?.textContent).toBe("11 / 300 件");
   });
 
-  it("↑↓ で強調を動かし（aria-activedescendant）、Enter で選択を切り替える。選んでも一覧は開いたまま", () => {
+  it("↑↓ で強調を動かし（aria-activedescendant）、Enter で選択を切り替える。選んでも開いたまま", () => {
     const onChange = vi.fn();
-    const input = mountMulti({ onChange });
-    focus(input);
+    const button = mountMulti({ onChange });
+    const input = openMulti(button);
     expect(input.getAttribute("aria-activedescendant")).toBe(options()[0].id);
     keydown(input, "ArrowDown");
     expect(input.getAttribute("aria-activedescendant")).toBe(options()[1].id);
@@ -197,7 +222,7 @@ describe("SearchableMultiSelect", () => {
     expect(enter.defaultPrevented).toBe(true);
     expect(onChange).toHaveBeenLastCalledWith(["kb-2"]);
     expect(options()[1].getAttribute("aria-selected")).toBe("true");
-    expect(input.getAttribute("aria-expanded")).toBe("true");
+    expect(button.getAttribute("aria-expanded")).toBe("true");
     keydown(input, "ArrowUp");
     keydown(input, "Enter");
     expect(onChange).toHaveBeenLastCalledWith(["kb-2", "kb-1"]);
@@ -208,8 +233,7 @@ describe("SearchableMultiSelect", () => {
   it("IME の変換中は絞り込まず、変換を確定する Enter・矢印では候補を操作しない", () => {
     const onChange = vi.fn();
     const onQueryChange = vi.fn();
-    const input = mountMulti({ onChange, onQueryChange });
-    focus(input);
+    const input = openMulti(mountMulti({ onChange, onQueryChange }));
     composition(input, "compositionstart");
     type(input, "なれ", { composing: true });
     advance(SEARCH_FIELD_DEBOUNCE_MS * 2);
@@ -224,29 +248,37 @@ describe("SearchableMultiSelect", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("Esc で一覧だけを閉じ（囲むダイアログへ伝えない）、閉じた後の Esc で検索語を消す", () => {
+  it("Esc で popover だけを閉じてボタンへ戻り（囲むダイアログへ伝えない）、検索語は次に開いたとき残らない", () => {
     const outer = vi.fn();
-    const input = mountMulti();
+    const onQueryChange = vi.fn();
+    const button = mountMulti({ onQueryChange });
     document.addEventListener("keydown", outer);
-    focus(input);
+    const input = openMulti(button);
     type(input, "abc");
-    const first = keydown(input, "Escape");
-    expect(first.defaultPrevented).toBe(true);
+    advance(SEARCH_FIELD_DEBOUNCE_MS);
+    const escape = keydown(input, "Escape");
+    expect(escape.defaultPrevented).toBe(true);
     expect(outer).not.toHaveBeenCalled();
-    expect(input.getAttribute("aria-expanded")).toBe("false");
-    expect(input.value).toBe("abc");
-    keydown(input, "Escape");
-    expect(input.value).toBe("");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(button);
+    expect(onQueryChange).toHaveBeenLastCalledWith("");
+    expect(openMulti(button).value).toBe("");
     document.removeEventListener("keydown", outer);
   });
 
-  it("選択済みは chip で名前を切らずに出し、状態の文字と「外す」を持つ。一覧に無い値も外せる", () => {
+  it("ボタンは選択を 1 行で要約し（名前 2 件と「他 N 件」）、下の chip は名前を切らずに出して 1 件ずつ外せる", () => {
     const onChange = vi.fn();
-    mountMulti({
+    const button = mountMulti({
       initial: ["kb-1", "kb-archived", "kb-unknown"],
       onChange,
       selectedOptions: [{ value: "kb-archived", label: "旧規程", badge: "アーカイブ済み" }],
     });
+    const summary = button.querySelector<HTMLElement>("[data-searchable-summary]")!;
+    expect(summary.textContent).toBe(`${OPTIONS[0].label}、旧規程他 1 件`);
+    // 名前は 1 行で省略し、「他 N 件」は省略しない。全文は title。
+    expect(summary.firstElementChild?.className).toContain("truncate");
+    expect(summary.lastElementChild?.className).toContain("shrink-0");
+    expect(summary.title).toBe(`${OPTIONS[0].label}、旧規程、kb-unknown`);
     const chips = host.querySelector('ul[aria-label="選択中のナレッジベース"]')!;
     expect(chips.textContent).toContain(OPTIONS[0].label);
     expect(chips.querySelector("span")?.className).not.toContain("truncate");
@@ -254,18 +286,35 @@ describe("SearchableMultiSelect", () => {
     expect(chips.textContent).toContain("kb-unknown");
     click(host.querySelector('[aria-label="旧規程 を選択から外す"]')!);
     expect(onChange).toHaveBeenLastCalledWith(["kb-1", "kb-unknown"]);
+    expect(summary.textContent).toBe(`${OPTIONS[0].label}、kb-unknown`);
+  });
+
+  it("labelHidden と labelledBy では、見出しとボタンの要約で名前を付ける（自分のラベルを二重に置かない）", () => {
+    act(() =>
+      root.render(
+        <>
+          <h3 id="kb-heading">参照先</h3>
+          <MultiHarness labelHidden labelledBy="kb-heading" />
+        </>
+      )
+    );
+    const button = host.querySelector<HTMLButtonElement>("#kb")!;
+    const [nameId] = button.getAttribute("aria-labelledby")!.split(" ");
+    expect(nameId).toBe("kb-heading");
+    expect(host.querySelectorAll("label")).toHaveLength(0);
   });
 
   it("hideable な候補は既定で隠し（選択済みは残す）、チェックを外すと出す", () => {
-    const input = mountMulti({
-      initial: ["kb-2"],
-      labels: { hideHideable: "空のKBを隠す", hiddenCount: (count) => `空 ${count} 件を非表示中` },
-    });
-    focus(input);
+    openMulti(
+      mountMulti({
+        initial: ["kb-2"],
+        labels: { hideHideable: "空のKBを隠す", hiddenCount: (count) => `空 ${count} 件を非表示中` },
+      })
+    );
     // 奇数番目（kb-2, kb-4, …）が hideable。kb-2 は選択済みなので残る。
     expect(options()).toHaveLength(151);
-    expect(host.textContent).toContain("空 149 件を非表示中");
-    click(host.querySelector('input[type="checkbox"]')!);
+    expect(document.body.textContent).toContain("空 149 件を非表示中");
+    click(document.querySelector('[role="dialog"] input[type="checkbox"]')!);
     expect(options()).toHaveLength(300);
   });
 
@@ -273,20 +322,21 @@ describe("SearchableMultiSelect", () => {
     const onLoadMore = vi.fn();
     const onQueryChange = vi.fn();
     const page = OPTIONS.slice(0, 50);
-    const input = mountMulti({
-      options: page,
-      onQueryChange,
-      remote: { total: 300, hasMore: true, loadingMore: false, searching: false, onLoadMore },
-    });
-    focus(input);
+    const input = openMulti(
+      mountMulti({
+        options: page,
+        onQueryChange,
+        remote: { total: 300, hasMore: true, loadingMore: false, searching: false, onLoadMore },
+      })
+    );
     expect(options()).toHaveLength(50);
-    expect(host.textContent).toContain("50 / 300 件");
+    expect(document.body.textContent).toContain("50 / 300 件");
     type(input, "存在しない");
     advance(SEARCH_FIELD_DEBOUNCE_MS);
     // 絞り込みは呼び出し側（サーバー）が行う。
     expect(onQueryChange).toHaveBeenLastCalledWith("存在しない");
     expect(options()).toHaveLength(50);
-    click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "さらに表示")!);
+    click(buttonByText("さらに表示"));
     expect(onLoadMore).toHaveBeenCalledTimes(1);
     for (let step = 0; step < 49; step += 1) keydown(input, "ArrowDown");
     expect(input.getAttribute("aria-activedescendant")).toBe(options()[49].id);
@@ -294,26 +344,61 @@ describe("SearchableMultiSelect", () => {
     expect(onLoadMore).toHaveBeenCalledTimes(2);
   });
 
-  it("スクロール領域へフォーカスが移っても開いたままで、Esc で入力へ戻る", () => {
+  it("スクロール領域へフォーカスが移っても開いたままで、Esc でボタンへ戻る", () => {
     const onChange = vi.fn();
-    const input = mountMulti({ initial: ["kb-1"], onChange });
-    focus(input);
+    const button = mountMulti({ initial: ["kb-1"], onChange });
+    openMulti(button);
     const list = document.querySelector<HTMLElement>('[role="listbox"]')!;
     focus(list);
     expect(document.activeElement).toBe(list);
-    expect(input.getAttribute("aria-expanded")).toBe("true");
+    expect(button.getAttribute("aria-expanded")).toBe("true");
     keydown(list, "Escape");
-    expect(input.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(input);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(button);
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("「完了」で一覧を閉じて検索欄へ戻り、戻したことで開き直さない", () => {
-    const input = mountMulti();
-    focus(input);
-    click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "完了")!);
-    expect(input.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(input);
+  it("「完了」で閉じてボタンへ戻る", () => {
+    const button = mountMulti();
+    openMulti(button);
+    click(buttonByText("完了"));
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("Shift+Tab は検索欄からボタンへ戻り、最後の操作（完了）からの Tab は閉じてボタンへ戻す（既定の Tab で次へ進む）", () => {
+    const button = mountMulti();
+    const input = openMulti(button);
+    const back = keydown(input, "Tab", { shiftKey: true });
+    expect(back.defaultPrevented).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(button);
+
+    openMulti(button);
+    const done = buttonByText("完了");
+    focus(done);
+    const forward = keydown(done, "Tab");
+    expect(forward.defaultPrevented).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("外側を押すと閉じ（検索語も消す）、ボタンの下の chip を押しても閉じない", () => {
+    const onQueryChange = vi.fn();
+    const button = mountMulti({ initial: ["kb-1", "kb-2"], onQueryChange });
+    type(openMulti(button), "-1");
+    advance(SEARCH_FIELD_DEBOUNCE_MS);
+    act(() => {
+      host.querySelector('[aria-label="ナレッジベース-2 を選択から外す"]')!.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true })
+      );
+    });
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    act(() => {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(onQueryChange).toHaveBeenLastCalledWith("");
   });
 });
 

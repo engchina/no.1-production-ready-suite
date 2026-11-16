@@ -91,11 +91,6 @@ updates:
       # major は Issue を立て、起動の契約を更新する PR で個別に上げる。
       - dependency-name: gunicorn
         update-types: ["version-update:semver-major"]
-      # pytest 9.2 は nodeid を `_id` から作るため、pytest-xdist 3.8.0 が `_nodeid` を書き換える
-      # `--dist loadgroup` が効かない（rag の実 Oracle のテストの直列化が崩れ、tests/test_oracle_xdist_grouping.py が
-      # 失敗する。#5268）。pytest-xdist が対応した版を出したら外し、rag/backend の pytest を上げる。
-      - dependency-name: pytest
-        versions: [">=9.2.0"]
 
   # platform の backend の package（#1588）。3 製品の uv.lock が path で入れて依存を書き写しているので、
   # lock だけを上げる（lockfile-only。冒頭の「対象範囲」）。版の範囲を超える更新は Issue を立てて 3 製品の lock と上げる。

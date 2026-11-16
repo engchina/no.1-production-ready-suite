@@ -242,11 +242,7 @@ fake_sleep() {
   curl() { return 0; }
   SUITE_PRODUCT_LOG_DIR="${task_dir}/var-log"
   mkdir -p "${SUITE_PRODUCT_LOG_DIR}"
-  # log は配備のたびに追記される。前の実行の ORA（ORA-29855）は出さず、最後の実行の ORA だけを出す（#5260）。
-  printf '%s\n' '[nl2sql-init] Starting direct Compute initialization.' \
-    '{"error":{"code":"ORA-29855","message":"システムテーブル操作に失敗しました（DatabaseError）。"},"ok":false}' \
-    '[nl2sql-init] Starting direct Compute initialization.' \
-    '[nl2sql-init] Initializing NL2SQL system schema with an idempotent migration.' \
+  printf '%s\n' '[nl2sql-init] Initializing NL2SQL system schema with an idempotent migration.' \
     '{"error":{"code":"ORA-01031","message":"システムテーブル操作に失敗しました（DatabaseError）。"},"ok":false}' \
     > "${SUITE_PRODUCT_LOG_DIR}/nl2sql-init.log"
   suite_run_schema_check() {
@@ -279,41 +275,6 @@ fake_sleep() {
     || fail "権限の不足の手がかり: $(cat "${out}")"
   if grep -qF 'check: rag の DB ユーザー' "${out}"; then fail "OK の製品に手がかりを出した"; fi
   tail -n 1 "${out}" | grep -q "check: NG" || fail "最後の行が NG ではない: $(tail -n 1 "${out}")"
-
-  # 最後の実行が ORA 以外で止まった（承認が要る削除など）: 前の実行の ORA を最後のエラーにせず、
-  # その ORA で権限の手がかりも出さない（#5260）。
-  printf '%s\n' '[rag-init] Starting Compute initialization (native: uv + systemd + Nginx).' \
-    '{"error":{"code":"ORA-01031","message":"システムテーブル操作に失敗しました（DatabaseError）。"},"ok":false}' \
-    '[rag-init] Starting Compute initialization (native: uv + systemd + Nginx).' \
-    '{"error_code": "SCHEMA_DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED"}' \
-    > "${SUITE_PRODUCT_LOG_DIR}/rag-init.log"
-  suite_run_schema_check() {
-    printf 'status=partial・承認が要る削除 1 件（demo。書き出してから --allow-destructive で初期化）\n'
-    return 1
-  }
-  : > "${out}"
-  if SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then fail "schema が NG なのに成功した"; fi
-  grep -qF '[suite-init] check: rag schema NG（status=partial・承認が要る削除 1 件' "${out}" || fail "schema の NG の行: $(cat "${out}")"
-  if grep -qF 'の最後のエラー' "${out}"; then fail "前の実行の ORA を最後のエラーとして出した: $(cat "${out}")"; fi
-  if grep -qF 'check: rag の DB ユーザー' "${out}"; then fail "前の実行の ORA で権限の手がかりを出した: $(cat "${out}")"; fi
-  # 最後の実行に ORA があれば、そのコードを出す。
-  printf '%s\n' '{"error":{"code":"ORA-51995","message":"システムテーブル操作に失敗しました（DatabaseError）。"},"ok":false}' \
-    >> "${SUITE_PRODUCT_LOG_DIR}/rag-init.log"
-  : > "${out}"
-  if SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then fail "schema が NG なのに成功した"; fi
-  grep -qxF "[suite-init] check: rag の初期化の log（${SUITE_PRODUCT_LOG_DIR}/rag-init.log）の最後のエラー: ORA-51995" "${out}" \
-    || fail "最後の実行の ORA: $(cat "${out}")"
-  # 開始の行が無い log（init_script.sh が main の前に止まったなど）からは取らない。
-  printf '%s\n' '{"error":{"code":"ORA-01031"}}' > "${SUITE_PRODUCT_LOG_DIR}/rag-init.log"
-  : > "${out}"
-  if SUITE_CHECK_SETTLE_SECONDS=0 suite_check_deployment https://127.0.0.1:443 rag; then fail "schema が NG なのに成功した"; fi
-  if grep -qF 'の最後のエラー' "${out}"; then fail "開始の行の無い log から最後のエラーを出した: $(cat "${out}")"; fi
-  # 3 製品の init_script.sh の main の最初の行が、開始の行の形（SUITE_INIT_RUN_START_PATTERN）に合う。
-  for product in rag nl2sql agent; do
-    first="$(sed -n '/^main() {$/,/^}$/p' "${repo}/${product}/init_script.sh" | sed -n '2p')"
-    printf '%s\n' "${first}" | grep -qE "^  log \"${SUITE_INIT_RUN_START_PATTERN}" \
-      || fail "${product} の init_script.sh の main の最初の行が開始の行の形と合わない: ${first}"
-  done
 
   # 時間切れ（timeout の 124）と、要約を出さない失敗。
   suite_run_schema_check() { return 124; }
