@@ -119,3 +119,42 @@ async def test_rereads_only_once_even_if_switched_again() -> None:
     await client._native_rows("keyword", "合成", (), top_k=3, filters={})
 
     assert len(client.reads) == 2
+
+
+@pytest.mark.asyncio
+async def test_check_reads_each_scope_by_index_with_unchanged_conditions() -> None:
+    """古さの確認は範囲の行を native_scope_id だけで引き、検索の条件は CASE の中で行ごとに
+    確かめる(#5237)。条件の文と bind は検索と同じで、WHERE に並べない(文書の側から chunk を
+    引く計画を選ばせない)。
+    """
+    from app.clients.oracle import _NativeScope, _oracle_retrieval_where
+
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    class Capture(OracleClient):
+        async def _fetch_all(
+            self, sql: str, binds: Mapping[str, object] | None = None
+        ) -> list[dict[str, object]]:
+            captured.append((sql, dict(binds or {})))
+            return [{"scope_id": NEW_SCOPE}]
+
+    filters = {"knowledge_base_id": "kb-1"}
+    scope = _NativeScope(
+        allowed_ids=[],
+        complete_scopes=[OLD_SCOPE, NEW_SCOPE],
+        scope_ranges=[],
+        vector_chunks=2,
+        scope_ids=(OLD_SCOPE, NEW_SCOPE),
+    )
+
+    assert await Capture(Settings())._native_scope_is_stale(scope, filters) is True
+
+    [(sql, binds)] = captured
+    where, where_binds = _oracle_retrieval_where(filters)
+    outer, inner = sql.split("NOT EXISTS (", 1)
+    access, condition = inner.split("AND CASE WHEN ", 1)
+    assert access.rstrip().endswith("WHERE c.native_scope_id = s.scope_id")
+    assert condition.startswith(where)
+    assert condition[len(where) :].split() == ["THEN", "1", "ELSE", "0", "END", "=", "1)"]
+    assert "JSON_TABLE(:native_checked_scope_ids" in outer
+    assert binds == {**where_binds, "native_checked_scope_ids": json.dumps([OLD_SCOPE, NEW_SCOPE])}
