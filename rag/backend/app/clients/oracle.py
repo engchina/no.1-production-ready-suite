@@ -571,6 +571,34 @@ class _NativeScope:
     total_chunks: int = 0
 
 
+@dataclass(slots=True)
+class NativeScopeReuse:
+    """1 回の回答の中で、原生検索の準備の確認と範囲の解決を使い回す(#5184)。
+
+    回答ごとに作って ``search_many`` に渡す(回答をまたいで使わない)。範囲は検索の条件ごとに持つ。
+    各 ``search_many`` の後の範囲の古さの確認(#4179)は使い回しても毎回行い、古ければ捨てて
+    解決し直す。読んだ行には毎回同じ権限の条件を掛けるので、権限・範囲は弱めない。
+    """
+
+    ready: bool = False
+    scopes: dict[tuple[tuple[str, str], ...], asyncio.Future[_NativeScope | None]] = field(
+        default_factory=dict
+    )
+
+    def scope(self, filters: Mapping[str, str]) -> asyncio.Future[_NativeScope | None] | None:
+        """同じ条件で解決済み(か解決中)の範囲。失敗・取り消しで終わった範囲は使わない。"""
+        future = self.scopes.get(_native_scope_key(filters))
+        if future is None or (
+            future.done() and (future.cancelled() or future.exception() is not None)
+        ):
+            return None
+        return future
+
+
+def _native_scope_key(filters: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(filters.items()))
+
+
 class NativeSearchRows(list[dict[str, object]]):
     """有界な原生結果と、実際の閾値判定・ベクトルの読み方の集計。"""
 
@@ -992,15 +1020,21 @@ class OracleClient:
         searches: Sequence[tuple[str, list[float], SearchMode]],
         top_k: int,
         filters: dict[str, str] | None = None,
+        *,
+        reuse: NativeScopeReuse | None = None,
     ) -> list[list[RetrievedChunk]]:
         """複数の検索文の検索を、検索文ごとの vector / keyword の SQL を並行に読む(#2800)。
 
         返す値は ``searches`` の順に、``hybrid_search(query, embedding, top_k, mode, filters)``
-        と同じ(候補・順位・score・本文・metadata)。
+        と同じ(候補・順位・score・本文・metadata)。``reuse`` を渡すと、同じ回答の前の呼び出しの
+        原生検索の準備の確認と範囲の解決を使う(#5184)。
         """
         if not searches:
             return []
-        await self._ensure_native_hybrid_ready()
+        if reuse is None or not reuse.ready:
+            await self._ensure_native_hybrid_ready()
+            if reuse is not None:
+                reuse.ready = True
         filters = filters or {}
         if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index":
             for _, embedding, mode in searches:
@@ -1027,18 +1061,26 @@ class OracleClient:
                     )
                 )
 
-            # 同じ要求の検索文は範囲が同じなので、範囲の解決は 1 回だけにする(#4011)。
-            native_scope = asyncio.ensure_future(self._resolve_native_scope(filters))
+            # 同じ要求の検索文は範囲が同じなので、範囲の解決は 1 回だけにする(#4011)。同じ回答の
+            # 前の呼び出し(要求ごとの補いの検索・業務ガイドの手順の検索)で解決した範囲も使う
+            # (#5184)。
+            def resolve() -> asyncio.Future[_NativeScope | None]:
+                future = asyncio.ensure_future(self._resolve_native_scope(filters))
+                if reuse is not None:
+                    reuse.scopes[_native_scope_key(filters)] = future
+                return future
+
+            native_scope = (reuse.scope(filters) if reuse is not None else None) or resolve()
             native_results = await read_all(native_scope)
             try:
-                scope = await native_scope
+                # 使い回す範囲を、この呼び出しの取り消しで取り消さない。
+                scope = await asyncio.shield(native_scope)
             except Exception:
                 # 範囲を読めなかった失敗は、各検索文の結果にすでに入っている。
                 return native_results
+            # 使い回した範囲も毎回確かめ、古ければ解決し直して読み直す(#4179)。
             if await self._native_scope_is_stale(scope, filters):
-                native_results = await read_all(
-                    asyncio.ensure_future(self._resolve_native_scope(filters))
-                )
+                native_results = await read_all(resolve())
             return native_results
         branch_queries: list[str] = []
         branch_kinds: list[str] = []
