@@ -260,6 +260,9 @@ class StepSearch:
     target_id: str = ""
     owner_ids: tuple[str, ...] = ()
     reused: bool = False
+    # 主の検索の根拠にすでにあるため切りの前に除いた候補の record（#5175）。根拠には足さないが、手順の根拠の
+    # 結び付きと必須の取得の候補には数える（主の検索の根拠が手順の根拠になる）。
+    covered: tuple[Any, ...] = ()
 
 
 def step_queries(question: str, step: GuideStep) -> tuple[str, tuple[str, ...]]:
@@ -321,6 +324,7 @@ def run_step_searches(
                 tuple(getattr(context, "evidence_tree", ()) or ()),
                 tuple(getattr(context, "expansion_records", ()) or ()),
                 int((clock() - began) * 1000),
+                covered=covered_records(context),
             )
         )
     return results, stop
@@ -372,6 +376,11 @@ def _key_of(record: Any) -> str:
 
 def _key(parent: Any) -> str:
     return _key_of(getattr(parent, "record", None))
+
+
+def covered_records(context: Any) -> tuple[Any, ...]:
+    """検索の結果（AnswerContext）のうち、主の検索の根拠にあるため切りの前に除いた候補の record（#5175）。"""
+    return tuple(record for record, _ in getattr(context, "covered_candidates", ()) or ())
 
 
 __all__ = [
@@ -553,6 +562,7 @@ def run_required_guide_searches(
         text, queries = step_queries(question, target.steps[0])
         parents: tuple[Any, ...] = ()
         expansion: tuple[Any, ...] = ()
+        covered: tuple[Any, ...] = ()
         error = ""
         elapsed = 0
         is_reused = target.target_id in reused
@@ -575,7 +585,9 @@ def run_required_guide_searches(
                 candidates = tuple(getattr(context, "evidence_tree", ()) or ())
                 parents = tuple(parent for parent in candidates if target_records(target, [parent.record]))
                 expansion = tuple(getattr(context, "expansion_records", ()) or ())
-                state.update(execution="completed", acquisition="candidate_available" if parents else "no_candidates")
+                # 主の検索の根拠にあるため除いた候補（#5175）も、対象の範囲なら取得の候補に数える。
+                covered = tuple(target_records(target, covered_records(context)))
+                state.update(execution="completed", acquisition="candidate_available" if parents or covered else "no_candidates")
             except Exception as exc:  # noqa: BLE001 - 一対象の失敗は他の対象を消さない。
                 error = type(exc).__name__
                 state.update(execution="error", reason=error)
@@ -595,9 +607,12 @@ def run_required_guide_searches(
                     target.target_id,
                     target.owner_ids,
                     is_reused,
+                    covered,
                 )
             )
-        state["candidate_source_ids"] = list(dict.fromkeys(_key(parent) for parent in parents if _key(parent)))
+        state["candidate_source_ids"] = list(
+            dict.fromkeys(key for key in (*(_key(parent) for parent in parents), *(_key_of(record) for record in covered)) if key)
+        )
         state["elapsed_ms"] = elapsed
         states.append(state)
     budget.reserve_required(0)

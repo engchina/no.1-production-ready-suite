@@ -91,7 +91,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 |---|---|---|---|---|---|
 | 入力の正規化（LLM なし。独立した推定工程は廃止） | 必須 | 例外は送出 → **エラー**（try が無い） | `SP` | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/question_planning.py::plan_question` |
 | 用語・同義語（runtime knowledge） | 任意 | 読めない → 補助情報なしで続ける | `DS`（`runtime_knowledge`）・`ST`（status「補助情報なしで続行」と詳細の「読込エラー: 例外の型の名前」。例外の文はログだけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/knowledge/runtime_knowledge.py::load_runtime_knowledge`・`_load_failure` |
-| 業務ガイドの手順ごとの検索（#2395） | 任意（`RAG_GUIDE_STEP_RETRIEVAL_ENABLED`。検索ごとに rerank・下限・上位 `RAG_GUIDE_STEP_CHUNKS_PER_STEP` 件で切り、主の検索の根拠へ検索拡張と同じ規則で合わせる。#5173） | 失敗 → 既存の根拠で回答する | `DX`（`guide_step_retrieval` の `error`。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/guide_steps.py::run_step_searches` |
+| 業務ガイドの手順ごとの検索（#2395） | 任意（`RAG_GUIDE_STEP_RETRIEVAL_ENABLED`。検索ごとに rerank・下限の後に主の検索の根拠にある候補を除き〔#5175〕、上位 `RAG_GUIDE_STEP_CHUNKS_PER_STEP` 件で切り、主の検索の根拠へ検索拡張と同じ規則で合わせる。#5173） | 失敗 → 既存の根拠で回答する | `DX`（`guide_step_retrieval` の `error`。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/guide_steps.py::run_step_searches` |
 
 ### 生成・検証（rag_engine と backend）
 

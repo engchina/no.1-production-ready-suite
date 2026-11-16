@@ -1,8 +1,8 @@
 """補いの検索（要求別の補完・業務ガイドの手順）の根拠を、主の検索と同じ切りと合わせ込みで足す（#5173）。
 
-補いの検索は検索ごとに「検索 → rerank → 下限 → ``top_k`` で切る」だけを行い、切った根拠を検索拡張と同じ規則
-（並びにある → 印だけ／同じ文書 → 文書の chunk の順／無い → 最後）で主の検索の根拠へ合わせ、文脈を補う。
-主の検索の根拠は外さない。検索・rerank は合成のスタブで、DB と LLM を呼ばない。
+補いの検索は検索ごとに「検索 → rerank → 下限 → 主の検索の根拠にある候補を除く（#5175）→ ``top_k`` で切る」だけを
+行い、切った根拠を検索拡張と同じ規則（並びにある → 印だけ／同じ文書 → 文書の chunk の順／無い → 最後）で主の検索の
+根拠へ合わせ、文脈を補う。主の検索の根拠は外さない。検索・rerank は合成のスタブで、DB と LLM を呼ばない。
 """
 
 from __future__ import annotations
@@ -124,7 +124,21 @@ def _evidence(result: Any) -> list[str]:
 SCORES = {"A2": 0.9, "C2": 0.7, "E1": 0.88, "A5": 0.85, "D2": 0.6, "D9": 0.1, "F1": 0.9, "F2": 0.8, "F3": 0.75}
 
 
-def test_request_supplements_are_reranked_cut_and_merged_without_displacing_main_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+def _step(result: Any, name: str) -> dict[str, str]:
+    """工程の記録の欄（ラベル → 値）。同じ名前の工程が複数あれば最初のもの。"""
+    step = next(item for item in result.execution_steps if item["name"] == name)
+    return {field["label"]: field["value"] for field in step["details"]["fields"]}
+
+
+MAIN = ["A1", "A2", "A3", "C1", "C2", "C3"]
+
+
+def _keeps_main_evidence(evidence: list[str]) -> bool:
+    """主の検索の根拠（A2・C2 と前後の文脈）が 1 つも外れず、並びの順も同じか。"""
+    return [uid for uid in evidence if uid in MAIN] == MAIN
+
+
+def test_request_supplements_skip_main_evidence_before_the_cut(monkeypatch: pytest.MonkeyPatch) -> None:
     harness = Harness({QUESTION: ["A2", "C2"], "(1)": ["D9", "D2", "A5", "E1", "A2"]}, SCORES)
 
     result = _run(monkeypatch, harness, request_coverage_max_chunks=3)
@@ -132,21 +146,40 @@ def test_request_supplements_are_reranked_cut_and_merged_without_displacing_main
     # 要求の検索も rerank にかける（主の検索 1 回 + 要求 1 回）。
     assert [sorted(names) for names in harness.reranked] == [["A2", "C2"], ["A2", "A5", "D2", "D9", "E1"]]
     trace = result.generation_trace["query_overflow"]
-    # 上限 3 件（要求 1 件）で切る: 下限 0.3 で D9 を外し、rerank の上位 3 件（A2・E1・A5）で D2 を外す。
+    # 上限 3 件（要求 1 件）で切る: 下限 0.3 で D9 を外し、主の検索の根拠にある A2 を切りの前に除き（#5175）、
+    # 残りの rerank の上位 3 件（E1・A5・D2）を採る。枠はすべて新しい根拠に使う。
     assert [row["top_k"] for row in trace["requests"]] == [3]
-    assert trace["candidate_chunk_ids"] == ["A2", "E1", "A5"]
-    # 主の検索の根拠にある A2 は上限の使用量に数えない。
-    assert trace["requests"][0]["new_candidates"] == 2
-    # 主の検索の根拠（A2・C2 と前後の文脈）は外れない。A2 は並びにあるので印だけ。A5 は同じ文書 A の文書の順の
-    # 位置に入り、前後の文脈（A4・A6）が A2 のかたまりとつながるので、検索拡張と同じく印だけになる（#5171）。
-    # 別の文書の E1 は前後の文脈と一緒に最後。
-    assert _evidence(result) == ["A1", "A2", "A3", "A4", "A5", "A6", "C1", "C2", "C3", "E1", "E2"]
-    assert trace["added_chunk_ids"] == ["E1"]
+    assert trace["candidate_chunk_ids"] == ["E1", "A5", "D2"]
+    assert trace["requests"][0]["new_candidates"] == 3
+    # 除いた件数と理由を記録に残す。
+    assert trace["requests"][0]["covered_candidates"] == 1
+    assert _step(result, "主の検索の根拠と重複する候補の除外")["結果"] == (
+        "主の検索の根拠と重複する 1 件を除きました（主の検索の根拠と同じ chunk 1 件）。残りの候補 3 件"
+    )
+    assert "主の検索の根拠と重複して除いた候補 1 件" in _step(result, "検索上限の要求別補完")["結果"]
+    # 主の検索の根拠（A2・C2 と前後の文脈）は外れない。A5 は同じ文書 A の文書の順の位置に入り（前後の文脈 A4・A6 と
+    # 一緒に）、別の文書の E1・D2 は前後の文脈と一緒に最後（合わせ込みの規則は #5173 と同じ）。
+    assert _evidence(result) == ["A1", "A2", "A3", "A4", "A5", "A6", "C1", "C2", "C3", "E1", "E2", "D1", "D2", "D3"]
+    assert _keeps_main_evidence(_evidence(result))
+    assert trace["added_chunk_ids"] == ["E1", "D2"]
     children = {child["chunk_uid"]: child for item in result.evidence_items for child in item.get("children") or ()}
     assert children["A2"]["retrieval_role"] == "retrieved_anchor" and children["A2"]["context_reason"] == "top_retrieved_child"
-    assert children["A5"]["retrieval_role"] == "parent_context" and children["A5"]["context_reason"] == EXPANSION_EVIDENCE_REASON
     assert children["E1"]["retrieval_role"] == "retrieved_anchor" and children["E1"]["context_reason"] == EXPANSION_EVIDENCE_REASON
-    assert "D2" not in _evidence(result) and "D9" not in _evidence(result)
+    assert "D9" not in _evidence(result)
+
+
+def test_request_supplements_fill_the_cut_when_all_top_candidates_are_main_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    # rerank の上位 2 件（A2・C2）がどちらも主の検索の根拠でも、枠 2 件は次の新しい候補（F1・F2）で埋まる。
+    harness = Harness({QUESTION: ["A2", "C2"], "(1)": ["F3", "F2", "F1", "C2", "A2"]}, {**SCORES, "A2": 0.99, "C2": 0.98})
+
+    result = _run(monkeypatch, harness, request_coverage_max_chunks=2)
+
+    trace = result.generation_trace["query_overflow"]
+    assert trace["candidate_chunk_ids"] == ["F1", "F2"]
+    assert trace["requests"][0]["covered_candidates"] == 2
+    assert _keeps_main_evidence(_evidence(result))
+    assert {"F1", "F2"} <= set(_evidence(result)) and "F3" in _evidence(result)
+    assert trace["added_chunk_ids"] == ["F1", "F2"]
 
 
 def test_guide_step_supplements_use_the_same_cut_and_merge(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,12 +191,42 @@ def test_guide_step_supplements_use_the_same_cut_and_merge(monkeypatch: pytest.M
 
     step_searches = [kwargs for query, kwargs in harness.searches if "工程F" in query]
     assert step_searches and {kwargs["candidate_limit"] for kwargs in step_searches} == {a._retrieval_candidate_limit(2, None)}
-    # 手順の検索は rerank の後に上位 2 件（A2・F1）で切る。A2 は主の検索の根拠なので印だけ、F1 は最後へ。
-    assert _evidence(result) == ["A1", "A2", "A3", "C1", "C2", "C3", "F1", "F2"]
+    # 手順の検索も主の検索の根拠にある A2 を切りの前に除き（#5175）、上位 2 件（F1・F2）で切る。F3 は F2 の前後の文脈。
+    assert _evidence(result) == ["A1", "A2", "A3", "C1", "C2", "C3", "F1", "F2", "F3"]
+    assert _keeps_main_evidence(_evidence(result))
     roles = {child["chunk_uid"]: child for item in result.evidence_items for child in item.get("children") or ()}
-    assert roles["F1"]["context_reason"] == EXPANSION_EVIDENCE_REASON and roles["F2"]["retrieval_role"] == "neighbor_context"
-    assert result.generation_trace["guide_steps"]["added_chunk_ids"] == ["F1"]
-    assert "F3" not in _evidence(result)
+    assert roles["F1"]["context_reason"] == EXPANSION_EVIDENCE_REASON and roles["F2"]["context_reason"] == EXPANSION_EVIDENCE_REASON
+    guide_trace = result.generation_trace["guide_steps"]
+    assert guide_trace["added_chunk_ids"] == ["F1", "F2"]
+    search = guide_trace["steps"][0]["searches"][0]
+    assert search["candidates"] == 2 and search["covered_candidates"] == 1
+    # 除いた A2（主の検索の根拠）も手順の根拠と必須の取得の候補に数える。
+    assert guide_trace["steps"][0]["evidence_count"] == 3
+    assert "A2" in guide_trace["required_acquisition"]["targets"][0]["candidate_source_ids"]
+    assert "主の検索の根拠と重複して除いた候補 1 件" in _step(result, "業務ガイドの手順ごとの検索")["結果"]
+
+
+def test_request_and_guide_supplements_share_one_exclusion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """要求別の補完と業務ガイドの手順の検索は、同じ 1 つの除外の判定を使う（#5175）。"""
+    guide = GuidePlan.from_payload("g-1", 1, [{"id": "s1", "title": "合成の工程", "retrieval_hints": ["工程F"]}])
+    assert guide is not None
+    harness = Harness({"工程F": ["F1", "A2"], "(1)": ["E1", "C2"], QUESTION: ["A2", "C2"]}, SCORES)
+    calls: list[tuple[str, Any]] = []
+    original = a.build_adb_hybrid_answer_context
+
+    def spy(question: str, *args: Any, **kwargs: Any) -> Any:
+        calls.append((kwargs.get("rerank_phase", ""), kwargs.get("exclude")))
+        return original(question, *args, **kwargs)
+
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", spy)
+    result = _run(monkeypatch, harness, guide=guide)
+
+    excludes = {phase: exclude for phase, exclude in calls}
+    assert excludes["main_search"] is None
+    assert excludes["missing_requirement"] is not None and excludes["missing_requirement"] is excludes["guide_step"]
+    assert result.generation_trace["query_overflow"]["requests"][0]["covered_candidates"] == 1
+    assert result.generation_trace["guide_steps"]["steps"][0]["searches"][0]["covered_candidates"] == 1
+    assert _keeps_main_evidence(_evidence(result))
 
 
 def test_supplement_marks_are_kept_on_merged_records() -> None:
