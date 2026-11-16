@@ -913,9 +913,6 @@ def search_adb_hybrid_chunks(
             budgets = source_weights([*queries, *extra_text_queries], weights)
             # 埋め込み（`gen_ai.embeddings` の span）の後の DB の検索は、それぞれ工程の span にする（処理の経過で、文書の
             # 検索の中の今の作業を末端の段として出す。#3436）。
-            from rag_engine.retrieval.query_channels import expression_channels
-
-            channels = {q: expression_channels(q, queries[0], settings.retrieval_query_sources) for q in queries}
             vectors = dict(zip(queries, _query_vectors(queries, settings, query_embedder), strict=True))
             with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
                 if getattr(vector_observation, "capture_enabled", True):
@@ -1001,10 +998,8 @@ def search_adb_hybrid_chunks(
             )
             tokenizer_config = _text_search_tokenizer_config(settings)
             query_keywords = {dedupe_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
-            # 全文検索の上限は vector だけで検索する検索文を除いてから数える (#921)。重みは元の位置で決める。
-            text_candidates = [
-                (index, query) for index, query in enumerate(queries) if any(c in {"hybrid", "keyword"} for c in channels[query])
-            ]
+            # どの検索文も全文検索にも使う。上限を超えた検索文はベクトル検索だけに使う (#921)。重みは元の位置で決める。
+            text_candidates = list(enumerate(queries))
             # 質問文の変種の全文検索と、組み立て済みの検索式（extra_text_queries）の全文検索を 1 つの工程にする
             # （融合の順と重みは変えない）。検索するものが無ければ工程を出さない。
             text_variants = text_candidates[: _text_search_query_variant_limit(settings)]

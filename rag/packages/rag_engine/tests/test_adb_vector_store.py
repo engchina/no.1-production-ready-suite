@@ -106,8 +106,8 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(ids["chunk-7"].metadata["adb_hybrid"]["reserved_by"], ["vector:q3"])
         self.assertEqual(ids["chunk-1"].metadata["adb_hybrid"]["reserved_by"], [])
 
-    def test_additional_queries_without_terms_skip_text_search_but_keep_vector_search(self):
-        # 用語・同義語を足していない追加検索文は embedding だけに使い、Oracle Text の CONTAINS には使わない。
+    def test_additional_queries_without_terms_also_use_text_search(self):
+        # 用語・同義語を足していない追加検索文も、原質問と同じく embedding と Oracle Text の CONTAINS の両方に使う（#5151）。
         settings = replace(
             get_settings(), hybrid_search_backend="oracle_separate_sql", embedding_output_dimensions=1536, image_embedding_enabled=False
         )
@@ -129,8 +129,8 @@ class AdbVectorStoreTests(unittest.TestCase):
                 candidate_limit=5,
             )
         self.assertEqual(vector.call_count, 3)
-        self.assertEqual(text.call_count, 1)
-        self.assertFalse(any("仮説" in call.args[2] for call in text.call_args_list))
+        self.assertEqual(text.call_count, 3)
+        self.assertTrue(any("仮説" in call.args[2] for call in text.call_args_list))
 
     def test_db_searches_are_stage_spans_for_the_progress_timeline(self):
         # 文書の検索の中の DB の検索（ベクトル検索・全文検索・検索対象の読み込み）は工程の span にする（#3436）。
@@ -185,7 +185,7 @@ class AdbVectorStoreTests(unittest.TestCase):
                     ("end", "stage", "検索結果の統合（RRF）"),
                 ],
             )
-            self.assertEqual(text.call_count, 1)
+            self.assertEqual(text.call_count, 2)
             self.assertEqual(load.call_count, 1)
             # 読み込み済みの対象は再利用として記録し、DBは読み直さない。
             observed.clear()
@@ -201,8 +201,8 @@ class AdbVectorStoreTests(unittest.TestCase):
             )
             self.assertEqual(load.call_count, 1)
 
-    def test_text_search_limit_counts_only_text_candidates(self):
-        # 上限は vector だけで検索する検索文を除いてから数える (#921)。
+    def test_text_search_limit_keeps_the_first_queries(self):
+        # 全文検索は先頭から上限の本数の検索文で行い、上限を超えた検索文はベクトル検索だけに使う (#921)。
         settings = replace(
             get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False, text_search_query_variant_limit=2
         )
@@ -223,7 +223,7 @@ class AdbVectorStoreTests(unittest.TestCase):
                 query_embedder=lambda *_: [0.1] * 1536,
                 candidate_limit=5,
             )
-        self.assertEqual(text.call_count, 1)
+        self.assertEqual(text.call_count, 2)
         self.assertFalse(any("派生" in call.args[2] for call in text.call_args_list))
 
     def test_repeated_search_in_same_scope_loads_chunks_and_checks_embeddings_once(self):
@@ -367,10 +367,10 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(embedded_queries, ["original question", "expanded synonym"])
         self.assertEqual(vector_search.call_count, 2)
         load_keywords.assert_called_once_with(settings.output_dir)
-        self.assertEqual(text_search.call_count, 1)
+        self.assertEqual(text_search.call_count, 2)
         self.assertEqual(text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
-        self.assertNotIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
+        self.assertIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
 
     def test_term_expanded_question_searches_vector_and_text_like_the_original(self):
         settings = replace(

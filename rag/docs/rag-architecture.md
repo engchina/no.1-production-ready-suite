@@ -68,7 +68,7 @@
 
 6. ハイブリッド検索
    - API: `POST /api/search`（回答）。検索は回答フローの中で行う（`AnswerEngine._search`）。`generate_answer=false` は根拠を集め終えるまで（質問の理解・拡張・検索・rerank・回答フロー（CRAG を含む）・章節の拡張・要求ごとの根拠の確認）をチャットと同じ 1 つの流れ・工程・LLM の呼び出しで行い、回答の生成の手前で止める（RAG 検索の画面の既定。画面の「LLM で回答を生成する」をオンにすると `true`。#649・#3506）。処理の経過の全体は「質問の理解から根拠の検索まで」（段 `evidence`）、根拠を集める工程は「根拠の検索」（回答を作るときは「根拠の検索と回答の作成」）。MCP の `rag_retrieve_evidence` は同じ流れの主の文書の検索の後で止める（根拠の補いは Agent がする）。
-   - Oracle AI Vector Search と Oracle Text（keyword）を Reciprocal Rank Fusion で統合する（`OracleClient.hybrid_search`）。RRF 定数は `RAG_RRF_K` で調整する。HyDE の仮説文書など、質問の言い換え・分解が vector だけで引く検索文は vector 検索にする。
+   - Oracle AI Vector Search と Oracle Text（keyword）を Reciprocal Rank Fusion で統合する（`OracleClient.hybrid_search`）。RRF 定数は `RAG_RRF_K` で調整する。原質問も、原質問に語を足した検索文も、vector と全文の両方で検索する（#5151）。
    - `SearchRequest` の `mode`・`strategy`・`rerank_top_n`・`generation_profile` は #595 で削除した。旧クライアントが送っても 422 にせず読み捨てる。
    - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path`、`source_acl`、`document_version` に対応し、retrieval 前に適用する。
    - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。RAG 検索の画面からは #649 で入力欄を外した（API の条件としては残す）。

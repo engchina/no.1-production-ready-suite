@@ -73,8 +73,8 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
     )
     assert {chunk.metadata["document_id"] for chunk in result.child_chunks} == set(doc_ids[:2])
     rrf = state.retrieval_stages[-1]["rrf"]
-    # 原質問は hybrid（vector と全文の原生融合の 1 本）、追加検索文は vector だけ。
-    assert [item["weight"] for item in rrf["lists"]] == pytest.approx([0.7, 0.21])
+    # 原質問も追加検索文も hybrid（vector と全文の原生融合の 1 本。#5151）。
+    assert [item["weight"] for item in rrf["lists"]] == pytest.approx([0.7, 0.3])
     restricted = set_audit_request_context(
         AuditRequestContext(
             allowed_document_ids=frozenset([doc_ids[0]]),

@@ -2505,23 +2505,10 @@ def _retrieval_query_plan_payload(
     return payload
 
 
-def _text_search_variants(
-    queries: Sequence[str], expansion: QueryExpansionResult, sources: Mapping[str, Sequence[str]] | None = None
-) -> tuple[str, ...]:
-    """全文検索の検索語 trace に使う検索文。"""
-    from rag_engine.retrieval.query_channels import expression_channels
-
-    return tuple(
-        query
-        for query in queries
-        if any(channel in {"hybrid", "keyword"} for channel in expression_channels(query, expansion.original_question, sources or {}))
-    )
-
-
 def _text_search_limit_note(text_variants: Sequence[str], settings: Settings) -> str:
     """全文検索の上限（TEXT_SEARCH_QUERY_VARIANT_LIMIT）で切れる検索文の本数を示す。上限内なら空 (#921)。
 
-    検索実装（search_adb_hybrid_chunks）と同じく、vector 専用の検索文を除いた検索文に上限を当てる。
+    検索実装（search_adb_hybrid_chunks）と同じく、どの検索文も全文検索に使い、上限を当てる。
     """
     limit = max(1, int(getattr(settings, "text_search_query_variant_limit", 6) or 6))
     if len(text_variants) <= limit:
@@ -2924,7 +2911,7 @@ def answer_question_result(
             normalized_question,
             settings,
             query_source=_text_search_query_source(runtime_knowledge, expansion),
-            query_variants=_text_search_variants(retrieval_queries, expansion, query_sources),
+            query_variants=retrieval_queries,
         )
         text_search_info = replace(text_search_info, domain_keyword_expansion=keyword_trace)
         if (tokenizer_failure := sudachi_unavailable(_question_text_search_tokenizer_config(settings))) is not None:
@@ -2934,7 +2921,7 @@ def answer_question_result(
             f"検索文 {len(retrieval_queries)} 本",
             *(f"{number}. [{sources[source_key(query)]}] " + _display_query(query) for number, query in enumerate(retrieval_queries, 1)),
         )
-        if note := _text_search_limit_note(_text_search_variants(retrieval_queries, expansion), settings):
+        if note := _text_search_limit_note(retrieval_queries, settings):
             step.add(note)
         _add_text_search_details(step, text_search_info)
         if text_search_info.error:

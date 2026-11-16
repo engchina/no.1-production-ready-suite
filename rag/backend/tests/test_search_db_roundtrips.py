@@ -891,8 +891,8 @@ class _OneHitPerQueryOracle(_SearchOracle):
         return [_hit(self.hits[query], 1.0, mode=mode.value)]
 
 
-async def test_vector_queries_share_the_additional_budget() -> None:
-    """vector だけで検索する追加検索文も予算を分け合い、全文の重みを再配分しない。"""
+async def test_additional_queries_share_the_additional_budget() -> None:
+    """追加検索文は原質問と同じく hybrid で検索し、追加検索文の予算を等分する。"""
     oracle = _OneHitPerQueryOracle({"原": "c-0", "派生 1": "c-1", "派生 2": "c-2", "規定": "c-3"})
     engine = AnswerEngine(Settings(), oracle=oracle, genai=_GenAi())  # type: ignore[arg-type]
     result = await engine._search(
@@ -904,7 +904,7 @@ async def test_vector_queries_share_the_additional_budget() -> None:
     )
     scores = {chunk.chunk_id: chunk.metadata.get("rrf_score") for chunk in result.child_chunks}
     assert scores["c-0"] == pytest.approx(0.7 / 61)
-    assert scores["c-3"] == pytest.approx(0.1 * 0.7 / 61)
+    assert scores["c-3"] == pytest.approx(0.1 / 61)
     assert scores["c-1"] == scores["c-2"]
     assert scores["c-1"] < scores["c-0"]
 
@@ -1014,10 +1014,11 @@ async def test_injected_search_reports_db_search_stages_and_channels(
         chunk.chunk_uid: chunk.metadata["adb_hybrid"]["retrieval_channels"]
         for chunk in result.child_chunks
     }
-    # 「規程」(q1) の vector と keyword の両方と「保管」(q2) の vector、keyword だけ、q2 の両方。
+    # 「規程」(q1) の vector と keyword の両方と「保管」(q2) の vector、q1 の keyword だけ、
+    # q2 の両方(追加検索文も全文検索に使う。#5151)。
     assert channels["c-1"] == ["keyword:oracle_text:q1", "vector:q1", "vector:q2"]
     assert channels["c-7"] == ["keyword:oracle_text:q1"]
-    assert channels["c-4"] == ["vector:q2"]
+    assert channels["c-4"] == ["keyword:oracle_text:q2", "vector:q2"]
     # 並べ替えに効く値は書かない(文脈の選択の点数を変えない)。
     assert all(
         set(chunk.metadata["adb_hybrid"]) == {"retrieval_channels"} for chunk in result.child_chunks
@@ -1292,13 +1293,11 @@ async def test_weighted_rrf_uses_raw_lists_once_and_records_actual_contributions
     )
     record = next(s for s in state.retrieval_stages if s["stage"] == "candidate_fusion")["rrf"]
     assert len(record["lists"]) == 3
-    assert [r["weight"] for r in record["lists"]] == pytest.approx([0.7, 0.105, 0.105])
+    assert [r["weight"] for r in record["lists"]] == pytest.approx([0.7, 0.15, 0.15])
     assert record["unique_count"] == 3
     assert record["raw_count"] == 3
     scores = {c.chunk_id: c.metadata["rrf_score"] for c in result.child_chunks}
-    assert scores == pytest.approx(
-        {"c-0": 0.7 / 61, "c-1": 0.15 * 0.7 / 61, "c-2": 0.15 * 0.7 / 61}
-    )
+    assert scores == pytest.approx({"c-0": 0.7 / 61, "c-1": 0.15 / 61, "c-2": 0.15 / 61})
     for chunk_id, score in scores.items():
         assert state.chunks[chunk_id].metadata["rrf_score"] == pytest.approx(score)
         assert state.chunks[chunk_id].metadata["rrf_k"] == 60

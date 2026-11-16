@@ -87,11 +87,11 @@ def test_search_snapshots_match_actual_rankings_and_failures(monkeypatch, enable
                 assert call["output"]["rankings"] == ([[("uid-1", 0.1)]] * 2 if failure == "none" else [[], []])
                 assert len(call["output"]["failures"]) == (0 if failure == "none" else 2)
             elif key[1] == store.TEXT_SEARCH_STAGE:
-                assert call["output"]["expressions"] == ["{合成質問}", "{追加}"]
-                assert call["output"]["rankings"] == ([[], []] if failure == "all" else [[("uid-2", 0.2)]] * 2)
+                assert call["output"]["expressions"] == ["{合成質問}", "{合成仮説}", "{追加}"]
+                assert call["output"]["rankings"] == ([[], [], []] if failure == "all" else [[("uid-2", 0.2)]] * 3)
             else:
                 assert key[1] == "検索結果の統合（RRF）"
-                assert len(call["input"]["rankings"]) == 4
+                assert len(call["input"]["rankings"]) == 5
                 assert call["output"]["fusion_execution"] == ("empty" if failure == "all" else "outer_rrf")
     assert "private-error-sentinel" not in str(recorder.calls)
 

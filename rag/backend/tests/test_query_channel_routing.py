@@ -1,10 +1,9 @@
-"""出所に基づく検索経路と native 融合済み得点の合算を検証する。"""
+"""検索文の検索経路（すべて hybrid）と native 融合済み得点の合算を検証する。"""
 
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from rag_engine.retrieval.query_channels import expression_channels
 from rag_engine.retrieval.weighted_rrf import RankedList, RrfWeights, fuse_rankings, source_weights
 
 from app.config import Settings
@@ -13,27 +12,8 @@ from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from tests.test_search_db_roundtrips import _OneHitPerQueryOracle
 
 
-@pytest.mark.parametrize(
-    "labels,expected",
-    [
-        (("質問の言い換え・分解",), ("vector",)),
-        (("原質問 + 用語・同義語",), ("hybrid",)),
-        (("原質問 + 用語・同義語 + 業務ガイド",), ("hybrid",)),
-        (("質問の言い換え・分解", "原質問 + 用語・同義語"), ("hybrid",)),
-        (("原質問 + 業務ガイド",), ("vector",)),
-        (("原質問 + 確認で選んだ条件",), ("vector",)),
-        (("原質問 + 確認・回答ルール",), ("vector",)),
-        ((), ("vector",)),
-    ],
-)
-def test_channels_use_provenance_not_words(
-    labels: tuple[str, ...], expected: tuple[str, ...]
-) -> None:
-    assert expression_channels("合成追加", "合成原質問", {"合成追加": labels}) == expected
-    assert expression_channels("Ａ", "a", {"Ａ": labels}) == ("hybrid",)
-
-
-async def test_term_expanded_query_uses_native_hybrid_and_semantic_stays_vector() -> None:
+async def test_every_query_uses_native_hybrid_whatever_words_were_added() -> None:
+    """足した語の出どころによらず、どの検索文も原生ハイブリッドで検索する（#5151）。"""
     calls = []
 
     class Oracle(_OneHitPerQueryOracle):
@@ -53,38 +33,38 @@ async def test_term_expanded_query_uses_native_hybrid_and_semantic_stays_vector(
 
     class Embedding:
         async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
-            assert texts == ["原質問", "意味追加", "用語追加"]
+            assert texts == ["原質問", "ガイド追加", "用語追加"]
             return [[1.0] for _ in texts]
 
     state = _SearchState()
     engine = AnswerEngine(
         Settings(),
-        oracle=cast(Any, Oracle({"原質問": "c-0", "意味追加": "c-1", "用語追加": "c-2"})),
+        oracle=cast(Any, Oracle({"原質問": "c-0", "ガイド追加": "c-1", "用語追加": "c-2"})),
         genai=cast(Any, Embedding()),
     )
     await engine._search(
         SearchRequest(query="原質問"),
         state,
-        retrieval_queries=["原質問", "意味追加", "用語追加", "用語追加"],
+        retrieval_queries=["原質問", "ガイド追加", "用語追加", "用語追加"],
         expand_references=False,
         settings=SimpleNamespace(
             retrieval_query_sources={
-                "意味追加": ("質問の言い換え・分解",),
+                "ガイド追加": ("原質問 + 業務ガイド",),
                 "用語追加": ("原質問 + 用語・同義語",),
             }
         ),
     )
     assert [(q, mode) for q, mode, _ in calls] == [
         ("原質問", SearchMode.HYBRID),
-        ("意味追加", SearchMode.VECTOR),
+        ("ガイド追加", SearchMode.HYBRID),
         ("用語追加", SearchMode.HYBRID),
     ]
     rrf = state.retrieval_stages[-1]["rrf"]
-    assert [r["channel"] for r in rrf["lists"]] == ["hybrid", "vector", "hybrid"]
+    assert [r["channel"] for r in rrf["lists"]] == ["hybrid", "hybrid", "hybrid"]
     assert rrf["lists"][0]["score_source"] == "oracle_wrrf"
-    # 用語を足した質問も原質問と同じく Oracle の融合点を使い、重みは追加検索文の 3 割を等分する。
-    assert rrf["lists"][2]["score_source"] == "oracle_wrrf"
-    assert rrf["lists"][1]["weight"] == pytest.approx(rrf["lists"][2]["weight"] * 0.7)
+    # 語を足した検索文も原質問と同じく Oracle の融合点を使い、重みは追加検索文の 3 割を等分する。
+    assert [r["score_source"] for r in rrf["lists"][1:]] == ["oracle_wrrf", "oracle_wrrf"]
+    assert [r["weight"] for r in rrf["lists"][1:]] == pytest.approx([0.15, 0.15])
     assert rrf["fusion_execution"] == "additional_to_native"
 
 
@@ -134,7 +114,9 @@ async def test_followup_semantic_query_does_not_become_another_original() -> Non
     request = SearchRequest(query="原")
     await engine._search(request, state, retrieval_queries=["原"], expand_references=False)
     await engine._search(request, state, retrieval_queries=["再検索"], expand_references=False)
-    assert calls == [("原", SearchMode.HYBRID), ("再検索", SearchMode.VECTOR)]
+    assert calls == [("原", SearchMode.HYBRID), ("再検索", SearchMode.HYBRID)]
+    # 後の検索文は原質問の扱いにならず、追加検索文の 3 割の予算で融合する。
+    assert [r["weight"] for r in state.retrieval_stages[-1]["rrf"]["lists"]] == pytest.approx([0.3])
 
 
 @pytest.mark.parametrize("native", [True, False])

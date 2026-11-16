@@ -441,8 +441,7 @@ SDK の `DomainProfile`、`Runtime.profile`、`create_oracle_application(profile
 DB内の外部AI資格情報や全庫のembedding再生成は不要。検索用JSON・原生索引分のDB容量と、
 書込み時の同期負荷が増える。従来の索引も個別SQL方式で使用するため保持する。
 
-原生方式は原質問と「質問＋用語・同義語」を `DBMS_HYBRID_VECTOR.SEARCH` の1回の `UNION / WRRF` 呼出で検索・融合する。
-用語・同義語を足していない追加検索文（業務ガイド・確認で選んだ条件の語だけを足したもの）はベクトルのみを使う。原質問のOracle WRRF得点を
+原生方式は原質問と追加検索文（原質問に語を足した検索文。足した語の出どころによらない）を、それぞれ `DBMS_HYBRID_VECTOR.SEARCH` の1回の `UNION / WRRF` 呼出で検索・融合する。原質問のOracle WRRF得点を
 正規化した順位寄与の尺度へ戻し、追加文の寄与と出所予算で合算する（[計算](./weighted-rrf.md)）。索引内部の再分割や二段のRRFは行わない。権限・KB・明示範囲・
 配信中の版を検索前のID制限に使い、結果取得時にも同じSQL条件を適用する。候補上限とrerankは独立。
 原生索引が未作成・無効の場合は準備不足エラーとし、従来方式へ暗黙に切り替えない。
