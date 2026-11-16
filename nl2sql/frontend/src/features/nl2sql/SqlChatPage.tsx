@@ -45,6 +45,7 @@ import {
   chatAttachmentItems,
   type ChatAttachmentItem,
   type OptimisticChatMessage,
+  CombinedBanner,
 } from "@production-ready/ui";
 import {
   useWorkspaceActive,
@@ -1066,6 +1067,23 @@ function SqlChatTurn({
       result.generated_sql.trim(),
   );
   const executed = Boolean(execution.data || turn.last_execution);
+  // 同じ回答の案内は 1 つの枠にまとめる（messaging.md §3.4.3。#5192）。
+  const answerNotices = (
+    <CombinedBanner
+      testId="sql-chat-turn-notice"
+      items={[
+        result?.guardrail_warnings?.length
+          ? {
+              id: "guardrail",
+              severity: "warning",
+              children: `${t("chat.guardrail")}: ${result.guardrail_warnings.join(" / ")}`,
+            }
+          : null,
+        turn.warning_message ? { id: "warning", severity: "warning", children: turn.warning_message } : null,
+        copyError ? { id: "copy-error", severity: "danger", children: copyError } : null,
+      ]}
+    />
+  );
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
     <ChatTurn
@@ -1182,11 +1200,6 @@ function SqlChatTurn({
               {result.explanation ? (
                 <MessageText text={result.explanation} />
               ) : null}
-              {result.guardrail_warnings?.length ? (
-                <Banner severity="warning">
-                  {t("chat.guardrail")}: {result.guardrail_warnings.join(" / ")}
-                </Banner>
-              ) : null}
               {executable && !canExecuteSql && !readOnly ? (
                 <p className="text-xs text-fg-muted">
                   {t("chat.execute.permissionRequired")}
@@ -1200,16 +1213,16 @@ function SqlChatTurn({
                   readOnly={readOnly}
                 />
               ) : null}
+              {/* 回答の案内（安全チェックの注意・回答の警告・コピーの失敗）は回答の 1 つの枠で、SQL と結果の後・回答の注意書きの前。 */}
+              {answerNotices}
               {/* 回答の注意書きは SQL と結果の後（3 製品共通の AnswerNotice。#2405）。 */}
               {turn.status === "done" ? (
                 <AnswerNotice notice={result.notice} label={t("answer.notice.label")} />
               ) : null}
             </>
-          ) : null}
-          {turn.warning_message ? (
-            <Banner severity="warning">{turn.warning_message}</Banner>
-          ) : null}
-          {copyError ? <Banner severity="danger">{copyError}</Banner> : null}
+          ) : (
+            answerNotices
+          )}
       </ChatAnswer>
     </ChatTurn>
   );

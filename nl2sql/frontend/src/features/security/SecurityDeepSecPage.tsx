@@ -4,6 +4,7 @@ import { canonicalExpression, entitlementExpression, expressionError, expression
 import {
   Button,
   Banner,
+  CombinedBanner,
   Card,
   CardContent,
   CardHeader,
@@ -52,7 +53,6 @@ import {
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ErrorState } from "@/components/StateViews";
-import { PageNotice } from "@/components/page-notice";
 import {
   ManagementPanelHeader,
   ManagementPanelShell,
@@ -1685,32 +1685,40 @@ export function SecurityDeepSecPage() {
       />
       <PageBody wide className="grid gap-4">
         <fieldset disabled={operationBusy} className="contents" aria-busy={operationBusy} data-testid="security-deepsec-controls">
-        <PageNotice
-          notice={statusLoadError ? { tone: "danger", message: statusLoadError } : null}
-          action={
-            statusLoadError ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={statusRetry.pending}
-                onClick={() => {
-                  if (!statusRetry.pending) void statusRetry.track(() => loadStatus({ keepError: true }));
-                }}
-                icon={RefreshCw}
-                data-testid="security-deepsec-status-retry"
-              >
-                {t("common.retry")}
-              </Button>
-            ) : null
-          }
+        {/* ページの案内（状態の読み込みの失敗・無効・パスワード未設定）は 1 つの枠（messaging.md §3.4.3。#5192）。 */}
+        <CombinedBanner
+          testId="security-deepsec-page-notice"
+          items={[
+            statusLoadError
+              ? {
+                  id: "status-load-error",
+                  severity: "danger",
+                  children: statusLoadError,
+                  action: (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      loading={statusRetry.pending}
+                      onClick={() => {
+                        if (!statusRetry.pending) void statusRetry.track(() => loadStatus({ keepError: true }));
+                      }}
+                      icon={RefreshCw}
+                      data-testid="security-deepsec-status-retry"
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  ),
+                }
+              : null,
+            plan && !plan.deepsec_enabled
+              ? { id: "disabled", severity: "warning", children: t("security.deepsec.banner.disabled") }
+              : null,
+            plan?.deepsec_enabled && !plan.has_data_user_password
+              ? { id: "password-missing", severity: "warning", children: t("security.deepsec.banner.passwordMissing") }
+              : null,
+          ]}
         />
-        {plan && !plan.deepsec_enabled ? (
-          <Banner severity="warning">{t("security.deepsec.banner.disabled")}</Banner>
-        ) : null}
-        {plan?.deepsec_enabled && !plan.has_data_user_password ? (
-          <Banner severity="warning">{t("security.deepsec.banner.passwordMissing")}</Banner>
-        ) : null}
         <ManagementTabs
           activeView={activeView}
           tabs={[
@@ -2042,18 +2050,27 @@ export function SecurityDeepSecPage() {
                 <p className="text-sm leading-6 text-fg-muted">{t("security.deepsec.entitlements.hint")}</p>
               </CardHeader>
               <CardContent className="space-y-4">
-                {entitlementLoadError ? <Banner severity="danger">{entitlementLoadError}</Banner> : null}
-                {!entitlementLoading && selectedRoleMissing ? (
-                  <Banner severity="warning">{t("security.deepsec.entitlements.selectionMissing")}</Banner>
-                ) : null}
-                {draftVersionChanged ? (
-                  <Banner severity="warning">
-                    <p>{t("security.deepsec.entitlements.versionChanged")}</p>
-                    <Button type="button" variant="secondary" size="sm" disabled={actionBlocked} onClick={() => void restartEntitlementDraft()}>
-                      {t("security.deepsec.entitlements.restartDraft")}
-                    </Button>
-                  </Banner>
-                ) : null}
+                {/* データの権限のカードの案内は 1 つの枠（messaging.md §3.4.3。#5192）。 */}
+                <CombinedBanner
+                  items={[
+                    entitlementLoadError ? { id: "load-error", severity: "danger", children: entitlementLoadError } : null,
+                    !entitlementLoading && selectedRoleMissing
+                      ? { id: "selection-missing", severity: "warning", children: t("security.deepsec.entitlements.selectionMissing") }
+                      : null,
+                    draftVersionChanged
+                      ? {
+                          id: "version-changed",
+                          severity: "warning",
+                          children: t("security.deepsec.entitlements.versionChanged"),
+                          action: (
+                            <Button type="button" variant="secondary" size="sm" disabled={actionBlocked} onClick={() => void restartEntitlementDraft()}>
+                              {t("security.deepsec.entitlements.restartDraft")}
+                            </Button>
+                          ),
+                        }
+                      : null,
+                  ]}
+                />
                 <div className="grid gap-4 xl:grid-cols-[minmax(15rem,22rem)_minmax(0,1fr)]">
                   <section className="grid min-w-0 content-start gap-3" aria-labelledby="deepsec-entitlement-role-list-title">
                     <h3 id="deepsec-entitlement-role-list-title" className="text-sm font-semibold">
@@ -2187,15 +2204,20 @@ export function SecurityDeepSecPage() {
                               />
                             </div>
                           </div>
-                          {selectedEntitlementRole.is_built_in ? (
-                            <Banner severity="info">{t("security.deepsec.entitlements.readOnlyBuiltIn")}</Banner>
-                          ) : null}
-                          {selectedEntitlementRole.archived ? (
-                            <Banner severity="info">{t("security.deepsec.entitlements.readOnlyArchived")}</Banner>
-                          ) : null}
-                          {entitlementDraftChanged ? (
-                            <Banner severity="info">{t("security.deepsec.entitlements.unsavedPreview")}</Banner>
-                          ) : null}
+                          {/* ロールの案内（組み込み・アーカイブ・未保存のプレビュー）は 1 つの枠（messaging.md §3.4.3。#5192）。 */}
+                          <CombinedBanner
+                            items={[
+                              selectedEntitlementRole.is_built_in
+                                ? { id: "built-in", severity: "info", children: t("security.deepsec.entitlements.readOnlyBuiltIn") }
+                                : null,
+                              selectedEntitlementRole.archived
+                                ? { id: "archived", severity: "info", children: t("security.deepsec.entitlements.readOnlyArchived") }
+                                : null,
+                              entitlementDraftChanged
+                                ? { id: "unsaved-preview", severity: "info", children: t("security.deepsec.entitlements.unsavedPreview") }
+                                : null,
+                            ]}
+                          />
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <h4 className="text-sm font-semibold">{t("security.deepsec.entitlements.rows")}</h4>
                             <div className="flex flex-wrap gap-2">

@@ -61,6 +61,7 @@ import {
   type FeedbackTone,
   TextareaField,
   TextField,
+  CombinedBanner,
 } from "@production-ready/ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX, LIST_DETAIL_STORAGE_PREFIX } from "@/lib/ui-store";
@@ -987,8 +988,7 @@ export function FeedbackManagementPage() {
                 </dl>
               </section>
 
-              <ActionResultBanner result={actionResultFor("entries")} />
-              <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
+              <FeedbackWarnings result={actionResultFor("entries")} warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
               {loading === "feedback" ? (
                 <ProcessingIndicator
                   active
@@ -1695,16 +1695,15 @@ function ActionResultStatus({ result }: { result: ActionResult }) {
   return <FormStatus tone={result.tone} message={result.message} />;
 }
 
-function FeedbackWarnings({ warnings }: { warnings: string[] }) {
-  if (warnings.length === 0) return null;
+/** 一覧の操作の結果と取得の警告は、区画の 1 つの枠に項目で並べる（messaging.md §3.4.3。#5192）。 */
+function FeedbackWarnings({ warnings, result = null }: { warnings: string[]; result?: ActionResult }) {
   return (
-    <div className="grid gap-2">
-      {warnings.map((warning) => (
-        <Banner key={warning} severity="warning">
-          {warning}
-        </Banner>
-      ))}
-    </div>
+    <CombinedBanner
+      items={[
+        result ? { id: "action-result", severity: result.tone, children: result.message } : null,
+        ...warnings.map((warning) => ({ id: warning, severity: "warning" as const, children: warning })),
+      ]}
+    />
   );
 }
 

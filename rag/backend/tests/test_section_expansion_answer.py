@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from rag_engine.generation.citation_wire import (
     generation_draft_wire_model,
     guided_generation_wire_model,
@@ -263,6 +264,30 @@ def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
     assert (custom.section_expansion_enabled, custom.section_expansion_max_levels) == (False, 2)
     assert custom.section_expansion_input_token_percent == 30
     # 回答の通しの上限より長くしない。
+
+
+def test_generation_round_estimate_setting_reaches_the_engine(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """生成の 1 回の見積もり（#5184）: 既定 120 秒・.env.example・範囲・engine への受け渡し。"""
+    from app import config as config_module
+
+    assert Settings().rag_answer_generation_round_estimate_seconds == 120.0
+    example = (config_module.BACKEND_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "RAG_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS=120" in example.splitlines()
+    monkeypatch.setenv("RAG_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS", "200")
+    assert Settings().rag_answer_generation_round_estimate_seconds == 200.0
+    for value in (0, 601):
+        with pytest.raises(ValidationError):
+            Settings(rag_answer_generation_round_estimate_seconds=value)
+
+    # 設定の値（明示・.env の環境変数）が engine の同じ名前の設定になる。
+    explicit = build_engine_settings(
+        Settings(rag_answer_generation_round_estimate_seconds=90), output_dir=tmp_path
+    )
+    from_env = build_engine_settings(Settings(), output_dir=tmp_path)
+    assert explicit.answer_generation_round_estimate_seconds == 90.0
+    assert from_env.answer_generation_round_estimate_seconds == 200.0
 
 
 def test_build_engine_settings_passes_model_input_limit(tmp_path: Any) -> None:

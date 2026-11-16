@@ -21,6 +21,7 @@ import {
   FieldSkeleton,
   ListSkeleton,
   useActionPending,
+  CombinedBanner,
 } from "@production-ready/ui";
 import {
   useCallback,
@@ -1437,29 +1438,57 @@ function ExecutableNl2SqlWorkbench() {
                       />
                     )}
                   </FieldActionRow>
-                  {prefillProfileUnavailable && !profileId && !noProfiles ? (
-                    // 実行履歴から開いた実行の業務プロファイルが削除済み・権限なしで使えない（#3355）。選択欄の直下に出す。
-                    <div data-testid="nl2sql-prefill-profile-unavailable">
-                      <Banner severity="warning">{t("nl2sql.prefill.profileUnavailable")}</Banner>
-                    </div>
-                  ) : null}
-                  {profileLoadMoreError && (
-                    <Banner
-                      severity="danger"
-                      action={<Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        className="w-full sm:w-auto"
-                        loading={profilesQuery.isFetchingNextPage}
-                        disabled={active}
-                        onClick={() => void profilesQuery.fetchNextPage()} icon={RefreshCw}>
-                        <span>{t("common.retry")}</span>
-                      </Button>}
-                    >
-                      {profileLoadMoreError}
-                    </Banner>
-                  )}
+                  {/* 業務プロファイルの選択の案内（実行履歴の業務プロファイルが使えない #3355・候補の続きの読み込みの失敗・
+                      自動判定の確信度が低い）は選択欄の直下の 1 つの枠（messaging.md §3.4.3。#5192）。 */}
+                  <CombinedBanner
+                    testId="nl2sql-profile-notice"
+                    items={[
+                      profileLoadMoreError
+                        ? {
+                            id: "profile-load-more-error",
+                            severity: "danger",
+                            children: profileLoadMoreError,
+                            action: (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                className="w-full sm:w-auto"
+                                loading={profilesQuery.isFetchingNextPage}
+                                disabled={active}
+                                onClick={() => void profilesQuery.fetchNextPage()} icon={RefreshCw}>
+                                <span>{t("common.retry")}</span>
+                              </Button>
+                            ),
+                          }
+                        : null,
+                      prefillProfileUnavailable && !profileId && !noProfiles
+                        ? {
+                            id: "prefill-profile-unavailable",
+                            severity: "warning",
+                            children: t("nl2sql.prefill.profileUnavailable"),
+                            testId: "nl2sql-prefill-profile-unavailable",
+                          }
+                        : null,
+                      autoDetectLowConfidence &&
+                      recommendation &&
+                      recommendation.confidence <
+                        (recommendation.confidence_threshold ?? PROFILE_RECOMMENDATION_APPLY_THRESHOLD)
+                        ? {
+                            id: "recommend-low-confidence",
+                            severity: "warning",
+                            testId: "nl2sql-recommend-low-confidence",
+                            children: t("nl2sql.recommend.autoDetectLowConfidence", {
+                              name: profileDisplayLabel({
+                                name: recommendation.recommended_profile_name,
+                                category: recommendation.recommended_profile_category,
+                              }),
+                              confidence: Math.round(recommendation.confidence * 100),
+                            }),
+                          }
+                        : null,
+                    ]}
+                  />
                 </div>
                 {recommendation &&
                   recommendation.confidence >=
@@ -1495,23 +1524,6 @@ function ExecutableNl2SqlWorkbench() {
                       >
                         {t("nl2sql.recommend.switchApply")}
                       </Button>
-                    </div>
-                  )}
-                {autoDetectLowConfidence &&
-                  recommendation &&
-                  recommendation.confidence <
-                    (recommendation.confidence_threshold ??
-                      PROFILE_RECOMMENDATION_APPLY_THRESHOLD) && (
-                    <div data-testid="nl2sql-recommend-low-confidence">
-                      <Banner severity="warning">
-                        {t("nl2sql.recommend.autoDetectLowConfidence", {
-                          name: profileDisplayLabel({
-                            name: recommendation.recommended_profile_name,
-                            category: recommendation.recommended_profile_category,
-                          }),
-                          confidence: Math.round(recommendation.confidence * 100),
-                        })}
-                      </Banner>
                     </div>
                   )}
               </div>
@@ -1825,15 +1837,13 @@ function ExecutableNl2SqlWorkbench() {
                         </div>
                       </dl>
                       {/* API 応答に warnings が無くても画面全体を落とさない(防御)。 */}
-                      {(rewriteData.warnings ?? []).length > 0 && (
-                        <div className="grid gap-2">
-                          {(rewriteData.warnings ?? []).map((warning) => (
-                            <Banner key={warning} severity="warning">
-                              {warning}
-                            </Banner>
-                          ))}
-                        </div>
-                      )}
+                      <CombinedBanner
+                        items={(rewriteData.warnings ?? []).map((warning) => ({
+                          id: warning,
+                          severity: "warning" as const,
+                          children: warning,
+                        }))}
+                      />
                       <div className="flex flex-wrap items-center gap-2">
                         {/* source（deterministic 等）は内部識別子なので画面には出さない。 */}
                         {rewriteData.model && (

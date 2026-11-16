@@ -113,12 +113,13 @@ def oracle_schema_locked(
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
-    """実 Oracle が使えるならスキーマを保証し baseline を記録する。"""
+def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """実 Oracle が使えるならスキーマを保証し baseline を記録する。終わりに後始末の接続を閉じる。"""
     from app.config import get_settings
     from tests import _oracle_test_db
 
     if not _oracle_test_db.db_available():
+        yield
         return
     _oracle_test_db.apply_real_oracle_settings(get_settings())
     # xdist の worker は同時に起動するため、スキーマの作成（DDL）は 1 つずつにする（#344）。
@@ -128,8 +129,13 @@ def _oracle_db_session(tmp_path_factory: pytest.TempPathFactory) -> None:
         # データを消す未適用の migration は当てない。実 Oracle のテストは `oracle_db` で
         # skip する（#619）。
         warnings.warn(skip_reason, stacklevel=1)
+        yield
         return
     _oracle_test_db.capture_baseline()
+    try:
+        yield
+    finally:
+        _oracle_test_db.close_cleanup_connection()
 
 
 @pytest.fixture(autouse=True)

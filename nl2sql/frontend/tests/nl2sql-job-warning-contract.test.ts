@@ -22,14 +22,16 @@ test("NL2SQL job data carries persistence warnings without converting them to er
   assert.match(statusStripSource, /const warningMessage = job\.warning_message\?\.trim\(\);/);
 });
 
-test("operation status strip renders done warnings separately from red job errors", () => {
+test("operation status strip renders done warnings as warning items beside red job errors in one notice (#5192)", () => {
   assert.match(
     statusStripSource,
     /const errorMessage = job\.status === "error" \? job\.error_message\?\.trim\(\) : "";/,
   );
   assert.equal(statusStripSource.includes("{job.error_message && ("), false);
-  assert.match(statusStripSource, /<Banner severity="warning"/);
-  assert.match(statusStripSource, /<Banner[\s\S]*severity="danger"/);
+  // 警告・中止・失敗は 1 つの枠（CombinedBanner）の項目。警告は warning、失敗は danger（messaging.md §3.4.3）。
+  assert.match(statusStripSource, /<CombinedBanner/);
+  assert.match(statusStripSource, /id: "warning", severity: "warning"/);
+  assert.match(statusStripSource, /id: "failure",\s*severity: "danger"/);
   assert.match(statusStripSource, /<ChatProgress[\s\S]*active=\{active\}/);
   assert.doesNotMatch(statusStripSource, /role=\{job\.status === "error" \? "alert"/);
   assert.match(i18nSource, /nl2sql\.progress\.persistenceWarning/);

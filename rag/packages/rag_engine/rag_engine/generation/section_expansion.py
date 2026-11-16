@@ -62,10 +62,6 @@ SECTION_CONTEXT_ROLE = "section_context"
 MAX_SECTION_CHUNKS = 400
 # モデルの入力の上限の既定（tokens。platform の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS と同じ。#1437）。
 DEFAULT_MODEL_INPUT_TOKENS = 128_000
-# 回答の生成に残す秒数。これより残りが少なければ上がらない。生成の 1 回の見積もりの既定と回答の確定の分の和
-# （#1516。150 秒は、長い根拠で 1 組 125〜344 秒かかるモデルの 1 組目に足りなかった）。是正の round は、残りの時間と
-# 直前の組の実測から grounded の `RoundBudget` が決める。
-GENERATION_RESERVE_SECONDS = DEFAULT_GENERATION_ROUND_SECONDS + ANSWER_FINALIZE_RESERVE_SECONDS
 # 次の段を読む処理の見積もりの秒数。
 DEFAULT_LEVEL_SECONDS = 20.0
 _ASCII = re.compile(r"[\x00-\x7f]")
@@ -267,18 +263,27 @@ class SectionRead(list[Any]):
 
 @dataclass(frozen=True)
 class SectionExpansionLimits:
-    """拡張の上限（検索方法の全体設定で決める）。``input_tokens`` は根拠の本文の入力 token の上限。"""
+    """拡張の上限（検索方法の全体設定で決める）。``input_tokens`` は根拠の本文の入力 token の上限。
+
+    ``generation_reserve_seconds`` は回答の生成に残す秒数で、回答の期限の残りが次の段の見積もりとこの値の和より
+    少なければ上がらない。生成の 1 回の見積もり（設定の ``answer_generation_round_estimate_seconds``。#5184）と
+    回答の確定の分（``ANSWER_FINALIZE_RESERVE_SECONDS``）の和。
+    """
 
     max_levels: int
     input_tokens: int
+    generation_reserve_seconds: float = DEFAULT_GENERATION_ROUND_SECONDS + ANSWER_FINALIZE_RESERVE_SECONDS
 
     @classmethod
     def from_settings(cls, settings: Any) -> SectionExpansionLimits:
         percent = max(1, min(100, int(getattr(settings, "section_expansion_input_token_percent", 50) or 50)))
         input_tokens = model_input_tokens(settings) * percent // 100
+        round_seconds = getattr(settings, "answer_generation_round_estimate_seconds", None)
+        round_seconds = DEFAULT_GENERATION_ROUND_SECONDS if round_seconds is None else max(0.0, float(round_seconds))
         return cls(
             max_levels=max(0, int(getattr(settings, "section_expansion_max_levels", 4))),
             input_tokens=input_tokens,
+            generation_reserve_seconds=round_seconds + ANSWER_FINALIZE_RESERVE_SECONDS,
         )
 
 
@@ -856,7 +861,7 @@ def expand_sections(
         # 時間: 回答全体の期限までに、この段と生成の分が残るか。
         remaining_deadline = deadline_remaining()
         left = math.inf if remaining_deadline is None else remaining_deadline
-        if left < level_seconds + GENERATION_RESERVE_SECONDS:
+        if left < level_seconds + limits.generation_reserve_seconds:
             _mark_unread(result, reader, targets, STOP_TIME_LIMIT)
             return finish(STOP_TIME_LIMIT)
         level_trace: dict[str, Any] = {"level": level, "sections": []}
@@ -944,7 +949,6 @@ def _mark_unread(result: SectionExpansionResult, reader: SectionReader, chains: 
 
 
 __all__ = [
-    "GENERATION_RESERVE_SECONDS",
     "DEFAULT_MODEL_INPUT_TOKENS",
     "LIMIT_STOPS",
     "MAX_SECTION_CHUNKS",
