@@ -38,11 +38,19 @@ def test_fold_width_only_folds_full_and_half_width_forms():
 def test_fold_text_matches_the_text_search_index_rule_with_positions():
     for raw in (PLAN, "ｶﾞｲﾄﾞ ㈱ ① 10〜20—30", "a\x00\x01b\tc", "が", ""):
         folded, positions = fold_text_with_positions(raw)
-        assert folded == fold_text(raw) == normalize_text_search_index_text(raw)
+        # 索引の側は fold_text に casefold を重ねる（#5117）。引用の照合は大文字小文字を残す。
+        assert folded == fold_text(raw)
+        assert normalize_text_search_index_text(raw) == folded.casefold()
         assert len(positions) == len(folded)
         assert all(0 <= p < len(raw) for p in positions)
     folded, positions = fold_text_with_positions("ｶﾞｲﾄﾞ")
     assert folded == "ガイド" and positions == [0, 2, 3]
+    # 書式文字は除き（位置を持たない）、C1 制御文字は空白にする（#5118）。
+    for raw in ("a\x85b\x9fc", "a\xadb​c﻿", "a\x01​\x02b", "e\xad́x"):
+        folded, positions = fold_text_with_positions(raw)
+        assert folded == fold_text(raw) and len(positions) == len(folded)
+    folded, positions = fold_text_with_positions("ab\xadcd\x85e")
+    assert folded == "abcd e" and positions == [0, 1, 3, 4, 5, 6]
 
 
 def test_folded_quote_resolves_to_the_original_text():

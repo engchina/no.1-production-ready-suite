@@ -45,18 +45,37 @@ class TextSearchTokenizerTests(unittest.TestCase):
     def test_index_text_uses_same_characters_as_question_terms(self):
         # 索引の側も質問の側と同じ文字の形にする（#1336）。WORLD_LEXER が同一視しない互換文字を含む。
         for raw in ("手順①", "第Ⅴ章", "㈱サンプル", "５㌔", "２５℃", "１～３", "Ａ－１２３"):
-            index_text = normalize_text_search_index_text(raw)
-            self.assertEqual(index_text.casefold(), normalize_text_search_text(raw), raw)
+            self.assertEqual(normalize_text_search_index_text(raw), normalize_text_search_text(raw), raw)
         self.assertEqual(normalize_text_search_index_text("手順①"), "手順1")
         self.assertEqual(normalize_text_search_index_text("㈱サンプル"), "(株)サンプル")
 
-    def test_index_text_keeps_line_breaks_and_case(self):
-        # 語の区切りと大文字小文字の無視は Oracle Text の lexer が行うため、索引の文字列では変えない。
+    def test_index_text_keeps_line_breaks_and_casefolds(self):
+        # 語の区切りは Oracle Text の lexer が行うため、改行・タブは残す。大文字小文字は質問と同じ casefold にする（#5117）。
         self.assertEqual(
             normalize_text_search_index_text("規程.pdf > 申請\nＶＰＮ\t接続\x00"),
-            "規程.pdf > 申請\nVPN\t接続 ",
+            "規程.pdf > 申請\nvpn\t接続 ",
         )
         self.assertEqual(normalize_text_search_index_text(None), "")
+
+    def test_index_text_and_question_use_the_same_casefold(self):
+        # Oracle Text の大文字の変換は 1 字の対応で casefold と違う字がある（ß・ẞ・İ・Ÿ など）。両方の側で casefold する（#5117）。
+        for raw, folded in (("Straße", "strasse"), ("STRAẞE", "strasse"), ("STRASSE", "strasse"), ("ŸVES", "ÿves"), ("İZMİR", "i̇zmi̇r")):
+            self.assertEqual(normalize_text_search_index_text(raw), folded, raw)
+            self.assertEqual(normalize_text_search_text(raw), folded, raw)
+
+    def test_invisible_characters_are_folded_the_same_on_both_sides(self):
+        # C1 制御文字は空白、書式文字（Cf）は除く（#5118）。質問と索引で同じ規則。
+        for raw, folded in (
+            ("abc\x85def", "abc def"),
+            ("abc\x80\x9fdef", "abc def"),
+            ("ab\xadcd", "abcd"),
+            ("ab\u200bcd", "abcd"),
+            ("ab\u200c\u200d\u2060cd", "abcd"),
+            ("ab\ufeffcd", "abcd"),
+            ("ab\x01\u200b\x02cd", "ab cd"),
+        ):
+            self.assertEqual(normalize_text_search_index_text(raw), folded, repr(raw))
+            self.assertEqual(normalize_text_search_text(raw), folded, repr(raw))
 
     def test_oracle_text_query_escapes_reserved_characters_with_braces(self):
         self.assertEqual(escape_oracle_text_term("ORA-01555"), "{ora-01555}")
@@ -125,6 +144,15 @@ class ScriptOnlyFallbackTests(unittest.TestCase):
         self.assertIn("index", weights)  # 英語の語幹
         self.assertNotIn("and", weights)
         self.assertNotIn("確認してください", weights)
+
+    def test_letters_other_than_kanji_and_kana_become_one_term(self):
+        # Sudachi が補助記号にする文字種の語も、Oracle Text が索引する 1 語として拾う（#5119）。
+        for word in ("ტექსტი", "հայերեն", "ἀρχή", "ɓɓɓ"):
+            weights, _ = _weighted(f"語 {word}")
+            self.assertEqual(weights.get(word), 1.0, word)
+        # ASCII だけの語は英数字の区切りのまま（重ねて別の語を作らない）。
+        weights, _ = _weighted("abc_def")
+        self.assertEqual(weights, {"abc_def": 1.0})
 
     def test_hiragana_is_a_separator_without_sudachi(self):
         weights, _ = _weighted("注文を取り消したい")

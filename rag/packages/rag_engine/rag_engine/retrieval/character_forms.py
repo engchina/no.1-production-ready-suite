@@ -4,7 +4,8 @@
 資料の半角（``HRM``）と同じ語に見えない。ここで文字の形を 1 つにそろえる。改行と大文字小文字は残す
 （語の区切り・大文字小文字の無視は使う側が決める）。
 
-- ``fold_text``: NFKC と波線・ダッシュの同一視。全文検索の索引（``normalize_text_search_index_text``。#1336）と
+- ``fold_text``: NFKC と波線・ダッシュの同一視、目に見えない字の整理（書式文字を除き、制御文字を空白にする）。
+  全文検索の質問と索引（``normalize_text_search_text`` / ``normalize_text_search_index_text``。#1336・#5118）と
   引用の照合に使う。丸数字・ローマ数字・㈱ なども同じ形にする（``①`` → ``1``）。
 - ``fold_text_with_positions``: ``fold_text`` の形と、各文字の元の位置。そろえた形で見つけた引用を原文の範囲へ戻す。
 - ``find_width_folded``: ``fold_width`` の形で空白を除いて写しを探し、原文の範囲を返す（引用の写しの照合と同じ比べ方）。
@@ -20,7 +21,9 @@
 
 from __future__ import annotations
 
+import functools
 import re
+import sys
 import unicodedata
 from collections.abc import Mapping
 from typing import Any
@@ -32,9 +35,10 @@ SYMBOL_FOLD = str.maketrans(
         **dict.fromkeys("－‐‑‒–—―−", "-"),
     }
 )
-# 改行（\n）とタブ以外の制御文字。連続をまとめて 1 つの空白にする。
-_CONTROL_RUN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]+")
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# 改行（\n）とタブ以外の制御文字（C0・DEL・C1）。連続をまとめて 1 つの空白にする。C1（U+0080〜U+009F）を
+# 残すと、Oracle Text はそれを語の一部にし（``abc\x85def`` が 1 語）、前後の語で当たらない（#5118）。
+_CONTROL_RUN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]+")
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 # 直前の文字と合わせて NFKC を取る文字（結合文字と半角の濁点・半濁点）。「ｶﾞ」は 1 文字の「ガ」になる。
 _HALFWIDTH_SOUND_MARKS = frozenset("ﾞﾟ")
 # 全角・半角の互換文字（全角の英数字・記号、全角の空白、半角カナ・半角の記号）と、その NFKC の形。
@@ -49,10 +53,26 @@ _WIDTH_FOLD = str.maketrans(
 _SOUND_MARK_PAIR = re.compile(r".[゙゚]")
 
 
+@functools.cache
+def _format_run() -> re.Pattern[str]:
+    """Unicode の書式文字（一般カテゴリ Cf）の連続（初めて使うときに Unicode のデータから作る）。
+
+    soft hyphen・ZWSP・ZWNJ・ZWJ・WORD JOINER・BOM などの目に見えない字。NFKC でも消えず、Oracle Text は
+    字によって語を分けたり（U+00AD・U+200B〜U+200D・U+2060）語の一部にしたり（U+FEFF）するので、
+    語の中にあると同じ表記の質問で当たらない（#5118）。字ごとの一覧は持たず、カテゴリで決める。
+    """
+    chars = "".join(chr(code) for code in range(sys.maxunicode + 1) if unicodedata.category(chr(code)) == "Cf")
+    return re.compile(f"[{re.escape(chars)}]+")
+
+
+def _is_format(char: str) -> bool:
+    return unicodedata.category(char) == "Cf"
+
+
 def fold_text(text: Any) -> str:
-    """NFKC・波線とダッシュの同一視・制御文字の空白化で、文字の形をそろえます。改行と大文字小文字は残します。"""
+    """NFKC・波線とダッシュの同一視・書式文字の除去・制御文字の空白化で、文字の形をそろえます。改行と大文字小文字は残します。"""
     normalized = unicodedata.normalize("NFKC", str(text or "")).translate(SYMBOL_FOLD)
-    return _CONTROL_RUN.sub(" ", normalized)
+    return _CONTROL_RUN.sub(" ", _format_run().sub("", normalized))
 
 
 def fold_width(text: Any) -> str:
@@ -83,13 +103,15 @@ def fold_text_with_positions(text: Any) -> tuple[str, list[int]]:
 
     NFKC は文字の数を変える（「㈱」→「(株)」、「ｶﾞ」→「ガ」）ので、そろえた形で見つけた範囲を原文の範囲へ
     戻すには位置の対応が要る。塊（基底の文字と結合文字）ごとに NFKC を取り、塊の文字はすべて塊の先頭の位置に
-    対応させる。
+    対応させる。除いた書式文字は位置を持たず、前後の制御文字の連続を分けない（``fold_text`` と同じ順序）。
     """
     value = str(text or "")
     chars: list[str] = []
     positions: list[int] = []
     previous_control = False
     for start, cluster in _clusters(value):
+        if len(cluster) == 1 and _is_format(cluster):
+            continue
         if len(cluster) == 1 and _CONTROL.match(cluster):
             if not previous_control:
                 chars.append(" ")
@@ -98,6 +120,8 @@ def fold_text_with_positions(text: Any) -> tuple[str, list[int]]:
             continue
         previous_control = False
         for char in unicodedata.normalize("NFKC", cluster).translate(SYMBOL_FOLD):
+            if _is_format(char):
+                continue
             chars.append(" " if _CONTROL.match(char) else char)
             positions.append(start)
     return "".join(chars), positions

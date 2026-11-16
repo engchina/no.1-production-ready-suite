@@ -2,12 +2,13 @@
 
 規則ごとに両方向（質問がこの形・文書が別の形と、その逆）を確かめる。
 
-- 質問の側: ``normalize_text_search_text``（NFKC → 波線・ダッシュの同一視 → 空白の連続を
-  1 つ → 制御文字を空白 → ``casefold`` → 前後の空白を除く）で語を作り、
-  ``_oracle_text_query`` が CONTAINS の式にする。
-- 索引の側: ``_text_search_index_text``（= ``character_forms.fold_text``。NFKC → 波線・
-  ダッシュ → 制御文字を空白）。改行と大文字小文字は残し、語の区切りと大文字小文字の無視は
-  WORLD_LEXER に任せる（#1336・#1350）。
+- 共通の文字の形: ``character_forms.fold_text``（NFKC → 波線・ダッシュの同一視 → 書式文字（Cf）を
+  除く → 制御文字（C0・DEL・C1）を空白。#1336・#1350・#5118）に ``casefold`` を重ねる（#5117）。
+- 質問の側: ``normalize_text_search_text``（共通の文字の形 → 空白の連続を 1 つ → 前後の空白を
+  除く）で語を作り、``_oracle_text_query`` が CONTAINS の式にする。漢字・かな以外の文字の連続も
+  1 語にする（#5119）。
+- 索引の側: ``_text_search_index_text``（= ``normalize_text_search_index_text``。共通の文字の形）。
+  改行は残し、語の区切りは WORLD_LEXER に任せる。
 
 事例はすべて合成で、質問は規則で形が変わる語だけにする（ほかの語で当たると、規則を確かめた
 ことにならない）。
@@ -45,11 +46,6 @@ from app.schemas.search import SearchMode
 from tests import _oracle_test_db
 from tests.test_answer_scope_oracle import _indexed_document
 
-# 食い違いの Issue。
-CASE_FOLD_ISSUE = 5117  # casefold と Oracle Text の大文字の変換の食い違い
-INVISIBLE_ISSUE = 5118  # C1 制御文字と書式文字の扱いの食い違い
-SCRIPT_ISSUE = 5119  # 質問の語の分割が落とす文字種
-
 
 @dataclass(frozen=True)
 class Case:
@@ -76,7 +72,7 @@ CASES: tuple[Case, ...] = (
         "型番ＱＸ７０１の説明",
         "qx701",
         "qx701",
-        "型番QX701の説明",
+        "型番qx701の説明",
         "qx701",
     ),
     Case(
@@ -162,8 +158,8 @@ CASES: tuple[Case, ...] = (
     ),
     Case("nfkc-circled-digit-doc", "NFKC", "工程⑫で確認", "12", "12", "工程12で確認", "12"),
     Case("nfkc-circled-digit-question", "NFKC", "工程13で確認", "⑬", "13", "工程13で確認", "13"),
-    Case("nfkc-roman-numeral-doc", "NFKC", "付録Ⅻを参照", "XII", "xii", "付録XIIを参照", "xii"),
-    Case("nfkc-roman-numeral-question", "NFKC", "付録XIを参照", "Ⅺ", "xi", "付録XIを参照", "xi"),
+    Case("nfkc-roman-numeral-doc", "NFKC", "付録Ⅻを参照", "XII", "xii", "付録xiiを参照", "xii"),
+    Case("nfkc-roman-numeral-question", "NFKC", "付録XIを参照", "Ⅺ", "xi", "付録xiを参照", "xi"),
     Case(
         "nfkc-parenthesized-kanji-doc",
         "NFKC",
@@ -195,9 +191,9 @@ CASES: tuple[Case, ...] = (
         "上限は5キロです",
         "キロ",
     ),
-    Case("nfkc-degree-celsius-doc", "NFKC", "単位は℃で表す", "°C", "°c", "単位は°Cで表す", "c"),
+    Case("nfkc-degree-celsius-doc", "NFKC", "単位は℃で表す", "°C", "°c", "単位は°cで表す", "c"),
     Case(
-        "nfkc-degree-celsius-question", "NFKC", "単位は°Cで表す", "℃", "°c", "単位は°Cで表す", "c"
+        "nfkc-degree-celsius-question", "NFKC", "単位は°Cで表す", "℃", "°c", "単位は°cで表す", "c"
     ),
     Case(
         "nfkc-ideographic-space-doc", "NFKC", "語ｑｒｓ　ｔｕｖ", "tuv", "tuv", "語qrs tuv", "tuv"
@@ -303,9 +299,8 @@ CASES: tuple[Case, ...] = (
         "語ctli\x85ctlj",
         "ctlj",
         "ctlj",
-        "語ctli\x85ctlj",
+        "語ctli ctlj",
         "ctlj",
-        INVISIBLE_ISSUE,
     ),
     Case(
         "control-c1-same-form",
@@ -313,9 +308,35 @@ CASES: tuple[Case, ...] = (
         "語ctlk\x85ctll",
         "ctlk\x85ctll",
         "ctlk ctll",
-        "語ctlk\x85ctll",
+        "語ctlk ctll",
         "ctll",
-        INVISIBLE_ISSUE,
+    ),
+    Case(
+        "control-c1-first-doc",
+        "制御文字",
+        "語ctlm\x80ctln",
+        "ctln",
+        "ctln",
+        "語ctlm ctln",
+        "ctln",
+    ),
+    Case(
+        "control-c1-last-doc",
+        "制御文字",
+        "語ctlo\x9fctlp",
+        "ctlp",
+        "ctlp",
+        "語ctlo ctlp",
+        "ctlp",
+    ),
+    Case(
+        "control-c1-question",
+        "制御文字",
+        "語ctlq ctlr",
+        "ctlq\x80ctlr",
+        "ctlq ctlr",
+        "語ctlq ctlr",
+        "ctlr",
     ),
     Case(
         "format-soft-hyphen-doc",
@@ -323,9 +344,8 @@ CASES: tuple[Case, ...] = (
         "語fmt­one",
         "fmtone",
         "fmtone",
-        "語fmt­one",
+        "語fmtone",
         "fmtone",
-        INVISIBLE_ISSUE,
     ),
     Case(
         "format-zwsp-doc",
@@ -333,9 +353,8 @@ CASES: tuple[Case, ...] = (
         "語fmt​two",
         "fmttwo",
         "fmttwo",
-        "語fmt​two",
+        "語fmttwo",
         "fmttwo",
-        INVISIBLE_ISSUE,
     ),
     Case(
         "format-bom-doc",
@@ -343,9 +362,32 @@ CASES: tuple[Case, ...] = (
         "語fmt﻿six",
         "fmtsix",
         "fmtsix",
-        "語fmt﻿six",
+        "語fmtsix",
         "fmtsix",
-        INVISIBLE_ISSUE,
+    ),
+    *(
+        Case(
+            f"format-u{ord(char):04x}-doc",
+            "書式文字",
+            f"語fmt{char}{word}",
+            f"fmt{word}",
+            f"fmt{word}",
+            f"語fmt{word}",
+            f"fmt{word}",
+        )
+        for char, word in (("\u200c", "four"), ("\u200d", "five"), ("\u2060", "seven"))
+    ),
+    *(
+        Case(
+            f"format-u{ord(char):04x}-question",
+            "書式文字",
+            f"語fmt{word}",
+            f"fmt{char}{word}",
+            f"fmt{word}",
+            f"語fmt{word}",
+            f"fmt{word}",
+        )
+        for char, word in (("\xad", "three"), ("\u200b", "eight"), ("\ufeff", "nine"))
     ),
     # 5. 大文字・小文字
     Case(
@@ -354,7 +396,7 @@ CASES: tuple[Case, ...] = (
         "語CASEALPHA",
         "casealpha",
         "casealpha",
-        "語CASEALPHA",
+        "語casealpha",
         "casealpha",
     ),
     Case(
@@ -372,7 +414,7 @@ CASES: tuple[Case, ...] = (
         "語ＣＡＳＥＧＡＭＭＡ",
         "casegamma",
         "casegamma",
-        "語CASEGAMMA",
+        "語casegamma",
         "casegamma",
     ),
     Case(
@@ -399,11 +441,11 @@ CASES: tuple[Case, ...] = (
         "語 ΚΕΙΜΕΝΟ",
         "κειμενο",
         "κειμενο",
-        "語 ΚΕΙΜΕΝΟ",
+        "語 κειμενο",
         "κειμενο",
     ),
     Case(
-        "case-cyrillic-upper-doc", "大文字小文字", "語 ТЕКСТ", "текст", "текст", "語 ТЕКСТ", "текст"
+        "case-cyrillic-upper-doc", "大文字小文字", "語 ТЕКСТ", "текст", "текст", "語 текст", "текст"
     ),
     Case(
         "case-greek-final-sigma-upper-doc",
@@ -411,7 +453,7 @@ CASES: tuple[Case, ...] = (
         "語 ΛΟΓΟΣ",
         "λογος",
         "λογοσ",
-        "語 ΛΟΓΟΣ",
+        "語 λογοσ",
         "λογοσ",
     ),
     Case(
@@ -420,7 +462,7 @@ CASES: tuple[Case, ...] = (
         "語 λογος",
         "ΛΟΓΟΣ",
         "λογοσ",
-        "語 λογος",
+        "語 λογοσ",
         "λογοσ",
     ),
     Case(
@@ -429,7 +471,7 @@ CASES: tuple[Case, ...] = (
         "語 νομος",
         "νομος",
         "νομοσ",
-        "語 νομος",
+        "語 νομοσ",
         "νομοσ",
     ),
     Case(
@@ -438,7 +480,7 @@ CASES: tuple[Case, ...] = (
         "語 STRASSE",
         "Straße",
         "strasse",
-        "語 STRASSE",
+        "語 strasse",
         "strasse",
     ),
     Case(
@@ -447,19 +489,18 @@ CASES: tuple[Case, ...] = (
         "語 Straße",
         "Straße",
         "strasse",
-        "語 Straße",
+        "語 strasse",
         "strasse",
-        CASE_FOLD_ISSUE,
     ),
+    # 文書は他の事例と違う語にする（同じ本文の chunk は 1 つにまとめて保存されるため）。
     Case(
         "case-sharp-s-doc",
         "大文字小文字",
-        "語 Straße",
-        "strasse",
-        "strasse",
-        "語 Straße",
-        "strasse",
-        CASE_FOLD_ISSUE,
+        "語 Maße",
+        "masse",
+        "masse",
+        "語 masse",
+        "masse",
     ),
     Case(
         "case-capital-sharp-s-same-form",
@@ -467,9 +508,8 @@ CASES: tuple[Case, ...] = (
         "語 STRAẞE",
         "STRAẞE",
         "strasse",
-        "語 STRAẞE",
+        "語 strasse",
         "strasse",
-        CASE_FOLD_ISSUE,
     ),
     Case(
         "case-dotted-capital-i-same-form",
@@ -477,9 +517,8 @@ CASES: tuple[Case, ...] = (
         "語 İZMİR",
         "İZMİR",
         "i̇zmi̇r",
-        "語 İZMİR",
+        "語 i̇zmi̇r",
         "i̇zmi̇r",
-        CASE_FOLD_ISSUE,
     ),
     Case(
         "case-capital-y-diaeresis-same-form",
@@ -487,9 +526,35 @@ CASES: tuple[Case, ...] = (
         "語 ŸVES",
         "ŸVES",
         "ÿves",
-        "語 ŸVES",
+        "語 ÿves",
         "ÿves",
-        CASE_FOLD_ISSUE,
+    ),
+    Case(
+        "case-capital-y-diaeresis-doc",
+        "大文字小文字",
+        "語 ŸVET",
+        "ÿvet",
+        "ÿvet",
+        "語 ÿvet",
+        "ÿvet",
+    ),
+    Case(
+        "case-capital-sharp-s-doc",
+        "大文字小文字",
+        "語 GROẞE",
+        "grosse",
+        "grosse",
+        "語 grosse",
+        "grosse",
+    ),
+    Case(
+        "case-greek-iota-subscript-upper-doc",
+        "大文字小文字",
+        "語 ᾼΔΗ",
+        "ᾳδη",
+        "αιδη",
+        "語 αιδη",
+        "αιδη",
     ),
     # 6. 前後の空白（strip）
     Case(
@@ -517,7 +582,7 @@ CASES: tuple[Case, ...] = (
         "型番ＡＢ－１２３の手順",
         "ab-123",
         "ab-123",
-        "型番AB-123の手順",
+        "型番ab-123の手順",
         "ab-123",
     ),
     Case(
@@ -535,7 +600,7 @@ CASES: tuple[Case, ...] = (
         "型番ＥＦ—７８９",
         "ef‐789",
         "ef-789",
-        "型番EF-789",
+        "型番ef-789",
         "ef-789",
     ),
     Case(
@@ -553,7 +618,7 @@ CASES: tuple[Case, ...] = (
         "ﾓﾃﾞﾙＸＹ－３４５",
         "xy‑345",
         "xy-345",
-        "モデルXY-345",
+        "モデルxy-345",
         "xy-345",
     ),
     Case(
@@ -565,7 +630,7 @@ CASES: tuple[Case, ...] = (
         "型番jk-778",
         "jk-778",
     ),
-    # 質問の語の分割が落とす文字種（質問の式に語が入らない）
+    # 8. 漢字・かな以外の文字の連続（Sudachi が補助記号にする文字種も 1 語にする。#5119）
     Case(
         "script-georgian-same-form",
         "文字種",
@@ -574,7 +639,6 @@ CASES: tuple[Case, ...] = (
         "ტექსტი",
         "語 ტექსტი",
         "ტექსტი",
-        SCRIPT_ISSUE,
     ),
     Case(
         "script-polytonic-greek-same-form",
@@ -584,7 +648,42 @@ CASES: tuple[Case, ...] = (
         "ἀρχή",
         "語 ἀρχή",
         "ἀρχή",
-        SCRIPT_ISSUE,
+    ),
+    Case(
+        "script-polytonic-greek-upper-doc",
+        "文字種",
+        "語 ἈΡΧΉ",
+        "ἀρχή",
+        "ἀρχή",
+        "語 ἀρχή",
+        "ἀρχή",
+    ),
+    Case(
+        "script-georgian-upper-doc",
+        "文字種",
+        "語 ᲢᲔᲥᲡᲢᲘ",
+        "ტექსტი",
+        "ტექსტი",
+        "語 ტექსტი",
+        "ტექსტი",
+    ),
+    Case(
+        "script-armenian-same-form",
+        "文字種",
+        "語 Հայերեն",
+        "Հայերեն",
+        "հայերեն",
+        "語 հայերեն",
+        "հայերեն",
+    ),
+    Case(
+        "script-ipa-same-form",
+        "文字種",
+        "語 ɓɗɠ",
+        "ɓɗɠ",
+        "ɓɗɠ",
+        "語 ɓɗɠ",
+        "ɓɗɠ",
     ),
 )
 
@@ -622,10 +721,6 @@ def test_normalization_table(case: Case) -> None:
     assert normalize_text_search_text(case.question) == case.question_normalized
     assert _text_search_index_text(case.document) == case.index_text
     query = _oracle_text_query(case.question, settings=_settings())
-    if case.issue == SCRIPT_ISSUE:
-        # 語の分割が語を落とす（#5119）。直ったら式に語が入る。
-        assert query is None or "{" + str(case.term) + "}" not in query
-        return
     assert query is not None
     assert "{" + str(case.term) + "}" in query
 

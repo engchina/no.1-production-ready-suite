@@ -221,6 +221,33 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5117・#5118・#5119 全文検索の質問と索引の文字の形の食い違い）
+
+全文検索（Oracle Text）の質問の側と索引の側で文字の形がずれ、同じ表記の文書にも当たらない語があった。
+次の 3 点を直した。lexer・stoplist・索引の DDL（`RAG_TEXT_WORLD_LEXER` / `RAG_TEXT_STOPLIST`）と schema は変えていない。
+表示の本文・引用の原文・embedding は変えない。
+
+- 大文字小文字（#5117）: 索引に入れる文字列（`rag_chunks.search_text`・`rag_feedback_details.search_text`）にも、質問と同じ
+  `casefold` をかける。Oracle Text の大文字の変換は 1 字の対応で、`ß`・`ẞ`・`İ`・`Ÿ`・下書きのイオタ付きのギリシャ文字などを
+  `casefold` と違う形にするため、索引の側が大文字小文字を残すと当たらなかった。
+- 目に見えない字（#5118）: 質問と索引の共通の規則（`character_forms.fold_text`）で、C1 制御文字（U+0080〜U+009F）を空白にし、
+  書式文字（Unicode の一般カテゴリ Cf。soft hyphen・ZWSP・ZWNJ・ZWJ・WORD JOINER・BOM など）を除く。引用の照合も同じ規則になる。
+- 質問の語の分割（#5119）: 漢字・かな以外の文字の連続（ジョージア文字・アルメニア文字・多調のギリシャ文字・IPA など）も
+  1 語の補う語にする。質問の側だけの変更で、索引の作り直しは要らない。
+
+1. backend を更新して再起動すると、それ以降に取り込む文書・作り直す chunk・保存するフィードバックは新しい形で索引され、
+   質問も新しい形になる（質問の側の語の cache は process の中だけなので、再起動で消える）。
+2. **既存の行は次の CLI で直す**（直すまでは、既存の行の大文字を含む語・目に見えない字を含む語は、新しい形の質問で当たらない
+   ことがある。小文字だけ・目に見えない字の無い本文の行は変わらない）。行を読み、正規化した値が違う行の `search_text` だけを
+   更新する。CONTEXT 索引（`SYNC (ON COMMIT)`）と原生 hybrid の索引（`search_text` の更新で trigger が `hybrid_payload` を
+   作り直す）は更新の commit で反映され、索引の DROP / CREATE は要らない。英字を含む行の多くが更新の対象になるので、
+   先に `--dry-run` で件数を確かめ、利用の少ない時間に実行する。同じ CLI を何度実行しても結果は変わらない。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.text_search_index_cli normalize --dry-run
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.text_search_index_cli normalize
+   ```
+
 ## 既存環境の更新手順（#5107 承認済み FAQ を質問と回答だけにする）
 
 承認済み FAQ（登録済みQ&A）の項目を質問と回答だけにし、当てはめない質問・対象のナレッジベース・引用した文書の状態・

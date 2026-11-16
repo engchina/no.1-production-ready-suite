@@ -110,8 +110,8 @@ def test_small_to_big_chunks_keep_parent_search_text_and_element_refs() -> None:
     assert json.loads(str(metadata["engine_metadata_json"]))["schema_version"] == 4
     table = next(chunk for chunk in chunks if chunk.metadata["content_kind"] == "table")
     assert "受注番号" in table.text
-    # Oracle Text へは rag_poc の search_text を索引する。
-    assert _chunk_search_text(body) == search_text
+    # Oracle Text へは rag_poc の search_text を、質問と同じ casefold の形で索引する（#5117）。
+    assert _chunk_search_text(body) == search_text.casefold()
 
 
 @pytest.mark.parametrize(
