@@ -204,7 +204,8 @@ def _cover(ctx: AnswerContext, settings: Any, guide: GuidePlan, budget: ExtraRet
         *(ContextParentEvidence(record=item, role="synthesis_parent", reason="top") for item in supplements if item.chunk_uid in added),
         added=added,
     )
-    trace, sources = a._finish_guide_steps(guide, results, acquisitions, trace, merged)
+    added_chunks = a._merged_supplement_chunks(merged, set(a._context_owner_keys(ctx)))[GUIDE_STEP_KEY]
+    trace, sources = a._finish_guide_steps(guide, results, acquisitions, trace, merged, added_chunks)
     return merged, trace, sources
 
 
@@ -262,11 +263,15 @@ def test_finish_guide_steps_links_step_sources_after_the_merge(monkeypatch: pyte
         },
     )
     guide = plan(STEP_A, STEP_B)
-    results, acquisitions, trace = _search(context(parent("a1"), parent("other")), _settings(), guide)
+    main = context(parent("a1"), parent("other"))
+    results, acquisitions, trace = _search(main, _settings(), guide)
     # 主の検索の根拠（a1・other）を外さず、手順の根拠を同じ規則で合わせた後の文脈。
     merged = _merged(parent("a1"), parent("other"), _paged("b-page", "doc-b", 5), parent("b-top"), added=("run:b-page", "run:b-top"))
+    # 新しく足した根拠は合わせ込みの直後に決める（主の検索の根拠にあるものは数えない。#5185）。
+    added_chunks = a._merged_supplement_chunks(merged, set(a._context_owner_keys(main)))[GUIDE_STEP_KEY]
+    assert added_chunks == ["run:b-page", "run:b-top"]
 
-    trace, sources = a._finish_guide_steps(guide, results, acquisitions, trace, merged)
+    trace, sources = a._finish_guide_steps(guide, results, acquisitions, trace, merged, added_chunks)
 
     assert sources == (("s1", "画面 A で設定を変える", ("run:a1",)), ("s2", "画面 B で反映する", ("run:b-page", "run:b-top")))
     assert trace["added_chunk_ids"] == ["run:b-page", "run:b-top"]

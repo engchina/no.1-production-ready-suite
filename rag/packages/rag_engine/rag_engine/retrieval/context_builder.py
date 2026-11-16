@@ -222,6 +222,10 @@ class ContextBuildRequest:
     # 補いの検索（要求別の補完・業務ガイドの手順ごとの検索。#5173）で rerank・下限・``top_k`` の切りを通した根拠。
     # 検索拡張の根拠の後に、同じ規則で合わせる。``top_k``・``max_records`` に数えず、並びの根拠を外さない。
     supplement_children: Sequence[Any] = ()
+    # 補いの検索の候補の原文と、補いの根拠のために読んだ前後・親の原文（#5185）。``active_records`` には主の検索の分だけを
+    # 渡す。主の検索の根拠の前後の文脈は ``active_records`` だけから選び、補いの有無で変えない（補いの原文は補いの根拠の
+    # 前後・親にだけ使う）。
+    supplement_records: Sequence[Any] = ()
     # 章節で文脈を補う起点の ID（chunk_uid か id。#5168）。前後の chunk を足さない（補い方は起点ごとに 1 つ。
     # ``context_fill``）。章節の本文は呼び出し元の章節の拡張が足す。
     section_anchor_ids: frozenset[str] = frozenset()
@@ -238,9 +242,16 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         )
 
     active_records = [record for record in request.active_records if _record_active(record)]
-    active_ids = {record_context_key(record) for record in active_records if record_context_key(record)}
+    supplement_records = [record for record in request.supplement_records if _record_active(record)]
+    active_ids = {record_context_key(record) for record in (*active_records, *supplement_records) if record_context_key(record)}
     children = [record for record in active_records if str(getattr(record, "chunk_level", "") or "") == CHILD_CHUNK_LEVEL]
-    if not children:
+    child_ids = {record_context_key(child) for child in children}
+    supplement_only = [
+        record
+        for record in supplement_records
+        if str(getattr(record, "chunk_level", "") or "") == CHILD_CHUNK_LEVEL and record_context_key(record) not in child_ids
+    ]
+    if not children and not supplement_only:
         return ContextBundle(
             records=[],
             text="",
@@ -262,17 +273,22 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             insufficient_reason="retrieval returned no active child chunks",
         )
 
-    parents = {
-        record_context_key(record): record
-        for record in active_records
-        if str(getattr(record, "chunk_level", "") or "") == PARENT_CHUNK_LEVEL and record_context_key(record)
-    }
-    children_by_parent: dict[str, list[Any]] = {}
-    for child in sorted(
-        children,
-        key=lambda record: (_record_engine(record), _record_chunk_seq(record)),
-    ):
-        children_by_parent.setdefault(_child_sibling_context_key(child), []).append(child)
+    parents: dict[str, Any] = {}
+    # 同じ key の親は主の検索の原文を使う（補いの原文で置き換えない。#5185）。
+    for record in (*active_records, *supplement_records):
+        if str(getattr(record, "chunk_level", "") or "") == PARENT_CHUNK_LEVEL and (key := record_context_key(record)):
+            parents.setdefault(key, record)
+
+    def siblings_of(records: Sequence[Any]) -> dict[str, list[Any]]:
+        grouped: dict[str, list[Any]] = {}
+        for child in sorted(records, key=lambda record: (_record_engine(record), _record_chunk_seq(record))):
+            grouped.setdefault(_child_sibling_context_key(child), []).append(child)
+        return grouped
+
+    # 主の検索の根拠の前後の文脈は主の検索の原文だけから選ぶ。前後は読んだ chunk の並びの位置で選ぶため、補いの原文が
+    # 混ざると主の検索の根拠の前後が変わる（#5185）。補いの根拠の前後は両方の原文から選ぶ。
+    children_by_parent = siblings_of(children)
+    all_children_by_parent = siblings_of([*children, *supplement_only]) if supplement_only else children_by_parent
 
     groups: list[_ParentEvidenceBuilder] = []
     groups_by_id: dict[str, _ParentEvidenceBuilder] = {}
@@ -451,7 +467,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
 
     # 検索拡張の根拠（#5162）は、根拠の並び（起点・添付・前後の文脈・図の原文）が決まった後に合わせる。補いの検索の
     # 根拠（#5173）は、その後に同じ規則で合わせる。
-    def merge_after_cut(candidates: Sequence[Any]) -> None:
+    def merge_after_cut(candidates: Sequence[Any], siblings_by_parent: dict[str, list[Any]]) -> None:
         nonlocal selected
         merged_children = [
             record
@@ -472,11 +488,10 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             return group
 
         for child in merged_children:
-            key = record_context_key(child)
-            # 1. 同じ chunk が並びにある: 印だけを付ける。
-            holder = next((group for group in (*selected, *added) if key in group.children), None)
-            if holder is not None:
-                existing = holder.children[key]
+            # 1. 同じ chunk が並びにある: 印だけを付ける。頁の範囲を絞った検索で取った同じ chunk も同じ chunk とみる（#5185）。
+            held = _held_child((*selected, *added), chunk_identity_key(child))
+            if held is not None:
+                existing = held[0].children[held[1]]
                 existing.record = _with_expansion_marks(existing.record, child)
                 continue
             group = fresh_group(child)
@@ -492,7 +507,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             added.append(group)
             added_ids.add(id(group))
         # 合わせた根拠の単位は検索で当たった chunk と同じ（親子の分割なら親、そうでなければ前後の文脈）。
-        present = {record_context_key(entry.record) for entry in (*selected, *added)}
+        present = {chunk_identity_key(entry.record) for entry in (*selected, *added)}
         for group in tuple(added):
             for anchor in tuple(group.children.values()):
                 if (
@@ -501,9 +516,9 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
                     or fill_anchor_id(anchor.record) in request.section_anchor_ids
                 ):
                     continue
-                siblings = children_by_parent.get(_child_sibling_context_key(anchor.record), [])
+                siblings = siblings_by_parent.get(_child_sibling_context_key(anchor.record), [])
                 for neighbor in _chunk_neighbors(anchor.record, siblings, request.neighbor_child_count):
-                    key = record_context_key(neighbor)
+                    key = chunk_identity_key(neighbor)
                     if key in present:
                         continue
                     neighbor_group = fresh_group(neighbor)
@@ -517,8 +532,8 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         selected = merge_expansions(selected, added, key=lambda group: str(id(group)), document=_group_document, seq=_group_seq)
         selected_groups.update(id(group) for group in added)
 
-    merge_after_cut(request.expansion_children)
-    merge_after_cut(request.supplement_children)
+    merge_after_cut(request.expansion_children, children_by_parent)
+    merge_after_cut(request.supplement_children, all_children_by_parent)
     evidence_tree = _finalize_parent_evidence(selected)
     if not request.select_anchors_only:
         # 補った後に 1 回だけ、重なる根拠をまとめ、前後の文脈を起点のかたまりへ置く（#5168）。
@@ -565,6 +580,17 @@ def evidence_overlap(tree: Sequence[ContextParentEvidence]) -> Callable[[Any], s
 def fill_anchor_id(record: Any) -> str:
     """文脈の補い方を決める起点の ID（chunk_uid か id。``ContextBuildRequest.section_anchor_ids`` の値）。"""
     return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
+
+
+def _held_child(groups: Sequence[_ParentEvidenceBuilder], identity: str) -> tuple[_ParentEvidenceBuilder, str] | None:
+    """並びの根拠のかたまりのうち、同じ chunk（``chunk_identity_key``）を子に持つかたまりと子の key（無ければ None）。"""
+    if not identity:
+        return None
+    for group in groups:
+        for key, entry in group.children.items():
+            if chunk_identity_key(entry.record) == identity:
+                return group, key
+    return None
 
 
 def _with_expansion_marks(record: Any, expansion: Any) -> Any:
@@ -1057,31 +1083,44 @@ def _record_id(record: Any) -> str:
     return str(getattr(record, "id", None) or getattr(record, "chunk_id", None) or getattr(record, "citation", None) or "")
 
 
-def record_context_key(record: Any) -> str:
-    """重複除外に使う record の安定 key を作ります。"""
-    chunk_key = _record_chunk_context_key(record)
+def record_context_key(record: Any, *, page_scope: bool = True) -> str:
+    """重複除外に使う record の安定 key を作ります。
+
+    page_scope=False は頁の範囲（``context_page_ranges``）を key に含めない（``chunk_identity_key``）。
+    """
+    chunk_key = _record_chunk_context_key(record, page_scope=page_scope)
     if chunk_key:
         return chunk_key
     record_id = _record_id(record)
     if not record_id:
         return ""
-    return _scoped_record_context_key("record", record, record_id)
+    return _scoped_record_context_key("record", record, record_id, page_scope=page_scope)
 
 
-def _scoped_uid_key(record: Any, uid: str) -> str:
+def chunk_identity_key(record: Any) -> str:
+    """頁の範囲を除いた chunk の key（#5185）。
+
+    同じ chunk を頁の範囲で絞った検索（業務ガイドの手順の参照）と絞らない検索の両方で取ると、``record_context_key`` は
+    範囲ごとに別の key になる（範囲ごとに前後・親を読み分けるため）。補いの検索の合わせ込みの「並びに同じ chunk がある」
+    はこの key で判定する。
+    """
+    return record_context_key(record, page_scope=False)
+
+
+def _scoped_uid_key(record: Any, uid: str, *, page_scope: bool = True) -> str:
     key = f"chunk_uid:{uid}"
-    scope = (getattr(record, "metadata", None) or {}).get("context_page_ranges", "")
+    scope = (getattr(record, "metadata", None) or {}).get("context_page_ranges", "") if page_scope else ""
     return f"{key}::page_scope:{scope}" if scope else key
 
 
-def _record_chunk_context_key(record: Any) -> str:
+def _record_chunk_context_key(record: Any, *, page_scope: bool = True) -> str:
     chunk_uid = str(getattr(record, "chunk_uid", "") or "").strip()
     if chunk_uid:
-        return _scoped_uid_key(record, chunk_uid)
+        return _scoped_uid_key(record, chunk_uid, page_scope=page_scope)
     chunk_id = str(getattr(record, "chunk_id", "") or "").strip()
     if not chunk_id:
         return ""
-    return _scoped_record_context_key("chunk", record, chunk_id)
+    return _scoped_record_context_key("chunk", record, chunk_id, page_scope=page_scope)
 
 
 def _record_parent_context_key(record: Any) -> str:
@@ -1125,13 +1164,13 @@ def _record_scope_context_key(record: Any) -> str:
     return _scoped_record_context_key("scope", record, "")
 
 
-def _scoped_record_context_key(kind: str, record: Any, value: str) -> str:
+def _scoped_record_context_key(kind: str, record: Any, value: str, *, page_scope: bool = True) -> str:
     source_run_id = str(getattr(record, "source_run_id", "") or "")
     source = str(getattr(record, "source", "") or getattr(record, "source_file_name", "") or "")
     engine = _record_engine(record)
     scope_parts: tuple[str, ...] = (source_run_id, source, engine)
-    if page_scope := str((getattr(record, "metadata", None) or {}).get("context_page_ranges", "")):
-        scope_parts = (*scope_parts, page_scope)
+    if page_scope and (scope := str((getattr(record, "metadata", None) or {}).get("context_page_ranges", ""))):
+        scope_parts = (*scope_parts, scope)
     if not any(scope_parts):
         return f"{kind}:{value}" if value else kind
     escaped = [part.replace("::", r"\::") for part in (kind, *scope_parts, value)]
