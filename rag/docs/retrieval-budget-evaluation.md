@@ -11,7 +11,7 @@
 | 多様化を探す融合順位の深さ・追加枠 | `RAG_CANDIDATE_DIVERSITY_DEPTH` / `RAG_CANDIDATE_DIVERSITY_MAX_EXTRA` | 420 / 20。取得深度を変更する設定とは分離 |
 | 全拡張を含む Rerank 入力 | `RAG_RERANK_CANDIDATE_LIMIT` | 200。段ごとの上限の中で先着に入る合計の上限（下の内訳）。0 は有効な各段の上限の和を使う |
 | Rerank の 1 回の要求の候補数 | `RAG_RERANK_MAX_DOCUMENTS_PER_REQUEST` | 1000。OCI は 1001 件で 400 を返す。超える候補は分けて送り、点数は変わらない |
-| Rerank 後の採用 | `RAG_RERANK_MIN_RELEVANCE_SCORE` / `RAG_MAX_ANCHORS_PER_DOCUMENT` | 0.30 / 0。下限以上の候補を点数の順に採り、文書ごとの上限（0 は上限なし）の後に起点数 `top_k` で 1 回だけ切る（#5165。Top-N は削除） |
+| Rerank 後の採用 | `RAG_RERANK_MIN_RELEVANCE_SCORE` / `RAG_MAX_ANCHORS_PER_DOCUMENT` | 0.30 / 5。下限以上の候補を点数の順に採り、文書ごとの上限（0 は上限なし）の後に起点数 `top_k` で 1 回だけ切る（#5165。Top-N は削除） |
 | 回答起点 | `top_k` / 省略時 `RAG_SEARCH_TOP_K_DEFAULT` | 30。親へ集約した原文は1枠とし、同じ親の子の引用位置を追加しても次の原文の枠を消費しない |
 | 回答本文 | `RAG_EVIDENCE_BUDGET_CHARS` と既存の record・モデル入力予算 | 40000 文字。採用前の取得と、モデルへ渡す原文を区別 |
 
@@ -50,7 +50,7 @@ uv run python -m app.rag.retrieval_budget_plan ../../tmp/retrieval-ab/input.json
 | 既定 | 総枠 200、既定の有効段 | 比較の基準 |
 | 総枠の比較 | 総枠を複数の値で明示（0 は各段の上限の和） | 必要根拠が落ちる段と Rerank の使用量 |
 | 多様化なし | 追加枠0、取得上限は同じ | 複数文書への寄与 |
-| 文書ごとの起点制限なし | 要求の `max_anchors_per_document=0` | 起点の文書分散の影響（既定は 0。プロファイル・.env で上限を付けたときの比較） |
+| 文書ごとの起点制限なし | 要求の `max_anchors_per_document=0` | 起点の文書分散の影響（既定の上限 5 を外したときの比較） |
 | 各拡張を単独除去 | 参照・実体・構造・章節は要求の `rag_overrides`、画面は対応する全体環境設定で OFF | 実際に適用した段だけの条件付き寄与。プロファイルの上書きがある場合は有効設定の照合が必要 |
 
 実行には単一文書の複数手順、複数文書比較、親子/非親子、重複、別artifact、明示参照、権限外を含める。各段で必要根拠の ID の残存率/順位を測り、最終回答は正確性・必要事項・引用の支持で評価する。呼出数・使用量・p50/p95・キャッシュ条件・失敗/未完了の分母も残す。機能のための成果物が無いケースを「効果なし」に数えない。

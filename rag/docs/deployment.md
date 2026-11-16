@@ -221,6 +221,19 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5170 1 つの文書から採る根拠の上限の既定を 5 に戻す）
+
+文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`）の既定を、#5165 の 0（上限なし）から **5** に戻した（backend の
+`rag_max_anchors_per_document` と engine の `DEFAULT_MAX_ANCHORS_PER_DOCUMENT` の両方）。`.env` で設定できること・検索・
+回答プロファイルの `query.max_anchors_per_document` で上書きできること・超えた候補を外すことは #5165 のまま変えていない。
+表・migration・API path は変えていない。
+
+1. `backend/.env` に `RAG_MAX_ANCHORS_PER_DOCUMENT` が無ければ、既定の 5 になる（`.env.example` は
+   `RAG_MAX_ANCHORS_PER_DOCUMENT=5`）。
+2. **既存の環境の `backend/.env` に `RAG_MAX_ANCHORS_PER_DOCUMENT=0` が書かれていれば、0（上限なし）のまま扱う**（既定は
+   `.env` の値で上書きされる）。既定の 5 にしたいときは、その行を `5` にするか消す。
+3. backend（と取込 worker）を再起動する。検索・回答プロファイルで値を保存していればその値が優先される。
+
 ## 既存環境の更新手順（#5165 rerank の後の並べ替えと件数の切りを 1 回ずつにする）
 
 rerank の後の工程を「rerank の点数の順（MMR）→ 関連度の下限 → 文書ごとの上限 → 起点数 `top_k` で 1 回だけ切る →
@@ -240,7 +253,7 @@ rerank の後の工程を「rerank の点数の順（MMR）→ 関連度の下�
 
 - rerank が成功して関連度の下限（`RAG_RERANK_MIN_RELEVANCE_SCORE`、既定 0.30）以上が 0 件なら根拠なし。全部が下限未満の
   ときに下限を 0.7 倍にしてやり直す処理は削除した。rerank の失敗・無効のときは今までどおり検索の順で続ける。
-- 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`）は、超えた候補を後ろへ回さずに外す。既定を 5 から 0（上限なし）にし、
+- 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`）は、超えた候補を後ろへ回さずに外す。既定を 5 から 0（上限なし）にし（#5170 で既定を 5 に戻した。上の節）、
   `backend/.env` から読むようにした（今までは検索・回答プロファイルでだけ変えられた）。プロファイルの
   `query.max_anchors_per_document` の上書きはそのまま使える。
 - rerank の入力の文を「文書の名前・章節の見出し・当たった chunk の原文」にした（検索文の文脈行・引用の ID を入れない）。

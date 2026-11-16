@@ -73,7 +73,7 @@ def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path)
         "RAG_CANDIDATE_DIVERSITY_DEPTH": (settings.rag_candidate_diversity_depth, 420),
         "RAG_CANDIDATE_DIVERSITY_MAX_EXTRA": (settings.rag_candidate_diversity_max_extra, 20),
         "RAG_RERANK_CANDIDATE_LIMIT": (settings.rag_rerank_candidate_limit, 200),
-        "RAG_MAX_ANCHORS_PER_DOCUMENT": (settings.rag_max_anchors_per_document, 0),
+        "RAG_MAX_ANCHORS_PER_DOCUMENT": (settings.rag_max_anchors_per_document, 5),
         "RAG_SEARCH_TOP_K_DEFAULT": (settings.rag_search_top_k_default, 30),
         "RAG_EVIDENCE_BUDGET_CHARS": (settings.rag_evidence_budget_chars, 40000),
     }
@@ -88,7 +88,7 @@ def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path)
     assert settings.rag_rerank_min_relevance_score == 0.3
     assert float(example["RAG_RERANK_MIN_RELEVANCE_SCORE"]) == 0.3
     assert (engine.retrieval_candidate_limit, engine.rerank_candidate_limit) == (140, 200)
-    assert (engine.max_anchors_per_document, engine.rerank_min_relevance_score) == (0, 0.3)
+    assert (engine.max_anchors_per_document, engine.rerank_min_relevance_score) == (5, 0.3)
     assert engine.evidence_budget_chars == 40000
     engine_defaults = engine_settings(environ={}, dotenv_path=None)
     assert (
@@ -97,7 +97,7 @@ def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path)
         engine_defaults.max_anchors_per_document,
         engine_defaults.rerank_min_relevance_score,
         engine_defaults.evidence_budget_chars,
-    ) == (140, 200, 0, 0.3, 40000)
+    ) == (140, 200, 5, 0.3, 40000)
 
 
 def test_text_search_limits_reach_the_engine_and_match_env_example(tmp_path: Path) -> None:
