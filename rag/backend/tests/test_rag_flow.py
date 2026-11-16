@@ -344,6 +344,8 @@ async def test_ingestion_records_trace_spans_without_payload_text(
         ("source_partition", "success"),
         ("chunking", "success"),
         ("embedding", "success"),
+        # 実体・別名索引の構築は全体の既定で有効（#5187）。span には件数だけを残す。
+        ("entity_indexing", "success"),
         ("indexing", "success"),
     ]
     assert [(event["span_name"], event["outcome"]) for event in observed] == expected_stages
