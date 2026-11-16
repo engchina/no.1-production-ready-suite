@@ -221,6 +221,63 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5241 埋め込みを細い表 RAG_CHUNK_EMBEDDINGS へ分ける）
+
+chunk の埋め込み（`VECTOR(1536, FLOAT32)`。1 行約 6KB）を `RAG_CHUNKS.EMBEDDING` から新しい表 `RAG_CHUNK_EMBEDDINGS`
+（`chunk_id`・`embedding`。`NOCOMPRESS`）へ移した。範囲の解決は `RAG_CHUNKS_DOCUMENT_IDX`
+（`document_id, chunk_index, chunk_set_id, native_scope_id, chunk_id`）だけで、距離順の読み（`vector_exact`）は
+`RAG_CHUNKS_NATIVE_SCOPE_IDX`（`native_scope_id, chunk_index, chunk_id, document_id`）と埋め込みの表の行だけで済み、
+chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`RAG_CHUNKS_HYBRID_IDX`）の JSON（本文と埋め込み）は
+変えず、埋め込みの表の trigger（`RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC`）が以後の書き込みを同期する。
+
+1. **取込を止めてから更新する**（取込 job・業務ガイドの取込が無いことを確かめる）。migration
+   `20261117_5241_chunk_embeddings` は `RAG_CHUNKS` の列を削除するので承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が
+   要る（上の「既存環境の更新手順の共通の注意」）。適用の前に `RAG_CHUNKS` を書き出す（Data Pump など）。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+   更新は次の順に進む（再取込・再埋め込みは要らない。埋め込みの値は SQL でそのまま写す）。
+   1. 表 `RAG_CHUNK_EMBEDDINGS` と trigger を作る。
+   2. 埋め込みを `INSERT ... SELECT` で写す（写す間は `RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC` を止め、原生索引の JSON を書き換えない）。
+   3. `RAG_CHUNKS_EMBEDDING_HNSW_IDX` を消し、`ALTER TABLE rag_chunks DROP COLUMN embedding` で列を消す（全行を書き換える）。
+   4. trigger を作り直し、範囲の 2 つの索引を新しい定義で作り直す。
+   5. 検索の索引（`RAG_CHUNKS_EMBEDDING_HNSW_IDX`）を新しい表に作り直す（同じ名前。既定の検索精度の推奨ビルド。
+      画面で別のビルドにしていた環境は、「取込・検索・回答設定 > 検索インデックス」の再作成の SQL を当て直す）。
+   途中で止まっても、同じコマンドを流し直せば続きから進む（写した行は二重に入れない）。
+
+   所要時間の目安: テスト専用の DB ユーザー（合成の約 3.4 万 chunk、開発の ADB・OCPU 1）で、更新全体が約 12.5 分だった
+   （2・3 の写しと列の削除、5 の HNSW の作成が大半）。chunk の数にほぼ比例すると見込む（未確認）。
+2. 確かめる: `system_schema_cli status` が `ready`、次の 2 つの件数が同じ（埋め込みのある chunk の数）。
+
+   ```sql
+   SELECT COUNT(*) FROM rag_chunk_embeddings;
+   SELECT COUNT(*) FROM rag_chunks c WHERE JSON_EXISTS(c.hybrid_payload, '$.embedding');
+   ```
+
+3. 列の削除は表の領域を返さず、既存の chunk の行の chain も残る（範囲の解決と距離順の読みは chunk の行を読まないので、
+   この 2 つの速さには影響しない。全文の命中など、行を ID で読む数百行には残る）。更新の後に取り込む行は chain しない。
+   領域を返すには、取込を止めて `ALTER TABLE rag_chunks MOVE NOCOMPRESS` と全索引の作り直し（原生索引・全文索引の再作成を
+   含む）が要る。この PR の更新は行わない（必要なら別に計画する）。
+4. 失敗したときに戻す（旧版の backend に戻す前に、取込を止めて流す。埋め込みは新しい表から書き戻す）:
+
+   ```sql
+   ALTER TABLE rag_chunks ADD (embedding VECTOR(1536, FLOAT32));
+   UPDATE rag_chunks c
+   SET c.embedding = (SELECT e.embedding FROM rag_chunk_embeddings e WHERE e.chunk_id = c.chunk_id)
+   WHERE EXISTS (SELECT 1 FROM rag_chunk_embeddings e WHERE e.chunk_id = c.chunk_id);
+   COMMIT;
+   DROP INDEX rag_chunks_embedding_hnsw_idx;
+   DROP TABLE rag_chunk_embeddings PURGE;
+   DELETE FROM rag_schema_migrations WHERE migration_name = '20261117_5241_chunk_embeddings';
+   COMMIT;
+   ```
+
+   その後、旧版の backend を配置して `system_schema_cli initialize` を流す（旧版の trigger と `RAG_CHUNKS` の HNSW 索引を作り直す）。
+   列の削除の前に止まった場合（`RAG_CHUNKS.EMBEDDING` が残っている）は、`DROP TABLE rag_chunk_embeddings PURGE` と台帳の行の
+   削除だけでよい。
+
 ## 既存環境の更新手順（#5224 削除したファイル準備の変換方式が残る文書レシピの読み込み）
 
 削除したファイル準備の変換方式「PDF を画像として読み直す」（`pdf_to_page_images`。#3347）と「PIIマスク」（`pii_redact`。#3358）が
