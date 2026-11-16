@@ -292,7 +292,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_REQUEST_COVERAGE_DEADLINE_SECONDS` | `10` | 再検索の期限（秒、0〜60）。過ぎたら次の要求の検索を始めない（実行中の 1 回は止めない） |
 | `RAG_REQUEST_COVERAGE_MAX_SUBQUESTIONS` | `5` | 小問ごとの検索をする小問の数の上限（1 小問 1 回、0〜10。0 はしない。#2399）。丸数字・(1) などで並べた小問（言語資源の `question_cues` の小問の印。資料の手順の印 `markers.circled_numbers` とは別）は、小問ごとに 1 つの要求単位になり（小問の前の前置きは背景の単位にし、各小問に `preamble` として付ける）、根拠が「なし」か「一部」の小問ごとに、前置き＋小問の文で検索する。小問の検索を先に、根拠の無い要求の再検索を後に、同じ期限（`RAG_REQUEST_COVERAGE_DEADLINE_SECONDS`）で行い、検索の枠は `request_coverage.plan_targeted_retrievals` の 1 か所で数える。回答の本文は小問ごとの見出し（言語資源の `answer_labels.subquestion_heading_template`）で分け、根拠の無い小問だけを「確認できませんでした」にする |
 | `RAG_REQUEST_COVERAGE_CHUNKS_PER_SUBQUESTION` | `2` | 小問ごとの検索で、小問ごとに回答の材料に確保する根拠（親 chunk）の数（0〜6。0 は小問ごとの検索をしない）。根拠の無い要求の再検索の `RAG_REQUEST_COVERAGE_MAX_CHUNKS` とは別に数える |
-| `RAG_EXTRA_RETRIEVAL_MAX_QUERIES` | `8` | 主の検索の後に足す検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の合計の枠（0〜20）。種類ごとの上限（`RAG_GUIDE_STEP_MAX_QUERIES`・`RAG_REQUEST_COVERAGE_MAX_SUBQUESTIONS`・`RAG_REQUEST_COVERAGE_MAX_QUERIES`）はこの枠の中で数える（`rag_engine/retrieval/extra_retrieval.py` の 1 か所）。手順ごとの検索を先に、小問ごとの検索、根拠の無い要求の再検索の順に、枠の残りの中で行う |
+| `RAG_EXTRA_RETRIEVAL_MAX_QUERIES` | `8` | 主の検索の後に足す検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索・補いの検索で当たった要約の本文の検索〔#5244〕）の回数の合計の枠（0〜20）。種類ごとの上限（`RAG_GUIDE_STEP_MAX_QUERIES`・`RAG_REQUEST_COVERAGE_MAX_SUBQUESTIONS`・`RAG_REQUEST_COVERAGE_MAX_QUERIES`）はこの枠の中で数える（`rag_engine/retrieval/extra_retrieval.py` の 1 か所）。手順ごとの検索を先に、小問ごとの検索、根拠の無い要求の再検索の順に、枠の残りの中で行う |
 | `RAG_GENERATION_REASONING_EFFORT` | `model` | 回答文の生成の LLM の呼び出しの推論の量（#1499。値は上と同じ）。工程の記録（「回答文の生成と引用の確認」）に「生成の推論の量」を残す。`rag_overrides` の `generation_reasoning_effort` |
 | `RAG_QUESTION_SUBJECT_ROLE_MODEL` | `xai.grok-4.7` | 段ごとのモデル（この行と下の 3 つ。`app/rag/step_models.py` の表 `STEP_MODEL_SETTINGS` と rag_engine の `STEP_LLM_PROVIDERS` が同じ段を持つ）の 1 つ目: 質問の対象の名前の役割（問い・前提・例）の判定の段（#4351）。値はシステム設定 › モデル に登録したモデルの ID で、空は回答のモデル。登録モデルの接続・推論の量・入出力の上限を `RAG_ENGINE_<段>_*` で rag_engine へ渡す。登録していないモデルは接続を渡さず（段の provider は model だけ）、その段は失敗・省略として扱って回答は続ける（回答のモデルへ暗黙に切り替えない。#3240 と同じ）。4 つとも検索方法の画面（回答の検索と生成 › 生成後の回答確認）で選べ、回答の診断の `models` に段ごとに残る。この段の失敗では名前の照合を飛ばす |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | Q&A の候補の照合に embedding の意味類似度を加える |
@@ -421,6 +421,15 @@ MCP の `rag_read_document` も派生の chunk を返さない。
 拡張の起点にはせず（backend は前後を読まず、engine も読んだ chunk の並びの位置で前後を選ぶときに派生の chunk を起点にも
 前後にもしない。`context_builder._chunk_neighbors`。#5198）、章節と chunk の対応・MCP の `rag_read_document` には入れない。索引だけの作り直しの複製には含めず、切替の
 後の後段が入れ直す（入力の指紋が同じなら LLM を呼ばずに保存済みの文を使う）。
+
+補いの検索（要求別の補完・業務ガイドの手順の検索）が切った起点に文書全体の要約などの派生の chunk があれば、engine はその文書の
+本文に範囲を絞って同じ検索文で検索し直し（文書の範囲つきの検索。元の検索が頁に絞った検索ならその文書の範囲のまま）、当たった
+本文の chunk を派生の chunk の枠の根拠にする（`rag_engine/retrieval/summary_hits.py`。#5244）。派生の chunk は切りの枠を取らず
+（要求別の補完の足す根拠の上限にも数えない）、本文の後に文書の説明として残す（合成の評価で、小さい文書では要約の文にも根拠の
+語句があり、外すと期待の根拠が減ったため）。本文が当たらない・検索し直せないときは派生の chunk がその枠のまま残る。検索し直しは追加の検索の総枠（`RAG_EXTRA_RETRIEVAL_MAX_QUERIES`）
+から 1 回ずつ取り、回答の期限の残りが検索 1 回の見積もり（当てた検索にかかった時間）と章節の拡張と同じ生成・確定に残す分の和より
+少なければしない。LLM は呼ばない。記録は診断 `summary_hits`（文書・要約・本文の chunk・状態・時間）。主の検索の起点の要約は
+変えない。
 
 Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。
 

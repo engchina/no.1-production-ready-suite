@@ -213,6 +213,7 @@ from rag_engine.retrieval.guide_steps import (
     GUIDE_STEP_TRACE_SCHEMA_VERSION,
     GuidePlan,
     StepSearch,
+    planned_searches,
     reference_step_sources,
     required_guide_targets,
     run_required_guide_searches,
@@ -231,6 +232,20 @@ from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
     AdbSearchReadiness,
     normalize_retrieval_scope,
+)
+from rag_engine.retrieval.summary_hits import (
+    EXCLUDED_CODES,
+    EXCLUDED_DERIVED,
+    EXCLUDED_TAKEN,
+    STATUS_FAILED,
+    STATUS_NO_BODY,
+    STATUS_REPLACED,
+    STATUS_UNSCOPED,
+    SummaryHitResearch,
+    derived_hits_by_document,
+    document_scope,
+    is_derived_record,
+    place_bodies_before_derived,
 )
 from rag_engine.retrieval.task_contract import (
     REQUIRED_ASPECTS,
@@ -959,6 +974,9 @@ _OVERLAP_LABELS = {
     OVERLAP_PARENT: "主の検索の根拠の親の本文に含まれる",
     OVERLAP_NEIGHBOR: "主の検索の根拠の前後の文脈に含まれる",
     OVERLAP_SECTION: "主の検索の根拠を補う章節に含まれる",
+    # 要約の当たりの本文の検索（#5244）で除く候補。
+    EXCLUDED_DERIVED: "文書全体の要約などの派生の chunk",
+    EXCLUDED_TAKEN: "この補いの検索ですでに切った根拠",
 }
 
 
@@ -1065,6 +1083,7 @@ def build_adb_hybrid_answer_context(
     section_fill: bool = False,
     fill: bool = True,
     exclude: Callable[[AnswerRecord], str] | None = None,
+    summary_research: SummaryHitResearch | None = None,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
 
@@ -1086,9 +1105,14 @@ def build_adb_hybrid_answer_context(
     rerank と下限の後、文書ごとの上限と ``top_k`` の切りの前にその候補を除き（``covered_candidates`` に残す）、
     切りの枠を新しい根拠に使う。
 
+    summary_research は補いの検索（fill=False）で、切った起点の文書全体の要約などの派生の chunk の枠に、その文書の本文に
+    範囲を絞った同じ検索文の検索で当たった本文の chunk を置く枠と記録（#5244。``_research_summary_hits``。派生の chunk は
+    本文の後に枠の外で残す）。
+
     pinned_chunk_run_id 指定時は保存済み実行を直接読み、latest 更新による評価条件の変化を防ぐ。
     存在しない実行は AdbHybridSearchUnavailable とする。ADB と必要に応じ reranker に接続する。
     """
+    started = monotonic()
     max_records = _max_context_records(settings) if max_records is None else max_records
     scope = normalize_retrieval_scope(retrieval_scope)
     chunk_run_id = ""
@@ -1200,6 +1224,42 @@ def build_adb_hybrid_answer_context(
             section_fill=section_fill,
         )
     selected = _cut_anchors(question, kept_children, active_records, settings, top_k=top_k, max_records=max_records)
+    if summary_research is not None and derived_hits_by_document(selected):
+        selected, more_covered, more_records = _research_summary_hits(
+            selected,
+            summary_research,
+            phase=rerank_phase,
+            page_ranges=page_ranges,
+            exclude=exclude,
+            estimate_seconds=monotonic() - started,
+            search=lambda ranges, count, drop: build_adb_hybrid_answer_context(
+                question,
+                run_id,
+                preferred_engines,
+                settings,
+                top_k=count,
+                neighbor_child_count=neighbor_child_count,
+                max_records=max_records,
+                max_chars=max_chars,
+                retrieval_queries=retrieval_queries,
+                rerank_enabled=rerank_enabled,
+                rerank_phase=rerank_phase,
+                retrieval_scope=retrieval_scope,
+                classification_filter=classification_filter,
+                pinned_chunk_run_id=pinned_chunk_run_id,
+                query_embedder=query_embedder,
+                page_ranges=ranges,
+                text_queries=text_queries,
+                fill=False,
+                exclude=drop,
+            ),
+        )
+        known = {record_context_key(record) for record in anchors.expansion_records}
+        anchors = replace(
+            anchors,
+            expansion_records=(*anchors.expansion_records, *(r for r in more_records if record_context_key(r) not in known)),
+            covered_candidates=(*anchors.covered_candidates, *more_covered),
+        )
     tree = tuple(
         ContextParentEvidence(
             record=record,
@@ -1242,6 +1302,107 @@ def _cut_anchors(
         if child.role == "retrieved_anchor"
     }
     return list({retrieval_record_id(record): record for record in kept_children if retrieval_record_id(record) in anchor_ids}.values())
+
+
+def _nothing_held() -> int:
+    return 0
+
+
+def _generation_reserve_seconds(settings: Settings) -> float:
+    """回答の期限の残りから、生成と回答の確定に残す秒数（章節の拡張と同じ。#5184）。"""
+    from rag_engine.generation.section_expansion import SectionExpansionLimits
+
+    return SectionExpansionLimits.from_settings(settings).generation_reserve_seconds
+
+
+def _research_summary_hits(
+    selected: Sequence[AnswerRecord],
+    research: SummaryHitResearch,
+    *,
+    phase: str,
+    page_ranges: Sequence[Mapping[str, Any]],
+    exclude: Callable[[AnswerRecord], str] | None,
+    estimate_seconds: float,
+    search: Callable[[list[dict[str, Any]], int, Callable[[AnswerRecord], str]], AnswerContext],
+) -> tuple[list[AnswerRecord], tuple[tuple[AnswerRecord, str], ...], tuple[AnswerRecord, ...]]:
+    """補いの検索の切った起点の派生の chunk の枠に、その文書の本文の根拠を置く（#5244）。
+
+    文書ごとに、その文書の本文に範囲を絞って同じ検索文で検索し直し（``search(範囲, 件数, 除く判定)``。件数は派生の
+    chunk の数）、当たった本文の chunk を派生の chunk の位置に置く。派生の chunk は本文の後に文書の説明として残す
+    （枠の外）。検索し直しでは派生の chunk・すでに切った起点・主の検索の根拠にある候補（``exclude``）を切りの前に除く。
+    戻り値は (起点, 主の検索の根拠にあるため除いた候補, 検索の原文)。
+    """
+    hits = derived_hits_by_document(selected)
+    taken = {retrieval_record_id(record) for record in selected}
+
+    def drop(record: AnswerRecord) -> str:
+        if is_derived_record(record):
+            return EXCLUDED_DERIVED
+        if retrieval_record_id(record) in taken:
+            return EXCLUDED_TAKEN
+        return exclude(record) if exclude is not None else ""
+
+    bodies: dict[str, list[AnswerRecord]] = {}
+    covered: dict[str, tuple[AnswerRecord, str]] = {}
+    pool: dict[str, AnswerRecord] = {}
+    with _execution_step(
+        "要約の当たりの本文の検索",
+        "補いの検索で当たった文書全体の要約の枠を、その文書の本文に範囲を絞った同じ検索文の検索で当たった本文で補います。",
+    ) as step:
+        step.input(
+            {
+                "用途": phase,
+                "要約の当たり": {document_id: [retrieval_record_id(record) for record in records] for document_id, records in hits.items()},
+                "見積もりの秒数": round(estimate_seconds, 3),
+                "生成と確定に残す秒数": research.reserve_seconds,
+            }
+        )
+        rows: list[dict[str, Any]] = []
+        for document_id, records in hits.items():
+            row: dict[str, Any] = {
+                "phase": phase,
+                "document_id": document_id,
+                "summary_chunk_ids": [record.chunk_uid or record.id for record in records],
+                "top_k": len(records),
+            }
+            rows.append(row)
+            ranges = document_scope(document_id, page_ranges)
+            if not ranges:
+                row["status"] = STATUS_UNSCOPED
+                continue
+            if reason := research.admit(estimate_seconds):
+                row["status"] = reason
+                continue
+            began = monotonic()
+            try:
+                found = search(ranges, len(records), drop)
+            except Exception as exc:  # noqa: BLE001 - 検索し直しの失敗は要約の根拠のまま続ける。
+                row.update(status=STATUS_FAILED, error_type=type(exc).__name__, elapsed_ms=int((monotonic() - began) * 1000))
+                continue
+            row["elapsed_ms"] = int((monotonic() - began) * 1000)
+            body = [record for record in found.records if not is_derived_record(record)]
+            for record, code in found.covered_candidates:
+                if code not in EXCLUDED_CODES:
+                    covered.setdefault(retrieval_record_id(record), (record, code))
+            for record in found.expansion_records:
+                pool.setdefault(record_context_key(record), record)
+            row["body_chunk_ids"] = [record.chunk_uid or record.id for record in body]
+            row["status"] = STATUS_REPLACED if body else STATUS_NO_BODY
+            if body:
+                bodies[document_id] = body
+                taken.update(retrieval_record_id(record) for record in body)
+        research.rows.extend(rows)
+        step.output({"記録": rows})
+        replaced = sum(len(hits[document_id]) for document_id in bodies)
+        step.result(
+            f"要約の当たり {sum(len(records) for records in hits.values())} 件のうち {replaced} 件の枠を本文 "
+            f"{sum(len(records) for records in bodies.values())} 件で補いました（要約は本文の後に残します）"
+        )
+    return (
+        place_bodies_before_derived(selected, bodies, retrieval_record_id),
+        tuple(covered.values()),
+        tuple(pool.values()),
+    )
 
 
 def capped_candidate_ids(context: AnswerContext, settings: Settings | None, *, top_k: int) -> list[str]:
@@ -2261,6 +2422,7 @@ def _search_guide_steps(
     retrieval_scope: str,
     classification_filter: ClassificationFilter | None,
     exclude: Callable[[AnswerRecord], str] | None = None,
+    summary_research: SummaryHitResearch | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[list[StepSearch], list[dict[str, Any]], dict[str, Any]]:
     """業務ガイドの手順ごとに検索する (#2395)。戻り値は (検索の結果, 必須の取得の記録, 記録)。
@@ -2268,6 +2430,8 @@ def _search_guide_steps(
     検索ごとに「検索 → rerank → 下限 → 文書ごとの上限 → ``top_k``（``guide_step_chunks_per_step``）で切る」だけを行い
     （#5173）、切った根拠を返す。主の検索の根拠への合わせ込みと文脈の補完は呼び出し元が主の検索と一緒に行う。
     exclude は要求別の補完と同じ、主の検索の根拠にすでにある候補を切りの前に除く判定（#5175）。
+    summary_research は手順の検索が当てた文書全体の要約を、その文書の本文の根拠に置き換える枠と記録（#5244）。検索し直しは
+    任意の手順の検索の回数（必須の取得の後の枠の残りで決まる）を奪わない（``held``）。
     """
     targets = required_guide_targets(plan)
     trace: dict[str, Any] = {
@@ -2319,31 +2483,45 @@ def _search_guide_steps(
             page_ranges=page_ranges,
             fill=False,
             exclude=exclude,
+            summary_research=summary_research,
         )
 
-    started = clock()
-    results, acquisitions, stop = run_required_guide_searches(
-        question,
-        targets,
-        budget=extra_budget,
-        existing_records=context.records,
-        deadline_seconds=float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0),
-        retrieve=retrieve,
-        clock=clock,
-    )
     # 必須参照の取得後、参照なしの補助検索と任意手順だけを通常の枠から実行する。
     optional_steps = tuple(
         replace(step, references=()) if step.required else step for step in plan.steps if not step.required or step.references
     )
-    optional_limit = extra_budget.allowance(int(getattr(settings, "guide_step_max_queries", 0) or 0))
-    optional_results, optional_stop = run_step_searches(
-        question,
-        replace(plan, steps=optional_steps),
-        limit=optional_limit,
-        deadline_seconds=max(0.0, float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0) - (clock() - started)),
-        retrieve=retrieve,
-        clock=clock,
-    )
+    optional_plan = replace(plan, steps=optional_steps)
+    kind_limit = int(getattr(settings, "guide_step_max_queries", 0) or 0)
+    if summary_research is not None:
+        # 必須の取得の間の検索し直しは、この後の任意の手順の検索の回数（枠の残りで決まる）を奪わない。
+        summary_research.held = lambda: len(planned_searches(optional_plan, extra_budget.allowance(kind_limit)))
+    started = clock()
+    try:
+        results, acquisitions, stop = run_required_guide_searches(
+            question,
+            targets,
+            budget=extra_budget,
+            existing_records=context.records,
+            deadline_seconds=float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0),
+            retrieve=retrieve,
+            clock=clock,
+        )
+        optional_limit = extra_budget.allowance(kind_limit)
+        planned = len(planned_searches(optional_plan, optional_limit))
+        if summary_research is not None:
+            # 任意の手順の検索は終わってからまとめて数えるので、その間は決めた回数を検索し直しに使わない。
+            summary_research.held = lambda: planned
+        optional_results, optional_stop = run_step_searches(
+            question,
+            optional_plan,
+            limit=optional_limit,
+            deadline_seconds=max(0.0, float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0) - (clock() - started)),
+            retrieve=retrieve,
+            clock=clock,
+        )
+    finally:
+        if summary_research is not None:
+            summary_research.held = _nothing_held
     extra_budget.take(GUIDE_STEPS_KIND, len(optional_results))
     results.extend(optional_results)
     trace.update(
@@ -3195,6 +3373,8 @@ def answer_question_result(
         if guide_plan is not None and settings.guide_step_retrieval_enabled:
             extra_budget.reserve_required(len(required_guide_targets(guide_plan)))
         coverage_usage = CoverageUsage()
+        # 補いの検索で当たった文書全体の要約を、その文書の本文の根拠に置き換える検索し直しの枠と記録（#5244）。
+        summary_research = SummaryHitResearch(budget=extra_budget, reserve_seconds=_generation_reserve_seconds(settings))
         # 根拠の流れは回答・回答を作らない検索・検索だけ・MCP で同じ（#5173）: 主の検索 → rerank → 切る → 検索拡張の
         # 合わせ込み → 補いの検索（要求別の補完・業務ガイドの手順）の合わせ込み → 文脈の補完（章節の拡張を含む）。
         try:
@@ -3293,6 +3473,7 @@ def answer_question_result(
                 classification_filter=selected_classification_filter,
                 fill=False,
                 exclude=main_overlap,
+                summary_research=summary_research,
             )
 
         with _execution_step(
@@ -3425,6 +3606,7 @@ def answer_question_result(
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
                     exclude=main_overlap,
+                    summary_research=summary_research,
                 )
                 guide_records, guide_pool = _guide_step_supplements(guide_results)
                 supplement_pool.extend(guide_pool)
@@ -3520,6 +3702,7 @@ def answer_question_result(
                 "zero_evidence": zero_evidence,
                 "query_overflow": overflow_trace,
                 **({"supplement_merge": supplement_merge} if supplement_merge is not None else {}),
+                **({"summary_hits": summary_research.to_payload()} if summary_research.rows else {}),
                 "retrieval_counts": _retrieval_counts(context, ()),
             }
             if not generate_answer:
@@ -3556,6 +3739,7 @@ def answer_question_result(
         evidence_trace: dict[str, Any] = {
             "query_overflow": overflow_trace,
             **({"supplement_merge": supplement_merge} if supplement_merge is not None else {}),
+            **({"summary_hits": summary_research.to_payload()} if summary_research.rows else {}),
             **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
             **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
         }
