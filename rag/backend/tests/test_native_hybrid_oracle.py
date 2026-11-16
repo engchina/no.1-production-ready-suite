@@ -154,8 +154,9 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     )
     assert {c.metadata["document_id"] for c in result.child_chunks} == set(ids[:2])
     fusion = state.retrieval_stages[-1]["rrf"]
+    # 追加検索文も原質問と同じく vector と全文で検索する(#5151)。
     assert [row["weight"] for row in fusion["lists"]] == pytest.approx(
-        [0.7, 0.21] if backend == "oracle_hybrid_index" else [0.49, 0.21, 0.21]
+        [0.7, 0.3] if backend == "oracle_hybrid_index" else [0.49, 0.21, 0.21, 0.09]
     )
     assert all(row["status"] == "completed" for row in fusion["lists"])
     assert state.filters is not None
@@ -255,7 +256,7 @@ async def _empty_native_scope_diagnostics(
 
 @pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize("ratio", [(10, 1), (2, 3)])
-async def test_native_combined_original_and_provenance_channels(
+async def test_native_combined_original_and_additional_queries(
     ratio: tuple[float, float], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import json
@@ -313,18 +314,19 @@ async def test_native_combined_original_and_provenance_channels(
         expand_references=False,
         settings=SimpleNamespace(
             retrieval_query_sources={
-                "syntheticsemantic": ("質問の言い換え・分解",),
+                "syntheticsemantic": ("原質問 + 業務ガイド",),
                 "syntheticterm": ("原質問 + 用語・同義語",),
             }
         ),
     )
     assert result.child_chunks
     assert embedded == ["syntheticoriginal", "syntheticsemantic", "syntheticterm"]
-    assert sorted(c["search_fusion"] for c in calls) == ["UNION", "UNION", "VECTOR_ONLY"]
-    original = next(c for c in calls if c["search_fusion"] == "UNION")
-    assert original["search_scorer"] == "WRRF"
-    assert original["vector"]["score_weight"] == ratio[0]
-    assert original["text"]["score_weight"] == ratio[1]
+    # 足した語の出どころによらず、どの検索文も 1 回の UNION で検索する(#5151)。
+    assert [c["search_fusion"] for c in calls] == ["UNION", "UNION", "UNION"]
+    for call in calls:
+        assert call["search_scorer"] == "WRRF"
+        assert call["vector"]["score_weight"] == ratio[0]
+        assert call["text"]["score_weight"] == ratio[1]
     fusion = state.retrieval_stages[-1]["rrf"]
     assert [r["status"] for r in fusion["lists"]] == ["completed"] * 3
     assert fusion["lists"][0]["score_source"] == "oracle_wrrf"
