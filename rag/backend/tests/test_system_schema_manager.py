@@ -16,11 +16,12 @@ import pytest
 from pr_system_settings.system_schema import ForeignKeySpec, foreign_keys_from_create_table
 
 from app.clients.oracle import oracle_vector_index_create_sql
-from app.rag import oracle_schema
+from app.rag import oracle_schema, system_schema_cli
 from app.rag.oracle_schema import oracle_schema_migration_sections, split_sql_statements
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     DOMAIN_TABLES,
+    HNSW_INDEXES,
     MANAGED_COLUMNS,
     MANAGED_FOREIGN_KEYS,
     MANAGED_INDEXES,
@@ -273,6 +274,8 @@ class _FakeCursor:
                 raise RuntimeError("ORA-00054: resource busy")
             if (name, "INDEX") in self.database.objects:
                 raise RuntimeError("ORA-00955: name is already used by an existing object")
+            if name in self.database.fail_index_creation:
+                raise RuntimeError(self.database.fail_index_creation[name])
             self.database.objects[(name, "INDEX")] = datetime.now(UTC)
             if name == "RAG_CHUNKS_HYBRID_IDX":
                 self.database.native_health = (
@@ -461,6 +464,8 @@ class _FakeDatabase:
         self.operation: dict[str, Any] | None = None
         self.native_health: tuple[str, ...] = ("VALID", "VALID", "VALID", "VALID", "ENABLED")
         self.fail_native_creation = False
+        # 索引の名前 → 作成の失敗の Oracle の message（vector memory の不足など。#5261）。
+        self.fail_index_creation: dict[str, str] = {}
         self.active_jobs = 0
         self.fail_drop_or_create_with_lock = False
         # 制約名 → (定義, 既存の行を検査済みか)。CREATE TABLE と ALTER TABLE で増える。
@@ -1421,6 +1426,101 @@ def test_native_creation_failure_never_passes_postcondition_or_retry() -> None:
         manager.initialize()
     database.fail_native_creation = False
     assert manager.initialize()["status"] == "ready"
+
+
+_HNSW_INDEX = "RAG_CHUNKS_EMBEDDING_HNSW_IDX"
+# 録画した Oracle の失敗の形（vector memory の上限。#5261）。
+_VECTOR_MEMORY_ERROR = "ORA-51995: Vector memory pool exhausted"
+
+
+def _schema_with_vector_memory_shortage() -> tuple[_FakeDatabase, SystemSchemaManager]:
+    """HNSW 索引と、それより後に作る索引が無く、HNSW の作成が vector memory の不足で失敗する DB。"""
+
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    database.objects.pop((_HNSW_INDEX, "INDEX"))
+    database.objects.pop(("RAG_ROLE_KNOWLEDGE_BASES_KB_IDX", "INDEX"))
+    database.fail_index_creation[_HNSW_INDEX] = _VECTOR_MEMORY_ERROR
+    return database, manager
+
+
+def test_hnsw_indexes_come_from_canonical_ddl() -> None:
+    assert {_HNSW_INDEX} == HNSW_INDEXES
+
+
+def test_vector_memory_shortage_names_index_and_keeps_other_objects() -> None:
+    """HNSW だけが vector memory の不足で作れないとき、原因・索引・既定の検索への影響を返す。
+
+    #5261: 必須の判定は変えない（status は partial のまま）。
+    """
+
+    database, manager = _schema_with_vector_memory_shortage()
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+
+    assert error.value.code == "ORA-51995"
+    message = error.value.public_message
+    for expected in (
+        "vector memory の不足（ORA-51995）",
+        _HNSW_INDEX,
+        "Oracle Hybrid Vector Index",
+        "V$VECTOR_MEMORY_POOL",
+        "rag/docs/deployment.md",
+    ):
+        assert expected in message
+    # HNSW より後の索引も作り、ほかの作成・更新は済ませる。必須の判定は変えない。
+    assert ("RAG_ROLE_KNOWLEDGE_BASES_KB_IDX", "INDEX") in database.objects
+    status = manager.status()
+    assert status["status"] == "partial"
+    assert status["missing_objects"] == [{"name": _HNSW_INDEX, "object_type": "INDEX"}]
+    assert status["operation_state"]["status"] == "failed"
+    assert status["operation_state"]["last_error_code"] == "ORA-51995"
+    assert status["operation_state"]["last_error_detail"] == message
+
+    # vector memory を空けて流し直せば ready になり、説明は消える。
+    database.fail_index_creation.clear()
+    assert manager.initialize()["status"] == "ready"
+    assert "last_error_detail" not in manager.status()["operation_state"]
+
+
+def test_other_hnsw_creation_failures_are_not_reported_as_vector_memory() -> None:
+    database, manager = _schema_with_vector_memory_shortage()
+    database.fail_index_creation[_HNSW_INDEX] = "ORA-01031: insufficient privileges"
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+
+    assert error.value.code == "ORA-01031"
+    assert "vector memory" not in error.value.public_message
+    assert "last_error_detail" not in manager.status()["operation_state"]
+
+
+def test_cli_reports_vector_memory_shortage_in_initialize_status_and_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CLI の initialize・status・check（配備の確認）の出力で原因と索引が分かる（#5261）。"""
+
+    _database, manager = _schema_with_vector_memory_shortage()
+    monkeypatch.setattr(system_schema_cli, "system_schema_manager", manager)
+
+    assert system_schema_cli.main(["initialize", "--allow-destructive"]) == 1
+    # 標準エラーには CLI の log（1 行の JSON）も出る。結果は最後の字下げした JSON。
+    stderr = capsys.readouterr().err
+    error = json.loads(stderr[stderr.rindex("{\n") :])
+    assert error["error_code"] == "ORA-51995"
+    assert "vector memory の不足（ORA-51995）" in error["error_message"]
+    assert _HNSW_INDEX in error["error_message"]
+
+    assert system_schema_cli.main(["status"]) == 0
+    state = json.loads(capsys.readouterr().out)["operation_state"]
+    assert state["last_error_detail"] == error["error_message"]
+
+    assert system_schema_cli.main(["check"]) == 1
+    summary = capsys.readouterr().out.strip()
+    assert summary.startswith("status=partial・不足 1 件（RAG_CHUNKS_EMBEDDING_HNSW_IDX）")
+    assert f"前回の操作の失敗 ORA-51995（{error['error_message']}）" in summary
 
 
 def test_unknown_native_index_type_is_not_dropped_even_during_migration(

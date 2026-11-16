@@ -161,6 +161,24 @@ def test_deployment_check_summary_is_ok_only_when_ready_and_idle() -> None:
     assert not ok
     assert summary == "status=missing・操作 failed・前回の操作の失敗 ORA-01031"
 
+    # 製品が前回の失敗の説明を返すときは、コードに続けて出す（#5261）。
+    ok, summary = deployment_check_summary(
+        {
+            "status": "partial",
+            "missing_objects": [{"name": "DEMO_HNSW_IDX"}],
+            "operation_state": {
+                "status": "failed",
+                "last_error_code": "ORA-51995",
+                "last_error_detail": "vector memory の不足で DEMO_HNSW_IDX を作れませんでした。",
+            },
+        }
+    )
+    assert not ok
+    assert summary == (
+        "status=partial・不足 1 件（DEMO_HNSW_IDX）・操作 failed・前回の操作の失敗 ORA-51995"
+        "（vector memory の不足で DEMO_HNSW_IDX を作れませんでした。）"
+    )
+
     names = [{"name": f"DEMO_{index}"} for index in range(7)]
     ok, summary = deployment_check_summary(
         {

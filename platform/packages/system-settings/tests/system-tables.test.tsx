@@ -391,15 +391,34 @@ describe("SystemTablesCard の状態ごとの表示", () => {
         operation_state: { ...statusData("partial").operation_state, status: "failed", last_error_code: code },
       });
     const generic = renderCard(clientWith(failed("ORA-00600")));
-    expect(generic).toContain("<p>状態を再取得し、「作成・更新」で再試行してください。</p>");
+    expect(generic).toContain(">状態を再取得し、「作成・更新」で再試行してください。</p>");
     expect(generic).toMatch(/<details[^>]*open=""[^>]*>[\s\S]*?詳細[\s\S]*?エラーコード: ORA-00600/);
     const lock = renderCard(clientWith(failed("ORA-00054")));
-    expect(lock).toContain("<p>Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。");
+    expect(lock).toContain(">Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。");
     expect(lock).toContain("エラーコード: ORA-00054");
     // コードが無いときは「詳細」を出さない。
     const unknown = renderCard(clientWith(failed(null)));
     expect(unknown).toContain("前回の操作が完了していません");
     expect(unknown).not.toContain("エラーコード");
+  });
+
+  it("前回の失敗の説明を製品が返したときは、汎用の対処の代わりに本文に出す（#5261）", () => {
+    const detail = "vector memory の不足（ORA-51995）で HNSW 索引（DEMO_HNSW_IDX）を作れませんでした。";
+    const html = renderCard(
+      clientWith(
+        statusData("partial", {
+          operation_state: {
+            ...statusData("partial").operation_state,
+            status: "failed",
+            last_error_code: "ORA-51995",
+            last_error_detail: detail,
+          },
+        }),
+      ),
+    );
+    expect(html).toContain(`<p class="[overflow-wrap:anywhere]">${detail}</p>`);
+    expect(html).not.toContain("状態を再取得し、「作成・更新」で再試行してください。");
+    expect(html).toContain("エラーコード: ORA-51995");
   });
 
   it("状態を取得できないときは DB の案内（banner）と再試行を出し、操作を出さない", () => {
