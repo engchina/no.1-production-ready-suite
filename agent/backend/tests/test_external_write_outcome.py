@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import json
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -395,9 +394,7 @@ def test_crash_after_send_is_unknown_after_restart(server: _TicketMcp) -> None:
         run_id, ToolCall(name="test72_read", arguments={}, trace_id="call-2")
     )
 
-    failed = runtime_repository.fail_interrupted_runs(
-        updated_before=datetime.now(UTC) + timedelta(seconds=1)
-    )
+    failed = runtime_repository.fail_interrupted_runs()
 
     assert run_id in failed
     write, read = runtime_repository.get_run(run_id).steps
