@@ -1099,10 +1099,12 @@ def _assert_failed_usage(run_id: str) -> None:
         run.usage.output_tokens,
         run.usage.total_tokens,
     ) == (2, 250, 50, 300)
+    # 集計の「今」は Run の作成日時にする（ホストの時計が後ろへ戻ると、今の時刻より後に作った
+    # Run として期間から外れる。#5123）。
     report = build_usage_report(
         [fact_from_run(run)],
         days=7,
-        now=datetime.now(UTC),
+        now=run.created_at,
         tz=ZoneInfo("UTC"),
         agent_names={},
         user_names=lambda ids: {},

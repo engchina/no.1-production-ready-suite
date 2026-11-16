@@ -8,7 +8,9 @@ store に差し替える（開発機の共通 `.env` の DB に触れない）�
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Iterator
+from datetime import datetime, timedelta, tzinfo
 
 from pr_backend_core.config import isolate_env_files_for_tests
 
@@ -142,3 +144,42 @@ def _stub_upload_storage_object_storage(monkeypatch: pytest.MonkeyPatch) -> None
         "default_object_storage_client",
         lambda _settings: _ObjectStorageStub(),
     )
+
+
+def _wall_now(tz: tzinfo | None) -> datetime:
+    """OS の時計（wall clock）の今。"""
+    return datetime.now(tz)
+
+
+class _MonotonicDatetime(datetime):
+    """`now()` が前の値より戻らない datetime（Run の作成日時の順をホストの時計の段差から守る）。
+
+    返す値は `datetime` のまま（このクラスの instance にしない）。時差の無い `now()` は変えない。
+    """
+
+    _last: datetime | None = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> datetime:  # type: ignore[override]
+        current = _wall_now(tz)
+        if tz is None:
+            return current
+        with cls._lock:
+            last = cls._last
+            if last is not None and current <= last:
+                current = (last + timedelta(microseconds=1)).astimezone(tz)
+            cls._last = current
+        return current
+
+
+@pytest.fixture(autouse=True)
+def _monotonic_runtime_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run・イベントの作成日時（`runtime._now`）を、プロセスの中で戻らない時計にする（#5123）。
+
+    会話の続き（前の Run の状態・履歴）は `created_at` の前後で前の Run を選ぶ。ホストの時計が
+    時刻の同期で後ろへ戻ると、先に作った Run が後の Run より新しい日時になり、テストの結果が
+    ホストの時計に依る。作った順に日時が増えるようにする（`runtime._now` 自体を差し替える
+    テストはそちらが優先する）。
+    """
+    monkeypatch.setattr(agent_runtime, "datetime", _MonotonicDatetime)
