@@ -424,6 +424,7 @@ jobs:
               - ".github/scripts/oracle-free-ci.sh"
               - ".github/scripts/oracle-free-pull.sh"
               - ".github/scripts/oracle_ci_shard.py"
+              - ".github/scripts/oracle-listener-summary.py"
               - ".github/scripts/pytest-skip-gate.py"
               - "platform/packages/backend_core/src/pr_backend_core/oracle_*.py"
               - "platform/packages/backend_core/src/pr_backend_core/observability/trace_bodies.py"
@@ -2043,6 +2044,10 @@ jobs:
 
       - name: Test Oracle CI sharding
         run: python3 -m unittest discover -s scripts/tests -p 'test_oracle_ci_shard.py' -v
+
+      # 実 Oracle の結合テストの listener の診断（oracle-listener-summary.py。#5156）。接続の利用者・host を出さない。
+      - name: Test oracle-listener-summary
+        run: bash scripts/tests/oracle-listener-summary.test.sh
 
       # Oracle の image の取得の時間切れと再試行（oracle-free-pull.sh。#4708）。偽の docker で確かめる。
       - name: Test oracle-free-pull
