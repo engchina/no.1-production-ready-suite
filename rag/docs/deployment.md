@@ -230,7 +230,45 @@ chunk の埋め込み（`VECTOR(1536, FLOAT32)`。1 行約 6KB）を `RAG_CHUNKS
 chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`RAG_CHUNKS_HYBRID_IDX`）の JSON（本文と埋め込み）は
 変えず、埋め込みの表の trigger（`RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC`）が以後の書き込みを同期する。
 
-1. **取込を止めてから更新する**（取込 job・業務ガイドの取込が無いことを確かめる）。migration
+1. **適用の前に vector memory の空きと必要量を確かめる**（#5261）。更新の最後に作り直す HNSW 索引
+   （`RAG_CHUNKS_EMBEDDING_HNSW_IDX`）は vector memory（`vector_memory_size` の Vector Pool）に載り、同じ DB のほかの
+   schema の HNSW 索引と空きを分け合う。足りないと、表・列・範囲の索引の更新と台帳の記録が済んだ後に `ORA-51995` で止まり、
+   `status` は `partial` のまま残る。ADMIN（`V$` を読める DB ユーザー）で次を確かめる。
+
+   ```sql
+   -- Vector Pool の大きさと使用量（MB）。空き = ALLOC - USED
+   SELECT pool, ROUND(alloc_bytes / 1048576) AS alloc_mb, ROUND(used_bytes / 1048576) AS used_mb, populate_status
+   FROM v$vector_memory_pool;
+   -- vector memory に載っている HNSW 索引（ほかの schema の分も出る）
+   SELECT owner, index_name, ROUND(allocated_bytes / 1048576) AS allocated_mb, ROUND(used_bytes / 1048576) AS used_mb
+   FROM v$vector_index;
+   ```
+
+   必要量は、RAG のアプリ用の DB ユーザーで、更新の前の表と列から `DBMS_VECTOR.INDEX_VECTOR_MEMORY_ADVISOR` で見積もる
+   （`neighbors` は今の索引のビルド。既定は 48。式と件数からの見積もりは [oracle-hnsw-vector-index.md](./oracle-hnsw-vector-index.md)
+   「Vector Pool メモリ設計」）。
+
+   ```sql
+   VARIABLE response_json CLOB;
+   EXEC DBMS_VECTOR.INDEX_VECTOR_MEMORY_ADVISOR(USER, 'RAG_CHUNKS', 'EMBEDDING', 'HNSW', '{"neighbors":48}', :response_json);
+   PRINT response_json;
+   ```
+
+   更新は旧い表の HNSW 索引を消してから新しい表に作るので、旧い索引が `v$vector_index` に載っていればその分は空く。
+   空き（旧い索引の分を含む）が見積もりより少なければ、適用の前に次のどれかを選ぶ。
+   - `vector_memory_size` を上げる（ADMIN で `ALTER SYSTEM SET vector_memory_size = <大きさ> SCOPE = BOTH`。上げられる
+     上限は DB の SGA の大きさで決まる）。
+   - 同じ DB の使っていない HNSW 索引を消す（ほかの schema の検証用の索引など。消す前に使っていないことを確かめる）。
+   - HNSW 索引を作らずに、既定の検索の実行方式（Oracle Hybrid Vector Index）で使う。この方式は HNSW 索引を使わないので
+     検索は動く。ただし HNSW 索引は schema の必須の object のままで、`status` は `partial`、配備の確認は schema の NG を
+     出し続ける。「ベクトル検索＋Oracle Text個別実行」の距離順（`FETCH APPROX`）は厳密な距離の計算になり遅くなる。
+     空きができたら `initialize` を流し直して HNSW 索引を作る。
+
+   `ORA-51995` で止まったときは、CLI の `initialize` の `error_message`・`status` の `operation_state.last_error_detail`・
+   配備の確認の要約・システムテーブル管理の画面の「前回の操作が完了していません」に、作れなかった索引と既定の検索への影響が
+   出る（`missing_objects` は HNSW 索引だけ）。上のどれかで空きを作ってから、`initialize`（台帳は記録済みなので
+   `--allow-destructive` は要らない）を流し直す。
+2. **取込を止めてから更新する**（取込 job・業務ガイドの取込が無いことを確かめる）。migration
    `20261117_5241_chunk_embeddings` は `RAG_CHUNKS` の列を削除するので承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が
    要る（上の「既存環境の更新手順の共通の注意」）。適用の前に `RAG_CHUNKS` を書き出す（Data Pump など）。
 
@@ -250,18 +288,18 @@ chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`
    所要時間の目安: テスト専用の DB ユーザー（合成の約 3.4 万 chunk、開発の ADB・OCPU 1）で、更新全体が 12.5 分と 21 分
    （2 回）。2・3 の写しと列の削除は 23 秒で、大半は 5 の HNSW の作成（2 回目は原生索引の整理の job と CPU を取り合った）。
    chunk の数にほぼ比例すると見込む（未確認）。HNSW の作成中も検索は原生索引（既定）で動く。
-2. 確かめる: `system_schema_cli status` が `ready`、次の 2 つの件数が同じ（埋め込みのある chunk の数）。
+3. 確かめる: `system_schema_cli status` が `ready`、次の 2 つの件数が同じ（埋め込みのある chunk の数）。
 
    ```sql
    SELECT COUNT(*) FROM rag_chunk_embeddings;
    SELECT COUNT(*) FROM rag_chunks c WHERE JSON_EXISTS(c.hybrid_payload, '$.embedding');
    ```
 
-3. 列の削除は表の領域を返さず、既存の chunk の行の chain も残る（範囲の解決と距離順の読みは chunk の行を読まないので、
+4. 列の削除は表の領域を返さず、既存の chunk の行の chain も残る（範囲の解決と距離順の読みは chunk の行を読まないので、
    この 2 つの速さには影響しない。全文の命中など、行を ID で読む数百行には残る）。更新の後に取り込む行は chain しない。
    領域を返すには、取込を止めて `ALTER TABLE rag_chunks MOVE NOCOMPRESS` と全索引の作り直し（原生索引・全文索引の再作成を
    含む）が要る。この PR の更新は行わない（必要なら別に計画する）。
-4. 失敗したときに戻す（旧版の backend に戻す前に、取込を止めて流す。埋め込みは新しい表から書き戻す）:
+5. 失敗したときに戻す（旧版の backend に戻す前に、取込を止めて流す。埋め込みは新しい表から書き戻す）:
 
    ```sql
    ALTER TABLE rag_chunks ADD (embedding VECTOR(1536, FLOAT32));
