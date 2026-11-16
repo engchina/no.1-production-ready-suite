@@ -19049,10 +19049,16 @@ def _tokens(text: str) -> list[str]:
 
 def oracle_text_terms(query: str, *, settings: Settings | None = None) -> list[str]:
     """全文検索（Oracle Text）の語。検索と同じ分割で、診断に出す（#588）。"""
-    from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query
+    from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query_with_trace
 
-    return tokenize_text_search_query(
-        query, domain_keywords=_text_search_domain_keywords(settings, query)
+    limits = settings or get_settings()
+    return list(
+        tokenize_text_search_query_with_trace(
+            query,
+            domain_keywords=_text_search_domain_keywords(settings, query),
+            max_tokens=limits.rag_text_search_max_tokens,
+            max_query_chars=limits.rag_text_search_max_query_chars,
+        ).tokens
     )
 
 
@@ -19062,13 +19068,19 @@ def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str |
     分割は rag_engine の 1 つの方式（Sudachi の C / A を主に、文字種の区切り・漢字の部分語・
     送り仮名を除いた形を補う。Sudachi が無ければ文字種の区切りだけ）。検索・回答プロファイルの
     ドメインキーワードは 1 語として優先する。語は重み付きの ``ACCUM`` で結ぶ。
+    語と式の文字数の上限は設定（``RAG_TEXT_SEARCH_MAX_TOKENS`` /
+    ``RAG_TEXT_SEARCH_MAX_QUERY_CHARS``）。
     索引の側（WORLD_LEXER）は変えない。
     """
     from rag_engine.retrieval.text_search_tokenizer import oracle_text_query_for_question
 
+    limits = settings or get_settings()
     return (
         oracle_text_query_for_question(
-            query, domain_keywords=_text_search_domain_keywords(settings, query)
+            query,
+            domain_keywords=_text_search_domain_keywords(settings, query),
+            max_tokens=limits.rag_text_search_max_tokens,
+            max_chars=limits.rag_text_search_max_query_chars,
         )
         or None
     )

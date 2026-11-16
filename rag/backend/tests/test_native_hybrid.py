@@ -1348,9 +1348,12 @@ async def test_native_contains_is_built_once_for_all_filter_batches(channel: str
 
 @pytest.mark.asyncio
 async def test_native_contains_keeps_added_aliases_of_a_long_question() -> None:
-    """用語・同義語を足した質問は、長い質問の後ろの別名も全文検索の語に残す(#2163)。"""
+    """用語・同義語を足した質問は、長い質問の後ろの別名も全文検索の語に残す(#2163)。
+
+    重みは主の語と同じ 1 にする(#5157)。
+    """
     aliases = ["合成別名甲", "合成別名乙"]
-    # 語の上限(24 語)を超える、数字を含まない質問(数字は別の段で優先される)。
+    # 語の上限(既定の 24 語)を超える、数字を含まない質問(数字は別の段で優先される)。
     question = "、".join(
         f"{chr(0x4E00 + 97 * index)}{chr(0x4E10 + 131 * index)}の値" for index in range(40)
     )
@@ -1365,7 +1368,8 @@ async def test_native_contains_keeps_added_aliases_of_a_long_question() -> None:
     without_binding, with_binding = await contains(bound=False), await contains(bound=True)
     # 優先が無ければ語の上限で落ちる入力であることも確かめる。
     assert not any(f"{{{alias}}}" in without_binding for alias in aliases)
-    assert all(f"{{{alias}}}*2" in with_binding for alias in aliases)
+    assert all(f"{{{alias}}}" in with_binding for alias in aliases)
+    assert not any(f"{{{alias}}}*" in with_binding for alias in aliases)
 
 
 def test_text_query_keywords_do_not_leak_outside_the_binding() -> None:

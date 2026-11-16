@@ -98,6 +98,9 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "guardrails_output_enabled": resolved_settings.guardrails_output_enabled,
         # 検索の経路と候補の予算(#4141。rerank に進む候補の数が変わる)。
         "hybrid_search_backend": resolved_settings.rag_hybrid_search_backend,
+        # 全文検索の語と式の文字数の上限(#5157)。
+        "text_search_max_tokens": resolved_settings.rag_text_search_max_tokens,
+        "text_search_max_query_chars": resolved_settings.rag_text_search_max_query_chars,
         "native_vector_exact_max_chunks": resolved_settings.rag_native_vector_exact_max_chunks,
         "native_vector_shortage_oversample_factor": (
             resolved_settings.rag_native_vector_shortage_oversample_factor

@@ -236,13 +236,15 @@ def test_compatibility_characters_hit_when_index_text_is_normalized_on_real_orac
 def test_overflow_preserves_explicit_conditions_in_executed_oracle_query(overflow: str) -> None:
     """語数・文字数で省略しても、実際の CONTAINS の bind に保護条件を残す。"""
     from rag_engine.retrieval.text_search_tokenizer import (
-        MAX_ORACLE_TEXT_QUERY_CHARS,
+        DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
         tokenize_text_search_query_with_trace,
     )
 
     keywords = [f"候補語{letter}" for letter in "abcdefghijklmnopqrstuvxyz"]
     prefix = (
-        " ".join(keywords) if overflow == "tokens" else "x" * (MAX_ORACLE_TEXT_QUERY_CHARS + 100)
+        " ".join(keywords)
+        if overflow == "tokens"
+        else "x" * (DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS + 100)
     )
     question = prefix + " ID-789 v2.3 2026/10/27 50以上"
     settings = Settings(rag_domain_keywords=keywords)
@@ -250,7 +252,7 @@ def test_overflow_preserves_explicit_conditions_in_executed_oracle_query(overflo
     query = _oracle_text_query(question, settings=settings)
     assert query == tokenization.oracle_text_query
     assert query is not None
-    assert len(query) <= MAX_ORACLE_TEXT_QUERY_CHARS
+    assert len(query) <= DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS
     assert {"id-789", "v2.3", "2026/10/27", "50"} <= set(tokenization.tokens)
     assert tokenization.truncated
     if overflow == "characters":

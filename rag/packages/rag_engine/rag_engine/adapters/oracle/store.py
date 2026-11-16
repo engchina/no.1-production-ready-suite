@@ -69,8 +69,8 @@ from rag_engine.retrieval.scope import (
 from rag_engine.retrieval.search_diagnostics import search_diagnostics
 from rag_engine.retrieval.search_stages import CHUNK_POOL_LOAD_STAGE, TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_engine.retrieval.text_search_tokenizer import (
-    MAX_ORACLE_TEXT_QUERY_CHARS,
-    MAX_TEXT_SEARCH_TOKENS,
+    DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
+    DEFAULT_TEXT_SEARCH_MAX_TOKENS,
     TextSearchTokenizerConfig,
     oracle_text_query_for_question,
 )
@@ -82,7 +82,6 @@ from rag_engine.retrieval.weighted_rrf import RankedList, RrfWeights, fuse_ranki
 POOL_CACHE_TTL_SECONDS = 120.0
 _pool_cache: dict[tuple[Any, ...], tuple[float, list[StoredChunk]]] = {}
 ADB_EMBEDDING_DIMENSIONS = 1536
-MAX_ORACLE_TEXT_TERMS = MAX_TEXT_SEARCH_TOKENS
 EMBEDDING_MODALITY_TEXT = "text"
 EMBEDDING_MODALITY_IMAGE = "image"
 
@@ -1024,6 +1023,8 @@ def search_adb_hybrid_chunks(
                         query,
                         domain_keywords=[*domain_keywords, *query_keywords.get(dedupe_query_key(query), ())],
                         tokenizer_config=tokenizer_config,
+                        max_tokens=settings.text_search_max_tokens,
+                        max_chars=settings.text_search_max_query_chars,
                     )
                     if not text_query or text_query in seen_text_queries:
                         continue
@@ -1196,14 +1197,20 @@ def oracle_text_query(
     query: str,
     domain_keywords: Sequence[str] | None = None,
     tokenizer_config: TextSearchTokenizerConfig | None = None,
+    *,
+    max_tokens: int = DEFAULT_TEXT_SEARCH_MAX_TOKENS,
+    max_chars: int = DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
 ) -> str:
-    """質問とドメインキーワードから Oracle Text CONTAINS query（重み付きの ACCUM。#588）を構築します。"""
+    """質問とドメインキーワードから Oracle Text CONTAINS query（重み付きの ACCUM。#588）を構築します。
+
+    上限は設定（``text_search_max_tokens`` / ``text_search_max_query_chars``）の値を呼び出し元が渡す。
+    """
     return oracle_text_query_for_question(
         query,
         domain_keywords=domain_keywords,
         config=tokenizer_config,
-        max_tokens=MAX_ORACLE_TEXT_TERMS,
-        max_chars=MAX_ORACLE_TEXT_QUERY_CHARS,
+        max_tokens=max_tokens,
+        max_chars=max_chars,
     )
 
 

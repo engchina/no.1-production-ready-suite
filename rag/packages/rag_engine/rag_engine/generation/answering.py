@@ -236,7 +236,6 @@ from rag_engine.retrieval.task_contract import (
     task_contract,
 )
 from rag_engine.retrieval.text_search_tokenizer import (
-    MAX_TEXT_SEARCH_TOKENS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
     TextSearchTokenizerConfig,
     build_oracle_text_query,
@@ -2565,10 +2564,11 @@ def build_question_text_search_info(
                 variant,
                 domain_keywords=[*domain_keywords, *query_keywords.get(dedupe_query_key(variant), ())],
                 config=config,
-                max_tokens=MAX_TEXT_SEARCH_TOKENS,
+                max_tokens=settings.text_search_max_tokens,
+                max_query_chars=settings.text_search_max_query_chars,
             )
             terms = tuple(tokenization.tokens)
-            oracle_query = build_oracle_text_query(terms, weights=tokenization.weights)
+            oracle_query = build_oracle_text_query(terms, weights=tokenization.weights, max_chars=settings.text_search_max_query_chars)
             if oracle_query and oracle_query not in seen_queries:
                 oracle_queries.append(oracle_query)
                 seen_queries.add(oracle_query)
@@ -3113,7 +3113,11 @@ def answer_question_result(
             overflow_results, overflow_trace = search_overflow_requests(
                 request_text,
                 tokenize=lambda text: tokenize_text_search_query_with_trace(
-                    text, domain_keywords=overflow_keywords, config=overflow_config
+                    text,
+                    domain_keywords=overflow_keywords,
+                    config=overflow_config,
+                    max_tokens=settings.text_search_max_tokens,
+                    max_query_chars=settings.text_search_max_query_chars,
                 ),
                 retrieve=overflow_retrieve,
                 extra_budget=extra_budget,

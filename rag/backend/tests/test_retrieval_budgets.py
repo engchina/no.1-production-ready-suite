@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 from rag_engine.config import get_settings as engine_settings
 from rag_engine.generation.answer_records import _stored_chunk_answer_record
 
@@ -97,6 +98,63 @@ def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path)
         engine_defaults.rerank_min_relevance_score,
         engine_defaults.evidence_budget_chars,
     ) == (140, 200, 60, 0.3, 40000)
+
+
+def test_text_search_limits_reach_the_engine_and_match_env_example(tmp_path: Path) -> None:
+    """全文検索の語と式の文字数の上限(#5157)。
+
+    既定は backend・rag_engine・.env.example で同じで、設定の値が engine に届く。
+    """
+    from rag_engine.retrieval.text_search_tokenizer import (
+        TEXT_SEARCH_MAX_QUERY_CHARS_RANGE,
+        TEXT_SEARCH_MAX_TOKENS_RANGE,
+    )
+
+    example = dict(
+        line.split("=", 1)
+        for line in (BACKEND_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    defaults = Settings()
+    engine_defaults = engine_settings(environ={}, dotenv_path=None)
+    assert (defaults.rag_text_search_max_tokens, defaults.rag_text_search_max_query_chars) == (
+        24,
+        3000,
+    )
+    assert (
+        int(example["RAG_TEXT_SEARCH_MAX_TOKENS"]),
+        int(example["RAG_TEXT_SEARCH_MAX_QUERY_CHARS"]),
+    ) == (24, 3000)
+    assert (
+        engine_defaults.text_search_max_tokens,
+        engine_defaults.text_search_max_query_chars,
+    ) == (
+        24,
+        3000,
+    )
+    engine = build_engine_settings(
+        Settings(rag_text_search_max_tokens=12, rag_text_search_max_query_chars=1500),
+        output_dir=tmp_path,
+    )
+    assert (engine.text_search_max_tokens, engine.text_search_max_query_chars) == (12, 1500)
+    # 範囲は backend と rag_engine で同じ。backend は範囲の外を拒み、rag_engine は範囲に収める。
+    for name, (low, high) in (
+        ("rag_text_search_max_tokens", TEXT_SEARCH_MAX_TOKENS_RANGE),
+        ("rag_text_search_max_query_chars", TEXT_SEARCH_MAX_QUERY_CHARS_RANGE),
+    ):
+        assert getattr(Settings.model_validate({name: low}), name) == low
+        assert getattr(Settings.model_validate({name: high}), name) == high
+        for value in (low - 1, high + 1):
+            with pytest.raises(ValidationError):
+                Settings.model_validate({name: value})
+    clamped = engine_settings(
+        environ={"RAG_TEXT_SEARCH_MAX_TOKENS": "1000", "RAG_TEXT_SEARCH_MAX_QUERY_CHARS": "0"},
+        dotenv_path=None,
+    )
+    assert (clamped.text_search_max_tokens, clamped.text_search_max_query_chars) == (
+        TEXT_SEARCH_MAX_TOKENS_RANGE[1],
+        TEXT_SEARCH_MAX_QUERY_CHARS_RANGE[0],
+    )
 
 
 def test_default_total_budget_includes_enabled_reference_expansion(tmp_path: Path) -> None:

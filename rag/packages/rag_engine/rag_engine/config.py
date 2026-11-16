@@ -15,8 +15,12 @@ if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
 
 from rag_engine.retrieval.text_search_tokenizer import (
+    DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
+    DEFAULT_TEXT_SEARCH_MAX_TOKENS,
     DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
     DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
+    TEXT_SEARCH_MAX_QUERY_CHARS_RANGE,
+    TEXT_SEARCH_MAX_TOKENS_RANGE,
 )
 
 # LLM は本リポジトリのモデル設定(OCI Enterprise AI, OpenAI 互換 Responses API)に一本化する。
@@ -259,6 +263,10 @@ class Settings:
     retrieval_query_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # 検索文ごとに、全文検索の語の上限で優先する語（質問に足した用語・同義語）。ドメインキーワードと同じ段で扱う。
     retrieval_query_keywords: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # 全文検索（Oracle Text）の 1 つの検索文の語の上限と、式の文字数の上限（RAG_TEXT_SEARCH_MAX_TOKENS /
+    # RAG_TEXT_SEARCH_MAX_QUERY_CHARS）。
+    text_search_max_tokens: int = DEFAULT_TEXT_SEARCH_MAX_TOKENS
+    text_search_max_query_chars: int = DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS
     hybrid_search_backend: str = "oracle_hybrid_index"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
@@ -456,6 +464,17 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[7,3]")),
         rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
         rerank_slot_ratio=_slot_ratio(env.get("RAG_RERANK_SLOT_RATIO", "[7,3]")),
+        text_search_max_tokens=max(
+            TEXT_SEARCH_MAX_TOKENS_RANGE[0],
+            min(TEXT_SEARCH_MAX_TOKENS_RANGE[1], _env_int(env, "RAG_TEXT_SEARCH_MAX_TOKENS", DEFAULT_TEXT_SEARCH_MAX_TOKENS)),
+        ),
+        text_search_max_query_chars=max(
+            TEXT_SEARCH_MAX_QUERY_CHARS_RANGE[0],
+            min(
+                TEXT_SEARCH_MAX_QUERY_CHARS_RANGE[1],
+                _env_int(env, "RAG_TEXT_SEARCH_MAX_QUERY_CHARS", DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS),
+            ),
+        ),
         runtime_terms_search_enabled=_env_bool(env, "RUNTIME_TERMS_SEARCH_ENABLED", False),
         runtime_terms_answer_enabled=_env_bool(env, "RUNTIME_TERMS_ANSWER_ENABLED", False),
         original_query_only=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_ONLY", False),

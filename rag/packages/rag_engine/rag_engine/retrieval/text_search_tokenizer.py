@@ -9,7 +9,7 @@
 - ドメインキーワード・質問で明示された列名は 1 語として優先する。
 - Sudachi（辞書）が使えない環境では、自動で文字種の区切りだけにする（文字種の連続を主の語にする）。
 
-Oracle Text の query は語を ``ACCUM`` で結び、語ごとに重み（キーワード 2・主 1・補う語と 1 字の語 0.5）を
+Oracle Text の query は語を ``ACCUM`` で結び、語ごとに重み（キーワードと主 1・補う語と 1 字の語 0.5）を
 付ける。多くの語に当たる文書ほど上になり、補った語だけの一致は軽くなる。索引の側（WORLD_LEXER）は変えない。
 """
 
@@ -40,15 +40,21 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT = "full"
 DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER = "auto"
-MAX_TEXT_SEARCH_TOKENS = 24
-MAX_ORACLE_TEXT_QUERY_CHARS = 3800
+# 語の上限と Oracle Text の式の文字数の上限の既定と範囲。実際の値は設定（RAG_TEXT_SEARCH_MAX_TOKENS /
+# RAG_TEXT_SEARCH_MAX_QUERY_CHARS）から渡す。
+DEFAULT_TEXT_SEARCH_MAX_TOKENS = 24
+TEXT_SEARCH_MAX_TOKENS_RANGE = (1, 100)
+DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS = 3000
+# 上限は Oracle Text の query の大きさの制限に余裕を残した値（これより大きくしない）。
+TEXT_SEARCH_MAX_QUERY_CHARS_RANGE = (100, 3800)
 MAX_TEXT_SEARCH_TOKEN_TRACE = 64
 # 実行記録に出す分割の名前。Sudachi が使えたかどうかで変わる。
 TEXT_SEARCH_TOKENIZER_HYBRID = "sudachi+script"
 TEXT_SEARCH_TOKENIZER_SCRIPT_ONLY = "script"
 
-# 語の重み（Oracle Text の ``term*weight``。0.1〜10）。
-KEYWORD_TERM_WEIGHT = 2.0
+# 語の重み（Oracle Text の ``term*weight``。0.1〜10）。キーワード（ドメインキーワード・足した用語・同義語）は優先して
+# 上限で落ちにくくするが、重みは主の語と同じにする（#5157）。
+KEYWORD_TERM_WEIGHT = 1.0
 PRIMARY_TERM_WEIGHT = 1.0
 SUPPLEMENT_TERM_WEIGHT = 0.5
 
@@ -208,7 +214,7 @@ class TextSearchTokenizationResult:
     truncated_tokens: tuple[str, ...] = ()
     candidate_count: int = 0
     truncated_count: int = 0
-    max_tokens: int = MAX_TEXT_SEARCH_TOKENS
+    max_tokens: int = DEFAULT_TEXT_SEARCH_MAX_TOKENS
     matched_domain_keywords: tuple[str, ...] = ()
     selected_domain_keywords: tuple[str, ...] = ()
     truncated_domain_keywords: tuple[str, ...] = ()
@@ -265,7 +271,7 @@ def tokenize_domain_keyword_candidates(
     text: str,
     *,
     config: TextSearchTokenizerConfig | None = None,
-    max_tokens: int = MAX_TEXT_SEARCH_TOKENS,
+    max_tokens: int = DEFAULT_TEXT_SEARCH_MAX_TOKENS,
 ) -> list[str]:
     """登録候補には本文の名詞の表層形とコードだけを使う。検索用の派生形は作らない。"""
     cfg = normalize_text_search_tokenizer_config(config)
@@ -317,7 +323,7 @@ def tokenize_text_search_query(
     *,
     domain_keywords: Sequence[str] | None = None,
     config: TextSearchTokenizerConfig | None = None,
-    max_tokens: int = MAX_TEXT_SEARCH_TOKENS,
+    max_tokens: int = DEFAULT_TEXT_SEARCH_MAX_TOKENS,
 ) -> list[str]:
     """質問文を Oracle Text query に使う token 列へ変換します。"""
     return list(
@@ -335,8 +341,8 @@ def tokenize_text_search_query_with_trace(
     *,
     domain_keywords: Sequence[str] | None = None,
     config: TextSearchTokenizerConfig | None = None,
-    max_tokens: int = MAX_TEXT_SEARCH_TOKENS,
-    max_query_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS,
+    max_tokens: int = DEFAULT_TEXT_SEARCH_MAX_TOKENS,
+    max_query_chars: int = DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
     _script_only: bool = False,
 ) -> TextSearchTokenizationResult:
     """token 化結果に加えて、語の重みと採用・除外理由の trace を返します。"""
@@ -530,8 +536,8 @@ def oracle_text_query_for_question(
     *,
     domain_keywords: Sequence[str] | None = None,
     config: TextSearchTokenizerConfig | None = None,
-    max_tokens: int = MAX_TEXT_SEARCH_TOKENS,
-    max_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS,
+    max_tokens: int = DEFAULT_TEXT_SEARCH_MAX_TOKENS,
+    max_chars: int = DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
 ) -> str:
     """質問文から、重み付きの ``ACCUM`` の Oracle Text query を作ります。語が無ければ空文字。"""
     result = tokenize_text_search_query_with_trace(
@@ -554,7 +560,7 @@ class OracleTextQueryPlan:
 
 
 def build_oracle_text_query_with_trace(
-    terms: Sequence[str], *, weights: Sequence[float] | None = None, max_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS
+    terms: Sequence[str], *, weights: Sequence[float] | None = None, max_chars: int = DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS
 ) -> OracleTextQueryPlan:
     """長さの枠を守って式を作り、長過ぎる語で後続の短い語まで捨てない。"""
     pieces: list[str] = []
@@ -579,7 +585,7 @@ def build_oracle_text_query_with_trace(
 
 
 def build_oracle_text_query(
-    terms: Sequence[str], *, weights: Sequence[float] | None = None, max_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS
+    terms: Sequence[str], *, weights: Sequence[float] | None = None, max_chars: int = DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS
 ) -> str:
     """重み付き ACCUM の式を実行用と診断用で共通の計画から作る。"""
     return build_oracle_text_query_with_trace(terms, weights=weights, max_chars=max_chars).query

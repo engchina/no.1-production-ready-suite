@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from rag_engine.retrieval.text_search_tokenizer import (
-    MAX_ORACLE_TEXT_QUERY_CHARS,
+    DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS,
     TEXT_SEARCH_TOKENIZER_HYBRID,
     TEXT_SEARCH_TOKENIZER_SCRIPT_ONLY,
     TextSearchTokenizerConfig,
@@ -94,7 +94,7 @@ class TextSearchTokenizerTests(unittest.TestCase):
         terms = [f"語{index:04d}" for index in range(2000)]
         query = build_oracle_text_query(terms, weights=[0.5] * len(terms))
 
-        self.assertLessEqual(len(query), MAX_ORACLE_TEXT_QUERY_CHARS)
+        self.assertLessEqual(len(query), DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS)
         self.assertTrue(query.endswith("*0.5"))
         self.assertLessEqual(len(build_oracle_text_query(terms, max_chars=40)), 40)
 
@@ -137,7 +137,7 @@ class ScriptOnlyFallbackTests(unittest.TestCase):
 
         self.assertEqual(result.tokenizer, TEXT_SEARCH_TOKENIZER_SCRIPT_ONLY)
         self.assertEqual(result.tokens[:2], ("契約区分", "契約"))
-        self.assertEqual(weights["契約区分"], 2.0)  # ドメインキーワードは 1 語として優先する
+        self.assertEqual(weights["契約区分"], 1.0)  # ドメインキーワードは 1 語として優先し、重みは主の語と同じ（#5157）
         self.assertEqual(weights["ora-01555"], 1.0)
         self.assertEqual(weights["ora"], 0.5)  # 型番の部分は補う語
         self.assertEqual(weights["発生"], 1.0)
@@ -174,6 +174,17 @@ class ScriptOnlyFallbackTests(unittest.TestCase):
 
         self.assertEqual(terms, ["伝票様式設定", "拠点倉庫名", "マスタ", "倉庫"])
         self.assertNotIn("確認", terms)
+
+    def test_keywords_keep_priority_with_primary_weight(self):
+        # ドメインキーワード・用語集の語は上限で落ちにくい優先を保ち、重みは主の語と同じ 1 にする（#2163・#5157）。
+        question = "表示 確認 画面 情報 倉庫マスタ登録 伝票様式設定 拠点倉庫名 合成別名"
+        result = tokenize_text_search_query_with_trace(question, domain_keywords=["拠点倉庫名", "合成別名"], max_tokens=2)
+
+        self.assertEqual(dict(zip(result.tokens, result.weights, strict=True)), {"拠点倉庫名": 1.0, "合成別名": 1.0})
+        self.assertEqual(result.oracle_text_query, "{拠点倉庫名} ACCUM {合成別名}")
+        # 優先が無ければ上限で落ちる入力であることも確かめる。
+        without = tokenize_text_search_query_with_trace(question, domain_keywords=["拠点倉庫名"], max_tokens=2)
+        self.assertNotIn("合成別名", without.tokens)
 
     def test_tokenization_trace_exposes_truncated_candidates(self):
         result = tokenize_text_search_query_with_trace(
@@ -335,10 +346,10 @@ class RealSudachiTests(unittest.TestCase):
             self.assertIn(term, weights)
         self.assertEqual(weights["x"], 0.5)  # 1 字の語は軽くする
 
-    def test_domain_keyword_is_one_heavy_term(self):
+    def test_domain_keyword_is_one_prioritized_term(self):
         query = oracle_text_query_for_question("出荷基準年月を修正したい", domain_keywords=["出荷基準年月"])
 
-        self.assertTrue(query.startswith("{出荷基準年月}*2 ACCUM {出荷} ACCUM {基準}"))
+        self.assertTrue(query.startswith("{出荷基準年月} ACCUM {出荷} ACCUM {基準}"))
         self.assertIn("{年月}*0.5", query)
         self.assertIn("{修正}", query)
         self.assertNotIn(" OR ", query)

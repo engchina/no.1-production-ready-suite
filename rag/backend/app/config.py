@@ -1279,6 +1279,26 @@ class Settings(
     rag_hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
         "oracle_hybrid_index"
     )
+    # 範囲は rag_engine の TEXT_SEARCH_MAX_TOKENS_RANGE / TEXT_SEARCH_MAX_QUERY_CHARS_RANGE と同じ。
+    rag_text_search_max_tokens: int = Field(
+        default=24,
+        ge=1,
+        le=100,
+        description=(
+            "全文検索(Oracle Text)の 1 つの検索文に使う語の上限(#5157)。"
+            "両方の検索の実行方式で使う。超えた語は、質問で明示した識別子や数値・"
+            "ドメインキーワードと足した用語・同義語を優先して残す。"
+        ),
+    )
+    rag_text_search_max_query_chars: int = Field(
+        default=3000,
+        ge=100,
+        le=3800,
+        description=(
+            "全文検索(Oracle Text)の 1 つの検索文の式(重み付きの ACCUM)の文字数の上限(#5157)。"
+            "Oracle Text の式の大きさの制限に余裕を残すため 3800 を超えない。"
+        ),
+    )
     rag_native_vector_exact_max_chunks: int = Field(
         default=50000,
         ge=0,
