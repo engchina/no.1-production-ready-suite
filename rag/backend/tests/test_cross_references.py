@@ -944,8 +944,8 @@ async def test_search_skips_reference_expansion_when_disabled_and_search_only_ex
     assert _order(disabled) == ["doc-1:a"]
     assert oracle.reference_calls == []
 
-    # 検索だけ(KB の検索テスト・レシピの検索比較)も回答と同じく拡張し、top_k に数えずに
-    # 同じ規則で合わせる(同じ文書の chunk の順。#5162)。
+    # 検索だけ(KB の検索テスト・レシピの検索比較)も回答と同じ流れで拡張し、top_k に数えずに
+    # 同じ規則で合わせる(同じ文書の chunk の順。#5162)。足した根拠の前後の文脈も補う(#5173)。
     def indexed(chunk: RetrievedChunk, index: int) -> RetrievedChunk:
         return chunk.model_copy(update={"metadata": {**chunk.metadata, "chunk_index": index}})
 
@@ -955,13 +955,21 @@ async def test_search_skips_reference_expansion_when_disabled_and_search_only_ex
     assert [chunk.chunk_id for chunk in retrieved] == ["doc-1:a", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
     assert [chunk.metadata.get(EVIDENCE_EXPANSION_KEY) for chunk in retrieved] == [
         None,
-        True,
+        None,
         True,
     ]
-    # 番号が起点より小さい参照先は、同じ文書の最小の根拠の前に置く。
+    # s0 は足した根拠(s1)の前後の文脈。
+    assert retrieved[1].metadata["evidence_role"] == "neighbor_context"
+    # 番号が起点より小さい参照先は、同じ文書の番号の最小の根拠の前に置く。この合成のデータでは s1 が
+    # 起点の前後の文脈（同じ chunk の組で隣）なので、s0 は s1 の前・起点の後に入る。
     oracle = ReferenceOracle([indexed(anchor, 9)], sections)
     retrieved = await _engine(oracle).retrieve(SearchRequest(query="q", top_k=1))
-    assert [chunk.chunk_id for chunk in retrieved] == ["doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:a"]
+    assert [chunk.chunk_id for chunk in retrieved] == ["doc-1:a", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
+    assert [chunk.metadata.get("evidence_role") for chunk in retrieved] == [
+        "retrieved_anchor",
+        "retrieved_anchor",
+        "neighbor_context",
+    ]
 
 
 async def test_search_continues_when_reference_target_cannot_be_read() -> None:

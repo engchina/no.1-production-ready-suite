@@ -362,18 +362,6 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertIn("request_coverage", searched.generation_trace)
         return search_steps, search_calls
 
-    def test_retrieval_stopping_after_search_skips_crag_and_evidence_completion(self):
-        # 業務 Agent の根拠の取得（complete_evidence=False）は主の文書の検索の後で止める。
-        result, steps, calls = self.run_with_steps(generate_answer=False, complete_evidence=False)
-        self.search.assert_called_once()
-        self.assertEqual(calls, [])
-        self.assertEqual(result.answer_text, "")
-        self.assertEqual(result.answer_flow, generation.STANDARD_ANSWER_FLOW)
-        self.assertEqual(len(result.evidence_items), 1)
-        self.assertEqual(steps[-2:], [(0, generation.EVIDENCE_FLOW_STEP), (1, "文書検索")])
-        with self.assertRaises(ValueError):
-            self.run_answer(complete_evidence=False)
-
     def test_retrieval_without_answer_reports_search_unavailable(self):
         self.search.side_effect = generation.AdbHybridSearchUnavailable("search unavailable")
         result = self.run_answer(generate_answer=False)

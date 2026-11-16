@@ -1,4 +1,4 @@
-"""業務 Agent の根拠の取得（MCP の rag_retrieve_evidence。complete_evidence=False）のテスト。
+"""業務 Agent の根拠の取得（MCP の rag_retrieve_evidence。materialize_images=False）のテスト。
 
 回答のモデルが画像を読めても、根拠の取得では図の画像を切り出さない（図は呼び出し元が
 rag_read_source で読む。#5125）。検索は渡された質問 1 つで通常どおり行う。
@@ -63,7 +63,7 @@ async def test_evidence_retrieval_does_not_crop_images(no_image_crop: None) -> N
         settings=_vision_settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=genai,  # type: ignore[arg-type]
-        complete_evidence=False,
+        materialize_images=False,
     )
 
     response = await pipeline.run(
@@ -83,7 +83,7 @@ async def test_evidence_retrieval_does_not_crop_images(no_image_crop: None) -> N
 async def test_answer_search_still_crops_images(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 対照: 回答の検索（RAG 検索の画面と同じ complete_evidence=True）は切り出しの工程を通る。
+    # 対照: 回答の検索（RAG 検索の画面と同じ materialize_images=True）は切り出しの工程を通る。
     called: list[int] = []
 
     async def record(self: AnswerEngine, chunks: object, state: object) -> None:

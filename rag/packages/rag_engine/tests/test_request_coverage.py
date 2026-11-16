@@ -12,11 +12,7 @@ from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
-from rag_engine.retrieval.request_coverage import (
-    TargetedRetrieval,
-    coverage_targets,
-    select_new_parents,
-)
+from rag_engine.retrieval.request_coverage import coverage_targets
 
 _VOCABULARY = re.compile("請求書|請求|再発行|受注|登録|方法|業務|種別|追加|担当|インボイス|承認|取消|締め|語[0-9]")
 
@@ -72,15 +68,6 @@ def test_parallel_targets_are_assessed_separately() -> None:
     targets = coverage_targets("業務と種別を追加したい。", split)
 
     assert [t.text for t in targets] == ["業務と種別を追加したい。"]
-
-
-def test_select_new_parents_round_robin_skips_existing_and_caps() -> None:
-    first = TargetedRetrieval("Q1", ("a",), (parent("old", "x"), parent("a1", "x"), parent("a2", "x"), parent("a3", "x")))
-    second = TargetedRetrieval("Q2", ("b",), (parent("b1", "x"), parent("a1", "x")))
-
-    selected = select_new_parents([first, second], {"run:old"}, max_chunks=3)
-
-    assert [(rid, p.record.chunk_uid) for rid, p in selected] == [("Q1", "run:a1"), ("Q2", "run:b1"), ("Q1", "run:a2")]
 
 
 def _settings(**changes: Any) -> Any:

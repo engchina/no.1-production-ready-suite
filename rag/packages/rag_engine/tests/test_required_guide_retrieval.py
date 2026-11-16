@@ -26,7 +26,7 @@ def _refs(count):
     )
 
 
-def test_five_reference_bodies_survive_optional_reference_cap(monkeypatch):
+def test_five_reference_bodies_are_all_merged_without_a_reference_cap(monkeypatch):
     from test_guide_steps import _paged
 
     from rag_engine.generation import answering as a
@@ -39,7 +39,7 @@ def test_five_reference_bodies_survive_optional_reference_cap(monkeypatch):
         return context(_paged(doc, doc, 1))
 
     monkeypatch.setattr(a, "build_adb_hybrid_answer_context", retrieve)
-    merged, trace, sources = _cover(context(parent("base")), _settings(guide_step_max_queries=0, guide_reference_max_chunks=4), _refs(5))
+    merged, trace, sources = _cover(context(parent("base")), _settings(guide_step_max_queries=0), _refs(5))
     assert calls == [f"d{i}" for i in range(5)]
     assert {r.chunk_uid for r in merged.records} == {"run:base", *(f"run:d{i}" for i in range(5))}
     assert all(keys for _, _, keys in sources)
@@ -115,16 +115,17 @@ def test_shared_exact_reference_is_one_attempt_but_never_semantic_completion(mon
     assert row["semantic_support"] == "not_run" and row["scope_coverage"] == "unknown"
 
 
-def test_candidate_rejected_from_context_remains_an_explicit_acquisition_gap(monkeypatch):
-    from test_guide_steps import _paged
+def test_candidate_missing_from_the_final_context_remains_an_explicit_acquisition_gap(monkeypatch):
+    """切った候補が補った後の根拠に無い（原文を読めない等）ときは、取得の欠けとして残す（#5173）。"""
+    from test_guide_steps import _paged, _search
 
     from rag_engine.generation import answering as a
 
     _patch_search(monkeypatch, {"reference": context(_paged("new", "d0", 1))})
     original = context(parent("base"))
-    monkeypatch.setattr(a, "merge_evidence", lambda *args, **kwargs: context(_paged("new", "d0", 1)))
-    merged, trace, _ = _cover(original, _settings(guide_step_max_queries=0), _refs(1))
-    assert merged is original
+    guide = _refs(1)
+    results, acquisitions, trace = _search(original, _settings(guide_step_max_queries=0), guide)
+    trace, _ = a._finish_guide_steps(guide, results, acquisitions, trace, original)
     row = trace["required_acquisition"]["targets"][0]
     assert row["candidate_source_ids"] == ["run:new"]
     assert row["retained_source_ids"] == [] and row["retained_body_chars"] == 0

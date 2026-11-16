@@ -1948,7 +1948,7 @@ async def _run_with_progress(
     request: SearchRequest,
     *,
     history: list[Any] | None = None,
-    complete_evidence: bool = True,
+    materialize_images: bool = True,
 ) -> tuple[Any, list[tuple[str, str]], list[str], SavingOracle]:
     """同じ stub の依存で pipeline を 1 回実行し、工程の開始・終了の列と LLM の schema を返す。"""
     import rag_engine.adapters.oci as engine_oci
@@ -1967,7 +1967,7 @@ async def _run_with_progress(
         settings=Settings(),
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
-        complete_evidence=complete_evidence,
+        materialize_images=materialize_images,
     )
     observed: list[tuple[str, str]] = []
 
@@ -2040,39 +2040,51 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
     assert oracle.saved == []
 
 
-async def test_evidence_retrieval_for_agent_stops_after_document_search(
+async def test_answer_retrieve_and_mcp_collect_the_same_evidence_in_the_same_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """業務 Agent の根拠の取得(complete_evidence=False)は主の文書の検索の後で止める(#3506)。
+    """回答・検索だけ(retrieve)・MCP の根拠の取得は同じ流れで同じ根拠を同じ順に集める(#5173)。
 
-    CRAG も使わない。
+    MCP(業務 Agent の根拠の取得)も主の文書の検索の後で止めず、章節の拡張・要求別の補完までの工程を
+    回答・RAG 検索の画面と同じ順に通る。違うのは図の画像を切り出さないことだけ。回答は引用した根拠を
+    先頭に出すので、回答だけの並び(引用した根拠)を除いて比べる。
     """
-    response, steps, schemas, oracle = await _run_with_progress(
+    from app.mcp.tools import mcp_evidence
+
+    chat, chat_steps, _chat_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？"), history=[]
+    )
+    search, search_steps, _search_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？", generate_answer=False)
+    )
+    mcp, mcp_steps, mcp_llm, oracle = await _run_with_progress(
         monkeypatch,
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
-        complete_evidence=False,
+        materialize_images=False,
     )
+    engine = AnswerEngine(
+        Settings(),
+        oracle=SavingOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        materialize_images=False,
+    )
+    retrieved = await engine.retrieve(SearchRequest(query="受注の登録方法は？"))
 
-    assert response.answer == ""
-    assert response.citations
-    assert schemas == []
-    started = [stage for stage, outcome in steps if outcome == "started"]
-    assert started[0] == "evidence"
-    flow = started.index("answer_step:根拠検索フロー")
-    assert started[flow + 1] == "answer_step:文書検索"
-    # 根拠の補い（章節の拡張・要求ごとの根拠の確認）はしない（Agent が MCP でする）。
-    assert "answer_step:要求ごとの根拠の確認" not in started
-    assert "answer_step:根拠確認（1回目）" not in started
-    answer = response.diagnostics.answer or {}
-    assert answer["answer_flow"] == "standard_rag"
-    models = cast(dict[str, Any], answer["models"])
-    assert set(models) == {
-        "llm",
-        "attached_images",
-        "embedding",
-        "rerank",
-    }
-    assert oracle.saved == []
+    used = {c.chunk_id for c in chat.citations if c.metadata.get("evidence_model_used")}
+    chat_order = [c.chunk_id for c in chat.citations if c.chunk_id not in used]
+    assert [c.chunk_id for c in search.citations if c.chunk_id not in used] == chat_order
+    assert [c.chunk_id for c in retrieved if c.chunk_id not in used] == chat_order
+    returned, omitted = mcp_evidence(mcp.citations, 20)
+    assert [c.chunk_id for c in returned if c.chunk_id not in used] == chat_order
+    assert omitted == 0
+    # MCP も同じ工程(章節の拡張・要求別の補完・文脈の補完を含む)を通る。
+    assert mcp_steps == search_steps
+    started = [stage for stage, outcome in mcp_steps if outcome == "started"]
+    assert "answer_step:章節の拡張" in started
+    assert "answer_step:検索上限の要求別補完" in started
+    assert "answer_step:文脈の補完" in started
+    assert mcp.answer == "" and oracle.saved == []
+    assert not {"GroundedDraft", "GroundedDraftWire"}.intersection(mcp_llm)
 
 
 async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -818,7 +818,7 @@ async def _run_search_with_timeout(
     guide_preview: GuidePreview | None = None,
     run_recorder: RunRecorder | None = None,
     scope: AnswerScope | None = None,
-    complete_evidence: bool = True,
+    materialize_images: bool = True,
 ) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
@@ -826,9 +826,9 @@ async def _run_search_with_timeout(
     ``guide_preview`` は業務ガイドの下書きで試す回答（#1288。trace_id に接頭辞を付ける）。
     ``run_recorder`` は RAG 検索の画面の実行を実行履歴に残す（#1890。MCP・下書きは渡さない）。
     ``scope`` は回答前の確認の答え（MCP の rag_search のルールの確認。#2117）。
-    ``complete_evidence=False`` は回答を作らない検索を主の文書の検索の後で止める（MCP の
-    rag_retrieve_evidence。根拠の補いと図の画像は呼び出し元が読む。#3506・#5125）。RAG 検索の
-    画面は既定の True で、チャットと同じ流れで根拠を集めて回答の生成の手前で止める。
+    ``materialize_images=False`` は根拠の図の画像を切り出さない（MCP の rag_retrieve_evidence。
+    図は呼び出し元が rag_read_source で読む。#5125）。根拠を集める流れは回答・RAG 検索の画面と
+    同じ（#5173）。
     """
     (request, settings, applied_kb, applied_view), query_guardrail = await _checked_query_context(
         request, get_settings(), guide_preview=guide_preview
@@ -857,7 +857,7 @@ async def _run_search_with_timeout(
                 run_recorder=run_recorder,
                 scope=scope,
                 answer_notice=current_answer_notice,
-                complete_evidence=complete_evidence,
+                materialize_images=materialize_images,
             ).run(
                 request,
                 trace_id=trace_id,

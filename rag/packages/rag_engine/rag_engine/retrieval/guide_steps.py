@@ -374,96 +374,6 @@ def _key(parent: Any) -> str:
     return _key_of(getattr(parent, "record", None))
 
 
-@dataclass(frozen=True)
-class StepSelection:
-    """手順の検索の結果から選んだ根拠。"""
-
-    # (step_id, 種類, parent)。回答の材料に無く、足す根拠。
-    added: tuple[tuple[str, SearchKind, Any], ...]
-    # 手順 id → その手順の根拠の key（既存の根拠のうち手順の検索で当たったものと、足した根拠）。
-    step_sources: Mapping[str, tuple[str, ...]]
-
-
-def select_step_parents(
-    results: Sequence[StepSearch],
-    existing_keys: Iterable[str],
-    *,
-    chunks_per_step: int,
-    reference_max_chunks: int,
-) -> StepSelection:
-    """手順ごとの検索の結果から、手順の根拠を選ぶ。
-
-    - 絞らない検索: 各検索の上位 ``chunks_per_step`` 件を手順の根拠にする（既にある根拠はそのまま手順に紐づけ、
-      無い根拠を足す）。
-    - 頁に絞った検索: 参照の頁の根拠は順位に関係なく入れる。各検索の上位から手順の間で交互に、合計
-      ``reference_max_chunks`` 件まで（既にある根拠は数えずに手順に紐づける）。
-    """
-    existing = set(existing_keys)
-    seen = set(existing)
-    added: list[tuple[str, SearchKind, Any]] = []
-    sources: dict[str, list[str]] = {}
-
-    def link(step_id: str, key: str) -> None:
-        keys = sources.setdefault(step_id, [])
-        if key not in keys:
-            keys.append(key)
-
-    # 必須の最少一候補は先に確保する。任意の追加候補だけを種類別上限で制限する。
-    for result in results:
-        if result.lane != "required":
-            continue
-        for parent in result.parents[:1]:
-            key = _key(parent)
-            if not key:
-                continue
-            for owner in result.owner_ids or (result.step_id,):
-                link(owner, key)
-            if key not in seen:
-                seen.add(key)
-                added.append((result.step_id, result.kind, parent))
-
-    per_step = max(0, int(chunks_per_step))
-    for result in results:
-        if result.kind != "step":
-            continue
-        taken = 0
-        for parent in result.parents:
-            if taken >= per_step:
-                break
-            key = _key(parent)
-            if not key:
-                continue
-            taken += 1
-            for owner in result.owner_ids or (result.step_id,):
-                link(owner, key)
-            if key not in seen:
-                seen.add(key)
-                added.append((result.step_id, "step", parent))
-
-    queues = [list(result.parents) for result in results if result.kind == "reference"]
-    owners = [result.owner_ids or (result.step_id,) for result in results if result.kind == "reference"]
-    pinned = 0
-    limit = max(0, int(reference_max_chunks))
-    while pinned < limit and any(queues):
-        for index, queue in enumerate(queues):
-            while queue:
-                parent = queue.pop(0)
-                key = _key(parent)
-                if not key:
-                    continue
-                for owner in owners[index]:
-                    link(owner, key)
-                if key in seen:
-                    continue
-                seen.add(key)
-                added.append((owners[index][0], "reference", parent))
-                pinned += 1
-                break
-            if pinned >= limit:
-                break
-    return StepSelection(added=tuple(added), step_sources={step_id: tuple(keys) for step_id, keys in sources.items()})
-
-
 __all__ = [
     "GUIDE_STEP_TRACE_SCHEMA_VERSION",
     "GuidePageRange",
@@ -476,11 +386,9 @@ __all__ = [
     "GuideStep",
     "GuideStepReference",
     "StepSearch",
-    "StepSelection",
     "planned_searches",
     "reference_step_sources",
     "run_step_searches",
-    "select_step_parents",
     "step_queries",
     "unsearched_steps",
 ]

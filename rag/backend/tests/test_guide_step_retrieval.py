@@ -216,7 +216,6 @@ def test_build_engine_settings_passes_guide_step_settings(tmp_path: Any) -> None
             rag_guide_step_retrieval_enabled=False,
             rag_guide_step_max_queries=2,
             rag_guide_step_chunks_per_step=3,
-            rag_guide_reference_max_chunks=1,
             rag_guide_step_deadline_seconds=2.5,
             rag_extra_retrieval_max_queries=5,
         ),
@@ -229,7 +228,7 @@ def test_build_engine_settings_passes_guide_step_settings(tmp_path: Any) -> None
     assert default.guide_step_deadline_seconds == 60.0
     assert custom.guide_step_retrieval_enabled is False
     assert (custom.guide_step_max_queries, custom.guide_step_chunks_per_step) == (2, 3)
-    assert (custom.guide_reference_max_chunks, custom.guide_step_deadline_seconds) == (1, 2.5)
+    assert custom.guide_step_deadline_seconds == 2.5
     assert custom.extra_retrieval_max_queries == 5
 
 

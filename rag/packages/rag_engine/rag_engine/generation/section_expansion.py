@@ -17,9 +17,8 @@
   関連度の順でより上の兄弟の章節を全体で読んだ後に予算で読めなかった章節のうち、どの起点の chunk も含まないものは、
   回答に出さず、診断（``unread_omitted``）にだけ残す（#2816。質問に合わせて広げた参考の
   範囲で、読めなくても当たった章節の読了は崩れない）。読取の失敗は、どの章節でも回答に出す。
-- 1 回の回答の中で後に別の起点から広げる段（業務ガイドの手順ごとの検索の後など）があるときは、呼び出し元が
-  ``reserve_tokens`` で残す token を渡し、先の段はその分を使わずに止める（#2816）。後の段は、前の段で起点に
-  しなかった起点の章節を先に広げる。
+- 回答の流れは、補いの検索（要求別の補完・業務ガイドの手順）の根拠を主の検索の根拠に合わせた後に 1 回だけ広げる
+  （#5173）。所有の章節を読めなかった起点は、呼び出し元が次の補い方（親 → 前後）で補う。
 - 呼び出し元が先に読む範囲（``priority``。業務ガイドの手順の参照の文書と頁）を渡したら、参照の頁に重なる起点 →
   参照の文書の起点 → その他の起点の順に広げる（#2828）。参照の文書の起点があれば、その他の文書の起点は段の外に
   置き（親へ上がらない）、所有の章節だけを止めた後に残りの予算で読む。読めなくても回答に出さず、診断
@@ -272,18 +271,14 @@ class SectionExpansionLimits:
 
     max_levels: int
     input_tokens: int
-    # 後に別の起点から広げる段があるとき、先の段で使わずに残す token（``input_tokens`` に対する割合から。#2816）。
-    followup_reserve_tokens: int = 0
 
     @classmethod
     def from_settings(cls, settings: Any) -> SectionExpansionLimits:
         percent = max(1, min(100, int(getattr(settings, "section_expansion_input_token_percent", 50) or 50)))
         input_tokens = model_input_tokens(settings) * percent // 100
-        reserve = max(0, min(50, int(getattr(settings, "section_expansion_followup_reserve_percent", 20) or 0)))
         return cls(
             max_levels=max(0, int(getattr(settings, "section_expansion_max_levels", 4))),
             input_tokens=input_tokens,
-            followup_reserve_tokens=input_tokens * reserve // 100,
         )
 
 
@@ -396,8 +391,6 @@ class SectionReader:
     _groups: dict[tuple[str, str, str], list[ContextParentEvidence]] = field(default_factory=dict)
     failures: dict[tuple[str, str, str], str] = field(default_factory=dict)
     read_events: list[dict[str, Any]] = field(default_factory=list)
-    # 前の呼び出しで起点にした章節（文書・chunk_set・所有の章節）。後の呼び出しは新しい起点を先に広げる（#2816）。
-    seeded_owners: set[tuple[str, str, str]] = field(default_factory=set)
 
     def section_key(self, outline: SectionOutline, section: SectionInfo) -> tuple[str, str, str]:
         return outline.document_id, outline.chunk_set_id, section.section_id
@@ -622,18 +615,16 @@ def expand_sections(
     deadline_remaining: Callable[[], float | None] = lambda: None,
     clock: Callable[[], float] = monotonic,
     reader: SectionReader | None = None,
-    reserve_tokens: int = 0,
     priority: Sequence[PriorityRange] = (),
 ) -> SectionExpansionResult:
     """当たった chunk の章節から段階的に広げ、読む範囲までの原文を文脈に足す。
 
     ``started_at`` は回答の開始の時刻（``clock`` の値）、
-    ``deadline_remaining`` は回答の期限までの残りの秒数（無ければ None）。``reserve_tokens`` は、後の段のために
-    この呼び出しで使わずに残す入力 token（#2816）。``priority`` は先に読む範囲（業務ガイドの手順の参照。#2828）。
+    ``deadline_remaining`` は回答の期限までの残りの秒数（無ければ None）。``priority`` は先に読む範囲
+    （業務ガイドの手順の参照。#2828）。
     """
     limits = SectionExpansionLimits.from_settings(settings)
-    reserved = max(0, min(int(reserve_tokens or 0), limits.input_tokens))
-    budget = limits.input_tokens - reserved
+    budget = limits.input_tokens
     start = clock() if started_at is None else started_at
     trace: dict[str, Any] = {
         "enabled": True,
@@ -641,8 +632,6 @@ def expand_sections(
         "input_token_limit": limits.input_tokens,
         "levels": [],
     }
-    if reserved:
-        trace["reserved_tokens"] = reserved
     chains: list[_Chain] = []
     # 先に読む範囲があるとき、範囲の外の文書の起点（段の外。所有の章節だけを最後に読む。#2828）。
     deferred: list[_Chain] = []
@@ -715,15 +704,9 @@ def expand_sections(
         return finish(STOP_NO_SECTIONS)
 
     reader = reader or SectionReader(read_chunks=section_chunks, known_ids=set())
-    # 先に読む範囲（業務ガイドの手順の参照）に当たる起点を先に、前の呼び出しで起点にしなかった起点（後の段の新しい
-    # 根拠）をその次に広げる（#2828・#2816。同じ段の中の並び）。
+    # 先に読む範囲（業務ガイドの手順の参照）に当たる起点を先に広げる（#2828。同じ段の中の並び）。
     ranks = {id(chain): _priority_rank(chain.outline, priority) for chain in chains}
-    chains.sort(
-        key=lambda c: (
-            ranks[id(c)],
-            (c.outline.document_id, c.outline.chunk_set_id, c.outline.owner_section_id) in reader.seeded_owners,
-        )
-    )
+    chains.sort(key=lambda c: ranks[id(c)])
     if any(rank < _RANK_OTHER for rank in ranks.values()):
         # 範囲の外の文書の起点は段の外に置き、範囲の起点の章節を先に読む（#2828）。
         deferred = [chain for chain in chains if ranks[id(chain)] == _RANK_OTHER]
@@ -733,7 +716,6 @@ def expand_sections(
                 {"document_id": c.outline.document_id, "chunk_set_id": c.outline.chunk_set_id, "section_id": c.outline.owner_section_id}
                 for c in deferred
             ]
-    reader.seeded_owners.update(owners)
     reader.known_ids = _context_chunk_ids(context)
     reader.known_texts = {_record_key(record): str(getattr(record, "text", "") or "") for record in context.records}
     # 再検索の組立で本文が短縮された場合、前の段の読了をそのまま再利用しない。

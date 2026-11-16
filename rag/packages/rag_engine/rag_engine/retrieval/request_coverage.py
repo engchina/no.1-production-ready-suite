@@ -17,7 +17,7 @@ class CoverageBudget:
     enabled: bool = True
     # 再検索する要求の数（1 要求 1 回）。
     max_queries: int = 2
-    # 再検索で回答の材料に足す根拠（親）の数の合計。
+    # 再検索で回答の材料に足す根拠の数の合計（要求ごとの検索の top_k は、これを要求の数で割った件数。#5173）。
     max_chunks: int = 4
     # 再検索の全体の期限（秒）。期限を過ぎたら次の要求の検索を始めない（実行中の 1 回は中断しない）。
     deadline_seconds: float = 10.0
@@ -88,69 +88,9 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
     return targets
 
 
-def _record_key(record: Any) -> str:
-    return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
-
-
-@dataclass(frozen=True)
-class TargetedRetrieval:
-    """欠けた要求 1 件の再検索の結果。"""
-
-    request_id: str
-    queries: tuple[str, ...]
-    parents: tuple[Any, ...]  # ContextParentEvidence（順位順）
-    expansion_records: tuple[Any, ...] = ()
-    elapsed_ms: int = 0
-    # 失敗したときの例外の型の名前（例外の文は入れない。#3284）。
-    error: str = ""
-    # この要求に確保する根拠の数（小問）。None は欠けた要求の共有の枠（max_chunks）から取る。
-    chunk_cap: int | None = None
-    reused: bool = False
-
-
-def select_new_parents(results: Sequence[TargetedRetrieval], existing_keys: Iterable[str], max_chunks: int) -> list[tuple[str, Any]]:
-    """再検索の結果から、回答の材料に無い根拠（親）を要求ごとに順番に 1 件ずつ選ぶ。戻り値は (request_id, parent)。
-
-    1 つの要求の結果が予算を使い切らないよう、各要求の最上位から交互に取る。`chunk_cap` のある要求（小問）は
-    その件数まで確保し、無い要求（欠けた要求）は合わせて max_chunks 件までにする。
-    """
-    seen = set(existing_keys)
-    queues = [[(result.request_id, parent) for parent in result.parents] for result in results]
-    caps = [result.chunk_cap for result in results]
-    taken = [0] * len(results)
-    shared = 0
-    selected: list[tuple[str, Any]] = []
-
-    def open_(index: int) -> bool:
-        cap = caps[index]
-        return taken[index] < cap if cap is not None else shared < max_chunks
-
-    progress = True
-    while progress:
-        progress = False
-        for index, queue in enumerate(queues):
-            if not open_(index):
-                continue
-            while queue:
-                request_id, parent = queue.pop(0)
-                key = _record_key(parent.record)
-                if not key or key in seen:
-                    continue
-                seen.add(key)
-                selected.append((request_id, parent))
-                taken[index] += 1
-                if caps[index] is None:
-                    shared += 1
-                progress = True
-                break
-    return selected
-
-
 __all__ = [
     "CoverageBudget",
     "CoverageUsage",
     "RequestTarget",
-    "TargetedRetrieval",
     "coverage_targets",
-    "select_new_parents",
 ]

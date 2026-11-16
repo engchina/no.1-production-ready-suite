@@ -442,7 +442,10 @@ def test_expansion_metadata_marks_role_reason() -> None:
 
 
 def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
-    """MCP の根拠の並びで、実体からたどった根拠は検索で当たった根拠と同じく順位の順（#1348）。"""
+    """上限で残す根拠を選ぶとき、実体からたどった根拠は検索で当たった根拠と同じく順位の順（#1348）。
+
+    返す並びは citations の順のまま（#5173）。
+    """
     from app.mcp.tools import mcp_evidence
 
     def chunk(chunk_id: str, role: str, rank: int | None) -> RetrievedChunk:
@@ -453,17 +456,15 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
             document_id="d", chunk_id=chunk_id, text=chunk_id, score=0.0, metadata=metadata
         )
 
-    ordered, omitted = mcp_evidence(
-        [
-            chunk("context", "neighbor_context", None),
-            chunk("anchor-2", "retrieved_anchor", 2),
-            chunk("entity-4", ENTITY_EXPANSION_ROLE, 4),
-            chunk("anchor-1", "retrieved_anchor", 1),
-        ]
-    )
-    assert omitted == 0
-
-    assert [item.chunk_id for item in ordered] == ["anchor-1", "anchor-2", "entity-4", "context"]
+    citations = [
+        chunk("context", "neighbor_context", None),
+        chunk("anchor-2", "retrieved_anchor", 2),
+        chunk("entity-4", ENTITY_EXPANSION_ROLE, 4),
+        chunk("anchor-1", "retrieved_anchor", 1),
+    ]
+    ordered, omitted = mcp_evidence(citations, 3)
+    assert omitted == 1
+    assert [item.chunk_id for item in ordered] == ["anchor-2", "entity-4", "anchor-1"]
 
 
 # ---- 設定・レシピ ----
@@ -995,19 +996,20 @@ def test_mcp_evidence_does_not_count_added_expansions_in_the_limit() -> None:
 
     returned, omitted = mcp_evidence(citations, 20)
 
-    # 上限 20 件は当たった chunk だけで埋め、拡張の根拠は同じ文書が無いので最後
-    # （文書ごと・chunk の順）。
+    # 上限 20 件は当たった chunk だけで埋め、拡張の根拠は上限の外にすべて返す。並びは citations の
+    # 順のまま（回答の流れが合わせた位置。#5173）。
     assert _ids_of(returned) == [
         *(f"hit-{n}" for n in range(1, 21)),
-        "org-code",
         "org-approver",
         "ledger-row",
+        "org-code",
     ]
     # 上限で返さなかった根拠の数に、拡張の根拠は入らない。
     assert omitted == len(citations) - 3 - 20
 
 
-def test_mcp_evidence_inserts_added_expansion_in_document_order() -> None:
+def test_mcp_evidence_keeps_added_expansions_where_the_answer_flow_placed_them() -> None:
+    """拡張の根拠の位置は回答の流れ（context の組み立て）が決める。MCP は並べ直さない（#5173）。"""
     from app.mcp.tools import mcp_evidence
 
     hits = [
@@ -1020,11 +1022,10 @@ def test_mcp_evidence_inserts_added_expansion_in_document_order() -> None:
 
     returned, omitted = mcp_evidence([*hits, between, before], 2)
 
-    # 上限 2 件（a2・b1）の後に合わせる: a1 は同じ文書の最小の前、a3 は a2 の後。
-    assert _ids_of(returned) == ["a1", "a2", "a3", "b1"]
+    # 上限 2 件（a2・b1）と、上限に数えない拡張の根拠を citations の順で返す。
+    assert _ids_of(returned) == ["a2", "b1", "a3", "a1"]
     assert omitted == 1
-    # 上限を渡さないときも同じ規則。
-    assert _ids_of(mcp_evidence([*hits, between, before])[0]) == ["a1", "a2", "a3", "b1", "a5"]
+    assert _ids_of(mcp_evidence([*hits, between, before])[0]) == ["a2", "b1", "a5", "a3", "a1"]
 
 
 def test_mcp_evidence_keeps_marked_hits_inside_the_ranked_order() -> None:

@@ -18,7 +18,7 @@ Oracle Text の式は語の上限（`RAG_TEXT_SEARCH_MAX_TOKENS`。既定 24 語
 | `unsearched_query_overflow` | 1 要求と共有条件だけでも保護した語が収まらず未検索 |
 | `unsearched_tokenization_failed` | 語の抽出が失敗して未検索 |
 
-既存の根拠を追い出す統合は採用せず、追加する根拠数にも既存の不足補查の上限を使う。新たに採用した ID は `added_chunk_ids` に記録する。
+要求ごとの検索は、主の検索と同じく「検索 → rerank → 関連度の下限 → 文書ごとの上限 → `top_k` で切る」だけを行う（#5173）。`top_k` は、足す根拠の合計（`RAG_REQUEST_COVERAGE_MAX_CHUNKS`）を要求の数で割った件数（切り上げ）と、合計の残りの小さい方（記録の `top_k`）。主の検索の根拠にある候補は合計に数えない（`new_candidates`）。切った根拠（`candidate_chunk_ids`）は、検索拡張の根拠と同じ規則で主の検索の根拠へ合わせる（並びにある・含まれる → 印 `query_overflow` だけ／同じ文書 → 文書の chunk の順の位置／無い → 最後）。主の検索の根拠は外さず（外れる結果は使わず `rejected` に残す）、合わせた後に文脈の補完（章節の拡張を含む）を 1 回だけ行う。新たに足した根拠（印だけのものを除く）の ID は `added_chunk_ids` に記録する。業務ガイドの手順ごとの検索も同じ切りと合わせ込み（[rag-engine.md の「補いの検索と 3 つの経路」](./rag-engine.md#補いの検索と-3-つの経路5173)）。回答・検索だけ・MCP の `rag_retrieve_evidence` のどの経路でも行う。
 
 原質問だけで検索する設定（`RETRIEVAL_ORIGINAL_QUERY_ONLY`）では追加の分割を行わない（`skipped=original_query_only`）。一つの要求と共有条件の保護語だけで上限を超える場合は、条件の組み合わせを推測して検索しない。未検索は「資料に無い」と扱わない。
 

@@ -79,7 +79,6 @@ from rag_engine.knowledge.runtime_knowledge import (
     MAX_MATCHED_TERMS,
     RuntimeTerm,
 )
-from rag_engine.retrieval.expansion_merge import merge_expansions
 from rag_parser_core.extraction import is_derived_content
 from rag_parser_core.parsed_table import ROW_BASIS_PARSED_TABLE
 from rag_parser_core.sheet_records import (
@@ -597,8 +596,8 @@ class SearchScopeInput(BaseModel):
         ge=1,
         le=EVIDENCE_LIMIT_MAX,
         description=(
-            "返す根拠の最大件数。回答に使った根拠、検索で当たった根拠（関連度の順）、前後の文脈の"
-            "順に並べてから切る。"
+            "返す根拠の最大件数。超えるときは、回答に使った根拠、検索で当たった根拠（関連度の順）、"
+            "前後の文脈の順に残す（並びは evidence の順のまま）。"
         ),
     )
     conditions: dict[str, str] = Field(
@@ -693,7 +692,8 @@ class RetrieveEvidenceInput(ApprovedFaqChoiceInput):
         ge=1,
         le=EVIDENCE_LIMIT_MAX,
         description=(
-            "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。"
+            "返す根拠の最大件数。超えるときは、検索で当たった根拠（関連度の順）、前後の文脈の順に"
+            "残す（並びは evidence の順のまま）。"
             "省略時は設定の検索する件数（top_k）を基準に、この件数の上限まで返し、"
             "検索で当たった根拠を全部返す。"
         ),
@@ -1771,10 +1771,9 @@ class SearchOutput(VersionedOutput):
     evidence: list[RagEvidence] = Field(
         description=(
             "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、"
-            "検索で当たった根拠"
-            "（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、"
-            "前後の文脈（neighbor_context など）の順。検索の拡張で加えた根拠は evidence_limit に"
-            "数えず、同じ文書の根拠があればその文書の中の順の位置に、無ければ最後に置く。"
+            "残りは検索で当たった根拠（role=retrieved_anchor と、実体からたどった"
+            " role=entity_expansion）と前後の文脈（neighbor_context など）を、同じ文書の続く箇所"
+            "ごとにまとめて関連度の順に並べる。検索の拡張で加えた根拠は evidence_limit に数えない。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -1967,10 +1966,10 @@ class RetrieveEvidenceOutput(VersionedOutput):
     zero_evidence: ZeroEvidence | None = Field(default=None, description=ZERO_EVIDENCE_DESCRIPTION)
     evidence: list[RagEvidence] = Field(
         description=(
-            "検索で当たった根拠（role=retrieved_anchor・entity_expansion。関連度＝rerank の順）を"
-            "先に、前後の文脈（neighbor_context など）をその後ろに並べる。検索の拡張で加えた根拠は"
-            "evidence_limit に数えず、同じ文書の根拠があればその文書の中の順の位置に、"
-            "無ければ最後に置く。回答は作らないので used_in_answer は false。"
+            "検索で当たった根拠（role=retrieved_anchor・entity_expansion）と前後の文脈"
+            "（neighbor_context など）を、同じ文書の続く箇所ごとにまとめて関連度の順に並べる。"
+            "検索の拡張で加えた根拠は evidence_limit に数えない。回答は作らないので used_in_answer"
+            " は false。"
         )
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
@@ -2587,11 +2586,12 @@ def _linked_contexts(ordered: Sequence[RetrievedChunk], tiers: Sequence[int]) ->
 def mcp_hit_order(
     citations: Sequence[RetrievedChunk], limit: int | None = None
 ) -> list[RetrievedChunk]:
-    """拡張で足した根拠を除いた根拠の並び（evidence_limit で切る前。#1348）。
+    """evidence_limit を超えるときに残す根拠を選ぶ順（拡張で足した根拠を除く。#1348）。
 
     検索の結果（citations）は、文書ごとのかたまりの中を文書の順（前後の文脈を含む）に並べている
     （画面の検索結果・回答の文脈の並び）。そのまま上限で切ると、上位の文書の前置き・前の章で枠が
-    埋まり、検索で当たった chunk が落ちる。MCP では次の順にしてから切る。
+    埋まり、検索で当たった chunk が落ちる。MCP では次の順で残す根拠を選ぶ（返す並びは citations の
+    順のまま。``mcp_evidence``）。
 
     1. 回答に使った根拠（used_in_answer）。回答に使った順（citations の順）を保つ。
     2. 検索で当たった chunk（role=retrieved_anchor・entity_expansion と、役割の無い根拠）。関連度の
@@ -2650,26 +2650,20 @@ def mcp_hit_order(
 def mcp_evidence(
     citations: Sequence[RetrievedChunk], limit: int | None = None
 ) -> tuple[list[RetrievedChunk], int]:
-    """MCP が返す根拠と、上限で返さなかった根拠の件数（#1348・#5162）。
+    """MCP が返す根拠と、上限で返さなかった根拠の件数（#1348・#5162・#5173）。
 
-    検索拡張（参照先・実体・関係情報）で最後の根拠の並びに足した根拠（``evidence_expansion``）は
-    evidence_limit に数えない。拡張の根拠を除いた根拠を ``mcp_hit_order`` の順で上限まで切った後に、
-    回答・検索だけの経路と同じ規則（``rag_engine.retrieval.expansion_merge.merge_expansions``）で
-    1 回だけ合わせる（同じ文書の根拠があれば文書の chunk の順の位置、無ければ最後）。
+    並びは回答・RAG 検索の画面・検索だけと同じ根拠の並び（citations の順）のまま変えない。
+    evidence_limit を超えるときだけ、残す根拠を ``mcp_hit_order`` の順（回答に使った根拠 → 検索で
+    当たった根拠（関連度の順）→ 前後の文脈）で選ぶ。検索拡張・補いの検索で並びに足した根拠
+    （``evidence_expansion``）は上限に数えず、すべて返す。
     """
     added = [chunk for chunk in citations if _is_added_expansion(chunk)]
-    ordered = mcp_hit_order([chunk for chunk in citations if not _is_added_expansion(chunk)], limit)
+    ranked = mcp_hit_order([chunk for chunk in citations if not _is_added_expansion(chunk)], limit)
     head, rest = (
-        (ordered[:limit], ordered[limit:]) if limit is not None and limit > 0 else (ordered, [])
+        (ranked[:limit], ranked[limit:]) if limit is not None and limit > 0 else (ranked, [])
     )
-    merged = merge_expansions(
-        head,
-        added,
-        key=lambda chunk: chunk.chunk_id,
-        document=lambda chunk: chunk.document_id,
-        seq=lambda chunk: _metadata_int(chunk.metadata, "chunk_index") or 0,
-    )
-    return merged, len(rest)
+    keep = {id(chunk) for chunk in (*head, *added)}
+    return [chunk for chunk in citations if id(chunk) in keep], len(rest)
 
 
 def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
@@ -4400,10 +4394,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
-        # 検索の画面・チャットと同じ流れで質問の理解・用語の別名・文書の検索（rerank を含む）
-        # まで行い、その後の根拠の補い（章節の拡張・要求ごとの探し直し）・図の画像の切り出しと
-        # 回答の生成はしない（補いは Agent が rag_read_section など、図は rag_read_source で
-        # 行う。#3506・#5125）。
+        # 検索の画面・チャットと同じ流れ（主の検索 → rerank → 切る → 検索拡張・補いの検索の
+        # 合わせ込み → 文脈の補完（章節の拡張を含む））で根拠を集める（#5173）。図の画像の切り出しと
+        # 回答の生成はしない（図は Agent が rag_read_source で読む。#5125）。
         request = _search_request(arguments)
         enforce_rate_limit("search", http_request)
         # 承認済み FAQ（#5136）は rag_search と同じ入口と処理: 候補があれば根拠を検索せずに候補
@@ -4422,7 +4415,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         if arguments.approved_faq_id is not None:
             return await _approved_faq_evidence(request)
         request = request.model_copy(update={"generate_answer": False})
-        result = await _run_search(request, complete_evidence=False)
+        result = await _run_search(request, materialize_images=False)
         # 回答を作る呼び出し元へ、query に当たる承認済みの用語の説明を渡す（#2701）。
         knowledge = await _profile_knowledge(arguments)
         logger.info(
@@ -4430,8 +4423,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             extra={"trace_id": result.trace_id, **_profile_knowledge_log(knowledge)},
         )
         limit = retrieve_evidence_limit(arguments)
-        # 検索で当たった chunk を関連度の順に先に、前後の文脈を後ろにしてから切り、検索拡張の根拠は
-        # 上限に数えずに合わせる（#1348・#5162）。
+        # 並びは回答と同じまま、上限を超えるときは当たった chunk を先に残す。検索拡張・補いの検索の
+        # 根拠は上限に数えない（#1348・#5162・#5173）。
         returned, omitted = mcp_evidence(result.citations, limit)
         citations = await _with_extraction_recipe_ids(None, returned)
         sections = await _chunk_sections(citations)

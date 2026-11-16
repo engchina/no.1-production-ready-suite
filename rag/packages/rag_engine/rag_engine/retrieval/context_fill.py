@@ -1,8 +1,10 @@
 """文脈の補完: 起点ごとに補い方を 1 つ選び、補った後に重なる根拠を 1 回でまとめる（#5168）。
 
-rerank の後に決まった根拠（起点。検索拡張の根拠 #5162 も同じ）ごとに、次の順で補い方を 1 つだけ選ぶ。
+rerank の後に決まった根拠（起点。検索拡張の根拠 #5162・補いの検索の根拠 #5173 も同じ）ごとに、次の順で補い方を
+1 つだけ選ぶ。
 
 1. 章節の対応がある: 章節で補う（``section_expansion``。入力の予算・段の上限は章節の拡張の設定のまま）。
+   章節の拡張が予算・時間の上限で所有の章節を読めなかった起点は、次の補い方（親 → 前後）で補う（#5173）。
 2. 章節が無い親子分割（small-to-big）: 親の本文で補う。
 3. どちらも無い: 前後の chunk を N 件ずつ（``RAG_NEIGHBOR_CHILD_COUNT``。1〜5）。
 
@@ -28,7 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, is_dataclass, replace
 from typing import Any, Literal
 
-from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, EXPANSION_KEYS
+from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, MERGE_MARK_KEYS
 
 ContextFillMode = Literal["section", "parent", "neighbors"]
 FILL_SECTION: ContextFillMode = "section"
@@ -85,7 +87,7 @@ def _merge_child(existing: Any, incoming: Any) -> Any:
 
 
 def _with_marks(record: Any, source: Any) -> Any:
-    marks = {key: value for key, value in (getattr(source, "metadata", None) or {}).items() if key in EXPANSION_KEYS}
+    marks = {key: value for key, value in (getattr(source, "metadata", None) or {}).items() if key in MERGE_MARK_KEYS}
     current = getattr(record, "metadata", None) or {}
     if not marks or all(key in current for key in marks) or not is_dataclass(record) or isinstance(record, type):
         return record

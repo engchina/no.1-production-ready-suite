@@ -221,6 +221,35 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5173 補いの検索を主の検索と同じ切りと合わせ込みにし、3 つの経路の根拠の流れを 1 つにする）
+
+語数上限の要求別の補完・業務ガイドの手順ごとの検索を、検索ごとに「検索 → rerank → 関連度の下限 → `top_k` で切る」に
+し、切った根拠を検索拡張と同じ規則で主の検索の根拠へ合わせてから文脈を補うようにした。回答・検索だけ（KB の
+検索テスト・レシピの検索比較）・RAG 検索の画面・MCP の `rag_retrieve_evidence` は同じ 1 つの流れで根拠を集める
+（[rag-engine.md の「補いの検索と 3 つの経路」](./rag-engine.md#補いの検索と-3-つの経路5173)）。表・migration・API path は
+変えていない。未リリースのため互換は持たない。
+
+削除した設定（`backend/.env` に残っていても読まない。起動は止まらない）:
+
+| 設定 | 内容 | 代わり |
+|---|---|---|
+| `RAG_GUIDE_REFERENCE_MAX_CHUNKS` | 参照の頁に絞った検索の根拠を手順の間で交互に選ぶ合計の上限 | 検索ごとに上位 `RAG_GUIDE_STEP_CHUNKS_PER_STEP` 件 |
+| `RAG_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT` | 後の段（業務ガイドの手順）のために最初の章節の拡張が残す入力の割合 | 無し（章節の拡張は補いの根拠を合わせた後に 1 回） |
+
+変えた動き:
+
+- 検索だけ（`retrieval_only`）が rerank・補いの検索・文脈の補完（章節の拡張を含む）を行う。根拠の件数と並びは
+  RAG 検索の画面（回答を作らない検索）と同じになる。図の画像は今までどおり切り出さない。
+- MCP の `rag_retrieve_evidence` は主の文書の検索の後で止めず、章節の拡張・要求別の補完・業務ガイドの手順の検索まで
+  行う（応答は遅くなることがある）。`evidence` の並びは回答と同じ根拠の並びのまま（`evidence_limit` を超えるときは
+  当たった根拠を先に残す）。契約 `platform/contracts/mcp/rag-tools.json` の説明を更新した。
+- 要求別の補完は、足す根拠の合計（`RAG_REQUEST_COVERAGE_MAX_CHUNKS`）を要求の数で割った件数で検索ごとに切る。
+- 章節の拡張が起点の所有の章節を読めなかったときは、その起点を前後 N 件（親子分割は親）で補う。
+
+1. `backend/.env` の `RAG_GUIDE_REFERENCE_MAX_CHUNKS`・`RAG_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT` の行を消す
+   （残しても読まないが、意味の無い行を残さない）。
+2. backend を再起動する。
+
 ## 既存環境の更新手順（#5168 前後の文脈・親・章節の拡張を文脈の補完にまとめる）
 
 根拠（検索拡張の根拠も同じ）ごとに文脈の補い方を 1 つだけ選ぶようにした: 章節の対応がある → 章節（章節の拡張。
@@ -817,7 +846,7 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
 1. システムテーブルを更新する（migration `20261018_004_support_guide_schema_v2`）。保存済みの下書きと公開の版の
    `schema_version` を 1 から 2 に書き換える（ほかの値は変えない。データは消えない。承認は要らない）。
 2. 設定（`rag/backend/.env`。どれも任意で既定のままでよい）: `RAG_GUIDE_STEP_RETRIEVAL_ENABLED`（既定 true）・
-   `RAG_GUIDE_STEP_MAX_QUERIES`（4）・`RAG_GUIDE_STEP_CHUNKS_PER_STEP`（2）・`RAG_GUIDE_REFERENCE_MAX_CHUNKS`（4）・
+   `RAG_GUIDE_STEP_MAX_QUERIES`（4）・`RAG_GUIDE_STEP_CHUNKS_PER_STEP`（2）・`RAG_GUIDE_REFERENCE_MAX_CHUNKS`（4。#5173 で削除）・
    `RAG_GUIDE_STEP_DEADLINE_SECONDS`（60。#2826）と、追加の検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の合計の枠
    `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（8）。手順ごとの検索の ON / OFF と回数・時間の上限は全体設定だけで決め、検索・回答プロファイルでは上書きしない（上限は #3523 から）。
 3. backend を再起動する。

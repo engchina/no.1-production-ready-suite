@@ -10,6 +10,10 @@ rerank・下限・起点の選択が終わって最後の根拠の並びが決�
 2. 並びに同じ文書の根拠がある: 文書の chunk の順で入れる（同じ文書で番号が小さいもののうち最大のものの後。
    無ければ同じ文書の最小のものの前）。
 3. 同じ文書が無い: 最後に置く（複数は文書ごとにまとめ、文書の中は chunk の順）。
+
+主の検索の後に足す補いの検索（語数上限の要求別の補完・業務ガイドの手順ごとの検索。#5173）の根拠も、検索ごとに
+rerank・下限・``top_k`` の切りを通した後、検索拡張の後に同じ規則で合わせる（``query_overflow`` / ``guide_step`` の印）。
+主の検索の根拠は外さない。合わせた後に文脈の補完（``context_fill``）を 1 回だけ行う。
 """
 
 from __future__ import annotations
@@ -22,7 +26,13 @@ REFERENCE_EXPANSION_KEY = "reference_expansion"
 ENTITY_EXPANSION_KEY = "entity_expansion"
 GRAPH_EXPANSION_KEY = "graph_expansion"
 EXPANSION_KEYS = (REFERENCE_EXPANSION_KEY, ENTITY_EXPANSION_KEY, GRAPH_EXPANSION_KEY)
-# 最後の並びに新しく足した拡張の根拠の、根拠の木の理由（context_reason）。並びの件数に数えない印に使う。
+# 補いの検索の根拠の印のキー（#5173）。値は検索の記録（要求 ID・手順 ID・種類など）。
+QUERY_OVERFLOW_KEY = "query_overflow"
+GUIDE_STEP_KEY = "guide_step"
+SUPPLEMENT_KEYS = (QUERY_OVERFLOW_KEY, GUIDE_STEP_KEY)
+# 合わせた根拠が並びにある・含まれるときに、並びの根拠へ写す印のキー。
+MERGE_MARK_KEYS = (*EXPANSION_KEYS, *SUPPLEMENT_KEYS)
+# 最後の並びに新しく足した根拠（検索拡張と補いの検索）の、根拠の木の理由（context_reason）。並びの件数に数えない印に使う。
 EXPANSION_EVIDENCE_REASON = "expansion_evidence"
 
 
@@ -32,6 +42,14 @@ def expansion_kinds(record: Any) -> tuple[str, ...]:
     if not isinstance(metadata, dict):
         return ()
     return tuple(key for key in EXPANSION_KEYS if isinstance(metadata.get(key), dict))
+
+
+def supplement_kinds(record: Any) -> tuple[str, ...]:
+    """根拠に付いた補いの検索の印のキー（無ければ空。#5173）。"""
+    metadata = getattr(record, "metadata", None)
+    if not isinstance(metadata, dict):
+        return ()
+    return tuple(key for key in SUPPLEMENT_KEYS if isinstance(metadata.get(key), dict))
 
 
 def is_expansion_record(record: Any) -> bool:
@@ -81,8 +99,13 @@ __all__ = [
     "EXPANSION_EVIDENCE_REASON",
     "EXPANSION_KEYS",
     "GRAPH_EXPANSION_KEY",
+    "GUIDE_STEP_KEY",
+    "MERGE_MARK_KEYS",
+    "QUERY_OVERFLOW_KEY",
     "REFERENCE_EXPANSION_KEY",
+    "SUPPLEMENT_KEYS",
     "expansion_kinds",
     "is_expansion_record",
     "merge_expansions",
+    "supplement_kinds",
 ]

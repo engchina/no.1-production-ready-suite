@@ -236,43 +236,6 @@ class OwnerStub(SectionStub):
         return replace(outline, owner_section_id=self.owner) if outline is not None else None
 
 
-def test_reserve_tokens_leaves_input_for_a_later_phase():
-    stub = SectionStub()
-    settings = _settings(answer_max_input_tokens=2400)
-
-    result = _expand(_seed_context("c31a"), settings, stub, reserve_tokens=600)
-
-    # 上限 1,200 のうち 600 を残す: 3.1（600）を読んだ後、第3章の子の章節（600 ずつ）は読まない。
-    assert sections.context_tokens(result.context) <= 600
-    assert result.trace["reserved_tokens"] == 600 and result.trace["input_token_limit"] == 1200
-    assert "c33a" not in _child_ids(result.context) and "c32a" not in _child_ids(result.context)
-
-
-def test_later_phase_expands_new_seeds_before_retrying_earlier_ones():
-    # 上限 1,000（モデルの入力の上限 2,000 × 50%）。後の段は、前の段で起点にしなかった起点の章節を先に広げる（#2816）。
-    stub = SectionStub()
-    settings = _settings(answer_max_input_tokens=2000, section_expansion_max_levels=1)
-    reader = sections.SectionReader(read_chunks=stub.chunks, known_ids=set())
-
-    # 前の段: 700 を残すので、3.1 の残り（300）も入らない。
-    first = _expand(_seed_context("c31a"), settings, stub, reader=reader, reserve_tokens=700)
-    assert "c31b" not in _child_ids(first.context)
-
-    # 後の段: 新しい起点（第4章の c4a）の章節を先に読み、残り 100 では 3.1 の残りは入らない。
-    second = _expand(_seed_context("c31a", "c4a"), settings, stub, reader=reader)
-    assert "c4b" in _child_ids(second.context) and "c31b" not in _child_ids(second.context)
-    assert [item.section_id for item in second.unread] == ["s3-1"]
-
-
-def test_followup_reserve_is_share_of_the_input_limit():
-    limits = sections.SectionExpansionLimits.from_settings(_settings(section_expansion_followup_reserve_percent=25))
-    assert limits.input_tokens == 64_000 and limits.followup_reserve_tokens == 16_000
-    assert sections.SectionExpansionLimits.from_settings(_settings()).followup_reserve_tokens == 12_800
-    assert (
-        sections.SectionExpansionLimits.from_settings(_settings(section_expansion_followup_reserve_percent=0)).followup_reserve_tokens == 0
-    )
-
-
 def test_elapsed_time_does_not_impose_a_separate_expansion_deadline():
     stub = SectionStub()
     result = _expand(_seed_context("c31a"), _settings(), stub, started_at=0.0, clock=lambda: 900.0)
@@ -406,38 +369,6 @@ def test_engine_settings_read_section_expansion_environment():
     ) == (False, 2, 30)
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.section_expansion_enabled and defaults.section_expansion_max_levels == 4
-
-
-def test_engine_settings_read_followup_reserve_environment():
-    assert get_settings(environ={}, dotenv_path=None).section_expansion_followup_reserve_percent == 20
-    settings = get_settings(environ={"RAG_ENGINE_SECTION_EXPANSION_FOLLOWUP_RESERVE_PERCENT": "80"}, dotenv_path=None)
-    # 上限は 50%（後の段のために先の段を止めすぎない）。
-    assert settings.section_expansion_followup_reserve_percent == 50
-
-
-@pytest.mark.parametrize("reserve", [True, False])
-def test_answer_section_phase_passes_the_followup_reserve(reserve):
-    from rag_engine.generation.answering import _expand_context_by_sections
-
-    stub = SectionStub()
-    unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
-    settings = get_settings(environ={}, dotenv_path=None)
-    with bind_dependencies(
-        AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
-    ):
-        _context, result = _expand_context_by_sections(
-            QUESTION,
-            _seed_context("c31a"),
-            settings,
-            rerank_enabled=False,
-            started_at=0.0,
-            phase="main",
-            reserve=reserve,
-        )
-
-    expected = sections.SectionExpansionLimits.from_settings(settings).followup_reserve_tokens
-    assert expected > 0
-    assert result.trace.get("reserved_tokens", 0) == (expected if reserve else 0)
 
 
 OTHER_DOC = "doc-2"
