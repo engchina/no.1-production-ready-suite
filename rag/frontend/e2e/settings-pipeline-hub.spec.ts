@@ -26,8 +26,8 @@ const RECIPE_DEFAULTS = {
   chunk_overlap: 120,
   chunk_min_chars: 120,
   graph_profile: "off",
-  // 実体・別名索引の全体の既定は OFF（#3008）。
-  entity_index_enabled: false,
+  // 実体・別名索引の全体の既定は ON（#5187）。
+  entity_index_enabled: true,
   entity_name_columns: [],
   entity_attribute_columns: [],
   heading_level_inference_enabled: false,
@@ -240,9 +240,9 @@ for (const scheme of ["light", "dark"] as const) {
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-heading-levels");
     await expect(items.locator('[data-config-field="heading_level_inference_enabled"]')).toContainText("無効");
     await expect(items.getByRole("link", { name: /^設定画面へ（.+）$/ })).toHaveCount(12);
-    // 索引構築の全体の既定は OFF。専用の設定画面から変更できる。
+    // 索引構築の全体の既定は ON。専用の設定画面から変更できる。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
-    await expect(entityIndex).toContainText("無効");
+    await expect(entityIndex).toContainText("有効");
     await expect(entityIndex.getByRole("link")).toHaveAttribute("href", "/settings/entity-index");
     await expect(items.locator('[data-config-field="vector_index"]').getByRole("link")).toHaveAttribute("href", "/settings/vector-index");
 

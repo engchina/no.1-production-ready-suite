@@ -253,7 +253,7 @@ export const ja = {
   "settings.entityIndex.title": "実体・別名索引の構築",
   "settings.entityIndex.description": "実体とは、名称・ID・別名で識別する文書中の対象です。表の行や本文の定義から、同じ対象の名称・ID・別名と、根拠となる文書の断片との関連を記録します。Embedding（ベクトル化）とは別の処理で、AI は使いません。検索で利用するかは、検索方法の「実体・別名による検索拡張」で設定します（全体の設定）。",
   "settings.entityIndex.enabled": "実体・別名索引を構築する",
-  "settings.entityIndex.hint": "既定は無効です。文書レシピで個別に上書きできます。変更は次回の索引構築から適用され、既存の文書へ反映するには索引から再処理します。",
+  "settings.entityIndex.hint": "既定は有効です。文書レシピで個別に上書きできます。変更は次回の索引構築から適用され、既存の文書へ反映するには索引から再処理します。",
   "settings.entityIndex.off.description": "実体の名称・ID・別名と、根拠となる文書の断片を結ぶ索引を構築しません。",
   "settings.entityIndex.on.description": "表の行や本文の定義から、実体の名称・ID・別名と根拠の関連を記録します。AI は使いません。",
   "settings.entityIndex.saved": "実体・別名索引の設定を保存しました。",
@@ -2299,7 +2299,7 @@ export const ja = {
   "knowledgeBases.adapter.field.headingLevels.hint":
     "Docling の解析結果で、しおりの階層を使えず、番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす場合に、見出しの文字列を OCI Enterprise AI にまとめて送り、階層を推定します。通常は文書ごとに 1 回で、再試行する場合があります。変えると解析からやり直します。",
   "knowledgeBases.adapter.field.entityIndex": "実体・別名索引",
-  "knowledgeBases.adapter.field.entityIndex.hint": "実体（文書中の対象）の名称・ID・別名と、根拠となる文書の断片の関連を、表の行や本文の定義から記録します。AI は使いません。全体の既定は無効です。文書レシピで上書きできます。表の名前・属性の列を個別に指定でき、未指定なら列名で決めます。検索で利用するかは、検索方法の「実体・別名による検索拡張」で設定します（全体の設定）。変えると索引から作り直します。",
+  "knowledgeBases.adapter.field.entityIndex.hint": "実体（文書中の対象）の名称・ID・別名と、根拠となる文書の断片の関連を、表の行や本文の定義から記録します。AI は使いません。全体の既定は有効です。文書レシピで上書きできます。表の名前・属性の列を個別に指定でき、未指定なら列名で決めます。検索で利用するかは、検索方法の「実体・別名による検索拡張」で設定します（全体の設定）。変えると索引から作り直します。",
   "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
   "knowledgeBases.adapter.field.autoIndexAfterChunk": "Chunk 後に Embedding / 索引へ進む",

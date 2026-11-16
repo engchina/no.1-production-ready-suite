@@ -16,7 +16,8 @@
    `--keep-superseded-active` を渡すと登録せず、旧版も今有効な文書のまま検索させる
    （旧版の紛らわしさの測定）。
 5. `file:` の参照を文書 ID に置き換え、`knowledge_base_ids` を入れた評価セットを `--output` に書く。
-6. 実体・別名索引は文書レシピの ``entity_index_enabled`` で選ぶ（全体の既定は OFF）。
+6. 実体・別名索引は文書レシピの ``entity_index_enabled`` で選ぶ（全体の既定は
+   ``RAG_ENTITY_INDEX_ENABLED``）。
    `--entity-index` は索引の構築を明示し、比較用の評価セットの `rag_overrides` に
    `entity_expansion_enabled: true` を入れる（既存の明示値は変えない）。
    `--no-entity-index` は構築を無効にし、未指定は全体の既定に従う。
@@ -78,7 +79,7 @@ class CorpusError(RuntimeError):
 def recipe_for(path: Path, *, entity_index: bool | None = None) -> dict[str, Any]:
     """ファイルの文書レシピ（拡張子ごとの前処理と、指定したときは実体の抽出の有無。#1362）。
 
-    ``entity_index`` が None ならレシピに書かず、全体の既定（ON。#1388）に従う。
+    ``entity_index`` が None ならレシピに書かず、全体の既定（``RAG_ENTITY_INDEX_ENABLED``）に従う。
     """
     recipe: dict[str, Any] = dict(RECIPE_BY_EXTENSION.get(path.suffix.lower(), {}))
     if entity_index is not None:
@@ -184,7 +185,7 @@ def resolve_golden_set(
 def with_entity_expansion(golden_set: Mapping[str, Any]) -> dict[str, Any]:
     """実体の 1 段の拡張を選んだ評価セット（#1388）。
 
-    拡張は検索方法の全体設定（`RAG_ENTITY_EXPANSION_ENABLED`。既定 OFF）で決め、検索・回答
+    拡張は検索方法の全体設定（`RAG_ENTITY_EXPANSION_ENABLED`。既定 ON）で決め、検索・回答
     プロファイルでは上書きしない。全体設定に頼らず、評価（A）は評価の `rag_overrides` で
     明示する。評価セットが明示した `entity_expansion_enabled` は変えない。
     """

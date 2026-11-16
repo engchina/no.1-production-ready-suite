@@ -514,7 +514,7 @@ test("実体・別名索引は全体が有効なら継承し、列の上書き�
   const editor = panel.getByTestId("document-processing-config-editor-items");
   const entityRow = editor.locator('[data-config-field="entity_index_enabled"]');
   await expect(entityRow).toContainText("グローバル設定に従う: 有効");
-  await expect(entityRow).toContainText("全体の既定は無効です。");
+  await expect(entityRow).toContainText("全体の既定は有効です。");
   // 有効（継承）のあいだは列の行を出し、列は全体の既定（列名で決める）に従う。
   const columns = panel.getByTestId("document-entity-columns");
   await expect(columns.getByTestId("document-entity-columns-inherited")).toContainText(
