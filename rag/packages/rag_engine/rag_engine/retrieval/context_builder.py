@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass, replace
 from typing import Any, Literal
 
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL
@@ -18,11 +18,10 @@ from rag_engine.parsing.decorative_pictures import (
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
-from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.retrieval.evidence_cues import evidence_cues
+from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, EXPANSION_KEYS, merge_expansions
 from rag_engine.retrieval.metadata_context import answer_metadata_context, with_child_contexts
 from rag_engine.retrieval.operation_context import operation_labels
-from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uids
 
 DEFAULT_MAX_RECORD_TEXT_CHARS = 1200
 DEFAULT_MIN_SNIPPET_CHARS = 80
@@ -216,6 +215,9 @@ class ContextBuildRequest:
     max_anchors_per_parent: int = MAX_ANCHORS_PER_PARENT
     # 原文の遅延取得のための起点選択専用。返した本文は回答に使わず、親参照で起点をまとめる。
     select_anchors_only: bool = False
+    # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。起点・親・前後の文脈が決まった後に、
+    # ``expansion_merge`` の規則で 1 回だけ合わせる。``top_k``・``max_records`` に数えない。
+    expansion_children: Sequence[Any] = ()
 
 
 def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
@@ -363,7 +365,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         )
 
     # 起点は Rerank 順を保つ。親子分割では親本文だけを使い、隣接親・同一ページ・子全体を補完しない。
-    primary = _reserve_entity_expansion_groups(sorted(groups, key=_parent_group_sort_key), request.max_records)
+    primary = sorted(groups, key=_parent_group_sort_key)[: request.max_records]
     selected = list(primary)
     selected_groups = {id(group) for group in selected}
     for retrieval_rank, child in attachment_children:
@@ -431,63 +433,89 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             selected.append(group)
             selected_keys.add(key)
             visual_added += 1
+    # 検索拡張の根拠（#5162）は、根拠の並び（起点・添付・前後の文脈・図の原文）が決まった後に合わせる。
+    expansion_children = [
+        record
+        for record in request.expansion_children
+        if record_context_key(record) in active_ids and str(getattr(record, "chunk_level", "") or "") == CHILD_CHUNK_LEVEL
+    ]
+    if expansion_children:
+        added: list[_ParentEvidenceBuilder] = []
+        added_ids: set[int] = set()
+
+        def fresh_group(child: Any) -> _ParentEvidenceBuilder | None:
+            group = group_for_child(child)
+            if group is None or id(group) in selected_groups or id(group) in added_ids:
+                return group
+            # 枠の外に落ちた起点の親を使い直すときは、落ちた起点を連れてこない。
+            group.children.clear()
+            return group
+
+        for child in expansion_children:
+            key = record_context_key(child)
+            # 1. 同じ chunk が並びにある: 印だけを付ける。
+            holder = next((group for group in (*selected, *added) if key in group.children), None)
+            if holder is not None:
+                existing = holder.children[key]
+                existing.record = _with_expansion_marks(existing.record, child)
+                continue
+            group = fresh_group(child)
+            if group is None:
+                continue
+            if id(group) in selected_groups or id(group) in added_ids:
+                # 2. 並びの親の本文に含まれる: 親のかたまりに印を残すだけで、根拠を足さない。
+                add_child(group, child, "parent_context", EXPANSION_EVIDENCE_REASON)
+                continue
+            # 3. 新しい根拠として足す（位置は下の merge_expansions が決める）。
+            group.reason = EXPANSION_EVIDENCE_REASON
+            add_child(group, child, "retrieved_anchor", EXPANSION_EVIDENCE_REASON)
+            added.append(group)
+            added_ids.add(id(group))
+        # 拡張の根拠の単位は検索で当たった chunk と同じ（親子の分割なら親、そうでなければ前後の文脈）。
+        present = {record_context_key(entry.record) for entry in (*selected, *added)}
+        for group in tuple(added):
+            for anchor in tuple(group.children.values()):
+                if anchor.role != "retrieved_anchor" or _uses_parent_context(anchor.record):
+                    continue
+                siblings = children_by_parent.get(_child_sibling_context_key(anchor.record), [])
+                for neighbor in _chunk_neighbors(anchor.record, siblings, request.neighbor_child_count):
+                    key = record_context_key(neighbor)
+                    if key in present:
+                        continue
+                    neighbor_group = fresh_group(neighbor)
+                    if neighbor_group is None or id(neighbor_group) in selected_groups or id(neighbor_group) in added_ids:
+                        continue
+                    neighbor_group.reason = "adjacent_child"
+                    add_child(neighbor_group, neighbor, "neighbor_context", "adjacent_child")
+                    added.append(neighbor_group)
+                    added_ids.add(id(neighbor_group))
+                    present.add(key)
+        selected = merge_expansions(selected, added, key=lambda group: str(id(group)), document=_group_document, seq=_group_seq)
     evidence_tree = _finalize_parent_evidence(selected)
     return _context_bundle_from_parent_evidence(evidence_tree, max_chars=request.max_chars)
 
 
-def _group_has_entity_expansion(group: _ParentEvidenceBuilder) -> bool:
-    """枠を確保する実体の 1 段の拡張の根拠（#1362。関連度が下限以上。#1390）を起点に持つ親か。"""
-    return any(child.role == "retrieved_anchor" and is_reserved_entity_expansion(child.record) for child in group.children.values())
+def _with_expansion_marks(record: Any, expansion: Any) -> Any:
+    """並びにある根拠へ、拡張の印（足した理由）を写す。関連度などの並びの値はそのまま残す。"""
+    marks = {key: value for key, value in (getattr(expansion, "metadata", None) or {}).items() if key in EXPANSION_KEYS}
+    if not marks or not is_dataclass(record) or isinstance(record, type):
+        return record
+    return replace(record, metadata={**(getattr(record, "metadata", None) or {}), **marks})
 
 
-def _group_follows_reference(group: _ParentEvidenceBuilder, sources: set[str]) -> bool:
-    """参照元の直後へ置いた交差参照の参照先（#1549）を起点に持ち、その参照元が枠の内の起点の親か。"""
-    return any(
-        child.role == "retrieved_anchor"
-        and is_followed_reference(child.record)
-        and bool(sources.intersection(reference_source_uids(child.record)))
-        for child in group.children.values()
-    )
+def _group_document(group: _ParentEvidenceBuilder) -> str:
+    """根拠のかたまりの文書（拡張の根拠の位置を決める単位）。"""
+    for record in (*(child.record for child in group.children.values()), group.record):
+        metadata = getattr(record, "metadata", None) or {}
+        if document_id := str(metadata.get("document_id") or ""):
+            return document_id
+    return _record_scope_context_key(group.record)
 
 
-def _reserve_entity_expansion_groups(ranked_groups: Sequence[_ParentEvidenceBuilder], max_records: int) -> list[_ParentEvidenceBuilder]:
-    """context の親の枠（``max_records``）に、実体の 1 段の拡張の根拠の親を確保する（#1362）。
-
-    拡張の根拠（台帳の行・略号の表）は質問の語と重ならず rerank の分数が低いため、分数の順で切ると落ちる。枠の
-    外に落ちた拡張の親を、枠の後ろ（拡張でない親の分数の低い側）と入れ替える。入れ替えるのは枠の半分まで（検索
-    で当たった主根拠を半分より多くは落とさない）。確保するのは関連度が下限（``ENTITY_EXPANSION_MIN_RELEVANCE``）
-    以上の拡張の根拠の親だけで、質問と関係の薄い属性の chunk の親で、検索で当たった親（前後の文脈・章の参照の先
-    を持つ）を入れ替えない（#1390）。拡張の根拠が無ければ今までと同じ。
-
-    交差参照の参照先（参照元の直後へ置いたもの。#1549）の親も、参照元の親が枠の内にあれば同じ枠で確保する
-    （参照先は質問の語と重ならない橋渡しの根拠で、親を分数の順に並べると枠の外に落ちる。kb1517 の定期保守計画の
-    第 1 章「この章に無いシステムは、第 2 章の共通の保守枠で保守します」）。
-    """
-    primary = list(ranked_groups[:max_records])
-    sources = {
-        str(getattr(child.record, "chunk_uid", "") or "")
-        for group in primary
-        for child in group.children.values()
-        if child.role == "retrieved_anchor"
-    }
-
-    def bridge(group: _ParentEvidenceBuilder) -> bool:
-        return _group_has_entity_expansion(group) or _group_follows_reference(group, sources)
-
-    reserved = [group for group in ranked_groups[max_records:] if bridge(group)]
-    if not reserved:
-        return primary
-    room = max(0, max_records - max(1, max_records // 2) - sum(bridge(g) for g in primary))
-    reserved = reserved[:room]
-    if not reserved:
-        return primary
-    kept = list(primary)
-    for _ in reserved:
-        for index in range(len(kept) - 1, -1, -1):
-            if not bridge(kept[index]):
-                del kept[index]
-                break
-    return [*kept, *reserved]
+def _group_seq(group: _ParentEvidenceBuilder) -> int:
+    """根拠のかたまりの文書の中の位置（子の chunk の番号の最小。親の番号は子と別の番号のため使わない）。"""
+    numbers = [_record_chunk_seq(child.record) for child in group.children.values()]
+    return min(numbers) if numbers else _record_chunk_seq(group.record)
 
 
 def _operation_labels(record: Any) -> set[str]:
@@ -612,8 +640,8 @@ def _parent_group_sort_key(group: _ParentEvidenceBuilder) -> tuple[Any, ...]:
     """親の並び（`max_records` の切り・根拠の予算の配分・評価器に渡す順が引き継ぐ）。
 
     主キーは起点の最上位の順位（rerank の後の候補の並び。MaxP。#3504）。rerank の後の並びは rerank の工程が
-    点数の順と検索の順の枠（#4664）と明示の配置（質問が名指しした画面の先頭寄せ・交差参照の参照先を参照元の
-    直後へ・位置を保つ候補。`rerank_records`）で決め、ここでは並べ替えない。起点の数・前後の chunk の
+    点数の順と検索の順の枠（#4664）と明示の配置（質問が名指しした画面の先頭寄せ・位置を保つ候補。
+    `rerank_records`）で決め、ここでは並べ替えない。検索拡張の根拠は、この並びの後に合わせる（#5162）。起点の数・前後の chunk の
     数・RRF などの合成の点数は同点の順だけに使う（件数で、上位の起点 1 件の親を下げない）。
     """
     anchor_ranks = [

@@ -15,6 +15,7 @@ import pytest
 from pr_evaluation_scoring import contains_normalized
 
 from app.config import Settings
+from app.rag.answer_engine import EVIDENCE_EXPANSION_KEY
 from app.rag.chunking import Chunk
 from app.rag.entity_expansion import (
     ENTITY_EXPANSION_KEY,
@@ -442,7 +443,7 @@ def test_expansion_metadata_marks_role_reason() -> None:
 
 def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
     """MCP の根拠の並びで、実体からたどった根拠は検索で当たった根拠と同じく順位の順（#1348）。"""
-    from app.mcp.tools import mcp_evidence_order
+    from app.mcp.tools import mcp_evidence
 
     def chunk(chunk_id: str, role: str, rank: int | None) -> RetrievedChunk:
         metadata: dict[str, Any] = {"evidence_role": role}
@@ -452,7 +453,7 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
             document_id="d", chunk_id=chunk_id, text=chunk_id, score=0.0, metadata=metadata
         )
 
-    ordered = mcp_evidence_order(
+    ordered, omitted = mcp_evidence(
         [
             chunk("context", "neighbor_context", None),
             chunk("anchor-2", "retrieved_anchor", 2),
@@ -460,6 +461,7 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
             chunk("anchor-1", "retrieved_anchor", 1),
         ]
     )
+    assert omitted == 0
 
     assert [item.chunk_id for item in ordered] == ["anchor-1", "anchor-2", "entity-4", "context"]
 
@@ -478,9 +480,12 @@ def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.Monke
     assert settings.rag_entity_attribute_columns == []
     # 任意の検索拡張は明示的に有効化した場合だけ使う。
     assert settings.rag_entity_expansion_enabled is False
-    assert settings.rag_entity_expansion_max_chunks == 6
-    with pytest.raises(ValueError):
-        Settings(rag_entity_expansion_max_chunks=0)
+    # 上限は既定 3・範囲 1〜10（#5097）。範囲外は起動時の検証の誤り（互換は持たない）。
+    assert settings.rag_entity_expansion_max_chunks == 3
+    assert Settings(rag_entity_expansion_max_chunks=10).rag_entity_expansion_max_chunks == 10
+    for value in (0, 11):
+        with pytest.raises(ValueError):
+            Settings(rag_entity_expansion_max_chunks=value)
 
 
 def test_entity_expansion_uses_global_environment_settings(
@@ -782,7 +787,7 @@ def _approval_hits(store: InMemoryEntityStore) -> list[RetrievedChunk]:
     return [store.chunks[chunk_id] for chunk_id in [approval[2], procedure[2], approval[4]]]
 
 
-async def test_search_inserts_entity_expansion_after_top_candidates() -> None:
+async def test_search_passes_entity_expansion_outside_the_rerank_candidates() -> None:
     from app.rag.answer_engine import _SearchState
     from app.schemas.search import SearchRequest
 
@@ -796,24 +801,26 @@ async def test_search_inserts_entity_expansion_after_top_candidates() -> None:
         retrieval_queries=[QUESTION],
     )
 
-    order = [child.chunk_uid for child in result.child_chunks]
     expanded = list(state.entity_expansions)
-    # 上位の 3 件の後ろに、台帳の行と組織規程（略号の表・承認者）を足す。
-    assert order[:3] == [hit.chunk_id for hit in hits]
-    assert order[3 : 3 + len(expanded)] == expanded
-    assert expanded[:3] == [
+    # rerank の候補は検索の候補だけ。台帳の行と組織規程（略号の表・承認者）は rerank にかけず、
+    # 検索拡張の chunk として渡す（rerank と起点の選択の後に最後の根拠へ合わせる。#5162）。
+    assert [child.chunk_uid for child in result.child_chunks] == [hit.chunk_id for hit in hits]
+    assert [child.chunk_uid for child in result.expansion_chunks] == expanded
+    # 上限の既定は 3 件（#5097）。
+    assert expanded == [
         f"{LEDGER}:{CHUNK_SET_ID}:1",
         f"{ORG}:{CHUNK_SET_ID}:2",
         f"{ORG}:{CHUNK_SET_ID}:3",
     ]
-    child = result.child_chunks[3]
+    child = result.expansion_chunks[0]
     assert child.metadata["entity_expansion"]["entity"] == "経費精算ポータル"
+    assert child.metadata["retrieval_admission_stage"] == "entity"
     marker = state.chunks[expanded[1]].metadata[ENTITY_EXPANSION_KEY]
     assert isinstance(marker, dict) and marker["match"] == "経"
     assert store.calls[:3] == ["seed", "definition", "hop"]
 
 
-async def test_search_caches_the_plan_and_skips_when_disabled_or_search_only() -> None:
+async def test_search_caches_the_plan_skips_when_disabled_and_expands_search_only() -> None:
     from app.rag.answer_engine import _SearchState
     from app.schemas.search import SearchRequest
 
@@ -832,9 +839,15 @@ async def test_search_caches_the_plan_and_skips_when_disabled_or_search_only() -
         request, _SearchState(), retrieval_queries=[QUESTION]
     )
     assert [child.chunk_uid for child in disabled.child_chunks] == [hit.chunk_id for hit in hits]
-    # 検索だけ（KB の検索テスト・レシピの検索比較）は上位 top_k 件の候補なので足さない。
+    assert disabled.expansion_chunks == []
+    # 検索だけ（KB の検索テスト・レシピの検索比較）も回答と同じく拡張する（#5162）。top_k に数えず、
+    # 同じ文書の根拠が無い拡張の根拠は最後に置き、拡張の印を付ける。
     retrieved_only = await engine.retrieve(request.model_copy(update={"top_k": 3}))
-    assert [chunk.chunk_id for chunk in retrieved_only] == [hit.chunk_id for hit in hits]
+    ids = [chunk.chunk_id for chunk in retrieved_only]
+    assert ids[:3] == [hit.chunk_id for hit in hits]
+    assert set(ids[3:]) == set(store.chunks) & set(ids[3:]) and len(ids) > 3
+    assert all(chunk.metadata.get(EVIDENCE_EXPANSION_KEY) is True for chunk in retrieved_only[3:])
+    assert not any(EVIDENCE_EXPANSION_KEY in chunk.metadata for chunk in retrieved_only[:3])
 
 
 async def test_search_continues_when_the_entity_tables_cannot_be_read() -> None:
@@ -906,21 +919,66 @@ def test_outcome_marks_entity_expansion_role_for_mcp_and_answer() -> None:
 
     roles = {chunk.chunk_id: chunk.metadata["evidence_role"] for chunk in outcome.citations}
     assert roles == {hit.chunk_id: "retrieved_anchor", row.chunk_id: ENTITY_EXPANSION_ROLE}
+    assert not any(EVIDENCE_EXPANSION_KEY in chunk.metadata for chunk in outcome.citations)
 
 
-# ---- MCP の根拠の並びで、実体の拡張の根拠を evidence_limit の内に入れる（#1362。D の holdout）
+def test_outcome_marks_evidence_added_after_rerank_for_mcp() -> None:
+    """rag_engine が最後の根拠の並びに足した拡張の根拠（理由 expansion_evidence）に印を付ける
+    （#5162）。
+    """
+    from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON
+
+    from app.rag.answer_engine import _outcome_from_result, _SearchState
+    from app.rag.entity_expansion import expansion_metadata
+
+    store = corpus_store()
+    hit = _approval_hits(store)[0]
+    row = store.chunks[f"{LEDGER}:{CHUNK_SET_ID}:1"]
+    state = _SearchState()
+    state.chunks = {hit.chunk_id: hit, row.chunk_id: expansion_metadata(row, {"entity": "x"})}
+
+    outcome = _outcome_from_result(
+        _EngineResult(
+            [
+                {"chunk_id": hit.chunk_id, "retrieval_role": "retrieved_anchor"},
+                {
+                    "chunk_id": row.chunk_id,
+                    "retrieval_role": "retrieved_anchor",
+                    "context_reason": EXPANSION_EVIDENCE_REASON,
+                },
+            ]
+        ),
+        state,
+    )
+
+    marks = {
+        chunk.chunk_id: EVIDENCE_EXPANSION_KEY in chunk.metadata for chunk in outcome.citations
+    }
+    assert marks == {hit.chunk_id: False, row.chunk_id: True}
+
+
+# ---- MCP の根拠: 検索拡張で足した根拠は evidence_limit に数えず、同じ規則で合わせる（#5162）
 
 
 def _mcp_chunk(
-    chunk_id: str, role: str, rank: int | None = None, *, expansion: bool = False
+    chunk_id: str,
+    role: str,
+    rank: int | None = None,
+    *,
+    added: bool = False,
+    document: str = "d",
+    index: int | None = None,
 ) -> RetrievedChunk:
     metadata: dict[str, Any] = {"evidence_role": role}
     if rank is not None:
         metadata["evidence_retrieval_rank"] = rank
-    if expansion:
+    if added:
         metadata[ENTITY_EXPANSION_KEY] = {"entity": chunk_id, "hop": 1}
+        metadata[EVIDENCE_EXPANSION_KEY] = True
+    if index is not None:
+        metadata["chunk_index"] = index
     return RetrievedChunk(
-        document_id="d", chunk_id=chunk_id, text=chunk_id, score=0.0, metadata=metadata
+        document_id=document, chunk_id=chunk_id, text=chunk_id, score=0.0, metadata=metadata
     )
 
 
@@ -928,104 +986,64 @@ def _ids_of(chunks: list[RetrievedChunk]) -> list[str]:
     return [chunk.chunk_id for chunk in chunks]
 
 
-def test_mcp_order_reserves_limit_for_entity_expansion_after_many_hits() -> None:
-    """評価の D の holdout の形: 当たった chunk が 20 件を超え、拡張の根拠（略号の表など）が親の
-    文脈の役割で 21〜38 位にある。evidence_limit 20 の内の末尾（上限の 3 割まで）に入れる。
-    """
-    from app.mcp.tools import mcp_evidence_order
+def test_mcp_evidence_does_not_count_added_expansions_in_the_limit() -> None:
+    """当たった chunk が上限を超えても、拡張で足した根拠は上限の外に足す（3 割の枠は持たない）。"""
+    from app.mcp.tools import mcp_evidence
 
-    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 23)]
+    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n, index=n) for n in range(1, 23)]
     context = [_mcp_chunk(f"ctx-{n}", "neighbor_context") for n in range(10)]
-    expanded = [
-        _mcp_chunk("ledger-row", ENTITY_EXPANSION_ROLE, 30, expansion=True),
-        _mcp_chunk("org-code", "neighbor_context", expansion=True),
-        _mcp_chunk("org-approver", "parent_context", expansion=True),
-    ]
-    citations = [*context[:4], *hits, *expanded[1:], *context[4:], expanded[0]]
+    ledger = _mcp_chunk("ledger-row", ENTITY_EXPANSION_ROLE, added=True, document="ledger")
+    approver = _mcp_chunk(
+        "org-approver", ENTITY_EXPANSION_ROLE, added=True, document="org", index=3
+    )
+    code = _mcp_chunk("org-code", ENTITY_EXPANSION_ROLE, added=True, document="org", index=2)
+    citations = [*context[:4], *hits, approver, *context[4:], ledger, code]
 
-    ordered = mcp_evidence_order(citations, 20)
+    returned, omitted = mcp_evidence(citations, 20)
 
-    assert _ids_of(ordered[:20]) == [
-        *(f"hit-{n}" for n in range(1, 18)),
-        "ledger-row",
+    # 上限 20 件は当たった chunk だけで埋め、拡張の根拠は同じ文書が無いので最後
+    # （文書ごと・chunk の順）。
+    assert _ids_of(returned) == [
+        *(f"hit-{n}" for n in range(1, 21)),
         "org-code",
         "org-approver",
+        "ledger-row",
     ]
-    # 押し出した当たりは上限の後ろに残り、前後の文脈はその後。
-    assert _ids_of(ordered[20:25]) == ["hit-18", "hit-19", "hit-20", "hit-21", "hit-22"]
-    assert len(ordered) == len(citations)
-    # 上限を渡さない（従来の）並びでは、拡張の文脈の根拠は前後の文脈の中に残る。
-    plain = _ids_of(mcp_evidence_order(citations))
-    assert plain.index("org-code") > 20
+    # 上限で返さなかった根拠の数に、拡張の根拠は入らない。
+    assert omitted == len(citations) - 3 - 20
 
 
-def test_mcp_order_puts_entity_expansion_before_context_when_hits_are_few() -> None:
-    from app.mcp.tools import mcp_evidence_order
+def test_mcp_evidence_inserts_added_expansion_in_document_order() -> None:
+    from app.mcp.tools import mcp_evidence
 
-    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 6)]
-    context = [_mcp_chunk(f"ctx-{n}", "neighbor_context") for n in range(30)]
-    expanded = _mcp_chunk("org-code", "neighbor_context", expansion=True)
-
-    ordered = mcp_evidence_order([*hits, *context, expanded], 20)
-
-    assert _ids_of(ordered[:7]) == [
-        "hit-1",
-        "hit-2",
-        "hit-3",
-        "hit-4",
-        "hit-5",
-        "org-code",
-        "ctx-0",
+    hits = [
+        _mcp_chunk("a2", "retrieved_anchor", 1, document="A", index=2),
+        _mcp_chunk("b1", "retrieved_anchor", 2, document="B", index=1),
+        _mcp_chunk("a5", "retrieved_anchor", 3, document="A", index=5),
     ]
+    before = _mcp_chunk("a1", ENTITY_EXPANSION_ROLE, added=True, document="A", index=1)
+    between = _mcp_chunk("a3", "retrieved_anchor", added=True, document="A", index=3)
+
+    returned, omitted = mcp_evidence([*hits, between, before], 2)
+
+    # 上限 2 件（a2・b1）の後に合わせる: a1 は同じ文書の最小の前、a3 は a2 の後。
+    assert _ids_of(returned) == ["a1", "a2", "a3", "b1"]
+    assert omitted == 1
+    # 上限を渡さないときも同じ規則。
+    assert _ids_of(mcp_evidence([*hits, between, before])[0]) == ["a1", "a2", "a3", "b1", "a5"]
 
 
-def test_mcp_order_caps_the_reserved_share_and_keeps_expansion_already_inside() -> None:
-    from app.mcp.tools import ENTITY_EXPANSION_LIMIT_SHARE, mcp_evidence_order
-
-    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 25)]
-    inside = _mcp_chunk("inside", ENTITY_EXPANSION_ROLE, 2, expansion=True)
-    outside = [_mcp_chunk(f"exp-{n}", "neighbor_context", expansion=True) for n in range(10)]
-
-    ordered = mcp_evidence_order([*hits, inside, *outside], 20)
-
-    head = _ids_of(ordered[:20])
-    # 上限 20 の 3 割 = 6 件まで（上限の内に元からある 1 件を含む）。
-    assert ENTITY_EXPANSION_LIMIT_SHARE == 0.3
-    assert [cid for cid in head if cid.startswith(("exp-", "inside"))] == [
-        "inside",
-        "exp-0",
-        "exp-1",
-        "exp-2",
-        "exp-3",
-        "exp-4",
-    ]
-    assert head.index("inside") == 2
-    # 拡張の根拠が無い・上限に収まるときは従来どおり。
-    assert _ids_of(mcp_evidence_order(hits, 20)) == _ids_of(hits)
-    # 同じ順位の当たりがあれば、citations の順（当たりが先）。
-    assert _ids_of(mcp_evidence_order([*hits[:3], inside], 20)) == [
-        "hit-1",
-        "hit-2",
-        "inside",
-        "hit-3",
-    ]
-
-
-def test_mcp_order_also_reserves_context_in_the_same_parent_as_entity_expansion() -> None:
-    """拡張の根拠（第 3 章の承認者）と同じ親のかたまりの前後の文脈（第 2 章の略号の表）も、上限の
-    内に入れる。別の親の前後の文脈は動かさない。
+def test_mcp_evidence_keeps_marked_hits_inside_the_ranked_order() -> None:
+    """並びにあって印だけを付けた根拠（拡張で足していない）は、当たった chunk と同じく
+    上限に数える。
     """
-    from app.mcp.tools import mcp_evidence_order
+    from app.mcp.tools import mcp_evidence
 
-    def grouped(chunk: RetrievedChunk, group: str) -> RetrievedChunk:
-        return chunk.model_copy(update={"metadata": {**chunk.metadata, "chunk_group_id": group}})
+    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 4)]
+    marked = _mcp_chunk("marked", ENTITY_EXPANSION_ROLE, 2)
+    marked.metadata[ENTITY_EXPANSION_KEY] = {"entity": "marked", "hop": 0}
 
-    hits = [_mcp_chunk(f"hit-{n}", "retrieved_anchor", n) for n in range(1, 23)]
-    approver = grouped(_mcp_chunk("org-approver", ENTITY_EXPANSION_ROLE, 25, expansion=True), "org")
-    code_table = grouped(_mcp_chunk("org-code", "neighbor_context"), "org")
-    other = grouped(_mcp_chunk("other-ctx", "neighbor_context"), "other")
+    returned, omitted = mcp_evidence([*hits, marked], 3)
 
-    ordered = mcp_evidence_order([*hits, other, code_table, approver], 20)
-
-    assert _ids_of(ordered[:20])[-2:] == ["org-approver", "org-code"]
-    assert "other-ctx" not in _ids_of(ordered[:20])
+    assert _ids_of(returned) == ["hit-1", "hit-2", "marked"]
+    assert omitted == 1

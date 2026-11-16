@@ -5,7 +5,7 @@ from dataclasses import replace
 
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
-from rag_engine.retrieval.reference_follow import REFERENCE_EXPANSION_KEY
+from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from tests.test_document_selection import child
 
 
@@ -57,14 +57,14 @@ class AnchorDocumentCapTest(unittest.TestCase):
         environ = {"RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": "5"}
         self.assertEqual(get_settings(environ=environ, dotenv_path=None).max_anchors_per_document, 5)
 
-    def test_followed_references_keep_their_position(self):
+    def test_attachments_keep_their_position_and_are_not_counted(self):
+        # 会話の添付は位置を保ち、文書ごとの上限に数えない。検索拡張の根拠は候補に入らない（#5162）。
         ranked = self.ranked()
-        followed = child("a-ref", 7, "A の参照先", "A.pdf", "pa-ref")
-        followed.metadata[REFERENCE_EXPANSION_KEY] = {"followed": True}
-        ranked.insert(2, followed)
-        self.assertTrue(a.is_followed_reference(followed))
+        attached = child("a-att", 7, "A の添付", "A.pdf", "pa-att")
+        attached.metadata[ATTACHMENT_EVIDENCE_KEY] = True
+        ranked.insert(2, attached)
         capped = a.cap_anchors_per_document(ranked, settings(2), top_k=3)
-        self.assertEqual([r.id for r in capped][:4], ["a1", "a2", "a-ref", "b1"])
+        self.assertEqual([r.id for r in capped][:4], ["a1", "a2", "a-att", "b1"])
 
 
 if __name__ == "__main__":

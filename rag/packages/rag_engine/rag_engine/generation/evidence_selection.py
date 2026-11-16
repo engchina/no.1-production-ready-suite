@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from rag_engine.config import Settings
@@ -23,8 +23,13 @@ def select_evidence(
     schema_for: Callable[[Sequence[dict[str, Any]]], Mapping[str, Any]],
     provider_id: str | None = None,
     source_scores: Mapping[str, float | None] | None = None,
+    protected_sources: Collection[str] = (),
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
-    """固定入力も含めて測り、入らない原文は除外する。単独でも大きい原文は位置付きで一部を渡す。"""
+    """固定入力も含めて測り、入らない原文は除外する。単独でも大きい原文は位置付きで一部を渡す。
+
+    protected_sources（検索拡張の印を持つ根拠の出典。#5162）は先に入れ、入らないときは印の無い原文を関連度の
+    低い順に外す。渡す原文の並びは関連度の順（今までと同じ）のまま。
+    """
 
     def measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         prompt = render(values)
@@ -40,7 +45,12 @@ def select_evidence(
     omitted = 0
     duplicates = 0
     partial = 0
-    for span in sorted(spans, key=lambda value: rerank_first_key((source_scores or {}).get(str(value["source_id"])))):
+
+    def relevance(value: dict[str, Any]) -> tuple[int, float]:
+        return rerank_first_key((source_scores or {}).get(str(value["source_id"])))
+
+    protected = set(protected_sources)
+    for span in sorted(spans, key=lambda value: (str(value["source_id"]) not in protected, relevance(value))):
         key = str(span["source_id"]), str(span["text"])
         if key in seen:
             duplicates += 1
@@ -77,6 +87,8 @@ def select_evidence(
             partial += 1
         else:
             omitted += 1
+    # 選ぶ順（印の付いた根拠を先）と渡す順（関連度の順）を分ける。
+    selected.sort(key=relevance)
     selected = tag(selected)
     prompt, measurement = measure(selected)
     if not measurement["fits"]:

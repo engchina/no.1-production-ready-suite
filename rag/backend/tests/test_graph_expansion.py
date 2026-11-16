@@ -320,7 +320,7 @@ def _engine(store: InMemoryGraphStore, hits: list[RetrievedChunk], **settings: A
 QUESTION = "作業の準備では何をしますか？"
 
 
-async def test_search_adds_graph_chunks_after_the_top_candidates() -> None:
+async def test_search_passes_graph_chunks_outside_the_rerank_candidates() -> None:
     from app.rag.answer_engine import _graph_expansion_diagnostics, _SearchState
     from app.schemas.search import SearchRequest
 
@@ -333,12 +333,13 @@ async def test_search_adds_graph_chunks_after_the_top_candidates() -> None:
         SearchRequest(query=QUESTION, filters=dict(KB)), state, retrieval_queries=[QUESTION]
     )
 
-    order = [child.chunk_uid for child in result.child_chunks]
-    # 上位の候補の後ろに、名前の一致（第 2 章）と広げ（第 4 章の 2 つ目）を足す。
-    assert order[:2] == [hit.chunk_id for hit in hits]
-    assert order[2:] == [a[1], a[2], a[3], a[17]]
-    marker = result.child_chunks[2].metadata[GRAPH_EXPANSION_KEY]
+    # rerank の候補は検索の候補だけ。名前の一致（第 2 章）と広げ（第 4 章の 2 つ目）は rerank に
+    # かけず、検索拡張の chunk として渡す（rerank と起点の選択の後に最後の根拠へ合わせる。#5162）。
+    assert [child.chunk_uid for child in result.child_chunks] == [hit.chunk_id for hit in hits]
+    assert [child.chunk_uid for child in result.expansion_chunks] == [a[1], a[2], a[3], a[17]]
+    marker = result.expansion_chunks[0].metadata[GRAPH_EXPANSION_KEY]
     assert marker["kind"] == GRAPH_KIND_NAME and marker["match"] == "作業の準備"
+    assert result.expansion_chunks[0].metadata["retrieval_admission_stage"] == "structure"
     diagnostics = _graph_expansion_diagnostics(state.graph_expansions, max_chunks=6)
     assert diagnostics["added_count"] == 4
     assert diagnostics["entity_count"] == 2
@@ -346,7 +347,7 @@ async def test_search_adds_graph_chunks_after_the_top_candidates() -> None:
     assert diagnostics["entities"][0]["entity"] == "手順書 A > 第 2 章 作業の準備"
 
 
-async def test_search_caches_the_plan_and_skips_when_disabled_or_search_only() -> None:
+async def test_search_caches_the_plan_skips_when_disabled_and_expands_search_only() -> None:
     from app.rag.answer_engine import _SearchState
     from app.schemas.search import SearchRequest
 
@@ -369,9 +370,14 @@ async def test_search_caches_the_plan_and_skips_when_disabled_or_search_only() -
     )
     assert [child.chunk_uid for child in disabled.child_chunks] == [a[16]]
     assert off_store.calls == []
-    # 検索だけ（KB の検索テストなど）は上位 top_k 件の候補なので足さない。
+    # 検索だけ（KB の検索テストなど）も回答と同じく拡張し、top_k に数えずに同じ文書の chunk の順で
+    # 合わせる（#5162）。
     retrieved_only = await engine.retrieve(request.model_copy(update={"top_k": 1}))
-    assert [chunk.chunk_id for chunk in retrieved_only] == [a[16]]
+    ids = [chunk.chunk_id for chunk in retrieved_only]
+    assert a[16] in ids and len(ids) > 1
+    added = [chunk for chunk in retrieved_only if chunk.chunk_id != a[16]]
+    assert all(GRAPH_EXPANSION_KEY in chunk.metadata for chunk in added)
+    assert all(chunk.metadata.get("evidence_expansion") is True for chunk in added)
 
 
 async def test_search_continues_when_the_graph_tables_cannot_be_read() -> None:

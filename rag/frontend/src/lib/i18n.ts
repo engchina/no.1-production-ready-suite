@@ -1781,7 +1781,7 @@ export const ja = {
   "searchAnswerProfiles.field.guideEnabledHelper":
     "既定値は OFF です。ON にすると、質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。",
   "searchAnswerProfiles.field.graphExpansion": "文書構造による検索拡張",
-  "searchAnswerProfiles.field.graphExpansionHelper": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を検索候補に加えます。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。検索方法の全体設定を使います。",
+  "searchAnswerProfiles.field.graphExpansionHelper": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を、Rerank と根拠の選択の後に回答の根拠へ加えます。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。検索方法の全体設定を使います。",
   "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
   "searchAnswerProfiles.field.guideStepRetrievalHelper":
     "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。継承時は検索方法の現在の設定を使います。",
@@ -3833,7 +3833,7 @@ export const ja = {
   "settings.answering.retrievalQueryLimitHint": "既定は 60 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。",
   "settings.answering.retrievalQueryLimitInvalid": "0～2000 の整数を入力してください。",
   "settings.answering.rerankTopN": "再ランキング後の採用件数（Top-N）",
-  "settings.answering.rerankTopNHint": "既定は 60 件です。0 は追加制限なしです。1～2000 を指定すると、採点と関連度による選別後の普通候補を最大 N 件に制限します。引用元と参照先は組で選び、収まらない組は採用しません。明示添付とその参照先は別枠で保持します。Rerank が無効・未実行・失敗、または有効な採点がないときは適用しません。回答で補う親章節・隣接原文の総数は制限しません。",
+  "settings.answering.rerankTopNHint": "既定は 60 件です。0 は追加制限なしです。1～2000 を指定すると、採点と関連度による選別後の普通候補を最大 N 件に制限します。明示添付は別枠で保持します。検索拡張（参照先・実体・文書構造）で加える根拠は件数に数えません。Rerank が無効・未実行・失敗、または有効な採点がないときは適用しません。回答で補う親章節・隣接原文の総数は制限しません。",
   "settings.answering.rerankTopNInvalid": "0～2000 の整数を入力してください。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
@@ -3871,7 +3871,7 @@ export const ja = {
   "settings.answering.neighborChildCountHint":
     "当たった根拠の前と後から、それぞれ最大でこの数のチャンクを文脈に加えます。同じ親やページの範囲、取得できる根拠、入力上限によって実際の数は減ります。",
   "settings.answering.entityExpansion": "実体・別名による検索拡張",
-  "settings.answering.entityExpansionHint": "質問と上位の検索候補に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ検索候補に加えます。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。文書構造による検索拡張と併用できます。全体の検索に適用します。",
+  "settings.answering.entityExpansionHint": "質問と上位の検索候補に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ集めます。集めた根拠は Rerank にかけず、Rerank と根拠の選択の後に回答の根拠へ加えます（起点数や根拠の件数には数えません）。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。文書構造による検索拡張と併用できます。全体の検索に適用します。",
   "settings.answering.sectionExpansion": "章節で広げる根拠",
   "settings.answering.sectionExpansionHint": "当たった根拠の章節から親の章節へ広げ、原文を回答の材料に加えます。段数と回答モデルの入力上限に対する割合で制限します。全体の回答に適用します。",
   "settings.answering.entity_expansion_max_chunks": "1 回の検索で加える根拠の上限",
@@ -3887,7 +3887,7 @@ export const ja = {
   "settings.answering.rerankHint":
     "OCI Generative AI の Rerank で、検索候補を質問との関連の強さの順に並べ替えます。",
   "settings.answering.graphExpansion": "文書構造による検索拡張",
-  "settings.answering.graphExpansionHint": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を検索候補に加えます。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。実体・別名による検索拡張と併用でき、追加済みの根拠は重複して加えません。全体の検索に適用します。",
+  "settings.answering.graphExpansionHint": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を集めます。集めた根拠は Rerank にかけず、Rerank と根拠の選択の後に回答の根拠へ加えます（起点数や根拠の件数には数えません）。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。実体・別名による検索拡張と併用でき、追加済みの根拠は重複して加えません。全体の検索に適用します。",
   "settings.answering.save": "回答の設定を保存",
   "settings.answering.saved": "回答の検索と生成の設定を保存しました。",
   "settings.answering.saveError": "回答の検索と生成の設定を保存できませんでした。",

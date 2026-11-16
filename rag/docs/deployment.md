@@ -221,6 +221,29 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5097・#5162 検索拡張の根拠を rerank の後に合わせる）
+
+交差参照の参照先・実体・別名による検索拡張・文書構造による検索拡張で足す chunk を、rerank の前の候補に入れず、
+rerank・関連度の下限・Top-N・起点の選択の後に同じ規則で最後の根拠へ合わせるようにした
+（[rag-engine.md の「検索拡張の根拠の合わせ方」](./rag-engine.md#検索拡張の根拠の合わせ方50975162)）。
+表・migration・API path は変えていない。
+
+- 足した根拠は `top_k`・MCP の `evidence_limit`・検索結果の件数に数えない。MCP の `evidence` は `evidence_limit` より
+  多く返ることがある（足した根拠に `evidence_expansion` の印）。`evidence_omitted` に足した根拠は数えない。
+- 検索だけ（KB の検索テスト・レシピの検索比較。`AnswerEngine.retrieve`）も回答と同じく 3 つの拡張を行う。
+- rerank の入力の経路ごとの上限（`RAG_ENGINE_RETRIEVAL_STAGE_LIMITS`）から `reference` / `entity` / `structure` を外した
+  （拡張の chunk は rerank の候補に入らない）。
+- `RAG_ENTITY_EXPANSION_MAX_CHUNKS` の既定を 6 から 3 に、範囲を 1〜20 から 1〜10 にした（設定 API・品質評価の
+  `rag_overrides`・画面の選択肢も同じ。互換は持たない）。
+
+1. `backend/.env` の `RAG_ENTITY_EXPANSION_MAX_CHUNKS` を確かめる。11 以上なら起動時の設定の検証で backend が起動しない
+   ので、10 以下に直す（既定の 3 にするなら行を消すか `3` にする）。画面（取込・検索・回答設定 > 検索方法）から
+   保存した値も同じ変数に入る。
+2. 品質評価の保存済みの評価の要求で `rag_overrides.entity_expansion_max_chunks` を 11 以上にしていたものは、その値の
+   ままでは再実行できない（422）。10 以下にして実行し直す。
+3. backend（と取込 worker）を再起動する。前と同じ値の上限でも、拡張の根拠の位置と件数は変わる（印の無い根拠を
+   押し出さなくなり、足した根拠が根拠の件数に加わる）。
+
 ## 既存環境の更新手順（#5117・#5118・#5119 全文検索の質問と索引の文字の形の食い違い）
 
 全文検索（Oracle Text）の質問の側と索引の側で文字の形がずれ、同じ表記の文書にも当たらない語があった。

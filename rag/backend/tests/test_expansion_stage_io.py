@@ -157,7 +157,9 @@ async def test_empty_anchors_still_record_an_executed_question_expansion(
     output = json.loads(captured[ENTITY_EXPANSION_STAGE].output.text)
     assert output["返した固有 Chunk 数"] == 1
     assert output["返した候補"][0]["chunk_id"] == "entity-a"
-    assert [item.chunk_uid for item in result.child_chunks] == ["entity-a"]
+    # 拡張の chunk は rerank の候補に入れず、最後の根拠へ合わせる拡張の chunk として渡す(#5162)。
+    assert [item.chunk_uid for item in result.child_chunks] == []
+    assert [item.chunk_uid for item in result.expansion_chunks] == ["entity-a"]
 
 
 async def test_derived_source_preserves_mapping_and_transferred_score(
@@ -227,8 +229,8 @@ async def test_returned_expansions_keep_their_actual_origin_and_exclusions(
     assert graph_output["返した固有 Chunk 数"] == 1
     assert graph_output["返した候補"][0]["chunk_id"] == "graph-a"
     assert graph_output["回答内の関係情報の探索記録（累計）"] == [{"status": "read"}]
-    assert {item.chunk_uid for item in result.child_chunks} == {
-        "seed-a",
+    assert {item.chunk_uid for item in result.child_chunks} == {"seed-a"}
+    assert {item.chunk_uid for item in result.expansion_chunks} == {
         "reference-a",
         "entity-a",
         "graph-a",

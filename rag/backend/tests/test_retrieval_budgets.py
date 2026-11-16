@@ -157,17 +157,16 @@ def test_text_search_limits_reach_the_engine_and_match_env_example(tmp_path: Pat
     )
 
 
-def test_default_total_budget_includes_enabled_reference_expansion(tmp_path: Path) -> None:
+def test_default_total_budget_excludes_search_expansions(tmp_path: Path) -> None:
+    """rerank の入力の枠は検索の候補だけ。検索拡張は rerank の候補に入らない(#5162)。"""
     from rag_engine.retrieval.candidate_budget import stage_limits
 
-    engine = build_engine_settings(Settings(), output_dir=tmp_path)
+    engine = build_engine_settings(
+        Settings(rag_entity_expansion_enabled=True, rag_graph_expansion_enabled=True),
+        output_dir=tmp_path,
+    )
     limits = stage_limits(engine, [])
     assert limits["fusion"] == 140
     assert limits["diversity"] == 20
-    assert limits["reference"] == 4
-    assert "article" not in limits
-    assert sum(limits.values()) == 164
-    disabled = build_engine_settings(
-        Settings(rag_reference_expansion_enabled=False), output_dir=tmp_path
-    )
-    assert stage_limits(disabled, [])["reference"] == 0
+    assert not {"reference", "entity", "structure", "article"} & set(limits)
+    assert sum(limits.values()) == 160

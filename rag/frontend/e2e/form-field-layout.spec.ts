@@ -60,7 +60,7 @@ async function mockRetrieval(page: Page) {
         neighbor_child_count: 3,
         rerank_enabled: true,
         graph_expansion_enabled: false,
-        entity_expansion_enabled: true, entity_expansion_max_chunks: 6,
+        entity_expansion_enabled: true, entity_expansion_max_chunks: 3,
         section_expansion_enabled: true, section_expansion_max_levels: 4,
         section_expansion_input_token_percent: 50,
         config_source: "runtime",

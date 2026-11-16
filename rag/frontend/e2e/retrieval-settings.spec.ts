@@ -136,7 +136,7 @@ const ANSWERING_SETTINGS = {
   graph_expansion_enabled: false,
   config_source: "runtime",
   entity_expansion_enabled: true,
-  entity_expansion_max_chunks: 6,
+  entity_expansion_max_chunks: 3,
   section_expansion_enabled: true,
   section_expansion_max_levels: 4,
   section_expansion_input_token_percent: 50,
@@ -621,6 +621,22 @@ test("回答の検索と生成の設定は群ごとに枠と見出しがあり�
   await page.screenshot({ path: testInfo.outputPath("rerank-block.png") });
   await card.getByRole("region", { name: "検索文の作成", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("groups.png") });
+});
+
+test("実体・別名による検索拡張の上限は 1〜10 から選び、保存値を表示する (#5097)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockRetrievalCards(page);
+  await mockAnsweringSettings(page, [], { entity_expansion_max_chunks: 3 });
+  await page.goto("/settings/retrieval");
+  const card = page.getByTestId("answering-settings-card");
+  const limit = card.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true });
+  await expect(limit).toContainText("3");
+  await limit.scrollIntoViewIfNeeded();
+  await limit.click();
+  const options = page.getByRole("option");
+  await expect(options).toHaveText(Array.from({ length: 10 }, (_, n) => String(n + 1)));
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("entity-expansion-limit.png") });
+  await page.keyboard.press("Escape");
 });
 
 for (const theme of ["light", "dark"] as const) {
