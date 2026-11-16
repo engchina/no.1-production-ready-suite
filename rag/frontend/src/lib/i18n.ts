@@ -1578,12 +1578,6 @@ export const ja = {
   "settings.database.systemTables.readOnly":
     "システムテーブルの作成・更新と全再作成には「システムテーブル管理」の権限が必要です。状態の確認と再取得はできます。",
   "settings.database.systemTables.summary.objectsHint": "テーブル・索引・Oracle Text の設定の合計",
-  "settings.database.systemTables.statusHint.missing":
-    "RAG システムテーブルがまだありません。「作成・更新」で必要なオブジェクトを作成してください。",
-  "settings.database.systemTables.statusHint.partial":
-    "必須オブジェクトが {count} 件不足しています。「作成・更新」で不足分を補ってください。",
-  "settings.database.systemTables.statusHint.outdated":
-    "DDL または migration の更新が必要です。「作成・更新」は既存データを保持して更新します。",
   "settings.database.systemTables.action.recreate": "すべて再作成",
   "settings.database.systemTables.operation.initialized": "RAG システムテーブルを作成しました。",
   "settings.database.systemTables.operation.migrated": "RAG システムテーブルを更新しました。",

@@ -3120,8 +3120,6 @@ const nl2sqlJa = {
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES。NL2SQL の文言が基準）を使う。
   "settings.database.systemTables.description":
     "NL2SQL のオントロジー、schema catalog、Profile、状態保存領域を versioned migration で管理します。アプリ起動時に DDL は実行しません。",
-  "settings.database.systemTables.statusHint.missing":
-    "NL2SQL の主要テーブルがまだありません。「作成・更新」で初期化できます。",
   "settings.database.systemTables.summary.objectsHint":
     "テーブル・索引・シーケンス・パッケージの合計",
   "settings.database.systemTables.previousFailureLockDetail":

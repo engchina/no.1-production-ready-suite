@@ -7,6 +7,7 @@ import { useConfirm } from "@production-ready/ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { DATABASE_GATE_ROUTES, databaseGateMessages } from "@/components/system/DatabaseGate";
+import { useNonPersistentStorageNoticeItem } from "@/components/system/StorageNotice";
 import { api, ApiError } from "@/lib/api";
 import { isI18nKey, t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
@@ -30,6 +31,9 @@ function systemTablesMessages(): Partial<SystemTablesMessages> {
 export function SystemTablesCard() {
   const canManage = useAuth().hasPermission(MENU_PERMISSIONS.settingsSystemTables);
   const confirm = useConfirm();
+  // テーブルを作成済みでも、保存先がメモリなら使われない（#839）。DB が未設定のときはカードの DB の案内と
+  // 同じ原因なので、ページの先頭に別の枠で出さず、カードの案内の枠に並べる（#5183）。
+  const storageNotice = useNonPersistentStorageNoticeItem();
   return (
     <SharedSystemTablesCard
       api={api}
@@ -52,6 +56,7 @@ export function SystemTablesCard() {
       // データを消す未適用の migration（#619。旧版の検索・回答プロファイルの割り当ての表の削除など）は、
       // 削除される内容を示す確認ダイアログで承認させてから作成・更新する。
       confirmDestructiveMigrations={(request) => confirm({ ...request, tone: "danger", dismissOnOverlay: false })}
+      notices={[storageNotice]}
     />
   );
 }

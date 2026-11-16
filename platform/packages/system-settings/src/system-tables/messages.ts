@@ -11,17 +11,26 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.status.missing": "未初期化",
   "settings.database.systemTables.status.partial": "一部不足",
   "settings.database.systemTables.status.outdated": "更新必要",
-  "settings.database.systemTables.statusHint.missing":
-    "主要テーブルがまだありません。「作成・更新」で初期化できます。",
+  // 案内の枠の見出し（何が起きているか）。見出しの StatusBadge の文字（未初期化・一部不足・更新必要）を繰り返さない（#5183）。
+  "settings.database.systemTables.notice.missing": "主要テーブルがまだありません",
+  "settings.database.systemTables.notice.partial": "必須オブジェクトが {count} 件不足しています",
+  "settings.database.systemTables.notice.outdated": "テーブルの定義が最新ではありません",
+  // 「作成・更新」ですること（見出しの事柄を繰り返さない）。
+  "settings.database.systemTables.statusHint.missing": "「作成・更新」で必要なオブジェクトを作成します。",
   "settings.database.systemTables.statusHint.partial":
-    "必須オブジェクトが {count} 件不足しています。「作成・更新」で既存データを保持したまま補完できます。",
+    "「作成・更新」で既存データを保持したまま不足分を補います。",
   "settings.database.systemTables.statusHint.outdated":
-    "テーブルは存在しますが migration version または checksum が古くなっています。無損失で更新できます。",
-  "settings.database.systemTables.statusHint.outdatedDestructive":
-    "テーブルは存在しますが migration version または checksum が古くなっています。",
+    "migration version または checksum が古くなっているか、定義と異なるオブジェクトがあります。「作成・更新」で既存データを保持したまま更新します。",
   "settings.database.systemTables.destructive.title": "データを削除する更新があります",
-  "settings.database.systemTables.destructive.description":
-    "次の migration は「作成・更新」でテーブルや行を削除します。削除したデータは元に戻せません。残すデータを書き出し、データベースのバックアップを確認してから実行してください。",
+  // データを削除する migration があるときの「作成・更新」ですること（状態ごと。#5183）。
+  "settings.database.systemTables.destructive.plan.missing":
+    "「作成・更新」で主要テーブルを作成し、次の migration でテーブルや行を削除します。",
+  "settings.database.systemTables.destructive.plan.partial":
+    "「作成・更新」で不足している必須オブジェクト {count} 件を補い、次の migration でテーブルや行を削除します。",
+  "settings.database.systemTables.destructive.plan.outdated":
+    "「作成・更新」で定義を更新し、次の migration でテーブルや行を削除します。",
+  "settings.database.systemTables.destructive.irreversible":
+    "削除したデータは元に戻せません。残すデータを書き出し、データベースのバックアップを確認してから実行してください。",
   "settings.database.systemTables.destructive.approvalHint":
     "「作成・更新」を押すと、削除の確認を求めます。",
   "settings.database.systemTables.destructive.confirmTitle": "データを削除する更新を実行しますか？",

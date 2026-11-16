@@ -84,7 +84,7 @@ for (const viewport of VIEWPORTS) {
 }
 
 test(
-  "保存済みのデータを書き換えた後に再起動が要るプロセスは、作成・更新の直下に残す（#1844）",
+  "保存済みのデータを書き換えた後に再起動が要るプロセスは、作成・更新の行に接するカードの案内の枠に残す（#1844・#5183）",
   { tag: "@responsive" },
   async ({ page, mockApi }) => {
     const dispatcher = "実行の dispatcher（python -m app.features.agent.runtime_dispatcher）";
@@ -101,11 +101,15 @@ test(
     await expect(notice).toBeVisible();
     await expect(notice).toContainText("Agent のシステムテーブルを更新しました。再起動が必要なプロセスがあります");
     await expect(notice.getByRole("listitem")).toHaveText([dispatcher]);
-    // 結果は操作の直下の Banner 1 か所だけ（Toast と重ねない。messaging.md §10.1）。
+    // 結果はカードの案内の枠 1 か所だけ（Toast と重ねない。messaging.md §10.1）。枠はカードに 1 つで、
+    // 作成・更新の行の直前に接して置く（同じ区画の案内は 1 つの枠。messaging.md §3.4.3。#5183）。
     await expect(page.getByRole("region", { name: "通知" }).getByRole("status")).toHaveCount(0);
+    await expect(page.locator("#system-tables").locator('[role="status"], [role="alert"]')).toHaveCount(1);
     const actionBox = await initialize.boundingBox();
     const noticeBox = await notice.boundingBox();
-    expect(actionBox && noticeBox && noticeBox.y >= actionBox.y + actionBox.height).toBeTruthy();
+    expect(
+      actionBox && noticeBox && noticeBox.y + noticeBox.height <= actionBox.y && actionBox.y - (noticeBox.y + noticeBox.height) < 64,
+    ).toBeTruthy();
     await expectNoPageHorizontalOverflow(page);
 
     // 状態を取り直したら消す（次の操作まで残す。messaging.md §10.4）。

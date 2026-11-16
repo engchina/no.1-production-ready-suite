@@ -200,7 +200,13 @@ export {
   type SearchableSelectLabels,
   type SearchableMultiSelectLabels,
 } from "./components/ui/searchable-options";
-export { Banner } from "./components/ui/banner";
+export {
+  Banner,
+  CombinedBanner,
+  combinedBannerItems,
+  type CombinedBannerItem,
+  type CombinedBannerProps,
+} from "./components/ui/banner";
 export {
   ApiErrorBanner,
   ApiErrorDetailList,
