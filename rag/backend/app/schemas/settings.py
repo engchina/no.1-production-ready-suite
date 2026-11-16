@@ -790,7 +790,6 @@ class AnsweringSettingsData(BaseModel):
         "oracle_hybrid_index"
     )
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
-    rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
@@ -817,7 +816,6 @@ class AnsweringSettingsUpdate(BaseModel):
     )
     hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] | None = None
     rrf_method_ratio: tuple[float, float] | None = None
-    rrf_source_ratio: tuple[float, float] | None = None
     rerank_slot_ratio: tuple[int, int] | None = None
 
     @field_validator("rerank_slot_ratio")
@@ -829,7 +827,7 @@ class AnsweringSettingsUpdate(BaseModel):
 
         return validate_slot_ratio(value)
 
-    @field_validator("rrf_method_ratio", "rrf_source_ratio")
+    @field_validator("rrf_method_ratio")
     @classmethod
     def _rrf_ratio(cls, value: tuple[float, float] | None) -> tuple[float, float] | None:
         if value is not None:

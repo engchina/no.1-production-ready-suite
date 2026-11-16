@@ -70,6 +70,8 @@ class RankedList:
     factor: float = 1.0
     native_scores: tuple[float, ...] = ()
     ranks: tuple[int, ...] = ()
+    # 全文検索に使った文（検索文に語を足したときだけ。主検索の全文検索。#5159）。重みと同一性は query で決める。
+    text: str = ""
 
     def __post_init__(self) -> None:
         if self.ranks and (len(self.ranks) != len(self.chunk_ids) or any(type(rank) is not int or rank < 1 for rank in self.ranks)):
@@ -128,6 +130,7 @@ class FusionResult:
                     "channel": e.ranking.channel,
                     "variant": e.ranking.variant,
                     "sources": list(e.ranking.sources),
+                    "text_query": e.ranking.text,
                     "weight": e.weight,
                     "count": len(dict.fromkeys(e.ranking.chunk_ids)),
                     "raw_count": len(e.ranking.chunk_ids),
@@ -196,6 +199,13 @@ def fuse_rankings(rankings: Sequence[RankedList], sources: Mapping[str, float], 
     return FusionResult(scores, tuple(executed), tuple(contributions), raw_count, len(identifiers))
 
 
+def _source_ratio_applies(result: FusionResult, sources: Mapping[str, float]) -> bool:
+    """原質問と追加検索文の比重が順位に効くか（原質問の一覧と、ほかの検索文の一覧が両方あるとき）。"""
+    original = query_key(next(iter(sources), ""))
+    keys = {query_key(entry.ranking.query) for entry in result.lists}
+    return original in keys and len(keys) > 1
+
+
 def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[str, float], k: float) -> dict[str, object]:
     """表示用の先頭と完全な計算記録を同じ結果から作る。"""
     data = result.diagnostics(weights, sources, k)
@@ -214,7 +224,8 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
         }[r.channel]
         lines.append(
             f"{'参照した検索一覧' if inherited else '一覧'} {i}: {r.query} / {channel_label} {r.variant} / "
-            f"出所: {'・'.join(r.sources) or '追加検索文'} / 重み {entry.weight:.9g} / "
+            + (f"全文検索の文: {r.text} / " if r.text else "")
+            + f"出所: {'・'.join(r.sources) or '追加検索文'} / 重み {entry.weight:.9g} / "
             f"{len(dict.fromkeys(r.chunk_ids))} 件 / {'検索時の状態: ' if inherited else ''}{state}" + (f"（{r.error}）" if r.error else "")
         )
     lines += [
@@ -239,7 +250,11 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
                 f"正の寄与がある候補 {len(result.scores)} 件",
             },
             {"label": "ベクトル検索と全文検索の比重", "value": f"{weights.vector:g}：{weights.keyword:g}"},
-            {"label": "原質問と追加検索文の比重", "value": f"{weights.original:g}：{weights.additional:g}"},
+            *(
+                [{"label": "原質問と追加検索文の比重", "value": f"{weights.original:g}：{weights.additional:g}"}]
+                if _source_ratio_applies(result, sources)
+                else []
+            ),
             {"label": "検索文", "value": f"原質問 {min(1, len(sources))} 本 / 追加 {max(0, len(sources) - 1)} 本"},
             {"label": "順位定数", "value": str(k)},
             {

@@ -1408,12 +1408,8 @@ async def test_all_failed_rankings_record_failure_and_are_not_cached() -> None:
 def test_direct_hybrid_lookup_uses_configured_channel_ratios() -> None:
     vector = [_hit("c-1", 0.9, mode="vector"), _hit("c-2", 0.8, mode="vector")]
     keyword = [_hit("c-2", 9.0, mode="keyword"), _hit("c-3", 8.0, mode="keyword")]
-    first = OracleClient(
-        settings=Settings(rag_rrf_method_ratio=(9, 1), rag_rrf_source_ratio=(1, 9))
-    )
-    second = OracleClient(
-        settings=Settings(rag_rrf_method_ratio=(1, 9), rag_rrf_source_ratio=(9, 1))
-    )
+    first = OracleClient(settings=Settings(rag_rrf_method_ratio=(9, 1)))
+    second = OracleClient(settings=Settings(rag_rrf_method_ratio=(1, 9)))
     first_hits = first._fuse_hybrid_hits(vector, keyword)
     second_hits = second._fuse_hybrid_hits(vector, keyword)
     assert first_hits[0].metadata["rrf_score"] != second_hits[0].metadata["rrf_score"]

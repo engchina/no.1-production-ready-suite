@@ -432,6 +432,66 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertIn("vector:q2", channels)
         self.assertIn("keyword:oracle_text:q2", channels)
 
+    def test_main_search_uses_the_original_for_vector_and_the_expanded_text_for_full_text(self):
+        """主検索は 1 回: ベクトルは原質問の embedding 1 回、全文は語を足した文の式 1 本（個別 SQL 方式。#5159）。"""
+        settings = replace(
+            get_settings(),
+            embedding_output_dimensions=1536,
+            image_embedding_enabled=False,
+            text_search_tokenizer_latin_stemmer="none",
+            retrieval_query_sources={"original question": ("原質問",), "original question synonym": ("原質問 + 用語・同義語",)},
+            retrieval_query_keywords={"original question synonym": ("synonym",)},
+        )
+        embedded_queries = []
+
+        def query_embedder(query, settings_value):
+            embedded_queries.append(query)
+            return [0.1] * 1536
+
+        with (
+            patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value=object()),
+            patch("rag_engine.adapters.oracle.store.connect_adb_thin", return_value=_ConnectionContext(object())),
+            patch("rag_engine.adapters.oracle.store.load_domain_keywords", return_value=[]),
+            patch("rag_engine.adapters.oracle.store._available_embedding_count", return_value=2),
+            patch("rag_engine.adapters.oracle.store._vector_search", return_value=[("uid-original", 0.1)]) as vector_search,
+            patch("rag_engine.adapters.oracle.store._text_search", return_value=[("uid-expanded", 8.0)]) as text_search,
+            patch("rag_engine.adapters.oracle.store.fuse_rankings", wraps=adb_vector_store.fuse_rankings) as fuse,
+            patch(
+                "rag_engine.adapters.oracle.store._load_chunk_run_chunks",
+                return_value=[
+                    _stored_chunk("uid-original", "chunk-original", page_start=1, chunk_seq=1),
+                    _stored_chunk("uid-expanded", "chunk-expanded", page_start=1, chunk_seq=2),
+                ],
+            ),
+        ):
+            result = search_adb_hybrid_chunks(
+                chunk_run_id="abcdef-1234567890ab",
+                retrieval_queries=["original question"],
+                text_queries={"original question": "original question synonym"},
+                settings=settings,
+                candidate_limit=5,
+                query_embedder=query_embedder,
+            )
+
+        self.assertEqual(embedded_queries, ["original question"])
+        self.assertEqual(vector_search.call_count, 1)
+        self.assertEqual(text_search.call_count, 1)
+        expression = text_search.call_args.args[2]
+        self.assertIn("{synonym}", expression)
+        self.assertIn("{original}", expression)
+        rankings, budgets = fuse.call_args.args[0], fuse.call_args.args[1]
+        self.assertEqual(budgets, {"original question": 1.0})
+        self.assertEqual(
+            [(r.query, r.channel, r.text) for r in rankings],
+            [
+                ("original question", "vector", ""),
+                ("original question", "keyword", "original question synonym"),
+            ],
+        )
+        self.assertEqual(rankings[0].sources, ("原質問",))
+        self.assertEqual(rankings[1].sources, ("原質問 + 用語・同義語",))
+        self.assertEqual({chunk.chunk_id for chunk in result.child_chunks}, {"chunk-original", "chunk-expanded"})
+
     def test_hybrid_search_runs_extra_text_queries_as_additional_keyword_channels(self):
         """組み立て済みの Oracle Text 式（対象語の部分語）は質問文の変種とは別に検索し、派生と同じ重みで融合する (#730)。"""
         settings = replace(

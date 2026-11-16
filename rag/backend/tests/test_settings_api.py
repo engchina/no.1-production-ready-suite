@@ -3743,18 +3743,16 @@ def test_removed_rule_and_auto_field_settings_are_not_offered(
 def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_rrf_method_ratio", (1.0, 1.0))
-    monkeypatch.setattr(settings, "rag_rrf_source_ratio", (7.0, 3.0))
     env_file = _settings_env_file(monkeypatch, tmp_path)
     initial = client.get("/api/settings/answering").json()["data"]
     assert initial["rrf_method_ratio"] == [1, 1]
-    assert initial["rrf_source_ratio"] == [7, 3]
-    response = client.patch(
-        "/api/settings/answering", json={"rrf_method_ratio": [1, 3], "rrf_source_ratio": [4, 1]}
-    )
+    # 原質問と追加検索文の比重は持たない(主検索は 1 回。#5159)。
+    assert "rrf_source_ratio" not in initial
+    response = client.patch("/api/settings/answering", json={"rrf_method_ratio": [1, 3]})
     assert response.status_code == 200
     reloaded = Settings(_env_file=env_file)
     assert reloaded.rag_rrf_method_ratio == (1, 3)
-    assert reloaded.rag_rrf_source_ratio == (4, 1)
+    assert "RAG_RRF_SOURCE_RATIO" not in env_file.read_text()
     assert response.json()["data"]["rerank_enabled"] == initial["rerank_enabled"]
 
 
@@ -3782,7 +3780,7 @@ def test_rerank_slot_ratio_rejects_invalid_without_saving(
     assert (env_file.read_text() if env_file.exists() else "") == before
 
 
-@pytest.mark.parametrize("field", ["rrf_method_ratio", "rrf_source_ratio"])
+@pytest.mark.parametrize("field", ["rrf_method_ratio"])
 @pytest.mark.parametrize("ratio", [[-1, 1], [0, 0], [1], [1, 2, 3]])
 def test_rrf_ratios_reject_invalid_without_saving(
     field: str, ratio: list[int], monkeypatch: MonkeyPatch, tmp_path: Path

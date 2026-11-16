@@ -53,10 +53,12 @@ def test_stage_io_matches_actual_enabled_inputs_and_queries(tmp_path, search, an
     # payload に残った登録ルールは使わず、その工程も無い。
     assert not result.runtime_knowledge.matched_rules
     merged = recorder.stage("検索文をまとめ、検索語を作る")
-    actual = [item["本文"] for item in merged["output"]["採用した検索文"]]
-    assert actual == result.retrieval_query_plan["text_query_variants"]
+    # 主検索は 1 回: ベクトル検索は原質問、全文検索は原質問に語を足した文（#5159）。
+    assert [merged["output"]["ベクトル検索の文"]["本文"]] == result.retrieval_query_plan["vector_queries"]
+    assert [merged["output"]["全文検索の文"]["本文"]] == result.retrieval_query_plan["text_query_variants"]
     assert merged["output"]["全文検索の入力"]["oracle_text_queries"] == result.text_search_queries
-    assert all(item["出どころ"] for item in merged["output"]["採用した検索文"])
+    assert merged["output"]["ベクトル検索の文"]["出どころ"] == ["原質問"]
+    assert merged["output"]["全文検索の文"]["出どころ"] == (["原質問 + 用語・同義語"] if search else ["原質問"])
 
 
 def test_query_sources_are_found_when_question_has_format_characters(tmp_path):
@@ -68,7 +70,8 @@ def test_query_sources_are_found_when_question_has_format_characters(tmp_path):
         observer=recorder,
         search=True,
     )
-    adopted = recorder.stage("検索文をまとめ、検索語を作る")["output"]["採用した検索文"]
+    output = recorder.stage("検索文をまとめ、検索語を作る")["output"]
+    adopted = [output["ベクトル検索の文"], output["全文検索の文"]]
     assert [item["出どころ"] for item in adopted] == [["原質問"], ["原質問 + 用語・同義語"]]
     assert all("\u200b" not in item["本文"] for item in adopted)
 
@@ -77,7 +80,7 @@ def test_no_term_match_is_completed_with_empty_output(tmp_path):
     recorder = Recorder()
     _run(_write(tmp_path / "knowledge.json", terms=[_TERM]), question="合成の別の質問", observer=recorder, search=True)
     output = recorder.stage(answering.TERM_SEARCH_STEP)["output"]
-    assert output == {"状態": "照合完了", "読込エラー": "", "一致した用語": [], "追加検索文": []}
+    assert output == {"状態": "照合完了", "読込エラー": "", "一致した用語": [], "全文検索の文": []}
 
 
 def test_term_load_failure_is_recorded_without_inventing_a_match(tmp_path, monkeypatch):

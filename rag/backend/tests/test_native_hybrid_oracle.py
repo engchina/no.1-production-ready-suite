@@ -149,14 +149,20 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     result = await engine._search(
         request,
         state,
-        retrieval_queries=["syntheticneedle", "syntheticneedle additional"],
+        retrieval_queries=["syntheticneedle"],
+        text_queries={"syntheticneedle": "syntheticneedle additional"},
         expand_references=False,
     )
     assert {c.metadata["document_id"] for c in result.child_chunks} == set(ids[:2])
     fusion = state.retrieval_stages[-1]["rrf"]
-    # 追加検索文も原質問と同じく vector と全文で検索する(#5151)。
+    # 主検索は 1 回: 原生方式は hybrid 1 本、個別 SQL 方式は vector と全文の 1 本ずつ(#5159)。
     assert [row["weight"] for row in fusion["lists"]] == pytest.approx(
-        [0.7, 0.3] if backend == "oracle_hybrid_index" else [0.49, 0.21, 0.21, 0.09]
+        [1.0] if backend == "oracle_hybrid_index" else [0.7, 0.3]
+    )
+    assert [row["text_query"] for row in fusion["lists"]] == (
+        ["syntheticneedle additional"]
+        if backend == "oracle_hybrid_index"
+        else ["", "syntheticneedle additional"]
     )
     assert all(row["status"] == "completed" for row in fusion["lists"])
     assert state.filters is not None
@@ -256,7 +262,7 @@ async def _empty_native_scope_diagnostics(
 
 @pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize("ratio", [(10, 1), (2, 3)])
-async def test_native_combined_original_and_additional_queries(
+async def test_native_main_search_uses_original_vector_and_expanded_text(
     ratio: tuple[float, float], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import json
@@ -310,26 +316,34 @@ async def test_native_combined_original_and_additional_queries(
     result = await engine._search(
         SearchRequest(query="syntheticoriginal", filters={"knowledge_base_id": kb.id}),
         state,
-        retrieval_queries=["syntheticoriginal", "syntheticsemantic", "syntheticterm"],
+        retrieval_queries=["syntheticoriginal"],
+        text_queries={"syntheticoriginal": "syntheticoriginal syntheticterm"},
         expand_references=False,
         settings=SimpleNamespace(
             retrieval_query_sources={
-                "syntheticsemantic": ("原質問 + 業務ガイド",),
-                "syntheticterm": ("原質問 + 用語・同義語",),
-            }
+                "syntheticoriginal": ("原質問",),
+                "syntheticoriginal syntheticterm": ("原質問 + 用語・同義語",),
+            },
+            retrieval_query_keywords={"syntheticoriginal syntheticterm": ("syntheticterm",)},
         ),
     )
     assert result.child_chunks
-    assert embedded == ["syntheticoriginal", "syntheticsemantic", "syntheticterm"]
-    # 足した語の出どころによらず、どの検索文も 1 回の UNION で検索する(#5151)。
-    assert [c["search_fusion"] for c in calls] == ["UNION", "UNION", "UNION"]
-    for call in calls:
-        assert call["search_scorer"] == "WRRF"
-        assert call["vector"]["score_weight"] == ratio[0]
-        assert call["text"]["score_weight"] == ratio[1]
+    # 主検索は 1 回(#5159): embedding は原質問だけ。1 回の UNION の vector は原質問、
+    # 全文は語を足した文。
+    assert embedded == ["syntheticoriginal"]
+    assert [c["search_fusion"] for c in calls] == ["UNION"]
+    (call,) = calls
+    assert call["search_scorer"] == "WRRF"
+    assert call["vector"]["score_weight"] == ratio[0]
+    assert call["text"]["score_weight"] == ratio[1]
+    assert call["vector"]["search_vector"] == pytest.approx([0.1] * 1536)
+    assert "syntheticterm" in call["text"]["contains"]
+    assert "syntheticoriginal" in call["text"]["contains"]
     fusion = state.retrieval_stages[-1]["rrf"]
-    assert [r["status"] for r in fusion["lists"]] == ["completed"] * 3
+    assert [r["status"] for r in fusion["lists"]] == ["completed"]
     assert fusion["lists"][0]["score_source"] == "oracle_wrrf"
+    assert fusion["lists"][0]["text_query"] == "syntheticoriginal syntheticterm"
+    assert fusion["lists"][0]["sources"] == ["原質問 + 用語・同義語"]
     for chunk in state.chunks.values():
         if "native_wrrf_score" in chunk.metadata:
             assert chunk.metadata["native_rrf_contribution"] == pytest.approx(

@@ -211,12 +211,12 @@ class AnswerExecutionTests(unittest.TestCase):
         # 質問を 1 つの目的に分類した結果は表示しない（#3498）。
         self.assertNotIn("質問の目的", display)
         self.assertNotIn("回答方針", display)
-        # 質問の理解は検索文を作らない（#3496）。検索文は確定の工程に、番号と由来付きで1回だけ出る。
+        # 質問の理解は検索文を作らない（#3496）。検索文は確定の工程に、由来付きで1回だけ出る。
         self.assertNotIn("補助の検索文", display)
         self.assertNotIn("[質問理解]", display)
         for query in result.retrieval_query_plan["vector_queries"][1:]:  # 先頭は原質問（質問の表示にも出る）
             self.assertEqual(display.count(generation._display_query(query)), 1)
-        self.assertIn("1. [原質問] ", display)
+        self.assertIn("ベクトル検索の文: [原質問] ", display)
 
     def test_understanding_stage_is_not_executed(self):
         question = "名称を変更する方法と、過去の記録への影響を教えてください。"

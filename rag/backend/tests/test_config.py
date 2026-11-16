@@ -858,14 +858,17 @@ def test_rrf_ratio_defaults_match_api_and_direct_engine(monkeypatch: pytest.Monk
     from app.api.routes.settings import _answering_settings_data
 
     monkeypatch.delenv("RAG_RRF_METHOD_RATIO", raising=False)
-    monkeypatch.delenv("RAG_RRF_SOURCE_RATIO", raising=False)
     backend = Settings(_env_file=None)
     engine = get_engine_settings(environ={}, dotenv_path=None)
     response = _answering_settings_data(backend)
-    expected = ((7.0, 3.0), (7.0, 3.0))
-    assert (backend.rag_rrf_method_ratio, backend.rag_rrf_source_ratio) == expected
-    assert (engine.rrf_method_ratio, engine.rrf_source_ratio) == expected
-    assert (response.rrf_method_ratio, response.rrf_source_ratio) == expected
+    assert backend.rag_rrf_method_ratio == (7.0, 3.0)
+    assert engine.rrf_method_ratio == (7.0, 3.0)
+    assert response.rrf_method_ratio == (7.0, 3.0)
+    # 原質問と追加検索文の比重は、主検索が 1 回なので全体設定に持たない(#5159)。
+    # 直接 engine の経路の既定だけ。
+    assert not hasattr(backend, "rag_rrf_source_ratio")
+    assert "rrf_source_ratio" not in response.model_dump()
+    assert engine.rrf_source_ratio == (7.0, 3.0)
 
 
 def test_rerank_slot_ratio_defaults_match_across_config_layers(

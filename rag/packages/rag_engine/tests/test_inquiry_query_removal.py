@@ -90,7 +90,7 @@ class InquiryQueryRemovalTests(unittest.TestCase):
         display = result.question_display
         self.assertNotIn("答える要求", display)
         self.assertNotIn("読み取ったコード・エラー:", display)
-        self.assertIn("1. [原質問] ", display)
+        self.assertIn("ベクトル検索の文: [原質問] ", display)
         self.assertNotIn("補助の検索文", display)
         self.assertNotIn("[質問理解]", display)
 

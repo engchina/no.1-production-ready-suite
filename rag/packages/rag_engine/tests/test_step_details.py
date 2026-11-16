@@ -96,12 +96,13 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         self.assertNotIn("検索の準備確認", steps)
         self.assertNotIn("分類フィルタ", _fields(steps["文書検索"]))
         queries = steps["検索文をまとめ、検索語を作る"]
-        self.assertRegex(_fields(queries)["結果"], r"^検索文 \d+ 本$")
+        self.assertEqual(_fields(queries)["結果"], "検索 1 回")
         self.assertIn("全文検索の入力", _fields(queries))
         self.assertIn("共通の検索語処理で全文式を作り", _fields(queries)["全文検索の入力"])
         self.assertTrue(any("Sudachi、利用できない場合は文字種分割" in line for line in _lines(queries)))
         self.assertFalse(any("Sudachiは使用していません" in line for line in _lines(queries)))
-        self.assertTrue(any(line.startswith("1. [原質問]") for line in _lines(queries)))
+        self.assertTrue(any(line.startswith("ベクトル検索の文: [原質問]") for line in _lines(queries)))
+        self.assertTrue(any(line.startswith("全文検索の文: [") for line in _lines(queries)))
 
     def test_classification_filter_is_shown_on_search_step_only_when_set(self):
         """分類フィルタを指定したときだけ、文書検索の工程に示す（#3495）。"""
@@ -112,8 +113,9 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
     def test_search_and_rerank_steps_show_routes_scores_and_top_documents(self):
         steps = _by_name(self.run_flow())
         search = _fields(steps["文書検索"])
-        # 検索に使った検索文の数は、確定した検索文の数と同じ。
-        self.assertEqual(f"検索文 {search['検索文']}", _fields(steps["検索文をまとめ、検索語を作る"])["結果"])
+        # 主検索は 1 回で、全文検索の文の出どころを示す（#5159）。
+        self.assertEqual(_fields(steps["検索文をまとめ、検索語を作る"])["結果"], "検索 1 回")
+        self.assertTrue(search["全文検索の文"])
         self.assertEqual(search["検索の候補"], "2 件（1 文書）")
         self.assertEqual(search["候補の経路"], "ベクトルと全文の両方 1・ベクトルだけ 1")
         self.assertTrue(search["結果"].startswith("回答に渡す根拠 "))

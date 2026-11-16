@@ -1073,8 +1073,12 @@ def build_adb_hybrid_answer_context(
     pinned_chunk_run_id: str | None = None,
     query_embedder: Callable[[str, Settings], list[float]] | None = None,
     page_ranges: Sequence[Mapping[str, Any]] = (),
+    text_queries: Mapping[str, str] | None = None,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
+
+    text_queries は検索文ごとの全文検索の文（主検索で、原質問に用語・同義語などの語を足した文。#5159）。
+    ベクトル検索はその検索文で、全文検索はこの文で同じ 1 回の検索として行う。無い検索文はその文で両方を検索する。
 
     page_ranges は検索を絞る文書の頁の範囲（{document_id, page_start, page_end} の列。業務ガイドの手順の参照。
     #2395）。空なら絞らない。絞り込みは注入された検索実装が行う。
@@ -1115,6 +1119,7 @@ def build_adb_hybrid_answer_context(
         # 注入された検索実装の既存シグネチャを壊さないよう、指定時だけ渡す。
         **({"query_embedder": query_embedder} if query_embedder is not None else {}),
         **({"page_ranges": [dict(item) for item in page_ranges]} if page_ranges else {}),
+        **({"text_queries": dict(text_queries)} if text_queries else {}),
     }
     # 業務語は #848 で SQL の除外条件から融合後の加点に変わったため、0 件時の再検索（#818）は不要になった。
     search_result = search_adb_hybrid_chunks(**search_options)
@@ -2373,7 +2378,7 @@ def _describe_term_usage(
             "一致した用語": [term.to_payload() for term in runtime.matched_terms]
             if enabled and runtime is not None and not runtime.error
             else [],
-            "追加検索文": list(queries) if enabled and not answer and runtime is not None and not runtime.error else [],
+            "全文検索の文": list(queries) if enabled and not answer and runtime is not None and not runtime.error else [],
         }
     )
     if not enabled:
@@ -2388,10 +2393,10 @@ def _describe_term_usage(
         step.result(
             "登録した用語・同義語に一致しなかったため、回答補助には使用していません。"
             if answer
-            else "登録した用語・同義語に一致しなかったため、検索文の追加はありません。"
+            else "登録した用語・同義語に一致しなかったため、全文検索の文に足す語はありません。"
         )
         return
-    step.field("用途", "回答の補助情報（資料の根拠とは別）" if answer else "全文検索・ベクトル検索への検索文の追加")
+    step.field("用途", "回答の補助情報（資料の根拠とは別）" if answer else "全文検索の文への語の追加（ベクトル検索は原質問のまま）")
     for term in runtime.matched_terms:
         step.field("用語", term.term)
         step.field("別名", " / ".join(term.aliases))
@@ -2400,10 +2405,10 @@ def _describe_term_usage(
     if answer:
         step.result("一致した用語・別名・説明を回答生成の補助情報として提供します。")
     elif queries:
-        step.result(f"検索文 {len(queries)} 本を追加します。")
+        step.result("全文検索の文に一致した用語と別名を足します。")
         step.add(*queries)
     else:
-        step.result("一致した用語はありますが、追加する検索文はありません。")
+        step.result("一致した用語はありますが、全文検索の文に足す語はありません。")
 
 
 def _record_term_usage(runtime: RuntimeKnowledgeContext | None, *, answer: bool, queries: Sequence[str] = ()) -> None:
@@ -2442,7 +2447,7 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
                 step.status = "補助情報なしで続行"
                 step.add(f"読込エラー: {terms.error}")
                 step.result(f"用語の照合に失敗したため、用語の追加なしで続行します（{terms.error}）。")
-                step.output({"状態": "読込失敗", "読込エラー": terms.error, "一致した用語": [], "追加検索文": []})
+                step.output({"状態": "読込失敗", "読込エラー": terms.error, "一致した用語": [], "全文検索の文": []})
                 return runtime
             result = replace(runtime, matched_terms=terms.matched_terms).with_term_usage(
                 search=settings.runtime_terms_search_enabled,
@@ -2502,20 +2507,6 @@ def _retrieval_query_plan_payload(
     payload["domain_keyword_expansion"] = dict(text_search_info.domain_keyword_expansion)
     payload["runtime_expansion_decisions"] = list(runtime_knowledge.expansion_decisions) if runtime_knowledge else []
     return payload
-
-
-def _text_search_limit_note(text_variants: Sequence[str], settings: Settings) -> str:
-    """全文検索の上限（TEXT_SEARCH_QUERY_VARIANT_LIMIT）で切れる検索文の本数を示す。上限内なら空 (#921)。
-
-    検索実装（search_adb_hybrid_chunks）と同じく、どの検索文も全文検索に使い、上限を当てる。
-    """
-    limit = max(1, int(getattr(settings, "text_search_query_variant_limit", 6) or 6))
-    if len(text_variants) <= limit:
-        return ""
-    return (
-        f"      全文検索に使う検索文: 先頭 {limit} 本（TEXT_SEARCH_QUERY_VARIANT_LIMIT）。"
-        f"残り {len(text_variants) - limit} 本は意味検索だけに使います。"
-    )
 
 
 def build_question_text_search_info(
@@ -2862,67 +2853,55 @@ def answer_question_result(
 
     with _execution_step(
         "検索文をまとめ、検索語を作る",
-        "原質問と用語・同義語による追加検索文をまとめ、重複を除き、全文検索に使う検索語を作ります。",
+        "意味の近さ（ベクトル）は原質問で、語の一致（全文）は原質問に用語・同義語などの語を足した文で 1 回検索します。"
+        "全文検索に使う検索語を作ります。",
     ) as step:
         keyword_trace: dict[str, Any] = {}
-        candidate_queries = _merge_retrieval_queries(
-            normalized_question,
-            runtime_knowledge.expanded_question,
-            *expansion.retrieval_queries,
-        )
-        retrieval_queries = candidate_queries
-        if getattr(settings, "original_query_only", False):
+        # 主検索は 1 回（#5159）。ベクトル検索は原質問だけ（語を足すと意味がずれる）、全文検索は原質問に足した語つきの文。
+        (vector_query,) = _merge_retrieval_queries(normalized_question)
+        retrieval_queries: tuple[str, ...] = (vector_query,)
+        original_query_only = bool(getattr(settings, "original_query_only", False))
+        expanded = runtime_knowledge.expanded_question != runtime_knowledge.original_question
+        text_query = vector_query
+        if expanded and not original_query_only:
+            # 原質問と同じ形（NFKC・制御文字の除去・空白の正規化）にする。
+            text_query = (_merge_retrieval_queries(runtime_knowledge.expanded_question) or (vector_query,))[0]
+        elif original_query_only:
             # 比較実験用。検索直前にも同じ絞り込みがあるが、ここで適用しないと記録が実際の検索と食い違う。
-            retrieval_queries = (normalized_question,)
-            step.add("      設定 RETRIEVAL_ORIGINAL_QUERY_ONLY=true のため、原質問だけで検索します。")
-
-        def source_key(query: str) -> str:
-            # 候補検索文は _merge_retrieval_queries が制御文字・書式文字を除いた形なので、出どころのキーも同じ形で作る。
-            return dedupe_query_key(_normalized_query_text(query))
-
-        # 検索文は原質問と、原質問に語を足したものだけなので、どの検索文にも出どころがある。
-        sources = {source_key(normalized_question): "原質問"}
-        if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
-            # 出どころは実際に語を足したもの（用語・同義語 / 業務ガイド / 確認で選んだ条件。#3490）。
-            sources.setdefault(source_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
-        query_sources: dict[str, tuple[str, ...]] = {}
-        for query in retrieval_queries:
-            key = source_key(query)
-            labels = [sources[key]]
-            if (
-                runtime_knowledge.expanded_question != runtime_knowledge.original_question
-                and source_key(runtime_knowledge.expanded_question) == key
-            ):
-                labels.append(runtime_knowledge.query_source)
-            query_sources[query] = tuple(dict.fromkeys(labels))
+            step.add("      設定 RETRIEVAL_ORIGINAL_QUERY_ONLY=true のため、全文検索にも原質問だけを使います。")
+        # 出どころは実際に語を足したもの（用語・同義語 / 業務ガイド / 確認で選んだ条件。#3490）。
+        text_source = runtime_knowledge.query_source if text_query != vector_query else "原質問"
+        query_sources: dict[str, tuple[str, ...]] = {vector_query: ("原質問",)}
+        text_queries: dict[str, str] = {}
+        if text_query != vector_query:
+            query_sources[text_query] = (text_source,)
+            text_queries[vector_query] = text_query
         step.input(
             {
                 "原質問": normalized_question,
-                "候補検索文": [{"本文": query, "出どころ": sources[source_key(query)]} for query in candidate_queries],
                 "一致した用語": [term.to_payload() for term in runtime_knowledge.retrieval_terms],
-                "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
+                "原質問だけで検索": original_query_only,
             }
         )
-        # 用語・同義語を足した検索文は、足した語を全文検索の語の上限から落とさない（長い質問の後ろの別名が埋もれる #2163）。
+        # 用語・同義語を足した全文検索の文は、足した語を全文検索の語の上限から落とさない（長い質問の後ろの別名が埋もれる #2163）。
         term_labels = _term_labels(runtime_knowledge)
-        query_keywords = {runtime_knowledge.expanded_question: term_labels} if term_labels else {}
+        query_keywords = {text_query: term_labels} if term_labels and text_query != vector_query else {}
         settings = replace(settings, retrieval_query_sources=query_sources, retrieval_query_keywords=query_keywords)
         text_search_info = build_question_text_search_info(
-            normalized_question,
+            text_query,
             settings,
-            query_source=_text_search_query_source(runtime_knowledge, expansion),
-            query_variants=retrieval_queries,
+            query_source=_text_search_query_source(runtime_knowledge, expansion) if text_query != vector_query else "原質問",
+            query_variants=(text_query,),
         )
         text_search_info = replace(text_search_info, domain_keyword_expansion=keyword_trace)
         if (tokenizer_failure := sudachi_unavailable(_question_text_search_tokenizer_config(settings))) is not None:
             # 全文検索の語を文字種の区切りだけで作ったことを、回答ごとに 1 回だけ診断に残す（#3286）。
             report_degraded("text_search_tokenizer", tokenizer_failure)
         step.result(
-            f"検索文 {len(retrieval_queries)} 本",
-            *(f"{number}. [{sources[source_key(query)]}] " + _display_query(query) for number, query in enumerate(retrieval_queries, 1)),
+            "検索 1 回",
+            "ベクトル検索の文: [原質問] " + _display_query(vector_query),
+            f"全文検索の文: [{text_source}] " + _display_query(text_query),
         )
-        if note := _text_search_limit_note(retrieval_queries, settings):
-            step.add(note)
         _add_text_search_details(step, text_search_info)
         if text_search_info.error:
             step.status = "検索語の抽出に失敗"
@@ -2930,8 +2909,9 @@ def answer_question_result(
             step.status = "文字種による分割で続行"
         step.output(
             {
-                "採用した検索文": [{"本文": query, "出どころ": list(query_sources[query])} for query in retrieval_queries],
-                "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
+                "ベクトル検索の文": {"本文": vector_query, "出どころ": ["原質問"]},
+                "全文検索の文": {"本文": text_query, "出どころ": [text_source]},
+                "原質問だけで検索": original_query_only,
                 "全文検索の入力": asdict(text_search_info),
             }
         )
@@ -2988,7 +2968,8 @@ def answer_question_result(
             lambda: {
                 "回答対象の質問": request_text,
                 "検索対象の質問": normalized_question,
-                "検索文": tuple(retrieval_queries),
+                "ベクトル検索の文": vector_query,
+                "全文検索の文": text_query,
                 "検索範囲": selected_retrieval_scope,
                 "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
                 "回答生成の要求": generate_answer,
@@ -3007,7 +2988,8 @@ def answer_question_result(
                 retrieval_step.input(
                     {
                         "質問": normalized_question,
-                        "検索文": tuple(retrieval_queries),
+                        "ベクトル検索の文": vector_query,
+                        "全文検索の文": text_query,
                         "検索範囲": selected_retrieval_scope,
                         "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
                         "起点数": chunk_top_k,
@@ -3023,12 +3005,13 @@ def answer_question_result(
                     top_k=chunk_top_k,
                     neighbor_child_count=chunk_neighbor_count,
                     retrieval_queries=retrieval_queries,
+                    text_queries=text_queries,
                     rerank_phase="main_search",
                     rerank_enabled=effective_rerank_enabled,
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
                 )
-                retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
+                retrieval_step.field("全文検索の文", text_source)
                 _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
                 _record_search_result(retrieval_step, context, title=evidence_title)
         except AdbHybridSearchUnavailable as exc:
@@ -3100,7 +3083,7 @@ def answer_question_result(
             overflow_step.input(
                 lambda: {
                     "原質問": request_text,
-                    "既検索文": list(retrieval_queries),
+                    "既検索文": list(dict.fromkeys((*retrieval_queries, *text_queries.values()))),
                     "既存根拠": candidate_snapshot(context.records),
                     "追加検索予算": extra_budget.to_payload(),
                     "要求別の予算": asdict(_request_coverage_budget(settings)),
@@ -3123,7 +3106,7 @@ def answer_question_result(
                 extra_budget=extra_budget,
                 coverage_budget=_request_coverage_budget(settings),
                 usage=coverage_usage,
-                searched_queries=retrieval_queries,
+                searched_queries=(*retrieval_queries, *text_queries.values()),
                 initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
                 allow_split=not getattr(settings, "retrieval_original_query_only", False),
             )

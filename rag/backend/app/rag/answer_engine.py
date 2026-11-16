@@ -306,11 +306,11 @@ class _SearchState:
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
     )
-    # 検索文ごとの検索の結果((検索文, 方式, 検索条件, 件数) ごと。#1490)。要求ごとの
-    # 再検索で同じ検索文を読み直さない(1 回の回答の中だけ)。
-    search_hits: dict[tuple[str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]] = (
-        field(default_factory=dict)
-    )
+    # 検索文ごとの検索の結果((検索文, 全文検索の文, 方式, 検索条件, 件数) ごと。#1490・#5159)。
+    # 要求ごとの再検索で同じ検索文を読み直さない(1 回の回答の中だけ)。
+    search_hits: dict[
+        tuple[str, str, str, tuple[tuple[str, str], ...], int], list[RetrievedChunk]
+    ] = field(default_factory=dict)
     # 章節の拡張(#1436)の章節の一覧((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
     # 利用者が明示した基準日(as_of。無ければ空)。検索の条件は 1 回の回答の初めに決めた基準日を
@@ -508,7 +508,6 @@ def build_engine_settings(
         "RAG_TEXT_SEARCH_MAX_TOKENS": str(settings.rag_text_search_max_tokens),
         "RAG_TEXT_SEARCH_MAX_QUERY_CHARS": str(settings.rag_text_search_max_query_chars),
         "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
-        "RAG_RRF_SOURCE_RATIO": json.dumps(settings.rag_rrf_source_ratio),
         "RAG_RERANK_SLOT_RATIO": json.dumps(settings.rag_rerank_slot_ratio),
         "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",
         "RUNTIME_TERMS_ANSWER_ENABLED": "1" if settings.rag_runtime_terms_answer_enabled else "0",
@@ -1037,9 +1036,15 @@ class AnswerEngine:
         expand_references: bool = True,
         defer_context: bool = False,
         page_ranges: Sequence[Mapping[str, Any]] = (),
+        text_queries: Mapping[str, str] | None = None,
         **_: object,
     ) -> Any:
         """回答の検索。``page_ranges``(業務ガイドの手順の参照の頁。#2395)は、その頁に絞って検索する。
+
+        ``text_queries`` は検索文ごとの全文検索の文(主検索で原質問に語を足した文。#5159)。
+        その検索文はベクトル検索を検索文で、全文検索をこの文で 1 回の検索として行う(原生方式は
+        1 回の ``DBMS_HYBRID_VECTOR.SEARCH``、個別 SQL 方式はベクトルの SQL と CONTAINS の SQL を
+        1 本ずつ)。
 
         頁に絞った検索は、参照の頁の外の chunk(交差参照・実体の拡張)を足さない。利用者の確認で
         検索の範囲がすでに頁に絞られていれば、その範囲と重なる頁だけを検索する(範囲を広げない)。
@@ -1065,8 +1070,13 @@ class AnswerEngine:
                 (q for q, labels in query_sources.items() if "原質問" in labels), queries[0]
             )
         original_query = state.original_retrieval_query
+        # embedding はベクトル検索の文(検索文)だけに作る。全文検索の文は embedding にしない(#5159)。
         embedded = await self._query_embeddings(state, queries)
         embeddings: dict[str, list[float]] = {}
+        full_texts = {query_key(query): text for query, text in (text_queries or {}).items()}
+        # 検索文ごとの全文検索の文(指定が無ければ検索文そのもの)。
+        texts = {query: full_texts.get(query_key(query), query) for query in queries}
+
         # どの検索文も vector と全文(hybrid)で検索する。embedding に失敗したら全文だけで検索する。
         modes: tuple[SearchMode, ...]
         if embedded is None:
@@ -1087,13 +1097,20 @@ class AnswerEngine:
             source_weights,
         )
 
-        weights = RrfWeights(
-            *self._settings.rag_rrf_method_ratio, *self._settings.rag_rrf_source_ratio
-        )
+        weights = RrfWeights(*self._settings.rag_rrf_method_ratio)
         budgets = source_weights([original_query, *queries], weights)
         query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
-        searches: list[tuple[str, list[float], SearchMode]] = [
-            (query, embeddings.get(query, []), mode) for query in queries for mode in modes
+        # (検索文, 検索に渡す文, embedding, 方式)。ベクトルだけの検索は検索文、全文を含む検索は
+        # 全文検索の文を渡す。
+        searches: list[tuple[str, str, list[float], SearchMode]] = [
+            (
+                query,
+                query if mode == SearchMode.VECTOR else texts[query],
+                embeddings.get(query, []),
+                mode,
+            )
+            for query in queries
+            for mode in modes
         ]
         fused: dict[str, float] = {}
         rankings: list[list[str]] = []
@@ -1103,9 +1120,9 @@ class AnswerEngine:
         }
         with bind_text_query_keywords(
             {
-                query: keywords_by_query[query_key(query)]
-                for query in queries
-                if query_key(query) in keywords_by_query
+                text: keywords_by_query[query_key(text)]
+                for text in dict.fromkeys(texts.values())
+                if query_key(text) in keywords_by_query
             }
         ):
             all_hits = await self._query_hits(
@@ -1117,7 +1134,7 @@ class AnswerEngine:
                 else dict(state.filters),
             )
         raw_lists = []
-        for (query, _embedding, mode), hits in zip(searches, all_hits, strict=True):
+        for (query, searched_text, _embedding, mode), hits in zip(searches, all_hits, strict=True):
             index = queries.index(query)
             if getattr(hits, "status", "") == "not_executed":
                 continue
@@ -1153,12 +1170,16 @@ class AnswerEngine:
                     error=getattr(hits, "error", ""),
                     sources=tuple(
                         query_sources.get(
-                            query,
-                            ("原質問",)
-                            if query_key(query) == query_key(original_query)
-                            else ("追加検索文",),
+                            searched_text,
+                            query_sources.get(
+                                query,
+                                ("原質問",)
+                                if query_key(query) == query_key(original_query)
+                                else ("追加検索文",),
+                            ),
                         )
                     ),
+                    text=searched_text if searched_text != query else "",
                 )
             )
             for hit in hits:
@@ -1206,7 +1227,7 @@ class AnswerEngine:
         citation_ids: list[str] = []
         citation_search = getattr(self._oracle, "citation_label_search", None)
         if citation_search is not None:
-            for query in queries:
+            for query in dict.fromkeys([*queries, *texts.values()]):
                 hits = await citation_search(
                     query,
                     filters=(_with_page_ranges(state.filters, page_ranges) or {})
@@ -1939,26 +1960,31 @@ class AnswerEngine:
     async def _query_hits(
         self,
         state: _SearchState,
-        searches: Sequence[tuple[str, list[float], SearchMode]],
+        searches: Sequence[tuple[str, str, list[float], SearchMode]],
         *,
         candidate_limit: int,
         filters: dict[str, str],
     ) -> list[list[RetrievedChunk]]:
         """検索文ごとの検索の結果を、``searches`` の順に返す(#1490)。
 
-        まだ読んでいない検索文は 1 回の SQL でまとめて読む(``OracleClient.search_many``。結果は
-        検索文ごとの ``hybrid_search`` と同じ。#1498)。同じ回答の中で同じ検索文・方式・条件・件数を
-        読んだことがあれば、その結果を使う(要求ごとの再検索)。
+        ``searches`` は (検索文, 検索に渡す文, embedding, 方式)。検索に渡す文は全文検索に使い、
+        embedding は検索文のもの(#5159)。まだ読んでいない検索は 1 回の SQL でまとめて読む
+        (``OracleClient.search_many``。結果は検索文ごとの ``hybrid_search`` と同じ。#1498)。
+        同じ回答の中で同じ検索文・渡す文・方式・条件・件数を読んだことがあれば、その結果を使う
+        (要求ごとの再検索)。
         """
         filter_key = tuple(sorted(filters.items()))
-        keys = [(query, mode.value, filter_key, candidate_limit) for query, _, mode in searches]
+        keys = [
+            (query, text, mode.value, filter_key, candidate_limit)
+            for query, text, _, mode in searches
+        ]
         missing: dict[
-            tuple[str, str, tuple[tuple[str, str], ...], int],
+            tuple[str, str, str, tuple[tuple[str, str], ...], int],
             tuple[str, list[float], SearchMode],
         ] = {}
-        for key, search in zip(keys, searches, strict=True):
+        for key, (_query, text, embedding, mode) in zip(keys, searches, strict=True):
             if key not in state.search_hits:
-                missing.setdefault(key, search)
+                missing.setdefault(key, (text, embedding, mode))
         if missing:
             search_many = getattr(self._oracle, "search_many", None)
             if search_many is not None:
