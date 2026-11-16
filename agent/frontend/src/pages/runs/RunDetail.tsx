@@ -14,7 +14,6 @@ import {
   ListSkeleton,
   ObjectActionBar,
   OpenConversationAction,
-  ProcessFailureNotice,
   RunDetailLayout,
   RunUsedModels,
   RunDetailSection,
@@ -33,6 +32,7 @@ import {
   CollapsedListToggle,
   useCollapsedList,
   operationTimestampMs,
+  processFailureBannerItem,
 } from "@production-ready/ui";
 import {
   agentApi,
@@ -237,15 +237,14 @@ export function RunDetail({
             alert={
               <>
                 <RunProgressIndicator run={run} steps={timelineSteps} />
-                {failure ? (
-                  // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・「詳細」。#2342）。
-                  <ProcessFailureNotice failure={failure} labels={processFailureLabels()} testId="run-failure" />
-                ) : null}
-                {/* 実行の状況の案内（通知の途切れ・待ち・結果の不明な書き込み）は 1 つの枠（messaging.md §3.4.3。#5183）。
-                    失敗は 3 製品共通の失敗のカード（§9.1 の状態メッセージの枠）で別に出す。 */}
+                {/* 実行の状況の案内（失敗・通知の途切れ・待ち・結果の不明な書き込み）は 1 つの枠（messaging.md §3.4.3。#5183）。
+                    失敗は 3 製品共通の失敗のカードの内容（チャットと同じ 1 文目・「詳細」。§9.1。#2342）を枠の項目にする（#5226）。 */}
                 <CombinedBanner
                   testId="run-status-notice"
                   items={[
+                    failure
+                      ? processFailureBannerItem({ failure, labels: processFailureLabels(), testId: "run-failure" })
+                      : null,
                     sseState.status === "failed" && CANCELLABLE_RUN_STATUSES.includes(run.status)
                       ? {
                           id: "stream-stopped",
