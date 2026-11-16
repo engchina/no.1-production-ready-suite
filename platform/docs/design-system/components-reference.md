@@ -1091,6 +1091,61 @@ export declare const toast: {
 
 ---
 
+## CombinedBanner — **新規**（#5183）
+
+1 つの区画（カード・フォーム・1 つの回答）の案内を **1 つの枠**にまとめる Banner。UX 契約 messaging.md §3.4.3 の実装。同じ区画に `Banner` を積まず、事柄を `items` に渡す。
+
+```tsx
+<CombinedBanner
+  testId="system-tables-notice"
+  items={[
+    failed && { id: "failure", severity: "danger", title: t("…previousFailure"), children: <p>{t("…detail")}</p> },
+    destructive.length > 0 && {
+      id: "schema",
+      severity: "warning",
+      title: t("…destructive.title"),        // 見出しの StatusBadge の文字を繰り返さない
+      children: <>{plan}{details}{confirmHint}</>,
+      testId: "system-tables-destructive-migrations",
+    },
+    !canManage && { id: "read-only", severity: "info", children: t("…readOnly") },
+  ]}
+/>
+```
+
+```ts
+interface CombinedBannerItem {
+  id: string;                 // 枠の中で一意
+  severity: FeedbackTone;     // 枠の色・アイコン・role は最も重い項目のもの
+  title?: string;             // 何が起きているか（最も重い項目の見出しが枠の先頭）
+  children?: ReactNode;       // 原因と対処（1 回だけ）
+  action?: ReactNode;         // この項目の操作（導線・再試行）
+  progress?: ReactNode;       // action で始めた処理の進行（Banner の progress と同じ）
+  testId?: string;
+}
+
+interface CombinedBannerProps {
+  items: ReadonlyArray<CombinedBannerItem | null | false | undefined>; // 偽の値は出さない
+  className?: string;
+  testId?: string;
+}
+
+// 出す項目を重い順に並べる（空の項目を捨てる）。枠を描くかの判定に使える。
+declare function combinedBannerItems(items: CombinedBannerProps["items"]): CombinedBannerItem[];
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 色・アイコン・role は最も重い項目（danger > warning > info > success）。role は外側の枠の 1 か所だけ | 色だけでなくアイコンと読み上げも 1 つにそろえ、項目ごとに読み上げを重ねない（messaging §2） |
+| 項目は重い順、同じ重さは渡した順。最も重い項目の見出しが枠の先頭 | 最も重大で対処できる事柄を上に（messaging §9 P3） |
+| 項目が 1 つなら `Banner` と同じ形。2 つ以上なら `<ul>` の項目を、枠の色の区切り線（`divide-<tone>-border`）で並べる。項目ごとに見出し・本文・操作・進行 | 1 つの枠のまま、事柄の切れ目と数が見え、読み上げでも項目の数が分かる |
+| 見出しも本文も無い項目と偽の値は出さず、出す項目が無ければ何も描かない | 空の面を描かない（messaging §9 P4）。`cond && { … }` で渡せる |
+| 項目に role を持つ部品（`Banner`・`DatabaseUnavailableNotice` の banner）を入れない。DB の縮退の案内は `useDatabaseUnavailableBannerItem`（`@production-ready/system-settings`）で項目にする | 枠の中に live region を重ねない |
+
+- 単体テストは `packages/ui/tests/combined-banner.test.tsx`。
+- 使う画面: 3 製品のシステムテーブルのカード（`SystemTablesCard`。状態・削除の migration・参照先のない行・前回 / 今回の失敗・再起動・閲覧専用・製品の案内（Agent の保存先））。
+
+---
+
 ## BlockedPageNotice — **新規**（#325）
 
 ページ全体が使えない（ブロック状態）ときに、業務画面の代わりに主領域の中央へ出す案内カードです。RAG と NL2SQL の DB ゲートが別々に手書きしていた見た目を `packages/ui` にまとめました（3製品の DB ゲートは `@production-ready/system-settings` の `DatabaseGate` がこれを使います）。製品で全画面の案内カードを再実装しないでください。

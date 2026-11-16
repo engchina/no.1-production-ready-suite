@@ -203,3 +203,151 @@ describe("「最新情報を取得」のスピナー（#819）", () => {
     expect(initializeButton().getAttribute("aria-busy")).toBeNull();
   });
 });
+
+// #5183: カードの案内は、どの組み合わせでも 1 つの枠（CombinedBanner）にまとめる。
+describe("カードの案内の枠は 1 つ（#5183）", () => {
+  const FOREIGN_KEY = {
+    name: "DEMO_ITEMS_PARENT_FK",
+    table_name: "DEMO_ITEMS",
+    columns: ["PARENT_ID"],
+    referenced_table_name: "DEMO_PARENTS",
+    referenced_columns: ["PARENT_ID"],
+    delete_rule: "CASCADE",
+    orphan_rows: 3,
+  };
+  const failedState = (code: string | null) => ({
+    ...statusData().operation_state,
+    status: "failed" as const,
+    last_error_code: code,
+  });
+
+  function notices(): Element[] {
+    return [...host.querySelectorAll('#system-tables [role="status"], #system-tables [role="alert"]')];
+  }
+
+  function onlyNotice(): Element {
+    const found = notices();
+    expect(found).toHaveLength(1);
+    return found[0];
+  }
+
+  function itemOrder(notice: Element): string[] {
+    return [...notice.querySelectorAll("[data-testid]")]
+      .map((element) => element.getAttribute("data-testid") ?? "")
+      .filter((id) => id.startsWith("system-tables-") && !id.includes("foreign-keys-") && !id.includes("columns"));
+  }
+
+  it("partial と削除の migration は、削除を見出しに 1 つの枠で出し、補うことと削除の明細と確認の案内を順に並べる", async () => {
+    const { api } = apiWith(
+      statusData({
+        status: "partial",
+        existing_object_count: 2,
+        missing_objects: [
+          { name: "DEMO_IDX", object_type: "INDEX" },
+          { name: "DEMO_SEQ", object_type: "SEQUENCE" },
+        ],
+      }),
+    );
+    await renderCard({ api, confirmDestructiveMigrations: async () => false });
+    const notice = onlyNotice();
+    expect(notice.getAttribute("role")).toBe("status");
+    const text = notice.textContent ?? "";
+    // 見出しは最も重い事柄。StatusBadge の文字（一部不足）を繰り返さない。
+    expect(text.startsWith("データを削除する更新があります")).toBe(true);
+    expect(text).not.toContain("一部不足");
+    const order = [
+      "不足している必須オブジェクト 2 件を補い",
+      DESTRUCTIVE.name,
+      "削除したデータは元に戻せません",
+      "「作成・更新」を押すと、削除の確認を求めます。",
+    ].map((part) => text.indexOf(part));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // 状態だけの案内（補完の文）を別に出さない。
+    expect(text).not.toContain("既存データを保持したまま不足分を補います");
+  });
+
+  it("outdated と削除の migration は、1 つの枠で定義の更新と削除を伝える", async () => {
+    const { api } = apiWith(statusData({ missing_columns: [{ table_name: "DEMO_ITEMS", column_name: "PAYLOAD" }] }));
+    await renderCard({ api });
+    const text = onlyNotice().textContent ?? "";
+    expect(text.startsWith("データを削除する更新があります")).toBe(true);
+    expect(text).toContain("「作成・更新」で定義を更新し、次の migration でテーブルや行を削除します。");
+    expect(text).toContain("DEMO_ITEMS.PAYLOAD");
+    expect(text).not.toContain("更新必要");
+    // 確認ダイアログを渡さない製品には、確認の案内を出さない。
+    expect(text).not.toContain("削除の確認を求めます");
+  });
+
+  it("missing は info の 1 つの枠にし、閲覧専用の案内も同じ枠に並べる", async () => {
+    const { api } = apiWith(
+      statusData({
+        status: "missing",
+        pending_destructive_migrations: [],
+        existing_object_count: 0,
+        existing_table_count: 0,
+      }),
+    );
+    await renderCard({ api, canManage: false });
+    const notice = onlyNotice();
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.getAttribute("data-surface-tint")).toBe("info");
+    expect(notice.textContent?.startsWith("主要テーブルがまだありません")).toBe(true);
+    expect(itemOrder(notice)).toEqual(["system-tables-schema-notice", "system-tables-read-only"]);
+  });
+
+  it("前回の失敗は danger にし、削除・参照先のない行・閲覧専用・製品の案内を同じ枠に重い順で並べる", async () => {
+    const { api } = apiWith(
+      statusData({
+        status: "partial",
+        missing_objects: [{ name: "DEMO_IDX", object_type: "INDEX" }],
+        orphaned_foreign_keys: [FOREIGN_KEY],
+        operation_state: failedState("ORA-00054"),
+      }),
+    );
+    await renderCard({
+      api,
+      canManage: false,
+      notices: [{ id: "product", severity: "warning", title: "製品の案内", testId: "system-tables-product-notice" }],
+    });
+    const notice = onlyNotice();
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.getAttribute("data-surface-tint")).toBe("danger");
+    expect(notice.textContent?.startsWith("前回の操作が完了していません")).toBe(true);
+    expect(itemOrder(notice)).toEqual([
+      "system-tables-previous-failure",
+      "system-tables-destructive-migrations",
+      "system-tables-orphaned-foreign-keys",
+      "system-tables-product-notice",
+      "system-tables-read-only",
+    ]);
+    expect(notice.textContent).toContain("エラーコード: ORA-00054");
+  });
+
+  it("ready で案内が無ければ枠を出さない", async () => {
+    const { api } = apiWith(statusData({ status: "ready", pending_destructive_migrations: [], pending_versions: [] }));
+    await renderCard({ api });
+    expect(notices()).toHaveLength(0);
+    expect(host.querySelector('[data-testid="system-tables-notice"]')).toBeNull();
+  });
+
+  it("状態を取得できないときは、DB の案内と製品の案内を 1 つの枠に並べる", async () => {
+    const api: SystemTablesApi = {
+      getSystemTablesStatus: () => Promise.reject(new Error("503")),
+      initializeSystemTables: () => new Promise<never>(() => undefined),
+    };
+    await renderCard({
+      api,
+      notices: [{ id: "product", severity: "warning", title: "製品の案内", testId: "system-tables-product-notice" }],
+    });
+    for (let attempt = 0; attempt < 50 && !host.querySelector('[data-testid="database-gate-retry"]'); attempt += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    const notice = onlyNotice();
+    expect(notice.textContent).toContain("データベースに接続できません");
+    expect(notice.textContent).toContain("製品の案内");
+    expect(notice.querySelector('[data-testid="database-gate-retry"]')).not.toBeNull();
+  });
+});

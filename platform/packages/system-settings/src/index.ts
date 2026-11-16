@@ -204,6 +204,7 @@ export {
   DATABASE_UNAVAILABLE_TITLE_ID,
   DatabaseSettingsLink,
   DatabaseUnavailableNotice,
+  useDatabaseUnavailableBannerItem,
   adbLifecycleGroup,
   adbLifecycleLabel,
   databaseNoticeContent,

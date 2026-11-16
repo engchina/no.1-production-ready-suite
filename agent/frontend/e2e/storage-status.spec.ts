@@ -40,6 +40,10 @@ test("保存先がメモリなら、各画面に案内を出し、実行環境�
     await expect(notice, path).not.toContainText("データベースを設定してください");
   }
   await expectNoPageHorizontalOverflow(page);
+  // システムテーブルの画面は、保存先の案内をカードの案内の枠に入れ、ページに別の枠を出さない（#5183）。
+  await page.goto("/settings/system-tables");
+  await expect(page.locator("#system-tables").getByTestId("storage-not-persistent-notice")).toBeVisible();
+  await expect(page.locator('main [role="status"], main [role="alert"]')).toHaveCount(1);
 
   await page.goto("/agents");
   await page.getByTestId("storage-notice-open-runtime").click();
@@ -68,6 +72,18 @@ test("DB も未設定なら、データベースの設定へ案内する（既�
   };
   await page.goto("/settings/mcp-connections");
   await expect(page.getByTestId("storage-not-persistent-notice")).toContainText("データベースが未設定のため");
+
+  // システムテーブルの画面は、状態を取得できない DB の案内と保存先の案内を、カードの 1 つの枠に並べる（#5183）。
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    route.fulfill({ status: 503, json: { data: null, error_messages: ["合成の状態取得エラー"], warning_messages: [] } })
+  );
+  await page.goto("/settings/system-tables");
+  const tablesNotice = page.locator("#system-tables").getByTestId("system-tables-notice");
+  await expect(tablesNotice).toContainText("データベースに接続できません");
+  await expect(tablesNotice.getByTestId("storage-not-persistent-notice")).toContainText("データベースが未設定のため");
+  await expect(page.locator('main [role="status"], main [role="alert"]')).toHaveCount(1);
+  await expectNoPageHorizontalOverflow(page);
+  await page.unroute("**/api/settings/database/system-tables");
 
   await page.goto("/runtimes");
   await expect(page.getByTestId("runtime-storage-card")).toContainText("未設定");
