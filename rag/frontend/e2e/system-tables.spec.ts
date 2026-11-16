@@ -326,8 +326,9 @@ test("操作失敗後にエラーへフォーカスし、375px でページ横�
   const card = page.locator("#system-tables");
   await card.getByRole("button", { name: "作成・更新" }).click();
 
+  // 失敗はカードの案内の枠（1 つ）の項目に出し、枠へフォーカスを移す（#5183）。
+  await expect(page.getByTestId("system-tables-notice")).toBeFocused();
   const error = page.getByTestId("system-tables-operation-error");
-  await expect(error).toBeFocused();
   await expect(error).toContainText("ロック");
 
   const pageOverflow = await page.evaluate(
@@ -496,6 +497,8 @@ for (const theme of ["light", "dark"] as const) {
     await expect(
       card.getByRole("button", { name: "参照先のない行を削除 RAG_DOC_EXT_DOCUMENT_FK" })
     ).toBeVisible();
+    // 更新必要の案内と参照先のない行の警告は、カードの 1 つの枠に並べる（#5183）。
+    await expect(card.locator("[role='status'], [role='alert']")).toHaveCount(1);
 
     const contrast = await minimumTextContrast(page, "#system-tables [role='status']");
     expect(contrast.count).toBeGreaterThan(5);
@@ -509,15 +512,14 @@ for (const theme of ["light", "dark"] as const) {
     // 目視用の画像（環境変数を指定したときだけ。CI では撮らない）。
     if (screenshotDir) {
       const widths = testInfo.project.name === "mobile" ? [375] : [1280, 1920];
-      const banners = card.locator("[role='status']");
+      // 案内はカードに 1 つの枠（#5183）。
+      const notice = card.getByTestId("system-tables-notice");
       for (const width of widths) {
         await page.setViewportSize({ width, height: 900 });
-        for (const [index, name] of ["outdated", "orphaned"].entries()) {
-          await banners.nth(index).screenshot({
-            path: `${screenshotDir}/system-tables-fk-${name}-${theme}-${width}.png`,
-            animations: "disabled",
-          });
-        }
+        await notice.screenshot({
+          path: `${screenshotDir}/system-tables-fk-${theme}-${width}.png`,
+          animations: "disabled",
+        });
       }
       await card.getByRole("button", { name: "参照先のない行を削除 RAG_DOC_EXT_DOCUMENT_FK" }).click();
       const dialog = page.getByRole("alertdialog");
@@ -588,8 +590,9 @@ test("参照先のない行が確認時より増えていたら削除せず、�
     .click();
   await page.getByRole("alertdialog").getByRole("button", { name: "参照先のない行を削除" }).click();
 
+  // 失敗はカードの案内の枠（1 つ）の項目に出し、枠へフォーカスを移す（#5183）。
+  await expect(page.getByTestId("system-tables-notice")).toBeFocused();
   const error = page.getByTestId("system-tables-operation-error");
-  await expect(error).toBeFocused();
   await expect(error).toContainText("確認時 240 件、現在 241 件");
   expect(mock.orphanDeletePayloads()).toHaveLength(1);
 });
@@ -639,6 +642,8 @@ for (const theme of ["light", "dark"] as const) {
     await expect(warning).toContainText("rag_agent_memories");
     await expect(warning).toContainText("「作成・更新」を押すと、削除の確認を求めます。");
     await expect(card).not.toContainText("無損失で更新できます");
+    // 状態の案内と削除の案内を重ねず、1 つの枠にする（#5183）。
+    await expect(card.locator("[role='status'], [role='alert']")).toHaveCount(1);
 
     const contrast = await minimumTextContrast(page, "#system-tables [role='status']");
     expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);

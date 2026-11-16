@@ -802,7 +802,9 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
   const initialize = card.getByRole("button", { name: "作成・更新" });
   await initialize.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("system-tables-operation-error")).toBeFocused();
+  // 失敗はカードの案内の枠（1 つ）の項目に出し、枠へフォーカスを移す（#5183）。
+  await expect(page.getByTestId("system-tables-notice")).toBeFocused();
+  await expect(page.getByTestId("system-tables-operation-error")).toBeVisible();
   const operationAlert = card.getByRole("alert");
   await expect(operationAlert).toHaveCount(1);
   await expect(operationAlert).toContainText("ORA-00054");

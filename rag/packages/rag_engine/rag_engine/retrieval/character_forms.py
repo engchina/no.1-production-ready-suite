@@ -54,15 +54,21 @@ _SOUND_MARK_PAIR = re.compile(r".[゙゚]")
 
 
 @functools.cache
-def _format_run() -> re.Pattern[str]:
-    """Unicode の書式文字（一般カテゴリ Cf）の連続（初めて使うときに Unicode のデータから作る）。
+def format_characters() -> str:
+    """Unicode の書式文字（一般カテゴリ Cf）を正規表現の文字クラスの中身として返す（初めて使うときに Unicode のデータから作る）。
 
     soft hyphen・ZWSP・ZWNJ・ZWJ・WORD JOINER・BOM などの目に見えない字。NFKC でも消えず、Oracle Text は
     字によって語を分けたり（U+00AD・U+200B〜U+200D・U+2060）語の一部にしたり（U+FEFF）するので、
     語の中にあると同じ表記の質問で当たらない（#5118）。字ごとの一覧は持たず、カテゴリで決める。
+    回答の本文の引用の印の形式の解析（#5186）も同じ字の集合を使う。
     """
-    chars = "".join(chr(code) for code in range(sys.maxunicode + 1) if unicodedata.category(chr(code)) == "Cf")
-    return re.compile(f"[{re.escape(chars)}]+")
+    return re.escape("".join(chr(code) for code in range(sys.maxunicode + 1) if unicodedata.category(chr(code)) == "Cf"))
+
+
+@functools.cache
+def _format_run() -> re.Pattern[str]:
+    """Unicode の書式文字（一般カテゴリ Cf）の連続。"""
+    return re.compile(f"[{format_characters()}]+")
 
 
 def _is_format(char: str) -> bool:

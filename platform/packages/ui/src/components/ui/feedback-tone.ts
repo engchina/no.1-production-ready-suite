@@ -32,6 +32,22 @@ export const toneSurface: Record<FeedbackTone, string> = {
   danger: "border-danger-border bg-danger-subtle text-danger-fg",
 };
 
+/** 1 つの面の中で項目を区切る線（面の枠と同じ色。`CombinedBanner`）。 */
+export const toneDivide: Record<FeedbackTone, string> = {
+  success: "divide-success-border",
+  info: "divide-info-border",
+  warning: "divide-warning-border",
+  danger: "divide-danger-border",
+};
+
+/** 重さの順（danger > warning > info > success）。大きいほど重い。 */
+export const toneRank: Record<FeedbackTone, number> = {
+  success: 0,
+  info: 1,
+  warning: 2,
+  danger: 3,
+};
+
 /** danger は即時読み上げ（alert）、その他は polite（status）。 */
 export function toneRole(tone: FeedbackTone): "alert" | "status" {
   return tone === "danger" ? "alert" : "status";

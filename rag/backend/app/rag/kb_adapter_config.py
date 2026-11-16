@@ -105,7 +105,8 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     # 取込側の高度軸(現状グローバルのみだった adapter を KB 上書き対象へ拡張)。
     # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
     "graph_profile": "rag_graph_profile",
-    # 実体の層（#1362。既定 ON。#1388）。索引の保存の後に実体と「実体と chunk の関連」を作る。
+    # 実体・別名索引（#1362）。索引の保存の後に実体と「実体と chunk の関連」を作る。全体の既定は
+    # RAG_ENTITY_INDEX_ENABLED。
     "entity_index_enabled": "rag_entity_index_enabled",
     "entity_name_columns": "rag_entity_name_columns",
     "entity_attribute_columns": "rag_entity_attribute_columns",

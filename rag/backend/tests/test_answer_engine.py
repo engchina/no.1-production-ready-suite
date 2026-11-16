@@ -18,6 +18,7 @@ from rag_engine.models.llm import (
 )
 
 import app.rag.answer_engine as answer_engine_module
+from app.clients.entity_store import ENTITY_ALIASES_TABLE
 from app.clients.section_map_store import SECTION_CHUNKS_TABLE
 from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
@@ -92,6 +93,15 @@ class FakeOracle:
         if SECTION_CHUNKS_TABLE in statement:
             return None
         raise AssertionError("FakeOracle は章節の対応のほかの SQL を読まない")
+
+    # 実体・別名による検索拡張（既定 ON。#5187）が読む実体の表。この代役の文書は実体を持たないので、
+    # 拡張は何も足さずに回答を続ける。拡張を確かめる試験は `tests/test_entity_layer.py`。
+    async def _fetch_all(
+        self, statement: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if ENTITY_ALIASES_TABLE in statement:
+            return []
+        raise AssertionError("FakeOracle は実体の表のほかの SQL を一覧で読まない")
 
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
         return None
