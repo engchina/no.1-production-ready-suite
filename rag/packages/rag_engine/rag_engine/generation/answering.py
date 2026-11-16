@@ -245,7 +245,7 @@ from rag_engine.retrieval.summary_hits import (
     derived_hits_by_document,
     document_scope,
     is_derived_record,
-    replace_derived_hits,
+    place_bodies_before_derived,
 )
 from rag_engine.retrieval.task_contract import (
     REQUIRED_ASPECTS,
@@ -1105,8 +1105,9 @@ def build_adb_hybrid_answer_context(
     rerank と下限の後、文書ごとの上限と ``top_k`` の切りの前にその候補を除き（``covered_candidates`` に残す）、
     切りの枠を新しい根拠に使う。
 
-    summary_research は補いの検索（fill=False）で、切った起点の文書全体の要約などの派生の chunk を、その文書の本文に
-    範囲を絞った同じ検索文の検索で当たった本文の chunk に置き換える枠と記録（#5244。``_research_summary_hits``）。
+    summary_research は補いの検索（fill=False）で、切った起点の文書全体の要約などの派生の chunk の枠に、その文書の本文に
+    範囲を絞った同じ検索文の検索で当たった本文の chunk を置く枠と記録（#5244。``_research_summary_hits``。派生の chunk は
+    本文の後に枠の外で残す）。
 
     pinned_chunk_run_id 指定時は保存済み実行を直接読み、latest 更新による評価条件の変化を防ぐ。
     存在しない実行は AdbHybridSearchUnavailable とする。ADB と必要に応じ reranker に接続する。
@@ -1303,6 +1304,10 @@ def _cut_anchors(
     return list({retrieval_record_id(record): record for record in kept_children if retrieval_record_id(record) in anchor_ids}.values())
 
 
+def _nothing_held() -> int:
+    return 0
+
+
 def _generation_reserve_seconds(settings: Settings) -> float:
     """回答の期限の残りから、生成と回答の確定に残す秒数（章節の拡張と同じ。#5184）。"""
     from rag_engine.generation.section_expansion import SectionExpansionLimits
@@ -1320,11 +1325,12 @@ def _research_summary_hits(
     estimate_seconds: float,
     search: Callable[[list[dict[str, Any]], int, Callable[[AnswerRecord], str]], AnswerContext],
 ) -> tuple[list[AnswerRecord], tuple[tuple[AnswerRecord, str], ...], tuple[AnswerRecord, ...]]:
-    """補いの検索の切った起点の派生の chunk を、その文書の本文の根拠に置き換える（#5244）。
+    """補いの検索の切った起点の派生の chunk の枠に、その文書の本文の根拠を置く（#5244）。
 
     文書ごとに、その文書の本文に範囲を絞って同じ検索文で検索し直し（``search(範囲, 件数, 除く判定)``。件数は派生の
-    chunk の数）、当たった本文の chunk を派生の chunk の位置に置く。検索し直しでは派生の chunk・すでに切った起点・主の
-    検索の根拠にある候補（``exclude``）を切りの前に除く。戻り値は (起点, 主の検索の根拠にあるため除いた候補, 検索の原文)。
+    chunk の数）、当たった本文の chunk を派生の chunk の位置に置く。派生の chunk は本文の後に文書の説明として残す
+    （枠の外）。検索し直しでは派生の chunk・すでに切った起点・主の検索の根拠にある候補（``exclude``）を切りの前に除く。
+    戻り値は (起点, 主の検索の根拠にあるため除いた候補, 検索の原文)。
     """
     hits = derived_hits_by_document(selected)
     taken = {retrieval_record_id(record) for record in selected}
@@ -1341,7 +1347,7 @@ def _research_summary_hits(
     pool: dict[str, AnswerRecord] = {}
     with _execution_step(
         "要約の当たりの本文の検索",
-        "補いの検索で当たった文書全体の要約を、その文書の本文に範囲を絞った同じ検索文の検索で当たった本文に置き換えます。",
+        "補いの検索で当たった文書全体の要約の枠を、その文書の本文に範囲を絞った同じ検索文の検索で当たった本文で補います。",
     ) as step:
         step.input(
             {
@@ -1389,11 +1395,11 @@ def _research_summary_hits(
         step.output({"記録": rows})
         replaced = sum(len(hits[document_id]) for document_id in bodies)
         step.result(
-            f"要約の当たり {sum(len(records) for records in hits.values())} 件のうち {replaced} 件を本文 "
-            f"{sum(len(records) for records in bodies.values())} 件に置き換えました"
+            f"要約の当たり {sum(len(records) for records in hits.values())} 件のうち {replaced} 件の枠を本文 "
+            f"{sum(len(records) for records in bodies.values())} 件で補いました（要約は本文の後に残します）"
         )
     return (
-        replace_derived_hits(selected, bodies, retrieval_record_id),
+        place_bodies_before_derived(selected, bodies, retrieval_record_id),
         tuple(covered.values()),
         tuple(pool.values()),
     )
@@ -2422,8 +2428,8 @@ def _search_guide_steps(
     検索ごとに「検索 → rerank → 下限 → 文書ごとの上限 → ``top_k``（``guide_step_chunks_per_step``）で切る」だけを行い
     （#5173）、切った根拠を返す。主の検索の根拠への合わせ込みと文脈の補完は呼び出し元が主の検索と一緒に行う。
     exclude は要求別の補完と同じ、主の検索の根拠にすでにある候補を切りの前に除く判定（#5175）。
-    summary_research は手順の検索が当てた文書全体の要約を、その文書の本文の根拠に置き換える枠と記録（#5244）。任意の
-    手順の検索は終わってから総枠に数えるので、その間は決めた回数を検索し直しに使わない（``held``）。
+    summary_research は手順の検索が当てた文書全体の要約を、その文書の本文の根拠に置き換える枠と記録（#5244）。検索し直しは
+    任意の手順の検索の回数（必須の取得の後の枠の残りで決まる）を奪わない（``held``）。
     """
     targets = required_guide_targets(plan)
     trace: dict[str, Any] = {
@@ -2478,25 +2484,31 @@ def _search_guide_steps(
             summary_research=summary_research,
         )
 
-    started = clock()
-    results, acquisitions, stop = run_required_guide_searches(
-        question,
-        targets,
-        budget=extra_budget,
-        existing_records=context.records,
-        deadline_seconds=float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0),
-        retrieve=retrieve,
-        clock=clock,
-    )
     # 必須参照の取得後、参照なしの補助検索と任意手順だけを通常の枠から実行する。
     optional_steps = tuple(
         replace(step, references=()) if step.required else step for step in plan.steps if not step.required or step.references
     )
-    optional_limit = extra_budget.allowance(int(getattr(settings, "guide_step_max_queries", 0) or 0))
     optional_plan = replace(plan, steps=optional_steps)
+    kind_limit = int(getattr(settings, "guide_step_max_queries", 0) or 0)
     if summary_research is not None:
-        summary_research.held = len(planned_searches(optional_plan, optional_limit))
+        # 必須の取得の間の検索し直しは、この後の任意の手順の検索の回数（枠の残りで決まる）を奪わない。
+        summary_research.held = lambda: len(planned_searches(optional_plan, extra_budget.allowance(kind_limit)))
+    started = clock()
     try:
+        results, acquisitions, stop = run_required_guide_searches(
+            question,
+            targets,
+            budget=extra_budget,
+            existing_records=context.records,
+            deadline_seconds=float(getattr(settings, "guide_step_deadline_seconds", 0.0) or 0.0),
+            retrieve=retrieve,
+            clock=clock,
+        )
+        optional_limit = extra_budget.allowance(kind_limit)
+        planned = len(planned_searches(optional_plan, optional_limit))
+        if summary_research is not None:
+            # 任意の手順の検索は終わってからまとめて数えるので、その間は決めた回数を検索し直しに使わない。
+            summary_research.held = lambda: planned
         optional_results, optional_stop = run_step_searches(
             question,
             optional_plan,
@@ -2507,7 +2519,7 @@ def _search_guide_steps(
         )
     finally:
         if summary_research is not None:
-            summary_research.held = 0
+            summary_research.held = _nothing_held
     extra_budget.take(GUIDE_STEPS_KIND, len(optional_results))
     results.extend(optional_results)
     trace.update(

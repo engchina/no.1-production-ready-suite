@@ -6,7 +6,8 @@
 
 補いの検索が切った起点に派生の chunk があれば、その文書の本文に範囲を絞って同じ検索文で検索し直し（文書の範囲つきの
 検索。``page_ranges``。元の検索が範囲つきならその文書の範囲のまま）、当たった本文の chunk をその枠の根拠にする。派生の
-chunk は枠から外す。本文が当たらない・検索し直せないときは派生の chunk をそのまま残す（根拠を失わない）。
+chunk は枠の外に置き、本文の後に文書の説明として残す（小さい文書では要約の文にも根拠の語句があるため。#5244 の実測）。
+本文が当たらない・検索し直せないときは派生の chunk がその枠のまま残る。
 
 検索し直しは主の検索の後の追加の検索なので、追加の検索の同じ総枠（``ExtraRetrievalBudget``）から 1 回ずつ取る。回答の期限の
 残りが、検索 1 回の見積もり（派生の chunk を当てた検索にかかった時間）と生成・確定に残す分（章節の拡張と同じ
@@ -73,24 +74,23 @@ def document_scope(document_id: str, page_ranges: Sequence[Mapping[str, Any]]) -
     return [dict(item) for item in page_ranges if str(item.get("document_id") or "") == document_id]
 
 
-def replace_derived_hits(records: Sequence[Any], bodies: Mapping[str, Sequence[Any]], key: Callable[[Any], str]) -> list[Any]:
-    """派生の chunk を、その文書の本文の根拠に置き換える（本文は文書の最初の派生の chunk の位置に、検索の順で）。
+def place_bodies_before_derived(records: Sequence[Any], bodies: Mapping[str, Sequence[Any]], key: Callable[[Any], str]) -> list[Any]:
+    """派生の chunk の枠に、その文書の本文の根拠を置く（本文は文書の最初の派生の chunk の位置に、検索の順で）。
 
-    bodies に無い文書（検索し直さなかった・本文が当たらなかった）の派生の chunk はそのまま残す。
+    派生の chunk は本文の後に文書の説明として残す（枠の外。切りの数には数えない）。bodies に無い文書（検索し直さなかった・
+    本文が当たらなかった）の派生の chunk はそのまま残す。
     """
     out: list[Any] = []
     placed: set[str] = set()
     seen: set[str] = set()
     for record in records:
         document_id = record_document_id(record)
-        if is_derived_record(record) and bodies.get(document_id):
-            if document_id not in placed:
-                placed.add(document_id)
-                for body in bodies[document_id]:
-                    if (body_key := key(body)) not in seen:
-                        seen.add(body_key)
-                        out.append(body)
-            continue
+        if is_derived_record(record) and bodies.get(document_id) and document_id not in placed:
+            placed.add(document_id)
+            for body in bodies[document_id]:
+                if (body_key := key(body)) not in seen:
+                    seen.add(body_key)
+                    out.append(body)
         if (record_key := key(record)) not in seen:
             seen.add(record_key)
             out.append(record)
@@ -101,19 +101,19 @@ def replace_derived_hits(records: Sequence[Any], bodies: Mapping[str, Sequence[A
 class SummaryHitResearch:
     """1 回の回答の、要約の当たりの検索し直しの枠と記録。回答ごとに作り、補いの検索のすべてで共有する。
 
-    ``held`` は、すでに決めたがまだ総枠に数えていない追加の検索の回数（業務ガイドの任意の手順の検索は、終わってから
-    まとめて数える）。検索し直しはそれを除いた残りだけを使う。
+    ``held`` は、この後に行う・まだ総枠に数えていない追加の検索の回数を返す（業務ガイドの任意の手順の検索。必須の取得の後の
+    枠の残りで回数が決まり、終わってからまとめて数える）。検索し直しはそれを除いた残りだけを使い、決めた検索を奪わない。
     """
 
     budget: ExtraRetrievalBudget
     reserve_seconds: float
     deadline_remaining: Callable[[], float | None] = remaining_seconds
-    held: int = 0
+    held: Callable[[], int] = lambda: 0
     rows: list[dict[str, Any]] = field(default_factory=list)
 
     def admit(self, estimate_seconds: float) -> str:
         """検索し直してよければ総枠から 1 回取って ""、できなければ理由のコード。"""
-        if self.budget.remaining - max(0, self.held) <= 0:
+        if self.budget.remaining - max(0, self.held()) <= 0:
             return STATUS_UNSEARCHED_BUDGET
         left = self.deadline_remaining()
         if left is not None and left < max(0.0, estimate_seconds) + self.reserve_seconds:
@@ -146,5 +146,5 @@ __all__ = [
     "document_scope",
     "is_derived_record",
     "record_document_id",
-    "replace_derived_hits",
+    "place_bodies_before_derived",
 ]

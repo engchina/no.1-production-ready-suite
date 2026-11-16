@@ -1,8 +1,9 @@
-"""補いの検索で当たった文書全体の要約の chunk を、同じ文書の本文の根拠に置き換える（#5244）。
+"""補いの検索で当たった文書全体の要約の chunk の枠を、同じ文書の本文の根拠で補う（#5244）。
 
 補いの検索（要求別の補完・業務ガイドの手順）が切った起点に要約の chunk（#4793 の派生の chunk）があれば、その文書の本文に
 範囲を絞って同じ検索文で検索し直し（文書の範囲つきの検索。``page_ranges``）、当たった本文の chunk をその枠の根拠にする。
-要約の chunk は切りの枠を取らない。検索し直しは追加の検索の同じ総枠から取り、回答の期限の残りが足りなければしない。
+要約の chunk は切りの枠を取らず、本文の後に文書の説明として残す。検索し直しは追加の検索の同じ総枠から取り、回答の期限の
+残りが足りなければしない。
 検索・rerank は合成のスタブで、DB と LLM を呼ばない（``test_supplement_merge`` の Harness を使う）。
 """
 
@@ -18,7 +19,7 @@ from test_supplement_merge import CHUNKS, QUESTION, SCORES, Harness, _evidence, 
 from rag_engine.resources.deadline import Deadline, bind_deadline
 from rag_engine.retrieval.extra_retrieval import SUMMARY_BODY_KIND, ExtraRetrievalBudget
 from rag_engine.retrieval.guide_steps import GuidePlan
-from rag_engine.retrieval.summary_hits import SummaryHitResearch, document_scope, replace_derived_hits
+from rag_engine.retrieval.summary_hits import SummaryHitResearch, document_scope, place_bodies_before_derived
 
 _SUMMARY = CHUNKS["D9"]
 # 文書 D の要約の chunk（文書の中の位置を持たない派生の chunk。番号は本文の後）。backend と同じに印を付ける。
@@ -48,7 +49,7 @@ def _scoped_searches(harness: Harness) -> list[dict[str, Any]]:
     return [kwargs for _, kwargs in harness.searches if kwargs.get("page_ranges")]
 
 
-def test_request_supplement_summary_hit_is_replaced_by_body_of_the_same_document(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_request_supplement_summary_slot_is_filled_by_body_of_the_same_document(monkeypatch: pytest.MonkeyPatch) -> None:
     # 要求の検索は文書 D の要約 DS を最上位に当てる。文書 D の本文に絞った検索では、要約 DS（派生）を除き本文 D7 が当たる。
     harness = Harness(
         {QUESTION: ["A2", "C2"], "(1)": ["DS", "E1", "A2"]},
@@ -63,12 +64,14 @@ def test_request_supplement_summary_hit_is_replaced_by_body_of_the_same_document
     scoped = _scoped_searches(harness)
     assert [kwargs["page_ranges"] for kwargs in scoped] == [[{"document_id": "D"}]]
     assert scoped[0]["retrieval_queries"][0] == result.generation_trace["query_overflow"]["requests"][0]["query"]
-    # 補いの根拠は本文 D7 と E1。要約 DS は切りの枠を取らず、根拠に入らない。
+    # 補いの根拠は本文 D7 と E1（枠 2 件）。要約 DS は枠を取らず、本文 D7 の後に文書の説明として残る。
     trace = result.generation_trace["query_overflow"]
-    assert trace["candidate_chunk_ids"] == ["D7", "E1"]
+    assert trace["candidate_chunk_ids"] == ["D7", "DS", "E1"]
+    # 足す根拠の上限には本文だけを数える（要約は数えない）。
+    assert trace["requests"][0]["top_k"] == 2
     evidence = _evidence(result)
-    assert "DS" not in evidence and "D7" in evidence and "E1" in evidence
-    assert trace["added_chunk_ids"][:1] == ["D7"]
+    assert {"D7", "DS", "E1"} <= set(evidence)
+    assert trace["added_chunk_ids"][:2] == ["D7", "DS"]
     # 記録: 置き換えた文書・要約・本文。LLM は呼ばない。追加の検索の総枠から 1 回取る。
     rows = _research(result)
     assert [(row["phase"], row["document_id"], row["summary_chunk_ids"], row["status"], row["body_chunk_ids"]) for row in rows] == [
@@ -128,7 +131,7 @@ def test_summary_hit_is_not_searched_again_without_extra_retrieval_budget(monkey
     assert [row["status"] for row in _research(result)] == ["unsearched_budget"]
 
 
-def test_guide_step_summary_hit_is_replaced_within_the_step_reference_range(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_guide_step_summary_slot_is_filled_within_the_step_reference_range(monkeypatch: pytest.MonkeyPatch) -> None:
     # 手順の参照（文書 D の 3〜8 頁）に絞った検索が要約 DS を当てたら、その範囲の本文に絞って検索し直す（範囲を広げない）。
     guide = GuidePlan.from_payload(
         "g-1",
@@ -160,6 +163,8 @@ def test_guide_step_summary_hit_is_replaced_within_the_step_reference_range(monk
     assert guide_trace["added_chunk_ids"] == ["D7"]
     assert "D7" in guide_trace["required_acquisition"]["targets"][0]["candidate_source_ids"]
     assert guide_trace["required_acquisition"]["incomplete_step_ids"] == []
+    # 頁を持たない要約は手順の参照の頁の範囲の根拠にならない（必須の取得の対象の判定のまま）。変更前は要約が枠 1 件を取り、
+    # 必須の取得の候補が無くなっていた。
     assert "DS" not in _evidence(result)
     assert [(row["phase"], row["status"], row["body_chunk_ids"]) for row in _research(result)] == [("guide_step", "replaced", ["D7"])]
 
@@ -178,9 +183,9 @@ def test_main_search_summary_anchor_is_not_searched_again(monkeypatch: pytest.Mo
 def test_research_does_not_take_searches_already_planned_but_not_yet_counted() -> None:
     # 任意の手順の検索は終わってから総枠に数える。その間（held）は決めた回数を検索し直しに使わない。
     budget = ExtraRetrievalBudget(max_queries=3)
-    research = SummaryHitResearch(budget=budget, reserve_seconds=0.0, deadline_remaining=lambda: None, held=3)
+    research = SummaryHitResearch(budget=budget, reserve_seconds=0.0, deadline_remaining=lambda: None, held=lambda: 3)
     assert research.admit(0.0) == "unsearched_budget"
-    research.held = 2
+    research.held = lambda: 2
     assert research.admit(0.0) == ""
     assert budget.used == {SUMMARY_BODY_KIND: 1}
 
@@ -194,10 +199,10 @@ def test_research_scope_never_widens_the_original_range() -> None:
     assert document_scope("", ()) == []
 
 
-def test_derived_hits_are_replaced_in_place_and_others_are_kept() -> None:
+def test_bodies_take_the_summary_slot_and_the_summary_follows() -> None:
     records = [CHUNKS["E1"], CHUNKS_WITH_SUMMARY["DS"], CHUNKS["A2"]]
-    out = replace_derived_hits(records, {"D": [CHUNKS["D7"], CHUNKS["A2"]]}, lambda record: record.chunk_uid)
-    # 本文は要約の位置に検索の順で入り、すでにある起点（A2）は重ねない。
-    assert [record.chunk_uid for record in out] == ["E1", "D7", "A2"]
+    out = place_bodies_before_derived(records, {"D": [CHUNKS["D7"], CHUNKS["A2"]]}, lambda record: record.chunk_uid)
+    # 本文は要約の位置に検索の順で入り、要約はその後に残る。すでにある起点（A2）は重ねない。
+    assert [record.chunk_uid for record in out] == ["E1", "D7", "A2", "DS"]
     # 本文が無い文書の要約はそのまま残す。
-    assert [record.chunk_uid for record in replace_derived_hits(records, {}, lambda record: record.chunk_uid)] == ["E1", "DS", "A2"]
+    assert [record.chunk_uid for record in place_bodies_before_derived(records, {}, lambda record: record.chunk_uid)] == ["E1", "DS", "A2"]

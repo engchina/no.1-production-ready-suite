@@ -17,6 +17,7 @@ from typing import Any
 from rag_engine.dependencies import report_degraded
 from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
 from rag_engine.retrieval.request_coverage import CoverageBudget, CoverageUsage, coverage_targets
+from rag_engine.retrieval.summary_hits import is_derived_record
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult, normalize_text_search_text
 
 OVERFLOW_KIND = "query_overflow"
@@ -138,7 +139,8 @@ def search_overflow_requests(
         records = list(getattr(result, "records", ()) or ())
         fresh = [record_key for record in records if (record_key := _record_key(record)) and record_key not in seen]
         seen.update(fresh)
-        usage.chunks += len(fresh)
+        # 本文の後に文書の説明として残した要約などの派生の chunk は、足す根拠の上限に数えない（#5244）。
+        usage.chunks += sum(1 for record in records if _record_key(record) in fresh and not is_derived_record(record))
         count = len(records)
         row.update(
             status="candidate_found" if count else "no_candidates",
