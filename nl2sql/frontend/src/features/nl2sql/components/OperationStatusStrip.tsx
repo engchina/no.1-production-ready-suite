@@ -1,7 +1,7 @@
 import { CircleStop, Database } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { RunProgressCard, RunUsedModels, ChatProgress, Button, Banner, FormStatus } from "@production-ready/ui";
+import { RunProgressCard, RunUsedModels, ChatProgress, Button, CombinedBanner, FormStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { CHAT_PROGRESS_LABELS, chatQueueProgressSteps, jobTracePath } from "../chatProgress";
@@ -129,36 +129,24 @@ export function OperationStatusStrip({
             </div>
           )}
 
-          {warningMessage && (
-            <Banner severity="warning" className="mx-4 mb-4">
-              {warningMessage}
-            </Banner>
-          )}
-
-          {cancelledMessage && (
-            <div data-testid="nl2sql-job-cancelled">
-              <Banner severity="warning" className="mx-4 mb-4">
-                {cancelledMessage}
-              </Banner>
-            </div>
-          )}
-
-          {failureMessage && (
-            <Banner
-              severity="danger"
-              className="mx-4 mb-4"
-              // 取込の進行と失敗は、押した「サンプルデータを取込」の直下（同じ案内の中）に出す（#2034）。
-              progress={
-                job.status === "error" && catalogEmpty && onImportSample
+          {/* 結果の案内（警告・中止・失敗）は 1 つの枠（messaging.md §3.4.3。#5192）。 */}
+          <CombinedBanner
+            className="mx-4 mb-4"
+            items={[
+              failureMessage
+                ? {
+                    id: "failure",
+                    severity: "danger",
+                    // 取込の進行と失敗は、押した「サンプルデータを取込」の直下（同じ案内の中）に出す（#2034）。
+                    progress: job.status === "error" && catalogEmpty && onImportSample
                   ? sampleImportProgress ??
                     (sampleImportError ? (
                       <div data-testid="nl2sql-sample-import-error">
                         <FormStatus tone="danger" message={sampleImportError} />
                       </div>
                     ) : undefined)
-                  : undefined
-              }
-              action={job.status === "error" && catalogEmpty && onImportSample ? (
+                  : undefined,
+                    action: job.status === "error" && catalogEmpty && onImportSample ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
@@ -170,8 +158,9 @@ export function OperationStatusStrip({
                   </Button>
                   <span className="text-xs text-fg-muted">{t("nl2sql.sample.importHint")}</span>
                 </div>
-              ) : undefined}
-            >
+              ) : undefined,
+                    children: (
+                      <>
               <JobFailureBody
                 message={failureMessage}
                 errorCode={job.error_code}
@@ -180,8 +169,16 @@ export function OperationStatusStrip({
               {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
                 <p className="text-xs text-fg-muted">{sampleImportUnavailableHint}</p>
               )}
-            </Banner>
-          )}
+                      </>
+                    ),
+                  }
+                : null,
+              cancelledMessage
+                ? { id: "cancelled", severity: "warning", children: cancelledMessage, testId: "nl2sql-job-cancelled" }
+                : null,
+              warningMessage ? { id: "warning", severity: "warning", children: warningMessage } : null,
+            ]}
+          />
         </>
     {job.result ? (
       <div data-testid="nl2sql-generated-sql">
