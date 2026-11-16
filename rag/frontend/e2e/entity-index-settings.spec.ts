@@ -3,8 +3,8 @@ import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 test.beforeEach(async ({ page }) => { await mockLocalAuth(page); });
 
-test("実体・別名索引は既定 OFF で、切り替え・保存・再読込ができる", { tag: "@responsive" }, async ({ page }) => {
-  let enabled = false;
+test("実体・別名索引は既定 ON で、切り替え・保存・再読込ができる", { tag: "@responsive" }, async ({ page }) => {
+  let enabled = true;
   const patches: unknown[] = [];
   await page.route("**/api/settings/entity-index", async (route) => {
     if (route.request().method() === "PATCH") {
@@ -22,19 +22,20 @@ test("実体・別名索引は既定 OFF で、切り替え・保存・再読込
   const toggle = page.getByRole("radio", { name: /^構築する/ });
   const off = page.getByRole("radio", { name: /^構築しない/ });
   const save = page.getByRole("button", { name: "保存", exact: true });
-  await expect(off).toBeChecked();
+  await expect(toggle).toBeChecked();
+  await expect(page.getByText(/^既定は有効です。/)).toBeVisible();
   await expect(save).toBeDisabled();
-  await toggle.click();
+  await off.click();
   await page.getByRole("button", { name: "変更を破棄" }).click();
-  await expect(off).toBeChecked();
-  for (const next of [true, false]) {
+  await expect(toggle).toBeChecked();
+  for (const next of [false, true]) {
     await (next ? toggle : off).check();
     await save.click();
     await expect(save).toBeDisabled();
     await page.reload();
     await expect(toggle).toBeChecked({ checked: next });
   }
-  expect(patches).toEqual([{ enabled: true }, { enabled: false }]);
+  expect(patches).toEqual([{ enabled: false }, { enabled: true }]);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("entity-index.png"), fullPage: true });
 });

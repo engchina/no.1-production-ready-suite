@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,6 +12,7 @@ import pytest
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_parser_core.language import FIELD_SPECS, builtin_pack, resolve, set_default_pack
 
+from app.clients.entity_store import ENTITY_ALIASES_TABLE
 from app.config import Settings
 from app.rag.answer_engine import (
     EVIDENCE_EXPANSION_KEY,
@@ -675,6 +676,14 @@ class ReferenceOracle:
         self, ids: list[str], *, filters: dict[str, str] | None = None
     ) -> dict[str, dict[str, object]]:
         return {}
+
+    # 実体・別名による検索拡張（既定 ON。#5187）が読む実体の表。この代役の文書は実体を持たない。
+    async def _fetch_all(
+        self, statement: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if ENTITY_ALIASES_TABLE in statement:
+            return []
+        raise AssertionError("ReferenceOracle は実体の表のほかの SQL を一覧で読まない")
 
     async def hybrid_search(
         self,

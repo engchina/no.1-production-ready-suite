@@ -71,7 +71,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
-| 実体の拡張（#1362） | 任意（全体設定 `RAG_ENTITY_EXPANSION_ENABLED`。既定 off。上限 `RAG_ENTITY_EXPANSION_MAX_CHUNKS` は既定 3・1〜10。足した根拠は rerank にかけず、rerank と起点の選択の後に最後の根拠へ合わせる。#5097・#5162） | 読めない → 足さずに続ける | `DS`（`entity_expansion`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
+| 実体の拡張（#1362） | 任意（全体設定 `RAG_ENTITY_EXPANSION_ENABLED`。既定 on。#5187。上限 `RAG_ENTITY_EXPANSION_MAX_CHUNKS` は既定 3・1〜10。足した根拠は rerank にかけず、rerank と起点の選択の後に最後の根拠へ合わせる。#5097・#5162） | 読めない → 足さずに続ける | `DS`（`entity_expansion`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
 | 関係情報の拡張（#2055） | 任意（`RAG_GRAPH_EXPANSION_ENABLED`。既定 off。足した根拠は実体の拡張と同じ規則で合わせる。#5162） | 読めない → 足さずに続ける | `DS`（`graph_expansion`）・`DX`（`graph_expansion.attempts` の `status: error`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._graph_expansion` |
 | 交差参照の参照先の解決・読み込み（#1280・#1400） | 任意（`RAG_REFERENCE_EXPANSION_ENABLED`。足した参照先は実体の拡張と同じ規則で合わせる。#5162） | 解決・読み込みの失敗 → その参照を辿らない / 足さない | `DS`（`reference_resolve`・`reference_load`）・`DX`（`reference_expansion.searches`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
 | 参照先の文書の先読み | 任意 | 失敗 → 辿るときに 1 つずつ照合する | `DS`（`reference_prefetch`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._prefetch_reference_documents` |

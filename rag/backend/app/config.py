@@ -1028,14 +1028,14 @@ class Settings(
         description="交差参照で 1 回の検索に足す参照先の chunk 数の上限(#1280)。",
     )
     rag_entity_index_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "取込の索引の保存の後に、chunk から実体（表の行の名前・属性の値、本文の定義の形・"
             "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
-            "rag_entity_aliases / rag_entity_chunks に保存する。既定 OFF。全体の設定と文書"
-            "レシピの「実体・別名索引」で構築を選ぶ。LLM は使わない。回答の検索は、"
-            "この表との SQL の join で関連する chunk を 1 段だけ足す（検索方法の全体設定の"
-            " entity_expansion_enabled。#1388）。"
+            "rag_entity_aliases / rag_entity_chunks に保存する。既定 ON（#5187）。全体の設定と"
+            "文書レシピの「実体・別名索引」で構築を選ぶ（レシピで OFF にできる）。LLM は使わない。"
+            "回答の検索は、この表との SQL の join で関連する chunk を 1 段だけ足す（検索方法の"
+            "全体設定の entity_expansion_enabled）。"
         ),
     )
     rag_entity_name_columns: list[str] = Field(
@@ -1052,12 +1052,12 @@ class Settings(
             "空なら名前の列・長い本文の列（説明・備考など）・日付や数値の列を除いた列。"
         ),
     )
-    # 名称・別名と章節の拡張は検索方法の全体設定で選ぶ。
+    # 実体・別名による検索拡張と章節の拡張は検索方法の全体設定で選ぶ。
     rag_entity_expansion_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
-            "関連する chunk を 1 段だけ足す（#1362）。検索方法の全体設定で選ぶ（既定 OFF）。"
+            "関連する chunk を 1 段だけ足す（#1362）。検索方法の全体設定で選ぶ（既定 ON。#5187）。"
             "実体は文書レシピで実体・別名索引の構築"
             "（rag_entity_index_enabled）を選んだ文書にだけある。LLM の呼び出しは増えない。"
         ),

@@ -793,7 +793,7 @@ class AnsweringSettingsData(BaseModel):
     runtime_terms_answer_enabled: bool = False
     neighbor_child_count: int = Field(ge=1, le=5)
     rerank_enabled: bool
-    # 関係情報(章節・表の見出しの entity と chunk の対応)で検索の候補を足す(#2055。既定 OFF)。
+    # 実体・別名による検索拡張(#1362。全体設定だけで決める。既定 ON。#5187)。
     entity_expansion_enabled: bool
     entity_expansion_max_chunks: int
     section_expansion_enabled: bool

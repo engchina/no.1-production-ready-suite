@@ -221,6 +221,39 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5187 実体・別名索引の構築と実体・別名による検索拡張を既定 ON にする）
+
+実体・別名索引の構築（`RAG_ENTITY_INDEX_ENABLED`）と、実体・別名による検索拡張（`RAG_ENTITY_EXPANSION_ENABLED`）の全体の
+既定を `true` にした（以前は両方 `false`）。文書レシピの `entity_index_enabled` で文書ごとに OFF にでき、拡張は検索方法の
+全体設定だけで決める（検索・回答プロファイルでは上書きしない）ことは変えていない。表・migration・API path・抽出と拡張の規則は
+変えていない。
+
+- **取込は 15% 程度遅くなる。** 索引の保存の後に実体と関連を作って保存する（#1362 の実測で多段 15 文書の取込が 62 秒 → 71 秒。
+  表の行の多い文書ほど増える）。LLM の呼び出しは増えない。
+- 検索は、実体・別名索引のある文書が検索範囲にあるとき、1 回の検索で最大 `RAG_ENTITY_EXPANSION_MAX_CHUNKS`（既定 3）件の根拠を
+  足す（SQL の読み取りが増える。AI の呼び出しは増えない）。
+
+**既存の環境の `backend/.env` に明示した値は、そのまま優先される。** 以前の `.env.example` は `RAG_ENTITY_INDEX_ENABLED=false`・
+`RAG_ENTITY_EXPANSION_ENABLED=false` を書いていたため、それを写した環境は更新しても OFF のまま。設定画面で保存した値も
+`backend/.env` に書かれている。
+
+1. backend（と取込 worker）を更新して再起動する。
+2. `backend/.env` の 2 つの行を確かめる。既定の ON にするときは、行を `true` にするか消す（画面なら「取込・検索・回答設定 →
+   実体・別名索引」で「構築する」、検索方法「回答の検索と生成」で「実体・別名による検索拡張」を有効にして保存する）。OFF のまま
+   使うときは `false` の行を残す（無い環境は既定の ON になるので、OFF にするなら `false` を書く）。
+3. **構築を ON にした後で、取込済みの文書の実体・別名索引を作り直しの CLI で作る**（#5178。下の節）。既定を ON にしても、
+   取込済みの文書は再処理するまで索引を持たない（拡張は索引の無い文書には何も足さない）。分割・embedding は変えない。
+   構築が OFF のまま `--all` を実行すると、レシピで ON にしていない文書の実体の行を消すので、必ず手順 2 の後に実行する。
+   先に `--dry-run` で `rebuilt`（作る chunk_set の数）・`cleared`（消す数）を確かめ、利用の少ない時間に実行する。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.entity_index_cli rebuild --all --dry-run
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.entity_index_cli rebuild --all
+   ```
+
+4. 拡張を ON にしたら、検索の結果に `entity_expansion` の根拠が加わる（回答の診断・MCP の根拠の `role`）。止めるときは検索方法の
+   「実体・別名による検索拡張」を無効にして保存する（`RAG_ENTITY_EXPANSION_ENABLED=false`）。
+
 ## 既存環境の更新手順（#5167・#5178 実体・別名索引の抽出の修正と、作り直しの CLI）
 
 実体・別名索引（文書レシピの `entity_index_enabled`。`rag_entities` / `rag_entity_aliases` / `rag_entity_chunks`）の本文の

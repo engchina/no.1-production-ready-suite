@@ -470,17 +470,17 @@ def test_mcp_orders_entity_expansion_with_ranked_evidence() -> None:
 # ---- 設定・レシピ ----
 
 
-def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in ("RAG_ENTITY_EXPANSION_ENABLED",):
+def test_settings_default_on_for_recipe_and_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ("RAG_ENTITY_INDEX_ENABLED", "RAG_ENTITY_EXPANSION_ENABLED"):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
-    # 索引の構築は既定 OFF。検索時の拡張とは別に設定する。
-    assert settings.rag_entity_index_enabled is False
+    # 索引の構築は既定 ON（#5187。文書レシピで OFF にできる）。検索時の拡張とは別に設定する。
+    assert settings.rag_entity_index_enabled is True
     assert settings.rag_chunk_context_header_enabled is True
     assert settings.rag_entity_name_columns == []
     assert settings.rag_entity_attribute_columns == []
-    # 任意の検索拡張は明示的に有効化した場合だけ使う。
-    assert settings.rag_entity_expansion_enabled is False
+    # 検索拡張も既定 ON（#5187）。明示的に無効化した場合だけ使わない。
+    assert settings.rag_entity_expansion_enabled is True
     # 上限は既定 3・範囲 1〜10（#5097）。範囲外は起動時の検証の誤り（互換は持たない）。
     assert settings.rag_entity_expansion_max_chunks == 3
     assert Settings(rag_entity_expansion_max_chunks=10).rag_entity_expansion_max_chunks == 10
@@ -526,6 +526,12 @@ def test_recipe_option_maps_to_ingestion_settings() -> None:
     assert effective.rag_entity_index_enabled is True
     assert effective.rag_entity_attribute_columns == ["担当部署", "重要度"]
     assert effective.rag_entity_name_columns == []
+    # 全体の既定が ON（#5187）でも、文書レシピで OFF にできる。
+    disabled, _ = documents_route._merge_document_processing_config(
+        DocumentProcessingConfig.model_validate({"entity_index_enabled": False}),
+        Settings(_env_file=None),
+    )
+    assert disabled.rag_entity_index_enabled is False
     groups = documents_route.DOCUMENT_PROCESSING_OUTPUT_GROUPS
     assert groups["entity_index_enabled"] == (
         "entity_index_enabled",
@@ -734,25 +740,23 @@ async def _save_index(settings: Settings) -> _IngestOracle:
     return oracle
 
 
-@pytest.mark.parametrize("explicit", [False, True])
-async def test_recipe_without_entity_index_does_not_touch_the_entity_tables(
-    explicit: bool,
-) -> None:
-    """未指定・明示 OFF はいずれも実体の表に触らない（SQL も実行しない）。"""
-    settings = (
-        Settings(rag_graph_profile="off", rag_entity_index_enabled=False)
-        if explicit
-        else Settings(rag_graph_profile="off")
-    )
-    oracle = await _save_index(settings)
+async def test_recipe_without_entity_index_does_not_touch_the_entity_tables() -> None:
+    """明示 OFF は実体の表に触らない（SQL も実行しない）。"""
+    oracle = await _save_index(Settings(rag_graph_profile="off", rag_entity_index_enabled=False))
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 0
 
 
-async def test_enabled_recipe_saves_the_entity_index_after_the_index() -> None:
-    """構築を選んだときだけ、列の指定が無くても索引を保存する。"""
-    oracle = await _save_index(Settings(rag_graph_profile="off", rag_entity_index_enabled=True))
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_enabled_recipe_saves_the_entity_index_after_the_index(explicit: bool) -> None:
+    """構築を選んだとき（未指定は既定 ON。#5187）は、列の指定が無くても索引を保存する。"""
+    settings = (
+        Settings(rag_graph_profile="off", rag_entity_index_enabled=True)
+        if explicit
+        else Settings(_env_file=None, rag_graph_profile="off")
+    )
+    oracle = await _save_index(settings)
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 1
