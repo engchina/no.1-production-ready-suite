@@ -26,7 +26,7 @@ from pr_backend_core.observability.call_details import withhold_call_details
 
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
-    ATTACHMENT_DOCUMENT_PREFIX,
+    NON_RAG_DOCUMENT_PREFIXES,
     passed_evidence,
 )
 from app.features.agent.rag_figures import (
@@ -56,7 +56,7 @@ def _document_id(value: object) -> str | None:
     document_id = value.get("document_id")
     if not isinstance(document_id, str) or not document_id:
         return None
-    return None if document_id.startswith(ATTACHMENT_DOCUMENT_PREFIX) else document_id
+    return None if document_id.startswith(NON_RAG_DOCUMENT_PREFIXES) else document_id
 
 
 def _document_ids(value: object) -> set[str]:

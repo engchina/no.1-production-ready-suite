@@ -1157,6 +1157,12 @@ def test_retrieve_evidence_skips_answer_generation(
         )
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+
+    async def no_faq_candidates(_arguments: Any) -> list[Any]:
+        # 承認済み FAQ の候補の照会（#5136）は DB を読むので、候補なしにする。
+        return []
+
+    monkeypatch.setattr(mcp_tools, "_approved_faq_suggestions", no_faq_candidates)
     user = auth.user_with_permissions("searcher", ["menu.search"])
     body = _call(
         "rag_retrieve_evidence",

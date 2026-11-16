@@ -406,7 +406,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     `rag_search` の引数に `skip_clarification: true` を決定的に付け（入力の schema にあるときだけ。モデルに任せない）、RAG に
     ルールの確認を出させずに回答させる。品質評価の Run は利用者のチャットと同じく確認を出させ、評価ケースの答えで答える
     （`ConfirmationBudget.skips_tool_clarification`。#2117）。複数選べる確認（`multiple`）はカードでも複数選べる。
-  - **RAG の承認済み FAQ の候補**（#5134）: `rag_search` が候補だけを返したら（`status=approved_faq_candidates`。検索・回答は
+  - **RAG の承認済み FAQ の候補**（#5134・#5136）: `rag_search` が候補だけを返したら（`status=approved_faq_candidates`。検索・回答は
     していない）、結果の次の手（`next_step.action=wait_for_approved_faq_choice`）でモデルに候補を並べさせず・選ばせずに終えさせ、
     候補の質問と「どれでもない（通常どおり回答）」を 1 件の確認事項にしたカード（出所 `rag`・「確認せずに回答」なし・候補の id は
     確認の `context` だけに持つ）を出す。回答の対応は `needs_clarification`（basis `approved_faq_candidates`。失敗・根拠不足に
@@ -414,6 +414,15 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     返した検索・回答プロファイルを、「どれでもない」・自由入力だけの答えと 2 回目以降は `skip_approved_faq: true` を付ける
     （`confirmation.approved_faq_choice`。2 つの引数はモデルに見せず、モデルが渡した値は使わない）。利用者に確認しない Run も
     `skip_approved_faq: true` を付け、候補を返させない。Q&A の選択は業務ガイドの条件（支援タスクの分かっている条件）にしない。
+    **`rag_retrieve_evidence`**（組み込みのスキルが根拠を集めるツール。#5136）も同じ: 候補を返したら同じ次の手・同じカード（理由の文は
+    「選んだ Q&A の登録済みの回答をもとに答えます。」）にし、次の Run は候補を返したツール（同じ接続の同じ名前）の最初の呼び出しに
+    `approved_faq_id` を、それ以外の呼び出しには `skip_approved_faq: true` を付ける（2 つの引数はモデルに見せない。実行環境が付けるので
+    組み込みのスキルの本文は変えない）。選んだ Q&A の登録済みの回答（結果の `approved_faq` の `answer`）は資料の根拠と同じくツールの
+    結果としてモデルに渡り、回答はモデルが書く（候補・選んだ Q&A の結果には業務ガイドの照合 `guide_check` を足さない）。根拠が登録済みの
+    Q&A だったことは、回答の対応の印 `approved_faq`（`rag_search` の経路も）と basis `approved_faq`（`rag_retrieve_evidence` で受け取り、
+    現場のデータの道具を使っていない回答）、回答の根拠（成果物 `answer_evidence`）の項目（`document_id=approved_faq:<Q&A の ID>`・
+    `approved_faq_id`・資料名「登録済みの Q&A」・節は Q&A の質問・抜粋は登録済みの回答・回答で引用。画面は「登録済みの Q&A」の印を付け、
+    会話の添付と同じく原文のプレビューを開かない）に残す。
   - **Agent 自身の確認**（Control Plane のツール `ask_user_confirmation`。引数 `question`・`reason`・`options[{label, description}]`（2〜8 個）・`multiple`。「その他（自由入力）」は画面が必ず出す）: SDK の `needs_approval`（呼び出しごとの判定）で中断し、Run を`waiting_confirmation`（確認待ち）にして SDK の状態を保存する（承認待ちと同じ仕組み。承認と同時に中断したら承認待ち）。答え・スキップで `queued` に戻し、同じ Run を再開する（確認のツールは実行され、結果が利用者の答え `status=answered`（`selected`・`other_text`）か `status=skipped`（前提を示して答える指示））。処理の段階は `confirmation_wait`（kind `confirmation`）。**確認は Run の状態を変える中断**（#3352。LangGraph の `interrupt` と同じ考え方）: 利用者に聞ける確認は、どの経路（差し戻しの後を含む）でも Run を確認待ちにし、問いを画面と MCP（`agent_chat` の `confirmation`）に出す。中断の判断はツールを実行する前に応答ごとに 1 回決め（SDK の `on_llm_end`。`_ToolRecorder.hold_for_confirmation`）、確認で中断する応答のほかのツールの呼び出しは実行せず、承認にも回さない（結果は `error_code=tool.confirmation_pending`。答えの後にモデルが必要なら呼び直す）。中断しない呼び出し（下のツールの確認のカード・ツールの失敗の直後・`nl2sql_query` の前の表・列の確認・スキップ・上限）は、確認を出していないことと次にすることを結果で返す。**先に資料・業務データのツールで調べる**（#1917）: 根拠・データのツールを渡した Run で、モデルがまだ MCP 接続のツール（根拠・データのツールとプロファイルの一覧・推薦）を 1 つも呼んでいない確認は、モデルが作った選択肢を外した自由入力の確認にする（選択肢をツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。先に調べることは指示とツールの説明に置く（中断せずに「先に調べる」を返すと、モデルは確認を出したと取り違え、答えを待つと述べるだけの回答で完了した。#3352）。拒答のガード（`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。**ツールの確認に任せる**（#1934・#2726）: この Run のツールの結果が確認事項を返して止まっている（NL2SQL・`rag_search` の`needs_clarification`・根拠の取得のルールの確認と、最も新しい業務ガイドの判断（`rag_lookup_guides`・`rag_search` の`guide`）が条件を確かめる `clarify`。答えた条件の問いは数えない）ときは中断せず、`status=tool_confirmation_pending` を返す。
   - **やめる**（API の `action: "cancel"`。画面は #2311 から出さず、確認を終えるのは「確認せずに回答」だけ。質問を取り消すのは入力欄の「停止」）: 確認を出した Run と、同じ質問の確認の往復の Run に metadata `clarification_withdrawn` を付けて会話・履歴・支援タスクの
     状態から外し、最初の質問を返す。Agent 自身の確認で待っている Run は取り消し、NL2SQL の session は

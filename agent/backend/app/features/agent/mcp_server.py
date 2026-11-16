@@ -65,7 +65,7 @@ from pydantic import BaseModel, Field
 from app.features.agent import router as agent_api
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
-    ATTACHMENT_DOCUMENT_PREFIX,
+    NON_RAG_DOCUMENT_PREFIXES,
     answer_evidence,
 )
 from app.features.agent.answer_outcome import ANSWER_OUTCOMES
@@ -855,7 +855,7 @@ def _rag_ids(item: Mapping[str, Any]) -> tuple[str | None, str | None]:
     document_id, chunk_id = item.get("document_id"), item.get("chunk_id")
     if not isinstance(document_id, str) or not document_id:
         return None, None
-    if document_id.startswith(ATTACHMENT_DOCUMENT_PREFIX):
+    if document_id.startswith(NON_RAG_DOCUMENT_PREFIXES):
         return None, None
     return document_id, chunk_id if isinstance(chunk_id, str) and chunk_id else None
 

@@ -22,9 +22,9 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 
-1. `approved_faq_candidates`: 最後の `rag_search` が承認済み FAQ の候補だけを返した（利用者が選ぶ
-   確認のカードになる。検索・回答はしていないので、失敗・根拠不足ではない。#5134）
-   → needs_clarification
+1. `approved_faq_candidates`: 最後の RAG の検索（`rag_search` / `rag_retrieve_evidence`）が承認済み
+   FAQ の候補だけを返した（利用者が選ぶ確認のカードになる。検索はしていないので、失敗・根拠不足
+   ではない。#5134・#5136）→ needs_clarification
    `empty_answer`: 回答が空 → insufficient_evidence
 2. `nl2sql_clarification`: 最後の `nl2sql_query` が SQL の生成前の確認の項目を返した
    → needs_clarification
@@ -36,8 +36,9 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    answered でも下の「不足の印」があれば conditional にする。
 4. `guide_handoff`: `rag_search` に拠らず、最も新しい `rag_lookup_guides` の最上位の業務ガイドの
    判断が人への引き継ぎ（handoff）→ needs_human
-5. `answer_passages`（または現場のデータの道具を使ったなら `environment_tools`）: Agent が自分で
-   組み立てた回答。不足の印があれば conditional、無ければ answered。
+5. `answer_passages`（現場のデータの道具を使ったなら `environment_tools`、利用者が選んだ承認済み
+   FAQ を `rag_retrieve_evidence` で受け取ったなら `approved_faq`。#5136）: Agent が自分で組み立てた
+   回答。不足の印があれば conditional、無ければ answered。
 
 不足の印（`signals`）: 業務ガイドの条件が分からないまま答えた印（`guide_conditions`。最後の
 `rag_search` の後の、最も新しい `rag_lookup_guides` の最上位の業務ガイドの判断が、条件を確かめる
@@ -46,7 +47,9 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 
 記録だけのシグナル（対応の値を変えない。#3546）: RAG の根拠のツールが縮退した検索の結果を返した
 （`rag_degraded`。任意の補助の処理の縮退 `degraded_steps` か安全チェックの未完了
-`guardrail_degraded`。任意の能力の縮退は回答を続ける契約なので不足の印にしない）。
+`guardrail_degraded`。任意の能力の縮退は回答を続ける契約なので不足の印にしない）・RAG の検索が
+利用者の選んだ承認済み FAQ（登録済みの Q&A）を返した（`approved_faq`。根拠が登録済みの Q&A。
+#5136）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
 """
@@ -63,6 +66,7 @@ from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
     approved_faq_candidates_step,
+    chosen_approved_faq,
     is_environment_data_tool,
     nl2sql_clarification_pending,
 )
@@ -101,6 +105,8 @@ BASIS_RAG_SEARCH = "rag_search"
 BASIS_ENVIRONMENT_TOOLS = "environment_tools"
 BASIS_GUIDE_HANDOFF = "guide_handoff"
 BASIS_ANSWER_PASSAGES = "answer_passages"
+# 利用者が選んだ承認済み FAQ（登録済みの Q&A）を根拠にした回答（#5136）。
+BASIS_APPROVED_FAQ = "approved_faq"
 
 SIGNAL_QUESTION = "question"
 SIGNAL_ENVIRONMENT_TOOLS = "environment_tools"
@@ -109,6 +115,8 @@ SIGNAL_GUIDE_CONDITIONS = "guide_conditions"
 SIGNAL_UNREAD_SECTIONS = "unread_sections"
 # RAG の根拠のツールが縮退した検索の結果を返した（不足の印にしない記録。#3546）。
 SIGNAL_RAG_DEGRADED = "rag_degraded"
+# RAG の検索が利用者の選んだ承認済み FAQ を返した（根拠が登録済みの Q&A。記録だけ。#5136）。
+SIGNAL_APPROVED_FAQ = "approved_faq"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset({SIGNAL_GUIDE_CONDITIONS, SIGNAL_UNREAD_SECTIONS})
 _RAG_LOOKUP_GUIDES = "rag_lookup_guides"
@@ -265,8 +273,12 @@ def answer_outcome(
             signals={SIGNAL_QUESTION},
         )
     signals: set[str] = set()
-    if any(degraded_retrieval(output) for output in _rag_evidence_outputs(steps)):
+    evidence_outputs = _rag_evidence_outputs(steps)
+    if any(degraded_retrieval(output) for output in evidence_outputs):
         signals.add(SIGNAL_RAG_DEGRADED)
+    approved_faq = any(chosen_approved_faq(output) is not None for output in evidence_outputs)
+    if approved_faq:
+        signals.add(SIGNAL_APPROVED_FAQ)
     # 業務ガイドが条件を確かめる・条件ごとに答えると判断したのに、確認の質問だけで答えなかった
     # （最後の rag_search の後の照合だけを見る。rag_search の対応は下で扱う。#1321・#1322）。
     after_search = last_search[0] + 1 if last_search is not None else 0
@@ -300,7 +312,10 @@ def answer_outcome(
     environment = _environment_resolved(steps)
     if environment:
         signals.add(SIGNAL_ENVIRONMENT_TOOLS)
-    basis = BASIS_ENVIRONMENT_TOOLS if environment else BASIS_ANSWER_PASSAGES
+    if environment:
+        basis = BASIS_ENVIRONMENT_TOOLS
+    else:
+        basis = BASIS_APPROVED_FAQ if approved_faq else BASIS_ANSWER_PASSAGES
     return _content(
         CONDITIONAL if gaps else ANSWERED, basis, rag_outcome=rag_outcome, signals=signals
     )

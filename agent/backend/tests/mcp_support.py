@@ -50,14 +50,15 @@ class _RagScopeIn(_ContractInput):
     include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
+    # 承認済み FAQ（rag_search は #5134、rag_retrieve_evidence は #5136）: 利用者が選んだ Q&A の id
+    # と、候補を返さずに検索する指定。
+    approved_faq_id: str | None = Field(default=None, max_length=200)
+    skip_approved_faq: bool = False
 
 
 class RagSearchIn(_RagScopeIn):
     # 利用者の元の質問（回答の要求の単位に使う。#2261）。
     original_question: str | None = None
-    # 承認済み FAQ（#5134）: 利用者が選んだ Q&A の id と、候補を返さずに検索・回答する指定。
-    approved_faq_id: str | None = Field(default=None, max_length=200)
-    skip_approved_faq: bool = False
 
 
 class RagRetrieveEvidenceIn(_RagScopeIn):
@@ -413,6 +414,43 @@ def rag_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str
         evidence=[],
         evidence_omitted=0,
         evidence_text_omitted=0,
+    )
+    return output
+
+
+def rag_evidence_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str, Any]:
+    """`rag_retrieve_evidence` が承認済み FAQ の候補だけを返した出力（#5136。契約の形の合成の値）。
+
+    `candidates` は（id, 質問, 一致度）。根拠は検索していないので evidence は空。
+    """
+    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_retrieve_evidence"])
+    output.update(
+        status="approved_faq_candidates",
+        approved_faq_candidates=[
+            {"id": faq_id, "question": question, "score": score}
+            for faq_id, question, score in candidates
+        ],
+        approved_faq=None,
+        trace_id="",
+        evidence=[],
+        evidence_omitted=0,
+        evidence_text_omitted=0,
+        profile_knowledge=None,
+    )
+    return output
+
+
+def rag_evidence_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str, Any]:
+    """`rag_retrieve_evidence` が選んだ承認済み FAQ の登録済みの回答を返した出力（#5136）。"""
+    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_retrieve_evidence"])
+    output.update(
+        status="completed",
+        approved_faq_candidates=[],
+        approved_faq={"id": faq_id, "question": question, "answer": answer},
+        evidence=[],
+        evidence_omitted=0,
+        evidence_text_omitted=0,
+        profile_knowledge=None,
     )
     return output
 

@@ -79,10 +79,11 @@ NON_GROUNDING_TOOLS = frozenset(
 RAG_SEARCH = "rag_search"
 RAG_RETRIEVE_EVIDENCE = "rag_retrieve_evidence"
 RAG_LOOKUP_GUIDES = "rag_lookup_guides"
-# rag_search が承認済み FAQ の候補だけを返した状態（#5134。検索・回答はしていない）と、利用者の
-# 選択を渡す引数（実行環境が付けるので、モデルに見せない）。
+# rag_search・rag_retrieve_evidence が承認済み FAQ の候補だけを返した状態（#5134・#5136。検索は
+# していない）と、利用者の選択を渡す引数（実行環境が付けるので、モデルに見せない）。
 RAG_APPROVED_FAQ_CANDIDATES = "approved_faq_candidates"
 APPROVED_FAQ_ARGUMENTS = ("approved_faq_id", "skip_approved_faq")
+RAG_APPROVED_FAQ_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 # 本文を読むツール（#1330・#1332）。軽いので Run ごとの RAG の上限には数えない。
 RAG_READ_SOURCE = "rag_read_source"
 RAG_READ_DOCUMENT = "rag_read_document"
@@ -568,27 +569,46 @@ def is_approved_faq_candidates(output: object) -> bool:
 
 
 def approved_faq_candidates_step(steps: list[RunStep]) -> RunStep | None:
-    """この Run の最後の成功した `rag_search` が承認済み FAQ の候補を返したなら、その step。
+    """この Run の最後の成功した RAG の検索（`rag_search` / `rag_retrieve_evidence`）が承認済み
+    FAQ の候補を返したなら、その step。
 
-    利用者が候補を選ぶまで検索・回答はしていない（回答前の確認のカードになる。#5134）。
+    利用者が候補を選ぶまで検索はしていない（回答前の確認のカードになる。#5134・#5136）。
     """
     for step in reversed(steps):
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or not result.success:
             continue
-        if mcp_base_tool_name(call.name) != RAG_SEARCH:
+        if mcp_base_tool_name(call.name) not in RAG_APPROVED_FAQ_TOOLS:
             continue
         return step if is_approved_faq_candidates(result.output) else None
     return None
 
 
+def chosen_approved_faq(output: object) -> JsonObject | None:
+    """RAG の検索の結果の、利用者が選んだ承認済み FAQ（`approved_faq`。無ければ None。#5136）。"""
+    faq = output.get("approved_faq") if isinstance(output, dict) else None
+    return faq if isinstance(faq, dict) and faq.get("id") else None
+
+
+def approved_faq_choice_step() -> JsonObject:
+    """承認済み FAQ の候補を返した結果に足す次の手（利用者が選ぶ確認のカードを待つ）。"""
+    return {
+        "action": NEXT_STEP_WAIT_APPROVED_FAQ_CHOICE,
+        "reason": RAG_APPROVED_FAQ_CANDIDATES,
+        "tools": [],
+        "instruction": APPROVED_FAQ_CHOICE_INSTRUCTION,
+    }
+
+
 def approved_faq_schema(function_name: str, schema: JsonObject) -> JsonObject:
-    """モデルに見せる `rag_search` の schema から、承認済み FAQ の選択の引数を外す（#5134）。
+    """モデルに見せる RAG の検索の schema から、承認済み FAQ の選択の引数を外す（#5134・#5136）。
 
     利用者の選択は実行環境が付ける（モデルに id を写させない・候補を代わりに選ばせない）。
     """
     properties = schema.get("properties")
-    if mcp_base_tool_name(function_name) != RAG_SEARCH or not isinstance(properties, dict):
+    if mcp_base_tool_name(function_name) not in RAG_APPROVED_FAQ_TOOLS or not isinstance(
+        properties, dict
+    ):
         return schema
     if not any(name in properties for name in APPROVED_FAQ_ARGUMENTS):
         return schema
@@ -659,12 +679,12 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
             continue
         if not result.success or not isinstance(result.output, dict):
             return False
+        # 承認済み FAQ の候補も、利用者が選ぶ確認のカードになる（#5134・#5136）。
+        if is_approved_faq_candidates(result.output):
+            return True
         if mcp_base_tool_name(call.name) == RAG_RETRIEVE_EVIDENCE:
             return False
-        # 承認済み FAQ の候補も、利用者が選ぶ確認のカードになる（#5134）。
-        return result.output.get("outcome") == "needs_clarification" or is_approved_faq_candidates(
-            result.output
-        )
+        return result.output.get("outcome") == "needs_clarification"
     return False
 
 
@@ -1567,12 +1587,7 @@ def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObjec
     確認の質問を求められた（`needs_clarification`）ときは、問いを先に返す次の手（#1322）。
     """
     if is_approved_faq_candidates(output):
-        return {
-            "action": NEXT_STEP_WAIT_APPROVED_FAQ_CHOICE,
-            "reason": RAG_APPROVED_FAQ_CANDIDATES,
-            "tools": [],
-            "instruction": APPROVED_FAQ_CHOICE_INSTRUCTION,
-        }
+        return approved_faq_choice_step()
     outcome = output.get("outcome")
     if outcome == "needs_clarification":
         return ask_clarification_step(output.get("clarifications"), reason=outcome)

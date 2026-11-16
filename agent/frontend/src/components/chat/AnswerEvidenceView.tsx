@@ -93,7 +93,7 @@ function EvidenceSource({
       labels={EVIDENCE_LABELS}
       data-testid={testId}
     >
-      {entry && !entry.attachment ? (
+      {entry && !entry.attachment && !entry.approvedFaq ? (
         <RagSourcePreview
           // 根拠を切り替えたら、倍率・回転・ページを初期化する。
           key={`${entry.documentId}:${entry.chunkId}`}

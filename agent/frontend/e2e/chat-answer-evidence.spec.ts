@@ -918,6 +918,92 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
+// #5136: 利用者が選んだ登録済みの Q&A（RAG の検索が返した approved_faq）も根拠の塊に出す。RAG の文書ではないので、
+// 「登録済みの Q&A」の印を付け、原文を開く「根拠を表示」は出さない。
+const FAQ_RUN_ID = "run-evidence-approved-faq";
+const FAQ_GOAL = "合成の FAQ の質問 C は？";
+
+function seedApprovedFaqRun(mockApi: MockApi) {
+  mockApi.state.runs.push({
+    id: FAQ_RUN_ID,
+    goal: FAQ_GOAL,
+    agent_id: "default",
+    runtime_id: "builtin",
+    status: "completed",
+    steps: [],
+    events: [],
+    approvals: [],
+    pending_tool_calls: [],
+    metadata: {},
+    created_by_user_uuid: "local",
+    thread_id: `thread_${"a".repeat(32)}`,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+    artifacts: [
+      {
+        id: "artifact-approved-faq-evidence",
+        kind: "answer_evidence",
+        name: "回答の根拠",
+        created_at: MOCK_NOW,
+        content: {
+          items: [
+            {
+              document_id: "approved_faq:faq-1",
+              chunk_id: "approved_faq:faq-1",
+              file_name: "登録済みの Q&A",
+              excerpt: "合成の登録済みの回答。手続きは窓口 C で行います。",
+              truncated: false,
+              evidence_type: "approved_faq",
+              approved_faq_id: "faq-1",
+              section_title: "合成の登録済みの質問 C",
+              cited: true,
+              answer_use: null,
+            },
+          ],
+          passed: 1,
+          cited: 1,
+          markers: [],
+          passages: [],
+        },
+      },
+      {
+        id: "artifact-approved-faq-answer",
+        kind: "answer",
+        name: "回答",
+        created_at: MOCK_NOW,
+        content: { text: "手続きは窓口 C で行います。" },
+      },
+    ],
+  });
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`選んだ登録済みの Q&A は「登録済みの Q&A」の印で根拠の塊に出し、原文は開かない (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+    seedApprovedFaqRun(mockApi);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    await page.getByTestId("chat-history-toggle").click();
+    if (viewport.width >= 1024) {
+      await page.getByTestId("chat-history").getByRole("button", { name: new RegExp(`^${FAQ_GOAL}`) }).click();
+    } else {
+      await page.getByRole("dialog", { name: "会話の履歴" }).getByText(FAQ_GOAL).click();
+    }
+    const turn = page.getByTestId(`chat-turn-${FAQ_RUN_ID}`);
+    const evidence = turn.getByTestId("answer-citations");
+    await expect(evidence.locator("summary")).toHaveText("AI に渡した 1 件 ／ 回答で引用 1 件");
+    await evidence.locator("summary").click();
+    const cards = evidence.getByTestId("evidence-card");
+    await expect(cards).toHaveCount(1);
+    await expect(cards.nth(0)).toContainText("登録済みの Q&A");
+    await expect(cards.nth(0)).toContainText("回答で引用");
+    await expect(cards.nth(0)).toContainText("合成の登録済みの回答");
+    await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("合成の登録済みの質問 C");
+    await expect(evidence.getByRole("button", { name: /の根拠を表示$/ })).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`answer-evidence-approved-faq-${viewport.name}.png`), fullPage: true });
+  });
+}
+
 function readerWindow(quote: string, continuation: boolean) {
   return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: "paragraph",
     blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : "前文。".repeat(400) + quote, offset: 0, highlights: continuation ? [] : [[1200, 1200 + quote.length]], cited: !continuation }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],

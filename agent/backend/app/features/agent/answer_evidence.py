@@ -17,6 +17,11 @@
   開く確かめ（`passed_evidence`）には入れない）。添付は根拠の ID の
   印が無いため、回答で引用は回答がその添付のファイル名を書いたときに付ける。
 
+- 利用者が選んだ承認済み FAQ（登録済みの Q&A。#5136）: RAG の検索（`rag_search` /
+  `rag_retrieve_evidence`）が返した `approved_faq`。`document_id` は `approved_faq:<Q&A の ID>`
+  （RAG の文書ではないので、会話の添付と同じく原文・図を開く確かめには入れない）。利用者が選んで
+  RAG が返した登録済みの回答で、その Run の回答の根拠なので、回答で引用にする。
+
 - 段落に結び付ける根拠: 段落が書いた根拠の ID の印と、段落の特徴（引用・ID・コード・見出し・
   同じ文字の並び）の決定的な照合で決める（#4714）。
 """
@@ -49,6 +54,7 @@ from app.features.agent.evidence_match import (
     matched_features,
     order_weights,
 )
+from app.features.agent.support_task import RAG_APPROVED_FAQ_TOOLS, chosen_approved_faq
 from app.features.agent.tools import mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -65,6 +71,12 @@ ATTACHMENT_DOCUMENT_PREFIX = "attachment:"
 ATTACHMENT_EVIDENCE_TYPE = "chat_attachment"
 # 添付の根拠の抜粋の上限（節は 1 回に 8000 文字まで読めるので、画面と成果物では縮める）。
 ATTACHMENT_EXCERPT_CHARACTERS = 2_000
+# 利用者が選んだ承認済み FAQ の根拠（#5136）。
+APPROVED_FAQ_DOCUMENT_PREFIX = "approved_faq:"
+APPROVED_FAQ_EVIDENCE_TYPE = "approved_faq"
+APPROVED_FAQ_SOURCE_NAME = "登録済みの Q&A"
+# RAG の文書ではない根拠の document_id の接頭辞（RAG の文書・chunk の ID として扱わない）。
+NON_RAG_DOCUMENT_PREFIXES = (ATTACHMENT_DOCUMENT_PREFIX, APPROVED_FAQ_DOCUMENT_PREFIX)
 _ANSWER_USES = frozenset({"confirmed", "reference"})
 # 決定的な照合で 1 つの段落に結び付ける根拠の上限（当たりの重みの大きい順）。
 MAX_TEXT_BOUND_PER_PASSAGE = 3
@@ -92,6 +104,7 @@ _COPIED_FIELDS = (
     "rerank_score",
     "superseded",
     "chat_attachment_id",
+    "approved_faq_id",
 )
 
 
@@ -319,6 +332,41 @@ def attachment_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
                             content_kind="sheet",
                         )
                     )
+    return list(items.values())
+
+
+def approved_faq_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
+    """利用者が選んだ承認済み FAQ の根拠（RAG の検索が返した `approved_faq`。Q&A ごとに 1 件）。"""
+    items: dict[str, JsonObject] = {}
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success or step.status != "completed":
+            continue
+        if mcp_base_tool_name(call.name) not in RAG_APPROVED_FAQ_TOOLS:
+            continue
+        faq = chosen_approved_faq(result.output)
+        if faq is None or str(faq["id"]) in items:
+            continue
+        faq_id = str(faq["id"])
+        question = faq.get("question")
+        answer = faq.get("answer")
+        if not isinstance(answer, str):
+            # rag_search は登録済みの回答を answer（回答の本文）に返す。
+            output = result.output
+            answer = output.get("answer") if isinstance(output, Mapping) else None
+        excerpt, truncated = _excerpt(answer if isinstance(answer, str) else "")
+        item: JsonObject = {
+            "document_id": f"{APPROVED_FAQ_DOCUMENT_PREFIX}{faq_id}",
+            "chunk_id": f"{APPROVED_FAQ_DOCUMENT_PREFIX}{faq_id}",
+            "file_name": APPROVED_FAQ_SOURCE_NAME,
+            "excerpt": excerpt,
+            "truncated": truncated,
+            "evidence_type": APPROVED_FAQ_EVIDENCE_TYPE,
+            "approved_faq_id": faq_id,
+        }
+        if isinstance(question, str) and question:
+            item["section"] = {"title": question}
+        items[faq_id] = item
     return list(items.values())
 
 
@@ -623,6 +671,12 @@ def answer_evidence(steps: Sequence[RunStep], answer: str) -> JsonObject:
             # 画像を読んだ由来（モデルへ届いた画像か、読んだ Vision モデルと観点。#2652）。
             view["image_reading"] = dict(item["image_reading"])
         view["cited"] = _attachment_cited(answer, str(item.get("file_name") or ""))
+        view["answer_use"] = None
+        items.append(view)
+    for item in approved_faq_evidence(steps)[: max(MAX_ANSWER_EVIDENCE - len(items), 0)]:
+        view = {key: item.get(key) for key in _COPIED_FIELDS if key in item}
+        view["section_title"] = item.get("section", {}).get("title")
+        view["cited"] = True
         view["answer_use"] = None
         items.append(view)
     content: JsonObject = {
