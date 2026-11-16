@@ -59,6 +59,20 @@ def test_stage_io_matches_actual_enabled_inputs_and_queries(tmp_path, search, an
     assert all(item["出どころ"] for item in merged["output"]["採用した検索文"])
 
 
+def test_query_sources_are_found_when_question_has_format_characters(tmp_path):
+    """候補検索文は書式文字（U+200B）を除いた形なので、出どころも同じ形で引き、原質問を原質問として記録する（#5148）。"""
+    recorder = Recorder()
+    _run(
+        _write(tmp_path / "knowledge.json", terms=[_TERM]),
+        question="合成用語A\u200bの合成の期限は？",
+        observer=recorder,
+        search=True,
+    )
+    adopted = recorder.stage("検索文をまとめ、検索語を作る")["output"]["採用した検索文"]
+    assert [item["出どころ"] for item in adopted] == [["原質問"], ["原質問 + 用語・同義語"]]
+    assert all("\u200b" not in item["本文"] for item in adopted)
+
+
 def test_no_term_match_is_completed_with_empty_output(tmp_path):
     recorder = Recorder()
     _run(_write(tmp_path / "knowledge.json", terms=[_TERM]), question="合成の別の質問", observer=recorder, search=True)
