@@ -33,7 +33,7 @@ def test_low_scored_attachment_reaches_context(threshold):
     ranks = [RerankTextRank(0, 0.9), RerankTextRank(1, 0.8), RerankTextRank(2, 0.01)]
     ranked = _records_by_rerank_ranks(records, ranks, settings)
     assert [r.id for r in ranked] == ["a", "b", "attachment"]
-    anchors = a.cap_anchors_per_document(ranked, settings, top_k=2)
+    anchors = a.cap_anchors_per_document(ranked, settings)
     bundle = a._bundle_context(
         "添付の項目 A の値を資料と照合する",
         anchors,
