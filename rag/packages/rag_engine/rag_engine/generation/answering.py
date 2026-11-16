@@ -219,9 +219,8 @@ from rag_engine.retrieval.request_coverage import (
     TargetedRetrieval,
     select_new_parents,
 )
-from rag_engine.retrieval.rerank_order import COLUMN_RERANK, COLUMN_SEARCH, DEFAULT_SLOT_RATIO, order_reranked_candidates
+from rag_engine.retrieval.rerank_order import order_reranked_candidates
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
-from rag_engine.retrieval.rerank_selection import select_reranked_candidates
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -277,7 +276,6 @@ def rerank_records(
                 "採点候補数の指定": candidate_limit,
                 "用途": rerank_phase,
                 "関連度スコアの下限": getattr(settings, "rerank_min_relevance_score", None),
-                "採用件数の上限": getattr(settings, "rerank_top_n", 0),
                 "候補": candidate_snapshot(records),
             }
         )
@@ -315,8 +313,6 @@ def rerank_records(
 
 # rerank に使う検索文の上限（原質問のほか。LLM ではなく rerank の呼び出しの数を抑える。#2161）。
 MAX_EXTRA_RERANK_QUERIES = 6
-# 全候補が合格点未満のとき、合格点に掛けてやり直す倍率（#4664）。
-RERANK_THRESHOLD_RELAXATION = 0.7
 
 
 def _best_rerank_ranks(
@@ -430,38 +426,23 @@ def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | No
     return ""
 
 
-def _order_by_slots(
+def _order_by_score(
     records: Sequence[AnswerRecord], settings: Settings, step: Any, receipt: dict[str, Any], *, rerank_phase: str
 ) -> list[AnswerRecord]:
-    """合格した候補を、rerank の順（MMR）と検索の順の枠で 1 本に並べ、工程の記録に残す（#4664）。"""
-    ratio = cast(tuple[int, int], getattr(settings, "rerank_slot_ratio", DEFAULT_SLOT_RATIO))
+    """合格した候補を rerank の点数の順（MMR）に並べ、工程の記録に残す（#5165。検索の順は混ぜない）。"""
     tokenizer_config = TextSearchTokenizerConfig(
         sudachi_dict_type=getattr(settings, "text_search_tokenizer_sudachi_dict", ""),
         sudachi_config_path=getattr(settings, "text_search_tokenizer_sudachi_config", ""),
         latin_stemmer=getattr(settings, "text_search_tokenizer_latin_stemmer", ""),
     )
-    ordered, columns = order_reranked_candidates(records, ratio, tokenizer_config=tokenizer_config)
-    counts = Counter(column for column in columns if column is not None)
-    trace = {
-        "ratio": list(ratio),
-        "rerank_slot_count": counts[COLUMN_RERANK],
-        "search_slot_count": counts[COLUMN_SEARCH],
-        "kept_position_count": len(records) - sum(counts.values()),
-    }
-    receipt["並びの枠"] = trace
-    step.field("並びの枠（rerank の順 : 検索の順）", f"{ratio[0]} : {ratio[1]}")
-    breakdown = (
-        ("rerank の順", trace["rerank_slot_count"]),
-        ("検索の順", trace["search_slot_count"]),
-        ("位置を保つ", trace["kept_position_count"]),
-    )
-    step.field("枠の内訳", " / ".join(f"{label} {count} 件" for label, count in breakdown))
+    ordered = order_reranked_candidates(records, tokenizer_config=tokenizer_config)
+    receipt["並び"] = "rerank の点数の順（MMR で内容の似た候補を後ろへ）"
+    step.field("並び", "rerank の点数の順（MMR で内容の似た候補を後ろへ回します）")
     record_retrieval_stage(
         {
-            "stage": "rerank_slot_order",
+            "stage": "rerank_order",
             "phase": rerank_phase,
-            **trace,
-            "order": [{"id": retrieval_record_id(record), "column": column} for record, column in zip(ordered, columns, strict=True)],
+            "order": [retrieval_record_id(record) for record in ordered],
         }
     )
     return ordered
@@ -479,7 +460,11 @@ def _rerank_records(
     rerank_phase: str = "other",
     receipt: dict[str, Any] | None = None,
 ) -> list[AnswerRecord]:
-    """rerank 本体。無効・未設定・失敗時は取得順を保持する（並びの枠と MMR も行わない。#4664）。
+    """rerank 本体。無効・未設定・失敗時は取得順を保持する（MMR も行わない）。
+
+    成功したときは関連度の下限（``rerank_min_relevance_score``）未満を外し、残りを rerank の点数の順（MMR）に並べる。
+    下限以上が 0 件なら根拠なしで、下限を下げてやり直さない（#5165）。件数はここで切らず、起点数（top_k）で 1 回だけ
+    切る（context の組み立て）。
 
     extra_queries（呼び出し元の検索文、質問に用語・同義語を足した検索文など）があれば、候補ごとに原質問と各検索文の関連度の最高値で
     並べる（#2161）。長い事例の質問の全体と比べると、要求の一部にだけ答える根拠（条文など）の関連度が薄まるため。
@@ -538,28 +523,12 @@ def _rerank_records(
         candidate_indices=rerankable_indices,
         decisions=threshold_rows,
     )
-    # 全部が不合格のときだけ、合格点を下げて 1 回だけやり直す（#4664）。それでも 0 件なら根拠 0 件で終える。
-    relaxed_from: float | None = None
-    if all(row["status"] == "excluded" for row in threshold_rows):
-        relaxed_from = cast(float, threshold_rows[0]["minimum"])
-        threshold_rows.clear()
-        reranked_candidates = _records_by_rerank_ranks(
-            rerankable_candidates,
-            reranked,
-            cast(Settings, settings),
-            candidate_indices=rerankable_indices,
-            decisions=threshold_rows,
-            min_score_override=round(relaxed_from * RERANK_THRESHOLD_RELAXATION, 6),
-        )
-        receipt["関連度下限のやり直し"] = {"元の下限": relaxed_from, "下げた下限": threshold_rows[0]["minimum"]}
+    # 全部が下限未満なら根拠なし（下限を下げてやり直さない。#5165）。
     receipt["関連度下限の判断"] = threshold_rows
     excluded = sum(row["status"] == "excluded" for row in threshold_rows)
     unscored = sum(row["status"] == "kept_unscored" for row in threshold_rows)
     attachments = sum(row["status"] == "kept_attachment" for row in threshold_rows)
-    if relaxed_from is None:
-        step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
-    else:
-        step.field("関連度スコアの下限", f"{threshold_rows[0]['minimum']}（全候補が {relaxed_from} 未満のため下げて 1 回だけやり直し）")
+    step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
     step.field(
         "関連度による選別",
         f"採用 {len(reranked_candidates)} 件 / 下限未満で除外 {excluded} 件 / "
@@ -579,7 +548,6 @@ def _rerank_records(
             "stage": "rerank_threshold",
             "phase": rerank_phase,
             "minimum": threshold_rows[0]["minimum"],
-            "relaxed_from": relaxed_from,
             "decisions": threshold_rows,
             "excluded_count": excluded,
             "unscored_kept_count": unscored,
@@ -587,35 +555,9 @@ def _rerank_records(
             "outside_scoring_count": len(protected_candidates) + len(remainder),
         }
     )
-    has_scores = any(row["adopted_score"] is not None for row in threshold_rows)
-    if has_scores:
-        reranked_candidates = _order_by_slots(reranked_candidates, cast(Settings, settings), step, receipt, rerank_phase=rerank_phase)
-    merged = _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
-    if not has_scores:
-        receipt["採用件数の判断"] = {"applied": False, "stop_reason": "no_scores"}
-        if int(getattr(settings, "rerank_top_n", 0) or 0) > 0:
-            step.add("有効な採点がないため、採用件数の上限を適用せず候補を保持します。")
-            record_retrieval_stage({"stage": "rerank_selection", "phase": rerank_phase, "applied": False, "stop_reason": "no_scores"})
-        return merged
-    selected, selection = select_reranked_candidates(merged, int(getattr(settings, "rerank_top_n", 0) or 0))
-    receipt["採用件数の判断"] = selection
-    if selection["applied"]:
-        step.field("再ランキング後の採用上限", str(selection["limit"]))
-        step.field(
-            "件数による選別",
-            f"普通候補 {selection['ordinary_selected_count']} 件 / "
-            f"明示添付 {selection['attachment_related_count']} 件 / "
-            f"除外 {selection['excluded_count']} 件",
-        )
-        record_retrieval_stage(
-            {
-                "stage": "rerank_selection",
-                "phase": rerank_phase,
-                **selection,
-                "selected_ids": [retrieval_record_id(record) for record in selected],
-            }
-        )
-    return selected
+    if any(row["adopted_score"] is not None for row in threshold_rows):
+        reranked_candidates = _order_by_score(reranked_candidates, cast(Settings, settings), step, receipt, rerank_phase=rerank_phase)
+    return _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
 
 
 def build_answer_context(
@@ -713,125 +655,13 @@ def build_chunk_answer_context(
     )
 
 
-def select_documents(
-    ranked_children: Sequence[AnswerRecord], settings: Settings | None, step: Any | None = None, *, top_k: int
-) -> tuple[list[AnswerRecord], list[AnswerRecord], dict[str, Any]]:
-    """rerank 後の child を文書ごとに集約し、rerank の点数が明らかに低い文書の child を後回し（deferred）にする (#1028)。
-
-    粗→細の検索の「粗」の側。文書級の要約や索引は作らず、文書の点数は文書の chunk の rerank の点数の最高値
-    （MaxP。#3504）。後回しにするのは、並べ替えの点数（原質問と検索文の最高値。#2161）でも原質問だけの点数でも
-    最上位の文書の `document_selection_score_ratio` 倍未満で、かつ rerank の後の並び（枠の並び。#4664）の上位
-    `top_k` 件（起点）に chunk を持たない文書だけ。命中の件数は判定に使わない（件数は長い文書・繰り返しの多い文書に偏り、点数の高い 1 件の
-    文書を、点数の低い候補を多く持つ文書より後ろにしていた。#3504）。集約は rerank が見た範囲、すなわち候補
-    全件で行う (#1084)。後回しにした child は落とさず `AnswerContext.deferred_records` に残し、不足時に戻す。
-    rerank の点数が無い（rerank が動かなかった）ときは落差を判断できないので後回しにしない。無効なら何もしない。
-    """
-    from rag_engine.retrieval.metadata_context import document_context_key  # 循環 import を避けて関数内で読む
-
-    enabled = bool(getattr(settings, "document_selection_enabled", False))
-    trace: dict[str, Any] = {"enabled": enabled, "selected": [], "deferred": [], "restored": False}
-    if not enabled or not ranked_children:
-        return list(ranked_children), [], trace
-    ratio = float(getattr(settings, "document_selection_score_ratio", 0.5))
-    head = max(0, int(top_k or 0))
-    scores: dict[tuple[str, ...], float | None] = {}
-    question_scores: dict[tuple[str, ...], float | None] = {}
-    best_ranks: dict[tuple[str, ...], int] = {}
-    hits: dict[tuple[str, ...], int] = {}
-    sources: dict[tuple[str, ...], str] = {}
-
-    def higher(current: float | None, value: float | None) -> float | None:
-        return value if current is None or (value is not None and value > current) else current
-
-    for position, record in enumerate(ranked_children, start=1):
-        if is_attachment_evidence(record):
-            # 会話の添付は利用者が明示した入力なので、文書間の関連度の比較に数えない。
-            continue
-        key = document_context_key(record)
-        scores[key] = higher(scores.get(key), rerank_score(record))
-        question_scores[key] = higher(question_scores.get(key), question_rerank_score(record))
-        best_ranks.setdefault(key, position)
-        hits[key] = hits.get(key, 0) + 1
-        sources.setdefault(key, str(record.source or ""))
-    if not scores:
-        return list(ranked_children), [], trace
-    scored = any(score is not None for score in scores.values())
-    top = max((score for score in scores.values() if score is not None), default=0.0)
-    top_question = max((score for score in question_scores.values() if score is not None), default=0.0)
-
-    def low(score: float | None, best: float) -> bool:
-        return score is None or score < best * ratio
-
-    excluded = (
-        {key for key in scores if best_ranks[key] > head and low(scores[key], top) and low(question_scores[key], top_question)}
-        if scored
-        else set()
-    )
-    # 表示の順: 原質問との点数、並べ替えの点数、最上位の候補の順位。命中の件数は同点の順だけ。
-    order = sorted(
-        scores,
-        key=lambda k: (*rerank_first_key(question_scores[k]), *rerank_first_key(scores[k]), best_ranks[k], -hits[k]),
-    )
-    for key in order:
-        entry = {
-            "source": sources[key],
-            "score": None if scores[key] is None else round(float(scores[key] or 0.0), 4),
-            "question_score": None if question_scores[key] is None else round(float(question_scores[key] or 0.0), 4),
-            "best_rank": best_ranks[key],
-            "hits": hits[key],
-        }
-        trace["deferred" if key in excluded else "selected"].append(entry)
-    # 会話の添付（#3100）は、利用者が明示した入力なので後回しにしない。検索拡張の根拠は候補に入らず、最後の
-    # 根拠の並びへ合わせる（#5162）。
-    reserved = [is_attachment_evidence(r) for r in ranked_children]
-    kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
-    deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
-    if step is not None:
-        # 文書ごとの点数と出所、残す / 後回しを示す（処理の経過の段を開いて見る。#2341・#3504）。
-        step.field("判定の基準", _document_selection_rule(ratio, head, scored=scored))
-        step.field("文書", f"{len(scores)} 文書（残す {len(scores) - len(excluded)}・後回し {len(excluded)}）")
-        step.add(
-            *numbered(
-                [
-                    f"{'後回し' if index >= len(trace['selected']) else '残す'}: {Path(entry['source']).name or entry['source']}"
-                    f"（{_document_score_label(entry)}）"
-                    for index, entry in enumerate([*trace["selected"], *trace["deferred"]])
-                ],
-                limit=8,
-            )
-        )
-    return kept, deferred, trace
-
-
-def _document_selection_rule(ratio: float, top_k: int, *, scored: bool) -> str:
-    """文書の絞り込みの判定の基準の文（処理の経過に出す。#3504）。"""
-    if not scored:
-        return "rerank の点数が無いため、どの文書も後回しにしません（取得の順位で並べます）"
-    return (
-        "文書の点数は、文書の候補の rerank の点数（元の質問との点数と、検索文を含む並べ替えの点数）の最高値。"
-        f"どちらも最上位の文書の {ratio:g} 倍未満で、上位 {top_k} 件の起点に候補が無い文書を後回し（命中の件数は判定に使いません）"
-    )
-
-
-def _document_score_label(entry: Mapping[str, Any]) -> str:
-    """文書の行の点数の表示（元の質問との点数・並べ替えの点数・最上位の順位・命中の件数）。"""
-    score, question = entry.get("score"), entry.get("question_score")
-    tail = f"最上位 {entry['best_rank']} 位・命中 {entry['hits']} 件"
-    if score is None:
-        return f"rerank の点数なし・{tail}"
-    if question is None or abs(float(question) - float(score)) < 0.0005:
-        return f"元の質問との並べ替えの点数 {float(score):.3f}・{tail}"
-    return f"元の質問との点数 {float(question):.3f}・検索文を含む並べ替えの点数 {float(score):.3f}・{tail}"
-
-
 def cap_anchors_per_document(
     ranked_children: Sequence[AnswerRecord], settings: Settings | None, *, top_k: int, step: Any | None = None
 ) -> list[AnswerRecord]:
-    """同じ文書の child を、文書ごとに `max_anchors_per_document` 件までにして先に並べ、超えた child を後ろへ回す（#2167）。
+    """1 つの文書から採る候補を `max_anchors_per_document` 件までにする（#2167・#5165。0 は上限なし）。
 
-    rerank の上位は、章の多い 1 つの文書の似た節で占められやすく、分数の近い別の文書の候補が起点（上位 top_k）から
-    押し出される（検索エンジンの host crowding と同じ）。超えた child は落とさず順位を保って後ろへ置く（起点が
-    足りなければ使われる）。会話の添付は位置を保ち、数えない。検索拡張の根拠は候補に入らない（#5162）。0 は上限なし。
+    rerank の後の並びの順に文書ごとに数え、上限を超えた候補は外す（後ろへ回して使い直さない）。会話の添付は
+    数えない。検索拡張の根拠は候補に入らない（#5162）。
     """
     from rag_engine.retrieval.metadata_context import document_context_key  # 循環 import を避けて関数内で読む
 
@@ -840,7 +670,7 @@ def cap_anchors_per_document(
         return list(ranked_children)
     counts: dict[tuple[str, ...], int] = {}
     kept: list[AnswerRecord] = []
-    later: list[AnswerRecord] = []
+    dropped: list[AnswerRecord] = []
     for record in ranked_children:
         # 会話の添付（#3100）は数えない。
         if is_attachment_evidence(record):
@@ -851,21 +681,19 @@ def cap_anchors_per_document(
             counts[key] = counts.get(key, 0) + 1
             kept.append(record)
         else:
-            later.append(record)
-    capped = kept + later
+            dropped.append(record)
     if step is not None:
-        head = {id(record) for record in capped[:top_k]}
-        moved_records = [record for record in ranked_children[:top_k] if id(record) not in head]
-        moved = len(moved_records)
-        step.result(f"文書ごとの起点の上限 {limit} 件: 上位 {top_k} 件のうち {moved} 件を後ろへ回します")
-        # 後ろへ回した候補と、代わりに起点に入った候補（#2341）。
-        if moved_records:
-            step.add("後ろへ回した候補:", *numbered([record_label(record) for record in moved_records]))
+        head = {id(record) for record in kept[:top_k]}
+        removed = [record for record in ranked_children[:top_k] if id(record) not in head]
+        step.result(f"文書ごとの上限 {limit} 件: {len(dropped)} 件を外しました（上位 {top_k} 件のうち {len(removed)} 件）")
+        # 外した候補と、代わりに起点に入った候補（#2341）。
+        if removed:
+            step.add("外した候補:", *numbered([record_label(record) for record in removed]))
             original = {id(record) for record in ranked_children[:top_k]}
-            raised = [record for record in capped[:top_k] if id(record) not in original]
+            raised = [record for record in kept[:top_k] if id(record) not in original]
             if raised:
                 step.add("代わりに起点に入った候補:", *numbered([record_label(record) for record in raised]))
-    return capped
+    return kept
 
 
 def _bundle_context(
@@ -1008,57 +836,6 @@ def _bundle_context(
     return bundle
 
 
-def _restore_deferred_context(
-    question: str, context: AnswerContext, settings: Settings, *, top_k: int, neighbor_child_count: int, max_records: int, max_chars: int
-) -> AnswerContext:
-    """後回しにした文書を戻し、全候補から context を作り直す（護欄: 覆盖度による回退。#1028）。"""
-    with _execution_step("文書の選択の解除", "根拠が不足したため、後回しにした文書を戻して再評価します。") as step:
-        step.input(
-            partial(
-                context_snapshot,
-                context,
-                **{
-                    "質問": question,
-                    "起点数": top_k,
-                    "前後それぞれのChunk数": neighbor_child_count,
-                    "根拠数上限": max_records,
-                    "文脈文字数上限": max_chars,
-                    "文書ごとの起点数上限": settings.max_anchors_per_document,
-                },
-            )
-        )
-        bundle = _bundle_context(
-            question,
-            cap_anchors_per_document(context.ranked_candidates, settings, top_k=top_k),
-            context.expansion_records,
-            settings,
-            top_k=top_k,
-            neighbor_child_count=neighbor_child_count,
-            max_records=max_records,
-            max_chars=max_chars,
-            expansions=context.expansion_candidates,
-        )
-        restored = AnswerContext(
-            records=list(bundle.records),
-            text=bundle.text,
-            evidence=bundle.evidence,
-            evidence_tree=bundle.evidence_tree,
-            status=bundle.status,
-            insufficient_reason=bundle.insufficient_reason,
-            expansion_records=context.expansion_records,
-            ranked_candidates=context.ranked_candidates,
-            candidate_count=context.candidate_count,
-            deferred_records=(),
-            document_selection={**context.document_selection, "restored": True},
-            expansion_candidates=context.expansion_candidates,
-        )
-
-        step.output(partial(context_snapshot, restored, **{"新規の根拠がある": _adds_new_records(context, restored)}))
-        step.result(f"後回しの候補 {len(context.deferred_records)} 件から文脈を作り直しました")
-        step.field("作り直した根拠", evidence_summary(restored.records))
-        return restored
-
-
 def build_adb_hybrid_answer_context(
     question: str,
     run_id: Any,
@@ -1159,27 +936,13 @@ def build_adb_hybrid_answer_context(
         rerank_phase=rerank_phase,
     )
     record_retrieval_stage({"stage": "post_rerank_policies", "selected_ids": [retrieval_record_id(record) for record in ranked_children]})
-    if getattr(settings, "document_selection_enabled", False):
-        with _execution_step(
-            "文書の選択", "候補を文書ごとに集約し、元の質問との並べ替え（rerank）の点数が明らかに低い文書を後回しにします。"
-        ) as step:
-            step.input(
-                {"候補": candidate_snapshot(ranked_children), "起点数": top_k, "文書の点数比率": settings.document_selection_score_ratio}
-            )
-            kept_children, deferred_children, selection = select_documents(ranked_children, settings, step, top_k=top_k)
-            step.output(
-                {"判断": selection, "残す候補": candidate_snapshot(kept_children), "後回しの候補": candidate_snapshot(deferred_children)}
-            )
-            step.result(
-                f"{len(selection['selected'])} 文書を起点にします"
-                + (f"、{len(selection['deferred'])} 文書は後回し" if selection["deferred"] else "")
-            )
-    else:
-        kept_children, deferred_children, selection = select_documents(ranked_children, settings, top_k=top_k)
+    # rerank の後は「並び（rerank の点数と MMR）→ 関連度の下限 → 文書ごとの上限 → top_k で切る → 検索拡張の合わせ込み」
+    # の順で、以後は足すだけで削除・並べ替えをしない（#5165）。top_k の切りは context の組み立てで 1 回だけ行う。
+    kept_children = ranked_children
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) > 0:
-        with _execution_step("文書ごとの起点の上限", "同じ文書の候補が起点を占めないよう、超えた候補を後ろへ回します。") as step:
-            step.input({"候補": candidate_snapshot(kept_children), "起点数": top_k, "文書ごとの上限": settings.max_anchors_per_document})
-            kept_children = cap_anchors_per_document(kept_children, settings, top_k=top_k, step=step)
+        with _execution_step("文書ごとの上限", "同じ文書の候補が起点を占めないよう、1 つの文書から採る候補を上限までにします。") as step:
+            step.input({"候補": candidate_snapshot(ranked_children), "起点数": top_k, "文書ごとの上限": settings.max_anchors_per_document})
+            kept_children = cap_anchors_per_document(ranked_children, settings, top_k=top_k, step=step)
             step.output({"処理後の候補": candidate_snapshot(kept_children)})
     bundle = _bundle_context(
         question,
@@ -1202,8 +965,6 @@ def build_adb_hybrid_answer_context(
         insufficient_reason=bundle.insufficient_reason,
         ranked_candidates=tuple(ranked_children),
         candidate_count=candidate_count,
-        deferred_records=tuple(deferred_children),
-        document_selection=selection,
         expansion_candidates=expansion_candidates,
     )
 
@@ -1212,8 +973,6 @@ def _record_search_result(step: _ExecutionStep, context: AnswerContext, *, title
     """文書の検索の結果（候補の件数と経路ごとの件数、根拠の件数と上位の根拠）を工程の詳細に書く（#2341）。"""
     step.output(partial(context_snapshot, context))
     record_search_candidates(step, context.ranked_candidates)
-    if context.deferred_records:
-        step.field("後回しにした候補", f"{len(context.deferred_records)} 件")
     step.result(f"{title} {evidence_summary(context.records)}{note}")
     add_evidence_lines(step, context.records, title=title)
 
@@ -1380,33 +1139,19 @@ def _expand_context_from_pool(
     modes: Sequence[str] = _REMEDY_MODES,
     max_records: int = 6,
     max_chars: int = MAX_CONTEXT_CHARS,
-    deferred: bool = True,
 ) -> tuple[AnswerContext | None, dict[str, Any]]:
     """既取得poolから同機能の根拠を最大 max_records 件足す。既存の根拠を追い出す拡張は採用しない。
 
-    modes は `recover_context_records` の方式を順に試し、最初に見つかった方式の結果を採用する。deferred=True では、文書の選択で後回しにした
-    文書の親を近傍より先に足す（是正の回退。#1028）。生成前の同単元の補充（`_fill_same_unit`）は
-    deferred=False で呼び、後回しの文書を答えていない要求が出る前に消費しない。
+    modes は `recover_context_records` の方式を順に試し、最初に見つかった方式の結果を採用する。
     """
     visible = list(context.records)
     anchors = [r.chunk_uid for r in visible if r.chunk_uid][:3]
     recovered = ContextRecovery()
     mode = ""
-    if not recovered.records and deferred and context.deferred_records:
-        # 護欄: 覆盖度による回退（生成側。#1028）。答えていない要求があるとき、文書の選択で後回しにした文書の
-        # 親を pool から足す。可視の起点と同じ文書しか探さない近傍・同単元の回復では届かないため先に試す。
-        # 足す件数は可視の根拠の数まで。下の併合は可視の 2 倍を上限にするので、超えると既存の根拠を押し出して
-        # `would_drop_existing_evidence` で却下され、回退が空振りした（実データで確認）。
-        limit = min(max_records, max(1, len(visible)))
-        context = _hydrate_recovery_context(context, context.deferred_records, limit)
-        recovered, mode = _deferred_document_records(context, limit), "deferred_documents"
-    if not recovered.records:
-        for mode in modes:
-            recovered = recover_context_records(
-                visible, context.expansion_records, anchors, mode, max_records=max_records, max_chars=max_chars
-            )
-            if recovered.records:
-                break
+    for mode in modes:
+        recovered = recover_context_records(visible, context.expansion_records, anchors, mode, max_records=max_records, max_chars=max_chars)
+        if recovered.records:
+            break
     if not recovered.records:
         return None, {"remedy": "context", "reason": "no_new_compatible_evidence"}
     # 追加分も tree 付きにする。tree のない context を merge すると既存分まで tree なしの fallback に落ち、
@@ -1437,8 +1182,6 @@ def _expand_context_from_pool(
         preferred_child_ids=context.preferred_child_ids,
         ranked_candidates=context.ranked_candidates,
         candidate_count=context.candidate_count,
-        deferred_records=() if mode == "deferred_documents" else context.deferred_records,
-        document_selection={**context.document_selection, "restored": True} if mode == "deferred_documents" else context.document_selection,
     )
     return candidate, {"remedy": "context", "mode": mode, "added_chunk_ids": [r.chunk_uid for r in recovered.records]}
 
@@ -1447,57 +1190,6 @@ def _adds_new_records(current: AnswerContext, restored: AnswerContext) -> bool:
     """戻した context に、今の context に無い根拠（親）があるか。"""
     known = {record.chunk_uid or record.id for record in current.records}
     return any((record.chunk_uid or record.id) not in known for record in restored.records)
-
-
-def _hydrate_recovery_context(context: AnswerContext, candidates: Sequence[AnswerRecord], limit: int) -> AnswerContext:
-    """明示した回復先だけを既存の件数枠で読む。未読の親が無いことを根拠不足と取り違えない。"""
-    known = {retrieval_record_id(record): record for record in context.expansion_records}
-    selected: dict[tuple[str, ...], AnswerRecord] = {}
-    for child in candidates:
-        if child.chunk_level != CHILD_CHUNK_LEVEL:
-            continue
-        strategy = child.metadata.get("chunk_strategy")
-        parent = child.parent_chunk_uid if strategy in (None, "small_to_big", "small_to_big_parent_child") else ""
-        if parent and parent in known:
-            continue
-        key = (*retrieval_artifact_key(child), parent or retrieval_record_id(child))
-        selected.setdefault(key, child)
-        if len(selected) >= max(0, limit):
-            break
-    if not selected or limit <= 0:
-        return context
-    loaded = injected_context_chunks(anchors=list(selected.values()), settings=None)
-    if loaded is None:
-        return context
-    known.update((retrieval_record_id(record), record) for record in map(_stored_chunk_answer_record, loaded))
-    record_retrieval_stage(
-        {
-            "stage": "context_recovery",
-            "anchor_limit": limit,
-            "anchor_ids": [retrieval_record_id(record) for record in selected.values()],
-            "loaded_ids": [str(chunk.chunk_uid) for chunk in loaded],
-        }
-    )
-    return replace(context, expansion_records=tuple(known.values()))
-
-
-def _deferred_document_records(context: AnswerContext, max_records: int) -> ContextRecovery:
-    """後回しにした文書の child の親を、順位順に最大 max_records 件、既取得 pool から返す (#1028)。"""
-    context = _hydrate_recovery_context(context, context.deferred_records, max_records)
-    pool = {r.chunk_uid or r.id: r for r in context.expansion_records}
-    visible = {r.chunk_uid or r.id for r in context.records}
-    selected: dict[str, AnswerRecord] = {}
-    for child in context.deferred_records:
-        strategy = child.metadata.get("chunk_strategy")
-        parent_mode = strategy in (None, "small_to_big", "small_to_big_parent_child")
-        parent = (pool.get(child.parent_chunk_uid) or child) if parent_mode and child.parent_chunk_uid else child
-        uid = (parent.chunk_uid or parent.id) if parent is not None else ""
-        if not uid or uid in visible or uid in selected:
-            continue
-        selected[uid] = cast(AnswerRecord, parent)
-        if len(selected) >= max_records:
-            break
-    return ContextRecovery(tuple(selected.values()), (), "expanded" if selected else "no_new_compatible_evidence")
 
 
 def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContext, dict[str, Any]]:
@@ -1514,7 +1206,6 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
         modes=("same_unit",),
         max_records=SAME_UNIT_FILL_RECORDS,
         max_chars=SAME_UNIT_FILL_CHARS,
-        deferred=False,
     )
     if filled is None:
         return context, {"applied": False, "reason": reason.get("reason", "")}
@@ -1980,7 +1671,7 @@ def _evidence_subset_counts(context: AnswerContext, spans: Sequence[Mapping[str,
 def _retrieval_counts(context: AnswerContext, spans: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """検索の件数を段ごとに記録する（基準で全部落ちた場合と、検索で見つからなかった場合を区別する）。
 
-    candidate_count は基準（rerank の関連度の下限・採用件数の上限）で絞り込む前の候補、found は基準を通った候補、
+    candidate_count は基準（rerank の関連度の下限）で絞り込む前の候補、found は基準を通った候補、
     passed_to_model はモデルに渡した根拠の単位の数（生成を呼ばない経路は 0）。
     """
     ranked = context.ranked_candidates or tuple(context.records)
@@ -2085,7 +1776,7 @@ def _cover_guide_steps(
 ) -> tuple[AnswerContext, dict[str, Any], tuple[tuple[str, str, tuple[str, ...]], ...]]:
     """業務ガイドの手順ごとに検索し、手順の根拠と参照の頁の根拠を回答の材料に足す (#2395)。
 
-    検索は embedding・hybrid 検索・rerank だけで、文書の選択は使わない。
+    検索は embedding・hybrid 検索・rerank だけ。
     足した根拠は既存の根拠の後ろに置き、既存の根拠は追い出さない。戻り値は (回答に渡す context, 記録,
     手順ごとの根拠（手順 id, 題名, 根拠の chunk_uid の列）)。
     """
@@ -2122,10 +1813,6 @@ def _cover_guide_steps(
         )
         return context, trace, tuple((step.step_id, step.title, ()) for step in plan.steps)
 
-    search_settings = replace(
-        settings,
-        document_selection_enabled=False,
-    )
     per_step = max(1, int(getattr(settings, "guide_step_chunks_per_step", 1) or 1))
     reference_cap = max(0, int(getattr(settings, "guide_reference_max_chunks", 0) or 0))
     per_query = max(1, min(int(top_k), max(per_step, reference_cap)))
@@ -2135,7 +1822,7 @@ def _cover_guide_steps(
             text,
             run_id,
             preferred_engines,
-            search_settings,
+            settings,
             top_k=per_query,
             neighbor_child_count=neighbor_child_count,
             max_records=per_query,
@@ -2200,8 +1887,6 @@ def _cover_guide_steps(
                 expansion_records=tuple(pool.values()),
                 preferred_child_ids=context.preferred_child_ids,
                 ranked_candidates=context.ranked_candidates,
-                deferred_records=context.deferred_records,
-                document_selection=context.document_selection,
             )
     in_context = {r.chunk_uid or r.id for r in context.records}
     # 手順の根拠は、手順ごとの検索の結果に、手順の参照の頁に当たる回答の材料の根拠を足したもの（#2706）。期限で検索
@@ -3075,7 +2760,6 @@ def answer_question_result(
             )
 
         # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
-        overflow_settings = replace(settings, document_selection_enabled=False)
         overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
         overflow_keywords = (
             settings.domain_keywords_override
@@ -3088,7 +2772,7 @@ def answer_question_result(
                 query,
                 run_id,
                 preferred_engine_ids,
-                overflow_settings,
+                settings,
                 top_k=chunk_top_k,
                 neighbor_child_count=chunk_neighbor_count,
                 retrieval_queries=(query,),
@@ -3166,8 +2850,6 @@ def answer_question_result(
                         ),
                         preferred_child_ids=context.preferred_child_ids,
                         ranked_candidates=context.ranked_candidates,
-                        deferred_records=context.deferred_records,
-                        document_selection=context.document_selection,
                     )
                     overflow_added = merged_ids - existing_overflow_ids
             coverage_usage.chunks += len(overflow_added)

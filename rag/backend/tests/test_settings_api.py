@@ -3775,30 +3775,6 @@ def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: 
     assert response.json()["data"]["rerank_enabled"] == initial["rerank_enabled"]
 
 
-def test_rerank_slot_ratio_default_save_and_reload(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_rerank_slot_ratio", (7, 3))
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-    assert client.get("/api/settings/answering").json()["data"]["rerank_slot_ratio"] == [7, 3]
-    response = client.patch("/api/settings/answering", json={"rerank_slot_ratio": [4, 1]})
-    assert response.status_code == 200
-    assert response.json()["data"]["rerank_slot_ratio"] == [4, 1]
-    assert Settings(_env_file=env_file).rag_rerank_slot_ratio == (4, 1)
-
-
-@pytest.mark.parametrize("ratio", [[-1, 1], [0, 0], [1], [1, 2, 3], [1.5, 1]])
-def test_rerank_slot_ratio_rejects_invalid_without_saving(
-    ratio: list[float], monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-    before = env_file.read_text() if env_file.exists() else ""
-    response = client.patch("/api/settings/answering", json={"rerank_slot_ratio": ratio})
-    assert response.status_code == 422
-    assert (env_file.read_text() if env_file.exists() else "") == before
-
-
 @pytest.mark.parametrize("field", ["rrf_method_ratio"])
 @pytest.mark.parametrize("ratio", [[-1, 1], [0, 0], [1], [1, 2, 3]])
 def test_rrf_ratios_reject_invalid_without_saving(
@@ -3862,28 +3838,33 @@ def test_retrieval_thresholds_reject_invalid_without_persisting(
     assert (env_file.read_text() if env_file.exists() else "") == before
 
 
-@pytest.mark.parametrize("values", [(0, 0), (1, 0), (600, 50), (2000, 2000)])
-def test_retrieval_counts_save_reload_and_reach_engine(
-    values: tuple[int, int], monkeypatch: MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("value", [0, 1, 600, 2000])
+def test_retrieval_counts_save_reload_and_preserve_other_settings(
+    value: int, monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    from app.rag.answer_engine import build_engine_settings
-
     env_file = _settings_env_file(monkeypatch, tmp_path)
     before = client.get("/api/settings/answering").json()["data"]
-    response = client.patch(
-        "/api/settings/answering",
-        json={"retrieval_query_limit": values[0], "rerank_top_n": values[1]},
-    )
+    response = client.patch("/api/settings/answering", json={"retrieval_query_limit": value})
     assert response.status_code == 200, response.text
     saved = Settings(_env_file=env_file)
-    assert saved.rag_retrieval_query_limit == values[0]
-    assert saved.rag_rerank_top_n == values[1]
-    assert build_engine_settings(saved, output_dir=tmp_path).rerank_top_n == values[1]
+    assert saved.rag_retrieval_query_limit == value
     after = client.get("/api/settings/answering").json()["data"]
-    assert after["retrieval_query_limit"] == values[0]
-    assert after["rerank_top_n"] == values[1]
-    for name in before.keys() - {"retrieval_query_limit", "rerank_top_n"}:
+    assert after["retrieval_query_limit"] == value
+    for name in before.keys() - {"retrieval_query_limit"}:
         assert after[name] == before[name]
+
+
+def test_removed_rerank_order_and_top_n_settings_are_not_exposed(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """rerank の後の並びの比率と Top-N は削除した(#5165)。画面の API にも保存先にも無い。"""
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    data = client.get("/api/settings/answering").json()["data"]
+    assert "rerank_slot_ratio" not in data and "rerank_top_n" not in data
+    response = client.patch("/api/settings/answering", json={"rerank_enabled": True})
+    assert response.status_code == 200, response.text
+    saved = env_file.read_text()
+    assert "RAG_RERANK_SLOT_RATIO" not in saved and "RAG_RERANK_TOP_N" not in saved
 
 
 @pytest.mark.parametrize(
@@ -3891,9 +3872,6 @@ def test_retrieval_counts_save_reload_and_reach_engine(
     [
         ("retrieval_query_limit", -1),
         ("retrieval_query_limit", 2001),
-        ("rerank_top_n", -1),
-        ("rerank_top_n", 2001),
-        ("rerank_top_n", 1.5),
         ("retrieval_query_limit", True),
     ],
 )
@@ -3916,8 +3894,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
         settings.rag_min_similarity,
         settings.rag_retrieval_query_limit,
         settings.rag_rerank_min_relevance_score,
-        settings.rag_rerank_top_n,
-    ) == (0.2, 60, 0.3, 60)
+    ) == (0.2, 60, 0.3)
     fields = AnsweringSettingsData.model_fields
     assert tuple(
         fields[name].default
@@ -3925,17 +3902,15 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
             "min_similarity",
             "retrieval_query_limit",
             "rerank_min_relevance_score",
-            "rerank_top_n",
         )
-    ) == (0.2, 60, 0.3, 60)
+    ) == (0.2, 60, 0.3)
     custom = settings.model_copy(
         update={
             "rag_min_similarity": 0.35,
             "rag_retrieval_query_limit": 120,
             "rag_rerank_min_relevance_score": 0.45,
-            "rag_rerank_top_n": 0,
         }
     )
     assert (custom.rag_min_similarity, custom.rag_retrieval_query_limit) == (0.35, 120)
     engine = build_engine_settings(custom, output_dir=tmp_path)
-    assert (engine.rerank_min_relevance_score, engine.rerank_top_n) == (0.45, 0)
+    assert engine.rerank_min_relevance_score == 0.45

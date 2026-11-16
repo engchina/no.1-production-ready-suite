@@ -9,7 +9,7 @@ from rag_engine.generation.evidence_merge import merge_evidence
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
-from tests.test_document_selection import child, parent
+from tests.record_fixtures import child, parent
 
 
 def _bundle(children, parents, *, top_k=20, max_records=12):

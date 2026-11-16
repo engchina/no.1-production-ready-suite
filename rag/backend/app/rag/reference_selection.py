@@ -1,4 +1,4 @@
-"""引用補充の依存群を、固有 Chunk の予算内で選ぶ。読取や Rerank の Top-N とは別の責務。"""
+"""引用補充の依存群を、固有 Chunk の予算内で選ぶ。読取や Rerank の件数とは別の責務。"""
 
 from __future__ import annotations
 

@@ -492,12 +492,6 @@ def test_entity_expansion_uses_global_environment_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """拡張の開閉と上限は検索方法の全体設定を保存した環境変数から読む。"""
-    from app.config import PROFILE_ONLY_SETTING_FIELDS
-
-    assert {
-        "rag_entity_expansion_enabled",
-        "rag_entity_expansion_max_chunks",
-    }.isdisjoint(PROFILE_ONLY_SETTING_FIELDS)
     monkeypatch.setenv("RAG_ENTITY_EXPANSION_ENABLED", "false")
     monkeypatch.setenv("RAG_ENTITY_EXPANSION_MAX_CHUNKS", "3")
     # 同じ source のほかの項目は今までどおり読む。

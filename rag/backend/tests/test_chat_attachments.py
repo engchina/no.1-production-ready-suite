@@ -178,20 +178,18 @@ async def test_search_adds_attachment_evidence_once_even_without_hits() -> None:
     assert state.chunks["attachment:x:s1.1"].file_name == "a.md"
 
 
-def test_attachment_evidence_survives_document_selection_through_engine_records(
+def test_attachment_evidence_is_not_counted_by_the_document_cap_through_engine_records(
     service: ChatAttachmentService,
 ) -> None:
-    """添付の chunk を engine の記録にしても印が残り、文書の選択で後回しにならない（#3126）。
+    """添付の chunk を engine の記録にしても印が残り、文書ごとの上限に数えない（#3126・#5165）。
 
-    rerank の関連度が最上位の文書の半分未満で命中 1 件の添付は、ナレッジベースの文書と同じ基準なら
-    後回しになる（#3100）。backend の印（`chat_attachment_id`）を engine の記録へ写さないと、
-    engine の判定が効かない。
+    backend の印（`chat_attachment_id`）を engine の記録へ写さないと、engine の判定が効かない。
     """
     from dataclasses import replace
 
     from rag_engine.config import get_settings as engine_settings
     from rag_engine.generation.answer_records import _stored_chunk_answer_record
-    from rag_engine.generation.answering import cap_anchors_per_document, select_documents
+    from rag_engine.generation.answering import cap_anchors_per_document
     from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 
     from app.rag.answer_engine import _stored_child
@@ -217,13 +215,8 @@ def test_attachment_evidence_survives_document_selection_through_engine_records(
 
     settings = replace(
         engine_settings(environ={}, dotenv_path=None),
-        document_selection_enabled=True,
-        document_selection_score_ratio=0.5,
         max_anchors_per_document=1,
     )
-    kept, deferred, trace = select_documents(records, settings, top_k=1)
-    assert attached in kept and attached not in deferred
-    assert trace["deferred"] == []
     assert cap_anchors_per_document([rule, attached], settings, top_k=2) == [rule, attached]
 
 
@@ -265,8 +258,7 @@ def test_attachment_below_rerank_threshold_reaches_final_evidence(
     ranked = _records_by_rerank_ranks(
         records, [RerankTextRank(0, 0.9), RerankTextRank(1, 0.01)], settings
     )
-    kept, _, _ = a.select_documents(ranked, settings, top_k=1)
-    anchors = a.cap_anchors_per_document(kept, settings, top_k=1)
+    anchors = a.cap_anchors_per_document(ranked, settings, top_k=1)
     bundle = a._bundle_context(
         "項目 A の値は何ですか",
         anchors,

@@ -4,7 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from test_document_selection import child, parent
+from record_fixtures import child, parent
 from test_query_stage_io import Recorder
 
 from rag_engine.config import get_settings
@@ -17,7 +17,7 @@ def settings(**values):
     return replace(get_settings(environ={}, dotenv_path=None), **values)
 
 
-def test_rerank_io_records_real_calls_threshold_and_top_n(monkeypatch):
+def test_rerank_io_records_real_calls_threshold_and_order(monkeypatch):
     records = [child(str(i), i, f"合成本文 {i}", f"合成{i}.txt", f"p{i}") for i in range(3)]
     calls = []
 
@@ -33,21 +33,22 @@ def test_rerank_io_records_real_calls_threshold_and_top_n(monkeypatch):
         ranked = a.rerank_records(
             "合成の原質問",
             records,
-            settings(rerank_min_relevance_score=0.4, rerank_top_n=1),
+            settings(rerank_min_relevance_score=0.4),
             enabled=True,
             extra_queries=["合成の追加質問"],
         )
     stage = recorder.stage("Rerank")
     assert calls == ["合成の原質問", "合成の追加質問"]
     assert stage["input"]["関連度スコアの下限"] == 0.4
-    assert stage["input"]["採用件数の上限"] == 1
+    assert "採用件数の上限" not in stage["input"]
     assert [item["ID"] for item in stage["input"]["候補"]] == [record.chunk_uid for record in records]
-    assert [item["ID"] for item in stage["output"]["処理後の候補"]] == [record.chunk_uid for record in ranked] == ["run:2"]
+    # 下限以上の 2 件を点数の順に返す（件数では切らない）。
+    assert [item["ID"] for item in stage["output"]["処理後の候補"]] == [record.chunk_uid for record in ranked] == ["run:2", "run:0"]
     decisions = stage["output"]["判定"]
     assert decisions["状態"] == "採点完了"
     assert len(decisions["実際の採点呼出"]) == len(calls)
     assert {item["candidate_index"]: item["status"] for item in decisions["関連度下限の判断"]} == {0: "kept", 1: "excluded", 2: "kept"}
-    assert decisions["採用件数の判断"]["applied"] is True
+    assert "採用件数の判断" not in decisions
 
 
 def _context_after_rerank(monkeypatch, scores, **values):
@@ -61,7 +62,7 @@ def _context_after_rerank(monkeypatch, scores, **values):
         "合成の質問",
         "synthetic-run",
         ["docling"],
-        settings(document_selection_enabled=False, **values),
+        settings(**values),
         top_k=3,
         neighbor_child_count=0,
         retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -69,14 +70,14 @@ def _context_after_rerank(monkeypatch, scores, **values):
 
 
 def test_candidate_count_is_taken_before_the_relevance_threshold(monkeypatch):
-    result = _context_after_rerank(monkeypatch, [0.9, 0.1, 0.2], rerank_min_relevance_score=0.4, rerank_top_n=0)
+    result = _context_after_rerank(monkeypatch, [0.9, 0.1, 0.2], rerank_min_relevance_score=0.4)
     counts = a._retrieval_counts(result, ())
     assert (counts["candidate_count"], counts["found"], counts["passed_to_model"]) == (3, 1, 0)
     assert result.candidate_count == 3
 
 
 def test_candidate_count_survives_when_the_threshold_removes_everything(monkeypatch):
-    result = _context_after_rerank(monkeypatch, [0.01, 0.01], rerank_min_relevance_score=0.9, rerank_top_n=0)
+    result = _context_after_rerank(monkeypatch, [0.01, 0.01], rerank_min_relevance_score=0.9)
     counts = a._retrieval_counts(result, ())
     assert (counts["candidate_count"], counts["found"], counts["passed_to_model"]) == (2, 0, 0)
 
@@ -103,7 +104,7 @@ def test_rerank_io_does_not_invent_scores_or_a_successful_call(monkeypatch, mode
     monkeypatch.setattr(a, "rerank_text_with_scores", provider)
     recorder = Recorder()
     with bind_trace_observer(recorder.observe):
-        ranked = a.rerank_records("合成の質問", records, settings(rerank_top_n=1), enabled=mode != "disabled")
+        ranked = a.rerank_records("合成の質問", records, settings(), enabled=mode != "disabled")
     assert [(item.chunk_uid, item.text) for item in ranked] == [(item.chunk_uid, item.text) for item in records]
     output = recorder.stage("Rerank")["output"]["判定"]
     if mode in {"disabled", "empty"}:
@@ -115,7 +116,6 @@ def test_rerank_io_does_not_invent_scores_or_a_successful_call(monkeypatch, mode
         assert output["エラーの種類"] == "ValueError"
         assert output["実際の採点呼出"][0]["logical_status"] == "error"
     else:
-        assert output["採用件数の判断"] == {"applied": False, "stop_reason": "no_scores"}
         assert output["関連度下限の判断"][0]["status"] == "kept_unscored"
 
 
@@ -141,12 +141,7 @@ def test_candidate_document_and_anchor_io_follow_real_pipeline(monkeypatch, last
             "合成の質問",
             "synthetic-run",
             ["docling"],
-            settings(
-                rerank_min_relevance_score=0,
-                rerank_top_n=0,
-                max_anchors_per_document=1,
-                document_selection_enabled=True,
-            ),
+            settings(rerank_min_relevance_score=0, max_anchors_per_document=1),
             top_k=1,
             neighbor_child_count=0,
             retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -155,11 +150,9 @@ def test_candidate_document_and_anchor_io_follow_real_pipeline(monkeypatch, last
     assert len(candidate["input"]["候補"]) == 4
     assert len(candidate["output"]["採用候補"]) == 3
     assert candidate["output"]["判断"]["excluded"] == [{"id": "run:a1", "reason": "duplicate_original", "retained_id": "run:a1"}]
-    documents = recorder.stage("文書の選択")
-    assert len(documents["input"]["候補"]) == len(result.ranked_candidates)
-    assert [item["ID"] for item in documents["output"]["後回しの候補"]] == (["run:b1"] if last_score == 0.1 else [])
-    capped = recorder.stage("文書ごとの起点の上限")
+    # 文書の選択（点数の低い文書の後回し）は無く、文書ごとの上限だけが候補を外す（#5165）。
+    assert ("stage", "文書の選択") not in recorder.calls
+    capped = recorder.stage("文書ごとの上限")
     assert capped["input"]["文書ごとの上限"] == 1
-    assert [item["ID"] for item in capped["output"]["処理後の候補"]] == (
-        ["run:a1", "run:a2"] if last_score == 0.1 else ["run:a1", "run:b1", "run:a2"]
-    )
+    assert len(capped["input"]["候補"]) == len(result.ranked_candidates)
+    assert [item["ID"] for item in capped["output"]["処理後の候補"]] == ["run:a1", "run:b1"]

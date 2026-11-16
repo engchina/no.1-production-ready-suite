@@ -41,12 +41,10 @@ type AnsweringDraft = Omit<
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
     retrieval_query_limit: settings.retrieval_query_limit ?? 60,
-    rerank_top_n: settings.rerank_top_n ?? 60,
     min_similarity: settings.min_similarity ?? 0.2,
     rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.3,
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_hybrid_index",
     rrf_method_ratio: settings.rrf_method_ratio ?? [7, 3],
-    rerank_slot_ratio: settings.rerank_slot_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
@@ -121,11 +119,8 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   const invalidThreshold = [form.min_similarity, form.rerank_min_relevance_score].some(
     (value) => value == null || !Number.isFinite(value) || value < 0 || value > 1
   );
-  const invalidCount = !Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 0 || (form.retrieval_query_limit ?? 0) > 2000
-    || !Number.isInteger(form.rerank_top_n) || (form.rerank_top_n ?? -1) < 0 || (form.rerank_top_n ?? 0) > 2000;
+  const invalidCount = !Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 0 || (form.retrieval_query_limit ?? 0) > 2000;
   const invalidRatio = [form.rrf_method_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
-  const slotRatio = form.rerank_slot_ratio;
-  const invalidSlotRatio = !slotRatio || slotRatio.some((v) => !Number.isInteger(v) || v < 0) || slotRatio[0] + slotRatio[1] <= 0;
 
   function update(patch: Partial<AnsweringDraft>) {
     save.reset();
@@ -138,7 +133,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   }
 
   function submit() {
-    if (save.isPending || invalidRatio || invalidSlotRatio || invalidThreshold || invalidCount) return;
+    if (save.isPending || invalidRatio || invalidThreshold || invalidCount) return;
     // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
     save.mutate(form, { onSuccess: () => toast.success(t("settings.answering.saved")) });
   }
@@ -203,13 +198,12 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             </a>
           </p>
         </div>
-        {(["rrf_method_ratio", "rerank_slot_ratio"] as const).map((key) => (
+        {(["rrf_method_ratio"] as const).map((key) => (
           <fieldset key={key} className="space-y-2">
             <legend className="text-sm font-medium text-fg">{t(`settings.answering.${key}`)}</legend>
-            {key === "rerank_slot_ratio" ? <p className="text-sm text-fg-muted">{t("settings.answering.rerank_slot_ratioHint")}</p> : null}
             <FormGrid>
               {([0, 1] as const).map((index) => <TextField
-                key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step={key === "rerank_slot_ratio" ? 1 : "any"}
+                key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step="any"
                 label={t(`settings.answering.${key}.${index}`)}
                 value={String(form[key]?.[index] ?? [7,3][index])}
                 disabled={disabled} onChange={(event) => {
@@ -222,7 +216,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           </fieldset>
         ))}
         {invalidRatio ? <p role="alert" className="text-sm text-danger-fg">{t("settings.answering.rrfInvalid")}</p> : null}
-        {invalidSlotRatio ? <p role="alert" className="text-sm text-danger-fg">{t("settings.answering.rerank_slot_ratioInvalid")}</p> : null}
       </SettingsGroup>
       <SettingsGroup id="answer-generation-title" title={t("settings.answering.answerGenerationTitle")}>
       <FormGrid>
@@ -281,15 +274,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled || !form.rerank_enabled}
           onChange={(event) => update({ rerank_min_relevance_score: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />
-        <TextField
-          id="answering-rerank-top-n" type="number" min={0} max={2000} step={1} width="sm"
-          label={t("settings.answering.rerankTopN")}
-          helper={t("settings.answering.rerankTopNHint")}
-          value={Number.isFinite(form.rerank_top_n) ? String(form.rerank_top_n) : ""}
-          error={!Number.isInteger(form.rerank_top_n) || (form.rerank_top_n ?? -1) < 0 || (form.rerank_top_n ?? 0) > 2000 ? t("settings.answering.rerankTopNInvalid") : undefined}
-          disabled={disabled || !form.rerank_enabled}
-          onChange={(event) => update({ rerank_top_n: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
-        />
         </FormGrid>
         </div>
         <div>
@@ -314,7 +298,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             label: t("settings.answering.save"),
             icon: Save,
             loading: save.isPending,
-            disabled: !dirty || invalidRatio || invalidSlotRatio || invalidThreshold || invalidCount,
+            disabled: !dirty || invalidRatio || invalidThreshold || invalidCount,
             onClick: submit,
           },
         ]}

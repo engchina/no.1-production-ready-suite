@@ -35,7 +35,7 @@ def test_variants_preserve_cases_scope_and_unrelated_overrides() -> None:
     baseline = request()
     plan = prepare_plan(baseline, total_caps=[100, 200, 100])
     assert not plan["executed"] and plan["requires_effective_settings_snapshot"]
-    assert plan["unavailable_controls"] == ["document_selection_disabled"]
+    assert plan["unavailable_controls"] == []
     for variant in plan["variants"]:
         parsed = EvaluationRunRequest.model_validate(variant["request"])
         assert parsed.cases == baseline.cases and parsed.filters == baseline.filters

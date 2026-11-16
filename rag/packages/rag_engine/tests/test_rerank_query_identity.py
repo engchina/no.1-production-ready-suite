@@ -105,7 +105,7 @@ def test_extra_query_failure_keeps_original_comparison_and_records_failed_logica
 
 def test_export_retains_original_question_and_max_scores_separately():
     from rag_engine.generation.answer_payload import _rerank_scores_from_evidence
-    from tests.test_document_selection import child
+    from tests.record_fixtures import child
 
     record = child("A", 1, "合成本文", "合成資料", "parent", 0.95, question_score=0.2)
     exported = _rerank_scores_from_evidence([record], ())

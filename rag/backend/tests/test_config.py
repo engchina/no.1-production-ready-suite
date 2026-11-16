@@ -871,30 +871,38 @@ def test_rrf_ratio_defaults_match_api_and_direct_engine(monkeypatch: pytest.Monk
     assert engine.rrf_source_ratio == (7.0, 3.0)
 
 
-def test_rerank_slot_ratio_defaults_match_across_config_layers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """全体設定の既定と engine の既定を同じ 7:3 にする(環境変数から渡す前の直接の経路を含む)。"""
+def test_removed_rerank_order_settings_are_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """rerank の後の並びの比率・Top-N・文書の選択は削除した(#5165)。
+
+    旧変数が残っていても読まない。
+    """
     from rag_engine.config import get_settings as get_engine_settings
 
     from app.api.routes.settings import _answering_settings_data
 
-    monkeypatch.delenv("RAG_RERANK_SLOT_RATIO", raising=False)
+    for name in ("RAG_RERANK_SLOT_RATIO", "RAG_RERANK_TOP_N"):
+        monkeypatch.setenv(name, "[4, 1]" if name.endswith("RATIO") else "5")
     backend = Settings(_env_file=None)
-    assert backend.rag_rerank_slot_ratio == (7, 3)
-    assert get_engine_settings(environ={}, dotenv_path=None).rerank_slot_ratio == (7, 3)
-    assert _answering_settings_data(backend).rerank_slot_ratio == (7, 3)
-    assert get_engine_settings(
-        environ={"RAG_RERANK_SLOT_RATIO": "[4, 1]"}, dotenv_path=None
-    ).rerank_slot_ratio == (4, 1)
-
-
-@pytest.mark.parametrize("raw", ["[0, 0]", "[-1, 1]", "[1]", "[1.5, 1]"])
-def test_engine_rejects_invalid_rerank_slot_ratio(raw: str) -> None:
-    from rag_engine.config import get_settings as get_engine_settings
-
-    with pytest.raises(ValueError):
-        get_engine_settings(environ={"RAG_RERANK_SLOT_RATIO": raw}, dotenv_path=None)
+    assert not hasattr(backend, "rag_rerank_slot_ratio")
+    assert not hasattr(backend, "rag_rerank_top_n")
+    dumped = _answering_settings_data(backend).model_dump()
+    assert "rerank_slot_ratio" not in dumped and "rerank_top_n" not in dumped
+    engine = get_engine_settings(
+        environ={
+            "RAG_RERANK_SLOT_RATIO": "[4, 1]",
+            "RAG_ENGINE_RERANK_TOP_N": "5",
+            "RAG_ENGINE_DOCUMENT_SELECTION": "true",
+            "RAG_ENGINE_DOCUMENT_SELECTION_SCORE_RATIO": "0.5",
+        },
+        dotenv_path=None,
+    )
+    for name in (
+        "rerank_slot_ratio",
+        "rerank_top_n",
+        "document_selection_enabled",
+        "document_selection_score_ratio",
+    ):
+        assert not hasattr(engine, name)
 
 
 def test_rag_rrf_k_is_bounded() -> None:

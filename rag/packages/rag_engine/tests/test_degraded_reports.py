@@ -181,7 +181,7 @@ def _child(index: int) -> AnswerRecord:
 
 
 def _rerank_settings() -> Any:
-    return SimpleNamespace(rerank_model="rerank-test", rerank_enabled=True, document_selection_enabled=False)
+    return SimpleNamespace(rerank_model="rerank-test", rerank_enabled=True)
 
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])

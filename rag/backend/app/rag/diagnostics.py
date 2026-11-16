@@ -106,11 +106,9 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
             resolved_settings.rag_native_vector_shortage_oversample_factor
         ),
         "rrf_method_ratio": resolved_settings.rag_rrf_method_ratio,
-        "rerank_slot_ratio": resolved_settings.rag_rerank_slot_ratio,
         "retrieval_query_limit": resolved_settings.rag_retrieval_query_limit,
         "retrieval_candidate_limit": resolved_settings.rag_retrieval_candidate_limit,
         "rerank_candidate_limit": resolved_settings.rag_rerank_candidate_limit,
-        "rerank_top_n": resolved_settings.rag_rerank_top_n,
         "rerank_min_relevance_score": resolved_settings.rag_rerank_min_relevance_score,
         "candidate_diversity_depth": resolved_settings.rag_candidate_diversity_depth,
         "candidate_diversity_max_extra": resolved_settings.rag_candidate_diversity_max_extra,

@@ -29,7 +29,7 @@ def _child(index):
 
 
 def _settings():
-    return SimpleNamespace(rerank_model="rerank-test", rerank_enabled=True, document_selection_enabled=False)
+    return SimpleNamespace(rerank_model="rerank-test", rerank_enabled=True)
 
 
 def _stub_rerank(monkeypatch, seen):

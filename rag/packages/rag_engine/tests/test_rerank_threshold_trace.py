@@ -8,7 +8,7 @@ from rag_engine.generation import answering
 from rag_engine.generation.answer_records import _records_by_rerank_ranks
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
-from tests.test_document_selection import child
+from tests.record_fixtures import child
 
 
 class Step:
