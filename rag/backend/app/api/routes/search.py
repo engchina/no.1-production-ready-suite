@@ -14,6 +14,7 @@ from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params,
 from pr_backend_core.mcp import report_tool_progress
 from pr_backend_core.observability.trace_bodies import BodyPage
 from pr_backend_core.observability.trace_body_reader import CallBodySlot
+from pr_backend_core.oracle_errors import oracle_error_codes
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.guardrails import GuardrailResult
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +31,7 @@ from app.config import (
     get_settings,
     settings_today,
 )
+from app.db_read_failures import database_read_failure
 from app.rag.answer_assumptions import with_answer_assumptions
 from app.rag.answer_engine import AnswerScope
 from app.rag.answer_failure import (
@@ -948,6 +950,16 @@ async def _run_search_with_timeout(
                 },
             )
             raise AnswerApiFailedHTTPError(api_failure) from exc
+        if oracle_error_codes(exc):
+            # 検索の DB の読み取りの失敗（#5233）。定型の 500 にせず、一覧の読み取りと同じ分類
+            # （接続の失敗・pool の待ちは 503 と Retry-After、それ以外は 500）と error_code で返す。
+            # コード（ORA / DPY）の無い例外は DB の失敗と言い切らず、共通の 500 のまま。
+            failure = database_read_failure(exc)
+            logger.warning(
+                "rag_search_database_failed",
+                extra={"trace_id": trace_id, "error_code": failure.code},
+            )
+            raise failure from exc
         raise
 
 
