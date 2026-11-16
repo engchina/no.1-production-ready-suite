@@ -1,6 +1,7 @@
 """整理接続の期限、取消、lease境界をモデル・実DBなしで確認する。"""
 
 import asyncio
+import sys
 from collections.abc import Callable, Mapping
 from typing import cast
 
@@ -45,8 +46,13 @@ class Oracle:
         self.connection = connection
         self.transactions = 0
         self.fail_record = False
+        self.dedicated_opened = 0
 
     def acquire_connection(self) -> Connection:
+        raise AssertionError("索引整理は共有 pool の接続を借りない(#5181)")
+
+    def open_dedicated_connection(self) -> Connection:
+        self.dedicated_opened += 1
         return self.connection
 
     async def _db_call_runner(self, callback: Callable[[], None]) -> None:
@@ -60,7 +66,7 @@ class Oracle:
 
 
 @pytest.mark.parametrize("valid", [True, False])
-async def test_expired_lease_cannot_start_and_timeout_is_restored(valid: bool) -> None:
+async def test_expired_lease_cannot_start_and_connection_is_closed(valid: bool) -> None:
     connection = Connection(valid=valid)
     store = NativeMaintenanceStore(cast(OracleClient, Oracle(connection)))
     if valid:
@@ -70,7 +76,6 @@ async def test_expired_lease_cannot_start_and_timeout_is_restored(valid: bool) -
             await store.optimize(LEASE)
     assert any("OPTIMIZE_INDEX" in sql for sql in connection.sql) is valid
     assert not any("FOR UPDATE" in sql for sql in connection.sql)
-    assert connection.call_timeout == 1000
     assert connection.closed
 
 
@@ -296,7 +301,7 @@ async def test_total_deadline_prevents_later_optimizer_call(
     with pytest.raises(TimeoutError):
         await store.optimize(LEASE)
     assert not any("OPTIMIZE_INDEX" in sql for sql in connection.sql)
-    assert connection.call_timeout == 1000 and connection.closed
+    assert connection.closed
 
 
 async def test_optimizer_returning_past_deadline_is_not_reported_as_failed(
@@ -319,7 +324,7 @@ async def test_optimizer_returning_past_deadline_is_not_reported_as_failed(
     monkeypatch.setattr("app.clients.native_maintenance_store.monotonic", lambda: clock[0])
     await store.optimize(LEASE)
     assert verify_timeouts == [VERIFY_CALL_TIMEOUT_MS]
-    assert connection.call_timeout == 1000 and connection.closed
+    assert connection.closed
 
 
 async def test_cancellation_does_not_report_running_sql_as_stopped() -> None:
@@ -343,3 +348,114 @@ async def test_cancellation_does_not_report_running_sql_as_stopped() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert finished.is_set()
+
+
+async def test_optimize_uses_a_dedicated_connection_and_closes_it() -> None:
+    """整理の接続は共有 pool から借りず、終わったら閉じる(#5181)。"""
+    connection = Connection()
+    oracle = Oracle(connection)
+    store = NativeMaintenanceStore(cast(OracleClient, oracle))
+
+    await store.optimize(LEASE)
+
+    assert oracle.dedicated_opened == 1
+    assert connection.closed
+
+
+async def test_close_failure_of_the_dedicated_connection_keeps_the_result() -> None:
+    """切れた接続の close の失敗で、終わった整理を失敗にしない・元の例外を隠さない(#5181)。"""
+
+    class Cursor:
+        def __init__(self, connection: Connection) -> None:
+            self.connection = connection
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self.connection, name)
+
+        def close(self) -> None:
+            pass
+
+    class BrokenClose(Connection):
+        def cursor(self) -> "Connection":
+            return cast(Connection, Cursor(self))
+
+        def close(self) -> None:
+            self.closed = True
+            raise RuntimeError("合成の close の失敗")
+
+    await NativeMaintenanceStore(cast(OracleClient, Oracle(BrokenClose()))).optimize(LEASE)
+    with pytest.raises(RuntimeError, match="lease"):
+        await NativeMaintenanceStore(cast(OracleClient, Oracle(BrokenClose(valid=False)))).optimize(
+            LEASE
+        )
+
+
+async def test_failed_dedicated_connection_fails_before_any_optimizer() -> None:
+    class Unreachable:
+        async def _db_call_runner(self, callback: Callable[[], None]) -> None:
+            callback()
+
+        def open_dedicated_connection(self) -> Connection:
+            raise RuntimeError("合成の接続の失敗")
+
+    with pytest.raises(RuntimeError, match="合成の接続の失敗"):
+        await NativeMaintenanceStore(cast(OracleClient, Unreachable())).optimize(LEASE)
+
+
+class _SessionConnection:
+    def __init__(self, *, fail_init: bool = False) -> None:
+        self.fail_init = fail_init
+        self.sql: list[str] = []
+        self.closed = False
+
+    def cursor(self) -> "_SessionConnection":
+        return self
+
+    def __enter__(self) -> "_SessionConnection":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def execute(self, statement: str, binds: Mapping[str, object] | None = None) -> None:
+        if self.fail_init:
+            raise RuntimeError("合成の初期化の失敗")
+        self.sql.append(statement)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("fail_init", [False, True], ids=["opened", "init-failed"])
+def test_dedicated_connection_does_not_touch_the_shared_pool(
+    monkeypatch: pytest.MonkeyPatch, fail_init: bool
+) -> None:
+    """専用の接続は共有 pool を作らず・借りず、共有 pool と同じ接続引数と初期化を使う(#5181)。"""
+    connection = _SessionConnection(fail_init=fail_init)
+    connected: list[dict[str, object]] = []
+
+    class FakeOracleDb:
+        def connect(self, **kwargs: object) -> _SessionConnection:
+            connected.append(kwargs)
+            return connection
+
+        def create_pool(self, **kwargs: object) -> None:
+            raise AssertionError("共有 pool を作らない")
+
+    monkeypatch.setitem(sys.modules, "oracledb", FakeOracleDb())
+    monkeypatch.setattr(
+        "app.clients.oracle.shared_pool_connect_kwargs", lambda settings: {"dsn": "x"}
+    )
+    client = OracleClient(Settings(oracle_user="u", oracle_dsn="x"))
+    monkeypatch.setattr(
+        client, "acquire_connection", lambda: (_ for _ in ()).throw(AssertionError("pool"))
+    )
+
+    if fail_init:
+        with pytest.raises(RuntimeError, match="合成の初期化の失敗"):
+            client.open_dedicated_connection()
+        assert connection.closed
+    else:
+        assert cast(object, client.open_dedicated_connection()) is connection
+        assert connection.sql and not connection.closed
+    assert connected == [{"dsn": "x"}]

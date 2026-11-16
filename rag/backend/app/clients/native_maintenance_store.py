@@ -244,7 +244,9 @@ class NativeMaintenanceStore:
         results: list[NativeMaintenanceResult] = []
 
         def operation() -> None:
-            connection = cast(TimedMaintenanceConnection, self.oracle.acquire_connection())
+            # 共有 pool の接続を使わない。整理の後の返却で DB を待つ間に pool の lock を持ち、
+            # 同じプロセスの要求の接続の取得（event loop の上の読み出しも）を止めた（#5181）。
+            connection = cast(TimedMaintenanceConnection, self.oracle.open_dedicated_connection())
             previous_timeout = getattr(connection, "call_timeout", None)
             try:
                 if not isinstance(previous_timeout, int):
@@ -305,10 +307,15 @@ class NativeMaintenanceStore:
                     },
                 )
             finally:
-                if isinstance(previous_timeout, int):
-                    with suppress(Exception):
-                        connection.call_timeout = previous_timeout
-                connection.close()
+                # 専用の接続は pool へ返さず閉じる（呼出時間上限を戻す必要は無い）。切れた接続の
+                # close の失敗で、整理の結果・元の例外を隠さない。
+                try:
+                    connection.close()
+                except Exception as exc:  # noqa: BLE001 - 結果・元の例外を優先する
+                    logger.warning(
+                        "native_index_maintenance_connection_close_failed",
+                        extra={"error_type": type(exc).__name__},
+                    )
 
         # OPTIMIZE_INDEXの暗黙commitを業務transactionやlease行lockへ混ぜない。
         async def run() -> None:
