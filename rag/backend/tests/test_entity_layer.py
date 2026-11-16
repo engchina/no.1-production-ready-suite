@@ -500,7 +500,7 @@ def test_entity_expansion_uses_global_environment_settings(
     env_file = tmp_path / "backend.env"
     env_file.write_text(
         "RAG_ENTITY_EXPANSION_ENABLED=false\nRAG_ENTITY_EXPANSION_MAX_CHUNKS=2\n"
-        "RAG_REFERENCE_EXPANSION_MAX_CHUNKS=7\n",
+        "RAG_REFERENCE_EXPANSION_MAX_TARGETS=7\n",
         encoding="utf-8",
     )
 
@@ -509,7 +509,7 @@ def test_entity_expansion_uses_global_environment_settings(
     assert settings.rag_entity_expansion_enabled is False
     assert settings.rag_entity_expansion_max_chunks == 3
     assert settings.rag_entity_index_enabled is False
-    assert settings.rag_reference_expansion_max_chunks == 7
+    assert settings.rag_reference_expansion_max_targets == 7
     # 属性名での生成（テスト・評価の上書き）は受け付ける。
     assert Settings(rag_entity_expansion_enabled=False).rag_entity_expansion_enabled is False
 

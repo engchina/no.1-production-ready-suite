@@ -1846,6 +1846,7 @@ def synthesize_grounded_answer(
     from rag_engine.generation import grounded
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
+    from rag_engine.generation.document_inputs import with_first_chunks
     from rag_engine.generation.evidence_selection import select_evidence
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
     from rag_engine.models.llm import GroundedItem
@@ -2039,7 +2040,8 @@ def synthesize_grounded_answer(
     shown = [entry for entry in current.checked if entry.span]
     if generation_failure:
         # 生成の出力が無い。質問に関係する資料の記載だけを示す。
-        shown = grounded.deadline_document_quotes(question, spans)
+        # 選択の前に止まったときの入力には、根拠が原文を含む先頭の chunk も残っている。同じ原文を重ねて示さない（#5240）。
+        shown = grounded.deadline_document_quotes(question, with_first_chunks(spans))
         summary = grounded.answer_labels().neutral_summary
         rendered_items = shown
     else:

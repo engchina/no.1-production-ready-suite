@@ -58,6 +58,8 @@ REFERENCE_FROM_KEY = "reference_from_chunk_id"
 REFERENCE_LABEL_KEY = "reference_label"
 # 文書名だけの参照(#1400)の参照先 1 つの中で足した順(1 始まり。質問に関連の高い順)。
 REFERENCE_RANK_KEY = "reference_rank"
+# 回答で参照先として足した chunk の、原質問との rerank の点数(#5243。足す chunk を並べる関連度)。
+REFERENCE_SCORE_KEY = "reference_relevance_score"
 # 1 つの chunk から残す参照の数の上限(目次や索引のような参照だらけの chunk を抑える)。
 MAX_REFERENCES_PER_CHUNK = 6
 # 見出しの列の区切り(chunking が「 > 」でつないで保存する)。
@@ -1077,6 +1079,7 @@ __all__ = [
     "REFERENCE_FROM_KEY",
     "REFERENCE_LABEL_KEY",
     "REFERENCE_RANK_KEY",
+    "REFERENCE_SCORE_KEY",
     "REFERENCE_TARGETS_KEY",
     "ReferenceSpec",
     "ReferenceTarget",

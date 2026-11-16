@@ -26,6 +26,7 @@ from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
     REFERENCE_RANK_KEY,
+    REFERENCE_SCORE_KEY,
     REFERENCE_TARGETS_KEY,
     ReferenceSpec,
     ReferenceTarget,
@@ -884,17 +885,21 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
         retrieval_queries=["承認の条件"],
     )
 
-    # 参照先の節の先頭から 2 件を、rerank の候補に入れずに検索拡張の chunk として渡す(#5162)。
+    # 参照先の節の読めた chunk をすべて(個数の上限で選ばない。#5243)、rerank の候補に入れずに
+    # 検索拡張の chunk として渡す(#5162)。
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a", "doc-1:b"]
     assert [child.chunk_uid for child in result.expansion_chunks] == [
         "doc-1:cs-1:s0",
         "doc-1:cs-1:s1",
+        "doc-1:cs-1:s2",
     ]
     assert {child.metadata["retrieval_admission_stage"] for child in result.expansion_chunks} == {
         "reference"
     }
     # 拡張の chunk の本文も文脈の組み立て(all_chunks)に渡す。
-    assert {"doc-1:cs-1:s0", "doc-1:cs-1:s1"} <= {chunk.chunk_uid for chunk in result.all_chunks}
+    assert {"doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:cs-1:s2"} <= {
+        chunk.chunk_uid for chunk in result.all_chunks
+    }
     # 参照先は参照元と同じ版から読み、明示した文書名・分類も残す。
     (call,) = oracle.reference_calls
     assert call["chunk_set_id"] == "cs-1"
@@ -906,12 +911,12 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
     added = state.chunks["doc-1:cs-1:s0"]
     assert added.metadata[REFERENCE_FROM_KEY] == "doc-1:a"
     assert added.metadata[REFERENCE_LABEL_KEY] == "第3章"
-    assert set(state.reference_expansions) == {"doc-1:cs-1:s0", "doc-1:cs-1:s1"}
+    assert set(state.reference_expansions) == {"doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:cs-1:s2"}
     # 非親子の参照先は子の原文を保持し、連結した親を合成しない。
     assert all(chunk.chunk_level == "child" for chunk in result.all_chunks)
 
 
-async def test_search_reference_expansion_respects_budget_and_caches_targets() -> None:
+async def test_search_reference_expansion_adds_every_target_and_caches_targets() -> None:
     targets = [
         CHAPTER3,
         ReferenceTarget("別紙1", "appendix", "別紙:1", None, "別紙1 申請書様式"),
@@ -923,19 +928,16 @@ async def test_search_reference_expansion_respects_budget_and_caches_targets() -
     appendix = [_retrieved(f"doc-1:cs-1:x{n}", "様式", "別紙1 申請書様式") for n in range(3)]
     oracle = ReferenceOracle(anchors, [*_section_chunks(3), *appendix])
     state = _SearchState()
-    engine = _engine(oracle, rag_reference_expansion_max_chunks=3)
+    engine = _engine(oracle)
 
     result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
     await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q2"])
 
-    referenced = [
-        child.chunk_uid
-        for child in result.child_chunks
-        if child.chunk_uid not in {a.chunk_id for a in anchors}
-    ]
-    # 4件の必要引用を3件に切り詰めず、起点を残して依存未充足を記録する。
-    assert referenced == []
-    assert state.reference_sources[0]["unsatisfied_sources"] == 3
+    # 個数の上限で依存群ごと捨てず(#5243)、2 つの参照先の読めた chunk をすべて足す。
+    assert sorted(child.chunk_uid for child in result.expansion_chunks) == sorted(
+        [*(f"doc-1:cs-1:s{n}" for n in range(3)), *(f"doc-1:cs-1:x{n}" for n in range(3))]
+    )
+    assert state.reference_sources[0]["unsatisfied_sources"] == 0
     # 同じ参照先は 1 回の回答で 1 回だけ読む(CRAG の各回でも読み直さない)。
     assert [call["section_path"] for call in oracle.reference_calls] == [
         "第3章 承認",
@@ -1149,7 +1151,7 @@ async def test_search_resolves_references_of_chunks_without_ingest_targets() -> 
         retrieval_queries=["q"],
     )
 
-    # 共有参照先は同じ2件を再利用し、起点ごとに別の残りを補充しない。
+    # 共有参照先は 1 回だけ読み、同じ chunk を起点ごとに重ねて足さない。
     assert _order(result) == [
         "doc-1:a",
         "doc-1:b",
@@ -1157,6 +1159,7 @@ async def test_search_resolves_references_of_chunks_without_ingest_targets() -> 
         "doc-1:d",
         "doc-1:cs-1:s0",
         "doc-1:cs-1:s1",
+        "doc-1:cs-1:s2",
     ]
     # 見出しの列は文書と版(chunk_set)ごとに 1 回だけ、検索と同じ範囲(KB)で読む。取込で解決済みの
     # 印(空の列)のある chunk と、参照の無い chunk では読まない。
@@ -1493,7 +1496,8 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
 
     #1390 の検証で `br-sales-change-window` の必要な根拠(共通の保守枠)が MCP の並びの 96 位の
     まま改善しなかった型(#1400)。参照先は同じナレッジベースの今の版の定期保守計画だけで、
-    その中の質問に関連の高い chunk(rerank の順)を足す。旧版・別の KB の同じ名前の文書は足さない。
+    その中の質問で検索した chunk を個数で選ばずにすべて足し、rerank の点数の順に並べる(#5243)。
+    旧版・別の KB の同じ名前の文書は足さない。
     """
     from pr_evaluation_scoring import contains_normalized
 
@@ -1513,8 +1517,13 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
         retrieval_queries=[case["query"]],
     )
 
-    # 参照先の文書の質問に関連の高い 2 件を足す(第 3 章の保守枠の変更は足さない)。
-    assert _order(result) == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
+    # 参照先の文書の読めた chunk をすべて、原質問との rerank の点数の順に足す(#5243)。
+    assert _order(result) == [
+        window.chunk_id,
+        "doc-plan:cs-plan:1",
+        "doc-plan:cs-plan:0",
+        "doc-plan:cs-plan:2",
+    ]
     context = "\n".join(child.text for child in [*result.child_chunks, *result.expansion_chunks])
     evidence = [
         item
@@ -1523,13 +1532,18 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
     ]
     assert {item["id"] for item in evidence} == {"mt-common-ref", "mt-common"}
     assert [item["id"] for item in evidence if not contains_normalized(context, item["text"])] == []
+    # 旧版・別の KB の写しは足さない。関連の低い第 3 章(保守枠の変更)は捨てず、点数の順の最後に
+    # 置く(点数の印を残す)。
     assert "毎月最終土曜日" not in context
+    assert "変えたい月の 1 か月前まで" in context
+    assert state.chunks["doc-plan:cs-plan:2"].metadata[REFERENCE_SCORE_KEY] == 0.1
     added = state.chunks["doc-plan:cs-plan:1"]
     assert added.metadata[REFERENCE_FROM_KEY] == window.chunk_id
     assert added.metadata[REFERENCE_LABEL_KEY] == "定期保守計画"
     # 参照先の中の関連の順(MCP の根拠の並びは 1 件目だけを確保する)。
     assert added.metadata[REFERENCE_RANK_KEY] == 1
     assert state.chunks["doc-plan:cs-plan:0"].metadata[REFERENCE_RANK_KEY] == 2
+    assert state.chunks["doc-plan:cs-plan:2"].metadata[REFERENCE_RANK_KEY] == 3
     assert {item["kind"] for item in state.reference_expansions.values()} == {"document"}
     expected_resolved_at = "ingest" if resolved_at == "ingest" else "query"
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {
@@ -1594,7 +1608,7 @@ async def test_document_name_reference_needs_exact_title() -> None:
 
 @pytest.mark.parametrize("mode", ["disabled", "failed"], ids=["rerank-disabled", "rerank-failed"])
 async def test_document_name_reference_keeps_search_order_without_rerank(mode: str) -> None:
-    """rerank が無効・失敗のときは、参照先の文書の中の検索の順で足す。"""
+    """rerank が無効・失敗のときは、参照先の文書の中の検索の順で足す(足す chunk は減らさない)。"""
     window, sections = _change_window_corpus("query")
     oracle = ReferenceOracle(
         [window], sections, knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan"}}
@@ -1612,6 +1626,7 @@ async def test_document_name_reference_keeps_search_order_without_rerank(mode: s
         window.chunk_id,
         "doc-plan:cs-plan:0",
         "doc-plan:cs-plan:1",
+        "doc-plan:cs-plan:2",
     ]
     assert len(genai.rerank_calls) == (0 if mode == "disabled" else 1)
 
@@ -1720,11 +1735,16 @@ async def test_document_name_reference_outside_top_five_is_followed(
     assert source["rrf_score"] > 0
     assert {"label": "定期保守計画", "kind": "document"} in source["targets"]
     if followed:
-        # 参照先の文書の質問に関連の高い 2 件を足す(上位 5 件の起点と同じ)。
-        assert order[7:] == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
+        # 参照先の文書の読めた chunk を関連度の順にすべて足す(上位 5 件の起点と同じ。#5243)。
+        assert order[7:] == [
+            window.chunk_id,
+            "doc-plan:cs-plan:1",
+            "doc-plan:cs-plan:0",
+            "doc-plan:cs-plan:2",
+        ]
         assert source["outcome"] == "added"
         assert "available" in source["target_outcomes"]
-        assert search["added_count"] == 2
+        assert search["added_count"] == 3
         assert {item["from_fused_rank"] for item in state.reference_expansions.values()} == {8}
         assert state.chunks["doc-plan:cs-plan:1"].metadata[REFERENCE_FROM_KEY] == window.chunk_id
         # rag_engine へは参照元の印を渡す(足した理由。#5162)。
@@ -1790,7 +1810,8 @@ async def test_document_name_reference_adds_sentence_citing_selected_section() -
     kb1517 では定期保守計画が章ごとの親に分かれ、第 2 章(共通の保守枠)と第 3 章を足しても、第 1 章の
     「この章に無いシステムは、第 2 章の共通の保守枠で保守します」(`mt-common-ref`)が文脈に
     入らなかった。
-    参照先の文書の中の検索の候補のうち、取込で選んだ節(第 2 章)への参照を持つ chunk を足す。
+    参照先の文書の中の検索の候補は個数で選ばずにすべて足すので(#5243)、第 2 章への参照を持つ
+    第 1 章の文も、関連度の順(点数は低い)で入る。
     """
     case = _sales_case()
     window, _sections = _change_window_corpus("ingest")
@@ -1807,7 +1828,7 @@ async def test_document_name_reference_adds_sentence_citing_selected_section() -
         retrieval_queries=[case["query"]],
     )
 
-    # 関連の高い 2 件(第 2 章・第 3 章)の後に、第 2 章を参照する第 1 章を置く。
+    # 関連の高い第 2 章・第 3 章の後に、第 2 章を参照する第 1 章を置く(点数の順)。
     assert _order(result) == [
         window.chunk_id,
         "doc-plan:cs-plan:1",
@@ -1816,17 +1837,7 @@ async def test_document_name_reference_adds_sentence_citing_selected_section() -
     ]
     assert state.chunks["doc-plan:cs-plan:0"].metadata[REFERENCE_RANK_KEY] == 3
     assert "この章に無いシステムは" in state.chunks["doc-plan:cs-plan:0"].text
-
-    # 上限(rag_reference_expansion_max_chunks)は超えない。
-    limited = _SearchState()
-    result = await _engine(oracle, genai, rag_reference_expansion_max_chunks=2)._search(
-        SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
-        limited,
-        retrieval_queries=[case["query"]],
-    )
-    # 条件文も必要な依存なので、2件の予算で切り離さない。
-    assert _order(result) == [window.chunk_id]
-    assert limited.reference_sources[0]["unsatisfied_sources"] == 1
+    assert state.reference_sources[0]["unsatisfied_sources"] == 0
 
 
 async def test_extended_reference_sources_follow_one_hop_without_moving_sources() -> None:
@@ -1857,6 +1868,7 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
         "doc-1:cs-1:x0",
         "doc-1:cs-1:x1",
         "doc-1:cs-1:s1",
+        "doc-1:cs-1:s2",
     ]
     (search,) = state.reference_sources
     assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
@@ -1872,7 +1884,7 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
 
     result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
 
-    assert _order(result)[5:] == ["doc-1:f", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
+    assert _order(result)[5:] == ["doc-1:f", "doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:cs-1:s2"]
     (search,) = state.reference_sources
     assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
         (6, "added"),
@@ -2362,21 +2374,26 @@ def test_reference_expansion_settings_and_evaluation_override() -> None:
 
     settings = Settings()
     assert settings.rag_reference_expansion_enabled is True
-    assert settings.rag_reference_expansion_max_chunks == 4
     assert settings.rag_reference_expansion_max_targets == 20
     with pytest.raises(ValueError):
         Settings(rag_reference_expansion_max_targets=0)
     with pytest.raises(ValueError):
         Settings(rag_reference_expansion_max_targets=121)
-    with pytest.raises(ValueError):
-        Settings(rag_reference_expansion_max_chunks=0)
 
     overridden = evaluation_settings(
-        settings,
-        EvaluationRagOverrides(reference_expansion_enabled=False, reference_expansion_max_chunks=2),
+        settings, EvaluationRagOverrides(reference_expansion_enabled=False)
     )
     assert overridden.rag_reference_expansion_enabled is False
-    assert overridden.rag_reference_expansion_max_chunks == 2
+
+
+def test_reference_expansion_chunk_cap_is_removed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """足す参照先の chunk の個数の上限は削除した(#5243)。旧変数・評価の上書きのキーは読まない。"""
+    from app.schemas.evaluation import EvaluationRagOverrides
+
+    monkeypatch.setenv("RAG_REFERENCE_EXPANSION_MAX_CHUNKS", "2")
+    assert not hasattr(Settings(_env_file=None), "rag_reference_expansion_max_chunks")
+    with pytest.raises(ValueError):
+        EvaluationRagOverrides.model_validate({"reference_expansion_max_chunks": 2})
 
 
 def test_abbreviation_references_point_to_the_base_document(

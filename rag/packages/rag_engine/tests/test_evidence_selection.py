@@ -128,3 +128,42 @@ def test_reading_findings_keep_their_source_positions_in_the_final_input():
         original = next(item for item in spans if item["source_id"] == value["source_id"])
         assert original["text"][value["start"] - 50 : value["end"] - 50] == value["text"]
     assert "回答候補（evidence_id は根拠のラベル）" in prompt
+
+
+def document_span(index, document, text, *, first=False):
+    """文書の範囲を持つ合成の根拠。first は文書の本文の先頭の chunk の根拠（#5240）。"""
+    value = {**span(index, text), "document_scope": [document]}
+    return {**value, "document_first_chunk": True} if first else value
+
+
+def test_first_chunks_join_one_generation_and_are_not_repeated_when_evidence_has_them():
+    """#5240: 先頭の chunk は主の根拠と一緒に渡す。主の根拠がその原文を含む文書には重ねて足さない。"""
+    spans = [
+        document_span(0, "a", "主の根拠A。"),
+        document_span(1, "a", "先頭A。", first=True),
+        document_span(2, "b", "先頭B。主の根拠B。"),
+        document_span(3, "b", "先頭B。", first=True),
+    ]
+    selected, _, diagnostic = select(spans, source_scores={"s0": 0.9, "s2": 0.5})
+    assert sorted(value["source_id"] for value in selected) == ["s0", "s1", "s2"]
+    assert diagnostic["selection"] == "relevance_within_budget"
+    assert diagnostic["first_chunk_document_count"] == 2
+    assert diagnostic["first_chunk_covered_document_count"] == 1
+    assert diagnostic["duplicate_span_count"] == 0
+
+
+def test_every_batch_and_the_final_input_carry_the_first_chunk_of_their_documents():
+    """#5240: 予算を超えたら分割読取にし、各組と最終生成に、その組の文書の先頭の chunk を必ず入れる（外さない）。"""
+    main = [document_span(index, f"d{index}", f"合成の根拠{index}。" + "補足の文。" * 80) for index in range(3)]
+    first = {f"d{index}": document_span(10 + index, f"d{index}", f"合成の文書{index}の前提。", first=True) for index in range(3)}
+    calls: list[list[str]] = []
+    selected, _, diagnostic = select([*main, *first.values()], read=recording_reader(calls))
+    assert diagnostic["selection"] == "batched_reading"
+    assert len(calls) >= 2
+    for call in calls:
+        for index, value in enumerate(main):
+            if any(text and text in value["text"] for text in call if not text.startswith("合成の文書")):
+                assert call.count(first[f"d{index}"]["text"]) == 1
+    final_firsts = [value["text"] for value in selected if value.get("document_first_chunk")]
+    documents = {tuple(value["document_scope"]) for value in selected if not value.get("document_first_chunk")}
+    assert sorted(final_firsts) == sorted(first[key[0]]["text"] for key in documents)
