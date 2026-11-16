@@ -212,8 +212,9 @@ def bind_step_listener(listener: StepListener | None) -> Iterator[None]:
 
 
 # 工程ごとに差分を記録する累積の計測値（DB の SQL の回数・行数など。#1490）。呼び出し側が渡す関数は
-# その時点の累積値（数値）を返し、工程の記録には終了時と開始時の差を足す。失敗しても回答を止めない。
-StepMetrics = Callable[[], Mapping[str, int | float]]
+# その時点の累積値（数値、または数値を値に持つ入れ子の dict。SQL の種類ごとの値など。#5184）を返し、
+# 工程の記録には終了時と開始時の差を足す。失敗しても回答を止めない。
+StepMetrics = Callable[[], Mapping[str, Any]]
 _step_metrics: ContextVar[StepMetrics | None] = ContextVar("answer_step_metrics", default=None)
 
 
@@ -227,24 +228,46 @@ def bind_step_metrics(provider: StepMetrics | None) -> Iterator[None]:
         _step_metrics.reset(token)
 
 
-def _step_metrics_snapshot() -> dict[str, int | float]:
+def _metric_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    """数値と、数値を値に持つ入れ子の dict だけを残す（そのほかの値は捨てる）。"""
+    kept: dict[str, Any] = {}
+    for key, value in values.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int | float):
+            kept[key] = value
+        elif isinstance(value, Mapping):
+            kept[key] = _metric_values(value)
+    return kept
+
+
+def _step_metrics_snapshot() -> dict[str, Any]:
     provider = _step_metrics.get()
     if provider is None:
         return {}
     try:
-        values = provider()
+        return _metric_values(provider())
     except Exception:  # noqa: BLE001 - 計測は補助。回答の処理を止めない。
         return {}
-    return {key: value for key, value in values.items() if isinstance(value, int | float) and not isinstance(value, bool)}
 
 
-def _step_metrics_delta(before: Mapping[str, int | float]) -> dict[str, int | float]:
-    after = _step_metrics_snapshot()
-    delta: dict[str, int | float] = {}
+def _metric_delta(after: Mapping[str, Any], before: Mapping[str, Any]) -> dict[str, Any]:
+    """``after - before``。入れ子の dict は、差が全部 0 の項目を省く（工程で増えた種類だけを残す）。"""
+    delta: dict[str, Any] = {}
     for key, value in after.items():
-        diff = value - before.get(key, 0)
+        prior = before.get(key)
+        if isinstance(value, Mapping):
+            nested = _metric_delta(value, prior if isinstance(prior, Mapping) else {})
+            if any(nested.values()):
+                delta[key] = nested
+            continue
+        diff = value - (prior if isinstance(prior, int | float) else 0)
         delta[key] = round(diff, 3) if isinstance(diff, float) else diff
     return delta
+
+
+def _step_metrics_delta(before: Mapping[str, Any]) -> dict[str, Any]:
+    return _metric_delta(_step_metrics_snapshot(), before)
 
 
 def _notify_step(name: str, outcome: str, elapsed: float, record: Mapping[str, Any] | None = None) -> None:
