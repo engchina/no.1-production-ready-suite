@@ -147,6 +147,7 @@ from rag_engine.generation.query_prompts import (
     MAX_GENERATED_QUERY_CHARS,
     _limited_text_search_query_variants,
     _merge_retrieval_queries,
+    _normalized_query_text,
     _retrieval_metadata_filter,
     _retrieval_queries,
     _text_search_query_source,
@@ -2887,26 +2888,30 @@ def answer_question_result(
             # 比較実験用。検索直前にも同じ絞り込みがあるが、ここで適用しないと記録が実際の検索と食い違う。
             retrieval_queries = (normalized_question,)
             step.add("      設定 RETRIEVAL_ORIGINAL_QUERY_ONLY=true のため、原質問だけで検索します。")
-        sources = {dedupe_query_key(normalized_question): "原質問"}
+
+        def source_key(query: str) -> str:
+            # 候補検索文は _merge_retrieval_queries が制御文字・書式文字を除いた形なので、出どころのキーも同じ形で作る。
+            return dedupe_query_key(_normalized_query_text(query))
+
+        # 検索文は原質問と、原質問に語を足したものだけなので、どの検索文にも出どころがある。
+        sources = {source_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
             # 出どころは実際に語を足したもの（用語・同義語 / 業務ガイド / 確認で選んだ条件。#3490）。
-            sources.setdefault(dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
+            sources.setdefault(source_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         query_sources: dict[str, tuple[str, ...]] = {}
         for query in retrieval_queries:
-            key = dedupe_query_key(query)
-            labels = [sources.get(key, "追加検索文")]
+            key = source_key(query)
+            labels = [sources[key]]
             if (
                 runtime_knowledge.expanded_question != runtime_knowledge.original_question
-                and dedupe_query_key(runtime_knowledge.expanded_question) == key
+                and source_key(runtime_knowledge.expanded_question) == key
             ):
                 labels.append(runtime_knowledge.query_source)
             query_sources[query] = tuple(dict.fromkeys(labels))
         step.input(
             {
                 "原質問": normalized_question,
-                "候補検索文": [
-                    {"本文": query, "出どころ": sources.get(dedupe_query_key(query), "追加検索文")} for query in candidate_queries
-                ],
+                "候補検索文": [{"本文": query, "出どころ": sources[source_key(query)]} for query in candidate_queries],
                 "一致した用語": [term.to_payload() for term in runtime_knowledge.retrieval_terms],
                 "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
             }
@@ -2927,10 +2932,7 @@ def answer_question_result(
             report_degraded("text_search_tokenizer", tokenizer_failure)
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
-            *(
-                f"{number}. " + (f"[{source}] " if (source := sources.get(dedupe_query_key(query))) else "") + _display_query(query)
-                for number, query in enumerate(retrieval_queries, 1)
-            ),
+            *(f"{number}. [{sources[source_key(query)]}] " + _display_query(query) for number, query in enumerate(retrieval_queries, 1)),
         )
         if note := _text_search_limit_note(_text_search_variants(retrieval_queries, expansion), settings):
             step.add(note)
