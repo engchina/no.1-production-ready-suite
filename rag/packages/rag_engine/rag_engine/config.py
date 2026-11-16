@@ -230,10 +230,6 @@ class Settings:
     rerank_retry_initial_wait_seconds: float
     rerank_retry_max_wait_seconds: float
     rerank_min_relevance_score: float
-    # 粗→細の検索: rerank 後の候補を文書ごとに集約し、rerank の点数が明らかに低い文書を後回しにする (#1028)。既定 on (#1040)。
-    # 命中の件数は判定に使わない（#3504）。
-    document_selection_enabled: bool
-    document_selection_score_ratio: float
     embedding_region: str
     embedding_endpoint: str
     embedding_model: str
@@ -244,7 +240,7 @@ class Settings:
     text_search_query_variant_limit: int
     # 文脈構築で同じ親から起点（retrieved_anchor）に採る child の上限（#669、#889）。1 以上。
     max_anchors_per_parent: int
-    # 起点に採る同じ文書の child の上限（#2167）。超えた child は落とさず後ろへ回す。0 は上限なし。
+    # 1 つの文書から採る child の上限（#2167・#5165）。超えた child は外す。0 は上限なし。
     max_anchors_per_document: int
     text_search_tokenizer_sudachi_dict: str
     text_search_tokenizer_sudachi_config: str
@@ -272,8 +268,6 @@ class Settings:
     # 原質問と追加検索文の比重。1 回の検索に原質問とほかの検索文を渡す独立 engine の経路（SDK の
     # `SearchRequest.queries`・業務ガイドの手順の検索）だけで使う。主検索は 1 回なので使わない（#5159）。
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
-    # rerank の後の並びの枠（rerank の順の件数・検索の順の件数。#4664）。
-    rerank_slot_ratio: tuple[int, int] = (7, 3)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
     original_query_only: bool = False
@@ -294,7 +288,6 @@ class Settings:
     # 基本候補と、拡張を含む精排入力の合計は回答起点数から独立する。
     retrieval_candidate_limit: int = 140
     rerank_candidate_limit: int = 200
-    rerank_top_n: int = 60
     # 呼出元が解決した、各候補経路の既存の上限。KB/レシピには設定しない。
     retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
@@ -465,7 +458,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         hybrid_search_backend=_hybrid_backend(env.get("RAG_HYBRID_SEARCH_BACKEND", "oracle_hybrid_index")),
         rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[7,3]")),
         rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
-        rerank_slot_ratio=_slot_ratio(env.get("RAG_RERANK_SLOT_RATIO", "[7,3]")),
         text_search_max_tokens=max(
             TEXT_SEARCH_MAX_TOKENS_RANGE[0],
             min(TEXT_SEARCH_MAX_TOKENS_RANGE[1], _env_int(env, "RAG_TEXT_SEARCH_MAX_TOKENS", DEFAULT_TEXT_SEARCH_MAX_TOKENS)),
@@ -518,8 +510,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             0.0,
             _env_float(env, "RERANK_MIN_RELEVANCE_SCORE", DEFAULT_RERANK_MIN_RELEVANCE_SCORE),
         ),
-        document_selection_enabled=_env_bool(env, "RAG_ENGINE_DOCUMENT_SELECTION", True),
-        document_selection_score_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_DOCUMENT_SELECTION_SCORE_RATIO", 0.5))),
         embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip() or DEFAULT_EMBEDDING_REGION,
         embedding_endpoint=env.get("EMBEDDING_ENDPOINT", "").strip(),
         embedding_model=env.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip() or DEFAULT_EMBEDDING_MODEL,
@@ -543,7 +533,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
         retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 140)),
         rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 200)),
-        rerank_top_n=max(0, _env_int(env, "RAG_ENGINE_RERANK_TOP_N", 60)),
         retrieval_stage_limits={
             str(key): max(0, int(value)) for key, value in json.loads(env.get("RAG_ENGINE_RETRIEVAL_STAGE_LIMITS", "{}")).items()
         },
@@ -710,12 +699,6 @@ def _rrf_ratio(raw: str) -> tuple[float, float]:
     left, right = float(parsed[0]), float(parsed[1])
     RrfWeights(vector=left, keyword=right)
     return left, right
-
-
-def _slot_ratio(raw: str) -> tuple[int, int]:
-    from rag_engine.retrieval.rerank_order import validate_slot_ratio
-
-    return validate_slot_ratio(json.loads(raw))
 
 
 def _hybrid_backend(value: str) -> str:

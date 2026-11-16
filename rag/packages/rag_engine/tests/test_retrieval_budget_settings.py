@@ -114,11 +114,12 @@ class EvidenceBudgetTraceTest(unittest.TestCase):
         self.assertEqual(trace["evidence_block_chars"], 0)
 
 
-def test_rerank_defaults_and_explicit_unlimited():
+def test_rerank_defaults_and_explicit_values():
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.rerank_min_relevance_score == 0.3
-    assert defaults.rerank_top_n == 60
     assert defaults.rerank_candidate_limit == 200
     assert defaults.retrieval_candidate_limit == 140
-    explicit = get_settings(environ={"RERANK_MIN_RELEVANCE_SCORE": "0.4", "RAG_ENGINE_RERANK_TOP_N": "0"}, dotenv_path=None)
-    assert (explicit.rerank_min_relevance_score, explicit.rerank_top_n) == (0.4, 0)
+    # rerank の後の件数の切りは top_k の 1 回だけで、Top-N の設定は無い（#5165）。
+    assert not hasattr(defaults, "rerank_top_n")
+    explicit = get_settings(environ={"RERANK_MIN_RELEVANCE_SCORE": "0.4"}, dotenv_path=None)
+    assert explicit.rerank_min_relevance_score == 0.4

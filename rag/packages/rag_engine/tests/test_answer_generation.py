@@ -336,31 +336,40 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertTrue(reranked[0].metadata["rerank"]["skipped"])
         self.assertEqual(reranked[0].metadata["rerank"]["skip_reason"], "image_vector_only")
 
-    def test_rerank_preserves_long_body_and_recovers_legacy_search_text_tail(self):
+    def test_rerank_document_is_the_title_heading_and_original_text_only(self):
+        """rerank の文は文書の名前・見出し・当たった chunk の原文だけ（#5165）。検索文の文脈行・引用の ID は入れない。"""
         body = "条件の説明\n" * 600 + "例外: 対象外"
-        record = replace(_record("long", "docling", 1, 1, "Source file: manual\nChild text: " + body[:1500]), body_text=body)
+        record = replace(
+            _record("long", "docling", 1, 1, "Source file: manual\nParent summary: 親の要約\nKeywords: 語\nChild text: " + body[:1500]),
+            body_text=body,
+            source="/tmp/upload/架空手引き.pdf",
+            chunk_id="chunk-1",
+            metadata={"section_path": ["第 1 章", "1.2 例外"]},
+        )
         with patch("rag_engine.generation.answering.rerank_text_with_scores", return_value=[]) as rerank:
             rerank_records("例外は？", [record], _rerank_ready_settings(), enabled=True)
         document = rerank.call_args.args[1][0]
-        self.assertTrue(document.startswith(body))
-        self.assertIn("例外: 対象外", document)
-        self.assertLessEqual(len(document) - len(body), 702)
+        self.assertEqual(document, f"文書: 架空手引き.pdf\n見出し: 第 1 章 > 1.2 例外\n\n{body}")
+        for extra in ("Parent summary", "親の要約", "Keywords", "chunk-1", "docling"):
+            self.assertNotIn(extra, document)
 
-    def test_rerank_document_starts_with_the_section_heading(self):
-        """rerank の文書は見出しで始める。cross-encoder が画面・機能の一致を順位に反映しやすい (#1118)。"""
+    def test_rerank_document_starts_with_the_title_and_section_heading(self):
+        """見出しは本文の前に置く。cross-encoder が画面・機能の一致を順位に反映しやすい (#1118)。"""
         from rag_engine.generation.answer_records import _rerank_document
 
         record = replace(
             _record("steps", "docling", 1, 1, "①抽出条件を入力します。"),
+            source="架空手引き.pdf",
             metadata={"section_path": ["架空管理", "（２）伝票印刷設定", "B 【操作説明】"]},
         )
         plain = replace(_record("plain", "docling", 1, 1, "①抽出条件を入力します。"), metadata={})
 
-        self.assertTrue(_rerank_document(record).startswith("見出し: 架空管理 > （２）伝票印刷設定 > B 【操作説明】\n"))
-        self.assertIn("①抽出条件を入力します。", _rerank_document(record))
-        self.assertFalse(_rerank_document(plain).startswith("見出し:"))
+        heading = "文書: 架空手引き.pdf\n見出し: 架空管理 > （２）伝票印刷設定 > B 【操作説明】\n\n"
+        self.assertTrue(_rerank_document(record).startswith(heading))
+        self.assertTrue(_rerank_document(record).endswith("①抽出条件を入力します。"))
+        self.assertEqual(_rerank_document(plain), "①抽出条件を入力します。")
 
-    def test_rerank_document_includes_visual_context_for_image_hits(self):
+    def test_rerank_document_does_not_add_image_metadata(self):
         record = replace(
             _record("visual", "docling", 1, 1, "screen evidence"),
             metadata={
@@ -383,9 +392,7 @@ class AnswerGenerationTests(unittest.TestCase):
         ) as rerank:
             rerank_records("赤枠のボタン", [record], settings, enabled=True)
 
-        document = rerank.call_args.args[1][0]
-        self.assertIn("Visual retrieval channels: image_vector:q1", document)
-        self.assertIn("赤枠の実行ボタン", document)
+        self.assertEqual(rerank.call_args.args[1][0], "screen evidence")
 
     def test_build_answer_context_includes_same_page_cautions_for_top_record(self):
         records = [

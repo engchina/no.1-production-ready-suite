@@ -258,14 +258,13 @@ async def test_answer_uses_low_fusion_rank_source_chosen_by_rerank(
 async def test_source_below_minimum_score_is_reported_as_insufficient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """下げた合格点でも全部落ちる原文は渡さない。日付を推測せず、資料不足を明示する。"""
+    """合格点より下の原文は渡さない（合格点は下げない。#5165）。日付を推測せず、資料不足を明示する。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _llm)
     outcome = await AnswerEngine(
         _settings(),
         oracle=cast(Any, _RankedOracle(_ranked_chunks())),
-        # 全部が不合格なら合格点を 0.7 倍にしてやり直すので、下げた合格点より下の点数にする。
         genai=cast(Any, _ScoredGenAi(needed_score=0.12)),
     ).run(SearchRequest(query=QUESTION, generate_answer=True))
 
@@ -277,7 +276,8 @@ async def test_source_below_minimum_score_is_reported_as_insufficient(
     # 候補に入って最低点で外れたことが、融合の予算で落ちたことと区別して残る。
     decision = next(item for item in threshold["decisions"] if item["candidate_id"] == NEEDED_ID)
     assert decision["status"] == "excluded"
-    assert threshold["relaxed_from"] is not None
-    assert threshold["minimum"] < threshold["relaxed_from"]
+    # 全部が合格点未満でも合格点を下げてやり直さない（#5165）。
+    assert "relaxed_from" not in threshold
+    assert threshold["minimum"] == 0.3
     fusion = next(stage for stage in stages if stage["stage"] == "candidate_fusion")
     assert NEEDED_ID in fusion["selected_ids"]

@@ -18,7 +18,7 @@ from rag_engine.generation.citation_wire import (
 )
 
 from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow
-from app.config import PROFILE_ONLY_SETTING_FIELDS, Settings
+from app.config import Settings
 from app.rag import section_map_service
 from app.rag.answer_engine import AnswerEngine, build_engine_settings
 from app.rag.section_chunk_map import SectionNode
@@ -235,7 +235,6 @@ def test_section_expansion_settings_are_global(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """章節の拡張は検索方法の全体設定を保存した環境変数から読む。"""
-    assert SECTION_FIELDS.isdisjoint(PROFILE_ONLY_SETTING_FIELDS)
     monkeypatch.setenv("RAG_SECTION_EXPANSION_ENABLED", "false")
     env_file = tmp_path / "backend.env"
     env_file.write_text("RAG_SECTION_EXPANSION_MAX_LEVELS=2\n", encoding="utf-8")

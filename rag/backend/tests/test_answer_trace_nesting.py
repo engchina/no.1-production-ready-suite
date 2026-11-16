@@ -70,7 +70,7 @@ async def test_spans_are_nested_under_the_step_that_did_the_work(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _traced_llm)
     pipeline = RagPipeline(
-        settings=Settings(oci_compartment_id="synthetic"),
+        settings=Settings(oci_compartment_id="synthetic", rag_max_anchors_per_document=2),
         oracle=_TracedOracle(),  # type: ignore[arg-type]
         genai=_TracedGenAi(),  # type: ignore[arg-type]
     )
@@ -95,9 +95,9 @@ async def test_spans_are_nested_under_the_step_that_did_the_work(
     # 並べ替えのモデルの呼び出しは「検索結果の並べ替え」（Rerank）の子。
     assert parents("gen_ai.rerank")
     assert set(parents("gen_ai.rerank")) == {"Rerank"}
-    # 並べ替え・文書の絞り込み・起点の上限は、文書の検索の中の別の工程（兄弟）。
+    # 並べ替え・文書ごとの上限は、文書の検索の中の別の工程（兄弟）。
     assert parent_of("Rerank") == "文書検索"
-    assert parent_of("文書ごとの起点の上限") == "文書検索"
+    assert parent_of("文書ごとの上限") == "文書検索"
     db_parents = parents("synthetic.db_search")
     assert db_parents
     assert set(db_parents) <= {"文書検索", "前後の文脈の読み込み"} or set(db_parents) <= {

@@ -501,13 +501,11 @@ def build_engine_settings(
         "RAG_TEXT_SEARCH_MAX_TOKENS": str(settings.rag_text_search_max_tokens),
         "RAG_TEXT_SEARCH_MAX_QUERY_CHARS": str(settings.rag_text_search_max_query_chars),
         "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
-        "RAG_RERANK_SLOT_RATIO": json.dumps(settings.rag_rerank_slot_ratio),
         "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",
         "RUNTIME_TERMS_ANSWER_ENABLED": "1" if settings.rag_runtime_terms_answer_enabled else "0",
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
         "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
         "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),
-        "RAG_ENGINE_RERANK_TOP_N": str(settings.rag_rerank_top_n),
         # rerank の入力の経路ごとの上限。検索拡張の chunk は rerank の候補に入らない(#5162)。
         "RAG_ENGINE_RETRIEVAL_STAGE_LIMITS": json.dumps(
             {
@@ -550,7 +548,8 @@ def build_engine_settings(
         ),
         # 生成に渡す根拠の原文の文字予算(#3776。全体設定だけで決める)。
         "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
-        # rerank の後、起点に採る同じ文書の chunk の上限(#2167。検索・回答プロファイルで選ぶ)。
+        # rerank の後、1 つの文書から起点に採る chunk の上限(#2167・#5165。0 は上限なし。
+        # 全体の既定は .env、検索・回答プロファイルで上書きできる)。
         "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": str(settings.rag_max_anchors_per_document),
         # 回答文の生成の推論の量(#1499。model は空 = モデルの登録値のまま)。
         "RAG_ENGINE_GENERATION_REASONING_EFFORT": _reasoning_effort_override(
@@ -3758,8 +3757,8 @@ def _stored_child(
             **({"rank": rank} if isinstance(rank, int) else {}),
         }
     if is_attachment_chunk(chunk.metadata):
-        # 会話の添付から選んだ箇所(#2517)。rag_engine は文書の選択で後回しにせず、文書ごとの
-        # 起点の上限で数えない(#3100)。backend の印(`chat_attachment_id`)は engine の metadata に
+        # 会話の添付から選んだ箇所(#2517)。rag_engine は関連度の下限で外さず、文書ごとの
+        # 上限で数えない(#3100)。backend の印(`chat_attachment_id`)は engine の metadata に
         # 入らないので、engine の印に写す(#3126)。
         metadata[ATTACHMENT_EVIDENCE_KEY] = True
     chunk_set_id = str(chunk.metadata.get("chunk_set_id") or "")

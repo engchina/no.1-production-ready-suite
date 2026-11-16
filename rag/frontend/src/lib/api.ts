@@ -2730,12 +2730,10 @@ export interface ChunkingSettingsUpdate {
 /** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
   retrieval_query_limit?: number;
-  rerank_top_n?: number;
   min_similarity?: number;
   rerank_min_relevance_score?: number;
   hybrid_search_backend?: "oracle_hybrid_index" | "oracle_separate_sql";
   rrf_method_ratio?: [number, number];
-  rerank_slot_ratio?: [number, number];
   runtime_terms_search_enabled?: boolean;
   runtime_terms_answer_enabled?: boolean;
   neighbor_child_count: number;

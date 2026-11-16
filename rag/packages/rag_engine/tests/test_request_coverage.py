@@ -92,8 +92,6 @@ def _patch_search(monkeypatch: pytest.MonkeyPatch, results: dict[str, AnswerCont
     calls: list[tuple[str, tuple]] = []
 
     def fake_build(question: str, run_id: Any, engines: Any, settings: Any, **kwargs: Any) -> AnswerContext:
-        # 文書の選択は使わない。
-        assert settings.document_selection_enabled is False
         calls.append((question, tuple(kwargs["retrieval_queries"])))
         return results.get(question, context())
 

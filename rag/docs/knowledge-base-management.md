@@ -344,7 +344,6 @@ GET /api/documents?knowledge_base_id=kb_1&status=INDEXED&q=規程&limit=50&offse
   "query": "リモートワーク時の申請手順は？",
   "knowledge_base_ids": ["kb_1"],
   "top_k": 20,
-  "rerank_top_n": 5,
   "mode": "hybrid",
   "filters": {
     "content_kind": "text"
