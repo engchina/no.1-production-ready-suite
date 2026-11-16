@@ -3816,6 +3816,7 @@ onError: (error) => {
 | warning の `Banner` 1 つに、理由（backend の文。無ければ既定の文）と「送り直しても同じ結果になる・書き換えて送る」の案内を出す。ボタンは置かない | 送信の失敗ではない。再送信・確認の省略は必ず同じ停止になるので出さない（messaging.md §11.3）。RAG の回答の安全チェックの警告と同じ warning |
 | 文言は `DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS`（状態の文・既定の理由・案内）。3 製品は既定の文を使う | 3 製品で同じ機能の文をそろえる（shared-features.md） |
 | 判定は `errorCode === GUARDRAIL_BLOCKED_CODE`（backend は `pr_system_settings.guardrails.GUARDRAIL_BLOCKED_CODE`） | 3 製品の `ApiError` はどれも `errorCode` を持つ。説明の文を解析しない（messaging.md §4.3） |
+| 回答前の確認への答え（自由入力）を止めたときは `subject="answer"`（`answerGuidance`「答えの内容を書き換えてから送信してください」）で確認のカードの `error` に置く。チャットではない画面（NL2SQL の SQL 生成）は `labels.guidance` を画面の操作に合わせて上書きする（#5205） | 止めた入力（質問・答え）と、書き換える場所を取り違えない |
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。e2e は NL2SQL `tests/e2e/sql-chat.spec.ts`・Agent `e2e/chat.spec.ts` の「#5191」（desktop と 375px）。
 - 回答の本文は `ChatAnswerBody`（#3433）で包み、本文の前に見出し「回答」（既定 h3。`labels.heading`・`headingLevel` で変えられる）を出す。見出しは本文の中の節の見出しと同じ部品 `AnswerHeading`（`text-sm font-semibold text-fg`。`AnswerSections` の節の見出しも同じ）。回答の本文を描くときだけ使い、処理の経過だけの間・失敗・停止だけの枠・回答前の確認のカードには使わない。実行の詳細は `Section` の見出し「回答」を持つので使わない。使う所: RAG `AssistantColumn`、Agent `RunChatTurn`（NL2SQL の回答は SQL・説明・結果で、本文の節の見出しを持たないので使わない）。単体テストは `packages/ui/tests/answer-heading.test.tsx`。

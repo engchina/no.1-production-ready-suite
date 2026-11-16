@@ -10,6 +10,7 @@ import {
   ApiErrorBanner,
   Banner,
   Button,
+  ChatGuardrailNotice,
   ClarificationCard,
   clarificationLabels,
   Disclosure,
@@ -525,7 +526,25 @@ export function RequirementCheckFailure({
 export function RequirementErrorBanner({ error }: { error: unknown }) {
   if (!error) return null;
   if (typeof error === "string") return <Banner severity="danger">{error}</Banner>;
+  // 確認への答え（自由入力）を安全チェックが止めた案内は、答えの欄のあるカードの中に出す（`RequirementGuardrailNotice`。
+  // 起点の直下。#5205）。ここでは重ねない。
+  if (isGuardrailBlockedError(error)) return null;
   return <ApiErrorBanner error={error} fallback={t("nl2sql.requirementFailure.fallback")} />;
+}
+
+/**
+ * 確認への答え（自由入力）を安全チェックが止めたときの案内（#5205）。送り直しても同じなので、汎用の失敗にせず
+ * 答えの書き換えを案内する。確認のカードの `error`（答えの操作の直前）に置く（Agent の確認のカードと同じ）。
+ */
+function RequirementGuardrailNotice({ error }: { error: unknown }) {
+  if (!isGuardrailBlockedError(error)) return null;
+  return (
+    <ChatGuardrailNotice
+      message={error instanceof Error ? error.message : null}
+      subject="answer"
+      testId="nl2sql-clarification-guardrail-notice"
+    />
+  );
 }
 
 export function RequirementStateBanners({ state, unresolvedCount }: { state: RequirementState | null; unresolvedCount: number }) {
@@ -741,6 +760,7 @@ export function RequirementCard({
           idPrefix={`${idPrefix}-clarification`}
           testId="nl2sql-clarification-card"
           items={[item]}
+          error={<RequirementGuardrailNotice error={controller.error} />}
           value={{ [activeItem.id]: { optionIds: selectedCandidateIds, otherText: freeText } }}
           onValueChange={(draft) => {
             const entry = draft[activeItem.id];
@@ -810,6 +830,7 @@ export function RequirementCard({
         idPrefix={`${idPrefix}-confirm`}
         testId="nl2sql-clarification-card"
         items={[item]}
+        error={<RequirementGuardrailNotice error={controller.error} />}
         value={{
           [item.id]: { optionIds: confirmTarget && checkedId ? [checkedId] : [], otherText: freeText },
         }}
