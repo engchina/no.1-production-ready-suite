@@ -132,6 +132,8 @@ const SCOPE_OPTIONS = options<SupportGuideImpactScope>(
 
 /** 共通の資料の選択を開いているときの `picking` の値（手順の行の key と重ならない）。 */
 const REFERENCES_PICKER = "references";
+/** 資料を選んで足すシートの id（開くボタンの aria-controls）。 */
+const REFERENCE_PICKER_SHEET_ID = "support-guide-reference-picker";
 
 const ROW_LABEL: Record<GuideRowSection, I18nKey> = {
   conditions: "supportGuides.row.condition",
@@ -258,8 +260,14 @@ function SupportGuideForm({
     detail && detail.issues.length > 0 ? { source: "saved", issues: detail.issues } : null,
   );
   const [viewRevision, setViewRevision] = useState<number | null>(null);
-  // 開いている資料の選択（共通の資料は REFERENCES_PICKER、手順の資料はその手順の行の key）。一度に 1 つだけ開く。
+  // 開いている資料の選択のシート（共通の資料は REFERENCES_PICKER、手順の資料はその手順の行の key）。一度に 1 つだけ開く。
+  // `pickerTarget` は最後に開いた先で、閉じる間（シートが滑って消える間）も中身を出したままにするために残す（#5279）。
   const [picking, setPicking] = useState<string | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<string>(REFERENCES_PICKER);
+  const openPicker = (target: string) => {
+    setPickerTarget(target);
+    setPicking(target);
+  };
 
   const save = useSaveSupportGuide(searchAnswerProfileId);
   const validate = useValidateSupportGuide(searchAnswerProfileId);
@@ -963,31 +971,18 @@ function SupportGuideForm({
                       })}
                     </ol>
                   ) : null}
+                  {/* 開くだけ（開閉を切り替えない）。選択はシートで開く（#5279）。 */}
                   <Button
                     size="sm"
                     variant="secondary"
                     icon={Plus}
-                    aria-expanded={picking === row.key}
-                    aria-controls={picking === row.key ? `support-guide-step-reference-picker-${row.key}` : undefined}
+                    aria-haspopup="dialog"
+                    aria-controls={REFERENCE_PICKER_SHEET_ID}
                     disabled={row.references.length >= MAX_STEP_REFERENCES}
-                    onClick={() => setPicking((current) => (current === row.key ? null : row.key))}
+                    onClick={() => openPicker(row.key)}
                   >
                     {t("supportGuides.add.stepReference")}
                   </Button>
-                  {picking === row.key ? (
-                    <SupportGuideReferencePicker
-                      id={`support-guide-step-reference-picker-${row.key}`}
-                      testId={`support-guide-step-reference-picker-${index}`}
-                      searchAnswerProfileId={searchAnswerProfileId}
-                      references={row.references}
-                      maxSelection={MAX_STEP_REFERENCES - row.references.length}
-                      onAdd={(references) => {
-                        updateRow("steps", index, { references: [...row.references, ...references] });
-                        setPicking(null);
-                      }}
-                      onClose={() => setPicking(null)}
-                    />
-                  ) : null}
                 </Fieldset>
                 <div className="col-span-full">
                   <TextareaField
@@ -1130,33 +1125,17 @@ function SupportGuideForm({
           help={t("supportGuides.section.referencesHelp")}
           rows={form.references}
           adder={
-            <>
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={Plus}
-                aria-expanded={picking === REFERENCES_PICKER}
-                aria-controls={picking === REFERENCES_PICKER ? "support-guide-reference-picker" : undefined}
-                disabled={form.references.length >= MAX_GUIDE_REFERENCES}
-                onClick={() => setPicking((current) => (current === REFERENCES_PICKER ? null : REFERENCES_PICKER))}
-              >
-                {t("supportGuides.add.reference")}
-              </Button>
-              {picking === REFERENCES_PICKER ? (
-                <SupportGuideReferencePicker
-                  id="support-guide-reference-picker"
-                  testId="support-guide-reference-picker"
-                  searchAnswerProfileId={searchAnswerProfileId}
-                  references={form.references}
-                  maxSelection={MAX_GUIDE_REFERENCES - form.references.length}
-                  onAdd={(references) => {
-                    update({ references: [...form.references, ...references] });
-                    setPicking(null);
-                  }}
-                  onClose={() => setPicking(null)}
-                />
-              ) : null}
-            </>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={Plus}
+              aria-haspopup="dialog"
+              aria-controls={REFERENCE_PICKER_SHEET_ID}
+              disabled={form.references.length >= MAX_GUIDE_REFERENCES}
+              onClick={() => openPicker(REFERENCES_PICKER)}
+            >
+              {t("supportGuides.add.reference")}
+            </Button>
           }
           rowTitle={(row) => row.title || row.documentId}
           onMove={(index, delta) => moveRow("references", index, delta)}
@@ -1470,6 +1449,34 @@ function SupportGuideForm({
           disabled={busy}
         />
       ) : null}
+
+      {/* 資料を選んで足すシート（共通の資料と手順の資料で 1 つ。#5279）。 */}
+      {(() => {
+        const stepIndex = form.steps.findIndex((row) => row.key === pickerTarget);
+        const step = pickerTarget === REFERENCES_PICKER || stepIndex < 0 ? null : form.steps[stepIndex];
+        const references = step ? step.references : form.references;
+        return (
+          <SupportGuideReferencePicker
+            open={picking !== null && (picking === REFERENCES_PICKER || step !== null)}
+            id={REFERENCE_PICKER_SHEET_ID}
+            testId={step ? `support-guide-step-reference-picker-${stepIndex}` : "support-guide-reference-picker"}
+            title={
+              step
+                ? t("supportGuides.referencePicker.stepTitle", { step: stepIndex + 1 })
+                : t("supportGuides.add.reference")
+            }
+            searchAnswerProfileId={searchAnswerProfileId}
+            references={references}
+            maxSelection={(step ? MAX_STEP_REFERENCES : MAX_GUIDE_REFERENCES) - references.length}
+            onAdd={(added) => {
+              if (step) updateRow("steps", stepIndex, { references: [...step.references, ...added] });
+              else update({ references: [...form.references, ...added] });
+              setPicking(null);
+            }}
+            onClose={() => setPicking(null)}
+          />
+        );
+      })()}
 
       {detail ? (
         <SupportGuideHistory
