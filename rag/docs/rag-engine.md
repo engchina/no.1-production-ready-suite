@@ -418,7 +418,8 @@ MCP の `rag_read_document` も派生の chunk を返さない。
 （`app/rag/document_summary.py`）、有効な chunk_set に 1 つだけ入れる。派生の chunk だが、指す原文が文書の全体で置き換える
 原文を決められないので、検索で当たったときは置き換えずに回答の根拠に渡す（`derived_evidence.keeps_own_evidence`）。モデルへの
 出典情報には `evidence_kind=document_summary` を付け、回答の本文の出典の場所はページではなく「文書の要約」（言語資源の `answer_labels.document_summary_location`）、引用の表示の種類も「文書の要約」にする。前後の文脈・交差参照・章節の
-拡張の起点にはせず、章節と chunk の対応・MCP の `rag_read_document` には入れない。索引だけの作り直しの複製には含めず、切替の
+拡張の起点にはせず（backend は前後を読まず、engine も読んだ chunk の並びの位置で前後を選ぶときに派生の chunk を起点にも
+前後にもしない。`context_builder._chunk_neighbors`。#5198）、章節と chunk の対応・MCP の `rag_read_document` には入れない。索引だけの作り直しの複製には含めず、切替の
 後の後段が入れ直す（入力の指紋が同じなら LLM を呼ばずに保存済みの文を使う）。
 
 Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。

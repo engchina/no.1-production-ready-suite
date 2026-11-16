@@ -8,6 +8,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, is_dataclass, replace
 from typing import Any, Literal
 
+from rag_parser_core.extraction import is_derived_content
+
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL
 from rag_engine.knowledge.document_metadata import document_context_text
 from rag_engine.parsing.decorative_pictures import (
@@ -1024,10 +1026,22 @@ def _context_prefix(record: Any, *, metadata_max_chars: int = 1200) -> str:
     return f"[{citation} / {engine_label} / {category}]" + suffix + (context + "\n" if context else "")
 
 
+def _in_body_sequence(record: Any) -> bool:
+    """文書の本文の並び（chunk の番号の順）に入る chunk か。
+
+    派生の chunk（文書全体の要約など。``content_kind`` か印で判定。backend の ``is_derived_chunk`` と同じ）は、取込の後に
+    作る文書の説明で文書の中の位置を持たず、番号は本文の後に振られる。前後の文脈を選ぶ並びに入れない（#5198）。
+    """
+    metadata = getattr(record, "metadata", None) or {}
+    return not is_derived_content(metadata.get("content_kind"), metadata)
+
+
 def _chunk_neighbors(child: Any, siblings: Sequence[Any], neighbor_child_count: int) -> list[Any]:
     count = max(0, int(neighbor_child_count or 0))
-    if count <= 0:
+    if count <= 0 or not _in_body_sequence(child):
         return []
+    # 前後は本文の並びでの位置で選ぶ（派生の chunk は起点にも前後にもしない）。
+    siblings = [record for record in siblings if _in_body_sequence(record)]
     index_by_id = {record_context_key(record): index for index, record in enumerate(siblings)}
     index = index_by_id.get(record_context_key(child))
     if index is None:
