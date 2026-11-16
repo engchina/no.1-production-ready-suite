@@ -1,4 +1,4 @@
-"""成功した重排の採用上限と、引用の依存関係・明示添付の保持。"""
+"""成功した重排の採用上限と、明示添付の保持。"""
 
 from types import SimpleNamespace
 
@@ -30,29 +30,28 @@ def child(index, *, source=None, attachment=False):
     )
 
 
-def test_reference_groups_are_atomic_and_oversized_groups_do_not_expand_limit():
-    records = [child(0), child(1), child(2, source=0)]
+def test_selection_keeps_candidate_order_up_to_the_limit():
+    records = [child(0), child(1), child(2)]
     selected, detail = select_reranked_candidates(records, 2)
-    assert [r.id for r in selected] == ["0", "2"]
+    assert [r.id for r in selected] == ["0", "1"]
     assert detail["ordinary_selected_count"] == 2
-    selected, detail = select_reranked_candidates(records, 1)
-    assert [r.id for r in selected] == ["1"]
-    assert detail["groups_over_budget"] == 1
+    assert detail["excluded_count"] == 1
+    assert select_reranked_candidates(records, 0)[0] == records
 
 
-def test_attachment_and_its_reference_group_are_preserved_separately():
-    records = [child(0), child(1, attachment=True), child(2, source=1), child(3)]
+def test_attachment_is_preserved_outside_the_limit():
+    records = [child(0), child(1, attachment=True), child(2), child(3)]
     selected, detail = select_reranked_candidates(records, 1)
-    assert [r.id for r in selected] == ["0", "1", "2"]
+    assert [r.id for r in selected] == ["0", "1"]
     assert detail["ordinary_selected_count"] == 1
-    assert detail["attachment_related_count"] == 2
+    assert detail["attachment_related_count"] == 1
 
 
-def test_cycles_and_reference_before_source_do_not_split_groups():
+def test_reference_markers_do_not_form_groups():
+    # 検索拡張の根拠は rerank の候補に入らず、最後の根拠の並びへ合わせる（#5162）。印は件数の選択に効かない。
     a, b, c = child(0, source=1), child(1, source=0), child(2)
-    assert select_reranked_candidates([a, b, c], 1)[0] == [c]
+    assert select_reranked_candidates([a, b, c], 1)[0] == [a]
     assert select_reranked_candidates([a, b, c], 2)[0] == [a, b]
-    assert select_reranked_candidates([a, b, c], 0)[0] == [a, b, c]
 
 
 @pytest.mark.parametrize("mode", ["off", "unconfigured", "failed", "unscored", "success", "unlimited"])
@@ -121,12 +120,3 @@ def test_each_followup_rerank_selects_from_its_own_candidates(monkeypatch):
     next_round = rerank_records("合成の追加質問", [child(2), child(3)], settings, enabled=True)
     assert [record.id for record in first] == ["0"]
     assert [record.id for record in next_round] == ["2"]
-
-
-def test_shared_reference_keeps_all_source_dependencies_in_one_group():
-    from dataclasses import replace
-
-    a, b, reference, other = child(0), child(1), child(2, source=0), child(3)
-    reference = replace(reference, metadata={"reference_expansion": {"from_chunk_uid": "uid:0", "from_chunk_uids": ["uid:0", "uid:1"]}})
-    assert select_reranked_candidates([a, b, reference, other], 2)[0] == [other]
-    assert select_reranked_candidates([a, b, reference, other], 3)[0] == [a, b, reference]

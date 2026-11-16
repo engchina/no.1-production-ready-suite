@@ -175,7 +175,7 @@ async def test_main_search_and_expansions_use_the_same_as_of(
         request, _SearchState(), retrieval_queries=["合成の手順"]
     )
 
-    ids = [child.chunk_uid for child in result.child_chunks]
+    ids = [child.chunk_uid for child in [*result.child_chunks, *result.expansion_chunks]]
     # 主検索の文書 B と、参照先の文書 B の節は、同じ基準日で同じに判定される。
     assert ("doc-b:cs-9:9" in ids) is effective
     assert ("doc-b:cs-9:0" in ids) is effective

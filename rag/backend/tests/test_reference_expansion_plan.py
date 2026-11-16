@@ -211,11 +211,12 @@ async def test_existing_anchor_dependency_is_retained_without_spending_supplemen
     )
     assert [row.chunk_uid for row in result.child_chunks] == ["a", "b"]
     assert state.reference_sources[0]["added_count"] == 0
-    assert result.child_chunks[1].metadata["reference_expansion"] == {
-        "from_chunk_uids": ["a"],
-        "keep_source_position": True,
-    }
-    assert select_reranked_candidates(result.child_chunks, 1)[0] == []
+    # 上位の起点にある参照先は拡張の chunk にせず、rerank の候補の印も付けない(#5162)。
+    assert result.expansion_chunks == []
+    assert state.chunks["b"].metadata["reference_from_chunk_ids"] == ["a"]
+    assert "reference_expansion" not in result.child_chunks[1].metadata
+    # 参照元・参照先を組にせず、候補の順で件数を選ぶ。
+    assert select_reranked_candidates(result.child_chunks, 1)[0] == [result.child_chunks[0]]
 
 
 def test_other_document_target_cache_is_bound_to_source_version() -> None:

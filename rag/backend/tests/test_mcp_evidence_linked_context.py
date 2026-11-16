@@ -1,10 +1,9 @@
-"""MCP の根拠の並びで、当たった chunk の章の参照の先・前後の文脈を、実体の拡張の根拠より
-先に確保する（#1390）。
+"""MCP の根拠の並びで、当たった chunk の章の参照の先・前後の文脈を上限の内に確保する（#1390）。
 
-#1362 の評価（D の実体のレシピあり・拡張 on）で、拡張の根拠（上限の 3 割）が質問と関係の
-薄い属性の chunk で枠を埋め、当たった chunk の章の参照の先・すぐ前の chunk が evidence_limit
-20 の外（20〜96 位）へ押された（``ir-room-booking-maintenance`` は共通の保守枠が 54 位で
-誤答）。評価の検索の結果（citations）の並びの形を、決定論の根拠の列で確かめる。
+#1362 の評価（D の実体のレシピあり・拡張 on）で、当たった chunk の章の参照の先・すぐ前の chunk が
+evidence_limit 20 の外（20〜96 位）へ押された（``ir-room-booking-maintenance`` は共通の保守枠が
+54 位で誤答）。評価の検索の結果（citations）の並びの形を、決定論の根拠の列で確かめる。
+検索拡張で足した根拠は evidence_limit に数えず、上限で切った後に合わせる（#5162）。
 """
 
 from __future__ import annotations
@@ -13,10 +12,11 @@ import json
 from typing import Any
 
 from app.mcp.tools import (
-    ENTITY_EXPANSION_LIMIT_SHARE,
+    EVIDENCE_EXPANSION_KEY,
     LINKED_CONTEXT_LIMIT_SHARE,
-    mcp_evidence_order,
+    mcp_evidence,
 )
+from app.mcp.tools import mcp_hit_order as mcp_evidence_order
 from app.rag.cross_references import REFERENCE_FROM_KEY, REFERENCE_LABEL_KEY, REFERENCE_RANK_KEY
 from app.rag.entity_expansion import ENTITY_EXPANSION_KEY, ENTITY_EXPANSION_ROLE
 from app.schemas.search import RetrievedChunk
@@ -39,6 +39,7 @@ def _chunk(
     section: str = "",
     targets: list[str] | None = None,
     expansion: bool = False,
+    added: bool = False,
     seed: str = "question",
     group: str | None = None,
 ) -> RetrievedChunk:
@@ -60,8 +61,10 @@ def _chunk(
             ],
             ensure_ascii=False,
         )
-    if expansion:
+    if expansion or added:
         metadata[ENTITY_EXPANSION_KEY] = {"entity": chunk_id, "hop": 1, "seed": seed}
+    if added:
+        metadata[EVIDENCE_EXPANSION_KEY] = True
     return RetrievedChunk(
         document_id=document,
         chunk_id=chunk_id,
@@ -101,7 +104,7 @@ def _room_booking_citations() -> list[RetrievedChunk]:
         ),
         _chunk("mt-title", "retrieved_anchor", document=MAINTENANCE, index=0, rank=3, section=plan),
     ]
-    # 関連度の低い拡張の根拠（rag_engine は位置を保たず、分数の順に並べた）。
+    # 並びにあって印だけを付けた拡張の根拠（関連度の順位のまま。上限に数える）。
     weak_expansions = [
         _chunk(
             f"weak-{name}",
@@ -166,7 +169,7 @@ def test_room_booking_keeps_the_referenced_chapter_inside_the_limit() -> None:
     assert "mt-ch2-common" in head
     # 当たった上位の chunk は動かない。
     assert head[:3] == ["ops-ch7", "mt-ch1", "mt-title"]
-    # 関連度の低い拡張の根拠は確保しない（関連度の順位のまま上限の外）。
+    # 印だけを付けた拡張の根拠は確保しない（関連度の順位のまま上限の外）。
     assert not [cid for cid in head if cid.startswith("weak-")]
     # 章の参照の先を、すぐ前・すぐ後の chunk より先に確保する。
     linked = [
@@ -176,33 +179,32 @@ def test_room_booking_keeps_the_referenced_chapter_inside_the_limit() -> None:
     assert len(ordered) == len(citations)
 
 
-def test_room_booking_still_reserves_a_relevant_expansion_after_the_linked_context() -> None:
-    """関連度の高い拡張の根拠（質問のシステムの台帳の行）は、章の参照の先と一緒に上限の内に残る。"""
+def test_room_booking_adds_the_expansion_outside_the_limit_after_the_linked_context() -> None:
+    """拡張で足した根拠（質問のシステムの台帳の行）は上限に数えず、上限で切った後に合わせる（#5162）。"""
     citations = _room_booking_citations()
     ledger_row = _chunk(
         "ledger-room-booking",
         ENTITY_EXPANSION_ROLE,
         document=LEDGER,
         index=6,
-        rank=45,
-        rerank=0.45,
-        expansion=True,
+        added=True,
         group="ledger-p1",
     )
-    # 台帳の行と同じ親の前後の文脈（同じ表の続き）。
+    # 台帳の行の前後の文脈（同じ表の続き）は、ほかの前後の文脈と同じく上限に数える。
     ledger_next = _chunk(
         "ledger-room-booking-next", "neighbor_context", document=LEDGER, index=7, group="ledger-p1"
     )
 
-    ordered = mcp_evidence_order([*citations, ledger_row, ledger_next], 20)
-    head = _ids(ordered[:20])
+    returned, omitted = mcp_evidence([*citations, ledger_row, ledger_next], 20)
+    ids = _ids(returned)
 
-    assert "mt-ch2-common" in head
-    assert "ledger-room-booking" in head
-    assert "ledger-room-booking-next" in head
-    # 章の参照の先（前後の文脈の枠）を先に、拡張の根拠（拡張の枠）を後に置く。
-    assert head.index("mt-ch2-common") < head.index("ledger-room-booking")
-    assert not [cid for cid in head if cid.startswith("weak-")]
+    assert len(ids) == 21
+    assert "mt-ch2-common" in ids[:20]
+    # 同じ文書の根拠が上限の内に無いので、最後に置く。
+    assert ids[-1] == "ledger-room-booking"
+    assert "ledger-room-booking-next" not in ids
+    assert omitted == len(citations) + 1 - 20
+    assert not [cid for cid in ids if cid.startswith("weak-")]
 
 
 def test_incoming_reference_and_previous_chunk_of_the_hit_are_reserved() -> None:
@@ -286,26 +288,9 @@ def test_linked_context_share_is_capped_and_other_documents_are_not_linked() -> 
     assert "other-doc" not in head
 
 
-def test_expansion_without_relevance_after_rerank_is_not_reserved_alone() -> None:
-    """rerank を実行した検索で、関連度の無い拡張の根拠（起点にならず前後の文脈に入った
-    もの）は単独では確保しない。rerank を実行しなかった検索では今までどおり確保する（#1362）。
-    """
-    hits = [
-        _chunk(f"hit-{rank}", "retrieved_anchor", document=f"doc-{rank}", index=0, rank=rank)
-        for rank in range(1, 24)
-    ]
-    stray = _chunk("stray-expansion", "neighbor_context", document=LEDGER, index=9, expansion=True)
-    scored = [hits[0].model_copy(update={"rerank_score": 0.9}), *hits[1:]]
-
-    assert "stray-expansion" not in _ids(mcp_evidence_order([*scored, stray], 20)[:20])
-    assert "stray-expansion" in _ids(mcp_evidence_order([*hits, stray], 20)[:20])
-    assert ENTITY_EXPANSION_LIMIT_SHARE == 0.3
-
-
-def test_expansion_from_top_chunk_entities_needs_hit_level_relevance() -> None:
-    """上位の chunk の実体から足した根拠（保守計画の章に並ぶ別のシステムの台帳の行など）は、検索で
-    当たった chunk と同じ程度の関連度が無ければ確保しない。質問の実体から足した根拠は低い関連度でも
-    確保する（橋渡しの行）。
+def test_added_expansions_are_returned_regardless_of_relevance_or_seed() -> None:
+    """拡張で足した根拠は rerank の関連度・起点の種類に関わらず返す（下限 0.24 / 0.28 / 0.45 と
+    3 割の枠は持たない。#5162）。
     """
     hits = [
         _chunk(f"hit-{rank}", "retrieved_anchor", document=f"doc-{rank}", index=0, rank=rank)
@@ -313,31 +298,16 @@ def test_expansion_from_top_chunk_entities_needs_hit_level_relevance() -> None:
     ]
     hits[0] = hits[0].model_copy(update={"rerank_score": 0.9})
     question_row = _chunk(
-        "ledger-named",
-        ENTITY_EXPANSION_ROLE,
-        document=LEDGER,
-        index=1,
-        rank=30,
-        rerank=0.3,
-        expansion=True,
-        group="ledger-a",
+        "ledger-named", ENTITY_EXPANSION_ROLE, document=LEDGER, index=1, added=True
     )
     chunk_row = _chunk(
-        "ledger-listed",
-        ENTITY_EXPANSION_ROLE,
-        document=LEDGER,
-        index=5,
-        rank=31,
-        rerank=0.4,
-        expansion=True,
-        seed="chunk",
-        group="ledger-b",
+        "ledger-listed", ENTITY_EXPANSION_ROLE, document=LEDGER, index=5, added=True, seed="chunk"
     )
 
-    head = _ids(mcp_evidence_order([*hits, question_row, chunk_row], 20)[:20])
+    returned, omitted = mcp_evidence([*hits, chunk_row, question_row], 20)
 
-    assert "ledger-named" in head
-    assert "ledger-listed" not in head
+    assert _ids(returned)[20:] == ["ledger-named", "ledger-listed"]
+    assert omitted == 3
 
 
 def _named(

@@ -1762,7 +1762,7 @@ def test_search_orders_used_then_anchors_then_context(
     assert body["evidence_omitted"] == 3
 
 
-def test_mcp_evidence_order_keeps_unranked_hits_and_unknown_roles() -> None:
+def test_mcp_evidence_keeps_unranked_hits_and_unknown_roles() -> None:
     """順位の無い当たり・役割の無い根拠は順位のある当たりの後ろで citations の順（#1348）。"""
     citations = [
         _chunk("context", evidence_role="neighbor_context"),
@@ -1771,7 +1771,7 @@ def test_mcp_evidence_order_keeps_unranked_hits_and_unknown_roles() -> None:
         _chunk("anchor-2", evidence_role="retrieved_anchor", evidence_retrieval_rank=2),
         _chunk("anchor-1", evidence_role="retrieved_anchor", evidence_retrieval_rank="1"),
     ]
-    assert [chunk.chunk_id for chunk in mcp_tools.mcp_evidence_order(citations)] == [
+    assert [chunk.chunk_id for chunk in mcp_tools.mcp_evidence(citations)[0]] == [
         "anchor-1",
         "anchor-2",
         "no-role",

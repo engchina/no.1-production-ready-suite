@@ -45,6 +45,7 @@ from rag_engine.resources.runtime import saved_prompt_overrides
 from rag_engine.resources.tracing import CallObservation, observe_call
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.evidence_selection import ARTICLE_UNIT_KEY
+from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, merge_expansions
 from rag_engine.retrieval.search_stages import (
     CANDIDATE_DIVERSITY_STAGE,
     CONTEXT_SIBLINGS_STAGE,
@@ -166,8 +167,6 @@ _REFERENCE_EXTENDED_ANCHORS = 20
 _REFERENCE_CHUNKS_PER_TARGET = 2
 # 検索の基準日の条件の名前(文書の有効期間をこの日で判定する。YYYY-MM-DD)。
 AS_OF_FILTER_KEY = "as_of"
-# 交差参照: 参照先の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
-_REFERENCE_SCORE_DECAY = 0.5
 # 交差参照: 他の文書への参照で、文書名・タイトルが合う文書を探す行の上限(文書とタイトルの組)。
 _REFERENCE_DOCUMENT_CANDIDATES = 20
 # 交差参照: 文書名だけの参照(「定期保守計画で確かめます」。#1400)の参照先の文書から、質問で
@@ -178,18 +177,12 @@ _DOCUMENT_REFERENCE_CANDIDATES = 8
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
 # 診断に出す交差参照の起点の記録の、検索の回数の上限(要求ごとの再検索)。
 _REFERENCE_DIAGNOSTICS_SEARCHES = 4
-# 実体の 1 段の拡張(#1362)で足した chunk を置く候補の位置(先頭からこの件数の後ろ)。rag_engine は
-# この chunk を rerank で並べ替えず(位置を保つ)、文書の選択で後回しにしない。
-_ENTITY_INSERT_AFTER = 3
-# 実体の拡張の chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
-_ENTITY_SCORE_DECAY = 0.5
-# 関係情報(#2055)で足した chunk を置く候補の位置(先頭からこの件数の後ろ。実体の拡張の後)。
-# 位置は rerank が決め直す(実体の拡張と違い、位置を保つ枠は持たない)。
-_GRAPH_INSERT_AFTER = 5
-# 関係情報で足した chunk の RRF の点(起点の点に掛ける。rerank が無効なときの並びに使う)。
-_GRAPH_SCORE_DECAY = 0.5
 # 診断に出す、関係情報で使った entity の数の上限。
 _GRAPH_DIAGNOSTICS_ENTITIES = 10
+# 検索拡張の工程の記録の「最終採用」(#5162)。
+_EXPANSION_ADOPTION_NOTE = "rerank にかけず、rerank と起点の選択の後に最後の根拠へ合わせます。"
+# 検索拡張で最後の根拠の並びに足した根拠の引用の印(#5162)。MCP は evidence_limit に数えない。
+EVIDENCE_EXPANSION_KEY = "evidence_expansion"
 
 # 回答の記録の工程(execution_steps)に残す、工程の中の SQL の計測値(#1490。DbCallStats.snapshot)。
 _STEP_DB_METRIC_KEYS = frozenset(
@@ -515,20 +508,12 @@ def build_engine_settings(
         "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
         "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),
         "RAG_ENGINE_RERANK_TOP_N": str(settings.rag_rerank_top_n),
+        # rerank の入力の経路ごとの上限。検索拡張の chunk は rerank の候補に入らない(#5162)。
         "RAG_ENGINE_RETRIEVAL_STAGE_LIMITS": json.dumps(
             {
                 "fusion": settings.rag_retrieval_candidate_limit,
                 "diversity": settings.rag_candidate_diversity_max_extra
                 if settings.rag_candidate_diversity_depth > 0
-                else 0,
-                "reference": settings.rag_reference_expansion_max_chunks
-                if settings.rag_reference_expansion_enabled
-                else 0,
-                "entity": settings.rag_entity_expansion_max_chunks
-                if settings.rag_entity_expansion_enabled
-                else 0,
-                "structure": settings.rag_graph_expansion_max_chunks
-                if settings.rag_graph_expansion_enabled
                 else 0,
             }
         ),
@@ -889,11 +874,15 @@ class AnswerEngine:
         回答の検索(``_search``)を原質問 1 本で呼ぶ。質問の理解・rerank・回答の
         生成は行わず、LLM を呼ばない(embedding と Oracle の検索だけ)。KB の検索テストとレシピの
         検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
+
+        検索拡張(参照先・実体・関係情報)は回答と同じく行い、上位 ``top_k`` 件の候補の後に回答と
+        同じ規則(``rag_engine.retrieval.expansion_merge``)で合わせる(#5162)。拡張の根拠は
+        ``top_k`` に数えず、``evidence_expansion`` の印を付ける。
         """
         state = _SearchState(
             degraded=self._degraded if self._degraded is not None else DegradedSteps()
         )
-        # 主検索と同じ基準日で読む(#2602。この経路は拡張しないが、条件の決め方をそろえる)。
+        # 主検索と同じ基準日で読む(#2602)。
         request = _with_effective_as_of(request, self._settings.rag_answer_as_of)
         with read_lobs_as_values():
             result = await self._search(
@@ -901,14 +890,28 @@ class AnswerEngine:
                 state,
                 retrieval_queries=[request.query],
                 candidate_limit=max(1, int(request.top_k)),
-                # 検索だけの結果は上位 top_k 件の候補なので、交差参照の chunk は足さない(#1280)。
-                expand_references=False,
             )
-        return [
-            state.chunks[child.chunk_uid]
-            for child in result.child_chunks
-            if child.chunk_uid in state.chunks
-        ]
+        merged = merge_expansions(
+            list(result.child_chunks),
+            list(result.expansion_chunks),
+            key=lambda child: str(child.chunk_uid),
+            document=lambda child: str(child.metadata.get("document_id") or ""),
+            seq=lambda child: int(child.chunk_seq or 0),
+        )
+        added = {child.chunk_uid for child in result.expansion_chunks} - {
+            child.chunk_uid for child in result.child_chunks
+        }
+        chunks: list[RetrievedChunk] = []
+        for child in merged:
+            chunk = state.chunks.get(child.chunk_uid)
+            if chunk is None:
+                continue
+            if child.chunk_uid in added:
+                chunk = chunk.model_copy(
+                    update={"metadata": {**chunk.metadata, EVIDENCE_EXPANSION_KEY: True}}
+                )
+            chunks.append(chunk)
+        return chunks
 
     def _answer_sync(
         self,
@@ -1365,9 +1368,9 @@ class AnswerEngine:
         ]
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
-        # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
-        # 参照先が起点より下位の候補・前後の文脈(siblings)にあるときも、起点の直後へ移す(#1400。
-        # 前後の文脈は rerank にかからず、下位の候補は文脈に入らないため)。上位の起点はそのまま。
+        # 上位の候補が本文で参照する節の chunk(#1280)。rerank の候補には入れず、最後の根拠の並びへ
+        # 合わせる(#5162)。参照先が下位の候補・前後の文脈(siblings)にあっても候補の位置は動かさず、
+        # 並びに残ればそのまま印を付け、残らなければ拡張の根拠として足す。上位の起点は足さない。
         # 起点は統合の上位 5 件と、その外で回答の文脈に入りうる上位(top_k)の参照を持つ候補(#1549)。
         source_ids = {chunk.chunk_id for chunk in anchors[:_REFERENCE_SOURCE_ANCHORS]}
         references: dict[str, list[RetrievedChunk]] = {}
@@ -1430,7 +1433,7 @@ class AnswerEngine:
                                 "同点は検索順位です。"
                             ),
                             "回答内の縮退記録（累計）": state.degraded_steps(),
-                            "最終採用": "返却候補です。回答文脈への採用は後段で決まります。",
+                            "最終採用": _EXPANSION_ADOPTION_NOTE,
                         }
                     )
         anchors = [state.chunks.get(chunk.chunk_id, chunk) for chunk in anchors]
@@ -1475,7 +1478,7 @@ class AnswerEngine:
                             "返した候補": _trace_chunks(entity_chunks),
                             "返した固有 Chunk 数": len({item.chunk_id for item in entity_chunks}),
                             "回答内の縮退記録（累計）": state.degraded_steps(),
-                            "最終採用": "返却候補です。回答文脈への採用は後段で決まります。",
+                            "最終採用": _EXPANSION_ADOPTION_NOTE,
                         }
                     )
         entity_ids = {chunk.chunk_id for chunk in entity_chunks}
@@ -1534,7 +1537,7 @@ class AnswerEngine:
                                 state.graph_attempts.values()
                             ),
                             "回答内の縮退記録（累計）": state.degraded_steps(),
-                            "最終採用": "返却候補です。回答文脈への採用は後段で決まります。",
+                            "最終採用": _EXPANSION_ADOPTION_NOTE,
                         }
                     )
         if self._attach_images and not defer_context:
@@ -1551,66 +1554,38 @@ class AnswerEngine:
         added = [*referenced, *entity_chunks, *graph_chunks]
         evidence = [*anchors, *siblings, *added]
         _require_projected_vision_chunks([*evidence, *self._attachment_chunks])
+        # rerank の候補は検索の候補だけ。検索拡張(参照先・実体・関係情報)の chunk は候補に入れず、
+        # rerank・下限・起点の選択の後に最後の根拠の並びへ合わせる(#5162。expansion_chunks)。
         children = []
         for chunk in anchors:
-            if chunk.chunk_id in entity_ids:
-                # 実体の拡張で足す chunk は、拡張の位置に置く(下)。
-                continue
-            if chunk.chunk_id in promoted:
-                # 参照先として起点の直後へ移した候補は、元の位置に置かない。
-                continue
-            children.append(
-                _stored_child(
-                    chunk,
-                    rrf_score=fused.get(chunk.chunk_id, 0.0),
+            child = _stored_child(
+                chunk,
+                rrf_score=fused.get(chunk.chunk_id, 0.0),
+                retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
+            )
+            child.metadata["retrieval_admission_stage"] = (
+                "fusion" if chunk.chunk_id in fusion_ids else "diversity"
+            )
+            children.append(child)
+        expansions: dict[str, Any] = {}
+        for stage, chunks in (
+            ("reference", referenced),
+            ("entity", entity_chunks),
+            ("structure", graph_chunks),
+        ):
+            for chunk in chunks:
+                if chunk.chunk_id in expansions:
+                    continue
+                stored = _stored_child(
+                    state.chunks.get(chunk.chunk_id, chunk),
+                    rrf_score=0.0,
                     retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
-            )
-            children.extend(
-                _stored_child(
-                    reference,
-                    rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
-                    retrieval_channels=state.retrieval_channels.get(reference.chunk_id),
-                )
-                for reference in references.get(chunk.chunk_id, ())
-                if reference.chunk_id not in entity_ids
-            )
-        if entity_chunks:
-            insert_at = min(len(children), _ENTITY_INSERT_AFTER)
-            base_score = fused.get(anchors[0].chunk_id, 0.0) if anchors else 0.0
-            children[insert_at:insert_at] = [
-                _stored_child(
-                    chunk,
-                    rrf_score=base_score * _ENTITY_SCORE_DECAY,
-                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
-                )
-                for chunk in entity_chunks
-            ]
-        if graph_chunks:
-            insert_at = min(len(children), _GRAPH_INSERT_AFTER + len(entity_chunks))
-            base_score = fused.get(anchors[0].chunk_id, 0.0) if anchors else 0.0
-            children[insert_at:insert_at] = [
-                _stored_child(
-                    chunk,
-                    rrf_score=base_score * _GRAPH_SCORE_DECAY,
-                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
-                )
-                for chunk in graph_chunks
-            ]
-        for child in children:
-            stage = (
-                "reference"
-                if child.chunk_uid in promoted
-                else "entity"
-                if child.chunk_uid in entity_ids
-                else "structure"
-                if child.chunk_uid in {chunk.chunk_id for chunk in graph_chunks}
-                else "fusion"
-                if child.chunk_uid in fusion_ids
-                else "diversity"
-            )
-            child.metadata["retrieval_admission_stage"] = stage
+                stored.metadata["retrieval_admission_stage"] = stage
+                expansions[chunk.chunk_id] = stored
         all_children = {chunk.chunk_uid: chunk for chunk in children}
+        for uid, stored in expansions.items():
+            all_children.setdefault(uid, stored)
         for sibling in siblings:
             all_children.setdefault(
                 sibling.chunk_id,
@@ -1637,6 +1612,9 @@ class AnswerEngine:
         all_children = {
             uid: _with_context_scope(child, context_scope) for uid, child in all_children.items()
         }
+        expansion_children = [
+            _with_context_scope(child, context_scope) for child in expansions.values()
+        ]
         parents = [] if defer_context else _stored_parents(list(all_children.values()), state)
         state.retrieval_stages.append(
             {
@@ -1658,11 +1636,14 @@ class AnswerEngine:
                 ],
                 "base_limit": candidate_limit,
                 "selected_ids": [child.chunk_uid for child in children],
+                "expansion_ids": [child.chunk_uid for child in expansion_children],
                 "context_deferred": defer_context,
             }
         )
         return HybridSearchResult(
-            child_chunks=children, all_chunks=[*all_children.values(), *parents]
+            child_chunks=children,
+            all_chunks=[*all_children.values(), *parents],
+            expansion_chunks=expansion_children,
         )
 
     async def _context_chunks(
@@ -3754,18 +3735,16 @@ def _stored_child(
     if element_ids := chunk_element_ids(chunk.metadata):
         # 解析の要素の ID。複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめる(#1331)。
         metadata["element_ids"] = element_ids
+    # 検索拡張で足した chunk の印(#5162)。rag_engine は rerank にかけず、最後の根拠の並びへ合わせる
+    # とき(rag_engine.retrieval.expansion_merge)に足した理由として残す。
     if isinstance(expansion := chunk.metadata.get(ENTITY_EXPANSION_KEY), dict):
-        # 実体の 1 段の拡張で足した chunk(#1362)。rag_engine は rerank で位置を変えず、文書の選択で
-        # 後回しにせず、文脈の親の枠を確保する。
+        # 実体の 1 段の拡張で足した chunk(#1362)。
         metadata["entity_expansion"] = dict(expansion)
     if isinstance(graph := chunk.metadata.get(GRAPH_EXPANSION_KEY), dict):
-        # 関係情報で足した chunk(#2055)。rag_engine は他の候補と同じく rerank で並べる(足した理由を
-        # 回答の記録の根拠に残すだけ)。
+        # 関係情報で足した chunk(#2055)。
         metadata[GRAPH_EXPANSION_KEY] = dict(graph)
     if source := str(chunk.metadata.get(REFERENCE_FROM_KEY) or ""):
-        # 交差参照で足した参照先(#1280・#1400)。rag_engine は rerank の後に参照元の直後へ置き、
-        # 文書の選択で後回しにしない(質問で並べると橋渡しの参照先が下がり、文脈に入らなかった。
-        # #1549)。
+        # 交差参照で足した参照先(#1280・#1400)。
         rank = chunk.metadata.get(REFERENCE_RANK_KEY)
         source_ids = chunk.metadata.get("reference_from_chunk_ids")
         metadata["reference_expansion"] = {
@@ -3777,11 +3756,6 @@ def _stored_child(
             ),
             "label": str(chunk.metadata.get(REFERENCE_LABEL_KEY) or ""),
             **({"rank": rank} if isinstance(rank, int) else {}),
-        }
-    elif isinstance(chunk.metadata.get("reference_from_chunk_ids"), list):
-        metadata["reference_expansion"] = {
-            "from_chunk_uids": chunk.metadata["reference_from_chunk_ids"],
-            "keep_source_position": True,
         }
     if is_attachment_chunk(chunk.metadata):
         # 会話の添付から選んだ箇所(#2517)。rag_engine は文書の選択で後回しにせず、文書ごとの
@@ -4263,6 +4237,12 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         }:
             # 実体の 1 段の拡張で足した chunk は、検索で当たった chunk と分ける(#1362)。
             metadata["evidence_role"] = ENTITY_EXPANSION_ROLE
+        if evidence["reason"] == EXPANSION_EVIDENCE_REASON and evidence["role"] in {
+            "retrieved_anchor",
+            "",
+        }:
+            # 検索拡張で最後の根拠の並びに足した根拠(#5162)。MCP の evidence_limit に数えない。
+            metadata[EVIDENCE_EXPANSION_KEY] = True
         if retrieval_rank > 0:
             # MCP の根拠は当たった子を関連度の順に先にする（画面の並びは変えない。#1348）。
             metadata["evidence_retrieval_rank"] = retrieval_rank

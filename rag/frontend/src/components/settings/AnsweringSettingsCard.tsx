@@ -250,7 +250,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             disabled={disabled} onChange={(checked) => update({ entity_expansion_enabled: checked })} />
           {form.entity_expansion_enabled ? <FormGrid className="px-3 pb-3">
             <SelectField id="answering-entity_expansion_max_chunks" label={t("settings.answering.entity_expansion_max_chunks")} width="xs"
-              value={String(form.entity_expansion_max_chunks)} disabled={disabled} options={Array.from({ length: 20 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
+              value={String(form.entity_expansion_max_chunks)} disabled={disabled} options={Array.from({ length: 10 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
               onValueChange={(value) => update({ entity_expansion_max_chunks: Number(value) })} />
           </FormGrid> : null}
         </div>

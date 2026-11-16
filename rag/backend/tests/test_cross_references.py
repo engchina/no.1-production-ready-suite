@@ -13,7 +13,12 @@ from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_parser_core.language import FIELD_SPECS, builtin_pack, resolve, set_default_pack
 
 from app.config import Settings
-from app.rag.answer_engine import AnswerEngine, _outcome_from_result, _SearchState
+from app.rag.answer_engine import (
+    EVIDENCE_EXPANSION_KEY,
+    AnswerEngine,
+    _outcome_from_result,
+    _SearchState,
+)
 from app.rag.chunking import Chunk
 from app.rag.cross_references import (
     MAX_REFERENCES_PER_CHUNK,
@@ -828,6 +833,18 @@ def _engine(
     )
 
 
+def _order(result: Any) -> list[str]:
+    """rerank の候補(検索の候補)の後に、候補に無い検索拡張の chunk を足した並び(#5162)。
+
+    検索拡張の chunk は rerank の候補に入れず、``expansion_chunks`` で rag_engine へ渡す。
+    """
+    children = [child.chunk_uid for child in result.child_chunks]
+    return [
+        *children,
+        *(child.chunk_uid for child in result.expansion_chunks if child.chunk_uid not in children),
+    ]
+
+
 def _section_chunks(count: int, *, chunk_set_id: str = "cs-1") -> list[RetrievedChunk]:
     return [
         _retrieved(
@@ -858,13 +875,17 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
         retrieval_queries=["承認の条件"],
     )
 
-    order = [child.chunk_uid for child in result.child_chunks]
-    # 参照先の節の先頭から 2 件を、参照元の直後に置く(rerank が無効でも根拠に入る)。
-    assert order == ["doc-1:a", "doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:b"]
-    child = result.child_chunks[1]
-    assert child.metadata["rrf_score"] == pytest.approx(
-        result.child_chunks[0].metadata["rrf_score"] * 0.5
-    )
+    # 参照先の節の先頭から 2 件を、rerank の候補に入れずに検索拡張の chunk として渡す(#5162)。
+    assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a", "doc-1:b"]
+    assert [child.chunk_uid for child in result.expansion_chunks] == [
+        "doc-1:cs-1:s0",
+        "doc-1:cs-1:s1",
+    ]
+    assert {child.metadata["retrieval_admission_stage"] for child in result.expansion_chunks} == {
+        "reference"
+    }
+    # 拡張の chunk の本文も文脈の組み立て(all_chunks)に渡す。
+    assert {"doc-1:cs-1:s0", "doc-1:cs-1:s1"} <= {chunk.chunk_uid for chunk in result.all_chunks}
     # 参照先は参照元と同じ版から読み、明示した文書名・分類も残す。
     (call,) = oracle.reference_calls
     assert call["chunk_set_id"] == "cs-1"
@@ -913,18 +934,34 @@ async def test_search_reference_expansion_respects_budget_and_caches_targets() -
     ]
 
 
-async def test_search_skips_reference_expansion_when_disabled_or_search_only() -> None:
+async def test_search_skips_reference_expansion_when_disabled_and_search_only_expands() -> None:
     anchor = _retrieved("doc-1:a", "第3章を参照。", "第1章 総則", targets=[CHAPTER3])
     oracle = ReferenceOracle([anchor], _section_chunks(2))
 
     disabled = await _engine(oracle, rag_reference_expansion_enabled=False)._search(
         SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
     )
-    retrieved = await _engine(oracle).retrieve(SearchRequest(query="q", top_k=1))
-
-    assert [child.chunk_uid for child in disabled.child_chunks] == ["doc-1:a"]
-    assert [chunk.chunk_id for chunk in retrieved] == ["doc-1:a"]
+    assert _order(disabled) == ["doc-1:a"]
     assert oracle.reference_calls == []
+
+    # 検索だけ(KB の検索テスト・レシピの検索比較)も回答と同じく拡張し、top_k に数えずに
+    # 同じ規則で合わせる(同じ文書の chunk の順。#5162)。
+    def indexed(chunk: RetrievedChunk, index: int) -> RetrievedChunk:
+        return chunk.model_copy(update={"metadata": {**chunk.metadata, "chunk_index": index}})
+
+    sections = [indexed(chunk, 5 + n) for n, chunk in enumerate(_section_chunks(2))]
+    oracle = ReferenceOracle([indexed(anchor, 1)], sections)
+    retrieved = await _engine(oracle).retrieve(SearchRequest(query="q", top_k=1))
+    assert [chunk.chunk_id for chunk in retrieved] == ["doc-1:a", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
+    assert [chunk.metadata.get(EVIDENCE_EXPANSION_KEY) for chunk in retrieved] == [
+        None,
+        True,
+        True,
+    ]
+    # 番号が起点より小さい参照先は、同じ文書の最小の根拠の前に置く。
+    oracle = ReferenceOracle([indexed(anchor, 9)], sections)
+    retrieved = await _engine(oracle).retrieve(SearchRequest(query="q", top_k=1))
+    assert [chunk.chunk_id for chunk in retrieved] == ["doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:a"]
 
 
 async def test_search_continues_when_reference_target_cannot_be_read() -> None:
@@ -982,7 +1019,7 @@ async def test_search_resolves_other_document_reference_within_scope(
         retrieval_queries=["q"],
     )
 
-    assert [child.chunk_uid for child in result.child_chunks] == (
+    assert _order(result) == (
         ["doc-1:a"]
         if ambiguous_version
         else [
@@ -1046,12 +1083,12 @@ async def test_search_matches_other_document_titles_in_one_read() -> None:
         oracle = ReferenceOracle([first, second], manual)
         oracle.fail_batch = fail_batch
         result = await _engine(oracle)._search(request, _SearchState(), retrieval_queries=["q"])
-        return [child.chunk_uid for child in result.child_chunks], oracle
+        return _order(result), oracle
 
     batched, oracle = await search(fail_batch=False)
     one_by_one, fallback = await search(fail_batch=True)
 
-    assert batched == one_by_one == ["doc-1:a", "doc-2:cs-9:0", "doc-1:b", "doc-3:cs-7:0"]
+    assert batched == one_by_one == ["doc-1:a", "doc-1:b", "doc-2:cs-9:0", "doc-3:cs-7:0"]
     assert oracle.document_batch_calls == [
         {"filters": {"knowledge_base_id": "kb-1"}, "titles": ["経費精算マニュアル", "出張旅費規程"]}
     ]
@@ -1095,15 +1132,14 @@ async def test_search_resolves_references_of_chunks_without_ingest_targets() -> 
         retrieval_queries=["q"],
     )
 
-    order = [child.chunk_uid for child in result.child_chunks]
     # 共有参照先は同じ2件を再利用し、起点ごとに別の残りを補充しない。
-    assert order == [
+    assert _order(result) == [
         "doc-1:a",
-        "doc-1:cs-1:s0",
-        "doc-1:cs-1:s1",
         "doc-1:b",
         "doc-1:c",
         "doc-1:d",
+        "doc-1:cs-1:s0",
+        "doc-1:cs-1:s1",
     ]
     # 見出しの列は文書と版(chunk_set)ごとに 1 回だけ、検索と同じ範囲(KB)で読む。取込で解決済みの
     # 印(空の列)のある chunk と、参照の無い chunk では読まない。
@@ -1220,7 +1256,7 @@ async def test_multi_hop_common_window_reference_reaches_chapter_two(resolved_at
         retrieval_queries=["保守枠"],
     )
 
-    context = "\n".join(child.text for child in result.child_chunks)
+    context = "\n".join(child.text for child in [*result.child_chunks, *result.expansion_chunks])
     cases = _common_window_cases()
     assert {case["id"] for case in cases} >= {"br-budget-change-window", "br-sales-change-window"}
     for case in cases:
@@ -1460,10 +1496,9 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
         retrieval_queries=[case["query"]],
     )
 
-    order = [child.chunk_uid for child in result.child_chunks]
-    # 参照先の文書の質問に関連の高い 2 件を、参照元の直後に置く(第 3 章の保守枠の変更は足さない)。
-    assert order == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
-    context = "\n".join(child.text for child in result.child_chunks)
+    # 参照先の文書の質問に関連の高い 2 件を足す(第 3 章の保守枠の変更は足さない)。
+    assert _order(result) == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
+    context = "\n".join(child.text for child in [*result.child_chunks, *result.expansion_chunks])
     evidence = [
         item
         for item in case["required_evidence"]
@@ -1556,7 +1591,7 @@ async def test_document_name_reference_keeps_search_order_without_rerank(mode: s
         retrieval_queries=["q"],
     )
 
-    assert [child.chunk_uid for child in result.child_chunks] == [
+    assert _order(result) == [
         window.chunk_id,
         "doc-plan:cs-plan:0",
         "doc-plan:cs-plan:1",
@@ -1564,11 +1599,11 @@ async def test_document_name_reference_keeps_search_order_without_rerank(mode: s
     assert len(genai.rerank_calls) == (0 if mode == "disabled" else 1)
 
 
-async def test_reference_target_in_lower_candidates_moves_after_citing_anchor() -> None:
-    """参照先が起点より下位の候補にあるときは、起点の直後へ移す(元の位置には置かない。#1400)。
+async def test_reference_target_in_lower_candidates_stays_and_is_also_an_expansion() -> None:
+    """参照先が起点より下位の候補にあるときは、候補の位置を動かさず検索拡張の chunk にも入れる。
 
-    回答の検索は候補が多い(既定 150)ため、小さなナレッジベースでは参照先がすでに下位の候補や
-    前後の文脈にあり、足せる chunk が無かった(参照が辿られなかった)。上位の起点は動かさない。
+    rag_engine は rerank の後の並びに残れば印だけを付け、残らなければ拡張の根拠として足す(#5162)。
+    上位 5 件の起点の中にある参照先は足さない。
     """
     anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
     others = [_retrieved(f"doc-1:o{n}", "精算の概要。", "第1章 総則") for n in range(4)]
@@ -1578,15 +1613,17 @@ async def test_reference_target_in_lower_candidates_moves_after_citing_anchor() 
 
     result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
 
-    order = [child.chunk_uid for child in result.child_chunks]
-    assert order == [
+    assert [child.chunk_uid for child in result.child_chunks] == [
         "doc-1:a",
-        "doc-1:cs-1:s0",
-        "doc-1:cs-1:s1",
         "doc-1:o0",
         "doc-1:o1",
         "doc-1:o2",
         "doc-1:o3",
+        "doc-1:cs-1:s1",
+    ]
+    assert [child.chunk_uid for child in result.expansion_chunks] == [
+        "doc-1:cs-1:s0",
+        "doc-1:cs-1:s1",
     ]
     assert state.chunks["doc-1:cs-1:s1"].metadata[REFERENCE_FROM_KEY] == "doc-1:a"
 
@@ -1597,13 +1634,13 @@ async def test_reference_target_in_lower_candidates_moves_after_citing_anchor() 
     )
     assert [child.chunk_uid for child in result.child_chunks] == [
         "doc-1:a",
-        "doc-1:cs-1:s0",
         "doc-1:cs-1:s1",
         "doc-1:o0",
         "doc-1:o1",
         "doc-1:o2",
         "doc-1:o3",
     ]
+    assert [child.chunk_uid for child in result.expansion_chunks] == ["doc-1:cs-1:s0"]
 
 
 def _sources(search: dict[str, object]) -> list[dict[str, Any]]:
@@ -1655,7 +1692,7 @@ async def test_document_name_reference_outside_top_five_is_followed(
         retrieval_queries=[case["query"]],
     )
 
-    order = [child.chunk_uid for child in result.child_chunks]
+    order = _order(result)
     assert order[:7] == [chunk.chunk_id for chunk in others]
     (search,) = state.reference_sources
     assert search["top_sources"] == 5
@@ -1666,15 +1703,15 @@ async def test_document_name_reference_outside_top_five_is_followed(
     assert source["rrf_score"] > 0
     assert {"label": "定期保守計画", "kind": "document"} in source["targets"]
     if followed:
-        # 参照先の文書の質問に関連の高い 2 件を、起点の直後に置く(上位 5 件の起点と同じ)。
+        # 参照先の文書の質問に関連の高い 2 件を足す(上位 5 件の起点と同じ)。
         assert order[7:] == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
         assert source["outcome"] == "added"
         assert "available" in source["target_outcomes"]
         assert search["added_count"] == 2
         assert {item["from_fused_rank"] for item in state.reference_expansions.values()} == {8}
         assert state.chunks["doc-plan:cs-plan:1"].metadata[REFERENCE_FROM_KEY] == window.chunk_id
-        # rag_engine へは参照元の印を渡す(rerank の後に参照元の直後へ置く。#1549)。
-        assert result.child_chunks[8].metadata["reference_expansion"] == {
+        # rag_engine へは参照元の印を渡す(足した理由。#5162)。
+        assert result.expansion_chunks[0].metadata["reference_expansion"] == {
             "from_chunk_uid": window.chunk_id,
             "label": "定期保守計画",
             "rank": 1,
@@ -1753,9 +1790,8 @@ async def test_document_name_reference_adds_sentence_citing_selected_section() -
         retrieval_queries=[case["query"]],
     )
 
-    order = [child.chunk_uid for child in result.child_chunks]
     # 関連の高い 2 件(第 2 章・第 3 章)の後に、第 2 章を参照する第 1 章を置く。
-    assert order == [
+    assert _order(result) == [
         window.chunk_id,
         "doc-plan:cs-plan:1",
         "doc-plan:cs-plan:2",
@@ -1772,7 +1808,7 @@ async def test_document_name_reference_adds_sentence_citing_selected_section() -
         retrieval_queries=[case["query"]],
     )
     # 条件文も必要な依存なので、2件の予算で切り離さない。
-    assert [child.chunk_uid for child in result.child_chunks] == [window.chunk_id]
+    assert _order(result) == [window.chunk_id]
     assert limited.reference_sources[0]["unsatisfied_sources"] == 1
 
 
@@ -1798,12 +1834,11 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
 
     result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
 
-    order = [child.chunk_uid for child in result.child_chunks]
-    assert order[5:] == [
+    assert _order(result)[5:] == [
         "doc-1:cs-1:s0",
+        "doc-1:f",
         "doc-1:cs-1:x0",
         "doc-1:cs-1:x1",
-        "doc-1:f",
         "doc-1:cs-1:s1",
     ]
     (search,) = state.reference_sources
@@ -1820,8 +1855,7 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
 
     result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
 
-    order = [child.chunk_uid for child in result.child_chunks]
-    assert order[5:] == ["doc-1:f", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
+    assert _order(result)[5:] == ["doc-1:f", "doc-1:cs-1:s0", "doc-1:cs-1:s1"]
     (search,) = state.reference_sources
     assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
         (6, "added"),

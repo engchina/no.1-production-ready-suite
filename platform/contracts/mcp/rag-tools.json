@@ -4245,7 +4245,7 @@
             "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
           },
           "evidence": {
-            "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。回答は作らないので used_in_answer は false。",
+            "description": "検索で当たった根拠（role=retrieved_anchor・entity_expansion。関連度＝rerank の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。検索の拡張で加えた根拠はevidence_limit に数えず、同じ文書の根拠があればその文書の中の順の位置に、無ければ最後に置く。回答は作らないので used_in_answer は false。",
             "items": {
               "$ref": "#/$defs/RagEvidence"
             },
@@ -5880,7 +5880,7 @@
             "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
           },
           "evidence": {
-            "description": "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。",
+            "description": "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、前後の文脈（neighbor_context など）の順。検索の拡張で加えた根拠は evidence_limit に数えず、同じ文書の根拠があればその文書の中の順の位置に、無ければ最後に置く。",
             "items": {
               "$ref": "#/$defs/RagEvidence"
             },

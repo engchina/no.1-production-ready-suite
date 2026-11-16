@@ -17,8 +17,6 @@ from collections.abc import Sequence
 from typing import Any
 
 from .attachment_evidence import is_attachment_evidence
-from .entity_expansion import is_reserved_entity_expansion
-from .reference_follow import reference_source_uids
 from .rerank_scores import rerank_score
 from .text_search_tokenizer import TextSearchTokenizerConfig, content_term_set
 
@@ -41,15 +39,10 @@ def validate_slot_ratio(value: Any) -> tuple[int, int]:
 def keeps_position(record: Any) -> bool:
     """枠と MMR の対象にせず、rerank の工程が決めた位置に残す候補か。
 
-    会話の添付・実体の拡張で確保した枠・交差参照の参照先は、rerank の点数や検索の順位で
-    動かさない規則がある候補。rerank の点数が無い候補は合格点を通っていないので、検索の順位で前へ出さない。
+    会話の添付は、rerank の点数や検索の順位で動かさない規則がある候補。rerank の点数が無い候補は合格点を
+    通っていないので、検索の順位で前へ出さない（検索拡張の根拠は rerank の候補に入らない。#5162）。
     """
-    return (
-        rerank_score(record) is None
-        or is_attachment_evidence(record)
-        or is_reserved_entity_expansion(record)
-        or bool(reference_source_uids(record))
-    )
+    return rerank_score(record) is None or is_attachment_evidence(record)
 
 
 def _term_masks(terms: Sequence[frozenset[str]]) -> list[int]:

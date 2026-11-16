@@ -3540,6 +3540,25 @@ def test_answering_settings_rejects_invalid_values() -> None:
     )
 
 
+@pytest.mark.parametrize("value", [0, 11])
+def test_answering_settings_reject_entity_expansion_limit_outside_one_to_ten(value: int) -> None:
+    """実体の拡張の上限は 1〜10(#5097)。範囲外は 422 で、互換の読み替えはしない。"""
+    response = client.patch("/api/settings/answering", json={"entity_expansion_max_chunks": value})
+    assert response.status_code == 422
+
+
+def test_evaluation_overrides_accept_entity_expansion_limit_only_within_one_to_ten() -> None:
+    """品質評価の rag_overrides の実体の拡張の上限も 1〜10(#5097)。"""
+    from pydantic import ValidationError
+
+    from app.schemas.evaluation import EvaluationRagOverrides
+
+    assert EvaluationRagOverrides(entity_expansion_max_chunks=10).entity_expansion_max_chunks == 10
+    for value in (0, 11):
+        with pytest.raises(ValidationError):
+            EvaluationRagOverrides(entity_expansion_max_chunks=value)
+
+
 class _MissingBucketError(Exception):
     """OCI SDK の ServiceError と同じ属性を持つ（HeadBucket の 404 BucketNotFound）。"""
 

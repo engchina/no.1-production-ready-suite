@@ -121,6 +121,8 @@ class AnswerContext:
     candidate_count: int = 0
     deferred_records: tuple[AnswerRecord, ...] = ()
     document_selection: dict[str, Any] = field(default_factory=dict)
+    # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。rerank にかけず、context を作るたびに最後の根拠の並びへ合わせる。
+    expansion_candidates: tuple[AnswerRecord, ...] = ()
 
 
 @dataclass(frozen=True)

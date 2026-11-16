@@ -113,7 +113,6 @@ from rag_engine.generation.answer_records import (
     _bool_metadata_value,
     _chunk_answer_record,
     _context_neighbors,
-    _keep_entity_expansion_positions,
     _merge_text_rerank_candidates,
     _preferred_chunk_records,
     _records_by_rerank_ranks,
@@ -123,7 +122,6 @@ from rag_engine.generation.answer_records import (
     _search_terms_for_queries,
     _split_text_rerank_candidates,
     _stored_chunk_answer_record,
-    is_reserved_entity_expansion,
     load_answer_records,
     preferred_records,
     rank_records,
@@ -215,7 +213,6 @@ from rag_engine.retrieval.guide_steps import (
 from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key, normalized_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
-from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
 from rag_engine.retrieval.request_coverage import (
     CoverageBudget,
     CoverageUsage,
@@ -310,8 +307,6 @@ def rerank_records(
                 ),
             }
         )
-        # 交差参照で足した参照先は、参照元の直後へ置く（質問で並べると橋渡しの参照先が下がる。#1549）。
-        ranked = follow_reference_sources(ranked, step)
         # 並べ替えた後の上位と関連度（処理の経過の段を開いて見る。#2341）。
         record_rerank_top(step, ranked)
         step.output({"判定": receipt, "処理後の候補": candidate_snapshot(ranked)})
@@ -592,8 +587,6 @@ def _rerank_records(
             "outside_scoring_count": len(protected_candidates) + len(remainder),
         }
     )
-    # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
-    protected_candidates, reranked_candidates = _keep_entity_expansion_positions(protected_candidates, reranked_candidates)
     has_scores = any(row["adopted_score"] is not None for row in threshold_rows)
     if has_scores:
         reranked_candidates = _order_by_slots(reranked_candidates, cast(Settings, settings), step, receipt, rerank_phase=rerank_phase)
@@ -611,10 +604,9 @@ def _rerank_records(
         step.field(
             "件数による選別",
             f"普通候補 {selection['ordinary_selected_count']} 件 / "
-            f"明示添付と参照先 {selection['attachment_related_count']} 件 / "
+            f"明示添付 {selection['attachment_related_count']} 件 / "
             f"除外 {selection['excluded_count']} 件",
         )
-        step.add("引用元と参照先は組で選び、上限に収まらない組は採用しません。")
         record_retrieval_stage(
             {
                 "stage": "rerank_selection",
@@ -789,11 +781,9 @@ def select_documents(
             "hits": hits[key],
         }
         trace["deferred" if key in excluded else "selected"].append(entry)
-    # 実体の 1 段の拡張で足した根拠（#1362）は、文書の分数が低くても後回しにしない（橋渡しの行）。関連度が
-    # 下限未満の拡張の根拠は、印の無い候補と同じに扱う（#1390）。
-    # 参照元の直後へ置いた交差参照の参照先（#1549）も、参照元に従うので後回しにしない。
-    # 会話の添付（#3100）も、利用者が明示した入力なので後回しにしない。
-    reserved = [is_reserved_entity_expansion(r) or is_followed_reference(r) or is_attachment_evidence(r) for r in ranked_children]
+    # 会話の添付（#3100）は、利用者が明示した入力なので後回しにしない。検索拡張の根拠は候補に入らず、最後の
+    # 根拠の並びへ合わせる（#5162）。
+    reserved = [is_attachment_evidence(r) for r in ranked_children]
     kept = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) not in excluded or keep]
     deferred = [r for r, keep in zip(ranked_children, reserved, strict=False) if document_context_key(r) in excluded and not keep]
     if step is not None:
@@ -841,8 +831,7 @@ def cap_anchors_per_document(
 
     rerank の上位は、章の多い 1 つの文書の似た節で占められやすく、分数の近い別の文書の候補が起点（上位 top_k）から
     押し出される（検索エンジンの host crowding と同じ）。超えた child は落とさず順位を保って後ろへ置く（起点が
-    足りなければ使われる）。実体の拡張・交差参照で足した child は位置を保ち、数えない（参照元の直後に置くため）。
-    目録で選んで加えた条（#2254）も位置を保ち、数えない。0 は上限なし。
+    足りなければ使われる）。会話の添付は位置を保ち、数えない。検索拡張の根拠は候補に入らない（#5162）。0 は上限なし。
     """
     from rag_engine.retrieval.metadata_context import document_context_key  # 循環 import を避けて関数内で読む
 
@@ -854,7 +843,7 @@ def cap_anchors_per_document(
     later: list[AnswerRecord] = []
     for record in ranked_children:
         # 会話の添付（#3100）は数えない。
-        if is_reserved_entity_expansion(record) or is_followed_reference(record) or is_attachment_evidence(record):
+        if is_attachment_evidence(record):
             kept.append(record)
             continue
         key = document_context_key(record)
@@ -889,8 +878,12 @@ def _bundle_context(
     neighbor_child_count: int,
     max_records: int,
     max_chars: int,
+    expansions: Sequence[AnswerRecord] = (),
 ):
-    """rerank 済みの child を起点に parent・隣接 child を展開して context bundle を作る（検索と復元で共用）。"""
+    """rerank 済みの child を起点に parent・隣接 child を展開して context bundle を作る（検索と復元で共用）。
+
+    expansions は検索拡張の根拠（#5162）。起点・親・前後の文脈を決めた後に最後の根拠の並びへ合わせる。
+    """
     request = ContextBuildRequest(
         question=question,
         ranked_children=list(ranked_children),
@@ -901,6 +894,7 @@ def _bundle_context(
         max_anchors_per_parent=_max_anchors_per_parent(settings),
         max_records=max_records,
         max_chars=max_chars,
+        expansion_children=list(expansions),
     )
     # 同じ起点選択を先に行い、未採用の候補の親本文・近傍を読まない。文字予算は原文の取得後に適用する。
     provisional = build_chunk_context_bundle(replace(request, max_chars=2**31 - 1, select_anchors_only=True))
@@ -910,7 +904,11 @@ def _bundle_context(
         for child in parent.children
         if child.role == "retrieved_anchor"
     }
-    selected = [record for record in ranked_children if retrieval_record_id(record) in anchor_ids]
+    selected = list(
+        {
+            retrieval_record_id(record): record for record in (*ranked_children, *expansions) if retrieval_record_id(record) in anchor_ids
+        }.values()
+    )
     with (
         _execution_step("前後の文脈の読み込み", "選択した起点の前後から文脈を読み、回答の材料に加えます。") as step,
         bind_context_read_receipt() as receipt,
@@ -935,7 +933,11 @@ def _bundle_context(
                     metadata.update({key: record.metadata[key] for key in ("rerank", "rrf_score") if key in record.metadata})
                     fresh[uid] = replace(record, metadata=metadata)
             known.update(fresh)
-            request = replace(request, ranked_children=[fresh.get(retrieval_record_id(record), record) for record in ranked_children])
+            request = replace(
+                request,
+                ranked_children=[fresh.get(retrieval_record_id(record), record) for record in ranked_children],
+                expansion_children=[fresh.get(retrieval_record_id(record), record) for record in expansions],
+            )
             # 呼出元が保持する回復候補にも、実際に読み取った原文を残す。
             if isinstance(active_records, list):
                 active_records[:] = known.values()
@@ -1034,6 +1036,7 @@ def _restore_deferred_context(
             neighbor_child_count=neighbor_child_count,
             max_records=max_records,
             max_chars=max_chars,
+            expansions=context.expansion_candidates,
         )
         restored = AnswerContext(
             records=list(bundle.records),
@@ -1047,6 +1050,7 @@ def _restore_deferred_context(
             candidate_count=context.candidate_count,
             deferred_records=(),
             document_selection={**context.document_selection, "restored": True},
+            expansion_candidates=context.expansion_candidates,
         )
 
         step.output(partial(context_snapshot, restored, **{"新規の根拠がある": _adds_new_records(context, restored)}))
@@ -1125,6 +1129,9 @@ def build_adb_hybrid_answer_context(
     search_result = search_adb_hybrid_chunks(**search_options)
     active_records = [_stored_chunk_answer_record(chunk) for chunk in search_result.all_chunks]
     ranked_children = [_stored_chunk_answer_record(chunk) for chunk in search_result.child_chunks]
+    # 検索拡張の根拠（#5162）。rerank の候補に入れず、context を作るときに最後の根拠の並びへ合わせる。
+    # 拡張を持たない検索の実装（SDK・評価の注入）は expansion_chunks を返さない。
+    expansion_candidates = tuple(_stored_chunk_answer_record(chunk) for chunk in getattr(search_result, "expansion_chunks", None) or ())
     if not ranked_children:
         return AnswerContext(
             records=[],
@@ -1183,6 +1190,7 @@ def build_adb_hybrid_answer_context(
         neighbor_child_count=neighbor_child_count,
         max_records=max_records,
         max_chars=max_chars,
+        expansions=expansion_candidates,
     )
     return AnswerContext(
         records=list(bundle.records),
@@ -1196,6 +1204,7 @@ def build_adb_hybrid_answer_context(
         candidate_count=candidate_count,
         deferred_records=tuple(deferred_children),
         document_selection=selection,
+        expansion_candidates=expansion_candidates,
     )
 
 
@@ -1576,6 +1585,17 @@ def _source_question_scores(context: AnswerContext) -> dict[str, float | None]:
     return scores
 
 
+def _expansion_sources(context: AnswerContext) -> frozenset[str]:
+    """検索拡張の印を持つ根拠の出典の ID（#5162。入力の上限で外さない）。親は子のどれかに印があれば含める。"""
+    from rag_engine.retrieval.expansion_merge import is_expansion_record
+
+    return frozenset(
+        parent.record.chunk_uid or parent.record.id
+        for parent in context.evidence_tree
+        if any(is_expansion_record(record) for record in (parent.record, *(child.record for child in parent.children)))
+    )
+
+
 def _invalid_structured_output(exc: Exception) -> bool:
     """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。
 
@@ -1709,6 +1729,7 @@ def synthesize_grounded_answer(
                 schema_for=selected_generation_schema,
                 provider_id=provider,
                 source_scores=_source_question_scores(context),
+                protected_sources=_expansion_sources(context),
             )
             selecting_evidence = False
             current = grounded.run_round(

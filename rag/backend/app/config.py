@@ -1061,7 +1061,8 @@ class Settings(
         default=True,
         description=(
             "回答の検索で、上位の候補の chunk が本文で参照する節(「第3章を参照」など。取込時に"
-            "解決して chunk の metadata に保存)の chunk を rerank の候補に足す(#1280)。"
+            "解決して chunk の metadata に保存)の chunk を足す(#1280)。rerank にかけず、rerank と"
+            "起点の選択の後に最後の根拠へ合わせる(#5162)。"
             "LLM の呼び出しは増えない。参照の無い候補だけなら SQL も増えない。"
         ),
     )
@@ -1113,12 +1114,12 @@ class Settings(
         ),
     )
     rag_entity_expansion_max_chunks: int = Field(
-        default=6,
+        default=3,
         ge=1,
-        le=20,
+        le=10,
         description=(
-            "実体の 1 段の拡張で 1 回の検索に足す chunk 数の上限（#1362）。検索方法の"
-            "全体設定で選ぶ（#1388）。"
+            "実体の 1 段の拡張で 1 回の検索に足す chunk 数の上限（#1362・#5097。1〜10）。"
+            "検索方法の全体設定で選ぶ（#1388）。"
         ),
     )
     rag_graph_expansion_enabled: bool = Field(

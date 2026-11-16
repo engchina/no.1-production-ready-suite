@@ -843,7 +843,7 @@ class AnsweringSettingsUpdate(BaseModel):
     graph_expansion_enabled: bool | None = None
 
     entity_expansion_enabled: bool | None = None
-    entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
