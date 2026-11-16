@@ -504,6 +504,9 @@ def build_engine_settings(
         "OCI_RERANK_ENDPOINT": genai_endpoint(settings.oci_genai_rerank_region),
         "RERANK_MIN_RELEVANCE_SCORE": str(settings.rag_rerank_min_relevance_score),
         "RAG_HYBRID_SEARCH_BACKEND": settings.rag_hybrid_search_backend,
+        # 全文検索の語の上限と式の文字数の上限(#5157)。
+        "RAG_TEXT_SEARCH_MAX_TOKENS": str(settings.rag_text_search_max_tokens),
+        "RAG_TEXT_SEARCH_MAX_QUERY_CHARS": str(settings.rag_text_search_max_query_chars),
         "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
         "RAG_RRF_SOURCE_RATIO": json.dumps(settings.rag_rrf_source_ratio),
         "RAG_RERANK_SLOT_RATIO": json.dumps(settings.rag_rerank_slot_ratio),

@@ -264,7 +264,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         )
         self.assertNotIn("*", re.sub(r"\}\*[0-9.]+", "}", query))  # 重み以外に * が残らない
         self.assertNotIn("\x00", query)
-        self.assertLessEqual(len(query), adb_vector_store.MAX_ORACLE_TEXT_QUERY_CHARS)
+        self.assertLessEqual(len(query), adb_vector_store.DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS)
 
     def test_oracle_text_query_prioritizes_matched_domain_keywords(self):
         query = oracle_text_query(
@@ -273,7 +273,8 @@ class AdbVectorStoreTests(unittest.TestCase):
             tokenizer_config=TextSearchTokenizerConfig(),
         )
 
-        self.assertEqual(query, "{契約区分}*2 ACCUM {契約} ACCUM {区分} ACCUM {登録} ACCUM {出庫伝票} ACCUM {出庫} ACCUM {伝票}")
+        # ドメインキーワードは先頭に置き、重みは主の語と同じ 1（#5157）。
+        self.assertEqual(query, "{契約区分} ACCUM {契約} ACCUM {区分} ACCUM {登録} ACCUM {出庫伝票} ACCUM {出庫} ACCUM {伝票}")
 
     def test_combine_hybrid_scores_uses_rrf_and_text_vector_tiebreakers(self):
         scores = _combine_hybrid_scores(
@@ -368,7 +369,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(vector_search.call_count, 2)
         load_keywords.assert_called_once_with(settings.output_dir)
         self.assertEqual(text_search.call_count, 2)
-        self.assertEqual(text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
+        self.assertEqual(text_search.call_args_list[0].args[2], "{question} ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
         self.assertIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
 
@@ -422,9 +423,10 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(vector_search.call_count, 2)
         load_keywords.assert_called_once_with(settings.output_dir)
         self.assertEqual(text_search.call_count, 2)
-        self.assertEqual(text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
-        # 足した語はドメインキーワードと同じ段で優先する（質問と同じ語の扱いは変えない）。
-        self.assertIn("{synonym}*2", text_search.call_args_list[1].args[2])
+        self.assertEqual(text_search.call_args_list[0].args[2], "{question} ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
+        # 足した語はドメインキーワードと同じ段で優先する。重みは主の語と同じ 1（#5157）。
+        self.assertIn("{synonym}", text_search.call_args_list[1].args[2])
+        self.assertNotIn("{synonym}*", text_search.call_args_list[1].args[2])
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
         channels = result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"]
         self.assertIn("vector:q2", channels)

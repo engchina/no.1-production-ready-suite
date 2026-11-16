@@ -114,10 +114,27 @@ def test_oracle_text_query_keeps_domain_keyword_as_single_term() -> None:
     query = _oracle_text_query("伝票区分を変更する方法", settings=settings)
 
     assert query is not None
-    # ドメインキーワードは 1 語として重く(*2)、先頭に置く。語は ACCUM で結ぶ(#588)。
-    assert query.startswith("{伝票区分}*2 ACCUM ")
+    # ドメインキーワードは 1 語として先頭に置き、重みは主の語と同じ 1(#588・#5157)。
+    # 語は ACCUM で結ぶ。
+    assert query.startswith("{伝票区分} ACCUM ")
+    assert "{伝票区分}*" not in query
     assert " OR " not in query
-    # キーワードが無ければ重みを付けない(設定を渡さない呼び出しと同じ)。
+    # キーワードが無ければ 1 語にしない(設定を渡さない呼び出しと同じ)。
     plain = _oracle_text_query("伝票区分を変更する方法", settings=Settings())
     assert plain == _oracle_text_query("伝票区分を変更する方法")
-    assert plain is not None and "*2" not in plain
+    assert plain is not None and not plain.startswith("{伝票区分} ")
+
+
+def test_oracle_text_query_uses_text_search_limits_from_settings() -> None:
+    """原生方式の全文の式も、語と式の文字数の上限を設定から読む(#5157)。"""
+    question = "伝票区分を変更する方法と承認の手順と前提条件の概要"
+    settings = Settings(rag_domain_keywords=["伝票区分"], rag_text_search_max_tokens=1)
+
+    assert _oracle_text_query(question, settings=settings) == "{伝票区分}"
+    wide = _oracle_text_query(question, settings=Settings(rag_text_search_max_tokens=100))
+    short = _oracle_text_query(
+        question,
+        settings=Settings(rag_text_search_max_tokens=100, rag_text_search_max_query_chars=100),
+    )
+    assert wide is not None and len(wide) > 100
+    assert short is not None and len(short) <= 100

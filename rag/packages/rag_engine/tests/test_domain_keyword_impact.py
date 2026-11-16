@@ -59,6 +59,28 @@ class DomainKeywordImpactTests(unittest.TestCase):
         self.assertEqual(trace["tokens"], list(info.tokens))
         self.assertLessEqual(len(info.tokens), 24)
 
+    def test_text_search_limits_come_from_settings_and_keywords_weigh_one(self):
+        # 語と式の文字数の上限は設定の値を使う。ドメインキーワードと用語集の語は優先して残し、重みは 1（#5157）。
+        question = "合成登録語の値と合成用語甲の値を比べる手順の概要と前提条件"
+        settings = self.settings(
+            domain_keywords_override=("合成登録語",),
+            retrieval_query_keywords={question: ("合成用語甲",)},
+            text_search_max_tokens=2,
+        )
+        trace = build_question_text_search_info(question, settings).tokenization_traces[0]
+        self.assertEqual(trace["max_tokens"], 2)
+        self.assertEqual(dict(zip(trace["tokens"], trace["weights"], strict=True)), {"合成登録語": 1.0, "合成用語甲": 1.0})
+        self.assertCountEqual(trace["matched_domain_keywords"], ["合成登録語", "合成用語甲"])
+        self.assertNotIn("*", trace["oracle_text_query"])
+
+        wide = replace(settings, text_search_max_tokens=100)
+        long = build_question_text_search_info(question, wide)
+        short = build_question_text_search_info(question, replace(wide, text_search_max_query_chars=100))
+        self.assertGreater(len(long.tokens), 2)
+        self.assertGreater(len(long.oracle_text_query), 100)
+        self.assertLessEqual(len(short.oracle_text_query), 100)
+        self.assertTrue(short.tokenization_traces[0]["character_limit_tokens"])
+
     def test_metrics_use_actual_anchor_rank_and_ignore_neighbors(self):
         children = [
             SimpleNamespace(role="retrieved_anchor", retrieval_rank=3, record=SimpleNamespace(chunk_id="hit")),
