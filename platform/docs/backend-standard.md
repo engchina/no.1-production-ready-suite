@@ -373,4 +373,4 @@ Terraform の環境入力は3製品共通の `platform_environment`（既定 `st
 
 ### 軌跡の本文を記録するか（#3901）
 
-運用設定「軌跡の記録」は3製品で1つの値を共有する。`PLATFORM_TRACE_RECORDING_SETTINGS` の単一の行を使い、未設定・読み出し失敗は無効。短い cache で読み、新しい span の開始時に判断を固定する。入力・出力・返却された思考・Schema と本文の診断詳細を対象とし、無効時はコピー・機密除去・serialize の前に止める。構造・時刻・状態・モデル・usage・内容を含まないエラー種別は記録する。通常の業務記録と既存の trace は削除しない。API / worker の tracing lifecycle に共通の provider を注入し、backend_core は system_settings_backend を import しない。
+運用設定「軌跡の記録」は3製品で1つの値を共有する。`PLATFORM_TRACE_RECORDING_SETTINGS` の単一の行を使い、未設定・読み出し失敗は無効。短い cache で読み、新しい span の開始時に判断を固定する。span の開始（event loop の上）では DB を待たない: cache の値をすぐ返し、期限切れの読み直しは背景の thread で 1 本だけ行い、その間は最後に読めた値、プロセスでまだ一度も読めていない間は無効とする（#5140・#5181）。入力・出力・返却された思考・Schema と本文の診断詳細を対象とし、無効時はコピー・機密除去・serialize の前に止める。構造・時刻・状態・モデル・usage・内容を含まないエラー種別は記録する。通常の業務記録と既存の trace は削除しない。API / worker の tracing lifecycle に共通の provider を注入し、backend_core は system_settings_backend を import しない。
