@@ -194,7 +194,9 @@ from rag_engine.retrieval.context_builder import (
     context_bundle_from_parent_evidence,
     context_bundle_from_records,
     record_has_image_evidence,
+    uses_parent_context,
 )
+from rag_engine.retrieval.context_fill import consolidate_evidence_tree, context_fill_mode
 from rag_engine.retrieval.context_recovery import ContextRecovery, recover_context_records
 from rag_engine.retrieval.evidence_selection import EVIDENCE_BUDGET_CHARS, evidence_spans
 from rag_engine.retrieval.evidence_selection import new_evidence_count as _new_evidence_count
@@ -707,10 +709,13 @@ def _bundle_context(
     max_records: int,
     max_chars: int,
     expansions: Sequence[AnswerRecord] = (),
+    section_fill: bool = False,
 ):
-    """rerank 済みの child を起点に parent・隣接 child を展開して context bundle を作る（検索と復元で共用）。
+    """rerank 済みの child を起点に文脈を補って context bundle を作る（検索と復元で共用。文脈の補完 #5168）。
 
     expansions は検索拡張の根拠（#5162）。起点・親・前後の文脈を決めた後に最後の根拠の並びへ合わせる。
+    section_fill は、この後に章節の拡張（``_expand_context_by_sections``）を行う経路か。そのとき章節の対応が
+    ある起点は章節で補い、前後の chunk を読まない（補い方は起点ごとに 1 つ。章節 > 親 > 前後）。
     """
     request = ContextBuildRequest(
         question=question,
@@ -737,8 +742,16 @@ def _bundle_context(
             retrieval_record_id(record): record for record in (*ranked_children, *expansions) if retrieval_record_id(record) in anchor_ids
         }.values()
     )
+    sectioned = _sectioned_anchor_ids(selected, settings) if section_fill else frozenset()
+    request = replace(request, section_anchor_ids=sectioned)
+    modes = {
+        retrieval_record_id(record): context_fill_mode(
+            sectioned=retrieval_record_id(record) in sectioned, parent_child=uses_parent_context(record)
+        )
+        for record in selected
+    }
     with (
-        _execution_step("前後の文脈の読み込み", "選択した起点の前後から文脈を読み、回答の材料に加えます。") as step,
+        _execution_step("文脈の補完", "起点ごとに章節・親・前後の chunk のどれか 1 つで文脈を補い、重なる根拠をまとめます。") as step,
         bind_context_read_receipt() as receipt,
     ):
         step.input(
@@ -746,10 +759,14 @@ def _bundle_context(
                 "前後それぞれの最大 Chunk 数": neighbor_child_count,
                 "起点根拠数": len(selected),
                 "起点根拠 ID": [retrieval_record_id(record) for record in selected],
+                "起点ごとの補い方": modes,
                 "文脈の最大レコード数": max_records,
             }
         )
-        loaded = injected_context_chunks(anchors=selected, settings=settings)
+        # 章節で補う起点は前後の chunk を読まない（親子分割の親・画像の原文は読む）。
+        loaded = injected_context_chunks(
+            anchors=selected, settings=settings, **({"section_anchor_ids": sorted(sectioned)} if sectioned else {})
+        )
         if loaded is not None:
             known = {retrieval_record_id(record): record for record in active_records}
             fresh = {retrieval_record_id(record): record for record in map(_stored_chunk_answer_record, loaded)}
@@ -802,18 +819,20 @@ def _bundle_context(
             "選択時の除外": list(bundle.excluded_evidence),
             "隣接候補の選択記録": receipt.selection,
         }
+        output["補い方ごとの起点数"] = {mode: list(modes.values()).count(mode) for mode in dict.fromkeys(modes.values())}
         if not selected:
             step.skip("起点根拠がありません。")
             output["実行状態"] = "起点なし"
-        elif neighbor_child_count <= 0:
-            step.skip("前後の Chunk を加える設定が 0 です。親本文の復元は別に実行します。")
-            output["実行状態"] = "設定無効"
         elif receipt.reads and all(read["state"] == "reused" for read in receipt.reads):
             step.skip("読み取り済みの内容を再利用しました。")
             output["実行状態"] = "既読を再利用"
         else:
             output["実行状態"] = "実行済み"
-            step.result(f"前後の文脈 {len(adopted)} Chunk を回答文脈に採用しました。")
+            counts = output["補い方ごとの起点数"]
+            step.result(
+                f"章節 {counts.get('section', 0)} 件・親 {counts.get('parent', 0)} 件・前後 {counts.get('neighbors', 0)} 件の起点を補い、"
+                f"前後の文脈 {len(adopted)} Chunk を回答文脈に採用しました（章節の本文は章節の拡張で読みます）。"
+            )
         if loaded is None or not receipt.reads:
             output["読み取り詳細"] = "未記録"
         step.output(output)
@@ -836,6 +855,33 @@ def _bundle_context(
     return bundle
 
 
+def _sectioned_anchor_ids(anchors: Sequence[AnswerRecord], settings: Settings) -> frozenset[str]:
+    """章節の対応がある起点（章節で文脈を補う起点。#5168）。章節の拡張が無効・未設定なら空。
+
+    章節の拡張と同じ ``section_outline`` を読む（backend は起点ごとの結果を回答の中で使い回す）。
+    """
+    from rag_engine.dependencies import section_dependencies
+    from rag_engine.generation.section_expansion import SectionExpansionLimits, SectionOutline
+
+    ports = section_dependencies()
+    if (
+        ports is None
+        or not getattr(settings, "section_expansion_enabled", True)
+        or SectionExpansionLimits.from_settings(settings).max_levels <= 0
+    ):
+        return frozenset()
+    found: set[str] = set()
+    for record in anchors:
+        uid = retrieval_record_id(record)
+        try:
+            outline = ports[0](chunk_uid=uid)
+        except Exception:  # noqa: BLE001 - 対応を読めない起点は章節で補わない（前後か親で補う）
+            continue
+        if isinstance(outline, SectionOutline) and outline.chain():
+            found.add(uid)
+    return frozenset(found)
+
+
 def build_adb_hybrid_answer_context(
     question: str,
     run_id: Any,
@@ -855,6 +901,7 @@ def build_adb_hybrid_answer_context(
     query_embedder: Callable[[str, Settings], list[float]] | None = None,
     page_ranges: Sequence[Mapping[str, Any]] = (),
     text_queries: Mapping[str, str] | None = None,
+    section_fill: bool = False,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
 
@@ -865,6 +912,8 @@ def build_adb_hybrid_answer_context(
     #2395）。空なら絞らない。絞り込みは注入された検索実装が行う。
 
     query_embedder は索引と同じ embedder を使う SDK 用。未指定なら検索実装の既定（OCI）を使う。
+
+    section_fill は、この後に章節の拡張を行う経路（回答・根拠の補完をする検索）か（#5168。``_bundle_context``）。
 
     pinned_chunk_run_id 指定時は保存済み実行を直接読み、latest 更新による評価条件の変化を防ぐ。
     存在しない実行は AdbHybridSearchUnavailable とする。ADB と必要に応じ reranker に接続する。
@@ -954,6 +1003,7 @@ def build_adb_hybrid_answer_context(
         max_records=max_records,
         max_chars=max_chars,
         expansions=expansion_candidates,
+        section_fill=section_fill,
     )
     return AnswerContext(
         records=list(bundle.records),
@@ -1845,6 +1895,8 @@ def _cover_guide_steps(
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
             page_ranges=page_ranges,
+            # 手順の根拠は後の章節の拡張（guide_steps の段）で章節を補う。
+            section_fill=True,
         )
 
     started = clock()
@@ -2729,6 +2781,8 @@ def answer_question_result(
                     rerank_enabled=effective_rerank_enabled,
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
+                    # 根拠を補う経路だけが後で章節の拡張を行う（業務 Agent の根拠の取得は主の検索で止める）。
+                    section_fill=complete_evidence,
                 )
                 retrieval_step.field("全文検索の文", text_source)
                 _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
@@ -2793,6 +2847,7 @@ def answer_question_result(
                 rerank_enabled=effective_rerank_enabled,
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,
+                section_fill=True,
             )
 
         with _execution_step(
@@ -3297,6 +3352,9 @@ def _expand_context_by_sections(
             reserve_tokens=sections.SectionExpansionLimits.from_settings(settings).followup_reserve_tokens if reserve else 0,
             priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
         )
+        if result.context is not context:
+            # 章節の本文を足した後に 1 回だけ、重なる根拠をまとめ、章節の本文を起点のかたまりへ置く（文脈の補完。#5168）。
+            result.context = consolidate_context(result.context)
         result.trace["phase"] = phase
         previous = state.get("result")
         if previous is not None:
@@ -3384,6 +3442,25 @@ def _expand_context_by_sections(
     state["result"] = result
     state["signature"] = signature_of(result.context)
     return result.context, result
+
+
+def consolidate_context(context: AnswerContext) -> AnswerContext:
+    """根拠の木を ``consolidate_evidence_tree`` でまとめ、records・evidence・text を木から作り直す（#5168）。
+
+    records が根拠の木の親と 1 対 1 でない文脈（木を持たない旧形式）はそのまま返す。
+    """
+    from rag_engine.retrieval.context_builder import record_context_key
+
+    tree = context.evidence_tree
+    if not tree or [record_context_key(item.record) for item in tree] != [record_context_key(record) for record in context.records]:
+        return context
+    merged = consolidate_evidence_tree(tree)
+    bundle = context_bundle_from_parent_evidence(
+        merged, max_chars=max([len(str(getattr(item.record, "text", "") or "")) for item in merged] + [MAX_CONTEXT_CHARS])
+    )
+    if not bundle.records:
+        return context
+    return replace(context, records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree)
 
 
 _SECTION_STOP_LABELS = {

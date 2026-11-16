@@ -64,6 +64,7 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "要約・抽出値の原文の読み込み": "answer.step.loadDerivedSource",
   "文書の多様性を補う候補の追加": "answer.step.candidateDiversity",
   "前後の文脈の読み込み": "answer.step.loadSiblings",
+  "文脈の補完": "answer.step.fillContext",
   "参照先の根拠の追加": "answer.step.expandReferences",
   "実体・別名による検索拡張": "answer.step.expandEntities",
   "文書構造による検索拡張": "answer.step.expandStructure",

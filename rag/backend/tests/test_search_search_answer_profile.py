@@ -340,7 +340,7 @@ def test_search_answer_profile_ignores_single_kb_legacy_query(monkeypatch: Monke
     settings = RecordingPipeline.captured_settings
     assert settings is not None
     # Search Answer Profile が触れていない項目は KB legacy 値ではなく global 既定。
-    assert settings.rag_neighbor_child_count == 3
+    assert settings.rag_neighbor_child_count == 1
     assert settings.rag_vector_index_profile == "accurate"
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["search_answer_profile_applied"] == "bv-1"

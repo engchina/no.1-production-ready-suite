@@ -1893,7 +1893,7 @@ test("前後文脈と章節の読取・採用・重複を入力と結果で分�
   } });
   await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
     { key: "root", spec: ragSpan.root(), at: [0, 2] },
-    { key: "neighbor", spec: ragSpan.step("前後の文脈の読み込み", "root"), at: [0, 1], details: detail(contextExpansionTrace.neighbor) },
+    { key: "neighbor", spec: ragSpan.step("文脈の補完", "root"), at: [0, 1], details: detail(contextExpansionTrace.neighbor) },
     { key: "section", spec: ragSpan.step("章節の拡張", "root"), at: [1, 2], details: detail(contextExpansionTrace.section) },
     { key: "legacy", spec: ragSpan.step("章節の拡張", "root"), at: [1, 2] },
   ]) });

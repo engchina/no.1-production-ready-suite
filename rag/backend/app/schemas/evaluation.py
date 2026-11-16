@@ -747,7 +747,7 @@ class EvaluationRagOverrides(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
+    neighbor_child_count: int | None = Field(default=None, ge=1, le=5)
     rerank_enabled: bool | None = None
     rrf_k: int | None = Field(default=None, ge=1, le=1000)
     context_group_max_chunks: int | None = Field(default=None, ge=1, le=20)

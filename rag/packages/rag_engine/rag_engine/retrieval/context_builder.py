@@ -18,6 +18,7 @@ from rag_engine.parsing.decorative_pictures import (
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
+from rag_engine.retrieval.context_fill import consolidate_evidence_tree
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, EXPANSION_KEYS, merge_expansions
 from rag_engine.retrieval.metadata_context import answer_metadata_context, with_child_contexts
@@ -218,6 +219,9 @@ class ContextBuildRequest:
     # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。起点・親・前後の文脈が決まった後に、
     # ``expansion_merge`` の規則で 1 回だけ合わせる。``top_k``・``max_records`` に数えない。
     expansion_children: Sequence[Any] = ()
+    # 章節で文脈を補う起点の ID（chunk_uid か id。#5168）。前後の chunk を足さない（補い方は起点ごとに 1 つ。
+    # ``context_fill``）。章節の本文は呼び出し元の章節の拡張が足す。
+    section_anchor_ids: frozenset[str] = frozenset()
 
 
 def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
@@ -378,12 +382,19 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             group.reason = reason
             selected.append(group)
             selected_groups.add(id(group))
-    # 非親子の前後は同じ成果物の保存順から選び、原文の個別 record として回答へ渡す。
+    # 非親子の前後は同じ成果物の保存順から選び、原文の個別 record として回答へ渡す。章節で補う起点には足さない
+    # （補い方は起点ごとに 1 つ。章節 > 親 > 前後。#5168）。
     neighbors: dict[str, Any] = {}
     receipt = context_read_receipt()
     for group in selected:
         for anchor in tuple(group.children.values()):
             if anchor.role != "retrieved_anchor" or _uses_parent_context(anchor.record):
+                continue
+            if fill_anchor_id(anchor.record) in request.section_anchor_ids:
+                if receipt is not None:
+                    receipt.selection.append(
+                        {"anchor_id": record_context_key(anchor.record), "eligible_neighbor_ids": [], "reason": "section_context"}
+                    )
                 continue
             siblings = children_by_parent.get(_child_sibling_context_key(anchor.record), [])
             candidates = _chunk_neighbors(anchor.record, siblings, request.neighbor_child_count)
@@ -475,7 +486,11 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         present = {record_context_key(entry.record) for entry in (*selected, *added)}
         for group in tuple(added):
             for anchor in tuple(group.children.values()):
-                if anchor.role != "retrieved_anchor" or _uses_parent_context(anchor.record):
+                if (
+                    anchor.role != "retrieved_anchor"
+                    or _uses_parent_context(anchor.record)
+                    or fill_anchor_id(anchor.record) in request.section_anchor_ids
+                ):
                     continue
                 siblings = children_by_parent.get(_child_sibling_context_key(anchor.record), [])
                 for neighbor in _chunk_neighbors(anchor.record, siblings, request.neighbor_child_count):
@@ -492,7 +507,15 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
                     present.add(key)
         selected = merge_expansions(selected, added, key=lambda group: str(id(group)), document=_group_document, seq=_group_seq)
     evidence_tree = _finalize_parent_evidence(selected)
+    if not request.select_anchors_only:
+        # 補った後に 1 回だけ、重なる根拠をまとめ、前後の文脈を起点のかたまりへ置く（#5168）。
+        evidence_tree = consolidate_evidence_tree(evidence_tree)
     return _context_bundle_from_parent_evidence(evidence_tree, max_chars=request.max_chars)
+
+
+def fill_anchor_id(record: Any) -> str:
+    """文脈の補い方を決める起点の ID（chunk_uid か id。``ContextBuildRequest.section_anchor_ids`` の値）。"""
+    return str(getattr(record, "chunk_uid", "") or getattr(record, "id", "") or "")
 
 
 def _with_expansion_marks(record: Any, expansion: Any) -> Any:
@@ -1034,6 +1057,11 @@ def _uses_parent_context(record: Any) -> bool:
     if "chunk_strategy" in metadata:
         return metadata["chunk_strategy"] in {"small_to_big", "small_to_big_parent_child"}
     return bool(_record_parent_context_key(record))
+
+
+def uses_parent_context(record: Any) -> bool:
+    """親子分割（small-to-big）の child か（親の本文を根拠の単位にする。文脈の補完の「親」。#5168）。"""
+    return _uses_parent_context(record)
 
 
 def _artifact_context_key(record: Any) -> str:
