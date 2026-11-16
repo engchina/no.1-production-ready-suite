@@ -38,8 +38,9 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
   後。無ければ同じ文書の最小のものの前）。
 - 同じ文書が無いとき: 最後に置く（複数は文書ごとにまとめ、文書の中は chunk の順）。
 - 足した根拠の単位は検索で当たった chunk と同じ（親子の分割なら親、そうでなければ前後の文脈）。
-- モデルの入力の上限を超えるときは、印の付いた根拠を残し、印の無い根拠を関連度の低い順に外す
-  （`select_evidence` の `protected_sources`。分割読取の組の扱いは #5098）。
+- モデルの入力の上限を超えるときは、原文を外さずに分割読取へ進み、印の付いた根拠の文書を最初の組から読み、
+  読取が選ばなかったときも最終生成へ補う順の先頭にする（`select_evidence` の `protected_sources`。
+  [reference-answer-flow.md](./reference-answer-flow.md)「原文の選択と分割読取」）。
 - 回答・検索だけ（`generate_answer=false` と `AnswerEngine.retrieve`）・MCP（`rag_search` /
   `rag_retrieve_evidence` の `mcp_evidence`）は同じ処理を呼ぶ。検索だけと MCP の引用では、足した根拠に
   `evidence_expansion` の印を付ける。

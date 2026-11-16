@@ -1,13 +1,12 @@
-"""原文を関連度と入力予算で選ぶ。意味の評価やモデルによる縮約は行わない。"""
+"""回答の生成へ渡す原文を決める。上限内なら全部を 1 回の生成へ、上限を超えれば原文を外さずに分割読取へ渡す（#5098）。"""
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from rag_engine.config import Settings
-from rag_engine.generation.evidence_cuts import evidence_cuts
+from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.retrieval.rerank_scores import rerank_first_key
 
@@ -16,19 +15,23 @@ def select_evidence(
     spans: Sequence[dict[str, Any]],
     settings: Settings,
     *,
+    question: str,
     render: Callable[[Sequence[dict[str, Any]]], str],
     evidence_text: Callable[[Sequence[dict[str, Any]]], str],
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]],
     system: str,
     schema_for: Callable[[Sequence[dict[str, Any]]], Mapping[str, Any]],
+    read: Callable[[str, str, type[BatchReading]], BatchReading],
+    unusable_output: Callable[[Exception], bool],
     provider_id: str | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
+    failed_batches: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
-    """固定入力も含めて測り、入らない原文は除外する。単独でも大きい原文は位置付きで一部を渡す。
+    """固定入力も含めて測り、重複を除いた全原文が入れば関連度の順で 1 回の生成の入力にする。
 
-    protected_sources（検索拡張の印を持つ根拠の出典。#5162）は先に入れ、入らないときは印の無い原文を関連度の
-    低い順に外す。渡す原文の並びは関連度の順（今までと同じ）のまま。
+    入らなければ原文を除外せず、``prepare_batched_evidence`` で容量内の組に分けて全件を読み、選ばれた範囲と回答候補を
+    最終生成の 1 回へまとめる。protected_sources（検索拡張の印を持つ根拠の出典。#5162）は分割読取の組分けと補う順で先にする。
     """
 
     def measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
@@ -40,72 +43,37 @@ def select_evidence(
     _, fixed = measure([])
     if not fixed["fits"]:
         raise GenerationInputBudgetExceeded({**fixed, "reason": "fixed_input_exceeds_limit"})
-    selected: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    omitted = 0
-    duplicates = 0
-    partial = 0
 
     def relevance(value: dict[str, Any]) -> tuple[int, float]:
         return rerank_first_key((source_scores or {}).get(str(value["source_id"])))
 
-    protected = set(protected_sources)
-    for span in sorted(spans, key=lambda value: (str(value["source_id"]) not in protected, relevance(value))):
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for span in sorted(spans, key=relevance):
         key = str(span["source_id"]), str(span["text"])
-        if key in seen:
-            duplicates += 1
-            continue
-        seen.add(key)
-        if measure([*selected, span])[1]["fits"]:
-            selected.append(span)
-            continue
-        # 原文を入れる余地がある場合だけ、絶対位置を保った前半を選ぶ。未投入の範囲は診断へ残す。
-        cuts = evidence_cuts(span, {})
-        ends = sorted(
-            {
-                end
-                for level in cuts.levels
-                for end in level
-                if 0 < end < len(span["text"]) and not any(table.start < end < table.end for table in cuts.tables)
-            }
-        )
-        low, high = 0, len(ends)
-        best: dict[str, Any] | None = None
-        while low < high:
-            middle = (low + high + 1) // 2
-            end = ends[middle - 1]
-            text = span["text"][:end]
-            start = int(span.get("start", 0))
-            identity = hashlib.sha256(f"{span['source_id']}:{start}:{start + end}:{text}".encode()).hexdigest()[:20]
-            piece = {**span, "text": text, "start": start, "end": start + end, "evidence_id": "E" + identity, "excerpt_only": True}
-            if measure([*selected, piece])[1]["fits"]:
-                low, best = middle, piece
-            else:
-                high = middle - 1
-        if best is not None:
-            selected.append(best)
-            partial += 1
-        else:
-            omitted += 1
-    # 選ぶ順（印の付いた根拠を先）と渡す順（関連度の順）を分ける。
-    selected.sort(key=relevance)
-    selected = tag(selected)
+        if key not in seen:
+            seen.add(key)
+            unique.append(span)
+    counts = {"input_span_count": len(spans), "duplicate_span_count": len(spans) - len(unique), "excluded_span_count": 0}
+    selected = tag(unique)
     prompt, measurement = measure(selected)
-    if not measurement["fits"]:
-        raise GenerationInputBudgetExceeded({**measurement, "reason": "final_model_input_exceeds_limit"})
-    if not selected and spans:
-        raise GenerationInputBudgetExceeded({**measurement, "fits": False, "reason": "no_evidence_fits"})
-    return (
-        selected,
-        prompt,
-        {
-            **measurement,
-            "selection": "relevance_within_budget",
-            "batch_count": 0,
-            "input_span_count": len(spans),
-            "selected_span_count": len(selected),
-            "excluded_span_count": omitted + partial,
-            "partial_span_count": partial,
-            "duplicate_span_count": duplicates,
-        },
+    if measurement["fits"]:
+        return selected, prompt, {**measurement, **counts, "selection": "relevance_within_budget", "batch_count": 0}
+    selected, prompt, measurement = prepare_batched_evidence(
+        unique,
+        settings,
+        question=question,
+        render=render,
+        evidence_text=evidence_text,
+        system=system,
+        schema=schema_for([]),
+        schema_for=schema_for,
+        read=read,
+        unusable_output=unusable_output,
+        provider_id=provider_id,
+        tag=tag,
+        failed_batches=failed_batches,
+        source_scores=source_scores,
+        protected_sources=protected_sources,
     )
+    return selected, prompt, {**measurement, **counts, "selection": "batched_reading"}

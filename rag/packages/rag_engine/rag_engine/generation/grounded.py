@@ -151,6 +151,8 @@ EVIDENCE_READING_PROMPT = (
     "［記載時点の設定値］も資料を作った時点の記録である。"
     "表示が無くても、列名が既定値・初期値・記入例・設定例・推奨値の値は同じに扱う。"
     "今の値・この環境の値を尋ねる質問には、資料の値を種類とともに示し（例: 「資料の既定値は〇〇」）、実際の値は external_data_items（who_can_answer=system）で確認対象にする。\n"
+    "- 回答候補: 根拠の後の回答候補は、各根拠の原文の範囲から作った局所的な回答の下書きである。読む手がかりにだけ使い、"
+    "回答と引用は根拠の原文で確かめてから書く。候補にだけある内容は書かない。\n"
 )
 
 # 業務ガイドの部品があるときだけ渡す扱い（行の残し方は EVIDENCE_READING_PROMPT と同じ）。
@@ -2434,6 +2436,9 @@ def evidence_reading_rules(spans: Sequence[dict[str, Any]], *, attached_images: 
         keys.add("画面の値")
     if any(has_table_structure(str(span.get("text") or "")) for span in spans):
         keys.add("表の値")
+    if any(span.get("batch_answer") for span in spans):
+        # 分割読取の回答候補（``batched_evidence.candidate_block``）を根拠の後に添えるときだけ。
+        keys.add("回答候補")
     return _reading_block(EVIDENCE_READING_PROMPT, keys)
 
 

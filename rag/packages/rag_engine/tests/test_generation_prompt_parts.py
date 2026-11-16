@@ -48,7 +48,7 @@ def test_only_marks_present_on_the_evidence_are_explained() -> None:
 def test_word_based_evidence_tags_are_not_part_of_the_reading_rules() -> None:
     """語の一致で付ける印はやめた。形から分かる読み方だけが残る（#4668）。"""
     keys = grounded.reading_line_keys(grounded.EVIDENCE_READING_PROMPT)
-    assert keys == ["image_generated", "補助情報", "画面の値", "表の値"]
+    assert keys == ["image_generated", "補助情報", "画面の値", "表の値", "回答候補"]
     assert not any(tag in " ".join(keys) for tag in ("definition", "operation_entry", "completion", "constraint", "multi_condition"))
     assert "aggregate_only" not in " ".join(keys)
     tagged = grounded.tag_spans(

@@ -1638,6 +1638,7 @@ def synthesize_grounded_answer(
             search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled
         )
     from rag_engine.generation import grounded
+    from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
     from rag_engine.generation.evidence_selection import select_evidence
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
@@ -1708,6 +1709,7 @@ def synthesize_grounded_answer(
             }
         )
         selecting_evidence = False
+        failed_batches: list[dict[str, Any]] = []
         try:
             generation_system = grounded.generation_system_prompt(
                 assume_unconfirmed=runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed
@@ -1719,17 +1721,24 @@ def synthesize_grounded_answer(
                     question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
                 ).model_json_schema()
 
+            # 上限内なら 1 回の生成、上限を超えれば原文を外さずに分割読取（組ごとの読取＋最終生成の 1 回。#5098）。
             spans, prompt, input_diagnostic = select_evidence(
                 spans,
                 generation_settings,
+                question=question,
                 render=render_generation,
                 evidence_text=grounded.evidence_block_text,
                 tag=grounded.tag_spans,
                 system=generation_system,
                 schema_for=selected_generation_schema,
+                read=lambda system, user, schema: grounded.call_with_model_purpose(
+                    "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
+                ),
+                unusable_output=_invalid_structured_output,
                 provider_id=provider,
                 source_scores=_source_question_scores(context),
                 protected_sources=_expansion_sources(context),
+                failed_batches=failed_batches,
             )
             selecting_evidence = False
             current = grounded.run_round(
@@ -1765,7 +1774,9 @@ def synthesize_grounded_answer(
             if not timed_out and not invalid_draft:
                 raise
             generation_failure = str(exc) if isinstance(exc, grounded.DraftGenerationInvalid) else type(exc).__name__
-            generation_failure_stage = "evidence.select" if selecting_evidence else "answer.generate"
+            generation_failure_stage = (
+                ("evidence.batch_read" if failed_batches else "evidence.select") if selecting_evidence else "answer.generate"
+            )
             if invalid_draft and not input_limited:
                 structured_output_failed = True
                 if escalation_probe:
@@ -1775,6 +1786,8 @@ def synthesize_grounded_answer(
                 if input_limited
                 else {"category": "deadline"}
                 if timed_out
+                else batch_failure_summary(failed_batches[-1], exc)
+                if selecting_evidence and failed_batches
                 else grounded.generation_failure_detail(exc)
             )
             logger.warning(

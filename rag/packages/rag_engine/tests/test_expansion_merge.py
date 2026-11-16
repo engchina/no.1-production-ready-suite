@@ -4,7 +4,6 @@
 並びへ同じ規則で 1 回だけ合わせる（同じ chunk・親にあれば印だけ、同じ文書があれば文書の chunk の順、無ければ最後）。
 """
 
-import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -12,7 +11,6 @@ from test_document_selection import child, parent
 
 from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
-from rag_engine.generation.evidence_selection import select_evidence
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.expansion_merge import (
@@ -203,33 +201,3 @@ def test_answer_context_does_not_rerank_expansions_and_keeps_them_after_threshol
         max_chars=100_000,
     )
     assert [record.id for record in restored.records][-1] == "px1"
-
-
-def _span(index, text):
-    return {"evidence_id": f"E{index}", "source_id": f"s{index}", "text": text, "start": 0, "end": len(text)}
-
-
-def _select(spans, **kwargs):
-    base = get_settings(environ={}, dotenv_path=None)
-    providers = {key: replace(value, max_output_tokens=100) for key, value in base.llm_providers.items()}
-    return select_evidence(
-        spans,
-        replace(base, llm_providers=providers, evidence_budget_chars=30, answer_max_input_tokens=10000),
-        render=lambda values: json.dumps(values, ensure_ascii=False),
-        evidence_text=lambda values: "".join(value["text"] for value in values),
-        tag=list,
-        system="合成の指示",
-        schema_for=lambda _values: {"type": "object"},
-        **kwargs,
-    )
-
-
-def test_input_limit_keeps_expansion_evidence_and_drops_low_relevance_unmarked_evidence():
-    high, low, expansion = _span(0, "高い関連度の原文です。"), _span(1, "低い関連度の原文です。"), _span(2, "拡張の根拠の原文。")
-    scores = {"s0": 0.9, "s1": 0.5}
-    selected, _, diagnostic = _select([high, low, expansion], source_scores=scores, protected_sources={"s2"})
-    # 入らないときは印の無い根拠を関連度の低い順に外し、渡す並びは関連度の順のまま。
-    assert [value["source_id"] for value in selected] == ["s0", "s2"]
-    assert diagnostic["excluded_span_count"] >= 1
-    unprotected, _, _ = _select([high, low, expansion], source_scores=scores)
-    assert "s2" not in [value["source_id"] for value in unprotected]

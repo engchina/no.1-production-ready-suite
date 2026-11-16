@@ -203,5 +203,7 @@ def test_generation_input_shows_only_the_evidence_labels_as_references() -> None
     assert re.search(r"\[U[0-9a-f]{24}\]", prompt) is None
     assert "[C1]" not in system and "[C1]" not in prompt
     assert re.search(r"(?m)^1\| \[E1\.1\] ", prompt)
+    # 上限内の 1 回の生成には、分割読取の回答候補とその読み方を渡さない。
+    assert "回答候補" not in prompt
     assert "[E1" not in response.answer_text
     assert response.generation_trace["citation_lines"]
