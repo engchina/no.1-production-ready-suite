@@ -40,7 +40,6 @@ from app.schemas.evaluation import (
 # 工程の名前 → (full の設定の項目, 無効にする上書き)。
 ABLATIONS: dict[str, tuple[str, dict[str, object]]] = {
     "rerank": ("rag_rerank_enabled", {"rerank_enabled": False}),
-    "neighbor_children": ("rag_neighbor_child_count", {"neighbor_child_count": 0}),
     "reference_expansion": (
         "rag_reference_expansion_enabled",
         {"reference_expansion_enabled": False},
@@ -51,6 +50,9 @@ ABLATIONS: dict[str, tuple[str, dict[str, object]]] = {
 }
 # 評価の上書きで無効にできず、ここでは測らない工程（成功を装わずに表示する）。
 UNSUPPORTED_STAGES: dict[str, str] = {
+    "neighbor_children": (
+        "前後の chunk は文脈の補完の 1 つの補い方で、無効にできない（前後の数は 1〜5。#5168）"
+    ),
     "ingestion_preamble_and_chunking": "取込の前置き・分割は別の文書レシピの成果物を比べる",
     "image_channel": "画像の検索・回答時の原画像の添付は評価の上書きで切り替えられない",
 }

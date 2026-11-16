@@ -30,7 +30,8 @@
 入力 token の上限は、回答のモデルの入力の上限（共通のモデル設定の登録モデルの「入力の上限（tokens）」。#1437。
 backend が platform の ``enterprise_ai_max_input_tokens`` で決めて ``answer_max_input_tokens`` で渡す）に対する割合
 （既定 50%）。根拠の本文の token は ``estimate_tokens``（platform の ``estimate_input_tokens`` と同じ見積もり）で
-数える。文脈の並びは、もとの根拠（関連度の順）を先頭に、広げた章節をその後ろに章節の中の読み順で置く。引用の ID は
+数える。この module は、もとの根拠（関連度の順）の後ろに広げた章節を章節の中の読み順で足し、回答の流れはその後に
+文脈の補完のまとめ（``rag_engine.retrieval.context_fill``。#5168）で章節の本文を最も近い根拠のかたまりへ置く。引用の ID は
 chunk のまま（章節の chunk は検索の chunk と同じ親子の record にする）。
 """
 

@@ -3532,12 +3532,28 @@ def test_update_answer_record_settings_persists_retention_and_purges(
     )
 
 
-def test_answering_settings_rejects_invalid_values() -> None:
-    """選択肢に無い値・範囲外の近傍数は 422(#593)。"""
-    assert (
-        client.patch("/api/settings/answering", json={"neighbor_child_count": 21}).status_code
-        == 422
-    )
+@pytest.mark.parametrize("value", [0, 6, 21])
+def test_answering_settings_reject_neighbor_count_outside_one_to_five(value: int) -> None:
+    """文脈の補完の前後の chunk 数は 1〜5(#5168)。範囲外は 422 で、互換の読み替えはしない。"""
+    response = client.patch("/api/settings/answering", json={"neighbor_child_count": value})
+    assert response.status_code == 422
+
+
+def test_neighbor_count_defaults_to_one_and_rejects_values_outside_one_to_five() -> None:
+    """既定は 1。.env(Settings)・品質評価の rag_overrides の範囲外は検証のエラー(#5168)。"""
+    from pydantic import ValidationError
+
+    from app.config import Settings
+    from app.schemas.evaluation import EvaluationRagOverrides
+
+    assert Settings(_env_file=None).rag_neighbor_child_count == 1
+    assert Settings(_env_file=None, rag_neighbor_child_count=5).rag_neighbor_child_count == 5
+    assert EvaluationRagOverrides(neighbor_child_count=5).neighbor_child_count == 5
+    for value in (0, 6):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, rag_neighbor_child_count=value)
+        with pytest.raises(ValidationError):
+            EvaluationRagOverrides(neighbor_child_count=value)
 
 
 @pytest.mark.parametrize("value", [0, 11])

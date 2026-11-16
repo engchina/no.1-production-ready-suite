@@ -93,7 +93,6 @@ async def test_stage_switch_reaches_production_pipeline_settings(monkeypatch: Mo
         None,
         [
             "rerank",
-            "neighbor_children",
             "reference_expansion",
             "entity_expansion",
             "graph_expansion",
@@ -110,12 +109,11 @@ async def test_stage_switch_reaches_production_pipeline_settings(monkeypatch: Mo
     assert full.rag_rerank_enabled and full.rag_section_expansion_enabled
     assert [
         ablated[0].rag_rerank_enabled,
-        ablated[1].rag_neighbor_child_count,
-        ablated[2].rag_reference_expansion_enabled,
-        ablated[3].rag_entity_expansion_enabled,
-        ablated[4].rag_graph_expansion_enabled,
-        ablated[5].rag_section_expansion_enabled,
-    ] == [False, 0, False, False, False, False]
+        ablated[1].rag_reference_expansion_enabled,
+        ablated[2].rag_entity_expansion_enabled,
+        ablated[3].rag_graph_expansion_enabled,
+        ablated[4].rag_section_expansion_enabled,
+    ] == [False, False, False, False, False]
     # 無効にした工程のほかは full と同じ。
     assert ablated[0].rag_section_expansion_enabled is True
 

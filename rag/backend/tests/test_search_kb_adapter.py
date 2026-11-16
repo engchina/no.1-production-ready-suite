@@ -97,7 +97,7 @@ def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) 
     assert diagnostics["kb_adapter_config_applied"] is None
     # pipeline へはグローバル settings が渡っている。
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_neighbor_child_count == 3
+    assert RecordingPipeline.captured_settings.rag_neighbor_child_count == 1
     assert RecordingPipeline.captured_settings.rag_vector_index_profile == "accurate"
 
 
@@ -115,7 +115,7 @@ def test_multiple_kb_ids_use_global_defaults(monkeypatch: MonkeyPatch) -> None:
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["kb_adapter_config_applied"] is None
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_neighbor_child_count == 3
+    assert RecordingPipeline.captured_settings.rag_neighbor_child_count == 1
 
 
 def test_empty_kb_config_does_not_mark_applied(monkeypatch: MonkeyPatch) -> None:

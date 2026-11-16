@@ -27,10 +27,10 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-// 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
-const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
-  value: String(n),
-  label: String(n),
+// 1〜5（backend の rag_neighbor_child_count と同じ範囲。#5168）。SelectField は文字列値を扱う。
+const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 5 }, (_, n) => ({
+  value: String(n + 1),
+  label: String(n + 1),
 }));
 
 type AnsweringDraft = Omit<

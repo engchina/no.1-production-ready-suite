@@ -484,13 +484,13 @@ async def test_pipeline_blocked_query_does_not_run_answer_flow(
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
-        (Settings(), (3, True)),
+        (Settings(), (1, True)),
         (
             Settings(
-                rag_neighbor_child_count=7,
+                rag_neighbor_child_count=5,
                 rag_rerank_enabled=False,
             ),
-            (7, False),
+            (5, False),
         ),
     ],
 )

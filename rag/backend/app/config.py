@@ -1404,11 +1404,12 @@ class Settings(
         description="登録した用語・同義語と説明を回答生成の補助情報に使用する。全体設定だけで決める。",
     )
     rag_neighbor_child_count: int = Field(
-        default=3,
-        ge=0,
-        le=20,
+        default=1,
+        ge=1,
+        le=5,
         description=(
-            "回答で、根拠の child の前後から context へ足す近傍 child 数。"
+            "回答の文脈の補完で、章節の対応も親子分割も無い根拠の前後それぞれから足す"
+            " chunk 数(1〜5。#5168)。"
             "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
