@@ -1,4 +1,4 @@
-"""選択済み原文を容量内で全件読み、原文位置付きの回答候補へまとめる。"""
+"""入力の上限を超える原文を外さずに容量内の組で全件読み（map）、原文位置付きの回答候補を最終生成の 1 回へまとめる（reduce）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from types import GenericAlias
 from typing import Any, cast
 
@@ -30,6 +30,7 @@ from rag_engine.generation.document_inputs import document_groups, document_key,
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
+from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.resources.call_context import call_context, update_call_context
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.rerank_scores import rerank_first_key
@@ -148,6 +149,26 @@ def _slice(span: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
     return {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
 
 
+def candidate_block(values: Sequence[Mapping[str, Any]]) -> str:
+    """最終生成の根拠の後に添える回答候補（根拠のラベルごと）。候補が無ければ空。
+
+    候補は原文から作ったモデルの出力なので、根拠と同じ信頼できないデータの境界で囲む。読み方は根拠の読み方
+    （``grounded.EVIDENCE_READING_PROMPT`` の「回答候補」）の 1 か所にだけ書く。
+    """
+    notes = [
+        {"evidence_id": value["label"] if "label" in value else value["evidence_id"], "answer": value["batch_answer"]}
+        for value in values
+        if value.get("batch_answer")
+    ]
+    if not notes:
+        return ""
+    return (
+        "回答候補（evidence_id は根拠のラベル）:\nBEGIN_UNTRUSTED_RETRIEVED_CONTEXT\n"
+        + neutralize_boundary_markers(json.dumps({"candidates": notes}, ensure_ascii=False))
+        + "\nEND_UNTRUSTED_RETRIEVED_CONTEXT"
+    )
+
+
 def prepare_batched_evidence(
     spans: Sequence[dict[str, Any]],
     settings: Settings,
@@ -164,15 +185,21 @@ def prepare_batched_evidence(
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
     failed_batches: list[dict[str, Any]] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
+    protected_sources: Collection[str] = (),
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。
 
     ``unusable_output`` は ``read`` の例外が「モデルの使える出力が得られなかった」失敗かを判定する。その組は原文を残して続ける（#4229）。
     ``failed_batches`` には失敗した組の記録を足す（例外で返せない診断を呼び出し側へ渡す。#4090）。
     ``source_scores`` は出典の ID ごとの原質問への rerank の点数。読取で選ばれなかった原文を予算まで補う順に使う（#4113）。
+    ``protected_sources`` は検索拡張の印を持つ根拠の出典（#5162・#5098）。その文書を最初の組から読み（関連度の高い根拠と
+    同じ組に入りやすくし、点数の低い橋渡しの根拠を最後の組へ回さない）、読取で選ばれなかったときは補う順の先頭にする。
+    最終生成へ渡す並びは関連度の順（``document_order``）のまま。
     """
     reading_system = BATCH_READING_PROMPT
+    protected = frozenset(protected_sources)
     document_order = document_priority(spans, source_scores)
+    reading_order = document_priority(spans, source_scores, first=protected) if protected else document_order
     selected = order_document_spans(spans, priority=document_order)
     batches: list[dict[str, Any]] = []
     read_sources: set[str] = set()
@@ -188,15 +215,7 @@ def prepare_batched_evidence(
 
     def final_prompt(values: Sequence[dict[str, Any]]) -> str:
         values = order_document_spans(values, priority=document_order)
-        prompt = render(values)
-        notes = [
-            {"evidence_id": value["label"] if "label" in value else value["evidence_id"], "answer": value["batch_answer"]}
-            for value in values
-            if value.get("batch_answer")
-        ]
-        if notes:
-            prompt += "\n\n## 分割読取の回答候補（事実の出典は添付した原文）\n" + json.dumps({"candidates": notes}, ensure_ascii=False)
-        return prompt
+        return "\n\n".join(part for part in (render(values), candidate_block(values)) if part)
 
     def final_measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         prompt = final_prompt(values)
@@ -317,7 +336,7 @@ def prepare_batched_evidence(
     def partition(values: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         result: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
-        for document in document_groups(values, priority=document_order):
+        for document in document_groups(values, priority=reading_order):
             if fits([*current, *document]):
                 current.extend(document)
                 continue
@@ -351,14 +370,15 @@ def prepare_batched_evidence(
         return result
 
     def fill_to_budget(chosen: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, Any]]:
-        """読取で選ばれなかった原文を、原質問の rerank の点数の順に入力の予算まで足す（#4113。モデルの呼び出しは増やさない）。
+        """読取で選ばれなかった原文を、印の付いた根拠を先に、原質問の rerank の点数の順に入力の予算まで足す
+        （#4113。モデルの呼び出しは増やさない）。
 
         読取の選択だけに任せると、原則・例外・適用条件が最終生成の入力から落ちる。足すのは検索で選ばれた原文そのもので、
         出典の照合は最終生成で従来どおり掛かる。同じ原文の抜粋は全文へ置き換え、読取の回答候補は保つ。
         """
 
-        def rank(value: Mapping[str, Any]) -> tuple[int, float]:
-            return rerank_first_key((source_scores or {}).get(str(value["source_id"])))
+        def rank(value: Mapping[str, Any]) -> tuple[bool, int, float]:
+            return (str(value["source_id"]) not in protected, *rerank_first_key((source_scores or {}).get(str(value["source_id"]))))
 
         def inside(excerpt: Mapping[str, Any], value: Mapping[str, Any]) -> bool:
             return bool(

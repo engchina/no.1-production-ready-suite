@@ -1,7 +1,7 @@
 """選択順位・文書の版・原文位置を保つ生成入力の並べ方。"""
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 
@@ -36,11 +36,13 @@ def order_document_spans(spans: Sequence[dict[str, Any]], *, priority: Mapping[t
     return [value for members in document_groups(spans, priority=priority) for value in members]
 
 
-def document_priority(spans: Sequence[dict[str, Any]], source_scores: Mapping[str, float | None] | None) -> dict[tuple[str, ...], int]:
-    """選択済みChunkの原質問スコアの最高値で並べる。"""
+def document_priority(
+    spans: Sequence[dict[str, Any]], source_scores: Mapping[str, float | None] | None, *, first: Collection[str] = ()
+) -> dict[tuple[str, ...], int]:
+    """選択済みChunkの原質問スコアの最高値で並べる。``first`` の出典を含む文書は、点数より先に置く。"""
     groups = document_groups(spans)
 
-    def rank(members: list[dict[str, Any]]) -> tuple[int, float]:
+    def rank(members: list[dict[str, Any]]) -> tuple[bool, int, float]:
         scores = [
             score
             for value in members
@@ -48,7 +50,8 @@ def document_priority(spans: Sequence[dict[str, Any]], source_scores: Mapping[st
             and not isinstance(score, bool)
             and math.isfinite(score)
         ]
-        return (0, -max(scores)) if scores else (1, 0.0)
+        leading = any(str(value.get("source_id") or "") in first for value in members)
+        return (not leading, *((0, -max(scores)) if scores else (1, 0.0)))
 
     ordered = sorted(groups, key=rank)
     return {document_key(members[0]): index for index, members in enumerate(ordered)}
