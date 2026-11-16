@@ -552,6 +552,53 @@ def test_annotate_cross_references_keeps_other_documents_unresolved() -> None:
     assert own.section_path == "第2章 権限"
 
 
+def test_annotate_keeps_unnumbered_appendix_only_when_a_heading_has_the_same_name() -> None:
+    """番号の無い単位の語だけの別紙の参照は、同じ文書の見出しにあるときだけ残す(#5251)。"""
+    text = "作業の記録は合成作業記録様式を参照する。"
+    without = [_chunk(0, text, "第1章 総則"), _chunk(1, "合成本文。", "第2章 手順")]
+    annotate_cross_references(without, document_title="合成手順書.pdf")
+    # 見出しに「様式」が無い: 参照にしない(解決できない参照を残さない)。
+    assert reference_targets(without[0].metadata) == []
+
+    with_heading = [_chunk(0, text, "第1章 総則"), _chunk(1, "合成本文。", "様式")]
+    annotate_cross_references(with_heading, document_title="合成手順書.pdf")
+    assert [
+        (t.label, t.key, t.section_path) for t in reference_targets(with_heading[0].metadata)
+    ] == [("様式", "様式:", "様式")]
+
+    # 番号つきの別紙の参照は、見出しに無くても未解決のまま残す(従来どおり)。
+    numbered = [_chunk(0, "記録は様式1を参照する。", "第1章 総則")]
+    annotate_cross_references(numbered, document_title="合成手順書.pdf")
+    assert [(t.label, t.key, t.resolved) for t in reference_targets(numbered[0].metadata)] == [
+        ("様式1", "様式:1", False)
+    ]
+
+
+async def test_answer_drops_unnumbered_appendix_without_heading_from_receipt() -> None:
+    """回答の解決でも、見出しに無い番号の無い別紙の参照は外し、受領記録に残さない(#5251)。"""
+    from app.rag.cross_references import REFERENCE_RESOLUTION_VERSION_KEY
+
+    stale = ReferenceTarget("様式", "appendix", "様式:", None, None)
+    text = "作業の記録は合成作業記録様式を参照する。第3章を参照。"
+    legacy = _retrieved("doc-1:a", text, "第1章 総則")
+    # 修正前の規則で取り込んだ印(版が古い)も、本文から解決し直す。
+    stored = _retrieved("doc-1:b", text, "第1章 総則", targets=[stale, CHAPTER3])
+    stored.metadata[REFERENCE_RESOLUTION_VERSION_KEY] = "unique-v1"
+    anchors = [legacy, stored]
+    oracle = ReferenceOracle(anchors, [_retrieved("doc-1:cs-1:c3", "合成本文", "第3章 承認")])
+    receipt: dict[str, Any] = {}
+    await _engine(oracle)._reference_expansion(
+        SearchRequest(query="合成の質問"),
+        _SearchState(),
+        anchors,
+        existing={row.chunk_id for row in anchors},
+        receipt=receipt,
+    )
+    statuses = [item["status"] for item in receipt["targets"]]
+    assert statuses == ["available"]
+    assert "unresolved_section" not in receipt["stop_reasons"]
+
+
 def test_reference_targets_round_trip_and_ignore_broken_values() -> None:
     target = ReferenceTarget("第3章", "chapter", "3", None, "第3章 承認")
 
