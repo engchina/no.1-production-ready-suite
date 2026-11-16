@@ -59,6 +59,7 @@ from rag_engine.parsing.decorative_pictures import (
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.resources.tracing import observe_call
 from rag_engine.retrieval.metadata_filters import RetrievalMetadataFilter
+from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -826,7 +827,7 @@ def search_adb_hybrid_chunks(
         raise NativeHybridUnavailable(
             "Oracle原生hybrid検索はRAG backendの検索入口を使用してください。旧独立schemaのadapterへは切り替えません。"
         )
-    queries = _dedupe_queries(retrieval_queries)
+    queries = dedupe_queries(retrieval_queries)
     if not queries:
         return HybridSearchResult(child_chunks=[], all_chunks=[])
     preferred_engine_ids = tuple(preferred_engine_ids)
@@ -999,7 +1000,7 @@ def search_adb_hybrid_chunks(
                 else load_domain_keywords(settings.output_dir)
             )
             tokenizer_config = _text_search_tokenizer_config(settings)
-            query_keywords = {_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
+            query_keywords = {dedupe_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
             # 全文検索の上限は vector だけで検索する検索文を除いてから数える (#921)。重みは元の位置で決める。
             text_candidates = [
                 (index, query) for index, query in enumerate(queries) if any(c in {"hybrid", "keyword"} for c in channels[query])
@@ -1026,7 +1027,7 @@ def search_adb_hybrid_chunks(
                 for _query_index, query in text_variants:
                     text_query = oracle_text_query(
                         query,
-                        domain_keywords=[*domain_keywords, *query_keywords.get(_query_key(query), ())],
+                        domain_keywords=[*domain_keywords, *query_keywords.get(dedupe_query_key(query), ())],
                         tokenizer_config=tokenizer_config,
                     )
                     if not text_query or text_query in seen_text_queries:
@@ -2834,24 +2835,6 @@ def _set_input_sizes(cursor: Any, **types: str) -> None:
         "VECTOR": oracledb.DB_TYPE_VECTOR,
     }
     setter(**{name: type_map[type_name] for name, type_name in types.items() if type_name in type_map})
-
-
-def _query_key(query: str) -> str:
-    """検索文の同一性判定キー（NFKC・casefold・空白除去）。"""
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(query or "").strip()).casefold())
-
-
-def _dedupe_queries(queries: Sequence[str]) -> tuple[str, ...]:
-    selected: list[str] = []
-    seen: set[str] = set()
-    for query in queries:
-        text = str(query or "").strip()
-        key = _query_key(text)
-        if not key or key in seen:
-            continue
-        selected.append(text)
-        seen.add(key)
-    return tuple(selected)
 
 
 def _json_dumps(value: Any) -> str:

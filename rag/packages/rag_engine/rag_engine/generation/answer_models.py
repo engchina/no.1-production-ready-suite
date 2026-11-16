@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -11,6 +10,7 @@ from typing import Any
 from rag_engine.chunking import DEFAULT_RETRIEVAL_TOP_K
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.context_builder import ContextEvidence, ContextParentEvidence
+from rag_engine.retrieval.query_identity import dedupe_queries
 from rag_engine.retrieval.question_planning import QuestionPlan
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN, RETRIEVAL_SCOPE_KNOWLEDGE_BASE, normalize_retrieval_scope
 
@@ -154,7 +154,7 @@ class QueryExpansionResult:
     @property
     def retrieval_queries(self) -> tuple[str, ...]:
         """検索へ投入する query を重複なく返します。"""
-        return _dedupe_queries((self.original_question, *self.generated_queries))
+        return dedupe_queries((self.original_question, *self.generated_queries))
 
 
 @dataclass(frozen=True)
@@ -292,23 +292,6 @@ def retrieval_scope_label(scope_id: str) -> str:
     if scope == RETRIEVAL_SCOPE_KNOWLEDGE_BASE:
         return "Knowledge Base（全登録ファイル）"
     return "現在のファイル"
-
-
-def _dedupe_queries(queries: Sequence[str]) -> tuple[str, ...]:
-    seen: set[str] = set()
-    selected: list[str] = []
-    for query in queries:
-        text = str(query or "").strip()
-        key = _dedupe_query_key(text)
-        if not key or key in seen:
-            continue
-        selected.append(text)
-        seen.add(key)
-    return tuple(selected)
-
-
-def _dedupe_query_key(value: str) -> str:
-    return re.sub(r"\s+", "", _normalize_text(str(value or "")))
 
 
 def _normalize_text(value: str) -> str:
