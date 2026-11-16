@@ -740,7 +740,7 @@ class EvaluationRagOverrides(BaseModel):
     """評価の実行に一時適用する非 secret の回答設定(#591)。
 
     回答エンジンの全体の既定(近傍 child 数・rerank)と、検索の
-    RRF 定数・同じ group から足す child の上限・交差参照で足す chunk(#1280)・ベクトル検索の
+    RRF 定数・同じ group から足す child の上限・交差参照の有無(#1280)・ベクトル検索の
     target accuracy を上書きする。
     削除したキー(query_expansion_* / context_window_chars など)は受け付けない。
     """
@@ -752,7 +752,6 @@ class EvaluationRagOverrides(BaseModel):
     rrf_k: int | None = Field(default=None, ge=1, le=1000)
     context_group_max_chunks: int | None = Field(default=None, ge=1, le=20)
     reference_expansion_enabled: bool | None = None
-    reference_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
     # 実体の 1 段の拡張(#1362)。実体の抽出を選んだ文書で、拡張の有り / 無しを比べる。
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
