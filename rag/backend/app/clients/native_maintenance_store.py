@@ -317,7 +317,7 @@ class NativeMaintenanceStore:
                         extra={"error_type": type(exc).__name__},
                     )
 
-        # OPTIMIZE_INDEXの暗黙commitを業務transactionやlease行lockへ混ぜない。
+        # 整理の commit を業務transactionやlease行lockへ混ぜない(専用の接続で行う)。
         async def run() -> None:
             await self.oracle._db_call_runner(operation)
 

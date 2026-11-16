@@ -158,6 +158,17 @@ async def test_plan_follows_the_full_interval(
     assert ("full_completed" in connection.events) is completed
 
 
+async def test_semantic_cleanup_is_committed_before_the_connection_is_closed() -> None:
+    """semantic の整理は close(rollback)の前に確定する。次の回で同じ整理をやり直さない(#5199)。"""
+    connection = PlanConnection(full_due=False)
+    store = NativeMaintenanceStore(cast(OracleClient, Oracle(connection)), full_interval_hours=6)
+
+    await store.optimize(LEASE)
+
+    assert connection.events == ["wait", "commit", "semantic", "commit"]
+    assert connection.closed
+
+
 async def test_full_start_is_committed_before_any_optimizer_runs() -> None:
     """時間切れや再起動の後も次の FULL を待たせるため、開始の前に記録を確定する(#4214)。"""
     connection = PlanConnection(full_due=True)
