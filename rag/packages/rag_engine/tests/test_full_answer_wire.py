@@ -318,3 +318,25 @@ def test_answer_without_any_bound_citation_is_not_reported_with_the_declared_con
     assert response.cited_evidence
     assert response.confidence == "high"
     assert "[" not in response.answer_text.split("根拠：")[0]
+
+
+def test_response_kind_is_defined_once_in_the_instructions_and_declared_after_the_body():
+    """種別の各値の定義は、モデルが必ず読む生成の指示の 1 か所にあり、応答 schema の説明では繰り返さない（#5229）。
+
+    応答 schema の項目の説明は、モデルによっては構造の制約だけに使われて読まれないため、定義を schema に置かない。
+    """
+    from typing import get_args
+
+    from rag_engine.generation.answer_envelope import AnswerOutcome
+
+    kinds = get_args(AnswerOutcome)
+    assert set(grounded.RESPONSE_KIND_DEFINITIONS) == set(kinds)
+    system = grounded.generation_system_prompt()
+    for kind, definition in grounded.RESPONSE_KIND_DEFINITIONS.items():
+        assert system.count(f"- {kind}: {definition}") == 1
+    units, _unit = catalog()
+    schema = full_answer_model(units).model_json_schema()
+    properties = list(schema["properties"])
+    assert properties.index("answer_body") < properties.index("response_kind")
+    description = schema["properties"]["response_kind"]["description"]
+    assert not any(kind in description for kind in kinds)

@@ -25,9 +25,8 @@ class FullAnswerWire(BaseModel):
 
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
     answer_body: str = Field(min_length=1, description="利用者へ返す完成した回答本文。必要に応じて Markdown を使う。")
-    response_kind: AnswerOutcome = Field(
-        description="本文の回答種別。付帯情報であり、本文の正しさを保証しない。answered=回答、conditional=条件付き、needs_environment_data=実環境の確認が必要、needs_clarification=質問の確認が必要、insufficient_evidence=資料不足、needs_human=人の判断が必要。"
-    )
+    # 各値の定義は生成の指示（grounded.RESPONSE_KIND_DEFINITIONS）だけに書く（#5229）。
+    response_kind: AnswerOutcome = Field(description="本文が質問の要求にどう応じたかの種別。")
     confidence: Literal["high", "medium", "low"] = Field(description="回答の確かさの自己申告。")
 
 
