@@ -1254,7 +1254,7 @@ def capped_candidate_ids(context: AnswerContext, settings: Settings | None, *, t
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) <= 0 or not ranked:
         return []
     limit = max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K))
-    kept = {id(record) for record in cap_anchors_per_document(ranked, settings, top_k=limit)[:limit]}
+    kept = {id(record) for record in cap_anchors_per_document(ranked, settings)[:limit]}
     return list(dict.fromkeys(retrieval_record_id(record) for record in ranked[:limit] if id(record) not in kept))
 
 
