@@ -221,6 +221,47 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5167・#5178 実体・別名索引の抽出の修正と、作り直しの CLI）
+
+実体・別名索引（文書レシピの `entity_index_enabled`。`rag_entities` / `rag_entity_aliases` / `rag_entity_chunks`）の本文の
+抽出で、次の誤った実体・別名を作らないようにした（#5167。`app/rag/entity_index.py`）。表・migration・API path・言語資源は
+変えていない。
+
+- 「名前（以下、略称）」の別名に読点が入る（別名 `、略称`）。別名の語の後の読点は読み飛ばす。
+- 英字の名前の前に付けるカナ・漢字の語が語の途中から始まり、先頭の文字が欠けた名前ができる。語の途中からは始めない
+  （長い語は英字の部分だけを名前にする）。
+- 英語の本文の文頭の大文字の語（`This`・`Every` など）が名前になる。大文字で始まる英字の語を名前にするのは、日本語の
+  本文に混じるとき（前後のいちばん近い文字が日本語の字）だけにし、英語の本文の中では大文字が 2 つ以上の語（`REST API`・
+  `MaxRetryCount`）だけを名前にする。
+
+**保存済みの実体の行は、更新しただけでは変わらない**（取込の索引の工程でだけ作る）。取込済みの文書は、実体・別名索引だけを
+作り直す CLI（#5178。`app/rag/entity_index_cli.py`）で直す。分割・embedding・全文検索の索引は変えず、LLM も使わない。
+
+- 対象は検索に出している chunk_set（有効な `INDEXED` の版と、レシピの無い旧データの配信中の版）。作っている途中の候補は
+  対象にしない（索引の工程で新しい規則で作られる）。
+- chunk_set ごとに、文書レシピの有効な設定（全体の既定 `RAG_ENTITY_INDEX_ENABLED` → 形式別の既定 → レシピの
+  `entity_index_enabled`・`entity_name_columns`・`entity_attribute_columns`）に従う。実体・別名索引を使う chunk_set は保存済みの
+  chunk から作り直して置き換え、**使わない chunk_set は実体の行を消す**（取込し直したときと同じ状態にする。残すと、レシピで
+  使わないと決めた文書の古い行が、実体・別名による検索拡張に使われ続ける）。
+- 全体の既定が OFF の環境で `--all` を実行すると、レシピで ON にしていない文書の実体の行は消える。先に `--dry-run` の
+  `cleared`（消す chunk_set の数）と `entities_before` を確かめる。
+- 同じ chunk と設定なら、何度実行しても同じ行になる。1 つの chunk_set の失敗は `failed` に出して残りを続け、終了コードを 1
+  にする（失敗した文書だけを `--document-id` で実行し直せる）。
+
+1. backend を更新して再起動する（以降に取り込む文書は新しい規則で作る）。
+2. 対象の件数を確かめる（書き込まない。作り直した後の実体・別名・関連の数も出す。`--details` で chunk_set ごと）。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.entity_index_cli rebuild --all --dry-run
+   ```
+
+3. 利用の少ない時間に作り直す。対象は `--all`（全件）、`--knowledge-base-id <KB の ID>`（所属する文書）、
+   `--document-id <文書 ID>` のどれかで選ぶ（ID の指定は複数でき、`--all` と同時には指定できない）。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.entity_index_cli rebuild --all
+   ```
+
 ## 既存環境の更新手順（#5173 補いの検索を主の検索と同じ切りと合わせ込みにし、3 つの経路の根拠の流れを 1 つにする）
 
 語数上限の要求別の補完・業務ガイドの手順ごとの検索を、検索ごとに「検索 → rerank → 関連度の下限 → `top_k` で切る」に
