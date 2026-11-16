@@ -17,6 +17,8 @@
 
 上限を超えたときの呼び出しは「組の数 × 読む回数（通常 1 回）＋最終生成 1 回」になる。組の大きさは上の 2 つの予算で決まり、専用の設定は持たない（呼び出しを減らすには `RAG_EVIDENCE_BUDGET_CHARS` を上げるか検索で渡す根拠を減らす）。各組の原文の座標・状態・件数と最終入力の測定値は `generation_input_budget`（`selection`・`batch_count`・`batches`・`reduction`）に記録する。
 
+**回答の期限（#5204）**: 各組を読む前に、回答の期限の残りが最後の生成の 1 回の見積もり（`RAG_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS`）と確定の 30 秒より少なければ、その組から先を読まない。読み終わった組の結果に、読まなかった組の入力を読取の優先の順に入る分だけ足し、上の 3 と同じく予算まで補って最終生成へ渡す（LLM は呼ばない）。最終生成の入力に入らなかった出典の数は `excluded_span_count` として回答の未反映の案内になり、止めた理由は `generation_input_budget` の `stop_reason="deadline"` と `deadline`（残りの秒・予約・読んだ組と読まなかった組の数）に残る。読まなかった組は `batch_count` に数えない。
+
 読取の時間切れ・縮約できない入力・出力の契約に反する失敗は、成功に置き換えず、質問に関係する資料の記載だけを示す既存の扱いへ進む（`generation_failure` の `stage` が `evidence.batch_read`）。
 
 ## 回答種別と品質
