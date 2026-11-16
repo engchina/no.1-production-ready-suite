@@ -272,6 +272,9 @@ class _SearchState:
     # 交差参照で足した chunk を起点にした章節の拡張で読む章節((document_id, chunk_set_id,
     # section_id)。所有の章節から根まで)。参照先と同じ範囲(``_reference_scope``)で読む(#3325)。
     reference_sections: set[tuple[str, str, str]] = field(default_factory=set)
+    # chunk ごとの章節の対応(``_section_outline`` の結果。None は対応なし)。
+    # 文脈の補完の補い方の判定と章節の拡張が同じ結果を使う(#5168)。
+    chunk_outlines: dict[str, Any] = field(default_factory=dict)
     # 交差参照の起点の記録(検索ごと。#1549)。参照を持つ候補の統合の順位と、辿った・辿らなかった
     # 理由(起点の外・参照先が無い・上限)を診断に出し、回答の記録から replay で確かめる。
     reference_sources: list[dict[str, object]] = field(default_factory=list)
@@ -1334,10 +1337,6 @@ class AnswerEngine:
                             for anchor in anchors
                             # 文書全体の要約は文書の中の位置を持たないので、前後を読まない(#4793)。
                             if not is_derived_chunk(anchor)
-                            and (
-                                anchor.metadata.get("chunk_strategy") == "small_to_big"
-                                or self._settings.rag_neighbor_child_count > 0
-                            )
                         ],
                         max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
                         neighbor_child_count=self._settings.rag_neighbor_child_count,
@@ -1651,8 +1650,14 @@ class AnswerEngine:
         *,
         anchors: Sequence[Any],
         settings: Any = None,
+        section_anchor_ids: Sequence[str] = (),
     ) -> list[Any]:
-        """精排後の起点だけから、同じ有効成果物の親/近傍を読む。再構築は回答内の既読を使う。"""
+        """精排後の起点だけから、同じ有効成果物の親/近傍を読む。再構築は回答内の既読を使う。
+
+        ``section_anchor_ids`` は章節で文脈を補う起点(#5168)。前後の chunk を読まない
+        (親子分割の親は読む)。
+        """
+        sectioned = set(section_anchor_ids)
         result: list[Any] = []
         # 検索ごとの範囲を起点から引き継ぐ。同じ chunk でも異なる範囲の既読を混ぜない。
         scopes: dict[str, list[Any]] = {}
@@ -1688,7 +1693,14 @@ class AnswerEngine:
             def cache_key(item: RetrievedChunk, page_scope: str = scope) -> str:
                 return json.dumps([item.chunk_id, page_scope], ensure_ascii=False)
 
-            pending = [item for item in selected if cache_key(item) not in state.context_reads]
+            # 章節で補う起点(親子分割でないもの)は前後を読まない(補い方は起点ごとに 1 つ。#5168)。
+            readable = [
+                item
+                for item in selected
+                if item.chunk_id not in sectioned
+                or item.metadata.get("chunk_strategy") == "small_to_big"
+            ]
+            pending = [item for item in readable if cache_key(item) not in state.context_reads]
             if pending:
                 with _search_stage(CONTEXT_SIBLINGS_STAGE, active=receipt is None) as observation:
                     read_anchors = [
@@ -1696,10 +1708,6 @@ class AnswerEngine:
                         for item in pending
                         # 文書全体の要約は文書の中の位置を持たないので、前後を読まない(#4793)。
                         if not is_derived_chunk(item)
-                        and (
-                            item.metadata.get("chunk_strategy") == "small_to_big"
-                            or self._settings.rag_neighbor_child_count > 0
-                        )
                     ]
                     if observation is not None:
                         observation.request(
@@ -1789,7 +1797,7 @@ class AnswerEngine:
                 for item in siblings:
                     state.chunks.setdefault(item.chunk_id, item)
             if receipt is not None:
-                cached = [item for item in selected if item not in pending]
+                cached = [item for item in readable if item not in pending]
                 if cached:
                     receipt.reads.append(
                         {
@@ -1807,7 +1815,7 @@ class AnswerEngine:
                         }
                     )
             chunks = {item.chunk_id: item for item in selected}
-            for anchor in selected:
+            for anchor in readable:
                 chunks.update(
                     (item.chunk_id, item) for item in state.context_reads.get(cache_key(anchor), ())
                 )
@@ -2734,6 +2742,11 @@ class AnswerEngine:
         対応がまだ無い文書(この機能の前に取り込んだ文書)は、第 1 段階(#1438)と同じく
         その場で作り直す。
         """
+        if chunk_id not in state.chunk_outlines:
+            state.chunk_outlines[chunk_id] = await self._load_section_outline(state, chunk_id)
+        return state.chunk_outlines[chunk_id]
+
+    async def _load_section_outline(self, state: _SearchState, chunk_id: str) -> Any:
         from rag_engine.generation.section_expansion import SectionInfo, SectionOutline
 
         from app.rag.section_map_service import chunk_section, section_outline

@@ -221,6 +221,32 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5168 前後の文脈・親・章節の拡張を文脈の補完にまとめる）
+
+根拠（検索拡張の根拠も同じ）ごとに文脈の補い方を 1 つだけ選ぶようにした: 章節の対応がある → 章節（章節の拡張。
+`RAG_SECTION_EXPANSION_*` の予算・段の上限は変えていない）/ 章節が無い親子分割 → 親の本文 / どちらも無い → 前後の
+chunk（`RAG_NEIGHBOR_CHILD_COUNT`）。補った後に、互いに含む・重なりの大きい根拠を 1 つにまとめ、補った文脈と隣り合う
+根拠を根拠のかたまり（文書の順）にし、かたまりは rerank の後の根拠の順に並べる（[rag-engine.md の「文脈の補完」](./rag-engine.md#文脈の補完5168)）。
+表・migration・API path は変えていない。未リリースのため互換は持たない。
+
+変えた動き:
+
+- `RAG_NEIGHBOR_CHILD_COUNT` の既定を 3 から 1 に、範囲を 0〜20 から 1〜5 にした（設定 API の
+  `PATCH /api/settings/answering` の `neighbor_child_count`・品質評価の `rag_overrides.neighbor_child_count`・画面の
+  選択肢も同じ）。前後を足さない設定（0）は無くなった。
+- 章節の対応がある根拠には前後の chunk を足さない。前後の chunk と章節の本文は、根拠の並びの最後ではなく、
+  同じ文書の最も近い根拠のそばに置く。検索拡張の根拠がほかの根拠（章節の本文を含む）に含まれるときは印だけを残す。
+- 処理の経過の工程「前後の文脈の読み込み」（回答の流れ）は「文脈の補完」になり、起点ごとの補い方を記録する。
+- 品質評価の除去実験（`ablate`）の工程 `neighbor_children` は、無効にできないため測らない工程になった。
+
+1. `backend/.env` の `RAG_NEIGHBOR_CHILD_COUNT` を確かめる。0 か 6 以上なら起動時の設定の検証で backend が起動しない
+   ので、1〜5 に直す（新しい既定にするなら行を消すか `1` にする）。行が無い環境は既定が 3 から 1 に変わる。画面
+   （取込・検索・回答設定 > 検索方法）から保存した値も同じ変数に入る。
+2. 品質評価の保存済みの評価の要求で `rag_overrides.neighbor_child_count` を 0 か 6 以上にしていたものは、その値の
+   ままでは再実行できない（422）。1〜5 にして実行し直す。`ablate --stages` に `neighbor_children` を渡しているときは外す。
+3. backend（と取込 worker）を再起動する。根拠の件数・字数と並びは変わる（章節のある文書の前後の chunk が減り、
+   補った文脈が根拠のそばに移る）。
+
 ## 既存環境の更新手順（#5165 rerank の後の並べ替えと件数の切りを 1 回ずつにする）
 
 rerank の後の工程を「rerank の点数の順（MMR）→ 関連度の下限 → 文書ごとの上限 → 起点数 `top_k` で 1 回だけ切る →

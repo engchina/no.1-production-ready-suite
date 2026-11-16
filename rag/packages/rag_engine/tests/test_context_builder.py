@@ -153,13 +153,15 @@ class ContextBuilderTests(unittest.TestCase):
 
         records = [before, hit, after, synthetic, *foreign]
         bundle = build(records, [hit])
-        self.assertEqual([r.id for r in bundle.records], ["hit", "before", "after"])
-        self.assertEqual([e.reason for e in bundle.evidence], ["retrieved_chunk", "adjacent_child", "adjacent_child"])
+        # 前後の文脈は起点のかたまりとして文書の順に続けて置く（#5168）。
+        self.assertEqual([r.id for r in bundle.records], ["before", "hit", "after"])
+        self.assertEqual([e.reason for e in bundle.evidence], ["adjacent_child", "retrieved_chunk", "adjacent_child"])
         self.assertEqual([r.id for r in build(records, [hit], count=0).records], ["hit"])
         self.assertEqual([r.id for r in build(records, [before]).records], ["before", "hit"])
         self.assertEqual([r.id for r in build(records, [hit], max_records=1).records], ["hit"])
         self.assertEqual([r.id for r in build(records, [after, before], count=0).records], ["after", "before"])
-        self.assertEqual([r.id for r in build(records, [after, before, hit], count=0).records], ["after", "before", "hit"])
+        # 隣り合う起点は 1 つのかたまり（文書の順）にし、かたまりは最も上の起点の位置に置く（#5168）。
+        self.assertEqual([r.id for r in build(records, [after, before, hit], count=0).records], ["before", "hit", "after"])
         parent_scope = {**scope, "chunk_strategy": "small_to_big"}
         parent_hit = replace(hit, metadata=parent_scope)
         parent = replace(synthetic, text="保存された親原文", metadata=parent_scope)

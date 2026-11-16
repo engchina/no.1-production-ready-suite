@@ -70,7 +70,7 @@ def fixed(uid, seq):
     )
 
 
-@pytest.mark.parametrize("count,limit,expected", [(1, 10, 2), (1, 1, 0), (0, 10, 0)])
+@pytest.mark.parametrize("count,limit,expected", [(1, 10, 2), (1, 1, 0), (5, 10, 2)])
 def test_neighbors_separate_read_and_adoption(count, limit, expected):
     rows = [fixed("c1", 1), fixed("c2", 2), fixed("c3", 3)]
 
@@ -101,14 +101,14 @@ def test_neighbors_separate_read_and_adoption(count, limit, expected):
             max_records=limit,
             max_chars=10000,
         )
-    step = next(call for call in calls if call.name == "前後の文脈の読み込み")
+    step = next(call for call in calls if call.name == "文脈の補完")
     assert step.inputs["前後それぞれの最大 Chunk 数"] == count
+    assert step.inputs["起点ごとの補い方"] == {"c2": "neighbors"}
     assert step.outputs["読取 Chunk 数"] == 3
     assert step.outputs["文脈への採用 Chunk 数"] == expected
     if limit == 1:
         assert any(item.get("reason") == "context_record_limit" for item in step.outputs["隣接候補の選択記録"])
-    if count == 0:
-        assert step.outputs["実行状態"] == "設定無効"
+    assert step.outputs["実行状態"] == "実行済み"
 
 
 def run_sections(ctx, stub, settings=None, state=None):

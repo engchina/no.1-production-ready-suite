@@ -345,7 +345,10 @@ for (const width of [1280, 375]) {
   await mockLocalAuth(page);
   await mockRetrievalCards(page);
   await page.goto("/settings/retrieval");
-  await expect(page.getByText("当たった根拠の前と後から、それぞれ最大でこの数のチャンクを文脈に加えます。同じ親やページの範囲、取得できる根拠、入力上限によって実際の数は減ります。", {exact:true})).toBeVisible();
+  await expect(page.getByText("章節の対応も親子分割も無い根拠に、前と後からそれぞれ最大でこの数のチャンクを文脈として加えます（1〜5）。章節の対応がある根拠は章節で、親子分割の根拠は親の本文で補い、前後のチャンクは加えません。", {exact:true})).toBeVisible();
+  // 選択肢は 1〜5（0 で前後を加えない設定は無い。#5168）。
+  await page.getByRole("combobox", { name: "根拠の前後から加える数", exact: true }).click();
+  await expect(page.getByRole("listbox", { name: "根拠の前後から加える数" }).getByRole("option")).toHaveText(["1", "2", "3", "4", "5"]);
   await expect(page.getByText("0 は加えません。", {exact:false})).toHaveCount(0);
  });
 
