@@ -2,11 +2,14 @@
 
 import asyncio
 import sys
+import threading
+import time
 from collections.abc import Callable, Mapping
 from typing import cast
 
 import pytest
 
+from app.clients import native_maintenance_store as store_module
 from app.clients.native_index_maintenance import NativeIndexMaintenanceIncomplete
 from app.clients.native_maintenance_store import VERIFY_CALL_TIMEOUT_MS, NativeMaintenanceStore
 from app.clients.oracle import OracleClient
@@ -470,3 +473,61 @@ def test_dedicated_connection_does_not_touch_the_shared_pool(
         assert cast(object, client.open_dedicated_connection()) is connection
         assert connection.sql and not connection.closed
     assert connected == [{"dsn": "x"}]
+
+
+class _CancelAware(Connection):
+    """call_timeout で止まらない整理を模す。cancel() だけが整理を止める(#5214)。"""
+
+    def __init__(self, *, optimize_seconds: float = 5.0, verify_seconds: float = 0.0) -> None:
+        super().__init__()
+        self.optimize_seconds = optimize_seconds
+        self.verify_seconds = verify_seconds
+        self.cancel_requested = threading.Event()
+
+    def execute(self, statement: str, binds: Mapping[str, object] | None = None) -> None:
+        super().execute(statement, binds)
+        if "OPTIMIZE_INDEX" in statement:
+            if self.cancel_requested.wait(timeout=self.optimize_seconds):
+                raise RuntimeError("合成の ORA-01013")
+        elif "COUNT(*)" in statement and any("OPTIMIZE_INDEX" in sql for sql in self.sql):
+            time.sleep(self.verify_seconds)
+
+    def cancel(self) -> None:
+        self.cancel_requested.set()
+
+
+def _short_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store_module, "OPTIMIZE_CALL_TIMEOUT_MS", 300)
+    monkeypatch.setattr(store_module, "OVERRUN_CANCEL_GRACE_SECONDS", 0.2)
+
+
+async def test_optimizer_that_ignores_call_timeout_is_cancelled_by_the_wall_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """call_timeout を過ぎても返らない整理は、期限と猶予の後に cancel で止める(#5214)。"""
+    _short_limits(monkeypatch)
+    connection = _CancelAware()
+    store = NativeMaintenanceStore(cast(OracleClient, Oracle(connection)))
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="ORA-01013"):
+        await store.optimize(LEASE)
+
+    assert time.monotonic() - started < 3
+    assert connection.cancel_requested.is_set()
+    assert connection.closed
+
+
+async def test_wall_clock_limit_does_not_cancel_verification_or_a_finished_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """期限の内に返った整理の確定・件数の検査は止めない。終わった後にも cancel しない。"""
+    _short_limits(monkeypatch)
+    connection = _CancelAware(optimize_seconds=0.0, verify_seconds=0.4)
+    store = NativeMaintenanceStore(cast(OracleClient, Oracle(connection)))
+
+    await store.optimize(LEASE)
+    await asyncio.sleep(0.6)
+
+    assert not connection.cancel_requested.is_set()
+    assert connection.closed
