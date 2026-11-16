@@ -7,6 +7,7 @@ from typing import Any
 
 from rag_engine.config import Settings
 from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
+from rag_engine.generation.document_inputs import FIRST_CHUNK, document_key, with_first_chunks
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.retrieval.rerank_scores import rerank_first_key
 
@@ -32,6 +33,9 @@ def select_evidence(
 
     入らなければ原文を除外せず、``prepare_batched_evidence`` で容量内の組に分けて全件を読み、選ばれた範囲と回答候補を
     最終生成の 1 回へまとめる。protected_sources（検索拡張の印を持つ根拠の出典。#5162）は分割読取の組分けと補う順で先にする。
+
+    文書の本文の先頭の chunk（``FIRST_CHUNK`` の印。#5240）は外さない。1 回の生成でも分割読取の各組・最終生成でも、その文書の
+    根拠と一緒に入れ、根拠がすでにその原文を含めば足さない（``with_first_chunks``）。
     """
 
     def measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
@@ -47,20 +51,33 @@ def select_evidence(
     def relevance(value: dict[str, Any]) -> tuple[int, float]:
         return rerank_first_key((source_scores or {}).get(str(value["source_id"])))
 
+    firsts = [span for span in spans if span.get(FIRST_CHUNK)]
     unique: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for span in sorted(spans, key=relevance):
+    for span in sorted((span for span in spans if not span.get(FIRST_CHUNK)), key=relevance):
         key = str(span["source_id"]), str(span["text"])
         if key not in seen:
             seen.add(key)
             unique.append(span)
-    counts = {"input_span_count": len(spans), "duplicate_span_count": len(spans) - len(unique), "excluded_span_count": 0}
-    selected = tag(unique)
+    whole = with_first_chunks(unique, firsts)
+    first_documents = {document_key(span) for span in firsts}
+    counts: dict[str, Any] = {
+        "input_span_count": len(spans),
+        "duplicate_span_count": len(spans) - len(firsts) - len(unique),
+        "excluded_span_count": 0,
+    }
+    if first_documents:
+        # 先頭の chunk の文書の数と、根拠がすでにその原文を含んでいて足さなかった文書の数。
+        counts["first_chunk_document_count"] = len(first_documents)
+        counts["first_chunk_covered_document_count"] = len(
+            first_documents - {document_key(span) for span in whole if span.get(FIRST_CHUNK)}
+        )
+    selected = tag(whole)
     prompt, measurement = measure(selected)
     if measurement["fits"]:
         return selected, prompt, {**measurement, **counts, "selection": "relevance_within_budget", "batch_count": 0}
     selected, prompt, measurement = prepare_batched_evidence(
-        unique,
+        [*unique, *firsts],
         settings,
         question=question,
         render=render,
