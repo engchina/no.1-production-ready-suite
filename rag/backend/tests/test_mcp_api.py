@@ -638,7 +638,8 @@ def test_search_maps_evidence_and_uses_token_user_context(
         captured["context"] = current_audit_request_context()
         return SearchResponse(
             answer="回答",
-            # 回答に使った根拠は citations の先頭に来る（answer_engine の並び。MCP は並びを変えない）。
+            # 回答に使った根拠は citations の先頭に来る（answer_engine の並び。MCP は並びを
+            # 変えない）。
             citations=[
                 _chunk(
                     "c1",
@@ -1576,7 +1577,8 @@ def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) 
     body = _call("rag_search", {"query": "規程", "evidence_limit": 3}, _token(user.user_uuid))[
         "structuredContent"
     ]
-    # 回答に使った c0・c3 を先に残し、残りの枠に使っていない根拠を入れる。並びは citations の順のまま。
+    # 回答に使った c0・c3 を先に残し、残りの枠に使っていない根拠を入れる。並びは citations の
+    # 順のまま。
     assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "c3"]
     assert body["evidence_omitted"] == 3
     assert (body["insufficient_reason"], body["needs_human_review"]) == (None, False)
@@ -1611,7 +1613,9 @@ def _approval_citations(used: frozenset[str] = frozenset()) -> list[Any]:
 def test_retrieve_evidence_keeps_anchors_within_the_limit_in_the_evidence_order(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
-    """上限を超えるときは当たった chunk を関連度の順に先に残し（#1348）、並びは回答と同じまま（#5173）。"""
+    """上限を超えるときは当たった chunk を関連度の順に先に残し（#1348）、並びは回答と同じ
+    まま（#5173）。
+    """
 
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
