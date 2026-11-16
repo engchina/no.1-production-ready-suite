@@ -28,7 +28,9 @@
 
 from __future__ import annotations
 
+import functools
 import re
+import sys
 import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -428,7 +430,39 @@ def _attachment_cited(answer: str, file_name: str) -> bool:
 
 # 回答が本文に書いた根拠の ID の印（「【証拠 ID: 0f3a…:7】」「〔根拠: …〕」「[evidence_id: …]」）。
 # 中の ID を根拠に引き当てられた印だけを数える（Markdown のリンク `[文](URL)` は除く）。
-_MARKER = re.compile(r"【[^】\n]{1,200}】|〔[^〕\n]{1,200}〕|\[[^\]\n]{1,200}\](?!\()")
+_MARKER_BRACKETS = {"【": "】", "〔": "〕", "[": "]"}
+
+
+@functools.cache
+def _marker() -> re.Pattern[str]:
+    """括弧を重ねた印（`【【…】】`）も 1 つの印として読む。中身には同じ種類の括弧を含めない。
+
+    重ねた括弧の間には、改行を除く空白と書式文字（一般カテゴリ Cf。ZWSP・BOM など）を許す（初めて
+    使うときに Unicode のデータから作る）。
+    """
+    format_chars = "".join(
+        chr(code) for code in range(sys.maxunicode + 1) if unicodedata.category(chr(code)) == "Cf"
+    )
+    pad = rf"(?:[^\S\n]|[{re.escape(format_chars)}])*"
+    patterns = []
+    for open_, close in _MARKER_BRACKETS.items():
+        o, c = re.escape(open_), re.escape(close)
+        link = r"(?!\()" if open_ == "[" else ""
+        patterns.append(rf"{o}(?:{pad}{o})*[^{o}{c}\n]{{1,200}}{c}(?:{pad}{c})*+{link}")
+    return re.compile("|".join(patterns))
+
+
+def _balanced_marker(text: str) -> str:
+    """印の範囲を括弧の対応で決める: 開きと閉じの少ない方の数だけ、内側から対にした範囲（#5190）。
+
+    中身に同じ種類の括弧を含めないので、開きは先頭に、閉じは末尾にだけ並ぶ。閉じが多いときの残りは
+    外側の本文の括弧と対になる（`【注: …【根拠: …】】`）。
+    """
+    close = _MARKER_BRACKETS[text[0]]
+    opens = [index for index, char in enumerate(text) if char == text[0]]
+    closes = [index for index, char in enumerate(text) if char == close]
+    pairs = min(len(opens), len(closes))
+    return text[opens[-pairs] : closes[pairs - 1] + 1]
 
 
 def _ordered_ids(ids: set[str], order: Sequence[str]) -> list[str]:
@@ -438,7 +472,9 @@ def _ordered_ids(ids: set[str], order: Sequence[str]) -> list[str]:
 def _markers(answer: str, chunk_ids: Sequence[str]) -> list[JsonObject]:
     """回答の中の根拠の ID の印と、引き当てた根拠（印の原文, chunk の一覧）。"""
     markers: list[JsonObject] = []
-    for text in dict.fromkeys(match.group(0) for match in _MARKER.finditer(answer)):
+    for text in dict.fromkeys(
+        _balanced_marker(match.group(0)) for match in _marker().finditer(answer)
+    ):
         ids = cited_chunk_ids(text, chunk_ids)
         if ids:
             markers.append({"text": text, "chunk_ids": _ordered_ids(ids, chunk_ids)})
