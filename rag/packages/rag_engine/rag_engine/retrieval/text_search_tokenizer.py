@@ -3,7 +3,7 @@
 分割の方式は 1 つだけで、利用者が選ぶ設定は持たない。
 
 - 主の語: Sudachi の長い単位（C）と短い単位（A）。正規化形と表層形の両方を出す。
-- 補う語: 文字種の区切り（漢字・カタカナ・英数字の連続）、漢字の複合語の部分語（先頭 2 字・末尾 2 字）、
+- 補う語: 文字種の区切り（漢字・カタカナ・英数字の連続と、漢字・かな以外の文字の連続）、漢字の複合語の部分語（先頭 2 字・末尾 2 字）、
   Sudachi の語から送り仮名を除いた形（「取り消し」→「取消」）。辞書に無い語・型番・送り仮名の
   書き分けに届かせる。
 - ドメインキーワード・質問で明示された列名は 1 語として優先する。
@@ -22,6 +22,7 @@ import importlib.util
 import json
 import logging
 import re
+import sys
 import threading
 import unicodedata
 from collections.abc import Iterable, Sequence
@@ -33,7 +34,7 @@ from rag_parser_core.language.text import range_class, text_patterns
 
 from rag_engine.dependencies import report_degraded
 from rag_engine.knowledge.domain_keywords import extract_domain_keywords
-from rag_engine.retrieval.character_forms import SYMBOL_FOLD, fold_text
+from rag_engine.retrieval.character_forms import fold_text
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +72,9 @@ _EXTRA_PATTERNS = (
     re.compile(r"\d+[a-z][a-z0-9]*"),
     re.compile(r"v?\d+(?:\.\d+)+"),
 )
-# 文字の同一視（質問の側と索引の側、回答のモデルに渡す根拠で共通。#1336・#1350）。波線・ダッシュは
-# ``character_forms.SYMBOL_FOLD``、質問の側だけが空白の連続を 1 つにまとめる。
+# 文字の同一視（質問の側と索引の側、回答のモデルに渡す根拠で共通。#1336・#1350・#5118）は
+# ``character_forms.fold_text``。質問の側だけが空白の連続を 1 つにまとめる。
 _WHITESPACE_RUN = re.compile(r"[　\s]+")
-_CONTROL_RUN = re.compile(r"[\x00-\x1f\x7f]+")
 _SPACE_RUN = re.compile(r"\s+")
 
 
@@ -132,10 +132,18 @@ class _Vocabulary:
     hiragana: re.Pattern[str]
     kanji_run: re.Pattern[str]
     katakana_run: re.Pattern[str]
+    other_letter_run: re.Pattern[str]
     sentence_split: re.Pattern[str]
 
 
 _vocabularies: dict[str, _Vocabulary] = {}
+
+
+@functools.cache
+def _combining_marks() -> str:
+    """Unicode の結合文字（一般カテゴリ M）の文字クラスの中身（初めて使うときに Unicode のデータから作る）。"""
+    marks = "".join(chr(code) for code in range(sys.maxunicode + 1) if unicodedata.category(chr(code)).startswith("M"))
+    return re.escape(marks)
 
 
 def _vocabulary() -> _Vocabulary:
@@ -152,6 +160,8 @@ def _vocabulary() -> _Vocabulary:
     kanji = range_class(words("kanji_chars"))
     katakana = range_class(words("katakana_chars"))
     hiragana = range_class(words("hiragana_chars"))
+    # 漢字・かな以外の Unicode の文字（``[^\W\d_]``）で始まり、文字と結合文字が続く連続。
+    other_letter = f"(?:(?!{kanji}|{katakana}|{hiragana})[^\\W\\d_])"
     vocabulary = _Vocabulary(
         key=hashlib.sha256(json.dumps({k: list(v) for k, v in section.items()}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[
             :8
@@ -172,6 +182,7 @@ def _vocabulary() -> _Vocabulary:
         hiragana=re.compile(hiragana),
         kanji_run=re.compile(f"{kanji}+"),
         katakana_run=re.compile(f"{katakana}+"),
+        other_letter_run=re.compile(f"{other_letter}(?:{other_letter}|[{_combining_marks()}])*"),
         sentence_split=re.compile(f"(?<={text_patterns().sentence_end})|(?<=\n)"),
     )
     _vocabularies[pack.hash] = vocabulary
@@ -228,11 +239,8 @@ _local = threading.local()
 
 
 def normalize_text_search_text(text: Any) -> str:
-    """Oracle Text token 化前の文字列を NFKC と空白規則で正規化します。"""
-    normalized = unicodedata.normalize("NFKC", str(text or "")).translate(SYMBOL_FOLD)
-    normalized = _WHITESPACE_RUN.sub(" ", normalized)
-    normalized = _CONTROL_RUN.sub(" ", normalized)
-    return normalized.casefold().strip()
+    """Oracle Text token 化前の質問の文字列を、索引と同じ文字の形（``fold_text`` と ``casefold``）にし、空白をまとめます。"""
+    return _WHITESPACE_RUN.sub(" ", fold_text(text)).casefold().strip()
 
 
 # 同じ語の表層形を繰り返し正規化しないための再利用（語の後処理の時間の多くを占める。#4679）。
@@ -240,14 +248,17 @@ _normalize_token = functools.lru_cache(maxsize=_TOKEN_FORMS_CACHE_SIZE)(normaliz
 
 
 def normalize_text_search_index_text(text: Any) -> str:
-    """Oracle Text に索引する文字列を、質問の語と同じ文字の形にそろえます（#1336）。
+    """Oracle Text に索引する文字列を、質問の語と同じ文字の形にそろえます（#1336・#5117・#5118）。
 
-    NFKC と波線・ダッシュの同一視は ``normalize_text_search_text`` と同じにし、索引の側だけが互換文字
-    （``①`` ``Ⅴ`` ``㈱`` ``㌔`` ``℃`` など。WORLD_LEXER は同一視しない）を残して当たらないことを防ぎます。
-    改行と大文字小文字は残します（Oracle Text の語の区切りと大文字小文字の無視は lexer が行う）。
-    回答のモデルに渡す根拠も同じ規則でそろえる（``character_forms.fold_text``。#1350）。
+    ``fold_text``（NFKC・波線とダッシュ・書式文字と制御文字）と ``casefold`` は ``normalize_text_search_text`` と
+    同じにし、索引の側だけが互換文字（``①`` ``Ⅴ`` ``㈱`` ``㌔`` ``℃`` など。WORLD_LEXER は同一視しない）を
+    残して当たらないことを防ぎます。``casefold`` も両方の側でかけるのは、Oracle Text の大文字の変換が 1 字の
+    対応で、``casefold`` と結果が違う字（``ß`` を ``SS`` にしない、``ÿ`` を大文字にしない、など）があるため
+    （索引の側が大文字小文字を残すと、同じ表記の質問でも当たらない。#5117）。
+    改行は残します（語の区切りは lexer が行う）。回答のモデルに渡す根拠・引用の照合は大文字小文字を残す
+    ``fold_text`` のままです。
     """
-    return fold_text(text)
+    return fold_text(text).casefold()
 
 
 def tokenize_domain_keyword_candidates(
@@ -693,9 +704,12 @@ def _script_terms(
     *,
     primary: bool,
 ) -> list[tuple[str, int]]:
-    """文字種の区切り（漢字・カタカナ・英数字の連続）と漢字の複合語の部分語。
+    """文字種の区切り（漢字・カタカナ・英数字の連続、漢字・かな以外の文字の連続）と漢字の複合語の部分語。
 
     ``primary`` は Sudachi が無いときに連続そのものを主の語にする。部分語はいつも補う語。
+    漢字・かな以外の文字の連続（ASCII だけの連続は英数字の区切りが拾う）は、Sudachi が補助記号にして
+    語にしない文字（ジョージア文字・アルメニア文字・多調のギリシャ文字・IPA など）の語を、Oracle Text
+    （WORLD_LEXER）が索引する語と同じ 1 語として拾う（#5119。語の意味ではなく文字の種類の区切り）。
     """
     normalized = normalize_text_search_text(text)
     whole = _TIER_PRIMARY if primary else _TIER_SUPPLEMENT
@@ -725,6 +739,9 @@ def _script_terms(
             for part in re.split(r"[-.]", run):
                 if len(part) >= 2:
                     push(part, _TIER_SUPPLEMENT)
+    for run in vocabulary.other_letter_run.findall(normalized):
+        if len(run) >= 2 and not run.isascii():
+            push(run, whole)
     return terms
 
 

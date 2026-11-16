@@ -1,4 +1,7 @@
-"""既存の search_text を正規化する CLI（#1336）。実 DB は使わず、cursor の振る舞いを確かめる。"""
+"""既存の search_text を正規化する CLI（#1336・#5117・#5118）。
+
+実 DB は使わず、cursor の振る舞いを確かめる。
+"""
 
 from __future__ import annotations
 
@@ -67,6 +70,8 @@ def _connection() -> _FakeConnection:
                 "c1": "手順①で申請",
                 "c2": "変更の無い本文",
                 "c3": "第Ⅴ章",
+                # #1336 の形で保存した行（大文字・C1 制御文字・書式文字が残る。#5117・#5118）。
+                "c4": "語 Straße ab\x85cd\u200bef",
             },
             "rag_feedback_details": {"f1": "㈱サンプル"},
         }
@@ -80,7 +85,7 @@ def test_normalize_updates_only_changed_rows_in_batches(dry_run: bool) -> None:
     results = normalize_search_texts(connection, dry_run=dry_run, batch_size=2)
 
     assert [(result.table, result.scanned, result.changed) for result in results] == [
-        ("rag_chunks", 3, 2),
+        ("rag_chunks", 4, 3),
         ("rag_feedback_details", 1, 1),
     ]
     # Oracle は空文字を NULL として扱うため、最初の回は last_key の条件を付けない。
@@ -95,7 +100,8 @@ def test_normalize_updates_only_changed_rows_in_batches(dry_run: bool) -> None:
         assert connection.tables["rag_chunks"] == {
             "c1": "手順1で申請",
             "c2": "変更の無い本文",
-            "c3": "第V章",
+            "c3": "第v章",
+            "c4": "語 strasse ab cdef",
         }
         assert connection.tables["rag_feedback_details"] == {"f1": "(株)サンプル"}
         # 変わった行のある回ごとに commit する（rag_chunks で 2 回、フィードバックで 1 回）。
