@@ -30,6 +30,7 @@ import {
   formatDisplayDateTime,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
+  CombinedBanner,
 } from "@production-ready/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -454,15 +455,6 @@ export function EvaluationPage() {
                 startEvaluation();
               }}
             >
-              {capabilities && !capabilities.judge.available ? (
-                <Banner
-                  severity="warning"
-                  title={t("qualityEvaluation.judge.unavailableTitle")}
-                >
-                  {capabilities?.judge.reason}
-                </Banner>
-              ) : null}
-
               {/* 条件の欄の並びは共通の FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。 */}
               <FormGrid className="items-start" data-testid="quality-evaluation-input-row">
                 <div className="min-w-0" data-testid="quality-evaluation-profile-field">
@@ -673,8 +665,22 @@ export function EvaluationPage() {
                 </div>
               </div>
 
+              {/* LLM Judge の案内（使えない理由・判定の扱い）は開始の操作の前の 1 つの枠（messaging.md §3.4.3。#5192）。 */}
               <div data-testid="quality-evaluation-judge-note">
-                <Banner severity="info">{t("qualityEvaluation.judge.note")}</Banner>
+                <CombinedBanner
+                  items={[
+                    capabilities && !capabilities.judge.available
+                      ? {
+                          id: "judge-unavailable",
+                          severity: "warning",
+                          title: t("qualityEvaluation.judge.unavailableTitle"),
+                          children: capabilities.judge.reason,
+                          testId: "quality-evaluation-judge-unavailable",
+                        }
+                      : null,
+                    { id: "judge-note", severity: "info", children: t("qualityEvaluation.judge.note") },
+                  ]}
+                />
               </div>
               {/* Select AI の Credential の事前条件（#1688）。開始の操作の直前に全幅で出す。 */}
               {selectAiCredentialBlocked ? (
@@ -1139,24 +1145,36 @@ function JobProgress({
           </span>
         </span>
       </div>
-      {attemptTimedOut ? (
-        <div role="status" aria-live="polite">
-          <Banner
-            severity="warning"
-            title={t("qualityEvaluation.progress.attemptTimedOutTitle")}
-          >
-            {t("qualityEvaluation.progress.attemptTimedOutHint", {
-              seconds: attemptTimeoutSeconds,
-            })}
-          </Banner>
-        </div>
-      ) : leaseExpired ? (
-        <div role="status" aria-live="polite">
-          <Banner severity="warning" title={t("qualityEvaluation.progress.leaseExpiredTitle")}>
-            {t("qualityEvaluation.progress.leaseExpiredHint")}
-          </Banner>
-        </div>
-      ) : null}
+      {/* 実行状況の案内（失敗・中止と、試行の時間切れ / lease の期限切れ）は 1 つの枠（messaging.md §3.4.3。#5192）。
+          role は枠の 1 か所だけ（入れ物に重ねない）。 */}
+      <CombinedBanner
+        testId="quality-evaluation-progress-notice"
+        items={[
+          job.error_message
+            ? {
+                id: "error",
+                severity: job.status === "cancelled" ? "info" : "danger",
+                title: statusLabel(job.status),
+                children: job.error_message,
+              }
+            : null,
+          attemptTimedOut
+            ? {
+                id: "attempt-timed-out",
+                severity: "warning",
+                title: t("qualityEvaluation.progress.attemptTimedOutTitle"),
+                children: t("qualityEvaluation.progress.attemptTimedOutHint", { seconds: attemptTimeoutSeconds }),
+              }
+            : leaseExpired
+              ? {
+                  id: "lease-expired",
+                  severity: "warning",
+                  title: t("qualityEvaluation.progress.leaseExpiredTitle"),
+                  children: t("qualityEvaluation.progress.leaseExpiredHint"),
+                }
+              : null,
+        ]}
+      />
       <div
         data-surface-tint="neutral"
         className="h-2 overflow-hidden rounded-full bg-surface-hover"
@@ -1194,16 +1212,6 @@ function JobProgress({
           danger={job.error_count > 0}
         />
       </dl>
-      {job.error_message ? (
-        <div role="status" aria-live="polite">
-          <Banner
-            severity={job.status === "cancelled" ? "info" : "danger"}
-            title={statusLabel(job.status)}
-          >
-            {job.error_message}
-          </Banner>
-        </div>
-      ) : null}
     </div>
   );
 }
