@@ -32,7 +32,9 @@ class PolicyRecorder(Recorder):
         return observe()
 
 
-def run(monkeypatch, recorder, *, question="合成の質問", guide=None, generate=False, complete=True, settings=None, search=None):
+def run(
+    monkeypatch, recorder, *, question="合成の質問", guide=None, generate=False, complete=True, settings=None, search=None, request=None
+):
     original = context(parent("old", "合成本文"))
     monkeypatch.setattr(a, "load_latest_or_source_chunk_run", lambda *args, **kwargs: _chunk_run_stub())
     monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda *args, **kwargs: None)
@@ -48,13 +50,16 @@ def run(monkeypatch, recorder, *, question="合成の質問", guide=None, genera
             generate_answer=generate,
             complete_evidence=complete,
             classification_filter=ClassificationFilter(large_category="synthetic-category"),
+            request_question=request,
         )
 
 
 @pytest.mark.parametrize("enabled", [True, False])
 @pytest.mark.parametrize("failed", [True, False])
 def test_overflow_records_actual_returned_and_adopted_evidence(monkeypatch, enabled, failed):
-    question = "対象は合成A。\n(1) 合成手順を教えてください。\n(2) 合成設定を教えてください。"
+    # 検索用に言い換えた質問と利用者の元の質問が違うときだけ、元の質問は主検索で未検索になり、要求別補完が検索する。
+    question = "合成Aの合成手順と合成設定"
+    request = "対象は合成A。\n(1) 合成手順を教えてください。\n(2) 合成設定を教えてください。"
     calls = []
     original, extra = context(parent("old", "合成本文")), context(parent("new", "合成追加本文"))
 
@@ -70,17 +75,22 @@ def test_overflow_records_actual_returned_and_adopted_evidence(monkeypatch, enab
         a,
         "tokenize_text_search_query_with_trace",
         lambda text, **kwargs: TextSearchTokenizationResult(
-            tokens=("合成",), oracle_text_query="{合成}", truncated_count=int(text == question)
+            tokens=("合成",), oracle_text_query="{合成}", truncated_count=int(text == request)
         ),
     )
     recorder = PolicyRecorder(enabled)
     result = run(
-        monkeypatch, recorder, question=question, search=search, settings=replace(_rerank_ready_settings(), extra_retrieval_max_queries=1)
+        monkeypatch,
+        recorder,
+        question=question,
+        request=request,
+        search=search,
+        settings=replace(_rerank_ready_settings(), extra_retrieval_max_queries=1),
     )
-    assert len(calls) == 2
+    assert calls[1:] == [request]
     call = recorder.stage("検索上限の要求別補完")
     if enabled:
-        assert call["input"]["原質問"] == question
+        assert call["input"]["原質問"] == request
         assert call["input"]["分類条件"]["large_category"] == "synthetic-category"
         assert call["input"]["使用済みの要求別予算"]["queries"] == 0
         assert call["output"]["新規採用ID"] == ([] if failed else ["run:new"])

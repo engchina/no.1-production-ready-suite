@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from contextlib import contextmanager
+from dataclasses import replace
 
 import pytest
 from test_runtime_knowledge_steps import _RULE, _TERM, _run, _write
@@ -74,6 +75,67 @@ def test_query_sources_are_found_when_question_has_format_characters(tmp_path):
     adopted = [output["ベクトル検索の文"], output["全文検索の文"]]
     assert [item["出どころ"] for item in adopted] == [["原質問"], ["原質問 + 用語・同義語"]]
     assert all("\u200b" not in item["本文"] for item in adopted)
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("check the KPI\nKPI target", "check the KPI KPI target"),
+        ("a\tb", "a b"),
+        ("a\r\n\n\t b", "a b"),
+        ("a\u3000b", "a b"),
+        ("合成用語A\u200bの\x00期限", "合成用語Aの期限"),
+        ("a \u200b b", "a b"),
+        ("\n Ａ１ \t", "A1"),
+    ],
+    ids=["newline", "tab", "whitespace-run", "ideographic-space", "format-and-control", "format-between-spaces", "nfkc-strip"],
+)
+def test_normalized_query_text_turns_whitespace_into_single_space(value, expected):
+    """改行・タブなどの空白は 1 つの空白にし、残りの制御文字・書式文字は除く（#5160）。"""
+    from rag_engine.generation.query_prompts import _merge_retrieval_queries, _normalized_query_text
+
+    assert _normalized_query_text(value) == expected
+    assert _merge_retrieval_queries(value) == (expected,)
+
+
+@pytest.mark.parametrize("backend", ["oracle_hybrid_index", "oracle_separate_sql"])
+def test_text_search_query_keeps_boundary_between_question_and_added_terms(tmp_path, monkeypatch, backend):
+    """原質問と足した語は改行で区切られる。改行・タブを空白にし、原質問の末尾の語と足した語を別の語にする（#5160）。
+
+    出どころ・足した語・全文検索の文の対応は、検索に渡す検索文と同じ形の key で引ける。
+    """
+    import test_runtime_knowledge_steps
+
+    ready = test_runtime_knowledge_steps._rerank_ready_settings
+    monkeypatch.setattr(test_runtime_knowledge_steps, "_rerank_ready_settings", lambda: replace(ready(), hybrid_search_backend=backend))
+    searches = []
+    original_search = answering.build_adb_hybrid_answer_context
+
+    def spy(*args, **kwargs):
+        searches.append((args, kwargs))
+        return original_search(*args, **kwargs)
+
+    monkeypatch.setattr(answering, "build_adb_hybrid_answer_context", spy)
+    recorder = Recorder()
+    term = {"term": "SynthTermA", "aliases": ["SynthAliasB"]}
+    result = _run(_write(tmp_path / "knowledge.json", terms=[term]), question="SynthTermA\tの確認 KPI", observer=recorder, search=True)
+    assert result.runtime_knowledge.expanded_question.endswith("KPI\nSynthTermA SynthAliasB")
+    output = recorder.stage("検索文をまとめ、検索語を作る")["output"]
+    vector, text = "SynthTermA の確認 KPI", "SynthTermA の確認 KPI SynthTermA SynthAliasB"
+    assert (output["ベクトル検索の文"]["本文"], output["全文検索の文"]["本文"]) == (vector, text)
+    assert output["全文検索の文"]["出どころ"] == ["原質問 + 用語・同義語"]
+    (trace,) = output["全文検索の入力"]["tokenization_traces"]
+    if backend == "oracle_hybrid_index":
+        assert trace["native_search_text"] == text
+    else:
+        assert "kpi" in trace["tokens"]
+        assert not any(token.startswith("kpisynth") for token in trace["tokens"])
+    args, kwargs = searches[0]
+    settings = args[3]
+    assert kwargs["retrieval_queries"] == (vector,)
+    assert kwargs["text_queries"] == {vector: text}
+    assert settings.retrieval_query_sources == {vector: ("原質問",), text: ("原質問 + 用語・同義語",)}
+    assert set(settings.retrieval_query_keywords) == {text}
 
 
 def test_no_term_match_is_completed_with_empty_output(tmp_path):

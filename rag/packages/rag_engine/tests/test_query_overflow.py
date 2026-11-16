@@ -128,13 +128,15 @@ def test_answer_flow_keeps_scope_existing_evidence_and_overflow_trace(monkeypatc
     from rag_engine.generation import answering as a
     from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
-    question = "対象は ID-123 です。\n(1) 接続の手順を教えてください。\n(2) 設定の確認方法を教えてください。"
+    # 検索用に言い換えた質問と利用者の元の質問が違うときだけ、元の質問は主検索で未検索になり、要求別補完が検索する。
+    question = "ID-123 の接続の手順と設定の確認方法"
+    request = "対象は ID-123 です。\n(1) 接続の手順を教えてください。\n(2) 設定の確認方法を教えてください。"
     original = context(parent("old", "既存の根拠"))
     retrieved = context(parent("new", "追加した操作手順の根拠"))
     calls = []
 
     def tokenize(text, **kwargs):
-        return TextSearchTokenizationResult(tokens=("語",), oracle_text_query="{語}", truncated_count=int(text == question))
+        return TextSearchTokenizationResult(tokens=("語",), oracle_text_query="{語}", truncated_count=int(text == request))
 
     def search(text, *args, **kwargs):
         calls.append((text, args, kwargs))
@@ -152,15 +154,58 @@ def test_answer_flow_keeps_scope_existing_evidence_and_overflow_trace(monkeypatc
         replace(get_settings(environ={}, dotenv_path=None), extra_retrieval_max_queries=1),
         retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
         generate_answer=False,
+        request_question=request,
     )
     assert len(calls) == 2
-    assert "ID-123" in calls[1][0]
+    assert calls[1][0] == request
     assert calls[1][2]["retrieval_scope"] == RETRIEVAL_SCOPE_KNOWLEDGE_BASE
     assert calls[1][1][2].document_selection_enabled is False
     trace = result.generation_trace["query_overflow"]
     assert [row["status"] for row in trace["requests"]] == ["candidate_found"]
     assert trace["added_chunk_ids"] == ["run:new"]
     assert {item["chunk_uid"] for item in result.evidence_items} >= {"run:old", "run:new"}
+
+
+def test_answer_flow_does_not_search_multiline_question_again(monkeypatch):
+    """改行を含む質問も主検索の文と同じ key になり、要求別補完で同じ質問を検索し直さない（#5160）。
+
+    主検索の文は改行を空白にした形で、要求別補完の key（``normalize_text_search_text``）も改行を空白として比べる。
+    """
+    from test_answer_generation import _chunk_run_stub
+    from test_request_coverage import context, parent
+
+    from rag_engine.config import get_settings
+    from rag_engine.generation import answering as a
+
+    question = "対象は ID-123 です。\n(1) 接続の手順を教えてください。\n\t(2) 設定の確認方法を教えてください。"
+    calls = []
+
+    def search(text, *args, **kwargs):
+        calls.append((text, kwargs))
+        return context(parent("old", "既存の根拠"))
+
+    monkeypatch.setattr(a, "load_latest_or_source_chunk_run", lambda *a, **k: _chunk_run_stub())
+    monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda *a, **k: None)
+    monkeypatch.setattr(
+        a,
+        "tokenize_text_search_query_with_trace",
+        lambda text, **kwargs: TextSearchTokenizationResult(tokens=("語",), oracle_text_query="{語}", truncated_count=1),
+    )
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", search)
+    result = a.answer_question_result(
+        question,
+        "abcdef",
+        ["docling"],
+        replace(get_settings(environ={}, dotenv_path=None), extra_retrieval_max_queries=1),
+        generate_answer=False,
+    )
+    assert [kwargs["retrieval_queries"] for _, kwargs in calls] == [
+        ("対象は ID-123 です。 (1) 接続の手順を教えてください。 (2) 設定の確認方法を教えてください。",)
+    ]
+    trace = result.generation_trace["query_overflow"]
+    assert trace["triggered"] is True
+    assert [row["status"] for row in trace["requests"]] == ["already_searched"]
+    assert trace["budget"]["used"] == {}
 
 
 def test_failed_queries_are_not_executed_again_for_another_request():
