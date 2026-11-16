@@ -99,4 +99,5 @@ def test_nonstream_output_limit_uses_provider_reason_instead_of_body_pattern():
     ):
         oci._openai_parsed(messages, settings, schema, PROVIDER)
     assert failure.value.reason == "max_output_tokens"
-    assert len(requests) == 1 and requests[0]["input"] == messages
+    # 入力はそのまま送る（前に足すのは応答 schema の項目の説明の system だけ。#5230）。
+    assert len(requests) == 1 and requests[0]["input"][1:] == messages and requests[0]["input"][0]["role"] == "system"
