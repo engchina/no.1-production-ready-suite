@@ -3,7 +3,6 @@ import type { QueryKey } from "@tanstack/react-query";
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import {
   displayDateTimeFormat,
-  Banner,
   Button,
   Card,
   CardContent,
@@ -11,6 +10,8 @@ import {
   CardHeader,
   CardTitle,
   cn,
+  CombinedBanner,
+  combinedBannerItems,
   DataTable,
   Disclosure,
   ExecutionConfirmationField,
@@ -21,12 +22,13 @@ import {
   TimedLoadingState,
   toast,
   useActionPending,
+  type CombinedBannerItem,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 
 import { formatMessage } from "../auth/messages";
-import { DatabaseUnavailableNotice } from "../database-gate/DatabaseUnavailableNotice";
+import { useDatabaseUnavailableBannerItem } from "../database-gate/DatabaseUnavailableNotice";
 import type { DatabaseGateMessages } from "../database-gate/messages";
 import type { DatabaseGateRoutes } from "../database-gate/types";
 import {
@@ -135,6 +137,11 @@ export interface SystemTablesCardProps {
    * 無ければ承認を送らず、backend が 409 で止める（その文言を出す）。
    */
   confirmDestructiveMigrations?: (request: SystemTablesConfirmRequest) => Promise<boolean>;
+  /**
+   * 製品の案内（Agent の保存先の案内など）。カードの案内と同じ 1 つの枠に項目として並べる
+   * （同じ区画の案内の枠は 1 つ。messaging.md §3.4.3。#5183）。
+   */
+  notices?: ReadonlyArray<CombinedBannerItem | null | false | undefined>;
 }
 
 /**
@@ -154,6 +161,7 @@ export function SystemTablesCard({
   renderObjectName,
   confirmDeleteOrphans,
   confirmDestructiveMigrations,
+  notices = [],
 }: SystemTablesCardProps) {
   const m: SystemTablesMessages = { ...SYSTEM_TABLES_MESSAGES, ...messages };
   const text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) =>
@@ -181,23 +189,14 @@ export function SystemTablesCard({
   const schemaOperationRunning = data?.operation_state.status === "running";
   // 既存の表に無い正本の列（#2450 / #2458。3 製品が返す。無ければ出さない）。
   const missingColumns = data?.missing_columns ?? [];
-  // 外部キーの差分（#505。RAG だけが返す。無ければ出さない）。
+  // 外部キーの差分（#505。RAG と Agent が返す。無ければ出さない）。
   const missingForeignKeys = data?.missing_foreign_keys ?? [];
   const orphanedForeignKeys = data?.orphaned_foreign_keys ?? [];
-  // 削除規則の違い・無効化（#511。RAG だけが返す）。
+  // 削除規則の違い・無効化（#511。RAG と Agent が返す）。
   const mismatchedForeignKeys = data?.mismatched_foreign_keys ?? [];
   const disabledForeignKeys = data?.disabled_foreign_keys ?? [];
-  // データを消す未適用の migration（#619。RAG だけが返す）。
+  // データを消す未適用の migration（#619。RAG と Agent が返す。partial のときも返る）。
   const destructiveMigrations = data?.pending_destructive_migrations ?? [];
-  // outdated の理由が削除の migration だけなら、下の削除の Banner が伝える。状態の Banner と 2 回出さない（#2133）。
-  const statusBannerRedundant =
-    data?.status === "outdated" &&
-    destructiveMigrations.length > 0 &&
-    missingColumns.length +
-      missingForeignKeys.length +
-      mismatchedForeignKeys.length +
-      disabledForeignKeys.length ===
-      0;
   const schemaHead = data ? schemaHeadDisplay(data) : null;
   // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
   const canDeleteOrphans =
@@ -323,6 +322,164 @@ export function SystemTablesCard({
   const statusLabel = (status: SystemTableSchemaStatus) =>
     text(`settings.database.systemTables.status.${status}`);
 
+  // 状態を取得できないときの DB の案内（再試行つき）。製品の案内と同じ枠に並べる。
+  const databaseItem = useDatabaseUnavailableBannerItem({
+    routes: databaseRoutes,
+    messages: databaseMessages,
+    onRetry: () => void refreshStatus(),
+    isRetrying: manualRefresh.pending,
+  });
+
+  // カードの案内は 1 つの枠にまとめる（messaging.md §3.4.3。#5183）。色と見出しは最も重い事柄
+  // （前回・今回の失敗は danger）。見出しは見出しの StatusBadge の文字を繰り返さない。
+  // 取り直しに失敗しても前回の状態（data）は残るので、DB の案内とカードの案内を同じ枠に並べる。
+  const cardItems: Array<CombinedBannerItem | null | false | undefined> = data
+      ? [
+          operationError
+            ? {
+                id: "operation-error",
+                severity: "danger",
+                title: text("settings.database.systemTables.error.operationTitle"),
+                children: operationError,
+                testId: "system-tables-operation-error",
+              }
+            : data.operation_state.status === "failed"
+              ? {
+                  id: "previous-failure",
+                  severity: "danger",
+                  title: text("settings.database.systemTables.previousFailure"),
+                  testId: "system-tables-previous-failure",
+                  // 本文は原因と対処だけにし、エラーコードは「詳細」に分ける（失敗なので開いて出す。messaging.md §10.3。#722）。
+                  children: (
+                    <div className="space-y-2">
+                      <p>
+                        {data.operation_state.last_error_code === "ORA-00054"
+                          ? text("settings.database.systemTables.previousFailureLockDetail")
+                          : text("settings.database.systemTables.previousFailureDetail")}
+                      </p>
+                      {data.operation_state.last_error_code ? (
+                        <Disclosure
+                          variant="plain"
+                          size="sm"
+                          summary={text("settings.database.systemTables.previousFailureDetails")}
+                          defaultOpen
+                        >
+                          <p className="text-xs text-fg-muted">
+                            {text("settings.database.systemTables.previousFailureErrorCode", {
+                              code: data.operation_state.last_error_code,
+                            })}
+                          </p>
+                        </Disclosure>
+                      ) : null}
+                    </div>
+                  ),
+                }
+              : null,
+          schemaNoticeItem({
+            data,
+            destructiveMigrations,
+            missingColumns,
+            missingForeignKeys,
+            mismatchedForeignKeys,
+            disabledForeignKeys,
+            showApprovalHint: canManage && Boolean(confirmDestructiveMigrations),
+            text,
+          }),
+          orphanedForeignKeys.length > 0
+            ? {
+                id: "orphaned-foreign-keys",
+                severity: "warning",
+                title: text("settings.database.systemTables.foreignKeys.orphanedTitle"),
+                testId: "system-tables-orphaned-foreign-keys",
+                children: (
+                  <>
+                    <p>{text("settings.database.systemTables.foreignKeys.orphaned")}</p>
+                    {canDeleteOrphans ? (
+                      <p className="mt-1">{text("settings.database.systemTables.foreignKeys.orphanedDeleteHint")}</p>
+                    ) : null}
+                    <ForeignKeyList
+                      foreignKeys={orphanedForeignKeys}
+                      text={text}
+                      label={text("settings.database.systemTables.foreignKeys.orphanedTitle")}
+                      renderAction={
+                        canDeleteOrphans
+                          ? (foreignKey) =>
+                              foreignKey.orphan_rows ? (
+                                // 確認ダイアログを開く起点なので赤塗りにしない（secondary + 赤文字。buttons.md §3）。
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="secondary"
+                                  tone="danger"
+                                  icon={Trash2}
+                                  onClick={() => void requestDeleteOrphans(foreignKey)}
+                                  loading={
+                                    orphanDeletion.isPending &&
+                                    orphanDeletion.variables?.constraint_name === foreignKey.name
+                                  }
+                                  disabled={busy}
+                                  aria-label={text("settings.database.systemTables.action.deleteOrphansLabel", {
+                                    name: foreignKey.name,
+                                  })}
+                                >
+                                  {text("settings.database.systemTables.action.deleteOrphans")}
+                                </Button>
+                              ) : null
+                          : undefined
+                      }
+                    />
+                  </>
+                ),
+              }
+            : null,
+          // 作成・更新の結果で再起動が要るプロセス（#1844。Toast と重ねない）。
+          restartNotice
+            ? {
+                id: "restart-required",
+                severity: "warning",
+                title: text("settings.database.systemTables.restartRequired.title", {
+                  operation: text(`settings.database.systemTables.operation.${restartNotice.operation}`),
+                }),
+                testId: "system-tables-restart-required",
+                children: (
+                  <div className="space-y-1.5">
+                    <p>{restartNotice.restart.message}</p>
+                    <p className="font-medium">{text("settings.database.systemTables.restartRequired.processes")}</p>
+                    <ul className="list-disc space-y-1 pl-5">
+                      {restartNotice.restart.processes.map((process) => (
+                        <li key={process} className="[overflow-wrap:anywhere]">
+                          {process}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ),
+              }
+            : null,
+          !canManage
+            ? {
+                id: "read-only",
+                severity: "info",
+                children: text("settings.database.systemTables.readOnly"),
+                testId: "system-tables-read-only",
+              }
+            : null,
+        ]
+      : [];
+  const noticeItems = [statusUnavailable ? databaseItem : null, ...cardItems, ...notices];
+  const hasNotice = combinedBannerItems(noticeItems).length > 0;
+  // 操作の失敗は案内の枠へフォーカスを移す（枠は 1 つなので、失敗の項目も同じ枠の中）。
+  const noticeBlock = hasNotice ? (
+    <div
+      ref={operationErrorRef}
+      tabIndex={-1}
+      data-testid="system-tables-notice"
+      className="rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+    >
+      <CombinedBanner items={noticeItems} />
+    </div>
+  ) : null;
+
   return (
     <Card id="system-tables" className="min-w-0 max-w-full scroll-mt-24 rounded-md" aria-busy={activityBusy}>
       <CardHeader className="p-6 pb-0">
@@ -360,15 +517,7 @@ export function SystemTablesCard({
           </TimedLoadingState>
         ) : null}
 
-        {statusUnavailable ? (
-          <DatabaseUnavailableNotice
-            mode="banner"
-            routes={databaseRoutes}
-            messages={databaseMessages}
-            onRetry={() => void refreshStatus()}
-            isRetrying={manualRefresh.pending}
-          />
-        ) : null}
+        {statusUnavailable ? noticeBlock : null}
 
         {data ? (
           <>
@@ -394,167 +543,7 @@ export function SystemTablesCard({
               />
             </div>
 
-            {data.status !== "ready" && !statusBannerRedundant ? (
-              <Banner severity={data.status === "missing" ? "info" : "warning"} title={statusLabel(data.status)}>
-                {data.status === "outdated" && destructiveMigrations.length > 0
-                  ? text("settings.database.systemTables.statusHint.outdatedDestructive")
-                  : text(`settings.database.systemTables.statusHint.${data.status}`, {
-                      count: data.missing_objects.length,
-                    })}
-                {missingColumns.length > 0 ? (
-                  <div className="mt-2" data-testid="system-tables-missing-columns">
-                    <p>
-                      {text("settings.database.systemTables.columns.missing", {
-                        count: missingColumns.length,
-                      })}
-                    </p>
-                    {/* スキーマが古いと件数が増えるので、行リストの高さで止める（#4636）。 */}
-                    <ListScrollRegion
-                      className="mt-1.5"
-                      label={text("settings.database.systemTables.columns.missing", { count: missingColumns.length })}
-                    >
-                      <ul className="space-y-1">
-                        {missingColumns.map((column) => (
-                          <li
-                            key={`${column.table_name}.${column.column_name}`}
-                            className="min-w-0 font-mono text-xs [overflow-wrap:anywhere]"
-                          >
-                            {column.table_name}.{column.column_name}
-                          </li>
-                        ))}
-                      </ul>
-                    </ListScrollRegion>
-                  </div>
-                ) : null}
-                {missingForeignKeys.length > 0 ? (
-                  <div className="mt-2" data-testid="system-tables-missing-foreign-keys">
-                    <p>
-                      {text("settings.database.systemTables.foreignKeys.missing", {
-                        count: missingForeignKeys.length,
-                      })}
-                    </p>
-                    <ForeignKeyList foreignKeys={missingForeignKeys} text={text} label={text("settings.database.systemTables.foreignKeys.missing", { count: missingForeignKeys.length })} />
-                  </div>
-                ) : null}
-                {mismatchedForeignKeys.length > 0 ? (
-                  <div className="mt-2" data-testid="system-tables-mismatched-foreign-keys">
-                    <p>
-                      {text("settings.database.systemTables.foreignKeys.mismatched", {
-                        count: mismatchedForeignKeys.length,
-                      })}
-                    </p>
-                    <ForeignKeyList foreignKeys={mismatchedForeignKeys} text={text} label={text("settings.database.systemTables.foreignKeys.mismatched", { count: mismatchedForeignKeys.length })} showDeleteRule />
-                  </div>
-                ) : null}
-                {disabledForeignKeys.length > 0 ? (
-                  <div className="mt-2" data-testid="system-tables-disabled-foreign-keys">
-                    <p>
-                      {text("settings.database.systemTables.foreignKeys.disabled", {
-                        count: disabledForeignKeys.length,
-                      })}
-                    </p>
-                    <ForeignKeyList foreignKeys={disabledForeignKeys} text={text} label={text("settings.database.systemTables.foreignKeys.disabled", { count: disabledForeignKeys.length })} />
-                  </div>
-                ) : null}
-              </Banner>
-            ) : null}
-
-            {destructiveMigrations.length > 0 ? (
-              <Banner severity="warning" title={text("settings.database.systemTables.destructive.title")}>
-                <div data-testid="system-tables-destructive-migrations">
-                  <p>{text("settings.database.systemTables.destructive.description")}</p>
-                  <DestructiveMigrationList migrations={destructiveMigrations} />
-                  {canManage && confirmDestructiveMigrations ? (
-                    <p className="mt-1.5">{text("settings.database.systemTables.destructive.approvalHint")}</p>
-                  ) : null}
-                </div>
-              </Banner>
-            ) : null}
-
-            {orphanedForeignKeys.length > 0 ? (
-              <Banner
-                severity="warning"
-                title={text("settings.database.systemTables.foreignKeys.orphanedTitle")}
-              >
-                <div data-testid="system-tables-orphaned-foreign-keys">
-                  <p>{text("settings.database.systemTables.foreignKeys.orphaned")}</p>
-                  {canDeleteOrphans ? (
-                    <p className="mt-1">{text("settings.database.systemTables.foreignKeys.orphanedDeleteHint")}</p>
-                  ) : null}
-                  <ForeignKeyList
-                    foreignKeys={orphanedForeignKeys}
-                    text={text}
-                    label={text("settings.database.systemTables.foreignKeys.orphanedTitle")}
-                    renderAction={
-                      canDeleteOrphans
-                        ? (foreignKey) =>
-                            foreignKey.orphan_rows ? (
-                              // 確認ダイアログを開く起点なので赤塗りにしない（secondary + 赤文字。buttons.md §3）。
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                tone="danger"
-                                icon={Trash2}
-                                onClick={() => void requestDeleteOrphans(foreignKey)}
-                                loading={
-                                  orphanDeletion.isPending &&
-                                  orphanDeletion.variables?.constraint_name === foreignKey.name
-                                }
-                                disabled={busy}
-                                aria-label={text("settings.database.systemTables.action.deleteOrphansLabel", {
-                                  name: foreignKey.name,
-                                })}
-                              >
-                                {text("settings.database.systemTables.action.deleteOrphans")}
-                              </Button>
-                            ) : null
-                        : undefined
-                    }
-                  />
-                </div>
-              </Banner>
-            ) : null}
-
-            {operationError ? (
-              <div
-                ref={operationErrorRef}
-                tabIndex={-1}
-                data-testid="system-tables-operation-error"
-                className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
-                <Banner severity="danger" title={text("settings.database.systemTables.error.operationTitle")}>
-                  {operationError}
-                </Banner>
-              </div>
-            ) : data.operation_state.status === "failed" ? (
-              <Banner severity="danger" title={text("settings.database.systemTables.previousFailure")}>
-                {/* 本文は原因と対処だけにし、エラーコードは「詳細」に分ける（失敗なので開いて出す。messaging.md §10.3。#722）。 */}
-                <div className="space-y-2">
-                  <p>
-                    {data.operation_state.last_error_code === "ORA-00054"
-                      ? text("settings.database.systemTables.previousFailureLockDetail")
-                      : text("settings.database.systemTables.previousFailureDetail")}
-                  </p>
-                  {data.operation_state.last_error_code ? (
-                    <Disclosure
-                      variant="plain"
-                      size="sm"
-                      summary={text("settings.database.systemTables.previousFailureDetails")}
-                      defaultOpen
-                    >
-                      <p className="text-xs text-fg-muted">
-                        {text("settings.database.systemTables.previousFailureErrorCode", {
-                          code: data.operation_state.last_error_code,
-                        })}
-                      </p>
-                    </Disclosure>
-                  ) : null}
-                </div>
-              </Banner>
-            ) : null}
-
-            {!canManage ? <Banner severity="info">{text("settings.database.systemTables.readOnly")}</Banner> : null}
+            {statusUnavailable ? null : noticeBlock}
 
             <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
               {canManage ? (
@@ -581,27 +570,6 @@ export function SystemTablesCard({
                 {text("settings.database.systemTables.action.refresh")}
               </Button>
             </div>
-
-            {restartNotice ? (
-              <Banner
-                severity="warning"
-                title={text("settings.database.systemTables.restartRequired.title", {
-                  operation: text(`settings.database.systemTables.operation.${restartNotice.operation}`),
-                })}
-              >
-                <div className="space-y-1.5" data-testid="system-tables-restart-required">
-                  <p>{restartNotice.restart.message}</p>
-                  <p className="font-medium">{text("settings.database.systemTables.restartRequired.processes")}</p>
-                  <ul className="list-disc space-y-1 pl-5">
-                    {restartNotice.restart.processes.map((process) => (
-                      <li key={process} className="[overflow-wrap:anywhere]">
-                        {process}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </Banner>
-            ) : null}
 
             <SystemTablesDetails data={data} text={text} renderObjectName={renderObjectName} />
 
@@ -665,6 +633,130 @@ export function SystemTablesCard({
 }
 
 type Text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) => string;
+
+/**
+ * 表の状態（missing / partial / outdated）とデータを消す未適用の migration を、案内の枠の 1 項目にする（#5183）。
+ * 見出しは最も重い事柄（削除の migration があれば「データを削除する更新があります」、無ければ状態の事柄）。
+ * 本文は「作成・更新」ですること → 削除の migration の明細 → 列・外部キーの差分 → 削除の確認の案内の順。
+ * partial は outdated を上書きして返る（backend）ので、削除の migration は状態に関わらず扱う。
+ */
+function schemaNoticeItem({
+  data,
+  destructiveMigrations,
+  missingColumns,
+  missingForeignKeys,
+  mismatchedForeignKeys,
+  disabledForeignKeys,
+  showApprovalHint,
+  text,
+}: {
+  data: SystemTablesStatusData;
+  destructiveMigrations: SystemTableDestructiveMigration[];
+  missingColumns: NonNullable<SystemTablesStatusData["missing_columns"]>;
+  missingForeignKeys: SystemTableForeignKey[];
+  mismatchedForeignKeys: SystemTableForeignKey[];
+  disabledForeignKeys: SystemTableForeignKey[];
+  showApprovalHint: boolean;
+  text: Text;
+}): CombinedBannerItem | null {
+  const destructive = destructiveMigrations.length > 0;
+  if (data.status === "ready" && !destructive) return null;
+  const count = data.missing_objects.length;
+  // ready のまま削除の migration だけが残ることは無いが、残れば outdated と同じ文にする。
+  const status = data.status === "ready" ? "outdated" : data.status;
+  const differences = (
+    <>
+      {missingColumns.length > 0 ? (
+        <div className="mt-2" data-testid="system-tables-missing-columns">
+          <p>{text("settings.database.systemTables.columns.missing", { count: missingColumns.length })}</p>
+          {/* スキーマが古いと件数が増えるので、行リストの高さで止める（#4636）。 */}
+          <ListScrollRegion
+            className="mt-1.5"
+            label={text("settings.database.systemTables.columns.missing", { count: missingColumns.length })}
+          >
+            <ul className="space-y-1">
+              {missingColumns.map((column) => (
+                <li
+                  key={`${column.table_name}.${column.column_name}`}
+                  className="min-w-0 font-mono text-xs [overflow-wrap:anywhere]"
+                >
+                  {column.table_name}.{column.column_name}
+                </li>
+              ))}
+            </ul>
+          </ListScrollRegion>
+        </div>
+      ) : null}
+      {missingForeignKeys.length > 0 ? (
+        <div className="mt-2" data-testid="system-tables-missing-foreign-keys">
+          <p>{text("settings.database.systemTables.foreignKeys.missing", { count: missingForeignKeys.length })}</p>
+          <ForeignKeyList
+            foreignKeys={missingForeignKeys}
+            text={text}
+            label={text("settings.database.systemTables.foreignKeys.missing", { count: missingForeignKeys.length })}
+          />
+        </div>
+      ) : null}
+      {mismatchedForeignKeys.length > 0 ? (
+        <div className="mt-2" data-testid="system-tables-mismatched-foreign-keys">
+          <p>
+            {text("settings.database.systemTables.foreignKeys.mismatched", { count: mismatchedForeignKeys.length })}
+          </p>
+          <ForeignKeyList
+            foreignKeys={mismatchedForeignKeys}
+            text={text}
+            label={text("settings.database.systemTables.foreignKeys.mismatched", {
+              count: mismatchedForeignKeys.length,
+            })}
+            showDeleteRule
+          />
+        </div>
+      ) : null}
+      {disabledForeignKeys.length > 0 ? (
+        <div className="mt-2" data-testid="system-tables-disabled-foreign-keys">
+          <p>{text("settings.database.systemTables.foreignKeys.disabled", { count: disabledForeignKeys.length })}</p>
+          <ForeignKeyList
+            foreignKeys={disabledForeignKeys}
+            text={text}
+            label={text("settings.database.systemTables.foreignKeys.disabled", { count: disabledForeignKeys.length })}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (destructive) {
+    return {
+      id: "schema",
+      severity: "warning",
+      title: text("settings.database.systemTables.destructive.title"),
+      testId: "system-tables-destructive-migrations",
+      children: (
+        <>
+          <p>{text(`settings.database.systemTables.destructive.plan.${status}`, { count })}</p>
+          <DestructiveMigrationList migrations={destructiveMigrations} />
+          {differences}
+          <p className="mt-2">
+            {text("settings.database.systemTables.destructive.irreversible")}
+            {showApprovalHint ? <> {text("settings.database.systemTables.destructive.approvalHint")}</> : null}
+          </p>
+        </>
+      ),
+    };
+  }
+  return {
+    id: "schema",
+    severity: status === "missing" ? "info" : "warning",
+    title: text(`settings.database.systemTables.notice.${status}`, { count }),
+    testId: "system-tables-schema-notice",
+    children: (
+      <>
+        <p>{text(`settings.database.systemTables.statusHint.${status}`)}</p>
+        {differences}
+      </>
+    ),
+  };
+}
 
 /**
  * 外部キーの一覧（子の表と列 → 参照先の表。参照先のない行があれば件数を添える）。
