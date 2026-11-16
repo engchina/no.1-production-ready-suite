@@ -241,8 +241,10 @@ export {
   ProcessFailureNotice,
   failedStepName,
   processFailureDetails,
+  processFailureBannerItem,
   processFailureFacts,
   type ProcessFailure,
+  type ProcessFailureBannerItemOptions,
   type ProcessFailureLabels,
   type ProcessFailureNoticeProps,
 } from "./components/feedback/process-failure";
@@ -648,6 +650,8 @@ export {
 export { OneTimeSecret, type OneTimeSecretProps } from "./components/feedback/one-time-secret";
 export {
   PreconditionBanner,
+  preconditionBannerItem,
+  type PreconditionBannerItemOptions,
   type PreconditionBannerLink,
   type PreconditionBannerProps,
 } from "./components/feedback/precondition-banner";

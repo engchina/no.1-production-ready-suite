@@ -70,9 +70,17 @@ for (const width of [1280, 1920]) {
     await expect(notice).toContainText("同じ操作を再実行すると重複する可能性があります");
     await expect(notice.getByRole("listitem")).toHaveText([`起票（操作の ID: ${OPERATION_ID}）`]);
     // 状態は色だけに頼らない（共有の Banner のアイコン）。案内は概要の 1 つの枠の項目で、アイコンは枠に 1 つ（#5183）。
+    // 失敗した Run の失敗のカード（§9.1）も同じ枠の項目で、枠は最も重い失敗の danger（alert）。失敗が先頭（#5226）。
     const frame = page.getByTestId("run-status-notice");
+    await expect(frame.locator(":scope > span svg")).toHaveCount(1);
     await expect(frame.locator(":scope > span svg")).toBeVisible();
-    await expect(frame).toHaveAttribute("role", "status");
+    await expect(frame).toHaveAttribute("role", "alert");
+    await expect(frame.getByTestId("run-failure")).toBeVisible();
+    await expect(frame.getByTestId("run-outcome-unknown")).toBeVisible();
+    await expect(page.getByTestId("run-summary").locator('[role="alert"], [role="status"][data-surface-tint]')).toHaveCount(1);
+    const failureBox = await frame.getByTestId("run-failure").boundingBox();
+    const outcomeBox = await frame.getByTestId("run-outcome-unknown").boundingBox();
+    expect(failureBox && outcomeBox && failureBox.y < outcomeBox.y).toBe(true);
     await expectNoHorizontalOverflow(page);
     if (SCREENSHOT_DIR) {
       await page.getByTestId("run-summary").screenshot({ path: `${SCREENSHOT_DIR}/agent-run-outcome-unknown-${width}.png` });
@@ -98,6 +106,8 @@ test("結果不明の警告は 375px でも横にあふれない", { tag: "@resp
   runWithUnknownWrite(mockApi, "run-72-mobile", "failed", "failed", UNKNOWN_RESULT);
   await page.goto("/runs?id=run-72-mobile");
   await expect(page.getByTestId("run-outcome-unknown")).toBeVisible();
+  // 375px でも失敗と結果不明の書き込みは 1 つの枠（#5226）。
+  await expect(page.getByTestId("run-status-notice").getByTestId("run-failure")).toBeVisible();
   await expectNoHorizontalOverflow(page);
   if (SCREENSHOT_DIR) {
     await page.getByTestId("run-summary").screenshot({ path: `${SCREENSHOT_DIR}/agent-run-outcome-unknown-375.png` });

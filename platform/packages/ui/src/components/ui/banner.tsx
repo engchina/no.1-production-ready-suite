@@ -87,6 +87,8 @@ export interface CombinedBannerItem {
   progress?: ReactNode;
   /** 項目の要素の `data-testid`。 */
   testId?: string;
+  /** 項目の要素の DOM の `id`（押せなくした操作の `aria-describedby` の先など）。 */
+  elementId?: string;
 }
 
 export interface CombinedBannerProps {
@@ -123,7 +125,7 @@ export function CombinedBanner({ items, className, testId }: CombinedBannerProps
   return (
     <BannerFrame severity={severity} className={className} testId={testId}>
       {visible.length === 1 ? (
-        <div data-testid={top.testId}>
+        <div id={top.elementId} data-testid={top.testId}>
           <BannerContent title={top.title} action={top.action} progress={top.progress}>
             {top.children}
           </BannerContent>
@@ -131,7 +133,7 @@ export function CombinedBanner({ items, className, testId }: CombinedBannerProps
       ) : (
         <ul className={cn("divide-y", toneDivide[severity])}>
           {visible.map((item) => (
-            <li key={item.id} data-testid={item.testId} className="min-w-0 py-2.5 first:pt-0 last:pb-0">
+            <li key={item.id} id={item.elementId} data-testid={item.testId} className="min-w-0 py-2.5 first:pt-0 last:pb-0">
               <BannerContent title={item.title} action={item.action} progress={item.progress}>
                 {item.children}
               </BannerContent>
