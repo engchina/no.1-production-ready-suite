@@ -296,6 +296,96 @@ def test_padded_marks_still_reject_units_not_sent_and_keep_labels_not_sent_as_te
     assert render_full_answer(draft, []).text == "合成の回答[ E7 ]"
 
 
+def two_sources_catalog():
+    """合成の根拠 2 つ（別の文書・頁）。各根拠は 2 行。"""
+    snapshots = []
+    for position, (label, source, page) in enumerate((("E1", "doc_a.txt", 2), ("E2", "doc_b.txt", 5))):
+        text = f"合成の記載{position}の一行目です。\n合成の記載{position}の二行目です。"
+        first = text.index("\n")
+        snapshots.append(
+            EvidenceUnitSnapshot.create(
+                {
+                    "text": text,
+                    "label": label,
+                    "evidence_id": f"synthetic-{position}",
+                    "source_id": f"synthetic-{position}",
+                    "source": source,
+                    "page": page,
+                    "scope_source_ids": [f"synthetic-{position}"],
+                },
+                [(0, first), (first + 1, len(text))],
+                "synthetic",
+            )
+        )
+    return SentUnitCatalog(snapshots)
+
+
+def _render(units, body):
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+    draft = canonical_full_answer(wire, units)
+    checked, dropped = grounded.verify("合成の質問", draft, [snapshot.span() for snapshot in units.snapshots])
+    assert dropped == []
+    return draft, render_full_answer(draft, checked)
+
+
+@pytest.mark.parametrize(
+    "marks",
+    [
+        "（[E1.1]）",
+        "（[E1][E2]）",
+        "（[E1]、[E2]）",
+        " （ [E1] [E2] ）",
+        "([E1], [E2])",
+        "（【​E1】・［ E2 ］）",
+        "（[　E1.1　]　[⁠E2.2]）",
+    ],
+    ids=["single", "consecutive", "comma", "spaced", "ascii-parens", "full-width-and-zwsp", "ideographic-space-and-word-joiner"],
+)
+def test_parentheses_holding_only_marks_are_removed_with_the_marks(marks):
+    """丸括弧の中が印と空白・区切りの記号・書式文字だけなら、括弧ごと外して空の括弧を残さない（#5231）。"""
+    units = two_sources_catalog()
+    draft, rendered = _render(units, f"合成の値は二つです{marks}。")
+    assert rendered.text.startswith("合成の値は二つです。\n根拠：")
+    assert not any(char in rendered.text for char in "（）()[]【】［］")
+    # 出典の行と引用の結び付きは、段落の末尾に印を書いた本文と変わらない。
+    plain_draft, plain = _render(units, "合成の値は二つです。" + marks.strip().strip("（）()"))
+    assert [item.text for item in draft.items] == [item.text for item in plain_draft.items]
+    assert rendered.citation_lines == plain.citation_lines
+    assert rendered.text.split("\n")[1:] == plain.text.split("\n")[1:]
+
+
+@pytest.mark.parametrize(
+    ("body", "displayed"),
+    [
+        (
+            "提供された資料（[E1] および [E2]）には記載がありません。",
+            "提供された資料（doc_a.txt p.2 および doc_b.txt p.5）には記載がありません。",
+        ),
+        ("詳細は（[E1.1][E1.2]を参照）です。", "詳細は（doc_a.txt p.2を参照）です。"),
+        ("詳細は（［ E1 ］​ と【E2.1】の両方）です。", "詳細は（doc_a.txt p.2​ とdoc_b.txt p.5の両方）です。"),
+    ],
+    ids=["connector", "consecutive-units-of-one-source", "full-width-and-zwsp"],
+)
+def test_marks_inside_parentheses_with_other_text_become_the_source_names(body, displayed):
+    """丸括弧の中に印のほかの字があれば、印を出典の名前（出典の行と同じ書き方）に置き換え、括弧と字を保つ（#5231）。"""
+    units = two_sources_catalog()
+    draft, rendered = _render(units, body)
+    paragraph, *references = rendered.text.split("\n")
+    assert paragraph == displayed
+    assert all(line.startswith(grounded.answer_labels().citation_prefix) for line in references)
+    assert len(rendered.citation_lines) == len(references) == len(draft.items)
+    assert [line["scope_source_ids"] for line in rendered.citation_lines] == [
+        [item.citations[0]._unit_binding.snapshot.span()["evidence_id"]] for item in draft.items
+    ]
+
+
+def test_parentheses_without_marks_stay_as_written():
+    """印の無い丸括弧（Markdown のリンクを含む）は変えない（#5231）。"""
+    units = two_sources_catalog()
+    _draft, rendered = _render(units, "定格（合成）の値は [リンク](https://example.com/a) にあります（）。[E1]")
+    assert rendered.text.startswith("定格（合成）の値は [リンク](https://example.com/a) にあります（）。\n根拠：")
+
+
 def test_answer_without_any_bound_citation_is_not_reported_with_the_declared_confidence():
     """本文の印が 1 つも根拠に結ばれない回答は、ほかの経路と同じく引用の無い回答として確かさを low にする（#5186）。"""
     from test_answer_flow_single_generation import ROW, _run, context, record
