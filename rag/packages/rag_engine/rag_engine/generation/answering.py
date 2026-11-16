@@ -83,8 +83,6 @@ from rag_engine.generation.answer_models import (
     QueryExpansionResult,
     QuestionTextSearchInfo,
     RetrievalQueryPlan,
-    _dedupe_queries,
-    _dedupe_query_key,
     _normalize_text,
     extract_original_question,
     merge_answer_use,
@@ -213,7 +211,7 @@ from rag_engine.retrieval.guide_steps import (
     target_records,
     unsearched_steps,
 )
-from rag_engine.retrieval.query_identity import normalized_query_key
+from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key, normalized_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
 from rag_engine.retrieval.reference_follow import follow_reference_sources, is_followed_reference
@@ -2451,7 +2449,7 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
                 answer=settings.runtime_terms_answer_enabled,
             )
             additions: tuple[str, ...] = ()
-            if not settings.original_query_only and _dedupe_query_key(result.expanded_question) != _dedupe_query_key(
+            if not settings.original_query_only and dedupe_query_key(result.expanded_question) != dedupe_query_key(
                 result.original_question
             ):
                 additions = (result.expanded_question,)
@@ -2466,7 +2464,7 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
 
 def _term_labels(runtime_knowledge: RuntimeKnowledgeContext) -> tuple[str, ...]:
     """検索に使う、一致した用語と別名。"""
-    return _dedupe_queries(tuple(label for term in runtime_knowledge.retrieval_terms for label in term.labels()))
+    return dedupe_queries(tuple(label for term in runtime_knowledge.retrieval_terms for label in term.labels()))
 
 
 def _retrieval_query_plan_payload(
@@ -2482,7 +2480,7 @@ def _retrieval_query_plan_payload(
     lexical_queries: Sequence[str] = (),
 ) -> dict[str, Any]:
     runtime_question = runtime_knowledge.expanded_question if runtime_knowledge is not None else expansion.original_question
-    queries = _dedupe_queries(vector_queries or text_search_info.query_variants or expansion.retrieval_queries)
+    queries = dedupe_queries(vector_queries or text_search_info.query_variants or expansion.retrieval_queries)
     plan = RetrievalQueryPlan(
         original_question=expansion.original_question,
         runtime_expanded_question=runtime_question,
@@ -2492,7 +2490,7 @@ def _retrieval_query_plan_payload(
         text_search_tokens=tuple(text_search_info.tokens),
         text_search_tokenization_traces=tuple(text_search_info.tokenization_traces),
         llm_expansion_queries=tuple(expansion.generated_queries),
-        lexical_queries=_dedupe_queries(lexical_queries),
+        lexical_queries=dedupe_queries(lexical_queries),
         retrieval_scope=normalize_retrieval_scope(retrieval_scope),
         top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
         candidate_limit=_retrieval_candidate_limit(top_k, settings),
@@ -2569,7 +2567,7 @@ def build_question_text_search_info(
             if settings.domain_keywords_override is not None
             else load_domain_keywords(settings.output_dir)
         )
-        query_keywords = {_dedupe_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
+        query_keywords = {dedupe_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
         query_terms: list[tuple[str, ...]] = []
         tokenization_traces: list[dict[str, Any]] = []
         oracle_queries: list[str] = []
@@ -2577,7 +2575,7 @@ def build_question_text_search_info(
         for variant in variants:
             tokenization = tokenize_text_search_query_with_trace(
                 variant,
-                domain_keywords=[*domain_keywords, *query_keywords.get(_dedupe_query_key(variant), ())],
+                domain_keywords=[*domain_keywords, *query_keywords.get(dedupe_query_key(variant), ())],
                 config=config,
                 max_tokens=MAX_TEXT_SEARCH_TOKENS,
             )
@@ -2889,17 +2887,17 @@ def answer_question_result(
             # 比較実験用。検索直前にも同じ絞り込みがあるが、ここで適用しないと記録が実際の検索と食い違う。
             retrieval_queries = (normalized_question,)
             step.add("      設定 RETRIEVAL_ORIGINAL_QUERY_ONLY=true のため、原質問だけで検索します。")
-        sources = {_dedupe_query_key(normalized_question): "原質問"}
+        sources = {dedupe_query_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
             # 出どころは実際に語を足したもの（用語・同義語 / 業務ガイド / 確認で選んだ条件。#3490）。
-            sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
+            sources.setdefault(dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         query_sources: dict[str, tuple[str, ...]] = {}
         for query in retrieval_queries:
-            key = _dedupe_query_key(query)
+            key = dedupe_query_key(query)
             labels = [sources.get(key, "追加検索文")]
             if (
                 runtime_knowledge.expanded_question != runtime_knowledge.original_question
-                and _dedupe_query_key(runtime_knowledge.expanded_question) == key
+                and dedupe_query_key(runtime_knowledge.expanded_question) == key
             ):
                 labels.append(runtime_knowledge.query_source)
             query_sources[query] = tuple(dict.fromkeys(labels))
@@ -2907,7 +2905,7 @@ def answer_question_result(
             {
                 "原質問": normalized_question,
                 "候補検索文": [
-                    {"本文": query, "出どころ": sources.get(_dedupe_query_key(query), "追加検索文")} for query in candidate_queries
+                    {"本文": query, "出どころ": sources.get(dedupe_query_key(query), "追加検索文")} for query in candidate_queries
                 ],
                 "一致した用語": [term.to_payload() for term in runtime_knowledge.retrieval_terms],
                 "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
@@ -2930,7 +2928,7 @@ def answer_question_result(
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(
-                f"{number}. " + (f"[{source}] " if (source := sources.get(_dedupe_query_key(query))) else "") + _display_query(query)
+                f"{number}. " + (f"[{source}] " if (source := sources.get(dedupe_query_key(query))) else "") + _display_query(query)
                 for number, query in enumerate(retrieval_queries, 1)
             ),
         )

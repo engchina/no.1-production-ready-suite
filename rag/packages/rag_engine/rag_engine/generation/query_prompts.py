@@ -8,9 +8,10 @@ from collections.abc import Sequence
 from typing import Any
 
 from rag_engine.config import Settings
-from rag_engine.generation.answer_models import QueryExpansionResult, _dedupe_queries, _dedupe_query_key
+from rag_engine.generation.answer_models import QueryExpansionResult
 from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key
 
 MAX_GENERATED_QUERY_CHARS = 900
 
@@ -70,9 +71,9 @@ def _normalized_query_text(value: Any) -> str:
 def _retrieval_queries(question: str, retrieval_queries: Sequence[str] | None) -> tuple[str, ...]:
     if retrieval_queries is None:
         return (question,)
-    queries = _dedupe_queries(retrieval_queries)
+    queries = dedupe_queries(retrieval_queries)
     if not queries:
         return (question,)
-    if _dedupe_query_key(question) != _dedupe_query_key(queries[0]):
-        return _dedupe_queries((question, *queries))
+    if dedupe_query_key(question) != dedupe_query_key(queries[0]):
+        return dedupe_queries((question, *queries))
     return queries

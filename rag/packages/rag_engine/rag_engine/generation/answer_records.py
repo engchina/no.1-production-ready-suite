@@ -13,7 +13,7 @@ from rag_parser_core.vision_text import answer_text_from_projection, load_vision
 
 from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
 from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
-from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _normalize_text
+from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _normalize_text
 from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim_for_context
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.models.storage import StoredChunk
@@ -25,6 +25,7 @@ from rag_engine.retrieval.entity_expansion import (  # noqa: F401  is_entity_exp
     is_entity_expansion_record,
     is_reserved_entity_expansion,
 )
+from rag_engine.retrieval.query_identity import dedupe_queries
 
 RUN_ID_PATTERN = re.compile(r"[0-9a-f]{6,64}\Z")
 
@@ -102,7 +103,7 @@ def rank_records_with_rrf(
     if limit <= 0:
         return []
 
-    retrieval_queries = _dedupe_queries(queries)
+    retrieval_queries = dedupe_queries(queries)
     if not retrieval_queries:
         return rank_records("", records, limit)
     if len(retrieval_queries) == 1:
