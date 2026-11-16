@@ -199,6 +199,7 @@ from rag_engine.retrieval.context_builder import (
     context_bundle_from_parent_evidence,
     context_bundle_from_records,
     evidence_overlap,
+    record_context_key,
     record_has_image_evidence,
     uses_parent_context,
 )
@@ -712,6 +713,7 @@ def _bundle_context(
     max_chars: int,
     expansions: Sequence[AnswerRecord] = (),
     supplements: Sequence[AnswerRecord] = (),
+    supplement_records: Sequence[AnswerRecord] = (),
     section_fill: bool = False,
 ):
     """rerank 済みの child を起点に文脈を補って context bundle を作る（文脈の補完 #5168）。
@@ -719,6 +721,9 @@ def _bundle_context(
     expansions は検索拡張の根拠（#5162）。起点・親・前後の文脈を決めた後に最後の根拠の並びへ合わせる。
     supplements は補いの検索の根拠（#5173。検索ごとに rerank・下限・``top_k`` の切りを通したもの）。検索拡張の後に
     同じ規則で合わせる。
+    active_records は主の検索の原文、supplement_records は補いの検索の原文（#5185）。原文は ``record_context_key``
+    （頁の範囲を含む）で区別し、補いの原文・補いのために読んだ原文で主の検索の原文を置き換えない。どちらも呼び出し元の
+    列（list）なら、読み取った原文を足す。
     section_fill は、この後に章節の拡張（``_expand_context_by_sections``）を行う経路か。そのとき章節の対応が
     ある起点は章節で補い、前後の chunk を読まない（補い方は起点ごとに 1 つ。章節 > 親 > 前後）。
     """
@@ -734,22 +739,31 @@ def _bundle_context(
         max_chars=max_chars,
         expansion_children=list(expansions),
         supplement_children=list(supplements),
+        supplement_records=list(supplement_records),
     )
     # 同じ起点選択を先に行い、未採用の候補の親本文・近傍を読まない。文字予算は原文の取得後に適用する。
     provisional = build_chunk_context_bundle(replace(request, max_chars=2**31 - 1, select_anchors_only=True))
-    anchor_ids = {
-        retrieval_record_id(child.record)
+    anchor_keys = {
+        record_context_key(child.record)
         for parent in provisional.evidence_tree
         for child in parent.children
         if child.role == "retrieved_anchor"
     }
-    selected = list(
-        {
-            retrieval_record_id(record): record
-            for record in (*ranked_children, *expansions, *supplements)
-            if retrieval_record_id(record) in anchor_ids
-        }.values()
-    )
+
+    def anchors_of(records: Iterable[AnswerRecord], skip: Iterable[str] = ()) -> dict[str, AnswerRecord]:
+        found: dict[str, AnswerRecord] = {}
+        skipped = set(skip)
+        for record in records:
+            key = record_context_key(record)
+            if key in anchor_keys and key not in skipped:
+                found.setdefault(key, record)
+        return found
+
+    # 主の検索の起点（検索拡張を含む）と、補いの検索で新しく起点になった根拠を分けて読む（#5185）。同じ chunk でも頁の
+    # 範囲が違えば別の起点として範囲ごとに読み、補いの読み取りの結果で主の検索の起点の原文を置き換えない。
+    main_anchors = anchors_of((*ranked_children, *expansions))
+    supplement_anchors = anchors_of(supplements, skip=main_anchors)
+    selected = [*main_anchors.values(), *supplement_anchors.values()]
     sectioned = _sectioned_anchor_ids(selected, settings) if section_fill else frozenset()
     request = replace(request, section_anchor_ids=sectioned)
     modes = {
@@ -772,30 +786,41 @@ def _bundle_context(
             }
         )
         # 章節で補う起点は前後の chunk を読まない（親子分割の親・画像の原文は読む）。
-        loaded = injected_context_chunks(
-            anchors=selected, settings=settings, **({"section_anchor_ids": sorted(sectioned)} if sectioned else {})
+        section_option = {"section_anchor_ids": sorted(sectioned)} if sectioned else {}
+        loaded = injected_context_chunks(anchors=list(main_anchors.values()), settings=settings, **section_option)
+        loaded_supplements = (
+            injected_context_chunks(anchors=list(supplement_anchors.values()), settings=settings, **section_option)
+            if loaded is not None and supplement_anchors
+            else None
         )
         if loaded is not None:
-            known = {retrieval_record_id(record): record for record in active_records}
-            fresh = {retrieval_record_id(record): record for record in map(_stored_chunk_answer_record, loaded)}
+            known = {record_context_key(record): record for record in active_records}
+            fresh = {record_context_key(record): record for record in map(_stored_chunk_answer_record, loaded)}
             for record in ranked_children:
-                uid = retrieval_record_id(record)
-                if uid in fresh:
-                    metadata = {**(record.metadata or {}), **(fresh[uid].metadata or {})}
+                key = record_context_key(record)
+                if key in fresh:
+                    metadata = {**(record.metadata or {}), **(fresh[key].metadata or {})}
                     # 遅延取得で並べ替えの点数・順序を消さない。画像等の新しい原文情報だけを補う。
-                    metadata.update({key: record.metadata[key] for key in ("rerank", "rrf_score") if key in record.metadata})
-                    fresh[uid] = replace(record, metadata=metadata)
+                    metadata.update({name: record.metadata[name] for name in ("rerank", "rrf_score") if name in record.metadata})
+                    fresh[key] = replace(record, metadata=metadata)
             known.update(fresh)
+            # 補いの原文は主の検索の原文に無い key だけを足す（同じ key は主の検索の原文を使う）。
+            extra = {key: record for record in supplement_records if (key := record_context_key(record)) not in known}
+            for record in map(_stored_chunk_answer_record, loaded_supplements or ()):
+                if (key := record_context_key(record)) not in known:
+                    extra[key] = record
             request = replace(
                 request,
-                ranked_children=[fresh.get(retrieval_record_id(record), record) for record in ranked_children],
-                expansion_children=[fresh.get(retrieval_record_id(record), record) for record in expansions],
-                supplement_children=[_with_fresh_source(record, fresh) for record in supplements],
+                ranked_children=[fresh.get(record_context_key(record), record) for record in ranked_children],
+                expansion_children=[fresh.get(record_context_key(record), record) for record in expansions],
+                supplement_children=[_with_fresh_source(record, {**known, **extra}) for record in supplements],
             )
             # 呼出元が保持する回復候補にも、実際に読み取った原文を残す。
             if isinstance(active_records, list):
                 active_records[:] = known.values()
-            request = replace(request, active_records=list(known.values()))
+            if isinstance(supplement_records, list):
+                supplement_records[:] = extra.values()
+            request = replace(request, active_records=list(known.values()), supplement_records=list(extra.values()))
         bundle = build_chunk_context_bundle(request)
 
         adopted = {
@@ -856,7 +881,7 @@ def _bundle_context(
             "record_limit": max_records,
             "full_parent_text": True,
             "anchor_ids": [retrieval_record_id(record) for record in selected],
-            "loaded_ids": [str(chunk.chunk_uid) for chunk in loaded] if loaded is not None else [],
+            "loaded_ids": [str(chunk.chunk_uid) for chunk in (*(loaded or ()), *(loaded_supplements or ()))],
             "selected_ids": [retrieval_record_id(record) for record in bundle.records],
             "excluded": list(bundle.excluded_evidence),
         }
@@ -865,8 +890,8 @@ def _bundle_context(
 
 
 def _with_fresh_source(record: AnswerRecord, fresh: Mapping[str, AnswerRecord]) -> AnswerRecord:
-    """読み直した原文に、補いの検索の印と並べ替えの点数を残す（#5173）。"""
-    loaded = fresh.get(retrieval_record_id(record))
+    """読み直した原文（``record_context_key`` → 原文）に、補いの検索の印と並べ替えの点数を残す（#5173・#5185）。"""
+    loaded = fresh.get(record_context_key(record))
     if loaded is None:
         return record
     metadata = {**(loaded.metadata or {}), **{key: value for key, value in (record.metadata or {}).items() if key not in loaded.metadata}}
@@ -1204,12 +1229,15 @@ def fill_answer_context(
     anchors は ``build_adb_hybrid_answer_context`` の結果（文脈を補った後でもよい）。rerank の後の候補
     （``ranked_candidates``）から同じ規則（文書ごとの上限・``top_k``）で起点を選び直すので、主の検索の起点は同じものに
     なり外れない。supplements は補いの検索の根拠（印つき）、supplement_pool はその検索の候補の原文。
+    主の検索の原文（``anchors.expansion_records``。文脈を補った後なら読んだ前後・親を含む）と補いの原文は分けて渡し、
+    主の検索の根拠の前後の文脈は主の検索の原文だけから選ぶ（補いの有無で変えない。#5185）。
     """
     max_records = _max_context_records(settings) if max_records is None else max_records
     # 文書ごとの上限（#5165）は主の検索の工程で記録済み。同じ規則で同じ候補を残す。
     kept_children = cap_anchors_per_document(list(anchors.ranked_candidates), settings, top_k=top_k)
-    pool = {retrieval_record_id(record): record for record in (*anchors.expansion_records, *supplement_pool)}
-    active_records = list(pool.values())
+    main_pool = {record_context_key(record): record for record in anchors.expansion_records}
+    active_records = list(main_pool.values())
+    supplement_records = list({key: record for record in supplement_pool if (key := record_context_key(record)) not in main_pool}.values())
     if not kept_children and not supplements:
         return replace(
             anchors,
@@ -1231,6 +1259,7 @@ def fill_answer_context(
         max_chars=max_chars,
         expansions=anchors.expansion_candidates,
         supplements=supplements,
+        supplement_records=supplement_records,
         section_fill=section_fill,
     )
     return AnswerContext(
@@ -1238,7 +1267,7 @@ def fill_answer_context(
         text=bundle.text,
         evidence=bundle.evidence,
         evidence_tree=bundle.evidence_tree,
-        expansion_records=tuple(active_records),
+        expansion_records=(*active_records, *supplement_records),
         status=bundle.status,
         insufficient_reason=bundle.insufficient_reason,
         ranked_candidates=anchors.ranked_candidates,
@@ -2048,20 +2077,100 @@ def _request_coverage_budget(settings: Settings) -> CoverageBudget:
     )
 
 
-def _merged_supplement_keys(context: AnswerContext, mark: str) -> list[str]:
-    """補いの検索（``mark`` の印）で新しく足した根拠の key（根拠の木の親。#5173）。並びにあって印だけのものは数えない。"""
-    from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON
+# 補いの検索の根拠を合わせ込みに使わなかった理由のコード（#5185。``supplement_merge.rejected``）。
+SUPPLEMENT_REJECTED_DROPS_MAIN = "would_drop_main_evidence"
 
-    return list(
-        dict.fromkeys(
-            parent.record.chunk_uid or parent.record.id
-            for parent in context.evidence_tree
-            for child in parent.children
-            if child.role == "retrieved_anchor"
-            and child.reason == EXPANSION_EVIDENCE_REASON
-            and isinstance((child.record.metadata or {}).get(mark), dict)
+
+def _merged_supplement_chunks(context: AnswerContext, main_keys: Collection[str]) -> dict[str, list[str]]:
+    """補いの検索で新しく足した chunk の key（印のキー → key。#5173・#5185）。
+
+    主の検索の根拠（main_keys。根拠の木の chunk と親）にあって印だけのもの・主の検索の根拠の親の本文に含まれて印だけの
+    ものは数えない。合わせた後のまとめ（``consolidate_evidence_tree``）で主の検索の根拠のかたまりに入り、前後・親の文脈の
+    役割になった根拠は、主の検索の根拠に無かった本文なので数える。
+    """
+    from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON, supplement_kinds
+
+    found: dict[str, list[str]] = {mark: [] for mark in SUPPLEMENT_KEYS}
+    for parent in context.evidence_tree:
+        if (parent.record.chunk_uid or parent.record.id) in main_keys:
+            continue
+        for child in parent.children:
+            key = child.record.chunk_uid or child.record.id
+            if child.reason != EXPANSION_EVIDENCE_REASON or not key or key in main_keys:
+                continue
+            for mark in supplement_kinds(child.record):
+                if key not in found[mark]:
+                    found[mark].append(key)
+    return found
+
+
+def _supplement_owner_keys(context: AnswerContext, chunks: Iterable[str]) -> list[str]:
+    """補いの検索で足した chunk を持つ根拠（根拠の木の親）の key（根拠の木に無い chunk は除く）。"""
+    owners = _context_owner_keys(context)
+    return list(dict.fromkeys(owners[key] for key in chunks if key in owners))
+
+
+def _merge_supplements(
+    question: str,
+    context: AnswerContext,
+    settings: Settings,
+    supplements: Sequence[AnswerRecord],
+    supplement_pool: Sequence[AnswerRecord],
+    *,
+    top_k: int,
+    neighbor_child_count: int,
+) -> tuple[AnswerContext, dict[str, Any]]:
+    """補いの検索の根拠を主の検索の根拠に合わせ、文脈を補い直す（#5173・#5185）。戻り値は (根拠, 記録)。
+
+    主の検索の根拠（根拠の木の chunk と親）が 1 つでも外れる結果は使わない（保険の確認）。外れたときは、外れた根拠と
+    同じ文書の補いの根拠だけを除いて合わせ直し、それでも外れるときだけ補いの根拠をすべて使わない。使わなかった根拠と
+    理由・外れた主の検索の根拠は記録に残す（診断の ``supplement_merge``）。
+    """
+    from rag_engine.retrieval.expansion_merge import supplement_kinds
+    from rag_engine.retrieval.metadata_context import document_context_key
+
+    main_owners = _context_owner_keys(context)
+
+    def merge(records: Sequence[AnswerRecord]) -> tuple[AnswerContext, list[str]]:
+        merged = fill_answer_context(
+            question,
+            context,
+            settings,
+            top_k=top_k,
+            neighbor_child_count=neighbor_child_count,
+            supplements=tuple(records),
+            supplement_pool=supplement_pool,
+            section_fill=True,
         )
-    )
+        kept = _context_owner_keys(merged)
+        return merged, [key for key in main_owners if key not in kept]
+
+    records = list(supplements)
+    merged, missing = merge(records)
+    rejected: list[AnswerRecord] = []
+    if missing:
+        tree_records = {
+            record.chunk_uid or record.id: record
+            for parent in context.evidence_tree
+            for record in (parent.record, *(child.record for child in parent.children))
+        }
+        documents = {document_context_key(tree_records[key]) for key in missing if key in tree_records}
+        rejected = [record for record in records if document_context_key(record) in documents]
+        kept = [record for record in records if document_context_key(record) not in documents]
+        retried = merge(kept) if kept and rejected else None
+        if retried is not None and not retried[1]:
+            merged = retried[0]
+        else:
+            merged, rejected = context, records
+    trace: dict[str, Any] = {"supplement_count": len(records), "rejected_count": len(rejected)}
+    if rejected:
+        trace["rejected"] = [
+            {"chunk_id": record.chunk_uid or record.id, "kinds": list(supplement_kinds(record)), "reason": SUPPLEMENT_REJECTED_DROPS_MAIN}
+            for record in rejected
+        ]
+        # 補いの根拠をすべて合わせたときに外れた主の検索の根拠。
+        trace["missing_main_chunk_ids"] = missing
+    return merged, trace
 
 
 def _with_supplement_mark(record: AnswerRecord, mark: str, payload: Mapping[str, Any]) -> AnswerRecord:
@@ -2220,15 +2329,19 @@ def _finish_guide_steps(
     acquisitions: list[dict[str, Any]],
     trace: dict[str, Any],
     context: AnswerContext,
+    added_chunks: Sequence[str] = (),
 ) -> tuple[dict[str, Any], tuple[tuple[str, str, tuple[str, ...]], ...]]:
-    """文脈を補った後の根拠で、手順ごとの根拠と必須の取得の記録を決める（#2706・#5173）。"""
+    """文脈を補った後の根拠で、手順ごとの根拠と必須の取得の記録を決める（#2706・#5173）。
+
+    added_chunks は手順の検索で新しく足した chunk の key（合わせ込みの直後に決めたもの。``_merged_supplement_chunks``）。
+    """
     if trace.get("skipped"):
         return trace, tuple((step.step_id, step.title, ()) for step in plan.steps)
     targets = {target.target_id: target for target in required_guide_targets(plan)}
     titles = {step.step_id: step.title for step in plan.steps}
     owners = _context_owner_keys(context)
     in_context = {record.chunk_uid or record.id for record in context.records}
-    added_keys = set(_merged_supplement_keys(context, GUIDE_STEP_KEY))
+    added_keys = set(_supplement_owner_keys(context, added_chunks))
 
     def located(parent: Any) -> str:
         return located_record(parent.record)
@@ -3279,24 +3392,34 @@ def answer_question_result(
                         f"検索 {len(guide_results)} 回、合わせる根拠 {len(guide_records)} 件"
                         f"（主の検索の根拠と重複して除いた候補 {sum(len(result.covered) for result in guide_results)} 件）"
                     )
+        supplement_merge: dict[str, Any] | None = None
+        added_chunks: dict[str, list[str]] = {mark: [] for mark in SUPPLEMENT_KEYS}
         if supplements:
             # 主の検索の起点・検索拡張の根拠に補いの検索の根拠を同じ規則で合わせ、文脈を補い直す（#5162・#5168・
-            # #5173）。主の検索の起点は同じ選び方で同じものになる。主の検索の根拠が 1 つでも外れる結果は使わない。
-            merged = fill_answer_context(
-                normalized_question,
-                context,
-                settings,
-                top_k=chunk_top_k,
-                neighbor_child_count=chunk_neighbor_count,
-                supplements=tuple(supplements.values()),
-                supplement_pool=supplement_pool,
-                section_fill=True,
-            )
-            if set(_context_owner_keys(context)) <= set(_context_owner_keys(merged)):
-                context = merged
-            else:
-                overflow_trace["rejected"] = "would_drop_existing_evidence"
-        overflow_trace["added_chunk_ids"] = _merged_supplement_keys(context, QUERY_OVERFLOW_KEY)
+            # #5173）。主の検索の根拠は外さない（#5185）。
+            with _execution_step(
+                "補いの検索の根拠の合わせ込み",
+                "補いの検索の根拠を主の検索の根拠に合わせて文脈を補い直します。主の検索の根拠は外しません。",
+            ) as merge_step:
+                merge_step.input({"補いの根拠ID": list(supplements)})
+                context, supplement_merge = _merge_supplements(
+                    normalized_question,
+                    context,
+                    settings,
+                    tuple(supplements.values()),
+                    supplement_pool,
+                    top_k=chunk_top_k,
+                    neighbor_child_count=chunk_neighbor_count,
+                )
+                added_chunks = _merged_supplement_chunks(context, main_keys)
+                supplement_merge["added_chunk_ids"] = list(dict.fromkeys(key for keys in added_chunks.values() for key in keys))
+                merge_step.output(supplement_merge)
+                rejected_count = int(supplement_merge["rejected_count"])
+                merge_step.result(
+                    f"補いの根拠 {len(supplements)} 件を合わせ、新しく足した根拠 {len(supplement_merge['added_chunk_ids'])} 件"
+                    + (f"（主の検索の根拠が外れるため {rejected_count} 件を使いませんでした）" if rejected_count else "")
+                )
+        overflow_trace["added_chunk_ids"] = _supplement_owner_keys(context, added_chunks[QUERY_OVERFLOW_KEY])
         context, section_expansion = _expand_context_by_sections(
             normalized_question,
             context,
@@ -3310,7 +3433,9 @@ def answer_question_result(
         # 章節の拡張が所有の章節を読めなかった起点は、次の補い方（親 → 前後）で補う（#5173）。
         context = _fill_unread_section_anchors(context, settings, section_state, neighbor_child_count=chunk_neighbor_count)
         if guide_plan is not None and guide_step_trace is not None:
-            guide_step_trace, step_sources = _finish_guide_steps(guide_plan, guide_results, guide_acquisitions, guide_step_trace, context)
+            guide_step_trace, step_sources = _finish_guide_steps(
+                guide_plan, guide_results, guide_acquisitions, guide_step_trace, context, added_chunks[GUIDE_STEP_KEY]
+            )
             runtime_knowledge = replace(
                 runtime_knowledge,
                 guide_steps=step_sources,
@@ -3342,6 +3467,7 @@ def answer_question_result(
             zero_trace = {
                 "zero_evidence": zero_evidence,
                 "query_overflow": overflow_trace,
+                **({"supplement_merge": supplement_merge} if supplement_merge is not None else {}),
                 "retrieval_counts": _retrieval_counts(context, ()),
             }
             if not generate_answer:
@@ -3377,6 +3503,7 @@ def answer_question_result(
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = {
             "query_overflow": overflow_trace,
+            **({"supplement_merge": supplement_merge} if supplement_merge is not None else {}),
             **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
             **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
         }

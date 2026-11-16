@@ -101,8 +101,24 @@ rerank が無効・失敗・有効な点が 1 件も無いときは、並べ替�
   並びにある・並びの親や前後の文脈に含まれる → 印（`query_overflow` / `guide_step`）だけ（主の検索の根拠にある候補は
   切りの前に除くので、補いの検索どうし・検索拡張と重なるときだけ）／同じ文書の根拠がある → 文書の chunk の順の
   位置／無い → 最後。`top_k`・context の親の枠・MCP の `evidence_limit` に数えない。
-- 主の検索の根拠は外さない（主の検索の起点は同じ規則で選び直すので同じものになる。外れる結果は使わず、
-  `query_overflow.rejected` に残す）。合わせた後に文脈の補完（章節の拡張を含む）を 1 回だけ行う。
+- 同じ chunk かは、頁の範囲（`context_page_ranges`。業務ガイドの手順の参照に絞った検索の根拠に付く）を除いた key
+  （`context_builder.chunk_identity_key`）で判定する。範囲つきの根拠が主の検索の根拠と同じ chunk なら印だけ（#5185）。
+- 主の検索の根拠（起点と前後・親の文脈）は外さない（#5185）。主の検索の起点は同じ規則で選び直すので同じものになる。
+  前後の文脈は読んだ chunk の並びの位置で選ぶので、主の検索の原文（主の検索の候補と、主の検索の起点のために読んだ
+  前後・親）だけから選び、補いの検索の原文と補いの根拠のために読んだ原文は補いの根拠の前後・親にだけ使う
+  （`ContextBuildRequest.supplement_records`）。原文は頁の範囲を含む key（`record_context_key`）で区別し、主の検索の
+  起点と補いの起点は分けて読む（範囲つきの読み取りの結果で主の検索の起点の原文を置き換えない）。補いの根拠は
+  `top_k`・context の親の枠（`RAG_ENGINE_MAX_CONTEXT_RECORDS`）に数えない。
+- 保険の確認: 合わせた結果から主の検索の根拠（根拠の木の chunk と親）が 1 つでも外れたら、外れた根拠と同じ文書の
+  補いの根拠だけを除いて合わせ直し、それでも外れるときだけ補いの根拠をすべて使わない。工程「補いの検索の根拠の
+  合わせ込み」と診断の `supplement_merge`（`supplement_count`・`rejected_count`・`rejected`〔chunk・印の種類・理由
+  `would_drop_main_evidence`〕・`missing_main_chunk_ids`・`added_chunk_ids`）に残す。
+- 合わせた後に文脈の補完（章節の拡張を含む）を 1 回だけ行う。新しく足した根拠（`query_overflow.added_chunk_ids`・
+  `guide_step_retrieval.added_chunk_ids`）は合わせ込みの直後に決め、主の検索の根拠にあって印だけのもの・主の検索の
+  根拠の親の本文に含まれて印だけのものは数えない。まとめ（`consolidate_evidence_tree`）で主の検索の根拠のかたまりに
+  入り前後・親の文脈の役割になった補いの根拠も、主の検索の根拠に無かった本文なので数え、印（`query_overflow` /
+  `guide_step`）も根拠の木の record に残る。引用の `evidence_expansion`（MCP の `evidence_limit` に数えない印）は、
+  単独の根拠として並ぶもの（役割が `retrieved_anchor`）だけに付く（検索拡張と同じ）。
 - 削除した規則: 要求の間で交互に選ぶ（`select_new_parents`）、手順の必須の対象の 1 件目の確保・手順ごとの上位の
   選択・参照の頁の根拠を手順の間で交互に選ぶ（`select_step_parents`。`RAG_GUIDE_REFERENCE_MAX_CHUNKS`）、
   検索ごとに文脈を補った根拠を `merge_evidence` で並びの最後に足す処理、後の段のために最初の章節の拡張が入力を
