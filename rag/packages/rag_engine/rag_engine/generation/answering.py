@@ -1211,6 +1211,20 @@ def _cut_anchors(
     return list({retrieval_record_id(record): record for record in kept_children if retrieval_record_id(record) in anchor_ids}.values())
 
 
+def capped_candidate_ids(context: AnswerContext, settings: Settings | None, *, top_k: int) -> list[str]:
+    """上位 ``top_k`` 件の候補のうち、文書ごとの上限で起点から外した候補の chunk の ID（上位の順。#5209）。
+
+    外した候補の文書には、上限の数だけ起点がある。章節の拡張は、起点の所有の章節を読んだ後にこの候補の章節を
+    残りの予算で読む（``expand_sections`` の ``related``）。上限が無い・候補が無いときは空。
+    """
+    ranked = list(context.ranked_candidates)
+    if int(getattr(settings, "max_anchors_per_document", 0) or 0) <= 0 or not ranked:
+        return []
+    limit = max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K))
+    kept = {id(record) for record in cap_anchors_per_document(ranked, settings, top_k=limit)[:limit]}
+    return list(dict.fromkeys(retrieval_record_id(record) for record in ranked[:limit] if id(record) not in kept))
+
+
 def fill_answer_context(
     question: str,
     anchors: AnswerContext,
@@ -3431,6 +3445,7 @@ def answer_question_result(
             state=section_state,
             phase="main",
             priority=guide_ranges,
+            top_k=chunk_top_k,
         )
         # 章節の拡張が所有の章節を読めなかった起点は、次の補い方（親 → 前後）で補う（#5173）。
         context = _fill_unread_section_anchors(context, settings, section_state, neighbor_child_count=chunk_neighbor_count)
@@ -3649,12 +3664,15 @@ def _expand_context_by_sections(
     state: dict[str, Any] | None = None,
     phase: str = "main",
     priority: Sequence[tuple[str, int | None, int | None]] = (),
+    top_k: int | None = None,
 ) -> tuple[AnswerContext, Any]:
     """当たった chunk の章節から親の章節へ段階的に広げる (#1436。`section_expansion`)。
 
     最低範囲（列挙の問は文書全体）までの原文を決定的に足す。state は1回答内で共有し、追加検索後も同じ原文・根拠入力の
     予算・回答全体の期限を使う。無効と読み込み未設定は診断で区別する。
     ``priority`` は先に広げる範囲（業務ガイドの手順の参照の文書, 始まりの頁, 終わりの頁。#2828）。
+    ``top_k`` は主の検索の起点数。上位 ``top_k`` 件のうち文書ごとの上限で外した同じ文書の候補の章節を、所有の
+    章節の後に残りの予算で読む（#5209。``capped_candidate_ids``）。
     """
     from rag_engine.dependencies import section_dependencies
     from rag_engine.generation import section_expansion as sections
@@ -3742,6 +3760,7 @@ def _expand_context_by_sections(
         for child in parent.children
         if child.role == "neighbor_context"
     }
+    related = capped_candidate_ids(context, settings, top_k=top_k) if top_k is not None else []
     with _execution_step("章節の拡張", "当たった根拠の章節から親の章節へ段階的に広げ、原文を根拠に加えます。") as step:
         result = sections.expand_sections(
             question,
@@ -3755,7 +3774,10 @@ def _expand_context_by_sections(
             clock=monotonic,
             reader=state["reader"],
             priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
+            related=related,
         )
+        if related:
+            result.trace["related_seeds"] = related
         if result.context is not context:
             # 章節の本文を足した後に 1 回だけ、重なる根拠をまとめ、章節の本文を起点のかたまりへ置く（文脈の補完。#5168）。
             result.context = consolidate_context(result.context)
