@@ -102,29 +102,66 @@ class OracleTraceRecordingStore:
         return TraceRecordingSettings(enabled=enabled, updated_at=now)
 
 
+def _start_daemon_thread(refresh: Callable[[], None]) -> None:
+    threading.Thread(target=refresh, name="trace-recording-refresh", daemon=True).start()
+
+
 class TraceRecordingProvider:
+    """「軌跡の記録」の値を短い cache で返す。
+
+    `enabled()` はすべての要求の span の開始（event loop の上）で呼ばれるため、DB を待たない
+    （#5140・#5181）。cache の値をすぐ返し、期限が切れたら背景の thread で 1 本だけ読み直す。
+    読み直しの間は最後に読めた値、まだ一度も読めていない・読めなかったときは無効（False）。
+    """
+
     def __init__(
-        self, store: TraceRecordingStore, *, clock: Callable[[], float] = time.monotonic
+        self,
+        store: TraceRecordingStore,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        run_in_background: Callable[[Callable[[], None]], None] = _start_daemon_thread,
     ) -> None:
         self.store = store
         self._clock = clock
+        self._run_in_background = run_in_background
         self._lock = threading.Lock()
         self._cached: tuple[float, bool] | None = None
+        self._refreshing = False
+        # save() のたびに進める。保存より前に始めた読み直しの結果で、保存した値を戻さない。
+        self._generation = 0
 
     def enabled(self) -> bool:
         with self._lock:
-            now = self._clock()
-            if self._cached is not None and now - self._cached[0] < CACHE_SECONDS:
-                return self._cached[1]
+            cached = self._cached
+            if cached is not None and self._clock() - cached[0] < CACHE_SECONDS:
+                return cached[1]
+            start = not self._refreshing
+            self._refreshing = True
+            generation = self._generation
+        if start:
             try:
-                value = self.load().enabled
-            except Exception as exc:
+                self._run_in_background(lambda: self._refresh(generation))
+            except Exception as exc:  # thread を作れない。次の呼び出しでやり直す
                 logger.warning(
                     "trace_recording_settings_unavailable", extra={"error_type": type(exc).__name__}
                 )
-                value = False
-            self._cached = (now, value)
-            return value
+                with self._lock:
+                    self._refreshing = False
+        with self._lock:
+            return self._cached[1] if self._cached is not None else False
+
+    def _refresh(self, generation: int) -> None:
+        try:
+            value = self.load().enabled
+        except Exception as exc:
+            logger.warning(
+                "trace_recording_settings_unavailable", extra={"error_type": type(exc).__name__}
+            )
+            value = False
+        with self._lock:
+            self._refreshing = False
+            if generation == self._generation:
+                self._cached = (self._clock(), value)
 
     def load(self) -> TraceRecordingSettings:
         return self.store.load() or TraceRecordingSettings()
@@ -132,6 +169,7 @@ class TraceRecordingProvider:
     def save(self, enabled: bool) -> TraceRecordingSettings:
         saved = self.store.save(enabled)
         with self._lock:
+            self._generation += 1
             self._cached = (self._clock(), saved.enabled)
         return saved
 

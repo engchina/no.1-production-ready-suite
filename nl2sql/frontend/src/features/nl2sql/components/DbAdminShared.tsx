@@ -24,6 +24,7 @@ import {
   ExecutionConfirmationField,
   FormGrid,
   TextareaField,
+  CombinedBanner,
 } from "@production-ready/ui";
 import {
   useEffect,
@@ -604,11 +605,12 @@ export function DbAdminExecutionResult({
         {result.committed && <StatusBadge variant="success" label={t("dbAdmin.result.summary.committed")} />}
         {result.rolled_back && <StatusBadge variant="danger" label={t("dbAdmin.result.summary.rolledBack")} />}
       </div>
-      {result.warnings.filter((warning) => !duplicatesStatementError(warning, result.statements)).map((warning, index) => (
-        <Banner key={`${index}-${warning}`} severity="warning">
-          {warning}
-        </Banner>
-      ))}
+      {/* 実行の警告は 1 つの枠に項目で並べる（同じ区画の案内の枠は 1 つ。messaging.md §3.4.3。#5192）。 */}
+      <CombinedBanner
+        items={result.warnings
+          .filter((warning) => !duplicatesStatementError(warning, result.statements))
+          .map((warning, index) => ({ id: `${index}-${warning}`, severity: "warning" as const, children: warning }))}
+      />
       {result.select_result && (
         <QueryResultTable results={result.select_result} rowLimit={rowLimit} csvFilePrefix="nl2sql-admin-sql-result" />
       )}

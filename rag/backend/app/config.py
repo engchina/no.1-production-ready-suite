@@ -1735,6 +1735,17 @@ class Settings(
             "これより長くする。"
         ),
     )
+    rag_answer_generation_round_estimate_seconds: float = Field(
+        default=120.0,
+        ge=1.0,
+        le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+        description=(
+            "生成の 1 回の見積もり（秒。#5184。既定 120）。生成の実測が無い段階の見積もりで、"
+            "章節の拡張は次の段を読む前に、この値と回答の確定の分を回答の期限"
+            "（rag_answer_timeout_seconds）の残りから生成に残し、足りなければ読まずに止める。"
+            "1 回の生成が長い推論のモデルでは大きくする。"
+        ),
+    )
     db_read_timeout_seconds: float = Field(
         default=8.0,
         gt=0.0,

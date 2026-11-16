@@ -12302,6 +12302,26 @@ class OracleClient:
                 _discard_shared_pool(fresh, reason="retry_failed", exc=exc)
             raise
 
+    def open_dedicated_connection(self) -> OracleConnectionProtocol:
+        """共有 pool を通さない専用の接続を開く（閉じるのは呼び出し側の `close()`）。
+
+        長く DB を待つ保守（索引の整理）に使う。共有 pool の接続を返す途中で DB の応答を待つと、
+        pool の lock を持ったまま止まり、同じプロセスの要求の接続の取得まで止める（#5181）。
+        専用の接続の close は共有 pool に触れない。接続の初期化に失敗したら閉じて例外を返す。
+        """
+        oracledb = importlib.import_module("oracledb")
+        _init_oracle_client(oracledb, self._settings)
+        connection = cast(
+            OracleConnectionProtocol,
+            oracledb.connect(**shared_pool_connect_kwargs(self._settings)),
+        )
+        try:
+            init_oracle_session(connection)
+        except Exception:
+            _close_quietly(connection)
+            raise
+        return connection
+
     def connection_pool(self) -> OraclePoolProtocol:
         """共有 connection pool を返す。"""
         return self._pool()

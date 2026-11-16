@@ -14,6 +14,7 @@ import {
   clarificationLabels,
   Disclosure,
   DisclosureChevron,
+  isGuardrailBlockedError,
   ProcessingIndicator,
   StatusBadge,
   type ClarificationBusyAction,
@@ -406,14 +407,19 @@ export interface RequirementCheckRunner {
   /**
    * 検査を行う。成功したら結果を返し、失敗は `checkError` に入れて null を返す。`isCurrent` が false になった
    * （中止した・別の送信に移った）ときは状態を変えずに null を返す。OCI Enterprise AI が無い
-   * （`REQUIREMENT_AI_NOT_CONFIGURED`）ときは `onUnavailable` を呼ぶ（確認せずに SQL を作る）。
+   * （`REQUIREMENT_AI_NOT_CONFIGURED`）ときは `onUnavailable` を呼ぶ（確認せずに SQL を作る）。安全チェックが
+   * 質問を止めた（`GUARDRAIL_BLOCKED`）ときに `onBlocked` があれば、失敗にせずそれを呼ぶ（チャットは確認の
+   * カードを出さずに、止めた質問として出す。#5191）。
    */
-  run: <T>(
-    task: () => Promise<T>,
-    options?: { isCurrent?: () => boolean; onUnavailable?: () => void }
-  ) => Promise<T | null>;
+  run: <T>(task: () => Promise<T>, options?: RequirementCheckOptions) => Promise<T | null>;
   /** 検査の表示を外す（中止・別の送信に移ったとき）。 */
   reset: () => void;
+}
+
+export interface RequirementCheckOptions {
+  isCurrent?: () => boolean;
+  onUnavailable?: () => void;
+  onBlocked?: (cause: unknown) => void;
 }
 
 export function useRequirementCheck(initialChecking = false): RequirementCheckRunner {
@@ -422,7 +428,7 @@ export function useRequirementCheck(initialChecking = false): RequirementCheckRu
   const run = useCallback(
     async <T,>(
       task: () => Promise<T>,
-      options: { isCurrent?: () => boolean; onUnavailable?: () => void } = {}
+      options: RequirementCheckOptions = {}
     ): Promise<T | null> => {
       const isCurrent = options.isCurrent ?? (() => true);
       setCheckError(null);
@@ -438,6 +444,10 @@ export function useRequirementCheck(initialChecking = false): RequirementCheckRu
         if (isAbortError(cause)) return null;
         if (options.onUnavailable && isRequirementCheckUnavailable(cause)) {
           options.onUnavailable();
+          return null;
+        }
+        if (options.onBlocked && isGuardrailBlockedError(cause)) {
+          options.onBlocked(cause);
           return null;
         }
         setCheckError(cause);

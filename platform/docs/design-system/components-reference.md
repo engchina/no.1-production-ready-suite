@@ -3249,7 +3249,8 @@ function submit() {
 |---|---|
 | 送信中（`sending`）も吹き出しの見た目は送信後と同じ（薄くしない・スピナーを付けない） | ChatGPT・Claude・Gemini と同じ。待ちの表示は回答の場所の 1 つだけにする（messaging.md §3.7 の単一スピナー） |
 | 失敗（`failed`）は吹き出しの下に `failedLabel` を `AlertCircle` 付きで出す。原因と「再送信」は製品が Banner で出す | 質問の状態（送れていない）と原因・対処を分ける（messaging.md §9 P1 / P2）。色だけに頼らない |
-| 状態は `data-status`（`sending` / `sent` / `failed` / `stopped`）に出す | e2e で状態を確かめる |
+| 状態は `data-status`（`sending` / `sent` / `failed` / `blocked` / `stopped`）に出す | e2e で状態を確かめる |
+| 安全チェックが止めた質問（`blocked`。#5191）は吹き出しの下に `blockedLabel`（「安全チェックで停止しました」）を `ShieldAlert` 付きの `text-warning-fg` で出し、`failedLabel` は出さない | 送信の失敗ではない（送り直しても同じ結果）ことを、文とアイコンで分ける |
 | 仮の ID は `crypto.randomUUID` を使わず時刻と連番で作る | http の IP 直打ちなど安全でない文脈で `randomUUID` が無い |
 | `withOptimisticChatStatus(m, "sending")` は送信の時刻を数え直す。失敗・停止は送信の時刻を保つ | 再送信の経過時間を 0 から出す |
 | 会話の持ち主以外（#3244 より前の system_admin。#1928）が送った質問は `senderLabel`（`ChatTurn` は `questionSender`）に「〈名前〉 が送信」を渡し、吹き出しの上に `UserRound`（14px）付きの `text-xs text-fg-muted` の文で出す（`data-chat-sender`）。持ち主が送った質問には渡さない | 同じ会話に別の人の質問が混ざることを、色ではなく文で分かるようにする。持ち主だけの会話は今までと同じ見た目 |
@@ -3784,6 +3785,39 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
 - 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。
+- 安全チェック（OCI Guardrails）が止めた質問（API の error code が `GUARDRAIL_BLOCKED`。`isGuardrailBlockedError`）は、仮のメッセージを `withOptimisticChatStatus(m, "blocked")` にし、`failure` ではなく `blocked` に `ChatGuardrailNotice` を渡す（下の節。#5191）。
+
+## ChatGuardrailNotice / isGuardrailBlockedError — **新規**（#5191）
+
+安全チェック（OCI Guardrails）が止めた質問の、回答の場所の案内（3 製品共通）。振る舞いの規則は messaging.md §11.3。
+
+```tsx
+import { ChatGuardrailNotice, ChatPendingTurn, isGuardrailBlockedError, withOptimisticChatStatus } from "@production-ready/ui";
+
+onError: (error) => {
+  if (isGuardrailBlockedError(error)) {                      // error code だけで判定（説明の文は見ない）
+    setPending((p) => (p ? withOptimisticChatStatus(p, "blocked") : p));
+    if (!draft.trim()) setDraft(sentQuestion);              // 書き換えられるよう、空の入力欄に質問を戻す
+    return;
+  }
+  setPending((p) => (p ? withOptimisticChatStatus(p, "failed") : p));
+};
+
+<ChatPendingTurn
+  message={pending}
+  failedLabel={t("chat.sendFailed")}
+  blocked={<ChatGuardrailNotice message={sendError?.message} testId="chat-guardrail-notice" />}
+  …
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| warning の `Banner` 1 つに、理由（backend の文。無ければ既定の文）と「送り直しても同じ結果になる・書き換えて送る」の案内を出す。ボタンは置かない | 送信の失敗ではない。再送信・確認の省略は必ず同じ停止になるので出さない（messaging.md §11.3）。RAG の回答の安全チェックの警告と同じ warning |
+| 文言は `DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS`（状態の文・既定の理由・案内）。3 製品は既定の文を使う | 3 製品で同じ機能の文をそろえる（shared-features.md） |
+| 判定は `errorCode === GUARDRAIL_BLOCKED_CODE`（backend は `pr_system_settings.guardrails.GUARDRAIL_BLOCKED_CODE`） | 3 製品の `ApiError` はどれも `errorCode` を持つ。説明の文を解析しない（messaging.md §4.3） |
+
+- 単体テストは `packages/ui/tests/chat-turn.test.tsx`。e2e は NL2SQL `tests/e2e/sql-chat.spec.ts`・Agent `e2e/chat.spec.ts` の「#5191」（desktop と 375px）。
 - 回答の本文は `ChatAnswerBody`（#3433）で包み、本文の前に見出し「回答」（既定 h3。`labels.heading`・`headingLevel` で変えられる）を出す。見出しは本文の中の節の見出しと同じ部品 `AnswerHeading`（`text-sm font-semibold text-fg`。`AnswerSections` の節の見出しも同じ）。回答の本文を描くときだけ使い、処理の経過だけの間・失敗・停止だけの枠・回答前の確認のカードには使わない。実行の詳細は `Section` の見出し「回答」を持つので使わない。使う所: RAG `AssistantColumn`、Agent `RunChatTurn`（NL2SQL の回答は SQL・説明・結果で、本文の節の見出しを持たないので使わない）。単体テストは `packages/ui/tests/answer-heading.test.tsx`。
 - 利用者の側が質問の文ではない往復（回答前の確認のカードで答えた往復。#1839）は、`userContent` に `ClarificationRecord`（`variant="bubble"`）を渡す。質問の吹き出しの代わりに出る。
 

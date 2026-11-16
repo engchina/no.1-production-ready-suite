@@ -1,4 +1,4 @@
-import { RunProgressCard, callBodyPath, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
+import { RunProgressCard, callBodyPath, CollapsedListToggle, useCollapsedList, CombinedBanner } from "@production-ready/ui";
 import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
@@ -29,6 +29,7 @@ import {
   useChatHistoryActions,
   useChatHistoryPanel,
   withOptimisticChatStatus,
+  isGuardrailBlockedError,
   type OptimisticChatMessage,
 } from "@production-ready/ui";
 
@@ -223,7 +224,15 @@ export function DbAdminChatPage() {
           setDraft(question);
           return;
         }
-        setPending({ message: withOptimisticChatStatus(message, "failed"), turnId, error });
+        // 安全チェックが止めた質問は送信の失敗ではない（送り直しても同じ）。再送信を出さず、書き換えられるよう
+        // 空の入力欄に質問を戻す（書き始めた次の質問は上書きしない。messaging.md §11.3。#5191）。
+        const guardrailBlocked = isGuardrailBlockedError(error);
+        if (guardrailBlocked) setDraft((current) => (current.trim() ? current : question));
+        setPending({
+          message: withOptimisticChatStatus(message, guardrailBlocked ? "blocked" : "failed"),
+          turnId,
+          error,
+        });
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
       }
@@ -402,7 +411,7 @@ export function DbAdminChatPage() {
           // 送った質問は生成の応答を待たずに出し、失敗しても残して「再送信」を出す（チャットと同じ。#907）。
           <Nl2SqlPendingTurn
             message={pending.message}
-            error={pending.message.status === "failed" ? pending.error : null}
+            error={pending.message.status === "sending" ? null : pending.error}
             fallback={t("dbAdminChat.sendFailed")}
             onResend={resend}
             resendDisabled={generating}
@@ -786,11 +795,11 @@ function DbAdminChatTurn({
           testId={`${TEST_ID}-schema-sync-notice`}
           processingTestId={`${TEST_ID}-schema-refresh-processing`}
         />
-        {turn.warnings.map((warning) => (
-          <Banner key={warning} severity="warning">
-            {warning}
-          </Banner>
-        ))}
+        {/* 往復の警告は回答の 1 つの枠に項目で並べる（messaging.md §3.4.3。#5192）。 */}
+        <CombinedBanner
+          testId={`${TEST_ID}-warnings`}
+          items={turn.warnings.map((warning) => ({ id: warning, severity: "warning" as const, children: warning }))}
+        />
         {/* 回答の注意書きは SQL と実行の結果の後（3 製品共通の AnswerNotice。#2405）。 */}
         <AnswerNotice notice={turn.notice} label={t("answer.notice.label")} />
       </ChatAnswer>
@@ -857,11 +866,9 @@ function RunAllSummary({ runAll, turnId }: { runAll: DbAdminChatRunAll; turnId: 
               notRun: data ? notRun : Math.max(count - succeeded - 1, 0),
             })}
       </p>
-      {warnings.map((warning) => (
-        <Banner key={warning} severity="warning">
-          {warning}
-        </Banner>
-      ))}
+      <CombinedBanner
+        items={warnings.map((warning) => ({ id: warning, severity: "warning" as const, children: warning }))}
+      />
     </div>
   );
 }
@@ -969,20 +976,42 @@ function DbAdminChatStatement({
         // SELECT は SQL の横の「実行」で実行する（チャットと同じ位置）。確認語の要る文は確認語の欄の横。
         actions={!blocked && !statement.requires_confirmation && !readOnly ? executeButton : null}
       />
-      {blocked ? (
-        <Banner severity="danger" title={t("dbAdminChat.blocked.title")}>
-          <p className="break-words">{statement.blocked_reason}</p>
-          <p className="mt-2 text-xs">
-            {t(unknownColumns ? "dbAdminChat.blocked.unknownColumnHint" : "dbAdminChat.blocked.hint")}
-          </p>
-        </Banner>
-      ) : null}
+      {/* 文の案内（実行できない・データを変える文の確認・コピーの失敗）は文の区画の 1 つの枠（messaging.md §3.4.3。#5192）。 */}
+      <CombinedBanner
+        testId={`${TEST_ID}-statement-notice`}
+        items={[
+          blocked
+            ? {
+                id: "blocked",
+                severity: "danger",
+                title: t("dbAdminChat.blocked.title"),
+                children: (
+                  <>
+                    <p className="break-words">{statement.blocked_reason}</p>
+                    <p className="mt-2 text-xs">
+                      {t(unknownColumns ? "dbAdminChat.blocked.unknownColumnHint" : "dbAdminChat.blocked.hint")}
+                    </p>
+                  </>
+                ),
+              }
+            : null,
+          statement.requires_confirmation
+            ? {
+                id: "mutation",
+                severity: "warning",
+                children: (
+                  <>
+                    <p>{t("dbAdminChat.warning.mutation")}</p>
+                    {statement.implicit_commit ? <p className="mt-1">{t("dbAdminChat.warning.implicitCommit")}</p> : null}
+                  </>
+                ),
+              }
+            : null,
+          copyError ? { id: "copy-error", severity: "danger", children: copyError } : null,
+        ]}
+      />
       {statement.requires_confirmation ? (
         <>
-          <Banner severity="warning">
-            <p>{t("dbAdminChat.warning.mutation")}</p>
-            {statement.implicit_commit ? <p className="mt-1">{t("dbAdminChat.warning.implicitCommit")}</p> : null}
-          </Banner>
           {readOnly ? null : (
             <ExecutionConfirmationField
               id={`${TEST_ID}-confirmation-${turn.turn_id}-${statement.index}`}
@@ -1080,7 +1109,6 @@ function DbAdminChatStatement({
           onUseCorrected={applyCorrected}
         />
       ) : null}
-      {copyError ? <Banner severity="danger">{copyError}</Banner> : null}
     </section>
   );
 }
@@ -1178,11 +1206,9 @@ function AnalysisPanel({
               ) : null}
             </>
           ) : null}
-          {analysis.data.warnings.map((warning) => (
-            <Banner key={warning} severity="info">
-              {warning}
-            </Banner>
-          ))}
+          <CombinedBanner
+            items={analysis.data.warnings.map((warning) => ({ id: warning, severity: "info" as const, children: warning }))}
+          />
         </>
       ) : null}
     </section>

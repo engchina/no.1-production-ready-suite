@@ -29,6 +29,7 @@ import {
   ChatAnswer,
   ChatAnswerBody,
   DEFAULT_CHAT_ANSWER_BODY_LABELS,
+  ChatGuardrailNotice,
   ChatPendingTurn,
   ChatTurn,
   EmptyState,
@@ -40,6 +41,7 @@ import {
   createOptimisticChatMessage,
   toast,
   withOptimisticChatStatus,
+  isGuardrailBlockedError,
   type OptimisticChatMessage,
   useChatAutoScroll,
   useChatHistoryActions,
@@ -388,9 +390,17 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
       if (stopRequested) cancel.mutate(run.id);
     },
-    onError: (_error, { generation }) => {
+    onError: (error, { generation, goal, clarificationCancel }) => {
       if (stopAfterCreateRef.current === generation) stopAfterCreateRef.current = null;
       if (generation !== viewGenerationRef.current) return;
+      // 安全チェックが止めた質問は送信の失敗ではない（送り直しても同じ）。再送信を出さず、書き換えられるよう
+      // 空の入力欄に質問を戻す（書き始めた次の質問は上書きしない。確認の取り消しの定型の文は戻さない。
+      // messaging.md §11.3。#5191）。
+      if (isGuardrailBlockedError(error)) {
+        if (!clarificationCancel) setDraft((current) => (current.trim() ? current : goal));
+        setPending((current) => (current ? withOptimisticChatStatus(current, "blocked") : current));
+        return;
+      }
       // 送れなかった質問は会話の欄に残し、理由と「再送信」を出す（入力欄には戻さない。#907）。
       setPending((current) => (current ? withOptimisticChatStatus(current, "failed") : current));
     },
@@ -1316,6 +1326,7 @@ function RunChatTurn({
 /**
  * 送った質問（Run の作成の応答の前・作れなかったとき。#907）。作成中の表示は Run の回答の場所と同じ形にし、
  * Run ができたら同じ位置の `ChatTurn` に置き換わる。作れなかったときは質問を残し、理由と「再送信」を出す。
+ * 安全チェックが止めた質問（`blocked`）は理由と書き換えの案内だけを出す（再送信を出さない。#5191）。
  */
 function PendingTurn({
   message,
@@ -1340,6 +1351,7 @@ function PendingTurn({
       testId="chat-pending-turn"
       // Run の作成の応答を待つ間も段階として出す（送信で待っていることが分かる。#1147）。
       progress={<ChatProgress key={message.localId} steps={chatSubmitProgressSteps(message.sentAtMs)} testId="chat-progress" />}
+      blocked={<ChatGuardrailNotice message={errorMessage} testId="chat-guardrail-notice" />}
       failure={
         <div data-testid="chat-send-failure">
           <Banner
