@@ -10,11 +10,12 @@ from typing import Any
 from rag_engine.dependencies import injected_document_background
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_records import _stored_chunk_answer_record
+from rag_engine.generation.document_inputs import BACKGROUND_ONLY, FIRST_CHUNK
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextEvidence, ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_spans
 from rag_engine.retrieval.metadata_context import document_context_key
 
-BACKGROUND_ONLY = "document_background_only"
+__all__ = ["BACKGROUND_ONLY", "FIRST_CHUNK", "DocumentBackgroundReader", "background_label", "without_embedded_background"]
 
 
 def background_label(span: Mapping[str, Any]) -> str:
@@ -194,7 +195,7 @@ class DocumentBackgroundReader:
             first = row.get("first_chunk")
             if first is not None:
                 record = _stored_chunk_answer_record(first)
-                record = replace(record, text=record.body_text or record.text, metadata={**record.metadata, "document_first_chunk": True})
+                record = replace(record, text=record.body_text or record.text, metadata={**record.metadata, FIRST_CHUNK: True})
                 uid = record.chunk_uid or record.id
                 included = any(
                     uid == value.get("source_id")
@@ -206,12 +207,14 @@ class DocumentBackgroundReader:
                 )
                 if document_context_key(record) != key:
                     detail["first_chunk_status"] = "version_mismatch"
-                elif included:
-                    detail["first_chunk_status"] = "already_included"
                 else:
-                    added = evidence_spans(question, [record], preserve_records=True)
+                    # 根拠に原文が入っていても印の付いた全文を持たせ、分割読取でその原文を含まない組に足せるようにする（#5240）。
+                    # 同じ原文を重ねて渡さないことは ``with_first_chunks`` が入力ごとに確かめる。
+                    added = [{**value, FIRST_CHUNK: True} for value in evidence_spans(question, [record], preserve_records=True)]
                     spans.extend(added)
-                    if not any((item.chunk_uid or item.id) == uid for item in records):
+                    if included:
+                        detail["first_chunk_status"] = "already_included"
+                    elif not any((item.chunk_uid or item.id) == uid for item in records):
                         records.append(record)
                         evidence.append(ContextEvidence(record, "supporting", "document_first_chunk"))
                         trees.append(
@@ -222,7 +225,7 @@ class DocumentBackgroundReader:
                                 (ContextChildEvidence(record, "same_page_context", "document_first_chunk"),),
                             )
                         )
-                    detail.update(first_chunk_id=uid, first_chunk_added_spans=len(added))
+                    detail.update(first_chunk_id=uid, first_chunk_added_spans=0 if included else len(added))
             page = row.get("first_page")
             if isinstance(page, Mapping):
                 from rag_engine.generation.answer_images import prompt_injection_warnings_for_records

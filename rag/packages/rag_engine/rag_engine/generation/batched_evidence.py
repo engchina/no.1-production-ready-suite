@@ -26,12 +26,20 @@ from rag_engine.generation.batch_output_repair import (
     repair_feedback_upper_bound,
 )
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.document_inputs import document_groups, document_key, document_priority, order_document_spans
+from rag_engine.generation.document_inputs import (
+    FIRST_CHUNK,
+    document_groups,
+    document_key,
+    document_priority,
+    order_document_spans,
+    with_first_chunks,
+)
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.resources.call_context import call_context, update_call_context
+from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS, remaining_seconds
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.rerank_scores import rerank_first_key
 
@@ -195,12 +203,28 @@ def prepare_batched_evidence(
     ``protected_sources`` は検索拡張の印を持つ根拠の出典（#5162・#5098）。その文書を最初の組から読み（関連度の高い根拠と
     同じ組に入りやすくし、点数の低い橋渡しの根拠を最後の組へ回さない）、読取で選ばれなかったときは補う順の先頭にする。
     最終生成へ渡す並びは関連度の順（``document_order``）のまま。
+
+    文書の本文の先頭の chunk（``FIRST_CHUNK`` の印。#5240）は組分けの対象にせず、各組と最終生成の入力に、そこに出てくる文書の
+    分を必ず足す（その入力の原文がすでに含めば足さない。``with_first_chunks``）。組の大きさはその分を含めて測る。
+
+    回答の期限（#5204）: 各組を読む前に、期限の残りが最後の生成の 1 回の見積もり（設定の
+    ``answer_generation_round_estimate_seconds``）と確定の分（``ANSWER_FINALIZE_RESERVE_SECONDS``）より少なければ、
+    残りの組を読まない。読み終わった組の結果と、読まなかった組の入力を優先の順に入る分だけ最終生成へ渡し、入らなかった
+    出典の数を ``excluded_span_count``、止めた理由を ``stop_reason="deadline"`` と ``deadline`` に残す。
     """
     reading_system = BATCH_READING_PROMPT
     protected = frozenset(protected_sources)
     document_order = document_priority(spans, source_scores)
     reading_order = document_priority(spans, source_scores, first=protected) if protected else document_order
-    selected = order_document_spans(spans, priority=document_order)
+    firsts = [value for value in spans if value.get(FIRST_CHUNK)]
+
+    def with_firsts(values: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        return with_first_chunks(values, firsts)
+
+    def main_of(values: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [value for value in values if not value.get(FIRST_CHUNK)]
+
+    selected = order_document_spans(with_firsts(spans), priority=document_order)
     batches: list[dict[str, Any]] = []
     read_sources: set[str] = set()
     context = render([])
@@ -269,6 +293,10 @@ def prepare_batched_evidence(
             ]
         )
 
+    def batch_fits(values: Sequence[dict[str, Any]]) -> bool:
+        """組の本文に、その文書の先頭の chunk を足しても読取の入力に入るか。"""
+        return fits(with_firsts(values))
+
     def retain_whole(values: Sequence[dict[str, Any]], reduced: dict[tuple[str, int, int], dict[str, Any]]) -> None:
         """読取の結果を確かめられない入力の原文の全体を最終生成へ残す。引用の検査は最終生成の出典にも掛かる。"""
         for value in values:
@@ -307,7 +335,7 @@ def prepare_batched_evidence(
         text = value["text"]
 
         def in_budget(end: int) -> bool:
-            return fits([piece(value, cuts, offset, end)])
+            return batch_fits([piece(value, cuts, offset, end)])
 
         for level in cuts.levels:
             positions = [position for position in level if position > offset and text[offset:position].strip() and text[position:].strip()]
@@ -336,14 +364,14 @@ def prepare_batched_evidence(
     def partition(values: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         result: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
-        for document in document_groups(values, priority=reading_order):
-            if fits([*current, *document]):
+        for document in document_groups(main_of(values), priority=reading_order):
+            if batch_fits([*current, *document]):
                 current.extend(document)
                 continue
             if current:
                 result.append(current)
                 current = []
-            if fits(document):
+            if batch_fits(document):
                 current.extend(document)
                 continue
             # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。字数は入るかどうかの確認だけに使う。
@@ -352,7 +380,7 @@ def prepare_batched_evidence(
                 offset = 0
                 while offset < len(value["text"]):
                     rest = piece(value, cuts, offset, len(value["text"]))
-                    if fits([*current, rest]):
+                    if batch_fits([*current, rest]):
                         current.append(rest)
                         break
                     if current:
@@ -393,12 +421,12 @@ def prepare_batched_evidence(
                 answers = [excerpt["batch_answer"] for excerpt in result if inside(excerpt, value) and excerpt.get("batch_answer")]
                 result = [excerpt for excerpt in result if not inside(excerpt, value)]
                 result.append({**value, **({"batch_answer": "\n".join(answers)} if answers else {})})
-            return order_document_spans(tag(result), priority=document_order)
+            return order_document_spans(tag(with_firsts(result)), priority=document_order)
 
         # 文字数は根拠のブロックの大きさで見積もり、入らない大きな原文は飛ばして次の順位を足す。
         room = settings.evidence_budget_chars - len(evidence_text(tag(list(chosen))))
         candidates = []
-        for value in sorted(spans, key=rank):
+        for value in sorted(main_of(spans), key=rank):
             if any(excerpt["text"] == value["text"] and inside(excerpt, value) for excerpt in chosen):
                 continue
             size = len(evidence_text(tag([value])))
@@ -442,8 +470,50 @@ def prepare_batched_evidence(
             },
         )
 
+    round_estimate = getattr(settings, "answer_generation_round_estimate_seconds", None)
+    generation_reserve = (
+        DEFAULT_GENERATION_ROUND_SECONDS if round_estimate is None else max(0.0, float(round_estimate))
+    ) + ANSWER_FINALIZE_RESERVE_SECONDS
+    # 期限で読まなかった組（#5204）。読取の回数（batch_count）には数えない。
+    deadline_stop: dict[str, Any] = {}
+
+    def keep_unread(chosen: Sequence[dict[str, Any]], unread: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+        """読み終わった組の結果に、読まなかった入力を読取の優先の順に入る分だけ足す（二分探索。LLM は呼ばない）。"""
+
+        def attempt(count: int) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+            values = order_document_spans(tag(with_firsts([*chosen, *unread[:count]])), priority=document_order)
+            return (values, *final_measure(values))
+
+        best = attempt(0)
+        if not best[2]["fits"]:
+            fail("batch_reduction_deadline", deadline=deadline_stop)
+        low, high = 0, len(unread)
+        while low < high:
+            middle = (low + high + 1) // 2
+            trial = attempt(middle)
+            if trial[2]["fits"]:
+                best, low = trial, middle
+            else:
+                high = middle - 1
+        return best
+
+    def uncovered_sources(unread: Sequence[dict[str, Any]], final: Sequence[dict[str, Any]]) -> int:
+        """読まなかった入力のうち、最終生成の入力にその範囲を含む原文が無いものの出典の数。"""
+        missing = {
+            value["source_id"]
+            for value in unread
+            if not any(
+                kept["source_id"] == value["source_id"]
+                and kept.get("start", 0) <= value.get("start", 0)
+                and value.get("end", len(value["text"])) <= kept.get("end", len(kept["text"]))
+                for kept in final
+            )
+        }
+        return len(missing)
+
     prompt, measurement = final_measure(selected)
     reduction: dict[str, Any] = {}
+    unread_inputs: list[dict[str, Any]] = []
     if not measurement["fits"]:
         # 文字予算だけを緩めず、system・schema・出力予約込みで各読取と最終生成を検査する。
         remaining_passes = max(1, sum(len(value["text"]) for value in selected).bit_length())
@@ -457,6 +527,22 @@ def prepare_batched_evidence(
             reduced: dict[tuple[str, int, int], dict[str, Any]] = {}
             pass_batches = list(partition(selected))
             for batch_index, batch in enumerate(pass_batches, 1):
+                left = remaining_seconds()
+                if left is not None and left < generation_reserve:
+                    # 残りは最後の生成と確定に使い、この組から先は読まない（#5204）。
+                    skipped = pass_batches[batch_index - 1 :]
+                    unread_inputs = [value for group in skipped for value in group]
+                    deadline_stop.update(
+                        remaining_seconds=round(left, 3),
+                        reserve_seconds=generation_reserve,
+                        pass_index=pass_index,
+                        completed_batch_count=batch_index - 1,
+                        skipped_batch_count=len(skipped),
+                        skipped_input_count=len(unread_inputs),
+                    )
+                    break
+                # 組の本文の文書ごとに、本文の先頭の chunk を先頭に足す（#5240）。
+                batch = order_document_spans(with_firsts(batch), priority=document_order)
                 payload = read_prompt(batch)
                 receipt: dict[str, Any] = {
                     "index": len(batches) + 1,
@@ -481,6 +567,7 @@ def prepare_batched_evidence(
                         {"source_id": value["source_id"], "start": value.get("start", 0), "end": value.get("end", len(value["text"]))}
                         for value in batch
                     ],
+                    "first_chunk_source_ids": list(dict.fromkeys(value["source_id"] for value in batch if value.get(FIRST_CHUNK))),
                 }
                 batches.append(receipt)
                 reading_model = _reading_model(batch)
@@ -580,7 +667,10 @@ def prepare_batched_evidence(
                     unverified_failure = (exc, receipt)
                 finally:
                     record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
-            selected = order_document_spans(tag(list(reduced.values())), priority=document_order)
+            if deadline_stop:
+                selected, prompt, measurement = keep_unread(list(reduced.values()), unread_inputs)
+                break
+            selected = order_document_spans(tag(with_firsts(list(reduced.values()))), priority=document_order)
             prompt, measurement = final_measure(selected)
             if not measurement["fits"] and len(prompt) >= previous_size:
                 stop_reduction("batch_reduction_did_not_shrink")
@@ -593,7 +683,8 @@ def prepare_batched_evidence(
             **measurement,
             **({"reduction": reduction} if reduction else {}),
             "configured_chars": settings.evidence_budget_chars,
-            "excluded_span_count": 0,
+            "excluded_span_count": uncovered_sources(unread_inputs, selected) if deadline_stop else 0,
+            **({"stop_reason": "deadline", "deadline": deadline_stop} if deadline_stop else {}),
             "batch_count": len(batches),
             "batches": batches,
             "read_source_count": len(read_sources),

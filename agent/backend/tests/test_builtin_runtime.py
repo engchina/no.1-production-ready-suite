@@ -845,6 +845,64 @@ def test_oci_model_omits_reasoning_text_from_the_input() -> None:
     assert responses.calls[1]["input"] == "x"
 
 
+def test_oci_model_sends_output_schema_descriptions_in_the_instructions_step() -> None:
+    """構造化出力の schema の項目の説明は、指示の最後の Step にして送り、schema から外す（#5238）。
+
+    `text.format` の説明はモデルによっては読まれない。function tool の引数の説明は変えない。
+    """
+    from agents.agent_output import AgentOutputSchema
+    from pydantic import BaseModel, Field
+
+    class _Probe(BaseModel):
+        """型の説明（実装のメモ）。"""
+
+        note: str = Field(description="合成の欄の書き方。")
+        plain: str
+
+    schema = AgentOutputSchema(_Probe).json_schema()
+    text = {
+        "format": {"type": "json_schema", "name": "final_output", "schema": schema, "strict": True}
+    }
+    tool = {
+        "type": "function",
+        "name": "record",
+        "parameters": {
+            "type": "object",
+            "properties": {"x": {"type": "string", "description": "引数の説明。"}},
+        },
+    }
+    responses = _RecordingResponses()
+    wrapped = _oci_client(responses)
+
+    anyio.run(
+        lambda: wrapped.responses.create(
+            model="m",
+            input="x",
+            instructions="## Step 1: 読む\n合成の指示。",
+            text=text,
+            tools=[tool],
+        )
+    )
+    anyio.run(lambda: wrapped.responses.create(model="m", input="x", text=text))
+    anyio.run(lambda: wrapped.responses.create(model="m", input="x", instructions="合成の指示。"))
+
+    guided = responses.calls[0]
+    assert (
+        guided["instructions"] == "## Step 1: 読む\n合成の指示。\n\n## Step 2: 応答の各項目を書く\n"
+        "応答の JSON の各項目は、次の説明に従って書く。\n- `note`: 合成の欄の書き方。"
+    )
+    sent_schema = guided["text"]["format"]["schema"]
+    assert "description" not in sent_schema
+    assert "description" not in sent_schema["properties"]["note"]
+    assert sent_schema["required"] == schema["required"]
+    assert guided["tools"] == [tool]
+    # 指示が無い要求は Step だけを指示にする。schema の無い要求は変えない。
+    assert responses.calls[1]["instructions"].startswith("## Step 1: 応答の各項目を書く\n")
+    assert responses.calls[2]["instructions"] == "合成の指示。"
+    # SDK が作った引数は書き換えない。
+    assert schema["properties"]["note"]["description"] == "合成の欄の書き方。"
+
+
 def test_oci_model_retries_model_output_invalid_only() -> None:
     """OCI が再試行を求める `model_output_invalid` だけ、上限まで同じ要求で再試行する（#1215）。"""
     invalid = _bad_request("model_output_invalid", "The selected model could not produce ...")

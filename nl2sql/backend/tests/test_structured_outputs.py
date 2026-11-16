@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.features.nl2sql.enterprise_ai_client import (
     EnterpriseAiDirectError,
@@ -128,6 +128,40 @@ def test_custom_template_cannot_omit_strict_format() -> None:
         response_format=fmt,
     )
     assert payload["text"] == {"verbosity": "low", "format": fmt}
+
+
+class _DescribedOutput(BaseModel):
+    """型の説明（実装のメモ）。"""
+
+    sql: str = Field(description="合成の欄の書き方。")
+    plain: str = ""
+
+
+@pytest.mark.parametrize(
+    "template", ["", '{"input":"${prompt}","instructions":"${system_prompt}"}']
+)
+def test_schema_descriptions_are_sent_in_the_instructions_step_only(template: str) -> None:
+    """text.format の schema の項目の説明は、指示の最後の Step にして送る（#5238）。"""
+    fmt = response_format(_DescribedOutput)
+    payload = _build_payload(
+        settings=Settings(oci_enterprise_ai_llm_payload_template=template),
+        model_id="synthetic",
+        prompt="質問",
+        context="",
+        system_prompt="## Step 1: 読む\n合成の指示。",
+        response_format=fmt,
+    )
+    assert payload["instructions"].endswith(
+        "\n\n## Step 2: 応答の各項目を書く\n応答の JSON の各項目は、次の説明に従って書く。"
+        "\n- `sql`: 合成の欄の書き方。"
+    )
+    sent = payload["text"]["format"]
+    assert "description" not in sent["schema"]
+    assert "description" not in sent["schema"]["properties"]["sql"]
+    assert sent["schema"]["required"] == fmt["schema"]["required"]
+    assert sent["strict"] is True
+    # 呼び出し側の形式は変えない（応答の検査は元の schema で行う）。
+    assert fmt["schema"]["properties"]["sql"]["description"] == "合成の欄の書き方。"
 
 
 def test_complex_schemas_are_valid_and_intent_example_matches() -> None:

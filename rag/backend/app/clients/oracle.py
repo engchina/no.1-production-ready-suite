@@ -46,7 +46,11 @@ from rag_engine.retrieval.search_stages import (
     TEXT_SEARCH_STAGE,
     VECTOR_SEARCH_STAGE,
 )
-from rag_parser_core.extraction import DOCUMENT_SUMMARY_CONTENT_KIND
+from rag_parser_core.extraction import (
+    DERIVED_CONTENT_KINDS,
+    DERIVED_FLAG_KEYS,
+    DOCUMENT_SUMMARY_CONTENT_KIND,
+)
 from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
@@ -2179,7 +2183,10 @@ class OracleClient:
     async def retrieval_document_first_chunk(
         self, filters: dict[str, str], *, document_id: str, chunk_set_id: str
     ) -> RetrievedChunk | None:
-        """正確な版の先頭を先に決め、検索条件に適合する場合だけ返す。範囲内の別の先頭へ代えない。"""
+        """正確な版の本文の先頭を先に決め、検索条件に適合する場合だけ返す。範囲内の別の先頭へ代えない。
+
+        先頭は派生の chunk（章節の要約・抽出値・文書全体の要約）を除いた番号の最小（#5240）。
+        """
         where, binds = _oracle_retrieval_where(filters)
         rows = await self._fetch_all(
             _render_sql(
@@ -2195,11 +2202,13 @@ class OracleClient:
                       SELECT MIN(first_c.chunk_index) FROM rag_chunks first_c
                       WHERE first_c.document_id = :background_document_id
                         AND NVL(first_c.chunk_set_id, '#untagged') = :background_chunk_set_id
+                        AND {body_chunk_sql}
                   )
                 ORDER BY c.chunk_id
                 FETCH FIRST 1 ROWS ONLY
                 """,
                 where_sql=where,
+                body_chunk_sql=_body_chunk_sql("first_c"),
             ),
             {
                 **binds,
@@ -8292,6 +8301,12 @@ class OracleClient:
         範囲の解決と検索は別の文なので、間に切替が commit されると、検索は範囲の外の新版を読まず、
         対象の文書の根拠が欠ける。範囲ごとに 1 行あるかだけを索引で確かめる。確認に失敗しても、
         読めた結果を捨てない。
+
+        検索の条件は ``CASE`` の中に置き、範囲の行を ``native_scope_id`` の索引から引いて、条件を
+        満たす最初の行で止まる計画に固定する(#5237)。条件を WHERE に並べると、optimizer が
+        文書の副問い合わせを展開して文書の側から chunk を引く計画を選ぶことがあり(統計の見積もり
+        次第。ADB は hint を無視する)、範囲 60 個・3 万 chunk で文書 × 文書の直積から 178 万
+        logical reads になった。``CASE`` の中の副問い合わせは展開されず、行ごとの FILTER になる。
         """
         if scope is None or not scope.scope_ids:
             return False
@@ -8303,7 +8318,8 @@ class OracleClient:
                         COLUMNS (scope_id NUMBER PATH '$')) s
                     WHERE NOT EXISTS (
                         SELECT 1 {_NATIVE_SCOPE_JOINS}
-                        WHERE {where} AND c.native_scope_id = s.scope_id)""",
+                        WHERE c.native_scope_id = s.scope_id
+                          AND CASE WHEN {where} THEN 1 ELSE 0 END = 1)""",
                     {**binds, "native_checked_scope_ids": json.dumps(list(scope.scope_ids))},
                 )
         except Exception as exc:
@@ -15643,6 +15659,19 @@ _NOT_SUPERSEDED_SQL = "d.superseded_by_document_id IS NULL"
 _NOT_DOCUMENT_SUMMARY_CHUNK_SQL = (
     f"NVL(JSON_VALUE(c.metadata_json, '$.content_kind'), '-') <> '{DOCUMENT_SUMMARY_CONTENT_KIND}'"
 )
+
+
+def _body_chunk_sql(alias: str) -> str:
+    """派生の chunk(``is_derived_content`` と同じ判定)を除く述語。
+
+    印の無い chunk は本文として残す(#5240)。
+    """
+    kinds = ", ".join(f"'{kind}'" for kind in sorted(DERIVED_CONTENT_KINDS))
+    flags = "".join(
+        f" AND NVL(LOWER(JSON_VALUE({alias}.metadata_json, '$.{key}')), 'false') IN ('false', '0')"
+        for key in DERIVED_FLAG_KEYS
+    )
+    return f"NVL(JSON_VALUE({alias}.metadata_json, '$.content_kind'), '-') NOT IN ({kinds}){flags}"
 
 
 def _includes_superseded_documents(filters: Mapping[str, str]) -> bool:
