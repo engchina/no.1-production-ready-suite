@@ -224,7 +224,7 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
         assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
         json.loads(prompt)
         return AnswerCorrectnessOutput(
-            correctness="correct",
+            correctness="consistent",
             reason="一致",
         )
 
