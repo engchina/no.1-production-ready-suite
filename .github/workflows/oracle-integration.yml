@@ -196,4 +196,14 @@ jobs:
           # SQL・bind 値・環境識別子は出さず、許可した資源 ID とロックの列だけを記録する。
           docker exec oracle sh -c 'cat /opt/oracle/diag/rdbms/free/FREE/trace/*.trc' 2>/dev/null |
             python3 .github/scripts/oracle-deadlock-summary.py || true
+          # 接続の拒否（ORA-12516）の診断（#5156）。listener が handler を止めた・戻した行（load）・接続の数と
+          # 10 秒の窓の最大、process / session の上限と最大の使用数だけを出す（接続の利用者・host と、listener の
+          # 詳細表示の環境変数は出さない）。
+          docker exec oracle sh -c 'cat /opt/oracle/diag/tnslsnr/*/listener/trace/listener.log' 2>/dev/null |
+            python3 .github/scripts/oracle-listener-summary.py || true
+          docker exec -i oracle sqlplus -s / as sysdba <<'SQL' || true
+          SET FEEDBACK OFF
+          SELECT resource_name, current_utilization, max_utilization, limit_value
+          FROM v$resource_limit WHERE resource_name IN ('processes', 'sessions');
+          SQL
           docker rm -f oracle || true

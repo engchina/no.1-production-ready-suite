@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Sequence
 from typing import Any, Literal, cast
@@ -11,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, create_model, fi
 from rag_engine.generation.answer_envelope import AnswerOutcome
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, unit_label
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, ResponseLanguage
+from rag_engine.retrieval.character_forms import format_characters
 
 
 class FullAnswerWire(BaseModel):
@@ -34,23 +36,31 @@ _OPEN = "[\\[［【]"
 _CLOSE = "[\\]］】]"
 
 
+@functools.cache
+def _padding() -> str:
+    """括弧の内側と印の間に許す字: 改行を除く Unicode の空白（全角の空白を含む）と書式文字（ZWSP・BOM など）の連続（#5186）。"""
+    return rf"(?:[^\S\n]|[{format_characters()}])*"
+
+
 def citation_marker(catalog: SentUnitCatalog) -> re.Pattern[str] | None:
     """本文の引用の印: この入力の根拠のラベル（``[E2]``）か単位のラベル（``[E2.1]``）を角括弧で囲んだもの。
 
     印はモデルが入力の根拠で見たラベルそのもので、別の番号の体系を持たない（#5078）。今回送っていない根拠の
     ラベルは印にしない（本文の字として残す）。自然言語の意味は解析しない。
 
-    角括弧は文字の種類だけを形式として揃え、全角の ``［］`` と ``【】`` も同じ印として読む（#5091）。
+    角括弧は文字の種類だけを形式として揃え、全角の ``［］`` と ``【】`` も同じ印として読む（#5091）。括弧の内側の
+    前後の空白と書式文字（``[ E2.1 ]``・ゼロ幅の空白の入った印）も形式として読み飛ばす（#5186）。ラベルの照合は変えない。
     """
     if not catalog.block_labels:
         return None
     blocks = "|".join(re.escape(label) for label in sorted(catalog.block_labels, key=len, reverse=True))
-    return re.compile(rf"{_OPEN}({blocks})(?:\.([1-9][0-9]*))?{_CLOSE}")
+    pad = _padding()
+    return re.compile(rf"{_OPEN}{pad}({blocks})(?:\.([1-9][0-9]*))?{pad}{_CLOSE}")
 
 
 def _marker_run(marker: re.Pattern[str]) -> re.Pattern[str]:
     """続けて書いた印（``[E2.1][E2.2]``）は 1 か所の引用として、隣り合う単位を 1 つの出典の行にまとめる。"""
-    return re.compile(rf"(?:{marker.pattern})(?:[ \t]*(?:{marker.pattern}))*")
+    return re.compile(rf"(?:{marker.pattern})(?:{_padding()}(?:{marker.pattern}))*")
 
 
 def _cited_labels(run: str, marker: re.Pattern[str], catalog: SentUnitCatalog) -> tuple[str, ...]:

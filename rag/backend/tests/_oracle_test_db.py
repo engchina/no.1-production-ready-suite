@@ -51,6 +51,40 @@ def _connect() -> Any:
     return oracledb.connect(**real_oracle_connection_kwargs())
 
 
+# テストの前後の後始末（``cleanup_to_baseline``）が使う、worker ごとに 1 本の接続（#5156）。
+# テストごとに接続を作ると、短いテストが続いたときに listener へ接続の要求が集中する。listener は
+# 渡した接続の数を、DB の負荷の報告（LREG。数秒〜十数秒ごと）までは減らさずに数えるので、報告の間に
+# 空きの process の数（processes の上限 - 使用中）を超えると、handler を止めて ORA-12516 で
+# 拒否する。
+_cleanup_connection_instance: Any = None
+
+
+def _cleanup_connection() -> Any:
+    """後始末の接続を返す（無い・切れていれば作り直す）。"""
+    global _cleanup_connection_instance
+    connection = _cleanup_connection_instance
+    if connection is not None:
+        try:
+            connection.ping()
+        except Exception:
+            with suppress(Exception):
+                connection.close()
+            connection = None
+    if connection is None:
+        connection = _connect()
+        _cleanup_connection_instance = connection
+    return connection
+
+
+def close_cleanup_connection() -> None:
+    """後始末の接続を閉じる（worker の終わり）。"""
+    global _cleanup_connection_instance
+    connection, _cleanup_connection_instance = _cleanup_connection_instance, None
+    if connection is not None:
+        with suppress(Exception):
+            connection.close()
+
+
 @lru_cache(maxsize=1)
 def db_available() -> bool:
     """実 Oracle に接続できるかを 1 回だけ判定する。"""
@@ -182,8 +216,10 @@ def cleanup_to_baseline() -> None:
 
     テスト開始前から存在した baseline の文書・KB（将来の実運用データ）は残し、テスト中に
     作成された行（と、削除済みの文書を指したまま残った行）だけを削除して分離を担保する。
+    接続は worker の中で使い回す（``_cleanup_connection``）。失敗したら rollback して、消しかけの
+    行の lock を次のテストに残さない。
     """
-    connection = _connect()
+    connection = _cleanup_connection()
     try:
         cursor = connection.cursor()
         document_sql, document_binds = _not_in_predicate(
@@ -210,8 +246,10 @@ def cleanup_to_baseline() -> None:
             cursor.execute(f"DELETE FROM rag_knowledge_bases WHERE {kb_sql}", kb_binds)
         connection.commit()
         settle_test_native_index(connection)
-    finally:
-        connection.close()
+    except BaseException:
+        with suppress(Exception):
+            connection.rollback()
+        raise
 
 
 def settle_at_session_start(connection: Any) -> None:
