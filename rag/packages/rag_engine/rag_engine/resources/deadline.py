@@ -29,10 +29,10 @@ from contextvars import ContextVar
 
 # 回答の確定（引用の照合・本文の組み立て・回答の安全チェック・記録の保存）に残す秒数（#1516）。
 ANSWER_FINALIZE_RESERVE_SECONDS = 30.0
-# 生成の 1 回（grounded の round）の見積もりの既定（秒）。実測が無いとき（章節の拡張が生成に残す分・
-# 是正の round の最初の見積もり）に使う。長い根拠の列挙の問で、推論するモデル（DeepSeek）は 1 組 125〜344 秒
-# かかった（#1516）。
-DEFAULT_GENERATION_ROUND_SECONDS = 240.0
+# 生成の 1 回の見積もりの既定（秒。#5184）。章節の拡張が、次の段を読む前に生成に残す分（この値と
+# ANSWER_FINALIZE_RESERVE_SECONDS の和）に使う。backend は .env の RAG_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS を
+# engine の設定の answer_generation_round_estimate_seconds で渡し、これは設定が無いときの既定。
+DEFAULT_GENERATION_ROUND_SECONDS = 120.0
 
 
 class DeadlineExceeded(TimeoutError):
