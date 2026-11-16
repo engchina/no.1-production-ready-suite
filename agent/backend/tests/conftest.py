@@ -27,6 +27,7 @@ os.environ["PLATFORM_AUTH_MODE"] = "local"
 os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
 
 import pytest  # noqa: E402
+from clock_support import RuntimeClock  # noqa: E402
 from pr_backend_core.llm_request_params import reset_dropped_parameters  # noqa: E402
 from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
 
@@ -177,9 +178,17 @@ class _MonotonicDatetime(datetime):
 def _monotonic_runtime_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run・イベントの作成日時（`runtime._now`）を、プロセスの中で戻らない時計にする（#5123）。
 
-    会話の続き（前の Run の状態・履歴）は `created_at` の前後で前の Run を選ぶ。ホストの時計が
-    時刻の同期で後ろへ戻ると、先に作った Run が後の Run より新しい日時になり、テストの結果が
-    ホストの時計に依る。作った順に日時が増えるようにする（`runtime._now` 自体を差し替える
-    テストはそちらが優先する）。
+    会話の中の順（前の Run の状態・履歴）は会話の中の番号で決め、時計に依らない（#5150）。ほかの
+    作成日時・更新日時の順（実行の一覧・会話の一覧・承認の待ちの区間など）を確かめるテストが、
+    ホストの時計の段差（時刻の同期で後ろへ戻る）に依らないようにする（`runtime._now` 自体を
+    差し替えるテスト・`runtime_clock` を使うテストはそちらが優先する）。
     """
     monkeypatch.setattr(agent_runtime, "datetime", _MonotonicDatetime)
+
+
+@pytest.fixture
+def runtime_clock(monkeypatch: pytest.MonkeyPatch) -> RuntimeClock:
+    """`runtime._now` の時計（`rewind` で OS の時計が後ろへ戻ったときを再現する。#5150）。"""
+    clock = RuntimeClock()
+    clock.install(monkeypatch)
+    return clock

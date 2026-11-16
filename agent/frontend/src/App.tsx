@@ -13,7 +13,6 @@ import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { t, type I18nKey } from "@/lib/i18n";
-import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 // 画面は route ごとに分けて読む（NL2SQL と同じ。#818）。最初に開いた画面のコードだけを読み、残りは移動したときに読む。
 const ChatPage = lazy(() =>
@@ -362,8 +361,7 @@ function SettingsSystemTablesRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsSystemTables")} subtitle={t("settings.systemTables.subtitle")} />
       <PageBody wide>
-        {/* テーブルを作成済みでも、保存先がメモリなら使われない（#839）。 */}
-        <NonPersistentStorageNotice />
+        {/* 保存先の案内はカードの案内の枠に並べる（同じ区画の案内の枠は 1 つ。#5183）。 */}
         <SystemTablesCard />
       </PageBody>
     </div>

@@ -18,6 +18,7 @@ import anyio
 import pytest
 from agents import FunctionTool, Usage
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
+from clock_support import RuntimeClock
 from mcp_support import fake_product_mcp
 from pr_backend_core.chat_history import CHAT_HISTORY_UNTRUSTED_NOTE, ChatHistoryTurn
 from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT
@@ -1125,7 +1126,9 @@ def test_usage_is_retained_when_postcheck_fails_after_resume(
     monkeypatch: MonkeyPatch,
     calls: _Calls,
     check: str,
+    runtime_clock: RuntimeClock,
 ) -> None:
+    """再開の後の確かめで失敗しても利用量を残す（承認の間に OS の時計が戻っても。#5150）。"""
     del calls
     _script(
         monkeypatch,
@@ -1138,6 +1141,7 @@ def test_usage_is_retained_when_postcheck_fails_after_resume(
     run_id = _create_run("確認用の質問")
     anyio.run(builtin_runtime.execute_run, run_id)
     [approval] = runtime_repository.get_run(run_id).approvals
+    runtime_clock.rewind(1)
     runtime_repository.decide_approval(approval.id, ApprovalDecisionRequest(approved=True))
 
     def fail(*args: Any, **kwargs: Any) -> Any:

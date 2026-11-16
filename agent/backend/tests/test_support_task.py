@@ -16,6 +16,7 @@ from typing import Any
 import anyio
 import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
+from clock_support import RuntimeClock
 from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, fake_product_mcp
 from pytest import MonkeyPatch
 
@@ -235,8 +236,9 @@ def _lookup(call_id: str, tool: str = LOOKUP) -> Any:
 
 
 def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
-    monkeypatch: MonkeyPatch, env: _Env
+    monkeypatch: MonkeyPatch, env: _Env, runtime_clock: RuntimeClock
 ) -> None:
+    """状態を作り、次の Run へ引き継ぐ（Run の間に OS の時計が戻っても引き継ぐ。#5150）。"""
     model = _script(
         monkeypatch,
         _search("call-1"),
@@ -282,7 +284,10 @@ def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
     # 1 回目の指示に引き継ぎは無い。
     assert STATE_HEADING not in str(model.calls[0].system_instructions)
 
+    # 前の Run の後に時計が戻っても、会話の中の順で前の Run を読む（#5150）。
+    runtime_clock.rewind(1)
     second = _run("年間です", thread_id=first.thread_id)
+    assert second.created_at < first.created_at
     assert second.status == RunStatus.COMPLETED, second.events[-1].message
     # 2 回目の指示に、目的・分かっている条件・確かめ中の問い・ガイド・予算を足す。
     instructions = str(model.calls[2].system_instructions)
@@ -314,6 +319,7 @@ def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
     assert state["budget"]["task"]["rag_calls"] == 2
 
     # 新しい発言で条件が変わったら、新しい値で上書きし、古い値は出所と時刻ごと残す。
+    runtime_clock.rewind(1)
     third = _run("やっぱり月額でした", thread_id=first.thread_id)
     assert "契約の種類（kind） = 「年間」（利用者の答え）" in str(
         model.calls[4].system_instructions

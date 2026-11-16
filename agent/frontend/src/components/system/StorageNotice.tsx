@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { HardDrive } from "lucide-react";
-import { Banner, ButtonLink } from "@production-ready/ui";
+import { ButtonLink, CombinedBanner, type CombinedBannerItem } from "@production-ready/ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { agentApi, type RuntimeStorageStatus } from "@/lib/api";
@@ -45,42 +45,48 @@ export function storageFixKey(status: RuntimeStorageStatus): I18nKey {
 }
 
 /**
- * 保存先がメモリのとき、作成・変更した内容が再起動で消えることを、定義・実行を作る画面の先頭に出す
- * （UX 契約 messaging.md §3.4 の Banner。状況を出し続ける）。直し方の詳細は実行環境の「保存先」に
- * 1 か所だけ書き、ここからはそこへ案内する（実行環境を開けない利用者には管理者への依頼を出す）。
- * 保存されている・状態を取得できない・取得中は何も出さない（業務の画面を止めない）。
+ * 保存先がメモリのとき、作成・変更した内容が再起動で消えることを伝える案内の項目（`CombinedBanner` の 1 項目）。
+ * 直し方の詳細は実行環境の「保存先」に 1 か所だけ書き、ここからはそこへ案内する（実行環境を開けない利用者には
+ * 管理者への依頼を出す）。保存されている・状態を取得できない・取得中は null（業務の画面を止めない）。
+ * 同じ区画に他の案内がある画面（システムテーブルのカード）は、この項目を区画の枠に入れる（#5183）。
  */
-export function NonPersistentStorageNotice({ className }: { className?: string }) {
+export function useNonPersistentStorageNoticeItem(): CombinedBannerItem | null {
   const storage = useRuntimeStorage();
   const { hasPermission } = useAuth();
   const data = storage.data;
   // 保存しないと分かったときだけ出す（不明な応答では出さない）。
   if (data?.persistent !== false) return null;
   const canOpenRuntime = canOpenRoute(APP_ROUTES.runtimes, hasPermission);
-  return (
-    <div className={className} data-testid="storage-not-persistent-notice">
-      <Banner
-        severity="warning"
-        title={t("storage.notice.title")}
-        action={
-          canOpenRuntime ? (
-            <ButtonLink
-              to={APP_ROUTES.runtimes}
-              linkComponent={Link}
-              size="sm"
-              icon={HardDrive}
-              testId="storage-notice-open-runtime"
-            >
-              {t("storage.notice.openRuntime")}
-            </ButtonLink>
-          ) : undefined
-        }
+  return {
+    id: "storage-not-persistent",
+    severity: "warning",
+    title: t("storage.notice.title"),
+    testId: "storage-not-persistent-notice",
+    action: canOpenRuntime ? (
+      <ButtonLink
+        to={APP_ROUTES.runtimes}
+        linkComponent={Link}
+        size="sm"
+        icon={HardDrive}
+        testId="storage-notice-open-runtime"
       >
-        <div className="space-y-1">
-          <p>{t(storageReasonKey(data))}</p>
-          {canOpenRuntime ? null : <p>{t("storage.notice.askAdmin")}</p>}
-        </div>
-      </Banner>
-    </div>
-  );
+        {t("storage.notice.openRuntime")}
+      </ButtonLink>
+    ) : undefined,
+    children: (
+      <div className="space-y-1">
+        <p>{t(storageReasonKey(data))}</p>
+        {canOpenRuntime ? null : <p>{t("storage.notice.askAdmin")}</p>}
+      </div>
+    ),
+  };
+}
+
+/**
+ * 保存先がメモリのとき、作成・変更した内容が再起動で消えることを、定義・実行を作る画面の先頭に出す
+ * （UX 契約 messaging.md §3.4 の Banner。状況を出し続ける）。
+ */
+export function NonPersistentStorageNotice({ className }: { className?: string }) {
+  const item = useNonPersistentStorageNoticeItem();
+  return item ? <CombinedBanner items={[item]} className={className} /> : null;
 }

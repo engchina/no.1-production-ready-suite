@@ -14,12 +14,13 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
-  Banner,
   BlockedPageNotice,
   Button,
   ButtonLink,
+  CombinedBanner,
   StatusBadge,
   type ButtonLinkComponent,
+  type CombinedBannerItem,
   type FeedbackTone,
   type StatusVariant,
 } from "@production-ready/ui";
@@ -341,12 +342,11 @@ function useReturnToLink(returnTo: string | undefined): ButtonLinkComponent {
 }
 
 /**
- * DB が使えないときの案内（#325。NL2SQL の見た目が基準）。
- * 状態（未設定・接続できない・初期化が必要・状態を確認できない）ごとに見出し・本文・アイコン・導線を分け、
- * 設定の画面を開けない利用者にはシステム管理者への連絡を案内する（#820）。再試行は全状態で出す。
+ * 縮退の banner（`mode="banner"`）の中身を、区画の案内の枠（`CombinedBanner`）の 1 項目にする（#5183）。
+ * 同じ区画に他の案内があるとき（システムテーブルのカードの製品の案内など）、DB の案内を別の枠にせず
+ * 同じ枠に並べる（messaging.md §3.4.3）。
  */
-export function DatabaseUnavailableNotice({
-  mode = "gate",
+export function useDatabaseUnavailableBannerItem({
   status = "unreachable",
   reasonCode,
   adbLifecycleState,
@@ -360,6 +360,97 @@ export function DatabaseUnavailableNotice({
   title,
   message,
   settingsLink = false,
+}: Omit<DatabaseUnavailableNoticeProps, "mode" | "className">): CombinedBannerItem {
+  const m: DatabaseGateMessages = { ...DATABASE_GATE_MESSAGES, ...messages };
+  const linkComponent = useReturnToLink(returnTo);
+  const content = databaseNoticeContent({
+    status,
+    reasonCode,
+    adbLifecycleState,
+    routes,
+    canManageDatabase,
+    canManageSystemTables,
+  });
+  const retryButton = onRetry ? (
+    <DatabaseRetryButton
+      size="sm"
+      onRetry={onRetry}
+      isRetrying={isRetrying}
+      label={m[content.kind === "schema_updating" ? "dbGate.schemaUpdating.refresh" : "common.retry"]}
+    />
+  ) : null;
+  const showSettingsLink = settingsLink && canManageDatabase;
+  return {
+    id: "database-unavailable",
+    severity: content.tone,
+    title: title ?? m[content.title],
+    children: message,
+    testId: "database-unavailable-banner",
+    action:
+      retryButton || showSettingsLink ? (
+        <>
+          {retryButton}
+          {showSettingsLink ? (
+            <DatabaseSettingsLink routes={routes} messages={m} linkComponent={linkComponent} />
+          ) : null}
+        </>
+      ) : undefined,
+  };
+}
+
+function DatabaseRetryButton({
+  size,
+  onRetry,
+  isRetrying,
+  label,
+}: {
+  size: "sm" | "md";
+  onRetry: () => void;
+  isRetrying: boolean;
+  label: string;
+}) {
+  return (
+    <Button
+      type="button"
+      size={size}
+      variant="secondary"
+      onClick={onRetry}
+      loading={isRetrying}
+      icon={RefreshCw}
+      data-testid="database-gate-retry"
+    >
+      {label}
+    </Button>
+  );
+}
+
+/**
+ * DB が使えないときの案内（#325。NL2SQL の見た目が基準）。
+ * 状態（未設定・接続できない・初期化が必要・状態を確認できない）ごとに見出し・本文・アイコン・導線を分け、
+ * 設定の画面を開けない利用者にはシステム管理者への連絡を案内する（#820）。再試行は全状態で出す。
+ */
+export function DatabaseUnavailableNotice(props: DatabaseUnavailableNoticeProps) {
+  return props.mode === "banner" ? <DatabaseUnavailableBanner {...props} /> : <DatabaseUnavailableGate {...props} />;
+}
+
+function DatabaseUnavailableBanner({ mode: _mode, className, ...props }: DatabaseUnavailableNoticeProps) {
+  const item = useDatabaseUnavailableBannerItem(props);
+  return <CombinedBanner items={[item]} className={className} />;
+}
+
+function DatabaseUnavailableGate({
+  status = "unreachable",
+  reasonCode,
+  adbLifecycleState,
+  routes,
+  messages,
+  canManageDatabase = false,
+  canManageSystemTables = false,
+  returnTo,
+  onRetry,
+  isRetrying = false,
+  title,
+  message,
   className,
 }: DatabaseUnavailableNoticeProps) {
   const m: DatabaseGateMessages = { ...DATABASE_GATE_MESSAGES, ...messages };
@@ -373,41 +464,13 @@ export function DatabaseUnavailableNotice({
     canManageSystemTables,
   });
   const retryButton = onRetry ? (
-    <Button
-      type="button"
-      size={mode === "banner" ? "sm" : "md"}
-      variant="secondary"
-      onClick={onRetry}
-      loading={isRetrying}
-      icon={RefreshCw}
-      data-testid="database-gate-retry"
-    >
-      {m[content.kind === "schema_updating" ? "dbGate.schemaUpdating.refresh" : "common.retry"]}
-    </Button>
+    <DatabaseRetryButton
+      size="md"
+      onRetry={onRetry}
+      isRetrying={isRetrying}
+      label={m[content.kind === "schema_updating" ? "dbGate.schemaUpdating.refresh" : "common.retry"]}
+    />
   ) : null;
-
-  if (mode === "banner") {
-    const showSettingsLink = settingsLink && canManageDatabase;
-    return (
-      <Banner
-        severity={content.tone}
-        title={title ?? m[content.title]}
-        className={className}
-        action={
-          retryButton || showSettingsLink ? (
-            <>
-              {retryButton}
-              {showSettingsLink ? (
-                <DatabaseSettingsLink routes={routes} messages={m} linkComponent={linkComponent} />
-              ) : null}
-            </>
-          ) : undefined
-        }
-      >
-        {message}
-      </Banner>
-    );
-  }
 
   const code = databaseReasonCode(reasonCode);
   const codeMessageKey = code ? databaseCheckMessageKey(code) : undefined;

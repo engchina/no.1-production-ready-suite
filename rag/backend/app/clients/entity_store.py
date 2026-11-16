@@ -25,19 +25,26 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from app.clients.oracle import (
+    _NOT_DOCUMENT_SUMMARY_CHUNK_SQL,
+    _SERVED_CHUNK_SET_SQL,
     OracleClient,
     OracleConnectionProtocol,
     _current_tenant_id_hash,
     _execute,
     _executemany,
+    _json_loads,
+    _metadata_from_json,
     _oracle_in_predicate,
     _oracle_retrieval_where,
     _render_sql,
     _retrieved_chunk_from_row,
 )
+from app.rag.chunking import Chunk
 from app.rag.entity_expansion import (
     MIN_QUESTION_ALIAS_CHARS,
     EntityDefinitionRow,
@@ -64,6 +71,20 @@ _CHUNK_COLUMNS = """
                 d.category_name,
                 d.superseded_by_document_id,
                 0 AS score"""
+
+
+@dataclass(frozen=True)
+class EntityRebuildTarget:
+    """実体・別名索引を作り直す chunk_set（検索に出している版。#5178）。"""
+
+    document_id: str
+    chunk_set_id: str
+    recipe_id: str | None
+    extraction_recipe_id: str | None
+    tenant_id_hash: str | None
+    file_name: str
+    content_type: str | None
+    processing_config: dict[str, object]
 
 
 def _usable_alias_sql(alias: str, entity: str, where_sql: str) -> str:
@@ -237,6 +258,124 @@ class EntityStore:
         await self._oracle._run_transaction(
             lambda connection: _delete_chunk_set_entities(connection, chunk_set_id)
         )
+
+    async def list_rebuild_targets(
+        self,
+        *,
+        document_ids: Sequence[str] = (),
+        knowledge_base_ids: Sequence[str] = (),
+    ) -> list[EntityRebuildTarget]:
+        """実体・別名索引を作り直す chunk_set を返す（#5178。取込済みの文書の作り直し）。
+
+        対象は検索に出している chunk_set（有効な ``INDEXED`` の版と、レシピの無い旧データの配信中の
+        版）だけ（作っている途中の候補は、索引の工程で作られる）。文書 ID・ナレッジベース ID の両方
+        が空なら全件。両方を渡したときは、どちらかに当たる文書。
+        """
+        clauses: list[str] = []
+        binds: dict[str, object] = {}
+        if document_ids:
+            predicate, document_binds = _oracle_in_predicate(
+                "cs.document_id", "rebuild_document", document_ids
+            )
+            clauses.append(predicate)
+            binds.update(document_binds)
+        if knowledge_base_ids:
+            predicate, kb_binds = _oracle_in_predicate(
+                "member.knowledge_base_id", "rebuild_kb", knowledge_base_ids
+            )
+            clauses.append(
+                "EXISTS (SELECT 1 FROM rag_document_knowledge_bases member "
+                f"WHERE member.document_id = cs.document_id AND {predicate})"
+            )
+            binds.update(kb_binds)
+        where = f"AND ({' OR '.join(clauses)})" if clauses else ""
+        rows = await self._oracle._fetch_all(
+            f"""
+            SELECT cs.chunk_set_id, cs.document_id, cs.recipe_id, cs.extraction_recipe_id,
+                   d.tenant_id_hash, d.file_name, d.content_type,
+                   r.processing_config
+            FROM rag_chunk_sets cs
+            JOIN rag_documents d ON d.document_id = cs.document_id
+            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+            WHERE {_SERVED_CHUNK_SET_SQL}
+              {where}
+            ORDER BY cs.document_id, cs.chunk_set_id
+            """,
+            binds,
+        )
+        return [
+            EntityRebuildTarget(
+                document_id=str(row["document_id"]),
+                chunk_set_id=str(row["chunk_set_id"]),
+                recipe_id=_optional_text(row.get("recipe_id")),
+                extraction_recipe_id=_optional_text(row.get("extraction_recipe_id")),
+                tenant_id_hash=_optional_text(row.get("tenant_id_hash")),
+                file_name=str(row.get("file_name") or ""),
+                content_type=_optional_text(row.get("content_type")),
+                processing_config=_json_loads(row.get("processing_config")),
+            )
+            for row in rows
+        ]
+
+    async def chunk_set_source_chunks(self, chunk_set_id: str) -> list[Chunk]:
+        """chunk_set の保存済みの chunk を、取込が実体を抜き出したときの形で読み順に返す。
+
+        文書全体の要約の chunk（実体の索引の後に入れる chunk。#4793）は含めない。
+        """
+        rows = await self._oracle._fetch_all(
+            f"""
+            SELECT c.chunk_index, c.chunk_text, c.metadata_json
+            FROM rag_chunks c
+            WHERE c.chunk_set_id = :chunk_set_id
+              AND {_NOT_DOCUMENT_SUMMARY_CHUNK_SQL}
+            ORDER BY c.chunk_index
+            """,
+            {"chunk_set_id": chunk_set_id},
+        )
+        chunks: list[Chunk] = []
+        for row in rows:
+            text = str(row.get("chunk_text") or "")
+            chunks.append(
+                Chunk(
+                    text=text,
+                    index=_int(row.get("chunk_index")),
+                    start_offset=0,
+                    end_offset=len(text),
+                    metadata={
+                        key: value
+                        for key, value in _metadata_from_json(row.get("metadata_json")).items()
+                        if value is None or isinstance(value, str | int | float)
+                    },
+                )
+            )
+        return chunks
+
+    async def extraction_title_texts(
+        self, *, document_id: str, extraction_recipe_id: str | None
+    ) -> list[str]:
+        """抽出の先頭の 3 要素の本文（取込が実体の会社の名前を探す題名と同じ範囲）。"""
+        if extraction_recipe_id is None:
+            return []
+        row = await self._oracle._fetch_one(
+            """
+            SELECT JSON_QUERY(
+                       extraction_json, '$.elements[0 to 2].text'
+                       RETURNING CLOB WITH ARRAY WRAPPER
+                   ) AS title_texts
+            FROM rag_document_extractions
+            WHERE document_id = :document_id AND extraction_recipe_id = :extraction_recipe_id
+            """,
+            {"document_id": document_id, "extraction_recipe_id": extraction_recipe_id},
+        )
+        return _json_text_list(row.get("title_texts") if row else None)
+
+    async def count_chunk_set_entities(self, chunk_set_id: str) -> int:
+        """chunk_set の保存済みの実体の数。"""
+        row = await self._oracle._fetch_one(
+            f"SELECT COUNT(*) AS n FROM {ENTITIES_TABLE} WHERE chunk_set_id = :chunk_set_id",
+            {"chunk_set_id": chunk_set_id},
+        )
+        return _int(row.get("n")) if row else 0
 
     async def entity_seed_aliases(
         self,
@@ -457,6 +596,18 @@ def _definition_row(row: Mapping[str, object]) -> EntityDefinitionRow:
     )
 
 
+def _json_text_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    try:
+        decoded = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [str(item) for item in decoded if isinstance(item, str)]
+
+
 def _optional_text(value: object) -> str | None:
     if value is None:
         return None
@@ -475,6 +626,7 @@ __all__ = [
     "ENTITIES_TABLE",
     "ENTITY_ALIASES_TABLE",
     "ENTITY_CHUNKS_TABLE",
+    "EntityRebuildTarget",
     "EntityStore",
     "oracle_entity_schema_sql",
 ]

@@ -249,3 +249,99 @@ async def test_entity_labels_need_another_document_on_real_oracle() -> None:
         max_chunks=6,
     )
     assert [item.chunk.chunk_id for item in named] == [f"{incident_id}:{incident_cs}:1"]
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_entity_index_rebuild_cli_on_real_oracle() -> None:
+    """保存済みの chunk から実体・別名索引だけを作り直す（#5178）。2 回目も同じ行になる。"""
+    from app.config import Settings
+    from app.rag.entity_index_cli import rebuild_entity_indexes
+
+    client = OracleClient()
+    store = EntityStore(client)
+    token = uuid4().hex[:8]
+    kb = await client.create_knowledge_base(name=f"entity-rebuild-{token}")
+    text = (
+        "本書は、データ変換ユーティリティ Kawa Convert（以下、本ツール）の説明です。\n"
+        "This section describes the REST API. Every request returns JSON."
+    )
+    chunks = [
+        Chunk(text=text, index=0, start_offset=0, end_offset=len(text), metadata={}),
+        Chunk(
+            text="全体の要約",
+            index=1,
+            start_offset=0,
+            end_offset=5,
+            metadata={"content_kind": "document_summary"},
+        ),
+    ]
+    document_id, chunk_set_id = await _indexed_document(
+        client, file_name=f"entity-rebuild-{token}.md", chunks=chunks, knowledge_base_id=kb.id
+    )
+    extraction_recipe_id = f"ex_entity_{token}"
+    await client.upsert_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=extraction_recipe_id,
+        source_sha256=None,
+        extraction={"elements": [{"text": "サンプル社"}, {"text": "取扱説明書"}]},
+        status="materialized",
+    )
+    await client._run_transaction(
+        lambda connection: connection.cursor().execute(
+            "UPDATE rag_chunk_sets SET extraction_recipe_id = :ex WHERE chunk_set_id = :cs",
+            {"ex": extraction_recipe_id, "cs": chunk_set_id},
+        )
+    )
+    # 古い規則で作った行（先頭の欠けた名前・読点の付いた別名）を置いておく。
+    await store.replace_chunk_set_entity_index(
+        document_id,
+        chunk_set_id,
+        build_entity_index(document_id=document_id, chunks=chunks[:1], chunk_set_id=chunk_set_id),
+    )
+
+    targets = await store.list_rebuild_targets(knowledge_base_ids=[kb.id])
+    assert [(t.document_id, t.chunk_set_id) for t in targets] == [(document_id, chunk_set_id)]
+    assert targets[0].extraction_recipe_id == extraction_recipe_id
+    assert [
+        t.chunk_set_id for t in await store.list_rebuild_targets(document_ids=[document_id])
+    ] == [chunk_set_id]
+    # 文書全体の要約の chunk は読まない。
+    assert [c.index for c in await store.chunk_set_source_chunks(chunk_set_id)] == [0]
+    assert await store.extraction_title_texts(
+        document_id=document_id, extraction_recipe_id=extraction_recipe_id
+    ) == ["サンプル社", "取扱説明書"]
+
+    def enabled(_target: object) -> Settings:
+        return Settings(_env_file=None, rag_entity_index_enabled=True)
+
+    rows_sql = (
+        "SELECT e.entity_id, e.entity_key, e.scope_label, a.alias_key "
+        "FROM rag_entities e JOIN rag_entity_aliases a ON a.entity_id = e.entity_id "
+        "WHERE e.chunk_set_id = :cs ORDER BY e.entity_id, a.alias_key"
+    )
+    dry = await rebuild_entity_indexes(store, enabled, dry_run=True, document_ids=[document_id])
+    assert (dry.rebuilt, dry.failed) == (1, [])
+    summary = await rebuild_entity_indexes(
+        store, enabled, dry_run=False, document_ids=[document_id]
+    )
+    assert summary.failed == []
+    first = await client._fetch_all(rows_sql, {"cs": chunk_set_id})
+    keys = {str(row["entity_key"]) for row in first}
+    aliases = {str(row["alias_key"]) for row in first}
+    assert "データ変換ユーティリティkawaconvert" in keys
+    assert {"restapi", "json"} <= keys
+    assert not {"ータ変換ユーティリティkawaconvert", "this", "every"} & keys
+    assert "本ツール" in aliases
+    assert not [alias for alias in aliases if alias.startswith("、")]
+    assert {row["scope_label"] for row in first} == {"サンプル社"}
+    await rebuild_entity_indexes(store, enabled, dry_run=False, document_ids=[document_id])
+    assert await client._fetch_all(rows_sql, {"cs": chunk_set_id}) == first
+
+    def disabled(_target: object) -> Settings:
+        return Settings(_env_file=None, rag_entity_index_enabled=False)
+
+    cleared = await rebuild_entity_indexes(
+        store, disabled, dry_run=False, document_ids=[document_id]
+    )
+    assert (cleared.cleared, cleared.entities_before) == (1, summary.entities)
+    assert await client._fetch_all(rows_sql, {"cs": chunk_set_id}) == []
