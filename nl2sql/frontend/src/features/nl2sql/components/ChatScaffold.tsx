@@ -8,6 +8,7 @@ import {
   ApiErrorBanner,
   Button,
   ChatComposer,
+  ChatGuardrailNotice,
   ChatHistoryList,
   ChatLayout,
   chatHistoryWindowLabels,
@@ -291,7 +292,8 @@ export function Nl2SqlChatComposer(
 
 /**
  * 送った質問（応答の前・送れなかったとき）。共通の `ChatPendingTurn` に、処理の段階（既定は「質問を
- * 送信しています」）と、送れなかったときの原因と「再送信」を付ける。
+ * 送信しています」）と、送れなかったときの原因と「再送信」を付ける。安全チェックが止めた質問（`blocked`）は
+ * 理由と書き換えの案内だけを出す（再送信を出さない。#5191）。
  */
 export function Nl2SqlPendingTurn({
   message,
@@ -329,6 +331,12 @@ export function Nl2SqlPendingTurn({
           steps={steps ?? chatSubmitProgressSteps(message.sentAtMs)}
           labels={CHAT_PROGRESS_LABELS}
           testId={`${testIdPrefix}-progress`}
+        />
+      }
+      blocked={
+        <ChatGuardrailNotice
+          message={error instanceof Error ? error.message : null}
+          testId={`${testIdPrefix}-guardrail-notice`}
         />
       }
       failure={

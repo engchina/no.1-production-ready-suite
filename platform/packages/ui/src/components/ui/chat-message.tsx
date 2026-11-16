@@ -1,12 +1,15 @@
-import { AlertCircle, UserRound } from "lucide-react";
+import { AlertCircle, ShieldAlert, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { resolveContentLang } from "../../lib/content-lang";
 import { cn } from "../../lib/utils";
 import { ChatAttachmentList, type ChatAttachmentItem } from "../chat/chat-attachments";
 
-/** 利用者のメッセージの状態（#907）。`sending` は送信の応答を待つ仮のメッセージ。 */
-export type ChatUserMessageStatus = "sending" | "sent" | "failed" | "stopped";
+/**
+ * 利用者のメッセージの状態（#907）。`sending` は送信の応答を待つ仮のメッセージ。`blocked` は安全チェックが
+ * 止めた質問（送信の失敗ではない。#5191）。
+ */
+export type ChatUserMessageStatus = "sending" | "sent" | "failed" | "blocked" | "stopped";
 
 export interface ChatUserMessageProps {
   /** 送った本文。改行はそのまま出す。 */
@@ -15,6 +18,8 @@ export interface ChatUserMessageProps {
   status?: ChatUserMessageStatus;
   /** 送信できなかったときの状態の文（翻訳済み。例:「送信できませんでした」）。 */
   failedLabel?: string;
+  /** 安全チェックが止めたときの状態の文（翻訳済み。`DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.status`）。 */
+  blockedLabel?: string;
   /**
    * 会話の持ち主以外が送った質問の、送った人の表示（翻訳済み。例:「システム管理者 が送信」。#1928）。
    * 吹き出しの上に `UserRound` 付きの小さな文で出す。持ち主が送った質問には渡さない。
@@ -40,6 +45,8 @@ export interface ChatUserMessageProps {
  *   応答を待つ表示は回答の場所（`ProcessingIndicator`）の 1 つだけにする（スピナーを増やさない）。
  * - 送信できなかったとき（`failed`）は、吹き出しを残したまま下に状態の文をアイコン付きで出す
  *   （色だけに頼らない）。原因と「再送信」は製品が回答の場所の Banner に出す（messaging.md §9 P1 / P2）。
+ * - 安全チェックが止めたとき（`blocked`）は、送信の失敗と分けて `ShieldAlert` と状態の文を出す。原因と書き換えの
+ *   案内は回答の場所の `ChatGuardrailNotice`（再送信は出さない。messaging.md §11.3。#5191）。
  * - 状態は `data-status` にも出す（e2e で状態を確かめる）。
  * - 会話の持ち主以外（system_admin）が送った質問は、吹き出しの上に送った人を文で出す
  *   （`senderLabel`。色だけに頼らない。#1928）。
@@ -49,6 +56,7 @@ export function ChatUserMessage({
   children,
   status = "sent",
   failedLabel,
+  blockedLabel,
   senderLabel,
   attachments,
   attachmentsLabel,
@@ -79,6 +87,12 @@ export function ChatUserMessage({
           align="end"
           className="max-w-[85%]"
         />
+      ) : null}
+      {status === "blocked" && blockedLabel ? (
+        <p className="flex items-center gap-1 text-xs text-warning-fg">
+          <ShieldAlert size={14} aria-hidden className="shrink-0" />
+          {blockedLabel}
+        </p>
       ) : null}
       {status === "failed" && failedLabel ? (
         <p className="flex items-center gap-1 text-xs text-danger-fg">

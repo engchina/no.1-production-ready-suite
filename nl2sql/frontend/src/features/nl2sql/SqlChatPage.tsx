@@ -41,6 +41,7 @@ import {
   useChatHistoryPanel,
   useChatProgressTracker,
   withOptimisticChatStatus,
+  isGuardrailBlockedError,
   chatAttachmentItems,
   type ChatAttachmentItem,
   type OptimisticChatMessage,
@@ -148,6 +149,8 @@ interface PendingSend {
   request: ChatJobRequest;
   /** 質問に添付したファイル（#2517。送った質問の下に出す）。 */
   attachments: ChatAttachmentItem[];
+  /** 安全チェックが止めた理由（回答前の確認の検査で止まったとき。ジョブの投入の失敗は `send.error`。#5191）。 */
+  error?: unknown;
 }
 
 /**
@@ -418,14 +421,21 @@ export function SqlChatPage() {
       );
       await queryClient.invalidateQueries({ queryKey: chatKey });
     },
-    onError: (error) => {
+    onError: (error, variables) => {
       selectAiCredential.refreshAfterError(error);
+      // 安全チェックが止めた質問は送信の失敗ではない（送り直しても同じ）。再送信を出さず、書き換えられるよう
+      // 空の入力欄に質問を戻す（書き始めた次の質問は上書きしない。messaging.md §11.3。#5191）。
+      const guardrailBlocked = isGuardrailBlockedError(error);
+      if (guardrailBlocked) restoreDraft(variables.question);
       // 送った質問は残し、理由と「再送信」を出す（入力を失わない。#907）。
       setPendingSend((current) =>
         current
           ? {
               ...current,
-              message: withOptimisticChatStatus(current.message, "failed"),
+              message: withOptimisticChatStatus(
+                current.message,
+                guardrailBlocked ? "blocked" : "failed",
+              ),
             }
           : current,
       );
@@ -488,8 +498,23 @@ export function SqlChatPage() {
     // 確認を中止したら、送った質問を入力欄に戻す（書き始めた次の質問は上書きしない）。
     onCancelled: (check) => {
       setRequirementCheck(null);
-      if (!draft.trim()) setDraft(check.request.question);
+      restoreDraft(check.request.question);
       requestAnimationFrame(() => composerRef.current?.focus());
+    },
+    // 安全チェックが止めた質問は、確認のカード（もう一度確認・確認せずに生成）を出さずに、止めた質問として
+    // 理由と書き換えの案内を出す。ジョブは作らない（#5191）。
+    onBlocked: (check, cause) => {
+      setRequirementCheck(null);
+      setPendingSend({
+        message: withOptimisticChatStatus(
+          createOptimisticChatMessage(check.request.question, check.sentAtMs),
+          "blocked",
+        ),
+        request: check.request,
+        attachments: attachmentsByJob[check.request.client_job_id] ?? [],
+        error: cause,
+      });
+      restoreDraft(check.request.question);
     },
     enabled: active,
   });
@@ -527,10 +552,16 @@ export function SqlChatPage() {
     selectAiCredentialBlocked ||
     attachmentEngineMismatch ||
     chatAttachments.uploading;
+  /** 送った質問を入力欄に戻す（入力欄が空のときだけ。書き始めた次の質問は上書きしない）。 */
+  function restoreDraft(question: string) {
+    setDraft((current) => (current.trim() ? current : question));
+  }
   function submit() {
     const question = draft.trim();
     if (!question || blocked || sendingRef.current) return;
     sendingRef.current = true;
+    // 安全チェックが止めた前の質問（保存していない）は、次の質問を送ったら外す（#5191）。
+    if (pending?.status === "blocked") setPendingSend(null);
     // 添付は入力欄から外し、送った質問の下に出す（#2517）。
     const sentAttachments = chatAttachments.take();
     const request: ChatJobRequest = {
@@ -949,7 +980,7 @@ export function SqlChatPage() {
             <Nl2SqlPendingTurn
               message={pending}
               attachments={pendingSend?.attachments}
-              error={send.isError ? send.error : null}
+              error={pendingSend?.error ?? (send.isError ? send.error : null)}
               fallback={t("chat.sendFailed")}
               onResend={resend}
               resendDisabled={blocked}
