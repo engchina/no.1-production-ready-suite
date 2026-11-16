@@ -20,6 +20,12 @@
   照合して決め(``document_name_match``)、参照の先はその文書の質問に関連の高い chunk に限る。
   誤検出を避けるため、文書名は 4 文字以上・一般語(「システム」「台帳」など)でない・章や条の
   表記を含まないものに限り、照合は別名との完全一致(とファイル名が文書名を含むもの)だけにする。
+- 拡張子つきのファイル名だけを書いた参照(一覧の行の「手順A.txt」、「A.txt と B.txt を参照」。
+  #5208)は、区切り(行頭・空白・括弧・句読点)の間にあるファイル名の形を抜き出し、文書全体への
+  参照(``kind="document"``)にする。語の意味は判定しない(形式の解析だけ)。どの文書かは回答の
+  ときに検索範囲の文書のファイル名との完全一致(NFKC・大文字と小文字・空白の違いだけを無視)で
+  決め(``document_reference_rank``)、別名・部分一致では当てない。範囲に無いファイル名は参照先に
+  しない。URL・パスの一部は拾わない(外部の URL・任意のローカルのパスは読まない)。
 - 回答: 検索で見つけた chunk の参照先の節の chunk を、上限付きで rerank の候補に足す。
 
 参照先は「見出しの列のどこまでか」(``section_path`` の前方一致)で表す。chunk の id は
@@ -460,6 +466,15 @@ def document_name_references(text: str) -> list[ReferenceSpec]:
 
 
 def _extract_document_names(text: str) -> list[ReferenceSpec]:
+    specs = _extract_named_documents(text)
+    seen = {title_key(spec.document_title or "") for spec in specs}
+    for spec in _extract_file_names(text):
+        if title_key(spec.document_title or "") not in seen:
+            specs.append(spec)
+    return specs
+
+
+def _extract_named_documents(text: str) -> list[ReferenceSpec]:
     specs: list[ReferenceSpec] = []
     grammar = current_grammar()
     for predicate in grammar.document_name_predicate.finditer(text):
@@ -507,6 +522,44 @@ def _document_name_spec(match: re.Match[str]) -> ReferenceSpec | None:
     closing = current_grammar().document_title_brackets.get(opening or "", "")
     label = f"{opening}{name}{closing}" if opening else name
     return ReferenceSpec(label, "document", "", name)
+
+
+# 拡張子つきのファイル名の形(#5208)。名前の文字(英数字・かな漢字・``_-+~#&``、間の ``.``)と、
+# 英字で始まる 1〜5 文字の拡張子。直前が区切り(行頭・空白・括弧・句読点)でないもの(パス・URL・
+# メールの途中、区切りの無い和文の途中)と、直後に英数字・パスの区切りが続くものは拾わない。
+_FILE_NAME_CHAR = r"[\w\-+~#&]"
+_FILE_NAME_FORM = re.compile(
+    rf"(?<![\w\-+~#&./\\:@%=?])"
+    rf"(?P<name>{_FILE_NAME_CHAR}+(?:\.{_FILE_NAME_CHAR}+)*\.[A-Za-z][A-Za-z0-9]{{0,4}})"
+    r"(?![A-Za-z0-9_\-+~#&@/\\]|\.[A-Za-z0-9])"
+)
+
+
+def _extract_file_names(text: str) -> list[ReferenceSpec]:
+    """本文の中の、拡張子つきのファイル名だけの参照(``kind="document"``。#5208)。"""
+    specs: list[ReferenceSpec] = []
+    for match in _FILE_NAME_FORM.finditer(text):
+        name = match.group("name")
+        if len(title_key(_FILE_EXTENSION.sub("", name))) >= 2:
+            specs.append(ReferenceSpec(name, "document", "", name))
+    return specs
+
+
+def _file_name_form_key(value: str) -> str | None:
+    """値の全体が拡張子つきのファイル名の形なら比較の形(NFKC・小文字・空白なし)。違えば None。"""
+    text = normalize_text(value).strip()
+    if _FILE_NAME_FORM.fullmatch(text) is None:
+        return None
+    return re.sub(r"\s+", "", text.casefold())
+
+
+def is_file_name_reference(value: str) -> bool:
+    """参照の名前の全体が拡張子つきのファイル名の形か(#5208)。"""
+    return _file_name_form_key(value) is not None
+
+
+def _file_name_key(value: str) -> str:
+    return re.sub(r"\s+", "", normalize_text(value).strip().casefold())
 
 
 # 文書のタイトルの別名を作るときに外す、年度・版の表記(「2026年度」「第2版」「v1.2」「改訂版」)。
@@ -585,6 +638,27 @@ def document_name_match(name: str, file_name: str, headings: Iterable[str] = ())
     if len(key) < 2:
         return None
     return document_name_rank(key, document_name_keys(file_name, headings))
+
+
+def document_reference_rank(
+    name: str,
+    file_name: str,
+    headings: Iterable[str] = (),
+    *,
+    keys: tuple[frozenset[str], str] | None = None,
+) -> int | None:
+    """他の文書への参照の名前が文書に当たるか(回答の参照の補充と文書構造の参照の記録が使う)。
+
+    名前が拡張子つきのファイル名の形なら、ファイル名との完全一致(NFKC・大文字と小文字・空白の
+    違いだけを無視)だけを 0 とする(別名・部分一致・タイトルでは当てない。#5208)。それ以外は
+    ``document_name_match`` の規則(``keys`` は計算済みの ``document_name_keys``)。
+    """
+    if (wanted := _file_name_form_key(name)) is not None:
+        return 0 if _file_name_key(file_name) == wanted else None
+    key = title_key(name)
+    if len(key) < 2:
+        return None
+    return document_name_rank(key, keys or document_name_keys(file_name, headings))
 
 
 # ---- 解決 ----
@@ -798,7 +872,17 @@ def section_path_within(chunk_path: object, target: str) -> bool:
 
 
 def same_document_title(document_title: str, file_name: str) -> bool:
-    """参照の文書名が文書名(拡張子を除く)に当たるか(どちらかがもう一方を含む)。"""
+    """参照の文書名が文書名(拡張子を除く)に当たるか(どちらかがもう一方を含む)。
+
+    拡張子つきのファイル名の形の参照(#5208)は包含で決めず、拡張子を除く名前の一致と、
+    ``file_name`` に拡張子があればその一致で決める(「一覧.xlsx」の中の「一覧詳細.txt」は別の文書)。
+    """
+    if _file_name_form_key(document_title) is not None:
+        wanted = _file_name_key(document_title)
+        own = _file_name_key(file_name)
+        if _FILE_EXTENSION.search(own):
+            return own == wanted
+        return own == _FILE_EXTENSION.sub("", wanted)
     title = title_key(document_title)
     stem = title_key(re.sub(r"\.[A-Za-z0-9]{1,5}$", "", normalize_text(file_name)))
     if len(title) < 2 or len(stem) < 2:
@@ -1001,8 +1085,10 @@ __all__ = [
     "document_name_aliases",
     "document_name_match",
     "document_name_references",
+    "document_reference_rank",
     "extract_references",
     "heading_keys",
+    "is_file_name_reference",
     "reference_targets",
     "resolve_reference_specs",
     "same_document_title",
