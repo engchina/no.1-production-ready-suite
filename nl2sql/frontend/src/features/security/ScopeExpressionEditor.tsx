@@ -4,6 +4,7 @@ import {
   FieldError,
   Button,
   ProcessingIndicator,
+  SearchableSelectField,
   SelectField,
   TextField,
   useConfirm,
@@ -13,6 +14,7 @@ import { useId, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import {
   formatEntitlementTargetName,
   splitDbObjectName,
@@ -81,7 +83,8 @@ function ConditionEditor({
           FormGrid（container query）にしない: 入れ子の fieldset の中で値を変えると、Chromium が container の中を
           描き直さず欄の幅・高さが 0 のままになった（e2e の「未選択へ戻す」で確認）。 */}
       <div className="grid min-w-0 gap-2 md:grid-cols-2">
-        <SelectField
+        <SearchableSelectField
+          labels={searchableSelectLabels()}
           id={`deepsec-scope-filter-column-${suffix}`}
           label={text("scopeFilterColumn")}
           width="md"
@@ -89,13 +92,15 @@ function ConditionEditor({
           value={filter.column_name}
           placeholder={text("scopeFilterColumnPlaceholder")}
           // 任意の欄。誤って選んだ列を未選択に戻せるよう、一覧の先頭に「未選択」を出す（#647）。
-          emptyOptionLabel={text("expression.unselected")}
-          options={columns
-            .filter((c) => columnValueType(c.data_type))
-            .map((c) => ({
-              value: c.column_name,
-              label: `${c.column_name} · ${c.data_type}`,
-            }))}
+          options={[
+            { value: "", label: text("expression.unselected") },
+            ...columns
+              .filter((c) => columnValueType(c.data_type))
+              .map((c) => ({
+                value: c.column_name,
+                label: `${c.column_name} · ${c.data_type}`,
+              })),
+          ]}
           onValueChange={(columnName) => {
             const column = columns.find((c) => c.column_name === columnName);
             onChange({
@@ -544,15 +549,16 @@ function RelatedEditor({
         {text("expression.protectedRelated")}
       </p>
       <QueryStatus loading={profiles.isLoading || catalog.isLoading || detail.isLoading} />
-      <SelectField
+      <SearchableSelectField
+        labels={searchableSelectLabels()}
         id={`deepsec-scope-related-profile-${path}`}
         label={text("expression.profile")}
         width="md"
         className="min-w-0"
         value={node.profile_id}
         placeholder={text("expression.select")}
-        emptyOptionLabel={text("expression.unselected")}
         options={[
+          { value: "", label: text("expression.unselected") },
           ...eligible.map((p) => ({ value: p.id, label: p.name })),
           // 保存済みの Profile が候補から外れても値を残し、利用できないことを示す。
           ...(node.profile_id && !eligible.some((p) => p.id === node.profile_id)
@@ -591,7 +597,8 @@ function RelatedEditor({
       {!profiles.isLoading && !profiles.error && !eligible.length && (
         <p className="text-sm text-fg-muted">{text("expression.noProfiles")}</p>
       )}
-      <SelectField
+      <SearchableSelectField
+        labels={searchableSelectLabels()}
         id={`deepsec-scope-related-table-${path}`}
         label={text("expression.relatedTable")}
         width="lg"
@@ -599,8 +606,8 @@ function RelatedEditor({
         disabled={!catalog.data || catalog.isError}
         value={selectedTarget}
         placeholder={text("expression.select")}
-        emptyOptionLabel={text("expression.unselected")}
         options={[
+          { value: "", label: text("expression.unselected") },
           ...(catalog.data?.objects.map((name) => ({ value: name, label: name })) ?? []),
           ...(selectedTarget && !catalog.data?.objects.includes(selectedTarget)
             ? [
@@ -651,7 +658,8 @@ function RelatedEditor({
       {stale && <InlineError message="expression.stale" />}
       {node.target_object && (
         <>
-          <SelectField
+          <SearchableSelectField
+            labels={searchableSelectLabels()}
             id={`deepsec-scope-related-relation-${path}`}
             label={text("expression.relation")}
             width="lg"
@@ -690,7 +698,8 @@ function RelatedEditor({
               // 列名の選択欄（md）・「=」・列名の選択欄（md）・削除を左に寄せて並べる（欄をセルいっぱいに伸ばさない。#1891）。
               className="grid min-w-0 gap-2 md:grid-cols-[minmax(0,auto)_auto_minmax(0,auto)_auto] md:items-end md:justify-start"
             >
-              <SelectField
+              <SearchableSelectField
+                labels={searchableSelectLabels()}
                 id={`deepsec-scope-related-source-key-${path}-${index}`}
                 label={text("expression.sourceKey")}
                 width="md"
@@ -698,10 +707,12 @@ function RelatedEditor({
                 disabled={node.relation_source !== "MANUAL"}
                 value={key.source_column}
                 placeholder={text("expression.select")}
-                emptyOptionLabel={text("expression.unselected")}
-                options={columns
-                  .filter((c) => columnValueType(c.data_type))
-                  .map((c) => ({ value: c.column_name, label: c.column_name }))}
+                options={[
+                  { value: "", label: text("expression.unselected") },
+                  ...columns
+                    .filter((c) => columnValueType(c.data_type))
+                    .map((c) => ({ value: c.column_name, label: c.column_name })),
+                ]}
                 onValueChange={(column) =>
                   patch({
                     join_keys: node.join_keys.map((k, i) =>
@@ -713,7 +724,8 @@ function RelatedEditor({
               <span className="self-center" aria-hidden>
                 =
               </span>
-              <SelectField
+              <SearchableSelectField
+                labels={searchableSelectLabels()}
                 id={`deepsec-scope-related-target-key-${path}-${index}`}
                 label={text("expression.targetKey")}
                 width="md"
@@ -721,10 +733,12 @@ function RelatedEditor({
                 disabled={node.relation_source !== "MANUAL"}
                 value={key.target_column}
                 placeholder={text("expression.select")}
-                emptyOptionLabel={text("expression.unselected")}
-                options={relatedColumns
-                  .filter((c) => columnValueType(c.data_type))
-                  .map((c) => ({ value: c.column_name, label: c.column_name }))}
+                options={[
+                  { value: "", label: text("expression.unselected") },
+                  ...relatedColumns
+                    .filter((c) => columnValueType(c.data_type))
+                    .map((c) => ({ value: c.column_name, label: c.column_name })),
+                ]}
                 onValueChange={(column) =>
                   patch({
                     join_keys: node.join_keys.map((k, i) =>

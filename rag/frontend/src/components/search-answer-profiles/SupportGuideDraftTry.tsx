@@ -10,7 +10,7 @@ import {
   Fieldset,
   FormGrid,
   ProcessingIndicator,
-  SelectField,
+  SearchableSelectField,
   StatusBadge,
   TextareaField,
   TextField,
@@ -31,6 +31,7 @@ import {
   tryConditionOptions,
   tryConditionsPayload,
 } from "@/lib/support-guide-form";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 /**
  * 保存した下書きで試しに答える（#1288）。公開の版は変えず、試した回答は利用者の回答の履歴・
@@ -122,7 +123,8 @@ export function SupportGuideDraftTry({
                 ...values.map((item) => ({ value: item, label: item })),
               ];
               return (
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   key={condition.id}
                   id={id}
                   width="md"

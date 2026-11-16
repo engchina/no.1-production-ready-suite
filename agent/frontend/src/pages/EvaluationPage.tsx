@@ -28,6 +28,7 @@ import {
   ProcessingIndicator,
   RowActionMenu,
   RowTitleButton,
+  SearchableSelectField,
   SelectField,
   SideSheet,
   StatusBadge,
@@ -80,6 +81,7 @@ import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 // 品質評価（#776）。業務 Agent ごとの評価セット（評価ケースの集まり）で業務 Agent を実行し、
@@ -496,7 +498,8 @@ function EvaluationOverview({
             ) : (
               <>
                 <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-                  <SelectField<string>
+                  <SearchableSelectField
+                    labels={searchableSelectLabels()}
                     id="evaluation-agent"
                     label={t("evaluation.form.agent")}
                     width="md"

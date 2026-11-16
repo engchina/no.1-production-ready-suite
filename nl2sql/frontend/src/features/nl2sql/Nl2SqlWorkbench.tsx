@@ -17,7 +17,7 @@ import {
   FieldActionRow,
   InfoTip,
   TextareaField,
-  SelectField,
+  SearchableSelectField,
   FormStatus,
   ProcessingIndicator,
   FieldSkeleton,
@@ -59,6 +59,7 @@ import { t } from "@/lib/i18n";
 import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { formatDateTime } from "@/lib/format";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
 import { useProfileEngine } from "./useProfileEngine";
@@ -1436,7 +1437,8 @@ function ExecutableNl2SqlWorkbench() {
                         testId="nl2sql-profile-select-skeleton"
                       />
                     ) : (
-                      <SelectField
+                      <SearchableSelectField
+                        labels={searchableSelectLabels()}
                         id="nl2sql-profile-select"
                         label={t("nl2sql.profile.label")}
                         value={profileId}

@@ -96,7 +96,7 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
       dataManagementSource.indexOf('value={syntheticResultLimitInput}')
   );
   assert.ok(
-    dataManagementSource.indexOf('data-testid="synthetic-result-table-select"') <
+    dataManagementSource.indexOf('id="data-synthetic-result-table"') <
       dataManagementSource.indexOf('value={syntheticResultLimitInput}')
   );
 

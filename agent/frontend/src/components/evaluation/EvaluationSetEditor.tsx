@@ -15,7 +15,7 @@ import {
   Pagination,
   SaveErrorBanner,
   Section,
-  SelectField,
+  SearchableSelectField,
   Switch,
   TextareaField,
   TextField,
@@ -58,6 +58,7 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { listTotal } from "@/components/ListFilters";
 
 export const EVALUATION_MAX_CASES = 50;
@@ -476,9 +477,9 @@ export function EvaluationSetEditor({
                   </p>
                   {/* 「評価を開始」（上の操作）で評価する業務 Agent（#1845）と版（#810）。 */}
                   <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-                    <SelectField<string>
+                    <SearchableSelectField
+                      labels={searchableSelectLabels()}
                       id="evaluation-set-evaluated-agent"
-                      data-testid="evaluation-set-evaluated-agent"
                       label={t("evaluation.set.evaluatedAgent")}
                       helper={t("evaluation.set.evaluatedAgentHelper")}
                       // 対象の選択（業務 Agent）は lg（#1891）。
@@ -501,7 +502,8 @@ export function EvaluationSetEditor({
                 </>
               ) : (
                 <>
-                <SelectField<string>
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id="evaluation-set-agent"
                   label={t("evaluation.form.agent")}
                   helper={t("evaluation.set.agentHelper")}

@@ -166,6 +166,8 @@ export function SearchableOptionRow({
       id={id}
       role="option"
       aria-selected={selected}
+      // 選択肢の値（SelectField の選択肢と同じ目印。e2e が値で選ぶ。#5266）。
+      data-value={option.value}
       data-active={active || undefined}
       // 淡青の面の上の補足（description / meta）を 4.5:1 にする（tokens/colors.css。#1671）。
       data-surface-tint={selected || active ? "accent" : undefined}
