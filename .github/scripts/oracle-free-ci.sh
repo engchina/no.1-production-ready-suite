@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Integration Nightly（integration-nightly.yml）の Oracle AI Database Free の container の準備（#1595）。
 #   1. container の log に "DATABASE IS READY TO USE" が出るまで待つ（container が止まったら失敗する）。
-#   1b. VECTOR_MEMORY_SIZE を設定して instance を再起動する（ベクトル索引に要る）。
+#   1b. VECTOR_MEMORY_SIZE（ベクトル索引に要る）と PROCESSES（listener が接続を拒否しないため）を設定して
+#       instance を再起動する。
 #   2. PDB（FREEPDB1）にテストの利用者 APP を作る（NL2SQL の tests/conftest.py が PLATFORM_ORACLE_USER=APP に
 #      固定するので、3 製品とも APP を使う）。
 #   3. 接続の設定（PLATFORM_ORACLE_*。Wallet なし）を platform/.env に書く。環境変数（GITHUB_ENV）には書かず、
@@ -40,16 +41,22 @@ echo "Oracle の起動を確認しました（${SECONDS} 秒）。"
 
 # Free の image は VECTOR_MEMORY_SIZE が 0 で、HNSW のベクトル索引を作る migration が ORA-51962 で失敗する。
 # 動的には増やせない（ORA-51950）ので SPFILE に書いて instance を再起動する。
+# PROCESSES は image の 200 では、起動の直後に背景の process で約 100 を使う。listener は渡した接続の数を、
+# DB の負荷の報告（LREG。数秒〜十数秒ごと）までは減らさずに数え、上限に届くと handler を止めて新しい接続を
+# ORA-12516 で拒否する。実際の使用は 100 程度でも、報告の間に約 100 本の接続を作るテストで拒否が起きる
+# （#5156）。同時に使う接続はほぼ増えないので、上限だけを上げて listener の数える余地を広げる
+# （SESSIONS は PROCESSES から決まる）。
 "${docker_cmd}" exec -i "${container}" sqlplus -s / as sysdba <<'SQL'
 WHENEVER SQLERROR EXIT FAILURE
 SET FEEDBACK OFF
 ALTER SYSTEM SET vector_memory_size = 512M SCOPE = SPFILE;
+ALTER SYSTEM SET processes = 1000 SCOPE = SPFILE;
 SHUTDOWN IMMEDIATE
 STARTUP
 ALTER PLUGGABLE DATABASE ALL OPEN;
 EXIT
 SQL
-echo "VECTOR_MEMORY_SIZE を 512M にして再起動しました。"
+echo "VECTOR_MEMORY_SIZE を 512M、PROCESSES を 1000 にして再起動しました。"
 
 # password は標準入力で渡す（process の引数に出さない）。sqlplus は失敗した文を置換の後の値で表示するので、
 # CREATE USER は PL/SQL の中で実行し、失敗の文言を差し替えて password を log に出さない（文言は英語。
