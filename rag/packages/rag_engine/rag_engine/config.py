@@ -269,6 +269,8 @@ class Settings:
     text_search_max_query_chars: int = DEFAULT_TEXT_SEARCH_MAX_QUERY_CHARS
     hybrid_search_backend: str = "oracle_hybrid_index"
     rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
+    # 原質問と追加検索文の比重。1 回の検索に原質問とほかの検索文を渡す独立 engine の経路（SDK の
+    # `SearchRequest.queries`・業務ガイドの手順の検索）だけで使う。主検索は 1 回なので使わない（#5159）。
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     # rerank の後の並びの枠（rerank の順の件数・検索の順の件数。#4664）。
     rerank_slot_ratio: tuple[int, int] = (7, 3)

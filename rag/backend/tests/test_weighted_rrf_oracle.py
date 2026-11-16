@@ -68,13 +68,15 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
     result = await engine._search(
         request,
         state,
-        retrieval_queries=["合成項目", "追加検索文"],
+        retrieval_queries=["合成項目"],
+        text_queries={"合成項目": "合成項目 合成語"},
         expand_references=False,
     )
     assert {chunk.metadata["document_id"] for chunk in result.child_chunks} == set(doc_ids[:2])
     rrf = state.retrieval_stages[-1]["rrf"]
-    # 原質問も追加検索文も hybrid（vector と全文の原生融合の 1 本。#5151）。
-    assert [item["weight"] for item in rrf["lists"]] == pytest.approx([0.7, 0.3])
+    # 主検索は 1 回: ベクトルは原質問、全文は語を足した文の 1 本の hybrid（#5159）。
+    assert [item["weight"] for item in rrf["lists"]] == pytest.approx([1.0])
+    assert [item["text_query"] for item in rrf["lists"]] == ["合成項目 合成語"]
     restricted = set_audit_request_context(
         AuditRequestContext(
             allowed_document_ids=frozenset([doc_ids[0]]),

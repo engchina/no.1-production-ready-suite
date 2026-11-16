@@ -813,12 +813,16 @@ def search_adb_hybrid_chunks(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     extra_text_queries: Sequence[str] = (),
+    text_queries: Mapping[str, str] | None = None,
 ) -> HybridSearchResult:
     """text vector、Oracle Text、任意 image vector を RRF で融合してチャンクを検索します。
 
     extra_text_queries は組み立て済みの Oracle Text 検索式（`{基準月}` など。#730 の対象語の部分語）。
     質問文の変種とは別に Oracle Text だけで検索し、派生検索文と同じ重みで融合する。各式の上位
     `RESERVED_CANDIDATES_PER_QUERY` 件は候補に確保される。
+
+    text_queries は検索文ごとの全文検索の文（主検索で原質問に語を足した文。#5159）。その検索文のベクトル検索は
+    検索文で、全文検索はこの文で行い、同じ検索文の一覧として融合する。
     """
     if settings.hybrid_search_backend == "oracle_hybrid_index":
         from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable
@@ -997,12 +1001,15 @@ def search_adb_hybrid_chunks(
             )
             tokenizer_config = _text_search_tokenizer_config(settings)
             query_keywords = {dedupe_query_key(query): terms for query, terms in settings.retrieval_query_keywords.items()}
+            full_texts = {dedupe_query_key(query): text for query, text in (text_queries or {}).items()}
             # どの検索文も全文検索にも使う。上限を超えた検索文はベクトル検索だけに使う (#921)。重みは元の位置で決める。
             text_candidates = list(enumerate(queries))
             # 質問文の変種の全文検索と、組み立て済みの検索式（extra_text_queries）の全文検索を 1 つの工程にする
             # （融合の順と重みは変えない）。検索するものが無ければ工程を出さない。
             text_variants = text_candidates[: _text_search_query_variant_limit(settings)]
             text_inputs: list[str] = []
+            # 全文検索の一覧の検索文（重みと出どころの鍵）。text_inputs は実際に全文検索した文。
+            text_keys: list[str] = []
             text_expressions: list[str] = []
             with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext() as text_observation:
                 if text_observation is not None and getattr(text_observation, "capture_enabled", True):
@@ -1018,7 +1025,8 @@ def search_adb_hybrid_chunks(
                             "metadata_filter": metadata_filter.to_payload() if metadata_filter is not None else None,
                         }
                     )
-                for _query_index, query in text_variants:
+                for _query_index, key_query in text_variants:
+                    query = full_texts.get(dedupe_query_key(key_query), key_query)
                     text_query = oracle_text_query(
                         query,
                         domain_keywords=[*domain_keywords, *query_keywords.get(dedupe_query_key(query), ())],
@@ -1030,6 +1038,7 @@ def search_adb_hybrid_chunks(
                         continue
                     seen_text_queries.add(text_query)
                     text_inputs.append(query)
+                    text_keys.append(key_query)
                     text_expressions.append(text_query)
                     text_rankings.append(
                         read_ranking(
@@ -1052,6 +1061,7 @@ def search_adb_hybrid_chunks(
                         continue
                     seen_text_queries.add(text_query)
                     text_inputs.append(text_query)
+                    text_keys.append(text_query)
                     text_expressions.append(text_query)
                     text_rankings.append(
                         read_ranking(
@@ -1111,9 +1121,12 @@ def search_adb_hybrid_chunks(
                     q,
                     "keyword",
                     tuple(uid for uid, _ in ranking),
-                    sources=settings.retrieval_query_sources.get(q, ("原質問",) if q == queries[0] else ("追加検索文",)),
+                    sources=settings.retrieval_query_sources.get(
+                        text, settings.retrieval_query_sources.get(q, ("原質問",) if q == queries[0] else ("追加検索文",))
+                    ),
+                    text=text if text != q else "",
                 )
-                for q, ranking in zip(text_inputs, text_rankings, strict=True)
+                for q, text, ranking in zip(text_keys, text_inputs, text_rankings, strict=True)
             ]
             image_weight = _image_embedding_rrf_weight(settings) if image_rankings else 0.0
             if image_rankings:
@@ -1130,8 +1143,8 @@ def search_adb_hybrid_chunks(
                     for i, (q, ranking) in enumerate(zip(queries, image_rankings, strict=True))
                 ]
             raw_lists = [
-                replace(r, status="failed", error=failures[(r.channel, r.query, r.variant)])
-                if (r.channel, r.query, r.variant) in failures
+                replace(r, status="failed", error=failures[(r.channel, r.text or r.query, r.variant)])
+                if (r.channel, r.text or r.query, r.variant) in failures
                 else r
                 for r in raw_lists
             ]

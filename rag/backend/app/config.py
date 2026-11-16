@@ -1328,9 +1328,8 @@ class Settings(
         ),
     )
     rag_rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
-    rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
 
-    @field_validator("rag_rrf_method_ratio", "rag_rrf_source_ratio")
+    @field_validator("rag_rrf_method_ratio")
     @classmethod
     def _rrf_ratio(cls, value: tuple[float, float]) -> tuple[float, float]:
         from rag_engine.retrieval.weighted_rrf import RrfWeights

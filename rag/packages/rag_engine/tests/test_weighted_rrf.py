@@ -88,6 +88,40 @@ def test_trace_details_use_the_same_calculation_and_safe_shared_format():
     assert actual["contributions"][0]["contribution"] == r.scores["x"]
 
 
+def test_single_main_search_shows_the_full_text_query_and_no_source_ratio():
+    """主検索は 1 回: 全文検索の一覧は語を足した文を示し、原質問と追加検索文の比重は出さない（#5159）。"""
+    from rag_engine.retrieval.weighted_rrf import fusion_details
+
+    w = RrfWeights()
+    s = source_weights(["q"], w)
+    r = fuse_rankings(
+        [
+            RankedList("q", "vector", ("x",), sources=("原質問",)),
+            RankedList("q", "keyword", ("y",), sources=("原質問 + 用語・同義語",), text="q 語"),
+        ],
+        s,
+        w,
+        k=60,
+    )
+    details = fusion_details(r, w, s, 60)
+    labels = [field["label"] for field in details["fields"]]
+    assert "原質問と追加検索文の比重" not in labels
+    assert "ベクトル検索と全文検索の比重" in labels
+    assert "全文検索の文: q 語" in details["lines"][1]
+    assert "全文検索の文" not in details["lines"][0]
+    assert [entry["text_query"] for entry in details["rrf"]["lists"]] == ["", "q 語"]
+    assert r.scores == pytest.approx({"x": 0.7 / 61, "y": 0.3 / 61})
+
+
+def test_source_ratio_is_shown_when_the_original_and_other_queries_are_fused():
+    from rag_engine.retrieval.weighted_rrf import fusion_details
+
+    w = RrfWeights()
+    s = source_weights(["q", "a"], w)
+    r = fuse_rankings([RankedList(q, "vector", ("x",)) for q in s], s, w, k=60)
+    assert "原質問と追加検索文の比重" in [field["label"] for field in fusion_details(r, w, s, 60)["fields"]]
+
+
 def test_normalized_duplicates_and_large_finite_ratios():
     w = RrfWeights(1e308, 1e308, 1e308, 1e308)
     s = source_weights(["Ａ", "a", " B ", "b"], w)

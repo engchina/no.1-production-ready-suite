@@ -255,13 +255,17 @@ class RuntimeKnowledgeTests(unittest.TestCase):
 
         tokenized_questions = [call.args[0] for call in tokenize.call_args_list]
         retrieval_queries = build_context.call_args.kwargs["retrieval_queries"]
+        text_queries = build_context.call_args.kwargs["text_queries"]
         prompt = parse.call_args.args[1]
         payload = answer_result_payload(result, answer_id="answer123", run_id="abcdef")
 
-        # 登録語の追加検索文は原生方式へ直接渡す。独立した完全性確認の原質問分割は保つ。
-        self.assertNotIn(retrieval_queries[1], tokenized_questions)
-        self.assertIn("納品書", retrieval_queries[1])
-        self.assertNotIn("再発行条件", retrieval_queries[1])
+        # 主検索は 1 回: ベクトル検索は原質問だけ、登録語は全文検索の文に足して原生方式へ直接渡す（#5159）。
+        # 独立した完全性確認の原質問分割は保つ。
+        self.assertEqual(retrieval_queries, ("出荷業務で再発行できない条件は?",))
+        text_query = text_queries[retrieval_queries[0]]
+        self.assertNotIn(text_query, tokenized_questions)
+        self.assertIn("納品書", text_query)
+        self.assertNotIn("再発行条件", text_query)
         self.assertIn("[Runtime Glossary / Rules]", prompt)
         self.assertIn("再発行条件", prompt)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)

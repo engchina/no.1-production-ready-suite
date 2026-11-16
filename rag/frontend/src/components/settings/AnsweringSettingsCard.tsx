@@ -46,7 +46,6 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.3,
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_hybrid_index",
     rrf_method_ratio: settings.rrf_method_ratio ?? [7, 3],
-    rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     rerank_slot_ratio: settings.rerank_slot_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     neighbor_child_count: settings.neighbor_child_count,
@@ -124,7 +123,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   );
   const invalidCount = !Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 0 || (form.retrieval_query_limit ?? 0) > 2000
     || !Number.isInteger(form.rerank_top_n) || (form.rerank_top_n ?? -1) < 0 || (form.rerank_top_n ?? 0) > 2000;
-  const invalidRatio = [form.rrf_method_ratio, form.rrf_source_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
+  const invalidRatio = [form.rrf_method_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
   const slotRatio = form.rerank_slot_ratio;
   const invalidSlotRatio = !slotRatio || slotRatio.some((v) => !Number.isInteger(v) || v < 0) || slotRatio[0] + slotRatio[1] <= 0;
 
@@ -204,7 +203,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             </a>
           </p>
         </div>
-        {(["rrf_method_ratio", "rrf_source_ratio", "rerank_slot_ratio"] as const).map((key) => (
+        {(["rrf_method_ratio", "rerank_slot_ratio"] as const).map((key) => (
           <fieldset key={key} className="space-y-2">
             <legend className="text-sm font-medium text-fg">{t(`settings.answering.${key}`)}</legend>
             {key === "rerank_slot_ratio" ? <p className="text-sm text-fg-muted">{t("settings.answering.rerank_slot_ratioHint")}</p> : null}

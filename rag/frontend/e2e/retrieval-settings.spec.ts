@@ -129,7 +129,6 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 const ANSWERING_SETTINGS = {
   hybrid_search_backend: "oracle_hybrid_index",
   rrf_method_ratio: [1, 1],
-  rrf_source_ratio: [7, 3],
   runtime_terms_search_enabled: false,
   runtime_terms_answer_enabled: false,
   neighbor_child_count: 3,
@@ -454,7 +453,7 @@ for (const theme of ["light", "dark"] as const) {
     await mockAnsweringSettings(page, saved);
     await page.goto("/settings/retrieval");
     const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
-    for (const [name,value] of [["ベクトル検索の比重","1"],["全文検索の比重","1"],["原質問の比重","7"],["追加検索文全体の比重","3"]]) {
+    for (const [name,value] of [["ベクトル検索の比重","1"],["全文検索の比重","1"]]) {
       await expect(section.getByRole("spinbutton", {name,exact:true})).toHaveValue(value);
     }
     await section.getByRole("spinbutton", {name:"ベクトル検索の比重",exact:true}).fill("0");
@@ -462,13 +461,15 @@ for (const theme of ["light", "dark"] as const) {
     await expect(section.getByRole("alert")).toBeVisible();
     await expect(page.getByRole("button", {name:"回答の設定を保存",exact:true})).toBeDisabled();
     await section.getByRole("spinbutton", {name:"全文検索の比重",exact:true}).fill("3");
-    await section.getByRole("spinbutton", {name:"原質問の比重",exact:true}).fill("4");
     await section.screenshot({path:testInfo.outputPath(`rrf-ratios-${theme}.png`)});
     await page.getByRole("button", {name:"回答の設定を保存",exact:true}).click();
     await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({rrf_method_ratio:[0,3],rrf_source_ratio:[4,3]});
+    expect(saved[0]).toMatchObject({rrf_method_ratio:[0,3]});
+    expect(saved[0]).not.toHaveProperty("rrf_source_ratio");
     await page.reload();
-    await expect(page.getByRole("spinbutton", {name:"原質問の比重",exact:true})).toHaveValue("4");
+    await expect(page.getByRole("spinbutton", {name:"全文検索の比重",exact:true})).toHaveValue("3");
+    // 原質問と追加検索文の比重は主検索が 1 回になり使わないので、画面に出さない（#5159）。
+    await expect(section.getByRole("spinbutton", {name:"原質問の比重",exact:true})).toHaveCount(0);
     await expectNoPageOverflow(page);
   });
 }
@@ -510,16 +511,16 @@ for (const theme of ["light", "dark"] as const) {
 test(`RRF の比重が未指定の場合も新しい既定値と公式説明を表示する (${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
   await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({state: {sidebarCollapsed: true, theme},version: 0})), theme);
   await mockRetrievalCards(page);
-  await mockAnsweringSettings(page, [], {rrf_method_ratio: undefined, rrf_source_ratio: undefined});
+  await mockAnsweringSettings(page, [], {rrf_method_ratio: undefined});
   await page.goto("/settings/retrieval");
   const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
-  for (const [name,value] of [["ベクトル検索の比重","7"],["全文検索の比重","3"],["原質問の比重","7"],["追加検索文全体の比重","3"]]) {
+  for (const [name,value] of [["ベクトル検索の比重","7"],["全文検索の比重","3"]]) {
     await expect(section.getByRole("spinbutton", {name,exact:true})).toHaveValue(value);
   }
   await expect(section).toContainText("本システムの既定はベクトル 7・全文 3");
   await expect(section).toContainText("Oracle 公式 API の既定はベクトル 10・全文 1");
   await expect(section).toContainText("5:1 は計算例");
-  await expect(section).toContainText("7:3 は本システム独自の予算");
+  await expect(section).not.toContainText("原質問と追加検索文");
   for (const [name, href] of [["Oracle 公式：検索 API の既定値", "https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/search.html"], ["Oracle 公式：重み付き RRF の計算", "https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/understand-hybrid-search.html"]]) {
     const link = section.getByRole("link", {name: new RegExp(name)});
     await expect(link).toHaveAttribute("href", href);
