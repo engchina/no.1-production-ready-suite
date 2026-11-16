@@ -800,6 +800,10 @@ class RunState(BaseModel):
     created_by_user_uuid: str | None = None
     # 会話（スレッド。#768）。チャットの 1 往復が 1 Run。#768 より前の Run は None。
     thread_id: str | None = None
+    # 会話の中の Run の番号（1 から。#5150）。前の Run・最初の Run・履歴の順はこの番号で決め、
+    # 作成日時（OS の時計で、時刻の同期で戻ることがある）を使わない。作るときに同じ会話の最大
+    # + 1。番号の無い既存の Run は、会話を読むときに振る（`_assign_thread_seqs`）。
+    thread_seq: int | None = Field(default=None, ge=1)
     # 会話の持ち主（会話を始めた利用者。#1928）。`created_by_user_uuid` は Run を実行した利用者
     # （actor）で、system_admin が他の利用者の会話を続けた Run では持ち主と異なる。新しい会話の
     # Run は `created_by_user_uuid` と同じ。この項目がない既存の Run は None（`run_thread_owner`）。
@@ -1183,6 +1187,32 @@ def is_withdrawn_run(run: RunState) -> bool:
 def run_thread_owner(run: RunState) -> str | None:
     """Run の会話の持ち主（#1928）。記録の無い既存の Run は Run を実行した利用者。"""
     return run.thread_owner_user_uuid or run.created_by_user_uuid
+
+
+def _thread_order_key(run: RunState) -> tuple[int, str]:
+    """会話の中の Run の順（会話の中の番号、同じ番号なら run id。#5150）。
+
+    番号は作った順で、別のプロセスの Run とそろえてから決める（Oracle）。それでも同じ番号に
+    なったときも、どのプロセスでも同じ順にする。
+    """
+    return (run.thread_seq or 0, run.id)
+
+
+def _assign_thread_seqs(runs: Sequence[RunState]) -> list[RunState]:
+    """1 つの会話の、番号の無い Run（#5150 より前の Run）に番号を振る（振った Run を返す）。
+
+    番号の無い Run を作成日時（同じなら run id）の順に、会話の今の最大の番号の後へ振る。会話の
+    Run が同じなら、どのプロセスで振っても同じ番号になる。
+    """
+    missing = sorted(
+        (run for run in runs if run.thread_seq is None), key=lambda run: (run.created_at, run.id)
+    )
+    if not missing:
+        return []
+    last = max((run.thread_seq or 0 for run in runs), default=0)
+    for offset, run in enumerate(missing, start=1):
+        run.thread_seq = last + offset
+    return missing
 
 
 def _thread_owner(runs: Sequence[RunState]) -> str | None:
@@ -2312,85 +2342,106 @@ class AgentRuntimeRepository:
         """
         if action == "answer":
             answers = checked_confirmation_answers(answers)
-        with self._lock:
-            run = self._require_run(run_id)
-            confirmation = next(
-                (item for item in run.confirmations if item.id == confirmation_id), None
+        # ツールの結果の確認は同じ会話に次の Run を作る（会話の中の番号を決める。#5150）。
+        return self._thread_transition(
+            lambda: self._decide_confirmation_locked(
+                run_id,
+                confirmation_id,
+                action=action,
+                answers=answers,
+                decided_by=decided_by,
+                actor_user_uuid=actor_user_uuid,
             )
-            if confirmation is None:
-                raise KeyError(confirmation_id)
-            if confirmation.status != "pending":
-                raise ConfirmationClosedError(confirmation_id)
-            if action == "cancel":
-                return self._withdraw_confirmation_locked(run, confirmation, decided_by=decided_by)
-            normalized = validate_answers(confirmation, answers) if action == "answer" else []
-            confirmation.answers = normalized
-            confirmation.status = "answered" if action == "answer" else "skipped"
-            confirmation.decided_at = _now()
-            self._append_event(
-                run,
-                RunEventType.RUNTIME_EVENT,
-                (
-                    "利用者が回答前の確認に答えました。"
-                    if action == "answer"
-                    else "利用者が確認せずに回答を求めました。"
+        )
+
+    def _decide_confirmation_locked(
+        self,
+        run_id: str,
+        confirmation_id: str,
+        *,
+        action: str,
+        answers: Sequence[ConfirmationAnswer],
+        decided_by: str | None,
+        actor_user_uuid: str | None,
+    ) -> ConfirmationOutcome:
+        run = self._require_run(run_id)
+        confirmation = next(
+            (item for item in run.confirmations if item.id == confirmation_id), None
+        )
+        if confirmation is None:
+            raise KeyError(confirmation_id)
+        if confirmation.status != "pending":
+            raise ConfirmationClosedError(confirmation_id)
+        if action == "cancel":
+            return self._withdraw_confirmation_locked(run, confirmation, decided_by=decided_by)
+        normalized = validate_answers(confirmation, answers) if action == "answer" else []
+        confirmation.answers = normalized
+        confirmation.status = "answered" if action == "answer" else "skipped"
+        confirmation.decided_at = _now()
+        self._append_event(
+            run,
+            RunEventType.RUNTIME_EVENT,
+            (
+                "利用者が回答前の確認に答えました。"
+                if action == "answer"
+                else "利用者が確認せずに回答を求めました。"
+            ),
+            {
+                "confirmation_id": confirmation.id,
+                "source": confirmation.source,
+                "action": action,
+                "decided_by": decided_by,
+            },
+        )
+        next_run: RunState | None = None
+        if confirmation.source == SOURCE_AGENT:
+            if (
+                run.status == RunStatus.WAITING_CONFIRMATION
+                and _pending_approval_count(run) == 0
+                and not _pending_agent_confirmations(run)
+            ):
+                run.status = RunStatus.QUEUED
+            run.updated_at = _now()
+        else:
+            question_run = self._question_run_locked(run)
+            draft = run.metadata.get("agent_version") == "draft"
+            next_run = self._create_builtin_run_locked(
+                RunCreateRequest(
+                    goal=response_goal(confirmation, action),
+                    agent_id=run.agent_id,
+                    thread_id=run.thread_id,
+                    draft=draft,
                 ),
-                {
-                    "confirmation_id": confirmation.id,
-                    "source": confirmation.source,
-                    "action": action,
-                    "decided_by": decided_by,
+                # 次の Run は答えた利用者として実行する（答えるのは会話の持ち主だけ。呼ぶ側が
+                # 確かめる。#3244）。
+                created_by_user_uuid=actor_user_uuid or run.created_by_user_uuid,
+                agent_version=None,
+                # 会話を操作してよいかは呼ぶ側が確かめた（同じ会話の続き）。
+                all_users=True,
+                extra_metadata={
+                    RESPONSE_METADATA_KEY: response_record(
+                        confirmation,
+                        action=action,
+                        source_run_id=run.id,
+                        question_run_id=question_run.id,
+                    ),
+                    ROUND_METADATA_KEY: confirmation.round,
+                    # MCP の Run の続きは MCP の Run（承認の扱い・Run の数・監査。#1874）。
+                    **{
+                        key: run.metadata[key]
+                        for key in RUN_ORIGIN_METADATA_KEYS
+                        if key in run.metadata
+                    },
                 },
             )
-            next_run: RunState | None = None
-            if confirmation.source == SOURCE_AGENT:
-                if (
-                    run.status == RunStatus.WAITING_CONFIRMATION
-                    and _pending_approval_count(run) == 0
-                    and not _pending_agent_confirmations(run)
-                ):
-                    run.status = RunStatus.QUEUED
-                run.updated_at = _now()
-            else:
-                question_run = self._question_run_locked(run)
-                draft = run.metadata.get("agent_version") == "draft"
-                next_run = self._create_builtin_run_locked(
-                    RunCreateRequest(
-                        goal=response_goal(confirmation, action),
-                        agent_id=run.agent_id,
-                        thread_id=run.thread_id,
-                        draft=draft,
-                    ),
-                    # 次の Run は答えた利用者として実行する（答えるのは会話の持ち主だけ。呼ぶ側が
-                    # 確かめる。#3244）。
-                    created_by_user_uuid=actor_user_uuid or run.created_by_user_uuid,
-                    agent_version=None,
-                    # 会話を操作してよいかは呼ぶ側が確かめた（同じ会話の続き）。
-                    all_users=True,
-                    extra_metadata={
-                        RESPONSE_METADATA_KEY: response_record(
-                            confirmation,
-                            action=action,
-                            source_run_id=run.id,
-                            question_run_id=question_run.id,
-                        ),
-                        ROUND_METADATA_KEY: confirmation.round,
-                        # MCP の Run の続きは MCP の Run（承認の扱い・Run の数・監査。#1874）。
-                        **{
-                            key: run.metadata[key]
-                            for key in RUN_ORIGIN_METADATA_KEYS
-                            if key in run.metadata
-                        },
-                    },
-                )
-            self._persist_locked()
-            self._record_fact_locked(run)
-            if next_run is not None:
-                self._record_fact_locked(next_run)
-            return ConfirmationOutcome(
-                run=run.model_copy(deep=True),
-                next_run=next_run.model_copy(deep=True) if next_run is not None else None,
-            )
+        self._persist_locked()
+        self._record_fact_locked(run)
+        if next_run is not None:
+            self._record_fact_locked(next_run)
+        return ConfirmationOutcome(
+            run=run.model_copy(deep=True),
+            next_run=next_run.model_copy(deep=True) if next_run is not None else None,
+        )
 
     def _question_run_locked(self, run: RunState) -> RunState:
         """確認の往復の始まりの Run（利用者が質問を書いた Run）。"""
@@ -2409,10 +2460,13 @@ class AgentRuntimeRepository:
         question_run = self._question_run_locked(run)
         chain = [run]
         if run.thread_id is not None and question_run.id != run.id:
+            thread_runs = self._thread_runs_locked(run.thread_id)
             chain = [
                 item
-                for item in self._thread_runs_locked(run.thread_id)
-                if question_run.created_at <= item.created_at <= run.created_at
+                for item in thread_runs
+                if _thread_order_key(question_run)
+                <= _thread_order_key(item)
+                <= _thread_order_key(run)
             ]
         sessions: list[JsonObject] = []
         for item in chain:
@@ -2476,7 +2530,8 @@ class AgentRuntimeRepository:
         目標では Run を作らず（`GuardrailBlockedError`）、個人情報は伏せた文で作る（#5109）。
         """
         request = request.model_copy(update={"goal": checked_input(request.goal)})
-        with self._lock:
+
+        def create() -> RunState:
             run = self._create_builtin_run_locked(
                 request,
                 created_by_user_uuid=created_by_user_uuid,
@@ -2488,6 +2543,22 @@ class AgentRuntimeRepository:
             self._persist_locked()
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
+
+        if request.thread_id is None:
+            # 新しい会話の最初の Run（番号は 1。ほかのプロセスの Run とそろえなくてよい）。
+            with self._lock:
+                return create()
+        # 続ける会話は、会話の中の番号（最大 + 1）を別のプロセスの Run とそろえて決める（#5150）。
+        return self._thread_transition(create)
+
+    def _thread_transition(self, mutate: Callable[[], _T]) -> _T:
+        """会話に Run を足す変更（会話の中の番号を決める。#5150）。
+
+        1 つのプロセスの保存先（memory / file）は lock の中で行う。Oracle の保存先は、別のプロセスの
+        変更をそろえてから行い、同じ transaction で書く（`_storage_transition`）。
+        """
+        with self._lock:
+            return mutate()
 
     def _create_builtin_run_locked(
         self,
@@ -2517,6 +2588,8 @@ class AgentRuntimeRepository:
             "draft" if request.draft else agent_version or agent.published_version or "draft"
         )
         thread_owner = created_by_user_uuid
+        # 会話の中の番号（#5150）。新しい会話は 1、続ける会話は会話の今の最大 + 1。
+        thread_seq = 1
         if request.thread_id is not None:
             # 続ける会話は、自分の会話・同じ Agent のものだけ（他人の会話へ書き込ませない。
             # system_admin も同じ。#3244）。`all_users` は呼ぶ側が持ち主を確かめた続き。
@@ -2531,6 +2604,7 @@ class AgentRuntimeRepository:
             # 1 つの会話の履歴に混ぜない。
             if _is_draft_thread(thread_runs) != request.draft:
                 raise ThreadKindMismatchError(request.thread_id)
+            thread_seq = max(item.thread_seq or 0 for item in thread_runs) + 1
         run = RunState(
             id=f"run_{uuid4().hex}",
             goal=request.goal,
@@ -2540,6 +2614,7 @@ class AgentRuntimeRepository:
             trace_store=True,
             created_by_user_uuid=created_by_user_uuid,
             thread_id=request.thread_id or f"thread_{uuid4().hex}",
+            thread_seq=thread_seq,
             thread_owner_user_uuid=thread_owner,
             attachments=list(attachments or []),
             status=RunStatus.QUEUED,
@@ -2581,10 +2656,35 @@ class AgentRuntimeRepository:
         return run
 
     def _thread_runs_locked(self, thread_id: str) -> list[RunState]:
-        return sorted(
-            (run for run in self._runs.values() if run.thread_id == thread_id),
-            key=lambda run: run.created_at,
+        """会話の Run（会話の中の順。#5150）。"""
+        return self._ordered_thread_runs_locked(
+            [run for run in self._runs.values() if run.thread_id == thread_id]
         )
+
+    def _ordered_thread_runs_locked(self, runs: list[RunState]) -> list[RunState]:
+        """1 つの会話の Run を会話の中の順に並べる（#5150）。
+
+        保存先から読んだ Run には読み込みのときに番号を振る（`_number_threads_locked`）。ここでも
+        番号の無い Run があれば振り、保存の印を付ける（次の保存で書く）。
+        """
+        for run in _assign_thread_seqs(runs):
+            self._changed.add((RUN_ENTITY, run.id))
+        return sorted(runs, key=_thread_order_key)
+
+    def _number_threads_locked(self) -> bool:
+        """番号の無い既存の Run（#5150 より前の Run）に、会話ごとに番号を振る（読み込みのとき）。
+
+        振った Run に保存の印を付ける（1 つの会話の Run は同じ保存でまとめて書くので、一部の Run
+        だけに番号が書かれることは無い）。振ったかを返す。
+        """
+        threads: dict[str, list[RunState]] = {}
+        for run in self._runs.values():
+            if run.thread_id is not None:
+                threads.setdefault(run.thread_id, []).append(run)
+        numbered = [run for runs in threads.values() for run in _assign_thread_seqs(runs)]
+        for run in numbered:
+            self._changed.add((RUN_ENTITY, run.id))
+        return bool(numbered)
 
     def _require_thread_locked(
         self,
@@ -2613,11 +2713,11 @@ class AgentRuntimeRepository:
             run = self._require_run(run_id)
             if run.thread_id is None:
                 return []
+            thread_runs = self._thread_runs_locked(run.thread_id)
             return [
                 run_history_turn(previous, answer)
-                for previous in self._thread_runs_locked(run.thread_id)
-                if previous.id != run.id
-                and previous.created_at <= run.created_at
+                for previous in thread_runs
+                if _thread_order_key(previous) < _thread_order_key(run)
                 and previous.status == RunStatus.COMPLETED
                 and not is_withdrawn_run(previous)
                 and (answer := run_answer_text(previous)) is not None
@@ -2633,11 +2733,11 @@ class AgentRuntimeRepository:
             run = self._require_run(run_id)
             if run.thread_id is None:
                 return []
+            thread_runs = self._thread_runs_locked(run.thread_id)
             return [
                 previous.model_copy(deep=True)
-                for previous in self._thread_runs_locked(run.thread_id)
-                if previous.id != run.id
-                and previous.created_at <= run.created_at
+                for previous in thread_runs
+                if _thread_order_key(previous) < _thread_order_key(run)
                 and previous.status == RunStatus.COMPLETED
                 and run_answer_text(previous) is not None
             ]
@@ -2656,10 +2756,12 @@ class AgentRuntimeRepository:
             if run.thread_id is None:
                 return run.goal, None
             owner = run_thread_owner(run)
+            thread_runs = self._thread_runs_locked(run.thread_id)
             owned = [
                 previous
-                for previous in self._thread_runs_locked(run.thread_id)
-                if run_thread_owner(previous) == owner and previous.created_at <= run.created_at
+                for previous in thread_runs
+                if run_thread_owner(previous) == owner
+                and _thread_order_key(previous) <= _thread_order_key(run)
             ]
             goal = owned[0].goal if owned else run.goal
             abandoned: list[JsonObject] = []
@@ -2826,8 +2928,8 @@ class AgentRuntimeRepository:
                     continue
                 grouped.setdefault(run.thread_id, []).append(run)
             summaries = []
-            for thread_id, runs in grouped.items():
-                runs.sort(key=lambda item: item.created_at)
+            for thread_id, group in grouped.items():
+                runs = self._ordered_thread_runs_locked(group)
                 if _is_draft_thread(runs) != draft:
                     continue
                 owner = _thread_owner(runs)
@@ -4219,7 +4321,8 @@ class AgentRuntimeRepository:
         try:
             self._replace_state_locked(snapshot)
             self._load_report = report
-            if not report.changed:
+            numbered = self._number_threads_locked()
+            if not (report.changed or numbered):
                 return
             self._mark_load_repairs_locked(report)
             self._persist_locked()
@@ -4563,7 +4666,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             self._quarantined.extend(unreadable)
             report.quarantined.extend(unreadable)
             self._quarantine_changed = True
-        if report.changed:
+        if self._number_threads_locked() or report.changed:
             self._mark_load_repairs_locked(report)
             self._persist_locked()
 
@@ -4615,6 +4718,13 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 agent_id, note=note, published_by=published_by
             )
         )
+
+    def _thread_transition(self, mutate: Callable[[], _T]) -> _T:
+        """会話に Run を足す変更は、別のプロセスが同じ会話に作った Run をそろえてから会話の中の
+        番号を決め、同じ transaction で書く（#5150。番号を決めてから書くまでに別のプロセスが同じ
+        番号を書けない）。
+        """
+        return self._storage_transition(mutate)
 
     def _storage_transition(self, mutate: Callable[[], _T]) -> _T:
         """head の行を lock し、別のプロセスの変更をそろえてから `mutate`（判定と変更）を行い、
@@ -4907,6 +5017,8 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
+        # 別のプロセスが番号を振る前の Run を書いたとき（#5150）。印は次の保存で書く。
+        self._number_threads_locked()
         self._reset_change_tracking_locked()
         self._condition.notify_all()
         # 本番の 1 プロセス（in_process）では起きない。dispatcher を別プロセスにした構成では、
