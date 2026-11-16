@@ -422,7 +422,7 @@ for (const viewport of VIEWPORTS) {
 // #5191: 安全チェック（OCI Guardrails）が止めた質問は送信の失敗ではない（送り直しても同じ）。「再送信」を出さず、
 // 理由と書き換えの案内を出し、空の入力欄に質問を戻す。
 for (const viewport of VIEWPORTS) {
-  test(`安全チェックが止めた質問は再送信を出さず、入力欄に戻して書き換えを案内する（#5191） (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+  test(`安全チェックが止めた質問は再送信を出さず、入力欄に戻して書き換えを案内する（#5191） (${viewport.name})`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     let createCalls = 0;
     await page.route("**/api/runs", async (route) => {
