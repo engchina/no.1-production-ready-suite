@@ -189,8 +189,8 @@ def test_vision_editor_requires_parser_settings_permission(
 async def test_saved_vision_instructions_reach_serialized_http_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from pr_backend_core.response_schema import with_schema_field_guide
     from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiClient, OciEnterpriseAiConfig
-    from rag_parser_core.response_schema import with_schema_field_guide
 
     from tests.test_oci_enterprise_ai import FakeEnterpriseAiTransport
 

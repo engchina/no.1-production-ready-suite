@@ -15,6 +15,21 @@ from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCata
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, ResponseLanguage
 from rag_engine.retrieval.character_forms import format_characters
 
+# 回答種別（response_kind）の各値の定義。本文が質問の要求にどう応じたかで定める。
+RESPONSE_KIND_DEFINITIONS: dict[AnswerOutcome, str] = {
+    "answered": "すべての要求に資料で答えた。",
+    "conditional": "一部の要求に答え、答えられない部分や前提の条件を本文で示した。",
+    "insufficient_evidence": (
+        "要求に答える記載が資料に無く、答えを示せない。資料に記載が無いことの説明や、関連する記載の紹介だけの本文もこれにする。"
+    ),
+    "needs_clarification": "質問の意味を利用者に確かめる必要がある。",
+    "needs_environment_data": "答えに実環境の値・記録の確認が要る。",
+    "needs_human": "人の判断が要る。",
+}
+RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種別。次の値から選ぶ。\n" + "\n".join(
+    f"  - {kind}: {definition}" for kind, definition in RESPONSE_KIND_DEFINITIONS.items()
+)
+
 
 class FullAnswerWire(BaseModel):
     """本文はモデルが完成させ、種別は同じ呼び出しの付帯情報にする。"""
@@ -26,8 +41,9 @@ class FullAnswerWire(BaseModel):
 
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
     answer_body: str = Field(min_length=1, description="利用者へ返す完成した回答本文。必要に応じて Markdown を使う。")
-    # 各値の定義は生成の指示（grounded.RESPONSE_KIND_DEFINITIONS）だけに書く（#5229）。
-    response_kind: AnswerOutcome = Field(description="本文が質問の要求にどう応じたかの種別。")
+    # 各値の定義はこの項目の説明だけに書き、生成の指示の Step では繰り返さない。adapter が説明を指示の最後の
+    # Step にして全モデルに送る（#5230・#5238）。
+    response_kind: AnswerOutcome = Field(description=RESPONSE_KIND_DESCRIPTION)
     confidence: Literal["high", "medium", "low"] = Field(description="回答の確かさの自己申告。")
 
 
