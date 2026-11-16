@@ -13,7 +13,7 @@ def test_explicit_attachment_is_not_counted_by_the_document_cap():
     attached.metadata[ATTACHMENT_EVIDENCE_KEY] = True
     other = child("a", 2, "規則", "a.pdf", "pa", 0.9)
     settings = replace(get_settings(environ={}, dotenv_path=None), max_anchors_per_document=1)
-    assert a.cap_anchors_per_document([attached, attached, other], settings, top_k=3) == [attached, attached, other]
+    assert a.cap_anchors_per_document([attached, attached, other], settings) == [attached, attached, other]
 
 
 def _context_record(name, level):

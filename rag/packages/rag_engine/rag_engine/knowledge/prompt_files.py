@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rag_parser_core.prompt_steps import continue_prompt_steps  # noqa: F401  # 既存の呼び出し元（grounded・adapters.oci）が使う
+from pr_backend_core.prompt_steps import continue_prompt_steps  # noqa: F401  # 既存の呼び出し元（grounded・adapters.oci）が使う
 
 from rag_engine.parsing.vision_prompt_rules import (
     VISION_EXTRACTION_INSTRUCTION,

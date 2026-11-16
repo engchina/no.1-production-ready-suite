@@ -217,7 +217,7 @@ def test_attachment_evidence_is_not_counted_by_the_document_cap_through_engine_r
         engine_settings(environ={}, dotenv_path=None),
         max_anchors_per_document=1,
     )
-    assert cap_anchors_per_document([rule, attached], settings, top_k=2) == [rule, attached]
+    assert cap_anchors_per_document([rule, attached], settings) == [rule, attached]
 
 
 def test_attachment_below_rerank_threshold_reaches_final_evidence(
@@ -258,7 +258,7 @@ def test_attachment_below_rerank_threshold_reaches_final_evidence(
     ranked = _records_by_rerank_ranks(
         records, [RerankTextRank(0, 0.9), RerankTextRank(1, 0.01)], settings
     )
-    anchors = a.cap_anchors_per_document(ranked, settings, top_k=1)
+    anchors = a.cap_anchors_per_document(ranked, settings)
     bundle = a._bundle_context(
         "項目 A の値は何ですか",
         anchors,

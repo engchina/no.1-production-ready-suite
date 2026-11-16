@@ -30,8 +30,8 @@ from pr_backend_core.observability.model_purpose import (
     model_purpose_attributes,
 )
 from pr_backend_core.output_budget import online_output_budget, output_limit_message
+from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import BaseModel
-from rag_parser_core.response_schema import with_schema_field_guide
 
 from rag_engine.config import (
     DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS,
