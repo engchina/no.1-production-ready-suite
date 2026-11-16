@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { OptimisticChatMessage } from "../../lib/chat-optimistic";
 import { cn } from "../../lib/utils";
 import { ChatSenderLabel, ChatUserMessage, type ChatUserMessageStatus } from "../ui/chat-message";
+import { DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS } from "./chat-guardrail-notice";
 import type { ChatAttachmentItem } from "./chat-attachments";
 
 export interface ChatTurnProps {
@@ -19,6 +20,8 @@ export interface ChatTurnProps {
   questionStatus?: ChatUserMessageStatus;
   /** 送信できなかったときの質問の下の文（翻訳済み）。 */
   failedLabel?: string;
+  /** 安全チェックが止めたときの質問の下の文（翻訳済み。#5191）。 */
+  blockedLabel?: string;
   /**
    * 会話の持ち主以外が送った質問の、送った人の表示（翻訳済み。`ChatUserMessage` の `senderLabel`。#1928）。
    * `userContent` を渡したときは、その上に出す。
@@ -44,6 +47,7 @@ export function ChatTurn({
   userContent,
   questionStatus = "sent",
   failedLabel,
+  blockedLabel,
   questionSender,
   questionAttachments,
   attachmentsLabel,
@@ -62,6 +66,7 @@ export function ChatTurn({
         <ChatUserMessage
           status={questionStatus}
           failedLabel={failedLabel}
+          blockedLabel={blockedLabel}
           senderLabel={questionSender}
           attachments={questionAttachments}
           attachmentsLabel={attachmentsLabel}
@@ -116,6 +121,13 @@ export interface ChatPendingTurnProps {
   progress: ReactNode;
   /** 送信できなかったときの原因と「再送信」（danger の `Banner` / `ApiErrorBanner`）。 */
   failure?: ReactNode;
+  /**
+   * 安全チェックが止めたとき（`message.status === "blocked"`）の原因と書き換えの案内（`ChatGuardrailNotice`。
+   * 再送信は出さない。#5191）。
+   */
+  blocked?: ReactNode;
+  /** 安全チェックが止めたときの質問の下の文（翻訳済み。既定は `DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.status`）。 */
+  blockedLabel?: string;
   /** 質問に添付したファイル（#2517。`ChatTurn` の `questionAttachments`）。 */
   attachments?: ChatAttachmentItem[];
   /** 添付の一覧の名前（翻訳済み。読み上げだけ）。 */
@@ -125,7 +137,8 @@ export interface ChatPendingTurnProps {
 
 /**
  * 送った質問（サーバーの応答の前・送れなかったとき。messaging.md §11）。送信中は回答の入れ物に処理の段階を出し、
- * 送れなかったら質問を残したまま原因と「再送信」を出す（入力欄には戻さない）。確定したら製品が同じ位置の
+ * 送れなかったら質問を残したまま原因と「再送信」を出す（入力欄には戻さない）。安全チェックが止めた質問
+ * （`blocked`）は、原因と書き換えの案内だけを出す（再送信を出さない。#5191）。確定したら製品が同じ位置の
  * `ChatTurn` に置き換える。
  */
 export function ChatPendingTurn({
@@ -133,6 +146,8 @@ export function ChatPendingTurn({
   failedLabel,
   progress,
   failure,
+  blocked,
+  blockedLabel = DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.status,
   attachments,
   attachmentsLabel,
   testId,
@@ -142,11 +157,18 @@ export function ChatPendingTurn({
       question={message.content}
       questionStatus={message.status}
       failedLabel={failedLabel}
+      blockedLabel={blockedLabel}
       questionAttachments={attachments}
       attachmentsLabel={attachmentsLabel}
       testId={testId}
     >
-      {message.status === "failed" ? failure : message.status === "sending" ? <ChatAnswer progress={progress} /> : null}
+      {message.status === "failed"
+        ? failure
+        : message.status === "blocked"
+          ? blocked
+          : message.status === "sending"
+            ? <ChatAnswer progress={progress} />
+            : null}
     </ChatTurn>
   );
 }

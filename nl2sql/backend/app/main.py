@@ -179,9 +179,18 @@ async def others_content_forbidden_handler(
 
 @app.exception_handler(GuardrailBlockedError)
 async def guardrail_blocked_handler(request: Request, exc: GuardrailBlockedError) -> JSONResponse:
-    """安全チェックで止めた入力は、どの入口でも route と同じ形の 422 にする（#5081・#5110）。"""
-    return await http_exception_problem_handler(
-        request, StarletteHTTPException(status_code=422, detail=str(exc))
+    """安全チェックで止めた入力は、どの入口でも同じ 422 にする（#5081・#5110）。
+
+    code は `GUARDRAIL_BLOCKED` のまま返し、同じ文を送り直しても結果は変わらないので
+    `retryable: false` にする。画面はこの code で送信の失敗と分け、再送信を出さない（#5191）。
+    """
+    return api_problem_response(
+        request,
+        status_code=422,
+        detail=exc.message_ja,
+        code=exc.code,
+        title="安全チェックにより処理を停止しました",
+        retryable=False,
     )
 
 

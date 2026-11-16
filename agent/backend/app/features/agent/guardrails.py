@@ -16,16 +16,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pr_system_settings.guardrails import GuardrailPolicy
+from pr_system_settings.guardrails import GUARDRAIL_BLOCKED_CODE, GuardrailPolicy
 
 from app.features.agent.confirmation import ConfirmationAnswer
 from app.settings import get_settings
 
-GUARDRAIL_BLOCKED_CODE = "guardrail_blocked"
-
 
 class GuardrailBlockedError(ValueError):
-    """安全チェックで入力を止めた（画面は 422、MCP はツールのエラー）。"""
+    """安全チェックで入力を止めた（画面は 422、MCP はツールのエラー。code は 3 製品で同じ
+    `GUARDRAIL_BLOCKED`。#5191）。"""
 
     code = GUARDRAIL_BLOCKED_CODE
 

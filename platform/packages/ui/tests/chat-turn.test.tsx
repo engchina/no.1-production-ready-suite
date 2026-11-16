@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   ChatAnswer,
+  ChatGuardrailNotice,
   ChatPendingTurn,
   ChatTurn,
   createOptimisticChatMessage,
+  DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS,
+  GUARDRAIL_BLOCKED_CODE,
+  isGuardrailBlockedError,
   withOptimisticChatStatus,
 } from "../src";
 
@@ -90,6 +94,50 @@ describe("ChatPendingTurn", () => {
     expect(question.textContent).toContain("送信できませんでした");
     expect(host.querySelector('[data-testid="failure"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="progress"]')).toBeNull();
+  });
+});
+
+describe("安全チェックが止めた質問（#5191）", () => {
+  const sending = createOptimisticChatMessage("合成の質問", 1000);
+
+  it("送信の失敗と分け、状態の文と案内だけを出して再送信の失敗の面を出さない", () => {
+    act(() =>
+      root.render(
+        <ChatPendingTurn
+          message={withOptimisticChatStatus(sending, "blocked")}
+          failedLabel="送信できませんでした"
+          progress={<p data-testid="progress">質問を送信しています</p>}
+          failure={<p data-testid="failure">失敗</p>}
+          blocked={<ChatGuardrailNotice message="安全チェックにより処理を停止しました。 合成の理由。" testId="notice" />}
+        />
+      )
+    );
+    const question = host.querySelector('[data-status="blocked"]')!;
+    expect(question.textContent).toContain("合成の質問");
+    expect(question.textContent).toContain(DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.status);
+    expect(question.textContent).not.toContain("送信できませんでした");
+    expect(host.querySelector('[data-testid="failure"]')).toBeNull();
+    expect(host.querySelector('[data-testid="progress"]')).toBeNull();
+    const notice = host.querySelector('[data-testid="notice"]')!;
+    expect(notice.textContent).toContain("合成の理由。");
+    expect(notice.textContent).toContain(DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.guidance);
+    expect(notice.querySelector('[role="alert"], [role="status"]')).not.toBeNull();
+    expect(notice.querySelector("button")).toBeNull();
+  });
+
+  it("理由の文が無ければ既定の理由を出す", () => {
+    act(() => root.render(<ChatGuardrailNotice message="  " testId="notice" />));
+    expect(host.querySelector('[data-testid="notice"]')!.textContent).toContain(
+      DEFAULT_CHAT_GUARDRAIL_NOTICE_LABELS.fallback
+    );
+  });
+
+  it("error code だけで判定する（説明の文は見ない）", () => {
+    expect(GUARDRAIL_BLOCKED_CODE).toBe("GUARDRAIL_BLOCKED");
+    expect(isGuardrailBlockedError({ errorCode: "GUARDRAIL_BLOCKED" })).toBe(true);
+    expect(isGuardrailBlockedError({ errorCode: "REQUEST_VALIDATION_FAILED", message: "安全チェック" })).toBe(false);
+    expect(isGuardrailBlockedError(new Error("GUARDRAIL_BLOCKED"))).toBe(false);
+    expect(isGuardrailBlockedError(null)).toBe(false);
   });
 });
 

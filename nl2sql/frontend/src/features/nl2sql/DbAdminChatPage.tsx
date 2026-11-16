@@ -29,6 +29,7 @@ import {
   useChatHistoryActions,
   useChatHistoryPanel,
   withOptimisticChatStatus,
+  isGuardrailBlockedError,
   type OptimisticChatMessage,
 } from "@production-ready/ui";
 
@@ -223,7 +224,15 @@ export function DbAdminChatPage() {
           setDraft(question);
           return;
         }
-        setPending({ message: withOptimisticChatStatus(message, "failed"), turnId, error });
+        // 安全チェックが止めた質問は送信の失敗ではない（送り直しても同じ）。再送信を出さず、書き換えられるよう
+        // 空の入力欄に質問を戻す（書き始めた次の質問は上書きしない。messaging.md §11.3。#5191）。
+        const guardrailBlocked = isGuardrailBlockedError(error);
+        if (guardrailBlocked) setDraft((current) => (current.trim() ? current : question));
+        setPending({
+          message: withOptimisticChatStatus(message, guardrailBlocked ? "blocked" : "failed"),
+          turnId,
+          error,
+        });
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
       }
@@ -402,7 +411,7 @@ export function DbAdminChatPage() {
           // 送った質問は生成の応答を待たずに出し、失敗しても残して「再送信」を出す（チャットと同じ。#907）。
           <Nl2SqlPendingTurn
             message={pending.message}
-            error={pending.message.status === "failed" ? pending.error : null}
+            error={pending.message.status === "sending" ? null : pending.error}
             fallback={t("dbAdminChat.sendFailed")}
             onResend={resend}
             resendDisabled={generating}

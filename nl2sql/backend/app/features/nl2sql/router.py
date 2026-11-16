@@ -758,9 +758,10 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         raise _select_ai_credential_missing_exception(exc) from exc
     except JobIdConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except GuardrailBlockedError as exc:
-        # 安全チェックで止めた質問は 400 にせず、DB 管理のチャットと同じ 422（#5081）。
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GuardrailBlockedError:
+        # 安全チェックで止めた質問は 400 にせず、app の exception handler の 422
+        # （code: GUARDRAIL_BLOCKED。#5081・#5191）。
+        raise
     except ValidationError:
         # 保存した値（添付など）を読めないのは入力の誤りではない。pydantic の原文を 400 の本文に
         # 出さず、想定外のエラーとして返す（#2548）。
@@ -3492,9 +3493,10 @@ def db_admin_chat_generate(
         )
     except DbAdminChatGenerationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    except GuardrailBlockedError as exc:
-        # 安全チェックで止めた質問は保存しない（#5063）。
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GuardrailBlockedError:
+        # 安全チェックで止めた質問は保存しない（#5063）。応答は app の exception handler の 422
+        # （code: GUARDRAIL_BLOCKED。#5191）。
+        raise
     except DbAdminChatConversationFullError as exc:
         raise HTTPException(
             status_code=409,

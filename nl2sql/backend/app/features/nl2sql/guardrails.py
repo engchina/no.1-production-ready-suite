@@ -12,14 +12,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from pr_system_settings.guardrails import GuardrailPolicy, GuardrailResult
+from pr_system_settings.guardrails import GUARDRAIL_BLOCKED_CODE, GuardrailPolicy, GuardrailResult
 from pydantic import BaseModel
 
 from app.settings import get_settings
 
 from .ontology_service import OntologyServiceError
 
-GUARDRAIL_BLOCKED_ERROR_CODE = "GUARDRAIL_BLOCKED"
+# 3 製品で同じ code（platform の定数。#5191）。
+GUARDRAIL_BLOCKED_ERROR_CODE = GUARDRAIL_BLOCKED_CODE
 
 
 class GuardrailBlockedError(OntologyServiceError, ValueError):
