@@ -214,10 +214,13 @@ PreprocessProfile = Literal[
     "excel_to_jsonl",
     "word_to_jsonl",
 ]
-# 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown)。
-# 保存済みの設定(backend/.env・文書レシピ・KB 構築設定・取込ジョブ)に残っていても起動・取込を
-# 壊さないよう、読み込み時に「変換なし」(passthrough)へ寄せる。旧値は再保存時に消える。
-REMOVED_PREPROCESS_PROFILES = frozenset({"text_normalize", "url_to_markdown", "image_enhance"})
+# 削除したファイル準備の変換方式(text_normalize、#2042: スキャン画像の補正・URL→Markdown、
+# #3347: PDF を画像として読み直す、#3358: PIIマスク)。保存済みの設定(backend/.env・文書レシピ・
+# KB 構築設定・取込ジョブ)に残っていても起動・画面・取込を壊さないよう、読み込み時に「変換なし」
+# (passthrough)へ寄せる。旧値は再保存時に消える(#5224)。
+REMOVED_PREPROCESS_PROFILES = frozenset(
+    {"text_normalize", "url_to_markdown", "image_enhance", "pdf_to_page_images", "pii_redact"}
+)
 
 
 def normalize_removed_preprocess_profile(value: object) -> object:
@@ -2365,7 +2368,7 @@ class Settings(
     @field_validator("rag_preprocess_profile", mode="before")
     @classmethod
     def normalize_legacy_preprocess_profile(cls, value: object) -> object:
-        """削除した変換方式(text_normalize・#2042 の 2 つ)は起動互換のため passthrough へ寄せる。"""
+        """削除した変換方式(REMOVED_PREPROCESS_PROFILES)は起動互換のため passthrough へ寄せる。"""
         return normalize_removed_preprocess_profile(value)
 
     @field_validator("rag_chunking_strategy", mode="before")
