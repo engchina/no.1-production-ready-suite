@@ -729,14 +729,14 @@ for path in 'search' 'search/stream' \
     || printf '%s\n' "${suite_site}" | grep -E '^    location ~ \^/rag/api/\(' | grep -Fq "|${path})" \
     || fail "評価・回答生成・MCP の待ち時間を延ばす location に ${path} がない"
 done
-printf '%s\n' "${suite_site}" | grep -Fq 'proxy_read_timeout 660s;' \
-  || fail "評価・回答生成の待ち時間が backend（600 秒）・画面（630 秒）より長くない"
-# backend の回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS の設定の上限）が Nginx（660 秒）・画面（630 秒）より短いこと。
-answer_timeout_max="$(sed -n 's/^OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = \([0-9]*\)\.0$/\1/p' "${REPO_DIR}/backend/app/config.py")"
-test "${answer_timeout_max}" = "600" || fail "LLM 1 回の timeout の上限（回答生成の上限）が 600 秒ではない"
+printf '%s\n' "${suite_site}" | grep -Fq 'proxy_read_timeout 1260s;' \
+  || fail "評価・回答生成の待ち時間が backend（1200 秒）・画面（1230 秒）より長くない"
+# backend の回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS の設定の上限）が Nginx（1260 秒）・画面（1230 秒）より短いこと（#5280）。
+answer_timeout_max="$(sed -n 's/^RAG_ANSWER_TIMEOUT_MAX_SECONDS = \([0-9]*\)\.0$/\1/p' "${REPO_DIR}/backend/app/config.py")"
+test "${answer_timeout_max}" = "1200" || fail "回答生成の通しの上限が 1200 秒ではない"
 awk '/rag_answer_timeout_seconds: float = Field\(/ {found = 1} found {print} found && /^    \)$/ {exit}' \
-  "${REPO_DIR}/backend/app/config.py" | grep -Fq 'le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,' \
-  || fail "回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS）が LLM 1 回の timeout の上限で抑えられていない"
+  "${REPO_DIR}/backend/app/config.py" | grep -Fq 'le=RAG_ANSWER_TIMEOUT_MAX_SECONDS,' \
+  || fail "回答生成の上限（RAG_ANSWER_TIMEOUT_SECONDS）が通しの上限の定数で抑えられていない"
 # 上限の値は suite の Nginx の 1 か所だけにする（固定値を持つ別の Nginx 設定を置かない。#306）。
 test ! -e "${REPO_DIR}/frontend/nginx.conf.template" \
   || fail "使われない frontend/nginx.conf.template が固定の upload の上限を持ったまま残っている"

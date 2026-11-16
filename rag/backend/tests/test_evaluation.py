@@ -9,7 +9,12 @@ import pytest
 from pydantic import ValidationError
 from pytest import LogCaptureFixture, MonkeyPatch
 
-from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
+from app.config import (
+    OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+    RAG_ANSWER_TIMEOUT_MAX_SECONDS,
+    Settings,
+    get_settings,
+)
 from app.main import app
 from app.rag.evaluation import (
     EVALUATION_CASE_ERROR_MESSAGE,
@@ -1154,7 +1159,7 @@ def test_evaluation_api_persists_redacted_artifact(monkeypatch: MonkeyPatch) -> 
 
 
 def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch) -> None:
-    """評価 API は、評価全体を画面・Nginx の待ちより短い上限（600 秒）で打ち切らせる（#383）。"""
+    """評価 API は、評価全体を Nginx の待ちより短い上限（1200 秒。#5280）で打ち切らせる（#383）。"""
     from app.api.routes import evaluation as evaluation_route
 
     observed: dict[str, object] = {}
@@ -1176,7 +1181,7 @@ def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch
     run_response = client.post("/api/evaluation/run", json={"cases": [case]})
 
     assert run_response.status_code == 200
-    assert evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+    assert evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS == RAG_ANSWER_TIMEOUT_MAX_SECONDS
     assert observed == {"run": evaluation_route.EVALUATION_RUN_TIMEOUT_SECONDS}
 
 

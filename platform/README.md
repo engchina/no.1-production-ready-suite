@@ -284,9 +284,10 @@ API は 422 で「既定のテキストモデルを選択してください。�
 - NL2SQL の Select AI・Select AI Agent には効かない（AI profile（`DBMS_CLOUD_AI`）に推論の量の属性が無い。画面の推論の量の説明と、
   業務プロファイルの Select AI 設定に書いている）。
 - `max_output_tokens` は思考の token も含むので、推論の量を減らすと出力上限での未完了（#987）も減る。
-- 推論型のモデルの 1 回の呼び出しが数十秒になるため、RAG の回答の上限 `RAG_ANSWER_TIMEOUT_SECONDS` の既定を 600 秒（上限と同じ）にし、
-  Agent の接続 `rag` の待ち時間 `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS` の既定を 630 秒（MCP のタイムアウト秒の上限は 900 秒）にした。
-  画面（630 秒）と Nginx（660 秒）は前から回答の上限より長い。
+- 推論型のモデルの 1 回の呼び出しが数十秒になり、回答は LLM を複数回呼ぶ（分割読取・参照の補充）ため、RAG の回答の通しの上限
+  `RAG_ANSWER_TIMEOUT_SECONDS` の既定・上限を 1200 秒にした（LLM 1 回の timeout の上限 600 秒とは別。#1425・#5280）。
+  Agent の接続 `rag` の待ち時間 `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS` の既定は 1230 秒（MCP のタイムアウト秒の上限は 1500 秒）、
+  画面は 1230 秒、Nginx は 1260 秒（Agent の `tools/invoke` は 1560 秒）で、外側ほど長い。
 
 ## LLM / VLM の呼び出しの seed は送らない（#3529）
 

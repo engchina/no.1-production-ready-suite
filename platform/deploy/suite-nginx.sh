@@ -36,21 +36,21 @@ SUITE_AGENT_CLIENT_MAX_BODY_SIZE="${SUITE_AGENT_CLIENT_MAX_BODY_SIZE:-110M}"
 # backend へ転送する API の待ち時間（秒。proxy_read_timeout / proxy_send_timeout）。値の根拠（#1597）:
 # - 既定（全 API）600 秒: SSE は 10〜15 秒ごとに heartbeat を送る（共通の進み具合の SSE
 #   pr_backend_core.chat_progress・RAG のチャットの SSE・Agent の Run の SSE）ので、間が空かない。
-# - RAG の LLM を呼ぶ同期の API 660 秒: 回答の通しの上限 rag_answer_timeout_seconds（既定・上限 600 秒）と
-#   画面の待ち時間 630 秒より長く。RAG 検索のストリーム（search/stream）は heartbeat が無く、LLM 1 回の間
-#   （最大 600 秒）何も届かない。
+# - RAG の LLM を呼ぶ同期の API 1260 秒: 回答の通しの上限 rag_answer_timeout_seconds（既定・上限 1200 秒。
+#   #5280）と画面の待ち時間 1230 秒より長く。RAG 検索のストリーム（search/stream）は heartbeat が無く、LLM 1 回の間
+#   （最大 600 秒）何も届かない。外部の MCP クライアントへ案内する待ち時間（MCP_TOOL_TIMEOUT）も同じ 1260 秒。
 # - NL2SQL の LLM を呼ぶ同期の API 2460 秒: LLM 1 回の timeout 600 秒 × 試行 4 回
 #   （oci_enterprise_ai_max_retries 3。timeout も再試行する）+ 余白 60 秒。SQL から質問へ（reverse/deep）の
 #   通しの期限 1800 秒もこの中。画面は 65 分まで待つ（API_TIMEOUT_MS.longRunningJob）。
-# - Agent のツールの直接の呼び出し（tools/invoke）960 秒: 外部 MCP の timeout の上限 900 秒
-#   （_MCP_TIMEOUT_MAX_SECONDS。RAG の既定は 630 秒）+ 余白 60 秒。
+# - Agent のツールの直接の呼び出し（tools/invoke）1560 秒: 外部 MCP の timeout の上限 1500 秒
+#   （_MCP_TIMEOUT_MAX_SECONDS。接続 rag の既定は RAG の回答の上限 1200 秒 + 30 秒 = 1230 秒。#5280）+ 余白 60 秒。
 SUITE_PROXY_TIMEOUT_SECONDS=600
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
-SUITE_RAG_LONG_API_TIMEOUT_SECONDS=660
+SUITE_RAG_LONG_API_TIMEOUT_SECONDS=1260
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
 SUITE_NL2SQL_LONG_API_TIMEOUT_SECONDS=2460
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
-SUITE_AGENT_LONG_API_TIMEOUT_SECONDS=960
+SUITE_AGENT_LONG_API_TIMEOUT_SECONDS=1560
 # 長い待ち時間にする API（/<製品>/api/ の後ろの path の正規表現。完全一致）。
 # RAG: チャットと RAG 検索の回答生成（#375）・作成中の回答の再購読（#1175）・
 # 品質評価の同期の API（#383）・業務ガイドの下書きを試す（#1288）と、同じ回答生成を呼ぶ MCP（rag_search）。

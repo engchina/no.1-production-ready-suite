@@ -5,7 +5,11 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings
+from app.config import (
+    OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+    RAG_ANSWER_TIMEOUT_MAX_SECONDS,
+    Settings,
+)
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
     StageTracker,
@@ -23,26 +27,31 @@ def _progress(stage: str, outcome: str) -> SearchStageProgress:
 
 
 def test_answer_timeout_default_and_limit() -> None:
-    """回答生成は既定 600 秒（#1425）・上限は LLM 1 回の timeout の上限。
+    """回答生成の通しの上限は既定・上限とも 1200 秒（#5280）。LLM 1 回の timeout の上限とは分ける。
 
     検索だけの上限（旧 rag_search_timeout_seconds）は #383 で削除した（品質評価の 1 ケースも
     回答生成の上限で打ち切る）。
     """
     settings = Settings()
-    assert settings.rag_answer_timeout_seconds == 600.0 == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+    assert settings.rag_answer_timeout_seconds == 1200.0 == RAG_ANSWER_TIMEOUT_MAX_SECONDS
+    # 通しの上限は複数回の LLM 呼び出しを含むので、1 回の上限（600 秒）より長い。
+    assert OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS == 600.0
+    assert settings.oci_enterprise_ai_timeout_seconds == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
     assert not hasattr(settings, "rag_search_timeout_seconds")
-    assert Settings(rag_answer_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS)
+    assert Settings(rag_answer_timeout_seconds=RAG_ANSWER_TIMEOUT_MAX_SECONDS)
     with pytest.raises(ValidationError):
-        Settings(rag_answer_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS + 1)
+        Settings(rag_answer_timeout_seconds=RAG_ANSWER_TIMEOUT_MAX_SECONDS + 1)
     with pytest.raises(ValidationError):
         Settings(rag_answer_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(oci_enterprise_ai_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS + 1)
 
 
 def test_answer_timeout_env_example_documents_setting() -> None:
     from pathlib import Path
 
     env_example = Path(__file__).resolve().parents[1] / ".env.example"
-    assert "RAG_ANSWER_TIMEOUT_SECONDS=600" in env_example.read_text(encoding="utf-8")
+    assert "RAG_ANSWER_TIMEOUT_SECONDS=1200" in env_example.read_text(encoding="utf-8")
 
 
 def test_answer_timeout_message_names_stage_and_retry() -> None:

@@ -270,6 +270,11 @@ def normalize_legacy_chunking_strategy_value(value: object) -> object:
 # OCI Enterprise AI の LLM 1 回の timeout（`oci_enterprise_ai_timeout_seconds`）の上限（秒）。
 # 保存済みの回答の評価の時間の上限もこの値から決める（#304）。
 OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = 600.0
+# 回答生成の通しの上限（`rag_answer_timeout_seconds`）の上限と既定（秒。#5280）。通しは LLM を
+# 複数回呼ぶ（分割読取・参照の補充を含む）ので、LLM 1 回の timeout の上限とは分けて持つ。
+# 画面（`ANSWER_GENERATION_TIMEOUT_MS`）と Nginx（`SUITE_RAG_LONG_API_TIMEOUT_SECONDS`）の
+# 待ちはこれより長くする。
+RAG_ANSWER_TIMEOUT_MAX_SECONDS = 1200.0
 # 品質評価の job の全体の時間の上限の最大（秒。1 日）。job の上限は、回答の回数 × 回答の上限を
 # この値で抑える（#1430。`app.rag.evaluation_jobs.evaluation_job_time_limit_seconds`）。
 RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS = 86400
@@ -1724,16 +1729,16 @@ class Settings(
         ),
     )
     rag_answer_timeout_seconds: float = Field(
-        default=600.0,
+        default=RAG_ANSWER_TIMEOUT_MAX_SECONDS,
         gt=0.0,
-        le=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+        le=RAG_ANSWER_TIMEOUT_MAX_SECONDS,
         description=(
             "LLM を呼ぶ回答生成（チャット・RAG 検索の回答。ストリーム・非ストリーム・MCP。"
             "品質評価の 1 ケース）の通しの上限（秒。#375 / #383）。検索の計画・追加の検索の再分解・"
-            "回答の生成で LLM を複数回呼ぶ。上限は LLM 1 回の timeout の設定の上限と同じ。"
-            "既定は上限と同じ 600 秒（推論の量の既定 medium で、推論型のモデルの 1 回の呼び出しが"
-            "数十秒になるため。#1425）。画面（630 秒）と Nginx（660 秒）の待ち時間は"
-            "これより長くする。"
+            "参照の補充・分割読取・回答の生成で LLM を複数回呼ぶ。"
+            "既定・上限とも 1200 秒（#5280）で、"
+            "LLM 1 回の timeout（oci_enterprise_ai_timeout_seconds。上限 600 秒）とは別に持つ。"
+            "画面（1230 秒）と Nginx（1260 秒）の待ち時間はこれより長くする。"
         ),
     )
     rag_answer_generation_round_estimate_seconds: float = Field(

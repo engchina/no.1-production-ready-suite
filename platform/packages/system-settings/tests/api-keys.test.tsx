@@ -100,7 +100,7 @@ describe("接続先の行と登録の例（#1870）", () => {
         "  --header 'Authorization: Bearer ${PR_API_KEY}'",
         "claude mcp add --scope user --transport http agent https://203.0.113.10/agent/api/mcp \\",
         "  --header 'Authorization: Bearer ${PR_API_KEY}'",
-        "export MCP_TOOL_TIMEOUT=660000",
+        "export MCP_TOOL_TIMEOUT=1260000",
         "curl -sk https://203.0.113.10/platform/ca.crt -o ~/production-ready-ca.crt",
         "export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt",
         "claude",
@@ -234,7 +234,7 @@ describe("API キーの画面（#1805）", () => {
     expect(https).toContain("MCP のサーバー名は rag / nl2sql / agent にします");
     expect(https).toContain("組み込みのスキルは rag / nl2sql を使います");
     expect(https).toContain("agent は業務 Agent を呼ぶためのものです");
-    expect(https).toContain("rag_search のサーバーの上限 600 秒より長くします");
+    expect(https).toContain("rag_search のサーバーの上限 1200 秒より長くします");
     expect(https).not.toContain("既定の 60 秒");
     expect(https).toContain("export はこのシェルだけで有効です");
     expect(https).toContain("~/.claude/settings.json の env");
