@@ -1,8 +1,8 @@
-import { FilePlus2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { FilePlus2 } from "lucide-react";
+import { type ReactNode, type RefObject, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/StatusBadge";
-import { FormActionBar, ListPicker, type ListPickerItem } from "@production-ready/ui";
+import { ListPickerSheet, type ListPickerItem } from "@production-ready/ui";
 import { ApiError, type DocumentSummary } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -13,42 +13,70 @@ import { useDocumentCandidates } from "@/lib/queries";
 export type DocumentPickerSelection = { deselect: (documentIds: readonly string[]) => void };
 
 /**
- * 文書を選ぶ（ナレッジベースの「文書を追加」#600、業務ガイドの資料 #2749）。
+ * 文書を選んで追加するシート（ナレッジベースの「文書を追加」#600、業務ガイドの資料 #2749。共通の `ListPickerSheet`。#5279）。
  * 数千〜数万件の文書から、文書名で検索して複数を選ぶ。候補はサーバー側の検索（`q`）と追加読み込み（100 件ずつ）で取り、
  * `unavailableReason` が理由を返す文書は選べなくする。選んだ文書は検索語を変えても残り、「選択中だけ表示」で確かめられる。
+ * 候補は開いている間だけ取り、開くたびに検索語と選択を空にする。
  */
-export function DocumentPicker({
+export function DocumentPickerSheet({
+  open,
   id,
   testId,
-  description,
+  title,
   knowledgeBaseIds,
+  scopePending = false,
+  scopeError,
+  onScopeRetry,
   unavailableReason,
   maxSelection,
   submitting = false,
+  status,
+  returnFocusRef,
   onSubmit,
   onClose,
 }: {
+  open: boolean;
   id: string;
   testId: string;
-  description: string;
+  /** シートの見出し（開くボタンと同じ語）。 */
+  title: string;
   /** 候補をこのナレッジベースの文書に絞る（空なら候補は無い）。未指定なら全文書。 */
   knowledgeBaseIds?: readonly string[];
+  /** 候補を絞る範囲（`knowledgeBaseIds`）を読み込んでいる間。候補を取らずに読み込み中を出す。 */
+  scopePending?: boolean;
+  /** 候補を絞る範囲を読み込めなかったときの文言。 */
+  scopeError?: string;
+  onScopeRetry?: () => void;
   /** 選べない文書の理由（「追加済み」など）。選べるなら undefined。 */
   unavailableReason?: (document: DocumentSummary) => string | undefined;
   /** 一度に選べる数の上限。 */
   maxSelection?: number;
   submitting?: boolean;
+  /** 追加の結果（一部を追加できなかったときの `FormStatus` など）。確定の操作の直上に出す。 */
+  status?: ReactNode;
+  /** 閉じたときにフォーカスを戻す先（開くボタン）。 */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   onSubmit: (documents: DocumentSummary[], selection: DocumentPickerSelection) => void;
   onClose: () => void;
 }) {
   const [candidateQuery, setCandidateQuery] = useState("");
+  // 選んだ文書（検索語を変えても残す。名前を出すために文書ごと持つ）。
+  const [selected, setSelected] = useState<Map<string, DocumentSummary>>(() => new Map());
+  // 開くたびに検索語と選択を空にする（一覧の中の状態は ListPickerSheet が作り直す）。
+  // 閉じる間（シートが滑って消える間）は前の内容を出したままにする。
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setCandidateQuery("");
+      setSelected(new Map());
+    }
+  }
   const scoped = knowledgeBaseIds !== undefined;
   const candidates = useDocumentCandidates(
     { q: candidateQuery || undefined, knowledgeBaseIds },
-    { enabled: !scoped || knowledgeBaseIds.length > 0 },
+    { enabled: open && !scopePending && !scopeError && (!scoped || knowledgeBaseIds.length > 0) },
   );
-  // 選んだ文書（検索語を変えても残す。名前を出すために文書ごと持つ）。
-  const [selected, setSelected] = useState<Map<string, DocumentSummary>>(() => new Map());
 
   const pages = candidates.data?.pages;
   const documents = useMemo(() => {
@@ -101,11 +129,12 @@ export function DocumentPicker({
   };
 
   return (
-    <ListPicker
+    <ListPickerSheet
+      open={open}
+      onClose={onClose}
       id={id}
-      title={t("documentPicker.title")}
-      headingLevel={3}
-      description={description}
+      title={title}
+      closeLabel={t("documentPicker.close")}
       label={t("documentPicker.listLabel")}
       items={items}
       selectedKeys={selectedKeys}
@@ -138,12 +167,13 @@ export function DocumentPicker({
         placeholder: t("documentPicker.searchPlaceholder"),
         value: candidateQuery,
         onSearch: setCandidateQuery,
-        autoFocus: true,
       }}
-      loading={candidates.isPending && candidates.fetchStatus !== "idle"}
+      loading={scopePending || (candidates.isPending && candidates.fetchStatus !== "idle")}
       refreshing={candidates.isFetching && candidates.isPlaceholderData}
-      error={candidates.isError && !candidates.data ? errorMessage(candidates.error) : undefined}
-      onRetry={() => void candidates.refetch()}
+      error={
+        scopeError ?? (candidates.isError && !candidates.data ? errorMessage(candidates.error) : undefined)
+      }
+      onRetry={scopeError ? onScopeRetry : () => void candidates.refetch()}
       hasMore={Boolean(candidates.hasNextPage)}
       loadingMore={candidates.isFetchingNextPage}
       loadMoreError={candidates.isFetchNextPageError ? errorMessage(candidates.error) : undefined}
@@ -155,33 +185,16 @@ export function DocumentPicker({
         noResultsTitle: t("documentPicker.noResults"),
         noResultsHint: t("documentPicker.noResultsHint"),
       })}
-      actions={
-        <FormActionBar
-          ariaLabel={t("documentPicker.actions")}
-          primaryActions={[
-            {
-              id: "submit",
-              label: t("documentPicker.submit", { count: formatNumber(selected.size) }),
-              icon: FilePlus2,
-              loading: submitting,
-              disabled: selected.size === 0,
-              onClick: () => {
-                if (selected.size > 0) onSubmit([...selected.values()], selection);
-              },
-              testId: `${testId}-submit`,
-            },
-          ]}
-          secondaryActions={[
-            {
-              id: "close",
-              label: t("documentPicker.close"),
-              icon: X,
-              disabled: submitting,
-              onClick: onClose,
-            },
-          ]}
-        />
-      }
+      submitLabel={t("documentPicker.submit", { count: formatNumber(selected.size) })}
+      submitIcon={FilePlus2}
+      submitting={submitting}
+      onSubmit={() => {
+        if (selected.size > 0) onSubmit([...selected.values()], selection);
+      }}
+      cancelLabel={t("documentPicker.cancel")}
+      actionsLabel={t("documentPicker.actions")}
+      status={status}
+      returnFocusRef={returnFocusRef}
       testId={testId}
     />
   );

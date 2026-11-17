@@ -2630,35 +2630,64 @@ type SaveErrorBannerProps = {
 一覧の上のツールバー（検索欄の位置）と、数千〜数万件の候補から一覧で複数を選ぶ部品。数十〜数百件を選択欄で選ぶものは `SearchableSelectField` / `SearchableMultiSelect`（#578）。規則は UX 契約 page-archetypes.md「一覧のツールバー」「大量の候補から選ぶ」、見た目の変更は README §7 の 53。
 
 ```tsx
-import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@production-ready/ui";
+import { FormActionBar, FormStatus, ListPicker, ListPickerSheet, ListToolbar, SearchField } from "@production-ready/ui";
 
 // 一覧のツールバー: 左に検索（先頭・lg 28rem）→ 絞り込み、右に件数 → 一覧への操作。検索欄に幅の class を付けない。
 <ListToolbar
   search={<SearchField id="kb-docs-search" label="所属文書を検索" labelHidden value={q} onSearch={setQ} clearLabel="検索語をクリア" />}
   filters={<FilterSelect id="kb-docs-kind" label="種類" … />}   // 絞り込みは FilterSelect / FilterChipGroup（#1933。下の「一覧の絞り込み」）
   count={{ total: 25 }}                  // 「全 25 件」（#1891。以前は summary="25 件"）
-  actions={<Button variant="secondary" icon={FilePlus2} aria-expanded={open}>文書を追加</Button>}
+  actions={<Button ref={openerRef} variant="secondary" icon={FilePlus2} aria-haspopup="dialog" aria-controls="kb-add-documents" onClick={() => setOpen(true)}>文書を追加</Button>}
 />
 
-// 大量の候補から選ぶ: サーバーの検索（q）と追加読み込み（total / hasMore / loadingMore / onLoadMore は #578 の remote と同じ名前）
-<ListPicker
+// ページの一覧へ追加する操作は、右から出すシートで開く（#5279）。開くボタンは開くだけ（aria-haspopup="dialog"）。
+// 見出しは開くボタンと同じ語だけ。検索は placeholder だけ（label は読み上げの名前）で、開いたらフォーカスする。
+// 下部に「N 件を追加 / キャンセル」を固定し、結果（一部失敗）は status（FormStatus。Toast にしない）。
+<ListPickerSheet
+  open={open}
+  onClose={() => setOpen(false)}
   id="kb-add-documents"
-  title="追加する文書を選ぶ"
-  label="追加する文書の候補"            // listbox の名前
+  title="文書を追加"
+  closeLabel="閉じる"
+  label="追加する文書の候補"
+  items={items}
+  selectedKeys={selectedKeys}
+  selectedItems={selectedItems}
+  onToggle={(item, selected) => …}
+  search={{ label: "追加する文書を検索", placeholder: "文書名で検索", value: q, onSearch: setQ }}
+  total={total} hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore}
+  submitLabel={`${selectedKeys.size} 件を追加`}
+  submitIcon={FilePlus2}
+  onSubmit={submit}                      // 全部成功: 閉じて Toast・一覧を取り直す。一部失敗: 閉じずに status へ
+  submitting={isPending}
+  cancelLabel="キャンセル"
+  actionsLabel="文書の追加"
+  status={<FormStatus tone="danger" message={failure} />}
+  returnFocusRef={openerRef}             // 閉じたら「文書を追加」へ戻す
+  testId="kb-add-documents"              // 一覧は <testId>-list、確定は <testId>-submit / -cancel
+/>
+
+// フォームの値として常に見せる選択は、ページの中に ListPicker を置く（NL2SQL の許可する表・ビュー、権限管理の「利用できる対象」）。
+// サーバーの検索（q）と追加読み込み（total / hasMore / loadingMore / onLoadMore は #578 の remote と同じ名前）
+<ListPicker
+  id="profile-allowed-objects"
+  title="許可する表・ビュー"
+  label="許可する表・ビューの候補"        // listbox の名前
   items={items}                          // { key, label, textValue, description?, meta?, disabled?, disabledReason?, groupKey? }[]
+                                         // disabledReason（例:「追加済み」）は meta の左の中立の灰色のバッジ。meta は右端に固定（#5279）
   groups={groups}                        // 任意: { key, label, textValue, countLabel?, onSelectAll?, onClearAll?, … }[]
   selectedKeys={selectedKeys}            // ReadonlySet<string>
   onToggle={(item, selected) => …}
   onSelectMany={(items) => …}            // 任意:「表示中をすべて選択」
   onClearSelection={() => …}             // 任意:「選択をすべて解除」
   selectedItems={selectedItems}          // 任意:「選択中だけ表示（K）」
-  search={{ label: "追加する文書を検索", value: q, onSearch: setQ }}
+  search={{ label: "表・ビューを検索", value: q, onSearch: setQ }}
   total={total} hasMore={hasMore} loadingMore={loadingMore} loadMoreError={error} onLoadMore={loadMore}
   loading={isPending} refreshing={isPlaceholderData}
   disabled={saving}                      // 任意: 保存中は切り替えない（<fieldset disabled> の中も同じ）
   fixedHeight                            // 任意: 並べた 2 つの一覧の高さをそろえる
   labels={…}                             // 翻訳済みの文言（既定は日本語。DEFAULT_LIST_PICKER_LABELS）
-  actions={<FormActionBar primaryActions={[{ id: "add", label: "選択した 3 件を追加", icon: FilePlus2 }]} … />}
+  actions={<FormActionBar primaryActions={[{ id: "apply", label: "選択を反映", icon: Check }]} … />}
 />
 ```
 
@@ -2670,6 +2699,8 @@ import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@production
 | 100 行を超えたら見えている行と、キーボードの位置の行だけを描く（行の高さは描いた行から測る。`lib/list-window.ts`） | 数千件でも重くならない。スクロールしてもフォーカスが body に落ちない |
 | 検索語・「選択中だけ表示」を変えたら一覧の先頭へ戻す。「選択中だけ表示」は `selectedItems` を検索語で画面側で絞る | 読み込みの範囲の外にある選択も確かめられる |
 | `LoadMoreFooter` は失敗中は「さらに読み込む」を出さず、Banner の「再試行」だけにする | 同じ処理のスピナー・ボタンを 1 つにする（messaging §3.7） |
+| 選べない理由（`disabledReason`）は中立の灰色の `StatusBadge`（`Link` のアイコン）で `meta` の左に置き、`meta` は右端に固定する。行の位置は変えない（#5279） | 理由の有無で状態の列がずれない。名前の順を保つ |
+| `ListPickerSheet` は `SideSheet`（`side="right"`・`size="md"`・`fullScreenBelowSm`）の中に `ListPicker`（`fill`・枠なし）を置き、`footer` に「N 件を追加 / キャンセル」と `status`、`initialFocusRef` で検索欄へフォーカスする。確定の処理中は閉じない。開くたびに一覧の中の状態を作り直す（選択と検索語は製品が開くときに空にする）（#5279） | 追加の操作をページに差し込まない。確定の操作を常に見せ、結果をモーダルの中に出す |
 
 - 単体テストは `packages/ui/tests/list-picker.test.tsx`（読み上げの属性・↑↓ / Home / End / Space / Enter・IME の確定の Enter・グループ間の移動・3,000 件の仮想スクロール・検索欄の IME と件数の読み上げ・0 件・追加読み込みと再試行・一括選択と「選択中だけ表示」・無効・`list-window` の計算）。
 - 実ブラウザは RAG `e2e/knowledge-bases.spec.ts`（モックで 3,000 件から検索して複数を追加、desktop / 375px、ライト / ダーク、キーボード。所属文書の検索とページング）と NL2SQL `tests/e2e/profile-allowed-objects.spec.ts`（許可する表・ビュー）。
@@ -2974,7 +3005,18 @@ export interface SideSheetProps {
 
 - 閉じている間も描いたまま（`inert`・`data-state="closed"`）。開いている間は `data-state="open"`。
 - キー操作はナビのドロワーと同じ helper（`focusableIn` / `navDrawerKeyAction`）。閉じるボタンの Tooltip が出ている間の 1 回目の Escape は吹き出しだけを閉じる（README §4「`Tooltip`」）。
-- 単体テストは `packages/ui/tests/side-sheet.test.tsx`、実ブラウザは RAG の `e2e/chat.spec.ts`（375px の開閉・Esc・外側・フォーカスの戻り）。
+- `footer`（本文の下に固定する確定の行。`<testId>-footer`）・`initialFocusRef`（開いたときのフォーカスの先）・`fullScreenBelowSm`（sm 未満で全画面）は一覧から選んで追加するシート（`ListPickerSheet`。#5279）が使う。
+
+```ts
+  /** 開いたときにフォーカスする要素（例: 中の検索欄）。描かれていればフォーカスの先は initialFocus より優先。 */
+  initialFocusRef?: React.RefObject<HTMLElement | null>;
+  /** sm 未満で全画面にする（wide は常に全画面）。 */
+  fullScreenBelowSm?: boolean;
+  /** 本文の下に固定する確定の操作の行（区切り線と余白は部品が持つ）。 */
+  footer?: React.ReactNode;
+```
+
+- 単体テストは `packages/ui/tests/side-sheet.test.tsx`・`list-picker-sheet.test.tsx`、実ブラウザは RAG の `e2e/chat.spec.ts`（375px の開閉・Esc・外側・フォーカスの戻り）と `e2e/knowledge-bases.spec.ts`（「文書を追加」のシート）。
 
 ---
 
