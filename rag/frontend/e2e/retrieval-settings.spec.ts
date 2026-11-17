@@ -137,6 +137,7 @@ const ANSWERING_SETTINGS = {
   config_source: "runtime",
   entity_expansion_enabled: true,
   entity_expansion_max_chunks: 3,
+  reference_outline_selection_enabled: false,
   section_expansion_enabled: true,
   section_expansion_max_levels: 4,
   section_expansion_input_token_percent: 50,
@@ -710,6 +711,31 @@ for (const viewport of [
     await expect.poll(() => saved.length).toBe(1);
     expect(saved[0]).toMatchObject({ answer_timeout_seconds: 1200 });
     await expect(select).toContainText("1200 秒");
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, collapse: false },
+  { name: "mobile", width: 375, height: 812, collapse: true },
+]) {
+  test(`参照先の文書の目次から章節を選ぶ設定は既定でオフで、オンにして保存できる（${viewport.name}。#5263）`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    await mockAnsweringSettings(page, saved);
+
+    await page.goto("/settings/retrieval");
+
+    const toggle = page.getByRole("switch", { name: "参照先の文書の目次から章節をモデルが選ぶ", exact: true });
+    await expect(toggle).not.toBeChecked();
+    await toggle.click();
+    await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({ reference_outline_selection_enabled: true });
+    await expect(toggle).toBeChecked();
     await expectNoPageOverflow(page);
   });
 }
