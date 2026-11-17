@@ -60,10 +60,9 @@ OUTLINE_SECTION_PROMPT = (
     + "選んだ章節は、質問に答えるために重要な順に並べます。"
 )
 
-# 見出しの語の無い章節に添える本文の書き出しの文字数（rag_outline の既定と同じ。2 つの経路で共有）。
-# 目次の字数の上限・読む章節の数・読む量は設定（文書全体への参照は
-# rag_reference_outline_selection_*、一般の質問は rag_outline_selection_*）。
-CATALOG_LEAD_CHARS = 60
+# 見出しの語の無い章節に添える本文の書き出しの文字数は設定 rag_outline_lead_chars（2 つの経路と
+# rag_outline の既定で共有。#5345）。目次の字数の上限・読む章節の数・読む量は設定（文書全体への
+# 参照は rag_reference_outline_selection_*、一般の質問は rag_outline_selection_*）。
 
 # 読み方。
 READ_MODE_SECTIONS = "outline_selection"

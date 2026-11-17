@@ -1069,6 +1069,17 @@ class Settings(
             "rag_outline_selection_catalog_max_chars と同じ。"
         ),
     )
+    rag_outline_lead_chars: int = Field(
+        default=60,
+        ge=0,
+        le=200,
+        description=(
+            "目次の行で、見出しの語の無い章節(条の番号だけなど)に添える本文の書き出しの字数(#5345。"
+            "0 は付けない)。文書全体への参照の目次の選択(#5263)・検索の上位の文書の目次の選択"
+            "(#5324)と、MCP の rag_outline(format=compact)の lead_chars の省略時の値で共有する。"
+            "範囲は rag_outline の lead_chars と同じ。"
+        ),
+    )
     rag_reference_outline_selection_max_sections: int = Field(
         default=12,
         ge=1,

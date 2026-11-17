@@ -343,7 +343,11 @@ async def test_numbered_reference_reads_up_to_the_section_chunk_limit(enabled: b
     """番号つきの参照の節は、節の先頭から設定の上限(既定 8)まで読む(目次の設定に関わらない)。"""
     anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
 
-    for settings, expected in (({}, 8), ({"rag_reference_section_read_max_chunks": 3}, 3)):
+    cases: list[tuple[dict[str, Any], int]] = [
+        ({}, 8),
+        ({"rag_reference_section_read_max_chunks": 3}, 3),
+    ]
+    for settings, expected in cases:
         oracle = ReferenceOracle([anchor], _section_chunks(10))
         engine = _engine(oracle, rag_reference_outline_selection_enabled=enabled, **settings)
         state = _SearchState()
@@ -395,6 +399,8 @@ def test_limits_default_to_the_previous_constants() -> None:
     assert settings.rag_reference_outline_selection_read_max_chunks == 400
     # 番号つきの参照の節から読む chunk の上限も、設定にする前の定数(8)と同じ(#5348)。
     assert settings.rag_reference_section_read_max_chunks == 8
+    # 目次の行の書き出しの字数も、設定にする前の定数と同じ(#5345)。
+    assert settings.rag_outline_lead_chars == 60
 
 
 @pytest.mark.parametrize(
@@ -404,6 +410,7 @@ def test_limits_default_to_the_previous_constants() -> None:
         ("rag_reference_outline_selection_max_sections", 1, 50),
         ("rag_reference_outline_selection_read_max_chunks", 10, 1000),
         ("rag_reference_section_read_max_chunks", 1, 50),
+        ("rag_outline_lead_chars", 0, 200),
     ],
 )
 def test_limits_reject_values_out_of_range(name: str, low: int, high: int) -> None:
@@ -427,10 +434,12 @@ async def test_catalog_limit_is_split_between_targets(monkeypatch: pytest.Monkey
     from app.rag import section_catalog
 
     limits: list[int] = []
+    leads: list[int] = []
     original = section_catalog.compact_section_lines
 
     async def recording(*args: Any, max_chars: int, **kwargs: Any) -> tuple[list[str], int]:
         limits.append(max_chars)
+        leads.append(args[3])
         return await original(*args, max_chars=max_chars, **kwargs)
 
     monkeypatch.setattr(section_catalog, "compact_section_lines", recording)
@@ -444,6 +453,33 @@ async def test_catalog_limit_is_split_between_targets(monkeypatch: pytest.Monkey
     await _search(engine)
 
     assert limits == [1500, 1500]
+    # 目次の行の書き出しの字数は既定の設定(設定にする前の定数と同じ 60。#5345)。
+    assert leads == [60, 60]
+
+
+async def test_catalog_lead_chars_follow_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目次の行に添える本文の書き出しの字数は設定 rag_outline_lead_chars の値(#5345)。"""
+    from app.rag import section_catalog
+
+    leads: list[int] = []
+    original = section_catalog.compact_section_lines
+
+    async def recording(*args: Any, **kwargs: Any) -> tuple[list[str], int]:
+        leads.append(args[3])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(section_catalog, "compact_section_lines", recording)
+    engine, _oracle, _sections, _llm = _setup(
+        monkeypatch,
+        outlines={DOC_A},
+        targets=[TARGET_A],
+        pick=lambda context: [],
+        rag_outline_lead_chars=7,
+    )
+
+    await _search(engine)
+
+    assert leads == [7]
 
 
 async def test_section_and_chunk_limits_follow_the_settings(
