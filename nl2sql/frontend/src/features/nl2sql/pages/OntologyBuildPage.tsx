@@ -4,7 +4,7 @@ import {
   EmptyState,
   PageHeader,
   PageBody,
-  SelectField,
+  SearchableSelectField,
 } from "@production-ready/ui";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -14,6 +14,7 @@ import { useSearchParams } from "react-router-dom";
 import { ErrorState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
 import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
   SchemaRefreshHeaderStatus,
@@ -313,14 +314,14 @@ export function OntologyBuildPage() {
           ) : (
             <div className="grid min-w-0 gap-3">
               <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id="ontology-build-profile"
                   label={t("ontologyBuild.profile.selectLabel")}
                   value={selectedProfileId}
                   placeholder={t("nl2sql.workspace.profileUnavailable")}
                   options={activeProfiles.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
                   onValueChange={selectProfile}
-                  data-testid="ontology-build-profile-select"
                   // grid の外で操作ボタンと並べる単独の選択欄。対象の選択（業務プロファイル）は lg（#613 / #1891）。
                   width="lg"
                   className="min-w-0"

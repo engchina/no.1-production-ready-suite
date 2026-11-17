@@ -521,7 +521,7 @@ test("回答前の確認は「この内容で SQL を生成して実行」で、
   });
 
   await page.goto("/query");
-  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル", exact: true }), "default");
+  await expectSelectFieldValue(page.getByRole("button", { name: /^業務プロファイル(?:\s|$)/ }), "default");
   await page.locator("#nl2sql-question-input").fill(REQUIREMENT_QUESTION);
   const startButton = page.getByRole("button", { name: "回答前の確認", exact: true });
   await expect(startButton).toBeEnabled();

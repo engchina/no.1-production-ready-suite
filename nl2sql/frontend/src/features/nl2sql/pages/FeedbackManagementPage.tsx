@@ -35,6 +35,7 @@ import {
   PageHeader,
   PageBody,
   useConfirm,
+  SearchableSelectField,
   SelectField,
   ProcessingIndicator,
   TimedLoadingState,
@@ -114,6 +115,7 @@ import type {
   SelectAiFeedbackMutationData,
 } from "../types";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 type FeedbackManagementView = "entries" | "vectorIndex" | "appFeedback" | "similarityIndex";
 type AppFeedbackFilter = "all" | FeedbackRating | "unrated";
@@ -1240,6 +1242,9 @@ export function FeedbackManagementPage() {
                         />
                         <FilterSelect
                           id="app-feedback-profile-filter"
+                          // 選択肢はデータから来るので検索して選ぶ（#5266）。
+                          searchable
+                          searchLabels={searchableSelectLabels()}
                           label={t("feedbackManagement.appFeedback.profileFilter")}
                           value={appProfileFilter}
                           options={[
@@ -1670,7 +1675,8 @@ function ProfileSelect({
 }) {
   const id = useId();
   return (
-    <SelectField
+    <SearchableSelectField
+      labels={searchableSelectLabels()}
       id={`feedback-db-profile-${id}`}
       label={t("feedbackManagement.profile")}
       value={value}

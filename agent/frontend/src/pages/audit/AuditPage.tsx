@@ -25,6 +25,7 @@ import {
   type DataTableColumn,
   PageBody,
   isSubmitEnter,
+  SearchableSelectField,
   SelectField,
   TextField,
   useActionPending,
@@ -45,6 +46,7 @@ import {
   stepStatusView,
 } from "@/lib/status-labels";
 import { useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { formatDate } from "@/pages/shared/page-helpers";
 
 type AuditWarningsFilter = "any" | "true" | "false";
@@ -239,7 +241,8 @@ export function AuditPage() {
                   if (isSubmitEnter(event)) applyFilters();
                 }}
               />
-              <SelectField
+              <SearchableSelectField
+                labels={searchableSelectLabels()}
                 id="audit-tool-name"
                 width="lg"
                 label={t("audit.toolName")}

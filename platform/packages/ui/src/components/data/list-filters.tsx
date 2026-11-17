@@ -2,6 +2,8 @@ import { useId } from "react";
 
 import { cn } from "../../lib/utils";
 import { CONTROL_HEIGHT_CLASS, type ControlSize, type FieldWidth } from "../ui/control-size";
+import { SearchableSelectField } from "../ui/searchable-select-field";
+import type { SearchableSelectLabels } from "../ui/searchable-options";
 import { SelectField, type SelectFieldOption } from "../ui/select-field";
 import { formatPaginationNumber } from "./pagination";
 
@@ -39,7 +41,16 @@ export interface FilterSelectProps<T extends string> {
   /** 高さ（既定 md）。ツールバーの検索欄と同じ size にする。 */
   size?: ControlSize;
   disabled?: boolean;
-  /** ボタン（combobox）に付ける `data-testid`。 */
+  /**
+   * 選択肢を検索して選ぶ（#5266）。選択肢がデータから来る絞り込み（API から来る・利用者が増やせるもの。例: プロファイル・
+   * 業務 Agent）に使い、コードの固定の列挙（状態・期間・評価）には使わない。`SearchableSelectField` の
+   * `labelPlacement="inline"` で、同じ「ラベル: 値」の形・高さ・幅・絞り込み中の強調で出す。
+   * 選択肢の `disabled` は表せない（データの絞り込みの選択肢は選べないものを持たない）。
+   */
+  searchable?: boolean;
+  /** `searchable` のときの検索欄・件数・候補なしの文言（翻訳済み。製品の i18n から渡す）。 */
+  searchLabels?: Partial<SearchableSelectLabels>;
+  /** ボタン（combobox）に付ける `data-testid`（`searchable` では使えない。ボタンは `id` で引く）。 */
   "data-testid"?: string;
   className?: string;
 }
@@ -53,6 +64,7 @@ export interface FilterSelectProps<T extends string> {
  * - 既定（`defaultValue`）以外を選んでいると、値を太字・アクセントの文字、枠をアクセントの線にする
  *   （`data-filter-active="true"`）。値の文字でも分かるので色だけで伝えない。
  * - キーボード・typeahead・一覧の位置は `SelectField` と同じ。
+ * - 選択肢がデータから来る絞り込みは `searchable` で検索して選ぶ（#5266）。
  */
 export function FilterSelect<T extends string>({
   id,
@@ -64,10 +76,37 @@ export function FilterSelect<T extends string>({
   width = "sm",
   size = "md",
   disabled,
+  searchable = false,
+  searchLabels,
   "data-testid": testId,
   className,
 }: FilterSelectProps<T>) {
   const resolvedDefault = defaultValue ?? options[0]?.value;
+  const active = resolvedDefault !== undefined && isFilterActive(value, resolvedDefault);
+  if (searchable) {
+    return (
+      <SearchableSelectField
+        id={id}
+        label={label}
+        value={value}
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          description: option.description,
+          badge: option.badge,
+        }))}
+        // 選択肢は `options` の値だけなので、受け取った値は T のどれか。
+        onValueChange={(next) => onValueChange(next as T)}
+        labelPlacement="inline"
+        active={active}
+        width={width}
+        size={size}
+        disabled={disabled}
+        labels={searchLabels}
+        className={className}
+      />
+    );
+  }
   return (
     <SelectField
       id={id}
@@ -76,7 +115,7 @@ export function FilterSelect<T extends string>({
       options={options}
       onValueChange={onValueChange}
       labelPlacement="inline"
-      active={resolvedDefault !== undefined && isFilterActive(value, resolvedDefault)}
+      active={active}
       width={width}
       size={size}
       disabled={disabled}
