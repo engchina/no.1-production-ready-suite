@@ -32,10 +32,10 @@ from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.section_chunk_map import ROOT_SECTION_ID
 from tests.security_support import ProductionAuth, enable_production_auth
 from tests.support import AsgiTestClient
+from tests.test_mcp_api import SECRET
 from tests.test_security_scope import ScopedViewOracle
 
 client = AsgiTestClient(app)
-SECRET = "rag-mcp-grep-test-secret-0123456789abcdef"  # nosec B105 - テスト用
 
 
 @dataclass(frozen=True)
