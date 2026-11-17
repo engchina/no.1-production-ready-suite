@@ -1,9 +1,10 @@
-import { SelectField, type SelectFieldOption } from "@production-ready/ui";
+import { SearchableSelectField, type SearchableSelectOption } from "@production-ready/ui";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import type { DocumentCategory } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useDocumentCategories } from "@/lib/queries";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 export const CATEGORY_KEYS = ["large_category", "middle_category", "small_category"] as const;
 export type CategoryKey = (typeof CATEGORY_KEYS)[number];
@@ -19,7 +20,7 @@ function findByName(nodes: readonly DocumentCategory[], name: string): DocumentC
   return label ? nodes.find((node) => categoryLabel(node.name) === label) : undefined;
 }
 
-function options(nodes: readonly DocumentCategory[], current: string): SelectFieldOption[] {
+function options(nodes: readonly DocumentCategory[], current: string): SearchableSelectOption[] {
   const listed = nodes.map((node) => ({ value: node.name, label: node.name }));
   // 一覧に無い保存済みの値（一覧を作る前に保存した値など）も、今の値として選べるように残す。
   return current && !findByName(nodes, current) ? [{ value: current, label: current }, ...listed] : listed;
@@ -64,14 +65,15 @@ export function CategorySelectFields({
   return (
     <>
       {levels.map(({ key, nodes, parentSelected }) => (
-        <SelectField
+        <SearchableSelectField
+          labels={searchableSelectLabels()}
           key={key}
           id={`${idPrefix}-${key}`}
           width="md"
           label={labels[key]}
           value={values[key]}
-          options={options(nodes, values[key])}
-          emptyOptionLabel={t("documentCategories.select.none")}
+          // 「指定なし」（空の値）を先頭の選択肢にして、選んだ分類を外せるようにする。
+          options={[{ value: "", label: t("documentCategories.select.none") }, ...options(nodes, values[key])]}
           placeholder={t("documentCategories.select.none")}
           helper={
             key !== "large_category" && !parentSelected && !values[key]

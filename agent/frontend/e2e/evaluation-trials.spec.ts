@@ -196,9 +196,9 @@ for (const viewport of VIEWPORTS) {
     await page.goto("/evaluation");
     const compare = page.getByTestId("evaluation-compare");
     await compare.scrollIntoViewIfNeeded();
-    await compare.getByTestId("evaluation-compare-base").click();
+    await compare.locator("#evaluation-compare-base").click();
     await page.getByRole("option", { name: /v1/ }).click();
-    await compare.getByTestId("evaluation-compare-target").click();
+    await compare.locator("#evaluation-compare-target").click();
     await page.getByRole("option", { name: /下書き/ }).click();
     const paired = compare.getByTestId("evaluation-compare-paired");
     await expect(paired).toContainText("同じ定義のケース 1 件の対応比較: 成功率 0% → 100%（差 +100 pt、95% 区間 -21〜+100 pt）");

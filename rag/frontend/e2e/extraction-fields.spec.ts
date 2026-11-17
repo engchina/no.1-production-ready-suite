@@ -185,7 +185,7 @@ async function openFieldFilters(page: Page) {
 
 async function addCondition(page: Page, fieldLabel: RegExp) {
   await page.getByRole("button", { name: "条件を追加" }).click();
-  await page.getByRole("combobox", { name: "項目" }).last().click();
+  await page.getByRole("button", { name: /^項目 / }).last().click();
   await page.getByRole("option", { name: fieldLabel }).click();
 }
 
@@ -238,7 +238,7 @@ test("数値でない値の条件は誤りを出して検索しない", async ({
 
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("金額は？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "項目" })).toBeFocused();
+  await expect(page.getByRole("button", { name: /^項目 / })).toBeFocused();
   expect(bodies).toEqual([]);
 });
 

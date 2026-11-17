@@ -327,7 +327,7 @@ for (const viewport of VIEWPORTS) {
 
     // エディタで評価する業務 Agent を選ぶと、その業務 Agent で評価する（版の選択もその業務 Agent に従う）。
     await page.goto(`/evaluation?id=${SET.id}`);
-    const evaluated = page.getByTestId("evaluation-set-evaluated-agent");
+    const evaluated = page.locator("#evaluation-set-evaluated-agent");
     await expect(evaluated).toContainText("資料・データ横断アシスタント");
     await evaluated.click();
     await page.getByRole("option", { name: "資料調査アシスタント" }).click();
@@ -354,9 +354,9 @@ for (const viewport of VIEWPORTS) {
     const compare = page.getByTestId("evaluation-compare");
     await compare.scrollIntoViewIfNeeded();
     await expect(compare.getByText("基準の評価と比べる評価を選ぶと、ケースごとの差を出します。")).toBeVisible();
-    await compare.getByTestId("evaluation-compare-base").click();
+    await compare.locator("#evaluation-compare-base").click();
     await page.getByRole("option", { name: /資料・データ横断アシスタント・v1/ }).click();
-    await compare.getByTestId("evaluation-compare-target").click();
+    await compare.locator("#evaluation-compare-target").click();
     await page.getByRole("option", { name: /資料調査アシスタント/ }).click();
     const summary = compare.getByTestId("evaluation-compare-summary");
     await expect(summary).toContainText("合格率 0% → 67%");

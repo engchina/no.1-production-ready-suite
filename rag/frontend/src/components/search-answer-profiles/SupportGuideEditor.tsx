@@ -26,6 +26,7 @@ import {
   ObjectActionBar,
   RowActionMenu,
   SearchableMultiSelect,
+  SearchableSelectField,
   SelectField,
   StatusBadge,
   Switch,
@@ -98,6 +99,7 @@ import {
   type ReferenceForm,
   type StepForm,
 } from "@/lib/support-guide-form";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 import { SupportGuideContentView } from "./SupportGuideContentView";
 import { SupportGuideDraftTry } from "./SupportGuideDraftTry";
@@ -1032,7 +1034,8 @@ function SupportGuideForm({
                   error={errorAt(path("id"))}
                   onChange={(event) => updateRow("branches", index, { id: event.target.value })}
                 />
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id={domId(path("when.condition_id"))}
                   width="md"
                   label={t("supportGuides.field.branchCondition")}
@@ -1051,7 +1054,22 @@ function SupportGuideForm({
                   options={OPERATOR_OPTIONS}
                   onValueChange={(value) => updateRow("branches", index, { operator: value })}
                 />
-                {row.operator === "unknown" ? null : row.operator === "equals" && selectableValues ? (
+                {row.operator === "unknown" ? null : row.operator === "equals" && condition?.type === "enum" && selectableValues ? (
+                  // 選択肢の条件の値は、ガイドの中で定義した値（データ）から検索して選ぶ（#5266）。
+                  <SearchableSelectField
+                    labels={searchableSelectLabels()}
+                    id={domId(path("when.values"))}
+                    width="md"
+                    label={t("supportGuides.field.values")}
+                    value={values[0] ?? ""}
+                    options={selectableValues.map((value) => ({ value, label: value }))}
+                    placeholder={t("supportGuides.select.choose")}
+                    required
+                    error={errorAt(path("when.values"))}
+                    onValueChange={(value) => updateRow("branches", index, { values: value })}
+                  />
+                ) : row.operator === "equals" && selectableValues ? (
+                  // はい / いいえの条件は固定の 2 つなので、検索の無い選択のまま。
                   <SelectField
                     id={domId(path("when.values"))}
                     width="md"
@@ -1098,7 +1116,8 @@ function SupportGuideForm({
                     onChange={(event) => updateRow("branches", index, { values: event.target.value })}
                   />
                 )}
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id={domId(path("goto_step"))}
                   width="md"
                   label={t("supportGuides.field.gotoStep")}

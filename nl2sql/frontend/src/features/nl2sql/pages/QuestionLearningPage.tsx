@@ -9,6 +9,7 @@ import {
   DataTable,
   EmptyState,
   FormStatus,
+  SearchableSelectField,
   SelectField,
   FilterSelect,
   isFilterActive,
@@ -68,6 +69,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { appPath } from "@/lib/base-path";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import {
   DbManagementLoadingSkeleton,
   DbManagementSearchField,
@@ -1061,10 +1063,12 @@ function TrainingDataTable({
             className: "break-words align-top font-semibold",
             render: (example) =>
               editingExampleId === example.id ? (
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id={`qcm-training-edit-profile-${example.id}`}
                   label={t("qcm.training.editProfile")}
-                  labelHidden
+                  // 表のセルの中の欄。列の見出しがラベルなので、値だけを出しラベルは読み上げ名に残す。
+                  labelPlacement="compact"
                   value={editingProfileId}
                   options={profiles
                     .filter((profile) => !profile.archived)
@@ -1514,6 +1518,9 @@ function TrainingCandidatesPanel({
               />
               <FilterSelect
                 id="qcm-candidate-profile-filter"
+                // 選択肢はデータから来るので検索して選ぶ（#5266）。
+                searchable
+                searchLabels={searchableSelectLabels()}
                 label={t("nl2sql.profile.label")}
                 value={profileId}
                 options={[
@@ -1694,7 +1701,8 @@ function TrainingCandidatesPanel({
                   </div>
 
                   {(item.status === "pending" || item.status === "profile_missing") && (
-                    <SelectField
+                    <SearchableSelectField
+                      labels={searchableSelectLabels()}
                       id={`qcm-candidate-profile-${item.history_id}`}
                       label={t("qcm.candidates.confirmProfile")}
                       value={override}

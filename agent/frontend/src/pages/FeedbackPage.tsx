@@ -67,6 +67,7 @@ import { useCapabilities } from "@/lib/permissions";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { isOneOf, isString, useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { countDelta, formatRate, Metric, rateDelta } from "@/pages/feedbackMetrics";
 import { signalLabel, SignalsContent, SignalsSkeleton } from "@/pages/FeedbackSignals";
 
@@ -220,6 +221,9 @@ export function FeedbackPage() {
       />
       <FilterSelect<string>
         id="feedback-agent"
+        // 選択肢はデータから来るので検索して選ぶ（#5266）。
+        searchable
+        searchLabels={searchableSelectLabels()}
         width="md"
         label={t("feedback.filter.agent")}
         value={agentId}
