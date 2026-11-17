@@ -116,6 +116,10 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "answer_generation_round_estimate_seconds": (
             resolved_settings.rag_answer_generation_round_estimate_seconds
         ),
+        # 回答文の生成の段の出力の上限(#5368。上限に届いた生成は失敗になる)。
+        "answer_generation_max_output_tokens": (
+            resolved_settings.rag_answer_generation_max_output_tokens
+        ),
         # 生成に渡す根拠の原文の文字予算(#3776)。
         "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
