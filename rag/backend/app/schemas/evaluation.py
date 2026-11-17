@@ -126,6 +126,8 @@ EvaluationFailureReason = Literal[
     "answer_generation_fallback",
     "case_error",
 ]
+# 回答文を生成できず参考情報へ退避した（#4104）。この問は不合格にし、全体も合格にしない（#5320）。
+ANSWER_GENERATION_FALLBACK: EvaluationFailureReason = "answer_generation_fallback"
 
 # 評価の指標(#591)。閾値で合否を決める 3 つ（検索 2・回答の正確性）。
 EVALUATION_METRICS_VERSION = "four_metrics_v2"
@@ -514,8 +516,9 @@ class EvaluationAnswerJudgement(BaseModel):
 
     詳細は trace_id の回答の記録にも保存する(#680)。`status` は completed / error /
     input_too_large / timeout / unavailable(評価の記録が無いなど)。`passed` はこの問の合否で、
-    正確性だけで決める（網羅は参考。#5262）。`rubric_version` が無い結果は、主張ごとの判定の
-    前の旧方式の結果。
+    正確性で決める（網羅は参考。#5262）。回答文を生成できず参考情報へ退避した問は、正確性に
+    関わらず不合格（#5320。正確性の値は判定のまま）。`rubric_version` が無い結果は、主張ごとの
+    判定の前の旧方式の結果。
     """
 
     status: str

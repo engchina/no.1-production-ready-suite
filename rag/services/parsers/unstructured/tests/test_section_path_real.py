@@ -68,3 +68,19 @@ def test_html_headings_build_hierarchy() -> None:
         "<h2>第2章 合成の構成</h2></body></html>"
     )
     _assert_hierarchy(_elements(source.encode(), "text/html", ".html", "html"))
+
+
+def test_plain_text_titles_without_body_join_the_preceding_section() -> None:
+    """本文の無い見出しが並ぶ一覧は、直前の見出しの本文に入る（#5315）。"""
+    items = ["synthetic_alpha_notes.txt", "synthetic_beta_notes.txt", "Synthetic Gamma Overview"]
+    source = "\n\n".join(
+        ["第1章 合成の概要", PARAGRAPH, "合成の一覧", PARAGRAPH, *items, "合成の次の節", PARAGRAPH]
+    )
+    elements = _elements(source.encode(), "text/plain", ".txt")
+    by_text = {element.text: element for element in elements}
+    for item in items:
+        assert by_text[item].kind == "text"
+        assert by_text[item].section_path == ["合成の一覧"]
+    assert by_text["合成の一覧"].kind == "title"
+    assert by_text["合成の次の節"].section_path == ["合成の次の節"]
+    assert by_text["第1章 合成の概要"].section_path == ["第1章 合成の概要"]

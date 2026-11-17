@@ -2042,7 +2042,14 @@ def synthesize_grounded_answer(
     if generation_failure:
         # 生成の出力が無い。質問に関係する資料の記載だけを示す。
         # 選択の前に止まったときの入力には、根拠が原文を含む先頭の chunk も残っている。同じ原文を重ねて示さない（#5240）。
-        shown = grounded.deadline_document_quotes(question, with_first_chunks(spans))
+        # 抜粋は検索で当たった子（根拠の木の起点）の範囲を中心にする（#5322）。
+        retrieved = {
+            str(child.record.chunk_uid or child.record.id)
+            for parent in context.evidence_tree
+            for child in parent.children
+            if child.role == "retrieved_anchor"
+        }
+        shown = grounded.deadline_document_quotes(question, with_first_chunks(spans), anchors=retrieved)
         summary = grounded.answer_labels().neutral_summary
         rendered_items = shown
     else:
