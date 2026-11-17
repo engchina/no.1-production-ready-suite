@@ -53,7 +53,8 @@ async def _embedded(client: OracleClient, chunk_set_id: str) -> int:
 
 
 # 別の worker の開始の整理(``ensure_schema``)は整理の要求を消すので、テストの間は待たせる(#5300)。
-@pytest.mark.usefixtures("oracle_schema_locked")
+# ``oracle_db`` は実 Oracle の CI がこのファイルを選ぶ目印でもあるので明示する。
+@pytest.mark.usefixtures("oracle_db", "oracle_schema_locked")
 async def test_embedding_table_keeps_hybrid_payload_and_maintenance_requests_in_sync() -> None:
     client = OracleClient()
     detail = await client.create_document(
