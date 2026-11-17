@@ -19,13 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.schemas.search import RetrievedChunk
 
 SUPPORT_GUIDE_SCHEMA_VERSION: Literal[2] = 2
-# 使ってよい道具（handoff §10。手順の allowed_tools はこの中から選ぶ）。
-SUPPORT_GUIDE_TOOLS: tuple[str, ...] = (
-    "rag_search",
-    "rag_read_source",
-    "rag_retrieve_evidence",
-    "nl2sql_query",
-)
 # 1 つの資料の頁の範囲・1 つの手順の参照の数の上限（#2395）。
 MAX_REFERENCE_PAGE_RANGES = 10
 MAX_STEP_REFERENCES = 10
@@ -286,7 +279,6 @@ class SupportGuideStep(_Strict):
     evidence_requirements: list[str] = Field(
         default_factory=list, max_length=10, description="この手順で示すべき根拠。"
     )
-    allowed_tools: list[str] = Field(default_factory=list, max_length=len(SUPPORT_GUIDE_TOOLS))
     done_when: str = Field(default="", max_length=_TEXT, description="この手順の終わりの条件。")
     references: list[SupportGuideReference] = Field(
         default_factory=list,
@@ -297,9 +289,16 @@ class SupportGuideStep(_Strict):
         ),
     )
 
-    _clean = field_validator(
-        "depends_on", "retrieval_hints", "evidence_requirements", "allowed_tools"
-    )(_clean_list)
+    _clean = field_validator("depends_on", "retrieval_hints", "evidence_requirements")(_clean_list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_removed_fields(cls, data: Any) -> Any:
+        # 消した項目（外部 Agent に許可する道具。#5357）が保存済みの内容・書き出した JSON に
+        # 残っていても読めるように、検証の前に外す。
+        if isinstance(data, dict) and "allowed_tools" in data:
+            return {key: value for key, value in data.items() if key != "allowed_tools"}
+        return data
 
 
 class SupportGuideCompletion(_Strict):

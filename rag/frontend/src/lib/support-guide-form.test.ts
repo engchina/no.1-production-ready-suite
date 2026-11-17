@@ -86,7 +86,6 @@ const content: SupportGuideContent = {
       depends_on: [],
       retrieval_hints: ["本人確認"],
       evidence_requirements: [],
-      allowed_tools: ["rag_search"],
       done_when: "",
       references: [],
     },
@@ -97,7 +96,6 @@ const content: SupportGuideContent = {
       depends_on: ["check"],
       retrieval_hints: [],
       evidence_requirements: ["手順書の節"],
-      allowed_tools: ["rag_read_source", "rag_search"],
       done_when: "新しいパスワードで入れる",
       references: [
         {
@@ -218,15 +216,9 @@ describe("splitLines", () => {
 });
 
 describe("フォームと内容の変換", () => {
-  it("内容 → フォーム → 内容で同じになる（道具は許可の一覧の順にそろえる）", () => {
+  it("内容 → フォーム → 内容で同じになる", () => {
     const roundTrip = guideContentFromForm(guideFormFromContent(content));
-    expect(roundTrip).toEqual({
-      ...content,
-      steps: [
-        content.steps[0],
-        { ...content.steps[1], allowed_tools: ["rag_search", "rag_read_source"] },
-      ],
-    });
+    expect(roundTrip).toEqual(content);
   });
 
   it("選択肢は型が選択のときだけ送り、「分からない」の分岐は値を送らない", () => {

@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE
+from pydantic import ValidationError
 
 from app.api.routes import search as search_route
 from app.api.routes import support_guides as route
@@ -61,7 +62,7 @@ def guide(**overrides: Any) -> dict[str, Any]:
             }
         ],
         "steps": [
-            {"id": "register", "title": "アカウントを登録する", "allowed_tools": ["rag_search"]},
+            {"id": "register", "title": "アカウントを登録する"},
             {"id": "grant", "title": "権限を付与する", "depends_on": ["register"]},
             {"id": "ask", "title": "付与先を確かめる"},
         ],
@@ -98,11 +99,22 @@ def test_valid_guide_has_only_the_uncovered_branch_warning() -> None:
     assert "グループ" in issues[0].message
 
 
+def test_saved_content_with_removed_allowed_tools_still_loads() -> None:
+    # 消した項目（#5357）を持つ保存済みの内容・書き出した JSON も読め、項目は残らない。
+    saved = guide()
+    saved["steps"][0]["allowed_tools"] = ["rag_search", "rag_read_source"]
+    loaded = SupportGuideContent.model_validate(saved)
+    assert loaded == content()
+    assert "allowed_tools" not in loaded.model_dump()["steps"][0]
+    with pytest.raises(ValidationError):
+        SupportGuideContent.model_validate(guide(steps=[{"id": "a", "title": "A", "extra": 1}]))
+
+
 def test_structural_errors_are_reported_with_paths() -> None:
     broken = content(
         goal={"expected_result": "結果"},
         steps=[
-            {"id": "a", "title": "A", "depends_on": ["b", "missing"], "allowed_tools": ["shell"]},
+            {"id": "a", "title": "A", "depends_on": ["b", "missing"]},
             {"id": "b", "title": "B", "depends_on": ["a"]},
             {"id": "c", "title": "C"},
             {"id": "c", "title": "C2"},
@@ -123,7 +135,6 @@ def test_structural_errors_are_reported_with_paths() -> None:
         "goal_unmatchable",
         "duplicate_id",
         "unknown_dependency",
-        "unknown_tool",
         "dependency_cycle",
         "unknown_goto",
         "unknown_value",
@@ -139,8 +150,6 @@ def test_structural_errors_are_reported_with_paths() -> None:
 
 
 def test_content_model_rejects_unsafe_or_inconsistent_values() -> None:
-    from pydantic import ValidationError
-
     with pytest.raises(ValidationError):  # 選択肢が 1 つの enum
         content(conditions=[{"id": "c", "label": "c", "allowed_values": ["a"], "question": "?"}])
     with pytest.raises(ValidationError):  # 確かめる問いの無い ask
@@ -519,7 +528,7 @@ def test_diff_contents_lists_added_removed_and_changed_rows() -> None:
             }
         ],
         steps=[
-            {"id": "register", "title": "アカウントを登録する", "allowed_tools": ["rag_search"]},
+            {"id": "register", "title": "アカウントを登録する"},
             {"id": "grant", "title": "権限を付与する（承認の後）", "depends_on": ["register"]},
             {"id": "notify", "title": "利用者に知らせる"},
         ],

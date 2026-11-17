@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from app.schemas.support_guide import (
     SUPPORT_GUIDE_BOOLEAN_VALUES,
-    SUPPORT_GUIDE_TOOLS,
     SupportGuideChange,
     SupportGuideContent,
     SupportGuideDiffSection,
@@ -116,15 +115,6 @@ def validate_content(content: SupportGuideContent) -> list[SupportGuideIssue]:
                         f"手順「{step.title}」の依存先「{dependency}」がありません。",
                     )
                 )
-        unknown_tools = [tool for tool in step.allowed_tools if tool not in SUPPORT_GUIDE_TOOLS]
-        if unknown_tools:
-            issues.append(
-                _error(
-                    "unknown_tool",
-                    f"steps[{index}].allowed_tools",
-                    f"手順「{step.title}」の道具「{'、'.join(unknown_tools)}」は使えません。",
-                )
-            )
     if cycle := _cycle({key: [d for d in value if d != key] for key, value in graph.items()}):
         issues.append(
             _error("dependency_cycle", "steps", f"手順の依存が循環しています: {' → '.join(cycle)}")

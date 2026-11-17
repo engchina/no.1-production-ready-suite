@@ -4900,11 +4900,6 @@ export type SupportGuideConditionSource = "user" | "document" | "tool";
 export type SupportGuideUnknownHandling = "ask" | "branch" | "handoff";
 export type SupportGuideImpactScope = "individual" | "group" | "all";
 export type SupportGuideBranchOperator = "equals" | "in" | "unknown";
-export type SupportGuideTool =
-  | "rag_search"
-  | "rag_read_source"
-  | "rag_retrieve_evidence"
-  | "nl2sql_query";
 
 export interface SupportGuideCondition {
   id: string;
@@ -4926,7 +4921,6 @@ export interface SupportGuideStep {
   depends_on: string[];
   retrieval_hints: string[];
   evidence_requirements: string[];
-  allowed_tools: string[];
   done_when: string;
   /** この手順が参照する資料と頁（#2395。ガイドの references は全手順の共通）。 */
   references: SupportGuideReference[];
