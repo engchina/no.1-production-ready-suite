@@ -5,8 +5,9 @@
 内容（`SupportGuideContent`）の下書きにし、資料の名前を同じ規則でナレッジベースの文書に解決する。
 ここでは、その下書きを評価のケースの期待に直す（LLM を呼ばない決定的な対応）。
 
-- 手順 → `required_answer_points`: 手順の題名と説明を標準回答に足し、意味上の正確性の判定に使う。
-- 確認事項 → `required_conditions`: 条件の名前。
+- 手順 → `required_answer_points`: 手順の題名と説明。回答の網羅の要点にする（標準回答には
+  足さない。#5262）。
+- 確認事項 → `required_conditions`: 条件の名前。これも網羅の要点にする。
 - 資料と頁 → 解決できた資料は正解の文書（`relevant_document_ids`）にし、頁・章節があれば必要な根拠
   （`required_evidence`）にする。解決できない・複数に当たる資料は下書きの警告にする。
 

@@ -36,7 +36,7 @@ from pr_evaluation_scoring import (
     threshold_failures,
     unique_in_order,
 )
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from rag_engine.evaluation.answer_eval import scored_answer_text
 from rag_engine.retrieval.text_search_tokenizer import surface_tokens
 
@@ -83,7 +83,9 @@ from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,
     EvaluationCategorySummary,
+    EvaluationCoveredPoint,
     EvaluationEvidence,
+    EvaluationJudgedClaim,
     EvaluationJudgeDiagnostics,
     EvaluationMetrics,
     EvaluationRagOverrides,
@@ -605,22 +607,16 @@ class EvaluationRunner:
         judge_model_id: str,
         turn_runs: Sequence[_TurnRun] | None = None,
     ) -> EvaluationAnswerJudgement | None:
-        """標準回答（必須要点・条件を含む）のあるケースを、本文全体で独立評価する。
+        """標準回答のあるケースの回答を、主張ごとの正確性と要点の網羅で評価する（#5262）。
 
-        標準回答の無いケースは判定を呼ばず、回答の正確性は未評価にする。
+        正確性は標準回答だけと比べる。必須の回答要点と確かめる条件は標準回答に結合せず、網羅の要点
+        （``answer_points``）として渡す（無ければ判定が標準回答の文を要点にする）。標準回答の無いケースは
+        判定を呼ばず、正確性・網羅は未評価にする。
 
         ``judge_model_id`` は判定のモデル(#3574)。判定を完了できなかったケースにも残す。
         """
-        standard_answer = "\n".join(
-            filter(
-                None,
-                [
-                    case.standard_answer or "",
-                    *case.required_answer_points,
-                    *case.required_conditions,
-                ],
-            )
-        )
+        standard_answer = (case.standard_answer or "").strip()
+        answer_points = [*case.required_answer_points, *case.required_conditions]
         evaluation_input = response.evaluation_input or {
             "question": case.query,
             "answer_text": response.answer,
@@ -635,7 +631,11 @@ class EvaluationRunner:
         ]
         if not standard_answer:
             return None
-        evaluation_input = {**evaluation_input, "actual_responses": actual_responses}
+        evaluation_input = {
+            **evaluation_input,
+            "actual_responses": actual_responses,
+            "answer_points": answer_points,
+        }
         if self._answer_judge is None:
             return None
         remaining = _remaining_seconds(deadline)
@@ -773,23 +773,43 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
     status = str(evaluation.get("status") or "error")
     message = evaluation.get("message")
     diagnostics = _judge_diagnostics(evaluation)
+    rubric = evaluation.get("rubric_version")
+    rubric_version = rubric if isinstance(rubric, int) and not isinstance(rubric, bool) else None
     if status != "completed":
         return EvaluationAnswerJudgement(
             status=status,
             message=str(message) if message else ANSWER_JUDGE_ERROR_MESSAGE,
             judge_diagnostics=diagnostics,
+            rubric_version=rubric_version,
         )
     passed = evaluation.get("passed")
     return EvaluationAnswerJudgement(
         status="completed",
         passed=passed if isinstance(passed, bool) else None,
         answer_correctness=_optional_float(evaluation.get("answer_correctness")),
+        answer_coverage=_optional_float(evaluation.get("answer_coverage")),
         reason=str(evaluation["correctness_reason"])
         if evaluation.get("correctness_reason")
         else None,
         message=str(message) if message else None,
         judge_diagnostics=diagnostics,
+        rubric_version=rubric_version,
+        claims=_judged_rows(evaluation.get("correctness_claims"), EvaluationJudgedClaim),
+        points=_judged_rows(evaluation.get("coverage_points"), EvaluationCoveredPoint),
     )
+
+
+def _judged_rows[RowT: BaseModel](value: object, model: type[RowT]) -> list[RowT]:
+    """判定の記録の主張・要点の一覧。形の違う行は読み捨てる。"""
+    if not isinstance(value, list):
+        return []
+    rows: list[RowT] = []
+    for item in value:
+        try:
+            rows.append(model.model_validate(item))
+        except ValidationError:
+            continue
+    return rows
 
 
 def evaluation_settings(
@@ -1003,6 +1023,7 @@ def _case_result(
         hit_document_ids=unique_in_order(hits),
         mrr=rank,
         answer_correctness=judgement.answer_correctness if judgement else None,
+        answer_coverage=judgement.answer_coverage if judgement else None,
         observed_outcome=observed.outcome,
         outcome_source=observed.source,
         required_evidence_recall=evidence_recall,

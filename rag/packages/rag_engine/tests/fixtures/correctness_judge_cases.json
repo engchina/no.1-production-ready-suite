@@ -1,0 +1,1398 @@
+[
+  {
+    "id": "a_migration_partial",
+    "question": "システムXを新しい基盤へ移行するときの進め方と注意点を教えてください。",
+    "standard_answer": "システムXの新しい基盤への移行は、旧環境と新環境を並行稼働させる段階移行の方針で進める。旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込む。この移行手順は版5以降の基盤にだけ適用できる。詳しい作業の一覧は別添Bに記載されている。",
+    "answer_points": [
+      "構築方針（段階移行）の説明 — 並行稼働で進める",
+      "文字コードの変換 — 旧版3系からの移行",
+      "適用できる版の条件",
+      "基盤の版"
+    ],
+    "answer_text": "過去の移行の注意点として、旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込む必要があります。\n\nただし、この手順は版5以降の基盤にだけ適用できるため、お使いの基盤の版を確かめてください。\n\n資料から確認できなかった事項\n- 詳しい作業の一覧は別添Bに記載とされていますが、別添Bは資料に含まれていません。",
+    "judge_inputs": {
+      "question": "システムXを新しい基盤へ移行するときの進め方と注意点を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "システムXの新しい基盤への移行は、旧環境と新環境を並行稼働させる段階移行の方針で進める。"
+        },
+        {
+          "id": "S2",
+          "text": "旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込む。"
+        },
+        {
+          "id": "S3",
+          "text": "この移行手順は版5以降の基盤にだけ適用できる。"
+        },
+        {
+          "id": "S4",
+          "text": "詳しい作業の一覧は別添Bに記載されている。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "構築方針（段階移行）の説明 — 並行稼働で進める"
+        },
+        {
+          "id": "P2",
+          "text": "文字コードの変換 — 旧版3系からの移行"
+        },
+        {
+          "id": "P3",
+          "text": "適用できる版の条件"
+        },
+        {
+          "id": "P4",
+          "text": "基盤の版"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "システムXを新しい基盤へ移行するときの進め方と注意点を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "過去の移行の注意点として、旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込む必要があります。"
+            },
+            {
+              "id": "A2",
+              "text": "ただし、この手順は版5以降の基盤にだけ適用できるため、お使いの基盤の版を確かめてください。"
+            },
+            {
+              "id": "A3",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A4",
+              "text": "- 詳しい作業の一覧は別添Bに記載とされていますが、別添Bは資料に含まれていません。"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S3"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A4"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S4"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A4"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": true
+        },
+        {
+          "point_id": "P3",
+          "covered": true
+        },
+        {
+          "point_id": "P4",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 0.75,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "c_two_errors_sections",
+    "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+    "standard_answer": "エラーE1は接続先の証明書の期限切れが原因。ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。\nエラーE2はキューの上限の超過が原因。設定画面でキューの上限を引き上げ、処理を再実行する。",
+    "answer_points": [
+      "ログの詳細レベルの変更 — 接続の記録を確かめる",
+      "証明書の更新",
+      "キューの上限の引き上げ — 処理の再実行",
+      "エラーの番号",
+      "接続先のホスト",
+      "発生した時刻"
+    ],
+    "answer_text": "資料により確認できた事項\n- E1は接続先の証明書の期限切れで起こります。\n根拠：運用手引きC p.30\n\n確認手順（ログの設定画面）\n1. ログの設定画面で詳細レベルをDEBUGにします。\n2. 接続の記録を開き、証明書の期限の警告を確かめます。\n根拠：運用手引きC p.31\n\n資料から確認できなかった事項\n- E2の原因と調べ方は、検索された資料からは確認できませんでした。E2について必要な情報は提供できません。\n\n回答に未反映の関連章節\n- 運用手引きC 第7章 キューの管理",
+    "judge_inputs": {
+      "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "エラーE1は接続先の証明書の期限切れが原因。"
+        },
+        {
+          "id": "S2",
+          "text": "ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。"
+        },
+        {
+          "id": "S3",
+          "text": "エラーE2はキューの上限の超過が原因。"
+        },
+        {
+          "id": "S4",
+          "text": "設定画面でキューの上限を引き上げ、処理を再実行する。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "ログの詳細レベルの変更 — 接続の記録を確かめる"
+        },
+        {
+          "id": "P2",
+          "text": "証明書の更新"
+        },
+        {
+          "id": "P3",
+          "text": "キューの上限の引き上げ — 処理の再実行"
+        },
+        {
+          "id": "P4",
+          "text": "エラーの番号"
+        },
+        {
+          "id": "P5",
+          "text": "接続先のホスト"
+        },
+        {
+          "id": "P6",
+          "text": "発生した時刻"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料により確認できた事項"
+            },
+            {
+              "id": "A2",
+              "text": "- E1は接続先の証明書の期限切れで起こります。"
+            },
+            {
+              "id": "A3",
+              "text": "確認手順（ログの設定画面）"
+            },
+            {
+              "id": "A4",
+              "text": "1. ログの設定画面で詳細レベルをDEBUGにします。"
+            },
+            {
+              "id": "A5",
+              "text": "2. 接続の記録を開き、証明書の期限の警告を確かめます。"
+            },
+            {
+              "id": "A6",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A7",
+              "text": "- E2の原因と調べ方は、検索された資料からは確認できませんでした。"
+            },
+            {
+              "id": "A8",
+              "text": "E2について必要な情報は提供できません。"
+            },
+            {
+              "id": "A9",
+              "text": "回答に未反映の関連章節"
+            },
+            {
+              "id": "A10",
+              "text": "- 運用手引きC 第7章 キューの管理"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A4"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A5"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A7",
+            "A8"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        },
+        {
+          "point_id": "P3",
+          "covered": false
+        },
+        {
+          "point_id": "P4",
+          "covered": true
+        },
+        {
+          "point_id": "P5",
+          "covered": false
+        },
+        {
+          "point_id": "P6",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 0.3333333333333333,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "c_cannot_propose_sections",
+    "question": "機器Yの診断ログを取得するにはどうすればよいですか。保存期間も知りたいです。",
+    "standard_answer": "機器Yの診断ログは、管理画面の診断メニューで収集を実行して取得する。ログの保存期間は7日。",
+    "answer_points": [
+      "診断メニュー",
+      "収集の実行",
+      "保存期間",
+      "機器の種類"
+    ],
+    "answer_text": "資料により確認できた事項\n- 機器Yの診断ログの保存期間は7日です。\n根拠：機器Yの説明書 p.40\n\n診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。\n\n参考情報\n以下は資料の原文です。本質問の条件への該当は確認できていません。\n- 「ログの表示画面では、表示する期間と種類を選んで［表示］を押す。」\n根拠：機器Yの説明書 p.41\n\n資料から確認できなかった事項\n- 診断ログを取得する画面と操作",
+    "judge_inputs": {
+      "question": "機器Yの診断ログを取得するにはどうすればよいですか。保存期間も知りたいです。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "機器Yの診断ログは、管理画面の診断メニューで収集を実行して取得する。"
+        },
+        {
+          "id": "S2",
+          "text": "ログの保存期間は7日。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "診断メニュー"
+        },
+        {
+          "id": "P2",
+          "text": "収集の実行"
+        },
+        {
+          "id": "P3",
+          "text": "保存期間"
+        },
+        {
+          "id": "P4",
+          "text": "機器の種類"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "機器Yの診断ログを取得するにはどうすればよいですか。保存期間も知りたいです。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料により確認できた事項"
+            },
+            {
+              "id": "A2",
+              "text": "- 機器Yの診断ログの保存期間は7日です。"
+            },
+            {
+              "id": "A3",
+              "text": "診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。"
+            },
+            {
+              "id": "A4",
+              "text": "参考情報"
+            },
+            {
+              "id": "A5",
+              "text": "以下は資料の原文です。"
+            },
+            {
+              "id": "A6",
+              "text": "本質問の条件への該当は確認できていません。"
+            },
+            {
+              "id": "A7",
+              "text": "- 「ログの表示画面では、表示する期間と種類を選んで［表示］を押す。」"
+            },
+            {
+              "id": "A8",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A9",
+              "text": "- 診断ログを取得する画面と操作"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A3"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A6"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A9"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        },
+        {
+          "point_id": "P3",
+          "covered": true
+        },
+        {
+          "point_id": "P4",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 0.25,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "h_inline_negation",
+    "question": "機器Yの診断ログを取得するにはどうすればよいですか。保存期間も知りたいです。",
+    "standard_answer": "機器Yの診断ログは、管理画面の診断メニューで収集を実行して取得する。ログの保存期間は7日。",
+    "answer_points": [
+      "診断メニュー",
+      "収集の実行",
+      "保存期間",
+      "機器の種類"
+    ],
+    "answer_text": "資料により確認できた事項\n- 機器Yの診断ログの保存期間は7日です。\n根拠：機器Yの説明書 p.40\n\n診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。\n\n参考情報\n以下は資料の原文です。本質問の条件への該当は確認できていません。\n- 「ログの表示画面では、表示する期間と種類を選んで［表示］を押す。」\n根拠：機器Yの説明書 p.41",
+    "judge_inputs": {
+      "question": "機器Yの診断ログを取得するにはどうすればよいですか。保存期間も知りたいです。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "機器Yの診断ログは、管理画面の診断メニューで収集を実行して取得する。"
+        },
+        {
+          "id": "S2",
+          "text": "ログの保存期間は7日。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "診断メニュー"
+        },
+        {
+          "id": "P2",
+          "text": "収集の実行"
+        },
+        {
+          "id": "P3",
+          "text": "保存期間"
+        },
+        {
+          "id": "P4",
+          "text": "機器の種類"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "機器Yの診断ログを取得するにはどうすればよいですか。保存期間も知りたいです。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料により確認できた事項"
+            },
+            {
+              "id": "A2",
+              "text": "- 機器Yの診断ログの保存期間は7日です。"
+            },
+            {
+              "id": "A3",
+              "text": "診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。"
+            },
+            {
+              "id": "A4",
+              "text": "参考情報"
+            },
+            {
+              "id": "A5",
+              "text": "以下は資料の原文です。"
+            },
+            {
+              "id": "A6",
+              "text": "本質問の条件への該当は確認できていません。"
+            },
+            {
+              "id": "A7",
+              "text": "- 「ログの表示画面では、表示する期間と種類を選んで［表示］を押す。」"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A3"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A6"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        },
+        {
+          "point_id": "P3",
+          "covered": true
+        },
+        {
+          "point_id": "P4",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 0.5,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "b_gap_expected",
+    "question": "機器Yの保守の料金はいくらですか。",
+    "standard_answer": "資料には保守の料金の記載がないため、金額は答えられない。担当窓口への確認を案内する。",
+    "answer_points": [
+      "担当窓口への確認の案内"
+    ],
+    "answer_text": "資料では保守の料金を確認できませんでした。金額は担当窓口に確認してください。\n\n資料から確認できなかった事項\n- 保守の料金",
+    "judge_inputs": {
+      "question": "機器Yの保守の料金はいくらですか。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "資料には保守の料金の記載がないため、金額は答えられない。"
+        },
+        {
+          "id": "S2",
+          "text": "担当窓口への確認を案内する。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "担当窓口への確認の案内"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "機器Yの保守の料金はいくらですか。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料では保守の料金を確認できませんでした。"
+            },
+            {
+              "id": "A2",
+              "text": "金額は担当窓口に確認してください。"
+            },
+            {
+              "id": "A3",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A4",
+              "text": "- 保守の料金"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1",
+            "A4"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S2"
+          ]
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 1.0,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "e_gap_expected_gaps_only",
+    "question": "機器Yの保守の料金はいくらですか。",
+    "standard_answer": "資料には保守の料金の記載がないため、金額は答えられない。",
+    "answer_points": [],
+    "answer_text": "資料から確認できなかった事項\n\n- 機器Yの保守の料金",
+    "judge_inputs": {
+      "question": "機器Yの保守の料金はいくらですか。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "資料には保守の料金の記載がないため、金額は答えられない。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "資料には保守の料金の記載がないため、金額は答えられない。"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "機器Yの保守の料金はいくらですか。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A2",
+              "text": "- 機器Yの保守の料金"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1",
+            "A2"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 1.0,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "h_refusal_summary",
+    "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+    "standard_answer": "エラーE1は接続先の証明書の期限切れが原因。ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。\nエラーE2はキューの上限の超過が原因。設定画面でキューの上限を引き上げ、処理を再実行する。",
+    "answer_points": [
+      "ログの詳細レベルの変更 — 接続の記録を確かめる",
+      "証明書の更新",
+      "キューの上限の引き上げ — 処理の再実行",
+      "エラーの番号",
+      "接続先のホスト"
+    ],
+    "answer_text": "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。\n\n資料から確認できなかった事項\n- E1の原因と調べ方\n- E2の原因と調べ方",
+    "judge_inputs": {
+      "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "エラーE1は接続先の証明書の期限切れが原因。"
+        },
+        {
+          "id": "S2",
+          "text": "ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。"
+        },
+        {
+          "id": "S3",
+          "text": "エラーE2はキューの上限の超過が原因。"
+        },
+        {
+          "id": "S4",
+          "text": "設定画面でキューの上限を引き上げ、処理を再実行する。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "ログの詳細レベルの変更 — 接続の記録を確かめる"
+        },
+        {
+          "id": "P2",
+          "text": "証明書の更新"
+        },
+        {
+          "id": "P3",
+          "text": "キューの上限の引き上げ — 処理の再実行"
+        },
+        {
+          "id": "P4",
+          "text": "エラーの番号"
+        },
+        {
+          "id": "P5",
+          "text": "接続先のホスト"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。"
+            },
+            {
+              "id": "A2",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A3",
+              "text": "- E1の原因と調べ方"
+            },
+            {
+              "id": "A4",
+              "text": "- E2の原因と調べ方"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A3"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A4"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        },
+        {
+          "point_id": "P3",
+          "covered": false
+        },
+        {
+          "point_id": "P4",
+          "covered": true
+        },
+        {
+          "point_id": "P5",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 0.2,
+    "recorded_reason": "標準回答と合う主張がありません（質問に答えていません）。"
+  },
+  {
+    "id": "b_refusal_answerable",
+    "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+    "standard_answer": "エラーE1は接続先の証明書の期限切れが原因。ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。\nエラーE2はキューの上限の超過が原因。設定画面でキューの上限を引き上げ、処理を再実行する。",
+    "answer_points": [
+      "ログの詳細レベルの変更 — 接続の記録を確かめる",
+      "証明書の更新",
+      "キューの上限の引き上げ — 処理の再実行",
+      "エラーの番号",
+      "接続先のホスト"
+    ],
+    "answer_text": "資料からは、E1とE2の原因と調べ方を確認できませんでした。\n\n資料から確認できなかった事項\n- E1の原因\n- E2の原因",
+    "judge_inputs": {
+      "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "エラーE1は接続先の証明書の期限切れが原因。"
+        },
+        {
+          "id": "S2",
+          "text": "ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。"
+        },
+        {
+          "id": "S3",
+          "text": "エラーE2はキューの上限の超過が原因。"
+        },
+        {
+          "id": "S4",
+          "text": "設定画面でキューの上限を引き上げ、処理を再実行する。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "ログの詳細レベルの変更 — 接続の記録を確かめる"
+        },
+        {
+          "id": "P2",
+          "text": "証明書の更新"
+        },
+        {
+          "id": "P3",
+          "text": "キューの上限の引き上げ — 処理の再実行"
+        },
+        {
+          "id": "P4",
+          "text": "エラーの番号"
+        },
+        {
+          "id": "P5",
+          "text": "接続先のホスト"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料からは、E1とE2の原因と調べ方を確認できませんでした。"
+            },
+            {
+              "id": "A2",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A3",
+              "text": "- E1の原因"
+            },
+            {
+              "id": "A4",
+              "text": "- E2の原因"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        },
+        {
+          "point_id": "P3",
+          "covered": false
+        },
+        {
+          "point_id": "P4",
+          "covered": true
+        },
+        {
+          "point_id": "P5",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 0.2,
+    "recorded_reason": "標準回答と合う主張がありません（質問に答えていません）。"
+  },
+  {
+    "id": "h_contra_with_gaps",
+    "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+    "standard_answer": "エラーE1は接続先の証明書の期限切れが原因。ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。\nエラーE2はキューの上限の超過が原因。設定画面でキューの上限を引き上げ、処理を再実行する。",
+    "answer_points": [
+      "ログの詳細レベルの変更 — 接続の記録を確かめる",
+      "証明書の更新",
+      "キューの上限の引き上げ — 処理の再実行",
+      "エラーの番号",
+      "接続先のホスト"
+    ],
+    "answer_text": "資料により確認できた事項\n- E1はディスクの容量不足で起こります。不要なファイルを消してください。\n根拠：運用手引きC p.30\n\n資料から確認できなかった事項\n- E2の原因と調べ方",
+    "judge_inputs": {
+      "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "エラーE1は接続先の証明書の期限切れが原因。"
+        },
+        {
+          "id": "S2",
+          "text": "ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。"
+        },
+        {
+          "id": "S3",
+          "text": "エラーE2はキューの上限の超過が原因。"
+        },
+        {
+          "id": "S4",
+          "text": "設定画面でキューの上限を引き上げ、処理を再実行する。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "ログの詳細レベルの変更 — 接続の記録を確かめる"
+        },
+        {
+          "id": "P2",
+          "text": "証明書の更新"
+        },
+        {
+          "id": "P3",
+          "text": "キューの上限の引き上げ — 処理の再実行"
+        },
+        {
+          "id": "P4",
+          "text": "エラーの番号"
+        },
+        {
+          "id": "P5",
+          "text": "接続先のホスト"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "エラーE1とエラーE2が出ました。原因と調べ方を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料により確認できた事項"
+            },
+            {
+              "id": "A2",
+              "text": "- E1はディスクの容量不足で起こります。"
+            },
+            {
+              "id": "A3",
+              "text": "不要なファイルを消してください。"
+            },
+            {
+              "id": "A4",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A5",
+              "text": "- E2の原因と調べ方"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "contradicted",
+          "standard_ids": [
+            "S1"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A3"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A4",
+            "A5"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        },
+        {
+          "point_id": "P3",
+          "covered": false
+        },
+        {
+          "point_id": "P4",
+          "covered": true
+        },
+        {
+          "point_id": "P5",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 0.2,
+    "recorded_reason": "回答の「- E1はディスクの容量不足で起こります。」と標準回答の「エラーE1は接続先の証明書の期限切れが原因。」が食い違う。"
+  },
+  {
+    "id": "b_partial_with_contradiction",
+    "question": "システムXを新しい基盤へ移行するときの進め方と注意点を教えてください。",
+    "standard_answer": "システムXの新しい基盤への移行は、旧環境と新環境を並行稼働させる段階移行の方針で進める。旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込む。この移行手順は版5以降の基盤にだけ適用できる。詳しい作業の一覧は別添Bに記載されている。",
+    "answer_points": [
+      "構築方針（段階移行）の説明 — 並行稼働で進める",
+      "文字コードの変換 — 旧版3系からの移行",
+      "適用できる版の条件",
+      "基盤の版"
+    ],
+    "answer_text": "旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込みます。\n\nこの手順は版4以前の基盤にだけ適用できます。\n\n資料から確認できなかった事項\n- 詳しい作業の一覧",
+    "judge_inputs": {
+      "question": "システムXを新しい基盤へ移行するときの進め方と注意点を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "システムXの新しい基盤への移行は、旧環境と新環境を並行稼働させる段階移行の方針で進める。"
+        },
+        {
+          "id": "S2",
+          "text": "旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込む。"
+        },
+        {
+          "id": "S3",
+          "text": "この移行手順は版5以降の基盤にだけ適用できる。"
+        },
+        {
+          "id": "S4",
+          "text": "詳しい作業の一覧は別添Bに記載されている。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "構築方針（段階移行）の説明 — 並行稼働で進める"
+        },
+        {
+          "id": "P2",
+          "text": "文字コードの変換 — 旧版3系からの移行"
+        },
+        {
+          "id": "P3",
+          "text": "適用できる版の条件"
+        },
+        {
+          "id": "P4",
+          "text": "基盤の版"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "システムXを新しい基盤へ移行するときの進め方と注意点を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "旧版3系から移す場合は、設定ファイルの文字コードを変換してから取り込みます。"
+            },
+            {
+              "id": "A2",
+              "text": "この手順は版4以前の基盤にだけ適用できます。"
+            },
+            {
+              "id": "A3",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A4",
+              "text": "- 詳しい作業の一覧"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "contradicted",
+          "standard_ids": [
+            "S3"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A3",
+            "A4"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": true
+        },
+        {
+          "point_id": "P3",
+          "covered": true
+        },
+        {
+          "point_id": "P4",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 0.75,
+    "recorded_reason": "回答の「この手順は版4以前の基盤にだけ適用できます。」と標準回答の「この移行手順は版5以降の基盤にだけ適用できる。」が食い違う。"
+  },
+  {
+    "id": "a_direction_consistent",
+    "question": "機器群Zへ設定の変更を適用するとき、どう進めればよいですか。",
+    "standard_answer": "基本の方針は、まず影響範囲を確認し、そのうえで一部の機器から段階的に適用すること。具体的な手順は環境に応じて決める。",
+    "answer_points": [
+      "影響範囲の確認",
+      "段階的な適用"
+    ],
+    "answer_text": "まず変更の対象になる機器と、変更で止まるサービスを洗い出して影響範囲を確認します。次に検証用の1台に適用して動作を確かめ、問題が無ければ残りの機器へ数台ずつ広げます。",
+    "judge_inputs": {
+      "question": "機器群Zへ設定の変更を適用するとき、どう進めればよいですか。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "基本の方針は、まず影響範囲を確認し、そのうえで一部の機器から段階的に適用すること。"
+        },
+        {
+          "id": "S2",
+          "text": "具体的な手順は環境に応じて決める。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "影響範囲の確認"
+        },
+        {
+          "id": "P2",
+          "text": "段階的な適用"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "機器群Zへ設定の変更を適用するとき、どう進めればよいですか。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "まず変更の対象になる機器と、変更で止まるサービスを洗い出して影響範囲を確認します。"
+            },
+            {
+              "id": "A2",
+              "text": "次に検証用の1台に適用して動作を確かめ、問題が無ければ残りの機器へ数台ずつ広げます。"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        },
+        {
+          "point_id": "P2",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 1.0,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "h_direction_contra_gap",
+    "question": "機器群Zへ設定の変更を適用するとき、どう進めればよいですか。",
+    "standard_answer": "基本の方針は、まず影響範囲を確認し、そのうえで一部の機器から段階的に適用すること。具体的な手順は環境に応じて決める。",
+    "answer_points": [
+      "影響範囲の確認",
+      "段階的な適用"
+    ],
+    "answer_text": "資料により確認できた事項\n- 停止時間を短くするため、すべての機器へ一度に適用します。\n根拠：変更管理の手引き p.9\n\n資料から確認できなかった事項\n- 影響範囲を確認する方法",
+    "judge_inputs": {
+      "question": "機器群Zへ設定の変更を適用するとき、どう進めればよいですか。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "基本の方針は、まず影響範囲を確認し、そのうえで一部の機器から段階的に適用すること。"
+        },
+        {
+          "id": "S2",
+          "text": "具体的な手順は環境に応じて決める。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "影響範囲の確認"
+        },
+        {
+          "id": "P2",
+          "text": "段階的な適用"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "機器群Zへ設定の変更を適用するとき、どう進めればよいですか。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料により確認できた事項"
+            },
+            {
+              "id": "A2",
+              "text": "- 停止時間を短くするため、すべての機器へ一度に適用します。"
+            },
+            {
+              "id": "A3",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A4",
+              "text": "- 影響範囲を確認する方法"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "contradicted",
+          "standard_ids": [
+            "S1"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A4"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 0.0,
+    "recorded_reason": "回答の「- 停止時間を短くするため、すべての機器へ一度に適用します。」と標準回答の「基本の方針は、まず影響範囲を確認し、そのうえで一部の機器から段階的に適用すること。」が食い違う。"
+  }
+]

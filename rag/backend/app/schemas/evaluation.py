@@ -141,7 +141,9 @@ EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
 )
 # 合否と閾値には使わない参考の指標（#4341）。
 # 順位の指標は引用の文書列で、語の重なりは標準回答との比較で計算する（#4714）。
+# 回答の網羅（answer_coverage）は覆った要点の割合で、平均だけを出す（#5262）。
 EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = (
+    "answer_coverage",
     "precision_at_10",
     "ndcg_at_3",
     "ndcg_at_10",
@@ -492,17 +494,40 @@ class EvaluationJudgeDiagnostics(BaseModel):
     judge_calls: int = Field(default=0, ge=0)
 
 
-class EvaluationAnswerJudgement(BaseModel):
-    """標準回答による評価(正確性の判定と、評価の基準の閾値による合否)の要約。
+class EvaluationJudgedClaim(BaseModel):
+    """回答の主張 1 つの判定の印（#5262）。原文はコードが段落・文の番号から切り出したもの。"""
 
-    詳細(指標の値・判定の理由)は trace_id の回答の記録に保存する(#680)。`status` は
-    completed / error / input_too_large / timeout / unavailable(評価の記録が無いなど)。
+    verdict: Literal["supported", "contradicted", "not_in_standard"]
+    answer: str
+    standard: str = ""
+
+
+class EvaluationCoveredPoint(BaseModel):
+    """網羅の要点 1 つと、回答が覆ったか（#5262）。"""
+
+    point: str
+    covered: bool
+
+
+class EvaluationAnswerJudgement(BaseModel):
+    """標準回答による評価(正確性・網羅の判定と、評価の基準の閾値による合否)の要約。
+
+    詳細は trace_id の回答の記録にも保存する(#680)。`status` は completed / error /
+    input_too_large / timeout / unavailable(評価の記録が無いなど)。`passed` はこの問の合否で、
+    正確性だけで決める（網羅は参考。#5262）。`rubric_version` が無い結果は、主張ごとの判定の
+    前の旧方式の結果。
     """
 
     status: str
     passed: bool | None = None
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
+    # 網羅すべき要点のうち回答が覆った割合（参考。合否と閾値に使わない。#5262）。
+    answer_coverage: float | None = Field(default=None, ge=0, le=1)
+    # 判定の理由。主張ごとの判定では、矛盾した主張の一覧（コードが印から作る）。
     reason: str | None = None
+    rubric_version: int | None = None
+    claims: list[EvaluationJudgedClaim] = Field(default_factory=list)
+    points: list[EvaluationCoveredPoint] = Field(default_factory=list)
     message: str | None = None
     # 判定の診断（呼び出しの数・出力の誤りで再試行した回数）。
     # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。
@@ -537,6 +562,7 @@ class EvaluationCaseResult(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
+    answer_coverage: float | None = None
     precision_at_10: float | None = None
     ndcg_at_3: float | None = None
     ndcg_at_10: float | None = None
@@ -622,6 +648,7 @@ class EvaluationMetrics(BaseModel):
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
+    answer_coverage: float | None = None
     precision_at_10: float | None = None
     ndcg_at_3: float | None = None
     ndcg_at_10: float | None = None
