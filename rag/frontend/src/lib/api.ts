@@ -2760,6 +2760,12 @@ export interface AnsweringSettingsData {
   entity_expansion_max_chunks: number;
   /** 文書全体への参照の参照先を、目次からモデルが選んだ章節で読む（#5263。既定 false）。 */
   reference_outline_selection_enabled: boolean;
+  /** 検索の上位の文書の目次からモデルが選んだ章節を、Rerank の枠の外で根拠に加える（#5324。既定 false）。 */
+  outline_selection_enabled: boolean;
+  /** 目次を渡す検索の上位の文書の数・目次の字数・読む章節の字数の上限（#5324）。 */
+  outline_selection_max_documents: number;
+  outline_selection_catalog_max_chars: number;
+  outline_selection_read_max_chars: number;
   section_expansion_enabled: boolean;
   section_expansion_max_levels: number;
   section_expansion_input_token_percent: number;

@@ -167,6 +167,12 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "retrieval",
         (("system", "app.rag.reference_sections:REFERENCE_SECTION_PROMPT"),),
     ),
+    # 検索の上位の文書の目次から、質問に要る章節を選ぶ(#5324。全体設定で有効にしたとき)。
+    PromptStage(
+        "outline_sections",
+        "retrieval",
+        (("system", "app.rag.reference_sections:OUTLINE_SECTION_PROMPT"),),
+    ),
     PromptStage(
         "generation",
         "generation",

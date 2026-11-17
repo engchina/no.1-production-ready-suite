@@ -3643,6 +3643,9 @@ export const ja = {
   "search.answerDetails.degraded.step.reference_outline": "参照先の文書の目次の読み込み",
   "search.answerDetails.degraded.step.reference_section_select": "参照先の目次から読む章節の選択",
   "search.answerDetails.degraded.step.reference_section_read": "参照先の選んだ章節の読み込み",
+  "search.answerDetails.degraded.step.outline_load": "検索の上位の文書の目次の読み込み",
+  "search.answerDetails.degraded.step.outline_section_select": "検索の上位の文書の目次から読む章節の選択",
+  "search.answerDetails.degraded.step.outline_section_read": "目次から選んだ章節の読み込み",
   "search.answerDetails.degraded.step.reference_prefetch": "参照先の文書の先読み",
   "search.answerDetails.degraded.step.reference_rerank": "参照先の文書の中の並べ替え",
   "search.answerDetails.degraded.step.section_outline": "章節の目次の読み込み",
@@ -3810,6 +3813,9 @@ export const ja = {
   "settings.answerPrompts.stage.reference_sections": "参照先の文書の目次から読む章節を選ぶ",
   "settings.answerPrompts.stage.reference_sections.condition":
     "検索の根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき（参照先が複数でも 1 回）。目次が無い文書や章節を選べなかったときは文書の全体を読みます",
+  "settings.answerPrompts.stage.outline_sections": "検索の上位の文書の目次から読む章節を選ぶ",
+  "settings.answerPrompts.stage.outline_sections.condition":
+    "検索方法の「検索の上位の文書の目次から章節を選ぶ」を有効にしたとき、回答で 1 回。章節の木を持つ文書が無いときや、回答の期限の残りが足りないときは使いません",
   "settings.answerPrompts.stage.small_talk": "挨拶・雑談への応答",
   "settings.answerPrompts.stage.small_talk.condition": "会話を踏まえた質問の書き換えが、発話を挨拶・雑談と分けたとき（検索しない）",
   "settings.answerPrompts.stage.generation": "回答の生成",
@@ -3877,6 +3883,13 @@ export const ja = {
   "settings.answering.referenceOutlineSelection": "参照先の文書の目次から章節をモデルが選ぶ",
   "settings.answering.referenceOutlineSelectionHint":
     "根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき、参照先の文書の目次を回答のモデルに渡して質問に要る章節を選ばせ、その章節を読みます（参照先が複数でも AI の呼び出しは 1 回増えます）。目次が無い文書や章節を選べなかったときは、参照先の文書の全体を読みます。オフのときは参照先の文書の中を質問で検索した上位を読みます。番号を示す参照（第 3 章・別紙 1 など）はどちらでも番号で読みます。全体の検索に適用します。",
+  "settings.answering.outlineSelection": "検索の上位の文書の目次から章節をモデルが選ぶ",
+  "settings.answering.outlineSelectionHint":
+    "回答の検索で上位に当たった文書のうち章節の構成を持つ文書の目次を回答のモデルに渡し、質問に要る章節を選ばせて、その章節を回答の根拠に加えます（AI の呼び出しは回答ごとに 1 回増えます）。検索の語では関連が低く見える章節も根拠に入ります。加えた根拠は Rerank にかけず、起点数や根拠の件数には数えません。根拠が入力の予算を超えるときは分けて読みます。回答の上限時間の残りが足りないときは選ばずに回答します。全体の検索に適用します。",
+  "settings.answering.outline_selection_max_documents": "目次を渡す文書の数",
+  "settings.answering.outline_selection_catalog_max_chars": "目次の字数の上限",
+  "settings.answering.outline_selection_read_max_chars": "読む章節の字数の上限",
+  "settings.answering.charsOption": "{chars} 字",
   "settings.answering.answerTimeout": "回答の上限時間",
   "settings.answering.answerTimeoutHint":
     "質問から回答を確定するまでの上限です（既定 600 秒）。超えると、時間切れの工程を示して止めます。最小の 150 秒は生成の 1 回の見積もりと確定の分（既定 150 秒）と同じなので、章節の拡張・参照先の読み足し・根拠の分割読取をせず、入る根拠だけで 1 回生成します。",

@@ -53,6 +53,7 @@ from rag_engine.retrieval.search_stages import (
     ENTITY_EXPANSION_STAGE,
     GRAPH_EXPANSION_STAGE,
     IMAGE_EVIDENCE_STAGE,
+    OUTLINE_SELECTION_STAGE,
     REFERENCE_EXPANSION_STAGE,
 )
 from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, PARENT_NON_SOURCE_RANGES_KEY
@@ -136,6 +137,7 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
+from app.rag.reference_sections import OUTLINE_SELECTION_KEY
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
@@ -322,6 +324,10 @@ class _SearchState:
     reference_reads: dict[tuple[str, ...], Any] = field(default_factory=dict)
     reference_full_read_ids: set[str] = field(default_factory=set)
     reference_section_selections: list[dict[str, object]] = field(default_factory=list)
+    # 検索の上位の文書の目次から章節を選んだ記録(#5324。1 回の回答で 1 回だけ選ぶ。None は
+    # 未実行)と、読んで足した chunk(以後の検索は同じ chunk を返す)。
+    outline_selection: dict[str, object] | None = None
+    outline_selection_ids: list[str] = field(default_factory=list)
     # 参照の起点として調べた chunk、独立に読んだ参照先の数(1 回の回答の累計)と、検索の段の参照の
     # 展開の質問(検索文と embedding)。章節の拡張・親の読取で文脈に入った chunk を起点にするとき、
     # 調べ直さず、上限は検索の段と合わせて数え、文書全体への参照を同じ質問で読む(#5315)。
@@ -848,6 +854,10 @@ class AnswerEngine:
                 # 検索ごとの、参照を持つ候補の統合の順位と辿った結果・辿らなかった理由(#1549)。
                 "searches": list(state.reference_sources),
             }
+        if state.outline_selection is not None:
+            # 検索の上位の文書の目次から章節を選んだ記録(#5324。対象の文書・選んだ章節・読んだ字数・
+            # 飛ばした理由)。
+            outcome.diagnostics["outline_selection"] = state.outline_selection
         if state.derived_hits:
             # 当たった派生の chunk と、根拠に置き換えた原文(#2641)。原文が無いものは根拠に
             # 渡していない。
@@ -1469,6 +1479,44 @@ class AnswerEngine:
         anchors = [state.chunks.get(chunk.chunk_id, chunk) for chunk in anchors]
         referenced = [chunk for chunks in references.values() for chunk in chunks]
         promoted = {chunk.chunk_id for chunk in referenced}
+        # 検索の上位の文書の目次から回答のモデルが選んだ章節の chunk(#5324。既定は無効)。参照先と
+        # 同じく rerank の候補に入れず、最後の根拠の並びへ合わせる(context の枠に数えない)。
+        # 無効なら段も出さない。
+        outline_chunks: list[RetrievedChunk] = []
+        if expand_references and self._settings.rag_outline_selection_enabled:
+            with _search_stage(OUTLINE_SELECTION_STAGE) as observation:
+                reused = state.outline_selection is not None
+                if observation is not None:
+                    observation.request(
+                        lambda: {
+                            "質問": request.query,
+                            "範囲": _expansion_scope(request.filters),
+                            "起点候補": _trace_chunks(anchors),
+                            "対象の文書の数の上限": (
+                                self._settings.rag_outline_selection_max_documents
+                            ),
+                            "目次の字数の上限": (
+                                self._settings.rag_outline_selection_catalog_max_chars
+                            ),
+                            "読む章節の字数の上限": (
+                                self._settings.rag_outline_selection_read_max_chars
+                            ),
+                            "同じ回答の選択の再利用": reused,
+                        }
+                    )
+                with db_call_label("outline"):
+                    outline_chunks = await self._outline_selection(request, state, anchors)
+                if observation is not None:
+                    observation.response(
+                        lambda: {
+                            "返した候補": _trace_chunks(outline_chunks),
+                            "返した固有 Chunk 数": len({item.chunk_id for item in outline_chunks}),
+                            "今回の判断": state.outline_selection,
+                            "回答内の縮退記録（累計）": state.degraded_steps(),
+                            "最終採用": _EXPANSION_ADOPTION_NOTE,
+                        }
+                    )
+        outline_ids = {chunk.chunk_id for chunk in outline_chunks}
         # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
         entity_chunks: list[RetrievedChunk] = []
         with _search_stage(ENTITY_EXPANSION_STAGE) as observation:
@@ -1535,6 +1583,7 @@ class AnswerEngine:
                     *ranked,
                     *(chunk.chunk_id for chunk in siblings),
                     *promoted,
+                    *outline_ids,
                     *entity_ids,
                 }
                 if observation is not None:
@@ -1573,7 +1622,14 @@ class AnswerEngine:
                         }
                     )
         if self._attach_images and not defer_context:
-            evidence = [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]
+            evidence = [
+                *anchors,
+                *siblings,
+                *referenced,
+                *outline_chunks,
+                *entity_chunks,
+                *graph_chunks,
+            ]
             await self._materialize_images(evidence, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
@@ -1581,9 +1637,10 @@ class AnswerEngine:
                 anchor_id: [state.chunks.get(chunk.chunk_id, chunk) for chunk in chunks]
                 for anchor_id, chunks in references.items()
             }
+            outline_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in outline_chunks]
             entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
             graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
-        added = [*referenced, *entity_chunks, *graph_chunks]
+        added = [*referenced, *outline_chunks, *entity_chunks, *graph_chunks]
         evidence = [*anchors, *siblings, *added]
         _require_projected_vision_chunks([*evidence, *self._attachment_chunks])
         # rerank の候補は検索の候補だけ。検索拡張(参照先・実体・関係情報)の chunk は候補に入れず、
@@ -1602,6 +1659,7 @@ class AnswerEngine:
         expansions: dict[str, Any] = {}
         for stage, chunks in (
             ("reference", referenced),
+            ("outline_selection", outline_chunks),
             ("entity", entity_chunks),
             ("structure", graph_chunks),
         ):
@@ -3177,9 +3235,6 @@ class AnswerEngine:
         reserve: float,
     ) -> None:
         """回答のモデルに目次を渡して読む章節を選ばせ、目次にある ID だけを計画に入れる(#5263)。"""
-        from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
-
-        from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
         from app.rag.reference_sections import (
             CATALOG_LEAD_CHARS,
             CATALOG_MAX_CHARS,
@@ -3188,9 +3243,6 @@ class AnswerEngine:
             FALLBACK_UNKNOWN_IDS,
             REFERENCE_SECTION_PROMPT,
             SELECTED_SECTIONS_MAX,
-            ReferenceSectionChoice,
-            build_catalog,
-            resolve_choice,
             without_descendants,
         )
         from app.rag.section_catalog import compact_section_lines
@@ -3205,17 +3257,69 @@ class AnswerEngine:
             )
             lines.append(rows)
             omitted.append(skipped)
+        call: dict[str, object] = {}
+        state.reference_section_selections.append(call)
+        result = await self._choose_sections(
+            request,
+            state,
+            plans,
+            lines,
+            omitted,
+            call=call,
+            prompt=REFERENCE_SECTION_PROMPT,
+            schema_name="reference_sections",
+            reserve=reserve,
+        )
+        if isinstance(result, BaseException):
+            state.record_degraded("reference_section_select", result)
+            for plan in plans:
+                plan.fall_back(FALLBACK_SELECTION_ERROR)
+            return
+        for index, plan in enumerate(plans):
+            chosen = without_descendants(plan.sections, result.selected.get(index, []))
+            if chosen:
+                plan.selected = chosen[:SELECTED_SECTIONS_MAX]
+            elif result.returned and not result.selected:
+                plan.fall_back(FALLBACK_UNKNOWN_IDS)
+            else:
+                plan.fall_back(FALLBACK_NO_SELECTION)
+
+    async def _choose_sections(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        plans: Sequence[Any],
+        lines: Sequence[Sequence[str]],
+        omitted: Sequence[int],
+        *,
+        call: dict[str, object],
+        prompt: str,
+        schema_name: str,
+        reserve: float,
+    ) -> Any:
+        """目次を回答のモデルに 1 回だけ渡して章節を選ばせ、目次にある ID だけを返す(#5263・#5324)。
+
+        ``lines`` は計画ごとの目録の行(先頭から ``plan.sections`` に対応)。呼び出しの記録を
+        ``call`` に書く。回答の期限の残りから ``reserve`` を生成に残し、足りない・失敗した・出力が
+        契約に合わないときはその例外を返す(呼び出し元が縮退を記録して退避する)。
+        """
+        from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
+
+        from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+        from app.rag.reference_sections import ReferenceSectionChoice, build_catalog, resolve_choice
+
         catalog = build_catalog(plans, lines, omitted)
         answer_model = self._answer_model_id or enterprise_ai_default_model_id(self._settings)
-        call: dict[str, object] = {
-            "model_id": answer_model,
-            "documents": len(plans),
-            "catalog_sections": len(catalog.ids),
-            "catalog_omitted_sections": catalog.omitted_sections,
-            "catalog_chars": len(catalog.text),
-            "prompt_chars": len(REFERENCE_SECTION_PROMPT) + len(request.query) + len(catalog.text),
-        }
-        state.reference_section_selections.append(call)
+        call.update(
+            {
+                "model_id": answer_model,
+                "documents": len(plans),
+                "catalog_sections": len(catalog.ids),
+                "catalog_omitted_sections": catalog.omitted_sections,
+                "catalog_chars": len(catalog.text),
+                "prompt_chars": len(prompt) + len(request.query) + len(catalog.text),
+            }
+        )
         deadline = state.deadline
         left = deadline.remaining() if deadline is not None else None
         timeout = None if left is None else max(0.0, left - reserve)
@@ -3232,23 +3336,20 @@ class AnswerEngine:
                     llm.generate,
                     request.query,
                     catalog.text,
-                    system_prompt=REFERENCE_SECTION_PROMPT,
+                    system_prompt=prompt,
                     response_schema=ReferenceSectionChoice.model_json_schema(),
-                    response_schema_name="reference_sections",
+                    response_schema_name=schema_name,
                 ),
                 timeout,
             )
             choice = ReferenceSectionChoice.model_validate_json(text)
-        except Exception as exc:  # noqa: BLE001 - 選べなければ全体で読む。
-            state.record_degraded("reference_section_select", exc)
+        except Exception as exc:  # noqa: BLE001 - 選べなければ呼び出し元が退避する。
             call.update(
                 outcome="error",
                 error_type=type(exc).__name__,
                 elapsed_seconds=round(time.monotonic() - started, 3),
             )
-            for plan in plans:
-                plan.fall_back(FALLBACK_SELECTION_ERROR)
-            return
+            return exc
         result = resolve_choice(choice, catalog)
         call.update(
             outcome="selected" if result.selected else "none",
@@ -3256,14 +3357,252 @@ class AnswerEngine:
             returned_ids=result.returned[:50],
             discarded_ids=result.discarded[:50],
         )
-        for index, plan in enumerate(plans):
-            chosen = without_descendants(plan.sections, result.selected.get(index, []))
-            if chosen:
-                plan.selected = chosen[:SELECTED_SECTIONS_MAX]
-            elif result.returned and not result.selected:
-                plan.fall_back(FALLBACK_UNKNOWN_IDS)
-            else:
-                plan.fall_back(FALLBACK_NO_SELECTION)
+        return result
+
+    async def _outline_selection(
+        self, request: SearchRequest, state: _SearchState, anchors: Sequence[RetrievedChunk]
+    ) -> list[RetrievedChunk]:
+        """検索の上位の文書の目次から回答のモデルが選んだ章節の chunk(#5324。章節の中の順)。
+
+        検索の上位の候補(``anchors``。統合の順)の文書を版ごとに順位の順で
+        ``rag_outline_selection_max_documents`` 件まで採り、章節の木を持つ文書の目次
+        (``rag_outline`` の compact と同じ目録。合計 ``rag_outline_selection_catalog_max_chars``
+        字まで)を回答のモデルに 1 回だけ渡して章節を選ばせる(文書全体への参照の #5263 と同じ部品)。
+        目次にある ID の章節をモデルが返した順に ``read_section`` で読み、本文の合計が
+        ``rag_outline_selection_read_max_chars`` 字に達したら止める。範囲は実体・関係情報の拡張と
+        同じ(``_expansion_scope``)。1 回の回答で 1 回だけ選び、以後の検索は同じ chunk を返す。
+
+        回答の期限の残りが選択と読取の予約(生成の 1 回の見積もりの 2 回分と確定の分)より少なければ
+        選ばない。選べない・何も選ばない・読めないときは何も足さない(今の経路で回答する)。記録は
+        ``state.outline_selection``(回答の診断の ``outline_selection``)に残す。
+        """
+        from app.rag.reference_sections import (
+            CATALOG_LEAD_CHARS,
+            DOCUMENT_NO_OUTLINE,
+            DOCUMENT_OUTLINE_ERROR,
+            OUTLINE_SECTION_PROMPT,
+            OUTLINE_SELECTION_KEY,
+            READ_MODE_SECTIONS,
+            READ_STOP_CHAR_LIMIT,
+            READ_STOP_DEADLINE,
+            SKIP_DEADLINE,
+            SKIP_NO_CANDIDATES,
+            SKIP_NO_OUTLINE,
+            SKIP_NO_SELECTION,
+            SKIP_SECTIONS_EMPTY,
+            SKIP_SELECTION_ERROR,
+            SKIP_UNKNOWN_IDS,
+            DocumentReadPlan,
+            allot_catalog_chars,
+            fit_catalog_lines,
+            without_descendants,
+        )
+        from app.rag.section_catalog import compact_section_lines
+        from app.rag.section_chunk_map import ROOT_SECTION_ID
+        from app.rag.section_map_service import READ_SECTION_BATCH, read_section, section_outline
+
+        if state.outline_selection is not None:
+            return [state.chunks[chunk_id] for chunk_id in state.outline_selection_ids]
+        settings = self._settings
+        generation_reserve = _reference_generation_reserve_seconds(settings)
+        reserve = generation_reserve + float(settings.rag_answer_generation_round_estimate_seconds)
+        read_limit = settings.rag_outline_selection_read_max_chars
+        record: dict[str, object] = {
+            "max_documents": settings.rag_outline_selection_max_documents,
+            "catalog_max_chars": settings.rag_outline_selection_catalog_max_chars,
+            "read_max_chars": read_limit,
+            "deadline_reserve_seconds": reserve,
+            "skip_reason": None,
+            "documents": [],
+            "selection": None,
+            "read_chars": 0,
+            "read_stop_reason": None,
+            "unread_sections": [],
+            "added_count": 0,
+        }
+        state.outline_selection = record
+        if _reference_deadline_short(state, reserve):
+            record["skip_reason"] = SKIP_DEADLINE
+            return []
+        candidates: list[tuple[str, str]] = []
+        for chunk in anchors:
+            chunk_set_id = str(chunk.metadata.get("chunk_set_id") or "")
+            key = (chunk.document_id, chunk_set_id)
+            if (
+                not chunk_set_id
+                or is_derived_chunk(chunk)
+                or is_attachment_chunk(chunk.metadata)
+                or key in candidates
+            ):
+                continue
+            candidates.append(key)
+            if len(candidates) >= settings.rag_outline_selection_max_documents:
+                break
+        if not candidates:
+            record["skip_reason"] = SKIP_NO_CANDIDATES
+            return []
+        plans: list[Any] = []
+        outlines: list[Any] = []
+        for document_id, chunk_set_id in candidates:
+            plan = DocumentReadPlan(document_id, chunk_set_id, "")
+            plans.append(plan)
+            key = (document_id, chunk_set_id)
+            try:
+                if key not in state.section_outlines:
+                    state.section_outlines[key] = await section_outline(
+                        document_id, chunk_set_id=chunk_set_id, oracle=self._oracle
+                    )
+                outline = state.section_outlines[key]
+            except Exception as exc:  # noqa: BLE001 - この文書は目次を使わない。
+                state.record_degraded("outline_load", exc)
+                plan.fall_back(DOCUMENT_OUTLINE_ERROR)
+                continue
+            nodes = [
+                node
+                for node in (outline.sections if outline is not None else [])
+                if node.section_id != ROOT_SECTION_ID and node.chunk_count > 0
+            ]
+            if outline is None or not nodes:
+                plan.fall_back(DOCUMENT_NO_OUTLINE)
+                continue
+            plan.document_name = outline.chunk_set.file_name or ""
+            plan.sections = nodes
+            outlines.append((plan, outline))
+        documents = cast(list[dict[str, object]], record["documents"])
+        if not outlines:
+            documents.extend(plan.receipt() for plan in plans)
+            record["skip_reason"] = SKIP_NO_OUTLINE
+            return []
+        full: list[list[str]] = []
+        for plan, outline in outlines:
+            rows, _skipped = await compact_section_lines(
+                self._oracle, outline, plan.sections, CATALOG_LEAD_CHARS, max_chars=2**31 - 1
+            )
+            full.append(rows)
+        allotted = allot_catalog_chars(
+            [sum(len(row) + 1 for row in rows) for rows in full],
+            settings.rag_outline_selection_catalog_max_chars,
+        )
+        selectable = [plan for plan, _outline in outlines]
+        lines: list[list[str]] = []
+        omitted: list[int] = []
+        for plan, rows, limit in zip(selectable, full, allotted, strict=True):
+            kept = fit_catalog_lines(plan.sections, rows, limit)
+            omitted.append(len(plan.sections) - len(kept))
+            plan.sections = [plan.sections[index] for index in kept]
+            lines.append([rows[index] for index in kept])
+        call: dict[str, object] = {}
+        record["selection"] = call
+        result = await self._choose_sections(
+            request,
+            state,
+            selectable,
+            lines,
+            omitted,
+            call=call,
+            prompt=OUTLINE_SECTION_PROMPT,
+            schema_name="outline_sections",
+            reserve=generation_reserve,
+        )
+        if isinstance(result, BaseException):
+            state.record_degraded("outline_section_select", result)
+        if isinstance(result, BaseException) or not result.selected:
+            record["skip_reason"] = (
+                SKIP_SELECTION_ERROR
+                if isinstance(result, BaseException)
+                else SKIP_UNKNOWN_IDS
+                if result.returned
+                else SKIP_NO_SELECTION
+            )
+            documents.extend(plan.receipt() for plan in plans)
+            return []
+        kept_sections = {
+            index: set(without_descendants(plan.sections, result.selected.get(index, [])))
+            for index, plan in enumerate(selectable)
+        }
+        order = [
+            (index, section_id)
+            for index, section_id in result.ordered
+            if section_id in kept_sections[index]
+        ]
+        for index, section_id in order:
+            selectable[index].selected.append(section_id)
+        scope = _expansion_scope(request.filters)
+        added: list[RetrievedChunk] = []
+        seen: set[str] = set()
+        used = 0
+        unread = cast(list[dict[str, object]], record["unread_sections"])
+        for index, section_id in order:
+            plan = selectable[index]
+            stop = (
+                READ_STOP_CHAR_LIMIT
+                if used >= read_limit
+                else READ_STOP_DEADLINE
+                if _reference_deadline_short(state, generation_reserve)
+                else None
+            )
+            if stop is not None:
+                record["read_stop_reason"] = record["read_stop_reason"] or stop
+                unread.append({"document_id": plan.document_id, "section_id": section_id})
+                continue
+            title = next(
+                (node.title for node in plan.sections if node.section_id == section_id), ""
+            )
+            mark = {"document_id": plan.document_id, "section_id": section_id, "title": title}
+            start = 0
+            while used < read_limit:
+                try:
+                    text = await read_section(
+                        plan.document_id,
+                        section_id,
+                        chunk_set_id=plan.chunk_set_id,
+                        from_order=start,
+                        limit=READ_SECTION_BATCH,
+                        filters=scope,
+                        oracle=self._oracle,
+                    )
+                except Exception as exc:  # noqa: BLE001 - この章節を読まずに続ける。
+                    state.record_degraded("outline_section_read", exc)
+                    break
+                for row in text.chunks:
+                    chunk = row.chunk
+                    if chunk.chunk_id in seen or is_derived_chunk(chunk):
+                        continue
+                    if used + len(chunk.text) > read_limit:
+                        # 上限に入らない chunk から先は読まない(この章節の残りと後の章節)。
+                        record["read_stop_reason"] = READ_STOP_CHAR_LIMIT
+                        unread.append(
+                            {
+                                "document_id": plan.document_id,
+                                "section_id": section_id,
+                                "partial": True,
+                            }
+                        )
+                        used = read_limit
+                        break
+                    seen.add(chunk.chunk_id)
+                    used += len(chunk.text)
+                    plan.read_chunk_count += 1
+                    plan.read_chars += len(chunk.text)
+                    current = state.chunks.get(chunk.chunk_id, chunk)
+                    marked = current.model_copy(
+                        update={"metadata": {**current.metadata, OUTLINE_SELECTION_KEY: mark}}
+                    )
+                    state.chunks[chunk.chunk_id] = marked
+                    added.append(marked)
+                if text.complete or not text.chunks:
+                    break
+                start = text.chunks[-1].chunk_order + 1
+        for plan in selectable:
+            if plan.read_chunk_count:
+                plan.mode = READ_MODE_SECTIONS
+        documents.extend(plan.receipt() for plan in plans)
+        record["read_chars"] = sum(plan.read_chars for plan in selectable)
+        record["added_count"] = len(added)
+        if not added:
+            record["skip_reason"] = SKIP_SECTIONS_EMPTY
+        state.outline_selection_ids = [chunk.chunk_id for chunk in added]
+        return added
 
     async def _section_outline(self, state: _SearchState, chunk_id: str) -> Any:
         """当たった chunk の文書の章節の一覧と所有の章節(#1436)。対応が無い・読めなければ None。
@@ -4290,6 +4629,9 @@ def _stored_child(
     if isinstance(graph := chunk.metadata.get(GRAPH_EXPANSION_KEY), dict):
         # 関係情報で足した chunk(#2055)。
         metadata[GRAPH_EXPANSION_KEY] = dict(graph)
+    if isinstance(outline := chunk.metadata.get(OUTLINE_SELECTION_KEY), dict):
+        # 検索の上位の文書の目次から回答のモデルが選んだ章節の chunk(#5324)。
+        metadata[OUTLINE_SELECTION_KEY] = dict(outline)
     if source := str(chunk.metadata.get(REFERENCE_FROM_KEY) or ""):
         # 交差参照で足した参照先(#1280・#1400)。
         rank = chunk.metadata.get(REFERENCE_RANK_KEY)
