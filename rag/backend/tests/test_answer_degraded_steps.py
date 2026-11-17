@@ -236,8 +236,11 @@ async def test_reference_prefetch_failure_is_recorded() -> None:
 
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "ok"])
-async def test_reference_rerank_failure_is_recorded(fail: bool) -> None:
-    from tests.test_cross_references import _PLAN_KB
+async def test_reference_rerank_failure_is_recorded(
+    fail: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文書名だけの参照の参照先(目次から選んだ章節。#5263・#5348)の rerank の失敗を記録する。"""
+    from tests.test_cross_references import _PLAN_KB, _outline_engine
 
     window, sections = _change_window_corpus("query")
     oracle = ReferenceOracle(
@@ -246,7 +249,9 @@ async def test_reference_rerank_failure_is_recorded(fail: bool) -> None:
     genai = ReferenceGenAi({"共通の保守枠は": 0.9}, fail=fail)
     state = _SearchState()
 
-    await reference_engine(oracle, genai)._search(
+    engine, _sections, _llm = _outline_engine(monkeypatch, oracle, genai)
+
+    await engine._search(
         SearchRequest(query="q", filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=["q"],
