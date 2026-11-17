@@ -39,7 +39,7 @@ export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
     routeBadges: citationRetrievalBadges(chunk),
     score: chunk.score,
     rerankScore: chunk.rerank_score,
-    chips: citationMetadataChips(chunk.metadata).filter((chip) => chip.id !== "context_header_enabled").map((chip) => ({
+    chips: citationMetadataChips(chunk.metadata).map((chip) => ({
       id: chip.id,
       label: chipLabel(chip),
       value: chipValue(chip),
@@ -68,10 +68,6 @@ function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
 }
 function chipValue(chip: CitationMetadataChip): string {
   switch (chip.id) {
-    case "context_header":
-      return chip.value;
-    case "context_header_enabled":
-      return t(chip.value === "true" ? "search.citation.contextHeaderOn" : chip.value === "false" ? "search.citation.contextHeaderOff" : "search.citation.contextHeaderUnknown");
     case "citation_label":
       return chip.value;
     case "page":
@@ -87,17 +83,11 @@ function chipValue(chip: CitationMetadataChip): string {
       return t("search.citation.sectionTitleValue", { title: chip.value });
     case "section_path":
       return t("search.citation.sectionPathValue", { path: chip.value });
-    case "chunk_profile":
-      return t("search.citation.profileValue", { profile: chip.value });
   }
 }
 
 function chipLabel(chip: CitationMetadataChip): string {
   switch (chip.id) {
-    case "context_header":
-      return t("search.citation.contextHeaderLabel");
-    case "context_header_enabled":
-      return t("search.citation.contextHeaderStatusLabel");
     case "citation_label":
       return t("search.citation.citationLabelLabel");
     case "page":
@@ -108,8 +98,6 @@ function chipLabel(chip: CitationMetadataChip): string {
       return t("search.citation.sectionTitleLabel");
     case "section_path":
       return t("search.citation.sectionPathLabel");
-    case "chunk_profile":
-      return t("search.citation.profileLabel");
   }
 }
 
@@ -133,6 +121,8 @@ function contentKindLabel(kind: string): string {
       return t("search.filters.contentKind.slide");
     case "sheet":
       return t("search.filters.contentKind.sheet");
+    case "record":
+      return t("search.filters.contentKind.record");
     case "field":
       return t("search.filters.contentKind.field");
     case "section_summary":
