@@ -634,6 +634,9 @@ class _FakePipeline:
     filters: list[dict[str, str]] = []
     # 作られた pipeline に渡した検索する件数(#3512)。
     top_ks: list[int] = []
+    # 作られた pipeline と入口の解決に渡した回答の経路(#5332)。
+    flows: list[object] = []
+    resolve_flows: list[object] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
@@ -643,6 +646,7 @@ class _FakePipeline:
             getattr(settings, "rag_approved_faq_selected", None) or None
         )
         _FakePipeline.scopes.append(kwargs.get("scope"))
+        _FakePipeline.flows.append(kwargs.get("flow"))
 
     async def run(  # type: ignore[no-untyped-def]
         self,
@@ -688,6 +692,7 @@ def _stub_stream(monkeypatch: MonkeyPatch, fake: FakeChatOracle, models: list[st
     monkeypatch.setattr(chat_route, "RagPipeline", _FakePipeline)
 
     async def fake_resolve(request, settings, **_kwargs):  # type: ignore[no-untyped-def]
+        _FakePipeline.resolve_flows.append(_kwargs.get("flow"))
         if (gate := _kwargs.get("question_gate")) is not None:
             request = await gate(request, settings) or request
         return request, settings, None, None
@@ -722,11 +727,16 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     fake.conversations["conv-x"] = conv
     fake.messages["conv-x"] = []
     _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(_FakePipeline, "flows", [])
+    monkeypatch.setattr(_FakePipeline, "resolve_flows", [])
 
     resp = client.post(
         "/api/chat/conversations/conv-x/messages/stream", json={"content": "経費の上限は?"}
     )
     assert resp.status_code == 200
+    # RAG Chat は業務ガイド・承認済み FAQ・根拠の拡張を含む経路（#5332）。
+    assert _FakePipeline.resolve_flows == ["expanded"]
+    assert "expanded" in _FakePipeline.flows
     assert resp.headers["content-type"].startswith("text/event-stream")
     text = resp.text
     assert "event: start" in text

@@ -1,6 +1,5 @@
 "use client";
 
-import { answerFromApprovedFaq } from "@/lib/answer-diagnostics";
 
 import {
   AnswerFooter,
@@ -46,7 +45,6 @@ import {
 import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
 import {
   api,
-  type ApprovedFaqSuggestionData,
   type RetrievedChunk,
   type SearchDiagnostics,
 } from "@/lib/api";
@@ -66,7 +64,6 @@ import { answerAttachedImages, answerModelHeading, parseAnswerDiagnostics, unrea
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { useAuth } from "@/components/security/AuthProvider";
 import { AnswerText } from "./AnswerText";
-import { ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 import { ExtractionFieldFilters } from "./ExtractionFieldFilters";
 import {
   EXTRACTION_FIELD_FILTER_KEY,
@@ -110,21 +107,20 @@ interface SearchRun {
 }
 
 /**
- * 検索 1 回の条件。「検索」は入力欄・選択から作り、表示中の結果への操作（再試行・類似問を使用しない）は
- * この条件で送り直す（入力欄を書き換えていても前の質問を送る。#914）。
+ * 検索 1 回の条件。「検索」は入力欄・選択から作り、表示中の結果への操作（再試行）はこの条件で送り直す
+ * （入力欄を書き換えていても前の質問を送る。#914）。
  */
 interface SearchRequestSnapshot {
   query: string;
   searchAnswerProfileId: string;
   generateAnswer: boolean;
   filters: Record<string, string>;
-  /** 利用者が選んだ登録済みQ&A。付けると backend は検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
-  approvedFaqId?: string;
 }
 
 /**
- * RAG 検索画面。チャットと同じ工程（質問の理解・拡張・検索・rerank）で検索し、既定は検索結果までを表示する。
- * 「LLM で回答を生成する」をオンにしたときだけ、チャットと同じく回答まで行う（#649）。
+ * RAG 検索画面。基本の RAG（検索 → 融合 → rerank → 親・前後の読取）で検索し、既定は検索結果までを表示する。
+ * 「LLM で回答を生成する」をオンにしたときだけ回答まで行う（#649）。業務ガイドの照合・登録済みQ&A の提示・
+ * 根拠の拡張は RAG Chat だけが行う（#5332）。
  */
 export function SearchClient() {
   // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
@@ -198,12 +194,9 @@ export function SearchClient() {
   // 表示中の回答を生成したときの検索・回答プロファイル。回答・引用の評価はこの検索・回答プロファイルへ送る。
   // 検索後に選択を変えても、表示中の回答の評価先は変えない（#285）。
   const [answerSearchAnswerProfileId, setAnswerSearchAnswerProfileId] = useState<string | null>(null);
-  // 直前の送信が類似 FAQ の提示を飛ばしたか。エラーの再試行を同じ操作にする（#285）。
-  const [lastSkipFaq, setLastSkipFaq] = useState(false);
-  // 直前に送った検索の条件。再試行・類似問を使用しない・「自動」の条件を外すはこれで送り直す（#914）。
+  // 直前に送った検索の条件。再試行・「自動」の条件を外すはこれで送り直す（#914）。
   // 外した「自動」の条件（#652）もここに持ち、入力欄から新しく検索するたびに空に戻す。
   const [lastRequest, setLastRequest] = useState<SearchRequestSnapshot | null>(null);
-  const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
   const searchAnswerProfilesQuery = useAllSearchAnswerProfiles({ status: "ACTIVE" });
@@ -271,25 +264,19 @@ export function SearchClient() {
       return;
     }
     setScopeError("");
-    await runRequest(
-      {
-        query: trimmed,
-        searchAnswerProfileId,
-        generateAnswer,
-        filters: buildSearchFilters({
-          classification,
-          extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
-        }),
-      },
-      false
-    );
+    await runRequest({
+      query: trimmed,
+      searchAnswerProfileId,
+      generateAnswer,
+      filters: buildSearchFilters({
+        classification,
+        extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
+      }),
+    });
   };
 
-  /**
-   * 検索の条件で、類似 FAQ の照会と検索の stream を行う。押した時点で実行中にし、照会の間も「停止」と
-   * 進行を出す（照会は embedding を呼ぶことがあり時間がかかる。#915）。
-   */
-  const runRequest = async (request: SearchRequestSnapshot, skipFaq: boolean) => {
+  /** 検索の条件で検索の stream を行う。押した時点で実行中にし、「停止」と進行を出す（#915）。 */
+  const runRequest = async (request: SearchRequestSnapshot) => {
     if (phase === "streaming") return;
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -298,8 +285,6 @@ export function SearchClient() {
 
     setLastRequest(request);
     setSubmittedQuery(request.query);
-    setLastSkipFaq(skipFaq);
-    setFaqSuggestions(null);
     setPhase("streaming");
     setAnswer("");
     setCitations([]);
@@ -317,38 +302,12 @@ export function SearchClient() {
     });
 
     try {
-      // 回答を作る検索だけ、質問に近い登録済みQ&A を回答の前に提示する（選んだら Q&A の回答をそのまま返す。#5107）。
-      if (!skipFaq && !request.approvedFaqId && request.generateAnswer) {
-        let suggestions: ApprovedFaqSuggestionData[] = [];
-        try {
-          suggestions = (
-            await api.suggestApprovedFaq(
-              request.searchAnswerProfileId,
-              request.query,
-              null,
-              controller.signal
-            )
-          ).suggestions ?? [];
-        } catch {
-          // 類似問の照会に失敗しても通常の回答生成は続ける（停止したときは下で抜ける）。
-        }
-        if (controller.signal.aborted) return;
-        if (suggestions.length > 0) {
-          // 選ぶまで検索しない。実行の表示を消して FAQ の提示を出す。
-          setFaqSuggestions(suggestions);
-          setRun(null);
-          setPhase("idle");
-          return;
-        }
-      }
-
       await streamSearch(
         {
           query: request.query,
           search_answer_profile_id: request.searchAnswerProfileId,
           generate_answer: request.generateAnswer,
           ...(Object.keys(request.filters).length ? { filters: request.filters } : {}),
-          ...(request.approvedFaqId ? { approved_faq_id: request.approvedFaqId } : {}),
         },
         {
           onRun: ({ trace_id }) =>
@@ -394,7 +353,7 @@ export function SearchClient() {
     }
   };
 
-  // pointerdown と click の両方から呼ばれる。類似問の照会を await する間も二重送信しないよう ref で守る。
+  // pointerdown と click の両方から呼ばれる。送信を await する間も二重送信しないよう ref で守る。
   const submittingRef = useRef(false);
   const guardSubmit = async (run: () => Promise<void>) => {
     if (submittingRef.current) return;
@@ -406,14 +365,11 @@ export function SearchClient() {
     }
   };
   const submit = () => guardSubmit(runSubmit);
-  /**
-   * 表示中の結果（エラー・類似 FAQ の提示）を出した検索を、同じ条件で送り直す。入力欄・選択を書き換えて
-   * いても使わない（#914）。
-   */
-  const resubmit = (skipFaq: boolean, approvedFaqId?: string) =>
+  /** 表示中の結果（エラー）を出した検索を、同じ条件で送り直す。入力欄・選択を書き換えていても使わない（#914）。 */
+  const resubmit = () =>
     guardSubmit(async () => {
       if (!lastRequest) return;
-      await runRequest(approvedFaqId ? { ...lastRequest, approvedFaqId } : lastRequest, skipFaq);
+      await runRequest(lastRequest);
     });
 
   const cancel = () => {
@@ -767,14 +723,7 @@ export function SearchClient() {
           </Card>
 
           {/* 状態別表示 */}
-          {faqSuggestions ? (
-            <ApprovedFaqSuggestions
-              suggestions={faqSuggestions}
-              // 選んだ Q&A を付けて同じ条件で送り直す（回答は backend が Q&A の原文のまま返し、実行履歴にも残る）。
-              onUse={(suggestion) => void resubmit(true, suggestion.id)}
-              onSkip={() => void resubmit(true)}
-            />
-          ) : phase === "idle" ? (
+          {phase === "idle" ? (
             <Card>
               <CardContent className="pt-5">
                 <EmptyState title={t("search.initial")} hint={t("search.initialHint")} />
@@ -784,7 +733,7 @@ export function SearchClient() {
             <ApiErrorState
               error={searchError}
               fallback={t("search.error.failed")}
-              onRetry={() => void resubmit(lastSkipFaq)}
+              onRetry={() => void resubmit()}
             />
           ) : (
             <>
@@ -841,7 +790,7 @@ export function SearchClient() {
                       page-archetypes.md §6.1）。
                     */}
                     <AnswerFooter
-                      notice={meta && phase === "done" && !answerFromApprovedFaq(meta.diagnostics?.answer, null) ? meta.notice : null}
+                      notice={meta && phase === "done" ? meta.notice : null}
                       noticeLabel={t("answer.notice.label")}
                       evidence={
                         <AnswerCitations
@@ -893,7 +842,7 @@ export function SearchClient() {
               {/* 引用 / no-results */}
               {phase === "done" && awaitingClarification ? (
                 <Banner severity="info">{t("search.clarificationHint")}</Banner>
-              ) : noResults && !answerFromApprovedFaq(meta?.diagnostics?.answer, null) ? (
+              ) : noResults ? (
                 <Card>
                   <CardContent className="pt-5">
                     <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />

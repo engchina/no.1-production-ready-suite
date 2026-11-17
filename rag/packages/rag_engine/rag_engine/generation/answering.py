@@ -3146,6 +3146,7 @@ def answer_question_result(
     scope: tuple[str, Sequence[str]] | None = None,
     guide_plan: GuidePlan | None = None,
     request_question: str | None = None,
+    expand: bool = True,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
 
@@ -3168,6 +3169,10 @@ def answer_question_result(
     この質問で行い、``question`` は検索（質問の理解・検索文・章節の拡張・業務ガイドの手順の検索）にだけ使う。
     言い換えで番号つきの小問が平文になり・まとめられても、元の要求を落とさない。省略すると
     ``question`` で両方を行う。
+
+    流れは ⑤⑥ 主の検索と文脈の補完（``build_adb_hybrid_answer_context``）→ ⑦ 根拠の拡張（``_expand_evidence``）→
+    ⑧ 回答（``_answer_from_evidence``）。``expand=False`` は RAG 検索の経路で、⑦ を呼ばず（章節で文脈を補わない）、
+    主の検索の根拠で答える。⑤⑥ と ⑧ は両方の経路で同じ関数を呼ぶ。
     """
     normalized_question = extract_original_question(question)
     if not normalized_question:
@@ -3380,14 +3385,8 @@ def answer_question_result(
                 "再ランキング": effective_rerank_enabled,
             }
         )
-        extra_budget = ExtraRetrievalBudget.from_settings(settings)
-        if guide_plan is not None and settings.guide_step_retrieval_enabled:
-            extra_budget.reserve_required(len(required_guide_targets(guide_plan)))
-        coverage_usage = CoverageUsage()
-        # 補いの検索で当たった文書全体の要約を、その文書の本文の根拠に置き換える検索し直しの枠と記録（#5244）。
-        summary_research = SummaryHitResearch(budget=extra_budget, reserve_seconds=_generation_reserve_seconds(settings))
-        # 根拠の流れは回答・回答を作らない検索・検索だけ・MCP で同じ（#5173）: 主の検索 → rerank → 切る → 検索拡張の
-        # 合わせ込み → 補いの検索（要求別の補完・業務ガイドの手順）の合わせ込み → 文脈の補完（章節の拡張を含む）。
+        # 根拠の流れは回答を作るか否かで変えない（#5173）: ⑤⑥ 主の検索 → rerank → 切る →（Chat の経路は検索拡張の合わせ込み）
+        # → 文脈の補完、Chat の経路だけ ⑦ 補いの検索（要求別の補完・業務ガイドの手順）の合わせ込み → 章節の拡張。
         try:
             with _execution_step("文書検索", _SEARCH_PURPOSE) as retrieval_step:
                 retrieval_step.input(
@@ -3415,7 +3414,7 @@ def answer_question_result(
                     rerank_enabled=effective_rerank_enabled,
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
-                    section_fill=True,
+                    section_fill=expand,
                 )
                 retrieval_step.field("全文検索の文", text_source)
                 _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
@@ -3437,130 +3436,6 @@ def answer_question_result(
                     retrieval_top_k=chunk_top_k,
                 )
             )
-        section_state: dict[str, Any] = {}
-        # 業務ガイドの手順が参照する文書と頁（#2828）。章節の拡張はこの範囲の起点を先に広げ、回答の「回答に未反映の
-        # 関連章節」はこの文書の章節を残す。
-        guide_ranges = guide_plan.reference_ranges if guide_plan is not None else ()
-        # 主の検索の根拠（文脈を補った後の chunk と親）。補いの検索の新しい根拠の数は、これ以外だけを数える。
-        main_keys = set(_context_owner_keys(context)) | {record.chunk_uid or record.id for record in context.records}
-        # 補いの検索は、主の検索の根拠にすでにある候補を切りの前に除く（#5175。要求別の補完と業務ガイドの手順で同じ判定）。
-        main_overlap = _lazy_overlap(context, settings)
-        supplements: dict[str, AnswerRecord] = {}
-        supplement_pool: list[AnswerRecord] = []
-
-        def add_supplements(records: Iterable[AnswerRecord]) -> None:
-            for record in records:
-                key = record.chunk_uid or record.id
-                if not key:
-                    continue
-                previous = supplements.get(key)
-                # 同じ根拠を 2 つの補いの検索が切ったときは、両方の印を残す（位置は先の検索の順）。
-                supplements[key] = (
-                    record
-                    if previous is None
-                    else replace(previous, metadata={**(record.metadata or {}), **{k: v for k, v in (previous.metadata or {}).items()}})
-                )
-
-        # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
-        overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
-        overflow_keywords = (
-            settings.domain_keywords_override
-            if settings.domain_keywords_override is not None
-            else load_domain_keywords(settings.output_dir)
-        )
-
-        def overflow_retrieve(query: str, top_k: int) -> AnswerContext:
-            return build_adb_hybrid_answer_context(
-                query,
-                run_id,
-                preferred_engine_ids,
-                settings,
-                top_k=top_k,
-                neighbor_child_count=chunk_neighbor_count,
-                retrieval_queries=(query,),
-                rerank_phase="missing_requirement",
-                rerank_enabled=effective_rerank_enabled,
-                retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
-                fill=False,
-                exclude=main_overlap,
-                summary_research=summary_research,
-            )
-
-        with _execution_step(
-            "検索上限の要求別補完", "全文検索の語数上限に達した質問を、元の要求と共通条件に分けて検索します。"
-        ) as overflow_step:
-            overflow_step.input(
-                lambda: {
-                    "原質問": request_text,
-                    "既検索文": list(dict.fromkeys((*retrieval_queries, *text_queries.values()))),
-                    "既存根拠": candidate_snapshot(context.records),
-                    "追加検索予算": extra_budget.to_payload(),
-                    "要求別の予算": asdict(_request_coverage_budget(settings)),
-                    "使用済みの要求別予算": asdict(coverage_usage),
-                    "原質問のみ": bool(getattr(settings, "retrieval_original_query_only", False)),
-                    "検索範囲": selected_retrieval_scope,
-                    "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
-                }
-            )
-            overflow_results, overflow_trace = search_overflow_requests(
-                request_text,
-                tokenize=lambda text: tokenize_text_search_query_with_trace(
-                    text,
-                    domain_keywords=overflow_keywords,
-                    config=overflow_config,
-                    max_tokens=settings.text_search_max_tokens,
-                    max_query_chars=settings.text_search_max_query_chars,
-                ),
-                retrieve=overflow_retrieve,
-                extra_budget=extra_budget,
-                coverage_budget=_request_coverage_budget(settings),
-                usage=coverage_usage,
-                searched_queries=(*retrieval_queries, *text_queries.values()),
-                existing_keys=main_keys,
-                initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
-                allow_split=not getattr(settings, "retrieval_original_query_only", False),
-            )
-            for result in overflow_results:
-                supplement_pool.extend(result.context.expansion_records)
-                add_supplements(
-                    _with_supplement_mark(record, QUERY_OVERFLOW_KEY, {"request_ids": [result.request_id], "queries": [result.query]})
-                    for record in result.context.records
-                )
-            overflow_candidates = list(
-                dict.fromkeys(record.chunk_uid or record.id for result in overflow_results for record in result.context.records)
-            )
-            overflow_trace["candidate_chunk_ids"] = overflow_candidates
-            overflow_step.output(
-                lambda: {
-                    "検索結果": overflow_trace,
-                    "要求ごとの返却根拠": [
-                        {"要求ID": item.request_id, "検索文": item.query, "候補": candidate_snapshot(item.context.records)}
-                        for item in overflow_results
-                    ],
-                    "合わせる根拠ID": overflow_candidates,
-                }
-            )
-            if overflow_trace.get("triggered"):
-                statuses = [str(row["status"]) for row in overflow_trace["requests"]]
-                covered_count = sum(int(row.get("covered_candidates") or 0) for row in overflow_trace["requests"])
-                overflow_step.result(
-                    f"要求 {len(statuses)} 件、合わせる根拠 {len(overflow_candidates)} 件"
-                    f"（主の検索の根拠と重複して除いた候補 {covered_count} 件）"
-                )
-                overflow_step.field("追加検索の残り", str(extra_budget.remaining))
-                overflow_step.field("未検索", str(sum(status.startswith("unsearched_") for status in statuses)))
-                overflow_step.field("失敗", str(statuses.count("failed")))
-            else:
-                overflow_step.skip(
-                    {
-                        "original_query_only": "原質問のみを検索する設定のため、要求別には分割しません。",
-                        "tokenization_failed": "検索語の抽出に失敗したため、補完検索を実行していません。",
-                    }.get(str(overflow_trace.get("skipped") or ""), "語数上限の超過がないため追加検索は不要です。")
-                )
-        guide_step_trace: dict[str, Any] | None = None
-        guide_results: list[StepSearch] = []
-        guide_acquisitions: list[dict[str, Any]] = []
         if guide_plan is not None:
             # 業務ガイドの案内（窓口・引き継ぐ条件・承認。#2792）。本文の「業務ガイドの案内」の節に資料とは分けて出す。
             from rag_engine.generation.grounded import guide_notice_lines
@@ -3580,129 +3455,34 @@ def answer_question_result(
                 ),
                 guide_condition_notices=guide_plan.branch_notes,
             )
-            with _execution_step(
-                "業務ガイドの手順ごとの検索", "業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に加えます。"
-            ) as guide_step:
-                guide_step.input(
-                    lambda: {
-                        "質問": normalized_question,
-                        "手順計画": asdict(guide_plan),
-                        "既存根拠": candidate_snapshot(context.records),
-                        "追加検索予算": extra_budget.to_payload(),
-                        "検索範囲": selected_retrieval_scope,
-                        "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
-                        "前後それぞれのChunk数": chunk_neighbor_count,
-                        "再ランキング": effective_rerank_enabled,
-                        "設定": {
-                            key: getattr(settings, key, None)
-                            for key in (
-                                "guide_step_retrieval_enabled",
-                                "guide_step_max_queries",
-                                "guide_step_chunks_per_step",
-                                "guide_step_deadline_seconds",
-                            )
-                        },
-                    }
-                )
-                guide_results, guide_acquisitions, guide_step_trace = _search_guide_steps(
-                    normalized_question,
-                    context,
-                    settings,
-                    guide_plan,
-                    extra_budget=extra_budget,
-                    run_id=run_id,
-                    preferred_engines=preferred_engine_ids,
-                    neighbor_child_count=chunk_neighbor_count,
-                    rerank_enabled=effective_rerank_enabled,
-                    retrieval_scope=selected_retrieval_scope,
-                    classification_filter=selected_classification_filter,
-                    exclude=main_overlap,
-                    summary_research=summary_research,
-                )
-                guide_records, guide_pool = _guide_step_supplements(guide_results)
-                supplement_pool.extend(guide_pool)
-                add_supplements(guide_records)
-                guide_step.output(
-                    lambda: {
-                        "検索と取得の記録": guide_step_trace,
-                        "合わせる根拠ID": [record.chunk_uid or record.id for record in guide_records],
-                    }
-                )
-                skipped = str(guide_step_trace.get("skipped") or "")
-                if skipped:
-                    guide_step.skip(_GUIDE_STEP_SKIP_LABELS.get(skipped, f"しない（{skipped}）"))
-                else:
-                    guide_step.result(
-                        f"検索 {len(guide_results)} 回、合わせる根拠 {len(guide_records)} 件"
-                        f"（主の検索の根拠と重複して除いた候補 {sum(len(result.covered) for result in guide_results)} 件）"
-                    )
-        supplement_merge: dict[str, Any] | None = None
-        added_chunks: dict[str, list[str]] = {mark: [] for mark in SUPPLEMENT_KEYS}
-        if supplements:
-            # 主の検索の起点・検索拡張の根拠に補いの検索の根拠を同じ規則で合わせ、文脈を補い直す（#5162・#5168・
-            # #5173）。主の検索の根拠は外さない（#5185）。
-            with _execution_step(
-                "補いの検索の根拠の合わせ込み",
-                "補いの検索の根拠を主の検索の根拠に合わせて文脈を補い直します。主の検索の根拠は外しません。",
-            ) as merge_step:
-                merge_step.input({"補いの根拠ID": list(supplements)})
-                context, supplement_merge = _merge_supplements(
-                    normalized_question,
-                    context,
-                    settings,
-                    tuple(supplements.values()),
-                    supplement_pool,
-                    top_k=chunk_top_k,
-                    neighbor_child_count=chunk_neighbor_count,
-                )
-                added_chunks = _merged_supplement_chunks(context, main_keys)
-                supplement_merge["added_chunk_ids"] = list(dict.fromkeys(key for keys in added_chunks.values() for key in keys))
-                merge_step.output(supplement_merge)
-                rejected_count = int(supplement_merge["rejected_count"])
-                merge_step.result(
-                    f"補いの根拠 {len(supplements)} 件を合わせ、新しく足した根拠 {len(supplement_merge['added_chunk_ids'])} 件"
-                    + (f"（主の検索の根拠が外れるため {rejected_count} 件を使いませんでした）" if rejected_count else "")
-                )
-        overflow_trace["added_chunk_ids"] = _supplement_owner_keys(context, added_chunks[QUERY_OVERFLOW_KEY])
-        context, section_expansion = _expand_context_by_sections(
-            normalized_question,
-            context,
-            settings,
-            rerank_enabled=effective_rerank_enabled,
-            started_at=answer_started_at,
-            state=section_state,
-            phase="main",
-            priority=guide_ranges,
-            top_k=chunk_top_k,
+        # ⑦ 根拠の拡張は Chat の経路だけ（RAG 検索の経路は主の検索の根拠で答える）。
+        expanded = (
+            _expand_evidence(
+                context,
+                settings,
+                normalized_question=normalized_question,
+                request_text=request_text,
+                run_id=run_id,
+                preferred_engine_ids=preferred_engine_ids,
+                chunk_top_k=chunk_top_k,
+                chunk_neighbor_count=chunk_neighbor_count,
+                effective_rerank_enabled=effective_rerank_enabled,
+                selected_retrieval_scope=selected_retrieval_scope,
+                selected_classification_filter=selected_classification_filter,
+                retrieval_queries=retrieval_queries,
+                text_queries=text_queries,
+                text_search_info=text_search_info,
+                runtime_knowledge=runtime_knowledge,
+                guide_plan=guide_plan,
+                answer_started_at=answer_started_at,
+            )
+            if expand
+            else None
         )
-        # 章節の拡張が所有の章節を読めなかった起点は、次の補い方（親 → 前後）で補う（#5173）。
-        context = _fill_unread_section_anchors(context, settings, section_state, neighbor_child_count=chunk_neighbor_count)
-        # 章節の拡張・親の読取で文脈に入った chunk を起点に参照先を読む（深さ 1。#5315）。
-        context = _add_context_references(context, section_state)
-        if guide_plan is not None and guide_step_trace is not None:
-            guide_step_trace, step_sources = _finish_guide_steps(
-                guide_plan, guide_results, guide_acquisitions, guide_step_trace, context, added_chunks[GUIDE_STEP_KEY]
-            )
-            runtime_knowledge = replace(
-                runtime_knowledge,
-                guide_steps=step_sources,
-                guide_optional_steps=guide_plan.optional_step_ids,
-                guide_step_terms=guide_plan.step_terms,
-                guide_step_contracts=guide_plan.step_contracts,
-                guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
-                guide_acquisition=tuple((guide_step_trace.get("required_acquisition") or {}).get("targets") or ()),
-                guide_acquisition_notices=_guide_acquisition_notices(guide_step_trace),
-            )
-        if guide_plan is not None and runtime_knowledge is not None and runtime_knowledge.guide_steps:
-            # 章節の拡張が child を parent に置き換えた後の ID も、参照の頁から手順に結び直す。
-            expanded_sources = reference_step_sources(guide_plan, context.records)
-            runtime_knowledge = replace(
-                runtime_knowledge,
-                guide_steps=tuple(
-                    (step_id, title, tuple(dict.fromkeys((*sources, *expanded_sources.get(step_id, ())))))
-                    for step_id, title, sources in runtime_knowledge.guide_steps
-                ),
-            )
+        if expanded is not None:
+            context, runtime_knowledge = expanded.context, expanded.runtime_knowledge
+        # 根拠の補いの記録（回答の generation_trace と同じ key）。
+        evidence_trace: dict[str, Any] = dict(expanded.trace) if expanded is not None else {}
         if not context.records or not context.text.strip():
             flow_step.status = "根拠不足で終了"
             flow_step.add("回答に使える根拠がありません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
@@ -3713,9 +3493,7 @@ def answer_question_result(
             # 候補 0 件でも回答と同じ形で件数を残す（#4735）。
             zero_trace = {
                 "zero_evidence": zero_evidence,
-                "query_overflow": overflow_trace,
-                **({"supplement_merge": supplement_merge} if supplement_merge is not None else {}),
-                **({"summary_hits": summary_research.to_payload()} if summary_research.rows else {}),
+                **{key: evidence_trace[key] for key in _ZERO_EVIDENCE_EXPANSION_KEYS if key in evidence_trace},
                 "retrieval_counts": _retrieval_counts(context, ()),
             }
             if not generate_answer:
@@ -3748,142 +3526,487 @@ def answer_question_result(
                 )
             )
 
-        # 根拠の補いの記録（回答の generation_trace と同じ key）。
-        evidence_trace: dict[str, Any] = {
-            "query_overflow": overflow_trace,
-            **({"supplement_merge": supplement_merge} if supplement_merge is not None else {}),
-            **({"summary_hits": summary_research.to_payload()} if summary_research.rows else {}),
-            **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
-            **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
-        }
         if not generate_answer:
             # 回答を作らない検索（RAG 検索の画面）は、回答と同じ方法で集めた根拠をここで返す（#3506）。
             flow_step.result(f"{EVIDENCE_RESULT_TITLE} {evidence_summary(context.records)}（回答は生成しません）")
             return evidence_result(context, trace=evidence_trace)
 
+        return record_flow_result(
+            _answer_from_evidence(
+                context,
+                settings,
+                normalized_question=normalized_question,
+                request_text=request_text,
+                runtime_knowledge=runtime_knowledge,
+                question_plan=question_plan,
+                answer_llm_provider=answer_llm_provider,
+                expanded=expanded,
+                legacy_notice=legacy_notice,
+                query_expansion=expansion,
+                text_search_info=text_search_info,
+                selected_retrieval_scope=selected_retrieval_scope,
+                selected_classification_filter=selected_classification_filter,
+                retrieval_queries=retrieval_queries,
+                chunk_top_k=chunk_top_k,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class _EvidenceExpansion:
+    """⑦ 根拠の拡張（``_expand_evidence``）の結果。"""
+
+    context: AnswerContext
+    runtime_knowledge: RuntimeKnowledgeContext
+    # 回答の generation_trace と同じ key の拡張の記録（要求別の補完・合わせ込み・要約のヒット・業務ガイドの手順・章節の拡張）。
+    trace: dict[str, Any]
+    section_expansion: Any | None
+    # 業務ガイドの手順が参照する文書（回答の「回答に未反映の関連章節」に残す文書。#2828）。
+    unread_documents: frozenset[str]
+    extra_budget: ExtraRetrievalBudget
+
+
+# 根拠が 0 件のときも残す拡張の記録の key（#4735）。
+_ZERO_EVIDENCE_EXPANSION_KEYS = ("query_overflow", "supplement_merge", "summary_hits")
+
+
+def _expand_evidence(
+    context: AnswerContext,
+    settings: Settings,
+    *,
+    normalized_question: str,
+    request_text: str,
+    run_id: Any,
+    preferred_engine_ids: list[str],
+    chunk_top_k: int,
+    chunk_neighbor_count: int,
+    effective_rerank_enabled: bool,
+    selected_retrieval_scope: str,
+    selected_classification_filter: ClassificationFilter | None,
+    retrieval_queries: tuple[str, ...],
+    text_queries: Mapping[str, str],
+    text_search_info: QuestionTextSearchInfo,
+    runtime_knowledge: RuntimeKnowledgeContext,
+    guide_plan: GuidePlan | None,
+    answer_started_at: float,
+) -> _EvidenceExpansion:
+    """⑦ 主の検索の根拠を広げる（Chat の経路だけ。``answer_question_result(expand=True)``）。
+
+    検索上限の要求別補完（要約のヒットの本文の再検索を含む）→ 業務ガイドの手順ごとの検索 → 補いの検索の根拠の合わせ込み →
+    章節の拡張と読めなかった起点の補い → 文脈の根拠からの参照 → 業務ガイドの手順と根拠の結び直し。検索の段の検索拡張
+    （参照の展開・目次からの章節の選択・実体・関係情報）は backend の検索が同じ経路の値で行う。
+    """
+    extra_budget = ExtraRetrievalBudget.from_settings(settings)
+    if guide_plan is not None and settings.guide_step_retrieval_enabled:
+        extra_budget.reserve_required(len(required_guide_targets(guide_plan)))
+    coverage_usage = CoverageUsage()
+    # 補いの検索で当たった文書全体の要約を、その文書の本文の根拠に置き換える検索し直しの枠と記録（#5244）。
+    summary_research = SummaryHitResearch(budget=extra_budget, reserve_seconds=_generation_reserve_seconds(settings))
+    section_state: dict[str, Any] = {}
+    # 業務ガイドの手順が参照する文書と頁（#2828）。章節の拡張はこの範囲の起点を先に広げ、回答の「回答に未反映の
+    # 関連章節」はこの文書の章節を残す。
+    guide_ranges = guide_plan.reference_ranges if guide_plan is not None else ()
+    # 主の検索の根拠（文脈を補った後の chunk と親）。補いの検索の新しい根拠の数は、これ以外だけを数える。
+    main_keys = set(_context_owner_keys(context)) | {record.chunk_uid or record.id for record in context.records}
+    # 補いの検索は、主の検索の根拠にすでにある候補を切りの前に除く（#5175。要求別の補完と業務ガイドの手順で同じ判定）。
+    main_overlap = _lazy_overlap(context, settings)
+    supplements: dict[str, AnswerRecord] = {}
+    supplement_pool: list[AnswerRecord] = []
+
+    def add_supplements(records: Iterable[AnswerRecord]) -> None:
+        for record in records:
+            key = record.chunk_uid or record.id
+            if not key:
+                continue
+            previous = supplements.get(key)
+            # 同じ根拠を 2 つの補いの検索が切ったときは、両方の印を残す（位置は先の検索の順）。
+            supplements[key] = (
+                record
+                if previous is None
+                else replace(previous, metadata={**(record.metadata or {}), **{k: v for k, v in (previous.metadata or {}).items()}})
+            )
+
+    # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
+    overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
+    overflow_keywords = (
+        settings.domain_keywords_override if settings.domain_keywords_override is not None else load_domain_keywords(settings.output_dir)
+    )
+
+    def overflow_retrieve(query: str, top_k: int) -> AnswerContext:
+        return build_adb_hybrid_answer_context(
+            query,
+            run_id,
+            preferred_engine_ids,
+            settings,
+            top_k=top_k,
+            neighbor_child_count=chunk_neighbor_count,
+            retrieval_queries=(query,),
+            rerank_phase="missing_requirement",
+            rerank_enabled=effective_rerank_enabled,
+            retrieval_scope=selected_retrieval_scope,
+            classification_filter=selected_classification_filter,
+            fill=False,
+            exclude=main_overlap,
+            summary_research=summary_research,
+        )
+
+    with _execution_step(
+        "検索上限の要求別補完", "全文検索の語数上限に達した質問を、元の要求と共通条件に分けて検索します。"
+    ) as overflow_step:
+        overflow_step.input(
+            lambda: {
+                "原質問": request_text,
+                "既検索文": list(dict.fromkeys((*retrieval_queries, *text_queries.values()))),
+                "既存根拠": candidate_snapshot(context.records),
+                "追加検索予算": extra_budget.to_payload(),
+                "要求別の予算": asdict(_request_coverage_budget(settings)),
+                "使用済みの要求別予算": asdict(coverage_usage),
+                "原質問のみ": bool(getattr(settings, "retrieval_original_query_only", False)),
+                "検索範囲": selected_retrieval_scope,
+                "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
+            }
+        )
+        overflow_results, overflow_trace = search_overflow_requests(
+            request_text,
+            tokenize=lambda text: tokenize_text_search_query_with_trace(
+                text,
+                domain_keywords=overflow_keywords,
+                config=overflow_config,
+                max_tokens=settings.text_search_max_tokens,
+                max_query_chars=settings.text_search_max_query_chars,
+            ),
+            retrieve=overflow_retrieve,
+            extra_budget=extra_budget,
+            coverage_budget=_request_coverage_budget(settings),
+            usage=coverage_usage,
+            searched_queries=(*retrieval_queries, *text_queries.values()),
+            existing_keys=main_keys,
+            initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
+            allow_split=not getattr(settings, "retrieval_original_query_only", False),
+        )
+        for result in overflow_results:
+            supplement_pool.extend(result.context.expansion_records)
+            add_supplements(
+                _with_supplement_mark(record, QUERY_OVERFLOW_KEY, {"request_ids": [result.request_id], "queries": [result.query]})
+                for record in result.context.records
+            )
+        overflow_candidates = list(
+            dict.fromkeys(record.chunk_uid or record.id for result in overflow_results for record in result.context.records)
+        )
+        overflow_trace["candidate_chunk_ids"] = overflow_candidates
+        overflow_step.output(
+            lambda: {
+                "検索結果": overflow_trace,
+                "要求ごとの返却根拠": [
+                    {"要求ID": item.request_id, "検索文": item.query, "候補": candidate_snapshot(item.context.records)}
+                    for item in overflow_results
+                ],
+                "合わせる根拠ID": overflow_candidates,
+            }
+        )
+        if overflow_trace.get("triggered"):
+            statuses = [str(row["status"]) for row in overflow_trace["requests"]]
+            covered_count = sum(int(row.get("covered_candidates") or 0) for row in overflow_trace["requests"])
+            overflow_step.result(
+                f"要求 {len(statuses)} 件、合わせる根拠 {len(overflow_candidates)} 件"
+                f"（主の検索の根拠と重複して除いた候補 {covered_count} 件）"
+            )
+            overflow_step.field("追加検索の残り", str(extra_budget.remaining))
+            overflow_step.field("未検索", str(sum(status.startswith("unsearched_") for status in statuses)))
+            overflow_step.field("失敗", str(statuses.count("failed")))
+        else:
+            overflow_step.skip(
+                {
+                    "original_query_only": "原質問のみを検索する設定のため、要求別には分割しません。",
+                    "tokenization_failed": "検索語の抽出に失敗したため、補完検索を実行していません。",
+                }.get(str(overflow_trace.get("skipped") or ""), "語数上限の超過がないため追加検索は不要です。")
+            )
+    guide_step_trace: dict[str, Any] | None = None
+    guide_results: list[StepSearch] = []
+    guide_acquisitions: list[dict[str, Any]] = []
+    if guide_plan is not None:
         with _execution_step(
-            "回答に添付する画像", "回答モデルが画像を読めるとき、根拠の資料の図・画面の画像を回答の入力に添付します。"
-        ) as image_step:
-            # 回答は選んだ回答モデルだけで作る（#3444）。画像を読めるモデルなら根拠の chunk に結び付いた画像を添付し、
-            # 読めないモデルは根拠の本文（取り込み時に作った図の説明を含む）だけで答える。質問の語で要否を決めない。
-            has_images = any(record_has_image_evidence(record) for record in context.records)
-            reads_images = answer_model_reads_images(settings, answer_llm_provider)
-            image_step.input(
+            "業務ガイドの手順ごとの検索", "業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に加えます。"
+        ) as guide_step:
+            guide_step.input(
                 lambda: {
                     "質問": normalized_question,
-                    "根拠ID": [item.chunk_uid or item.id for item in context.records],
-                    "画像を含む根拠ID": [item.chunk_uid or item.id for item in context.records if record_has_image_evidence(item)],
-                    "回答モデルの指定": answer_llm_provider,
-                    "画像を読める": reads_images,
+                    "手順計画": asdict(guide_plan),
+                    "既存根拠": candidate_snapshot(context.records),
+                    "追加検索予算": extra_budget.to_payload(),
+                    "検索範囲": selected_retrieval_scope,
+                    "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
+                    "前後それぞれのChunk数": chunk_neighbor_count,
+                    "再ランキング": effective_rerank_enabled,
+                    "設定": {
+                        key: getattr(settings, key, None)
+                        for key in (
+                            "guide_step_retrieval_enabled",
+                            "guide_step_max_queries",
+                            "guide_step_chunks_per_step",
+                            "guide_step_deadline_seconds",
+                        )
+                    },
                 }
             )
-            image_evidence = (
-                answer_image_evidence(context.records, settings.output_dir, question=normalized_question)
-                if has_images and reads_images
-                else ()
-            )
-            image_prompt_mode = _image_prompt_mode(image_evidence, settings, answer_llm_provider)
-            attached = [item for item in image_evidence if item.get("prompt_path")] if image_prompt_mode == "vision_attachments" else []
-            image_step.output(
-                lambda: {
-                    "入力方式": image_prompt_mode,
-                    "準備画像数": len(image_evidence),
-                    "添付画像数": len(attached),
-                    "理由": (
-                        "no_image_evidence"
-                        if not has_images
-                        else "model_without_vision"
-                        if not reads_images
-                        else "no_attachable_image"
-                        if not attached
-                        else "attached"
-                    ),
-                    "画像": [
-                        {**{key: item.get(key) for key in ("image_id", "page", "visual_kind")}, "添付": item in attached}
-                        for item in image_evidence
-                    ],
-                }
-            )
-            if not has_images:
-                # 記録の文からは省くが、処理の経過の段は出るので理由を残す（#2341）。
-                image_step.hide()
-                image_step.result("根拠に画像がありません")
-            elif not reads_images:
-                image_step.result("回答モデルが画像を読めないため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
-            elif not attached:
-                image_step.result(
-                    "添付できる画像のファイルが無いため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）"
-                )
-            else:
-                image_step.result(f"画像 {len(attached)} 件を添付して回答します")
-                image_step.add(
-                    "添付する画像:",
-                    *numbered(
-                        [
-                            f"{Path(str(item.get('source') or '')).name or item.get('image_id')}"
-                            + (f"（p.{item['page']}）" if item.get("page") else "")
-                            + (f" {item['visual_kind']}" if item.get("visual_kind") else "")
-                            for item in attached
-                        ]
-                    ),
-                )
-
-        unread_for_answer = list(section_expansion.unread) if section_expansion is not None else []
-
-        grounded_answer = synthesize_with_model_cascade(
-            request_text,
-            context,
-            settings,
-            question_plan=question_plan,
-            runtime_knowledge=runtime_knowledge,
-            image_evidence=image_evidence,
-            image_prompt_mode=image_prompt_mode,
-            answer_llm_provider=answer_llm_provider,
-            unread_sections=unread_for_answer,
-            unread_documents={document_id for document_id, _start, _end in guide_ranges},
-            evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
-        )
-        # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
-        response, context = grounded_answer.response, grounded_answer.context
-        response = replace(
-            response,
-            generation_trace={
-                **(response.generation_trace or {}),
-                **evidence_trace,
-                "extra_retrieval_budget": extra_budget.to_payload(),
-            },
-        )
-        image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
-        if legacy_notice:
-            response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
-        answer = _format_answer_response(response)
-        publication = (response.generation_trace or {}).get("finalization", {})
-        references = format_references(
-            _published_reference_records(context.records, response.generation_trace),
-            include_source=bool(publication.get("filtered") or publication.get("citations_synchronized")),
-        )
-        if references:
-            answer = f"{answer}\n\n参照:\n{references}"
-        return record_flow_result(
-            _answer_question_result(
-                settings=settings,
-                expansion=expansion,
-                answer=answer,
-                response=response,
-                records=context.records,
-                text_search_info=text_search_info,
-                question_plan=question_plan,
-                runtime_knowledge=runtime_knowledge,
+            guide_results, guide_acquisitions, guide_step_trace = _search_guide_steps(
+                normalized_question,
+                context,
+                settings,
+                guide_plan,
+                extra_budget=extra_budget,
+                run_id=run_id,
+                preferred_engines=preferred_engine_ids,
+                neighbor_child_count=chunk_neighbor_count,
+                rerank_enabled=effective_rerank_enabled,
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,
-                image_evidence=image_evidence,
-                image_prompt_mode=image_prompt_mode,
-                evidence_tree=context.evidence_tree,
-                retrieval_queries=retrieval_queries,
-                retrieval_top_k=chunk_top_k,
-                request_question=request_text,
+                exclude=main_overlap,
+                summary_research=summary_research,
             )
+            guide_records, guide_pool = _guide_step_supplements(guide_results)
+            supplement_pool.extend(guide_pool)
+            add_supplements(guide_records)
+            guide_step.output(
+                lambda: {
+                    "検索と取得の記録": guide_step_trace,
+                    "合わせる根拠ID": [record.chunk_uid or record.id for record in guide_records],
+                }
+            )
+            skipped = str(guide_step_trace.get("skipped") or "")
+            if skipped:
+                guide_step.skip(_GUIDE_STEP_SKIP_LABELS.get(skipped, f"しない（{skipped}）"))
+            else:
+                guide_step.result(
+                    f"検索 {len(guide_results)} 回、合わせる根拠 {len(guide_records)} 件"
+                    f"（主の検索の根拠と重複して除いた候補 {sum(len(result.covered) for result in guide_results)} 件）"
+                )
+    supplement_merge: dict[str, Any] | None = None
+    added_chunks: dict[str, list[str]] = {mark: [] for mark in SUPPLEMENT_KEYS}
+    if supplements:
+        # 主の検索の起点・検索拡張の根拠に補いの検索の根拠を同じ規則で合わせ、文脈を補い直す（#5162・#5168・
+        # #5173）。主の検索の根拠は外さない（#5185）。
+        with _execution_step(
+            "補いの検索の根拠の合わせ込み",
+            "補いの検索の根拠を主の検索の根拠に合わせて文脈を補い直します。主の検索の根拠は外しません。",
+        ) as merge_step:
+            merge_step.input({"補いの根拠ID": list(supplements)})
+            context, supplement_merge = _merge_supplements(
+                normalized_question,
+                context,
+                settings,
+                tuple(supplements.values()),
+                supplement_pool,
+                top_k=chunk_top_k,
+                neighbor_child_count=chunk_neighbor_count,
+            )
+            added_chunks = _merged_supplement_chunks(context, main_keys)
+            supplement_merge["added_chunk_ids"] = list(dict.fromkeys(key for keys in added_chunks.values() for key in keys))
+            merge_step.output(supplement_merge)
+            rejected_count = int(supplement_merge["rejected_count"])
+            merge_step.result(
+                f"補いの根拠 {len(supplements)} 件を合わせ、新しく足した根拠 {len(supplement_merge['added_chunk_ids'])} 件"
+                + (f"（主の検索の根拠が外れるため {rejected_count} 件を使いませんでした）" if rejected_count else "")
+            )
+    overflow_trace["added_chunk_ids"] = _supplement_owner_keys(context, added_chunks[QUERY_OVERFLOW_KEY])
+    context, section_expansion = _expand_context_by_sections(
+        normalized_question,
+        context,
+        settings,
+        rerank_enabled=effective_rerank_enabled,
+        started_at=answer_started_at,
+        state=section_state,
+        phase="main",
+        priority=guide_ranges,
+        top_k=chunk_top_k,
+    )
+    # 章節の拡張が所有の章節を読めなかった起点は、次の補い方（親 → 前後）で補う（#5173）。
+    context = _fill_unread_section_anchors(context, settings, section_state, neighbor_child_count=chunk_neighbor_count)
+    # 章節の拡張・親の読取で文脈に入った chunk を起点に参照先を読む（深さ 1。#5315）。
+    context = _add_context_references(context, section_state)
+    if guide_plan is not None and guide_step_trace is not None:
+        guide_step_trace, step_sources = _finish_guide_steps(
+            guide_plan, guide_results, guide_acquisitions, guide_step_trace, context, added_chunks[GUIDE_STEP_KEY]
         )
+        runtime_knowledge = replace(
+            runtime_knowledge,
+            guide_steps=step_sources,
+            guide_optional_steps=guide_plan.optional_step_ids,
+            guide_step_terms=guide_plan.step_terms,
+            guide_step_contracts=guide_plan.step_contracts,
+            guide_unsearched_steps=tuple(guide_step_trace.get("unsearched_step_ids") or ()),
+            guide_acquisition=tuple((guide_step_trace.get("required_acquisition") or {}).get("targets") or ()),
+            guide_acquisition_notices=_guide_acquisition_notices(guide_step_trace),
+        )
+    if guide_plan is not None and runtime_knowledge is not None and runtime_knowledge.guide_steps:
+        # 章節の拡張が child を parent に置き換えた後の ID も、参照の頁から手順に結び直す。
+        expanded_sources = reference_step_sources(guide_plan, context.records)
+        runtime_knowledge = replace(
+            runtime_knowledge,
+            guide_steps=tuple(
+                (step_id, title, tuple(dict.fromkeys((*sources, *expanded_sources.get(step_id, ())))))
+                for step_id, title, sources in runtime_knowledge.guide_steps
+            ),
+        )
+    trace: dict[str, Any] = {
+        "query_overflow": overflow_trace,
+        **({"supplement_merge": supplement_merge} if supplement_merge is not None else {}),
+        **({"summary_hits": summary_research.to_payload()} if summary_research.rows else {}),
+        **({"guide_steps": guide_step_trace} if guide_step_trace is not None else {}),
+        **({"section_expansion": section_expansion.trace} if section_expansion is not None else {}),
+    }
+    return _EvidenceExpansion(
+        context=context,
+        runtime_knowledge=runtime_knowledge,
+        trace=trace,
+        section_expansion=section_expansion,
+        unread_documents=frozenset(document_id for document_id, _start, _end in guide_ranges),
+        extra_budget=extra_budget,
+    )
+
+
+def _answer_from_evidence(
+    context: AnswerContext,
+    settings: Settings,
+    *,
+    normalized_question: str,
+    request_text: str,
+    runtime_knowledge: RuntimeKnowledgeContext,
+    question_plan: QuestionPlan,
+    answer_llm_provider: str | None,
+    expanded: _EvidenceExpansion | None,
+    legacy_notice: str,
+    query_expansion: QueryExpansionResult,
+    text_search_info: QuestionTextSearchInfo,
+    selected_retrieval_scope: str,
+    selected_classification_filter: ClassificationFilter | None,
+    retrieval_queries: tuple[str, ...],
+    chunk_top_k: int,
+) -> AnswerQuestionResult:
+    """⑧ 集めた根拠で回答する（RAG 検索と Chat の経路で同じ）。
+
+    回答に添付する画像 → 文書の背景と最初の chunk・根拠の選択・分割読取・回答の生成・引用の検証・参考情報への退避
+    （``synthesize_with_model_cascade``）→ 参照の整形。``expanded`` は ⑦ の結果（RAG 検索の経路は None）。
+    """
+    section_expansion = expanded.section_expansion if expanded is not None else None
+
+    with _execution_step(
+        "回答に添付する画像", "回答モデルが画像を読めるとき、根拠の資料の図・画面の画像を回答の入力に添付します。"
+    ) as image_step:
+        # 回答は選んだ回答モデルだけで作る（#3444）。画像を読めるモデルなら根拠の chunk に結び付いた画像を添付し、
+        # 読めないモデルは根拠の本文（取り込み時に作った図の説明を含む）だけで答える。質問の語で要否を決めない。
+        has_images = any(record_has_image_evidence(record) for record in context.records)
+        reads_images = answer_model_reads_images(settings, answer_llm_provider)
+        image_step.input(
+            lambda: {
+                "質問": normalized_question,
+                "根拠ID": [item.chunk_uid or item.id for item in context.records],
+                "画像を含む根拠ID": [item.chunk_uid or item.id for item in context.records if record_has_image_evidence(item)],
+                "回答モデルの指定": answer_llm_provider,
+                "画像を読める": reads_images,
+            }
+        )
+        image_evidence = (
+            answer_image_evidence(context.records, settings.output_dir, question=normalized_question) if has_images and reads_images else ()
+        )
+        image_prompt_mode = _image_prompt_mode(image_evidence, settings, answer_llm_provider)
+        attached = [item for item in image_evidence if item.get("prompt_path")] if image_prompt_mode == "vision_attachments" else []
+        image_step.output(
+            lambda: {
+                "入力方式": image_prompt_mode,
+                "準備画像数": len(image_evidence),
+                "添付画像数": len(attached),
+                "理由": (
+                    "no_image_evidence"
+                    if not has_images
+                    else "model_without_vision"
+                    if not reads_images
+                    else "no_attachable_image"
+                    if not attached
+                    else "attached"
+                ),
+                "画像": [
+                    {**{key: item.get(key) for key in ("image_id", "page", "visual_kind")}, "添付": item in attached}
+                    for item in image_evidence
+                ],
+            }
+        )
+        if not has_images:
+            # 記録の文からは省くが、処理の経過の段は出るので理由を残す（#2341）。
+            image_step.hide()
+            image_step.result("根拠に画像がありません")
+        elif not reads_images:
+            image_step.result("回答モデルが画像を読めないため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
+        elif not attached:
+            image_step.result("添付できる画像のファイルが無いため、画像は添付しません（図の内容は取り込み時に作った文字の説明で読みます）")
+        else:
+            image_step.result(f"画像 {len(attached)} 件を添付して回答します")
+            image_step.add(
+                "添付する画像:",
+                *numbered(
+                    [
+                        f"{Path(str(item.get('source') or '')).name or item.get('image_id')}"
+                        + (f"（p.{item['page']}）" if item.get("page") else "")
+                        + (f" {item['visual_kind']}" if item.get("visual_kind") else "")
+                        for item in attached
+                    ]
+                ),
+            )
+
+    unread_for_answer = list(section_expansion.unread) if section_expansion is not None else []
+
+    grounded_answer = synthesize_with_model_cascade(
+        request_text,
+        context,
+        settings,
+        question_plan=question_plan,
+        runtime_knowledge=runtime_knowledge,
+        image_evidence=image_evidence,
+        image_prompt_mode=image_prompt_mode,
+        answer_llm_provider=answer_llm_provider,
+        unread_sections=unread_for_answer,
+        unread_documents=expanded.unread_documents if expanded is not None else frozenset(),
+        evidence_budget_chars=_section_evidence_budget(context, settings, section_expansion),
+    )
+    # 是正で根拠や画像が増えた場合は、回答を生成した入力を参照欄と payload に使う。
+    response, context = grounded_answer.response, grounded_answer.context
+    response = replace(
+        response,
+        generation_trace={
+            **(response.generation_trace or {}),
+            **(expanded.trace if expanded is not None else {}),
+            **({"extra_retrieval_budget": expanded.extra_budget.to_payload()} if expanded is not None else {}),
+        },
+    )
+    image_evidence, image_prompt_mode = grounded_answer.image_evidence, grounded_answer.image_prompt_mode
+    if legacy_notice:
+        response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
+    answer = _format_answer_response(response)
+    publication = (response.generation_trace or {}).get("finalization", {})
+    references = format_references(
+        _published_reference_records(context.records, response.generation_trace),
+        include_source=bool(publication.get("filtered") or publication.get("citations_synchronized")),
+    )
+    if references:
+        answer = f"{answer}\n\n参照:\n{references}"
+    return _answer_question_result(
+        settings=settings,
+        expansion=query_expansion,
+        answer=answer,
+        response=response,
+        records=context.records,
+        text_search_info=text_search_info,
+        question_plan=question_plan,
+        runtime_knowledge=runtime_knowledge,
+        retrieval_scope=selected_retrieval_scope,
+        classification_filter=selected_classification_filter,
+        image_evidence=image_evidence,
+        image_prompt_mode=image_prompt_mode,
+        evidence_tree=context.evidence_tree,
+        retrieval_queries=retrieval_queries,
+        retrieval_top_k=chunk_top_k,
+        request_question=request_text,
+    )
 
 
 def _expand_context_by_sections(

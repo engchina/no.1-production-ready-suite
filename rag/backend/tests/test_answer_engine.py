@@ -22,6 +22,7 @@ from app.clients.entity_store import ENTITY_ALIASES_TABLE
 from app.clients.section_map_store import SECTION_CHUNKS_TABLE
 from app.config import EnterpriseAiConfiguredModel, Settings
 from app.rag.answer_engine import AnswerEngine
+from app.rag.pipeline import BASIC_FLOW, EXPANDED_FLOW, AnswerFlow
 from app.rag.stored_answer import STORED_CITATION_METADATA_KEYS
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from tests.audit_fixtures import is_audit_schema, legacy_audit_result
@@ -1961,6 +1962,7 @@ async def _run_with_progress(
     *,
     history: list[Any] | None = None,
     materialize_images: bool = True,
+    flow: AnswerFlow = BASIC_FLOW,
 ) -> tuple[Any, list[tuple[str, str]], list[str], SavingOracle]:
     """同じ stub の依存で pipeline を 1 回実行し、工程の開始・終了の列と LLM の schema を返す。"""
     import rag_engine.adapters.oci as engine_oci
@@ -1980,6 +1982,7 @@ async def _run_with_progress(
         oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         materialize_images=materialize_images,
+        flow=flow,
     )
     observed: list[tuple[str, str]] = []
 
@@ -1990,113 +1993,155 @@ async def _run_with_progress(
     return response, observed, schemas, oracle
 
 
-async def test_search_without_answer_runs_the_chat_evidence_flow(
+# ⑦ 根拠の拡張の工程（Chat の経路だけ。#5332）。stub の依存で必ず開く工程。
+EXPANSION_STEPS = (
+    "answer_step:検索上限の要求別補完",
+    "answer_step:章節の拡張",
+)
+
+
+def _cut_before_answer(steps: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """回答の工程の列を、回答に添付する画像（回答の生成の最初の工程）の手前で切り、根拠の検索の名前にする。"""
+    cut = steps.index(("answer_step:回答に添付する画像", "started"))
+    rename = {
+        "answer": "evidence",
+        "answer_step:回答生成フロー": "answer_step:根拠検索フロー",
+    }
+    return [(rename.get(stage, stage), outcome) for stage, outcome in steps[:cut]] + [
+        ("answer_step:根拠検索フロー", "success"),
+        ("evidence", "success"),
+    ]
+
+
+def _without_parallel(steps: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [e for e in steps if e[0] != "answer_step:用語・同義語による検索文の追加"]
+
+
+async def test_search_without_answer_runs_the_answer_evidence_flow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """RAG 検索(回答オフ)はチャットと同じ工程・入れ子・LLM で根拠を集める(#3506)。
+    """RAG 検索の回答オフは、同じ経路の回答と同じ工程・入れ子・LLM で根拠を集める(#3506・#5332)。
 
-    回答の生成の手前で止める。チャット(会話の最初の質問。履歴は空)と RAG 検索を同じ stub の依存で
-    実行し、根拠を集め終えるまでの工程の列(名前と開始・終了の順 = 入れ子)・LLM の呼び出し・
-    根拠の並びが同じことを確かめる。
+    回答の生成の手前で止める。根拠を集め終えるまでの工程の列(名前と開始・終了の順 = 入れ子)・LLM の
+    呼び出し・根拠の並びが、回答オンの RAG 検索と同じことを確かめる。
     """
-    chat, chat_steps, chat_llm, _ = await _run_with_progress(
-        monkeypatch, SearchRequest(query="受注の登録方法は？"), history=[]
+    answered, answered_steps, answered_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？")
     )
     search, search_steps, search_llm, oracle = await _run_with_progress(
         monkeypatch,
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
     )
 
-    # チャットだけが毎回の発話で最初に通す質問の補完（発話の種類の判定を含む。#4787）は比べない。
-    assert chat_steps[:2] == [("history_rewrite", "started"), ("history_rewrite", "success")]
-    chat_steps = chat_steps[2:]
-    assert not [e for e in search_steps if e[0] == "history_rewrite"]
-    # チャットの工程を、回答に添付する画像（回答の生成の最初の工程）の手前で切る。
-    cut = chat_steps.index(("answer_step:回答に添付する画像", "started"))
-    rename = {
-        "answer": "evidence",
-        "answer_step:回答生成フロー": "answer_step:根拠検索フロー",
-    }
-    expected = [(rename.get(stage, stage), outcome) for stage, outcome in chat_steps[:cut]]
-    expected += [
-        ("answer_step:根拠検索フロー", "success"),
-        ("evidence", "success"),
-    ]
-    parallel = {
-        "answer_step:用語・同義語による検索文の追加",
-    }
-    assert [e for e in search_steps if e[0] not in parallel] == [
-        e for e in expected if e[0] not in parallel
-    ]
-    assert sorted(e for e in search_steps if e[0] in parallel) == sorted(
-        e for e in expected if e[0] in parallel
-    )
-    assert ("answer_step:文書検索", "started") in search_steps or (
-        "answer_step:文書検索（1回目）",
-        "started",
-    ) in search_steps
-    # 根拠を集める LLM は同じ。回答の生成と監査だけがチャットに足される。
-    assert search_llm == chat_llm[: len(search_llm)]
+    expected = _cut_before_answer(answered_steps)
+    assert _without_parallel(search_steps) == _without_parallel(expected)
+    assert ("answer_step:文書検索", "started") in search_steps
+    # 根拠を集める LLM は同じ。回答の生成と監査だけが回答に足される。
+    assert search_llm == answered_llm[: len(search_llm)]
     assert not {"GroundedDraft", "GroundedDraftWire"}.intersection(search_llm)
     # 根拠も同じ。回答は引用した根拠を先頭に出すので、それ以外の根拠の並びを比べる。
     assert search.answer == ""
-    assert {c.chunk_id for c in search.citations} == {c.chunk_id for c in chat.citations}
-    used = {c.chunk_id for c in chat.citations if c.metadata.get("evidence_model_used")}
+    assert {c.chunk_id for c in search.citations} == {c.chunk_id for c in answered.citations}
+    used = {c.chunk_id for c in answered.citations if c.metadata.get("evidence_model_used")}
     assert [c.chunk_id for c in search.citations if c.chunk_id not in used] == [
-        c.chunk_id for c in chat.citations if c.chunk_id not in used
+        c.chunk_id for c in answered.citations if c.chunk_id not in used
     ]
     assert not any(c.metadata.get("evidence_model_used") for c in search.citations)
-    search_answer = search.diagnostics.answer or {}
-    assert search_answer["answer_flow"] == (chat.diagnostics.answer or {})["answer_flow"]
     # 回答が無いので回答の記録は保存しない。
     assert oracle.saved == []
+
+
+async def test_search_flow_skips_only_the_expansion_steps_of_the_chat_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RAG 検索(基本の経路)は Chat(拡張の経路)と同じ ⑤⑥・⑧ の工程を通り、⑦ の工程だけを
+    通らない(#5332)。"""
+    chat, chat_steps, chat_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？"), history=[], flow=EXPANDED_FLOW
+    )
+    search, search_steps, search_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？")
+    )
+
+    # チャットだけが毎回の発話で最初に通す質問の補完（#4787）は比べない。
+    assert chat_steps[:2] == [("history_rewrite", "started"), ("history_rewrite", "success")]
+    chat_steps = chat_steps[2:]
+    chat_started = {stage for stage, outcome in chat_steps if outcome == "started"}
+    search_started = {stage for stage, outcome in search_steps if outcome == "started"}
+    for step in EXPANSION_STEPS:
+        assert step in chat_started
+        assert step not in search_started
+    # ⑦ の工程(と、その中の入れ子の工程)を除けば、工程の並びは同じ。
+    expansion_only = chat_started - search_started
+    assert not search_started - chat_started
+    assert _without_parallel([e for e in chat_steps if e[0] not in expansion_only]) == (
+        _without_parallel(search_steps)
+    )
+    assert "answer_step:文脈の補完" in search_started
+    assert "answer_step:回答文の生成と引用の確認" in search_started
+    # 回答の生成の LLM は両方の経路で同じ（stub の依存では ⑦ に LLM の呼び出しが無い）。
+    assert search_llm
+    assert search_llm == [name for name in chat_llm if name in search_llm]
+    assert search.answer and chat.answer
 
 
 async def test_answer_retrieve_and_mcp_collect_the_same_evidence_in_the_same_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回答・検索だけ(retrieve)・MCP の根拠の取得は同じ流れで同じ根拠を同じ順に集める(#5173)。
+    """同じ経路なら、回答・検索だけ(retrieve)・MCP の根拠の取得は同じ根拠を同じ順に集める
+    (#5173・#5332)。
 
-    MCP(業務 Agent の根拠の取得)も主の文書の検索の後で止めず、章節の拡張・要求別の補完までの工程を
-    回答・RAG 検索の画面と同じ順に通る。違うのは図の画像を切り出さないことだけ。回答は引用した根拠を
-    先頭に出すので、回答だけの並び(引用した根拠)を除いて比べる。
+    MCP(業務 Agent の根拠の取得)は Chat と同じ拡張の経路で、主の文書の検索の後で止めず、章節の
+    拡張・要求別の補完までの工程を通る。違うのは図の画像を切り出さないことだけ。検索だけ(retrieve)は
+    RAG 検索の画面と同じ基本の経路。回答は引用した根拠を先頭に出すので、回答だけの並び(引用した
+    根拠)を除いて比べる。
     """
     from app.mcp.tools import mcp_evidence
 
-    chat, chat_steps, _chat_llm, _ = await _run_with_progress(
-        monkeypatch, SearchRequest(query="受注の登録方法は？"), history=[]
+    chat, _chat_steps, _chat_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？"), history=[], flow=EXPANDED_FLOW
     )
-    search, search_steps, _search_llm, _ = await _run_with_progress(
-        monkeypatch, SearchRequest(query="受注の登録方法は？", generate_answer=False)
+    chat_evidence, chat_evidence_steps, _llm, _ = await _run_with_progress(
+        monkeypatch,
+        SearchRequest(query="受注の登録方法は？", generate_answer=False),
+        flow=EXPANDED_FLOW,
     )
     mcp, mcp_steps, mcp_llm, oracle = await _run_with_progress(
         monkeypatch,
         SearchRequest(query="受注の登録方法は？", generate_answer=False),
         materialize_images=False,
+        flow=EXPANDED_FLOW,
+    )
+    search, search_steps, _search_llm, _ = await _run_with_progress(
+        monkeypatch, SearchRequest(query="受注の登録方法は？", generate_answer=False)
     )
     engine = AnswerEngine(
         Settings(),
         oracle=SavingOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         materialize_images=False,
+        expand=False,
     )
     retrieved = await engine.retrieve(SearchRequest(query="受注の登録方法は？"))
 
     used = {c.chunk_id for c in chat.citations if c.metadata.get("evidence_model_used")}
     chat_order = [c.chunk_id for c in chat.citations if c.chunk_id not in used]
-    assert [c.chunk_id for c in search.citations if c.chunk_id not in used] == chat_order
-    assert [c.chunk_id for c in retrieved if c.chunk_id not in used] == chat_order
+    assert [c.chunk_id for c in chat_evidence.citations if c.chunk_id not in used] == chat_order
     returned, omitted = mcp_evidence(mcp.citations, 20)
     assert [c.chunk_id for c in returned if c.chunk_id not in used] == chat_order
     assert omitted == 0
-    # MCP も同じ工程(章節の拡張・要求別の補完・文脈の補完を含む)を通る。
-    assert mcp_steps == search_steps
+    # MCP も Chat と同じ工程(章節の拡張・要求別の補完・文脈の補完を含む)を通る。
+    assert mcp_steps == chat_evidence_steps
     started = [stage for stage, outcome in mcp_steps if outcome == "started"]
-    assert "answer_step:章節の拡張" in started
-    assert "answer_step:検索上限の要求別補完" in started
+    for step in EXPANSION_STEPS:
+        assert step in started
     assert "answer_step:文脈の補完" in started
     assert mcp.answer == "" and oracle.saved == []
     assert not {"GroundedDraft", "GroundedDraftWire"}.intersection(mcp_llm)
+    # 検索だけ(retrieve)は RAG 検索の画面と同じ根拠を同じ順に集める(⑦ を通らない)。
+    assert [c.chunk_id for c in retrieved] == [c.chunk_id for c in search.citations]
+    search_started = [stage for stage, outcome in search_steps if outcome == "started"]
+    assert not set(EXPANSION_STEPS) & set(search_started)
 
 
 async def test_answer_diagnostics_include_models(monkeypatch: pytest.MonkeyPatch) -> None:

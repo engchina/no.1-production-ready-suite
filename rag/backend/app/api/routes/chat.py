@@ -84,6 +84,7 @@ from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.input_guardrail import combine_question_results
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (
+    EXPANDED_FLOW,
     ChatTurn,
     PreparedHistoryRewrite,
     RagPipeline,
@@ -1000,6 +1001,8 @@ async def _prepare_chat_turn(
             approved_faq_id=request.approved_faq_id,
         ),
         settings,
+        # RAG Chat は業務ガイドの照合・承認済み FAQ・根拠の拡張を含む経路（#5332）。
+        flow=EXPANDED_FLOW,
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
         # 補完した質問は前の発話の文脈を含むので、補完が有効なら足さない。
         guide_context=()
@@ -1130,6 +1133,7 @@ async def _generate_chat_answer(
             attachment_conversation_id=turn.conversation_id,
             history_question_prepared=turn.history_question_prepared,
             prepared_history_rewrite=turn.prepared_history_rewrite,
+            flow=EXPANDED_FLOW,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(

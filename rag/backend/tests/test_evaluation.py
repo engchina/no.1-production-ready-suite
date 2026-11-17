@@ -970,7 +970,7 @@ async def test_evaluation_run_applies_rag_overrides(
     observed_settings: list[Settings] = []
 
     class CapturingRagPipeline:
-        def __init__(self, settings: Settings) -> None:
+        def __init__(self, settings: Settings, flow: str = "basic") -> None:
             observed_settings.append(settings)
 
         async def run(

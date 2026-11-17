@@ -389,6 +389,21 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
         yield Observation()
 
 
+# 回答の経路（#5332）。入口（画面の RAG 検索・チャット・MCP・品質評価・業務ガイドの下書きの試答）が
+# 選び、入口の解決（``app.api.routes.search._resolve_query_context``）と ``RagPipeline`` に同じ値を
+# 渡す。
+# - basic: 基本の RAG。⑤ 検索（vector / keyword / native hybrid）→ 融合（RRF）→ rerank ＋
+#   ⑥ 親・前後の読取 → ⑧ 回答。画面の RAG 検索・検索だけ（retrieval_only）・staging の確かめ。
+# - expanded: ③ 業務ガイドの照合・承認済み FAQ と ⑦ 根拠の拡張（章節の拡張・参照の展開・目次から
+#   の章節の選択・実体・関係情報・検索上限の要求別補完・業務ガイドの手順ごとの検索）あり。
+#   RAG Chat・品質評価・業務ガイドの下書きの試答・MCP。
+# ② 会話の履歴による補完（``run(history=...)``）と ④ 会話の添付（``attachment_conversation_id``）は
+# 経路と別の引数で渡す。
+AnswerFlow = Literal["basic", "expanded"]
+BASIC_FLOW: AnswerFlow = "basic"
+EXPANDED_FLOW: AnswerFlow = "expanded"
+
+
 class RagPipeline:
     """回答フローで検索・回答する RAG パイプライン。
 
@@ -412,6 +427,7 @@ class RagPipeline:
         history_question_prepared: bool = False,
         prepared_history_rewrite: PreparedHistoryRewrite | None = None,
         materialize_images: bool = True,
+        flow: AnswerFlow = BASIC_FLOW,
     ) -> None:
         self._settings = settings or get_settings()
         if not self._settings.rag_support_guide_enabled:
@@ -449,6 +465,8 @@ class RagPipeline:
         self._materialize_images = materialize_images
         # 処理の経過の記録（`run(trace=...)`。回答の記録に trace id と工程の詳細を残す。#3226）。
         self._trace: AnswerTrace | None = None
+        # 回答の経路（``AnswerFlow``。#5332）。⑦ 根拠の拡張は expanded だけが行う。
+        self._flow = flow
 
     async def run(
         self,
@@ -753,6 +771,7 @@ class RagPipeline:
             attachment_chunks=attachment_chunks,
             degraded=degraded,
             materialize_images=self._materialize_images,
+            expand=self._flow == EXPANDED_FLOW,
         )
 
         async def emit_step(
@@ -987,7 +1006,8 @@ class RagPipeline:
             request = request.model_copy(update={"query": query_guardrail.sanitized_text})
         # 検索だけの結果にも縮退を残す(全文のみの結果を見誤らないように。#4663)。
         degraded = DegradedSteps()
-        # 回答・RAG 検索の画面と同じ流れで根拠を集める（#5173）。図の画像は切り出さない。
+        # 回答と同じ流れ（⑤⑥。expanded なら ⑦ も）で根拠を集める（#5173・#5332）。
+        # 図の画像は切り出さない。
         engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
@@ -995,6 +1015,7 @@ class RagPipeline:
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
             degraded=degraded,
             materialize_images=False,
+            expand=self._flow == EXPANDED_FLOW,
         )
         citations = await _observe_stage(
             trace_id,

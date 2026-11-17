@@ -70,7 +70,13 @@ from app.rag.observability import (
     record_evaluation_case,
     record_rag_request,
 )
-from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgressCallback
+from app.rag.pipeline import (
+    EXPANDED_FLOW,
+    AnswerFlow,
+    ChatTurn,
+    RagPipeline,
+    SearchStageProgressCallback,
+)
 from app.schemas.evaluation import (
     ANSWER_GENERATION_FALLBACK,
     EVALUATION_METRIC_NAMES,
@@ -254,6 +260,11 @@ ProfileResolver = Callable[
 ]
 
 
+# 品質評価の回答の経路（#5332）。RAG Chat と同じ経路（業務ガイドの照合・承認済み FAQ・根拠の
+# 拡張あり）で答える。入口の解決と pipeline の両方がこの値を使う。
+EVALUATION_ANSWER_FLOW: AnswerFlow = EXPANDED_FLOW
+
+
 async def _resolve_profile_context(
     request: SearchRequest, settings: Settings, guide_context: Sequence[str] = ()
 ) -> tuple[SearchRequest, Settings]:
@@ -265,7 +276,7 @@ async def _resolve_profile_context(
     from app.api.routes.search import _resolve_query_context
 
     resolved, resolved_settings, _kb, _view = await _resolve_query_context(
-        request, settings, guide_context=guide_context
+        request, settings, guide_context=guide_context, flow=EVALUATION_ANSWER_FLOW
     )
     return resolved, resolved_settings
 
@@ -415,7 +426,9 @@ class EvaluationRunner:
         deadline = _deadline(time_budget_seconds)
         cases = await self._with_same_text_equivalents(cases)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
-        pipeline = self._pipeline or RagPipeline(settings=effective_settings)
+        pipeline = self._pipeline or RagPipeline(
+            settings=effective_settings, flow=EVALUATION_ANSWER_FLOW
+        )
 
         concurrency = evaluation_concurrency(self._settings)
         caller = make_ai_caller(self._settings, "evaluation", max_concurrency=concurrency)
@@ -561,7 +574,9 @@ class EvaluationRunner:
                         effective_settings,
                         prior_queries[-EVALUATION_GUIDE_CONTEXT_TURNS:],
                     )
-                    case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
+                    case_pipeline = self._pipeline or RagPipeline(
+                        settings=case_settings, flow=EVALUATION_ANSWER_FLOW
+                    )
                     answer_settings = case_settings
                 attempt_trace_ids = [turn_trace_id]
 

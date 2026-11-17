@@ -223,43 +223,13 @@ test("質問履歴の候補を取得せず、質問欄から検索できる", as
   expect(candidateRequests).toEqual([]);
   await expectNoPageOverflow(page);
 });
-test("類似する登録済みQ&Aを提示し、選んだ Q&A を付けて検索すると回答を原文のまま表示する（#5107）", async ({ page }) => {
-  await mockCommon(page);
-  await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
-  const bodies: Record<string, unknown>[] = [];
-  await page.route("**/api/search/stream", (route) => {
-    bodies.push(route.request().postDataJSON() as Record<string, unknown>);
-    const events = [
-      ["metadata", { trace_id: "faq-run", elapsed_ms: 3, guardrail_warnings: [], diagnostics: { answer: { answer_source: "approved_faq", approved_faq_id: faqSuggestion.id, approved_faq_question: faqSuggestion.question, approved_faq_answer: faqSuggestion.answer } } }],
-      ["delta", { text: faqSuggestion.answer }],
-      ["citations", []],
-      ["done", { trace_id: "faq-run" }],
-    ] as const;
-    return route.fulfill({
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-      body: events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(""),
-    });
-  });
-
-  await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
-
-  await expect(page.getByRole("heading", { name: "質問に近い登録済みQ&Aがあります" })).toBeVisible();
-  expect(bodies).toHaveLength(0);
-  await page.getByRole("button", { name: "このQ&Aで回答する" }).click();
-  await expect.poll(() => bodies.length).toBe(1);
-  expect(bodies[0]).toMatchObject({ query: "受注を取り消すには？", approved_faq_id: faqSuggestion.id });
-  await expect(page.getByText(faqSuggestion.answer, { exact: true })).toBeVisible();
-  await expect(page.getByTestId("answer-faq-direct")).toBeVisible();
-});
-
-test("類似問を使わない場合は回答と根拠パネルを表示する", { tag: "@responsive" }, async ({ page }) => {
+test("RAG 検索は登録済みQ&Aを提示せずに回答と根拠パネルを表示する（#5332）", { tag: "@responsive" }, async ({ page }) => {
   await mockCommon(page);
   await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
   await mockAnswerStream(page);
 
   await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
-  await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
+  await expect(page.getByRole("heading", { name: "質問に近い登録済みQ&Aがあります" })).toHaveCount(0);
 
   // 回答の記録の詳細は、処理の経過の中の「処理の詳細」に畳む（#2096 / #2325。旧「回答の根拠と実行記録」）。
   const process = page.getByRole("region", { name: "処理の経過" });
@@ -456,10 +426,9 @@ for (const graph of [
 ]) {
   test(`関係情報の追加0件でも処理の詳細に理由を表示する (${graph.graph_available})`, { tag: "@responsive" }, async ({ page }) => {
     await mockCommon(page);
-    await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
+    await mockSearchAnswerProfileApi(page);
     await mockAnswerStream(page, graph);
     await selectSearchAnswerProfileAndAsk(page, "合成の操作方法を確認する");
-    await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
     const panel = await openAnswerProcessDetails(page, "search-run-progress");
     const diagnostic = panel.getByTestId("answer-graph-expansion");
     await expect(diagnostic).toHaveCount(0);
