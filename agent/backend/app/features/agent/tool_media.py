@@ -13,7 +13,9 @@ Run への記録と SDK・入力の管理への組み込みは `builtin_runtime`
   添付する画像を決め（`plan_image_delivery`）、結果の参照に `model_input`（添付した / しない理由）を
   書く。添付する画像は `model_tool_output` で `[ToolOutputText, ToolOutputImage, ...]` にする。
 - **入力の管理**: 同じ画像の重複・入力の画像の枚数の上限・予算は、モデルの呼び出しの直前に
-  `context_window` が決める（後の結果に同じ画像があれば前の添付を外し、参照は残す）。
+  `context_window` が決める（後の結果に同じ画像があれば前の添付を外し、参照は残す）。画像の
+  token の見積もりは Run のモデルの共通のモデル設定（画像 1 枚の入力 token。#5334）で、ここでは
+  数えない。
 - **保存**: 承認待ちで保存する SDK の状態からは画像のデータを外す（`strip_image_data`）。再開・
   会話の続きでは画像を持ち越さず、要るときはツールで取り直す（取り直すたびに呼び先が認可する）。
 """
@@ -24,7 +26,6 @@ import base64
 import binascii
 import hashlib
 import json
-import math
 import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -45,16 +46,6 @@ MAX_IMAGE_BYTES = 5_000_000
 MAX_IMAGES_PER_RESULT = 4
 # 1 回のモデルの入力に添付する画像の数の上限（新しい結果の画像から残す）。
 MAX_IMAGES_IN_INPUT = 8
-# 画像の token の見積もり（高い解像度の扱い: 長い辺を 2048、短い辺を 768 に縮め、512 px の
-# 区画ごとに数える。主要な Vision の API の計算と同じ形で、どの登録モデルでも多めになる値）。
-IMAGE_BASE_TOKENS = 85
-IMAGE_TILE_TOKENS = 170
-_IMAGE_MAX_EDGE = 2048
-_IMAGE_SHORT_EDGE = 768
-_IMAGE_TILE = 512
-# 大きさが読めない画像の見積もり（2048 × 2048 を縮めた 768 × 768 = 4 区画）。
-UNKNOWN_IMAGE_TOKENS = IMAGE_BASE_TOKENS + IMAGE_TILE_TOKENS * 4
-
 ImageInputStatus = Literal[
     "attached",
     "unsupported_model",
@@ -120,18 +111,6 @@ def _image_dimensions(data: bytes, mime_type: str) -> tuple[int, int] | None:
     return None
 
 
-def estimate_image_tokens(width: int | None, height: int | None) -> int:
-    """画像 1 枚の入力 token の見積もり（大きさが分からなければ多めの既定）。"""
-    if not width or not height or width <= 0 or height <= 0:
-        return UNKNOWN_IMAGE_TOKENS
-    scale = min(1.0, _IMAGE_MAX_EDGE / max(width, height))
-    w, h = width * scale, height * scale
-    shrink = min(1.0, _IMAGE_SHORT_EDGE / min(w, h))
-    w, h = w * shrink, h * shrink
-    tiles = math.ceil(w / _IMAGE_TILE) * math.ceil(h / _IMAGE_TILE)
-    return IMAGE_BASE_TOKENS + IMAGE_TILE_TOKENS * tiles
-
-
 @dataclass(frozen=True)
 class ToolImage:
     """ツールの結果の画像 1 枚（バイト列と由来。由来に画像のデータは入れない）。
@@ -155,11 +134,6 @@ class ToolImage:
     @cached_property
     def dimensions(self) -> tuple[int, int] | None:
         return _image_dimensions(self.data, self.mime_type)
-
-    @property
-    def estimated_tokens(self) -> int:
-        size = self.dimensions
-        return estimate_image_tokens(*(size or (None, None)))
 
     def data_url(self) -> str:
         return f"data:{self.mime_type};base64,{base64.b64encode(self.data).decode('ascii')}"
@@ -276,7 +250,6 @@ def plan_image_delivery(
     summary: dict[str, Any] = {
         "images": len(refs),
         "attached": len(attached),
-        "estimated_tokens": sum(image.estimated_tokens for image in attached),
         "statuses": {status: statuses.count(status) for status in dict.fromkeys(statuses)},
         "image_input": image_input,
     }
@@ -378,7 +351,6 @@ __all__ = [
     "ToolOutputWithImages",
     "data_url_image",
     "decode_image",
-    "estimate_image_tokens",
     "model_tool_output",
     "plan_image_delivery",
     "strip_image_data",

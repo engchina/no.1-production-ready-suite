@@ -61,10 +61,10 @@ export const ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX = 2_000_000;
 
 /**
  * 画像 1 枚の入力 token（#5316）。登録モデルごとに持ち、画像を添付する呼び出しの入力の上限の判定で、画像を
- * 枚数 × この値で数える。値の無いモデルは既定の 16384。範囲は backend の ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN /
- * _MAX と同じ（範囲外は保存で 422）。
+ * 枚数 × この値で数える。値の無いモデルは backend の既定（`ModelSettingsData.default_image_input_tokens`。#5334）を
+ * 使い、画面は既定を書き写さずに API の値を示す。範囲は backend の ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN / _MAX と
+ * 同じ（範囲外は保存で 422）。
  */
-export const DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS = 16_384;
 export const ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN = 1;
 export const ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX = 2_000_000;
 
@@ -84,9 +84,10 @@ export interface EnterpriseAiConfiguredModel {
    */
   max_output_tokens?: number;
   /**
-   * 画像 1 枚の入力 token（#5316）。未指定は既定（16384）。空欄は NaN で持ち、保存の前に欄のエラーで止める。
+   * 画像 1 枚の入力 token（#5316）。未指定・空欄（null）は backend の既定（`ModelSettingsData.default_image_input_tokens`。
+   * #5334）を使う。
    */
-  image_input_tokens?: number;
+  image_input_tokens?: number | null;
 }
 
 /**
@@ -153,6 +154,9 @@ export interface ModelSettingsData {
    * 古い backend は返さない（そのときは送らない）。
    */
   revision?: string;
+  /** 値の無い登録モデルに使う画像 1 枚の入力 token の既定と、その出典の URL（#5334。backend の既定）。 */
+  default_image_input_tokens?: number;
+  default_image_input_tokens_source_url?: string;
 }
 
 /** 保存（PATCH）の body。`base_revision` は読み込んだ時点の `ModelSettingsData.revision`（#1037）。 */

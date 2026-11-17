@@ -32,7 +32,8 @@ context editing が古いツールの結果から消す、LangChain の `trim_me
   読み取り専用のツールだけ（副作用があり得るツールは、呼び直すと同じ操作をもう一度実行する。#2632）。
 - Run の step に残すツールの結果は全文のまま（引用の照合は step を使う）。縮めるのは
   モデルに渡す入力だけで、呼び出しごとに元の入力から作り直す。
-- **画像**（ツールの結果の `input_image`。#2650）: 見積もりは画像の大きさから（`tool_media`）。
+- **画像**（ツールの結果の `input_image`。#2650）: 見積もりは画像の枚数 × Run のモデルの画像 1 枚の
+  入力 token（システム設定 > モデル の登録モデルの値。値が無ければ共通の既定。#5334）。
   同じ画像は最新の結果の 1 つだけに添付し、入力の画像は新しい結果から `MAX_IMAGES_IN_INPUT` 枚まで
   にする（予算に関わらず）。予算を超えるときは、古い結果の画像を文字を縮める前に外し、最新の結果の
   画像は文字を縮めても足りないときだけ外す。外した画像は、ID と読み直しの手を書いた文に置き換える。
@@ -52,6 +53,7 @@ from functools import lru_cache
 from typing import Any
 
 from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, online_output_budget
+from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS
 from pr_system_settings.model import estimate_input_tokens
 
 from app.features.agent.generation_diagnostics import generation_diagnostics_summary
@@ -60,7 +62,6 @@ from app.features.agent.tool_media import (
     MAX_IMAGES_IN_INPUT,
     ToolImage,
     data_url_image,
-    estimate_image_tokens,
 )
 
 # 縮めた結果に足す項目の名前。
@@ -121,6 +122,8 @@ class ContextLimits:
     max_input_tokens: int
     max_output_tokens: int
     online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
+    # 画像 1 枚の入力 token（#5334。登録モデルの値。値が無いモデルは共通の既定）。
+    image_input_tokens: int = DEFAULT_IMAGE_INPUT_TOKENS
 
 
 @dataclass
@@ -246,24 +249,28 @@ def _output_images(output: Sequence[Any]) -> list[tuple[int, str]]:
 
 
 @lru_cache(maxsize=64)
-def _image_facts(url: str) -> tuple[str, int]:
-    """画像の ID（sha256）と token の見積もり（data URL でなければ ID は空、見積もりは既定）。"""
+def _image_id(url: str) -> str:
+    """画像の ID（sha256。data URL でなければ空）。"""
     decoded = data_url_image(url)
     if decoded is None:
-        return "", estimate_image_tokens(None, None)
+        return ""
     mime, raw = decoded
-    image = ToolImage(data=raw, mime_type=mime)
-    return image.image_id, image.estimated_tokens
+    return ToolImage(data=raw, mime_type=mime).image_id
 
 
-def _image_tokens(item: Any) -> int:
+def _image_count(item: Any) -> int:
     data = _as_dict(item)
     if not isinstance(data, dict) or data.get("type") not in _TOOL_OUTPUT_TYPES:
         return 0
     output = data.get("output")
     if not isinstance(output, list):
         return 0
-    return sum(_image_facts(url)[1] for _index, url in _output_images(output))
+    return len(_output_images(output))
+
+
+def _images_tokens(count: int, budget: ContextBudget) -> int:
+    """画像の token の見積もり（枚数 × Run のモデルの画像 1 枚の入力 token。#5334）。"""
+    return math.ceil(count * budget.limits.image_input_tokens * budget.estimate_scale)
 
 
 def _item_text(item: Any) -> str:
@@ -273,7 +280,7 @@ def _item_text(item: Any) -> str:
         if data.get("type") in _TOOL_OUTPUT_TYPES and isinstance(output, str):
             return output
         if data.get("type") in _TOOL_OUTPUT_TYPES and isinstance(output, list):
-            # 画像は文字として数えない（`_image_tokens` が大きさから見積もる）。
+            # 画像は文字として数えない（`_images_tokens` が枚数から見積もる）。
             return "\n".join(_output_texts(output))
         content = data.get("content")
         if isinstance(content, str) and set(data) <= {"role", "content", "type"}:
@@ -588,7 +595,7 @@ def _latest_outputs(items: Sequence[Any], outputs: Sequence[int]) -> set[int]:
 def _item_tokens(item: Any, budget: ContextBudget) -> int:
     return (
         budget.estimate(_item_text(item))
-        + math.ceil(_image_tokens(item) * budget.estimate_scale)
+        + _images_tokens(_image_count(item), budget)
         + _ITEM_OVERHEAD_TOKENS
     )
 
@@ -663,7 +670,7 @@ def _without_images(
         if index in positions:
             parts[index] = {
                 "type": "input_text",
-                "text": _image_note(reason, _image_facts(url)[0], read_tool, rerunnable),
+                "text": _image_note(reason, _image_id(url), read_tool, rerunnable),
             }
     return {**item, "output": parts}
 
@@ -799,7 +806,7 @@ def compact_items(
         duplicates: list[int] = []
         over: list[int] = []
         for position, url in reversed(_output_images(output)):
-            image_id = _image_facts(url)[0] or url
+            image_id = _image_id(url) or url
             if image_id in seen:
                 duplicates.append(position)
                 continue
@@ -886,9 +893,7 @@ def compact_items(
             for index in sorted({*levels, *removed})
         ],
         images=len(remaining),
-        image_tokens=math.ceil(
-            sum(_image_facts(url)[1] for url in remaining) * budget.estimate_scale
-        ),
+        image_tokens=_images_tokens(len(remaining), budget),
     )
 
 

@@ -132,7 +132,11 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.imageInputTokens": "画像 1 枚の入力（tokens）",
   "settings.model.enterprise.imageInputTokensOfModel": "モデル {number} の画像 1 枚の入力（tokens）",
   "settings.model.enterprise.imageInputTokensHelp":
-    "画像を添付してモデルを呼ぶときに、入力の上限の判定で画像 1 枚を何 token として数えるかの値です。画像の token の数え方はモデルごとに異なるため、選択したモデルの公式の文書にある画像 1 枚の最大の token 数を入れてください。画像を読まないモデルでは使いません。既定は 16384 です。値を変えても、送る画像や画像の解像度は変わりません。",
+    "画像を添付してモデルを呼ぶときに、入力の上限の判定で画像 1 枚を何 token として数えるかの値です。画像の token の数え方はモデルごとに異なるため、選択したモデルの公式の文書にある画像 1 枚の最大の token 数を入れてください。画像を読まないモデルでは使いません。値を変えても、送る画像や画像の解像度は変わりません。",
+  "settings.model.enterprise.imageInputTokensDefaultHelp":
+    "未入力のときは {value} を使います（OCI Generative AI の公式の文書にある、xAI Grok の画像 1 枚の上限）。",
+  "settings.model.enterprise.imageInputTokensPlaceholder": "{value}（既定）",
+  "settings.model.enterprise.imageInputTokensSourceDocs": "Oracle 公式: 画像 1 枚の token（xAI Grok）",
   "settings.model.enterprise.imageInputTokensInvalid":
     "画像 1 枚の入力は 1〜2000000 の整数で入力してください。",
   "settings.model.enterprise.removeConfirm.description":

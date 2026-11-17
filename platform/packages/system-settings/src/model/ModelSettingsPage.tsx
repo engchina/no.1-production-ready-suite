@@ -98,7 +98,6 @@ import {
 import { searchableSelectLabels, t } from "./messages";
 import {
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
-  DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
   ENTERPRISE_AI_CONNECTION_IDS,
@@ -458,7 +457,7 @@ export function ModelSettingsPage({
                   reasoning_effort: DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
                   max_input_tokens: DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
                   max_output_tokens: DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
-                  image_input_tokens: DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
+                  image_input_tokens: null,
                 },
               ],
             },
@@ -899,6 +898,10 @@ export function ModelSettingsPage({
                 maxInputTokensErrors={maxInputTokensErrors}
                 maxOutputTokensErrors={maxOutputTokensErrors}
                 imageInputTokensErrors={imageInputTokensErrors}
+                defaultImageInputTokens={baselineData?.default_image_input_tokens}
+                defaultImageInputTokensSourceUrl={
+                  baselineData?.default_image_input_tokens_source_url
+                }
                 testingKey={testingKey}
                 testResults={testResults}
                 onModelChange={updateEnterpriseModel}
@@ -1306,6 +1309,8 @@ function ModelCatalogEditor({
   maxInputTokensErrors,
   maxOutputTokensErrors,
   imageInputTokensErrors,
+  defaultImageInputTokens,
+  defaultImageInputTokensSourceUrl,
   testingKey,
   testResults,
   onModelChange,
@@ -1321,6 +1326,9 @@ function ModelCatalogEditor({
   maxInputTokensErrors: Record<number, string>;
   maxOutputTokensErrors: Record<number, string>;
   imageInputTokensErrors: Record<number, string>;
+  /** 値の無いモデルに使う画像 1 枚の入力 token と出典（#5334。backend の既定。画面に書き写さない）。 */
+  defaultImageInputTokens?: number;
+  defaultImageInputTokensSourceUrl?: string;
   testingKey: ModelTestKey | null;
   testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
   onModelChange: (
@@ -1518,14 +1526,21 @@ function ModelCatalogEditor({
                 min={ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN}
                 max={ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX}
                 step={1}
-                value={imageInputTokensInputValue(model)}
+                value={model.image_input_tokens ?? ""}
+                placeholder={
+                  defaultImageInputTokens === undefined
+                    ? undefined
+                    : t("settings.model.enterprise.imageInputTokensPlaceholder", {
+                        value: defaultImageInputTokens,
+                      })
+                }
                 width="xs"
                 aria-describedby={IMAGE_INPUT_TOKENS_HELP_ID}
                 error={imageInputTokensErrors[index]}
                 onValueChange={(next) =>
                   onModelChange(index, {
-                    image_input_tokens:
-                      next.trim() === "" ? Number.NaN : Number(next),
+                    // 空欄は値なし（backend の既定を使う。#5334）。
+                    image_input_tokens: next.trim() === "" ? null : Number(next),
                   })
                 }
                 inputClassName="tnum"
@@ -1600,6 +1615,11 @@ function ModelCatalogEditor({
         </p>
         <p id={IMAGE_INPUT_TOKENS_HELP_ID} className="text-xs leading-relaxed text-fg-muted">
           {t("settings.model.enterprise.imageInputTokensHelp")}
+          {defaultImageInputTokens === undefined
+            ? null
+            : t("settings.model.enterprise.imageInputTokensDefaultHelp", {
+                value: defaultImageInputTokens,
+              })}
         </p>
         <div className="flex flex-wrap gap-3 text-xs">
           <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/models.htm" target="_blank" rel="noopener noreferrer" className="text-accent-fg underline underline-offset-2">
@@ -1608,6 +1628,11 @@ function ModelCatalogEditor({
           <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/responses-api.htm" target="_blank" rel="noopener noreferrer" className="text-accent-fg underline underline-offset-2">
             {t("settings.model.enterprise.apiDocs")}
           </a>
+          {defaultImageInputTokensSourceUrl ? (
+            <a href={defaultImageInputTokensSourceUrl} target="_blank" rel="noopener noreferrer" className="text-accent-fg underline underline-offset-2">
+              {t("settings.model.enterprise.imageInputTokensSourceDocs")}
+            </a>
+          ) : null}
         </div>
       </Disclosure>
     </div>
@@ -1698,19 +1723,14 @@ function modelImageInputTokensFieldId(index: number): string {
   return `enterprise-model-image-input-tokens-${index}`;
 }
 
-/** 画像 1 枚の入力の欄の表示値（値の無いモデルは既定、空欄（NaN）は空）。 */
-function imageInputTokensInputValue(model: EnterpriseAiConfiguredModel): number | "" {
-  const value = model.image_input_tokens ?? DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS;
-  return Number.isNaN(value) ? "" : value;
-}
-
-/** 行ごとの画像 1 枚の入力のエラー（#5316。1〜2000000 の整数。backend の検証と同じ範囲）。 */
+/** 行ごとの画像 1 枚の入力のエラー（#5316。1〜2000000 の整数。backend の検証と同じ範囲。空欄は既定を使う）。 */
 function validateImageInputTokens(
   models: readonly EnterpriseAiConfiguredModel[],
 ): Record<number, string> {
   const errors: Record<number, string> = {};
   models.forEach((model, index) => {
-    const tokens = model.image_input_tokens ?? DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS;
+    const tokens = model.image_input_tokens;
+    if (tokens === null || tokens === undefined) return;
     if (
       !Number.isInteger(tokens) ||
       tokens < ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN ||

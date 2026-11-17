@@ -233,7 +233,7 @@ def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 32768,
-            "image_input_tokens": 16384,
+            "image_input_tokens": None,
         }
     ]
 

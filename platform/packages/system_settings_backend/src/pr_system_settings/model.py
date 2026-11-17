@@ -25,7 +25,8 @@
   未完了（`incomplete` / `max_output_tokens`）の送り直しは `enterprise_ai_retry_output_token_budget`
   でモデルの上限まで広げる。共通の LLM / VLM の出力の上限（#1719 より前の
   `llm_max_output_tokens` / `vlm_max_output_tokens`）は持たない
-- 登録モデルごとに画像 1 枚の入力 token `image_input_tokens` を持つ（#5316。既定 16384）。
+- 登録モデルごとに画像 1 枚の入力 token `image_input_tokens` を持つ（#5316。値の無いモデルは
+  共通の既定 1792。#5334）。
   画像を添付する呼び出しの入力の上限の判定は、画像を base64 の文字ではなく、枚数 × この値で数える
   （値の解釈は `enterprise_ai_image_input_tokens`、画像の部品を除く見積もりは
   `pr_backend_core.token_estimate.without_image_inputs`）
@@ -65,7 +66,10 @@ from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
 from pr_backend_core.schemas import ApiResponse
 
 # 入力 token の見積もりは backend_core の 1 つ（検索の結果の本文の予算と共有する。#3321）。
-from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS
+from pr_backend_core.token_estimate import (
+    DEFAULT_IMAGE_INPUT_TOKENS,
+    DEFAULT_IMAGE_INPUT_TOKENS_SOURCE_URL,
+)
 from pr_backend_core.token_estimate import estimate_input_tokens as estimate_input_tokens
 from pr_enterprise_ai.errors import (
     classify_enterprise_ai_http_failure,
@@ -117,7 +121,7 @@ ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
 # `vlm_max_output_tokens` は持たず、5 の JSON のそれらは読み捨てる（項目の無いモデル =
 # 既定の 32768。入力の上限がそれより小さいモデルは入力の上限）。
 # 7: 登録モデルの `image_input_tokens`（#5316）。6 の JSON はそのまま読める
-# （項目が無い = 既定の 16384）。
+# （項目が無い = 既定。値は `DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS`）。
 MODEL_SETTINGS_DOCUMENT_VERSION = 7
 # この版より前の JSON だけが API key（`enterprise_ai.api_key`）を持てた
 # （v3 から secret は `.env`）。
@@ -175,7 +179,10 @@ ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX: Final = 2_000_000
 # 画像 1 枚の入力 token（#5316）。登録モデルごとに持ち、画像を添付する呼び出しの入力の上限の判定で、
 # 画像を枚数 × この値で数える（画像の data URL の base64 は本文の見積もりに入れない）。
 # 画像の token はモデルごとに計算が違うので、モデルの公式の文書にある 1 枚の最大を入れる。
-# 値が無いモデルは既定（実体と根拠は `pr_backend_core.token_estimate.DEFAULT_IMAGE_INPUT_TOKENS`）。
+# 値が無いモデルは既定の 1792（OCI Generative AI の公式の文書の xAI Grok 4.3 の 1 枚の最大。
+# https://docs.oracle.com/en-us/iaas/Content/generative-ai/xai-grok-4-3.htm 。実体と根拠は
+# `pr_backend_core.token_estimate.DEFAULT_IMAGE_INPUT_TOKENS`）。値の無いモデルは値を保存せず
+# （None）、既定を変えれば値の無いモデルすべてに効く。
 # 範囲は 1〜入力の上限の最大。
 DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS: Final = DEFAULT_IMAGE_INPUT_TOKENS
 ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN: Final = 1
@@ -216,10 +223,10 @@ class EnterpriseAiConfiguredModel(BaseModel):
         ge=ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN,
         le=ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX,
     )
-    # 画像 1 枚の入力 token（#5316）。未指定（#5316 より前の設定も）は既定の 16384。範囲外は
-    # 読み込み・保存とも検証エラー。
-    image_input_tokens: int = Field(
-        default=DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
+    # 画像 1 枚の入力 token（#5316）。未指定（None。#5316 より前の設定も）は共通の既定を使う
+    # （値の解釈は `image_input_tokens_to_use`。#5334）。範囲外は読み込み・保存とも検証エラー。
+    image_input_tokens: int | None = Field(
+        default=None,
         ge=ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN,
         le=ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX,
     )
@@ -494,6 +501,9 @@ class ModelSettingsData(BaseModel):
     legacy_secret_detected: bool = False
     # 保存済みのモデル設定の版（#1037）。保存の `base_revision` に返す。
     revision: str = ""
+    # 画像 1 枚の入力 token の既定と出典（#5334）。値の無いモデルに使う値を画面に示す。
+    default_image_input_tokens: int = DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS
+    default_image_input_tokens_source_url: str = DEFAULT_IMAGE_INPUT_TOKENS_SOURCE_URL
 
 
 class ModelSettingsTestRequest(BaseModel):
@@ -868,7 +878,7 @@ def enterprise_ai_max_input_tokens(settings: Any, model_id: str) -> int:
 def image_input_tokens_to_use(value: object) -> int:
     """設定の値を、画像 1 枚の入力 token にする（#5316。解釈はここだけ）。
 
-    整数で範囲（1〜2000000）の中ならその値、値なし・範囲外・整数でない値は既定の 16384。
+    整数で範囲（1〜2000000）の中ならその値、値なし・範囲外・整数でない値は既定の 1792。
     """
     if isinstance(value, bool) or value is None:
         return DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS
@@ -884,7 +894,7 @@ def image_input_tokens_to_use(value: object) -> int:
 def enterprise_ai_image_input_tokens(settings: Any, model_id: str) -> int:
     """モデルに設定した画像 1 枚の入力 token（#5316）。
 
-    登録モデルにない ID（env だけで設定した場合など）は、登録モデルの既定と同じ 16384。
+    登録モデルにない ID（env だけで設定した場合など）は、登録モデルの既定と同じ 1792。
     """
     normalized = model_id.strip()
     return next(

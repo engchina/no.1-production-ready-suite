@@ -28,7 +28,7 @@ const baseline: ModelSettingsPayload = {
         reasoning_effort: "medium",
         max_input_tokens: 128000,
         max_output_tokens: 32768,
-        image_input_tokens: 16384,
+        image_input_tokens: null,
       },
     ],
     default_text_model_id: "saved-llm",
