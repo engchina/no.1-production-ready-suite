@@ -115,6 +115,10 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
                 "contextRecords",
                 "rag_engine.parsing.vision_prompt_rules:VISION_CONTEXT_RECORDS_INSTRUCTION",
             ),
+            (
+                "sourceShapes",
+                "rag_engine.parsing.vision_prompt_rules:VISION_SOURCE_SHAPES_INSTRUCTION",
+            ),
         ),
     ),
     PromptStage(

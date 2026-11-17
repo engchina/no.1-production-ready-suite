@@ -3831,6 +3831,7 @@ export const ja = {
   "settings.answerPrompts.part.table": "表を読むときの対象の指示",
   "settings.answerPrompts.part.contextImage": "周辺の画像があるときに足す指示",
   "settings.answerPrompts.part.contextRecords": "前後の記録や見出しがあるときに足す指示",
+  "settings.answerPrompts.part.sourceShapes": "原ファイルの図形と接続線があるときに足す指示",
   "settings.answerPrompts.part.rules": "共通の読み取り指示",
   "settings.answerPrompts.part.contract": "出力形式と上限（読み取り専用）",
   "settings.answerPrompts.part.answerChoice":

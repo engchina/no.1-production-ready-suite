@@ -18,6 +18,7 @@ from io import BytesIO
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
+from xml.etree import ElementTree
 
 from pr_backend_core.bounded_calls import (
     Attempt,
@@ -28,6 +29,7 @@ from pr_backend_core.bounded_calls import (
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
+from rag_engine.parsing.slide_shapes import PresentationShapes, read_presentation_shapes
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.language import LANGUAGE_PACK_HASH_KEY, current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
@@ -225,7 +227,10 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 9: 図・画像の説明を、同じページの本文の言語で書く。#4821。
 # 14: 解析器が本文に付けた原文に無い範囲(non_source_text_ranges)を要素に記録する。#5305。
 # 15: プレーンテキストの本文の無い見出しの並びを、直前の見出しの本文に含める。#5315)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 15
+# 16: PowerPoint の原本の図形と接続線を、図の読み取りの入力と図の説明に入れる。#5359。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 16
+# 原本の図形と接続線を読む PowerPoint の形式（OOXML。Office→PDF で変換して解析するとき。#5359）。
+_PRESENTATION_SHAPE_EXTENSIONS = frozenset({".pptx", ".pptm"})
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
@@ -1517,6 +1522,14 @@ class IngestionPipeline:
             source_profile = converted_source_profile(
                 source_profile, converted=source_derivation.converted
             )
+            # PowerPoint を PDF へ変換して解析するときは、原本の図形と接続線を図の読み取りへ渡す。
+            slide_shapes = await self._presentation_shapes(
+                trace_id,
+                source_profile,
+                source_bytes=image_bytes if prepared_artifact is None else None,
+                original_object_storage_path=original_object_storage_path,
+                parse_content_type=parse_content_type,
+            )
             await _raise_if_cancelled(cancel_checker)
             progress = active_ingestion_progress()
             partition_attributes: dict[str, object] = {
@@ -1556,6 +1569,7 @@ class IngestionPipeline:
                     parser_backend=segment_backend,
                     progress=progress,
                     cancel_checker=cancel_checker,
+                    slide_shapes=slide_shapes,
                 )
                 try:
                     parser_result, checkpoint_segments = await self._parse_pdf_segments(
@@ -1692,6 +1706,7 @@ class IngestionPipeline:
                 ),
                 parser_backend=parser_result.parser_backend,
                 cancel_checker=cancel_checker,
+                slide_shapes=slide_shapes,
             )
             # 文書全体の整理(しおりの見出しの深さ・ページの境目で切れた段落・表の続き。#2001)。
             # 段ごとの解析をまとめた結果にも原本全体の解析の結果にも同じ規則で当てる。Vision の
@@ -2986,6 +3001,7 @@ class IngestionPipeline:
         cancel_checker: Callable[[], Awaitable[bool]] | None,
         segment: IngestionSegment | None = None,
         stop: threading.Event | None = None,
+        slide_shapes: PresentationShapes | None = None,
     ) -> StructuredExtraction:
         """`rag_vision_enabled` が真なら、図・画像を既定の Vision モデルで読み取る(#497)。
 
@@ -3084,6 +3100,7 @@ class IngestionPipeline:
                     ),
                     progress_callback=progress_callback,
                     work_dir=job.work_dir() if job is not None else None,
+                    slide_shapes=slide_shapes,
                 )
             except IngestionCancelledError:
                 raise
@@ -3111,6 +3128,43 @@ class IngestionPipeline:
         _raise_if_item_failures_fail_job(self._settings, result)
         return result
 
+    async def _presentation_shapes(
+        self,
+        trace_id: str,
+        source_profile: SourceProfile | None,
+        *,
+        source_bytes: bytes | None,
+        original_object_storage_path: str | None,
+        parse_content_type: str,
+    ) -> PresentationShapes | None:
+        """PowerPoint を PDF へ変換して解析するとき、原本の図形と接続線を読む(#5359)。
+
+        変換の後は線の端がどの図形につながるかが失われるため、図の読み取りの入力と図の説明に、原本
+        から形式どおりに読んだ構造を入れる。``source_bytes`` が原本(ファイル準備をこの job で行った)
+        でなければ、原本の保存先から読む。図の読み取りが無効・PowerPoint でない・PDF を解析しない
+        ときと、原本を読めないときは None(読み取りは画像だけで続ける)。
+        """
+        if not self._settings.rag_vision_enabled or source_profile is None:
+            return None
+        if (source_profile.extension or "").casefold() not in _PRESENTATION_SHAPE_EXTENSIONS:
+            return None
+        if _observability_content_type(parse_content_type) != "application/pdf":
+            return None
+        data = source_bytes
+        if data is None:
+            if not original_object_storage_path:
+                return None
+            try:
+                data = await self._object_storage.get(original_object_storage_path)
+            except (FileNotFoundError, ValueError, OSError):
+                logger.warning("slide_shapes_source_unreadable", extra={"trace_id": trace_id})
+                return None
+        try:
+            return await asyncio.to_thread(read_presentation_shapes, data)
+        except (zipfile.BadZipFile, ElementTree.ParseError, KeyError, ValueError):
+            logger.warning("slide_shapes_unreadable", extra={"trace_id": trace_id}, exc_info=True)
+            return None
+
     async def _start_vision_prefetch(
         self,
         *,
@@ -3123,6 +3177,7 @@ class IngestionPipeline:
         parser_backend: str,
         progress: IngestionProgressReporter | None,
         cancel_checker: Callable[[], Awaitable[bool]] | None,
+        slide_shapes: PresentationShapes | None = None,
     ) -> _VisionPrefetcher | None:
         """段ごとの解析と並べる Vision の先読みを始める(#2002)。Vision が無効なら None。
 
@@ -3151,6 +3206,7 @@ class IngestionPipeline:
                 parser_backend=parser_backend,
                 cancel_checker=cancel_checker,
                 stop=stop,
+                slide_shapes=slide_shapes,
             )
 
         return _VisionPrefetcher(run)
@@ -3168,6 +3224,7 @@ class IngestionPipeline:
         parser_backend: str,
         cancel_checker: Callable[[], Awaitable[bool]] | None,
         stop: threading.Event,
+        slide_shapes: PresentationShapes | None = None,
     ) -> None:
         """解析の終わった段の図・表を先に読み、応答を段の artifact に残す(#2002)。
 
@@ -3187,6 +3244,7 @@ class IngestionPipeline:
             cancel_checker=cancel_checker,
             segment=segment,
             stop=stop,
+            slide_shapes=slide_shapes,
         )
         if job is not None:
             await self._save_vision_checkpoints(document_id, segment, job)

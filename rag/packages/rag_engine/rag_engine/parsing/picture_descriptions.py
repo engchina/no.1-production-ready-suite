@@ -6,7 +6,7 @@ import math
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future
 from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass
@@ -26,6 +26,7 @@ from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import classify_picture_record, mark_picture_record_role
 from rag_engine.parsing.diagram_graph import graph_projection, normalize_graph
 from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
+from rag_engine.parsing.slide_shapes import SOURCE_SLIDE_SHAPES_KEY, SlideShapes, slide_shapes_text
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
 from rag_engine.parsing.vision_prompt_rules import (
     MAX_CHART_SERIES_VALUES,
@@ -287,12 +288,14 @@ def _vision_field_lines(field: str, value: Any) -> list[str]:
     return [line for item in value if not _is_empty_vision_value(item) and (line := renderer(item))]
 
 
-def vision_description_text(payload: dict[str, Any], *, for_answer: bool = False) -> str:
+def vision_description_text(payload: dict[str, Any], *, for_answer: bool = False, source_shapes: str = "") -> str:
     """対応する Vision field を text-only retrieval 向けのラベル付き text に整形します。
 
     `■ グループ` の見出しの下に `ラベル: 値` を並べ、要素が複数ある field は `ラベル:` の
     下へ `- ` の箇条書きにします。人が検証でき、回答生成が行と対応を読み取れる形を優先します。
     空の field と、行が 1 つも出ないグループは出力しません。
+    ``source_shapes`` は原本（PowerPoint）から読んだ図形と接続線の文（``slide_shapes_text``）で、
+    Vision の項目とは別のグループ（検索の手がかりの前）に置きます（#5359）。
     """
     description = payload.get("description") if isinstance(payload.get("description"), dict) else payload
     if not isinstance(description, dict):
@@ -316,6 +319,11 @@ def vision_description_text(payload: dict[str, Any], *, for_answer: bool = False
             description["correction_notes"] = "\n".join(filter(None, [description.get("correction_notes"), note]))
     lines: list[str] = []
     for group, fields in VISION_SENTENCE_GROUPS:
+        if group == "search" and source_shapes.strip():
+            if lines:
+                lines.append("")
+            lines.append(f"{labels.group_prefix}{labels.group('source')}")
+            lines.append(source_shapes.strip())
         if for_answer and group == "search":
             continue
         group_lines: list[str] = []
@@ -339,11 +347,11 @@ def vision_description_text(payload: dict[str, Any], *, for_answer: bool = False
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def vision_text_projection(payload: dict[str, Any]) -> VisionTextProjection:
+def vision_text_projection(payload: dict[str, Any], *, source_shapes: str = "") -> VisionTextProjection:
     """型付き検索フィールドだけを本文から分け、可視文字列は解釈しない。"""
     return VisionTextProjection(
-        answer_description=vision_description_text(payload, for_answer=True),
-        index_text=vision_description_text(payload),
+        answer_description=vision_description_text(payload, for_answer=True, source_shapes=source_shapes),
+        index_text=vision_description_text(payload, source_shapes=source_shapes),
     )
 
 
@@ -358,7 +366,7 @@ def reproject_saved_vision_record(record: dict[str, Any]) -> None:
     category = str(record.get("category") or "")
     if not isinstance(description, dict) or category not in {"Picture", "Table", "Form"}:
         return
-    projection = vision_text_projection(description)
+    projection = vision_text_projection(description, source_shapes=str(raw.get(SOURCE_SLIDE_SHAPES_KEY) or ""))
     if not projection.answer_description:
         return
     key = "table_vision_text" if category == "Table" else "text"
@@ -551,6 +559,7 @@ def describe_layout_pictures(
     cancel_check: Callable[[], None] | None = None,
     progress_callback: Callable[[dict], None] | None = None,
     image_purpose: ImagePurpose | None = None,
+    slide_shapes: Mapping[int, SlideShapes] | None = None,
 ) -> VisionDescriptionStats:
     """``engine`` の LayoutRecord の Picture と画像入り Table を ``describer`` で読み取る。
 
@@ -559,6 +568,8 @@ def describe_layout_pictures(
     表内画像の検出、prompt の metadata)で読み取れる。``prompt_template`` は画像検索の prompt
     (未指定は保存済みの prompt)。``cancel_check`` は対象ごとの前に呼び、例外で中断する。
     ``progress_callback`` は途中状態(``progress.json`` と同じ内容)の保存ごとに呼ぶ。
+    ``slide_shapes`` は頁番号ごとの原本（PowerPoint）の図形と接続線（#5359）。その頁の Picture の
+    領域の構造を、prompt の metadata と説明の本文に入れる。
     """
     with checkpoint_lock(run_dir, ".vision.lock"):
         return _describe_layout_pictures(
@@ -573,6 +584,7 @@ def describe_layout_pictures(
             cancel_check=cancel_check,
             progress_callback=progress_callback,
             image_purpose=image_purpose,
+            slide_shapes=slide_shapes,
         )
 
 
@@ -589,6 +601,7 @@ def _describe_layout_pictures(
     cancel_check: Callable[[], None] | None = None,
     progress_callback: Callable[[dict], None] | None = None,
     image_purpose: ImagePurpose | None = None,
+    slide_shapes: Mapping[int, SlideShapes] | None = None,
 ) -> VisionDescriptionStats:
     """Picture と未抽出画像を含む Table に Vision 説明を追加します。
 
@@ -701,6 +714,14 @@ def _describe_layout_pictures(
         )
         if image_purpose is not None:
             metadata[IMAGE_PURPOSE_METADATA_KEY] = image_purpose
+        slide = (slide_shapes or {}).get(record.page) if record.category == "Picture" else None
+        shapes_text = slide_shapes_text(slide, page_size=(page.width, page.height), region=_validated_bbox(record.bbox)) if slide else ""
+        if shapes_text:
+            # 原本の確定した構造を、読み取りの入力と説明の本文（Vision の項目とは別のグループ）に入れる。
+            metadata[SOURCE_SLIDE_SHAPES_KEY] = shapes_text
+            record.raw[SOURCE_SLIDE_SHAPES_KEY] = shapes_text
+        else:
+            record.raw.pop(SOURCE_SLIDE_SHAPES_KEY, None)
         if record.category == "Table":
             metadata["existing_table_html"] = record.text
             metadata["missing_picture_regions"] = record.raw["table_missing_picture_regions"]
@@ -779,7 +800,7 @@ def _describe_layout_pictures(
             return
         if post_vision_role is not None:
             mark_picture_record_role(record, post_vision_role)
-        projection = vision_text_projection(description)
+        projection = vision_text_projection(description, source_shapes=str(record.raw.get(SOURCE_SLIDE_SHAPES_KEY) or ""))
         sentence = projection.answer_description
         if not sentence:
             # 投影は回答本文があるときだけ書く。失敗の前に書くと、回答本文の空の投影が残り、

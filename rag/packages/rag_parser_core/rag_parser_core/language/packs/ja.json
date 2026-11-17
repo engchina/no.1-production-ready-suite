@@ -866,6 +866,7 @@
       "構造=structure",
       "関係=relation",
       "補足=supplement",
+      "原ファイルの図形=source",
       "検索=search"
     ],
     "vision_fields": [
@@ -900,7 +901,9 @@
       "修正・補足=correction_notes",
       "検索語=search_keywords",
       "言い換え=query_rewrites",
-      "想定質問=answerable_questions"
+      "想定質問=answerable_questions",
+      "図形=source_shapes",
+      "接続線=source_connectors"
     ],
     "form_field_kinds": [
       "選択=select",

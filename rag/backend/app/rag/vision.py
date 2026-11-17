@@ -62,6 +62,7 @@ from rag_engine.parsing.rendering import (
     get_source_page_count,
     prepare_source_for_analysis,
 )
+from rag_engine.parsing.slide_shapes import PresentationShapes
 from rag_parser_core.image_purpose import IMAGE_PURPOSE_METADATA_KEY, ImagePurpose
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 from rag_parser_core.vision_text import load_vision_text_projection, text_sha256
@@ -475,6 +476,7 @@ def read_figures_with_vision(
     cancel_check: Callable[[], None] | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
     work_dir: Path | None = None,
+    slide_shapes: PresentationShapes | None = None,
 ) -> StructuredExtraction:
     """解析結果の図・画像を Vision で読み取り、要素・asset(・layout_records)へ反映する。
 
@@ -482,6 +484,9 @@ def read_figures_with_vision(
     ``cancel_check`` は対象ごとの前に呼び、例外で中断する(取込の取り消し)。
     ``progress_callback`` は Vision の段の記録(``vision/progress.json`` と同じ内容)が変わる
     たびに呼ぶ(取込の job の進捗。#1999)。
+    ``slide_shapes`` は PowerPoint の原本の図形と接続線(#5359)。表示するスライドの数が解析した
+    PDF の頁数と同じときだけ、頁ごとに読み取りの入力と図の説明へ入れる(合わなければ頁と
+    スライドを対応付けられないので使わない)。
     """
     from rag_engine.parsing.picture_descriptions import describe_layout_pictures
 
@@ -503,6 +508,12 @@ def read_figures_with_vision(
         source_path = run_dir / f"input{suffix}"
         source_path.write_bytes(source_bytes)
         page_count = get_source_page_count(source_path)
+        if slide_shapes is not None and slide_shapes.page_count != page_count:
+            logger.warning(
+                "vision_slide_shapes_page_mismatch",
+                extra={"slide_count": slide_shapes.page_count, "page_count": page_count},
+            )
+            slide_shapes = None
         if has_layout:
             layout = _docling_records(extraction)
             pages_wanted = sorted(
@@ -555,6 +566,7 @@ def read_figures_with_vision(
             image_purpose=image_purpose,
             cancel_check=cancel_check,
             progress_callback=progress_callback,
+            slide_shapes=slide_shapes.slides if slide_shapes is not None else None,
         )
     if has_layout:
         updated = _write_back_docling(extraction, layout)
