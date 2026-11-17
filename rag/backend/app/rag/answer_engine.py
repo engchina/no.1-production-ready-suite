@@ -3156,12 +3156,11 @@ class AnswerEngine:
         ``_plan_document_reads`` が目次から章節を選んでいれば、その章節を章節の中の順に読む
         (``read_section``。範囲は検索と同じ。版は 1 つの chunk_set にそろえる)。選べなかった・
         読めなかったときは、参照先の文書を全体で読む(回答の検索と同じ検索文と埋め込みで文書の中を
-        ``DOCUMENT_READ_MAX_CHUNKS`` 件まで)。全体で読んで足した chunk は章節の拡張の起点に
-        しない。原質問との rerank は、足す参照先の chunk をまとめて ``_reference_relevance`` で
-        1 回だけ行う(#5243)。
+        ``rag_reference_outline_selection_read_max_chunks`` 件まで)。全体で読んで足した chunk は
+        章節の拡張の起点にしない。原質問との rerank は、足す参照先の chunk をまとめて
+        ``_reference_relevance`` で 1 回だけ行う(#5243)。
         """
         from app.rag.reference_sections import (
-            DOCUMENT_READ_MAX_CHUNKS,
             FALLBACK_NOT_PLANNED,
             FALLBACK_SECTIONS_EMPTY,
             READ_MODE_FULL,
@@ -3191,7 +3190,7 @@ class AnswerEngine:
         hits = await self._oracle.hybrid_search(
             query,
             embedding,
-            DOCUMENT_READ_MAX_CHUNKS,
+            self._settings.rag_reference_outline_selection_read_max_chunks,
             mode=SearchMode.HYBRID,
             filters={**scope, "document_id": document_id},
         )
@@ -3211,22 +3210,24 @@ class AnswerEngine:
         """目次から選んだ章節を、章節の中の順に読む(``rag_read_section`` と同じ読取。#5263)。
 
         範囲は参照先を読む範囲(``_reference_scope``)。章節が重なる chunk は 1 回だけ、参照先 1 つで
-        ``DOCUMENT_READ_MAX_CHUNKS`` 件まで。読めない章節は記録して次の章節へ進む。
+        ``rag_reference_outline_selection_read_max_chunks`` 件まで。読めない章節は記録して次の
+        章節へ進む。
         """
-        from app.rag.reference_sections import DOCUMENT_READ_MAX_CHUNKS
         from app.rag.section_map_service import read_section
+
+        max_chunks = self._settings.rag_reference_outline_selection_read_max_chunks
 
         rows: list[RetrievedChunk] = []
         seen: set[str] = set()
         for section_id in plan.selected:
-            if len(rows) >= DOCUMENT_READ_MAX_CHUNKS:
+            if len(rows) >= max_chunks:
                 break
             try:
                 text = await read_section(
                     plan.document_id,
                     section_id,
                     chunk_set_id=plan.chunk_set_id,
-                    limit=DOCUMENT_READ_MAX_CHUNKS - len(rows),
+                    limit=max_chunks - len(rows),
                     filters=scope,
                     oracle=self._oracle,
                 )
@@ -3323,18 +3324,19 @@ class AnswerEngine:
         """回答のモデルに目次を渡して読む章節を選ばせ、目次にある ID だけを計画に入れる(#5263)。"""
         from app.rag.reference_sections import (
             CATALOG_LEAD_CHARS,
-            CATALOG_MAX_CHARS,
             FALLBACK_NO_SELECTION,
             FALLBACK_SELECTION_ERROR,
             FALLBACK_UNKNOWN_IDS,
             REFERENCE_SECTION_PROMPT,
-            SELECTED_SECTIONS_MAX,
             without_descendants,
         )
         from app.rag.section_catalog import compact_section_lines
 
         plans = [plan for _key, plan, _outline in selectable]
-        per_document = max(1, CATALOG_MAX_CHARS // len(selectable))
+        settings = self._settings
+        per_document = max(
+            1, settings.rag_reference_outline_selection_catalog_max_chars // len(selectable)
+        )
         lines: list[list[str]] = []
         omitted: list[int] = []
         for _key, plan, outline in selectable:
@@ -3364,7 +3366,7 @@ class AnswerEngine:
         for index, plan in enumerate(plans):
             chosen = without_descendants(plan.sections, result.selected.get(index, []))
             if chosen:
-                plan.selected = chosen[:SELECTED_SECTIONS_MAX]
+                plan.selected = chosen[: settings.rag_reference_outline_selection_max_sections]
             elif result.returned and not result.selected:
                 plan.fall_back(FALLBACK_UNKNOWN_IDS)
             else:

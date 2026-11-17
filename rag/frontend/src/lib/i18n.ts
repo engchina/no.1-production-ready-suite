@@ -3877,6 +3877,10 @@ export const ja = {
   "settings.answering.referenceOutlineSelection": "参照先の文書の目次から章節をモデルが選ぶ",
   "settings.answering.referenceOutlineSelectionHint":
     "根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき、参照先の文書の目次を回答のモデルに渡して質問に要る章節を選ばせ、その章節を読みます（参照先が複数でも AI の呼び出しは 1 回増えます）。目次が無い文書や章節を選べなかったときは、参照先の文書の全体を読みます。オフのときは参照先の文書の中を質問で検索した上位を読みます。番号を示す参照（第 3 章・別紙 1 など）はどちらでも番号で読みます。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
+  "settings.answering.reference_outline_selection_catalog_max_chars": "参照先の目次の字数の上限",
+  "settings.answering.reference_outline_selection_max_sections": "参照先ごとに読む章節の数",
+  "settings.answering.reference_outline_selection_read_max_chunks": "参照先ごとに読むチャンクの上限",
+  "settings.answering.chunksOption": "{count} 件",
   "settings.answering.outlineSelection": "検索の上位の文書の目次から章節をモデルが選ぶ",
   "settings.answering.outlineSelectionHint":
     "回答の検索で上位に当たった文書のうち章節の構成を持つ文書の目次を回答のモデルに渡し、質問に要る章節を選ばせて、その章節を回答の根拠に加えます（AI の呼び出しは回答ごとに 1 回増えます）。検索の語では関連が低く見える章節も根拠に入ります。加えた根拠は Rerank にかけず、起点数や根拠の件数には数えません。根拠が入力の予算を超えるときは分けて読みます。回答の上限時間の残りが足りないときは選ばずに回答します。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
