@@ -186,14 +186,23 @@ def test_missing_tables_and_empty_tables_do_not_fail() -> None:
     assert db.updates == 0
 
 
-def test_release_unreadable_for_another_reason_keeps_its_hash() -> None:
+def test_release_unreadable_for_another_reason_keeps_its_content_and_hash() -> None:
+    """廃止項目と別の必須項目の欠けがある公開版は、本文も hash も書き換えない(#5035)。"""
     old = _with_retired(builtin_pack().to_dict())
     del old["question_cues"][_KEEP]
-    db = _db(_release(old, content_hash="kept"), draft=builtin_pack().to_dict(), profile={})
-    remove_retired_language_pack_fields(db)
-    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
-    assert not RETIRED_QUESTION_CUE_FIELDS & release["effective_json"]["question_cues"].keys()
-    assert release["content_hash"] == "kept"
+    db = _db(
+        _release(copy.deepcopy(old), content_hash="kept"),
+        draft=builtin_pack().to_dict(),
+        profile={},
+    )
+    for _ in range(2):
+        remove_retired_language_pack_fields(db)
+        release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+        assert release["effective_json"] == old
+        assert release["content_hash"] == "kept"
+        assert release["ingest_hash"] == "ingest"
+    # 下書き・プロファイルにも消す項目が無いので、どの表も更新しない。
+    assert db.updates == 0
 
 
 def test_retired_fields_are_no_longer_part_of_the_pack() -> None:

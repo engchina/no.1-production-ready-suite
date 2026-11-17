@@ -435,16 +435,12 @@ def _strip_releases(connection: Any) -> None:
         try:
             pack = build_pack(stripped)
         except ValueError:
-            # 別の項目の欠けで今の契約では読めない版。項目だけを消し、hash は変えない。
+            # 別の項目の欠けで今の契約では読めない版。本文も hash も書き換えず、そのまま残す
+            # (#5035。本文だけを変えると保存した content_hash と対応しなくなる。
+            # rag/docs/language-pack-current-contract.md: 既存公開版の内容と hash は書き換えない)。
             logger.warning(
                 "language_pack_retired_fields_release_unreadable",
                 extra={"release_id": row["release_id"]},
-            )
-            _execute(
-                connection,
-                f"UPDATE {table} SET effective_json=:effective WHERE release_id=:id",
-                {"id": row["release_id"], "effective": _json_bind(stripped)},
-                input_sizes=_json_input_sizes("effective"),
             )
             continue
         # 検索・回答の項目だけを消した版の取込 hash は変わらないので書かない。
