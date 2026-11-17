@@ -49,6 +49,7 @@ from app.rag.answer_timeout import (
     AnswerTimeoutError,
     StageTracker,
     answer_stage_label,
+    answer_timeout_seconds,
     run_answer_with_timeout,
 )
 from app.rag.approved_faq_answer import APPROVED_FAQ_NOT_FOUND_MESSAGE, selected_approved_faq
@@ -853,6 +854,7 @@ async def _run_search_with_timeout(
     run_recorder: RunRecorder | None = None,
     scope: AnswerScope | None = None,
     materialize_images: bool = True,
+    deadline: float | None = None,
 ) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
@@ -868,6 +870,8 @@ async def _run_search_with_timeout(
     ``flow`` は回答の経路（#5332。``AnswerFlow``）で、入口の解決と pipeline に同じ値を渡す。
     ``interactive`` は業務ガイドの残った不明の条件を分岐で答えるか（既定は確認の質問を返す）。
     工程の開始を MCP の進み具合で知らせ、呼び出し元の取消は監査に残して送り直す。
+    ``deadline`` は呼び出し元の通しの期限（event loop の時刻。MCP の rag_search・rag_chat は
+    ツールの処理の全体を 1 つの期限に入れる。#5339）で、回答生成は期限の残りで打ち切る。
     """
     (request, settings, applied_kb, applied_view), query_guardrail = await _checked_query_context(
         request,
@@ -911,6 +915,7 @@ async def _run_search_with_timeout(
             ),
             settings,
             stages,
+            **_deadline_options(deadline, settings),
         )
         if applied_kb is not None:
             result.diagnostics.kb_adapter_config_applied = applied_kb
@@ -1003,6 +1008,20 @@ async def _run_search_with_timeout(
             )
             raise failure from exc
         raise
+
+
+def _deadline_options(deadline: float | None, settings: Settings) -> dict[str, float]:
+    """呼び出し元の期限の残りで打ち切る `run_answer_with_timeout` の引数（期限が無ければ空）。
+
+    文言には通しの上限を出す（残りの秒数ではない）。
+    """
+    if deadline is None:
+        return {}
+    remaining = deadline - asyncio.get_running_loop().time()
+    return {
+        "timeout_seconds": max(remaining, 0.0),
+        "limit_seconds": answer_timeout_seconds(settings),
+    }
 
 
 def _record_cancelled_search(

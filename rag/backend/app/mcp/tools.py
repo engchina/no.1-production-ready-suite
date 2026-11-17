@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import functools
 import hashlib
 import json
@@ -118,6 +119,8 @@ from app.mcp.profile_scope import (
     within_profile_scope,
 )
 from app.rag.answer_failure import ANSWER_API_FAILED_ERROR_CODE, describe_answer_api_failure
+from app.rag.answer_threads import answer_deadline
+from app.rag.answer_timeout import answer_timeout_message, answer_timeout_seconds
 from app.rag.approved_faq_answer import approved_faq_candidates, is_approved_faq_answer
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
@@ -213,7 +216,7 @@ from app.schemas.search_answer_profile import (
 )
 from app.schemas.support_guide import SupportGuideReference
 from app.search_defaults import search_top_k_default, search_top_k_schema
-from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
+from app.security.permissions import MENU_CHAT, MENU_SEARCH, ROUTE_PERMISSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +326,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     登録済みの回答を含む）を足した。
 # （版を変えない追加）文書の本文から語を字のとおりに探すツール（rag_grep）を足した。既存のツールの
 #     出力の形は変えない（#5293）。
+# （版を変えない追加）RAG Chat の経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で答えるツール
+#     （rag_chat）を足した。既存のツールの出力の形は変えない（#5339）。
 MCP_OUTPUT_SCHEMA_VERSION = 46
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
@@ -406,6 +411,8 @@ IMAGE_URL_UNAVAILABLE_CODE = "image_url_unavailable"
 PREVIEW_NOT_ALLOWED_CODE = "preview_not_allowed"
 PREVIEW_UNAVAILABLE_CODE = "preview_unavailable"
 PREVIEW_FILE_MISSING_CODE = "preview_file_missing"
+# RAG のチャットが運用の設定（rag_chat_enabled）で無効（rag_chat。#5339）。
+CHAT_DISABLED_CODE = "chat_disabled"
 # ツールの失敗（`isError: true` の結果の `error_code`）の一覧と意味（#3240）。呼び出し側
 # （Agent など）はここに載せた code だけで分岐する。一覧は契約（rag-tools.json の `errors`）に
 # 書き出し、`*_CODE` の定数とツールが raise する code がすべて載ることをテストで確かめる。
@@ -434,6 +441,7 @@ MCP_ERROR_CODES: dict[str, str] = {
     PREVIEW_NOT_ALLOWED_CODE: "原文のプレビューをこの呼び出しでは作れない（画面の操作だけ）。",
     PREVIEW_UNAVAILABLE_CODE: "原文のプレビューを今は作れない（一時的）。",
     PREVIEW_FILE_MISSING_CODE: "原文のプレビューのファイルが保存先に無い。",
+    CHAT_DISABLED_CODE: "RAG のチャットが無効に設定されている（rag_chat は使えない）。",
 }
 # ブラウザで開く URL（図・原文のプレビュー）を作ってよい呼び出し（Agent の画面の操作）の、
 # サービストークンの
@@ -452,6 +460,10 @@ GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした�
 
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
+# rag_chat は RAG のチャットの権限（#5339）。
+CHAT_PERMISSIONS = frozenset({MENU_CHAT})
+# 推薦・根拠の読み取り（rag_search・rag_chat のどちらかの結果を読み足す）は、どちらかの権限で使う。
+ANSWER_READ_PERMISSIONS = frozenset({MENU_SEARCH, MENU_CHAT})
 
 # rag_search の状態（#5134）。completed=検索・回答をした（選んだ承認済み FAQ の回答を含む）/
 # approved_faq_candidates=承認済み FAQ の候補だけを返した（検索・回答はしていない）。
@@ -464,19 +476,19 @@ INSTRUCTIONS = (
     "## Step 1: 検索・回答プロファイルを選ぶ\n"
     "検索・回答プロファイルが決まっていなければ、まず rag_recommend_search_answer_profile に"
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
-    "確かめる）、その id を rag_search に渡してください。名前で探すときは"
+    "確かめる）、その id を rag_search・rag_chat に渡してください。名前で探すときは"
     " rag_list_search_answer_profiles を使います。\n\n"
     # 承認済み FAQ の候補（#5134・#5136）。引数の意味は approved_faq_id・skip_approved_faq の説明に
     # ある。
     "## Step 2: 登録済みの Q&A の候補を利用者に選んでもらう\n"
-    "rag_search・rag_retrieve_evidence が"
+    "rag_chat・rag_search・rag_retrieve_evidence が"
     f" status={APPROVED_FAQ_CANDIDATES_STATUS} を返したら、approved_faq_candidates の"
     "質問を利用者に示して選んでもらってから呼び直してください（候補を自分で選ばない）。"
     "選ばれた Q&A は approved_faq_id に、どれでもなければ skip_approved_faq に渡します。\n\n"
     # 回答前の確認（業務ガイドの条件）。引数の組み立ては conditions の説明にある。
     "## Step 3: 回答前の確認に答える\n"
-    "rag_search が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
-    "利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
+    "rag_chat・rag_search が outcome=needs_clarification を返したら、clarifications の問いと"
+    "選択肢を利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
     # evidence は回答で引用した箇所だけではない（AI に渡した箇所の全体。#2040）。
     "## Step 4: 結果の根拠を読む\n"
     "evidence は AI に渡した資料の箇所です。used_in_answer は回答で引用した箇所、"
@@ -719,6 +731,102 @@ class RetrieveEvidenceInput(ApprovedFaqChoiceInput):
             "検索で当たった根拠を全部返す。"
         ),
     )
+
+
+# 1 回の呼び出しは 1 つの質問（会話の履歴による補完・会話の添付はしない。#5339）。範囲は検索・回答
+# プロファイルの参照先と設定だけ（ナレッジベース・filters・top_k は受けない）。
+class ChatInput(BaseModel):
+    """RAG Chat の経路で答える条件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=8000,
+        description=(
+            "1 つの質問（利用者の質問のまま。指示語・省略は前の質問で補い、それだけで意味の通る"
+            "文にする）。"
+        ),
+    )
+    search_answer_profile_id: OptionalText = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。id を推測"
+            "で作らない。省略したとき・見つからない id のときは、使えるプロファイルが 1 つなら"
+            "それを、そうでなければ質問から推薦したものを使い、"
+            "auto_selected_search_answer_profile に示す（決まらなければ候補つきのエラー）。"
+        ),
+    )
+    original_question: OptionalText = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "利用者の元の質問。query を言い換えたときに、言い換える前の全文を渡す（番号つきの小問は"
+            "番号のまま）。回答は元の質問の要求ごとに根拠を確かめて作る。"
+        ),
+    )
+    include_superseded: bool = Field(
+        default=False,
+        description=(
+            "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。"
+            "旧版・変更点・改定前との違いを尋ねるとき、旧版の年度・版を名指しするときは true を"
+            "渡す。"
+        ),
+    )
+    evidence_limit: int = Field(
+        default=EVIDENCE_LIMIT_DEFAULT,
+        ge=1,
+        le=EVIDENCE_LIMIT_MAX,
+        description=(
+            "返す根拠の最大件数。超えるときは、回答に使った根拠、検索で当たった根拠（関連度の順）、"
+            "前後の文脈の順に残す（並びは evidence の順のまま）。"
+        ),
+    )
+    conditions: dict[str, str] = Field(
+        default_factory=dict,
+        max_length=30,
+        description=(
+            "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の"
+            " clarifications に利用者が答えた値（選んだ選択肢の表示名・自由入力。複数は「、」で"
+            "区切る）を入れて呼び直すと、分かっている条件は聞き直さない。"
+        ),
+    )
+    approved_faq_id: OptionalText = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、検索をせずにその Q&A の"
+            "登録済みの回答を返す。候補を返した search_answer_profile_id も渡す。"
+        ),
+    )
+    skip_approved_faq: bool = Field(
+        default=False,
+        description=(
+            "true なら登録済みの Q&A の候補を返さずに答える（利用者が候補のどれも選ばなかった"
+            "とき）。既定（false）は、質問に近い登録済みの Q&A があれば、回答の前にその候補だけを"
+            "返す。"
+        ),
+    )
+    skip_clarification: bool = Field(
+        default=False,
+        description=(
+            "true なら、業務ガイドの条件が分からなくても確認（needs_clarification）を返さず、条件"
+            "ごとに分けて答える（利用者に確かめられないとき）。既定（false）は確認を返す。"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _one_approved_faq_choice(self) -> Self:
+        if self.approved_faq_id is not None and self.skip_approved_faq:
+            raise ValueError("approved_faq_id と skip_approved_faq は一緒に渡さないでください。")
+        if self.approved_faq_id is not None and self.search_answer_profile_id is None:
+            raise ValueError(
+                "approved_faq_id を渡すときは、候補を返した search_answer_profile_id も渡して"
+                "ください。"
+            )
+        return self
 
 
 class LookupGuidesInput(BaseModel):
@@ -1885,6 +1993,12 @@ class SearchOutput(VersionedOutput):
     notice: str | None = Field(
         default=None, description="利用者に回答を示すときは、末尾にこの文をそのまま添える。"
     )
+
+
+# rag_chat の出力（#5339）。今は rag_search と同じ形（承認済み FAQ の候補・確認・業務ガイド
+# を含む）。
+class ChatOutput(SearchOutput):
+    """RAG Chat の経路の回答と根拠。"""
 
 
 class GuidePageRangeItem(BaseModel):
@@ -3953,6 +4067,26 @@ def _search_request(arguments: SearchScopeInput) -> SearchRequest:
         payload["top_k"] = arguments.top_k
     if arguments.conditions:
         payload["conditions"] = arguments.conditions
+    return _validated_request(payload)
+
+
+def _chat_request(arguments: ChatInput) -> SearchRequest:
+    """rag_chat の要求（範囲は検索・回答プロファイルの参照先と設定。#5339）。"""
+    payload: dict[str, Any] = {"query": arguments.query}
+    if arguments.original_question is not None:
+        payload["original_question"] = arguments.original_question
+    if arguments.approved_faq_id is not None:
+        payload["approved_faq_id"] = arguments.approved_faq_id
+    if arguments.include_superseded:
+        payload["filters"] = {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
+    if arguments.search_answer_profile_id is not None:
+        payload["search_answer_profile_id"] = arguments.search_answer_profile_id
+    if arguments.conditions:
+        payload["conditions"] = arguments.conditions
+    return _validated_request(payload)
+
+
+def _validated_request(payload: dict[str, Any]) -> SearchRequest:
     try:
         return SearchRequest.model_validate(payload)
     except ValidationError as exc:
@@ -3965,7 +4099,9 @@ def _search_request(arguments: SearchScopeInput) -> SearchRequest:
 
 
 async def _older_versions(
-    arguments: SearchScopeInput, request: SearchRequest, citations: Sequence[RetrievedChunk]
+    arguments: SearchScopeInput | ChatInput,
+    request: SearchRequest,
+    citations: Sequence[RetrievedChunk],
 ) -> list[OlderVersion]:
     """根拠の文書（今の版）を置き換えた旧版（#1405。旧版を検索しなかったときだけ）。
 
@@ -4204,6 +4340,25 @@ def _check_search_scope(scope: ProfileScope | None, arguments: SearchScopeInput)
     check_search(scope, arguments.search_answer_profile_id, arguments.knowledge_base_ids)
 
 
+CHAT_DISABLED_MESSAGE = (
+    "RAG のチャットは無効に設定されています。rag_search で検索・回答してください。"
+)
+
+
+def _check_chat(scope: ProfileScope | None, arguments: ChatInput) -> None:
+    """rag_chat の前の判定: チャットの有効（運用の設定）とデータの範囲。"""
+    if not get_settings().rag_chat_enabled:
+        raise McpToolError(
+            CHAT_DISABLED_CODE,
+            CHAT_DISABLED_MESSAGE,
+            status=403,
+            details={"next_tools": ["rag_search"]},
+        )
+    # 省略は範囲の中から自動で選ぶ（`_select_profile` は範囲に絞った監査 context の中で数える）。
+    if arguments.search_answer_profile_id is not None:
+        check_profile(scope, arguments.search_answer_profile_id)
+
+
 def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput) -> None:
     check_profile(scope, arguments.search_answer_profile_id)
 
@@ -4266,6 +4421,46 @@ async def profile_not_found_error(search_answer_profile_id: str) -> McpToolError
     return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
 
 
+# 回答のツール（rag_search・rag_chat）の通しの期限（event loop の時刻。#5339）。
+# `_within_answer_deadline` が置き、`_run_search` が回答生成に渡す。
+_ANSWER_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "rag_mcp_answer_deadline", default=None
+)
+# 外側の期限に足す余裕（秒）。回答生成の中の時間切れ（工程と監査が残る）を外側の打ち切りより
+# 先にする。外側は回答生成の前後（承認済み FAQ の照会・プロファイルの自動の選択・根拠の整形）の
+# 時間切れを止める保険。
+ANSWER_DEADLINE_GRACE_SECONDS = 1.0
+
+
+def _within_answer_deadline[A, R](
+    handler: Callable[[A], Awaitable[R]],
+) -> Callable[[A], Awaitable[R]]:
+    """ツールの処理の全体（入口から出力まで）を回答の通しの上限（`rag_answer_timeout_seconds`）の
+    1 つの期限に入れる（#5339）。
+
+    呼び出し元（業務 Agent の接続・外部の MCP クライアント）の待ち時間は、この上限に往復の余裕を
+    足せば足りる。回答生成は期限の残りで打ち切り（`_run_search`）、その前後で期限を過ぎたら
+    同じ時間切れの文言（504）にする。
+    """
+
+    async def wrapped(arguments: A) -> R:
+        limit = answer_timeout_seconds(get_settings())
+        deadline = asyncio.get_running_loop().time() + limit
+        token = _ANSWER_DEADLINE.set(deadline)
+        try:
+            async with asyncio.timeout(limit + ANSWER_DEADLINE_GRACE_SECONDS):
+                with answer_deadline(limit):
+                    return await handler(arguments)
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail=answer_timeout_message(None, limit)
+            ) from exc
+        finally:
+            _ANSWER_DEADLINE.reset(token)
+
+    return wrapped
+
+
 async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
     """検索・回答の pipeline を実行し、AI の API の失敗を種類つきのツールのエラーにする（#2475）。
 
@@ -4275,7 +4470,9 @@ async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
     """
     try:
         # MCP は業務ガイドの照合・承認済み FAQ・根拠の拡張を含む今の経路で答える（#5332）。
-        return await search_route._run_search_with_timeout(request, flow=EXPANDED_FLOW, **options)
+        return await search_route._run_search_with_timeout(
+            request, flow=EXPANDED_FLOW, deadline=_ANSWER_DEADLINE.get(), **options
+        )
     except search_route.AnswerApiFailedHTTPError as exc:
         # 検索の REST と同じ分類（#2667）を、種類つきのツールのエラーにする。
         failure = exc.failure
@@ -4385,7 +4582,7 @@ def _selection_error(
 
 
 async def _approved_faq_suggestions(
-    arguments: ApprovedFaqChoiceInput,
+    arguments: ApprovedFaqChoiceInput | ChatInput,
 ) -> list[ApprovedFaqCandidate]:
     """検索の前に示す承認済み FAQ の候補（#5134・#5136。画面の照会と同じ規則。#5107）。
 
@@ -4404,7 +4601,9 @@ async def _approved_faq_suggestions(
     status = getattr(view, "status", None)
     if getattr(status, "value", status) == SearchAnswerProfileStatus.ARCHIVED.value:
         return []
-    question = arguments.original_question if isinstance(arguments, SearchInput) else None
+    question = (
+        arguments.original_question if isinstance(arguments, SearchInput | ChatInput) else None
+    )
     suggestions, _ = await approved_faq_candidates(
         oracle, view.id, question or arguments.query, get_settings()
     )
@@ -4452,30 +4651,40 @@ async def _approved_faq_evidence(request: SearchRequest) -> RetrieveEvidenceOutp
     )
 
 
-def _with_profile_selection[A: SearchScopeInput, R: SearchOutput | RetrieveEvidenceOutput](
+def _with_profile_selection[
+    A: SearchScopeInput | ChatInput,
+    R: SearchOutput | RetrieveEvidenceOutput,
+](
     handler: Callable[[A], Awaitable[R]],
+    *,
+    select_when_omitted: bool = False,
 ) -> Callable[[A], Awaitable[R]]:
     """検索・回答プロファイルの id を誤ったときに、自動で選んで続ける（#2355）。
 
     モデルが推測した id で失敗させない: 見つからない・使えない id なら、使えるプロファイルが
-    1 つならそれを、そうでなければ質問（rag_search の original_question、無ければ query）の
-    推薦が決めたものを使い、結果の auto_selected_search_answer_profile に示す。決まらなければ、
-    推薦の候補と次の手の付いたエラーにする。
+    1 つならそれを、そうでなければ質問（rag_search・rag_chat の original_question、無ければ
+    query）の推薦が決めたものを使い、結果の auto_selected_search_answer_profile に示す。決まら
+    なければ、推薦の候補と次の手の付いたエラーにする。``select_when_omitted`` は id の省略も
+    自動の選択にする（rag_chat。範囲は検索・回答プロファイルだけ。#5339）。
     """
 
     async def run_selected(arguments: A, requested: str | None) -> R:
-        question = arguments.original_question if isinstance(arguments, SearchInput) else None
+        question = (
+            arguments.original_question if isinstance(arguments, SearchInput | ChatInput) else None
+        )
         selected, usable, candidates = await _select_profile(question or arguments.query)
         if selected is None:
             raise _selection_error(requested, usable, candidates)
         selected = selected.model_copy(update={"requested_id": requested})
         result = await handler(
-            arguments.model_copy(update={"search_answer_profile_id": selected.id})
+            cast(A, arguments.model_copy(update={"search_answer_profile_id": selected.id}))
         )
         return cast(R, result.model_copy(update={"auto_selected_search_answer_profile": selected}))
 
     async def wrapped(arguments: A) -> R:
         requested = arguments.search_answer_profile_id
+        if requested is None and select_when_omitted:
+            return await run_selected(arguments, None)
         if requested is None:
             # 省略は今までどおり（使えるナレッジベースを全体の既定の設定で検索する。解決の順の
             # 「request の明示 > 検索・回答プロファイル > 全体の既定」）。
@@ -4559,14 +4768,19 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ],
         )
 
-    async def search(arguments: SearchInput) -> SearchOutput:
-        request = _search_request(arguments)
-        enforce_rate_limit("search", http_request)
+    async def answer_output[O: SearchOutput](
+        output_type: type[O],
+        arguments: SearchInput | ChatInput,
+        request: SearchRequest,
+        *,
+        interactive: bool = False,
+    ) -> O:
+        """回答のツール（rag_search・rag_chat）の出力（承認済み FAQ の候補か、回答と根拠）。"""
         # 検索・回答の前に承認済み FAQ の候補を照会し、あれば候補だけを返す（#5134。画面と
         # 同じ入口の順: 安全チェック → 照合）。
         candidates = await _approved_faq_suggestions(arguments)
         if candidates:
-            return SearchOutput(
+            return output_type(
                 status=APPROVED_FAQ_CANDIDATES_STATUS,
                 approved_faq_candidates=candidates,
                 answer="",
@@ -4576,12 +4790,12 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 evidence=[],
                 evidence_omitted=0,
             )
-        result = await _run_search(request)
+        result = await _run_search(request, interactive=interactive)
         citations = await _with_extraction_recipe_ids(None, list(result.citations))
         result = result.model_copy(update={"citations": citations})
         returned, _ = mcp_evidence(citations, arguments.evidence_limit)
         sections = await _chunk_sections(returned)
-        output = SearchOutput(
+        output = output_type(
             **_answer_fields(result, arguments.evidence_limit),
             approved_faq=_approved_faq_ref(result),
             older_versions=await _older_versions(arguments, request, citations),
@@ -4595,6 +4809,21 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         )
         return output.model_copy(
             update={"evidence": evidence, "evidence_text_omitted": text_omitted}
+        )
+
+    async def search(arguments: SearchInput) -> SearchOutput:
+        request = _search_request(arguments)
+        enforce_rate_limit("search", http_request)
+        return await answer_output(SearchOutput, arguments, request)
+
+    async def chat(arguments: ChatInput) -> ChatOutput:
+        # RAG のチャットと同じ経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で、会話の履歴と
+        # 添付を使わずに 1 問に答える（#5339）。会話・実行履歴は残さない（監査は残る）。
+        request = _chat_request(arguments)
+        enforce_rate_limit("search", http_request)
+        # 確認を返さない呼び出しは、チャットの画面と同じく残った条件を分岐で答える。
+        return await answer_output(
+            ChatOutput, arguments, request, interactive=arguments.skip_clarification
         )
 
     async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:
@@ -4748,7 +4977,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=RecommendSearchAnswerProfileInput,
                 handler=scoped(recommend_search_answer_profile),
                 output_model=RecommendSearchAnswerProfileOutput,
-                permissions=(SEARCH_PERMISSIONS,),
+                permissions=(ANSWER_READ_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_search",
@@ -4759,9 +4988,32 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     "検索・回答の前にその候補だけを返します（status=approved_faq_candidates）。"
                 ),
                 input_model=SearchInput,
-                handler=scoped(_with_profile_selection(search), _check_search_scope),
+                handler=scoped(
+                    _within_answer_deadline(_with_profile_selection(search)), _check_search_scope
+                ),
                 output_model=SearchOutput,
                 permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_chat",
+                title="ナレッジベースへの質問（チャット）",
+                description=(
+                    "RAG のチャットと同じ流れ（業務ガイドの照合・登録済みの Q&A・根拠の拡張を"
+                    "含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は"
+                    "使いません。"
+                    "質問に近い登録済みの Q&A があるときは、回答の前にその候補だけを返し"
+                    "（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは"
+                    "確認を返します（outcome=needs_clarification）。"
+                ),
+                input_model=ChatInput,
+                handler=scoped(
+                    _within_answer_deadline(
+                        _with_profile_selection(chat, select_when_omitted=True)
+                    ),
+                    _check_chat,
+                ),
+                output_model=ChatOutput,
+                permissions=(CHAT_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_lookup_guides",
@@ -4806,7 +5058,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=ReadSourceInput,
                 handler=scoped(read),
                 output_model=ReadSourceOutput,
-                permissions=(SEARCH_PERMISSIONS,),
+                permissions=(ANSWER_READ_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_outline",
@@ -4821,7 +5073,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=OutlineInput,
                 handler=scoped(outline_document),
                 output_model=OutlineOutput,
-                permissions=(SEARCH_PERMISSIONS,),
+                permissions=(ANSWER_READ_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_read_document",
@@ -4834,7 +5086,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=ReadDocumentInput,
                 handler=scoped(read_document),
                 output_model=ReadDocumentOutput,
-                permissions=(SEARCH_PERMISSIONS,),
+                permissions=(ANSWER_READ_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_readable_documents",
@@ -4845,7 +5097,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=ReadableDocumentsInput,
                 handler=scoped(readable_documents),
                 output_model=ReadableDocumentsOutput,
-                permissions=(SEARCH_PERMISSIONS,),
+                permissions=(ANSWER_READ_PERMISSIONS,),
                 listed=False,
             ),
             McpTool(
@@ -4861,7 +5113,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=ReadSectionInput,
                 handler=scoped(read_section_tool),
                 output_model=ReadSectionOutput,
-                permissions=(SEARCH_PERMISSIONS,),
+                permissions=(ANSWER_READ_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_grep",
@@ -4875,7 +5127,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=GrepInput,
                 handler=scoped(grep),
                 output_model=GrepOutput,
-                permissions=(SEARCH_PERMISSIONS,),
+                permissions=(ANSWER_READ_PERMISSIONS,),
             ),
         ],
     )

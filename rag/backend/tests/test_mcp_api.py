@@ -59,6 +59,7 @@ ALL_TOOLS = [
     "rag_list_search_answer_profiles",
     "rag_recommend_search_answer_profile",
     "rag_search",
+    "rag_chat",
     "rag_lookup_guides",
     "rag_retrieve_evidence",
     "rag_read_source",
@@ -169,10 +170,17 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
         "rag_read_section",
         "rag_grep",
     ]
-    # チャットは MCP で提供しない（#787）。チャット
-    # だけの利用者は検索・回答プロファイルの一覧だけを使える。
-    #
-    assert _tool_names(_token(chatter.user_uuid)) == ["rag_list_search_answer_profiles"]
+    # チャットだけの利用者は rag_chat と、推薦・根拠の読み取りを使える（#5339）。
+    assert _tool_names(_token(chatter.user_uuid)) == [
+        "rag_list_search_answer_profiles",
+        "rag_recommend_search_answer_profile",
+        "rag_chat",
+        "rag_read_source",
+        "rag_outline",
+        "rag_read_document",
+        "rag_read_section",
+        "rag_grep",
+    ]
     assert _tool_names(_token(viewer.user_uuid)) == []
     assert _tool_names(_token(admin.user_uuid)) == ALL_TOOLS
 
@@ -1453,10 +1461,11 @@ def test_omitted_evidence_text_is_read_with_read_source(
         _token(user.user_uuid),
     )["structuredContent"]
     assert (body["text"], body["truncated"], body["text_length"]) == (text, False, len(text))
-    # 読めない利用者には読ませない（検索と同じ範囲）。
-    chatter = auth.user_with_permissions("chatter", ["menu.chat"])
+    # 検索・チャットの権限の無い利用者には読ませない（#5339。チャットの利用者は rag_chat の
+    # 根拠を読む）。
+    viewer = auth.user_with_permissions("viewer", ["menu.upload"])
     denied = _call(
-        "rag_read_source", {"document_id": "d1", "chunk_id": "c-big"}, _token(chatter.user_uuid)
+        "rag_read_source", {"document_id": "d1", "chunk_id": "c-big"}, _token(viewer.user_uuid)
     )
     assert denied["isError"] is True
 
@@ -1526,6 +1535,8 @@ def test_retrieve_evidence_searches_the_query_and_marks_rank_and_origin(
         # 切り出さない（Agent が読む。#5125）。
         "flow": "expanded",
         "materialize_images": False,
+        # 通しの期限は回答のツール（rag_search・rag_chat）だけ（#5339）。
+        "deadline": None,
         "generate_answer": False,
         "query": "経費精算 期限",
     }
@@ -2877,7 +2888,7 @@ def test_evidence_shows_the_section_of_the_chunk(
 
     async def fake_search(request: SearchRequest, **options: object) -> SearchResponse:
         del request
-        assert options == {"flow": "expanded", "materialize_images": False}
+        assert options == {"flow": "expanded", "materialize_images": False, "deadline": None}
         return SearchResponse(answer="", citations=[hit, other], trace_id="t-1", elapsed_ms=1.0)
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_search)

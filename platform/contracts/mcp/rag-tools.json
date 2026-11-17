@@ -2,6 +2,1631 @@
   "server": "production-ready-rag",
   "tools": [
     {
+      "name": "rag_chat",
+      "title": "ナレッジベースへの質問（チャット）",
+      "description": "RAG のチャットと同じ流れ（業務ガイドの照合・登録済みの Q&A・根拠の拡張を含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は使いません。質問に近い登録済みの Q&A があるときは、回答の前にその候補だけを返し（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは確認を返します（outcome=needs_clarification）。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "RAG Chat の経路で答える条件。",
+        "properties": {
+          "query": {
+            "description": "1 つの質問（利用者の質問のまま。指示語・省略は前の質問で補い、それだけで意味の通る文にする）。",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "search_answer_profile_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。id を推測で作らない。省略したとき・見つからない id のときは、使えるプロファイルが 1 つならそれを、そうでなければ質問から推薦したものを使い、auto_selected_search_answer_profile に示す（決まらなければ候補つきのエラー）。",
+            "title": "Search Answer Profile Id"
+          },
+          "original_question": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者の元の質問。query を言い換えたときに、言い換える前の全文を渡す（番号つきの小問は番号のまま）。回答は元の質問の要求ごとに根拠を確かめて作る。",
+            "title": "Original Question"
+          },
+          "include_superseded": {
+            "default": false,
+            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるとき、旧版の年度・版を名指しするときは true を渡す。",
+            "title": "Include Superseded",
+            "type": "boolean"
+          },
+          "evidence_limit": {
+            "default": 12,
+            "description": "返す根拠の最大件数。超えるときは、回答に使った根拠、検索で当たった根拠（関連度の順）、前後の文脈の順に残す（並びは evidence の順のまま）。",
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Evidence Limit",
+            "type": "integer"
+          },
+          "conditions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、分かっている条件は聞き直さない。",
+            "maxProperties": 30,
+            "title": "Conditions",
+            "type": "object"
+          },
+          "approved_faq_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、検索をせずにその Q&A の登録済みの回答を返す。候補を返した search_answer_profile_id も渡す。",
+            "title": "Approved Faq Id"
+          },
+          "skip_approved_faq": {
+            "default": false,
+            "description": "true なら登録済みの Q&A の候補を返さずに答える（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、回答の前にその候補だけを返す。",
+            "title": "Skip Approved Faq",
+            "type": "boolean"
+          },
+          "skip_clarification": {
+            "default": false,
+            "description": "true なら、業務ガイドの条件が分からなくても確認（needs_clarification）を返さず、条件ごとに分けて答える（利用者に確かめられないとき）。既定（false）は確認を返す。",
+            "title": "Skip Clarification",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ChatInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "AnswerProvenance": {
+            "description": "回答を作った設定の版（回答の記録の provenance）。",
+            "properties": {
+              "search_answer_profile_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Search Answer Profile Id"
+              },
+              "search_answer_profile_updated_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "検索・回答プロファイルの更新時刻（版）。",
+                "title": "Search Answer Profile Updated At"
+              },
+              "search_answer_profile_config_sha256": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "検索・回答プロファイルの設定の sha256。",
+                "title": "Search Answer Profile Config Sha256"
+              },
+              "prompt_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答フローのプロンプトの版（内容の sha256 の先頭）。",
+                "title": "Prompt Version"
+              }
+            },
+            "title": "AnswerProvenance",
+            "type": "object"
+          },
+          "AnswerRequest": {
+            "properties": {
+              "id": {
+                "description": "質問の要求単位の ID（Q1 など）。業務ガイドの手順は guide:<手順の id>。",
+                "title": "Id",
+                "type": "string"
+              },
+              "text": {
+                "description": "要求の原文（業務ガイドの手順は手順の名前）。",
+                "title": "Text",
+                "type": "string"
+              },
+              "status": {
+                "description": "充足（addressed=答えた / partial=一部 / missing=答えていない / unknown=未確認）。",
+                "enum": [
+                  "addressed",
+                  "partial",
+                  "missing",
+                  "unknown"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "status"
+            ],
+            "title": "AnswerRequest",
+            "type": "object"
+          },
+          "ApprovedFaqCandidate": {
+            "description": "検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。",
+            "properties": {
+              "id": {
+                "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
+                "title": "Id",
+                "type": "string"
+              },
+              "question": {
+                "description": "登録済みの質問。",
+                "title": "Question",
+                "type": "string"
+              },
+              "score": {
+                "description": "質問との一致度（0〜1）。",
+                "title": "Score",
+                "type": "number"
+              }
+            },
+            "required": [
+              "id",
+              "question",
+              "score"
+            ],
+            "title": "ApprovedFaqCandidate",
+            "type": "object"
+          },
+          "ApprovedFaqRef": {
+            "description": "回答に使った承認済み FAQ（回答は登録済みの回答をそのまま返したもの）。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "question": {
+                "description": "登録済みの質問。",
+                "title": "Question",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "question"
+            ],
+            "title": "ApprovedFaqRef",
+            "type": "object"
+          },
+          "AutoSelectedProfile": {
+            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル。",
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "requested_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した search_answer_profile_id（省略したときは null）。",
+                "title": "Requested Id"
+              },
+              "method": {
+                "description": "only_usable=使えるのが 1 つだけ / recommended=質問から推薦した。",
+                "enum": [
+                  "only_usable",
+                  "recommended"
+                ],
+                "title": "Method",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "method"
+            ],
+            "title": "AutoSelectedProfile",
+            "type": "object"
+          },
+          "DegradedStep": {
+            "description": "失敗して縮退した任意の補助の処理。",
+            "properties": {
+              "kind": {
+                "description": "処理の種類（例: rerank・section_outline・reference_load）。",
+                "title": "Kind",
+                "type": "string"
+              },
+              "count": {
+                "description": "失敗した回数。",
+                "title": "Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "title": "DegradedStep",
+            "type": "object"
+          },
+          "EvidenceImageRef": {
+            "description": "図の根拠の元の画像の領域。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめる）。文書の古い版（chunk_set）が\n消えると source_stale になる。",
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "chunk_set_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "領域を記録した処理の版。",
+                "title": "Chunk Set Id"
+              },
+              "page": {
+                "description": "図のある頁（PDF の物理頁。画像ファイルは 1）。",
+                "title": "Page",
+                "type": "integer"
+              },
+              "page_label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "印刷の頁番号（物理頁と違うときだけ）。",
+                "title": "Page Label"
+              },
+              "bbox": {
+                "description": "頁の中の図の領域 [x0, y0, x1, y1]。",
+                "items": {
+                  "type": "number"
+                },
+                "title": "Bbox",
+                "type": "array"
+              },
+              "bbox_unit": {
+                "description": "bbox の単位（absolute=頁の座標 / ratio=0〜1 / percent=0〜100）。",
+                "enum": [
+                  "absolute",
+                  "ratio",
+                  "percent"
+                ],
+                "title": "Bbox Unit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id",
+              "page",
+              "bbox",
+              "bbox_unit"
+            ],
+            "title": "EvidenceImageRef",
+            "type": "object"
+          },
+          "EvidenceLocator": {
+            "description": "根拠の場所（種類によって空の項目がある）。",
+            "properties": {
+              "section_path": {
+                "description": "節の見出しの列。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁（PDF の物理頁）。",
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "終了の頁（PDF の物理頁）。",
+                "title": "Page End"
+              },
+              "sheet_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表計算のシート名。",
+                "title": "Sheet Name"
+              },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table",
+                      "parsed_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。",
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。",
+                "title": "Table Index"
+              },
+              "row_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の行（1 始まり。番号の基準は row_basis）。",
+                "title": "Row Start"
+              },
+              "row_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "終了の行。",
+                "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
+              },
+              "cell_range": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。",
+                "title": "Cell Range"
+              },
+              "page_label_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ）。",
+                "title": "Page Label Start"
+              },
+              "page_label_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "終了の頁の印刷の頁番号。",
+                "title": "Page Label End"
+              },
+              "bbox": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁の中の領域 [x0, y0, x1, y1]（分かるときだけ）。",
+                "title": "Bbox"
+              },
+              "bbox_unit": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "bbox の単位（absolute=頁の座標 / normalized=0〜1）。",
+                "title": "Bbox Unit"
+              },
+              "element_locator": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の先頭の要素の定位子（doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
+                "title": "Element Locator"
+              },
+              "table_row": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録・解析の表の 1 行）のとき、その行の番号（row_basis の番号）。複数のデータの行の根拠・Word の表・行の位置が分からない表は null。",
+                "title": "Table Row"
+              },
+              "table_cells": {
+                "description": "table_row の行の値のあるセル（本文の順）。table_row が null なら空。",
+                "items": {
+                  "$ref": "#/$defs/EvidenceTableCell"
+                },
+                "title": "Table Cells",
+                "type": "array"
+              }
+            },
+            "title": "EvidenceLocator",
+            "type": "object"
+          },
+          "EvidenceReference": {
+            "description": "根拠の本文が参照する節・文書（「第3章を参照」など）。",
+            "properties": {
+              "label": {
+                "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
+                "title": "Label",
+                "type": "string"
+              },
+              "document_title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "他の文書への参照の文書名（同じ文書なら null）。",
+                "title": "Document Title"
+              },
+              "section_path": {
+                "description": "同じ文書の参照先の節の見出しの列（解決できたときだけ）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "resolved": {
+                "description": "同じ文書の参照先の節が決まっているか（他の文書への参照は false）。",
+                "title": "Resolved",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "label",
+              "resolved"
+            ],
+            "title": "EvidenceReference",
+            "type": "object"
+          },
+          "EvidenceSection": {
+            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの）。",
+            "properties": {
+              "section_id": {
+                "description": "章節の id（rag_read_section の section_id に渡す）。",
+                "title": "Section Id",
+                "type": "string"
+              },
+              "title": {
+                "description": "章節の名前（どの章節にも入らない chunk は文書名）。",
+                "title": "Title",
+                "type": "string"
+              },
+              "level": {
+                "description": "章節の階層（1〜6。0 は文書全体）。",
+                "title": "Level",
+                "type": "integer"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の開始の頁。",
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "章節の終了の頁。",
+                "title": "Page End"
+              },
+              "chars": {
+                "description": "章節の本文の文字数（excerpt より長ければ章節を読む）。",
+                "title": "Chars",
+                "type": "integer"
+              },
+              "chunk_count": {
+                "description": "章節の chunk の数。",
+                "title": "Chunk Count",
+                "type": "integer"
+              },
+              "parent_section_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の id。",
+                "title": "Parent Section Id"
+              },
+              "parent_title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の名前。",
+                "title": "Parent Title"
+              },
+              "parent_chars": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "親の章節の本文の文字数。",
+                "title": "Parent Chars"
+              }
+            },
+            "required": [
+              "section_id",
+              "title",
+              "level",
+              "chars",
+              "chunk_count"
+            ],
+            "title": "EvidenceSection",
+            "type": "object"
+          },
+          "EvidenceTableCell": {
+            "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
+            "properties": {
+              "table_col": {
+                "description": "列（表計算の列の記号。例: B。CSV・parsed_table は列の位置を同じ記号で示し、結合したセルは左の列）。",
+                "title": "Table Col",
+                "type": "string"
+              },
+              "header_path": {
+                "description": "列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Header Path",
+                "type": "array"
+              },
+              "bbox": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セルの領域 [x0, y0, x1, y1]（locator の bbox と同じ頁・座標。解析が出したときだけ）。",
+                "title": "Bbox"
+              }
+            },
+            "required": [
+              "table_col",
+              "header_path"
+            ],
+            "title": "EvidenceTableCell",
+            "type": "object"
+          },
+          "ExcerptRange": {
+            "description": "本文の中の範囲（文字の位置。[start, end)）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "ExcerptRange",
+            "type": "object"
+          },
+          "GuideClarification": {
+            "properties": {
+              "condition_id": {
+                "description": "条件の id（conditions に値を入れて呼び直す）。",
+                "title": "Condition Id",
+                "type": "string"
+              },
+              "label": {
+                "description": "条件の名前。",
+                "title": "Label",
+                "type": "string"
+              },
+              "question": {
+                "description": "利用者に確かめる問い。",
+                "title": "Question",
+                "type": "string"
+              },
+              "options": {
+                "description": "選択肢（無ければ自由に答える）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Options",
+                "type": "array"
+              },
+              "multiple": {
+                "default": false,
+                "description": "選択肢を複数選べるか。",
+                "title": "Multiple",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "condition_id",
+              "label",
+              "question"
+            ],
+            "title": "GuideClarification",
+            "type": "object"
+          },
+          "GuideCondition": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "state": {
+                "default": "unknown",
+                "description": "条件の状態（known=分かっている / unknown=分からない / conflicting=質問に複数の値が出ていて決められない。値は candidates）。",
+                "enum": [
+                  "known",
+                  "unknown",
+                  "conflicting"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Value"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "user=利用者が答えた / question=質問の文から読んだ / document=回答の根拠の画面の図から決めた。",
+                "title": "Source"
+              },
+              "handling": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。",
+                "title": "Handling"
+              },
+              "candidates": {
+                "description": "state=conflicting のとき、質問に出た値。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Candidates",
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "title": "GuideCondition",
+            "type": "object"
+          },
+          "GuideRef": {
+            "properties": {
+              "guide_id": {
+                "title": "Guide Id",
+                "type": "string"
+              },
+              "revision": {
+                "description": "使った公開の版。",
+                "title": "Revision",
+                "type": "integer"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "decision": {
+                "description": "answer=条件がそろった / branch=分岐で答えた / clarify=確かめる / handoff=人へ。",
+                "enum": [
+                  "answer",
+                  "branch",
+                  "clarify",
+                  "handoff"
+                ],
+                "title": "Decision",
+                "type": "string"
+              },
+              "known_conditions": {
+                "items": {
+                  "$ref": "#/$defs/GuideCondition"
+                },
+                "title": "Known Conditions",
+                "type": "array"
+              },
+              "unknown_conditions": {
+                "description": "確かめる・分岐する・引き継ぐ条件（不明・矛盾）。",
+                "items": {
+                  "$ref": "#/$defs/GuideCondition"
+                },
+                "title": "Unknown Conditions",
+                "type": "array"
+              },
+              "applicability": {
+                "additionalProperties": {
+                  "enum": [
+                    "matched",
+                    "unverified"
+                  ],
+                  "type": "string"
+                },
+                "description": "値のある適用範囲の項目（business_domains / object_types / versions）ごとの状態。matched=質問・絞り込みの手がかりと合った / unverified=手がかりが無く確かめていない。空の項目は制限なし（出さない）。手がかりと合わないガイドは返さない。",
+                "title": "Applicability",
+                "type": "object"
+              }
+            },
+            "required": [
+              "guide_id",
+              "revision",
+              "title",
+              "decision"
+            ],
+            "title": "GuideRef",
+            "type": "object"
+          },
+          "OlderVersion": {
+            "description": "検索で当たった文書を置き換えた旧版。",
+            "properties": {
+              "document_id": {
+                "description": "旧版の文書の id。",
+                "title": "Document Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "旧版の文書名。",
+                "title": "File Name"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "旧版のタイトル（文書の先頭の見出し。版・年度を含むことが多い。例: 「定期保守計画 2025年度」）。見出しが無ければ null。",
+                "title": "Title"
+              },
+              "superseded_by_document_id": {
+                "description": "この旧版を置き換えた新しい版（検索で当たった根拠の文書）の id。",
+                "title": "Superseded By Document Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "superseded_by_document_id"
+            ],
+            "title": "OlderVersion",
+            "type": "object"
+          },
+          "RagEvidence": {
+            "description": "検索・回答の根拠 1 件。",
+            "properties": {
+              "evidence_id": {
+                "description": "根拠の id（chunk_id と同じ）。",
+                "title": "Evidence Id",
+                "type": "string"
+              },
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "chunk_set_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠を作った処理の版（取込み直すと変わる。文書の改訂の版ではない。改訂した文書は別の document_id で、置き換えた旧版は superseded）。",
+                "title": "Chunk Set Id"
+              },
+              "recipe_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠を作った処理レシピ。",
+                "title": "Recipe Id"
+              },
+              "content_kind": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "内容の種類（text / table など）。",
+                "title": "Content Kind"
+              },
+              "evidence_type": {
+                "default": "text",
+                "description": "根拠の種類（text=本文 / table=表 / figure_description=図を AI（VLM）が読んだ説明。原文ではないので元の図で確かめる / ocr=図の中・周りの文字（OCR・キャプション））。",
+                "enum": [
+                  "text",
+                  "table",
+                  "figure_description",
+                  "ocr"
+                ],
+                "title": "Evidence Type",
+                "type": "string"
+              },
+              "image_ref": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceImageRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "図の元の画像の領域（rag_read_source の include_image で読む）。無ければ null。"
+              },
+              "locator": {
+                "$ref": "#/$defs/EvidenceLocator"
+              },
+              "excerpt": {
+                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 24000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "title": "Excerpt",
+                "type": "string"
+              },
+              "truncated": {
+                "description": "excerpt が本文の一部だけか（範囲は excerpt_range）。",
+                "title": "Truncated",
+                "type": "boolean"
+              },
+              "text_omitted": {
+                "default": false,
+                "description": "応答の予算に入らず excerpt を空にしたか（本文は rag_read_source で読む）。",
+                "title": "Text Omitted",
+                "type": "boolean"
+              },
+              "text_length": {
+                "description": "本文の文字数。",
+                "title": "Text Length",
+                "type": "integer"
+              },
+              "excerpt_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExcerptRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の本文の位置（文字の [start, end)）。text_omitted なら null。"
+              },
+              "header_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExcerptRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "切った表で excerpt の先頭に付けた見出しの行の位置（excerpt_range と続かないときだけ）。無ければ null。"
+              },
+              "next_offset": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "excerpt の後ろの続きを読むときの rag_read_source の offset（続きが無ければ null）。",
+                "title": "Next Offset"
+              },
+              "used_in_answer": {
+                "description": "回答で引用した箇所か（AI に渡した箇所のうち、回答の本文に示したもの）。",
+                "title": "Used In Answer",
+                "type": "boolean"
+              },
+              "answer_use": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "confirmed",
+                      "reference"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答での使われ方。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
+                "title": "Answer Use"
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など）。",
+                "title": "Role"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              },
+              "rerank_score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Rerank Score"
+              },
+              "retrieval_rank": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "検索で当たった根拠の関連度の順位（1 始まり）。前後の文脈など、検索で当たったのではない根拠は null。",
+                "title": "Retrieval Rank"
+              },
+              "origin": {
+                "default": "source",
+                "description": "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った要約・抽出した値（引用する前に原文を読んで確かめる）。",
+                "enum": [
+                  "source",
+                  "derived"
+                ],
+                "title": "Origin",
+                "type": "string"
+              },
+              "superseded": {
+                "default": false,
+                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
+                "title": "Superseded",
+                "type": "boolean"
+              },
+              "references": {
+                "description": "この根拠の本文が参照する節・文書。",
+                "items": {
+                  "$ref": "#/$defs/EvidenceReference"
+                },
+                "title": "References",
+                "type": "array"
+              },
+              "reference_from": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id。",
+                "title": "Reference From"
+              },
+              "reference_label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "reference_from の根拠の本文の参照の表記。",
+                "title": "Reference Label"
+              },
+              "section": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceSection"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠が属する章節（章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
+              }
+            },
+            "required": [
+              "evidence_id",
+              "document_id",
+              "chunk_id",
+              "locator",
+              "excerpt",
+              "truncated",
+              "text_length",
+              "used_in_answer"
+            ],
+            "title": "RagEvidence",
+            "type": "object"
+          },
+          "ZeroEvidence": {
+            "description": "根拠が 0 件になった段。",
+            "properties": {
+              "stage": {
+                "description": "retrieval=検索の候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と判定 / context=候補はあるが回答に渡す根拠が 0 件。",
+                "enum": [
+                  "retrieval",
+                  "evidence_check",
+                  "context"
+                ],
+                "title": "Stage",
+                "type": "string"
+              },
+              "candidate_count": {
+                "description": "検索の候補の件数。",
+                "title": "Candidate Count",
+                "type": "integer"
+              },
+              "rejected_count": {
+                "description": "根拠確認で外した候補の件数。",
+                "title": "Rejected Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stage",
+              "candidate_count",
+              "rejected_count"
+            ],
+            "title": "ZeroEvidence",
+            "type": "object"
+          }
+        },
+        "description": "RAG Chat の経路の回答と根拠。",
+        "properties": {
+          "schema_version": {
+            "default": 46,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "status": {
+            "default": "completed",
+            "description": "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みの Q&A の候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、outcome は null）。",
+            "enum": [
+              "completed",
+              "approved_faq_candidates"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "approved_faq_candidates": {
+            "description": "status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。",
+            "items": {
+              "$ref": "#/$defs/ApprovedFaqCandidate"
+            },
+            "title": "Approved Faq Candidates",
+            "type": "array"
+          },
+          "approved_faq": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApprovedFaqRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "approved_faq_id で選んだ Q&A の登録済みの回答を answer に返したとき、その Q&A（根拠の evidence は空）。それ以外は null。"
+          },
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "guardrail_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Guardrail Warnings",
+            "type": "array"
+          },
+          "guardrail_degraded": {
+            "default": false,
+            "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
+            "title": "Guardrail Degraded",
+            "type": "boolean"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "answered",
+                  "conditional",
+                  "needs_clarification",
+                  "needs_environment_data",
+                  "needs_human",
+                  "insufficient_evidence"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "回答の対応（status=approved_faq_candidates のときは null）。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る）。",
+            "title": "Outcome"
+          },
+          "requests": {
+            "description": "質問の要求単位ごとの充足（背景の文は含めない）。",
+            "items": {
+              "$ref": "#/$defs/AnswerRequest"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "conditions": {
+            "description": "回答の説明が成り立つ条件（原文の語句と、利用者に確かめる条件（質問で特定されていない対象・利用者のロールや承認など）。質問から確かめられないもの）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "gaps": {
+            "description": "資料から確かめられない点。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "confirmations": {
+            "description": "回答を確定するために確かめる現場のデータ・別の資料。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Confirmations",
+            "type": "array"
+          },
+          "clarifications": {
+            "description": "outcome=needs_clarification のとき、利用者に確かめる業務ガイドの条件と問い。",
+            "items": {
+              "$ref": "#/$defs/GuideClarification"
+            },
+            "title": "Clarifications",
+            "type": "array"
+          },
+          "guide": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GuideRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答に使った業務ガイド（公開の版）。使わなければ null。"
+          },
+          "insufficient_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠が足りず答えきれなかった理由（無ければ null）。",
+            "title": "Insufficient Reason"
+          },
+          "needs_human_review": {
+            "default": false,
+            "description": "人の確認が要る回答か。",
+            "title": "Needs Human Review",
+            "type": "boolean"
+          },
+          "degraded_steps": {
+            "description": "失敗して縮退した任意の補助の処理（rerank・質問の embedding・章節の目録・参照先の読み込みなど）。その処理を使わずに続けた結果（例: rerank の失敗は検索の順のまま、質問の embedding の失敗は全文検索だけの結果）で、空なら縮退していない。必須の能力（Oracle の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。",
+            "items": {
+              "$ref": "#/$defs/DegradedStep"
+            },
+            "title": "Degraded Steps",
+            "type": "array"
+          },
+          "zero_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ZeroEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
+          },
+          "evidence": {
+            "description": "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、残りは検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion）と前後の文脈（neighbor_context など）を、同じ文書の続く箇所ごとにまとめて関連度の順に並べる。検索の拡張で加えた根拠は evidence_limit に数えない。",
+            "items": {
+              "$ref": "#/$defs/RagEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "evidence_omitted": {
+            "description": "evidence_limit を超えて返さなかった根拠の数。",
+            "title": "Evidence Omitted",
+            "type": "integer"
+          },
+          "evidence_text_omitted": {
+            "default": 0,
+            "description": "応答の予算に入らず本文を省いた根拠（text_omitted）の数。",
+            "title": "Evidence Text Omitted",
+            "type": "integer"
+          },
+          "older_versions": {
+            "description": "検索で当たった今の版の文書に、新しい版に置き換えた旧版があれば、その旧版（検索の範囲の中のもの。最大 10 件）。include_superseded を渡さない検索だけで返し、旧版の根拠は検索していない。質問が旧版の年度・版（タイトル・文書名の「2025年度」など）や改定前との違いを尋ねるなら、include_superseded に true を渡して検索し直す。無ければ空。",
+            "items": {
+              "$ref": "#/$defs/OlderVersion"
+            },
+            "title": "Older Versions",
+            "type": "array"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AnswerProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答を作った検索・回答プロファイルとプロンプトの版。"
+          },
+          "auto_selected_search_answer_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AutoSelectedProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
+            "title": "Notice"
+          }
+        },
+        "required": [
+          "answer",
+          "trace_id",
+          "guardrail_warnings",
+          "outcome",
+          "evidence",
+          "evidence_omitted"
+        ],
+        "title": "ChatOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "rag_grep",
       "title": "文書の中の語の検索（字のとおり）",
       "description": "文書の本文から、語を字のとおりに含む行を探し、文書・章節（section_id）と前後 2 行を返します。意味の検索では当たりにくい語がどこにあるかを確かめるときに、document_ids で文書を絞ってから使います。見つけた行の章節は、section_id を rag_read_section に渡して読みます。",
@@ -6130,6 +7755,10 @@
     {
       "code": "RAG_ANSWER_AI_API_FAILED",
       "description": "回答の生成の AI の呼び出しが失敗した。"
+    },
+    {
+      "code": "chat_disabled",
+      "description": "RAG のチャットが無効に設定されている（rag_chat は使えない）。"
     },
     {
       "code": "cursor_invalid",
