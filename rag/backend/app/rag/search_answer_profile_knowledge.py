@@ -162,7 +162,7 @@ async def suggest_domain_keywords(
     return DomainKeywordSuggestion(candidates=candidates, processed_chunk_count=len(sources))
 
 
-# --- 承認済み FAQ（質問と回答。#5107）---------------------------------------------
+# --- 登録済みQ&A（質問と回答。#5107）---------------------------------------------
 
 APPROVED_FAQ_KIND = "approved_faq"
 FAQ_SEMANTIC_CACHE_KEY = "semantic_index_cache"
@@ -221,7 +221,7 @@ async def save_approved_faq_settings(
 async def find_approved_faq(
     store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, faq_id: str
 ) -> ApprovedFaqRecord | None:
-    """利用者が選んだ FAQ を、検索・回答プロファイルの承認済み FAQ から引き直す。
+    """利用者が選んだ FAQ を、検索・回答プロファイルの登録済みQ&Aから引き直す。
 
     提示がオフ・承認済みでない・無い FAQ は None。
     """
@@ -349,7 +349,7 @@ async def suggest_approved_faq(
     embedding_dimensions: int = 1536,
     loaded: tuple[dict[str, object] | None, list[ApprovedFaqRecord]] | None = None,
 ) -> list[ApprovedFaqSuggestion]:
-    """質問に近い承認済み FAQ を、一致度が ``min_score`` 以上のものだけ最大 ``limit`` 件返す。
+    """質問に近い登録済みQ&Aを、一致度が ``min_score`` 以上のものだけ最大 ``limit`` 件返す。
 
     提示がオフ・FAQ が無いときは空。文字列類似度に加え、embed 指定時は意味照合(FAQ の質問の
     embedding index)を使う。index は FAQ payload の ``semantic_index_cache`` に保持し、FAQ 集合の

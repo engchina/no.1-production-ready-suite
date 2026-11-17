@@ -54,7 +54,7 @@ export const CAPABILITY_PERMISSIONS = {
   searchAnswerProfilesManage: "rag.search_answer_profiles.manage",
   /** ナレッジベースの作成・アーカイブと、すべてのナレッジベースの利用。 */
   knowledgeBasesManage: "rag.knowledge_bases.manage",
-  /** フィードバックの回答を承認済み FAQ へ反映する。 */
+  /** フィードバックの回答を登録済みQ&Aへ反映する。 */
   feedbackManage: "rag.feedback.manage",
   /** RAG のシステムテーブルの初期化・全再作成。 */
   systemTablesManage: "rag.system_tables.manage",

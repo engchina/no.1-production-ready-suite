@@ -1,30 +1,30 @@
-"""文書全体への参照の参照先を、目次から選んだ章節で読む(#5263)。
+"""文書全体への参照の参照先を、目次から選んだ章節だけで読む(#5263・#5348)。
 
 文書名・ファイル名だけの参照は、参照先の文書の目次を回答のモデルに 1 回渡して章節を選ばせ、
-その章節を読む。選べないときは文書全体を読む方式へ退避し、退避で足した chunk は章節の拡張の
-起点にしない。番号つきの参照は今どおり番号で定位する。
+その章節だけを読む。選べない・読めない・設定が無効のときは何も読まず(文書の中の検索もしない)、
+理由を受領記録に残す。番号つきの参照は今どおり番号で定位し、節から読む chunk の上限は設定に従う。
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any, cast
 
 import pytest
 
-from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow
 from app.rag import section_map_service
 from app.rag.answer_engine import _SearchState
-from app.rag.cross_references import REFERENCE_SECTION_SEED_KEY, ReferenceTarget
+from app.rag.cross_references import ReferenceTarget
 from app.rag.reference_sections import (
-    FALLBACK_NO_OUTLINE,
-    FALLBACK_NO_SELECTION,
-    FALLBACK_SECTIONS_EMPTY,
-    FALLBACK_SELECTION_ERROR,
-    FALLBACK_UNKNOWN_IDS,
-    READ_MODE_FULL,
+    DOCUMENT_NO_OUTLINE,
+    DOCUMENT_OUTLINE_ERROR,
     READ_MODE_SECTIONS,
     REFERENCE_SECTION_PROMPT,
+    SKIP_NO_SELECTION,
+    SKIP_NOT_PLANNED,
+    SKIP_OUTLINE_SELECTION_DISABLED,
+    SKIP_SECTIONS_EMPTY,
+    SKIP_SELECTION_ERROR,
+    SKIP_UNKNOWN_IDS,
     DocumentReadPlan,
     ReferenceSectionChoice,
     build_catalog,
@@ -32,14 +32,15 @@ from app.rag.reference_sections import (
     resolve_choice,
     without_descendants,
 )
-from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
-from app.rag.section_map_service import SectionNotFoundError, SectionOutline, SectionText
 from app.schemas.search import RetrievedChunk, SearchRequest
 from tests.test_cross_references import (
     CHAPTER3,
     FakeGenAi,
+    FakeLlm,
     ReferenceOracle,
+    SectionMap,
     _engine,
+    _node,
     _retrieved,
     _section_chunks,
 )
@@ -75,88 +76,6 @@ def _doc_chunks(document_id: str, file_name: str, count: int) -> list[RetrievedC
         )
     )
     return rows
-
-
-def _node(
-    section_id: str, title: str, *, parent: str = ROOT_SECTION_ID, level: int = 1
-) -> SectionNode:
-    return SectionNode(section_id, title, level, 1, parent, None, None, chunk_count=1, chars=10)
-
-
-class SectionMap:
-    """章節の目次と章節の読取の代役(``section_map_service`` の 2 つの関数を差し替える)。"""
-
-    def __init__(self, chunks: list[RetrievedChunk], *, outlines: set[str]) -> None:
-        self.chunks = chunks
-        # 目次を持つ文書(それ以外は目次が無い)。
-        self.outlines = outlines
-        self.empty_sections: set[str] = set()
-        self.outline_calls: list[str] = []
-        self.read_calls: list[tuple[str, str]] = []
-
-    def sections(self, document_id: str) -> list[SectionNode]:
-        nodes = [SectionNode(ROOT_SECTION_ID, "", 0, 0, None, None, None, chunk_count=9)]
-        for chunk in self.chunks:
-            if chunk.document_id == document_id:
-                path = str(chunk.metadata["section_path"])
-                nodes.append(_node(f"{document_id}#{path}", path))
-        return nodes
-
-    async def outline(
-        self, document_id: str, *, chunk_set_id: str | None = None, oracle: Any = None
-    ) -> SectionOutline | None:
-        self.outline_calls.append(document_id)
-        if document_id not in self.outlines:
-            return None
-        file_name = next(c.file_name for c in self.chunks if c.document_id == document_id)
-        return SectionOutline(
-            chunk_set=ReadableChunkSet(document_id, chunk_set_id or "cs", file_name, False),
-            sections=self.sections(document_id),
-        )
-
-    async def read(
-        self,
-        document_id: str,
-        section_id: str,
-        *,
-        chunk_set_id: str | None = None,
-        limit: int | None = None,
-        filters: Any = None,
-        oracle: Any = None,
-        from_order: int = 0,
-    ) -> SectionText:
-        self.read_calls.append((document_id, section_id))
-        outline = await self.outline(document_id, chunk_set_id=chunk_set_id)
-        assert outline is not None
-        node = outline.get(section_id)
-        if node is None:
-            raise SectionNotFoundError(section_id)
-        rows = [
-            SectionChunkRow(order, chunk)
-            for order, chunk in enumerate(
-                c
-                for c in self.chunks
-                if c.document_id == document_id
-                and f"{document_id}#{c.metadata['section_path']}" == section_id
-                and section_id not in self.empty_sections
-            )
-        ]
-        return SectionText(outline=outline, section=node, chunks=rows, complete=True)
-
-
-class FakeLlm:
-    """回答のモデルの代役。目次から ID を選ぶ関数で応答を作る(呼び出しを記録する)。"""
-
-    def __init__(self, pick: Any) -> None:
-        self.pick = pick
-        self.calls: list[dict[str, Any]] = []
-
-    async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
-        self.calls.append({"prompt": prompt, "context": context, **kwargs})
-        result = self.pick(context)
-        if isinstance(result, Exception):
-            raise result
-        return result if isinstance(result, str) else json.dumps({"section_ids": result})
 
 
 def _label(context: str, title: str) -> str:
@@ -236,7 +155,7 @@ async def test_selected_sections_are_read_with_one_call_for_all_targets(
 
     added = {child.chunk_uid for child in result.expansion_chunks}
     assert added == {f"{DOC_A}:cs:body", f"{DOC_B}:cs:body"}
-    # 文書の中の検索(全体で読む退避)はしない。章節は rag_read_section と同じ読取で読む。
+    # 文書の中の検索はしない。章節は rag_read_section と同じ読取で読む。
     assert oracle.search_calls == []
     assert sorted(sections.read_calls) == [
         (DOC_A, f"{DOC_A}#操作の手順"),
@@ -251,13 +170,12 @@ async def test_selected_sections_are_read_with_one_call_for_all_targets(
     assert "[S1] 設定項目 0" in call["context"]
     reads = _reads(state)
     assert {item["read_mode"] for item in reads.values()} == {READ_MODE_SECTIONS}
-    assert {item["fallback_reason"] for item in reads.values()} == {None}
+    assert {item["skip_reason"] for item in reads.values()} == {None}
     assert reads[DOC_A]["selected_sections"] == [
         {"section_id": f"{DOC_A}#操作の手順", "title": "操作の手順"}
     ]
-    # 目次から選んだ章節の chunk は章節の拡張の起点のまま(退避の印を付けない)。
-    assert REFERENCE_SECTION_SEED_KEY not in state.chunks[f"{DOC_A}:cs:body"].metadata
-    assert state.reference_full_read_ids == set()
+    # 選ばなかった章節(設定項目の説明)は読まない。
+    assert f"{DOC_A}:cs:0" not in added
     (selection,) = _selections(state)
     assert selection["outcome"] == "selected"
     assert selection["documents"] == 2
@@ -280,52 +198,72 @@ async def test_ids_not_in_the_outline_are_discarded(monkeypatch: pytest.MonkeyPa
     assert selection["discarded_ids"] == ["S9999", "第3章"]
 
 
+def _assert_read_nothing(result: Any, state: _SearchState, reason: str) -> dict[str, Any]:
+    """参照先を何も読まず(参照の記述の chunk は根拠に残る)、理由を受領記録に残したこと。"""
+    assert result.expansion_chunks == []
+    assert [child.chunk_uid for child in result.child_chunks] == ["doc-index:a"]
+    (record,) = state.reference_sources
+    assert record["added_count"] == 0
+    (source,) = cast(list[dict[str, Any]], record["sources"])
+    assert (source["target_outcomes"], source["dependency_reasons"]) == ([reason], [reason])
+    read = _reads(state)[DOC_A]
+    assert (read["read_mode"], read["skip_reason"], read["read_chunk_count"]) == (None, reason, 0)
+    return read
+
+
 @pytest.mark.parametrize(
     ("outlines", "pick", "reason"),
     [
-        (set(), lambda context: [], FALLBACK_NO_OUTLINE),
-        ({DOC_A}, lambda context: RuntimeError("model down"), FALLBACK_SELECTION_ERROR),
-        ({DOC_A}, lambda context: "not json", FALLBACK_SELECTION_ERROR),
-        ({DOC_A}, lambda context: [], FALLBACK_NO_SELECTION),
-        ({DOC_A}, lambda context: ["S9999", "x"], FALLBACK_UNKNOWN_IDS),
+        (set(), lambda context: [], DOCUMENT_NO_OUTLINE),
+        ({DOC_A}, lambda context: RuntimeError("model down"), SKIP_SELECTION_ERROR),
+        ({DOC_A}, lambda context: "not json", SKIP_SELECTION_ERROR),
+        ({DOC_A}, lambda context: [], SKIP_NO_SELECTION),
+        ({DOC_A}, lambda context: ["S9999", "x"], SKIP_UNKNOWN_IDS),
     ],
     ids=["no-outline", "model-error", "invalid-output", "nothing-selected", "all-ids-unknown"],
 )
-async def test_falls_back_to_reading_the_whole_document(
+async def test_reads_nothing_when_no_section_is_selected(
     monkeypatch: pytest.MonkeyPatch, outlines: set[str], pick: Any, reason: str
 ) -> None:
-    """目次が無い・選べない・何も選ばない・ID がすべて目次に無いときは、文書全体を読む。"""
+    """目次が無い・選べない・何も選ばない・ID がすべて目次に無いときは、参照先を何も読まない。
+
+    文書全体を読む退避も、文書の中の検索もしない。理由は受領記録に残す(#5348)。
+    """
     engine, oracle, sections, llm = _setup(
         monkeypatch, outlines=outlines, targets=[TARGET_A], pick=pick
     )
 
     result, state = await _search(engine)
 
-    # 文書の中を全体の上限まで読み、本文の chunk も足す(入らない分は分割読取に任せる)。
-    added = {child.chunk_uid for child in result.expansion_chunks}
-    assert f"{DOC_A}:cs:body" in added
-    assert len(added) == 31
-    (search,) = oracle.search_calls
-    assert search["filters"]["document_id"] == DOC_A
+    _assert_read_nothing(result, state, reason)
+    assert oracle.search_calls == []
     assert sections.read_calls == []
-    assert llm.calls == ([] if reason == FALLBACK_NO_OUTLINE else llm.calls)
-    assert len(llm.calls) == (0 if reason == FALLBACK_NO_OUTLINE else 1)
-    read = _reads(state)[DOC_A]
-    assert (read["read_mode"], read["fallback_reason"]) == (READ_MODE_FULL, reason)
-    assert read["read_chunk_count"] == 31
-    # 退避で足した chunk は章節の拡張の起点にしない(rag_engine へ印を渡す)。
-    assert state.chunks[f"{DOC_A}:cs:body"].metadata[REFERENCE_SECTION_SEED_KEY] is False
-    assert {
-        child.metadata["reference_expansion"].get("section_seed")
-        for child in result.expansion_chunks
-    } == {False}
-    assert added <= state.reference_full_read_ids
+    assert len(llm.calls) == (0 if reason == DOCUMENT_NO_OUTLINE else 1)
 
 
-async def test_selected_sections_that_read_nothing_fall_back(
+async def test_reads_nothing_when_the_outline_cannot_be_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """選んだ章節がどれも読めなければ、文書全体を読む。"""
+    """目次を読めなければ、その参照先を読まず理由を残す(モデルも呼ばない)。"""
+    engine, oracle, _sections, llm = _setup(
+        monkeypatch, outlines={DOC_A}, targets=[TARGET_A], pick=lambda context: []
+    )
+
+    async def broken(document_id: str, **kwargs: Any) -> None:
+        raise RuntimeError("outline down")
+
+    monkeypatch.setattr(section_map_service, "section_outline", broken)
+
+    result, state = await _search(engine)
+
+    _assert_read_nothing(result, state, DOCUMENT_OUTLINE_ERROR)
+    assert oracle.search_calls == [] and llm.calls == []
+
+
+async def test_selected_sections_that_read_nothing_add_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """選んだ章節がどれも読めなければ、何も足さず理由を残す(文書全体を読まない)。"""
     engine, oracle, sections, _llm = _setup(
         monkeypatch,
         outlines={DOC_A},
@@ -336,33 +274,44 @@ async def test_selected_sections_that_read_nothing_fall_back(
 
     result, state = await _search(engine)
 
-    assert f"{DOC_A}:cs:body" in {child.chunk_uid for child in result.expansion_chunks}
-    assert len(oracle.search_calls) == 1
-    read = _reads(state)[DOC_A]
-    assert (read["read_mode"], read["fallback_reason"]) == (READ_MODE_FULL, FALLBACK_SECTIONS_EMPTY)
+    read = _assert_read_nothing(result, state, SKIP_SECTIONS_EMPTY)
+    assert read["selected_sections"] == []
+    assert sections.read_calls == [(DOC_A, f"{DOC_A}#操作の手順")]
+    assert oracle.search_calls == []
 
 
-async def test_only_unselected_document_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    """1 回の呼び出しで片方の文書だけ選んだら、選ばなかった文書だけを全体で読む。"""
-    engine, oracle, _sections, llm = _setup(
+async def test_only_selected_document_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1 回の呼び出しで片方の文書だけ選んだら、選んだ文書だけを読み、もう片方は読まない。"""
+    engine, oracle, sections, llm = _setup(
         monkeypatch,
         outlines={DOC_A, DOC_B},
         pick=lambda context: [_label(context.split("</document>")[0], "操作の手順")],
     )
 
-    _result, state = await _search(engine)
+    result, state = await _search(engine)
 
     assert len(llm.calls) == 1
+    assert [child.chunk_uid for child in result.expansion_chunks] == [f"{DOC_A}:cs:body"]
     reads = _reads(state)
-    assert (reads[DOC_A]["read_mode"], reads[DOC_A]["fallback_reason"]) == (
-        READ_MODE_SECTIONS,
-        None,
-    )
-    assert (reads[DOC_B]["read_mode"], reads[DOC_B]["fallback_reason"]) == (
-        READ_MODE_FULL,
-        FALLBACK_NO_SELECTION,
-    )
-    assert [call["filters"]["document_id"] for call in oracle.search_calls] == [DOC_B]
+    assert (reads[DOC_A]["read_mode"], reads[DOC_A]["skip_reason"]) == (READ_MODE_SECTIONS, None)
+    assert (reads[DOC_B]["read_mode"], reads[DOC_B]["skip_reason"]) == (None, SKIP_NO_SELECTION)
+    assert sections.read_calls == [(DOC_A, f"{DOC_A}#操作の手順")]
+    assert oracle.search_calls == []
+
+
+async def test_unplanned_document_reference_reads_nothing() -> None:
+    """読む前の計画が無い参照先(章節を選んでいない)は読まず、理由を残す。"""
+    chunks = _doc_chunks(DOC_A, FILE_A, 2)
+    oracle = ReferenceOracle([], chunks)
+    oracle.documents = [(DOC_A, FILE_A, ())]
+    engine = _engine(oracle, rag_reference_outline_selection_enabled=True)
+    state = _SearchState()
+    anchor = _retrieved("doc-index:a", "資料を参照。", "索引", document_id="doc-index")
+
+    rows = await engine._document_reference_chunks({}, state, anchor, TARGET_A, key=("k",))
+
+    assert rows == [] and oracle.search_calls == []
+    assert state.reference_reads[("k",)].skip_reason == SKIP_NOT_PLANNED
 
 
 async def test_numbered_reference_does_not_use_the_outline(
@@ -387,7 +336,29 @@ async def test_numbered_reference_does_not_use_the_outline(
     assert sections.outline_calls == []
     assert llm.calls == []
     assert state.reference_reads == {}
-    assert REFERENCE_SECTION_SEED_KEY not in state.chunks["doc-1:cs-1:s0"].metadata
+
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["outline-on", "outline-off"])
+async def test_numbered_reference_reads_up_to_the_section_chunk_limit(enabled: bool) -> None:
+    """番号つきの参照の節は、節の先頭から設定の上限(既定 8)まで読む(目次の設定に関わらない)。"""
+    anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+
+    cases: list[tuple[dict[str, Any], int]] = [
+        ({}, 8),
+        ({"rag_reference_section_read_max_chunks": 3}, 3),
+    ]
+    for settings, expected in cases:
+        oracle = ReferenceOracle([anchor], _section_chunks(10))
+        engine = _engine(oracle, rag_reference_outline_selection_enabled=enabled, **settings)
+        state = _SearchState()
+
+        result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+
+        assert [child.chunk_uid for child in result.expansion_chunks] == [
+            f"doc-1:cs-1:s{n}" for n in range(expected)
+        ]
+        (record,) = state.reference_sources
+        assert record["section_read_max_chunks"] == expected
 
 
 def test_resolve_choice_keeps_only_catalog_ids_once() -> None:
@@ -426,6 +397,10 @@ def test_limits_default_to_the_previous_constants() -> None:
     assert settings.rag_reference_outline_selection_catalog_max_chars == 40000
     assert settings.rag_reference_outline_selection_max_sections == 12
     assert settings.rag_reference_outline_selection_read_max_chunks == 400
+    # 番号つきの参照の節から読む chunk の上限も、設定にする前の定数(8)と同じ(#5348)。
+    assert settings.rag_reference_section_read_max_chunks == 8
+    # 目次の行の書き出しの字数も、設定にする前の定数と同じ(#5345)。
+    assert settings.rag_outline_lead_chars == 60
 
 
 @pytest.mark.parametrize(
@@ -434,6 +409,8 @@ def test_limits_default_to_the_previous_constants() -> None:
         ("rag_reference_outline_selection_catalog_max_chars", 2000, 80000),
         ("rag_reference_outline_selection_max_sections", 1, 50),
         ("rag_reference_outline_selection_read_max_chunks", 10, 1000),
+        ("rag_reference_section_read_max_chunks", 1, 50),
+        ("rag_outline_lead_chars", 0, 200),
     ],
 )
 def test_limits_reject_values_out_of_range(name: str, low: int, high: int) -> None:
@@ -457,10 +434,12 @@ async def test_catalog_limit_is_split_between_targets(monkeypatch: pytest.Monkey
     from app.rag import section_catalog
 
     limits: list[int] = []
+    leads: list[int] = []
     original = section_catalog.compact_section_lines
 
     async def recording(*args: Any, max_chars: int, **kwargs: Any) -> tuple[list[str], int]:
         limits.append(max_chars)
+        leads.append(args[3])
         return await original(*args, max_chars=max_chars, **kwargs)
 
     monkeypatch.setattr(section_catalog, "compact_section_lines", recording)
@@ -474,6 +453,33 @@ async def test_catalog_limit_is_split_between_targets(monkeypatch: pytest.Monkey
     await _search(engine)
 
     assert limits == [1500, 1500]
+    # 目次の行の書き出しの字数は既定の設定(設定にする前の定数と同じ 60。#5345)。
+    assert leads == [60, 60]
+
+
+async def test_catalog_lead_chars_follow_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目次の行に添える本文の書き出しの字数は設定 rag_outline_lead_chars の値(#5345)。"""
+    from app.rag import section_catalog
+
+    leads: list[int] = []
+    original = section_catalog.compact_section_lines
+
+    async def recording(*args: Any, **kwargs: Any) -> tuple[list[str], int]:
+        leads.append(args[3])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(section_catalog, "compact_section_lines", recording)
+    engine, _oracle, _sections, _llm = _setup(
+        monkeypatch,
+        outlines={DOC_A},
+        targets=[TARGET_A],
+        pick=lambda context: [],
+        rag_outline_lead_chars=7,
+    )
+
+    await _search(engine)
+
+    assert leads == [7]
 
 
 async def test_section_and_chunk_limits_follow_the_settings(
@@ -511,33 +517,15 @@ async def test_section_and_chunk_limits_follow_the_settings(
     assert _reads(state)[DOC_A]["read_chunk_count"] == 10
 
 
-async def test_full_read_fallback_uses_the_chunk_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """選べずに文書全体で読む退避も、参照先 1 つから読む chunk の上限に従う(#5335)。"""
-    engine, oracle, _sections, _llm = _setup(
-        monkeypatch,
-        outlines=set(),
-        targets=[TARGET_A],
-        pick=lambda context: [],
-        rag_reference_outline_selection_read_max_chunks=10,
-    )
-
-    result, state = await _search(engine)
-
-    assert len(oracle.search_calls) == 1
-    assert len(result.expansion_chunks) == 10
-    read = _reads(state)[DOC_A]
-    assert (read["read_mode"], read["read_chunk_count"]) == (READ_MODE_FULL, 10)
-
-
-async def test_disabled_setting_keeps_the_search_top_candidates(
+async def test_disabled_setting_reads_nothing_for_document_name_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """設定が無効なら今までどおり、参照先の中を質問で検索した上位 8 件を読む。
+    """設定が無効なら、文書名だけの参照の参照先は何も読まない(#5348)。
 
-    目次もモデルも使わない(LLM の呼び出しは増えない)。
+    目次・モデル・文書の中の検索のどれも使わず(LLM・検索の呼び出しは増えない)、参照の記述の
+    chunk はそのまま根拠に残る。理由は受領記録に残す。
     """
     from app.config import Settings
-    from app.rag.answer_engine import _REFERENCE_TARGET_CANDIDATES
 
     assert Settings(_env_file=None).rag_reference_outline_selection_enabled is True
     engine, oracle, sections, llm = _setup(
@@ -546,17 +534,8 @@ async def test_disabled_setting_keeps_the_search_top_candidates(
 
     result, state = await _search(engine)
 
-    added = [child.chunk_uid for child in result.expansion_chunks]
-    assert len(added) == _REFERENCE_TARGET_CANDIDATES == 8
-    # 本文の chunk は検索の上位に入らない(質問の語と重ならない合成)。
-    assert f"{DOC_A}:cs:body" not in added
-    (search,) = oracle.search_calls
-    assert search["filters"]["document_id"] == DOC_A
+    _assert_read_nothing(result, state, SKIP_OUTLINE_SELECTION_DISABLED)
+    assert oracle.search_calls == []
     assert sections.outline_calls == [] and sections.read_calls == [] and llm.calls == []
-    assert state.reference_reads == {} and state.reference_full_read_ids == set()
     (record,) = state.reference_sources
-    assert record["document_reads"] == [] and record["section_selections"] == []
-    assert {
-        child.metadata["reference_expansion"].get("section_seed")
-        for child in result.expansion_chunks
-    } == {None}
+    assert record["section_selections"] == []

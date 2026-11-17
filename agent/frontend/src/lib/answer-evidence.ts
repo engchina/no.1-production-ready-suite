@@ -24,7 +24,7 @@ export interface AnswerEvidenceEntry {
   citationLocation: string;
   /** 会話の添付の根拠か（#2554）。RAG の文書ではないので、原文のプレビューを開かない。 */
   attachment: boolean;
-  /** 利用者が選んだ登録済みの Q&A の根拠か（#5136）。RAG の文書ではないので、原文のプレビューを開かない。 */
+  /** 利用者が選んだ登録済みQ&Aの根拠か（#5136）。RAG の文書ではないので、原文のプレビューを開かない。 */
   approvedFaq: boolean;
 }
 
@@ -108,7 +108,7 @@ export function answerEvidenceData(content: Record<string, unknown> | null | und
     const page = pageLabel(locator);
     // 会話の添付の根拠（backend の `chat_attachment_id` の印。#2554）。RAG のチャットの添付の根拠と同じ扱い。
     const attachment = text(item.chat_attachment_id) !== "";
-    // 利用者が選んだ登録済みの Q&A（backend の `approved_faq_id` の印。#5136）。
+    // 利用者が選んだ登録済みQ&A（backend の `approved_faq_id` の印。#5136）。
     const approvedFaq = text(item.approved_faq_id) !== "";
     return [
       {

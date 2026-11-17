@@ -1,4 +1,4 @@
-"""MCP の承認済み FAQ（登録済みの Q&A）: 候補・選んだ回答・候補の省略。
+"""MCP の登録済みQ&A: 候補・選んだ回答・候補の省略。
 
 rag_search（#5134）と rag_retrieve_evidence（#5136）。
 """
@@ -209,7 +209,7 @@ def test_invalid_faq_arguments_are_tool_errors(
 
 
 def test_approved_faq_arguments_are_shared_by_search_and_retrieve() -> None:
-    """承認済み FAQ の引数は rag_search と rag_retrieve_evidence で同じ定義（#5136）。"""
+    """登録済みQ&Aの引数は rag_search と rag_retrieve_evidence で同じ定義（#5136）。"""
     search = mcp_tools.SearchInput.model_json_schema()["properties"]
     retrieve = mcp_tools.RetrieveEvidenceInput.model_json_schema()["properties"]
     for name in ("approved_faq_id", "skip_approved_faq"):

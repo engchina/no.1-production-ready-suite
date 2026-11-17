@@ -376,6 +376,35 @@ def test_comparison_adds_columns_for_both_profiles() -> None:
     assert sheet.cell(2, columns["評価結果（比較対象）: 回答の正確性"]).value == 0.125
 
 
+@pytest.mark.parametrize(
+    ("answer_mode", "with_comparison", "prefixes"),
+    [
+        ("chat", False, ["評価結果（チャット）"]),
+        ("search", True, ["評価結果（主条件・RAG 検索）", "評価結果（比較対象・RAG 検索）"]),
+    ],
+    ids=["chat", "search-comparison"],
+)
+def test_result_column_headers_name_the_answer_mode(
+    answer_mode: Any, with_comparison: bool, prefixes: list[str]
+) -> None:
+    """足す列の見出しに回答の方法を入れる（#5340。2 つの評価のファイルを並べても区別できる）。"""
+    metrics = _metrics(_case("row-2"))
+    if with_comparison:
+        metrics.comparison = EvaluationComparison(
+            search_answer_profile_id="profile-b", metrics=_metrics(_case("row-2", score=0.125))
+        )
+    sheet = load_workbook(
+        BytesIO(
+            evaluation_workbook_with_results(
+                _workbook(), metrics, {"trace-row-2": "回答"}, answer_mode=answer_mode
+            )
+        )
+    )["評価リクエスト"]
+    columns = _headers(sheet)
+    for prefix in prefixes:
+        assert f"{prefix}: 回答の正確性" in columns
+
+
 # ---- API ----
 
 
@@ -605,6 +634,8 @@ async def test_export_uses_the_uploaded_workbook_and_names_the_file(
         )
     ).json()["data"]
     assert job["source_workbook_id"] == workbook_id
+    # 回答の方法の既定はチャット（#5340）。足す列の見出しに方法を入れる。
+    assert job["answer_mode"] == "chat"
     await job_service.wait_for(job["job_id"])
 
     response = await api_client.post(f"/api/evaluation/jobs/{job['job_id']}/results.xlsx", json={})
@@ -616,10 +647,10 @@ async def test_export_uses_the_uploaded_workbook_and_names_the_file(
     assert book.sheetnames == ["評価リクエスト", "別のシート", "空のシート"]
     sheet = book["評価リクエスト"]
     columns = _headers(sheet)
-    assert sheet.cell(3, columns["評価結果: 回答"]).value == "合成の回答 trace-row-3"
+    assert sheet.cell(3, columns["評価結果（チャット）: 回答"]).value == "合成の回答 trace-row-3"
     assert sheet.cell(3, 3).value == "メモ B"
     assert (
-        sheet.cell(3, columns["評価結果: 回答に使用した根拠"]).value
+        sheet.cell(3, columns["評価結果（チャット）: 回答に使用した根拠"]).value
         == "合成資料.xlsx | シート: Sheet1 | 行: 10-12"
     )
 
@@ -646,8 +677,8 @@ async def test_partial_export_marks_the_remaining_rows(
     assert response.headers["x-evaluation-results-source"] == "uploaded"
     sheet = load_workbook(BytesIO(response.content))["評価リクエスト"]
     columns = _headers(sheet)
-    assert sheet.cell(2, columns["評価結果: 状態"]).value == "成功"
-    assert sheet.cell(3, columns["評価結果: 状態"]).value == "未実行"
+    assert sheet.cell(2, columns["評価結果（チャット）: 状態"]).value == "成功"
+    assert sheet.cell(3, columns["評価結果（チャット）: 状態"]).value == "未実行"
 
 
 async def test_job_without_workbook_exports_the_results_only_file(
@@ -660,16 +691,25 @@ async def test_job_without_workbook_exports_the_results_only_file(
     """API で直接投入した job は元の Excel が無いので、結果だけのファイルにする。"""
     _fake_runner(monkeypatch)
     job = (
-        await api_client.post("/api/evaluation/jobs/run", json=_run_body(None, "case-a"))
+        await api_client.post(
+            "/api/evaluation/jobs/run",
+            json={**_run_body(None, "case-a"), "answer_mode": "search"},
+        )
     ).json()["data"]
     assert job["source_workbook_id"] is None
+    assert job["answer_mode"] == "search"
     await job_service.wait_for(job["job_id"])
 
     response = await api_client.post(f"/api/evaluation/jobs/{job['job_id']}/results.xlsx", json={})
     assert response.status_code == 200
     assert response.headers["x-evaluation-results-source"] == "generated"
     assert "evaluation_results.xlsx" in response.headers["content-disposition"]
-    assert load_workbook(BytesIO(response.content)).sheetnames == ["概要", "主条件の結果"]
+    book = load_workbook(BytesIO(response.content))
+    assert book.sheetnames == ["概要", "評価の条件", "主条件の結果"]
+    # 回答の方法は job の記録から書く（#5340）。
+    conditions = {row[0].value: row[1].value for row in book["評価の条件"].iter_rows(min_row=2)}
+    assert conditions["回答の方法"] == "RAG 検索"
+    assert conditions["比較対象"] == "なし"
 
 
 async def test_export_falls_back_to_results_only_when_the_workbook_cannot_be_read(

@@ -100,7 +100,7 @@ class ChatMessage(BaseModel):
     # 出す。
     # 画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
-    # 利用者が選んだ承認済み FAQ の回答をそのまま返した回答か（ASSISTANT の終わった回答だけ。
+    # 利用者が選んだ登録済みQ&Aの回答をそのまま返した回答か（ASSISTANT の終わった回答だけ。
     # #5107）。true なら、回答の見出しと案内に、検索と回答の生成をしていないことを出す。
     approved_faq_answer: bool = False
 
@@ -193,7 +193,7 @@ class ChatMessageRequest(BaseModel):
         le=SEARCH_TOP_K_MAX,
         json_schema_extra=search_top_k_schema,
     )
-    # 利用者が回答の前の候補から選んだ承認済み FAQ の id(#5107)。backend が検索・回答プロファイルの
+    # 利用者が回答の前の候補から選んだ登録済みQ&Aの id(#5107)。backend が検索・回答プロファイルの
     # FAQ から引き直し、検索・回答の生成をせずに FAQ の回答をそのまま返す。
     approved_faq_id: str | None = Field(default=None, min_length=1, max_length=200)
     # 利用者が業務ガイドの条件の確認に答えた内容。

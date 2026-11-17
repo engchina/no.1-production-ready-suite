@@ -50,7 +50,7 @@ metadata:
 
 ## Step 5: 結果ごとの対応
 
-- `rag_chat` の結果の `status` が `approved_faq_candidates`（登録済みQ&A の候補）か、`outcome` が `needs_clarification`（業務ガイドの条件の確認）なら、利用者に選んでもらうか答えてもらってから、同じ `query` と `search_answer_profile_id` で呼び直す（渡す引数は `approved_faq_id`・`skip_approved_faq`・`conditions`・`skip_clarification` の説明のとおり）。候補・選択肢を自分で選ばない。
+- `rag_chat` の結果の `status` が `approved_faq_candidates`（登録済みQ&Aの候補）か、`outcome` が `needs_clarification`（業務ガイドの条件の確認）なら、利用者に選んでもらうか答えてもらってから、同じ `query` と `search_answer_profile_id` で呼び直す（渡す引数は `approved_faq_id`・`skip_approved_faq`・`conditions`・`skip_clarification` の説明のとおり）。候補・選択肢を自分で選ばない。
 - 資料の回答だけでは確定できない現場の値・記録（件数・状態・設定値）は、`nl2sql_query` で確かめてから答える。
 - `nl2sql_query` が `pending` / `running` を返した: `nl2sql_get_job` で続きを取る。
 - `nl2sql_query` が `needs_clarification` を返した: SQL はまだ作っていない。

@@ -377,7 +377,7 @@ function AssistantColumn({
   const storageNotice = storageFailureNotice(storageFailures, traceId);
   // 回答は列のモデルだけで作る（#3444）。そのモデルへ根拠の画像を添付した回答は、見出しにそのことを添える。
   const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
-  // 登録済みQ&A の回答をそのまま返した回答は、モデルが作っていないので見出しをモデル名にしない（#4788）。
+  // 登録済みQ&Aの回答をそのまま返した回答は、モデルが作っていないので見出しをモデル名にしない（#4788）。
   const faqDirect = finished && answerFromApprovedFaq(answerDiagnostics, passageSource);
   const heading = faqDirect ? t("chat.column.faqDirect") : answerModelHeading(label, attachedImages);
   const listId = useId();
@@ -816,7 +816,7 @@ export function ChatClient() {
   const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
-  // 回答の前に選ぶ類似の承認済み FAQ（選ぶまで送らない。#684）。選ぶ前に画面を離れても、戻ったとき・
+  // 回答の前に選ぶ類似の登録済みQ&A（選ぶまで送らない。#684）。選ぶ前に画面を離れても、戻ったとき・
   // 再読込で同じ質問と候補を出す（作業状態。#702）。検索・回答プロファイルを変えたら消す。
   const [faqChoice, setFaqChoice] = useWorkspaceState<FaqChoice | null>(
     "chat.faqChoice",
@@ -1121,7 +1121,7 @@ export function ChatClient() {
   /**
    * 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。
    * 送った質問は、類似問・確認の照会や会話の作成を待たずにすぐ会話の欄へ出し、入力欄を空にする（#907）。
-   * 検索・回答プロファイルの Q&A の提示がオンで、補完した質問に近い登録済みQ&A があれば、回答を作る前に候補と
+   * 検索・回答プロファイルの Q&A の提示がオンで、補完した質問に近い登録済みQ&Aがあれば、回答を作る前に候補と
    * 「どれでもない」を出し、どれかを選ぶまで送らない（#684・#5107）。Q&A の照会は会話を確定してから行い、backend が
    * 済ませた補完の token を確認の照会と送信に渡す（補完を呼び直さない）。照会に失敗したときは Q&A を使わずに送る。
    */

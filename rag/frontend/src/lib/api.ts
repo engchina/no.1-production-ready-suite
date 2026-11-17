@@ -1514,7 +1514,7 @@ export interface SearchRequestBody {
   generate_answer?: boolean;
   /** 回答のモデル（既定のテキストモデルか既定の Vision モデル。未指定はテキスト。#675）。 */
   model_id?: string;
-  /** 利用者が選んだ登録済みQ&A の id。付けると検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
+  /** 利用者が選んだ登録済みQ&Aの id。付けると検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
   approved_faq_id?: string;
 }
 
@@ -1569,7 +1569,7 @@ export interface ChatMessage {
    * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
    */
   answer_attached_images?: number;
-  /** 利用者が選んだ登録済みQ&A の回答をそのまま返した ASSISTANT の回答か（#5107）。 */
+  /** 利用者が選んだ登録済みQ&Aの回答をそのまま返した ASSISTANT の回答か（#5107）。 */
   approved_faq_answer?: boolean;
 }
 
@@ -1605,7 +1605,7 @@ export interface ChatMessageRequestBody {
   question_context_token?: string;
   model_ids?: string[];
   top_k?: number;
-  /** 利用者が選んだ登録済みQ&A の id。検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
+  /** 利用者が選んだ登録済みQ&Aの id。検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
   approved_faq_id?: string;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
   clarification?: GuideConditionAnswer;
@@ -2007,10 +2007,19 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
  * 画面からの評価の request（#2065）。評価の基準は常に設定の既定（suite・thresholds を送らない）、
  * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
+/**
+ * 品質評価の回答の方法（#5340）。chat は RAG チャットと同じ経路（登録済みQ&A・業務ガイド・根拠の拡張あり）、
+ * search は画面の RAG 検索と同じ基本の RAG。
+ */
+export type EvaluationAnswerMode = "chat" | "search";
+export const EVALUATION_ANSWER_MODES: readonly EvaluationAnswerMode[] = ["chat", "search"];
+
 export interface EvaluationRunRequestBody {
   testset_id?: string;
   testset_revision?: number;
   answer_model_id?: string;
+  /** 回答の方法（#5340。省略時はチャット）。 */
+  answer_mode?: EvaluationAnswerMode;
   cases: EvaluationCase[];
   search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
@@ -2158,6 +2167,8 @@ export interface EvaluationJob {
   compare_search_answer_profile_id: string | null;
   search_answer_profile_name: string | null;
   compare_search_answer_profile_name: string | null;
+  /** 回答の方法（#5340。記録の無い古い job は null＝未記録）。 */
+  answer_mode?: EvaluationAnswerMode | null;
   /** 実行した利用者の表示名（分からない古い job は null）。 */
   actor_display_name: string | null;
   /** 見ている利用者が実行した job か、取り消せるか（本人と system_admin。#4811）。 */
@@ -2182,6 +2193,8 @@ export interface EvaluationJobSummary {
   compare_search_answer_profile_id: string | null;
   search_answer_profile_name: string | null;
   compare_search_answer_profile_name: string | null;
+  /** 回答の方法（#5340。記録の無い古い job は null＝未記録）。 */
+  answer_mode?: EvaluationAnswerMode | null;
   actor_display_name: string | null;
   owned: boolean;
   can_cancel: boolean;
@@ -2758,6 +2771,8 @@ export interface AnsweringSettingsData {
   graph_expansion_enabled: boolean;
   entity_expansion_enabled: boolean;
   entity_expansion_max_chunks: number;
+  /** 番号つきの参照の参照先 1 つで、番号で定位した節から読むチャンクの上限（#5348。既定 8）。 */
+  reference_section_read_max_chunks: number;
   /** 文書全体への参照の参照先を、目次からモデルが選んだ章節で読む（#5263。既定 true。#5296）。 */
   reference_outline_selection_enabled: boolean;
   /** 参照先の目次の字数・参照先 1 つで読む章節の数・読むチャンクの上限（#5335）。 */
@@ -4035,7 +4050,7 @@ export const api = {
       { method: "POST", body: form },
     );
   },
-  /** 登録済みQ&A の Excel 取込のテンプレート（QUESTION・ANSWER の 2 列だけ。#5107）。 */
+  /** 登録済みQ&Aの Excel 取込のテンプレート（QUESTION・ANSWER の 2 列だけ。#5107）。 */
   downloadApprovedFaqTemplate: (id: string) =>
     requestFile(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/import/template`,

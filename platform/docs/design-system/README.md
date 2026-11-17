@@ -958,6 +958,19 @@ LLM の回答など Markdown で書かれた本文は、この部品で描きま
 - 単体テストは `packages/ui/tests/clarification-card.test.tsx`。製品の画面の e2e は載せ替え（#1839 の段 2〜4）で足す。
 - 使う所（予定）: NL2SQL の SQL の生成の前の確認（`RequirementQuestionForm` / `RequirementConfirmForm` の置き換え。要件の一覧は `children`、物理名・根拠は選択肢の `detail`）、RAG の回答の前の確認（`ClarificationChoice` の置き換え。章節は `detail`）、Agent のツールの結果の確認と `ask_user_confirmation`。
 
+### `RadioOptionGroup`（新規）— ★ 名前と説明を持つラジオの群は 1 つの実装（#5340）
+
+1 つを選ぶ選択肢に 1 行の説明を添えて並べる部品です。`Fieldset role="radiogroup"`（legend・補足・エラー・必須は `Fieldset` のまま）の中に、ネイティブのラジオを包んだ行を並べます。行の見た目は `ClarificationCard` の選択肢の行と同じです。
+
+| 決めたこと | 理由 |
+|---|---|
+| 行全体が押せるネイティブのラジオ。名前は `aria-labelledby`、説明は `aria-describedby` でラジオに結ぶ | 矢印キーの移動・読み上げをブラウザに任せる。説明を名前に混ぜない |
+| 行の高さは 44px 以上（`--control-height-touch`）。選んだ行は `--color-accent-emphasis` の枠と `--color-accent-subtle` の地に加え、ラジオの印でも示す | タッチの最小。状態を色だけで示さない |
+| 列の数は置き場所の幅で決める（`repeat(auto-fit, minmax(min(100%, 16rem), 1fr))`、群の幅は 60rem まで）。375px では縦に 1 列 | 2〜3 の選択肢は広い画面で横に並べ、狭い画面で説明を折り返さずに読める |
+| `disabled`（実行中など）は群の全部のラジオを無効にし、色は変えずに押せないことだけを示す | 実行中も選んだ内容を読める（`ClarificationCard` と同じ） |
+
+- 単体テストは `packages/ui/tests/radio-option-group.test.tsx`。最初の利用は RAG の品質評価の「回答の方法」（#5340）。RAG の設定画面の手書きのラジオの載せ替えは別の Issue。
+
 ### `Toaster`（変更）— ★ 置き場所は画面幅ごとに決まった 1 か所（#1728。#411 を置き換え）
 
 通知（Toast）は**画面幅ごとに決まった 1 か所**に出し、ページの内容（`PageHeader` の操作の有無・幅、スクロール）では動かしません。置き場所は `Toaster` が決め、製品・画面では変えません（`placement` プロップは無い）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。
@@ -1286,7 +1299,7 @@ QA に事前共有してください。**189点あります。**
 | 24 | **入りきらないタブの端がフェードする** | 横にスクロールしても手がかりなし → スクロールできる方向の端だけを透かす（2rem）。キーボードで選んだタブはフェードの外までスクロール | 375px などで続きのタブがあることを見せる。強制カラーモードではフェードの代わりに細いスクロールバー（§4「Tabs」、#364） |
 | 25 | **アイコンだけのボタンに説明の吹き出しが出る** | `iconOnly` の名前は `aria-label`（読み上げだけ）か HTML の `title`（マウスで長く止めたときだけ）→ ホバー（400ms）とキーボードのフォーカスで、`aria-label` と同じ文言の暗い吹き出しをボタンの上（入らなければ下）に出す。Escape で閉じる。タッチ端末では出さない。RAG のプレビューのツールバー・NL2SQL のグラフ操作などの `title` は `tooltip` に置き換えた | アイコンだけのボタンの名前を、キーボード・マウスのどちらでも目で確かめられるようにする（§4「`Tooltip`」、#372） |
 | 26 | **読み込み中の Skeleton の見た目が 1 つになり、経過時間が付く** | 共有 `Skeleton` は `bg-border/60`、DataTable の読込行と NL2SQL の画面は `bg-surface-hover` と混在し、`prefers-reduced-motion` で点滅が止まらない部品があった。RAG の設定・一覧・文書詳細は塊やテキストだけ → すべて `--color-surface-hover` の地で reduced-motion では点滅しない。読み込み中は `TimedLoadingState`（「〜を読み込んでいます」と経過時間）+ 形のある `TableSkeleton` / `ListSkeleton` / `FormSkeleton`。`DataTable` の `loading` は `visibleRows` の行数で高さを予約 | UX 契約 messaging §3.6 / §3.7 を 3 製品でそろえる（#265。#338 から移した形のある Skeleton） |
-| 27 | **RAG の一覧が 10 件/ページになり、表の中で縦スクロールする** | 文書・ナレッジベース・検索・回答プロファイルは 20 件/ページで自前の前へ / 次へ（1 ページでも表示）、高さは `bounded-scroll-area-lg`。承認済み FAQ・用語・ルール・評価のケース結果は全件を表示 → 共通の `Pagination`（10 件、件数と「N / M ページ」、1 ページなら出さない）を表の直下に置き、表頭を固定して md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロール。ナレッジベース詳細の所属文書のページは再読込でも残る | NL2SQL の基準（ルートの `docs/agents/ui.md`「読み込み中・一覧・ページング」、#265） |
+| 27 | **RAG の一覧が 10 件/ページになり、表の中で縦スクロールする** | 文書・ナレッジベース・検索・回答プロファイルは 20 件/ページで自前の前へ / 次へ（1 ページでも表示）、高さは `bounded-scroll-area-lg`。登録済みQ&A・用語・ルール・評価のケース結果は全件を表示 → 共通の `Pagination`（10 件、件数と「N / M ページ」、1 ページなら出さない）を表の直下に置き、表頭を固定して md 未満 5 行・md 以上 8 行を超えた行は表の中で縦スクロール。ナレッジベース詳細の所属文書のページは再読込でも残る | NL2SQL の基準（ルートの `docs/agents/ui.md`「読み込み中・一覧・ページング」、#265） |
 | 28 | NL2SQL のページ送りの「N / M ページ」の枠 | 製品のコピー（`border-border`・高さ 2rem）→ 共通 `Pagination`（`border-border-control`・`--button-height-sm`） | 製品のコピーを削除し、共有部品に一本化（#265） |
 | 29 | **md 未満のナビがドロワーになる**（#367。案 A に決定） | 375px などで 56px のアイコン列（展開すると本文を押し出す）→ **上端のバーの「メニュー」ボタンで開くドロワー**（scrim・フォーカスの閉じ込め・Escape / scrim / ナビの選択で閉じる）。本文は画面の全幅（375 − 56 = 319px → 375px）。md 以上は変わらない | 狭い画面で本文の幅を削らない。Material の modal navigation drawer と同じ型（§4 `AppShell`。2026-09-28 に案 A に決定） |
 | 30 | **確認語欄が 1 つの実装になる** | Agent の実行時スナップショットの置換の確認語は `danger` の枠線の区画に素の入力欄（`h-10`・`bg-surface-sunken`）と説明だけ、置換ボタンは区画の下（`md`）→ 共有の `ExecutionConfirmationField`（中立の面・「入力条件: REPLACE」と状態のバッジ・44px の入力欄・区切り線の下に `lg` の置換ボタン、375px では全幅）。見出しの「確認入力」と説明の文言は変えない。system-settings のシステムテーブルの確認語欄は、確認語が `_` の直後で折り返すようになる（旧: 任意の位置）。NL2SQL は変わらない | 製品のコードと system-settings のコピーを `packages/ui` に一本化し、3 製品の確認語欄を同じ見た目・振る舞いにする。破壊的な操作の確認面を中立にする（UX 契約 buttons.md / messaging §3.5、§4「`ExecutionConfirmationField`」、#379） |

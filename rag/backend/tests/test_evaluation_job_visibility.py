@@ -280,6 +280,7 @@ async def test_submit_records_profiles_and_user(
             executor=executor,
             search_answer_profile_id="profile-a",
             compare_search_answer_profile_id="profile-b",
+            answer_mode="search",
         )
         await service.wait_for(job.job_id)
     finally:
@@ -288,6 +289,9 @@ async def test_submit_records_profiles_and_user(
     assert record.search_answer_profile_id == "profile-a"
     assert record.compare_search_answer_profile_id == "profile-b"
     assert record.user_uuid == "owner-uuid"
+    # 回答の方法（#5340）も job の行に残し、job の応答に出す。
+    assert record.answer_mode == "search"
+    assert job.answer_mode == "search"
 
 
 # ---- API ----
@@ -320,7 +324,7 @@ async def test_list_api_returns_page_with_names(
     names: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    await _seed(store, _record("job-known"))
+    await _seed(store, replace(_record("job-known"), answer_mode="search"))
     await _seed(store, _record("job-legacy", profile=None))
     _as_viewer(monkeypatch, _OTHER_WITH_PROFILE)
 
@@ -334,6 +338,7 @@ async def test_list_api_returns_page_with_names(
     assert item["actor_display_name"] == "利用者 A"
     assert item["passed"] is True
     assert item["can_cancel"] is False
+    assert item["answer_mode"] == "search"
     # 利用者の UUID は表示名を引くためだけに使い、応答に出さない。
     assert "actor_user_uuid" not in item
     assert "result" not in str(item.keys())
@@ -414,3 +419,21 @@ def test_record_from_row_reads_compared_verdict() -> None:
     }
     record = evaluation_jobs._record_from_row(row)  # noqa: SLF001
     assert (record.passed, record.compare_passed) == (True, False)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("chat", "chat"), ("search", "search"), (None, None), ("other", None)],
+    ids=["chat", "search", "unrecorded", "unknown"],
+)
+def test_record_from_row_reads_answer_mode(value: object, expected: object) -> None:
+    """回答の方法（#5340）。記録の無い古い行・知らない値は None（画面・Excel は「未記録」）。"""
+    row = {
+        "job_id": "job-row",
+        "status": "SUCCEEDED",
+        "total_cases": 1,
+        "completed_cases": 1,
+        "time_limit_seconds": 60,
+        "answer_mode": value,
+    }
+    assert evaluation_jobs._record_from_row(row).answer_mode == expected  # noqa: SLF001

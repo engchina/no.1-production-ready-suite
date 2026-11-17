@@ -31,7 +31,7 @@ function item(runId: string, overrides: Record<string, unknown> = {}) {
     run_id: runId,
     thread_id: null,
     agent_id: "default",
-    agent_name: "資料・データ横断アシスタント",
+    agent_name: "RAG チャット＋データアシスタント",
     user_uuid: "u-1",
     display_name: "山田 太郎",
     question: `${runId} の質問：今月の契約件数は？`,
@@ -548,7 +548,7 @@ test("評価セットが無ければ新しい評価セットを作り、期待�
   await detail.getByTestId("feedback-add-case-toggle").click();
   const form = detail.getByTestId("feedback-add-case-form");
   await expect(form.locator("#feedback-add-case-set")).toContainText("新しい評価セットを作る");
-  await expect(form.getByLabel("新しい評価セットの名前")).toHaveValue("資料・データ横断アシスタント のフィードバック");
+  await expect(form.getByLabel("新しい評価セットの名前")).toHaveValue("RAG チャット＋データアシスタント のフィードバック");
   await expect(form.getByLabel("期待する回答の要点")).toHaveValue("");
 
   await form.getByRole("button", { name: "評価ケースに追加" }).click();
@@ -558,10 +558,10 @@ test("評価セットが無ければ新しい評価セットを作り、期待�
 
   await form.getByLabel("期待する回答の要点").fill("15 件");
   await form.getByRole("button", { name: "評価ケースに追加" }).click();
-  await expect(page.getByText("「資料・データ横断アシスタント のフィードバック」に評価ケースを追加しました")).toBeVisible();
+  await expect(page.getByText("「RAG チャット＋データアシスタント のフィードバック」に評価ケースを追加しました")).toBeVisible();
   expect(mockApi.lastRequest("POST", "/api/evaluation-sets")?.body).toEqual({
     agent_id: "default",
-    name: "資料・データ横断アシスタント のフィードバック",
+    name: "RAG チャット＋データアシスタント のフィードバック",
     description: "",
     cases: [
       {

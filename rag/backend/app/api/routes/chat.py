@@ -997,11 +997,11 @@ async def _prepare_chat_turn(
             top_k=request.top_k,
             search_answer_profile_id=search_answer_profile_id,
             conditions=conditions,
-            # 利用者が選んだ承認済み FAQ（#5107）。入口が補完の後に引き直し、回答をそのまま返す。
+            # 利用者が選んだ登録済みQ&A（#5107）。入口が補完の後に引き直し、回答をそのまま返す。
             approved_faq_id=request.approved_faq_id,
         ),
         settings,
-        # RAG Chat は業務ガイドの照合・承認済み FAQ・根拠の拡張を含む経路（#5332）。
+        # RAG チャットは登録済みQ&A・業務ガイドの照合・根拠の拡張を含む経路（#5332）。
         flow=EXPANDED_FLOW,
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
         # 補完した質問は前の発話の文脈を含むので、補完が有効なら足さない。

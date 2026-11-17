@@ -1474,7 +1474,7 @@ export function useImportDomainKeywords(searchAnswerProfileId: string) {
   });
 }
 
-/** 検索・回答プロファイルの承認済み FAQ(類似問)。 */
+/** 検索・回答プロファイルの登録済みQ&A(類似問)。 */
 export function useApprovedFaq(searchAnswerProfileId: string) {
   return useQuery({
     queryKey: ["search-answer-profiles", searchAnswerProfileId, "approved-faq"],

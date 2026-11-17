@@ -53,6 +53,7 @@ from app.rag.evaluation_cli import (
     _gate_summary,
     _load_evaluation_request,
     _write_json,
+    add_answer_mode_argument,
 )
 from app.rag.evaluation_jobs import evaluation_answer_runs, evaluation_job_time_limit_seconds
 from app.rag.evaluation_manifest import comparison_differences, flatten_manifest
@@ -73,6 +74,10 @@ from app.schemas.evaluation import (
 REPLAY_PLACEHOLDER_KEY = "replay-without-key"  # nosec B105 - 秘密ではない固定の印
 REPLAY_PLACEHOLDER_ENDPOINT = "https://replay.invalid/v1"
 REPLAY_FAILED_EXIT_CODE = 2
+ABLATION_ANSWER_MODE_MESSAGE = (
+    "除去実験は RAG チャットの経路の工程を測るため、回答の方法が chat の評価だけを流せます"
+    "（--answer-mode chat）。"
+)
 _SHOWN_VALUE_CHARS = 80
 
 
@@ -104,6 +109,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("golden_set", type=Path, help="EvaluationRunRequest 形式の JSON。")
     run.add_argument("--split", choices=["dev", "holdout"], help="この区分のケースだけを流す。")
     run.add_argument("--output", type=Path, help="結果の JSON の保存先（未指定は stdout）。")
+    add_answer_mode_argument(run)
     mode = run.add_mutually_exclusive_group()
     mode.add_argument("--record", type=Path, help="外部の AI の応答を残す先（実データを含む）。")
     mode.add_argument("--replay", type=Path, help="この記録の応答で、実の API を呼ばずに流す。")
@@ -134,6 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"無効にする工程（カンマ区切り。既定は全部: {','.join(ABLATIONS)}）。",
     )
     ablate.add_argument("--output-dir", type=Path, required=True, help="結果と表の保存先。")
+    add_answer_mode_argument(ablate)
     ablate_mode = ablate.add_mutually_exclusive_group()
     ablate_mode.add_argument(
         "--record", action="store_true", help="構成ごとの外部の AI の応答も残す（実データを含む）。"
@@ -155,7 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run(args: argparse.Namespace) -> int:
     request = EvaluationRunRequest.model_validate(
-        _load_evaluation_request(args.golden_set, split=args.split)
+        _load_evaluation_request(args.golden_set, split=args.split, answer_mode=args.answer_mode)
     )
     settings = get_settings()
     session: ExternalCallSession | None = None
@@ -195,10 +202,16 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _ablate(args: argparse.Namespace) -> int:
-    """full と工程を 1 つずつ無効にした構成を同じ条件で流し、差の表を出す（#2573）。"""
+    """full と工程を 1 つずつ無効にした構成を同じ条件で流し、差の表を出す（#2573）。
+
+    除く工程（根拠の拡張）は RAG チャットの経路だけが通るので、回答の方法が RAG 検索（#5340）の
+    評価は流さない。
+    """
     request = EvaluationRunRequest.model_validate(
-        _load_evaluation_request(args.golden_set, split=args.split)
+        _load_evaluation_request(args.golden_set, split=args.split, answer_mode=args.answer_mode)
     )
+    if request.answer_mode != "chat":
+        raise EvaluationGateError(ABLATION_ANSWER_MODE_MESSAGE)
     settings = get_settings()
     # 構成の間で呼び出しの順・時間の条件を揃える（ケースを 1 件ずつ）。
     settings.rag_evaluation_concurrency = 1

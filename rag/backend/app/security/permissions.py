@@ -204,7 +204,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         FEEDBACK_MANAGE,
         _GROUP_MANAGE,
         "フィードバックの承認 FAQ 反映",
-        "フィードバックの回答を検索・回答プロファイルの承認済み FAQ に登録できます"
+        "フィードバックの回答を検索・回答プロファイルの登録済みQ&Aに登録できます"
         "（自分が送った、利用できる検索・回答プロファイルのフィードバックだけ。すべての利用者の分を"
         "扱えるのは SYSTEM_ADMIN だけ）。フィードバックの表示と、他の利用者の"
         "保存済みの回答の表示・評価・削除も含みます。",
@@ -473,7 +473,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/approved-faq/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # FAQ の取込のテンプレート（QUESTION・ANSWER の 2 列。#5107）。
     ("GET", f"{_BV}/approved-faq/import/template"): _any(MENU_SEARCH_ANSWER_PROFILES),
-    # 回答前に承認済み FAQ の候補を提示する（読み取り。プロファイルの権限だけで判定する。#5107）。
+    # 回答前に登録済みQ&Aの候補を提示する（読み取り。プロファイルの権限だけで判定する。#5107）。
     ("POST", f"{_BV}/approved-faq/suggest"): _any(
         MENU_SEARCH, MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES
     ),
@@ -577,7 +577,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/feedback"): _any(MENU_FEEDBACK),
     ("GET", "/feedback/{feedback_id}"): _any(MENU_FEEDBACK),
     ("GET", "/feedback/{feedback_id}/evaluation-case"): _any(MENU_FEEDBACK),
-    # 承認済み FAQ への反映（回答の書き込み）だけは rag.feedback.manage。
+    # 登録済みQ&Aへの反映（回答の書き込み）だけは rag.feedback.manage。
     ("POST", "/feedback/{feedback_id}/approved-faq"): _any(FEEDBACK_MANAGE),
     # ---- システム設定（3 製品共通の画面） ----
     ("GET", "/settings/upload-storage"): _any(

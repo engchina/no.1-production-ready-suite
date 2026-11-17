@@ -72,8 +72,15 @@ def test_export_keeps_full_inputs_scores_unassessed_and_comparison() -> None:
     result.comparison = EvaluationComparison(
         search_answer_profile_id="profile-b", metrics=metrics()
     )
-    book = load_workbook(BytesIO(evaluation_results_xlsx(result, inputs())))
-    assert book.sheetnames == ["概要", "主条件の結果", "比較対象の結果"]
+    book = load_workbook(BytesIO(evaluation_results_xlsx(result, inputs(), answer_mode="chat")))
+    assert book.sheetnames == ["概要", "評価の条件", "主条件の結果", "比較対象の結果"]
+    # 評価の条件のシート（#5340）。主条件・比較対象・回答の方法。
+    assert [[cell.value for cell in row] for row in book["評価の条件"].iter_rows()] == [
+        ["項目", "値"],
+        ["主条件", "プロファイル A"],
+        ["比較対象", "プロファイル B"],
+        ["回答の方法", "チャット"],
+    ]
     sheet = book["主条件の結果"]
     assert sheet["B2"].value == "=2+2"
     assert sheet["B2"].data_type == "s"
@@ -332,3 +339,10 @@ async def test_export_reads_only_final_trace_citations_and_does_not_mix_profiles
         "trace-b": "比較資料.pdf | p.5",
     }
     assert calls == [["trace-a", "trace-b"]]
+
+
+def test_export_writes_unrecorded_answer_mode_for_old_jobs() -> None:
+    """回答の方法の記録の無い古い評価（#5340）は「未記録」と書く。"""
+    book = load_workbook(BytesIO(evaluation_results_xlsx(metrics(), inputs())))
+    conditions = {row[0].value: row[1].value for row in book["評価の条件"].iter_rows(min_row=2)}
+    assert conditions == {"主条件": "プロファイル A", "比較対象": "なし", "回答の方法": "未記録"}

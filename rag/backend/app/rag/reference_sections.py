@@ -10,10 +10,10 @@ ID は捨てる）。文書が複数でも 1 回の呼び出しにまとめる�
 
 - 文書全体への参照（#5263）: 文書名・ファイル名だけで文書全体を指す参照（#1400・#5208）の参照先は、
   質問の語と本文の語が重ならないと、文書の中の検索・rerank の上位に本文が入らない。参照先の目次から
-  章節を選ぶ。目次が無い・読めない、選択が失敗した・何も選ばない、返った ID がすべて目次に無い、
-  選んだ章節を読めないときは、参照先の文書を全体で読む方式に退避する（入らない分は分割読取に任せる）。
-  退避の理由は受領記録に残し、退避で足した chunk は章節の拡張の起点にしない。番号つきの参照
-  （条・章・様式など）は今どおり番号で定位し、この経路を通らない。
+  章節を選び、選んだ章節だけを読む。目次が無い・読めない、選択が失敗した・何も選ばない、返った ID が
+  すべて目次に無い、選んだ章節を読めない、目次から選ぶ設定が無効のときは何も読まず（参照の記述の
+  chunk はそのまま根拠に残る）、理由を受領記録に残す（#5348）。番号つきの参照（条・章・様式など）は
+  今どおり番号で定位し、この経路を通らない。
 - 一般の質問（#5324。既定は無効）: 検索の上位の文書のうち章節の木を持つ文書の目次から章節を選ぶ。
   検索の字面では関連が低く見えるが答えに要る章節は rerank の上位に入らないので、選んだ章節は検索拡張
   （#5162）と同じく rerank にかけず、context の枠の外で根拠に足す。選べないときは何も足さない
@@ -60,22 +60,12 @@ OUTLINE_SECTION_PROMPT = (
     + "選んだ章節は、質問に答えるために重要な順に並べます。"
 )
 
-# 見出しの語の無い章節に添える本文の書き出しの文字数（rag_outline の既定と同じ。2 つの経路で共有）。
-# 目次の字数の上限・読む章節の数・読む量は設定（文書全体への参照は
-# rag_reference_outline_selection_*、一般の質問は rag_outline_selection_*）。
-CATALOG_LEAD_CHARS = 60
+# 見出しの語の無い章節に添える本文の書き出しの文字数は設定 rag_outline_lead_chars（2 つの経路と
+# rag_outline の既定で共有。#5345）。目次の字数の上限・読む章節の数・読む量は設定（文書全体への
+# 参照は rag_reference_outline_selection_*、一般の質問は rag_outline_selection_*）。
 
 # 読み方。
 READ_MODE_SECTIONS = "outline_selection"
-READ_MODE_FULL = "full_document"
-# 全体で読む方式へ退避した理由。
-FALLBACK_NO_OUTLINE = "no_outline"
-FALLBACK_OUTLINE_ERROR = "outline_error"
-FALLBACK_SELECTION_ERROR = "selection_error"
-FALLBACK_NO_SELECTION = "no_selection"
-FALLBACK_UNKNOWN_IDS = "unknown_ids"
-FALLBACK_SECTIONS_EMPTY = "selected_sections_empty"
-FALLBACK_NOT_PLANNED = "not_planned"
 
 # 一般の質問の章節の選択（#5324）で足した chunk の印（backend の chunk と rag_engine の根拠の
 # metadata のキー。``rag_engine.retrieval.expansion_merge.OUTLINE_SELECTION_KEY`` と同じ）。
@@ -88,7 +78,12 @@ SKIP_SELECTION_ERROR = "selection_error"
 SKIP_NO_SELECTION = "no_selection"
 SKIP_UNKNOWN_IDS = "unknown_ids"
 SKIP_SECTIONS_EMPTY = "selected_sections_empty"
-# 一般の質問の章節の選択で、文書を対象にしなかった理由（受領記録の文書ごとの ``fallback_reason``）。
+# 文書全体への参照の参照先を読まなかった理由（受領記録の ``document_read`` の ``skip_reason``。
+# #5348）。ほかの理由（目次が無い・読めない・選択の失敗・何も選ばない・ID がすべて目次に無い・
+# 選んだ章節を読めない）は一般の質問の理由と同じ名前を使う。
+SKIP_OUTLINE_SELECTION_DISABLED = "outline_selection_disabled"
+SKIP_NOT_PLANNED = "not_planned"
+# 文書を対象にしなかった理由（受領記録の文書ごとの ``skip_reason``。2 つの経路で共有）。
 DOCUMENT_NO_OUTLINE = "no_outline"
 DOCUMENT_OUTLINE_ERROR = "outline_error"
 # 選んだ章節の読取を途中で止めた理由。
@@ -120,16 +115,16 @@ class DocumentReadPlan:
     sections: list[SectionNode] = field(default_factory=list)
     selected: list[str] = field(default_factory=list)
     mode: str = ""
-    fallback_reason: str | None = None
+    skip_reason: str | None = None
     read_chunk_count: int = 0
     # 読んだ chunk の本文の文字数（#5324。評価で数える）。
     read_chars: int = 0
 
-    def fall_back(self, reason: str) -> None:
-        """全体で読む方式へ退避する（最初の理由を残す）。"""
+    def skip(self, reason: str) -> None:
+        """この文書を読まない（最初の理由を残す）。"""
         self.selected = []
-        if self.fallback_reason is None:
-            self.fallback_reason = reason
+        if self.skip_reason is None:
+            self.skip_reason = reason
 
     def receipt(self) -> dict[str, object]:
         by_id = {node.section_id: node for node in self.sections}
@@ -137,7 +132,7 @@ class DocumentReadPlan:
             "document_id": self.document_id,
             "chunk_set_id": self.chunk_set_id,
             "read_mode": self.mode or None,
-            "fallback_reason": self.fallback_reason,
+            "skip_reason": self.skip_reason,
             "outline_sections": len(self.sections),
             "selected_sections": [
                 {"section_id": section_id, "title": by_id[section_id].title}

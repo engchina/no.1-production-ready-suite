@@ -348,7 +348,7 @@ test("回答のフィードバックを詳細から 登録済みQ&Aに登録し�
   await expect(page).toHaveURL(/\/feedback/);
 });
 
-test("承認 FAQ への反映の権限が無い利用者には 登録済みQ&A への登録を出さない", async ({ page }) => {
+test("承認 FAQ への反映の権限が無い利用者には 登録済みQ&Aへの登録を出さない", async ({ page }) => {
   await mockFeedback(page, []);
   // フィードバックの閲覧だけを持つ DB ユーザー（rag.feedback.manage なし。#214）。
   await mockAuthUser(page, {

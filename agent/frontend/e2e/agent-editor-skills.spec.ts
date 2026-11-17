@@ -32,9 +32,10 @@ test("登録から消えたスキルが「見つかりません」として出�
   await page.goto(`/agents?id=${AGENT_ID}`);
 
   await expect(page.getByRole("heading", { name: "経理の Agent", level: 1 })).toBeVisible();
-  await expect(
-    page.getByText("登録されていないスキルが割り当てられています（deleted_skill_925）", { exact: false })
-  ).toBeVisible();
+  // 削除されたスキルの案内は、スキルの区画の 1 つの枠（#5351）。
+  await expect(page.getByTestId("agent-skills-unavailable")).toContainText(
+    "次のスキルは削除されたため使えません: deleted_skill_925"
+  );
   const missing = page.getByRole("option", { name: /deleted_skill_925/ });
   await expect(missing).toHaveAttribute("aria-checked", "true");
   await expect(missing).toContainText("見つかりません");
@@ -52,7 +53,7 @@ test("登録から消えたスキルが「見つかりません」として出�
   await expect(page.getByText("Agent を保存しました")).toBeVisible();
   const saved = mockApi.lastRequest("PATCH", `/api/agents/${AGENT_ID}`);
   expect(saved?.body).toMatchObject({ skill_ids: [knownSkill], instructions: "v2 の指示" });
-  await expect(page.getByText("登録されていないスキルが割り当てられています", { exact: false })).toHaveCount(0);
+  await expect(page.getByTestId("agent-skills-unavailable")).toHaveCount(0);
 });
 
 test("保存していない変更があるあいだは公開できない", async ({ page, mockApi }) => {

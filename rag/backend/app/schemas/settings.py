@@ -793,11 +793,13 @@ class AnsweringSettingsData(BaseModel):
     runtime_terms_answer_enabled: bool = False
     neighbor_child_count: int = Field(ge=1, le=5)
     rerank_enabled: bool
-    # 以下の拡張(実体・目次からの章節の選択・章節の拡張・関係情報)は RAG Chat・品質評価・MCP の
+    # 以下の拡張(実体・目次からの章節の選択・章節の拡張・関係情報)は RAG チャット・品質評価・MCP の
     # 経路だけに効き、RAG 検索(基本の RAG)では使わない(#5332)。
     # 実体・別名による検索拡張(#1362。全体設定だけで決める。既定 ON。#5187)。
     entity_expansion_enabled: bool
     entity_expansion_max_chunks: int
+    # 番号つきの参照の参照先 1 つで、番号で定位した節から読む chunk の上限(#5348)。
+    reference_section_read_max_chunks: int = 8
     # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 ON。#5296)と、
     # 目次の字数・読む章節の数・参照先 1 つから読む chunk の上限(#5335)。
     reference_outline_selection_enabled: bool
@@ -847,6 +849,8 @@ class AnsweringSettingsUpdate(BaseModel):
 
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
+    # 範囲は Settings の rag_reference_section_read_max_chunks と同じ(#5348)。
+    reference_section_read_max_chunks: int | None = Field(default=None, ge=1, le=50)
     reference_outline_selection_enabled: bool | None = None
     # 範囲は Settings の rag_reference_outline_selection_* と同じ(#5335)。
     reference_outline_selection_catalog_max_chars: int | None = Field(

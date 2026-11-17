@@ -1039,14 +1039,24 @@ class Settings(
             "既読の cache は消費しない。"
         ),
     )
+    rag_reference_section_read_max_chunks: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description=(
+            "番号つきの参照(第 3 章・別紙 1 など)の参照先 1 つで、番号で定位した節の先頭から"
+            "読み順に読む chunk の上限(#5348)。文書名・ファイル名だけの参照は目次から選んだ章節を"
+            "読み、rag_reference_outline_selection_read_max_chunks に従う。"
+        ),
+    )
     rag_reference_outline_selection_enabled: bool = Field(
         default=True,
         description=(
             "文書名・ファイル名だけで文書全体を指す参照の参照先を、目次から回答のモデルが選んだ章節で"
             "読む(#5263。全体設定だけで決め、検索・回答プロファイルでは上書きしない)。参照先が複数でも"
-            "モデルの呼び出しは 1 回。目次が無い・選べないときは参照先の文書を全体で読む"
-            "(章節の拡張の起点にしない)。既定は有効(#5296)。無効なら参照先の中を質問で検索した"
-            "上位 8 件を読む。"
+            "モデルの呼び出しは 1 回。選んだ章節だけを読み、目次が無い・選べない・選んだ章節を"
+            "読めないときは読まない(理由を回答の診断に残す。#5348)。既定は有効(#5296)。無効なら"
+            "文書名・ファイル名だけの参照の参照先は読まない(参照の記述の chunk は根拠に残る)。"
         ),
     )
     rag_reference_outline_selection_catalog_max_chars: int = Field(
@@ -1057,6 +1067,17 @@ class Settings(
             "文書全体への参照の参照先の目次を回答のモデルに渡す字数の上限(#5263。参照先の合計を"
             "参照先ごとに均等に割り、目次の順に入るところまで載せる)。範囲は一般の選択の"
             "rag_outline_selection_catalog_max_chars と同じ。"
+        ),
+    )
+    rag_outline_lead_chars: int = Field(
+        default=60,
+        ge=0,
+        le=200,
+        description=(
+            "目次の行で、見出しの語の無い章節(条の番号だけなど)に添える本文の書き出しの字数(#5345。"
+            "0 は付けない)。文書全体への参照の目次の選択(#5263)・検索の上位の文書の目次の選択"
+            "(#5324)と、MCP の rag_outline(format=compact)の lead_chars の省略時の値で共有する。"
+            "範囲は rag_outline の lead_chars と同じ。"
         ),
     )
     rag_reference_outline_selection_max_sections: int = Field(
@@ -1073,8 +1094,8 @@ class Settings(
         ge=10,
         le=1000,
         description=(
-            "文書全体への参照の参照先 1 つから読む chunk の上限(#5263。選んだ章節の合計と、選べない"
-            "ときに文書全体で読む退避のどちらも)。"
+            "文書全体への参照の参照先 1 つで、目次から選んだ章節から読む chunk の合計の上限"
+            "(#5263)。"
         ),
     )
     rag_outline_selection_enabled: bool = Field(
@@ -1450,7 +1471,7 @@ class Settings(
     )
     rag_approved_faq_semantic_enabled: bool = Field(
         default=True,
-        description=("承認済み FAQ の候補の照合に embedding の意味類似度を加える(既定 ON)。"),
+        description=("登録済みQ&Aの候補の照合に embedding の意味類似度を加える(既定 ON)。"),
     )
     rag_approved_faq_min_score: float = Field(
         default=0.92,
@@ -1458,7 +1479,7 @@ class Settings(
         le=0.99,
         description=(
             "「回答の前に関連するQ&Aを提示する」がオンの検索・回答プロファイルで、回答の前に出す"
-            "承認済み FAQ の候補の一致度の下限(0.90〜0.99。#5107)。下限未満の FAQ は出さない。"
+            "登録済みQ&Aの候補の一致度の下限(0.90〜0.99。#5107)。下限未満の FAQ は出さない。"
             "利用者が選んだ FAQ の回答はそのまま返す(LLM と検索を呼ばない)。"
         ),
     )
@@ -1466,7 +1487,7 @@ class Settings(
         default=3,
         ge=1,
         le=10,
-        description="回答の前に出す承認済み FAQ の候補の最大件数(#5107)。",
+        description="回答の前に出す登録済みQ&Aの候補の最大件数(#5107)。",
     )
     # 回答は rag_poc の根拠付き回答だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
@@ -1751,7 +1772,7 @@ class Settings(
     rag_approved_faq_selected: dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で、利用者が選んだ承認済み FAQ（id・question・answer。#5107）。入口で"
+            "リクエスト単位で、利用者が選んだ登録済みQ&A（id・question・answer。#5107）。入口で"
             "プロファイルの FAQ から引き直す。値があれば回答の工程は検索・回答の生成をせず、FAQ の"
             "回答をそのまま返す。"
         ),

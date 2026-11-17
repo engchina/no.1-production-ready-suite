@@ -1129,7 +1129,7 @@ END;
                 "検索・回答プロファイルの知識（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が "
                 "runtime_knowledge の行の PAYLOAD_JSON）から、登録ルール（$.rules。確認の質問と"
                 "選択肢を含む）を削除します。用語・同義語（$.terms）と、ドメインキーワード・"
-                "承認済み FAQ の行は変えません。登録ルールは確認・回答に使わなくなり、回答の規則は"
+                "登録済みQ&Aの行は変えません。登録ルールは確認・回答に使わなくなり、回答の規則は"
                 "回答プロンプトの役割の文に書きます。ルールの文を残す必要があれば、適用前に同列を "
                 "export し、役割の文へ手で写してください。削除後は復元できません。"
             ),
@@ -1165,7 +1165,7 @@ END;
             table_name="rag_search_answer_profile_knowledge",
             sql=removed_approved_faq_fields_sql(),
             destructive_note=(
-                "承認済み FAQ を質問と回答だけにしたため、検索・回答プロファイルの知識"
+                "登録済みQ&Aを質問と回答だけにしたため、検索・回答プロファイルの知識"
                 "（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が approved_faq の行の"
                 " PAYLOAD_JSON）から、FAQ ごとの当てはめない質問（negative_questions）・"
                 "対象のナレッジベース"
@@ -1184,7 +1184,7 @@ END;
             table_name="rag_answer_prompts",
             sql=removed_faq_answer_prompt_sql(),
             destructive_note=(
-                "選んだ承認済み FAQ の回答をそのまま返すようにし、FAQ から回答を作る LLM の指示を"
+                "選んだ登録済みQ&Aの回答をそのまま返すようにし、FAQ から回答を作る LLM の指示を"
                 "なくしたため、RAG_ANSWER_PROMPTS の PROMPT_KEY が faq_answer.system の行（編集した"
                 "FAQ の回答の指示）を削除します。ほかの行は変えません。編集した文を残す必要が"
                 "あれば、適用前に該当の行の CONTENT を export してください。"
@@ -1212,6 +1212,13 @@ END;
             name="20261117_5313_document_extracted_text_hash",
             table_name="rag_documents",
             sql=document_extracted_text_hash_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261117_5340_evaluation_job_answer_mode",
+            table_name="rag_evaluation_jobs",
+            sql=evaluation_job_answer_mode_migration_sql(),
         )
     )
     return sections
@@ -2139,6 +2146,38 @@ BEGIN
     IF v_count = 0 THEN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_documents_text_sha256_idx ON rag_documents (extracted_text_sha256)';
+    END IF;
+END;
+/"""
+
+
+def evaluation_job_answer_mode_migration_sql() -> str:
+    """品質評価の job に回答の方法（chat / search）の列と CHECK を無ければ足す（#5340）。
+
+    列を足すだけでデータは変えない。既存の行は NULL のまま（画面・Excel では「未記録」）で、過去の
+    実行の方法を推測して埋めない。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count = 0 THEN
+        RETURN;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'ANSWER_MODE';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (answer_mode VARCHAR2(16))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND constraint_name = 'RAG_EVALUATION_JOBS_ANSWER_MODE_CK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs '
+            || 'ADD CONSTRAINT rag_evaluation_jobs_answer_mode_ck '
+            || 'CHECK (answer_mode IN (''chat'', ''search''))';
     END IF;
 END;
 /"""

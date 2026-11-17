@@ -408,13 +408,13 @@ test("並行する末端の段はそれぞれ実行中を示し、架空の処�
   const {run} = seedRunningRun(mockApi);
   const start = iso(-8_000);
   run.created_at = start;
-  const tool = "tool:rag__rag_retrieve_evidence";
+  const tool = "tool:rag__rag_chat";
   const rag = (parent: string, extra: Record<string, unknown> = {}) => ({startedAt: start, parent, product: "rag", ...extra});
   // ベクトル検索と全文検索は並行に実行中（#3443）。今の段は最後に始まった全文検索。
   run.progress_events = new ProgressLog(RUN_ID, undefined, start)
     .step("chat-1", "done", {startedAt: start, finishedAt: iso(-7_000), kind: "plan"})
-    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_retrieve_evidence", title: "根拠の取得"}})
-    .step("mcp-call", "running", {startedAt: start, parent: tool, attributes: {"mcp.method.name": "tools/call", "gen_ai.tool.name": "rag_retrieve_evidence"}})
+    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_chat", title: "根拠の取得"}})
+    .step("mcp-call", "running", {startedAt: start, parent: tool, attributes: {"mcp.method.name": "tools/call", "gen_ai.tool.name": "rag_chat"}})
     .step("rag-server", "running", rag("mcp-call", {name: "mcp.server", root: true}))
     .step("rag-search", "running", rag("rag-server", {name: "rag.search", root: true}))
     .step("rag-retrieval", "running", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
@@ -467,7 +467,7 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   run.created_at = start;
   run.updated_at = end;
   run.status = "completed";
-  const tool = "tool:rag__rag_retrieve_evidence";
+  const tool = "tool:rag__rag_chat";
   const mcp = (method: string, extra: Record<string, string> = {}) => ({
     startedAt: start, finishedAt: end, parent: tool, attributes: {"mcp.method.name": method, ...extra},
   });
@@ -475,10 +475,10 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   run.progress_events = new ProgressLog(RUN_ID, () => end, start)
     .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan"})
     // ツールの表示名（MCP の title）は、ツールの行と MCP の呼び出しの行の両方に出す（#3468）。
-    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_retrieve_evidence", title: "合成の根拠の取得"}})
+    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_chat", title: "合成の根拠の取得"}})
     .step("mcp-init", "done", mcp("initialize"))
     .step("mcp-notify", "done", mcp("notifications/initialized"))
-    .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_retrieve_evidence", "pr.tool.title": "合成の根拠の取得"}))
+    .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_chat", "pr.tool.title": "合成の根拠の取得"}))
     .step("rag-server", "done", rag("mcp-call", {name: "mcp.server", root: true}))
     .step("rag-search", "done", rag("rag-server", {name: "rag.search", root: true}))
     .step("rag-retrieval", "done", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))

@@ -412,7 +412,7 @@ class StoredMessage:
     # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
     # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
-    # 利用者が選んだ承認済み FAQ の回答をそのまま返した回答か（ASSISTANT の回答だけ。回答の記録の
+    # 利用者が選んだ登録済みQ&Aの回答をそのまま返した回答か（ASSISTANT の回答だけ。回答の記録の
     # 診断の ``answer_source`` が ``approved_faq``。#5107）。
     approved_faq_answer: bool = False
 
@@ -7608,6 +7608,7 @@ class OracleClient:
                     search_answer_profile_id,
                     compare_search_answer_profile_id,
                     user_uuid,
+                    answer_mode,
                     created_at,
                     started_at,
                     updated_at
@@ -7626,6 +7627,7 @@ class OracleClient:
                     :search_answer_profile_id,
                     :compare_search_answer_profile_id,
                     :user_uuid,
+                    :answer_mode,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP
@@ -7643,6 +7645,7 @@ class OracleClient:
                     "search_answer_profile_id": job.get("search_answer_profile_id"),
                     "compare_search_answer_profile_id": job.get("compare_search_answer_profile_id"),
                     "user_uuid": job.get("user_uuid"),
+                    "answer_mode": job.get("answer_mode"),
                 },
             )
         )
@@ -12900,6 +12903,7 @@ _EVALUATION_JOB_COLUMNS = """job_id,
                 search_answer_profile_id,
                 compare_search_answer_profile_id,
                 user_uuid,
+                answer_mode,
                 created_at,
                 started_at,
                 finished_at,
@@ -19047,6 +19051,7 @@ CREATE TABLE {table_name} (
     search_answer_profile_id VARCHAR2(128),
     compare_search_answer_profile_id VARCHAR2(128),
     user_uuid               VARCHAR2(64),
+    answer_mode             VARCHAR2(16),
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
@@ -19054,6 +19059,7 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_source_workbook_fk FOREIGN KEY (source_workbook_id)
         REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL,
     CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run')),
+    CONSTRAINT {table_name}_answer_mode_ck CHECK (answer_mode IN ('chat', 'search')),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
 );

@@ -1,7 +1,7 @@
 """回答の経路（#5332）。合成の質問と stub の依存で確かめる。
 
 RAG 検索（画面の `/api/search`・`/stream`・検索だけ）は基本の RAG（⑤⑥ 検索と文脈の補完 →
-⑧ 回答）で、業務ガイドの照合（③）・承認済み FAQ・⑦ 根拠の拡張をしない。RAG Chat・品質評価・
+⑧ 回答）で、登録済みQ&A・業務ガイドの照合（③）・⑦ 根拠の拡張をしない。RAG チャット・品質評価・
 業務ガイドの下書きの試答・MCP は ③・FAQ・⑦ を含む経路。⑤⑥ と ⑧ は両方の経路で同じ関数を通る。
 """
 
@@ -20,6 +20,7 @@ from app.config import get_settings
 from app.rag import evaluation as evaluation_module
 from app.rag.answer_engine import AnswerEngine
 from app.rag.pipeline import BASIC_FLOW, EXPANDED_FLOW, AnswerFlow
+from app.schemas.evaluation import EvaluationCase, EvaluationTurn
 from app.schemas.search import SearchRequest, SearchResponse
 from tests.support import AsgiTestClient
 from tests.test_answer_engine import _run_with_progress
@@ -112,19 +113,74 @@ async def test_search_with_timeout_passes_the_flow_to_the_entry_and_the_pipeline
         assert captured == [("resolve", flow), ("interactive", True), ("pipeline", flow)]
 
 
-async def test_evaluation_answers_through_the_chat_flow(monkeypatch: MonkeyPatch) -> None:
-    """品質評価は RAG Chat と同じ経路。経路は評価の 1 つの値で入口の解決と pipeline に渡す。"""
-    assert evaluation_module.EVALUATION_ANSWER_FLOW == EXPANDED_FLOW
-    captured: list[object] = []
+@pytest.mark.parametrize(
+    ("answer_mode", "expected_flow"),
+    [("chat", EXPANDED_FLOW), ("search", BASIC_FLOW)],
+    ids=["chat", "search"],
+)
+async def test_evaluation_answer_mode_selects_one_flow(
+    monkeypatch: MonkeyPatch, answer_mode: Any, expected_flow: AnswerFlow
+) -> None:
+    """品質評価の回答の方法（#5340）は 1 つの経路を選び、入口の解決と pipeline に同じ値を渡す。"""
+    captured: list[tuple[str, object]] = []
 
     async def fake_resolve(request: SearchRequest, settings: Any, **options: Any) -> Any:
-        captured.append(options.get("flow"))
+        captured.append(("resolve", options.get("flow")))
         return request, settings, None, None
 
-    monkeypatch.setattr(search_route, "_resolve_query_context", fake_resolve)
-    await evaluation_module._resolve_profile_context(SearchRequest(query=QUESTION), get_settings())
+    class Pipeline:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(("pipeline", kwargs.get("flow")))
 
-    assert captured == [EXPANDED_FLOW]
+        async def run(self, *_args: Any, **_kwargs: Any) -> SearchResponse:
+            return _response()
+
+    async def no_same_text(_ids: Any) -> dict[str, list[str]]:
+        return {}
+
+    monkeypatch.setattr(search_route, "_resolve_query_context", fake_resolve)
+    monkeypatch.setattr(evaluation_module, "RagPipeline", Pipeline)
+    runner = evaluation_module.EvaluationRunner(same_text_documents=no_same_text)
+    metrics = await runner.run(
+        cases=[EvaluationCase(id="row-2", query=QUESTION)],
+        top_k=5,
+        search_answer_profile_id="bv-1",
+        answer_mode=answer_mode,
+    )
+
+    assert metrics.error_count == 0
+    assert {flow for _, flow in captured} == {expected_flow}
+    assert ("resolve", expected_flow) in captured
+    assert ("pipeline", expected_flow) in captured
+
+
+async def test_search_answer_mode_joins_turns_into_one_question() -> None:
+    """RAG 検索の方法（#5340）は往復を持たないので、最初の質問と返答をつないで 1 問で送る。"""
+    sent: list[tuple[str, dict[str, str], object]] = []
+
+    class Pipeline:
+        async def run(self, request: SearchRequest, *_args: Any, **kwargs: Any) -> SearchResponse:
+            sent.append((request.query, dict(request.conditions), kwargs.get("history")))
+            return _response()
+
+    case = EvaluationCase(
+        id="row-2",
+        query=QUESTION,
+        conditions={"region": "A"},
+        turns=[EvaluationTurn(reply="合成の返答", conditions={"period": "B"})],
+    )
+    metrics = await evaluation_module.EvaluationRunner(pipeline=Pipeline()).run(
+        cases=[case], top_k=5, answer_mode="search"
+    )
+
+    assert sent == [(f"{QUESTION}\n合成の返答", {"region": "A", "period": "B"}, None)]
+    assert len(metrics.case_results[0].turn_results) == 1
+
+    sent.clear()
+    await evaluation_module.EvaluationRunner(pipeline=Pipeline()).run(
+        cases=[case], top_k=5, answer_mode="chat"
+    )
+    assert [query for query, _, _ in sent] == [QUESTION, "合成の返答"]
 
 
 async def test_basic_flow_entry_does_not_match_business_guides(monkeypatch: MonkeyPatch) -> None:

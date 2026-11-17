@@ -4,6 +4,7 @@ import type { EvaluationJob, EvaluationMetrics } from "@/lib/api";
 
 import {
   EVALUATION_JOB_STATUS_VARIANT,
+  evaluationAnswerModeLabel,
   evaluationCaseErrorSummary,
   evaluationHistoryProfileLabel,
   evaluationJobCountLabel,
@@ -169,6 +170,15 @@ describe("途中までの結果（Issue 4208）", () => {
     expect(label).toContain("3 件");
     expect(label).toContain("全 10 件");
     expect(evaluationJobPartialLabel(job())).toBeNull();
+  });
+});
+
+describe("回答の方法の表示（Issue 5340）", () => {
+  it("チャット・RAG 検索を出し、記録の無い古い評価は「未記録」", () => {
+    expect(evaluationAnswerModeLabel("chat")).toBe("チャット");
+    expect(evaluationAnswerModeLabel("search")).toBe("RAG 検索");
+    expect(evaluationAnswerModeLabel(null)).toBe("未記録");
+    expect(evaluationAnswerModeLabel(undefined)).toBe("未記録");
   });
 });
 

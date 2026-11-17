@@ -43,6 +43,8 @@ const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200
 // と同じ）と検索の上位の文書（#5324。rag_outline_selection_* と同じ）。目次の字数の選択肢は両方で使う。
 // .env で選択肢の外の値を保存していれば、その値も選べるように足す。
 const REFERENCE_SECTION_CHOICES = [3, 6, 12, 24, 50];
+// 番号つきの参照の節から読むチャンクの上限（#5348。範囲は backend の rag_reference_section_read_max_chunks と同じ 1〜50）。
+const REFERENCE_SECTION_READ_CHUNK_CHOICES = [4, 8, 16, 32, 50];
 const REFERENCE_READ_CHUNK_CHOICES = [50, 100, 200, 400, 800, 1000];
 const OUTLINE_DOCUMENT_CHOICES = Array.from({ length: 10 }, (_, n) => n + 1);
 const OUTLINE_CATALOG_CHAR_CHOICES = [10000, 20000, 40000, 80000];
@@ -80,6 +82,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
+    reference_section_read_max_chunks: settings.reference_section_read_max_chunks ?? 8,
     reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? true,
     reference_outline_selection_catalog_max_chars: settings.reference_outline_selection_catalog_max_chars ?? 40000,
     reference_outline_selection_max_sections: settings.reference_outline_selection_max_sections ?? 12,
@@ -278,6 +281,17 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           options={ANSWER_TIMEOUT_OPTIONS}
           width="xs"
           onValueChange={(value) => update({ answer_timeout_seconds: Number(value) })}
+        />
+        <SelectField
+          id="answering-reference-section-read-max-chunks"
+          className="min-w-0"
+          disabled={disabled}
+          label={t("settings.answering.referenceSectionReadMaxChunks")}
+          helper={t("settings.answering.referenceSectionReadMaxChunksHint")}
+          value={String(form.reference_section_read_max_chunks)}
+          options={countOptions(REFERENCE_SECTION_READ_CHUNK_CHOICES, form.reference_section_read_max_chunks, chunkOption)}
+          width="xs"
+          onValueChange={(value) => update({ reference_section_read_max_chunks: Number(value) })}
         />
       </FormGrid>
       </SettingsGroup>

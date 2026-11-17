@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from app.clients.http_retry import HttpRetryConfig, request_with_retry
 from app.schemas.evaluation import (
+    EVALUATION_ANSWER_MODES,
     EVALUATION_METRIC_NAMES,
     EvaluationMetrics,
     EvaluationRunRequest,
@@ -55,7 +56,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
-        payload = _load_evaluation_request(args.golden_set, split=args.split)
+        payload = _load_evaluation_request(
+            args.golden_set, split=args.split, answer_mode=args.answer_mode
+        )
         response_payload = _post_evaluation_request(
             api_url=_resolve_api_url(args.api_url, args.api_base_url),
             payload=payload,
@@ -123,6 +126,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["dev", "holdout"],
         help="評価セットのうち、この区分のケースだけを流します（#1335。未指定なら全部）。",
     )
+    add_answer_mode_argument(parser)
     parser.add_argument(
         "--output",
         type=Path,
@@ -149,10 +153,25 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_evaluation_request(path: Path, *, split: str | None = None) -> dict[str, Any]:
+def add_answer_mode_argument(parser: argparse.ArgumentParser) -> None:
+    """回答の方法（#5340）の引数。指定すると評価ファイルの ``answer_mode`` より優先する。"""
+    parser.add_argument(
+        "--answer-mode",
+        choices=EVALUATION_ANSWER_MODES,
+        help=(
+            "回答の方法（chat: RAG チャットと同じ経路、search: 基本の RAG）。"
+            "未指定なら評価ファイルの answer_mode（省略時は chat）。"
+        ),
+    )
+
+
+def _load_evaluation_request(
+    path: Path, *, split: str | None = None, answer_mode: str | None = None
+) -> dict[str, Any]:
     """golden set JSON を読み、API request schema として検証する。
 
-    `split` を渡すと、その区分（dev / holdout）のケースだけを残す（#1335）。
+    `split` を渡すと、その区分（dev / holdout）のケースだけを残す（#1335）。`answer_mode` を渡すと
+    評価ファイルの回答の方法を置き換える（#5340）。
     """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -164,6 +183,8 @@ def _load_evaluation_request(path: Path, *, split: str | None = None) -> dict[st
         ) from exc
     if not isinstance(raw, dict):
         raise EvaluationGateError("評価ファイルの root は JSON object にしてください。")
+    if answer_mode is not None:
+        raw = {**raw, "answer_mode": answer_mode}
     try:
         request = EvaluationRunRequest.model_validate(raw)
     except ValidationError as exc:

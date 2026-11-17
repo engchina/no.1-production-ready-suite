@@ -9,15 +9,17 @@ import { measureHorizontalOverflow } from "../../../platform/packages/ui/e2e/lay
 const AGENT_ID = "agent-1866";
 
 const BUILTIN_NAMES = [
-  "業務 RAG 調査",
+  "RAG チャット",
+  "RAG 検索",
   "構造化データ照会",
-  "資料とデータの横断調査",
+  "RAG チャット＋データ",
+  "RAG 検索＋データ",
 ];
 
 /** backend が返す順（組み込み → 組み込みでないスキルの表示名の順）で、実行時のスキルを足す。 */
 function seedRuntimeSkills(mockApi: MockApi) {
   for (const [id, name] of [
-    // ID の文字の順なら「業務 RAG 調査」と「資料とデータの横断調査」の間に入る。
+    // ID の文字の順なら組み込みの rag-* と structured-data-query の間に入る。
     ["github_repo_research", "GitHub リポジトリ調査（テスト）"],
     ["accounting_1866", "経理の手順"],
   ]) {
@@ -125,22 +127,24 @@ test.describe("スキルの並び", { tag: "@responsive" }, () => {
     seedRuntimeSkills(mockApi);
     await page.goto("/skills");
 
-    await expect(page.locator('tr[data-testid^="skill-row-"]')).toHaveCount(5);
+    await expect(page.locator('tr[data-testid^="skill-row-"]')).toHaveCount(7);
     expect(await listedSkillIds(page)).toEqual([
       "github_repo_research",
-      "business-rag-research",
+      "rag-chat",
+      "rag-chat-and-data",
+      "rag-search",
+      "rag-search-and-data",
       "accounting_1866",
       "structured-data-query",
-      "rag-and-structured-data",
     ]);
 
     // 絞り込んでも同じ順。
-    await page.getByRole("searchbox").fill("調査");
+    await page.getByRole("searchbox").fill("データ");
     await expect(page.locator('tr[data-testid^="skill-row-"]')).toHaveCount(3);
     expect(await listedSkillIds(page)).toEqual([
-      "github_repo_research",
-      "business-rag-research",
-      "rag-and-structured-data",
+      "rag-chat-and-data",
+      "rag-search-and-data",
+      "structured-data-query",
     ]);
   });
 
@@ -156,7 +160,7 @@ test.describe("スキルの並び", { tag: "@responsive" }, () => {
     ).toBeVisible();
 
     const picker = page.getByTestId("agent-skill-picker");
-    await expect(picker.getByRole("option")).toHaveCount(5);
+    await expect(picker.getByRole("option")).toHaveCount(7);
     expect(await optionNames(picker)).toEqual([
       ...BUILTIN_NAMES,
       "GitHub リポジトリ調査（テスト）",
@@ -166,27 +170,27 @@ test.describe("スキルの並び", { tag: "@responsive" }, () => {
     // 選ぶ順を逆にしても、選択中だけ表示は一覧の順。
     for (const name of [
       "経理の手順",
-      "資料とデータの横断調査",
-      "業務 RAG 調査",
+      "RAG チャット＋データ",
+      /^RAG チャット(?!＋)/,
     ]) {
       await picker.getByRole("option", { name }).click();
     }
     await picker.getByTestId("agent-skill-picker-show-selected").click();
     await expect(picker.getByRole("option")).toHaveCount(3);
     expect(await optionNames(picker)).toEqual([
-      "業務 RAG 調査",
-      "資料とデータの横断調査",
+      "RAG チャット",
+      "RAG チャット＋データ",
       "経理の手順",
     ]);
     await picker.getByTestId("agent-skill-picker-show-selected").click();
 
     // 絞り込んでも同じ順。
-    await picker.getByRole("searchbox").fill("調査");
+    await picker.getByRole("searchbox").fill("データ");
     await expect(picker.getByRole("option")).toHaveCount(3);
     expect(await optionNames(picker)).toEqual([
-      "業務 RAG 調査",
-      "資料とデータの横断調査",
-      "GitHub リポジトリ調査（テスト）",
+      "構造化データ照会",
+      "RAG チャット＋データ",
+      "RAG 検索＋データ",
     ]);
   });
 });
