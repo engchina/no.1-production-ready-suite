@@ -96,6 +96,7 @@ from pr_backend_core.output_budget import (
     output_limit_message,
 )
 from pr_backend_core.response_schema import with_schema_field_guide
+from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS
 from pr_system_settings.enterprise_ai_errors import (
     EnterpriseAiIncomplete,
     enterprise_ai_incomplete_from_response,
@@ -107,6 +108,7 @@ from pr_system_settings.model import (
     EnterpriseAiModelNotRegisteredError,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_image_input_tokens,
     enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
@@ -419,6 +421,9 @@ class ModelTarget:
     # 画像の入力に対応するか（#2650。システム設定 > モデル の登録モデルの「画像対応」）。対応しない
     # モデルにはツールの結果の画像を添付せず、読めなかったことを結果に書く。
     vision_enabled: bool = False
+    # 画像 1 枚の入力 token（#5334。システム設定 > モデル の登録モデルの値。値が無いモデルは共通の
+    # 既定）。入力の予算の判定で、入力に残した画像を枚数 × この値で数える。
+    image_input_tokens: int = DEFAULT_IMAGE_INPUT_TOKENS
     # openai SDK の再試行の回数（#2004）。None は SDK の既定。上限つきの並行の実行器
     # （pr_backend_core.bounded_calls）を通す呼び出しは 0 にし、再試行を実行器に任せる。
     sdk_max_retries: int | None = None
@@ -468,6 +473,7 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
         max_input_tokens=enterprise_ai_max_input_tokens(settings, resolved),
         vision_enabled=model_accepts_images(settings, resolved),
+        image_input_tokens=enterprise_ai_image_input_tokens(settings, resolved),
         online_max_output_tokens=configured_online_output_tokens(settings),
     )
 
@@ -3199,6 +3205,7 @@ def build_sdk_agent(
             max_input_tokens=target.max_input_tokens,
             max_output_tokens=target.max_output_tokens,
             online_max_output_tokens=target.online_max_output_tokens,
+            image_input_tokens=target.image_input_tokens,
         ),
     )
     setattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, static_instructions)
@@ -3498,8 +3505,8 @@ class _ContextWindow:
     def measure(self, response: Any) -> None:
         """画像を添付した呼び出しの、入力の見積もりとプロバイダが数えた入力（実測）を残す（#2650）。
 
-        画像の token の見積もりはモデルの画像の扱いに依らない多めの値なので、実測と並べてログに
-        残し、見積もりの係数を直す根拠にする（画像・本文の値は出さない）。
+        画像の token の見積もりは登録モデルの画像 1 枚の入力 token（#5334）なので、実測と並べて
+        ログに残し、設定の値を直す根拠にする（画像・本文の値は出さない）。
         """
         last = self.last_input
         if last is None or not last.images:

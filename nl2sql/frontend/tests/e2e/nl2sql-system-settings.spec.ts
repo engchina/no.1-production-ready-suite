@@ -3313,8 +3313,8 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
     max_input_tokens: 128000,
     // 追加したモデルの出力の上限は既定の 32768（#1719）。
     max_output_tokens: 32768,
-    // 追加したモデルの画像 1 枚の入力は既定の 16384（#5316）。
-    image_input_tokens: 16384,
+    // 追加したモデルの画像 1 枚の入力は値なし（backend の既定を使う。#5316・#5334）。
+    image_input_tokens: null,
   });
   const remove = page.getByRole("button", { name: "モデルを削除 3", exact: true });
   await expect(remove).toBeEnabled();

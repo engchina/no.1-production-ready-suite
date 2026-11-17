@@ -75,6 +75,8 @@ function data(modelIds: string[] = ["llm"]): ModelSettingsData {
     source: "runtime",
     secret_source: "environment",
     legacy_secret_detected: false,
+    default_image_input_tokens: 1792,
+    default_image_input_tokens_source_url: "https://docs.example/image-input-tokens",
   };
 }
 
@@ -206,10 +208,10 @@ describe("ModelSettingsPage の登録モデルの入力の上限（#1437）", ()
   });
 });
 
-// #5316: 登録モデルごとの画像 1 枚の入力（tokens）。値の無いモデルは既定の 16384 を出し、範囲外は入力の上限と
-// 同じく保存の前に欄のエラーで止める。
+// #5316: 登録モデルごとの画像 1 枚の入力（tokens）。値の無いモデルは空欄で、使う値（backend の既定。#5334）を
+// placeholder と説明に API の値で出す。範囲外は入力の上限と同じく保存の前に欄のエラーで止める。
 describe("ModelSettingsPage の登録モデルの画像 1 枚の入力（#5316）", () => {
-  it("値の無いモデルは既定の 16384 を出し、入れた値を保存で送る", async () => {
+  it("値の無いモデルは空欄で API の既定を placeholder・説明・出典に出し、空欄のまま保存すると null を送る", async () => {
     const updateModelSettings = vi.fn(pending);
     await renderPage({
       getModelSettings: async () => data(),
@@ -217,10 +219,36 @@ describe("ModelSettingsPage の登録モデルの画像 1 枚の入力（#5316�
       testModelSettings: pending,
     });
 
-    expect(input("enterprise-model-image-input-tokens-0")?.value).toBe("16384");
-    expect(
-      input("enterprise-model-image-input-tokens-0")?.getAttribute("aria-describedby"),
-    ).toContain("enterprise-model-image-input-tokens-help");
+    const field = input("enterprise-model-image-input-tokens-0");
+    expect(field?.value).toBe("");
+    expect(field?.placeholder).toBe("1792（既定）");
+    expect(field?.getAttribute("aria-describedby")).toContain(
+      "enterprise-model-image-input-tokens-help",
+    );
+    expect(host.querySelector("#enterprise-model-image-input-tokens-help")?.textContent).toContain(
+      "未入力のときは 1792 を使います",
+    );
+    const source = host.querySelector<HTMLAnchorElement>(
+      'a[href="https://docs.example/image-input-tokens"]',
+    );
+    expect(source?.textContent).toBe("Oracle 公式: 画像 1 枚の token（xAI Grok）");
+    expect(source?.target).toBe("_blank");
+
+    await submitModels();
+
+    expect(fieldError("enterprise-model-image-input-tokens-0")).toBeUndefined();
+    expect(updateModelSettings).toHaveBeenCalledTimes(1);
+    expect(updateModelSettings.mock.calls[0]?.[0].enterprise_ai.models[0].image_input_tokens).toBeNull();
+  });
+
+  it("入れた値を保存で送る", async () => {
+    const updateModelSettings = vi.fn(pending);
+    await renderPage({
+      getModelSettings: async () => data(),
+      updateModelSettings,
+      testModelSettings: pending,
+    });
+
     await setInputValue("enterprise-model-image-input-tokens-0", "4784");
 
     await submitModels();
@@ -232,7 +260,6 @@ describe("ModelSettingsPage の登録モデルの画像 1 枚の入力（#5316�
   });
 
   it.each([
-    ["空欄", ""],
     ["下限より小さい", "0"],
     ["上限より大きい", "2000001"],
     ["整数でない", "1000.5"],

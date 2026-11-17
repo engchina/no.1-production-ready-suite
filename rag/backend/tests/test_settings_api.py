@@ -1313,7 +1313,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 32768,
-            "image_input_tokens": 16384,
+            "image_input_tokens": None,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1323,7 +1323,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 32768,
-            "image_input_tokens": 16384,
+            "image_input_tokens": None,
         },
     ]
     assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -1400,7 +1400,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 16000,
-            "image_input_tokens": 16384,
+            "image_input_tokens": None,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1410,7 +1410,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 64000,
-            "image_input_tokens": 16384,
+            "image_input_tokens": None,
         },
     ]
     assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"

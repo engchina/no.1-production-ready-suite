@@ -72,6 +72,9 @@ function createModelSettings({
     source: "runtime",
     secret_source: "environment",
     legacy_secret_detected: false,
+    // 値の無い登録モデルの画像 1 枚の入力 token と出典（#5334。backend の既定）。
+    default_image_input_tokens: 1792,
+    default_image_input_tokens_source_url: "https://docs.example/image-input-tokens",
   };
 }
 
@@ -902,7 +905,7 @@ for (const viewport of [
   { name: "wide", width: 1920, height: 1000 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`登録モデルごとに画像 1 枚の入力（tokens）を入力し、範囲外は保存の前に止める（既定は 16384。#5316, ${viewport.name}）`, { tag: "@responsive" }, async ({
+  test(`登録モデルごとに画像 1 枚の入力（tokens）を入力し、範囲外は保存の前に止める（空欄は API の既定。#5316・#5334, ${viewport.name}）`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -913,9 +916,11 @@ for (const viewport of [
     await page.goto("/settings/model");
 
     const image2 = page.getByRole("spinbutton", { name: "モデル 2 の画像 1 枚の入力（tokens）" });
-    // 値の無い保存済みのモデルは既定の 16384。
-    await expect(image2).toHaveValue("16384");
+    // 値の無い保存済みのモデルは空欄で、使う値（API の既定）を placeholder と説明に出す（#5334）。
+    await expect(image2).toHaveValue("");
+    await expect(image2).toHaveAttribute("placeholder", "1792（既定）");
     await expect(image2).toHaveAccessibleDescription(/画像 1 枚を何 token として数えるか/);
+    await expect(image2).toHaveAccessibleDescription(/未入力のときは 1792 を使います/);
     if (viewport.name === "wide") {
       // 広い画面（2xl）は表頭に出し、出力の上限の右に同じ行・同じ高さで並べる。
       await expect(
@@ -942,7 +947,8 @@ for (const viewport of [
     await image2.fill("4784");
     await page.getByRole("button", { name: "登録モデル: 保存" }).click();
     await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
-    expect(savedPayload?.enterprise_ai.models.map((model) => model.image_input_tokens)).toEqual([16384, 4784]);
+    // 値を入れなかったモデルは値なし（null。backend の既定を使う）。
+    expect(savedPayload?.enterprise_ai.models.map((model) => model.image_input_tokens ?? null)).toEqual([null, 4784]);
     await expectNoPageOverflow(page);
   });
 }
@@ -1192,6 +1198,12 @@ test("モデルの説明は初期状態で閉じ、クリックとキーボー�
   await expect(help).toContainText("推論の token も含まれる場合があります");
   await expect(help).not.toContainText(/xai\.|openai\.|claude-|128000|32768/);
   await expect(help.getByRole("link", { name: "Oracle 公式: モデルの仕様" })).toHaveAttribute("href", "https://docs.oracle.com/en-us/iaas/Content/generative-ai/models.htm");
+  // 画像 1 枚の入力の既定は API の値と出典で示す（#5334。画面に値を書き写さない）。
+  await expect(help.locator("#enterprise-model-image-input-tokens-help")).toContainText("未入力のときは 1792 を使います");
+  const imageSource = help.getByRole("link", { name: "Oracle 公式: 画像 1 枚の token（xAI Grok）" });
+  await expect(imageSource).toHaveAttribute("href", "https://docs.example/image-input-tokens");
+  await expect(imageSource).toBeVisible();
+  await expect(imageSource).toHaveAttribute("target", "_blank");
   await toggle.focus();
   await page.keyboard.press("Space");
   await expect(inputHelp).toBeHidden();

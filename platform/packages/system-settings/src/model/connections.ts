@@ -9,7 +9,6 @@ import { DEFAULT_GENERATIVE_AI_REGION } from "../oci/regions";
 
 import { t } from "./messages";
 import {
-  DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
@@ -370,9 +369,8 @@ export function normalizeModelSettings(
           max_output_tokens:
             model.max_output_tokens ??
             Math.min(DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS, maxInputTokens),
-          // 値の無いモデルは既定の画像 1 枚の入力 token（#5316）。
-          image_input_tokens:
-            model.image_input_tokens ?? DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
+          // 値の無いモデルは null（backend の既定を使う。#5334）。
+          image_input_tokens: model.image_input_tokens ?? null,
         };
       }),
     },

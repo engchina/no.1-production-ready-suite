@@ -53,7 +53,6 @@ from app.features.agent.tool_media import (
     MAX_IMAGES_PER_RESULT,
     ToolImage,
     ToolOutputWithImages,
-    estimate_image_tokens,
     model_tool_output,
     plan_image_delivery,
     strip_image_data,
@@ -312,9 +311,9 @@ def test_delivery_attaches_up_to_the_per_result_limit() -> None:
     statuses = [ref["model_input"] for ref in delivery.output[CONTENT_IMAGES_KEY]]
     assert statuses == ["attached"] * MAX_IMAGES_PER_RESULT + ["over_limit"]
     assert str(MAX_IMAGES_PER_RESULT) in delivery.output[IMAGE_INPUT_NOTE_KEY]
-    assert delivery.summary["estimated_tokens"] == sum(
-        image.estimated_tokens for image in images[:MAX_IMAGES_PER_RESULT]
-    )
+    # 画像の token は数えない（入力の見積もりは `context_window` が Run のモデルの値で数える。
+    # #5334）。
+    assert "estimated_tokens" not in delivery.summary
 
 
 def test_delivery_to_a_model_without_image_input_says_the_image_was_not_read() -> None:
@@ -338,13 +337,6 @@ def test_model_tool_output_uses_the_sdk_image_output() -> None:
     assert isinstance(text, ToolOutputText) and text.text == "{}"
     assert isinstance(picture, ToolOutputImage)
     assert picture.image_url == image.data_url()
-
-
-def test_image_token_estimate_follows_the_image_size() -> None:
-    small = estimate_image_tokens(256, 256)
-    large = estimate_image_tokens(2048, 4096)
-    assert small < large
-    assert estimate_image_tokens(None, None) >= estimate_image_tokens(768, 768)
 
 
 def test_saved_state_has_no_image_data() -> None:
@@ -459,7 +451,7 @@ def test_budget_removes_older_images_before_shrinking_text_and_keeps_the_latest(
         _output("c2", text, new),
     ]
     full = compact_items(items, budget=_budget(), fixed_text="")
-    image_tokens = new.estimated_tokens
+    image_tokens = _budget().limits.image_input_tokens
     # 画像 1 枚と文字（と外した画像の案内）は収まるが、2 枚は収まらない予算。
     budget = _budget(full.tokens_before - image_tokens + 150)
 
@@ -709,7 +701,7 @@ def test_structured_text_and_image_reach_the_same_model_input(
     assert step.tool_result.output[CONTENT_IMAGES_KEY][0]["image_id"] == ref["image_id"]
     image_input = step.tool_result.audit_metadata["image_input"]
     assert image_input["attached"] == 1
-    assert image_input["estimated_tokens"] == estimate_image_tokens(640, 480)
+    assert "estimated_tokens" not in image_input
 
 
 def test_model_without_image_input_is_told_the_image_was_not_read(

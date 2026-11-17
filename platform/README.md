@@ -258,6 +258,16 @@ API は 422 で「既定のテキストモデルを選択してください。�
 - 保存の形式: `model-settings.json` は version 6 で、`enterprise_ai.models[].max_output_tokens` を書く。version 5 はそのまま読め、共通の `llm_max_output_tokens` / `vlm_max_output_tokens` は読み捨てる（各モデルは既定の 32768）。画面で保存し直すと version 6 になる。
 - 2026-10-13 の実測（NL2SQL のコメント管理の SQL 生成と同じ要求。5 表・32 列）: `openai.gpt-oss-120b`（推論 medium・上限 1200）は `incomplete`（output 1200 のうち reasoning 1198、本文 0 文字）、上限 32768 では completed（output 2756、うち reasoning 1506）。`xai.grok-4.3`（推論 medium）は上限 1200 でも completed のことがあり（output 3300〜3700）、上限 300 では incomplete。
 
+## 登録モデルごとの画像 1 枚の入力（`image_input_tokens`。#5316・#5334）
+
+「システム設定 › モデル」の登録モデルは、行ごとに「画像 1 枚の入力（tokens）」を持つ。画像を添付してモデルを呼ぶときの入力の上限の判定で、画像を「枚数 × この値」で数える（画像の data URL の base64 は本文の見積もりに入れない。`pr_backend_core.token_estimate.without_image_inputs`）。値を変えても、送る画像や画像の解像度は変わらない。
+
+- 既定は **1792**（`pr_backend_core.token_estimate.DEFAULT_IMAGE_INPUT_TOKENS`。数値の正本はここだけ）。このシステムの LLM / VLM は OCI Generative AI 経由なので、OCI の公式文書の値に合わせた（2026-11-17 に確認）: xAI Grok 4.3（https://docs.oracle.com/en-us/iaas/Content/generative-ai/xai-grok-4-3.htm ）と Grok 4.20 Multi-Agent（https://docs.oracle.com/en-us/iaas/Content/generative-ai/xai-grok-4-20-multi-agent.htm ）は「each converted image is more than 256 and less than 1,792 tokens」、512 x 512 は約 1,610。Cohere Command A Vision も 512 x 512 は約 1,610。
+- **モデルごとに上書きできる**: 欄に値を入れたモデルはその値（1〜2000000 の整数。範囲外は保存（422）・読み込みとも検証エラー）、空欄のモデルは値を保存せず（`null`）既定を使う。既定を変えると、値の無いモデルすべてに効く。モデルの公式文書の画像 1 枚の最大の token 数を入れる。値の解釈は `pr_system_settings.model.image_input_tokens_to_use` / `enterprise_ai_image_input_tokens` の 1 か所（登録に無い ID も既定）。
+- 画面: 空欄の欄は placeholder に「<既定>（既定）」、説明（「推論の量・入力と出力の上限・画像 1 枚の入力について」）に「未入力のときは <既定> を使います」と出典へのリンクを出す。既定と出典の URL はモデル設定の API（`ModelSettingsData.default_image_input_tokens` / `default_image_input_tokens_source_url`）の値で、画面に書き写さない。
+- 使う製品: RAG（根拠の画像を添付する回答の生成の入力の上限の判定。backend が回答・Vision のモデルの値を `rag_engine` に渡す）、Agent（ツールの結果の画像を含む入力の予算。`context_window` が Run のモデルの値で数える）。
+- 保存の形式: `model-settings.json` は version 7 で、`enterprise_ai.models[].image_input_tokens` を書く（空欄は `null`）。version 6 は項目なし = 既定として読める。
+
 ## 登録モデルごとの推論の量（`reasoning_effort`。#1425）
 
 「システム設定 › モデル」の登録モデルは、行ごとに「推論の量」（モデルが回答の前に考える量。Responses API の `reasoning.effort`）を持つ。

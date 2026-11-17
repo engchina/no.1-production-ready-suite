@@ -17,15 +17,20 @@ def estimate_input_tokens(text: str) -> int:
     return (len(value) - ascii_count) + (ascii_count + 3) // 4
 
 
-# 画像 1 枚の入力 token の既定（#5316）。登録モデルの「画像 1 枚の入力（tokens）」に値が無い
+# 画像 1 枚の入力 token の既定（#5316・#5334）。登録モデルの「画像 1 枚の入力（tokens）」に値が無い
 # モデルに使う（値の置き場と検証は `pr_system_settings.model` の
-# `EnterpriseAiConfiguredModel.image_input_tokens`）。画像の token はモデルごとに計算が違い
-# （画像の大きさを区画で数える）、送る画像の base64 の長さには比例しない。
-# 値の無いモデルでも上限の判定が実際より小さくならないよう、主要な Vision の API の公式の文書に
-# ある 1 枚の最大より大きい値にする（2026-11-17 の確認: Anthropic の高い解像度の tier は 4,784、
-# OpenAI の Responses API の `detail` を送らない（auto）呼び出しは patch の方式のモデルで
-# 最大 12,000）。
-DEFAULT_IMAGE_INPUT_TOKENS = 16_384
+# `EnterpriseAiConfiguredModel.image_input_tokens`）。画像の token はモデルごとに計算が違い、送る
+# 画像の base64 の長さには比例しない。
+# 値は、このシステムの LLM / VLM を呼ぶ OCI Generative AI の公式の文書にある 1 枚の最大
+# （2026-11-17 の確認: xAI Grok 4.3 と Grok 4.20 Multi-Agent は「each converted image is more than
+# 256 and less than 1,792 tokens」、512 x 512 は約 1,610。Cohere Command A Vision も 512 x 512 は
+# 約 1,610）。
+# https://docs.oracle.com/en-us/iaas/Content/generative-ai/xai-grok-4-20-multi-agent.htm
+# 設定画面は出典として `DEFAULT_IMAGE_INPUT_TOKENS_SOURCE_URL` を示す（モデル設定の API が返す）。
+DEFAULT_IMAGE_INPUT_TOKENS = 1_792
+DEFAULT_IMAGE_INPUT_TOKENS_SOURCE_URL = (
+    "https://docs.oracle.com/en-us/iaas/Content/generative-ai/xai-grok-4-3.htm"
+)
 # Responses API の入力の画像の部品の type（`input_image`。SDK の出力の型の `image` も同じ扱い）。
 _IMAGE_PART_TYPES = frozenset({"input_image", "image"})
 
