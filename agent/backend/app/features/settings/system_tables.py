@@ -1,10 +1,11 @@
 """システムテーブル（運用設定 > システムテーブル）の API（#751。RAG / NL2SQL と同じ契約）。
 
 - `GET /settings/database/system-tables`: DDL を実行せずに状態を返す。
-- `POST /settings/database/system-tables/initialize`: 作成・更新、または確認語付きの全再作成。
-  データを消す未適用の migration は `allow_destructive` が無ければ 409（#619）。保存済みのデータを
-  書き換える migration・全再作成の後は、このプロセスのメモリを保存先から読み直し、読み直せない
-  プロセスを `restart_required` で返す（#1844）。
+- `POST /settings/database/system-tables/initialize`: 作成・更新、または確認語付きの全再作成を
+  後台の操作として始め、202 と開始した時点の状態を返す（#5278）。データを消す未適用の migration は
+  `allow_destructive` が無ければ 409（#619）。保存済みのデータを書き換える migration・全再作成の
+  後は、このプロセスのメモリを保存先から読み直し、読み直せないプロセスを状態の
+  `last_operation.restart_required` で返す（#1844）。
 
 権限はどちらも `menu.settings_system_tables`（API の権限 manifest。NL2SQL と同じ）。
 """
@@ -19,6 +20,7 @@ from pr_backend_core import ApiResponse
 from pr_system_settings.system_schema import (
     SystemTableColumnData,
     SystemTableForeignKeyData,
+    SystemTableLastOperationData,
     SystemTableOperationState,
     SystemTablesInitializeRequest,
     system_tables_status_error,
@@ -75,53 +77,39 @@ class SystemTablesStatusData(BaseModel):
     tables: list[SystemTableMetadata]
     objects: list[SystemObjectMetadata] = Field(default_factory=list)
     operation_state: SystemTableOperationState
-
-
-class SystemTablesRestartRequired(BaseModel):
-    """保存済みのデータを書き換えた後に、再起動が要るプロセス（#1844）。
-
-    同じプロセス（この API を処理した backend）のメモリは読み直し済み。別のプロセス
-    （dispatcher）と、読み直せなかった backend だけを挙げる。
-    """
-
-    message: str
-    processes: list[str]
-
-
-class SystemTablesOperationData(SystemTablesStatusData):
-    operation: str
-    dropped_object_count: int
-    created_object_count: int
-    # 書き換えた保存済みのデータ（runtime / control_plane。#1844）。
-    rewritten_saved_data: list[str] = Field(default_factory=list)
-    restart_required: SystemTablesRestartRequired | None = None
+    # このプロセスが後台で終えた直近の操作の要約（無ければ画面は状態の差から求める。#5278）。
+    last_operation: SystemTableLastOperationData | None = None
 
 
 @router.get("", response_model=ApiResponse[SystemTablesStatusData])
 async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     """Agent のシステムテーブルの状態を DDL なしで取得する。"""
     try:
-        data = await asyncio.to_thread(system_schema_manager.status)
+        data = await asyncio.to_thread(system_schema_manager.screen_status)
     except Exception as exc:
         raise system_tables_status_error(exc) from exc
     return ApiResponse(data=SystemTablesStatusData.model_validate(data))
 
 
-@router.post("/initialize", response_model=ApiResponse[SystemTablesOperationData])
+@router.post("/initialize", response_model=ApiResponse[SystemTablesStatusData], status_code=202)
 async def initialize_system_tables(
     payload: SystemTablesInitializeRequest,
-) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
-    """管理者の明示操作として作成・更新、または全再作成する。"""
+) -> ApiResponse[SystemTablesStatusData] | JSONResponse:
+    """管理者の明示操作として作成・更新、または全再作成を始める（後台の操作。#5278）。
+
+    lease を取ったら 202 と開始した時点の状態（running）を返す。保存済みのデータの読み直しは
+    後台の操作の中で行い、再起動が要るプロセス（#1844）は状態の `last_operation` で返す。
+    """
     try:
         data = await asyncio.to_thread(
-            system_schema_manager.initialize,
+            system_schema_manager.start_initialize_in_background,
             recreate=payload.recreate,
             confirmation=payload.confirmation,
             allow_destructive=payload.allow_destructive,
         )
     except SystemSchemaError as exc:
         return _system_schema_error_response(exc)
-    return ApiResponse(data=SystemTablesOperationData.model_validate(data))
+    return ApiResponse(data=SystemTablesStatusData.model_validate(data))
 
 
 def _system_schema_error_response(exc: SystemSchemaError) -> JSONResponse:

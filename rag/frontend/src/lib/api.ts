@@ -28,7 +28,7 @@ import {
   type RunModelUsageRecord,
 } from "@production-ready/ui";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #214）。
-import { csrfHeader, notifyAuthResponse, notifyAuthStatus } from "@production-ready/system-settings";
+import { csrfHeader, notifyAuthResponse, notifyAuthStatus, SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS } from "@production-ready/system-settings";
 import type { BaseCurrentUser } from "@production-ready/system-settings";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
@@ -2192,7 +2192,7 @@ export interface EvaluationJobSummary {
 
 export type SystemTableSchemaStatus =
   "missing" | "partial" | "outdated" | "ready";
-export type SystemTableOperationStatus = "idle" | "running" | "failed";
+export type SystemTableOperationStatus = "idle" | "running" | "stale" | "failed";
 export type SystemTableOperationKind = "initialize" | "recreate";
 export type SystemTableOperationResult =
   "no_op" | "initialized" | "migrated" | "recreated";
@@ -2214,6 +2214,8 @@ export interface SystemTableOperationState {
   status: SystemTableOperationStatus;
   operation_kind: SystemTableOperationKind | null;
   lease_expires_at: string | null;
+  /** 操作の開始時刻（running / stale のときだけ。#5278）。 */
+  started_at?: string | null;
   last_error_code: string | null;
   schema_epoch: number;
   updated_at: string | null;
@@ -2255,12 +2257,6 @@ export interface SystemTableForeignKeyData {
 export interface SystemTablesInitializeRequest {
   recreate: boolean;
   confirmation?: string;
-}
-
-export interface SystemTablesOperationData extends SystemTablesStatusData {
-  operation: SystemTableOperationResult;
-  dropped_object_count: number;
-  created_object_count: number;
 }
 
 /** 参照先のない行の削除（#511）。`expected_orphan_rows` は利用者が確認した件数。 */
@@ -4412,10 +4408,12 @@ export const api = {
     ),
   getSystemTablesStatus: () =>
     request<SystemTablesStatusData>("/api/settings/database/system-tables"),
+  // 後台の操作を始める（202 と開始した時点の状態。#5278）。この要求だけ時間の上限を 60 秒にする。
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
-    request<SystemTablesOperationData>(
+    request<SystemTablesStatusData>(
       "/api/settings/database/system-tables/initialize",
       jsonBody(body),
+      { timeoutMs: SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS },
     ),
   deleteSystemTableOrphanedRows: (body: SystemTablesDeleteOrphansRequest) =>
     request<SystemTablesOrphanDeletionData>(

@@ -885,6 +885,9 @@ class FakeGenAi:
 def _engine(
     oracle: ReferenceOracle, genai: FakeGenAi | None = None, **settings: Any
 ) -> AnswerEngine:
+    # この file の参照の追跡は、目次から章節を選ぶ経路(#5263。既定 ON の #5296)の外の、参照先の中を
+    # 質問で検索した上位を読む経路を確かめる。目次の経路は test_reference_sections.py で確かめる。
+    settings.setdefault("rag_reference_outline_selection_enabled", False)
     return AnswerEngine(
         Settings(**settings), oracle=cast(Any, oracle), genai=cast(Any, genai or FakeGenAi())
     )

@@ -55,6 +55,9 @@ from pr_system_settings.system_schema import (
     SystemTableDestructiveMigrationData as SystemTableDestructiveMigrationData,
 )
 from pr_system_settings.system_schema import SystemTableForeignKeyData as SystemTableForeignKeyData
+from pr_system_settings.system_schema import (
+    SystemTableLastOperationData as SystemTableLastOperationData,
+)
 from pr_system_settings.system_schema import SystemTableOperationState as SystemTableOperationState
 from pr_system_settings.system_schema import (
     SystemTablesDeleteOrphansRequest as SystemTablesDeleteOrphansRequest,
@@ -71,6 +74,7 @@ from pr_system_settings.upload_storage import (
 from pr_system_settings.upload_storage import (
     UploadStorageSettingsUpdate as UploadStorageSettingsUpdate,
 )
+from pr_system_settings.vector_memory import VectorMemoryData as VectorMemoryData
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -209,14 +213,10 @@ class SystemTablesStatusData(BaseModel):
     # 全管理 object（詳細の一覧。概要の object の件数と同じ。#658）。
     objects: list[SystemObjectMetadata] = Field(default_factory=list)
     operation_state: SystemTableOperationState
-
-
-class SystemTablesOperationData(SystemTablesStatusData):
-    """DDL operation 後の状態と件数。"""
-
-    operation: SystemTableOperationResult
-    dropped_object_count: int
-    created_object_count: int
+    # このプロセスが後台で終えた直近の操作の要約（無ければ画面は状態の差から求める。#5278）。
+    last_operation: SystemTableLastOperationData | None = None
+    # HNSW 索引ごとの vector memory の見込みの必要量と今の空き（#5278）。
+    vector_memory: VectorMemoryData | None = None
 
 
 class SystemTablesOrphanDeletionData(SystemTablesStatusData):

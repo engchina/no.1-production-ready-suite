@@ -214,6 +214,15 @@ function systemTables(
   };
 }
 
+/**
+ * 後台の作成・更新（#5278）の 202 の応答。合成の操作はすぐ終わったものとして、終わった状態（ready・idle）を
+ * 返す。画面は始まる前の schema epoch（7）との差から結果を知らせる（増えていなければ変更なし）。
+ */
+function finishedSystemTables(schemaEpoch: number) {
+  const ready = systemTables("ready");
+  return { ...ready, operation_state: { ...ready.operation_state, schema_epoch: schemaEpoch } };
+}
+
 async function mockDatabasePage(page: Page, user = systemAdminMe) {
   await page.route("**/api/auth/me", (route) => fulfill(route, user));
   await page.route("**/api/ready/database", (route) =>
@@ -539,13 +548,7 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
     requestBody = route.request().postDataJSON();
     await pending;
     status = "ready";
-    await fulfill(route, {
-      ...systemTables("ready"),
-      operation: "initialized",
-      applied_versions: [...APPLIED_VERSIONS],
-      dropped_object_count: 0,
-      created_object_count: EXPECTED_OBJECT_COUNT,
-    });
+    await fulfill(route, finishedSystemTables(8), 202);
   });
 
   await page.goto("/settings/system-tables");
@@ -592,13 +595,7 @@ test("システムテーブル管理権限だけの利用者は初期化を実�
   let requestBody: unknown = null;
   await page.route("**/api/settings/database/system-tables/initialize", (route) => {
     requestBody = route.request().postDataJSON();
-    return fulfill(route, {
-      ...systemTables("ready"),
-      operation: "migrated",
-      applied_versions: [...APPLIED_VERSIONS],
-      dropped_object_count: 0,
-      created_object_count: PARTIAL_MISSING_NAMES.size,
-    });
+    return fulfill(route, finishedSystemTables(8), 202);
   });
 
   await page.goto("/settings/system-tables");
@@ -622,13 +619,7 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
     fulfill(route, systemTables("ready"))
   );
   await page.route("**/api/settings/database/system-tables/initialize", (route) =>
-    fulfill(route, {
-      ...systemTables("ready"),
-      operation: "no_op",
-      applied_versions: [...APPLIED_VERSIONS],
-      dropped_object_count: 0,
-      created_object_count: 0,
-    })
+    fulfill(route, finishedSystemTables(7), 202)
   );
 
   await page.goto("/settings/system-tables");
@@ -685,13 +676,7 @@ test("全再作成は実行確認語の完全一致まで実行できない", { 
   await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
     recreateRequests += 1;
     requestBody = route.request().postDataJSON();
-    await fulfill(route, {
-      ...systemTables("ready"),
-      operation: "recreated",
-      applied_versions: [...APPLIED_VERSIONS],
-      dropped_object_count: EXPECTED_OBJECT_COUNT - 1,
-      created_object_count: EXPECTED_OBJECT_COUNT - 1,
-    });
+    await fulfill(route, finishedSystemTables(8), 202);
   });
 
   await page.goto("/settings/system-tables");
@@ -917,7 +902,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
       mutations += 1;
       await new Promise<void>((resolve) => { release = resolve; });
-      await route.fulfill({ json: { data: { ...data, operation: "initialized" }, error_messages: [], warning_messages: [] } });
+      await route.fulfill({ status: 202, json: { data, error_messages: [], warning_messages: [] } });
     });
     const finish = async () => {
       await expect.poll(() => Boolean(release)).toBe(true);
@@ -974,3 +959,104 @@ for (const theme of ["light", "dark"] as const) {
     expect(mutations).toBe(1); // すべて合成route、実DDLなし。
   });
 }
+
+// ---- 後台の作成・更新・止まった操作・vector memory の見積もり（#5278） --------------------------
+
+function runningSystemTables(startedMsAgo: number, status: "running" | "stale" = "running") {
+  const base = systemTables("outdated");
+  return {
+    ...base,
+    operation_state: {
+      ...base.operation_state,
+      status,
+      operation_kind: "initialize",
+      started_at: new Date(Date.now() - startedMsAgo).toISOString(),
+      lease_expires_at: new Date(Date.now() + (status === "stale" ? -60_000 : 900_000)).toISOString(),
+    },
+  };
+}
+
+test("外で始まった作成・更新も「作成・更新」を回し、開始と経過を出し、終われば戻す（#5278）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let finished = false;
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, finished ? finishedSystemTables(8) : runningSystemTables(5_000))
+  );
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#system-tables");
+  const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+  await expect(initialize).toHaveAttribute("aria-busy", "true");
+  await expect(initialize).toHaveAttribute("aria-disabled", "true");
+  await expect(initialize).toHaveText("作成・更新");
+  await expect(card.getByTestId("system-tables-operation-progress")).toHaveText(
+    /^作成・更新を実行中（開始 \d{2}:\d{2}・経過 1 分未満）$/
+  );
+  await expect(card.locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expectNoPageHorizontalOverflow(page);
+  await card.getByTestId("system-tables-operation-progress").locator("xpath=..").screenshot({
+    path: testInfo.outputPath(`system-tables-running-${testInfo.project.name}.png`),
+  });
+
+  await initialize.focus();
+  finished = true;
+  await expect(initialize).not.toHaveAttribute("aria-busy", "true", { timeout: 10_000 });
+  await expect(initialize).toBeFocused();
+  await expect(page.getByText("システムテーブルを更新しました。")).toBeVisible();
+});
+
+test("lease の期限を過ぎた操作は回さず、止まった可能性を出して再実行できる（#5278）", { tag: "@responsive" }, async ({ page }) => {
+  let requests = 0;
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, requests ? finishedSystemTables(8) : runningSystemTables(20 * 60_000, "stale"))
+  );
+  await page.route("**/api/settings/database/system-tables/initialize", (route) => {
+    requests += 1;
+    return fulfill(route, finishedSystemTables(8), 202);
+  });
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#system-tables");
+  await expect(card.getByText("停止の可能性", { exact: true })).toBeVisible();
+  await expect(card.getByTestId("system-tables-stale-operation")).toContainText(
+    "前回の操作が止まった可能性があります"
+  );
+  const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+  await expect(initialize).toBeEnabled();
+  await expect(card.locator("svg.animate-spin:visible")).toHaveCount(0);
+  await expectNoPageHorizontalOverflow(page);
+  await initialize.click();
+  await expect(page.getByText("システムテーブルを更新しました。")).toBeVisible();
+  expect(requests).toBe(1);
+});
+
+test("HNSW 索引の vector memory の見込みの必要量と今の空きを出す（#5278）", { tag: "@responsive" }, async ({ page }) => {
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, {
+      ...systemTables("ready"),
+      vector_memory: {
+        available: true,
+        error_code: null,
+        pool_allocated_bytes: 64 * 1048576,
+        pool_used_bytes: 16 * 1048576,
+        pool_free_bytes: 48 * 1048576,
+        indexes: [
+          {
+            name: "IX_NL2SQL_ONT_NODE_EMBED",
+            table_name: "NL2SQL_ONTOLOGY_NODES",
+            column_name: "EMBEDDING",
+            loaded: true,
+            estimated_bytes: 12 * 1048576,
+            used_bytes: 10 * 1048576,
+            error_code: null,
+          },
+        ],
+      },
+    })
+  );
+  await page.goto("/settings/system-tables");
+  const section = page.getByTestId("system-tables-vector-memory");
+  await expect(section).toContainText("IX_NL2SQL_ONT_NODE_EMBED");
+  await expect(section).toContainText("見込みの必要量12.0 MB");
+  await expect(section).toContainText("今の空き48.0 MB");
+  await expect(section).toContainText("使用中10.0 MB");
+  await expect(section).not.toContainText("見込みの必要量が今の空きを超えています。");
+  await expectNoPageHorizontalOverflow(page);
+});

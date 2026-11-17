@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -302,6 +303,9 @@ class _FakeCursor:
         operation = self.database.operation
         now = datetime.now(UTC)
         if sql.startswith("SELECT STATUS, OPERATION_KIND"):
+            expires = operation["lease_expires_at"]
+            # 7 列目は DB が計算する lease の期限切れ（RUNNING で期限を過ぎたら 1）。
+            expired = int(operation["status"] == "RUNNING" and (expires is None or expires < now))
             self.rows = [
                 (
                     operation["status"],
@@ -310,6 +314,7 @@ class _FakeCursor:
                     operation["last_error_code"],
                     operation["schema_epoch"],
                     operation["updated_at"],
+                    expired,
                 )
             ]
         elif sql.startswith("SELECT MIGRATION_NAME, CHECKSUM FROM DEMO_SCHEMA_MIGRATIONS"):
@@ -335,6 +340,7 @@ class _FakeCursor:
                 lease_owner=params["lease_owner"],
                 lease_expires_at=now + timedelta(seconds=int(params["lease_seconds"])),
                 last_error_code=None,
+                updated_at=now,
             )
             self.rowcount = 1
         elif sql.startswith("UPDATE DEMO_SCHEMA_OPERATIONS"):
@@ -358,6 +364,8 @@ class _FakeCursor:
                 operation["lease_expires_at"] = now + timedelta(
                     seconds=int(params["lease_seconds"])
                 )
+                if "UPDATED_AT" in sql:
+                    operation["updated_at"] = now
             else:
                 return
             self.rowcount = 1
@@ -548,6 +556,138 @@ def test_lease_rejects_concurrent_operation_and_allows_expired_takeover() -> Non
 
     database.operation["lease_expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
     assert manager.initialize()["status"] == "ready"
+
+
+def test_expired_running_lease_is_reported_as_stale_and_does_not_block() -> None:
+    """RUNNING のまま lease の期限を過ぎた行は stale（止まった可能性）で、塞がない（#5278）。"""
+
+    database = _FakeDatabase()
+    manager = _DemoManager(database)
+    manager.initialize()
+    manager._claim_lease("crashed", "initialize")
+    started = database.operation["updated_at"]
+
+    running = manager.status()["operation_state"]
+    assert running["status"] == "running"
+    assert running["started_at"] == iso_timestamp(started)
+    assert manager.is_ready() is False
+
+    # 異常終了した操作の lease が期限を過ぎた。
+    database.operation["lease_expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
+    stale = manager.status()
+    assert stale["operation_state"]["status"] == "stale"
+    assert stale["operation_state"]["started_at"] == iso_timestamp(started)
+    assert SystemTableOperationState.model_validate(stale["operation_state"]).status == "stale"
+    # 実行中として DB ゲート・取込 worker・配備の確認を塞がない。
+    assert manager.is_ready() is True
+    assert deployment_check_summary(stale) == (True, "status=ready")
+    # 管理者は再実行できる（lease を取り直す）。
+    assert manager.initialize()["operation_state"]["status"] == "idle"
+
+
+def test_load_operation_uses_the_database_clock_for_expiry() -> None:
+    """期限の比較は DB の時計（SYSTIMESTAMP）。行の 7 列目が無い旧い fake は時刻で比べる。"""
+
+    database = _FakeDatabase()
+    manager = _DemoManager(database)
+    manager._ensure_control_schema()
+    manager._claim_lease("owner", "initialize")
+    with database.connection() as connection:
+        manager._load_operation(connection)
+    assert any("LEASE_EXPIRES_AT < SYSTIMESTAMP" in sql for sql in database.statements)
+
+
+def test_heartbeat_extends_the_lease_without_moving_the_start_time() -> None:
+    database = _FakeDatabase()
+    manager = _DemoManager(database)
+    manager._ensure_control_schema()
+    manager._claim_lease("owner", "initialize")
+    started = database.operation["updated_at"]
+    with database.connection() as connection:
+        manager._heartbeat(connection, "owner")
+    assert database.operation["updated_at"] == started
+    assert manager.status()["operation_state"]["started_at"] == iso_timestamp(started)
+
+
+class _BlockingManager(_DemoManager):
+    """`_initialize_on` を止めておける manager（後台の操作の途中の状態を見る）。"""
+
+    def __init__(self, database: _FakeDatabase, **kwargs: Any) -> None:
+        super().__init__(database, **kwargs)
+        self.release = threading.Event()
+        self.entered = threading.Event()
+
+    def _initialize_on(self, connection: Any, owner: str, *, recreate: bool) -> dict[str, Any]:
+        self.entered.set()
+        assert self.release.wait(5)
+        return {
+            **super()._initialize_on(connection, owner, recreate=recreate),
+            "restart_required": None,
+        }
+
+
+def test_background_initialize_returns_running_state_and_finishes_later() -> None:
+    """後台の操作: lease を取ったら running の状態を返し、終わりは状態で知る（#5278）。"""
+
+    database = _FakeDatabase()
+    manager = _BlockingManager(database)
+    finished: list[dict[str, Any]] = []
+
+    started = manager.start_initialize_in_background(on_finished=finished.append)
+    assert started["operation_state"]["status"] == "running"
+    assert started["operation_state"]["operation_kind"] == "initialize"
+    assert manager.entered.wait(5)
+    # 実行中に重ねた操作は 409（lease を取れない）で、すぐ返る。
+    with pytest.raises(SystemSchemaBusyError):
+        manager.start_initialize_in_background()
+
+    manager.release.set()
+    assert manager._background_thread is not None
+    manager._background_thread.join(5)
+    assert [item["operation"] for item in finished] == ["initialized"]
+    screen = manager.screen_status()
+    assert screen["operation_state"]["status"] == "idle"
+    assert screen["last_operation"]["operation"] == "initialized"
+    assert screen["last_operation"]["schema_epoch"] == 1
+    # HNSW 索引の無い製品は vector memory を返さない。
+    assert "vector_memory" not in screen
+
+
+def test_background_initialize_records_failure_and_checks_before_starting() -> None:
+    database = _FakeDatabase()
+    manager = _DemoManager(database, fail_with="ORA-00600 internal")
+
+    # 確認語の誤りは DB に触る前に、呼んだ側へ返す（後台にしない）。
+    with pytest.raises(SystemSchemaError) as error:
+        manager.start_initialize_in_background(recreate=True, confirmation="X")
+    assert error.value.code == RECREATE_CONFIRMATION_REQUIRED
+    assert manager.control_schema_calls == 0
+
+    finished: list[dict[str, Any]] = []
+    manager.start_initialize_in_background(on_finished=finished.append)
+    assert manager._background_thread is not None
+    manager._background_thread.join(5)
+    assert finished == []
+    state = manager.status()["operation_state"]
+    assert state["status"] == "failed"
+    assert state["last_error_code"] == "ORA-00600"
+    assert "last_operation" not in manager.screen_status()
+
+
+def test_background_after_operation_failure_is_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database = _FakeDatabase()
+    manager = _DemoManager(database)
+
+    def broken(_result: dict[str, Any]) -> None:
+        raise RuntimeError("reload failed")
+
+    manager.start_initialize_in_background(on_finished=broken)
+    assert manager._background_thread is not None
+    manager._background_thread.join(5)
+    assert manager.status()["operation_state"]["status"] == "idle"
+    assert "demo_system_schema_after_operation_failed" in caplog.text
 
 
 def test_failure_is_recorded_safely_and_can_be_retried() -> None:

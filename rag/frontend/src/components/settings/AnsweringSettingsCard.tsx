@@ -57,7 +57,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
-    reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? false,
+    reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? true,
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,

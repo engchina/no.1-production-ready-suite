@@ -41,10 +41,10 @@ import type {
   DatabaseWalletDownloadData,
 } from "@production-ready/system-settings";
 // システムテーブルの API 型は3製品共通（platform の共有パッケージ。#325 / #751）。
-import type {
-  SystemTablesInitializeRequest,
-  SystemTablesOperationData,
-  SystemTablesStatusData,
+import {
+  SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS,
+  type SystemTablesInitializeRequest,
+  type SystemTablesStatusData,
 } from "@production-ready/system-settings";
 export type {
   EnterpriseAiConfiguredModel,
@@ -2350,8 +2350,12 @@ export const api = {
   // システムテーブル（運用設定。3製品共通のカードと契約。#751）。
   getSystemTablesStatus: (options?: { signal?: AbortSignal }) =>
     request<SystemTablesStatusData>("/api/settings/database/system-tables", { signal: options?.signal }),
+  // 後台の操作を始める（202 と開始した時点の状態。#5278）。この要求だけ時間の上限を 60 秒にする。
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
-    request<SystemTablesOperationData>("/api/settings/database/system-tables/initialize", jsonBody(body)),
+    request<SystemTablesStatusData>("/api/settings/database/system-tables/initialize", {
+      ...jsonBody(body),
+      signal: AbortSignal.timeout(SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS),
+    }),
 
   getModelSettings: (options: SettingsRequestOptions = {}) =>
     request<ModelSettingsData>("/api/settings/model", { signal: options.signal }),

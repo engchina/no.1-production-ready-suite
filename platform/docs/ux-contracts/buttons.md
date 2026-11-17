@@ -222,14 +222,15 @@
 - 非同期処理は `loading` prop を使う（共通 `Button` がアイコンをスピナーに置き換え、`aria-busy` と `aria-disabled` を付けてクリック・Enter / Space・form の送信を止める）。
   - **`loading` を渡すボタンは必ず `icon` を持つ**（アイコンが無いとスピナーの分だけ幅が変わる。adherence の lint が検出する）。
   - **`loading` 中もフォーカスはボタンに残る。** ネイティブの `disabled` を付けるとフォーカスが `body` へ外れるため、共通 `Button` は `loading` のときだけ `aria-disabled` にする。完了後もフォーカスはボタンのまま（#355）。製品側で `disabled={pending}` を足してフォーカスを外さない。
-    - 処理中に他の操作をまとめて無効にするときも、押したボタンを `disabled` にしない。共有の `busy` を使うなら `disabled: busy && !loading` にする（`disabled` と `loading` が重なると `disabled` が優先され、ネイティブの disabled になる）。押したボタンを含む領域を `<fieldset disabled>` で包まない（中のボタンの prop に関係なくすべてが `:disabled` になる）。他の入力欄・操作は部品ごとに `disabled` を渡す（#835）。
+    - 処理中に他の操作をまとめて無効にするときも、押したボタン（と上の「操作そのものが進行中」で `loading` のボタン）を `disabled` にしない。共有の `busy` を使うなら `disabled: busy && !loading` にする（`disabled` と `loading` が重なると `disabled` が優先され、ネイティブの disabled になってフォーカスが外れる。#5278 でシステムテーブルの「作成・更新」「すべて再作成」「参照先のない行を削除」のずれを直した）。押したボタンを含む領域を `<fieldset disabled>` で包まない（中のボタンの prop に関係なくすべてが `:disabled` になる）。他の入力欄・操作は部品ごとに `disabled` を渡す（#835）。
   - **ボタン内の loading 表示は共通 `Button` に任せる。** `Loader2` や `Spinner` を子要素として描画しない。loading 中にラベルを「実行中…」などに差し替えない。
   - **同じ処理の動的なスピナーは 1 つだけ**にする。主ボタンが `loading` の場合、同じ処理を説明する `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"` にして、静的なラベル・経過時間・slow hint だけを表示する。
   - 更新・同期などの busy 表示も `<Button loading>` を使い、ボタン内のアイコンに個別に `animate-spin` を付けない。
   - **`loading` は押したボタンだけが持つ（#819）。** `loading` を true にするのは、**そのボタンが始めた処理**の間だけ（Material・Carbon・Apple HIG と同じ。スピナーは利用者が操作した部品に出す）。同じ処理の間に使えない他のボタンは `disabled` にするだけで、スピナーを出さない。
     - 複数のボタンが 1 つの mutation・関数を共有するとき（「保存」と「情報を再取得」が同じ保存を呼ぶ、行ごとの同じ操作など）は、どのボタンが始めたかを `activeOperation` の state・`mutation.variables`（`isPending` のときだけ読む。完了後も前の値が残る）・行の id で区別する。共有の `busy` / `pending` を複数のボタンの `loading` に渡さない（`disabled` には渡してよい）。
     - 「最新情報を取得」などの再取得のボタンは、**押した取り直しの間だけ** `loading` にする。query の `isFetching` をそのまま渡すと、定期の取り直し（`refetchInterval`）・他の操作の後の invalidate・絞り込みやページの切り替え（`keepPreviousData`）でも回る。押した取り直しを state で持つ（共通の `useActionPending` など）。初回の読込でどちらがスピナーを出すかは [messaging.md §3.7](./messaging.md) に従う。
-    - 例外: ボタンが表す状態そのものが進行中のとき（Autonomous Database の「起動」と `STARTING`、「停止」と `STOPPING`）は、押していなくても `loading` にしてよい。durable job の開始のボタンは送信の間だけ `loading`、job の間は `disabled`（[messaging.md §3.7](./messaging.md)）。
+    - **ボタンが表す操作そのものが進行中なら、誰が始めたかに関わらず `loading`（Spinner・押せない）にする（#5278）。** 押したこの画面の操作だけでなく、別のタブ・CLI・配備のスクリプトが始めた操作も、サーバーの状態が「進行中」の間は同じに見せる（Autonomous Database の「起動」と `STARTING`、「停止」と `STOPPING`、システムテーブルの「作成・更新」「すべて再作成」と lease の `running`）。ラベルは差し替えず、状態の文言（「〈操作〉を実行中（開始 hh:mm・経過 n 分）」など）はボタンの隣に出す。進行中の状態は polling で取り直し、終われば自動で元に戻す。止まった可能性がある状態（lease の期限切れなど）は回し続けず、案内の枠で知らせて再実行できるようにする。
+    - 例外: 進行の表示を別に持つ durable job（NL2SQL の `WorkflowProgressStrip` など）は、開始のボタンは送信の間だけ `loading`、job の間は `disabled` にし、スピナーは進行の表示が出す（[messaging.md §3.7](./messaging.md)）。
 - emoji をアイコンに使わない（`no-emoji-icons`）。
 
 ---

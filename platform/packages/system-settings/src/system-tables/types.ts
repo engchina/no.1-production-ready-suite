@@ -5,7 +5,11 @@
  * backend の骨格は `pr_system_settings.system_schema`、manifest と DDL の正本は製品が持つ。
  */
 export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
-export type SystemTableOperationStatus = "idle" | "running" | "failed";
+/**
+ * 操作の状態。`stale` は制御テーブルの行が running のまま lease の期限を過ぎたもの（操作したプロセスが
+ * 異常終了した可能性。#5278）。実行中として塞がず、管理者が確かめて再実行できる。
+ */
+export type SystemTableOperationStatus = "idle" | "running" | "stale" | "failed";
 export type SystemTableOperationResult = "no_op" | "initialized" | "migrated" | "recreated";
 /** 参照先のない行の削除の結果（削除も検査も要らなかったときは `no_op`。#511）。 */
 export type SystemTableOrphanOperationResult = "no_op" | "orphans_deleted";
@@ -64,6 +68,8 @@ export interface SystemTableOperationState {
   status: SystemTableOperationStatus;
   operation_kind: "initialize" | "recreate" | null;
   lease_expires_at: string | null;
+  /** 操作の開始時刻（running / stale のときだけ。#5278）。 */
+  started_at?: string | null;
   last_error_code: string | null;
   /** 前回の失敗の原因・影響・対処の説明（製品が分かる失敗だけに返す。例: RAG の vector memory の不足。#5261）。 */
   last_error_detail?: string | null;
@@ -100,6 +106,43 @@ export interface SystemTablesStatusData {
   /** 全管理 object（NL2SQL）。無ければ `tables` をテーブルとして並べる。 */
   objects?: SystemObjectMetadata[];
   operation_state: SystemTableOperationState;
+  /** この状態を返したプロセスが後台で終えた直近の操作の要約（無ければ画面は状態の差から求める。#5278）。 */
+  last_operation?: SystemTableLastOperation | null;
+  /** HNSW 索引ごとの vector memory の見込みの必要量と今の空き（HNSW を持つ製品だけ。#5278）。 */
+  vector_memory?: SystemTableVectorMemory | null;
+}
+
+/** 後台で終えた直近の操作の要約（#5278）。 */
+export interface SystemTableLastOperation {
+  operation: SystemTableOperationResult | null;
+  schema_epoch: number;
+  restart_required?: SystemTableRestartRequired | null;
+  finished_at?: string | null;
+}
+
+/** HNSW 索引 1 件の vector memory の見積もり（取れない値は null。#5278）。 */
+export interface SystemTableVectorMemoryIndex {
+  name: string;
+  table_name: string;
+  column_name: string;
+  /** vector memory に載っているか（読めなければ null）。 */
+  loaded: boolean | null;
+  /** 見込みの必要量（`DBMS_VECTOR.INDEX_VECTOR_MEMORY_ADVISOR`）。 */
+  estimated_bytes: number | null;
+  /** 今の使用量（`V$VECTOR_INDEX`）。 */
+  used_bytes: number | null;
+  error_code?: string | null;
+}
+
+/** vector memory の見積もり（#5278）。`available` が false なら「取得できません」。 */
+export interface SystemTableVectorMemory {
+  available: boolean;
+  error_code?: string | null;
+  pool_allocated_bytes?: number | null;
+  pool_used_bytes?: number | null;
+  /** Vector Pool の今の空き（`V$VECTOR_MEMORY_POOL` の ALLOC − USED）。 */
+  pool_free_bytes?: number | null;
+  indexes: SystemTableVectorMemoryIndex[];
 }
 
 export interface SystemTablesInitializeRequest {
@@ -120,14 +163,6 @@ export interface SystemTableRestartRequired {
   processes: string[];
 }
 
-export interface SystemTablesOperationData extends SystemTablesStatusData {
-  operation: SystemTableOperationResult;
-  dropped_object_count: number;
-  created_object_count: number;
-  /** 再起動が要るプロセス（無ければ null か無し。Agent。#1844）。 */
-  restart_required?: SystemTableRestartRequired | null;
-}
-
 /** 参照先のない行の削除（#511）。`expected_orphan_rows` は利用者が確認した件数。 */
 export interface SystemTablesDeleteOrphansRequest {
   constraint_name: string;
@@ -142,12 +177,23 @@ export interface SystemTablesOrphanDeletionData extends SystemTablesStatusData {
 
 export interface SystemTablesApi {
   getSystemTablesStatus: (options?: { signal?: AbortSignal }) => Promise<SystemTablesStatusData>;
-  initializeSystemTables: (body: SystemTablesInitializeRequest) => Promise<SystemTablesOperationData>;
+  /**
+   * 作成・更新 / 全再作成を始める（後台の操作。#5278）。backend は lease を取ったら 202 と開始した時点の
+   * 状態を返し、画面は状態の polling で進み具合と終わりを見る。要求の時間の上限は
+   * `SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS`（全体の上限とは別）。
+   */
+  initializeSystemTables: (body: SystemTablesInitializeRequest) => Promise<SystemTablesStatusData>;
   /** 参照先のない行の削除（RAG だけが持つ。無ければ削除の操作を出さない。#511）。 */
   deleteSystemTableOrphanedRows?: (
     body: SystemTablesDeleteOrphansRequest,
   ) => Promise<SystemTablesOrphanDeletionData>;
 }
+
+/**
+ * 作成・更新 / 全再作成の開始の要求の時間の上限（#5278）。backend は lease を取ったらすぐ返すが、
+ * 前提の確認（状態の読み取り・制御テーブルの用意）に時間がかかることがあるため、全体の上限より長くする。
+ */
+export const SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS = 60_000;
 
 /** 3 製品で同じ query key にする。 */
 export const SYSTEM_TABLES_QUERY_KEY = ["settings", "database", "system-tables"] as const;
