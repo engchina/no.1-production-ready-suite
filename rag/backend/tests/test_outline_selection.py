@@ -124,8 +124,9 @@ def _record(state: _SearchState) -> dict[str, Any]:
 async def test_disabled_setting_adds_no_model_call_and_no_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """既定は無効。目次も読まず、モデルも呼ばず、検索の結果は今と同じ。"""
-    assert Settings(_env_file=None).rag_outline_selection_enabled is False
+    """無効にすると、目次も読まず、モデルも呼ばず、検索の結果は今と同じ(既定は有効。#5362)。"""
+    monkeypatch.delenv("RAG_OUTLINE_SELECTION_ENABLED", raising=False)
+    assert Settings(_env_file=None).rag_outline_selection_enabled is True
     engine, _oracle, sections, llm = _setup(monkeypatch, rag_outline_selection_enabled=False)
 
     result, state = await _search(engine)
