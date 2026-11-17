@@ -135,7 +135,6 @@ export function agentRunDetailLabels(): RunDetailLabelsInput {
     summary: t("run.section.summary"),
     question: t("run.section.question"),
     answer: t("run.section.answer"),
-    timeline: t("run.section.timeline"),
     processDetails: t("run.section.processDetails"),
     facts: {
       startedAt: t("run.fact.startedAt"),

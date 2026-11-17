@@ -149,7 +149,7 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
   summary: "概要",
   question: "質問",
   answer: "回答",
-  timeline: "処理の経過",
+  timeline: "処理の段階",
   processDetails: "処理の詳細",
   facts: {
     startedAt: "開始日時",
@@ -841,7 +841,13 @@ export function RunTimeline({
       data-run-timeline-bars={showBars ? "true" : "false"}
       data-testid={testId}
     >
-      {exploreAction ? <div className="flex justify-end">{exploreAction}</div> : null}
+      {steps.length ? (
+        // 見出しと「軌跡を調べる」は、軌跡の調査の見出しと「経過に戻る」と同じ形・位置（#5360）。
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 id={`${idPrefix}-heading`} className="text-sm font-semibold text-fg" data-run-timeline-heading="">{labels.timeline}</h3>
+          {exploreAction}
+        </div>
+      ) : null}
       {showBars && steps.some(step => !step.startedAt) ? (
         <p className="text-xs text-fg-muted">{traceLabels.reconstructed}</p>
       ) : null}
@@ -852,7 +858,7 @@ export function RunTimeline({
       ) : null}
       {collapsed.keep === "end" ? toggle : null}
       <RunTimelineViewport depth={Math.max(0, ...steps.map(step => stepLevel(step.level)))} label={labels.timeline}>
-      <ol id={listId} className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
+      <ol id={listId} className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-labelledby={steps.length ? `${idPrefix}-heading` : undefined} aria-label={steps.length ? undefined : labels.timeline}>
         {collapsed.visible.map(({ item: step, index }) => {
           if (renderRunningStep && step.status === "running" && !hasChildren[index]) return <li key={step.id} className="min-w-0">{renderRunningStep(step)}</li>;
           const duration = stepDurationMs(step);

@@ -1884,7 +1884,7 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
 });
 
 
-test("「軌跡を調べる」と「経過に戻る」を右上にそろえ、呼び出しの一覧と「さらに表示」の間を空ける（#5360）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("処理の段階の見出しと「軌跡を調べる」を軌跡の調査の見出しと「経過に戻る」と同じ形にそろえ、呼び出しの一覧と「さらに表示」の間を空ける（#5360）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockLocalAuth(page);
   const row = run(1);
   await mockRuns(page, [row]);
@@ -1898,6 +1898,13 @@ test("「軌跡を調べる」と「経過に戻る」を右上にそろえ、�
   await expect.poll(() => progressCardLayout(card)).toMatchObject({ explorerTopRight: true, detailsAfterSteps: true });
   const open = card.getByRole("button", { name: "軌跡を調べる", exact: true });
   const openBox = (await open.boundingBox())!;
+  // 一覧の見出しは「軌跡を調べる」と同じ行の左（軌跡の調査の見出しと同じ形）。
+  const heading = card.getByRole("heading", { name: "処理の段階", exact: true });
+  await expect(heading).toBeVisible();
+  await expect(card.getByRole("list", { name: "処理の段階", exact: true })).toBeVisible();
+  const headingBox = (await heading.boundingBox())!;
+  expect(headingBox.x).toBeLessThan(openBox.x);
+  expect(Math.abs(headingBox.y + headingBox.height / 2 - (openBox.y + openBox.height / 2))).toBeLessThanOrEqual(2);
   await card.screenshot({ path: testInfo.outputPath("timeline-explore-top-right.png") });
   await open.click();
   const explorer = card.locator("[data-trace-explorer]");

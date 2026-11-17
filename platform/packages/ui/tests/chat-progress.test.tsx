@@ -62,7 +62,12 @@ describe("ChatProgress", () => {
     expect(card.hasAttribute("data-run-progress-card")).toBe(true);
     const list = card.querySelector("[data-run-timeline] ol")!;
     const explore = Array.from(card.querySelectorAll("button")).find(button => button.textContent?.includes("軌跡を調べる"))!;
-    expect(explore.parentElement!.className).toContain("justify-end");
+    // 一覧の見出しと「軌跡を調べる」は同じ行（軌跡の調査の見出しと「経過に戻る」と同じ形）。
+    const heading = card.querySelector("[data-run-timeline-heading]")!;
+    expect(heading.tagName).toBe("H3");
+    expect(heading.textContent).toBe("処理の段階");
+    expect(heading.parentElement).toBe(explore.parentElement);
+    expect(list.getAttribute("aria-labelledby")).toBe(heading.id);
     expect(explore.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const footer = card.querySelector("[data-run-timeline-footer]")!;
     expect(footer.textContent).not.toContain("軌跡を調べる");

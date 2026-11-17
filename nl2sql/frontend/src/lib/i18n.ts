@@ -42,7 +42,7 @@ const nl2sqlJa = {
   "chat.send": "送信",
   "chat.stop": "停止",
   // 回答の場所の処理の段階（#1145）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。
-  "chat.progress.steps": "SQL 生成の処理の段階",
+  "chat.progress.steps": "処理の段階",
   "chat.progress.summary": "処理の経過（{count} ステップ・{duration}）",
   "chat.progress.status.failed": "失敗",
   "chat.progress.tablesMore": "{tables} ほか {count} 件",
