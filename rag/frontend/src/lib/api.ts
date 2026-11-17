@@ -137,10 +137,10 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
 
 /**
  * 回答を LLM で生成する `POST /api/search`（非ストリーム）の timeout（#375）。backend は回答生成を
- * `RAG_ANSWER_TIMEOUT_SECONDS`（上限 600 秒）で打ち切って 504 と理由（時間切れになった工程）を返すので、
- * 画面はそれより 30 秒長く待つ。SSE（`/api/search/stream`・チャットの送信）は画面で打ち切らない。
+ * `RAG_ANSWER_TIMEOUT_SECONDS`（画面で選べる最大 1200 秒。#5280）で打ち切って 504 と理由（時間切れになった工程）を
+ * 返すので、画面は選べる最大より 30 秒長く待つ（設定の値に依らず固定。Nginx は 1260 秒）。SSE（`/api/search/stream`・チャットの送信）は画面で打ち切らない。
  */
-export const ANSWER_GENERATION_TIMEOUT_MS = 630_000;
+export const ANSWER_GENERATION_TIMEOUT_MS = 1_230_000;
 
 /**
  * 品質評価の job の状態を取得する間隔（#390）。評価は job（投入 → 状態の取得 → 結果）で動き、
@@ -2765,6 +2765,8 @@ export interface AnsweringSettingsData {
   section_expansion_enabled: boolean;
   section_expansion_max_levels: number;
   section_expansion_input_token_percent: number;
+  /** 回答生成の通しの上限（秒。#5280）。画面は 100 / 300 / 600 / 1200 から選ぶ（既定 600）。 */
+  answer_timeout_seconds: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */
   /** 段ごとのモデルで選べる登録モデル（接続情報を含まない）。 */
   config_source: "runtime";

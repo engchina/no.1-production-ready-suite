@@ -3532,6 +3532,31 @@ def test_update_answer_record_settings_persists_retention_and_purges(
     )
 
 
+@pytest.mark.parametrize("value", [150, 300, 600, 1200])
+def test_answering_settings_save_answer_timeout_choice(
+    monkeypatch: MonkeyPatch, tmp_path: Path, value: int
+) -> None:
+    """回答生成の通しの上限は画面の選択肢から選び、.env と実行中の設定へ反映する(#5280)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 600.0)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    assert client.get("/api/settings/answering").json()["data"]["answer_timeout_seconds"] == 600
+    response = client.patch("/api/settings/answering", json={"answer_timeout_seconds": value})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["answer_timeout_seconds"] == value
+    assert settings.rag_answer_timeout_seconds == value
+    assert f"RAG_ANSWER_TIMEOUT_SECONDS={value}\n" in env_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", [0, 100, 149, 450, 1201])
+def test_answering_settings_reject_answer_timeout_outside_choices(value: int) -> None:
+    """画面で選べない回答の上限は 422(#5280)。"""
+    response = client.patch("/api/settings/answering", json={"answer_timeout_seconds": value})
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize("value", [0, 6, 21])
 def test_answering_settings_reject_neighbor_count_outside_one_to_five(value: int) -> None:
     """文脈の補完の前後の chunk 数は 1〜5(#5168)。範囲外は 422 で、互換の読み替えはしない。"""

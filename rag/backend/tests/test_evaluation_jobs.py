@@ -661,7 +661,7 @@ def _case(case_id: str, *, replies: int = 0) -> EvaluationCase:
         # 1 日（86400 秒）を超えない。
         (200, 3600, 600.0, RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS),
         # 回答の上限の端数は切り上げる。
-        (3, 60, 100.5, 302),
+        (3, 60, 150.5, 452),
         (0, 60, 600.0, 60),
     ],
     ids=["twenty-cases", "floor", "max", "ceil", "no-cases"],
