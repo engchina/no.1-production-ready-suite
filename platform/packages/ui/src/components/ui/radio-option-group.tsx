@@ -86,7 +86,8 @@ export function RadioOptionGroup<T extends string = string>({
       role="radiogroup"
       className={className}
     >
-      <div className={OPTION_GRID_CLASS} data-testid={testId}>
+      {/* 行の幅は列で決まり、入力欄の幅の段（width）と補足の幅の e2e の検査（#1891）の対象外。 */}
+      <div className={OPTION_GRID_CLASS} data-testid={testId} data-field-width-exempt="">
         {options.map((option) => {
           const optionId = `${baseId}-${option.value}`;
           const labelId = `${optionId}-label`;

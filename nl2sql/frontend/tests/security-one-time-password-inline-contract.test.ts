@@ -56,13 +56,10 @@ test("無効ユーザーの編集内容は選択状態を表示したまま読�
   assert.match(usersPage, /disabled=\{inputReadOnly\}/u);
   // 発行済みの一時パスワードの欄とコピーも、無効なユーザーでは使わせない。
   assert.match(usersPage, /disabled=\{userFormReadOnly \|\| !issuedTemporaryPassword\}/u);
+  // ロールは共有の RadioOptionGroup で、選んだロールを出したまま群の全体を無効にする（#5343）。
   assert.match(
     usersPage,
-    /<fieldset className="grid gap-2 border-t border-border pt-5" disabled=\{inputReadOnly\}>/u
-  );
-  assert.match(
-    usersPage,
-    /const disabled = userFormReadOnly;/u
+    /<RadioOptionGroup\s+id="security-users-role"[\s\S]*?value=\{draft\.selectedRoleId \|\| null\}[\s\S]*?disabled=\{inputReadOnly\}/u
   );
 });
 
