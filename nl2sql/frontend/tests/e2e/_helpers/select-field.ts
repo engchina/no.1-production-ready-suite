@@ -59,6 +59,11 @@ export async function expectSelectFieldValue(combobox: Locator, value: string) {
 }
 
 async function expectSearchableSelectValue(button: Locator, value: string) {
+  // 読み込み中だけ一時的に無効の欄がある（業務プロファイルなど）。無効の瞬間に確かめると、無効のままの欄として
+  // ボタンの文字で値を探して失敗する。押せるようになるか、無効のままボタンの文字に値が含まれるまで待つ（#5267）。
+  await expect
+    .poll(async () => value === "" || !(await button.isDisabled()) || ((await button.textContent()) ?? "").includes(value))
+    .toBe(true);
   if (await button.isDisabled()) {
     // 無効の欄は開けない。選択肢の名前が値を含む欄（列名・表名など）だけ、ボタンの文字で確かめる。
     if (value !== "") await expect(button).toContainText(value);
