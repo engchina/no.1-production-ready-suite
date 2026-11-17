@@ -460,9 +460,19 @@ function EvidenceExcerptScroll({ label, children }: { label: string; children: R
   );
 }
 
+/** 表示の値が同じチップは最初の 1 つだけにする（章節の見出しと階層が同じ値になるときなど。#5303）。 */
+function uniqueChipsByValue(chips: readonly EvidenceChip[]): EvidenceChip[] {
+  const seen = new Set<string>();
+  return chips.filter((chip) => {
+    if (seen.has(chip.value)) return false;
+    seen.add(chip.value);
+    return true;
+  });
+}
+
 /** 根拠の頁・章節などのチップ・タグ・原典へのリンクの行。どれも無ければ出さない。 */
 function EvidenceMetadata({ item, labels }: { item: EvidenceListItem; labels: EvidenceLabels }) {
-  const chips = item.chips ?? [];
+  const chips = uniqueChipsByValue(item.chips ?? []);
   const tags = item.tags ?? [];
   if (chips.length === 0 && tags.length === 0 && !item.sourceUrl) return null;
   return (

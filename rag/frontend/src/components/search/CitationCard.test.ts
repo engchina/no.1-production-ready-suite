@@ -57,8 +57,41 @@ describe("citationEvidenceItem", () => {
   });
 });
 
-it.each([true, false, undefined])("文脈ヘッダの状態%sは表示せず、ヘッダ本文を残す", (enabled) => {
-  const item = citationEvidenceItem({ document_id: "d", chunk_id: "c", text: "原文", score: 1, rerank_score: null, file_name: null, category_name: null, metadata: { context_header: "文書 A > 節 A", ...(enabled === undefined ? {} : { context_header_enabled: enabled }) } });
-  expect(item.chips).toContainEqual({ id: "context_header", label: "検索用の文脈ヘッダ", value: "文書 A > 節 A" });
-  expect(item.chips?.some((chip) => chip.id === "context_header_enabled")).toBe(false);
+describe("citationEvidenceItem の章節・内容種別のチップ（issue 5303）", () => {
+  const chunk = (metadata: RetrievedChunk["metadata"]): RetrievedChunk => ({
+    document_id: "d",
+    chunk_id: "c",
+    text: "原文",
+    score: 1,
+    rerank_score: null,
+    file_name: "合成の表.xlsx",
+    category_name: null,
+    metadata,
+  });
+
+  it("表の行は「表の行」と章節 1 つだけを出し、文脈ヘッダ・分割方針を出さない", () => {
+    const item = citationEvidenceItem(
+      chunk({
+        content_kind: "record",
+        section_title: "シート A",
+        section_path: "シート A",
+        chunk_profile: "structure_v1",
+        context_header: "合成の表.xlsx > シート A",
+        context_header_enabled: true,
+        recipe_slot_no: 1,
+      })
+    );
+    expect(item.chips).toEqual([
+      { id: "content_kind", label: "内容種別", value: "表の行" },
+      { id: "section_path", label: "見出しの階層", value: "シート A" },
+    ]);
+    expect(item.tags?.map((tag) => tag.id)).toEqual(["recipe"]);
+  });
+
+  it.each([true, false, undefined])("文脈ヘッダ（状態 %s）は根拠のカードに出さない", (enabled) => {
+    const item = citationEvidenceItem(
+      chunk({ context_header: "文書 A > 節 A", ...(enabled === undefined ? {} : { context_header_enabled: enabled }) })
+    );
+    expect(item.chips).toEqual([]);
+  });
 });

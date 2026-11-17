@@ -95,6 +95,34 @@ def test_short_input_uses_one_normal_generation_without_reader():
     assert prompt == block(inputs)
 
 
+@pytest.mark.parametrize("offset", [0, 700], ids=["origin", "offset"])
+@pytest.mark.parametrize("overlapping", [False, True], ids=["single", "overlapping"])
+def test_full_source_restoration_counts_replaced_excerpts_once(offset, overlapping):
+    """全文へ戻すと消える抜粋の分を、補う容量の見積もりで二重に数えない（#5033）。"""
+    inputs = [span(0, "A" * 1000 + "\n" + "Z" * 600), span(1, "B" * 1400 + "\n" + "Y" * 1800)]
+    inputs[0].update(start=offset, end=offset + len(inputs[0]["text"]))
+
+    def read(system, prompt, schema):
+        findings = []
+        for value in json.loads(prompt)["evidence"]:
+            if value["source"] == "p0":
+                findings.append(finding(value, last=3))
+                if overlapping:
+                    findings.append(finding(value, first=2, last=4))
+            else:
+                findings.append(finding(value, last=1 if overlapping else 4))
+        return schema.model_validate({"findings": findings})
+
+    selected, _, diagnostic = prepare(inputs, read)
+    restored = [value for value in selected if value["source_id"] == "p0"]
+    assert len(restored) == 1
+    assert restored[0]["text"] == inputs[0]["text"]
+    assert (restored[0]["start"], restored[0]["end"]) == (offset, offset + len(inputs[0]["text"]))
+    assert restored[0]["evidence_id"] == inputs[0]["evidence_id"]
+    assert len(block(selected)) <= config().evidence_budget_chars
+    assert diagnostic["fits"] is True
+
+
 @pytest.mark.parametrize("failure", ["missing", "invalid_range", "exception"])
 def test_failed_batch_does_not_become_success(failure):
     def read(system, prompt, schema):

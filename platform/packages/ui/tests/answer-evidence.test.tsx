@@ -147,6 +147,27 @@ describe("EvidenceCard", () => {
     expect(value.textContent).toBe(longPath);
     expect(chips.querySelector("dt")!.textContent).toBe("章節");
   });
+
+  it("表示の値が同じチップは最初の 1 つだけを出す（#5303）", () => {
+    const card = html(
+      <ul>
+        <EvidenceCard
+          index={0}
+          item={item({
+            chips: [
+              { id: "page", label: "ページ", value: "p.3" },
+              { id: "section_title", label: "見出し名", value: "節 A" },
+              { id: "section_path", label: "見出しの階層", value: "節 A" },
+              { id: "other", label: "その他", value: "節 A > 項 B" },
+            ],
+          })}
+        />
+      </ul>
+    );
+    const chips = card.querySelector('[data-testid="evidence-chips"]')!;
+    expect(Array.from(chips.querySelectorAll("dd")).map((dd) => dd.textContent)).toEqual(["p.3", "節 A", "節 A > 項 B"]);
+    expect(Array.from(chips.querySelectorAll("dt")).map((dt) => dt.textContent)).toEqual(["ページ", "見出し名", "その他"]);
+  });
 });
 
 describe("AnswerEvidence", () => {
