@@ -4022,6 +4022,29 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
 
 ---
 
+## RadioOptionGroup — **新規**（#5340）
+
+名前と 1 行の説明を持つ選択肢から 1 つを選ぶラジオの群。仕様と理由は README §4「`RadioOptionGroup`」。
+
+```tsx
+import { RadioOptionGroup } from "@production-ready/ui";
+
+<RadioOptionGroup<"chat" | "search">
+  id="evaluation-answer-mode"
+  legend={t("evaluation.answerMode.legend")}
+  options={[
+    { value: "chat", label: t("evaluation.answerMode.chat"), description: t("evaluation.answerMode.chatDescription") },
+    { value: "search", label: t("evaluation.answerMode.search"), description: t("evaluation.answerMode.searchDescription") },
+  ]}
+  value={answerMode}
+  onValueChange={setAnswerMode}
+  disabled={running}
+/>
+```
+
+- props: `legend`・`helper`・`error`・`required`（`Fieldset` と同じ）、`options`（`value`・`label`・`description`・`disabled`）、`value`（未選択は `null`）、`onValueChange`、`disabled`（群の全体）、`name`（省略時は `id`）、`testId`（選択肢の並びの要素）。
+- 製品でラジオの行・選んだ行の枠と地・44px を手書きしない。
+
 ## RunHistoryTable / RunHistoryToolbar / RunStatusBadge / RunSummary / RunTimeline / RunDetailLayout — **新規**（#1955）
 
 3 製品の「実行履歴」の一覧と詳細。決めたことと理由は README §4「実行履歴」、画面の規則は UX 契約 [run-history.md](../ux-contracts/run-history.md)。製品はデータの取得・行の写し（`toItem`）・状態の写し・i18n・操作の定義と、節の中身（回答・根拠・SQL・ツール）だけを持つ。

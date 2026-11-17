@@ -5,6 +5,7 @@
 import type { StatusVariant } from "@production-ready/ui";
 
 import type {
+  EvaluationAnswerMode,
   EvaluationCaseResult,
   EvaluationJob,
   EvaluationJobStatus,
@@ -63,6 +64,11 @@ export function evaluationJobTimeLimitLabel(job: Pick<EvaluationJob, "time_limit
   return t("evaluation.job.timeLimit", {
     minutes: Math.max(1, Math.ceil(job.time_limit_seconds / 60)),
   });
+}
+
+/** 回答の方法の表示（#5340）。記録の無い古い評価は「未記録」。 */
+export function evaluationAnswerModeLabel(mode: EvaluationAnswerMode | null | undefined): string {
+  return mode ? t(`evaluation.answerMode.${mode}`) : t("evaluation.answerMode.unrecorded");
 }
 
 type ProfileFields = Pick<

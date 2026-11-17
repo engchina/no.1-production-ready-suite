@@ -24,6 +24,7 @@ import {
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  RadioOptionGroup,
 } from "@production-ready/ui";
 import {
   BarChart3,
@@ -51,6 +52,8 @@ import {
 import {
   api,
   ApiError,
+  EVALUATION_ANSWER_MODES,
+  type EvaluationAnswerMode,
   type EvaluationJob,
   type EvaluationJobStatus,
   type EvaluationAnswerJudgement,
@@ -77,6 +80,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 
 import {
+  evaluationAnswerModeLabel,
   evaluationCaseErrorSummary,
   evaluationHistoryProfileLabel,
   evaluationJobShownResult,
@@ -255,6 +259,8 @@ export function EvaluationClient() {
   const selectedSet = useQuery({ queryKey: ["testset", savedTestsetId], queryFn: () => testsetApi.get(savedTestsetId!), enabled: Boolean(savedTestsetId && savedTestsetId !== "choose") });
   const preparedSet = useQuery({ queryKey: ["testset-prepared", savedTestsetId, selectedSet.data?.revision, profileId], queryFn: () => testsetApi.prepare(savedTestsetId!, selectedSet.data!.revision, profileId!), enabled: Boolean(savedTestsetId && selectedSet.data && profileId) });
   const [answerModelId, setAnswerModelId] = useWorkspaceState<string>("evaluation.answerModelId", "", (value): value is string => typeof value === "string");
+  // 回答の方法（#5340）。既定は RAG Chat と同じ経路（チャット）。
+  const [answerMode, setAnswerMode] = useWorkspaceState<EvaluationAnswerMode>("evaluation.answerMode", "chat", isAnswerMode);
   const models = useQuery({ queryKey: ["evaluation-models"], queryFn: api.listEvaluationModels, enabled: pageTab === "run" });
   const importStale =
     importResult !== null && importResult.search_answer_profile_id !== profileId;
@@ -382,6 +388,7 @@ export function EvaluationClient() {
         cases: savedTestsetId ? [] : runInput.cases,
         ...(savedTestsetId && selectedSet.data ? { testset_id: savedTestsetId, testset_revision: selectedSet.data.revision } : {}),
         ...(answerModelId ? { answer_model_id: answerModelId } : {}),
+        answer_mode: answerMode,
         search_answer_profile_id: profileId,
         ...(!savedTestsetId && runInput.source_workbook_id ? { source_workbook_id: runInput.source_workbook_id } : {}),
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
@@ -491,6 +498,20 @@ export function EvaluationClient() {
                 onFiles={selectFiles}
                 onDownloadTemplate={() => void downloadTemplate()}
               />}
+              {/* 回答の方法（#5340）。回答のモデルの真上に置き、実行中は変えられない。 */}
+              <RadioOptionGroup<EvaluationAnswerMode>
+                id="evaluation-answer-mode"
+                legend={t("evaluation.answerMode.legend")}
+                options={EVALUATION_ANSWER_MODES.map((mode) => ({
+                  value: mode,
+                  label: evaluationAnswerModeLabel(mode),
+                  description: t(`evaluation.answerMode.${mode}Description`),
+                }))}
+                value={answerMode}
+                onValueChange={setAnswerMode}
+                disabled={runActive}
+                testId="evaluation-answer-mode"
+              />
               {models.isError ? <DataLoadFailure layout="field" error={models.error} fallback={t("evaluation.testsets.modelLoadError")} onRetry={() => void models.refetch()} /> : <SearchableSelectField labels={searchableSelectLabels()} width="lg" id="evaluation-answer-model" label={t("evaluation.testsets.model")} value={answerModelId} disabled={runActive || models.isPending} options={[{ value: "", label: t("evaluation.testsets.modelDefault") }, ...(models.data ?? []).map(value => ({ value: value.model_id, label: value.display_name }))]} onValueChange={setAnswerModelId} />}
 
               {!savedTestsetId && shownResult && shownResult.error_count === 0 && processRows.length ? (
@@ -604,6 +625,10 @@ export function EvaluationClient() {
       </PageBody>
     </div>
   );
+}
+
+function isAnswerMode(value: unknown): value is EvaluationAnswerMode {
+  return EVALUATION_ANSWER_MODES.includes(value as EvaluationAnswerMode);
 }
 
 function isBoolean(value: unknown): value is boolean {
@@ -774,6 +799,7 @@ function EvaluationJobSection({
         cancelling={state.cancelling}
         meta={[
           t("evaluation.job.profile", { profile: evaluationHistoryProfileLabel(job) }),
+          t("evaluation.job.answerMode", { mode: evaluationAnswerModeLabel(job.answer_mode) }),
           t("evaluation.job.actor", { actor: job.actor_display_name ?? "—" }),
         ]}
       />

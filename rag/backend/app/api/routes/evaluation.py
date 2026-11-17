@@ -102,6 +102,7 @@ from app.rag.support_guide_process_import import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.evaluation import (
+    EvaluationAnswerMode,
     EvaluationCase,
     EvaluationCaseResult,
     EvaluationComparison,
@@ -226,6 +227,7 @@ async def submit_run_evaluation_job(
         source_workbook_id=source_workbook_id,
         search_answer_profile_id=request.search_answer_profile_id,
         compare_search_answer_profile_id=request.compare_search_answer_profile_id,
+        answer_mode=request.answer_mode,
     )
     return ApiResponse(data=(await _with_job_names([job]))[0])
 
@@ -645,6 +647,7 @@ async def export_evaluation_results(job_id: str, body: EvaluationResultExportReq
         body,
         partial_of_total=job.total_cases if job.run_result is None else None,
         evidence=evidence,
+        answer_mode=job.answer_mode,
     )
     return Response(
         content,
@@ -675,7 +678,12 @@ async def _results_on_source_workbook(
         )
         answers = await _case_answers(metrics)
         content = await asyncio.to_thread(
-            evaluation_workbook_with_results, workbook.content, metrics, answers, evidence=evidence
+            evaluation_workbook_with_results,
+            workbook.content,
+            metrics,
+            answers,
+            evidence=evidence,
+            answer_mode=job.answer_mode,
         )
     except Exception as exc:  # noqa: BLE001 - 結果だけのファイルを返す
         logger.warning(
@@ -746,6 +754,7 @@ async def _submit_job(
     source_workbook_id: str | None = None,
     search_answer_profile_id: str | None = None,
     compare_search_answer_profile_id: str | None = None,
+    answer_mode: EvaluationAnswerMode | None = None,
 ) -> EvaluationJob:
     try:
         return await get_evaluation_job_service().submit(
@@ -757,6 +766,7 @@ async def _submit_job(
             source_workbook_id=source_workbook_id,
             search_answer_profile_id=search_answer_profile_id,
             compare_search_answer_profile_id=compare_search_answer_profile_id,
+            answer_mode=answer_mode,
         )
     except EvaluationJobLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -805,6 +815,7 @@ async def _execute_run(
             thresholds=effective_thresholds,
             rag_overrides=request.rag_overrides,
             answer_model_id=request.answer_model_id,
+            answer_mode=request.answer_mode,
             search_answer_profile_id=request.search_answer_profile_id,
             time_budget_seconds=time_budget_seconds,
             progress=_offset_progress(progress, offset=0, final=False)
@@ -828,6 +839,7 @@ async def _execute_run(
                 thresholds=effective_thresholds,
                 rag_overrides=request.rag_overrides,
                 answer_model_id=request.answer_model_id,
+                answer_mode=request.answer_mode,
                 search_answer_profile_id=request.compare_search_answer_profile_id,
                 time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
                 progress=_offset_progress(progress, offset=len(request.cases), final=True),
@@ -913,6 +925,7 @@ def _run_request_summary(request: EvaluationRunRequest) -> dict[str, Any]:
         "knowledge_base_ids": request.knowledge_base_ids,
         "search_answer_profile_id": request.search_answer_profile_id,
         "compare_search_answer_profile_id": request.compare_search_answer_profile_id,
+        "answer_mode": request.answer_mode,
         "thresholds": (
             request.thresholds.model_dump(mode="json", exclude_none=True)
             if request.thresholds is not None

@@ -41,7 +41,8 @@ from app.rag.evaluation import evaluation_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.schemas.evaluation import EvaluationRunRequest
 
-MANIFEST_VERSION = 2
+# 3: request.answer_mode（回答の方法。#5340）を足した。
+MANIFEST_VERSION = 3
 UNVERIFIED = "unverified"
 ANSWER_MODEL_FROM_PROFILE = "search_answer_profile"
 ANSWER_MODEL_FROM_GLOBAL_DEFAULT = "global_default"
@@ -119,6 +120,8 @@ async def build_run_manifest(
             "search_answer_profile_id": request.search_answer_profile_id,
             "compare_search_answer_profile_id": request.compare_search_answer_profile_id,
             "answer_model_id": request.answer_model_id,
+            # 回答の方法（#5340。chat は RAG Chat と同じ経路、search は基本の RAG）。
+            "answer_mode": request.answer_mode,
             "rag_overrides": (
                 request.rag_overrides.model_dump(mode="json", exclude_none=True)
                 if request.rag_overrides is not None

@@ -375,6 +375,8 @@ for (const viewport of [
       await expect.poll(() => jobs.runPayloads.length).toBe(1);
       expect(jobs.runPayloads[0]).toEqual({
         cases: evaluationImportResult().cases,
+        // 回答の方法の既定はチャット（#5340）。
+        answer_mode: "chat",
         search_answer_profile_id: "profile-base",
       });
 

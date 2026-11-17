@@ -2007,10 +2007,19 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
  * 画面からの評価の request（#2065）。評価の基準は常に設定の既定（suite・thresholds を送らない）、
  * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
+/**
+ * 品質評価の回答の方法（#5340）。chat は RAG Chat と同じ経路（業務ガイド・承認済み FAQ・根拠の拡張あり）、
+ * search は画面の RAG 検索と同じ基本の RAG。
+ */
+export type EvaluationAnswerMode = "chat" | "search";
+export const EVALUATION_ANSWER_MODES: readonly EvaluationAnswerMode[] = ["chat", "search"];
+
 export interface EvaluationRunRequestBody {
   testset_id?: string;
   testset_revision?: number;
   answer_model_id?: string;
+  /** 回答の方法（#5340。省略時はチャット）。 */
+  answer_mode?: EvaluationAnswerMode;
   cases: EvaluationCase[];
   search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
@@ -2158,6 +2167,8 @@ export interface EvaluationJob {
   compare_search_answer_profile_id: string | null;
   search_answer_profile_name: string | null;
   compare_search_answer_profile_name: string | null;
+  /** 回答の方法（#5340。記録の無い古い job は null＝未記録）。 */
+  answer_mode?: EvaluationAnswerMode | null;
   /** 実行した利用者の表示名（分からない古い job は null）。 */
   actor_display_name: string | null;
   /** 見ている利用者が実行した job か、取り消せるか（本人と system_admin。#4811）。 */
@@ -2182,6 +2193,8 @@ export interface EvaluationJobSummary {
   compare_search_answer_profile_id: string | null;
   search_answer_profile_name: string | null;
   compare_search_answer_profile_name: string | null;
+  /** 回答の方法（#5340。記録の無い古い job は null＝未記録）。 */
+  answer_mode?: EvaluationAnswerMode | null;
   actor_display_name: string | null;
   owned: boolean;
   can_cancel: boolean;

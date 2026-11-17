@@ -23,6 +23,7 @@ from app.rag.xlsx_append_columns import (
 )
 from app.schemas.evaluation import (
     ANSWER_GENERATION_FALLBACK,
+    EvaluationAnswerMode,
     EvaluationCaseResult,
     EvaluationMetrics,
     EvaluationResultExportRequest,
@@ -70,6 +71,11 @@ FAILURE_REASONS = {
     "wrong_screen": "別の画面を案内した",
 }
 CASE_STATUSES = {"success": "成功", "error": "失敗"}
+# 回答の方法（#5340。画面の `evaluation.answerMode.*` と同じ文言）。記録の無い古い評価は「未記録」。
+ANSWER_MODE_LABELS: dict[EvaluationAnswerMode, str] = {"chat": "チャット", "search": "RAG 検索"}
+ANSWER_MODE_UNRECORDED_LABEL = "未記録"
+CONDITIONS_SHEET_TITLE = "評価の条件"
+NO_COMPARISON_LABEL = "なし"
 # この問の合否（正確性で決め、退避した問は不合格。#5262・#5320）。
 CASE_VERDICTS = {True: "合格", False: "不合格"}
 # 主張ごとの判定（#5262）の前の結果。網羅を出さない。
@@ -119,6 +125,11 @@ def _judgement_values(item: EvaluationCaseResult) -> list[CellValue]:
     return [verdict, reason or None]
 
 
+def answer_mode_label(answer_mode: EvaluationAnswerMode | None) -> str:
+    """回答の方法の表示（記録の無い古い評価は「未記録」）。"""
+    return ANSWER_MODE_LABELS[answer_mode] if answer_mode else ANSWER_MODE_UNRECORDED_LABEL
+
+
 def _append(sheet: Any, values: list[Any]) -> None:
     sheet.append([ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v for v in values])
     for cell in sheet[sheet.max_row]:
@@ -150,10 +161,12 @@ def evaluation_results_xlsx(
     *,
     partial_of_total: int | None = None,
     evidence: Mapping[str, str] | None = None,
+    answer_mode: EvaluationAnswerMode | None = None,
 ) -> bytes:
     """全ページ分の結果を出す。文字列は式として評価させない。
 
     `partial_of_total` は途中までの結果（#4208）の全ケースの数で、概要の末尾に範囲を書く。
+    「評価の条件」のシートに主条件・比較対象・回答の方法（#5340）を書く。
     """
     workbook = Workbook()
     overview = workbook.active
@@ -186,6 +199,12 @@ def evaluation_results_xlsx(
             metrics.comparison.metrics.case_count if metrics.comparison else 0
         )
         _append(overview, ["途中までの結果", f"全 {partial_of_total} ケースのうち {saved} ケース"])
+    conditions = workbook.create_sheet(CONDITIONS_SHEET_TITLE)
+    _append(conditions, ["項目", "値"])
+    _append(conditions, ["主条件", groups[0][1]])
+    _append(conditions, ["比較対象", groups[1][1] if len(groups) > 1 else NO_COMPARISON_LABEL])
+    _append(conditions, ["回答の方法", answer_mode_label(answer_mode)])
+    _format(conditions, [24, 48])
     rows = {row.case_id: row for row in inputs.rows}
     cases = {case.id: case for case in inputs.cases}
     for title, _profile, result in groups:
@@ -300,11 +319,14 @@ def evaluation_workbook_with_results(
     answers: Mapping[str, str],
     *,
     evidence: Mapping[str, str] | None = None,
+    answer_mode: EvaluationAnswerMode | None = None,
 ) -> bytes:
     """アップロードした Excel のケースの行の右に、結果の列を足したファイルを返す。
 
     行はケースの ID（行番号から決まる。`evaluation_case_id`）で決め、質問の文字では探さない。結果の
     無い行（途中までの結果）は状態を「未実行」にする。`answers` は trace の ID → 回答の本文。
+    列の見出しには回答の方法（#5340。「評価結果（チャット）」）を入れる。記録の無い古い評価は
+    方法を入れない。
     """
     parsed = parse_evaluation_workbook(data)
     if parsed.sheet_title is None or not parsed.rows:
@@ -312,10 +334,12 @@ def evaluation_workbook_with_results(
     groups = [("主条件", metrics)]
     if metrics.comparison:
         groups.append(("比較対象", metrics.comparison.metrics))
+    mode = ANSWER_MODE_LABELS[answer_mode] if answer_mode else None
     columns: list[AppendedColumn] = []
     for title, _result in groups:
+        labels = [label for label in (title if metrics.comparison else None, mode) if label]
         columns.extend(
-            _result_columns(f"評価結果（{title}）" if metrics.comparison else "評価結果")
+            _result_columns(f"評価結果（{'・'.join(labels)}）" if labels else "評価結果")
         )
     by_case = [{item.case_id: item for item in result.case_results} for _, result in groups]
     rows: dict[int, list[CellValue]] = {}

@@ -38,6 +38,8 @@ export type WorkspaceField =
   // 品質評価（#2065）: 検証した評価リクエストの Excel（ケースとプレビュー。200,000 文字を超えると
   // 保存しない）、KB スコープ、評価の job id と、その評価のケースの見出し（結果の表の質問・根拠）。
   | "evaluation.answerModelId"
+  // 品質評価の回答の方法（#5340。チャット / RAG 検索）
+  | "evaluation.answerMode"
   | "evaluation.import"
   | "evaluation.profileId"
   | "evaluation.runProfileName"
