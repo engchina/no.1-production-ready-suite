@@ -1039,14 +1039,24 @@ class Settings(
             "既読の cache は消費しない。"
         ),
     )
+    rag_reference_section_read_max_chunks: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description=(
+            "番号つきの参照(第 3 章・別紙 1 など)の参照先 1 つで、番号で定位した節の先頭から"
+            "読み順に読む chunk の上限(#5348)。文書名・ファイル名だけの参照は目次から選んだ章節を"
+            "読み、rag_reference_outline_selection_read_max_chunks に従う。"
+        ),
+    )
     rag_reference_outline_selection_enabled: bool = Field(
         default=True,
         description=(
             "文書名・ファイル名だけで文書全体を指す参照の参照先を、目次から回答のモデルが選んだ章節で"
             "読む(#5263。全体設定だけで決め、検索・回答プロファイルでは上書きしない)。参照先が複数でも"
-            "モデルの呼び出しは 1 回。目次が無い・選べないときは参照先の文書を全体で読む"
-            "(章節の拡張の起点にしない)。既定は有効(#5296)。無効なら参照先の中を質問で検索した"
-            "上位 8 件を読む。"
+            "モデルの呼び出しは 1 回。選んだ章節だけを読み、目次が無い・選べない・選んだ章節を"
+            "読めないときは読まない(理由を回答の診断に残す。#5348)。既定は有効(#5296)。無効なら"
+            "文書名・ファイル名だけの参照の参照先は読まない(参照の記述の chunk は根拠に残る)。"
         ),
     )
     rag_reference_outline_selection_catalog_max_chars: int = Field(
@@ -1084,8 +1094,8 @@ class Settings(
         ge=10,
         le=1000,
         description=(
-            "文書全体への参照の参照先 1 つから読む chunk の上限(#5263。選んだ章節の合計と、選べない"
-            "ときに文書全体で読む退避のどちらも)。"
+            "文書全体への参照の参照先 1 つで、目次から選んだ章節から読む chunk の合計の上限"
+            "(#5263)。"
         ),
     )
     rag_outline_selection_enabled: bool = Field(

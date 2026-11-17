@@ -2,6 +2,7 @@
 
 一覧の資料が「ファイル名だけの行」や「A と B を参照」で同じナレッジベースの別の文書を指すとき、
 その文書を検索範囲(KB・権限・有効な版)の中のファイル名との完全一致で決め、参照の補充へ渡す。
+参照先の文書は目次から選んだ章節で読み(#5263・#5348。ここでは代役が目次のすべての章節を選ぶ)、
 読めた参照先は個数の上限で選ばずにすべて足し、原質問との rerank の点数の順に並べる(#5243)。
 文書・語はすべて合成。
 """
@@ -26,8 +27,10 @@ from app.schemas.search import RetrievedChunk, SearchRequest
 from tests.test_cross_references import (
     FakeGenAi,
     ReferenceOracle,
+    SectionMap,
     _chunk,
     _engine,
+    _outline_engine,
     _retrieved,
 )
 
@@ -249,14 +252,16 @@ def _corpus() -> list[RetrievedChunk]:
 
 
 async def _expand(
+    monkeypatch: pytest.MonkeyPatch,
     oracle: ReferenceOracle,
     anchors: list[RetrievedChunk],
     genai: FakeGenAi | None = None,
     **settings: Any,
-) -> tuple[dict[str, list[RetrievedChunk]], dict[str, Any], _SearchState]:
+) -> tuple[dict[str, list[RetrievedChunk]], dict[str, Any], _SearchState, SectionMap]:
     state = _SearchState()
     receipt: dict[str, Any] = {}
-    result = await _engine(oracle, genai or FakeGenAi(), **settings)._reference_expansion(
+    engine, sections, _llm = _outline_engine(monkeypatch, oracle, genai, **settings)
+    result = await engine._reference_expansion(
         SearchRequest(query=_QUESTION, filters={"knowledge_base_id": _KB}),
         state,
         anchors,
@@ -264,14 +269,21 @@ async def _expand(
         question=(_QUESTION, [0.1] * 4),
         receipt=receipt,
     )
-    return result, receipt, state
+    return result, receipt, state, sections
+
+
+def _read_documents(sections: SectionMap) -> set[str]:
+    """目次から選んだ章節を読んだ文書。"""
+    return {document_id for document_id, _section in sections.read_calls}
 
 
 def _statuses(receipt: dict[str, Any]) -> dict[str, str]:
     return {item["target"]["document_title"]: item["status"] for item in receipt["targets"]}
 
 
-async def test_list_of_bare_file_names_adds_both_procedures_from_same_kb() -> None:
+async def test_list_of_bare_file_names_adds_both_procedures_from_same_kb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """一覧の chunk のファイル名だけの行から、同じ KB の手順 A・B の原文を参照先として足す。"""
     anchor = _list_chunk()
     oracle = ReferenceOracle(
@@ -283,7 +295,7 @@ async def test_list_of_bare_file_names_adds_both_procedures_from_same_kb() -> No
         },
     )
 
-    result, receipt, state = await _expand(oracle, [anchor])
+    result, receipt, state, sections = await _expand(monkeypatch, oracle, [anchor])
 
     added = [row.chunk_id for row in result[anchor.chunk_id]]
     assert added == ["doc-a:cs-a:0", "doc-a:cs-a:1", "doc-b:cs-b:0", "doc-b:cs-b:1"]
@@ -291,10 +303,13 @@ async def test_list_of_bare_file_names_adds_both_procedures_from_same_kb() -> No
     assert receipt["sources"][0]["dependency_status"] == "satisfied"
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {"query"}
     # 範囲外の写し・名前が似ているだけの文書は読まない。
-    assert {call["filters"]["document_id"] for call in oracle.search_calls} == {"doc-a", "doc-b"}
+    assert _read_documents(sections) == {"doc-a", "doc-b"}
+    assert oracle.search_calls == []
 
 
-async def test_ingested_file_name_references_are_followed_without_requery() -> None:
+async def test_ingested_file_name_references_are_followed_without_requery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """取込で残したファイル名の参照(未解決の文書の参照)も同じく辿る。"""
     staged = [_chunk(0, _list_chunk().text, "作業の一覧")]
     annotate_cross_references(staged, document_title="一覧.xlsx")
@@ -305,13 +320,15 @@ async def test_ingested_file_name_references_are_followed_without_requery() -> N
         [anchor], _corpus(), knowledge_bases={_KB: {"doc-list", "doc-a", "doc-b"}}
     )
 
-    result, receipt, state = await _expand(oracle, [anchor])
+    result, receipt, state, sections = await _expand(monkeypatch, oracle, [anchor])
 
     assert {row.document_id for row in result[anchor.chunk_id]} == {"doc-a", "doc-b"}
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {"ingest"}
 
 
-async def test_file_name_reference_distinguishes_ambiguous_and_versions() -> None:
+async def test_file_name_reference_distinguishes_ambiguous_and_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """同名が複数・有効な版が複数の文書は足さず、受領記録で理由を分ける(依存は満たさない)。"""
     corpus = [
         *_procedure("doc-a", "手順A.txt", "cs-a", "作業Aの操作"),
@@ -324,7 +341,7 @@ async def test_file_name_reference_distinguishes_ambiguous_and_versions() -> Non
         [anchor], corpus, knowledge_bases={_KB: {"doc-list", "doc-a", "doc-a2", "doc-b"}}
     )
 
-    result, receipt, _state = await _expand(oracle, [anchor])
+    result, receipt, _state, sections = await _expand(monkeypatch, oracle, [anchor])
 
     assert result == {}
     assert _statuses(receipt) == {
@@ -337,10 +354,10 @@ async def test_file_name_reference_distinguishes_ambiguous_and_versions() -> Non
         "document_version_unconfirmed",
     }
     assert set(receipt["stop_reasons"]) == {"document_ambiguous", "document_version_unconfirmed"}
-    assert oracle.search_calls == []
+    assert sections.outline_calls == []
 
 
-async def test_file_name_outside_scope_is_not_a_dependency() -> None:
+async def test_file_name_outside_scope_is_not_a_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
     """範囲に無いファイル名(未登録・KB や権限の外)は参照として数えず、ほかの参照先は足す。
 
     範囲の外と未登録は、存在を漏らさないよう同じ「範囲に無い」として受領記録に残す。
@@ -354,14 +371,14 @@ async def test_file_name_outside_scope_is_not_a_dependency() -> None:
         [anchor], corpus, knowledge_bases={_KB: {"doc-list", "doc-a"}, _OTHER_KB: {"doc-c"}}
     )
 
-    result, receipt, _state = await _expand(oracle, [anchor])
+    result, receipt, _state, sections = await _expand(monkeypatch, oracle, [anchor])
 
     assert [row.chunk_id for row in result[anchor.chunk_id]] == ["doc-a:cs-a:0", "doc-a:cs-a:1"]
     assert _statuses(receipt) == {"手順A.txt": "available", "手順C.txt": "document_not_found"}
     assert receipt["sources"][0]["dependency_status"] == "satisfied"
     assert receipt["sources"][0]["dependency_reasons"] == []
     assert receipt["stop_reasons"] == ["declared_source_range_complete"]
-    assert {call["filters"]["document_id"] for call in oracle.search_calls} == {"doc-a"}
+    assert _read_documents(sections) == {"doc-a"}
 
 
 async def test_unknown_file_name_does_not_block_section_reference() -> None:
@@ -392,14 +409,18 @@ async def test_unknown_file_name_does_not_block_section_reference() -> None:
     assert receipt["sources"][0]["dependency_status"] == "satisfied"
 
 
-async def test_file_name_references_respect_target_read_limit() -> None:
+async def test_file_name_references_respect_target_read_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """読む参照先の数の上限(読取の安全の上限)は残す。読めた参照先は足し、読まなかった理由を残す。"""
     anchor = _list_chunk()
     oracle = ReferenceOracle(
         [anchor], _corpus(), knowledge_bases={_KB: {"doc-list", "doc-a", "doc-b"}}
     )
 
-    result, receipt, _state = await _expand(oracle, [anchor], rag_reference_expansion_max_targets=1)
+    result, receipt, _state, sections = await _expand(
+        monkeypatch, oracle, [anchor], rag_reference_expansion_max_targets=1
+    )
 
     # 一部の参照先を読めなくても、読めた参照先(手順 A)は足す(すべてか無しかにしない)。
     assert [row.chunk_id for row in result[anchor.chunk_id]] == ["doc-a:cs-a:0", "doc-a:cs-a:1"]
@@ -416,7 +437,9 @@ def _list_of(names: list[str]) -> RetrievedChunk:
 
 
 @pytest.mark.parametrize("count", [3, 4, 5], ids=["three", "four", "five"])
-async def test_list_of_many_file_names_adds_every_document_in_relevance_order(count: int) -> None:
+async def test_list_of_many_file_names_adds_every_document_in_relevance_order(
+    count: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """範囲の文書に当たるファイル名を 3〜5 件並べた一覧の chunk から、全部の文書を足す(#5243)。
 
     個数の上限(旧 RAG_REFERENCE_EXPANSION_MAX_CHUNKS、既定 4)で依存群ごと捨てない。足す chunk は
@@ -444,7 +467,7 @@ async def test_list_of_many_file_names_adds_every_document_in_relevance_order(co
     )
     genai = FakeGenAi({"作業Cの操作": 0.9, "作業Aの操作": 0.5})
 
-    result, receipt, state = await _expand(oracle, [anchor], genai)
+    result, receipt, state, sections = await _expand(monkeypatch, oracle, [anchor], genai)
 
     added = [row.chunk_id for row in result[anchor.chunk_id]]
     expected = [

@@ -3874,9 +3874,12 @@ export const ja = {
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
     "親子分割の根拠は親の本文で補い、それ以外の根拠に前と後からそれぞれ最大でこの数のチャンクを文脈として加えます（1〜5）。チャット・品質評価・MCP では、章節の対応がある根拠は章節で補い、前後のチャンクは加えません。",
+  "settings.answering.referenceSectionReadMaxChunks": "番号で参照する節から読む数",
+  "settings.answering.referenceSectionReadMaxChunksHint":
+    "根拠が番号を示して参照する節（第 3 章・別紙 1 など）を、参照先 1 つにつき節の先頭から読み順でこの数のチャンクまで読み、根拠に加えます（1〜50、既定 8）。RAG チャットと品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "settings.answering.referenceOutlineSelection": "参照先の文書の目次から章節をモデルが選ぶ",
   "settings.answering.referenceOutlineSelectionHint":
-    "根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき、参照先の文書の目次を回答のモデルに渡して質問に要る章節を選ばせ、その章節を読みます（参照先が複数でも AI の呼び出しは 1 回増えます）。目次が無い文書や章節を選べなかったときは、参照先の文書の全体を読みます。オフのときは参照先の文書の中を質問で検索した上位を読みます。番号を示す参照（第 3 章・別紙 1 など）はどちらでも番号で読みます。RAG チャットと品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
+    "根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき、参照先の文書の目次を回答のモデルに渡して質問に要る章節を選ばせ、選んだ章節だけを読みます（参照先が複数でも AI の呼び出しは 1 回増えます）。目次が無い文書や章節を選べなかったときは、参照先を読みません。オフのときは、文書名・ファイル名だけの参照の参照先を読みません。番号を示す参照（第 3 章・別紙 1 など）はどちらでも番号で読みます。RAG チャットと品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "settings.answering.reference_outline_selection_catalog_max_chars": "参照先の目次の字数の上限",
   "settings.answering.reference_outline_selection_max_sections": "参照先ごとに読む章節の数",
   "settings.answering.reference_outline_selection_read_max_chunks": "参照先ごとに読むチャンクの上限",
