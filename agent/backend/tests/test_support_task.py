@@ -531,7 +531,7 @@ def test_default_nl2sql_budget_allows_thirty_queries_per_run() -> None:
 
 
 def test_default_rag_budget_allows_ten_rag_calls_per_run() -> None:
-    """既定では rag_search・rag_chat の合計を 10 回まで実行する（#5373。本文を読むツールは除く）。"""
+    """既定では rag_search・rag_chat の合計を 10 回まで実行する（本文を読むツールは除く）。"""
     budget = _default_budget()
     for index in range(10):
         tool = "rag__rag_search" if index % 2 else "rag__rag_chat"
