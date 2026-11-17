@@ -259,10 +259,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
     # 知らせる（Run は失敗にしない）。0 以下は上限なし。
     # Run ごとの RAG の呼び出し（rag_search・rag_chat の合計。1 回が重い検索と回答の
-    # 生成）。既定 30 は、多段の質問・条件の多い質問で段・条件ごとに検索し直しても足りる回数。
+    # 生成）。既定 10 は、多段の質問・条件の多い質問の実測（1 Run 最大 3〜4 回。#5373）の 2 倍以上。
     # 本文を読むツール（rag_read_source・rag_outline・rag_read_document・rag_read_section）は
     # 数えない（ツールの呼び出しの上限には数える）。
-    agent_max_rag_calls_per_run: int = 30
+    agent_max_rag_calls_per_run: int = 10
     # Run ごとの NL2SQL の問い合わせ（nl2sql_query。1 回が SQL の生成と実行のジョブ）。結果の取得
     # （nl2sql_get_job）・プロファイルの一覧・推薦は数えない（ツールの呼び出しの上限には数える）。
     agent_max_nl2sql_calls_per_run: int = 30
@@ -279,7 +279,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 品質評価の 1 ケースの上限時間（秒。Run の実行。判定は別。#1432）。0 以下（既定）は自動で、
     # 接続 `rag` の待ち時間 ×（Run の RAG の予算〔agent_max_rag_calls_per_run。0 以下なら
     # agent_max_tool_calls_per_run〕+ 1）にする。+1 はモデルの推論の分。
-    # 既定では 1500 ×（30 + 1）= 46500 秒。300 秒〜86400 秒に収める。
+    # 既定では 1500 ×（10 + 1）= 16500 秒。300 秒〜86400 秒に収める。
     agent_evaluation_case_timeout_seconds: float = 0.0
     # 品質評価で同時に実行するケースの数の上限（#2004）。判定（LLM-as-judge）は job の中で 1 つの
     # 上限つきの並行の実行器（pr_backend_core.bounded_calls）を共有し、429 を受けたら全体で待って

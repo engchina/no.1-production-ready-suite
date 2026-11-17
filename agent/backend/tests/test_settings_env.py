@@ -152,7 +152,7 @@ def test_run_call_limits_defaults_match_env_example() -> None:
     settings = Settings(_env_file=None)
     expected = {
         "AGENT_MAX_TOOL_CALLS_PER_RUN": 100,
-        "AGENT_MAX_RAG_CALLS_PER_RUN": 30,
+        "AGENT_MAX_RAG_CALLS_PER_RUN": 10,
         "AGENT_MAX_NL2SQL_CALLS_PER_RUN": 30,
         "AGENT_MAX_TOOL_CALLS_PER_TASK": 1000,
     }
