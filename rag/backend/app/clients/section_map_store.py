@@ -25,6 +25,7 @@ from rag_parser_core.extraction import is_derived_content, strip_formatting_mark
 from app.clients.oracle import (
     OracleClient,
     OracleConnectionProtocol,
+    _body_chunk_sql,
     _execute,
     _executemany,
     _fetch_one,
@@ -149,6 +150,22 @@ class ReadableChunkSet:
     chunk_set_id: str
     file_name: str | None
     superseded: bool
+
+
+@dataclass(frozen=True)
+class GrepChunkRow:
+    """字のとおりの検索（MCP の ``rag_grep``）が読む chunk の本文と所有の章節。
+
+    ``section_id`` / ``section_title`` は、章節の対応がまだ無い chunk では None。
+    """
+
+    document_id: str
+    file_name: str | None
+    chunk_id: str
+    chunk_index: int
+    text: str
+    section_id: str | None
+    section_title: str | None
 
 
 @dataclass(frozen=True)
@@ -562,6 +579,98 @@ class SectionMapStore:
             SectionChunkRow(
                 chunk_order=_int_value(row.get("chunk_order")),
                 chunk=_retrieved_chunk_from_row(row),
+            )
+            for row in rows
+        ]
+
+    async def grep_chunks(
+        self,
+        *,
+        document_ids: Sequence[str] | None,
+        contains: str | None,
+        after: tuple[str, int] | None,
+        limit: int,
+    ) -> list[GrepChunkRow]:
+        """字のとおりの検索（MCP の ``rag_grep``）が読む chunk を、文書・chunk の順に読む。
+
+        読むのは文書を読むツール（``readable_chunk_set``）と同じ chunk_set（有効な chunk_set のうち
+        レシピの番号が最も小さいもの）の本文の chunk（派生の chunk は除く）で、検索と同じ見え方の
+        条件で絞る（範囲の外の文書は返さない。有効期間では絞らない）。``document_ids`` が無ければ
+        見られる文書の全部（旧版は除く）、あれば指定の文書（旧版も読む）。``contains`` は一致する
+        chunk の本文にそのまま含まれる字の列（候補を DB で絞る。一致の判定は呼び出し側）。
+        ``after`` は前の回の最後の (document_id, chunk_index) で、その次から ``limit`` 件を読む。
+        """
+        filters = {INCLUDE_SUPERSEDED_FILTER_KEY: "true"} if document_ids else {}
+        where_sql, binds = _oracle_retrieval_where(filters, effective_period=False)
+        query_binds: dict[str, object] = {**binds, "grep_limit": max(1, int(limit))}
+        document_sql = ""
+        if document_ids:
+            in_sql, in_binds = _oracle_in_predicate("c.document_id", "grep_document", document_ids)
+            document_sql = f"AND {in_sql}"
+            query_binds.update(in_binds)
+        contains_sql = ""
+        if contains:
+            contains_sql = "AND INSTR(c.chunk_text, :grep_contains) > 0"
+            query_binds["grep_contains"] = contains
+        after_sql = ""
+        if after is not None:
+            after_sql = """AND (
+                c.document_id > :grep_after_document
+                OR (c.document_id = :grep_after_document AND c.chunk_index > :grep_after_index)
+            )"""
+            query_binds["grep_after_document"] = after[0]
+            query_binds["grep_after_index"] = int(after[1])
+        rows = await self._oracle._fetch_all(
+            _render_sql(
+                f"""
+            SELECT c.document_id, c.chunk_id, c.chunk_index, c.chunk_text, d.file_name,
+                   s.section_id, s.title
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN {SECTION_CHUNKS_TABLE} sc
+              ON sc.chunk_id = c.chunk_id
+             AND sc.chunk_set_id = c.chunk_set_id
+             AND sc.is_owner = 1
+            LEFT JOIN {CHUNK_SET_SECTIONS_TABLE} s
+              ON s.chunk_set_id = sc.chunk_set_id AND s.section_id = sc.section_id
+            WHERE {{where_sql}}
+              AND {{body_sql}}
+              AND c.chunk_set_id = (
+                  SELECT MIN(primary_cs.chunk_set_id) KEEP (
+                      DENSE_RANK FIRST ORDER BY primary_r.slot_no, primary_cs.chunk_set_id
+                  )
+                  FROM rag_chunk_sets primary_cs
+                  JOIN rag_document_recipes primary_r
+                    ON primary_r.recipe_id = primary_cs.recipe_id
+                  WHERE primary_cs.document_id = c.document_id
+                    AND primary_cs.is_active = 1
+                    AND primary_cs.status = 'INDEXED'
+              )
+              {{document_sql}}
+              {{contains_sql}}
+              {{after_sql}}
+            ORDER BY c.document_id, c.chunk_index
+            FETCH FIRST :grep_limit ROWS ONLY
+            """,
+                where_sql=where_sql,
+                body_sql=_body_chunk_sql("c"),
+                document_sql=document_sql,
+                contains_sql=contains_sql,
+                after_sql=after_sql,
+            ),
+            query_binds,
+        )
+        return [
+            GrepChunkRow(
+                document_id=str(row["document_id"]),
+                file_name=_optional_str(row.get("file_name")),
+                chunk_id=str(row["chunk_id"]),
+                chunk_index=_int_value(row.get("chunk_index")),
+                text=str(row.get("chunk_text") or ""),
+                section_id=_optional_str(row.get("section_id")),
+                section_title=(
+                    strip_formatting_marks(str(row["title"])) if row.get("title") else None
+                ),
             )
             for row in rows
         ]

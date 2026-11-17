@@ -2,6 +2,159 @@
   "server": "production-ready-rag",
   "tools": [
     {
+      "name": "rag_grep",
+      "title": "文書の中の語の検索（字のとおり）",
+      "description": "文書の本文から、語を字のとおりに含む行を探し、文書・章節（section_id）と前後 2 行を返します。意味の検索では当たりにくい語がどこにあるかを確かめるときに、document_ids で文書を絞ってから使います。見つけた行の章節は、section_id を rag_read_section に渡して読みます。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "文書の本文から語を字のとおりに探す条件。",
+        "properties": {
+          "text": {
+            "description": "探す語。この語を字のとおりに含む行を返す（英字の大文字・小文字と全角・半角の違いは同じとみなす）。正規表現・ワイルドカードとしては読まない。1 行の語にする。",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "document_ids": {
+            "description": "探す文書の id。省略すると、見られる文書の全部（新しい版に置き換えた旧版は除く）。",
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Document Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "GrepInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "GrepMatch": {
+            "description": "字のとおりに一致した 1 行。",
+            "properties": {
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "section_id": {
+                "description": "行を含む章節の id（rag_read_section の section_id に渡す）。",
+                "title": "Section Id",
+                "type": "string"
+              },
+              "section_title": {
+                "description": "章節の見出し（文書全体の章節は文書名）。",
+                "title": "Section Title",
+                "type": "string"
+              },
+              "chunk_id": {
+                "description": "行を含む chunk の id。",
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "line": {
+                "description": "一致した行。",
+                "title": "Line",
+                "type": "string"
+              },
+              "before": {
+                "description": "一致した行の前の行（最大 2 行）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Before",
+                "type": "array"
+              },
+              "after": {
+                "description": "一致した行の後の行（最大 2 行）。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "After",
+                "type": "array"
+              },
+              "line_truncated": {
+                "default": false,
+                "description": "長い行（一致した行は一致の前後、前後の行は一致に近い側）だけを返したか。行の全体は rag_read_section で読む。",
+                "title": "Line Truncated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "document_id",
+              "section_id",
+              "section_title",
+              "chunk_id",
+              "line"
+            ],
+            "title": "GrepMatch",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "schema_version": {
+            "default": 46,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "matches": {
+            "description": "一致した行（文書・本文の順。最大 50 件）。",
+            "items": {
+              "$ref": "#/$defs/GrepMatch"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "truncated": {
+            "default": false,
+            "description": "上限で打ち切ったか（true ならまだ一致があり得る）。",
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "打ち切ったときの次にすること。",
+            "title": "Next Step"
+          }
+        },
+        "required": [
+          "matches"
+        ],
+        "title": "GrepOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "rag_list_search_answer_profiles",
       "title": "検索・回答プロファイルの一覧",
       "description": "利用できる検索・回答プロファイル（ACTIVE）の一覧を返します。",

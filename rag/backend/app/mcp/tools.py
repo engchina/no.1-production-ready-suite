@@ -21,6 +21,9 @@
   「章節ナビゲーション」が正本（#1438。`app.rag.section_map_service`）
 - `rag_read_section`（`menu.search`）: 章節（section_id か、根拠の chunk の所属の章節。`up` で
   親の章節）の本文を章節の終わりまで順に読む（#1438）
+- `rag_grep`（`menu.search`）: 文書の本文から語を字のとおりに探し、一致した行と前後の行を、文書と
+  所有の章節（`rag_read_section` の section_id）つきで返す（ripgrep の代わり。外部のソフトは使わず、
+  文書を読むツールと同じ見え方の条件の SQL で候補を読む。#5293）
 
 RAG のチャットは画面の機能で、MCP では提供しない（#787）。MCP で提供するのは検索と根拠の
 読み取りだけにする。
@@ -33,11 +36,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import hashlib
 import json
 import logging
 import math
 import sys
+import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -79,6 +84,7 @@ from rag_engine.knowledge.runtime_knowledge import (
     MAX_MATCHED_TERMS,
     RuntimeTerm,
 )
+from rag_engine.retrieval.character_forms import fold_width
 from rag_parser_core.extraction import is_derived_content
 from rag_parser_core.parsed_table import ROW_BASIS_PARSED_TABLE
 from rag_parser_core.sheet_records import (
@@ -103,7 +109,7 @@ from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
-from app.clients.section_map_store import SectionChunkRow, SectionMapStore
+from app.clients.section_map_store import GrepChunkRow, SectionChunkRow, SectionMapStore
 from app.config import get_settings
 from app.mcp.profile_scope import (
     ProfileScope,
@@ -314,6 +320,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 46: rag_retrieve_evidence にも承認済み FAQ を入れた（#5136）。入力に approved_faq_id・
 #     skip_approved_faq、出力に status・approved_faq_candidates・approved_faq（選んだ Q&A の
 #     登録済みの回答を含む）を足した。
+# （版を変えない追加）文書の本文から語を字のとおりに探すツール（rag_grep）を足した。既存のツールの
+#     出力の形は変えない（#5293）。
 MCP_OUTPUT_SCHEMA_VERSION = 46
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
@@ -358,6 +366,18 @@ OUTLINE_LEAD_CHARS_MAX = 200
 # rag_read_section が返す子の章節の上限と、up で上がれる段の上限（章節の階層は 1〜6）。
 READ_SECTION_MAX_CHILDREN = 50
 READ_SECTION_MAX_UP = 6
+# 字のとおりの検索（rag_grep。#5293）の上限: 返す一致の数・一致の前後の行の数・指定できる文書の数・
+# 語の文字数・返す行の文字数（一致した行と前後の行）。
+GREP_MATCHES_MAX = 50
+GREP_CONTEXT_LINES = 2
+GREP_DOCUMENTS_MAX = 50
+GREP_TEXT_MAX_CHARS = 200
+GREP_LINE_MAX_CHARS = 300
+GREP_CONTEXT_LINE_MAX_CHARS = 160
+# 1 回の SQL で読む chunk の数と、1 回の呼び出しで読む chunk の上限（候補を DB で絞れない語で、
+# 見られる文書の全部を読み続けないため。超えたら打ち切りとして返す）。
+GREP_BATCH = 200
+GREP_SCAN_CHUNKS_MAX = 10000
 CURSOR_INVALID_CODE = "cursor_invalid"
 # 続きの位置（next_cursor）。モデルが書き写して次の呼び出しに渡す文字列なので、短い平文にする
 # （#2499）: rag_read_section は「<chunk_set の先頭>:<章節の id>:<章節の中の順>:<文字の位置>」、
@@ -942,6 +962,40 @@ class ReadSectionInput(BaseModel):
         return self
 
 
+class GrepInput(BaseModel):
+    """文書の本文から語を字のとおりに探す条件。"""
+
+    # 字のとおりの検索（#5293）。
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=GREP_TEXT_MAX_CHARS,
+        description=(
+            "探す語。この語を字のとおりに含む行を返す（英字の大文字・小文字と全角・半角の違いは"
+            "同じとみなす）。正規表現・ワイルドカードとしては読まない。1 行の語にする。"
+        ),
+    )
+    document_ids: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
+        default_factory=list,
+        max_length=GREP_DOCUMENTS_MAX,
+        description=(
+            "探す文書の id。省略すると、見られる文書の全部（新しい版に置き換えた旧版は除く）。"
+        ),
+    )
+
+    @field_validator("text")
+    @classmethod
+    def _one_line(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text が空白だけです。探す語を渡してください。")
+        if value.splitlines() != [value]:
+            raise ValueError("text に改行を含められません。1 行の語にしてください。")
+        return value
+
+
 # ---- 出力 ----
 
 
@@ -1121,6 +1175,42 @@ class ReadSectionOutput(VersionedOutput):
         default=None, description="章節の続きを読む cursor（章節の終わりまで読んだら null）。"
     )
     superseded: bool = Field(default=False, description="新しい版に置き換えた文書（旧版）か。")
+
+
+class GrepMatch(BaseModel):
+    """字のとおりに一致した 1 行。"""
+
+    document_id: str
+    file_name: str | None = None
+    section_id: str = Field(
+        description="行を含む章節の id（rag_read_section の section_id に渡す）。"
+    )
+    section_title: str = Field(description="章節の見出し（文書全体の章節は文書名）。")
+    chunk_id: str = Field(description="行を含む chunk の id。")
+    line: str = Field(description="一致した行。")
+    before: list[str] = Field(
+        default_factory=list, description=f"一致した行の前の行（最大 {GREP_CONTEXT_LINES} 行）。"
+    )
+    after: list[str] = Field(
+        default_factory=list, description=f"一致した行の後の行（最大 {GREP_CONTEXT_LINES} 行）。"
+    )
+    line_truncated: bool = Field(
+        default=False,
+        description=(
+            "長い行（一致した行は一致の前後、前後の行は一致に近い側）だけを返したか。"
+            "行の全体は rag_read_section で読む。"
+        ),
+    )
+
+
+class GrepOutput(VersionedOutput):
+    matches: list[GrepMatch] = Field(
+        description=f"一致した行（文書・本文の順。最大 {GREP_MATCHES_MAX} 件）。"
+    )
+    truncated: bool = Field(
+        default=False, description="上限で打ち切ったか（true ならまだ一致があり得る）。"
+    )
+    next_step: str | None = Field(default=None, description="打ち切ったときの次にすること。")
 
 
 class ListSearchAnswerProfilesOutput(VersionedOutput):
@@ -3280,6 +3370,166 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
     )
 
 
+GREP_TRUNCATED_NEXT_STEP = (
+    "上限で打ち切りました（まだ一致があり得ます）。document_ids で文書を絞るか、より長い語で"
+    "呼び直してください。"
+)
+
+
+def _grep_fold(text: str) -> str:
+    """一致を比べる形（全角・半角の違いと英字の大文字・小文字をそろえる）。"""
+    return fold_width(text).casefold()
+
+
+@functools.cache
+def _grep_folded_targets() -> frozenset[str]:
+    """別の字をそろえた形に現れる字（本文には別の字で書かれ得る字）。初めて使うときに作る。"""
+    found: set[str] = set()
+    for code in range(sys.maxunicode + 1):
+        if 0xD800 <= code <= 0xDFFF:
+            continue
+        char = chr(code)
+        folded = _grep_fold(char)
+        if folded != char:
+            found.update(folded)
+    return frozenset(found)
+
+
+def _grep_literal_run(needle: str) -> str | None:
+    """そろえた形の語のうち、一致する本文にもそのまま現れる最も長い字の列（無ければ None）。
+
+    そろえても変わらず、別の字・結合文字の組からもできない字だけをつなぐ。DB で候補の chunk を
+    絞るのに使い（``INSTR``）、この列を含まない chunk には一致が無い。
+    """
+    targets = _grep_folded_targets()
+
+    def stable(char: str) -> bool:
+        return (
+            not char.isspace()
+            and char not in targets
+            and _grep_fold(char) == char
+            and not any(part in targets for part in unicodedata.normalize("NFD", char))
+        )
+
+    best = ""
+    current = ""
+    for char in needle:
+        current = current + char if stable(char) else ""
+        if len(current) > len(best):
+            best = current
+    return best or None
+
+
+def _grep_match_end(line: str, needle: str) -> int:
+    """そろえた形で語が終わる、元の行の位置（長い行を一致の前後に切るための目安）。"""
+    low, high = 1, len(line)
+    while low < high:
+        middle = (low + high) // 2
+        if needle in _grep_fold(line[:middle]):
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def _grep_line_window(line: str, needle: str) -> tuple[str, bool]:
+    """一致した行。長い行は一致を中ほどに置いて上限の文字数に切る。"""
+    if len(line) <= GREP_LINE_MAX_CHARS:
+        return line, False
+    end = _grep_match_end(line, needle)
+    start = max(0, end - len(needle))
+    begin = max(
+        0, min(start - (GREP_LINE_MAX_CHARS - (end - start)) // 2, len(line) - GREP_LINE_MAX_CHARS)
+    )
+    return line[begin : begin + GREP_LINE_MAX_CHARS], True
+
+
+def _grep_matches(row: GrepChunkRow, needle: str) -> list[GrepMatch]:
+    """chunk の本文の行のうち、そろえた形で語を含む行（前後の行つき）。"""
+    lines = row.text.splitlines()
+    found: list[GrepMatch] = []
+    for index, line in enumerate(lines):
+        if needle not in _grep_fold(line):
+            continue
+        text, truncated = _grep_line_window(line, needle)
+        before = lines[max(0, index - GREP_CONTEXT_LINES) : index]
+        after = lines[index + 1 : index + 1 + GREP_CONTEXT_LINES]
+        truncated = truncated or any(
+            len(item) > GREP_CONTEXT_LINE_MAX_CHARS for item in (*before, *after)
+        )
+        found.append(
+            GrepMatch(
+                document_id=row.document_id,
+                file_name=row.file_name,
+                # 章節の対応がまだ無い文書は文書全体の章節（rag_read_section が対応を作って読む）。
+                section_id=row.section_id or ROOT_SECTION_ID,
+                section_title=row.section_title or row.file_name or row.document_id,
+                chunk_id=row.chunk_id,
+                line=text,
+                before=[item[-GREP_CONTEXT_LINE_MAX_CHARS:] for item in before],
+                after=[item[:GREP_CONTEXT_LINE_MAX_CHARS] for item in after],
+                line_truncated=truncated,
+            )
+        )
+    return found
+
+
+async def grep_documents(arguments: GrepInput) -> GrepOutput:
+    """文書の本文から語を字のとおりに探す（#5293）。
+
+    本文は文書を読むツールと同じ chunk_set の本文の chunk を、検索と同じ見え方の条件で読む
+    （``SectionMapStore.grep_chunks``。範囲の外の文書は SQL が返さない）。一致は行ごとに、
+    全角・半角と英字の大文字・小文字をそろえた形で比べる。``GREP_MATCHES_MAX`` 件か、読む chunk の
+    上限で打ち切る。
+    """
+    oracle = OracleClient()
+    document_ids = list(dict.fromkeys(arguments.document_ids))
+    if document_ids:
+        readable = await oracle.accessible_document_ids(document_ids)
+        missing = [item for item in document_ids if item not in readable]
+        if missing:
+            raise McpToolError(
+                SOURCE_NOT_FOUND_CODE,
+                f"指定した文書のうち {len(missing)} 件が見つかりません（削除されたか、利用できる"
+                "範囲の外です）。document_ids を確かめてください。",
+            )
+    needle = _grep_fold(arguments.text)
+    contains = _grep_literal_run(needle)
+    store = SectionMapStore(oracle)
+    matches: list[GrepMatch] = []
+    seen: set[tuple[object, ...]] = set()
+    after: tuple[str, int] | None = None
+    scanned = 0
+    while True:
+        rows = await store.grep_chunks(
+            document_ids=document_ids or None, contains=contains, after=after, limit=GREP_BATCH
+        )
+        for row in rows:
+            for match in _grep_matches(row, needle):
+                # 重なりのある chunk の同じ行（前後の行も同じ）は 1 つにする。
+                key = (
+                    match.document_id,
+                    match.section_id,
+                    tuple(match.before),
+                    match.line,
+                    tuple(match.after),
+                )
+                if key in seen:
+                    continue
+                if len(matches) >= GREP_MATCHES_MAX:
+                    return GrepOutput(
+                        matches=matches, truncated=True, next_step=GREP_TRUNCATED_NEXT_STEP
+                    )
+                seen.add(key)
+                matches.append(match)
+        scanned += len(rows)
+        if len(rows) < GREP_BATCH:
+            return GrepOutput(matches=matches)
+        if scanned >= GREP_SCAN_CHUNKS_MAX:
+            return GrepOutput(matches=matches, truncated=True, next_step=GREP_TRUNCATED_NEXT_STEP)
+        after = (rows[-1].document_id, rows[-1].chunk_index)
+
+
 async def _read_start(
     oracle: OracleClient, arguments: ReadDocumentInput
 ) -> tuple[str, int, int, bool]:
@@ -4449,6 +4699,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             update={"evidence": evidence, "evidence_text_omitted": text_omitted}
         )
 
+    async def grep(arguments: GrepInput) -> GrepOutput:
+        # 見られる文書の全部の本文を読むことがあるので、検索と同じ上限で守る。
+        enforce_rate_limit("search", http_request)
+        return await grep_documents(arguments)
+
     async def read(arguments: ReadSourceInput) -> ReadSourceOutput | McpToolResult:
         if arguments.include_image or arguments.include_preview:
             # 図の切り出し・プレビューのページの一覧は元のファイルを読むので、
@@ -4604,6 +4859,20 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=ReadSectionInput,
                 handler=scoped(read_section_tool),
                 output_model=ReadSectionOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_grep",
+                title="文書の中の語の検索（字のとおり）",
+                description=(
+                    "文書の本文から、語を字のとおりに含む行を探し、文書・章節（section_id）と"
+                    f"前後 {GREP_CONTEXT_LINES} 行を返します。意味の検索では当たりにくい語が"
+                    "どこにあるかを確かめるときに、document_ids で文書を絞ってから使います。"
+                    "見つけた行の章節は、section_id を rag_read_section に渡して読みます。"
+                ),
+                input_model=GrepInput,
+                handler=scoped(grep),
+                output_model=GrepOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
         ],

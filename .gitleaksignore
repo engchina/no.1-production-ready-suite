@@ -35,3 +35,5 @@ cbf9af2d191ec936e0175520d335fc6b390dc4dc:rag/frontend/e2e/api-keys.spec.ts:gener
 cbf9af2d191ec936e0175520d335fc6b390dc4dc:rag/frontend/e2e/api-keys.spec.ts:generic-api-key:34
 cbf9af2d191ec936e0175520d335fc6b390dc4dc:nl2sql/frontend/tests/e2e/api-keys.spec.ts:generic-api-key:8
 cbf9af2d191ec936e0175520d335fc6b390dc4dc:nl2sql/frontend/tests/e2e/api-keys.spec.ts:generic-api-key:22
+# #5293 の rag_grep のテストの、サービストークンの合成の鍵（"rag-mcp-grep-test-secret-…"。後の commit で既存のテストの定数に置き換えた）。
+8815c7af0c84ceadb5a8c90e601436b7b522dab8:rag/backend/tests/test_mcp_grep.py:generic-api-key:38
