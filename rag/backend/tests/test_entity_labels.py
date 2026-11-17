@@ -217,14 +217,37 @@ async def test_labels_need_the_other_document_inside_the_search_scope() -> None:
 async def test_entity_store_sql_limits_labels_to_aliases_shared_across_documents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """3 つの SQL は、ラベルの別名を別の文書のラベル以外の別名がある範囲だけで使う。"""
+    """ラベルの別名は、別の文書のラベル以外の別名がある範囲だけで使う。
+
+    起点・名寄せは SQL の条件で、1 段（#5333 で SQL を分けた）は同じ別名をラベル以外で持つ実体の
+    chunk を読み、その chunk も検索と同じ見え方の条件で確かめる（判定は test_entity_hop_split）。
+    """
     client = OracleClient(settings=Settings())
     calls: list[str] = []
 
     async def fake_fetch_all(
         statement: str, binds: dict[str, object] | None = None
     ) -> list[dict[str, object]]:
-        calls.append(" ".join(statement.split()))
+        sql = " ".join(statement.split())
+        calls.append(sql)
+        if sql.startswith("SELECT d.document_id FROM rag_documents d"):
+            return [{"document_id": "doc-2"}]
+        if sql.startswith("SELECT src.chunk_id AS via_chunk_id"):
+            return [
+                {
+                    "via_chunk_id": "c1",
+                    "via_scope_label": None,
+                    "alias_key": "原因a",
+                    "alias_kind": "label",
+                    "entity_id": "e2",
+                    "document_id": "doc-2",
+                    "display_name": "原因 A",
+                    "scope_label": None,
+                    "chunk_id": "c2",
+                }
+            ]
+        if sql.startswith("SELECT DISTINCT label_a.alias_key"):
+            return [{"alias_key": "原因a", "document_id": "doc-3", "chunk_id": "c3"}]
         return []
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
@@ -234,15 +257,20 @@ async def test_entity_store_sql_limits_labels_to_aliases_shared_across_documents
     await store.entity_definition_chunks(dict(KB), alias_keys=["原因a"], limit=5)
     await store.entity_attribute_definition_chunks(dict(KB), source_chunk_ids=["c1"], limit=5)
 
-    seed_sql, definition_sql, hop_sql = calls
+    seed_sql, definition_sql, _documents_sql, _hop_sql, label_sql, visible_sql = calls
     assert "alias.alias_kind <> 'label' OR EXISTS" in seed_sql
     assert "label_a.alias_key = alias.alias_key" in seed_sql
-    for sql in (definition_sql, hop_sql):
-        assert "a.alias_kind <> 'label' OR EXISTS" in sql
-        assert "label_a.alias_key = a.alias_key" in sql
-    for sql in calls:
+    assert "a.alias_kind <> 'label' OR EXISTS" in definition_sql
+    assert "label_a.alias_key = a.alias_key" in definition_sql
+    for sql in (seed_sql, definition_sql):
         assert "label_a.alias_kind <> 'label'" in sql
         assert "label_e.document_id <> e.document_id" in sql
         # 別の文書の chunk も検索と同じ見え方の条件（有効な chunk_set・KB の範囲）で選ぶ。
         assert "JOIN rag_chunks c ON c.chunk_id = label_ec.chunk_id" in sql
         assert sql.count("rag_chunk_sets active_cs") >= 2
+    # 1 段: ラベル以外の種類で同じ別名を持つ実体の chunk を読み、見え方の条件で確かめる。
+    assert "label_a.alias_key IN (:entity_label_0)" in label_sql
+    assert "label_a.alias_kind <> 'label'" in label_sql
+    assert "JOIN rag_chunks c ON c.chunk_id = label_ec.chunk_id" in label_sql
+    assert "c.chunk_id IN (:entity_chunk_0, :entity_chunk_1)" in visible_sql
+    assert "rag_chunk_sets active_cs" in visible_sql

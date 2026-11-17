@@ -41,6 +41,7 @@ from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oci_snapshot import oci_call_snapshot
 from app.clients.oracle import OracleClient
+from app.clients.oracle_call_timeout import db_call_timeout
 from app.clients.oracle_read_stats import track_db_calls
 from app.config import Settings, get_settings
 from app.rag.answer_engine import (
@@ -501,6 +502,8 @@ class RagPipeline:
             ),
             bind_trace_observer(_observe_engine_call),
             profile_language_scope(self._settings),
+            # 回答の経路の DB の呼出し 1 回の上限(#5381)。超えた SQL は DB の側でも止める。
+            db_call_timeout(self._settings.rag_db_call_timeout_seconds),
         ):
             response = await self._run(
                 request,

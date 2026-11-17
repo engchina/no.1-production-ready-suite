@@ -55,6 +55,7 @@ from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
 from app.clients.native_hybrid_schema import hybrid_payload_sql
+from app.clients.oracle_call_timeout import applied_call_timeout
 from app.clients.oracle_read_stats import (
     current_db_call_stats,
     db_call_label,
@@ -12366,9 +12367,10 @@ class OracleClient:
             committing = False
             retry_delay: float | None = None
             try:
-                result = operation(connection)
-                committing = True
-                connection.commit()
+                with applied_call_timeout(connection):
+                    result = operation(connection)
+                    committing = True
+                    connection.commit()
                 return result
             except Exception as exc:
                 # rollback / close の例外で、元の失敗段階と下位コードを失わないよう先に記録する。
@@ -12413,7 +12415,9 @@ class OracleClient:
     def _run_with_connection(self, operation: Callable[[OracleConnectionProtocol], Any]) -> Any:
         connection = self._acquire_connection()
         try:
-            result = operation(connection)
+            # 回答の経路(``db_call_timeout`` の範囲)では、1 回の呼出しの上限を当てる(#5381)。
+            with applied_call_timeout(connection):
+                result = operation(connection)
         except Exception:
             with suppress(Exception):
                 connection.close()

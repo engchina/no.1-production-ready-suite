@@ -649,8 +649,9 @@ async def test_replace_entity_index_deletes_the_chunk_set_rows_first() -> None:
 
 
 async def test_entity_store_queries_use_the_search_scope(monkeypatch: pytest.MonkeyPatch) -> None:
-    """3 つの SQL は検索と同じ見え方の条件（KB の範囲・権限・有効な chunk_set）で chunk を join す
-    る。
+    """実体の SQL は検索と同じ見え方の条件（KB の範囲・権限・有効な chunk_set）で chunk を選ぶ。
+
+    1 段は、見える文書・実体の表の経路・見える chunk・本文の SQL に分ける（#5333）。
     """
     from app.clients.entity_store import EntityStore
     from app.clients.oracle import OracleClient
@@ -661,7 +662,24 @@ async def test_entity_store_queries_use_the_search_scope(monkeypatch: pytest.Mon
     async def fake_fetch_all(
         statement: str, binds: dict[str, object] | None = None
     ) -> list[dict[str, object]]:
-        calls.append((" ".join(statement.split()), dict(binds or {})))
+        sql = " ".join(statement.split())
+        calls.append((sql, dict(binds or {})))
+        if sql.startswith("SELECT d.document_id FROM rag_documents d"):
+            return [{"document_id": "doc-2"}]
+        if sql.startswith("SELECT src.chunk_id AS via_chunk_id"):
+            return [
+                {
+                    "via_chunk_id": "c1",
+                    "via_scope_label": None,
+                    "alias_key": "経",
+                    "alias_kind": "value",
+                    "entity_id": "e2",
+                    "document_id": "doc-2",
+                    "display_name": "経理部",
+                    "scope_label": None,
+                    "chunk_id": "c2",
+                }
+            ]
         return []
 
     monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
@@ -692,12 +710,26 @@ async def test_entity_store_queries_use_the_search_scope(monkeypatch: pytest.Mon
     assert "JOIN rag_chunks c ON c.chunk_id = ec.chunk_id" in definition_sql
     assert "superseded_by_document_id IS NULL" in definition_sql
     assert definition_binds["entity_alias_0"] == "経"
-    hop_sql, hop_binds = calls[2]
+    # 1 段: 見える文書（文書の側の条件だけ）→ 実体の表の経路 → 見える chunk（両側の条件）。
+    documents_sql, documents_binds = calls[2]
+    assert "kb-1" in documents_binds.values()
+    assert "superseded_by_document_id IS NULL" in documents_sql
+    assert "rag_entity" not in documents_sql
+    hop_sql, hop_binds = calls[3]
     assert "src.chunk_role = 'attribute'" in hop_sql
     assert "a.alias_key = src_a.alias_key AND a.entity_id <> src.entity_id" in hop_sql
+    assert "c.document_id IN (:entity_document_0)" in hop_sql
     assert hop_binds["entity_source_0"] == "c1"
-    assert "kb-1" in hop_binds.values()
-    assert len(calls) == 3
+    assert hop_binds["entity_document_0"] == "doc-2"
+    assert "rag_documents" not in hop_sql
+    visible_sql, visible_binds = calls[4]
+    assert "c.chunk_id IN (:entity_chunk_0)" in visible_sql
+    assert visible_binds["entity_chunk_0"] == "c2"
+    assert "kb-1" in visible_binds.values()
+    assert "rag_chunk_sets active_cs" in visible_sql
+    assert "rag_entity" not in visible_sql
+    # 見える chunk が無いので本文は読まない。
+    assert len(calls) == 5
 
 
 # ---- 取込 ----

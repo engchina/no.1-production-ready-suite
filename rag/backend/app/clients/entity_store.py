@@ -14,8 +14,9 @@
 と文書の条件（``_oracle_retrieval_where``）で決め、削除を FK で連動させる別の表にした。
 
 検索の SQL は ``app.rag.entity_expansion.EntityExpansionStore`` の 3 つ（起点の別名・名寄せ・1 段）
-。どれも chunk と文書を検索と同じ見え方の条件で join し、範囲の外の chunk を返さない（途中の chunk
-も同じ）。
+。どれも chunk と文書を検索と同じ見え方の条件で選び、範囲の外の chunk を返さない（途中の chunk
+も同じ）。1 段は、実体の表と見え方の条件を 1 つの SQL で join せず、小さな SQL に分けて Python で
+結合する（#5333。``EntityStore.entity_attribute_definition_chunks``）。
 
 本文の見出し・列挙のラベル（別名の種類 ``label``。「原因 A」「手順 1」）は、別の文書が同じ別名をラ
 ベル以外の種類（表の値・定義の形・ID や名前）で持ち、その文書の chunk が同じ見え方の条件の中にある
@@ -26,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -41,6 +43,7 @@ from app.clients.oracle import (
     _metadata_from_json,
     _oracle_in_predicate,
     _oracle_retrieval_where,
+    _oracle_retrieval_where_split,
     _render_sql,
     _retrieved_chunk_from_row,
 )
@@ -51,6 +54,7 @@ from app.rag.entity_expansion import (
     EntitySeedRow,
 )
 from app.rag.entity_index import ALIAS_KIND_LABEL, EntityIndex
+from app.schemas.search import RetrievedChunk
 
 ENTITIES_TABLE = "rag_entities"
 ENTITY_ALIASES_TABLE = "rag_entity_aliases"
@@ -85,6 +89,34 @@ class EntityRebuildTarget:
     file_name: str
     content_type: str | None
     processing_config: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _HopLink:
+    """1 段の経路の 1 行（元の chunk の属性の実体 → 同じ別名の別の実体の「定義する行」）。"""
+
+    via_chunk_id: str
+    via_scope_label: str | None
+    alias_key: str
+    alias_kind: str
+    entity_id: str
+    document_id: str
+    display_name: str
+    scope_label: str | None
+    chunk_id: str
+
+
+def _batches(values: Sequence[str]) -> list[list[str]]:
+    """IN の値を ``_MAX_IN_VALUES`` 件ずつに分ける（同じ値は 1 回だけ）。"""
+    unique = list(dict.fromkeys(values))
+    return [
+        unique[start : start + _MAX_IN_VALUES] for start in range(0, len(unique), _MAX_IN_VALUES)
+    ]
+
+
+def _binds_in(sql: str, binds: Mapping[str, object]) -> dict[str, object]:
+    """``sql`` が使う bind だけ（使わない bind を渡すと python-oracledb が失敗する）。"""
+    return {key: value for key, value in binds.items() if re.search(rf":{key}\b", sql)}
 
 
 def _usable_alias_sql(alias: str, entity: str, where_sql: str) -> str:
@@ -515,47 +547,234 @@ class EntityStore:
         self, filters: dict[str, str], *, source_chunk_ids: Sequence[str], limit: int
     ) -> list[EntityDefinitionRow]:
         """chunk の属性の実体（台帳の行の「担当部署: 経」）の別名を「定義する行」に持つ chunk（1
-        段）。"""
+        段）。
+
+        実体の表と見え方の条件（``_oracle_retrieval_where``）を 1 つの SQL で join せず、小さな集合
+        と bind の一覧で引く SQL に分ける（#5333）。
+
+        1. 見え方の条件の文書の側だけで、見える文書の ID を読む。
+        2. 実体の表: 元の chunk の属性の実体 → 同じ別名の別の実体 → その「定義する行」の chunk
+           （``src.chunk_id`` の IN から引き、chunk の文書を 1 の一覧で絞る）。
+        3. ラベルの別名（``label``）があれば、同じ別名をラベル以外の種類で持つ実体の文書と chunk
+           （``alias_key`` の IN から引く。``_usable_alias_sql`` と同じ判定に使う）。
+        4. 2・3 の chunk のうち、見え方の条件（文書と chunk の両側）の中にあるもの（``chunk_id`` の
+           IN）。
+        5. 選んだ上位 ``limit`` 件の chunk の本文（``chunk_id`` の IN）。
+
+        結合・並べ替え（元の chunk・文書・chunk の順・chunk・別名）・上限は Python で行い、結果は
+        1 つの SQL で join した形と同じにする。1 つの SQL では、optimizer が見え方の条件の文書の数を
+        1 件と見積もり（ナレッジベースの所属・重複の正本・有効期間の副問い合わせ）、統計の更新の後の
+        ハードパースで ``rag_entity_chunks`` の読み取りを nested loop の内側で繰り返す計画に
+        変わって、1 回が 20 分を超えた。
+        """
         sources = list(dict.fromkeys(source_chunk_ids))[:_MAX_IN_VALUES]
         if not sources:
             return []
-        where_sql, binds = _oracle_retrieval_where(filters)
-        source_in_sql, source_binds = _oracle_in_predicate("src.chunk_id", "entity_source", sources)
-        binds.update(source_binds)
-        binds["entity_limit"] = max(1, int(limit))
-        rows = await self._oracle._fetch_all(
-            _render_sql(
-                f"""
-            SELECT * FROM (
-                SELECT {_CHUNK_COLUMNS},
-                    a.alias_key AS entity_match_key,
-                    e.entity_id AS entity_id,
-                    e.display_name AS entity_display_name,
-                    e.scope_label AS entity_scope_label,
-                    src.chunk_id AS entity_via_chunk_id,
-                    src_e.scope_label AS entity_via_scope_label
-                FROM {ENTITY_CHUNKS_TABLE} src
-                JOIN {ENTITIES_TABLE} src_e ON src_e.entity_id = src.entity_id
-                JOIN {ENTITY_ALIASES_TABLE} src_a ON src_a.entity_id = src.entity_id
-                JOIN {ENTITY_ALIASES_TABLE} a
-                  ON a.alias_key = src_a.alias_key AND a.entity_id <> src.entity_id
-                JOIN {ENTITIES_TABLE} e ON e.entity_id = a.entity_id
-                JOIN {ENTITY_CHUNKS_TABLE} ec
-                  ON ec.entity_id = a.entity_id AND ec.chunk_role = 'definition'
-                JOIN rag_chunks c ON c.chunk_id = ec.chunk_id
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE src.chunk_role = 'attribute'
-                  AND {source_in_sql}
-                  AND {{where_sql}}
-                  AND {_usable_alias_sql("a", "e", where_sql)}
-                ORDER BY src.chunk_id, c.document_id, c.chunk_index, c.chunk_id, a.alias_key
-            ) WHERE ROWNUM <= :entity_limit
-            """,
-                where_sql=where_sql,
+        documents = await self._visible_document_ids(filters)
+        if not documents:
+            return []
+        # 見える文書が多いときは 2・3 を文書で絞らない（4 で同じ条件を確かめるので結果は同じ）。
+        document_filter = documents if len(documents) <= _MAX_IN_VALUES else None
+        links = await self._attribute_hop_links(sources, document_filter)
+        if not links:
+            return []
+        label_keys = list(
+            dict.fromkeys(link.alias_key for link in links if link.alias_kind == ALIAS_KIND_LABEL)
+        )
+        label_evidence = (
+            await self._label_evidence(label_keys, document_filter) if label_keys else []
+        )
+        candidate_ids = [link.chunk_id for link in links]
+        candidate_ids.extend(chunk_id for _, _, chunk_id in label_evidence)
+        visible = await self._visible_chunk_positions(filters, candidate_ids)
+        # ラベルの別名を使える文書（別名 → 同じ別名をラベル以外で持ち、見える chunk のある文書）。
+        label_documents: dict[str, set[str]] = {}
+        for alias_key, document_id, chunk_id in label_evidence:
+            if chunk_id in visible:
+                label_documents.setdefault(alias_key, set()).add(document_id)
+
+        def usable(link: _HopLink) -> bool:
+            if link.alias_kind != ALIAS_KIND_LABEL:
+                return True
+            return any(
+                document_id != link.document_id
+                for document_id in label_documents.get(link.alias_key, ())
+            )
+
+        ordered = sorted(
+            (link for link in links if link.chunk_id in visible and usable(link)),
+            key=lambda link: (
+                link.via_chunk_id,
+                *visible[link.chunk_id],
+                link.chunk_id,
+                link.alias_key,
+                link.entity_id,
             ),
+        )[: max(1, int(limit))]
+        if not ordered:
+            return []
+        chunks = await self._chunks_by_id([link.chunk_id for link in ordered])
+        return [
+            EntityDefinitionRow(
+                chunk=chunks[link.chunk_id],
+                match_key=link.alias_key,
+                entity_id=link.entity_id,
+                display_name=link.display_name,
+                scope_label=link.scope_label,
+                via_chunk_id=link.via_chunk_id,
+                via_scope_label=link.via_scope_label,
+            )
+            for link in ordered
+            if link.chunk_id in chunks
+        ]
+
+    async def _visible_document_ids(self, filters: dict[str, str]) -> list[str]:
+        """見え方の条件の文書の側（tenant・権限・ナレッジベース・状態・有効期間）の文書の ID。"""
+        document_sql, _, binds = _oracle_retrieval_where_split(filters)
+        rows = await self._oracle._fetch_all(
+            f"SELECT d.document_id FROM rag_documents d WHERE {document_sql}",
+            _binds_in(document_sql, binds),
+        )
+        return [str(row["document_id"]) for row in rows]
+
+    async def _attribute_hop_links(
+        self, sources: Sequence[str], documents: Sequence[str] | None
+    ) -> list[_HopLink]:
+        """1 段の経路（実体の表）。元の chunk の属性の実体の別名を、別の実体が持つ組。"""
+        source_in_sql, binds = _oracle_in_predicate("src.chunk_id", "entity_source", sources)
+        document_join = ""
+        if documents is not None:
+            document_in_sql, document_binds = _oracle_in_predicate(
+                "c.document_id", "entity_document", documents
+            )
+            binds.update(document_binds)
+            document_join = f"JOIN rag_chunks c ON c.chunk_id = ec.chunk_id AND {document_in_sql}"
+        rows = await self._oracle._fetch_all(
+            f"""
+            SELECT
+                src.chunk_id AS via_chunk_id,
+                src_e.scope_label AS via_scope_label,
+                a.alias_key AS alias_key,
+                a.alias_kind AS alias_kind,
+                e.entity_id AS entity_id,
+                e.document_id AS document_id,
+                e.display_name AS display_name,
+                e.scope_label AS scope_label,
+                ec.chunk_id AS chunk_id
+            FROM {ENTITY_CHUNKS_TABLE} src
+            JOIN {ENTITIES_TABLE} src_e ON src_e.entity_id = src.entity_id
+            JOIN {ENTITY_ALIASES_TABLE} src_a ON src_a.entity_id = src.entity_id
+            JOIN {ENTITY_ALIASES_TABLE} a
+              ON a.alias_key = src_a.alias_key AND a.entity_id <> src.entity_id
+            JOIN {ENTITIES_TABLE} e ON e.entity_id = a.entity_id
+            JOIN {ENTITY_CHUNKS_TABLE} ec
+              ON ec.entity_id = a.entity_id AND ec.chunk_role = 'definition'
+            {document_join}
+            WHERE src.chunk_role = 'attribute'
+              AND {source_in_sql}
+            """,
             binds,
         )
-        return [_definition_row(row) for row in rows]
+        return [
+            _HopLink(
+                via_chunk_id=str(row["via_chunk_id"]),
+                via_scope_label=_optional_text(row.get("via_scope_label")),
+                alias_key=str(row["alias_key"]),
+                alias_kind=str(row["alias_kind"]),
+                entity_id=str(row["entity_id"]),
+                document_id=str(row["document_id"]),
+                display_name=str(row.get("display_name") or ""),
+                scope_label=_optional_text(row.get("scope_label")),
+                chunk_id=str(row["chunk_id"]),
+            )
+            for row in rows
+        ]
+
+    async def _label_evidence(
+        self, alias_keys: Sequence[str], documents: Sequence[str] | None
+    ) -> list[tuple[str, str, str]]:
+        """ラベルの別名をラベル以外の種類で持つ実体の (別名, 文書 ID, chunk ID)。"""
+        evidence: list[tuple[str, str, str]] = []
+        for batch in _batches(alias_keys):
+            alias_in_sql, binds = _oracle_in_predicate("label_a.alias_key", "entity_label", batch)
+            document_join = ""
+            if documents is not None:
+                document_in_sql, document_binds = _oracle_in_predicate(
+                    "c.document_id", "entity_document", documents
+                )
+                binds.update(document_binds)
+                document_join = (
+                    f"JOIN rag_chunks c ON c.chunk_id = label_ec.chunk_id AND {document_in_sql}"
+                )
+            rows = await self._oracle._fetch_all(
+                f"""
+                SELECT DISTINCT
+                    label_a.alias_key AS alias_key,
+                    label_e.document_id AS document_id,
+                    label_ec.chunk_id AS chunk_id
+                FROM {ENTITY_ALIASES_TABLE} label_a
+                JOIN {ENTITIES_TABLE} label_e ON label_e.entity_id = label_a.entity_id
+                JOIN {ENTITY_CHUNKS_TABLE} label_ec ON label_ec.entity_id = label_e.entity_id
+                {document_join}
+                WHERE {alias_in_sql}
+                  AND label_a.alias_kind <> '{ALIAS_KIND_LABEL}'
+                """,
+                binds,
+            )
+            evidence.extend(
+                (str(row["alias_key"]), str(row["document_id"]), str(row["chunk_id"]))
+                for row in rows
+            )
+        return evidence
+
+    async def _visible_chunk_positions(
+        self, filters: dict[str, str], chunk_ids: Sequence[str]
+    ) -> dict[str, tuple[str, int | float]]:
+        """見え方の条件の中にある chunk の ID → (文書 ID, chunk の順)。"""
+        positions: dict[str, tuple[str, int | float]] = {}
+        for batch in _batches(chunk_ids):
+            where_sql, binds = _oracle_retrieval_where(filters)
+            chunk_in_sql, chunk_binds = _oracle_in_predicate("c.chunk_id", "entity_chunk", batch)
+            binds.update(chunk_binds)
+            rows = await self._oracle._fetch_all(
+                _render_sql(
+                    f"""
+                SELECT c.chunk_id, c.document_id, c.chunk_index
+                FROM rag_chunks c
+                WHERE {chunk_in_sql}
+                  AND {{where_sql}}
+                """,
+                    where_sql=where_sql,
+                ),
+                binds,
+            )
+            for row in rows:
+                index = row.get("chunk_index")
+                # Oracle の昇順と同じく、順の無い chunk は後ろに置く。
+                positions[str(row["chunk_id"])] = (
+                    str(row["document_id"]),
+                    _int(index) if index is not None else float("inf"),
+                )
+        return positions
+
+    async def _chunks_by_id(self, chunk_ids: Sequence[str]) -> dict[str, RetrievedChunk]:
+        """chunk の ID → 根拠の chunk（見え方の条件は ``_visible_chunk_positions`` で確かめた）。"""
+        chunks: dict[str, RetrievedChunk] = {}
+        for batch in _batches(chunk_ids):
+            chunk_in_sql, binds = _oracle_in_predicate("c.chunk_id", "entity_chunk", batch)
+            rows = await self._oracle._fetch_all(
+                f"""
+                SELECT {_CHUNK_COLUMNS}
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {chunk_in_sql}
+                """,
+                binds,
+            )
+            for row in rows:
+                chunk = _retrieved_chunk_from_row(row)
+                chunks[chunk.chunk_id] = chunk
+        return chunks
 
 
 def _delete_chunk_set_entities(connection: OracleConnectionProtocol, chunk_set_id: str) -> None:

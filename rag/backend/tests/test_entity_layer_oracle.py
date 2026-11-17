@@ -345,3 +345,141 @@ async def test_entity_index_rebuild_cli_on_real_oracle() -> None:
     )
     assert (cleared.cleared, cleared.entities_before) == (1, summary.entities)
     assert await client._fetch_all(rows_sql, {"cs": chunk_set_id}) == []
+
+
+async def _single_join_hop(
+    client: OracleClient, filters: dict[str, str], *, sources: list[str], limit: int
+) -> list[tuple[object, ...]]:
+    """分ける前（#5333 の前）の 1 段の 1 つの SQL。分けた形と結果を比べる基準。"""
+    from app.clients.entity_store import (
+        _CHUNK_COLUMNS,
+        ENTITIES_TABLE,
+        ENTITY_ALIASES_TABLE,
+        ENTITY_CHUNKS_TABLE,
+        _usable_alias_sql,
+    )
+    from app.clients.oracle import _oracle_in_predicate, _oracle_retrieval_where, _render_sql
+
+    where_sql, binds = _oracle_retrieval_where(filters)
+    source_in_sql, source_binds = _oracle_in_predicate("src.chunk_id", "entity_source", sources)
+    binds.update(source_binds)
+    binds["entity_limit"] = limit
+    rows = await client._fetch_all(
+        _render_sql(
+            f"""
+        SELECT * FROM (
+            SELECT {_CHUNK_COLUMNS},
+                a.alias_key AS entity_match_key,
+                e.entity_id AS entity_id,
+                e.display_name AS entity_display_name,
+                e.scope_label AS entity_scope_label,
+                src.chunk_id AS entity_via_chunk_id,
+                src_e.scope_label AS entity_via_scope_label
+            FROM {ENTITY_CHUNKS_TABLE} src
+            JOIN {ENTITIES_TABLE} src_e ON src_e.entity_id = src.entity_id
+            JOIN {ENTITY_ALIASES_TABLE} src_a ON src_a.entity_id = src.entity_id
+            JOIN {ENTITY_ALIASES_TABLE} a
+              ON a.alias_key = src_a.alias_key AND a.entity_id <> src.entity_id
+            JOIN {ENTITIES_TABLE} e ON e.entity_id = a.entity_id
+            JOIN {ENTITY_CHUNKS_TABLE} ec
+              ON ec.entity_id = a.entity_id AND ec.chunk_role = 'definition'
+            JOIN rag_chunks c ON c.chunk_id = ec.chunk_id
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE src.chunk_role = 'attribute'
+              AND {source_in_sql}
+              AND {{where_sql}}
+              AND {_usable_alias_sql("a", "e", where_sql)}
+            ORDER BY src.chunk_id, c.document_id, c.chunk_index, c.chunk_id, a.alias_key,
+                e.entity_id
+        ) WHERE ROWNUM <= :entity_limit
+        """,
+            where_sql=where_sql,
+        ),
+        binds,
+    )
+    return [
+        (
+            row["entity_via_chunk_id"],
+            row["chunk_id"],
+            row["entity_match_key"],
+            row["entity_id"],
+            row["entity_display_name"],
+            row["entity_scope_label"],
+            row["entity_via_scope_label"],
+            row["document_id"],
+            row["chunk_text"],
+            row["file_name"],
+        )
+        for row in rows
+    ]
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_split_hop_sql_matches_single_join_on_real_oracle() -> None:
+    """1 段の SQL を分けた形（#5333）が、分ける前の 1 つの SQL と同じ行を同じ順に返す。
+
+    範囲の外のナレッジベースの文書・ラベルの別名（「原因 A」「重要度 C」）を含む合成の資料で、
+    属性を持つすべての chunk を元にして比べる。
+    """
+    client = OracleClient()
+    store = EntityStore(client)
+    token = uuid4().hex[:8]
+    kb = await client.create_knowledge_base(name=f"entity-split-{token}")
+    other_kb = await client.create_knowledge_base(name=f"entity-split-other-{token}")
+    corpus = [*multi_hop_corpus(), *business_support_corpus()]
+    in_scope: list[str] = []
+    for position, document in enumerate(corpus):
+        knowledge_base_id = other_kb.id if position % 4 == 3 else kb.id
+        document_id, chunk_set_id = await _indexed_document(
+            client,
+            file_name=f"entity-split-{token}-{document.file_name}",
+            chunks=document.chunks,
+            knowledge_base_id=knowledge_base_id,
+        )
+        await store.replace_chunk_set_entity_index(
+            document_id,
+            chunk_set_id,
+            build_entity_index(
+                document_id=document_id,
+                chunks=document.chunks,
+                chunk_set_id=chunk_set_id,
+                document_title=document.chunks[0].text,
+            ),
+        )
+        if knowledge_base_id == kb.id:
+            in_scope.append(document_id)
+    rows = await client._fetch_all(
+        "SELECT DISTINCT ec.chunk_id FROM rag_entity_chunks ec "
+        "JOIN rag_entities e ON e.entity_id = ec.entity_id "
+        "WHERE ec.chunk_role = 'attribute' AND e.document_id IN ("
+        + ", ".join(f":d{n}" for n in range(len(in_scope)))
+        + ") ORDER BY ec.chunk_id",
+        {f"d{n}": document_id for n, document_id in enumerate(in_scope)},
+    )
+    sources = [str(row["chunk_id"]) for row in rows]
+    assert sources
+
+    compared = 0
+    for filters in ({"knowledge_base_id": kb.id}, {"knowledge_base_id": other_kb.id}):
+        for limit in (24, 10_000):
+            expected = await _single_join_hop(client, filters, sources=sources, limit=limit)
+            actual = await store.entity_attribute_definition_chunks(
+                filters, source_chunk_ids=sources, limit=limit
+            )
+            assert [
+                (
+                    row.via_chunk_id,
+                    row.chunk.chunk_id,
+                    row.match_key,
+                    row.entity_id,
+                    row.display_name,
+                    row.scope_label,
+                    row.via_scope_label,
+                    row.chunk.document_id,
+                    row.chunk.text,
+                    row.chunk.file_name,
+                )
+                for row in actual
+            ] == expected
+            compared += len(expected)
+    assert compared > 0
