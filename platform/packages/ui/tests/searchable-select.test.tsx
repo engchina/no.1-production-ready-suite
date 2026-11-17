@@ -667,5 +667,9 @@ describe("チャットの対象のコンパクトな選択", () => {
     expect(badge.closest("[aria-hidden]")).toBeNull();
     expect(badge.hidden).toBe(false);
     expect(host.querySelector("label")?.textContent).toBe("対象");
+    // 「必須」は値の直後（同じまとまりの中）に置き、矢印だけを右端に残す（#5384）。
+    expect(badge.previousElementSibling?.id).toBe(ids[1]);
+    expect(badge.parentElement?.parentElement).toBe(button);
+    expect(button.children).toHaveLength(2);
   });
 });
