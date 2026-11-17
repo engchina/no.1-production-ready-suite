@@ -36,8 +36,8 @@ SUITE_AGENT_CLIENT_MAX_BODY_SIZE="${SUITE_AGENT_CLIENT_MAX_BODY_SIZE:-110M}"
 # backend へ転送する API の待ち時間（秒。proxy_read_timeout / proxy_send_timeout）。値の根拠（#1597）:
 # - 既定（全 API）600 秒: SSE は 10〜15 秒ごとに heartbeat を送る（共通の進み具合の SSE
 #   pr_backend_core.chat_progress・RAG のチャットの SSE・Agent の Run の SSE）ので、間が空かない。
-# - RAG の LLM を呼ぶ同期の API 1260 秒: 回答の通しの上限 rag_answer_timeout_seconds（既定・上限 1200 秒。
-#   #5280）と画面の待ち時間 1230 秒より長く。RAG 検索のストリーム（search/stream）は heartbeat が無く、LLM 1 回の間
+# - RAG の LLM を呼ぶ同期の API 1260 秒: 回答の通しの上限 rag_answer_timeout_seconds（既定 600 秒・画面で
+#   選べる最大 1200 秒。#5280）と画面の待ち時間 1230 秒より長く。RAG 検索のストリーム（search/stream）は heartbeat が無く、LLM 1 回の間
 #   （最大 600 秒）何も届かない。外部の MCP クライアントへ案内する待ち時間（MCP_TOOL_TIMEOUT）も同じ 1260 秒。
 # - NL2SQL の LLM を呼ぶ同期の API 2460 秒: LLM 1 回の timeout 600 秒 × 試行 4 回
 #   （oci_enterprise_ai_max_retries 3。timeout も再試行する）+ 余白 60 秒。SQL から質問へ（reverse/deep）の

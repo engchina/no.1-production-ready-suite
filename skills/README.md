@@ -88,7 +88,7 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 
 | 症状 | 原因と対処 |
 |---|---|
-| `rag_search` が 60 秒で `The operation timed out.` | HTTP の 1 要求の最初の応答までのタイマーが 60 秒（進み具合の SSE が届いていれば、既定でも 60 秒では切れない）。`rag_search`（回答を作る）は 20 秒〜2 分かかることがある（上限 1200 秒）ので、`MCP_TOOL_TIMEOUT=1260000` を `~/.claude/settings.json` の `env` に置く。60000 より大きくすると、このタイマーも延びる（下の「長くかかるツール」） |
+| `rag_search` が 60 秒で `The operation timed out.` | HTTP の 1 要求の最初の応答までのタイマーが 60 秒（進み具合の SSE が届いていれば、既定でも 60 秒では切れない）。`rag_search`（回答を作る）は 20 秒〜2 分かかることがある（上限は設定で最大 1200 秒）ので、`MCP_TOOL_TIMEOUT=1260000` を `~/.claude/settings.json` の `env` に置く。60000 より大きくすると、このタイマーも延びる（下の「長くかかるツール」） |
 | スキルは選ばれるが MCP のツールが呼ばれない・見つからない | MCP サーバーの名前が `rag` / `nl2sql` でない（`production-ready-rag` など）。名前を合わせて登録し直す |
 | `claude -p` でツールが使われずに終わる | 非対話では許可の確認ができない。`--allowedTools "Skill,mcp__rag,mcp__nl2sql"` を渡す |
 | 401 `SECURITY_API_KEY_INVALID` / 403 `SECURITY_API_KEY_PRODUCT_FORBIDDEN` | キーの誤り・削除・期限切れ、または使える製品にその製品が無い（[応答の一覧](../platform/docs/mcp-api-keys.md#応答)） |
@@ -101,8 +101,8 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 
 ### 長くかかるツール
 
-- `rag_search` は回答を作るので、モデルを 1 回以上呼ぶ（回答文の生成。根拠が長いときは分割して読む）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は 1200 秒（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
-- **推奨の待ち時間は 1260 秒**（`MCP_TOOL_TIMEOUT=1260000`）。サーバーの上限（1200 秒）より長くし、時間切れはサーバーのエラー（どの工程で切れたか付き）で受け取る。配備の Nginx の待ち時間（1260 秒）と同じ。
+- `rag_search` は回答を作るので、モデルを 1 回以上呼ぶ（回答文の生成。根拠が長いときは分割して読む）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は設定で最大 1200 秒（既定 600 秒）（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
+- **推奨の待ち時間は 1260 秒**（`MCP_TOOL_TIMEOUT=1260000`）。サーバーの上限（設定で最大 1200 秒）より長くし、時間切れはサーバーのエラー（どの工程で切れたか付き）で受け取る。配備の Nginx の待ち時間（1260 秒）と同じ。
 - **Claude Code の待ち時間**: `MCP_TOOL_TIMEOUT` の全体の既定は `100000000` ミリ秒（約 28 時間）。60 秒なのは HTTP の 1 要求の最初の応答までのタイマーで、`MCP_TOOL_TIMEOUT` を 60000 より大きくするとこのタイマーも延びる。SSE の進み具合があれば、既定でも 60 秒では切れない。`MCP_TOOL_TIMEOUT` は進み具合では延びない固定の上限。
 - **進み具合の通知（progress）**: client が `tools/call` に `_meta.progressToken` を付け、`Accept` に `text/event-stream` を含めると、応答は SSE になり、10 秒ごとと工程が変わるたびに `notifications/progress`（`message` は「経過 30 秒: 根拠確認（1回目）」の形）を送ってから結果を送る。進み具合を受けて待ち時間を延ばす client（MCP の SDK の `resetTimeoutOnProgress`）なら、待ち時間が短くても切れない。
 - 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。回答のモデルを呼ばない）で根拠を集める。

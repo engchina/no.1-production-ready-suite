@@ -20,7 +20,7 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.endpoint.exampleNote":
     "PR_API_KEY に発行したキーを入れます（repo に書きません）。--header は単一引用符のまま登録し、キーの値を設定ファイルに書かせません。MCP のサーバー名は rag / nl2sql / agent にします（組み込みのスキルは rag / nl2sql を使います。agent は業務 Agent を呼ぶためのものです）。",
   "apiKeys.endpoint.exampleTimeoutNote":
-    "MCP_TOOL_TIMEOUT は MCP のツールの待ち時間（ミリ秒）です。rag_search のサーバーの上限 1200 秒より長くします。",
+    "MCP_TOOL_TIMEOUT は MCP のツールの待ち時間（ミリ秒）です。rag_search のサーバーの上限（設定で最大 1200 秒）より長くします。",
   "apiKeys.endpoint.exampleCaNote":
     "curl は自作の CA の証明書を保存し、NODE_EXTRA_CA_CERTS はそのファイルを信頼させます。curl の -k は、信頼する前の自作の CA を取得するためのものです。正規の証明書に替えた環境では、この 2 行は要りません。",
   "apiKeys.endpoint.exampleExportNote":

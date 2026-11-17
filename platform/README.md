@@ -285,9 +285,9 @@ API は 422 で「既定のテキストモデルを選択してください。�
   業務プロファイルの Select AI 設定に書いている）。
 - `max_output_tokens` は思考の token も含むので、推論の量を減らすと出力上限での未完了（#987）も減る。
 - 推論型のモデルの 1 回の呼び出しが数十秒になり、回答は LLM を複数回呼ぶ（分割読取・参照の補充）ため、RAG の回答の通しの上限
-  `RAG_ANSWER_TIMEOUT_SECONDS` の既定・上限を 1200 秒にした（LLM 1 回の timeout の上限 600 秒とは別。#1425・#5280）。
+  `RAG_ANSWER_TIMEOUT_SECONDS` を LLM 1 回の timeout の上限 600 秒と分け、取込・検索・回答設定で 100 / 300 / 600 / 1200 秒から選べるようにした（既定 600 秒。#1425・#5280）。
   Agent の接続 `rag` の待ち時間 `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS` の既定は 1230 秒（MCP のタイムアウト秒の上限は 1500 秒）、
-  画面は 1230 秒、Nginx は 1260 秒（Agent の `tools/invoke` は 1560 秒）で、外側ほど長い。
+  画面は 1230 秒、Nginx は 1260 秒（Agent の `tools/invoke` は 1560 秒）で、選べる最大の 1200 秒より外側ほど長い。
 
 ## LLM / VLM の呼び出しの seed は送らない（#3529）
 

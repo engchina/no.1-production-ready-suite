@@ -880,7 +880,7 @@ def _timeout_cases() -> list[EvaluationCase]:
 
 async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
     """評価の 1 ケースは、回答生成の上限（rag_answer_timeout_seconds）で打ち切る（#383）。"""
-    settings = Settings(rag_answer_timeout_seconds=0.05)
+    settings = Settings().model_copy(update={"rag_answer_timeout_seconds": 0.05})
     pipeline = StagedSlowPipeline(sleep_seconds=1.0)
     runner = EvaluationRunner(pipeline=pipeline, settings=settings)
 
@@ -903,7 +903,7 @@ async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
 
 async def test_evaluation_time_budget_stops_remaining_cases() -> None:
     """評価全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに記録する。"""
-    settings = Settings(rag_answer_timeout_seconds=5.0)
+    settings = Settings().model_copy(update={"rag_answer_timeout_seconds": 5.0})
     pipeline = StagedSlowPipeline(sleep_seconds=1.0)
     runner = EvaluationRunner(pipeline=pipeline, settings=settings)
 
@@ -983,7 +983,7 @@ async def test_evaluation_run_applies_rag_overrides(
 
     monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
     runner = EvaluationRunner(
-        settings=Settings(rag_answer_timeout_seconds=30.0, rag_rrf_k=60),
+        settings=Settings(rag_answer_timeout_seconds=300.0, rag_rrf_k=60),
         answer_judge=FakeJudge(_completed_judgement()),
     )
 

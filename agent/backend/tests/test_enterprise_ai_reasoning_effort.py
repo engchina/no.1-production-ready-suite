@@ -157,5 +157,5 @@ def test_model_test_shows_rejection_body(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_rag_mcp_timeout_default_outlasts_rag_answer_timeout() -> None:
-    """`rag_search` は RAG の回答生成（既定・上限 1200 秒。#5280）を通しで待つので、既定は長い。"""
+    """`rag_search` は RAG の回答生成（最大 1200 秒。#5280）を通しで待つので、既定は長い。"""
     assert Settings(_env_file=None).agent_external_rag_timeout_seconds == 1230.0

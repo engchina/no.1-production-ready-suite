@@ -201,7 +201,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 親子階層（small-to-big） | 文書レシピ | 取込・検索・回答設定 > 文書分割「親子階層（small-to-big）」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
 | Approved FAQ / 用語・同義語 / ドメインキーワード | 検索・回答プロファイル | 検索・回答プロファイルを編集 >「検索・回答プロファイルの知識」 |
 | 回答の検索の上書き（根拠の起点に採る同じ文書の chunk の上限・業務ガイドの使用） | 検索・回答プロファイル | 検索・回答プロファイルを編集 > 検索・回答設定（上書きできるのは `app/rag/kb_adapter_config.py` の `KnowledgeBaseQueryConfig` の欄だけ。ほかの欄を API に送ると検証エラー。#4784） |
-| 回答の検索と生成の全体設定（根拠の前後から加える数・Rerank・実体・別名と章節・関係情報の拡張（件数の上限を含む）・不足要求の再検索・業務ガイドの手順ごとの検索の ON / OFF と回数・時間の上限） | global | 取込・検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。全体設定だけで決め、検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない。#3053・#4784） |
+| 回答の検索と生成の全体設定（根拠の前後から加える数・Rerank・実体・別名と章節・関係情報の拡張（件数の上限を含む）・不足要求の再検索・業務ガイドの手順ごとの検索の ON / OFF と回数・時間の上限・回答の上限時間〔100 / 300 / 600 / 1200 秒。既定 600。#5280〕） | global | 取込・検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。全体設定だけで決め、検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない。#3053・#4784） |
 
 | 文書の分類の一覧（大分類 → 中分類 → 小分類） | global | ナレッジ構築 >「文書の分類」（`GET` / `POST /api/document-categories`、`PATCH` / `DELETE /api/document-categories/{id}`、`POST /api/document-categories/{id}/move`。権限 `menu.document_categories`。表 `rag_document_categories`。#2131） |
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`。分類は「文書の分類」の一覧から選ぶ。どれも任意） |

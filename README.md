@@ -156,7 +156,7 @@ path = home / ".claude" / "settings.json"
 settings = json.loads(path.read_text()) if path.exists() else {}
 settings.setdefault("env", {}).update({
     "NODE_EXTRA_CA_CERTS": str(home / ".config/production-ready/ca.crt"),  # 自作の CA を信頼させる（正規の証明書なら不要）
-    "MCP_TOOL_TIMEOUT": "1260000",  # rag_search のサーバーの上限 1200 秒より長くする
+    "MCP_TOOL_TIMEOUT": "1260000",  # rag_search のサーバーの上限（設定で最大 1200 秒）より長くする
 })
 path.parent.mkdir(exist_ok=True)
 path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")

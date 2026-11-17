@@ -3856,6 +3856,10 @@ export const ja = {
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
     "章節の対応も親子分割も無い根拠に、前と後からそれぞれ最大でこの数のチャンクを文脈として加えます（1〜5）。章節の対応がある根拠は章節で、親子分割の根拠は親の本文で補い、前後のチャンクは加えません。",
+  "settings.answering.answerTimeout": "回答の上限時間",
+  "settings.answering.answerTimeoutHint":
+    "質問から回答を確定するまでの上限です（既定 600 秒）。超えると、時間切れの工程を示して止めます。生成の 1 回の見積もりと確定の分（既定 150 秒）より短くすると、章節の拡張・参照先の読み足し・根拠の分割読取をせず、入る根拠だけで 1 回生成します。",
+  "settings.answering.answerTimeoutOption": "{seconds} 秒",
   "settings.answering.entityExpansion": "実体・別名による検索拡張",
   "settings.answering.entityExpansionHint": "質問と上位の検索候補に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ集めます。集めた根拠は Rerank にかけず、Rerank と根拠の選択の後に回答の根拠へ加えます（起点数や根拠の件数には数えません）。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。文書構造による検索拡張と併用できます。全体の検索に適用します。",
   "settings.answering.sectionExpansion": "章節で広げる根拠",

@@ -19,8 +19,8 @@ curl http://localhost:8000/api/evaluation/jobs/<job_id>
 
 job 全体の時間の上限は、投入時の回答の回数（ケース × 往復）× 回答生成の上限で、
 `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒）を最小値、86400 秒を最大値にします（#1430。例: 20 問なら
-20 × 1200 = 24000 秒）。上限は job の `time_limit_seconds` で返ります。1 ケースは回答生成の上限
-（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 1200 秒）で打ち切り、時間切れになった工程を `error_stage` / `error_message` に
+20 × 600 = 12000 秒）。上限は job の `time_limit_seconds` で返ります。1 ケースは回答生成の上限
+（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒）で打ち切り、時間切れになった工程を `error_stage` / `error_message` に
 残して次のケースへ進みます。全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに
 `error_type=EvaluationTimeBudgetExceeded` の失敗として結果を返します（job は `SUCCEEDED`、評価は `passed=false`）。
 同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run` は、外部から直接呼ぶ

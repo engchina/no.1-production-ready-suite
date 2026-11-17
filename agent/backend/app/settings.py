@@ -195,7 +195,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # （共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名）で呼ぶ（#233）。タイムアウト（秒）は
     # 1 回の MCP の呼び出しの待ち時間で、画面の「MCP 接続」の上限（1500 秒）以下にする。
     agent_external_rag_mcp_url: str | None = None
-    # RAG の `rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`。既定・上限 1200 秒）を
+    # RAG の `rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`。最大 1200 秒）を
     # 通しで待つため、RAG の回答の上限より長くする（RAG の画面の timeout と同じ 1230 秒。
     # #1425・#5280）。
     agent_external_rag_timeout_seconds: float = 1230.0

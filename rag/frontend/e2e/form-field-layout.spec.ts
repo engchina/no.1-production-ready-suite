@@ -58,6 +58,7 @@ async function mockRetrieval(page: Page) {
       "**/api/settings/answering",
       {
         neighbor_child_count: 3,
+        answer_timeout_seconds: 600,
         rerank_enabled: true,
         graph_expansion_enabled: false,
         entity_expansion_enabled: true, entity_expansion_max_chunks: 3,
