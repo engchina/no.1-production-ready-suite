@@ -722,7 +722,7 @@ for (const viewport of VIEWPORTS) {
 }
 
 test("前の RAG のツールの呼び出しの根拠も、原文のプレビューを開ける", async ({ page, mockApi }) => {
-  // 成果物「検索の根拠」は rag_search の結果（根拠 A）だけを持ち、前の rag_retrieve_evidence の根拠 C は
+  // 成果物「検索の根拠」は rag_search の結果（根拠 A）だけを持ち、前の rag_chat の根拠 C は
   // step の出力にだけある。画面の根拠の一覧と同じ集合で確かめるので、C も開ける（#2427）。
   seedRun(mockApi);
   const run = mockApi.state.runs.find((item) => item.id === RUN_ID)!;
@@ -734,7 +734,7 @@ test("前の RAG のツールの呼び出しの根拠も、原文のプレビュ
     tool_call: { name: `rag__${tool}`, arguments: {} },
     tool_result: { name: `rag__${tool}`, success: true, output: { evidence: [evidenceItem(chunkId)] } },
   });
-  run.steps = [step("rag_retrieve_evidence", CHUNK_C), step("rag_search", CHUNK_A)];
+  run.steps = [step("rag_chat", CHUNK_C), step("rag_search", CHUNK_A)];
   (run.artifacts as Record<string, unknown>[]).push({
     id: "artifact-rag-search",
     kind: "rag_evidence",

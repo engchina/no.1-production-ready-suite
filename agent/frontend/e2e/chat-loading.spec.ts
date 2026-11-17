@@ -134,7 +134,7 @@ test("業務 Agent の一覧を読めなかったときは、空の状態では�
 
   fail = false;
   await error.getByRole("button", { name: "再試行" }).click();
-  await expect(page.locator("#chat-agent")).toContainText("資料・データ横断アシスタント");
+  await expect(page.locator("#chat-agent")).toContainText("RAG チャット＋データアシスタント");
   await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
 });
 

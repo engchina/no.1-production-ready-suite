@@ -729,6 +729,10 @@ const agentJa = {
   "chat.agentUnavailable.title": "この会話の業務 Agent は削除されたか、使えません",
   "chat.agentUnavailable.message":
     "会話は閲覧だけできます。続けて質問するときは、業務 Agent を選ぶか新しい会話を始めてください。",
+  // 選んだ業務 Agent が削除されたスキルを選んでいる（#5342）。送信は止めず、失敗しうることを送信の前に示す。
+  "chat.agentSkillUnavailable.title": "この業務 Agent は削除されたスキルを選んでいます",
+  "chat.agentSkillUnavailable.message":
+    "送信すると実行が失敗することがあります。業務 Agent の編集でスキルを選び直して公開してください（削除されたスキル: {skills}）。",
   "chat.agent.empty": "使える業務 Agent がありません。業務 Agent の公開と権限の付与を管理者に依頼してください。",
   "chat.threads.title": "会話の履歴",
   "chat.threads.close": "会話の履歴を閉じる",
@@ -900,6 +904,8 @@ const agentJa = {
   "agent.version.changed": "公開していない変更あり",
   "agent.version.skillsUpdated": "スキルが更新されています",
   "agent.version.latestBadge": "常に最新のスキル",
+  // 削除されたスキルを選んでいる業務 Agent の印（#5342）。
+  "agent.version.skillsUnavailable": "削除されたスキルあり",
   "agent.skillPolicy.label": "スキルの更新",
   "agent.skillPolicy.pinned": "公開の版に固定する（推奨）",
   "agent.skillPolicy.latest": "常に最新のスキルを使う",
@@ -1773,7 +1779,13 @@ const agentJa = {
   // 割り当て済みで登録から消えたスキル（#925）。外さないと保存・公開できない。
   "agent.skillPicker.missing": "見つかりません",
   "agent.skillPicker.missingDescription": "登録されていないスキルです（{id}）。選択を外して保存してください。",
-  "agent.skillPicker.missingBanner": "登録されていないスキルが割り当てられています（{skills}）。選択を外してから保存・公開してください。",
+  // 下書き・公開中の版が選んだのに今は無いスキル（#5342。API の unavailable_skill_ids と、下書きの選択の見つからないスキル）。
+  "agent.skillUnavailable.title": "削除されたスキルが選ばれています",
+  "agent.skillUnavailable.message":
+    "次のスキルは削除されたため使えません: {skills}。下書きでの実行と、常に最新のスキルを使う業務 Agent の実行は失敗します。スキルを選び直して保存し、公開してください。",
+  // 回答をそのまま返すスキル（API の final_answer_tools。#5342）。業務 Agent の指示で回答の書き方は変わらない。
+  "agent.finalAnswer.badge": "RAG の回答をそのまま返す",
+  "agent.finalAnswer.notice": "回答は RAG がそのまま返します（書き方は検索・回答プロファイルで設定します）。対象のスキル: {skills}",
   // データの範囲（#1378）。業務 Agent が使える NL2SQL の業務プロファイル・RAG の検索・回答プロファイル。
   "agent.dataScope.title": "データの範囲",
   // 回答前の確認（#1839）。用語は 3 製品で同じ（platform の UX 契約 confirm-before-answer.md）。

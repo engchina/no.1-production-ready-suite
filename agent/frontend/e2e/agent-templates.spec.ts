@@ -34,7 +34,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator("#new-agent-name")).toHaveValue("営業分析");
       await expect(page.locator("#new-agent-instructions")).toHaveValue(/構造化データ照会で集計し/);
       await expect(page.getByRole("option", { name: /^構造化データ照会/ })).toBeChecked();
-      await expect(page.getByRole("option", { name: /^業務 RAG 調査/ })).not.toBeChecked();
+      await expect(page.getByRole("option", { name: /^RAG チャット(?!＋)/ })).not.toBeChecked();
       await expect(page.getByTestId("agent-template-samples")).toContainText("今月の地域別の売上を教えてください。");
       // テンプレートの評価ケースで評価セットを作る（既定はオン。#810）。
       await expect(page.getByRole("checkbox", { name: /テンプレートの評価ケース（1 件）で評価セットを作る/ })).toBeChecked();
@@ -50,7 +50,7 @@ for (const viewport of VIEWPORTS) {
       expect(body.template_id).toBe("sales-analytics");
       await expect(page.getByText("評価セット「営業分析（テンプレート）」を作りました")).toBeVisible();
       expect(mockApi.lastRequest("POST", "/api/evaluation-sets/from-template")?.body).toEqual({
-        agent_id: String(body.id ?? "agent-4"),
+        agent_id: String(body.id ?? "agent-6"),
       });
       expect(mockApi.state.evaluationSets[0].cases).toEqual([
         {
@@ -80,17 +80,17 @@ test("入力した内容があるときは、確認してからテンプレー�
   await page.getByTestId("agent-template-internal-policy-helpdesk").click();
   await dialog.getByRole("button", { name: "置き換える" }).click();
   await expect(page.locator("#new-agent-name")).toHaveValue("社内規程の問い合わせ");
-  await expect(page.getByRole("option", { name: /^業務 RAG 調査/ })).toBeChecked();
+  await expect(page.getByRole("option", { name: /^RAG チャット(?!＋)/ })).toBeChecked();
 });
 
 test("使えない Skill は外して知らせ、既存の業務 Agent の編集にはテンプレートを出さない", async ({ page }) => {
   await page.goto("/agents?id=new");
   await page.getByTestId("agent-template-manufacturing-quality").click();
   await expect(page.getByText("使えないスキルは外しました: quality_lab_only")).toBeVisible();
-  await expect(page.getByRole("option", { name: /^業務 RAG 調査/ })).toBeChecked();
+  await expect(page.getByRole("option", { name: /^RAG チャット(?!＋)/ })).toBeChecked();
 
   await page.goto("/agents?id=default");
-  await expect(page.getByRole("heading", { name: "資料・データ横断アシスタント", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "RAG チャット＋データアシスタント", level: 1 })).toBeVisible();
   await expect(page.getByRole("heading", { name: "テンプレートから始める" })).toHaveCount(0);
 });
 

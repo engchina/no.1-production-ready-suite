@@ -7,27 +7,27 @@ import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 test.describe("スキルの指示の表示", { tag: "@responsive" }, () => {
   test("組み込みのスキルの指示を見出し・入れ子の箇条書き・code で表示する", async ({ page }) => {
-    await page.goto("/skills?id=business-rag-research");
-    await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
+    await page.goto("/skills?id=rag-chat");
+    await expect(page.getByRole("heading", { name: "RAG チャット", level: 1 })).toBeVisible();
 
     const view = page.getByTestId("skill-instructions-view");
     await expect(view).toBeVisible();
     // 画面の「指示」（Section の h2）の下に、## は h3、### は h4 で並ぶ。
     await expect(page.getByRole("heading", { name: "指示", level: 2 })).toBeVisible();
     await expect(view.getByRole("heading", { level: 3 })).toHaveText(["使う MCP ツール", "手順", "結果ごとの対応"]);
-    await expect(view.getByRole("heading", { name: "Step 1: 検索の前に確かめる", level: 4 })).toBeVisible();
-    await expect(view.getByRole("heading", { name: "Step 3: rag_search で答えを得る", level: 4 })).toBeVisible();
+    await expect(view.getByRole("heading", { name: "Step 1: 検索・回答プロファイルを決める", level: 4 })).toBeVisible();
+    await expect(view.getByRole("heading", { name: "Step 3: rag_chat で答えを得る", level: 4 })).toBeVisible();
 
     // 「次へ進む」の行き先は入れ子の箇条書き、needs_clarification の手順は番号付き。
     const next = view.getByRole("listitem").filter({ hasText: /^次へ進む:/ });
     await expect(next.getByRole("listitem")).toHaveText([
-      "複数の根拠をつないで初めて答えられる質問（多段の質問）→ Step 2",
-      "それ以外 → Step 3",
+      "プロファイルが 1 つに決まる → Step 3",
+      "候補が複数ある → Step 2",
     ]);
     const clarification = view.getByRole("listitem").filter({ hasText: /^needs_clarification:/ });
     await expect(clarification.locator("ol > li")).toHaveText([
       "答えを得たら conditions（条件の id → 値）に入れる。",
-      "rag_search を呼び直す。",
+      "rag_chat を呼び直す。",
     ]);
 
     // 識別子は code、Markdown の記号は文字のまま残らない。

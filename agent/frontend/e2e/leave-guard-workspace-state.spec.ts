@@ -99,7 +99,7 @@ for (const viewport of VIEWPORTS) {
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(true);
       await page.getByRole("button", { name: "作成", exact: true }).first().click();
       await expect(page.getByText("Agent を作成しました")).toBeVisible();
-      await expect(page).toHaveURL(/\/agents\?id=agent-4$/);
+      await expect(page).toHaveURL(/\/agents\?id=agent-6$/);
       await expect(page.getByRole("heading", { name: "作成する Agent", level: 1 })).toBeVisible();
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(false);
       // 新規フォームは履歴に残さない（戻るで空の作成フォームへ戻らない）。
@@ -193,8 +193,8 @@ for (const viewport of VIEWPORTS) {
 
     test("Skill の編集対象は URL が唯一の情報源で、消えた対象は説明して一覧へ戻す", async ({ page }) => {
       await page.goto("/skills");
-      await page.getByRole("link", { name: /業務 RAG 調査/ }).click();
-      await expect(page).toHaveURL(/\/skills\?id=business-rag-research$/);
+      await page.getByRole("link", { name: /^RAG チャット(?!＋)/ }).click();
+      await expect(page).toHaveURL(/\/skills\?id=rag-chat$/);
       // 詳細だけが出す読み取り専用の案内で、対象が開いていることを確かめる。
       const detail = page.getByText("このスキルは読み取り専用です", { exact: false });
       await expect(detail).toBeVisible();

@@ -79,7 +79,7 @@ function seedJob(mockApi: MockApi) {
   mockApi.state.evaluations.push({
     id: "eval-output",
     agent_id: "default",
-    agent_name: "資料・データ横断アシスタント",
+    agent_name: "RAG チャット＋データアシスタント",
     set_id: "evset-output",
     set_name: "出力の評価",
     status: "completed",

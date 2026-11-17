@@ -1041,6 +1041,11 @@ export interface AgentProfile {
   draft_changed?: boolean;
   /** 公開中の版に固定した後に中身が変わった（消えた）スキルの ID（#1855）。 */
   skill_updates?: string[];
+  /**
+   * 下書き・公開中の版が選んだのに、今は無いスキルの ID（#5342。組み込みのスキルの廃止など）。無ければ空として扱う。
+   * 下書き・常に最新のスキルを使う版の実行は失敗する（`runtime.skill_unavailable`）。
+   */
+  unavailable_skill_ids?: string[];
   /** 公開中の版がスキルの中身を固定しているか（false は #1855 より前の版）。 */
   skills_pinned?: boolean;
   /** スキルの更新の扱い（#1867）。pinned = 公開の版に固定（既定）、latest = 常に今のスキル。 */
@@ -1209,6 +1214,11 @@ export interface AgentSkill {
   description: string;
   instructions: string;
   mcp_requirements: { server_id: string; tool_names: string[] }[];
+  /**
+   * 結果の回答をそのまま実行の最終の回答にするツール（#5342。組み込みの rag-chat・rag-search）。無ければ空として扱う。
+   * このスキルを選んだ業務 Agent は RAG の回答をそのまま返す（業務 Agent の指示で回答の書き方は変わらない）。
+   */
+  final_answer_tools?: { server_id: string; tool_name: string }[];
   /** SKILL.md と同じディレクトリの references/ の参照文書（パスと文字数。本文は返さない。#1803）。 */
   references: { path: string; characters: number }[];
   enabled: boolean;

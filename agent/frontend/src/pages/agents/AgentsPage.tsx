@@ -278,6 +278,10 @@ export function AgentVersionBadges({ agent }: { agent: AgentProfile }) {
     <span className="inline-flex flex-wrap items-center gap-1">
       <AgentOwnershipBadges agent={agent} />
       <AgentPublishBadges agent={agent} />
+      {/* 下書き・公開中の版が削除されたスキルを選んでいる（#5342）。選び直して公開するまで出す。 */}
+      {agent.unavailable_skill_ids?.length ? (
+        <StatusBadge variant="warning" label={t("agent.version.skillsUnavailable")} />
+      ) : null}
     </span>
   );
 }

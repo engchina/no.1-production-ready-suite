@@ -76,7 +76,7 @@ function seed(mockApi: MockApi) {
   mockApi.state.evaluations.push({
     id: "eval-safety",
     agent_id: "default",
-    agent_name: "資料・データ横断アシスタント",
+    agent_name: "RAG チャット＋データアシスタント",
     set_id: SET.id,
     set_name: SET.name,
     agent_version: "draft",

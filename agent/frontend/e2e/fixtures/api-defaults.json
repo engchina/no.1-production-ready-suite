@@ -8,13 +8,11 @@
   "agents": [
     {
       "id": "default",
-      "name": "資料・データ横断アシスタント",
-      "description": "社内の資料（業務 RAG）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる既定の業務 Agent。",
-      "instructions": "問いと途中の結果から、資料の根拠と業務データの値のどちらが要るかを判断してツールを呼ぶ。根拠と監査情報を残す。",
+      "name": "RAG チャット＋データアシスタント",
+      "description": "資料（RAG チャット）と業務データ（NL2SQL）を使い分けて調べる既定の業務 Agent。",
+      "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
       "skill_ids": [
-        "rag-and-structured-data",
-        "business-rag-research",
-        "structured-data-query"
+        "rag-chat-and-data"
       ],
       "model_id": "",
       "enabled": true,
@@ -23,13 +21,11 @@
       "versions": [
         {
           "version": 1,
-          "name": "資料・データ横断アシスタント",
-          "description": "社内の資料（業務 RAG）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる既定の業務 Agent。",
-          "instructions": "問いと途中の結果から、資料の根拠と業務データの値のどちらが要るかを判断してツールを呼ぶ。根拠と監査情報を残す。",
+          "name": "RAG チャット＋データアシスタント",
+          "description": "資料（RAG チャット）と業務データ（NL2SQL）を使い分けて調べる既定の業務 Agent。",
+          "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
           "skill_ids": [
-            "rag-and-structured-data",
-            "business-rag-research",
-            "structured-data-query"
+            "rag-chat-and-data"
           ],
           "model_id": "",
           "note": "版の導入（#770）の前の内容",
@@ -40,15 +36,16 @@
       "published_version": 1,
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
-      "unpublished_changes": false
+      "unpublished_changes": false,
+      "unavailable_skill_ids": []
     },
     {
-      "id": "rag-research",
-      "name": "資料調査アシスタント",
-      "description": "社内の資料（業務 RAG）を調べ、根拠の文書と場所を示して答える業務 Agent。",
-      "instructions": "資料の根拠に基づいて答え、根拠の文書名と場所を示す。",
+      "id": "rag-chat",
+      "name": "RAG チャットアシスタント",
+      "description": "RAG チャットの回答と根拠をそのまま返す業務 Agent。",
+      "instructions": "資料の質問に、RAG のチャットの流れで答える。",
       "skill_ids": [
-        "business-rag-research"
+        "rag-chat"
       ],
       "model_id": "",
       "enabled": true,
@@ -57,11 +54,11 @@
       "versions": [
         {
           "version": 1,
-          "name": "資料調査アシスタント",
-          "description": "社内の資料（業務 RAG）を調べ、根拠の文書と場所を示して答える業務 Agent。",
-          "instructions": "資料の根拠に基づいて答え、根拠の文書名と場所を示す。",
+          "name": "RAG チャットアシスタント",
+          "description": "RAG チャットの回答と根拠をそのまま返す業務 Agent。",
+          "instructions": "資料の質問に、RAG のチャットの流れで答える。",
           "skill_ids": [
-            "business-rag-research"
+            "rag-chat"
           ],
           "model_id": "",
           "note": "版の導入（#770）の前の内容",
@@ -72,7 +69,74 @@
       "published_version": 1,
       "created_at": "2026-06-28T00:00:01Z",
       "updated_at": "2026-06-28T00:00:01Z",
-      "unpublished_changes": false
+      "unpublished_changes": false,
+      "unavailable_skill_ids": []
+    },
+    {
+      "id": "rag-search",
+      "name": "RAG 検索アシスタント",
+      "description": "RAG の基本の検索の回答と根拠をそのまま返す業務 Agent。",
+      "instructions": "資料の質問に、RAG の基本の検索で答える。",
+      "skill_ids": [
+        "rag-search"
+      ],
+      "model_id": "",
+      "enabled": true,
+      "source": "builtin",
+      "versioned": true,
+      "versions": [
+        {
+          "version": 1,
+          "name": "RAG 検索アシスタント",
+          "description": "RAG の基本の検索の回答と根拠をそのまま返す業務 Agent。",
+          "instructions": "資料の質問に、RAG の基本の検索で答える。",
+          "skill_ids": [
+            "rag-search"
+          ],
+          "model_id": "",
+          "note": "版の導入（#770）の前の内容",
+          "published_at": "2026-06-28T00:00:02Z",
+          "published_by": null
+        }
+      ],
+      "published_version": 1,
+      "created_at": "2026-06-28T00:00:02Z",
+      "updated_at": "2026-06-28T00:00:02Z",
+      "unpublished_changes": false,
+      "unavailable_skill_ids": []
+    },
+    {
+      "id": "rag-search-data",
+      "name": "RAG 検索＋データアシスタント",
+      "description": "資料（基本の検索）と業務データ（NL2SQL）を使い分けて調べる業務 Agent。",
+      "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
+      "skill_ids": [
+        "rag-search-and-data"
+      ],
+      "model_id": "",
+      "enabled": true,
+      "source": "builtin",
+      "versioned": true,
+      "versions": [
+        {
+          "version": 1,
+          "name": "RAG 検索＋データアシスタント",
+          "description": "資料（基本の検索）と業務データ（NL2SQL）を使い分けて調べる業務 Agent。",
+          "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
+          "skill_ids": [
+            "rag-search-and-data"
+          ],
+          "model_id": "",
+          "note": "版の導入（#770）の前の内容",
+          "published_at": "2026-06-28T00:00:03Z",
+          "published_by": null
+        }
+      ],
+      "published_version": 1,
+      "created_at": "2026-06-28T00:00:03Z",
+      "updated_at": "2026-06-28T00:00:03Z",
+      "unpublished_changes": false,
+      "unavailable_skill_ids": []
     },
     {
       "id": "data-query",
@@ -97,36 +161,75 @@
           ],
           "model_id": "",
           "note": "版の導入（#770）の前の内容",
-          "published_at": "2026-06-28T00:00:02Z",
+          "published_at": "2026-06-28T00:00:04Z",
           "published_by": null
         }
       ],
       "published_version": 1,
-      "created_at": "2026-06-28T00:00:02Z",
-      "updated_at": "2026-06-28T00:00:02Z",
-      "unpublished_changes": false
+      "created_at": "2026-06-28T00:00:04Z",
+      "updated_at": "2026-06-28T00:00:04Z",
+      "unpublished_changes": false,
+      "unavailable_skill_ids": []
     }
   ],
   "skills": [
     {
-      "id": "business-rag-research",
-      "name": "業務 RAG 調査",
-      "description": "業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
-      "instructions": "利用者の目的を `rag_search` の `query` として扱い、根拠（evidence）に基づいて答える。\n\n## 使う MCP ツール\n\n- MCP サーバー `rag`: `rag_search`・`rag_list_search_answer_profiles`\n\n## 手順\n\n### Step 1: 検索の前に確かめる\n\n- 対象の検索・回答プロファイルが分からなければ `rag_list_search_answer_profiles` で確かめる。\n- 次へ進む:\n  - 複数の根拠をつないで初めて答えられる質問（多段の質問）→ Step 2\n  - それ以外 → Step 3\n\n### Step 2: 多段の質問を段に分ける\n\n答えに要る事実を段に分け、前の段の答えが次の段の検索の語になる順に並べる。\n\n### Step 3: `rag_search` で答えを得る\n\n`rag_search` を呼び、`outcome` で答え方を決める（「結果ごとの対応」）。\n\n## 結果ごとの対応\n\n`rag_search` の `outcome`:\n\n- `answered`: 根拠に沿って答える。\n- `needs_clarification`: `clarifications` の問いを利用者にそのまま確かめ、推測で選ばない。\n  1. 答えを得たら `conditions`（条件の id → 値）に入れる。\n  2. `rag_search` を呼び直す。",
+      "id": "rag-chat",
+      "name": "RAG チャット",
+      "description": "RAG のチャットの流れ（rag_chat）で、登録済みQ&A・業務ガイド・根拠の拡張を使って作った回答をそのまま返す。",
+      "instructions": "利用者の質問を `rag_chat` の `question` としてそのまま渡し、RAG の回答をそのまま返す。\n\n## 使う MCP ツール\n\n- MCP サーバー `rag`: `rag_chat`・`rag_recommend_search_answer_profile`・`rag_list_search_answer_profiles`\n\n## 手順\n\n### Step 1: 検索・回答プロファイルを決める\n\n- 対象の検索・回答プロファイルが分からなければ `rag_list_search_answer_profiles` で確かめる。\n- 次へ進む:\n  - プロファイルが 1 つに決まる → Step 3\n  - 候補が複数ある → Step 2\n\n### Step 2: プロファイルを選ぶ\n\n`rag_recommend_search_answer_profile` で質問に合うプロファイルを選ぶ。\n\n### Step 3: `rag_chat` で答えを得る\n\n`rag_chat` を呼び、`outcome` で答え方を決める（「結果ごとの対応」）。\n\n## 結果ごとの対応\n\n`rag_chat` の `outcome`:\n\n- `answered`: RAG の回答をそのまま返す。\n- `needs_clarification`: `clarifications` の問いを利用者にそのまま確かめ、推測で選ばない。\n  1. 答えを得たら `conditions`（条件の id → 値）に入れる。\n  2. `rag_chat` を呼び直す。",
       "mcp_requirements": [
         {
           "server_id": "rag",
           "tool_names": [
-            "rag_search",
+            "rag_chat",
+            "rag_recommend_search_answer_profile",
             "rag_list_search_answer_profiles"
           ]
+        }
+      ],
+      "final_answer_tools": [
+        {
+          "server_id": "rag",
+          "tool_name": "rag_chat"
         }
       ],
       "enabled": true,
       "tags": [
         "rag",
-        "research",
-        "business-data"
+        "chat",
+        "business-guide"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z",
+      "references": []
+    },
+    {
+      "id": "rag-search",
+      "name": "RAG 検索",
+      "description": "RAG の検索（rag_search）で、登録済みQ&A・業務ガイド・根拠の拡張を使わない基本の検索の回答をそのまま返す。",
+      "instructions": "利用者の質問を `rag_search` の `query` としてそのまま渡し、RAG の回答をそのまま返す。",
+      "mcp_requirements": [
+        {
+          "server_id": "rag",
+          "tool_names": [
+            "rag_search",
+            "rag_recommend_search_answer_profile",
+            "rag_list_search_answer_profiles"
+          ]
+        }
+      ],
+      "final_answer_tools": [
+        {
+          "server_id": "rag",
+          "tool_name": "rag_search"
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "rag",
+        "search"
       ],
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
@@ -149,6 +252,7 @@
           ]
         }
       ],
+      "final_answer_tools": [],
       "enabled": true,
       "tags": [
         "nl2sql",
@@ -161,28 +265,71 @@
       "references": []
     },
     {
-      "id": "rag-and-structured-data",
-      "name": "資料とデータの横断調査",
-      "description": "業務 RAG（資料）と NL2SQL（業務データ）のどちらを使うかをその都度判断し、順序を決めずに繰り返し使って調べる。",
-      "instructions": "ツールを呼ぶ順序は決めない。資料の根拠が要るなら rag_search を、業務データの値が要るなら nl2sql_query を呼び、答えに要る根拠がそろったら答える。",
+      "id": "rag-chat-and-data",
+      "name": "RAG チャット＋データ",
+      "description": "RAG のチャットの流れ（rag_chat）と業務データの照会（nl2sql_query）を、順序を決めずに必要なだけ往復して調べ、RAG の回答と業務データの値を合わせて答える。",
+      "instructions": "ツールを呼ぶ順序は決めない。資料が要るなら rag_chat を、業務データの値が要るなら nl2sql_query を呼び、答えに要る結果がそろったら答える。",
       "mcp_requirements": [
         {
           "server_id": "rag",
           "tool_names": [
-            "rag_search"
+            "rag_chat",
+            "rag_recommend_search_answer_profile",
+            "rag_list_search_answer_profiles"
           ]
         },
         {
           "server_id": "nl2sql",
           "tool_names": [
             "nl2sql_query",
-            "nl2sql_get_job"
+            "nl2sql_get_job",
+            "nl2sql_list_profiles",
+            "nl2sql_recommend_profile"
           ]
         }
       ],
+      "final_answer_tools": [],
       "enabled": true,
       "tags": [
         "rag",
+        "chat",
+        "nl2sql",
+        "business-data"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z",
+      "references": []
+    },
+    {
+      "id": "rag-search-and-data",
+      "name": "RAG 検索＋データ",
+      "description": "RAG の検索（rag_search）と業務データの照会（nl2sql_query）を、順序を決めずに必要なだけ往復して調べ、RAG の回答と業務データの値を合わせて答える。",
+      "instructions": "ツールを呼ぶ順序は決めない。資料が要るなら rag_search を、業務データの値が要るなら nl2sql_query を呼び、答えに要る結果がそろったら答える。",
+      "mcp_requirements": [
+        {
+          "server_id": "rag",
+          "tool_names": [
+            "rag_search",
+            "rag_recommend_search_answer_profile",
+            "rag_list_search_answer_profiles"
+          ]
+        },
+        {
+          "server_id": "nl2sql",
+          "tool_names": [
+            "nl2sql_query",
+            "nl2sql_get_job",
+            "nl2sql_list_profiles",
+            "nl2sql_recommend_profile"
+          ]
+        }
+      ],
+      "final_answer_tools": [],
+      "enabled": true,
+      "tags": [
+        "rag",
+        "search",
         "nl2sql",
         "business-data"
       ],
