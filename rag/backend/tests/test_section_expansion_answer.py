@@ -290,6 +290,37 @@ def test_generation_round_estimate_setting_reaches_the_engine(
     assert from_env.answer_generation_round_estimate_seconds == 200.0
 
 
+def test_answer_generation_output_cap_setting_reaches_the_engine(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回答文の生成の段の出力の上限（#5368）: 既定・.env.example・範囲・engine への受け渡し。"""
+    from rag_engine.config import DEFAULT_ANSWER_GENERATION_MAX_OUTPUT_TOKENS
+
+    from app import config as config_module
+
+    assert config_module.RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS_DEFAULT == (
+        DEFAULT_ANSWER_GENERATION_MAX_OUTPUT_TOKENS
+    )
+    monkeypatch.delenv("RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS", raising=False)
+    assert Settings(_env_file=None).rag_answer_generation_max_output_tokens == 16384
+    example = (config_module.BACKEND_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS=16384" in example.splitlines()
+    for value in (-1, 1, 1023, 131073):
+        with pytest.raises(ValidationError):
+            Settings(rag_answer_generation_max_output_tokens=value)
+    for value in (0, 1024, 131072):
+        accepted = Settings(rag_answer_generation_max_output_tokens=value)
+        assert accepted.rag_answer_generation_max_output_tokens == value
+
+    monkeypatch.setenv("RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS", "8192")
+    from_env = build_engine_settings(Settings(), output_dir=tmp_path)
+    disabled = build_engine_settings(
+        Settings(rag_answer_generation_max_output_tokens=0), output_dir=tmp_path
+    )
+    assert from_env.answer_generation_max_output_tokens == 8192
+    assert disabled.answer_generation_max_output_tokens == 0
+
+
 def test_build_engine_settings_passes_model_input_limit(tmp_path: Any) -> None:
     """回答のモデルの入力の上限は、共通のモデル設定の登録モデルの値（#1437。既定 128000）。"""
     from pr_system_settings.model import EnterpriseAiConfiguredModel

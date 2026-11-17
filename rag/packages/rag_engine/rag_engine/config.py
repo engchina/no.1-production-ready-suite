@@ -130,6 +130,12 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     return value if value >= 1 else default
 
 
+def _non_negative_int(env: Mapping[str, str], name: str, default: int) -> int:
+    """0 以上の整数(値なし・整数でない・負は既定)。"""
+    value = _env_int(env, name, default)
+    return value if value >= 0 else default
+
+
 def _env_float(env: Mapping[str, str], name: str, default: float) -> float:
     try:
         return float(env.get(name, default))
@@ -165,6 +171,9 @@ def normalize_llm_api_mode(value: str | None, default: str = DEFAULT_LLM_API_MOD
 # 1 回の呼び出しの出力の上限の既定(tokens。#1719。platform の DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS と同じ)。
 # 回答の上限(`answer_max_tokens`)の既定と、モデルの出力の上限が渡されないときの値。
 DEFAULT_MODEL_OUTPUT_TOKENS = 32768
+# 回答文の生成（`answer.generate`）の 1 回の呼び出しの出力の上限の既定（tokens。#5368。推論の token も含む）。
+# backend の RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS の既定と同じ値（backend のテストで一致を確かめる）。
+DEFAULT_ANSWER_GENERATION_MAX_OUTPUT_TOKENS = 16384
 
 
 @dataclass(frozen=True)
@@ -323,6 +332,10 @@ class Settings:
     # 生成の 1 回の見積もり（秒。#5184）。章節の拡張は、次の段を読む前にこの値と回答の確定の分を生成に残す。
     # backend が .env の RAG_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS を RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS で渡す。
     answer_generation_round_estimate_seconds: float = DEFAULT_GENERATION_ROUND_SECONDS
+    # 回答文の生成の 1 回の呼び出しの出力の上限（tokens。#5368。0 は段の上限を掛けない）。実効の上限は登録モデルの
+    # 出力の上限・`online_max_output_tokens`・入力の残りとの最小（`settings_for_answer_generation`）。
+    # backend が .env の RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS を RAG_ENGINE_ANSWER_GENERATION_MAX_OUTPUT_TOKENS で渡す。
+    answer_generation_max_output_tokens: int = DEFAULT_ANSWER_GENERATION_MAX_OUTPUT_TOKENS
     # 回答のモデルの入力の上限（tokens。#1437）。backend が共通のモデル設定の登録モデルの値を
     # `OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS` で渡す（platform の enterprise_ai_max_input_tokens。既定 128000）。
     # 章節の拡張の根拠の入力の上限をこの割合で決める。
@@ -571,6 +584,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         answer_generation_round_estimate_seconds=max(
             0.0, _env_float(env, "RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS", DEFAULT_GENERATION_ROUND_SECONDS)
         ),
+        answer_generation_max_output_tokens=_non_negative_int(
+            env, "RAG_ENGINE_ANSWER_GENERATION_MAX_OUTPUT_TOKENS", DEFAULT_ANSWER_GENERATION_MAX_OUTPUT_TOKENS
+        ),
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         generation_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_GENERATION_REASONING_EFFORT")),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
@@ -630,6 +646,21 @@ def normalize_reasoning_effort_override(value: str | None) -> str:
 def settings_for_llm_purpose(settings: Settings, purpose: str) -> Settings:
     """用途の推論の量を反映した設定(#1499)。上書きが無ければ同じ設定を返す。"""
     return settings_with_reasoning_effort(settings, getattr(settings, _PURPOSE_EFFORT_FIELDS.get(purpose, ""), ""))
+
+
+def settings_for_answer_generation(settings: Settings) -> Settings:
+    """回答文の生成の呼び出しに渡す設定。段の出力の上限をオンライン生成の出力予算に重ねる(#5368)。
+
+    送る上限は adapter の `online_output_budget` が、登録モデルの出力の上限・`online_max_output_tokens`・入力の残りの
+    最小で決めるので、ここでは `online_max_output_tokens` を段の上限まで下げるだけにする(上限で未完了のときの扱いは
+    オンライン生成のまま)。段の上限が 0(掛けない)か、すでに予算以上なら同じ設定を返す。
+    """
+    if not isinstance(settings, Settings):
+        return settings
+    cap = int(settings.answer_generation_max_output_tokens)
+    if cap <= 0 or cap >= settings.online_max_output_tokens:
+        return settings
+    return replace(settings, online_max_output_tokens=cap)
 
 
 def step_provider(settings: Any, field_name: str, provider_id: str | None) -> str | None:
