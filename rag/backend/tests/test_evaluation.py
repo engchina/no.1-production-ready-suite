@@ -985,6 +985,7 @@ async def test_evaluation_run_applies_rag_overrides(
     runner = EvaluationRunner(
         settings=Settings(rag_answer_timeout_seconds=300.0, rag_rrf_k=60),
         answer_judge=FakeJudge(_completed_judgement()),
+        same_text_documents=SameTextDocuments({}),
     )
 
     cases = [EvaluationCase(id="case", query="承認条件", relevant_document_ids=["doc-1"])]
@@ -1502,6 +1503,169 @@ def test_equivalent_documents_count_as_the_relevant_document() -> None:
     assert result.mrr == 1.0
     assert result.required_evidence_recall == 1.0
     assert result.missing_evidence == []
+
+
+# ---- 解析後の本文が同じ文書を同じ文書とみなす（#5325） -------------------------------------
+
+
+class SameTextDocuments:
+    """解析後の本文の hash が同じ文書の引き方の決定論スタブ（文書 ID → 別の文書の ID）。"""
+
+    def __init__(self, same_text: Mapping[str, Sequence[str]]) -> None:
+        self.same_text = same_text
+        self.calls: list[list[str]] = []
+
+    async def __call__(self, document_ids: Sequence[str]) -> Mapping[str, Sequence[str]]:
+        self.calls.append(list(document_ids))
+        return {key: value for key, value in self.same_text.items() if key in document_ids}
+
+
+def _evidence_case(**overrides: Any) -> EvaluationCase:
+    """期待する根拠を別の形式の文書（doc-md）で書いたケース。引用は doc-1（StubPipeline）。"""
+    return EvaluationCase(
+        id="c",
+        query="承認条件は？",
+        relevant_document_ids=["doc-md"],
+        required_evidence=[EvaluationEvidence(id="e1", document_id="doc-md", text="120000")],
+        **overrides,
+    )
+
+
+async def test_document_with_same_extracted_text_counts_as_the_expected_document() -> None:
+    """書式違いで解析後の本文が同じ文書の引用は、取得率・MRR・順位の指標で期待する文書に一致する。"""
+    same_text = SameTextDocuments({"doc-md": ["doc-1"]})
+    runner = EvaluationRunner(pipeline=StubPipeline(), same_text_documents=same_text)
+
+    metrics = await runner.run(cases=[_evidence_case()], top_k=5)
+
+    result = metrics.case_results[0]
+    assert same_text.calls == [["doc-md"]]
+    assert result.retrieved_document_ids == ["doc-md"]
+    assert result.hit_document_ids == ["doc-md"]
+    assert result.mrr == 1.0
+    assert result.precision_at_10 == 1.0
+    assert result.required_evidence_recall == 1.0
+    assert result.missing_evidence == []
+    assert result.failure_reasons == []
+    # どの引用の文書を同じ文書とみなしたかを結果に残す。
+    assert result.equated_document_ids == {"doc-md": ["doc-1"]}
+
+
+@pytest.mark.parametrize(
+    "same_text",
+    [{}, {"doc-md": ["doc-other"]}],
+    ids=["hash-missing", "hash-differs"],
+)
+async def test_document_without_same_extracted_text_stays_a_miss(
+    same_text: Mapping[str, Sequence[str]],
+) -> None:
+    """hash の無い文書・hash の違う文書は今どおり別の文書として数える。"""
+    runner = EvaluationRunner(
+        pipeline=StubPipeline(), same_text_documents=SameTextDocuments(same_text)
+    )
+
+    result = (await runner.run(cases=[_evidence_case()], top_k=5)).case_results[0]
+
+    assert result.retrieved_document_ids == ["doc-1"]
+    assert result.mrr == 0.0
+    assert result.required_evidence_recall == 0.0
+    assert result.missing_evidence == ["e1"]
+    assert result.failure_reasons == ["evidence_miss", "retrieval_miss"]
+    assert result.equated_document_ids == {}
+
+
+async def test_same_file_name_equivalents_still_count_and_extend_by_text() -> None:
+    """同じファイル名の同一視（#2086）は今どおりで、その文書と本文が同じ文書も同じ文書とみなす。"""
+    by_name = EvaluationRunner(pipeline=StubPipeline(), same_text_documents=SameTextDocuments({}))
+    name_result = (
+        await by_name.run(
+            cases=[_evidence_case(equivalent_document_ids={"doc-md": ["doc-1"]})], top_k=5
+        )
+    ).case_results[0]
+    assert name_result.required_evidence_recall == 1.0
+    assert name_result.equated_document_ids == {"doc-md": ["doc-1"]}
+
+    same_text = SameTextDocuments({"doc-md-copy": ["doc-1"]})
+    by_text = EvaluationRunner(pipeline=StubPipeline(), same_text_documents=same_text)
+    text_result = (
+        await by_text.run(
+            cases=[_evidence_case(equivalent_document_ids={"doc-md": ["doc-md-copy"]})], top_k=5
+        )
+    ).case_results[0]
+    assert same_text.calls == [["doc-md", "doc-md-copy"]]
+    assert text_result.mrr == 1.0
+    assert text_result.required_evidence_recall == 1.0
+    assert text_result.equated_document_ids == {"doc-md": ["doc-1"]}
+
+
+def test_expected_documents_with_same_text_keep_their_own_evidence() -> None:
+    """期待する文書同士は互いにそろえない（それぞれの根拠はその文書で照合する）。"""
+    from app.rag.evaluation import with_same_text_equivalents
+
+    case = EvaluationCase(
+        id="c",
+        query="承認条件は？",
+        relevant_document_ids=["doc-a"],
+        required_evidence=[EvaluationEvidence(id="e1", document_id="doc-b", text="120000")],
+    )
+
+    extended = with_same_text_equivalents(
+        case, {"doc-a": ["doc-b", "doc-c"], "doc-b": ["doc-a", "doc-c"]}
+    )
+
+    assert extended.equivalent_document_ids == {"doc-a": ["doc-c"], "doc-b": ["doc-c"]}
+    assert extended.canonical_document_id("doc-b") == "doc-b"
+    assert with_same_text_equivalents(case, {}) is case
+
+
+@pytest.mark.parametrize(
+    ("section", "matched"),
+    [("第2章 > 承認", True), ("第3章", False)],
+    ids=["same-section", "other-section"],
+)
+def test_section_condition_uses_the_cited_chunk_of_the_same_text_document(
+    section: str, matched: bool
+) -> None:
+    """章節の条件は、同じ文書とみなした文書の引用の chunk の章節で今の規則のまま照合する。"""
+    from app.rag.evaluation import _case_result, with_same_text_equivalents
+
+    case = with_same_text_equivalents(
+        EvaluationCase(
+            id="c",
+            query="承認条件は？",
+            relevant_document_ids=["doc-md"],
+            required_evidence=[
+                EvaluationEvidence(id="e1", document_id="doc-md", section=section, text="120000")
+            ],
+        ),
+        {"doc-md": ["doc-docx"]},
+    )
+    response = SearchResponse(
+        answer="承認条件は 120000 円です。",
+        citations=[
+            RetrievedChunk(
+                document_id="doc-docx",
+                chunk_id="doc-docx:0",
+                text="承認条件: 120000",
+                score=1.0,
+                metadata={"section_path": "合成の規程 > 第2章 > 承認"},
+            )
+        ],
+        trace_id="t",
+        elapsed_ms=1.0,
+    )
+
+    result = _case_result(case, response, None)
+
+    assert result.mrr == 1.0
+    assert result.required_evidence_recall == (1.0 if matched else 0.0)
+
+
+def test_default_runner_looks_up_same_text_documents_only_in_the_real_pipeline() -> None:
+    from app.rag.evaluation import _oracle_same_text_documents
+
+    assert EvaluationRunner()._same_text_documents is _oracle_same_text_documents
+    assert EvaluationRunner(pipeline=StubPipeline())._same_text_documents is None
 
 
 # ---- 既知の条件・往復・別解・区分・必要な根拠（#1284） --------------------------------------

@@ -109,3 +109,25 @@ async def test_later_or_superseded_or_duplicate_documents_are_not_canonical() ->
     )
     assert await _duplicate_of(client, old_version) is None
     assert await _duplicate_of(client, new_version) is None
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_documents_with_same_extracted_text_are_found_for_evaluation() -> None:
+    """品質評価の同一視（#5325）: 同じ hash の別の文書だけを返し、hash の無い文書は含めない。"""
+    client = OracleClient()
+    suffix = uuid4().hex[:12]
+    kb = await client.create_knowledge_base(name=f"text-same-{suffix}")
+    text_hash = extracted_text_sha256(f"合成の本文 {suffix}")
+    first = await _document(client, f"same-first-{suffix}", [kb.id], minutes_ago=30)
+    second = await _document(client, f"same-second-{suffix}", [kb.id], minutes_ago=20)
+    differing = await _document(client, f"same-differing-{suffix}", [kb.id], minutes_ago=10)
+    unhashed = await _document(client, f"same-unhashed-{suffix}", [kb.id], minutes_ago=5)
+    await client.record_extracted_text_hash(first, text_hash, judge_duplicate=False)
+    await client.record_extracted_text_hash(second, text_hash, judge_duplicate=False)
+    await client.record_extracted_text_hash(
+        differing, extracted_text_sha256(f"合成の本文 {suffix}。"), judge_duplicate=False
+    )
+
+    found = await client.same_extracted_text_document_ids([first, second, differing, unhashed])
+
+    assert found == {first: [second], second: [first]}
