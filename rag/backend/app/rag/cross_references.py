@@ -912,8 +912,7 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
     まま残す(回答のときに検索範囲から解決する)。派生の chunk(要約・項目の値。#2641)には付けない。
     """
     index = SectionIndex(chunk.metadata.get("section_path") for chunk in chunks)
-    citing_title = _citing_title(chunks, document_title)
-    vocabulary = current_grammar().vocabulary
+    citing_title = citing_document_title(chunks, document_title)
     annotated = 0
     for chunk in chunks:
         metadata = chunk.metadata
@@ -922,16 +921,8 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
         specs = extract_references(chunk.text)
         if not specs:
             continue
-        # 略称の参照(派生の文書の「法第N条」)は、参照元の文書の名前から本体の文書名にする(#2169)。
-        specs = [
-            replace(spec, document_title=expanded)
-            if spec.document_title
-            and (expanded := vocabulary.abbreviation_title(spec.document_title, citing_title))
-            else spec
-            for spec in specs
-        ]
         targets = resolve_reference_specs(
-            specs,
+            expand_abbreviation_specs(specs, citing_title),
             index,
             citing_path=split_section_path(metadata.get("section_path")),
             document_title=document_title,
@@ -947,8 +938,26 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
     return annotated
 
 
-def _citing_title(chunks: Sequence[Any], document_title: str) -> str:
-    """参照元の文書の名前。
+def expand_abbreviation_specs(
+    specs: Sequence[ReferenceSpec], citing_title: str
+) -> list[ReferenceSpec]:
+    """略称の参照(派生の文書の「法第N条」)の文書名を、参照元の文書の名前から本体の文書名にする(#2169)。
+
+    取込と、取込で解決していない chunk の回答のとき(#5311)の両方がこの規則を使う。
+    展開できない略称・略称でない文書名はそのまま残す。
+    """
+    vocabulary = current_grammar().vocabulary
+    return [
+        replace(spec, document_title=expanded)
+        if spec.document_title
+        and (expanded := vocabulary.abbreviation_title(spec.document_title, citing_title))
+        else spec
+        for spec in specs
+    ]
+
+
+def citing_document_title(chunks: Iterable[Any], document_title: str) -> str:
+    """参照元の文書の名前(略称の展開に使う)。
 
     先頭の見出しが番号の無いタイトルならそれ、無ければファイル名(拡張子を除く)。
     """
