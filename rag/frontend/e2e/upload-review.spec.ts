@@ -6,6 +6,8 @@ import {
   mockAuthUser,
   mockDatabaseReady,
   mockLocalAuth,
+  openSearchableMultiSelect,
+  searchableMultiSelectTrigger,
 } from "./_helpers";
 
 // 文書アップロードのレビューで直した点（#280）。
@@ -326,7 +328,7 @@ test("送信中は経過時間を示し、KB 一覧の読み込み中は Skeleto
   await expect(loading.getByRole("timer")).toBeVisible();
   releaseKnowledgeBases();
   await expect(loading).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "所属させるナレッジベース" })).toBeVisible();
+  await expect(searchableMultiSelectTrigger(page, "所属させるナレッジベース")).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
@@ -373,7 +375,7 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   ).toBeVisible();
   failing = false;
   await picker.getByRole("button", { name: "再試行" }).click();
-  await expect(page.getByRole("combobox", { name: "所属させるナレッジベース" })).toBeVisible();
+  await expect(searchableMultiSelectTrigger(page, "所属させるナレッジベース")).toBeVisible();
 });
 
 test("アップロードだけを許可された利用者には、設定とナレッジベース管理への導線を出さない", async ({ page }) => {
@@ -401,8 +403,7 @@ test("200 件を超えるナレッジベースは、サーバー側で検索し�
   await mockUploadPage(page, { knowledgeBaseCount: 230 });
 
   await page.goto("/upload");
-  const combobox = page.getByRole("combobox", { name: "所属させるナレッジベース" });
-  await combobox.click();
+  const combobox = await openSearchableMultiSelect(page, "所属させるナレッジベース");
   await combobox.fill("ナレッジベース 230");
   await expect(
     page.getByRole("listbox", { name: "所属させるナレッジベース" }).getByRole("option", { name: /ナレッジベース 230/ })

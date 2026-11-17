@@ -1,6 +1,6 @@
 import { exerciseSelectScrollbar } from "./_select-scrollbar";
 import { expect, test, type Page } from "./fixtures/test";
-import { expectNoPageOverflow, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { expectNoPageOverflow, mockLocalAuth, openSearchableMultiSelect, openSidebarNav, searchableMultiSelectTrigger } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
@@ -102,9 +102,8 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
     const delimiterChips = page.locator("[data-searchable-chips]");
     await expect(delimiterChips.getByRole("listitem")).toHaveText(["空行 (\\n\\n)"]);
-    const delimiter = page.getByRole("combobox", { name: "分割符" });
     // 候補を順に足すと、選んだ順が優先度の順になる。
-    await delimiter.click();
+    const delimiter = await openSearchableMultiSelect(page, "分割符");
     await page.getByRole("option", { name: "記録の境界" }).click();
     await page.getByRole("option", { name: "句点" }).click();
     await expect(delimiterChips.getByRole("listitem")).toHaveText([
@@ -274,11 +273,11 @@ test(
     const field = page.locator("[data-searchable-multi-select]");
     await field.screenshot({ path: testInfo.outputPath("delimiter-defaults.png") });
 
-    await page.getByRole("combobox", { name: "分割符" }).click();
+    await openSearchableMultiSelect(page, "分割符");
     await expect(page.getByRole("option")).toHaveCount(11);
     await expect(page.getByRole("option", { name: /英語のピリオド/ })).toBeVisible();
     await expectNoHorizontalOverflow(page);
-    await field.screenshot({ path: testInfo.outputPath("delimiter-options.png") });
+    await page.screenshot({ path: testInfo.outputPath("delimiter-options.png") });
   }
 );
 
@@ -301,8 +300,8 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
 
   await page.goto("/settings/chunking");
   await page.getByRole("radio", { name: /固定分割符/ }).click();
-  const delimiter = page.getByRole("combobox", { name: "分割符" });
   await page.getByRole("button", { name: /空行.*選択から外す/ }).click();
+  const delimiter = await openSearchableMultiSelect(page, "分割符");
   await delimiter.fill("---SECTION---");
   await page.getByRole("button", { name: "「---SECTION---」を分割符に追加" }).click();
   await page.getByRole("button", { name: "完了" }).click();
@@ -561,9 +560,10 @@ test("分割符はスクロールバーとタッチ操作でも閉じず、選�
   await mockChunkingSettings(page);
   await page.goto("/settings/chunking");
   await page.getByRole("radio", { name: /固定分割符/ }).click();
-  const input = page.getByRole("combobox", { name: "分割符", exact: true });
+  // 開閉はボタン（#5267）。閉じるとフォーカスはボタンへ戻る。
+  const toggle = searchableMultiSelectTrigger(page, "分割符");
+  const input = toggle;
   const list = page.getByRole("listbox", { name: "分割符", exact: true });
-  const toggle = page.locator("[data-searchable-multi-select]").getByRole("button", { name: "一覧を開閉", exact: true });
   const chips = page.locator("[data-searchable-chips]").getByRole("listitem");
   const initial = await chips.allTextContents();
   await toggle.click();

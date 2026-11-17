@@ -307,7 +307,7 @@ export async function findFieldsOffWidthScale(
         "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]):not([type=color]), textarea, button[role=combobox]"
       );
       for (const field of fields) {
-        if (field.closest("table, [data-pagination], [data-field-width-exempt], [role=listbox], [role=dialog] [data-searchable-panel]")) {
+        if (field.closest("table, [data-pagination], [data-field-width-exempt], [role=listbox], [data-searchable-select-popover]")) {
           continue;
         }
         const box =
@@ -699,7 +699,7 @@ export async function findToolbarFieldWidthMismatch(
 }
 
 export interface SearchablePanelLayout {
-  /** 部品の検索欄（combobox）の id。 */
+  /** popover を開いたボタン（トリガー）の id。 */
   field: string;
   /** 下部の「N 件選択中」と操作の組が 1 行に並ぶ。 */
   footerOneRow: boolean;
@@ -707,21 +707,24 @@ export interface SearchablePanelLayout {
   countWrapped: boolean;
   /** 操作の組（表示中をすべて選択・クリア・完了）が 2 行に分かれている。 */
   actionsSplit: boolean;
-  /** パネルの左右の端（px）と画面の幅（documentElement の clientWidth）。 */
+  /** popover の左右の端（px）と画面の幅（documentElement の clientWidth）。 */
   left: number;
   right: number;
   viewport: number;
-  /** パネルと欄の幅（px）。 */
+  /** popover とトリガーの幅（px）、トリガーの左端（px）。 */
   panelWidth: number;
   fieldWidth: number;
+  fieldLeft: number;
+  /** ルートの文字の大きさ（px。rem の換算）。 */
+  rem: number;
 }
 
 /**
- * 開いている検索つきの複数選択（`SearchableMultiSelect`）のパネルの下部の行と位置を測る（#2091）。
+ * 開いている検索つきの複数選択（`SearchableMultiSelect`）の popover の下部の行と位置を測る（#2091・#5267）。
  *
- * 規則（README §7 の 127）: パネルは欄の幅以上で、下部の「N 件選択中」と操作（表示中をすべて選択・クリア・完了）を
- * 1 行に並べる。幅が足りない（375px など）ときだけ件数の文と操作の組を 2 段にし、件数の文は折り返さず、操作の組は分けない。
- * パネルは画面からはみ出さない。
+ * 規則（README §4「検索して選ぶ選択欄の popover」）: popover はトリガーと同じ幅を 20〜40rem に収め（sm 未満は画面の幅から
+ * 左右の 1rem を引いた幅）、画面からはみ出さない。下部の「N 件選択中」は折り返さず、操作の組（表示中をすべて選択・クリア・
+ * 完了）は分けない。幅が足りないときだけ件数の文と操作の組を 2 段にする。
  *
  * ```ts
  * const [panel] = await measureSearchablePanels(page);
@@ -742,21 +745,25 @@ export async function measureSearchablePanels(page: EvaluatePage): Promise<Searc
       viewport: number;
       panelWidth: number;
       fieldWidth: number;
+      fieldLeft: number;
+      rem: number;
     }> = [];
-    for (const panel of Array.from(document.querySelectorAll<HTMLElement>("[data-searchable-panel]"))) {
-      const root = panel.closest<HTMLElement>("[data-searchable-multi-select]");
+    const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    for (const panel of Array.from(document.querySelectorAll<HTMLElement>("[data-searchable-select-popover]"))) {
+      const trigger = document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(panel.id)}"]`);
       const footer = panel.querySelector<HTMLElement>("[data-searchable-panel-footer]");
       const actions = footer?.querySelector<HTMLElement>("[data-searchable-panel-actions]");
       const count = footer?.firstElementChild;
-      if (!root || !footer || !actions || !(count instanceof HTMLElement) || count === actions) continue;
+      if (!trigger || !footer || !actions || !(count instanceof HTMLElement) || count === actions) continue;
       const center = (rect: DOMRect) => rect.top + rect.height / 2;
       const countRect = count.getBoundingClientRect();
       const actionsRect = actions.getBoundingClientRect();
       const lineHeight = Number.parseFloat(getComputedStyle(count).lineHeight) || countRect.height;
       const tops = Array.from(actions.children).map((child) => child.getBoundingClientRect().top);
       const panelRect = panel.getBoundingClientRect();
+      const triggerRect = trigger.getBoundingClientRect();
       results.push({
-        field: root.querySelector<HTMLElement>("[role=combobox]")?.id ?? "",
+        field: trigger.id,
         footerOneRow: Math.abs(center(countRect) - center(actionsRect)) <= 2,
         countWrapped: countRect.height > lineHeight * 1.5,
         actionsSplit: tops.length > 0 && Math.max(...tops) - Math.min(...tops) > 1,
@@ -764,11 +771,25 @@ export async function measureSearchablePanels(page: EvaluatePage): Promise<Searc
         right: Math.round(panelRect.right),
         viewport: document.documentElement.clientWidth,
         panelWidth: Math.round(panelRect.width),
-        fieldWidth: Math.round(root.getBoundingClientRect().width),
+        fieldWidth: Math.round(triggerRect.width),
+        fieldLeft: Math.round(triggerRect.left),
+        rem,
       });
     }
     return results;
   }, undefined);
+}
+
+/**
+ * 検索つきの選択の popover の幅の規則（#5267）。sm（640px）以上はトリガーの幅を 20〜40rem に収めた幅、
+ * sm 未満は画面の幅から左右の 1rem を引いた幅（どちらも画面の左右の 1rem の内側を超えない）。
+ */
+export function expectedSearchablePopoverWidth(
+  panel: Pick<SearchablePanelLayout, "fieldWidth" | "viewport" | "rem">
+): number {
+  const available = panel.viewport - panel.rem * 2;
+  if (panel.viewport < 640) return Math.floor(available);
+  return Math.floor(Math.min(available, Math.max(20 * panel.rem, Math.min(40 * panel.rem, panel.fieldWidth))));
 }
 
 /** 文字の横のアイコンの縦の中心のずれ（`findIconTextMisalignment`）。 */

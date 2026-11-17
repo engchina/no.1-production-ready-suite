@@ -34,7 +34,9 @@ export function knowledgeBaseSelectLabels(): SearchableSelectLabels {
 export function knowledgeBaseMultiSelectLabels(): SearchableMultiSelectLabels {
   return {
     ...knowledgeBaseSelectLabels(),
-    toggleList: t("knowledgeBasePicker.toggleListAria"),
+    noneSelected: t("knowledgeBasePicker.noneSelected"),
+    summaryRest: (count) => t("knowledgeBasePicker.summaryRest", { count }),
+    summarySeparator: t("knowledgeBasePicker.summarySeparator"),
     selectedCount: (count) => t("knowledgeBasePicker.selectedCount", { count }),
     selectedList: () => t("knowledgeBasePicker.selectedList"),
     removeChip: (name) => t("knowledgeBasePicker.removeChip", { name }),

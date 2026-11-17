@@ -32,7 +32,7 @@ describe("SelectField の一覧の位置（computeFloatingMenuLayout）", () => 
     });
     expect(layout.placement).toBe("bottom");
     expect(layout.constrained).toBe(false);
-    expect(layout.style).toMatchObject({ top: 140, left: 100, width: 320 });
+    expect(layout.style).toMatchObject({ top: 140, left: 100, minWidth: 320 });
     expect(layout.style).not.toHaveProperty("maxHeight");
   });
 
@@ -75,7 +75,7 @@ describe("SelectField の一覧の位置（computeFloatingMenuLayout）", () => 
     });
     // 上: 250 - 8 - 4 = 238、下: 400 - 8 - 286 - 4 = 102 → 上で 224 は収まる
     expect(layout.placement).toBe("top");
-    expect(layout.style).toMatchObject({ maxHeight: 224, top: 250 - 4 - 224, width: 343 });
+    expect(layout.style).toMatchObject({ maxHeight: 224, top: 250 - 4 - 224, minWidth: 343 });
 
     const cramped = computeFloatingMenuLayout({
       viewportWidth: 375,

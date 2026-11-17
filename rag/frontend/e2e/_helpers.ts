@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { findEscapedAbsoluteElements, measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
+import { expectedSearchablePopoverWidth, findEscapedAbsoluteElements, measureSearchablePanels } from "../../../platform/packages/ui/e2e/layout-checks";
 
 /**
  * 共通認証の利用者（`GET /api/auth/me` の CurrentUser。#214）。
@@ -260,22 +260,41 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
     .toEqual([]);
 }
 
+/** 検索つきの複数選択（`SearchableMultiSelect`）の開閉のボタン（名前はラベルで始まり、選択の要約が続く。#5267）。 */
+export function searchableMultiSelectTrigger(scope: Page | Locator, label: string): Locator {
+  const name = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+  return scope
+    .locator("[data-searchable-multi-select] > button[aria-haspopup=dialog]")
+    .and(scope.getByRole("button", { name }));
+}
+
 /**
- * 開いている検索つきの複数選択（`SearchableMultiSelect`）のパネルが、欄の幅以上で画面からはみ出さず、
- * 下部の「N 件選択中」が折り返さず、操作の組（表示中をすべて選択・クリア・完了）が 1 行にそろうことを確かめる（#2091）。
- * 画面の幅が sm（640px）以上なら、件数の文と操作の組も 1 行に並ぶ（375px は 2 段まで）。
+ * 検索つきの複数選択を開き、上の層の popover の最上部の検索欄（combobox）を返す（#5267）。
+ * 開くとフォーカスは検索欄へ移る（位置が決まるのを待つ）。
+ */
+export async function openSearchableMultiSelect(scope: Page | Locator, label: string): Promise<Locator> {
+  const page = "goto" in scope ? scope : scope.page();
+  await searchableMultiSelectTrigger(scope, label).click();
+  const search = page.locator("[data-searchable-select-popover]").getByRole("combobox");
+  await expect(search).toBeFocused();
+  return search;
+}
+
+/**
+ * 開いている検索つきの複数選択（`SearchableMultiSelect`）の popover が、トリガーに合わせた幅（20〜40rem、375px は画面の幅から
+ * 左右の 1rem を引いた幅）で画面からはみ出さず、下部の「N 件選択中」が折り返さず、操作の組（表示中をすべて選択・クリア・完了）が
+ * 1 行にそろうことを確かめる（#2091・#5267）。popover が 28rem 以上なら、件数の文と操作の組も 1 行に並ぶ。
  */
 export async function expectSearchablePanelFits(page: Page): Promise<void> {
   const panels = await measureSearchablePanels(page);
   expect(panels).toHaveLength(1);
   const [panel] = panels;
-  const wide = (page.viewportSize()?.width ?? 0) >= 640;
   expect(panel, JSON.stringify(panel)).toMatchObject({
     countWrapped: false,
     actionsSplit: false,
-    ...(wide ? { footerOneRow: true } : {}),
+    ...(panel.panelWidth >= 28 * panel.rem - 1 ? { footerOneRow: true } : {}),
   });
-  expect(panel.panelWidth).toBeGreaterThanOrEqual(panel.fieldWidth);
+  expect(Math.abs(panel.panelWidth - expectedSearchablePopoverWidth(panel)), JSON.stringify(panel)).toBeLessThanOrEqual(2);
   expect(panel.left).toBeGreaterThanOrEqual(0);
   expect(panel.right).toBeLessThanOrEqual(panel.viewport);
 }

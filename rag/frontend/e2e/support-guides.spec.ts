@@ -2,7 +2,7 @@ import { editThreeLineProse } from "./_multiline-prose";
 import { readFile } from "node:fs/promises";
 import { expect, type Locator, type Page, type Route, test } from "./fixtures/test";
 import { findClippedPlaceholders, findToolbarMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
-import { expectNoPageOverflow, expectSearchablePanelFits, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, expectSearchablePanelFits, mockDatabaseReady, mockLocalAuth, searchableMultiSelectTrigger } from "./_helpers";
 
 // 業務ガイド（#1237）: 検索・回答プロファイルの知識の「業務ガイド」タブ。
 // 一覧・作成・保存・検証（問題 / 注意）・公開・409 の競合・履歴とロールバック・取り込みの確認。
@@ -652,7 +652,7 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
   await page.getByRole("option", { name: "再設定する（step2）" }).click();
 
   // 影響範囲・承認が係る手順（#1320）は、手順の題名で選ぶ。
-  await editor.getByRole("combobox", { name: /^影響範囲・承認が係る手順/ }).click();
+  await searchableMultiSelectTrigger(editor, "影響範囲・承認が係る手順").click();
   await page.getByRole("option", { name: /再設定する/ }).click();
   await page.keyboard.press("Escape");
 
@@ -875,8 +875,8 @@ test("業務ガイドの複数選択の開いた一覧の下部が 1 行に並�
   await second.getByLabel("題名").fill("手順 B");
 
   const footer = page.locator("[data-searchable-panel-footer]");
-  const check = async (combobox: ReturnType<typeof editor.getByRole>) => {
-    await combobox.click();
+  const check = async (trigger: ReturnType<typeof editor.getByRole>) => {
+    await trigger.click();
     await expect(footer).toContainText(/\d+ 件選択中/);
     await expectSearchablePanelFits(page);
     await expectNoPageOverflow(page);
@@ -884,7 +884,7 @@ test("業務ガイドの複数選択の開いた一覧の下部が 1 行に並�
     await expect(footer).toHaveCount(0);
   };
 
-  await check(second.getByRole("combobox", { name: /^依存する手順/ }));
+  await check(searchableMultiSelectTrigger(second, "依存する手順"));
 
   await editor.getByRole("button", { name: "分岐を足す" }).click();
   const branch = editor.getByRole("listitem", { name: "分岐 1" });
@@ -892,9 +892,9 @@ test("業務ガイドの複数選択の開いた一覧の下部が 1 行に並�
   await page.getByRole("option", { name: /条件 A/ }).click();
   await branch.getByRole("combobox", { name: /^比べ方/ }).click();
   await page.getByRole("option", { name: "いずれかに一致する" }).click();
-  await check(branch.getByRole("combobox", { name: /^値/ }));
+  await check(searchableMultiSelectTrigger(branch, "値"));
 
-  await check(editor.getByRole("combobox", { name: /^影響範囲・承認が係る手順/ }));
+  await check(searchableMultiSelectTrigger(editor, "影響範囲・承認が係る手順"));
 });
 
 test("ほかの人が先に保存していたら、読み込み直しを案内し、最新の内容を読み込める", async ({ page }) => {

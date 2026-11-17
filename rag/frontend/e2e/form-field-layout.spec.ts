@@ -9,7 +9,7 @@ import {
   measureHorizontalOverflow,
   setFormGridMaxWidth,
 } from "../../../platform/packages/ui/e2e/layout-checks";
-import { apiEnvelope, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
+import { apiEnvelope, mockLocalAuth, searchableMultiSelectTrigger, selectSearchAnswerProfile } from "./_helpers";
 
 /**
  * RAG のフォームの欄の幅と placeholder（#1891 段 2）。
@@ -696,7 +696,7 @@ const SCREENS: FormScreen[] = [
     path: "/settings/chunking",
     mock: mockChunking("fixed_delimiter"),
     open: async (page) => {
-      await expect(page.getByRole("combobox", { name: "分割符" })).toBeVisible();
+      await expect(searchableMultiSelectTrigger(page, "分割符")).toBeVisible();
     },
   },
   {

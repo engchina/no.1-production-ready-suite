@@ -10,6 +10,8 @@ import {
   openSidebarNav,
   selectSearchAnswerProfile,
   expectSearchablePanelFits,
+  openSearchableMultiSelect,
+  searchableMultiSelectTrigger,
 } from "./_helpers";
 
 // 1x1 透明 PNG。`<img>` で実際に描画できる有効な data URI。
@@ -189,8 +191,7 @@ test("文書詳細で所属ナレッジベースを更新できる", async ({ pa
   // 既存の所属はチップで可視化される。
   await expect(page.getByLabel("社内規程 を選択から外す")).toBeVisible();
   // 候補はサーバー側で検索するため（#302）、空（0 文書）の FAQ も隠さずに出る。
-  const kbCombo = page.getByRole("combobox", { name: "所属先" });
-  await kbCombo.click();
+  await openSearchableMultiSelect(page, "所属先");
   await page.getByRole("option", { name: /FAQ/ }).click();
   // 「完了」で一覧を閉じる（#316）。
   await page.getByRole("button", { name: "完了" }).click();
@@ -785,7 +786,7 @@ test("文書詳細の所属ナレッジベースの候補と今の値を読み�
   await expect(candidates).toHaveCount(0);
   await membership.getByRole("button", { name: "再試行" }).click();
   await expect(membership).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: /所属先/ })).toBeVisible();
+  await expect(searchableMultiSelectTrigger(page, "所属先")).toBeVisible();
 });
 
 /** 文書の分類の一覧（#2131）。名前は合成の値。 */
@@ -1367,7 +1368,7 @@ test("文書詳細の所属先の開いた一覧の下部が 1 行に並び、�
   await mockDocumentDetail(page);
   await page.goto("/documents/doc-1");
 
-  await page.getByRole("combobox", { name: "所属先" }).click();
+  await openSearchableMultiSelect(page, "所属先");
   await expect(page.locator("[data-searchable-panel-footer]")).toContainText(/\d+ 件選択中/);
   await expectSearchablePanelFits(page);
   await expectNoHorizontalOverflow(page);
@@ -1386,7 +1387,7 @@ test("文書詳細の所属先を 0 件にすると、保存時に欄の下へ�
   await expect(page.locator("#document-knowledge-base-required-error")).toHaveText(
     "所属先を 1 件以上選択してください。"
   );
-  await expect(page.getByRole("combobox", { name: "所属先" })).toHaveAttribute("aria-invalid", "true");
+  await expect(searchableMultiSelectTrigger(page, "所属先")).toHaveAttribute("aria-invalid", "true");
   expect(state.lastReplacePayload).toBeNull();
   await expectNoHorizontalOverflow(page);
 });

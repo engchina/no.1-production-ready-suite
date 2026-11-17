@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth, openSearchableMultiSelect } from "./_helpers";
 
 interface UploadStorageSettingsData {
   backend: "local" | "oci";
@@ -255,12 +255,9 @@ test("アップロード時に選択したナレッジベースへ所属でき�
 
   await page.goto("/upload");
 
-  const kbCombo = page.getByRole("combobox", {
-    name: "所属させるナレッジベース",
-  });
-  await kbCombo.click();
+  await openSearchableMultiSelect(page, "所属させるナレッジベース");
   await page.getByRole("option", { name: /社内規程/ }).click();
-  await kbCombo.press("Escape");
+  await page.keyboard.press("Escape");
   await expect(
     page.getByText("1 件のナレッジベースへ登録します。"),
   ).toBeVisible();
