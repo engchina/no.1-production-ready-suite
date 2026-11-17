@@ -24,6 +24,7 @@ from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
+from app.rag import support_guide_runtime
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
@@ -41,7 +42,6 @@ from app.rag.support_guide_runtime import (
     is_guide_preview_record,
     is_guide_preview_trace,
     match_guide,
-    rank_guides,
     resolve_guide_clarification,
     short_circuit_answer,
     visible_plan,
@@ -55,6 +55,22 @@ from tests.test_mcp_api import _call, _token, auth  # noqa: F401 - fixture を�
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
 client = AsgiTestClient(app)
+
+
+def _ranked(
+    guides: Any,
+    query: Any,
+    provided: dict[str, str] | None = None,
+    *,
+    limit: int = 3,
+    context: Any = None,
+) -> list[support_guide_runtime.GuideMatch]:
+    """点の高い順の候補（選ぶ前の並び。#5352 で MCP の rank_guides を消したのでテストで並べる）。"""
+    parsed = support_guide_runtime._as_query(query)  # noqa: SLF001 - 並びを確かめる
+    return [
+        support_guide_runtime._match(item, parsed.text, provided or {}, interactive=False)  # noqa: SLF001
+        for item in support_guide_runtime._candidates(guides, parsed, None, context)[:limit]  # noqa: SLF001
+    ]
 
 
 def grant_guide(**overrides: Any) -> SupportGuideContent:
@@ -182,9 +198,9 @@ def test_handoff_and_ranking() -> None:
     assert match is not None and match.decision == "handoff"
     assert "サポート窓口へお問い合わせください" in short_circuit_answer(match)
 
-    ranked = rank_guides(GUIDES, "アクセス権限を付与して地域別集計表も出したい", limit=5)
+    ranked = _ranked(GUIDES, "アクセス権限を付与して地域別集計表も出したい", limit=5)
     assert [item.guide_id for item in ranked] == ["g-grant", "g-export"]
-    assert rank_guides(GUIDES, "アクセス権限を付与", limit=1)[0].guide_id == "g-grant"
+    assert _ranked(GUIDES, "アクセス権限を付与", limit=1)[0].guide_id == "g-grant"
 
 
 def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
@@ -463,7 +479,7 @@ def test_applicability_excludes_guides_named_out_of_scope() -> None:
     unscoped = match_guide(GUIDES, "経理のアクセス権限を付与したい", context=context)
     assert unscoped is not None and unscoped.applicability == {}
     # rank_guides も同じ判定（範囲の外のガイドを返さない）。
-    ranked = rank_guides([hr, *GUIDES], "経理のアクセス権限を付与", context=context)
+    ranked = _ranked([hr, *GUIDES], "経理のアクセス権限を付与", context=context)
     assert [item.guide_id for item in ranked] == ["g-grant"]
 
 

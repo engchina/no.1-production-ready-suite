@@ -81,10 +81,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from rag_engine.knowledge.runtime_knowledge import (
-    MAX_MATCHED_TERMS,
-    RuntimeTerm,
-)
 from rag_engine.retrieval.character_forms import fold_width
 from rag_parser_core.extraction import is_derived_content
 from rag_parser_core.parsed_table import ROW_BASIS_PARSED_TABLE
@@ -159,9 +155,7 @@ from app.rag.figure_url import (
     FigureUrlUnavailableError,
     issue_figure_token,
 )
-from app.rag.input_guardrail import check_question_text
-from app.rag.pipeline import EXPANDED_FLOW
-from app.rag.profile_language import profile_language_scope
+from app.rag.pipeline import BASIC_FLOW, EXPANDED_FLOW, AnswerFlow
 from app.rag.profile_recommendation import (
     RECOMMEND_LIMIT_DEFAULT,
     RECOMMEND_LIMIT_MAX,
@@ -169,11 +163,6 @@ from app.rag.profile_recommendation import (
     recommend_search_answer_profiles,
 )
 from app.rag.rate_limit import enforce_rate_limit
-from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
-from app.rag.search_answer_profile_knowledge import (
-    load_runtime_knowledge_payload,
-    match_runtime_knowledge,
-)
 from app.rag.section_catalog import compact_section_lines
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.rag.section_map_service import (
@@ -192,19 +181,9 @@ from app.rag.source_preview import (
 from app.rag.stored_answer import (
     stored_citation_metadata,
 )
-from app.rag.support_guide_conditions import resolve_answered_conditions
-from app.rag.support_guide_query import build_guide_query
-from app.rag.support_guide_runtime import (
-    GuideMatch,
-    clarification_questions,
-    impact_applies,
-    rank_guides,
-    visible_plan,
-)
 from app.schemas.document import DocumentPreprocessArtifact
 from app.schemas.search import (
     INCLUDE_SUPERSEDED_FILTER_KEY,
-    SEARCH_TOP_K_DEFAULT,
     SEARCH_TOP_K_MAX,
     RetrievedChunk,
     SearchRequest,
@@ -214,7 +193,6 @@ from app.schemas.search_answer_profile import (
     SearchAnswerProfileStatus,
     SearchAnswerProfileSummary,
 )
-from app.schemas.support_guide import SupportGuideReference
 from app.search_defaults import search_top_k_default, search_top_k_schema
 from app.security.permissions import MENU_CHAT, MENU_SEARCH, ROUTE_PERMISSIONS
 
@@ -328,7 +306,11 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     出力の形は変えない（#5293）。
 # （版を変えない追加）RAG Chat の経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で答えるツール
 #     （rag_chat）を足した。既存のツールの出力の形は変えない（#5339）。
-MCP_OUTPUT_SCHEMA_VERSION = 46
+# 47: rag_retrieve_evidence・rag_lookup_guides を削除した。rag_search を基本の RAG（RAG 検索の
+#     画面と同じ経路）にし、入力の conditions・approved_faq_id・skip_approved_faq・
+#     original_question と、出力の status・approved_faq_candidates・approved_faq・clarifications・
+#     guide を外した（rag_chat だけが持つ。#5352）。
+MCP_OUTPUT_SCHEMA_VERSION = 47
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
@@ -337,26 +319,6 @@ EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
 EVIDENCE_TEXT_BUDGET_TOKENS = SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 EVIDENCE_LIMIT_DEFAULT = 12
 EVIDENCE_LIMIT_MAX = 50
-# rag_retrieve_evidence（回答を作らない根拠の収集）の既定の件数。検索する件数（SearchRequest の
-# top_k の既定 30）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。
-# rag_search は回答に使った根拠が先に並ぶので 12 のまま。返す本文の合計は
-# EVIDENCE_TEXT_BUDGET_TOKENS で抑える。
-RETRIEVE_EVIDENCE_LIMIT_DEFAULT = min(SEARCH_TOP_K_DEFAULT, EVIDENCE_LIMIT_MAX)
-
-
-def _retrieve_evidence_default() -> int:
-    return min(search_top_k_default(), EVIDENCE_LIMIT_MAX)
-
-
-def _retrieve_evidence_default_schema(schema: dict[str, Any]) -> None:
-    schema["default"] = _retrieve_evidence_default()
-
-
-# rag_retrieve_evidence が返す検索・回答プロファイルの用語（profile_knowledge。#2701）の
-# 上限。件数は RAG が回答を作るときに prompt へ入れる件数と同じ。字数は用語・別名・説明など
-# 返す文字の合計で、超える項目は返さずに省いた数へ数える。
-PROFILE_KNOWLEDGE_TERMS_MAX = MAX_MATCHED_TERMS
-PROFILE_KNOWLEDGE_MAX_CHARS = 4000
 # 根拠の結果に示す旧版（older_versions。#1405）の最大件数。
 OLDER_VERSIONS_MAX = 10
 # rag_read_source が 1 回で返す本文・親の本文の上限。
@@ -456,8 +418,6 @@ SOURCE_PREVIEW_PATH_PREFIX = "/api/source-previews"
 # 根拠の種類（#1282）。figure_description=図を VLM が読んだ説明（元の図で確かめる）/
 # ocr=図の中・周りの文字（解析の OCR・キャプション）。
 EvidenceType = Literal["text", "table", "figure_description", "ocr"]
-GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした。時間をおいて再度お試しください。"
-
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
 # rag_chat は RAG のチャットの権限（#5339）。
@@ -465,8 +425,8 @@ CHAT_PERMISSIONS = frozenset({MENU_CHAT})
 # 推薦・根拠の読み取り（rag_search・rag_chat のどちらかの結果を読み足す）は、どちらかの権限で使う。
 ANSWER_READ_PERMISSIONS = frozenset({MENU_SEARCH, MENU_CHAT})
 
-# rag_search の状態（#5134）。completed=検索・回答をした（選んだ承認済み FAQ の回答を含む）/
-# approved_faq_candidates=承認済み FAQ の候補だけを返した（検索・回答はしていない）。
+# rag_chat の状態（#5134・#5352）。completed=回答した（選んだ登録済みQ&A の回答を含む）/
+# approved_faq_candidates=登録済みQ&A の候補だけを返した（回答はしていない）。
 SearchStatus = Literal["completed", "approved_faq_candidates"]
 APPROVED_FAQ_CANDIDATES_STATUS: SearchStatus = "approved_faq_candidates"
 
@@ -476,19 +436,18 @@ INSTRUCTIONS = (
     "## Step 1: 検索・回答プロファイルを選ぶ\n"
     "検索・回答プロファイルが決まっていなければ、まず rag_recommend_search_answer_profile に"
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
-    "確かめる）、その id を rag_search・rag_chat に渡してください。名前で探すときは"
+    "確かめる）、その id を rag_chat・rag_search に渡してください。名前で探すときは"
     " rag_list_search_answer_profiles を使います。\n\n"
-    # 承認済み FAQ の候補（#5134・#5136）。引数の意味は approved_faq_id・skip_approved_faq の説明に
+    # 登録済みQ&A の候補（#5134・#5339）。引数の意味は approved_faq_id・skip_approved_faq の説明に
     # ある。
-    "## Step 2: 登録済みの Q&A の候補を利用者に選んでもらう\n"
-    "rag_chat・rag_search・rag_retrieve_evidence が"
-    f" status={APPROVED_FAQ_CANDIDATES_STATUS} を返したら、approved_faq_candidates の"
+    "## Step 2: 登録済みQ&A の候補を利用者に選んでもらう\n"
+    f"rag_chat が status={APPROVED_FAQ_CANDIDATES_STATUS} を返したら、approved_faq_candidates の"
     "質問を利用者に示して選んでもらってから呼び直してください（候補を自分で選ばない）。"
     "選ばれた Q&A は approved_faq_id に、どれでもなければ skip_approved_faq に渡します。\n\n"
     # 回答前の確認（業務ガイドの条件）。引数の組み立ては conditions の説明にある。
     "## Step 3: 回答前の確認に答える\n"
-    "rag_chat・rag_search が outcome=needs_clarification を返したら、clarifications の問いと"
-    "選択肢を利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
+    "rag_chat が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
+    "利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
     # evidence は回答で引用した箇所だけではない（AI に渡した箇所の全体。#2040）。
     "## Step 4: 結果の根拠を読む\n"
     "evidence は AI に渡した資料の箇所です。used_in_answer は回答で引用した箇所、"
@@ -571,8 +530,8 @@ class RecommendSearchAnswerProfileInput(BaseModel):
         return ids
 
 
-class SearchScopeInput(BaseModel):
-    """検索の条件（rag_search と rag_retrieve_evidence で共通）。
+class SearchInput(BaseModel):
+    """rag_search の条件（基本の検索。#5352）。
 
     旧 scope を含む未定義項目は拒否する。
     """
@@ -633,16 +592,6 @@ class SearchScopeInput(BaseModel):
             "前後の文脈の順に残す（並びは evidence の順のまま）。"
         ),
     )
-    conditions: dict[str, str] = Field(
-        default_factory=dict,
-        max_length=30,
-        description=(
-            "業務ガイドの条件の値"
-            "（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値"
-            "（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、"
-            "分かっている条件は聞き直さない。"
-        ),
-    )
 
     @field_validator("filters")
     @classmethod
@@ -656,87 +605,10 @@ class SearchScopeInput(BaseModel):
         return value
 
 
-class ApprovedFaqChoiceInput(SearchScopeInput):
-    """承認済み FAQ の候補への利用者の選択（rag_search と rag_retrieve_evidence で共通）。
-
-    候補の提示と選んだ Q&A の回答は画面と同じ規則（#5107・#5134・#5136）。
-    """
-
-    approved_faq_id: OptionalText = Field(
-        default=None,
-        max_length=200,
-        description=(
-            "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、検索をせずにその Q&A の"
-            "登録済みの回答を返す。search_answer_profile_id が要る。"
-        ),
-    )
-    skip_approved_faq: bool = Field(
-        default=False,
-        description=(
-            "true なら登録済みの Q&A の候補を返さずに検索する（利用者が候補のどれも選ば"
-            "なかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索の前に"
-            "その候補だけを返す。"
-        ),
-    )
-
-    @model_validator(mode="after")
-    def _one_approved_faq_choice(self) -> Self:
-        if self.approved_faq_id is not None and self.skip_approved_faq:
-            raise ValueError("approved_faq_id と skip_approved_faq は一緒に渡さないでください。")
-        if self.approved_faq_id is not None and self.search_answer_profile_id is None:
-            raise ValueError(
-                "approved_faq_id を渡すときは、候補を返した search_answer_profile_id も渡して"
-                "ください。"
-            )
-        return self
-
-
-class SearchInput(ApprovedFaqChoiceInput):
-    """検索・回答の条件（回答の要求の単位に使う元の質問を足す）。"""
-
-    original_question: OptionalText = Field(
-        default=None,
-        max_length=8000,
-        description=(
-            "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す"
-            "（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに"
-            "根拠を確かめて作る。"
-        ),
-    )
-
-
-# 1 回の呼び出しは 1 つの質問（#5125）。何を調べるかは呼び出し元が決め、RAG は渡された query で
-# 通常どおり検索し（用語の照合も query）、回答は作らずに根拠だけを返す。
-class RetrieveEvidenceInput(ApprovedFaqChoiceInput):
-    """根拠の収集の条件。"""
-
-    query: str = Field(
-        ...,
-        min_length=1,
-        max_length=8000,
-        description=(
-            "1 つの質問（利用者の質問か、そこから分けた 1 つの問い）。"
-            "複数の問いを 1 つの query にまとめない。"
-        ),
-    )
-    evidence_limit: int = Field(
-        default_factory=_retrieve_evidence_default,
-        json_schema_extra=_retrieve_evidence_default_schema,
-        ge=1,
-        le=EVIDENCE_LIMIT_MAX,
-        description=(
-            "返す根拠の最大件数。超えるときは、検索で当たった根拠（関連度の順）、前後の文脈の順に"
-            "残す（並びは evidence の順のまま）。"
-            "省略時は設定の検索する件数（top_k）を基準に、この件数の上限まで返し、"
-            "検索で当たった根拠を全部返す。"
-        ),
-    )
-
-
 # 1 回の呼び出しは 1 つの質問（会話の履歴による補完・会話の添付はしない。#5339）。範囲は検索・回答
 # プロファイルの参照先と設定だけ（ナレッジベース・filters・top_k は受けない）。
 class ChatInput(BaseModel):
-    """RAG Chat の経路で答える条件。"""
+    """RAG チャットの経路で答える条件。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -804,8 +676,8 @@ class ChatInput(BaseModel):
     skip_approved_faq: bool = Field(
         default=False,
         description=(
-            "true なら登録済みの Q&A の候補を返さずに答える（利用者が候補のどれも選ばなかった"
-            "とき）。既定（false）は、質問に近い登録済みの Q&A があれば、回答の前にその候補だけを"
+            "true なら登録済みQ&A の候補を返さずに答える（利用者が候補のどれも選ばなかった"
+            "とき）。既定（false）は、質問に近い登録済みQ&A があれば、回答の前にその候補だけを"
             "返す。"
         ),
     )
@@ -827,21 +699,6 @@ class ChatInput(BaseModel):
                 "ください。"
             )
         return self
-
-
-class LookupGuidesInput(BaseModel):
-    """質問に当たる業務ガイドを引く条件。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = Field(..., min_length=1, max_length=8000, description="質問文（利用者の目的）。")
-    search_answer_profile_id: str = Field(
-        ..., min_length=1, max_length=128, description="検索・回答プロファイルの id。"
-    )
-    conditions: dict[str, str] = Field(
-        default_factory=dict, max_length=30, description="分かっている条件の値（条件の id → 値）。"
-    )
-    limit: int = Field(default=3, ge=1, le=10, description="返す業務ガイドの最大件数。")
 
 
 class ReadSourceInput(BaseModel):
@@ -1878,7 +1735,7 @@ GUARDRAIL_DEGRADED_DESCRIPTION = (
 
 
 class ApprovedFaqCandidate(BaseModel):
-    """検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。"""
+    """回答の前に利用者に示す登録済みQ&A の候補（rag_chat）。"""
 
     id: str = Field(description="Q&A の id（利用者が選んだら approved_faq_id に渡す）。")
     question: str = Field(description="登録済みの質問。")
@@ -1886,56 +1743,33 @@ class ApprovedFaqCandidate(BaseModel):
 
 
 class ApprovedFaqRef(BaseModel):
-    """回答に使った承認済み FAQ（回答は登録済みの回答をそのまま返したもの）。"""
+    """回答に使った登録済みQ&A（回答は登録済みの回答をそのまま返したもの）。"""
 
     id: str
     question: str = Field(description="登録済みの質問。")
 
 
-class ApprovedFaqAnswer(ApprovedFaqRef):
-    """利用者が選んだ承認済み FAQ と、その登録済みの回答（rag_retrieve_evidence。#5136）。"""
-
-    answer: str = Field(description="登録済みの回答（原文のまま）。")
-
-
 APPROVED_FAQ_CANDIDATES_DESCRIPTION = (
-    "status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。"
+    "status=approved_faq_candidates のとき、登録済みQ&A の候補（一致度の順）。"
 )
 
 
-class SearchOutput(VersionedOutput):
-    status: SearchStatus = Field(
-        default="completed",
-        description=(
-            "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みの Q&A の"
-            "候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、"
-            "outcome は null）。"
-        ),
-    )
-    approved_faq_candidates: list[ApprovedFaqCandidate] = Field(
-        default_factory=list, description=APPROVED_FAQ_CANDIDATES_DESCRIPTION
-    )
-    approved_faq: ApprovedFaqRef | None = Field(
-        default=None,
-        description=(
-            "approved_faq_id で選んだ Q&A の登録済みの回答を answer に返したとき、その Q&A"
-            "（根拠の evidence は空）。それ以外は null。"
-        ),
-    )
+OUTCOME_DESCRIPTION = (
+    "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / "
+    "needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / "
+    "insufficient_evidence=資料から答えられない。needs_clarification / needs_human は"
+    "利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを"
+    "確かめる回答は conditional（conditions に載る）。"
+)
+
+
+class AnswerToolOutput(VersionedOutput):
+    """回答のツール（rag_search・rag_chat）の共通の項目（回答と根拠）。"""
+
     answer: str
     trace_id: str
     guardrail_warnings: list[str]
     guardrail_degraded: bool = Field(default=False, description=GUARDRAIL_DEGRADED_DESCRIPTION)
-    outcome: AnswerOutcome | None = Field(
-        description=(
-            "回答の対応（status=approved_faq_candidates のときは null）。answered=資料で答えた / "
-            "conditional=条件・不足を示して答えた / "
-            "needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / "
-            "insufficient_evidence=資料から答えられない。needs_clarification / needs_human は"
-            "利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを"
-            "確かめる回答は conditional（conditions に載る）。"
-        )
-    )
     requests: list[AnswerRequest] = Field(
         default_factory=list, description="質問の要求単位ごとの充足（背景の文は含めない）。"
     )
@@ -1949,15 +1783,6 @@ class SearchOutput(VersionedOutput):
     gaps: list[str] = Field(default_factory=list, description="資料から確かめられない点。")
     confirmations: list[str] = Field(
         default_factory=list, description="回答を確定するために確かめる現場のデータ・別の資料。"
-    )
-    clarifications: list[GuideClarification] = Field(
-        default_factory=list,
-        description=(
-            "outcome=needs_clarification のとき、利用者に確かめる業務ガイドの条件と問い。"
-        ),
-    )
-    guide: GuideRef | None = Field(
-        default=None, description="回答に使った業務ガイド（公開の版）。使わなければ null。"
     )
     insufficient_reason: str | None = Field(
         default=None, description="根拠が足りず答えきれなかった理由（無ければ null）。"
@@ -1995,208 +1820,46 @@ class SearchOutput(VersionedOutput):
     )
 
 
-# rag_chat の出力（#5339）。今は rag_search と同じ形（承認済み FAQ の候補・確認・業務ガイド
-# を含む）。
-class ChatOutput(SearchOutput):
-    """RAG Chat の経路の回答と根拠。"""
+class SearchOutput(AnswerToolOutput):
+    """rag_search の回答と根拠（基本の検索。#5352）。"""
+
+    outcome: AnswerOutcome = Field(description=OUTCOME_DESCRIPTION)
 
 
-class GuidePageRangeItem(BaseModel):
-    page_start: int
-    page_end: int
+# rag_chat の出力（#5339）。登録済みQ&A の候補・業務ガイドの確認と業務ガイドの判断は rag_chat
+# だけが返す（#5352）。
+class ChatOutput(AnswerToolOutput):
+    """RAG チャットの経路の回答と根拠。"""
 
-
-class GuideSheetRangeItem(BaseModel):
-    sheet_name: str
-    row_start: int | None = Field(default=None, description="始まりの行（無ければシートの全体）。")
-    row_end: int | None = None
-    cell_range: str = Field(default="", description="A1 形式のセルの範囲（書いてあれば）。")
-
-
-class GuideReferenceItem(BaseModel):
-    document_id: str
-    title: str = Field(default="", description="表示名（参照の正本は document_id）。")
-    section_path: list[str] = Field(default_factory=list, description="節の見出しの列。")
-    page_ranges: list[GuidePageRangeItem] = Field(
-        default_factory=list,
-        description=(
-            "根拠の頁の範囲（両端を含む。空なら文書の全体）。rag_read_document に document_id と "
-            "page（page_start）を渡すと、その頁から読める。"
-        ),
-    )
-    sheet_ranges: list[GuideSheetRangeItem] = Field(
-        default_factory=list,
-        description="表計算の資料の根拠のシートと行の範囲（両端を含む。頁ではない）。",
-    )
-
-
-class GuideStepItem(BaseModel):
-    id: str
-    title: str
-    purpose: str = ""
-    depends_on: list[str] = Field(default_factory=list)
-    allowed_tools: list[str] = Field(default_factory=list)
-    retrieval_hints: list[str] = Field(
-        default_factory=list, description="この手順の根拠を引く検索の手がかり（語・画面名など）。"
-    )
-    references: list[GuideReferenceItem] = Field(
-        default_factory=list, description="この手順の根拠がある資料と頁。"
-    )
-    evidence_requirements: list[str] = Field(
-        default_factory=list, description="この手順で示すべき根拠。"
-    )
-    done_when: str = Field(default="", description="この手順の終わりの条件。")
-
-
-class GuideBranchItem(BaseModel):
-    id: str
-    condition_id: str
-    operator: Literal["equals", "in", "unknown"]
-    values: list[str] = Field(default_factory=list)
-    goto_step: str = Field(description="条件に当たるときに進む手順の id。")
-    applies: bool | None = Field(
-        description=(
-            "分かっている条件に当たるか（true=当たる / null=条件が分からず決まらない）。"
-            "当たらない分岐は返さない。"
-        )
-    )
-    note: str = ""
-
-
-class GuideCompletionItem(BaseModel):
-    id: str
-    description: str
-    check_method: str = ""
-
-
-class LookupGuideItem(GuideRef):
-    expected_result: str
-    score: int = Field(description="質問との照合の点（大きいほど合う）。")
-    clarifications: list[GuideClarification] = Field(default_factory=list)
-    steps: list[GuideStepItem] = Field(
-        default_factory=list,
-        description="手順（確かめる順。分かっている条件で外れた分岐の手順は含めない）。",
-    )
-    branches: list[GuideBranchItem] = Field(
-        default_factory=list, description="当たる・決まらない分岐（当たらない分岐は含めない）。"
-    )
-    references: list[GuideReferenceItem] = Field(
-        default_factory=list, description="全手順に共通の資料と頁。"
-    )
-    completion: list[GuideCompletionItem] = Field(
-        default_factory=list, description="回答を終えてよい条件。"
-    )
-    impact_scope: Literal["individual", "group", "all"]
-    approval_required: bool
-    impact_steps: list[str] = Field(
-        default_factory=list,
-        description="影響範囲と承認が係る手順の id（空なら業務ガイドのすべての場合に係る）。",
-    )
-    impact_applies: bool = Field(
-        default=True,
-        description=(
-            "分かっている条件の場合に影響範囲・承認が係るか（false なら、外れた分岐の手順だけに"
-            "係るので、回答に影響範囲・承認を書かない）。"
-        ),
-    )
-    handoff_contact: str = ""
-
-
-class LookupGuidesOutput(VersionedOutput):
-    guides: list[LookupGuideItem] = Field(
-        description=(
-            "質問に当たり、適用範囲の手がかりと合う公開の業務ガイド（照合の点の高い順）。"
-            "無ければ空。"
-        )
-    )
-
-
-ProfileKnowledgeStatus = Literal["approved", "stale_review_needed"]
-PROFILE_KNOWLEDGE_STATUS_DESCRIPTION = (
-    "approved=承認済み / stale_review_needed=承認済みで、見直しの期日を過ぎている"
-)
-
-
-class ProfileKnowledgeTerm(BaseModel):
-    term: str
-    aliases: list[str] = Field(default_factory=list)
-    description: str = Field(description="用語の説明（無ければ空）。")
-    source: str = Field(description="用語を登録した人が書いた出典（無ければ空）。")
-    status: ProfileKnowledgeStatus = Field(description=PROFILE_KNOWLEDGE_STATUS_DESCRIPTION)
-    updated_at: str = Field(description="用語を最後に更新した時刻（不明なら空）。")
-
-
-class ProfileKnowledge(BaseModel):
-    search_answer_profile_id: str
-    revision: str | None = Field(
-        description=(
-            "照合した用語・同義語の登録の版（登録の内容の sha256 の先頭。読めなければ null）。"
-        )
-    )
-    terms: list[ProfileKnowledgeTerm] = Field(
-        description="当たった用語と説明（一致の強い順）。資料の原文ではない。"
-    )
-    terms_omitted: int = Field(description="件数・字数の上限を超えて返さなかった用語の数。")
-    load_failed: bool = Field(
-        default=False,
-        description=("用語・同義語を読めなかった（terms は空。当たるものが無いとは限らない）。"),
-    )
-
-
-class RetrieveEvidenceOutput(VersionedOutput):
     status: SearchStatus = Field(
         default="completed",
         description=(
-            "completed=根拠を検索した（approved_faq_id を渡したときは、選んだ Q&A を返した）/ "
-            "approved_faq_candidates=質問に近い登録済みの Q&A の候補（approved_faq_candidates）"
-            "だけを返した（根拠は検索していない。evidence は空）。"
+            "completed=回答した / approved_faq_candidates=質問に近い登録済みQ&A の"
+            "候補（approved_faq_candidates）だけを返した（回答していない。answer は空、"
+            "outcome は null）。"
         ),
     )
     approved_faq_candidates: list[ApprovedFaqCandidate] = Field(
         default_factory=list, description=APPROVED_FAQ_CANDIDATES_DESCRIPTION
     )
-    approved_faq: ApprovedFaqAnswer | None = Field(
+    approved_faq: ApprovedFaqRef | None = Field(
         default=None,
         description=(
-            "approved_faq_id で選んだ Q&A と、その登録済みの回答（根拠の evidence は空）。"
-            "資料の根拠と同じく、回答の根拠に使う。それ以外は null。"
+            "approved_faq_id で選んだ Q&A の登録済みの回答を answer に返したとき、その Q&A"
+            "（根拠の evidence は空）。それ以外は null。"
         ),
     )
-    trace_id: str
-    guardrail_warnings: list[str]
-    guardrail_degraded: bool = Field(default=False, description=GUARDRAIL_DEGRADED_DESCRIPTION)
-    degraded_steps: list[DegradedStep] = Field(
-        default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
+    outcome: AnswerOutcome | None = Field(
+        description=OUTCOME_DESCRIPTION + "status=approved_faq_candidates のときは null。"
     )
-    zero_evidence: ZeroEvidence | None = Field(default=None, description=ZERO_EVIDENCE_DESCRIPTION)
-    evidence: list[RagEvidence] = Field(
+    clarifications: list[GuideClarification] = Field(
+        default_factory=list,
         description=(
-            "検索で当たった根拠（role=retrieved_anchor・entity_expansion）と前後の文脈"
-            "（neighbor_context など）を、同じ文書の続く箇所ごとにまとめて関連度の順に並べる。"
-            "検索の拡張で加えた根拠は evidence_limit に数えない。回答は作らないので used_in_answer"
-            " は false。"
-        )
-    )
-    evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
-    evidence_text_omitted: int = Field(
-        default=0, description="応答の予算に入らず本文を省いた根拠（text_omitted）の数。"
-    )
-    older_versions: list[OlderVersion] = Field(
-        default_factory=list, description=OLDER_VERSIONS_DESCRIPTION
-    )
-    auto_selected_search_answer_profile: AutoSelectedProfile | None = Field(
-        default=None, description=AUTO_SELECTED_PROFILE_DESCRIPTION
-    )
-    profile_knowledge: ProfileKnowledge | None = Field(
-        default=None,
-        description=(
-            "検索・回答プロファイルに登録・承認された用語の説明（terms）のうち、"
-            "query に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として"
-            "引用しない。根拠の読み方と回答の判断に使う。上限（用語 "
-            f"{PROFILE_KNOWLEDGE_TERMS_MAX} 件・文字の合計 {PROFILE_KNOWLEDGE_MAX_CHARS} 字）を"
-            "超えた分は terms_omitted に数える。"
-            "検索・回答プロファイルを使わない検索・当たるものが無いときは null。"
+            "outcome=needs_clarification のとき、利用者に確かめる業務ガイドの条件と問い。"
         ),
+    )
+    guide: GuideRef | None = Field(
+        default=None, description="回答に使った業務ガイド（公開の版）。使わなければ null。"
     )
 
 
@@ -2869,21 +2532,6 @@ def mcp_evidence(
     )
     keep = {id(chunk) for chunk in (*head, *added)}
     return [chunk for chunk in citations if id(chunk) in keep], len(rest)
-
-
-def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
-    """rag_retrieve_evidence が返す根拠の件数（#1365）。
-
-    evidence_limit を省略して top_k を既定より大きくしたときは top_k まで返す（検索で当たった
-    chunk を全部返す。上限は EVIDENCE_LIMIT_MAX）。渡した evidence_limit はそのまま使う。
-    """
-    if (
-        "evidence_limit" in arguments.model_fields_set
-        or "top_k" not in arguments.model_fields_set
-        or arguments.top_k is None
-    ):
-        return arguments.evidence_limit
-    return min(max(arguments.evidence_limit, arguments.top_k), EVIDENCE_LIMIT_MAX)
 
 
 def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any]:
@@ -4048,16 +3696,12 @@ async def read_source(
     return McpToolResult(output=output, content=blocks) if blocks else output
 
 
-def _search_request(arguments: SearchScopeInput) -> SearchRequest:
+def _search_request(arguments: SearchInput) -> SearchRequest:
     payload: dict[str, Any] = {
         "query": arguments.query,
         "knowledge_base_ids": arguments.knowledge_base_ids,
         "filters": arguments.filters,
     }
-    if isinstance(arguments, SearchInput) and arguments.original_question is not None:
-        payload["original_question"] = arguments.original_question
-    if isinstance(arguments, ApprovedFaqChoiceInput) and arguments.approved_faq_id is not None:
-        payload["approved_faq_id"] = arguments.approved_faq_id
     if arguments.include_superseded:
         # 検索の要求の中では旧版の扱いは filters の 1 つ（画面の検索と同じ。#1248）。
         payload["filters"] = {**arguments.filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
@@ -4065,8 +3709,6 @@ def _search_request(arguments: SearchScopeInput) -> SearchRequest:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if "top_k" in arguments.model_fields_set and arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
-    if arguments.conditions:
-        payload["conditions"] = arguments.conditions
     return _validated_request(payload)
 
 
@@ -4099,7 +3741,7 @@ def _validated_request(payload: dict[str, Any]) -> SearchRequest:
 
 
 async def _older_versions(
-    arguments: SearchScopeInput | ChatInput,
+    arguments: SearchInput | ChatInput,
     request: SearchRequest,
     citations: Sequence[RetrievedChunk],
 ) -> list[OlderVersion]:
@@ -4143,169 +3785,6 @@ async def _older_versions(
     ]
 
 
-def _knowledge_status(status: str) -> ProfileKnowledgeStatus:
-    # 状態が空の登録は承認済みとして使う（回答の生成と同じ有効の判定。無効・下書きは照合で除く）。
-    return "stale_review_needed" if status == "stale_review_needed" else "approved"
-
-
-def _knowledge_term(term: RuntimeTerm) -> ProfileKnowledgeTerm:
-    return ProfileKnowledgeTerm(
-        term=term.term,
-        aliases=list(term.aliases),
-        description=term.description,
-        source=term.source,
-        status=_knowledge_status(term.status),
-        updated_at=term.updated_at,
-    )
-
-
-def _knowledge_revision(payload: Mapping[str, object]) -> str:
-    text = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowledge | None:
-    """query に当たる検索・回答プロファイルの承認済みの用語の説明（#2701）。
-
-    RAG が回答を作らない根拠の取得では、回答を作る呼び出し元（業務 Agent）へ渡す。照合は回答の
-    生成と同じ（有効な登録だけ・語の一致。LLM は呼ばない）で、渡された query に当てる（#5125）。
-    対象は検索に使った検索・回答プロファイルだけ（利用者の範囲外は
-    無いものになる）。件数・字数の上限で切り、省いた数を示す。読めなければ
-    ``load_failed`` を返す（当たるものが無いこと〔null〕と区別する）。
-    """
-    profile_id = arguments.search_answer_profile_id
-    if profile_id is None:
-        return None
-    question = arguments.query
-    try:
-        oracle = OracleClient()
-        view = await oracle.get_search_answer_profile(profile_id)
-        if view is None:
-            return None
-        payload = await load_runtime_knowledge_payload(oracle, view.id)
-        context = await asyncio.to_thread(match_runtime_knowledge, payload, question)
-    except Exception:  # noqa: BLE001 - 根拠の結果は返し、読めなかったことを示す
-        logger.warning("rag_mcp_profile_knowledge_load_failed", exc_info=True)
-        context = None
-    if context is None or context.error:
-        if context is not None:
-            logger.warning("rag_mcp_profile_knowledge_invalid")
-        return ProfileKnowledge(
-            search_answer_profile_id=profile_id,
-            revision=None,
-            terms=[],
-            terms_omitted=0,
-            load_failed=True,
-        )
-    context = context.with_term_usage(
-        search=False, answer=get_settings().rag_runtime_terms_answer_enabled
-    )
-    if not context.answer_terms:
-        return None
-    remaining = PROFILE_KNOWLEDGE_MAX_CHARS
-    terms: list[ProfileKnowledgeTerm] = []
-    for term in context.answer_terms:
-        size = len(term.term) + sum(map(len, term.aliases)) + len(term.description)
-        size += len(term.source)
-        if len(terms) < PROFILE_KNOWLEDGE_TERMS_MAX and size <= remaining:
-            terms.append(_knowledge_term(term))
-            remaining -= size
-    return ProfileKnowledge(
-        search_answer_profile_id=profile_id,
-        revision=_knowledge_revision(payload),
-        terms=terms,
-        terms_omitted=len(context.answer_terms) - len(terms),
-    )
-
-
-def _profile_knowledge_log(knowledge: ProfileKnowledge | None) -> dict[str, object]:
-    """モデルへ渡した用語の記録（数と版だけ。本文・名前は業務の内容なので残さない）。"""
-    if knowledge is None:
-        return {"profile_knowledge": None}
-    return {
-        "profile_knowledge": {
-            "revision": knowledge.revision,
-            "terms": len(knowledge.terms),
-            "terms_omitted": knowledge.terms_omitted,
-            "load_failed": knowledge.load_failed,
-        }
-    }
-
-
-def _guide_reference(reference: SupportGuideReference) -> GuideReferenceItem:
-    return GuideReferenceItem(
-        document_id=reference.document_id,
-        title=reference.title,
-        section_path=list(reference.section_path),
-        page_ranges=[
-            GuidePageRangeItem(
-                page_start=item.page_start, page_end=item.page_end or item.page_start
-            )
-            for item in reference.page_ranges
-        ],
-        sheet_ranges=[
-            GuideSheetRangeItem(
-                sheet_name=item.sheet_name,
-                row_start=item.row_start,
-                row_end=item.row_end,
-                cell_range=item.cell_range,
-            )
-            for item in reference.sheet_ranges
-        ],
-    )
-
-
-def _lookup_item(match: GuideMatch) -> LookupGuideItem:
-    summary = match.summary()
-    content = match.content
-    # 分かっている条件で外れた分岐の手順は返さない（回答の材料と同じ。#2396）。
-    steps, branches = visible_plan(match)
-    return LookupGuideItem(
-        **summary,
-        expected_result=content.goal.expected_result,
-        score=match.score,
-        clarifications=[GuideClarification(**item) for item in clarification_questions(match)],
-        steps=[
-            GuideStepItem(
-                id=step.id,
-                title=step.title,
-                purpose=step.purpose,
-                depends_on=list(step.depends_on),
-                allowed_tools=list(step.allowed_tools),
-                retrieval_hints=list(step.retrieval_hints),
-                references=[_guide_reference(item) for item in step.references],
-                evidence_requirements=list(step.evidence_requirements),
-                done_when=step.done_when,
-            )
-            for step in steps
-        ],
-        branches=[
-            GuideBranchItem(
-                id=branch.id,
-                condition_id=branch.when.condition_id,
-                operator=branch.when.operator,
-                values=list(branch.when.values),
-                goto_step=branch.goto_step,
-                applies=applies,
-                note=branch.note,
-            )
-            for branch, applies in branches
-        ],
-        references=[_guide_reference(item) for item in content.references],
-        completion=[
-            GuideCompletionItem(
-                id=item.id, description=item.description, check_method=item.check_method
-            )
-            for item in content.completion
-        ],
-        impact_scope=content.impact.scope,
-        approval_required=content.impact.approval_required,
-        impact_steps=list(content.impact.steps),
-        impact_applies=impact_applies(match),
-        handoff_contact=content.handoff.contact,
-    )
-
-
 def called_with_api_key(http_request: Request) -> bool:
     """利用者の API キー（`prak_…`）で呼んだ外部の MCP クライアントか（#2405）。
 
@@ -4336,7 +3815,7 @@ def _figure_url_request(http_request: Request) -> FigureUrlRequest | None:
     return FigureUrlRequest(subject=subject, base_url=str(http_request.base_url))
 
 
-def _check_search_scope(scope: ProfileScope | None, arguments: SearchScopeInput) -> None:
+def _check_search_scope(scope: ProfileScope | None, arguments: SearchInput) -> None:
     check_search(scope, arguments.search_answer_profile_id, arguments.knowledge_base_ids)
 
 
@@ -4357,10 +3836,6 @@ def _check_chat(scope: ProfileScope | None, arguments: ChatInput) -> None:
     # 省略は範囲の中から自動で選ぶ（`_select_profile` は範囲に絞った監査 context の中で数える）。
     if arguments.search_answer_profile_id is not None:
         check_profile(scope, arguments.search_answer_profile_id)
-
-
-def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput) -> None:
-    check_profile(scope, arguments.search_answer_profile_id)
 
 
 LIST_PROFILES_TOOL = "rag_list_search_answer_profiles"
@@ -4388,46 +3863,13 @@ async def _active_profiles(query: str | None, limit: int) -> list[SearchAnswerPr
     return list(page.items) if page is not None else []
 
 
-async def profile_not_found_error(search_answer_profile_id: str) -> McpToolError:
-    """見つからない・使えない検索・回答プロファイルの id のエラー（次の手つき。#2355）。
-
-    使えるプロファイルは今の監査 context（利用者の権限とデータの範囲）の中だけを数えるので、
-    ほかの利用者のプロファイルは案内に出ない。1 つだけならその id を案内する。
-    """
-    try:
-        usable = await _active_profiles(None, 2)
-    except HTTPException:
-        usable = None  # 一覧を読めなくても、id の誤りと次の手は返す
-    message = f"検索・回答プロファイル「{search_answer_profile_id}」は見つからないか、使えません。"
-    details: dict[str, Any] = {
-        "search_answer_profile_id": search_answer_profile_id,
-        "next_tools": [RECOMMEND_PROFILE_TOOL, LIST_PROFILES_TOOL],
-    }
-    if usable is not None and len(usable) == 1:
-        only = usable[0]
-        details["suggested_search_answer_profile_id"] = only.id
-        message += (
-            f"使える検索・回答プロファイルは「{only.name}」（id: {only.id}）だけです。"
-            "この id を search_answer_profile_id に渡して呼び直してください。"
-        )
-    elif usable is not None and not usable:
-        details["next_tools"] = []
-        message += NO_PROFILES_NEXT_STEP
-    else:
-        message += (
-            f"{RECOMMEND_PROFILE_TOOL} に質問を渡して選ぶか、{LIST_PROFILES_TOOL}（query なし）の"
-            "一覧の id を search_answer_profile_id に渡して呼び直してください。"
-        )
-    return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
-
-
 # 回答のツール（rag_search・rag_chat）の通しの期限（event loop の時刻。#5339）。
 # `_within_answer_deadline` が置き、`_run_search` が回答生成に渡す。
 _ANSWER_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "rag_mcp_answer_deadline", default=None
 )
 # 外側の期限に足す余裕（秒）。回答生成の中の時間切れ（工程と監査が残る）を外側の打ち切りより
-# 先にする。外側は回答生成の前後（承認済み FAQ の照会・プロファイルの自動の選択・根拠の整形）の
+# 先にする。外側は回答生成の前後（登録済みQ&A の照会・プロファイルの自動の選択・根拠の整形）の
 # 時間切れを止める保険。
 ANSWER_DEADLINE_GRACE_SECONDS = 1.0
 
@@ -4461,7 +3903,9 @@ def _within_answer_deadline[A, R](
     return wrapped
 
 
-async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
+async def _run_search(
+    request: SearchRequest, *, flow: AnswerFlow, **options: Any
+) -> SearchResponse:
     """検索・回答の pipeline を実行し、AI の API の失敗を種類つきのツールのエラーにする（#2475）。
 
     汎用の内部エラー（`MCP_TOOL_INTERNAL_ERROR`）にすると、呼び出し元（業務 Agent）が検索の失敗を
@@ -4469,9 +3913,8 @@ async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
     質問・文書・呼び先の応答の本文は入れない（ログも同じ項目だけ）。
     """
     try:
-        # MCP は業務ガイドの照合・承認済み FAQ・根拠の拡張を含む今の経路で答える（#5332）。
         return await search_route._run_search_with_timeout(
-            request, flow=EXPANDED_FLOW, deadline=_ANSWER_DEADLINE.get(), **options
+            request, flow=flow, deadline=_ANSWER_DEADLINE.get(), **options
         )
     except search_route.AnswerApiFailedHTTPError as exc:
         # 検索の REST と同じ分類（#2667）を、種類つきのツールのエラーにする。
@@ -4581,15 +4024,13 @@ def _selection_error(
     return McpToolError(SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE, message, status=404, details=details)
 
 
-async def _approved_faq_suggestions(
-    arguments: ApprovedFaqChoiceInput | ChatInput,
-) -> list[ApprovedFaqCandidate]:
-    """検索の前に示す承認済み FAQ の候補（#5134・#5136。画面の照会と同じ規則。#5107）。
+async def _approved_faq_suggestions(arguments: ChatInput) -> list[ApprovedFaqCandidate]:
+    """回答の前に示す登録済みQ&A の候補（rag_chat。#5134・#5339。画面の照会と同じ規則。#5107）。
 
     approved_faq_id・skip_approved_faq を渡した呼び出しは照会しない。検索・回答プロファイルを
-    指定した検索だけ。プロファイルが無い・使えない（アーカイブ済み）ときは候補を返さず、検索の
-    側のエラー（プロファイルの自動の選択を含む）に任せる。照合は利用者の元の質問（rag_search の
-    original_question。無ければ query）で行う。
+    指定した呼び出しだけ。プロファイルが無い・使えない（アーカイブ済み）ときは候補を返さず、回答の
+    側のエラー（プロファイルの自動の選択を含む）に任せる。照合は利用者の元の質問
+    （original_question。無ければ query）で行う。
     """
     profile_id = arguments.search_answer_profile_id
     if arguments.approved_faq_id is not None or arguments.skip_approved_faq or profile_id is None:
@@ -4601,11 +4042,8 @@ async def _approved_faq_suggestions(
     status = getattr(view, "status", None)
     if getattr(status, "value", status) == SearchAnswerProfileStatus.ARCHIVED.value:
         return []
-    question = (
-        arguments.original_question if isinstance(arguments, SearchInput | ChatInput) else None
-    )
     suggestions, _ = await approved_faq_candidates(
-        oracle, view.id, question or arguments.query, get_settings()
+        oracle, view.id, arguments.original_question or arguments.query, get_settings()
     )
     return [
         ApprovedFaqCandidate(
@@ -4616,7 +4054,7 @@ async def _approved_faq_suggestions(
 
 
 def _approved_faq_ref(result: SearchResponse) -> ApprovedFaqRef | None:
-    """選んだ承認済み FAQ の回答をそのまま返した検索なら、その Q&A（それ以外は None）。"""
+    """選んだ登録済みQ&A の回答をそのまま返した回答なら、その Q&A（それ以外は None）。"""
     diagnostics = _answer_diagnostics(result)
     if not is_approved_faq_answer(diagnostics):
         return None
@@ -4626,34 +4064,9 @@ def _approved_faq_ref(result: SearchResponse) -> ApprovedFaqRef | None:
     )
 
 
-async def _approved_faq_evidence(request: SearchRequest) -> RetrieveEvidenceOutput:
-    """rag_retrieve_evidence で利用者が選んだ承認済み FAQ の登録済みの回答（#5136）。
-
-    rag_search の approved_faq_id と同じ経路で引き、根拠は検索しない。安全チェックで止めた
-    質問は、FAQ の回答を返さずに止めた結果（guardrail_warnings）を返す。
-    """
-    result = await _run_search(request)
-    diagnostics = _answer_diagnostics(result)
-    ref = _approved_faq_ref(result)
-    return RetrieveEvidenceOutput(
-        approved_faq=(
-            ApprovedFaqAnswer(id=ref.id, question=ref.question, answer=result.answer)
-            if ref is not None
-            else None
-        ),
-        trace_id=result.trace_id,
-        guardrail_warnings=list(result.guardrail_warnings),
-        guardrail_degraded=_guardrail_degraded(result),
-        degraded_steps=_degraded_steps(diagnostics),
-        zero_evidence=_zero_evidence(diagnostics, result) if ref is None else None,
-        evidence=[],
-        evidence_omitted=0,
-    )
-
-
 def _with_profile_selection[
-    A: SearchScopeInput | ChatInput,
-    R: SearchOutput | RetrieveEvidenceOutput,
+    A: SearchInput | ChatInput,
+    R: SearchOutput | ChatOutput,
 ](
     handler: Callable[[A], Awaitable[R]],
     *,
@@ -4662,16 +4075,14 @@ def _with_profile_selection[
     """検索・回答プロファイルの id を誤ったときに、自動で選んで続ける（#2355）。
 
     モデルが推測した id で失敗させない: 見つからない・使えない id なら、使えるプロファイルが
-    1 つならそれを、そうでなければ質問（rag_search・rag_chat の original_question、無ければ
-    query）の推薦が決めたものを使い、結果の auto_selected_search_answer_profile に示す。決まら
+    1 つならそれを、そうでなければ質問（rag_chat の original_question、無ければ query）の
+    推薦が決めたものを使い、結果の auto_selected_search_answer_profile に示す。決まら
     なければ、推薦の候補と次の手の付いたエラーにする。``select_when_omitted`` は id の省略も
     自動の選択にする（rag_chat。範囲は検索・回答プロファイルだけ。#5339）。
     """
 
     async def run_selected(arguments: A, requested: str | None) -> R:
-        question = (
-            arguments.original_question if isinstance(arguments, SearchInput | ChatInput) else None
-        )
+        question = arguments.original_question if isinstance(arguments, ChatInput) else None
         selected, usable, candidates = await _select_profile(question or arguments.query)
         if selected is None:
             raise _selection_error(requested, usable, candidates)
@@ -4768,19 +4179,59 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             ],
         )
 
-    async def answer_output[O: SearchOutput](
+    async def answer_output[O: SearchOutput | ChatOutput](
         output_type: type[O],
         arguments: SearchInput | ChatInput,
         request: SearchRequest,
-        *,
-        interactive: bool = False,
+        result: SearchResponse,
+        extra: Mapping[str, Any],
     ) -> O:
-        """回答のツール（rag_search・rag_chat）の出力（承認済み FAQ の候補か、回答と根拠）。"""
-        # 検索・回答の前に承認済み FAQ の候補を照会し、あれば候補だけを返す（#5134。画面と
-        # 同じ入口の順: 安全チェック → 照合）。
+        """回答のツールの回答と根拠（根拠の本文は応答の予算に入れてから足す）。"""
+        citations = await _with_extraction_recipe_ids(None, list(result.citations))
+        result = result.model_copy(update={"citations": citations})
+        returned, _ = mcp_evidence(citations, arguments.evidence_limit)
+        sections = await _chunk_sections(returned)
+        fields = {
+            key: value
+            for key, value in _answer_fields(result, arguments.evidence_limit).items()
+            if key in output_type.model_fields
+        }
+        output = output_type(
+            **fields,
+            **extra,
+            older_versions=await _older_versions(arguments, request, citations),
+            notice=result.notice if called_with_api_key(http_request) else None,
+        )
+        original = arguments.original_question if isinstance(arguments, ChatInput) else None
+        evidence, text_omitted = _fit_evidence(
+            returned,
+            sections,
+            queries=[arguments.query, original],
+            reserved_tokens=_output_tokens(output),
+        )
+        return cast(
+            O,
+            output.model_copy(update={"evidence": evidence, "evidence_text_omitted": text_omitted}),
+        )
+
+    async def search(arguments: SearchInput) -> SearchOutput:
+        # RAG 検索の画面と同じ基本の経路（検索 → 融合 → rerank・親と前後の読み取り・回答。登録済み
+        # Q&A・業務ガイド・根拠の拡張はしない。#5352）。
+        request = _search_request(arguments)
+        enforce_rate_limit("search", http_request)
+        result = await _run_search(request, flow=BASIC_FLOW)
+        return await answer_output(SearchOutput, arguments, request, result, {})
+
+    async def chat(arguments: ChatInput) -> ChatOutput:
+        # RAG のチャットと同じ経路（登録済みQ&A・業務ガイド・根拠の拡張）で、会話の履歴と添付を
+        # 使わずに 1 問に答える（#5339）。会話・実行履歴は残さない（監査は残る）。
+        request = _chat_request(arguments)
+        enforce_rate_limit("search", http_request)
+        # 回答の前に登録済みQ&A の候補を照会し、あれば候補だけを返す（#5134。画面と同じ入口の順:
+        # 安全チェック → 照合）。
         candidates = await _approved_faq_suggestions(arguments)
         if candidates:
-            return output_type(
+            return ChatOutput(
                 status=APPROVED_FAQ_CANDIDATES_STATUS,
                 approved_faq_candidates=candidates,
                 answer="",
@@ -4790,144 +4241,12 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 evidence=[],
                 evidence_omitted=0,
             )
-        result = await _run_search(request, interactive=interactive)
-        citations = await _with_extraction_recipe_ids(None, list(result.citations))
-        result = result.model_copy(update={"citations": citations})
-        returned, _ = mcp_evidence(citations, arguments.evidence_limit)
-        sections = await _chunk_sections(returned)
-        output = output_type(
-            **_answer_fields(result, arguments.evidence_limit),
-            approved_faq=_approved_faq_ref(result),
-            older_versions=await _older_versions(arguments, request, citations),
-            notice=result.notice if called_with_api_key(http_request) else None,
-        )
-        evidence, text_omitted = _fit_evidence(
-            returned,
-            sections,
-            queries=[arguments.query, arguments.original_question],
-            reserved_tokens=_output_tokens(output),
-        )
-        return output.model_copy(
-            update={"evidence": evidence, "evidence_text_omitted": text_omitted}
-        )
-
-    async def search(arguments: SearchInput) -> SearchOutput:
-        request = _search_request(arguments)
-        enforce_rate_limit("search", http_request)
-        return await answer_output(SearchOutput, arguments, request)
-
-    async def chat(arguments: ChatInput) -> ChatOutput:
-        # RAG のチャットと同じ経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で、会話の履歴と
-        # 添付を使わずに 1 問に答える（#5339）。会話・実行履歴は残さない（監査は残る）。
-        request = _chat_request(arguments)
-        enforce_rate_limit("search", http_request)
         # 確認を返さない呼び出しは、チャットの画面と同じく残った条件を分岐で答える。
+        result = await _run_search(
+            request, flow=EXPANDED_FLOW, interactive=arguments.skip_clarification
+        )
         return await answer_output(
-            ChatOutput, arguments, request, interactive=arguments.skip_clarification
-        )
-
-    async def lookup_guides(arguments: LookupGuidesInput) -> LookupGuidesOutput:
-        oracle = OracleClient()
-        view = await oracle.get_search_answer_profile(arguments.search_answer_profile_id)
-        if view is None:
-            raise await profile_not_found_error(arguments.search_answer_profile_id)
-        # rag_search と同じく、アーカイブ済みのプロファイルは使わない（409。#1278）。
-        search_route.ensure_search_answer_profile_not_archived(
-            view, arguments.search_answer_profile_id
-        )
-        settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
-        # 質問の文を使う最初の処理として入力の安全チェックを行い、止めた質問は照合しない（#5099）。
-        checked = await check_question_text(arguments.query, settings)
-        if not checked.allowed:
-            return LookupGuidesOutput(guides=[])
-        arguments = arguments.model_copy(update={"query": checked.sanitized_text})
-        with profile_language_scope(settings):
-            if not settings.rag_support_guide_enabled:
-                return LookupGuidesOutput(guides=[])
-            guides, failed = await search_route.load_published_guides(oracle, view.id)
-            if failed:
-                # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
-                raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
-            context = await search_route.support_guide_context(
-                oracle, guides, arguments.query, search_route.profile_scope_filters(view)
-            )
-            # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-            query = await build_guide_query(
-                oracle,
-                settings,
-                view.id,
-                guides,
-                arguments.query,
-                await load_runtime_knowledge_payload(oracle, view.id),
-            )
-            matches = rank_guides(
-                guides, query, arguments.conditions, limit=arguments.limit, context=context
-            )
-            if arguments.conditions:
-                # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
-                resolved = await asyncio.gather(
-                    *(
-                        resolve_answered_conditions(match, arguments.conditions, settings)
-                        for match in matches
-                    )
-                )
-                matches = [item for item in resolved if isinstance(item, GuideMatch)]
-            return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
-
-    async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
-        # 検索の画面・チャットと同じ流れ（主の検索 → rerank → 切る → 検索拡張・補いの検索の
-        # 合わせ込み → 文脈の補完（章節の拡張を含む））で根拠を集める（#5173）。図の画像の切り出しと
-        # 回答の生成はしない（図は Agent が rag_read_source で読む。#5125）。
-        request = _search_request(arguments)
-        enforce_rate_limit("search", http_request)
-        # 承認済み FAQ（#5136）は rag_search と同じ入口と処理: 候補があれば根拠を検索せずに候補
-        # だけを返し、選んだ Q&A は検索・回答と同じ入口（安全チェック → Q&A の引き直し）で登録
-        # 済みの回答を引く（モデルは呼ばない）。
-        candidates = await _approved_faq_suggestions(arguments)
-        if candidates:
-            return RetrieveEvidenceOutput(
-                status=APPROVED_FAQ_CANDIDATES_STATUS,
-                approved_faq_candidates=candidates,
-                trace_id="",
-                guardrail_warnings=[],
-                evidence=[],
-                evidence_omitted=0,
-            )
-        if arguments.approved_faq_id is not None:
-            return await _approved_faq_evidence(request)
-        request = request.model_copy(update={"generate_answer": False})
-        result = await _run_search(request, materialize_images=False)
-        # 回答を作る呼び出し元へ、query に当たる承認済みの用語の説明を渡す（#2701）。
-        knowledge = await _profile_knowledge(arguments)
-        logger.info(
-            "rag_mcp_retrieve_evidence",
-            extra={"trace_id": result.trace_id, **_profile_knowledge_log(knowledge)},
-        )
-        limit = retrieve_evidence_limit(arguments)
-        # 並びは回答と同じまま、上限を超えるときは当たった chunk を先に残す。検索拡張・補いの検索の
-        # 根拠は上限に数えない（#1348・#5162・#5173）。
-        returned, omitted = mcp_evidence(result.citations, limit)
-        citations = await _with_extraction_recipe_ids(None, returned)
-        sections = await _chunk_sections(citations)
-        output = RetrieveEvidenceOutput(
-            trace_id=result.trace_id,
-            guardrail_warnings=list(result.guardrail_warnings),
-            guardrail_degraded=_guardrail_degraded(result),
-            degraded_steps=_degraded_steps(_answer_diagnostics(result)),
-            zero_evidence=_zero_evidence(_answer_diagnostics(result), result),
-            evidence=[],
-            evidence_omitted=omitted,
-            older_versions=await _older_versions(arguments, request, result.citations),
-            profile_knowledge=knowledge,
-        )
-        evidence, text_omitted = _fit_evidence(
-            citations,
-            sections,
-            queries=[arguments.query],
-            reserved_tokens=_output_tokens(output),
-        )
-        return output.model_copy(
-            update={"evidence": evidence, "evidence_text_omitted": text_omitted}
+            ChatOutput, arguments, request, result, {"approved_faq": _approved_faq_ref(result)}
         )
 
     async def grep(arguments: GrepInput) -> GrepOutput:
@@ -4983,9 +4302,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_search",
                 title="ナレッジベースの検索",
                 description=(
-                    "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・"
-                    "回答に使ったか付き）と回答を返します。質問に近い登録済みの Q&A があるときは、"
-                    "検索・回答の前にその候補だけを返します（status=approved_faq_candidates）。"
+                    "検索・回答プロファイル（またはナレッジベース）を基本の検索で調べ、回答と根拠"
+                    "（evidence。場所・版・回答に使ったか付き）を返します。登録済みQ&A・業務"
+                    "ガイド・根拠の拡張は使いません（使うときは rag_chat）。"
                 ),
                 input_model=SearchInput,
                 handler=scoped(
@@ -4998,10 +4317,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_chat",
                 title="ナレッジベースへの質問（チャット）",
                 description=(
-                    "RAG のチャットと同じ流れ（業務ガイドの照合・登録済みの Q&A・根拠の拡張を"
-                    "含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は"
-                    "使いません。"
-                    "質問に近い登録済みの Q&A があるときは、回答の前にその候補だけを返し"
+                    "RAG のチャットと同じ流れ（登録済みQ&A・業務ガイド・根拠の拡張を含む）で、"
+                    "1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は使いません。"
+                    "質問に近い登録済みQ&A があるときは、回答の前にその候補だけを返し"
                     "（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは"
                     "確認を返します（outcome=needs_clarification）。"
                 ),
@@ -5016,40 +4334,11 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 permissions=(CHAT_PERMISSIONS,),
             ),
             McpTool(
-                name="rag_lookup_guides",
-                title="業務ガイドの照会",
-                description=(
-                    "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順と各手順の"
-                    "検索の手がかり・参照の資料と頁・分岐・完了の条件・影響範囲・引き継ぎ先）を"
-                    "返します。回答は作りません。"
-                ),
-                input_model=LookupGuidesInput,
-                handler=scoped(lookup_guides, _check_guides_scope),
-                output_model=LookupGuidesOutput,
-                permissions=(SEARCH_PERMISSIONS,),
-            ),
-            McpTool(
-                name="rag_retrieve_evidence",
-                title="根拠の取得",
-                description=(
-                    "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
-                    "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
-                    "質問に近い登録済みの Q&A があるときは、根拠を検索する前にその候補だけを返し"
-                    "（status=approved_faq_candidates）、選んだ Q&A では、その登録済みの回答を"
-                    " approved_faq に返します。"
-                    "図の根拠は画像を返さず image_ref を返します。図を見るときは、その"
-                    " document_id・chunk_id で rag_read_source を include_image=true で呼びます。"
-                ),
-                input_model=RetrieveEvidenceInput,
-                handler=scoped(_with_profile_selection(retrieve_evidence), _check_search_scope),
-                output_model=RetrieveEvidenceOutput,
-                permissions=(SEARCH_PERMISSIONS,),
-            ),
-            McpTool(
                 name="rag_read_source",
                 title="根拠の本文の読み取り",
                 description=(
-                    "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。"
+                    "rag_chat・rag_search の根拠（document_id と chunk_id）の本文の続きと親の"
+                    "本文を読みます。"
                     "根拠の本文が省かれた（text_omitted）・切られた（truncated）とき・前後の文脈が"
                     "要るときに使います。"
                     "検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の"

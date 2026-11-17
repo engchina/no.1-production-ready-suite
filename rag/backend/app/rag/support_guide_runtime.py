@@ -748,23 +748,6 @@ def match_guide(
     return selected if isinstance(selected, GuideMatch) else None
 
 
-def rank_guides(
-    guides: Iterable[GuideTriple],
-    query: GuideQuery | str,
-    provided: Mapping[str, str] | None = None,
-    *,
-    limit: int = 3,
-    today: date | None = None,
-    context: GuideContext | None = None,
-) -> list[GuideMatch]:
-    """質問に当たる公開の業務ガイドを点の高い順に（MCP の rag_lookup_guides）。"""
-    query = _as_query(query)
-    return [
-        _match(item, query.text, provided or {}, interactive=False)
-        for item in _candidates(guides, query, today, context)[:limit]
-    ]
-
-
 def _branch_applies(branch: SupportGuideBranch, state: ConditionState | None) -> bool | None:
     """分岐が今の条件に当たるか。条件が決まっていなければ None（どちらとも言えない）。"""
     if state is None or state.conflicting:
@@ -1469,7 +1452,6 @@ __all__ = [
     "is_guide_preview_trace",
     "match_guide",
     "query_summary",
-    "rank_guides",
     "resolve_guide_clarification",
     "score_guide",
     "select_guide",

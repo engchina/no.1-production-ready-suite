@@ -705,7 +705,7 @@ SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "る権限がありません。管理者に権限を依頼してください。"
 )
 # 指定した検索・回答プロファイルが無い（利用者が使えないものを含む）404 の文の頭。MCP はこの文で
-# 見分けて、次の手の付いたツールのエラーにする（app.mcp.tools.profile_not_found_error）。
+# 見分けて、プロファイルを自動で選ぶ（app.mcp.tools._with_profile_selection）。
 SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX = "指定した検索・回答プロファイルが見つかりません: "
 # 基本の RAG の経路（画面の RAG 検索。#5332）で承認済み FAQ を選んだ要求の 422 の文。
 APPROVED_FAQ_BASIC_FLOW_MESSAGE = "選んだQ&Aの回答は、RAG Chat でだけ返せます。"

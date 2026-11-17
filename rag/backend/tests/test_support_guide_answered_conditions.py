@@ -15,7 +15,8 @@ from app.api.routes import search as search_route
 from app.config import get_settings
 from app.mcp import tools as mcp_tools
 from app.rag import support_guide_conditions as recognition
-from app.rag.support_guide_runtime import GuideMatch, match_guide, rank_guides
+from app.rag import support_guide_runtime
+from app.rag.support_guide_runtime import GuideMatch, match_guide
 from app.schemas.search import SearchRequest
 from app.schemas.support_guide import SupportGuideContent
 from tests.test_mcp_api import _call, _token, auth  # noqa: F401 - fixture を使う
@@ -44,6 +45,22 @@ GUIDE = SupportGuideContent.model_validate(
     }
 )
 GUIDES = [("g-scope", 1, GUIDE)]
+
+
+def _ranked(
+    guides: Any,
+    query: Any,
+    provided: dict[str, str] | None = None,
+    *,
+    limit: int = 3,
+    context: Any = None,
+) -> list[support_guide_runtime.GuideMatch]:
+    """点の高い順の候補（選ぶ前の並び。#5352 で MCP の rank_guides を消したのでテストで並べる）。"""
+    parsed = support_guide_runtime._as_query(query)  # noqa: SLF001 - 並びを確かめる
+    return [
+        support_guide_runtime._match(item, parsed.text, provided or {}, interactive=False)  # noqa: SLF001
+        for item in support_guide_runtime._candidates(guides, parsed, None, context)[:limit]  # noqa: SLF001
+    ]
 
 
 def stub(monkeypatch: MonkeyPatch, output: Any = None, *, error: bool = False) -> list[Any]:
@@ -187,4 +204,4 @@ def test_mcp_lookup_guides_resolves_the_free_text_answer(
     ]
     assert guide["clarifications"] == []
     # 答えの無い照合は確かめる判断のまま。
-    assert rank_guides(GUIDES, QUESTION, {})[0].decision == "clarify"
+    assert _ranked(GUIDES, QUESTION, {})[0].decision == "clarify"
