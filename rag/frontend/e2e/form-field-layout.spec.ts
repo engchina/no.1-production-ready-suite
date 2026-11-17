@@ -58,6 +58,7 @@ async function mockRetrieval(page: Page) {
       "**/api/settings/answering",
       {
         neighbor_child_count: 3,
+        answer_timeout_seconds: 600,
         rerank_enabled: true,
         graph_expansion_enabled: false,
         entity_expansion_enabled: true, entity_expansion_max_chunks: 3,
@@ -312,13 +313,13 @@ async function openSearchConditions(page: Page) {
   await expand(page, "抽出項目の値で絞り込む");
   // 候補の読込中は保存済みの条件欄も描画されない。読込後に既存行を確かめ、テーマ変更で重ねて追加しない。
   await expect(page.getByTestId("search-extraction-field-filters")).toBeVisible();
-  if ((await page.getByRole("combobox", { name: "項目" }).count()) > 0) return;
+  if ((await page.getByRole("button", { name: /^項目 / }).count()) > 0) return;
   for (const field of [/契約番号/, /金額/, /契約日/]) {
     await page.getByRole("button", { name: "条件を追加" }).click();
-    await page.getByRole("combobox", { name: "項目" }).last().click();
+    await page.getByRole("button", { name: /^項目 / }).last().click();
     await page.getByRole("option", { name: field }).click();
   }
-  await expect(page.getByRole("combobox", { name: "大分類" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^大分類 / })).toBeVisible();
 }
 
 // ---- ナレッジベース（編集・抽出する項目） ----

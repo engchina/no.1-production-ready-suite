@@ -18,6 +18,7 @@ import {
   ObjectActionBar,
   RowActionMenu,
   SaveErrorBanner,
+  SearchableSelectField,
   SelectField,
   type SelectFieldOption,
   StatusBadge,
@@ -77,6 +78,7 @@ import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { confirmPendingLeave } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
@@ -952,6 +954,7 @@ function SearchAnswerProfileEditor({
                   <QuerySelectRow
                     id="search-answer-profile-answer-model"
                     width="md"
+                    searchable
                     label={t("searchAnswerProfiles.field.answerModel")}
                     helper={t("searchAnswerProfiles.field.answerModelHelper")}
                     failure={
@@ -980,6 +983,7 @@ function SearchAnswerProfileEditor({
                   <QuerySelectRow
                     id="search-answer-profile-escalation-model"
                     width="md"
+                    searchable
                     label={t("searchAnswerProfiles.field.escalationModel")}
                     helper={t("searchAnswerProfiles.field.escalationModelHelper")}
                     failure={
@@ -1202,10 +1206,13 @@ function QuerySelectRow<T extends string>({
   offLabel,
   onLabel,
   disabled = false,
+  searchable = false,
   onChange,
 }: {
   id: string;
   label: string;
+  /** 選択肢がデータから来る（登録モデルなど）とき、検索して選ぶ選択にする（#5266）。固定の段階・方式は渡さない。 */
+  searchable?: boolean;
   /** 項目の説明（継承・上書きのどちらでも出す）。 */
   helper?: string;
   /** 候補の読み取りの失敗（共有の `DataLoadFailure` の `layout="field"`。欄の直下に出す。#4817）。 */
@@ -1241,7 +1248,20 @@ function QuerySelectRow<T extends string>({
           </ToggleChip>
         </div>
         {helper ? <p className="text-xs text-fg-muted">{helper}</p> : null}
-        {overriding ? (
+        {overriding && searchable ? (
+          <SearchableSelectField
+            labels={searchableSelectLabels()}
+            id={id}
+            label={label}
+            value={value ?? ""}
+            options={options}
+            // 選択肢は `options` の値だけなので、受け取った値は T のどれか。
+            onValueChange={(next) => onChange(next as T)}
+            disabled={disabled}
+            width={width}
+            className="[&>label]:sr-only"
+          />
+        ) : overriding ? (
           <SelectField
             id={id}
             label={label}

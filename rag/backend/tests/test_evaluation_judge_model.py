@@ -222,10 +222,12 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
             (schema.__name__, provider.model, provider.endpoint, settings.answer_max_input_tokens)
         )
         assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
-        json.loads(prompt)
-        return AnswerCorrectnessOutput(
-            correctness="consistent",
-            reason="一致",
+        inputs = json.loads(prompt)
+        return AnswerCorrectnessOutput.model_validate(
+            {
+                "claims": [{"answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}],
+                "points": [{"point_id": p["id"], "covered": True} for p in inputs["points"]],
+            }
         )
 
     return fake

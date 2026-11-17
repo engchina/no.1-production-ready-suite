@@ -527,7 +527,7 @@ test("履歴の絞り込みは FilterSelect で 1 行にそろい、狭い画面
   const filters = await openListToolbarFilters(toolbar);
   const rating = filters.getByRole("combobox", { name: "利用者評価", exact: true });
   await expect(rating).toContainText(/利用者評価:\s*すべて/);
-  await expect(filters.getByRole("combobox", { name: "業務プロファイル", exact: true })).toContainText(/業務プロファイル:\s*すべて/);
+  await expect(filters.getByRole("button", { name: /^業務プロファイル(?:\s|$)/ })).toContainText(/業務プロファイル:\s*すべて/);
   await chooseSelectFieldOption(rating, "bad");
   await expect.poll(() => state.feedbackRequests.at(-1)?.searchParams.get("rating")).toBe("bad");
   // 既定以外を選ぶと値を強調する（`FilterSelect` の外枠の data-filter-active）。

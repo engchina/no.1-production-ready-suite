@@ -10,7 +10,7 @@ import {
   ProcessingIndicator,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
-  SelectField,
+  SearchableSelectField,
   DISPLAY_TIME_SECONDS,
   formatDisplayDateTime,
 } from "@production-ready/ui";
@@ -19,6 +19,7 @@ import { useValuesChanged } from "@/lib/render-sync";
 import { useDatabaseStatus } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { useAuth } from "@/features/security/AuthProvider";
 import { syntheticRunPollingInterval } from "./syntheticRunPolling";
 import { DbObjectName } from "./components/DbObjectName";
@@ -172,7 +173,8 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
       {run.finished_at && <p className="text-sm text-fg-muted">{t("syntheticRun.finishedAt", { time: formatDateTime(run.finished_at) })}</p>}
     </>}
     {runs.some((item) => !runFinished(item)) && <p className="text-sm text-fg-muted">{t("syntheticRun.independentRuns")}</p>}
-    {runs.length > 0 && <SelectField
+    {runs.length > 0 && <SearchableSelectField
+      labels={searchableSelectLabels()}
       id="synthetic-run-history"
       label={t("syntheticRun.history")}
       disabled={submitting}

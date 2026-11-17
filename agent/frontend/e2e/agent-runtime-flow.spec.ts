@@ -199,7 +199,7 @@ test.describe("AI Agent Control Plane", () => {
     await expect(page.getByText("利用可能ツール")).toHaveCount(0);
 
     // モデルは「既定のテキストモデル（…）」か、登録モデルから選ぶ。
-    const model = page.getByRole("combobox", { name: "モデル" });
+    const model = page.getByRole("button", { name: /^モデル / });
     await expect(model).toContainText("既定のテキストモデル（xai.grok-4）");
     await model.click();
     await page.getByRole("option", { name: "gpt-oss-120b" }).click();
@@ -267,7 +267,7 @@ test.describe("AI Agent Control Plane", () => {
       await expect(modelFailure).toHaveCount(0);
       await skillsFailure.getByRole("button", { name: "再試行" }).click();
       await expect(skillsFailure).toHaveCount(0);
-      await page.getByRole("combobox", { name: "モデル" }).click();
+      await page.getByRole("button", { name: /^モデル / }).click();
       await expect(page.getByRole("option", { name: "gpt-oss-120b" })).toBeVisible();
     });
   }

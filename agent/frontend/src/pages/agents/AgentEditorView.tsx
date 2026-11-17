@@ -25,6 +25,7 @@ import {
   useConfirm,
   type EntityAction,
   PageBody,
+  SearchableSelectField,
   SelectField,
   TabPanel,
   Tabs,
@@ -65,6 +66,7 @@ import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
 import { sameDraft, useDirtySources, useEditorLeaveGuard } from "@/lib/leave-guard";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { AgentVersionBadges, AgentVersionsSection } from "@/pages/agents/AgentsPage";
 import { AgentChat } from "@/pages/ChatPage";
 import { focusField, formatDate } from "@/pages/shared/page-helpers";
@@ -735,16 +737,23 @@ export function AgentEditorView({
                         testId="agent-model-loading"
                       />
                     ) : (
-                      <SelectField
+                      <SearchableSelectField
+                        labels={searchableSelectLabels()}
                         id={`${fieldId}-agent-model`}
                         label={t("agent.model")}
                         helper={t("agent.modelHint")}
                         width="lg"
                         value={modelId}
-                        emptyOptionLabel={
-                          defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
-                        }
-                        options={agentModelOptions(models, modelId)}
+                        // 業務 Agent のモデルは任意。「既定のモデル」（空の値）を先頭の選択肢にする。
+                        options={[
+                          {
+                            value: "",
+                            label: defaultModelId
+                              ? t("agent.modelDefaultWith", { model: defaultModelId })
+                              : t("agent.modelDefault"),
+                          },
+                          ...agentModelOptions(models, modelId),
+                        ]}
                         onValueChange={setModelId}
                       />
                     )}

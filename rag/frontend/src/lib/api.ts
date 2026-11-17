@@ -137,10 +137,10 @@ export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
 
 /**
  * 回答を LLM で生成する `POST /api/search`（非ストリーム）の timeout（#375）。backend は回答生成を
- * `RAG_ANSWER_TIMEOUT_SECONDS`（上限 600 秒）で打ち切って 504 と理由（時間切れになった工程）を返すので、
- * 画面はそれより 30 秒長く待つ。SSE（`/api/search/stream`・チャットの送信）は画面で打ち切らない。
+ * `RAG_ANSWER_TIMEOUT_SECONDS`（画面で選べる最大 1200 秒。#5280）で打ち切って 504 と理由（時間切れになった工程）を
+ * 返すので、画面は選べる最大より 30 秒長く待つ（設定の値に依らず固定。Nginx は 1260 秒）。SSE（`/api/search/stream`・チャットの送信）は画面で打ち切らない。
  */
-export const ANSWER_GENERATION_TIMEOUT_MS = 630_000;
+export const ANSWER_GENERATION_TIMEOUT_MS = 1_230_000;
 
 /**
  * 品質評価の job の状態を取得する間隔（#390）。評価は job（投入 → 状態の取得 → 結果）で動き、
@@ -2026,8 +2026,28 @@ export interface EvaluationAnswerJudgement {
   /** 正確性が評価の基準の閾値以上か（#680）。保存済みの古い結果は保存した合否のまま。 */
   passed: boolean | null;
   answer_correctness?: number | null;
+  /** 網羅すべき要点のうち回答が覆った割合（参考。合否に使わない。#5262）。 */
+  answer_coverage?: number | null;
+  /** 判定の理由。主張ごとの判定では、矛盾した主張の一覧。 */
   reason?: string | null;
   message: string | null;
+  /** 判定の版。無い結果は主張ごとの判定の前の旧方式（#5262）。 */
+  rubric_version?: number | null;
+  claims?: EvaluationJudgedClaim[];
+  points?: EvaluationCoveredPoint[];
+}
+
+/** 回答の主張 1 つの判定の印（#5262）。 */
+export interface EvaluationJudgedClaim {
+  verdict: "supported" | "contradicted" | "not_in_standard";
+  answer: string;
+  standard: string;
+}
+
+/** 網羅の要点 1 つと、回答が覆ったか（#5262）。 */
+export interface EvaluationCoveredPoint {
+  point: string;
+  covered: boolean;
 }
 
 /** 評価のケースの分類（#1226。答えられるかの種類）。 */
@@ -2077,7 +2097,7 @@ export interface EvaluationCaseResult extends Partial<Record<EvaluationMetricNam
   category?: EvaluationCaseCategory|null; split?: EvaluationCaseSplit|null;
   retrieved_document_ids: string[]; relevant_document_ids:string[]; hit_document_ids:string[];
   observed_outcome?: EvaluationOutcome|null; outcome_source?:string|null;
-  missing_evidence?:string[]; answer_evaluation?:EvaluationAnswerJudgement|null;
+  missing_evidence?:string[]; answer_evaluation?:EvaluationAnswerJudgement|null; answer_coverage?:number|null;
   guardrail_warnings:string[]; failure_reasons:string[]; diagnostics:SearchDiagnostics;
   elapsed_ms:number; error_type:string|null; error_stage?:string|null; error_message:string|null;
 }
@@ -2090,7 +2110,7 @@ export interface EvaluationThresholdFailure {
 }
 
 /** 評価結果。各指標は測れたケースだけの平均で、測れなかった指標は null。 */
-export type EvaluationReferenceMetricName = "precision_at_10" | "ndcg_at_3" | "ndcg_at_10" | "map" | "bleu_1" | "bleu_2" | "bleu_4" | "rouge_1" | "rouge_2" | "rouge_l";
+export type EvaluationReferenceMetricName = "answer_coverage" | "precision_at_10" | "ndcg_at_3" | "ndcg_at_10" | "map" | "bleu_1" | "bleu_2" | "bleu_4" | "rouge_1" | "rouge_2" | "rouge_l";
 export type EvaluationMetrics = Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName, number | null>> & {
  metrics_version?:string; case_count:number; error_count:number; evaluation_suite:string;
  metric_case_counts?:Partial<Record<EvaluationMetricName | EvaluationReferenceMetricName,number>>; passed:boolean|null;
@@ -2747,6 +2767,8 @@ export interface AnsweringSettingsData {
   section_expansion_enabled: boolean;
   section_expansion_max_levels: number;
   section_expansion_input_token_percent: number;
+  /** 回答生成の通しの上限（秒。#5280）。画面は 100 / 300 / 600 / 1200 から選ぶ（既定 600）。 */
+  answer_timeout_seconds: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */
   /** 段ごとのモデルで選べる登録モデル（接続情報を含まない）。 */
   config_source: "runtime";

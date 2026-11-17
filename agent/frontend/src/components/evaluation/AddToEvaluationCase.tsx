@@ -7,7 +7,7 @@ import {
   FormGrid,
   FormSkeleton,
   FormStatus,
-  SelectField,
+  SearchableSelectField,
   TextareaField,
   TextField,
   TimedLoadingState,
@@ -21,6 +21,7 @@ import { useNavigate } from "react-router-dom";
 import { agentApi, type EvaluationCase, type EvaluationCaseDraft, type EvaluationSetItem } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 /** 評価セットの選択肢の「新しい評価セットを作る」。評価セットの ID（`evset_…`）とは重ならない。 */
 const NEW_SET = "__new__";
@@ -202,7 +203,8 @@ function CaseForm({
       }}
     >
       <FormGrid>
-        <SelectField<string>
+        <SearchableSelectField
+          labels={searchableSelectLabels()}
           id={`${testId}-set`}
           label={t("evaluation.add.set")}
           width="lg"
@@ -215,7 +217,6 @@ function CaseForm({
             setSetId(value);
             add.reset();
           }}
-          data-testid={`${testId}-set`}
         />
         {setId === NEW_SET ? (
           <TextField

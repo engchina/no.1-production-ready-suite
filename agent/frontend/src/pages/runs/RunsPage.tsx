@@ -37,7 +37,7 @@ import {
   PageBody,
   isSubmitEnter,
   runPeriodSince,
-  SelectField,
+  SearchableSelectField,
   Skeleton,
   TextareaField,
   useActionPending,
@@ -71,6 +71,7 @@ import {
 } from "@/lib/run-history";
 import { useEditorLeaveGuard } from "@/lib/leave-guard";
 import { isNullableString, isOneOf, isString, useWorkspaceState } from "@/lib/workspace-state";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { RunDetail, runCapabilities, runSummaryCapabilities } from "@/pages/runs/RunDetail";
 import { type RunCommandKind, useRunEventSource } from "@/pages/runs/run-event-stream";
 import { focusField } from "@/pages/shared/page-helpers";
@@ -550,7 +551,8 @@ export function RunsPage() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {/* grid の外に単独で置く選択欄は値の長さの幅（業務 Agent の名前は lg。#613）。 */}
-                    <SelectField
+                    <SearchableSelectField
+                      labels={searchableSelectLabels()}
                       id="run-agent"
                       label={t("run.form.agent")}
                       width="lg"

@@ -62,7 +62,7 @@ export function mcpRegistrationCaUrl(rows: McpEndpointRow[]): string | null {
  *
  * - サーバー名は `rag` / `nl2sql` / `agent`（組み込みのスキルは `rag` / `nl2sql` を使う。`agent` は業務 Agent を呼ぶ）。
  * - `--header` は単一引用符で `${PR_API_KEY}` のまま保存させる（キーの値を `~/.claude.json` に書かない）。
- * - `MCP_TOOL_TIMEOUT` は `rag_search` のサーバーの上限 600 秒より長くする（配備の Nginx の 660 秒と同じ）。
+ * - `MCP_TOOL_TIMEOUT` は `rag_search` のサーバーの上限（設定で最大 1200 秒）より長くする（配備の Nginx の 1260 秒と同じ）。
  * - https の URL は、自作の CA の証明書を保存してから `NODE_EXTRA_CA_CERTS` で信頼させる。`-k` は信頼する前の CA を取得するため。
  * - 行末に `#` のコメントを書かない（zsh に貼るとエラーになる）。説明は画面の注記に書く。
  */
@@ -77,7 +77,7 @@ export function mcpRegistrationExample(rows: McpEndpointRow[]): string {
       "  --header 'Authorization: Bearer ${PR_API_KEY}'"
     );
   }
-  lines.push("export MCP_TOOL_TIMEOUT=660000");
+  lines.push("export MCP_TOOL_TIMEOUT=1260000");
   if (caUrl) {
     lines.push(`curl -sk ${caUrl} -o ~/production-ready-ca.crt`, "export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt");
   }

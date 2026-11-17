@@ -93,6 +93,47 @@ describe("FilterSelect（#1933）", () => {
     expect(host.querySelector<HTMLElement>("[data-filter-active]")!.dataset.filterActive).toBe("true");
   });
 
+  it("searchable は検索して選ぶ選択にし、同じ「ラベル: 値」の形と絞り込み中の強調を保つ（#5266）", () => {
+    const options = [
+      { value: "", label: "すべて" },
+      { value: "p1", label: "プロファイル A" },
+      { value: "p2", label: "プロファイル B" },
+    ];
+    function Harness() {
+      const [value, setValue] = useState("");
+      return (
+        <FilterSelect
+          id="profile"
+          label="プロファイル"
+          value={value}
+          options={options}
+          onValueChange={setValue}
+          searchable
+          searchLabels={{ searchPlaceholder: "検索して選ぶ…" }}
+          width="md"
+        />
+      );
+    }
+    render(<Harness />);
+    const button = host.querySelector<HTMLButtonElement>("button#profile")!;
+    // 検索つきの選択はダイアログを開くボタン（select-only の combobox ではない）。
+    expect(button.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(button.textContent).toBe("プロファイル:すべて");
+    expect(host.querySelector("[data-field-label]")).toBeNull();
+    expect(host.querySelector<HTMLElement>("[data-filter-active]")!.dataset.filterActive).toBe("false");
+    expect(`${button.className} ${button.parentElement?.className}`).toContain("--field-width-md");
+    act(() => button.click());
+    const search = document.querySelector<HTMLInputElement>("[data-searchable-select-popover] input")!;
+    expect(search.placeholder).toBe("検索して選ぶ…");
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((item) =>
+      item.textContent?.includes("プロファイル B")
+    )!;
+    act(() => option.click());
+    expect(button.textContent).toBe("プロファイル:プロファイル B");
+    expect(host.querySelector<HTMLElement>("[data-filter-active]")!.dataset.filterActive).toBe("true");
+    expect(button.className).toContain("border-accent-fg");
+  });
+
   it("isFilterActive は既定と違う値で true", () => {
     expect(isFilterActive("all", "all")).toBe(false);
     expect(isFilterActive("failed", "all")).toBe(true);

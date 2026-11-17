@@ -12,7 +12,7 @@ import {
   PAGE_SIZE_OPTIONS,
   PagedDataTable,
   RowActionMenu,
-  SelectField,
+  SearchableSelectField,
   SideSheet,
   Skeleton,
   StatusBadge,
@@ -37,6 +37,7 @@ import {
   useRestoreDocumentRecipeExtractionRevision,
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 const KIND_LABEL: Record<ExtractionRevisionSummary["kind"], I18nKey> = {
   parsed: "flow.review.revisions.kind.parsed",
@@ -329,7 +330,8 @@ function RevisionDiff({
       <h3 id="extraction-revision-diff" className="text-sm font-semibold text-fg">
         {t("flow.review.revisions.diffTitle", { revision: revision.revision_no })}
       </h3>
-      <SelectField
+      <SearchableSelectField
+        labels={searchableSelectLabels()}
         id="extraction-revision-against"
         label={t("flow.review.revisions.against")}
         width="md"

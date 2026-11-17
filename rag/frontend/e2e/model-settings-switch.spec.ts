@@ -117,8 +117,8 @@ for (const viewport of [
       "true"
     );
     await expect(page.getByRole("heading", { name: "既定のモデル" })).toBeVisible();
-    const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
-    const visionDefault = page.getByRole("combobox", { name: "既定の画像対応モデル" });
+    const textDefault = page.getByRole("button", { name: /^既定のテキストモデル/ });
+    const visionDefault = page.getByRole("button", { name: /^既定の画像対応モデル/ });
     await expect(visionDefault).toContainText("Vision LLM");
     await expect(textDefault).toContainText("標準 LLM");
     // 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順）で、2 つとも必須（#566）。
@@ -127,13 +127,14 @@ for (const viewport of [
       [textDefault, "enterprise-default-text-model"],
       [visionDefault, "enterprise-default-vision-model"],
     ] as const) {
-      await expect(field).toHaveAttribute("aria-required", "true");
+      // 検索つきの選択（#5266）のボタンは aria-required を持てないので、必須はラベルの「必須」で読み上げる。
+      await expect(field).toHaveAccessibleName(/必須/);
       await expect(page.locator(`label[for="${id}"]`)).toContainText("必須");
     }
     // 既定の判定モデル（#3574）は Vision の後ろに置く任意の欄で、既定は「既定のテキストモデル」。
-    const judgeDefault = page.getByRole("combobox", { name: "既定の判定モデル" });
+    const judgeDefault = page.getByRole("button", { name: /^既定の判定モデル/ });
     await expect(judgeDefault).toContainText("既定のテキストモデル");
-    await expect(judgeDefault).not.toHaveAttribute("aria-required", "true");
+    await expect(page.locator('label[for="enterprise-default-judge-model"]')).not.toContainText("必須");
     await expectTextBeforeVision(visionDefault, judgeDefault);
     await judgeDefault.scrollIntoViewIfNeeded();
     await page.screenshot({
@@ -305,7 +306,7 @@ test("既定の判定モデルは「既定のテキストモデル」→「回�
   );
   await page.goto("/settings/model");
 
-  const judge = page.getByRole("combobox", { name: "既定の判定モデル" });
+  const judge = page.getByRole("button", { name: /^既定の判定モデル/ });
   await expect(judge).toContainText("既定のテキストモデル");
   await judge.click();
   const options = page.getByRole("listbox", { name: "既定の判定モデル" }).getByRole("option");
@@ -353,8 +354,8 @@ for (const scheme of ["light", "dark"] as const) {
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(scheme === "dark");
 
-    const vision = page.getByRole("combobox", { name: "既定の画像対応モデル" });
-    const text = page.getByRole("combobox", { name: "既定のテキストモデル" });
+    const vision = page.getByRole("button", { name: /^既定の画像対応モデル/ });
+    const text = page.getByRole("button", { name: /^既定のテキストモデル/ });
     await expect(vision).toContainText("Vision LLM");
 
     // 選択肢: Vision は Vision 対応のモデルだけ、テキストは全モデル（未選択に戻す選択肢はない。#566）。
@@ -385,7 +386,7 @@ for (const scheme of ["light", "dark"] as const) {
 
     // Vision 対応を戻して保存すると、既定のモデル 2 つを送る。
     await page.getByRole("switch", { name: "画像入力に対応 2" }).click();
-    await expect(vision).toHaveAttribute("aria-invalid", "false");
+    await expect(vision).not.toHaveAttribute("aria-invalid", "true");
     await page.getByRole("button", { name: "登録モデル: 保存" }).click();
     await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
     expect(patches[0]).toMatchObject({
@@ -417,7 +418,7 @@ for (const scheme of ["light", "dark"] as const) {
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(scheme === "dark");
 
-    const text = page.getByRole("combobox", { name: "既定のテキストモデル" });
+    const text = page.getByRole("button", { name: /^既定のテキストモデル/ });
     await expect(text).toContainText("モデルを選んでください");
     await expect(text).toHaveAttribute("aria-invalid", "true");
     await expectFieldErrorBelow(text, "既定のテキストモデルを選択してください。");
@@ -432,7 +433,7 @@ for (const scheme of ["light", "dark"] as const) {
       .getByRole("listbox", { name: "既定のテキストモデル" })
       .getByRole("option", { name: /標準 LLM/ })
       .click();
-    await expect(text).toHaveAttribute("aria-invalid", "false");
+    await expect(text).not.toHaveAttribute("aria-invalid", "true");
     await expect(page.getByText("既定のテキストモデルを選択してください。")).toHaveCount(0);
     await page.getByRole("button", { name: "登録モデル: 保存" }).click();
     await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
@@ -454,7 +455,7 @@ test("既定の画像対応モデルに選んだモデルを一覧から削除�
   await page.getByRole("button", { name: "モデルを削除 2" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
 
-  const vision = page.getByRole("combobox", { name: "既定の画像対応モデル" });
+  const vision = page.getByRole("button", { name: /^既定の画像対応モデル/ });
   await expect(vision).toContainText("enterprise-vision");
   await expect(vision).toHaveAttribute("aria-invalid", "true");
   await expect(

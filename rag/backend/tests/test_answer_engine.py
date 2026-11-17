@@ -1213,10 +1213,12 @@ def _fake_evaluation_llm(
     from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput
 
     assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
-    json.loads(prompt)
-    return AnswerCorrectnessOutput(
-        correctness="consistent",
-        reason="標準回答と一致",
+    inputs = json.loads(prompt)
+    return AnswerCorrectnessOutput.model_validate(
+        {
+            "claims": [{"answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}],
+            "points": [{"point_id": p["id"], "covered": True} for p in inputs["points"]],
+        }
     )
 
 
