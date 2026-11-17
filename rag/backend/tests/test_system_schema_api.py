@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+import pytest
 from pytest import MonkeyPatch
 
 from app.main import app
@@ -15,6 +16,13 @@ from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_vector_memory(monkeypatch: MonkeyPatch) -> None:
+    """画面の状態の vector memory の見積もりは DB に繋がないもの（#5278。別のテストで確かめる）。"""
+    monkeypatch.setattr(system_schema_manager._vector_memory, "estimate", lambda: None)
+    monkeypatch.setattr(system_schema_manager, "_last_operation", None)
 
 
 async def _run_inline(operation: Any, *args: Any, **kwargs: Any) -> Any:
@@ -102,19 +110,28 @@ def test_system_tables_status_returns_foreign_key_drift(monkeypatch: MonkeyPatch
     assert data["orphaned_foreign_keys"][0]["orphan_rows"] == 240
 
 
-def test_initialize_system_tables_returns_typed_operation(monkeypatch: MonkeyPatch) -> None:
+def _running_payload() -> dict[str, Any]:
+    payload = _status_payload()
+    return {
+        **payload,
+        "operation_state": {
+            **payload["operation_state"],
+            "status": "running",
+            "operation_kind": "initialize",
+            "started_at": "2026-11-17T01:02:03+00:00",
+        },
+    }
+
+
+def test_initialize_system_tables_starts_background_operation(monkeypatch: MonkeyPatch) -> None:
+    """作成・更新は後台の操作: lease を取ったら 202 と running の状態を返す（#5278）。"""
     captured: dict[str, Any] = {}
 
-    def initialize(**kwargs: Any) -> dict[str, Any]:
+    def start(**kwargs: Any) -> dict[str, Any]:
         captured.update(kwargs)
-        return {
-            **_status_payload(),
-            "operation": "initialized",
-            "dropped_object_count": 0,
-            "created_object_count": 96,
-        }
+        return _running_payload()
 
-    monkeypatch.setattr(system_schema_manager, "initialize", initialize)
+    monkeypatch.setattr(system_schema_manager, "start_initialize_in_background", start)
     monkeypatch.setattr(asyncio, "to_thread", _run_inline)
 
     response = client.post(
@@ -122,9 +139,71 @@ def test_initialize_system_tables_returns_typed_operation(monkeypatch: MonkeyPat
         json={"recreate": False},
     )
 
-    assert response.status_code == 200
-    assert response.json()["data"]["operation"] == "initialized"
+    assert response.status_code == 202
+    state = response.json()["data"]["operation_state"]
+    assert state["status"] == "running"
+    assert state["started_at"] == "2026-11-17T01:02:03+00:00"
+    on_finished = captured.pop("on_finished")
     assert captured == {"recreate": False, "confirmation": None, "allow_destructive": False}
+    assert callable(on_finished)
+
+
+def test_system_tables_status_returns_stale_and_last_operation(monkeypatch: MonkeyPatch) -> None:
+    """止まった可能性（stale）と、後台で終えた直近の操作の要約を返す（#5278）。"""
+    payload = _status_payload()
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {
+            **payload,
+            "operation_state": {
+                **payload["operation_state"],
+                "status": "stale",
+                "started_at": "2026-11-17T01:02:03+00:00",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        system_schema_manager,
+        "_last_operation",
+        {"operation": "migrated", "schema_epoch": 2, "restart_required": None},
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    data = client.get("/api/settings/database/system-tables").json()["data"]
+
+    assert data["operation_state"]["status"] == "stale"
+    assert data["last_operation"]["operation"] == "migrated"
+
+
+def test_system_tables_status_returns_vector_memory(monkeypatch: MonkeyPatch) -> None:
+    """HNSW 索引の見込みの必要量と今の空きを返す（#5278）。"""
+    vector_memory = {
+        "available": True,
+        "error_code": None,
+        "pool_allocated_bytes": 100,
+        "pool_used_bytes": 40,
+        "pool_free_bytes": 60,
+        "indexes": [
+            {
+                "name": "RAG_CHUNKS_EMBEDDING_HNSW_IDX",
+                "table_name": "RAG_CHUNK_EMBEDDINGS",
+                "column_name": "EMBEDDING",
+                "loaded": False,
+                "estimated_bytes": 80,
+                "used_bytes": None,
+                "error_code": None,
+            }
+        ],
+    }
+    monkeypatch.setattr(system_schema_manager, "status", _status_payload)
+    monkeypatch.setattr(system_schema_manager._vector_memory, "estimate", lambda: vector_memory)
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    data = client.get("/api/settings/database/system-tables").json()["data"]
+
+    assert data["vector_memory"] == vector_memory
+    assert system_schema_manager.managed_hnsw_indexes[0].name == "RAG_CHUNKS_EMBEDDING_HNSW_IDX"
 
 
 def test_initialize_system_tables_preserves_retryable_error(monkeypatch: MonkeyPatch) -> None:
@@ -135,7 +214,7 @@ def test_initialize_system_tables_preserves_retryable_error(monkeypatch: MonkeyP
             status_code=409,
         )
 
-    monkeypatch.setattr(system_schema_manager, "initialize", initialize)
+    monkeypatch.setattr(system_schema_manager, "start_initialize_in_background", initialize)
     monkeypatch.setattr(asyncio, "to_thread", _run_inline)
 
     response = client.post(
@@ -158,13 +237,8 @@ def test_initialize_system_tables_requires_system_tables_manage(
     monkeypatch.setattr(system_schema_manager, "status", _status_payload)
     monkeypatch.setattr(
         system_schema_manager,
-        "initialize",
-        lambda **_kwargs: {
-            **_status_payload(),
-            "operation": "no_op",
-            "dropped_object_count": 0,
-            "created_object_count": 0,
-        },
+        "start_initialize_in_background",
+        lambda **_kwargs: _running_payload(),
     )
     monkeypatch.setattr(asyncio, "to_thread", _run_inline)
     auth = enable_production_auth(monkeypatch)
@@ -186,8 +260,8 @@ def test_initialize_system_tables_requires_system_tables_manage(
         json={"recreate": False},
         headers=manager,
     )
-    assert allowed.status_code == 200
-    assert allowed.json()["data"]["operation"] == "no_op"
+    assert allowed.status_code == 202
+    assert allowed.json()["data"]["operation_state"]["status"] == "running"
 
 
 _ORPHANED_FOREIGN_KEY = {
@@ -378,6 +452,8 @@ def test_initialize_system_tables_requires_destructive_approval(monkeypatch: Mon
         json={"recreate": False, "allow_destructive": True},
     )
 
-    assert approved.status_code == 200
-    assert approved.json()["data"]["operation"] == "migrated"
+    assert approved.status_code == 202
+    thread = system_schema_manager._background_thread
+    assert thread is not None
+    thread.join(5)
     assert calls == [{"recreate": False}]

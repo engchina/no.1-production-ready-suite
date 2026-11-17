@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import APIRouter, HTTPException, Request
@@ -70,7 +70,6 @@ from app.schemas.settings import (
     SelectAiCredentialCreateRequest,
     SelectAiCredentialData,
     SystemTablesInitializeRequest,
-    SystemTablesOperationData,
     SystemTablesStatusData,
 )
 from app.security.service import get_security_service
@@ -390,26 +389,42 @@ def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     """NL2SQL system table の状態を DDL なしで取得する。"""
 
     try:
-        data = system_schema_manager.status()
+        data = system_schema_manager.screen_status()
     except Exception as exc:
         raise system_tables_status_error(exc) from exc
     return ApiResponse(data=SystemTablesStatusData.model_validate(data))
 
 
+def _reset_runtime_after_system_schema_change(result: dict[str, Any]) -> None:
+    """後台の操作が終わったら、このプロセスの NL2SQL / Ontology の cache を捨てて再接続する。
+
+    失敗しても例外は後台の操作の側でログに残す（別の replica と同じく、次の readiness で
+    `observe_system_schema_epoch` が epoch の変化から反映し直す）。
+    """
+
+    reset_system_schema_runtime(schema_epoch=int(result["operation_state"]["schema_epoch"]))
+
+
 @router.post(
     "/database/system-tables/initialize",
-    response_model=ApiResponse[SystemTablesOperationData],
+    response_model=ApiResponse[SystemTablesStatusData],
+    status_code=202,
 )
 def initialize_system_tables(
     request: Request,
     payload: SystemTablesInitializeRequest,
-) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
-    """明示操作として system table を作成・更新または全再作成する。"""
+) -> ApiResponse[SystemTablesStatusData] | JSONResponse:
+    """明示操作として system table の作成・更新または全再作成を始める（後台の操作。#5278）。
+
+    前提の確認と lease の取得までを待ち、202 と開始した時点の状態（running）を返す。操作は
+    後台で続き、画面は状態の polling で進み具合と終わりを見る。
+    """
 
     try:
-        data = system_schema_manager.initialize(
+        data = system_schema_manager.start_initialize_in_background(
             recreate=payload.recreate,
             confirmation=payload.confirmation,
+            on_finished=_reset_runtime_after_system_schema_change,
         )
     except SystemSchemaError as exc:
         return api_problem_response(
@@ -420,19 +435,7 @@ def initialize_system_tables(
             retryable=True if exc.retryable else None,
             headers=exc.retry_headers,
         )
-    try:
-        reset_system_schema_runtime(
-            schema_epoch=int(data["operation_state"]["schema_epoch"]),
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "システムテーブルは更新されましたが、実行中 API の再接続に失敗しました。"
-                "状態を再取得してから再試行してください。"
-            ),
-        ) from exc
-    return ApiResponse(data=SystemTablesOperationData.model_validate(data))
+    return ApiResponse(data=SystemTablesStatusData.model_validate(data))
 
 
 async def _run_model_settings_test(

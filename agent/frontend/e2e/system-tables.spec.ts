@@ -206,7 +206,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
       mutations += 1;
       await new Promise<void>((resolve) => { release = resolve; });
-      await route.fulfill({ json: { data: { ...data, operation: "initialized" }, error_messages: [], warning_messages: [] } });
+      await route.fulfill({ status: 202, json: { data, error_messages: [], warning_messages: [] } });
     });
     const finish = async () => {
       await expect.poll(() => Boolean(release)).toBe(true);
@@ -263,3 +263,56 @@ for (const theme of ["light", "dark"] as const) {
     expect(mutations).toBe(1); // すべて合成route、実DDLなし。
   });
 }
+
+// ---- 後台の作成・更新と止まった操作（#5278） --------------------------------------------------
+
+test(
+  "外で始まった作成・更新も「作成・更新」を回し、開始と経過を出し、lease の期限を過ぎたら止まった可能性を出す（#5278）",
+  { tag: "@responsive" },
+  async ({ page, mockApi }, testInfo) => {
+    const legacy = mockApi.state.systemTables as Record<string, unknown>;
+    const operationState = legacy.operation_state as Record<string, unknown>;
+    mockApi.state.systemTables = {
+      ...legacy,
+      operation_state: {
+        ...operationState,
+        status: "running",
+        operation_kind: "initialize",
+        started_at: new Date(Date.now() - 5_000).toISOString(),
+        lease_expires_at: new Date(Date.now() + 900_000).toISOString(),
+      },
+    };
+    await page.goto("/settings/system-tables");
+    const card = page.locator("#system-tables");
+    const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+    await expect(initialize).toHaveAttribute("aria-busy", "true");
+    await expect(initialize).toHaveAttribute("aria-disabled", "true");
+    await expect(initialize).toHaveText("作成・更新");
+    const progress = card.getByTestId("system-tables-operation-progress");
+    await expect(progress).toHaveText(/^作成・更新を実行中（開始 \d{2}:\d{2}・経過 1 分未満）$/);
+    await expect(card.locator("svg.animate-spin:visible")).toHaveCount(1);
+    await expectNoPageHorizontalOverflow(page);
+    await progress.locator("xpath=..").screenshot({ path: testInfo.outputPath("running.png") });
+
+    // 異常終了で lease の期限を過ぎた（状態は stale）。回さず、止まった可能性を出し、再実行できる。
+    mockApi.state.systemTables = {
+      ...legacy,
+      operation_state: {
+        ...operationState,
+        status: "stale",
+        operation_kind: "initialize",
+        started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+        lease_expires_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      },
+    };
+    await card.getByRole("button", { name: "最新情報を取得", exact: true }).click();
+    await expect(card.getByTestId("system-tables-stale-operation")).toContainText("前回の操作が止まった可能性があります");
+    await expect(card.getByText("停止の可能性", { exact: true })).toBeVisible();
+    await expect(initialize).not.toHaveAttribute("aria-busy", "true");
+    await expect(initialize).toBeEnabled();
+    await expect(progress).toHaveCount(0);
+    await expectNoPageHorizontalOverflow(page);
+    // HNSW 索引を持たない製品は vector memory の見積もりを出さない。
+    await expect(card.getByTestId("system-tables-vector-memory")).toHaveCount(0);
+  },
+);

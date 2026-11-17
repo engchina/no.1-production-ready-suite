@@ -859,22 +859,33 @@ def test_recreate_rejects_each_active_persistent_job_type(
 
 
 class _ApiManager:
-    def status(self) -> dict[str, Any]:
+    """画面の API が使う manager（状態と後台の操作の開始。#5278）。"""
+
+    def __init__(self) -> None:
+        self.on_finished: Any = None
+
+    def screen_status(self) -> dict[str, Any]:
         return _status_payload("partial", existing=4)
 
-    def initialize(self, *, recreate: bool, confirmation: str | None) -> dict[str, Any]:
-        result = _status_payload("ready")
+    def start_initialize_in_background(
+        self, *, recreate: bool, confirmation: str | None, on_finished: Any
+    ) -> dict[str, Any]:
+        self.on_finished = on_finished
+        running = _status_payload("partial", existing=4)
         return {
-            **result,
-            "operation": "recreated" if recreate else "migrated",
-            "applied_versions": [migration.version for migration in MIGRATIONS],
-            "dropped_object_count": 42 if recreate else 0,
-            "created_object_count": 48 if recreate else 44,
+            **running,
+            "operation_state": {
+                **running["operation_state"],
+                "status": "running",
+                "operation_kind": "recreate" if recreate else "initialize",
+            },
         }
 
 
 class _LockedApiManager(_ApiManager):
-    def initialize(self, *, recreate: bool, confirmation: str | None) -> dict[str, Any]:
+    def start_initialize_in_background(
+        self, *, recreate: bool, confirmation: str | None, on_finished: Any
+    ) -> dict[str, Any]:
         raise SystemSchemaError(
             "ORA-00054",
             "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。",
@@ -896,11 +907,13 @@ def _system_tables_request() -> Request:
 def test_system_tables_api_contract_and_strict_permission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings_router, "system_schema_manager", _ApiManager())
+    manager = _ApiManager()
+    resets: list[int] = []
+    monkeypatch.setattr(settings_router, "system_schema_manager", manager)
     monkeypatch.setattr(
         settings_router,
         "reset_system_schema_runtime",
-        lambda *, schema_epoch: None,
+        lambda *, schema_epoch: resets.append(schema_epoch),
     )
 
     status = settings_router.get_system_tables_status()
@@ -910,9 +923,16 @@ def test_system_tables_api_contract_and_strict_permission(
 
     assert status.data is not None
     assert status.data.status == "partial"
+    # 後台の操作: 開始した時点の状態（running）を返し、終わったら runtime を捨て直す（#5278）。
     assert not isinstance(initialized, JSONResponse)
     assert initialized.data is not None
-    assert initialized.data.operation == "migrated"
+    assert initialized.data.operation_state.status == "running"
+    assert resets == []
+    finished = _status_payload("ready")
+    manager.on_finished(
+        {**finished, "operation_state": {**finished["operation_state"], "schema_epoch": 7}}
+    )
+    assert resets == [7]
     assert permission_for_route("GET", "/settings/database/system-tables") == frozenset(
         {"menu.settings_system_tables"}
     )

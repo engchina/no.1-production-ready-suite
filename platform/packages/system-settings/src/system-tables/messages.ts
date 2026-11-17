@@ -72,6 +72,27 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.action.recreate": "すべて再作成",
   "settings.database.systemTables.refreshed": "最新の状態に更新しました。",
   "settings.database.systemTables.operation.running": "操作中",
+  // lease の期限を過ぎた操作（止まった可能性。#5278）。
+  "settings.database.systemTables.operation.stale": "停止の可能性",
+  "settings.database.systemTables.operation.kind.initialize": "作成・更新",
+  "settings.database.systemTables.operation.kind.recreate": "すべて再作成",
+  // 操作中のボタンの隣に出す状態（ボタンのラベルは変えない。buttons.md §8。#5278）。
+  "settings.database.systemTables.operation.progress": "{operation}を実行中（開始 {startedAt}・経過 {elapsed}）",
+  "settings.database.systemTables.operation.elapsedMinutes": "{minutes} 分",
+  "settings.database.systemTables.operation.elapsedUnderMinute": "1 分未満",
+  "settings.database.systemTables.stale.title": "前回の操作が止まった可能性があります",
+  "settings.database.systemTables.stale.detail":
+    "{operation}（開始 {startedAt}）が、処理中の印の期限（{expiresAt}）を過ぎても終わっていません。操作したプロセスが異常終了した可能性があります。サーバーで処理が動いていないことを確かめてから、もう一度実行してください。",
+  "settings.database.systemTables.vectorMemory.title": "vector memory の見積もり（HNSW 索引）",
+  "settings.database.systemTables.vectorMemory.description":
+    "HNSW 索引は vector memory（Vector Pool）に載ります。Autonomous Database Serverless では Vector Pool が HNSW 索引に合わせて自動で増減するため、今の空きは目安です。",
+  "settings.database.systemTables.vectorMemory.estimated": "見込みの必要量",
+  "settings.database.systemTables.vectorMemory.free": "今の空き",
+  "settings.database.systemTables.vectorMemory.used": "使用中",
+  "settings.database.systemTables.vectorMemory.unavailable": "取得できません",
+  "settings.database.systemTables.vectorMemory.unavailableWithCode": "取得できません（{code}）",
+  "settings.database.systemTables.vectorMemory.shortage":
+    "見込みの必要量が今の空きを超えています。作成・更新で HNSW 索引を作れないことがあります。",
   "settings.database.systemTables.operation.no_op": "システムテーブルは最新です。変更はありません。",
   "settings.database.systemTables.operation.initialized": "システムテーブルを初期作成しました。",
   "settings.database.systemTables.operation.migrated": "システムテーブルを更新しました。",

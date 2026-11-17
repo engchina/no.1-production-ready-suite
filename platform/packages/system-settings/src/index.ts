@@ -254,10 +254,14 @@ export {
   type SystemTablesMessages,
 } from "./system-tables/messages";
 export {
+  SYSTEM_TABLES_IDLE_REFETCH_MS,
+  SYSTEM_TABLES_RUNNING_REFETCH_MAX_MS,
   SYSTEM_TABLES_RUNNING_REFETCH_MS,
   isSystemTableRecreateConfirmationValid,
   isSystemTablesStatusData,
+  systemTableCompletedOperation,
   systemTableControlsBusy,
+  systemTablesRefetchInterval,
   systemTableDetailCounts,
   systemTableObjects,
   useDeleteSystemTableOrphanedRows,
@@ -266,12 +270,14 @@ export {
   type UseInitializeSystemTablesOptions,
 } from "./system-tables/systemTables";
 export {
+  SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS,
   SYSTEM_TABLES_QUERY_KEY,
   type SystemObjectMetadata,
   type SystemObjectType,
   type SystemTableColumnRef,
   type SystemTableDestructiveMigration,
   type SystemTableForeignKey,
+  type SystemTableLastOperation,
   type SystemTableMetadata,
   type SystemTableObjectRef,
   type SystemTableOperationResult,
@@ -283,9 +289,10 @@ export {
   type SystemTablesApi,
   type SystemTablesDeleteOrphansRequest,
   type SystemTablesInitializeRequest,
-  type SystemTablesOperationData,
   type SystemTablesOrphanDeletionData,
   type SystemTablesStatusData,
+  type SystemTableVectorMemory,
+  type SystemTableVectorMemoryIndex,
 } from "./system-tables/types";
 
 // ユーザー管理・ロール管理（NL2SQL から移設。#206）

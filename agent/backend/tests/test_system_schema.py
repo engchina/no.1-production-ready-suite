@@ -714,12 +714,19 @@ def test_system_tables_api_status_and_initialize(fake_manager: SystemSchemaManag
     assert refused.status_code == 409
     assert refused.json()["error_code"] == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
 
-    done = client.post(
+    started = client.post(
         "/api/settings/database/system-tables/initialize", json={"allow_destructive": True}
     )
-    assert done.status_code == 200, done.text
+    # 後台の操作: lease を取ったら 202 と running の状態を返す（#5278）。
+    assert started.status_code == 202, started.text
+    assert started.json()["data"]["operation_state"]["status"] in {"running", "idle"}
+    assert fake_manager._background_thread is not None
+    fake_manager._background_thread.join(10)
+
+    done = client.get("/api/settings/database/system-tables")
     assert done.json()["data"]["status"] == "ready"
-    assert done.json()["data"]["operation"] == "migrated"
+    assert done.json()["data"]["operation_state"]["status"] == "idle"
+    assert done.json()["data"]["last_operation"]["operation"] == "migrated"
 
 
 def test_system_tables_api_returns_missing_columns(monkeypatch: MonkeyPatch) -> None:

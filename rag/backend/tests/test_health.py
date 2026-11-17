@@ -729,3 +729,45 @@ def test_database_status_distinguishes_running_schema_update(
     assert data["status"] == "setup_required"
     assert data["schema_status"] == "ready"
     assert data["check"] == "schema_update_running"
+
+
+def test_database_status_does_not_block_on_stale_schema_operation(
+    monkeypatch: MonkeyPatch, wallet_dir: Path
+) -> None:
+    """lease の期限を過ぎた操作（stale）は実行中として DB ゲートを塞がない（#5278）。"""
+    _configure_oracle_only(monkeypatch, wallet_dir=wallet_dir)
+
+    async def probe_ok(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", probe_ok)
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {"status": "ready", "operation_state": {"status": "stale"}},
+    )
+    data = client.get("/api/ready/database").json()["data"]
+    assert data["status"] == "ok"
+    assert data["schema_status"] == "ready"
+
+
+def test_ingestion_schema_runtime_treats_stale_operation_as_ready(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """取込 worker の判定（system_schema_runtime）も stale を塞がない（#5278）。"""
+    import asyncio
+
+    from app.rag.system_schema_runtime import SystemSchemaRuntime
+
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {"status": "ready", "operation_state": {"status": "stale"}},
+    )
+    assert asyncio.run(SystemSchemaRuntime(ttl_seconds=0).state()) == "ready"
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {"status": "ready", "operation_state": {"status": "running"}},
+    )
+    assert asyncio.run(SystemSchemaRuntime(ttl_seconds=0).state()) == "setup_required"

@@ -231,7 +231,7 @@ chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`
 変えず、埋め込みの表の trigger（`RAG_CHUNK_EMBEDDINGS_HYBRID_SYNC`）が以後の書き込みを同期する。
 
 1. **適用の前に vector memory の空きと必要量を確かめる**（#5261）。更新の最後に作り直す HNSW 索引
-   （`RAG_CHUNKS_EMBEDDING_HNSW_IDX`）は vector memory（`vector_memory_size` の Vector Pool）に載り、同じ DB のほかの
+   （`RAG_CHUNKS_EMBEDDING_HNSW_IDX`）は vector memory（Vector Pool）に載り、同じ DB のほかの
    schema の HNSW 索引と空きを分け合う。足りないと、表・列・範囲の索引の更新と台帳の記録が済んだ後に `ORA-51995` で止まり、
    `status` は `partial` のまま残る。ADMIN（`V$` を読める DB ユーザー）で次を確かめる。
 
@@ -246,7 +246,8 @@ chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`
 
    必要量は、RAG のアプリ用の DB ユーザーで、更新の前の表と列から `DBMS_VECTOR.INDEX_VECTOR_MEMORY_ADVISOR` で見積もる
    （`neighbors` は今の索引のビルド。既定は 48。式と件数からの見積もりは [oracle-hnsw-vector-index.md](./oracle-hnsw-vector-index.md)
-   「Vector Pool メモリ設計」）。
+   「Vector Pool メモリ設計」）。運用設定 › システムテーブルの画面も、HNSW 索引ごとの「見込みの必要量 / 今の空き」を
+   同じ advisor と `V$VECTOR_MEMORY_POOL`・`V$VECTOR_INDEX` で出す（#5278。権限・ビューが無い環境では「取得できません」）。
 
    ```sql
    VARIABLE response_json CLOB;
@@ -255,9 +256,12 @@ chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`
    ```
 
    更新は旧い表の HNSW 索引を消してから新しい表に作るので、旧い索引が `v$vector_index` に載っていればその分は空く。
-   空き（旧い索引の分を含む）が見積もりより少なければ、適用の前に次のどれかを選ぶ。
-   - `vector_memory_size` を上げる（ADMIN で `ALTER SYSTEM SET vector_memory_size = <大きさ> SCOPE = BOTH`。上げられる
-     上限は DB の SGA の大きさで決まる）。
+   空き（旧い索引の分を含む）が見積もりより少なければ、適用の前に次のどれかを選ぶ。Autonomous Database Serverless では
+   SGA のパラメータ（`vector_memory_size` を含む）を明示的に設定できず、Vector Pool は HNSW 索引に合わせて SGA の中で
+   自動で増減する（[Vector Memory Management](https://docs.oracle.com/en/database/oracle/oracle-database/26/nfcoa/vector-memory-management.html)）。
+   そのため `vector_memory_size` を上げる方法は使えない。
+   - ECPU を増やす（SGA が増え、Vector Pool に使える上限も増える）。ECPU の数と Vector Pool の大きさの対応は公式文書に
+     記載が無い。観測（公式ではない）: 配備環境で 2 ECPU では `ORA-51995` で作れなかった HNSW 索引が、4 ECPU にしたら作れた。
    - 同じ DB の使っていない HNSW 索引を消す（ほかの schema の検証用の索引など。消す前に使っていないことを確かめる）。
    - HNSW 索引を作らずに、既定の検索の実行方式（Oracle Hybrid Vector Index）で使う。この方式は HNSW 索引を使わないので
      検索は動く。ただし HNSW 索引は schema の必須の object のままで、`status` は `partial`、配備の確認は schema の NG を

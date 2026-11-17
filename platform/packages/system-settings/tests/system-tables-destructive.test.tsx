@@ -193,7 +193,8 @@ describe("「最新情報を取得」のスピナー（#819）", () => {
     });
     expect(calls).toBe(2);
     expect(refreshButton().getAttribute("aria-busy")).toBeNull();
-    expect(initializeButton().disabled).toBe(true);
+    // 押していない取り直し（定期・invalidate）は操作を止めない（#5278）。
+    expect(initializeButton().disabled).toBe(false);
 
     await act(async () => {
       refreshButton().click();
