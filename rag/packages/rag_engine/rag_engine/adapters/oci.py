@@ -80,6 +80,7 @@ from rag_engine.resources.llm_usage import (
     record_llm_usage,
     response_usage,
 )
+from rag_engine.resources.output_shape import summarize_output_shape
 from rag_engine.resources.rerank_diagnostics import (
     RerankCallReceipt,
     bind_rerank_attempt,
@@ -746,11 +747,14 @@ def _log_incomplete(
 
     `llm_call_usage`（INFO）は配備の log の level で出ないことがあるため、未完了は別の event で残す。
     ``next_action`` は `widen`（上限を広げて送り直す）/ `lower_effort`（推論の量を下げて送り直す）/ `fail`。
+    受け取った出力の形の要約（`llm_output_shape`。字数・末尾の文字の種類・反復・JSON の文字列の内か外か。#5368）も残し、
+    本文そのものは残さない。
     """
     usage = response_usage(response)
+    shape = summarize_output_shape(_response_output_text(response))
     _logger.warning(
         "LLM の応答が未完了: model=%s reason=%s max_output_tokens=%d reasoning_effort=%s output_tokens=%d "
-        "reasoning_tokens=%d next_action=%s",
+        "reasoning_tokens=%d next_action=%s output_shape=%s",
         provider.model,
         exc.reason,
         max_output_tokens,
@@ -758,6 +762,7 @@ def _log_incomplete(
         usage["output_tokens"],
         usage["reasoning_tokens"],
         next_action,
+        json.dumps(shape, ensure_ascii=False, separators=(",", ":")),
         extra={
             "event": "llm_incomplete_response",
             "llm_model": str(provider.model),
@@ -767,6 +772,7 @@ def _log_incomplete(
             "llm_next_action": next_action,
             "output_tokens": usage["output_tokens"],
             "reasoning_tokens": usage["reasoning_tokens"],
+            "llm_output_shape": shape,
         },
     )
 

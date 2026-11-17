@@ -332,6 +332,15 @@ token を出す。
 （`incomplete_responses`・`incomplete_reasons`）も、起きたときだけ `llm_usage` と log（`llm_incomplete_reason`・
 `llm_attempt`・`llm_max_output_tokens`）に残す（#1527）。
 
+**未完了の出力の形の要約（#5368）**: 未完了の応答の log（`llm_incomplete_response`）には、受け取った出力の形の要約
+（`llm_output_shape`。`rag_engine.resources.output_shape.summarize_output_shape`）も残す。本文・断片の中身は残さず、数値だけを
+残す: 出力の字数（`output_chars`）、末尾 2,000 字の文字の種類の内訳（`tail_classes`: 空白・改行・JSON の記号・数字・英字・
+かな漢字・句読点・記号など）、末尾に続く反復の断片の長さと回数（`tail_repeat_unit_chars`・`tail_repeat_count`）、末尾の範囲で
+最も多く現れた 8 字・32 字の断片の回数（`tail_top_fragment_counts`）、JSON の字句の状態（`json_in_string`・`json_depth`・
+閉じていない文字列の字数 `json_open_string_chars`・末尾に続く文字列の外の空白の字数 `json_trailing_whitespace_chars`・末尾の範囲の
+文字列の中の字数 `tail_in_string_chars`）。文字列の中の暴走（#5041）か外の空白（#5077）かを見分けるための診断で、打ち切りの
+判定には使わない。
+
 **本文の反復・空白による中止の廃止（#5041）**: 単一の回答streamを文字の周期や空白の長さで中止しません。合法な同値表でも途中の文字列が反復するためです。providerの完了/未完了・失敗event、全体の期限、無応答timeout、取消、出力token上限と型検証で処理します。内容反復を契機とした再送や推論設定の変更も行いません。
 
 **JSON の文字列の外の空白の打ち切り（#5077）**: provider の制約付き生成は JSON の値と値の間の空白を制限しないため、モデルが

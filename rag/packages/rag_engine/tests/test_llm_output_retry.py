@@ -87,6 +87,23 @@ class OutputRetryRecordTest(unittest.TestCase):
         warned = [r for r in records if getattr(r, "event", "") == "llm_incomplete_response"]
         self.assertEqual([(r.llm_max_output_tokens, r.llm_next_action) for r in warned], [(65536, "fail")])
 
+    def test_output_limit_logs_the_shape_of_the_output_without_its_text(self):
+        """#5368: 未完了の出力の形の要約をログに残し、本文はログに出さない。"""
+        marker = "SYNTHETICMARKER"
+        response = _incomplete("max_output_tokens")
+        response.output_text = '{"text":"' + marker * 300
+        _usage, records = self.call(_Client([response]))
+        warned = [r for r in records if getattr(r, "event", "") == "llm_incomplete_response"]
+        self.assertEqual(len(warned), 1)
+        shape = warned[0].llm_output_shape
+        self.assertEqual(shape["output_chars"], 9 + len(marker) * 300)
+        self.assertEqual((shape["tail_repeat_unit_chars"], shape["tail_repeat_count"]), (len(marker), 2000 // len(marker)))
+        self.assertTrue(shape["json_in_string"])
+        self.assertIn('"json_in_string":true', warned[0].getMessage())
+        for record in records:
+            self.assertNotIn(marker, record.getMessage())
+            self.assertNotIn(marker, repr(vars(record)))
+
     def test_other_incomplete_reasons_are_recorded_without_retry(self):
         client = _Client([_incomplete("content_filter")])
         usage, _records = self.call(client)
