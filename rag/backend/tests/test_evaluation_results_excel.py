@@ -83,10 +83,48 @@ def test_export_keeps_full_inputs_scores_unassessed_and_comparison() -> None:
     assert sheet["H2"].value == 0.5
     assert sheet["H2"].number_format == "0.0%"
     assert sheet["I2"].value == "未評価"
-    assert sheet["V2"].value == "trace-a"
+    assert sheet["Y2"].value == "trace-a"
     assert "期待する応答の判断" not in [cell.value for cell in sheet[1]]
     assert sheet.freeze_panes == "B2"
     assert book["概要"]["C1"].value == "比較対象: プロファイル B"
+
+
+def _judged_case(**judgement: Any) -> EvaluationCaseResult:
+    return EvaluationCaseResult.model_validate(
+        {
+            "case_id": "row-2",
+            "trace_id": "trace-a",
+            "elapsed_ms": 10,
+            "answer_correctness": judgement.get("answer_correctness"),
+            "answer_coverage": judgement.get("answer_coverage"),
+            "answer_evaluation": {"status": "completed", **judgement},
+        }
+    )
+
+
+def test_export_writes_case_verdict_reason_and_coverage() -> None:
+    """この問の合否・判定の理由・網羅の列（#5262）。旧方式の結果は網羅を出さず「旧方式」と書く。"""
+    new = _judged_case(
+        passed=False,
+        answer_correctness=0.0,
+        answer_coverage=0.5,
+        reason="回答の「値は3」と標準回答の「値は5」が食い違う。",
+        rubric_version=33,
+    )
+    legacy = _judged_case(passed=True, answer_correctness=1.0, reason="一致している。")
+    rows = []
+    for case in (new, legacy):
+        result = EvaluationMetrics(case_count=1, case_results=[case])
+        sheet = load_workbook(BytesIO(evaluation_results_xlsx(result, inputs())))["主条件の結果"]
+        headers = [cell.value for cell in sheet[1]]
+        rows.append(
+            [
+                sheet.cell(row=2, column=headers.index(name) + 1).value
+                for name in ("回答の網羅（参考）", "この問の合否", "判定の理由")
+            ]
+        )
+    assert rows[0] == [0.5, "不合格", "回答の「値は3」と標準回答の「値は5」が食い違う。"]
+    assert rows[1] == ["旧方式", "合格", "旧方式: 一致している。"]
 
 
 def test_saved_old_result_keeps_its_verdict_without_retired_columns() -> None:

@@ -15,7 +15,7 @@ export const EVALUATION_PERSPECTIVES: ReadonlyArray<{id: EvaluationPerspective; 
 export const EVALUATION_METRIC_NAMES: readonly EvaluationMetricName[] = EVALUATION_PERSPECTIVES.flatMap(item => item.metrics);
 /** 合否と閾値に使わない参考の指標。 */
 export const EVALUATION_REFERENCE_METRICS: readonly EvaluationReferenceMetricName[] = [
-  "precision_at_10", "ndcg_at_3", "ndcg_at_10", "map",
+  "answer_coverage", "precision_at_10", "ndcg_at_3", "ndcg_at_10", "map",
   "bleu_1", "bleu_2", "bleu_4", "rouge_1", "rouge_2", "rouge_l",
 ];
 export const LOWER_IS_BETTER_METRICS: ReadonlySet<string> = new Set();

@@ -110,7 +110,7 @@ async def test_runner_keeps_case_when_screen_judge_fails() -> None:
 
     metrics = await EvaluationRunner(
         pipeline=_ScreenPipeline("設定を開いて変更します。"), answer_judge=judge
-    ).run(cases=[_case(SCREEN_A)], top_k=5)
+    ).run(cases=[_case(SCREEN_A, standard_answer="設定の画面で変更する。")], top_k=5)
     result = metrics.case_results[0]
     assert result.status == "success"
     assert result.answer_correctness is None

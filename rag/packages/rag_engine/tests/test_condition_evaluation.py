@@ -1,4 +1,4 @@
-"""本文全体の独立判定を保持し、不要な片段番号や自己申告ラベルに依存しない。"""
+"""主張ごとの正確性と要点の網羅（#5262）: 判定へ渡す入力、印からの採点、記録の再生。"""
 
 import json
 from pathlib import Path
@@ -7,109 +7,152 @@ from unittest.mock import patch
 
 import pytest
 
-from rag_engine.evaluation.answer_eval import CORRECTNESS_PROMPT, CORRECTNESS_VALUES, AnswerCorrectnessOutput, evaluate_answer_payload
+from rag_engine.evaluation.answer_eval import (
+    CORRECTNESS_PROMPT,
+    AnswerCorrectnessOutput,
+    ClaimVerdict,
+    evaluate_answer_payload,
+    judge_inputs,
+    score_judgement,
+)
 
 PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
-# 合成の対照（正しい部分回答・事実の矛盾・単なる不足・資料不足の明示・答えのある質問の拒答など）。
-# recorded_* は openai.gpt-oss-120b（推論の量 medium）・rubric_version 32 の実呼び出しの記録（#5207）。
-CASES = json.loads((Path(__file__).with_name("fixtures") / "condition_evaluation_cases.json").read_text())
+# 合成の匿名の対照（正しい部分回答・資料不足の明示・事実の矛盾・標準回答が方向性だけ・答えの無い回答）。
+# judge_inputs は判定へ実際に渡した入力、recorded_output は xai.grok-4.7（推論の量 medium）・rubric_version 33 の
+# 実呼び出しの出力（#5262）。
+CASES = json.loads((Path(__file__).with_name("fixtures") / "correctness_judge_cases.json").read_text())
 
 
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
-def test_fixed_synthetic_inputs_are_passed_as_complete_text(case):
-    output = AnswerCorrectnessOutput(correctness="unassessed", reason="比較材料の確認")
-    with patch(PARSE, return_value=output) as model:
-        result = evaluate_answer_payload(case, object())
-    inputs = json.loads(model.call_args.args[1])
-    for field in ("question", "standard_answer"):
-        assert inputs[field] == case[field]
-    assert inputs["actual_responses"][0]["answer_text"] == case["answer_text"]
-    assert result["answer_correctness"] is None
-    assert model.call_count == 1
+def _output(claims, points):
+    return AnswerCorrectnessOutput.model_validate({"claims": claims, "points": points})
 
 
-@pytest.mark.parametrize("verdict,score", [("consistent", 1), ("contradicts", 0), ("unassessed", None)])
-def test_hold_expectation_written_in_standard_answer_is_scored_as_correctness(verdict, score):
-    data = {
-        "question": "合成の資料にない項目の値は？",
-        "standard_answer": "資料に記載がないため答えられないと伝える。",
-        "answer_text": "資料から値を確認できません。",
+def _payload(**fields):
+    return {
+        "question": "項目Aと項目Bの値は？",
+        "standard_answer": "項目Aは5。項目Bは8。",
+        "answer_text": "項目Aは5です。\n根拠：synthetic.pdf p.1\n項目Bは資料で確認できませんでした。",
+        **fields,
     }
-    output = AnswerCorrectnessOutput(correctness=verdict, reason="本文と標準回答の比較")
-    with patch(PARSE, return_value=output) as model:
-        result = evaluate_answer_payload(data, object())
-    assert result["status"] == "completed"
-    assert result["answer_correctness"] == score
-    assert model.call_count == 1
-    inputs = json.loads(model.call_args.args[1])
-    assert set(inputs) == {"question", "standard_answer", "actual_responses"}
-    schema = model.call_args.args[3].model_json_schema()
-    assert set(schema["properties"]) == {"correctness", "reason"}
-    assert "answer_unit_id" not in json.dumps(schema)
-
-
-@pytest.mark.parametrize("verdict,expected", [("consistent", 1), ("contradicts", 0), ("unassessed", None)])
-def test_model_whole_body_verdict_is_not_reinterpreted_by_coverage_or_headings(verdict, expected):
-    from rag_engine.generation.answer_labels import answer_labels
-
-    data = {
-        "question": "合成の値は？",
-        "standard_answer": "項目Aは5です。項目Bは8です。",
-        "answer_text": answer_labels().gaps_section + "\n項目Aは5です。",
-    }
-    output = AnswerCorrectnessOutput(correctness=verdict, reason="本文の意味に基づく判定")
-    with patch(PARSE, return_value=output) as model:
-        result = evaluate_answer_payload(data, object())
-    assert json.loads(model.call_args.args[1])["actual_responses"][0]["answer_text"] == data["answer_text"]
-    assert result["answer_correctness"] == expected
-    assert model.call_count == 1
-
-
-def test_actual_citations_are_removed_from_the_compared_body():
-    actual = "合成の値は24です。\n根拠：synthetic.csv p.1"
-    data = {
-        "question": "合成の値は？",
-        "standard_answer": "合成の値は24です。",
-        "answer_text": actual,
-        "actual_responses": [{"question": "合成の値は？", "answer_text": actual}],
-    }
-    output = AnswerCorrectnessOutput(correctness="consistent", reason="正しい値を回答している。")
-    with patch(PARSE, return_value=output) as model:
-        result = evaluate_answer_payload(data, object())
-    inputs = json.loads(model.call_args.args[1])
-    assert inputs["actual_responses"] == [{"question": "合成の値は？", "answer_text": "合成の値は24です。"}]
-    assert "answer_text" not in inputs
-    assert "synthetic.csv" not in model.call_args.args[1]
-    assert result["answer_correctness"] == 1
-    assert model.call_count == 1
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
 def test_recorded_judge_outputs_replay_to_expected_scores(case):
-    """記録した判定を再生し、判定へ渡す入力と点への写像を確かめる（実モデルの意味判断の正しさは保証しない）。"""
-    output = AnswerCorrectnessOutput(correctness=case["recorded_verdict"], reason=case["recorded_reason"])
+    """記録した出力を再生し、渡す入力・点・理由を確かめる（実モデルの意味判断の正しさは保証しない）。"""
+    output = AnswerCorrectnessOutput.model_validate(case["recorded_output"])
     with patch(PARSE, return_value=output) as model:
-        result = evaluate_answer_payload(case, object())
+        result = evaluate_answer_payload(
+            {
+                "question": case["question"],
+                "standard_answer": case["standard_answer"],
+                "answer_points": case["answer_points"],
+                "answer_text": case["answer_text"],
+            },
+            object(),
+        )
     system, prompt, _settings, schema = model.call_args.args
     assert system == CORRECTNESS_PROMPT and schema is AnswerCorrectnessOutput
-    assert json.loads(prompt) == {
-        "question": case["question"],
-        "standard_answer": case["standard_answer"],
-        "actual_responses": [{"question": case["question"], "answer_text": case["answer_text"]}],
-    }
-    assert case["recorded_verdict"] == case["expected_verdict"]
-    assert result["answer_correctness"] == CORRECTNESS_VALUES[case["expected_verdict"]]
+    assert json.loads(prompt) == case["judge_inputs"]
+    assert model.call_count == 1
+    assert result["status"] == "completed"
+    assert result["answer_correctness"] == case["expected_correctness"]
+    assert result["answer_coverage"] == case["recorded_coverage"]
     assert result["correctness_reason"] == case["recorded_reason"]
 
 
-def test_prompt_names_every_verdict_and_states_the_reason_language_once():
-    """判定の値は「述べた内容が標準回答と合うか・食い違うか」の名前で、指示はすべての値を名指す。
+def test_inputs_number_standard_points_and_answer_without_citations_or_merging():
+    """標準回答・要点・本文を番号つきの単位で渡す。要点は標準回答に結合せず、出典の行は除く。"""
+    inputs = judge_inputs(_payload(answer_points=["項目Aの値", "確かめる条件"]))
+    assert inputs["standard_answer"] == [{"id": "S1", "text": "項目Aは5。"}, {"id": "S2", "text": "項目Bは8。"}]
+    assert inputs["points"] == [{"id": "P1", "text": "項目Aの値"}, {"id": "P2", "text": "確かめる条件"}]
+    (response,) = inputs["actual_responses"]
+    assert response["answer"] == [
+        {"id": "A1", "text": "項目Aは5です。"},
+        {"id": "A2", "text": "項目Bは資料で確認できませんでした。"},
+    ]
+    assert "synthetic.pdf" not in json.dumps(inputs, ensure_ascii=False)
 
-    理由の言語の規則は指示だけに書き、出力の型の説明に重ねない。
-    """
-    verdicts = get_args(AnswerCorrectnessOutput.model_fields["correctness"].annotation)
-    assert verdicts == ("consistent", "contradicts", "unassessed", "not_applicable")
-    assert all(verdict in CORRECTNESS_PROMPT for verdict in verdicts)
-    assert CORRECTNESS_VALUES == {"consistent": 1.0, "contradicts": 0.0}
-    assert "日本語" in CORRECTNESS_PROMPT
-    assert "日本語" not in json.dumps(AnswerCorrectnessOutput.model_json_schema(), ensure_ascii=False)
+
+def test_points_default_to_standard_sentences_and_answer_ids_run_across_turns():
+    inputs = judge_inputs(
+        _payload(
+            actual_responses=[
+                {"question": "質問", "answer_text": "どちらの項目ですか。"},
+                {"question": "返答", "answer_text": "項目Aは5です。項目Bは8です。"},
+            ]
+        )
+    )
+    assert inputs["points"] == [{"id": "P1", "text": "項目Aは5。"}, {"id": "P2", "text": "項目Bは8。"}]
+    ids = [[row["id"] for row in response["answer"]] for response in inputs["actual_responses"]]
+    assert ids == [["A1"], ["A2", "A3"]]
+
+
+@pytest.mark.parametrize(
+    ("verdicts", "correctness"),
+    [
+        (["supported", "not_in_standard"], 1.0),  # 正しい部分回答と、標準回答に記載の無い主張
+        (["supported", "contradicted"], 0.0),  # 矛盾が 1 つでもあれば 0
+        (["not_in_standard"], 0.0),  # 標準回答と合う主張が無い（答えていない）
+        ([], 0.0),
+    ],
+    ids=["partial", "contradiction", "no_answer", "no_claims"],
+)
+def test_correctness_is_computed_from_claim_verdicts(verdicts, correctness):
+    inputs = judge_inputs(_payload())
+    claims = [
+        {"answer_ids": [f"A{index}"], "verdict": verdict, "standard_ids": [] if verdict == "not_in_standard" else [f"S{index}"]}
+        for index, verdict in enumerate(verdicts, 1)
+    ]
+    scores = score_judgement(inputs, _output(claims, [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": False}]))
+    assert scores["answer_correctness"] == correctness
+    assert scores["answer_coverage"] == 0.5
+    assert scores["coverage_points"] == [{"point": "項目Aは5。", "covered": True}, {"point": "項目Bは8。", "covered": False}]
+
+
+def test_reason_lists_each_contradiction_with_the_original_text():
+    inputs = judge_inputs(_payload(answer_text="項目Aは3です。項目Bは8です。"))
+    claims = [
+        {"answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": ["S1"]},
+        {"answer_ids": ["A2"], "verdict": "supported", "standard_ids": ["S2"]},
+    ]
+    scores = score_judgement(inputs, _output(claims, [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": True}]))
+    assert scores["correctness_reason"] == "回答の「項目Aは3です。」と標準回答の「項目Aは5。」が食い違う。"
+    assert scores["correctness_claims"][0] == {"verdict": "contradicted", "answer": "項目Aは3です。", "standard": "項目Aは5。"}
+
+
+@pytest.mark.parametrize(
+    ("claims", "points"),
+    [
+        ([{"answer_ids": ["A9"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2"]),
+        ([{"answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": ["S9"]}], ["P1", "P2"]),
+        ([{"answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": []}], ["P1", "P2"]),
+        ([{"answer_ids": [], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2"]),
+        ([{"answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1"]),
+        ([{"answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2", "P3"]),
+    ],
+    ids=["unknown_answer_id", "unknown_standard_id", "contradiction_without_standard", "no_answer_id", "missing_point", "extra_point"],
+)
+def test_output_pointing_outside_the_input_is_an_evaluation_error(claims, points):
+    """入力に無い id・要点の過不足は評価のエラーにする（点を推測で補わない）。"""
+    output = _output(claims, [{"point_id": point, "covered": True} for point in points])
+    with patch(PARSE, return_value=output):
+        result = evaluate_answer_payload(_payload(), object())
+    assert result["status"] == "error" and result["error_type"] == "InvalidJudgeReference"
+    assert "answer_correctness" not in result
+
+
+def test_prompt_steps_and_value_definitions_live_in_one_layer_each():
+    """手順は指示の Step に、印の値の定義は応答 schema の説明に 1 回だけ書く（指示で繰り返さない）。"""
+    assert [line for line in CORRECTNESS_PROMPT.splitlines() if line.startswith("## Step")] == [
+        "## Step 1: 評価の入力を読む",
+        "## Step 2: 本文を主張に分ける",
+        "## Step 3: 主張を標準回答と照らす",
+        "## Step 4: 要点の網羅を確かめる",
+    ]
+    verdicts = get_args(ClaimVerdict)
+    assert verdicts == ("supported", "contradicted", "not_in_standard")
+    described = AnswerCorrectnessOutput.model_json_schema()["$defs"]["JudgedClaim"]["properties"]["verdict"]["description"]
+    assert all(verdict in described for verdict in verdicts)
+    assert not any(verdict in CORRECTNESS_PROMPT for verdict in verdicts)
+    # 点・理由はコードが作るので、出力に点・理由の項目は無い。
+    assert set(AnswerCorrectnessOutput.model_fields) == {"claims", "points"}

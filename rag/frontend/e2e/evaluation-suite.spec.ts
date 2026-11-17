@@ -808,7 +808,8 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await page.getByRole("button",{name:"評価実行"}).click();
   const group=page.getByTestId("evaluation-perspective-reference");
   await expect(group.getByRole("heading",{name:"参考の指標",exact:true})).toBeVisible();
-  await expect(group.locator("[data-testid^='evaluation-reference-']")).toHaveCount(10);
+  await expect(group.locator("[data-testid^='evaluation-reference-']")).toHaveCount(11);
+  await expect(page.getByTestId("evaluation-reference-answer_coverage")).toContainText("未評価");
   await expect(page.getByTestId("evaluation-reference-precision_at_10")).toContainText("50%");
   await expect(page.getByTestId("evaluation-reference-bleu_1")).toContainText("25%");
   await expect(page.getByTestId("evaluation-reference-rouge_l")).toContainText("未評価");
@@ -816,6 +817,42 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await expectNoPageOverflow(page);
   await group.scrollIntoViewIfNeeded();
   await group.screenshot({path:testInfo.outputPath(`reference-${viewport.name}.png`)});
+ });
+}
+
+for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
+ test(`問ごとの合否・判定の理由・網羅を行で開いて見られ、旧方式の結果は網羅を出さない (#5262, ${viewport.name})`, async ({page}, testInfo)=>{
+  await page.setViewportSize({width:viewport.width,height:viewport.height});
+  const base=evaluationMetrics("standard");
+  const [row]=base.case_results;
+  const judged={...row,answer_correctness:0,answer_coverage:0.5,answer_evaluation:{status:"completed",passed:false,answer_correctness:0,answer_coverage:0.5,message:null,rubric_version:33,
+   reason:"回答の「合成の値は3です。」と標準回答の「合成の値は5。」が食い違う。",
+   claims:[{verdict:"contradicted",answer:"合成の値は3です。",standard:"合成の値は5。"}],
+   points:[{point:"合成の要点 A",covered:true},{point:"合成の要点 B",covered:false}]}};
+  const legacy={...row,case_id:"row-3",trace_id:"trace-legacy",answer_correctness:1,answer_evaluation:{status:"completed",passed:true,answer_correctness:1,message:null,reason:"一致している。"}};
+  await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,case_results:[judged,legacy]})});
+  await page.goto("/evaluation");await prepareEvaluationRun(page);await page.getByRole("button",{name:"評価実行"}).click();
+  const table=page.getByTestId("evaluation-case-scroll-region");
+  const [first,second]=[table.getByTestId("evaluation-case-judgement").nth(0),table.getByTestId("evaluation-case-judgement").nth(1)];
+  await expect(first).toContainText("不合格");
+  await expect(first.getByTestId("evaluation-case-judgement-reason")).toBeHidden();
+  await first.getByTestId("evaluation-case-judgement-toggle").click();
+  await expect(first.getByTestId("evaluation-case-judgement-reason")).toHaveText("回答の「合成の値は3です。」と標準回答の「合成の値は5。」が食い違う。");
+  const points=first.getByTestId("evaluation-case-judgement-points").getByRole("listitem");
+  await expect(points).toHaveText(["述べた: 合成の要点 A","述べていない: 合成の要点 B"]);
+  await expect(second).toContainText("合格");await expect(second).toContainText("旧方式");
+  await second.getByTestId("evaluation-case-judgement-toggle").click();
+  await expect(second).toContainText("網羅は出しません");await expect(second).toContainText("一致している。");
+  await expect(second.getByTestId("evaluation-case-judgement-points")).toHaveCount(0);
+  const headers=await table.getByRole("columnheader").allTextContents();
+  const coverage=headers.indexOf("回答: 網羅（参考）");
+  expect(coverage).toBeGreaterThan(-1);
+  const rows=table.getByRole("row");
+  await expect(rows.nth(1).getByRole("cell").nth(coverage-1)).toHaveText("50%");
+  await expect(rows.nth(2).getByRole("cell").nth(coverage-1)).toHaveText("旧方式");
+  await expectNoPageOverflow(page);
+  await table.scrollIntoViewIfNeeded();
+  await table.screenshot({path:testInfo.outputPath(`case-judgement-${viewport.name}.png`)});
  });
 }
 
