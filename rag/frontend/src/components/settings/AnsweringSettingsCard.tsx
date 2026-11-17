@@ -34,7 +34,7 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 5 }, 
 }));
 
 // 回答生成の通しの上限の選択肢（秒。backend の RAG_ANSWER_TIMEOUT_CHOICES と同じ。#5280）。
-const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [100, 300, 600, 1200].map((seconds) => ({
+const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200].map((seconds) => ({
   value: String(seconds),
   label: t("settings.answering.answerTimeoutOption", { seconds: String(seconds) }),
 }));
