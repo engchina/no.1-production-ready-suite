@@ -12,6 +12,7 @@ import {
   FormStatus,
   TimedLoadingState,
   FormSkeleton,
+  RadioOptionGroup,
   RoadmapBadge,
 } from "@production-ready/ui";
 import { useMemo, useState } from "react";
@@ -54,7 +55,6 @@ import {
   useUpdateParserAdapterSettings,
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 import {
   ConnectionConfiguredBadge,
   ExternalConnectionSheet,
@@ -246,8 +246,7 @@ function OverviewCard({
     () => backendOptionsFromSettings(settings),
     [settings]
   );
-  // 正本（PARSER_BACKEND_ORDER。#3359）の順。1 つの 2 列の grid に並べ、375px の 1 列でも同じ順にする
-  // （Docling・Unstructured / 構造化レコード JSONL・XML ツリー JSON /
+  // 正本（PARSER_BACKEND_ORDER。#3359）の順（Docling・Unstructured・構造化レコード JSONL・XML ツリー JSON・
   // Dots.OCR・OCI Document Understanding）。処理レシピの選択肢も同じ順。
   const orderedBackends = useMemo(() => sortParserBackends(backendOptions), [backendOptions]);
   // 準備中（ロードマップ）のエンジン（#3374）。カードを灰色にして選ばせず、状態も問い合わせない。
@@ -311,132 +310,86 @@ function OverviewCard({
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-2">
-          <div className="text-sm font-medium text-fg">
-            {t("settings.parserAdapters.backend")}
-          </div>
-          <div
-            role="radiogroup"
-            aria-label={t("settings.parserAdapters.backend")}
-            className="space-y-2"
-          >
-            {/* 1 行 2 枚で横幅いっぱいに並べる。 */}
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                {orderedBackends.map((backend) => {
-                  const roadmap = roadmapBackends.has(backend);
-                  const selected = !roadmap && form.adapter_backend === backend;
-                  const roadmapReasonId = `settings-parser-backend-${backend}-roadmap-reason`;
-                  const service = isServiceBackend(backend)
-                    ? serviceByName.get(backend)
-                    : undefined;
-                  const externalConnection = isExternalBackend(backend)
-                    ? connectionByBackend.get(backend)
-                    : undefined;
-                  const serviceId = serviceIdForBackend(backend);
-                  const runtime = serviceId ? runtimeByServiceId.get(serviceId) : null;
-                  const runtimeStatus = runtime?.status ?? null;
-                  const runtimeProfile = runtime?.profile ?? serviceProfileForBackend(backend);
-                  const capability = findParserCapability(settings.capabilities, backend);
-                  const supportedFormats = formatSupportedFormats(capability);
-                  const supportedExtensions = formatSupportedExtensions(capability);
-                  // 外部 GPU のエンジンは、カードの「設定」から接続を開く（準備中は出さない）。
-                  const connectionBackend = isExternalBackend(backend) && !roadmap ? backend : null;
-                  return (
-                    <div key={backend} className="relative min-w-0">
-                      <input
-                        id={`settings-parser-backend-${backend}`}
-                        className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                        type="radio"
-                        name="settings-parser-backend"
-                        value={backend}
-                        checked={selected}
-                        // 準備中（ロードマップ）のエンジンは選べない（#3374）。理由は下の文で読み上げる。
-                        disabled={saving || roadmap}
-                        aria-describedby={roadmap ? roadmapReasonId : undefined}
-                        data-availability={roadmap ? "roadmap" : undefined}
-                        onChange={() => onBackendChange(backend)}
-                      />
-                      <label
-                        data-surface-tint={selected ? "accent" : undefined}
-                        htmlFor={`settings-parser-backend-${backend}`}
-                        className={cn(
-                          connectionBackend ? "flex flex-col" : "block",
-                          "h-full cursor-pointer min-h-[5.43rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-                          roadmap
-                            ? // 準備中は無効の地と灰色の名前にし、理由は読める濃さのまま残す（全体を薄くしない。#3374）。
-                              "border-border bg-surface-disabled text-fg-disabled peer-disabled:opacity-100"
-                            : selected
-                              ? "border-accent-emphasis bg-accent-subtle text-fg"
-                              : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
-                        )}
-                      >
-                        <span className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-sm font-semibold">{backendLabel(backend)}</span>
-                          {runtimeProfile ? <ServiceProfileBadge profile={runtimeProfile} /> : null}
-                          {roadmap ? <RoadmapBadge label={t("settings.parserAdapters.roadmap.badge")} /> : null}
-                        </span>
-                        {roadmap ? (
-                          <span
-                            id={roadmapReasonId}
-                            className="mt-1 block text-xs font-medium leading-relaxed text-fg-muted"
-                          >
-                            {t("settings.parserAdapters.roadmap.reason")}
-                          </span>
-                        ) : null}
-                        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                          {t(backendDescriptionKey(backend))}
-                        </span>
-                        {supportedFormats ? (
-                          <span className="mt-1 block text-xs text-fg-muted">
-                            {t("settings.parserAdapters.capabilities")}: {supportedFormats}
-                          </span>
-                        ) : null}
-                        {supportedExtensions ? (
-                          <span className="mt-0.5 block break-words text-xs leading-4 text-fg-muted">
-                            {supportedExtensions}
-                          </span>
-                        ) : null}
-                        <span
-                          className={cn(
-                            "flex flex-wrap items-center gap-1.5",
-                            // 「設定」のボタンと同じ行に、重ならないよう右を空けて並べる。
-                            connectionBackend ? "mt-auto min-h-[var(--control-height-touch)] pt-2 pr-24" : "mt-2"
-                          )}
-                        >
-                          {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
-                          {service && !roadmap && !service.configured ? (
-                            <ConnectionConfiguredBadge configured={false} />
-                          ) : null}
-                          {externalConnection && !roadmap ? (
-                            <ConnectionConfiguredBadge configured={externalConnection.configured} />
-                          ) : null}
-                        </span>
-                      </label>
-                      {/* ラベルの外（ラジオの上の層）に置き、押してもエンジンを選ばない（#4740）。 */}
-                      {connectionBackend ? (
-                        <div className="absolute bottom-2 right-3 z-20 flex h-[var(--control-height-touch)] items-center">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            icon={Settings}
-                            disabled={saving}
-                            aria-label={t("settings.parserAdapters.connection.settingsLabel", {
-                              backend: backendLabel(connectionBackend),
-                            })}
-                            aria-haspopup="dialog"
-                            aria-expanded={connectionSheetBackend === connectionBackend}
-                            aria-controls={externalConnectionSheetId(connectionBackend)}
-                            onClick={() => setConnectionSheetBackend(connectionBackend)}
-                          >
-                            {t("settings.parserAdapters.connection.settings")}
-                          </Button>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
+          {/* 並びは正本（PARSER_BACKEND_ORDER）の順。列の数は置き場所の幅で決まり、375px の 1 列でも同じ順。 */}
+          <RadioOptionGroup<ParserAdapterBackend>
+            id="settings-parser-backend"
+            legend={t("settings.parserAdapters.backend")}
+            options={orderedBackends.map((backend) => {
+              const roadmap = roadmapBackends.has(backend);
+              const service = isServiceBackend(backend) ? serviceByName.get(backend) : undefined;
+              const externalConnection = isExternalBackend(backend)
+                ? connectionByBackend.get(backend)
+                : undefined;
+              const serviceId = serviceIdForBackend(backend);
+              const runtime = serviceId ? runtimeByServiceId.get(serviceId) : null;
+              const runtimeStatus = runtime?.status ?? null;
+              const runtimeProfile = runtime?.profile ?? serviceProfileForBackend(backend);
+              const capability = findParserCapability(settings.capabilities, backend);
+              const supportedFormats = formatSupportedFormats(capability);
+              const supportedExtensions = formatSupportedExtensions(capability);
+              // 外部 GPU のエンジンは、行の右の「設定」から接続を開く（準備中は出さない）。
+              const connectionBackend = isExternalBackend(backend) && !roadmap ? backend : null;
+              // 未設定のサービス・外部の接続の印（準備中は出さない）。
+              const serviceUnconfigured = Boolean(service && !roadmap && !service.configured);
+              const connection = externalConnection && !roadmap ? externalConnection : null;
+              const hasBadges = Boolean(
+                runtimeProfile || roadmap || runtimeStatus || serviceUnconfigured || connection
+              );
+              return {
+                value: backend,
+                label: backendLabel(backend),
+                // 準備中（ロードマップ）のエンジンは選べない（#3374）。理由は説明の先頭の文で読み上げる。
+                disabled: roadmap,
+                inputData: roadmap ? { "data-availability": "roadmap" } : undefined,
+                badges: hasBadges ? (
+                  <>
+                    {runtimeProfile ? <ServiceProfileBadge profile={runtimeProfile} /> : null}
+                    {roadmap ? <RoadmapBadge label={t("settings.parserAdapters.roadmap.badge")} /> : null}
+                    {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
+                    {serviceUnconfigured ? <ConnectionConfiguredBadge configured={false} /> : null}
+                    {connection ? <ConnectionConfiguredBadge configured={connection.configured} /> : null}
+                  </>
+                ) : undefined,
+                description: (
+                  <>
+                    {roadmap ? (
+                      <span className="block font-medium">{t("settings.parserAdapters.roadmap.reason")}</span>
+                    ) : null}
+                    <span className="block">{t(backendDescriptionKey(backend))}</span>
+                    {supportedFormats ? (
+                      <span className="mt-1 block">
+                        {t("settings.parserAdapters.capabilities")}: {supportedFormats}
+                      </span>
+                    ) : null}
+                    {supportedExtensions ? <span className="block">{supportedExtensions}</span> : null}
+                  </>
+                ),
+                // 行の右（ラベルの外）に置き、押してもエンジンを選ばない（#4740）。
+                trailing: connectionBackend ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={Settings}
+                    disabled={saving}
+                    aria-label={t("settings.parserAdapters.connection.settingsLabel", {
+                      backend: backendLabel(connectionBackend),
+                    })}
+                    aria-haspopup="dialog"
+                    aria-expanded={connectionSheetBackend === connectionBackend}
+                    aria-controls={externalConnectionSheetId(connectionBackend)}
+                    onClick={() => setConnectionSheetBackend(connectionBackend)}
+                  >
+                    {t("settings.parserAdapters.connection.settings")}
+                  </Button>
+                ) : undefined,
+              };
+            })}
+            // 準備中のエンジンが保存されていても、選んだ行として見せない（#3374）。
+            value={roadmapBackends.has(form.adapter_backend) ? null : form.adapter_backend}
+            onValueChange={onBackendChange}
+            disabled={saving}
+          />
           {form.adapter_backend === "local" ? (
             <p className="text-xs leading-relaxed text-warning-fg">
               {t("settings.parserAdapters.legacyBackendNotice")}

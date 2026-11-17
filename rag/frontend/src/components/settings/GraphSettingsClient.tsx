@@ -9,11 +9,13 @@ import {
   CardTitle,
   FormActionBar,
   FormStatus,
+  RadioOptionGroup,
+  StatusBadge,
   TimedLoadingState,
   FormSkeleton,
 } from "@production-ready/ui";
 import { useState } from "react";
-import { CheckCircle2, RotateCcw, Save, Share2 } from "lucide-react";
+import { RotateCcw, Save, Share2 } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { ApiError, type GraphProfileName, type GraphProfileStatusData } from "@/lib/api";
@@ -22,7 +24,6 @@ import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGraphSettings, useUpdateGraphSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: GraphProfileName[] = ["off", "entities"];
 // 全体の既定(backend の Settings.rag_graph_profile の既定)。選択肢に「既定」と文字で添える。
@@ -124,61 +125,22 @@ export function GraphSettingsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="space-y-2">
-            <div className="text-sm font-medium text-fg" id="settings-graph-profile-label">
-              {t("settings.graph.profile")}
-            </div>
-            <div
-              role="radiogroup"
-              aria-labelledby="settings-graph-profile-label"
-              className="grid grid-cols-1 gap-2 md:grid-cols-2"
-            >
-              {profiles.map((item) => {
-                const selected = profile === item.name;
-                return (
-                  <div key={item.name} className="relative min-w-0">
-                    <input
-                      id={`settings-graph-profile-${item.name}`}
-                      className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                      type="radio"
-                      name="settings-graph-profile"
-                      value={item.name}
-                      checked={selected}
-                      disabled={save.isPending}
-                      onChange={() => selectProfile(item.name)}
-                    />
-                    <label
-                      data-surface-tint={selected ? "accent" : undefined}
-                      htmlFor={`settings-graph-profile-${item.name}`}
-                      className={cn(
-                        "block h-full cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-                        selected
-                          ? "border-accent-emphasis bg-accent-subtle text-fg"
-                          : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
-                      )}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold">{profileLabel(item.name)}</span>
-                          {item.name === DEFAULT_PROFILE ? (
-                            <span className="inline-flex min-h-5 items-center rounded border border-border px-1.5 text-xs text-fg-muted">
-                              {t("settings.graph.defaultTag")}
-                            </span>
-                          ) : null}
-                        </span>
-                        {selected ? (
-                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
-                        ) : null}
-                      </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                        {profileDescription(item.name)}
-                      </span>
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <RadioOptionGroup<GraphProfileName>
+            id="settings-graph-profile"
+            legend={t("settings.graph.profile")}
+            options={profiles.map((item) => ({
+              value: item.name,
+              label: profileLabel(item.name),
+              badges:
+                item.name === DEFAULT_PROFILE ? (
+                  <StatusBadge variant="neutral" icon={false} label={t("settings.graph.defaultTag")} />
+                ) : undefined,
+              description: profileDescription(item.name),
+            }))}
+            value={profile}
+            onValueChange={selectProfile}
+            disabled={save.isPending}
+          />
           <FormStatus tone="info" message={t("settings.graph.rebuildHint")} />
           <FormActionBar
             ariaLabel={t("settings.graph.actions.label")}

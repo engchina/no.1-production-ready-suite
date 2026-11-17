@@ -960,7 +960,7 @@ LLM の回答など Markdown で書かれた本文は、この部品で描きま
 
 ### `RadioOptionGroup`（新規）— ★ 名前と説明を持つラジオの群は 1 つの実装（#5340）
 
-1 つを選ぶ選択肢に 1 行の説明を添えて並べる部品です。`Fieldset role="radiogroup"`（legend・補足・エラー・必須は `Fieldset` のまま）の中に、ネイティブのラジオを包んだ行を並べます。行の見た目は `ClarificationCard` の選択肢の行と同じです。
+1 つを選ぶ選択肢に説明を添えて並べる部品です。3 製品と platform の画面のラジオはすべてこの部品で出し、製品で `type="radio"` の行を手書きしません（#5343）。`Fieldset role="radiogroup"`（legend・補足・エラー・必須は `Fieldset` のまま）の中に、ネイティブのラジオを包んだ行を並べます。行の見た目は `ClarificationCard` の選択肢の行と同じです。
 
 | 決めたこと | 理由 |
 |---|---|
@@ -968,8 +968,13 @@ LLM の回答など Markdown で書かれた本文は、この部品で描きま
 | 行の高さは 44px 以上（`--control-height-touch`）。選んだ行は `--color-accent-emphasis` の枠と `--color-accent-subtle` の地に加え、ラジオの印でも示す | タッチの最小。状態を色だけで示さない |
 | 列の数は置き場所の幅で決める（`repeat(auto-fit, minmax(min(100%, 16rem), 1fr))`、群の幅は 60rem まで）。375px では縦に 1 列 | 2〜3 の選択肢は広い画面で横に並べ、狭い画面で説明を折り返さずに読める |
 | `disabled`（実行中など）は群の全部のラジオを無効にし、色は変えずに押せないことだけを示す | 実行中も選んだ内容を読める（`ClarificationCard` と同じ） |
+| 選択肢だけの `disabled`（準備中など）は、その行の地を `--color-surface-disabled`、名前を `--color-fg-disabled` にし、説明（選べない理由を含む）は読める濃さのまま残す | 選べないことを色と無効のラジオの両方で示し、理由は読める（#3374 の準備中のエンジンと同じ） |
+| 行に置けるのは、名前の左の印（`icon`。lucide・20px・高さを名前の 1 行にそろえる）、名前の横のバッジ（`badges`。既定・推奨・状態など）、説明（`description`。複数の行・選べない理由を含めてよい）、行の右の独立した操作（`trailing`）だけ | 画面ごとの行の手書きをなくす。読み上げの名前は名前だけにし、バッジと説明はこの順で `aria-describedby` に結ぶ（#5343） |
+| `trailing` は label の外（行の枠の中の右）に置き、押しても選択肢を選ばない | 「接続の設定を開く」のような行ごとの操作で選択を変えない（#4740） |
+| ラジオの input に付けられるのは `inputData` の `data-*` 属性だけ | 状態の印（`data-availability`）・e2e の目印を付ける。名前・説明の結び方は部品が持つ |
+| 読み込み中は `RadioOptionGroupSkeleton`（見出しと補足はそのまま、選択肢を同じ並びと 44px の `Skeleton`） | 読み込み後に下を押し下げない（#4649） |
 
-- 単体テストは `packages/ui/tests/radio-option-group.test.tsx`。最初の利用は RAG の品質評価の「回答の方法」（#5340）。RAG の設定画面の手書きのラジオの載せ替えは別の Issue。
+- 単体テストは `packages/ui/tests/radio-option-group.test.tsx`。最初の利用は RAG の品質評価の「回答の方法」（#5340）。RAG の設定画面・処理レシピの追加、NL2SQL の業務プロファイルの推薦、platform の API キー・アップロードの保存先・ユーザーのロールの手書きのラジオは #5343 で載せ替えた。
 
 ### `Toaster`（変更）— ★ 置き場所は画面幅ごとに決まった 1 か所（#1728。#411 を置き換え）
 

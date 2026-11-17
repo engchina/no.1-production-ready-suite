@@ -1978,7 +1978,7 @@ test(`ALLの要件確認はProfileと質問を引き継ぐ（保存不可=${stor
   await page.goto("/query");
   await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
   const panel = await startRequirementCheck(page);
-  await expect(panel.getByRole("group", { name: "どの業務プロファイルで確認しますか？" })).toBeVisible();
+  await expect(panel.getByRole("radiogroup", { name: "どの業務プロファイルで確認しますか？" })).toBeVisible();
   await panel.getByRole("radio", { name: /標準プロファイル/ }).check();
   await panel.getByRole("button", { name: "この業務プロファイルで開始" }).click();
   await expect(panel.getByRole("heading", { name: "「今年度」は、どの期間ですか？" })).toBeVisible();

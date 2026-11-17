@@ -492,7 +492,7 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
   await page.goto("/settings/security/users");
   await expect(page.getByTestId("security-users-grid").getByText("人事 花子")).toBeVisible();
   await headerActions.getByRole("button", { name: "新規作成", exact: true }).click();
-  let actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "[role=radiogroup][aria-labelledby=security-users-role-legend]", ["作成", "変更を破棄"]);
+  let actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "#security-users-role[role=radiogroup]", ["作成", "変更を破棄"]);
   // 入力すると変更を破棄が押せ、押すと開いたときの値に戻す。
   const displayName = page.getByRole("textbox", { name: "表示名" });
   await displayName.fill("採用 次郎");
@@ -502,7 +502,7 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
   await page.goto("/settings/security/users");
   // 一覧の行から全幅のエディタを開く（A 型。#4635）。
   await page.getByTestId("security-users-grid").getByText("人事 花子").click();
-  actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "[role=radiogroup][aria-labelledby=security-users-role-legend]", ["保存", "変更を破棄"]);
+  actions = await expectConfirmAtFormEnd("ユーザーの確定", "ログインユーザーID", "#security-users-role[role=radiogroup]", ["保存", "変更を破棄"]);
 
   await page.goto("/settings/security/roles");
   await expect(page.getByTestId("security-roles-grid")).toContainText("人事利用者");
