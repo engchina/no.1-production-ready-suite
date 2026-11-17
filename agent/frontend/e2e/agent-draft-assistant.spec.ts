@@ -9,7 +9,7 @@ const SUGGESTION = {
   name: "Agent B",
   description: "資料を調べて答える",
   instructions: "根拠の箇所を示して答える。範囲の外の質問には答えられないと伝える。",
-  skill_ids: ["business-rag-research"],
+  skill_ids: ["rag-chat"],
   data_scopes: { rag: { profile_ids: ["bv-legal"], default_profile_id: "bv-legal" } },
   // #2561: 決まった項目で結果を返す業務なら、出力の項目も提案する。
   output_fields: [
@@ -68,7 +68,7 @@ for (const viewport of [
     await page.getByRole("button", { name: "作成", exact: true }).click();
     await expect(page.getByText("Agent を作成しました")).toBeVisible();
     const created = mockApi.state.agents.find((agent) => agent.name === "Agent B");
-    expect(created?.skill_ids).toEqual(["business-rag-research"]);
+    expect(created?.skill_ids).toEqual(["rag-chat"]);
     expect(created?.data_scopes).toEqual(SUGGESTION.data_scopes);
     // 下書きは評価の比べ方を提案しないので、画面が既定（完全に一致）を入れて保存する（#2571）。
     expect(created?.output_fields).toEqual(SUGGESTION.output_fields.map((field) => ({ ...field, match: "exact" })));

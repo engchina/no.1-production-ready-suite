@@ -189,7 +189,7 @@ export const AGENT_TEMPLATES = [
     name: "社内規程の問い合わせ",
     description: "就業規則・各種規程・社内手続きの質問に、規程の条項を示して答えます。",
     instructions: "あなたは総務・人事の問い合わせ窓口です。\n- 業務 RAG で規程を検索し、条項を引用して答える。",
-    skill_ids: ["business-rag-research"],
+    skill_ids: ["rag-chat"],
     sample_questions: ["育児休業はいつから取得できますか？", "在宅勤務の申請はどのように行いますか？"],
     evaluation_cases: [{ question: "在宅勤務の申請は？", expected: "申請の方法と期限" }],
   },
@@ -209,7 +209,7 @@ export const AGENT_TEMPLATES = [
     name: "品質管理",
     description: "品質基準・不具合報告の文書と、検査・不良率のデータをあわせて調べます。",
     instructions: "あなたは製造部門の品質管理の担当です。",
-    skill_ids: ["business-rag-research", "quality_lab_only"],
+    skill_ids: ["rag-chat", "quality_lab_only"],
     sample_questions: ["先月のライン別の不良率を教えてください。", "溶接の外観検査の判定基準は？"],
     evaluation_cases: [{ question: "溶接の判定基準は？", expected: "合否の条件" }],
   },
@@ -545,7 +545,7 @@ export const SIGNAL_KINDS = [
 /** 業務データの道具（RAG 以外の MCP 接続のツール）の成功した呼び出しの数（backend の `environment_tool_calls`）。 */
 /**
  * 画面から根拠の原文を開いてよい、その Run の RAG の根拠（backend の `rag_figures.run_evidence_items`。#2427）。
- * 画面の根拠の一覧と同じ集合: 根拠のツール（`rag_search` / `rag_retrieve_evidence`）の step の出力、
+ * 画面の根拠の一覧と同じ集合: 根拠のツール（`rag_search` / `rag_chat`）の step の出力、
  * 成果物「回答の根拠」の `items`、成果物「検索の根拠」（`rag__rag_search:*`）の `evidence`。
  */
 function runEvidenceItems(run: Json): Json[] {
@@ -558,7 +558,7 @@ function runEvidenceItems(run: Json): Json[] {
     const result = step.tool_result as Json | null | undefined;
     const tool = String(call?.name ?? "").split("__").pop();
     if (step.status !== "completed" || result?.success !== true) continue;
-    if (tool !== "rag_search" && tool !== "rag_retrieve_evidence") continue;
+    if (tool !== "rag_search" && tool !== "rag_chat") continue;
     add((result.output as Json | null | undefined)?.evidence);
   }
   for (const artifact of (run.artifacts as Json[] | undefined) ?? []) {
@@ -2672,7 +2672,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
               { kind: "added", text: "新しい手順で調べる。" },
             ],
             truncated: false,
-            tools_added: ["rag:rag_retrieve_evidence"],
+            tools_added: ["rag:rag_chat"],
             tools_removed: [],
             references_added: [],
             references_removed: [],

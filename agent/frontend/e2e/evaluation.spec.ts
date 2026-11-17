@@ -99,7 +99,7 @@ function seedFinishedJobs(mockApi: MockApi) {
   const job = (id: string, items: typeof results) => ({
     id,
     agent_id: "default",
-    agent_name: "資料・データ横断アシスタント",
+    agent_name: "RAG チャット＋データアシスタント",
     set_id: SET.id,
     set_name: SET.name,
     status: "completed",
@@ -221,7 +221,7 @@ for (const viewport of VIEWPORTS) {
       await expect(summary).toContainText("1 / 2 件");
       // どの版どうしの比較かを出す（#810）。
       await expect(page.getByTestId("evaluation-previous")).toContainText("同じ評価ケースで完了した前回の評価（v1・");
-      await expect(page.getByText("経理の評価（資料・データ横断アシスタント・下書き）")).toBeVisible();
+      await expect(page.getByText("経理の評価（RAG チャット＋データアシスタント・下書き）")).toBeVisible();
       await expect(
         page.getByRole("table", { name: "最近の評価" }).getByRole("row").nth(1)
       ).toContainText("下書き");
@@ -267,8 +267,8 @@ for (const viewport of VIEWPORTS) {
     const results = latest.results as Record<string, unknown>[];
     results[0] = {
       ...results[0],
-      case: { ...SET.cases[0], expected_tools: ["rag_retrieve_evidence", "rag_search"], expected_tools_in_order: true },
-      tool_calls: ["rag__rag_search", "rag__rag_retrieve_evidence"],
+      case: { ...SET.cases[0], expected_tools: ["rag_chat", "rag_search"], expected_tools_in_order: true },
+      tool_calls: ["rag__rag_search", "rag__rag_chat"],
       tool_selection_correct: false,
       tool_order_correct: false,
     };
@@ -328,10 +328,10 @@ for (const viewport of VIEWPORTS) {
     // エディタで評価する業務 Agent を選ぶと、その業務 Agent で評価する（版の選択もその業務 Agent に従う）。
     await page.goto(`/evaluation?id=${SET.id}`);
     const evaluated = page.locator("#evaluation-set-evaluated-agent");
-    await expect(evaluated).toContainText("資料・データ横断アシスタント");
+    await expect(evaluated).toContainText("RAG チャット＋データアシスタント");
     await evaluated.click();
-    await page.getByRole("option", { name: "資料調査アシスタント" }).click();
-    await expect(evaluated).toContainText("資料調査アシスタント");
+    await page.getByRole("option", { name: "RAG チャットアシスタント" }).click();
+    await expect(evaluated).toContainText("RAG チャットアシスタント");
     await expectNoPageHorizontalOverflow(page);
     const actions = page.getByTestId("evaluation-set-actions");
     const startButton = actions.getByRole("button", { name: "評価を開始" });
@@ -345,19 +345,19 @@ for (const viewport of VIEWPORTS) {
     expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({
       set_id: SET.id,
       agent_version: "published",
-      agent_id: "rag-research",
+      agent_id: "rag-chat",
     });
     await expect(page.getByTestId("evaluation-progress")).toHaveCount(0);
-    await expect(page.getByText("経理の評価（資料調査アシスタント・v1）")).toBeVisible();
+    await expect(page.getByText("経理の評価（RAG チャットアシスタント・v1）")).toBeVisible();
 
     // 評価を比べる: 基準（前の評価）と比べる評価（ほかの業務 Agent の評価）を選ぶ。
     const compare = page.getByTestId("evaluation-compare");
     await compare.scrollIntoViewIfNeeded();
     await expect(compare.getByText("基準の評価と比べる評価を選ぶと、ケースごとの差を出します。")).toBeVisible();
     await compare.locator("#evaluation-compare-base").click();
-    await page.getByRole("option", { name: /資料・データ横断アシスタント・v1/ }).click();
+    await page.getByRole("option", { name: /RAG チャット＋データアシスタント・v1/ }).click();
     await compare.locator("#evaluation-compare-target").click();
-    await page.getByRole("option", { name: /資料調査アシスタント/ }).click();
+    await page.getByRole("option", { name: /RAG チャットアシスタント/ }).click();
     const summary = compare.getByTestId("evaluation-compare-summary");
     await expect(summary).toContainText("合格率 0% → 67%");
     await expect(summary).toContainText("改善 2 件・悪化 0 件・変化なし 1 件");
@@ -553,7 +553,7 @@ for (const viewport of VIEWPORTS) {
       agent_version: "published",
     });
     await expect(page.getByTestId("evaluation-summary")).toBeVisible();
-    await expect(page.getByText("経理の評価（資料・データ横断アシスタント・v1）")).toBeVisible();
+    await expect(page.getByText("経理の評価（RAG チャット＋データアシスタント・v1）")).toBeVisible();
     await expect(page.getByRole("table", { name: "最近の評価" }).getByRole("row").nth(1)).toContainText("v1");
   });
 }

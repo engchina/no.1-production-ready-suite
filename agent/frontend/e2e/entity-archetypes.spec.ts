@@ -96,11 +96,11 @@ for (const viewport of VIEWPORTS) {
       await expect(breadcrumbs(page)).toHaveCount(0);
 
       // 先頭セルの対象名のリンクで開く（URL を持つので新しいタブでも開ける。#583）。
-      const skillLink = page.getByRole("link", { name: /業務 RAG 調査/ });
-      await expect(skillLink).toHaveAttribute("href", "/skills?id=business-rag-research");
+      const skillLink = page.getByRole("link", { name: /^RAG チャット(?!＋)/ });
+      await expect(skillLink).toHaveAttribute("href", "/skills?id=rag-chat");
       await skillLink.click();
-      await expect(page).toHaveURL(/\/skills\?id=business-rag-research$/);
-      await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/skills\?id=rag-chat$/);
+      await expect(page.getByRole("heading", { name: "RAG チャット", level: 1 })).toBeVisible();
       // 2 階層のパンくずは出さず、タイトルの上の左端に「一覧へ戻る」（#618）。
       await expect(breadcrumbs(page)).toHaveCount(0);
       await expect(page.getByTestId("editor-back")).toHaveText("一覧へ戻る");
@@ -108,14 +108,14 @@ for (const viewport of VIEWPORTS) {
       await expectNoPageHorizontalOverflow(page);
 
       await page.reload();
-      await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "RAG チャット", level: 1 })).toBeVisible();
 
       await page.goBack();
       await expect(page).toHaveURL(/\/skills$/);
       await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
       await page.goForward();
-      await expect(page).toHaveURL(/\/skills\?id=business-rag-research$/);
-      await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/skills\?id=rag-chat$/);
+      await expect(page.getByRole("heading", { name: "RAG チャット", level: 1 })).toBeVisible();
 
       await page.getByTestId("editor-back").click();
       await expect(page).toHaveURL(/\/skills$/);

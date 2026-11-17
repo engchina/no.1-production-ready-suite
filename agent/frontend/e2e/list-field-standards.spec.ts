@@ -189,25 +189,25 @@ test.describe("一覧の件数と表示件数（#1891）", () => {
     seedAgents(mockApi, 52);
     await page.goto("/agents");
     const toolbar = page.getByTestId("agent-list-toolbar");
-    await expect(toolbar.locator("[data-list-count]")).toHaveText("全 55 件");
+    await expect(toolbar.locator("[data-list-count]")).toHaveText("全 57 件");
     const pagination = page.getByTestId("agent-list-pagination");
-    await expect(pagination).toContainText("1–25 / 55 件");
+    await expect(pagination).toContainText("1–25 / 57 件");
     await jumpToPage(pagination, 3);
-    await expect(pagination).toContainText("51–55 / 55 件");
+    await expect(pagination).toContainText("51–57 / 57 件");
 
     await pagination.getByRole("combobox", { name: "表示件数" }).click();
     await page.getByRole("option", { name: "100 件" }).click();
     // 表示件数を変えると 1 ページ目へ戻り、1 ページに収まるのでページ送りのボタンは出さない（範囲と表示件数だけ）。
-    await expect(pagination).toContainText("1–55 / 55 件");
+    await expect(pagination).toContainText("1–57 / 57 件");
     await expect(pagination.getByRole("button", { name: "次へ" })).toHaveCount(0);
-    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).locator("tbody tr")).toHaveCount(55);
+    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).locator("tbody tr")).toHaveCount(57);
 
     await page.reload();
-    await expect(page.getByTestId("agent-list-pagination")).toContainText("1–55 / 55 件");
+    await expect(page.getByTestId("agent-list-pagination")).toContainText("1–57 / 57 件");
 
     // 絞り込み中は「N 件（全 M 件）」。
     await page.locator("#agent-search").fill("検証 Agent 1");
-    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 55 件）$/);
+    await expect(toolbar.locator("[data-list-count]")).toHaveText(/^\d+ 件（全 57 件）$/);
   });
 
   test("実行履歴: 表示件数は API の limit になり、状態の絞り込み中は「N 件（全 M 件）」", async ({ page, mockApi }) => {

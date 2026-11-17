@@ -798,11 +798,11 @@ test.describe("Agent Runtime settings", () => {
 
     await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
     // ビルトインは詳細を開けるが、行メニューは書き出しだけで削除を持たない（#1874）
-    await page.getByRole("button", { name: "業務 RAG 調査 の操作" }).click();
+    await page.getByRole("button", { name: "RAG チャット の操作" }).click();
     await expect(page.getByRole("menuitem", { name: "Agent Skills の形で書き出す" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "削除" })).toHaveCount(0);
     await page.keyboard.press("Escape");
-    await page.getByRole("link", { name: /業務 RAG 調査/ }).click();
+    await page.getByRole("link", { name: /^RAG チャット(?!＋)/ }).click();
     await expect(page.getByText("このスキルは読み取り専用です", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
     await page.getByTestId("editor-back").click();
@@ -946,7 +946,7 @@ test.describe("Agent Runtime settings", () => {
     await page.locator("#new-agent-name").fill("RAG Skill Agent");
     await page.locator("#new-agent-description").fill("Skill で能力を選択する");
     // スキルは ListPicker（listbox）で選ぶ（#808）。
-    const skillOption = page.getByRole("option", { name: /^業務 RAG 調査/ });
+    const skillOption = page.getByRole("option", { name: /^RAG チャット(?!＋)/ });
     await skillOption.click();
     await expect(skillOption).toHaveAttribute("aria-checked", "true");
     await page.getByRole("button", { name: "作成" }).first().click();
@@ -956,7 +956,7 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.getByText("業務 RAG 調査").first()).toBeVisible();
+    await expect(page.getByText("RAG チャット").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 });

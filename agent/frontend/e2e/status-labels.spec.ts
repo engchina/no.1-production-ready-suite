@@ -78,7 +78,7 @@ for (const viewport of VIEWPORTS) {
       await expect(waitingStatus).toHaveAttribute("data-run-status", "waiting");
       await expect(waitingStatus).toHaveText("承認待ち");
       // 目標の下の補足は業務 Agent の ID ではなく名前。
-      await expect(table.getByTestId("run-row-run-status-running")).toContainText("資料・データ横断アシスタント");
+      await expect(table.getByTestId("run-row-run-status-running")).toContainText("RAG チャット＋データアシスタント");
       await expectNoRawEnumBadges(page);
 
       const refresh = page.getByRole("button", { name: "最新情報を取得" });

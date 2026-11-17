@@ -79,13 +79,13 @@ for (const viewport of [
 }
 
 function seedSkillUpdatedAgent(mockApi: MockApi) {
-  // 公開中の v1 に「業務 RAG 調査」を固定した後、そのスキルが変わった業務 Agent（#1855）。
+  // 公開中の v1 に「RAG チャット」を固定した後、そのスキルが変わった業務 Agent（#1855）。
   mockApi.state.agents.push({
     id: "agent-1855",
     name: "調査の Agent",
     description: "資料を調べる",
     instructions: "資料を調べて答える。",
-    skill_ids: ["business-rag-research"],
+    skill_ids: ["rag-chat"],
     model_id: "",
     enabled: true,
     source: "runtime",
@@ -96,19 +96,19 @@ function seedSkillUpdatedAgent(mockApi: MockApi) {
         name: "調査の Agent",
         description: "資料を調べる",
         instructions: "資料を調べて答える。",
-        skill_ids: ["business-rag-research"],
+        skill_ids: ["rag-chat"],
         model_id: "",
         data_scopes: {},
         note: "",
         published_at: MOCK_NOW,
         published_by: "local",
-        skills: [{ id: "business-rag-research", name: "業務 RAG 調査", description: "", content_hash: "hash-old" }],
+        skills: [{ id: "rag-chat", name: "RAG チャット", description: "", content_hash: "hash-old" }],
       },
     ],
     published_version: 1,
     unpublished_changes: true,
     draft_changed: false,
-    skill_updates: ["business-rag-research"],
+    skill_updates: ["rag-chat"],
     skills_pinned: true,
     created_at: MOCK_NOW,
     updated_at: MOCK_NOW,
@@ -135,11 +135,11 @@ for (const viewport of [
 
     await page.goto("/agents?id=agent-1855");
     const banner = page.getByTestId("agent-skills-updated");
-    await expect(banner).toContainText("公開中の版（v1）に固定したスキルが、公開の後に変わりました: 業務 RAG 調査");
+    await expect(banner).toContainText("公開中の版（v1）に固定したスキルが、公開の後に変わりました: RAG チャット");
     await expect(page.getByTestId("agent-skills-not-pinned")).toHaveCount(0);
     const versions = page.getByRole("table", { name: "版の履歴" });
     await expect(versions.getByRole("columnheader", { name: "固定したスキル" })).toBeAttached();
-    await expect(versions).toContainText("業務 RAG 調査");
+    await expect(versions).toContainText("RAG チャット");
     await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-skills-updated-${viewport.name}.png`), fullPage: true });
 
@@ -185,7 +185,7 @@ for (const viewport of [
     const sheet = page.getByRole("dialog", { name: "スキルの更新を取り込む" });
     await expect(sheet).toBeVisible();
     const first = sheet.getByTestId("agent-skill-update-agent-1855");
-    await expect(first).toContainText("公開中 v1・変わったスキル: 業務 RAG 調査");
+    await expect(first).toContainText("公開中 v1・変わったスキル: RAG チャット");
     // 評価セットの無い業務 Agent は、そのことを出す。
     await expect(first).toContainText("評価セットがありません");
 
@@ -194,8 +194,8 @@ for (const viewport of [
     const diff = first.getByTestId("skill-update-diff-agent-1855");
     await expect(diff).toContainText("新しい手順で調べる。");
     await expect(diff).toContainText("前の手順で調べる。");
-    await expect(diff).toContainText("+ rag:rag_retrieve_evidence");
-    await expect(diff.getByRole("list", { name: "業務 RAG 調査 の指示の差分" })).toBeVisible();
+    await expect(diff).toContainText("+ rag:rag_chat");
+    await expect(diff.getByRole("list", { name: "RAG チャット の指示の差分" })).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`agent-skill-updates-${viewport.name}.png`) });
 
@@ -203,7 +203,7 @@ for (const viewport of [
     await sheet.getByTestId("agent-skill-update-agent-1867").getByRole("checkbox").uncheck();
     await sheet.getByTestId("agent-skill-updates-publish").click();
     const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog", { name: /再公開しますか/ }));
-    await expect(dialog).toContainText("調査の Agent（業務 RAG 調査）");
+    await expect(dialog).toContainText("調査の Agent（RAG チャット）");
     await expect(dialog).not.toContainText("経費の Agent");
     await dialog.getByRole("button", { name: "選んだ 1 件を再公開", exact: true }).click();
     await expect(page.getByText("1 件の業務 Agent にスキルの更新を取り込みました")).toBeVisible();
@@ -276,7 +276,7 @@ test("一覧に公開の状態を出す", async ({ page, mockApi }) => {
   await page.goto("/agents");
   const table = page.getByRole("table");
   await expect(table.getByRole("row", { name: /経理の Agent/ }).getByText("未公開")).toBeVisible();
-  await expect(table.getByRole("row", { name: /資料・データ横断アシスタント/ }).getByText("公開中 v1")).toBeVisible();
+  await expect(table.getByRole("row", { name: /RAG チャット＋データアシスタント/ }).getByText("公開中 v1")).toBeVisible();
 });
 
 test("公開していない Agent は、管理者が「下書きで実行」にしたときだけ Run で選べる", async ({ page, mockApi }) => {

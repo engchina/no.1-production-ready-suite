@@ -399,6 +399,10 @@ export function AgentEditorView({
     meta: (
       <span className="flex shrink-0 flex-wrap items-center gap-1.5">
         <StatusBadge variant={skillSourceVariant(skill.source)} label={skillSourceLabel(skill.source)} icon={false} />
+        {/* RAG の回答をそのまま返すスキル（#5342）。選ぶ前に分かるよう候補にも出す。 */}
+        {skill.final_answer_tools?.length ? (
+          <StatusBadge variant="info" label={t("agent.finalAnswer.badge")} icon={false} />
+        ) : null}
         {skill.enabled ? null : <StatusBadge variant="neutral" label={t("agent.disabled")} />}
       </span>
     ),
@@ -425,6 +429,13 @@ export function AgentEditorView({
     ...missingSkillItems,
     ...availableSkills.filter((skill) => skillIds.includes(skill.id)).map(skillItem),
   ];
+  // 削除されたスキル（#5342）: 下書きの選択の見つからないスキルと、API の下書き・公開中の版の unavailable_skill_ids。
+  // 公開中の版のものは、選び直して公開するまで残る。
+  const unavailableSkillIds = [...new Set([...missingSkillIds, ...(agent?.unavailable_skill_ids ?? [])])];
+  // RAG の回答をそのまま返すスキル（final_answer_tools。#5342）を選んでいたら、回答の書き方の置き場を示す。
+  const finalAnswerSkillNames = availableSkills
+    .filter((skill) => skillIds.includes(skill.id) && skill.final_answer_tools?.length)
+    .map((skill) => skill.name);
   // 公開は保存済みの下書きを版にする。画面の入力と違う内容を公開しないよう、未保存の変更があるあいだは
   // 押せなくする（自動実行の「今すぐ実行」と同じ。#925）。
   const publishBlocked = formDirty && actions.some((action) => action.id === "publish" && action.visible !== false);
@@ -796,11 +807,35 @@ export function AgentEditorView({
                   testId="agent-skills-load-failed"
                 />
               ) : null}
-              {missingSkillIds.length ? (
-                <Banner severity="warning">
-                  {t("agent.skillPicker.missingBanner", { skills: missingSkillIds.join("、") })}
-                </Banner>
-              ) : null}
+              {/* スキルの区画の案内は 1 つの枠（messaging.md §3.4.3。#5183）。 */}
+              <CombinedBanner
+                testId="agent-skill-notices"
+                items={[
+                  // 候補が 1 つも無い（読み取りの失敗は上の欄の失敗の表示）。
+                  !skillsLoading && !skillsError && !availableSkills.length && !missingSkillIds.length
+                    ? { id: "no-skills", severity: "warning", children: t("agent.skillsUnavailable") }
+                    : null,
+                  unavailableSkillIds.length
+                    ? {
+                        id: "unavailable",
+                        severity: "warning",
+                        title: t("agent.skillUnavailable.title"),
+                        testId: "agent-skills-unavailable",
+                        children: t("agent.skillUnavailable.message", {
+                          skills: unavailableSkillIds.join("、"),
+                        }),
+                      }
+                    : null,
+                  finalAnswerSkillNames.length
+                    ? {
+                        id: "final-answer",
+                        severity: "info",
+                        testId: "agent-final-answer-notice",
+                        children: t("agent.finalAnswer.notice", { skills: finalAnswerSkillNames.join("、") }),
+                      }
+                    : null,
+                ]}
+              />
               {skillsLoading ? (
                 <TimedLoadingState label={t("loading.skills")} testId="agent-skills-loading">
                   <ListSkeleton rows={4} />
@@ -839,9 +874,7 @@ export function AgentEditorView({
                   }}
                   testId="agent-skill-picker"
                 />
-              ) : skillsError ? null : (
-                <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
-              )}
+              ) : null}
               {/* スキルの更新の扱い（#1867。版の項目なので、変えたら公開で反映する）。 */}
               <SelectField<SkillPolicy>
                 id={`${fieldId}-agent-skill-policy`}
