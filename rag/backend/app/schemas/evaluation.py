@@ -50,6 +50,11 @@ EVALUATION_UNCATEGORIZED = "uncategorized"
 # holdout は調整に使わず最後の確認だけに使うケース。同じ業務の流れ・資料の族のケースは同じ区分に
 # する（言い換えの漏れを防ぐ）。区分の無いケースは内訳で unassigned にする。
 EvaluationCaseSplit = Literal["dev", "holdout"]
+# 品質評価の回答の方法（#5340）。chat は RAG Chat と同じ経路（業務ガイド・承認済み FAQ・根拠の
+# 拡張あり）、search は基本の RAG（画面の RAG 検索と同じ。拡張なし）。
+EvaluationAnswerMode = Literal["chat", "search"]
+EVALUATION_ANSWER_MODES: tuple[EvaluationAnswerMode, ...] = ("chat", "search")
+DEFAULT_EVALUATION_ANSWER_MODE: EvaluationAnswerMode = "chat"
 EVALUATION_UNASSIGNED_SPLIT = "unassigned"
 
 # 多段の質問（multi-hop）の種類（#1335）。複数の根拠をつないで初めて答えられる質問を、つなぎ方で
@@ -823,6 +828,8 @@ class EvaluationRunRequest(BaseModel):
     testset_id: str | None = Field(default=None, min_length=1, max_length=64)
     testset_revision: int | None = Field(default=None, ge=1)
     answer_model_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # 回答の方法（#5340）。省略時は RAG Chat と同じ経路。
+    answer_mode: EvaluationAnswerMode = DEFAULT_EVALUATION_ANSWER_MODE
 
     @model_validator(mode="after")
     def input_source(self) -> Self:
@@ -954,6 +961,8 @@ class EvaluationJob(BaseModel):
     compare_search_answer_profile_id: str | None = None
     search_answer_profile_name: str | None = None
     compare_search_answer_profile_name: str | None = None
+    # 回答の方法（#5340。記録の無い古い job は None＝未記録）。
+    answer_mode: EvaluationAnswerMode | None = None
     # 実行した利用者の表示名（分からない古い job・引けない利用者は None）。UUID は表示名を引く
     # ためだけに使い、応答には出さない。
     actor_user_uuid: str | None = Field(default=None, exclude=True)
@@ -982,6 +991,8 @@ class EvaluationJobSummary(BaseModel):
     compare_search_answer_profile_id: str | None = None
     search_answer_profile_name: str | None = None
     compare_search_answer_profile_name: str | None = None
+    # 回答の方法（#5340。記録の無い古い job は None＝未記録）。
+    answer_mode: EvaluationAnswerMode | None = None
     # 実行した利用者の UUID は表示名を引くためだけに使い、応答には出さない。
     actor_user_uuid: str | None = Field(default=None, exclude=True)
     actor_display_name: str | None = None

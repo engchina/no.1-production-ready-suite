@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from pytest import CaptureFixture, MonkeyPatch
 
 from app.rag import evaluation_cli
@@ -102,6 +103,28 @@ def test_evaluation_gate_cli_returns_one_when_gate_fails(
     assert response["data"]["passed"] is False
     assert response["data"]["error_count"] == 1
     assert response["data"]["threshold_failures"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [([], "chat"), (["--answer-mode", "search"], "search")],
+    ids=["default", "flag"],
+)
+def test_evaluation_gate_cli_sends_answer_mode(
+    tmp_path: Path, monkeypatch: MonkeyPatch, argv: list[str], expected: str
+) -> None:
+    """回答の方法（#5340）は --answer-mode で評価ファイルの値を置き換えて送る。"""
+    golden_set = _write_golden_set(tmp_path)
+    observed: dict[str, Any] = {}
+
+    def fake_post(*, payload: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        observed.update(payload)
+        return {"data": _metrics_payload(passed=True)}
+
+    monkeypatch.setattr(evaluation_cli, "_post_evaluation_request", fake_post)
+
+    assert evaluation_cli.main([str(golden_set), *argv]) == 0
+    assert observed["answer_mode"] == expected
 
 
 def test_evaluation_gate_cli_writes_redacted_trend_output(

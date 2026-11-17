@@ -221,6 +221,18 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5340 品質評価の回答の方法）
+
+品質評価で回答の方法（チャット＝RAG Chat と同じ拡張の経路／RAG 検索＝基本の RAG）を選べるようにし、job の行に残す。
+
+- migration（`20261117_5340_evaluation_job_answer_mode`）は `RAG_EVALUATION_JOBS` に列 `ANSWER_MODE`（`VARCHAR2(16)`）と
+  CHECK 制約 `RAG_EVALUATION_JOBS_ANSWER_MODE_CK`（`chat` / `search`）を足すだけで、データは変えない。本番（OCI Compute）は
+  `sudo platform/deploy/suite-update.sh` だけでよい。
+- 既存の評価の行は NULL のまま（画面の履歴・結果・Excel では「未記録」）。過去の実行の方法を推測して埋めない。
+- 評価の結果の manifest の版は 3（`request.answer_mode` を足した）。`evaluation_run_cli diff` / `compare` で前の版の結果と
+  比べると `request.answer_mode` が条件の差に出る。前の版の `--record` の記録は manifest が合わないため `--replay` で
+  使えない（記録し直す）。
+
 ## 既存環境の更新手順（#5313 解析後の本文で文書の重複を判定する）
 
 書式だけが違う同じ内容の文書（1 行の JSON と整形した JSON、同じ本文の PDF とテキストなど）を、既定のレシピ（レシピ 1）の

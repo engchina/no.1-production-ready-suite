@@ -1514,6 +1514,7 @@ CREATE TABLE rag_evaluation_jobs (
     search_answer_profile_id VARCHAR2(128),
     compare_search_answer_profile_id VARCHAR2(128),
     user_uuid               VARCHAR2(64),
+    answer_mode             VARCHAR2(16),
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
@@ -1521,6 +1522,7 @@ CREATE TABLE rag_evaluation_jobs (
     CONSTRAINT rag_evaluation_jobs_source_workbook_fk FOREIGN KEY (source_workbook_id)
         REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL,
     CONSTRAINT rag_evaluation_jobs_kind_ck CHECK (kind IN ('run')),
+    CONSTRAINT rag_evaluation_jobs_answer_mode_ck CHECK (answer_mode IN ('chat', 'search')),
     CONSTRAINT rag_evaluation_jobs_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
 );

@@ -71,6 +71,7 @@ from app.rag.observability import (
     record_rag_request,
 )
 from app.rag.pipeline import (
+    BASIC_FLOW,
     EXPANDED_FLOW,
     AnswerFlow,
     ChatTurn,
@@ -79,6 +80,7 @@ from app.rag.pipeline import (
 )
 from app.schemas.evaluation import (
     ANSWER_GENERATION_FALLBACK,
+    DEFAULT_EVALUATION_ANSWER_MODE,
     EVALUATION_METRIC_NAMES,
     EVALUATION_METRICS_VERSION,
     EVALUATION_REASONING_METRIC_NAMES,
@@ -87,6 +89,7 @@ from app.schemas.evaluation import (
     EVALUATION_UNCATEGORIZED,
     EVALUATION_UNSPECIFIED_REASONING,
     EvaluationAnswerJudgement,
+    EvaluationAnswerMode,
     EvaluationCase,
     EvaluationCaseResult,
     EvaluationCategorySummary,
@@ -252,6 +255,8 @@ class _TurnRun:
 
     response: SearchResponse
     conditions: Mapping[str, str] = field(default_factory=dict)
+    # 送った質問（RAG 検索の方法で往復をつないだ 1 問。#5340）。None はケースの質問・返答のまま。
+    question: str | None = None
 
 
 # (検索・回答の request, Settings, 業務ガイドの照合に足す前の質問) → 解決した request と Settings。
@@ -260,33 +265,81 @@ ProfileResolver = Callable[
 ]
 
 
-# 品質評価の回答の経路（#5332）。RAG Chat と同じ経路（業務ガイドの照合・承認済み FAQ・根拠の
-# 拡張あり）で答える。入口の解決と pipeline の両方がこの値を使う。
-EVALUATION_ANSWER_FLOW: AnswerFlow = EXPANDED_FLOW
-
-
 async def _resolve_profile_context(
-    request: SearchRequest, settings: Settings, guide_context: Sequence[str] = ()
+    request: SearchRequest,
+    settings: Settings,
+    guide_context: Sequence[str] = (),
+    *,
+    flow: AnswerFlow = EXPANDED_FLOW,
 ) -> tuple[SearchRequest, Settings]:
     """検索・回答と同じ解決で、プロファイルの KB・回答の設定・業務ガイドを当てる（#1249）。
 
-    返答の往復（#1284）では、チャットと同じく前の質問も業務ガイドの照合に使う。確認の質問は回答として
-    測るため、検索の API と同じく ``interactive`` にしない（不明の条件は確認の質問になる）。
+    ``flow`` は回答の方法の経路（#5340）。返答の往復（#1284）では、チャットと同じく前の質問も業務
+    ガイドの照合に使う。確認の質問は回答として測るため、検索の API と同じく ``interactive`` に
+    しない（不明の条件は確認の質問になる）。
     """
     from app.api.routes.search import _resolve_query_context
 
     resolved, resolved_settings, _kb, _view = await _resolve_query_context(
-        request, settings, guide_context=guide_context, flow=EVALUATION_ANSWER_FLOW
+        request, settings, guide_context=guide_context, flow=flow
     )
     return resolved, resolved_settings
 
 
-def _case_queries(case: EvaluationCase) -> list[tuple[str, dict[str, str]]]:
-    """最初の質問と返答を、送る順に（質問・返答, その発話で分かった条件）で返す（#1284）。"""
-    return [
+@dataclass(frozen=True)
+class EvaluationAnswerRoute:
+    """品質評価の回答の方法（#5340）の経路。入口の解決と pipeline に同じ ``flow`` を渡す。
+
+    ``conversational`` は往復のケース（#1284）を会話として順に送るか。RAG 検索（基本の RAG）は
+    会話の履歴・確認の往復を持たないので、最初の質問と返答をつないで 1 問にする。
+    """
+
+    mode: EvaluationAnswerMode
+    flow: AnswerFlow
+    conversational: bool
+
+    async def resolve(
+        self, request: SearchRequest, settings: Settings, guide_context: Sequence[str]
+    ) -> tuple[SearchRequest, Settings]:
+        """検索・回答プロファイルの解決（KB・回答の設定・業務ガイド）。"""
+        return await _resolve_profile_context(request, settings, guide_context, flow=self.flow)
+
+    def pipeline(self, settings: Settings) -> RagPipeline:
+        """この経路の検索・回答の pipeline。"""
+        return RagPipeline(settings=settings, flow=self.flow)
+
+
+# 回答の方法 → 経路。chat は RAG Chat と同じ経路（業務ガイドの照合・承認済み FAQ・根拠の拡張あり）、
+# search は画面の RAG 検索と同じ基本の RAG（#5332）。
+EVALUATION_ANSWER_ROUTES: Mapping[EvaluationAnswerMode, EvaluationAnswerRoute] = {
+    "chat": EvaluationAnswerRoute(mode="chat", flow=EXPANDED_FLOW, conversational=True),
+    "search": EvaluationAnswerRoute(mode="search", flow=BASIC_FLOW, conversational=False),
+}
+
+
+def evaluation_answer_route(mode: EvaluationAnswerMode) -> EvaluationAnswerRoute:
+    """回答の方法の経路（評価の入口が 1 か所で選ぶ）。"""
+    return EVALUATION_ANSWER_ROUTES[mode]
+
+
+def _case_queries(
+    case: EvaluationCase, *, conversational: bool = True
+) -> list[tuple[str, dict[str, str]]]:
+    """最初の質問と返答を、送る順に（質問・返答, その発話で分かった条件）で返す（#1284）。
+
+    ``conversational`` でなければ（RAG 検索。#5340）、最初の質問と返答を改行でつないだ 1 問と、
+    すべての発話で分かった条件にする。
+    """
+    queries = [
         (case.query, dict(case.conditions)),
         *((turn.reply, dict(turn.conditions)) for turn in case.turns),
     ]
+    if conversational or len(queries) == 1:
+        return queries
+    conditions: dict[str, str] = {}
+    for _query, turn_conditions in queries:
+        conditions.update(turn_conditions)
+    return [("\n".join(query for query, _ in queries), conditions)]
 
 
 def _case_filters(case: EvaluationCase, filters: Mapping[str, str] | None) -> dict[str, str]:
@@ -355,7 +408,8 @@ class EvaluationRunner:
     ) -> None:
         self._settings = settings or get_settings()
         self._pipeline = pipeline
-        self._profile_resolver = profile_resolver or _resolve_profile_context
+        # 省略時は回答の方法の経路の解決（#5340）。テストでは注入した解決だけを使う。
+        self._profile_resolver = profile_resolver
         # 解析後の本文が同じ文書の引き方（#5325）。既定の pipeline(実環境)では DB から引く。
         # テストで pipeline を注入したときは、明示したものだけを使う。
         self._same_text_documents = same_text_documents
@@ -381,6 +435,7 @@ class EvaluationRunner:
         progress: EvaluationProgressCallback | None = None,
         on_case_result: EvaluationCaseResultCallback | None = None,
         answer_model_id: str | None = None,
+        answer_mode: EvaluationAnswerMode = DEFAULT_EVALUATION_ANSWER_MODE,
     ) -> EvaluationMetrics:
         """評価ケースを実行し、集計指標を返す。
 
@@ -393,6 +448,7 @@ class EvaluationRunner:
 
         `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
         設定・用語・同義語・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
+        `answer_mode` は回答の方法（#5340。chat は RAG Chat と同じ経路、search は基本の RAG）。
         """
         return await self._run(
             cases,
@@ -406,6 +462,7 @@ class EvaluationRunner:
             progress=progress,
             on_case_result=on_case_result,
             answer_model_id=answer_model_id,
+            route=evaluation_answer_route(answer_mode),
         )
 
     async def _run(
@@ -422,13 +479,12 @@ class EvaluationRunner:
         progress: EvaluationProgressCallback | None,
         on_case_result: EvaluationCaseResultCallback | None,
         answer_model_id: str | None,
+        route: EvaluationAnswerRoute,
     ) -> EvaluationMetrics:
         deadline = _deadline(time_budget_seconds)
         cases = await self._with_same_text_equivalents(cases)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
-        pipeline = self._pipeline or RagPipeline(
-            settings=effective_settings, flow=EVALUATION_ANSWER_FLOW
-        )
+        pipeline = self._pipeline or route.pipeline(effective_settings)
 
         concurrency = evaluation_concurrency(self._settings)
         caller = make_ai_caller(self._settings, "evaluation", max_concurrency=concurrency)
@@ -459,6 +515,7 @@ class EvaluationRunner:
                     knowledge_base_ids=knowledge_base_ids,
                     search_answer_profile_id=search_answer_profile_id,
                     answer_model_id=answer_model_id,
+                    route=route,
                 )
                 results[case_index] = case_result
                 if on_case_result is not None:
@@ -520,8 +577,12 @@ class EvaluationRunner:
         knowledge_base_ids: Sequence[str] | None,
         search_answer_profile_id: str | None,
         answer_model_id: str | None = None,
+        route: EvaluationAnswerRoute = EVALUATION_ANSWER_ROUTES[DEFAULT_EVALUATION_ANSWER_MODE],
     ) -> EvaluationCaseResult:
         """1 ケース（最初の質問と確認の質問への返答の往復、判定）を実行して結果を返す。
+
+        回答は ``route``（回答の方法の経路。#5340）で作る。プロファイルの解決と pipeline に同じ
+        経路を渡し、RAG 検索の経路は往復を 1 問にまとめて送る。
 
         回答が流量の制限（429）で失敗したら、共通の実行器が全体で待って送り直す（#2004）。
         ほかの失敗はケースの失敗にする（今までと同じ）。権限・設定の誤り・割り当ての使い切りは
@@ -542,7 +603,11 @@ class EvaluationRunner:
         error_result: EvaluationCaseResult | None = None
         # 回答に使った設定（プロファイルの pass はプロファイルの回答のモデルを当てた設定。#3574）。
         answer_settings = effective_settings
-        for turn_index, (query, turn_conditions) in enumerate(_case_queries(case)):
+        combined = not route.conversational and bool(case.turns)
+        resolve_profile = self._profile_resolver or route.resolve
+        for turn_index, (query, turn_conditions) in enumerate(
+            _case_queries(case, conversational=route.conversational)
+        ):
             conditions = {**conditions, **turn_conditions}
             request = SearchRequest(
                 query=query,
@@ -567,16 +632,14 @@ class EvaluationRunner:
                 if search_answer_profile_id:
                     # プロファイルの解決（KB・回答の設定・業務ガイド）。
                     # 失敗はケースの失敗にする。
-                    request, case_settings = await self._profile_resolver(
+                    request, case_settings = await resolve_profile(
                         request.model_copy(
                             update={"search_answer_profile_id": search_answer_profile_id}
                         ),
                         effective_settings,
                         prior_queries[-EVALUATION_GUIDE_CONTEXT_TURNS:],
                     )
-                    case_pipeline = self._pipeline or RagPipeline(
-                        settings=case_settings, flow=EVALUATION_ANSWER_FLOW
-                    )
+                    case_pipeline = self._pipeline or route.pipeline(case_settings)
                     answer_settings = case_settings
                 attempt_trace_ids = [turn_trace_id]
 
@@ -658,7 +721,13 @@ class EvaluationRunner:
                     error_type=failure.error_type,
                 )
                 break
-            turn_runs.append(_TurnRun(response=response, conditions=dict(conditions)))
+            turn_runs.append(
+                _TurnRun(
+                    response=response,
+                    conditions=dict(conditions),
+                    question=query if combined else None,
+                )
+            )
             history.extend(
                 [
                     ChatTurn(role="USER", content=query),
@@ -713,7 +782,11 @@ class EvaluationRunner:
         runs = list(turn_runs or [_TurnRun(response=response, conditions={})])
         actual_responses = [
             {
-                "question": case.query if index == 0 else case.turns[index - 1].reply,
+                "question": run.question
+                if run.question is not None
+                else case.query
+                if index == 0
+                else case.turns[index - 1].reply,
                 "answer_text": run.response.answer,
             }
             for index, run in enumerate(runs)

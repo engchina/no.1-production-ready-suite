@@ -29,6 +29,7 @@ import { useWorkspaceState } from "@/lib/workspace-state";
 
 import {
   EVALUATION_JOB_STATUS_VARIANT,
+  evaluationAnswerModeLabel,
   evaluationJobStatusLabel,
   evaluationHistoryProfileLabel,
 } from "./evaluation-job";
@@ -136,7 +137,7 @@ export function EvaluationHistory({
                       // 375px では列を畳み、プロファイル・状態・判定を日時の下にまとめる。
                       subtitle={
                         <span className="lg:hidden">
-                          {evaluationHistoryProfileLabel(job)} · {evaluationJobStatusLabel(job.status)}
+                          {evaluationHistoryProfileLabel(job)} · {evaluationAnswerModeLabel(job.answer_mode)} · {evaluationJobStatusLabel(job.status)}
                           {job.passed === null ? "" : ` · ${passedLabel(job.passed)}`}
                           {job.compare_passed == null ? "" : ` · ${t("evaluation.history.comparePassed", { label: passedLabel(job.compare_passed) })}`}
                         </span>
@@ -156,6 +157,13 @@ export function EvaluationHistory({
                   headerClassName: "hidden lg:table-cell",
                   className: "hidden break-words align-top lg:table-cell",
                   render: (job) => evaluationHistoryProfileLabel(job),
+                },
+                {
+                  key: "answerMode",
+                  header: t("evaluation.history.column.answerMode"),
+                  headerClassName: "hidden lg:table-cell",
+                  className: "hidden whitespace-nowrap align-top lg:table-cell",
+                  render: (job) => evaluationAnswerModeLabel(job.answer_mode),
                 },
                 {
                   key: "status",

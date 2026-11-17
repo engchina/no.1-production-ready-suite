@@ -1214,6 +1214,13 @@ END;
             sql=document_extracted_text_hash_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261117_5340_evaluation_job_answer_mode",
+            table_name="rag_evaluation_jobs",
+            sql=evaluation_job_answer_mode_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -2139,6 +2146,38 @@ BEGIN
     IF v_count = 0 THEN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_documents_text_sha256_idx ON rag_documents (extracted_text_sha256)';
+    END IF;
+END;
+/"""
+
+
+def evaluation_job_answer_mode_migration_sql() -> str:
+    """品質評価の job に回答の方法（chat / search）の列と CHECK を無ければ足す（#5340）。
+
+    列を足すだけでデータは変えない。既存の行は NULL のまま（画面・Excel では「未記録」）で、過去の
+    実行の方法を推測して埋めない。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count = 0 THEN
+        RETURN;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'ANSWER_MODE';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (answer_mode VARCHAR2(16))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND constraint_name = 'RAG_EVALUATION_JOBS_ANSWER_MODE_CK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs '
+            || 'ADD CONSTRAINT rag_evaluation_jobs_answer_mode_ck '
+            || 'CHECK (answer_mode IN (''chat'', ''search''))';
     END IF;
 END;
 /"""

@@ -56,12 +56,14 @@ interface SyntheticJob {
   actor: string | null;
   owned: boolean;
   created_at: string;
+  /** 回答の方法（#5340。記録の無い古い評価は null）。 */
+  answerMode?: "chat" | "search" | null;
 }
 
 const JOBS: SyntheticJob[] = [
-  { job_id: "jobmine", status: "SUCCEEDED", passed: true, profile: "プロファイル A", actor: "利用者 A", owned: true, created_at: "2026-11-09T03:00:00Z" },
-  { job_id: "jobother", status: "SUCCEEDED", passed: false, comparePassed: false, profile: "プロファイル A", actor: "利用者 B", owned: false, created_at: "2026-11-09T02:00:00Z" },
-  { job_id: "jobrunning", status: "RUNNING", passed: null, profile: "プロファイル A", actor: "利用者 B", owned: false, created_at: "2026-11-09T01:00:00Z" },
+  { job_id: "jobmine", status: "SUCCEEDED", passed: true, profile: "プロファイル A", actor: "利用者 A", owned: true, created_at: "2026-11-09T03:00:00Z", answerMode: "chat" },
+  { job_id: "jobother", status: "SUCCEEDED", passed: false, comparePassed: false, profile: "プロファイル A", actor: "利用者 B", owned: false, created_at: "2026-11-09T02:00:00Z", answerMode: "search" },
+  { job_id: "jobrunning", status: "RUNNING", passed: null, profile: "プロファイル A", actor: "利用者 B", owned: false, created_at: "2026-11-09T01:00:00Z", answerMode: "chat" },
   { job_id: "joblegacy", status: "SUCCEEDED", passed: true, profile: null, actor: null, owned: true, created_at: "2026-11-08T01:00:00Z" },
 ];
 
@@ -80,6 +82,7 @@ function summary(job: SyntheticJob) {
     compare_search_answer_profile_id: job.comparePassed === undefined ? null : "profile-compare",
     search_answer_profile_name: job.profile,
     compare_search_answer_profile_name: job.comparePassed === undefined ? null : "プロファイル B",
+    answer_mode: job.answerMode ?? null,
     actor_display_name: job.actor,
     owned: job.owned,
     can_cancel: job.owned,
@@ -162,7 +165,7 @@ for (const viewport of [
       await expect(rows).toHaveCount(5);
       if (viewport.name === "desktop") {
         const header = history.getByRole("row").first();
-        for (const column of ["実行日時", "検索・回答プロファイル", "状態", "件数", "全体の判定", "実行者"]) {
+        for (const column of ["実行日時", "検索・回答プロファイル", "回答の方法", "状態", "件数", "全体の判定", "実行者"]) {
           await expect(header.getByRole("columnheader", { name: column })).toBeVisible();
         }
         await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("要改善");
@@ -170,12 +173,15 @@ for (const viewport of [
         await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("比較: 要改善");
         await expect(page.getByTestId("evaluation-history-row-jobmine")).not.toContainText("比較:");
         await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("利用者 B");
-        // 実行者もプロファイルも分からない古い評価は「—」。
+        // 実行者もプロファイルも分からない古い評価は「—」、回答の方法は「未記録」（#5340）。
         await expect(page.getByTestId("evaluation-history-row-joblegacy")).toContainText("—");
+        await expect(page.getByTestId("evaluation-history-row-joblegacy")).toContainText("未記録");
+        await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText("RAG 検索");
+        await expect(page.getByTestId("evaluation-history-row-jobmine")).toContainText("チャット");
       } else {
-        // 375px は列を畳み、日時の下にプロファイル・状態・判定をまとめる。
+        // 375px は列を畳み、日時の下にプロファイル・回答の方法・状態・判定をまとめる。
         await expect(page.getByTestId("evaluation-history-row-jobother")).toContainText(
-          "プロファイル A（比較: プロファイル B） · 完了 · 要改善 · 比較: 要改善"
+          "プロファイル A（比較: プロファイル B） · RAG 検索 · 完了 · 要改善 · 比較: 要改善"
         );
       }
       await expectNoPageOverflow(page);
@@ -186,6 +192,7 @@ for (const viewport of [
       const panel = page.getByTestId("evaluation-run-job");
       await expect(panel).toContainText("実行者: 利用者 B");
       await expect(panel).toContainText("検索・回答プロファイル: プロファイル A");
+      await expect(panel).toContainText("回答の方法: RAG 検索");
       await expect(page.getByRole("button", { name: "取り消し" })).toHaveCount(0);
       const result = page.getByRole("region", { name: "評価結果", exact: true });
       await expect(result.getByText("要改善", { exact: true })).toBeVisible();
