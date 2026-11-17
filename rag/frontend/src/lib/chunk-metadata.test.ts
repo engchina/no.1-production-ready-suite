@@ -8,12 +8,10 @@ import {
   citationSourceUrl,
 } from "./chunk-metadata";
 
-const sourceChips = (metadata: Parameters<typeof citationMetadataChips>[0]) => citationMetadataChips(metadata).filter(chip => chip.id !== "context_header_enabled");
-
 describe("citationMetadataChips", () => {
   it("XML ツリー JSON の段落の引用ラベルを先頭の chip にする（issue 2024）", () => {
     expect(
-      sourceChips({
+      citationMetadataChips({
         xml_tree_citation_label_arabic: "サンプル規程 第7条第1項",
         section_path: "サンプル規程 > 第七条（対象の範囲）",
       })
@@ -23,31 +21,59 @@ describe("citationMetadataChips", () => {
     ]);
   });
 
-  it("ページ範囲と構造 metadata を chip 化する", () => {
+  it("ページ範囲・内容種別・章節を chip 化し、章節は階層の 1 つだけにする（issue 5303）", () => {
+    // 見出し（section_title）は階層（section_path）の末尾なので別に出さない。分割方針の識別子も出さない。
     expect(
-      sourceChips({
+      citationMetadataChips({
         page_start: 2,
         page_end: 4,
         content_kind: "table",
-        section_title: "料金表",
-        section_path: "契約 > 料金表",
+        section_title: "節 B",
+        section_path: "章 A > 節 B",
         chunk_profile: "structure_v1",
       })
     ).toEqual([
       { id: "page", value: "2-4" },
       { id: "content_kind", value: "table" },
-      { id: "section_title", value: "料金表" },
-      { id: "section_path", value: "契約 > 料金表" },
-      { id: "chunk_profile", value: "structure_v1" },
+      { id: "section_path", value: "章 A > 節 B" },
     ]);
   });
 
+  it("節が 1 段の表の行（見出しと階層が同じ値）は章節の chip を 1 つにする（issue 5303）", () => {
+    expect(
+      citationMetadataChips({
+        content_kind: "record",
+        section_title: "シート A",
+        section_path: "シート A",
+        chunk_profile: "structure_v1",
+        context_header: "合成の表.xlsx > シート A",
+        context_header_enabled: true,
+      })
+    ).toEqual([
+      { id: "content_kind", value: "record" },
+      { id: "section_path", value: "シート A" },
+    ]);
+  });
+
+  it("階層が無ければ見出しを章節の chip にする（issue 5303）", () => {
+    expect(citationMetadataChips({ section_title: "節 B", section_path: " " })).toEqual([
+      { id: "section_title", value: "節 B" },
+    ]);
+  });
+
+  it("文脈ヘッダと分割方針は chip にしない（issue 5303）", () => {
+    expect(
+      citationMetadataChips({ context_header: "文書 A > 節 A", context_header_enabled: false, chunk_profile: "structure_v1" })
+    ).toEqual([]);
+    expect(citationMetadataChips({})).toEqual([]);
+  });
+
   it("資料に印刷されたページ番号があれば物理頁と並べる（issue 1287）", () => {
-    expect(sourceChips({ page_start: 12, page_label_start: "3-4" })).toEqual([
+    expect(citationMetadataChips({ page_start: 12, page_label_start: "3-4" })).toEqual([
       { id: "page", value: "12", printed: "3-4" },
     ]);
     expect(
-      sourceChips({
+      citationMetadataChips({
         page_start: 12,
         page_end: 13,
         page_label_start: "3-4",
@@ -55,20 +81,20 @@ describe("citationMetadataChips", () => {
       })
     ).toEqual([{ id: "page", value: "12-13", printed: "3-4〜3-5" }]);
     // 印刷の番号が無い・空・物理頁と同じ表記なら物理頁だけ。
-    expect(sourceChips({ page_start: 12 })).toEqual([{ id: "page", value: "12" }]);
-    expect(sourceChips({ page_start: 12, page_label_start: " " })).toEqual([
+    expect(citationMetadataChips({ page_start: 12 })).toEqual([{ id: "page", value: "12" }]);
+    expect(citationMetadataChips({ page_start: 12, page_label_start: " " })).toEqual([
       { id: "page", value: "12" },
     ]);
-    expect(sourceChips({ page_start: 12, page_label_start: "12" })).toEqual([
+    expect(citationMetadataChips({ page_start: 12, page_label_start: "12" })).toEqual([
       { id: "page", value: "12" },
     ]);
     // 物理頁が無ければ印刷の番号だけでは出さない（MCP の locator と同じ）。
-    expect(sourceChips({ page_label_start: "ii" })).toEqual([]);
+    expect(citationMetadataChips({ page_label_start: "ii" })).toEqual([]);
   });
 
   it("欠損値や非文字列 metadata は表示対象にしない", () => {
     expect(
-      sourceChips({
+      citationMetadataChips({
         page_start: null,
         page_end: 3,
         content_kind: "",
@@ -137,13 +163,3 @@ describe("citationSourceUrl", () => {
     expect(citationSourceUrl({})).toBeNull();
   });
 });
-
- it("文脈ヘッダの実値と有効・無効・未記録を区別する", () => {
-    expect(citationMetadataChips({context_header: "文書 A > 上位 > 下位", context_header_enabled: true})).toEqual([
-      {id: "context_header", value: "文書 A > 上位 > 下位"}, {id: "context_header_enabled", value: "true"}
-    ]);
-    expect(citationMetadataChips({context_header_enabled: false})).toEqual([{id: "context_header_enabled", value: "false"}]);
-    expect(citationMetadataChips({})).toEqual([{id: "context_header_enabled", value: "unknown"}]);
- });
-
-

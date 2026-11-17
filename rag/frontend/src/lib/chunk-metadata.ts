@@ -7,10 +7,7 @@ export type CitationMetadataChipId =
   | "page"
   | "content_kind"
   | "section_title"
-  | "section_path"
-  | "chunk_profile"
-  | "context_header"
-  | "context_header_enabled";
+  | "section_path";
 
 export interface CitationMetadataChip {
   id: CitationMetadataChipId;
@@ -22,7 +19,11 @@ export interface CitationMetadataChip {
   printed?: string;
 }
 
-/** 引用カードで表示する低 cardinality metadata を抽出する。 */
+/**
+ * 根拠のカードで表示する低 cardinality metadata を抽出する（#5303）。章節は 1 つのチップで、階層
+ * （`section_path`）があればそれ、無ければ見出し（`section_title`）。見出しは階層の末尾なので別に出さない。
+ * 文脈ヘッダ（ファイル名 > 階層）と分割方針の識別子は、カードの題・章節のチップと重なるか技術の情報なので出さない。
+ */
 export function citationMetadataChips(
   metadata: RetrievedChunk["metadata"]
 ): CitationMetadataChip[] {
@@ -35,14 +36,12 @@ export function citationMetadataChips(
     const printed = printedPageRange(metadata, page);
     chips.push(printed ? { id: "page", value: page, printed } : { id: "page", value: page });
   }
-  for (const id of ["content_kind", "section_title", "section_path", "chunk_profile"] as const) {
-    const value = stringMetadata(metadata, id);
-    if (value) chips.push({ id, value });
-  }
-  const header = stringMetadata(metadata, "context_header");
-  if (header) chips.push({ id: "context_header", value: header });
-  const enabled = metadata.context_header_enabled;
-  chips.push({ id: "context_header_enabled", value: typeof enabled === "boolean" ? String(enabled) : header ? "true" : "unknown" });
+  const contentKind = stringMetadata(metadata, "content_kind");
+  if (contentKind) chips.push({ id: "content_kind", value: contentKind });
+  const sectionPath = stringMetadata(metadata, "section_path");
+  const sectionTitle = stringMetadata(metadata, "section_title");
+  if (sectionPath) chips.push({ id: "section_path", value: sectionPath });
+  else if (sectionTitle) chips.push({ id: "section_title", value: sectionTitle });
   return chips;
 }
 

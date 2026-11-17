@@ -349,8 +349,10 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   const citation = page.locator("li").filter({ hasText: "料金表の交通費は 1000 円です。" });
   await expect(page.getByText("p.2-3")).toBeVisible();
   await expect(citation.locator("dl").getByText("表", { exact: true })).toBeVisible();
-  await expect(citation.getByText("経費申請 > 料金表")).toBeVisible();
-  await expect(citation.getByText("structure_v1")).toBeVisible();
+  // 章節は階層の 1 つだけ。見出し（階層の末尾）と分割方針の識別子は根拠のカードに出さない（#5303）。
+  const chips = citation.getByTestId("evidence-chips").locator("dd");
+  await expect(chips).toHaveText(["p.2-3", "表", "経費申請 > 料金表"]);
+  await expect(citation.getByText("structure_v1")).toHaveCount(0);
   const citationList = page.locator("ul.bounded-scroll-area-lg");
   await expect
     .poll(() => citationList.evaluate((element) => element.scrollHeight > element.clientHeight))
