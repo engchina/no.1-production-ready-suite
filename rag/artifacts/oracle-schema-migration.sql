@@ -4741,3 +4741,23 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261117_5313_document_extracted_text_hash
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'EXTRACTED_TEXT_SHA256';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (extracted_text_sha256 CHAR(64))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_DOCUMENTS_TEXT_SHA256_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_documents_text_sha256_idx ON rag_documents (extracted_text_sha256)';
+    END IF;
+END;
+/

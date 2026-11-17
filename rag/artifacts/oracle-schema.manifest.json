@@ -16,8 +16,8 @@
     },
     {
       "name": "documents",
-      "sha256": "b343fc27ccf509b1e8b7cc8a25e894c1bc61e77e3c64711cb9d6399ed04c1dbd",
-      "statement_count": 5,
+      "sha256": "35538533398c6ce15b9a23b2368fa742ba3f0eb2336ae8e20acc37ddb9a8ae12",
+      "statement_count": 6,
       "table_name": "rag_documents"
     },
     {
@@ -279,8 +279,8 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "13c1cc83fb8e09f567de65e696eab73a54a37ad73ae452ba4f04406a4a1e2548",
-  "statement_count": 165,
+  "sha256": "ab04c37b4cf2668f7c0e16e53aa4ea60e35cc9ce3941978a620457c3b298f12c",
+  "statement_count": 166,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {
     "distance": "COSINE",

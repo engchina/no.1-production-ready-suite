@@ -1207,6 +1207,13 @@ END;
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261117_5313_document_extracted_text_hash",
+            table_name="rag_documents",
+            sql=document_extracted_text_hash_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -2108,6 +2115,32 @@ def document_superseded_migration_sql() -> str:
     v_count NUMBER;
 BEGIN
 {column_blocks}END;
+/"""
+
+
+def document_extracted_text_hash_migration_sql() -> str:
+    """文書の解析後の本文の hash の列と索引を無ければ足す(#5313)。
+
+    列と索引を足すだけでデータは変えない。既存の文書の値は NULL のままで、次に既定のレシピを
+    解析した時に記録する(既に登録済みの文書を遡って重複にはしない)。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'EXTRACTED_TEXT_SHA256';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (extracted_text_sha256 CHAR(64))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_DOCUMENTS_TEXT_SHA256_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_documents_text_sha256_idx ON rag_documents (extracted_text_sha256)';
+    END IF;
+END;
 /"""
 
 

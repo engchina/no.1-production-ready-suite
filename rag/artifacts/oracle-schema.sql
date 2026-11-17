@@ -91,6 +91,9 @@ CREATE TABLE rag_documents (
     -- 自己参照の FK は持たず、存在・自己参照・循環はアプリで検証する。
     superseded_by_document_id VARCHAR2(64),
     superseded_at            TIMESTAMP WITH TIME ZONE,
+    -- 既定のレシピの抽出の本文(空白を除く)の sha256(#5313)。
+    -- 書式だけ違う同じ内容の文書を重複にする。
+    extracted_text_sha256    CHAR(64),
     CONSTRAINT rag_documents_status_ck
         CHECK (status IN (
             'UPLOADED', 'PREPROCESSING', 'PREPROCESSED', 'INGESTING', 'REVIEW',
@@ -104,6 +107,9 @@ CREATE INDEX rag_documents_duplicate_idx ON rag_documents (duplicate_of_document
 
 CREATE INDEX rag_documents_content_sha256_idx
     ON rag_documents (content_sha256);
+
+CREATE INDEX rag_documents_text_sha256_idx
+    ON rag_documents (extracted_text_sha256);
 
 CREATE INDEX rag_documents_status_uploaded_idx
     ON rag_documents (status, uploaded_at DESC);
