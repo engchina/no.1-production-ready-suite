@@ -12029,7 +12029,8 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   await expect(candidateProfile).toHaveAttribute("aria-expanded", "false");
   await expect(candidateProfile).toBeFocused();
   await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("End");
+  // 検索つきの選択（#5266）は開いた層の検索欄で PageDown を押し、最後の候補へ移る。
+  await page.keyboard.press("PageDown");
   await page.keyboard.press("Enter");
   await expect(candidateProfile).toHaveText("入金管理");
   await expect(candidateProfile).not.toContainText("payment");
@@ -12100,7 +12101,13 @@ test("learning candidates use the shared responsive list, filters, paging, and r
   const mobileCandidate = page.getByTestId("qcm-training-candidate").first();
   const mobileProfile = mobileCandidate.getByRole("button", { name: /^追加する業務プロファイル(?:\s|$)/ });
   await mobileProfile.click();
-  await expectHorizontallyContained(page.getByRole("listbox", { name: "追加する業務プロファイル" }), mobileCandidate);
+  // 検索つきの選択（#5266）の候補の層は画面に重ねて開く（カードの幅ではなく、画面の余白の内側に収める）。
+  const mobileProfilePopover = page.locator("[data-searchable-select-popover]");
+  await expect(mobileProfilePopover.getByRole("listbox", { name: "追加する業務プロファイル" })).toBeVisible();
+  const popoverBox = await mobileProfilePopover.boundingBox();
+  expect(popoverBox).not.toBeNull();
+  expect(popoverBox!.x).toBeGreaterThanOrEqual(0);
+  expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(375);
   await page.keyboard.press("Escape");
   await expect(mobileCandidate.getByRole("link", { name: "フィードバック管理で確認" })).toBeVisible();
   await expectNoHorizontalScroll(page);
