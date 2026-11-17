@@ -6097,6 +6097,25 @@ class OracleClient:
         """同一 content hash の既存ドキュメントを返す。"""
         return await self._find_document_by_content_hash_with_oracle(content_sha256)
 
+    async def record_extracted_text_hash(
+        self, document_id: str, extracted_text_sha256: str, *, judge_duplicate: bool
+    ) -> str | None:
+        """既定のレシピの抽出の本文の hash を記録し、重複にしたら正本の文書 ID を返す(#5313)。
+
+        ``judge_duplicate`` のときだけ、同じナレッジベースに所属する先に登録された正本の文書
+        (重複でも旧版でもない)に同じ hash があれば ``duplicate_of_document_id`` を付ける。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> str | None:
+            return _record_extracted_text_hash(
+                connection,
+                document_id=document_id,
+                extracted_text_sha256=extracted_text_sha256,
+                judge_duplicate=judge_duplicate,
+            )
+
+        return await self._run_transaction(operation)
+
     async def document_language_pack_uses(
         self,
         document_ids: Sequence[str],
@@ -12963,6 +12982,106 @@ def insert_chunk_rows(
         )
 
 
+def _record_extracted_text_hash(
+    connection: OracleConnectionProtocol,
+    *,
+    document_id: str,
+    extracted_text_sha256: str,
+    judge_duplicate: bool,
+) -> str | None:
+    """``OracleClient.record_extracted_text_hash`` の本体(呼び出し側の transaction の中)。"""
+    binds = _with_tenant_bind(
+        {"document_id": document_id, "extracted_text_sha256": extracted_text_sha256}
+    )
+    tenant_sql = _oracle_tenant_predicate()
+    locked = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT document_id, duplicate_of_document_id
+        FROM rag_documents
+        WHERE document_id = :document_id
+          AND {tenant_sql}
+        FOR UPDATE
+        """,
+            tenant_sql=tenant_sql,
+        ),
+        binds,
+    )
+    if not locked:
+        return None
+    _execute(
+        connection,
+        _render_sql(
+            """
+        UPDATE rag_documents
+        SET extracted_text_sha256 = :extracted_text_sha256
+        WHERE document_id = :document_id
+          AND {tenant_sql}
+        """,
+            tenant_sql=tenant_sql,
+        ),
+        binds,
+    )
+    if not judge_duplicate or locked[0].get("duplicate_of_document_id") is not None:
+        return None
+    # 正本は先に登録された文書だけにする(同時に取り込んだ 2 件が互いを正本にしない)。
+    # ナレッジベースを共にする文書に限り、利用者の見えない範囲の文書を正本にしない。
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT canonical.document_id
+        FROM rag_documents canonical
+        JOIN rag_documents target
+          ON target.document_id = :document_id
+        WHERE canonical.extracted_text_sha256 = :extracted_text_sha256
+          AND canonical.document_id <> target.document_id
+          AND canonical.duplicate_of_document_id IS NULL
+          AND canonical.superseded_by_document_id IS NULL
+          AND (
+              canonical.uploaded_at < target.uploaded_at
+              OR (
+                  canonical.uploaded_at = target.uploaded_at
+                  AND canonical.document_id < target.document_id
+              )
+          )
+          AND {canonical_tenant_sql}
+          AND EXISTS (
+              SELECT 1
+              FROM rag_document_knowledge_bases canonical_kb
+              JOIN rag_document_knowledge_bases target_kb
+                ON target_kb.knowledge_base_id = canonical_kb.knowledge_base_id
+              WHERE canonical_kb.document_id = canonical.document_id
+                AND target_kb.document_id = target.document_id
+          )
+        ORDER BY canonical.uploaded_at, canonical.document_id
+        FETCH FIRST 1 ROWS ONLY
+        """,
+            canonical_tenant_sql=_oracle_tenant_predicate(alias="canonical"),
+        ),
+        binds,
+    )
+    if not rows:
+        return None
+    canonical_id = str(rows[0]["document_id"])
+    _execute(
+        connection,
+        _render_sql(
+            """
+        UPDATE rag_documents
+        SET duplicate_of_document_id = :duplicate_of_document_id
+        WHERE document_id = :document_id
+          AND duplicate_of_document_id IS NULL
+          AND {tenant_sql}
+        """,
+            tenant_sql=tenant_sql,
+        ),
+        {**binds, "duplicate_of_document_id": canonical_id},
+    )
+    return canonical_id
+
+
 def delete_document_rows(connection: OracleConnectionProtocol, document_id: str) -> bool:
     """文書と関連 chunk/graph/ingestion 行を、呼び出し側の transaction の中で削除する。
 
@@ -18479,6 +18598,9 @@ CREATE TABLE {table_name} (
     -- 自己参照の FK は持たず、存在・自己参照・循環はアプリで検証する。
     superseded_by_document_id VARCHAR2(64),
     superseded_at            TIMESTAMP WITH TIME ZONE,
+    -- 既定のレシピの抽出の本文(空白を除く)の sha256(#5313)。
+    -- 書式だけ違う同じ内容の文書を重複にする。
+    extracted_text_sha256    CHAR(64),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN (
             'UPLOADED', 'PREPROCESSING', 'PREPROCESSED', 'INGESTING', 'REVIEW',
@@ -18492,6 +18614,9 @@ CREATE INDEX {table_name}_duplicate_idx ON {table_name} (duplicate_of_document_i
 
 CREATE INDEX {table_name}_content_sha256_idx
     ON {table_name} (content_sha256);
+
+CREATE INDEX {table_name}_text_sha256_idx
+    ON {table_name} (extracted_text_sha256);
 
 CREATE INDEX {table_name}_status_uploaded_idx
     ON {table_name} (status, uploaded_at DESC);

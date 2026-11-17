@@ -221,6 +221,19 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5313 解析後の本文で文書の重複を判定する）
+
+書式だけが違う同じ内容の文書（1 行の JSON と整形した JSON、同じ本文の PDF とテキストなど）を、既定のレシピ（レシピ 1）の
+抽出の後に重複と判定するようにした。索引用の本文から空白を除いた本文の sha256 を `RAG_DOCUMENTS.EXTRACTED_TEXT_SHA256` に
+記録し、初めて索引を作る取込で、同じナレッジベースに所属する先に登録された正本の文書（重複でも旧版でもない）に同じ値があれば、
+アップロードの時の重複と同じく `duplicate_of_document_id` を付け、取込 job を `duplicate_content` の SKIPPED にする。
+
+- migration（`20261117_5313_document_extracted_text_hash`）は列 `EXTRACTED_TEXT_SHA256` と索引
+  `RAG_DOCUMENTS_TEXT_SHA256_IDX` を足すだけで、データは変えない。本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけでよい。
+- 既に登録済みの文書は値が NULL のままで、遡って重複にはしない（既に二重に入った文書は、片方を削除する）。登録済みの文書を
+  新しい文書の比べる相手にしたいときは、その文書を解析から再処理すると値が記録される（索引のある文書の再処理は値の記録だけで、
+  その文書を重複にはしない）。
+
 ## 既存環境の更新手順（#5241 埋め込みを細い表 RAG_CHUNK_EMBEDDINGS へ分ける）
 
 chunk の埋め込み（`VECTOR(1536, FLOAT32)`。1 行約 6KB）を `RAG_CHUNKS.EMBEDDING` から新しい表 `RAG_CHUNK_EMBEDDINGS`

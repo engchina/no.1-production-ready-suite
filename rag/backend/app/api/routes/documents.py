@@ -103,6 +103,11 @@ from app.rag.document_sections_service import (
     sections_source,
 )
 from app.rag.document_summary import content_summary_view, refresh_document_summary
+from app.rag.extracted_text_duplicate import (
+    DUPLICATE_CONTENT_SKIP_REASON,
+    ExtractedTextDuplicateError,
+    extracted_text_duplicate_gate,
+)
 from app.rag.extraction_field_adapter import field_extraction_outcome, load_field_schema
 from app.rag.extraction_revisions import ExtractionElementChange, extraction_element_changes
 from app.rag.file_type_defaults import classify_file_type, file_type_default_overrides
@@ -3234,6 +3239,13 @@ async def _materialize_experiment_candidate(
             # 処理後ファイルを読む工程でも、監査には文書に記録済みの原本の hash とサイズを使う。
             source_sha256=detail.content_sha256,
             source_size=detail.file_size_bytes,
+            # 解析後の本文が先に登録された文書と同じなら、重複として止める(#5313)。
+            extracted_text_gate=extracted_text_duplicate_gate(
+                oracle,
+                document_id=job.document_id,
+                recipe=recipe_at_start,
+                duplicate_of_document_id=detail.duplicate_of_document_id,
+            ),
         )
         recipe_row = await oracle.get_document_recipe(job.document_id, recipe_id)
         recipe_status = (
@@ -5758,10 +5770,26 @@ async def _run_pinned_ingestion_job(
         if propagate_errors:
             raise
     except IngestionSupersededError:
-        await _skip_superseded_ingestion_job(oracle, job, lease_owner=lease_owner)
+        await _skip_ingestion_job(
+            oracle, job, skip_reason=INGESTION_SKIP_REASON_SUPERSEDED, lease_owner=lease_owner
+        )
         logger.info(
             "ingestion_job_superseded",
             extra={"job_id": job_id, "document_id": job.document_id, "recipe_id": job.recipe_id},
+        )
+    except ExtractedTextDuplicateError as exc:
+        # 解析後の本文が先に登録された文書と同じ。アップロードの時の重複と同じく SKIPPED にする
+        # (文書には重複の正本を記録済み。重複を無視して取り込む操作で続けられる。#5313)。
+        await _skip_ingestion_job(
+            oracle, job, skip_reason=DUPLICATE_CONTENT_SKIP_REASON, lease_owner=lease_owner
+        )
+        logger.info(
+            "ingestion_job_duplicate_extracted_text",
+            extra={
+                "job_id": job_id,
+                "document_id": job.document_id,
+                "duplicate_of_document_id": exc.duplicate_of_document_id,
+            },
         )
     except IngestionTimeoutError as exc:
         await _fail_ingestion_job(oracle, job, str(exc), lease_owner=lease_owner)
@@ -5986,20 +6014,24 @@ async def _fail_ingestion_job(
     return True
 
 
-async def _skip_superseded_ingestion_job(
+async def _skip_ingestion_job(
     oracle: OracleClient,
     job: IngestionJob,
     *,
+    skip_reason: str,
     lease_owner: str | None = None,
 ) -> None:
-    """結果を適用しなかった job を SKIPPED にし、レシピ行を今の active の状態へ戻す(#4167)。"""
+    """結果を適用しなかった job を SKIPPED にし、レシピ行を今の active の状態へ戻す。
+
+    有効な版が job の開始時から変わっていた(#4167)・解析後の本文が重複だった(#5313)とき。
+    """
     skipped = await oracle.transition_ingestion_job(
         job.id,
         from_statuses=(IngestionJobStatus.RUNNING,),
         to_status=IngestionJobStatus.SKIPPED,
         finished_at=datetime.now(UTC),
         fence=_ingestion_job_fence(job, lease_owner),
-        skip_reason=INGESTION_SKIP_REASON_SUPERSEDED,
+        skip_reason=skip_reason,
     )
     if skipped is None:
         await _restore_statuses_after_cancel(
