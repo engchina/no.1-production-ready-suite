@@ -22,6 +22,7 @@ from app.rag.xlsx_append_columns import (
     append_columns,
 )
 from app.schemas.evaluation import (
+    ANSWER_GENERATION_FALLBACK,
     EvaluationCaseResult,
     EvaluationMetrics,
     EvaluationResultExportRequest,
@@ -69,7 +70,7 @@ FAILURE_REASONS = {
     "wrong_screen": "別の画面を案内した",
 }
 CASE_STATUSES = {"success": "成功", "error": "失敗"}
-# この問の合否（正確性だけで決める。#5262）。
+# この問の合否（正確性で決め、退避した問は不合格。#5262・#5320）。
 CASE_VERDICTS = {True: "合格", False: "不合格"}
 # 主張ごとの判定（#5262）の前の結果。網羅を出さない。
 LEGACY_JUDGEMENT_LABEL = "旧方式"
@@ -111,6 +112,10 @@ def _judgement_values(item: EvaluationCaseResult) -> list[CellValue]:
     reason = judgement.reason or ""
     if _is_legacy(item):
         reason = f"{LEGACY_JUDGEMENT_LABEL}: {reason}" if reason else LEGACY_JUDGEMENT_LABEL
+    if judgement.passed is False and ANSWER_GENERATION_FALLBACK in item.failure_reasons:
+        # 退避した問の不合格の理由（#5320）。正確性の判定の理由はその後に残す。
+        fallback = FAILURE_REASONS[ANSWER_GENERATION_FALLBACK]
+        reason = f"{fallback}\n{reason}" if reason else fallback
     return [verdict, reason or None]
 
 

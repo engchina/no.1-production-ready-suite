@@ -17,7 +17,7 @@ import logging
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from itertools import groupby
@@ -1103,7 +1103,7 @@ def _quote_item(span: dict, start: int, end: int) -> CheckedItem:
     citation._extraction = dict(proof)
     item = GroundedItem(
         kind="operation",
-        text=quote[:600],
+        text=quote[:RELATED_QUOTE_MAX_CHARS],
         citations=[citation],
         applies="unverified",
     )
@@ -1289,8 +1289,37 @@ def _block_screen_title(entries: Sequence[CheckedItem]) -> str:
     return max(counts, key=lambda h: counts[h]) if counts else ""
 
 
-# 拒答時に「資料の記載」として示す関連原文の上限と、質問の語のうち照合しない総称語。
+# 拒答時に「資料の記載」として示す関連原文の上限と、1 件の抜粋の字数の上限。
 RELATED_QUOTE_LIMIT = 4
+RELATED_QUOTE_MAX_CHARS = 600
+
+
+def _quote_window(span: Mapping[str, Any], anchors: Collection[str]) -> tuple[int, int]:
+    """原文のみ提示の抜粋の範囲（根拠の本文の中の位置。長さは ``RELATED_QUOTE_MAX_CHARS`` まで）。
+
+    根拠の ``child_ranges``（親の本文の中の子の範囲。#2710）のうち、検索で当たった子（``anchors`` の ID）の最初の範囲を
+    中心にする。範囲が長さを超えればその先頭から。抜粋の始まりは、当たった範囲が外れない限りその行の先頭へ寄せる。
+    当たった子の範囲が根拠に無ければ本文の先頭から（#5322）。
+    """
+    text = str(span["text"])
+    limit = RELATED_QUOTE_MAX_CHARS
+    if len(text) <= limit:
+        return 0, len(text)
+    base = span.get("start", 0) if isinstance(span.get("start"), int) else 0
+    hits = sorted(
+        (max(0, item["start"] - base), min(len(text), item["end"] - base))
+        for item in span.get("child_ranges") or ()
+        if isinstance(item, Mapping) and str(item.get("id") or "") in anchors
+    )
+    first = next(((start, end) for start, end in hits if start < end), None)
+    if first is None:
+        return 0, limit
+    hit_start, hit_end = first
+    start = max(0, min(hit_start - max(0, limit - (hit_end - hit_start)) // 2, len(text) - limit))
+    line_start = text.rfind("\n", 0, start) + 1
+    if line_start + limit >= min(hit_end, hit_start + limit):
+        start = line_start
+    return start, start + limit
 
 
 def _related_terms(question: str) -> set[str]:
@@ -1304,12 +1333,15 @@ def _question_term_hits(terms: set[str], span: dict) -> int:
     return sum(1 for t in terms if _mentions_term(t, haystack))
 
 
-def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT) -> list[CheckedItem]:
+def related_document_quotes(
+    question: str, spans: Sequence[dict], *, limit: int = RELATED_QUOTE_LIMIT, anchors: Collection[str] = ()
+) -> list[CheckedItem]:
     """草稿が gap だけのとき、質問の語を 2 つ以上含む原文（生成説明を除く）を原文のみ提示の item として返す (#722)。
 
     質問の語（画面名・メッセージ文）そのものが原文になく、モデルが全面拒答しても、同じ対象の条件・操作を
     述べた原文があれば「どの資料のどのページに関連する記載があるか」は示せる。適用の判定はせず、原文と
     出典だけを出す。語は漢字・カタカナ 2 文字以上の連続で、総称語は除く。照合は `_mentions_term`（完全一致か略称）。
+    抜粋の範囲は ``_quote_window``（``anchors`` は検索で当たった子の ID）。
     """
     terms = _related_terms(question)
     if not terms:
@@ -1328,7 +1360,7 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
         if hits >= min(2, len(terms)):
             scored.append((-hits, order, span))
     scored.sort(key=lambda entry: entry[:2])
-    return [_quote_item(span, 0, min(600, len(span["text"]))) for _, _, span in scored[:limit]]
+    return [_quote_item(span, *_quote_window(span, anchors)) for _, _, span in scored[:limit]]
 
 
 def deadline_document_quotes(
@@ -1336,6 +1368,7 @@ def deadline_document_quotes(
     spans: Sequence[dict],
     *,
     limit: int = RELATED_QUOTE_LIMIT,
+    anchors: Collection[str] = (),
 ) -> list[CheckedItem]:
     """1 組目の生成が回答の時間の上限までに終わらなかった（草稿が無い）ときに示す、根拠の原文の抜粋（#1548）。
 
@@ -1343,9 +1376,9 @@ def deadline_document_quotes(
     ためで根拠の不足ではない。質問の語を含む原文（`related_document_quotes`）を先に、足りなければ根拠の順（検索の
     順位・読んだ章節の順）で、上限まで原文のみ提示（適用は未確認）の item にする。見出しだけ・項目名の羅列・画像
     から作った説明は、拒答のときの関連原文と同じく除く。生成の出力が契約を満たさず草稿が無いとき（#3849）も同じ
-    抜粋を示す。
+    抜粋を示す。各抜粋の範囲は、検索で当たった子（``anchors`` の ID）の範囲を中心にする（``_quote_window``）。
     """
-    quotes = related_document_quotes(question, spans, limit=limit)
+    quotes = related_document_quotes(question, spans, limit=limit, anchors=anchors)
     shown = {entry.span["evidence_id"] for entry in quotes if entry.span}
     for span in spans:
         if len(quotes) >= limit:
@@ -1360,7 +1393,7 @@ def deadline_document_quotes(
         ):
             continue
         shown.add(span["evidence_id"])
-        quotes.append(_quote_item(span, 0, min(600, len(span["text"]))))
+        quotes.append(_quote_item(span, *_quote_window(span, anchors)))
     return quotes
 
 

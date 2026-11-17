@@ -889,3 +889,98 @@ def test_reading_answer_rule_is_sent_once_from_the_schema():
     assert "条件、例外、否定、数値、比較対象の違い" not in BATCH_READING_PROMPT
     assert "answer" not in BATCH_READING_PROMPT
     assert guided.count(rule) == 1
+
+
+def _limit_full_sources(monkeypatch, marker, limit):
+    """最終生成の入力の判定だけを、全文の原文（``marker`` を含む）の数が ``limit`` を超えると入らないことにする
+    （字数は入るのに token の判定で入らない試行の合成）。読取の入力の判定は変えない。判定の結果を順に返す。"""
+    import rag_engine.generation.batched_evidence as module
+
+    original = module.model_input_measurement
+    results = []
+
+    def measure(settings, system, prompt, schema, **kwargs):
+        measured = original(settings, system, prompt, schema, **kwargs)
+        if system == module.BATCH_READING_PROMPT:
+            return measured
+        fits = bool(measured["fits"]) and prompt.count(marker) <= limit
+        results.append(fits)
+        return {**measured, "fits": fits}
+
+    monkeypatch.setattr(module, "model_input_measurement", measure)
+    return results
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3, 4], ids=lambda limit: f"limit-{limit}")
+@pytest.mark.parametrize("path", ["fill_to_budget", "keep_unread"])
+def test_returned_prompt_is_rendered_last_from_the_returned_sources(monkeypatch, path, limit):
+    """#5317: 容量の二分探索の最後の試行が入らなくても、最後の描画は返す原文から行う。描画は引用の単位の視図を
+    その原文で記録するので、最終生成の目録が返す原文と一致する。"""
+    if path == "keep_unread":
+        inputs, filler = DEADLINE_INPUTS, "補足本文。" * 120
+        _remaining(monkeypatch, [600.0, 149.0])
+        read = _deadline_reader([])
+    else:
+        inputs, filler = [span(index, f"合成の条件{index}。\n" + "補足本文。" * 200) for index in range(6)], "補足本文。" * 200
+
+        def read(system, payload, schema):
+            return schema(findings=[finding(json.loads(payload)["evidence"][0], answer="合成の条件です。")])
+
+    results = _limit_full_sources(monkeypatch, filler, limit)
+    rendered = []
+
+    def render(values):
+        rendered.append(list(values))
+        return block(values)
+
+    selected, prompt, diagnostic = prepare_batched_evidence(
+        inputs,
+        config(),
+        question="各資料の条件を比較する",
+        render=render,
+        evidence_text=block,
+        system="指示",
+        schema={"type": "object"},
+        read=read,
+        unusable_output=_invalid_structured_output,
+    )
+
+    assert diagnostic["fits"] and results
+    assert [id(value) for value in rendered[-1]] == [id(value) for value in selected]
+    assert prompt.startswith(block(selected))
+
+
+def test_last_unfit_trial_keeps_the_citations_of_the_final_generation(monkeypatch):
+    """#5317: 原文を補う二分探索の最後の試行が入らなくても、最終生成の目録は送った根拠と一致し、本文の印は引用に結ばれて
+    内部のラベルが回答に残らない。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation import answering
+
+    filler = "合成の補足の本文である。" * 700
+    records = [_record(index, f"合成の記載{index}です。\n{filler}\n合成の末尾です。", score=1.0 - index / 10) for index in range(6)]
+    results = _limit_full_sources(monkeypatch, "合成の末尾です。", 1)
+
+    def model(system, prompt, settings, schema, **kwargs):
+        if issubclass(schema, BatchReading):
+            return schema(findings=[finding(value, answer="合成の記載です。") for value in json.loads(prompt)["evidence"][:1]])
+        unit = re.search(r"\[(E[0-9]+\.[0-9]+)\] 合成の記載[0-9]+です。", prompt).group(1)
+        return schema.model_validate({"answer_body": f"合成の記載があります。[{unit}]", "response_kind": "answered", "confidence": "high"})
+
+    def unused(*args, **kwargs):
+        pytest.fail("不要な呼出し")
+
+    settings = replace(config(), evidence_budget_chars=30000)
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = answering.synthesize_grounded_answer(
+            "合成の申請の承認者は？", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
+        ).response
+
+    trace = result.generation_trace
+    assert trace["generation_input_budget"]["selection"] == "batched_reading"
+    assert trace["generation_input_budget"]["reduction"]["program_added"]["count"] == 1
+    # 補う件数の二分探索は、入らない試行で終わる。
+    assert results[-2:] == [True, False]
+    snapshot = trace["rounds"][0]["generation_citation_trace"]["input"]
+    assert snapshot["snapshot_status"] == "recorded" and not snapshot["unrecorded_evidence_ids"]
+    assert len(trace["citation_lines"]) == 1
+    assert not re.search(r"\[E[0-9]+\.[0-9]+\]", result.answer_text)
