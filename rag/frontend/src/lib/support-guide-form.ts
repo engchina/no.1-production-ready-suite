@@ -26,19 +26,12 @@ import type {
   SupportGuideSheetRange,
   SupportGuideStepStatus,
   SupportGuideSummary,
-  SupportGuideTool,
   SupportGuideUnknownHandling,
 } from "./api";
 import { displayFileTimestamp } from "@production-ready/ui";
 
 import { t, type I18nKey } from "./i18n";
 
-export const SUPPORT_GUIDE_TOOLS: readonly SupportGuideTool[] = [
-  "rag_search",
-  "rag_read_source",
-  "rag_retrieve_evidence",
-  "nl2sql_query",
-];
 export const SUPPORT_GUIDE_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 /** 1 つの資料の頁の範囲・1 つの手順の参照の上限（backend の MAX_REFERENCE_PAGE_RANGES / MAX_STEP_REFERENCES）。 */
@@ -80,7 +73,6 @@ export type StepForm = {
   dependsOn: string[];
   retrievalHints: string;
   evidenceRequirements: string;
-  allowedTools: string[];
   doneWhen: string;
   /** この手順が参照する資料と頁（#2395）。 */
   references: ReferenceForm[];
@@ -218,7 +210,6 @@ export function guideFormFromContent(content: SupportGuideContent): GuideForm {
       dependsOn: [...step.depends_on],
       retrievalHints: joinLines(step.retrieval_hints),
       evidenceRequirements: joinLines(step.evidence_requirements),
-      allowedTools: [...step.allowed_tools],
       doneWhen: step.done_when,
       references: (step.references ?? []).map(referenceFormFromContent),
     })),
@@ -283,12 +274,6 @@ export function guideContentFromForm(form: GuideForm): SupportGuideContent {
       depends_on: [...new Set(step.dependsOn)],
       retrieval_hints: splitLines(step.retrievalHints),
       evidence_requirements: splitLines(step.evidenceRequirements),
-      allowed_tools: SUPPORT_GUIDE_TOOLS.filter((tool) => step.allowedTools.includes(tool)).concat(
-        // 許可の一覧に無い道具（取り込んだ内容など）は落とさず送り、検証で知らせる。
-        step.allowedTools.filter(
-          (tool) => !(SUPPORT_GUIDE_TOOLS as readonly string[]).includes(tool),
-        ) as SupportGuideTool[],
-      ),
       done_when: step.doneWhen.trim(),
       references: step.references.map(referenceContentFromForm),
     })),
@@ -471,7 +456,6 @@ export function newStepRow(form: GuideForm): StepForm {
     dependsOn: [],
     retrievalHints: "",
     evidenceRequirements: "",
-    allowedTools: ["rag_search"],
     doneWhen: "",
     references: [],
   };
@@ -764,7 +748,6 @@ const FIELD_LABEL: Record<string, I18nKey> = {
   "steps.depends_on": "supportGuides.field.dependsOn",
   "steps.retrieval_hints": "supportGuides.field.retrievalHints",
   "steps.evidence_requirements": "supportGuides.field.evidenceRequirements",
-  "steps.allowed_tools": "supportGuides.field.allowedTools",
   "steps.done_when": "supportGuides.field.doneWhen",
   "steps.references": "supportGuides.field.stepReferences",
   "steps.references.document_id": "supportGuides.field.documentId",

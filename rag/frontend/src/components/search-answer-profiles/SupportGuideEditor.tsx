@@ -89,7 +89,6 @@ import {
   renameStepId,
   splitLines,
   SUPPORT_GUIDE_STATE_VARIANT,
-  SUPPORT_GUIDE_TOOLS,
   supportGuideState,
   type BranchForm,
   type CompletionForm,
@@ -859,30 +858,6 @@ function SupportGuideForm({
                   disabled={archived || busy}
                   onValueChange={(value) => updateRow("steps", index, { dependsOn: value })}
                 />
-                <Fieldset
-                  legend={t("supportGuides.field.allowedTools")}
-                  helper={t("supportGuides.field.allowedToolsHelp")}
-                >
-                  <div className="grid grid-cols-1 gap-1.5">
-                    {SUPPORT_GUIDE_TOOLS.map((tool) => (
-                      <label key={tool} className="flex cursor-pointer items-center gap-2 text-sm text-fg">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-border accent-accent-emphasis"
-                          checked={row.allowedTools.includes(tool)}
-                          onChange={(event) =>
-                            updateRow("steps", index, {
-                              allowedTools: event.target.checked
-                                ? [...row.allowedTools, tool]
-                                : row.allowedTools.filter((item) => item !== tool),
-                            })
-                          }
-                        />
-                        {t(`supportGuides.tool.${tool}` as I18nKey)}
-                      </label>
-                    ))}
-                  </div>
-                </Fieldset>
                 <TextareaField
                   id={domId(path("retrieval_hints"))}
                   className="col-span-full"

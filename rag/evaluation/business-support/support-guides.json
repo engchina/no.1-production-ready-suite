@@ -35,7 +35,6 @@
           "purpose": "個別の利用者に権限を付与する。",
           "retrieval_hints": ["個別の利用者に付与する場合", "利用者の詳細画面 権限タブ"],
           "evidence_requirements": ["個別の利用者に付与する場合の操作"],
-          "allowed_tools": ["rag_search", "rag_read_source", "rag_retrieve_evidence"],
           "done_when": "利用者の詳細画面で権限を付与した。"
         },
         {
@@ -44,7 +43,6 @@
           "purpose": "グループに付与した権限はグループの全員に付き、影響範囲が広い。",
           "retrieval_hints": ["グループに付与する場合 部門長の承認"],
           "evidence_requirements": ["グループへの付与の前に部門長の承認を得ること"],
-          "allowed_tools": ["rag_search", "rag_read_source", "rag_retrieve_evidence"],
           "done_when": "部門長の承認を得た。"
         },
         {
@@ -54,7 +52,6 @@
           "depends_on": ["group-approval"],
           "retrieval_hints": ["グループの詳細画面 権限タブ"],
           "evidence_requirements": ["グループに付与する場合の操作"],
-          "allowed_tools": ["rag_search", "rag_read_source", "rag_retrieve_evidence"],
           "done_when": "グループの詳細画面で権限を付与した。"
         },
         {
@@ -63,7 +60,6 @@
           "purpose": "付与した権限が反映されたことを確かめる。",
           "retrieval_hints": ["権限が反映されない場合 15 分"],
           "evidence_requirements": ["反映に最大 15 分かかること"],
-          "allowed_tools": ["rag_search", "rag_read_source", "rag_retrieve_evidence"],
           "done_when": "付与した権限が使えることを確かめた。"
         }
       ],
@@ -139,7 +135,6 @@
           "purpose": "承認の無い削除は行わない。",
           "retrieval_hints": ["アカウントの削除 部門長の承認"],
           "evidence_requirements": ["削除の前に部門長の承認を得ること"],
-          "allowed_tools": ["rag_search", "rag_read_source", "rag_retrieve_evidence"],
           "done_when": "部門長の承認を得た。"
         },
         {
@@ -149,7 +144,6 @@
           "depends_on": ["approval"],
           "retrieval_hints": ["削除したアカウント 30 日後 復元できません"],
           "evidence_requirements": ["削除したアカウントは 30 日後に完全に消去され、復元できないこと"],
-          "allowed_tools": ["rag_search", "rag_read_source", "rag_retrieve_evidence"],
           "done_when": "アカウントを削除した。"
         }
       ],

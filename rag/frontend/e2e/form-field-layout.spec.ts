@@ -560,7 +560,6 @@ function supportGuideContent() {
         depends_on: [],
         retrieval_hints: [],
         evidence_requirements: [],
-        allowed_tools: ["rag_search"],
         done_when: "",
       },
     ],
