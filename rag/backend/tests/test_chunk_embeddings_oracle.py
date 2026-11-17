@@ -33,8 +33,14 @@ async def _count(client: OracleClient, sql: str, binds: dict[str, object]) -> in
     return int(str(next(iter(row.values()))))
 
 
-async def _events(client: OracleClient) -> int:
-    return await _count(client, "SELECT COUNT(*) AS n FROM rag_native_index_events", {})
+async def _event_ids(client: OracleClient) -> set[str]:
+    rows = await client._fetch_all("SELECT event_id FROM rag_native_index_events", {})
+    return {str(row["event_id"]) for row in rows}
+
+
+async def _new_events(client: OracleClient, before: set[str]) -> set[str]:
+    """``before`` の後に足された整理の要求。表は共有なので、全体の件数では比べない。"""
+    return await _event_ids(client) - before
 
 
 async def _embedded(client: OracleClient, chunk_set_id: str) -> int:
@@ -46,7 +52,9 @@ async def _embedded(client: OracleClient, chunk_set_id: str) -> int:
     )
 
 
-@pytest.mark.usefixtures("oracle_db")
+# 別の worker の開始の整理(``ensure_schema``)は整理の要求を消すので、テストの間は待たせる(#5300)。
+# ``oracle_db`` は実 Oracle の CI がこのファイルを選ぶ目印でもあるので明示する。
+@pytest.mark.usefixtures("oracle_db", "oracle_schema_locked")
 async def test_embedding_table_keeps_hybrid_payload_and_maintenance_requests_in_sync() -> None:
     client = OracleClient()
     detail = await client.create_document(
@@ -81,14 +89,14 @@ async def test_embedding_table_keeps_hybrid_payload_and_maintenance_requests_in_
         )
         for view_index, view in enumerate(views)
     ]
-    before = await _events(client)
+    before = await _event_ids(client)
     await client.update_chunk_set_embeddings(
         chunk_set_id=chunk_set_id, chunks=saved, embeddings=[_EMBEDDING, _EMBEDDING]
     )
     assert await _embedded(client, chunk_set_id) == 2
     payloads = await _payloads(client, chunk_set_id)
     assert [len(payload["embedding"]) for payload in payloads] == [1536, 1536]
-    assert await _events(client) == before
+    assert not await _new_events(client, before)
 
     # 埋め込みのある行の書き換え: 整理を要求する。
     await client.update_chunk_set_embeddings(
@@ -96,22 +104,22 @@ async def test_embedding_table_keeps_hybrid_payload_and_maintenance_requests_in_
         chunks=saved,
         embeddings=[[0.2] * 1536, [0.2] * 1536],
     )
-    assert await _events(client) > before
+    assert await _new_events(client, before)
     assert (await _payloads(client, chunk_set_id))[0]["embedding"][0] == pytest.approx(0.2)
 
     # 再 index の前の初期化: 別表の行を消し、JSON を本文だけに戻す。
-    before = await _events(client)
+    before = await _event_ids(client)
     await client.reset_document_index_outputs(document_id, status=FileStatus.CHUNKED)
     assert await _embedded(client, chunk_set_id) == 0
     assert all("embedding" not in payload for payload in await _payloads(client, chunk_set_id))
-    assert await _events(client) > before
+    assert await _new_events(client, before)
 
     # 埋め込みのある chunk の行の削除は別表の行も消す(cascade)。
     await client.save_index(
         document_id, extraction, chunks, [_EMBEDDING, _EMBEDDING], chunk_set_id=chunk_set_id
     )
     assert await _embedded(client, chunk_set_id) == 2
-    before = await _events(client)
+    before = await _event_ids(client)
     await client.save_chunk_preview(document_id, extraction, chunks, chunk_set_id=chunk_set_id)
     assert await _embedded(client, chunk_set_id) == 0
-    assert await _events(client) > before
+    assert await _new_events(client, before)
