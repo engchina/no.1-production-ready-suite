@@ -15,7 +15,7 @@ LLM に渡す文（製品の LLM への指示、組み込みのスキル `skills
 - **システムの内部を説明しない。** 何をして何を返すかを書き、内部の仕組み（キャッシュ・モデルの呼び出しの回数・強制の方法・結果に付く印の作り方）は書かない。
 - **数値・名前は正本から差し込む**（定数・設定・ツールの定義。文に手で写さない）。
 - **決まった形は型とテンプレートで渡す**（構造化出力・JSON schema・出力の雛形）。誤りやすい判断にだけ短い例を 1 つ付ける。
-- **応答 schema の項目の説明（`Field(description=...)`）は、モデルによっては読まれない**（Responses API の `text.format` の形の制約にだけ使われる。#5230）。3 製品の Enterprise AI の adapter（RAG・NL2SQL・Agent の SDK の要求）が `pr_backend_core.response_schema` で項目の説明を指示の最後の Step にして全モデルに送り、schema からは外す。項目の意味（値の定義を含む）は schema の説明に 1 回だけ書き、指示の Step で繰り返さない。型の説明（model の docstring）はモデルに渡らない。function tool の引数の説明はツールの定義として読まれるので、この処理の対象ではない（#5238）。
+- **応答 schema の項目の説明（`Field(description=...)`）は、モデルによっては読まれない**（Responses API の `text.format` の形の制約にだけ使われる。#5230）。3 製品の Enterprise AI の adapter（RAG・NL2SQL・Agent の SDK の要求）が `pr_backend_core.response_schema` で項目の説明を指示の最後の Step にして全モデルに送り、schema からは外す。項目の意味（値の定義を含む）は schema の説明に 1 回だけ書き、指示の Step で繰り返さない。ただし、値の区別そのものが判断の基準になる項目（判定の印など）は、定義と区別を判断の Step に書き、schema の説明には書かない（#5302）。型の説明（model の docstring）はモデルに渡らない。function tool の引数の説明はツールの定義として読まれるので、この処理の対象ではない（#5238）。
 - **読み手を分ける。** 外部の Agent に配るスキル（`skills/`）は MCP が実際に返すフィールドだけを使い、組み込み Runtime だけが結果に足すもの（`next_step` など）は「組み込みの Agent では」と分かる 1 か所にまとめる（契約は `agent/backend/tests/test_skill_md_spec.py`）。
 - **節の価値は、外した版と比べて確かめる**（ablation・記録の replay。実モデルの評価は 1 回 5 問）。短くすることを目的にせず、条件・様相（必ず / してよい / しない）・否定・例外を落とさない。変えたら、最初のターンに渡す字数（token）の前後を PR に書く。
 - **モデルの力を前提にする。** 既定のモデルは frontier のモデルより弱い。意味の判断の規則・例・出力の雛形・中核の制約は残し、構造化出力・ツールの結果の次の手・差し戻しと再試行・Runtime が決定的に行う手順を優先する。

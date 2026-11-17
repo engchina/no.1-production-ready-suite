@@ -35,13 +35,8 @@ class JudgedClaim(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     answer_ids: list[str] = Field(description="この主張を述べた本文の段落の id（A1 など）。")
-    verdict: ClaimVerdict = Field(
-        description=(
-            "supported は標準回答の文と意味が合う。contradicted は標準回答の文と同時には成り立たない。"
-            "not_in_standard は標準回答がこの主張の点に触れていない"
-            "（例: 標準回答が答えを示し、本文が「その答えは資料で確認できない」とする主張）。"
-        )
-    )
+    # 印の定義と区別は照らし方の判断の基準なので、指示の Step 3 にだけ書く（schema の説明に重ねない。#5302）。
+    verdict: ClaimVerdict
     standard_ids: list[str] = Field(
         description="supported・contradicted のとき、照らした標準回答の文の id（S1 など）。not_in_standard は空。"
     )
@@ -72,12 +67,18 @@ CORRECTNESS_PROMPT = (
     "本文の段落から、質問の対象について述べた主張（結論・数値・対象・条件・否定・例外・手順）を一つずつ取り出し、"
     "述べた段落の id を付ける。見出し・出典・定型の案内は主張にしない。\n"
     "\n## Step 3: 主張を標準回答と照らす\n"
-    "各主張に印を付ける。言い換えは意味で照らし、表示の形式は問わない。\n"
+    "各主張に次のどれか 1 つの印を付ける。言い換えは意味で照らし、表示の形式は問わない。\n"
+    "- supported: 主張と標準回答の文が同じ事実・結論を述べる。標準回答がその点を資料では確定できない・"
+    "原文に記載が無いと述べ、主張も同じ点を確定できないと述べるときも supported。\n"
+    "- contradicted: 主張と標準回答の文が述べる事実が、同時には真になれない（結論・数値・対象・条件・否定・例外が食い違う）。\n"
+    "- not_in_standard: 標準回答がこの主張の点に触れていない。主張がその点を資料では確認できない・確定できないと"
+    "述べ、標準回答がその点の答えや進め方を示すときも not_in_standard（確認できないという主張は、"
+    "標準回答と食い違う事実を述べていない）。\n"
     "\n## Step 4: 要点の網羅を確かめる\n"
     "points の各要点について、本文がその内容を述べたかを返す。\n"
 )
 # 判定の指示・入力・出力の契約の版。
-RUBRIC_VERSION = 33
+RUBRIC_VERSION = 34
 
 
 class InvalidJudgeReference(ValueError):

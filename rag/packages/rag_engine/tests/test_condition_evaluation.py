@@ -17,9 +17,10 @@ from rag_engine.evaluation.answer_eval import (
 )
 
 PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
-# 合成の匿名の対照（正しい部分回答・資料不足の明示・事実の矛盾・標準回答が方向性だけ・答えの無い回答）。
-# judge_inputs は判定へ実際に渡した入力、recorded_output は xai.grok-4.7（推論の量 medium）・rubric_version 33 の
-# 実呼び出しの出力（#5262）。
+# 合成の匿名の対照（正しい部分回答・資料不足の明示・事実の矛盾・標準回答が方向性だけ・答えの無い回答、
+# 資料不足の留保と標準回答の提案の方向・標準回答も確定できない・留保を含む事実の矛盾）。
+# judge_inputs は判定へ実際に渡した入力、recorded_output は xai.grok-4.7（推論の量 medium）・rubric_version 34 の
+# 実呼び出しの出力（#5262・#5302）。
 CASES = json.loads((Path(__file__).with_name("fixtures") / "correctness_judge_cases.json").read_text())
 
 
@@ -141,8 +142,10 @@ def test_output_pointing_outside_the_input_is_an_evaluation_error(claims, points
     assert "answer_correctness" not in result
 
 
-def test_prompt_steps_and_value_definitions_live_in_one_layer_each():
-    """手順は指示の Step に、印の値の定義は応答 schema の説明に 1 回だけ書く（指示で繰り返さない）。"""
+def test_verdict_definitions_live_only_in_the_comparison_step():
+    """印の定義と区別は照らし方の判断の基準なので、指示の Step 3 にだけ書く（応答 schema の説明に重ねない）。"""
+    from pr_backend_core.response_schema import with_schema_field_guide
+
     assert [line for line in CORRECTNESS_PROMPT.splitlines() if line.startswith("## Step")] == [
         "## Step 1: 評価の入力を読む",
         "## Step 2: 本文を主張に分ける",
@@ -151,8 +154,32 @@ def test_prompt_steps_and_value_definitions_live_in_one_layer_each():
     ]
     verdicts = get_args(ClaimVerdict)
     assert verdicts == ("supported", "contradicted", "not_in_standard")
-    described = AnswerCorrectnessOutput.model_json_schema()["$defs"]["JudgedClaim"]["properties"]["verdict"]["description"]
-    assert all(verdict in described for verdict in verdicts)
-    assert not any(verdict in CORRECTNESS_PROMPT for verdict in verdicts)
+    step3 = CORRECTNESS_PROMPT.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
+    definitions = {line.split(":", 1)[0].removeprefix("- "): line for line in step3.splitlines() if line.startswith("- ")}
+    assert tuple(definitions) == verdicts
+    # 矛盾は事実が同時には真になれないときだけ。資料で確認できないという主張は、標準回答が答えを示しても
+    # 記載なし、標準回答も確定できないと述べるなら合う。
+    assert "同時には真になれない" in definitions["contradicted"]
+    assert "確認できない" in definitions["not_in_standard"] and "答えや進め方を示す" in definitions["not_in_standard"]
+    assert "確定できない" in definitions["supported"]
+    schema = AnswerCorrectnessOutput.model_json_schema()
+    assert "description" not in schema["$defs"]["JudgedClaim"]["properties"]["verdict"]
+    # 実際に送る指示（項目の説明の Step を足した文）でも、定義は 1 回だけ。
+    guided, _stripped = with_schema_field_guide(CORRECTNESS_PROMPT, schema)
+    assert all(guided.count(f"- {verdict}:") == 1 for verdict in verdicts)
+    assert "`claims[].verdict`" not in guided
     # 点・理由はコードが作るので、出力に点・理由の項目は無い。
     assert set(AnswerCorrectnessOutput.model_fields) == {"claims", "points"}
+
+
+def test_reservation_only_answer_scores_zero_without_calling_it_a_contradiction():
+    """本文がすべて留保（標準回答と合う主張が無い）なら 0。理由は矛盾ではなく、合う主張が無いこと。"""
+    inputs = judge_inputs(_payload(answer_text="項目Aと項目Bは資料で確認できず、確定できません。"))
+    output = _output(
+        [{"answer_ids": ["A1"], "verdict": "not_in_standard", "standard_ids": []}],
+        [{"point_id": "P1", "covered": False}, {"point_id": "P2", "covered": False}],
+    )
+    scores = score_judgement(inputs, output)
+    assert scores["answer_correctness"] == 0.0
+    assert scores["correctness_reason"] == "標準回答と合う主張がありません（質問に答えていません）。"
+    assert "食い違う" not in scores["correctness_reason"]

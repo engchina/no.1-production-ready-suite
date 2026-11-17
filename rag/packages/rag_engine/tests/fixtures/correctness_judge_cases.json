@@ -94,6 +94,13 @@
         },
         {
           "answer_ids": [
+            "A2"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
             "A4"
           ],
           "verdict": "supported",
@@ -270,8 +277,21 @@
         },
         {
           "answer_ids": [
-            "A7",
+            "A7"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
             "A8"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A10"
           ],
           "verdict": "not_in_standard",
           "standard_ids": []
@@ -406,7 +426,8 @@
         },
         {
           "answer_ids": [
-            "A3"
+            "A3",
+            "A9"
           ],
           "verdict": "not_in_standard",
           "standard_ids": []
@@ -414,13 +435,6 @@
         {
           "answer_ids": [
             "A6"
-          ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
-        },
-        {
-          "answer_ids": [
-            "A9"
           ],
           "verdict": "not_in_standard",
           "standard_ids": []
@@ -441,12 +455,12 @@
         },
         {
           "point_id": "P4",
-          "covered": false
+          "covered": true
         }
       ]
     },
     "expected_correctness": 1.0,
-    "recorded_coverage": 0.25,
+    "recorded_coverage": 0.5,
     "recorded_reason": "標準回答と矛盾する主張はありません。"
   },
   {
@@ -550,6 +564,13 @@
           ],
           "verdict": "not_in_standard",
           "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A7"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
         }
       ],
       "points": [
@@ -567,12 +588,12 @@
         },
         {
           "point_id": "P4",
-          "covered": true
+          "covered": false
         }
       ]
     },
     "expected_correctness": 1.0,
-    "recorded_coverage": 0.5,
+    "recorded_coverage": 0.25,
     "recorded_reason": "標準回答と矛盾する主張はありません。"
   },
   {
@@ -629,8 +650,7 @@
       "claims": [
         {
           "answer_ids": [
-            "A1",
-            "A4"
+            "A1"
           ],
           "verdict": "supported",
           "standard_ids": [
@@ -644,6 +664,15 @@
           "verdict": "supported",
           "standard_ids": [
             "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A4"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
           ]
         }
       ],
@@ -933,6 +962,20 @@
           ],
           "verdict": "not_in_standard",
           "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A3"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A4"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
         }
       ],
       "points": [
@@ -1059,8 +1102,10 @@
           "answer_ids": [
             "A3"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "verdict": "contradicted",
+          "standard_ids": [
+            "S2"
+          ]
         },
         {
           "answer_ids": [
@@ -1096,7 +1141,7 @@
     },
     "expected_correctness": 0.0,
     "recorded_coverage": 0.2,
-    "recorded_reason": "回答の「- E1はディスクの容量不足で起こります。」と標準回答の「エラーE1は接続先の証明書の期限切れが原因。」が食い違う。"
+    "recorded_reason": "回答の「- E1はディスクの容量不足で起こります。」と標準回答の「エラーE1は接続先の証明書の期限切れが原因。」が食い違う。\n回答の「不要なファイルを消してください。」と標準回答の「ログの詳細レベルをDEBUGにして接続の記録を確かめ、証明書を更新する。」が食い違う。"
   },
   {
     "id": "b_partial_with_contradiction",
@@ -1374,6 +1419,13 @@
         },
         {
           "answer_ids": [
+            "A2"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
             "A4"
           ],
           "verdict": "not_in_standard",
@@ -1394,5 +1446,321 @@
     "expected_correctness": 0.0,
     "recorded_coverage": 0.0,
     "recorded_reason": "回答の「- 停止時間を短くするため、すべての機器へ一度に適用します。」と標準回答の「基本の方針は、まず影響範囲を確認し、そのうえで一部の機器から段階的に適用すること。」が食い違う。"
+  },
+  {
+    "id": "r_reservation_with_supported",
+    "question": "処理Pで警告W3が続けて出ます。共通の解決策はありますか。",
+    "standard_answer": "警告W3が出たときは、まず稼働の記録で発生の時刻を確かめる。そのうえで、利用者から受け取った設定の資料に基づいて、環境に合わせた対処を個別に提案する。",
+    "answer_points": [
+      "稼働の記録で発生の時刻を確かめる",
+      "設定の資料に基づく個別の提案"
+    ],
+    "answer_text": "警告W3が出たら、まず稼働の記録で発生の時刻を確かめてください。\n\n原因と対処を記した本文が資料に含まれていないため、共通の解決策としては確定できません。",
+    "judge_inputs": {
+      "question": "処理Pで警告W3が続けて出ます。共通の解決策はありますか。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "警告W3が出たときは、まず稼働の記録で発生の時刻を確かめる。"
+        },
+        {
+          "id": "S2",
+          "text": "そのうえで、利用者から受け取った設定の資料に基づいて、環境に合わせた対処を個別に提案する。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "稼働の記録で発生の時刻を確かめる"
+        },
+        {
+          "id": "P2",
+          "text": "設定の資料に基づく個別の提案"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "処理Pで警告W3が続けて出ます。共通の解決策はありますか。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "警告W3が出たら、まず稼働の記録で発生の時刻を確かめてください。"
+            },
+            {
+              "id": "A2",
+              "text": "原因と対処を記した本文が資料に含まれていないため、共通の解決策としては確定できません。"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 0.5,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "r_cannot_propose_vs_proposal",
+    "question": "処理Pで警告W3が続けて出ます。どう対処すればよいですか。",
+    "standard_answer": "警告W3には、個別の資料に基づいた対処の提案を行う。まず稼働の記録を確かめる。",
+    "answer_points": [
+      "個別の資料に基づく提案",
+      "稼働の記録の確認"
+    ],
+    "answer_text": "警告W3は処理Pの実行中に出ると資料に記されています。\n\n原因・対処の本文が資料に無く、共通の解決策として確定できないため、具体的な対処は提案できません。",
+    "judge_inputs": {
+      "question": "処理Pで警告W3が続けて出ます。どう対処すればよいですか。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "警告W3には、個別の資料に基づいた対処の提案を行う。"
+        },
+        {
+          "id": "S2",
+          "text": "まず稼働の記録を確かめる。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "個別の資料に基づく提案"
+        },
+        {
+          "id": "P2",
+          "text": "稼働の記録の確認"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "処理Pで警告W3が続けて出ます。どう対処すればよいですか。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "警告W3は処理Pの実行中に出ると資料に記されています。"
+            },
+            {
+              "id": "A2",
+              "text": "原因・対処の本文が資料に無く、共通の解決策として確定できないため、具体的な対処は提案できません。"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 0.0,
+    "recorded_reason": "標準回答と合う主張がありません（質問に答えていません）。"
+  },
+  {
+    "id": "r_reservation_matches_standard",
+    "question": "設定Qの上限値はいくつですか。",
+    "standard_answer": "資料には設定Qの上限値の記載がなく、上限値は確定できない。",
+    "answer_points": [],
+    "answer_text": "資料では設定Qの上限値を確認できず、上限値は確定できません。",
+    "judge_inputs": {
+      "question": "設定Qの上限値はいくつですか。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "資料には設定Qの上限値の記載がなく、上限値は確定できない。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "資料には設定Qの上限値の記載がなく、上限値は確定できない。"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "設定Qの上限値はいくつですか。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "資料では設定Qの上限値を確認できず、上限値は確定できません。"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "supported",
+          "standard_ids": [
+            "S1"
+          ]
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 1.0,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
+  },
+  {
+    "id": "r_conflicting_facts",
+    "question": "設定Qの上限値と、変更できる条件を教えてください。",
+    "standard_answer": "設定Qの上限値は200。変更できるのは保守モードのときだけ。",
+    "answer_points": [
+      "上限値",
+      "変更できる条件"
+    ],
+    "answer_text": "設定Qの上限値は500です。\n\n変更は通常の稼働中でもできます。\n\n上限を超えたときの動作は資料では確認できませんでした。",
+    "judge_inputs": {
+      "question": "設定Qの上限値と、変更できる条件を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "設定Qの上限値は200。"
+        },
+        {
+          "id": "S2",
+          "text": "変更できるのは保守モードのときだけ。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "上限値"
+        },
+        {
+          "id": "P2",
+          "text": "変更できる条件"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "設定Qの上限値と、変更できる条件を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "設定Qの上限値は500です。"
+            },
+            {
+              "id": "A2",
+              "text": "変更は通常の稼働中でもできます。"
+            },
+            {
+              "id": "A3",
+              "text": "上限を超えたときの動作は資料では確認できませんでした。"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "answer_ids": [
+            "A1"
+          ],
+          "verdict": "contradicted",
+          "standard_ids": [
+            "S1"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A2"
+          ],
+          "verdict": "contradicted",
+          "standard_ids": [
+            "S2"
+          ]
+        },
+        {
+          "answer_ids": [
+            "A3"
+          ],
+          "verdict": "not_in_standard",
+          "standard_ids": []
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        },
+        {
+          "point_id": "P2",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 1.0,
+    "recorded_reason": "回答の「設定Qの上限値は500です。」と標準回答の「設定Qの上限値は200。」が食い違う。\n回答の「変更は通常の稼働中でもできます。」と標準回答の「変更できるのは保守モードのときだけ。」が食い違う。"
   }
 ]
