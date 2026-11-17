@@ -372,8 +372,10 @@ OUTLINE_LEAD_CHARS_MAX = 200
 
 
 def _outline_lead_chars_default() -> int:
-    """import 時に固定せず、現在の設定から省略時の値を得る（#5345）。"""
-    return get_settings().rag_outline_lead_chars
+    """import 時に固定せず、現在の設定から省略時の値を得る（#5345。top_k の既定と同じ）。"""
+    from app import config
+
+    return config.get_settings().rag_outline_lead_chars
 
 
 def _outline_lead_chars_default_schema(schema: dict[str, Any]) -> None:

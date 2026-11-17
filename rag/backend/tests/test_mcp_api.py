@@ -2545,8 +2545,10 @@ def test_compact_outline_lead_chars_default_reads_the_setting(
     headers = _token(user.user_uuid)
     schema = mcp_tools.OutlineInput.model_json_schema()["properties"]["lead_chars"]
     assert (schema["default"], schema["minimum"], schema["maximum"]) == (60, 0, 200)
-    configured = mcp_tools.get_settings().model_copy(update={"rag_outline_lead_chars": 3})
-    monkeypatch.setattr(mcp_tools, "get_settings", lambda: configured)
+    from app import config
+
+    configured = config.get_settings().model_copy(update={"rag_outline_lead_chars": 3})
+    monkeypatch.setattr(config, "get_settings", lambda: configured)
 
     body = _call("rag_outline", {"document_id": "d1", "format": "compact"}, headers)[
         "structuredContent"
