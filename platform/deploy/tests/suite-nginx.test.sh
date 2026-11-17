@@ -41,12 +41,18 @@ assert_not_contains() {
   esac
 }
 
-free_port() {
-  python3 - <<'PY'
+# 互いに異なる空きの port を n 個（1 行に空白区切り）。1 つずつ取ると、閉じた直後の port が次にも
+# 返り、同じ port が 2 つの用途に当たることがある（#5371）。n 個を同時に bind して重ならないようにする。
+free_ports() {
+  python3 - "$1" <<'PY'
 import socket
-with socket.socket() as sock:
+import sys
+socks = [socket.socket() for _ in range(int(sys.argv[1]))]
+for sock in socks:
     sock.bind(('127.0.0.1', 0))
-    print(sock.getsockname()[1])
+print(' '.join(str(sock.getsockname()[1]) for sock in socks))
+for sock in socks:
+    sock.close()
 PY
 }
 
@@ -230,9 +236,7 @@ ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 PY
 
 export SUITE_RAG_BACKEND_PORT SUITE_NL2SQL_BACKEND_PORT SUITE_AGENT_BACKEND_PORT
-SUITE_RAG_BACKEND_PORT="$(free_port)"
-SUITE_NL2SQL_BACKEND_PORT="$(free_port)"
-SUITE_AGENT_BACKEND_PORT="$(free_port)"
+read -r SUITE_RAG_BACKEND_PORT SUITE_NL2SQL_BACKEND_PORT SUITE_AGENT_BACKEND_PORT < <(free_ports 3)
 python3 "${task_dir}/backend.py" rag "${SUITE_RAG_BACKEND_PORT}" &
 backend_pids+=("$!")
 python3 "${task_dir}/backend.py" nl2sql "${SUITE_NL2SQL_BACKEND_PORT}" &
@@ -258,8 +262,7 @@ suite_tls_ensure "${task_dir}/ssl" "" 127.0.0.1 false 2>/dev/null
 run_case() {
   local https_enabled="$1"
   local http_port https_port
-  http_port="$(free_port)"
-  https_port="$(free_port)"
+  read -r http_port https_port < <(free_ports 2)
   export SUITE_LISTEN_ADDRESS=127.0.0.1
   export SUITE_NGINX_LOG_DIR="${task_dir}/logs-${https_enabled}"
   mkdir -p "${SUITE_NGINX_LOG_DIR}"
