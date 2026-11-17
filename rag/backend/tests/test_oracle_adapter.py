@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from array import array
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -12,16 +13,18 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pr_backend_core.oracle_session import init_oracle_session
+from pr_backend_core.oracle_session import SESSION_INIT_SQL
 
 import app.clients.oracle as oracle_module
 from app.clients.oracle import (
+    RAG_SESSION_SERIAL_DML_SQL,
     DocumentDeleteBlockedByRunningIngestionError,
     IngestionJobFence,
     OracleClient,
     OracleWalletPasswordRequiredError,
     _datetime_value,
     _test_oracle_connection_sync,
+    init_rag_oracle_session,
     oracle_chunk_embedding_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
@@ -659,8 +662,55 @@ def test_oracle_pool_initializes_instant_client_when_configured(
     assert client.connection_pool() is pool
     assert calls[0] == ("init", str(tmp_path / "instantclient_23_26"))
     assert calls[1] == ("create_pool", "ragdb_high")
-    # 新しい接続ごとに result cache を無効にする（ADB の内部エラーを避ける。#333）。
-    assert calls[2] == ("session_callback", init_oracle_session)
+    # 新しい接続ごとに result cache と並列 DML を無効にする（#333・#5314）。
+    assert calls[2] == ("session_callback", init_rag_oracle_session)
+
+
+class _SessionCursor:
+    """接続の初期化の SQL を記録する。"""
+
+    def __init__(self, executed: list[str]) -> None:
+        self.executed = executed
+
+    def __enter__(self) -> "_SessionCursor":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def execute(self, statement: str, binds: Mapping[str, object] | None = None) -> None:
+        self.executed.append(statement)
+
+
+def test_rag_session_init_disables_parallel_dml_once_at_connect() -> None:
+    """接続を作るときに共通の初期化に続けて並列 DML を無効にする（#5314）。
+
+    並列 DML の有無は transaction の中では変えられない（ORA-12841）ため、transaction の前後で
+    切り替えず、pool の接続を作るときに 1 回だけ設定する。並列の問い合わせは変えない。
+    """
+    executed: list[str] = []
+    connection = SimpleNamespace(cursor=lambda: _SessionCursor(executed))
+
+    init_rag_oracle_session(connection, requested_tag=None)
+
+    assert executed == [SESSION_INIT_SQL, "ALTER SESSION DISABLE PARALLEL DML"]
+    assert RAG_SESSION_SERIAL_DML_SQL == "ALTER SESSION DISABLE PARALLEL DML"
+
+
+def test_rag_backend_never_turns_parallel_dml_back_on() -> None:
+    """pool の接続の並列 DML を途中で有効に戻す SQL を RAG の backend に書かない（#5314）。
+
+    接続の初期化で無効にした状態は pool に返した後も残るため、どこかで有効に戻すと、次にその接続を
+    借りた削除の transaction が並列 DML（ORA-12860 の条件）で動く。
+    """
+    app_root = Path(oracle_module.__file__).resolve().parents[1]
+    forbidden = re.compile(r"(ENABLE|FORCE)\s+PARALLEL\s+DML|ENABLE_PARALLEL_DML", re.IGNORECASE)
+    offenders = [
+        str(path.relative_to(app_root))
+        for path in sorted(app_root.rglob("*.py"))
+        if forbidden.search(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == []
 
 
 def test_oracle_connection_uses_database_password_as_wallet_password(
