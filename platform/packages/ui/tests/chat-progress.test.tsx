@@ -56,16 +56,19 @@ describe("formatChatProgressDuration", () => {
 });
 
 describe("ChatProgress", () => {
-  it("独立した進度カードで、軌跡と処理詳細を工程の後ろへ集める", () => {
+  it("独立した進度カードで、軌跡を調べるを工程の上の右に、処理詳細を工程の後ろに置く", () => {
     render(<ChatProgress steps={runningSteps} active traceId="synthetic-trace" testId="p" />);
     const card = q("p")!;
     expect(card.hasAttribute("data-run-progress-card")).toBe(true);
+    const list = card.querySelector("[data-run-timeline] ol")!;
+    const explore = Array.from(card.querySelectorAll("button")).find(button => button.textContent?.includes("軌跡を調べる"))!;
+    expect(explore.parentElement!.className).toContain("justify-end");
+    expect(explore.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const footer = card.querySelector("[data-run-timeline-footer]")!;
-    expect(footer).not.toBeNull();
-    expect(footer.textContent).toContain("軌跡を調べる");
+    expect(footer.textContent).not.toContain("軌跡を調べる");
     expect(footer.textContent).toContain("処理の詳細");
-    expect(card.querySelector("[data-run-timeline] ol")!.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    act(() => Array.from(card.querySelectorAll("button")).find(button => button.textContent?.includes("軌跡を調べる"))!.click());
+    expect(list.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    act(() => explore.click());
     expect(card.querySelector("[data-trace-explorer]")).not.toBeNull();
     expect(card.querySelector("[data-run-process-details]")).not.toBeNull();
   });

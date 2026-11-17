@@ -10,6 +10,7 @@ import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
 import nativeOnlyRrfDetails from "./fixtures/native-only-rrf-trace.json";
 import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
+import { progressCardLayout } from "../../../platform/packages/ui/e2e/progress-card-checks";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
@@ -1880,6 +1881,42 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("LLM 4 回");
   await confirmTraceExplorer(page, testInfo, expect, true);
+});
+
+
+test("「軌跡を調べる」と「経過に戻る」を右上にそろえ、呼び出しの一覧と「さらに表示」の間を空ける（#5360）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1);
+  await mockRuns(page, [row]);
+  await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
+    { key: "root", spec: ragSpan.root(), at: [0, 7] },
+    ...Array.from({ length: 62 }, (_, index) => ({ key: `step-${index}`, spec: ragSpan.step(`合成の工程 ${index + 1}`, "root"), at: [index * 0.1, (index + 1) * 0.1] as [number, number] })),
+  ]) });
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const card = page.getByTestId("run-history-timeline");
+  await expect.poll(() => progressCardLayout(card)).toMatchObject({ explorerTopRight: true, detailsAfterSteps: true });
+  const open = card.getByRole("button", { name: "軌跡を調べる", exact: true });
+  const openBox = (await open.boundingBox())!;
+  await card.screenshot({ path: testInfo.outputPath("timeline-explore-top-right.png") });
+  await open.click();
+  const explorer = card.locator("[data-trace-explorer]");
+  await page.screenshot({ path: testInfo.outputPath("trace-explorer-back-top-right.png") });
+  const backBox = (await explorer.getByRole("button", { name: "経過に戻る", exact: true }).boundingBox())!;
+  // 開く・戻るの操作は同じ右上の位置（押した後にボタンを探し直さない）。
+  expect(Math.abs(openBox.x + openBox.width - (backBox.x + backBox.width))).toBeLessThanOrEqual(1);
+  const loaded = explorer.getByText(/^50 \/ \d+ 件を表示$/);
+  await expect(loaded).toBeVisible();
+  const listBox = (await explorer.locator("[data-trace-list-scroll]").boundingBox())!;
+  const loadedBox = (await loaded.boundingBox())!;
+  const moreBox = (await explorer.getByRole("button", { name: "さらに表示", exact: true }).boundingBox())!;
+  // 一覧の枠と件数・「さらに表示」の行の間は共有の間隔（gap-2。0.5rem）。
+  const gap = await explorer.locator("[data-trace-list-scroll]").evaluate(node => parseFloat(getComputedStyle(node.parentElement!).rowGap));
+  expect(gap).toBeGreaterThan(0);
+  expect(Math.min(loadedBox.y, moreBox.y) - (listBox.y + listBox.height)).toBeGreaterThanOrEqual(gap - 0.5);
+  await explorer.locator("[data-trace-list-scroll]").evaluate(node => node.scrollTo({ top: node.scrollHeight }));
+  await explorer.getByRole("button", { name: "さらに表示", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("trace-explorer-load-more-gap.png") });
 });
 
 

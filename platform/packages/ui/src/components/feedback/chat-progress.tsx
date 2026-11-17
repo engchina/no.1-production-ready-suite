@@ -315,7 +315,6 @@ function StepList({
   return (
     <RunTimeline
       loadCallBody={loadCallBody}
-      explorerPlacement="footer"
       footer={footer}
       steps={steps.map(chatProgressTimelineStep)}
       showSummary={false}
