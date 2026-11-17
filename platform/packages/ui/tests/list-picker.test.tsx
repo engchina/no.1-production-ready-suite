@@ -157,13 +157,13 @@ describe("ListPicker", () => {
     expect(option("doc-0001")!.querySelector("[data-list-picker-reason]")).toBeNull();
   });
 
-  it("fill は一覧の高さを行数で決めず、置かれた領域を埋める（#5279）", () => {
+  it("fill は一覧の高さを行数で決めず、残りの高さまで候補の分だけ伸ばす（#5279）", () => {
     render(<Harness items={makeItems(3)} fill />);
     const section = host.querySelector<HTMLElement>('[data-testid="picker"]')!;
     expect(section.className.split(/\s+/)).toEqual(expect.arrayContaining(["flex", "flex-1", "flex-col", "min-h-0"]));
     const viewport = host.querySelector<HTMLElement>('[data-testid="picker-scroll-region"]')!;
     const classes = viewport.className.split(/\s+/);
-    expect(classes).toEqual(expect.arrayContaining(["flex-1", "overflow-auto"]));
+    expect(classes).toEqual(expect.arrayContaining(["shrink", "overflow-auto"]));
     expect(classes.some((name) => name.startsWith("max-h-") || name.startsWith("md:max-h-"))).toBe(false);
   });
 

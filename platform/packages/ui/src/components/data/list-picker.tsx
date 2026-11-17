@@ -188,7 +188,8 @@ export interface ListPickerProps {
   /** 一覧の高さを 5 / 8 行に固定する（並べた 2 つの一覧の高さをそろえるとき）。既定は候補の数に合わせて 5 / 8 行まで。 */
   fixedHeight?: boolean;
   /**
-   * 置かれた縦の領域を埋める（#5279。一覧から選んで追加するシートの中）。一覧の高さを行数で決めず、残りの高さを一覧に使う。
+   * 置かれた縦の領域を埋める（#5279。一覧から選んで追加するシートの中）。一覧の高さを行数で決めず、候補の分の高さで
+   * 残りの高さまで伸ばし、超えたら中をスクロールする。
    * 親は flex の縦並びで、高さが決まっていること。
    */
   fill?: boolean;
@@ -226,8 +227,10 @@ const OVERSCAN_ROWS = 6;
 const VIRTUALIZE_ABOVE_ROWS = 100;
 const ITEM_ROW_CLASS = "h-[3.5rem]";
 const FIXED_VIEWPORT_CLASS = "h-[17.5rem] overflow-auto md:h-[28rem]";
-/** 領域を埋める一覧（`fill`）。低い画面でも 3 行は見せ、足りなければ外側（シートの本文）がスクロールする。 */
-const FILL_VIEWPORT_CLASS = "min-h-[10.5rem] flex-1 overflow-auto";
+/**
+ * 領域を埋める一覧（`fill`）。高さは候補の分（少なければ短く、空の枠を残さない）で、残りの高さを超えたら縮めて中をスクロールする。
+ */
+const FILL_VIEWPORT_CLASS = "min-h-[3.5rem] shrink overflow-auto";
 
 function rootFontSize() {
   if (typeof window === "undefined") return 14;
