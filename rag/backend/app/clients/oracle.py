@@ -412,7 +412,7 @@ class StoredMessage:
     # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
     # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
-    # 利用者が選んだ承認済み FAQ の回答をそのまま返した回答か（ASSISTANT の回答だけ。回答の記録の
+    # 利用者が選んだ登録済みQ&Aの回答をそのまま返した回答か（ASSISTANT の回答だけ。回答の記録の
     # 診断の ``answer_source`` が ``approved_faq``。#5107）。
     approved_faq_answer: bool = False
 

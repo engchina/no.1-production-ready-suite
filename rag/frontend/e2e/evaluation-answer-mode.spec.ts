@@ -83,7 +83,7 @@ for (const viewport of [
       const search = group.getByRole("radio", { name: "RAG 検索" });
       // 既定はチャット。各選択肢に 1 行の説明（ラジオの説明として読み上げる）。
       await expect(chat).toBeChecked();
-      await expect(chat).toHaveAccessibleDescription(/業務ガイド・承認済み FAQ・根拠の拡張/);
+      await expect(chat).toHaveAccessibleDescription(/登録済みQ&A・業務ガイド・根拠の拡張/);
       await expect(search).toHaveAccessibleDescription(/拡張を使わず/);
 
       // 回答のモデルの真上（間にほかの欄を挟まない）。

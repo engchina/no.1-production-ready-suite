@@ -593,9 +593,9 @@ rerank・関連度の下限・Top-N・起点の選択の後に同じ規則で最
    sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.text_search_index_cli normalize
    ```
 
-## 既存環境の更新手順（#5107 承認済み FAQ を質問と回答だけにする）
+## 既存環境の更新手順（#5107 登録済みQ&Aを質問と回答だけにする）
 
-承認済み FAQ（登録済みQ&A）の項目を質問と回答だけにし、当てはめない質問・対象のナレッジベース・引用した文書の状態・
+登録済みQ&Aの項目を質問と回答だけにし、当てはめない質問・対象のナレッジベース・引用した文書の状態・
 承認の記録と、一致度が高いときに回答を自動で返す設定を削除した。「回答の前に関連するQ&Aを提示する」がオンのプロファイルは、
 一致度が下限以上の Q&A を候補に出し、利用者が選んだ Q&A の回答をそのまま返す（LLM と検索を呼ばない）。選んだ Q&A を
 LLM に渡して回答を作る経路と、その指示（`faq_answer.system`）も削除した。
@@ -615,7 +615,7 @@ LLM に渡して回答を作る経路と、その指示（`faq_answer.system`）
    `RAG_APPROVED_FAQ_NEGATIVE_MIN_SCORE`・`RAG_APPROVED_FAQ_DIRECT_ANSWER_MIN_SCORE` は読まない（消してよい）。
    候補の一致度の下限は `RAG_APPROVED_FAQ_MIN_SCORE`（既定 `0.92`。0.90〜0.99）、最大件数は
    `RAG_APPROVED_FAQ_MAX_SUGGESTIONS`（既定 `3`）に書く。
-3. MCP の登録済みの Q&A の候補と、選んだ Q&A の回答は `rag_search` と `rag_retrieve_evidence` が返す
+3. MCP の登録済みQ&Aの候補と、選んだ Q&A の回答は `rag_search` と `rag_retrieve_evidence` が返す
    （#5134 で専用のツール `rag_approved_faq` を削除して `rag_search` に統合し、#5136 で
    `rag_retrieve_evidence` にも入れた。MCP の出力の版は 46）。
 
@@ -650,7 +650,7 @@ LLM に渡して回答を作る経路と、その指示（`faq_answer.system`）
 質問から抽出項目の条件を LLM で読み取る段と、検索・回答プロファイルの登録ルール（回答前の確認・回答への差し込み）を
 削除した。絞り込みは利用者が画面・API・MCP で明示した条件（`filters.extraction_fields`）だけで行い、回答の規則は
 回答プロンプトの「役割と回答の書き方」（`generation.role`）に書く（[回答の規則](./confirmation-answer-rules.md)）。
-用語・同義語（`RAG_RUNTIME_TERMS_*`）・業務ガイドの条件の確認・承認済み FAQ の回答は変えない。
+用語・同義語（`RAG_RUNTIME_TERMS_*`）・業務ガイドの条件の確認・登録済みQ&Aの回答は変えない。
 
 1. **データを削除する migration `20261110_4799_search_answer_profile_runtime_rules` を含むので、承認（CLI の
    `--allow-destructive`・画面の確認ダイアログ）が要る**（上の「既存環境の更新手順の共通の注意」）。
@@ -1737,7 +1737,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 4. 注意:
    - 会話と回答履歴の持ち主は、ログインしたユーザー（`user_uuid`）になる。旧方式で作った会話（持ち主は共通の `admin-user-id`）は、新しいユーザーからは見えない（移行はしない）。
    - 保存済みの回答（`rag_answer_records`）は #304 から持ち主（`user_id_hash`）で分ける。システムテーブルの初期化（migration `20260928_002_answer_record_owner`）で列を足し、既存の行はチャットの回答・検索の監査から利用者が 1 人に決まるものだけ持ち主を補う。補えなかった行は SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者だけが一覧・詳細・評価・削除できる（不要なら管理者が削除する。保存期間を設定していれば、その経過でも消える）。
-   - 利用者フィードバック（`rag_citation_feedback`）は #408 から送った利用者（`user_id_hash`）で分ける。一覧・件数・集計・詳細（評価ケースの作成・承認済み FAQ への反映を含む）は、SYSTEM_ADMIN（構成管理者・local の利用者を含む）だけがすべての利用者の分を扱い、ほかのロールは自分が送った分だけを扱う（`rag.feedback.manage` を持っていても同じ。NL2SQL の実行履歴と同じ規則）。他人のフィードバックの ID を指定すると 403 になる。列は以前から保存しているので schema の変更はない。送信者の記録がない古い行は SYSTEM_ADMIN だけに見える。
+   - 利用者フィードバック（`rag_citation_feedback`）は #408 から送った利用者（`user_id_hash`）で分ける。一覧・件数・集計・詳細（評価ケースの作成・登録済みQ&Aへの反映を含む）は、SYSTEM_ADMIN（構成管理者・local の利用者を含む）だけがすべての利用者の分を扱い、ほかのロールは自分が送った分だけを扱う（`rag.feedback.manage` を持っていても同じ。NL2SQL の実行履歴と同じ規則）。他人のフィードバックの ID を指定すると 403 になる。列は以前から保存しているので schema の変更はない。送信者の記録がない古い行は SYSTEM_ADMIN だけに見える。
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す（その後 #1565 で 3 製品共通の `pr_session` / `pr_csrf` になった。[terraform/README.md](../../terraform/README.md)「ログインのセッションの共有（#1565）」）。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `PLATFORM_AUTH_MODE=authenticated` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 

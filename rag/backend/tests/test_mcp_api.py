@@ -1171,7 +1171,7 @@ def test_retrieve_evidence_skips_answer_generation(
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
 
     async def no_faq_candidates(_arguments: Any) -> list[Any]:
-        # 承認済み FAQ の候補の照会（#5136）は DB を読むので、候補なしにする。
+        # 登録済みQ&Aの候補の照会（#5136）は DB を読むので、候補なしにする。
         return []
 
     monkeypatch.setattr(mcp_tools, "_approved_faq_suggestions", no_faq_candidates)
@@ -1484,7 +1484,7 @@ def test_original_question_guardrail_blocks_mcp_before_engine(
     monkeypatch.setattr(search_route, "_run_search_with_timeout", run_pipeline)
 
     async def no_faq_candidates(_arguments: Any) -> list[Any]:
-        # 承認済み FAQ の候補の照会（#5134）は DB を読むので、候補なしにする。
+        # 登録済みQ&Aの候補の照会（#5134）は DB を読むので、候補なしにする。
         return []
 
     monkeypatch.setattr(mcp_tools, "_approved_faq_suggestions", no_faq_candidates)

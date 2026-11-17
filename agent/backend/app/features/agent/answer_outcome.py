@@ -22,9 +22,9 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 
-1. `approved_faq_candidates`: 最後の RAG の検索（`rag_search` / `rag_retrieve_evidence`）が承認済み
-   FAQ の候補だけを返した（利用者が選ぶ確認のカードになる。検索はしていないので、失敗・根拠不足
-   ではない。#5134・#5136）→ needs_clarification
+1. `approved_faq_candidates`: 最後の RAG の検索（`rag_search` / `rag_retrieve_evidence`）が
+   登録済みQ&Aの候補だけを返した（利用者が選ぶ確認のカードになる。検索はしていないので、
+   失敗・根拠不足ではない。#5134・#5136）→ needs_clarification
    `empty_answer`: 回答が空 → insufficient_evidence
 2. `nl2sql_clarification`: 最後の `nl2sql_query` が SQL の生成前の確認の項目を返した
    → needs_clarification
@@ -36,8 +36,8 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    answered でも下の「不足の印」があれば conditional にする。
 4. `guide_handoff`: `rag_search` に拠らず、最も新しい `rag_lookup_guides` の最上位の業務ガイドの
    判断が人への引き継ぎ（handoff）→ needs_human
-5. `answer_passages`（現場のデータの道具を使ったなら `environment_tools`、利用者が選んだ承認済み
-   FAQ を `rag_retrieve_evidence` で受け取ったなら `approved_faq`。#5136）: Agent が自分で組み立てた
+5. `answer_passages`（現場のデータの道具を使ったなら `environment_tools`、利用者が選んだ登録済みQ&A
+   を `rag_retrieve_evidence` で受け取ったなら `approved_faq`。#5136）: Agent が自分で組み立てた
    回答。不足の印があれば conditional、無ければ answered。
 
 不足の印（`signals`）: 業務ガイドの条件が分からないまま答えた印（`guide_conditions`。最後の
@@ -48,7 +48,7 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 記録だけのシグナル（対応の値を変えない。#3546）: RAG の根拠のツールが縮退した検索の結果を返した
 （`rag_degraded`。任意の補助の処理の縮退 `degraded_steps` か安全チェックの未完了
 `guardrail_degraded`。任意の能力の縮退は回答を続ける契約なので不足の印にしない）・RAG の検索が
-利用者の選んだ承認済み FAQ（登録済みの Q&A）を返した（`approved_faq`。根拠が登録済みの Q&A。
+利用者の選んだ登録済みQ&Aを返した（`approved_faq`。根拠が登録済みQ&A。
 #5136）。
 
 ここは決め方だけを持つ（呼び出しと保存は `builtin_runtime`）。
@@ -105,7 +105,7 @@ BASIS_RAG_SEARCH = "rag_search"
 BASIS_ENVIRONMENT_TOOLS = "environment_tools"
 BASIS_GUIDE_HANDOFF = "guide_handoff"
 BASIS_ANSWER_PASSAGES = "answer_passages"
-# 利用者が選んだ承認済み FAQ（登録済みの Q&A）を根拠にした回答（#5136）。
+# 利用者が選んだ登録済みQ&Aを根拠にした回答（#5136）。
 BASIS_APPROVED_FAQ = "approved_faq"
 
 SIGNAL_QUESTION = "question"
@@ -115,7 +115,7 @@ SIGNAL_GUIDE_CONDITIONS = "guide_conditions"
 SIGNAL_UNREAD_SECTIONS = "unread_sections"
 # RAG の根拠のツールが縮退した検索の結果を返した（不足の印にしない記録。#3546）。
 SIGNAL_RAG_DEGRADED = "rag_degraded"
-# RAG の検索が利用者の選んだ承認済み FAQ を返した（根拠が登録済みの Q&A。記録だけ。#5136）。
+# RAG の検索が利用者の選んだ登録済みQ&Aを返した（根拠が登録済みQ&A。記録だけ。#5136）。
 SIGNAL_APPROVED_FAQ = "approved_faq"
 # 回答が不足・条件を示している印（answered を conditional にする）。
 _GAP_SIGNALS = frozenset({SIGNAL_GUIDE_CONDITIONS, SIGNAL_UNREAD_SECTIONS})

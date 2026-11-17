@@ -1,4 +1,4 @@
-"""RAG の承認済み FAQ の候補を、利用者が回答前の確認で選ぶ（#5134・#5136）。
+"""RAG の登録済みQ&Aの候補を、利用者が回答前の確認で選ぶ（#5134・#5136）。
 
 `rag_search` / `rag_retrieve_evidence` が候補だけを返したら（`status=approved_faq_candidates`）、
 Agent は候補の質問と「どれでもない（通常どおり回答）」を確認のカードにする（モデルに選ばせない）。
@@ -246,7 +246,7 @@ def test_the_chosen_faq_is_sent_by_the_runtime_in_the_next_run(
     assert calls[1]["arguments"]["skip_approved_faq"] is True
     assert "approved_faq_id" not in calls[1]["arguments"]
     instructions = str(model.calls[0].system_instructions)
-    assert f"登録済みの Q&A「{CANDIDATES[1][1]}」を選びました" in instructions
+    assert f"登録済みQ&A「{CANDIDATES[1][1]}」を選びました" in instructions
     assert "faq-2" not in instructions
     assert second.confirmations == []
     state = run_support_task(second)
@@ -508,7 +508,7 @@ def test_retrieve_chosen_faq_answer_reaches_the_model_as_a_tool_result(
     assert calls[0]["arguments"]["search_answer_profile_id"] == PROFILE
     assert calls[1]["arguments"]["skip_approved_faq"] is True
     instructions = str(model.calls[0].system_instructions)
-    assert f"登録済みの Q&A「{CANDIDATES[1][1]}」を選びました" in instructions
+    assert f"登録済みQ&A「{CANDIDATES[1][1]}」を選びました" in instructions
     assert "rag_retrieve_evidence を呼び" in instructions
     # 選んだ Q&A の回答は、ツールの結果としてモデルに渡る（回答はモデルが書く）。
     result = _tool_output(model, 1, "call-2")
@@ -522,14 +522,14 @@ def test_retrieve_chosen_faq_answer_reaches_the_model_as_a_tool_result(
     assert isinstance(answer.content, dict)
     assert "モデルが書いた回答" in str(answer.content)
     assert second.confirmations == []
-    # 根拠が登録済みの Q&A だったことが、回答の対応と回答の根拠に残る。
+    # 根拠が登録済みQ&Aだったことが、回答の対応と回答の根拠に残る。
     recorded = _outcome(second)
     assert (recorded["value"], recorded["basis"]) == ("answered", "approved_faq")
     assert "approved_faq" in recorded["signals"]
     items = answer_evidence(second.steps, "モデルが書いた回答")["items"]
     faq_items = [item for item in items if item.get("approved_faq_id") == "faq-2"]
     assert len(faq_items) == 1
-    assert faq_items[0]["file_name"] == "登録済みの Q&A"
+    assert faq_items[0]["file_name"] == "登録済みQ&A"
     assert faq_items[0]["excerpt"] == FAQ_ANSWER
     assert faq_items[0]["section_title"] == CANDIDATES[1][1]
     assert faq_items[0]["cited"] is True

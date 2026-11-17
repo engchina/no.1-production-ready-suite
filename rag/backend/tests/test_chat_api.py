@@ -627,7 +627,7 @@ class _FakePipeline:
     # 作られた pipeline の回答のモデル(回答フローへ渡す列のモデル。#593)。
     answer_model_ids: list[object] = []
 
-    # 作られた pipeline に渡した、利用者が選んだ承認済み FAQ(入口で引き直した値。#5107)。
+    # 作られた pipeline に渡した、利用者が選んだ登録済みQ&A(入口で引き直した値。#5107)。
     approved_faqs: list[object] = []
     # 作られた pipeline に渡した確認の条件と、検索の絞り込み(#717)。
     scopes: list[object] = []
@@ -734,7 +734,7 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
         "/api/chat/conversations/conv-x/messages/stream", json={"content": "経費の上限は?"}
     )
     assert resp.status_code == 200
-    # RAG チャットは業務ガイド・承認済み FAQ・根拠の拡張を含む経路（#5332）。
+    # RAG チャットは登録済みQ&A・業務ガイド・根拠の拡張を含む経路（#5332）。
     assert _FakePipeline.resolve_flows == ["expanded"]
     assert "expanded" in _FakePipeline.flows
     assert resp.headers["content-type"].startswith("text/event-stream")

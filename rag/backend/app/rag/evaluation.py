@@ -309,7 +309,7 @@ class EvaluationAnswerRoute:
         return RagPipeline(settings=settings, flow=self.flow)
 
 
-# 回答の方法 → 経路。chat は RAG チャットと同じ経路（業務ガイドの照合・承認済み FAQ・
+# 回答の方法 → 経路。chat は RAG チャットと同じ経路（登録済みQ&A・業務ガイドの照合・
 # 根拠の拡張あり）、search は画面の RAG 検索と同じ基本の RAG（#5332）。
 EVALUATION_ANSWER_ROUTES: Mapping[EvaluationAnswerMode, EvaluationAnswerRoute] = {
     "chat": EvaluationAnswerRoute(mode="chat", flow=EXPANDED_FLOW, conversational=True),

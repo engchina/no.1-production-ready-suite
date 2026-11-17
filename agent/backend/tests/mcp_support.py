@@ -50,7 +50,7 @@ class _RagScopeIn(_ContractInput):
     include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
-    # 承認済み FAQ（rag_search は #5134、rag_retrieve_evidence は #5136）: 利用者が選んだ Q&A の id
+    # 登録済みQ&A（rag_search は #5134、rag_retrieve_evidence は #5136）: 利用者が選んだ Q&A の id
     # と、候補を返さずに検索する指定。
     approved_faq_id: str | None = Field(default=None, max_length=200)
     skip_approved_faq: bool = False
@@ -375,7 +375,7 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
 
 
 def rag_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str, Any]:
-    """`rag_search` が承認済み FAQ の候補だけを返した出力（#5134。契約の形の合成の値）。
+    """`rag_search` が登録済みQ&Aの候補だけを返した出力（#5134。契約の形の合成の値）。
 
     `candidates` は（id, 質問, 一致度）。検索・回答はしていないので answer は空、outcome は null。
     """
@@ -403,7 +403,7 @@ def rag_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str
 
 
 def rag_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str, Any]:
-    """`rag_search` が選んだ承認済み FAQ の登録済みの回答をそのまま返した出力（#5134）。"""
+    """`rag_search` が選んだ登録済みQ&Aの登録済みの回答をそのまま返した出力（#5134）。"""
     output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_search"])
     output.update(
         status="completed",
@@ -419,7 +419,7 @@ def rag_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str
 
 
 def rag_evidence_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str, Any]:
-    """`rag_retrieve_evidence` が承認済み FAQ の候補だけを返した出力（#5136。契約の形の合成の値）。
+    """`rag_retrieve_evidence` が登録済みQ&Aの候補だけを返した出力（#5136。契約の形の合成の値）。
 
     `candidates` は（id, 質問, 一致度）。根拠は検索していないので evidence は空。
     """
@@ -441,7 +441,7 @@ def rag_evidence_approved_faq_candidates(*candidates: tuple[str, str, float]) ->
 
 
 def rag_evidence_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str, Any]:
-    """`rag_retrieve_evidence` が選んだ承認済み FAQ の登録済みの回答を返した出力（#5136）。"""
+    """`rag_retrieve_evidence` が選んだ登録済みQ&Aの登録済みの回答を返した出力（#5136）。"""
     output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_retrieve_evidence"])
     output.update(
         status="completed",

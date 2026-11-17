@@ -1644,7 +1644,7 @@ class _ToolRecorder:
         # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
         # 答える」に変える。
         self.confirmation: ConfirmationBudget | None = None
-        # 承認済み FAQ の確認への利用者の選択（#5134。`confirmation.approved_faq_choice`）。この Run
+        # 登録済みQ&Aの確認への利用者の選択（#5134。`confirmation.approved_faq_choice`）。この Run
         # の `rag_search` に実行環境が付ける。
         self.approved_faq_choice: dict[str, Any] | None = None
         # モデルに渡したツール（名前 → 定義・handler・モデルに見せた schema。#2630）。
@@ -1729,7 +1729,7 @@ class _ToolRecorder:
     def _approved_faq_arguments(
         self, name: str, definition: ToolDefinition | None, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """RAG の検索（`rag_search` / `rag_retrieve_evidence`）に承認済み FAQ の引数を付ける
+        """RAG の検索（`rag_search` / `rag_retrieve_evidence`）に登録済みQ&Aの引数を付ける
         （#5134・#5136。モデルに見せない引数）。
 
         - 利用者が確認で Q&A を選んだ Run: その Run の最初の、候補を返したツール（同じ接続の同じ
@@ -2024,7 +2024,7 @@ class _ToolRecorder:
                         "profile_id": resolved["id"],
                     },
                 )
-        # 承認済み FAQ の選択（#5134）は、データの範囲で確かめる前に付ける（選んだ Q&A の検索・
+        # 登録済みQ&Aの選択（#5134）は、データの範囲で確かめる前に付ける（選んだ Q&A の検索・
         # 回答プロファイルも範囲で確かめる）。
         call_arguments = self._approved_faq_arguments(name, definition, call_arguments)
         # データの範囲（#1378）: プロファイルを埋める・上書きする・範囲外を拒否する。MCP 接続の
@@ -2126,7 +2126,7 @@ class _ToolRecorder:
                 result.success
                 and base == RAG_RETRIEVE_EVIDENCE
                 and isinstance(result.output or {}, dict)
-                # 承認済み FAQ の候補・選んだ Q&A（#5136）は業務ガイドを照合しない（RAG の FAQ の
+                # 登録済みQ&Aの候補・選んだ Q&A（#5136）は業務ガイドを照合しない（RAG の FAQ の
                 # 経路も業務ガイドを通さない）。
                 and not is_approved_faq_candidates(result.output)
                 and chosen_approved_faq(result.output) is None
@@ -2171,7 +2171,7 @@ class _ToolRecorder:
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and is_approved_faq_candidates(output):
-                # 承認済み FAQ の候補（#5136）: rag_search と同じく確認のカードを待たせる。
+                # 登録済みQ&Aの候補（#5136）: rag_search と同じく確認のカードを待たせる。
                 next_step = self._without_asking(approved_faq_choice_step())
                 output = {**output, "next_step": next_step}
             if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
@@ -2892,7 +2892,7 @@ def build_function_tools(
     渡し、呼び出しごとに中断するか（利用者の答えを待つか）を往復の残りで決める。
     `image_input` はモデルが画像の入力に対応するか（#2650。ツールの結果の画像を添付するか。
     対応しなければ `rag_read_source` の `include_image` もモデルに見せない。#5125）。
-    `approved_faq_choice` は承認済み FAQ の確認への利用者の選択（#5134。`rag_search` に実行環境が
+    `approved_faq_choice` は登録済みQ&Aの確認への利用者の選択（#5134。`rag_search` に実行環境が
     付ける）。
     """
     policy = _active_policy()
@@ -2958,7 +2958,7 @@ def build_function_tools(
         if not image_input:
             schema = image_input_schema(definition.name, schema)
         schema = search_limit_schema(definition.name, schema)
-        # 承認済み FAQ の選択の引数は実行環境が付ける（#5134。モデルに見せない）。
+        # 登録済みQ&Aの選択の引数は実行環境が付ける（#5134。モデルに見せない）。
         schema = approved_faq_schema(definition.name, schema)
         tool = FunctionTool(
             name=definition.name,
@@ -5594,7 +5594,7 @@ def _tool_confirmations(
 def _approved_faq_confirmation(
     budget: ConfirmationBudget, steps: Sequence[Any]
 ) -> ConfirmationRequest | None:
-    """この Run の最後の RAG の検索（`rag_search` / `rag_retrieve_evidence`）が返した承認済み FAQ
+    """この Run の最後の RAG の検索（`rag_search` / `rag_retrieve_evidence`）が返した登録済みQ&A
     の候補を、利用者が選ぶ確認にする（#5134・#5136）。
 
     利用者に確認できる Run だけ（確認しない Run は `skip_approved_faq` を付けるので、候補は

@@ -48,7 +48,7 @@ class DomainKeywordSuggestionData(BaseModel):
 
 
 class ApprovedFaqRecordData(BaseModel):
-    """承認済み FAQ 1 件(質問と回答。#5107)。"""
+    """登録済みQ&A 1 件(質問と回答。#5107)。"""
 
     id: str
     question: str

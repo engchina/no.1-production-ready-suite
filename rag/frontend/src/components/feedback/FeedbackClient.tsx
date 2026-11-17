@@ -644,7 +644,7 @@ function Metric({ label, value, detail, delta }: { label: string; value: string;
  * 結果は toast、失敗は操作の近くの FormStatus で知らせる。
  */
 function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
-  // 承認済み FAQ への反映は rag.feedback.manage を持つ利用者だけ（評価ケースの作成はフィードバックの閲覧権限で使える。#214）。
+  // 登録済みQ&Aへの反映は rag.feedback.manage を持つ利用者だけ（評価ケースの作成はフィードバックの閲覧権限で使える。#214）。
   const canPromoteFaq = useAuth().hasPermission(CAPABILITY_PERMISSIONS.feedbackManage);
   const promote = usePromoteFeedbackToApprovedFaq();
   const evaluationCase = useFeedbackEvaluationCase();

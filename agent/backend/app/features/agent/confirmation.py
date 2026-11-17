@@ -11,7 +11,7 @@
   確認事項を返した回答で完了し、利用者の答え（確認事項の ID・選んだ選択肢の ID・自由入力）を
   構造化して次の Run に渡す（NL2SQL は `nl2sql_query` の `answer`、RAG は `rag_search` の
   `conditions`）。
-- RAG の承認済み FAQ の候補（`rag_search` / `rag_retrieve_evidence` の
+- RAG の登録済みQ&Aの候補（`rag_search` / `rag_retrieve_evidence` の
   `status=approved_faq_candidates`。#5134・#5136）: 候補の質問を選択肢にし、「どれでもない（通常
   どおり回答）」を足した確認事項にする（モデルに選ばせない）。利用者の選択は次の Run でコードが
   候補を返したツールの `approved_faq_id` か `skip_approved_faq` にする（`approved_faq_choice`。
@@ -629,12 +629,12 @@ def nl2sql_context(pending: Mapping[str, Any]) -> JsonObject:
     }
 
 
-# ---- RAG の承認済み FAQ の候補（#5134） ----
+# ---- RAG の登録済みQ&Aの候補（#5134） ----
 
 APPROVED_FAQ_ITEM_ID = "approved_faq"
 APPROVED_FAQ_NONE_OPTION_ID = "approved_faq_none"
 APPROVED_FAQ_NONE_LABEL = "どれでもない（通常どおり回答）"
-APPROVED_FAQ_PROMPT = "質問に近い登録済みの Q&A があります。当てはまるものを選んでください。"
+APPROVED_FAQ_PROMPT = "質問に近い登録済みQ&Aがあります。当てはまるものを選んでください。"
 APPROVED_FAQ_REASON = "選んだ Q&A は、登録済みの回答をそのまま示します。"
 # 根拠の取得（rag_retrieve_evidence。#5136）の候補: 選んだ Q&A の回答は、資料の根拠と同じく
 # モデルが回答に使う（そのままは示さない）。名前は support_task.RAG_RETRIEVE_EVIDENCE と同じ
@@ -655,7 +655,7 @@ def approved_faq_request(
     round_: int,
     max_rounds: int,
 ) -> ConfirmationRequest | None:
-    """`rag_search` が返した承認済み FAQ の候補を、利用者が選ぶ確認にする（候補が無ければ None）。
+    """`rag_search` が返した登録済みQ&Aの候補を、利用者が選ぶ確認にする（候補が無ければ None）。
 
     選択肢は候補の質問（RAG が返した順・上限は `MAX_OPTIONS` から「どれでもない」の 1 つを除いた
     数）と「どれでもない（通常どおり回答）」。候補の id は選択肢の ID と対にして context に持つ。
@@ -721,7 +721,7 @@ def _approved_faq_context(response: Mapping[str, Any]) -> Mapping[str, Any] | No
 
 
 def approved_faq_choice(response: Mapping[str, Any] | None) -> JsonObject | None:
-    """承認済み FAQ の確認への利用者の選択（次の Run で RAG の検索に渡す引数。無ければ None）。
+    """登録済みQ&Aの確認への利用者の選択（次の Run で RAG の検索に渡す引数。無ければ None）。
 
     Q&A を選んだら `approved_faq_id`（と候補を返した検索・回答プロファイル）、「どれでもない」・
     自由入力だけの答え・スキップは `skip_approved_faq`。`tool` は候補を返したツール（`rag_search` /
@@ -749,7 +749,7 @@ def approved_faq_choice(response: Mapping[str, Any] | None) -> JsonObject | None
 
 
 def rag_conditions(response: Mapping[str, Any]) -> dict[str, str]:
-    """RAG の確認への答え（条件の id → 値）。スキップ・NL2SQL・承認済み FAQ の選択は空。"""
+    """RAG の確認への答え（条件の id → 値）。スキップ・NL2SQL・登録済みQ&Aの選択は空。"""
     if response.get("source") != SOURCE_RAG or response.get("action") != "answer":
         return {}
     if _approved_faq_context(response) is not None:
@@ -863,22 +863,22 @@ def response_instructions(response: Mapping[str, Any] | None) -> str:
 
 
 APPROVED_FAQ_CHOSEN_INSTRUCTION = (
-    "- 利用者は登録済みの Q&A「{label}」を選びました。前の質問のまま rag_search を呼び、"
+    "- 利用者は登録済みQ&A「{label}」を選びました。前の質問のまま rag_search を呼び、"
     "結果の answer（登録済みの回答）をそのまま利用者に示してください。"
 )
 APPROVED_FAQ_CHOSEN_EVIDENCE_INSTRUCTION = (
-    "- 利用者は登録済みの Q&A「{label}」を選びました。前の質問のまま rag_retrieve_evidence を"
-    "呼び、結果の approved_faq（登録済みの Q&A と回答）を資料の根拠と同じく使って答えてください。"
+    "- 利用者は登録済みQ&A「{label}」を選びました。前の質問のまま rag_retrieve_evidence を"
+    "呼び、結果の approved_faq（登録済みQ&Aと回答）を資料の根拠と同じく使って答えてください。"
 )
 APPROVED_FAQ_NONE_INSTRUCTION = (
-    "- 利用者は登録済みの Q&A のどれも選びませんでした。前の質問に、いつもどおり rag_search などで"
+    "- 利用者は登録済みQ&Aのどれも選びませんでした。前の質問に、いつもどおり rag_search などで"
     "調べて答えてください。"
 )
 APPROVED_FAQ_NOTE_INSTRUCTION = "- 利用者の補足:「{text}」"
 
 
 def _approved_faq_instructions(choice: Mapping[str, Any], entries: Sequence[Any]) -> list[str]:
-    """承認済み FAQ の確認の答えで作った Run の指示（引数はコードが付けるので書かない）。"""
+    """登録済みQ&Aの確認の答えで作った Run の指示（引数はコードが付けるので書かない）。"""
     entry = next(
         (
             item
