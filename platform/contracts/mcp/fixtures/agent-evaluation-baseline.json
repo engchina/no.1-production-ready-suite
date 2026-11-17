@@ -11,13 +11,13 @@
           {
             "status": "completed",
             "tool_call": {
-              "name": "rag__rag_retrieve_evidence",
+              "name": "rag__rag_chat",
               "arguments": {
                 "query": "項目 X 上限"
               }
             },
             "tool_result": {
-              "name": "rag_retrieve_evidence",
+              "name": "rag_chat",
               "success": true,
               "output": {
                 "evidence": [
@@ -128,7 +128,7 @@
         "sources_text_omitted": 0,
         "withheld_evidence_count": 0,
         "tools_used": [
-          "rag__rag_retrieve_evidence",
+          "rag__rag_chat",
           "rag__rag_read_source"
         ],
         "skipped_approval_tools": [],
@@ -157,7 +157,7 @@
           {
             "index": 0,
             "call_id": "run-answered-agent-outcome-0-step-0",
-            "name": "rag__rag_retrieve_evidence",
+            "name": "rag__rag_chat",
             "status": "completed",
             "error_code": null,
             "started_at": null,
@@ -318,11 +318,11 @@
           {
             "status": "completed",
             "tool_call": {
-              "name": "rag__rag_retrieve_evidence",
+              "name": "rag__rag_chat",
               "arguments": {}
             },
             "tool_result": {
-              "name": "rag_retrieve_evidence",
+              "name": "rag_chat",
               "success": true,
               "output": {
                 "evidence": [
@@ -413,7 +413,7 @@
         "sources_text_omitted": 0,
         "withheld_evidence_count": 0,
         "tools_used": [
-          "rag__rag_retrieve_evidence"
+          "rag__rag_chat"
         ],
         "skipped_approval_tools": [
           "ext__record_write"
@@ -443,7 +443,7 @@
           {
             "index": 0,
             "call_id": "run-approval-skipped-run-0-step-0",
-            "name": "rag__rag_retrieve_evidence",
+            "name": "rag__rag_chat",
             "status": "completed",
             "error_code": null,
             "started_at": null,
@@ -599,11 +599,11 @@
           {
             "status": "completed",
             "tool_call": {
-              "name": "rag__rag_retrieve_evidence",
+              "name": "rag__rag_chat",
               "arguments": {}
             },
             "tool_result": {
-              "name": "rag_retrieve_evidence",
+              "name": "rag_chat",
               "success": true,
               "output": {
                 "evidence": []
@@ -650,7 +650,7 @@
         "sources_text_omitted": 0,
         "withheld_evidence_count": 0,
         "tools_used": [
-          "rag__rag_retrieve_evidence"
+          "rag__rag_chat"
         ],
         "skipped_approval_tools": [],
         "pending_approvals": 0,
@@ -678,7 +678,7 @@
           {
             "index": 0,
             "call_id": "run-clarification-skips-retrieval-0-step-0",
-            "name": "rag__rag_retrieve_evidence",
+            "name": "rag__rag_chat",
             "status": "completed",
             "error_code": null,
             "started_at": null,
@@ -993,11 +993,11 @@
           {
             "status": "completed",
             "tool_call": {
-              "name": "rag__rag_retrieve_evidence",
+              "name": "rag__rag_chat",
               "arguments": {}
             },
             "tool_result": {
-              "name": "rag_retrieve_evidence",
+              "name": "rag_chat",
               "success": true,
               "output": {
                 "evidence": [
@@ -1068,7 +1068,7 @@
         "sources_text_omitted": 0,
         "withheld_evidence_count": 0,
         "tools_used": [
-          "rag__rag_retrieve_evidence"
+          "rag__rag_chat"
         ],
         "skipped_approval_tools": [],
         "pending_approvals": 0,
@@ -1096,7 +1096,7 @@
           {
             "index": 0,
             "call_id": "run-legacy-inferred-question-0-step-0",
-            "name": "rag__rag_retrieve_evidence",
+            "name": "rag__rag_chat",
             "status": "completed",
             "error_code": null,
             "started_at": null,
@@ -1756,11 +1756,11 @@
           {
             "status": "completed",
             "tool_call": {
-              "name": "rag__rag_retrieve_evidence",
+              "name": "rag__rag_chat",
               "arguments": {}
             },
             "tool_result": {
-              "name": "rag_retrieve_evidence",
+              "name": "rag_chat",
               "success": true,
               "output": {
                 "evidence": [
@@ -1838,7 +1838,7 @@
         "sources_text_omitted": 0,
         "withheld_evidence_count": 0,
         "tools_used": [
-          "rag__rag_retrieve_evidence"
+          "rag__rag_chat"
         ],
         "skipped_approval_tools": [],
         "pending_approvals": 0,
@@ -1866,7 +1866,7 @@
           {
             "index": 0,
             "call_id": "run-no-expectations-0-step-0",
-            "name": "rag__rag_retrieve_evidence",
+            "name": "rag__rag_chat",
             "status": "completed",
             "error_code": null,
             "started_at": null,

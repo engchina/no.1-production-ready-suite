@@ -121,7 +121,7 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 def test_stage_labels_cover_answer_stages() -> None:
     """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)・会話の添付からの根拠の
-    選択(#3475)・検索の要らない発話への応答(#4787)・選んだ承認済み FAQ の回答(#5107)と検索だけの
+    選択(#3475)・検索の要らない発話への応答(#4787)・選んだ登録済みQ&Aの回答(#5107)と検索だけの
     工程。
 
     旧 standard の工程は #595 で削除した。

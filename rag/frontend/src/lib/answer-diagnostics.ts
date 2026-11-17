@@ -80,7 +80,7 @@ export type AnswerDiagnostics = {
   /** 問い合わせ型（回答モデルが付けた質問の種類の語。#651）。 */
   questionType: string[];
   /**
-   * 利用者が選んだ登録済みQ&A の回答をそのまま返したときの Q&A（回答した時点の原文。#737・#5107）。
+   * 利用者が選んだ登録済みQ&Aの回答をそのまま返したときの Q&A（回答した時点の原文。#737・#5107）。
    * answer は変更前に保存した回答では空。Q&A の回答でなければ null。
    */
   approvedFaq: {
@@ -363,7 +363,7 @@ export function answerAttachedImages(diagnostics: unknown, savedMessage: unknown
 }
 
 /**
- * 利用者が選んだ登録済みQ&A の回答をそのまま返した回答か（#5107）。作成した直後の回答は配信の診断の
+ * 利用者が選んだ登録済みQ&Aの回答をそのまま返した回答か（#5107）。作成した直後の回答は配信の診断の
  * `answer_source`、保存した回答は会話のメッセージの `approved_faq_answer` から読む。
  */
 export function answerFromApprovedFaq(diagnostics: unknown, savedMessage: unknown): boolean {

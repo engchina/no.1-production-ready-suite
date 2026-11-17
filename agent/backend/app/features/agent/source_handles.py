@@ -13,7 +13,7 @@ REGISTRY_KEY = "_source_reference_handles"
 SOURCE_TOOLS = frozenset(
     {
         "rag_search",
-        "rag_retrieve_evidence",
+        "rag_chat",
         "rag_outline",
         "rag_read_document",
         "rag_read_section",
@@ -31,7 +31,7 @@ _FIELDS = {
     "parent_section_id": "section",
 }
 # 本文・自由入力を識別子として走査しない。
-_CONTENT = frozenset({"text", "excerpt", "answer", "parent_text", "profile_knowledge"})
+_CONTENT = frozenset({"text", "excerpt", "answer", "parent_text"})
 _SCHEMES = ("doc://", "chunk://", "section://")
 _HANDLE = re.compile(r"(?:doc|chunk|section)://[1-9][0-9]*\Z")
 _CITATION = re.compile(r"\[\[cite:([1-9][0-9]*)\]\]")

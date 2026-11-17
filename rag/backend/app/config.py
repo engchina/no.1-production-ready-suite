@@ -1471,7 +1471,7 @@ class Settings(
     )
     rag_approved_faq_semantic_enabled: bool = Field(
         default=True,
-        description=("承認済み FAQ の候補の照合に embedding の意味類似度を加える(既定 ON)。"),
+        description=("登録済みQ&Aの候補の照合に embedding の意味類似度を加える(既定 ON)。"),
     )
     rag_approved_faq_min_score: float = Field(
         default=0.92,
@@ -1479,7 +1479,7 @@ class Settings(
         le=0.99,
         description=(
             "「回答の前に関連するQ&Aを提示する」がオンの検索・回答プロファイルで、回答の前に出す"
-            "承認済み FAQ の候補の一致度の下限(0.90〜0.99。#5107)。下限未満の FAQ は出さない。"
+            "登録済みQ&Aの候補の一致度の下限(0.90〜0.99。#5107)。下限未満の FAQ は出さない。"
             "利用者が選んだ FAQ の回答はそのまま返す(LLM と検索を呼ばない)。"
         ),
     )
@@ -1487,7 +1487,7 @@ class Settings(
         default=3,
         ge=1,
         le=10,
-        description="回答の前に出す承認済み FAQ の候補の最大件数(#5107)。",
+        description="回答の前に出す登録済みQ&Aの候補の最大件数(#5107)。",
     )
     # 回答は rag_poc の根拠付き回答だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
@@ -1772,7 +1772,7 @@ class Settings(
     rag_approved_faq_selected: dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で、利用者が選んだ承認済み FAQ（id・question・answer。#5107）。入口で"
+            "リクエスト単位で、利用者が選んだ登録済みQ&A（id・question・answer。#5107）。入口で"
             "プロファイルの FAQ から引き直す。値があれば回答の工程は検索・回答の生成をせず、FAQ の"
             "回答をそのまま返す。"
         ),

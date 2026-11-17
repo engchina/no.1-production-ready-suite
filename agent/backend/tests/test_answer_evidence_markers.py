@@ -15,7 +15,7 @@ CHUNK_B = "synthetic-doc:0002"
 
 
 def retrieval_steps() -> list[RunStep]:
-    name = "rag__rag_retrieve_evidence"
+    name = "rag__rag_search"
     output: dict[str, Any] = {
         "evidence": [
             {

@@ -55,7 +55,7 @@
           "status": "completed",
           "outcome_source": "agent_answer",
           "tool_calls": {
-            "rag_retrieve_evidence": 1
+            "rag_chat": 1
           },
           "model_requests": 2
         }
@@ -73,7 +73,7 @@
           "outcome_source": "agent_answer",
           "model_requests": 2,
           "tool_calls": {
-            "rag_retrieve_evidence": 1
+            "rag_chat": 1
           },
           "superseded_searches": 0,
           "agent_version": null,

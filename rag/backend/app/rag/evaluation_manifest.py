@@ -120,7 +120,7 @@ async def build_run_manifest(
             "search_answer_profile_id": request.search_answer_profile_id,
             "compare_search_answer_profile_id": request.compare_search_answer_profile_id,
             "answer_model_id": request.answer_model_id,
-            # 回答の方法（#5340。chat は RAG Chat と同じ経路、search は基本の RAG）。
+            # 回答の方法（#5340。chat は RAG チャットと同じ経路、search は基本の RAG）。
             "answer_mode": request.answer_mode,
             "rag_overrides": (
                 request.rag_overrides.model_dump(mode="json", exclude_none=True)

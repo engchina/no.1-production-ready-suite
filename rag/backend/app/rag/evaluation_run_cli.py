@@ -75,7 +75,7 @@ REPLAY_PLACEHOLDER_KEY = "replay-without-key"  # nosec B105 - 秘密ではない
 REPLAY_PLACEHOLDER_ENDPOINT = "https://replay.invalid/v1"
 REPLAY_FAILED_EXIT_CODE = 2
 ABLATION_ANSWER_MODE_MESSAGE = (
-    "除去実験は RAG Chat の経路の工程を測るため、回答の方法が chat の評価だけを流せます"
+    "除去実験は RAG チャットの経路の工程を測るため、回答の方法が chat の評価だけを流せます"
     "（--answer-mode chat）。"
 )
 _SHOWN_VALUE_CHARS = 80
@@ -204,7 +204,7 @@ def _run(args: argparse.Namespace) -> int:
 def _ablate(args: argparse.Namespace) -> int:
     """full と工程を 1 つずつ無効にした構成を同じ条件で流し、差の表を出す（#2573）。
 
-    除く工程（根拠の拡張）は RAG Chat の経路だけが通るので、回答の方法が RAG 検索（#5340）の
+    除く工程（根拠の拡張）は RAG チャットの経路だけが通るので、回答の方法が RAG 検索（#5340）の
     評価は流さない。
     """
     request = EvaluationRunRequest.model_validate(

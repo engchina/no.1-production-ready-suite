@@ -1222,21 +1222,21 @@ def test_usage_is_retained_when_postcheck_fails_after_resume(
 
 BUSINESS_AGENT_ID = "test1303-business-agent"
 _BARE_RAG_TOOL = re.compile(
-    r"(?<![A-Za-z0-9_-])rag_(search|retrieve_evidence|lookup_guides|read_source"
+    r"(?<![A-Za-z0-9_-])rag_(search|chat|recommend_search_answer_profile"
     r"|list_search_answer_profiles)(?![A-Za-z0-9_-])"
 )
 
 
 @pytest.fixture
 def business_agent(monkeypatch: MonkeyPatch) -> Iterator[Any]:
-    """組み込みのスキル business-rag-research を持つ業務 Agent（fake の RAG の MCP）。"""
+    """組み込みのスキル rag-search-and-data を持つ業務 Agent（fake の RAG の MCP）。"""
     mcp = fake_product_mcp(monkeypatch)
     runtime_repository.create_agent(
         AgentProfile(
             id=BUSINESS_AGENT_ID,
             name="業務支援の Agent",
-            instructions="rag_retrieve_evidence と rag_lookup_guides には profile を必ず渡す。",
-            skill_ids=["business-rag-research"],
+            instructions="rag_search と nl2sql_query には profile を必ず渡す。",
+            skill_ids=["rag-search-and-data"],
         )
     )
     try:
@@ -1268,21 +1268,20 @@ def test_skill_instructions_name_the_tools_given_to_the_model(
 
     tools = {tool.name for tool in model.calls[0].tools}
     assert {
-        "rag__rag_retrieve_evidence",
-        "rag__rag_lookup_guides",
-        "rag__rag_read_source",
+        "rag__rag_search",
+        "rag__rag_recommend_search_answer_profile",
         "rag__rag_list_search_answer_profiles",
+        "nl2sql__nl2sql_query",
     } <= tools
     instructions = str(model.calls[0].system_instructions)
     # Skill の指示も業務の指示も、モデルが呼べる名前で書いてある（素の名前は残らない）。
     # Markdown の `code` の中の素の名前も書き直す（#1795）。
-    assert "`rag__rag_retrieve_evidence` で集め" in instructions
-    assert "rag__rag_retrieve_evidence と rag__rag_lookup_guides には profile" in instructions
-    assert "rag__rag_lookup_guides" in instructions
+    assert "→ `rag__rag_search`（" in instructions
+    assert "rag__rag_search と nl2sql__nl2sql_query には profile" in instructions
     assert _BARE_RAG_TOOL.search(instructions) is None, instructions
     # 定義の指示は素の名前のまま（Run のときだけ書き直す）。
-    skill = skill_registry.get("business-rag-research")
-    assert skill is not None and "`rag_retrieve_evidence` で集め" in skill.instructions
+    skill = skill_registry.get("rag-search-and-data")
+    assert skill is not None and "→ `rag_search`（" in skill.instructions
 
 
 def test_bare_tool_name_call_does_not_fail_the_run(
@@ -1291,12 +1290,8 @@ def test_bare_tool_name_call_does_not_fail_the_run(
     """モデルが素の名前でツールを呼んでも Run は落ちず、呼ぶ名前を返して呼び直させる（#1303）。"""
     model = _script(
         monkeypatch,
-        [function_call("rag_retrieve_evidence", {"query": "精算の期限"}, call_id="call-bare")],
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "精算の期限"}, call_id="call-prefixed"
-            )
-        ],
+        [function_call("rag_search", {"query": "精算の期限"}, call_id="call-bare")],
+        [function_call("rag__rag_search", {"query": "精算の期限"}, call_id="call-prefixed")],
         [assistant_message("精算の期限は翌月 10 日です。")],
     )
     run = runtime_repository.create_builtin_run(
@@ -1310,13 +1305,13 @@ def test_bare_tool_name_call_does_not_fail_the_run(
     assert finished.status == RunStatus.COMPLETED, finished.events[-1].message
     # 素の名前の呼び出しは実行せず、モデルへ呼ぶ名前を返した。
     hint = str(model.calls[1].input)
-    assert "ツール「rag_retrieve_evidence」はありません" in hint
-    assert "呼ぶときの名前は「rag__rag_retrieve_evidence」" in hint
+    assert "ツール「rag_search」はありません" in hint
+    assert "呼ぶときの名前は「rag__rag_search」" in hint
     # 呼び先へ届いたのは、モデルが呼び直した 1 回だけ（Control Plane は読み替えて実行しない）。
-    assert len(business_agent.calls_of("rag_retrieve_evidence")) == 1
+    assert len(business_agent.calls_of("rag_search")) == 1
     called = [step.tool_call.name for step in finished.steps if step.tool_call is not None]
-    assert called[0] == "rag__rag_retrieve_evidence"
-    assert "rag_retrieve_evidence" not in called
+    assert called[0] == "rag__rag_search"
+    assert "rag_search" not in called
 
 
 def test_ambiguous_bare_tool_name_is_not_rewritten_or_resolved() -> None:

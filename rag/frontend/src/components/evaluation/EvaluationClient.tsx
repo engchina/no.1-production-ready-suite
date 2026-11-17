@@ -259,7 +259,7 @@ export function EvaluationClient() {
   const selectedSet = useQuery({ queryKey: ["testset", savedTestsetId], queryFn: () => testsetApi.get(savedTestsetId!), enabled: Boolean(savedTestsetId && savedTestsetId !== "choose") });
   const preparedSet = useQuery({ queryKey: ["testset-prepared", savedTestsetId, selectedSet.data?.revision, profileId], queryFn: () => testsetApi.prepare(savedTestsetId!, selectedSet.data!.revision, profileId!), enabled: Boolean(savedTestsetId && selectedSet.data && profileId) });
   const [answerModelId, setAnswerModelId] = useWorkspaceState<string>("evaluation.answerModelId", "", (value): value is string => typeof value === "string");
-  // 回答の方法（#5340）。既定は RAG Chat と同じ経路（チャット）。
+  // 回答の方法（#5340）。既定は RAG チャットと同じ経路（チャット）。
   const [answerMode, setAnswerMode] = useWorkspaceState<EvaluationAnswerMode>("evaluation.answerMode", "chat", isAnswerMode);
   const models = useQuery({ queryKey: ["evaluation-models"], queryFn: api.listEvaluationModels, enabled: pageTab === "run" });
   const importStale =

@@ -22,7 +22,7 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   history_rewrite: "search.stage.historyRewrite",
   // 検索の要らない発話（挨拶・雑談）への応答（#4787）
   small_talk_reply: "search.stage.smallTalkReply",
-  // 利用者が選んだ登録済みQ&A の回答をそのまま返す（#5107）
+  // 利用者が選んだ登録済みQ&Aの回答をそのまま返す（#5107）
   approved_faq_answer: "search.stage.approvedFaqAnswer",
   // 会話の添付からの根拠の選択（#3475）
   attachment_evidence: "search.stage.attachmentEvidence",

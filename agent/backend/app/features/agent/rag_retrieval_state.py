@@ -1,6 +1,6 @@
 """RAG の根拠のツールの結果の、縮退・根拠 0 件の読み方（#3546。#3262 の残り）。
 
-RAG の MCP（`rag_search` / `rag_retrieve_evidence`）は、検索・回答の任意の補助の処理が失敗して
+RAG の MCP（`rag_search` / `rag_chat`）は、検索・回答の任意の補助の処理が失敗して
 縮退したこと（`degraded_steps`。処理の種類と回数）、安全チェックを完了できず止めたこと
 （`guardrail_degraded`）、根拠 0 件のときに 0 件になった段（`zero_evidence.stage`）を返す。
 組み込み Runtime はこれを次に使う（どれも RAG の結果を書き換えない。記録する step の結果は

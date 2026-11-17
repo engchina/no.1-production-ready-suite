@@ -382,7 +382,7 @@ def test_response_instructions_pass_structured_answers() -> None:
     }
     assert rag_conditions(rag) == {"screen": "受注入力"}
     text = response_instructions(rag)
-    assert '"screen": "受注入力"' in text and "rag_search の conditions" in text
+    assert '"screen": "受注入力"' in text and "確認を返したツールの conditions" in text
 
     entry = {
         "item_id": "item-period",

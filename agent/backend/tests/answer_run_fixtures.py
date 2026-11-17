@@ -34,18 +34,14 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
 
 
 def _mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
-    """RAG の rag_search・rag_retrieve_evidence だけを使う業務 Agent。"""
+    """RAG の rag_search だけを使う業務 Agent。"""
     fake = fake_product_mcp(monkeypatch)
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
             name="検証の Skill",
             instructions="RAG で調べて答える。",
-            mcp_requirements=[
-                SkillMcpRequirement(
-                    server_id="rag", tool_names=["rag_search", "rag_retrieve_evidence"]
-                )
-            ],
+            mcp_requirements=[SkillMcpRequirement(server_id="rag", tool_names=["rag_search"])],
         )
     )
     runtime_repository.create_agent(

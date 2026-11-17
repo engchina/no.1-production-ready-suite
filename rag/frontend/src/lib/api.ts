@@ -1514,7 +1514,7 @@ export interface SearchRequestBody {
   generate_answer?: boolean;
   /** 回答のモデル（既定のテキストモデルか既定の Vision モデル。未指定はテキスト。#675）。 */
   model_id?: string;
-  /** 利用者が選んだ登録済みQ&A の id。付けると検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
+  /** 利用者が選んだ登録済みQ&Aの id。付けると検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
   approved_faq_id?: string;
 }
 
@@ -1569,7 +1569,7 @@ export interface ChatMessage {
    * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
    */
   answer_attached_images?: number;
-  /** 利用者が選んだ登録済みQ&A の回答をそのまま返した ASSISTANT の回答か（#5107）。 */
+  /** 利用者が選んだ登録済みQ&Aの回答をそのまま返した ASSISTANT の回答か（#5107）。 */
   approved_faq_answer?: boolean;
 }
 
@@ -1605,7 +1605,7 @@ export interface ChatMessageRequestBody {
   question_context_token?: string;
   model_ids?: string[];
   top_k?: number;
-  /** 利用者が選んだ登録済みQ&A の id。検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
+  /** 利用者が選んだ登録済みQ&Aの id。検索も回答の生成もせず、Q&A の回答を原文のまま返す（#5107）。 */
   approved_faq_id?: string;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
   clarification?: GuideConditionAnswer;
@@ -2008,7 +2008,7 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
  * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
 /**
- * 品質評価の回答の方法（#5340）。chat は RAG Chat と同じ経路（業務ガイド・承認済み FAQ・根拠の拡張あり）、
+ * 品質評価の回答の方法（#5340）。chat は RAG チャットと同じ経路（登録済みQ&A・業務ガイド・根拠の拡張あり）、
  * search は画面の RAG 検索と同じ基本の RAG。
  */
 export type EvaluationAnswerMode = "chat" | "search";
@@ -4050,7 +4050,7 @@ export const api = {
       { method: "POST", body: form },
     );
   },
-  /** 登録済みQ&A の Excel 取込のテンプレート（QUESTION・ANSWER の 2 列だけ。#5107）。 */
+  /** 登録済みQ&Aの Excel 取込のテンプレート（QUESTION・ANSWER の 2 列だけ。#5107）。 */
   downloadApprovedFaqTemplate: (id: string) =>
     requestFile(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/import/template`,

@@ -292,7 +292,7 @@ def _full_run(setup: Setup) -> RunState:
         _step(
             run_id,
             "rag",
-            "rag_retrieve_evidence",
+            "rag_search",
             arguments={"query": CANARIES["argument"]},
             status=StepStatus.FAILED,
             success=False,
@@ -423,7 +423,7 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
     assert [call["call_id"] for call in calls] == [step.id for step in run.steps]
     assert [(call["name"], call["status"], call["error_code"]) for call in calls] == [
         ("rag__rag_search", "completed", None),
-        ("rag__rag_retrieve_evidence", "failed", "rag.timeout"),
+        ("rag__rag_search", "failed", "rag.timeout"),
         ("rag__rag_read_document", "completed", None),
         ("rag__rag_read_source", "completed", None),
         ("nl2sql__nl2sql_query", "completed", None),
@@ -589,7 +589,7 @@ def _paged_run(setup: Setup, texts: list[str]) -> RunState:
             runtime_id="builtin",
             status=RunStatus.COMPLETED,
             created_by_user_uuid=setup.owner,
-            steps=[_step(run_id, "rag", "rag_retrieve_evidence", output={"evidence": evidence})],
+            steps=[_step(run_id, "rag", "rag_search", output={"evidence": evidence})],
         )
     )
 
@@ -811,7 +811,7 @@ def test_observation_copies_the_degraded_retrieval_of_rag(
         agent_id="agent-a",
         runtime_id="builtin",
         status=RunStatus.COMPLETED,
-        steps=[_step(run_id, "rag", "rag_retrieve_evidence", output=output)],
+        steps=[_step(run_id, "rag", "rag_search", output=output)],
         created_at=T0,
     )
     (call,) = run_observation.observe_run(run).tool_calls

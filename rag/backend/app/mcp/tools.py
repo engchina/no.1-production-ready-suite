@@ -312,21 +312,21 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 43: 検索・回答プロファイルの登録ルールを削除した（#4799）。rag_search・rag_retrieve_evidence の
 #     skip_clarification と rule: の条件、rag_retrieve_evidence の clarifications、
 #     profile_knowledge の rules・rules_omitted を外した。
-# （版を変えない追加）回答の前に承認済み FAQ（登録済みの Q&A）の候補を返し、選んだ Q&A の回答を
+# （版を変えない追加）回答の前に登録済みQ&Aの候補を返し、選んだ Q&A の回答を
 #     そのまま返すツール（rag_approved_faq）を足した。既存のツールの出力の形は変えない（#5107）。
 # 44: rag_retrieve_evidence の planning・queries・original_question・request_id（入力）、
 #     planning・request_id と profile_knowledge の matched_on（出力）を削除した（1 回の呼び出しは
 #     1 つの質問。#5125）。
-# 45: rag_approved_faq を削除し、承認済み FAQ を rag_search に統合した（#5134）。rag_search に
+# 45: rag_approved_faq を削除し、登録済みQ&Aを rag_search に統合した（#5134）。rag_search に
 #     approved_faq_id・skip_approved_faq（入力）と status・approved_faq_candidates・approved_faq
 #     （出力）を足し、候補だけを返すとき（status=approved_faq_candidates）は outcome を null に
 #     した。
-# 46: rag_retrieve_evidence にも承認済み FAQ を入れた（#5136）。入力に approved_faq_id・
+# 46: rag_retrieve_evidence にも登録済みQ&Aを入れた（#5136）。入力に approved_faq_id・
 #     skip_approved_faq、出力に status・approved_faq_candidates・approved_faq（選んだ Q&A の
 #     登録済みの回答を含む）を足した。
 # （版を変えない追加）文書の本文から語を字のとおりに探すツール（rag_grep）を足した。既存のツールの
 #     出力の形は変えない（#5293）。
-# （版を変えない追加）RAG Chat の経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で答えるツール
+# （版を変えない追加）RAG チャットの経路（登録済みQ&A・業務ガイドの照合・根拠の拡張）で答えるツール
 #     （rag_chat）を足した。既存のツールの出力の形は変えない（#5339）。
 MCP_OUTPUT_SCHEMA_VERSION = 46
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
@@ -479,8 +479,8 @@ CHAT_PERMISSIONS = frozenset({MENU_CHAT})
 # 推薦・根拠の読み取り（rag_search・rag_chat のどちらかの結果を読み足す）は、どちらかの権限で使う。
 ANSWER_READ_PERMISSIONS = frozenset({MENU_SEARCH, MENU_CHAT})
 
-# rag_search の状態（#5134）。completed=検索・回答をした（選んだ承認済み FAQ の回答を含む）/
-# approved_faq_candidates=承認済み FAQ の候補だけを返した（検索・回答はしていない）。
+# rag_search の状態（#5134）。completed=検索・回答をした（選んだ登録済みQ&Aの回答を含む）/
+# approved_faq_candidates=登録済みQ&Aの候補だけを返した（検索・回答はしていない）。
 SearchStatus = Literal["completed", "approved_faq_candidates"]
 APPROVED_FAQ_CANDIDATES_STATUS: SearchStatus = "approved_faq_candidates"
 
@@ -492,9 +492,9 @@ INSTRUCTIONS = (
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
     "確かめる）、その id を rag_search・rag_chat に渡してください。名前で探すときは"
     " rag_list_search_answer_profiles を使います。\n\n"
-    # 承認済み FAQ の候補（#5134・#5136）。引数の意味は approved_faq_id・skip_approved_faq の説明に
+    # 登録済みQ&Aの候補（#5134・#5136）。引数の意味は approved_faq_id・skip_approved_faq の説明に
     # ある。
-    "## Step 2: 登録済みの Q&A の候補を利用者に選んでもらう\n"
+    "## Step 2: 登録済みQ&Aの候補を利用者に選んでもらう\n"
     "rag_chat・rag_search・rag_retrieve_evidence が"
     f" status={APPROVED_FAQ_CANDIDATES_STATUS} を返したら、approved_faq_candidates の"
     "質問を利用者に示して選んでもらってから呼び直してください（候補を自分で選ばない）。"
@@ -671,7 +671,7 @@ class SearchScopeInput(BaseModel):
 
 
 class ApprovedFaqChoiceInput(SearchScopeInput):
-    """承認済み FAQ の候補への利用者の選択（rag_search と rag_retrieve_evidence で共通）。
+    """登録済みQ&Aの候補への利用者の選択（rag_search と rag_retrieve_evidence で共通）。
 
     候補の提示と選んだ Q&A の回答は画面と同じ規則（#5107・#5134・#5136）。
     """
@@ -687,8 +687,8 @@ class ApprovedFaqChoiceInput(SearchScopeInput):
     skip_approved_faq: bool = Field(
         default=False,
         description=(
-            "true なら登録済みの Q&A の候補を返さずに検索する（利用者が候補のどれも選ば"
-            "なかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索の前に"
+            "true なら登録済みQ&Aの候補を返さずに検索する（利用者が候補のどれも選ば"
+            "なかったとき）。既定（false）は、質問に近い登録済みQ&Aがあれば、検索の前に"
             "その候補だけを返す。"
         ),
     )
@@ -750,7 +750,7 @@ class RetrieveEvidenceInput(ApprovedFaqChoiceInput):
 # 1 回の呼び出しは 1 つの質問（会話の履歴による補完・会話の添付はしない。#5339）。範囲は検索・回答
 # プロファイルの参照先と設定だけ（ナレッジベース・filters・top_k は受けない）。
 class ChatInput(BaseModel):
-    """RAG Chat の経路で答える条件。"""
+    """RAG チャットの経路で答える条件。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -818,8 +818,8 @@ class ChatInput(BaseModel):
     skip_approved_faq: bool = Field(
         default=False,
         description=(
-            "true なら登録済みの Q&A の候補を返さずに答える（利用者が候補のどれも選ばなかった"
-            "とき）。既定（false）は、質問に近い登録済みの Q&A があれば、回答の前にその候補だけを"
+            "true なら登録済みQ&Aの候補を返さずに答える（利用者が候補のどれも選ばなかった"
+            "とき）。既定（false）は、質問に近い登録済みQ&Aがあれば、回答の前にその候補だけを"
             "返す。"
         ),
     )
@@ -1893,7 +1893,7 @@ GUARDRAIL_DEGRADED_DESCRIPTION = (
 
 
 class ApprovedFaqCandidate(BaseModel):
-    """検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。"""
+    """検索・回答の前に利用者に示す登録済みQ&Aの候補。"""
 
     id: str = Field(description="Q&A の id（利用者が選んだら approved_faq_id に渡す）。")
     question: str = Field(description="登録済みの質問。")
@@ -1901,20 +1901,20 @@ class ApprovedFaqCandidate(BaseModel):
 
 
 class ApprovedFaqRef(BaseModel):
-    """回答に使った承認済み FAQ（回答は登録済みの回答をそのまま返したもの）。"""
+    """回答に使った登録済みQ&A（回答は登録済みの回答をそのまま返したもの）。"""
 
     id: str
     question: str = Field(description="登録済みの質問。")
 
 
 class ApprovedFaqAnswer(ApprovedFaqRef):
-    """利用者が選んだ承認済み FAQ と、その登録済みの回答（rag_retrieve_evidence。#5136）。"""
+    """利用者が選んだ登録済みQ&Aと、その登録済みの回答（rag_retrieve_evidence。#5136）。"""
 
     answer: str = Field(description="登録済みの回答（原文のまま）。")
 
 
 APPROVED_FAQ_CANDIDATES_DESCRIPTION = (
-    "status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。"
+    "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。"
 )
 
 
@@ -1922,7 +1922,7 @@ class SearchOutput(VersionedOutput):
     status: SearchStatus = Field(
         default="completed",
         description=(
-            "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みの Q&A の"
+            "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みQ&Aの"
             "候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、"
             "outcome は null）。"
         ),
@@ -2010,10 +2010,10 @@ class SearchOutput(VersionedOutput):
     )
 
 
-# rag_chat の出力（#5339）。今は rag_search と同じ形（承認済み FAQ の候補・確認・業務ガイド
+# rag_chat の出力（#5339）。今は rag_search と同じ形（登録済みQ&Aの候補・確認・業務ガイド
 # を含む）。
 class ChatOutput(SearchOutput):
-    """RAG Chat の経路の回答と根拠。"""
+    """RAG チャットの経路の回答と根拠。"""
 
 
 class GuidePageRangeItem(BaseModel):
@@ -2163,7 +2163,7 @@ class RetrieveEvidenceOutput(VersionedOutput):
         default="completed",
         description=(
             "completed=根拠を検索した（approved_faq_id を渡したときは、選んだ Q&A を返した）/ "
-            "approved_faq_candidates=質問に近い登録済みの Q&A の候補（approved_faq_candidates）"
+            "approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）"
             "だけを返した（根拠は検索していない。evidence は空）。"
         ),
     )
@@ -4442,7 +4442,7 @@ _ANSWER_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "rag_mcp_answer_deadline", default=None
 )
 # 外側の期限に足す余裕（秒）。回答生成の中の時間切れ（工程と監査が残る）を外側の打ち切りより
-# 先にする。外側は回答生成の前後（承認済み FAQ の照会・プロファイルの自動の選択・根拠の整形）の
+# 先にする。外側は回答生成の前後（登録済みQ&Aの照会・プロファイルの自動の選択・根拠の整形）の
 # 時間切れを止める保険。
 ANSWER_DEADLINE_GRACE_SECONDS = 1.0
 
@@ -4484,7 +4484,7 @@ async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
     質問・文書・呼び先の応答の本文は入れない（ログも同じ項目だけ）。
     """
     try:
-        # MCP は業務ガイドの照合・承認済み FAQ・根拠の拡張を含む今の経路で答える（#5332）。
+        # MCP は登録済みQ&A・業務ガイドの照合・根拠の拡張を含む今の経路で答える（#5332）。
         return await search_route._run_search_with_timeout(
             request, flow=EXPANDED_FLOW, deadline=_ANSWER_DEADLINE.get(), **options
         )
@@ -4599,7 +4599,7 @@ def _selection_error(
 async def _approved_faq_suggestions(
     arguments: ApprovedFaqChoiceInput | ChatInput,
 ) -> list[ApprovedFaqCandidate]:
-    """検索の前に示す承認済み FAQ の候補（#5134・#5136。画面の照会と同じ規則。#5107）。
+    """検索の前に示す登録済みQ&Aの候補（#5134・#5136。画面の照会と同じ規則。#5107）。
 
     approved_faq_id・skip_approved_faq を渡した呼び出しは照会しない。検索・回答プロファイルを
     指定した検索だけ。プロファイルが無い・使えない（アーカイブ済み）ときは候補を返さず、検索の
@@ -4631,7 +4631,7 @@ async def _approved_faq_suggestions(
 
 
 def _approved_faq_ref(result: SearchResponse) -> ApprovedFaqRef | None:
-    """選んだ承認済み FAQ の回答をそのまま返した検索なら、その Q&A（それ以外は None）。"""
+    """選んだ登録済みQ&Aの回答をそのまま返した検索なら、その Q&A（それ以外は None）。"""
     diagnostics = _answer_diagnostics(result)
     if not is_approved_faq_answer(diagnostics):
         return None
@@ -4642,7 +4642,7 @@ def _approved_faq_ref(result: SearchResponse) -> ApprovedFaqRef | None:
 
 
 async def _approved_faq_evidence(request: SearchRequest) -> RetrieveEvidenceOutput:
-    """rag_retrieve_evidence で利用者が選んだ承認済み FAQ の登録済みの回答（#5136）。
+    """rag_retrieve_evidence で利用者が選んだ登録済みQ&Aの登録済みの回答（#5136）。
 
     rag_search の approved_faq_id と同じ経路で引き、根拠は検索しない。安全チェックで止めた
     質問は、FAQ の回答を返さずに止めた結果（guardrail_warnings）を返す。
@@ -4790,8 +4790,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         *,
         interactive: bool = False,
     ) -> O:
-        """回答のツール（rag_search・rag_chat）の出力（承認済み FAQ の候補か、回答と根拠）。"""
-        # 検索・回答の前に承認済み FAQ の候補を照会し、あれば候補だけを返す（#5134。画面と
+        """回答のツール（rag_search・rag_chat）の出力（登録済みQ&Aの候補か、回答と根拠）。"""
+        # 検索・回答の前に登録済みQ&Aの候補を照会し、あれば候補だけを返す（#5134。画面と
         # 同じ入口の順: 安全チェック → 照合）。
         candidates = await _approved_faq_suggestions(arguments)
         if candidates:
@@ -4832,7 +4832,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         return await answer_output(SearchOutput, arguments, request)
 
     async def chat(arguments: ChatInput) -> ChatOutput:
-        # RAG のチャットと同じ経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で、会話の履歴と
+        # RAG のチャットと同じ経路（登録済みQ&A・業務ガイドの照合・根拠の拡張）で、会話の履歴と
         # 添付を使わずに 1 問に答える（#5339）。会話・実行履歴は残さない（監査は残る）。
         request = _chat_request(arguments)
         enforce_rate_limit("search", http_request)
@@ -4895,7 +4895,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         # 回答の生成はしない（図は Agent が rag_read_source で読む。#5125）。
         request = _search_request(arguments)
         enforce_rate_limit("search", http_request)
-        # 承認済み FAQ（#5136）は rag_search と同じ入口と処理: 候補があれば根拠を検索せずに候補
+        # 登録済みQ&A（#5136）は rag_search と同じ入口と処理: 候補があれば根拠を検索せずに候補
         # だけを返し、選んだ Q&A は検索・回答と同じ入口（安全チェック → Q&A の引き直し）で登録
         # 済みの回答を引く（モデルは呼ばない）。
         candidates = await _approved_faq_suggestions(arguments)
@@ -4999,7 +4999,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 title="ナレッジベースの検索",
                 description=(
                     "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・"
-                    "回答に使ったか付き）と回答を返します。質問に近い登録済みの Q&A があるときは、"
+                    "回答に使ったか付き）と回答を返します。質問に近い登録済みQ&Aがあるときは、"
                     "検索・回答の前にその候補だけを返します（status=approved_faq_candidates）。"
                 ),
                 input_model=SearchInput,
@@ -5013,10 +5013,10 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 name="rag_chat",
                 title="ナレッジベースへの質問（チャット）",
                 description=(
-                    "RAG のチャットと同じ流れ（業務ガイドの照合・登録済みの Q&A・根拠の拡張を"
+                    "RAG のチャットと同じ流れ（登録済みQ&A・業務ガイドの照合・根拠の拡張を"
                     "含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は"
                     "使いません。"
-                    "質問に近い登録済みの Q&A があるときは、回答の前にその候補だけを返し"
+                    "質問に近い登録済みQ&Aがあるときは、回答の前にその候補だけを返し"
                     "（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは"
                     "確認を返します（outcome=needs_clarification）。"
                 ),
@@ -5049,7 +5049,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 description=(
                     "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
                     "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
-                    "質問に近い登録済みの Q&A があるときは、根拠を検索する前にその候補だけを返し"
+                    "質問に近い登録済みQ&Aがあるときは、根拠を検索する前にその候補だけを返し"
                     "（status=approved_faq_candidates）、選んだ Q&A では、その登録済みの回答を"
                     " approved_faq に返します。"
                     "図の根拠は画像を返さず image_ref を返します。図を見るときは、その"

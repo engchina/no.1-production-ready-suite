@@ -98,8 +98,10 @@ from app.features.agent.report_preview import (
 from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.skills import (
-    BUSINESS_RAG_RESEARCH_SKILL_ID,
-    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+    RAG_CHAT_AND_DATA_SKILL_ID,
+    RAG_CHAT_SKILL_ID,
+    RAG_SEARCH_AND_DATA_SKILL_ID,
+    RAG_SEARCH_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
     PinnedSkill,
     pin_skill,
@@ -440,6 +442,20 @@ class AgentProfile(BaseModel):
         ):
             return []
         return skill_updates(published.skills)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def unavailable_skill_ids(self) -> list[str]:
+        """下書き・公開中の版が選んだのに、今は無いスキルの ID（#5342。組み込みのスキルの廃止）。
+
+        下書き・常に最新の版の Run は `runtime.skill_unavailable` で失敗する。固定した版の Run は
+        固定した中身で動くが、スキルを選び直して再公開するよう画面が示す。
+        """
+        published = self.published()
+        selected = [*self.skill_ids, *(published.skill_ids if published is not None else [])]
+        return [
+            skill_id for skill_id in dict.fromkeys(selected) if skill_registry.get(skill_id) is None
+        ]
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -4278,10 +4294,8 @@ class AgentRuntimeRepository:
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
-        self._agents = {
-            agent.id: _migrate_builtin_agent(_ensure_versioned(agent)) for agent in snapshot.agents
-        }
-        # 保存済みの snapshot に無い組み込みの業務 Agent は足す（#1573 で 3 つにした）。
+        self._agents, migrated = _migrate_loaded_agents(snapshot.agents)
+        # 保存済みの snapshot に無い組み込みの業務 Agent は足す（#1573・#5342）。
         for builtin in _builtin_agents():
             if builtin.id not in self._agents:
                 self._agents[builtin.id] = _ensure_versioned(builtin)
@@ -4292,6 +4306,9 @@ class AgentRuntimeRepository:
         # 状態を丸ごと置き換えた（前の印は意味を持たない。呼ぶ側が要る印を付ける）。
         self._clear_change_marks_locked()
         self._reset_change_tracking_locked()
+        # 読み込みで変えた・外した組み込みの業務 Agent（#5342）は、次の保存で書く・消す。
+        for agent_id in migrated:
+            self._mark_agent_changed(agent_id)
 
     def _mark_load_repairs_locked(self, report: SnapshotLoadReport) -> None:
         """読み込みで直した Run と退避した Run・業務 Agent に印を付ける（#853・#1939）。
@@ -4361,6 +4378,7 @@ class AgentRuntimeRepository:
         # MCP 接続のツール（`<接続>__<ツール>`。#757）は、ツールの部分で成果物の種類を決める。
         artifact_kind_by_tool = {
             "rag_search": "rag_evidence",
+            "rag_chat": "rag_evidence",
             "nl2sql_query": "structured_table",
             "nl2sql_get_job": "structured_table",
         }
@@ -5010,8 +5028,11 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             self._quarantine_changed = True
         for run in loaded.runs:
             self._runs[run.id] = run
-        for agent in loaded.agents:
-            self._agents[agent.id] = _migrate_builtin_agent(_ensure_versioned(agent))
+        agents, migrated = _migrate_loaded_agents(loaded.agents)
+        self._agents.update(agents)
+        for agent_id in migrated:
+            if agent_id not in agents:
+                self._agents.pop(agent_id, None)
         self._restore_builtin_agents_locked()
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
@@ -6497,42 +6518,100 @@ def _validate_approval_snapshot(
 
 
 DEFAULT_AGENT_ID = "default"
-RAG_RESEARCH_AGENT_ID = "rag-research"
+RAG_CHAT_AGENT_ID = "rag-chat"
+RAG_SEARCH_AGENT_ID = "rag-search"
+RAG_SEARCH_DATA_AGENT_ID = "rag-search-data"
 DATA_QUERY_AGENT_ID = "data-query"
-# 組み込みの業務 Agent（#1573）。削除できず、保存済みの snapshot に無ければ読み込みで足す。
-# 既定の Agent（default）が先頭（一覧は作成日時の順）。
-BUILTIN_AGENT_IDS: tuple[str, ...] = (DEFAULT_AGENT_ID, RAG_RESEARCH_AGENT_ID, DATA_QUERY_AGENT_ID)
+# 組み込みの業務 Agent（#1573・#5342）。削除できず、保存済みの snapshot に無ければ読み込みで足す。
+# 既定の Agent（default。RAG チャット＋データ）が先頭（一覧は作成日時の順）。
+BUILTIN_AGENT_IDS: tuple[str, ...] = (
+    DEFAULT_AGENT_ID,
+    RAG_CHAT_AGENT_ID,
+    RAG_SEARCH_AGENT_ID,
+    RAG_SEARCH_DATA_AGENT_ID,
+    DATA_QUERY_AGENT_ID,
+)
+# 廃止した組み込みの業務 Agent（#5342。資料調査アシスタント）。読み込みで外し、利用者が中身を
+# 変えていたら組織の業務 Agent として残す。
+RETIRED_RAG_RESEARCH_AGENT_ID = "rag-research"
 # #1573 より前の既定の Agent の名前。保存済みの default がこの名前のままなら、新しい内容にする。
 _LEGACY_DEFAULT_AGENT_NAME = "汎用業務 Agent"
+# 版の内容（名前・説明・指示・スキル）を比べる項目。
+_BUILTIN_CONTENT_FIELDS: tuple[str, ...] = ("name", "description", "instructions", "skill_ids")
+# #5342 より前の組み込みの内容（利用者が変えていなければ、新しい内容にする・外す）。
+_PREVIOUS_DEFAULT_CONTENT: dict[str, Any] = {
+    "name": "資料・データ横断アシスタント",
+    "description": (
+        "社内の資料（業務 RAG）と業務データ（NL2SQL）を、問いに合わせて使い分けて"
+        "調べる既定の業務 Agent。"
+    ),
+    "instructions": (
+        "問いと途中の結果から、資料の根拠と業務データの値のどちらが要るかを判断して"
+        "ツールを呼ぶ。根拠と監査情報を残す。"
+    ),
+    "skill_ids": ["rag-and-structured-data", "business-rag-research", "structured-data-query"],
+}
+_PREVIOUS_RAG_RESEARCH_CONTENT: dict[str, Any] = {
+    "name": "資料調査アシスタント",
+    "description": "社内の資料（業務 RAG）を調べ、根拠の文書と場所を示して答える業務 Agent。",
+    "instructions": "資料の根拠に基づいて答え、根拠の文書名と場所を示す。",
+    "skill_ids": ["business-rag-research"],
+}
 
 
 def _builtin_agents() -> list[AgentProfile]:
-    """組み込みの業務 Agent（資料・データ・その両方）。並びは BUILTIN_AGENT_IDS と同じ。"""
+    """組み込みの業務 Agent（#5342）。並びは BUILTIN_AGENT_IDS と同じ。
+
+    RAG だけの Agent は RAG の回答をそのまま返し（スキルの宣言）、データつきの Agent はモデルが
+    RAG の回答と業務データの値を合わせる。回答の書き方は RAG の検索・回答プロファイルが決める。
+    """
     return [
         AgentProfile(
             id=DEFAULT_AGENT_ID,
-            name="資料・データ横断アシスタント",
+            name="RAG チャット＋データアシスタント",
             description=(
-                "社内の資料（業務 RAG）と業務データ（NL2SQL）を、問いに合わせて使い分けて"
-                "調べる既定の業務 Agent。"
+                "社内の資料（RAG のチャットと同じ流れ）と業務データ（NL2SQL）を、問いに合わせて"
+                "使い分けて調べる既定の業務 Agent。"
             ),
             instructions=(
-                "問いと途中の結果から、資料の根拠と業務データの値のどちらが要るかを判断して"
-                "ツールを呼ぶ。根拠と監査情報を残す。"
+                "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。"
             ),
-            skill_ids=[
-                RAG_AND_STRUCTURED_DATA_SKILL_ID,
-                BUSINESS_RAG_RESEARCH_SKILL_ID,
-                STRUCTURED_DATA_QUERY_SKILL_ID,
-            ],
+            skill_ids=[RAG_CHAT_AND_DATA_SKILL_ID],
             source="builtin",
         ),
         AgentProfile(
-            id=RAG_RESEARCH_AGENT_ID,
-            name="資料調査アシスタント",
-            description="社内の資料（業務 RAG）を調べ、根拠の文書と場所を示して答える業務 Agent。",
-            instructions="資料の根拠に基づいて答え、根拠の文書名と場所を示す。",
-            skill_ids=[BUSINESS_RAG_RESEARCH_SKILL_ID],
+            id=RAG_CHAT_AGENT_ID,
+            name="RAG チャットアシスタント",
+            description=(
+                "社内の資料を RAG のチャットと同じ流れ（登録済みQ&A・業務ガイド・根拠の拡張）で"
+                "調べ、RAG の回答と根拠をそのまま返す業務 Agent。"
+            ),
+            instructions="資料の質問に、RAG のチャットの流れで答える。",
+            skill_ids=[RAG_CHAT_SKILL_ID],
+            source="builtin",
+        ),
+        AgentProfile(
+            id=RAG_SEARCH_AGENT_ID,
+            name="RAG 検索アシスタント",
+            description=(
+                "社内の資料を基本の検索（登録済みQ&A・業務ガイド・根拠の拡張なし）で調べ、RAG の"
+                "回答と根拠をそのまま返す業務 Agent。"
+            ),
+            instructions="資料の質問に、RAG の基本の検索で答える。",
+            skill_ids=[RAG_SEARCH_SKILL_ID],
+            source="builtin",
+        ),
+        AgentProfile(
+            id=RAG_SEARCH_DATA_AGENT_ID,
+            name="RAG 検索＋データアシスタント",
+            description=(
+                "社内の資料（基本の検索）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる"
+                "業務 Agent。"
+            ),
+            instructions=(
+                "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。"
+            ),
+            skill_ids=[RAG_SEARCH_AND_DATA_SKILL_ID],
             source="builtin",
         ),
         AgentProfile(
@@ -6546,31 +6625,58 @@ def _builtin_agents() -> list[AgentProfile]:
     ]
 
 
-def _migrate_builtin_agent(agent: AgentProfile) -> AgentProfile:
-    """#1573 より前の既定の Agent（名前が「汎用業務 Agent」のまま）を、新しい内容の版にする。
+def _content_of(item: AgentProfile | AgentVersion) -> dict[str, Any]:
+    return {field: getattr(item, field) for field in _BUILTIN_CONTENT_FIELDS}
 
-    名前を変えた default は利用者の内容として残す（Skill の ID の置き換えだけ）。
-    新しい内容は次の版として公開し、前の版は残す。
+
+def _is_previous_default(item: AgentProfile | AgentVersion) -> bool:
+    return item.name == _LEGACY_DEFAULT_AGENT_NAME or _content_of(item) == _PREVIOUS_DEFAULT_CONTENT
+
+
+def _migrate_loaded_agents(
+    loaded: Sequence[AgentProfile],
+) -> tuple[dict[str, AgentProfile], list[str]]:
+    """読み込んだ業務 Agent に版の導入と組み込みの移行を当てる（変えた・外した ID も返す）。"""
+    agents: dict[str, AgentProfile] = {}
+    migrated: list[str] = []
+    for item in loaded:
+        versioned = _ensure_versioned(item)
+        result = _migrate_builtin_agent(versioned)
+        if result is not None:
+            agents[result.id] = result
+        if result is None or result != versioned:
+            migrated.append(item.id)
+    return agents, migrated
+
+
+def _migrate_builtin_agent(agent: AgentProfile) -> AgentProfile | None:
+    """保存済みの組み込みの業務 Agent を今の内容にする（冪等。None は外す）。
+
+    - default（#1573・#5342）: 下書きが前の組み込みの内容（「汎用業務 Agent」の名前のままか、#5342
+      より前の「資料・データ横断アシスタント」の内容）のままなら、新しい内容にし、公開中の版も前の
+      内容なら次の版として公開する（前の版は残す）。利用者が変えた内容・モデル・データの範囲は残す。
+    - rag-research（#5342 で廃止）: 下書きとすべての版が前の組み込みの内容のままなら外し、変えて
+      いたら組織の業務 Agent（由来 runtime）として残す（消えたスキルは画面が示す）。
     """
-    if agent.id != DEFAULT_AGENT_ID or agent.name != _LEGACY_DEFAULT_AGENT_NAME:
+    if agent.id == RETIRED_RAG_RESEARCH_AGENT_ID and agent.source == "builtin":
+        unchanged = _content_of(agent) == _PREVIOUS_RAG_RESEARCH_CONTENT and all(
+            _content_of(item) == _PREVIOUS_RAG_RESEARCH_CONTENT for item in agent.versions
+        )
+        return None if unchanged else agent.model_copy(deep=True, update={"source": "runtime"})
+    if agent.id != DEFAULT_AGENT_ID or not _is_previous_default(agent):
         return agent
     builtin = next(item for item in _builtin_agents() if item.id == DEFAULT_AGENT_ID)
-    content = {
-        "name": builtin.name,
-        "description": builtin.description,
-        "instructions": builtin.instructions,
-        "skill_ids": list(builtin.skill_ids),
-    }
+    content = _content_of(builtin)
     published = agent.published()
     versions = [item.model_copy(deep=True) for item in agent.versions]
     published_version = agent.published_version
-    if published is None or published.name == _LEGACY_DEFAULT_AGENT_NAME:
+    if published is None or _is_previous_default(published):
         published_version = max((item.version for item in versions), default=0) + 1
         base = published if published is not None else agent
         versions.append(
             AgentVersion(
                 version=published_version,
-                note="初期の業務 Agent の見直し（#1573）",
+                note="組み込みの業務 Agent の見直し（RAG チャット＋データ）",
                 model_id=base.model_id,
                 data_scopes=deepcopy(base.data_scopes),
                 **content,

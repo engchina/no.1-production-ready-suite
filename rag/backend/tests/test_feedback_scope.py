@@ -334,7 +334,7 @@ def test_detail_api_rejects_other_users_feedback_with_403(monkeypatch: MonkeyPat
         "他の利用者のフィードバックを参照する権限がありません。"
     ]
 
-    # 評価ケースの作成・承認済み FAQ への反映も、他人の ID は 403。
+    # 評価ケースの作成・登録済みQ&Aへの反映も、他人の ID は 403。
     _capture(monkeypatch, [[], [{"found": 1}]])
     evaluation_case = client.get("/api/feedback/feedback-other/evaluation-case", headers=viewer)
     assert evaluation_case.status_code == 403

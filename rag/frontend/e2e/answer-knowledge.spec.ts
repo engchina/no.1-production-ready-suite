@@ -44,7 +44,7 @@ const faqSuggestion = {
   score: 0.97,
 };
 
-// 登録済みQ&A の一覧の 1 件（質問と回答だけ。#5107）。
+// 登録済みQ&Aの一覧の 1 件（質問と回答だけ。#5107）。
 const faqRecord = {
   id: "faq-1",
   question: faqSuggestion.question,
@@ -153,7 +153,7 @@ for (const viewport of [
 
     const panel = page.getByRole("heading", { name: "プロファイルの知識" });
     await expect(panel).toBeVisible();
-    // 登録済みQ&A を既定とし、主な利用段階に沿って並べる。
+    // 登録済みQ&Aを既定とし、主な利用段階に沿って並べる。
     const tabs = page.getByRole("tablist", { name: "プロファイルの知識" }).getByRole("tab");
     await expect(tabs).toHaveText([
       "登録済みQ&A",

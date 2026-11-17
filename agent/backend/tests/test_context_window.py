@@ -48,18 +48,18 @@ from app.settings import get_settings
 SKILL_ID = "test2383-skill"
 AGENT_ID = "test2383-agent"
 USER_UUID = "11111111-2222-3333-4444-555555555555"
-EVIDENCE_TOOL = "rag__rag_retrieve_evidence"
+EVIDENCE_TOOL = "rag__rag_search"
 READ_TOOL = "rag__rag_read_source"
 # 合成の本文（業務の内容を含まない）。1 件の抜粋は MCP の上限と同じ 1000 文字。
 _EXCERPT = ("合成の本文の文。" * 200)[:1000]
 
 
 def _evidence(group: str, count: int) -> dict[str, Any]:
-    """根拠 `count` 件の rag_retrieve_evidence の結果。
+    """根拠 `count` 件の rag_search の結果。
 
     ID は `doc-<group>-<n>` / `chunk-<group>-<n>`。
     """
-    template = DEFAULT_OUTPUTS["rag_retrieve_evidence"]
+    template = DEFAULT_OUTPUTS["rag_search"]
     item = template["evidence"][0]
     return {
         **deepcopy(template),
@@ -326,9 +326,7 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             name="入力の上限の Skill",
             instructions="RAG で調べて答える。",
             mcp_requirements=[
-                SkillMcpRequirement(
-                    server_id="rag", tool_names=["rag_retrieve_evidence", "rag_read_source"]
-                )
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_search", "rag_read_source"])
             ],
         )
     )
@@ -377,7 +375,7 @@ def _serve_evidence(mcp: FakeProductMcp, count: int) -> None:
         query = str(getattr(argument, "query", ""))
         return _evidence(query[-1], count)
 
-    mcp.outputs["rag_retrieve_evidence"] = output
+    mcp.outputs["rag_search"] = output
 
 
 def _tool_outputs(call_input: Any) -> dict[str, str]:

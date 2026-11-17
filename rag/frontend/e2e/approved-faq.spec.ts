@@ -4,7 +4,7 @@ import { expect, test } from "./fixtures/test";
 import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
-// #5107: 登録済みQ&A は質問と回答だけ。プロファイルの権限で全員が見られる。選んだら回答をそのまま返す。
+// #5107: 登録済みQ&Aは質問と回答だけ。プロファイルの権限で全員が見られる。選んだら回答をそのまま返す。
 // 内容は合成。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
@@ -61,7 +61,7 @@ async function mockFaqApi(page: Page, items: unknown[] = records) {
   });
 }
 
-test.describe("登録済みQ&A の管理（質問と回答だけ）", { tag: "@responsive" }, () => {
+test.describe("登録済みQ&Aの管理（質問と回答だけ）", { tag: "@responsive" }, () => {
   test("見える範囲・提示の説明・2 列の取込を示し、そのまま返す設定・対象のナレッジベース・当てはめない質問は無い", async ({
     page,
   }, testInfo) => {

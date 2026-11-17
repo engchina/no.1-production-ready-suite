@@ -1129,7 +1129,7 @@ END;
                 "検索・回答プロファイルの知識（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が "
                 "runtime_knowledge の行の PAYLOAD_JSON）から、登録ルール（$.rules。確認の質問と"
                 "選択肢を含む）を削除します。用語・同義語（$.terms）と、ドメインキーワード・"
-                "承認済み FAQ の行は変えません。登録ルールは確認・回答に使わなくなり、回答の規則は"
+                "登録済みQ&Aの行は変えません。登録ルールは確認・回答に使わなくなり、回答の規則は"
                 "回答プロンプトの役割の文に書きます。ルールの文を残す必要があれば、適用前に同列を "
                 "export し、役割の文へ手で写してください。削除後は復元できません。"
             ),
@@ -1165,7 +1165,7 @@ END;
             table_name="rag_search_answer_profile_knowledge",
             sql=removed_approved_faq_fields_sql(),
             destructive_note=(
-                "承認済み FAQ を質問と回答だけにしたため、検索・回答プロファイルの知識"
+                "登録済みQ&Aを質問と回答だけにしたため、検索・回答プロファイルの知識"
                 "（RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE の KIND が approved_faq の行の"
                 " PAYLOAD_JSON）から、FAQ ごとの当てはめない質問（negative_questions）・"
                 "対象のナレッジベース"
@@ -1184,7 +1184,7 @@ END;
             table_name="rag_answer_prompts",
             sql=removed_faq_answer_prompt_sql(),
             destructive_note=(
-                "選んだ承認済み FAQ の回答をそのまま返すようにし、FAQ から回答を作る LLM の指示を"
+                "選んだ登録済みQ&Aの回答をそのまま返すようにし、FAQ から回答を作る LLM の指示を"
                 "なくしたため、RAG_ANSWER_PROMPTS の PROMPT_KEY が faq_answer.system の行（編集した"
                 "FAQ の回答の指示）を削除します。ほかの行は変えません。編集した文を残す必要が"
                 "あれば、適用前に該当の行の CONTENT を export してください。"

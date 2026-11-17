@@ -36,7 +36,6 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 from app.features.agent.support_task import (
-    GUIDE_CHECK_TRACE_PREFIX,
     SUPPORT_TASK_KIND,
     SUPPORT_TASK_NAME,
     SupportTaskBudget,
@@ -532,10 +531,10 @@ def test_default_nl2sql_budget_allows_thirty_queries_per_run() -> None:
 
 
 def test_default_rag_budget_allows_thirty_searches_per_run() -> None:
-    """既定では rag_search・rag_retrieve_evidence の合計を 30 回まで実行する。"""
+    """既定では rag_search の合計を 30 回まで実行する。"""
     budget = _default_budget()
     for index in range(30):
-        tool = "rag__rag_search" if index % 2 else "rag__rag_retrieve_evidence"
+        tool = "rag__rag_search" if index % 2 else "rag__rag_search"
         assert budget.reserve(tool) is None
         assert budget.reserve("rag__rag_read_source") is None
     assert budget.rag_calls_remaining == 0
@@ -776,20 +775,12 @@ def test_profiles_keep_the_last_successful_profile_per_connection() -> None:
         previous,
         [
             _tool_step("rag__rag_search", {"query": "締め日", "search_answer_profile_id": "p-1"}),
-            _tool_step(
-                "rag__rag_retrieve_evidence", {"query": "締め日", "search_answer_profile_id": "p-2"}
-            ),
-            # 失敗した呼び出し・Control Plane の業務ガイドの照合・プロファイルの無い呼び出しは
-            # 残さない。
+            _tool_step("rag__rag_chat", {"query": "締め日", "search_answer_profile_id": "p-2"}),
+            # 失敗した呼び出し・プロファイルの無い呼び出しは残さない。
             _tool_step(
                 "rag__rag_search",
                 {"query": "x", "search_answer_profile_id": "p-bad"},
                 success=False,
-            ),
-            _tool_step(
-                "rag__rag_lookup_guides",
-                {"question": "x", "search_answer_profile_id": "p-guide"},
-                trace_id=f"{GUIDE_CHECK_TRACE_PREFIX}1",
             ),
             _tool_step("rag__rag_search", {"query": "x"}),
             _tool_step("nl2sql__nl2sql_query", {"question": "件数", "profile_id": "sales"}),
@@ -799,7 +790,7 @@ def test_profiles_keep_the_last_successful_profile_per_connection() -> None:
     # 前の状態の接続は引き継ぎ、同じ接続は最後の値で上書きする。
     assert state["profiles"] == {
         "rag-sub": {"kind": "rag", "id": "prof-old", "tool": "rag_search"},
-        "rag": {"kind": "rag", "id": "p-2", "tool": "rag_retrieve_evidence"},
+        "rag": {"kind": "rag", "id": "p-2", "tool": "rag_chat"},
         "nl2sql": {"kind": "nl2sql", "id": "sales", "tool": "nl2sql_query"},
     }
     # 次の Run でプロファイルを使わなければ、前の値をそのまま引き継ぐ。

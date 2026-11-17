@@ -26,7 +26,7 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from mcp_support import (
     DEFAULT_OUTPUTS,
     FakeProductMcp,
-    RagRetrieveEvidenceIn,
+    RagChatIn,
     RagSearchIn,
     fake_product_mcp,
 )
@@ -91,13 +91,13 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
         AgentSkillDefinition(
             id=SKILL_ID,
             name=SKILL_ID,
-            instructions="段ごとに rag_retrieve_evidence で調べる。",
+            instructions="段ごとに rag_search で調べる。",
             mcp_requirements=[
                 SkillMcpRequirement(
                     server_id="rag",
                     tool_names=[
                         "rag_search",
-                        "rag_retrieve_evidence",
+                        "rag_search",
                         "rag_outline",
                         "rag_read_document",
                     ],
@@ -155,7 +155,7 @@ def _tool_output(model: ScriptedModel, call_index: int, call_id: str) -> dict[st
 
 
 def _evidence_with(excerpt: str) -> dict[str, Any]:
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     output["evidence"][0].update(document_id="doc-org", file_name="組織規程.pdf", excerpt=excerpt)
     return output
 
@@ -163,20 +163,18 @@ def _evidence_with(excerpt: str) -> dict[str, Any]:
 # ---- 参照の検出（決定的） ---------------------------------------------------------------------
 
 
-def test_references_are_found_in_evidence_and_read_text() -> None:
-    evidence = {
-        "evidence": [
-            {
-                "document_id": "doc-org",
-                "file_name": "組織規程.pdf",
-                # 全角の数字は NFKC で同じに扱い、空白だけが違う同じ参照（第 4 章も）は 1 つにする。
-                "excerpt": "代理は第４章を参照してください。期限は第 2 章 を参照。第 4 章も参照。",
-            },
-            {"document_id": "doc-ledger", "excerpt": "詳しくは別表 2 参照のこと。"},
-            {"document_id": "", "excerpt": "第 9 章を参照"},
-        ]
+def test_references_are_found_in_read_text() -> None:
+    # RAG の回答のツールの根拠の参照は RAG が展開するので案内しない（#5342）。
+    evidence = {"evidence": [{"document_id": "doc-org", "excerpt": "代理は第４章を参照。"}]}
+    assert text_references("rag_search", evidence) == []
+    assert text_references("rag_chat", evidence) == []
+    # 全角の数字は NFKC で同じに扱い、空白だけが違う同じ参照（第 4 章も）は 1 つにする。
+    section = {
+        "document_id": "doc-org",
+        "file_name": "組織規程.pdf",
+        "text": "代理は第４章を参照してください。期限は第 2 章 を参照。第 4 章も参照。",
     }
-    assert text_references("rag_retrieve_evidence", evidence) == [
+    assert text_references("rag_read_section", section) == [
         {
             "document_id": "doc-org",
             "file_name": "組織規程.pdf",
@@ -187,12 +185,6 @@ def test_references_are_found_in_evidence_and_read_text() -> None:
             "document_id": "doc-org",
             "file_name": "組織規程.pdf",
             "reference": "第 2 章",
-            "how_to_read": REFERENCE_READ_HINT,
-        },
-        {
-            "document_id": "doc-ledger",
-            "file_name": None,
-            "reference": "別表 2",
             "how_to_read": REFERENCE_READ_HINT,
         },
     ]
@@ -212,7 +204,7 @@ def test_references_ignore_mentions_without_a_reference_and_other_tools() -> Non
     # 「参照」を伴わない章の言及・ほかのツールの出力は案内しない。
     assert (
         text_references(
-            "rag_retrieve_evidence",
+            "rag_search",
             {"evidence": [{"document_id": "d", "excerpt": "第 4 章では代理を定める。"}]},
         )
         == []
@@ -233,55 +225,11 @@ def test_references_ignore_mentions_without_a_reference_and_other_tools() -> Non
 # ---- Run ----------------------------------------------------------------------------------------
 
 
-def test_evidence_with_a_reference_gets_where_to_read_and_the_remaining_budget(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    mcp.outputs["rag_retrieve_evidence"] = _evidence_with("代理は第 4 章を参照してください。")
-    model = _script(
-        monkeypatch,
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "情報システム部 承認者"}, call_id="call-1"
-            )
-        ],
-        [function_call("rag__rag_read_document", {"document_id": "doc-org"}, call_id="call-2")],
-        [assistant_message("代理は管理本部長です。")],
-    )
-    run = _run()
-
-    limit = int(get_settings().agent_max_rag_calls_per_run)
-    seen = _tool_output(model, 1, "call-1")
-    assert all(item["document_id"].startswith("doc://") for item in seen["references"])
-    references = [
-        {**item, **decode_arguments(run.metadata, "rag", {"document_id": item["document_id"]})}
-        for item in seen["references"]
-    ]
-    assert references == [
-        {
-            "document_id": "doc-org",
-            "file_name": "組織規程.pdf",
-            "reference": "第 4 章",
-            "how_to_read": REFERENCE_READ_HINT,
-        }
-    ]
-    assert seen["rag_calls_remaining"] == limit - 1
-    # 読み取りは RAG の上限に数えないので、残りは変わらない。
-    # 参照の無い本文には references を足さない。
-    read = _tool_output(model, 2, "call-2")
-    assert read["rag_calls_remaining"] == limit - 1
-    assert "references" not in read
-
-    # 記録する step の結果は RAG の結果のまま。
-    recorded = [step.tool_result.output for step in run.steps if step.tool_result is not None]
-    assert all("references" not in (output or {}) for output in recorded)
-    assert all("rag_calls_remaining" not in (output or {}) for output in recorded)
-
-
 def test_no_budget_means_no_remaining_count(monkeypatch: MonkeyPatch, mcp: FakeProductMcp) -> None:
     monkeypatch.setattr(get_settings(), "agent_max_rag_calls_per_run", 0)
     model = _script(
         monkeypatch,
-        [function_call("rag__rag_retrieve_evidence", {"query": "承認者"}, call_id="call-1")],
+        [function_call("rag__rag_search", {"query": "承認者"}, call_id="call-1")],
         [assistant_message("承認者は部長です。")],
     )
     _run()
@@ -345,7 +293,7 @@ def _contract_schema(tool_name: str) -> dict[str, Any]:
             {"top_k": 10, "evidence_limit": 5},
             {
                 "top_k": {"requested": 10, "sent": 30},
-                "evidence_limit": {"requested": 5, "sent": 30},
+                "evidence_limit": {"requested": 5, "sent": 12},
             },
         ),
         (
@@ -366,7 +314,7 @@ def test_search_limits_follow_the_rag_contract(
     arguments: dict[str, Any], expected: dict[str, Any]
 ) -> None:
     # 既定と上限は RAG の契約から取る（#1403・#3240）。
-    schema = _contract_schema("rag_retrieve_evidence")
+    schema = _contract_schema("rag_search")
     assert adjusted_search_limits(arguments, schema) == expected
 
 
@@ -381,7 +329,7 @@ def test_rag_search_evidence_limit_default_stays_at_the_contract_value() -> None
 def test_search_limits_use_the_top_k_default_of_the_contract() -> None:
     """件数の既定は契約の `default` から取り、RAG の内部の既定を写さない（#3240）。契約の既定が
     変われば、引き上げる値もそれに従う。"""
-    schema = _contract_schema("rag_retrieve_evidence")
+    schema = _contract_schema("rag_search")
     default = schema["properties"]["top_k"]["default"]
     assert isinstance(default, int) and default > 5
     assert adjusted_search_limits({"top_k": 5}, schema) == {
@@ -393,15 +341,15 @@ def test_search_limits_use_the_top_k_default_of_the_contract() -> None:
 
 
 def test_search_limit_schema_tells_the_model_to_omit_the_limits() -> None:
-    schema = _contract_schema("rag_retrieve_evidence")
-    shown = search_limit_schema("rag__rag_retrieve_evidence", schema)
+    schema = _contract_schema("rag_search")
+    shown = search_limit_schema("rag__rag_search", schema)
     for name in ("top_k", "evidence_limit"):
         description = shown["properties"][name]["description"]
         assert description.endswith(SEARCH_LIMIT_SCHEMA_NOTE)
         assert "多段の質問では省略する" in description
     # 呼び先の契約（元の schema）は変えない。2 回通しても重ねない。
     assert SEARCH_LIMIT_SCHEMA_NOTE not in schema["properties"]["top_k"]["description"]
-    assert search_limit_schema("rag__rag_retrieve_evidence", shown) == shown
+    assert search_limit_schema("rag__rag_search", shown) == shown
     # 根拠のツール以外は元のまま。
     guides = _contract_schema("rag_lookup_guides")
     assert search_limit_schema("rag__rag_lookup_guides", guides) is guides
@@ -416,14 +364,14 @@ def _step(name: str, arguments: dict[str, Any], *, success: bool = True) -> RunS
 
 
 def test_repeated_query_compares_the_same_tool_and_scope_only() -> None:
-    tool = "rag__rag_retrieve_evidence"
+    tool = "rag__rag_search"
     arguments: dict[str, Any] = {"query": "勤怠管理システムの担当部署"}
     current = _step(tool, arguments)
     steps = [
         _step(tool, {"query": "勤怠管理システム 担当部署"}),
         # 失敗した呼び出し・別のツール・別のプロファイル・条件を足した呼び直しは数えない。
         _step(tool, {"query": "勤怠管理システム 担当部署"}, success=False),
-        _step("rag__rag_search", {"query": "勤怠管理システム 担当部署"}),
+        _step("rag__rag_chat", {"query": "勤怠管理システム 担当部署"}),
         _step(tool, {"query": "勤怠管理システム 担当部署", "search_answer_profile_id": "p2"}),
         _step(tool, {"query": "勤怠管理システム 担当部署", "conditions": {"kind": "年間"}}),
         _step(tool, {"query": "総務部 承認者"}),
@@ -480,21 +428,21 @@ def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
         monkeypatch,
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "勤怠管理システム 担当部署", "evidence_limit": 5},
                 call_id="call-1",
             )
         ],
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "勤怠管理システムの担当部署は？", "evidence_limit": 50},
                 call_id="call-2",
             )
         ],
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "システム台帳 勤怠管理システム 担当部署"},
                 call_id="call-3",
             )
@@ -503,19 +451,17 @@ def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
     )
     run = _run()
 
-    # 既定より小さい evidence_limit は既定（RAG の契約の 30。#1365）に引き上げ、既定以上は変えない。
-    sent = [
-        call["arguments"].get("evidence_limit") for call in mcp.calls_of("rag_retrieve_evidence")
-    ]
-    assert sent == [30, 50, None]
+    # 既定より小さい evidence_limit は既定（RAG の契約の値。#1365）に引き上げ、既定以上は変えない。
+    sent = [call["arguments"].get("evidence_limit") for call in mcp.calls_of("rag_search")]
+    assert sent == [12, 50, None]
     # step には送った値を残す。
     recorded = [step.tool_call.arguments for step in run.steps if step.tool_call is not None]
-    assert recorded[0]["evidence_limit"] == 30
+    assert recorded[0]["evidence_limit"] == 12
 
     assert "repeated_query" not in _tool_output(model, 1, "call-1")
     assert _tool_output(model, 1, "call-1")["adjusted_limits"]["evidence_limit"] == {
         "requested": 5,
-        "sent": 30,
+        "sent": 12,
     }
     assert "adjusted_limits" not in _tool_output(model, 2, "call-2")
     assert _tool_output(model, 2, "call-2")["repeated_query"] == {
@@ -537,14 +483,14 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
         monkeypatch,
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "システム台帳 販売管理システム エスカレーション先", "top_k": 5},
                 call_id="call-1",
             )
         ],
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "第三日曜 停止 システム", "top_k": 100, "evidence_limit": 100},
                 call_id="call-2",
             )
@@ -562,13 +508,12 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
 
     # 既定（30）より小さい top_k は既定に引き上げ、上限（evidence_limit 50）を超える値は上限に
     # 丸める。呼び先の入力検証（fake は契約の上限で検証する）で失敗させない（#1403）。
-    sent = [call["arguments"] for call in mcp.calls_of("rag_retrieve_evidence")]
+    sent = [call["arguments"] for call in mcp.calls_of("rag_search")]
     assert [(args.get("top_k"), args.get("evidence_limit")) for args in sent] == [
         (30, None),
         (100, 50),
+        (30, None),
     ]
-    [searched] = mcp.calls_of("rag_search")
-    assert searched["arguments"]["top_k"] == 30
     assert all(step.tool_result is not None and step.tool_result.success for step in run.steps)
     # step には送った値を残す。
     recorded = [step.tool_call.arguments for step in run.steps if step.tool_call is not None]
@@ -591,96 +536,10 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
     assert all("adjusted_limits" not in (output or {}) for output in outputs)
     # モデルに見せる schema の件数の説明に「多段の質問では省略する」を足す。
     tools = {tool.name: tool for tool in model.calls[0].tools if isinstance(tool, FunctionTool)}
-    for name in ("rag__rag_retrieve_evidence", "rag__rag_search"):
+    for name in ("rag__rag_search", "rag__rag_search"):
         properties = tools[name].params_json_schema["properties"]
         assert SEARCH_LIMIT_SCHEMA_NOTE in properties["top_k"]["description"]
         assert SEARCH_LIMIT_SCHEMA_NOTE in properties["evidence_limit"]["description"]
-
-
-def test_business_rag_research_instructions_cover_hop_queries() -> None:
-    skill = skill_registry.get("business-rag-research")
-    assert skill is not None
-    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
-    instructions = skill.instructions.replace("`", "")
-    # 1 回の呼び出しは 1 つの問い・段の query はその段の問いだけ（#5125）・件数は既定より
-    # 小さくしない・言い換えは 2 回まで・
-    # 台帳を示されたらその実体で台帳を引く（#1351）。Runtime の案内（record_codes・repeated_query・
-    # superseded_versions・section_reads）は、それぞれ結果の中の next_step に次の手を持つので、
-    # 本文は「next_step に従う」の 1 か所だけにする（#2269。契約は test_skill_md_spec.py）。
-    for phrase in (
-        "段ごとに rag_retrieve_evidence を 1 回呼ぶ。複数の段・小問を 1 回の呼び出しにまとめない。",
-        "段・小問ならその段の問いだけにする。前の段で分かった正式名・略号・ID・役職名は根拠の表記のまま"
-        "入れる。",
-        "件数（top_k・evidence_limit）は既定より小さくしない（多段の質問では省略する）",
-        "1 回目の結果だけで答えず、その意味を次の段で引く",
-        "言い換えて 2 回引いても根拠が出なければ",
-        "その台帳・一覧の名前と実体と属性で次の段を引く",
-        "組み込みの Agent では、ツールの結果（とその中の案内）に next_step（次にすること）が"
-        "付くことがある。付いたらそれに従う。",
-        "rag_calls_remaining",
-        "references",
-        # 旧版・変更点を尋ねる質問は旧版も検索する（#1392）。
-        "include_superseded: true",
-        # 旧版の年度を名指しする質問の例（#1405）。
-        "「2025 年度と 2026 年度では」",
-        "older_versions",
-        # 台帳の略称・別表記で書かれたほかの資料の記載も同じ対象として使う（#1958）。
-        "ほかの資料はその名前で書くことがある",
-    ):
-        assert phrase in instructions, phrase
-
-
-def test_business_rag_research_instructions_do_not_report_the_work() -> None:
-    """回答に作業の経過（ツール名・検索の状態・業務ガイドの有無・旧版の有無）を書かない（#1452）。
-
-    正しいのに回答が conditional になっていた（`da-regional-report-export` の「業務ガイドは
-    見つかりませんでした」、`km-license-fee` の「rag_search の結果は insufficient_evidence」、
-    `ir-emergency-change` の「旧版もあることが確認できました」、`br-crm-retention` の
-    「確かめられなかった点はありません」）。"""
-    skill = skill_registry.get("business-rag-research")
-    assert skill is not None
-    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
-    instructions = skill.instructions.replace("`", "")
-    for phrase in (
-        "回答には、資料の内容と、資料で確かめられなかった点だけを書く。",
-        "ツールの名前（rag_retrieve_evidence・rag_outline など）",
-        "ツールの結果の項目の値（role・origin など）",
-        "業務ガイドが見つかった・見つからなかったこと",
-        "検索の結果に旧版（older_versions）があったこと",
-        "自分の作業の経過は回答に書かない",
-        "「確かめられなかった点はありません」のような作業の報告",
-        # 旧版を比べる質問で旧版の内容を書くのは除く。
-        "旧版・改定前との違いを尋ねる質問で、旧版の内容を書くのは除く。",
-    ):
-        assert phrase in instructions, phrase
-
-
-def test_business_rag_research_instructions_do_not_add_absence_or_exhaustive_supplements() -> None:
-    """質問が求めない不在・網羅の補足を書かない（#1470）。
-
-    e1467-deepseek の D で、質問に答えた後の補足の「…は SYS-107 の 1 件だけでした」
-    （`tl-it-department-system`）・「A かつ極秘のものはこの 2 件だけです」
-    （`tl-severity-a-top-secret`）・「入出荷管理システム固有の別頻度は見当たりませんでした」
-    （`br-shipping-backup`）などの 8 段落が、渡された根拠の範囲で不在・網羅を確かめられず
-    unsupported になり、結論は正しいのに回答が conditional になっていた。"""
-    skill = skill_registry.get("business-rag-research")
-    assert skill is not None
-    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
-    instructions = skill.instructions.replace("`", "")
-    for phrase in (
-        "質問が求めない限り、資料に無いこと",
-        "ほかに無いこと・全件で何件だけ",
-        "を補足に書かない",
-        "無いと断定せず、確かめられなかった点として書く。",
-        # 全件を求める質問は、読んだ範囲を結論に書き、補足で繰り返さない。
-        "読んだ範囲（例: 台帳の SYS-101〜SYS-180 の 80 行を読んだ）を結論に書き、",
-        "補足で繰り返さない。",
-    ):
-        assert phrase in instructions, phrase
-    # 資料で確かめられなかった点を書く決まり（#1452）と矛盾させない（その文の後に置く）。
-    assert instructions.index("資料で確かめられなかった点だけを書く。") < instructions.index(
-        "質問が求めない限り、資料に無いこと"
-    )
 
 
 # ---- 台帳の行の略号・区分（#1365） --------------------------------------------------------------
@@ -802,21 +661,13 @@ def test_record_codes_are_bounded() -> None:
 def test_ledger_row_with_codes_gets_a_next_hop_hint(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     output["evidence"] = deepcopy(_LEDGER_EVIDENCE["evidence"])
-    mcp.outputs["rag_retrieve_evidence"] = output
+    mcp.outputs["rag_search"] = output
     model = _script(
         monkeypatch,
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "経費精算ポータル 担当部署"}, call_id="c1"
-            )
-        ],
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "担当部署 経 正式名"}, call_id="c2"
-            )
-        ],
+        [function_call("rag__rag_search", {"query": "経費精算ポータル 担当部署"}, call_id="c1")],
+        [function_call("rag__rag_search", {"query": "担当部署 経 正式名"}, call_id="c2")],
         [assistant_message("担当部署は経理部です。")],
     )
     run = _run()
@@ -879,10 +730,10 @@ def _hop_steps(*queries: str, evidence: list[dict[str, Any]] | None = None) -> l
             run_id="run-1958",
             title="根拠",
             tool_call=ToolCall(
-                name="rag__rag_retrieve_evidence", arguments={"query": query}, trace_id=f"t{index}"
+                name="rag__rag_search", arguments={"query": query}, trace_id=f"t{index}"
             ),
             tool_result=ToolResult(
-                name="rag__rag_retrieve_evidence",
+                name="rag__rag_search",
                 success=True,
                 output={"evidence": deepcopy(evidence or _HOP_EVIDENCE)},
             ),
@@ -931,19 +782,15 @@ def test_unresolved_hops_are_empty_once_the_next_hop_is_taken() -> None:
 def test_answer_with_an_unresolved_code_is_sent_back_once(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     output["evidence"] = deepcopy(_HOP_EVIDENCE)
-    mcp.outputs["rag_retrieve_evidence"] = output
+    mcp.outputs["rag_search"] = output
     first = "30 分以内に安部の承認者へ連絡します。"
     model = _script(
         monkeypatch,
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "ID管理システム 障害 連絡"}, call_id="c1"
-            )
-        ],
+        [function_call("rag__rag_search", {"query": "ID管理システム 障害 連絡"}, call_id="c1")],
         [assistant_message(first)],
-        [function_call("rag__rag_retrieve_evidence", {"query": "担当部署 安"}, call_id="c2")],
+        [function_call("rag__rag_search", {"query": "担当部署 安"}, call_id="c2")],
         [assistant_message("30 分以内に情報セキュリティ部長へ連絡します。")],
     )
 
@@ -955,7 +802,7 @@ def test_answer_with_an_unresolved_code_is_sent_back_once(
     assert retry.startswith(UNRESOLVED_HOPS_HINT)
     assert "「担当部署 安」" in retry
     assert first in retry
-    assert len(mcp.calls_of("rag_retrieve_evidence")) == 2
+    assert len(mcp.calls_of("rag_search")) == 2
     answer = [item for item in run.artifacts if item.kind == "answer"][-1].content["text"]
     assert answer == "30 分以内に情報セキュリティ部長へ連絡します。"
     assert run.metadata[METADATA_KEY] == {"hop_retries": 1}
@@ -968,16 +815,12 @@ def test_answer_with_an_unresolved_code_is_sent_back_once(
 def test_unresolved_code_is_not_sent_back_twice(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     output["evidence"] = deepcopy(_HOP_EVIDENCE)
-    mcp.outputs["rag_retrieve_evidence"] = output
+    mcp.outputs["rag_search"] = output
     model = _script(
         monkeypatch,
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "ID管理システム 障害 連絡"}, call_id="c1"
-            )
-        ],
+        [function_call("rag__rag_search", {"query": "ID管理システム 障害 連絡"}, call_id="c1")],
         [assistant_message("安部の承認者です。")],
         [assistant_message("担当部署（安）の承認者です。")],
     )
@@ -1112,16 +955,12 @@ def test_unresolved_hops_skip_codes_the_question_names() -> None:
 def _hop_retry_run(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp, first: str, second: str
 ) -> RunState:
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     output["evidence"] = deepcopy(_HOP_EVIDENCE)
-    mcp.outputs["rag_retrieve_evidence"] = output
+    mcp.outputs["rag_search"] = output
     _script(
         monkeypatch,
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "ID管理システム 障害 連絡"}, call_id="c1"
-            )
-        ],
+        [function_call("rag__rag_search", {"query": "ID管理システム 障害 連絡"}, call_id="c1")],
         [assistant_message(first)],
         [assistant_message(second)],
     )
@@ -1129,18 +968,18 @@ def _hop_retry_run(
 
 
 def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:
-    """fake の既定の件数は RAG の契約と同じ（rag_retrieve_evidence 30・rag_search 12。#1365）。"""
+    """fake の既定の件数は RAG の契約と同じ（rag_search・rag_chat。#1365）。"""
     contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
     defaults = {
         tool["name"]: tool["inputSchema"]["properties"]["evidence_limit"]["default"]
         for tool in contract["tools"]
-        if tool["name"] in {"rag_search", "rag_retrieve_evidence"}
+        if tool["name"] in {"rag_search", "rag_chat"}
     }
     assert defaults == {
         "rag_search": RagSearchIn.model_fields["evidence_limit"].default,
-        "rag_retrieve_evidence": RagRetrieveEvidenceIn.model_fields["evidence_limit"].default,
+        "rag_chat": RagChatIn.model_fields["evidence_limit"].default,
     }
-    assert defaults == {"rag_search": 12, "rag_retrieve_evidence": 30}
+    assert defaults == {"rag_search": 12, "rag_chat": 12}
 
 
 def test_fake_rag_search_inputs_match_the_contract() -> None:
@@ -1149,7 +988,7 @@ def test_fake_rag_search_inputs_match_the_contract() -> None:
     tools = {tool["name"]: tool["inputSchema"] for tool in contract["tools"]}
     for name, model in (
         ("rag_search", RagSearchIn),
-        ("rag_retrieve_evidence", RagRetrieveEvidenceIn),
+        ("rag_chat", RagChatIn),
     ):
         schema = tools[name]
         assert set(schema["properties"]) == set(model.model_fields), name
@@ -1230,25 +1069,25 @@ def test_named_old_year_gets_a_superseded_search_hint(
     """旧版の年度を名指しする質問で旧版を検索しなければ、旧版も含めた検索し直しを勧める。"""
 
     def evidence(argument: Any) -> dict[str, Any]:
-        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
         # RAG は旧版を検索しなかったときだけ、当たった文書の旧版を返す。
         if not argument.include_superseded:
             output["older_versions"] = [dict(_PLAN_2025)]
         return output
 
-    mcp.outputs["rag_retrieve_evidence"] = evidence
+    mcp.outputs["rag_search"] = evidence
     model = _script(
         monkeypatch,
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "定期保守計画 ＨＲＭ 保守枠"},
                 call_id="call-1",
             )
         ],
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "定期保守計画 2025年度 ＨＲＭ 保守枠", "include_superseded": True},
                 call_id="call-2",
             )
@@ -1268,10 +1107,10 @@ def test_named_old_year_gets_a_superseded_search_hint(
         "next_step": SUPERSEDED_VERSION_HINT,
     }
     assert "superseded_versions" not in _tool_output(model, 2, "call-2")
-    assert [
-        call["arguments"].get("include_superseded")
-        for call in mcp.calls_of("rag_retrieve_evidence")
-    ] == [None, True]
+    assert [call["arguments"].get("include_superseded") for call in mcp.calls_of("rag_search")] == [
+        None,
+        True,
+    ]
     # 記録する step の結果は RAG の結果のまま。
     outputs = [step.tool_result.output for step in run.steps if step.tool_result is not None]
     assert all("superseded_versions" not in (output or {}) for output in outputs)
@@ -1281,7 +1120,7 @@ def test_fake_rag_evidence_outputs_match_the_contract() -> None:
     """fake の根拠の結果の項目は RAG の契約の出力にある（旧版の older_versions を含む。#1405）。"""
     contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
     tools = {tool["name"]: tool["outputSchema"] for tool in contract["tools"]}
-    for name in ("rag_search", "rag_retrieve_evidence"):
+    for name in ("rag_search", "rag_chat"):
         properties = tools[name]["properties"]
         assert set(DEFAULT_OUTPUTS[name]) <= set(properties), name
         assert "older_versions" in DEFAULT_OUTPUTS[name], name
@@ -1309,7 +1148,7 @@ _GROUPED_GOAL = "契約の更新の手順をすべて教えてください。"
 
 
 def _section_evidence(**overrides: Any) -> dict[str, Any]:
-    item: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]["evidence"][0])
+    item: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"]["evidence"][0])
     item.update(overrides)
     return item
 
@@ -1332,7 +1171,7 @@ def test_section_read_note_points_to_sections_longer_than_the_excerpt() -> None:
     no_section = _section_evidence(chunk_id="c-5", section=None)
     output = {"evidence": [first, same_section, short, used, other, no_section]}
 
-    note = section_read_note("rag_retrieve_evidence", output, [_GROUPED_GOAL])
+    note = section_read_note("rag_search", output, [_GROUPED_GOAL])
 
     assert note is not None and note["next_step"] == SECTION_READ_HINT
     # 回答に使った根拠を先に、同じ章節は 1 つにし、抜粋より短い章節は案内しない。
@@ -1365,13 +1204,13 @@ def test_section_read_note_points_to_sections_longer_than_the_excerpt() -> None:
 def test_section_read_note_needs_a_grouped_question() -> None:
     output = {"evidence": [_section_evidence()]}
 
-    assert section_read_note("rag_retrieve_evidence", output, ["契約の更新の期限は？"]) is None
+    assert section_read_note("rag_search", output, ["契約の更新の期限は？"]) is None
     assert asks_for_grouped_content(["確認する項目を挙げてください"]) is True
     assert asks_for_grouped_content(["ＨＲＭの申請の流れ"]) is True
     assert asks_for_grouped_content(["承認者は誰？", None]) is False
     # 読み取りのツール以外・根拠の無い結果は案内しない。
     assert section_read_note("rag_read_source", output, [_GROUPED_GOAL]) is None
-    assert section_read_note("rag_retrieve_evidence", {"evidence": []}, [_GROUPED_GOAL]) is None
+    assert section_read_note("rag_search", {"evidence": []}, [_GROUPED_GOAL]) is None
 
 
 def test_section_read_note_after_reading_a_section() -> None:
@@ -1406,18 +1245,14 @@ def test_run_reads_the_section_of_the_evidence_when_the_question_asks_for_steps(
             mcp_requirements=[
                 SkillMcpRequirement(
                     server_id="rag",
-                    tool_names=["rag_retrieve_evidence", "rag_read_section"],
+                    tool_names=["rag_search", "rag_read_section"],
                 )
             ],
         )
     )
     model = _script(
         monkeypatch,
-        [
-            function_call(
-                "rag__rag_retrieve_evidence", {"query": "契約 更新 手順"}, call_id="call-1"
-            )
-        ],
+        [function_call("rag__rag_search", {"query": "契約 更新 手順"}, call_id="call-1")],
         [
             function_call(
                 "rag__rag_read_section",
@@ -1455,13 +1290,3 @@ def test_run_reads_the_section_of_the_evidence_when_the_question_asks_for_steps(
     # 記録する step の結果は RAG の結果のまま。
     recorded = [step.tool_result.output for step in run.steps if step.tool_result is not None]
     assert all("section_reads" not in (output or {}) for output in recorded)
-
-
-def test_business_rag_research_skill_reads_sections() -> None:
-    skill = skill_registry.get("business-rag-research")
-    assert skill is not None
-    assert "rag_read_section" in skill.mcp_requirements[0].tool_names
-    # 章節の読み方は本文（Step 4）に置く（参照文書は #1816 の評価で読まれなかった。#1846）。
-    assert "`rag_read_section` に `document_id`" in skill.instructions
-    assert "`up` を 1 ずつ増やして" in skill.instructions
-    assert skill.references == []

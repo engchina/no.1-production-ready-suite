@@ -394,9 +394,9 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
 # 渡す。
 # - basic: 基本の RAG。⑤ 検索（vector / keyword / native hybrid）→ 融合（RRF）→ rerank ＋
 #   ⑥ 親・前後の読取 → ⑧ 回答。画面の RAG 検索・検索だけ（retrieval_only）・staging の確かめ。
-# - expanded: ③ 業務ガイドの照合・承認済み FAQ と ⑦ 根拠の拡張（章節の拡張・参照の展開・目次から
+# - expanded: 登録済みQ&A・③ 業務ガイドの照合と ⑦ 根拠の拡張（章節の拡張・参照の展開・目次から
 #   の章節の選択・実体・関係情報・検索上限の要求別補完・業務ガイドの手順ごとの検索）あり。
-#   RAG Chat・品質評価・業務ガイドの下書きの試答・MCP。
+#   RAG チャット・品質評価・業務ガイドの下書きの試答・MCP。
 # ② 会話の履歴による補完（``run(history=...)``）と ④ 会話の添付（``attachment_conversation_id``）は
 # 経路と別の引数で渡す。
 AnswerFlow = Literal["basic", "expanded"]
@@ -707,7 +707,7 @@ class RagPipeline:
                 request = request.model_copy(
                     update={"query": rewritten_query, "original_question": original_query}
                 )
-        # 利用者が選んだ承認済み FAQ（入口で引き直した。#5107）は、検索・会話の添付の根拠・回答の
+        # 利用者が選んだ登録済みQ&A（入口で引き直した。#5107）は、検索・会話の添付の根拠・回答の
         # 生成を通さず、FAQ の回答を原文のまま返す（モデルを呼ばない）。
         faq_outcome: AnswerOutcome | None = None
         selected_faq = self._settings.rag_approved_faq_selected

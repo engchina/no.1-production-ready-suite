@@ -1,4 +1,4 @@
-"""承認済み FAQ を質問と回答だけにした保存値の一度限りの migration（#5107）。
+"""登録済みQ&Aを質問と回答だけにした保存値の一度限りの migration（#5107）。
 
 FAQ の項目を質問（QUESTION）と回答（ANSWER）だけにし、自動の直接回答と、選んだ FAQ を LLM に
 渡す回答をやめた。検索・回答プロファイルの FAQ の payload（``RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE``

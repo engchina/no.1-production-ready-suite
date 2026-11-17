@@ -46,10 +46,10 @@ def current_with_data_and_source() -> Any:
             {"document_id": "document-a", "chunk_id": "chunk-a", "excerpt": "合成の原文。"}
         ]
     }
-    source = _step("rag_retrieve_evidence", evidence)
+    source = _step("rag_search", evidence)
     current = SimpleNamespace(id="run-synthetic", metadata={}, steps=[data, source])
     register_data_result(current.metadata, data.id, output)
-    source_handles.register_output(current.metadata, "rag", evidence, tool="rag_retrieve_evidence")
+    source_handles.register_output(current.metadata, "rag", evidence, tool="rag_search")
     return current
 
 

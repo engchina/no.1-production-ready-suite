@@ -492,7 +492,7 @@ def test_cases_can_be_imported_and_exported_as_excel(agent: None) -> None:
     [sample] = parsed.json()["data"]["cases"]
     assert (sample["id"], sample["expected_tools"], sample["expected_tools_in_order"]) == (
         "expense-deadline",
-        ["rag_retrieve_evidence", "rag_read_source"],
+        ["rag_chat"],
         True,
     )
 
@@ -1140,22 +1140,22 @@ def test_judge_retry_widens_the_output_limit(monkeypatch: MonkeyPatch) -> None:
     ("calls", "in_order", "selection", "order"),
     [
         (
-            ["rag__rag_retrieve_evidence", "rag__rag_lookup_guides", "rag__rag_search"],
+            ["rag__rag_chat", "rag__rag_read_source", "rag__rag_search"],
             True,
             True,
             True,
         ),
         # 間にほかのツールを挟んでもよい。
         (
-            ["rag__rag_list_profiles", "rag__rag_retrieve_evidence", "rag__rag_search"],
+            ["rag__rag_list_profiles", "rag__rag_chat", "rag__rag_search"],
             True,
             True,
             True,
         ),
-        (["rag__rag_search", "rag__rag_retrieve_evidence"], True, False, False),
-        (["rag__rag_retrieve_evidence"], True, False, False),
+        (["rag__rag_search", "rag__rag_chat"], True, False, False),
+        (["rag__rag_chat"], True, False, False),
         # 順を指定しないケースは順を判定しない。
-        (["rag__rag_search", "rag__rag_retrieve_evidence"], False, True, None),
+        (["rag__rag_search", "rag__rag_chat"], False, True, None),
     ],
     ids=["in-order", "other-tools-between", "wrong-order", "missing", "order-not-required"],
 )
@@ -1166,7 +1166,7 @@ def test_expected_tool_order(
     case = EvaluationCase(
         question="q",
         expected="x",
-        expected_tools=["rag_retrieve_evidence", "rag_search"],
+        expected_tools=["rag_chat", "rag_search"],
         expected_tools_in_order=in_order,
     )
     assert evaluation.tool_order_correct(case, calls) is order

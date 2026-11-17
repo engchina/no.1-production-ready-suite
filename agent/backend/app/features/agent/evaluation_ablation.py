@@ -37,7 +37,7 @@ from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
 from app.features.agent.runtime import RunEventType, RunState
 from app.features.agent.tools import MCP_TOOL_SEPARATOR
 
-RAG_TOOL_NAMES = frozenset({"rag_search", "rag_retrieve_evidence"})
+RAG_TOOL_NAMES = frozenset({"rag_search", "rag_chat"})
 
 
 def _percentile(values: Sequence[float], quantile: float) -> float | None:

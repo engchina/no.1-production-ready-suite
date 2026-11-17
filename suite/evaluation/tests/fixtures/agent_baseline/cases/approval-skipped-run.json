@@ -75,7 +75,7 @@
           "outcome_source": null,
           "model_requests": 2,
           "tool_calls": {
-            "rag_retrieve_evidence": 1,
+            "rag_chat": 1,
             "record_write": 1
           },
           "superseded_searches": 0,

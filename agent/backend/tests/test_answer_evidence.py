@@ -1,6 +1,6 @@
 """回答の根拠（成果物 `answer_evidence`）と、調べ方の行の扱い（#2328）の決定論テスト。
 
-- AI に渡した根拠 = その Run の `rag_search` / `rag_retrieve_evidence` の `evidence`
+- AI に渡した根拠 = その Run の `rag_search` / `rag_search` の `evidence`
   （chunk で重複なし）。
 - 回答で引用 = 回答が書いた根拠の ID（省いた形を含む）。
 - 調べるのに使ったプロファイル・ツール・内部の ID だけを述べる行は、検証の前に回答から外し、
@@ -278,7 +278,7 @@ def test_a_citation_line_without_a_page_points_at_the_first_evidence_of_the_docu
     [
         ("- プロファイル A（ID: 0f3a9c2e7b1d4e5f）を用いて上記根拠を取得しました。", True),
         ("検索の設定 B（ID:3fa85f64-5717-4562-b3fc-2c963f66afa6）で検索しました。", True),
-        ("rag_retrieve_evidence で根拠を取得しました。", True),
+        ("rag_search で根拠を取得しました。", True),
         # 内部の ID の無い調べ方・主張・数字だけの番号・操作の指示は外さない。
         ("第 3 条を確認しました。", False),
         ("承認者は部長です（ID: 1a2b3c4d）。", False),

@@ -190,8 +190,8 @@ class _Tree:
 @pytest.fixture
 def rag(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(monkeypatch)
-    fake.outputs["rag_retrieve_evidence"] = _rag_server(fake, "rag_retrieve_evidence")
-    with _agent({"rag": ["rag_retrieve_evidence", "rag_lookup_guides"]}):
+    fake.outputs["rag_search"] = _rag_server(fake, "rag_search")
+    with _agent({"rag": ["rag_search"]}):
         yield fake
 
 
@@ -202,7 +202,7 @@ def test_tool_call_with_mcp_to_rag_nests_each_step_under_its_owner(
         monkeypatch,
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "合成の語", "search_answer_profile_id": PROFILE},
                 call_id="call-1",
             )
@@ -225,21 +225,13 @@ def test_tool_call_with_mcp_to_rag_nests_each_step_under_its_owner(
     assert top == [
         ("agent.attachment_evidence", None, None),
         (CHAT, "plan", None),
-        (TOOL, "tool", "rag__rag_retrieve_evidence"),
+        (TOOL, "tool", "rag__rag_search"),
         (CHAT, "respond", None),
     ]
-    evidence = tree.tool("rag__rag_retrieve_evidence")
-    # 業務ガイドの照合（#1322）は根拠の取得の一部なので、根拠の取得のツールの子（#3471）。
-    guides = tree.tool("rag__rag_lookup_guides")
-    assert tree.parent(guides) == evidence
-    assert guides.started_at >= evidence.started_at
-    assert evidence.finished_at is not None and guides.finished_at is not None
-    assert guides.finished_at <= evidence.finished_at
+    evidence = tree.tool("rag__rag_search")
     # MCP の呼び出しは、それを送ったツールの span の子（ツールの thread でも）。
-    [evidence_call] = tree.tools_call("rag_retrieve_evidence")
+    [evidence_call] = tree.tools_call("rag_search")
     assert tree.parent(evidence_call) == evidence
-    [guides_call] = tree.tools_call("rag_lookup_guides")
-    assert tree.parent(guides_call) == guides
     # 呼び先（RAG）の server の span は、送った `tools/call` の `mcp.request` の子で、RAG の工程は
     # その下（同じ trace）。
     [server] = tree.all(SERVER)
