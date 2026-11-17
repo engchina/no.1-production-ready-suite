@@ -1063,8 +1063,9 @@ toast.success(t("…deleted"), { action: { label: t("common.undo"), onClick: und
 | 通知の領域に `data-toast-placement`（`bottom-right` / `top-bar`） | E2E と目視で、どの規則で置いたかを確かめられる |
 | 下端の通知は下から、上端の通知は上から現れる（`toast-in` の向きは領域の `--toast-enter-y`） | 置き場所の側から現れる |
 | 下端からの距離は共通の定数 `--toast-offset-bottom` だけで決め、画面ごとの余白・位置の上書きをしない | 主操作と重なる画面が出たら、定数か画面の作りを直す（製品で通知の位置を変えない） |
+| md 以上の `PageBody` はページの末尾（下の余白）に通知の置き場所の高さ `--toast-reserve-bottom`（`calc(var(--toast-offset-bottom) + 6rem)` = 14rem）を空ける。md 未満と、下端に固定された入力欄（`ChatLayout`。埋め込みを除く）を持つ本文は 1.5rem のまま（#5354） | スクロールしきったとき、通知の範囲の下に内容（表の最後の行の行メニュー・末尾のボタン）が来ない。表の行メニュー（`RowActionMenu`）も通知で覆ってはならない主操作。余白は `PageBody` だけが持ち、画面ごとに足さない |
 
-E2E は 3 製品の同じ内容の helper（RAG `e2e/_toast-placement.ts`・Agent `e2e/fixtures/toast-placement.ts`・NL2SQL `tests/e2e/_helpers/toast.ts`）で確かめます。`expectToastPlacement` は規則どおりの位置（desktop は右下、375px は上端のバー）を、`expectMainActionsClearOfToast` は通知の範囲（最も広い通知・本文と補足の 1 件）が主操作（`PageHeader` の操作・`FormActionBar`・`ObjectActionBar`・チャットの入力欄と送信・ページの末尾の操作）と重ならないことを確かめます（3 製品の `a11y.nightly.spec.ts` がサイドナビの全項目で実行）。通知を閉じてから押す回避（`dismissToasts`）は要りません。
+E2E は 3 製品の同じ内容の helper（RAG `e2e/_toast-placement.ts`・Agent `e2e/fixtures/toast-placement.ts`・NL2SQL `tests/e2e/_helpers/toast.ts`）で確かめます。`expectToastPlacement` は規則どおりの位置（desktop は右下、375px は上端のバー）を、`expectMainActionsClearOfToast` は通知の範囲（最も広い通知・本文と補足の 1 件）が主操作（`PageHeader` の操作・`FormActionBar`・`ObjectActionBar`・チャットの入力欄と送信・ページの末尾の操作・スクロールしきった後に画面の下半分にある表の行メニュー（`RowActionMenu` の起動のボタンの `data-row-action-menu`。#5354））と重ならないことを確かめます（3 製品の `a11y.nightly.spec.ts` がサイドナビの全項目で実行）。通知を閉じてから押す回避（`dismissToasts`）は要りません。
 
 メッセージの部品（`Toast`・`Banner`・`FormStatus`・`ProcessingIndicator`・`BlockedPageNotice` の面と `MessageText`）は、共有の CSS の `.pr-message-text`（`word-break: auto-phrase`・`overflow-wrap: anywhere`・`text-wrap: pretty`）で日本語を文節で折り返します（#899。README §4「メッセージの本文の折り返し」）。製品でメッセージに `word-break` などを書かないでください。語の途中で折り返さないことは NL2SQL の `tests/e2e/message-wrapping.spec.ts`（文字ごとの描画位置から折り返しの位置を求め、`Intl.Segmenter` の語の境界と比べる）で確かめます。
 

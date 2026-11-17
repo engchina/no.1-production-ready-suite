@@ -70,6 +70,10 @@
      （3.5 行で下端から約 10rem）がある画面は、入力欄の上端から 1rem 上に出す（`--toast-clear-bottom`。#2103）。 */
   --toast-max-height-narrow: 40dvh;
   --toast-offset-bottom: 8rem;       /* 112px */
+  /* md 以上でページの末尾に空ける通知の置き場所の高さ（#5354）。下端からの距離（8rem）+ 通知 1 件の高さの見込み
+     （本文と補足の 1 件。約 6rem）= 14rem。`PageBody` が md 以上で下の余白にし、スクロールしきったとき通知の範囲の下に
+     内容（表の行メニュー・末尾のボタン）を置かない。md 未満（通知は上端）は空けない。 */
+  --toast-reserve-bottom: calc(var(--toast-offset-bottom) + 6rem); /* 196px */
 
   /* アイコン寸法。13/15/16/18/22/24 の 6 値混在を 4 段に統合。
      Lucide は 2px ストロークなので偶数 px 以外はサブピクセルでボケます。 */

@@ -77,6 +77,8 @@ describe("tokens CSS", () => {
     expect(spacing).toMatch(/--toast-width-min:\s*22rem;/);
     expect(spacing).toMatch(/--toast-width-max:\s*32rem;/);
     expect(spacing).toMatch(/--toast-offset-bottom:\s*8rem;/);
+    // ページの末尾に空ける通知の置き場所の高さは、下端からの距離に通知 1 件の高さ（6rem）を足した値（#5354）。
+    expect(spacing).toMatch(/--toast-reserve-bottom:\s*calc\(var\(--toast-offset-bottom\) \+ 6rem\);/);
     const placement = readFileSync(new URL("../src/lib/toast-placement.ts", import.meta.url), "utf8");
     expect(placement).toContain('"var(--toast-width-min)"');
     expect(placement).toContain('"var(--toast-width-max)"');

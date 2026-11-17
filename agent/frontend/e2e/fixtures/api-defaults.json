@@ -9,7 +9,7 @@
     {
       "id": "default",
       "name": "RAG チャット＋データアシスタント",
-      "description": "資料（RAG チャット）と業務データ（NL2SQL）を使い分けて調べる既定の業務 Agent。",
+      "description": "社内の資料（RAG のチャットと同じ流れ）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる既定の業務 Agent。",
       "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
       "skill_ids": [
         "rag-chat-and-data"
@@ -22,7 +22,7 @@
         {
           "version": 1,
           "name": "RAG チャット＋データアシスタント",
-          "description": "資料（RAG チャット）と業務データ（NL2SQL）を使い分けて調べる既定の業務 Agent。",
+          "description": "社内の資料（RAG のチャットと同じ流れ）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる既定の業務 Agent。",
           "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
           "skill_ids": [
             "rag-chat-and-data"
@@ -42,7 +42,7 @@
     {
       "id": "rag-chat",
       "name": "RAG チャットアシスタント",
-      "description": "RAG チャットの回答と根拠をそのまま返す業務 Agent。",
+      "description": "社内の資料を RAG のチャットと同じ流れ（登録済みQ&A・業務ガイド・根拠の拡張）で調べ、RAG の回答と根拠をそのまま返す業務 Agent。",
       "instructions": "資料の質問に、RAG のチャットの流れで答える。",
       "skill_ids": [
         "rag-chat"
@@ -55,7 +55,7 @@
         {
           "version": 1,
           "name": "RAG チャットアシスタント",
-          "description": "RAG チャットの回答と根拠をそのまま返す業務 Agent。",
+          "description": "社内の資料を RAG のチャットと同じ流れ（登録済みQ&A・業務ガイド・根拠の拡張）で調べ、RAG の回答と根拠をそのまま返す業務 Agent。",
           "instructions": "資料の質問に、RAG のチャットの流れで答える。",
           "skill_ids": [
             "rag-chat"
@@ -75,7 +75,7 @@
     {
       "id": "rag-search",
       "name": "RAG 検索アシスタント",
-      "description": "RAG の基本の検索の回答と根拠をそのまま返す業務 Agent。",
+      "description": "社内の資料を基本の検索（登録済みQ&A・業務ガイド・根拠の拡張なし）で調べ、RAG の回答と根拠をそのまま返す業務 Agent。",
       "instructions": "資料の質問に、RAG の基本の検索で答える。",
       "skill_ids": [
         "rag-search"
@@ -88,7 +88,7 @@
         {
           "version": 1,
           "name": "RAG 検索アシスタント",
-          "description": "RAG の基本の検索の回答と根拠をそのまま返す業務 Agent。",
+          "description": "社内の資料を基本の検索（登録済みQ&A・業務ガイド・根拠の拡張なし）で調べ、RAG の回答と根拠をそのまま返す業務 Agent。",
           "instructions": "資料の質問に、RAG の基本の検索で答える。",
           "skill_ids": [
             "rag-search"
@@ -108,7 +108,7 @@
     {
       "id": "rag-search-data",
       "name": "RAG 検索＋データアシスタント",
-      "description": "資料（基本の検索）と業務データ（NL2SQL）を使い分けて調べる業務 Agent。",
+      "description": "社内の資料（基本の検索）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる業務 Agent。",
       "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
       "skill_ids": [
         "rag-search-and-data"
@@ -121,7 +121,7 @@
         {
           "version": 1,
           "name": "RAG 検索＋データアシスタント",
-          "description": "資料（基本の検索）と業務データ（NL2SQL）を使い分けて調べる業務 Agent。",
+          "description": "社内の資料（基本の検索）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる業務 Agent。",
           "instructions": "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。",
           "skill_ids": [
             "rag-search-and-data"

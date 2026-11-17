@@ -13,14 +13,29 @@ export function measureClass(wide: boolean) {
 }
 
 /**
- * PageHeader の直後に置く本文コンテナ（左右ガター 2rem / 上下 1.5rem / セクション間 1.5rem）。
+ * md 以上でページの末尾に空ける下の余白（#5354）。通知（Toast）は md 以上で画面の右下（下端から 8rem）に決まって出るので、
+ * 通知の置き場所の高さ（`--toast-reserve-bottom` = 14rem）を空け、スクロールしきったとき通知の範囲の下に内容（表の行メニュー・
+ * 末尾のボタン）を置かない。md 未満は通知が上端に出るので空けない（1.5rem のまま）。
+ * 下端に固定された入力欄（`ChatLayout`。埋め込みを除く）を持つ本文は、通知が入力欄の上に出る（`--toast-clear-bottom`。#2103）
+ * ので空けない。
+ */
+const PAGE_BODY_TOAST_RESERVE_CLASS =
+  "md:pb-[var(--toast-reserve-bottom)] md:has-[[data-chat-layout]:not([data-chat-layout-embedded])]:pb-6";
+
+/**
+ * PageHeader の直後に置く本文コンテナ（左右ガター 2rem / 上 1.5rem / セクション間 1.5rem。
+ * 下は md 未満 1.5rem、md 以上は通知の置き場所の高さ。`PAGE_BODY_TOAST_RESERVE_CLASS`）。
  * 手書きの `<div style={{ padding: "1.5rem 2rem" }}>` を置き換える。
  * 表を画面幅いっぱいに出す画面だけ `wide`（PageHeader にも同じ値を渡す）。
  */
 export function PageBody({ wide = false, className, children, ...props }: ComponentProps<"div"> & { wide?: boolean }) {
   // grid item は既定で min-width: auto になり、横スクロールする表などが main の外へはみ出すため min-w-0 を付ける。
   return (
-    <div {...props} className={cn(measureClass(wide), "grid content-start gap-6 py-6 [&>*]:min-w-0", className)}>
+    <div
+      {...props}
+      data-page-body=""
+      className={cn(measureClass(wide), "grid content-start gap-6 py-6 [&>*]:min-w-0", PAGE_BODY_TOAST_RESERVE_CLASS, className)}
+    >
       {children}
     </div>
   );
