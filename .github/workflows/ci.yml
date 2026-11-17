@@ -471,6 +471,8 @@ jobs:
               - "rag/backend/app/rag/document_summary.py"
               - "rag/backend/tests/test_document_summary_oracle.py"
               - "rag/backend/app/clients/section_map_store.py"
+              # 字のとおりの検索（MCP の rag_grep）の SQL の見え方の条件（#5293）。
+              - "rag/backend/tests/test_rag_grep_oracle.py"
               - "rag/backend/app/clients/structure_graph_store.py"
               - "rag/backend/app/rag/reference_refresh.py"
               - "rag/backend/app/rag/section_map_service.py"

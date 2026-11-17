@@ -233,3 +233,44 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
         )
         runtime_repository.delete_agent(agent_id)
         skill_registry.remove(skill_id)
+
+
+def test_grep_results_use_short_ids_for_the_reading_tools() -> None:
+    """rag_grep の文書・章節の ID も短参照にし、読み取りのツールの引数で実IDへ戻す（#5293）。"""
+    assert "rag_grep" in handles.SOURCE_TOOLS
+    output = {
+        "matches": [
+            {
+                "document_id": "doc-a",
+                "file_name": "合成資料.txt",
+                "section_id": "section-a",
+                "section_title": "合成の章",
+                "chunk_id": "doc-a:set-a:1",
+                "line": "合成の行 doc-a:set-a:1",
+                "before": ["前の行"],
+                "after": ["後の行"],
+                "line_truncated": False,
+            }
+        ],
+        "truncated": False,
+        "next_step": None,
+    }
+    original = deepcopy(output)
+    metadata: dict[str, Any] = {}
+    handles.register_output(metadata, "rag", output, tool="rag_grep")
+    [match] = handles.encode_output(metadata, "rag", output)["matches"]
+    assert (match["document_id"], match["section_id"]) == ("doc://1", "section://1")
+    # 一致した行・前後の行は書き換えず、引用の参照も付けない（根拠ではない）。
+    assert match["line"] == original["matches"][0]["line"]
+    assert (match["before"], match["after"]) == (["前の行"], ["後の行"])
+    assert "citation" not in match
+    assert output == original
+    assert handles.decode_arguments(
+        metadata, "rag", {"document_id": "doc://1", "section_id": "section://1"}
+    ) == {"document_id": "doc-a", "section_id": "section-a"}
+    assert handles.decode_arguments(
+        metadata, "rag", {"document_ids": ["doc://1"], "text": "語"}
+    ) == {
+        "document_ids": ["doc-a"],
+        "text": "語",
+    }

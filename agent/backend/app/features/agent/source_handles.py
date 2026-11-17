@@ -19,6 +19,7 @@ SOURCE_TOOLS = frozenset(
         "rag_read_section",
         "rag_read_source",
         "rag_readable_documents",
+        "rag_grep",
     }
 )
 _FIELDS = {
