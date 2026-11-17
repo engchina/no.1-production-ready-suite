@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -203,9 +203,14 @@ async def _search(engine: Any) -> tuple[Any, _SearchState]:
     return result, state
 
 
+def _selections(state: _SearchState) -> list[dict[str, Any]]:
+    return cast(list[dict[str, Any]], state.reference_sources[0]["section_selections"])
+
+
 def _reads(state: _SearchState) -> dict[str, dict[str, Any]]:
     (record,) = state.reference_sources
-    return {str(item["document_id"]): item for item in record["document_reads"]}  # type: ignore[union-attr]
+    reads = cast(list[dict[str, Any]], record["document_reads"])
+    return {str(item["document_id"]): item for item in reads}
 
 
 async def test_selected_sections_are_read_with_one_call_for_all_targets(
@@ -251,7 +256,7 @@ async def test_selected_sections_are_read_with_one_call_for_all_targets(
     # 目次から選んだ章節の chunk は章節の拡張の起点のまま(退避の印を付けない)。
     assert REFERENCE_SECTION_SEED_KEY not in state.chunks[f"{DOC_A}:cs:body"].metadata
     assert state.reference_full_read_ids == set()
-    (selection,) = state.reference_sources[0]["section_selections"]  # type: ignore[misc]
+    (selection,) = _selections(state)
     assert selection["outcome"] == "selected"
     assert selection["documents"] == 2
 
@@ -269,7 +274,7 @@ async def test_ids_not_in_the_outline_are_discarded(monkeypatch: pytest.MonkeyPa
 
     assert [child.chunk_uid for child in result.expansion_chunks] == [f"{DOC_A}:cs:body"]
     assert sections.read_calls == [(DOC_A, f"{DOC_A}#操作の手順")]
-    (selection,) = state.reference_sources[0]["section_selections"]  # type: ignore[misc]
+    (selection,) = _selections(state)
     assert selection["discarded_ids"] == ["S9999", "第3章"]
 
 
