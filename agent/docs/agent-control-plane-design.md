@@ -709,7 +709,7 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`。014 の前は `MERGE_SQL_012`）で利用状況・フィードバックの事実を書き続ける。
 - 品質評価（#776）の job は、終わった job も自動では消さずに残し（#3235。以前は 365 日・2,000 件、その前は 50 件で消していた）、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
-- 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 1500 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`+ 1）にする（既定 1500 ×（30 + 1）= 46500 秒。300 秒〜86400 秒に収める）。RAG を使う業務 Agent の Run は RAG を予算の回数まで呼び、1 回は RAG の回答生成を通しで待つため（推論の量 medium の実測で 1 Run 160〜600 秒以上）、#1425 より前の固定の 300 秒では時間切れになった。RAG の予算が無制限（0 以下）なら `AGENT_MAX_TOOL_CALLS_PER_RUN`（既定 100）を回数に使う。上限までに決着しない Run は取り消し、ケースは時間切れ（`timed_out`。メッセージに実際の上限の秒数）にする。評価の job 全体の上限は持たない（ケースごとの上限で止まる）。
+- 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 1500 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`+ 1）にする（既定 1500 ×（10 + 1）= 16500 秒。300 秒〜86400 秒に収める）。RAG を使う業務 Agent の Run は RAG を予算の回数まで呼び、1 回は RAG の回答生成を通しで待つため（推論の量 medium の実測で 1 Run 160〜600 秒以上）、#1425 より前の固定の 300 秒では時間切れになった。RAG の予算が無制限（0 以下）なら `AGENT_MAX_TOOL_CALLS_PER_RUN`（既定 100）を回数に使う。上限までに決着しない Run は取り消し、ケースは時間切れ（`timed_out`。メッセージに実際の上限の秒数）にする。評価の job 全体の上限は持たない（ケースごとの上限で止まる）。
 - 品質評価のケースは上限つきの並行（`AGENT_EVALUATION_CONCURRENCY`。既定 2、1〜8。#2004）で、評価ケースの順に始め、結果は
   ケースの位置に書く（並行でも順番は変わらない）。判定（LLM-as-judge）の呼び出しは job の中で 1 つの共通の実行器
   （`pr_backend_core.bounded_calls`）を共有し、openai SDK の再試行を切る。429 は全体で待って並行の数を下げ（最小 1。成功が

@@ -239,8 +239,8 @@ def test_no_budget_means_no_remaining_count(monkeypatch: MonkeyPatch, mcp: FakeP
 
 
 def test_default_rag_budget_covers_multihop_questions() -> None:
-    # 多段・条件の多い質問で段・条件ごとに検索し直しても足りる回数（#5120）。
-    assert Settings.model_fields["agent_max_rag_calls_per_run"].default == 30
+    # 多段・条件の多い質問の実測（1 Run 最大 3〜4 回）の 2 倍以上（#5120・#5373）。
+    assert Settings.model_fields["agent_max_rag_calls_per_run"].default == 10
 
 
 # ---- 段の検索（#1351） --------------------------------------------------------------------------
