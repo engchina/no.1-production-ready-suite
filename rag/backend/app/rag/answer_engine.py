@@ -98,8 +98,10 @@ from app.rag.cross_references import (
     REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     SectionIndex,
+    citing_document_title,
     document_name_references,
     document_reference_rank,
+    expand_abbreviation_specs,
     extract_references,
     is_file_name_reference,
     reference_targets,
@@ -2614,7 +2616,7 @@ class AnswerEngine:
         取込は参照の表記のある chunk に ``reference_targets_json`` を残す(参照が自分の節だけでも
         空の列)。印の無い chunk(抽出を広げる前に取り込んだ chunk)は、本文に参照の表記が
         あるときだけ、その文書の同じ版(chunk_set)の見出しの列を検索と同じ範囲(KB・権限・
-        有効な chunk_set)で 1 回読み、取込と同じ規則で決める。
+        有効な chunk_set)で 1 回読み、取込と同じ規則で決める(略称の展開も取込と同じ関数。#5311)。
         印のある chunk でも、本文の文書名だけの参照(#1400)が印に無ければ足す(#1400 より前の取込)。
         """
         metadata = anchor.metadata
@@ -2637,6 +2639,8 @@ class AnswerEngine:
         targets: list[ReferenceTarget] = []
         if specs:
             file_name = anchor.file_name or ""
+            # 略称の参照は、同じ文書かを決める前に取込と同じ規則で本体の文書名にする(#5311)。
+            specs = expand_abbreviation_specs(specs, citing_document_title([anchor], file_name))
             chunk_set_id = str(metadata.get("chunk_set_id") or "")
             key = (anchor.document_id, chunk_set_id)
             same_document = any(

@@ -94,6 +94,7 @@ from app.rag.cross_references import (
     reference_targets,
 )
 from app.rag.entity_index import EntityIndex, EntityIndexOptions, build_entity_index
+from app.rag.extracted_text_duplicate import ExtractedTextDuplicateError, ExtractedTextGate
 from app.rag.extraction_field_adapter import (
     FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY,
     FIELD_EXTRACTION_RESPONSE_SCHEMA,
@@ -1389,6 +1390,7 @@ class IngestionPipeline:
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         source_sha256: str | None = None,
         source_size: int | None = None,
+        extracted_text_gate: ExtractedTextGate | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う(``_ingest``)。
 
@@ -1408,6 +1410,7 @@ class IngestionPipeline:
                 cancel_checker=cancel_checker,
                 source_sha256=source_sha256,
                 source_size=source_size,
+                extracted_text_gate=extracted_text_gate,
             )
 
     async def _ingest(
@@ -1425,6 +1428,7 @@ class IngestionPipeline:
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         source_sha256: str | None = None,
         source_size: int | None = None,
+        extracted_text_gate: ExtractedTextGate | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。
 
@@ -1434,6 +1438,8 @@ class IngestionPipeline:
         必ず索引まで進める)。chunk_set の行確定・配信は呼び出し側が行う。
         ``source_sha256`` / ``source_size`` を渡すと、成功・失敗の監査の原本の hash とサイズに
         ``image_bytes`` ではなくそれを使う(処理後ファイルを読むレシピの job。#504)。
+        ``extracted_text_gate`` は索引用の本文ができた後、抽出の保存の前に呼ぶ(解析後の本文の
+        重複の確認。#5313)。``ExtractedTextDuplicateError`` を送ると、保存・分割・索引へ進まない。
         """
         self.deferred_success_outcome = None
         started_at = now()
@@ -1767,6 +1773,8 @@ class IngestionPipeline:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
             # 抽出の正本の保存(レシピは抽出 pointer も切り替える)と REVIEW の前に確かめる。
             await _raise_if_cancelled(cancel_checker)
+            if extracted_text_gate is not None:
+                await extracted_text_gate(text)
             # extraction 層(rag_document_extractions)へ正本として書く(両ゲート共通)。
             extraction_recipe_id = await self._persist_extraction_layer(
                 document_id, source_profile, extraction
@@ -1822,6 +1830,10 @@ class IngestionPipeline:
                 source_sha256=source_sha256,
                 source_size=source_size,
             )
+            raise
+        except ExtractedTextDuplicateError:
+            # 失敗ではない(job は重複の SKIPPED になる)。解析の段は成功のまま残す。
+            record_ingestion("duplicate", 0)
             raise
         except Exception as exc:
             record_ingestion("error", 0)

@@ -79,7 +79,7 @@ def resolve_scoped_reference(
         return ReferenceResolution("version_unconfirmed")
 
     stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", source.name)
-    # 略称は取込の参照の解決（``_citing_title``）と同じく、本文の題名を優先して展開する。
+    # 略称は取込の参照の解決（``citing_document_title``）と同じく、本文の題名を優先して展開する。
     if spec.document_title and (
         expanded := current_grammar().vocabulary.abbreviation_title(
             spec.document_title, source.title or stem
