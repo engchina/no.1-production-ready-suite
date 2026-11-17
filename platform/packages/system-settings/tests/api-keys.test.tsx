@@ -234,7 +234,7 @@ describe("API キーの画面（#1805）", () => {
     expect(https).toContain("MCP のサーバー名は rag / nl2sql / agent にします");
     expect(https).toContain("組み込みのスキルは rag / nl2sql を使います");
     expect(https).toContain("agent は業務 Agent を呼ぶためのものです");
-    expect(https).toContain("rag_search のサーバーの上限 1200 秒より長くします");
+    expect(https).toContain("rag_search のサーバーの上限（設定で最大 1200 秒）より長くします");
     expect(https).not.toContain("既定の 60 秒");
     expect(https).toContain("export はこのシェルだけで有効です");
     expect(https).toContain("~/.claude/settings.json の env");
