@@ -425,15 +425,21 @@ def prepare_batched_evidence(
             return order_document_spans(tag(with_firsts(result)), priority=document_order)
 
         # 文字数は根拠のブロックの大きさで見積もり、入らない大きな原文は飛ばして次の順位を足す。
+        # 全文へ置き換えると消える抜粋の本文の分は差し引く（#5033。書式の分は差し引かず、増える量を多めに見積もる）。
+        # 実際に入るかは、下の全体の判定で文字数と token を測る。
         room = settings.evidence_budget_chars - len(evidence_text(tag(list(chosen))))
         candidates = []
+        estimated = list(chosen)
         for value in sorted(main_of(spans), key=rank):
-            if any(excerpt["text"] == value["text"] and inside(excerpt, value) for excerpt in chosen):
+            if any(excerpt["text"] == value["text"] and inside(excerpt, value) for excerpt in estimated):
                 continue
-            size = len(evidence_text(tag([value])))
+            replaced = [excerpt for excerpt in estimated if inside(excerpt, value)]
+            size = len(evidence_text(tag([value]))) - sum(len(excerpt["text"]) for excerpt in replaced)
             if size <= room:
                 candidates.append(value)
                 room -= size
+                estimated = [excerpt for excerpt in estimated if not inside(excerpt, value)]
+                estimated.append(value)
 
         # token を含む判定は全体で行う。入らなければ、足す件数を二分探索で減らす。``chosen`` だけなら入ることは確かめ済み。
         def attempt(count: int) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
