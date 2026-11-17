@@ -8,7 +8,7 @@
  * を行う。直すのは文言（短い例 + helper）で、`title` は直すまでの補い。
  *
  * 文字の幅は canvas の measureText で、欄の computed の font で測る（DOM を足さない）。jsdom など、
- * 幅を測れない環境（clientWidth が 0）では何もしない。
+ * 幅を測れない環境（offsetWidth が 0）では何もしない。
  */
 import { type Ref, useCallback, useLayoutEffect, useState } from "react";
 
@@ -59,12 +59,23 @@ function px(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * 欄の内側の幅（px。枠線・padding・スクロールバーを除く）。`<input>` の `clientWidth` は Chromium 158 から
+ * 左右の padding を含まなくなった（#5286）ため、input は版に依らない `offsetWidth` から枠線と padding を引く
+ * （入力欄はスクロールバーを持たない）。textarea は縦のスクロールバーを除くため `clientWidth` から padding を引く。
+ */
+function fieldContentWidth(element: HTMLInputElement | HTMLTextAreaElement, style: CSSStyleDeclaration) {
+  const padding = px(style.paddingLeft) + px(style.paddingRight);
+  if (element instanceof HTMLTextAreaElement) return element.clientWidth - padding;
+  return element.offsetWidth - px(style.borderLeftWidth) - px(style.borderRightWidth) - padding;
+}
+
 /** 欄の placeholder が収まらないかを測る（測れない環境では false）。 */
 export function measurePlaceholderClip(element: HTMLInputElement | HTMLTextAreaElement): boolean {
   const placeholder = element.placeholder;
-  if (!placeholder || element.clientWidth <= 0) return false;
+  if (!placeholder || element.offsetWidth <= 0) return false;
   const style = getComputedStyle(element);
-  const availableWidth = element.clientWidth - px(style.paddingLeft) - px(style.paddingRight);
+  const availableWidth = fieldContentWidth(element, style);
   if (availableWidth <= 0) return false;
   const context = canvasContext();
   if (!context) return false;

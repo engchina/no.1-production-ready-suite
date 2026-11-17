@@ -209,7 +209,13 @@ export async function findClippedPlaceholders(
         if (!field.placeholder || field.value || !visible(field) || !context) continue;
         const style = getComputedStyle(field);
         context.font = style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-        const availableWidth = field.clientWidth - px(style.paddingLeft) - px(style.paddingRight);
+        // input の clientWidth は Chromium 158 から左右の padding を含まない（#5286）。input は版に依らない offsetWidth から
+        // 枠線と padding を引き、textarea は縦のスクロールバーを除くため clientWidth から padding を引く（部品の placeholder-fit と同じ）。
+        const padding = px(style.paddingLeft) + px(style.paddingRight);
+        const availableWidth =
+          field instanceof HTMLTextAreaElement
+            ? field.clientWidth - padding
+            : field.offsetWidth - px(style.borderLeftWidth) - px(style.borderRightWidth) - padding;
         if (availableWidth <= 0) continue;
         const lines = field.placeholder.split("\n").map((line) => context.measureText(line).width);
         const textWidth = Math.max(...lines);
