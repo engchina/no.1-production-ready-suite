@@ -1001,7 +1001,7 @@ async def _prepare_chat_turn(
             approved_faq_id=request.approved_faq_id,
         ),
         settings,
-        # RAG Chat は業務ガイドの照合・承認済み FAQ・根拠の拡張を含む経路（#5332）。
+        # RAG チャットは業務ガイドの照合・承認済み FAQ・根拠の拡張を含む経路（#5332）。
         flow=EXPANDED_FLOW,
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
         # 補完した質問は前の発話の文脈を含むので、補完が有効なら足さない。

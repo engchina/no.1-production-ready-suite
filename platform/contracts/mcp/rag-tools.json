@@ -7,7 +7,7 @@
       "description": "RAG のチャットと同じ流れ（業務ガイドの照合・登録済みの Q&A・根拠の拡張を含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は使いません。質問に近い登録済みの Q&A があるときは、回答の前にその候補だけを返し（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは確認を返します（outcome=needs_clarification）。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "RAG Chat の経路で答える条件。",
+        "description": "RAG チャットの経路で答える条件。",
         "properties": {
           "query": {
             "description": "1 つの質問（利用者の質問のまま。指示語・省略は前の質問で補い、それだけで意味の通る文にする）。",
@@ -1379,7 +1379,7 @@
             "type": "object"
           }
         },
-        "description": "RAG Chat の経路の回答と根拠。",
+        "description": "RAG チャットの経路の回答と根拠。",
         "properties": {
           "schema_version": {
             "default": 46,

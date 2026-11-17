@@ -326,7 +326,7 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     登録済みの回答を含む）を足した。
 # （版を変えない追加）文書の本文から語を字のとおりに探すツール（rag_grep）を足した。既存のツールの
 #     出力の形は変えない（#5293）。
-# （版を変えない追加）RAG Chat の経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で答えるツール
+# （版を変えない追加）RAG チャットの経路（業務ガイドの照合・承認済み FAQ・根拠の拡張）で答えるツール
 #     （rag_chat）を足した。既存のツールの出力の形は変えない（#5339）。
 MCP_OUTPUT_SCHEMA_VERSION = 46
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
@@ -736,7 +736,7 @@ class RetrieveEvidenceInput(ApprovedFaqChoiceInput):
 # 1 回の呼び出しは 1 つの質問（会話の履歴による補完・会話の添付はしない。#5339）。範囲は検索・回答
 # プロファイルの参照先と設定だけ（ナレッジベース・filters・top_k は受けない）。
 class ChatInput(BaseModel):
-    """RAG Chat の経路で答える条件。"""
+    """RAG チャットの経路で答える条件。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1998,7 +1998,7 @@ class SearchOutput(VersionedOutput):
 # rag_chat の出力（#5339）。今は rag_search と同じ形（承認済み FAQ の候補・確認・業務ガイド
 # を含む）。
 class ChatOutput(SearchOutput):
-    """RAG Chat の経路の回答と根拠。"""
+    """RAG チャットの経路の回答と根拠。"""
 
 
 class GuidePageRangeItem(BaseModel):

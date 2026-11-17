@@ -50,7 +50,7 @@ EVALUATION_UNCATEGORIZED = "uncategorized"
 # holdout は調整に使わず最後の確認だけに使うケース。同じ業務の流れ・資料の族のケースは同じ区分に
 # する（言い換えの漏れを防ぐ）。区分の無いケースは内訳で unassigned にする。
 EvaluationCaseSplit = Literal["dev", "holdout"]
-# 品質評価の回答の方法（#5340）。chat は RAG Chat と同じ経路（業務ガイド・承認済み FAQ・根拠の
+# 品質評価の回答の方法（#5340）。chat は RAG チャットと同じ経路（業務ガイド・承認済み FAQ・根拠の
 # 拡張あり）、search は基本の RAG（画面の RAG 検索と同じ。拡張なし）。
 EvaluationAnswerMode = Literal["chat", "search"]
 EVALUATION_ANSWER_MODES: tuple[EvaluationAnswerMode, ...] = ("chat", "search")
@@ -828,7 +828,7 @@ class EvaluationRunRequest(BaseModel):
     testset_id: str | None = Field(default=None, min_length=1, max_length=64)
     testset_revision: int | None = Field(default=None, ge=1)
     answer_model_id: str | None = Field(default=None, min_length=1, max_length=200)
-    # 回答の方法（#5340）。省略時は RAG Chat と同じ経路。
+    # 回答の方法（#5340）。省略時は RAG チャットと同じ経路。
     answer_mode: EvaluationAnswerMode = DEFAULT_EVALUATION_ANSWER_MODE
 
     @model_validator(mode="after")

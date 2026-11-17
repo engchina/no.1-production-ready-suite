@@ -734,7 +734,7 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
         "/api/chat/conversations/conv-x/messages/stream", json={"content": "経費の上限は?"}
     )
     assert resp.status_code == 200
-    # RAG Chat は業務ガイド・承認済み FAQ・根拠の拡張を含む経路（#5332）。
+    # RAG チャットは業務ガイド・承認済み FAQ・根拠の拡張を含む経路（#5332）。
     assert _FakePipeline.resolve_flows == ["expanded"]
     assert "expanded" in _FakePipeline.flows
     assert resp.headers["content-type"].startswith("text/event-stream")

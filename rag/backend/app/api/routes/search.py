@@ -708,7 +708,7 @@ SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
 # 見分けて、次の手の付いたツールのエラーにする（app.mcp.tools.profile_not_found_error）。
 SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX = "指定した検索・回答プロファイルが見つかりません: "
 # 基本の RAG の経路（画面の RAG 検索。#5332）で承認済み FAQ を選んだ要求の 422 の文。
-APPROVED_FAQ_BASIC_FLOW_MESSAGE = "選んだQ&Aの回答は、RAG Chat でだけ返せます。"
+APPROVED_FAQ_BASIC_FLOW_MESSAGE = "選んだQ&Aの回答は、RAG チャットでだけ返せます。"
 REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "指定したナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
 )
@@ -1093,7 +1093,7 @@ async def run_guide_preview(request: SearchRequest, preview: GuidePreview) -> Se
     通常の検索・回答と同じ pipeline で 1 回だけ答える（モデルの呼び出しは通常の回答と同じ）。
     公開の版・保存した下書きは変えず、回答の記録には ``guide_preview`` の印を残す。
     """
-    # 業務ガイドを試すので、RAG Chat と同じ経路（業務ガイドの照合と根拠の拡張あり。#5332）。
+    # 業務ガイドを試すので、RAG チャットと同じ経路（業務ガイドの照合と根拠の拡張あり。#5332）。
     return await _run_search_with_timeout(request, flow=EXPANDED_FLOW, guide_preview=preview)
 
 

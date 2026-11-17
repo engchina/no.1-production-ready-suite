@@ -223,7 +223,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 
 ## 既存環境の更新手順（#5340 品質評価の回答の方法）
 
-品質評価で回答の方法（チャット＝RAG Chat と同じ拡張の経路／RAG 検索＝基本の RAG）を選べるようにし、job の行に残す。
+品質評価で回答の方法（チャット＝RAG チャットと同じ拡張の経路／RAG 検索＝基本の RAG）を選べるようにし、job の行に残す。
 
 - migration（`20261117_5340_evaluation_job_answer_mode`）は `RAG_EVALUATION_JOBS` に列 `ANSWER_MODE`（`VARCHAR2(16)`）と
   CHECK 制約 `RAG_EVALUATION_JOBS_ANSWER_MODE_CK`（`chat` / `search`）を足すだけで、データは変えない。本番（OCI Compute）は

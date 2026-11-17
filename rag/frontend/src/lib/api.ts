@@ -2008,7 +2008,7 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
  * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
 /**
- * 品質評価の回答の方法（#5340）。chat は RAG Chat と同じ経路（業務ガイド・承認済み FAQ・根拠の拡張あり）、
+ * 品質評価の回答の方法（#5340）。chat は RAG チャットと同じ経路（業務ガイド・承認済み FAQ・根拠の拡張あり）、
  * search は画面の RAG 検索と同じ基本の RAG。
  */
 export type EvaluationAnswerMode = "chat" | "search";
