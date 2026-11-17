@@ -93,6 +93,7 @@ from app.rag.cross_references import (
     REFERENCE_RESOLUTION_VERSION,
     REFERENCE_RESOLUTION_VERSION_KEY,
     REFERENCE_SCORE_KEY,
+    REFERENCE_SECTION_SEED_KEY,
     REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     SectionIndex,
@@ -308,6 +309,11 @@ class _SearchState:
     # 他の文書への参照の文書を決められなかった理由((範囲, 参照元の文書, 文書名) ごと。#5208)。
     # 範囲に無い(未登録と範囲・権限の外を区別しない)・同名が複数・有効な版が 1 つでない。
     reference_document_outcomes: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    # 文書全体への参照の参照先の読み方(参照先の鍵ごと。目次から選んだ章節か、全体で読む退避か。
+    # #5263)と、退避で全体を読んで足した chunk(章節の拡張の起点にしない)、章節を選ぶ呼び出しの記録。
+    reference_reads: dict[tuple[str, ...], Any] = field(default_factory=dict)
+    reference_full_read_ids: set[str] = field(default_factory=set)
+    reference_section_selections: list[dict[str, object]] = field(default_factory=list)
     # 参照の文書名の照合の DB の行(同じ key。辿る前に候補の文書名をまとめて 1 回で読む。#2137)。
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
@@ -733,6 +739,9 @@ class AnswerEngine:
         # 縮退した記録(#3286)。回答の中の補助の処理の失敗も同じ記録に足し、回答の診断の
         # degraded_steps に出す。
         self._degraded = degraded
+        # 文書全体への参照の章節を選ぶモデル(#5263)。None は回答のモデルの client を使うときに作る
+        # (テストは代役を入れる)。
+        self._reference_llm: Any | None = None
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -1381,6 +1390,12 @@ class AnswerEngine:
                                 self._settings.rag_reference_expansion_max_targets
                             ),
                             "参照先あたりの読取 Chunk 数": _REFERENCE_TARGET_CANDIDATES,
+                            "文書全体への参照の読み方": (
+                                "目次から回答のモデルが選んだ章節を読みます。選べないときは"
+                                "文書全体を読みます(章節の拡張の起点にしません)。"
+                                if self._settings.rag_reference_outline_selection_enabled
+                                else "参照先の文書の中を質問で検索した上位を読みます。"
+                            ),
                             "補充 Chunk の選び方": (
                                 "読めた参照先の Chunk は個数の上限で選ばずにすべて足し、"
                                 "原質問との rerank の点数の順に並べます。"
@@ -2225,6 +2240,16 @@ class AnswerEngine:
         # 対象の確認と原文の読取。範囲と版は既存の読取関数で適用する。空の結果だけでは権限・範囲・
         # 未登録のどれが原因か断定しない。期限の残りが生成の予約より少なければ、新しい読取をしない
         # (既読の cache は使う)。
+        # 文書全体への参照は、読む前に目次から章節を選ぶ(参照先が複数でも 1 回の呼び出し。#5263)。
+        await self._plan_document_reads(
+            scope,
+            state,
+            targets,
+            request=request,
+            question=question,
+            target_budget=target_budget,
+            reserve=reserve,
+        )
         loaded: dict[tuple[str, ...], list[RetrievedChunk]] = {}
         statuses: dict[tuple[str, ...], str] = {}
         target_receipts: dict[tuple[str, ...], dict[str, object]] = {}
@@ -2269,6 +2294,11 @@ class AnswerEngine:
                     "status": statuses[key],
                     "cache_reused": cached,
                     "read_chunk_ids": [chunk.chunk_id for chunk in chunks],
+                    **(
+                        {"document_read": state.reference_reads[key].receipt()}
+                        if key in state.reference_reads
+                        else {}
+                    ),
                 }
 
         # 範囲に無いファイル名の形の参照(#5208)は、検索範囲の文書を指していないので理由に数えない
@@ -2334,6 +2364,12 @@ class AnswerEngine:
                 ],
                 REFERENCE_LABEL_KEY: target.label,
                 **({REFERENCE_RANK_KEY: target_ranks[key]} if target.kind == "document" else {}),
+                # 文書全体を読む退避で足した chunk は章節の拡張の起点にしない(#5263)。
+                **(
+                    {REFERENCE_SECTION_SEED_KEY: False}
+                    if chunk_id in state.reference_full_read_ids
+                    else {}
+                ),
             }
             metadata.pop(REFERENCE_SCORE_KEY, None)
             if score is not None:
@@ -2412,6 +2448,18 @@ class AnswerEngine:
                     {chunk.chunk_id for chunks in loaded.values() for chunk in chunks}
                 ),
                 "added_count": len(emitted),
+                # 文書全体への参照の読み方(目次から選んだ章節 / 全体で読む退避と理由。#5263)。
+                "document_reads": [
+                    {
+                        "label": targets[key][1].label,
+                        **state.reference_reads[key].receipt(),
+                    }
+                    for key in targets
+                    if key in state.reference_reads
+                ][:_REFERENCE_DIAGNOSTICS_LIMIT],
+                "section_selections": state.reference_section_selections[
+                    -_REFERENCE_DIAGNOSTICS_SEARCHES:
+                ],
                 # 足した chunk の並べ方(rerank / rerank_disabled / rerank_failed / deadline /
                 # none)と、関連度の順の上位(回答の生成はこの順で予算に入れる)。
                 "ranking": ranking,
@@ -2652,8 +2700,14 @@ class AnswerEngine:
             if request is None or question is None:
                 return []
             if key not in state.reference_chunks:
-                state.reference_chunks[key] = await self._document_reference_chunks(
-                    scope, state, anchor, target, question=question
+                state.reference_chunks[key] = (
+                    await self._document_reference_chunks(
+                        scope, state, anchor, target, question=question, key=key
+                    )
+                    if self._settings.rag_reference_outline_selection_enabled
+                    else await self._document_search_chunks(
+                        scope, state, anchor, target, question=question
+                    )
                 )
             return state.reference_chunks[key]
         if key not in state.reference_chunks:
@@ -2796,7 +2850,7 @@ class AnswerEngine:
         state.reference_documents[documents_key] = documents
         return documents
 
-    async def _document_reference_chunks(
+    async def _document_search_chunks(
         self,
         scope: dict[str, str],
         state: _SearchState,
@@ -2807,11 +2861,9 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """文書名だけの参照(#1400)の参照先の文書の、質問に関連の高い chunk(検索の順)。
 
-        参照先の文書は検索範囲の中から文書名・タイトルで決める(参照元の文書は除く)。その文書の中を
-        回答の検索と同じ検索文と埋め込みで ``_REFERENCE_TARGET_CANDIDATES`` 件まで検索する(範囲は
-        検索と同じ。版は 1 つの chunk_set にそろえる)。文書の前置き・目次から順に読まない。
-        原質問との rerank は、足す参照先の chunk をまとめて ``_reference_relevance`` で 1 回だけ
-        行う(#5243)。
+        目次から章節を選ぶ設定(``rag_reference_outline_selection_enabled``。#5263)が無効のときの読み方。
+        参照先の文書の中を回答の検索と同じ検索文と埋め込みで ``_REFERENCE_TARGET_CANDIDATES`` 件まで
+        検索する(範囲は検索と同じ。版は 1 つの chunk_set にそろえる)。LLM は呼ばない。
         """
         document_id = await self._referenced_document_id(scope, state, anchor, target)
         if document_id is None:
@@ -2831,6 +2883,275 @@ class AnswerEngine:
             (json.dumps(scope, ensure_ascii=False, sort_keys=True), document_id)
         ][0]
         return [row for row in rows if row.metadata.get("chunk_set_id") == version]
+
+    async def _document_reference_chunks(
+        self,
+        scope: dict[str, str],
+        state: _SearchState,
+        anchor: RetrievedChunk,
+        target: ReferenceTarget,
+        *,
+        question: tuple[str, list[float]],
+        key: tuple[str, ...],
+    ) -> list[RetrievedChunk]:
+        """文書名だけの参照(#1400)の参照先の文書の chunk(#5263)。
+
+        参照先の文書は検索範囲の中から文書名・タイトルで決める(参照元の文書は除く)。読む前に
+        ``_plan_document_reads`` が目次から章節を選んでいれば、その章節を章節の中の順に読む
+        (``read_section``。範囲は検索と同じ。版は 1 つの chunk_set にそろえる)。選べなかった・
+        読めなかったときは、参照先の文書を全体で読む(回答の検索と同じ検索文と埋め込みで文書の中を
+        ``DOCUMENT_READ_MAX_CHUNKS`` 件まで)。全体で読んで足した chunk は章節の拡張の起点に
+        しない。原質問との rerank は、足す参照先の chunk をまとめて ``_reference_relevance`` で
+        1 回だけ行う(#5243)。
+        """
+        from app.rag.reference_sections import (
+            DOCUMENT_READ_MAX_CHUNKS,
+            FALLBACK_NOT_PLANNED,
+            FALLBACK_SECTIONS_EMPTY,
+            READ_MODE_FULL,
+            READ_MODE_SECTIONS,
+            DocumentReadPlan,
+        )
+
+        document_id = await self._referenced_document_id(scope, state, anchor, target)
+        if document_id is None:
+            return []
+        version = state.reference_versions[
+            (json.dumps(scope, ensure_ascii=False, sort_keys=True), document_id)
+        ][0]
+        plan = state.reference_reads.get(key)
+        if plan is None:
+            plan = DocumentReadPlan(document_id, version, target.document_title or "")
+            plan.fall_back(FALLBACK_NOT_PLANNED)
+            state.reference_reads[key] = plan
+        if plan.selected:
+            rows = await self._read_reference_sections(scope, state, plan)
+            if rows:
+                plan.mode = READ_MODE_SECTIONS
+                plan.read_chunk_count = len(rows)
+                return rows
+            plan.fall_back(FALLBACK_SECTIONS_EMPTY)
+        query, embedding = question
+        hits = await self._oracle.hybrid_search(
+            query,
+            embedding,
+            DOCUMENT_READ_MAX_CHUNKS,
+            mode=SearchMode.HYBRID,
+            filters={**scope, "document_id": document_id},
+        )
+        rows = [
+            hit
+            for hit in original_chunks(hits)
+            if hit.document_id == document_id and hit.metadata.get("chunk_set_id") == version
+        ]
+        plan.mode = READ_MODE_FULL
+        plan.read_chunk_count = len(rows)
+        state.reference_full_read_ids.update(row.chunk_id for row in rows)
+        return rows
+
+    async def _read_reference_sections(
+        self, scope: dict[str, str], state: _SearchState, plan: Any
+    ) -> list[RetrievedChunk]:
+        """目次から選んだ章節を、章節の中の順に読む(``rag_read_section`` と同じ読取。#5263)。
+
+        範囲は参照先を読む範囲(``_reference_scope``)。章節が重なる chunk は 1 回だけ、参照先 1 つで
+        ``DOCUMENT_READ_MAX_CHUNKS`` 件まで。読めない章節は記録して次の章節へ進む。
+        """
+        from app.rag.reference_sections import DOCUMENT_READ_MAX_CHUNKS
+        from app.rag.section_map_service import read_section
+
+        rows: list[RetrievedChunk] = []
+        seen: set[str] = set()
+        for section_id in plan.selected:
+            if len(rows) >= DOCUMENT_READ_MAX_CHUNKS:
+                break
+            try:
+                text = await read_section(
+                    plan.document_id,
+                    section_id,
+                    chunk_set_id=plan.chunk_set_id,
+                    limit=DOCUMENT_READ_MAX_CHUNKS - len(rows),
+                    filters=scope,
+                    oracle=self._oracle,
+                )
+            except Exception as exc:  # noqa: BLE001 - この章節を読まずに続ける。
+                state.record_degraded("reference_section_read", exc)
+                continue
+            for chunk in original_chunks(row.chunk for row in text.chunks):
+                if chunk.chunk_id not in seen:
+                    seen.add(chunk.chunk_id)
+                    rows.append(chunk)
+        return rows
+
+    async def _plan_document_reads(
+        self,
+        scope: dict[str, str],
+        state: _SearchState,
+        targets: Mapping[tuple[str, ...], tuple[RetrievedChunk, ReferenceTarget]],
+        *,
+        request: SearchRequest | None,
+        question: tuple[str, list[float]] | None,
+        target_budget: int,
+        reserve: float,
+    ) -> None:
+        """文書全体への参照の参照先の読み方を、読む前にまとめて決める(#5263)。
+
+        参照先の文書の章節の目次(``rag_outline`` の compact と同じ目録)を作り、回答のモデルに
+        1 回だけ渡して(参照先が複数でもまとめる)、質問に要る章節を選ばせる。目次が無い・読めない、
+        選択が失敗した・何も選ばない、返った ID がすべて目次に無い参照先は、全体で読む方式へ退避する
+        (理由を ``state.reference_reads`` の計画に残す)。回答の期限の残りが生成の予約より少なければ
+        計画しない(読取も同じ判定で止まる。#5252)。
+        """
+        from app.rag.reference_sections import (
+            FALLBACK_NO_OUTLINE,
+            FALLBACK_OUTLINE_ERROR,
+            DocumentReadPlan,
+        )
+        from app.rag.section_chunk_map import ROOT_SECTION_ID
+        from app.rag.section_map_service import section_outline
+
+        if (
+            not self._settings.rag_reference_outline_selection_enabled
+            or request is None
+            or question is None
+        ):
+            return
+        pending = [
+            (key, anchor, target)
+            for key, (anchor, target) in targets.items()
+            if target.kind == "document"
+            and target.document_title is not None
+            and key not in state.reference_chunks
+            and key not in state.reference_reads
+        ][: max(0, target_budget)]
+        if not pending or _reference_deadline_short(state, reserve):
+            return
+        scope_key = json.dumps(scope, ensure_ascii=False, sort_keys=True)
+        selectable: list[tuple[tuple[str, ...], Any, Any]] = []
+        for key, anchor, target in pending:
+            document_id = await self._referenced_document_id(scope, state, anchor, target)
+            if document_id is None:
+                continue
+            version = state.reference_versions[(scope_key, document_id)][0]
+            plan = DocumentReadPlan(document_id, version, target.document_title or "")
+            state.reference_reads[key] = plan
+            try:
+                outline = await section_outline(
+                    document_id, chunk_set_id=version, oracle=self._oracle
+                )
+            except Exception as exc:  # noqa: BLE001 - 目次を使わずに全体で読む。
+                state.record_degraded("reference_outline", exc)
+                plan.fall_back(FALLBACK_OUTLINE_ERROR)
+                continue
+            nodes = [
+                node
+                for node in (outline.sections if outline is not None else [])
+                if node.section_id != ROOT_SECTION_ID and node.chunk_count > 0
+            ]
+            if outline is None or not nodes:
+                plan.fall_back(FALLBACK_NO_OUTLINE)
+                continue
+            plan.document_name = outline.chunk_set.file_name or plan.document_name
+            plan.sections = nodes
+            selectable.append((key, plan, outline))
+        if selectable:
+            await self._select_reference_sections(request, state, selectable, reserve)
+
+    async def _select_reference_sections(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        selectable: Sequence[tuple[tuple[str, ...], Any, Any]],
+        reserve: float,
+    ) -> None:
+        """回答のモデルに目次を渡して読む章節を選ばせ、目次にある ID だけを計画に入れる(#5263)。"""
+        from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
+
+        from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+        from app.rag.reference_sections import (
+            CATALOG_LEAD_CHARS,
+            CATALOG_MAX_CHARS,
+            FALLBACK_NO_SELECTION,
+            FALLBACK_SELECTION_ERROR,
+            FALLBACK_UNKNOWN_IDS,
+            REFERENCE_SECTION_PROMPT,
+            SELECTED_SECTIONS_MAX,
+            ReferenceSectionChoice,
+            build_catalog,
+            resolve_choice,
+            without_descendants,
+        )
+        from app.rag.section_catalog import compact_section_lines
+
+        plans = [plan for _key, plan, _outline in selectable]
+        per_document = max(1, CATALOG_MAX_CHARS // len(selectable))
+        lines: list[list[str]] = []
+        omitted: list[int] = []
+        for _key, plan, outline in selectable:
+            rows, skipped = await compact_section_lines(
+                self._oracle, outline, plan.sections, CATALOG_LEAD_CHARS, max_chars=per_document
+            )
+            lines.append(rows)
+            omitted.append(skipped)
+        catalog = build_catalog(plans, lines, omitted)
+        answer_model = self._answer_model_id or enterprise_ai_default_model_id(self._settings)
+        call: dict[str, object] = {
+            "model_id": answer_model,
+            "documents": len(plans),
+            "catalog_sections": len(catalog.ids),
+            "catalog_omitted_sections": catalog.omitted_sections,
+            "catalog_chars": len(catalog.text),
+            "prompt_chars": len(REFERENCE_SECTION_PROMPT) + len(request.query) + len(catalog.text),
+        }
+        state.reference_section_selections.append(call)
+        deadline = state.deadline
+        left = deadline.remaining() if deadline is not None else None
+        timeout = None if left is None else max(0.0, left - reserve)
+        started = time.monotonic()
+        try:
+            if timeout is not None and timeout <= 0:
+                raise TimeoutError("回答の期限の残りが生成の予約より少ない")
+            llm = self._reference_llm or OciEnterpriseAiClient(
+                settings=self._settings, model_id=answer_model
+            )
+            text = await asyncio.wait_for(
+                async_call_with_model_purpose(
+                    "document.read",
+                    llm.generate,
+                    request.query,
+                    catalog.text,
+                    system_prompt=REFERENCE_SECTION_PROMPT,
+                    response_schema=ReferenceSectionChoice.model_json_schema(),
+                    response_schema_name="reference_sections",
+                ),
+                timeout,
+            )
+            choice = ReferenceSectionChoice.model_validate_json(text)
+        except Exception as exc:  # noqa: BLE001 - 選べなければ全体で読む。
+            state.record_degraded("reference_section_select", exc)
+            call.update(
+                outcome="error",
+                error_type=type(exc).__name__,
+                elapsed_seconds=round(time.monotonic() - started, 3),
+            )
+            for plan in plans:
+                plan.fall_back(FALLBACK_SELECTION_ERROR)
+            return
+        result = resolve_choice(choice, catalog)
+        call.update(
+            outcome="selected" if result.selected else "none",
+            elapsed_seconds=round(time.monotonic() - started, 3),
+            returned_ids=result.returned[:50],
+            discarded_ids=result.discarded[:50],
+        )
+        for index, plan in enumerate(plans):
+            chosen = without_descendants(plan.sections, result.selected.get(index, []))
+            if chosen:
+                plan.selected = chosen[:SELECTED_SECTIONS_MAX]
+            elif result.returned and not result.selected:
+                plan.fall_back(FALLBACK_UNKNOWN_IDS)
+            else:
+                plan.fall_back(FALLBACK_NO_SELECTION)
 
     async def _section_outline(self, state: _SearchState, chunk_id: str) -> Any:
         """当たった chunk の文書の章節の一覧と所有の章節(#1436)。対応が無い・読めなければ None。
@@ -3867,6 +4188,12 @@ def _stored_child(
             ),
             "label": str(chunk.metadata.get(REFERENCE_LABEL_KEY) or ""),
             **({"rank": rank} if isinstance(rank, int) else {}),
+            # 文書全体を読む退避で足した chunk(#5263)。rag_engine は章節の拡張の起点にしない。
+            **(
+                {"section_seed": False}
+                if chunk.metadata.get(REFERENCE_SECTION_SEED_KEY) is False
+                else {}
+            ),
         }
         score = chunk.metadata.get(REFERENCE_SCORE_KEY)
         if (

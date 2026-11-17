@@ -3639,6 +3639,9 @@ export const ja = {
   "search.answerDetails.degraded.step.graph_expansion": "関係情報からの根拠の追加",
   "search.answerDetails.degraded.step.reference_resolve": "参照先の特定",
   "search.answerDetails.degraded.step.reference_load": "参照先の本文の読み込み",
+  "search.answerDetails.degraded.step.reference_outline": "参照先の文書の目次の読み込み",
+  "search.answerDetails.degraded.step.reference_section_select": "参照先の目次から読む章節の選択",
+  "search.answerDetails.degraded.step.reference_section_read": "参照先の選んだ章節の読み込み",
   "search.answerDetails.degraded.step.reference_prefetch": "参照先の文書の先読み",
   "search.answerDetails.degraded.step.reference_rerank": "参照先の文書の中の並べ替え",
   "search.answerDetails.degraded.step.section_outline": "章節の目次の読み込み",
@@ -3803,6 +3806,9 @@ export const ja = {
     "回答・確認の対象に選んだ業務ガイドに、利用者が答える未確認の自由入力条件があるとき",
   "settings.answerPrompts.stage.history_rewrite": "会話を踏まえた質問の書き換え",
   "settings.answerPrompts.stage.history_rewrite.condition": "会話を踏まえた質問の書き換えを有効にしたとき、チャットの毎回の発話で 1 回（会話の最初の発話も含む）。検索用の質問を作り、検索が要らない挨拶・雑談かを分けます",
+  "settings.answerPrompts.stage.reference_sections": "参照先の文書の目次から読む章節を選ぶ",
+  "settings.answerPrompts.stage.reference_sections.condition":
+    "検索の根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき（参照先が複数でも 1 回）。目次が無い文書や章節を選べなかったときは文書の全体を読みます",
   "settings.answerPrompts.stage.small_talk": "挨拶・雑談への応答",
   "settings.answerPrompts.stage.small_talk.condition": "会話を踏まえた質問の書き換えが、発話を挨拶・雑談と分けたとき（検索しない）",
   "settings.answerPrompts.stage.generation": "回答の生成",
@@ -3867,6 +3873,9 @@ export const ja = {
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
     "章節の対応も親子分割も無い根拠に、前と後からそれぞれ最大でこの数のチャンクを文脈として加えます（1〜5）。章節の対応がある根拠は章節で、親子分割の根拠は親の本文で補い、前後のチャンクは加えません。",
+  "settings.answering.referenceOutlineSelection": "参照先の文書の目次から章節をモデルが選ぶ",
+  "settings.answering.referenceOutlineSelectionHint":
+    "根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき、参照先の文書の目次を回答のモデルに渡して質問に要る章節を選ばせ、その章節を読みます（参照先が複数でも AI の呼び出しは 1 回増えます）。目次が無い文書や章節を選べなかったときは、参照先の文書の全体を読みます。オフのときは参照先の文書の中を質問で検索した上位を読みます。番号を示す参照（第 3 章・別紙 1 など）はどちらでも番号で読みます。全体の検索に適用します。",
   "settings.answering.answerTimeout": "回答の上限時間",
   "settings.answering.answerTimeoutHint":
     "質問から回答を確定するまでの上限です（既定 600 秒）。超えると、時間切れの工程を示して止めます。最小の 150 秒は生成の 1 回の見積もりと確定の分（既定 150 秒）と同じなので、章節の拡張・参照先の読み足し・根拠の分割読取をせず、入る根拠だけで 1 回生成します。",
