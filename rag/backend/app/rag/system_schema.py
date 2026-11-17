@@ -84,6 +84,16 @@ _CREATE_INDEX_PATTERN = re.compile(
     r"^\s*CREATE\s+(?:UNIQUE\s+|(?:HYBRID\s+)?VECTOR\s+)?INDEX\s+([A-Z][A-Z0-9_$#]*)\b",
     flags=re.IGNORECASE,
 )
+_HNSW_ORGANIZATION_PATTERN = re.compile(
+    r"\bORGANIZATION\s+INMEMORY\s+NEIGHBOR\s+GRAPH\b",
+    flags=re.IGNORECASE,
+)
+# vector memory（vector pool）の上限で HNSW 索引を作れない Oracle のエラー（#5261）。
+VECTOR_MEMORY_ERROR_CODE = "ORA-51995"
+VECTOR_MEMORY_GUIDE = (
+    "rag/docs/deployment.md"
+    "「既存環境の更新手順（#5241 埋め込みを細い表 RAG_CHUNK_EMBEDDINGS へ分ける）」"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +372,63 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
 )
 
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
+
+
+def hnsw_indexes_from_schema(
+    sections: Sequence[OracleSchemaSection] | None = None,
+) -> frozenset[str]:
+    """DDL 正本の、vector memory に載る HNSW 索引の名前。
+
+    `ORGANIZATION INMEMORY NEIGHBOR GRAPH` の `CREATE VECTOR INDEX` を拾う。
+    """
+
+    return frozenset(
+        match.group(1).upper()
+        for section in sections or oracle_schema_sections()
+        for statement in split_sql_statements(section.sql)
+        if (match := _CREATE_INDEX_PATTERN.match(statement)) is not None
+        and _HNSW_ORGANIZATION_PATTERN.search(statement) is not None
+    )
+
+
+HNSW_INDEXES: frozenset[str] = hnsw_indexes_from_schema()
+
+
+def vector_memory_shortage_message(index_names: Sequence[str]) -> str:
+    """vector memory の不足で HNSW 索引を作れなかったときの原因・影響・対処（#5261）。
+
+    CLI の `initialize` の失敗・状態の `operation_state.last_error_detail`・配備の確認の要約・
+    画面の「前回の操作が完了していません」に同じ文を出す。
+    """
+
+    return (
+        f"vector memory の不足（{VECTOR_MEMORY_ERROR_CODE}）で HNSW 索引"
+        f"（{', '.join(index_names)}）を作れませんでした。"
+        "ほかの表・索引と migration は適用済みです。"
+        "既定の検索の実行方式（Oracle Hybrid Vector Index）は HNSW 索引を使わないため、"
+        "この状態でも検索できます。"
+        "「ベクトル検索＋Oracle Text個別実行」の距離順（FETCH APPROX）は、"
+        "HNSW 索引が無いと厳密な距離の計算になり遅くなります。"
+        "vector memory の空き（V$VECTOR_MEMORY_POOL）を増やして"
+        "（vector_memory_size を上げる・不要な HNSW 索引を消す）から、"
+        f"作成・更新をやり直してください（{VECTOR_MEMORY_GUIDE}）。"
+    )
+
+
+def vector_memory_failure_detail(
+    operation_state: Mapping[str, Any],
+    objects: Collection[tuple[str, str]],
+) -> str | None:
+    """前回の操作が vector memory の不足で止まり、HNSW 索引が今も無いときの説明。
+
+    それ以外は None。
+    """
+
+    if operation_state.get("last_error_code") != VECTOR_MEMORY_ERROR_CODE:
+        return None
+    missing = sorted(name for name in HNSW_INDEXES if (name, "INDEX") not in objects)
+    return vector_memory_shortage_message(missing) if missing else None
+
 
 if set(PRESERVED_TABLES) & set(MANAGED_TABLES):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("共通認証のテーブルを RAG の管理対象に含めないでください。")
@@ -674,13 +741,20 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 f"ALTER TRIGGER {EMBEDDING_HYBRID_TRIGGER} ENABLE",
             ],
         )
-        self._apply_missing_indexes(connection)
+        vector_memory_failures = self._apply_missing_indexes(connection)
         # 古い版で作った表に、後から正本に足した FK を補い（#505）、削除規則が違う FK を作り直し、
         # 無効化された FK を有効にする（#511）。孤立した行は消さない。
         foreign_keys = self._repair_foreign_keys(connection, owner)
         self._heartbeat(connection, owner)
         interim = self._status_on(connection)
         self._require_columns_present(interim)
+        if vector_memory_failures:
+            # ほかの作成・更新を済ませてから、作れなかった HNSW 索引と原因を返す（#5261）。
+            raise SystemSchemaError(
+                VECTOR_MEMORY_ERROR_CODE,
+                vector_memory_shortage_message(vector_memory_failures),
+                status_code=409,
+            )
         if interim["status"] != "ready":
             raise SystemSchemaError(
                 "SCHEMA_POSTCONDITION_FAILED",
@@ -747,6 +821,10 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         invalid_objects = self._native_invalid_objects(connection, objects)
         if status == "ready" and invalid_objects:
             status = "outdated"
+        operation_state = self._operation_payload(connection, objects)
+        failure_detail = vector_memory_failure_detail(operation_state, objects)
+        if failure_detail:
+            operation_state = {**operation_state, "last_error_detail": failure_detail}
         return {
             "invalid_objects": invalid_objects,
             "status": status,
@@ -783,7 +861,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             # 全管理 object（テーブル・索引・Oracle Text の設定）。詳細の一覧を概要の
             # 「存在オブジェクト / 必須オブジェクト」と同じ件数にそろえる（NL2SQL と同じ。#658）。
             "objects": self._build_object_metadata(objects, table_metadata),
-            "operation_state": self._operation_payload(connection, objects),
+            "operation_state": operation_state,
         }
 
     @staticmethod
@@ -919,7 +997,12 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             )
         return invalid
 
-    def _apply_missing_indexes(self, connection: Any) -> None:
+    def _apply_missing_indexes(self, connection: Any) -> list[str]:
+        """無い索引を作る。vector memory の不足で作れなかった HNSW 索引の名前を返す（#5261）。
+
+        HNSW 索引は vector memory の空き（同じ DB のほかの schema の HNSW も使う）に依存する。
+        不足（ORA-51995）なら残りの索引の作成を続け、呼び出し側が最後に原因を返す。
+        """
         objects = self._load_objects(connection)
         for invalid in self._native_invalid_objects(connection, objects):
             if invalid["object_type"] != "INDEX":
@@ -947,16 +1030,26 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             if (match := _CREATE_INDEX_PATTERN.match(statement)) is not None
             and match.group(1).upper() in missing
         ]
+        vector_memory_failures: list[str] = []
         for statement in statements:
             try:
                 self._execute_statements(connection, [statement])
             except Exception as exc:
                 match = _CREATE_INDEX_PATTERN.match(statement)
-                if match and match.group(1).upper() == NATIVE_HYBRID_INDEX:
+                name = match.group(1).upper() if match else ""
+                if name == NATIVE_HYBRID_INDEX:
                     logger.error(
                         "rag_native_hybrid_index_create_failed", extra=oracle_error_log_fields(exc)
                     )
+                if name in HNSW_INDEXES and oracle_error_code(exc) == VECTOR_MEMORY_ERROR_CODE:
+                    logger.error(
+                        "rag_hnsw_index_vector_memory_exhausted",
+                        extra={"index_name": name, **oracle_error_log_fields(exc)},
+                    )
+                    vector_memory_failures.append(name)
+                    continue
                 raise
+        return vector_memory_failures
 
     def _apply_migration(self, connection: Any, migration: MigrationArtifact) -> None:
         self._execute_statements(
@@ -1082,6 +1175,7 @@ __all__ = [
     "CONTROL_TABLE",
     "DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED",
     "DOMAIN_TABLES",
+    "HNSW_INDEXES",
     "MANAGED_COLUMNS",
     "MANAGED_FOREIGN_KEYS",
     "MANAGED_INDEXES",
@@ -1094,6 +1188,7 @@ __all__ = [
     "RECREATE_CONFIRMATION",
     "RETIRED_MANAGED_OBJECTS",
     "RETIRED_TABLES_APPROVAL",
+    "VECTOR_MEMORY_ERROR_CODE",
     "MigrationArtifact",
     "SystemSchemaActiveJobsError",
     "SystemSchemaBusyError",
@@ -1107,4 +1202,6 @@ __all__ = [
     "pending_destructive_migrations",
     "system_schema_manager",
     "unowned_retired_tables",
+    "vector_memory_failure_detail",
+    "vector_memory_shortage_message",
 ]

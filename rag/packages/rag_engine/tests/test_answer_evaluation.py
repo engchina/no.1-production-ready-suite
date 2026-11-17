@@ -1,4 +1,4 @@
-"""標準回答による回答の評価（正確性の判定 1 本）と、その保存。"""
+"""標準回答による回答の評価（主張ごとの正確性と要点の網羅の判定 1 回）と、その保存。"""
 
 import json
 from dataclasses import replace
@@ -37,8 +37,16 @@ def payload():
     }
 
 
-def verdict(value="consistent"):
-    return AnswerCorrectnessOutput(correctness=value, reason="理由")
+def verdict(value="supported"):
+    """判定の出力の偽物（入力のすべての要点を覆い、最初の段落を 1 つの主張にする）。"""
+
+    def fake(system, prompt, settings, schema, **options):
+        inputs = json.loads(prompt)
+        claims = [{"answer_ids": ["A1"], "verdict": value, "standard_ids": [] if value == "not_in_standard" else ["S1"]}]
+        points = [{"point_id": point["id"], "covered": True} for point in inputs["points"]]
+        return AnswerCorrectnessOutput.model_validate({"claims": claims, "points": points})
+
+    return fake
 
 
 def broken_output():
@@ -52,27 +60,38 @@ def generated_answer(**fields):
     )
 
 
-@pytest.mark.parametrize(("value", "score"), [("consistent", 1.0), ("contradicts", 0.0), ("unassessed", None)])
-def test_one_call_judges_correctness_from_question_standard_and_answer_body(value, score):
-    with patch(PARSE, return_value=verdict(value)) as parse:
+@pytest.mark.parametrize(("value", "score"), [("supported", 1.0), ("contradicted", 0.0), ("not_in_standard", 0.0)])
+def test_one_call_judges_claims_from_question_standard_and_answer_body(value, score):
+    with patch(PARSE, side_effect=verdict(value)) as parse:
         result = evaluate_answer_payload(payload(), object(), provider_id="chosen")
     assert parse.call_count == 1
     system, prompt, _settings, schema = parse.call_args.args
     assert system == CORRECTNESS_PROMPT and schema is AnswerCorrectnessOutput
     assert parse.call_args.kwargs["provider_id"] == "chosen"
-    # 渡すのは質問・標準回答・出典の行を除いた回答の本文だけ（取得した根拠は渡さない）。
+    # 渡すのは質問・標準回答の文・要点・出典の行を除いた回答の本文の段落だけ（取得した根拠は渡さない）。
     assert json.loads(prompt) == {
         "question": "今回の取込失敗の原因は？",
-        "standard_answer": "ログを確認して原因を特定する。",
-        "actual_responses": [{"question": "今回の取込失敗の原因は？", "answer_text": "ログを確認して原因を特定します。"}],
+        "standard_answer": [{"id": "S1", "text": "ログを確認して原因を特定する。"}],
+        "points": [{"id": "P1", "text": "ログを確認して原因を特定する。"}],
+        "actual_responses": [
+            {"question": "今回の取込失敗の原因は？", "answer": [{"id": "A1", "text": "ログを確認して原因を特定します。"}]}
+        ],
     }
+    standard = "" if value == "not_in_standard" else "ログを確認して原因を特定する。"
     assert result == {
         "rubric_version": RUBRIC_VERSION,
         "external_data_required": None,
         "external_data_items": [],
         "judge_diagnostics": {"judge_calls": 1, "judge_retries": 0, "retry_reasons": []},
         "answer_correctness": score,
-        "correctness_reason": "理由",
+        "answer_coverage": 1.0,
+        "correctness_reason": {
+            "supported": "標準回答と矛盾する主張はありません。",
+            "contradicted": "回答の「ログを確認して原因を特定します。」と標準回答の「ログを確認して原因を特定する。」が食い違う。",
+            "not_in_standard": "標準回答と合う主張がありません（質問に答えていません）。",
+        }[value],
+        "correctness_claims": [{"verdict": value, "answer": "ログを確認して原因を特定します。", "standard": standard}],
+        "coverage_points": [{"point": "ログを確認して原因を特定する。", "covered": True}],
         "status": "completed",
         "message": "",
     }
@@ -124,9 +143,10 @@ def test_input_limit_follows_the_judge_model_and_oversized_input_skips_network()
     assert evaluation_input_budget(object()) == MAX_EVALUATION_INPUT_BYTES
     assert evaluation_input_budget(SimpleNamespace(answer_max_input_tokens=128_000)) == 128_000
     assert evaluation_input_budget(SimpleNamespace(answer_max_input_tokens=0)) == MAX_EVALUATION_INPUT_BYTES
-    # 既定の上限（48,000 bytes）を超え、128,000 tokens のモデルの上限（128,000 bytes）に収まる長さ。
-    data = payload() | dict(standard_answer="長" * (MAX_EVALUATION_INPUT_BYTES // 2))
-    with patch(PARSE, return_value=verdict()) as parse:
+    # 既定の上限（48,000 bytes）を超え、128,000 tokens のモデルの上限（128,000 bytes）に収まる長さ
+    # （要点が無いので標準回答の文は要点としても渡る）。
+    data = payload() | dict(standard_answer="長" * (MAX_EVALUATION_INPUT_BYTES // 5))
+    with patch(PARSE, side_effect=verdict()) as parse:
         small = evaluate_answer_payload(data, object())
         assert parse.call_count == 0
         large = evaluate_answer_payload(data, SimpleNamespace(answer_max_input_tokens=128_000))
@@ -150,7 +170,7 @@ def test_successful_evaluation_is_saved_and_keeps_generation_external_state():
     with TemporaryDirectory() as tmp:
         settings = replace(get_settings(), output_dir=Path(tmp))
         result = generated_answer(external_data_required=True, external_data_items=("実行ログ",))
-        with patch(PARSE, return_value=verdict()) as parse:
+        with patch(PARSE, side_effect=verdict()) as parse:
             saved = save_answer_result(result, settings, standard_answer="標準", evaluation_provider="chosen")
         stored = json.loads((Path(tmp) / "run1" / "answers" / f"{saved.answer_id}.json").read_text())
         assert stored["evaluation"]["status"] == "completed"

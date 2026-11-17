@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
+  Disclosure,
   ProcessingIndicator,
   Skeleton,
   StatusBadge,
@@ -52,6 +53,7 @@ import {
   ApiError,
   type EvaluationJob,
   type EvaluationJobStatus,
+  type EvaluationAnswerJudgement,
   type EvaluationCaseResult,
   type EvaluationCategorySummary,
   type EvaluationImportResult,
@@ -1359,6 +1361,15 @@ function CaseTable({
             render: (result: EvaluationCaseResult) => formatMetricValue(result[metric]),
           }))),
           {
+            key: "coverage",
+            header: t("evaluation.case.coverage"),
+            className: "tnum whitespace-nowrap",
+            render: (result: EvaluationCaseResult) =>
+              isLegacyJudgement(result.answer_evaluation)
+                ? t("evaluation.case.judgement.legacy")
+                : formatMetricValue(result.answer_coverage),
+          },
+          {
             key: "failures",
             header: t("evaluation.case.failures"),
             headerClassName: "hidden md:table-cell",
@@ -1425,6 +1436,81 @@ function CaseQuestionCell({
           </div>
           <p className="break-words text-xs font-normal text-fg-muted">{error.message}</p>
         </div>
+      ) : null}
+      {result.answer_evaluation ? <CaseJudgement judgement={result.answer_evaluation} /> : null}
+    </div>
+  );
+}
+
+/** 主張ごとの判定（#5262）の前に保存した結果か（判定は完了しているが版が無い）。 */
+function isLegacyJudgement(judgement: EvaluationAnswerJudgement | null | undefined): boolean {
+  return judgement?.status === "completed" && judgement.rubric_version == null;
+}
+
+/**
+ * この問の合否（正確性だけで決める）と、開いて見る判定の理由・網羅の要点（#5262）。
+ * 375px でも見えるよう質問の列に出す。合否は文字のバッジで示し、色だけに頼らない。
+ */
+function CaseJudgement({ judgement }: { judgement: EvaluationAnswerJudgement }) {
+  const legacy = isLegacyJudgement(judgement);
+  const completed = judgement.status === "completed" && judgement.passed !== null;
+  const reasons = (judgement.reason ?? judgement.message ?? "").split("\n").filter(Boolean);
+  const points = legacy ? [] : (judgement.points ?? []);
+  return (
+    <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-judgement">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs font-normal text-fg-muted">{t("evaluation.case.judgement")}</span>
+        <StatusBadge
+          variant={completed ? (judgement.passed ? "success" : "danger") : "neutral"}
+          label={t(
+            completed
+              ? judgement.passed
+                ? "evaluation.case.judgement.passed"
+                : "evaluation.case.judgement.failed"
+              : "evaluation.case.judgement.incomplete"
+          )}
+        />
+        {legacy ? <StatusBadge variant="neutral" label={t("evaluation.case.judgement.legacy")} /> : null}
+      </div>
+      {reasons.length || points.length || legacy ? (
+        <Disclosure variant="plain" size="sm" summary={t("evaluation.case.judgement.reason")}
+          summaryProps={{ "data-testid": "evaluation-case-judgement-toggle" }}>
+          <div className="grid min-w-0 gap-2 text-xs font-normal text-fg-muted">
+            {legacy ? <p>{t("evaluation.case.judgement.legacyNote")}</p> : null}
+            {reasons.length ? (
+              <ul className="grid gap-1" data-testid="evaluation-case-judgement-reason">
+                {reasons.map((line, index) => (
+                  <li key={`${index}:${line}`} className="break-words">{line}</li>
+                ))}
+              </ul>
+            ) : null}
+            {points.length ? (
+              <div className="grid gap-1">
+                <p className="font-medium text-fg">{t("evaluation.case.judgement.coverage")}</p>
+                <ul className="grid gap-0.5" data-testid="evaluation-case-judgement-points">
+                  {points.map((point, index) => (
+                    <li key={`${index}:${point.point}`} className="flex min-w-0 items-start gap-1">
+                      <span className="pr-icon-line">
+                        {point.covered ? (
+                          <CheckCircle2 size={12} className="text-success-fg" aria-hidden />
+                        ) : (
+                          <XCircle size={12} className="text-danger-fg" aria-hidden />
+                        )}
+                      </span>
+                      <span className="min-w-0 break-words">
+                        <span className="sr-only">
+                          {t(point.covered ? "evaluation.case.judgement.covered" : "evaluation.case.judgement.notCovered")}
+                          :{" "}
+                        </span>
+                        {point.point}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </Disclosure>
       ) : null}
     </div>
   );

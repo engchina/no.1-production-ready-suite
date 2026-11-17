@@ -167,6 +167,9 @@ class SystemTableOperationState(BaseModel):
     operation_kind: SystemSchemaOperationKind | None = None
     lease_expires_at: str | None = None
     last_error_code: str | None = None
+    # 前回の失敗の原因・影響・対処の説明（製品が分かる失敗だけに返す。例: RAG の vector memory の
+    # 不足。#5261）。SQL・資格情報は含めない。
+    last_error_detail: str | None = None
     schema_epoch: int = 0
     updated_at: str | None = None
 
@@ -434,8 +437,8 @@ def deployment_check_summary(status: Mapping[str, Any]) -> tuple[bool, str]:
     """状態から、配備の確認の結果（ready か）と 1 行の要約を返す。
 
     ready で、操作が実行中でないときだけ OK。NG の要約には、状態・不足の object・未適用の
-    migration・承認が要る削除・前回の操作の失敗（ORA コードだけ）を入れる。SQL・資格情報は
-    入れない。
+    migration・承認が要る削除・前回の操作の失敗（ORA コードと、製品が返せば原因の説明
+    `last_error_detail`）を入れる。SQL・資格情報は入れない。
     """
 
     state = str(status.get("status") or "unknown")
@@ -469,7 +472,8 @@ def deployment_check_summary(status: Mapping[str, Any]) -> tuple[bool, str]:
         parts.append(f"操作 {operation_status}")
     last_error = operation.get("last_error_code")
     if last_error:
-        parts.append(f"前回の操作の失敗 {last_error}")
+        detail = operation.get("last_error_detail")
+        parts.append(f"前回の操作の失敗 {last_error}" + (f"（{detail}）" if detail else ""))
     return False, "・".join(parts)
 
 
