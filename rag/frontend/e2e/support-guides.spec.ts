@@ -523,18 +523,22 @@ const referenceDocuments = [
   knowledge_bases: document.knowledge_base_ids.map((id) => ({ id, name: id })),
 }));
 
-/** 資料の選択（ナレッジベースの「文書を追加」と同じ部品）を開き、文書名で選んで足す。 */
+/** 資料を選んで足すシート（ナレッジベースの「文書を追加」と同じ部品。#5279）を開き、文書名で選んで足す。 */
 async function pickReferenceDocuments(
   page: Page,
   container: Locator,
   addButton: string,
   names: string[],
 ) {
-  await container.getByRole("button", { name: addButton, exact: true }).click();
-  const listbox = page.getByRole("listbox", { name: "追加する文書の候補" });
+  const opener = container.getByRole("button", { name: addButton, exact: true });
+  await opener.click();
+  const sheet = page.getByRole("dialog");
+  const listbox = sheet.getByRole("listbox", { name: "追加する文書の候補" });
   for (const name of names) await listbox.getByRole("option", { name }).click();
-  await page.getByRole("button", { name: `選択した ${names.length} 件を追加` }).click();
-  await expect(listbox).toHaveCount(0);
+  await sheet.getByRole("button", { name: `${names.length} 件を追加` }).click();
+  // 足したらシートを閉じ、開いたボタンへフォーカスを戻す。
+  await expect(sheet).toBeHidden();
+  await expect(opener).toBeFocused();
 }
 
 async function openSupportGuides(page: Page, guides: Guide[] = [], setup?: (api: SupportGuideApi) => void) {
@@ -718,8 +722,12 @@ test("参照する資料の頁と手順ごとの参照を入れて保存でき�
   const stepReferences = second.getByRole("group", { name: "この手順が参照する資料" });
   await expect(stepReferences).toHaveAccessibleDescription(/この頁に絞って根拠を探し/);
   // 資料は、ナレッジベースの「文書を追加」と同じ選択で、プロファイルのナレッジベースの文書から選ぶ（#2749）。
-  await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  const stepOpener = stepReferences.getByRole("button", { name: "この手順の資料を足す" });
+  await expect(stepOpener).toHaveAttribute("aria-haspopup", "dialog");
+  await stepOpener.click();
+  // 右から出すシートで選ぶ（#5279）。見出しは手順の番号つき。
   const picker = page.getByTestId("support-guide-step-reference-picker-1");
+  await expect(picker).toHaveAccessibleName("手順 2 の資料を足す");
   const listbox = picker.getByRole("listbox", { name: "追加する文書の候補" });
   await expect(picker.getByRole("searchbox", { name: "追加する文書を検索" })).toBeFocused();
   await expect(listbox.getByRole("option", { name: "ほかの文書.pdf" })).toHaveCount(0);
@@ -727,20 +735,22 @@ test("参照する資料の頁と手順ごとの参照を入れて保存でき�
   await expectNoPageOverflow(page);
   await picker.screenshot({ path: testInfo.outputPath("support-guide-reference-picker.png") });
   await listbox.getByRole("option", { name: "画面の説明" }).click();
-  await picker.getByRole("button", { name: "選択した 1 件を追加" }).click();
-  await expect(picker).toHaveCount(0);
+  await picker.getByRole("button", { name: "1 件を追加" }).click();
+  await expect(picker).toBeHidden();
+  await expect(stepOpener).toBeFocused();
   const stepReference = stepReferences.getByRole("listitem", { name: "手順 2 の資料 1" });
   await expect(stepReference.getByLabel("文書", { exact: true })).toHaveValue("画面の説明");
   await expect(stepReference.getByLabel("文書", { exact: true })).toHaveAccessibleDescription("文書 ID: doc-b");
   await stepReference.getByLabel("根拠の頁").fill("6-4");
   await stepReference.screenshot({ path: testInfo.outputPath("support-guide-step-reference.png") });
   // すでに入れた文書は「追加済み」で選べない。
-  await stepReferences.getByRole("button", { name: "この手順の資料を足す" }).click();
+  await stepOpener.click();
   const added = picker.getByRole("option", { name: "画面の説明" });
   await expect(added).toHaveAttribute("aria-disabled", "true");
   await expect(added).toContainText("追加済み");
-  await picker.getByRole("button", { name: "閉じる" }).click();
-  await expect(picker).toHaveCount(0);
+  await picker.getByRole("button", { name: "キャンセル" }).click();
+  await expect(picker).toBeHidden();
+  await expect(stepOpener).toBeFocused();
 
   await pickReferenceDocuments(page, editor, "資料を足す", ["文書 A.pdf"]);
   const reference = editor.getByRole("listitem", { name: "資料 1", exact: true });

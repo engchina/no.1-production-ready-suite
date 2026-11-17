@@ -96,15 +96,17 @@ test("ナレッジベース管理で作成、文書追加、文書解除、ア�
   await expect(page.getByRole("heading", { name: "設計資料", level: 1 })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("設計資料");
 
-  // 詳細ページで文書を追加する（「文書を追加」で候補の一覧を開き、選んで追加する。#600）。
+  // 詳細ページで文書を追加する（「文書を追加」で候補の一覧のシートを開き、選んで追加する。#600・#5279）。
   await page.getByRole("button", { name: "文書を追加", exact: true }).click();
-  await page
+  const addSheet = page.getByRole("dialog", { name: "文書を追加" });
+  await addSheet
     .getByRole("listbox", { name: "追加する文書の候補" })
     .getByRole("option", { name: "guide.txt" })
     .click();
-  await page.getByRole("button", { name: "選択した 1 件を追加" }).click();
+  await addSheet.getByRole("button", { name: "1 件を追加" }).click();
 
-  await expect(page.getByText("文書をナレッジベースに追加しました。").first()).toBeVisible();
+  await expect(page.getByText("1 件を追加しました。").first()).toBeVisible();
+  await expect(addSheet).toBeHidden();
   await expect(page.getByRole("link", { name: "guide.txt" })).toBeVisible();
 
   // 詳細ページで文書を外す。
@@ -514,13 +516,14 @@ function addCandidateDocuments(state: ReturnType<typeof createKnowledgeBaseState
 }
 
 // #600: 数千〜数万件の文書から、検索して複数を選び、一度に追加する（共通の ListPicker）。
+// #5279: 追加は右から出すシート（ListPickerSheet。md 40rem・375px で全画面）で開き、下部に「N 件を追加 / キャンセル」を固定する。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900, theme: "light" as const },
   { name: "mobile", width: 375, height: 812, theme: "dark" as const },
 ]) {
   test(`文書を追加は 3,000 件から検索して複数を選び、一度に追加できる (${viewport.name} / ${viewport.theme})`, { tag: "@responsive" }, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await useTheme(page, viewport.theme);
     const state = createKnowledgeBaseState();
@@ -540,32 +543,72 @@ for (const viewport of [
 
     await page.goto("/knowledge-bases/kb-1");
     await expect(page.getByRole("heading", { name: "社内規程", level: 1 })).toBeVisible();
-    const toggle = page.getByRole("button", { name: "文書を追加", exact: true });
+    const opener = page.getByRole("button", { name: "文書を追加", exact: true });
     // 一覧のツールバー: 左に所属文書の検索、右に「文書を追加」（page-archetypes.md「一覧のツールバー」）。
     const memberSearch = page.getByRole("searchbox", { name: "所属文書を検索" });
-    const [memberSearchBox, toggleBox] = await Promise.all([memberSearch.boundingBox(), toggle.boundingBox()]);
-    if (viewport.width >= 1024) expect(memberSearchBox!.x).toBeLessThan(toggleBox!.x);
+    // ページの一覧の検索欄は「所属文書を検索」（シートの検索欄「文書名で検索」と見分ける）。
+    await expect(memberSearch).toHaveAttribute("placeholder", "所属文書を検索");
+    const [memberSearchBox, openerBox] = await Promise.all([memberSearch.boundingBox(), opener.boundingBox()]);
+    if (viewport.width >= 1024) expect(memberSearchBox!.x).toBeLessThan(openerBox!.x);
     // 狭い幅では縦に積み、検索欄が先頭。
-    else expect(memberSearchBox!.y).toBeLessThan(toggleBox!.y);
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    else expect(memberSearchBox!.y).toBeLessThan(openerBox!.y);
+    // 「文書を追加」は開くだけ（開閉を切り替えない）。
+    await expect(opener).toHaveAttribute("aria-haspopup", "dialog");
+    await expect(opener).not.toHaveAttribute("aria-expanded", /.*/);
     // 候補は開くまで読まない。
     expect(candidateRequests).toHaveLength(0);
 
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    const picker = page.getByTestId("knowledge-base-add-documents");
-    const search = picker.getByRole("searchbox", { name: "追加する文書を検索" });
+    await opener.click();
+    const sheet = page.getByRole("dialog", { name: "文書を追加" });
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toHaveAttribute("data-testid", "knowledge-base-add-documents");
+    // 右から出し、desktop は 40rem（560px）、375px は全画面。
+    // 滑り込む動き（200ms）が終わってから測る。
+    const sheetEdges = async () => {
+      const box = (await sheet.boundingBox())!;
+      return { left: Math.round(box.x), width: Math.round(box.width) };
+    };
+    await expect
+      .poll(sheetEdges)
+      .toEqual(
+        viewport.width >= 640
+          ? { left: viewport.width - 560, width: 560 }
+          : { left: 0, width: viewport.width }
+      );
+    // 説明は最小: 見出しはシートの「文書を追加」だけで、ピッカーの見出し・説明は無い。検索は placeholder だけ（読み上げの名前は残す）。
+    await expect(sheet.getByRole("heading")).toHaveText(["文書を追加"]);
+    await expect(sheet.getByText("追加する文書を選ぶ")).toHaveCount(0);
+    const search = sheet.getByRole("searchbox", { name: "追加する文書を検索" });
     await expect(search).toBeFocused();
-    const listbox = picker.getByRole("listbox", { name: "追加する文書の候補" });
+    await expect(search).toHaveAttribute("placeholder", "文書名で検索");
+    await expect(sheet.locator("label", { hasText: "追加する文書を検索" })).toHaveClass(/sr-only/);
+    const listbox = sheet.getByRole("listbox", { name: "追加する文書の候補" });
     await expect(listbox).toBeVisible();
     // 数千件を一度に読まず、100 件ずつ読む。
     expect(candidateRequests[0]).toEqual({ q: null, offset: "0", limit: "100" });
-    const footer = picker.getByTestId("knowledge-base-add-documents-footer");
+    const footer = sheet.getByTestId("knowledge-base-add-documents-list-footer");
     await expect(footer).toContainText("100 / 3,002 件を表示、選択 0 件");
-    // すでに所属している文書は「追加済み」で選べない。
+    // 下部の確定の行は固定で、選ぶまで「0 件を追加」は押せない。
+    const submit = sheet.getByRole("button", { name: "0 件を追加" });
+    await expect(submit).toBeDisabled();
+    // すでに所属している文書は「追加済み」のバッジ（中立の灰色）で選べない。元の位置（名前の順の先頭）のまま。
     const assigned = listbox.getByRole("option", { name: "policy.txt" });
     await expect(assigned).toHaveAttribute("aria-disabled", "true");
-    await expect(assigned).toContainText("追加済み");
+    await expect(listbox.getByRole("option").first()).toHaveAccessibleName("policy.txt");
+    const reasonBadge = assigned.locator("[data-list-picker-reason] [data-status-variant]");
+    await expect(reasonBadge).toHaveText("追加済み");
+    await expect(reasonBadge).toHaveAttribute("data-status-variant", "neutral");
+    // 状態（索引済み）は右端に固定し、「追加済み」はその左。状態の右端は他の行の状態の右端とそろう。
+    const assignedStatus = assigned.locator('[data-status-variant="success"]');
+    const otherStatus = listbox.getByRole("option", { name: "guide.txt" }).locator("[data-status-variant]").last();
+    const [reasonBox, assignedStatusBox, otherStatusBox] = await Promise.all([
+      reasonBadge.boundingBox(),
+      assignedStatus.boundingBox(),
+      otherStatus.boundingBox(),
+    ]);
+    expect(reasonBox!.x + reasonBox!.width).toBeLessThanOrEqual(assignedStatusBox!.x);
+    expect(assignedStatusBox!.x + assignedStatusBox!.width).toBeCloseTo(otherStatusBox!.x + otherStatusBox!.width, 0);
+    await page.screenshot({ path: testInfo.outputPath(`add-documents-sheet-${viewport.name}.png`) });
 
     // キーボード: listbox に入り、↓ と Space で選ぶ。
     await listbox.focus();
@@ -575,7 +618,7 @@ for (const viewport of [
     await expect(footer).toContainText("選択 1 件");
 
     // 続きを読み込む（offset 100）。
-    await picker.getByRole("button", { name: "さらに読み込む" }).click();
+    await sheet.getByRole("button", { name: "さらに読み込む" }).click();
     await expect(footer).toContainText("200 / 3,002 件を表示、選択 1 件");
     expect(candidateRequests.some((request) => request.offset === "100" && request.q === null)).toBe(true);
     // 100 行を超えたら、描く行は見えている範囲だけ（仮想スクロール）。
@@ -592,33 +635,53 @@ for (const viewport of [
     await search.fill("");
     // 検索前に読み込んだ分（2 ページ）はキャッシュから戻る。
     await expect(footer).toContainText("200 / 3,002 件を表示、選択 3 件");
-    const showSelected = picker.getByRole("button", { name: "選択中だけ表示（3）" });
+    const showSelected = sheet.getByRole("button", { name: "選択中だけ表示（3）" });
     await showSelected.click();
     await expect(showSelected).toHaveAttribute("aria-pressed", "true");
     await expect(listbox.getByRole("option")).toHaveCount(3);
     await expect(listbox.getByRole("option", { name: "bulk-2950.pdf" })).toBeVisible();
+    // 確定の行はシートの下端に固定（一覧の下に流れない）。
+    const sheetFooterBox = (await sheet.getByTestId("knowledge-base-add-documents-footer").boundingBox())!;
+    expect(sheetFooterBox.y + sheetFooterBox.height).toBeCloseTo(viewport.height, 0);
+    await page.screenshot({ path: testInfo.outputPath(`add-documents-sheet-selected-${viewport.name}.png`) });
     await expectNoPageOverflow(page);
 
-    await picker.getByRole("button", { name: "選択した 3 件を追加" }).click();
-    await expect(page.getByText("文書をナレッジベースに追加しました。").first()).toBeVisible();
+    await sheet.getByRole("button", { name: "3 件を追加" }).click();
+    await expect(page.getByText("3 件を追加しました。").first()).toBeVisible();
     // 追加したら閉じて、起点のボタンへフォーカスを戻す。
-    await expect(picker).toHaveCount(0);
-    await expect(toggle).toBeFocused();
+    await expect(sheet).toBeHidden();
+    await expect(opener).toBeFocused();
     await expect(page.getByRole("link", { name: "bulk-2959.pdf" })).toBeVisible();
     await expect(page.getByRole("link", { name: "guide.txt" })).toBeVisible();
     await expectNoPageOverflow(page);
+
+    // 開き直すと検索語と選択は空。Escape で閉じ、起点のボタンへ戻る。
+    await opener.click();
+    await expect(sheet).toBeVisible();
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue("");
+    await expect(sheet.getByRole("button", { name: "0 件を追加" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    await expect(opener).toBeFocused();
+    // キャンセルでも閉じる。
+    await opener.click();
+    await sheet.getByRole("button", { name: "キャンセル" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(opener).toBeFocused();
   });
 }
 
 // 200 件を超える追加は 200 件ずつ送る。2 回目以降で失敗しても、それまでの分は追加済みなので、
-// 所属文書の一覧を取り直し、何件まで追加できたかを出して、残りだけを選択に残す。
+// 所属文書の一覧を取り直し、何件まで追加できたかと追加できなかった文書をシートの中に出して（Toast にしない）、
+// シートを閉じずに残りだけを選択に残す。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
   test(`文書の追加が途中で失敗しても、追加できた分を一覧に出し件数を知らせる (${viewport.name})`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const state = createKnowledgeBaseState();
     addCandidateDocuments(state, 300);
@@ -638,33 +701,37 @@ for (const viewport of [
 
     await page.goto("/knowledge-bases/kb-1");
     const pagination = page.getByTestId("knowledge-base-documents-pagination");
-    const toggle = page.getByRole("button", { name: "文書を追加", exact: true });
-    await toggle.click();
-    const picker = page.getByTestId("knowledge-base-add-documents");
-    const footer = picker.getByTestId("knowledge-base-add-documents-footer");
+    const opener = page.getByRole("button", { name: "文書を追加", exact: true });
+    await opener.click();
+    const sheet = page.getByTestId("knowledge-base-add-documents");
+    const footer = sheet.getByTestId("knowledge-base-add-documents-list-footer");
     await expect(footer).toContainText("100 / 302 件を表示");
-    await picker.getByRole("button", { name: "さらに読み込む" }).click();
+    await sheet.getByRole("button", { name: "さらに読み込む" }).click();
     await expect(footer).toContainText("200 / 302 件を表示");
-    await picker.getByRole("button", { name: "さらに読み込む" }).click();
+    await sheet.getByRole("button", { name: "さらに読み込む" }).click();
     await expect(footer).toContainText("300 / 302 件を表示");
-    await picker.getByRole("button", { name: "表示中をすべて選択" }).click();
+    await sheet.getByRole("button", { name: "表示中をすべて選択" }).click();
     // policy.txt は追加済みで選べないため 299 件。
     await expect(footer).toContainText("選択 299 件");
 
-    await picker.getByRole("button", { name: "選択した 299 件を追加" }).click();
+    await sheet.getByRole("button", { name: "299 件を追加" }).click();
     await expect
       .poll(() => batches)
       .toEqual([200, 99]);
-    await expect(
-      page.getByText("299 件のうち 200 件を追加しました。残りの 99 件は追加できませんでした。").first()
-    ).toBeVisible();
-    await expect(page.getByText("一時的に利用できません。").first()).toBeVisible();
+    // 結果はシートの中（確定の操作の直上）に出す。
+    const status = sheet.getByTestId("knowledge-base-add-documents-footer").getByRole("alert");
+    await expect(status).toContainText("299 件のうち 200 件を追加しました。残りの 99 件は追加できませんでした。");
+    await expect(status).toContainText("一時的に利用できません。");
+    // 追加できなかった文書の名前（先頭の 5 件とほかの件数）。
+    await expect(status).toContainText("追加できなかった文書: bulk-0200.pdf、");
+    await expect(status).toContainText("ほか 94 件。");
     // 追加できた分は所属文書の一覧に出る（失敗しても一覧を取り直す）。
     await expect(pagination).toContainText("/ 201 件");
-    // 追加できなかった残りだけを選択に残し、もう一度追加できる。
-    await expect(picker).toBeVisible();
+    // シートは閉じず、追加できなかった残りだけを選択に残し、すぐもう一度追加できる。
+    await expect(sheet).toBeVisible();
     await expect(footer).toContainText("選択 99 件");
-    await expect(picker.getByRole("button", { name: "選択した 99 件を追加" })).toBeEnabled();
+    await expect(sheet.getByRole("button", { name: "99 件を追加" })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath(`add-documents-partial-${viewport.name}.png`) });
     await expectNoPageOverflow(page);
   });
 }
@@ -1002,7 +1069,7 @@ test("アーカイブ済みの詳細は所属文書を外す操作を出さず�
 
   await expect(page.getByTestId("knowledge-base-documents-list")).toContainText("old-policy.txt");
   await expect(page.getByTestId("knowledge-base-document-actions-doc-old")).toHaveCount(0);
-  await expect(page.getByTestId("knowledge-base-add-documents-toggle")).toHaveCount(0);
+  await expect(page.getByTestId("knowledge-base-add-documents-open")).toHaveCount(0);
   await expect(page.getByText("アーカイブ済みのナレッジベースでは検索テストを行えません。")).toBeVisible();
   await expect(page.getByText("索引済みの文書がありません。")).toHaveCount(0);
 });

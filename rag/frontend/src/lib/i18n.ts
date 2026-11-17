@@ -2048,8 +2048,7 @@ export const ja = {
   "knowledgeBases.col.actions": "操作",
   "knowledgeBases.detail.archivedHint":
     "アーカイブ済みのナレッジベースは文書の追加・解除を行えません。",
-  // 文書を選ぶ（ナレッジベースの「文書を追加」と業務ガイドの資料で共通。DocumentPicker。#600・#2749）。
-  "documentPicker.title": "追加する文書を選ぶ",
+  // 文書を選んで追加するシート（ナレッジベースの「文書を追加」と業務ガイドの資料で共通。DocumentPickerSheet。#600・#2749・#5279）。
   "documentPicker.listLabel": "追加する文書の候補",
   "documentPicker.actions": "文書の追加",
   "documentPicker.noOptions": "追加できる文書がありません。",
@@ -2063,15 +2062,14 @@ export const ja = {
   "documentPicker.searchPlaceholder": "文書名で検索",
   "documentPicker.alreadyAdded": "追加済み",
   "documentPicker.limitReached": "選べるのは {count} 件までです",
-  "documentPicker.submit": "選択した {count} 件を追加",
+  "documentPicker.submit": "{count} 件を追加",
+  "documentPicker.cancel": "キャンセル",
   "documentPicker.close": "閉じる",
   // 「文書を追加」: 数千〜数万件の文書から、検索して複数を選んで追加する（共通の ListPicker。#600）。
   "knowledgeBases.assignment.title": "文書を追加",
-  "knowledgeBases.assignment.hint":
-    "文書名で検索して、追加する文書を選んでください。すでに所属している文書は選べません。",
   "knowledgeBases.documents.title": "所属文書",
   "knowledgeBases.documents.search": "所属文書を検索",
-  "knowledgeBases.documents.searchPlaceholder": "文書名で検索",
+  "knowledgeBases.documents.searchPlaceholder": "所属文書を検索",
   "knowledgeBases.documents.noResults.title": "検索に一致する所属文書がありません。",
   "knowledgeBases.documents.noResults.hint": "文書名を変えるか、検索語をクリアしてください。",
   // ナレッジベースの「抽出する項目」（#548）。
@@ -2118,7 +2116,7 @@ export const ja = {
   "knowledgeBases.toast.created": "ナレッジベースを作成しました。",
   "knowledgeBases.toast.archived": "ナレッジベースをアーカイブしました。",
   "knowledgeBases.toast.updated": "ナレッジベースを更新しました。",
-  "knowledgeBases.toast.assigned": "文書をナレッジベースに追加しました。",
+  "knowledgeBases.toast.assigned": "{count} 件を追加しました。",
   "knowledgeBases.toast.removed": "文書をナレッジベースから外しました。",
   "knowledgeBases.error.load":
     "ナレッジベース一覧の取得に失敗しました。接続状態を確認して再試行してください。",
@@ -2132,7 +2130,9 @@ export const ja = {
   "knowledgeBases.error.assign":
     "文書の追加に失敗しました。文書とナレッジベースの状態を確認してください。",
   "knowledgeBases.error.assignPartial":
-    "{total} 件のうち {assigned} 件を追加しました。残りの {remaining} 件は追加できませんでした。{reason}",
+    "{total} 件のうち {assigned} 件を追加しました。残りの {remaining} 件は追加できませんでした。",
+  "knowledgeBases.error.assignFailedDocuments": "追加できなかった文書: {names}。",
+  "knowledgeBases.error.assignFailedDocumentsMore": "追加できなかった文書: {names} ほか {count} 件。",
   "knowledgeBases.error.remove":
     "文書の所属解除に失敗しました。ナレッジベースの状態を確認してください。",
   "knowledgeBases.error.documents":
@@ -4647,9 +4647,7 @@ export const ja = {
   "supportGuides.add.branch": "分岐を足す",
   "supportGuides.add.reference": "資料を足す",
   "supportGuides.add.stepReference": "この手順の資料を足す",
-  "supportGuides.referencePicker.hint":
-    "このプロファイルのナレッジベースの文書から、文書名で検索して選んでください。すでに入れた文書は選べません。",
-  "supportGuides.referencePicker.loading": "プロファイルのナレッジベースを読み込んでいます",
+  "supportGuides.referencePicker.stepTitle": "手順 {step} の資料を足す",
   "supportGuides.referencePicker.loadError": "プロファイルのナレッジベースを取得できませんでした。",
   "supportGuides.stepReference.row": "手順 {step} の資料 {n}",
   "supportGuides.stepReference.remove": "手順 {step} の資料 {n} を外す",
