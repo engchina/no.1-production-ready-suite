@@ -77,6 +77,8 @@ export async function mockEvaluationJobs(
         (job.payload.compare_search_answer_profile_id as string | undefined) ?? null,
       search_answer_profile_name: null,
       compare_search_answer_profile_name: null,
+      // 回答の方法（#5340）。投入した値を記録として返す。
+      answer_mode: (job.payload.answer_mode as string | undefined) ?? null,
       actor_display_name: "ローカル利用者",
       owned: true,
       can_cancel: true,
@@ -98,6 +100,7 @@ export async function mockEvaluationJobs(
       compare_search_answer_profile_id: detail.compare_search_answer_profile_id,
       search_answer_profile_name: null,
       compare_search_answer_profile_name: null,
+      answer_mode: detail.answer_mode,
       actor_display_name: detail.actor_display_name,
       owned: true,
       can_cancel: true,

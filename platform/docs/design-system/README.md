@@ -958,6 +958,19 @@ LLM の回答など Markdown で書かれた本文は、この部品で描きま
 - 単体テストは `packages/ui/tests/clarification-card.test.tsx`。製品の画面の e2e は載せ替え（#1839 の段 2〜4）で足す。
 - 使う所（予定）: NL2SQL の SQL の生成の前の確認（`RequirementQuestionForm` / `RequirementConfirmForm` の置き換え。要件の一覧は `children`、物理名・根拠は選択肢の `detail`）、RAG の回答の前の確認（`ClarificationChoice` の置き換え。章節は `detail`）、Agent のツールの結果の確認と `ask_user_confirmation`。
 
+### `RadioOptionGroup`（新規）— ★ 名前と説明を持つラジオの群は 1 つの実装（#5340）
+
+1 つを選ぶ選択肢に 1 行の説明を添えて並べる部品です。`Fieldset role="radiogroup"`（legend・補足・エラー・必須は `Fieldset` のまま）の中に、ネイティブのラジオを包んだ行を並べます。行の見た目は `ClarificationCard` の選択肢の行と同じです。
+
+| 決めたこと | 理由 |
+|---|---|
+| 行全体が押せるネイティブのラジオ。名前は `aria-labelledby`、説明は `aria-describedby` でラジオに結ぶ | 矢印キーの移動・読み上げをブラウザに任せる。説明を名前に混ぜない |
+| 行の高さは 44px 以上（`--control-height-touch`）。選んだ行は `--color-accent-emphasis` の枠と `--color-accent-subtle` の地に加え、ラジオの印でも示す | タッチの最小。状態を色だけで示さない |
+| 列の数は置き場所の幅で決める（`repeat(auto-fit, minmax(min(100%, 16rem), 1fr))`、群の幅は 60rem まで）。375px では縦に 1 列 | 2〜3 の選択肢は広い画面で横に並べ、狭い画面で説明を折り返さずに読める |
+| `disabled`（実行中など）は群の全部のラジオを無効にし、色は変えずに押せないことだけを示す | 実行中も選んだ内容を読める（`ClarificationCard` と同じ） |
+
+- 単体テストは `packages/ui/tests/radio-option-group.test.tsx`。最初の利用は RAG の品質評価の「回答の方法」（#5340）。RAG の設定画面の手書きのラジオの載せ替えは別の Issue。
+
 ### `Toaster`（変更）— ★ 置き場所は画面幅ごとに決まった 1 か所（#1728。#411 を置き換え）
 
 通知（Toast）は**画面幅ごとに決まった 1 か所**に出し、ページの内容（`PageHeader` の操作の有無・幅、スクロール）では動かしません。置き場所は `Toaster` が決め、製品・画面では変えません（`placement` プロップは無い）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。
