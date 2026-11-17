@@ -1,6 +1,6 @@
 # 検索・回答の能力の一覧（必須 / 任意と縮退）
 
-RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `rag_search` / `rag_retrieve_evidence` が通る `app/rag/pipeline.py` → `app/rag/answer_engine.py` → `rag_engine`）が使う能力ごとに、次の 4 つを記録する（#3262 の最初の段）。
+RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `rag_search` / `rag_chat` が通る `app/rag/pipeline.py` → `app/rag/answer_engine.py` → `rag_engine`）が使う能力ごとに、次の 4 つを記録する（#3262 の最初の段）。
 
 - (a) 回答に**必須**か**任意**か。ここでは「使えないとき回答を止める（エラー・拒否）」を必須、「縮退して回答を続ける」を任意と呼ぶ。設定で切れる能力は「任意（設定）」と書き、設定で有効なときに失敗したときの振る舞いを (b) に書く。
 - (b) 使えない・失敗したときの振る舞い（エラー / 拒否 / 縮退して続ける）。
@@ -28,7 +28,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `RT` | rag_engine の結果の trace だけ（backend の診断に写していない） | `rag/packages/rag_engine/rag_engine/generation/answering.py` |
 | `LOG` | ログだけ（診断では「無効・該当なし」と同じ値） | — |
 
-- MCP の応答（`rag_search`・`rag_retrieve_evidence`）は `DS` の処理の種類と回数を `degraded_steps` に出す（例外の型の名前は出さない。#3262。`rag/backend/app/mcp/tools.py::_degraded_steps`）。`ZE` は段と件数だけを `zero_evidence`（`stage`・`candidate_count`・`rejected_count`。検索の条件の項目・値・検索の記録は出さない）に、`GD` を `guardrail_degraded` に出す（#3546。`rag/backend/app/mcp/tools.py::_zero_evidence`・`_guardrail_degraded`）。Agent の組み込み Runtime は、根拠 0 件で `guardrail_degraded` か `degraded_steps` があるとき、モデルへのツールの結果に案内（`retrieval_notice`）を足し、回答の対応の `absence_conclusion` に数えない。`agent_get_run_observation` はツールの呼び出しごとに `degraded_steps`・`guardrail_degraded`・`zero_evidence_stage` を写す（`agent/backend/app/features/agent/run_observation.py`）。MCP は回答の診断の `needs_human_review` から `outcome=conditional` を決める（`rag/backend/app/mcp/tools.py::_answer_fields`）。
+- MCP の応答（`rag_search`・`rag_chat`）は `DS` の処理の種類と回数を `degraded_steps` に出す（例外の型の名前は出さない。#3262。`rag/backend/app/mcp/tools.py::_degraded_steps`）。`ZE` は段と件数だけを `zero_evidence`（`stage`・`candidate_count`・`rejected_count`。検索の条件の項目・値・検索の記録は出さない）に、`GD` を `guardrail_degraded` に出す（#3546。`rag/backend/app/mcp/tools.py::_zero_evidence`・`_guardrail_degraded`）。Agent の組み込み Runtime は、根拠 0 件で `guardrail_degraded` か `degraded_steps` があるとき、モデルへのツールの結果に案内（`retrieval_notice`）を足し、回答の対応の `absence_conclusion` に数えない。`agent_get_run_observation` はツールの呼び出しごとに `degraded_steps`・`guardrail_degraded`・`zero_evidence_stage` を写す（`agent/backend/app/features/agent/run_observation.py`）。MCP は回答の診断の `needs_human_review` から `outcome=conditional` を決める（`rag/backend/app/mcp/tools.py::_answer_fields`）。
 - `SearchDiagnostics.answer` は自由な dict で、REST の schema には `DS` などの形を持たない。
 
 ## 能力の一覧

@@ -227,21 +227,23 @@ def test_multi_turn_case_sends_conditions_and_scores_with_the_same_evaluator() -
         ],
     )
     fake = FakeRagMcp([clarify, answered])
-    record = _evaluate(fake, [CASE])
+    # 業務ガイドの条件と複数往復は C（検索・回答プロファイル）の rag_chat（#5352）。
+    record = _evaluate(fake, [CASE], RagTargetConfig(mcp_url=URL, search_answer_profile_id="p-1"))
+    assert fake.tools == ["rag_chat", "rag_chat"]
     assert fake.calls == [
         {
             "query": "権限の付け方は？",
             "evidence_limit": 50,
+            "search_answer_profile_id": "p-1",
             "skip_approved_faq": True,
-            "knowledge_base_ids": ["kb-1"],
             "conditions": {"mode": "標準"},
         },
         {
             "query": "権限の付け方は？\n個別の利用者です。",
-            "original_question": "権限の付け方は？\n個別の利用者です。",
             "evidence_limit": 50,
+            "search_answer_profile_id": "p-1",
             "skip_approved_faq": True,
-            "knowledge_base_ids": ["kb-1"],
+            "original_question": "権限の付け方は？\n個別の利用者です。",
             "conditions": {"mode": "標準", "target": "個別"},
         },
     ]
@@ -258,7 +260,7 @@ def test_multi_turn_case_sends_conditions_and_scores_with_the_same_evaluator() -
     assert record.report.metrics_version == "five_metrics_v1+rag_v1"
     assert record.provenance["target"]["kind"] == "rag_mcp"
     assert record.target["runs"][0]["clarification_conditions"] == ["target"]
-    assert record.observations[0].turns[1].payload["rag_search"]["trace_id"] == "trace-2"
+    assert record.observations[0].turns[1].payload["rag_chat"]["trace_id"] == "trace-2"
 
 
 def test_profile_and_superseded_cases_are_passed_to_rag_search() -> None:
@@ -272,10 +274,9 @@ def test_profile_and_superseded_cases_are_passed_to_rag_search() -> None:
         {
             "query": "旧版との違いは？",
             "evidence_limit": 50,
-            "skip_approved_faq": True,
             "search_answer_profile_id": "profile-1",
-            "top_k": 20,
             "include_superseded": True,
+            "top_k": 20,
         }
     ]
 
@@ -296,7 +297,7 @@ def test_profile_only_cases_are_passed_to_rag_chat() -> None:
             "include_superseded": True,
         }
     ]
-    assert record.provenance["target"]["output_schema_versions"] == {"rag_chat": 46}
+    assert record.provenance["target"]["output_schema_versions"] == {"rag_chat": 47}
     assert record.observations[0].turns[0].payload["rag_chat"]["trace_id"] == "trace-1"
     assert record.report.case_results[0].status == "success"
 

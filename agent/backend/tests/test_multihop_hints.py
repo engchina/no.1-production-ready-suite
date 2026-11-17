@@ -351,8 +351,8 @@ def test_search_limit_schema_tells_the_model_to_omit_the_limits() -> None:
     assert SEARCH_LIMIT_SCHEMA_NOTE not in schema["properties"]["top_k"]["description"]
     assert search_limit_schema("rag__rag_search", shown) == shown
     # 根拠のツール以外は元のまま。
-    guides = _contract_schema("rag_lookup_guides")
-    assert search_limit_schema("rag__rag_lookup_guides", guides) is guides
+    outline = _contract_schema("rag_outline")
+    assert search_limit_schema("rag__rag_outline", outline) is outline
 
 
 def _step(name: str, arguments: dict[str, Any], *, success: bool = True) -> RunStep:

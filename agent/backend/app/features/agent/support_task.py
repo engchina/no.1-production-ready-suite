@@ -80,11 +80,11 @@ NON_GROUNDING_TOOLS = frozenset(
 RAG_SEARCH = "rag_search"
 RAG_CHAT = "rag_chat"
 RAG_ANSWER_TOOLS = frozenset({RAG_SEARCH, RAG_CHAT})
-# RAG の回答のツールが登録済みQ&Aの候補だけを返した状態（#5134・#5136。検索はしていない）と、
+# rag_chat が登録済みQ&Aの候補だけを返した状態（#5134・#5352。回答はしていない）と、
 # 利用者の選択を渡す引数（実行環境が付けるので、モデルに見せない。入力の schema にあるときだけ）。
 RAG_APPROVED_FAQ_CANDIDATES = "approved_faq_candidates"
 APPROVED_FAQ_ARGUMENTS = ("approved_faq_id", "skip_approved_faq")
-RAG_APPROVED_FAQ_TOOLS = RAG_ANSWER_TOOLS
+RAG_APPROVED_FAQ_TOOLS = frozenset({RAG_CHAT})
 # 業務ガイドの条件の確認を返させない引数（#5342。利用者に確認しない Run で実行環境が付ける。
 # モデルに見せない）。
 SKIP_CLARIFICATION_ARGUMENT = "skip_clarification"
@@ -1954,7 +1954,7 @@ class _StateBuilder:
                 self.add_labels(guide.get("known_conditions"))
                 self.add_labels(guide.get("unknown_conditions"))
             self.add_labels(output.get("clarifications"))
-        # モデルが rag_search の conditions に入れた値（利用者の答え）。
+        # モデルが rag_chat の conditions に入れた値（利用者の答え）。
         if isinstance(conditions, dict):
             for condition_id, value in conditions.items():
                 self.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=at)
@@ -2282,9 +2282,9 @@ def support_task_instructions(
         )
     lines.extend(
         [
-            "- 利用者の新しい発言が確かめ中の問いに答えていれば、その値を rag_search の conditions"
+            "- 利用者の新しい発言が確かめ中の問いに答えていれば、その値を rag_chat の conditions"
             "（条件の id → 値）に入れて呼んでください。",
-            "- 分かっている条件は聞き直さず、rag_search の conditions に入れてください。",
+            "- 分かっている条件は聞き直さず、rag_chat の conditions に入れてください。",
             "- 利用者の新しい発言が分かっている条件と違う値を示したら、新しい値を使ってください。",
         ]
     )

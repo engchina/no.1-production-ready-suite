@@ -386,8 +386,8 @@ APPROVAL_NOT_FOUND_MESSAGE = "承認の依頼が見つかりません。"
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 
 
-# 接続 `rag` の既定（1230 秒。RAG の回答の上限 1200 秒より長い。#1425・#5280）を
-# 画面でも保存し直せる上限。
+# MCP 接続の待ち時間の上限（接続 `rag` の既定と同じ 1500 秒。RAG の回答の上限 1200 秒より長い。
+# #1425・#5280・#5352）。
 # 配備の Nginx の tools/invoke の待ち（SUITE_AGENT_LONG_API_TIMEOUT_SECONDS）はこれ + 60 秒。
 _MCP_TIMEOUT_MAX_SECONDS = 1500
 

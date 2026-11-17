@@ -72,15 +72,15 @@ _CLARIFICATION = {
 
 
 def _evidence(chunk_id: str) -> dict[str, Any]:
-    evidence: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"]["evidence"][0])
+    evidence: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_chat"]["evidence"][0])
     evidence.update(evidence_id=chunk_id, chunk_id=chunk_id)
     return evidence
 
 
 def _guided_search(argument: Any) -> dict[str, Any]:
-    """業務ガイドを使う rag_search（#1238 の出力）。契約の種類が分からなければ確かめる。"""
+    """業務ガイドを使う rag_chat（#1238 の出力）。契約の種類が分からなければ確かめる。"""
     conditions = dict(argument.conditions or {})
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
     region = {"id": "region", "label": "地域", "value": "東日本", "source": "question"}
     guide: dict[str, Any] = {
         "guide_id": "guide-1",
@@ -124,7 +124,7 @@ class _Env:
 @pytest.fixture
 def env(monkeypatch: MonkeyPatch) -> Iterator[_Env]:
     """RAG（fake の MCP）と、Control Plane の読み取り・書き込みのツールを使う業務 Agent。"""
-    mcp = fake_product_mcp(monkeypatch, outputs={"rag_search": _guided_search})
+    mcp = fake_product_mcp(monkeypatch, outputs={"rag_chat": _guided_search})
     recorded = _Env(mcp=mcp)
 
     def handler(name: str) -> Any:
@@ -159,9 +159,9 @@ def env(monkeypatch: MonkeyPatch) -> Iterator[_Env]:
         AgentSkillDefinition(
             id=SKILL_ID,
             name="支援の Skill",
-            instructions="契約の手続きは rag_search で調べる。",
+            instructions="契約の手続きは rag_chat で調べる。",
             mcp_requirements=[
-                SkillMcpRequirement(server_id="rag", tool_names=["rag_search", "rag_read_source"]),
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_chat", "rag_read_source"]),
                 SkillMcpRequirement(server_id="control-plane", tool_names=[LOOKUP, WRITE]),
             ],
         )
@@ -227,14 +227,14 @@ def _search(call_id: str, conditions: dict[str, str] | None = None) -> Any:
     arguments: dict[str, Any] = {"query": "契約を更新したい"}
     if conditions is not None:
         arguments["conditions"] = conditions
-    return [function_call("rag__rag_search", arguments, call_id=call_id)]
+    return [function_call("rag__rag_chat", arguments, call_id=call_id)]
 
 
 def _lookup(call_id: str, tool: str = LOOKUP) -> Any:
     return [function_call(tool, {"query": "売上"}, call_id=call_id)]
 
 
-def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
+def test_state_is_built_from_rag_chat_and_carried_to_the_next_run(
     monkeypatch: MonkeyPatch, env: _Env, runtime_clock: RuntimeClock
 ) -> None:
     """状態を作り、次の Run へ引き継ぐ（Run の間に OS の時計が戻っても引き継ぐ。#5150）。"""
@@ -297,9 +297,9 @@ def test_state_is_built_from_rag_search_and_carried_to_the_next_run(
     assert "guide_id=guide-1、版 2" in instructions
     assert "「更新の期限」" in instructions
     assert "残り 999 回（上限 1000 回）" in instructions
-    assert "rag_search の conditions" in instructions
+    assert "rag_chat の conditions" in instructions
     # モデルは利用者の答えを conditions に入れて呼び直した。
-    assert env.mcp.calls_of("rag_search")[1]["arguments"]["conditions"] == {"kind": "年間"}
+    assert env.mcp.calls_of("rag_chat")[1]["arguments"]["conditions"] == {"kind": "年間"}
     state = _state(second)
     assert state["goal"] == "契約を更新したい"
     assert state["known_conditions"]["kind"]["value"] == "年間"
@@ -364,7 +364,7 @@ def test_rag_calls_over_the_run_budget_return_budget_exceeded(
     monkeypatch: MonkeyPatch, env: _Env
 ) -> None:
     monkeypatch.setattr(get_settings(), "agent_max_rag_calls_per_run", 1)
-    env.mcp.outputs["rag_search"] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
+    env.mcp.outputs["rag_chat"] = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
     model = _script(
         monkeypatch,
         _search("call-1"),
@@ -383,7 +383,7 @@ def test_rag_calls_over_the_run_budget_return_budget_exceeded(
     run = _run("契約を更新したい")
 
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    assert len(env.mcp.calls_of("rag_search")) == 1
+    assert len(env.mcp.calls_of("rag_chat")) == 1
     assert len(env.mcp.calls_of("rag_read_source")) == 1
     assert [step.status for step in run.steps] == ["completed", "failed", "completed"]
     blocked = run.steps[1].tool_result
@@ -525,20 +525,20 @@ def test_default_nl2sql_budget_allows_thirty_queries_per_run() -> None:
     # 結果の取得・プロファイルの一覧・RAG の検索は、NL2SQL の上限に達した後も呼べる。
     assert budget.reserve("nl2sql__nl2sql_get_job") is None
     assert budget.reserve("nl2sql__nl2sql_list_profiles") is None
-    assert budget.reserve("rag__rag_search") is None
+    assert budget.reserve("rag__rag_chat") is None
     assert budget.run_calls == {"rag": 1, "nl2sql": 30}
     assert budget.run_tool_calls == 63
 
 
 def test_default_rag_budget_allows_thirty_searches_per_run() -> None:
-    """既定では rag_search の合計を 30 回まで実行する。"""
+    """既定では rag_chat の合計を 30 回まで実行する。"""
     budget = _default_budget()
     for index in range(30):
-        tool = "rag__rag_search" if index % 2 else "rag__rag_search"
+        tool = "rag__rag_chat" if index % 2 else "rag__rag_chat"
         assert budget.reserve(tool) is None
         assert budget.reserve("rag__rag_read_source") is None
     assert budget.rag_calls_remaining == 0
-    assert budget.reserve("rag__rag_search") == {
+    assert budget.reserve("rag__rag_chat") == {
         "scope": "run_rag_calls",
         "limit": 30,
         "used": 30,
@@ -552,7 +552,7 @@ def test_run_budget_of_zero_or_less_has_no_limit() -> None:
     )
     for _ in range(200):
         assert budget.reserve("nl2sql__nl2sql_query") is None
-        assert budget.reserve("rag__rag_search") is None
+        assert budget.reserve("rag__rag_chat") is None
     assert budget.rag_calls_remaining is None
 
 
@@ -714,7 +714,7 @@ def test_abandoned_run_consumption_counts_calls_stopped_before_the_result() -> N
     consumed = abandoned_run_consumption(
         [
             # 結果を受け取る前に Run が失敗・取消になった呼び出し（呼び先には届いている見込み）。
-            step("rag__rag_search", "running"),
+            step("rag__rag_chat", "running"),
             step(LOOKUP, "cancelled"),
             # 承認待ちのまま取り消した呼び出しは数えない。
             step(WRITE, "cancelled", approval_id="approval-1"),
@@ -770,26 +770,26 @@ def _instructions(state: dict[str, Any], fixed: tuple[str, ...] = ()) -> str:
 
 
 def test_profiles_keep_the_last_successful_profile_per_connection() -> None:
-    previous = {"profiles": {"rag-sub": {"kind": "rag", "id": "prof-old", "tool": "rag_search"}}}
+    previous = {"profiles": {"rag-sub": {"kind": "rag", "id": "prof-old", "tool": "rag_chat"}}}
     state = _build(
         previous,
         [
-            _tool_step("rag__rag_search", {"query": "締め日", "search_answer_profile_id": "p-1"}),
+            _tool_step("rag__rag_chat", {"query": "締め日", "search_answer_profile_id": "p-1"}),
             _tool_step("rag__rag_chat", {"query": "締め日", "search_answer_profile_id": "p-2"}),
             # 失敗した呼び出し・プロファイルの無い呼び出しは残さない。
             _tool_step(
-                "rag__rag_search",
+                "rag__rag_chat",
                 {"query": "x", "search_answer_profile_id": "p-bad"},
                 success=False,
             ),
-            _tool_step("rag__rag_search", {"query": "x"}),
+            _tool_step("rag__rag_chat", {"query": "x"}),
             _tool_step("nl2sql__nl2sql_query", {"question": "件数", "profile_id": "sales"}),
         ],
     )
 
     # 前の状態の接続は引き継ぎ、同じ接続は最後の値で上書きする。
     assert state["profiles"] == {
-        "rag-sub": {"kind": "rag", "id": "prof-old", "tool": "rag_search"},
+        "rag-sub": {"kind": "rag", "id": "prof-old", "tool": "rag_chat"},
         "rag": {"kind": "rag", "id": "p-2", "tool": "rag_chat"},
         "nl2sql": {"kind": "nl2sql", "id": "sales", "tool": "nl2sql_query"},
     }
@@ -801,7 +801,7 @@ def test_profile_instructions_hide_connections_fixed_by_the_data_scope() -> None
     state = _build(
         None,
         [
-            _tool_step("rag__rag_search", {"query": "締め日", "search_answer_profile_id": "p-1"}),
+            _tool_step("rag__rag_chat", {"query": "締め日", "search_answer_profile_id": "p-1"}),
             _tool_step("nl2sql__nl2sql_query", {"question": "件数", "profile_id": "sales"}),
         ],
     )
@@ -823,7 +823,7 @@ def test_profile_instructions_hide_connections_fixed_by_the_data_scope() -> None
 
 def _profile_search(call_id: str, profile_id: str) -> Any:
     arguments = {"query": "経費精算の締め日", "search_answer_profile_id": profile_id}
-    return [function_call("rag__rag_search", arguments, call_id=call_id)]
+    return [function_call("rag__rag_chat", arguments, call_id=call_id)]
 
 
 def test_next_run_is_told_to_reuse_the_previous_profile(
@@ -839,7 +839,7 @@ def test_next_run_is_told_to_reuse_the_previous_profile(
     first = _run("経費精算の締め日は？")
     assert first.status == RunStatus.COMPLETED, first.events[-1].message
     assert _state(first)["profiles"] == {
-        "rag": {"kind": "rag", "id": "prof-expense", "tool": "rag_search"}
+        "rag": {"kind": "rag", "id": "prof-expense", "tool": "rag_chat"}
     }
 
     second = _run("その期限を過ぎたらどうなる？", thread_id=first.thread_id)

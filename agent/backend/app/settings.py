@@ -195,10 +195,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # （共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名）で呼ぶ（#233）。タイムアウト（秒）は
     # 1 回の MCP の呼び出しの待ち時間で、画面の「MCP 接続」の上限（1500 秒）以下にする。
     agent_external_rag_mcp_url: str | None = None
-    # RAG の `rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`。最大 1200 秒）を
-    # 通しで待つため、RAG の回答の上限より長くする（RAG の画面の timeout と同じ 1230 秒。
-    # #1425・#5280）。
-    agent_external_rag_timeout_seconds: float = 1230.0
+    # RAG の回答のツール（`rag_chat`・`rag_search`）は、ツールの処理の全体を RAG の回答の上限
+    # （`RAG_ANSWER_TIMEOUT_SECONDS`。最大 1200 秒）の 1 つの期限で終える（#5339）。待ち時間は
+    # 画面の「MCP 接続」の上限と同じ 1500 秒にし、HTTP の往復・応答の組み立てに余裕を残す
+    # （#1425・#5280・#5352）。
+    agent_external_rag_timeout_seconds: float = 1500.0
     # 画面（ブラウザ）から RAG を開く起点（例: http://rag-host）。RAG の図の根拠を開く短命の URL
     # （#1311）の path をこの起点に付ける。空なら RAG が MCP の呼び出しを受けた起点（MCP の URL の
     # host。private IP のことがある）のまま使う。1 台の Compute（#1316）では同じ origin の `/rag`。
@@ -278,7 +279,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 品質評価の 1 ケースの上限時間（秒。Run の実行。判定は別。#1432）。0 以下（既定）は自動で、
     # 接続 `rag` の待ち時間 ×（Run の RAG の予算〔agent_max_rag_calls_per_run。0 以下なら
     # agent_max_tool_calls_per_run〕+ 1）にする。+1 はモデルの推論の分。
-    # 既定では 1230 ×（30 + 1）= 38130 秒。300 秒〜86400 秒に収める。
+    # 既定では 1500 ×（30 + 1）= 46500 秒。300 秒〜86400 秒に収める。
     agent_evaluation_case_timeout_seconds: float = 0.0
     # 品質評価で同時に実行するケースの数の上限（#2004）。判定（LLM-as-judge）は job の中で 1 つの
     # 上限つきの並行の実行器（pr_backend_core.bounded_calls）を共有し、429 を受けたら全体で待って

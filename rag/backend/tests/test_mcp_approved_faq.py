@@ -1,6 +1,6 @@
 """MCP の登録済みQ&A: 候補・選んだ回答・候補の省略。
 
-rag_search（#5134）と rag_retrieve_evidence（#5136）。
+rag_chat（#5134・#5339）。rag_search は登録済みQ&Aを扱わない（#5352）。
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _candidates(monkeypatch: MonkeyPatch, suggestions: list[ApprovedFaqSuggestio
 
 
 def _searcher(production_auth: Any) -> dict[str, str]:
-    user = production_auth.user_with_permissions("searcher", ["menu.search"])
+    user = production_auth.user_with_permissions("chatter", ["menu.chat"])
     return _token(user.user_uuid)
 
 
@@ -83,7 +83,7 @@ def test_returns_candidates_only_and_then_the_chosen_answer_verbatim(
         "search_answer_profile_id": "bv-1",
     }
 
-    body = _call("rag_search", question, headers)["structuredContent"]
+    body = _call("rag_chat", question, headers)["structuredContent"]
 
     # 候補だけを返し、検索・回答はしない（照合は利用者の元の質問）。
     assert queries == ["合成の質問 A"]
@@ -96,7 +96,7 @@ def test_returns_candidates_only_and_then_the_chosen_answer_verbatim(
     assert body["answer"] == "" and body["evidence"] == []
     assert body["approved_faq"] is None
 
-    chosen = _call("rag_search", {**question, "approved_faq_id": "faq-1"}, headers)[
+    chosen = _call("rag_chat", {**question, "approved_faq_id": "faq-1"}, headers)[
         "structuredContent"
     ]
 
@@ -121,7 +121,7 @@ def test_skip_approved_faq_searches_without_candidates(
     queries = _candidates(monkeypatch, [ApprovedFaqSuggestion(record=FAQ, score=0.97)])
 
     body = _call(
-        "rag_search",
+        "rag_chat",
         {"query": "合成の質問 A", "search_answer_profile_id": "bv-1", "skip_approved_faq": True},
         _searcher(auth),
     )["structuredContent"]
@@ -141,7 +141,7 @@ def test_no_candidates_searches_as_before(
     queries = _candidates(monkeypatch, [])
 
     body = _call(
-        "rag_search",
+        "rag_chat",
         {"query": "合成の別の質問", "search_answer_profile_id": "bv-1"},
         _searcher(auth),
     )["structuredContent"]
@@ -152,20 +152,6 @@ def test_no_candidates_searches_as_before(
     assert body["approved_faq_candidates"] == []
 
 
-def test_search_without_profile_does_not_look_up_candidates(
-    auth: Any,  # noqa: F811
-    monkeypatch: MonkeyPatch,
-    searched: list[SearchRequest],
-) -> None:
-    queries = _candidates(monkeypatch, [ApprovedFaqSuggestion(record=FAQ, score=0.97)])
-
-    body = _call("rag_search", {"query": "合成の質問 A"}, _searcher(auth))["structuredContent"]
-
-    assert queries == []
-    assert len(searched) == 1
-    assert body["status"] == "completed"
-
-
 def test_blocked_question_with_chosen_faq_does_not_return_the_faq_answer(
     auth: Any,  # noqa: F811
     monkeypatch: MonkeyPatch,
@@ -174,7 +160,7 @@ def test_blocked_question_with_chosen_faq_does_not_return_the_faq_answer(
     _candidates(monkeypatch, [])
 
     body = _call(
-        "rag_search",
+        "rag_chat",
         {"query": "攻撃の文", "search_answer_profile_id": "bv-1", "approved_faq_id": "faq-1"},
         _searcher(auth),
     )["structuredContent"]
@@ -183,7 +169,7 @@ def test_blocked_question_with_chosen_faq_does_not_return_the_faq_answer(
     assert "合成の回答 A" not in str(body)
 
 
-@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+@pytest.mark.parametrize("tool", ["rag_chat"])
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -208,105 +194,15 @@ def test_invalid_faq_arguments_are_tool_errors(
     assert searched == []
 
 
-def test_approved_faq_arguments_are_shared_by_search_and_retrieve() -> None:
-    """登録済みQ&Aの引数は rag_search と rag_retrieve_evidence で同じ定義（#5136）。"""
-    search = mcp_tools.SearchInput.model_json_schema()["properties"]
-    retrieve = mcp_tools.RetrieveEvidenceInput.model_json_schema()["properties"]
-    for name in ("approved_faq_id", "skip_approved_faq"):
-        assert search[name] == retrieve[name]
-
-
-# ---- rag_retrieve_evidence（#5136） ----
-
-
-def test_retrieve_returns_candidates_only_and_then_the_chosen_faq_answer(
-    auth: Any,  # noqa: F811
-    monkeypatch: MonkeyPatch,
-    searched: list[SearchRequest],
-) -> None:
-    queries = _candidates(monkeypatch, [ApprovedFaqSuggestion(record=FAQ, score=0.97)])
-    headers = _searcher(auth)
-    question = {"query": "合成の質問 A", "search_answer_profile_id": "bv-1"}
-
-    body = _call("rag_retrieve_evidence", question, headers)["structuredContent"]
-
-    # 候補だけを返し、根拠は検索しない（照合は query）。
-    assert queries == ["合成の質問 A"]
-    assert searched == []
-    assert body["status"] == "approved_faq_candidates"
-    assert body["approved_faq_candidates"] == [
-        {"id": "faq-1", "question": "合成の質問 A", "score": 0.97}
-    ]
-    assert body["evidence"] == [] and body["approved_faq"] is None
-
-    chosen = _call("rag_retrieve_evidence", {**question, "approved_faq_id": "faq-1"}, headers)[
-        "structuredContent"
-    ]
-
-    # 選んだ Q&A は rag_search と同じ入口（回答を作る要求の FAQ の経路）で引き、根拠は検索しない。
-    assert queries == ["合成の質問 A"]
-    assert [(r.approved_faq_id, r.generate_answer) for r in searched] == [("faq-1", True)]
-    assert chosen["status"] == "completed"
-    assert chosen["approved_faq"] == {
-        "id": "faq-1",
-        "question": "合成の質問 A",
-        "answer": "合成の回答 A",
-    }
-    assert chosen["evidence"] == [] and chosen["zero_evidence"] is None
-    assert chosen["approved_faq_candidates"] == []
-    assert chosen["trace_id"] == "trace-1"
-
-
-def test_retrieve_skip_approved_faq_retrieves_evidence_without_candidates(
-    auth: Any,  # noqa: F811
-    monkeypatch: MonkeyPatch,
-    searched: list[SearchRequest],
-) -> None:
-    queries = _candidates(monkeypatch, [ApprovedFaqSuggestion(record=FAQ, score=0.97)])
-
-    body = _call(
-        "rag_retrieve_evidence",
-        {"query": "合成の質問 A", "search_answer_profile_id": "bv-1", "skip_approved_faq": True},
-        _searcher(auth),
-    )["structuredContent"]
-
-    assert queries == []
-    assert [(r.approved_faq_id, r.generate_answer) for r in searched] == [(None, False)]
-    assert body["status"] == "completed"
-    assert body["approved_faq"] is None
-
-
-def test_retrieve_without_candidates_retrieves_as_before(
-    auth: Any,  # noqa: F811
-    monkeypatch: MonkeyPatch,
-    searched: list[SearchRequest],
-) -> None:
-    queries = _candidates(monkeypatch, [])
-
-    body = _call(
-        "rag_retrieve_evidence",
-        {"query": "合成の別の質問", "search_answer_profile_id": "bv-1"},
-        _searcher(auth),
-    )["structuredContent"]
-
-    assert queries == ["合成の別の質問"]
-    assert [r.generate_answer for r in searched] == [False]
-    assert body["status"] == "completed"
-    assert body["approved_faq_candidates"] == [] and body["approved_faq"] is None
-
-
-def test_retrieve_blocked_question_with_chosen_faq_does_not_return_the_faq_answer(
-    auth: Any,  # noqa: F811
-    monkeypatch: MonkeyPatch,
-    searched: list[SearchRequest],
-) -> None:
-    _candidates(monkeypatch, [])
-
-    body = _call(
-        "rag_retrieve_evidence",
-        {"query": "攻撃の文", "search_answer_profile_id": "bv-1", "approved_faq_id": "faq-1"},
-        _searcher(auth),
-    )["structuredContent"]
-
-    assert body["approved_faq"] is None
-    assert "合成の回答 A" not in str(body)
+def test_rag_search_rejects_the_approved_faq_arguments(auth: Any) -> None:  # noqa: F811
+    """rag_search は基本の検索で、登録済みQ&A・確認・元の質問の引数を受けない（#5352）。"""
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    for removed in (
+        {"approved_faq_id": "faq-1", "search_answer_profile_id": "bv-1"},
+        {"skip_approved_faq": True},
+        {"conditions": {"c": "v"}},
+        {"original_question": "元の質問"},
+    ):
+        result = _call("rag_search", {"query": "合成の質問", **removed}, _token(user.user_uuid))
+        assert result["isError"] is True, removed
+        assert result["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"

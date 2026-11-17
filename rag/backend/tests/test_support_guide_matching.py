@@ -19,8 +19,7 @@ from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.clients.support_guide_store import StoredIntentEmbeddings
 from app.config import get_settings
 from app.main import app
-from app.mcp import tools as mcp_tools
-from app.rag import support_guide_query
+from app.rag import support_guide_query, support_guide_runtime
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND
@@ -34,7 +33,6 @@ from app.rag.support_guide_runtime import (
     guide_choice_clarification,
     guide_clarification_record,
     match_guide,
-    rank_guides,
     resolve_guide_clarification,
     score_guide,
     select_guide,
@@ -50,6 +48,22 @@ from tests.test_mcp_api import _call, _token, auth  # noqa: F401 - fixture を�
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
 client = AsgiTestClient(app)
+
+
+def _ranked(
+    guides: Any,
+    query: Any,
+    provided: dict[str, str] | None = None,
+    *,
+    limit: int = 3,
+    context: Any = None,
+) -> list[support_guide_runtime.GuideMatch]:
+    """点の高い順の候補（選ぶ前の並び。#5352 で MCP の rank_guides を消したのでテストで並べる）。"""
+    parsed = support_guide_runtime._as_query(query)  # noqa: SLF001 - 並びを確かめる
+    return [
+        support_guide_runtime._match(item, parsed.text, provided or {}, interactive=False)  # noqa: SLF001
+        for item in support_guide_runtime._candidates(guides, parsed, None, context)[:limit]  # noqa: SLF001
+    ]
 
 
 def _guide(title: str, terms: Sequence[str], examples: Sequence[str] = ()) -> SupportGuideContent:
@@ -201,7 +215,7 @@ async def test_semantic_off_keeps_the_existing_match(question: str) -> None:
             if _legacy_score(content, question) >= 2
         ),
     )
-    ranked = rank_guides(GUIDES, query, limit=10)
+    ranked = _ranked(GUIDES, query, limit=10)
     assert [(-match.score, match.guide_id) for match in ranked] == expected
     selected = select_guide(GUIDES, query)
     legacy = match_guide(GUIDES, question)
@@ -375,23 +389,6 @@ def test_chat_suggestion_asks_which_guide(monkeypatch: MonkeyPatch) -> None:
     assert none["suggestion"] is None
 
 
-@pytest.mark.usefixtures("auth")
-def test_mcp_lookup_guides_expands_aliases(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
-    async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
-        return GUIDES, False
-
-    monkeypatch.setattr(get_settings(), "rag_runtime_terms_search_enabled", True)
-    monkeypatch.setattr(mcp_tools, "OracleClient", _ProfileOracle)
-    monkeypatch.setattr(search_route, "load_published_guides", published)
-    user = auth.user_with_permissions("searcher", ["menu.search"])
-    body = _call(
-        "rag_lookup_guides",
-        {"query": "NA画面が出ない", "search_answer_profile_id": "bv-1"},
-        _token(user.user_uuid),
-    )["structuredContent"]
-    assert [guide["guide_id"] for guide in body["guides"]] == ["g-notice"]
-
-
 # ---- 質問の例の埋め込みの作成・保存 ------------------------------------------------
 
 
@@ -541,27 +538,6 @@ def test_master_off_chat_does_not_load_or_confirm_guides(monkeypatch: MonkeyPatc
     )
     assert result.status_code == 200
     assert result.json()["data"]["suggestion"] is None
-
-
-@pytest.mark.usefixtures("auth")
-def test_master_off_mcp_does_not_lookup_guides(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
-    monkeypatch.setattr(
-        mcp_tools,
-        "OracleClient",
-        lambda: _ProfileOracle(support_guide_enabled=False),
-    )
-
-    async def forbidden(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("総合 OFF では MCP も業務ガイドを読み込まない")
-
-    monkeypatch.setattr(search_route, "load_published_guides", forbidden)
-    user = auth.user_with_permissions("guide-master-off", ["menu.search"])
-    result = _call(
-        "rag_lookup_guides",
-        {"search_answer_profile_id": "bv-1", "query": "NA画面の設定"},
-        _token(user.user_uuid),
-    )
-    assert result["structuredContent"]["guides"] == []
 
 
 @pytest.mark.parametrize("skipped", [False, True])

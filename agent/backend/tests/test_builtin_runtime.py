@@ -1070,11 +1070,8 @@ def test_mcp_connection_tools_are_given_to_the_model(
     assert call["claims"]["sub"] == USER_UUID
     assert call["claims"]["aud"] == "rag"
     assert call["claims"]["run_id"] == run_id
-    # 利用者の元の質問は Control Plane が付ける（#2261）。
-    assert call["arguments"] == {
-        "query": "契約の更新条件",
-        "original_question": "契約の更新条件を調べて",
-    }
+    # 基本の検索の rag_search は元の質問を受けないので付けない（#5352。rag_chat には付ける）。
+    assert call["arguments"] == {"query": "契約の更新条件"}
     [step] = run.steps
     assert step.tool_call is not None and step.tool_call.name == "rag__rag_search"
     assert step.status == "completed"

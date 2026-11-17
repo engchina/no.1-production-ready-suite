@@ -24,6 +24,7 @@ from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.config import get_settings
 from app.main import app
 from app.mcp import tools as mcp_tools
+from app.rag import support_guide_runtime
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.rag.support_guide_runtime import (
     GUIDE_LOAD_FAILED_KEY,
@@ -41,7 +42,6 @@ from app.rag.support_guide_runtime import (
     is_guide_preview_record,
     is_guide_preview_trace,
     match_guide,
-    rank_guides,
     resolve_guide_clarification,
     short_circuit_answer,
     visible_plan,
@@ -55,6 +55,22 @@ from tests.test_mcp_api import _call, _token, auth  # noqa: F401 - fixture を�
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
 client = AsgiTestClient(app)
+
+
+def _ranked(
+    guides: Any,
+    query: Any,
+    provided: dict[str, str] | None = None,
+    *,
+    limit: int = 3,
+    context: Any = None,
+) -> list[support_guide_runtime.GuideMatch]:
+    """点の高い順の候補（選ぶ前の並び。#5352 で MCP の rank_guides を消したのでテストで並べる）。"""
+    parsed = support_guide_runtime._as_query(query)  # noqa: SLF001 - 並びを確かめる
+    return [
+        support_guide_runtime._match(item, parsed.text, provided or {}, interactive=False)  # noqa: SLF001
+        for item in support_guide_runtime._candidates(guides, parsed, None, context)[:limit]  # noqa: SLF001
+    ]
 
 
 def grant_guide(**overrides: Any) -> SupportGuideContent:
@@ -182,9 +198,9 @@ def test_handoff_and_ranking() -> None:
     assert match is not None and match.decision == "handoff"
     assert "サポート窓口へお問い合わせください" in short_circuit_answer(match)
 
-    ranked = rank_guides(GUIDES, "アクセス権限を付与して地域別集計表も出したい", limit=5)
+    ranked = _ranked(GUIDES, "アクセス権限を付与して地域別集計表も出したい", limit=5)
     assert [item.guide_id for item in ranked] == ["g-grant", "g-export"]
-    assert rank_guides(GUIDES, "アクセス権限を付与", limit=1)[0].guide_id == "g-grant"
+    assert _ranked(GUIDES, "アクセス権限を付与", limit=1)[0].guide_id == "g-grant"
 
 
 def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
@@ -463,7 +479,7 @@ def test_applicability_excludes_guides_named_out_of_scope() -> None:
     unscoped = match_guide(GUIDES, "経理のアクセス権限を付与したい", context=context)
     assert unscoped is not None and unscoped.applicability == {}
     # rank_guides も同じ判定（範囲の外のガイドを返さない）。
-    ranked = rank_guides([hr, *GUIDES], "経理のアクセス権限を付与", context=context)
+    ranked = _ranked([hr, *GUIDES], "経理のアクセス権限を付与", context=context)
     assert [item.guide_id for item in ranked] == ["g-grant"]
 
 
@@ -838,138 +854,15 @@ class _FakeOracle:
 
 
 @pytest.mark.usefixtures("auth")
-def test_mcp_lookup_guides_returns_step_contents(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
-    """手順の中身（目的・手がかり・参照の資料と頁・必要な根拠・終わりの条件）と共通の資料・完了の
-    条件を返す（#2396）。"""
-    content = grant_guide(
-        steps=[
-            {
-                "id": "open",
-                "title": "詳細画面の権限タブを開く",
-                "purpose": "権限の画面に入る",
-                "retrieval_hints": ["権限タブ"],
-                "evidence_requirements": ["画面の入口"],
-                "done_when": "権限タブが開いた",
-                "references": [
-                    {
-                        "document_id": "doc-b",
-                        "title": "画面の説明",
-                        "page_ranges": [{"page_start": 4, "page_end": 6}],
-                    }
-                ],
-            },
-            {"id": "grant", "title": "権限を選んで付与する", "depends_on": ["open"]},
-        ],
-        references=[{"document_id": "doc-a", "title": "運用手順書", "section_path": ["3 章"]}],
-        completion=[{"id": "done", "description": "付与した権限が表示される"}],
-    )
+def test_mcp_chat_returns_guide_clarifications(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
+    """業務ガイドの確認は rag_chat が返す（#5352。rag_search は業務ガイドを照合しない）。"""
 
-    async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
-        return [("g-grant", 3, content)], False
+    async def no_faq_candidates(_arguments: Any) -> list[Any]:
+        return []
 
     monkeypatch.setattr(mcp_tools, "OracleClient", _FakeOracle)
-    monkeypatch.setattr(search_route, "load_published_guides", published)
-    user = auth.user_with_permissions("searcher", ["menu.search"])
-    guide = _call(
-        "rag_lookup_guides",
-        {
-            "query": "アクセス権限を付与したい",
-            "search_answer_profile_id": "bv-1",
-            "conditions": {"target": "グループ"},
-        },
-        _token(user.user_uuid),
-    )["structuredContent"]["guides"][0]
-
-    first = guide["steps"][0]
-    assert first["purpose"] == "権限の画面に入る"
-    assert first["retrieval_hints"] == ["権限タブ"]
-    assert first["evidence_requirements"] == ["画面の入口"]
-    assert first["done_when"] == "権限タブが開いた"
-    assert first["references"] == [
-        {
-            "document_id": "doc-b",
-            "title": "画面の説明",
-            "section_path": [],
-            "page_ranges": [{"page_start": 4, "page_end": 6}],
-            "sheet_ranges": [],
-        }
-    ]
-    assert guide["references"] == [
-        {
-            "document_id": "doc-a",
-            "title": "運用手順書",
-            "section_path": ["3 章"],
-            "page_ranges": [],
-            "sheet_ranges": [],
-        }
-    ]
-    assert guide["completion"] == [
-        {"id": "done", "description": "付与した権限が表示される", "check_method": ""}
-    ]
-
-
-@pytest.mark.usefixtures("auth")
-def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
-    async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
-        return GUIDES, False
-
-    monkeypatch.setattr(mcp_tools, "OracleClient", _FakeOracle)
-    monkeypatch.setattr(search_route, "load_published_guides", published)
-    user = auth.user_with_permissions("searcher", ["menu.search"])
-    body = _call(
-        "rag_lookup_guides",
-        {"query": "アクセス権限を付与したい", "search_answer_profile_id": "bv-1"},
-        _token(user.user_uuid),
-    )["structuredContent"]
-    guide = body["guides"][0]
-    assert (guide["guide_id"], guide["revision"], guide["decision"]) == ("g-grant", 2, "clarify")
-    assert guide["clarifications"][0]["options"] == ["個別", "グループ"]
-    assert [step["id"] for step in guide["steps"]] == ["open", "grant"]
-    assert (guide["impact_scope"], guide["approval_required"]) == ("group", True)
-    assert (guide["impact_steps"], guide["impact_applies"]) == ([], True)
-    known = _call(
-        "rag_lookup_guides",
-        {
-            "query": "アクセス権限を付与したい",
-            "search_answer_profile_id": "bv-1",
-            "conditions": {"target": "個別"},
-        },
-        _token(user.user_uuid),
-    )["structuredContent"]["guides"][0]
-    assert known["decision"] == "answer"
-    assert known["known_conditions"][0]["value"] == "個別"
-    # 分かっている条件で外れた分岐（グループ → grant）の手順と分岐は返さない（#2396）。
-    assert [step["id"] for step in known["steps"]] == ["open"]
-    assert known["branches"] == []
-    assert known["steps"][0]["retrieval_hints"] == ["権限タブ"]
-    group = _call(
-        "rag_lookup_guides",
-        {
-            "query": "アクセス権限を付与したい",
-            "search_answer_profile_id": "bv-1",
-            "conditions": {"target": "グループ"},
-        },
-        _token(user.user_uuid),
-    )["structuredContent"]["guides"][0]
-    assert [step["id"] for step in group["steps"]] == ["open", "grant"]
-    assert group["branches"] == [
-        {
-            "id": "b1",
-            "condition_id": "target",
-            "operator": "equals",
-            "values": ["グループ"],
-            "goto_step": "grant",
-            "applies": True,
-            "note": "承認を得てから",
-        }
-    ]
-    missing = _call(
-        "rag_lookup_guides",
-        {"query": "x", "search_answer_profile_id": "other"},
-        _token(user.user_uuid),
-    )
-    assert missing["isError"] is True
-
+    monkeypatch.setattr(mcp_tools, "_approved_faq_suggestions", no_faq_candidates)
+    user = auth.user_with_permissions("chatter", ["menu.chat"])
     match = match_guide(GUIDES, "アクセス権限を付与したい")
     assert match is not None
     outcome = guide_short_circuit_outcome(
@@ -993,7 +886,7 @@ def test_mcp_lookup_guides_and_search_clarifications(auth: Any, monkeypatch: Mon
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
     result = _call(
-        "rag_search",
+        "rag_chat",
         {
             "query": "アクセス権限を付与したい",
             "search_answer_profile_id": "bv-1",

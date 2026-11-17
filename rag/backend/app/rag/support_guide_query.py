@@ -1,7 +1,7 @@
 """業務ガイドの照合に使う質問を作る（#2398）。
 
 検索（``_resolve_query_context``）・チャットの確認の判定（``clarifications/suggest``）・MCP の
-``rag_lookup_guides`` の 3 か所が、同じ ``build_guide_query`` で質問を作る。
+``rag_chat``（検索と同じ入口）が、同じ ``build_guide_query`` で質問を作る。
 
 1. 用語の別名の展開（常に行う。モデルは呼ばない）: 検索・回答プロファイルの用語・同義語
    （runtime knowledge）の terms の別名で、質問を展開する（``expand_guide_query``）。

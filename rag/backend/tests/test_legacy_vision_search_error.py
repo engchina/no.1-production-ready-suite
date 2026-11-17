@@ -120,7 +120,7 @@ async def test_mcp_search_returns_a_tool_error_with_the_reprocess_code(
     monkeypatch.setattr(search_route, "RagPipeline", _LegacyPipeline)
 
     with pytest.raises(DocumentReprocessRequiredError) as caught:
-        await mcp_tools._run_search(SearchRequest(query="合成の質問"))
+        await mcp_tools._run_search(SearchRequest(query="合成の質問"), flow="basic")
 
     converted = mcp_error_from_exception(caught.value)
     assert isinstance(converted, McpToolError)

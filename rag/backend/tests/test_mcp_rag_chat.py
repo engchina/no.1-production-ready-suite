@@ -103,28 +103,14 @@ def test_chat_uses_the_expanded_flow_without_history(
     assert body["answer"] == "チャットの回答"
     assert body["status"] == "completed" and body["outcome"] == "answered"
     [(request, options)] = runs
-    # Chat の経路（_run_search が EXPANDED_FLOW を渡す）を、確認を返す形（interactive=False）で
-    # 呼び、通しの期限を渡す。
+    # Chat の経路（expanded）を、確認を返す形（interactive=False）で呼び、通しの期限を渡す。
+    assert options["flow"] == EXPANDED_FLOW
     assert options["interactive"] is False
     assert isinstance(options["deadline"], float)
     assert request.query == "合成の質問"
     assert request.original_question == "合成の元の質問"
     assert request.search_answer_profile_id == "bv-1"
     assert request.knowledge_base_ids == [] and request.filters == {}
-
-
-def test_chat_passes_the_expanded_flow_to_the_search(monkeypatch: MonkeyPatch) -> None:
-    seen: dict[str, Any] = {}
-
-    async def fake_run(_request: SearchRequest, **options: Any) -> SearchResponse:
-        seen.update(options)
-        return SearchResponse(answer="", citations=[], trace_id="t", elapsed_ms=0.0)
-
-    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
-    asyncio.run(mcp_tools._run_search(SearchRequest(query="合成"), interactive=True))
-    assert seen["flow"] == EXPANDED_FLOW
-    assert seen["interactive"] is True
-    assert seen["deadline"] is None  # 期限の外（ツールの handler の外）では渡さない
 
 
 def test_chat_returns_clarification_and_skip_answers_by_branches(
@@ -268,18 +254,19 @@ def test_chat_is_unavailable_when_chat_is_disabled(
 def test_answer_tools_stop_at_one_deadline_around_the_whole_handler(
     auth: Any,  # noqa: F811
     monkeypatch: MonkeyPatch,
+    runs: list[tuple[SearchRequest, dict[str, Any]]],
     tool: str,
 ) -> None:
-    """登録済みQ&Aの照会（回答生成の前）で期限を過ぎても、同じ時間切れ（504）にする。"""
-    monkeypatch.setattr(mcp_tools, "OracleClient", FakeKnowledgeOracle)
+    """回答生成の後（根拠の整形）で期限を過ぎても、同じ時間切れ（504）にする。"""
+    _no_candidates(monkeypatch, [])
     monkeypatch.setattr(mcp_tools, "answer_timeout_seconds", lambda _settings: 0.05)
     monkeypatch.setattr(mcp_tools, "ANSWER_DEADLINE_GRACE_SECONDS", 0.0)
 
-    async def slow_candidates(*_args: object) -> tuple[list[ApprovedFaqSuggestion], None]:
+    async def slow_older_versions(*_args: object) -> list[Any]:
         await asyncio.sleep(5)
-        return [], None
+        return []
 
-    monkeypatch.setattr(mcp_tools, "approved_faq_candidates", slow_candidates)
+    monkeypatch.setattr(mcp_tools, "_older_versions", slow_older_versions)
     headers = _chatter(auth, ["menu.chat", "menu.search"])
 
     result = _call(tool, {"query": "合成の質問", **PROFILE}, headers)
@@ -288,6 +275,7 @@ def test_answer_tools_stop_at_one_deadline_around_the_whole_handler(
     error = result["structuredContent"]
     assert error["status"] == 504
     assert "回答の生成が上限の" in error["message"]
+    assert len(runs) == 1
 
 
 def test_answer_generation_uses_the_remaining_time_and_reports_the_whole_limit() -> None:

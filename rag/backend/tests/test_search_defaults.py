@@ -7,12 +7,7 @@ from pydantic import ValidationError
 
 from app import config
 from app.config import Settings
-from app.mcp.tools import (
-    EVIDENCE_LIMIT_MAX,
-    RetrieveEvidenceInput,
-    SearchInput,
-    SearchScopeInput,
-)
+from app.mcp.tools import SearchInput
 from app.schemas.chat import ChatMessageRequest
 from app.schemas.search import SearchRequest
 
@@ -23,20 +18,17 @@ def test_omitted_top_k_and_public_schema_use_current_setting(
 ) -> None:
     settings = Settings(_env_file=None, rag_search_top_k_default=value)
     monkeypatch.setattr(config, "get_settings", lambda: settings)
-    requests: list[SearchRequest | ChatMessageRequest | SearchScopeInput] = [
+    requests: list[SearchRequest | ChatMessageRequest | SearchInput] = [
         SearchRequest(query="q"),
         ChatMessageRequest(content="q"),
         SearchInput(query="q"),
-        RetrieveEvidenceInput(query="q"),
     ]
     assert [request.top_k for request in requests] == [value] * len(requests)
-    assert RetrieveEvidenceInput(query="q").evidence_limit == min(value, EVIDENCE_LIMIT_MAX)
-    for model in (SearchRequest, ChatMessageRequest, SearchInput, RetrieveEvidenceInput):
+    for model in (SearchRequest, ChatMessageRequest, SearchInput):
         assert model.model_json_schema()["properties"]["top_k"]["default"] == value
     assert SearchRequest(query="q", top_k=12).top_k == 12
     assert ChatMessageRequest(content="q", top_k=12).top_k == 12
     assert SearchInput(query="q", top_k=12).top_k == 12
-    assert RetrieveEvidenceInput(query="q", top_k=12, evidence_limit=4).evidence_limit == 4
 
 
 @pytest.mark.parametrize("value", ["0", "101", "invalid"])

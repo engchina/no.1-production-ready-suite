@@ -4,7 +4,7 @@
     {
       "name": "rag_chat",
       "title": "ナレッジベースへの質問（チャット）",
-      "description": "RAG のチャットと同じ流れ（登録済みQ&A・業務ガイドの照合・根拠の拡張を含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は使いません。質問に近い登録済みQ&Aがあるときは、回答の前にその候補だけを返し（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは確認を返します（outcome=needs_clarification）。",
+      "description": "RAG のチャットと同じ流れ（登録済みQ&A・業務ガイド・根拠の拡張を含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は使いません。質問に近い登録済みQ&Aがあるときは、回答の前にその候補だけを返し（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは確認を返します（outcome=needs_clarification）。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "RAG チャットの経路で答える条件。",
@@ -196,7 +196,7 @@
             "type": "object"
           },
           "ApprovedFaqCandidate": {
-            "description": "検索・回答の前に利用者に示す登録済みQ&Aの候補。",
+            "description": "回答の前に利用者に示す登録済みQ&Aの候補（rag_chat）。",
             "properties": {
               "id": {
                 "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
@@ -1382,40 +1382,10 @@
         "description": "RAG チャットの経路の回答と根拠。",
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
-          },
-          "status": {
-            "default": "completed",
-            "description": "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、outcome は null）。",
-            "enum": [
-              "completed",
-              "approved_faq_candidates"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "approved_faq_candidates": {
-            "description": "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。",
-            "items": {
-              "$ref": "#/$defs/ApprovedFaqCandidate"
-            },
-            "title": "Approved Faq Candidates",
-            "type": "array"
-          },
-          "approved_faq": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ApprovedFaqRef"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "approved_faq_id で選んだ Q&A の登録済みの回答を answer に返したとき、その Q&A（根拠の evidence は空）。それ以外は null。"
           },
           "answer": {
             "title": "Answer",
@@ -1437,26 +1407,6 @@
             "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
             "title": "Guardrail Degraded",
             "type": "boolean"
-          },
-          "outcome": {
-            "anyOf": [
-              {
-                "enum": [
-                  "answered",
-                  "conditional",
-                  "needs_clarification",
-                  "needs_environment_data",
-                  "needs_human",
-                  "insufficient_evidence"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "回答の対応（status=approved_faq_candidates のときは null）。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る）。",
-            "title": "Outcome"
           },
           "requests": {
             "description": "質問の要求単位ごとの充足（背景の文は含めない）。",
@@ -1489,26 +1439,6 @@
             },
             "title": "Confirmations",
             "type": "array"
-          },
-          "clarifications": {
-            "description": "outcome=needs_clarification のとき、利用者に確かめる業務ガイドの条件と問い。",
-            "items": {
-              "$ref": "#/$defs/GuideClarification"
-            },
-            "title": "Clarifications",
-            "type": "array"
-          },
-          "guide": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/GuideRef"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "回答に使った業務ガイド（公開の版）。使わなければ null。"
           },
           "insufficient_reason": {
             "anyOf": [
@@ -1612,15 +1542,85 @@
             "default": null,
             "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
             "title": "Notice"
+          },
+          "status": {
+            "default": "completed",
+            "description": "completed=回答した / approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）だけを返した（回答していない。answer は空、outcome は null）。",
+            "enum": [
+              "completed",
+              "approved_faq_candidates"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "approved_faq_candidates": {
+            "description": "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。",
+            "items": {
+              "$ref": "#/$defs/ApprovedFaqCandidate"
+            },
+            "title": "Approved Faq Candidates",
+            "type": "array"
+          },
+          "approved_faq": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApprovedFaqRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "approved_faq_id で選んだ Q&A の登録済みの回答を answer に返したとき、その Q&A（根拠の evidence は空）。それ以外は null。"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "answered",
+                  "conditional",
+                  "needs_clarification",
+                  "needs_environment_data",
+                  "needs_human",
+                  "insufficient_evidence"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る）。status=approved_faq_candidates のときは null。",
+            "title": "Outcome"
+          },
+          "clarifications": {
+            "description": "outcome=needs_clarification のとき、利用者に確かめる業務ガイドの条件と問い。",
+            "items": {
+              "$ref": "#/$defs/GuideClarification"
+            },
+            "title": "Clarifications",
+            "type": "array"
+          },
+          "guide": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GuideRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "回答に使った業務ガイド（公開の版）。使わなければ null。"
           }
         },
         "required": [
           "answer",
           "trace_id",
           "guardrail_warnings",
-          "outcome",
           "evidence",
-          "evidence_omitted"
+          "evidence_omitted",
+          "outcome"
         ],
         "title": "ChatOutput",
         "type": "object"
@@ -1739,7 +1739,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1860,7 +1860,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1896,598 +1896,6 @@
           "search_answer_profiles"
         ],
         "title": "ListSearchAnswerProfilesOutput",
-        "type": "object"
-      }
-    },
-    {
-      "name": "rag_lookup_guides",
-      "title": "業務ガイドの照会",
-      "description": "質問に当たる公開の業務ガイド（目的・確かめる条件と状態・手順の順と各手順の検索の手がかり・参照の資料と頁・分岐・完了の条件・影響範囲・引き継ぎ先）を返します。回答は作りません。",
-      "inputSchema": {
-        "additionalProperties": false,
-        "description": "質問に当たる業務ガイドを引く条件。",
-        "properties": {
-          "query": {
-            "description": "質問文（利用者の目的）。",
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Query",
-            "type": "string"
-          },
-          "search_answer_profile_id": {
-            "description": "検索・回答プロファイルの id。",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Search Answer Profile Id",
-            "type": "string"
-          },
-          "conditions": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "分かっている条件の値（条件の id → 値）。",
-            "maxProperties": 30,
-            "title": "Conditions",
-            "type": "object"
-          },
-          "limit": {
-            "default": 3,
-            "description": "返す業務ガイドの最大件数。",
-            "maximum": 10,
-            "minimum": 1,
-            "title": "Limit",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "query",
-          "search_answer_profile_id"
-        ],
-        "title": "LookupGuidesInput",
-        "type": "object"
-      },
-      "annotations": {
-        "readOnlyHint": true
-      },
-      "outputSchema": {
-        "$defs": {
-          "GuideBranchItem": {
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "condition_id": {
-                "title": "Condition Id",
-                "type": "string"
-              },
-              "operator": {
-                "enum": [
-                  "equals",
-                  "in",
-                  "unknown"
-                ],
-                "title": "Operator",
-                "type": "string"
-              },
-              "values": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Values",
-                "type": "array"
-              },
-              "goto_step": {
-                "description": "条件に当たるときに進む手順の id。",
-                "title": "Goto Step",
-                "type": "string"
-              },
-              "applies": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "分かっている条件に当たるか（true=当たる / null=条件が分からず決まらない）。当たらない分岐は返さない。",
-                "title": "Applies"
-              },
-              "note": {
-                "default": "",
-                "title": "Note",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "condition_id",
-              "operator",
-              "goto_step",
-              "applies"
-            ],
-            "title": "GuideBranchItem",
-            "type": "object"
-          },
-          "GuideClarification": {
-            "properties": {
-              "condition_id": {
-                "description": "条件の id（conditions に値を入れて呼び直す）。",
-                "title": "Condition Id",
-                "type": "string"
-              },
-              "label": {
-                "description": "条件の名前。",
-                "title": "Label",
-                "type": "string"
-              },
-              "question": {
-                "description": "利用者に確かめる問い。",
-                "title": "Question",
-                "type": "string"
-              },
-              "options": {
-                "description": "選択肢（無ければ自由に答える）。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Options",
-                "type": "array"
-              },
-              "multiple": {
-                "default": false,
-                "description": "選択肢を複数選べるか。",
-                "title": "Multiple",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "condition_id",
-              "label",
-              "question"
-            ],
-            "title": "GuideClarification",
-            "type": "object"
-          },
-          "GuideCompletionItem": {
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "description": {
-                "title": "Description",
-                "type": "string"
-              },
-              "check_method": {
-                "default": "",
-                "title": "Check Method",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "description"
-            ],
-            "title": "GuideCompletionItem",
-            "type": "object"
-          },
-          "GuideCondition": {
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "label": {
-                "title": "Label",
-                "type": "string"
-              },
-              "state": {
-                "default": "unknown",
-                "description": "条件の状態（known=分かっている / unknown=分からない / conflicting=質問に複数の値が出ていて決められない。値は candidates）。",
-                "enum": [
-                  "known",
-                  "unknown",
-                  "conflicting"
-                ],
-                "title": "State",
-                "type": "string"
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Value"
-              },
-              "source": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "user=利用者が答えた / question=質問の文から読んだ / document=回答の根拠の画面の図から決めた。",
-                "title": "Source"
-              },
-              "handling": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。",
-                "title": "Handling"
-              },
-              "candidates": {
-                "description": "state=conflicting のとき、質問に出た値。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Candidates",
-                "type": "array"
-              }
-            },
-            "required": [
-              "id",
-              "label"
-            ],
-            "title": "GuideCondition",
-            "type": "object"
-          },
-          "GuidePageRangeItem": {
-            "properties": {
-              "page_start": {
-                "title": "Page Start",
-                "type": "integer"
-              },
-              "page_end": {
-                "title": "Page End",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "page_start",
-              "page_end"
-            ],
-            "title": "GuidePageRangeItem",
-            "type": "object"
-          },
-          "GuideReferenceItem": {
-            "properties": {
-              "document_id": {
-                "title": "Document Id",
-                "type": "string"
-              },
-              "title": {
-                "default": "",
-                "description": "表示名（参照の正本は document_id）。",
-                "title": "Title",
-                "type": "string"
-              },
-              "section_path": {
-                "description": "節の見出しの列。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Section Path",
-                "type": "array"
-              },
-              "page_ranges": {
-                "description": "根拠の頁の範囲（両端を含む。空なら文書の全体）。rag_read_document に document_id と page（page_start）を渡すと、その頁から読める。",
-                "items": {
-                  "$ref": "#/$defs/GuidePageRangeItem"
-                },
-                "title": "Page Ranges",
-                "type": "array"
-              },
-              "sheet_ranges": {
-                "description": "表計算の資料の根拠のシートと行の範囲（両端を含む。頁ではない）。",
-                "items": {
-                  "$ref": "#/$defs/GuideSheetRangeItem"
-                },
-                "title": "Sheet Ranges",
-                "type": "array"
-              }
-            },
-            "required": [
-              "document_id"
-            ],
-            "title": "GuideReferenceItem",
-            "type": "object"
-          },
-          "GuideSheetRangeItem": {
-            "properties": {
-              "sheet_name": {
-                "title": "Sheet Name",
-                "type": "string"
-              },
-              "row_start": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "始まりの行（無ければシートの全体）。",
-                "title": "Row Start"
-              },
-              "row_end": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Row End"
-              },
-              "cell_range": {
-                "default": "",
-                "description": "A1 形式のセルの範囲（書いてあれば）。",
-                "title": "Cell Range",
-                "type": "string"
-              }
-            },
-            "required": [
-              "sheet_name"
-            ],
-            "title": "GuideSheetRangeItem",
-            "type": "object"
-          },
-          "GuideStepItem": {
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "title": {
-                "title": "Title",
-                "type": "string"
-              },
-              "purpose": {
-                "default": "",
-                "title": "Purpose",
-                "type": "string"
-              },
-              "depends_on": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Depends On",
-                "type": "array"
-              },
-              "allowed_tools": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Allowed Tools",
-                "type": "array"
-              },
-              "retrieval_hints": {
-                "description": "この手順の根拠を引く検索の手がかり（語・画面名など）。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Retrieval Hints",
-                "type": "array"
-              },
-              "references": {
-                "description": "この手順の根拠がある資料と頁。",
-                "items": {
-                  "$ref": "#/$defs/GuideReferenceItem"
-                },
-                "title": "References",
-                "type": "array"
-              },
-              "evidence_requirements": {
-                "description": "この手順で示すべき根拠。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Evidence Requirements",
-                "type": "array"
-              },
-              "done_when": {
-                "default": "",
-                "description": "この手順の終わりの条件。",
-                "title": "Done When",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "title"
-            ],
-            "title": "GuideStepItem",
-            "type": "object"
-          },
-          "LookupGuideItem": {
-            "properties": {
-              "guide_id": {
-                "title": "Guide Id",
-                "type": "string"
-              },
-              "revision": {
-                "description": "使った公開の版。",
-                "title": "Revision",
-                "type": "integer"
-              },
-              "title": {
-                "title": "Title",
-                "type": "string"
-              },
-              "decision": {
-                "description": "answer=条件がそろった / branch=分岐で答えた / clarify=確かめる / handoff=人へ。",
-                "enum": [
-                  "answer",
-                  "branch",
-                  "clarify",
-                  "handoff"
-                ],
-                "title": "Decision",
-                "type": "string"
-              },
-              "known_conditions": {
-                "items": {
-                  "$ref": "#/$defs/GuideCondition"
-                },
-                "title": "Known Conditions",
-                "type": "array"
-              },
-              "unknown_conditions": {
-                "description": "確かめる・分岐する・引き継ぐ条件（不明・矛盾）。",
-                "items": {
-                  "$ref": "#/$defs/GuideCondition"
-                },
-                "title": "Unknown Conditions",
-                "type": "array"
-              },
-              "applicability": {
-                "additionalProperties": {
-                  "enum": [
-                    "matched",
-                    "unverified"
-                  ],
-                  "type": "string"
-                },
-                "description": "値のある適用範囲の項目（business_domains / object_types / versions）ごとの状態。matched=質問・絞り込みの手がかりと合った / unverified=手がかりが無く確かめていない。空の項目は制限なし（出さない）。手がかりと合わないガイドは返さない。",
-                "title": "Applicability",
-                "type": "object"
-              },
-              "expected_result": {
-                "title": "Expected Result",
-                "type": "string"
-              },
-              "score": {
-                "description": "質問との照合の点（大きいほど合う）。",
-                "title": "Score",
-                "type": "integer"
-              },
-              "clarifications": {
-                "items": {
-                  "$ref": "#/$defs/GuideClarification"
-                },
-                "title": "Clarifications",
-                "type": "array"
-              },
-              "steps": {
-                "description": "手順（確かめる順。分かっている条件で外れた分岐の手順は含めない）。",
-                "items": {
-                  "$ref": "#/$defs/GuideStepItem"
-                },
-                "title": "Steps",
-                "type": "array"
-              },
-              "branches": {
-                "description": "当たる・決まらない分岐（当たらない分岐は含めない）。",
-                "items": {
-                  "$ref": "#/$defs/GuideBranchItem"
-                },
-                "title": "Branches",
-                "type": "array"
-              },
-              "references": {
-                "description": "全手順に共通の資料と頁。",
-                "items": {
-                  "$ref": "#/$defs/GuideReferenceItem"
-                },
-                "title": "References",
-                "type": "array"
-              },
-              "completion": {
-                "description": "回答を終えてよい条件。",
-                "items": {
-                  "$ref": "#/$defs/GuideCompletionItem"
-                },
-                "title": "Completion",
-                "type": "array"
-              },
-              "impact_scope": {
-                "enum": [
-                  "individual",
-                  "group",
-                  "all"
-                ],
-                "title": "Impact Scope",
-                "type": "string"
-              },
-              "approval_required": {
-                "title": "Approval Required",
-                "type": "boolean"
-              },
-              "impact_steps": {
-                "description": "影響範囲と承認が係る手順の id（空なら業務ガイドのすべての場合に係る）。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Impact Steps",
-                "type": "array"
-              },
-              "impact_applies": {
-                "default": true,
-                "description": "分かっている条件の場合に影響範囲・承認が係るか（false なら、外れた分岐の手順だけに係るので、回答に影響範囲・承認を書かない）。",
-                "title": "Impact Applies",
-                "type": "boolean"
-              },
-              "handoff_contact": {
-                "default": "",
-                "title": "Handoff Contact",
-                "type": "string"
-              }
-            },
-            "required": [
-              "guide_id",
-              "revision",
-              "title",
-              "decision",
-              "expected_result",
-              "score",
-              "impact_scope",
-              "approval_required"
-            ],
-            "title": "LookupGuideItem",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "schema_version": {
-            "default": 46,
-            "description": "出力の形の版（変わったら上がる）。",
-            "title": "Schema Version",
-            "type": "integer"
-          },
-          "guides": {
-            "description": "質問に当たり、適用範囲の手がかりと合う公開の業務ガイド（照合の点の高い順）。無ければ空。",
-            "items": {
-              "$ref": "#/$defs/LookupGuideItem"
-            },
-            "title": "Guides",
-            "type": "array"
-          }
-        },
-        "required": [
-          "guides"
-        ],
-        "title": "LookupGuidesOutput",
         "type": "object"
       }
     },
@@ -2640,7 +2048,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3052,7 +2460,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3521,7 +2929,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3610,7 +3018,7 @@
     {
       "name": "rag_read_source",
       "title": "根拠の本文の読み取り",
-      "description": "rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。根拠の本文が省かれた（text_omitted）・切られた（truncated）とき・前後の文脈が要るときに使います。検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の元の画像の領域を画像（content の image）で返します。",
+      "description": "rag_chat・rag_search の根拠（document_id と chunk_id）の本文の続きと親の本文を読みます。根拠の本文が省かれた（text_omitted）・切られた（truncated）とき・前後の文脈が要るときに使います。検索と同じ利用範囲の根拠だけを読めます。include_image=true で、図の根拠の元の画像の領域を画像（content の image）で返します。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "根拠の本文を読む条件（evidence の document_id と、chunk_id か要素の定位子）。",
@@ -4308,7 +3716,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4557,7 +3965,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4691,7 +4099,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4726,1371 +4134,12 @@
       }
     },
     {
-      "name": "rag_retrieve_evidence",
-      "title": "根拠の取得",
-      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。質問に近い登録済みQ&Aがあるときは、根拠を検索する前にその候補だけを返し（status=approved_faq_candidates）、選んだ Q&A では、その登録済みの回答を approved_faq に返します。図の根拠は画像を返さず image_ref を返します。図を見るときは、その document_id・chunk_id で rag_read_source を include_image=true で呼びます。",
-      "inputSchema": {
-        "additionalProperties": false,
-        "description": "根拠の収集の条件。",
-        "properties": {
-          "query": {
-            "description": "1 つの質問（利用者の質問か、そこから分けた 1 つの問い）。複数の問いを 1 つの query にまとめない。",
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Query",
-            "type": "string"
-          },
-          "search_answer_profile_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。呼び出し元（業務 Agent）にデータの範囲があるときは必須。id を推測で作らない。見つからない id なら、使えるプロファイルが 1 つならそれを、そうでなければ質問から推薦したものを使い、auto_selected_search_answer_profile に示す（決まらなければ候補つきのエラー）。",
-            "title": "Search Answer Profile Id"
-          },
-          "knowledge_base_ids": {
-            "description": "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。呼び出し元にデータの範囲があるときは、検索・回答プロファイルの参照先の中だけ。",
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 200,
-            "title": "Knowledge Base Ids",
-            "type": "array"
-          },
-          "top_k": {
-            "anyOf": [
-              {
-                "maximum": 100,
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": 30,
-            "description": "検索する件数。",
-            "title": "Top K"
-          },
-          "filters": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "検索フィルター（例: category_name）。旧版を含める指定は filters ではなく include_superseded で渡す。",
-            "title": "Filters",
-            "type": "object"
-          },
-          "include_superseded": {
-            "default": false,
-            "description": "新しい版に置き換えた文書（旧版）も検索するか。既定（false）は今の版だけを検索する。旧版・変更点・改定前との違いを尋ねるとき、旧版の年度・版を名指しするとき（「2025 年度と 2026 年度では」「2023 年度版の規程では」）は true を渡す（検索の範囲は変わらず、検索・回答プロファイル・ナレッジベースの中の旧版だけが加わる）。結果の older_versions に、当たった文書の旧版（文書名・タイトル）が出る。",
-            "title": "Include Superseded",
-            "type": "boolean"
-          },
-          "evidence_limit": {
-            "default": 30,
-            "description": "返す根拠の最大件数。超えるときは、検索で当たった根拠（関連度の順）、前後の文脈の順に残す（並びは evidence の順のまま）。省略時は設定の検索する件数（top_k）を基準に、この件数の上限まで返し、検索で当たった根拠を全部返す。",
-            "maximum": 50,
-            "minimum": 1,
-            "title": "Evidence Limit",
-            "type": "integer"
-          },
-          "conditions": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、分かっている条件は聞き直さない。",
-            "maxProperties": 30,
-            "title": "Conditions",
-            "type": "object"
-          },
-          "approved_faq_id": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、検索をせずにその Q&A の登録済みの回答を返す。search_answer_profile_id が要る。",
-            "title": "Approved Faq Id"
-          },
-          "skip_approved_faq": {
-            "default": false,
-            "description": "true なら登録済みQ&Aの候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みQ&Aがあれば、検索の前にその候補だけを返す。",
-            "title": "Skip Approved Faq",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "title": "RetrieveEvidenceInput",
-        "type": "object"
-      },
-      "annotations": {
-        "readOnlyHint": true
-      },
-      "outputSchema": {
-        "$defs": {
-          "ApprovedFaqAnswer": {
-            "description": "利用者が選んだ登録済みQ&Aと、その登録済みの回答（rag_retrieve_evidence。#5136）。",
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "question": {
-                "description": "登録済みの質問。",
-                "title": "Question",
-                "type": "string"
-              },
-              "answer": {
-                "description": "登録済みの回答（原文のまま）。",
-                "title": "Answer",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "question",
-              "answer"
-            ],
-            "title": "ApprovedFaqAnswer",
-            "type": "object"
-          },
-          "ApprovedFaqCandidate": {
-            "description": "検索・回答の前に利用者に示す登録済みQ&Aの候補。",
-            "properties": {
-              "id": {
-                "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
-                "title": "Id",
-                "type": "string"
-              },
-              "question": {
-                "description": "登録済みの質問。",
-                "title": "Question",
-                "type": "string"
-              },
-              "score": {
-                "description": "質問との一致度（0〜1）。",
-                "title": "Score",
-                "type": "number"
-              }
-            },
-            "required": [
-              "id",
-              "question",
-              "score"
-            ],
-            "title": "ApprovedFaqCandidate",
-            "type": "object"
-          },
-          "AutoSelectedProfile": {
-            "description": "id を誤ったときに自動で選んだ検索・回答プロファイル。",
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "name": {
-                "title": "Name",
-                "type": "string"
-              },
-              "requested_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "渡した search_answer_profile_id（省略したときは null）。",
-                "title": "Requested Id"
-              },
-              "method": {
-                "description": "only_usable=使えるのが 1 つだけ / recommended=質問から推薦した。",
-                "enum": [
-                  "only_usable",
-                  "recommended"
-                ],
-                "title": "Method",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "name",
-              "method"
-            ],
-            "title": "AutoSelectedProfile",
-            "type": "object"
-          },
-          "DegradedStep": {
-            "description": "失敗して縮退した任意の補助の処理。",
-            "properties": {
-              "kind": {
-                "description": "処理の種類（例: rerank・section_outline・reference_load）。",
-                "title": "Kind",
-                "type": "string"
-              },
-              "count": {
-                "description": "失敗した回数。",
-                "title": "Count",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "kind",
-              "count"
-            ],
-            "title": "DegradedStep",
-            "type": "object"
-          },
-          "EvidenceImageRef": {
-            "description": "図の根拠の元の画像の領域。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめる）。文書の古い版（chunk_set）が\n消えると source_stale になる。",
-            "properties": {
-              "document_id": {
-                "title": "Document Id",
-                "type": "string"
-              },
-              "chunk_id": {
-                "title": "Chunk Id",
-                "type": "string"
-              },
-              "chunk_set_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "領域を記録した処理の版。",
-                "title": "Chunk Set Id"
-              },
-              "page": {
-                "description": "図のある頁（PDF の物理頁。画像ファイルは 1）。",
-                "title": "Page",
-                "type": "integer"
-              },
-              "page_label": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "印刷の頁番号（物理頁と違うときだけ）。",
-                "title": "Page Label"
-              },
-              "bbox": {
-                "description": "頁の中の図の領域 [x0, y0, x1, y1]。",
-                "items": {
-                  "type": "number"
-                },
-                "title": "Bbox",
-                "type": "array"
-              },
-              "bbox_unit": {
-                "description": "bbox の単位（absolute=頁の座標 / ratio=0〜1 / percent=0〜100）。",
-                "enum": [
-                  "absolute",
-                  "ratio",
-                  "percent"
-                ],
-                "title": "Bbox Unit",
-                "type": "string"
-              }
-            },
-            "required": [
-              "document_id",
-              "chunk_id",
-              "page",
-              "bbox",
-              "bbox_unit"
-            ],
-            "title": "EvidenceImageRef",
-            "type": "object"
-          },
-          "EvidenceLocator": {
-            "description": "根拠の場所（種類によって空の項目がある）。",
-            "properties": {
-              "section_path": {
-                "description": "節の見出しの列。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Section Path",
-                "type": "array"
-              },
-              "page_start": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "開始の頁（PDF の物理頁）。",
-                "title": "Page Start"
-              },
-              "page_end": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "終了の頁（PDF の物理頁）。",
-                "title": "Page End"
-              },
-              "sheet_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "表計算のシート名。",
-                "title": "Sheet Name"
-              },
-              "row_basis": {
-                "anyOf": [
-                  {
-                    "enum": [
-                      "sheet",
-                      "csv",
-                      "word_table",
-                      "parsed_table"
-                    ],
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。",
-                "title": "Row Basis"
-              },
-              "table_index": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。",
-                "title": "Table Index"
-              },
-              "row_start": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "開始の行（1 始まり。番号の基準は row_basis）。",
-                "title": "Row Start"
-              },
-              "row_end": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "終了の行。",
-                "title": "Row End"
-              },
-              "source_line_start": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
-                "title": "Source Line Start"
-              },
-              "source_line_end": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
-                "title": "Source Line End"
-              },
-              "cell_range": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。",
-                "title": "Cell Range"
-              },
-              "page_label_start": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ）。",
-                "title": "Page Label Start"
-              },
-              "page_label_end": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "終了の頁の印刷の頁番号。",
-                "title": "Page Label End"
-              },
-              "bbox": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "type": "number"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "開始の頁の中の領域 [x0, y0, x1, y1]（分かるときだけ）。",
-                "title": "Bbox"
-              },
-              "bbox_unit": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "bbox の単位（absolute=頁の座標 / normalized=0〜1）。",
-                "title": "Bbox Unit"
-              },
-              "element_locator": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "根拠の先頭の要素の定位子（doc:{document_id}/ext:{解析の結果}/page:{頁}/el:{要素}）。文書分割を作り直しても変わらず、rag_read_source の locator で読み直せる。要素を持たない分割の根拠は null。",
-                "title": "Element Locator"
-              },
-              "table_row": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録・解析の表の 1 行）のとき、その行の番号（row_basis の番号）。複数のデータの行の根拠・Word の表・行の位置が分からない表は null。",
-                "title": "Table Row"
-              },
-              "table_cells": {
-                "description": "table_row の行の値のあるセル（本文の順）。table_row が null なら空。",
-                "items": {
-                  "$ref": "#/$defs/EvidenceTableCell"
-                },
-                "title": "Table Cells",
-                "type": "array"
-              }
-            },
-            "title": "EvidenceLocator",
-            "type": "object"
-          },
-          "EvidenceReference": {
-            "description": "根拠の本文が参照する節・文書（「第3章を参照」など）。",
-            "properties": {
-              "label": {
-                "description": "本文の参照の表記（例: 第3章、別紙1、「権限」）。",
-                "title": "Label",
-                "type": "string"
-              },
-              "document_title": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "他の文書への参照の文書名（同じ文書なら null）。",
-                "title": "Document Title"
-              },
-              "section_path": {
-                "description": "同じ文書の参照先の節の見出しの列（解決できたときだけ）。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Section Path",
-                "type": "array"
-              },
-              "resolved": {
-                "description": "同じ文書の参照先の節が決まっているか（他の文書への参照は false）。",
-                "title": "Resolved",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "label",
-              "resolved"
-            ],
-            "title": "EvidenceReference",
-            "type": "object"
-          },
-          "EvidenceSection": {
-            "description": "根拠の chunk が属する章節（章節ナビゲーションの章節の中で最も深いもの）。",
-            "properties": {
-              "section_id": {
-                "description": "章節の id（rag_read_section の section_id に渡す）。",
-                "title": "Section Id",
-                "type": "string"
-              },
-              "title": {
-                "description": "章節の名前（どの章節にも入らない chunk は文書名）。",
-                "title": "Title",
-                "type": "string"
-              },
-              "level": {
-                "description": "章節の階層（1〜6。0 は文書全体）。",
-                "title": "Level",
-                "type": "integer"
-              },
-              "page_start": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "章節の開始の頁。",
-                "title": "Page Start"
-              },
-              "page_end": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "章節の終了の頁。",
-                "title": "Page End"
-              },
-              "chars": {
-                "description": "章節の本文の文字数（excerpt より長ければ章節を読む）。",
-                "title": "Chars",
-                "type": "integer"
-              },
-              "chunk_count": {
-                "description": "章節の chunk の数。",
-                "title": "Chunk Count",
-                "type": "integer"
-              },
-              "parent_section_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "親の章節の id。",
-                "title": "Parent Section Id"
-              },
-              "parent_title": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "親の章節の名前。",
-                "title": "Parent Title"
-              },
-              "parent_chars": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "親の章節の本文の文字数。",
-                "title": "Parent Chars"
-              }
-            },
-            "required": [
-              "section_id",
-              "title",
-              "level",
-              "chars",
-              "chunk_count"
-            ],
-            "title": "EvidenceSection",
-            "type": "object"
-          },
-          "EvidenceTableCell": {
-            "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
-            "properties": {
-              "table_col": {
-                "description": "列（表計算の列の記号。例: B。CSV・parsed_table は列の位置を同じ記号で示し、結合したセルは左の列）。",
-                "title": "Table Col",
-                "type": "string"
-              },
-              "header_path": {
-                "description": "列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Header Path",
-                "type": "array"
-              },
-              "bbox": {
-                "anyOf": [
-                  {
-                    "items": {
-                      "type": "number"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "セルの領域 [x0, y0, x1, y1]（locator の bbox と同じ頁・座標。解析が出したときだけ）。",
-                "title": "Bbox"
-              }
-            },
-            "required": [
-              "table_col",
-              "header_path"
-            ],
-            "title": "EvidenceTableCell",
-            "type": "object"
-          },
-          "ExcerptRange": {
-            "description": "本文の中の範囲（文字の位置。[start, end)）。",
-            "properties": {
-              "start": {
-                "title": "Start",
-                "type": "integer"
-              },
-              "end": {
-                "title": "End",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "start",
-              "end"
-            ],
-            "title": "ExcerptRange",
-            "type": "object"
-          },
-          "OlderVersion": {
-            "description": "検索で当たった文書を置き換えた旧版。",
-            "properties": {
-              "document_id": {
-                "description": "旧版の文書の id。",
-                "title": "Document Id",
-                "type": "string"
-              },
-              "file_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "旧版の文書名。",
-                "title": "File Name"
-              },
-              "title": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "旧版のタイトル（文書の先頭の見出し。版・年度を含むことが多い。例: 「定期保守計画 2025年度」）。見出しが無ければ null。",
-                "title": "Title"
-              },
-              "superseded_by_document_id": {
-                "description": "この旧版を置き換えた新しい版（検索で当たった根拠の文書）の id。",
-                "title": "Superseded By Document Id",
-                "type": "string"
-              }
-            },
-            "required": [
-              "document_id",
-              "superseded_by_document_id"
-            ],
-            "title": "OlderVersion",
-            "type": "object"
-          },
-          "ProfileKnowledge": {
-            "properties": {
-              "search_answer_profile_id": {
-                "title": "Search Answer Profile Id",
-                "type": "string"
-              },
-              "revision": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "照合した用語・同義語の登録の版（登録の内容の sha256 の先頭。読めなければ null）。",
-                "title": "Revision"
-              },
-              "terms": {
-                "description": "当たった用語と説明（一致の強い順）。資料の原文ではない。",
-                "items": {
-                  "$ref": "#/$defs/ProfileKnowledgeTerm"
-                },
-                "title": "Terms",
-                "type": "array"
-              },
-              "terms_omitted": {
-                "description": "件数・字数の上限を超えて返さなかった用語の数。",
-                "title": "Terms Omitted",
-                "type": "integer"
-              },
-              "load_failed": {
-                "default": false,
-                "description": "用語・同義語を読めなかった（terms は空。当たるものが無いとは限らない）。",
-                "title": "Load Failed",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "search_answer_profile_id",
-              "revision",
-              "terms",
-              "terms_omitted"
-            ],
-            "title": "ProfileKnowledge",
-            "type": "object"
-          },
-          "ProfileKnowledgeTerm": {
-            "properties": {
-              "term": {
-                "title": "Term",
-                "type": "string"
-              },
-              "aliases": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Aliases",
-                "type": "array"
-              },
-              "description": {
-                "description": "用語の説明（無ければ空）。",
-                "title": "Description",
-                "type": "string"
-              },
-              "source": {
-                "description": "用語を登録した人が書いた出典（無ければ空）。",
-                "title": "Source",
-                "type": "string"
-              },
-              "status": {
-                "description": "approved=承認済み / stale_review_needed=承認済みで、見直しの期日を過ぎている",
-                "enum": [
-                  "approved",
-                  "stale_review_needed"
-                ],
-                "title": "Status",
-                "type": "string"
-              },
-              "updated_at": {
-                "description": "用語を最後に更新した時刻（不明なら空）。",
-                "title": "Updated At",
-                "type": "string"
-              }
-            },
-            "required": [
-              "term",
-              "description",
-              "source",
-              "status",
-              "updated_at"
-            ],
-            "title": "ProfileKnowledgeTerm",
-            "type": "object"
-          },
-          "RagEvidence": {
-            "description": "検索・回答の根拠 1 件。",
-            "properties": {
-              "evidence_id": {
-                "description": "根拠の id（chunk_id と同じ）。",
-                "title": "Evidence Id",
-                "type": "string"
-              },
-              "document_id": {
-                "title": "Document Id",
-                "type": "string"
-              },
-              "chunk_id": {
-                "title": "Chunk Id",
-                "type": "string"
-              },
-              "file_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "File Name"
-              },
-              "chunk_set_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "根拠を作った処理の版（取込み直すと変わる。文書の改訂の版ではない。改訂した文書は別の document_id で、置き換えた旧版は superseded）。",
-                "title": "Chunk Set Id"
-              },
-              "recipe_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "根拠を作った処理レシピ。",
-                "title": "Recipe Id"
-              },
-              "content_kind": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "内容の種類（text / table など）。",
-                "title": "Content Kind"
-              },
-              "evidence_type": {
-                "default": "text",
-                "description": "根拠の種類（text=本文 / table=表 / figure_description=図を AI（VLM）が読んだ説明。原文ではないので元の図で確かめる / ocr=図の中・周りの文字（OCR・キャプション））。",
-                "enum": [
-                  "text",
-                  "table",
-                  "figure_description",
-                  "ocr"
-                ],
-                "title": "Evidence Type",
-                "type": "string"
-              },
-              "image_ref": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/EvidenceImageRef"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "図の元の画像の領域（rag_read_source の include_image で読む）。無ければ null。"
-              },
-              "locator": {
-                "$ref": "#/$defs/EvidenceLocator"
-              },
-              "excerpt": {
-                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 24000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
-                "title": "Excerpt",
-                "type": "string"
-              },
-              "truncated": {
-                "description": "excerpt が本文の一部だけか（範囲は excerpt_range）。",
-                "title": "Truncated",
-                "type": "boolean"
-              },
-              "text_omitted": {
-                "default": false,
-                "description": "応答の予算に入らず excerpt を空にしたか（本文は rag_read_source で読む）。",
-                "title": "Text Omitted",
-                "type": "boolean"
-              },
-              "text_length": {
-                "description": "本文の文字数。",
-                "title": "Text Length",
-                "type": "integer"
-              },
-              "excerpt_range": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ExcerptRange"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "excerpt の本文の位置（文字の [start, end)）。text_omitted なら null。"
-              },
-              "header_range": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ExcerptRange"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "切った表で excerpt の先頭に付けた見出しの行の位置（excerpt_range と続かないときだけ）。無ければ null。"
-              },
-              "next_offset": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "excerpt の後ろの続きを読むときの rag_read_source の offset（続きが無ければ null）。",
-                "title": "Next Offset"
-              },
-              "used_in_answer": {
-                "description": "回答で引用した箇所か（AI に渡した箇所のうち、回答の本文に示したもの）。",
-                "title": "Used In Answer",
-                "type": "boolean"
-              },
-              "answer_use": {
-                "anyOf": [
-                  {
-                    "enum": [
-                      "confirmed",
-                      "reference"
-                    ],
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "回答での使われ方。confirmed=質問の条件への該当確認済みの記載として引用 / reference=該当が確認できていない参考の記載として引用（回答の「参考情報」と「資料から確認できなかった事項」の節）。回答で引用していないとき・使われ方が分からないときは null。",
-                "title": "Answer Use"
-              },
-              "role": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "根拠の役割（retrieved_anchor / entity_expansion / parent_context など）。entity_expansion は、質問・検索の上位の根拠の実体（システム・部署の略号など）から実体の表で 1 段だけたどって足した根拠（台帳の行・略号の表など）。",
-                "title": "Role"
-              },
-              "score": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Score"
-              },
-              "rerank_score": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Rerank Score"
-              },
-              "retrieval_rank": {
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "検索で当たった根拠の関連度の順位（1 始まり）。前後の文脈など、検索で当たったのではない根拠は null。",
-                "title": "Retrieval Rank"
-              },
-              "origin": {
-                "default": "source",
-                "description": "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った要約・抽出した値（引用する前に原文を読んで確かめる）。",
-                "enum": [
-                  "source",
-                  "derived"
-                ],
-                "title": "Origin",
-                "type": "string"
-              },
-              "superseded": {
-                "default": false,
-                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
-                "title": "Superseded",
-                "type": "boolean"
-              },
-              "references": {
-                "description": "この根拠の本文が参照する節・文書。",
-                "items": {
-                  "$ref": "#/$defs/EvidenceReference"
-                },
-                "title": "References",
-                "type": "array"
-              },
-              "reference_from": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "別の根拠の本文の参照（「第3章を参照」など）を辿って足した根拠なら、その根拠の evidence_id。",
-                "title": "Reference From"
-              },
-              "reference_label": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "reference_from の根拠の本文の参照の表記。",
-                "title": "Reference Label"
-              },
-              "section": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/EvidenceSection"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "根拠が属する章節（章節と chunk の対応がまだ無い文書は null）。手順・一覧・条件のまとまりが excerpt より長いときは rag_read_section で章節を読む。"
-              }
-            },
-            "required": [
-              "evidence_id",
-              "document_id",
-              "chunk_id",
-              "locator",
-              "excerpt",
-              "truncated",
-              "text_length",
-              "used_in_answer"
-            ],
-            "title": "RagEvidence",
-            "type": "object"
-          },
-          "ZeroEvidence": {
-            "description": "根拠が 0 件になった段。",
-            "properties": {
-              "stage": {
-                "description": "retrieval=検索の候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と判定 / context=候補はあるが回答に渡す根拠が 0 件。",
-                "enum": [
-                  "retrieval",
-                  "evidence_check",
-                  "context"
-                ],
-                "title": "Stage",
-                "type": "string"
-              },
-              "candidate_count": {
-                "description": "検索の候補の件数。",
-                "title": "Candidate Count",
-                "type": "integer"
-              },
-              "rejected_count": {
-                "description": "根拠確認で外した候補の件数。",
-                "title": "Rejected Count",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "stage",
-              "candidate_count",
-              "rejected_count"
-            ],
-            "title": "ZeroEvidence",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "schema_version": {
-            "default": 46,
-            "description": "出力の形の版（変わったら上がる）。",
-            "title": "Schema Version",
-            "type": "integer"
-          },
-          "status": {
-            "default": "completed",
-            "description": "completed=根拠を検索した（approved_faq_id を渡したときは、選んだ Q&A を返した）/ approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）だけを返した（根拠は検索していない。evidence は空）。",
-            "enum": [
-              "completed",
-              "approved_faq_candidates"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "approved_faq_candidates": {
-            "description": "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。",
-            "items": {
-              "$ref": "#/$defs/ApprovedFaqCandidate"
-            },
-            "title": "Approved Faq Candidates",
-            "type": "array"
-          },
-          "approved_faq": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ApprovedFaqAnswer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "approved_faq_id で選んだ Q&A と、その登録済みの回答（根拠の evidence は空）。資料の根拠と同じく、回答の根拠に使う。それ以外は null。"
-          },
-          "trace_id": {
-            "title": "Trace Id",
-            "type": "string"
-          },
-          "guardrail_warnings": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Guardrail Warnings",
-            "type": "array"
-          },
-          "guardrail_degraded": {
-            "default": false,
-            "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
-            "title": "Guardrail Degraded",
-            "type": "boolean"
-          },
-          "degraded_steps": {
-            "description": "失敗して縮退した任意の補助の処理（rerank・質問の embedding・章節の目録・参照先の読み込みなど）。その処理を使わずに続けた結果（例: rerank の失敗は検索の順のまま、質問の embedding の失敗は全文検索だけの結果）で、空なら縮退していない。必須の能力（Oracle の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。",
-            "items": {
-              "$ref": "#/$defs/DegradedStep"
-            },
-            "title": "Degraded Steps",
-            "type": "array"
-          },
-          "zero_evidence": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ZeroEvidence"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
-          },
-          "evidence": {
-            "description": "検索で当たった根拠（role=retrieved_anchor・entity_expansion）と前後の文脈（neighbor_context など）を、同じ文書の続く箇所ごとにまとめて関連度の順に並べる。検索の拡張で加えた根拠は evidence_limit に数えない。回答は作らないので used_in_answer は false。",
-            "items": {
-              "$ref": "#/$defs/RagEvidence"
-            },
-            "title": "Evidence",
-            "type": "array"
-          },
-          "evidence_omitted": {
-            "description": "evidence_limit を超えて返さなかった根拠の数。",
-            "title": "Evidence Omitted",
-            "type": "integer"
-          },
-          "evidence_text_omitted": {
-            "default": 0,
-            "description": "応答の予算に入らず本文を省いた根拠（text_omitted）の数。",
-            "title": "Evidence Text Omitted",
-            "type": "integer"
-          },
-          "older_versions": {
-            "description": "検索で当たった今の版の文書に、新しい版に置き換えた旧版があれば、その旧版（検索の範囲の中のもの。最大 10 件）。include_superseded を渡さない検索だけで返し、旧版の根拠は検索していない。質問が旧版の年度・版（タイトル・文書名の「2025年度」など）や改定前との違いを尋ねるなら、include_superseded に true を渡して検索し直す。無ければ空。",
-            "items": {
-              "$ref": "#/$defs/OlderVersion"
-            },
-            "title": "Older Versions",
-            "type": "array"
-          },
-          "auto_selected_search_answer_profile": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AutoSelectedProfile"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "見つからない search_answer_profile_id を渡したときに自動で選んだ検索・回答プロファイル（それ以外は null）。"
-          },
-          "profile_knowledge": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ProfileKnowledge"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "検索・回答プロファイルに登録・承認された用語の説明（terms）のうち、query に当たるもの。資料の原文ではないので evidence と分け、根拠・出典として引用しない。根拠の読み方と回答の判断に使う。上限（用語 8 件・文字の合計 4000 字）を超えた分は terms_omitted に数える。検索・回答プロファイルを使わない検索・当たるものが無いときは null。"
-          }
-        },
-        "required": [
-          "trace_id",
-          "guardrail_warnings",
-          "evidence",
-          "evidence_omitted"
-        ],
-        "title": "RetrieveEvidenceOutput",
-        "type": "object"
-      }
-    },
-    {
       "name": "rag_search",
       "title": "ナレッジベースの検索",
-      "description": "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・回答に使ったか付き）と回答を返します。質問に近い登録済みQ&Aがあるときは、検索・回答の前にその候補だけを返します（status=approved_faq_candidates）。",
+      "description": "検索・回答プロファイル（またはナレッジベース）を基本の検索で調べ、回答と根拠（evidence。場所・版・回答に使ったか付き）を返します。登録済みQ&A・業務ガイド・根拠の拡張は使いません（使うときは rag_chat）。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "検索・回答の条件（回答の要求の単位に使う元の質問を足す）。",
+        "description": "rag_search の条件（基本の検索）。\n\n旧 scope を含む未定義項目は拒否する。",
         "properties": {
           "query": {
             "description": "質問文。",
@@ -6158,49 +4207,6 @@
             "minimum": 1,
             "title": "Evidence Limit",
             "type": "integer"
-          },
-          "conditions": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "業務ガイドの条件の値（条件の id → 値）。outcome=needs_clarification の clarifications に利用者が答えた値（選んだ選択肢の表示名・自由入力。複数は「、」で区切る）を入れて呼び直すと、分かっている条件は聞き直さない。",
-            "maxProperties": 30,
-            "title": "Conditions",
-            "type": "object"
-          },
-          "approved_faq_id": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "approved_faq_candidates から利用者が選んだ Q&A の id。渡すと、検索をせずにその Q&A の登録済みの回答を返す。search_answer_profile_id が要る。",
-            "title": "Approved Faq Id"
-          },
-          "skip_approved_faq": {
-            "default": false,
-            "description": "true なら登録済みQ&Aの候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みQ&Aがあれば、検索の前にその候補だけを返す。",
-            "title": "Skip Approved Faq",
-            "type": "boolean"
-          },
-          "original_question": {
-            "anyOf": [
-              {
-                "maxLength": 8000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "利用者の元の質問。query を検索用に短く言い換えたときに、言い換える前の全文を渡す（番号つきの小問は番号のまま）。検索は query で行い、回答は元の質問の要求ごとに根拠を確かめて作る。",
-            "title": "Original Question"
           }
         },
         "required": [
@@ -6304,53 +4310,6 @@
             "title": "AnswerRequest",
             "type": "object"
           },
-          "ApprovedFaqCandidate": {
-            "description": "検索・回答の前に利用者に示す登録済みQ&Aの候補。",
-            "properties": {
-              "id": {
-                "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
-                "title": "Id",
-                "type": "string"
-              },
-              "question": {
-                "description": "登録済みの質問。",
-                "title": "Question",
-                "type": "string"
-              },
-              "score": {
-                "description": "質問との一致度（0〜1）。",
-                "title": "Score",
-                "type": "number"
-              }
-            },
-            "required": [
-              "id",
-              "question",
-              "score"
-            ],
-            "title": "ApprovedFaqCandidate",
-            "type": "object"
-          },
-          "ApprovedFaqRef": {
-            "description": "回答に使った登録済みQ&A（回答は登録済みの回答をそのまま返したもの）。",
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "question": {
-                "description": "登録済みの質問。",
-                "title": "Question",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "question"
-            ],
-            "title": "ApprovedFaqRef",
-            "type": "object"
-          },
           "AutoSelectedProfile": {
             "description": "id を誤ったときに自動で選んだ検索・回答プロファイル。",
             "properties": {
@@ -6930,184 +4889,6 @@
             "title": "ExcerptRange",
             "type": "object"
           },
-          "GuideClarification": {
-            "properties": {
-              "condition_id": {
-                "description": "条件の id（conditions に値を入れて呼び直す）。",
-                "title": "Condition Id",
-                "type": "string"
-              },
-              "label": {
-                "description": "条件の名前。",
-                "title": "Label",
-                "type": "string"
-              },
-              "question": {
-                "description": "利用者に確かめる問い。",
-                "title": "Question",
-                "type": "string"
-              },
-              "options": {
-                "description": "選択肢（無ければ自由に答える）。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Options",
-                "type": "array"
-              },
-              "multiple": {
-                "default": false,
-                "description": "選択肢を複数選べるか。",
-                "title": "Multiple",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "condition_id",
-              "label",
-              "question"
-            ],
-            "title": "GuideClarification",
-            "type": "object"
-          },
-          "GuideCondition": {
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "label": {
-                "title": "Label",
-                "type": "string"
-              },
-              "state": {
-                "default": "unknown",
-                "description": "条件の状態（known=分かっている / unknown=分からない / conflicting=質問に複数の値が出ていて決められない。値は candidates）。",
-                "enum": [
-                  "known",
-                  "unknown",
-                  "conflicting"
-                ],
-                "title": "State",
-                "type": "string"
-              },
-              "value": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Value"
-              },
-              "source": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "user=利用者が答えた / question=質問の文から読んだ / document=回答の根拠の画面の図から決めた。",
-                "title": "Source"
-              },
-              "handling": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "不明のときの扱い（ask=確かめる / branch=分岐 / handoff=人へ）。",
-                "title": "Handling"
-              },
-              "candidates": {
-                "description": "state=conflicting のとき、質問に出た値。",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Candidates",
-                "type": "array"
-              }
-            },
-            "required": [
-              "id",
-              "label"
-            ],
-            "title": "GuideCondition",
-            "type": "object"
-          },
-          "GuideRef": {
-            "properties": {
-              "guide_id": {
-                "title": "Guide Id",
-                "type": "string"
-              },
-              "revision": {
-                "description": "使った公開の版。",
-                "title": "Revision",
-                "type": "integer"
-              },
-              "title": {
-                "title": "Title",
-                "type": "string"
-              },
-              "decision": {
-                "description": "answer=条件がそろった / branch=分岐で答えた / clarify=確かめる / handoff=人へ。",
-                "enum": [
-                  "answer",
-                  "branch",
-                  "clarify",
-                  "handoff"
-                ],
-                "title": "Decision",
-                "type": "string"
-              },
-              "known_conditions": {
-                "items": {
-                  "$ref": "#/$defs/GuideCondition"
-                },
-                "title": "Known Conditions",
-                "type": "array"
-              },
-              "unknown_conditions": {
-                "description": "確かめる・分岐する・引き継ぐ条件（不明・矛盾）。",
-                "items": {
-                  "$ref": "#/$defs/GuideCondition"
-                },
-                "title": "Unknown Conditions",
-                "type": "array"
-              },
-              "applicability": {
-                "additionalProperties": {
-                  "enum": [
-                    "matched",
-                    "unverified"
-                  ],
-                  "type": "string"
-                },
-                "description": "値のある適用範囲の項目（business_domains / object_types / versions）ごとの状態。matched=質問・絞り込みの手がかりと合った / unverified=手がかりが無く確かめていない。空の項目は制限なし（出さない）。手がかりと合わないガイドは返さない。",
-                "title": "Applicability",
-                "type": "object"
-              }
-            },
-            "required": [
-              "guide_id",
-              "revision",
-              "title",
-              "decision"
-            ],
-            "title": "GuideRef",
-            "type": "object"
-          },
           "OlderVersion": {
             "description": "検索で当たった文書を置き換えた旧版。",
             "properties": {
@@ -7488,42 +5269,13 @@
             "type": "object"
           }
         },
+        "description": "rag_search の回答と根拠（基本の検索）。",
         "properties": {
           "schema_version": {
-            "default": 46,
+            "default": 47,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
-          },
-          "status": {
-            "default": "completed",
-            "description": "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、outcome は null）。",
-            "enum": [
-              "completed",
-              "approved_faq_candidates"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "approved_faq_candidates": {
-            "description": "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。",
-            "items": {
-              "$ref": "#/$defs/ApprovedFaqCandidate"
-            },
-            "title": "Approved Faq Candidates",
-            "type": "array"
-          },
-          "approved_faq": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ApprovedFaqRef"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "approved_faq_id で選んだ Q&A の登録済みの回答を answer に返したとき、その Q&A（根拠の evidence は空）。それ以外は null。"
           },
           "answer": {
             "title": "Answer",
@@ -7545,26 +5297,6 @@
             "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
             "title": "Guardrail Degraded",
             "type": "boolean"
-          },
-          "outcome": {
-            "anyOf": [
-              {
-                "enum": [
-                  "answered",
-                  "conditional",
-                  "needs_clarification",
-                  "needs_environment_data",
-                  "needs_human",
-                  "insufficient_evidence"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "回答の対応（status=approved_faq_candidates のときは null）。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る）。",
-            "title": "Outcome"
           },
           "requests": {
             "description": "質問の要求単位ごとの充足（背景の文は含めない）。",
@@ -7597,26 +5329,6 @@
             },
             "title": "Confirmations",
             "type": "array"
-          },
-          "clarifications": {
-            "description": "outcome=needs_clarification のとき、利用者に確かめる業務ガイドの条件と問い。",
-            "items": {
-              "$ref": "#/$defs/GuideClarification"
-            },
-            "title": "Clarifications",
-            "type": "array"
-          },
-          "guide": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/GuideRef"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "回答に使った業務ガイド（公開の版）。使わなければ null。"
           },
           "insufficient_reason": {
             "anyOf": [
@@ -7720,15 +5432,28 @@
             "default": null,
             "description": "利用者に回答を示すときは、末尾にこの文をそのまま添える。",
             "title": "Notice"
+          },
+          "outcome": {
+            "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る）。",
+            "enum": [
+              "answered",
+              "conditional",
+              "needs_clarification",
+              "needs_environment_data",
+              "needs_human",
+              "insufficient_evidence"
+            ],
+            "title": "Outcome",
+            "type": "string"
           }
         },
         "required": [
           "answer",
           "trace_id",
           "guardrail_warnings",
-          "outcome",
           "evidence",
-          "evidence_omitted"
+          "evidence_omitted",
+          "outcome"
         ],
         "title": "SearchOutput",
         "type": "object"

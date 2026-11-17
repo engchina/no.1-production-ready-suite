@@ -43,7 +43,7 @@ SUITE_AGENT_CLIENT_MAX_BODY_SIZE="${SUITE_AGENT_CLIENT_MAX_BODY_SIZE:-110M}"
 #   （oci_enterprise_ai_max_retries 3。timeout も再試行する）+ 余白 60 秒。SQL から質問へ（reverse/deep）の
 #   通しの期限 1800 秒もこの中。画面は 65 分まで待つ（API_TIMEOUT_MS.longRunningJob）。
 # - Agent のツールの直接の呼び出し（tools/invoke）1560 秒: 外部 MCP の timeout の上限 1500 秒
-#   （_MCP_TIMEOUT_MAX_SECONDS。接続 rag の既定は RAG の回答の上限 1200 秒 + 30 秒 = 1230 秒。#5280）+ 余白 60 秒。
+#   （_MCP_TIMEOUT_MAX_SECONDS。接続 rag の既定も 1500 秒で、RAG の回答の上限 1200 秒より長い。#5280・#5352）+ 余白 60 秒。
 SUITE_PROXY_TIMEOUT_SECONDS=600
 # shellcheck disable=SC2034 # suite_long_api_regex / suite_long_api_timeout が製品の名前から参照する
 SUITE_RAG_LONG_API_TIMEOUT_SECONDS=1260

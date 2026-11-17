@@ -459,9 +459,8 @@ class RagPipeline:
         self._selected_history_facts: tuple[HistoryConfirmation, ...] = ()
         # 会話履歴による補完が分けた最新の発話の種類（#4787。補完しなければ search）。
         self._history_intent: HistoryIntent = "search"
-        # 根拠の図の画像を切り出すか（`AnswerEngine` の同名の引数）。False は業務 Agent の根拠の
-        # 取得（MCP の rag_retrieve_evidence。#5125）だけが渡す。根拠を集める流れは経路で変えない
-        # （#5173）。
+        # 根拠の図の画像を切り出すか（`AnswerEngine` の同名の引数）。根拠を集める流れは経路で
+        # 変えない（#5173）。
         self._materialize_images = materialize_images
         # 処理の経過の記録（`run(trace=...)`。回答の記録に trace id と工程の詳細を残す。#3226）。
         self._trace: AnswerTrace | None = None

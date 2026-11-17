@@ -108,8 +108,8 @@ ASK_ARGUMENTS = {
 }
 
 
-def _rag_search(argument: Any) -> dict[str, Any]:
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
+def _rag_chat(argument: Any) -> dict[str, Any]:
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
     if "conditions" not in argument.model_fields_set:
         output.update(
             answer="どの画面か確かめてください。",
@@ -129,7 +129,7 @@ def _nl2sql_query(argument: Any) -> dict[str, Any]:
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
     fake = fake_product_mcp(
-        monkeypatch, outputs={"nl2sql_query": _nl2sql_query, "rag_search": _rag_search}
+        monkeypatch, outputs={"nl2sql_query": _nl2sql_query, "rag_chat": _rag_chat}
     )
     # 台本のモデルはツールを呼ばずに答えるので、ツールで確かめていない回答の拒答（#1835）は外す
     # （ここで確かめるのは確認の往復。拒答のガードは test_tool_grounding.py）。
@@ -141,9 +141,9 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
         AgentSkillDefinition(
             id=SKILL_ID,
             name=SKILL_ID,
-            instructions="資料は rag_search、数値は nl2sql_query で調べる。",
+            instructions="資料は rag_chat、数値は nl2sql_query で調べる。",
             mcp_requirements=[
-                SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_chat"]),
                 SkillMcpRequirement(server_id="nl2sql", tool_names=["nl2sql_query"]),
             ],
         )
@@ -557,7 +557,7 @@ def test_agent_confirmation_skip_never_shows_a_tool_card(
         _ask("call-ask"),
         [
             function_call("nl2sql__nl2sql_query", query, call_id="call-1"),
-            function_call("rag__rag_search", {"query": "売上 定義"}, call_id="call-2"),
+            function_call("rag__rag_chat", {"query": "売上 定義"}, call_id="call-2"),
         ],
         _ask("call-ask-2", question="どのテーブルから売上金額を取得しますか？"),
         [assistant_message("前提: 全期間で集計する想定です。")],
@@ -682,7 +682,7 @@ def test_rag_clarification_becomes_a_card_and_the_answer_is_passed_as_conditions
 ) -> None:
     _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-1")],
         [assistant_message("どの画面の操作ですか？（受注入力 / 請求）")],
     )
     first = _run("受注を取り消す手順は？")
@@ -717,7 +717,7 @@ def test_rag_clarification_becomes_a_card_and_the_answer_is_passed_as_conditions
         monkeypatch,
         [
             function_call(
-                "rag__rag_search",
+                "rag__rag_chat",
                 {"query": "取り消し 手順", "conditions": {"screen": "受注入力"}},
                 call_id="call-2",
             )
@@ -741,7 +741,7 @@ def test_rag_skip_answers_with_assumptions_without_asking_again(
 ) -> None:
     _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-1")],
         [assistant_message("どの画面ですか？")],
     )
     first = _run("受注を取り消す手順は？")
@@ -751,7 +751,7 @@ def test_rag_skip_answers_with_assumptions_without_asking_again(
     assert outcome.next_run is not None
     model = _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-2")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-2")],
         [assistant_message("画面ごとに分けて示します。")],
     )
     second = _execute(outcome.next_run.id)
@@ -771,7 +771,7 @@ def test_assume_policy_answers_rag_clarifications_with_assumptions(
     _set_policy("assume")
     model = _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-1")],
         [assistant_message("画面ごとに示します。")],
     )
     run = _run("受注を取り消す手順は？")
@@ -793,26 +793,26 @@ def test_tool_clarification_is_skipped_only_when_not_asking() -> None:
     ).skips_tool_clarification
 
 
-def test_rag_search_never_gets_skip_clarification(
+def test_rag_chat_gets_skip_clarification_only_in_runs_that_do_not_ask(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    """RAG の検索に確認を飛ばす引数は無い（RAG #4799）ので、確認しない Run でも付けない。"""
+    """確認する Run は付けず（確認はカードになる）、確認しない Run は実行環境が付ける（#5342）。"""
     _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-1")],
         [assistant_message("どの画面ですか？")],
     )
     _run("受注を取り消す手順は？")
-    assert "skip_clarification" not in mcp.calls_of("rag_search")[-1]["arguments"]
+    assert "skip_clarification" not in mcp.calls_of("rag_chat")[-1]["arguments"]
 
     _set_policy("assume")
     _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-2")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-2")],
         [assistant_message("画面ごとに示します。")],
     )
     _run("受注を取り消す手順は？")
-    assert "skip_clarification" not in mcp.calls_of("rag_search")[-1]["arguments"]
+    assert mcp.calls_of("rag_chat")[-1]["arguments"]["skip_clarification"] is True
 
 
 def test_multiple_rag_clarification_is_a_multiple_selection_card() -> None:
@@ -943,7 +943,7 @@ def test_a_new_question_expires_the_previous_card(
 ) -> None:
     _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-1")],
         [assistant_message("どの画面ですか？")],
     )
     first = _run("受注を取り消す手順は？")
@@ -1279,7 +1279,7 @@ def test_schema_question_before_nl2sql_is_sent_back_to_nl2sql_first(
         monkeypatch,
         [
             function_call(
-                "rag__rag_search",
+                "rag__rag_chat",
                 {"query": "売上 定義", "conditions": {"screen": "請求"}},
                 call_id="call-rag",
             )
@@ -1414,19 +1414,19 @@ def test_rag_evidence_tools_get_the_run_goal_as_original_question(
     """
     _script(
         monkeypatch,
-        [function_call("rag__rag_search", {"query": "取り消し 手順"}, call_id="call-1")],
+        [function_call("rag__rag_chat", {"query": "取り消し 手順"}, call_id="call-1")],
         [assistant_message("画面ごとに示します。")],
     )
     _run("受注を取り消す手順は？")
     assert (
-        mcp.calls_of("rag_search")[-1]["arguments"]["original_question"] == "受注を取り消す手順は？"
+        mcp.calls_of("rag_chat")[-1]["arguments"]["original_question"] == "受注を取り消す手順は？"
     )
 
     _script(
         monkeypatch,
         [
             function_call(
-                "rag__rag_search",
+                "rag__rag_chat",
                 {"query": "取り消し", "original_question": "モデルが付けた質問"},
                 call_id="call-2",
             )
@@ -1434,7 +1434,7 @@ def test_rag_evidence_tools_get_the_run_goal_as_original_question(
         [assistant_message("画面ごとに示します。")],
     )
     _run("受注を取り消す手順は？")
-    assert mcp.calls_of("rag_search")[-1]["arguments"]["original_question"] == "モデルが付けた質問"
+    assert mcp.calls_of("rag_chat")[-1]["arguments"]["original_question"] == "モデルが付けた質問"
 
 
 # ---- 確認のツールの呼び出しは確認待ちにする（#3352） --------------------------------------------
@@ -1455,7 +1455,7 @@ def test_confirmation_after_the_grounding_retry_waits_for_the_user(
         monkeypatch,
         [assistant_message("対象の資料を教えてください。")],
         _ask("call-ask", question="どの資料の概要ですか？"),
-        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag")],
+        [function_call("rag__rag_chat", _RAG_WITH_CONDITIONS, call_id="call-rag")],
         [assistant_message("（上記の確認質問に対するご回答をお待ちしております。）")],
     )
     run = _run("この資料の概要を教えてください")
@@ -1471,7 +1471,7 @@ def test_confirmation_after_the_grounding_retry_waits_for_the_user(
     assert confirmation.items[0].options == []
     # 確認を待つ間は、次のモデルの呼び出し・ツールの呼び出しをしない。
     assert len(model.calls) == 2
-    assert mcp.calls_of("rag_search") == []
+    assert mcp.calls_of("rag_chat") == []
     assert not any(item.kind == "answer" for item in run.artifacts)
 
 
@@ -1502,7 +1502,7 @@ def test_mcp_chat_returns_the_confirmation_after_the_grounding_retry(
         monkeypatch,
         [assistant_message("対象の資料を教えてください。")],
         _ask("call-ask", question="どの資料の概要ですか？", options=[]),
-        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag")],
+        [function_call("rag__rag_chat", _RAG_WITH_CONDITIONS, call_id="call-rag")],
         [assistant_message("請求の資料の概要です。")],
     )
     client = TestClient(app)
@@ -1527,7 +1527,7 @@ def test_mcp_chat_returns_the_confirmation_after_the_grounding_retry(
     )
     assert (answered["status"], answered["answer"]) == ("completed", "請求の資料の概要です。")
     assert answered["confirmation"] is None
-    assert len(mcp.calls_of("rag_search")) == 1
+    assert len(mcp.calls_of("rag_chat")) == 1
 
 
 def test_confirmation_alone_waits_and_resumes(
@@ -1537,7 +1537,7 @@ def test_confirmation_alone_waits_and_resumes(
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
     model = _script(
         monkeypatch,
-        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag")],
+        [function_call("rag__rag_chat", _RAG_WITH_CONDITIONS, call_id="call-rag")],
         _ask("call-ask", question="どの資料の概要ですか？", options=[]),
         [assistant_message("請求の資料の概要です。")],
     )
@@ -1572,11 +1572,11 @@ def test_confirmation_holds_the_other_tool_calls_of_the_same_turn(
     monkeypatch.setattr(
         builtin_runtime,
         "_active_policy",
-        lambda: ToolPolicy(allow={"rag__rag_search"}, ask={"nl2sql__nl2sql_query"}),
+        lambda: ToolPolicy(allow={"rag__rag_chat"}, ask={"nl2sql__nl2sql_query"}),
     )
     query = {"question": GOAL, "profile_id": PROFILE, "requirement_session_id": "qs-1"}
     first = (
-        [[function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag-0")]]
+        [[function_call("rag__rag_chat", _RAG_WITH_CONDITIONS, call_id="call-rag-0")]]
         if consulted
         else []
     )
@@ -1585,17 +1585,17 @@ def test_confirmation_holds_the_other_tool_calls_of_the_same_turn(
         *first,
         [
             *_ask("call-ask", options=[]),
-            function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag"),
+            function_call("rag__rag_chat", _RAG_WITH_CONDITIONS, call_id="call-rag"),
             function_call("nl2sql__nl2sql_query", query, call_id="call-sql"),
         ],
-        [function_call("rag__rag_search", _RAG_WITH_CONDITIONS, call_id="call-rag-2")],
+        [function_call("rag__rag_chat", _RAG_WITH_CONDITIONS, call_id="call-rag-2")],
         [assistant_message("今年度の売上の資料の説明です。")],
     )
     run = _run()
     assert run.status == RunStatus.WAITING_CONFIRMATION
     assert [item.source for item in run.confirmations] == ["agent"]
     assert run.approvals == []
-    assert len(mcp.calls_of("rag_search")) == (1 if consulted else 0)
+    assert len(mcp.calls_of("rag_chat")) == (1 if consulted else 0)
     assert mcp.calls_of("nl2sql_query") == []
     # 実行しなかった呼び出しは step を作らない（処理の経過には実行しなかったツールの行を残す）。
     assert not any(
@@ -1618,5 +1618,5 @@ def test_confirmation_holds_the_other_tool_calls_of_the_same_turn(
         assert held["error_code"] == builtin_runtime.CONFIRMATION_PENDING_CODE
     assert _tool_output(model, turn, "call-ask")["status"] == "answered"
     # 答えの後にモデルが呼び直したツールは実行する。
-    assert len(mcp.calls_of("rag_search")) == (2 if consulted else 1)
+    assert len(mcp.calls_of("rag_chat")) == (2 if consulted else 1)
     assert mcp.calls_of("nl2sql_query") == []

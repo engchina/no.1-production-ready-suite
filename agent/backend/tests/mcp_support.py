@@ -49,15 +49,11 @@ class _RagScopeIn(_ContractInput):
     # 旧版も検索するかは専用の真偽値（#1392。filters の値は文字列だけ）。
     include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
-    conditions: dict[str, str] | None = None
-    # 登録済みQ&A（#5134）: 利用者が選んだ Q&A の id と、候補を返さずに検索する指定。
-    approved_faq_id: str | None = Field(default=None, max_length=200)
-    skip_approved_faq: bool = False
 
 
 class RagSearchIn(_RagScopeIn):
-    # 利用者の元の質問（回答の要求の単位に使う。#2261）。
-    original_question: str | None = None
+    # 基本の検索（#5352）。登録済みQ&A・確認・元の質問の引数は rag_chat だけが持つ。
+    pass
 
 
 class RagChatIn(_ContractInput):
@@ -374,11 +370,11 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
 
 
 def rag_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str, Any]:
-    """`rag_search` が登録済みQ&Aの候補だけを返した出力（#5134。契約の形の合成の値）。
+    """`rag_chat` が登録済みQ&Aの候補だけを返した出力（#5134。契約の形の合成の値）。
 
     `candidates` は（id, 質問, 一致度）。検索・回答はしていないので answer は空、outcome は null。
     """
-    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_search"])
+    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_chat"])
     output.update(
         status="approved_faq_candidates",
         approved_faq_candidates=[
@@ -402,8 +398,8 @@ def rag_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str
 
 
 def rag_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str, Any]:
-    """`rag_search` が選んだ登録済みQ&Aの登録済みの回答をそのまま返した出力（#5134）。"""
-    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_search"])
+    """`rag_chat` が選んだ登録済みQ&Aの登録済みの回答をそのまま返した出力（#5134）。"""
+    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_chat"])
     output.update(
         status="completed",
         approved_faq_candidates=[],
