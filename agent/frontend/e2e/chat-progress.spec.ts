@@ -512,7 +512,7 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   await page.goto(`/runs?id=${RUN_ID}`);
   await expect(page.getByTestId("run-summary")).toBeVisible();
   await page.getByTestId("run-timeline-section-summary").click();
-  await expect.poll(() => progressCardLayout(page.getByTestId("run-timeline-section"))).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
+  await expect.poll(() => progressCardLayout(page.getByTestId("run-timeline-section"))).toEqual({card:true,separateFromAnswer:true,explorerTopRight:true,detailsAfterSteps:true,bordered:true,padded:true,rounded:true});
   expect(await timelineSnapshot(page.getByTestId("run-timeline-section"))).toEqual(live);
   await expectNoHorizontalOverflow(page);
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process-products.png")});
@@ -536,7 +536,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await page.goto("/chat");
   await openThread(page);
   await page.getByTestId("chat-progress-summary").click();
-  await expect.poll(() => progressCardLayout(page.getByTestId("chat-progress"))).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
+  await expect.poll(() => progressCardLayout(page.getByTestId("chat-progress"))).toEqual({card:true,separateFromAnswer:true,explorerTopRight:true,detailsAfterSteps:true,bordered:true,padded:true,rounded:true});
   const live = await timelineSnapshot(page.getByTestId("chat-progress"));
   const liveTypography = await timelineTypography(page.getByTestId("chat-progress"));
   expect(liveTypography.steps.length).toBeGreaterThan(0);
@@ -562,7 +562,7 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expectTraceIdRowOnOneLine(page);
   await page.getByTestId("run-timeline-section").screenshot({path: testInfo.outputPath("history-process.png")});
   const card = page.getByTestId("run-timeline-section");
-  await expect.poll(() => progressCardLayout(card)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
+  await expect.poll(() => progressCardLayout(card)).toEqual({card:true,separateFromAnswer:true,explorerTopRight:true,detailsAfterSteps:true,bordered:true,padded:true,rounded:true});
   for (const theme of ["light", "dark"]) {
     await page.emulateMedia({colorScheme: theme as "light" | "dark"});
     await page.evaluate(value => {document.documentElement.classList.toggle("dark", value === "dark"); document.documentElement.dataset.theme = value;}, theme);

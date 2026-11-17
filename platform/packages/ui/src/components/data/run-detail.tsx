@@ -149,7 +149,7 @@ export const DEFAULT_RUN_DETAIL_LABELS: RunDetailLabels = {
   summary: "概要",
   question: "質問",
   answer: "回答",
-  timeline: "処理の経過",
+  timeline: "処理の段階",
   processDetails: "処理の詳細",
   facts: {
     startedAt: "開始日時",
@@ -735,8 +735,7 @@ export function runTimelineDuration(steps: readonly RunTimelineStep[]): number |
 
 export interface RunTimelineProps {
   loadCallBody?: CallBodyLoader;
-  /** 操作画面の進度では探索と詳細を末尾へ集める。単独の時間線は既存の上側を保つ。 */
-  explorerPlacement?: "top" | "footer";
+  /** 段の一覧の末尾に置く中身（処理の詳細など）。「軌跡を調べる」は一覧の上の右（「経過に戻る」と同じ位置。#5360）。 */
   footer?: ReactNode;
   explorerLabels?: Partial<TraceExplorerLabels>;
   steps: readonly RunTimelineStep[];
@@ -789,7 +788,6 @@ export interface RunTimelineProps {
  */
 export function RunTimeline({
   loadCallBody,
-  explorerPlacement = "top",
   footer,
   steps: inputSteps,
   explorerLabels,
@@ -843,7 +841,13 @@ export function RunTimeline({
       data-run-timeline-bars={showBars ? "true" : "false"}
       data-testid={testId}
     >
-      {explorerPlacement === "top" && steps.length ? <div className="flex justify-end">{exploreAction}</div> : null}
+      {steps.length ? (
+        // 見出しと「軌跡を調べる」は、軌跡の調査の見出しと「経過に戻る」と同じ形・位置（#5360）。
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 id={`${idPrefix}-heading`} className="text-sm font-semibold text-fg" data-run-timeline-heading="">{labels.timeline}</h3>
+          {exploreAction}
+        </div>
+      ) : null}
       {showBars && steps.some(step => !step.startedAt) ? (
         <p className="text-xs text-fg-muted">{traceLabels.reconstructed}</p>
       ) : null}
@@ -854,7 +858,7 @@ export function RunTimeline({
       ) : null}
       {collapsed.keep === "end" ? toggle : null}
       <RunTimelineViewport depth={Math.max(0, ...steps.map(step => stepLevel(step.level)))} label={labels.timeline}>
-      <ol id={listId} className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
+      <ol id={listId} className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-labelledby={steps.length ? `${idPrefix}-heading` : undefined} aria-label={steps.length ? undefined : labels.timeline}>
         {collapsed.visible.map(({ item: step, index }) => {
           if (renderRunningStep && step.status === "running" && !hasChildren[index]) return <li key={step.id} className="min-w-0">{renderRunningStep(step)}</li>;
           const duration = stepDurationMs(step);
@@ -912,12 +916,12 @@ export function RunTimeline({
       </ol>
       </RunTimelineViewport>
       {collapsed.keep === "start" ? toggle : null}
-      {explorerPlacement === "footer" && (exploreAction || footer) ? (
-        <div className="grid min-w-0 gap-2 border-t border-border pt-3" data-run-timeline-footer="">
-          {exploreAction ? <div className="flex flex-wrap items-center gap-2">{exploreAction}</div> : null}
+      {footer ? (
+        // 中身が空（一部の記録の案内も処理の詳細も無い）なら枠線ごと隠す。
+        <div className="grid min-w-0 gap-2 border-t border-border pt-3 empty:hidden" data-run-timeline-footer="">
           {footer}
         </div>
-      ) : footer}
+      ) : null}
     </div>
   );
 }
@@ -1044,7 +1048,6 @@ export function RunTimelineSection({
         >
           <RunTimeline
             loadCallBody={loadCallBody}
-            explorerPlacement="footer"
             footer={<>{partialNote}{processDetails != null || traceSummary != null || traceId ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId}>{processDetails}</RunProcessDetails> : null}</>}
             steps={steps}
             totalDurationMs={totalDurationMs}

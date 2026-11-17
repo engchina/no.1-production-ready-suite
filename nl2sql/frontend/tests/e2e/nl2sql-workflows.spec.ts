@@ -20629,7 +20629,7 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await expect(page.getByTestId("nl2sql-job-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("nl2sql-job-summary").click();
   const progress = page.getByTestId("nl2sql-job");
-  await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
+  await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,explorerTopRight:true,detailsAfterSteps:true,bordered:true,padded:true,rounded:true});
   await expect(page.getByTestId("nl2sql-job-partial-read-truncated")).toBeVisible();
   await expect(page.getByTestId("nl2sql-job-partial-write-dropped")).toBeVisible();
   await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルを呼び出す（用途の記録なし）");

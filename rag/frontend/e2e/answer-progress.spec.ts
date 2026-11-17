@@ -399,7 +399,7 @@ for (const viewport of [
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
     const progress = page.getByTestId("search-run-progress");
-    await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,actionsAfterSteps:true,visibleFooter:true,bordered:true,padded:true,rounded:true});
+    await expect.poll(() => progressCardLayout(progress)).toEqual({card:true,separateFromAnswer:true,explorerTopRight:true,detailsAfterSteps:true,bordered:true,padded:true,rounded:true});
     const current = page.getByTestId("search-run-progress-current");
     const timer = page.getByTestId("search-run-progress-timer");
     // 処理の経過（#2096。チャットと同じ ChatProgress）: 回答の中の工程（LLM）の間も今の工程と経過時間を出す。
