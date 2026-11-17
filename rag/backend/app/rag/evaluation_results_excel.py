@@ -31,6 +31,7 @@ METRICS = (
     ("required_evidence_recall", "required_evidence_recall", "必要な根拠の取得率"),
     ("mrr", "mrr", "正解文書の順位（MRR）"),
     ("answer_correctness", "answer_correctness", "回答の正確性"),
+    ("answer_coverage", "answer_coverage", "回答の網羅（参考）"),
     ("precision_at_10", "precision_at_10", "Precision@10（参考）"),
     ("ndcg_at_3", "ndcg_at_3", "NDCG@3（参考）"),
     ("ndcg_at_10", "ndcg_at_10", "NDCG@10（参考）"),
@@ -68,12 +69,49 @@ FAILURE_REASONS = {
     "wrong_screen": "別の画面を案内した",
 }
 CASE_STATUSES = {"success": "成功", "error": "失敗"}
+# この問の合否（正確性だけで決める。#5262）。
+CASE_VERDICTS = {True: "合格", False: "不合格"}
+# 主張ごとの判定（#5262）の前の結果。網羅を出さない。
+LEGACY_JUDGEMENT_LABEL = "旧方式"
 NOT_RUN_LABEL = "未実行"
 UNASSESSED_LABEL = "未評価"
 ANSWER_RECORD_MISSING_LABEL = "（回答の記録がありません）"
-_RESULT_COLUMN_WIDTHS = {"answer": 60, "status": 12, "failure": 36, "trace": 36}
+_RESULT_COLUMN_WIDTHS = {"answer": 60, "status": 12, "reason": 60, "failure": 36, "trace": 36}
 _ERROR_COLUMN_WIDTH = 48
 _METRIC_COLUMN_WIDTH = 14
+
+
+def _is_legacy(item: EvaluationCaseResult) -> bool:
+    """主張ごとの判定の前の結果か（判定は完了しているが版が無い）。"""
+    judgement = item.answer_evaluation
+    return (
+        judgement is not None
+        and judgement.status == "completed"
+        and judgement.rubric_version is None
+    )
+
+
+def _metric_value(item: EvaluationCaseResult, key: str) -> CellValue:
+    if key == "answer_coverage" and _is_legacy(item):
+        return LEGACY_JUDGEMENT_LABEL
+    value = getattr(item, key)
+    return value if value is not None else UNASSESSED_LABEL
+
+
+def _judgement_values(item: EvaluationCaseResult) -> list[CellValue]:
+    """「この問の合否」と「判定の理由」。"""
+    judgement = item.answer_evaluation
+    if judgement is None or judgement.status != "completed":
+        return [UNASSESSED_LABEL, judgement.message if judgement else None]
+    verdict = (
+        CASE_VERDICTS.get(judgement.passed, UNASSESSED_LABEL)
+        if judgement.passed is not None
+        else UNASSESSED_LABEL
+    )
+    reason = judgement.reason or ""
+    if _is_legacy(item):
+        reason = f"{LEGACY_JUDGEMENT_LABEL}: {reason}" if reason else LEGACY_JUDGEMENT_LABEL
+    return [verdict, reason or None]
 
 
 def _append(sheet: Any, values: list[Any]) -> None:
@@ -157,6 +195,8 @@ def evaluation_results_xlsx(
                 "必須の回答要点",
                 "回答の過程",
                 *[label for _, _, label in METRICS],
+                "この問の合否",
+                "判定の理由",
                 "状態",
                 "失敗理由",
                 "Trace",
@@ -183,10 +223,8 @@ def evaluation_results_xlsx(
                         else []
                     ),
                     row.answer_process or "" if row else "",
-                    *[
-                        getattr(item, key) if getattr(item, key) is not None else "未評価"
-                        for _, key, _ in METRICS
-                    ],
+                    *[_metric_value(item, key) for _, key, _ in METRICS],
+                    *_judgement_values(item),
                     CASE_STATUSES.get(item.status, item.status),
                     "\n".join(
                         FAILURE_REASONS.get(reason, reason) for reason in item.failure_reasons
@@ -196,9 +234,12 @@ def evaluation_results_xlsx(
                     (evidence or {}).get(item.trace_id, ""),
                 ],
             )
-            for cell in sheet[sheet.max_row][6:12]:
+            for cell in sheet[sheet.max_row][6 : 6 + len(METRICS)]:
                 cell.number_format = "0.0%"
-        _format(sheet, [24, 48, 40, 60, 40, 60, *([20] * len(METRICS)), 12, 36, 36, 48, 60])
+        _format(
+            sheet,
+            [24, 48, 40, 60, 40, 60, *([20] * len(METRICS)), 12, 60, 12, 36, 36, 48, 60],
+        )
     _format(overview, [36, *([36] * len(groups))])
     for row in overview.iter_rows(min_row=3, min_col=2):
         for cell in row:
@@ -215,6 +256,8 @@ def _result_columns(prefix: str) -> list[AppendedColumn]:
             AppendedColumn(f"{prefix}: {label}", kind="percent", width=_METRIC_COLUMN_WIDTH)
             for _, _, label in METRICS
         ],
+        AppendedColumn(f"{prefix}: この問の合否", width=_RESULT_COLUMN_WIDTHS["status"]),
+        AppendedColumn(f"{prefix}: 判定の理由", width=_RESULT_COLUMN_WIDTHS["reason"]),
         AppendedColumn(f"{prefix}: 状態", width=_RESULT_COLUMN_WIDTHS["status"]),
         AppendedColumn(f"{prefix}: 失敗理由", width=_RESULT_COLUMN_WIDTHS["failure"]),
         AppendedColumn(f"{prefix}: Trace", width=_RESULT_COLUMN_WIDTHS["trace"]),
@@ -228,18 +271,16 @@ def _result_values(
 ) -> list[CellValue]:
     if item is None:
         # 途中までの結果（#4208）で実行していない行。
-        blank: list[CellValue] = [None] * (1 + len(METRICS))
+        blank: list[CellValue] = [None] * (1 + len(METRICS) + 2)
         return [*blank, NOT_RUN_LABEL, None, None, None, None]
     answer: str | None = answers.get(item.trace_id)
     if answer is None and item.status == "success":
         answer = ANSWER_RECORD_MISSING_LABEL
-    metrics: list[CellValue] = [
-        value if (value := getattr(item, key)) is not None else UNASSESSED_LABEL
-        for _, key, _ in METRICS
-    ]
+    metrics: list[CellValue] = [_metric_value(item, key) for _, key, _ in METRICS]
     return [
         answer,
         *metrics,
+        *_judgement_values(item),
         CASE_STATUSES.get(item.status, item.status),
         "\n".join(FAILURE_REASONS.get(reason, reason) for reason in item.failure_reasons) or None,
         item.trace_id,
