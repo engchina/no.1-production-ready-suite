@@ -433,6 +433,21 @@ _ORACLE_CLIENT_INITIALIZED_LIB_DIR: str | None = None
 # ``RAG_ORACLE_POOL_MIN`` にし、作り直す pool も同じにする。取込の job のプロセスなどは 1(#1498)。
 _SHARED_ORACLE_POOL_MIN = 1
 _DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle_db_test_")
+# RAG の接続では並列 DML を使わない（#5314）。ADB の HIGH / MEDIUM のサービスは並列 DML が
+# 既定で有効で、自動の並列度で DML が並列になると、同じ transaction の並列の実行サーバーどうしが
+# 行ロックを待ち合って ORA-12860 で失敗する（FK の親の表の削除で起きた）。並列 DML の有無は
+# transaction の中では変えられない（ORA-12841）ので、接続を作るときに 1 回だけ無効にし、途中で
+# 戻さない（pool のどの接続も同じ状態になる）。並列の問い合わせはそのまま使う。文の
+# NO_PARALLEL のヒントは、ADB の Lakehouse の既定（OPTIMIZER_IGNORE_PARALLEL_HINTS = TRUE）で
+# 無視されるため使わない。
+RAG_SESSION_SERIAL_DML_SQL = "ALTER SESSION DISABLE PARALLEL DML"
+
+
+def init_rag_oracle_session(connection: Any, requested_tag: str | None = None) -> None:
+    """RAG の接続の初期化。共通の初期化に加えて並列 DML を無効にする（pool の初期化にも使う）。"""
+    init_oracle_session(connection, requested_tag)
+    with connection.cursor() as cursor:
+        cursor.execute(RAG_SESSION_SERIAL_DML_SQL)
 
 
 class DocumentDeleteBlockedByRunningIngestionError(RuntimeError):
@@ -2135,6 +2150,47 @@ class OracleClient:
                     tuple(name for name in sheets.split(chr(31)) if name.strip()),
                 )
         return locations
+
+    async def same_extracted_text_document_ids(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, list[str]]:
+        """解析後の本文の hash（`extracted_text_sha256`。#5313）が同じ別の文書の ID（#5325）。
+
+        品質評価の根拠の照合で、同じ本文の文書を同じ文書とみなすために使う。hash の無い文書・
+        同じ hash の文書の無い文書は結果に含めない。別の文書は登録の順に並べる。
+        """
+        found: dict[str, list[str]] = {}
+        unique_ids = _unique_optional_sequence(document_ids)
+        for offset in range(0, len(unique_ids), _EVALUATION_LOCATION_BATCH):
+            batch = unique_ids[offset : offset + _EVALUATION_LOCATION_BATCH]
+            in_sql, in_binds = _oracle_in_predicate(
+                "base.document_id", "same_text_document_id", batch
+            )
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT base.document_id, other.document_id AS same_text_document_id
+                FROM rag_documents base
+                JOIN rag_documents other
+                  ON other.extracted_text_sha256 = base.extracted_text_sha256
+                 AND other.document_id <> base.document_id
+                WHERE base.extracted_text_sha256 IS NOT NULL
+                  AND {in_sql}
+                  AND {base_tenant_sql}
+                  AND {other_tenant_sql}
+                ORDER BY base.document_id, other.uploaded_at, other.document_id
+                """,
+                    in_sql=in_sql,
+                    base_tenant_sql=_oracle_tenant_predicate(alias="base"),
+                    other_tenant_sql=_oracle_tenant_predicate(alias="other"),
+                ),
+                _with_tenant_bind(in_binds),
+            )
+            for row in rows:
+                found.setdefault(str(row["document_id"]), []).append(
+                    str(row["same_text_document_id"])
+                )
+        return found
 
     async def readable_document_chunks(
         self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
@@ -12408,7 +12464,7 @@ class OracleClient:
             oracledb.connect(**shared_pool_connect_kwargs(self._settings)),
         )
         try:
-            init_oracle_session(connection)
+            init_rag_oracle_session(connection)
         except Exception:
             _close_quietly(connection)
             raise
@@ -12458,8 +12514,8 @@ class OracleClient:
                 # 接続を返せないときに無期限に待たない（壊れた pool を作り直すため。#820）。
                 "getmode": oracledb.POOL_GETMODE_TIMEDWAIT,
                 "wait_timeout": DEFAULT_WAIT_TIMEOUT_MS,
-                # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
-                "session_callback": init_oracle_session,
+                # result cache（ADB の内部エラーと接続断。#333）と並列 DML（#5314）を使わない。
+                "session_callback": init_rag_oracle_session,
             }
         )
         _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)

@@ -223,8 +223,9 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 7: Unstructured の見出しの判定と階層を直した。#4741。
 # 8: 文末の記号で終わる番号付きの行を見出しにしない。#4742。
 # 9: 図・画像の説明を、同じページの本文の言語で書く。#4821。
-# 14: 解析器が本文に付けた原文に無い範囲(non_source_text_ranges)を要素に記録する。#5305)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 14
+# 14: 解析器が本文に付けた原文に無い範囲(non_source_text_ranges)を要素に記録する。#5305。
+# 15: プレーンテキストの本文の無い見出しの並びを、直前の見出しの本文に含める。#5315)。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 15
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {

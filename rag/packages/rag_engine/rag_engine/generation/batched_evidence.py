@@ -696,6 +696,9 @@ def prepare_batched_evidence(
                 stop_reduction("batch_reduction_did_not_shrink")
         selected, prompt, measurement, reduction = fill_to_budget(selected)
     selected = order_document_spans(selected, priority=document_order)
+    # 返す原文で最後に描画し直す（#5317）。描画は引用の単位の視図をその原文で記録するので、容量の二分探索の最後の試行が
+    # 入らなかったときも、最終生成の目録を返す原文と一致させる。描画は決定的で、測った結果は変わらない。
+    prompt = final_prompt(selected)
     return (
         selected,
         prompt,

@@ -126,6 +126,8 @@ EvaluationFailureReason = Literal[
     "answer_generation_fallback",
     "case_error",
 ]
+# 回答文を生成できず参考情報へ退避した（#4104）。この問は不合格にし、全体も合格にしない（#5320）。
+ANSWER_GENERATION_FALLBACK: EvaluationFailureReason = "answer_generation_fallback"
 
 # 評価の指標(#591)。閾値で合否を決める 3 つ（検索 2・回答の正確性）。
 EVALUATION_METRICS_VERSION = "four_metrics_v2"
@@ -364,6 +366,7 @@ class EvaluationCase(EvaluationHandlingExpectation):
     relevant_document_ids: list[str] = Field(default_factory=list)
     # 同じ文書とみなす別の文書の ID（正解の文書の ID → 別の文書の ID の列。#2086）。評価の Excel で
     # 同じ名前の文書が複数あるとき、どれが引用されても正解の文書・必要な根拠の文書に一致させる。
+    # 評価の実行では、解析後の本文が同じ文書も足す（#5325。`with_same_text_equivalents`）。
     equivalent_document_ids: dict[str, list[str]] = Field(default_factory=dict)
     standard_answer: str | None = Field(default=None, max_length=STANDARD_ANSWER_MAX_CHARS)
     answerable: bool | None = None
@@ -514,8 +517,9 @@ class EvaluationAnswerJudgement(BaseModel):
 
     詳細は trace_id の回答の記録にも保存する(#680)。`status` は completed / error /
     input_too_large / timeout / unavailable(評価の記録が無いなど)。`passed` はこの問の合否で、
-    正確性だけで決める（網羅は参考。#5262）。`rubric_version` が無い結果は、主張ごとの判定の
-    前の旧方式の結果。
+    正確性で決める（網羅は参考。#5262）。回答文を生成できず参考情報へ退避した問は、正確性に
+    関わらず不合格（#5320。正確性の値は判定のまま）。`rubric_version` が無い結果は、主張ごとの
+    判定の前の旧方式の結果。
     """
 
     status: str
@@ -559,6 +563,9 @@ class EvaluationCaseResult(BaseModel):
     retrieved_document_ids: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
     hit_document_ids: list[str] = Field(default_factory=list)
+    # 同じ文書とみなして正解の文書の ID にそろえた引用の文書（正解の文書の ID → 引用の文書の ID の
+    # 列。同じファイル名・解析後の本文が同じ文書。#2086・#5325）。前の結果には無い。
+    equated_document_ids: dict[str, list[str]] = Field(default_factory=dict)
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None

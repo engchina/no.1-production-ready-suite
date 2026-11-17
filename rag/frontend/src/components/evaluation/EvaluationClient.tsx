@@ -1437,7 +1437,12 @@ function CaseQuestionCell({
           <p className="break-words text-xs font-normal text-fg-muted">{error.message}</p>
         </div>
       ) : null}
-      {result.answer_evaluation ? <CaseJudgement judgement={result.answer_evaluation} /> : null}
+      {result.answer_evaluation ? (
+        <CaseJudgement
+          judgement={result.answer_evaluation}
+          generationFallback={result.failure_reasons.includes(ANSWER_GENERATION_FALLBACK)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1447,14 +1452,27 @@ function isLegacyJudgement(judgement: EvaluationAnswerJudgement | null | undefin
   return judgement?.status === "completed" && judgement.rubric_version == null;
 }
 
+/** 回答文を生成できず参考情報へ退避した問の失敗理由（この問は不合格。#4104・#5320）。 */
+const ANSWER_GENERATION_FALLBACK = "answer_generation_fallback";
+
 /**
- * この問の合否（正確性だけで決める）と、開いて見る判定の理由・網羅の要点（#5262）。
+ * この問の合否（正確性で決め、退避した問は不合格）と、開いて見る判定の理由・網羅の要点（#5262）。
  * 375px でも見えるよう質問の列に出す。合否は文字のバッジで示し、色だけに頼らない。
  */
-function CaseJudgement({ judgement }: { judgement: EvaluationAnswerJudgement }) {
+function CaseJudgement({
+  judgement,
+  generationFallback,
+}: {
+  judgement: EvaluationAnswerJudgement;
+  generationFallback: boolean;
+}) {
   const legacy = isLegacyJudgement(judgement);
   const completed = judgement.status === "completed" && judgement.passed !== null;
   const reasons = (judgement.reason ?? judgement.message ?? "").split("\n").filter(Boolean);
+  // 退避で不合格にした問は、その理由（失敗理由の文）を判定の理由の先頭に出す（#5320）。
+  if (completed && judgement.passed === false && generationFallback) {
+    reasons.unshift(failureReasonLabel(ANSWER_GENERATION_FALLBACK));
+  }
   const points = legacy ? [] : (judgement.points ?? []);
   return (
     <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-judgement">

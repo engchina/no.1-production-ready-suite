@@ -188,3 +188,28 @@ def test_explicit_guide_child_can_protect_neighbor_role(monkeypatch: pytest.Monk
     monkeypatch.setattr(answering, "evidence_spans", capture)
     _grounded_spans(QUESTION, ctx, (), knowledge(child.chunk_uid), budget=350)
     assert [record.chunk_uid for record in observed["anchors"]] == [child.chunk_uid]
+
+
+def test_fallback_quote_shows_the_retrieved_child_beyond_the_head() -> None:
+    """回答文を生成できず参考情報へ退避しても、検索で当たった子が根拠の先頭の抜粋の外なら、その子の範囲を示す（#5322）。"""
+    from rag_engine.adapters.oci import LlmStreamOutputMissing
+    from rag_engine.config import get_settings
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation import grounded
+
+    ctx, _child = fixture()
+    assert ctx.records[0].text.index(BODY) > grounded.RELATED_QUOTE_MAX_CHARS
+
+    def model(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        raise LlmStreamOutputMissing("合成の本文の無い応答", None, {"events": []})
+
+    def unused(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("不要な呼出し")
+
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = answering.synthesize_grounded_answer(
+            QUESTION, ctx, get_settings(environ={}, dotenv_path=None), image_prompt_mode="text_only"
+        ).response
+
+    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
+    assert BODY in result.answer_text

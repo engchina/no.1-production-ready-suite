@@ -72,6 +72,7 @@ from app.rag.observability import (
 )
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgressCallback
 from app.schemas.evaluation import (
+    ANSWER_GENERATION_FALLBACK,
     EVALUATION_METRIC_NAMES,
     EVALUATION_METRICS_VERSION,
     EVALUATION_REASONING_METRIC_NAMES,
@@ -285,6 +286,51 @@ def _case_filters(case: EvaluationCase, filters: Mapping[str, str] | None) -> di
     return case_filters
 
 
+# 文書 ID の列から、解析後の本文が同じ別の文書の ID を引く（#5325。文書 ID → 別の文書の ID の列）。
+SameTextDocuments = Callable[[Sequence[str]], Awaitable[Mapping[str, Sequence[str]]]]
+
+
+async def _oracle_same_text_documents(document_ids: Sequence[str]) -> Mapping[str, Sequence[str]]:
+    return await OracleClient().same_extracted_text_document_ids(document_ids)
+
+
+def _expected_document_ids(case: EvaluationCase) -> list[str]:
+    """ケースが期待する文書（正解の文書と、必要な根拠の文書）。"""
+    return unique_in_order(
+        [
+            *case.relevant_document_ids,
+            *(item.document_id for item in case.required_evidence if item.document_id),
+        ]
+    )
+
+
+def with_same_text_equivalents(
+    case: EvaluationCase, same_text: Mapping[str, Sequence[str]]
+) -> EvaluationCase:
+    """解析後の本文が同じ文書（#5325）を、期待する文書と同じ文書とみなす文書に足す。
+
+    今の同じ文書とみなす文書（同じファイル名。#2086）に加える。`same_text` は文書 ID → 解析後の
+    本文の hash が同じ別の文書の ID で、hash の無い文書は持たない（今の判定のまま）。期待する文書
+    同士は互いにそろえない（それぞれの根拠をその文書で照合する）。
+    """
+    expected = _expected_document_ids(case)
+    taken = set(expected)
+    merged = {key: list(values) for key, values in case.equivalent_document_ids.items()}
+    changed = False
+    for canonical in expected:
+        others = merged.setdefault(canonical, [])
+        for source in [canonical, *others]:
+            for other in same_text.get(source, ()):
+                if other not in taken and other not in others:
+                    others.append(other)
+                    changed = True
+    if not changed:
+        return case
+    return case.model_copy(
+        update={"equivalent_document_ids": {key: ids for key, ids in merged.items() if ids}}
+    )
+
+
 class EvaluationRunner:
     """小規模な golden set を使って検索・根拠・回答の品質を評価する。"""
 
@@ -294,10 +340,16 @@ class EvaluationRunner:
         settings: Settings | None = None,
         answer_judge: AnswerJudge | None = None,
         profile_resolver: ProfileResolver | None = None,
+        same_text_documents: SameTextDocuments | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._pipeline = pipeline
         self._profile_resolver = profile_resolver or _resolve_profile_context
+        # 解析後の本文が同じ文書の引き方（#5325）。既定の pipeline(実環境)では DB から引く。
+        # テストで pipeline を注入したときは、明示したものだけを使う。
+        self._same_text_documents = same_text_documents
+        if same_text_documents is None and pipeline is None:
+            self._same_text_documents = _oracle_same_text_documents
         # 既定の pipeline(実環境)では、標準回答のあるケースを LLM で評価する。
         # テストで pipeline を注入したときは、明示した judge だけを使う。
         self._answer_judge: AnswerJudge | None = answer_judge
@@ -361,6 +413,7 @@ class EvaluationRunner:
         answer_model_id: str | None,
     ) -> EvaluationMetrics:
         deadline = _deadline(time_budget_seconds)
+        cases = await self._with_same_text_equivalents(cases)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
         pipeline = self._pipeline or RagPipeline(settings=effective_settings)
 
@@ -419,6 +472,27 @@ class EvaluationRunner:
             )
         case_results = [result for result in results if result is not None]
         return summarize_case_results(case_results, thresholds=thresholds)
+
+    async def _with_same_text_equivalents(
+        self, cases: list[EvaluationCase]
+    ) -> list[EvaluationCase]:
+        """解析後の本文が同じ文書を、各ケースの同じ文書とみなす文書に足す（#5325）。"""
+        if self._same_text_documents is None:
+            return cases
+        document_ids = unique_in_order(
+            [
+                document_id
+                for case in cases
+                for canonical in _expected_document_ids(case)
+                for document_id in [canonical, *case.equivalent_document_ids.get(canonical, [])]
+            ]
+        )
+        if not document_ids:
+            return cases
+        same_text = await self._same_text_documents(document_ids)
+        if not same_text:
+            return cases
+        return [with_same_text_equivalents(case, same_text) for case in cases]
 
     async def _run_case(
         self,
@@ -856,13 +930,14 @@ def summarize_case_results(
     """ケースの結果を集計して評価の結果にする（評価ランナーと `score_case_answers` で共通）。
 
     指標は成功したケースのうち測れたものだけの平均。失敗したケースや、標準回答で評価できなかった
-    ケースがあれば合格にしない。
+    ケース、回答文を生成できず参考情報へ退避したケースがあれば合格にしない。
     """
     results = list(case_results)
     aggregate = _aggregate()
     failure_reason_counts: dict[str, int] = {}
     error_count = 0
     judge_incomplete_count = 0
+    generation_fallback_count = 0
     for result in results:
         count_reasons(failure_reason_counts, result.failure_reasons)
         if result.status != "success":
@@ -871,6 +946,8 @@ def summarize_case_results(
         judgement = result.answer_evaluation
         if judgement is not None and judgement.status != "completed":
             judge_incomplete_count += 1
+        if ANSWER_GENERATION_FALLBACK in result.failure_reasons:
+            generation_fallback_count += 1
         _accumulate_case_metrics(aggregate, result)
     aggregate_values = aggregate.means()
     failures = _threshold_failures(thresholds, aggregate_values)
@@ -882,10 +959,12 @@ def summarize_case_results(
         split_breakdown=split_breakdown(results),
         reasoning_type_breakdown=reasoning_type_breakdown(results),
         hops_breakdown=hops_breakdown(results),
+        # 回答文を生成できず参考情報へ退避したケース（この問は不合格。#5320）があれば、
+        # 全体も合格にしない。
         passed=overall_passed(
             failures=failures,
             error_count=error_count,
-            incomplete_count=judge_incomplete_count,
+            incomplete_count=judge_incomplete_count + generation_fallback_count,
             measured_counts=aggregate.counts(),
             thresholds=_threshold_values(thresholds),
             values=aggregate_values,
@@ -964,10 +1043,19 @@ def _case_result(
     省略したときは決定的な判定だけで採点する（決められなければ未判定）。
     """
     runs = list(turn_runs) if turn_runs else [_TurnRun(response, dict(case.conditions))]
-    # 同じ文書とみなす文書（同じ名前の文書。#2086）は、正解の文書の ID にそろえて数える。
+    # 同じ文書とみなす文書（同じ名前の文書・解析後の本文が同じ文書。#2086・#5325）は、正解の
+    # 文書の ID にそろえて数える。そろえた引用の文書は結果に残す。
     retrieved_ids = unique_in_order(
         [case.canonical_document_id(chunk.document_id) for chunk in response.citations]
     )
+    equated: dict[str, list[str]] = {}
+    for chunk in response.citations:
+        canonical = case.canonical_document_id(chunk.document_id)
+        if canonical == chunk.document_id:
+            continue
+        cited = equated.setdefault(canonical, [])
+        if chunk.document_id not in cited:
+            cited.append(chunk.document_id)
     relevant = set(case.relevant_document_ids)
     # 答えるべきでない質問(#301)は拒答の正しさだけを測る。正解の文書が無いケースは検索の
     # 指標の対象外(#591)。
@@ -998,6 +1086,14 @@ def _case_result(
                 elapsed_ms=run.response.elapsed_ms,
             )
         )
+    # 退避した回答（#4104）は、回答の記録の構造の印で決める（本文の語では判定しない）。
+    generation_fallback = any(
+        (run.response.diagnostics.answer or {}).get("generation_failure") for run in runs
+    )
+    if generation_fallback and judgement is not None and judgement.status == "completed":
+        # 参考情報の原文は標準回答と合う主張になり得るので、この問は正確性に関わらず
+        # 不合格（#5320）。正確性・網羅の値は判定のまま残す。
+        judgement = judgement.model_copy(update={"passed": False})
     failure_reasons: list[str] = []
     if missing_evidence:
         failure_reasons.append("evidence_miss")
@@ -1009,8 +1105,8 @@ def _case_result(
         if judgement.answer_correctness is not None and judgement.answer_correctness < 1:
             failure_reasons.append("answer_failed")
     # 退避した回答は成功の生成に数えない（#4104）。status は評価の処理の完了のまま。
-    if any((run.response.diagnostics.answer or {}).get("generation_failure") for run in runs):
-        failure_reasons.append("answer_generation_fallback")
+    if generation_fallback:
+        failure_reasons.append(ANSWER_GENERATION_FALLBACK)
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,
@@ -1021,6 +1117,7 @@ def _case_result(
         retrieved_document_ids=retrieved_ids,
         relevant_document_ids=list(case.relevant_document_ids),
         hit_document_ids=unique_in_order(hits),
+        equated_document_ids=equated,
         mrr=rank,
         answer_correctness=judgement.answer_correctness if judgement else None,
         answer_coverage=judgement.answer_coverage if judgement else None,

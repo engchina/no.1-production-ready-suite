@@ -8,11 +8,12 @@ from collections.abc import Callable, Mapping
 from typing import cast
 
 import pytest
+from pr_backend_core.oracle_session import SESSION_INIT_SQL
 
 from app.clients import native_maintenance_store as store_module
 from app.clients.native_index_maintenance import NativeIndexMaintenanceIncomplete
 from app.clients.native_maintenance_store import VERIFY_CALL_TIMEOUT_MS, NativeMaintenanceStore
-from app.clients.oracle import OracleClient
+from app.clients.oracle import RAG_SESSION_SERIAL_DML_SQL, OracleClient
 from app.config import Settings
 from app.rag.native_index_maintenance import MaintenanceLease
 
@@ -471,7 +472,9 @@ def test_dedicated_connection_does_not_touch_the_shared_pool(
         assert connection.closed
     else:
         assert cast(object, client.open_dedicated_connection()) is connection
-        assert connection.sql and not connection.closed
+        # 共有 pool の接続と同じ初期化（result cache と並列 DML を無効にする。#5314）。
+        assert connection.sql == [SESSION_INIT_SQL, RAG_SESSION_SERIAL_DML_SQL]
+        assert not connection.closed
     assert connected == [{"dsn": "x"}]
 
 
