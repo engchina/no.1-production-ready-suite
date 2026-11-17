@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { Check, Link } from "lucide-react";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -23,6 +23,7 @@ import { SearchField, type SearchFieldProps } from "../ui/search-field";
 import { ListSkeleton } from "../ui/skeleton";
 import { ToggleChip } from "../ui/toggle-chip";
 import { ListToolbar } from "./list-toolbar";
+import { StatusBadge } from "./status-badge";
 import { LoadMoreFooter } from "./load-more-footer";
 
 /** 候補の 1 行。 */
@@ -35,11 +36,14 @@ export interface ListPickerItem {
   textValue: string;
   /** 名前の下の補足（1 行で省略表示。例: 論理名・種類・更新日）。 */
   description?: ReactNode;
-  /** 行の右端の補足（例: 状態の StatusBadge）。読み上げでは選択肢の説明になる。 */
+  /** 行の右端の補足（例: 状態の StatusBadge）。右端に固定し、行をまたいで列をそろえる。読み上げでは選択肢の説明になる。 */
   meta?: ReactNode;
   /** 選べない候補（例: すでに追加済み）。フォーカスは移れるが、選択は切り替わらない。 */
   disabled?: boolean;
-  /** 選べない理由（行の右端に出し、読み上げの説明にもする。例:「追加済み」）。 */
+  /**
+   * 選べない理由（例:「追加済み」）。中立の灰色のバッジ（リンクのアイコン付き）で `meta` の左に出し、読み上げの説明にもする。
+   * 行は元の位置のまま（並べ替えない・隠さない）。
+   */
   disabledReason?: string;
   /** 属するグループ（`groups` の key）。 */
   groupKey?: string;
@@ -177,12 +181,18 @@ export interface ListPickerProps {
    */
   disabled?: boolean;
   /**
-   * 選択を確定する操作（任意。例: `FormActionBar` の「選択した N 件を追加」「閉じる」）。一覧のフッターの下に置く
+   * 選択を確定する操作（任意。例: `FormActionBar` の「選択を反映」。ページの一覧へ追加する操作は `ListPickerSheet` を使う）。一覧のフッターの下に置く
    * （design-system README §4「カード内の操作行」: 区切り線の下に左寄せ、primary → secondary）。
    */
   actions?: ReactNode;
   /** 一覧の高さを 5 / 8 行に固定する（並べた 2 つの一覧の高さをそろえるとき）。既定は候補の数に合わせて 5 / 8 行まで。 */
   fixedHeight?: boolean;
+  /**
+   * 置かれた縦の領域を埋める（#5279。一覧から選んで追加するシートの中）。一覧の高さを行数で決めず、候補の分の高さで
+   * 残りの高さまで伸ばし、超えたら中をスクロールする。
+   * 親は flex の縦並びで、高さが決まっていること。
+   */
+  fill?: boolean;
   labels?: Partial<ListPickerLabels>;
   className?: string;
   testId?: string;
@@ -217,6 +227,10 @@ const OVERSCAN_ROWS = 6;
 const VIRTUALIZE_ABOVE_ROWS = 100;
 const ITEM_ROW_CLASS = "h-[3.5rem]";
 const FIXED_VIEWPORT_CLASS = "h-[17.5rem] overflow-auto md:h-[28rem]";
+/**
+ * 領域を埋める一覧（`fill`）。高さは候補の分（少なければ短く、空の枠を残さない）で、残りの高さを超えたら縮めて中をスクロールする。
+ */
+const FILL_VIEWPORT_CLASS = "min-h-[3.5rem] shrink overflow-auto";
 
 function rootFontSize() {
   if (typeof window === "undefined") return 14;
@@ -266,6 +280,7 @@ export function ListPicker({
   actions,
   disabled = false,
   fixedHeight = false,
+  fill = false,
   labels: labelOverrides,
   className,
   testId,
@@ -698,7 +713,11 @@ export function ListPicker({
 
   return (
     <section
-      className={cn("grid min-w-0 gap-2 rounded-md border border-border bg-surface p-3", className)}
+      className={cn(
+        "min-w-0 gap-2 rounded-md border border-border bg-surface p-3",
+        fill ? "flex min-h-0 flex-1 flex-col" : "grid",
+        className
+      )}
       aria-labelledby={title ? titleId : undefined}
       aria-label={title ? undefined : label}
       data-testid={testId}
@@ -736,7 +755,7 @@ export function ListPicker({
         ref={viewportRef}
         className={cn(
           "relative min-w-0 rounded-md border border-border bg-surface overscroll-contain [scrollbar-gutter:stable]",
-          fixedHeight ? FIXED_VIEWPORT_CLASS : INFORMATION_LIST_SCROLL_CLASS,
+          fill ? FILL_VIEWPORT_CLASS : fixedHeight ? FIXED_VIEWPORT_CLASS : INFORMATION_LIST_SCROLL_CLASS,
           (loading || error || rows.length === 0) && "p-2"
         )}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
@@ -869,8 +888,8 @@ function PickerOption({
   const metaId = `${id}-meta`;
   const describedBy = [
     item.description ? descriptionId : "",
-    item.meta ? metaId : "",
     item.disabled && item.disabledReason ? reasonId : "",
+    item.meta ? metaId : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -936,14 +955,15 @@ function PickerOption({
           ) : null}
         </span>
       </span>
+      {/* 選べない理由は中立の灰色のバッジで状態（meta）の左に置き、状態は右端に固定して行をまたいで列をそろえる（#5279）。 */}
+      {item.disabled && item.disabledReason ? (
+        <span id={reasonId} className="flex shrink-0 items-center" data-list-picker-reason="">
+          <StatusBadge variant="neutral" icon={Link} label={item.disabledReason} />
+        </span>
+      ) : null}
       {item.meta ? (
         <span id={metaId} className="flex shrink-0 items-center gap-2">
           {item.meta}
-        </span>
-      ) : null}
-      {item.disabled && item.disabledReason ? (
-        <span id={reasonId} className="shrink-0 text-xs text-fg-muted">
-          {item.disabledReason}
         </span>
       ) : null}
     </div>

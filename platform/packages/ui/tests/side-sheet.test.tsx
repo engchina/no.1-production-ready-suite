@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useState } from "react";
+import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -175,5 +175,60 @@ describe("SideSheet（#664）", () => {
     expect(next.disabled).toBe(true);
     click(previous);
     expect(onPrevious).toHaveBeenCalledTimes(1);
+  });
+
+  it("fullScreenBelowSm は sm 未満で全画面、sm 以上は size の幅（#5279）", () => {
+    act(() =>
+      root.render(
+        <SideSheet open={false} onClose={() => {}} title="追加" closeLabel="閉じる" size="md" side="right" fullScreenBelowSm data-testid="full-sheet">
+          <p>一覧</p>
+        </SideSheet>
+      )
+    );
+    const classes = $('[data-testid="full-sheet"]').className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["w-full", "max-w-full", "sm:w-[40rem]", "sm:max-w-[calc(100vw-3.5rem)]"]));
+    expect(classes).not.toContain("w-[40rem]");
+  });
+
+  it("initialFocusRef の要素へ開いたときにフォーカスし、footer は本文の外（下端）に固定する（#5279）", () => {
+    function FooterHarness() {
+      const [open, setOpen] = useState(false);
+      const searchRef = useRef<HTMLInputElement>(null);
+      return (
+        <>
+          <button type="button" data-testid="opener" onClick={() => setOpen(true)}>
+            追加
+          </button>
+          <SideSheet
+            open={open}
+            onClose={() => setOpen(false)}
+            title="追加"
+            closeLabel="閉じる"
+            initialFocusRef={searchRef}
+            footer={
+              <button type="button" data-testid="cancel" onClick={() => setOpen(false)}>
+                キャンセル
+              </button>
+            }
+            data-testid="sheet"
+          >
+            <button type="button">先頭</button>
+            <input data-testid="search" ref={searchRef} />
+          </SideSheet>
+        </>
+      );
+    }
+    act(() => root.render(<FooterHarness />));
+    opener().focus();
+    click(opener());
+    expect(document.activeElement).toBe($('[data-testid="search"]'));
+    const footer = $('[data-testid="sheet-footer"]');
+    expect(footer.parentElement).toBe(sheet());
+    expect(sheet().lastElementChild).toBe(footer);
+    expect(footer.className.split(/\s+/)).toEqual(expect.arrayContaining(["shrink-0", "border-t"]));
+    // footer の操作で閉じても、開く前の要素へフォーカスを戻す。
+    click($('[data-testid="cancel"]'));
+    expect(sheet().hasAttribute("inert")).toBe(true);
+    expect(document.activeElement).toBe(opener());
   });
 });
