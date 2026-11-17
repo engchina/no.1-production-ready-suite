@@ -22,7 +22,7 @@ import {
 /**
  * RAG 検索のレビューで直した不具合の回帰テスト（#285）。
  * stream の途中の失敗・回答の評価先の検索・回答プロファイル・IME の確定の Enter・画面を離れたときの中断。
- * RAG 検索は登録済みQ&A を提示しない（#5332）。
+ * RAG 検索は登録済みQ&Aを提示しない（#5332）。
  */
 
 const envelope = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });

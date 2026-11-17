@@ -17,7 +17,7 @@
   開く確かめ（`passed_evidence`）には入れない）。添付は根拠の ID の
   印が無いため、回答で引用は回答がその添付のファイル名を書いたときに付ける。
 
-- 利用者が選んだ承認済み FAQ（登録済みの Q&A。#5136）: RAG の回答のツール（`rag_search` /
+- 利用者が選んだ登録済みQ&A（#5136）: RAG の回答のツール（`rag_search` /
   `rag_chat`）が返した `approved_faq`。`document_id` は `approved_faq:<Q&A の ID>`
   （RAG の文書ではないので、会話の添付と同じく原文・図を開く確かめには入れない）。利用者が選んで
   RAG が返した登録済みの回答で、その Run の回答の根拠なので、回答で引用にする。
@@ -77,10 +77,10 @@ ATTACHMENT_DOCUMENT_PREFIX = "attachment:"
 ATTACHMENT_EVIDENCE_TYPE = "chat_attachment"
 # 添付の根拠の抜粋の上限（節は 1 回に 8000 文字まで読めるので、画面と成果物では縮める）。
 ATTACHMENT_EXCERPT_CHARACTERS = 2_000
-# 利用者が選んだ承認済み FAQ の根拠（#5136）。
+# 利用者が選んだ登録済みQ&Aの根拠（#5136）。
 APPROVED_FAQ_DOCUMENT_PREFIX = "approved_faq:"
 APPROVED_FAQ_EVIDENCE_TYPE = "approved_faq"
-APPROVED_FAQ_SOURCE_NAME = "登録済みの Q&A"
+APPROVED_FAQ_SOURCE_NAME = "登録済みQ&A"
 # RAG の文書ではない根拠の document_id の接頭辞（RAG の文書・chunk の ID として扱わない）。
 NON_RAG_DOCUMENT_PREFIXES = (ATTACHMENT_DOCUMENT_PREFIX, APPROVED_FAQ_DOCUMENT_PREFIX)
 _ANSWER_USES = frozenset({"confirmed", "reference"})
@@ -342,7 +342,7 @@ def attachment_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
 
 
 def approved_faq_evidence(steps: Sequence[RunStep]) -> list[JsonObject]:
-    """利用者が選んだ承認済み FAQ の根拠（RAG の検索が返した `approved_faq`。Q&A ごとに 1 件）。"""
+    """利用者が選んだ登録済みQ&Aの根拠（RAG の検索が返した `approved_faq`。Q&A ごとに 1 件）。"""
     items: dict[str, JsonObject] = {}
     for step in steps:
         call, result = step.tool_call, step.tool_result
@@ -741,7 +741,7 @@ def rag_answer_evidence(steps: Sequence[RunStep]) -> JsonObject:
 
     根拠は最後の RAG の回答のツールが返した `evidence`（AI に渡した資料の箇所）で、回答で引用した
     根拠は RAG が付けた `used_in_answer`（回答での使われ方は RAG の `answer_use`）。回答の文から
-    根拠の印・段落を照合しない（RAG の回答の引用は RAG が決める）。利用者が選んだ承認済み FAQ の
+    根拠の印・段落を照合しない（RAG の回答の引用は RAG が決める）。利用者が選んだ登録済みQ&Aの
     回答なら、その Q&A を回答で引用した根拠にする。
     """
     last: tuple[str, Mapping[str, Any]] | None = None

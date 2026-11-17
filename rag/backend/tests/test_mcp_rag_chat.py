@@ -1,6 +1,6 @@
-"""MCP の rag_chat（RAG Chat の経路で 1 問に答える。#5339）。
+"""MCP の rag_chat（RAG チャットの経路で 1 問に答える。#5339）。
 
-経路・確認・承認済み FAQ・プロファイルの自動の選択・権限・Chat の無効・通しの期限を、検索・回答の
+経路・確認・登録済みQ&A・プロファイルの自動の選択・権限・Chat の無効・通しの期限を、検索・回答の
 pipeline を差し替えて確かめる（工程そのものは #5337 の経路のテストが確かめる）。
 """
 
@@ -270,7 +270,7 @@ def test_answer_tools_stop_at_one_deadline_around_the_whole_handler(
     monkeypatch: MonkeyPatch,
     tool: str,
 ) -> None:
-    """承認済み FAQ の照会（回答生成の前）で期限を過ぎても、同じ時間切れ（504）にする。"""
+    """登録済みQ&Aの照会（回答生成の前）で期限を過ぎても、同じ時間切れ（504）にする。"""
     monkeypatch.setattr(mcp_tools, "OracleClient", FakeKnowledgeOracle)
     monkeypatch.setattr(mcp_tools, "answer_timeout_seconds", lambda _settings: 0.05)
     monkeypatch.setattr(mcp_tools, "ANSWER_DEADLINE_GRACE_SECONDS", 0.0)

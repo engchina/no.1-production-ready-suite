@@ -30,8 +30,15 @@ from app.rag.reference_sections import (
 )
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.schemas.search import RetrievedChunk, SearchRequest
-from tests.test_cross_references import FakeGenAi, ReferenceOracle, _engine, _retrieved
-from tests.test_reference_sections import FakeLlm, SectionMap, _label
+from tests.test_cross_references import (
+    FakeGenAi,
+    FakeLlm,
+    ReferenceOracle,
+    SectionMap,
+    _engine,
+    _retrieved,
+)
+from tests.test_reference_sections import _label
 
 QUESTION = "手続の期限の扱いを教えて"
 TAIL = "補則"
@@ -261,7 +268,7 @@ async def test_document_without_section_tree_is_not_a_target(
     assert sections.outline_calls == ["doc-a"]
     record = _record(state)
     assert record["skip_reason"] == SKIP_NO_OUTLINE
-    assert [d["fallback_reason"] for d in record["documents"]] == ["no_outline"]
+    assert [d["skip_reason"] for d in record["documents"]] == ["no_outline"]
 
 
 async def test_max_documents_limits_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:

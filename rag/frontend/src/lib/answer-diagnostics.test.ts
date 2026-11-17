@@ -112,7 +112,7 @@ describe("parseAnswerDiagnostics", () => {
   });
 
   // #737
-  it("承認済み FAQ から回答したときは、FAQ の原文を出典として読む", () => {
+  it("登録済みQ&Aから回答したときは、FAQ の原文を出典として読む", () => {
     expect(
       parseAnswerDiagnostics({
         answer_source: "approved_faq",
@@ -127,7 +127,7 @@ describe("parseAnswerDiagnostics", () => {
   });
 
   // #5107
-  it("登録済みQ&A の回答かは、配信の診断か保存した会話のメッセージから読む", () => {
+  it("登録済みQ&Aの回答かは、配信の診断か保存した会話のメッセージから読む", () => {
     expect(answerFromApprovedFaq({ answer_source: "approved_faq", approved_faq_question: "Q" }, null)).toBe(true);
     expect(answerFromApprovedFaq(null, { approved_faq_answer: true })).toBe(true);
     // いつもの回答・壊れた値は Q&A の回答ではない。

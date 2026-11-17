@@ -10,7 +10,7 @@ Production Ready RAG・NL2SQL の MCP を使って調べるスキル。組み込
 | [`rag-search-and-data`](./rag-search-and-data/SKILL.md)（RAG 検索＋データ） | `rag`・`nl2sql` | 資料（`rag_search`）と業務データの両方が要る調査 |
 | [`structured-data-query`](./structured-data-query/SKILL.md)（構造化データ照会） | `nl2sql` | 業務データの件数・金額・一覧を SQL で照会する |
 
-RAG だけのスキル（`rag-chat`・`rag-search`）は metadata の `production-ready-final-answer-tools` に回答のツールを宣言し、組み込みの Agent はそのツールの回答（登録済みQ&A の候補・業務ガイドの確認を含む）をそのまま Run の回答にする（回答の書き方は RAG の検索・回答プロファイルで設定する）。
+RAG だけのスキル（`rag-chat`・`rag-search`）は metadata の `production-ready-final-answer-tools` に回答のツールを宣言し、組み込みの Agent はそのツールの回答（登録済みQ&Aの候補・業務ガイドの確認を含む）をそのまま Run の回答にする（回答の書き方は RAG の検索・回答プロファイルで設定する）。
 
 このディレクトリは Claude Code の plugin `production-ready-skills`（[`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json)）でもあり、repo 直下の [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json)（marketplace `production-ready-suite`）が配る。
 

@@ -918,8 +918,8 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
-// #5136: 利用者が選んだ登録済みの Q&A（RAG の検索が返した approved_faq）も根拠の塊に出す。RAG の文書ではないので、
-// 「登録済みの Q&A」の印を付け、原文を開く「根拠を表示」は出さない。
+// #5136: 利用者が選んだ登録済みQ&A（RAG の検索が返した approved_faq）も根拠の塊に出す。RAG の文書ではないので、
+// 「登録済みQ&A」の印を付け、原文を開く「根拠を表示」は出さない。
 const FAQ_RUN_ID = "run-evidence-approved-faq";
 const FAQ_GOAL = "合成の FAQ の質問 C は？";
 
@@ -950,7 +950,7 @@ function seedApprovedFaqRun(mockApi: MockApi) {
             {
               document_id: "approved_faq:faq-1",
               chunk_id: "approved_faq:faq-1",
-              file_name: "登録済みの Q&A",
+              file_name: "登録済みQ&A",
               excerpt: "合成の登録済みの回答。手続きは窓口 C で行います。",
               truncated: false,
               evidence_type: "approved_faq",
@@ -978,7 +978,7 @@ function seedApprovedFaqRun(mockApi: MockApi) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`選んだ登録済みの Q&A は「登録済みの Q&A」の印で根拠の塊に出し、原文は開かない (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  test(`選んだ登録済みQ&Aは「登録済みQ&A」の印で根拠の塊に出し、原文は開かない (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     seedApprovedFaqRun(mockApi);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/chat");
@@ -994,7 +994,7 @@ for (const viewport of VIEWPORTS) {
     await evidence.locator("summary").click();
     const cards = evidence.getByTestId("evidence-card");
     await expect(cards).toHaveCount(1);
-    await expect(cards.nth(0)).toContainText("登録済みの Q&A");
+    await expect(cards.nth(0)).toContainText("登録済みQ&A");
     await expect(cards.nth(0)).toContainText("回答で引用");
     await expect(cards.nth(0)).toContainText("合成の登録済みの回答");
     await expect(cards.nth(0).getByTestId("evidence-chips")).toContainText("合成の登録済みの質問 C");

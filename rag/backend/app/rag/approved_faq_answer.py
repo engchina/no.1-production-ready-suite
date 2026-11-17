@@ -1,4 +1,4 @@
-"""利用者が選んだ承認済み FAQ の回答をそのまま返す段（#5107）。
+"""利用者が選んだ登録済みQ&Aの回答をそのまま返す段（#5107）。
 
 「回答の前に関連するQ&Aを提示する」がオンの検索・回答プロファイルで、利用者が候補から FAQ を
 選んで送った質問は、入口（``_resolve_query_context``）がプロファイルの FAQ から引き直す。回答の
@@ -88,7 +88,7 @@ async def approved_faq_candidates(
     *,
     prepare: PrepareQuestion | None = None,
 ) -> tuple[list[ApprovedFaqSuggestion], str | None]:
-    """回答の前に提示する承認済み FAQ の候補と、補完の token（画面の照会・MCP で共通。#5107）。
+    """回答の前に提示する登録済みQ&Aの候補と、補完の token（画面の照会・MCP で共通。#5107）。
 
     入口の順は回答と同じ: 入力の安全チェック → 質問の補完（``prepare``。チャットだけ）→ FAQ の
     照合。候補は一致度が ``RAG_APPROVED_FAQ_MIN_SCORE`` 以上のものを最大

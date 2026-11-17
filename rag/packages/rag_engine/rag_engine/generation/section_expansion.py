@@ -56,7 +56,6 @@ from rag_engine.retrieval.context_builder import (
     ContextParentEvidence,
     context_bundle_from_parent_evidence,
 )
-from rag_engine.retrieval.expansion_merge import REFERENCE_EXPANSION_KEY
 
 # 根の章節（文書全体）の id。backend の ``section_chunk_map.ROOT_SECTION_ID`` と同じ。
 ROOT_SECTION_ID = "document"
@@ -364,21 +363,13 @@ def _context_chunk_ids(context: AnswerContext) -> set[str]:
     return ids
 
 
-def _section_seed_allowed(record: Any) -> bool:
-    """起点にしてよい根拠か。参照先の文書を全体で読む退避で足した根拠（backend が参照の印に
-    ``section_seed: False`` を付ける。#5263）は、章節を広げると読む範囲が文書の全体に膨らむので起点にしない。"""
-    metadata = getattr(record, "metadata", None)
-    reference = metadata.get(REFERENCE_EXPANSION_KEY) if isinstance(metadata, dict) else None
-    return not (isinstance(reference, dict) and reference.get("section_seed") is False)
-
-
 def seed_chunk_ids(context: AnswerContext) -> list[str]:
     """起点にする当たった chunk（関連度の順）。"""
     anchors: list[str] = []
     for parent in context.evidence_tree:
         for child in parent.children:
             uid = _record_key(child.record)
-            if uid and child.role == "retrieved_anchor" and _section_seed_allowed(child.record):
+            if uid and child.role == "retrieved_anchor":
                 anchors.append(uid)
     return list(dict.fromkeys(anchors))
 

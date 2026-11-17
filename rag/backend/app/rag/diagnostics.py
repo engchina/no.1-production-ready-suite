@@ -73,6 +73,9 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "extra_retrieval_max_queries": resolved_settings.rag_extra_retrieval_max_queries,
         "reference_expansion_enabled": resolved_settings.rag_reference_expansion_enabled,
         "reference_expansion_max_targets": resolved_settings.rag_reference_expansion_max_targets,
+        "reference_section_read_max_chunks": (
+            resolved_settings.rag_reference_section_read_max_chunks
+        ),
         # 文書全体への参照の参照先を、目次からモデルが選んだ章節で読む(#5263)。
         "reference_outline_selection_enabled": (
             resolved_settings.rag_reference_outline_selection_enabled

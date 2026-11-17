@@ -11,7 +11,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 #3284・#3286 で、例外の文を診断に残していた経路と、`DS` に入っていなかった縮退を直し、該当の行を更新した（コードの静的確認と決定論のスタブの pytest。実 Oracle・実 LLM では未確認）。
 
-#5332 で経路を 2 つに分けた: RAG 検索（`POST /api/search`・`/stream`・検索だけ）は基本の経路で、業務ガイドの照合・承認済み FAQ・根拠の拡張（参照の展開・目次からの章節の選択・実体・関係情報・章節の拡張・検索上限の要求別補完・業務ガイドの手順ごとの検索）の行の能力を使わない。チャット・MCP は拡張の経路で、下の行の能力をすべて使う。品質評価は回答の方法（#5340）で経路を選ぶ（チャット＝拡張、RAG 検索＝基本）。
+#5332 で経路を 2 つに分けた: RAG 検索（`POST /api/search`・`/stream`・検索だけ）は基本の経路で、登録済みQ&A・業務ガイドの照合・根拠の拡張（参照の展開・目次からの章節の選択・実体・関係情報・章節の拡張・検索上限の要求別補完・業務ガイドの手順ごとの検索）の行の能力を使わない。チャット・MCP は拡張の経路で、下の行の能力をすべて使う。品質評価は回答の方法（#5340）で経路を選ぶ（チャット＝拡張、RAG 検索＝基本）。
 
 この文書は現状の一覧で、契約（どの能力を必須にするか）は決めない。契約の差分は #3262 の後の段（#3250〜#3253 の後）で決める。
 
@@ -40,7 +40,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 質問の安全チェック（OCI Guardrails） | 任意（設定 `PLATFORM_GUARDRAILS_INPUT_ENABLED`）。有効なら必須 | 有効で OCI の検査が失敗 → **拒否**（fail-closed。「安全検査を完了できない」で止め、検索しない）。無効なら検査を省く | `GD`・finding `guardrail_backend_unavailable`・監査の outcome `blocked`。pipeline の入口では工程の span を作らない（chat の入口の span は未確認） | 見せない（拒否の応答） | `platform/packages/system_settings_backend/src/pr_system_settings/guardrails.py::GuardrailPolicy._inspect`・`rag/backend/app/rag/pipeline.py::RagPipeline.run` |
 | 回答の安全チェック（OCI Guardrails） | 任意（設定 `PLATFORM_GUARDRAILS_OUTPUT_ENABLED`）。有効なら必須 | 有効で検査が失敗 → **拒否**（回答を止める文に置き換える） | `GD`・`SP`（`answer_guardrail` が `error`。`guardrail_stage_outcome`） | 見せない | `rag/backend/app/rag/pipeline.py::guardrail_stage_outcome` |
 | 会話の履歴での質問の書き換えと発話の種類の判定（チャットの毎回の発話で 1 回。#4787） | 任意（設定 `RAG_HISTORY_REWRITE_ENABLED`） | LLM の失敗・書き換えの安全チェックの拒否 → 元の質問で続ける。発話の分類だけでは検索を省かない | LLM の失敗: `DS`（`history_rewrite`）。安全チェックの拒否は `LOG` だけ（例外ではないので `DS` に入れない）。`SP` の `history_rewrite` は成功のまま | 見せない（元の質問で答える） | `rag/backend/app/rag/pipeline.py::_rewrite_query_with_history`・`_safe_rewritten_query` |
-| 選んだ承認済み FAQ の回答をそのまま返す（検索を飛ばす。#5107） | 任意（「回答の前に関連するQ&Aを提示する」がオンのプロファイルで、利用者が候補から Q&A を選んだ送信。入口が補完の後に Q&A を引き直す） | Q&A が無い・提示がオフ → 送信を 422 で断る（発話は保存しない）。候補の照会の失敗 → 候補なしで送る | 段 `approved_faq_answer`（選んだ Q&A）。回答の診断の `answer_source`・`approved_faq_id` | 見せる（処理の経過に「選んだ登録済みQ&Aの回答を返す」。回答の見出しを「登録済みQ&Aの回答」にし、検索と回答の生成をしていない案内） | `rag/backend/app/api/routes/search.py::_resolve_query_context`・`rag/backend/app/rag/approved_faq_answer.py`・`rag/backend/app/rag/pipeline.py::RagPipeline._run_engine` |
+| 選んだ登録済みQ&Aの回答をそのまま返す（検索を飛ばす。#5107） | 任意（「回答の前に関連するQ&Aを提示する」がオンのプロファイルで、利用者が候補から Q&A を選んだ送信。入口が補完の後に Q&A を引き直す） | Q&A が無い・提示がオフ → 送信を 422 で断る（発話は保存しない）。候補の照会の失敗 → 候補なしで送る | 段 `approved_faq_answer`（選んだ Q&A）。回答の診断の `answer_source`・`approved_faq_id` | 見せる（処理の経過に「選んだ登録済みQ&Aの回答を返す」。回答の見出しを「登録済みQ&Aの回答」にし、検索と回答の生成をしていない案内） | `rag/backend/app/api/routes/search.py::_resolve_query_context`・`rag/backend/app/rag/approved_faq_answer.py`・`rag/backend/app/rag/pipeline.py::RagPipeline._run_engine` |
 | 会話の添付の根拠（#2517） | 任意 | 添付を読めない → 根拠に入れない。rerank の失敗 → 語の一致で選ぶ | `DS`（`chat_attachments`・`chat_attachment_rerank`）。添付が無いときは記録しない | 見せない | `rag/backend/app/rag/chat_attachments.py::attachment_evidence`・`attachment_units`・`select_attachment_units` |
 | 保存した回答の指示の読み取り（#1276） | 必須（未編集の空設定は有効） | 読めない → 通常回答の生成前に例外で停止。固定済みの要求snapshotは再読しない | 例外を呼び出し元へ伝播し、`DS` にしない | 見せない（生成前に停止） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
 
@@ -75,10 +75,10 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 |---|---|---|---|---|---|
 | 実体の拡張（#1362） | 任意（全体設定 `RAG_ENTITY_EXPANSION_ENABLED`。既定 on。#5187。上限 `RAG_ENTITY_EXPANSION_MAX_CHUNKS` は既定 3・1〜10。足した根拠は rerank にかけず、rerank と起点の選択の後に最後の根拠へ合わせる。#5097・#5162） | 読めない → 足さずに続ける | `DS`（`entity_expansion`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
 | 関係情報の拡張（#2055） | 任意（`RAG_GRAPH_EXPANSION_ENABLED`。既定 off。足した根拠は実体の拡張と同じ規則で合わせる。#5162） | 読めない → 足さずに続ける | `DS`（`graph_expansion`）・`DX`（`graph_expansion.attempts` の `status: error`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._graph_expansion` |
-| 交差参照の参照先の解決・読み込み（#1280・#1400。文書全体への参照は目次から回答のモデルが選んだ章節を読み、選べなければ文書全体を読む。#5263） | 任意（`RAG_REFERENCE_EXPANSION_ENABLED`。文書全体への参照の目次の選択は `RAG_REFERENCE_OUTLINE_SELECTION_ENABLED` で、上限は `RAG_REFERENCE_OUTLINE_SELECTION_CATALOG_MAX_CHARS`・`RAG_REFERENCE_OUTLINE_SELECTION_MAX_SECTIONS`・`RAG_REFERENCE_OUTLINE_SELECTION_READ_MAX_CHUNKS`。#5335。目次の行の書き出しの字数は `RAG_OUTLINE_LEAD_CHARS`。#5345。足した参照先は実体の拡張と同じ規則で合わせる。#5162） | 解決・読み込みの失敗 → その参照を辿らない / 足さない。目次・章節の選択・章節の読み込みの失敗 → 文書全体を読む（章節の拡張の起点にしない） | `DS`（`reference_resolve`・`reference_load`・`reference_outline`・`reference_section_select`・`reference_section_read`）・`DX`（`reference_expansion.searches`・`document_reads`・`section_selections`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
+| 交差参照の参照先の解決・読み込み（#1280・#1400。番号つきの参照は番号で定位した節を先頭から `RAG_REFERENCE_SECTION_READ_MAX_CHUNKS` 件まで読む。文書全体への参照は目次から回答のモデルが選んだ章節だけを読み、選べない・目次の選択が無効なら読まない。#5263・#5348） | 任意（`RAG_REFERENCE_EXPANSION_ENABLED`。文書全体への参照の目次の選択は `RAG_REFERENCE_OUTLINE_SELECTION_ENABLED` で、上限は `RAG_REFERENCE_OUTLINE_SELECTION_CATALOG_MAX_CHARS`・`RAG_REFERENCE_OUTLINE_SELECTION_MAX_SECTIONS`・`RAG_REFERENCE_OUTLINE_SELECTION_READ_MAX_CHUNKS`。#5335。目次の行の書き出しの字数は `RAG_OUTLINE_LEAD_CHARS`。#5345。足した参照先は実体の拡張と同じ規則で合わせる。#5162） | 解決・読み込みの失敗 → その参照を辿らない / 足さない。目次・章節の選択・章節の読み込みの失敗 → その参照先を読まない（理由を `document_reads` の `skip_reason` に残す。#5348） | `DS`（`reference_resolve`・`reference_load`・`reference_outline`・`reference_section_select`・`reference_section_read`）・`DX`（`reference_expansion.searches`・`document_reads`・`section_selections`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
 | 検索の上位の文書の目次から選んだ章節（#5324） | 任意（全体設定 `RAG_OUTLINE_SELECTION_ENABLED`。既定 off。検索の上位の文書のうち章節の木を持つ文書の目次を回答のモデルに 1 回だけ渡し、選んだ章節を読む。上限は `RAG_OUTLINE_SELECTION_MAX_DOCUMENTS`・`RAG_OUTLINE_SELECTION_CATALOG_MAX_CHARS`・`RAG_OUTLINE_SELECTION_READ_MAX_CHARS`。足した根拠は実体の拡張と同じ規則で合わせる。#5162） | 回答の期限の残りが選択と読取の予約より少ない・目次・章節の選択・章節の読み込みの失敗 → 足さずに続ける（今の経路で回答する） | `DS`（`outline_load`・`outline_section_select`・`outline_section_read`）・`DX`（`outline_selection`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._outline_selection` |
 | 参照先の文書の先読み | 任意 | 失敗 → 辿るときに 1 つずつ照合する | `DS`（`reference_prefetch`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._prefetch_reference_documents` |
-| 参照先の文書の中の rerank | 任意 | 失敗 → 検索の順のまま足す | `DS`（`reference_rerank`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._document_reference_chunks` |
+| 参照先の chunk の rerank | 任意 | 失敗 → 読んだ順のまま足す | `DS`（`reference_rerank`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_relevance` |
 
 ### 目録・章節（rag_engine の工程と backend の読み込み）
 
@@ -130,14 +130,14 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `graph_expansion` | 関係情報の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._graph_expansion` |
 | `reference_resolve` | 参照先の解決 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
 | `reference_load` | 参照先の chunk の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
-| `reference_outline` | 文書全体への参照の参照先の目次（読めなければ文書全体を読む。#5263） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._plan_document_reads` |
-| `reference_section_select` | 参照先の目次から章節を選ぶ回答のモデルの呼び出し（失敗・形式不正なら文書全体を読む。#5263） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._select_reference_sections` |
-| `reference_section_read` | 選んだ章節の読み込み（読めない章節は飛ばす。どれも読めなければ文書全体を読む。#5263） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._read_reference_sections` |
+| `reference_outline` | 文書全体への参照の参照先の目次（読めなければその参照先を読まない。#5263・#5348） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._plan_document_reads` |
+| `reference_section_select` | 参照先の目次から章節を選ぶ回答のモデルの呼び出し（失敗・形式不正なら参照先を読まない。#5263・#5348） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._select_reference_sections` |
+| `reference_section_read` | 選んだ章節の読み込み（読めない章節は飛ばす。どれも読めなければ参照先を読まない。#5263・#5348） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._read_reference_sections` |
 | `outline_load` | 検索の上位の文書の目次（読めなければその文書を目次に載せない。#5324） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._outline_selection` |
 | `outline_section_select` | 検索の上位の文書の目次から章節を選ぶ回答のモデルの呼び出し（失敗・形式不正なら何も足さない。#5324） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._outline_selection` |
 | `outline_section_read` | 目次から選んだ章節の読み込み（読めない章節は飛ばす。#5324） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._outline_selection` |
 | `reference_prefetch` | 参照先の文書の先読み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._prefetch_reference_documents` |
-| `reference_rerank` | 参照先の文書の中の rerank | `rag/backend/app/rag/answer_engine.py::AnswerEngine._document_reference_chunks` |
+| `reference_rerank` | 参照先の chunk の rerank | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_relevance` |
 | `section_outline` | 章節の目録 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_outline` |
 | `section_chunks` | 章節の chunk の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._section_chunks` |
 | `history_rewrite` | 会話の履歴での質問の書き換えの LLM（回答エンジンの前の段） | `rag/backend/app/rag/pipeline.py::_rewrite_query_with_history` |

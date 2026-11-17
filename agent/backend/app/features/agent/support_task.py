@@ -76,11 +76,11 @@ NON_GROUNDING_TOOLS = frozenset(
     }
 )
 # RAG の回答のツール（#5342）。rag_search は基本の検索、rag_chat は RAG のチャットと同じ流れ
-# （業務ガイドの照合・承認済み FAQ・根拠の拡張）で、どちらも回答と根拠を返す。
+# （登録済みQ&A・業務ガイドの照合・根拠の拡張）で、どちらも回答と根拠を返す。
 RAG_SEARCH = "rag_search"
 RAG_CHAT = "rag_chat"
 RAG_ANSWER_TOOLS = frozenset({RAG_SEARCH, RAG_CHAT})
-# RAG の回答のツールが承認済み FAQ の候補だけを返した状態（#5134・#5136。検索はしていない）と、
+# RAG の回答のツールが登録済みQ&Aの候補だけを返した状態（#5134・#5136。検索はしていない）と、
 # 利用者の選択を渡す引数（実行環境が付けるので、モデルに見せない。入力の schema にあるときだけ）。
 RAG_APPROVED_FAQ_CANDIDATES = "approved_faq_candidates"
 APPROVED_FAQ_ARGUMENTS = ("approved_faq_id", "skip_approved_faq")
@@ -187,10 +187,10 @@ NEXT_STEP_ANSWER_WITH_ASSUMPTIONS = "answer_with_assumptions"
 # 利用者が「確認せずに回答」を選んだ Run（#1903）で、NL2SQL の SQL の生成前の確認を聞かずに
 # `skip_clarification` で呼び直す次の手。
 NEXT_STEP_RETRY_WITHOUT_CLARIFICATION = "retry_without_clarification"
-# 承認済み FAQ の候補を利用者が選ぶ確認のカードを待つ（#5134）。
+# 登録済みQ&Aの候補を利用者が選ぶ確認のカードを待つ（#5134）。
 NEXT_STEP_WAIT_APPROVED_FAQ_CHOICE = "wait_for_approved_faq_choice"
 APPROVED_FAQ_CHOICE_INSTRUCTION = (
-    "質問に近い登録済みの Q&A の候補があり、利用者がその中から選ぶ確認のカードが出ます。"
+    "質問に近い登録済みQ&Aの候補があり、利用者がその中から選ぶ確認のカードが出ます。"
     "候補を本文に並べず、自分で選ばず、ほかのツールも呼ばずに、候補から選んでほしいことを"
     "1 文で伝えて回答を終えてください。"
 )
@@ -557,13 +557,13 @@ def nl2sql_pending_in_run(steps: list[RunStep]) -> JsonObject | None:
 
 
 def is_approved_faq_candidates(output: object) -> bool:
-    """`rag_search` の結果が、承認済み FAQ の候補だけを返したものか（#5134）。"""
+    """`rag_search` の結果が、登録済みQ&Aの候補だけを返したものか（#5134）。"""
     return isinstance(output, dict) and output.get("status") == RAG_APPROVED_FAQ_CANDIDATES
 
 
 def approved_faq_candidates_step(steps: list[RunStep]) -> RunStep | None:
-    """この Run の最後の成功した RAG の回答のツール（`rag_search` / `rag_chat`）が承認済み
-    FAQ の候補を返したなら、その step。
+    """この Run の最後の成功した RAG の回答のツール（`rag_search` / `rag_chat`）が
+    登録済みQ&Aの候補を返したなら、その step。
 
     利用者が候補を選ぶまで検索はしていない（回答前の確認のカードになる。#5134・#5136）。
     """
@@ -578,13 +578,13 @@ def approved_faq_candidates_step(steps: list[RunStep]) -> RunStep | None:
 
 
 def chosen_approved_faq(output: object) -> JsonObject | None:
-    """RAG の検索の結果の、利用者が選んだ承認済み FAQ（`approved_faq`。無ければ None。#5136）。"""
+    """RAG の検索の結果の、利用者が選んだ登録済みQ&A（`approved_faq`。無ければ None。#5136）。"""
     faq = output.get("approved_faq") if isinstance(output, dict) else None
     return faq if isinstance(faq, dict) and faq.get("id") else None
 
 
 def approved_faq_choice_step() -> JsonObject:
-    """承認済み FAQ の候補を返した結果に足す次の手（利用者が選ぶ確認のカードを待つ）。"""
+    """登録済みQ&Aの候補を返した結果に足す次の手（利用者が選ぶ確認のカードを待つ）。"""
     return {
         "action": NEXT_STEP_WAIT_APPROVED_FAQ_CHOICE,
         "reason": RAG_APPROVED_FAQ_CANDIDATES,
@@ -594,7 +594,7 @@ def approved_faq_choice_step() -> JsonObject:
 
 
 def approved_faq_schema(function_name: str, schema: JsonObject) -> JsonObject:
-    """モデルに見せる RAG の回答のツールの schema から、承認済み FAQ の選択と確認を返させない
+    """モデルに見せる RAG の回答のツールの schema から、登録済みQ&Aの選択と確認を返させない
     引数を外す（#5134・#5136・#5342）。
 
     利用者の選択と、確認するかは実行環境が付ける（モデルに id を写させない・候補を代わりに選ばせ
@@ -669,7 +669,7 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
             continue
         if not result.success or not isinstance(result.output, dict):
             return False
-        # 承認済み FAQ の候補も、利用者が選ぶ確認のカードになる（#5134・#5136）。
+        # 登録済みQ&Aの候補も、利用者が選ぶ確認のカードになる（#5134・#5136）。
         if is_approved_faq_candidates(result.output):
             return True
         return result.output.get("outcome") == "needs_clarification"

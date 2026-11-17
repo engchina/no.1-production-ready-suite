@@ -301,7 +301,7 @@ async def search(
     Cohere Rerank -> 回答の生成)で作る。
     """
     enforce_rate_limit("search", http_request)
-    # 画面の RAG 検索は基本の RAG（業務ガイド・承認済み FAQ・根拠の拡張をしない。#5332）。
+    # 画面の RAG 検索は基本の RAG（登録済みQ&A・業務ガイド・根拠の拡張をしない。#5332）。
     result = await _run_search_with_timeout(
         request, flow=BASIC_FLOW, run_recorder=_search_run_recorder(request)
     )
@@ -379,8 +379,8 @@ async def _resolve_query_context(
     ``guide_preview``（下書きで試す。#1288）は、そのガイドの公開の版の代わりに下書きを、この
     1 回の回答の照合にだけ使う（保存・公開の版は変えない）。回答の記録に印を残す。
 
-    ``flow``（回答の経路。#5332）が basic（画面の RAG 検索）なら、業務ガイドの照合と承認済み FAQ を
-    しない（承認済み FAQ を選んだ要求は 422）。
+    ``flow``（回答の経路。#5332）が basic（画面の RAG 検索）なら、登録済みQ&Aと業務ガイドの照合を
+    しない（登録済みQ&Aを選んだ要求は 422）。
     """
     # 明示した回答のモデルが未登録なら、DB・モデルを使う前に 422 にする（#4582）。
     if explicit_model := _answer_model_id(request):
@@ -457,7 +457,7 @@ async def _resolve_query_context(
             if request.approved_faq_id and flow == BASIC_FLOW:
                 raise HTTPException(status_code=422, detail=APPROVED_FAQ_BASIC_FLOW_MESSAGE)
             if request.approved_faq_id:
-                # 利用者が選んだ承認済み FAQ（#5107）。プロファイルの FAQ から引き直し、業務ガイド
+                # 利用者が選んだ登録済みQ&A（#5107）。プロファイルの FAQ から引き直し、業務ガイド
                 # 以降を通さずに回答の工程が FAQ の回答をそのまま返す。
                 selected_faq = await _selected_approved_faq(
                     oracle, view.id, request.approved_faq_id, request
@@ -612,7 +612,7 @@ async def _resolve_query_context(
             return request, settings, None, None
         request = gated
     if request.approved_faq_id:
-        # 承認済み FAQ は検索・回答プロファイルごと。プロファイルの無い検索では選べない。
+        # 登録済みQ&Aは検索・回答プロファイルごと。プロファイルの無い検索では選べない。
         raise HTTPException(status_code=422, detail=APPROVED_FAQ_NOT_FOUND_MESSAGE)
     return request, settings, None, None
 
@@ -620,7 +620,7 @@ async def _resolve_query_context(
 async def _selected_approved_faq(
     oracle: OracleClient, search_answer_profile_id: str, faq_id: str, request: SearchRequest
 ) -> dict[str, str]:
-    """選んだ承認済み FAQ を引き直す（回答を作る検索だけ。無い・提示がオフの FAQ は 422）。"""
+    """選んだ登録済みQ&Aを引き直す（回答を作る検索だけ。無い・提示がオフの FAQ は 422）。"""
     if not request.generate_answer or request.retrieval_only:
         raise HTTPException(
             status_code=422,
@@ -707,8 +707,8 @@ SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
 # 指定した検索・回答プロファイルが無い（利用者が使えないものを含む）404 の文の頭。MCP はこの文で
 # 見分けて、次の手の付いたツールのエラーにする（app.mcp.tools.profile_not_found_error）。
 SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX = "指定した検索・回答プロファイルが見つかりません: "
-# 基本の RAG の経路（画面の RAG 検索。#5332）で承認済み FAQ を選んだ要求の 422 の文。
-APPROVED_FAQ_BASIC_FLOW_MESSAGE = "選んだQ&Aの回答は、RAG Chat でだけ返せます。"
+# 基本の RAG の経路（画面の RAG 検索。#5332）で登録済みQ&Aを選んだ要求の 422 の文。
+APPROVED_FAQ_BASIC_FLOW_MESSAGE = "選んだQ&Aの回答は、RAG チャットでだけ返せます。"
 REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "指定したナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
 )
@@ -821,7 +821,7 @@ async def _checked_query_context(
 ) -> tuple[tuple[SearchRequest, Settings, str | None, str | None], GuardrailResult]:
     """検索の入口の処理（基準日 → プロファイルの解決 → 入力の安全チェック → 業務ガイド）を行う。
 
-    ``flow`` は回答の経路（#5332。basic は業務ガイドの照合と承認済み FAQ をしない）、
+    ``flow`` は回答の経路（#5332。basic は登録済みQ&Aと業務ガイドの照合をしない）、
     ``interactive`` は業務ガイドの残った不明の条件を分岐で答えるか（``_resolve_query_context``）。
 
     業務ガイドの照合（埋め込み・LLM）は伏せた後の質問で行い、止めた質問は照合しない。止めた結果は
@@ -1093,7 +1093,7 @@ async def run_guide_preview(request: SearchRequest, preview: GuidePreview) -> Se
     通常の検索・回答と同じ pipeline で 1 回だけ答える（モデルの呼び出しは通常の回答と同じ）。
     公開の版・保存した下書きは変えず、回答の記録には ``guide_preview`` の印を残す。
     """
-    # 業務ガイドを試すので、RAG Chat と同じ経路（業務ガイドの照合と根拠の拡張あり。#5332）。
+    # 業務ガイドを試すので、RAG チャットと同じ経路（業務ガイドの照合と根拠の拡張あり。#5332）。
     return await _run_search_with_timeout(request, flow=EXPANDED_FLOW, guide_preview=preview)
 
 
