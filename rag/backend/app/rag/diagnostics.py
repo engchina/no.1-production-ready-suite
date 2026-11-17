@@ -95,6 +95,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "outline_selection_read_max_chars": (
             resolved_settings.rag_outline_selection_read_max_chars
         ),
+        # 2 つの目次の選択の目次の行に添える本文の書き出しの字数(#5345)。
+        "outline_lead_chars": resolved_settings.rag_outline_lead_chars,
         # 実体の 1 段の拡張(#1362)。検索方法の全体設定で選ぶ(#1388・#3053)。
         "entity_expansion_enabled": resolved_settings.rag_entity_expansion_enabled,
         "entity_expansion_max_chunks": resolved_settings.rag_entity_expansion_max_chunks,
