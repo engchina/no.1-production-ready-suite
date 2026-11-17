@@ -807,8 +807,8 @@ class AnsweringSettingsData(BaseModel):
     reference_outline_selection_max_sections: int = 12
     reference_outline_selection_read_max_chunks: int = 400
     # 検索の上位の文書の目次から回答のモデルが選んだ章節を、rerank の枠の外で根拠に足す(#5324。
-    # 既定 OFF)と、その対象の文書の数・目次の字数・読む章節の字数の上限。
-    outline_selection_enabled: bool = False
+    # 既定 ON。#5362)と、その対象の文書の数・目次の字数・読む章節の字数の上限。
+    outline_selection_enabled: bool = True
     outline_selection_max_documents: int = 3
     outline_selection_catalog_max_chars: int = 40000
     outline_selection_read_max_chars: int = 20000

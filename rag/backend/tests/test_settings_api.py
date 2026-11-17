@@ -3639,12 +3639,13 @@ def test_answering_settings_save_reference_section_read_max_chunks(
 def test_answering_settings_save_outline_selection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """検索の上位の文書の目次から章節を選ぶ設定(#5324)は既定 OFF で、開閉と上限を .env と実行中の
-    設定へ反映する。範囲の外の上限は保存しない。"""
+    """検索の上位の文書の目次から章節を選ぶ設定(#5324)は既定 ON(#5362)で、開閉と上限を .env と
+    実行中の設定へ反映する。範囲の外の上限は保存しない。"""
     from app.config import Settings
 
+    monkeypatch.delenv("RAG_OUTLINE_SELECTION_ENABLED", raising=False)
     defaults = Settings(_env_file=None)
-    assert defaults.rag_outline_selection_enabled is False
+    assert defaults.rag_outline_selection_enabled is True
     assert (
         defaults.rag_outline_selection_max_documents,
         defaults.rag_outline_selection_catalog_max_chars,

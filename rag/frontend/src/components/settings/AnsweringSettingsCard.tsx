@@ -87,7 +87,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     reference_outline_selection_catalog_max_chars: settings.reference_outline_selection_catalog_max_chars ?? 40000,
     reference_outline_selection_max_sections: settings.reference_outline_selection_max_sections ?? 12,
     reference_outline_selection_read_max_chunks: settings.reference_outline_selection_read_max_chunks ?? 400,
-    outline_selection_enabled: settings.outline_selection_enabled ?? false,
+    outline_selection_enabled: settings.outline_selection_enabled ?? true,
     outline_selection_max_documents: settings.outline_selection_max_documents ?? 3,
     outline_selection_catalog_max_chars: settings.outline_selection_catalog_max_chars ?? 40000,
     outline_selection_read_max_chars: settings.outline_selection_read_max_chars ?? 20000,
