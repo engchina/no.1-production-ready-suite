@@ -1,3 +1,5 @@
+import type { SearchableSelectLabels } from "@production-ready/ui";
+
 /**
  * モデル設定画面の既定の文言（NL2SQL の文言。#103）。
  * key は NL2SQL の i18n key と同じにして、移設したコードをそのまま使えるようにしている。
@@ -184,6 +186,15 @@ export const MODEL_MESSAGES = {
   "settings.model.test.failed":
     "モデルテストに失敗しました。入力値とバックエンド接続を確認してください。",
   "settings.model.test.running": "{model} をテストしています",
+  // 検索して選ぶ選択欄の文言。3 製品の i18n の `searchableSelect.*` と同じ文（#5266）。
+  "searchableSelect.searchPlaceholder": "検索して選ぶ…",
+  "searchableSelect.searchLabel": "{label}を検索",
+  "searchableSelect.clearSearch": "検索語をクリア",
+  "searchableSelect.count": "{shown} / {total} 件",
+  "searchableSelect.noMatch": "「{query}」に一致する候補がありません。",
+  "searchableSelect.empty": "候補がありません。",
+  "searchableSelect.searching": "検索しています…",
+  "searchableSelect.loadMore": "さらに表示",
 } as const;
 
 export type ModelMessageKey = keyof typeof MODEL_MESSAGES;
@@ -203,4 +214,18 @@ export function t(
     }
   }
   return value;
+}
+
+/** 共有の `SearchableSelectField` に渡す文言（3 製品の `searchableSelectLabels()` と同じ文。#5266）。 */
+export function searchableSelectLabels(): SearchableSelectLabels {
+  return {
+    searchPlaceholder: t("searchableSelect.searchPlaceholder"),
+    searchLabel: (label) => t("searchableSelect.searchLabel", { label }),
+    clearSearch: t("searchableSelect.clearSearch"),
+    count: (shown, total) => t("searchableSelect.count", { shown, total }),
+    noMatch: (query) => t("searchableSelect.noMatch", { query }),
+    empty: t("searchableSelect.empty"),
+    searching: t("searchableSelect.searching"),
+    loadMore: t("searchableSelect.loadMore"),
+  };
 }

@@ -19,6 +19,7 @@ import {
   TimedLoadingState,
   useConfirm,
   ListToolbar,
+  SearchableSelectField,
   SelectField,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
@@ -120,6 +121,7 @@ import {
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
 import { testsetApi } from "@/lib/testset-api";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { TestSetTab } from "./testsets/TestSetTab";
 import { EvaluationHistory } from "./EvaluationHistory";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
@@ -471,7 +473,7 @@ export function EvaluationClient() {
 
               <SelectField width="lg" id="evaluation-input-source" label={t("evaluation.testsets.runData")} value={savedTestsetId ? "saved" : "excel"} disabled={runActive} options={[{ value: "excel", label: t("evaluation.testsets.inputExcel") }, { value: "saved", label: t("evaluation.testsets.inputSaved") }]} onValueChange={value => { const next = new URLSearchParams(searchParams); if (value === "excel") next.delete("testset"); else next.set("testset", "choose"); setSearchParams(next); }} />
               {savedTestsetId ? <>
-                {testsets.isError ? <DataLoadFailure layout="field" error={testsets.error} fallback={t("evaluation.testsets.loadError")} onRetry={() => void testsets.refetch()} /> : <SelectField width="lg" id="evaluation-testset" label={t("evaluation.testsets.choose")} value={savedTestsetId === "choose" ? "" : savedTestsetId} disabled={runActive || testsets.isPending} options={[{ value: "", label: t("evaluation.testsets.choose") }, ...(testsets.data ?? []).map(value => ({ value: value.draft_id, label: value.name }))]} onValueChange={value => { const next = new URLSearchParams(searchParams); next.set("testset", value); setSearchParams(next); }} />}
+                {testsets.isError ? <DataLoadFailure layout="field" error={testsets.error} fallback={t("evaluation.testsets.loadError")} onRetry={() => void testsets.refetch()} /> : <SearchableSelectField labels={searchableSelectLabels()} width="lg" id="evaluation-testset" label={t("evaluation.testsets.choose")} value={savedTestsetId === "choose" ? "" : savedTestsetId} disabled={runActive || testsets.isPending} options={[{ value: "", label: t("evaluation.testsets.choose") }, ...(testsets.data ?? []).map(value => ({ value: value.draft_id, label: value.name }))]} onValueChange={value => { const next = new URLSearchParams(searchParams); next.set("testset", value); setSearchParams(next); }} />}
                 {selectedSet.data ? <Banner severity="info">{t("evaluation.testsets.runHelp", { confirmed: selectedSet.data.items.filter(value => value.confirmed).length, pending: selectedSet.data.items.filter(value => !value.confirmed).length })}</Banner> : null}
                 {selectedSet.isError || preparedSet.isError ? <DataLoadFailure error={selectedSet.error ?? preparedSet.error} fallback={t("evaluation.testsets.loadError")} onRetry={() => { void selectedSet.refetch(); void preparedSet.refetch(); }} /> : null}
                 {preparedSet.isFetching ? <TimedLoadingState label={t("evaluation.testsets.loading")}><Skeleton className="h-20 w-full" /></TimedLoadingState> : null}
@@ -489,7 +491,7 @@ export function EvaluationClient() {
                 onFiles={selectFiles}
                 onDownloadTemplate={() => void downloadTemplate()}
               />}
-              {models.isError ? <DataLoadFailure layout="field" error={models.error} fallback={t("evaluation.testsets.modelLoadError")} onRetry={() => void models.refetch()} /> : <SelectField width="lg" id="evaluation-answer-model" label={t("evaluation.testsets.model")} value={answerModelId} disabled={runActive || models.isPending} options={[{ value: "", label: t("evaluation.testsets.modelDefault") }, ...(models.data ?? []).map(value => ({ value: value.model_id, label: value.display_name }))]} onValueChange={setAnswerModelId} />}
+              {models.isError ? <DataLoadFailure layout="field" error={models.error} fallback={t("evaluation.testsets.modelLoadError")} onRetry={() => void models.refetch()} /> : <SearchableSelectField labels={searchableSelectLabels()} width="lg" id="evaluation-answer-model" label={t("evaluation.testsets.model")} value={answerModelId} disabled={runActive || models.isPending} options={[{ value: "", label: t("evaluation.testsets.modelDefault") }, ...(models.data ?? []).map(value => ({ value: value.model_id, label: value.display_name }))]} onValueChange={setAnswerModelId} />}
 
               {!savedTestsetId && shownResult && shownResult.error_count === 0 && processRows.length ? (
                 <EvaluationProcessDrafts

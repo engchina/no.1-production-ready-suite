@@ -1183,7 +1183,7 @@ test("オントロジー構築の保存済みファイルは選択プロファ�
 
   await page.goto("/ontology-build?profile=sales");
 
-  await expectSelectFieldValue(page.getByTestId("ontology-build-profile-select"), "sales");
+  await expectSelectFieldValue(page.locator("#ontology-build-profile"), "sales");
   await expect(page.locator("#ontology-workspace-not-loaded")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   expect(state.profileDetailCalls).toEqual([]);
@@ -1202,7 +1202,7 @@ test("オントロジー構築の保存済みファイルは選択プロファ�
   await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toBeVisible();
   await expect(savedFiles.getByText("finance-rules.xlsx", { exact: true })).toHaveCount(0);
 
-  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "finance");
+  await chooseSelectFieldOption(page.locator("#ontology-build-profile"), "finance");
 
   await expect(page).toHaveURL(/profile=finance/u);
   await expect(page.locator("#ontology-workspace-not-loaded")).toBeVisible();
@@ -1839,7 +1839,7 @@ test("Profile の一覧読込と情報取得後の workspace/Markdown 読込で�
   await page.goto("/ontology-build?profile=default");
   await expect(page.getByTestId("ontology-profile-compact-skeleton")).toBeVisible();
   profilesGate.release();
-  await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
+  await expect(page.locator("#ontology-build-profile")).toBeVisible();
   await expect(page.locator("#ontology-workspace-not-loaded")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   await expect(page.getByTestId("ontology-markdown-loading")).toHaveCount(0);
@@ -1954,7 +1954,7 @@ test("Profile の読込失敗から再試行できる", async ({ page }) => {
   await pollWithClock(page, () => profilePanel.getByText("プロファイルの読込に失敗しました。").count(), 2_000).toBe(1);
   allowProfiles = true;
   await profilePanel.getByRole("button", { name: "再試行" }).click();
-  await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
+  await expect(page.locator("#ontology-build-profile")).toBeVisible();
 });
 
 test("Markdown オントロジーの読込失敗から再試行できる", async ({ page }) => {
@@ -2294,8 +2294,8 @@ test("旧 tab URL を正規化し、モバイルでは単一ページを縦積�
   await expectBuildPanelsStackedFullWidth(page);
   await expect(page.getByTestId("fixed-split-pane-profile-ontology-editor")).toHaveCount(0);
 
-  await page.getByTestId("ontology-build-profile-select").focus();
-  await expect(page.getByTestId("ontology-build-profile-select")).toBeFocused();
+  await page.locator("#ontology-build-profile").focus();
+  await expect(page.locator("#ontology-build-profile")).toBeFocused();
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth
   );
@@ -2897,7 +2897,7 @@ test("失効したProfile URLでは別Profileの情報を取得せず明示選�
   expect(state.profileDetailCalls).toEqual([]);
   expect(state.ontologyViewCalls).toBe(0);
   await page.screenshot({ path: testInfo.outputPath("ontology-missing-profile.png") });
-  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "default");
+  await chooseSelectFieldOption(page.locator("#ontology-build-profile"), "default");
   await expect(fetch).toBeEnabled();
   await fetch.press("Enter");
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
@@ -3072,7 +3072,7 @@ test("旧結果 API が停止していても Markdown を取得し Profile を�
   await page.goto("/ontology-build?profile=sales"); await loadOntologyBuildWorkspace(page);
   await expect(page.getByTestId("ontology-typed-results")).toHaveCount(0);
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
-  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "finance"); await loadOntologyBuildWorkspace(page);
+  await chooseSelectFieldOption(page.locator("#ontology-build-profile"), "finance"); await loadOntologyBuildWorkspace(page);
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   expect(obsolete).toBe(0);
 });
@@ -4075,18 +4075,18 @@ test("業務プロファイルの追加読み込みが失敗しても、選択�
 
   await page.goto("/ontology-build?profile=default");
   const profilePanel = page.getByRole("region", { name: "対象プロファイル" });
-  await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
+  await expect(page.locator("#ontology-build-profile")).toBeVisible();
   await profilePanel.getByRole("button", { name: "さらに読み込む", exact: true }).click();
 
   // 追加読み込みの失敗は、読み込み済みの選択欄を残し、追加読み込みの位置に出す。
   await pollWithClock(page, () => profilePanel.getByText("一時的な接続エラー", { exact: false }).count(), 2_000).toBe(1);
-  await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
+  await expect(page.locator("#ontology-build-profile")).toBeVisible();
   await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
 
   failNextPage = false;
   await profilePanel.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(profilePanel.getByText("一時的な接続エラー", { exact: false })).toHaveCount(0);
-  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "sales");
+  await chooseSelectFieldOption(page.locator("#ontology-build-profile"), "sales");
   await expect(page).toHaveURL(/profile=sales/);
 });
 
@@ -4100,7 +4100,7 @@ test("オントロジー構築は 1280 / 1920 / 375px・ライト / ダークで
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/ontology-build?profile=sales");
-      await expectSelectFieldValue(page.getByTestId("ontology-build-profile-select"), "sales");
+      await expectSelectFieldValue(page.locator("#ontology-build-profile"), "sales");
       await loadOntologyBuildWorkspace(page);
       await expect(page.locator("#ontology-build-business-text")).toBeVisible();
       const label = `ontology build ${width}px ${colorScheme}`;
@@ -4134,7 +4134,7 @@ for (const theme of ["light", "dark"] as const) {
       await page.route("**/api/nl2sql/profiles/default", route => fulfillJson(route, longProfile));
       await page.goto("/ontology-build");
       await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
-      const select = page.getByTestId("ontology-build-profile-select");
+      const select = page.locator("#ontology-build-profile");
       const fetch = page.getByTestId("ontology-view-fetch");
       await expect(select).toContainText(name);
       await expect(fetch).toBeEnabled();

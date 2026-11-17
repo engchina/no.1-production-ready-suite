@@ -24,6 +24,7 @@ import {
   RowTitleButton,
   SaveErrorBanner,
   Section,
+  SearchableSelectField,
   SelectField,
   StatusBadge,
   Switch,
@@ -69,6 +70,7 @@ import { canOpenRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { isValidTimezone } from "@/lib/timezones";
 import { runStatusView } from "@/lib/status-labels";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 // 業務 Agent の自動実行（スケジュール。#784・#1799）。一覧 → 全画面エディタ（A 型。`?id=`）。
@@ -686,7 +688,8 @@ function AutomationEditor({
                         testId="automation-agent-loading"
                       />
                     ) : (
-                      <SelectField<string>
+                      <SearchableSelectField
+                        labels={searchableSelectLabels()}
                         id="automation-agent"
                         label={t("automation.agent")}
                         width="lg"

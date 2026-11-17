@@ -1735,6 +1735,15 @@ export const ja = {
   "listToolbar.filtersSheetClose": "絞り込みを閉じる",
   "listToolbar.showResults": "{count} 件を表示",
   "listToolbar.showResultsUnknown": "結果を表示",
+  // 検索して選ぶ選択欄（SearchableSelectField・FilterSelect の searchable）の文言。3 製品と system-settings で同じ文（#5266）。
+  "searchableSelect.searchPlaceholder": "検索して選ぶ…",
+  "searchableSelect.searchLabel": "{label}を検索",
+  "searchableSelect.clearSearch": "検索語をクリア",
+  "searchableSelect.count": "{shown} / {total} 件",
+  "searchableSelect.noMatch": "「{query}」に一致する候補がありません。",
+  "searchableSelect.empty": "候補がありません。",
+  "searchableSelect.searching": "検索しています…",
+  "searchableSelect.loadMore": "さらに表示",
   // 一覧ごとのページ送りの名前（nav の aria-label。#1891）。
   "fileList.paginationLabel": "文書一覧のページ",
   "knowledgeBases.paginationLabel": "ナレッジベース一覧のページ",

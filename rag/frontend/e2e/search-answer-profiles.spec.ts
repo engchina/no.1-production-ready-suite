@@ -270,7 +270,7 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   await page.getByRole("option", { name: "上限なし" }).click();
   const model = page.getByRole("heading", { name: "回答モデル", level: 3 }).locator("..");
   await model.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  await model.getByRole("combobox").click();
+  await model.locator("#search-answer-profile-answer-model").click();
   await page.getByRole("option", { name: "モデル B", exact: true }).click();
   await page.getByRole("switch", { name: "業務ガイドを使用する" }).click();
   await page.getByTestId("search-answer-profile-guide-matching").screenshot({ path: testInfo.outputPath("guide-usage-switch.png") });
@@ -294,17 +294,17 @@ test("出力の検査を通らなかったときのモデルは既定で使わ�
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
   const model = page.getByRole("heading", { name: "回答モデル", level: 3 }).locator("..");
   await model.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  await model.getByRole("combobox").click();
+  await model.locator("#search-answer-profile-answer-model").click();
   await page.getByRole("option", { name: "モデル A", exact: true }).click();
   // 「回答モデル」の直下に置き、既定は「使わない」（全体の既定は持たない）。
   const escalation = page.getByRole("heading", { name: "出力の検査を通らなかったときのモデル", level: 3 }).locator("..");
   const headings = await page.getByRole("heading", { level: 3 }).allTextContents();
   expect(headings.indexOf("出力の検査を通らなかったときのモデル")).toBe(headings.indexOf("回答モデル") + 1);
   await expect(escalation.getByRole("button", { name: "使わない" })).toHaveAttribute("aria-pressed", "true");
-  await expect(escalation.getByRole("combobox")).toHaveCount(0);
+  await expect(escalation.locator("#search-answer-profile-escalation-model")).toHaveCount(0);
   await expect(escalation.getByText(/検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
   await escalation.getByRole("button", { name: "モデルを選ぶ" }).click();
-  await escalation.getByRole("combobox").click();
+  await escalation.locator("#search-answer-profile-escalation-model").click();
   // 回答モデルと同じモデルは候補に出さない。
   await expect(page.getByRole("option", { name: "モデル A", exact: true })).toHaveCount(0);
   await page.getByRole("option", { name: "モデル B", exact: true }).click();

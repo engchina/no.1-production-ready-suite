@@ -1304,7 +1304,7 @@ test("evaluation submission locks conditions and preserves them after rejection"
   const start = page.getByRole("button", { name: "評価を開始", exact: true });
   await start.click();
   await expect(repeat).toBeDisabled();
-  await expect(page.getByTestId("quality-evaluation-profile-field").getByRole("combobox")).toBeDisabled();
+  await expect(page.locator("#quality-evaluation-profile")).toBeDisabled();
   await expect(page.getByTestId("quality-evaluation-engine-fieldset").getByRole("checkbox").first()).toBeDisabled();
   await expect(page.getByTestId("quality-evaluation-file-input")).toBeDisabled();
   await expect(start).toBeDisabled();
@@ -1341,7 +1341,7 @@ test("業務プロファイルを切り替えても評価条件のフォーム�
   await page.goto("/evaluation");
 
   const inputRow = page.getByTestId("quality-evaluation-input-row");
-  const profileSelect = page.getByTestId("quality-evaluation-profile-field").getByRole("combobox");
+  const profileSelect = page.locator("#quality-evaluation-profile");
   await expect(inputRow).toBeVisible();
   await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [{
     name: "cases.xlsx",

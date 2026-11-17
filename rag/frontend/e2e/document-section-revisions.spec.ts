@@ -290,7 +290,7 @@ test.describe("章節の修正の履歴", { tag: "@responsive" }, () => {
     await expect(diff).toContainText("消した章");
     expect(state.diffUrls[0]?.searchParams.get("against")).toBeNull();
 
-    await diff.getByRole("combobox", { name: "比べる版" }).click();
+    await diff.getByRole("button", { name: /^比べる版/ }).click();
     await page.getByRole("option", { name: /^版 1/ }).click();
     await expect.poll(() => state.diffUrls.at(-1)?.searchParams.get("against")).toBe("1");
     await expectNoHorizontalOverflow(page);

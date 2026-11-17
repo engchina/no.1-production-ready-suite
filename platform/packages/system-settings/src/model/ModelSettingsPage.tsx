@@ -18,6 +18,7 @@ import {
   ProcessingIndicator,
   RequiredBadge,
   SecretField,
+  SearchableSelectField,
   SelectField,
   type SelectFieldOption,
   Switch,
@@ -94,7 +95,7 @@ import {
   type DefaultModelField,
   type ModelIdErrors,
 } from "./defaultModels";
-import { t } from "./messages";
+import { searchableSelectLabels, t } from "./messages";
 import {
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
@@ -1706,7 +1707,7 @@ function DefaultModelFields({
         </p>
       </div>
       <FormGrid>
-        <SelectField
+        <SearchableSelectField
           id={DEFAULT_MODEL_FIELD_IDS.default_text_model_id}
           label={t("settings.model.defaults.text")}
           required
@@ -1715,10 +1716,11 @@ function DefaultModelFields({
           placeholder={t("settings.model.defaults.placeholder")}
           helper={t("settings.model.defaults.textHelp")}
           width="lg"
+          labels={searchableSelectLabels()}
           error={errors.default_text_model_id}
           onValueChange={(value) => onChange("default_text_model_id", value)}
         />
-        <SelectField
+        <SearchableSelectField
           id={DEFAULT_MODEL_FIELD_IDS.default_vision_model_id}
           label={t("settings.model.defaults.vision")}
           required
@@ -1727,16 +1729,18 @@ function DefaultModelFields({
           placeholder={t("settings.model.defaults.placeholder")}
           helper={t("settings.model.defaults.visionHelp")}
           width="lg"
+          labels={searchableSelectLabels()}
           error={errors.default_vision_model_id}
           onValueChange={(value) => onChange("default_vision_model_id", value)}
         />
-        <SelectField
+        <SearchableSelectField
           id={DEFAULT_MODEL_FIELD_IDS.default_judge_model_id}
           label={t("settings.model.defaults.judge")}
           value={enterprise.default_judge_model_id ?? ""}
           options={judgeModelOptions(enterprise.models, enterprise.default_text_model_id)}
           helper={t("settings.model.defaults.judgeHelp")}
           width="lg"
+          labels={searchableSelectLabels()}
           error={errors.default_judge_model_id}
           onValueChange={(value) => onChange("default_judge_model_id", value)}
         />

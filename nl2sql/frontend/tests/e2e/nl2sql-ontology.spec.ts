@@ -1998,7 +1998,8 @@ test(`ALLの要件確認はProfileと質問を引き継ぐ（保存不可=${stor
   await panel.getByRole("button", { name: "この内容で SQL を生成して実行" }).click();
   if (storageBlocked) {
     await expect(panel).toBeVisible();
-    await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "all");
+    // 実行中は欄が無効で開けないので、選んだ業務プロファイルの名前で確かめる（検索つきの選択。#5266）。
+    await expect(page.locator("#nl2sql-profile-select")).toContainText("ALL（ALL）");
     await expect(page.locator("#nl2sql-question-input")).toHaveValue(REQUIREMENT_QUESTION);
     expect(payloads.job).toBeUndefined();
     await page.screenshot({ path: testInfo.outputPath("guided-profile-storage-error.png"), fullPage: true });

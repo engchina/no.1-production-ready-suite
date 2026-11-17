@@ -2241,6 +2241,8 @@ export function isSubmitEnter(event: KeyboardEventLike): boolean;  // key === "E
 
 数十〜数百件の選択肢から検索して選ぶ部品（単一・複数）。十数件までの固定の選択肢は `SelectField`、大量の候補から一覧で見比べて選ぶもの（表・ビューの選択など）は別の一覧型の部品にする。見た目の変更は README §7 の 50。
 
+**選択肢がデータから来る単一選択は `SearchableSelectField` にする（#5266）。** データから来るとは、API から来る・利用者が増やせる・取り込んだファイル由来のもの（プロファイル・モデル・テストセット・業務 Agent・表・列・Excel のシートと列・ガイドの中で定義した条件と手順・改訂の履歴など）。コードの固定の列挙（状態・並び順・はい / いいえ・方式・リージョン・数の段階）は長くても `SelectField` のまま。データ由来でも件数の上限が小さく常に少ないもの（上限 3 の接続・レシピなど）は `SelectField` でよい。一覧のツールバーの絞り込みは `FilterSelect` の `searchable`。検索欄・件数・候補なしの文言は製品の i18n の `searchableSelectLabels()`（3 製品と system-settings で同じ文）から `labels` に渡す。未選択へ戻す値（「指定なし」「すべて」）は `SelectField` の `emptyOptionLabel` が無いので、先頭の選択肢（`value: ""`）として `options` に入れる。
+
 ```tsx
 import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/ui";
 
@@ -2754,6 +2756,7 @@ const activeFilterCount = [isFilterActive(kind, "all"), isFilterActive(status, "
 | `defaultValue` | `T` | 絞り込まない値（「すべて」）。既定は `options` の先頭の値。これ以外で `data-filter-active="true"` |
 | `width` | `"xs" \| "sm" \| "md" \| "lg"` | 既定 `sm`。「ラベル: 値」の長さで選ぶ（`full` は無い） |
 | `size` / `disabled` / `data-testid` / `className` | | `SelectField` と同じ |
+| `searchable` / `searchLabels` | `boolean` / `Partial<SearchableSelectLabels>` | 選択肢がデータから来る絞り込み（プロファイル・業務 Agent など）を検索して選ぶ（#5266）。`SearchableSelectField` の `labelPlacement="inline"` で同じ「ラベル: 値」・強調・幅にする。`searchLabels` は製品の i18n の `searchableSelectLabels()`。選択肢の `disabled` と `data-testid` は使えない（ボタンは `id` で引く） |
 
 - 数百件から選ぶ対象は `SearchableSelectField` に `labelPlacement="inline"` と `active={isFilterActive(value, "ALL")}` を渡す（「ナレッジベース: すべて」。選んだ名前は 1 行で切り、全文は `title`。`data-filter-select-label` / `data-filter-select-value` は `FilterSelect` と同じ。#1933 段 2）。
 

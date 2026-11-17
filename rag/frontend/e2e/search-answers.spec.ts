@@ -607,7 +607,8 @@ async function navigateInApp(page: Page, path: string) {
 }
 
 async function chooseDefaultModel(page: Page, name: string, option: string) {
-  const field = page.getByRole("combobox", { name });
+  // 既定のモデルは検索つきの選択（#5266）。ボタンの名前は「ラベル 必須 選んだ名前」。
+  const field = page.getByRole("button", { name: new RegExp(`^${name}`) });
   await field.click();
   await page.getByRole("listbox", { name }).getByRole("option", { name: option }).click();
   await expect(field).toContainText(option);
