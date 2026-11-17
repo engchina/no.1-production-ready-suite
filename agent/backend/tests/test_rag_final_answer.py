@@ -189,6 +189,71 @@ def test_rag_only_skill_returns_the_rag_answer_without_another_model_turn(
     assert [item["cited"] for item in evidence.content["items"]] == used
 
 
+def _answers_by_query(mcp: FakeProductMcp) -> None:
+    def chat(argument: Any) -> dict[str, Any]:
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
+        output.update(answer=f"{argument.query}の回答", outcome="answered", status="completed")
+        return output
+
+    mcp.outputs["rag_chat"] = chat
+
+
+def _tool_outputs(model: ScriptedModel, call_index: int) -> list[str]:
+    return [
+        str(item.get("output"))
+        for item in model.calls[call_index].input
+        if isinstance(item, dict) and item.get("type") == "function_call_output"
+    ]
+
+
+def test_parallel_answer_tool_calls_return_to_the_model_to_combine(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    _answers_by_query(mcp)
+    model = _script(
+        monkeypatch,
+        [
+            function_call("rag__rag_chat", {"query": "合成の質問 X"}, call_id="call-1"),
+            function_call("rag__rag_chat", {"query": "合成の質問 Y"}, call_id="call-2"),
+        ],
+        [assistant_message("合成の質問 X の回答。合成の質問 Y の回答。")],
+    )
+
+    run = _run([FINAL_SKILL])
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    # どちらかの回答で終えず、両方の結果をモデルに返して回答を書かせる。
+    assert len(model.calls) == 2
+    outputs = _tool_outputs(model, 1)
+    assert any("合成の質問 Xの回答" in output for output in outputs)
+    assert any("合成の質問 Yの回答" in output for output in outputs)
+    content = _answer(run)
+    assert content["text"] == "合成の質問 X の回答。合成の質問 Y の回答。"
+    # 回答の対応はモデルの回答で決める（RAG の回答をそのまま返したときの basis ではない）。
+    assert content["outcome"]["basis"] != "rag_chat"
+
+
+def test_answer_tool_called_again_after_parallel_answers_does_not_end_the_run(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    _answers_by_query(mcp)
+    model = _script(
+        monkeypatch,
+        [
+            function_call("rag__rag_chat", {"query": "合成の質問 X"}, call_id="call-1"),
+            function_call("rag__rag_chat", {"query": "合成の質問 Y"}, call_id="call-2"),
+        ],
+        [function_call("rag__rag_chat", {"query": "合成の質問 Z"}, call_id="call-3")],
+        [assistant_message("モデルが合わせた回答")],
+    )
+
+    run = _run([FINAL_SKILL])
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 3
+    assert _answer(run)["text"] == "モデルが合わせた回答"
+
+
 def test_data_skill_lets_the_model_write_the_answer(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
