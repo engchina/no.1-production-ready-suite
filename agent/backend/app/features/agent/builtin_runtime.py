@@ -2907,10 +2907,14 @@ _FINAL_ANSWER_ATTR = "_production_ready_final_answer"
 
 @dataclass
 class _FinalAnswer:
-    """RAG の回答をそのまま最終の回答にしたときの、ツールの名前と回答（無ければ空）。"""
+    """RAG の回答をそのまま最終の回答にしたときの、ツールの名前と回答（無ければ空）。
+
+    `answered` は、この Run で回答のツールが回答を返した回数（2 回以上ならモデルが回答を書く）。
+    """
 
     tool_name: str = ""
     answer: str | None = None
+    answered: int = 0
 
 
 def unavailable_skill_ids(skill_ids: Sequence[str]) -> list[str]:
@@ -2968,18 +2972,27 @@ def rag_final_answer(output: object) -> str | None:
 
 
 def _final_answer_behavior(names: frozenset[str], record: _FinalAnswer) -> Any:
-    """`Agent.tool_use_behavior`: 宣言したツールの回答で Run を終える（SDK の関数。#5342）。"""
+    """`Agent.tool_use_behavior`: 宣言したツールの回答で Run を終える（SDK の関数。#5342）。
+
+    RAG の回答をそのまま Run の回答にするのは、Run の中で回答のツールが 1 回だけ回答を返したとき。
+    同じ応答で回答のツールを 2 回以上呼んだ（質問を分けて並行に呼んだなど）・前の応答で回答を
+    返していたときは、どれか 1 件で終えるとほかの回答が消えるので、結果をモデルに返して回答を
+    書かせる（回答の対応もモデルの回答で決まる。#5367）。
+    """
 
     def behavior(
         _context: RunContextWrapper[Any], results: list[FunctionToolResult]
     ) -> ToolsToFinalOutputResult:
-        for result in reversed(results):
-            if result.tool.name not in names:
-                continue
-            answer = rag_final_answer(result.output)
-            if answer is not None:
-                record.tool_name, record.answer = result.tool.name, answer
-                return ToolsToFinalOutputResult(is_final_output=True, final_output=answer)
+        calls = [result for result in results if result.tool.name in names]
+        answers = [
+            (result.tool.name, answer)
+            for result in calls
+            if (answer := rag_final_answer(result.output)) is not None
+        ]
+        record.answered += len(answers)
+        if len(calls) == 1 and answers and record.answered == 1:
+            record.tool_name, record.answer = answers[0]
+            return ToolsToFinalOutputResult(is_final_output=True, final_output=record.answer)
         return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 
     return behavior
