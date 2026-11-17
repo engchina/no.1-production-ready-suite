@@ -37,6 +37,9 @@ __all__ = [
 MAX_SLIDE_SHAPES = 100
 MAX_SLIDE_CONNECTORS = 100
 MAX_SHAPE_TEXT_CHARS = 300
+# 接続線の行の両端に添える図形の文字の長さの上限。接続線の行と図形の一覧が別の chunk に分かれても、
+# どの図形を結ぶ線かを行だけで読めるように名前を添える（全文は図形の一覧にある。#5386）。
+MAX_CONNECTOR_END_TEXT_CHARS = 40
 # OOXML の角度の単位（1 度 = 60000）。
 _ANGLE_UNIT = 60000
 _REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -159,7 +162,8 @@ def slide_shapes_text(slide: SlideShapes, *, page_size: tuple[float, float], reg
     """図の領域（頁の画像の px）にある図形と接続線を、頁の画像の px の座標で書いた文にする。
 
     領域と重なる図形と、端が領域の中にあるか領域の図形につながる接続線を書き、その接続線の端の図形も
-    書く。接続線が無ければ空文字（図形の文字だけなら OCR と同じなので書かない）。
+    書く。接続線が無ければ空文字（図形の文字だけなら OCR と同じなので書かない）。接続線の行には、
+    両端の図形の番号に続けてその図形の文字（長ければ切り詰める）も書く。
     """
     scale_x, scale_y = page_size[0] / slide.width, page_size[1] / slide.height
 
@@ -175,6 +179,7 @@ def slide_shapes_text(slide: SlideShapes, *, page_size: tuple[float, float], reg
         return "-".join(_point_text(point_px(point)) for point in connector.path)
 
     boxes = {shape.shape_id: box_px(shape.box) for shape in slide.shapes}
+    texts = {shape.shape_id: shape.text for shape in slide.shapes if shape.text}
     in_region = {shape_id for shape_id, box in boxes.items() if box is not None and _intersects(box, region)}
     connectors = [
         connector
@@ -201,7 +206,7 @@ def slide_shapes_text(slide: SlideShapes, *, page_size: tuple[float, float], reg
             (True, False): "←",
             (True, True): "↔",
         }.get((connector.arrow_at_start, connector.arrow_at_end), "—")
-        ends = f"{_shape_ref(connector.source)} {arrow} {_shape_ref(connector.target)}"
+        ends = f"{_shape_ref(connector.source, texts)} {arrow} {_shape_ref(connector.target, texts)}"
         path = path_text(connector)
         lines.append(f"- #{connector.connector_id}: {ends} {path}" if path else f"- #{connector.connector_id}: {ends}")
     if len(connectors) > MAX_SLIDE_CONNECTORS:
@@ -387,8 +392,16 @@ def _box_text(box: Box | None) -> str:
     return f"({x0},{y0})-({x1},{y1})"
 
 
-def _shape_ref(shape_id: str | None) -> str:
-    return f"#{shape_id}" if shape_id else "?"
+def _shape_ref(shape_id: str | None, texts: Mapping[str, str]) -> str:
+    """接続線の端の図形の番号と文字（文字の無い図形は番号だけ、結ばれていなければ ``?``）。"""
+    if not shape_id:
+        return "?"
+    text = texts.get(shape_id, "")
+    if not text:
+        return f"#{shape_id}"
+    if len(text) > MAX_CONNECTOR_END_TEXT_CHARS:
+        text = text[:MAX_CONNECTOR_END_TEXT_CHARS] + "…"
+    return f"#{shape_id} {text}"
 
 
 def _point_text(point: Point | None) -> str:
