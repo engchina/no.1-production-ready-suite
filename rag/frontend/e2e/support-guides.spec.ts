@@ -1411,8 +1411,9 @@ test("手順に外部 Agent の道具の項目を出さず、保存する内容�
 
   await step.getByLabel("題名").fill("手順 A を直した");
   await editor.getByRole("button", { name: "保存", exact: true }).click();
-  await expect.poll(() => api.guides[0].draft.steps[0]?.title).toBe("手順 A を直した");
-  expect(api.guides[0].draft.steps[0]).not.toHaveProperty("allowed_tools");
+  const savedStep = () => (api.guides[0].draft.steps as Array<Record<string, unknown>>)[0];
+  await expect.poll(() => savedStep()?.title).toBe("手順 A を直した");
+  expect(savedStep()).not.toHaveProperty("allowed_tools");
 });
 
 test("ガイドの段落は3行で編集し、Enterで保存せず内部改行を保存して再表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
