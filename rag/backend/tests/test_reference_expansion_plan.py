@@ -263,9 +263,12 @@ async def test_many_section_references_are_all_added_in_relevance_order() -> Non
     assert len(genai.rerank_calls) == 1
 
 
-async def test_many_document_name_references_are_all_added() -> None:
-    """文書名の参照の多い chunk(6 つの文書)から、各文書の質問に関連の高い chunk をすべて足す。"""
-    from tests.test_cross_references import FakeGenAi
+async def test_many_document_name_references_are_all_added(monkeypatch: Any) -> None:
+    """文書名の参照の多い chunk(6 つの文書)から、各文書の目次から選んだ章節の chunk をすべて足す。
+
+    6 つの参照先の目次は 1 回の呼び出しで渡す(#5263。ここでは代役がすべての章節を選ぶ)。
+    """
+    from tests.test_cross_references import FakeGenAi, _outline_engine
 
     names = [f"合成資料{letter}" for letter in "ABCDEF"]
     references = [ReferenceTarget(name, "document", "", name, None) for name in names]
@@ -284,8 +287,11 @@ async def test_many_document_name_references_are_all_added() -> None:
     ]
     genai = FakeGenAi({"合成資料Dの本文2": 0.9})
     receipt: dict[str, Any] = {}
+    engine, _sections, llm = _outline_engine(
+        monkeypatch, ReferenceOracle([anchor], contents), genai
+    )
 
-    result = await _engine(ReferenceOracle([anchor], contents), genai)._reference_expansion(
+    result = await engine._reference_expansion(
         SearchRequest(query="合成の質問"),
         _SearchState(),
         [anchor],
@@ -299,6 +305,7 @@ async def test_many_document_name_references_are_all_added() -> None:
     assert added[0] == "合成資料D-2"
     assert {item["status"] for item in receipt["targets"]} == {"available"}
     assert receipt["added_count"] == 18
+    assert len(llm.calls) == 1
 
 
 async def test_unreadable_target_does_not_drop_readable_targets(monkeypatch: Any) -> None:

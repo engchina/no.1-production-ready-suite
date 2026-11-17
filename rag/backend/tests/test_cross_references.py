@@ -13,6 +13,7 @@ from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_parser_core.language import FIELD_SPECS, builtin_pack, resolve, set_default_pack
 
 from app.clients.entity_store import ENTITY_ALIASES_TABLE
+from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow
 from app.config import Settings
 from app.rag.answer_engine import (
     EVIDENCE_EXPANSION_KEY,
@@ -43,6 +44,8 @@ from app.rag.cross_references import (
     section_path_within,
     title_key,
 )
+from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
+from app.rag.section_map_service import SectionNotFoundError, SectionOutline, SectionText
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
 # ---- 抽出 ----
@@ -885,12 +888,128 @@ class FakeGenAi:
 def _engine(
     oracle: ReferenceOracle, genai: FakeGenAi | None = None, **settings: Any
 ) -> AnswerEngine:
-    # この file の参照の追跡は、目次から章節を選ぶ経路(#5263。既定 ON の #5296)の外の、参照先の中を
-    # 質問で検索した上位を読む経路を確かめる。目次の経路は test_reference_sections.py で確かめる。
+    # この file の既定は目次から章節を選ぶ設定(#5263。既定 ON の #5296)を無効にする(文書名だけの
+    # 参照の参照先は読まない。#5348)。文書名だけの参照を読むテストは ``_outline_engine`` で、目次の
+    # 全章節を選ぶ代役を使う。目次の選び方は test_reference_sections.py で確かめる。
     settings.setdefault("rag_reference_outline_selection_enabled", False)
     return AnswerEngine(
         Settings(**settings), oracle=cast(Any, oracle), genai=cast(Any, genai or FakeGenAi())
     )
+
+
+def _node(
+    section_id: str, title: str, *, parent: str = ROOT_SECTION_ID, level: int = 1
+) -> SectionNode:
+    return SectionNode(section_id, title, level, 1, parent, None, None, chunk_count=1, chars=10)
+
+
+class SectionMap:
+    """章節の目次と章節の読取の代役(``section_map_service`` の 2 つの関数を差し替える)。
+
+    文書の chunk の ``section_path`` ごとに 1 つの章節(1 段)を、chunk の並びの順に作る。
+    """
+
+    def __init__(self, chunks: list[RetrievedChunk], *, outlines: set[str]) -> None:
+        self.chunks = chunks
+        # 目次を持つ文書(それ以外は目次が無い)。
+        self.outlines = outlines
+        self.empty_sections: set[str] = set()
+        self.outline_calls: list[str] = []
+        self.read_calls: list[tuple[str, str]] = []
+
+    def sections(self, document_id: str) -> list[SectionNode]:
+        nodes = [SectionNode(ROOT_SECTION_ID, "", 0, 0, None, None, None, chunk_count=9)]
+        paths = dict.fromkeys(
+            str(chunk.metadata["section_path"])
+            for chunk in self.chunks
+            if chunk.document_id == document_id
+        )
+        nodes.extend(_node(f"{document_id}#{path}", path) for path in paths)
+        return nodes
+
+    async def outline(
+        self, document_id: str, *, chunk_set_id: str | None = None, oracle: Any = None
+    ) -> SectionOutline | None:
+        self.outline_calls.append(document_id)
+        if document_id not in self.outlines:
+            return None
+        file_name = next(c.file_name for c in self.chunks if c.document_id == document_id)
+        return SectionOutline(
+            chunk_set=ReadableChunkSet(document_id, chunk_set_id or "cs", file_name, False),
+            sections=self.sections(document_id),
+        )
+
+    async def read(
+        self,
+        document_id: str,
+        section_id: str,
+        *,
+        chunk_set_id: str | None = None,
+        limit: int | None = None,
+        filters: Any = None,
+        oracle: Any = None,
+        from_order: int = 0,
+    ) -> SectionText:
+        self.read_calls.append((document_id, section_id))
+        outline = await self.outline(document_id, chunk_set_id=chunk_set_id)
+        assert outline is not None
+        node = outline.get(section_id)
+        if node is None:
+            raise SectionNotFoundError(section_id)
+        chunks = [
+            c
+            for c in self.chunks
+            if c.document_id == document_id
+            and f"{document_id}#{c.metadata['section_path']}" == section_id
+            and section_id not in self.empty_sections
+        ][:limit]
+        rows = [SectionChunkRow(order, chunk) for order, chunk in enumerate(chunks)]
+        return SectionText(outline=outline, section=node, chunks=rows, complete=True)
+
+
+class FakeLlm:
+    """回答のモデルの代役。目次から ID を選ぶ関数で応答を作る(呼び出しを記録する)。"""
+
+    def __init__(self, pick: Any) -> None:
+        self.pick = pick
+        self.calls: list[dict[str, Any]] = []
+
+    async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+        self.calls.append({"prompt": prompt, "context": context, **kwargs})
+        result = self.pick(context)
+        if isinstance(result, Exception):
+            raise result
+        return result if isinstance(result, str) else json.dumps({"section_ids": result})
+
+
+def pick_all_sections(context: str) -> list[str]:
+    """目次のすべての章節の ID を選ぶ(モデルの代わり)。"""
+    return re.findall(r"\[(S\d+)\]", context)
+
+
+def _outline_engine(
+    monkeypatch: pytest.MonkeyPatch,
+    oracle: ReferenceOracle,
+    genai: FakeGenAi | None = None,
+    *,
+    pick: Any = pick_all_sections,
+    **settings: Any,
+) -> tuple[AnswerEngine, SectionMap, FakeLlm]:
+    """文書名だけの参照の参照先を、目次から選んだ章節で読む engine(#5263・#5348)。
+
+    目次は ``oracle.sections`` の文書ごとに作り、既定ではモデルの代役が目次のすべての章節を選ぶ。
+    """
+    from app.rag import section_map_service
+
+    sections = SectionMap(
+        oracle.sections, outlines={chunk.document_id for chunk in oracle.sections}
+    )
+    monkeypatch.setattr(section_map_service, "section_outline", sections.outline)
+    monkeypatch.setattr(section_map_service, "read_section", sections.read)
+    engine = _engine(oracle, genai, rag_reference_outline_selection_enabled=True, **settings)
+    llm = FakeLlm(pick)
+    engine._reference_llm = llm
+    return engine, sections, llm
 
 
 def _order(result: Any) -> list[str]:
@@ -1540,14 +1659,14 @@ def _change_window_corpus(resolved_at: str) -> tuple[RetrievedChunk, list[Retrie
     "resolved_at", ["ingest", "query", "legacy"], ids=["ingest", "query", "legacy"]
 )
 async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
-    resolved_at: str,
+    resolved_at: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """変更手順書の「時間帯は定期保守計画で確かめます」から、定期保守計画の保守枠が文脈に入る。
 
     #1390 の検証で `br-sales-change-window` の必要な根拠(共通の保守枠)が MCP の並びの 96 位の
     まま改善しなかった型(#1400)。参照先は同じナレッジベースの今の版の定期保守計画だけで、
-    その中の質問で検索した chunk を個数で選ばずにすべて足し、rerank の点数の順に並べる(#5243)。
-    旧版・別の KB の同じ名前の文書は足さない。
+    その目次から選んだ章節(#5263。ここでは代役がすべての章節を選ぶ)の chunk を個数で選ばずに
+    すべて足し、rerank の点数の順に並べる(#5243)。旧版・別の KB の同じ名前の文書は足さない。
     """
     from pr_evaluation_scoring import contains_normalized
 
@@ -1560,8 +1679,9 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
     )
     genai = FakeGenAi({"共通の保守枠は": 0.9, "この章に無いシステム": 0.8, "保守枠を変えたい": 0.1})
     state = _SearchState()
+    engine, section_map, llm = _outline_engine(monkeypatch, oracle, genai)
 
-    result = await _engine(oracle, genai)._search(
+    result = await engine._search(
         SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=[case["query"]],
@@ -1599,16 +1719,14 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {
         expected_resolved_at
     }
-    # 文書は検索の範囲(KB)の中だけで探し、その文書の中を原質問で検索して rerank で選ぶ。
+    # 文書は検索の範囲(KB)の中だけで探し、その文書の目次から選んだ章節を読んで rerank で並べる
+    # (文書の中の検索はしない。#5348)。
     assert oracle.document_calls == [
         {"filters": {"knowledge_base_id": _PLAN_KB}, "title": "定期保守計画"}
     ]
-    assert oracle.search_calls == [
-        {
-            "query": case["query"],
-            "filters": {"knowledge_base_id": _PLAN_KB, "document_id": "doc-plan"},
-        }
-    ]
+    assert oracle.search_calls == []
+    assert len(llm.calls) == 1
+    assert {document_id for document_id, _section in section_map.read_calls} == {"doc-plan"}
     ((rerank_query, documents),) = genai.rerank_calls
     assert rerank_query == case["query"]
     # 見出しの列を先に置いた本文で並べる(rag_engine の rerank と同じ)。
@@ -1657,16 +1775,19 @@ async def test_document_name_reference_needs_exact_title() -> None:
 
 
 @pytest.mark.parametrize("mode", ["disabled", "failed"], ids=["rerank-disabled", "rerank-failed"])
-async def test_document_name_reference_keeps_search_order_without_rerank(mode: str) -> None:
-    """rerank が無効・失敗のときは、参照先の文書の中の検索の順で足す(足す chunk は減らさない)。"""
+async def test_document_name_reference_keeps_search_order_without_rerank(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rerank が無効・失敗のときは、参照先の文書の読んだ順で足す(足す chunk は減らさない)。"""
     window, sections = _change_window_corpus("query")
     oracle = ReferenceOracle(
         [window], sections, knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan"}}
     )
     genai = FakeGenAi({"共通の保守枠は": 0.9}, fail=mode == "failed")
     settings = {"rag_rerank_enabled": False} if mode == "disabled" else {}
+    engine, _section_map, _llm = _outline_engine(monkeypatch, oracle, genai, **settings)
 
-    result = await _engine(oracle, genai, **settings)._search(
+    result = await engine._search(
         SearchRequest(query="q", filters={"knowledge_base_id": _PLAN_KB}),
         _SearchState(),
         retrieval_queries=["q"],
@@ -1748,7 +1869,7 @@ def _filler(count: int) -> list[RetrievedChunk]:
     ("top_k", "followed"), [(20, True), (5, False)], ids=["top-k-20", "top-k-5"]
 )
 async def test_document_name_reference_outside_top_five_is_followed(
-    top_k: int, followed: bool
+    top_k: int, followed: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """参照を持つ chunk が統合の上位 5 件の外(8 位)でも、回答の文脈に入りうる上位なら辿る(#1549)。
 
@@ -1767,8 +1888,9 @@ async def test_document_name_reference_outside_top_five_is_followed(
     )
     genai = FakeGenAi({"共通の保守枠は": 0.9, "この章に無いシステム": 0.8})
     state = _SearchState()
+    engine, _section_map, _llm = _outline_engine(monkeypatch, oracle, genai)
 
-    result = await _engine(oracle, genai)._search(
+    result = await engine._search(
         SearchRequest(query=case["query"], top_k=top_k, filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=[case["query"]],
@@ -1854,14 +1976,16 @@ class _TreeResult:
         return None
 
 
-async def test_document_name_reference_adds_sentence_citing_selected_section() -> None:
+async def test_document_name_reference_adds_sentence_citing_selected_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """文書名の参照で選んだ節を同じ文書の中で参照する文(適用の条件)も足す(#1549)。
 
     kb1517 では定期保守計画が章ごとの親に分かれ、第 2 章(共通の保守枠)と第 3 章を足しても、第 1 章の
     「この章に無いシステムは、第 2 章の共通の保守枠で保守します」(`mt-common-ref`)が文脈に
     入らなかった。
-    参照先の文書の中の検索の候補は個数で選ばずにすべて足すので(#5243)、第 2 章への参照を持つ
-    第 1 章の文も、関連度の順(点数は低い)で入る。
+    目次から選んだ章節(ここでは代役がすべての章節を選ぶ)の chunk は個数で選ばずにすべて足すので
+    (#5243)、第 2 章への参照を持つ第 1 章の文も、関連度の順(点数は低い)で入る。
     """
     case = _sales_case()
     window, _sections = _change_window_corpus("ingest")
@@ -1871,8 +1995,9 @@ async def test_document_name_reference_adds_sentence_citing_selected_section() -
     oracle = ReferenceOracle([window], plan, knowledge_bases={_PLAN_KB: {"doc-change", "doc-plan"}})
     genai = FakeGenAi({"共通の保守枠は": 0.9, "保守枠を変えたい": 0.8, "この章に無い": 0.1})
     state = _SearchState()
+    engine, _section_map, _llm = _outline_engine(monkeypatch, oracle, genai)
 
-    result = await _engine(oracle, genai)._search(
+    result = await engine._search(
         SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=[case["query"]],
@@ -2424,7 +2549,16 @@ async def test_reference_in_section_expansion_chunk_reaches_generation(
         [hit], [hit, listed, target], knowledge_bases={_SECTION_KB: {"doc-x", "doc-b"}}
     )
 
-    outcome = await _section_engine(oracle).run(
+    # 文書名だけの参照の参照先は、目次から選んだ章節で読む(#5263・#5348。代役がすべてを選ぶ)。
+    engine = _engine(
+        oracle,
+        FakeGenAi({"手順": 0.9}),
+        rag_section_expansion_enabled=True,
+        rag_reference_outline_selection_enabled=True,
+    )
+    engine._reference_llm = FakeLlm(pick_all_sections)
+
+    outcome = await engine.run(
         SearchRequest(query="合成の操作の手順は？", filters={"knowledge_base_id": _SECTION_KB})
     )
 

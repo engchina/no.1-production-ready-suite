@@ -261,7 +261,7 @@ async def test_document_without_section_tree_is_not_a_target(
     assert sections.outline_calls == ["doc-a"]
     record = _record(state)
     assert record["skip_reason"] == SKIP_NO_OUTLINE
-    assert [d["fallback_reason"] for d in record["documents"]] == ["no_outline"]
+    assert [d["skip_reason"] for d in record["documents"]] == ["no_outline"]
 
 
 async def test_max_documents_limits_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:

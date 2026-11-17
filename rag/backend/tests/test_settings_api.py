@@ -3606,6 +3606,36 @@ def test_answering_settings_save_reference_outline_selection_limits(
         assert client.patch("/api/settings/answering", json=invalid).status_code == 422
 
 
+def test_answering_settings_save_reference_section_read_max_chunks(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """番号つきの参照の節から読む chunk の上限(#5348)を .env と実行中の設定へ保存する。
+
+    範囲(1〜50)の外の値は 422。
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_reference_section_read_max_chunks", 8)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    assert (
+        client.get("/api/settings/answering").json()["data"]["reference_section_read_max_chunks"]
+        == 8
+    )
+    response = client.patch(
+        "/api/settings/answering", json={"reference_section_read_max_chunks": 16}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["reference_section_read_max_chunks"] == 16
+    assert settings.rag_reference_section_read_max_chunks == 16
+    assert "RAG_REFERENCE_SECTION_READ_MAX_CHUNKS=16" in env_file.read_text(encoding="utf-8")
+    for invalid in (0, 51):
+        response = client.patch(
+            "/api/settings/answering", json={"reference_section_read_max_chunks": invalid}
+        )
+        assert response.status_code == 422
+
+
 def test_answering_settings_save_outline_selection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
