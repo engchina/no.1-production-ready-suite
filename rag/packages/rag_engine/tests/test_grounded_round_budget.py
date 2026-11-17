@@ -68,6 +68,39 @@ class DeadlineDocumentQuotesTest(unittest.TestCase):
         self.assertTrue(all(entry.quote_only and entry.item.applies == "unverified" for entry in quotes))
         self.assertEqual(grounded.deadline_document_quotes(question, []), [])
 
+    def test_quote_is_centered_on_the_retrieved_child_range(self):
+        """抜粋は検索で当たった子の範囲を中心にする。当たった子の範囲が無ければ本文の先頭から（#5322）。"""
+        lines = [f"合成の前置きの行{index:03d}です。" for index in range(120)]
+        answer = "合成の答えの行です。"
+        text = "\n".join([*lines, answer, *lines[:10]])
+        offset = 1000
+        hit = text.index(answer)
+        span = self._span(
+            "E1",
+            text,
+            start=offset,
+            end=offset + len(text),
+            child_ranges=[
+                {"id": "neighbor", "start": offset, "end": offset + hit},
+                {"id": "hit", "start": offset + hit, "end": offset + hit + len(answer)},
+            ],
+        )
+        limit = grounded.RELATED_QUOTE_MAX_CHARS
+        self.assertGreater(hit, limit)
+
+        [centered] = grounded.deadline_document_quotes("合成の質問", [span], anchors={"hit"})
+        quote = centered.item.citations[0].quote
+        self.assertIn(answer, quote)
+        self.assertLessEqual(len(quote), limit)
+        start = int(centered.citation_resolution["char_start"])
+        # 当たった範囲の前後を含み、行の先頭から始める。
+        self.assertTrue(0 < start < hit and text[start - 1] == "\n")
+        self.assertTrue(quote.startswith("合成の前置きの行") and quote.index(answer) > limit // 4)
+
+        for anchors in ((), {"other"}):
+            [head] = grounded.deadline_document_quotes("合成の質問", [span], anchors=anchors)
+            self.assertEqual(head.item.citations[0].quote, text[:limit])
+
 
 class DeadlineCutShortTest(unittest.TestCase):
     def test_child_deadline_cut_short_only_while_the_outer_deadline_is_alive(self):
