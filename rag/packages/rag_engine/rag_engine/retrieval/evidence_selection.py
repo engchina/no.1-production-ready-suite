@@ -10,6 +10,7 @@ from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from rag_parser_core.language import current_pack
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, TextRanges, join_ranges, load_ranges, slice_ranges
 
 from rag_engine.parsing.structural_text import structural_only
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
@@ -657,6 +658,9 @@ def evidence_spans(
             # 結ぶのに使う（親の ID だけでは同じ親・同じ頁の兄弟の子を区別できない）。
             if child_ranges:
                 result[-1]["child_ranges"] = child_ranges
+            # 解析器が本文に付けた原文に無い範囲（抜粋の座標）。引用単位から外す（#5305）。
+            if non_source := slice_ranges(record_non_source_ranges(record), start, end):
+                result[-1][NON_SOURCE_RANGES_KEY] = [list(item) for item in non_source]
             # parentの章一覧には隣接する別機能が混在し得る。本文位置と文書・版・
             # 親子関係を照合した単一childだけで、引用そのものの所属を確定する。
             matching = [(a, child) for a, b, _, child in scoped if a <= start and end <= b]
@@ -822,6 +826,14 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
             text = previous["text"] + span["text"]
             if ranges := _merged_child_ranges(previous.get("child_ranges"), span.get("child_ranges")):
                 previous["child_ranges"] = ranges
+            if non_source := join_ranges(
+                [
+                    (previous["text"], load_ranges(previous.get(NON_SOURCE_RANGES_KEY), len(previous["text"]))),
+                    (span["text"], load_ranges(span.get(NON_SOURCE_RANGES_KEY), len(span["text"]))),
+                ],
+                "",
+            ):
+                previous[NON_SOURCE_RANGES_KEY] = [list(item) for item in non_source]
             previous.update(
                 text=text,
                 end=span["end"],
@@ -889,6 +901,19 @@ def _local_child_path(child: Any, preceding: str) -> tuple[str, ...]:
             ):
                 selected = index
     return path[selected:] if selected is not None else path
+
+
+def record_non_source_ranges(record: Any) -> TextRanges:
+    """chunk の本文の中の、解析器が付けた原文に無い範囲（#5305）。
+
+    範囲は chunk の本文（``body_text``）の座標なので、回答用の本文が chunk の本文と同じときだけ使う。
+    画像の説明の投影などで本文が変わった record は、位置が決まらないので範囲を持たない。
+    """
+    text = str(getattr(record, "text", "") or "")
+    body = str(getattr(record, "body_text", "") or text)
+    if body != text:
+        return ()
+    return load_ranges((getattr(record, "metadata", {}) or {}).get(NON_SOURCE_RANGES_KEY), len(text))
 
 
 def _native_ranges(record: Any) -> list[tuple[int, int]]:

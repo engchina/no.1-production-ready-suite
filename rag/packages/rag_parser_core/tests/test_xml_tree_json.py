@@ -264,3 +264,24 @@ def test_query_citation_keys_prefer_titled_label_and_normalize_numerals() -> Non
     assert query_citation_keys("附則第3条") == ["附則第3条"]
     assert query_citation_keys("第7条の2第1項第2号") == ["第7条の2第1項第2号"]
     assert query_citation_keys("対象の範囲はどこまでか") == []
+
+
+def test_heading_line_is_declared_as_non_source_range() -> None:
+    """解析器が組み立てた見出しの行を、原文に無い範囲として要素に宣言する（#5305）。"""
+    from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges
+
+    extraction = _extraction()
+    maps = extraction.parser_artifacts["json_source_map"]["elements"]
+    declared = 0
+    for element in extraction.elements:
+        ranges = load_ranges(element.metadata.get(NON_SOURCE_RANGES_KEY), len(element.text))
+        if not ranges:
+            continue
+        declared += 1
+        heading = element.text.split("\n", 1)[0]
+        # 宣言は先頭の見出しの行だけで、本文の行に掛からない。
+        assert ranges == ((0, len(heading)),)
+        # 宣言した範囲は、原文（JSON の文字列値）に対応する範囲と重ならない。
+        for span in maps.get(element.element_id, []):
+            assert span["end"] <= 0 or span["start"] >= len(heading)
+    assert declared == len(extraction.elements)

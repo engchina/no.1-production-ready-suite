@@ -34,6 +34,14 @@ from rag_parser_core.extraction import (
     is_derived_content,
     strip_formatting_marks,
 )
+from rag_parser_core.non_source_text import (
+    NON_SOURCE_RANGES_KEY,
+    PARENT_NON_SOURCE_RANGES_KEY,
+    TextRanges,
+    dump_ranges,
+    join_ranges,
+    load_ranges,
+)
 from rag_parser_core.parsed_table import ParsedCell, ParsedTableGrid, grid_rows_metadata
 from rag_parser_core.sheet_records import SHEET_RECORD_CONTENT_KIND
 from rag_parser_core.structured_records import has_record_boundaries
@@ -313,6 +321,9 @@ def build_structure_parent_child_chunks(
                         "chunk_part_index": part_index,
                         "chunk_part_count": len(group),
                         "parent_text": parent_text,
+                        **_parent_non_source_metadata(
+                            _joined_chunk_non_source_ranges(group, "\n\n")
+                        ),
                         **(
                             {"parent_answer_text_projection_json": parent_proof}
                             if parent_proof is not None
@@ -660,6 +671,7 @@ def build_sheet_parent_child_chunks(
                         "chunk_part_index": part_index,
                         "chunk_part_count": len(group),
                         "parent_text": parent_text,
+                        **_parent_non_source_metadata(_joined_chunk_non_source_ranges(group, "\n")),
                         **_parent_page_metadata(group),
                         "engine_chunk_seq": len(result),
                         **location,
@@ -695,6 +707,13 @@ def build_xml_tree_parent_child_chunks(
     element_texts = {
         element.element_id: element.text for element in extraction.elements if element.element_id
     }
+    element_ranges = {
+        element.element_id: load_ranges(
+            element.metadata.get(NON_SOURCE_RANGES_KEY), len(element.text)
+        )
+        for element in extraction.elements
+        if element.element_id
+    }
     groups: list[list[Chunk]] = []
     for chunk in children:
         current = groups[-1] if groups else None
@@ -706,6 +725,7 @@ def build_xml_tree_parent_child_chunks(
     for group in groups:
         parent_text = _xml_tree_parent_text(group, element_texts)
         parent_id = _xml_tree_parent_id(group, parent_text)
+        parent_ranges = _xml_tree_parent_non_source_ranges(group, element_texts, element_ranges)
         for part_index, chunk in enumerate(group, start=1):
             result.append(
                 replace(
@@ -720,6 +740,7 @@ def build_xml_tree_parent_child_chunks(
                         "chunk_part_index": part_index,
                         "chunk_part_count": len(group),
                         "parent_text": parent_text,
+                        **_parent_non_source_metadata(parent_ranges),
                         **_parent_page_metadata(group),
                         "engine_chunk_seq": len(result),
                     },
@@ -774,6 +795,43 @@ def _xml_tree_parent_text(group: list[Chunk], element_texts: Mapping[str, str]) 
         if element_id in element_texts
     ]
     return "\n".join(texts) if texts else "\n".join(chunk.text for chunk in group)
+
+
+def _joined_chunk_non_source_ranges(group: list[Chunk], separator: str) -> TextRanges:
+    """子の本文を ``separator`` でつないだ親の本文の中の、原文に無い範囲(#5305)。"""
+    return join_ranges(
+        [
+            (
+                chunk.text,
+                load_ranges(chunk.metadata.get(NON_SOURCE_RANGES_KEY), len(chunk.text)),
+            )
+            for chunk in group
+        ],
+        separator,
+    )
+
+
+def _parent_non_source_metadata(ranges: TextRanges) -> dict[str, str]:
+    return {PARENT_NON_SOURCE_RANGES_KEY: dump_ranges(ranges)} if ranges else {}
+
+
+def _xml_tree_parent_non_source_ranges(
+    group: list[Chunk],
+    element_texts: Mapping[str, str],
+    element_ranges: Mapping[str, TextRanges],
+) -> TextRanges:
+    """親の本文(``_xml_tree_parent_text``)の中の、解析器が付けた原文に無い範囲(#5305)。"""
+    ids = [
+        element_id
+        for element_id in _xml_tree_group_element_ids(group)
+        if element_id in element_texts
+    ]
+    if not ids:
+        return ()
+    return join_ranges(
+        [(element_texts[element_id], element_ranges.get(element_id, ())) for element_id in ids],
+        "\n",
+    )
 
 
 def _xml_tree_parent_id(group: list[Chunk], parent_text: str) -> str:

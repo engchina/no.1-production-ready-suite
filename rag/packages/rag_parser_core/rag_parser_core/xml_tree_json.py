@@ -65,6 +65,7 @@ from rag_parser_core.language.text import (
     range_class,
     text_patterns,
 )
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, dump_ranges
 
 XML_TREE_JSON_BACKEND = "xml_tree_json"
 XML_TREE_JSON_SOURCE_FORMAT = "xml_tree_json"
@@ -988,6 +989,17 @@ def xml_tree_json_extraction_from_payload(
         for mark in FORMATTING_COMBINING_MARKS:
             text = mapped_replace(text, mark, "")
         text = mapped_strip(text)
+        # 見出しの行はこの解析器が組み立てた行で、原文に無い。引用の対象から外せるよう
+        # 範囲を宣言する（#5305）。
+        shown_heading = heading
+        for mark in FORMATTING_COMBINING_MARKS:
+            shown_heading = shown_heading.replace(mark, "")
+        shown_heading = shown_heading.strip()
+        non_source = (
+            {NON_SOURCE_RANGES_KEY: dump_ranges([(0, min(len(shown_heading), len(text)))])}
+            if shown_heading and text.startswith(shown_heading)
+            else {}
+        )
         content_kind = "table" if unit.unit_kind == "appendix" and unit.has_table else "text"
         order = len(elements)
         if source_sha256 and isinstance(text, MappedText):
@@ -1005,6 +1017,7 @@ def xml_tree_json_extraction_from_payload(
                 metadata={
                     **_unit_metadata(metadata, unit),
                     "section_level": len(unit.section_path),
+                    **non_source,
                 },
             )
         )

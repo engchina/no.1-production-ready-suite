@@ -55,6 +55,7 @@ from rag_engine.retrieval.search_stages import (
     IMAGE_EVIDENCE_STAGE,
     REFERENCE_EXPANSION_STAGE,
 )
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, PARENT_NON_SOURCE_RANGES_KEY
 from rag_parser_core.vision_text import (
     UnprojectedVisionSourceError,
     is_unprojected_vision_source,
@@ -4142,6 +4143,9 @@ def _stored_child(
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
     for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
         metadata[key] = chunk.metadata.get(key, "")
+    if isinstance(non_source := chunk.metadata.get(NON_SOURCE_RANGES_KEY), str):
+        # 解析器が本文に付けた原文に無い範囲(#5305)。rag_engine は引用単位から外す。
+        metadata[NON_SOURCE_RANGES_KEY] = non_source
     if keeps_own_evidence(chunk):
         # 文書全体の要約(#4793)。rag_engine は出典情報で、原文の抜粋ではなく要約であることを示す。
         metadata["content_kind"] = chunk.metadata.get("content_kind")
@@ -4418,6 +4422,17 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
             raise ValueError("親の回答本文の投影が未記録です。再分割してください。")
         _merge_member_metadata(metadata, members)
         _restore_parent_native_ranges(text, metadata, members, state)
+        # 子の原文に無い範囲(子の本文の座標)を、分割が記録した親の本文の座標の範囲に替える(#5305)。
+        metadata.pop(NON_SOURCE_RANGES_KEY, None)
+        if isinstance(
+            parent_non_source := source_metadata.get(PARENT_NON_SOURCE_RANGES_KEY), str
+        ) and all(
+            state.chunks[child.chunk_uid].metadata.get(PARENT_NON_SOURCE_RANGES_KEY)
+            == parent_non_source
+            for child in members
+            if child.chunk_uid in state.chunks
+        ):
+            metadata[NON_SOURCE_RANGES_KEY] = parent_non_source
         metadata.pop("rrf_score", None)
         if element_ids := list(
             dict.fromkeys(

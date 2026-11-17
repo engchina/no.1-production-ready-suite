@@ -11,6 +11,7 @@ from types import GenericAlias
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges, slice_ranges
 
 from rag_engine.config import Settings
 from rag_engine.dependencies import injected_current_section_paths, record_retrieval_stage
@@ -35,7 +36,7 @@ from rag_engine.generation.document_inputs import (
     with_first_chunks,
 )
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
-from rag_engine.generation.grounded import _image_text, citation_units
+from rag_engine.generation.grounded import span_citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.resources.call_context import call_context, update_call_context
@@ -94,7 +95,7 @@ def verified_candidate(answer: str, source: str) -> str:
 def reading_units(value: Mapping[str, Any]) -> list[tuple[int, int]]:
     """読取の入力の番号の単位。引用単位（句点・改行・表の行）を使い、長すぎる単位だけ上限で分ける。"""
     units: list[tuple[int, int]] = []
-    for start, end in citation_units(str(value["text"]), image_text=_image_text(value)):
+    for start, end in span_citation_units(value):
         units.extend((position, min(position + READING_UNIT_MAX_CHARS, end)) for position in range(start, end, READING_UNIT_MAX_CHARS))
     return units
 
@@ -155,7 +156,12 @@ def _slice(span: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
     absolute = int(span.get("start", 0)) + start
     text = span["text"][start:end]
     uid = "E" + hashlib.sha256(f"{span['source_id']}:{absolute}:{absolute + len(text)}:{text}".encode()).hexdigest()[:20]
-    return {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
+    sliced = {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
+    # 解析器が付けた原文に無い範囲は、分けた本文の座標に移す（#5305）。
+    sliced.pop(NON_SOURCE_RANGES_KEY, None)
+    if non_source := slice_ranges(load_ranges(span.get(NON_SOURCE_RANGES_KEY), len(span["text"])), start, end):
+        sliced[NON_SOURCE_RANGES_KEY] = [list(item) for item in non_source]
+    return sliced
 
 
 def candidate_block(values: Sequence[Mapping[str, Any]]) -> str:
