@@ -26,6 +26,14 @@ from rag_parser_core.extraction import (
     numbered_heading_line,
 )
 from rag_parser_core.language.text import text_patterns
+from rag_parser_core.non_source_text import (
+    NON_SOURCE_RANGES_KEY,
+    TextRanges,
+    dump_ranges,
+    join_ranges,
+    load_ranges,
+    slice_ranges,
+)
 from rag_parser_core.parsed_table import (
     ParsedTableBinding,
     html_table_layout,
@@ -165,6 +173,8 @@ class _ElementSpan:
     table_locator_metadata: tuple[tuple[str, str | int], ...] = ()
     # 解析の表の格子と要素の本文の行の対応（``row_basis=parsed_table``。#3429）。
     parsed_table: ParsedTableBinding | None = None
+    # 解析器が本文に付けた、原文に無い範囲（span の本文の座標。#5305）。
+    non_source_ranges: TextRanges = ()
 
     @property
     def xml_tree_citation_label(self) -> str | None:
@@ -971,7 +981,10 @@ def _absorb_small_chunks(
                     index=previous.index,
                     start_offset=previous.start_offset,
                     end_offset=chunk.end_offset,
-                    metadata={**previous.metadata, **chunk_projection_metadata(projection)},
+                    metadata=_with_non_source_ranges(
+                        {**previous.metadata, **chunk_projection_metadata(projection)},
+                        _joined_non_source_ranges(previous, chunk, joined),
+                    ),
                 ),
                 chunk_size=chunk_size,
             )
@@ -987,6 +1000,25 @@ def _absorb_small_chunks(
         )
         for index, chunk in enumerate(merged)
     ]
+
+
+def _joined_non_source_ranges(previous: Chunk, chunk: Chunk, joined: str) -> TextRanges:
+    """吸収でつないだ本文の、原文に無い範囲（#5305）。前後の空白を除いた分の位置をずらす。"""
+    raw = previous.text + "\n" + chunk.text
+    leading = len(raw) - len(raw.lstrip())
+    if raw[leading : leading + len(joined)] != joined:
+        return ()
+    ranges = join_ranges(
+        [
+            (
+                previous.text,
+                load_ranges(previous.metadata.get(NON_SOURCE_RANGES_KEY), len(previous.text)),
+            ),
+            (chunk.text, load_ranges(chunk.metadata.get(NON_SOURCE_RANGES_KEY), len(chunk.text))),
+        ],
+        "\n",
+    )
+    return slice_ranges(ranges, leading, leading + len(joined))
 
 
 def _restamp_merged_chunk(chunk: Chunk, *, chunk_size: int) -> Chunk:
@@ -1451,9 +1483,24 @@ def _element_spans(
                 parsed_table=(parsed_tables or {}).get(element.element_id or "")
                 if content_kind == "table"
                 else None,
+                non_source_ranges=_element_non_source_ranges(element, text),
             )
         )
     return spans
+
+
+def _element_non_source_ranges(element: DocumentElement, text: str) -> TextRanges:
+    """要素が宣言した、原文に無い範囲を span の本文の座標で返す（#5305）。
+
+    span の本文が要素の本文の前後の空白を除いただけのときだけ移す。ほかの変換（画像の説明の
+    補足など）で位置が決まらないときは範囲を持たない（推測で結び付けない）。
+    """
+    ranges = load_ranges(element.metadata.get(NON_SOURCE_RANGES_KEY), len(element.text))
+    stripped = element.text.strip()
+    if not ranges or not text.startswith(stripped):
+        return ()
+    leading = len(element.text) - len(element.text.lstrip())
+    return slice_ranges(ranges, leading, leading + len(stripped))
 
 
 def _provenance_metadata(
@@ -1870,7 +1917,7 @@ def _chunk_table_span(
                     index=start_index,
                     start_offset=span.start_offset,
                     end_offset=span.end_offset,
-                    metadata=metadata,
+                    metadata=_with_non_source_ranges(metadata, span.non_source_ranges),
                 )
             ],
             group_kind="table",
@@ -1884,17 +1931,16 @@ def _chunk_table_span(
     parts = _split_table_rows_by_size(span.text, chunk_size)
     if span.vision_projection is not None and span.vision_projection.ranges:
         parts = _project_table_parts(span.vision_projection, parts, chunk_size)
-    return _with_chunk_group_metadata(
-        _chunks_from_table_parts(
-            parts,
-            start_index=start_index,
-            start_offset=span.start_offset,
-            metadata=metadata,
-            parsed_table=span.parsed_table,
-        ),
-        group_kind="table",
-        group_text=span.text,
+    chunks = _chunks_from_table_parts(
+        parts,
+        start_index=start_index,
+        start_offset=span.start_offset,
+        metadata=metadata,
+        parsed_table=span.parsed_table,
     )
+    for chunk in chunks:
+        _with_non_source_ranges(chunk.metadata, _part_non_source_ranges(span, chunk.text))
+    return _with_chunk_group_metadata(chunks, group_kind="table", group_text=span.text)
 
 
 XML_TREE_GROUP_KIND = "xml_tree_part"
@@ -1959,17 +2005,41 @@ def _xml_tree_text_parts(text: str, chunk_size: int) -> list[str]:
 def _chunk_xml_tree_span(span: _ElementSpan, *, chunk_size: int, start_index: int) -> list[Chunk]:
     """XML ツリー JSON の段落（#2024）を 1 つ（長ければ行の境目で複数）の chunk にする。"""
     metadata = _span_group_metadata([span])
+    parts = _xml_tree_text_parts(span.text, chunk_size)
     chunks = [
         Chunk(
             text=part,
             index=start_index + offset,
             start_offset=span.start_offset,
             end_offset=span.end_offset,
-            metadata=dict(metadata),
+            metadata=_with_non_source_ranges(dict(metadata), _part_non_source_ranges(span, part)),
         )
-        for offset, part in enumerate(_xml_tree_text_parts(span.text, chunk_size))
+        for offset, part in enumerate(parts)
     ]
     return _with_chunk_group_metadata(chunks, group_kind=XML_TREE_GROUP_KIND, group_text=span.text)
+
+
+def _part_non_source_ranges(span: _ElementSpan, part: str) -> TextRanges:
+    """要素の本文を分けた部分の、原文に無い範囲（#5305）。
+
+    分けない本文は要素の範囲のまま。分けた部分は、要素の本文の先頭からその範囲の終わりまでを部分の先頭に
+    そのまま持つ範囲だけを移す（分割が各部分の先頭に繰り返す見出しの行・表の前の行）。ほかの範囲は
+    分けると位置が決まらないので移さない。
+    """
+    if part == span.text:
+        return span.non_source_ranges
+    return tuple(
+        (start, end) for start, end in span.non_source_ranges if part.startswith(span.text[:end])
+    )
+
+
+def _with_non_source_ranges(metadata: ChunkMetadata, ranges: TextRanges) -> ChunkMetadata:
+    """chunk の metadata に、本文の中の原文に無い範囲を入れる（無ければ key を持たない。#5305）。"""
+    if ranges:
+        metadata[NON_SOURCE_RANGES_KEY] = dump_ranges(ranges)
+    else:
+        metadata.pop(NON_SOURCE_RANGES_KEY, None)
+    return metadata
 
 
 def _chunk_record_span(span: _ElementSpan, *, start_index: int) -> Chunk:

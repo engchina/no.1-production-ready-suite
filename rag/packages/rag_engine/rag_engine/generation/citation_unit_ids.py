@@ -58,6 +58,8 @@ class EvidenceUnitSnapshot:
                     "source_run_id",
                     "chunk_uid",
                     "origin",
+                    # 引用単位から外した、解析器が付けた原文に無い範囲（#5305）。
+                    "non_source_text_ranges",
                 )
                 if key in span
             },

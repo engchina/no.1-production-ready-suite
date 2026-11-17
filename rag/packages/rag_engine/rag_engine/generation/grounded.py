@@ -27,6 +27,7 @@ from typing import Any
 
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ValidationError
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, TextRanges, load_ranges, source_pieces
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
 from rag_engine.generation.answer_envelope import (
@@ -1082,7 +1083,7 @@ def _bare_title(text: str) -> bool:
 def _quote_item(span: dict, start: int, end: int) -> CheckedItem:
     """システムが選んだ原文座標を、本文を検索し直さずに出典へ記録する。"""
     snapshot = EvidenceUnitSnapshot.create(span, [(start, end)], "system_char_range_v1")
-    quote = str(span["text"])[start:end]
+    quote = source_text(span, start, end)
     proof = {
         "status": "extracted",
         "authenticity": "verified",
@@ -1320,6 +1321,7 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
             or span.get("origin") == "image_extraction"
             or _bare_title(span["text"])
             or _label_list_like(span["text"])
+            or not source_text(span, 0, len(span["text"])).strip()
         ):
             continue
         hits = _question_term_hits(terms, span)
@@ -1354,6 +1356,7 @@ def deadline_document_quotes(
             or span.get("origin") == "image_extraction"
             or _bare_title(span["text"])
             or _label_list_like(span["text"])
+            or not source_text(span, 0, len(span["text"])).strip()
         ):
             continue
         shown.add(span["evidence_id"])
@@ -1822,6 +1825,38 @@ def citation_units(text: str, *, contract_version: str = CITATION_UNIT_CONTRACT,
     return units
 
 
+def span_citation_units(span: Mapping[str, Any], *, contract_version: str = CITATION_UNIT_CONTRACT) -> list[tuple[int, int]]:
+    """根拠の引用単位。解析器が本文に付けた原文に無い範囲（``non_source_text_ranges``）は単位から外す（#5305）。
+
+    外した範囲はモデルが選ぶ単位の列挙に入らないので、原文に無い文字列は引用にならない。範囲を持たない根拠
+    （旧い chunk・保存済みの根拠）は今までと同じ単位になる。
+    """
+    text = str(span.get("text") or "")
+    units = (
+        citation_units(text, contract_version=contract_version, image_text=_image_text(span))
+        if contract_version in _VERSIONED_UNIT_CONTRACTS
+        else _legacy_citation_units(text)
+    )
+    ranges = non_source_ranges(span)
+    if not ranges:
+        return units
+    return [piece for start, end in units for piece in source_pieces(start, end, ranges, text)]
+
+
+def non_source_ranges(span: Mapping[str, Any]) -> TextRanges:
+    """根拠の本文の中の、解析器が付けた原文に無い範囲（#5305）。"""
+    return load_ranges(span.get(NON_SOURCE_RANGES_KEY), len(str(span.get("text") or "")))
+
+
+def source_text(span: Mapping[str, Any], start: int, end: int) -> str:
+    """根拠の本文の ``[start, end)`` から、解析器が付けた原文に無い範囲を除いた原文（行で区切ってつなぐ。#5305）。"""
+    text = str(span.get("text") or "")
+    ranges = non_source_ranges(span)
+    if not ranges:
+        return text[start:end]
+    return "\n".join(text[a:b] for a, b in source_pieces(start, end, ranges, text))
+
+
 def _legacy_citation_units(text: str, *, step_lines: bool = False, physical_lines: bool = False) -> list[tuple[int, int]]:
     """根拠の本文の引用の単位（本文の中の開始・終了の位置）。
 
@@ -1911,11 +1946,7 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
         if cached is not None and cached[0] is span:
             contract_version = cached[1].contract_version
         explicit_units = contract_version in _EXPLICIT_UNIT_CONTRACTS
-    units = tuple(
-        citation_units(text, contract_version=contract_version, image_text=_image_text(span))
-        if contract_version in _VERSIONED_UNIT_CONTRACTS
-        else _legacy_citation_units(text)
-    )
+    units = tuple(span_citation_units(span, contract_version=contract_version))
     numbered = bool(units) if explicit_units else _numbered(text, units)
     rendered = _rendered_evidence_span(span, units=units, numbered=numbered)
     displayed = _model_evidence_span(span, rendered, units)
@@ -1929,7 +1960,11 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
         numbered,
         contract_version,
         json.dumps(
-            {key: span[key] for key in ("document_scope", "source_aliases", "start", "end", "child_ranges") if key in span},
+            {
+                key: span[key]
+                for key in ("document_scope", "source_aliases", "start", "end", "child_ranges", NON_SOURCE_RANGES_KEY)
+                if key in span
+            },
             ensure_ascii=False,
             sort_keys=True,
         ),
@@ -2094,7 +2129,8 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             metadata["requested_range_status"] = "out_of_bounds"
             return fail("citation_range_out_of_bounds", f"lines の範囲 {item.lines} が根拠の行（1〜{len(units)}）の外にあります。")
     start, end = units[first - 1][0], units[last - 1][1]
-    quote = text[start:end].strip()
+    # 範囲の中ほどにある解析器の行（親の本文の段落ごとの見出しなど）も引用に入れない（#5305）。
+    quote = source_text({"text": text, NON_SOURCE_RANGES_KEY: span.get(NON_SOURCE_RANGES_KEY)}, start, end).strip()
     if not quote:
         return fail("citation_extraction_failed", "指定範囲から原文を抽出できませんでした。")
     metadata.update(
@@ -2185,13 +2221,22 @@ def _rendered_evidence_span(
         from rag_engine.generation.document_background import background_label
 
         return background_label(span) + "\n" + text
-    selected_units = tuple(units if units is not None else citation_units(text, image_text=_image_text(span)))
+    selected_units = tuple(units if units is not None else span_citation_units(span))
     snapshot = EvidenceUnitSnapshot.create(span, selected_units, CITATION_UNIT_CONTRACT)
     if numbered is True or numbered is None and _numbered(text, selected_units):
-        body = "\n".join(
-            f"{index}| [{name}] {text[start:end]}"
+        numbered_lines = [
+            (start, f"{index}| [{name}] {text[start:end]}")
             for index, ((start, end), name) in enumerate(zip(selected_units, snapshot.unit_labels, strict=True), 1)
-        )
+        ]
+        # 解析器が付けた原文に無い行（#5305）は、番号・単位のラベルを付けずに本文の位置に残す（文脈として読めるが、
+        # 引用には選べない）。
+        plain_lines = [
+            (start, line)
+            for start, end in non_source_ranges(span)
+            for line in (part.strip() for part in text[start:end].split("\n"))
+            if line
+        ]
+        body = "\n".join(line for _start, line in sorted([*numbered_lines, *plain_lines], key=lambda item: item[0]))
     else:
         body = text
     return (
