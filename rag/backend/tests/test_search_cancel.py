@@ -22,7 +22,7 @@ from rag_engine.resources.deadline import DeadlineExceeded, check_deadline
 
 from app.api.routes import search as search_route
 from app.rag.answer_threads import run_answer_in_thread
-from app.rag.pipeline import SearchStageProgress
+from app.rag.pipeline import BASIC_FLOW, SearchStageProgress
 from app.schemas.search import SearchRequest
 
 # スタブの LLM の 1 回が、取り消しの後に戻るまで待つ上限（秒）。
@@ -113,7 +113,7 @@ async def test_cancelled_search_starts_no_further_step_or_llm_call(
     caplog.set_level(logging.INFO, logger=search_route.logger.name)
 
     task = asyncio.create_task(
-        search_route._run_search_with_timeout(SearchRequest(query="合成の質問"))
+        search_route._run_search_with_timeout(SearchRequest(query="合成の質問"), flow=BASIC_FLOW)
     )
     assert await asyncio.to_thread(flow.first_call.wait, WAIT_SECONDS)
     # client の切断（MCP の入口が検索の task を取り消す）。
@@ -145,7 +145,9 @@ async def test_search_that_finishes_is_not_recorded_as_cancelled(
     flow.release.set()
     monkeypatch.setattr(search_route, "RagPipeline", _pipeline(flow))
 
-    result = await search_route._run_search_with_timeout(SearchRequest(query="合成の質問"))
+    result = await search_route._run_search_with_timeout(
+        SearchRequest(query="合成の質問"), flow=BASIC_FLOW
+    )
 
     assert cast(Any, result) == "answer"
     assert flow.llm_calls == 3

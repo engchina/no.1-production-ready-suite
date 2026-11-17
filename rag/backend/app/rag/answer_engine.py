@@ -722,6 +722,18 @@ def _confirmed_validation_premises(
     ]
 
 
+@dataclass(frozen=True)
+class _SearchExpansions:
+    """検索の段の検索拡張(``AnswerEngine._search_expansions``)の結果。RAG 検索の経路は起点だけ。"""
+
+    anchors: list[RetrievedChunk]
+    references: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
+    referenced: list[RetrievedChunk] = field(default_factory=list)
+    outline_chunks: list[RetrievedChunk] = field(default_factory=list)
+    entity_chunks: list[RetrievedChunk] = field(default_factory=list)
+    graph_chunks: list[RetrievedChunk] = field(default_factory=list)
+
+
 class AnswerEngine:
     """rag_poc 回答フローを backend の I/O で駆動する。"""
 
@@ -739,10 +751,10 @@ class AnswerEngine:
         attachment_chunks: Sequence[RetrievedChunk] = (),
         degraded: DegradedSteps | None = None,
         materialize_images: bool = True,
+        expand: bool = True,
     ) -> None:
-        # 根拠を集める流れは回答・回答を作らない検索・検索だけ・MCP で同じ(#5173)。経路で違うのは
-        # 図の画像の切り出しだけ: 業務 Agent の根拠の取得(MCP)と検索だけは切り出さない(#5125。
-        # 図は Agent が rag_read_source で読む)。
+        # 根拠を集める流れは回答を作るか否かで変えない(#5173)。図の画像は業務 Agent の根拠の
+        # 取得(MCP)と検索だけは切り出さない(#5125。図は Agent が rag_read_source で読む)。
         if not settings.rag_support_guide_enabled:
             settings = settings.model_copy(update={"rag_support_guide": {}})
         self._settings = settings
@@ -774,6 +786,10 @@ class AnswerEngine:
         # 文書全体への参照の章節を選ぶモデル(#5263)。None は回答のモデルの client を使うときに作る
         # (テストは代役を入れる)。
         self._reference_llm: Any | None = None
+        # ⑦ 根拠の拡張をするか(#5332。``RagPipeline`` の経路が expanded のとき)。しないとき
+        # (RAG 検索の経路)は検索の段の検索拡張(参照の展開・目次からの章節の選択・実体・関係情報)を
+        # 呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
+        self._expand = expand
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -927,10 +943,10 @@ class AnswerEngine:
     async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
         """回答を作らずに根拠だけを集め、根拠の並びの順に返す(#593)。
 
-        KB の検索テストとレシピの検索比較で、引用の候補を確かめるために使う。回答・RAG 検索の画面
-        (``generate_answer=false``)・MCP の ``rag_retrieve_evidence`` と同じ 1 つの流れ(主の検索 →
-        rerank → 切る → 検索拡張の合わせ込み → 補いの検索の合わせ込み → 文脈の補完)で集め(#5173)、
-        回答の生成の手前で止める。回答の LLM は呼ばない。件数(起点の数)は ``request.top_k``。
+        KB の検索テストとレシピの検索比較で、引用の候補を確かめるために使う。回答と同じ流れ
+        (主の検索 → rerank → 切る → 文脈の補完。``expand`` なら検索拡張と補いの検索の合わせ込みも)
+        で集め(#5173・#5332)、回答の生成の手前で止める。回答の LLM は呼ばない。件数(起点の数)は
+        ``request.top_k``。
         """
         outcome = await self.run(request.model_copy(update={"generate_answer": False}))
         return list(outcome.citations)
@@ -1058,6 +1074,7 @@ class AnswerEngine:
                     else None
                 ),
                 guide_plan=guide_step_plan(self._settings.rag_support_guide),
+                expand=self._expand,
                 # rag_search の呼び出し元が検索文を言い換えたときの元の質問(#2665)。回答の要求の
                 # 単位・要求ごとの根拠の確認・回答の生成と検査に使い、検索は request.query で行う。
                 request_question=request.original_question,
@@ -1408,6 +1425,169 @@ class AnswerEngine:
         ]
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
+        # 検索の段の検索拡張(⑦。参照の展開・目次からの章節の選択・実体・関係情報)。RAG 検索の経路
+        # (#5332)は呼ばない。
+        search_expansions = (
+            await self._search_expansions(
+                request,
+                state,
+                anchors,
+                siblings,
+                ranked=ranked,
+                fused=fused,
+                queries=queries,
+                embeddings=embeddings,
+                page_ranges=page_ranges,
+                context_scope=context_scope,
+                expand_references=expand_references,
+            )
+            if self._expand
+            else _SearchExpansions(anchors=anchors)
+        )
+        anchors = search_expansions.anchors
+        references = search_expansions.references
+        referenced = search_expansions.referenced
+        outline_chunks = search_expansions.outline_chunks
+        entity_chunks = search_expansions.entity_chunks
+        graph_chunks = search_expansions.graph_chunks
+        if self._attach_images and not defer_context:
+            evidence = [
+                *anchors,
+                *siblings,
+                *referenced,
+                *outline_chunks,
+                *entity_chunks,
+                *graph_chunks,
+            ]
+            await self._materialize_images(evidence, state)
+            anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
+            siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
+            references = {
+                anchor_id: [state.chunks.get(chunk.chunk_id, chunk) for chunk in chunks]
+                for anchor_id, chunks in references.items()
+            }
+            outline_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in outline_chunks]
+            entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
+            graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
+        added = [*referenced, *outline_chunks, *entity_chunks, *graph_chunks]
+        evidence = [*anchors, *siblings, *added]
+        _require_projected_vision_chunks([*evidence, *self._attachment_chunks])
+        # rerank の候補は検索の候補だけ。検索拡張(参照先・実体・関係情報)の chunk は候補に入れず、
+        # rerank・下限・起点の選択の後に最後の根拠の並びへ合わせる(#5162。expansion_chunks)。
+        children = []
+        for chunk in anchors:
+            child = _stored_child(
+                chunk,
+                rrf_score=fused.get(chunk.chunk_id, 0.0),
+                retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
+            )
+            child.metadata["retrieval_admission_stage"] = (
+                "fusion" if chunk.chunk_id in fusion_ids else "diversity"
+            )
+            children.append(child)
+        expansions: dict[str, Any] = {}
+        for stage, chunks in (
+            ("reference", referenced),
+            ("outline_selection", outline_chunks),
+            ("entity", entity_chunks),
+            ("structure", graph_chunks),
+        ):
+            for chunk in chunks:
+                if chunk.chunk_id in expansions:
+                    continue
+                stored = _stored_child(
+                    state.chunks.get(chunk.chunk_id, chunk),
+                    rrf_score=0.0,
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
+                )
+                stored.metadata["retrieval_admission_stage"] = stage
+                expansions[chunk.chunk_id] = stored
+        all_children = {chunk.chunk_uid: chunk for chunk in children}
+        for uid, stored in expansions.items():
+            all_children.setdefault(uid, stored)
+        for sibling in siblings:
+            all_children.setdefault(
+                sibling.chunk_id,
+                _stored_child(
+                    sibling,
+                    rrf_score=0.0,
+                    retrieval_channels=state.retrieval_channels.get(sibling.chunk_id),
+                ),
+            )
+        if self._attachment_chunks:
+            # 会話の添付の根拠の候補（#2517）を先頭に足す（何度検索しても同じ chunk を 1 回だけ）。
+            base_score = max(fused.values(), default=1.0)
+            attached = []
+            for chunk in self._attachment_chunks:
+                state.chunks.setdefault(chunk.chunk_id, chunk)
+                if chunk.chunk_id in all_children:
+                    continue
+                stored = _stored_child(chunk, rrf_score=base_score * max(chunk.score, 0.1))
+                stored.metadata["retrieval_admission_stage"] = "attachment"
+                all_children[stored.chunk_uid] = stored
+                attached.append(stored)
+            children = [*attached, *children]
+        children = [_with_context_scope(child, context_scope) for child in children]
+        all_children = {
+            uid: _with_context_scope(child, context_scope) for uid, child in all_children.items()
+        }
+        expansion_children = [
+            _with_context_scope(child, context_scope) for child in expansions.values()
+        ]
+        parents = [] if defer_context else _stored_parents(list(all_children.values()), state)
+        state.retrieval_stages.append(
+            {
+                "stage": "candidate_fusion",
+                "rrf": fusion.diagnostics(weights, budgets, k),
+                "query_count": len(queries),
+                "query_limit": depth,
+                "fused_count": len(fused),
+                "fused_ids": ordered,
+                "duplicates": duplicates,
+                "excluded": [
+                    {"id": chunk_id, "reason": "fusion_candidate_budget"}
+                    for chunk_id in ordered
+                    if chunk_id not in selected_fused_ids
+                ],
+                "query_results": [
+                    {"query_index": index, "count": len(hits)}
+                    for index, hits in enumerate(all_hits)
+                ],
+                "base_limit": candidate_limit,
+                "selected_ids": [child.chunk_uid for child in children],
+                "expansion_ids": [child.chunk_uid for child in expansion_children],
+                "context_deferred": defer_context,
+            }
+        )
+        return HybridSearchResult(
+            child_chunks=children,
+            all_chunks=[*all_children.values(), *parents],
+            expansion_chunks=expansion_children,
+        )
+
+    async def _search_expansions(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        anchors: list[RetrievedChunk],
+        siblings: Sequence[RetrievedChunk],
+        *,
+        ranked: Sequence[str],
+        fused: Mapping[str, float],
+        queries: Sequence[str],
+        embeddings: Mapping[str, list[float]],
+        page_ranges: Sequence[Mapping[str, Any]],
+        context_scope: str,
+        expand_references: bool,
+    ) -> _SearchExpansions:
+        """⑦ 検索の段の検索拡張(Chat の経路だけ。#5332)。
+
+        上位の候補(``anchors``)を起点に、参照の展開(#1280。文書全体への参照は目次からの章節の
+        選択 #5263)・検索の上位の文書の目次からの章節の選択(#5324)・実体(#1362)・関係情報(#2055)の
+        chunk を集める。集めた chunk は rerank の候補に入れず、rerank・下限・起点の選択の後に最後の
+        根拠の並びへ合わせる(#5162。呼び出し元の ``expansion_chunks``)。頁に絞った検索
+        (``page_ranges``・``context_scope``)は ``expand_references=False`` で辿らない。
+        """
         # 上位の候補が本文で参照する節の chunk(#1280)。rerank の候補には入れず、最後の根拠の並びへ
         # 合わせる(#5162)。参照先が下位の候補・前後の文脈(siblings)にあっても候補の位置は動かさず、
         # 並びに残ればそのまま印を付け、残らなければ拡張の根拠として足す。上位の起点は足さない。
@@ -1633,119 +1813,13 @@ class AnswerEngine:
                             "最終採用": _EXPANSION_ADOPTION_NOTE,
                         }
                     )
-        if self._attach_images and not defer_context:
-            evidence = [
-                *anchors,
-                *siblings,
-                *referenced,
-                *outline_chunks,
-                *entity_chunks,
-                *graph_chunks,
-            ]
-            await self._materialize_images(evidence, state)
-            anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
-            siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
-            references = {
-                anchor_id: [state.chunks.get(chunk.chunk_id, chunk) for chunk in chunks]
-                for anchor_id, chunks in references.items()
-            }
-            outline_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in outline_chunks]
-            entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
-            graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
-        added = [*referenced, *outline_chunks, *entity_chunks, *graph_chunks]
-        evidence = [*anchors, *siblings, *added]
-        _require_projected_vision_chunks([*evidence, *self._attachment_chunks])
-        # rerank の候補は検索の候補だけ。検索拡張(参照先・実体・関係情報)の chunk は候補に入れず、
-        # rerank・下限・起点の選択の後に最後の根拠の並びへ合わせる(#5162。expansion_chunks)。
-        children = []
-        for chunk in anchors:
-            child = _stored_child(
-                chunk,
-                rrf_score=fused.get(chunk.chunk_id, 0.0),
-                retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
-            )
-            child.metadata["retrieval_admission_stage"] = (
-                "fusion" if chunk.chunk_id in fusion_ids else "diversity"
-            )
-            children.append(child)
-        expansions: dict[str, Any] = {}
-        for stage, chunks in (
-            ("reference", referenced),
-            ("outline_selection", outline_chunks),
-            ("entity", entity_chunks),
-            ("structure", graph_chunks),
-        ):
-            for chunk in chunks:
-                if chunk.chunk_id in expansions:
-                    continue
-                stored = _stored_child(
-                    state.chunks.get(chunk.chunk_id, chunk),
-                    rrf_score=0.0,
-                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
-                )
-                stored.metadata["retrieval_admission_stage"] = stage
-                expansions[chunk.chunk_id] = stored
-        all_children = {chunk.chunk_uid: chunk for chunk in children}
-        for uid, stored in expansions.items():
-            all_children.setdefault(uid, stored)
-        for sibling in siblings:
-            all_children.setdefault(
-                sibling.chunk_id,
-                _stored_child(
-                    sibling,
-                    rrf_score=0.0,
-                    retrieval_channels=state.retrieval_channels.get(sibling.chunk_id),
-                ),
-            )
-        if self._attachment_chunks:
-            # 会話の添付の根拠の候補（#2517）を先頭に足す（何度検索しても同じ chunk を 1 回だけ）。
-            base_score = max(fused.values(), default=1.0)
-            attached = []
-            for chunk in self._attachment_chunks:
-                state.chunks.setdefault(chunk.chunk_id, chunk)
-                if chunk.chunk_id in all_children:
-                    continue
-                stored = _stored_child(chunk, rrf_score=base_score * max(chunk.score, 0.1))
-                stored.metadata["retrieval_admission_stage"] = "attachment"
-                all_children[stored.chunk_uid] = stored
-                attached.append(stored)
-            children = [*attached, *children]
-        children = [_with_context_scope(child, context_scope) for child in children]
-        all_children = {
-            uid: _with_context_scope(child, context_scope) for uid, child in all_children.items()
-        }
-        expansion_children = [
-            _with_context_scope(child, context_scope) for child in expansions.values()
-        ]
-        parents = [] if defer_context else _stored_parents(list(all_children.values()), state)
-        state.retrieval_stages.append(
-            {
-                "stage": "candidate_fusion",
-                "rrf": fusion.diagnostics(weights, budgets, k),
-                "query_count": len(queries),
-                "query_limit": depth,
-                "fused_count": len(fused),
-                "fused_ids": ordered,
-                "duplicates": duplicates,
-                "excluded": [
-                    {"id": chunk_id, "reason": "fusion_candidate_budget"}
-                    for chunk_id in ordered
-                    if chunk_id not in selected_fused_ids
-                ],
-                "query_results": [
-                    {"query_index": index, "count": len(hits)}
-                    for index, hits in enumerate(all_hits)
-                ],
-                "base_limit": candidate_limit,
-                "selected_ids": [child.chunk_uid for child in children],
-                "expansion_ids": [child.chunk_uid for child in expansion_children],
-                "context_deferred": defer_context,
-            }
-        )
-        return HybridSearchResult(
-            child_chunks=children,
-            all_chunks=[*all_children.values(), *parents],
-            expansion_chunks=expansion_children,
+        return _SearchExpansions(
+            anchors=anchors,
+            references=references,
+            referenced=referenced,
+            outline_chunks=outline_chunks,
+            entity_chunks=entity_chunks,
+            graph_chunks=graph_chunks,
         )
 
     async def _context_chunks(

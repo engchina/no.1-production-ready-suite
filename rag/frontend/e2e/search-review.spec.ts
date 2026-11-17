@@ -21,8 +21,8 @@ import {
 
 /**
  * RAG 検索のレビューで直した不具合の回帰テスト（#285）。
- * stream の途中の失敗・回答の評価先の検索・回答プロファイル・IME の確定の Enter・画面を離れたときの中断・
- * 類似 FAQ を飛ばした後の再試行。
+ * stream の途中の失敗・回答の評価先の検索・回答プロファイル・IME の確定の Enter・画面を離れたときの中断。
+ * RAG 検索は登録済みQ&A を提示しない（#5332）。
  */
 
 const envelope = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
@@ -58,16 +58,8 @@ test.beforeEach(async ({ page }) => {
   await mockSearchPage(page);
 });
 
-async function mockSearchPage(
-  page: Page,
-  { faqSuggestions = [] as unknown[] }: { faqSuggestions?: unknown[] } = {}
-) {
+async function mockSearchPage(page: Page) {
   await page.route("**/api/search-answer-profiles**", async (route) => {
-    const pathname = new URL(route.request().url()).pathname;
-    if (pathname.endsWith("/approved-faq/suggest")) {
-      await route.fulfill(envelope({ suggestions: faqSuggestions }));
-      return;
-    }
     await route.fulfill(
       envelope({ items: VIEWS, total: VIEWS.length, limit: 50, offset: 0, has_next: false })
     );
@@ -262,41 +254,6 @@ test("回答の生成中に画面を離れたら検索の stream を止める", 
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
   await expect.poll(() => aborted).toBe(true);
-});
-
-test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し直さない", async ({ page }) => {
-  await page.unrouteAll();
-  await mockDatabaseReady(page);
-  await mockLocalAuth(page);
-  await mockSearchPage(page, {
-    faqSuggestions: [
-      { id: "faq-1", question: "交通費の上限は？", answer: "5,000 円です。", score: 0.95 },
-    ],
-  });
-  let calls = 0;
-  await page.route("**/api/search/stream", async (route) => {
-    calls += 1;
-    await route.fulfill({
-      status: 429,
-      json: {
-        data: null,
-        error_messages: ["リクエスト数が上限を超えました。しばらく待ってから再度お試しください。"],
-        warning_messages: [],
-      },
-    });
-  });
-
-  await page.goto("/search");
-  await selectSearchAnswerProfile(page, /経理ビュー/);
-  await search(page, "交通費の上限");
-  await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
-
-  const alert = page.getByRole("alert").filter({ hasText: "リクエスト数が上限を超えました" });
-  await expect(alert).toBeVisible();
-  await alert.getByRole("button", { name: "再試行" }).click();
-
-  await expect.poll(() => calls).toBe(2);
-  await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toHaveCount(0);
 });
 
 test("質問から条件を読み取らず、「自動」の条件のチップを出さない（#4799）", async ({ page }) => {
@@ -497,118 +454,6 @@ test.describe("送り直す操作は、表示中の結果を出した検索の�
       generate_answer: true,
     });
   });
-
-  test("「どれでもない（資料を検索する）」は、類似 FAQ を確かめた質問を送る", async ({ page }) => {
-    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
-      route.fulfill(
-        envelope({
-          suggestions: [
-            { id: "faq-1", question: "交通費の上限は？", answer: "5,000 円です。", score: 0.95 },
-          ],
-        })
-      )
-    );
-    const requests: Array<Record<string, unknown>> = [];
-    await page.route("**/api/search/stream", (route) => {
-      requests.push(route.request().postDataJSON() as Record<string, unknown>);
-      return fulfillStream(
-        route,
-        sse([
-          ["metadata", { trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], diagnostics: {} }],
-          ["citations", []],
-          ["done", { trace_id: "t1" }],
-        ])
-      );
-    });
-
-    await page.goto("/search");
-    await selectSearchAnswerProfile(page, /経理ビュー/);
-    await search(page, "交通費の上限");
-    await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toBeVisible();
-
-    await page.getByRole("textbox", { name: "RAG 検索" }).fill("書きかけ");
-    await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
-
-    await expect.poll(() => requests.length).toBe(1);
-    expect(requests[0]).toMatchObject({ query: "交通費の上限", search_answer_profile_id: "bv-1" });
-  });
-});
-
-test.describe("類似 FAQ の照会中も、検索を始めたことを示す（#915）", () => {
-  test("押した直後に「停止」と進行を出し、FAQ があれば提示する", async ({ page }) => {
-    let releaseFaq: () => void = () => undefined;
-    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
-      await new Promise<void>((resolve) => {
-        releaseFaq = resolve;
-      });
-      await route.fulfill(
-        envelope({
-          suggestions: [
-            { id: "faq-1", question: "交通費の上限は？", answer: "5,000 円です。", score: 0.95 },
-          ],
-        })
-      );
-    });
-    let streamCalls = 0;
-    await page.route("**/api/search/stream", (route) => {
-      streamCalls += 1;
-      return route.abort();
-    });
-
-    await page.goto("/search");
-    await selectSearchAnswerProfile(page, /経理ビュー/);
-    // Q&A の照会は回答を作る検索だけ（#5107）。
-    await enableSearchAnswer(page);
-    await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
-    const button = page.getByTestId("search-run-stop");
-    await button.click();
-
-    // 照会の応答を待つ間も実行中（停止できる・進行を出す・条件を変えられない）。
-    await expect(button).toHaveAccessibleName("停止");
-    await expect(page.getByTestId("search-run-progress")).toBeVisible();
-    await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toBeDisabled();
-    await expectNoPageOverflow(page);
-
-    releaseFaq();
-    await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toBeVisible();
-    await expect(button).toHaveAccessibleName("検索");
-    await expect(page.getByTestId("search-run-progress")).toHaveCount(0);
-    expect(streamCalls).toBe(0);
-  });
-
-  test("照会中に停止したら、照会の結果を捨てて検索を送らない", async ({ page }) => {
-    let releaseFaq: () => void = () => undefined;
-    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
-      await new Promise<void>((resolve) => {
-        releaseFaq = resolve;
-      });
-      await route.fulfill(envelope({ suggestions: [] }));
-    });
-    let streamCalls = 0;
-    await page.route("**/api/search/stream", (route) => {
-      streamCalls += 1;
-      return route.abort();
-    });
-
-    await page.goto("/search");
-    await selectSearchAnswerProfile(page, /経理ビュー/);
-    // Q&A の照会は回答を作る検索だけ（#5107）。
-    await enableSearchAnswer(page);
-    await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
-    const button = page.getByTestId("search-run-stop");
-    await button.click();
-    await expect(button).toHaveAccessibleName("停止");
-    // ダブルクリックの 2 回目として無視されないよう、間を空けて押す。
-    await page.waitForTimeout(600);
-    await button.click();
-
-    await expect(button).toHaveAccessibleName("検索");
-    await expect(page.getByText("検索ストリームを停止しました。")).toBeVisible();
-    releaseFaq();
-    await page.waitForTimeout(300);
-    expect(streamCalls).toBe(0);
-    await expect(button).toHaveAccessibleName("検索");
-  });
 });
 
 // 回答の注意書き（設定は製品ごと。#2405・#2449）。回答の本文と根拠の後に出す。
@@ -645,20 +490,34 @@ for (const viewport of [
 }
 
 
-test("FAQ の提示対象が無いときは質問を止めず検索する", { tag: "@responsive" }, async ({ page }) => {
-  let searched = false;
+test("RAG 検索は登録済みQ&Aを照会・提示せず、そのまま資料を検索する（#5332）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const suggestCalls: string[] = [];
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) => {
+    suggestCalls.push(route.request().url());
+    return route.fulfill(
+      envelope({ suggestions: [{ id: "faq-1", question: "合成の設定 A", answer: "合成の登録回答 A", score: 0.97 }] })
+    );
+  });
+  const requests: Array<Record<string, unknown>> = [];
   await page.route("**/api/search/stream", (route) => {
-    searched = true;
+    requests.push(route.request().postDataJSON() as Record<string, unknown>);
     return fulfillStream(route, sse([
-      ["metadata", { trace_id: "faq-filtered", elapsed_ms: 5, guardrail_warnings: [], diagnostics: {} }],
-      ["citations", []], ["done", { trace_id: "faq-filtered" }],
+      ["metadata", { trace_id: "basic-search", elapsed_ms: 5, guardrail_warnings: [], diagnostics: {} }],
+      ["delta", { text: "合成の回答 A" }],
+      ["citations", []], ["done", { trace_id: "basic-search" }],
     ]));
   });
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "合成の設定 A");
-  await expect.poll(() => searched).toBe(true);
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({ query: "合成の設定 A", generate_answer: true });
+  expect(requests[0]).not.toHaveProperty("approved_faq_id");
+  await expect(page.getByText("合成の回答 A", { exact: true })).toBeVisible();
   await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toHaveCount(0);
+  expect(suggestCalls).toEqual([]);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("search-basic-no-faq.png"), fullPage: true });
 });
 
 /**
@@ -835,40 +694,4 @@ test("旧取得件数の URL・保存値を無視し、検索・再試行に top
   }
   expect(await page.evaluate(() => sessionStorage.getItem("production-ready-rag.workspace.v1:search.topK"))).toBeNull();
   await expectNoPageOverflow(page);
-});
-
-
-test("選んだ登録済みQ&Aを付けて検索し、Q&A の回答を原文のまま出す（#5107）", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await page.route("**/approved-faq/suggest", (route) =>
-    route.fulfill(
-      envelope({
-        suggestions: [
-          { id: "faq-1", question: "合成の質問 A", answer: "合成の登録回答 A", score: 0.97 },
-        ],
-      })
-    )
-  );
-  const requests: Array<Record<string, unknown>> = [];
-  await page.route("**/api/search/stream", (route) => {
-    requests.push(route.request().postDataJSON() as Record<string, unknown>);
-    return fulfillStream(route, sse([
-      ["metadata", { trace_id: "synthetic-faq", elapsed_ms: 5, guardrail_warnings: [], diagnostics: { answer: { answer_source: "approved_faq", approved_faq_id: "faq-1", approved_faq_question: "合成の質問 A", approved_faq_answer: "合成の登録回答 A" } }, notice: "この回答は AI が生成したものです。" }],
-      ["delta", { text: "合成の登録回答 A" }], ["citations", []], ["done", { trace_id: "synthetic-faq" }],
-    ]));
-  });
-  await page.goto("/search");
-  await selectSearchAnswerProfile(page, /経理ビュー/);
-  await search(page, "合成の質問 A");
-  // 一致度が高くても自動では返さず、候補を選ぶまで検索しない。
-  await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toBeVisible();
-  expect(requests).toHaveLength(0);
-  await page.getByRole("button", { name: "このQ&Aで回答する" }).click();
-  await expect.poll(() => requests.length).toBe(1);
-  expect(requests[0]).toMatchObject({ query: "合成の質問 A", generate_answer: true, approved_faq_id: "faq-1" });
-  await expect(page.getByText("合成の登録回答 A", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("answer-faq-direct")).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "回答の注意書き" })).toHaveCount(0);
-  await expect(page.getByText("一致する根拠が見つかりませんでした。", { exact: true })).toHaveCount(0);
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("faq-search-selected.png"), fullPage: true });
 });

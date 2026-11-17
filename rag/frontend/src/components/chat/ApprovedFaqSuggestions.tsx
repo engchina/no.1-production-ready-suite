@@ -15,30 +15,28 @@ import { t } from "@/lib/i18n";
 
 /**
  * 回答の前に提示する、質問に近い登録済みQ&A（一致度の下限以上・最大件数は backend が絞る）。
- * RAG 検索（search）もチャット（chat）も、選ぶと資料の検索と回答の生成をせず、Q&A の回答をそのまま返す（#5107）。
- * 「どれでもない」は Q&A を使わずに資料を検索して回答する。
+ * RAG Chat だけが提示する（RAG 検索は基本の RAG で提示しない。#5332）。選ぶと資料の検索と回答の生成をせず、
+ * Q&A の回答をそのまま返す（#5107）。「どれでもない」は Q&A を使わずに資料を検索して回答する。
  */
 export function ApprovedFaqSuggestions({
   suggestions,
   onUse,
   onSkip,
-  mode = "search",
   disabled = false,
 }: {
   suggestions: ApprovedFaqSuggestionData[];
   onUse: (suggestion: ApprovedFaqSuggestionData) => void;
   onSkip: () => void;
-  mode?: "search" | "chat";
   disabled?: boolean;
 }) {
   return (
-    <Card data-testid={`${mode}-approved-faq-suggestions`}>
+    <Card data-testid="chat-approved-faq-suggestions">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <BookCheck size={16} className="text-accent-fg" aria-hidden />
-          {t(`${mode}.faq.title`)}
+          {t("chat.faq.title")}
         </CardTitle>
-        <CardDescription>{t(`${mode}.faq.description`)}</CardDescription>
+        <CardDescription>{t("chat.faq.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <ul className="space-y-2">
@@ -56,7 +54,7 @@ export function ApprovedFaqSuggestions({
                 </p>
                 <StatusBadge
                   variant="neutral"
-                  label={t(`${mode}.faq.score`, {
+                  label={t("chat.faq.score", {
                     value: Math.round(suggestion.score * 100),
                   })}
                 />
@@ -68,7 +66,7 @@ export function ApprovedFaqSuggestions({
                 disabled={disabled}
                 onClick={() => onUse(suggestion)}
               >
-                {t(`${mode}.faq.use`)}
+                {t("chat.faq.use")}
               </Button>
             </li>
           ))}
@@ -80,7 +78,7 @@ export function ApprovedFaqSuggestions({
           disabled={disabled}
           onClick={onSkip}
         >
-          {t(`${mode}.faq.skip`)}
+          {t("chat.faq.skip")}
         </Button>
       </CardContent>
     </Card>

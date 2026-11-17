@@ -13,6 +13,7 @@ from pytest import MonkeyPatch
 from app.api.routes import search as search_route
 from app.config import get_settings
 from app.rag.answer_engine import AS_OF_FILTER_KEY, _with_effective_as_of
+from app.rag.pipeline import EXPANDED_FLOW
 from app.rag.support_guide_query import build_guide_query
 from app.schemas.search import SearchRequest
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
@@ -92,7 +93,9 @@ async def test_search_entry_checks_the_question_before_the_guide(
 
     monkeypatch.setattr(search_route, "check_search_question", check)
     request = SearchRequest(query="合成の個人情報の質問", search_answer_profile_id="bv-1")
-    (resolved, *_), checked = await search_route._checked_query_context(request, get_settings())
+    (resolved, *_), checked = await search_route._checked_query_context(
+        request, get_settings(), flow=EXPANDED_FLOW
+    )
     assert order == ["guardrail", "guide:合成の [機微情報] の質問"]
     assert resolved.query == "合成の [機微情報] の質問"
     assert checked.allowed

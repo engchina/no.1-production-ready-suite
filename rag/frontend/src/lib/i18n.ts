@@ -1782,12 +1782,12 @@ export const ja = {
   "searchAnswerProfiles.field.guideEnabledOff": "OFF",
   "searchAnswerProfiles.field.guideEnabled": "業務ガイドを使用する",
   "searchAnswerProfiles.field.guideEnabledHelper":
-    "既定値は OFF です。ON にすると、質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。",
+    "既定値は OFF です。ON にすると、チャット・品質評価・MCP で質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。RAG 検索では業務ガイドを使用しません。",
   "searchAnswerProfiles.field.graphExpansion": "文書構造による検索拡張",
-  "searchAnswerProfiles.field.graphExpansionHelper": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を、Rerank と根拠の選択の後に回答の根拠へ加えます。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。検索方法の全体設定を使います。",
+  "searchAnswerProfiles.field.graphExpansionHelper": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を、Rerank と根拠の選択の後に回答の根拠へ加えます。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。検索方法の全体設定を使います。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
   "searchAnswerProfiles.field.guideStepRetrievalHelper":
-    "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。継承時は検索方法の現在の設定を使います。",
+    "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。継承時は検索方法の現在の設定を使います。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "searchAnswerProfiles.field.answerModelLoadError": "回答モデルの候補を読み込めませんでした。",
   "searchAnswerProfiles.field.escalationModelLoadError": "出力の検査を通らなかったときのモデルの候補を読み込めませんでした。",
   "searchAnswerProfiles.field.answerModel": "回答モデル",
@@ -1800,9 +1800,9 @@ export const ja = {
   "searchAnswerProfiles.faq.title": "登録済みQ&A",
   "searchAnswerProfiles.faq.enabled.label": "回答の前に関連するQ&Aを提示する",
   "searchAnswerProfiles.faq.enabled.help":
-    "チャットと RAG 検索で、質問に近い登録済みQ&A（一致度 {min}% 以上・最大 {count} 件）を回答の前に提示します。選んだQ&Aの回答をそのまま返し、資料の検索と回答の生成はしません。当てはまるQ&Aが無ければ候補を出さずに回答します。オフにするとQ&Aを使いません。",
+    "チャット（MCP を含む）で、質問に近い登録済みQ&A（一致度 {min}% 以上・最大 {count} 件）を回答の前に提示します。選んだQ&Aの回答をそのまま返し、資料の検索と回答の生成はしません。当てはまるQ&Aが無ければ候補を出さずに回答します。オフにするとQ&Aを使いません。RAG 検索では提示しません。",
   "searchAnswerProfiles.faq.enabled.helpLoading":
-    "チャットと RAG 検索で、質問に近い登録済みQ&Aを回答の前に提示します。選んだQ&Aの回答をそのまま返し、資料の検索と回答の生成はしません。オフにするとQ&Aを使いません。",
+    "チャット（MCP を含む）で、質問に近い登録済みQ&Aを回答の前に提示します。選んだQ&Aの回答をそのまま返し、資料の検索と回答の生成はしません。オフにするとQ&Aを使いません。RAG 検索では提示しません。",
   // 見える範囲（#5107）。プロファイルの権限だけで判定し、ナレッジベースの権限では見せ分けない。
   "searchAnswerProfiles.faq.visibility":
     "この検索・回答プロファイルの権限を持つ人は、全員ここのQ&Aを見られます（ナレッジベースの権限では判定しません）。ナレッジベースの権限で見せ分けたい内容は、ここに入れないでください。Q&Aの Excel は、文書としてナレッジベースに登録することもできます。",
@@ -1816,14 +1816,14 @@ export const ja = {
   "searchAnswerProfiles.faq.deleted": "Q&A を削除しました。",
   "searchAnswerProfiles.faq.deleteConfirm.title": "この Q&A を削除しますか？",
   "searchAnswerProfiles.faq.deleteConfirm.description":
-    "「{question}」を登録済みQ&Aから削除します。チャットと RAG 検索の候補に出なくなります。",
+    "「{question}」を登録済みQ&Aから削除します。チャットの候補に出なくなります。",
   "searchAnswerProfiles.faq.add": "追加",
   "searchAnswerProfiles.faq.added": "Q&A を追加しました。",
   "searchAnswerProfiles.faq.addTitle": "Q&A を追加",
   "searchAnswerProfiles.faq.saveError": "Q&A を保存できませんでした。",
   "searchAnswerProfiles.faq.empty": "登録済みQ&Aはまだありません",
   "searchAnswerProfiles.faq.emptyHint":
-    "追加または Excel 取込で登録すると、チャットと RAG 検索で回答の前に候補として提示されます。",
+    "追加または Excel 取込で登録すると、チャット（MCP を含む）で回答の前に候補として提示されます。",
   "searchAnswerProfiles.faq.importTitle": "Excel 取込",
   "searchAnswerProfiles.faq.importHelp":
     "1 行目に QUESTION と ANSWER の列を持つ Excel（.xlsx / .xls）を選ぶと、先頭 10 件をプレビューします。読み込むのは QUESTION 列と ANSWER 列だけで、ほかの列は無視します。",
@@ -3572,11 +3572,6 @@ export const ja = {
   "search.filters.knowledgeBaseHelper": "回答生成に使う検索対象をナレッジベース単位で絞り込みます。",
   "search.filters.clear": "クリア",
   "search.answer": "回答",
-  "search.faq.title": "質問に近い登録済みQ&Aがあります",
-  "search.faq.description":
-    "選んだQ&Aの回答をそのまま返します（資料の検索と回答の生成はしません）。当てはまるものが無ければ「どれでもない」を選ぶと、資料を検索して回答します。",
-  "search.faq.score": "一致度 {value}%",
-  "search.faq.use": "このQ&Aで回答する",
   // 回答の末尾の窓口の案内（#2400）
   "searchAnswerProfiles.contact.title": "回答の末尾の窓口の案内",
   "searchAnswerProfiles.contact.helper":
@@ -3609,7 +3604,6 @@ export const ja = {
   "chat.faq.score": "一致度 {value}%",
   "chat.faq.use": "このQ&Aで回答する",
   "chat.faq.skip": "どれでもない（資料を検索する）",
-  "search.faq.skip": "どれでもない（資料を検索する）",
   "search.answerDetails.models": "使用したモデル",
   "search.answerDetails.questionType": "問い合わせ型: {value}",
   "search.answerText.citationPart": "箇所 {number}/{total}：{citation}",
@@ -3673,7 +3667,7 @@ export const ja = {
   "search.answerDetails.model.embedding": "Embedding",
   "search.answerDetails.model.rerank": "Rerank",
   "search.generateAnswer.label": "LLM で回答を生成する",
-  "search.generateAnswer.help": "オフでもオンでも、チャットと同じ方法で根拠を検索して確かめます。オフのときは集めた根拠までを表示し、オンにすると LLM が根拠付きの回答も作ります（時間がかかります）。",
+  "search.generateAnswer.help": "オフでもオンでも、同じ方法（検索・Rerank・親と前後の文脈の読取）で根拠を集めます。オフのときは集めた根拠までを表示し、オンにすると LLM が根拠付きの回答も作ります（時間がかかります）。業務ガイド・登録済みQ&A・根拠の拡張（章節・参照・実体など）は RAG Chat だけで使います。",
   "search.results": "検索結果",
   "search.results.hint": "チャットと同じ工程（質問の理解・拡張、ハイブリッド検索、Rerank、前後の文脈の展開）で見つけた文書の箇所です。",
   "answerModel.text": "{name}（テキスト）",
@@ -3879,13 +3873,13 @@ export const ja = {
   "settings.answering.runtimeTermsAnswerHint": "登録した用語・同義語と説明を、回答生成時の補助情報として使用します。回答の根拠となる資料の代わりには使用しません。検索文への追加は別の設定で切り替えます。",
   "settings.answering.neighborChildCount": "根拠の前後から加える数",
   "settings.answering.neighborChildCountHint":
-    "章節の対応も親子分割も無い根拠に、前と後からそれぞれ最大でこの数のチャンクを文脈として加えます（1〜5）。章節の対応がある根拠は章節で、親子分割の根拠は親の本文で補い、前後のチャンクは加えません。",
+    "親子分割の根拠は親の本文で補い、それ以外の根拠に前と後からそれぞれ最大でこの数のチャンクを文脈として加えます（1〜5）。チャット・品質評価・MCP では、章節の対応がある根拠は章節で補い、前後のチャンクは加えません。",
   "settings.answering.referenceOutlineSelection": "参照先の文書の目次から章節をモデルが選ぶ",
   "settings.answering.referenceOutlineSelectionHint":
-    "根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき、参照先の文書の目次を回答のモデルに渡して質問に要る章節を選ばせ、その章節を読みます（参照先が複数でも AI の呼び出しは 1 回増えます）。目次が無い文書や章節を選べなかったときは、参照先の文書の全体を読みます。オフのときは参照先の文書の中を質問で検索した上位を読みます。番号を示す参照（第 3 章・別紙 1 など）はどちらでも番号で読みます。全体の検索に適用します。",
+    "根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき、参照先の文書の目次を回答のモデルに渡して質問に要る章節を選ばせ、その章節を読みます（参照先が複数でも AI の呼び出しは 1 回増えます）。目次が無い文書や章節を選べなかったときは、参照先の文書の全体を読みます。オフのときは参照先の文書の中を質問で検索した上位を読みます。番号を示す参照（第 3 章・別紙 1 など）はどちらでも番号で読みます。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "settings.answering.outlineSelection": "検索の上位の文書の目次から章節をモデルが選ぶ",
   "settings.answering.outlineSelectionHint":
-    "回答の検索で上位に当たった文書のうち章節の構成を持つ文書の目次を回答のモデルに渡し、質問に要る章節を選ばせて、その章節を回答の根拠に加えます（AI の呼び出しは回答ごとに 1 回増えます）。検索の語では関連が低く見える章節も根拠に入ります。加えた根拠は Rerank にかけず、起点数や根拠の件数には数えません。根拠が入力の予算を超えるときは分けて読みます。回答の上限時間の残りが足りないときは選ばずに回答します。全体の検索に適用します。",
+    "回答の検索で上位に当たった文書のうち章節の構成を持つ文書の目次を回答のモデルに渡し、質問に要る章節を選ばせて、その章節を回答の根拠に加えます（AI の呼び出しは回答ごとに 1 回増えます）。検索の語では関連が低く見える章節も根拠に入ります。加えた根拠は Rerank にかけず、起点数や根拠の件数には数えません。根拠が入力の予算を超えるときは分けて読みます。回答の上限時間の残りが足りないときは選ばずに回答します。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "settings.answering.outline_selection_max_documents": "目次を渡す文書の数",
   "settings.answering.outline_selection_catalog_max_chars": "目次の字数の上限",
   "settings.answering.outline_selection_read_max_chars": "読む章節の字数の上限",
@@ -3895,9 +3889,9 @@ export const ja = {
     "質問から回答を確定するまでの上限です（既定 600 秒）。超えると、時間切れの工程を示して止めます。最小の 150 秒は生成の 1 回の見積もりと確定の分（既定 150 秒）と同じなので、章節の拡張・参照先の読み足し・根拠の分割読取をせず、入る根拠だけで 1 回生成します。",
   "settings.answering.answerTimeoutOption": "{seconds} 秒",
   "settings.answering.entityExpansion": "実体・別名による検索拡張",
-  "settings.answering.entityExpansionHint": "質問と上位の検索候補に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ集めます。集めた根拠は Rerank にかけず、Rerank と根拠の選択の後に回答の根拠へ加えます（起点数や根拠の件数には数えません）。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。文書構造による検索拡張と併用できます。全体の検索に適用します。",
+  "settings.answering.entityExpansionHint": "質問と上位の検索候補に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ集めます。集めた根拠は Rerank にかけず、Rerank と根拠の選択の後に回答の根拠へ加えます（起点数や根拠の件数には数えません）。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。文書構造による検索拡張と併用できます。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "settings.answering.sectionExpansion": "章節で広げる根拠",
-  "settings.answering.sectionExpansionHint": "章節の対応がある根拠は、当たった根拠の章節から親の章節へ広げ、原文を回答の材料に加えます（前後のチャンクは加えません）。段数と回答モデルの入力上限に対する割合で制限します。全体の回答に適用します。",
+  "settings.answering.sectionExpansionHint": "章節の対応がある根拠は、当たった根拠の章節から親の章節へ広げ、原文を回答の材料に加えます（前後のチャンクは加えません）。段数と回答モデルの入力上限に対する割合で制限します。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "settings.answering.entity_expansion_max_chunks": "1 回の検索で加える根拠の上限",
   "settings.answering.section_expansion_max_levels": "広げる段の上限",
   "settings.answering.section_expansion_input_token_percent": "根拠の入力の上限（%）",
@@ -3911,7 +3905,7 @@ export const ja = {
   "settings.answering.rerankHint":
     "OCI Generative AI の Rerank で、検索候補を質問との関連の強さの順に並べ替えます。",
   "settings.answering.graphExpansion": "文書構造による検索拡張",
-  "settings.answering.graphExpansionHint": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を集めます。集めた根拠は Rerank にかけず、Rerank と根拠の選択の後に回答の根拠へ加えます（起点数や根拠の件数には数えません）。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。実体・別名による検索拡張と併用でき、追加済みの根拠は重複して加えません。全体の検索に適用します。",
+  "settings.answering.graphExpansionHint": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を集めます。集めた根拠は Rerank にかけず、Rerank と根拠の選択の後に回答の根拠へ加えます（起点数や根拠の件数には数えません）。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。実体・別名による検索拡張と併用でき、追加済みの根拠は重複して加えません。RAG Chat と品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "settings.answering.save": "回答の設定を保存",
   "settings.answering.saved": "回答の検索と生成の設定を保存しました。",
   "settings.answering.saveError": "回答の検索と生成の設定を保存できませんでした。",
@@ -4104,7 +4098,7 @@ export const ja = {
   "search.stage.approvedFaqAnswer": "選んだ登録済みQ&Aの回答を返す",
   "search.stage.attachmentEvidence": "会話の添付から根拠を選ぶ",
   "search.stage.answer": "質問の条件を整理して回答を作る",
-  // 回答を作らない RAG 検索（チャットと同じ流れを回答の生成の手前で止める。#3506）
+  // 回答を作らない RAG 検索（回答と同じ流れを回答の生成の手前で止める。#3506）
   "search.stage.evidence": "質問の条件を整理して根拠を探す",
   "search.stage.queryGuardrail": "質問に安全上の問題がないか検査する",
   "search.stage.answerGuardrail": "回答に安全上の問題がないか検査する",

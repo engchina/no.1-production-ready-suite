@@ -1522,7 +1522,9 @@ def test_retrieve_evidence_searches_the_query_and_marks_rank_and_origin(
     )["structuredContent"]
 
     assert captured == {
-        # 根拠は回答と同じ流れで集め（#5173）、図の画像だけ切り出さない（Agent が読む。#5125）。
+        # MCP は Chat と同じ拡張の経路（#5332）。根拠は回答と同じ流れで集め（#5173）、図の画像だけ
+        # 切り出さない（Agent が読む。#5125）。
+        "flow": "expanded",
         "materialize_images": False,
         "generate_answer": False,
         "query": "経費精算 期限",
@@ -2875,7 +2877,7 @@ def test_evidence_shows_the_section_of_the_chunk(
 
     async def fake_search(request: SearchRequest, **options: object) -> SearchResponse:
         del request
-        assert options == {"materialize_images": False}
+        assert options == {"flow": "expanded", "materialize_images": False}
         return SearchResponse(answer="", citations=[hit, other], trace_id="t-1", elapsed_ms=1.0)
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_search)

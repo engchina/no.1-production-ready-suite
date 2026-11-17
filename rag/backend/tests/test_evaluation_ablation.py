@@ -65,7 +65,7 @@ async def test_stage_switch_reaches_production_pipeline_settings(monkeypatch: Mo
     observed: list[Settings] = []
 
     class CapturingRagPipeline:
-        def __init__(self, settings: Settings) -> None:
+        def __init__(self, settings: Settings, flow: str = "basic") -> None:
             observed.append(settings)
 
         async def run(

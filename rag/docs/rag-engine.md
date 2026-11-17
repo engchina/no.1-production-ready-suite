@@ -82,6 +82,10 @@ rerank が無効・失敗・有効な点が 1 件も無いときは、並べ替�
 
 ## 補いの検索と 3 つの経路（#5173）
 
+補いの検索と章節の拡張は ⑦ 根拠の拡張（`_expand_evidence`）で、拡張の経路（RAG Chat・品質評価・業務ガイドの
+下書きの試答・MCP）だけが行う。RAG 検索（画面と `retrieval_only`）は基本の経路で行わない（#5332。経路は
+`app/rag/pipeline.py` の `AnswerFlow`）。
+
 主の検索の後に足す検索（全文検索の語数上限を超えた質問の要求別の補完「検索上限の要求別補完」・業務ガイドの
 手順ごとの検索）は、主の検索と同じ切りと検索拡張と同じ合わせ込みにする（`rag_engine/generation/answering.py`）。
 
@@ -153,8 +157,8 @@ rerank の後に決まった根拠（起点。検索拡張の根拠も同じ）�
 
 - 親子分割の当たった chunk は、章節の対応があっても親を根拠の単位にする（章節の読み込みは章節の親を読むので、
   章節で補った結果は親を含む。章節を読めなかったときも親の本文は残る）。
-- 3 つの経路（回答・検索だけ・MCP）はどれも章節の拡張を行う（#5173）。章節の拡張が無効・章節の読み込みが無いときは、
-  親か前後で補う。
+- 拡張の経路（チャット・品質評価・MCP。回答を作るか否かに関係なく）は章節の拡張を行う（#5173）。RAG 検索の基本の
+  経路は章節で補わず、親か前後で補う（#5332）。章節の拡張が無効・章節の読み込みが無いときも親か前後で補う。
 - 章節の拡張が予算・時間の上限・読み取りの失敗で起点の所有の章節（かその上の章節）を読めなかったときは、その起点を
   次の補い方で補う（親子分割は親が起点の単位なので補い済み、それ以外は前後 N 件。#5173）。補った起点と前後の
   chunk は `section_expansion.unread_section_fallback` に残す。
@@ -513,7 +517,7 @@ ai-foundations-lab の検証との照合（#512）:
 standard の回答エンジンを消す（#592）前に、standard だけが持っていた次の機能を用意した。standard の挙動と既定は変えていない。
 
 - **チャットのモデル比較**: チャットは比較の列ごとのモデルを `RagPipeline(answer_model_id=...)` で渡し、`AnswerEngine` → `build_engine_settings(answer_model_id=...)` がそのモデル（とその接続）で回答する。以前は列がすべて既定のモデルで答えていた。Vision のモデルは比較の対象ではなく、常に既定の Vision モデルを使う。
-- **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`AnswerEngine.retrieve` が回答と同じ流れ（`generate_answer=false`。主の検索 → rerank → 切る → 検索拡張・補いの検索の合わせ込み → 文脈の補完。#5173）で根拠を集め、引用として返す（回答は空）。回答の生成はせず、回答の LLM を呼ばない。図の画像は切り出さない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答していた（`retrieval_only` を無視する。#594 で standard は呼ばれなくなった）。
+- **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`AnswerEngine.retrieve` が RAG 検索の基本の経路の回答と同じ流れ（`generate_answer=false`。主の検索 → rerank → 切る → 文脈の補完。#5173・#5332）で根拠を集め、引用として返す（回答は空）。回答の生成はせず、回答の LLM を呼ばない。図の画像は切り出さない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答していた（`retrieval_only` を無視する。#594 で standard は呼ばれなくなった）。
 - **全体既定の画面**: 根拠の前後から加える数・Rerankの全体既定を、取込・検索・回答設定 > 検索方法「回答の検索と生成」で変えられる（`GET` / `PATCH /api/settings/answering`。権限は `menu.settings_retrieval`）。回答の記録の保存期間と質問履歴のカードも同じ画面へ移した（API の権限も `menu.settings_retrieval` に変えた）。
 - **回答フローの進捗**: 回答フローの各工程（`rag_engine.generation.execution_record._execution_step`。質問の理解・文書検索（1回目）など）は工程の観測（`observe_call("stage", 工程名)`）の span で、開始で種類 `answer_step` と工程名、終わりで LLM の回数・結果の説明・工程の詳細を観測の `display` に渡す（画面の処理の経過は trace の投影。#3226）。開始と終了は `answer` の中の入れ子の工程の知らせ（`answer_step:<工程名>`。`ANSWER_STEP_STAGE_PREFIX`）にもし、時間切れの文言・MCP の進み具合に使う。
 - **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（検索・回答プロファイルの用語・同義語、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。#595 で `query_transform.py` ごと削除した。
@@ -553,9 +557,9 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
   読んだことを意味し、LLM が内容の十分性を確認したという意味ではない。
 - 同じ ID でも本文が抜粋なら読了とせず原文へ戻す。部分取得、権限による欠落、読取失敗、抽出した抜粋は
   全量の読了にしない。読めなかった範囲は消さず条件つきの回答にする。
-- RAG 検索の画面の回答を作らない検索（`generate_answer=False`）は、チャットと同じ流れでこの補完まで行い、回答の
-  生成の手前で止める（#3506。処理の経過の工程・入れ子・LLM の呼び出しもチャットと同じ）。
-- MCP の根拠取得（`rag_retrieve_evidence`）・検索だけ（`retrieval_only`）も同じ流れでこの補完まで行う（#5173）。
+- 回答を作らない検索（`generate_answer=False`）は、同じ経路の回答と同じ流れで根拠を集め、回答の生成の手前で止める
+  （#3506）。章節の拡張は拡張の経路だけ（RAG 検索の基本の経路・検索だけ `retrieval_only` はしない。#5332）。
+- MCP の根拠取得（`rag_retrieve_evidence`）は拡張の経路でこの補完まで行う（#5173）。
   さらに広い範囲が要るときは、返された章節・chunk の ID から呼び出し側が `rag_read_section(up=...)` を使う。
 
 診断は `section_expansion.stop_reason`（`disabled` / `not_configured` / `no_sections` / `scope_read` / 各上限など）、

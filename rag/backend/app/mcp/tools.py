@@ -157,6 +157,7 @@ from app.rag.figure_url import (
     issue_figure_token,
 )
 from app.rag.input_guardrail import check_question_text
+from app.rag.pipeline import EXPANDED_FLOW
 from app.rag.profile_language import profile_language_scope
 from app.rag.profile_recommendation import (
     RECOMMEND_LIMIT_DEFAULT,
@@ -4273,7 +4274,8 @@ async def _run_search(request: SearchRequest, **options: Any) -> SearchResponse:
     質問・文書・呼び先の応答の本文は入れない（ログも同じ項目だけ）。
     """
     try:
-        return await search_route._run_search_with_timeout(request, **options)
+        # MCP は業務ガイドの照合・承認済み FAQ・根拠の拡張を含む今の経路で答える（#5332）。
+        return await search_route._run_search_with_timeout(request, flow=EXPANDED_FLOW, **options)
     except search_route.AnswerApiFailedHTTPError as exc:
         # 検索の REST と同じ分類（#2667）を、種類つきのツールのエラーにする。
         failure = exc.failure

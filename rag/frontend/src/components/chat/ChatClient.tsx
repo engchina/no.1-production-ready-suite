@@ -74,7 +74,7 @@ import {
   storageFailureNotice,
   type ChatAnswerFailureInfo,
 } from "@/lib/process-failure";
-import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
+import { ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 import { ClarificationChoice } from "./ClarificationChoice";
 import { useRagChatAttachments } from "./useRagChatAttachments";
 import { chatSubmitProgressSteps } from "@/lib/chat-progress";
@@ -1920,7 +1920,6 @@ export function ChatClient() {
                   <div className="space-y-2" data-testid="chat-approved-faq-choice">
                     <ChatUserMessage>{faqChoice.content}</ChatUserMessage>
                     <ApprovedFaqSuggestions
-                      mode="chat"
                       suggestions={faqChoice.suggestions}
                       onUse={(suggestion) => chooseFaq(suggestion.id)}
                       onSkip={() => chooseFaq()}

@@ -62,7 +62,13 @@ from app.rag.observability import (
     new_trace_id,
     record_rag_request,
 )
-from app.rag.pipeline import RagPipeline, SearchStageProgress
+from app.rag.pipeline import (
+    BASIC_FLOW,
+    EXPANDED_FLOW,
+    AnswerFlow,
+    RagPipeline,
+    SearchStageProgress,
+)
 from app.rag.profile_language import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
@@ -294,7 +300,10 @@ async def search(
     Cohere Rerank -> 回答の生成)で作る。
     """
     enforce_rate_limit("search", http_request)
-    result = await _run_search_with_timeout(request, run_recorder=_search_run_recorder(request))
+    # 画面の RAG 検索は基本の RAG（業務ガイド・承認済み FAQ・根拠の拡張をしない。#5332）。
+    result = await _run_search_with_timeout(
+        request, flow=BASIC_FLOW, run_recorder=_search_run_recorder(request)
+    )
     return ApiResponse(data=result)
 
 
@@ -320,10 +329,13 @@ async def stream_search(
     # 検索・回答プロファイル・KB の解決（404 / 403）は s
     # tream を始める前に行い、HTTP の status で返す。
     #
-    resolved, query_guardrail = await _checked_query_context(request, get_settings())
+    resolved, query_guardrail = await _checked_query_context(
+        request, get_settings(), flow=BASIC_FLOW
+    )
     return StreamingResponse(
         _stream_search_events_with_timeout(
             resolved,
+            flow=BASIC_FLOW,
             query_guardrail=query_guardrail,
             run_recorder=_search_run_recorder(request),
         ),
@@ -347,6 +359,7 @@ async def _resolve_query_context(
     interactive: bool = False,
     guide_preview: GuidePreview | None = None,
     question_gate: QuestionGate | None = None,
+    flow: AnswerFlow = EXPANDED_FLOW,
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
 
@@ -364,6 +377,9 @@ async def _resolve_query_context(
 
     ``guide_preview``（下書きで試す。#1288）は、そのガイドの公開の版の代わりに下書きを、この
     1 回の回答の照合にだけ使う（保存・公開の版は変えない）。回答の記録に印を残す。
+
+    ``flow``（回答の経路。#5332）が basic（画面の RAG 検索）なら、業務ガイドの照合と承認済み FAQ を
+    しない（承認済み FAQ を選んだ要求は 422）。
     """
     # 明示した回答のモデルが未登録なら、DB・モデルを使う前に 422 にする（#4582）。
     if explicit_model := _answer_model_id(request):
@@ -437,6 +453,8 @@ async def _resolve_query_context(
                         "original_question": gated.original_question,
                     }
                 )
+            if request.approved_faq_id and flow == BASIC_FLOW:
+                raise HTTPException(status_code=422, detail=APPROVED_FAQ_BASIC_FLOW_MESSAGE)
             if request.approved_faq_id:
                 # 利用者が選んだ承認済み FAQ（#5107）。プロファイルの FAQ から引き直し、業務ガイド
                 # 以降を通さずに回答の工程が FAQ の回答をそのまま返す。
@@ -450,7 +468,7 @@ async def _resolve_query_context(
             if guide_preview is not None:
                 # 管理画面から明示した下書きの試答だけ、この回答に限って有効にする。
                 settings = settings.model_copy(update={"rag_support_guide_enabled": True})
-            if not settings.rag_support_guide_enabled:
+            if flow == BASIC_FLOW or not settings.rag_support_guide_enabled:
                 runtime_knowledge = with_answer_assumptions(
                     runtime_knowledge, policy=profile_config.clarification_policy, guide={}
                 )
@@ -688,6 +706,8 @@ SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
 # 指定した検索・回答プロファイルが無い（利用者が使えないものを含む）404 の文の頭。MCP はこの文で
 # 見分けて、次の手の付いたツールのエラーにする（app.mcp.tools.profile_not_found_error）。
 SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX = "指定した検索・回答プロファイルが見つかりません: "
+# 基本の RAG の経路（画面の RAG 検索。#5332）で承認済み FAQ を選んだ要求の 422 の文。
+APPROVED_FAQ_BASIC_FLOW_MESSAGE = "選んだQ&Aの回答は、RAG Chat でだけ返せます。"
 REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "指定したナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
 )
@@ -794,9 +814,14 @@ async def _checked_query_context(
     request: SearchRequest,
     global_settings: Settings,
     *,
+    flow: AnswerFlow,
     guide_preview: GuidePreview | None = None,
+    interactive: bool = False,
 ) -> tuple[tuple[SearchRequest, Settings, str | None, str | None], GuardrailResult]:
     """検索の入口の処理（基準日 → プロファイルの解決 → 入力の安全チェック → 業務ガイド）を行う。
+
+    ``flow`` は回答の経路（#5332。basic は業務ガイドの照合と承認済み FAQ をしない）、
+    ``interactive`` は業務ガイドの残った不明の条件を分岐で答えるか（``_resolve_query_context``）。
 
     業務ガイドの照合（埋め込み・LLM）は伏せた後の質問で行い、止めた質問は照合しない。止めた結果は
     回答の工程へ渡し、回答の工程が止めた応答を作る（#5099）。
@@ -809,7 +834,12 @@ async def _checked_query_context(
         return gated if result.allowed else None
 
     resolved = await _resolve_query_context(
-        request, global_settings, guide_preview=guide_preview, question_gate=gate
+        request,
+        global_settings,
+        guide_preview=guide_preview,
+        question_gate=gate,
+        flow=flow,
+        interactive=interactive,
     )
     return resolved, checked[0]
 
@@ -817,6 +847,8 @@ async def _checked_query_context(
 async def _run_search_with_timeout(
     request: SearchRequest,
     *,
+    flow: AnswerFlow,
+    interactive: bool = False,
     guide_preview: GuidePreview | None = None,
     run_recorder: RunRecorder | None = None,
     scope: AnswerScope | None = None,
@@ -831,9 +863,18 @@ async def _run_search_with_timeout(
     ``materialize_images=False`` は根拠の図の画像を切り出さない（MCP の rag_retrieve_evidence。
     図は呼び出し元が rag_read_source で読む。#5125）。根拠を集める流れは回答・RAG 検索の画面と
     同じ（#5173）。
+
+    HTTP の要求に依らない実行の入口（画面の RAG 検索・MCP・業務ガイドの下書きの試答が呼ぶ）。
+    ``flow`` は回答の経路（#5332。``AnswerFlow``）で、入口の解決と pipeline に同じ値を渡す。
+    ``interactive`` は業務ガイドの残った不明の条件を分岐で答えるか（既定は確認の質問を返す）。
+    工程の開始を MCP の進み具合で知らせ、呼び出し元の取消は監査に残して送り直す。
     """
     (request, settings, applied_kb, applied_view), query_guardrail = await _checked_query_context(
-        request, get_settings(), guide_preview=guide_preview
+        request,
+        get_settings(),
+        flow=flow,
+        guide_preview=guide_preview,
+        interactive=interactive,
     )
     started_at = perf_counter()
     trace_id = new_trace_id()
@@ -860,6 +901,7 @@ async def _run_search_with_timeout(
                 scope=scope,
                 answer_notice=current_answer_notice,
                 materialize_images=materialize_images,
+                flow=flow,
             ).run(
                 request,
                 trace_id=trace_id,
@@ -1032,19 +1074,22 @@ async def run_guide_preview(request: SearchRequest, preview: GuidePreview) -> Se
     通常の検索・回答と同じ pipeline で 1 回だけ答える（モデルの呼び出しは通常の回答と同じ）。
     公開の版・保存した下書きは変えず、回答の記録には ``guide_preview`` の印を残す。
     """
-    return await _run_search_with_timeout(request, guide_preview=preview)
+    # 業務ガイドを試すので、RAG Chat と同じ経路（業務ガイドの照合と根拠の拡張あり。#5332）。
+    return await _run_search_with_timeout(request, flow=EXPANDED_FLOW, guide_preview=preview)
 
 
 async def _stream_search_events_with_timeout(
     resolved: tuple[SearchRequest, Settings, str | None, str | None],
     *,
+    flow: AnswerFlow,
     query_guardrail: GuardrailResult | None = None,
     run_recorder: RunRecorder | None = None,
 ) -> AsyncIterator[str]:
     """処理の経過を即時 SSE で返しながら検索 pipeline を実行する。
 
     `resolved` は `_resolve_query_context` の結
-    果（有効 request・Settings・適用 KB・検索・回答プロファイル）。
+    果（有効 request・Settings・適用 KB・検索・回答プロファイル）。``flow`` は解決と同じ回答の経路
+    （#5332）。
 
     最初に実行の id（`run`。trace_id）を送る。処理の経過は配信では送らず、画面が実行の trace の
     API（`GET /search/runs/{trace_id}/trace`。共通の span の表の snapshot。#3226）で読む。実行履歴
@@ -1090,6 +1135,7 @@ async def _stream_search_events_with_timeout(
                     answer_model_id=answer_model_id,
                     run_recorder=run_recorder,
                     answer_notice=current_answer_notice,
+                    flow=flow,
                 ).run(
                     request,
                     trace_id=trace_id,

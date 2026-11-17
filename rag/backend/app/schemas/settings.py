@@ -793,10 +793,12 @@ class AnsweringSettingsData(BaseModel):
     runtime_terms_answer_enabled: bool = False
     neighbor_child_count: int = Field(ge=1, le=5)
     rerank_enabled: bool
+    # 以下の拡張(実体・目次からの章節の選択・章節の拡張・関係情報)は RAG Chat・品質評価・MCP の経路だけに
+    # 効き、RAG 検索(基本の RAG)では使わない(#5332)。
     # 実体・別名による検索拡張(#1362。全体設定だけで決める。既定 ON。#5187)。
     entity_expansion_enabled: bool
     entity_expansion_max_chunks: int
-    # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 OFF)。
+    # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 ON。#5296)。
     reference_outline_selection_enabled: bool
     # 検索の上位の文書の目次から回答のモデルが選んだ章節を、rerank の枠の外で根拠に足す(#5324。
     # 既定 OFF)と、その対象の文書の数・目次の字数・読む章節の字数の上限。
