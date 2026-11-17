@@ -492,12 +492,13 @@ export function SearchableSelectField({
           >
             {current?.label ?? (value || placeholder)}
           </span>
+          {/* 「必須」は値の直後に置く（justify-between で値と矢印の中ほどに浮かせない。#5384）。 */}
+          {compactRequired && !value ? (
+            <span id={requiredId} className="shrink-0">
+              <RequiredBadge label={requiredLabel} />
+            </span>
+          ) : null}
         </span>
-        {compactRequired && !value ? (
-          <span id={requiredId} className="shrink-0">
-            <RequiredBadge label={requiredLabel} />
-          </span>
-        ) : null}
         <ChevronDown
           size={16}
           aria-hidden

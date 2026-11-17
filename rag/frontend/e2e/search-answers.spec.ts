@@ -389,6 +389,18 @@ for (const viewport of [
     const search = await measure();
     await page.goto("/chat");
     const chat = await measure();
+    // 未選択の「必須」は値の直後に共有の間隔で置き、矢印だけを右端に残す（値と矢印の中ほどに浮かせない。#5384）。
+    const badgeLayout = await page.getByRole("button", { name: /検索・回答プロファイル/ }).evaluate((button) => {
+      const badge = button.querySelector<HTMLElement>("[id$='-required']")!;
+      const value = badge.previousElementSibling as HTMLElement;
+      const chevron = button.lastElementChild as SVGElement;
+      const gap = parseFloat(getComputedStyle(badge.parentElement!).columnGap);
+      const [b, v, c] = [badge, value, chevron].map((node) => node.getBoundingClientRect());
+      return { valueGap: b.left - v.right, gap, chevronGap: c.left - b.right };
+    });
+    expect(Math.abs(badgeLayout.valueGap - badgeLayout.gap)).toBeLessThanOrEqual(0.5);
+    expect(badgeLayout.chevronGap).toBeGreaterThanOrEqual(badgeLayout.gap);
+    await page.getByRole("button", { name: /検索・回答プロファイル/ }).screenshot({ path: test.info().outputPath(`chat-target-required-${viewport.name}.png`) });
     for (const box of [search, chat]) expect(Math.abs(box.width - box.inner)).toBeLessThanOrEqual(1);
     expect(chat.width).toBeLessThan(search.width);
     const target = page.getByRole("button", {name: /検索・回答プロファイル/});
