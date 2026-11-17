@@ -8,11 +8,12 @@ A（業務ガイドなし。ナレッジベースを指定）と C（業務ガ�
   ツールだけで、利用者が発行した API キー（使える製品に `rag`）で呼ぶ。RAG の画面の API・DB・
   コードは読まない。C（検索・回答プロファイルだけを指定）は RAG のチャットと同じ流れの
   `rag_chat`、A（ナレッジベース・件数・filters を指定）は検索の `rag_search`（#5342）。
-- ケースの既知の条件（`conditions`）は `conditions` に構造化して渡す。複数往復のケース（`turns`）
-  は、回答のツールが会話を持たないので、最初の質問とそれまでの返答をつないだ質問と、返答までに
-  分かった条件で呼び直す（契約の「clarifications に答えた値を conditions に入れて呼び直す」）。
+- ケースの既知の条件（`conditions`）は `rag_chat` の `conditions` に構造化して渡す（基本の検索の
+  `rag_search` は業務ガイドを照合しないので渡さない。#5352）。複数往復のケース（`turns`）は、回答の
+  ツールが会話を持たないので、最初の質問とそれまでの返答をつないだ質問（`rag_chat` は返答までに
+  分かった条件も）で呼び直す（契約の「clarifications に答えた値を conditions に入れて呼び直す」）。
 - 旧版も検索して答えるケース（`include_superseded`）は `include_superseded: true` を渡す。
-- 登録済みQ&Aの候補は返させない（`skip_approved_faq: true`。評価するのは
+- 登録済みQ&Aの候補は返させない（`rag_chat` の `skip_approved_faq: true`。評価するのは
   検索・回答。#5134）。
 - 引用は回答のツールの `evidence[]`（AI に渡した資料の箇所。返った順。`evidence_limit` は既定で
   契約の上限 50）。本文は `excerpt`（`text_omitted` は本文を省いた根拠）、場所は `locator`。
@@ -52,8 +53,10 @@ ANSWER_TOOLS = (RAG_CHAT_TOOL, RAG_SEARCH_TOOL)
 # 〔rag_search の出力の形は 38 と同じ〕）、#5134 で登録済みQ&Aを rag_search に統合して 45
 # （評価は skip_approved_faq で呼び、候補の状態は受け取らない）、#5136 で登録済みQ&Aを
 # rag_retrieve_evidence にも入れて 46〔rag_search の出力の形は 45 と同じ〕。#5339 で足した
-# rag_chat の出力の形は 46 の rag_search と同じ。
-RAG_SEARCH_SCHEMA_VERSION = 46
+# rag_chat の出力の形は 46 の rag_search と同じ。#5352 で rag_retrieve_evidence・
+# rag_lookup_guides を削除し、rag_search を基本の検索にして登録済みQ&A・確認・業務ガイドの項目を
+# 外して 47（採点が読む項目は同じ）。
+RAG_SEARCH_SCHEMA_VERSION = 47
 # 返す根拠の上限（契約の evidence_limit の maximum）。
 DEFAULT_EVIDENCE_LIMIT = 50
 MAX_EVIDENCE_LIMIT = 50
@@ -156,26 +159,25 @@ class RagMcpTarget:
         self._clock = clock
 
     def _arguments(self, case: Case, query: str, conditions: Mapping[str, str]) -> dict[str, Any]:
-        arguments: dict[str, Any] = {
-            "query": query,
-            "evidence_limit": self._config.evidence_limit,
-            "skip_approved_faq": True,
-        }
-        if query != case.query:
-            arguments["original_question"] = query
+        arguments: dict[str, Any] = {"query": query, "evidence_limit": self._config.evidence_limit}
         if self._config.search_answer_profile_id:
             arguments["search_answer_profile_id"] = self._config.search_answer_profile_id
-        # rag_chat はナレッジベース・件数・filters を受けない（検索・回答プロファイルの設定）。
+        if case.include_superseded:
+            arguments["include_superseded"] = True
+        if self._config.tool == RAG_CHAT_TOOL:
+            # 登録済みQ&A・業務ガイドの条件・元の質問は rag_chat だけが受ける（#5352）。
+            arguments["skip_approved_faq"] = True
+            if query != case.query:
+                arguments["original_question"] = query
+            if conditions:
+                arguments["conditions"] = dict(list(conditions.items())[:MAX_CONDITIONS])
+            return arguments
         if self._config.knowledge_base_ids:
             arguments["knowledge_base_ids"] = list(self._config.knowledge_base_ids)
         if self._config.top_k is not None:
             arguments["top_k"] = self._config.top_k
         if self._config.filters:
             arguments["filters"] = dict(self._config.filters)
-        if case.include_superseded:
-            arguments["include_superseded"] = True
-        if conditions:
-            arguments["conditions"] = dict(list(conditions.items())[:MAX_CONDITIONS])
         return arguments
 
     def run_case(self, case: Case) -> CaseObservation:

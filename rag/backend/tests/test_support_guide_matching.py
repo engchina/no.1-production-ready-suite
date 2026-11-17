@@ -19,7 +19,6 @@ from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.clients.support_guide_store import StoredIntentEmbeddings
 from app.config import get_settings
 from app.main import app
-from app.mcp import tools as mcp_tools
 from app.rag import support_guide_query, support_guide_runtime
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
@@ -390,23 +389,6 @@ def test_chat_suggestion_asks_which_guide(monkeypatch: MonkeyPatch) -> None:
     assert none["suggestion"] is None
 
 
-@pytest.mark.usefixtures("auth")
-def test_mcp_lookup_guides_expands_aliases(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
-    async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
-        return GUIDES, False
-
-    monkeypatch.setattr(get_settings(), "rag_runtime_terms_search_enabled", True)
-    monkeypatch.setattr(mcp_tools, "OracleClient", _ProfileOracle)
-    monkeypatch.setattr(search_route, "load_published_guides", published)
-    user = auth.user_with_permissions("searcher", ["menu.search"])
-    body = _call(
-        "rag_lookup_guides",
-        {"query": "NA画面が出ない", "search_answer_profile_id": "bv-1"},
-        _token(user.user_uuid),
-    )["structuredContent"]
-    assert [guide["guide_id"] for guide in body["guides"]] == ["g-notice"]
-
-
 # ---- 質問の例の埋め込みの作成・保存 ------------------------------------------------
 
 
@@ -556,27 +538,6 @@ def test_master_off_chat_does_not_load_or_confirm_guides(monkeypatch: MonkeyPatc
     )
     assert result.status_code == 200
     assert result.json()["data"]["suggestion"] is None
-
-
-@pytest.mark.usefixtures("auth")
-def test_master_off_mcp_does_not_lookup_guides(auth: Any, monkeypatch: MonkeyPatch) -> None:  # noqa: F811
-    monkeypatch.setattr(
-        mcp_tools,
-        "OracleClient",
-        lambda: _ProfileOracle(support_guide_enabled=False),
-    )
-
-    async def forbidden(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("総合 OFF では MCP も業務ガイドを読み込まない")
-
-    monkeypatch.setattr(search_route, "load_published_guides", forbidden)
-    user = auth.user_with_permissions("guide-master-off", ["menu.search"])
-    result = _call(
-        "rag_lookup_guides",
-        {"search_answer_profile_id": "bv-1", "query": "NA画面の設定"},
-        _token(user.user_uuid),
-    )
-    assert result["structuredContent"]["guides"] == []
 
 
 @pytest.mark.parametrize("skipped", [False, True])

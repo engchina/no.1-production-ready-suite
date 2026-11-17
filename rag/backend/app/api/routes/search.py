@@ -853,7 +853,6 @@ async def _run_search_with_timeout(
     guide_preview: GuidePreview | None = None,
     run_recorder: RunRecorder | None = None,
     scope: AnswerScope | None = None,
-    materialize_images: bool = True,
     deadline: float | None = None,
 ) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
@@ -862,9 +861,6 @@ async def _run_search_with_timeout(
     ``guide_preview`` は業務ガイドの下書きで試す回答（#1288。trace_id に接頭辞を付ける）。
     ``run_recorder`` は RAG 検索の画面の実行を実行履歴に残す（#1890。MCP・下書きは渡さない）。
     ``scope`` は回答前の確認の答え（MCP の rag_search のルールの確認。#2117）。
-    ``materialize_images=False`` は根拠の図の画像を切り出さない（MCP の rag_retrieve_evidence。
-    図は呼び出し元が rag_read_source で読む。#5125）。根拠を集める流れは回答・RAG 検索の画面と
-    同じ（#5173）。
 
     HTTP の要求に依らない実行の入口（画面の RAG 検索・MCP・業務ガイドの下書きの試答が呼ぶ）。
     ``flow`` は回答の経路（#5332。``AnswerFlow``）で、入口の解決と pipeline に同じ値を渡す。
@@ -904,7 +900,6 @@ async def _run_search_with_timeout(
                 run_recorder=run_recorder,
                 scope=scope,
                 answer_notice=current_answer_notice,
-                materialize_images=materialize_images,
                 flow=flow,
             ).run(
                 request,

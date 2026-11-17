@@ -412,32 +412,6 @@ def test_step_coverage_and_embedding_go_to_guide_diagnostics() -> None:
     assert {"guide_step_coverage", "guide_step_embedding"}.isdisjoint(diagnostics)
 
 
-def test_mcp_guide_reference_carries_sheet_ranges_apart_from_pages() -> None:
-    """rag_lookup_guides の参照は、表計算の資料のシートの行を頁と別に返す(#2663)。"""
-    from app.mcp.tools import _guide_reference
-    from app.schemas.support_guide import SupportGuideReference
-
-    sheet = _guide_reference(
-        SupportGuideReference.model_validate(
-            {
-                "document_id": "doc-s",
-                "sheet_ranges": [{"sheet_name": "シートA", "cell_range": "B42:D45"}],
-            }
-        )
-    )
-    assert sheet.page_ranges == []
-    assert [(r.sheet_name, r.row_start, r.row_end, r.cell_range) for r in sheet.sheet_ranges] == [
-        ("シートA", 42, 45, "B42:D45")
-    ]
-    pages = _guide_reference(
-        SupportGuideReference.model_validate(
-            {"document_id": "doc-a", "page_ranges": [{"page_start": 3}]}
-        )
-    )
-    assert [(r.page_start, r.page_end) for r in pages.page_ranges] == [(3, 3)]
-    assert pages.sheet_ranges == []
-
-
 async def test_master_off_discards_stale_guide_and_does_not_run_step_retrieval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

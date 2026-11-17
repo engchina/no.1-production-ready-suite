@@ -156,7 +156,7 @@ path = home / ".claude" / "settings.json"
 settings = json.loads(path.read_text()) if path.exists() else {}
 settings.setdefault("env", {}).update({
     "NODE_EXTRA_CA_CERTS": str(home / ".config/production-ready/ca.crt"),  # 自作の CA を信頼させる（正規の証明書なら不要）
-    "MCP_TOOL_TIMEOUT": "1260000",  # rag_search のサーバーの上限（設定で最大 1200 秒）より長くする
+    "MCP_TOOL_TIMEOUT": "1260000",  # RAG の回答のツールのサーバーの上限（設定で最大 1200 秒）より長くする
 })
 path.parent.mkdir(exist_ok=True)
 path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
@@ -210,7 +210,7 @@ claude plugin list   # production-ready-skills@production-ready-suite が ✔ en
 
 設定を変えたら、Claude Code のセッションを新しく始めます（CA は起動のときにだけ読まれ、開いているセッションには効きません。デスクトップ版も新しいセッションを開きます）。新しいセッションでは、`/mcp` で 3 つのサーバーが connected か、`/plugin` でスキルが入っているかを見たうえで、読み取りだけのツールを呼ぶ質問で確かめます（例「rag と nl2sql の MCP で、私が使える検索・回答プロファイルと業務プロファイルを一覧にしてください」「agent の MCP で、使える業務 Agent を一覧にしてください」）。
 
-その後は普段の質問で使えます（質問に合うスキルを Claude Code が選び、RAG は `mcp__rag__rag_search`、NL2SQL は `mcp__nl2sql__nl2sql_query`、業務 Agent は `mcp__agent__agent_chat` などを呼びます）。非対話の `claude -p` では `--allowedTools "Skill,mcp__rag,mcp__nl2sql,mcp__agent"` を渡します。業務 Agent が使うスキルは `agent_skill_export` で Agent Skills の形で取り出し、`~/.claude/skills/<name>/` に置けます。
+その後は普段の質問で使えます（質問に合うスキルを Claude Code が選び、RAG は `mcp__rag__rag_chat` など、NL2SQL は `mcp__nl2sql__nl2sql_query`、業務 Agent は `mcp__agent__agent_chat` などを呼びます）。非対話の `claude -p` では `--allowedTools "Skill,mcp__rag,mcp__nl2sql,mcp__agent"` を渡します。業務 Agent が使うスキルは `agent_skill_export` で Agent Skills の形で取り出し、`~/.claude/skills/<name>/` に置けます。
 
 ### 更新・キーの削除
 

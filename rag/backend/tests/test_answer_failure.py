@@ -377,7 +377,7 @@ async def test_mcp_search_turns_the_classified_failure_into_a_tool_error(
     monkeypatch.setattr(search_route, "RagPipeline", _QuotaPipeline)
 
     with pytest.raises(McpToolError) as caught:
-        await mcp_tools._run_search(SearchRequest(query="条件の多い質問"))
+        await mcp_tools._run_search(SearchRequest(query="条件の多い質問"), flow="basic")
 
     assert (caught.value.code, caught.value.status) == ("RAG_ANSWER_AI_API_FAILED", 503)
     assert caught.value.details == {

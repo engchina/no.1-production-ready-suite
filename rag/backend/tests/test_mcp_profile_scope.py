@@ -90,7 +90,7 @@ def _forbidden(result: dict[str, Any]) -> str:
     return message
 
 
-@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+@pytest.mark.parametrize("tool", ["rag_search"])
 def test_claim_limits_search_to_scoped_profiles_and_their_knowledge_bases(
     auth: ProductionAuth, tool: str
 ) -> None:
@@ -142,7 +142,7 @@ def test_claim_limits_search_to_scoped_profiles_and_their_knowledge_bases(
     assert _call(tool, {"query": "規程", "knowledge_base_ids": ["kb-1"]}, plain)["isError"] is False
 
 
-@pytest.mark.parametrize("tool", ["rag_search", "rag_retrieve_evidence"])
+@pytest.mark.parametrize("tool", ["rag_search"])
 def test_including_superseded_keeps_the_claim_scope(auth: ProductionAuth, tool: str) -> None:
     """旧版を含めても（include_superseded。#1392）、範囲の判定と検索の KB は変わらない。"""
     user = auth.user_with_permissions(
@@ -307,17 +307,6 @@ def test_claim_limits_reading_tools_to_scoped_knowledge_bases(
     )
 
 
-def test_claim_limits_guides(auth: ProductionAuth) -> None:
-    user = auth.user_with_permissions(
-        "searcher", ["menu.search"], search_answer_profile_ids=["bv-1", "bv-2"]
-    )
-    scoped = _headers(user.user_uuid, ["bv-1"])
-
-    _forbidden(
-        _call("rag_lookup_guides", {"query": "精算", "search_answer_profile_id": "bv-2"}, scoped)
-    )
-
-
 def test_scope_that_cannot_be_loaded_is_not_treated_as_no_scope(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
@@ -439,7 +428,7 @@ def test_claim_disjoint_from_user_profiles_denies_everything(
     monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
     disjoint = _headers(_searcher(auth, user_knowledge_bases), ["bv-3"])
 
-    for tool in ["rag_search", "rag_retrieve_evidence"]:
+    for tool in ["rag_search"]:
         # claim の中でも利用者が使えないプロファイルは使えず、ほかのプロファイルに選び直さない。
         result = _call(tool, {"query": "規程", "search_answer_profile_id": "bv-3"}, disjoint)
         assert result["isError"] is True, result
@@ -453,9 +442,6 @@ def test_claim_disjoint_from_user_profiles_denies_everything(
         _forbidden(_call(tool, {"query": "規程", "search_answer_profile_id": "bv-1"}, disjoint))
         _forbidden(_call(tool, {"query": "規程"}, disjoint))
     assert RecordingPipeline.captured_request is None
-    _forbidden(
-        _call("rag_lookup_guides", {"query": "精算", "search_answer_profile_id": "bv-1"}, disjoint)
-    )
 
     listed = _call("rag_list_search_answer_profiles", {"limit": 10}, disjoint)
     assert listed["structuredContent"]["search_answer_profiles"] == []
@@ -499,7 +485,7 @@ def test_scope_with_only_archived_profiles_denies_knowledge_bases(
     monkeypatch.setattr(profile_scope, "OracleClient", lambda *_a, **_k: _ArchivedViewOracle(VIEWS))
     archived = _headers(_searcher(auth, user_knowledge_bases), ["bv-1"])
 
-    for tool in ["rag_search", "rag_retrieve_evidence"]:
+    for tool in ["rag_search"]:
         result = _call(tool, {"query": "規程", "search_answer_profile_id": "bv-1"}, archived)
         assert result["isError"] is True, result
         content = result["structuredContent"]

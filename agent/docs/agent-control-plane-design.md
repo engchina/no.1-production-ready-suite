@@ -309,13 +309,14 @@ URL は `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL` で、配
 
 | ツール（モデルに渡す名前） | readOnlyHint | 既定の policy |
 |---|---|---|
-| `rag__rag_search` / `rag__rag_list_search_answer_profiles` / `rag__rag_read_source` | true | 承認なし（`rag_search` は回答生成に LLM を使う） |
+| `rag__rag_chat` / `rag__rag_search` / `rag__rag_list_search_answer_profiles` / `rag__rag_read_source` | true | 承認なし（`rag_chat`・`rag_search` は回答生成に LLM を使う） |
 | `nl2sql__nl2sql_list_profiles` / `nl2sql__nl2sql_recommend_profile` / `nl2sql__nl2sql_get_job` | true | 承認なし |
 | `nl2sql__nl2sql_query` | false | 承認なし（#1832。標準の接続の既定。呼び先は SELECT だけを実行し、見える範囲は業務プロファイル・Deep Data Security・利用者の権限で決まる。ツール権限で ask にすれば承認を求める） |
 | `nl2sql__nl2sql_cancel_requirement` | false | 承認が必要 |
 
-RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）・根拠の読み取り（`rag_read_source`）・
-検索・回答プロファイルの一覧だけを持つ。`rag_search` の根拠は `evidence[]`（場所 `locator` の節・頁、版 `chunk_set_id` /
+RAG の会話のチャットは MCP で提供しない（#787）。RAG の MCP の回答のツールは、基本の検索の `rag_search` と、RAG チャットと
+同じ流れで 1 問に答える `rag_chat`（会話の履歴は使わない。#5339・#5352）で、ほかに根拠の読み取り（`rag_read_source` など）・
+検索・回答プロファイルの一覧と推薦を持つ。回答のツールの根拠は `evidence[]`（場所 `locator` の節・頁、版 `chunk_set_id` /
 `recipe_id`、回答に使ったか `used_in_answer`、切り詰めの有無 `truncated`）で返し、回答に使った根拠を先にして `evidence_limit`
 件まで返す。切り詰めた本文と親の本文は `rag_read_source`（検索と同じ見え方の条件。見えない根拠は `source_not_found`、古い版は
 `source_stale`）で読む（#1219）。
@@ -448,8 +449,9 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     支援タスクの状態にも確かめ中の問いを残さない（モデルが呼び直さなかったときも、カードで聞き直さない）。答えた（スキップ
     ではない）ときは今どおり。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
-  `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 1230 秒。`rag_search` は RAG の回答生成（`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒・画面で選べる最大 1200 秒。#5280。最大に合わせる）
-  を通しで待つため、それに HTTP の往復の余裕 30 秒を足す。#1425）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 600 秒。NL2SQL の
+  `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 1500 秒。RAG の回答のツール〔`rag_chat`・`rag_search`〕は処理の全体を RAG の回答の上限
+  （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒・画面で選べる最大 1200 秒。#5280）の 1 つの期限で終える〔#5339〕ので、その外側の
+  タイムアウト秒の上限と同じ値にする。#1425・#5352）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 600 秒。NL2SQL の
   `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って
   job_id を返す。`nl2sql_query` は SQL の生成前の確認〔LLM。下書きと回答の後の再検査で最大 2 回。#1441〕を呼び、その分だけ
   ジョブを待つ秒数を減らす。45 秒と SQL の生成前の確認の 480 秒〔NL2SQL の LLM 1 回 240 秒 × 試行 2 回。#2240〕に、HTTP の往復・
@@ -457,7 +459,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   ジョブの完了は `AGENT_NL2SQL_JOB_WAIT_SECONDS` まで待つ。SQL の生成の方式は業務プロファイルの既定の生成方式〔#1524〕で、既定の SQL の生成〔Select AI の 1 回〕と実行は NL2SQL の DB の呼び出しの
   上限〔120 秒〕で打ち切られる。#1430）は接続 `rag` / `nl2sql` の初期値（タイムアウト秒の上限は 1500 秒。SDK の function tool の
   timeout は、接続の timeout〔`nl2sql` はジョブを待つ分を足した値〕の 2 倍）。`backend/.env.example` は両方の値を明示する（#1430）。画面で保存済みの接続はその値のまま（#1425 より前に保存した `rag` の 60 秒は、
-  画面の「MCP 接続」で 1230 秒に直す。#5280 より前に保存した `rag` の 630 秒も同じ）。画面の「MCP 接続」で URL・タイムアウトを変更でき（保存先に残り、.env の値より優先する。#764）、署名鍵は
+  画面の「MCP 接続」で 1500 秒に直す。#5280 より前に保存した `rag` の 630 秒・#5352 より前の 1230 秒も同じ）。画面の「MCP 接続」で URL・タイムアウトを変更でき（保存先に残り、.env の値より優先する。#764）、署名鍵は
   設定済みかどうかだけを表示する。旧「外部 MCP」の単一の設定（`AGENT_EXTERNAL_MCP_BASE_URL` 等）・
   既定のサーバー・NL2SQL の既定取得件数（`AGENT_EXTERNAL_NL2SQL_DEFAULT_LIMIT`）は #757 で削除した。
 - **RAG の図の根拠を画面で開く（#1311）**: 画面の「図を開く」は #2462 で削除した（図は原文のプレビューの強調で確かめる）。
@@ -707,7 +709,7 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`。014 の前は `MERGE_SQL_012`）で利用状況・フィードバックの事実を書き続ける。
 - 品質評価（#776）の job は、終わった job も自動では消さずに残し（#3235。以前は 365 日・2,000 件、その前は 50 件で消していた）、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
-- 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 1230 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`+ 1）にする（既定 1230 ×（30 + 1）= 38130 秒。300 秒〜86400 秒に収める）。RAG を使う業務 Agent の Run は RAG を予算の回数まで呼び、1 回は RAG の回答生成を通しで待つため（推論の量 medium の実測で 1 Run 160〜600 秒以上）、#1425 より前の固定の 300 秒では時間切れになった。RAG の予算が無制限（0 以下）なら `AGENT_MAX_TOOL_CALLS_PER_RUN`（既定 100）を回数に使う。上限までに決着しない Run は取り消し、ケースは時間切れ（`timed_out`。メッセージに実際の上限の秒数）にする。評価の job 全体の上限は持たない（ケースごとの上限で止まる）。
+- 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 1500 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`+ 1）にする（既定 1500 ×（30 + 1）= 46500 秒。300 秒〜86400 秒に収める）。RAG を使う業務 Agent の Run は RAG を予算の回数まで呼び、1 回は RAG の回答生成を通しで待つため（推論の量 medium の実測で 1 Run 160〜600 秒以上）、#1425 より前の固定の 300 秒では時間切れになった。RAG の予算が無制限（0 以下）なら `AGENT_MAX_TOOL_CALLS_PER_RUN`（既定 100）を回数に使う。上限までに決着しない Run は取り消し、ケースは時間切れ（`timed_out`。メッセージに実際の上限の秒数）にする。評価の job 全体の上限は持たない（ケースごとの上限で止まる）。
 - 品質評価のケースは上限つきの並行（`AGENT_EVALUATION_CONCURRENCY`。既定 2、1〜8。#2004）で、評価ケースの順に始め、結果は
   ケースの位置に書く（並行でも順番は変わらない）。判定（LLM-as-judge）の呼び出しは job の中で 1 つの共通の実行器
   （`pr_backend_core.bounded_calls`）を共有し、openai SDK の再試行を切る。429 は全体で待って並行の数を下げ（最小 1。成功が

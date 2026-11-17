@@ -76,22 +76,22 @@ def _rag_search(argument: Any) -> dict[str, Any]:
     if argument.approved_faq_id:
         return rag_approved_faq_answer(argument.approved_faq_id, CANDIDATES[0][1], "合成の回答 A")
     if argument.skip_approved_faq:
-        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
         return output
     return rag_approved_faq_candidates(*CANDIDATES)
 
 
 @pytest.fixture
 def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
-    fake = fake_product_mcp(monkeypatch, outputs={"rag_search": _rag_search})
+    fake = fake_product_mcp(monkeypatch, outputs={"rag_chat": _rag_search})
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     monkeypatch.setattr(builtin_runtime, "_active_policy", lambda: ToolPolicy())
     skill_registry.upsert_custom(
         AgentSkillDefinition(
             id=SKILL_ID,
             name=SKILL_ID,
-            instructions="資料は rag_search で調べる。",
-            mcp_requirements=[SkillMcpRequirement(server_id="rag", tool_names=["rag_search"])],
+            instructions="資料は rag_chat で調べる。",
+            mcp_requirements=[SkillMcpRequirement(server_id="rag", tool_names=["rag_chat"])],
         )
     )
     runtime_repository.create_agent(AgentProfile(id=AGENT_ID, name=AGENT_ID, skill_ids=[SKILL_ID]))
@@ -141,7 +141,7 @@ def _execute(run_id: str) -> RunState:
 
 
 def _search(call_id: str, **arguments: Any) -> list[Any]:
-    return [function_call("rag__rag_search", {"query": QUESTION, **arguments}, call_id=call_id)]
+    return [function_call("rag__rag_chat", {"query": QUESTION, **arguments}, call_id=call_id)]
 
 
 def _tool_output(model: ScriptedModel, call_index: int, call_id: str) -> dict[str, Any]:
@@ -156,7 +156,7 @@ def _search_schema(model: ScriptedModel) -> dict[str, Any]:
     tool = next(
         tool
         for tool in model.calls[0].tools
-        if isinstance(tool, FunctionTool) and tool.name == "rag__rag_search"
+        if isinstance(tool, FunctionTool) and tool.name == "rag__rag_chat"
     )
     return tool.params_json_schema
 
@@ -192,7 +192,7 @@ def test_candidates_become_a_card_and_the_model_never_sees_the_faq_arguments(
     # 2 つの引数はモデルに見せず、モデルが渡した値も送らない（候補を返させる）。
     properties = _search_schema(model)["properties"]
     assert "approved_faq_id" not in properties and "skip_approved_faq" not in properties
-    [sent] = mcp.calls_of("rag_search")
+    [sent] = mcp.calls_of("rag_chat")
     assert "approved_faq_id" not in sent["arguments"]
     assert "skip_approved_faq" not in sent["arguments"]
     # モデルへの結果には、カードを待つ次の手。
@@ -241,7 +241,7 @@ def test_the_chosen_faq_is_sent_by_the_runtime_in_the_next_run(
     second = _execute(outcome.next_run.id)
 
     assert second.status == RunStatus.COMPLETED
-    calls = mcp.calls_of("rag_search")[1:]
+    calls = mcp.calls_of("rag_chat")[1:]
     assert calls[0]["arguments"]["approved_faq_id"] == "faq-2"
     assert calls[0]["arguments"]["search_answer_profile_id"] == PROFILE
     assert "skip_approved_faq" not in calls[0]["arguments"]
@@ -280,7 +280,7 @@ def test_none_of_the_candidates_searches_with_skip(
     second = _execute(outcome.next_run.id)
 
     assert second.status == RunStatus.COMPLETED
-    sent = mcp.calls_of("rag_search")[-1]["arguments"]
+    sent = mcp.calls_of("rag_chat")[-1]["arguments"]
     assert sent["skip_approved_faq"] is True and "approved_faq_id" not in sent
     instructions = str(model.calls[0].system_instructions)
     assert "どれも選びませんでした" in instructions
@@ -310,7 +310,7 @@ def test_runs_that_do_not_ask_search_with_skip(
     )
     run = _run(metadata=metadata)
 
-    sent = mcp.calls_of("rag_search")[-1]["arguments"]
+    sent = mcp.calls_of("rag_chat")[-1]["arguments"]
     assert sent["skip_approved_faq"] is True
     assert run.confirmations == []
 
@@ -323,14 +323,14 @@ def test_choice_and_next_step_are_deterministic() -> None:
         "entries": [{"item_id": APPROVED_FAQ_ITEM_ID, "option_ids": ["option_1"]}],
         "context": {
             "approved_faq": {
-                "tool": "rag__rag_search",
+                "tool": "rag__rag_chat",
                 "search_answer_profile_id": PROFILE,
                 "faq_ids": {"option_1": "faq-1"},
             }
         },
     }
     assert approved_faq_choice(response) == {
-        "tool": "rag__rag_search",
+        "tool": "rag__rag_chat",
         "search_answer_profile_id": PROFILE,
         "approved_faq_id": "faq-1",
     }
@@ -358,7 +358,7 @@ def test_choice_and_next_step_are_deterministic() -> None:
 
 
 def test_candidates_after_a_chosen_answer_do_not_keep_the_card_outcome() -> None:
-    """最後の rag_search が候補でなければ、候補の状態の対応にしない。"""
+    """最後の rag_chat が候補でなければ、候補の状態の対応にしない。"""
 
     def step(output: dict[str, Any], index: int) -> RunStep:
         return RunStep(
@@ -366,15 +366,15 @@ def test_candidates_after_a_chosen_answer_do_not_keep_the_card_outcome() -> None
             run_id="run-1",
             index=index,
             status="completed",
-            tool_call=ToolCall(name="rag__rag_search", arguments={"query": QUESTION}),
-            tool_result=ToolResult(name="rag__rag_search", success=True, output=output),
+            tool_call=ToolCall(name="rag__rag_chat", arguments={"query": QUESTION}),
+            tool_result=ToolResult(name="rag__rag_chat", success=True, output=output),
         )
 
     steps = [
         step(rag_approved_faq_candidates(*CANDIDATES), 0),
         step(rag_approved_faq_answer("faq-1", CANDIDATES[0][1], "合成の回答 A"), 1),
     ]
-    assert answer_outcome("合成の回答 A", steps=steps)["basis"] == "rag_search"
+    assert answer_outcome("合成の回答 A", steps=steps)["basis"] == "rag_chat"
     assert answer_outcome("", steps=steps[:1])["basis"] == "approved_faq_candidates"
 
 
@@ -530,22 +530,22 @@ def test_chat_runs_that_do_not_ask_skip_candidates_and_clarification(
     assert _answer_text(run) == CHAT_ANSWER
 
 
-def test_rag_search_chosen_faq_is_recorded_as_the_basis() -> None:
-    """rag_search の経路で選んだ Q&A も、回答の対応の印と回答の根拠に残る（振る舞いは変えない）。"""
+def test_rag_chat_chosen_faq_is_recorded_as_the_basis() -> None:
+    """rag_chat で選んだ Q&A は、回答の対応の印と回答の根拠に残る。"""
     step = RunStep(
         id="step-0",
         run_id="run-1",
         index=0,
         status="completed",
-        tool_call=ToolCall(name="rag__rag_search", arguments={"query": QUESTION}),
+        tool_call=ToolCall(name="rag__rag_chat", arguments={"query": QUESTION}),
         tool_result=ToolResult(
-            name="rag__rag_search",
+            name="rag__rag_chat",
             success=True,
             output=rag_approved_faq_answer("faq-1", CANDIDATES[0][1], "合成の回答 A"),
         ),
     )
     outcome = answer_outcome("合成の回答 A", steps=[step])
-    assert (outcome["value"], outcome["basis"]) == ("answered", "rag_search")
+    assert (outcome["value"], outcome["basis"]) == ("answered", "rag_chat")
     assert "approved_faq" in outcome["signals"]
     [item] = answer_evidence([step], "合成の回答 A")["items"]
     assert (item["approved_faq_id"], item["excerpt"]) == ("faq-1", "合成の回答 A")

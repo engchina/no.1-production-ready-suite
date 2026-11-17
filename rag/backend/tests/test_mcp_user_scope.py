@@ -1,19 +1,19 @@
 """MCP の入口(``POST /api/mcp``)から、呼び出し元が指定した条件・基準日・
 サービストークンの範囲(検索・回答プロファイルと KB)が残ることを確かめる(#3260)。
 
-``rag_search``(回答あり)と ``rag_retrieve_evidence``(根拠だけ)を、サービストークン
+``rag_search``(基本の検索。#5352)を、サービストークン
 (claim ``profile_ids``。#1379)で呼ぶ。検索 API の解決・
 ``RagPipeline``・``AnswerEngine`` は本物を動かし、Oracle・embedding・LLM と実体・関係情報の拡張の
 計画だけを決定論の代役にする(内容は合成)。
 
-- すべての検索、実体・関係情報の拡張の範囲、章節の拡張の読み取りに、呼び出し元の条件と基準日が残る。
-- どの検索・拡張も、トークンの範囲に絞った監査 context(認可の述語)で Oracle を読む。
-- 本文が明記した参照と章節の補充も、明示した文書名・分類・基準日と認可の範囲を保つ(#4026)。
+- すべての検索に、呼び出し元の条件と基準日が残り、根拠の拡張（実体・関係情報）はしない。
+- どの検索も、トークンの範囲に絞った監査 context(認可の述語)で Oracle を読む。
+- 拡張に呼び出し元の条件・認可が残ることは、回答の工程のテスト（test_answer_user_scope.py）が
+  確かめる（MCP で拡張する rag_chat はナレッジベース・filters を受けない）。
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from datetime import date
 from typing import Any
@@ -30,7 +30,6 @@ from app.config import get_settings
 from app.main import app
 from app.mcp import profile_scope
 from app.mcp import tools as mcp_tools
-from app.rag import section_map_service
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
@@ -49,10 +48,7 @@ from tests.test_answer_user_scope import (
     _manual_fields,
     _reference_corpus,
 )
-from tests.test_cross_references import FakeGenAi as ReferenceGenAi
 from tests.test_cross_references import (
-    SectionScopeMap,
-    _section_answer_llm,
     _section_corpus,
 )
 from tests.test_mcp_profile_scope import SECRET
@@ -68,10 +64,7 @@ VIEWS = {
 SCOPED_KNOWLEDGE_BASES = frozenset({"kb-1", "kb-2"})
 TODAY = date(2026, 4, 1)
 QUESTION = "sample.pdf の12ページの登録手順は？"
-TOOLS = [
-    pytest.param("rag_search", {}, id="rag_search"),
-    pytest.param("rag_retrieve_evidence", {}, id="retrieve"),
-]
+TOOLS = [pytest.param("rag_search", {}, id="rag_search")]
 
 
 class _ResultLookups:
@@ -218,7 +211,7 @@ def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     caller_filters: dict[str, str],
     as_of: str,
 ) -> None:
-    """すべての検索と、実体・関係情報の拡張に、呼び出し元の条件が残る。
+    """すべての検索に呼び出し元の条件が残り、根拠の拡張はしない（基本の検索。#5352）。
 
     呼び出し元の条件は文書名・ページ・分類・手の項目の条件・旧版の扱い(include_superseded)・
     基準日。ナレッジベースはトークンの範囲のプロファイルの参照先。
@@ -269,59 +262,12 @@ def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     for item in oracle.filters:
         assert {key: item.get(key) for key in scalar} == scalar
         assert _field_values(item) == [manual]
-    # 実体・関係情報の拡張は、主の検索と同じ呼び出し元の範囲の中で広げる。
+    # 基本の検索は実体・関係情報の拡張をしない。
     entity, graph = plans
-    assert entity.scopes and graph.scopes
-    assert all(scope == expected for scope in [*entity.scopes, *graph.scopes])
-    # 認可の範囲は、すべての検索と拡張で、トークンの範囲に絞った監査 context の述語で当たる。
-    _assert_token_scope([*oracle.contexts, *entity.contexts, *graph.contexts])
+    assert not entity.scopes and not graph.scopes
+    # 認可の範囲は、すべての検索で、トークンの範囲に絞った監査 context の述語で当たる。
+    _assert_token_scope(oracle.contexts)
     assert _access_knowledge_bases(oracle.contexts[-1], expected) == set(SCOPED_KNOWLEDGE_BASES)
-
-
-@pytest.mark.parametrize("tool,extra", TOOLS)
-def test_mcp_reference_entity_and_graph_keep_caller_file_name(
-    auth: ProductionAuth,
-    monkeypatch: MonkeyPatch,
-    plans: tuple[PlanRecorder, PlanRecorder],
-    tool: str,
-    extra: dict[str, Any],
-) -> None:
-    """参照・実体・関係の全補充に、呼び出し元の明示条件と認可を渡す(#4026)。"""
-    import rag_engine.adapters.oci as engine_oci
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-    oracle = ScopedViewReferenceOracle()
-    _install(monkeypatch, oracle, ReferenceGenAi())
-    filters = {"file_name": "合成文書A", "large_category": "分類A", "as_of": "2020-06-30"}
-
-    result = _call(
-        tool,
-        {
-            "query": "合成の手順",
-            "search_answer_profile_id": "bv-1",
-            "filters": filters,
-            "include_superseded": True,
-            **extra,
-        },
-        _headers(auth),
-    )
-
-    # 明示した文書名の外の参照先は根拠に足さない。
-    evidence = result["structuredContent"]["evidence"]
-    assert "doc-b:cs-9:0" not in [item["chunk_id"] for item in evidence]
-    reference_filters = [
-        *(call["filters"] for call in oracle.document_batch_calls),
-        *(call["filters"] for call in oracle.reference_calls),
-    ]
-    assert reference_filters
-    kept = {**filters, "knowledge_base_id": "kb-1,kb-2", "include_superseded": "true"}
-    assert all(item == kept for item in reference_filters)
-    # 実体・関係情報の拡張は、呼び出し元の文書名・分類を残す。
-    entity, graph = plans
-    expected = {**filters, **kept}
-    assert entity.scopes and graph.scopes
-    assert all(scope == expected for scope in [*entity.scopes, *graph.scopes])
-    _assert_token_scope([*oracle.contexts, *entity.contexts, *graph.contexts])
 
 
 class SectionReadRecorder(SectionMapStub):
@@ -338,63 +284,6 @@ class SectionReadRecorder(SectionMapStub):
         return await super().read_section(document_id, section_id, **kwargs)
 
 
-@pytest.mark.parametrize(
-    "caller_filters,as_of",
-    [
-        pytest.param({"as_of": "2020-06-30"}, "2020-06-30", id="explicit-as-of"),
-        pytest.param({}, TODAY.isoformat(), id="default-as-of"),
-    ],
-)
-def test_mcp_section_expansion_reads_with_caller_conditions_and_as_of(
-    auth: ProductionAuth,
-    monkeypatch: MonkeyPatch,
-    caller_filters: dict[str, str],
-    as_of: str,
-) -> None:
-    """章節の拡張(#1436)は、主の検索と同じ条件・基準日・トークンの範囲で読む。
-
-    基準日は呼び出し元が明示した値か、回答の初めに決めた既定の日(#2602)。
-    """
-    import rag_engine.adapters.oci as engine_oci
-
-    # CRAG の判定は候補の関連を返さない(不足)ので、章節を広げる。
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-    for name, value in {
-        "rag_section_expansion_enabled": True,
-        "rag_domain_keywords": ["受注番号"],
-    }.items():
-        monkeypatch.setattr(get_settings(), name, value)
-    stub = SectionReadRecorder()
-    monkeypatch.setattr(section_map_service, "chunk_section", stub.chunk_section)
-    monkeypatch.setattr(section_map_service, "section_outline", stub.section_outline)
-    monkeypatch.setattr(section_map_service, "read_section", stub.read_section)
-    oracle = ScopedViewSearchOracle()
-    _install(monkeypatch, oracle, FakeGenAi())
-    filters = {"middle_category": "分類B", "extraction_fields": _manual_fields(), **caller_filters}
-
-    _call(
-        "rag_search",
-        {"query": QUESTION, "search_answer_profile_id": "bv-1", "filters": filters},
-        _headers(auth),
-    )
-
-    expected = {**filters, "knowledge_base_id": "kb-1,kb-2", "as_of": as_of}
-    # 質問から文書名・ページを足さない。
-    assert (oracle.filters[0].get("file_name"), oracle.filters[0].get("page_number_min")) == (
-        None,
-        None,
-    )
-    searched = oracle.filters[0]
-    assert {key: searched.get(key) for key in expected if key != "extraction_fields"} == {
-        key: value for key, value in expected.items() if key != "extraction_fields"
-    }
-    # 章節の本文は、主の検索と同じ条件(呼び出し元の条件・KB・基準日)で読む。
-    assert stub.reads
-    assert all(read_filters == searched for _section, read_filters in stub.reads)
-    assert json.loads(expected["extraction_fields"]) == [MANUAL_FIELD.model_dump()]
-    _assert_token_scope(stub.contexts)
-
-
 class ScopedViewSectionReferenceOracle(_ResultLookups, ScopedViewOracle, ContextReferenceOracle):
     """検索・回答プロファイルの解決と、文書 A の候補が文書 B の第3章を参照する検索を受ける代役。"""
 
@@ -402,48 +291,3 @@ class ScopedViewSectionReferenceOracle(_ResultLookups, ScopedViewOracle, Context
         corpus = _section_corpus()
         ScopedViewOracle.__init__(self, VIEWS)
         ContextReferenceOracle.__init__(self, corpus[:1], corpus)
-
-
-def test_mcp_section_expansion_does_not_read_reference_outside_caller_file_name(
-    auth: ProductionAuth, monkeypatch: MonkeyPatch
-) -> None:
-    """明示範囲外の参照先とその章節を読み込まず、元文書の章節は同じ範囲で読む。"""
-    import rag_engine.adapters.oci as engine_oci
-
-    monkeypatch.setattr(engine_oci, "parse_text_response", _section_answer_llm)
-    for name, value in {
-        "rag_section_expansion_enabled": True,
-        "rag_entity_expansion_enabled": False,
-        "rag_graph_expansion_enabled": False,
-    }.items():
-        monkeypatch.setattr(get_settings(), name, value)
-    stub = SectionScopeMap(_section_corpus(), {"kb-1": {"doc-a", "doc-b", "doc-c"}})
-    monkeypatch.setattr(section_map_service, "chunk_section", stub.chunk_section)
-    monkeypatch.setattr(section_map_service, "section_outline", stub.section_outline)
-    monkeypatch.setattr(section_map_service, "read_section", stub.read_section)
-    oracle = ScopedViewSectionReferenceOracle()
-    _install(monkeypatch, oracle, ReferenceGenAi({"手順": 0.9}))
-    filters = {"file_name": "合成文書A", "large_category": "分類A", "as_of": "2020-06-30"}
-
-    result = _call(
-        "rag_search",
-        {
-            "query": "合成の操作の手順は？",
-            "search_answer_profile_id": "bv-1",
-            "filters": filters,
-            "include_superseded": True,
-        },
-        _headers(auth),
-    )
-
-    evidence = result["structuredContent"]["evidence"]
-    assert not any(item["document_id"] == "doc-b" for item in evidence)
-    reference_reads = [scoped for document, _section, scoped in stub.reads if document == "doc-b"]
-    assert reference_reads == []
-    own_reads = [scoped for document, _section, scoped in stub.reads if document == "doc-a"]
-    assert own_reads
-    assert all(scoped["file_name"] == "合成文書A" for scoped in own_reads)
-    _assert_token_scope(stub.contexts)
-    assert "回答に未反映の関連章節" not in json.dumps(
-        result["structuredContent"], ensure_ascii=False
-    )

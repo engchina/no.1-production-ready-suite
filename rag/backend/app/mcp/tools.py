@@ -545,7 +545,7 @@ class RecommendSearchAnswerProfileInput(BaseModel):
 
 
 class SearchInput(BaseModel):
-    """rag_search の条件（基本の検索。#5352）。
+    """rag_search の条件（基本の検索）。
 
     旧 scope を含む未定義項目は拒否する。
     """
@@ -1836,7 +1836,7 @@ class AnswerToolOutput(VersionedOutput):
 
 
 class SearchOutput(AnswerToolOutput):
-    """rag_search の回答と根拠（基本の検索。#5352）。"""
+    """rag_search の回答と根拠（基本の検索）。"""
 
     outcome: AnswerOutcome = Field(description=OUTCOME_DESCRIPTION)
 

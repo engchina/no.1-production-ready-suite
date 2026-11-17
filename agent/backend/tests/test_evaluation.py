@@ -701,14 +701,14 @@ def test_case_timeout_defaults_to_rag_wait_times_rag_budget(monkeypatch: MonkeyP
     monkeypatch.setattr(
         settings, "agent_max_rag_calls_per_run", defaults.agent_max_rag_calls_per_run
     )
-    monkeypatch.setattr(evaluation, "_rag_timeout_seconds", lambda: 1230.0)
-    # 既定の RAG の予算（30 回）で 1230 ×（30 + 1）秒。
-    assert evaluation.case_timeout_seconds() == 1230 * (30 + 1) == 38130
+    monkeypatch.setattr(evaluation, "_rag_timeout_seconds", lambda: 1500.0)
+    # 既定の RAG の予算（30 回）で 1500 ×（30 + 1）秒。
+    assert evaluation.case_timeout_seconds() == 1500 * (30 + 1) == 46500
     # RAG の予算が無制限なら、Run のツールの呼び出しの上限を回数に使う。
     monkeypatch.setattr(settings, "agent_max_rag_calls_per_run", 0)
     monkeypatch.setattr(settings, "agent_max_tool_calls_per_run", 100)
     assert evaluation.case_timeout_seconds() == min(
-        1230 * (100 + 1), evaluation.CASE_TIMEOUT_MAX_SECONDS
+        1500 * (100 + 1), evaluation.CASE_TIMEOUT_MAX_SECONDS
     )
     # 自動の値は 300 秒〜86400 秒に収める。
     monkeypatch.setattr(settings, "agent_max_rag_calls_per_run", 1)

@@ -333,7 +333,7 @@ def expand_guide_query(text: str, runtime_knowledge: Mapping[str, Any] | None) -
 
     質問に出た用語（正式名か別名のどれか）の、ほかの名前（正式名と別名のすべて）を後ろに足す。
     略称で書いた質問が正式名の照合の語に、正式名で書いた質問が略称の照合の語に当たる。検索・
-    チャットの確認・MCP の ``rag_lookup_guides`` が同じ関数を使う。
+    チャットの確認（MCP の ``rag_chat`` を含む）が同じ関数を使う。
     """
     additions: list[str] = []
     expanded_terms: list[str] = []

@@ -1,4 +1,4 @@
-"""業務 Agent の根拠の取得（MCP の rag_retrieve_evidence。materialize_images=False）のテスト。
+"""根拠の図の画像を切り出さない回答の工程（`AnswerEngine(materialize_images=False)`）のテスト。
 
 回答のモデルが画像を読めても、根拠の取得では図の画像を切り出さない（図は呼び出し元が
 rag_read_source で読む。#5125）。検索は渡された質問 1 つで通常どおり行う。

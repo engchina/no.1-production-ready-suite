@@ -13,7 +13,6 @@ from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
 from app.config import get_settings
-from app.mcp import tools as mcp_tools
 from app.rag import support_guide_conditions as recognition
 from app.rag import support_guide_runtime
 from app.rag.support_guide_runtime import GuideMatch, match_guide
@@ -178,30 +177,3 @@ async def test_search_uses_the_chosen_option_for_the_branch(monkeypatch: MonkeyP
     assert [(item["id"], item["value"]) for item in guide["known_conditions"]] == [
         ("scope", "個別の項目")
     ]
-
-
-@pytest.mark.usefixtures("auth")
-def test_mcp_lookup_guides_resolves_the_free_text_answer(
-    auth: Any,  # noqa: F811
-    monkeypatch: MonkeyPatch,
-) -> None:
-    async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
-        return GUIDES, False
-
-    stub(monkeypatch)
-    monkeypatch.setattr(mcp_tools, "OracleClient", _ProfileOracle)
-    monkeypatch.setattr(search_route, "load_published_guides", published)
-    user = auth.user_with_permissions("searcher", ["menu.search"])
-    body = _call(
-        "rag_lookup_guides",
-        {"query": QUESTION, "search_answer_profile_id": "bv-1", "conditions": {"scope": FREE_TEXT}},
-        _token(user.user_uuid),
-    )["structuredContent"]
-    [guide] = body["guides"]
-    assert guide["decision"] == "answer"
-    assert [(item["id"], item["value"]) for item in guide["known_conditions"]] == [
-        ("scope", "個別の項目")
-    ]
-    assert guide["clarifications"] == []
-    # 答えの無い照合は確かめる判断のまま。
-    assert _ranked(GUIDES, QUESTION, {})[0].decision == "clarify"

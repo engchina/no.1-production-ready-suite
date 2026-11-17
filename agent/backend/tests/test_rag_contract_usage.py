@@ -123,9 +123,12 @@ def test_shared_rag_outputs_follow_the_contract_output_schema() -> None:
 
 
 def test_approved_faq_names_come_from_the_contract() -> None:
-    """登録済みQ&A（#5134）の状態の値・引数の名前は契約の rag_search にあり、Agent のテストの
-    候補・選んだ Q&A の回答の出力は契約の outputSchema に合う。"""
-    tool = _tools()[support_task.RAG_SEARCH]
+    """登録済みQ&A（#5134）の状態の値・引数の名前は契約の rag_chat にあり、Agent のテストの
+    候補・選んだ Q&A の回答の出力は契約の outputSchema に合う（rag_search は持たない。#5352）。"""
+    assert not set(support_task.APPROVED_FAQ_ARGUMENTS) & set(
+        _tools()[support_task.RAG_SEARCH]["inputSchema"]["properties"]
+    )
+    tool = _tools()[support_task.RAG_CHAT]
     assert set(support_task.APPROVED_FAQ_ARGUMENTS) <= set(tool["inputSchema"]["properties"])
     status = tool["outputSchema"]["properties"]["status"]
     assert support_task.RAG_APPROVED_FAQ_CANDIDATES in status["enum"]

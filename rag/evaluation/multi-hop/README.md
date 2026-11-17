@@ -190,8 +190,8 @@ D 2 件あった）。
 
 - 旧版の文を根拠にする問（版の比較: `cmp-approval-deadline-versions`・`cmp-hrm-maintenance-versions`）は
   `include_superseded: true` を持ち、A はそのケースだけ利用者が旧版・変更点を尋ねるときと同じく `filters` の
-  `include_superseded=true` で旧版も検索します。D（業務 Agent）は、質問から旧版が要ると判断して `rag_search` /
-  `rag_retrieve_evidence` の真偽値の引数 `include_superseded: true` を自分で渡す必要があります（渡さなければ旧版の
+  `include_superseded=true` で旧版も検索します。D（業務 Agent）は、質問から旧版が要ると判断して `rag_chat` /
+  `rag_search` の真偽値の引数 `include_superseded: true` を自分で渡す必要があります（渡さなければ旧版の
   根拠が欠けます。#1392 より前は `filters` に真偽値を渡して入力の検証で拒否されていました）。旧版を含めない検索の
   結果には当たった文書の旧版（`older_versions`）が出て、質問の年度・版が旧版のタイトル・文書名に当たると、Agent が
   旧版も含めた検索し直しを案内します（`superseded_versions`。#1405）。D の結果の `agent.superseded_cases` に、このケースのうち旧版も検索したケース（`searched_case_ids`）と、検索しなかった
@@ -303,7 +303,7 @@ uv run suite-evaluation compare A=/tmp/multi-hop.suite-a.json D=/tmp/multi-hop.d
 ```
 
 - D の引用は、公開の Agent MCP の観測（`agent_get_run_observation` の `evidence[]`）の根拠で、その Run の
-  `rag_search` / `rag_retrieve_evidence` が返した根拠と読み取りのツールで読んだ chunk の全件です。本文は生成に渡した
+  `rag_search` / `rag_chat` が返した根拠と読み取りのツールで読んだ chunk の全件です。本文は生成に渡した
   本文そのものなので、必要な根拠はその本文で照合します（業務支援の評価と同じ）。
 - 文書の構成・続きを読む MCP のツール（#1332）がある Agent では、ツールの有る / 無いの 2 回を流して D と D' として
   比べます。
