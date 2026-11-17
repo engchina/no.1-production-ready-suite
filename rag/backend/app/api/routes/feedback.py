@@ -147,7 +147,7 @@ async def get_feedback_detail(
 async def promote_feedback_to_approved_faq(
     feedback_id: str,
 ) -> ApiResponse[FeedbackApprovedFaqPromotion]:
-    """回答 feedback を検索・回答プロファイルの承認済み FAQ へ登録する(質問と回答だけ。#5107)。
+    """回答 feedback を検索・回答プロファイルの登録済みQ&Aへ登録する(質問と回答だけ。#5107)。
 
     「役に立った」は保存した回答、それ以外は修正した回答を登録する。同じ質問の FAQ は置き換える。
     """

@@ -12,7 +12,7 @@ A（業務ガイドなし。ナレッジベースを指定）と C（業務ガ�
   は、回答のツールが会話を持たないので、最初の質問とそれまでの返答をつないだ質問と、返答までに
   分かった条件で呼び直す（契約の「clarifications に答えた値を conditions に入れて呼び直す」）。
 - 旧版も検索して答えるケース（`include_superseded`）は `include_superseded: true` を渡す。
-- 承認済み FAQ（登録済みの Q&A）の候補は返させない（`skip_approved_faq: true`。評価するのは
+- 登録済みQ&Aの候補は返させない（`skip_approved_faq: true`。評価するのは
   検索・回答。#5134）。
 - 引用は回答のツールの `evidence[]`（AI に渡した資料の箇所。返った順。`evidence_limit` は既定で
   契約の上限 50）。本文は `excerpt`（`text_omitted` は本文を省いた根拠）、場所は `locator`。
@@ -49,8 +49,8 @@ ANSWER_TOOLS = (RAG_CHAT_TOOL, RAG_SEARCH_TOOL)
 # 〔rag_search の出力の形は 38 と同じ〕）、#4714 で rag_validate_answer を削除して 40、
 # 段落の印を削除して 41、根拠の table_binding を削除して 42、登録ルールを削除して 43、
 # #5125 で rag_retrieve_evidence の planning の契約を削除して 44
-# 〔rag_search の出力の形は 38 と同じ〕）、#5134 で承認済み FAQ を rag_search に統合して 45
-# （評価は skip_approved_faq で呼び、候補の状態は受け取らない）、#5136 で承認済み FAQ を
+# 〔rag_search の出力の形は 38 と同じ〕）、#5134 で登録済みQ&Aを rag_search に統合して 45
+# （評価は skip_approved_faq で呼び、候補の状態は受け取らない）、#5136 で登録済みQ&Aを
 # rag_retrieve_evidence にも入れて 46〔rag_search の出力の形は 45 と同じ〕。#5339 で足した
 # rag_chat の出力の形は 46 の rag_search と同じ。
 RAG_SEARCH_SCHEMA_VERSION = 46

@@ -123,7 +123,7 @@ def test_shared_rag_outputs_follow_the_contract_output_schema() -> None:
 
 
 def test_approved_faq_names_come_from_the_contract() -> None:
-    """承認済み FAQ（#5134）の状態の値・引数の名前は契約の rag_search にあり、Agent のテストの
+    """登録済みQ&A（#5134）の状態の値・引数の名前は契約の rag_search にあり、Agent のテストの
     候補・選んだ Q&A の回答の出力は契約の outputSchema に合う。"""
     tool = _tools()[support_task.RAG_SEARCH]
     assert set(support_task.APPROVED_FAQ_ARGUMENTS) <= set(tool["inputSchema"]["properties"])

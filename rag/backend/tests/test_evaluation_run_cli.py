@@ -197,7 +197,7 @@ def test_run_takes_answer_mode_from_json_or_flag(
 def test_ablate_rejects_search_answer_mode(
     tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """除去実験は RAG Chat の経路の工程を測るので、RAG 検索の方法では流さない（#5340）。"""
+    """除去実験は RAG チャットの経路の工程を測るので、RAG 検索の方法では流さない（#5340）。"""
     from app.api.routes import evaluation as evaluation_route
 
     async def execute_run(*_args: Any, **_kwargs: Any) -> Any:

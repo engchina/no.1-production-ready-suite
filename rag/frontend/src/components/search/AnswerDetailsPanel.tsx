@@ -54,7 +54,7 @@ export function AnswerDetailsPanel({ diagnostics, recordedModels = [] }: { diagn
 }
 
 /**
- * 回答を読むときに要る案内（登録済み Q&A の回答・公開の業務ガイドを読めなかった・資料では決まらない値がある）。
+ * 回答を読むときに要る案内（登録済みQ&Aの回答・公開の業務ガイドを読めなかった・資料では決まらない値がある）。
  * 回答の本文の下に出す（「詳細」に畳まない。#2096）。同じ回答の案内（安全チェックの注意など）は `extra` で渡し、
  * 1 つの枠にまとめる（同じ回答の案内の枠は 1 つ。messaging.md §3.4.3。#5183）。
  */
@@ -73,7 +73,7 @@ export function AnswerNotices({
 /** 回答の診断から、回答を読むときに要る案内の項目を作る。 */
 export function answerNoticeItems(diagnostics: unknown, savedMessage: unknown = null): CombinedBannerItem[] {
   const data = parseAnswerDiagnostics(diagnostics);
-  // 利用者が選んだ登録済みQ&A の回答をそのまま返した回答（保存した回答は会話のメッセージから読む。#5107）。
+  // 利用者が選んだ登録済みQ&Aの回答をそのまま返した回答（保存した回答は会話のメッセージから読む。#5107）。
   const fromFaq = answerFromApprovedFaq(diagnostics, savedMessage);
   const items: CombinedBannerItem[] = [];
   if (fromFaq) {

@@ -255,7 +255,7 @@ def fallback_envelope(
     external_data_required: bool | None = None,
     external_data_items: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """grounded の確定を経ない回答（根拠が無く打ち切った回答・承認済み FAQ など）の構造。
+    """grounded の確定を経ない回答（根拠が無く打ち切った回答・登録済みQ&Aなど）の構造。
 
     説明の構造が無いので、回答の有無と不足・人の確認・実データの印から対応だけを決める。
     """

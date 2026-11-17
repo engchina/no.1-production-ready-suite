@@ -60,7 +60,7 @@ for (const [tab, paginationId, kind] of [
     const panel = page.getByRole("tabpanel");
     await expect(pagination).toContainText("1–25 / 61 件");
     await expect(panel.getByRole("rowheader")).toHaveCount(25);
-    await expect(panel.getByRole("rowheader").first()).toHaveText(/^項目 001/); // 登録済みQ&A は質問の下に対象・承認を出す（#4621）
+    await expect(panel.getByRole("rowheader").first()).toHaveText(/^項目 001/); // 登録済みQ&Aは質問の下に対象・承認を出す（#4621）
     await jumpToPage(pagination, 3);
     await expect(pagination).toContainText("51–61 / 61 件");
     await expect(panel.getByRole("rowheader")).toHaveCount(11);

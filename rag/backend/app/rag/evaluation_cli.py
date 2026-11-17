@@ -159,7 +159,7 @@ def add_answer_mode_argument(parser: argparse.ArgumentParser) -> None:
         "--answer-mode",
         choices=EVALUATION_ANSWER_MODES,
         help=(
-            "回答の方法（chat: RAG Chat と同じ経路、search: 基本の RAG）。"
+            "回答の方法（chat: RAG チャットと同じ経路、search: 基本の RAG）。"
             "未指定なら評価ファイルの answer_mode（省略時は chat）。"
         ),
     )

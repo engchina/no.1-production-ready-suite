@@ -1,4 +1,4 @@
-"""承認済み FAQ（質問と回答）の登録・候補の照合・semantic cache・feedback からの登録を扱う。
+"""登録済みQ&A（質問と回答）の登録・候補の照合・semantic cache・feedback からの登録を扱う。
 
 FAQ の項目は質問（QUESTION）と回答（ANSWER）だけ（#5107）。候補は質問と FAQ の質問の文字列の類似度と、
 指定時は embedding の意味の類似度の高いほうで並べる。
@@ -45,7 +45,7 @@ MAX_APPROVED_FAQ_ANSWER_LENGTH = 20000
 
 @dataclass(frozen=True)
 class ApprovedFaqRecord:
-    """承認済み FAQ 1 件（質問と回答。status・source・timestamps は保存の管理の値）。"""
+    """登録済みQ&A 1 件（質問と回答。status・source・timestamps は保存の管理の値）。"""
 
     id: str
     question: str
@@ -428,7 +428,7 @@ def suggest_approved_faq_questions(
     limit: int = DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
     min_score: float = DEFAULT_APPROVED_FAQ_MIN_SCORE,
 ) -> list[ApprovedFaqSuggestion]:
-    """質問に近い承認済み FAQ を一致度の高い順に返します（min_score 未満は含めない）。
+    """質問に近い登録済みQ&Aを一致度の高い順に返します（min_score 未満は含めない）。
 
     一致度は FAQ の質問との文字列の類似度と、semantic index を渡したときは embedding の
     類似度（semantic_min_score 以上のとき）の高いほうです。

@@ -228,7 +228,7 @@ async def suggest_search_answer_profile_domain_keywords(
     )
 
 
-# --- 承認済み FAQ（質問と回答。#5107）---------------------------------------------
+# --- 登録済みQ&A（質問と回答。#5107）---------------------------------------------
 
 
 async def _faq_list_data(
@@ -267,7 +267,7 @@ async def _faq_mutation_data(
     response_model=ApiResponse[ApprovedFaqListData],
 )
 async def get_approved_faq(search_answer_profile_id: str) -> ApiResponse[ApprovedFaqListData]:
-    """検索・回答プロファイルの承認済み FAQ（質問と回答）の一覧と提示の設定を返す。"""
+    """検索・回答プロファイルの登録済みQ&A（質問と回答）の一覧と提示の設定を返す。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     return ApiResponse(data=await _faq_list_data(oracle, search_answer_profile_id))
@@ -397,7 +397,7 @@ async def import_search_answer_profile_approved_faq(
 async def suggest_search_answer_profile_approved_faq(
     search_answer_profile_id: str, request: ApprovedFaqSuggestRequest
 ) -> ApiResponse[ApprovedFaqSuggestionsData]:
-    """回答の前に提示する承認済み FAQ の候補を返す(#5107)。
+    """回答の前に提示する登録済みQ&Aの候補を返す(#5107)。
 
     権限は検索・回答プロファイルの権限だけで判定する（ナレッジベースの権限では判定しない）。
     ``conversation_id``（チャット）を渡すと、安全チェックの後に質問を会話の履歴で補完してから

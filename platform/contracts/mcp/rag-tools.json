@@ -4,10 +4,10 @@
     {
       "name": "rag_chat",
       "title": "ナレッジベースへの質問（チャット）",
-      "description": "RAG のチャットと同じ流れ（業務ガイドの照合・登録済みの Q&A・根拠の拡張を含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は使いません。質問に近い登録済みの Q&A があるときは、回答の前にその候補だけを返し（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは確認を返します（outcome=needs_clarification）。",
+      "description": "RAG のチャットと同じ流れ（登録済みQ&A・業務ガイドの照合・根拠の拡張を含む）で、1 つの質問に答え、回答と根拠（evidence）を返します。会話の履歴は使いません。質問に近い登録済みQ&Aがあるときは、回答の前にその候補だけを返し（status=approved_faq_candidates）、業務ガイドの条件を確かめる必要があるときは確認を返します（outcome=needs_clarification）。",
       "inputSchema": {
         "additionalProperties": false,
-        "description": "RAG Chat の経路で答える条件。",
+        "description": "RAG チャットの経路で答える条件。",
         "properties": {
           "query": {
             "description": "1 つの質問（利用者の質問のまま。指示語・省略は前の質問で補い、それだけで意味の通る文にする）。",
@@ -83,7 +83,7 @@
           },
           "skip_approved_faq": {
             "default": false,
-            "description": "true なら登録済みの Q&A の候補を返さずに答える（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、回答の前にその候補だけを返す。",
+            "description": "true なら登録済みQ&Aの候補を返さずに答える（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みQ&Aがあれば、回答の前にその候補だけを返す。",
             "title": "Skip Approved Faq",
             "type": "boolean"
           },
@@ -196,7 +196,7 @@
             "type": "object"
           },
           "ApprovedFaqCandidate": {
-            "description": "検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。",
+            "description": "検索・回答の前に利用者に示す登録済みQ&Aの候補。",
             "properties": {
               "id": {
                 "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
@@ -223,7 +223,7 @@
             "type": "object"
           },
           "ApprovedFaqRef": {
-            "description": "回答に使った承認済み FAQ（回答は登録済みの回答をそのまま返したもの）。",
+            "description": "回答に使った登録済みQ&A（回答は登録済みの回答をそのまま返したもの）。",
             "properties": {
               "id": {
                 "title": "Id",
@@ -1379,7 +1379,7 @@
             "type": "object"
           }
         },
-        "description": "RAG Chat の経路の回答と根拠。",
+        "description": "RAG チャットの経路の回答と根拠。",
         "properties": {
           "schema_version": {
             "default": 46,
@@ -1389,7 +1389,7 @@
           },
           "status": {
             "default": "completed",
-            "description": "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みの Q&A の候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、outcome は null）。",
+            "description": "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、outcome は null）。",
             "enum": [
               "completed",
               "approved_faq_candidates"
@@ -1398,7 +1398,7 @@
             "type": "string"
           },
           "approved_faq_candidates": {
-            "description": "status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。",
+            "description": "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。",
             "items": {
               "$ref": "#/$defs/ApprovedFaqCandidate"
             },
@@ -4728,7 +4728,7 @@
     {
       "name": "rag_retrieve_evidence",
       "title": "根拠の取得",
-      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。質問に近い登録済みの Q&A があるときは、根拠を検索する前にその候補だけを返し（status=approved_faq_candidates）、選んだ Q&A では、その登録済みの回答を approved_faq に返します。図の根拠は画像を返さず image_ref を返します。図を見るときは、その document_id・chunk_id で rag_read_source を include_image=true で呼びます。",
+      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。質問に近い登録済みQ&Aがあるときは、根拠を検索する前にその候補だけを返し（status=approved_faq_candidates）、選んだ Q&A では、その登録済みの回答を approved_faq に返します。図の根拠は画像を返さず image_ref を返します。図を見るときは、その document_id・chunk_id で rag_read_source を include_image=true で呼びます。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "根拠の収集の条件。",
@@ -4825,7 +4825,7 @@
           },
           "skip_approved_faq": {
             "default": false,
-            "description": "true なら登録済みの Q&A の候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索の前にその候補だけを返す。",
+            "description": "true なら登録済みQ&Aの候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みQ&Aがあれば、検索の前にその候補だけを返す。",
             "title": "Skip Approved Faq",
             "type": "boolean"
           }
@@ -4842,7 +4842,7 @@
       "outputSchema": {
         "$defs": {
           "ApprovedFaqAnswer": {
-            "description": "利用者が選んだ承認済み FAQ と、その登録済みの回答（rag_retrieve_evidence。#5136）。",
+            "description": "利用者が選んだ登録済みQ&Aと、その登録済みの回答（rag_retrieve_evidence。#5136）。",
             "properties": {
               "id": {
                 "title": "Id",
@@ -4868,7 +4868,7 @@
             "type": "object"
           },
           "ApprovedFaqCandidate": {
-            "description": "検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。",
+            "description": "検索・回答の前に利用者に示す登録済みQ&Aの候補。",
             "properties": {
               "id": {
                 "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
@@ -5957,7 +5957,7 @@
           },
           "status": {
             "default": "completed",
-            "description": "completed=根拠を検索した（approved_faq_id を渡したときは、選んだ Q&A を返した）/ approved_faq_candidates=質問に近い登録済みの Q&A の候補（approved_faq_candidates）だけを返した（根拠は検索していない。evidence は空）。",
+            "description": "completed=根拠を検索した（approved_faq_id を渡したときは、選んだ Q&A を返した）/ approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）だけを返した（根拠は検索していない。evidence は空）。",
             "enum": [
               "completed",
               "approved_faq_candidates"
@@ -5966,7 +5966,7 @@
             "type": "string"
           },
           "approved_faq_candidates": {
-            "description": "status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。",
+            "description": "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。",
             "items": {
               "$ref": "#/$defs/ApprovedFaqCandidate"
             },
@@ -6087,7 +6087,7 @@
     {
       "name": "rag_search",
       "title": "ナレッジベースの検索",
-      "description": "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・回答に使ったか付き）と回答を返します。質問に近い登録済みの Q&A があるときは、検索・回答の前にその候補だけを返します（status=approved_faq_candidates）。",
+      "description": "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・回答に使ったか付き）と回答を返します。質問に近い登録済みQ&Aがあるときは、検索・回答の前にその候補だけを返します（status=approved_faq_candidates）。",
       "inputSchema": {
         "additionalProperties": false,
         "description": "検索・回答の条件（回答の要求の単位に使う元の質問を足す）。",
@@ -6184,7 +6184,7 @@
           },
           "skip_approved_faq": {
             "default": false,
-            "description": "true なら登録済みの Q&A の候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みの Q&A があれば、検索の前にその候補だけを返す。",
+            "description": "true なら登録済みQ&Aの候補を返さずに検索する（利用者が候補のどれも選ばなかったとき）。既定（false）は、質問に近い登録済みQ&Aがあれば、検索の前にその候補だけを返す。",
             "title": "Skip Approved Faq",
             "type": "boolean"
           },
@@ -6305,7 +6305,7 @@
             "type": "object"
           },
           "ApprovedFaqCandidate": {
-            "description": "検索・回答の前に利用者に示す承認済み FAQ（登録済みの Q&A）の候補。",
+            "description": "検索・回答の前に利用者に示す登録済みQ&Aの候補。",
             "properties": {
               "id": {
                 "description": "Q&A の id（利用者が選んだら approved_faq_id に渡す）。",
@@ -6332,7 +6332,7 @@
             "type": "object"
           },
           "ApprovedFaqRef": {
-            "description": "回答に使った承認済み FAQ（回答は登録済みの回答をそのまま返したもの）。",
+            "description": "回答に使った登録済みQ&A（回答は登録済みの回答をそのまま返したもの）。",
             "properties": {
               "id": {
                 "title": "Id",
@@ -7497,7 +7497,7 @@
           },
           "status": {
             "default": "completed",
-            "description": "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みの Q&A の候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、outcome は null）。",
+            "description": "completed=検索・回答をした / approved_faq_candidates=質問に近い登録済みQ&Aの候補（approved_faq_candidates）だけを返した（検索・回答はしていない。answer は空、outcome は null）。",
             "enum": [
               "completed",
               "approved_faq_candidates"
@@ -7506,7 +7506,7 @@
             "type": "string"
           },
           "approved_faq_candidates": {
-            "description": "status=approved_faq_candidates のとき、登録済みの Q&A の候補（一致度の順）。",
+            "description": "status=approved_faq_candidates のとき、登録済みQ&Aの候補（一致度の順）。",
             "items": {
               "$ref": "#/$defs/ApprovedFaqCandidate"
             },
