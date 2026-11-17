@@ -1747,11 +1747,11 @@ const REASONING_EFFORT_OPTIONS: readonly SelectFieldOption<EnterpriseAiReasoning
  * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 入力の上限 / 出力の上限 / 画像 1 枚の入力（#5316） /
  * 画像入力（Vision）に対応 / テスト / 削除）。8 列はサイドバーを引いた xl（1280px）の本文幅ではモデル ID・接続が読めないほど狭いため、2xl（1536px）から
  * 表の形にし、md〜2xl は 1 行のモデルの欄を 2 列に並べる（#533 / #1425 / #1437。7 列の #1425 までは xl から表）。
- * 推論の量は「none（送らない）」が読める固定の幅、入力の上限は 7 桁が読める固定の幅にし、残りをモデル ID・表示名・
- * 接続に回す。
+ * 推論の量は「none（送らない）」が読める固定の幅、入力の上限は 7 桁が読める固定の幅、画像 1 枚の入力は表頭が 1 行に
+ * 収まる幅にし、残りをモデル ID・表示名・接続に回す。
  */
 const CATALOG_COLUMNS =
-  "2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_8.5rem_8.5rem_8.5rem_6.5rem_7rem_3.25rem]";
+  "2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_8.5rem_8.5rem_10.5rem_6.5rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
