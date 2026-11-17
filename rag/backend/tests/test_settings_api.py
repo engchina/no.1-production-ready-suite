@@ -1313,6 +1313,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 32768,
+            "image_input_tokens": 16384,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1322,6 +1323,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 32768,
+            "image_input_tokens": 16384,
         },
     ]
     assert body["settings"]["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"
@@ -1385,7 +1387,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert stat.S_IMODE(settings_file.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["version"] == 6
+    assert persisted["version"] == 7
     # API key は JSON ではなく共通 .env に保存する（#103 / #211）。
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
@@ -1398,6 +1400,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 16000,
+            "image_input_tokens": 16384,
         },
         {
             "model_id": "enterprise-vlm",
@@ -1407,6 +1410,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 64000,
+            "image_input_tokens": 16384,
         },
     ]
     assert persisted["enterprise_ai"]["default_text_model_id"] == "enterprise-llm"

@@ -73,6 +73,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_image_input_tokens,
     enterprise_ai_judge_model_id,
     enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
@@ -467,6 +468,9 @@ def escalation_model_environ(settings: Settings, answer_model: str) -> dict[str,
         "RAG_ENGINE_ESCALATION_MAX_OUTPUT_TOKENS": str(
             enterprise_ai_output_token_budget(settings, model_id)
         ),
+        "RAG_ENGINE_ESCALATION_IMAGE_INPUT_TOKENS": str(
+            enterprise_ai_image_input_tokens(settings, model_id)
+        ),
     }
 
 
@@ -527,6 +531,14 @@ def build_engine_settings(
         ),
         "OCI_ENTERPRISE_AI_VISION_MAX_OUTPUT_TOKENS": str(
             enterprise_ai_output_token_budget(settings, vision_model)
+        ),
+        # 画像 1 枚の入力 token(#5316)。画像を添付する呼び出しの入力の上限の判定で、
+        # 画像を枚数 × この値で数える。
+        "OCI_ENTERPRISE_AI_IMAGE_INPUT_TOKENS": str(
+            enterprise_ai_image_input_tokens(settings, answer_model)
+        ),
+        "OCI_ENTERPRISE_AI_VISION_IMAGE_INPUT_TOKENS": str(
+            enterprise_ai_image_input_tokens(settings, vision_model)
         ),
         # rag_engine は rerank_model と oci_compartment_id が両方あるときだけ rerank を実行する
         # (answer_records._rerank_configured)。rerank 自体は backend の Cohere client を注入して

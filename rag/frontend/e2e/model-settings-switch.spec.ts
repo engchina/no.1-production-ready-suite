@@ -899,6 +899,56 @@ for (const viewport of [
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
+  { name: "wide", width: 1920, height: 1000 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`登録モデルごとに画像 1 枚の入力（tokens）を入力し、範囲外は保存の前に止める（既定は 16384。#5316, ${viewport.name}）`, { tag: "@responsive" }, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let savedPayload: { enterprise_ai: { models: Array<Record<string, unknown>> } } | undefined;
+    await mockModelSettings(page, (payload) => {
+      savedPayload = payload as typeof savedPayload;
+    });
+    await page.goto("/settings/model");
+
+    const image2 = page.getByRole("spinbutton", { name: "モデル 2 の画像 1 枚の入力（tokens）" });
+    // 値の無い保存済みのモデルは既定の 16384。
+    await expect(image2).toHaveValue("16384");
+    await expect(image2).toHaveAccessibleDescription(/画像 1 枚を何 token として数えるか/);
+    if (viewport.name === "wide") {
+      // 広い画面（2xl）は表頭に出し、出力の上限の右に同じ行・同じ高さで並べる。
+      await expect(
+        page.locator("#enterprise-model-catalog").getByText("画像 1 枚の入力（tokens）", { exact: true })
+      ).toBeVisible();
+      const outputBox = await page.getByRole("spinbutton", { name: "モデル 2 の出力の上限（tokens）" }).boundingBox();
+      const imageBox = await image2.boundingBox();
+      expect(imageBox!.x).toBeGreaterThan(outputBox!.x);
+      expect(Math.abs(imageBox!.y - outputBox!.y)).toBeLessThan(1);
+      expect(Math.abs(imageBox!.height - outputBox!.height)).toBeLessThan(1);
+    }
+    if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+      await page.locator("#enterprise-model-catalog").screenshot({
+        path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/model-image-input-tokens-${viewport.name}.png`,
+      });
+    }
+
+    await image2.fill("0");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("画像 1 枚の入力は 1〜2000000 の整数で入力してください。")).toBeVisible();
+    await expect(image2).toBeFocused();
+    expect(savedPayload).toBeUndefined();
+
+    await image2.fill("4784");
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+    expect(savedPayload?.enterprise_ai.models.map((model) => model.image_input_tokens)).toEqual([16384, 4784]);
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
   test(`seed の欄を持たず、登録モデルの保存に seed を含めない（#3529, ${viewport.name}）`, async ({

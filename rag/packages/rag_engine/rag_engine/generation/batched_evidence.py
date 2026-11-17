@@ -201,6 +201,7 @@ def prepare_batched_evidence(
     failed_batches: list[dict[str, Any]] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
+    image_count: int = 0,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。
 
@@ -210,6 +211,7 @@ def prepare_batched_evidence(
     ``protected_sources`` は検索拡張の印を持つ根拠の出典（#5162・#5098）。その文書を最初の組から読み（関連度の高い根拠と
     同じ組に入りやすくし、点数の低い橋渡しの根拠を最後の組へ回さない）、読取で選ばれなかったときは補う順の先頭にする。
     最終生成へ渡す並びは関連度の順（``document_order``）のまま。
+    ``image_count`` は最終生成に添付する画像の枚数（#5316）。最終生成の測定だけに含める（各組は画像を送らない）。
 
     文書の本文の先頭の chunk（``FIRST_CHUNK`` の印。#5240）は組分けの対象にせず、各組と最終生成の入力に、そこに出てくる文書の
     分を必ず足す（その入力の原文がすでに含めば足さない。``with_first_chunks``）。組の大きさはその分を含めて測る。
@@ -251,7 +253,12 @@ def prepare_batched_evidence(
     def final_measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         prompt = final_prompt(values)
         measured = model_input_measurement(
-            settings, system, prompt, schema_for(values) if schema_for is not None else schema, provider_id=provider_id
+            settings,
+            system,
+            prompt,
+            schema_for(values) if schema_for is not None else schema,
+            provider_id=provider_id,
+            image_count=image_count,
         )
         chars = len(evidence_text(values))
         return prompt, {**measured, "rendered_chars": chars, "fits": chars <= settings.evidence_budget_chars and measured["fits"]}

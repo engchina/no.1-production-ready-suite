@@ -59,6 +59,15 @@ export const DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS = 32_768;
 export const ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN = 1;
 export const ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX = 2_000_000;
 
+/**
+ * 画像 1 枚の入力 token（#5316）。登録モデルごとに持ち、画像を添付する呼び出しの入力の上限の判定で、画像を
+ * 枚数 × この値で数える。値の無いモデルは既定の 16384。範囲は backend の ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN /
+ * _MAX と同じ（範囲外は保存で 422）。
+ */
+export const DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS = 16_384;
+export const ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN = 1;
+export const ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX = 2_000_000;
+
 export interface EnterpriseAiConfiguredModel {
   model_id: string;
   display_name: string;
@@ -74,6 +83,10 @@ export interface EnterpriseAiConfiguredModel {
    * 空欄は NaN で持ち、保存の前に欄のエラーで止める。
    */
   max_output_tokens?: number;
+  /**
+   * 画像 1 枚の入力 token（#5316）。未指定は既定（16384）。空欄は NaN で持ち、保存の前に欄のエラーで止める。
+   */
+  image_input_tokens?: number;
 }
 
 /**

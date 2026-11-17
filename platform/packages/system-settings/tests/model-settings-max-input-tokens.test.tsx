@@ -205,3 +205,54 @@ describe("ModelSettingsPage の登録モデルの入力の上限（#1437）", ()
     expect(updateModelSettings.mock.calls[0]?.[0].enterprise_ai.models[0]?.max_input_tokens).toBe(4096);
   });
 });
+
+// #5316: 登録モデルごとの画像 1 枚の入力（tokens）。値の無いモデルは既定の 16384 を出し、範囲外は入力の上限と
+// 同じく保存の前に欄のエラーで止める。
+describe("ModelSettingsPage の登録モデルの画像 1 枚の入力（#5316）", () => {
+  it("値の無いモデルは既定の 16384 を出し、入れた値を保存で送る", async () => {
+    const updateModelSettings = vi.fn(pending);
+    await renderPage({
+      getModelSettings: async () => data(),
+      updateModelSettings,
+      testModelSettings: pending,
+    });
+
+    expect(input("enterprise-model-image-input-tokens-0")?.value).toBe("16384");
+    expect(
+      input("enterprise-model-image-input-tokens-0")?.getAttribute("aria-describedby"),
+    ).toContain("enterprise-model-image-input-tokens-help");
+    await setInputValue("enterprise-model-image-input-tokens-0", "4784");
+
+    await submitModels();
+
+    expect(updateModelSettings).toHaveBeenCalledTimes(1);
+    expect(updateModelSettings.mock.calls[0]?.[0].enterprise_ai.models[0].image_input_tokens).toBe(
+      4784,
+    );
+  });
+
+  it.each([
+    ["空欄", ""],
+    ["下限より小さい", "0"],
+    ["上限より大きい", "2000001"],
+    ["整数でない", "1000.5"],
+  ])("%s値は保存を止め、欄の直下にエラーを出してフォーカスする", async (_name, value) => {
+    const updateModelSettings = vi.fn(pending);
+    await renderPage({
+      getModelSettings: async () => data(),
+      updateModelSettings,
+      testModelSettings: pending,
+    });
+
+    await setInputValue("enterprise-model-image-input-tokens-0", value);
+    expect(fieldError("enterprise-model-image-input-tokens-0")).toBeUndefined();
+
+    await submitModels();
+
+    expect(updateModelSettings).not.toHaveBeenCalled();
+    expect(fieldError("enterprise-model-image-input-tokens-0")).toBe(
+      "画像 1 枚の入力は 1〜2000000 の整数で入力してください。",
+    );
+    expect(document.activeElement?.id).toBe("enterprise-model-image-input-tokens-0");
+  });
+});

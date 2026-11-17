@@ -107,7 +107,7 @@ export const MODEL_MESSAGES = {
     "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",
   "settings.model.enterprise.projectHelpTertiary":
     "OCI Enterprise AI を使うときだけ、Generative AI project OCID を入力します（入力したときだけ OpenAI-Project ヘッダーで送ります）。OpenAI や OpenAI 互換 API では空のままにします。",
-  "settings.model.enterprise.parameterHelp": "推論の量・入力と出力の上限について",
+  "settings.model.enterprise.parameterHelp": "推論の量・入力と出力の上限・画像 1 枚の入力について",
   "settings.model.enterprise.modelDocs": "Oracle 公式: モデルの仕様",
   "settings.model.enterprise.apiDocs": "Oracle 公式: API の仕様",
   "settings.model.enterprise.reasoningEffort": "推論の量",
@@ -129,6 +129,12 @@ export const MODEL_MESSAGES = {
     "出力の上限は 1〜2000000 の整数で入力してください。",
   "settings.model.enterprise.maxOutputTokensOverInput":
     "出力の上限は入力の上限（{max}）以下にしてください。",
+  "settings.model.enterprise.imageInputTokens": "画像 1 枚の入力（tokens）",
+  "settings.model.enterprise.imageInputTokensOfModel": "モデル {number} の画像 1 枚の入力（tokens）",
+  "settings.model.enterprise.imageInputTokensHelp":
+    "画像を添付してモデルを呼ぶときに、入力の上限の判定で画像 1 枚を何 token として数えるかの値です。画像の token の数え方はモデルごとに異なるため、選択したモデルの公式の文書にある画像 1 枚の最大の token 数を入れてください。画像を読まないモデルでは使いません。既定は 16384 です。値を変えても、送る画像や画像の解像度は変わりません。",
+  "settings.model.enterprise.imageInputTokensInvalid":
+    "画像 1 枚の入力は 1〜2000000 の整数で入力してください。",
   "settings.model.enterprise.removeConfirm.description":
     "モデル「{model}」を一覧から削除します。保存するまで確定しません。",
   "settings.model.enterprise.removeConfirm.descriptionUnnamed":

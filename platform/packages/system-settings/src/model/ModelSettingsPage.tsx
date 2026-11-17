@@ -98,9 +98,12 @@ import {
 import { searchableSelectLabels, t } from "./messages";
 import {
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
+  DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
   ENTERPRISE_AI_CONNECTION_IDS,
+  ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX,
+  ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN,
   ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX,
   ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN,
   ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX,
@@ -455,6 +458,7 @@ export function ModelSettingsPage({
                   reasoning_effort: DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
                   max_input_tokens: DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
                   max_output_tokens: DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+                  image_input_tokens: DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
                 },
               ],
             },
@@ -581,13 +585,18 @@ export function ModelSettingsPage({
       const outputTokenErrors = validateMaxOutputTokens(
         draft.enterprise_ai.models,
       );
-      // 行の順に、行の中は欄の並び（モデル ID → 接続 → 入力の上限 → 出力の上限）で最初のエラーの欄を探す。
+      const imageTokenErrors = validateImageInputTokens(
+        draft.enterprise_ai.models,
+      );
+      // 行の順に、行の中は欄の並び（モデル ID → 接続 → 入力の上限 → 出力の上限 → 画像 1 枚の入力）で
+      // 最初のエラーの欄を探す。
       const invalidRow = draft.enterprise_ai.models.findIndex(
         (_, index) =>
           idErrors[index] ||
           connectionErrors[index] ||
           tokenErrors[index] ||
-          outputTokenErrors[index],
+          outputTokenErrors[index] ||
+          imageTokenErrors[index],
       );
       const errors = validateDefaultModels(draft.enterprise_ai);
       const firstInvalid = DEFAULT_MODEL_FIELD_ORDER.find(
@@ -607,7 +616,9 @@ export function ModelSettingsPage({
                   ? modelConnectionFieldId(invalidRow)
                   : tokenErrors[invalidRow]
                     ? modelMaxInputTokensFieldId(invalidRow)
-                    : modelMaxOutputTokensFieldId(invalidRow)
+                    : outputTokenErrors[invalidRow]
+                      ? modelMaxOutputTokensFieldId(invalidRow)
+                      : modelImageInputTokensFieldId(invalidRow)
               : DEFAULT_MODEL_FIELD_IDS[firstInvalid!],
           )
           ?.focus();
@@ -727,6 +738,11 @@ export function ModelSettingsPage({
   const maxOutputTokensErrors: Record<number, string> =
     draft && showMaxInputTokensErrors
       ? validateMaxOutputTokens(draft.enterprise_ai.models)
+      : {};
+  // 画像 1 枚の入力（#5316）のエラーも、入力の上限と同じく保存の操作の後から出す。
+  const imageInputTokensErrors: Record<number, string> =
+    draft && showMaxInputTokensErrors
+      ? validateImageInputTokens(draft.enterprise_ai.models)
       : {};
 
   // 取得の失敗を出すのは、下書きがまだない（初回の取得が失敗した）ときだけ（#1036）。
@@ -882,6 +898,7 @@ export function ModelSettingsPage({
                 modelIdErrors={modelIdErrors}
                 maxInputTokensErrors={maxInputTokensErrors}
                 maxOutputTokensErrors={maxOutputTokensErrors}
+                imageInputTokensErrors={imageInputTokensErrors}
                 testingKey={testingKey}
                 testResults={testResults}
                 onModelChange={updateEnterpriseModel}
@@ -1288,6 +1305,7 @@ function ModelCatalogEditor({
   modelIdErrors,
   maxInputTokensErrors,
   maxOutputTokensErrors,
+  imageInputTokensErrors,
   testingKey,
   testResults,
   onModelChange,
@@ -1302,6 +1320,7 @@ function ModelCatalogEditor({
   modelIdErrors: ModelIdErrors;
   maxInputTokensErrors: Record<number, string>;
   maxOutputTokensErrors: Record<number, string>;
+  imageInputTokensErrors: Record<number, string>;
   testingKey: ModelTestKey | null;
   testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
   onModelChange: (
@@ -1367,6 +1386,7 @@ function ModelCatalogEditor({
           <span>{t("settings.model.enterprise.reasoningEffort")}</span>
           <span>{t("settings.model.enterprise.maxInputTokens")}</span>
           <span>{t("settings.model.enterprise.maxOutputTokens")}</span>
+          <span>{t("settings.model.enterprise.imageInputTokens")}</span>
           <span>{t("settings.model.enterprise.vision")}</span>
           <span>{t("settings.model.test.action")}</span>
           <span aria-hidden />
@@ -1487,6 +1507,30 @@ function ModelCatalogEditor({
                 inputClassName="tnum"
                 className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
               />
+              {/* 画像 1 枚の入力（#5316）。画像を添付する呼び出しの入力の上限の判定で、画像 1 枚をこの値で数える。 */}
+              <TextField
+                id={modelImageInputTokensFieldId(index)}
+                label={t("settings.model.enterprise.imageInputTokensOfModel", {
+                  number: modelNumber,
+                })}
+                type="number"
+                inputMode="numeric"
+                min={ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN}
+                max={ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX}
+                step={1}
+                value={imageInputTokensInputValue(model)}
+                width="xs"
+                aria-describedby={IMAGE_INPUT_TOKENS_HELP_ID}
+                error={imageInputTokensErrors[index]}
+                onValueChange={(next) =>
+                  onModelChange(index, {
+                    image_input_tokens:
+                      next.trim() === "" ? Number.NaN : Number(next),
+                  })
+                }
+                inputClassName="tnum"
+                className="min-w-0 max-2xl:[&>label]:text-xs max-2xl:[&>label]:text-fg-muted 2xl:[&>label]:sr-only"
+              />
               {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。 */}
               <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg md:self-end 2xl:self-start 2xl:justify-start">
                 <span className="2xl:sr-only">
@@ -1533,7 +1577,7 @@ function ModelCatalogEditor({
                 result={testResults[testKey]}
                 testing={testingKey === testKey}
                 model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
-                className="md:col-span-2 2xl:col-span-9"
+                className="md:col-span-2 2xl:col-span-10"
               />
             </div>
           );
@@ -1553,6 +1597,9 @@ function ModelCatalogEditor({
         </p>
         <p id={MAX_OUTPUT_TOKENS_HELP_ID} className="text-xs leading-relaxed text-fg-muted">
           {t("settings.model.enterprise.maxOutputTokensHelp")}
+        </p>
+        <p id={IMAGE_INPUT_TOKENS_HELP_ID} className="text-xs leading-relaxed text-fg-muted">
+          {t("settings.model.enterprise.imageInputTokensHelp")}
         </p>
         <div className="flex flex-wrap gap-3 text-xs">
           <a href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/models.htm" target="_blank" rel="noopener noreferrer" className="text-accent-fg underline underline-offset-2">
@@ -1644,6 +1691,37 @@ function validateMaxOutputTokens(
   return errors;
 }
 
+/** 画像 1 枚の入力の説明の要素の id（#5316）。 */
+const IMAGE_INPUT_TOKENS_HELP_ID = "enterprise-model-image-input-tokens-help";
+
+function modelImageInputTokensFieldId(index: number): string {
+  return `enterprise-model-image-input-tokens-${index}`;
+}
+
+/** 画像 1 枚の入力の欄の表示値（値の無いモデルは既定、空欄（NaN）は空）。 */
+function imageInputTokensInputValue(model: EnterpriseAiConfiguredModel): number | "" {
+  const value = model.image_input_tokens ?? DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS;
+  return Number.isNaN(value) ? "" : value;
+}
+
+/** 行ごとの画像 1 枚の入力のエラー（#5316。1〜2000000 の整数。backend の検証と同じ範囲）。 */
+function validateImageInputTokens(
+  models: readonly EnterpriseAiConfiguredModel[],
+): Record<number, string> {
+  const errors: Record<number, string> = {};
+  models.forEach((model, index) => {
+    const tokens = model.image_input_tokens ?? DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS;
+    if (
+      !Number.isInteger(tokens) ||
+      tokens < ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN ||
+      tokens > ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX
+    ) {
+      errors[index] = t("settings.model.enterprise.imageInputTokensInvalid");
+    }
+  });
+  return errors;
+}
+
 /** 推論の量の説明の要素の id（#1425）。 */
 const REASONING_EFFORT_HELP_ID = "enterprise-model-reasoning-effort-help";
 
@@ -1666,14 +1744,14 @@ const REASONING_EFFORT_OPTIONS: readonly SelectFieldOption<EnterpriseAiReasoning
   }));
 
 /**
- * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 入力の上限 / 画像入力（Vision）に対応 / テスト /
- * 削除）。8 列はサイドバーを引いた xl（1280px）の本文幅ではモデル ID・接続が読めないほど狭いため、2xl（1536px）から
+ * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 推論の量 / 入力の上限 / 出力の上限 / 画像 1 枚の入力（#5316） /
+ * 画像入力（Vision）に対応 / テスト / 削除）。8 列はサイドバーを引いた xl（1280px）の本文幅ではモデル ID・接続が読めないほど狭いため、2xl（1536px）から
  * 表の形にし、md〜2xl は 1 行のモデルの欄を 2 列に並べる（#533 / #1425 / #1437。7 列の #1425 までは xl から表）。
- * 推論の量は「none（送らない）」が読める固定の幅、入力の上限は 7 桁が読める固定の幅にし、残りをモデル ID・表示名・
- * 接続に回す。
+ * 推論の量は「none（送らない）」が読める固定の幅、入力の上限は 7 桁が読める固定の幅、画像 1 枚の入力は表頭が 1 行に
+ * 収まる幅にし、残りをモデル ID・表示名・接続に回す。
  */
 const CATALOG_COLUMNS =
-  "2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_8.5rem_8.5rem_6.5rem_7rem_3.25rem]";
+  "2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_minmax(0,1fr)_13.5rem_8.5rem_8.5rem_10.5rem_6.5rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。

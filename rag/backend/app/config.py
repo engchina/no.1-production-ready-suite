@@ -69,6 +69,9 @@ from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
 )
 from pr_system_settings.model import (
+    enterprise_ai_image_input_tokens as enterprise_ai_image_input_tokens,
+)
+from pr_system_settings.model import (
     enterprise_ai_judge_model_id as enterprise_ai_judge_model_id,
 )
 from pr_system_settings.model import (

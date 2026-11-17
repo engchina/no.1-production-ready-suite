@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
+from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS
 
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
@@ -186,6 +187,9 @@ class LlmProviderSettings:
     # モデルの 1 回の呼び出しの出力の上限(tokens。#1719。推論のあるモデルは推論の token も含む)。backend が
     # platform の `enterprise_ai_output_token_budget`(モデルの出力の上限と入力の上限の小さい方)で決めて渡す。
     max_output_tokens: int = DEFAULT_MODEL_OUTPUT_TOKENS
+    # 画像 1 枚の入力 token(#5316)。画像を添付する呼び出しの入力の上限の判定で、画像を枚数 × この値で数える。
+    # backend が platform の `enterprise_ai_image_input_tokens`(登録モデルの値。無ければ platform の既定)で決めて渡す。
+    image_input_tokens: int = DEFAULT_IMAGE_INPUT_TOKENS
 
     @property
     def base_url(self) -> str:
@@ -407,6 +411,13 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         if env.get("OCI_ENTERPRISE_AI_VLM_MODEL", "").strip()
         else answer_output_tokens
     )
+    # 画像 1 枚の入力 token もモデルごと(#5316)。Vision のモデルを指定しないときは回答のモデルの値。
+    answer_image_tokens = _positive_int(env, "OCI_ENTERPRISE_AI_IMAGE_INPUT_TOKENS", DEFAULT_IMAGE_INPUT_TOKENS)
+    vision_image_tokens = (
+        _positive_int(env, "OCI_ENTERPRISE_AI_VISION_IMAGE_INPUT_TOKENS", DEFAULT_IMAGE_INPUT_TOKENS)
+        if env.get("OCI_ENTERPRISE_AI_VLM_MODEL", "").strip()
+        else answer_image_tokens
+    )
     llm_providers = {
         ENTERPRISE_AI_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_LLM_PROVIDER,
@@ -420,6 +431,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             endpoint=endpoint,
             reasoning_effort=answer_reasoning,
             max_output_tokens=answer_output_tokens,
+            image_input_tokens=answer_image_tokens,
         ),
         ENTERPRISE_AI_VISION_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -432,6 +444,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             endpoint=vision_endpoint,
             reasoning_effort=vision_reasoning,
             max_output_tokens=vision_output_tokens,
+            image_input_tokens=vision_image_tokens,
         ),
     }
     escalation_model = env.get(f"{ESCALATION_ENV_PREFIX}_MODEL", "").strip()
@@ -447,6 +460,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             endpoint=env.get(f"{ESCALATION_ENV_PREFIX}_ENDPOINT", "").strip(),
             reasoning_effort=env.get(f"{ESCALATION_ENV_PREFIX}_REASONING_EFFORT", "").strip(),
             max_output_tokens=_positive_int(env, f"{ESCALATION_ENV_PREFIX}_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
+            image_input_tokens=_positive_int(env, f"{ESCALATION_ENV_PREFIX}_IMAGE_INPUT_TOKENS", DEFAULT_IMAGE_INPUT_TOKENS),
         )
     default_vision_llm = normalize_llm_provider_id(
         env.get("DEFAULT_VISION_LLM"),

@@ -342,6 +342,46 @@ def test_build_engine_settings_passes_model_output_limits(tmp_path: Any) -> None
     assert get_llm_provider(small, small.default_answer_llm).max_output_tokens == 8_192
 
 
+def test_build_engine_settings_passes_image_input_tokens(tmp_path: Any) -> None:
+    """画像 1 枚の入力 token は登録モデルの値（#5316）。値の無いモデルは platform の既定。"""
+    from pr_system_settings.model import (
+        DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
+        EnterpriseAiConfiguredModel,
+    )
+    from rag_engine.config import get_llm_provider
+
+    from app.rag.answer_engine import escalation_model_environ
+
+    models = [
+        EnterpriseAiConfiguredModel(
+            model_id="llm-a", vision_enabled=True, image_input_tokens=2_500
+        ),
+        EnterpriseAiConfiguredModel(
+            model_id="vlm-a", vision_enabled=True, image_input_tokens=6_000
+        ),
+        EnterpriseAiConfiguredModel(model_id="llm-b", vision_enabled=True),
+    ]
+    settings = Settings(
+        oci_enterprise_ai_models=models,
+        oci_enterprise_ai_default_text_model="llm-a",
+        oci_enterprise_ai_default_vision_model="vlm-a",
+    )
+
+    engine = build_engine_settings(settings, output_dir=tmp_path)
+    answer = get_llm_provider(engine, engine.default_answer_llm)
+    vision = get_llm_provider(engine, engine.default_vision_llm)
+    assert (answer.image_input_tokens, vision.image_input_tokens) == (2_500, 6_000)
+    escalation = escalation_model_environ(
+        settings.model_copy(update={"rag_answer_escalation_model": "vlm-a"}), "llm-a"
+    )
+    assert escalation["RAG_ENGINE_ESCALATION_IMAGE_INPUT_TOKENS"] == "6000"
+    other = build_engine_settings(settings, output_dir=tmp_path, answer_model_id="llm-b")
+    assert (
+        get_llm_provider(other, other.default_answer_llm).image_input_tokens
+        == DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS
+    )
+
+
 def test_token_estimate_and_default_limit_match_platform() -> None:
     """rag_engine の見積もり・既定は platform の値の解釈と同じ（3 製品で共通の 1 か所。#1437）。"""
     from pr_system_settings.model import (

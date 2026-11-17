@@ -907,13 +907,12 @@ def _openai_parsed[StructuredOutputT: BaseModel](
             }
             wire_request = _response_wire_request(request)
             if online_policy:
-                from rag_engine.generation.section_expansion import estimate_tokens
+                from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, request_input_estimate
 
-                input_tokens = estimate_tokens(json.dumps(wire_request, ensure_ascii=False))
+                # 画像の data URL（base64）は本文として数えず、枚数 × モデルの画像 1 枚の入力 token で数える（#5316）。
+                input_tokens, image_estimate = request_input_estimate(wire_request, provider)
                 room = settings.answer_max_input_tokens - input_tokens
                 if room <= 0:
-                    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
-
                     raise GenerationInputBudgetExceeded(
                         {
                             "reason": "final_model_input_exceeds_limit",
@@ -921,6 +920,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                             "estimated_input_tokens": input_tokens,
                             "available_input_tokens": 0,
                             "output_reserved_tokens": 0,
+                            **image_estimate,
                             "fits": False,
                         }
                     )
