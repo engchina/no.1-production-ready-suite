@@ -2471,6 +2471,116 @@ def test_abbreviation_references_point_to_the_base_document(
     assert json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))[0]["document_title"] == "法"
 
 
+# 参照の解決の版の無い chunk(#4026 より前の分割)の回答のとき(#5311)。合成の文書名。
+_DERIVED_FILE = "テスト法施行規則.json"
+_DERIVED_TITLE_PATH = "テスト法施行規則 > 第二条(届出)"
+
+
+@pytest.fixture
+def abbreviation_words(reference_words: Callable[..., None]) -> None:
+    """略称の展開の言語資源(合成)。展開の規則は ``ReferenceVocabulary.abbreviation_title``。"""
+    reference_words(
+        abbreviation_targets=["法=*", "令=*施行令"],
+        derived_document_suffixes=["施行令", "施行規則"],
+    )
+
+
+def _legacy_anchor(text: str, section_path: str, file_name: str) -> RetrievedChunk:
+    """参照先の印(``reference_targets_json``・解決の版)の無い候補の chunk。"""
+    return _retrieved("doc-1:a", text, section_path, file_name=file_name)
+
+
+@pytest.mark.parametrize(
+    "section_path",
+    [_DERIVED_TITLE_PATH, "第二条(届出)"],
+    ids=["title-heading", "file-name"],
+)
+async def test_answer_expands_abbreviation_with_ingestion_rule(
+    section_path: str, abbreviation_words: None
+) -> None:
+    """抜き出し直しの略称の展開は、取込と同じ関数で同じ文書名になる(#5311)。
+
+    参照元の名前は、先頭の見出しが番号の無いタイトルならそれ、無ければファイル名から決める。
+    """
+    text = "法第七条第一項の規定による届出。令第三条に定める書類を添える。"
+    chunks = [_chunk(0, text, section_path)]
+    annotate_cross_references(chunks, document_title=_DERIVED_FILE)
+    ingested = [(t.key, t.document_title) for t in reference_targets(chunks[0].metadata)]
+
+    anchor = _legacy_anchor(text, section_path, _DERIVED_FILE)
+    oracle = ReferenceOracle([anchor], [])
+    answered = await _engine(oracle)._anchor_reference_targets({}, _SearchState(), anchor)
+
+    assert ingested == [("7", "テスト法"), ("3", "テスト法施行令")]
+    assert [(t.key, t.document_title) for t in answered] == ingested
+    # 他の文書への参照だけなので、参照元の文書の見出しは読まない。
+    assert oracle.section_calls == []
+
+
+async def test_legacy_abbreviation_reference_reaches_base_document(
+    abbreviation_words: None,
+) -> None:
+    """解決の版の無い chunk の略称の参照は、検索範囲の本体の文書の条に辿る(#5311)。"""
+    anchor = _legacy_anchor("法第七条の規定による届出。", _DERIVED_TITLE_PATH, _DERIVED_FILE)
+    base = _retrieved(
+        "doc-2:cs-2:0",
+        "合成本文",
+        "テスト法 > 第七条(届出の義務)",
+        document_id="doc-2",
+        file_name="テスト法.json",
+        chunk_set_id="cs-2",
+    )
+    oracle = ReferenceOracle([anchor], [base])
+
+    result = await _engine(oracle)._search(
+        SearchRequest(query="合成の質問"), _SearchState(), retrieval_queries=["合成の質問"]
+    )
+
+    assert _order(result) == ["doc-1:a", "doc-2:cs-2:0"]
+    assert {call["title"] for call in oracle.document_calls} == {"テスト法"}
+
+
+@pytest.mark.parametrize(
+    ("text", "section_path", "file_name", "title"),
+    [
+        # 参照元の名前が派生の語尾で終わらない: 略称のまま(照合しない)。
+        ("法第七条の規定による。", "テスト法 > 第二条(届出)", "テスト法.json", "法"),
+        # 「同法」は前に出た文書を指す。どれかは決めない(設計どおり)。
+        ("同法第七条の規定による。", _DERIVED_TITLE_PATH, _DERIVED_FILE, "同法"),
+    ],
+    ids=["not-derived", "same-word"],
+)
+async def test_legacy_unexpanded_abbreviation_stays_not_found(
+    text: str, section_path: str, file_name: str, title: str, abbreviation_words: None
+) -> None:
+    """展開できない略称と「同法」は今どおり文書を決めず、document_not_found に残す(#5311)。"""
+    anchor = _legacy_anchor(text, section_path, file_name)
+    base = _retrieved(
+        "doc-2:cs-2:0",
+        "合成本文",
+        "テスト法 > 第七条(届出の義務)",
+        document_id="doc-2",
+        file_name="テスト法.json",
+        chunk_set_id="cs-2",
+    )
+    oracle = ReferenceOracle([anchor], [base])
+    state = _SearchState()
+
+    targets = await _engine(oracle)._anchor_reference_targets({}, state, anchor)
+    assert [(t.key, t.document_title) for t in targets] == [("7", title)]
+
+    receipt: dict[str, Any] = {}
+    added = await _engine(oracle)._reference_expansion(
+        SearchRequest(query="合成の質問"),
+        _SearchState(),
+        [anchor],
+        existing={anchor.chunk_id},
+        receipt=receipt,
+    )
+    assert not any(added.values())
+    assert [item["status"] for item in receipt["targets"]] == ["document_not_found"]
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
