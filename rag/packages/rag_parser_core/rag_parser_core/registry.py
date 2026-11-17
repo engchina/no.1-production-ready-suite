@@ -1318,7 +1318,7 @@ def _unstructured_adapter_result(
         template=template_for_source_profile(source_profile),
         parser_backend="unstructured",
         parser_version=version,
-        refine_heading=_unstructured_refined_heading,
+        refine_heading=_unstructured_heading_refiner(elements),
         extra_artifacts={
             "unstructured_text_contract": UNSTRUCTURED_TEXT_CONTRACT,
             **({"html_main_scope": "full_document"} if main_expanded else {}),
@@ -1383,6 +1383,42 @@ def _unstructured_refined_heading(item: object, kind: str, text: str) -> tuple[s
         if level is not None:
             return "title", level
     return kind, None
+
+
+def _unstructured_heading_refiner(
+    elements: Sequence[object],
+) -> Callable[[object, str, str], tuple[str, int | None]]:
+    """要素ごとの見出しの判定に、要素の並びの判定を重ねる(#5315)。
+
+    プレーンテキストで階層の手がかり(番号・``category_depth``)を持たない Title が、本文の要素を
+    挟まずに次の見出しか文書の終わりに続く(本文の無い見出しが並ぶ)とき、その Title は一覧の項目と
+    みなして本文にし、直前の見出しの本文に含める。判定は要素の並びだけで、字数・語では判定しない。
+    """
+    refined: list[tuple[object, str, int | None]] = []
+    for item in elements:
+        kind = _adapter_element_kind(item)
+        text = _adapter_element_text(item)
+        if kind == "page_break" or not text:
+            continue
+        refined.append((item, *_unstructured_refined_heading(item, kind, text)))
+    demoted: set[int] = set()
+    for index, (item, kind, level) in enumerate(refined):
+        following = refined[index + 1][1] if index + 1 < len(refined) else None
+        filetype = _metadata_get(_object_member(item, "metadata"), "filetype")
+        if (
+            kind == "title"
+            and level is None
+            and filetype == "text/plain"
+            and following in {"title", None}
+        ):
+            demoted.add(id(item))
+
+    def refine(item: object, kind: str, text: str) -> tuple[str, int | None]:
+        if id(item) in demoted:
+            return "text", None
+        return _unstructured_refined_heading(item, kind, text)
+
+    return refine
 
 
 def _numbered_section_level(text: str) -> int | None:
