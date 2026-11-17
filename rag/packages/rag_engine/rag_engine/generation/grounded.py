@@ -30,6 +30,7 @@ from pydantic import BaseModel, ValidationError
 from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, TextRanges, load_ranges, source_pieces
 
 from rag_engine.chunking import _flatten_table_html, _section_unit
+from rag_engine.config import settings_for_answer_generation
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     SettledConfirmations,
@@ -2742,6 +2743,8 @@ def run_round(
         )
         return canonical
 
+    # 回答文の生成の呼び出しだけに段の出力の上限を掛ける（#5368。分割読取などほかの呼び出しは変えない）。
+    answer_settings = settings_for_answer_generation(settings)
     try:
         if image_paths:
             draft = call_with_model_purpose(
@@ -2750,13 +2753,13 @@ def run_round(
                 generation_system,
                 prompt,
                 list(image_paths),
-                settings,
+                answer_settings,
                 generation_model,
                 provider_id=provider_id,
             )
         else:
             draft = call_with_model_purpose(
-                "answer.generate", parse_text, generation_system, prompt, settings, generation_model, provider_id=provider_id
+                "answer.generate", parse_text, generation_system, prompt, answer_settings, generation_model, provider_id=provider_id
             )
     except Exception as exc:
         if invalid_output is None or not invalid_output(exc):

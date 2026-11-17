@@ -393,9 +393,13 @@ def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
 
 
 def test_enterprise_ai_output_token_limits_follow_each_model() -> None:
-    """出力の上限は登録モデルごとの値(#1719)。共通の LLM / VLM の出力の上限は持たない。"""
+    """出力の上限は登録モデルごとの値(#1719)。共通の LLM / VLM の出力の上限は持たない。
+
+    回答文の生成の段の上限(#5368)は、登録モデルの値を置き換えず、それとの最小を取る段だけの上限。
+    """
     assert [name for name in Settings.model_fields if name.endswith("_max_output_tokens")] == [
-        "online_max_output_tokens"
+        "online_max_output_tokens",
+        "rag_answer_generation_max_output_tokens",
     ]
     settings = Settings(
         oci_enterprise_ai_models=[

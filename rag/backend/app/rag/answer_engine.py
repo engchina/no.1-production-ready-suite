@@ -596,6 +596,10 @@ def build_engine_settings(
         "RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS": str(
             settings.rag_answer_generation_round_estimate_seconds
         ),
+        # 回答文の生成の段の出力の上限(#5368。0 は掛けない)。
+        "RAG_ENGINE_ANSWER_GENERATION_MAX_OUTPUT_TOKENS": str(
+            settings.rag_answer_generation_max_output_tokens
+        ),
         # 生成に渡す根拠の原文の文字予算(#3776。全体設定だけで決める)。
         "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
         # rerank の後、1 つの文書から起点に採る chunk の上限(#2167・#5165。0 は上限なし。

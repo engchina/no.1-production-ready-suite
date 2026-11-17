@@ -278,6 +278,12 @@ OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = 600.0
 # 持つ。画面（`ANSWER_GENERATION_TIMEOUT_MS`）・Nginx（`SUITE_RAG_LONG_API_TIMEOUT_SECONDS`）・
 # Agent の接続 rag の待ちは、選べる最大（RAG_ANSWER_TIMEOUT_MAX_SECONDS）より長くする。
 RAG_ANSWER_TIMEOUT_MIN_SECONDS = 150.0
+# 回答文の生成の段の 1 回の出力の上限（`rag_answer_generation_max_output_tokens`）の
+# 既定と範囲（tokens。#5368）。既定は rag_engine の DEFAULT_ANSWER_GENERATION_MAX_OUTPUT_TOKENS
+# と同じ（テストで一致を確かめる）。0 は段の上限を掛けない（登録モデルの出力の上限と
+# オンライン生成の出力予算のまま）。
+RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS_DEFAULT = 16384
+RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS_RANGE = (1024, 131072)
 RAG_ANSWER_TIMEOUT_MAX_SECONDS = 1200.0
 RAG_ANSWER_TIMEOUT_CHOICES = (150, 300, 600, 1200)
 RAG_ANSWER_TIMEOUT_DEFAULT_SECONDS = 600.0
@@ -1858,6 +1864,27 @@ class Settings(
             "1 回の生成が長い推論のモデルでは大きくする。"
         ),
     )
+    rag_answer_generation_max_output_tokens: int = Field(
+        default=RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS_DEFAULT,
+        description=(
+            "回答文の生成の段の 1 回の呼び出しの出力の上限"
+            "（tokens。推論の token も含む。#5368。既定 16384）。"
+            "送る上限は、登録モデルの出力の上限・共通のオンライン生成の出力予算"
+            "（PLATFORM_ONLINE_MAX_OUTPUT_TOKENS）・入力の残りとこの値の最小。"
+            "分割読取などほかの段は変えない。"
+            "上限で未完了になったときの扱い（送り直さずに失敗）は変えない。0 は段の上限を掛けない。"
+            "それ以外は 1024〜131072。"
+        ),
+    )
+
+    @field_validator("rag_answer_generation_max_output_tokens")
+    @classmethod
+    def _answer_generation_max_output_tokens(cls, value: int) -> int:
+        low, high = RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS_RANGE
+        if value != 0 and not low <= value <= high:
+            raise ValueError(f"0（上限を掛けない）か {low}〜{high} の整数で指定してください。")
+        return value
+
     db_read_timeout_seconds: float = Field(
         default=8.0,
         gt=0.0,
