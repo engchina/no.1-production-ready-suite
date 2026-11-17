@@ -786,6 +786,17 @@ def test_no_batch_is_read_when_the_deadline_is_already_short(monkeypatch):
     assert diagnostic["excluded_span_count"] == 12 - len({value["source_id"] for value in selected}) > 0
 
 
+@pytest.mark.parametrize(("left", "reads"), [(149.9, False), (150.0, True)], ids=["after-search", "exact"])
+def test_shortest_answer_limit_reads_no_batch_after_any_elapsed_time(monkeypatch, left, reads):
+    """回答の上限の最小 150 秒は予約（既定 120 + 30 秒）と同じ（#5280）。境界ちょうどなら読むが、検索などで時間を使った
+    後の残り（150 秒未満）では組を読まず、入る分だけで最終生成する。"""
+    _remaining(monkeypatch, [left])
+    calls = []
+    _, _, diagnostic = prepare(DEADLINE_INPUTS, _deadline_reader(calls))
+    assert (len(calls) > 0) is reads
+    assert (diagnostic.get("stop_reason") == "deadline") is (not reads)
+
+
 @pytest.mark.parametrize(("left", "reads"), [(89.0, False), (90.0, True)], ids=["below", "boundary"])
 def test_batch_deadline_reserve_follows_the_generation_round_setting(monkeypatch, left, reads):
     """予約は設定の生成の 1 回の見積もり + 確定の 30 秒（設定 60 秒なら 90 秒が境界。#5204）。"""

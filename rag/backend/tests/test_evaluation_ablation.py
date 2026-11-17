@@ -80,7 +80,7 @@ async def test_stage_switch_reaches_production_pipeline_settings(monkeypatch: Mo
 
     monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
     settings = Settings(
-        rag_answer_timeout_seconds=30.0,
+        rag_answer_timeout_seconds=300.0,
         rag_rerank_enabled=True,
         rag_neighbor_child_count=2,
         rag_reference_expansion_enabled=True,

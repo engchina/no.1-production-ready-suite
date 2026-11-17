@@ -33,6 +33,12 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 5 }, 
   label: String(n + 1),
 }));
 
+// 回答生成の通しの上限の選択肢（秒。backend の RAG_ANSWER_TIMEOUT_CHOICES と同じ。#5280）。
+const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200].map((seconds) => ({
+  value: String(seconds),
+  label: t("settings.answering.answerTimeoutOption", { seconds: String(seconds) }),
+}));
+
 type AnsweringDraft = Omit<
   AnsweringSettingsData,
   "config_source" | "runtime_terms_answer_enabled"
@@ -54,6 +60,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
+    answer_timeout_seconds: settings.answer_timeout_seconds,
   };
 }
 
@@ -229,6 +236,17 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           options={NEIGHBOR_OPTIONS}
           width="xs"
           onValueChange={(value) => update({ neighbor_child_count: Number(value) })}
+        />
+        <SelectField
+          id="answering-answer-timeout"
+          className="min-w-0"
+          disabled={disabled}
+          label={t("settings.answering.answerTimeout")}
+          helper={t("settings.answering.answerTimeoutHint")}
+          value={String(form.answer_timeout_seconds)}
+          options={ANSWER_TIMEOUT_OPTIONS}
+          width="xs"
+          onValueChange={(value) => update({ answer_timeout_seconds: Number(value) })}
         />
       </FormGrid>
       </SettingsGroup>

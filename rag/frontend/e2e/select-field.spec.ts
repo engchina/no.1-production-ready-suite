@@ -99,6 +99,7 @@ async function mockApi(page: Page) {
       "/api/settings/answer-prompts": { prompts: [], stages: [] },
       "/api/settings/answering": {
         neighbor_child_count: 3,
+        answer_timeout_seconds: 600,
         rerank_enabled: true,
         section_expansion_enabled: true,
         section_expansion_max_levels: 4,

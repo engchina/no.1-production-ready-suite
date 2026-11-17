@@ -87,13 +87,13 @@ assert_contains "${site_all_https}" "|mcp)\$ {" "RAG の MCP は長い timeout"
 count_of() {
   printf '%s\n' "$1" | grep -cF -- "$2" || true
 }
-# 長い待ち時間: RAG 660 秒（回答の上限 600 秒・画面 630 秒より長く）・NL2SQL 2460 秒（LLM 600 秒 × 4 回 + 60）・
-# Agent の tools/invoke 960 秒（外部 MCP の上限 900 秒 + 60）。ほかの API は 600 秒（SSE は heartbeat）。
+# 長い待ち時間: RAG 1260 秒（回答の上限 1200 秒・画面 1230 秒より長く。#5280）・NL2SQL 2460 秒（LLM 600 秒 × 4 回 + 60）・
+# Agent の tools/invoke 1560 秒（外部 MCP の上限 1500 秒 + 60）。ほかの API は 600 秒（SSE は heartbeat）。
 assert_contains "${site_all_https}" "search-answer-profiles/[^/]+/support-guides/[^/]+/try|" "RAG の業務ガイドを試すは長い timeout"
 assert_contains "${site_all_https}" "location ~ ^/nl2sql/api/(nl2sql/analyze|nl2sql/reverse/deep|" "NL2SQL の LLM の同期の API は長い timeout"
 assert_contains "${site_all_https}" "nl2sql/db-admin-chat/conversations/[^/]+/turns/[^/]+/analyze-error" "保存したターンの分析は長い timeout"
 assert_contains "${site_all_https}" "location ~ ^/agent/api/(tools/invoke)\$ {" "Agent の tools/invoke は長い timeout"
-for value in 660 2460 960; do
+for value in 1260 2460 1560; do
   [ "$(count_of "${site_all_https}" "proxy_read_timeout ${value}s;")" = 1 ] || fail "proxy_read_timeout ${value}s が 1 か所ではない"
   [ "$(count_of "${site_all_https}" "proxy_send_timeout ${value}s;")" = 1 ] || fail "proxy_send_timeout ${value}s が 1 か所ではない"
 done
