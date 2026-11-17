@@ -297,7 +297,7 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             mcp_requirements=[
                 SkillMcpRequirement(
                     server_id="rag",
-                    tool_names=["rag_retrieve_evidence", "rag_read_section", "rag_outline"],
+                    tool_names=["rag_search", "rag_read_section", "rag_outline"],
                 )
             ],
         )
@@ -554,7 +554,7 @@ def _evidence_item(
     chars: int = 5000,
     chunk_count: int = 8,
 ) -> dict[str, Any]:
-    item: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]["evidence"][0])
+    item: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"]["evidence"][0])
     item.update(document_id="doc-a", chunk_id=chunk_id, excerpt=excerpt, file_name="文書 A.pdf")
     item["section"] = {
         **item["section"],
@@ -570,14 +570,14 @@ def _evidence_item(
 
 
 def _evidence_step(*items: dict[str, Any]) -> RunStep:
-    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+    output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_search"])
     output["evidence"] = list(items)
     return RunStep(
         run_id="run-2503",
-        title="rag_retrieve_evidence",
+        title="rag_search",
         status="completed",
-        tool_call=ToolCall(name="rag__rag_retrieve_evidence", arguments={"query": "設定 A"}),
-        tool_result=ToolResult(name="rag__rag_retrieve_evidence", success=True, output=output),
+        tool_call=ToolCall(name="rag__rag_search", arguments={"query": "設定 A"}),
+        tool_result=ToolResult(name="rag__rag_search", success=True, output=output),
     )
 
 
@@ -663,14 +663,14 @@ def test_message_for_a_section_that_was_not_read() -> None:
 
 
 def _retrieve(call_id: str) -> list[Any]:
-    return [function_call("rag__rag_retrieve_evidence", {"query": "設定 A 手順"}, call_id=call_id)]
+    return [function_call("rag__rag_search", {"query": "設定 A 手順"}, call_id=call_id)]
 
 
 def test_answer_from_excerpts_of_a_long_section_is_sent_back_to_read_it(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    mcp.outputs["rag_retrieve_evidence"] = {
-        **deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]),
+    mcp.outputs["rag_search"] = {
+        **deepcopy(DEFAULT_OUTPUTS["rag_search"]),
         "evidence": [_evidence_item(PART_1)],
     }
     mcp.outputs["rag_read_section"] = lambda _argument: _section_output(
@@ -697,8 +697,8 @@ def test_answer_from_excerpts_of_a_long_section_is_sent_back_to_read_it(
 def test_answer_from_excerpts_is_shown_when_the_section_is_still_not_read(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
-    mcp.outputs["rag_retrieve_evidence"] = {
-        **deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]),
+    mcp.outputs["rag_search"] = {
+        **deepcopy(DEFAULT_OUTPUTS["rag_search"]),
         "evidence": [_evidence_item(PART_1)],
     }
     _script(

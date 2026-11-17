@@ -222,11 +222,11 @@ def test_evidence_shown_on_screen_from_any_rag_call_can_be_previewed(
 ) -> None:
     """画面の根拠の一覧と同じ集合で確かめる（#2427）。
 
-    成果物「検索の根拠」は `rag_search` の結果だけを持つ。前の `rag_retrieve_evidence` の根拠・
+    成果物「検索の根拠」は `rag_search` の結果だけを持つ。前の `rag_search` の根拠・
     成果物「回答の根拠」だけにある根拠も、画面に出ているので開ける。
     """
     seeded_run.steps = [
-        _evidence_step("rag_retrieve_evidence", "c-earlier"),
+        _evidence_step("rag_search", "c-earlier"),
         _evidence_step("rag_search", "c-1"),
     ]
     seeded_run.artifacts.append(
@@ -246,7 +246,7 @@ def test_evidence_shown_on_screen_from_any_rag_call_can_be_previewed(
         "c-answer",
     ]
     # 画面に出ない根拠（失敗した呼び出し・根拠を返さないツール・その Run に無い根拠）は 404。
-    failed = _evidence_step("rag_retrieve_evidence", "c-failed")
+    failed = _evidence_step("rag_search", "c-failed")
     failed.status = StepStatus.FAILED
     seeded_run.steps.append(failed)
     seeded_run.steps.append(_evidence_step("rag_read_source", "c-read"))

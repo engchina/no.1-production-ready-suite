@@ -15,6 +15,8 @@ SKILL.md の frontmatter は仕様のフィールドだけを使う（#1816）:
   - `production-ready-display-name`: 画面の名前（無ければ `name`）。
   - `production-ready-mcp-tools`: 使う MCP ツール。`<接続>:<ツール>` を空白で区切る
     （`<接続>` だけなら接続のすべてのツール）。`mcp_requirements` になる。
+  - `production-ready-final-answer-tools`: 結果の回答をそのまま Run の最終の回答にするツール
+    （`<接続>:<ツール>` を空白で区切る。`production-ready-mcp-tools` で宣言したものだけ。#5342）。
   - `production-ready-tags`: タグ（空白区切り）。
 
 SKILL.md と同じディレクトリの `references/` の下のテキスト / Markdown は、スキルの参照文書として
@@ -36,6 +38,7 @@ from pydantic import ValidationError
 
 from app.features.agent.skills import (
     AgentSkillDefinition,
+    FinalAnswerTool,
     SkillMcpRequirement,
     SkillReference,
 )
@@ -57,6 +60,7 @@ SKILL_NAME_PATTERN = re.compile(r"^(?=.{1,64}$)[a-z0-9]+(?:-[a-z0-9]+)*$")
 METADATA_DISPLAY_NAME = "production-ready-display-name"
 METADATA_MCP_TOOLS = "production-ready-mcp-tools"
 METADATA_TAGS = "production-ready-tags"
+METADATA_FINAL_ANSWER_TOOLS = "production-ready-final-answer-tools"
 
 
 def _split_frontmatter(text: str) -> tuple[JsonObject, str]:
@@ -97,6 +101,7 @@ def _skill_from_mapping(
         "description": str(data.get("description") or ""),
         "instructions": instructions,
         "mcp_requirements": data.get("mcp_requirements") or [],
+        "final_answer_tools": data.get("final_answer_tools") or [],
         "enabled": bool(data.get("enabled", True)),
         "tags": list(data.get("tags") or []),
         "source": source,
@@ -127,6 +132,18 @@ def mcp_requirements_from_metadata(value: str) -> list[SkillMcpRequirement]:
     ]
 
 
+def final_answer_tools_from_metadata(value: str) -> list[FinalAnswerTool]:
+    """`rag:rag_chat` → 回答をそのまま返すツール（接続とツールの両方がある語だけ）。"""
+    tools: list[FinalAnswerTool] = []
+    for token in value.split():
+        server, _, tool = token.partition(":")
+        if server.strip() and tool.strip():
+            item = FinalAnswerTool(server_id=server.strip(), tool_name=tool.strip())
+            if item not in tools:
+                tools.append(item)
+    return tools
+
+
 def _skill_from_skill_md(
     data: JsonObject, body: str, *, folder: str, source: str
 ) -> AgentSkillDefinition | None:
@@ -153,6 +170,9 @@ def _skill_from_skill_md(
             "instructions": body.strip(),
             "mcp_requirements": mcp_requirements_from_metadata(
                 str(metadata.get(METADATA_MCP_TOOLS) or "")
+            ),
+            "final_answer_tools": final_answer_tools_from_metadata(
+                str(metadata.get(METADATA_FINAL_ANSWER_TOOLS) or "")
             ),
             "tags": str(metadata.get(METADATA_TAGS) or "").split(),
             "source": source,

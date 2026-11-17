@@ -1,4 +1,4 @@
-"""Target: 公開の RAG MCP（`rag_search`）の adapter（#3417）。
+"""Target: 公開の RAG MCP（`rag_chat` / `rag_search`）の adapter（#3417・#5342）。
 
 RAG の MCP（`POST /api/mcp`）は MockTransport の台本で、出力は契約
 （`platform/contracts/mcp/rag-tools.json`）の形の合成の値。送る引数は契約の inputSchema で確かめる。
@@ -112,11 +112,12 @@ def _output(
 
 
 class FakeRagMcp:
-    """台本の RAG の MCP。`rag_search` の呼び出しごとに台本の次の出力を返す。"""
+    """台本の RAG の MCP。回答のツールの呼び出しごとに台本の次の出力を返す（ツールも記録）。"""
 
     def __init__(self, outputs: list[dict[str, Any]]) -> None:
         self.outputs = list(outputs)
         self.calls: list[dict[str, Any]] = []
+        self.tools: list[str] = []
         self.headers: list[httpx.Headers] = []
         self.overrides: dict[str, Any] | None = None
 
@@ -125,10 +126,12 @@ class FakeRagMcp:
         message = json.loads(request.content)
         if message["method"] == "initialize":
             return self._reply(message, {"protocolVersion": MCP_PROTOCOL_VERSION})
-        assert message["params"]["name"] == "rag_search"
+        name = message["params"]["name"]
+        assert name in {"rag_search", "rag_chat"}
         arguments = message["params"]["arguments"]
-        check_arguments("rag_search", arguments, RAG_TOOLS)
+        check_arguments(name, arguments, RAG_TOOLS)
         self.calls.append(arguments)
+        self.tools.append(name)
         if self.overrides is not None:
             return self._reply(message, self.overrides)
         content = self.outputs.pop(0)
@@ -263,6 +266,8 @@ def test_profile_and_superseded_cases_are_passed_to_rag_search() -> None:
     config = RagTargetConfig(mcp_url=URL, search_answer_profile_id="profile-1", top_k=20)
     case = {"id": "v", "query": "旧版との違いは？", "include_superseded": True}
     _evaluate(fake, [case], config)
+    # 件数を指定した構成は検索の rag_search（rag_chat は件数を受けない）。
+    assert fake.tools == ["rag_search"]
     assert fake.calls == [
         {
             "query": "旧版との違いは？",
@@ -273,6 +278,27 @@ def test_profile_and_superseded_cases_are_passed_to_rag_search() -> None:
             "include_superseded": True,
         }
     ]
+
+
+def test_profile_only_cases_are_passed_to_rag_chat() -> None:
+    """C（検索・回答プロファイルだけ）は RAG のチャットと同じ流れの rag_chat（#5342）。"""
+    fake = FakeRagMcp([_output("trace-1")])
+    config = RagTargetConfig(mcp_url=URL, search_answer_profile_id="profile-1")
+    case = {"id": "v", "query": "旧版との違いは？", "include_superseded": True}
+    record = _evaluate(fake, [case], config)
+    assert fake.tools == ["rag_chat"]
+    assert fake.calls == [
+        {
+            "query": "旧版との違いは？",
+            "evidence_limit": 50,
+            "skip_approved_faq": True,
+            "search_answer_profile_id": "profile-1",
+            "include_superseded": True,
+        }
+    ]
+    assert record.provenance["target"]["output_schema_versions"] == {"rag_chat": 46}
+    assert record.observations[0].turns[0].payload["rag_chat"]["trace_id"] == "trace-1"
+    assert record.report.case_results[0].status == "success"
 
 
 def test_target_needs_a_knowledge_base_or_a_profile() -> None:
@@ -399,6 +425,7 @@ def test_main_runs_a_and_c_and_compares_them(
     )
     assert fake.calls[0]["knowledge_base_ids"] == ["kb-1"]
     assert fake.calls[1]["search_answer_profile_id"] == "p-1"
+    assert fake.tools == ["rag_search", "rag_chat"]
     assert API_KEY not in a.read_text(encoding="utf-8")
     capsys.readouterr()
     assert main(["compare", f"A={a}", f"C={c}"]) == 0

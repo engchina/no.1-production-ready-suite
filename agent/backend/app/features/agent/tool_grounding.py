@@ -73,7 +73,6 @@ from app.features.agent.clarification_cancel import CANCEL_TRACE_PREFIX
 from app.features.agent.confirmation import CONFIRMATION_TOOL
 from app.features.agent.job_cancel import RUN_CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
-    GUIDE_CHECK_TRACE_PREFIX,
     NON_GROUNDING_TOOLS,
     nl2sql_clarification_pending,
 )
@@ -104,7 +103,6 @@ _NON_GROUNDING_TOOLS = NON_GROUNDING_TOOLS
 _CONTROL_PLANE_TRACE_PREFIXES = (
     CANCEL_TRACE_PREFIX,
     RUN_CANCEL_TRACE_PREFIX,
-    GUIDE_CHECK_TRACE_PREFIX,
 )
 
 _RETRY_HEAD = (
@@ -177,23 +175,6 @@ _DATA_EXAMPLE = "「先月の部門別の受注金額は？」"
 _SCOPE_DESCRIPTION_MAX_CHARS = 200
 
 
-# 結果が空なら根拠・データを調べた呼び出しに数えないツールと、その結果の一覧の項目（#2504）。業務
-# ガイドの照合は、当たる業務ガイドを返したときだけ数える（業務ガイドが無いことは資料が無いことでは
-# ないので、それだけで「資料に無い」と答えた回答を差し戻す）。
-_EMPTY_RESULT_ITEMS = {"rag_lookup_guides": "guides"}
-
-
-def _empty_result(step: RunStep) -> bool:
-    """結果が空なら数えないツールで、成功して空を返した呼び出しか（#2504）。"""
-    call, result = step.tool_call, step.tool_result
-    key = _EMPTY_RESULT_ITEMS.get(mcp_base_tool_name(call.name)) if call is not None else None
-    if key is None or result is None or not result.success:
-        return False
-    output = result.output
-    items = output.get(key) if isinstance(output, dict) else None
-    return isinstance(items, list) and not items
-
-
 def is_grounding_tool(name: str) -> bool:
     """根拠・データのツールか（MCP 接続のツール。一覧・推薦・Control Plane が呼ぶものを除く）。
 
@@ -215,13 +196,10 @@ def grounding_tools(tool_names: Iterable[str]) -> list[str]:
 
 
 def grounding_attempted(steps: list[RunStep]) -> bool:
-    """モデルがこの Run で根拠・データのツールを呼んだ（呼ぼうとした）か。
-
-    当たる業務ガイドが無かった業務ガイドの照合は数えない（#2504。`_empty_result`）。
-    """
+    """モデルがこの Run で根拠・データのツールを呼んだ（呼ぼうとした）か。"""
     for step in steps:
         call = step.tool_call
-        if call is None or not is_grounding_tool(call.name) or _empty_result(step):
+        if call is None or not is_grounding_tool(call.name):
             continue
         if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
             continue
@@ -284,13 +262,10 @@ def tool_output_texts(steps: list[RunStep]) -> list[str]:
 
 
 def grounding_used(steps: list[RunStep]) -> bool:
-    """モデルが根拠・データのツールを呼んで結果を得たか（成功した呼び出しだけ。当たる業務ガイドが
-    無かった業務ガイドの照合は数えない。#2504）。"""
+    """モデルが根拠・データのツールを呼んで結果を得たか（成功した呼び出しだけ）。"""
     for step in steps:
         call, result = step.tool_call, step.tool_result
         if call is None or result is None or not is_grounding_tool(call.name):
-            continue
-        if _empty_result(step):
             continue
         if (call.trace_id or "").startswith(_CONTROL_PLANE_TRACE_PREFIXES):
             continue

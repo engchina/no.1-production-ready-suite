@@ -946,4 +946,6 @@ def test_builtin_skill_rename_migration_rewrites_saved_agents() -> None:
     assert agent.skill_ids == ["rag-and-structured-data", "business-rag-research"]
     assert agent.versions[0].skill_ids == ["structured-data-query"]
     assert agent.description == "business_rag_research を使う"
-    assert all(skill_registry.get(skill_id) is not None for skill_id in agent.skill_ids)
+    # 013 の新しい ID は #5342 で組み込みのスキルから外した（業務 Agent は消えたスキルを示す）。
+    assert all(skill_registry.get(skill_id) is None for skill_id in agent.skill_ids)
+    assert agent.unavailable_skill_ids == agent.skill_ids

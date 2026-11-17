@@ -27,7 +27,7 @@ def test_roundtrip_original_text_repeat_and_versions() -> None:
     output = {"evidence": [evidence(), evidence(chunk="doc-a:set-b:1")]}
     original = deepcopy(output)
     metadata: dict[str, Any] = {}
-    handles.register_output(metadata, "rag", output, tool="rag_retrieve_evidence")
+    handles.register_output(metadata, "rag", output, tool="rag_search")
     encoded = handles.encode_output(metadata, "rag", output)
     first, second = encoded["evidence"]
     assert first["document_id"] == second["document_id"] == "doc://1"
@@ -37,7 +37,7 @@ def test_roundtrip_original_text_repeat_and_versions() -> None:
     assert first["citation"] == "[[cite:1]]"
     assert output == original
     before = deepcopy(metadata)
-    handles.register_output(metadata, "rag", output, tool="rag_retrieve_evidence")
+    handles.register_output(metadata, "rag", output, tool="rag_search")
     assert metadata == before
     restored = json.loads(json.dumps(metadata))
     assert handles.decode_arguments(
@@ -65,9 +65,7 @@ def test_roundtrip_original_text_repeat_and_versions() -> None:
 )
 def test_unknown_and_mismatched_handle_never_becomes_an_id(arguments: dict[str, Any]) -> None:
     metadata: dict[str, Any] = {}
-    handles.register_output(
-        metadata, "rag", {"evidence": [evidence()]}, tool="rag_retrieve_evidence"
-    )
+    handles.register_output(metadata, "rag", {"evidence": [evidence()]}, tool="rag_search")
     with pytest.raises(handles.SourceHandleError):
         handles.decode_arguments(metadata, "rag", arguments)
     with pytest.raises(handles.SourceHandleError):
@@ -122,7 +120,7 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
     from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
 
     fake = fake_product_mcp(monkeypatch)
-    found = fake.outputs["rag_retrieve_evidence"]
+    found = fake.outputs["rag_search"]
     assert isinstance(found, dict)
     original = found["evidence"][0]
     doc, chunk = original["document_id"], original["chunk_id"]
@@ -144,7 +142,7 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
             mcp_requirements=[
                 SkillMcpRequirement(
                     server_id="rag",
-                    tool_names=["rag_retrieve_evidence", "rag_read_source"],
+                    tool_names=["rag_search", "rag_read_source"],
                 )
             ],
         )
@@ -162,7 +160,7 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
         answers = [[assistant_message("根拠 [[cite:99]]")], [assistant_message(last)]]
     model = _script(
         monkeypatch,
-        [function_call("rag__rag_retrieve_evidence", {"query": "合成質問"}, call_id="get")],
+        [function_call("rag__rag_search", {"query": "合成質問"}, call_id="get")],
         [
             function_call(
                 "rag__rag_read_source",

@@ -1,8 +1,10 @@
-"""初期の業務 Agent（資料・データ・横断の 3 つ）と、資料とデータの横断調査の Skill（#1573）。"""
+"""組み込みの業務 Agent（5 つ。#1573・#5342）と、組み込みのスキルの形。"""
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from typing import Any
 
 import pytest
 from checkpoint_support import export_state, load_state
@@ -10,6 +12,7 @@ from checkpoint_support import export_state, load_state
 from app.features.agent.builtin_runtime import agent_mcp_requirements
 from app.features.agent.runtime import (
     BUILTIN_AGENT_IDS,
+    RETIRED_RAG_RESEARCH_AGENT_ID,
     AgentProfile,
     AgentRuntimeRepository,
     AgentRuntimeSnapshot,
@@ -17,45 +20,80 @@ from app.features.agent.runtime import (
     RunCreateRequest,
 )
 from app.features.agent.skills import (
-    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+    RAG_CHAT_AND_DATA_SKILL_ID,
+    RAG_CHAT_SKILL_ID,
+    RAG_SEARCH_AND_DATA_SKILL_ID,
+    RAG_SEARCH_SKILL_ID,
+    STRUCTURED_DATA_QUERY_SKILL_ID,
+    FinalAnswerTool,
     skill_registry,
 )
 from app.features.agent.templates import AGENT_TEMPLATES
 
-OLD_SKILL_ID = "rag_then_structured_data"
 LEGACY_DEFAULT_NAME = "汎用業務 Agent"
-LEGACY_DEFAULT_SKILLS = [
-    "business-rag-research",
-    "structured-data-query",
-    RAG_AND_STRUCTURED_DATA_SKILL_ID,
-]
+# #5342 より前の組み込みの内容（スキルは消した）。
+PREVIOUS_DEFAULT: dict[str, Any] = {
+    "name": "資料・データ横断アシスタント",
+    "description": (
+        "社内の資料（業務 RAG）と業務データ（NL2SQL）を、問いに合わせて使い分けて"
+        "調べる既定の業務 Agent。"
+    ),
+    "instructions": (
+        "問いと途中の結果から、資料の根拠と業務データの値のどちらが要るかを判断して"
+        "ツールを呼ぶ。根拠と監査情報を残す。"
+    ),
+    "skill_ids": ["rag-and-structured-data", "business-rag-research", "structured-data-query"],
+}
+PREVIOUS_RAG_RESEARCH: dict[str, Any] = {
+    "name": "資料調査アシスタント",
+    "description": "社内の資料（業務 RAG）を調べ、根拠の文書と場所を示して答える業務 Agent。",
+    "instructions": "資料の根拠に基づいて答え、根拠の文書名と場所を示す。",
+    "skill_ids": ["business-rag-research"],
+}
 
 
 def _agent(repository: AgentRuntimeRepository, agent_id: str) -> AgentProfile:
     return next(item for item in repository.list_agents() if item.id == agent_id)
 
 
-def test_new_environment_has_three_builtin_agents() -> None:
+def _builtin(agent_id: str, content: Mapping[str, Any]) -> AgentProfile:
+    return AgentProfile(
+        id=agent_id,
+        source="builtin",
+        versioned=True,
+        versions=[AgentVersion(version=1, **content)],
+        published_version=1,
+        **content,
+    )
+
+
+def test_new_environment_has_five_builtin_agents() -> None:
     repository = AgentRuntimeRepository()
 
     agents = repository.list_agents()
-    assert [agent.id for agent in agents] == ["default", "rag-research", "data-query"]
-    assert list(BUILTIN_AGENT_IDS) == ["default", "rag-research", "data-query"]
+    expected = ["default", "rag-chat", "rag-search", "rag-search-data", "data-query"]
+    assert [agent.id for agent in agents] == expected
+    assert list(BUILTIN_AGENT_IDS) == expected
     assert [agent.name for agent in agents] == [
-        "資料・データ横断アシスタント",
-        "資料調査アシスタント",
+        "RAG チャット＋データアシスタント",
+        "RAG チャットアシスタント",
+        "RAG 検索アシスタント",
+        "RAG 検索＋データアシスタント",
         "データ照会アシスタント",
     ]
     assert [agent.skill_ids for agent in agents] == [
-        [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research", "structured-data-query"],
-        ["business-rag-research"],
-        ["structured-data-query"],
+        [RAG_CHAT_AND_DATA_SKILL_ID],
+        [RAG_CHAT_SKILL_ID],
+        [RAG_SEARCH_SKILL_ID],
+        [RAG_SEARCH_AND_DATA_SKILL_ID],
+        [STRUCTURED_DATA_QUERY_SKILL_ID],
     ]
     for agent in agents:
         # 公開した版があり、利用者がすぐ使える（チャット・自動実行で選べる）。
         assert agent.source == "builtin"
         assert agent.published_version == 1
         assert agent.unpublished_changes is False
+        assert agent.unavailable_skill_ids == []
         run = repository.create_builtin_run(RunCreateRequest(goal="質問", agent_id=agent.id))
         assert run.metadata["agent_version"] == 1
 
@@ -66,64 +104,71 @@ def test_builtin_agents_use_mcp_connections_of_their_skills() -> None:
     def requirements(agent_id: str) -> dict[str, set[str] | None]:
         return agent_mcp_requirements(_agent(repository, agent_id).skill_ids)
 
-    assert set(requirements("rag-research")) == {"rag"}
-    assert set(requirements("data-query")) == {"nl2sql"}
-    combined = requirements("default")
-    assert set(combined) == {"rag", "nl2sql"}
-    assert {"rag_retrieve_evidence"} <= (combined["rag"] or set())
-    assert {"nl2sql_query", "nl2sql_get_job"} <= (combined["nl2sql"] or set())
-
-
-def test_combined_skill_does_not_fix_the_order() -> None:
-    assert skill_registry.get(OLD_SKILL_ID) is None
-    skill = skill_registry.get(RAG_AND_STRUCTURED_DATA_SKILL_ID)
-    assert skill is not None
-    assert skill.name == "資料とデータの横断調査"
-    assert skill.source == "builtin"
-    # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
-    instructions = skill.instructions.replace("`", "")
-    # 順序を固定しない・往復と繰り返しを許す・止めどきを書く。
-    assert "先に rag_retrieve_evidence" not in instructions
-    assert "順序は決めない" in instructions
-    assert "nl2sql_query が先でもよい" in instructions
-    assert "何度でも呼んでよい" in instructions
-    assert "それ以上ツールを呼ばずに答える" in instructions
-    # 今の指示の手順を引き継ぐ。
-    for phrase in (
-        # 資料の根拠だけでは確定できない現場の値は業務データで確かめる（#2651 で RAG の回答の
-        # 対応から根拠の取得に移した）。
-        "資料の根拠だけでは確定できない現場の値・記録",
-        "nl2sql_recommend_profile",
-        "nl2sql_get_job",
-        "needs_clarification",
-        "requirement_session_id",
-        "出所として分けて示す",
-        # 資料の台帳の値で挙げる・数える質問は資料、業務データの表の集計は NL2SQL（#1958）。
-        "値がどこに載っているかで決める",
-        "台帳・一覧・名簿・規程の表のような資料そのものに載っている質問",
-        "そこで終えずに資料（rag_retrieve_evidence）を引く",
-        # 資料と業務データの両方が要る質問（#1979）: 規程の名前で始まっても、業務の対象の値は
-        # 業務データで引き、資料に無いと答える前に nl2sql_query を呼ぶ。
-        "資料の値と業務データの値の両方が要ることがある",
-        "業務の対象（受注・売上・商品・顧客・請求など）の値（単価・金額・件数・日付・状態）は、"
-        "業務データ（nl2sql_query）で引く",
-        "規程の名前で始まる質問でも",
-        "「資料からは確認できない」と答える前に nl2sql_query で引く",
-        "業務データのツールを呼ばずに、業務の対象の値",
-        # NL2SQL には規程の言葉ではなく、資料で分かった基準を値の条件にして渡す（#1979）。
-        "資料で分かった基準を値の条件に置き換えて書く",
-    ):
-        assert phrase in instructions
-    tools = {
-        requirement.server_id: requirement.tool_names for requirement in skill.mcp_requirements
-    }
-    # 検索・回答プロファイルは推薦で選ぶ（#1850）。
-    assert tools["rag"] == [
-        "rag_retrieve_evidence",
+    assert requirements("rag-chat")["rag"] == {
+        "rag_chat",
         "rag_recommend_search_answer_profile",
         "rag_list_search_answer_profiles",
-    ]
-    assert "nl2sql_query" in tools["nl2sql"]
+    }
+    assert set(requirements("rag-search")) == {"rag"}
+    assert "rag_search" in (requirements("rag-search")["rag"] or set())
+    assert set(requirements("data-query")) == {"nl2sql"}
+    for agent_id, tool in (("default", "rag_chat"), ("rag-search-data", "rag_search")):
+        combined = requirements(agent_id)
+        assert set(combined) == {"rag", "nl2sql"}
+        assert tool in (combined["rag"] or set())
+        assert {"nl2sql_query", "nl2sql_get_job"} <= (combined["nl2sql"] or set())
+
+
+def test_rag_only_skills_declare_the_final_answer_tool() -> None:
+    """RAG だけのスキルは RAG の回答をそのまま返す（データつきのスキルは宣言しない）。"""
+    finals = {
+        skill_id: (skill.final_answer_tools if (skill := skill_registry.get(skill_id)) else None)
+        for skill_id in (
+            RAG_CHAT_SKILL_ID,
+            RAG_SEARCH_SKILL_ID,
+            RAG_CHAT_AND_DATA_SKILL_ID,
+            RAG_SEARCH_AND_DATA_SKILL_ID,
+            STRUCTURED_DATA_QUERY_SKILL_ID,
+        )
+    }
+    assert finals == {
+        RAG_CHAT_SKILL_ID: [FinalAnswerTool(server_id="rag", tool_name="rag_chat")],
+        RAG_SEARCH_SKILL_ID: [FinalAnswerTool(server_id="rag", tool_name="rag_search")],
+        RAG_CHAT_AND_DATA_SKILL_ID: [],
+        RAG_SEARCH_AND_DATA_SKILL_ID: [],
+        STRUCTURED_DATA_QUERY_SKILL_ID: [],
+    }
+
+
+def test_data_skills_combine_without_fixing_the_order() -> None:
+    for skill_id, tool in (
+        (RAG_CHAT_AND_DATA_SKILL_ID, "rag_chat"),
+        (RAG_SEARCH_AND_DATA_SKILL_ID, "rag_search"),
+    ):
+        skill = skill_registry.get(skill_id)
+        assert skill is not None and skill.source == "builtin"
+        # 識別子は Markdown の `code`（#1795）。規則の文は記号を除いて確かめる。
+        instructions = skill.instructions.replace("`", "")
+        for phrase in (
+            "順序は決めない",
+            "nl2sql_query が先でもよい",
+            "何度でも呼んでよい",
+            "それ以上ツールを呼ばずに答える",
+            "値がどこに載っているかで決める",
+            f"そこで終えずに資料（{tool}）を引く",
+            "「資料からは確認できない」と答える前に nl2sql_query で引く",
+            "資料で分かった基準を値の条件に置き換えて書く",
+            # RAG の回答は言い換えず、業務データの値と分けて示す（#5342）。
+            f"{tool} の answer を言い換えず",
+        ):
+            assert phrase in instructions, (skill_id, phrase)
+        tools = {item.server_id: item.tool_names for item in skill.mcp_requirements}
+        assert tools["rag"] == [
+            tool,
+            "rag_recommend_search_answer_profile",
+            "rag_list_search_answer_profiles",
+        ]
+        assert "nl2sql_query" in tools["nl2sql"]
 
 
 BUILTIN_SKILL_IDS = [skill.id for skill in skill_registry.list() if skill.source == "builtin"]
@@ -171,90 +216,92 @@ def test_builtin_skill_instructions_are_flow_markdown(skill_id: str) -> None:
 
 
 def test_templates_use_registered_skills() -> None:
-    used = {skill_id for template in AGENT_TEMPLATES for skill_id in template.skill_ids}
-    assert OLD_SKILL_ID not in used
-    assert RAG_AND_STRUCTURED_DATA_SKILL_ID in used
-    assert all(skill_registry.get(skill_id) is not None for skill_id in used)
-
-
-def _legacy_default() -> AgentProfile:
-    content = {
-        "name": LEGACY_DEFAULT_NAME,
-        "description": "RAG / NL2SQL の MCP 接続と承認フローを使う既定 Agent。",
-        "instructions": "業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
-        "skill_ids": LEGACY_DEFAULT_SKILLS,
-    }
-    return AgentProfile(
-        id="default",
-        source="builtin",
-        versioned=True,
-        versions=[AgentVersion(version=1, **content)],
-        published_version=1,
-        **content,
+    used = {template.id: template.skill_ids for template in AGENT_TEMPLATES}
+    assert all(
+        skill_registry.get(skill_id) is not None for ids in used.values() for skill_id in ids
     )
+    # 窓口系は RAG チャット、確認は RAG 検索、経費・調達は RAG チャット＋データ、品質管理は
+    # RAG 検索＋データ。
+    assert used["internal-policy-helpdesk"] == [RAG_CHAT_SKILL_ID]
+    assert used["customer-support"] == [RAG_CHAT_SKILL_ID]
+    assert used["it-helpdesk"] == [RAG_CHAT_SKILL_ID]
+    assert used["compliance-check"] == [RAG_SEARCH_SKILL_ID]
+    assert used["expense-assistant"] == [RAG_CHAT_AND_DATA_SKILL_ID]
+    assert used["procurement"] == [RAG_CHAT_AND_DATA_SKILL_ID]
+    assert used["manufacturing-quality"] == [RAG_SEARCH_AND_DATA_SKILL_ID]
 
 
-def test_saved_snapshot_is_migrated_to_three_builtin_agents() -> None:
-    custom = AgentProfile(
-        id="custom-1573",
-        name="経理",
-        skill_ids=[RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research"],
-        versioned=True,
-        versions=[
-            AgentVersion(version=1, name="経理", skill_ids=[RAG_AND_STRUCTURED_DATA_SKILL_ID])
-        ],
-        published_version=1,
-    )
+def test_rag_only_templates_have_no_answer_style_instructions() -> None:
+    """RAG だけのテンプレートは回答の書き方を指示しない（回答は RAG が書く。#5342）。"""
+    rag_only = {RAG_CHAT_SKILL_ID, RAG_SEARCH_SKILL_ID}
+    for template in AGENT_TEMPLATES:
+        if set(template.skill_ids) <= rag_only:
+            assert "\n" not in template.instructions, template.id
+            assert "根拠" not in template.instructions, template.id
+
+
+@pytest.mark.parametrize(
+    "previous",
+    [
+        PREVIOUS_DEFAULT,
+        {**PREVIOUS_DEFAULT, "name": LEGACY_DEFAULT_NAME},
+    ],
+    ids=["previous_builtin", "legacy_name"],
+)
+def test_unchanged_default_is_published_with_the_new_content(previous: dict[str, Any]) -> None:
     repository = AgentRuntimeRepository()
-    load_state(repository, AgentRuntimeSnapshot(agents=[_legacy_default(), custom]))
+    load_state(repository, AgentRuntimeSnapshot(agents=[_builtin("default", previous)]))
 
-    # 無かった組み込みの Agent は足す（保存済みの Agent の後ろ）。
-    assert [agent.id for agent in repository.list_agents()][-2:] == ["rag-research", "data-query"]
-    assert {agent.id for agent in repository.list_agents()} == {
-        "default",
-        "custom-1573",
-        "rag-research",
-        "data-query",
-    }
-    # 名前を変えていない既定の Agent は、新しい内容を次の版として公開する（前の版は残す）。
     default = _agent(repository, "default")
-    assert default.name == "資料・データ横断アシスタント"
-    assert default.skill_ids[0] == RAG_AND_STRUCTURED_DATA_SKILL_ID
+    assert default.name == "RAG チャット＋データアシスタント"
+    assert default.skill_ids == [RAG_CHAT_AND_DATA_SKILL_ID]
     assert default.published_version == 2
     assert [item.version for item in default.versions] == [1, 2]
-    assert default.versions[0].name == LEGACY_DEFAULT_NAME
-    assert default.versions[0].skill_ids == [
-        "business-rag-research",
-        "structured-data-query",
-        RAG_AND_STRUCTURED_DATA_SKILL_ID,
-    ]
-    assert default.versions[1].name == "資料・データ横断アシスタント"
+    assert default.versions[0].name == previous["name"]
+    assert default.versions[1].skill_ids == [RAG_CHAT_AND_DATA_SKILL_ID]
     assert default.unpublished_changes is False
-    # 利用者の Agent はそのまま（旧 ID の置き換えはシステムテーブルの migration 013。#1816）。
-    migrated = _agent(repository, "custom-1573")
-    assert migrated.name == "経理"
-    assert migrated.skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID, "business-rag-research"]
-    assert migrated.versions[0].skill_ids == [RAG_AND_STRUCTURED_DATA_SKILL_ID]
-    # 保存し直して読み込んでも、版は増えない。
+    assert default.unavailable_skill_ids == []
+    # 保存し直して読み込んでも、版は増えない（冪等）。
     load_state(repository, export_state(repository))
     assert _agent(repository, "default").published_version == 2
-    exported = export_state(repository).model_dump_json()
-    assert OLD_SKILL_ID not in exported
 
 
-def test_renamed_default_keeps_user_content() -> None:
-    renamed = _legacy_default().model_copy(update={"name": "経理の既定"})
+def test_changed_default_keeps_user_content() -> None:
+    changed = _builtin("default", {**PREVIOUS_DEFAULT, "instructions": "利用者が変えた指示。"})
     repository = AgentRuntimeRepository()
-    load_state(repository, AgentRuntimeSnapshot(agents=[renamed]))
+    load_state(repository, AgentRuntimeSnapshot(agents=[changed]))
 
     default = _agent(repository, "default")
-    assert default.name == "経理の既定"
+    assert default.instructions == "利用者が変えた指示。"
     assert default.published_version == 1
-    assert default.skill_ids == [
+    # 消えたスキルは画面が示す（下書き・常に最新の版の Run は失敗する）。
+    assert default.unavailable_skill_ids == [
+        "rag-and-structured-data",
         "business-rag-research",
-        "structured-data-query",
-        RAG_AND_STRUCTURED_DATA_SKILL_ID,
     ]
+
+
+def test_retired_rag_research_is_removed_unless_changed() -> None:
+    unchanged = _builtin(RETIRED_RAG_RESEARCH_AGENT_ID, PREVIOUS_RAG_RESEARCH)
+    repository = AgentRuntimeRepository()
+    load_state(repository, AgentRuntimeSnapshot(agents=[unchanged]))
+    ids = [agent.id for agent in repository.list_agents()]
+    assert RETIRED_RAG_RESEARCH_AGENT_ID not in ids
+    # 無かった組み込みの Agent は足す。
+    assert set(BUILTIN_AGENT_IDS) <= set(ids)
+    assert RETIRED_RAG_RESEARCH_AGENT_ID not in export_state(repository).model_dump_json()
+
+    changed = _builtin(
+        RETIRED_RAG_RESEARCH_AGENT_ID, {**PREVIOUS_RAG_RESEARCH, "name": "利用者が付けた名前"}
+    )
+    repository = AgentRuntimeRepository()
+    load_state(repository, AgentRuntimeSnapshot(agents=[changed]))
+    kept = _agent(repository, RETIRED_RAG_RESEARCH_AGENT_ID)
+    # 組織の業務 Agent として残す（組み込みではないので削除できる）。
+    assert kept.source == "runtime"
+    assert kept.name == "利用者が付けた名前"
+    assert kept.unavailable_skill_ids == ["business-rag-research"]
+    repository.delete_agent(RETIRED_RAG_RESEARCH_AGENT_ID)
 
 
 @pytest.mark.parametrize("agent_id", BUILTIN_AGENT_IDS)

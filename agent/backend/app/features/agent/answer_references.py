@@ -20,11 +20,10 @@ from app.features.agent.answer_passages import (
     table_header_lines,
 )
 from app.features.agent.support_task import (
+    RAG_ANSWER_TOOLS,
     RAG_READ_DOCUMENT,
     RAG_READ_SECTION,
     RAG_READ_SOURCE,
-    RAG_RETRIEVE_EVIDENCE,
-    RAG_SEARCH,
 )
 from app.features.agent.tools import mcp_base_tool_name
 
@@ -41,7 +40,7 @@ MAX_QUERY_CHARS = 8000
 MAX_ANSWER_CHARS = 20000
 
 
-EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+EVIDENCE_TOOLS = RAG_ANSWER_TOOLS
 
 
 def locator_labels(item: JsonObject) -> list[object]:

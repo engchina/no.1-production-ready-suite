@@ -113,9 +113,7 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             name=SKILL_ID,
             instructions="資料は rag_read_section で読む。",
             mcp_requirements=[
-                SkillMcpRequirement(
-                    server_id="rag", tool_names=["rag_retrieve_evidence", "rag_read_section"]
-                )
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_search", "rag_read_section"])
             ],
         )
     )

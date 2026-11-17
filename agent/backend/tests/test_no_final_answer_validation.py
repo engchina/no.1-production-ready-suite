@@ -50,9 +50,10 @@ def test_outcome_keeps_the_value_returned_by_rag(rag_outcome: str) -> None:
 
 def test_needs_human_comes_only_from_the_explicit_handoff() -> None:
     assert answer_outcome(ANSWER, steps=[])["value"] != NEEDS_HUMAN
-    handoff = [_step("rag_lookup_guides", {"guides": [{"decision": "handoff"}]})]
+    # 人への引き継ぎは RAG の回答のツールの対応だけ（#5342）。
+    handoff = [_step("rag_chat", {"outcome": "needs_human"})]
     outcome = answer_outcome(ANSWER, steps=handoff)
-    assert (outcome["value"], outcome["basis"]) == (NEEDS_HUMAN, "guide_handoff")
+    assert (outcome["value"], outcome["basis"]) == (NEEDS_HUMAN, "rag_chat")
 
 
 def test_incomplete_section_reading_keeps_the_answer_conditional() -> None:

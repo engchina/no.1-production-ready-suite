@@ -5,14 +5,14 @@
 曖昧な質問に答える前に、利用者に確認事項を確かめる。Agent の確認は 2 つの出所がある。
 
 - ツールの結果（`nl2sql` / `rag`）: NL2SQL の `nl2sql_query` の SQL の生成前の確認・RAG の
-  `rag_search` の `needs_clarification`・業務ガイドの `clarify`（支援タスクの状態の
+  回答のツール（`rag_chat`）の `needs_clarification`・業務ガイドの `clarify`（支援タスクの状態の
   `pending_clarifications`）。
   確認事項と選択肢は呼び先が作ったものをそのまま受け渡し、Agent では二重に定義しない。Run は
   確認事項を返した回答で完了し、利用者の答え（確認事項の ID・選んだ選択肢の ID・自由入力）を
-  構造化して次の Run に渡す（NL2SQL は `nl2sql_query` の `answer`、RAG は `rag_search` の
+  構造化して次の Run に渡す（NL2SQL は `nl2sql_query` の `answer`、RAG は確認を返したツールの
   `conditions`）。
-- RAG の承認済み FAQ の候補（`rag_search` / `rag_retrieve_evidence` の
-  `status=approved_faq_candidates`。#5134・#5136）: 候補の質問を選択肢にし、「どれでもない（通常
+- RAG の承認済み FAQ の候補（RAG の回答のツールの `status=approved_faq_candidates`。
+  #5134・#5136・#5342）: 候補の質問を選択肢にし、「どれでもない（通常
   どおり回答）」を足した確認事項にする（モデルに選ばせない）。利用者の選択は次の Run でコードが
   候補を返したツールの `approved_faq_id` か `skip_approved_faq` にする（`approved_faq_choice`。
   モデルに id を写させない）。
@@ -636,12 +636,7 @@ APPROVED_FAQ_NONE_OPTION_ID = "approved_faq_none"
 APPROVED_FAQ_NONE_LABEL = "どれでもない（通常どおり回答）"
 APPROVED_FAQ_PROMPT = "質問に近い登録済みの Q&A があります。当てはまるものを選んでください。"
 APPROVED_FAQ_REASON = "選んだ Q&A は、登録済みの回答をそのまま示します。"
-# 根拠の取得（rag_retrieve_evidence。#5136）の候補: 選んだ Q&A の回答は、資料の根拠と同じく
-# モデルが回答に使う（そのままは示さない）。名前は support_task.RAG_RETRIEVE_EVIDENCE と同じ
-# （support_task がこの module を import するので写す）。
-APPROVED_FAQ_EVIDENCE_TOOL = "rag_retrieve_evidence"
-APPROVED_FAQ_EVIDENCE_REASON = "選んだ Q&A の登録済みの回答をもとに答えます。"
-# 確認の context の key（画面には出さない。次の Run で rag_search に渡す値を引き直す）。
+# 確認の context の key（画面には出さない。次の Run で RAG の回答のツールに渡す値を引き直す）。
 APPROVED_FAQ_CONTEXT_KEY = "approved_faq"
 APPROVED_FAQ_ID_ARGUMENT = "approved_faq_id"
 SKIP_APPROVED_FAQ_ARGUMENT = "skip_approved_faq"
@@ -655,7 +650,8 @@ def approved_faq_request(
     round_: int,
     max_rounds: int,
 ) -> ConfirmationRequest | None:
-    """`rag_search` が返した承認済み FAQ の候補を、利用者が選ぶ確認にする（候補が無ければ None）。
+    """RAG の回答のツールが返した承認済み FAQ の候補を、利用者が選ぶ確認にする（候補が無ければ
+    None）。
 
     選択肢は候補の質問（RAG が返した順・上限は `MAX_OPTIONS` から「どれでもない」の 1 つを除いた
     数）と「どれでもない（通常どおり回答）」。候補の id は選択肢の ID と対にして context に持つ。
@@ -685,9 +681,7 @@ def approved_faq_request(
             ConfirmationItem(
                 id=APPROVED_FAQ_ITEM_ID,
                 prompt=APPROVED_FAQ_PROMPT,
-                reason=APPROVED_FAQ_EVIDENCE_REASON
-                if _faq_from_evidence(tool_name)
-                else APPROVED_FAQ_REASON,
+                reason=APPROVED_FAQ_REASON,
                 options=options,
             )
         ],
@@ -705,13 +699,6 @@ def approved_faq_request(
     )
 
 
-def _faq_from_evidence(tool_name: object) -> bool:
-    """候補を返したのが根拠の取得（`rag_retrieve_evidence`）か（#5136）。"""
-    return (
-        isinstance(tool_name, str) and mcp_base_tool_name(tool_name) == APPROVED_FAQ_EVIDENCE_TOOL
-    )
-
-
 def _approved_faq_context(response: Mapping[str, Any]) -> Mapping[str, Any] | None:
     if response.get("source") != SOURCE_RAG:
         return None
@@ -725,7 +712,7 @@ def approved_faq_choice(response: Mapping[str, Any] | None) -> JsonObject | None
 
     Q&A を選んだら `approved_faq_id`（と候補を返した検索・回答プロファイル）、「どれでもない」・
     自由入力だけの答え・スキップは `skip_approved_faq`。`tool` は候補を返したツール（`rag_search` /
-    `rag_retrieve_evidence`）の名前。
+    `rag_chat`）の名前。
     """
     if not isinstance(response, Mapping):
         return None
@@ -855,24 +842,19 @@ def response_instructions(response: Mapping[str, Any] | None) -> str:
         conditions = rag_conditions(response)
         if conditions:
             lines.append(
-                "- 資料（RAG）の確認事項への答えです。rag_search の conditions に次の値を入れて"
-                "（分かっている条件も入れたまま）呼び直してください: "
+                "- 資料（RAG）の確認事項への答えです。確認を返したツールの conditions に次の値を"
+                "入れて（分かっている条件も入れたまま）呼び直してください: "
                 + json.dumps(conditions, ensure_ascii=False)
             )
     return "\n".join(lines)
 
 
 APPROVED_FAQ_CHOSEN_INSTRUCTION = (
-    "- 利用者は登録済みの Q&A「{label}」を選びました。前の質問のまま rag_search を呼び、"
-    "結果の answer（登録済みの回答）をそのまま利用者に示してください。"
-)
-APPROVED_FAQ_CHOSEN_EVIDENCE_INSTRUCTION = (
-    "- 利用者は登録済みの Q&A「{label}」を選びました。前の質問のまま rag_retrieve_evidence を"
-    "呼び、結果の approved_faq（登録済みの Q&A と回答）を資料の根拠と同じく使って答えてください。"
+    "- 利用者は登録済みQ&A「{label}」を選びました。前の質問のまま {tool} を呼び、"
+    "結果の answer（登録済みの回答）を言い換えずに使って答えてください。"
 )
 APPROVED_FAQ_NONE_INSTRUCTION = (
-    "- 利用者は登録済みの Q&A のどれも選びませんでした。前の質問に、いつもどおり rag_search などで"
-    "調べて答えてください。"
+    "- 利用者は登録済みQ&A のどれも選びませんでした。前の質問に、いつもどおり調べて答えてください。"
 )
 APPROVED_FAQ_NOTE_INSTRUCTION = "- 利用者の補足:「{text}」"
 
@@ -890,12 +872,8 @@ def _approved_faq_instructions(choice: Mapping[str, Any], entries: Sequence[Any]
     lines: list[str] = []
     if choice.get(APPROVED_FAQ_ID_ARGUMENT):
         labels = [_text(value, 200) for value in entry.get("selected") or []]
-        template = (
-            APPROVED_FAQ_CHOSEN_EVIDENCE_INSTRUCTION
-            if _faq_from_evidence(choice.get("tool"))
-            else APPROVED_FAQ_CHOSEN_INSTRUCTION
-        )
-        lines.append(template.format(label="、".join(labels)))
+        tool = mcp_base_tool_name(str(choice.get("tool") or "")) or "rag_chat"
+        lines.append(APPROVED_FAQ_CHOSEN_INSTRUCTION.format(label="、".join(labels), tool=tool))
     else:
         lines.append(APPROVED_FAQ_NONE_INSTRUCTION)
     other = _text(entry.get("other_text"), 300)
