@@ -111,7 +111,8 @@ function PersistenceGate({
     <>
       {persistence.data.mode === "memory" ? (
         // 全画面が wide のため、バナーも wide にして直下の PageHeader と左端をそろえる。
-        <PageBody wide className="pb-0">
+        // ページの末尾ではないので、下の余白（md 以上の通知の置き場所の高さ。#5354）を空けない。
+        <PageBody wide className="pb-0 md:pb-0">
           <Banner severity="warning" title={t("persistence.memoryWarning.title")}>
             {t("persistence.memoryWarning.message")}
           </Banner>

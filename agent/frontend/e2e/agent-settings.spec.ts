@@ -3,7 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
-import { expectToastPlacement, overlaps } from "./fixtures/toast-placement";
+import { expectToastPlacement, overlaps, pageEndToastReserve } from "./fixtures/toast-placement";
 
 /**
  * ページ全体（documentElement）と本文（`<main>`）が横にはみ出さないこと。
@@ -910,14 +910,15 @@ test.describe("Agent Runtime settings", () => {
       await expect.poll(saves).toBe(1);
       await expectToastPlacement(page);
 
-      // ページの末尾までスクロールすると、保存ボタンは画面の下端に来る。
+      // ページの末尾までスクロールすると、保存ボタンは画面の下端（desktop は PageBody が空ける通知の置き場所の高さの上。
+      // #5354）に来る。
       await chooseSelectFieldOption(defaultMode, "approval");
       await page.locator("main").evaluate((main) => {
         main.scrollTop = main.scrollHeight;
       });
       await expect(save).toBeInViewport();
       const box = (await save.boundingBox())!;
-      expect(viewport.height - (box.y + box.height)).toBeLessThan(120);
+      expect(viewport.height - (box.y + box.height) - (await pageEndToastReserve(save))).toBeLessThan(120);
 
       // 通知にポインタを乗せて止めたまま（一時停止は維持）、覆われていない保存ボタンを押せる。
       await notice.hover();

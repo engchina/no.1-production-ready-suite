@@ -176,6 +176,8 @@ export function RowActionMenu({
         aria-expanded={open}
         aria-controls={menuId}
         aria-haspopup="menu"
+        // 行メニューの起動のボタンの目印（#5354）。e2e が通知の置き場所と重ならないことを確かめる。
+        data-row-action-menu=""
         data-testid={testId ? `${testId}-trigger` : undefined}
         onClick={(event) => {
           event.stopPropagation();

@@ -56,6 +56,8 @@ describe("RowActionMenu", () => {
     expect(html).toContain('aria-label="orders の操作"');
     expect(html).toContain('aria-haspopup="menu"');
     expect(html).not.toContain('role="menu"');
+    // e2e が通知の置き場所と重ならないことを確かめる目印（#5354）。
+    expect(html).toContain('data-row-action-menu=""');
   });
 });
 

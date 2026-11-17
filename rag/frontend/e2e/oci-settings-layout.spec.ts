@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "./fixtures/test";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, LOCAL_AUTH_ME } from "./_helpers";
-import { expectToastPlacement, overlaps } from "./_toast-placement";
+import { expectToastPlacement, overlaps, pageEndToastReserve } from "./_toast-placement";
 
 type OciStageStatus = "success" | "failed" | "skipped";
 const OCI_STAGE_KEYS = ["config_format", "key_file", "region", "authentication"] as const;
@@ -618,14 +618,15 @@ for (const viewport of [
     await expect(notice).toBeVisible();
     await expectToastPlacement(page);
 
-    // ページの末尾までスクロールすると、最後の保存ボタンは画面の下端に来る。
+    // ページの末尾までスクロールすると、最後の保存ボタンは画面の下端（desktop は PageBody が空ける通知の置き場所の高さの上。
+    // #5354）に来る。
     await page.locator("main").evaluate((main) => {
       main.scrollTop = main.scrollHeight;
     });
     const save = page.getByRole("button", { name: /Object Storage: 保存/ });
     await expect(save).toBeInViewport();
     const box = (await save.boundingBox())!;
-    expect(viewport.height - (box.y + box.height)).toBeLessThan(120);
+    expect(viewport.height - (box.y + box.height) - (await pageEndToastReserve(save))).toBeLessThan(120);
 
     // 通知にポインタを乗せて止めたまま（一時停止は維持）、覆われていない保存ボタンを押せる。
     await notice.hover();

@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * 通知（Toast）の置き場所の e2e の確認（#1728）。3 製品の e2e に同じ内容の helper を置く
@@ -78,6 +78,19 @@ export async function expectToastPlacement(page: Page) {
 }
 
 /**
+ * 要素の入る `PageBody` がページの末尾に空ける通知の置き場所の高さのうち、md 未満の下の余白（1.5rem）を超える分（#5354）。
+ * md 以上は `--toast-reserve-bottom`（14rem）- 1.5rem、md 未満は 0。スクロールしきった末尾の操作の下端の位置を比べるときに引く。
+ */
+export async function pageEndToastReserve(target: Locator) {
+  return target.evaluate((element) => {
+    const body = element.closest("[data-page-body]");
+    if (!body) return 0;
+    const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return Math.max(0, Number.parseFloat(getComputedStyle(body).paddingBottom) - 1.5 * rem);
+  });
+}
+
+/**
  * 通知が出たときに覆う範囲（最も広い通知・本文と補足の 1 件）。通知の領域の位置（実際の CSS）から求める。
  * desktop は右下の角から左と上へ、375px は上端のバーから下へ広がる。
  */
@@ -94,8 +107,11 @@ export async function toastZone(page: Page): Promise<Box> {
  * 主操作が通知の範囲と重ならない。2 つの状態で確かめる。
  * - 開いたまま（スクロールの前）: PageHeader のページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信。
  * - すべてのスクロールの領域を末尾までスクロールした後: ページの末尾の操作（本文の最後のボタン。それ以上スクロール
- *   できないので画面の下端に来る）・チャットの入力欄と送信と、画面の下半分にある上の 3 種の操作。画面の上半分へ
- *   スクロールで動いた操作は、スクロールを戻せば通知から離れるので対象にしない（375px の通知は上端）。
+ *   できないので画面の下端に来る）・チャットの入力欄と送信と、画面の下半分にある上の 3 種の操作と表の行メニュー
+ *   （`RowActionMenu` の起動のボタン `[data-row-action-menu]`。#5354）。画面の上半分へスクロールで動いた操作は、
+ *   スクロールを戻せば通知から離れるので対象にしない（375px の通知は上端）。
+ *   desktop はページの末尾に通知の置き場所の高さ（`--toast-reserve-bottom`）が空くので、スクロールしきると通知の範囲の
+ *   下に内容が来ない（`PageBody`）。
  */
 export async function expectMainActionsClearOfToast(page: Page) {
   const zone = await toastZone(page);
@@ -125,6 +141,10 @@ export async function expectMainActionsClearOfToast(page: Page) {
         if (visible(element) && (!atEnd || inLowerHalf(element))) targets.add(element);
       }
       if (atEnd) {
+        // 表の行メニュー（#5354）: 画面の下半分にある、見えている起動のボタンのすべて。
+        for (const element of all("main [data-row-action-menu]")) {
+          if (inLowerHalf(element)) targets.add(element);
+        }
         // ページの末尾の操作: 本文（main）の中で DOM の最後の、見えているボタン（画面の下半分にあるとき。
         // 末尾にボタンの無いページでは、上の方の操作が最後のボタンになる）。
         const last = all("main button").filter((element) => visible(element)).at(-1);

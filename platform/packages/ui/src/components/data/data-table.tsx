@@ -294,8 +294,10 @@ export function DataTable<T>({
         }
       }
       const rootRem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
-      // ページ送りと PageBody の下余白に 6rem を確保する。
-      const available = window.innerHeight - scroller.getBoundingClientRect().top - pageScroll - 6 * rootRem;
+      // ページ送り（4.5rem）と PageBody の下余白（md 以上は通知の置き場所の高さ。#5354）を確保する。
+      const body = scroller.closest("[data-page-body]");
+      const bodyBottom = body ? Number.parseFloat(getComputedStyle(body).paddingBottom) || 0 : 1.5 * rootRem;
+      const available = window.innerHeight - scroller.getBoundingClientRect().top - pageScroll - 4.5 * rootRem - bodyBottom;
       next = Math.max(next, available);
     }
     setMeasuredHeight((current) => {

@@ -71,11 +71,15 @@ async function expectMainScrollDoesNotExposeTrailingBlank(panel: Locator) {
     const mainRect = main.getBoundingClientRect();
     const panelRect = node.getBoundingClientRect();
     const panelBottomInScrollContent = panelRect.bottom - mainRect.top + main.scrollTop;
+    // md 以上の PageBody がページの末尾に空ける通知の置き場所の高さ（1.5rem を超える分。#5354）は余白に数えない。
+    const body = node.closest("[data-page-body]");
+    const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const toastReserve = body ? Math.max(0, Number.parseFloat(getComputedStyle(body).paddingBottom) - 1.5 * rem) : 0;
     return {
       clientHeight: main.clientHeight,
       scrollHeight: main.scrollHeight,
       // 画面に収まる工程では余白＝残りの viewport なので、超過分だけを測る。
-      trailingBlank: main.scrollHeight - Math.max(panelBottomInScrollContent, main.clientHeight),
+      trailingBlank: main.scrollHeight - Math.max(panelBottomInScrollContent + toastReserve, main.clientHeight),
     };
   });
   expect(metrics).not.toBeNull();

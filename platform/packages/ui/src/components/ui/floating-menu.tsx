@@ -294,12 +294,24 @@ export function useFloatingMenuPosition({
     const animationFrame = window.requestAnimationFrame(updatePosition);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
+    // 開いた後にメニューの中身が伸びたとき（候補の描画・読み込み）も測り直す。測らないと、最初の低い高さで
+    // 下に収まると決めたまま、伸びた分が画面の下へはみ出す（#5354）。高さを制限した後（max-height）は測り直さない
+    // （flex の子が縮み scrollHeight が中身の高さを表さないので、制限と解除を繰り返す）。
+    const menu = menuRef.current;
+    const observer =
+      menu && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            if (!menu.style.maxHeight) updatePosition();
+          })
+        : undefined;
+    if (menu) observer?.observe(menu);
     return () => {
       window.cancelAnimationFrame(animationFrame);
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
+      observer?.disconnect();
     };
-  }, [open, updatePosition]);
+  }, [menuRef, open, updatePosition]);
 
   return position;
 }
