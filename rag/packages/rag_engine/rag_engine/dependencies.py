@@ -36,6 +36,9 @@ class AnswerDependencies:
     current_section_paths は長い根拠を分ける区切りに使う、子の chunk の今の章節（章節ナビゲーションが正本。#4682）。
     chunk の ID の列を受け取り {chunk の ID: 章節の名前の列} を返す（どの章節にも入らない chunk は空の列、対応の無い chunk は
     含めない）。省略時や読めないときは取込の章節で区切る。
+    context_references は章節の拡張・親の読取で回答の文脈に入った chunk を起点にした参照先（#5315）。keyword の
+    seeds（{chunk の ID: 由来}。文脈の順）と present（文脈にある chunk の ID）を受け取り、足す参照先の chunk（child と親の
+    StoredChunk。``reference_expansion`` の印つき）を返す。深さ・上限・期限は呼び出し元が持つ。省略時は辿らない。
     """
 
     search: Callable[..., Any]
@@ -53,6 +56,7 @@ class AnswerDependencies:
     # 正式生成に選んだ文書だけを、その版と検索範囲で読む。
     document_background: Callable[..., Sequence[Mapping[str, Any]]] | None = None
     current_section_paths: Callable[[Sequence[str]], Mapping[str, Sequence[str]]] | None = None
+    context_references: Callable[..., Sequence[Any]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -103,6 +107,14 @@ def injected_current_section_paths(chunk_ids: Sequence[str]) -> Mapping[str, Seq
     """注入された chunk の今の章節（#4682）。注入が無ければ空（取込の章節で区切る）。"""
     current = _active.get()
     return {} if current is None or current.current_section_paths is None else current.current_section_paths(chunk_ids)
+
+
+def injected_context_references(*, seeds: Mapping[str, str], present: Sequence[str]) -> list[Any] | None:
+    """注入された、回答の文脈の chunk を起点にした参照先（#5315）。注入が無ければ None（辿らない）。"""
+    current = _active.get()
+    if current is None or current.context_references is None:
+        return None
+    return list(current.context_references(seeds=seeds, present=present))
 
 
 def report_degraded(kind: str, exc: BaseException) -> None:
