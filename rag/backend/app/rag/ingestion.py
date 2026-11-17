@@ -18,7 +18,6 @@ from io import BytesIO
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
-from xml.etree import ElementTree
 
 from pr_backend_core.bounded_calls import (
     Attempt,
@@ -29,7 +28,11 @@ from pr_backend_core.bounded_calls import (
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
-from rag_engine.parsing.slide_shapes import PresentationShapes, read_presentation_shapes
+from rag_engine.parsing.slide_shapes import (
+    PresentationShapes,
+    SlideShapesError,
+    read_presentation_shapes,
+)
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.language import LANGUAGE_PACK_HASH_KEY, current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
@@ -3161,7 +3164,7 @@ class IngestionPipeline:
                 return None
         try:
             return await asyncio.to_thread(read_presentation_shapes, data)
-        except (zipfile.BadZipFile, ElementTree.ParseError, KeyError, ValueError):
+        except (SlideShapesError, ValueError):
             logger.warning("slide_shapes_unreadable", extra={"trace_id": trace_id}, exc_info=True)
             return None
 

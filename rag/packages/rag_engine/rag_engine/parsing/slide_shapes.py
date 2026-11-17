@@ -25,7 +25,14 @@ from xml.etree import ElementTree
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.vision_prompt_rules import SOURCE_SLIDE_SHAPES_KEY
 
-__all__ = ["SOURCE_SLIDE_SHAPES_KEY", "PresentationShapes", "SlideShapes", "read_presentation_shapes", "slide_shapes_text"]
+__all__ = [
+    "SOURCE_SLIDE_SHAPES_KEY",
+    "PresentationShapes",
+    "SlideShapes",
+    "SlideShapesError",
+    "read_presentation_shapes",
+    "slide_shapes_text",
+]
 # 1 つの図に書く図形・接続線の数と、1 つの図形の文字の長さの上限（prompt と chunk の大きさを抑える）。
 MAX_SLIDE_SHAPES = 100
 MAX_SLIDE_CONNECTORS = 100
@@ -36,6 +43,10 @@ _REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}
 
 type Box = tuple[float, float, float, float]
 type Point = tuple[float, float]
+
+
+class SlideShapesError(ValueError):
+    """原本の zip・XML が壊れていて構造を読めない。"""
 
 
 @dataclass(frozen=True)
@@ -108,8 +119,15 @@ class _Transform:
 def read_presentation_shapes(data: bytes) -> PresentationShapes:
     """pptx の原本から、表示するスライドの順（= 変換した PDF の頁）に構造を読む。
 
-    zip・XML が壊れていれば ``zipfile.BadZipFile`` / ``ElementTree.ParseError`` / ``KeyError`` を送る。
+    zip・XML が壊れていれば ``SlideShapesError`` を送る。
     """
+    try:
+        return _read_presentation_shapes(data)
+    except (zipfile.BadZipFile, ElementTree.ParseError, KeyError) as exc:
+        raise SlideShapesError(f"{type(exc).__name__}: {exc}") from exc
+
+
+def _read_presentation_shapes(data: bytes) -> PresentationShapes:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         presentation = _xml(archive, "ppt/presentation.xml")
         size = presentation.find("{*}sldSz")
