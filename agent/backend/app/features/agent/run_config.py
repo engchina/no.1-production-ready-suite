@@ -46,6 +46,14 @@ def sha256(value: object) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def exposed_tool_names(metadata: Mapping[str, Any]) -> list[str]:
+    """Run の metadata に残した、モデルに渡したツールの名前（記録が無ければ空）。"""
+    config = metadata.get(RUN_CONFIG_METADATA_KEY)
+    tools = config.get("tools") if isinstance(config, Mapping) else None
+    names = tools.get("names") if isinstance(tools, Mapping) else None
+    return [str(name) for name in names] if isinstance(names, list) else []
+
+
 def run_configuration(
     *,
     static_instructions: str,

@@ -4,6 +4,7 @@
 手順の回答に使ったとき、答える前に 1 回だけ差し戻すこと、それでも読まなければ回答に読み切れて
 いない章節を示すことを確かめる。
 続きを読んだ・探索だけの章節・予算の上限・古い続きの位置・取り消した Run も確かめる。
+章節を読むツールをモデルに渡していない Run は判定しない（差し戻しも注記もしない。#5366）。
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.run_config import exposed_tool_names
 from app.features.agent.runtime import (
     AgentProfile,
     RunCreateRequest,
@@ -31,6 +33,7 @@ from app.features.agent.runtime import (
 from app.features.agent.section_coverage import (
     UNREAD_SECTIONS_HEADING,
     UNREAD_SECTIONS_RETRY_HINT,
+    reads_sections,
     section_coverage,
     unread_sections_message,
     with_unread_sections_notice,
@@ -714,3 +717,50 @@ def test_answer_from_excerpts_is_shown_when_the_section_is_still_not_read(
     assert "「章節 sec-a」（文書 A.pdf、p.3-9）: 章節を読んでいません" in answer["text"]
     assert answer["outcome"]["value"] == "conditional"
     assert "unread_sections" in answer["outcome"]["signals"]
+
+
+def test_reads_sections_needs_the_read_tool_exposed_to_the_model() -> None:
+    assert reads_sections(["rag__rag_search", "rag__rag_read_section"])
+    assert not reads_sections(["rag__rag_search", "rag__rag_chat", "nl2sql__nl2sql_query"])
+    assert not reads_sections([])
+    metadata = {"run_config": {"tools": {"names": ["rag__rag_chat", "rag__rag_read_section"]}}}
+    assert exposed_tool_names(metadata) == ["rag__rag_chat", "rag__rag_read_section"]
+    assert exposed_tool_names({}) == []
+    assert exposed_tool_names({"run_config": {"tools": None}}) == []
+
+
+@pytest.mark.parametrize("tool", ["rag_search", "rag_chat"], ids=["search", "chat"])
+def test_run_without_the_read_tool_is_neither_sent_back_nor_noticed(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, tool: str
+) -> None:
+    # 根拠を集めるツールだけのスキル（章節を読むツールを宣言しない）。
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=SKILL_ID,
+            name=SKILL_ID,
+            instructions="資料を調べて答える。",
+            mcp_requirements=[SkillMcpRequirement(server_id="rag", tool_names=[tool])],
+        )
+    )
+    mcp.outputs[tool] = {
+        **deepcopy(DEFAULT_OUTPUTS[tool]),
+        "evidence": [_evidence_item(PART_1)],
+    }
+    model = _script(
+        monkeypatch,
+        [function_call(f"rag__{tool}", {"query": "設定 A 手順"}, call_id="c1")],
+        [assistant_message(PART_1)],
+    )
+
+    run = _run()
+
+    assert len(model.calls) == 2
+    assert not reads_sections(exposed_tool_names(run.metadata))
+    # ツールの結果にも章節を読む案内を足さない（#5342）。
+    result = [item for item in model.calls[1].input if isinstance(item, dict)][-1]
+    assert "section_reads" not in str(result.get("output"))
+    assert METADATA_KEY not in run.metadata
+    answer = _answer(run)
+    assert answer["text"] == PART_1
+    assert UNREAD_SECTIONS_HEADING not in answer["text"]
+    assert "unread_sections" not in answer["outcome"]["signals"]
