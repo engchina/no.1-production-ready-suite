@@ -111,6 +111,119 @@ def test_long_title_without_terminal_is_body(monkeypatch):
     assert elements[1].section_path == ["第1章 合成の概要"]
 
 
+def test_plain_text_titles_without_body_join_the_preceding_section(monkeypatch):
+    """本文を挟まずに見出しが続く Title は一覧の項目として直前の見出しの本文に入る(#5315)。"""
+    elements = _parse(
+        monkeypatch,
+        [
+            _element("Title", "合成の一覧"),
+            _element("UncategorizedText", "合成の項目 A"),
+            _element("UncategorizedText", "合成の項目 B"),
+            _element("Title", "合成の項目 C"),
+            _element("Title", "合成の次の節"),
+            _element("NarrativeText", BODY),
+            _element("Title", "合成の末尾の項目"),
+        ],
+        "text/plain",
+    )
+    assert [(element.kind, element.section_path) for element in elements] == [
+        ("title", ["合成の一覧"]),
+        ("text", ["合成の一覧"]),
+        ("text", ["合成の一覧"]),
+        ("text", ["合成の一覧"]),
+        ("title", ["合成の次の節"]),
+        ("text", ["合成の次の節"]),
+        ("text", ["合成の次の節"]),
+    ]
+
+
+def test_plain_text_titles_listed_in_a_row_all_join_the_preceding_section(monkeypatch):
+    elements = _parse(
+        monkeypatch,
+        [
+            _element("Title", "合成の節"),
+            _element("NarrativeText", BODY),
+            _element("Title", "合成の項目 A"),
+            _element("Title", "合成の項目 B"),
+            _element("Title", "合成の次の節"),
+            _element("NarrativeText", BODY),
+        ],
+        "text/plain",
+    )
+    assert [element.kind for element in elements] == [
+        "title",
+        "text",
+        "text",
+        "text",
+        "title",
+        "text",
+    ]
+    assert [element.section_path for element in elements] == [["合成の節"]] * 4 + [
+        ["合成の次の節"]
+    ] * 2
+
+
+def test_plain_text_numbered_heading_without_body_stays_a_heading(monkeypatch):
+    elements = _parse(
+        monkeypatch,
+        [
+            _element("Title", "第1章 合成の概要"),
+            _element("Title", "1.1 合成の節"),
+            _element("NarrativeText", BODY),
+            _element("Title", "第2章 合成の構成"),
+        ],
+        "text/plain",
+    )
+    assert [element.kind for element in elements] == ["title", "title", "text", "title"]
+    assert [element.section_path for element in elements] == [
+        ["第1章 合成の概要"],
+        ["第1章 合成の概要", "1.1 合成の節"],
+        ["第1章 合成の概要", "1.1 合成の節"],
+        ["第2章 合成の構成"],
+    ]
+
+
+def test_plain_text_titles_with_body_stay_headings(monkeypatch):
+    elements = _parse(
+        monkeypatch,
+        [
+            _element("Title", "合成の節"),
+            _element("NarrativeText", BODY),
+            _element("Title", "合成の次の節"),
+            _element("ListItem", "合成の項目"),
+        ],
+        "text/plain",
+    )
+    assert [element.kind for element in elements] == ["title", "text", "title", "list"]
+    assert elements[3].section_path == ["合成の次の節"]
+
+
+@pytest.mark.parametrize(
+    ("filetype", "content_type"),
+    [
+        ("text/markdown", "text/markdown"),
+        ("text/html", "text/html"),
+        (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+    ],
+)
+def test_titles_without_body_stay_headings_outside_plain_text(monkeypatch, filetype, content_type):
+    elements = _parse(
+        monkeypatch,
+        [
+            _element("Title", "合成の節", filetype=filetype),
+            _element("Title", "合成の項目 C", filetype=filetype),
+            _element("Title", "合成の次の節", filetype=filetype),
+            _element("NarrativeText", BODY, filetype=filetype),
+        ],
+        content_type,
+    )
+    assert [element.kind for element in elements] == ["title", "title", "title", "text"]
+    assert elements[3].section_path == ["合成の次の節"]
+
+
 @pytest.mark.parametrize(
     ("filetype", "content_type"),
     [("text/markdown", "text/markdown"), ("text/html", "text/html")],
