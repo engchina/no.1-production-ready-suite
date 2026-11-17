@@ -210,15 +210,19 @@ describe("PageHeader", () => {
     expect(renderToStaticMarkup(<Section titleId="s-title" actions={<span />} />)).not.toContain("aria-labelledby");
   });
 
-  it("PageBody は md 以上だけページの末尾に通知の置き場所の高さを空け、下端に固定された入力欄の本文は空けない（#5354）", () => {
+  it("PageBody は md 以上で通知の表示中だけページの末尾に通知の領域の高さを空け、下端に固定された入力欄の本文は空けない（#5388）", () => {
     const html = renderToStaticMarkup(<PageBody>本文</PageBody>);
-    // md 未満（通知は上端）は py-6 の 1.5rem のまま。
+    // md 未満（通知は上端）と、通知が無いとき（`--toast-reserve-bottom` が無い）は py-6 の 1.5rem。
     expect(html).toContain(" py-6 ");
-    expect(html).toContain("md:pb-[var(--toast-reserve-bottom)]");
+    // md 以上は `<Toaster/>` が通知の表示中だけ書く `--toast-reserve-bottom` と 1.5rem の大きい方（常時の 14rem は空けない）。
+    expect(html).toContain("md:pb-[max(var(--space-6),var(--toast-reserve-bottom,0px))]");
+    expect(html).not.toContain("md:pb-[var(--toast-reserve-bottom)]");
     // 下端に固定された入力欄（ChatLayout。埋め込みを除く）を持つ本文は 1.5rem に戻す（通知は入力欄の上に出る。#2103）。
     expect(html).toContain("md:has-[[data-chat-layout]:not([data-chat-layout-embedded])]:pb-6");
     // 製品の className（pb-0 など）は md 未満の下の余白だけを上書きする（tailwind-merge は md: を別に扱う）。
-    expect(renderToStaticMarkup(<PageBody className="pb-0">本文</PageBody>)).toContain("md:pb-[var(--toast-reserve-bottom)]");
+    expect(renderToStaticMarkup(<PageBody className="pb-0">本文</PageBody>)).toContain(
+      "md:pb-[max(var(--space-6),var(--toast-reserve-bottom,0px))]"
+    );
   });
 
   it("中身は PageBody と同じ計測コンテナに入る（ワイドモニタで左端が揃う）", () => {

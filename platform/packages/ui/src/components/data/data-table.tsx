@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Fragment, useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
+import { pageBodyRestingBottomInset } from "../app-shell/PageBody";
 import { stabilizeMeasuredSize } from "../../lib/measured-size";
 import { cn } from "../../lib/utils";
 import { SKELETON_CLASS } from "../ui/skeleton";
@@ -294,9 +295,10 @@ export function DataTable<T>({
         }
       }
       const rootRem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
-      // ページ送り（4.5rem）と PageBody の下余白（md 以上は通知の置き場所の高さ。#5354）を確保する。
+      // ページ送り（4.5rem）と PageBody の通常の下余白（1.5rem）を確保する。通知の表示中だけ足す余白（#5388）は数えない
+      // （通知の表示中に測り直しても表が低くならず、通知が消えた後に低いまま残らない）。
       const body = scroller.closest("[data-page-body]");
-      const bodyBottom = body ? Number.parseFloat(getComputedStyle(body).paddingBottom) || 0 : 1.5 * rootRem;
+      const bodyBottom = body ? pageBodyRestingBottomInset(body) : 1.5 * rootRem;
       const available = window.innerHeight - scroller.getBoundingClientRect().top - pageScroll - 4.5 * rootRem - bodyBottom;
       next = Math.max(next, available);
     }
