@@ -644,11 +644,11 @@ test("空の一覧から業務ガイドを作り、保存・検証（問題と�
 
   await editor.getByRole("button", { name: "分岐を足す" }).click();
   const branch = editor.getByRole("listitem", { name: "分岐 1" });
-  await branch.getByRole("combobox", { name: /^条件/ }).click();
+  await branch.getByRole("button", { name: /^条件/ }).click();
   await page.getByRole("option", { name: "アカウントの種類（cond1）" }).click();
-  await branch.getByRole("combobox", { name: /^値/ }).click();
+  await branch.getByRole("button", { name: /^値/ }).click();
   await page.getByRole("option", { name: "社員" }).click();
-  await branch.getByRole("combobox", { name: /^行き先の手順/ }).click();
+  await branch.getByRole("button", { name: /^行き先の手順/ }).click();
   await page.getByRole("option", { name: "再設定する（step2）" }).click();
 
   // 影響範囲・承認が係る手順（#1320）は、手順の題名で選ぶ。
@@ -888,7 +888,7 @@ test("業務ガイドの複数選択の開いた一覧の下部が 1 行に並�
 
   await editor.getByRole("button", { name: "分岐を足す" }).click();
   const branch = editor.getByRole("listitem", { name: "分岐 1" });
-  await branch.getByRole("combobox", { name: /^条件/ }).click();
+  await branch.getByRole("button", { name: /^条件/ }).click();
   await page.getByRole("option", { name: /条件 A/ }).click();
   await branch.getByRole("combobox", { name: /^比べ方/ }).click();
   await page.getByRole("option", { name: "いずれかに一致する" }).click();
@@ -1062,9 +1062,9 @@ test(
       mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       buffer: Buffer.from("xlsx"),
     });
-    await process.getByRole("combobox", { name: "質問の列" }).click();
+    await process.getByRole("button", { name: /^質問の列/ }).click();
     await page.getByRole("option", { name: "B: 質問" }).click();
-    await process.getByRole("combobox", { name: "回答の過程の列" }).click();
+    await process.getByRole("button", { name: /^回答の過程の列/ }).click();
     await page.getByRole("option", { name: "C: 回答の過程" }).click();
     await process.getByRole("button", { name: "AI で下書きを作る" }).click();
 
@@ -1171,7 +1171,7 @@ for (const theme of ["light", "dark"] as const) {
     expect(api.requests.filter((item) => item.path.endsWith("/try"))).toHaveLength(0);
 
     // 分かっている条件を選んで試す。
-    await panel.getByRole("combobox", { name: /^アカウントの種類/ }).click();
+    await panel.getByRole("button", { name: /^アカウントの種類/ }).click();
     await page.getByRole("option", { name: "社員" }).click();
     await panel.getByRole("textbox", { name: /^質問/ }).fill("パスワードを忘れた");
     await panel.getByRole("button", { name: "試す", exact: true }).click();

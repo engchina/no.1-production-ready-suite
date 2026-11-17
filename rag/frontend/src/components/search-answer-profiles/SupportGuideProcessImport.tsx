@@ -10,7 +10,7 @@ import {
   FormGrid,
   FormStatus,
   ProcessingIndicator,
-  SelectField,
+  SearchableSelectField,
   StatusBadge,
   TextareaField,
   TextField,
@@ -35,6 +35,7 @@ import { useImportSupportGuides } from "@/lib/queries";
 import { SupportGuideContentView } from "./SupportGuideContentView";
 import { SupportGuideIssueList } from "./SupportGuideIssueList";
 import { listScrollLabel } from "@/lib/pagination-labels";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 type Source = "excel" | "text";
 
@@ -253,7 +254,8 @@ export function SupportGuideProcessImport({
             ) : null}
             {workbook ? (
               <>
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id="support-guide-process-sheet"
                   label={t("supportGuides.processImport.sheet")}
                   width="md"
@@ -271,7 +273,8 @@ export function SupportGuideProcessImport({
                     setAnswerColumn("");
                   }}
                 />
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id="support-guide-process-question-column"
                   label={t("supportGuides.processImport.questionColumn")}
                   width="md"
@@ -283,7 +286,8 @@ export function SupportGuideProcessImport({
                   disabled={busy}
                   onValueChange={setQuestionColumn}
                 />
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id="support-guide-process-process-column"
                   label={t("supportGuides.processImport.processColumn")}
                   width="md"
@@ -295,13 +299,14 @@ export function SupportGuideProcessImport({
                   disabled={busy}
                   onValueChange={setProcessColumn}
                 />
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id="support-guide-process-answer-column"
                   label={t("supportGuides.processImport.answerColumn")}
                   width="md"
                   value={answerColumn}
-                  emptyOptionLabel={t("supportGuides.processImport.noColumn")}
-                  options={columnOptions}
+                  // 回答の列は任意。「使わない」（空の値）を先頭の選択肢にする。
+                  options={[{ value: "", label: t("supportGuides.processImport.noColumn") }, ...columnOptions]}
                   disabled={busy}
                   onValueChange={setAnswerColumn}
                 />

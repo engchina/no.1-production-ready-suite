@@ -11,7 +11,7 @@ import {
   PAGE_SIZE_OPTIONS,
   PagedDataTable,
   RowActionMenu,
-  SelectField,
+  SearchableSelectField,
   SideSheet,
   Skeleton,
   StatusBadge,
@@ -38,6 +38,7 @@ import {
   useRestoreDocumentSectionRevision,
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 const KIND_LABEL: Record<DocumentSectionRevisionSummary["kind"], I18nKey> = {
   extracted: "sections.revisions.kind.extracted",
@@ -313,7 +314,8 @@ function RevisionDiff({
       <h3 id="section-revision-diff" className="text-sm font-semibold text-fg">
         {t("sections.revisions.diffTitle", { revision: revision.revision_no })}
       </h3>
-      <SelectField
+      <SearchableSelectField
+        labels={searchableSelectLabels()}
         id="section-revision-against"
         label={t("sections.revisions.against")}
         width="md"

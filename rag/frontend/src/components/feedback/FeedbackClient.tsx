@@ -81,6 +81,7 @@ import { useValuesChanged } from "@/lib/render-sync";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 import {
   FEEDBACK_ALL_PARAMS,
@@ -274,6 +275,9 @@ export function FeedbackClient() {
               />
               <FilterSelect
                 id="feedback-search-answer-profile"
+                // 選択肢はデータから来るので検索して選ぶ（#5266）。
+                searchable
+                searchLabels={searchableSelectLabels()}
                 label={t("feedback.filters.searchAnswerProfile")}
                 value={urlState.searchAnswerProfileId}
                 options={searchAnswerProfileOptions}

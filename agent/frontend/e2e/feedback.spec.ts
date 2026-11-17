@@ -509,7 +509,7 @@ for (const viewport of VIEWPORTS) {
       await expect(form.getByLabel("質問")).toHaveValue(DISLIKED_QUESTION);
       await expect(form.getByLabel("期待する回答の要点")).toHaveValue("件数は 15 件が正しい");
       await expect(form.getByLabel("期待するツール")).toHaveValue("nl2sql__nl2sql_query, rag__rag_search");
-      const set = form.getByTestId("feedback-add-case-set");
+      const set = form.locator("#feedback-add-case-set");
       await expect(set).toContainText("月次の評価（1 件）");
 
       // 同じ質問を持つ評価セットを選ぶと、その場で知らせて追加しない。
@@ -522,7 +522,7 @@ for (const viewport of VIEWPORTS) {
       await form.getByLabel("期待するツール").fill("nl2sql_query");
       await set.click();
       await page.getByRole("option", { name: "月次の評価（1 件）" }).click();
-      await expect(set).toHaveAttribute("aria-invalid", "false");
+      await expect(set).not.toHaveAttribute("aria-invalid", "true");
       await expect(form.getByText("同じ質問のケースが既にあります")).toHaveCount(0);
       await expect(form.getByRole("button", { name: "評価ケースに追加" })).toBeInViewport();
       await expectNoPageHorizontalOverflow(page);
@@ -547,7 +547,7 @@ test("評価セットが無ければ新しい評価セットを作り、期待�
   const detail = await openDislikedDetail(page);
   await detail.getByTestId("feedback-add-case-toggle").click();
   const form = detail.getByTestId("feedback-add-case-form");
-  await expect(form.getByTestId("feedback-add-case-set")).toContainText("新しい評価セットを作る");
+  await expect(form.locator("#feedback-add-case-set")).toContainText("新しい評価セットを作る");
   await expect(form.getByLabel("新しい評価セットの名前")).toHaveValue("資料・データ横断アシスタント のフィードバック");
   await expect(form.getByLabel("期待する回答の要点")).toHaveValue("");
 

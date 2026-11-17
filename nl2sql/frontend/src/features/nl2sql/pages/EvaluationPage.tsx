@@ -25,7 +25,7 @@ import {
   TableSkeleton,
   TimedLoadingState,
   FieldLegend,
-  SelectField,
+  SearchableSelectField,
   TextField,
   formatDisplayDateTime,
   INFORMATION_LIST_SCROLL_CLASS,
@@ -56,6 +56,7 @@ import { listCountLabels, paginationLabels } from "@/lib/pagination-labels";
 import { useWorkspacePaging } from "@/lib/use-workspace-paging";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
 import { QuestionText } from "../components/QuestionText";
@@ -458,7 +459,8 @@ export function EvaluationPage() {
               {/* 条件の欄の並びは共通の FormGrid（最大 60rem・置き場所 42rem 以上で 2 列。#1891）。 */}
               <FormGrid className="items-start" data-testid="quality-evaluation-input-row">
                 <div className="min-w-0" data-testid="quality-evaluation-profile-field">
-                  <SelectField
+                  <SearchableSelectField
+                    labels={searchableSelectLabels()}
                     id="quality-evaluation-profile"
                     label={t("qualityEvaluation.profile.label")}
                     required
