@@ -46,7 +46,8 @@ test("src のすべての PageHeader / PageBody が wide を持つ", () => {
 
 test("メモリモードの警告バナーも全幅で、直下の PageHeader と左端をそろえる", () => {
   const gate = readFileSync(new URL("../src/components/system/DatabaseGate.tsx", import.meta.url), "utf8");
-  assert.match(gate, /<PageBody wide className="pb-0">/u);
+  // ページの末尾ではないので、md 以上の通知の置き場所の高さ（#5354）も空けない。
+  assert.match(gate, /<PageBody wide className="pb-0 md:pb-0">/u);
 });
 
 test("回答前の確認の未入力案内は操作前に赤いエラー（role=alert）で出さない", () => {
