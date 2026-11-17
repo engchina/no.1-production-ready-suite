@@ -3558,7 +3558,7 @@ def test_answering_settings_toggle_reference_outline_selection(
     assert "RAG_REFERENCE_OUTLINE_SELECTION_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("value", [100, 300, 600, 1200])
+@pytest.mark.parametrize("value", [150, 300, 600, 1200])
 def test_answering_settings_save_answer_timeout_choice(
     monkeypatch: MonkeyPatch, tmp_path: Path, value: int
 ) -> None:
@@ -3576,7 +3576,7 @@ def test_answering_settings_save_answer_timeout_choice(
     assert f"RAG_ANSWER_TIMEOUT_SECONDS={value}\n" in env_file.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("value", [0, 99, 450, 1201])
+@pytest.mark.parametrize("value", [0, 100, 149, 450, 1201])
 def test_answering_settings_reject_answer_timeout_outside_choices(value: int) -> None:
     """画面で選べない回答の上限は 422(#5280)。"""
     response = client.patch("/api/settings/answering", json={"answer_timeout_seconds": value})

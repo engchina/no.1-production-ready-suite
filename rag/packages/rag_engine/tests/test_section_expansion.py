@@ -689,8 +689,8 @@ def test_reference_full_read_evidence_is_not_a_section_seed():
     assert sections.seed_chunk_ids(replace(context, evidence_tree=tuple(tree))) == ["c31a", "c32a"]
 
 
-def test_answer_limit_shorter_than_the_generation_reserve_does_not_expand():
-    """回答の上限を 100 秒にすると、開始の時点で残りが予約（120 + 30 秒）より短く、章節を広げない（#5280）。"""
-    assert not _climbs(_settings(), 100.0)
+def test_shortest_answer_limit_does_not_expand():
+    """回答の上限の最小 150 秒は予約（120 + 30 秒）と同じで、1 段の分（20 秒）が残らず章節を広げない（#5280）。"""
+    assert not _climbs(_settings(), 150.0)
     # 300 秒以上なら開始の時点では 1 段目を読む。
     assert _climbs(_settings(), 300.0)

@@ -704,7 +704,7 @@ for (const viewport of [
     await expect(select).toContainText("600 秒");
     await select.click();
     const listbox = page.getByRole("listbox", { name: "回答の上限時間", exact: true });
-    await expect(listbox.getByRole("option")).toHaveText(["100 秒", "300 秒", "600 秒", "1200 秒"]);
+    await expect(listbox.getByRole("option")).toHaveText(["150 秒", "300 秒", "600 秒", "1200 秒"]);
     await listbox.getByRole("option", { name: "1200 秒" }).click();
     await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
 

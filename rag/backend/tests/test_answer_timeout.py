@@ -29,16 +29,16 @@ def _progress(stage: str, outcome: str) -> SearchStageProgress:
 
 
 def test_answer_timeout_default_and_limit() -> None:
-    """回答生成の通しの上限は既定 600 秒・100〜1200 秒（#5280）。LLM 1 回の上限とは分ける。
+    """回答生成の通しの上限は既定 600 秒・150〜1200 秒（#5280）。LLM 1 回の上限とは分ける。
 
     検索だけの上限（旧 rag_search_timeout_seconds）は #383 で削除した（品質評価の 1 ケースも
     回答生成の上限で打ち切る）。
     """
     settings = Settings()
     assert settings.rag_answer_timeout_seconds == 600.0
-    assert (RAG_ANSWER_TIMEOUT_MIN_SECONDS, RAG_ANSWER_TIMEOUT_MAX_SECONDS) == (100.0, 1200.0)
+    assert (RAG_ANSWER_TIMEOUT_MIN_SECONDS, RAG_ANSWER_TIMEOUT_MAX_SECONDS) == (150.0, 1200.0)
     # 画面の選択肢は範囲の両端と既定を含む。
-    assert RAG_ANSWER_TIMEOUT_CHOICES == (100, 300, 600, 1200)
+    assert RAG_ANSWER_TIMEOUT_CHOICES == (150, 300, 600, 1200)
     # 通しの上限は複数回の LLM 呼び出しを含むので、1 回の上限（600 秒）とは別に持つ。
     assert OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS == 600.0
     assert settings.oci_enterprise_ai_timeout_seconds == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
@@ -60,12 +60,13 @@ def test_answer_timeout_env_example_documents_setting() -> None:
 
 
 @pytest.mark.parametrize("choice", RAG_ANSWER_TIMEOUT_CHOICES, ids=str)
-def test_short_answer_limit_skips_reading_and_expansion(choice: int) -> None:
-    """上限が生成の予約（1 回の見積もり + 確定の 30 秒）より短いと、読み足しをしない（#5280）。
+def test_shortest_answer_limit_skips_reading_and_expansion(choice: int) -> None:
+    """最小の 150 秒は生成の予約（1 回の見積もり 120 + 確定の 30 秒）と同じ（#5280）。
 
-    既定の見積もり 120 秒では予約は 150 秒。100 秒を選ぶと、回答の開始から参照先の読取
-    （``_reference_deadline_short``）・章節の拡張・分割読取（rag_engine の同じ予約）をせず、
-    入る根拠だけで 1 回生成する。300 秒以上なら開始の時点では読み足せる。
+    回答の期限は開始から減るので、参照先を読む時点の残りは予約より短く、参照先の読取
+    （``_reference_deadline_short``）をしない。章節の拡張（1 段 20 秒 + 予約）・分割読取（予約）も
+    rag_engine の同じ予約で止まり、入る根拠だけで 1 回生成する。
+    300 秒以上なら開始の時点では読み足せる。
     """
     from types import SimpleNamespace
 
@@ -80,10 +81,10 @@ def test_short_answer_limit_skips_reading_and_expansion(choice: int) -> None:
 
     settings = Settings(rag_answer_timeout_seconds=choice)
     reserve = _reference_generation_reserve_seconds(settings)
-    assert reserve == 150.0
+    assert reserve == 150.0 == RAG_ANSWER_TIMEOUT_MIN_SECONDS
     state = _SearchState()
     state.deadline = Deadline(float(choice))
-    assert _reference_deadline_short(state, reserve) is (choice < reserve)
+    assert _reference_deadline_short(state, reserve) is (choice <= reserve)
     # rag_engine の章節の拡張・分割読取も同じ予約（設定から渡す見積もり + 確定の分）を使う。
     limits = SectionExpansionLimits.from_settings(
         SimpleNamespace(
