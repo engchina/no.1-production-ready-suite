@@ -62,6 +62,8 @@ from app.rag.evaluation_paired import compare_paired
 from app.rag.evaluation_result_storage import case_result_for_storage, without_answer_diagnostics
 from app.rag.request_context import current_audit_request_context
 from app.schemas.evaluation import (
+    EVALUATION_ANSWER_MODES,
+    EvaluationAnswerMode,
     EvaluationCase,
     EvaluationCaseResult,
     EvaluationComparison,
@@ -235,6 +237,8 @@ class EvaluationJobRecord:
     search_answer_profile_id: str | None = None
     compare_search_answer_profile_id: str | None = None
     user_uuid: str | None = None
+    # 回答の方法（#5340。chat / search）。記録の無い古い行は None（未記録）。
+    answer_mode: EvaluationAnswerMode | None = None
     # 一覧の行だけが持つ全体の判定（結果の本体は読まない。#4811）。
     passed: bool | None = None
     compare_passed: bool | None = None
@@ -538,6 +542,7 @@ class OracleEvaluationJobStore:
                 "search_answer_profile_id": record.search_answer_profile_id,
                 "compare_search_answer_profile_id": record.compare_search_answer_profile_id,
                 "user_uuid": record.user_uuid,
+                "answer_mode": record.answer_mode,
             }
         )
 
@@ -661,6 +666,14 @@ _STATUSES: dict[str, EvaluationJobStatus] = {
 }
 
 
+def _answer_mode(value: object) -> EvaluationAnswerMode | None:
+    """表の回答の方法（#5340）。記録の無い行・知らない値は None（未記録）。"""
+    for mode in EVALUATION_ANSWER_MODES:
+        if value == mode:
+            return mode
+    return None
+
+
 def _record_from_row(row: Mapping[str, object]) -> EvaluationJobRecord:
     """表の行を job にする。一覧の行は結果の本体を読まず、全体の判定（`passed`）だけを持つ。"""
     result = row.get("result_json")
@@ -686,6 +699,7 @@ def _record_from_row(row: Mapping[str, object]) -> EvaluationJobRecord:
         search_answer_profile_id=_optional_str(row.get("search_answer_profile_id")),
         compare_search_answer_profile_id=_optional_str(row.get("compare_search_answer_profile_id")),
         user_uuid=_optional_str(row.get("user_uuid")),
+        answer_mode=_answer_mode(row.get("answer_mode")),
         passed=None if passed is None else passed in (True, 1, "true"),
         compare_passed=None if compare_passed is None else compare_passed in (True, 1, "true"),
         started_at=_optional_datetime(row.get("started_at")),
@@ -762,6 +776,7 @@ def evaluation_job_response(
         source_workbook_id=record.source_workbook_id,
         search_answer_profile_id=record.search_answer_profile_id,
         compare_search_answer_profile_id=record.compare_search_answer_profile_id,
+        answer_mode=record.answer_mode,
         actor_user_uuid=record.user_uuid,
         owned=viewer.owns(record) if viewer is not None else True,
         can_cancel=viewer.can_cancel(record) if viewer is not None else True,
@@ -805,6 +820,7 @@ def evaluation_job_summary(
         ),
         search_answer_profile_id=record.search_answer_profile_id,
         compare_search_answer_profile_id=record.compare_search_answer_profile_id,
+        answer_mode=record.answer_mode,
         actor_user_uuid=record.user_uuid,
         owned=viewer.owns(record),
         can_cancel=viewer.can_cancel(record),
@@ -886,6 +902,7 @@ class EvaluationJobService:
         source_workbook_id: str | None = None,
         search_answer_profile_id: str | None = None,
         compare_search_answer_profile_id: str | None = None,
+        answer_mode: EvaluationAnswerMode | None = None,
     ) -> EvaluationJob:
         """job を作り、このプロセスの task で実行を始める。
 
@@ -920,6 +937,7 @@ class EvaluationJobService:
             search_answer_profile_id=search_answer_profile_id,
             compare_search_answer_profile_id=compare_search_answer_profile_id,
             user_uuid=user_uuid,
+            answer_mode=answer_mode,
         )
         await store.create(record)
         logger.info(

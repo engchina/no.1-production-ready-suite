@@ -152,3 +152,69 @@ def test_diff_reports_condition_changes_and_old_results(
     assert "実行中に条件が変わりました（x）" in capsys.readouterr().out
     assert evaluation_run_cli.main(["diff", str(left), str(write("old.json", None))]) == 1
     assert "#59 より前の結果" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("golden_mode", "argv", "expected"),
+    [
+        (None, [], "chat"),
+        ("search", [], "search"),
+        ("search", ["--answer-mode", "chat"], "chat"),
+        (None, ["--answer-mode", "search"], "search"),
+    ],
+    ids=["default", "from-json", "flag-overrides-json", "flag"],
+)
+def test_run_takes_answer_mode_from_json_or_flag(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    golden_mode: str | None,
+    argv: list[str],
+    expected: str,
+) -> None:
+    """回答の方法（#5340）は評価ファイルの answer_mode と --answer-mode（優先）で指定できる。"""
+    from app.api.routes import evaluation as evaluation_route
+
+    golden = tmp_path / "golden.json"
+    payload: dict[str, Any] = {"cases": [{"id": "c1", "query": "質問"}]}
+    if golden_mode:
+        payload["answer_mode"] = golden_mode
+    golden.write_text(json.dumps(payload), encoding="utf-8")
+    seen: list[str] = []
+
+    async def execute_run(
+        request: EvaluationRunRequest, *, time_budget_seconds: float
+    ) -> tuple[EvaluationMetrics, str | None]:
+        del time_budget_seconds
+        seen.append(request.answer_mode)
+        return EvaluationMetrics(case_count=1, passed=True, run_manifest={}), None
+
+    monkeypatch.setattr(evaluation_route, "_execute_run", execute_run)
+
+    assert evaluation_run_cli.main(["run", str(golden), *argv]) == 0
+    assert seen == [expected]
+
+
+def test_ablate_rejects_search_answer_mode(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """除去実験は RAG Chat の経路の工程を測るので、RAG 検索の方法では流さない（#5340）。"""
+    from app.api.routes import evaluation as evaluation_route
+
+    async def execute_run(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("RAG 検索の方法で除去実験を流しました")
+
+    monkeypatch.setattr(evaluation_route, "_execute_run", execute_run)
+
+    code = evaluation_run_cli.main(
+        [
+            "ablate",
+            str(_golden(tmp_path)),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--answer-mode",
+            "search",
+        ]
+    )
+
+    assert code == 2
+    assert evaluation_run_cli.ABLATION_ANSWER_MODE_MESSAGE in capsys.readouterr().err

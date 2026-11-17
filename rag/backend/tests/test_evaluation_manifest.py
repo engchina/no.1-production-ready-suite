@@ -171,6 +171,13 @@ async def test_manifest_detects_condition_differences() -> None:
     oracle.prompts = {"generation.role": "直したプロンプト"}
     assert comparison_differences(base, await _manifest(oracle)) == ["settings.prompt_version"]
 
+    # 回答の方法（#5340）は条件の差になる（CLI の diff・compare に出る）。省略時はチャット。
+    assert base["manifest_version"] == 3
+    assert base["request"]["answer_mode"] == "chat"
+    search = await _manifest(oracle, _request(answer_mode="search"))
+    assert search["request"]["answer_mode"] == "search"
+    assert comparison_differences(await _manifest(oracle), search) == ["request.answer_mode"]
+
     # コードの版と外部の呼び出しの扱いは条件の差に入れない（同じ条件でコード・再生を比べる）。
     other_code = {**base, "code_version": "other", "external_calls": {"mode": "replay"}}
     assert comparison_differences(base, other_code) == []

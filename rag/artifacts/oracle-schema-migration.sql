@@ -4761,3 +4761,29 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261117_5340_evaluation_job_answer_mode
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count = 0 THEN
+        RETURN;
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'ANSWER_MODE';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (answer_mode VARCHAR2(16))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND constraint_name = 'RAG_EVALUATION_JOBS_ANSWER_MODE_CK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs '
+            || 'ADD CONSTRAINT rag_evaluation_jobs_answer_mode_ck '
+            || 'CHECK (answer_mode IN (''chat'', ''search''))';
+    END IF;
+END;
+/

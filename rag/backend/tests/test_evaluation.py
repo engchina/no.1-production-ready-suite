@@ -1300,6 +1300,45 @@ def test_run_evaluation_request_thresholds_take_precedence_over_suite(
     assert captured["thresholds"].model_dump(exclude_none=True) == {}
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [({}, "chat"), ({"answer_mode": "search"}, "search")],
+    ids=["default-chat", "search"],
+)
+def test_run_evaluation_passes_answer_mode_to_the_runner(
+    monkeypatch: MonkeyPatch, body: dict[str, Any], expected: str
+) -> None:
+    """回答の方法（#5340）は runner と保存する評価の記録に渡る。省略時はチャット。"""
+    captured: dict[str, Any] = {}
+    artifacts: list[dict[str, Any]] = []
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        captured["answer_mode"] = kwargs.get("answer_mode")
+        return EvaluationMetrics(case_count=1)
+
+    async def save(self: Any, artifact: dict[str, Any]) -> str:
+        artifacts.append(artifact)
+        return "eval-1"
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr(
+        "app.api.routes.evaluation.OracleClient.save_evaluation_artifact", save, raising=False
+    )
+
+    resp = client.post("/api/evaluation/run", json={**_eval_run_body(), **body})
+
+    assert resp.status_code == 200
+    assert captured["answer_mode"] == expected
+    assert resp.json()["data"]["run_manifest"]["request"]["answer_mode"] == expected
+    assert artifacts[0]["request_summary"]["answer_mode"] == expected
+
+
+def test_run_evaluation_rejects_unknown_answer_mode() -> None:
+    resp = client.post("/api/evaluation/run", json={**_eval_run_body(), "answer_mode": "agent"})
+
+    assert resp.status_code == 422
+
+
 def test_run_evaluation_rejects_removed_suite_name() -> None:
     """削除した基準の名前は request では受け付けない(設定値は後継へ寄せる)。"""
     resp = client.post("/api/evaluation/run", json={**_eval_run_body(), "suite": "strict_ci"})
