@@ -1,4 +1,4 @@
-import { AnswerPlainText, Banner, Button, Disclosure, FormActionBar, FormGrid, FormStatus, PageBody, PageHeader, SaveErrorBanner, Section, SearchableMultiSelect, SelectField, StatusBadge, Tabs, TextareaField, TextField, apiErrorMessage, useConfirm, useMediaQuery } from "@production-ready/ui";
+import { AnswerPlainText, Banner, Button, Disclosure, FormActionBar, FormGrid, FormStatus, PageBody, PageHeader, SaveErrorBanner, Section, SearchableMultiSelect, StatusBadge, Tabs, TextareaField, TextField, apiErrorMessage, useConfirm, useMediaQuery, SearchableSelectField } from "@production-ready/ui";
 import { Check, ChevronLeft, ChevronRight, Download, FolderOpen, Play, Plus, Save, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -7,6 +7,7 @@ import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { blankTestSetItem, testsetApi, type TestSetDraft, type TestSetItem } from "@/lib/testset-api";
 import { toast } from "@/lib/toast";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 const valid = (item: TestSetItem) => Boolean(item.question.trim() && item.standard_answer.trim());
 
@@ -47,7 +48,7 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
     <PageBody wide>
       {loadNotice}
       <Section><FormGrid columns={1}><TextField width="md" id="testset-draft-name" required label={t("evaluation.testsets.name")} value={draft.name} maxLength={200} disabled={save.isPending} onChange={event => setDraft({ ...draft, name: event.target.value })} /></FormGrid><p className="mt-3 text-sm text-fg-muted">{t("evaluation.testsets.pendingHelp")}</p></Section>
-      <div className="testset-mobile-tools"><SelectField width="full" id="testset-item-picker" label={t("evaluation.testsets.itemSelector")} value={selected} onValueChange={choose} options={draft.items.map((value, i) => ({ value: value.item_id, label: `${i + 1}. ${value.question || t("evaluation.testsets.missingQuestion")} · ${t(value.confirmed ? "evaluation.testsets.isConfirmed" : "evaluation.testsets.unconfirmed")}` }))} /><Tabs idPrefix="testset-mobile" ariaLabel={t("evaluation.testsets.itemSelector")} value={tab} onChange={value => { remember(); setTab(value); }} items={[{ id: "edit", label: t("evaluation.testsets.editTab") }, { id: "reference", label: t("evaluation.testsets.referenceTab") }]} /></div>
+      <div className="testset-mobile-tools"><SearchableSelectField labels={searchableSelectLabels()} width="full" id="testset-item-picker" label={t("evaluation.testsets.itemSelector")} value={selected} onValueChange={choose} options={draft.items.map((value, i) => ({ value: value.item_id, label: `${i + 1}. ${value.question || t("evaluation.testsets.missingQuestion")} · ${t(value.confirmed ? "evaluation.testsets.isConfirmed" : "evaluation.testsets.unconfirmed")}` }))} /><Tabs idPrefix="testset-mobile" ariaLabel={t("evaluation.testsets.itemSelector")} value={tab} onChange={value => { remember(); setTab(value); }} items={[{ id: "edit", label: t("evaluation.testsets.editTab") }, { id: "reference", label: t("evaluation.testsets.referenceTab") }]} /></div>
       <div className="testset-review-workspace" data-testid="testset-editor">
         <aside className="testset-item-nav"><Section title={t("evaluation.testsets.items")}><div className="grid grid-cols-1 gap-3">
           {draft.items.map((value, i) => <div key={value.item_id} className="grid grid-cols-1 gap-1">

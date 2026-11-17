@@ -5,6 +5,7 @@ import {
   FieldError,
   FormGrid,
   ListSkeleton,
+  SearchableSelectField,
   SelectField,
   type SelectFieldOption,
   TextField,
@@ -15,6 +16,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { type ExtractionFieldDefinition } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 import {
   type ExtractionFieldFilterError,
@@ -107,7 +109,8 @@ export function ExtractionFieldFilters({
                   aria-label={rowLabel}
                   className="grid min-w-0 grid-cols-1 gap-3 rounded-md border border-border bg-surface p-3 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)_auto] md:items-start"
                 >
-                  <SelectField
+                  <SearchableSelectField
+                    labels={searchableSelectLabels()}
                     id={`${row.key}-name`}
                     width="md"
                     label={t("search.filters.fields.field")}

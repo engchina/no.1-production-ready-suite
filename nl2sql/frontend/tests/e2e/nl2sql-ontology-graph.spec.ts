@@ -1591,12 +1591,12 @@ test("公開済み Profile から未公開 Profile へ切り替えると graph �
   await page.getByTestId("ontology-view-fetch").click();
   const panel = page.locator("#ontology-query-playground-panel");
   await panel.getByTestId("ontology-playground-question").fill("公開版の顧客");
-  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "unpublished");
+  await chooseSelectFieldOption(page.locator("#ontology-build-profile"), "unpublished");
   await page.getByTestId("ontology-view-fetch").click();
   await expect(panel.getByText("公開済みオントロジーがまだありません", {exact:true})).toBeVisible();
   await expect(panel.locator(".react-flow")).toHaveCount(0);
   await expect(panel.getByTestId("ontology-playground-question")).toHaveCount(0);
-  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "default");
+  await chooseSelectFieldOption(page.locator("#ontology-build-profile"), "default");
   await page.getByTestId("ontology-view-fetch").click();
   await expect(panel.getByTestId("ontology-playground-question")).toHaveValue("");
 });

@@ -14,7 +14,7 @@ import {
   TimedLoadingState,
   FixedSplitPane,
   TextareaField,
-  SelectField,
+  SearchableSelectField,
   FormGrid,
   DISPLAY_DATE_TIME_SECONDS,
   formatDisplayDateTime,
@@ -51,6 +51,7 @@ import type {
   SchemaTable,
 } from "../types";
 import { listCountLabels, listScrollLabel } from "@/lib/pagination-labels";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 type SqlToQuestionPanel = "input" | "structure";
 type GeneratedSql = { sql: string; explanation: string; warnings: string[]; at: string };
@@ -470,7 +471,8 @@ export function SqlToQuestionPage() {
               <FormGrid columns={1}>
                 {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API で省略したときも backend が
                     既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
-                <SelectField
+                <SearchableSelectField
+                  labels={searchableSelectLabels()}
                   id="sql-to-question-profile"
                   label={t("sqlToQuestion.profile.label")}
                   value={selectedProfileId}

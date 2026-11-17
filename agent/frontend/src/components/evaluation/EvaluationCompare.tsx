@@ -10,7 +10,7 @@ import {
   CardTitle,
   EmptyState,
   ListToolbar,
-  SelectField,
+  SearchableSelectField,
   StatusBadge,
   TableSkeleton,
   TimedLoadingState,
@@ -32,6 +32,7 @@ import {
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { isString, useWorkspaceState } from "@/lib/workspace-state";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 
 /** 比べる評価の候補の件数（最近の評価の API の上限）。 */
 const COMPARE_OPTIONS_LIMIT = 100;
@@ -258,9 +259,9 @@ export function EvaluationCompare({
         ) : (
           <>
             <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-              <SelectField<string>
+              <SearchableSelectField
+                labels={searchableSelectLabels()}
                 id="evaluation-compare-base"
-                data-testid="evaluation-compare-base"
                 label={t("evaluation.compare.base")}
                 width="lg"
                 value={base}
@@ -268,9 +269,9 @@ export function EvaluationCompare({
                 options={options}
                 onValueChange={setBaseId}
               />
-              <SelectField<string>
+              <SearchableSelectField
+                labels={searchableSelectLabels()}
                 id="evaluation-compare-target"
-                data-testid="evaluation-compare-target"
                 label={t("evaluation.compare.target")}
                 width="lg"
                 value={target}

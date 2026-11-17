@@ -30,6 +30,7 @@ import {
   ExecutionConfirmationField,
   FieldLegend,
   FormGrid,
+  SearchableSelectField,
   SelectField,
   TextareaField,
   TextField,
@@ -54,6 +55,7 @@ import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { APP_ROUTES } from "@/lib/routes";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
+import { searchableSelectLabels } from "@/lib/searchable-select-labels";
 import {
   DbAdminErrorNotice,
   downloadBlob,
@@ -2122,7 +2124,8 @@ function SyntheticWorkspace({
         {/* Select AI のプロファイルは対象の選択なので lg、1 表あたりの行数は数値なので xs（#1891）。 */}
         <FormGrid>
           {/* 生成とテーブル取得は DB Profile の選択が前提（canGenerateSyntheticData）なので必須として示す（#531）。 */}
-          <SelectField
+          <SearchableSelectField
+            labels={searchableSelectLabels()}
             id="data-synthetic-profile"
             label={t("dataTools.syntheticData.profile")}
             required
@@ -2322,10 +2325,10 @@ function SyntheticWorkspace({
         {/* 結果テーブル（表名なので md）と取得件数上限（xs）は FormGrid、ボタン行はその下の全幅（#1891）。 */}
         <div className="border-t border-border pt-3">
         <FormGrid>
-          <SelectField
+          <SearchableSelectField
+            labels={searchableSelectLabels()}
             id="data-synthetic-result-table"
             label={t("dataTools.syntheticData.resultTable")}
-            data-testid="synthetic-result-table-select"
             value={hasValidResultTable ? syntheticResultTable : ""}
             placeholder={resultTableOptions.length === 0 ? t("dataTools.syntheticData.noResultTables") : ""}
             options={resultTableOptions.map((tableName) => ({ value: tableName, label: tableName }))}

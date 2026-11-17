@@ -314,14 +314,14 @@ test.describe("Agent Runtime settings", () => {
         default_vision_model_id: "enterprise-llm",
       },
     });
-    const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
-    const visionDefault = page.getByRole("combobox", { name: "既定の画像対応モデル" });
+    const textDefault = page.getByRole("button", { name: /^既定のテキストモデル/ });
+    const visionDefault = page.getByRole("button", { name: /^既定の画像対応モデル/ });
     await expect(visionDefault).toContainText("業務 RAG 標準");
     await expect(textDefault).toContainText("業務 RAG 標準");
     // 並びはテキスト → Vision で、2 つとも必須（#566）。
     await expectTextBeforeVision(textDefault, visionDefault);
-    await expect(textDefault).toHaveAttribute("aria-required", "true");
-    await expect(visionDefault).toHaveAttribute("aria-required", "true");
+    await expect(textDefault).toHaveAccessibleName(/必須/);
+    await expect(visionDefault).toHaveAccessibleName(/必須/);
     await expectNoHorizontalOverflow(page);
 
     await page.goto("/settings/database");
@@ -348,8 +348,8 @@ test.describe("Agent Runtime settings", () => {
       if (route === "/settings/model") {
         // 375px の縦積みでもテキスト → Vision の順（#566）。
         await expectTextBeforeVision(
-          page.getByRole("combobox", { name: "既定のテキストモデル" }),
-          page.getByRole("combobox", { name: "既定の画像対応モデル" })
+          page.getByRole("button", { name: /^既定のテキストモデル/ }),
+          page.getByRole("button", { name: /^既定の画像対応モデル/ })
         );
       }
     }
