@@ -796,6 +796,8 @@ class AnsweringSettingsData(BaseModel):
     # 実体・別名による検索拡張(#1362。全体設定だけで決める。既定 ON。#5187)。
     entity_expansion_enabled: bool
     entity_expansion_max_chunks: int
+    # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 OFF)。
+    reference_outline_selection_enabled: bool
     section_expansion_enabled: bool
     section_expansion_max_levels: int
     section_expansion_input_token_percent: int
@@ -831,6 +833,7 @@ class AnsweringSettingsUpdate(BaseModel):
 
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
+    reference_outline_selection_enabled: bool | None = None
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
     section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)

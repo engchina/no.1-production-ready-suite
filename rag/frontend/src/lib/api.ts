@@ -2742,6 +2742,8 @@ export interface AnsweringSettingsData {
   graph_expansion_enabled: boolean;
   entity_expansion_enabled: boolean;
   entity_expansion_max_chunks: number;
+  /** 文書全体への参照の参照先を、目次からモデルが選んだ章節で読む（#5263。既定 false）。 */
+  reference_outline_selection_enabled: boolean;
   section_expansion_enabled: boolean;
   section_expansion_max_levels: number;
   section_expansion_input_token_percent: number;

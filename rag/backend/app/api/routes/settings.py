@@ -551,6 +551,10 @@ async def update_answering_settings(
             ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
             ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
             ("rag_entity_expansion_max_chunks", payload.entity_expansion_max_chunks),
+            (
+                "rag_reference_outline_selection_enabled",
+                payload.reference_outline_selection_enabled,
+            ),
             ("rag_section_expansion_enabled", payload.section_expansion_enabled),
             ("rag_section_expansion_max_levels", payload.section_expansion_max_levels),
             (
@@ -569,6 +573,9 @@ async def update_answering_settings(
                     candidate.rag_entity_expansion_enabled
                 ),
                 "RAG_ENTITY_EXPANSION_MAX_CHUNKS": str(candidate.rag_entity_expansion_max_chunks),
+                "RAG_REFERENCE_OUTLINE_SELECTION_ENABLED": _format_env_bool(
+                    candidate.rag_reference_outline_selection_enabled
+                ),
                 "RAG_SECTION_EXPANSION_ENABLED": _format_env_bool(
                     candidate.rag_section_expansion_enabled
                 ),
@@ -615,6 +622,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         graph_expansion_enabled=settings.rag_graph_expansion_enabled,
         entity_expansion_enabled=settings.rag_entity_expansion_enabled,
         entity_expansion_max_chunks=settings.rag_entity_expansion_max_chunks,
+        reference_outline_selection_enabled=settings.rag_reference_outline_selection_enabled,
         section_expansion_enabled=settings.rag_section_expansion_enabled,
         section_expansion_max_levels=settings.rag_section_expansion_max_levels,
         section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,

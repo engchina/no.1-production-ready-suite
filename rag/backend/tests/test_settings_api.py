@@ -3532,6 +3532,32 @@ def test_update_answer_record_settings_persists_retention_and_purges(
     )
 
 
+def test_answering_settings_toggle_reference_outline_selection(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """参照先の目次から章節を選ぶ設定は既定 OFF で、画面から .env と実行中の設定へ反映する。
+
+    #5263。
+    """
+    from app.config import Settings
+
+    assert Settings(_env_file=None).rag_reference_outline_selection_enabled is False
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_reference_outline_selection_enabled", False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    data = client.get("/api/settings/answering").json()["data"]
+    assert data["reference_outline_selection_enabled"] is False
+    response = client.patch(
+        "/api/settings/answering", json={"reference_outline_selection_enabled": True}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["reference_outline_selection_enabled"] is True
+    assert settings.rag_reference_outline_selection_enabled is True
+    assert "RAG_REFERENCE_OUTLINE_SELECTION_ENABLED=true" in env_file.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("value", [0, 6, 21])
 def test_answering_settings_reject_neighbor_count_outside_one_to_five(value: int) -> None:
     """文脈の補完の前後の chunk 数は 1〜5(#5168)。範囲外は 422 で、互換の読み替えはしない。"""
