@@ -665,3 +665,25 @@ def test_a_section_with_chunks_that_returns_nothing_stays_unread(response: secti
     outline, reader = _reader_for(Stub(), section)
     assert reader.read(outline, section) == []
     assert reader.failures[reader.section_key(outline, section)] == sections.STOP_PARTIAL
+
+
+def test_reference_full_read_evidence_is_not_a_section_seed():
+    """参照先の文書を全体で読む退避で足した根拠（参照の印の section_seed が偽。#5263）は起点にしない。"""
+    context = _seed_context("c31a", "c32a")
+    tree = list(context.evidence_tree)
+    child = tree[1].children[0]
+    record = replace(
+        child.record,
+        metadata={**child.record.metadata, "reference_expansion": {"from_chunk_uid": "x", "section_seed": False}},
+    )
+    tree[1] = replace(tree[1], children=(replace(child, record=record),))
+    context = replace(context, evidence_tree=tuple(tree))
+    stub = SectionStub()
+
+    assert sections.seed_chunk_ids(context) == ["c31a"]
+    _expand(context, _settings(), stub)
+    assert stub.outline_calls == ["c31a"]
+    # 印の無い参照の根拠（目次から選んだ章節など）は今どおり起点にする。
+    record = replace(child.record, metadata={**child.record.metadata, "reference_expansion": {"from_chunk_uid": "x"}})
+    tree[1] = replace(tree[1], children=(replace(child, record=record),))
+    assert sections.seed_chunk_ids(replace(context, evidence_tree=tuple(tree))) == ["c31a", "c32a"]
