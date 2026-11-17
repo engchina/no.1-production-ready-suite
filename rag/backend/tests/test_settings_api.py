@@ -3535,13 +3535,13 @@ def test_update_answer_record_settings_persists_retention_and_purges(
 def test_answering_settings_toggle_reference_outline_selection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """参照先の目次から章節を選ぶ設定は既定 OFF で、画面から .env と実行中の設定へ反映する。
+    """参照先の目次から章節を選ぶ設定は既定 ON(#5296)で、画面から .env と実行中の設定へ反映する。
 
     #5263。
     """
     from app.config import Settings
 
-    assert Settings(_env_file=None).rag_reference_outline_selection_enabled is False
+    assert Settings(_env_file=None).rag_reference_outline_selection_enabled is True
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_reference_outline_selection_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)

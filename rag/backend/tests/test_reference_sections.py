@@ -420,14 +420,14 @@ def test_prompt_uses_steps_and_schema_holds_the_field_meaning() -> None:
 async def test_disabled_setting_keeps_the_search_top_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """設定が無効(既定)なら今までどおり、参照先の中を質問で検索した上位 8 件を読む。
+    """設定が無効なら今までどおり、参照先の中を質問で検索した上位 8 件を読む。
 
     目次もモデルも使わない(LLM の呼び出しは増えない)。
     """
     from app.config import Settings
     from app.rag.answer_engine import _REFERENCE_TARGET_CANDIDATES
 
-    assert Settings(_env_file=None).rag_reference_outline_selection_enabled is False
+    assert Settings(_env_file=None).rag_reference_outline_selection_enabled is True
     engine, oracle, sections, llm = _setup(
         monkeypatch, outlines={DOC_A}, targets=[TARGET_A], pick=lambda context: [], enabled=False
     )
