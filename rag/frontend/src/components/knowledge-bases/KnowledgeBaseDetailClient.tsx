@@ -2,10 +2,10 @@
 import { KnowledgeBaseStructureIndex } from "./KnowledgeBaseStructureIndex";
 
 import { FilePlus2, Files, Unlink } from "lucide-react";
-import { useRef, useState } from "react";
+import { type RefObject, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { DocumentPicker, type DocumentPickerSelection } from "@/components/documents/DocumentPicker";
+import { DocumentPickerSheet, type DocumentPickerSelection } from "@/components/documents/DocumentPickerSheet";
 import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { EmptyState } from "@/components/StateViews";
 import { EditorTargetState } from "@/components/layout/EntityLayout";
@@ -19,6 +19,7 @@ import {
   ClearActionButton,
   DEFAULT_PAGE_SIZE,
   FormSkeleton,
+  FormStatus,
   ListSkeleton,
   ListToolbar,
   OffsetPagination,
@@ -137,62 +138,87 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
   );
 }
 
+/** 一部を追加できなかったときに名前を出す文書の数（残りは「ほか N 件」）。 */
+const FAILED_DOCUMENT_NAMES_SHOWN = 5;
+
 /**
- * 「文書を追加」（#600）。共通の文書の選択（`DocumentPicker`）で複数を選び、一度に追加する。
- * すでに所属している文書は「追加済み」で選べなくする。
+ * 「文書を追加」（#600・#5279）。右から出すシート（共通の `ListPickerSheet`）で文書を複数選び、一度に追加する。
+ * すでに所属している文書は「追加済み」で選べなくする。全部追加できたらシートを閉じて Toast で知らせ、
+ * 一部・全部を追加できなかったときはシートを閉じず、追加できなかった文書と理由をシートの中に出す（Toast にしない）。
  */
 function DocumentAssignment({
   id,
+  open,
   knowledgeBase,
+  returnFocusRef,
   onClose,
 }: {
   id: string;
+  open: boolean;
   knowledgeBase: KnowledgeBaseDetail;
-  onClose: (options?: { assigned?: boolean }) => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
 }) {
   const assign = useAssignDocumentsToKnowledgeBase();
+  const [failure, setFailure] = useState<string | null>(null);
+  // 開くたびに前の結果を消す。
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) setFailure(null);
+  }
 
   const handleAssign = (documents: DocumentSummary[], selection: DocumentPickerSelection) => {
+    setFailure(null);
     assign.mutate(
       { id: knowledgeBase.id, documentIds: documents.map((document) => document.id) },
       {
+        // 成功・失敗のどちらでも、所属文書の一覧は hook の onSettled で取り直す。
         onSuccess: () => {
-          toast.success(t("knowledgeBases.toast.assigned"));
-          onClose({ assigned: true });
+          toast.success(t("knowledgeBases.toast.assigned", { count: formatNumber(documents.length) }));
+          onClose();
         },
         onError: (error) => {
-          if (error instanceof AssignDocumentsPartialError) {
-            // 追加できた分は選択から外し、追加できなかった残りだけを残す（もう一度追加できる）。
-            selection.deselect(error.assignedIds);
-            const reason =
-              error.cause instanceof ApiError ? error.cause.message : t("knowledgeBases.error.assign");
-            toast.error(
-              t("knowledgeBases.error.assignPartial", {
-                total: formatNumber(error.total),
-                assigned: formatNumber(error.assignedIds.length),
-                remaining: formatNumber(error.total - error.assignedIds.length),
-                reason,
-              })
-            );
-            return;
-          }
-          toast.error(error instanceof ApiError ? error.message : t("knowledgeBases.error.assign"));
+          const assigned = new Set(error instanceof AssignDocumentsPartialError ? error.assignedIds : []);
+          // 追加できた分は選択から外し、追加できなかった残りだけを残す（すぐもう一度追加できる）。
+          selection.deselect([...assigned]);
+          const cause = error instanceof AssignDocumentsPartialError ? error.cause : error;
+          const reason = cause instanceof ApiError ? cause.message : t("knowledgeBases.error.assign");
+          const failed = documents.filter((document) => !assigned.has(document.id));
+          const names = failed.slice(0, FAILED_DOCUMENT_NAMES_SHOWN).map((document) => document.file_name).join("、");
+          const more = failed.length - FAILED_DOCUMENT_NAMES_SHOWN;
+          const failedList =
+            more > 0
+              ? t("knowledgeBases.error.assignFailedDocumentsMore", { names, count: formatNumber(more) })
+              : t("knowledgeBases.error.assignFailedDocuments", { names });
+          const summary =
+            assigned.size > 0
+              ? t("knowledgeBases.error.assignPartial", {
+                  total: formatNumber(documents.length),
+                  assigned: formatNumber(assigned.size),
+                  remaining: formatNumber(failed.length),
+                })
+              : null;
+          setFailure([summary, reason, failedList].filter(Boolean).join(""));
         },
       }
     );
   };
 
   return (
-    <DocumentPicker
+    <DocumentPickerSheet
+      open={open}
       id={id}
       testId="knowledge-base-add-documents"
-      description={t("knowledgeBases.assignment.hint")}
+      title={t("knowledgeBases.assignment.title")}
       unavailableReason={(document) =>
         documentHasKnowledgeBase(document, knowledgeBase.id) ? t("documentPicker.alreadyAdded") : undefined
       }
       submitting={assign.isPending}
+      status={<FormStatus tone="danger" message={failure} />}
+      returnFocusRef={returnFocusRef}
       onSubmit={handleAssign}
-      onClose={() => onClose()}
+      onClose={onClose}
     />
   );
 }
@@ -244,11 +270,8 @@ function KnowledgeBaseDocuments({
   const total = page?.total ?? 0;
   const load = dataLoadView(documents, { isEmpty: total === 0 });
 
-  const closeAssignment = () => {
-    setAssigning(false);
-    // 閉じたら起点の「文書を追加」へフォーカスを戻す（位置を失わない）。
-    requestAnimationFrame(() => assignButtonRef.current?.focus());
-  };
+  // 閉じたら起点の「文書を追加」へフォーカスを戻す（シートが returnFocusRef へ戻す）。
+  const closeAssignment = () => setAssigning(false);
 
   const handleRemove = async (document: DocumentSummary) => {
     const ok = await confirm({
@@ -294,10 +317,11 @@ function KnowledgeBaseDocuments({
               type="button"
               variant="secondary"
               icon={FilePlus2}
-              aria-expanded={assigning}
-              aria-controls={assigning ? "knowledge-base-add-documents" : undefined}
-              onClick={() => (assigning ? closeAssignment() : setAssigning(true))}
-              data-testid="knowledge-base-add-documents-toggle"
+              // 開くだけ（開閉を切り替えない）。閉じるのはシートの ×・キャンセル・Escape・追加の成功（#5279）。
+              aria-haspopup="dialog"
+              aria-controls="knowledge-base-add-documents"
+              onClick={() => setAssigning(true)}
+              data-testid="knowledge-base-add-documents-open"
             >
               {t("knowledgeBases.assignment.title")}
             </Button>
@@ -310,8 +334,14 @@ function KnowledgeBaseDocuments({
         })}
         testId="knowledge-base-documents-toolbar"
       />
-      {canAssign && assigning ? (
-        <DocumentAssignment id="knowledge-base-add-documents" knowledgeBase={knowledgeBase} onClose={closeAssignment} />
+      {canAssign ? (
+        <DocumentAssignment
+          id="knowledge-base-add-documents"
+          open={assigning}
+          knowledgeBase={knowledgeBase}
+          returnFocusRef={assignButtonRef}
+          onClose={closeAssignment}
+        />
       ) : null}
       {load.phase === "stale" ? (
         <DataLoadStaleNotice

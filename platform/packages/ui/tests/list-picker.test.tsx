@@ -133,6 +133,40 @@ describe("ListPicker", () => {
     expect(host.querySelector('[data-testid="picker-footer"]')?.textContent).toContain("3 / 3 件を表示、選択 1 件");
   });
 
+  it("選べない理由は中立の灰色のバッジで状態（meta）の左に出し、行は元の位置のまま（#5279）", () => {
+    const items = makeItems(3).map((item) => ({ ...item, meta: <span data-testid={`meta-${item.key}`}>索引済み</span> }));
+    items[1] = { ...items[1], disabled: true, disabledReason: "追加済み" };
+    render(<Harness items={items} total={3} />);
+
+    // 並べ替えない・隠さない。
+    expect(options().map((node) => node.getAttribute("aria-posinset"))).toEqual(["1", "2", "3"]);
+    const second = option("doc-0002")!;
+    const reason = second.querySelector<HTMLElement>("[data-list-picker-reason]")!;
+    const badge = reason.querySelector<HTMLElement>("[data-status-variant]")!;
+    expect(badge.getAttribute("data-status-variant")).toBe("neutral");
+    expect(badge.textContent).toBe("追加済み");
+    expect(badge.querySelector("svg")).not.toBeNull();
+    // 状態は右端（行の最後の子）、理由のバッジはその直前。
+    const meta = host.querySelector('[data-testid="meta-doc-0002"]')!.parentElement!;
+    expect(second.lastElementChild).toBe(meta);
+    expect(meta.previousElementSibling).toBe(reason);
+    // 読み上げの説明は見た目の順（理由 → 状態）。
+    const describedBy = (second.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(describedBy).toEqual([reason.id, meta.id]);
+    // 選べる行には理由のバッジを出さない。
+    expect(option("doc-0001")!.querySelector("[data-list-picker-reason]")).toBeNull();
+  });
+
+  it("fill は一覧の高さを行数で決めず、残りの高さまで候補の分だけ伸ばす（#5279）", () => {
+    render(<Harness items={makeItems(3)} fill />);
+    const section = host.querySelector<HTMLElement>('[data-testid="picker"]')!;
+    expect(section.className.split(/\s+/)).toEqual(expect.arrayContaining(["flex", "flex-1", "flex-col", "min-h-0"]));
+    const viewport = host.querySelector<HTMLElement>('[data-testid="picker-scroll-region"]')!;
+    const classes = viewport.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["shrink", "overflow-auto"]));
+    expect(classes.some((name) => name.startsWith("max-h-") || name.startsWith("md:max-h-"))).toBe(false);
+  });
+
   it("キーボード: ↓↑ / Home / End で位置を動かし、Space と Enter で選択を切り替える。選べない候補は切り替わらない", () => {
     const items = makeItems(5);
     items[2] = { ...items[2], disabled: true, disabledReason: "追加済み" };

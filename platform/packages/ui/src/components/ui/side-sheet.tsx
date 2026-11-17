@@ -54,6 +54,21 @@ export interface SideSheetProps {
    * 開いた直後の Escape 1 回で閉じられる（閉じるボタンにフォーカスすると、1 回目の Escape は Tooltip だけを閉じる）。
    */
   initialFocus?: "first" | "dialog";
+  /**
+   * 開いたときにフォーカスする要素（#5279。例: 中の検索欄）。描かれていて、フォーカスできるときは `initialFocus` より優先する。
+   * 開いてすぐ入力する内容（一覧から選んで追加するシートの検索欄）に使う。
+   */
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  /**
+   * sm 未満で全画面にする（#5279）。`wide` は常に全画面になる。`md` の一覧から選ぶシートなど、狭い画面で
+   * 一覧と確定の操作に幅が要るときに使う。
+   */
+  fullScreenBelowSm?: boolean;
+  /**
+   * 本文の下に固定する確定の操作の行（#5279。例:「N 件を追加 / キャンセル」と結果の `FormStatus`）。
+   * 本文だけがスクロールし、この行は常に見える。区切り線の上の境界と余白は部品が持つ。
+   */
+  footer?: ReactNode;
   children: ReactNode;
   className?: string;
   bodyClassName?: string;
@@ -72,6 +87,9 @@ export function SideSheet({
   headerActions,
   pager,
   initialFocus = "first",
+  initialFocusRef,
+  fullScreenBelowSm = false,
+  footer,
   children,
   className,
   bodyClassName,
@@ -90,14 +108,16 @@ export function SideSheet({
       const active = typeof document === "undefined" ? null : document.activeElement;
       openerRef.current = active instanceof HTMLElement ? active : null;
       const panel = panelRef.current;
-      if (panel) ((initialFocus === "dialog" ? null : focusableIn(panel)[0]) ?? panel).focus({ preventScroll: true });
+      const requested = initialFocusRef?.current;
+      if (requested && panel?.contains(requested)) requested.focus({ preventScroll: true });
+      else if (panel) ((initialFocus === "dialog" ? null : focusableIn(panel)[0]) ?? panel).focus({ preventScroll: true });
     } else if (!open && wasOpen.current) {
       const target = returnFocusRef?.current ?? openerRef.current;
       if (target?.isConnected) target.focus({ preventScroll: true });
       openerRef.current = null;
     }
     wasOpen.current = open;
-  }, [open, returnFocusRef, initialFocus]);
+  }, [open, returnFocusRef, initialFocus, initialFocusRef]);
 
   const onPanelKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // 中の部品が自分で処理した Escape（名前の編集の取消・一覧を閉じるなど）では閉じない。
@@ -146,9 +166,11 @@ export function SideSheet({
           "fixed inset-y-0 z-[var(--z-dialog)] flex flex-col bg-surface-overlay text-fg shadow-[var(--shadow-dialog)] outline-none",
           size === "wide"
             ? "w-full max-w-full sm:w-[64rem] sm:max-w-[calc(100vw-3.5rem)]"
-            : size === "md"
-              ? "w-[40rem] max-w-[calc(100vw-3.5rem)]"
-              : "w-[22rem] max-w-[calc(100vw-3.5rem)]",
+            : fullScreenBelowSm
+              ? cn("w-full max-w-full sm:max-w-[calc(100vw-3.5rem)]", size === "md" ? "sm:w-[40rem]" : "sm:w-[22rem]")
+              : size === "md"
+                ? "w-[40rem] max-w-[calc(100vw-3.5rem)]"
+                : "w-[22rem] max-w-[calc(100vw-3.5rem)]",
           left ? "left-0 border-r border-border" : "right-0 border-l border-border",
           "duration-200 ease-out motion-reduce:transition-none",
           // 開くときは visibility を即座に visible にする（遷移させると開いた瞬間にフォーカスを移せない）。
@@ -174,6 +196,11 @@ export function SideSheet({
         <div className={cn("flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3", bodyClassName)}>
           {children}
         </div>
+        {footer ? (
+          <div className="shrink-0 border-t border-border p-3" data-testid={testId ? `${testId}-footer` : undefined}>
+            {footer}
+          </div>
+        ) : null}
       </div>
     </>,
     document.body
