@@ -343,5 +343,5 @@ def test_repository_definitions_are_valid() -> None:
     definitions = cli.read_definitions(cli.DEFAULT_DEFINITIONS)
     assert set(definitions) == {"A", "B"}
     for definition in definitions.values():
-        assert definition["skill_ids"] == ["business-rag-research"]
+        assert definition["skill_ids"] == ["rag-chat"]
         assert definition["enabled"] is True

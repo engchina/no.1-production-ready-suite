@@ -85,7 +85,8 @@ def test_browser_url_path_prefixes_are_in_the_contract() -> None:
 
 def test_search_limit_defaults_come_from_the_contract() -> None:
     """件数の既定（Agent が小さすぎる件数を引き上げる値）は契約の inputSchema にある。"""
-    for name in (support_task.RAG_SEARCH, support_task.RAG_RETRIEVE_EVIDENCE):
+    # rag_chat は件数を受けない（検索・回答プロファイルの設定。evidence_limit は返す件数）。
+    for name in (support_task.RAG_SEARCH,):
         properties = _tools()[name]["inputSchema"]["properties"]
         for argument in support_task.SEARCH_LIMIT_ARGUMENTS:
             assert isinstance(properties[argument]["default"], int), (name, argument)

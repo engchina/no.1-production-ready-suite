@@ -35,7 +35,7 @@ from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
 SKILL_ID = "test1979-skill"
 AGENT_ID = "test1979-agent"
 USER_UUID = "11111111-2222-3333-4444-555555555555"
-EVIDENCE = "rag__rag_retrieve_evidence"
+EVIDENCE = "rag__rag_search"
 QUERY = "nl2sql__nl2sql_query"
 GOAL = "経費精算規程の会食費の 1 人あたりの上限は、モニターの単価の何分の 1 ですか？"
 ABSENT = "会食費の上限は 1 人あたり 10,000 円です。\n\nモニターの単価は資料には記載がありません。"
@@ -53,7 +53,7 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             name=SKILL_ID,
             instructions="資料と業務データで調べて答える。",
             mcp_requirements=[
-                SkillMcpRequirement(server_id="rag", tool_names=["rag_retrieve_evidence"]),
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
                 SkillMcpRequirement(server_id="nl2sql", tool_names=["nl2sql_query"]),
             ],
         )

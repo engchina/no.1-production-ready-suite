@@ -1,11 +1,12 @@
 """RAG の登録済みQ&Aの候補を、利用者が回答前の確認で選ぶ（#5134・#5136）。
 
-`rag_search` / `rag_retrieve_evidence` が候補だけを返したら（`status=approved_faq_candidates`）、
-Agent は候補の質問と「どれでもない（通常どおり回答）」を確認のカードにする（モデルに選ばせない）。
+RAG の回答のツール（`rag_search` / `rag_chat`）が候補だけを返したら
+（`status=approved_faq_candidates`）、Agent は候補の質問と「どれでもない（通常どおり回答）」を
+確認のカードにする（モデルに選ばせない）。
 利用者の選択は次の Run で実行環境が候補を返したツールの `approved_faq_id` / `skip_approved_faq`
 にする（モデルに id を写させない。2 つの引数はモデルに見せない）。利用者に確認しない Run は
-`skip_approved_faq`。`rag_retrieve_evidence` で選んだ Q&A の回答は、資料の根拠と同じくツールの
-結果としてモデルに渡り、回答はモデルが書く（#5136）。
+`skip_approved_faq`。RAG の回答をそのまま返すスキル（#5342）では、候補・選んだ Q&A の回答で Run が
+終わる（モデルは回答を書かない）。
 """
 
 from __future__ import annotations
@@ -26,8 +27,6 @@ from mcp_support import (
     fake_product_mcp,
     rag_approved_faq_answer,
     rag_approved_faq_candidates,
-    rag_evidence_approved_faq_answer,
-    rag_evidence_approved_faq_candidates,
 )
 from pytest import MonkeyPatch
 
@@ -36,7 +35,6 @@ from app.features.agent.answer_evidence import answer_evidence
 from app.features.agent.answer_outcome import answer_outcome
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.confirmation import (
-    APPROVED_FAQ_EVIDENCE_REASON,
     APPROVED_FAQ_ITEM_ID,
     APPROVED_FAQ_NONE_OPTION_ID,
     APPROVED_FAQ_REASON,
@@ -56,7 +54,12 @@ from app.features.agent.runtime import (
     run_support_task,
     runtime_repository,
 )
-from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
+from app.features.agent.skills import (
+    AgentSkillDefinition,
+    FinalAnswerTool,
+    SkillMcpRequirement,
+    skill_registry,
+)
 from app.features.agent.support_task import approved_faq_schema, rag_next_step
 from app.features.agent.tools import ToolCall, ToolPolicy, ToolResult
 from app.settings import get_settings
@@ -341,11 +344,16 @@ def test_choice_and_next_step_are_deterministic() -> None:
 
     schema = {
         "type": "object",
-        "properties": {"query": {}, "approved_faq_id": {}, "skip_approved_faq": {}},
+        "properties": {
+            "query": {},
+            "approved_faq_id": {},
+            "skip_approved_faq": {},
+            "skip_clarification": {},
+        },
         "required": ["query"],
     }
     assert set(approved_faq_schema("rag__rag_search", schema)["properties"]) == {"query"}
-    assert set(approved_faq_schema("rag__rag_retrieve_evidence", schema)["properties"]) == {"query"}
+    assert set(approved_faq_schema("rag__rag_chat", schema)["properties"]) == {"query"}
     assert approved_faq_schema("rag__rag_read_source", schema) is schema
 
 
@@ -370,45 +378,41 @@ def test_candidates_after_a_chosen_answer_do_not_keep_the_card_outcome() -> None
     assert answer_outcome("", steps=steps[:1])["basis"] == "approved_faq_candidates"
 
 
-# ---- rag_retrieve_evidence（#5136） ----
+# ---- rag_chat の回答をそのまま返すスキル（#5342） ----
 
-EVIDENCE_SKILL_ID = "test5136-skill"
-EVIDENCE_AGENT_ID = "test5136-agent"
+CHAT_SKILL_ID = "test5342-chat-skill"
+CHAT_AGENT_ID = "test5342-chat-agent"
 FAQ_ANSWER = "合成の登録済みの回答 B"
+CHAT_ANSWER = "合成のチャットの回答"
 
 
-def _rag_retrieve_evidence(argument: Any) -> dict[str, Any]:
+def _rag_chat(argument: Any) -> dict[str, Any]:
     if argument.approved_faq_id:
-        return rag_evidence_approved_faq_answer(
-            argument.approved_faq_id, CANDIDATES[1][1], FAQ_ANSWER
-        )
+        return rag_approved_faq_answer(argument.approved_faq_id, CANDIDATES[1][1], FAQ_ANSWER)
     if argument.skip_approved_faq:
-        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
+        output["answer"] = CHAT_ANSWER
         return output
-    return rag_evidence_approved_faq_candidates(*CANDIDATES)
+    return rag_approved_faq_candidates(*CANDIDATES)
 
 
 @pytest.fixture
-def evidence_mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
-    """根拠の取得（rag_retrieve_evidence）だけを宣言したスキルの業務 Agent。
-
-    組み込みのスキルと同じ形。
-    """
-    fake = fake_product_mcp(monkeypatch, outputs={"rag_retrieve_evidence": _rag_retrieve_evidence})
+def chat_mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
+    """rag_chat の回答をそのまま返すスキル（組み込みの rag-chat と同じ形）の業務 Agent。"""
+    fake = fake_product_mcp(monkeypatch, outputs={"rag_chat": _rag_chat})
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", False)
     monkeypatch.setattr(builtin_runtime, "_active_policy", lambda: ToolPolicy())
     skill_registry.upsert_custom(
         AgentSkillDefinition(
-            id=EVIDENCE_SKILL_ID,
-            name=EVIDENCE_SKILL_ID,
-            instructions="資料は rag_retrieve_evidence で調べる。",
-            mcp_requirements=[
-                SkillMcpRequirement(server_id="rag", tool_names=["rag_retrieve_evidence"])
-            ],
+            id=CHAT_SKILL_ID,
+            name=CHAT_SKILL_ID,
+            instructions="資料は rag_chat で調べる。",
+            mcp_requirements=[SkillMcpRequirement(server_id="rag", tool_names=["rag_chat"])],
+            final_answer_tools=[FinalAnswerTool(server_id="rag", tool_name="rag_chat")],
         )
     )
     runtime_repository.create_agent(
-        AgentProfile(id=EVIDENCE_AGENT_ID, name=EVIDENCE_AGENT_ID, skill_ids=[EVIDENCE_SKILL_ID])
+        AgentProfile(id=CHAT_AGENT_ID, name=CHAT_AGENT_ID, skill_ids=[CHAT_SKILL_ID])
     )
     try:
         yield fake
@@ -416,75 +420,69 @@ def evidence_mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
         repository: Any = runtime_repository
         with repository._lock:  # noqa: SLF001 - テストの後始末
             for run_id in [
-                run_id
-                for run_id, run in repository._runs.items()
-                if run.agent_id == EVIDENCE_AGENT_ID
+                run_id for run_id, run in repository._runs.items() if run.agent_id == CHAT_AGENT_ID
             ]:
                 repository._runs.pop(run_id)
         with contextlib.suppress(KeyError, ValueError):
-            runtime_repository.delete_agent(EVIDENCE_AGENT_ID)
+            runtime_repository.delete_agent(CHAT_AGENT_ID)
         with contextlib.suppress(KeyError, ValueError):
-            skill_registry.remove(EVIDENCE_SKILL_ID)
+            skill_registry.remove(CHAT_SKILL_ID)
 
 
-def _retrieve(call_id: str, **arguments: Any) -> list[Any]:
-    return [
-        function_call(
-            "rag__rag_retrieve_evidence", {"query": QUESTION, **arguments}, call_id=call_id
-        )
-    ]
+def _chat(call_id: str, **arguments: Any) -> list[Any]:
+    return [function_call("rag__rag_chat", {"query": QUESTION, **arguments}, call_id=call_id)]
 
 
-def _evidence_run(metadata: dict[str, Any] | None = None) -> RunState:
+def _chat_run(metadata: dict[str, Any] | None = None) -> RunState:
     run = runtime_repository.create_builtin_run(
-        RunCreateRequest(goal=QUESTION, agent_id=EVIDENCE_AGENT_ID, metadata=metadata or {}),
+        RunCreateRequest(goal=QUESTION, agent_id=CHAT_AGENT_ID, metadata=metadata or {}),
         created_by_user_uuid=USER_UUID,
     )
     anyio.run(builtin_runtime.execute_run, run.id)
     return runtime_repository.get_run(run.id)
 
 
-def test_retrieve_candidates_become_the_same_card(
-    monkeypatch: MonkeyPatch, evidence_mcp: FakeProductMcp
-) -> None:
-    model = _script(
-        monkeypatch,
-        _retrieve("call-1", search_answer_profile_id=PROFILE, skip_approved_faq=True),
-        [assistant_message("候補から当てはまる Q&A を選んでください。")],
-    )
-    first = _evidence_run()
+def _answer_text(run: RunState) -> str:
+    answer = next(item for item in run.artifacts if item.kind == "answer")
+    assert isinstance(answer.content, dict)
+    return str(answer.content["text"])
 
-    assert first.status == RunStatus.COMPLETED
-    tool = next(
+
+def test_chat_candidates_end_the_run_with_the_card(
+    monkeypatch: MonkeyPatch, chat_mcp: FakeProductMcp
+) -> None:
+    # RAG の結果で Run が終わる（モデルを呼び直さない。台本はツールの呼び出しの 1 回だけ）。
+    model = _script(monkeypatch, _chat("call-1", search_answer_profile_id=PROFILE))
+    first = _chat_run()
+
+    assert first.status == RunStatus.COMPLETED, first.events[-1].message
+    assert len(model.calls) == 1
+    properties = next(
         tool
         for tool in model.calls[0].tools
-        if isinstance(tool, FunctionTool) and tool.name == "rag__rag_retrieve_evidence"
+        if isinstance(tool, FunctionTool) and tool.name == "rag__rag_chat"
+    ).params_json_schema["properties"]
+    assert not {"approved_faq_id", "skip_approved_faq", "skip_clarification"} & set(properties)
+    [sent] = chat_mcp.calls_of("rag_chat")
+    assert not {"approved_faq_id", "skip_approved_faq", "skip_clarification"} & set(
+        sent["arguments"]
     )
-    properties = tool.params_json_schema["properties"]
-    assert "approved_faq_id" not in properties and "skip_approved_faq" not in properties
-    [sent] = evidence_mcp.calls_of("rag_retrieve_evidence")
-    assert "skip_approved_faq" not in sent["arguments"]
-    assert _tool_output(model, 1, "call-1")["next_step"]["action"] == "wait_for_approved_faq_choice"
     [card] = first.confirmations
-    assert (card.source, card.can_skip) == ("rag", False)
     [item] = card.items
-    assert item.reason == APPROVED_FAQ_EVIDENCE_REASON
+    assert item.reason == APPROVED_FAQ_REASON
     assert [option.label for option in item.options][-1] == "どれでもない（通常どおり回答）"
+    assert _answer_text(first)
     assert (_outcome(first)["value"], _outcome(first)["basis"]) == (
         "needs_clarification",
         "approved_faq_candidates",
     )
 
 
-def test_retrieve_chosen_faq_answer_reaches_the_model_as_a_tool_result(
-    monkeypatch: MonkeyPatch, evidence_mcp: FakeProductMcp
+def test_chat_chosen_faq_answer_is_the_final_answer(
+    monkeypatch: MonkeyPatch, chat_mcp: FakeProductMcp
 ) -> None:
-    _script(
-        monkeypatch,
-        _retrieve("call-1", search_answer_profile_id=PROFILE),
-        [assistant_message("候補から当てはまる Q&A を選んでください。")],
-    )
-    first = _evidence_run()
+    _script(monkeypatch, _chat("call-1", search_answer_profile_id=PROFILE))
+    first = _chat_run()
     [card] = first.confirmations
     outcome = runtime_repository.decide_confirmation(
         first.id,
@@ -494,60 +492,42 @@ def test_retrieve_chosen_faq_answer_reaches_the_model_as_a_tool_result(
     )
     assert outcome.next_run is not None
 
-    model = _script(
-        monkeypatch,
-        _retrieve("call-2"),
-        _retrieve("call-3", search_answer_profile_id=PROFILE),
-        [assistant_message("モデルが書いた回答")],
-    )
+    model = _script(monkeypatch, _chat("call-2"))
     second = _execute(outcome.next_run.id)
 
-    assert second.status == RunStatus.COMPLETED
-    calls = evidence_mcp.calls_of("rag_retrieve_evidence")[1:]
+    assert second.status == RunStatus.COMPLETED, second.events[-1].message
+    assert len(model.calls) == 1
+    calls = chat_mcp.calls_of("rag_chat")[1:]
     assert calls[0]["arguments"]["approved_faq_id"] == "faq-2"
     assert calls[0]["arguments"]["search_answer_profile_id"] == PROFILE
-    assert calls[1]["arguments"]["skip_approved_faq"] is True
     instructions = str(model.calls[0].system_instructions)
     assert f"登録済みQ&A「{CANDIDATES[1][1]}」を選びました" in instructions
-    assert "rag_retrieve_evidence を呼び" in instructions
-    # 選んだ Q&A の回答は、ツールの結果としてモデルに渡る（回答はモデルが書く）。
-    result = _tool_output(model, 1, "call-2")
-    assert result["approved_faq"] == {
-        "id": "faq-2",
-        "question": CANDIDATES[1][1],
-        "answer": FAQ_ANSWER,
-    }
-    assert "next_step" not in result and "guide_check" not in result
-    answer = next(item for item in second.artifacts if item.kind == "answer")
-    assert isinstance(answer.content, dict)
-    assert "モデルが書いた回答" in str(answer.content)
+    # 登録済みの回答が、そのまま Run の回答になる（モデルは書かない）。
+    assert _answer_text(second) == FAQ_ANSWER
     assert second.confirmations == []
-    # 根拠が登録済みQ&Aだったことが、回答の対応と回答の根拠に残る。
     recorded = _outcome(second)
-    assert (recorded["value"], recorded["basis"]) == ("answered", "approved_faq")
+    assert (recorded["value"], recorded["basis"]) == ("answered", "rag_chat")
     assert "approved_faq" in recorded["signals"]
-    items = answer_evidence(second.steps, "モデルが書いた回答")["items"]
-    faq_items = [item for item in items if item.get("approved_faq_id") == "faq-2"]
-    assert len(faq_items) == 1
-    assert faq_items[0]["file_name"] == "登録済みQ&A"
-    assert faq_items[0]["excerpt"] == FAQ_ANSWER
-    assert faq_items[0]["section_title"] == CANDIDATES[1][1]
-    assert faq_items[0]["cited"] is True
+    evidence = next(item for item in second.artifacts if item.kind == "answer_evidence")
+    assert isinstance(evidence.content, dict)
+    [faq_item] = [
+        item for item in evidence.content["items"] if item.get("approved_faq_id") == "faq-2"
+    ]
+    assert (faq_item["excerpt"], faq_item["cited"]) == (FAQ_ANSWER, True)
 
 
-def test_retrieve_runs_that_do_not_ask_retrieve_with_skip(
-    monkeypatch: MonkeyPatch, evidence_mcp: FakeProductMcp
+def test_chat_runs_that_do_not_ask_skip_candidates_and_clarification(
+    monkeypatch: MonkeyPatch, chat_mcp: FakeProductMcp
 ) -> None:
-    _script(
-        monkeypatch,
-        _retrieve("call-1", search_answer_profile_id=PROFILE),
-        [assistant_message("根拠付き回答")],
-    )
-    run = _evidence_run(metadata={EVALUATION_DRY_RUN_KEY: True})
+    _script(monkeypatch, _chat("call-1", search_answer_profile_id=PROFILE))
+    run = _chat_run(metadata={EVALUATION_DRY_RUN_KEY: True})
 
-    sent = evidence_mcp.calls_of("rag_retrieve_evidence")[-1]["arguments"]
+    sent = chat_mcp.calls_of("rag_chat")[-1]["arguments"]
     assert sent["skip_approved_faq"] is True
+    # 確認を返させず、RAG が残った条件を分岐で答える。
+    assert sent["skip_clarification"] is True
     assert run.confirmations == []
+    assert _answer_text(run) == CHAT_ANSWER
 
 
 def test_rag_search_chosen_faq_is_recorded_as_the_basis() -> None:

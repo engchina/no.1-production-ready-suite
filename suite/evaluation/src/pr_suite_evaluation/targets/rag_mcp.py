@@ -1,24 +1,24 @@
-"""Target: RAG の検索・回答を公開の RAG MCP（`rag_search`）で呼ぶ adapter（#3417）。
+"""Target: RAG の検索・回答を公開の RAG MCP（`rag_chat` / `rag_search`）で呼ぶ adapter（#3417）。
 
 業務 Agent の Target（`agent_mcp`）と同じ Dataset・Observation・Evaluator・Report で、RAG の
 A（業務ガイドなし。ナレッジベースを指定）と C（業務ガイドあり。検索・回答プロファイルを指定）を
 採点する（1 つの採点器を複数の Target に当てる）。
 
-- 呼ぶのは公開の MCP（`POST /api/mcp`。契約は `platform/contracts/mcp/rag-tools.json`）の
-  `rag_search` だけで、利用者が発行した API キー（使える製品に `rag`）で呼ぶ。RAG の画面の
-  API・DB・コードは読まない。
-- ケースの既知の条件（`conditions`）は `rag_search` の `conditions` に構造化して渡す。複数往復の
-  ケース（`turns`）は、`rag_search` が会話を持たないので、最初の質問とそれまでの返答をつないだ
-  質問と、返答までに分かった条件で呼び直す（契約の「clarifications に答えた値を conditions に
-  入れて呼び直す」）。
+- 呼ぶのは公開の MCP（`POST /api/mcp`。契約は `platform/contracts/mcp/rag-tools.json`）の回答の
+  ツールだけで、利用者が発行した API キー（使える製品に `rag`）で呼ぶ。RAG の画面の API・DB・
+  コードは読まない。C（検索・回答プロファイルだけを指定）は RAG のチャットと同じ流れの
+  `rag_chat`、A（ナレッジベース・件数・filters を指定）は検索の `rag_search`（#5342）。
+- ケースの既知の条件（`conditions`）は `conditions` に構造化して渡す。複数往復のケース（`turns`）
+  は、回答のツールが会話を持たないので、最初の質問とそれまでの返答をつないだ質問と、返答までに
+  分かった条件で呼び直す（契約の「clarifications に答えた値を conditions に入れて呼び直す」）。
 - 旧版も検索して答えるケース（`include_superseded`）は `include_superseded: true` を渡す。
 - 登録済みQ&Aの候補は返させない（`skip_approved_faq: true`。評価するのは
   検索・回答。#5134）。
-- 引用は `rag_search` の `evidence[]`（AI に渡した資料の箇所。返った順。`evidence_limit` は既定で
+- 引用は回答のツールの `evidence[]`（AI に渡した資料の箇所。返った順。`evidence_limit` は既定で
   契約の上限 50）。本文は `excerpt`（`text_omitted` は本文を省いた根拠）、場所は `locator`。
 
-観測（`CaseObservation`）には `rag_search` の出力をそのまま保存し、採点の入力への変換
-（`rag_case_view`）は採点のときに行う。
+観測（`CaseObservation`）には回答のツールの出力をそのまま保存し（payload の key はツールの名前）、
+採点の入力への変換（`rag_case_view`）は採点のときに行う。
 """
 
 from __future__ import annotations
@@ -39,7 +39,9 @@ from pr_suite_evaluation.views import CaseFailure, CaseView, Citation, TurnView
 TARGET_KIND = "rag_mcp"
 # RAG の経路の規則の版（rag_v1: 公開の rag_search の出力だけで採点する最初の版。#3417）。
 RULES_VERSION = "rag_v1"
-TOOL = "rag_search"
+RAG_SEARCH_TOOL = "rag_search"
+RAG_CHAT_TOOL = "rag_chat"
+ANSWER_TOOLS = (RAG_CHAT_TOOL, RAG_SEARCH_TOOL)
 # 読める出力の版（契約 rag-tools.json の rag_search の schema_version。#3240 で
 # rag_validate_answer の段落の位置・top_k の既定・失敗の code の一覧を足して 37（rag_search の
 # 出力の形は 36 と同じ）、#3546 で安全チェックの未完了 guardrail_degraded と根拠 0 件の段
@@ -49,13 +51,15 @@ TOOL = "rag_search"
 # #5125 で rag_retrieve_evidence の planning の契約を削除して 44
 # 〔rag_search の出力の形は 38 と同じ〕）、#5134 で登録済みQ&Aを rag_search に統合して 45
 # （評価は skip_approved_faq で呼び、候補の状態は受け取らない）、#5136 で登録済みQ&Aを
-# rag_retrieve_evidence にも入れて 46〔rag_search の出力の形は 45 と同じ〕。
+# rag_retrieve_evidence にも入れて 46〔rag_search の出力の形は 45 と同じ〕。#5339 で足した
+# rag_chat の出力の形は 46 の rag_search と同じ。
 RAG_SEARCH_SCHEMA_VERSION = 46
 # 返す根拠の上限（契約の evidence_limit の maximum）。
 DEFAULT_EVIDENCE_LIMIT = 50
 MAX_EVIDENCE_LIMIT = 50
-# rag_search は回答まで同期で返す（1 回 50〜110 秒）。HTTP の timeout はこれより長くする。
-DEFAULT_REQUEST_TIMEOUT_SECONDS = 600.0
+# 回答のツールは回答まで同期で返す（RAG の回答の上限 rag_answer_timeout_seconds は最大 1200 秒で、
+# ツールの処理の全体がその 1 つの期限に入る。#5339）。HTTP の timeout はこれより長くする（#5342）。
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 1800.0
 MAX_CONDITIONS = 30
 OUTCOME_SOURCE_ANSWER = "rag_answer"
 
@@ -95,6 +99,18 @@ class RagTargetConfig:
         if not 1 <= self.evidence_limit <= MAX_EVIDENCE_LIMIT:
             raise ValueError(f"evidence_limit は 1〜{MAX_EVIDENCE_LIMIT} にしてください。")
 
+    @property
+    def tool(self) -> str:
+        """呼ぶ回答のツール（検索・回答プロファイルだけなら rag_chat、それ以外は rag_search）。"""
+        if (
+            self.search_answer_profile_id
+            and not self.knowledge_base_ids
+            and self.top_k is None
+            and not self.filters
+        ):
+            return RAG_CHAT_TOOL
+        return RAG_SEARCH_TOOL
+
     def provenance(self) -> dict[str, Any]:
         return {
             "kind": TARGET_KIND,
@@ -104,7 +120,7 @@ class RagTargetConfig:
             "top_k": self.top_k,
             "evidence_limit": self.evidence_limit,
             "filters": dict(sorted(self.filters.items())),
-            "output_schema_versions": {TOOL: RAG_SEARCH_SCHEMA_VERSION},
+            "output_schema_versions": {self.tool: RAG_SEARCH_SCHEMA_VERSION},
         }
 
 
@@ -121,7 +137,7 @@ def case_requests(case: Case) -> list[tuple[str, dict[str, str]]]:
 
 
 class RagMcpTarget:
-    """評価のケースを公開の RAG MCP の `rag_search` で流し、出力を観測として返す。
+    """評価のケースを公開の RAG MCP の回答のツールで流し、出力を観測として返す。
 
     `clock` は往復の時間を測る時計（テストで差し替える）。
     """
@@ -149,6 +165,7 @@ class RagMcpTarget:
             arguments["original_question"] = query
         if self._config.search_answer_profile_id:
             arguments["search_answer_profile_id"] = self._config.search_answer_profile_id
+        # rag_chat はナレッジベース・件数・filters を受けない（検索・回答プロファイルの設定）。
         if self._config.knowledge_base_ids:
             arguments["knowledge_base_ids"] = list(self._config.knowledge_base_ids)
         if self._config.top_k is not None:
@@ -163,17 +180,18 @@ class RagMcpTarget:
 
     def run_case(self, case: Case) -> CaseObservation:
         observation = CaseObservation(case_id=case.id, target_kind=TARGET_KIND)
+        tool = self._config.tool
         for index, (query, conditions) in enumerate(case_requests(case)):
             started = self._clock()
             arguments = self._arguments(case, query, conditions)
             request = {
                 "utterance": index,
-                "tool": TOOL,
+                "tool": tool,
                 "conditions": sorted(conditions),
                 "include_superseded": case.include_superseded,
             }
             try:
-                output = self._mcp.call(TOOL, arguments, schema_version=RAG_SEARCH_SCHEMA_VERSION)
+                output = self._mcp.call(tool, arguments, schema_version=RAG_SEARCH_SCHEMA_VERSION)
             except (TargetError, httpx.HTTPError) as error:
                 error_type = getattr(error, "error_type", None)
                 observation.turns.append(
@@ -196,9 +214,9 @@ class RagMcpTarget:
                     target_status=str(output.get("outcome") or ""),
                     elapsed_ms=elapsed,
                     refs={"trace_id": str(output.get("trace_id") or "") or None},
-                    output_versions={TOOL: RAG_SEARCH_SCHEMA_VERSION},
+                    output_versions={tool: RAG_SEARCH_SCHEMA_VERSION},
                     request=request,
-                    payload={TOOL: output},
+                    payload={tool: output},
                 )
             )
         return observation
@@ -208,7 +226,7 @@ class RagMcpTarget:
 
 
 def evidence_citations(output: Mapping[str, Any]) -> tuple[Citation, ...]:
-    """`rag_search` の根拠（返った順・重複なし）。文書と chunk の ID の無い根拠は数えない。"""
+    """回答のツールの根拠（返った順・重複なし）。文書と chunk の ID の無い根拠は数えない。"""
     citations: list[Citation] = []
     seen: set[tuple[str, str]] = set()
     for item in _records(output.get("evidence")):
@@ -234,8 +252,13 @@ def evidence_citations(output: Mapping[str, Any]) -> tuple[Citation, ...]:
     return tuple(citations)
 
 
+def _payload(turn: TurnObservation) -> Mapping[str, Any]:
+    """往復の回答のツールの出力（payload の key はツールの名前）。"""
+    return next((turn.payload[tool] for tool in ANSWER_TOOLS if turn.payload.get(tool)), {})
+
+
 def _turn_view(turn: TurnObservation) -> TurnView:
-    output = turn.payload.get(TOOL) or {}
+    output = _payload(turn)
     outcome = output.get("outcome")
     known = outcome if isinstance(outcome, str) and outcome in OUTCOMES else None
     return TurnView(
@@ -290,7 +313,7 @@ def target_summary(
     sources: dict[str, int] = {}
     for case in observations:
         for turn in case.turns:
-            output = turn.payload.get(TOOL) or {}
+            output = _payload(turn)
             view = _turn_view(turn) if turn.status == "completed" else None
             if view and view.outcome_source:
                 sources[view.outcome_source] = sources.get(view.outcome_source, 0) + 1

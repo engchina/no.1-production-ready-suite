@@ -123,7 +123,7 @@ def test_single_scope_hides_the_profile_argument_from_the_model() -> None:
         },
         "required": ["query", "search_answer_profile_id"],
     }
-    single = scoped_input_schema("rag__rag_lookup_guides", schema, {"rag": _scope("bv-sales")})
+    single = scoped_input_schema("rag__rag_chat", schema, {"rag": _scope("bv-sales")})
     assert set(single["properties"]) == {"query", "knowledge_base_ids"}
     assert single["required"] == ["query"]
     searched = scoped_input_schema("rag__rag_search", schema, {"rag": _scope("bv-sales")})
@@ -426,7 +426,7 @@ def test_single_rag_profile_raises_small_top_k_to_the_default(
         monkeypatch,
         [
             function_call(
-                "rag__rag_retrieve_evidence",
+                "rag__rag_search",
                 {"query": "システム台帳 販売管理システム 担当部署", "top_k": 5},
                 call_id="call-1",
             )
@@ -437,13 +437,13 @@ def test_single_rag_profile_raises_small_top_k_to_the_default(
 
     run = runtime_repository.get_run(run_id)
     assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    [call] = mcp.calls_of("rag_retrieve_evidence")
+    [call] = mcp.calls_of("rag_search")
     assert _scope_arguments(call) == {
         "query": "システム台帳 販売管理システム 担当部署",
         "top_k": 30,
         "search_answer_profile_id": "bv-sales",
     }
-    params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema
+    params = _tools(model)["rag__rag_search"].params_json_schema
     assert "search_answer_profile_id" not in params["properties"]
     assert "多段の質問では省略する" in params["properties"]["top_k"]["description"]
     output = next(

@@ -444,8 +444,8 @@ def test_superseded_cases_record_whether_the_agent_searched_old_versions() -> No
     searched = _observation(
         "run-1",
         tool_calls=[
-            _call("rag_retrieve_evidence", include_superseded=False),
-            _call("rag_retrieve_evidence", include_superseded=True),
+            _call("rag_chat", include_superseded=False),
+            _call("rag_chat", include_superseded=True),
             _call("rag_search", status="failed", include_superseded=True),
             _call("rag_read_source"),
         ],
@@ -472,7 +472,7 @@ def test_superseded_cases_record_whether_the_agent_searched_old_versions() -> No
     record = _evaluate(fake, cases)
     assert [run["superseded_searches"] for run in record.target["runs"]] == [1, 0, 0]
     assert record.target["runs"][0]["tool_calls"] == {
-        "rag_retrieve_evidence": 2,
+        "rag_chat": 2,
         "rag_search": 1,
         "rag_read_source": 1,
     }

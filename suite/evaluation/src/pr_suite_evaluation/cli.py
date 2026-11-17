@@ -160,7 +160,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--request-timeout",
         type=float,
         default=rag_mcp.DEFAULT_REQUEST_TIMEOUT_SECONDS,
-        help="rag_search の 1 回の待ちの上限（秒）",
+        help="回答のツール（rag_chat・rag_search）の 1 回の待ちの上限（秒）",
     )
 
     score = commands.add_parser("score", help="保存した観測を採点し直す（製品を呼ばない）")

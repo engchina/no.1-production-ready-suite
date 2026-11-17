@@ -2530,6 +2530,36 @@ def test_compact_outline_lists_sections_with_leads_for_numbered_titles(
     ]
 
 
+def test_compact_outline_lead_chars_default_reads_the_setting(
+    auth: ProductionAuth,
+    document_oracle: type[_DocumentOracle],
+    numbered_sections: None,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """lead_chars の省略時の値と inputSchema の default は設定 rag_outline_lead_chars（#5345）。
+
+    回答の目次からの章節の選択と同じ 1 つの設定を読み、import 時に固定しない。
+    """
+    del document_oracle, numbered_sections
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+    schema = mcp_tools.OutlineInput.model_json_schema()["properties"]["lead_chars"]
+    assert (schema["default"], schema["minimum"], schema["maximum"]) == (60, 0, 200)
+    from app import config
+
+    configured = config.get_settings().model_copy(update={"rag_outline_lead_chars": 3})
+    monkeypatch.setattr(config, "get_settings", lambda: configured)
+
+    body = _call("rag_outline", {"document_id": "d1", "format": "compact"}, headers)[
+        "structuredContent"
+    ]
+
+    assert body["lines"][-1] == "  第三条｜承認の"
+    assert mcp_tools.OutlineInput.model_json_schema()["properties"]["lead_chars"]["default"] == 3
+    # 明示した値は設定より優先する。
+    assert mcp_tools.OutlineInput(document_id="d1", lead_chars=0).lead_chars == 0
+
+
 def test_compact_outline_stops_at_the_char_limit_and_rejects_unknown_sections(
     auth: ProductionAuth,
     document_oracle: type[_DocumentOracle],

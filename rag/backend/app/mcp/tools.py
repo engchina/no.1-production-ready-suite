@@ -365,10 +365,24 @@ READ_SOURCE_MAX_CHARS_LIMIT = 20000
 # rag_read_document が 1 回で読む chunk の数の単位と、rag_outline が返す章節の上限（#1332）。
 READ_DOCUMENT_BATCH = 50
 OUTLINE_MAX_SECTIONS = 300
-# rag_outline の compact（条の目録。#2252）の文字数の上限と、本文の書き出しの文字数。
+# rag_outline の compact（条の目録。#2252）の文字数の上限と、本文の書き出しの文字数の上限。
+# 書き出しの文字数の省略時の値は設定 rag_outline_lead_chars（回答の目次の選択と共有。#5345）。
 OUTLINE_COMPACT_MAX_CHARS = 40000
-OUTLINE_LEAD_CHARS_DEFAULT = 60
 OUTLINE_LEAD_CHARS_MAX = 200
+
+
+def _outline_lead_chars_default() -> int:
+    """import 時に固定せず、現在の設定から省略時の値を得る（#5345。top_k の既定と同じ）。"""
+    from app import config
+
+    return config.get_settings().rag_outline_lead_chars
+
+
+def _outline_lead_chars_default_schema(schema: dict[str, Any]) -> None:
+    """公開する契約にも現在の既定を示す（rag_search の top_k と同じ方式）。"""
+    schema["default"] = _outline_lead_chars_default()
+
+
 # rag_read_section が返す子の章節の上限と、up で上がれる段の上限（章節の階層は 1〜6）。
 READ_SECTION_MAX_CHILDREN = 50
 READ_SECTION_MAX_UP = 6
@@ -944,7 +958,8 @@ class OutlineInput(BaseModel):
         description="この章節（rag_outline の section_id）の下だけを返す。省略すると文書全体。",
     )
     lead_chars: int = Field(
-        default=OUTLINE_LEAD_CHARS_DEFAULT,
+        default_factory=_outline_lead_chars_default,
+        json_schema_extra=_outline_lead_chars_default_schema,
         ge=0,
         le=OUTLINE_LEAD_CHARS_MAX,
         description=(

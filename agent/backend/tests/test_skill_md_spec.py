@@ -18,7 +18,7 @@ import skills_ref  # type: ignore[import-untyped]  # 型の情報（py.typed）�
 import yaml
 
 from app.features.agent.skills import BUILTIN_SKILL_IDS, BUILTIN_SKILLS_DIR, skill_registry
-from app.features.agent.skills_loader import METADATA_MCP_TOOLS
+from app.features.agent.skills_loader import METADATA_FINAL_ANSWER_TOOLS, METADATA_MCP_TOOLS
 
 REPO_ROOT = BUILTIN_SKILLS_DIR.parent
 CONTRACTS = REPO_ROOT / "platform/contracts/mcp"
@@ -95,6 +95,21 @@ def test_skill_mcp_tools_exist_in_the_mcp_contracts(skill_dir: Path) -> None:
     assert sorted(
         f"{item.server_id}:{tool}" for item in skill.mcp_requirements for tool in item.tool_names
     ) == sorted(declared)
+
+
+@pytest.mark.parametrize("skill_dir", SKILL_DIRS, ids=SKILL_NAMES)
+def test_final_answer_tools_are_declared_mcp_tools(skill_dir: Path) -> None:
+    """回答をそのまま返すツール（#5342）は、宣言した MCP のツールで、RAG の回答のツールだけ。"""
+    data, _ = _frontmatter(skill_dir)
+    metadata = data["metadata"]
+    assert isinstance(metadata, dict)
+    declared = set(str(metadata[METADATA_MCP_TOOLS]).split())
+    finals = set(str(metadata.get(METADATA_FINAL_ANSWER_TOOLS) or "").split())
+    assert finals <= declared
+    assert finals <= {"rag:rag_search", "rag:rag_chat"}
+    skill = skill_registry.get(skill_dir.name)
+    assert skill is not None
+    assert {f"{item.server_id}:{item.tool_name}" for item in skill.final_answer_tools} == finals
 
 
 # 組み込み Runtime だけがツールの結果に足すフィールド（外部の Agent には返らない）。スキルの本文では

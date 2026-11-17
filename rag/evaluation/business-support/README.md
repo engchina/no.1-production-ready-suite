@@ -51,7 +51,7 @@ A・C・D は製品横断の評価（`suite/evaluation`。[README](../../../suit
 |---|---|---|
 | A | 業務ガイドなし（ナレッジベースの指定） | `suite-evaluation run --target rag-mcp --knowledge-base-id` |
 | C | 業務ガイドあり（検索・回答プロファイルを指定。#1249） | `suite-evaluation run --target rag-mcp --search-answer-profile-id` |
-| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `business-rag-research`）の Run | `suite-evaluation run --target agent-mcp --agent-id` |
+| D | C と同じ検索・回答プロファイルを使う業務 Agent（スキル `rag-chat`）の Run | `suite-evaluation run --target agent-mcp --agent-id` |
 
 `evaluation_corpus_cli` に `--guides` を渡すと、資料を取り込んだナレッジベースを参照する検索・回答プロファイルを作り、
 `support-guides.json`（参照の `file:` は取り込んだ文書の ID に置き換える）を取り込んで公開します（出力にナレッジベースと
@@ -74,7 +74,7 @@ uv run suite-evaluation run "$SET" --document-map "$MAP" --target rag-mcp \
 uv run suite-evaluation run "$SET" --document-map "$MAP" --target rag-mcp \
   --mcp-url http://127.0.0.1:8000/api/mcp --search-answer-profile-id <検索・回答プロファイル> --output ../../tmp/eval/c.json
 # D（業務 Agent の Run。公開済みの業務 Agent を ID で指定する。業務 Agent は画面で、C と同じ検索・回答プロファイルを
-# データの範囲にしてスキル business-rag-research を付けて作り、公開しておく）
+# データの範囲にしてスキル rag-chat を付けて作り、公開しておく）
 uv run suite-evaluation run "$SET" --document-map "$MAP" --target agent-mcp \
   --mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \
   --guides ../../rag/evaluation/business-support/support-guides.json --output ../../tmp/eval/d.json

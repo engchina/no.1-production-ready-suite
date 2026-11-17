@@ -4,10 +4,13 @@ Production Ready RAG・NL2SQL の MCP を使って調べるスキル。組み込
 
 | スキル | 使う MCP サーバー | 使う場面 |
 |---|---|---|
-| [`business-rag-research`](./business-rag-research/SKILL.md)（業務 RAG 調査） | `rag` | 社内の規程・手順書・台帳を検索し、根拠（文書名と節・頁）を示して答える |
+| [`rag-chat`](./rag-chat/SKILL.md)（RAG チャット） | `rag` | 社内の資料に、RAG のチャットと同じ流れ（登録済みQ&A・業務ガイド・根拠の拡張）で答える。RAG の回答をそのまま返す |
+| [`rag-search`](./rag-search/SKILL.md)（RAG 検索） | `rag` | 社内の資料を基本の検索（登録済みQ&A・業務ガイド・根拠の拡張なし）で調べる。RAG の回答をそのまま返す |
+| [`rag-chat-and-data`](./rag-chat-and-data/SKILL.md)（RAG チャット＋データ） | `rag`・`nl2sql` | 資料（`rag_chat`）と業務データの両方が要る調査。RAG の回答と業務データの値を合わせて答える |
+| [`rag-search-and-data`](./rag-search-and-data/SKILL.md)（RAG 検索＋データ） | `rag`・`nl2sql` | 資料（`rag_search`）と業務データの両方が要る調査 |
 | [`structured-data-query`](./structured-data-query/SKILL.md)（構造化データ照会） | `nl2sql` | 業務データの件数・金額・一覧を SQL で照会する |
-| [`rag-and-structured-data`](./rag-and-structured-data/SKILL.md)（資料とデータの横断調査） | `rag`・`nl2sql` | 資料と業務データの両方が要る調査 |
-| [`article-catalog-lookup`](./article-catalog-lookup/SKILL.md)（条の目録から根拠を探す） | `rag` | 条で構成された文書（法令・規程の XML ツリー JSON など）の根拠の条が検索で当たらないとき、条の目録から選んで読む（`business-rag-research` と一緒に使う） |
+
+RAG だけのスキル（`rag-chat`・`rag-search`）は metadata の `production-ready-final-answer-tools` に回答のツールを宣言し、組み込みの Agent はそのツールの回答（登録済みQ&Aの候補・業務ガイドの確認を含む）をそのまま Run の回答にする（回答の書き方は RAG の検索・回答プロファイルで設定する）。
 
 このディレクトリは Claude Code の plugin `production-ready-skills`（[`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json)）でもあり、repo 直下の [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json)（marketplace `production-ready-suite`）が配る。
 
@@ -30,7 +33,7 @@ claude plugin list   # production-ready-skills@production-ready-suite が enable
 - Claude Code の中では `/plugin marketplace add …` と `/plugin install production-ready-skills@production-ready-suite`。入れた後に始めたセッションから使える（今のセッションは `/reload-plugins`）。
 - `--sparse .claude-plugin skills` で clone を 2 つのディレクトリに絞る（1 MB 未満）。付けないと monorepo 全体（約 72 MB）を clone する。
 - 1 行の `claude plugin install production-ready-skills --marketplace engchina/no.1-production-ready-suite` でも入る（monorepo 全体を clone する。`owner/repo` の形は SSH（`git@github.com:…`）で clone したので、SSH の鍵が無い環境では上の https の URL を使う）。
-- スキルの名前には plugin の名前が前に付く（`production-ready-skills:business-rag-research`）。質問に合うスキルは Claude Code が `description` から選ぶので、名前を書かなくてよい。
+- スキルの名前には plugin の名前が前に付く（`production-ready-skills:rag-chat`）。質問に合うスキルは Claude Code が `description` から選ぶので、名前を書かなくてよい。
 - 更新は `claude plugin marketplace update production-ready-suite` の後に `claude plugin update production-ready-skills@production-ready-suite`。
 
 ### 2. MCP を設定する
@@ -101,11 +104,10 @@ claude -p "経費の精算の申請期限はいつまでですか？期限を過
 
 ### 長くかかるツール
 
-- `rag_search` は回答を作るので、モデルを 1 回以上呼ぶ（回答文の生成。根拠が長いときは分割して読む）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は設定で最大 1200 秒（既定 600 秒）（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
+- `rag_chat`・`rag_search` は回答を作るので、モデルを 1 回以上呼ぶ（回答文の生成。根拠が長いときは分割して読む）。#1864 の計測（`openai.gpt-oss-120b`、代表の 9 問）では 1 回 18〜112 秒（平均 47 秒）。サーバーの上限は設定で最大 1200 秒（既定 600 秒）（`RAG_ANSWER_TIMEOUT_SECONDS`）で、超えると `isError: true`（`HTTP_504`）を返す。
 - **推奨の待ち時間は 1260 秒**（`MCP_TOOL_TIMEOUT=1260000`）。サーバーの上限（設定で最大 1200 秒）より長くし、時間切れはサーバーのエラー（どの工程で切れたか付き）で受け取る。配備の Nginx の待ち時間（1260 秒）と同じ。
 - **Claude Code の待ち時間**: `MCP_TOOL_TIMEOUT` の全体の既定は `100000000` ミリ秒（約 28 時間）。60 秒なのは HTTP の 1 要求の最初の応答までのタイマーで、`MCP_TOOL_TIMEOUT` を 60000 より大きくするとこのタイマーも延びる。SSE の進み具合があれば、既定でも 60 秒では切れない。`MCP_TOOL_TIMEOUT` は進み具合では延びない固定の上限。
 - **進み具合の通知（progress）**: client が `tools/call` に `_meta.progressToken` を付け、`Accept` に `text/event-stream` を含めると、応答は SSE になり、10 秒ごとと工程が変わるたびに `notifications/progress`（`message` は「経過 30 秒: 根拠確認（1回目）」の形）を送ってから結果を送る。進み具合を受けて待ち時間を延ばす client（MCP の SDK の `resetTimeoutOnProgress`）なら、待ち時間が短くても切れない。
-- 回答を Agent が自分で組み立てるなら、`rag_retrieve_evidence`（回答を作らず根拠だけ。回答のモデルを呼ばない）で根拠を集める。
 
 ## 業務 Agent を専門家として呼ぶ（Agent の MCP）
 

@@ -18,7 +18,7 @@ def test_report_retains_validated_derived_citation_outside_numeric_mask(
     output = current.steps[0].tool_result.output
     output["evidence"][0]["origin"] = "derived"
     current.metadata[source_handles.REGISTRY_KEY] = []
-    source_handles.register_output(current.metadata, "rag", output, tool="rag_retrieve_evidence")
+    source_handles.register_output(current.metadata, "rag", output, tool="rag_search")
     trusted = builtin_runtime._citable_source_ids(current)
     assert trusted == frozenset()
     rendered = render_plan(

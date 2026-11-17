@@ -257,7 +257,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_context_safety_margin_ratio: float = Field(default=0.05, ge=0.0, le=0.5)
     # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
     # 知らせる（Run は失敗にしない）。0 以下は上限なし。
-    # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence の合計。1 回が重い検索と回答の
+    # Run ごとの RAG の呼び出し（rag_search・rag_chat の合計。1 回が重い検索と回答の
     # 生成）。既定 30 は、多段の質問・条件の多い質問で段・条件ごとに検索し直しても足りる回数。
     # 本文を読むツール（rag_read_source・rag_outline・rag_read_document・rag_read_section）は
     # 数えない（ツールの呼び出しの上限には数える）。

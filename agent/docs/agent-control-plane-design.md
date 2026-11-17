@@ -39,7 +39,7 @@ flowchart TD
   無ければ 400（`agent_data_scope_forbidden`）、一覧を取れなければ 409 / 502（保存しない）。既に範囲にある ID と範囲を
   外す変更は確かめない（別の編集者が加えた ID を残したまま、ほかの項目を保存できる）。
 - 組み込み Runtime の強制（`features/agent/data_scope.py`。tool handler で、モデルの指示に頼らない）:
-  - 1 つ: `nl2sql_query` の `profile_id`・`rag_search` / `rag_retrieve_evidence` / `rag_lookup_guides` の
+  - 1 つ: `nl2sql_query` の `profile_id`・`rag_search` / `rag_chat` の
     `search_answer_profile_id` を Runtime が埋め、モデルが渡した値は上書きする。モデルに見せる schema からその引数を除く
     （`tool_registry.invoke` に渡す定義は呼び先の契約のまま）。
   - 複数: 範囲外の値はツールのエラー（`agent_data_scope_violation`。使える ID と既定を返す）で、呼び先へ送らず予算にも
@@ -56,7 +56,7 @@ flowchart TD
     渡していれば、その中に絞る。schema から除く）。
 - RAG / NL2SQL は「利用者の権限 ∩ claim」で判定し、範囲外は 403（`PROFILE_SCOPE_FORBIDDEN`）にする（platform の `docs/backend-standard.md`「製品間の連携」）。
 - 範囲の無い Agent でモデルが `nl2sql_query` の `profile_id` を渡さない・使えない ID を渡したとき、`rag_search` /
-  `rag_retrieve_evidence` に見つからない `search_answer_profile_id` を渡したときは、呼び先が選ぶ（使えるものが 1 つなら
+  `rag_chat` に見つからない `search_answer_profile_id` を渡したときは、呼び先が選ぶ（使えるものが 1 つなら
   それ、そうでなければ質問の推薦。結果の `auto_selected_profile` / `auto_selected_search_answer_profile`。決まらなければ
   候補つきのエラー。NL2SQL は `"default"` には切り替えない。#1379・#2355）。
 
@@ -119,11 +119,12 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 
 ```json
 {
-  "id": "business-rag-research",
+  "id": "rag-chat",
   "instructions": "...",
   "mcp_requirements": [
-    {"server_id": "rag", "tool_names": ["rag_search", "rag_list_search_answer_profiles", "rag_read_source"]}
+    {"server_id": "rag", "tool_names": ["rag_chat", "rag_recommend_search_answer_profile", "rag_list_search_answer_profiles"]}
   ],
+  "final_answer_tools": [{"server_id": "rag", "tool_name": "rag_chat"}],
   "references": [{"path": "references/guide.md", "characters": 1200}]
 }
 ```
@@ -132,13 +133,21 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 ツールを使う。組み込み Runtime は、Agent の選択 Skill が要求するツールの和集合だけをモデルに渡す（指示への列挙だけで
 権限を表現せず、渡すツールの一覧を実体として絞る）。
 
-組み込みの Skill と初期の業務 Agent（#1573）:
+組み込みの Skill と初期の業務 Agent（#1573・#5342）:
 
 | Skill の ID | 名前 | 使うツール |
 |---|---|---|
-| `business-rag-research` | 業務 RAG 調査 | `rag` の検索・読み取り |
+| `rag-chat` | RAG チャット | `rag_chat`（回答をそのまま返す）と検索・回答プロファイルの推薦・一覧 |
+| `rag-search` | RAG 検索 | `rag_search`（回答をそのまま返す）と検索・回答プロファイルの推薦・一覧 |
+| `rag-chat-and-data` | RAG チャット＋データ | `rag_chat` と `nl2sql` の照会 |
+| `rag-search-and-data` | RAG 検索＋データ | `rag_search` と `nl2sql` の照会 |
 | `structured-data-query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
-| `rag-and-structured-data` | 資料とデータの横断調査 | `rag_search` と `nl2sql` の照会 |
+
+`business-rag-research`・`rag-and-structured-data`・`article-catalog-lookup` は #5342 で消した（互換なし。選んでいた
+業務 Agent は `unavailable_skill_ids` で画面が示し、下書き・常に最新の版の Run は `runtime.skill_unavailable` で失敗する）。
+RAG だけのスキルは metadata `production-ready-final-answer-tools` で回答のツールを宣言し、組み込み Runtime はその回答を
+そのまま Run の回答にする（`docs/agents/runtime.md`「RAG の回答をそのまま返す」。回答の書き方は RAG の検索・回答
+プロファイルで設定する）。
 
 組み込みの Skill は Agent Skills の形式（agentskills.io）で、repo 直下の `skills/<name>/`（3 製品のどれにも属さない）に
 置く（#1816）。Agent は起動時に `skills.register_builtin_skills()` でこのフォルダを読み（コードに指示・説明・ツールを
@@ -148,7 +157,8 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   `description`（何をするか＋いつ使うか。外部の Agent がスキルを選ぶ手がかり）・`compatibility`（要る MCP 接続）・
   `license`。本プロダクトの拡張は `metadata`（文字列 → 文字列）に置く:
   `production-ready-display-name`（画面の名前）・`production-ready-mcp-tools`（`<接続>:<ツール>` の空白区切り。
-  `mcp_requirements` になる）・`production-ready-tags`。`AGENT_SKILLS_DIR` のスキルも同じ読み方をする。
+  `mcp_requirements` になる）・`production-ready-final-answer-tools`（回答をそのまま返すツール。`final_answer_tools`）・
+  `production-ready-tags`。`AGENT_SKILLS_DIR` のスキルも同じ読み方をする。
 - 本文は 500 行以内。目的の文（MCP サーバー名と、ツールは素の名前で書くこと。Agent によって前置きが付く）の後の見出しは
   すべて処理順の `## Step N: …`（1 から連番。入れ子の Step を置かない。root の `docs/agents/prompts.md`。#3830）で、
   `入力の種類を分ける` → 手順の Step → `結果ごとの対応` → `回答の書き方` → `してはいけないこと` の順。使う Step だけを
@@ -156,8 +166,8 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   呼ばずに用件（スキルの対象について何を知りたいか）を聞き、質問（範囲外を含む）とあいさつの混ざる質問は手順の Step に進める
   （用件を聞く返事は組み込み Runtime の拒答・差し戻しの対象外。`answer_passages.asks_for_request`）。長い参照は
   `references/*.md` に出し、本文から 1 段の深さでリンクする（Agent は索引だけを指示に入れ、`skill_reference_read` で
-  読ませる）。毎回の手順で要る短い内容は本文に置く（`business-rag-research` の根拠の読み方（約 1,000 字）は参照文書に
-  出すと #1816 の評価の 120 Run で 1 度も読まれず、本文の Step 4 に戻した。#1846）。
+  読ませる）。毎回の手順で要る短い内容は本文に置く（根拠の読み方を参照文書に出すと #1816 の評価の 120 Run で 1 度も
+  読まれなかった。#1846）。
 - 仕様の検証は公式の `skills-ref`（`tests/test_skill_md_spec.py`）。`metadata` のツールが RAG / NL2SQL の MCP の契約
   （`platform/contracts/mcp/`）にあることも確かめる。
 - 外部の Agent へ配る形: repo 直下の `.claude-plugin/marketplace.json`（marketplace `production-ready-suite`）が
@@ -166,13 +176,9 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   手順）。配った後にスキルを変えたら `plugin.json` の `version` を上げる。
 - 旧 ID（`business_rag_research` など。#1573 の `rag_then_structured_data` も）の保存済みの業務 Agent は、システム
   テーブルの migration `20261014_013_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
-- 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので一直線の手順の Step
-  （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag-and-structured-data` は順序を決めない判断のループ（足りないものを
-  判断 → ツールを呼ぶ → 結果を確かめて戻る）の Step、`structured-data-query`・`article-catalog-lookup` は短い番号付きの
-  手順を 1 つの Step に置き、`status` ごとの対応を `結果ごとの対応` の Step に置く。
-- `business-rag-research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
-  `rag_search` を独立の Step の見出しにしない。実モデル（`openai.gpt-oss-120b`）の比較で、`rag_search` の Step を
-  分岐の先に置いた並びでは、多段の質問を `rag_search` から始めて 2 段目を引かない回答が増えた（#1795）。
+- 手順の形は作業に合わせる: RAG だけのスキルは回答のツールを 1 回呼ぶ一直線の Step、データつきのスキルは順序を
+  決めない判断のループ（足りないものを判断 → ツールを呼ぶ → 結果を確かめて戻る）の Step、`structured-data-query` は短い
+  番号付きの手順を 1 つの Step に置き、`status` ごとの対応を `結果ごとの対応` の Step に置く。
 - ツールの結果の値（`outcome` / `status`）→ すること の対応を `結果ごとの対応` の Step の箇条書きに
   まとめ、ツール名・フィールド名は `code` にする（組み込み Runtime は `code` の中の素のツール名も
   `<接続>__<ツール>` に書き直す）。
@@ -185,20 +191,23 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 - 規則の文を書き直すときは、前後の規則を突き合わせて意味を落とさない・足さない。スキルの詳細画面は指示を Markdown
   として表示する。
 
-`rag-and-structured-data` は順序を決めない。各ステップで、資料の根拠が要るなら `rag_search`、業務データの値が要るなら
-`nl2sql_query` を選び、一方の結果で分かった事実・条件・識別子で、もう一方や同じツールを繰り返し呼ぶ。根拠がそろったら
-止める。旧 ID `rag_then_structured_data`（RAG の後に NL2SQL の固定の順序）は、保存済みの業務 Agent とその版の
-読み込みで新しい ID に置き換える（`skills.RENAMED_SKILL_IDS`）。
+データつきのスキルは順序を決めない。各ステップで、資料が要るなら RAG の回答のツール、業務データの値が要るなら
+`nl2sql_query` を選び、一方の結果で分かった事実・条件・識別子で、もう一方や同じツールを繰り返し呼ぶ。RAG の回答は
+言い換えずに使い、業務データの値と出所を分けて示す。
 
 | 業務 Agent の ID | 名前 | Skill |
 |---|---|---|
-| `default`（既定） | 資料・データ横断アシスタント | `rag-and-structured-data`・`business-rag-research`・`structured-data-query` |
-| `rag-research` | 資料調査アシスタント | `business-rag-research` |
+| `default`（既定） | RAG チャット＋データアシスタント | `rag-chat-and-data` |
+| `rag-chat` | RAG チャットアシスタント | `rag-chat` |
+| `rag-search` | RAG 検索アシスタント | `rag-search` |
+| `rag-search-data` | RAG 検索＋データアシスタント | `rag-search-and-data` |
 | `data-query` | データ照会アシスタント | `structured-data-query` |
 
-3 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
-状態）。#1573 より前の `default`（名前が「汎用業務 Agent」のまま）は、新しい内容を次の版として公開する（前の版は残す。
-名前を変えた `default` は利用者の内容として残し、Skill の ID だけを置き換える）。
+5 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
+状態）。保存済みの `default` が前の組み込みの内容（名前が「汎用業務 Agent」のまま、か #5342 より前の「資料・データ横断
+アシスタント」の内容）のままなら、新しい内容を次の版として公開する（前の版は残す。冪等。利用者が変えた内容は残す）。
+廃止した `rag-research`（資料調査アシスタント。#5342）は、下書きとすべての版が前の組み込みの内容のままなら読み込みで
+外して削除の印を付け、変えていたら組織の業務 Agent（由来 `runtime`）として残す（`runtime._migrate_builtin_agent`）。
 
 ### Skill の参照文書（#862 / #1803）
 
@@ -414,16 +423,15 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     返した検索・回答プロファイルを、「どれでもない」・自由入力だけの答えと 2 回目以降は `skip_approved_faq: true` を付ける
     （`confirmation.approved_faq_choice`。2 つの引数はモデルに見せず、モデルが渡した値は使わない）。利用者に確認しない Run も
     `skip_approved_faq: true` を付け、候補を返させない。Q&A の選択は業務ガイドの条件（支援タスクの分かっている条件）にしない。
-    **`rag_retrieve_evidence`**（組み込みのスキルが根拠を集めるツール。#5136）も同じ: 候補を返したら同じ次の手・同じカード（理由の文は
-    「選んだ Q&A の登録済みの回答をもとに答えます。」）にし、次の Run は候補を返したツール（同じ接続の同じ名前）の最初の呼び出しに
-    `approved_faq_id` を、それ以外の呼び出しには `skip_approved_faq: true` を付ける（2 つの引数はモデルに見せない。実行環境が付けるので
-    組み込みのスキルの本文は変えない）。選んだ Q&A の登録済みの回答（結果の `approved_faq` の `answer`）は資料の根拠と同じくツールの
-    結果としてモデルに渡り、回答はモデルが書く（候補・選んだ Q&A の結果には業務ガイドの照合 `guide_check` を足さない）。根拠が登録済みQ&A
-    だったことは、回答の対応の印 `approved_faq`（`rag_search` の経路も）と basis `approved_faq`（`rag_retrieve_evidence` で受け取り、
-    現場のデータの道具を使っていない回答）、回答の根拠（成果物 `answer_evidence`）の項目（`document_id=approved_faq:<Q&A の ID>`・
-    `approved_faq_id`・資料名「登録済みQ&A」・節は Q&A の質問・抜粋は登録済みの回答・回答で引用。画面は「登録済みQ&A」の印を付け、
-    会話の添付と同じく原文のプレビューを開かない）に残す。
-  - **Agent 自身の確認**（Control Plane のツール `ask_user_confirmation`。引数 `question`・`reason`・`options[{label, description}]`（2〜8 個）・`multiple`。「その他（自由入力）」は画面が必ず出す）: SDK の `needs_approval`（呼び出しごとの判定）で中断し、Run を`waiting_confirmation`（確認待ち）にして SDK の状態を保存する（承認待ちと同じ仕組み。承認と同時に中断したら承認待ち）。答え・スキップで `queued` に戻し、同じ Run を再開する（確認のツールは実行され、結果が利用者の答え `status=answered`（`selected`・`other_text`）か `status=skipped`（前提を示して答える指示））。処理の段階は `confirmation_wait`（kind `confirmation`）。**確認は Run の状態を変える中断**（#3352。LangGraph の `interrupt` と同じ考え方）: 利用者に聞ける確認は、どの経路（差し戻しの後を含む）でも Run を確認待ちにし、問いを画面と MCP（`agent_chat` の `confirmation`）に出す。中断の判断はツールを実行する前に応答ごとに 1 回決め（SDK の `on_llm_end`。`_ToolRecorder.hold_for_confirmation`）、確認で中断する応答のほかのツールの呼び出しは実行せず、承認にも回さない（結果は `error_code=tool.confirmation_pending`。答えの後にモデルが必要なら呼び直す）。中断しない呼び出し（下のツールの確認のカード・ツールの失敗の直後・`nl2sql_query` の前の表・列の確認・スキップ・上限）は、確認を出していないことと次にすることを結果で返す。**先に資料・業務データのツールで調べる**（#1917）: 根拠・データのツールを渡した Run で、モデルがまだ MCP 接続のツール（根拠・データのツールとプロファイルの一覧・推薦）を 1 つも呼んでいない確認は、モデルが作った選択肢を外した自由入力の確認にする（選択肢をツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。先に調べることは指示とツールの説明に置く（中断せずに「先に調べる」を返すと、モデルは確認を出したと取り違え、答えを待つと述べるだけの回答で完了した。#3352）。拒答のガード（`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。**ツールの確認に任せる**（#1934・#2726）: この Run のツールの結果が確認事項を返して止まっている（NL2SQL・`rag_search` の`needs_clarification`・根拠の取得のルールの確認と、最も新しい業務ガイドの判断（`rag_lookup_guides`・`rag_search` の`guide`）が条件を確かめる `clarify`。答えた条件の問いは数えない）ときは中断せず、`status=tool_confirmation_pending` を返す。
+    `rag_search`・`rag_chat`（RAG の回答のツール。#5342）とも同じで、次の Run は候補を返したツール（同じ接続の同じ名前）の
+    最初の呼び出しに `approved_faq_id` を、それ以外の呼び出しには `skip_approved_faq: true` を付ける（入力の schema にあるとき
+    だけ）。RAG の回答をそのまま返すスキルでは、候補（回答は空。カードの問いの文にする）・選んだ Q&A の登録済みの回答で Run が
+    終わる。根拠が登録済みQ&Aだったことは、回答の対応の印 `approved_faq` と、回答の根拠（成果物 `answer_evidence`）の項目
+    （`document_id=approved_faq:<Q&A の ID>`・`approved_faq_id`・資料名「登録済みQ&A」・節は Q&A の質問・抜粋は登録済みの
+    回答・回答で引用。画面は「登録済みQ&A」の印を付け、会話の添付と同じく原文のプレビューを開かない）に残す。
+    利用者に確認しない Run は、RAG の回答のツールに `skip_clarification: true` も付け（モデルに見せない）、業務ガイドの残った
+    条件を RAG が分岐で答える。
+  - **Agent 自身の確認**（Control Plane のツール `ask_user_confirmation`。引数 `question`・`reason`・`options[{label, description}]`（2〜8 個）・`multiple`。「その他（自由入力）」は画面が必ず出す）: SDK の `needs_approval`（呼び出しごとの判定）で中断し、Run を`waiting_confirmation`（確認待ち）にして SDK の状態を保存する（承認待ちと同じ仕組み。承認と同時に中断したら承認待ち）。答え・スキップで `queued` に戻し、同じ Run を再開する（確認のツールは実行され、結果が利用者の答え `status=answered`（`selected`・`other_text`）か `status=skipped`（前提を示して答える指示））。処理の段階は `confirmation_wait`（kind `confirmation`）。**確認は Run の状態を変える中断**（#3352。LangGraph の `interrupt` と同じ考え方）: 利用者に聞ける確認は、どの経路（差し戻しの後を含む）でも Run を確認待ちにし、問いを画面と MCP（`agent_chat` の `confirmation`）に出す。中断の判断はツールを実行する前に応答ごとに 1 回決め（SDK の `on_llm_end`。`_ToolRecorder.hold_for_confirmation`）、確認で中断する応答のほかのツールの呼び出しは実行せず、承認にも回さない（結果は `error_code=tool.confirmation_pending`。答えの後にモデルが必要なら呼び直す）。中断しない呼び出し（下のツールの確認のカード・ツールの失敗の直後・`nl2sql_query` の前の表・列の確認・スキップ・上限）は、確認を出していないことと次にすることを結果で返す。**先に資料・業務データのツールで調べる**（#1917）: 根拠・データのツールを渡した Run で、モデルがまだ MCP 接続のツール（根拠・データのツールとプロファイルの一覧・推薦）を 1 つも呼んでいない確認は、モデルが作った選択肢を外した自由入力の確認にする（選択肢をツールの結果から作れないため。`ConfirmationBudget.tools_consulted`）。先に調べることは指示とツールの説明に置く（中断せずに「先に調べる」を返すと、モデルは確認を出したと取り違え、答えを待つと述べるだけの回答で完了した。#3352）。拒答のガード（`AGENT_TOOL_GROUNDING_REQUIRED`）と同じ設定で切れる。**ツールの確認に任せる**（#1934・#2726）: この Run のツールの結果が確認事項を返して止まっている（NL2SQL・RAG の回答のツールの `needs_clarification` と、最も新しい RAG の回答のツールの `guide` の判断が条件を確かめる `clarify`。答えた条件の問いは数えない）ときは中断せず、`status=tool_confirmation_pending` を返す。
   - **やめる**（API の `action: "cancel"`。画面は #2311 から出さず、確認を終えるのは「確認せずに回答」だけ。質問を取り消すのは入力欄の「停止」）: 確認を出した Run と、同じ質問の確認の往復の Run に metadata `clarification_withdrawn` を付けて会話・履歴・支援タスクの
     状態から外し、最初の質問を返す。Agent 自身の確認で待っている Run は取り消し、NL2SQL の session は
     `nl2sql_cancel_requirement` で閉じる。

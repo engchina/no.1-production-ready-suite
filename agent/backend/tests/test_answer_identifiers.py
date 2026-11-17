@@ -77,7 +77,7 @@ def test_only_original_successful_source_values_are_used() -> None:
             },
         ),
         _step(
-            "rag_retrieve_evidence",
+            "rag_search",
             {"evidence": [_evidence("d:c:2", excerpt="generated-01", origin="generated")]},
         ),
         _step("rag_read_source", {"document_id": "d", "chunk_id": "c3", "text": "read-01"}),

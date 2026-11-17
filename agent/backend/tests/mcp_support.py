@@ -50,8 +50,7 @@ class _RagScopeIn(_ContractInput):
     include_superseded: bool = False
     evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
-    # 登録済みQ&A（rag_search は #5134、rag_retrieve_evidence は #5136）: 利用者が選んだ Q&A の id
-    # と、候補を返さずに検索する指定。
+    # 登録済みQ&A（#5134）: 利用者が選んだ Q&A の id と、候補を返さずに検索する指定。
     approved_faq_id: str | None = Field(default=None, max_length=200)
     skip_approved_faq: bool = False
 
@@ -61,17 +60,17 @@ class RagSearchIn(_RagScopeIn):
     original_question: str | None = None
 
 
-class RagRetrieveEvidenceIn(_RagScopeIn):
-    # 1 回の呼び出しは 1 つの質問（#5125）。根拠の収集は検索する件数（top_k の既定 30）と同じ件数を
-    # 既定で返す（#1365）。
-    evidence_limit: int = Field(default=30, ge=1, le=50)
-
-
-class RagLookupGuidesIn(_ContractInput):
+class RagChatIn(_ContractInput):
+    # RAG のチャットの流れで 1 問に答える（#5339）。ナレッジベース・filters・top_k は受けない。
     query: str
-    search_answer_profile_id: str
+    search_answer_profile_id: str | None = None
+    original_question: str | None = None
+    include_superseded: bool = False
+    evidence_limit: int = Field(default=12, ge=1, le=50)
     conditions: dict[str, str] | None = None
-    limit: int = Field(default=3, ge=1, le=10)
+    approved_faq_id: str | None = Field(default=None, max_length=200)
+    skip_approved_faq: bool = False
+    skip_clarification: bool = False
 
 
 class RagReadSourceIn(_ContractInput):
@@ -418,43 +417,6 @@ def rag_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str
     return output
 
 
-def rag_evidence_approved_faq_candidates(*candidates: tuple[str, str, float]) -> dict[str, Any]:
-    """`rag_retrieve_evidence` が登録済みQ&Aの候補だけを返した出力（#5136。契約の形の合成の値）。
-
-    `candidates` は（id, 質問, 一致度）。根拠は検索していないので evidence は空。
-    """
-    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_retrieve_evidence"])
-    output.update(
-        status="approved_faq_candidates",
-        approved_faq_candidates=[
-            {"id": faq_id, "question": question, "score": score}
-            for faq_id, question, score in candidates
-        ],
-        approved_faq=None,
-        trace_id="",
-        evidence=[],
-        evidence_omitted=0,
-        evidence_text_omitted=0,
-        profile_knowledge=None,
-    )
-    return output
-
-
-def rag_evidence_approved_faq_answer(faq_id: str, question: str, answer: str) -> dict[str, Any]:
-    """`rag_retrieve_evidence` が選んだ登録済みQ&Aの登録済みの回答を返した出力（#5136）。"""
-    output: dict[str, Any] = deepcopy(RAG_OUTPUTS["rag_retrieve_evidence"])
-    output.update(
-        status="completed",
-        approved_faq_candidates=[],
-        approved_faq={"id": faq_id, "question": question, "answer": answer},
-        evidence=[],
-        evidence_omitted=0,
-        evidence_text_omitted=0,
-        profile_knowledge=None,
-    )
-    return output
-
-
 Product = Literal["rag", "nl2sql"]
 ToolOutput = dict[str, Any] | Exception | Callable[[BaseModel], dict[str, Any]]
 
@@ -501,9 +463,8 @@ class FakeProductMcp:
                     self._tool(
                         "rag_recommend_search_answer_profile", RagRecommendSearchAnswerProfileIn
                     ),
+                    self._tool("rag_chat", RagChatIn),
                     self._tool("rag_read_source", RagReadSourceIn),
-                    self._tool("rag_lookup_guides", RagLookupGuidesIn),
-                    self._tool("rag_retrieve_evidence", RagRetrieveEvidenceIn),
                     self._tool("rag_outline", RagOutlineIn),
                     self._tool("rag_read_document", RagReadDocumentIn),
                     self._tool("rag_read_section", RagReadSectionIn),

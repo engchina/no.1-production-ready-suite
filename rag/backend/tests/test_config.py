@@ -1173,3 +1173,15 @@ def test_online_output_budget_loads_shared_setting(monkeypatch: pytest.MonkeyPat
     assert Settings().online_max_output_tokens == 24576
     with pytest.raises(ValidationError):
         Settings(online_max_output_tokens=0)
+
+
+def test_backend_env_example_lists_the_outline_lead_chars_default() -> None:
+    """目次の行の書き出しの字数の雛形は、Settings の既定と同じ(#5345)。"""
+    example = config_module.BACKEND_ROOT / ".env.example"
+    values = dict(
+        line.split("=", 1)
+        for line in example.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    settings = Settings(_env_file=None)
+    assert int(values["RAG_OUTLINE_LEAD_CHARS"]) == settings.rag_outline_lead_chars == 60

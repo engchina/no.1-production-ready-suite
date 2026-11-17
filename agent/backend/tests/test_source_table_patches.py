@@ -27,9 +27,9 @@ def fixture(with_data: bool, chunk: str = "chunk-a") -> tuple[Any, Any, Any, Any
     evidence: dict[str, Any] = {
         "evidence": [{"document_id": "document-a", "chunk_id": chunk, "excerpt": "合成の原文。"}]
     }
-    source = _step("rag_retrieve_evidence", evidence)
+    source = _step("rag_search", evidence)
     current = SimpleNamespace(id="run-synthetic", metadata={}, steps=[source])
-    source_handles.register_output(current.metadata, "rag", evidence, tool="rag_retrieve_evidence")
+    source_handles.register_output(current.metadata, "rag", evidence, tool="rag_search")
     if with_data:
         output: dict[str, Any] = {"status": "done", "columns": ["VALUE"], "rows": [{"VALUE": 1}]}
         data = _step("nl2sql_query", output)
@@ -250,9 +250,7 @@ def test_runtime_trusted_sources_exclude_unconfirmed_or_ambiguous_registry_entri
         else:
             output["evidence"][0]["origin"] = "derived"
             current.metadata[source_handles.REGISTRY_KEY] = []
-            source_handles.register_output(
-                current.metadata, "rag", output, tool="rag_retrieve_evidence"
-            )
+            source_handles.register_output(current.metadata, "rag", output, tool="rag_search")
             assert any(
                 item["chunk_id"] == "123" for item in passed_evidence(current.steps, limit=None)
             )
@@ -278,7 +276,7 @@ async def test_existing_citable_derived_source_patch_policy_is_not_numeric_mask_
     output = current.steps[0].tool_result.output
     output["evidence"][0]["origin"] = "derived"
     current.metadata[source_handles.REGISTRY_KEY] = []
-    source_handles.register_output(current.metadata, "rag", output, tool="rag_retrieve_evidence")
+    source_handles.register_output(current.metadata, "rag", output, tool="rag_search")
     assert any(
         row.get("citable")
         for row in current.metadata[source_handles.REGISTRY_KEY]

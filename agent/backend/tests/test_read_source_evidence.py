@@ -62,12 +62,12 @@ def test_read_sources_are_citable_and_present_in_final_items_and_markers(tool: s
         }
     original = deepcopy(output)
     metadata: dict[str, Any] = {}
-    handles.register_output(metadata, "rag", retrieval, tool="rag_retrieve_evidence")
+    handles.register_output(metadata, "rag", retrieval, tool="rag_search")
     handles.register_output(metadata, "rag", output, tool=tool)
     encoded = handles.encode_output(metadata, "rag", output)
     marker = encoded["citation"] if tool == "rag_read_source" else encoded["chunks"][1]["citation"]
     resolved = handles.render_citations(metadata, "合成の項目 B。" + marker)
-    steps = [step("rag_retrieve_evidence", retrieval), step(tool, output)]
+    steps = [step("rag_search", retrieval), step(tool, output)]
     content = answer_evidence(steps, resolved)
     assert [item["chunk_id"] for item in content["items"]] == ["chunk-a", "chunk-b"]
     assert content["items"][0]["score"] == 0.9
@@ -130,7 +130,7 @@ def test_colliding_chunk_ids_do_not_resolve_to_another_source(different_connecti
 def many_sources() -> list[RunStep]:
     return [
         step(
-            "rag_retrieve_evidence",
+            "rag_search",
             {
                 "evidence": [
                     {

@@ -53,10 +53,12 @@ from agents import (
     RunHooks,
     Runner,
     RunState,
+    ToolsToFinalOutputResult,
     set_tracing_disabled,
 )
 from agents.items import ModelResponse
 from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
+from agents.tool import FunctionToolResult
 from agents.tool_context import ToolContext
 from openai import (
     DEFAULT_MAX_RETRIES,
@@ -148,6 +150,7 @@ from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_NAME,
     answer_evidence,
     passed_evidence,
+    rag_answer_evidence,
     selected_answer_evidence,
 )
 from app.features.agent.answer_identifiers import identifier_index
@@ -235,7 +238,6 @@ from app.features.agent.context_window import (
 )
 from app.features.agent.evaluation_aids import aid_enabled
 from app.features.agent.guardrails import checked_answer
-from app.features.agent.guide_steps import unresolved_guide_steps, unresolved_guide_steps_message
 from app.features.agent.job_cancel import (
     NL2SQL_CANCEL_JOB_TOOL,
     RUN_CANCEL_TRACE_PREFIX,
@@ -277,28 +279,23 @@ from app.features.agent.support_task import (
     APPROVED_FAQ_ARGUMENTS,
     BUDGET_EXCEEDED_CODE,
     DATA_LOOKUP_HINT,
-    GUIDE_CHECK_TRACE_PREFIX,
     NL2SQL_NEEDS_CLARIFICATION,
     NL2SQL_QUERY,
+    RAG_ANSWER_TOOLS,
     RAG_APPROVED_FAQ_TOOLS,
     RAG_BUDGET_TOOLS,
-    RAG_LOOKUP_GUIDES,
     RAG_READ_DOCUMENT,
     RAG_READ_SECTION,
     RAG_READ_SOURCE,
-    RAG_RETRIEVE_EVIDENCE,
-    RAG_SEARCH,
+    SKIP_CLARIFICATION_ARGUMENT,
     SupportTaskBudget,
     adjusted_search_limits,
     agent_confirmation_answers,
     approved_faq_candidates_step,
-    approved_faq_choice_step,
     approved_faq_schema,
     assume_step,
     budget_exceeded_message,
     build_support_task,
-    chosen_approved_faq,
-    guide_check_note,
     has_support_task_activity,
     image_input_schema,
     is_approved_faq_candidates,
@@ -306,7 +303,6 @@ from app.features.agent.support_task import (
     missing_data_lookup,
     nl2sql_next_step,
     nl2sql_skip_step,
-    profile_knowledge_summary,
     rag_next_step,
     record_codes,
     repeated_query_note,
@@ -1398,41 +1394,11 @@ def _strict_schema(schema: dict[str, Any]) -> bool:
     return schema.get("additionalProperties") is False and required == set(properties)
 
 
-# 業務ガイドの照合（#1322）に渡す条件・質問の上限（`rag_lookup_guides` の契約の上限）。
-GUIDE_CHECK_MAX_CONDITIONS = 30
-GUIDE_CHECK_MAX_QUERY_CHARS = 8000
-
-
 def _connection_prefix(function_name: str) -> str | None:
     """`<接続>__<ツール>` の接続の部分（MCP 接続のツールでなければ None）。"""
     if MCP_TOOL_SEPARATOR not in function_name:
         return None
     return function_name[: -len(mcp_base_tool_name(function_name)) - len(MCP_TOOL_SEPARATOR)]
-
-
-def _guide_consulted(steps: list[Any], prefix: str) -> bool:
-    """この Run で、その接続の業務ガイドを引いた（`rag_lookup_guides`・`rag_search` が成功）か。"""
-    for step in steps:
-        call, result = step.tool_call, step.tool_result
-        if call is None or result is None or not result.success:
-            continue
-        if _connection_prefix(call.name) != prefix:
-            continue
-        if mcp_base_tool_name(call.name) in {RAG_LOOKUP_GUIDES, RAG_SEARCH}:
-            return True
-    return False
-
-
-def guide_check_query(goal: str, query: object) -> str:
-    """業務ガイドの照合の質問（利用者の質問と、モデルが根拠を集めた質問。同じなら 1 つ）。
-
-    条件の語（例: 検証用アカウント → 個別）は利用者の質問に、業務ガイドの語はモデルの質問に出る
-    ことがあるので両方を渡す。
-    """
-    parts = [" ".join(goal.split())]
-    if isinstance(query, str) and " ".join(query.split()) not in parts:
-        parts.append(" ".join(query.split()))
-    return "\n".join(part for part in parts if part)[:GUIDE_CHECK_MAX_QUERY_CHARS]
 
 
 def support_task_goal(goal: str, previous: Mapping[str, Any] | None) -> str:
@@ -1617,30 +1583,19 @@ class _ToolRecorder:
     接続のツール）。`rag_search` が回答を確定できないと返したら、モデルへの結果に次の手
     （`next_step`）を足す（#1283。記録する step の結果は RAG の結果のまま）。
 
-    モデルが自分で `rag_lookup_guides` を呼んだときも、最上位の業務ガイドの判断から次の手
-    （`next_step`。答える判断なら資料の根拠を集めてから答える）を結果に足す（#1322）。
-
-    業務ガイドの照合（#1322）: モデルが業務ガイド（`rag_lookup_guides`・`rag_search`）を引かずに
-    `rag_retrieve_evidence` で根拠を集めたら、Control Plane が同じ接続の `rag_lookup_guides` を
-    1 回呼び（step に残す。予算には数えない）、最上位の業務ガイドと次の手（条件が分からなければ
-    確認の質問）を根拠の結果に `guide_check` として足す。根拠を集める道具は業務ガイドの条件・分岐を
-    見ないため、確かめる条件があってもモデルが分岐ごとに答えてしまう（#1317 の実環境の評価）。
-    `guide_tools` はモデルに渡した `rag_lookup_guides`（接続の接頭辞 → 定義・handler）、
-    `goal` は利用者の質問（前の Run で問いを確かめ中なら、その質問も含む）、`known_conditions` は
-    前の Run までに分かった条件。
+    業務ガイドの照合は RAG の rag_chat が行う（#5342。実行環境は照合しない）。`goal` は利用者の
+    質問（前の Run で問いを確かめ中なら、その質問も含む）、`known_conditions` は前の Run までに
+    分かった条件。
     """
 
     def __init__(self, run_id: str, budget: SupportTaskBudget | None = None) -> None:
         self.run_id = run_id
         self.budget = budget
         self.environment_tools: list[str] = []
-        self.guide_tools: dict[str, tuple[ToolDefinition, ToolHandler | None]] = {}
         self.goal = ""
         self.known_conditions: dict[str, str] = {}
         # 業務 Agent のデータの範囲（#1378。接続 → 使えるプロファイル）。空は範囲なし。
         self.data_scopes: data_scope.AgentDataScopes = {}
-        # 照合した（する）接続。並列の呼び出しでも 1 回だけにする。
-        self._guide_checked: set[str] = set()
         # 回答前の確認（#1839）。利用者に確認しない Run では、RAG の確認の次の手を「前提を示して
         # 答える」に変える。
         self.confirmation: ConfirmationBudget | None = None
@@ -1715,11 +1670,14 @@ class _ToolRecorder:
         """RAG の回答のツールに渡す利用者の元の質問（Run の目標。#2261。渡さなければ None）。
 
         モデルは検索文を短いキーワードに言い換えることがあり、回答の要求の単位（番号つきの小問。
-        RAG の `rag_search` は要求ごとの根拠の確認と回答をこの質問で行う。#2665）が落ちる。
-        モデルに任せず決定的に付ける。根拠の取得（`rag_retrieve_evidence`）は 1 回の呼び出しが
-        1 つの質問で、元の質問を受けない（#5125）。引数を持たない RAG には送らない。
+        RAG の回答のツールは要求ごとの根拠の確認と回答をこの質問で行う。#2665）が落ちる。
+        モデルに任せず決定的に付ける。引数を持たないツールには送らない。
         """
-        if definition is None or mcp_base_tool_name(name) != RAG_SEARCH or not self.goal.strip():
+        if (
+            definition is None
+            or mcp_base_tool_name(name) not in RAG_ANSWER_TOOLS
+            or not self.goal.strip()
+        ):
             return None
         properties = (definition.input_schema or {}).get("properties")
         if not isinstance(properties, dict) or "original_question" not in properties:
@@ -1729,7 +1687,7 @@ class _ToolRecorder:
     def _approved_faq_arguments(
         self, name: str, definition: ToolDefinition | None, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """RAG の検索（`rag_search` / `rag_retrieve_evidence`）に登録済みQ&Aの引数を付ける
+        """RAG の回答のツール（`rag_search` / `rag_chat`）に登録済みQ&Aの引数を付ける
         （#5134・#5136。モデルに見せない引数）。
 
         - 利用者が確認で Q&A を選んだ Run: その Run の最初の、候補を返したツール（同じ接続の同じ
@@ -1777,6 +1735,28 @@ class _ToolRecorder:
             and step.tool_call.arguments.get(APPROVED_FAQ_ID_ARGUMENT)
             for step in runtime_repository.get_run(self.run_id).steps
         )
+
+    def _clarification_arguments(
+        self, name: str, definition: ToolDefinition | None, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """RAG の回答のツールに、業務ガイドの条件の確認を返させない引数を付ける（#5342。モデルに
+        見せない引数）。
+
+        利用者に確認しない Run（前提を示す方針・上限・無人の Run・「確認せずに回答」）は
+        `skip_clarification`（RAG が残った条件を分岐で答える）。確認する Run は付けない（確認は
+        カードになる）。モデルが渡した同じ名前の引数は使わない。引数を持たないツールには送らない。
+        """
+        if definition is None or mcp_base_tool_name(name) not in RAG_ANSWER_TOOLS:
+            return arguments
+        properties = (definition.input_schema or {}).get("properties")
+        if not isinstance(properties, dict) or SKIP_CLARIFICATION_ARGUMENT not in properties:
+            return arguments
+        cleaned = {
+            key: value for key, value in arguments.items() if key != SKIP_CLARIFICATION_ARGUMENT
+        }
+        if self.confirmation is None or not self.confirmation.asks:
+            return {**cleaned, SKIP_CLARIFICATION_ARGUMENT: True}
+        return cleaned
 
     def _without_asking(self, next_step: dict[str, Any] | None) -> dict[str, Any] | None:
         if self.confirmation is None or self.confirmation.asks:
@@ -2027,6 +2007,7 @@ class _ToolRecorder:
         # 登録済みQ&Aの選択（#5134）は、データの範囲で確かめる前に付ける（選んだ Q&A の検索・
         # 回答プロファイルも範囲で確かめる）。
         call_arguments = self._approved_faq_arguments(name, definition, call_arguments)
+        call_arguments = self._clarification_arguments(name, definition, call_arguments)
         # データの範囲（#1378）: プロファイルを埋める・上書きする・範囲外を拒否する。MCP 接続の
         # ツールだけ（Control Plane のツールは範囲の対象ではない）。
         scoped = (
@@ -2116,23 +2097,6 @@ class _ToolRecorder:
                 runtime_repository.finish_builtin_tool_step(self.run_id, step_id, not_sent)
                 return json.dumps(tool_failure_payload(not_sent), ensure_ascii=False)
         base = mcp_base_tool_name(name)
-        guide_note: dict[str, Any] | None = None
-
-        async def check_guides(result: ToolResult) -> None:
-            # 根拠の取得の結果に足す業務ガイドの照合（#1322）は、根拠の取得の一部なので、その
-            # ツールの span の中で呼ぶ（処理の経過で根拠の取得の行の子になる。#3471）。
-            nonlocal guide_note
-            if (
-                result.success
-                and base == RAG_RETRIEVE_EVIDENCE
-                and isinstance(result.output or {}, dict)
-                # 登録済みQ&Aの候補・選んだ Q&A（#5136）は業務ガイドを照合しない（RAG の FAQ の
-                # 経路も業務ガイドを通さない）。
-                and not is_approved_faq_candidates(result.output)
-                and chosen_approved_faq(result.output) is None
-            ):
-                guide_note = await self.check_guides(name, call.arguments)
-
         # 4. handler（呼び先へ送る。ツールの span は `execute` が測る）。
         result = await self.execute(
             step_id,
@@ -2142,11 +2106,10 @@ class _ToolRecorder:
             handler=handler,
             scoped=scoped,
             authorization=authorization,
-            follow_up=check_guides,
         )
         if result.success:
             output = result.output or {}
-            if base == RAG_SEARCH and isinstance(output, dict):
+            if base in RAG_ANSWER_TOOLS and isinstance(output, dict):
                 next_step = self._without_asking(rag_next_step(output, self.environment_tools))
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
@@ -2170,32 +2133,6 @@ class _ToolRecorder:
                     )
                 if next_step is not None:
                     output = {**output, "next_step": next_step}
-            if base == RAG_RETRIEVE_EVIDENCE and is_approved_faq_candidates(output):
-                # 登録済みQ&Aの候補（#5136）: rag_search と同じく確認のカードを待たせる。
-                next_step = self._without_asking(approved_faq_choice_step())
-                output = {**output, "next_step": next_step}
-            if base == RAG_RETRIEVE_EVIDENCE and isinstance(output, dict):
-                knowledge = profile_knowledge_summary(output)
-                if knowledge is not None:
-                    # 検索・回答プロファイルのルール・用語は結果のまま（根拠と分けた項目で）モデルへ
-                    # 渡す。渡したことを記録する（#2701）。
-                    logger.info(
-                        "builtin_runtime_profile_knowledge_passed",
-                        extra={"run_id": self.run_id, "tool_name": name, **knowledge},
-                    )
-                if guide_note is not None:
-                    output = {**output, "guide_check": guide_note}
-            if base == RAG_LOOKUP_GUIDES and isinstance(output, dict):
-                # モデルが自分で引いた業務ガイドにも次の手を足す（業務ガイドだけで答えさせない）。
-                note = guide_check_note(
-                    output,
-                    evidence_gathered=False,
-                    rag_calls_remaining=self.budget.rag_calls_remaining
-                    if self.budget is not None
-                    else None,
-                )
-                if note is not None:
-                    output = {**output, "next_step": self._without_asking(note["next_step"])}
             if base in RAG_BUDGET_TOOLS and isinstance(output, dict):
                 # 根拠 0 件が資料の不在を意味しない（安全チェックの未完了・補助の処理の縮退）とき
                 # の案内（#3546）。
@@ -2333,10 +2270,17 @@ class _ToolRecorder:
             RAG_READ_SECTION,
         }:
             return output
-        references = text_references(tool, output)
+        # 参照先・章節を読む案内は、読むツールをモデルに渡した Run だけ（#5342。RAG の回答の
+        # ツールだけのスキルは読むツールを宣言しない）。
+        reads = any(mcp_base_tool_name(name) == RAG_READ_SECTION for name in self.entries)
+        references = text_references(tool, output) if reads else []
         if references:
             output = {**output, "references": references}
-        section_note = section_read_note(tool, output, [self.goal, call.arguments.get("query")])
+        section_note = (
+            section_read_note(tool, output, [self.goal, call.arguments.get("query")])
+            if reads
+            else None
+        )
         if section_note is not None:
             output = {**output, "section_reads": section_note}
         if tool in RAG_BUDGET_TOOLS:
@@ -2372,66 +2316,6 @@ class _ToolRecorder:
         if remaining is not None:
             output = {**output, "rag_calls_remaining": remaining}
         return output
-
-    async def check_guides(
-        self, evidence_tool: str, arguments: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """根拠を集めた接続の業務ガイドを照合し、モデルへの案内を返す（#1322。しなければ None）。
-
-        この Run でその接続の業務ガイドを引いていない（`rag_lookup_guides`・`rag_search` を呼んで
-        いない）ときに 1 回だけ呼ぶ。照合の失敗は根拠の結果を変えない（案内を足さないだけ）。
-        """
-        from app.features.agent.runtime import runtime_repository
-
-        prefix = _connection_prefix(evidence_tool)
-        tool = self.guide_tools.get(prefix) if prefix is not None else None
-        profile = arguments.get("search_answer_profile_id")
-        if prefix is None or tool is None or prefix in self._guide_checked:
-            return None
-        if not isinstance(profile, str) or not profile.strip():
-            return None
-        self._guide_checked.add(prefix)
-        if _guide_consulted(runtime_repository.get_run(self.run_id).steps, prefix):
-            return None
-        query = guide_check_query(self.goal, arguments.get("query"))
-        if not query:
-            return None
-        provided = arguments.get("conditions")
-        conditions = dict(self.known_conditions)
-        if isinstance(provided, dict):
-            conditions.update(
-                {
-                    key: value
-                    for key, value in provided.items()
-                    if isinstance(key, str) and isinstance(value, str) and value.strip()
-                }
-            )
-        definition, handler = tool
-        _step_id, result = await self.call(
-            ToolCall(
-                name=definition.name,
-                arguments={
-                    "query": query,
-                    "search_answer_profile_id": profile,
-                    "conditions": dict(list(conditions.items())[:GUIDE_CHECK_MAX_CONDITIONS]),
-                    "limit": 1,
-                },
-                trace_id=f"{GUIDE_CHECK_TRACE_PREFIX}{self.run_id}_{prefix}",
-            ),
-            definition=definition,
-            handler=handler,
-        )
-        if not result.success or not isinstance(result.output, dict):
-            return None
-        note = guide_check_note(
-            result.output,
-            rag_calls_remaining=self.budget.rag_calls_remaining
-            if self.budget is not None
-            else None,
-        )
-        if note is not None:
-            note = {**note, "next_step": self._without_asking(note.get("next_step"))}
-        return note
 
     async def call(
         self,
@@ -2487,14 +2371,11 @@ class _ToolRecorder:
         scoped: data_scope.ScopeEnforcement | None = None,
         authorization: _Authorization,
         abortable: bool = True,
-        follow_up: Callable[[ToolResult], Awaitable[None]] | None = None,
     ) -> ToolResult:
         """handler を呼び、結果を step に記録する。
 
         `abortable` の呼び出しは、Run の取消・終了で実行中の呼び先への送信を打ち切る（#2691。
         `_invoke_abortable`）。打ち切った呼び出しは失敗ではなく取消として step に残す。
-        `follow_up` は、このツールの結果に続けて Runtime が行う処理（根拠の取得の後の業務ガイドの
-        照合など）で、ツールの span の中で呼ぶ（その中の span はこのツールの子になる。#3471）。
         """
         from app.features.agent.runtime import runtime_repository
 
@@ -2560,8 +2441,6 @@ class _ToolRecorder:
                     tool_span.set_call_output(result)
                 else:
                     tool_span.set_display(details=details)
-            if follow_up is not None:
-                await follow_up(result)
         return result
 
     async def _execute_handler(
@@ -3002,14 +2881,6 @@ def build_function_tools(
         if any(mcp_base_tool_name(name) == NL2SQL_QUERY for name in exposed):
             # 業務データの表・列を利用者に聞かせず、先に nl2sql_query を呼ばせる（#2223）。
             confirmation.nl2sql_unqueried = lambda: _nl2sql_unqueried(run_id)
-    for definition, handler in entries:
-        prefix = _connection_prefix(definition.name)
-        if (
-            prefix is not None
-            and definition.name in exposed
-            and mcp_base_tool_name(definition.name) == RAG_LOOKUP_GUIDES
-        ):
-            recorder.guide_tools.setdefault(prefix, (definition, handler))
     recorder.goal = goal
     recorder.known_conditions = dict(known_conditions or {})
     return tools
@@ -3025,6 +2896,104 @@ class _ConfirmationTurnHooks(AgentHooks[Any]):
         self, context: RunContextWrapper[Any], agent: Agent[Any], response: ModelResponse
     ) -> None:
         await self.recorder.hold_for_confirmation(context, list(response.output))
+
+
+# 業務 Agent のスキルが今は無い（組み込みのスキルの廃止など。#5342）。黙って飛ばさずに Run を失敗に
+# する（スキルの指示・ツールが欠けたまま答えない）。
+SKILL_UNAVAILABLE_CODE = "runtime.skill_unavailable"
+# 回答をそのまま Run の最終の回答にした RAG の回答のツールの記録（SDK の Agent に付ける。#5342）。
+_FINAL_ANSWER_ATTR = "_production_ready_final_answer"
+
+
+@dataclass
+class _FinalAnswer:
+    """RAG の回答をそのまま最終の回答にしたときの、ツールの名前と回答（無ければ空）。"""
+
+    tool_name: str = ""
+    answer: str | None = None
+
+
+def unavailable_skill_ids(skill_ids: Sequence[str]) -> list[str]:
+    """この実行で使えない（無い）スキルの ID（公開の版に固定した中身があれば使える）。"""
+    return [skill_id for skill_id in skill_ids if resolve_skill(skill_id) is None]
+
+
+def final_answer_tool_names(
+    skill_ids: Sequence[str], origins: Mapping[tuple[str, str], str]
+) -> frozenset[str]:
+    """回答をそのまま Run の最終の回答にするツール（モデルに渡した名前。#5342）。
+
+    スキルの `final_answer_tools` で宣言したツールのうち、この Run でモデルに渡したもの。同じ
+    ツールを宣言なしで使うスキル（データつきのスキル）も選んでいれば、そのツールの回答はモデルが
+    他の結果と合わせるので外す。
+    """
+    declared: set[tuple[str, str]] = set()
+    plain: set[tuple[str, str]] = set()
+    for skill_id in skill_ids:
+        skill = resolve_skill(skill_id)
+        if skill is None or not skill.enabled:
+            continue
+        finals = {(item.server_id, item.tool_name) for item in skill.final_answer_tools}
+        declared |= finals
+        for requirement in skill.mcp_requirements:
+            for server_id, tool_name in origins:
+                if (server_id, tool_name) in finals or server_id != requirement.server_id:
+                    continue
+                if not requirement.tool_names or tool_name in requirement.tool_names:
+                    plain.add((server_id, tool_name))
+    return frozenset(origins[key] for key in declared - plain if key in origins)
+
+
+def rag_final_answer(output: object) -> str | None:
+    """RAG の回答のツールの結果を Run の最終の回答にするなら、その文（しないなら None。#5342）。
+
+    回答（`answer`）があるとき・登録済みQ&Aの候補を返したとき（回答は空。確認のカードになる）・
+    業務ガイドの条件の確認を返したとき（回答は確認の問い）。ツールの失敗・空の回答はモデルに返す
+    （失敗の扱いは Run の通常の経路）。
+    """
+    if isinstance(output, str):
+        try:
+            output = json.loads(output)
+        except ValueError:
+            return None
+    if not isinstance(output, dict) or "error_code" in output:
+        return None
+    answer = output.get("answer")
+    text = answer if isinstance(answer, str) else ""
+    if is_approved_faq_candidates(output):
+        return ""
+    if output.get("outcome") == "needs_clarification" or text.strip():
+        return text
+    return None
+
+
+def _final_answer_behavior(names: frozenset[str], record: _FinalAnswer) -> Any:
+    """`Agent.tool_use_behavior`: 宣言したツールの回答で Run を終える（SDK の関数。#5342）。"""
+
+    def behavior(
+        _context: RunContextWrapper[Any], results: list[FunctionToolResult]
+    ) -> ToolsToFinalOutputResult:
+        for result in reversed(results):
+            if result.tool.name not in names:
+                continue
+            answer = rag_final_answer(result.output)
+            if answer is not None:
+                record.tool_name, record.answer = result.tool.name, answer
+                return ToolsToFinalOutputResult(is_final_output=True, final_output=answer)
+        return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+
+    return behavior
+
+
+def _rag_answered(sdk_agent: Agent[Any], result: Any) -> bool:
+    """Run の最終の回答が、RAG の回答のツールの回答をそのまま使ったものか（#5342）。"""
+    record = getattr(sdk_agent, _FINAL_ANSWER_ATTR, None)
+    return (
+        isinstance(record, _FinalAnswer)
+        and record.answer is not None
+        and not list(getattr(result, "interruptions", []) or [])
+        and _answer_text(result.final_output) == record.answer
+    )
 
 
 def build_sdk_agent(
@@ -3068,6 +3037,13 @@ def build_sdk_agent(
     from app.features.agent.runtime import runtime_repository
     from app.features.agent.skill_references import skill_reference_keys
 
+    missing_skills = unavailable_skill_ids(skill_ids)
+    if missing_skills:
+        raise BuiltinRuntimeError(
+            SKILL_UNAVAILABLE_CODE,
+            f"業務 Agent のスキル（{'、'.join(missing_skills)}）がありません。"
+            "業務 Agent の編集でスキルを選び直して公開してください。",
+        )
     target = resolve_model_target(model_id)
     attachments = thread_attachment_toolset(thread_id)
     mcp_tools, warnings = discover_mcp_tools(
@@ -3130,6 +3106,13 @@ def build_sdk_agent(
     # 指示のツールの名前は、モデルに渡すツールの名前にそろえる（#1303）。
     exposed = [tool.name for tool in tools]
     origins = exposed_mcp_origins(tools)
+    # RAG の回答をそのまま返すスキル（#5342）。出力の項目・参照付きレポートの Agent はモデルが
+    # 書くので当てない。
+    final_names = (
+        final_answer_tool_names(skill_ids, origins)
+        if output_contract is None and not output_fields
+        else frozenset()
+    )
     composed = compose_instructions(instructions, skill_ids, exposed, origins)
     # データの範囲の案内（#1378。強制は tool handler がする）。
     scope_text = data_scope.scope_instructions(data_scopes, exposed)
@@ -3141,7 +3124,12 @@ def build_sdk_agent(
         composed += "\n\n" + report_runtime.REPORT_DATA_INSTRUCTIONS
     elif any(mcp_base_tool_name(name) in {NL2SQL_QUERY, "nl2sql_get_job"} for name in exposed):
         composed += "\n\n" + DATA_INSTRUCTIONS
-    if any(mcp_base_tool_name(name) in source_handles.SOURCE_TOOLS for name in exposed):
+    # 根拠の ID と出典の書き方は、モデルが回答を書くときだけ（RAG の回答をそのまま返す
+    # ツールは除く）。
+    if any(
+        mcp_base_tool_name(name) in source_handles.SOURCE_TOOLS and name not in final_names
+        for name in exposed
+    ):
         composed += "\n\n" + source_handles.SOURCE_INSTRUCTIONS
     static_instructions = composed
     if support_task:
@@ -3177,6 +3165,10 @@ def build_sdk_agent(
         model_settings=model_settings_for(target),
         hooks=_ConfirmationTurnHooks(recorder) if recorder is not None else None,
     )
+    if final_names:
+        record = _FinalAnswer()
+        sdk_agent.tool_use_behavior = _final_answer_behavior(final_names, record)
+        setattr(sdk_agent, _FINAL_ANSWER_ATTR, record)
     if output_contract is not None:
         from app.features.agent.report_selection import ReportSelectionModel
 
@@ -4225,34 +4217,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     report_task=task,
                 )
                 result = await _run_sdk(run_id, sdk_agent, conversation_input(run_id, run.goal))
-                result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
-                result = _resolve_report_result(run.id, result, agent.output_contract)
-                result, refused = await _require_tool_grounding(
-                    run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
-                )
-                result = _resolve_report_result(run.id, result, agent.output_contract)
-                if not refused:
-                    _raise_on_grounding_failure(run.id, result)
-                    result = await _require_hops(
-                        run, sdk_agent, result, agent.data_scopes, task=task
-                    )
-                    result = _resolve_report_result(run.id, result, agent.output_contract)
-                    result = await _require_output(
-                        run, sdk_agent, result, agent.data_scopes, agent.output_fields
-                    )
-                    if agent.output_contract is None:
-                        result = await _require_data_references(
-                            run, sdk_agent, result, agent.data_scopes
-                        )
-                _record_usage(run_id, result, agent.model_id)
-                await _finish(
-                    run_id,
-                    result,
-                    task,
-                    data_scopes=agent.data_scopes,
-                    refusal=_refusal_text(agent, sdk_agent) if refused else None,
-                    output_contract=agent.output_contract,
-                )
+                result = await _settle_and_finish(run, agent, sdk_agent, result, task)
             except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
                 _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
                 _record_failure(run_id, exc)
@@ -4268,6 +4233,45 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 reset_pinned_skills(pinned)
                 _ACTIVE_RUN_BUDGET.reset(budget_token)
                 run_claim.release_execution(execution)
+
+
+async def _settle_and_finish(
+    run: Any, agent: Any, sdk_agent: Agent[Any], result: Any, task: _SupportTaskRun
+) -> Any:
+    """SDK の実行の結果を、差し戻し・検査の後に確定する（承認待ちなら止める）。戻り値は最後の結果。
+
+    RAG の回答をそのまま最終の回答にした Run（#5342）は、モデルの回答のための差し戻し・検査
+    （拒答・多段・出力・データの参照）を当てずに確定する（`_finish` の `rag_answer`）。
+    """
+    result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
+    result = _resolve_report_result(run.id, result, agent.output_contract)
+    if _rag_answered(sdk_agent, result):
+        _record_usage(run.id, result, agent.model_id)
+        await _finish(run.id, result, task, data_scopes=agent.data_scopes, rag_answer=True)
+        return result
+    result, refused = await _require_tool_grounding(
+        run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
+    )
+    result = _resolve_report_result(run.id, result, agent.output_contract)
+    if not refused:
+        _raise_on_grounding_failure(run.id, result)
+        result = await _require_hops(run, sdk_agent, result, agent.data_scopes, task=task)
+        result = _resolve_report_result(run.id, result, agent.output_contract)
+        result = await _require_output(
+            run, sdk_agent, result, agent.data_scopes, agent.output_fields
+        )
+        if agent.output_contract is None:
+            result = await _require_data_references(run, sdk_agent, result, agent.data_scopes)
+    _record_usage(run.id, result, agent.model_id)
+    await _finish(
+        run.id,
+        result,
+        task,
+        data_scopes=agent.data_scopes,
+        refusal=_refusal_text(agent, sdk_agent) if refused else None,
+        output_contract=agent.output_contract,
+    )
+    return result
 
 
 @capture_trace_bodies
@@ -4355,34 +4359,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                         outcome=tool_grounding.refusal_outcome(declined=True),
                     )
                     return
-                result = await _unattended_approvals(run, sdk_agent, result, agent.data_scopes)
-                result = _resolve_report_result(run.id, result, agent.output_contract)
-                result, refused = await _require_tool_grounding(
-                    run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
-                )
-                result = _resolve_report_result(run.id, result, agent.output_contract)
-                if not refused:
-                    _raise_on_grounding_failure(run.id, result)
-                    result = await _require_hops(
-                        run, sdk_agent, result, agent.data_scopes, task=task
-                    )
-                    result = _resolve_report_result(run.id, result, agent.output_contract)
-                    result = await _require_output(
-                        run, sdk_agent, result, agent.data_scopes, agent.output_fields
-                    )
-                    if agent.output_contract is None:
-                        result = await _require_data_references(
-                            run, sdk_agent, result, agent.data_scopes
-                        )
-                _record_usage(run_id, result, agent.model_id)
-                await _finish(
-                    run_id,
-                    result,
-                    task,
-                    data_scopes=agent.data_scopes,
-                    refusal=_refusal_text(agent, sdk_agent) if refused else None,
-                    output_contract=agent.output_contract,
-                )
+                result = await _settle_and_finish(run, agent, sdk_agent, result, task)
             except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
                 _record_usage(run_id, getattr(exc, "run_data", None) or result, agent.model_id)
                 _record_failure(run_id, exc)
@@ -4925,9 +4902,6 @@ async def _require_hops(
     同じ 1 回の枠で、業務データのツールを持つのに引かずに資料に無いとして答えた回答
     （`support_task.missing_data_lookup`。#1979）も差し戻す（利用者が業務データの確認を取り消した
     Run は除く。経過には `data_retry`）。略号・別名が残っていれば、そちらを先にする（重ねない）。
-    同じ枠で、照合した業務ガイドの手順のうち根拠を集めていない手順
-    （`guide_steps.unresolved_guide_steps`。#2396。経過には `guide_step_retry`）も差し戻す
-    （略号・別名と両方なら 1 つの差し戻しにまとめる）。
     同じ枠で、手順・一覧・条件のまとまりを求める質問で、回答に使った章節の続きを読んでいない
     （`section_coverage`。#2492。経過には `section_retry`）回答も差し戻す（ほかの差し戻しと両方なら
     1 つにまとめる）。この実行のツールの呼び出しが上限に達していれば差し戻さない（読めないので、
@@ -4944,9 +4918,6 @@ async def _require_hops(
     if is_clarification_only(answer):
         return result
     pending = unresolved_hops(current.steps, answer, str(getattr(current, "goal", "") or ""))
-    # 業務ガイドの手順のうち根拠を集めていない手順（#2396）。略号・別名と同じ 1 回の枠で、両方あれば
-    # 1 つの差し戻しにまとめる。
-    guide_pending = unresolved_guide_steps(current.steps)
     # 回答に使った章節の未読の続き（#2492）。予算が残っていて、読み直せるものだけ。
     sections = [
         item
@@ -4955,23 +4926,12 @@ async def _require_hops(
     ]
     if pending:
         head = unresolved_hops_message(pending)
-        if guide_pending:
-            head += "\n\n" + unresolved_guide_steps_message(guide_pending)
         if sections:
             head += "\n\n" + unread_sections_message(sections)
         runtime_repository.record_tool_grounding(run.id, "hop_retry", answer)
         logger.info(
             "builtin_runtime_unresolved_hops_retry",
             extra={"run_id": run.id, "values": [item["value"] for item in pending]},
-        )
-    elif guide_pending:
-        head = unresolved_guide_steps_message(guide_pending)
-        if sections:
-            head += "\n\n" + unread_sections_message(sections)
-        runtime_repository.record_tool_grounding(run.id, "guide_step_retry", answer)
-        logger.info(
-            "builtin_runtime_unresolved_guide_steps_retry",
-            extra={"run_id": run.id, "steps": [item["id"] for item in guide_pending]},
         )
     elif sections:
         head = unread_sections_message(sections)
@@ -5314,11 +5274,15 @@ async def _finish(
     data_scopes: data_scope.AgentDataScopes | None = None,
     refusal: str | None = None,
     output_contract: ReportOutputContract | None = None,
+    rag_answer: bool = False,
 ) -> None:
     """Run を承認待ちにするか、回答を確定する。
 
     `refusal` があれば（根拠・データのツールを呼ばずに作った回答。#1835）、モデルの回答の代わりに
     その拒答の文を回答にする。
+    `rag_answer` は RAG の回答をそのまま最終の回答にした Run（#5342）で、モデルの回答の整形
+    （引用の描画・作業の経過の行・章節の読み切り）を当てず、安全チェック・確認のカード・回答の根拠
+    （引用は RAG の `used_in_answer`）・回答の対応は残す。
     basis は、調べずに範囲外・答えられないと判断した拒答なら `declined_without_tools`（#2608）。
     """
     from app.features.agent.runtime import runtime_repository
@@ -5355,6 +5319,32 @@ async def _finish(
             refusal,
             outcome=tool_grounding.refusal_outcome(declined=_refusal_declined(run_id)),
             notice=current_answer_notice(),
+        )
+        return
+    if rag_answer:
+        answer = _answer_text(result.final_output)
+        steps = runtime_repository.get_run(run_id).steps
+        tool_confirmations = _tool_confirmations(task, state_content, steps)
+        if tool_confirmations and not answer.strip():
+            # 登録済みQ&Aの候補（回答は空）。カードの問いの文にする。
+            answer = card_answer(tool_confirmations)
+        content = rag_answer_evidence(steps)
+        if content["items"]:
+            runtime_repository.save_builtin_artifact(
+                run_id, kind=ANSWER_EVIDENCE_KIND, name=ANSWER_EVIDENCE_NAME, content=content
+            )
+        outcome = _answer_outcome(run_id, answer, None, rag_answer=True)
+        answer = _guarded_answer(run_id, answer)
+        runtime_repository.complete_builtin_run(
+            run_id,
+            answer,
+            outcome=outcome,
+            confirmations=tool_confirmations,
+            notice=(
+                current_answer_notice()
+                if answer_takes_notice(outcome, confirmations=bool(tool_confirmations))
+                else None
+            ),
         )
         return
     if output_contract is not None:
@@ -5594,7 +5584,7 @@ def _tool_confirmations(
 def _approved_faq_confirmation(
     budget: ConfirmationBudget, steps: Sequence[Any]
 ) -> ConfirmationRequest | None:
-    """この Run の最後の RAG の検索（`rag_search` / `rag_retrieve_evidence`）が返した登録済みQ&A
+    """この Run の最後の RAG の回答のツール（`rag_search` / `rag_chat`）が返した登録済みQ&A
     の候補を、利用者が選ぶ確認にする（#5134・#5136）。
 
     利用者に確認できる Run だけ（確認しない Run は `skip_approved_faq` を付けるので、候補は
@@ -5617,14 +5607,18 @@ def _approved_faq_confirmation(
 
 
 def _answer_outcome(
-    run_id: str, answer: str, coverage: dict[str, Any] | None = None
+    run_id: str,
+    answer: str,
+    coverage: dict[str, Any] | None = None,
+    *,
+    rag_answer: bool = False,
 ) -> dict[str, Any] | None:
     """回答の対応（#1305。`answer_outcome`）。決められなくても回答は保存する（対応は付けない）。"""
     from app.features.agent.runtime import runtime_repository
 
     try:
         steps = runtime_repository.get_run(run_id).steps
-        return answer_outcome(answer, steps=steps, coverage=coverage)
+        return answer_outcome(answer, steps=steps, coverage=coverage, rag_answer=rag_answer)
     except Exception as exc:  # noqa: BLE001 - 対応は補助。決められなくても回答は返す
         logger.warning(
             "builtin_runtime_answer_outcome_failed",

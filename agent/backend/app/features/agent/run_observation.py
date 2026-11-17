@@ -3,7 +3,7 @@
 Run が保存した記録（step のツールの呼び出しと結果・成果物）だけから作る（RAG / NL2SQL へ新しく
 読みに行かない）。見る人の今の権限での確かめ直し・ページング・認可は呼ぶ側（`mcp_server`）が行う。
 
-- **根拠**（`ObservedEvidenceItem`）: RAG の根拠のツール（`rag_search` / `rag_retrieve_evidence`）の
+- **根拠**（`ObservedEvidenceItem`）: RAG の回答のツール（`rag_search` / `rag_chat`）の
   `evidence` と、読み取りのツール（`rag_read_source` / `rag_read_document` / `rag_read_section`）で
   読んだ chunk。同じ chunk（`document_id`・`chunk_id`）は初めて現れた位置に 1 件だけにし、その順を
   `rank` にする。本文は生成に渡した本文そのもので、後の呼び出しが同じ chunk の別の本文を
@@ -40,15 +40,14 @@ from app.features.agent.runtime import (
 )
 from app.features.agent.support_task import (
     NL2SQL_QUERY,
+    RAG_ANSWER_TOOLS,
     RAG_READ_DOCUMENT,
     RAG_READ_SECTION,
     RAG_READ_SOURCE,
-    RAG_RETRIEVE_EVIDENCE,
-    RAG_SEARCH,
 )
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
-EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+EVIDENCE_TOOLS = RAG_ANSWER_TOOLS
 READ_TOOLS = frozenset({RAG_READ_SOURCE, RAG_READ_DOCUMENT, RAG_READ_SECTION})
 NL2SQL_GET_JOB = "nl2sql_get_job"
 NL2SQL_JOB_TOOLS = frozenset({NL2SQL_QUERY, NL2SQL_GET_JOB})

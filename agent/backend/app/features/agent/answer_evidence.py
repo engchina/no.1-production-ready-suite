@@ -17,8 +17,8 @@
   開く確かめ（`passed_evidence`）には入れない）。添付は根拠の ID の
   印が無いため、回答で引用は回答がその添付のファイル名を書いたときに付ける。
 
-- 利用者が選んだ登録済みQ&A（#5136）: RAG の検索（`rag_search` /
-  `rag_retrieve_evidence`）が返した `approved_faq`。`document_id` は `approved_faq:<Q&A の ID>`
+- 利用者が選んだ登録済みQ&A（#5136）: RAG の回答のツール（`rag_search` /
+  `rag_chat`）が返した `approved_faq`。`document_id` は `approved_faq:<Q&A の ID>`
   （RAG の文書ではないので、会話の添付と同じく原文・図を開く確かめには入れない）。利用者が選んで
   RAG が返した登録済みの回答で、その Run の回答の根拠なので、回答で引用にする。
 
@@ -56,7 +56,11 @@ from app.features.agent.evidence_match import (
     matched_features,
     order_weights,
 )
-from app.features.agent.support_task import RAG_APPROVED_FAQ_TOOLS, chosen_approved_faq
+from app.features.agent.support_task import (
+    RAG_ANSWER_TOOLS,
+    RAG_APPROVED_FAQ_TOOLS,
+    chosen_approved_faq,
+)
 from app.features.agent.tools import mcp_base_tool_name
 
 if TYPE_CHECKING:
@@ -730,3 +734,49 @@ def answer_evidence(steps: Sequence[RunStep], answer: str) -> JsonObject:
         passage["text"] for passage in passages if kinds.get(passage["text"]) == KIND_CITATION
     ]
     return content
+
+
+def rag_answer_evidence(steps: Sequence[RunStep]) -> JsonObject:
+    """RAG の回答をそのまま最終の回答にした Run の「回答の根拠」（#5342）。
+
+    根拠は最後の RAG の回答のツールが返した `evidence`（AI に渡した資料の箇所）で、回答で引用した
+    根拠は RAG が付けた `used_in_answer`（回答での使われ方は RAG の `answer_use`）。回答の文から
+    根拠の印・段落を照合しない（RAG の回答の引用は RAG が決める）。利用者が選んだ登録済みQ&Aの
+    回答なら、その Q&A を回答で引用した根拠にする。
+    """
+    last: tuple[str, Mapping[str, Any]] | None = None
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if call is None or result is None or not result.success or step.status != "completed":
+            continue
+        tool = mcp_base_tool_name(call.name)
+        if tool in RAG_ANSWER_TOOLS and isinstance(result.output, Mapping):
+            last = (tool, result.output)
+    items: list[JsonObject] = []
+    if last is not None:
+        tool, output = last
+        for item in evidence_items(tool, dict(output))[:MAX_ANSWER_EVIDENCE]:
+            view: JsonObject = {key: item.get(key) for key in _COPIED_FIELDS if key in item}
+            section = item.get("section")
+            if isinstance(section, Mapping) and isinstance(section.get("title"), str):
+                view["section_title"] = section["title"]
+            used = item.get("used_in_answer") is True
+            view["cited"] = used
+            answer_use = item.get("answer_use")
+            view["answer_use"] = answer_use if used and answer_use in _ANSWER_USES else None
+            items.append(view)
+    for item in approved_faq_evidence(steps)[: max(MAX_ANSWER_EVIDENCE - len(items), 0)]:
+        view = {key: item.get(key) for key in _COPIED_FIELDS if key in item}
+        view["section_title"] = item.get("section", {}).get("title")
+        view["cited"] = True
+        view["answer_use"] = None
+        items.append(view)
+    return {
+        "items": items,
+        "passed": len(items),
+        "cited": sum(1 for item in items if item["cited"]),
+        "markers": [],
+        "passages": [],
+        "references": [],
+        "citation_lines": [],
+    }

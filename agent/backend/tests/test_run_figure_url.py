@@ -219,8 +219,8 @@ def test_only_figures_in_the_run_and_accessible_agents_can_be_opened(
 def test_figures_from_earlier_rag_calls_can_be_opened(
     auth: ProductionAuth, rag: FakeProductMcp, seeded_run: RunState
 ) -> None:
-    """成果物「検索の根拠」に無い、前の `rag_retrieve_evidence` の図も開ける（#2427）。"""
-    name = mcp_function_name("rag", "rag_retrieve_evidence")
+    """成果物「検索の根拠」に無い、前の `rag_search` の図も開ける（#2427）。"""
+    name = mcp_function_name("rag", "rag_search")
     earlier_ref = {**FIGURE_REF, "chunk_id": "fig-earlier"}
     seeded_run.steps = [
         RunStep(
