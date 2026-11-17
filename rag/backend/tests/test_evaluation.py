@@ -162,6 +162,8 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
     assert metrics.mrr == 1.0
     assert metrics.answer_correctness == 1.0
     assert metrics.metric_case_counts == {
+        # 網羅は判定の記録が値を返したケースだけ（この偽の判定は返さない）。
+        "answer_coverage": 0,
         "precision_at_10": 1,
         "ndcg_at_3": 1,
         "ndcg_at_10": 1,
@@ -576,6 +578,7 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
         "actual_responses": [
             {"question": "合成の質問", "answer_text": EVALUATION_INPUT["answer_text"]}
         ],
+        "answer_points": [],
     }
     assert call["standard_answer"] == "合成の標準回答"
     assert call["timeout_seconds"] == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
@@ -666,6 +669,7 @@ async def test_judgement_is_unavailable_without_answer_record_input() -> None:
         "question",
         "answer_text",
         "actual_responses",
+        "answer_points",
     }
     assert metrics.metric_case_counts["answer_correctness"] == 1
 
@@ -1364,6 +1368,7 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
             id="answer",
             query="合成の質問",
             category="document_answerable",
+            standard_answer="合成の標準回答。",
             required_answer_points=["合成の要点"],
             required_conditions=["合成の条件"],
         ),
@@ -1391,10 +1396,14 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
     assert second.answer_correctness == 0
     assert "answer_failed" in second.failure_reasons
     assert judge.calls[1]["standard_answer"] == "条件を確認してから案内する。"
+    # 必須の回答要点と条件は標準回答に結合せず、網羅の要点として渡す（#5262）。
+    assert judge.calls[0]["standard_answer"] == "合成の標準回答。"
+    first_input = judge.calls[0]["evaluation_input"]
+    assert isinstance(first_input, dict)
+    assert first_input["answer_points"] == ["合成の要点", "合成の条件"]
     assert metrics.answer_correctness == 0
     assert metrics.metric_case_counts["answer_correctness"] == 2
     assert metrics.category_breakdown["clarification_required"].metrics["answer_correctness"] == 0
-    assert "合成の条件" in str(judge.calls[0]["standard_answer"])
 
 
 # ---- 検索・回答プロファイルを指定した評価（#1249） ------------------------------------------
@@ -1656,6 +1665,7 @@ def _multi_turn_case(**overrides: Any) -> EvaluationCase:
         "split": "dev",
         "relevant_document_ids": ["doc-manual"],
         "conditions": {"scope": "本番"},
+        "standard_answer": "個別の利用者には権限タブで付与する。",
         "required_conditions": ["個別", "グループ"],
         "required_evidence": [
             {"id": "grant-individual", "document_id": "doc-manual", "text": "個別の利用者に付与"},
@@ -1841,3 +1851,26 @@ def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
     assert summarize_answer_judgement({"status": "timeout"}).judge_diagnostics is None
     broken = summarize_answer_judgement({"status": "error", "judge_diagnostics": "壊れた値"})
     assert broken.judge_diagnostics is None
+
+
+def test_summarize_answer_judgement_keeps_claims_points_coverage_and_version() -> None:
+    """主張ごとの判定（#5262）の印・網羅の要点・網羅・版を要約に残す。形の違う行は読み捨てる。"""
+    judgement = summarize_answer_judgement(
+        {
+            **_completed_judgement(passed=False),
+            "answer_coverage": 0.5,
+            "correctness_reason": "回答の「A」と標準回答の「B」が食い違う。",
+            "rubric_version": 33,
+            "correctness_claims": [
+                {"verdict": "contradicted", "answer": "A", "standard": "B"},
+                {"verdict": "unknown", "answer": "C"},
+            ],
+            "coverage_points": [{"point": "要点 1", "covered": True}, "壊れた値"],
+        }
+    )
+    assert judgement.answer_coverage == 0.5 and judgement.rubric_version == 33
+    assert [claim.verdict for claim in judgement.claims] == ["contradicted"]
+    assert [(point.point, point.covered) for point in judgement.points] == [("要点 1", True)]
+    assert judgement.passed is False
+    # 版の無い結果（主張ごとの判定の前の旧方式）は版を持たない。
+    assert summarize_answer_judgement(_completed_judgement()).rubric_version is None

@@ -383,7 +383,8 @@ async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flo
     assert job["status"] == "SUCCEEDED", job
     assert job["completed_cases"] == 1 and job["total_cases"] == 1
     assert len(flow.pipeline.requests) == 1 and flow.pipeline.requests[0].query == QUESTION
-    assert flow.judge.standards == [STANDARD + "\n合成の要点"]
+    # 必須の回答要点は標準回答に結合せず、網羅の要点として渡す（#5262）。
+    assert flow.judge.standards == [STANDARD]
     result = job["run_result"]
     assert result["case_count"] == 1 and result["error_count"] == 0
     assert result["required_evidence_recall"] == result["mrr"] == 1.0

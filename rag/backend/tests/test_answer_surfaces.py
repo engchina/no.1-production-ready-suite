@@ -148,6 +148,7 @@ async def test_evaluation_runs_cases_with_answer_engine() -> None:
                 id="case-1",
                 query="受注の登録方法は？",
                 relevant_document_ids=["doc-1"],
+                standard_answer="登録ボタンで受注を登録する。",
                 required_answer_points=["登録ボタン"],
             )
         ],
