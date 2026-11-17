@@ -266,9 +266,8 @@ def answer_outcome(
         signals.add(SIGNAL_UNREAD_SECTIONS)
     gaps = bool(signals & _GAP_SIGNALS)
 
-    if len(calls) == 1 and calls[0][2] is not None:
-        index, tool, single = calls[0]
-        assert single is not None
+    index, tool, single = calls[0] if len(calls) == 1 else (0, "", None)
+    if single is not None:
         if single == NEEDS_ENVIRONMENT_DATA and _environment_resolved(steps, index + 1):
             signals.add(SIGNAL_ENVIRONMENT_TOOLS)
             # 現場のデータの確認を求められて確かめた。確かめる点が残っていれば不足。
