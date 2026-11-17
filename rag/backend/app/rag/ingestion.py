@@ -231,7 +231,8 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 14: 解析器が本文に付けた原文に無い範囲(non_source_text_ranges)を要素に記録する。#5305。
 # 15: プレーンテキストの本文の無い見出しの並びを、直前の見出しの本文に含める。#5315)。
 # 16: PowerPoint の原本の図形と接続線を、図の読み取りの入力と図の説明に入れる。#5359。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 16
+# 17: 原本の接続線の行に、両端の図形の文字も書く。#5386。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 17
 # 原本の図形と接続線を読む PowerPoint の形式（OOXML。Office→PDF で変換して解析するとき。#5359）。
 _PRESENTATION_SHAPE_EXTENSIONS = frozenset({".pptx", ".pptm"})
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。

@@ -13,7 +13,11 @@ import zipfile
 import pytest
 
 from rag_engine.parsing.picture_descriptions import vision_description_text, vision_text_projection
-from rag_engine.parsing.slide_shapes import read_presentation_shapes, slide_shapes_text
+from rag_engine.parsing.slide_shapes import (
+    MAX_CONNECTOR_END_TEXT_CHARS,
+    read_presentation_shapes,
+    slide_shapes_text,
+)
 from rag_engine.parsing.vision_prompt_rules import (
     SOURCE_SLIDE_SHAPES_KEY,
     VISION_SOURCE_SHAPES_INSTRUCTION,
@@ -179,13 +183,38 @@ def test_text_lists_region_shapes_and_every_branch_without_assigning_labels():
     assert "- #6 (520,340)-(680,380): 条件1 条件2" in lines
     assert "- #5 (200,600)-(400,680): 宛先B" in lines
     assert "接続線:" in lines
-    # 2 本の枝は同じ点 (600,320) から始まる。線の点は始点から終点の順。
-    assert "- #11: #3 → #4 (600,320)-(720,320)-(720,600)-(900,600)" in lines
-    assert "- #12: #3 → #5 (600,320)-(450,320)-(450,600)-(300,600)" in lines
-    assert "- #10: #2 → #3 (600,200)-(600,240)" in lines
+    # 2 本の枝は同じ点 (600,320) から始まる。線の点は始点から終点の順。接続線の行は両端の図形の文字も
+    # 書き、図形の一覧と別の chunk に分かれても、どの図形を結ぶ線かを行だけで読める（#5386）。
+    assert "- #11: #3 中継 → #4 宛先A (600,320)-(720,320)-(720,600)-(900,600)" in lines
+    assert "- #12: #3 中継 → #5 宛先B (600,320)-(450,320)-(450,600)-(300,600)" in lines
+    assert "- #10: #2 開始 → #3 中継 (600,200)-(600,240)" in lines
     # 領域の外の文字の図形は書かない。ラベルを接続に結び付けた行は作らない。
     assert "合成の見出し" not in text and "代替" not in text
     assert not any("条件1" in line for line in lines if line.startswith("- #1"))
+
+
+def test_connector_ends_keep_number_only_without_text_and_truncate_long_text():
+    long_text = "長" * (MAX_CONNECTOR_END_TEXT_CHARS + 10)
+    slide = read_presentation_shapes(
+        _pptx(
+            [
+                _slide(
+                    _sp(2, long_text, (0, 0, 100, 20))
+                    + _sp(3, "", (0, 100, 100, 20))
+                    + _cxn(4, 2, 3, (50, 20, 0, 80))
+                    + _cxn(5, 3, None, (50, 120, 0, 80))
+                )
+            ]
+        )
+    ).slides[1]
+    lines = slide_shapes_text(slide, page_size=(720, 540), region=(0, 0, 720, 540)).splitlines()
+
+    # 長い文字は上限で切り詰め、文字の無い図形は番号だけ、結ばれていない端は ? のまま。
+    clipped = "長" * MAX_CONNECTOR_END_TEXT_CHARS + "…"
+    assert any(line.startswith(f"- #4: #2 {clipped} → #3 (") for line in lines)
+    assert any(line.startswith("- #5: #3 → ? (") for line in lines)
+    # 図形の一覧には全文を書く。
+    assert f"- #2 (0,0)-(100,20): {long_text}" in lines
 
 
 def test_region_without_connectors_has_no_text():

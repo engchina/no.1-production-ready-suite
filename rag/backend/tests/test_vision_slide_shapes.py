@@ -22,6 +22,7 @@ from rag_engine.parsing.slide_shapes import (
 from rag_engine.parsing.vision_prompt_rules import VISION_SOURCE_SHAPES_INSTRUCTION
 
 from app.config import Settings
+from app.rag.chunking import chunk_extraction_with_strategy
 from app.rag.chunking_small_to_big import build_parent_child_chunks
 from app.rag.ingestion import IngestionPipeline
 from app.rag.source_profile import build_source_profile
@@ -84,7 +85,7 @@ DIAGRAM = "".join(
 )
 
 
-def _pptx(slide_count: int = 1) -> bytes:
+def _pptx(slide_count: int = 1, diagram: str = DIAGRAM) -> bytes:
     ids = "".join(f'<p:sldId id="{256 + n}" r:id="rId{n}"/>' for n in range(1, slide_count + 1))
     rels = "".join(
         f'<Relationship Id="rId{n}" Type="{R}/slide" Target="slides/slide{n}.xml"/>'
@@ -108,7 +109,7 @@ def _pptx(slide_count: int = 1) -> bytes:
                 f"ppt/slides/slide{n}.xml",
                 f'<p:sld xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:cSld><p:spTree>'
                 '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
-                f"<p:grpSpPr/>{DIAGRAM}</p:spTree></p:cSld></p:sld>",
+                f"<p:grpSpPr/>{diagram}</p:spTree></p:cSld></p:sld>",
             )
     return buffer.getvalue()
 
@@ -135,8 +136,8 @@ def test_slide_structure_reaches_vision_input_figure_text_and_chunks() -> None:
     structure = describer.calls[0]["metadata"][SOURCE_SLIDE_SHAPES_KEY]
     lines = structure.splitlines()
     # 2 本の枝はどちらも中継から出る。ラベルは位置つきの図形として書き、接続には結び付けない。
-    assert any(line.startswith("- #11: #3 ") and " → #4 " in line for line in lines)
-    assert any(line.startswith("- #12: #3 ") and " → #5 " in line for line in lines)
+    assert any(line.startswith("- #11: #3 中継 → #4 宛先A ") for line in lines)
+    assert any(line.startswith("- #12: #3 中継 → #5 宛先B ") for line in lines)
     assert any(line.startswith("- #6 (") and line.endswith(": 条件1 条件2") for line in lines)
     prompt = describer.calls[0]["prompt"]
     assert VISION_SOURCE_SHAPES_INSTRUCTION in prompt
@@ -151,6 +152,28 @@ def test_slide_structure_reaches_vision_input_figure_text_and_chunks() -> None:
     assert figure.text == picture["text"]
     chunks = build_parent_child_chunks(result, source_name="slides.pptx")
     assert any(structure in chunk.text for chunk in chunks)
+
+
+def test_connector_lines_name_both_ends_in_each_split_chunk() -> None:
+    """図の説明が分割され、接続線の行が図形の一覧と別の chunk に入っても、両端の図形が読める。
+
+    #5386。
+    """
+    # 図の領域に文字の図形を足して図形の一覧を長くし、図の説明を複数の chunk に分ける。
+    notes = "".join(
+        _sp(40 + n, f"補足{n}の合成の説明", (105, 160 + n * 5, 40, 4)) for n in range(12)
+    )
+    result, _ = _read(read_presentation_shapes(_pptx(diagram=DIAGRAM + notes)))
+    chunks = chunk_extraction_with_strategy(
+        result, strategy="structure_aware", chunk_size=300, overlap=0
+    )
+
+    connector_chunk = next(chunk.text for chunk in chunks if "- #11: " in chunk.text)
+    # 中継・宛先A の図形の一覧の行は別の chunk にあり、接続線の行だけで両端の図形が読める。
+    assert "- #3 (" not in connector_chunk and "- #4 (" not in connector_chunk
+    assert "- #10: #2 開始 → #3 中継 " in connector_chunk
+    assert "- #11: #3 中継 → #4 宛先A " in connector_chunk
+    assert "- #12: #3 中継 → #5 宛先B " in connector_chunk
 
 
 def test_slide_structure_is_not_used_when_slide_and_page_counts_differ() -> None:
