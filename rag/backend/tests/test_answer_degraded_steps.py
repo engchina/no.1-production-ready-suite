@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 
+import oracledb
 import pytest
 from rag_engine.knowledge.runtime_knowledge import TERMS_SOURCE_LABEL
 
@@ -20,6 +21,7 @@ from app.config import Settings
 from app.rag import answer_engine as answer_engine_module
 from app.rag.answer_engine import AnswerEngine, _SearchState
 from app.rag.cross_references import ReferenceTarget
+from app.rag.entity_expansion import EntitySeedRow
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from tests.test_answer_engine import (
     EmptyWithKeysOracle,
@@ -331,6 +333,61 @@ async def test_zero_evidence_separates_read_failure_from_no_hit(
     assert zero["stage"] == "retrieval"
     assert zero["degraded_steps"] == []
     assert "degraded_steps" not in outcome.diagnostics
+    assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
+
+
+class _TimedOutEntityStore:
+    """1 段の SQL が DB の呼出しの上限(call_timeout)で止まる実体の表(#5381)。"""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def entity_seed_aliases(self, filters: Any, **kwargs: Any) -> list[EntitySeedRow]:
+        self.calls.append("seed")
+        return [
+            EntitySeedRow(
+                entity_id="entity-a",
+                alias_key="合成a",
+                scope_label=None,
+                in_question=False,
+                seed_rank=0,
+            )
+        ]
+
+    async def entity_definition_chunks(self, filters: Any, **kwargs: Any) -> list[Any]:
+        self.calls.append("definition")
+        return []
+
+    async def entity_attribute_definition_chunks(self, filters: Any, **kwargs: Any) -> list[Any]:
+        self.calls.append("hop")
+        # python-oracledb の call_timeout の失敗と同じ型(DatabaseError)・同じ符号。
+        raise oracledb.DatabaseError(f"DPY-4024: call timeout of 60000 ms exceeded {SECRET}")
+
+
+async def test_entity_expansion_db_call_timeout_is_degraded_and_answer_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """実体の拡張の SQL が DB の呼出しの上限で止まっても、その段を飛ばして回答を続ける(#5381)。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    store = _TimedOutEntityStore()
+    engine = AnswerEngine(
+        Settings(rag_entity_expansion_enabled=True, rag_graph_expansion_enabled=False),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        entity_store=store,
+    )
+
+    outcome = await engine.run(
+        SearchRequest(query="登録の手順は？", filters={"knowledge_base_id": "kb-1"})
+    )
+
+    assert "hop" in store.calls
+    assert outcome.citations
+    assert outcome.diagnostics["degraded_steps"] == [
+        {"kind": "entity_expansion", "count": 1, "exc_type": "DatabaseError"}
+    ]
     assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
 
 

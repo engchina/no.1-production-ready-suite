@@ -1853,6 +1853,18 @@ class Settings(
             "せず、入る根拠だけで 1 回生成する。"
         ),
     )
+    rag_db_call_timeout_seconds: float = Field(
+        default=60.0,
+        ge=1.0,
+        le=RAG_ANSWER_TIMEOUT_MAX_SECONDS,
+        description=(
+            "回答の経路（チャット・RAG 検索・MCP・品質評価の 1 ケースの検索と回答）の DB の"
+            "呼出し 1 回の上限（秒。#5381。既定 60、1〜1200）。超えると python-oracledb の"
+            " call_timeout で DB の側の SQL も止める（DPY-4024）。任意の段（実体の拡張など）は"
+            "その段を飛ばして回答を続け、degraded_steps に残す。取込・索引の保守など回答の外の"
+            "呼出しには効かない。"
+        ),
+    )
     rag_answer_generation_round_estimate_seconds: float = Field(
         default=120.0,
         ge=1.0,
