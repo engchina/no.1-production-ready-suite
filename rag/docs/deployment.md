@@ -221,6 +221,29 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5359 PowerPoint の図形と接続線を図の読み取りに渡す）
+
+PowerPoint（`.pptx` / `.pptm`）を「ファイル準備」の **Office→PDF** で変換して解析し、「図・画像を AI で読み取る」が有効な
+とき、原本の slide XML から図形（ID・文字・位置）と接続線（`p:cxnSp` の `a:stCxn` / `a:endCxn` が指す始点と終点の図形、
+端の位置、矢印）を形式どおりに読み、図の領域にある分を (1) 図の読み取りの入力（metadata の `source_slide_shapes` と
+読み方の指示「原ファイルの図形と接続線があるときに足す指示」）と、(2) 図の説明の本文の「■ 原ファイルの図形」のグループ
+（Vision の項目とは別。図の chunk に入る）に入れる。ラベルの文字の図形がどの接続線に付くかは、コードで決めず読み取りの
+モデルが画像と位置から判断する。
+
+- migration・設定の追加は無い。本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけでよい。
+- 抽出結果の版（`EXTRACTION_ARTIFACT_SCHEMA_VERSION`）を 16 に上げた。保存済みの抽出結果は使い直されないので、
+  **対象の文書（Office→PDF で取り込んだ PowerPoint で、接続線を持つ図があるもの）を解析から再処理する**と反映される。
+  図の読み取りの入力が変わるので、Vision の応答は読み直す（同じ図の古い応答は使わない）。
+- 変わらないもの: PDF・画像で取り込んだ文書（原本に図形の構造が無い）、Office→PDF 以外で解析した PowerPoint、
+  「図・画像を AI で読み取る」が無効のとき、表示するスライドの数と変換した PDF の頁数が合わない原本（頁とスライドを
+  対応付けられないので使わず、ログ `vision_slide_shapes_page_mismatch` を出す）、接続線の無いスライド、SmartArt・
+  グラフ・図形の線（`p:cxnSp` でない線）だけの図。
+- 言語資源の `content_labels.vision_groups` に `原ファイルの図形=source`、`content_labels.vision_fields` に
+  `図形=source_shapes` と `接続線=source_connectors` を足した（組み込みの値）。公開済みの言語資源には入らないので、
+  そのままでは見出しが `source` / `source_shapes` / `source_connectors` のまま本文に出る（契約には合うので確認は NG に
+  ならない）。日本語の見出しにするときは、再処理の前にシステム設定の言語資源でこの 3 行を足して公開する
+  （取込に使う言語資源の版が変わる。言語資源の画面の案内に従う）。
+
 ## 既存環境の更新手順（#5340 品質評価の回答の方法）
 
 品質評価で回答の方法（チャット＝RAG チャットと同じ拡張の経路／RAG 検索＝基本の RAG）を選べるようにし、job の行に残す。

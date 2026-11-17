@@ -357,6 +357,7 @@ def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
         "table",
         "contextImage",
         "contextRecords",
+        "sourceShapes",
         "contract",
     ]
     assert stage.prompts[1].content == content

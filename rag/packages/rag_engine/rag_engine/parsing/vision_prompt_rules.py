@@ -138,6 +138,13 @@ VISION_CONTEXT_RECORDS_INSTRUCTION = """### 周辺の記録の読み方
 - 周辺の説明を retrieval_text に使う場合は「周辺の同行説明では」等と出所を明示し、別行・別節の条件や結果を結び付けない。
 - 画像と OCR が食い違う場合は読める画像を優先し、読めない箇所は空欄にして correction_notes に残す。"""
 
+# 原本（PowerPoint）の図形と接続線の文を渡す metadata の key。図の record の raw にも同じ key で残す（#5359）。
+SOURCE_SLIDE_SHAPES_KEY = "source_slide_shapes"
+
+VISION_SOURCE_SHAPES_INSTRUCTION = f"""### 原ファイルの図形の読み方
+- metadata.{SOURCE_SLIDE_SHAPES_KEY} は、原ファイルのスライドから読み取った対象領域の図形（#ID・位置・文字）と接続線（始点の図形 → 終点の図形と、始点から終点までの線の点の位置）です。位置は metadata.bbox と同じ座標です。矢印の印は、→ が終点、← が始点、↔ が両端に矢印があり、— は矢印がありません。
+- 接続線がどの図形とどの図形をつなぐかは {SOURCE_SLIDE_SHAPES_KEY} のとおりに読んでください。接続線につながっていない文字の図形がどの接続線に付くかは、画像と位置から判断してください。"""
+
 # 周辺の記録の案内を足す条件の metadata の key（値が空なら足さない）。
 _CONTEXT_RECORD_KEYS = (
     "nearby_headings",
@@ -150,13 +157,15 @@ _CONTEXT_RECORD_KEYS = (
 
 
 def vision_context_instructions(metadata: dict[str, Any]) -> list[str]:
-    """周辺の画像・記録の読み方を、その入力がある呼び出しの分だけ返す。"""
+    """周辺の画像・記録・原ファイルの図形の読み方を、その入力がある呼び出しの分だけ返す。"""
     parts: list[str] = []
     image_inputs = metadata.get("image_inputs")
     if isinstance(image_inputs, list) and len(image_inputs) > 1:
         parts.append(resolve_prompt("picture_description.contextImage", VISION_CONTEXT_IMAGE_INSTRUCTION))
     if any(metadata.get(key) for key in _CONTEXT_RECORD_KEYS):
         parts.append(resolve_prompt("picture_description.contextRecords", VISION_CONTEXT_RECORDS_INSTRUCTION))
+    if metadata.get(SOURCE_SLIDE_SHAPES_KEY):
+        parts.append(resolve_prompt("picture_description.sourceShapes", VISION_SOURCE_SHAPES_INSTRUCTION))
     return parts
 
 

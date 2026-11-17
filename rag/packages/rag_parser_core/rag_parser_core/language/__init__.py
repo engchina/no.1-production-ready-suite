@@ -71,6 +71,9 @@ VISION_FIELDS = (
     "search_keywords",
     "query_rewrites",
     "answerable_questions",
+    # 原本（PowerPoint）の図形と接続線（#5359）。Vision の出力ではなく、原本の構造から書く。
+    "source_shapes",
+    "source_connectors",
 )
 
 # 画面の図の項目の種類のうち、表示の語を持つ値
@@ -309,7 +312,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "content_labels",
         "vision_groups",
         FieldKind.ENUM_MAP,
-        choices=("summary", "visible", "structure", "relation", "supplement", "search"),
+        choices=("summary", "visible", "structure", "relation", "supplement", "source", "search"),
     ),
     FieldSpec(
         "content_labels",

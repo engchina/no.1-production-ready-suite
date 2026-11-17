@@ -129,8 +129,9 @@ def _restore_saved_vision_text(record: LayoutRecord) -> None:
     if not isinstance(description, dict) or record.raw.get("vision_error"):
         return
     from rag_engine.parsing.picture_descriptions import vision_text_projection
+    from rag_engine.parsing.slide_shapes import SOURCE_SLIDE_SHAPES_KEY
 
-    projection = vision_text_projection(description)
+    projection = vision_text_projection(description, source_shapes=str(record.raw.get(SOURCE_SLIDE_SHAPES_KEY) or ""))
     if not projection.answer_description.strip():
         return
     record.text = projection.answer_description
