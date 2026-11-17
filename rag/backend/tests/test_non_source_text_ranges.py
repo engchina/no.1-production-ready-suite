@@ -14,6 +14,7 @@ from typing import Any
 from rag_parser_core.non_source_text import (
     NON_SOURCE_RANGES_KEY,
     PARENT_NON_SOURCE_RANGES_KEY,
+    TextRanges,
     dump_ranges,
     load_ranges,
 )
@@ -46,7 +47,7 @@ def _extraction() -> Any:
     return extraction
 
 
-def _ranges(text: str, metadata: dict[str, Any], key: str = NON_SOURCE_RANGES_KEY) -> tuple:
+def _ranges(text: str, metadata: dict[str, Any], key: str = NON_SOURCE_RANGES_KEY) -> TextRanges:
     return load_ranges(metadata.get(key), len(text))
 
 
