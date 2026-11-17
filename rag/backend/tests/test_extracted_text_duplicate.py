@@ -402,3 +402,37 @@ async def test_record_for_missing_document_writes_nothing() -> None:
         is None
     )
     assert len(pool.connection.calls) == 1
+
+
+async def test_same_extracted_text_documents_groups_other_documents_by_hash() -> None:
+    """品質評価の同一視（#5325）: hash のある文書の、同じ hash の別の文書を登録の順に返す。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {"document_id": "doc-1", "same_text_document_id": "doc-2"},
+                {"document_id": "doc-1", "same_text_document_id": "doc-3"},
+            ]
+        ]
+    )
+
+    found = await _client(pool).same_extracted_text_document_ids(["doc-1", " ", "doc-1", "doc-4"])
+
+    assert found == {"doc-1": ["doc-2", "doc-3"]}
+    assert len(pool.connection.calls) == 1
+    query = " ".join(pool.connection.calls[0].statement.split())
+    assert "ON other.extracted_text_sha256 = base.extracted_text_sha256" in query
+    assert "other.document_id <> base.document_id" in query
+    assert "base.extracted_text_sha256 IS NOT NULL" in query
+    assert "ORDER BY base.document_id, other.uploaded_at, other.document_id" in query
+    assert {
+        key: value
+        for key, value in pool.connection.calls[0].parameters.items()
+        if key.startswith("same_text_document_id")
+    } == {"same_text_document_id_0": "doc-1", "same_text_document_id_1": "doc-4"}
+
+
+async def test_same_extracted_text_documents_without_ids_does_not_query() -> None:
+    pool = FakeOraclePool(execute_results=[])
+
+    assert await _client(pool).same_extracted_text_document_ids([]) == {}
+    assert pool.connection.calls == []

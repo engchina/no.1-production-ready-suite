@@ -2136,6 +2136,47 @@ class OracleClient:
                 )
         return locations
 
+    async def same_extracted_text_document_ids(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, list[str]]:
+        """解析後の本文の hash（`extracted_text_sha256`。#5313）が同じ別の文書の ID（#5325）。
+
+        品質評価の根拠の照合で、同じ本文の文書を同じ文書とみなすために使う。hash の無い文書・
+        同じ hash の文書の無い文書は結果に含めない。別の文書は登録の順に並べる。
+        """
+        found: dict[str, list[str]] = {}
+        unique_ids = _unique_optional_sequence(document_ids)
+        for offset in range(0, len(unique_ids), _EVALUATION_LOCATION_BATCH):
+            batch = unique_ids[offset : offset + _EVALUATION_LOCATION_BATCH]
+            in_sql, in_binds = _oracle_in_predicate(
+                "base.document_id", "same_text_document_id", batch
+            )
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT base.document_id, other.document_id AS same_text_document_id
+                FROM rag_documents base
+                JOIN rag_documents other
+                  ON other.extracted_text_sha256 = base.extracted_text_sha256
+                 AND other.document_id <> base.document_id
+                WHERE base.extracted_text_sha256 IS NOT NULL
+                  AND {in_sql}
+                  AND {base_tenant_sql}
+                  AND {other_tenant_sql}
+                ORDER BY base.document_id, other.uploaded_at, other.document_id
+                """,
+                    in_sql=in_sql,
+                    base_tenant_sql=_oracle_tenant_predicate(alias="base"),
+                    other_tenant_sql=_oracle_tenant_predicate(alias="other"),
+                ),
+                _with_tenant_bind(in_binds),
+            )
+            for row in rows:
+                found.setdefault(str(row["document_id"]), []).append(
+                    str(row["same_text_document_id"])
+                )
+        return found
+
     async def readable_document_chunks(
         self, document_id: str, *, chunk_set_id: str, from_index: int, limit: int
     ) -> list[RetrievedChunk]:

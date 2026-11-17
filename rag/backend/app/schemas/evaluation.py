@@ -364,6 +364,7 @@ class EvaluationCase(EvaluationHandlingExpectation):
     relevant_document_ids: list[str] = Field(default_factory=list)
     # 同じ文書とみなす別の文書の ID（正解の文書の ID → 別の文書の ID の列。#2086）。評価の Excel で
     # 同じ名前の文書が複数あるとき、どれが引用されても正解の文書・必要な根拠の文書に一致させる。
+    # 評価の実行では、解析後の本文が同じ文書も足す（#5325。`with_same_text_equivalents`）。
     equivalent_document_ids: dict[str, list[str]] = Field(default_factory=dict)
     standard_answer: str | None = Field(default=None, max_length=STANDARD_ANSWER_MAX_CHARS)
     answerable: bool | None = None
@@ -559,6 +560,9 @@ class EvaluationCaseResult(BaseModel):
     retrieved_document_ids: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
     hit_document_ids: list[str] = Field(default_factory=list)
+    # 同じ文書とみなして正解の文書の ID にそろえた引用の文書（正解の文書の ID → 引用の文書の ID の
+    # 列。同じファイル名・解析後の本文が同じ文書。#2086・#5325）。前の結果には無い。
+    equated_document_ids: dict[str, list[str]] = Field(default_factory=dict)
     required_evidence_recall: float | None = None
     mrr: float | None = None
     answer_correctness: float | None = None
