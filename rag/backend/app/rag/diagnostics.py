@@ -77,6 +77,15 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "reference_outline_selection_enabled": (
             resolved_settings.rag_reference_outline_selection_enabled
         ),
+        # 検索の上位の文書の目次から選んだ章節を rerank の枠の外で根拠に足す(#5324)。
+        "outline_selection_enabled": resolved_settings.rag_outline_selection_enabled,
+        "outline_selection_max_documents": resolved_settings.rag_outline_selection_max_documents,
+        "outline_selection_catalog_max_chars": (
+            resolved_settings.rag_outline_selection_catalog_max_chars
+        ),
+        "outline_selection_read_max_chars": (
+            resolved_settings.rag_outline_selection_read_max_chars
+        ),
         # 実体の 1 段の拡張(#1362)。検索方法の全体設定で選ぶ(#1388・#3053)。
         "entity_expansion_enabled": resolved_settings.rag_entity_expansion_enabled,
         "entity_expansion_max_chunks": resolved_settings.rag_entity_expansion_max_chunks,

@@ -39,6 +39,22 @@ const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200
   label: t("settings.answering.answerTimeoutOption", { seconds: String(seconds) }),
 }));
 
+// 検索の上位の文書の目次から章節を選ぶ設定の選択肢（#5324。範囲は backend の rag_outline_selection_* と同じ）。
+// .env で選択肢の外の値を保存していれば、その値も選べるように足す。
+const OUTLINE_DOCUMENT_CHOICES = Array.from({ length: 10 }, (_, n) => n + 1);
+const OUTLINE_CATALOG_CHAR_CHOICES = [10000, 20000, 40000, 80000];
+const OUTLINE_READ_CHAR_CHOICES = [5000, 10000, 20000, 40000, 80000, 200000];
+
+function countOptions(choices: number[], current: number, label: (value: number) => string): SelectFieldOption<string>[] {
+  return [...new Set([...choices, current])]
+    .sort((left, right) => left - right)
+    .map((value) => ({ value: String(value), label: label(value) }));
+}
+
+function charOption(value: number): string {
+  return t("settings.answering.charsOption", { chars: value.toLocaleString("ja-JP") });
+}
+
 type AnsweringDraft = Omit<
   AnsweringSettingsData,
   "config_source" | "runtime_terms_answer_enabled"
@@ -58,6 +74,10 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
     reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? true,
+    outline_selection_enabled: settings.outline_selection_enabled ?? false,
+    outline_selection_max_documents: settings.outline_selection_max_documents ?? 3,
+    outline_selection_catalog_max_chars: settings.outline_selection_catalog_max_chars ?? 40000,
+    outline_selection_read_max_chars: settings.outline_selection_read_max_chars ?? 20000,
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
@@ -274,6 +294,25 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled}
           onChange={(checked) => update({ reference_outline_selection_enabled: checked })}
         />
+        <div>
+          <SwitchRow id="answering-outline-selection" label={t("settings.answering.outlineSelection")}
+            description={t("settings.answering.outlineSelectionHint")} checked={form.outline_selection_enabled}
+            disabled={disabled} onChange={(checked) => update({ outline_selection_enabled: checked })} />
+          {form.outline_selection_enabled ? <FormGrid className="px-3 pb-3">
+            <SelectField id="answering-outline_selection_max_documents" label={t("settings.answering.outline_selection_max_documents")} width="xs"
+              value={String(form.outline_selection_max_documents)} disabled={disabled}
+              options={countOptions(OUTLINE_DOCUMENT_CHOICES, form.outline_selection_max_documents, String)}
+              onValueChange={(value) => update({ outline_selection_max_documents: Number(value) })} />
+            <SelectField id="answering-outline_selection_catalog_max_chars" label={t("settings.answering.outline_selection_catalog_max_chars")} width="xs"
+              value={String(form.outline_selection_catalog_max_chars)} disabled={disabled}
+              options={countOptions(OUTLINE_CATALOG_CHAR_CHOICES, form.outline_selection_catalog_max_chars, charOption)}
+              onValueChange={(value) => update({ outline_selection_catalog_max_chars: Number(value) })} />
+            <SelectField id="answering-outline_selection_read_max_chars" label={t("settings.answering.outline_selection_read_max_chars")} width="xs"
+              value={String(form.outline_selection_read_max_chars)} disabled={disabled}
+              options={countOptions(OUTLINE_READ_CHAR_CHOICES, form.outline_selection_read_max_chars, charOption)}
+              onValueChange={(value) => update({ outline_selection_read_max_chars: Number(value) })} />
+          </FormGrid> : null}
+        </div>
         <SwitchRow
           id="answering-graph-expansion"
           label={t("settings.answering.graphExpansion")}
