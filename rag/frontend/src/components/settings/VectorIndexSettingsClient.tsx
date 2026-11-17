@@ -9,11 +9,12 @@ import {
   CardTitle,
   FormActionBar,
   FormStatus,
+  RadioOptionGroup,
   TimedLoadingState,
   FormSkeleton,
 } from "@production-ready/ui";
 import { useState } from "react";
-import { Boxes, CheckCircle2, Database, RotateCcw, Save } from "lucide-react";
+import { Boxes, Database, RotateCcw, Save } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { SettingsPreviewCard } from "@/components/settings/SettingsPreviewPanels";
@@ -28,7 +29,6 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useUpdateVectorIndexSettings, useVectorIndexSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: VectorIndexProfileName[] = ["fast", "balanced", "accurate"];
 
@@ -132,55 +132,19 @@ export function VectorIndexSettingsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="space-y-2">
-            <div className="text-sm font-medium text-fg">
-              {t("settings.vectorIndex.profile")}
-            </div>
-            <div
-              role="radiogroup"
-              aria-label={t("settings.vectorIndex.profile")}
-              className="grid grid-cols-1 gap-2 md:grid-cols-3"
-            >
-              {profiles.map((item) => {
-                const selected = profile === item.name;
-                return (
-                  <div key={item.name} className="relative min-w-0">
-                    <input
-                      id={`settings-vector-index-profile-${item.name}`}
-                      className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                      type="radio"
-                      name="settings-vector-index-profile"
-                      value={item.name}
-                      checked={selected}
-                      disabled={save.isPending}
-                      onChange={() => selectProfile(item.name)}
-                    />
-                    <label
-                      data-surface-tint={selected ? "accent" : undefined}
-                      htmlFor={`settings-vector-index-profile-${item.name}`}
-                      className={cn(
-                        "block h-full cursor-pointer min-h-[8rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-                        selected
-                          ? "border-accent-emphasis bg-accent-subtle text-fg"
-                          : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
-                      )}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold">{profileLabel(item.name)}</span>
-                        {selected ? (
-                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
-                        ) : null}
-                      </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                        {profileDescription(item.name)}
-                      </span>
-                      <ProfileChips profile={item} />
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <RadioOptionGroup<VectorIndexProfileName>
+            id="settings-vector-index-profile"
+            legend={t("settings.vectorIndex.profile")}
+            options={profiles.map((item) => ({
+              value: item.name,
+              label: profileLabel(item.name),
+              badges: <ProfileChips profile={item} />,
+              description: profileDescription(item.name),
+            }))}
+            value={profile}
+            onValueChange={selectProfile}
+            disabled={save.isPending}
+          />
           <dl className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <RuntimeFact
               label={t("settings.vectorIndex.targetAccuracy")}
@@ -246,7 +210,7 @@ export function VectorIndexSettingsClient() {
 
 function ProfileChips({ profile }: { profile: VectorIndexProfileStatusData }) {
   return (
-    <span className="mt-2 flex flex-wrap gap-1">
+    <>
       <span data-surface-tint="info" className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
         {t("settings.vectorIndex.targetAccuracy")} {profile.target_accuracy}
       </span>
@@ -256,7 +220,7 @@ function ProfileChips({ profile }: { profile: VectorIndexProfileStatusData }) {
       <span data-surface-tint="neutral" className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
         {t("settings.vectorIndex.efconstruction")} {profile.efconstruction}
       </span>
-    </span>
+    </>
   );
 }
 

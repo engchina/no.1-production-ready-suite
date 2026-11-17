@@ -20,12 +20,12 @@ import {
   ListToolbar,
   listCountText,
   FieldActionRow,
-  FieldError,
-  FieldLegend,
+  Fieldset,
   TextField,
   PageBody,
   useConfirm,
   ProcessingIndicator,
+  RadioOptionGroup,
   ObjectActionBar,
   RowActionMenu,
   FormActionBar,
@@ -447,9 +447,8 @@ export function UserManagementPage({
       else if (errors.displayName) displayNameRef.current?.focus();
       else if (errors.temporaryPassword) temporaryPasswordRef.current?.focus();
       else if (errors.selectedRoleId) {
-        roleGroupRef.current
-          ?.querySelector<HTMLInputElement>('input[type="radio"]:not(:disabled)')
-          ?.focus();
+        // 群の中の入力はロールのラジオだけ。
+        roleGroupRef.current?.querySelector<HTMLInputElement>("input:not(:disabled)")?.focus();
       }
     });
   };
@@ -827,6 +826,11 @@ export function UserManagementPage({
           (role) => role.role_id !== baseline.selectedRoleId && role.role_id !== draft.selectedRoleId,
         )
       : [];
+  // ロールの欄の見出しと補足（system_admin を割り当てられない案内は補足として欄に結ぶ）。
+  const roleLegend = t("security.users.roles");
+  const roleHelper = systemAdminRoleHidden ? (
+    <span data-testid="security-users-role-system-admin-note">{t("security.users.systemAdminConfigOnly")}</span>
+  ) : undefined;
   const back = { label: t("security.common.backToList"), onClick: () => void returnToList(), disabled: operationBusy, testId: "security-users-back" };
   const errorBanners = (
     <>
@@ -941,89 +945,58 @@ export function UserManagementPage({
                     />
                   ) : null}
                 </FormGrid>
-                <fieldset className="grid gap-2 border-t border-border pt-5" disabled={inputReadOnly}>
-                  {/* 必須は下の radiogroup の aria-required で伝えるので、legend のタグは読み上げない。 */}
-                  <FieldLegend id="security-users-role-legend" required={!userFormReadOnly} requiredAnnouncedByControl>
-                    {t("security.users.roles")}
-                  </FieldLegend>
+                <div className="grid gap-2 border-t border-border pt-5">
                   {loadError && roleOptions.length === 0 ? (
                     // ロールの候補を読み取れないまま「利用可能なロールがありません」と見せず、欄の位置に失敗と再試行を出す（#4817）。
-                    <DataLoadFailureState
-                      error={new Error(loadError)}
-                      fallback={t("security.users.rolesLoadError")}
-                      labels={{
-                        timeout: t("common.dataLoad.timeout"),
-                        unavailable: t("common.dataLoad.unavailable"),
-                        unavailableRestricted: t("common.dataLoad.unavailableRestricted"),
-                        retry: t("common.retry"),
-                        staleTitle: (time) => t("common.dataLoad.staleTitle", { time }),
-                        staleOther: t("common.dataLoad.staleOther"),
-                      }}
-                      onRetry={() => void load()}
-                      layout="field"
-                      testId="security-users-roles-load-failed"
-                    />
-                  ) : roleOptions.length === 0 ? (
-                    <p className="text-sm text-fg-muted">{t("security.users.noRole")}</p>
-                  ) : (
-                    <div
-                      ref={roleGroupRef}
-                      className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
-                      role="radiogroup"
-                      aria-labelledby="security-users-role-legend"
-                      aria-required={userFormReadOnly ? undefined : "true"}
-                      aria-invalid={fieldErrors.selectedRoleId ? "true" : undefined}
-                      aria-describedby={
-                        [
-                          systemAdminRoleHidden ? "security-users-role-system-admin-note" : "",
-                          fieldErrors.selectedRoleId ? "security-users-role-error" : "",
-                        ].filter(Boolean).join(" ") || undefined
-                      }
+                    <Fieldset
+                      id="security-users-role"
+                      legend={roleLegend}
+                      helper={roleHelper}
+                      required={!userFormReadOnly}
                     >
-                      {roleOptions.map((role) => {
-                        const disabled = userFormReadOnly;
-                        const selected = draft.selectedRoleId === role.role_id;
-                        return (
-                          <label
-                            key={role.role_id}
-                            data-surface-tint={disabled ? "neutral" : selected ? "info" : undefined}
-                            className={cn(
-                              "flex min-h-11 items-start gap-2 rounded-md border p-2.5 text-sm transition-colors",
-                              disabled
-                                ? cn("cursor-not-allowed bg-surface-hover text-fg-muted", selected && "border-accent-emphasis")
-                                : selected
-                                  ? "cursor-pointer border-accent-emphasis bg-info-subtle"
-                                  : "cursor-pointer border-border hover:bg-surface-hover"
-                            )}
-                          >
-                            <input
-                              className="mt-0.5 h-4 w-4 accent-accent-emphasis disabled:cursor-not-allowed"
-                              type="radio"
-                              name="security-users-role"
-                              value={role.role_id}
-                              checked={selected}
-                              disabled={disabled}
-                              onChange={() => selectRole(role.role_id)}
-                            />
-                            <span className="min-w-0">
-                              {/* ロール名だけを出す（コード・ID は出さない。#1682） */}
-                              <span className="block break-words font-medium">{roleDisplayName(role)}</span>
-                            </span>
-                          </label>
-                        );
-                      })}
+                      <DataLoadFailureState
+                        error={new Error(loadError)}
+                        fallback={t("security.users.rolesLoadError")}
+                        labels={{
+                          timeout: t("common.dataLoad.timeout"),
+                          unavailable: t("common.dataLoad.unavailable"),
+                          unavailableRestricted: t("common.dataLoad.unavailableRestricted"),
+                          retry: t("common.retry"),
+                          staleTitle: (time) => t("common.dataLoad.staleTitle", { time }),
+                          staleOther: t("common.dataLoad.staleOther"),
+                        }}
+                        onRetry={() => void load()}
+                        layout="field"
+                        testId="security-users-roles-load-failed"
+                      />
+                    </Fieldset>
+                  ) : roleOptions.length === 0 ? (
+                    <Fieldset
+                      id="security-users-role"
+                      legend={roleLegend}
+                      helper={roleHelper}
+                      required={!userFormReadOnly}
+                      error={fieldErrors.selectedRoleId}
+                    >
+                      <p className="text-sm text-fg-muted">{t("security.users.noRole")}</p>
+                    </Fieldset>
+                  ) : (
+                    // 保存のエラーのときは、最初の選べるロールへフォーカスを移す（focusFirstFieldError）。
+                    <div ref={roleGroupRef}>
+                      <RadioOptionGroup
+                        id="security-users-role"
+                        legend={roleLegend}
+                        helper={roleHelper}
+                        required={!userFormReadOnly}
+                        error={fieldErrors.selectedRoleId}
+                        // ロール名だけを出す（コード・ID は出さない。#1682）
+                        options={roleOptions.map((role) => ({ value: role.role_id, label: roleDisplayName(role) }))}
+                        value={draft.selectedRoleId || null}
+                        onValueChange={selectRole}
+                        disabled={inputReadOnly}
+                      />
                     </div>
                   )}
-                  {systemAdminRoleHidden ? (
-                    <p
-                      id="security-users-role-system-admin-note"
-                      className="text-sm text-fg-muted"
-                      data-testid="security-users-role-system-admin-note"
-                    >
-                      {t("security.users.systemAdminConfigOnly")}
-                    </p>
-                  ) : null}
-                  <FieldError id="security-users-role-error" message={fieldErrors.selectedRoleId} />
                   {otherAssignedRoles.length > 0 ? (
                     <p className="text-sm text-fg-muted" data-testid="security-users-other-roles">
                       {t("security.users.otherRoles", {
@@ -1031,7 +1004,7 @@ export function UserManagementPage({
                       })}
                     </p>
                   ) : null}
-                </fieldset>
+                </div>
                 {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
                 <SaveErrorBanner
                   message={formError}

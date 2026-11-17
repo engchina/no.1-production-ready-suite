@@ -30,15 +30,15 @@ for (const viewport of [
     const radio = page.getByRole("radio", { name: /OCI Document Understanding/ });
     await expect(radio).toBeDisabled();
     await expect(radio).toHaveAttribute("data-availability", "roadmap");
-    // 理由はカードの文で読み上げる（aria-describedby）。
-    await expect(radio).toHaveAccessibleDescription("準備中（ロードマップ）のため、まだ選べません。");
+    // 理由は説明の先頭の文で読み上げる（aria-describedby。#5343）。
+    await expect(radio).toHaveAccessibleDescription(/準備中（ロードマップ）のため、まだ選べません。/);
     const card = page.locator('label[for="settings-parser-backend-oci_document_understanding"]');
     await expect(card.locator("[data-roadmap-badge]")).toHaveText("準備中（ロードマップ）");
     await expect(card).toContainText("準備中（ロードマップ）のため、まだ選べません。");
     // 押しても選ばれず、保存できる変更にならない。
     await card.click({ force: true });
     await expect(radio).not.toBeChecked();
-    await expect(page.getByRole("radio", { name: /Docling.*既定の解析エンジン/ })).toBeChecked();
+    await expect(page.getByRole("radio", { name: "Docling", exact: true })).toBeChecked();
     expect(serviceRequests).toEqual([]);
     await expectNoHorizontalOverflow(page);
     await card.scrollIntoViewIfNeeded();
@@ -69,14 +69,15 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "文書解析", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: /Docling.*CPU.*稼働中/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Unstructured.*CPU.*縮退/ })).toBeVisible();
+    // 読み上げの名前はエンジン名だけ。バッジ（CPU・稼働の状態）と説明は説明として結ぶ（#5343）。
+    const docling = page.getByRole("radio", { name: "Docling", exact: true });
+    const unstructured = page.getByRole("radio", { name: "Unstructured", exact: true });
+    await expect(docling).toHaveAccessibleDescription(/CPU.*稼働中/);
+    await expect(unstructured).toHaveAccessibleDescription(/CPU.*縮退/);
     // 既定の解析エンジンは Docling(#286)。Unstructured は明示選択したときだけ使う。
-    await expect(page.getByRole("radio", { name: /Docling.*既定の解析エンジン/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /既定の解析エンジン/ })).toHaveCount(1);
-    await expect(
-      page.getByRole("radio", { name: /Unstructured.*選んだ場合だけ使用/ })
-    ).toBeVisible();
+    await expect(docling).toHaveAccessibleDescription(/既定の解析エンジン/);
+    await expect(page.getByRole("radiogroup").getByText(/既定の解析エンジン/)).toHaveCount(1);
+    await expect(unstructured).toHaveAccessibleDescription(/選んだ場合だけ使用/);
     // 対応形式の拡張子に .rst / .org を出し、読まない形式（.heic / .epub など）は出さない（#3351）。
     const unstructuredCard = page.locator('label[for="settings-parser-backend-unstructured"]');
     await expect(unstructuredCard).toContainText(".org");
@@ -87,22 +88,22 @@ for (const viewport of [
       path: test.info().outputPath(`parser-settings-${viewport.name}.png`),
       fullPage: true,
     });
-    await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*設定済み/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Dots.OCR", exact: true })).toHaveAccessibleDescription(/GPU.*設定済み/);
     // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。選択肢に出さない。
     await expect(page.getByRole("radio", { name: /Marker|Unlimited-OCR|GLM-OCR/ })).toHaveCount(0);
     // OCI Generative AI (Vision) は削除した（#2042）。
     await expect(page.getByRole("radio", { name: /OCI Generative AI/ })).toHaveCount(0);
     // XML ツリー JSON は Docling・Unstructured と同じ形のカード（CPU・説明・対応形式・稼働の状態。#2042）。
-    const xmlTreeJson = page.getByRole("radio", { name: /XML ツリー JSON.*CPU.*稼働中/ });
-    await expect(xmlTreeJson).toBeVisible();
+    const xmlTreeJson = page.getByRole("radio", { name: "XML ツリー JSON", exact: true });
+    await expect(xmlTreeJson).toHaveAccessibleDescription(/CPU.*稼働中/);
     const xmlTreeJsonCard = page.locator('label[for="settings-parser-backend-xml_tree_json"]');
     await expect(xmlTreeJsonCard).toContainText("要素の階層のまま解析");
     await expect(xmlTreeJsonCard).toContainText("対応形式: JSON");
     await expect(xmlTreeJsonCard).toContainText(".json");
     // 構造化レコード JSONL も同じ形のカード（Unstructured の後・XML ツリー JSON の前。#2457）。
     await expect(
-      page.getByRole("radio", { name: /構造化レコード JSONL.*CPU.*稼働中/ })
-    ).toBeVisible();
+      page.getByRole("radio", { name: "構造化レコード JSONL", exact: true })
+    ).toHaveAccessibleDescription(/CPU.*稼働中/);
     const structuredRecordsCard = page.locator(
       'label[for="settings-parser-backend-structured_records_jsonl"]'
     );
@@ -133,8 +134,8 @@ for (const viewport of [
     expect(engineNames[3]).toContain("XML ツリー JSON");
     expect(engineNames[4]).toContain("Dots.OCR");
     expect(engineNames[5]).toContain("OCI Document Understanding");
-    // desktop は 2 列（1 行目 Docling・Unstructured / 2 行目 構造化レコード JSONL・XML ツリー JSON /
-    // 3 行目 Dots.OCR・OCI Document Understanding）、375px は 1 列で同じ順。
+    // 列の数は置き場所の幅で決まる（共有の RadioOptionGroup。#5343）。desktop は複数の列に行の順（左から右、
+    // 上から下）で並び、375px は 1 列で同じ順。
     const cardBoxes = await page
       .locator('label[for^="settings-parser-backend-"]')
       .evaluateAll((elements) =>
@@ -145,13 +146,16 @@ for (const viewport of [
       );
     expect(cardBoxes).toHaveLength(6);
     if (viewport.name === "desktop") {
-      for (const row of [0, 2, 4]) {
-        expect(cardBoxes[row].y).toBe(cardBoxes[row + 1].y);
-        expect(cardBoxes[row].x).toBeLessThan(cardBoxes[row + 1].x);
+      expect(cardBoxes[1].y).toBe(cardBoxes[0].y);
+      expect(cardBoxes[1].x).toBeGreaterThan(cardBoxes[0].x);
+      for (let index = 1; index < cardBoxes.length; index += 1) {
+        const sameRow = cardBoxes[index].y === cardBoxes[index - 1].y;
+        if (sameRow) expect(cardBoxes[index].x).toBeGreaterThan(cardBoxes[index - 1].x);
+        else {
+          expect(cardBoxes[index].y).toBeGreaterThan(cardBoxes[index - 1].y);
+          expect(cardBoxes[index].x).toBe(cardBoxes[0].x);
+        }
       }
-      expect(cardBoxes[0].y).toBeLessThan(cardBoxes[2].y);
-      expect(cardBoxes[2].y).toBeLessThan(cardBoxes[4].y);
-      expect(cardBoxes[4].x).toBe(cardBoxes[0].x);
     } else {
       for (let index = 1; index < cardBoxes.length; index += 1) {
         expect(cardBoxes[index].x).toBe(cardBoxes[0].x);
@@ -1116,22 +1120,25 @@ for (const viewport of [
     await mockFeaturePrompts(page);
 
     await page.goto("/settings/parser-adapters");
-    const docling = page.getByRole("radio", { name: /Docling.*既定の解析エンジン/ });
+    const docling = page.getByRole("radio", { name: "Docling", exact: true });
     const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
     await expect(docling).toBeChecked();
     const button = dotsSettingsButton(page);
-    // 「設定」はカードの中にあり、カードの文字に重ならない。
+    // 「設定」はカード（選択肢の行）の中の、ラベルの外にあり、カードの文字に重ならない（#5343）。
     const overlap = await page.locator('label[for="settings-parser-backend-dots_ocr"]').evaluate((label) => {
-      const target = label.parentElement!.querySelector("button")!.getBoundingClientRect();
-      const box = label.getBoundingClientRect();
+      const card = label.closest("[data-option-value]")!;
+      const target = card.querySelector("button")!.getBoundingClientRect();
+      const box = card.getBoundingClientRect();
       const inside = target.left >= box.left && target.right <= box.right && target.top >= box.top && target.bottom <= box.bottom;
       const covered = [...label.querySelectorAll("span")].filter((span) => span.children.length === 0 && span.textContent?.trim()).some((span) => {
         const rect = span.getBoundingClientRect();
         return rect.left < target.right && rect.right > target.left && rect.top < target.bottom && rect.bottom > target.top;
       });
-      return { inside, covered };
+      // 押してもエンジンを選ばないよう、ラベルの外に置く。
+      const outsideLabel = !label.contains(card.querySelector("button"));
+      return { inside, covered, outsideLabel };
     });
-    expect(overlap).toEqual({ inside: true, covered: false });
+    expect(overlap).toEqual({ inside: true, covered: false, outsideLabel: true });
 
     await button.click();
     const sheet = dotsSheet(page);

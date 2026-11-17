@@ -3,7 +3,6 @@
 import {
   AlertCircle,
   Check,
-  CheckCircle2,
   Circle,
   Clock3,
   Copy,
@@ -53,6 +52,7 @@ import {
   INFORMATION_CARD_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   ObjectActionBar,
+  RadioOptionGroup,
   SelectField,
   Skeleton,
   Spinner,
@@ -226,29 +226,19 @@ export function DocumentRecipeManager({
     >
       <div className="p-5">
         <h2 className="text-base font-semibold">{t("documents.recipes.addTitle")}</h2>
-        <p className="mt-1 text-sm text-fg-muted">{t("documents.recipes.addDescription")}</p>
-        <div
-          role="radiogroup"
-          aria-label={t("documents.recipes.addTitle")}
-          className="mt-4 grid gap-2"
-        >
-          {selected ? (
-            <AddModeOption
-              value="clone"
-              selected={addMode === "clone"}
-              icon={<Copy size={16} aria-hidden />}
-              label={t("documents.recipes.clone")}
-              onSelect={() => setAddMode("clone")}
-            />
-          ) : null}
-          <AddModeOption
-            value="defaults"
-            selected={addMode === "defaults"}
-            icon={<Settings2 size={16} aria-hidden />}
-            label={t("documents.recipes.defaults")}
-            onSelect={() => setAddMode("defaults")}
-          />
-        </div>
+        <RadioOptionGroup<AddMode>
+          id="recipe-add-mode"
+          className="mt-4"
+          legend={t("documents.recipes.addDescription")}
+          options={[
+            ...(selected
+              ? [{ value: "clone" as const, label: t("documents.recipes.clone"), icon: Copy }]
+              : []),
+            { value: "defaults" as const, label: t("documents.recipes.defaults"), icon: Settings2 },
+          ]}
+          value={addMode}
+          onValueChange={setAddMode}
+        />
         {createRecipe.error ? (
           <FormStatus
             tone="danger"
@@ -1004,46 +994,3 @@ function ComparisonColumn({ title, result }: { title: string; result: SearchResp
   );
 }
 
-function AddModeOption({
-  value,
-  selected,
-  icon,
-  label,
-  onSelect,
-}: {
-  value: string;
-  selected: boolean;
-  icon: ReactNode;
-  label: string;
-  onSelect: () => void;
-}) {
-  const id = `recipe-add-mode-${value}`;
-  // 本物のラジオにして、矢印キーの移動と Tab の 1 回の停止をブラウザに任せる（#469）。
-  return (
-    <div className="relative min-w-0">
-      <input
-        id={id}
-        className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-        type="radio"
-        name="recipe-add-mode"
-        value={value}
-        checked={selected}
-        onChange={onSelect}
-      />
-      <label
-        data-surface-tint={selected ? "accent" : undefined}
-        htmlFor={id}
-        className={cn(
-          "flex min-h-12 cursor-pointer items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring",
-          selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
-        )}
-      >
-        <span data-surface-tint={selected ? "accent" : "neutral"} className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
-          {icon}
-        </span>
-        <span className="flex-1">{label}</span>
-        {selected ? <CheckCircle2 size={16} className="text-accent-fg" aria-hidden /> : null}
-      </label>
-    </div>
-  );
-}

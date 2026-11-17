@@ -24,22 +24,24 @@ for (const viewport of [
     await page.goto("/settings/preprocess");
 
     await expect(page.getByRole("heading", { name: "ファイル準備方式" })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /原本をそのまま解析/ })).toBeVisible();
+    // 読み上げの名前は選択肢の名前だけで、説明は説明として結ぶ（#5343）。
+    await expect(page.getByRole("radio", { name: "変換なし", exact: true })).toHaveAccessibleDescription(/原本をそのまま解析/);
     // text_normalize は廃止(in-process 正規化撤去)。radio として出ないことを確認する。
     await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Office→PDF", exact: true })).toHaveAccessibleDescription(/Word・PowerPoint の文書.*PDF にしてから解析/);
     // CSV→JSONL・Excel→JSONL の順で、使う解析エンジンも説明に出す（#2457）。
-    await expect(page.getByRole("radio", { name: /CSV→JSONL.*表頭を除くデータの 1 記録/ })).toBeVisible();
-    await expect(
-      page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx・マクロ付きの \.xlsm、テンプレートの \.xltx・\.xltm\)/ })
-    ).toBeVisible();
-    await expect(page.getByRole("radio", { name: /CSV→JSONL.*構造化レコード JSONL/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /^Excel→JSONL/ })).toHaveAccessibleName(/保存済みの計算結果/);
-    await expect(page.getByRole("radio", { name: /^Word→JSONL/ })).toHaveAccessibleName(/ページ番号は付けません/);
+    const csv = page.getByRole("radio", { name: "CSV→JSONL", exact: true });
+    const excel = page.getByRole("radio", { name: "Excel→JSONL", exact: true });
+    const word = page.getByRole("radio", { name: "Word→JSONL", exact: true });
+    await expect(csv).toHaveAccessibleDescription(/表頭を除くデータの 1 記録/);
+    await expect(excel).toHaveAccessibleDescription(
+      /Excel ファイル\(\.xls・\.xlsx・マクロ付きの \.xlsm、テンプレートの \.xltx・\.xltm\)/
+    );
+    await expect(csv).toHaveAccessibleDescription(/構造化レコード JSONL/);
+    await expect(excel).toHaveAccessibleDescription(/保存済みの計算結果/);
+    await expect(word).toHaveAccessibleDescription(/ページ番号は付けません/);
     // Word→JSONL は Excel→JSONL の直後（#2457）。
-    await expect(
-      page.getByRole("radio", { name: /Word→JSONL.*見出しの下の段落・リスト・表のまとまり/ })
-    ).toBeVisible();
+    await expect(word).toHaveAccessibleDescription(/見出しの下の段落・リスト・表のまとまり/);
     const values = await page
       .getByRole("radio")
       .evaluateAll((items) => items.map((item) => (item as HTMLInputElement).value));
@@ -96,7 +98,7 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
 
   await page.goto("/settings/preprocess");
 
-  const office = page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ });
+  const office = page.getByRole("radio", { name: "Office→PDF", exact: true });
   await office.click();
   await expect(office).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
@@ -119,8 +121,8 @@ test("ファイル準備方式のカードは矢印キーで選択が移り、Ta
   );
   await page.goto("/settings/preprocess");
 
-  const passthrough = page.getByRole("radio", { name: /原本をそのまま解析/ });
-  const office = page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ });
+  const passthrough = page.getByRole("radio", { name: "変換なし", exact: true });
+  const office = page.getByRole("radio", { name: "Office→PDF", exact: true });
   await expect(passthrough).toBeChecked();
   await passthrough.focus();
   await page.keyboard.press("ArrowRight");
@@ -211,7 +213,7 @@ for (const viewport of [
     });
     await page.goto("/settings/preprocess");
 
-    const office = page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ });
+    const office = page.getByRole("radio", { name: "Office→PDF", exact: true });
     await office.click();
     const actions = page.getByRole("group", { name: "ファイル準備の設定の操作" });
     const saveButton = actions.getByRole("button", { name: "保存" });
