@@ -114,11 +114,13 @@ async def run_answer_with_timeout[T](
     progress_callback: SearchStageProgressCallback | None = None,
     *,
     timeout_seconds: float | None = None,
+    limit_seconds: float | None = None,
 ) -> T:
     """回答生成を `rag_answer_timeout_seconds` で打ち切る。
 
     `timeout_seconds` を渡すと、その秒数で打ち切る（品質評価で、評価全体の残り時間が回答生成の
-    上限より短いとき。#383）。
+    上限より短いとき。#383）。`limit_seconds` は時間切れの文言に出す上限（期限の残りで打ち切る
+    MCP の回答のツールが、通しの上限を示す。#5339。既定は打ち切った秒数）。
 
     打ち切り・取り消しは回答の thread にも伝える（期限を文脈に置き、抜けるときに取り消す。#1422）。
     thread の中の LLM の呼び出しは期限を過ぎたら止まり、再試行しない。
@@ -139,6 +141,7 @@ async def run_answer_with_timeout[T](
     except AnswerTimeoutError:
         raise
     except TimeoutError as exc:
+        limit = timeout if limit_seconds is None else limit_seconds
         raise AnswerTimeoutError(
-            tracker.current_stage, timeout if budget.expired() else None
+            tracker.current_stage, limit if budget.expired() else None
         ) from exc
