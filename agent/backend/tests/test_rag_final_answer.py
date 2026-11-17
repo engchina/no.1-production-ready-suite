@@ -191,7 +191,7 @@ def test_rag_only_skill_returns_the_rag_answer_without_another_model_turn(
 
 def _answers_by_query(mcp: FakeProductMcp) -> None:
     def chat(argument: Any) -> dict[str, Any]:
-        output = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
+        output: dict[str, Any] = deepcopy(DEFAULT_OUTPUTS["rag_chat"])
         output.update(answer=f"{argument.query}の回答", outcome="answered", status="completed")
         return output
 
