@@ -65,6 +65,7 @@ ALL_TOOLS = [
     "rag_outline",
     "rag_read_document",
     "rag_read_section",
+    "rag_grep",
 ]
 
 
@@ -166,6 +167,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
         "rag_outline",
         "rag_read_document",
         "rag_read_section",
+        "rag_grep",
     ]
     # チャットは MCP で提供しない（#787）。チャット
     # だけの利用者は検索・回答プロファイルの一覧だけを使える。

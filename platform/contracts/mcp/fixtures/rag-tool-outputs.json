@@ -496,6 +496,28 @@
       "provenance": null,
       "auto_selected_search_answer_profile": null,
       "notice": null
+    },
+    "rag_grep": {
+      "schema_version": 46,
+      "matches": [
+        {
+          "document_id": "doc-1",
+          "file_name": "synthetic-a.pdf",
+          "section_id": "sec-1",
+          "section_title": "第1章",
+          "chunk_id": "chunk-1",
+          "line": "合成の行 AB-12",
+          "before": [
+            "前の行"
+          ],
+          "after": [
+            "後の行"
+          ],
+          "line_truncated": false
+        }
+      ],
+      "truncated": false,
+      "next_step": null
     }
   }
 }
