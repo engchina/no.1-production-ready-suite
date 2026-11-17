@@ -238,7 +238,7 @@ def test_runtime_decodes_before_mcp_and_retains_real_source_after_approval(
 def test_grep_results_use_short_ids_for_the_reading_tools() -> None:
     """rag_grep の文書・章節の ID も短参照にし、読み取りのツールの引数で実IDへ戻す（#5293）。"""
     assert "rag_grep" in handles.SOURCE_TOOLS
-    output = {
+    output: dict[str, Any] = {
         "matches": [
             {
                 "document_id": "doc-a",
