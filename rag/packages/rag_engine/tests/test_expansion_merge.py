@@ -17,6 +17,7 @@ from rag_engine.retrieval.expansion_merge import (
     ENTITY_EXPANSION_KEY,
     EXPANSION_EVIDENCE_REASON,
     GRAPH_EXPANSION_KEY,
+    OUTLINE_SELECTION_KEY,
     REFERENCE_EXPANSION_KEY,
     expansion_kinds,
     is_expansion_record,
@@ -64,6 +65,20 @@ def test_expansion_kinds_cover_reference_entity_and_graph():
     record.metadata[ENTITY_EXPANSION_KEY] = {"hop": 0}
     record.metadata[GRAPH_EXPANSION_KEY] = {"kind": "section"}
     assert expansion_kinds(record) == (REFERENCE_EXPANSION_KEY, ENTITY_EXPANSION_KEY, GRAPH_EXPANSION_KEY)
+
+
+def test_outline_selection_mark_is_an_expansion_kept_outside_the_window():
+    """目次から選んだ章節（#5324）は検索拡張と同じく、top_k・context の枠に数えずに最後の並びへ入る。"""
+    record = child("x", 1, "本文", "X.txt", "px")
+    record.metadata[OUTLINE_SELECTION_KEY] = {"document_id": "X", "section_id": "s9", "title": "補則"}
+    assert expansion_kinds(record) == (OUTLINE_SELECTION_KEY,)
+    a1, a2 = child("a1", 1, "A の 1", "A.txt", "pa1"), child("a2", 2, "A の 2", "A.txt", "pa2")
+    tail = _marked(child("a9", 9, "A の 9", "A.txt", "pa9"), OUTLINE_SELECTION_KEY)
+    parents = [parent(name, 1, f"{name} の親", "A.txt") for name in ("pa1", "pa2", "pa9")]
+    bundle = _bundle([a1, a2], [a1, a2, tail, *parents], [tail], top_k=1, max_records=1)
+    assert "pa9" in _parents(bundle)
+    added = [c.reason for item in bundle.evidence_tree for c in item.children if c.record.id == "a9"]
+    assert added == [EXPANSION_EVIDENCE_REASON]
 
 
 def _marked(record, key=ENTITY_EXPANSION_KEY):

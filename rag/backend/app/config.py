@@ -1049,6 +1049,44 @@ class Settings(
             "上位 8 件を読む。"
         ),
     )
+    rag_outline_selection_enabled: bool = Field(
+        default=False,
+        description=(
+            "回答の検索の上位の文書(同じナレッジベース・検索と同じ見え方の条件)のうち章節の木を"
+            "持つ文書の目次を回答のモデルに 1 回だけ渡し、質問に要る章節を選ばせ、選んだ章節を"
+            "rerank にかけずに根拠に足す(#5324。全体設定だけで決め、検索・回答プロファイルでは"
+            "上書きしない)。context の枠に数えず、根拠の予算を超える分は分割読取へ渡す。回答の"
+            "期限の残りが選択と読取の予約(生成の 1 回の見積もりの 2 回分と確定の分)より少なければ"
+            "選ばない。既定は無効で、無効なら LLM の呼び出しは増えない。"
+        ),
+    )
+    rag_outline_selection_max_documents: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description=(
+            "目次から章節を選ぶ対象にする、検索の上位の文書の数(#5324。1〜10)。章節の木の無い文書は"
+            "数に入れたまま対象にしない。"
+        ),
+    )
+    rag_outline_selection_catalog_max_chars: int = Field(
+        default=40000,
+        ge=2000,
+        le=80000,
+        description=(
+            "回答のモデルに渡す目次の字数の上限(#5324。対象の文書の合計)。入らなければ深い階層の"
+            "章節から目次に載せない。"
+        ),
+    )
+    rag_outline_selection_read_max_chars: int = Field(
+        default=20000,
+        ge=2000,
+        le=200000,
+        description=(
+            "目次から選んだ章節を読む本文の字数の上限(#5324。対象の文書の合計)。モデルが返した順に"
+            "読み、上限に達したら読むのを止める。"
+        ),
+    )
     rag_entity_index_enabled: bool = Field(
         default=True,
         description=(

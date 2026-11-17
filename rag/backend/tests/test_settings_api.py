@@ -3562,6 +3562,60 @@ def test_answering_settings_toggle_reference_outline_selection(
     assert "RAG_REFERENCE_OUTLINE_SELECTION_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
+def test_answering_settings_save_outline_selection(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """検索の上位の文書の目次から章節を選ぶ設定(#5324)は既定 OFF で、開閉と上限を .env と実行中の
+    設定へ反映する。範囲の外の上限は保存しない。"""
+    from app.config import Settings
+
+    defaults = Settings(_env_file=None)
+    assert defaults.rag_outline_selection_enabled is False
+    assert (
+        defaults.rag_outline_selection_max_documents,
+        defaults.rag_outline_selection_catalog_max_chars,
+        defaults.rag_outline_selection_read_max_chars,
+    ) == (3, 40000, 20000)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_outline_selection_enabled", False)
+    monkeypatch.setattr(settings, "rag_outline_selection_max_documents", 3)
+    monkeypatch.setattr(settings, "rag_outline_selection_catalog_max_chars", 40000)
+    monkeypatch.setattr(settings, "rag_outline_selection_read_max_chars", 20000)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    data = client.get("/api/settings/answering").json()["data"]
+    assert data["outline_selection_enabled"] is False
+    assert data["outline_selection_max_documents"] == 3
+    response = client.patch(
+        "/api/settings/answering",
+        json={
+            "outline_selection_enabled": True,
+            "outline_selection_max_documents": 5,
+            "outline_selection_catalog_max_chars": 20000,
+            "outline_selection_read_max_chars": 80000,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()["data"]
+    assert saved["outline_selection_enabled"] is True
+    assert saved["outline_selection_read_max_chars"] == 80000
+    assert settings.rag_outline_selection_enabled is True
+    assert settings.rag_outline_selection_max_documents == 5
+    assert settings.rag_outline_selection_catalog_max_chars == 20000
+    text = env_file.read_text(encoding="utf-8")
+    assert "RAG_OUTLINE_SELECTION_ENABLED=true" in text
+    assert "RAG_OUTLINE_SELECTION_MAX_DOCUMENTS=5" in text
+    assert "RAG_OUTLINE_SELECTION_CATALOG_MAX_CHARS=20000" in text
+    assert "RAG_OUTLINE_SELECTION_READ_MAX_CHARS=80000" in text
+    for invalid in (
+        {"outline_selection_max_documents": 11},
+        {"outline_selection_catalog_max_chars": 1000},
+        {"outline_selection_read_max_chars": 300000},
+    ):
+        assert client.patch("/api/settings/answering", json=invalid).status_code == 422
+
+
 @pytest.mark.parametrize("value", [150, 300, 600, 1200])
 def test_answering_settings_save_answer_timeout_choice(
     monkeypatch: MonkeyPatch, tmp_path: Path, value: int

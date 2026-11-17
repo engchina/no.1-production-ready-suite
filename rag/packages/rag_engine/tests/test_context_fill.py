@@ -450,3 +450,52 @@ def test_main_evidence_overlap_without_section_map_reads_no_outline_for_other_do
         assert [overlap(records[uid]) for uid in ("C3", "D1")] == [OVERLAP_NEIGHBOR, ""]
     # 主の検索の起点（C2）の対応だけを読み、候補（D1）の対応は読まない。
     assert asked == ["C2"]
+
+
+def _expanded_three_documents() -> tuple[dict[str, StoredChunk], AnswerContext]:
+    chunks, ranked, active = _three_documents()
+    stub = Sections(chunks)
+    context, _step, _calls = _build(stub, ranked, active)
+    return chunks, _expand(stub, context)
+
+
+def test_context_references_start_from_section_and_context_read_chunks():
+    """章節の拡張・親の読取で文脈に入った chunk を由来つきで起点に渡し、参照先を最後に足す（#5315）。"""
+    _chunks, context = _expanded_three_documents()
+    calls: list[dict[str, Any]] = []
+    target = _stored("R1", 1, "R")
+
+    def references(*, seeds, present, **_):
+        calls.append({"seeds": dict(seeds), "present": list(present)})
+        return [target]
+
+    state = {"result": sections.SectionExpansionResult(context=context)}
+    dependencies = AnswerDependencies(unused, unused, unused, unused, unused, context_references=references)
+    with bind_dependencies(dependencies), recorded():
+        added = answering._add_context_references(context, state)
+    (call,) = calls
+    # 検索の候補（A2・B2・C2）は検索の段で辿り済みなので渡さない。章節の文脈と前後の文脈を由来つきで渡す。
+    assert call["seeds"] == {
+        "A1": answering.CONTEXT_REFERENCE_SECTION_ORIGIN,
+        "A3": answering.CONTEXT_REFERENCE_SECTION_ORIGIN,
+        "C1": answering.CONTEXT_REFERENCE_READ_ORIGIN,
+        "C3": answering.CONTEXT_REFERENCE_READ_ORIGIN,
+    }
+    assert {"A1", "A2", "A3", "B2", "C1", "C2", "C3"} <= set(call["present"])
+    assert _ids(added)[-1] == "R1"
+    assert _ids(added)[:-1] == _ids(context)
+    r1 = next(child for item in added.evidence_tree for child in item.children if child.record.chunk_uid == "R1")
+    assert r1.reason == EXPANSION_EVIDENCE_REASON
+    assert state["result"].trace["context_references"] == {"seed_ids": ["A1", "A3", "C1", "C3"], "added_chunk_ids": ["R1"]}
+
+
+def test_context_references_without_targets_or_port_keep_the_context():
+    _chunks, context = _expanded_three_documents()
+    state = {"result": sections.SectionExpansionResult(context=context)}
+    empty = AnswerDependencies(unused, unused, unused, unused, unused, context_references=lambda **_: [])
+    with bind_dependencies(empty), recorded():
+        assert answering._add_context_references(context, state) is context
+    assert state["result"].trace["context_references"]["added_chunk_ids"] == []
+    # 参照の展開が無効（注入なし）なら呼ばずにそのまま。
+    with bind_dependencies(AnswerDependencies(unused, unused, unused, unused, unused)), recorded():
+        assert answering._add_context_references(context, {}) is context
