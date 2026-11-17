@@ -1624,14 +1624,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (!body.recreate && destructive.length > 0 && body.allow_destructive !== true) {
       throw new HttpError(409, "データを削除する未適用の migration があります。内容を確認して承認してください。");
     }
-    state.systemTables = clone(SYSTEM_TABLES_READY) as Json;
-    return {
-      ...(state.systemTables as Json),
-      operation: body.recreate ? "recreated" : "migrated",
-      dropped_object_count: 1,
-      created_object_count: 3,
-      restart_required: state.systemTablesRestartRequired,
+    // 後台の操作（#5278）: 202 と開始した時点の状態を返す。合成の操作はすぐ終わったものとして、終わった
+    // 状態（ready・epoch が増えた idle）と、同じプロセスの要約（last_operation。再起動の案内）を返す。
+    const ready = clone(SYSTEM_TABLES_READY) as Json;
+    const epoch = Number((ready.operation_state as Json).schema_epoch);
+    state.systemTables = {
+      ...ready,
+      last_operation: {
+        operation: body.recreate ? "recreated" : "migrated",
+        schema_epoch: epoch,
+        restart_required: state.systemTablesRestartRequired,
+        finished_at: MOCK_NOW,
+      },
     };
+    return state.systemTables;
   }
 
   // --- 組み込み Runtime（#754） ---

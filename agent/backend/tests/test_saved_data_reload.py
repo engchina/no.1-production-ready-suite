@@ -160,6 +160,20 @@ def environment(monkeypatch: MonkeyPatch) -> Iterator[_Environment]:
         runtime.set_runtime_repository(None)
 
 
+def _initialize_and_wait(environment: _Environment) -> dict[str, Any]:
+    """画面の作成・更新（後台の操作。#5278）を始め、終わったら状態の `last_operation` を返す。"""
+    response = client.post("/api/settings/database/system-tables/initialize", json={})
+    assert response.status_code == 202, response.text
+    thread = environment.manager._background_thread
+    assert thread is not None
+    thread.join(WAIT_SECONDS)
+    status = client.get("/api/settings/database/system-tables")
+    assert status.status_code == 200, status.text
+    last_operation = status.json()["data"]["last_operation"]
+    assert last_operation is not None
+    return dict(last_operation)
+
+
 def _listed_skill_ids() -> list[str]:
     response = client.get("/api/agents")
     assert response.status_code == 200, response.text
@@ -171,12 +185,8 @@ def test_rewriting_migration_reloads_agents_in_this_process(environment: _Enviro
     """適用の直後に `GET /api/agents` が新しい ID を返す（再起動を待たない）。"""
     assert _listed_skill_ids() == OLD_SKILL_IDS
 
-    response = client.post("/api/settings/database/system-tables/initialize", json={})
-
-    assert response.status_code == 200, response.text
-    data = response.json()["data"]
+    data = _initialize_and_wait(environment)
     assert data["operation"] == "migrated"
-    assert data["rewritten_saved_data"] == ["runtime"]
     # 同じプロセスは読み直したので、再起動は求めない（dispatcher の無い構成）。
     assert data["restart_required"] is None
     assert _listed_skill_ids() == NEW_SKILL_IDS
@@ -234,10 +244,7 @@ def test_dispatcher_process_needs_restart(
     """別のプロセス（dispatcher）のメモリは読み直せないので、再起動を結果で求める。"""
     monkeypatch.setattr(get_settings(), "agent_runtime_dispatch_mode", "dispatcher")
 
-    response = client.post("/api/settings/database/system-tables/initialize", json={})
-
-    assert response.status_code == 200, response.text
-    restart = response.json()["data"]["restart_required"]
+    restart = _initialize_and_wait(environment)["restart_required"]
     assert restart["processes"] == [storage_bootstrap.DISPATCHER_PROCESS]
     assert "再起動してください" in restart["message"]
     assert _listed_skill_ids() == NEW_SKILL_IDS

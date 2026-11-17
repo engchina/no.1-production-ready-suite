@@ -149,16 +149,18 @@ async function mockSettings(
         return;
       }
       status = "ready";
+      // 後台の操作（#5278）: 202 と開始した時点の状態を返す。合成の操作はすぐ終わったものとして、
+      // 終わった状態（epoch が増えた idle）を返す（画面は epoch の差から結果を知らせる）。
+      const finished = systemTables("ready");
       await route.fulfill({
+        status: 202,
         json: {
           data: {
-            ...systemTables("ready"),
+            ...finished,
             orphaned_foreign_keys: options.foreignKeyDrift
               ? [{ ...chunkSetsDocumentForeignKey, orphan_rows: 240 }]
               : [],
-            operation: recreatePayload?.recreate ? "recreated" : "initialized",
-            dropped_object_count: recreatePayload?.recreate ? 96 : 0,
-            created_object_count: 96,
+            operation_state: { ...finished.operation_state, schema_epoch: 4 },
           },
           error_messages: [],
           warning_messages: [],
@@ -754,7 +756,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
       mutations += 1;
       await new Promise<void>((resolve) => { release = resolve; });
-      await route.fulfill({ json: { data: { ...data, operation: "initialized" }, error_messages: [], warning_messages: [] } });
+      await route.fulfill({ status: 202, json: { data, error_messages: [], warning_messages: [] } });
     });
     const finish = async () => {
       await expect.poll(() => Boolean(release)).toBe(true);
@@ -868,3 +870,230 @@ for (const theme of ["light", "dark"] as const) {
     });
   });
 }
+
+// ---- 後台の作成・更新と止まった操作・vector memory の見積もり（#5278） ------------------------
+
+function runningState(kind: "initialize" | "recreate", startedMsAgo: number) {
+  return {
+    status: "running",
+    operation_kind: kind,
+    lease_expires_at: new Date(Date.now() + 900_000).toISOString(),
+    started_at: new Date(Date.now() - startedMsAgo).toISOString(),
+    last_error_code: null,
+    schema_epoch: 3,
+    updated_at: new Date(Date.now() - startedMsAgo).toISOString(),
+  };
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`外で始まった作成・更新も「作成・更新」を回し、開始と経過を隣に出し、終われば戻す（#5278・${theme}）`, { tag: "@responsive" }, async ({
+    page,
+  }, testInfo) => {
+    await useTheme(page, theme);
+    await mockSettings(page, { initialStatus: "outdated" });
+    let finished = false;
+    await page.route("**/api/settings/database/system-tables", async (route) => {
+      const base = systemTables(finished ? "ready" : "outdated");
+      await route.fulfill({
+        json: {
+          data: finished
+            ? { ...base, operation_state: { ...base.operation_state, schema_epoch: 4 } }
+            : { ...base, operation_state: runningState("initialize", 10_000) },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+    });
+    await page.goto("/settings/system-tables");
+    const card = page.locator("#system-tables");
+    const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+    // CLI・配備・別のタブの操作でも、画面で押した操作と同じに Spinner（loading・押せない）にする。
+    await expect(initialize).toHaveAttribute("aria-busy", "true");
+    await expect(initialize).toHaveAttribute("aria-disabled", "true");
+    await expect(initialize).not.toHaveAttribute("disabled", /.*/);
+    await expect(initialize).toHaveText("作成・更新");
+    const progress = card.getByTestId("system-tables-operation-progress");
+    await expect(progress).toHaveText(/^作成・更新を実行中（開始 \d{2}:\d{2}・経過 1 分未満）$/);
+    await expect(card.getByText("操作中", { exact: true })).toBeVisible();
+    // 回るのは「作成・更新」の 1 つだけ。
+    await expect(card.locator("svg.animate-spin:visible")).toHaveCount(1);
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(pageOverflow).toBeLessThanOrEqual(1);
+    const width = testInfo.project.name === "mobile" ? 375 : 1280;
+    // 操作の行（「作成・更新」・開始と経過・「最新情報を取得」）。
+    await progress.locator("xpath=..").screenshot({
+      path: screenshotDir
+        ? `${screenshotDir}/system-tables-running-${theme}-${width}.png`
+        : testInfo.outputPath(`running-${theme}-${width}.png`),
+      animations: "disabled",
+    });
+
+    // フォーカスはボタンに置いたまま、状態の polling（最初の 1 分は 4 秒ごと）で終わりを見る。
+    await initialize.focus();
+    finished = true;
+    await expect(initialize).not.toHaveAttribute("aria-busy", "true", { timeout: 10_000 });
+    await expect(initialize).toBeFocused();
+    await expect(progress).toHaveCount(0);
+    await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
+    await expect(page.getByText("システムテーブルを更新しました。")).toBeVisible();
+  });
+}
+
+test("押した「作成・更新」は 202 の後も操作中は回り続け、フォーカスを保つ（#5278）", async ({ page }) => {
+  await mockSettings(page, { initialStatus: "outdated" });
+  let started = false;
+  await page.route("**/api/settings/database/system-tables", async (route) => {
+    const base = systemTables("outdated");
+    await route.fulfill({
+      json: {
+        data: started ? { ...base, operation_state: runningState("initialize", 1_000) } : base,
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  const posts: Array<Record<string, unknown>> = [];
+  await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
+    posts.push(JSON.parse(route.request().postData() ?? "{}"));
+    started = true;
+    const base = systemTables("outdated");
+    await route.fulfill({
+      status: 202,
+      json: { data: { ...base, operation_state: runningState("initialize", 0) }, error_messages: [], warning_messages: [] },
+    });
+  });
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#system-tables");
+  const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+  await initialize.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => posts.length).toBe(1);
+  await expect(initialize).toHaveAttribute("aria-busy", "true");
+  await expect(initialize).toBeFocused();
+  await expect(card.getByTestId("system-tables-operation-progress")).toContainText("作成・更新を実行中");
+  // loading の間の Enter は二重に送らない。
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  expect(posts).toHaveLength(1);
+  // timeout の失敗を出さない。
+  await expect(card.getByTestId("system-tables-operation-error")).toHaveCount(0);
+});
+
+for (const theme of ["light", "dark"] as const) {
+  test(`lease の期限を過ぎた操作は回さず「止まった可能性があります」と出し、再実行できる（#5278・${theme}）`, { tag: "@responsive" }, async ({
+    page,
+  }, testInfo) => {
+    await useTheme(page, theme);
+    const mock = await mockSettings(page, {
+      initialStatus: "partial",
+      statusExtra: {
+        operation_state: {
+          ...runningState("initialize", 20 * 60_000),
+          status: "stale",
+          lease_expires_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        },
+      },
+    });
+    await page.goto("/settings/system-tables");
+    const card = page.locator("#system-tables");
+    await expect(card.getByText("停止の可能性", { exact: true })).toBeVisible();
+    const stale = card.getByTestId("system-tables-stale-operation");
+    await expect(stale).toContainText("前回の操作が止まった可能性があります");
+    await expect(stale).toContainText("操作したプロセスが異常終了した可能性があります");
+    const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+    await expect(initialize).not.toHaveAttribute("aria-busy", "true");
+    await expect(initialize).toBeEnabled();
+    await expect(card.locator("svg.animate-spin:visible")).toHaveCount(0);
+    const contrast = await minimumTextContrast(page, "#system-tables [data-testid='system-tables-notice']");
+    expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
+    const width = testInfo.project.name === "mobile" ? 375 : 1280;
+    await card.getByTestId("system-tables-notice").screenshot({
+      path: screenshotDir
+        ? `${screenshotDir}/system-tables-stale-${theme}-${width}.png`
+        : testInfo.outputPath(`stale-${theme}-${width}.png`),
+      animations: "disabled",
+    });
+    await initialize.click();
+    await expect.poll(() => mock.initializeCalls()).toBe(1);
+    await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
+  });
+
+  test(`HNSW 索引ごとに vector memory の見込みの必要量と今の空きを出す（#5278・${theme}）`, { tag: "@responsive" }, async ({
+    page,
+  }, testInfo) => {
+    await useTheme(page, theme);
+    await mockSettings(page, {
+      initialStatus: "partial",
+      statusExtra: {
+        missing_objects: [{ name: "RAG_CHUNKS_EMBEDDING_HNSW_IDX", object_type: "INDEX" }],
+        vector_memory: {
+          available: true,
+          error_code: null,
+          pool_allocated_bytes: 128 * 1048576,
+          pool_used_bytes: 96 * 1048576,
+          pool_free_bytes: 32 * 1048576,
+          indexes: [
+            {
+              name: "RAG_CHUNKS_EMBEDDING_HNSW_IDX",
+              table_name: "RAG_CHUNK_EMBEDDINGS",
+              column_name: "EMBEDDING",
+              loaded: false,
+              estimated_bytes: 57.1 * 1048576,
+              used_bytes: null,
+              error_code: null,
+            },
+          ],
+        },
+      },
+    });
+    await page.goto("/settings/system-tables");
+    const section = page.getByTestId("system-tables-vector-memory");
+    await expect(section).toContainText("vector memory の見積もり（HNSW 索引）");
+    await expect(section).toContainText("RAG_CHUNKS_EMBEDDING_HNSW_IDX");
+    await expect(section).toContainText("見込みの必要量57.1 MB");
+    await expect(section).toContainText("今の空き32.0 MB");
+    await expect(section).toContainText("見込みの必要量が今の空きを超えています。");
+    const contrast = await minimumTextContrast(page, "[data-testid='system-tables-vector-memory']");
+    expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
+    const pageOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(pageOverflow).toBeLessThanOrEqual(1);
+    const width = testInfo.project.name === "mobile" ? 375 : 1280;
+    await section.screenshot({
+      path: screenshotDir
+        ? `${screenshotDir}/system-tables-vector-memory-estimate-${theme}-${width}.png`
+        : testInfo.outputPath(`vector-memory-estimate-${theme}-${width}.png`),
+      animations: "disabled",
+    });
+  });
+}
+
+test("vector memory を取得できない環境では「取得できません」と出す（#5278）", async ({ page }) => {
+  await mockSettings(page, {
+    initialStatus: "ready",
+    statusExtra: {
+      vector_memory: {
+        available: false,
+        error_code: "ORA-00942",
+        indexes: [
+          {
+            name: "RAG_CHUNKS_EMBEDDING_HNSW_IDX",
+            table_name: "RAG_CHUNK_EMBEDDINGS",
+            column_name: "EMBEDDING",
+            loaded: null,
+            estimated_bytes: null,
+            used_bytes: null,
+            error_code: "ORA-06550",
+          },
+        ],
+      },
+    },
+  });
+  await page.goto("/settings/system-tables");
+  const section = page.getByTestId("system-tables-vector-memory");
+  await expect(section).toContainText("取得できません（ORA-06550）");
+  await expect(section).toContainText("取得できません（ORA-00942）");
+});

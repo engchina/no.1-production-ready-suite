@@ -27,6 +27,7 @@ import {
 import {
   csrfHeader,
   notifyAuthResponse,
+  SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS,
   type DatabaseStatusData as SharedDatabaseStatusData,
 } from "@production-ready/system-settings";
 
@@ -601,7 +602,7 @@ export interface SelectAiCredentialCreateRequest {
 
 export type SystemTableSchemaStatus =
   "missing" | "partial" | "outdated" | "ready";
-export type SystemTableOperationStatus = "idle" | "running" | "failed";
+export type SystemTableOperationStatus = "idle" | "running" | "stale" | "failed";
 export type SystemTableOperationResult =
   "no_op" | "initialized" | "migrated" | "recreated";
 
@@ -637,6 +638,8 @@ export interface SystemTableOperationState {
   status: SystemTableOperationStatus;
   operation_kind: "initialize" | "recreate" | null;
   lease_expires_at: string | null;
+  /** 操作の開始時刻（running / stale のときだけ。#5278）。 */
+  started_at?: string | null;
   last_error_code: string | null;
   schema_epoch: number;
   updated_at: string | null;
@@ -662,12 +665,6 @@ export interface SystemTablesStatusData {
 export interface SystemTablesInitializeRequest {
   recreate: boolean;
   confirmation?: string;
-}
-
-export interface SystemTablesOperationData extends SystemTablesStatusData {
-  operation: SystemTableOperationResult;
-  dropped_object_count: number;
-  created_object_count: number;
 }
 
 export type DatabaseWalletDownloadStatus = "downloaded" | "already_configured";
@@ -926,10 +923,14 @@ export const api = {
         signal: options.signal,
       },
     ),
+  // 後台の操作を始める（202 と開始した時点の状態。#5278）。この要求だけ時間の上限を 60 秒にする。
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
-    settingsRequest<SystemTablesOperationData>(
+    settingsRequest<SystemTablesStatusData>(
       "/api/settings/database/system-tables/initialize",
-      jsonBody(body),
+      {
+        ...jsonBody(body),
+        signal: requestSignal({ timeoutMs: SYSTEM_TABLES_INITIALIZE_TIMEOUT_MS }),
+      },
     ),
   getSchemaOwners: (options: ApiRequestOptions = {}) =>
     settingsRequest<SchemaOwnersData>("/api/schema/owners", {

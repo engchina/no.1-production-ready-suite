@@ -40,6 +40,7 @@ from pr_system_settings.system_schema import (
 from pr_system_settings.system_schema import (
     classify_system_schema_status as classify_schema_status,
 )
+from pr_system_settings.vector_memory import HnswIndexSpec, hnsw_indexes_from_statements
 from rag_engine.adapters.oracle.native_hybrid import (
     NATIVE_HYBRID_INDEX,
     NATIVE_HYBRID_PREFERENCE,
@@ -392,6 +393,16 @@ def hnsw_indexes_from_schema(
 
 
 HNSW_INDEXES: frozenset[str] = hnsw_indexes_from_schema()
+# 画面の vector memory の見積もり（HNSW 索引ごとの表・列と構築の値。#5278）。
+HNSW_INDEX_SPECS: tuple[HnswIndexSpec, ...] = tuple(
+    spec
+    for spec in hnsw_indexes_from_statements(
+        statement
+        for section in oracle_schema_sections()
+        for statement in split_sql_statements(section.sql)
+    )
+    if spec.name in HNSW_INDEXES
+)
 
 
 def vector_memory_shortage_message(index_names: Sequence[str]) -> str:
@@ -409,9 +420,11 @@ def vector_memory_shortage_message(index_names: Sequence[str]) -> str:
         "この状態でも検索できます。"
         "「ベクトル検索＋Oracle Text個別実行」の距離順（FETCH APPROX）は、"
         "HNSW 索引が無いと厳密な距離の計算になり遅くなります。"
-        "vector memory の空き（V$VECTOR_MEMORY_POOL）を増やして"
-        "（vector_memory_size を上げる・不要な HNSW 索引を消す）から、"
-        f"作成・更新をやり直してください（{VECTOR_MEMORY_GUIDE}）。"
+        "vector memory の空き（V$VECTOR_MEMORY_POOL）を増やしてから作成・更新をやり直すか、"
+        "HNSW 索引を作らずに既定の検索の実行方式で使ってください。"
+        "Autonomous Database Serverless では Vector Pool を明示的に設定できず、"
+        "HNSW 索引に合わせて自動で増減します。空きを増やすには、ECPU を増やす（SGA が増える）か、"
+        f"不要な HNSW 索引を消してください（{VECTOR_MEMORY_GUIDE}）。"
     )
 
 
@@ -605,6 +618,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     managed_tables = MANAGED_TABLES
     managed_foreign_keys = MANAGED_FOREIGN_KEYS
     managed_columns = MANAGED_COLUMNS
+    managed_hnsw_indexes = HNSW_INDEX_SPECS
     # データを消す未適用の migration は、承認が無ければ作成・更新で当てない（#619）。
     guards_destructive_migrations = True
     recreate_confirmation = RECREATE_CONFIRMATION

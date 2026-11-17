@@ -30,6 +30,7 @@ from pr_system_settings.system_schema import (
 from pr_system_settings.system_schema import (
     classify_system_schema_status as classify_schema_status,
 )
+from pr_system_settings.vector_memory import HnswIndexSpec, hnsw_indexes_from_statements
 
 from app.clients.oracle_runtime import get_oracle_pool_manager
 from app.features.nl2sql.object_identity import qualified_object_name
@@ -421,6 +422,16 @@ def managed_columns_from_migrations() -> dict[str, tuple[str, ...]]:
 
 
 MANAGED_COLUMNS: dict[str, tuple[str, ...]] = managed_columns_from_migrations()
+# 画面の vector memory の見積もり（管理対象の HNSW 索引の表・列と構築の値。#5278）。
+HNSW_INDEX_SPECS: tuple[HnswIndexSpec, ...] = tuple(
+    spec
+    for spec in hnsw_indexes_from_statements(
+        statement
+        for migration in MIGRATIONS
+        for statement in split_migration_sql(migration.path.read_text(encoding="utf-8"))
+    )
+    if spec.name in MANAGED_INDEXES
+)
 
 
 def classify_system_schema_status(
@@ -451,6 +462,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     migration_key_column = "VERSION_NO"
     managed_tables = MANAGED_TABLES
     managed_columns = MANAGED_COLUMNS
+    managed_hnsw_indexes = HNSW_INDEX_SPECS
     recreate_confirmation = RECREATE_CONFIRMATION
     log_prefix = "nl2sql"
     lock_timeout_guidance = (

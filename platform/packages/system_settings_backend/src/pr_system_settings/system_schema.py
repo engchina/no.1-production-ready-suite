@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -51,10 +52,14 @@ from pr_backend_core.oracle_connect_diagnosis import (
 from pydantic import BaseModel, Field, ValidationError
 
 from .database_status import clear_database_status_cache
+from .vector_memory import HnswIndexSpec, VectorMemoryEstimator
 
 SystemSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
 SystemSchemaOperation = Literal["no_op", "initialized", "migrated", "recreated"]
-SystemSchemaOperationStatus = Literal["idle", "running", "failed"]
+# `stale` は制御テーブルの行が RUNNING のまま lease の期限（`LEASE_EXPIRES_AT`）を過ぎたもの
+# （操作したプロセスが異常終了した可能性。新しい秒の値は持たず、lease の期限をそのまま使う）。
+# 実行中として操作・DB ゲート・取込 worker・配備の確認を塞がず、次の操作が lease を取り直せる。
+SystemSchemaOperationStatus = Literal["idle", "running", "stale", "failed"]
 SystemSchemaOperationKind = Literal["initialize", "recreate"]
 # 参照先の無い行の削除（#511）の結果（削除も検査も要らなかったときは `no_op`）。
 SystemSchemaOrphanOperation = Literal["no_op", "orphans_deleted"]
@@ -166,6 +171,8 @@ class SystemTableOperationState(BaseModel):
     status: SystemSchemaOperationStatus
     operation_kind: SystemSchemaOperationKind | None = None
     lease_expires_at: str | None = None
+    # 操作の開始時刻（running / stale のときだけ。lease を取った時刻）。
+    started_at: str | None = None
     last_error_code: str | None = None
     # 前回の失敗の原因・影響・対処の説明（製品が分かる失敗だけに返す。例: RAG の vector memory の
     # 不足。#5261）。SQL・資格情報は含めない。
@@ -411,10 +418,53 @@ def idle_operation_state() -> dict[str, Any]:
         "status": "idle",
         "operation_kind": None,
         "lease_expires_at": None,
+        "started_at": None,
         "last_error_code": None,
         "schema_epoch": 0,
         "updated_at": None,
     }
+
+
+def _lease_expired(row: Sequence[Any]) -> bool:
+    """`_load_operation` の行の lease が期限切れか（DB が計算した 7 列目。無ければ時刻）。"""
+
+    if len(row) > 6:
+        return bool(row[6])
+    expires = row[2]
+    if expires is None:
+        return True
+    if isinstance(expires, datetime):
+        moment = expires if expires.tzinfo else expires.replace(tzinfo=UTC)
+        return moment < datetime.now(UTC)
+    return False
+
+
+def last_operation_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+    """後台の操作の結果から、状態の `last_operation` に出す要約を作る。"""
+
+    operation_state = result.get("operation_state") or {}
+    return {
+        "operation": result.get("operation"),
+        "schema_epoch": int(operation_state.get("schema_epoch") or 0),
+        "restart_required": result.get("restart_required"),
+        "finished_at": datetime.now(UTC).isoformat(),
+    }
+
+
+class SystemTableRestartRequiredData(BaseModel):
+    """保存済みのデータを書き換えた後に、再起動が要るプロセス（Agent。#1844）。"""
+
+    message: str
+    processes: list[str]
+
+
+class SystemTableLastOperationData(BaseModel):
+    """後台で終えた直近の操作の要約（同じプロセスが返す状態だけ。無ければ画面は状態の差から求める）。"""
+
+    operation: SystemSchemaOperation | None = None
+    schema_epoch: int = 0
+    restart_required: SystemTableRestartRequiredData | None = None
+    finished_at: str | None = None
 
 
 # ---- 配備の確認（#1648） --------------------------------------------------------
@@ -1182,6 +1232,9 @@ class SystemSchemaManagerBase(ABC):
     # 状態に `pending_destructive_migrations`（データを消す未適用の migration）を出す製品は True に
     # する。作成・更新の前に状態を読み、承認が無ければ止める（#619）。False なら確かめない。
     guards_destructive_migrations: ClassVar[bool] = False
+    # vector memory に載る HNSW 索引（`hnsw_indexes_from_statements` で DDL の正本から作る）。
+    # 空でなければ画面の状態に見込みの必要量と今の空き（`vector_memory`）を出す（#5278）。
+    managed_hnsw_indexes: ClassVar[tuple[HnswIndexSpec, ...]] = ()
     logger: ClassVar[logging.Logger] = logging.getLogger(__name__)
 
     def __init__(
@@ -1194,6 +1247,10 @@ class SystemSchemaManagerBase(ABC):
         self._connection_factory = connection_factory
         self._lease_seconds = max(MIN_LEASE_SECONDS, int(lease_seconds))
         self._ddl_lock_timeout_seconds = clamp_ddl_lock_timeout(ddl_lock_timeout_seconds)
+        # 後台の操作（`start_initialize_in_background`）の直近の結果の要約と thread（テスト用）。
+        self._last_operation: dict[str, Any] | None = None
+        self._background_thread: threading.Thread | None = None
+        self._vector_memory = VectorMemoryEstimator(connection_factory, self.managed_hnsw_indexes)
 
     # ---- 製品が実装するもの -------------------------------------------------
 
@@ -1245,11 +1302,32 @@ class SystemSchemaManagerBase(ABC):
         confirmation: str | None = None,
         allow_destructive: bool = False,
     ) -> dict[str, Any]:
-        """作成・更新（不足分と未適用の migration）、または確認語付きの全再作成。
+        """作成・更新（不足分と未適用の migration）、または確認語付きの全再作成を、終わるまで待つ。
+
+        CLI・配備のスクリプトが使う。画面の API は `start_initialize_in_background` で後台にする。
+        前提の確認と lease の取得は `begin_initialize` と同じ。
+        """
+
+        return self.begin_initialize(
+            recreate=recreate,
+            confirmation=confirmation,
+            allow_destructive=allow_destructive,
+        )()
+
+    def begin_initialize(
+        self,
+        *,
+        recreate: bool = False,
+        confirmation: str | None = None,
+        allow_destructive: bool = False,
+    ) -> Callable[[], dict[str, Any]]:
+        """前提の確認と lease の取得までを行い、残りの操作を実行する関数を返す。
 
         作成・更新は、データを消す未適用の migration（状態の `pending_destructive_migrations`。
         製品が返す）があれば、`allow_destructive` が無い限り DB を変えずに 409 で止める（#619）。
-        全再作成は確認語で承認済みのため確かめない。
+        全再作成は確認語で承認済みのため確かめない。lease を取れなければ 409
+        （`SystemSchemaBusyError`）。返した関数は失敗を記録して `SystemSchemaError` を投げる。
+        返した関数を呼ばずに終わった lease は、期限を過ぎると状態が `stale` になる。
         """
 
         require_recreate_confirmation(
@@ -1269,20 +1347,89 @@ class SystemSchemaManagerBase(ABC):
         self._claim_lease(owner, kind)
         # DB ゲートの `ok` の cache を、操作の間（実行中は setup_required）と後に使わない（#793）。
         clear_database_status_cache()
-        try:
-            with self._connection_factory() as connection:
-                return self._initialize_on(connection, owner, recreate=recreate)
-        except SystemSchemaError as exc:
-            self._record_failure(owner, exc.code)
-            self._log_operation_failed(kind, exc.code, exc)
-            raise
-        except Exception as exc:
-            code = oracle_error_code(exc)
-            self._record_failure(owner, code)
-            self._log_operation_failed(kind, code, exc)
-            raise self._operation_error(code) from exc
-        finally:
-            clear_database_status_cache()
+
+        def run() -> dict[str, Any]:
+            try:
+                with self._connection_factory() as connection:
+                    return self._initialize_on(connection, owner, recreate=recreate)
+            except SystemSchemaError as exc:
+                self._record_failure(owner, exc.code)
+                self._log_operation_failed(kind, exc.code, exc)
+                raise
+            except Exception as exc:
+                code = oracle_error_code(exc)
+                self._record_failure(owner, code)
+                self._log_operation_failed(kind, code, exc)
+                raise self._operation_error(code) from exc
+            finally:
+                clear_database_status_cache()
+
+        return run
+
+    def start_initialize_in_background(
+        self,
+        *,
+        recreate: bool = False,
+        confirmation: str | None = None,
+        allow_destructive: bool = False,
+        on_finished: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """lease を取ったら操作を後台の thread で続け、開始した時点の状態を返す（画面の API）。
+
+        前提の確認・lease の取得の失敗（確認語・承認・実行中）は、ここで `SystemSchemaError` を
+        投げる（API は 4xx を返す）。後台の失敗は制御テーブルに記録され（状態の `failed` と
+        `last_error_code`）、画面は状態の polling で知る。成功したときは `on_finished` に結果を
+        渡し（製品の cache の破棄など）、結果の要約を `last_operation` として状態に出す
+        （同じプロセスが返す状態だけ）。プロセスが途中で終わると、lease の期限の後に `stale`
+        になる。
+        """
+
+        run = self.begin_initialize(
+            recreate=recreate,
+            confirmation=confirmation,
+            allow_destructive=allow_destructive,
+        )
+
+        def target() -> None:
+            try:
+                result = run()
+            except SystemSchemaError:
+                return  # 記録とログは run が済ませている。
+            except Exception:  # pragma: no cover - run は SystemSchemaError にそろえる
+                self.logger.exception(f"{self.log_prefix}_system_schema_background_failed")
+                return
+            self._last_operation = last_operation_summary(result)
+            self._vector_memory.invalidate()
+            if on_finished is not None:
+                try:
+                    on_finished(result)
+                except Exception:
+                    self.logger.exception(f"{self.log_prefix}_system_schema_after_operation_failed")
+
+        thread = threading.Thread(
+            target=target,
+            name=f"{self.log_prefix}-system-schema-operation",
+            daemon=True,
+        )
+        thread.start()
+        self._background_thread = thread
+        return self.status()
+
+    def screen_status(self) -> dict[str, Any]:
+        """画面の API（`GET .../system-tables`）の状態。
+
+        `status()` に、このプロセスが後台で終えた直近の操作の要約（`last_operation`）と、
+        HNSW 索引を持つ製品の vector memory の見積もり（`vector_memory`。一定の秒数だけ保つ）を
+        足す。DB ゲート・取込 worker・配備の確認は `status()` を使う（advisor を呼ばない）。
+        """
+
+        data = self.status()
+        if self._last_operation is not None:
+            data["last_operation"] = self._last_operation
+        vector_memory = self._vector_memory.estimate()
+        if vector_memory is not None:
+            data["vector_memory"] = vector_memory
+        return data
 
     # ---- 手順の部品 ---------------------------------------------------------
 
@@ -1362,23 +1509,38 @@ class SystemSchemaManagerBase(ABC):
         return self._load_operation(connection)
 
     def _load_operation(self, connection: Any) -> dict[str, Any]:
+        """制御テーブルの行から操作の状態を返す。
+
+        RUNNING で lease の期限を過ぎた行は `stale`（止まった可能性）にする。期限の比較は lease を
+        取る `_claim_lease` と同じ DB の時計（SYSTIMESTAMP）で行う。running / stale の
+        `started_at` は lease を取った時刻（`UPDATED_AT`。heartbeat は進めない）。
+        """
+
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT STATUS, OPERATION_KIND, LEASE_EXPIRES_AT, LAST_ERROR_CODE, "
-                f"SCHEMA_EPOCH, UPDATED_AT FROM {self.control_table} "  # nosec B608 - 固定の識別子
+                "SCHEMA_EPOCH, UPDATED_AT, "
+                "CASE WHEN STATUS = 'RUNNING' AND (LEASE_EXPIRES_AT IS NULL "
+                "OR LEASE_EXPIRES_AT < SYSTIMESTAMP) THEN 1 ELSE 0 END "
+                f"FROM {self.control_table} "  # nosec B608 - 固定の識別子
                 "WHERE OPERATION_KEY = :operation_key",
                 {"operation_key": self.control_key},
             )
             row = cursor.fetchone()
         if row is None:
             return idle_operation_state()
+        status = str(row[0]).lower()
+        if status == "running" and _lease_expired(row):
+            status = "stale"
+        updated_at = iso_timestamp(row[5])
         return {
-            "status": str(row[0]).lower(),
+            "status": status,
             "operation_kind": str(row[1]).lower() if row[1] else None,
             "lease_expires_at": iso_timestamp(row[2]),
+            "started_at": updated_at if status in {"running", "stale"} else None,
             "last_error_code": str(row[3]) if row[3] else None,
             "schema_epoch": int(row[4] or 0),
-            "updated_at": iso_timestamp(row[5]),
+            "updated_at": updated_at,
         }
 
     def _claim_lease(self, owner: str, operation_kind: str) -> None:
@@ -1415,15 +1577,17 @@ class SystemSchemaManagerBase(ABC):
             raise SystemSchemaBusyError()
 
     def _heartbeat(self, connection: Any, owner: str) -> None:
-        """長い操作の途中で lease を延長する。他者に奪われていたら 409。"""
+        """長い操作の途中で lease を延長する。他者に奪われていたら 409。
+
+        `UPDATED_AT` は進めない（実行中の `UPDATED_AT` を操作の開始時刻として画面に出す）。
+        """
 
         with connection.cursor() as cursor:
             cursor.execute(
                 f"""
                 UPDATE {self.control_table}
                    SET LEASE_EXPIRES_AT = SYSTIMESTAMP
-                           + NUMTODSINTERVAL(:lease_seconds, 'SECOND'),
-                       UPDATED_AT = SYSTIMESTAMP
+                           + NUMTODSINTERVAL(:lease_seconds, 'SECOND')
                  WHERE OPERATION_KEY = :operation_key
                    AND STATUS = 'RUNNING'
                    AND LEASE_OWNER = :lease_owner
@@ -1973,7 +2137,9 @@ __all__ = [
     "SystemTableColumnData",
     "SystemTableDestructiveMigrationData",
     "SystemTableForeignKeyData",
+    "SystemTableLastOperationData",
     "SystemTableOperationState",
+    "SystemTableRestartRequiredData",
     "SystemTablesDeleteOrphansRequest",
     "SystemTablesInitializeRequest",
     "add_foreign_key_sql",
@@ -1993,6 +2159,7 @@ __all__ = [
     "idle_operation_state",
     "inspect_foreign_keys",
     "iso_timestamp",
+    "last_operation_summary",
     "load_existing_columns",
     "load_existing_tables",
     "load_foreign_keys",

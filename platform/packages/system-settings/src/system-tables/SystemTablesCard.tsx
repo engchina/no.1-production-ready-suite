@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { QueryKey } from "@tanstack/react-query";
+import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import {
   displayDateTimeFormat,
@@ -28,6 +28,7 @@ import {
 } from "@production-ready/ui";
 
 import { formatMessage } from "../auth/messages";
+import { DATABASE_STATUS_QUERY_KEY } from "../database-gate/types";
 import { useDatabaseUnavailableBannerItem } from "../database-gate/DatabaseUnavailableNotice";
 import type { DatabaseGateMessages } from "../database-gate/messages";
 import type { DatabaseGateRoutes } from "../database-gate/types";
@@ -40,22 +41,26 @@ import {
 import {
   isSystemTableRecreateConfirmationValid,
   isSystemTablesStatusData,
+  systemTableCompletedOperation,
   systemTableControlsBusy,
   systemTableDetailCounts,
   systemTableObjects,
   useDeleteSystemTableOrphanedRows,
   useInitializeSystemTables,
   useSystemTablesStatus,
+  type WatchedSystemTableOperation,
 } from "./systemTables";
 import type {
   SystemObjectMetadata,
   SystemTableDestructiveMigration,
   SystemTableForeignKey,
   SystemTableOperationResult,
+  SystemTableOperationState,
   SystemTableRestartRequired,
   SystemTableSchemaStatus,
   SystemTablesApi,
   SystemTablesStatusData,
+  SystemTableVectorMemory,
 } from "./types";
 
 const STATUS_VARIANTS = {
@@ -74,8 +79,19 @@ const dateTimeFormat = displayDateTimeFormat({
   minute: "2-digit",
 });
 
+// 操作の開始時刻（「13:45」。#5278）。
+const timeFormat = displayDateTimeFormat({ hour: "2-digit", minute: "2-digit" });
+// 経過時間の表示を進める間隔（分の単位で出すため、秒ごとには描き直さない）。
+const ELAPSED_TICK_MS = 15_000;
+const megabyteFormat = new Intl.NumberFormat("ja-JP", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
 function formatNumber(value: number): string {
   return numberFormat.format(value);
+}
+
+/** バイト数を「57.1 MB」の形へ（1 MB = 1024 × 1024 バイト）。 */
+function formatMegabytes(bytes: number): string {
+  return `${megabyteFormat.format(bytes / 1048576)} MB`;
 }
 
 /** ISO 文字列を「MM/DD HH:mm」へ。未設定・無効値はダッシュ。 */
@@ -166,8 +182,9 @@ export function SystemTablesCard({
   const m: SystemTablesMessages = { ...SYSTEM_TABLES_MESSAGES, ...messages };
   const text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) =>
     formatMessage(m[key], params);
+  const queryClient = useQueryClient();
   const statusQuery = useSystemTablesStatus(api);
-  const operation = useInitializeSystemTables(api, { invalidateQueryKeys });
+  const operation = useInitializeSystemTables(api);
   const orphanDeletion = useDeleteSystemTableOrphanedRows(api, { invalidateQueryKeys });
   const mutationPending = operation.isPending || orphanDeletion.isPending;
   const [operationError, setOperationError] = useState("");
@@ -186,7 +203,16 @@ export function SystemTablesCard({
   // 想定外の形の payload は描画せず、取得失敗として扱う（兄弟カードごと消さない）。
   const data = isSystemTablesStatusData(statusQuery.data) ? statusQuery.data : undefined;
   const statusUnavailable = statusQuery.isError || (statusQuery.data !== undefined && !data);
-  const schemaOperationRunning = data?.operation_state.status === "running";
+  const operationState = data?.operation_state;
+  // 操作中（誰が始めた操作でも。lease が running）と、止まった可能性（lease の期限切れ。#5278）。
+  const schemaOperationRunning = operationState?.status === "running";
+  const schemaOperationStale = operationState?.status === "stale";
+  const runningKind = schemaOperationRunning ? (operationState?.operation_kind ?? "initialize") : null;
+  // ボタンが表す操作そのものが進行中なら、誰が始めたかに関わらず loading にする（buttons.md §8。#5278）。
+  const initializeInProgress =
+    (operation.isPending && operation.variables?.recreate === false) || runningKind === "initialize";
+  const recreateInProgress =
+    (operation.isPending && operation.variables?.recreate === true) || runningKind === "recreate";
   // 既存の表に無い正本の列（#2450 / #2458。3 製品が返す。無ければ出さない）。
   const missingColumns = data?.missing_columns ?? [];
   // 外部キーの差分（#505。RAG と Agent が返す。無ければ出さない）。
@@ -201,10 +227,11 @@ export function SystemTablesCard({
   // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
   const canDeleteOrphans =
     canManage && Boolean(api.deleteSystemTableOrphanedRows) && Boolean(confirmDeleteOrphans);
-  // 操作できない状態と、現在処理が動いている状態を分ける。取得失敗は処理中ではない。
-  const activityBusy = statusQuery.isFetching || mutationPending || schemaOperationRunning;
+  // 操作できない状態と、現在処理が動いている状態を分ける。取得失敗は処理中ではない。定期の取り直し
+  // （平時 60 秒・操作中 4〜30 秒。#5278）は処理中にも操作できない状態にもしない（押した取り直しだけ）。
+  const activityBusy = statusQuery.isPending || manualRefresh.pending || mutationPending || schemaOperationRunning;
   const busy =
-    statusQuery.isFetching ||
+    manualRefresh.pending ||
     statusUnavailable ||
     !data ||
     systemTableControlsBusy(mutationPending, data.operation_state.status);
@@ -213,12 +240,35 @@ export function SystemTablesCard({
     if (operationError) operationErrorRef.current?.focus();
   }, [operationError]);
 
-  // 再取得が始まったレンダーで確認語を消す（取り直した状態を見てから入力し直させる）。
-  const [wasFetching, setWasFetching] = useState(statusQuery.isFetching);
-  if (wasFetching !== statusQuery.isFetching) {
-    setWasFetching(statusQuery.isFetching);
-    if (statusQuery.isFetching) setRecreateInput("");
-  }
+  // 見ている操作（画面で始めた操作と、running を見た外の操作）。終わったら結果を知らせ、cache を捨てる（#5278）。
+  const watchedRef = useRef<WatchedSystemTableOperation | null>(null);
+  useEffect(() => {
+    if (!data || operation.isPending) return;
+    const state = data.operation_state;
+    if (state.status === "running") {
+      watchedRef.current ??= {
+        kind: state.operation_kind ?? "initialize",
+        epoch: state.schema_epoch,
+        schemaStatus: data.status,
+      };
+      return;
+    }
+    const watched = watchedRef.current;
+    if (!watched) return;
+    watchedRef.current = null;
+    // 終わった（成功・失敗・止まった可能性）。DB ゲートと製品の cache を取り直す。
+    void queryClient.invalidateQueries({ queryKey: DATABASE_STATUS_QUERY_KEY });
+    for (const queryKey of invalidateQueryKeys ?? []) void queryClient.invalidateQueries({ queryKey });
+    const completed = systemTableCompletedOperation(watched, data);
+    if (!completed) return;
+    // 再起動が要るときは、結果を操作の直下の Banner 1 か所に出す（Toast と重ねない。messaging.md §10.1）。
+    if (completed.restartRequired?.processes.length) {
+      setRestartNotice({ operation: completed.operation, restart: completed.restartRequired });
+      return;
+    }
+    toast.success(text(`settings.database.systemTables.operation.${completed.operation}`));
+    // 結果の文言は製品の辞書で変わらないので、data の変化だけで判定する。
+  }, [data, operation.isPending]);
 
   const describeError = (cause: unknown) =>
     describeOperationError?.(cause) ??
@@ -229,6 +279,12 @@ export function SystemTablesCard({
     setRecreateInput("");
     setOperationError("");
     setRestartNotice(null);
+    // 始まる前の epoch と表の状態から、終わったときの結果を求める（#5278）。
+    watchedRef.current = {
+      kind: recreate ? "recreate" : "initialize",
+      epoch: data?.operation_state.schema_epoch ?? 0,
+      schemaStatus: data?.status ?? "missing",
+    };
     operation.mutate(
       {
         recreate,
@@ -236,15 +292,10 @@ export function SystemTablesCard({
         ...(allowDestructive ? { allow_destructive: true } : {}),
       },
       {
-        onSuccess: (result) => {
-          // 再起動が要るときは、結果を操作の直下の Banner 1 か所に出す（Toast と重ねない。messaging.md §10.1）。
-          if (result.restart_required?.processes.length) {
-            setRestartNotice({ operation: result.operation, restart: result.restart_required });
-            return;
-          }
-          toast.success(text(`settings.database.systemTables.operation.${result.operation}`));
+        onError: (cause) => {
+          watchedRef.current = null;
+          setOperationError(describeError(cause));
         },
-        onError: (cause) => setOperationError(describeError(cause)),
       },
     );
   };
@@ -343,7 +394,23 @@ export function SystemTablesCard({
                 children: operationError,
                 testId: "system-tables-operation-error",
               }
-            : data.operation_state.status === "failed"
+            : schemaOperationStale
+              ? {
+                  id: "stale-operation",
+                  severity: "warning",
+                  title: text("settings.database.systemTables.stale.title"),
+                  testId: "system-tables-stale-operation",
+                  children: (
+                    <p className="[overflow-wrap:anywhere]">
+                      {text("settings.database.systemTables.stale.detail", {
+                        operation: operationKindLabel(data.operation_state, text),
+                        startedAt: formatTime(data.operation_state.started_at),
+                        expiresAt: formatTime(data.operation_state.lease_expires_at),
+                      })}
+                    </p>
+                  ),
+                }
+              : data.operation_state.status === "failed"
               ? {
                   id: "previous-failure",
                   severity: "danger",
@@ -420,7 +487,13 @@ export function SystemTablesCard({
                                     orphanDeletion.isPending &&
                                     orphanDeletion.variables?.constraint_name === foreignKey.name
                                   }
-                                  disabled={busy}
+                                  disabled={
+                                    busy &&
+                                    !(
+                                      orphanDeletion.isPending &&
+                                      orphanDeletion.variables?.constraint_name === foreignKey.name
+                                    )
+                                  }
                                   aria-label={text("settings.database.systemTables.action.deleteOrphansLabel", {
                                     name: foreignKey.name,
                                   })}
@@ -502,6 +575,9 @@ export function SystemTablesCard({
               {schemaOperationRunning ? (
                 <StatusBadge variant="info" label={text("settings.database.systemTables.operation.running")} />
               ) : null}
+              {schemaOperationStale ? (
+                <StatusBadge variant="warning" label={text("settings.database.systemTables.operation.stale")} />
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -554,12 +630,16 @@ export function SystemTablesCard({
                   type="button"
                   size="md"
                   onClick={() => void requestInitialize()}
-                  loading={operation.isPending && operation.variables?.recreate === false}
-                  disabled={busy}
+                  loading={initializeInProgress}
+                  // loading のボタンに disabled を重ねない（フォーカスを外さない。buttons.md §8）。
+                  disabled={busy && !initializeInProgress}
                   icon={DatabaseZap}
                 >
                   {text("settings.database.systemTables.action.initialize")}
                 </Button>
+              ) : null}
+              {runningKind === "initialize" && operationState ? (
+                <OperationProgress state={operationState} text={text} />
               ) : null}
               <Button
                 type="button"
@@ -573,6 +653,8 @@ export function SystemTablesCard({
                 {text("settings.database.systemTables.action.refresh")}
               </Button>
             </div>
+
+            {data.vector_memory ? <VectorMemorySummary vectorMemory={data.vector_memory} text={text} /> : null}
 
             <SystemTablesDetails data={data} text={text} renderObjectName={renderObjectName} />
 
@@ -617,14 +699,17 @@ export function SystemTablesCard({
                         variant="danger"
                         className="w-full sm:w-auto"
                         onClick={() => void requestRecreate()}
-                        loading={operation.isPending && operation.variables?.recreate === true}
-                        disabled={busy || !recreateConfirmed}
+                        loading={recreateInProgress}
+                        disabled={!recreateInProgress && (busy || !recreateConfirmed)}
                         icon={RotateCcw}
                       >
                         {text("settings.database.systemTables.action.recreate")}
                       </Button>
                     }
                   />
+                  {runningKind === "recreate" && operationState ? (
+                    <OperationProgress state={operationState} text={text} />
+                  ) : null}
                 </div>
               </section>
             ) : null}
@@ -636,6 +721,124 @@ export function SystemTablesCard({
 }
 
 type Text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) => string;
+
+/** ISO 文字列を「HH:mm」へ。未設定・無効値はダッシュ。 */
+function formatTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return timeFormat.format(iso);
+}
+
+function operationKindLabel(state: SystemTableOperationState, text: Text): string {
+  return text(
+    state.operation_kind === "recreate"
+      ? "settings.database.systemTables.operation.kind.recreate"
+      : "settings.database.systemTables.operation.kind.initialize",
+  );
+}
+
+/**
+ * 操作中のボタンの隣の「〈操作〉を実行中（開始 hh:mm・経過 n 分）」（#5278）。ボタンのラベルは変えない
+ * （buttons.md §8）ため、状態の文言はここに出す。経過は backend の開始時刻から分の単位で数え、15 秒ごとに
+ * 描き直す（1 秒ごとに読み上げない timer）。
+ */
+function OperationProgress({ state, text }: { state: SystemTableOperationState; text: Text }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  const startedAt = state.started_at ? Date.parse(state.started_at) : Number.NaN;
+  const minutes = Number.isFinite(startedAt) ? Math.floor(Math.max(0, now - startedAt) / 60_000) : null;
+  const elapsed =
+    minutes == null || minutes < 1
+      ? text("settings.database.systemTables.operation.elapsedUnderMinute")
+      : text("settings.database.systemTables.operation.elapsedMinutes", { minutes: formatNumber(minutes) });
+  return (
+    <p
+      role="timer"
+      aria-live="off"
+      data-testid="system-tables-operation-progress"
+      className="min-w-0 text-xs leading-relaxed text-fg-muted tabular-nums [overflow-wrap:anywhere]"
+    >
+      {text("settings.database.systemTables.operation.progress", {
+        operation: operationKindLabel(state, text),
+        startedAt: formatTime(state.started_at),
+        elapsed,
+      })}
+    </p>
+  );
+}
+
+/**
+ * HNSW 索引ごとの vector memory の「見込みの必要量 / 今の空き」（#5278）。読めない値は「取得できません」。
+ * 見込みが空きを超え、索引がまだ vector memory に無いときは、アイコンと文で知らせる（色だけにしない）。
+ */
+function VectorMemorySummary({ vectorMemory, text }: { vectorMemory: SystemTableVectorMemory; text: Text }) {
+  const unavailable = vectorMemory.error_code
+    ? text("settings.database.systemTables.vectorMemory.unavailableWithCode", { code: vectorMemory.error_code })
+    : text("settings.database.systemTables.vectorMemory.unavailable");
+  const free = vectorMemory.available && vectorMemory.pool_free_bytes != null ? vectorMemory.pool_free_bytes : null;
+  return (
+    <section
+      aria-labelledby="system-tables-vector-memory-title"
+      data-testid="system-tables-vector-memory"
+      data-surface-tint="neutral"
+      className="min-w-0 rounded-md border border-border bg-surface-hover p-3"
+    >
+      <h3 id="system-tables-vector-memory-title" className="text-sm font-semibold text-fg">
+        {text("settings.database.systemTables.vectorMemory.title")}
+      </h3>
+      <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+        {text("settings.database.systemTables.vectorMemory.description")}
+      </p>
+      <ul className="mt-2 space-y-2">
+        {vectorMemory.indexes.map((index) => {
+          const shortage =
+            free != null && index.estimated_bytes != null && index.loaded !== true && index.estimated_bytes > free;
+          return (
+            <li key={index.name} className="min-w-0" data-testid="system-tables-vector-memory-index">
+              <span className="block font-mono text-xs font-semibold text-fg [overflow-wrap:anywhere]">
+                {index.name}
+              </span>
+              <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg">
+                <div className="flex gap-1">
+                  <dt className="text-fg-muted">{text("settings.database.systemTables.vectorMemory.estimated")}</dt>
+                  <dd className="tabular-nums">
+                    {index.estimated_bytes != null
+                      ? formatMegabytes(index.estimated_bytes)
+                      : index.error_code
+                        ? text("settings.database.systemTables.vectorMemory.unavailableWithCode", {
+                            code: index.error_code,
+                          })
+                        : text("settings.database.systemTables.vectorMemory.unavailable")}
+                  </dd>
+                </div>
+                <div className="flex gap-1">
+                  <dt className="text-fg-muted">{text("settings.database.systemTables.vectorMemory.free")}</dt>
+                  <dd className="tabular-nums">{free != null ? formatMegabytes(free) : unavailable}</dd>
+                </div>
+                {index.loaded && index.used_bytes != null ? (
+                  <div className="flex gap-1">
+                    <dt className="text-fg-muted">{text("settings.database.systemTables.vectorMemory.used")}</dt>
+                    <dd className="tabular-nums">{formatMegabytes(index.used_bytes)}</dd>
+                  </div>
+                ) : null}
+              </dl>
+              {shortage ? (
+                <p className="mt-1 flex items-start gap-1.5 text-xs text-warning-fg">
+                  <span className="pr-icon-line">
+                    <AlertTriangle size={14} aria-hidden />
+                  </span>
+                  <span>{text("settings.database.systemTables.vectorMemory.shortage")}</span>
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 /**
  * 表の状態（missing / partial / outdated）とデータを消す未適用の migration を、案内の枠の 1 項目にする（#5183）。

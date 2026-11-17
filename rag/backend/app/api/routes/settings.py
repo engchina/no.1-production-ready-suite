@@ -179,7 +179,6 @@ from app.schemas.settings import (
     PreprocessSettingsUpdate,
     SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
-    SystemTablesOperationData,
     SystemTablesOrphanDeletionData,
     SystemTablesStatusData,
     VectorIndexProfileStatusData,
@@ -275,7 +274,7 @@ async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
     """RAG system table の状態を DDL なしで取得する。"""
 
     try:
-        data = await asyncio.to_thread(system_schema_manager.status)
+        data = await asyncio.to_thread(system_schema_manager.screen_status)
     except Exception as exc:
         raise system_tables_status_error(exc) from exc
     return ApiResponse(data=SystemTablesStatusData.model_validate(data))
@@ -283,26 +282,33 @@ async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
 
 @router.post(
     "/database/system-tables/initialize",
-    response_model=ApiResponse[SystemTablesOperationData],
+    response_model=ApiResponse[SystemTablesStatusData],
+    status_code=202,
 )
 async def initialize_system_tables(
     payload: SystemTablesInitializeRequest,
-) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
-    """管理者の明示操作として作成・更新または全再作成する。"""
+) -> ApiResponse[SystemTablesStatusData] | JSONResponse:
+    """管理者の明示操作として作成・更新または全再作成を始める（後台の操作。#5278）。
+
+    前提の確認と lease の取得までを待ち、202 と開始した時点の状態（`operation_state` が
+    running）を返す。操作は後台で続き、画面は状態の polling で進み具合と終わりを見る。
+    """
 
     # 権限（rag.system_tables.manage）は API の権限 manifest で確認する（#214）。
     try:
         data = await asyncio.to_thread(
-            system_schema_manager.initialize,
+            system_schema_manager.start_initialize_in_background,
             recreate=payload.recreate,
             confirmation=payload.confirmation,
             # データを消す未適用の migration の承認（画面の確認ダイアログ。無ければ 409。#619）。
             allow_destructive=payload.allow_destructive,
+            # 取込 worker の判定の cache は、終わったら捨てる（実行中は running で塞ぐ）。
+            on_finished=lambda _result: system_schema_runtime.invalidate(),
         )
     except SystemSchemaError as exc:
         return _system_schema_error_response(exc)
     system_schema_runtime.invalidate()
-    return ApiResponse(data=SystemTablesOperationData.model_validate(data))
+    return ApiResponse(data=SystemTablesStatusData.model_validate(data))
 
 
 @router.post(

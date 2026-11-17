@@ -10,7 +10,12 @@ import {
   isSystemTableRecreateConfirmationValid,
   isSystemTablesStatusData,
   systemObjectTypeMessageKey,
+  SYSTEM_TABLES_IDLE_REFETCH_MS,
+  SYSTEM_TABLES_RUNNING_REFETCH_MAX_MS,
+  SYSTEM_TABLES_RUNNING_REFETCH_MS,
+  systemTableCompletedOperation,
   systemTableControlsBusy,
+  systemTablesRefetchInterval,
   systemTableDetailCounts,
   systemTableObjects,
   type SystemTableSchemaStatus,
@@ -70,6 +75,15 @@ function clientWith(data?: unknown, error = false) {
   return client;
 }
 
+/** 「作成・更新」「すべて再作成」のボタンの開始タグ。 */
+function initializeButton(html: string): string {
+  return html.match(/<button(?:(?!<button).)*?作成・更新<\/button>/s)?.[0].match(/<button[^>]*>/)?.[0] ?? "";
+}
+
+function recreateButton(html: string): string {
+  return html.match(/<button(?:(?!<button).)*?すべて再作成<\/button>/s)?.[0].match(/<button[^>]*>/)?.[0] ?? "";
+}
+
 function renderCard(client: QueryClient, props: Partial<SystemTablesCardProps> = {}) {
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
@@ -95,8 +109,69 @@ describe("判定の helper", () => {
     expect(isSystemTableRecreateConfirmationValid("", PHRASE)).toBe(false);
   });
 
-  it("mutation か DB の lease が実行中なら操作を止める", () => {
+  it("状態の取り直しは、操作中は最初の 1 分 4 秒・その後は延ばして最大 30 秒、平時は 60 秒（#5278）", () => {
+    const now = Date.parse("2026-11-17T01:00:00Z");
+    const runningSince = (ms: number | null) =>
+      statusData("ready", {
+        operation_state: {
+          ...statusData("ready").operation_state,
+          status: "running",
+          started_at: ms == null ? null : new Date(now - ms).toISOString(),
+        },
+      });
+    expect(systemTablesRefetchInterval(undefined, now)).toBe(SYSTEM_TABLES_IDLE_REFETCH_MS);
+    expect(systemTablesRefetchInterval(statusData("ready"), now)).toBe(60_000);
+    expect(
+      systemTablesRefetchInterval(
+        statusData("ready", { operation_state: { ...statusData("ready").operation_state, status: "stale" } }),
+        now,
+      ),
+    ).toBe(60_000);
+    expect(systemTablesRefetchInterval(runningSince(null), now)).toBe(SYSTEM_TABLES_RUNNING_REFETCH_MS);
+    expect(systemTablesRefetchInterval(runningSince(0), now)).toBe(4_000);
+    expect(systemTablesRefetchInterval(runningSince(60_000), now)).toBe(4_000);
+    expect(systemTablesRefetchInterval(runningSince(61_000), now)).toBe(6_000);
+    expect(systemTablesRefetchInterval(runningSince(121_000), now)).toBe(9_000);
+    expect(systemTablesRefetchInterval(runningSince(181_000), now)).toBe(13_500);
+    expect(systemTablesRefetchInterval(runningSince(301_000), now)).toBe(30_000);
+    expect(systemTablesRefetchInterval(runningSince(3_600_000), now)).toBe(SYSTEM_TABLES_RUNNING_REFETCH_MAX_MS);
+    // 時計のずれで開始が未来でも、最初の間隔にする。
+    expect(systemTablesRefetchInterval(runningSince(-30_000), now)).toBe(4_000);
+  });
+
+  it("見ていた操作の結果は、同じ epoch の要約を優先し、無ければ epoch の差と種類から求める（#5278）", () => {
+    const idle = (epoch: number, extra: Partial<SystemTablesStatusData> = {}) =>
+      statusData("ready", { operation_state: { ...statusData("ready").operation_state, schema_epoch: epoch }, ...extra });
+    const watched = { kind: "initialize" as const, epoch: 7, schemaStatus: "outdated" as const };
+    expect(systemTableCompletedOperation(watched, idle(7))?.operation).toBe("no_op");
+    expect(systemTableCompletedOperation(watched, idle(8))?.operation).toBe("migrated");
+    expect(systemTableCompletedOperation({ ...watched, schemaStatus: "missing" }, idle(8))?.operation).toBe(
+      "initialized",
+    );
+    expect(systemTableCompletedOperation({ ...watched, kind: "recreate" }, idle(8))?.operation).toBe("recreated");
+    const restart = { message: "再起動", processes: ["dispatcher"] };
+    expect(
+      systemTableCompletedOperation(
+        watched,
+        idle(8, { last_operation: { operation: "migrated", schema_epoch: 8, restart_required: restart } }),
+      ),
+    ).toEqual({ operation: "migrated", restartRequired: restart });
+    // 別の（古い）操作の要約は使わない。
+    expect(
+      systemTableCompletedOperation(
+        watched,
+        idle(9, { last_operation: { operation: "no_op", schema_epoch: 8, restart_required: restart } }),
+      ),
+    ).toEqual({ operation: "migrated", restartRequired: null });
+    const failed = statusData("ready", {
+      operation_state: { ...statusData("ready").operation_state, status: "failed", schema_epoch: 7 },
+    });
+    expect(systemTableCompletedOperation(watched, failed)).toBeNull();
+  });
+
+  it("mutation か DB の lease が実行中なら操作を止める（stale は止めない）", () => {
     expect(systemTableControlsBusy(false, "idle")).toBe(false);
+    expect(systemTableControlsBusy(false, "stale")).toBe(false);
     expect(systemTableControlsBusy(false, "failed")).toBe(false);
     expect(systemTableControlsBusy(true, "idle")).toBe(true);
     expect(systemTableControlsBusy(false, "running")).toBe(true);
@@ -153,21 +228,77 @@ describe("SystemTablesCard の取得状態と操作可否の分離", () => {
     }
   });
 
-  it("初回取得と再取得の間は処理中を示す", () => {
+  it("初回取得は処理中を示し、定期の取り直しは処理中にも操作無効にもしない（#5278）", () => {
     expect(renderCard(new QueryClient()).match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="true"');
     const client = clientWith(statusData("ready"));
     client.getQueryCache().find({ queryKey: SYSTEM_TABLES_QUERY_KEY })!.setState({ fetchStatus: "fetching" });
     const html = renderCard(client);
-    expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="true"');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
+    expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="false"');
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<button).)*?作成・更新/s);
   });
 
-  it("DBの操作中は取得完了後も処理中と操作無効を保つ", () => {
-    const data = statusData("ready");
-    data.operation_state.status = "running";
+  it("外の操作（CLI・別のタブ）でも、操作中は「作成・更新」を回し、開始と経過を隣に出す（#5278）", () => {
+    const startedAt = new Date(Date.now() - 3 * 60_000 - 5_000).toISOString();
+    const data = statusData("ready", {
+      operation_state: {
+        ...statusData("ready").operation_state,
+        status: "running",
+        operation_kind: "initialize",
+        started_at: startedAt,
+      },
+    });
     const html = renderCard(clientWith(data));
     expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="true"');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
+    const initialize = initializeButton(html);
+    // loading（Spinner・押せない）で、ネイティブの disabled は付けない（フォーカスを外さない。buttons.md §8）。
+    expect(initialize).toContain('aria-busy="true"');
+    expect(initialize).toContain('aria-disabled="true"');
+    expect(initialize).not.toContain('disabled=""');
+    // ラベルは変えず、状態の文言は隣に出す。
+    expect(html).toContain('data-testid="system-tables-operation-progress"');
+    expect(html).toMatch(/作成・更新を実行中（開始 \d{2}:\d{2}・経過 3 分）/);
+    // 全再作成は loading にしない（押せないだけ）。
+    expect(recreateButton(html)).not.toContain('aria-busy="true"');
+    expect(recreateButton(html)).toContain('disabled=""');
+  });
+
+  it("全再作成の操作中は「すべて再作成」を回し、「作成・更新」は押せないだけにする（#5278）", () => {
+    const data = statusData("ready", {
+      operation_state: {
+        ...statusData("ready").operation_state,
+        status: "running",
+        operation_kind: "recreate",
+        started_at: new Date(Date.now() - 10_000).toISOString(),
+      },
+    });
+    const html = renderCard(clientWith(data));
+    expect(recreateButton(html)).toContain('aria-busy="true"');
+    expect(recreateButton(html)).not.toContain('disabled=""');
+    expect(initializeButton(html)).toContain('disabled=""');
+    expect(initializeButton(html)).not.toContain('aria-busy="true"');
+    expect(html).toContain("すべて再作成を実行中（開始");
+    expect(html).toContain("経過 1 分未満");
+  });
+
+  it("lease の期限を過ぎた操作（stale）は回さず、止まった可能性を出して再実行できる（#5278）", () => {
+    const data = statusData("ready", {
+      operation_state: {
+        ...statusData("ready").operation_state,
+        status: "stale",
+        operation_kind: "initialize",
+        started_at: "2026-11-17T01:00:00Z",
+        lease_expires_at: "2026-11-17T01:15:00Z",
+      },
+    });
+    const html = renderCard(clientWith(data));
+    expect(html.match(/<[^>]+id="system-tables"[^>]*>/)?.[0]).toContain('aria-busy="false"');
+    expect(html).toContain("停止の可能性");
+    expect(html).toContain('data-testid="system-tables-stale-operation"');
+    expect(html).toContain("前回の操作が止まった可能性があります");
+    expect(html).not.toContain('data-testid="system-tables-operation-progress"');
+    const initialize = initializeButton(html);
+    expect(initialize).not.toContain('aria-busy="true"');
+    expect(initialize).not.toContain('disabled=""');
   });
 
   it("閲覧専用の取得完了は処理中でなく、管理操作を追加しない", () => {
@@ -382,7 +513,9 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     const html = renderCard(clientWith(running));
     expect(html).toContain("操作中");
     expect(html).toContain('aria-busy="true"');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
+    // 作成・更新は loading（押せない）で、ネイティブの disabled は重ねない（#5278）。
+    expect(initializeButton(html)).toContain('aria-disabled="true"');
+    expect(initializeButton(html)).not.toContain('disabled=""');
   });
 
   it("前回の失敗は本文に対処を出し、エラーコードは開いた「詳細」に分ける（messaging.md §10.3。#722）", () => {
@@ -472,5 +605,77 @@ describe("SystemTablesCard の状態ごとの表示", () => {
       renderObjectName: (object) => <strong>{`name:${object.name}`}</strong>,
     });
     expect(custom).toContain("<strong>name:DEMO_IDX</strong>");
+  });
+});
+
+describe("vector memory の見積もり（#5278）", () => {
+  const index = {
+    name: "DEMO_EMBEDDING_HNSW_IDX",
+    table_name: "DEMO_EMBEDDINGS",
+    column_name: "EMBEDDING",
+    loaded: false,
+    estimated_bytes: 80 * 1048576,
+    used_bytes: null,
+  };
+
+  it("HNSW 索引ごとに見込みの必要量と今の空きを出し、足りなければアイコンと文で知らせる", () => {
+    const html = renderCard(
+      clientWith(
+        statusData("partial", {
+          vector_memory: {
+            available: true,
+            pool_allocated_bytes: 100 * 1048576,
+            pool_used_bytes: 60 * 1048576,
+            pool_free_bytes: 40 * 1048576,
+            indexes: [index],
+          },
+        }),
+      ),
+    );
+    expect(html).toContain('data-testid="system-tables-vector-memory"');
+    expect(html).toContain("DEMO_EMBEDDING_HNSW_IDX");
+    expect(html).toContain("見込みの必要量");
+    expect(html).toContain("80.0 MB");
+    expect(html).toContain("今の空き");
+    expect(html).toContain("40.0 MB");
+    expect(html).toContain("見込みの必要量が今の空きを超えています。");
+  });
+
+  it("載っている索引は使用中の量を出し、不足の警告は出さない", () => {
+    const html = renderCard(
+      clientWith(
+        statusData("ready", {
+          vector_memory: {
+            available: true,
+            pool_free_bytes: 10 * 1048576,
+            indexes: [{ ...index, loaded: true, used_bytes: 75 * 1048576 }],
+          },
+        }),
+      ),
+    );
+    expect(html).toContain("使用中");
+    expect(html).toContain("75.0 MB");
+    expect(html).not.toContain("見込みの必要量が今の空きを超えています。");
+  });
+
+  it("取れない環境（権限・ビューが無い）では「取得できません」と出す", () => {
+    const html = renderCard(
+      clientWith(
+        statusData("ready", {
+          vector_memory: {
+            available: false,
+            error_code: "ORA-00942",
+            indexes: [{ ...index, estimated_bytes: null, error_code: "ORA-06550" }],
+          },
+        }),
+      ),
+    );
+    expect(html).toContain("取得できません（ORA-06550）");
+    expect(html).toContain("取得できません（ORA-00942）");
+    expect(html).not.toContain("見込みの必要量が今の空きを超えています。");
+  });
+
+  it("HNSW 索引を持たない製品（vector_memory が無い）は出さない", () => {
+    expect(renderCard(clientWith(statusData("ready")))).not.toContain('data-testid="system-tables-vector-memory"');
   });
 });
