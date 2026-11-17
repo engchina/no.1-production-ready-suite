@@ -264,6 +264,7 @@ from app.features.agent.run_claim import RunClaim
 from app.features.agent.section_coverage import (
     COVERAGE_INCOMPLETE,
     RETRYABLE_REASONS,
+    reads_sections,
     section_coverage,
     unread_sections_message,
     with_unread_sections_notice,
@@ -2270,9 +2271,8 @@ class _ToolRecorder:
             RAG_READ_SECTION,
         }:
             return output
-        # 参照先・章節を読む案内は、読むツールをモデルに渡した Run だけ（#5342。RAG の回答の
-        # ツールだけのスキルは読むツールを宣言しない）。
-        reads = any(mcp_base_tool_name(name) == RAG_READ_SECTION for name in self.entries)
+        # 参照先・章節を読む案内は、読むツールをモデルに渡した Run だけ（#5342）。
+        reads = reads_sections(self.entries)
         references = text_references(tool, output) if reads else []
         if references:
             output = {**output, "references": references}
@@ -5129,10 +5129,15 @@ def _tool_budget_exhausted(budget: SupportTaskBudget | None) -> bool:
 def _coverage(run: Any, answer: str, task: _SupportTaskRun | None) -> dict[str, Any] | None:
     """回答に使った章節を終わりまで読んだか（#2492。`section_coverage`。判定しなければ None）。
 
-    確認の質問だけの回答と、利用者が資料の検索を取り消した Run は判定しない。判定は補助なので、
-    判定できなくても回答は止めない（None）。
+    確認の質問だけの回答と、利用者が資料の検索を取り消した Run と、章節を読むツールをモデルに
+    渡していない Run（`reads_sections`。#5366）は判定しない（差し戻しも回答の注記もしない）。
+    判定は補助なので、判定できなくても回答は止めない（None）。
     """
-    if is_clarification_only(answer) or KIND_RAG in declined_kinds(run.metadata):
+    if (
+        is_clarification_only(answer)
+        or KIND_RAG in declined_kinds(run.metadata)
+        or not reads_sections(run_config.exposed_tool_names(run.metadata))
+    ):
         return None
     try:
         return section_coverage(

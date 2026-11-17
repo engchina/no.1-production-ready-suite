@@ -22,6 +22,7 @@
 - 回答に使った章節: 回答が章節の chunk の id を書いたか、回答の本文が章節の本文・題名と当たる
   （`evidence_match`）。探索で読んだだけで回答に使っていない章節は数えない。
 - 質問が手順・一覧・条件のまとまりを求めるとき（`asks_for_grouped_content`）だけ判定する。
+- 章節を読むツールをモデルに渡した Run（`reads_sections`）だけ判定する（呼ぶ側が決める）。
 
 呼ぶ側（組み込み Runtime）は、未読の続きがあり予算が残っていれば答える前に 1 回だけ差し戻し、
 それでも残れば回答に「読み切れていない章節」を示す。
@@ -29,7 +30,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -335,6 +336,17 @@ def _record(entry: _Section, *, budget_exhausted: bool) -> JsonObject:
         "next_cursor": entry.next_cursor,
         "reason": reason,
     }
+
+
+def reads_sections(tool_names: Iterable[str]) -> bool:
+    """章節を読むツール（`rag_read_section`）をモデルに渡した Run か（#5342・#5366）。
+
+    章節を読む案内（ツールの結果の `references`・`section_reads`）と、回答に使った章節の網羅の
+    判定（差し戻しと「読み切れていない章節」の注記）は、この Run だけで行う。読むツールの無い Run
+    （RAG の回答のツール・根拠を集めるツールだけのスキル）に章節を読むことを求めても、モデルは
+    読めず、同じ RAG を呼び直すだけになる。
+    """
+    return any(mcp_base_tool_name(name) == RAG_READ_SECTION for name in tool_names)
 
 
 def section_coverage(
