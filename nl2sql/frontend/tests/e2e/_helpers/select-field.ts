@@ -66,8 +66,12 @@ async function expectSearchableSelectValue(button: Locator, value: string) {
     .toBe(true);
   if (await button.isDisabled()) {
     // 無効の欄は開けない。選択肢の名前が値を含む欄（列名・表名など）だけ、ボタンの文字で確かめる。
-    if (value !== "") await expect(button).toContainText(value);
-    return;
+    // 読み込み中だけ無効になる欄もあるので、有効になるか、ボタンの文字が値を含むまで待つ（#5289）。
+    if (value === "") return;
+    await expect
+      .poll(async () => !(await button.isDisabled()) || ((await button.textContent()) ?? "").includes(value))
+      .toBe(true);
+    if (await button.isDisabled()) return;
   }
   await button.click();
   await expect(button).toHaveAttribute("aria-expanded", "true");

@@ -665,3 +665,10 @@ def test_a_section_with_chunks_that_returns_nothing_stays_unread(response: secti
     outline, reader = _reader_for(Stub(), section)
     assert reader.read(outline, section) == []
     assert reader.failures[reader.section_key(outline, section)] == sections.STOP_PARTIAL
+
+
+def test_shortest_answer_limit_does_not_expand():
+    """回答の上限の最小 150 秒は予約（120 + 30 秒）と同じで、1 段の分（20 秒）が残らず章節を広げない（#5280）。"""
+    assert not _climbs(_settings(), 150.0)
+    # 300 秒以上なら開始の時点では 1 段目を読む。
+    assert _climbs(_settings(), 300.0)

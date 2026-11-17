@@ -140,6 +140,7 @@ const ANSWERING_SETTINGS = {
   section_expansion_enabled: true,
   section_expansion_max_levels: 4,
   section_expansion_input_token_percent: 50,
+  answer_timeout_seconds: 600,
 };
 
 async function mockAnsweringSettings(page: Page, saved: unknown[] = [], initial: Record<string, unknown> = {}) {
@@ -682,5 +683,33 @@ for (const theme of ["light", "dark"] as const) {
     await expect(score).toBeEnabled();
     await expectNoPageOverflow(page);
 
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, collapse: false },
+  { name: "mobile", width: 375, height: 812, collapse: true },
+]) {
+  test(`回答の上限時間は 4 つの選択肢から選んで保存する（${viewport.name}。#5280）`, { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    await mockAnsweringSettings(page, saved);
+
+    await page.goto("/settings/retrieval");
+
+    const select = page.getByRole("combobox", { name: "回答の上限時間", exact: true });
+    await expect(select).toContainText("600 秒");
+    await select.click();
+    const listbox = page.getByRole("listbox", { name: "回答の上限時間", exact: true });
+    await expect(listbox.getByRole("option")).toHaveText(["150 秒", "300 秒", "600 秒", "1200 秒"]);
+    await listbox.getByRole("option", { name: "1200 秒" }).click();
+    await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({ answer_timeout_seconds: 1200 });
+    await expect(select).toContainText("1200 秒");
+    await expectNoPageOverflow(page);
   });
 }

@@ -557,6 +557,12 @@ async def update_answering_settings(
                 "rag_section_expansion_input_token_percent",
                 payload.section_expansion_input_token_percent,
             ),
+            (
+                "rag_answer_timeout_seconds",
+                float(payload.answer_timeout_seconds)
+                if payload.answer_timeout_seconds is not None
+                else None,
+            ),
         )
         if value is not None
     }
@@ -592,6 +598,7 @@ async def update_answering_settings(
                 "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
                     candidate.rag_graph_expansion_enabled
                 ),
+                "RAG_ANSWER_TIMEOUT_SECONDS": str(round(candidate.rag_answer_timeout_seconds)),
             },
             section_comment="# 回答の検索と生成",
             error_detail="回答の検索と生成の設定を backend/.env へ保存できませんでした。",
@@ -618,6 +625,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         section_expansion_enabled=settings.rag_section_expansion_enabled,
         section_expansion_max_levels=settings.rag_section_expansion_max_levels,
         section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,
+        answer_timeout_seconds=round(settings.rag_answer_timeout_seconds),
     )
 
 

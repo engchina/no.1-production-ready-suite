@@ -103,7 +103,7 @@ test.describe("API キー", { tag: "@responsive" }, () => {
     await expect(example).toContainText("claude mcp add --scope user --transport http rag https://203.0.113.10/rag/api/mcp");
     await expect(example).toContainText("claude mcp add --scope user --transport http nl2sql https://203.0.113.10/nl2sql/api/mcp");
     await expect(example).toContainText("--header 'Authorization: Bearer ${PR_API_KEY}'");
-    await expect(example).toContainText("export MCP_TOOL_TIMEOUT=660000");
+    await expect(example).toContainText("export MCP_TOOL_TIMEOUT=1260000");
     await expect(example).toContainText("curl -sk https://203.0.113.10/platform/ca.crt -o ~/production-ready-ca.crt");
     await expect(example).toContainText("export NODE_EXTRA_CA_CERTS=~/production-ready-ca.crt");
     // 行末の # のコメントは zsh に貼るとエラーになるので、コピーするコードに入れない（#4726）。

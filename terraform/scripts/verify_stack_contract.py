@@ -1389,11 +1389,9 @@ def _verify_nginx_limits() -> None:
         if not 0 < seconds * 4 <= default_timeout:
             raise AssertionError(f"{name} heartbeat {seconds}s must be well below proxy_read_timeout {default_timeout}s")
 
-    # RAG: 回答の通しの上限（上限 600 秒）< 画面の待ち時間（630 秒）< Nginx。
+    # RAG: 回答の通しの上限（上限 1200 秒。#5280）< 画面の待ち時間（1230 秒）< Nginx。
     rag_timeout = float(_shell_scalar(suite_nginx, "SUITE_RAG_LONG_API_TIMEOUT_SECONDS", context=context))
-    rag_answer_max = _python_number(
-        rag_config, r"(?m)^OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS = ([0-9.]+)", context="rag config"
-    )
+    rag_answer_max = _python_number(rag_config, r"(?m)^RAG_ANSWER_TIMEOUT_MAX_SECONDS = ([0-9.]+)", context="rag config")
     rag_api = (REPO_ROOT / "rag" / "frontend" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
     for name in ("ANSWER_GENERATION_TIMEOUT_MS",):
         frontend_seconds = _python_number(rag_api, rf"export const {name} = ([0-9_]+);", context="rag api.ts") / 1000
@@ -1419,6 +1417,17 @@ def _verify_nginx_limits() -> None:
     mcp_max = _python_number(agent_router, r"(?m)^_MCP_TIMEOUT_MAX_SECONDS = ([0-9.]+)", context="agent router")
     if agent_timeout != mcp_max + 60:
         raise AssertionError(f"{context}: SUITE_AGENT_LONG_API_TIMEOUT_SECONDS must be {mcp_max} + 60")
+    # Agent の接続 `rag` の既定は RAG の回答の上限より長く、外部 MCP の上限以内（#5280）。
+    agent_rag_default = _python_number(
+        (REPO_ROOT / "agent" / "backend" / "app" / "settings.py").read_text(encoding="utf-8"),
+        r"agent_external_rag_timeout_seconds: float = ([0-9.]+)",
+        context="agent settings",
+    )
+    if not rag_answer_max < agent_rag_default <= mcp_max:
+        raise AssertionError(
+            f"agent rag MCP timeout ({agent_rag_default}s) must be between the RAG answer limit "
+            f"({rag_answer_max}s) and the agent MCP limit ({mcp_max}s)"
+        )
 
     # 長い待ち時間の API は、今の backend の route にある（route の名前が変わったら気づく）。
     routes = {

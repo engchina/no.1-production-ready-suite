@@ -5,7 +5,13 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings
+from app.config import (
+    OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+    RAG_ANSWER_TIMEOUT_CHOICES,
+    RAG_ANSWER_TIMEOUT_MAX_SECONDS,
+    RAG_ANSWER_TIMEOUT_MIN_SECONDS,
+    Settings,
+)
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
     StageTracker,
@@ -23,19 +29,27 @@ def _progress(stage: str, outcome: str) -> SearchStageProgress:
 
 
 def test_answer_timeout_default_and_limit() -> None:
-    """回答生成は既定 600 秒（#1425）・上限は LLM 1 回の timeout の上限。
+    """回答生成の通しの上限は既定 600 秒・150〜1200 秒（#5280）。LLM 1 回の上限とは分ける。
 
     検索だけの上限（旧 rag_search_timeout_seconds）は #383 で削除した（品質評価の 1 ケースも
     回答生成の上限で打ち切る）。
     """
     settings = Settings()
-    assert settings.rag_answer_timeout_seconds == 600.0 == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+    assert settings.rag_answer_timeout_seconds == 600.0
+    assert (RAG_ANSWER_TIMEOUT_MIN_SECONDS, RAG_ANSWER_TIMEOUT_MAX_SECONDS) == (150.0, 1200.0)
+    # 画面の選択肢は範囲の両端と既定を含む。
+    assert RAG_ANSWER_TIMEOUT_CHOICES == (150, 300, 600, 1200)
+    # 通しの上限は複数回の LLM 呼び出しを含むので、1 回の上限（600 秒）とは別に持つ。
+    assert OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS == 600.0
+    assert settings.oci_enterprise_ai_timeout_seconds == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
     assert not hasattr(settings, "rag_search_timeout_seconds")
-    assert Settings(rag_answer_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS)
+    for choice in RAG_ANSWER_TIMEOUT_CHOICES:
+        assert Settings(rag_answer_timeout_seconds=choice).rag_answer_timeout_seconds == choice
+    for invalid in (RAG_ANSWER_TIMEOUT_MAX_SECONDS + 1, RAG_ANSWER_TIMEOUT_MIN_SECONDS - 1, 0):
+        with pytest.raises(ValidationError):
+            Settings(rag_answer_timeout_seconds=invalid)
     with pytest.raises(ValidationError):
-        Settings(rag_answer_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS + 1)
-    with pytest.raises(ValidationError):
-        Settings(rag_answer_timeout_seconds=0)
+        Settings(oci_enterprise_ai_timeout_seconds=OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS + 1)
 
 
 def test_answer_timeout_env_example_documents_setting() -> None:
@@ -43,6 +57,43 @@ def test_answer_timeout_env_example_documents_setting() -> None:
 
     env_example = Path(__file__).resolve().parents[1] / ".env.example"
     assert "RAG_ANSWER_TIMEOUT_SECONDS=600" in env_example.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("choice", RAG_ANSWER_TIMEOUT_CHOICES, ids=str)
+def test_shortest_answer_limit_skips_reading_and_expansion(choice: int) -> None:
+    """最小の 150 秒は生成の予約（1 回の見積もり 120 + 確定の 30 秒）と同じ（#5280）。
+
+    回答の期限は開始から減るので、参照先を読む時点の残りは予約より短く、参照先の読取
+    （``_reference_deadline_short``）をしない。章節の拡張（1 段 20 秒 + 予約）・分割読取（予約）も
+    rag_engine の同じ予約で止まり、入る根拠だけで 1 回生成する。
+    300 秒以上なら開始の時点では読み足せる。
+    """
+    from types import SimpleNamespace
+
+    from rag_engine.generation.section_expansion import SectionExpansionLimits
+    from rag_engine.resources.deadline import Deadline
+
+    from app.rag.answer_engine import (
+        _reference_deadline_short,
+        _reference_generation_reserve_seconds,
+        _SearchState,
+    )
+
+    settings = Settings(rag_answer_timeout_seconds=choice)
+    reserve = _reference_generation_reserve_seconds(settings)
+    assert reserve == 150.0 == RAG_ANSWER_TIMEOUT_MIN_SECONDS
+    state = _SearchState()
+    state.deadline = Deadline(float(choice))
+    assert _reference_deadline_short(state, reserve) is (choice <= reserve)
+    # rag_engine の章節の拡張・分割読取も同じ予約（設定から渡す見積もり + 確定の分）を使う。
+    limits = SectionExpansionLimits.from_settings(
+        SimpleNamespace(
+            answer_generation_round_estimate_seconds=(
+                settings.rag_answer_generation_round_estimate_seconds
+            )
+        )
+    )
+    assert limits.generation_reserve_seconds == reserve
 
 
 def test_answer_timeout_message_names_stage_and_retry() -> None:
@@ -113,7 +164,7 @@ async def test_stage_tracker_follows_nested_stages() -> None:
 
 
 async def test_run_answer_with_timeout_reports_last_stage() -> None:
-    settings = Settings(rag_answer_timeout_seconds=0.05)
+    settings = Settings().model_copy(update={"rag_answer_timeout_seconds": 0.05})
 
     async def slow(tracker: StageTracker) -> str:
         await tracker(_progress("history_rewrite", "started"))
@@ -132,7 +183,7 @@ async def test_run_answer_with_timeout_reports_last_stage() -> None:
 
 async def test_run_answer_with_timeout_wraps_inner_timeout_without_limit() -> None:
     """工程の中の TimeoutError（LLM 1 回の timeout など）も工程付きの時間切れにする。"""
-    settings = Settings(rag_answer_timeout_seconds=60)
+    settings = Settings().model_copy(update={"rag_answer_timeout_seconds": 60})
 
     async def inner_timeout(tracker: StageTracker) -> str:
         await tracker(_progress("answer", "started"))
@@ -147,7 +198,7 @@ async def test_run_answer_with_timeout_wraps_inner_timeout_without_limit() -> No
 
 
 async def test_run_answer_with_timeout_returns_result_within_limit() -> None:
-    settings = Settings(rag_answer_timeout_seconds=5)
+    settings = Settings().model_copy(update={"rag_answer_timeout_seconds": 5})
 
     async def quick(tracker: StageTracker) -> str:
         await asyncio.sleep(0.05)
