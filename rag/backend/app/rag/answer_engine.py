@@ -180,6 +180,11 @@ _REFERENCE_DOCUMENT_CANDIDATES = 20
 _REFERENCE_TARGET_CANDIDATES = 8
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
+# 交差参照の起点の由来(受領記録の ``origin`` / ``anchor_origin``。#5315)。検索の候補か、回答の文脈
+# (章節の拡張・親の読取。由来の名前は rag_engine が渡す)か。
+REFERENCE_ORIGIN_SEARCH = "search"
+REFERENCE_ORIGIN_CONTEXT = "context"
+REFERENCE_ANCHOR_SEARCH_CANDIDATE = "search_candidate"
 # 診断に出す交差参照の起点の記録の、検索の回数の上限(要求ごとの再検索)。
 _REFERENCE_DIAGNOSTICS_SEARCHES = 4
 # 診断に出す、関係情報で使った entity の数の上限。
@@ -317,6 +322,12 @@ class _SearchState:
     reference_reads: dict[tuple[str, ...], Any] = field(default_factory=dict)
     reference_full_read_ids: set[str] = field(default_factory=set)
     reference_section_selections: list[dict[str, object]] = field(default_factory=list)
+    # 参照の起点として調べた chunk、独立に読んだ参照先の数(1 回の回答の累計)と、検索の段の参照の
+    # 展開の質問(検索文と embedding)。章節の拡張・親の読取で文脈に入った chunk を起点にするとき、
+    # 調べ直さず、上限は検索の段と合わせて数え、文書全体への参照を同じ質問で読む(#5315)。
+    reference_checked_ids: set[str] = field(default_factory=set)
+    reference_read_targets: int = 0
+    reference_question: tuple[str, list[float]] | None = None
     # 参照の文書名の照合の DB の行(同じ key。辿る前に候補の文書名をまとめて 1 回で読む。#2137)。
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
@@ -960,6 +971,17 @@ class AnswerEngine:
                     )
                 )
                 if self._settings.rag_section_expansion_enabled
+                else None
+            ),
+            # 章節の拡張・親の読取で文脈に入った chunk を起点にした参照先(#5315)。深さ 1 で、上限と
+            # 期限は検索の段の参照の展開と同じ。参照の展開が無効なら辿らない。
+            context_references=(
+                (
+                    lambda *, seeds, present, **kwargs: run_async(
+                        lambda: self._context_reference_expansion(request, state, seeds, present)
+                    )
+                )
+                if self._settings.rag_reference_expansion_enabled
                 else None
             ),
             # 長い根拠を分ける区切りに使う今の章節(#4682)。章節の拡張の設定には関係なく読む。
@@ -2155,8 +2177,14 @@ class AnswerEngine:
         question: tuple[str, list[float]] | None = None,
         scores: Mapping[str, float] | None = None,
         receipt: dict[str, object] | None = None,
+        target_budget: int | None = None,
+        origins: Mapping[str, str] | None = None,
     ) -> dict[str, list[RetrievedChunk]]:
         """発見、対象の読取、関連度の順の選択を分ける。参照の補充は既存起点から一段だけ。
+
+        ``origins`` は回答の文脈から起点を渡すとき(#5315)の起点ごとの由来。省略は検索の候補。
+        ``target_budget`` は独立に読む参照先の数の上限(省略は
+        ``rag_reference_expansion_max_targets``)。
 
         起点範囲内を先に走査する。読めた参照先の chunk は個数の上限で選ばずにすべて足し(#5243)、
         原質問との rerank の点数の高い順に並べて点数を印に残す(回答の生成はこの順で根拠の文字の
@@ -2172,13 +2200,17 @@ class AnswerEngine:
             select_reference_chunks,
         )
 
-        target_budget = self._settings.rag_reference_expansion_max_targets
+        if target_budget is None:
+            target_budget = self._settings.rag_reference_expansion_max_targets
         reserve = _reference_generation_reserve_seconds(self._settings)
+        if origins is None and question is not None and state.reference_question is None:
+            state.reference_question = question
         scope = _reference_scope(request.filters)
         limit = max(_REFERENCE_SOURCE_ANCHORS, min(int(request.top_k), _REFERENCE_EXTENDED_ANCHORS))
         sources: list[dict[str, object]] = []
         all_sources: list[dict[str, object]] = []
         record: dict[str, object] = {
+            "origin": REFERENCE_ORIGIN_SEARCH if origins is None else REFERENCE_ORIGIN_CONTEXT,
             "candidates": len(anchors),
             "top_sources": _REFERENCE_SOURCE_ANCHORS,
             "source_limit": limit,
@@ -2190,8 +2222,9 @@ class AnswerEngine:
             "added_count": 0,
             "sources": sources,
         }
-        if len(state.reference_sources) < _REFERENCE_DIAGNOSTICS_SEARCHES:
+        if origins is not None or len(state.reference_sources) < _REFERENCE_DIAGNOSTICS_SEARCHES:
             state.reference_sources.append(record)
+        state.reference_checked_ids.update(anchor.chunk_id for anchor in anchors[:limit])
         # 起点ごとに対象の鍵を保存する。ラベルの表記違いを同じ対象としてまとめる。
         plans: list[tuple[RetrievedChunk, int, dict[str, object], list[tuple[str, ...]]]] = []
         targets: dict[tuple[str, ...], tuple[RetrievedChunk, ReferenceTarget]] = {}
@@ -2224,6 +2257,8 @@ class AnswerEngine:
                     sources.append(failed)
                 continue
             entry = _reference_source_entry(anchor, position, scores, found, "none")
+            if origins is not None:
+                entry["anchor_origin"] = origins.get(anchor.chunk_id, "")
             all_sources.append(entry)
             if not found:
                 entry["outcome"] = "no_references"
@@ -2304,6 +2339,7 @@ class AnswerEngine:
                     ),
                 }
 
+        state.reference_read_targets += read_count
         # 範囲に無いファイル名の形の参照(#5208)は、検索範囲の文書を指していないので理由に数えない
         # (本文のファイル名らしい語で、同じ起点のほかの参照の補充を止めない)。受領記録には残す。
         ignored = {
@@ -2390,6 +2426,11 @@ class AnswerEngine:
                 "document_title": target.document_title,
                 "section_path": str(chunk.metadata.get("section_path") or ""),
                 "resolved_at": "query" if source_id in state.query_reference_targets else "ingest",
+                "anchor_origin": (
+                    REFERENCE_ANCHOR_SEARCH_CANDIDATE
+                    if origins is None
+                    else origins.get(source_id, "")
+                ),
                 "relevance_rank": relevance_rank,
                 **({"relevance_score": round(score, 6)} if score is not None else {}),
             }
@@ -2567,6 +2608,72 @@ class AnswerEngine:
             for chunk in chunks
             if (request.query, chunk.chunk_id) in cache
         }, "rerank"
+
+    async def _context_reference_expansion(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        seeds: Mapping[str, str],
+        present: Collection[str],
+    ) -> list[Any]:
+        """章節の拡張・親の読取で回答の文脈に入った chunk を起点に、参照先を読む(#5315)。
+
+        ``seeds`` は起点にする chunk の ID と由来(文脈の順)、``present`` は回答の文脈にある chunk の
+        ID(参照先として足さない)。検索の段の参照の展開(``_reference_expansion``)と同じ規則で、
+        深さは 1: 検索の段で起点として調べた chunk・参照先として足した chunk・参照先の文書の
+        chunk は起点にしない。独立に読む参照先の数は検索の段と合わせて
+        ``rag_reference_expansion_max_targets`` まで、読取は回答の期限の残りが生成の予約より
+        少なければ止める。検索の段で参照を辿らなかった回答(無効・頁に絞った検索・呼び出し元の
+        範囲)では辿らない。起点の記録の ``fused_rank`` は文脈の中の順。返すのは足した参照先の
+        chunk(child と親)。
+        """
+        if not self._settings.rag_reference_expansion_enabled or not state.reference_checked_ids:
+            return []
+        referenced_documents = {
+            str(detail.get("document_id") or "") for detail in state.reference_expansions.values()
+        }
+        anchors = [
+            state.chunks[chunk_id]
+            for chunk_id in seeds
+            if chunk_id in state.chunks
+            and chunk_id not in state.reference_checked_ids
+            and chunk_id not in state.reference_expansions
+            and state.chunks[chunk_id].document_id not in referenced_documents
+            and not is_derived_chunk(state.chunks[chunk_id])
+        ]
+        if not anchors:
+            return []
+        with db_call_label("reference"):
+            references = await self._reference_expansion(
+                request,
+                state,
+                anchors,
+                existing={*present, *seeds},
+                question=state.reference_question,
+                target_budget=max(
+                    0,
+                    self._settings.rag_reference_expansion_max_targets
+                    - state.reference_read_targets,
+                ),
+                origins=seeds,
+            )
+        chunks = list(
+            {chunk.chunk_id: chunk for rows in references.values() for chunk in rows}.values()
+        )
+        if not chunks:
+            return []
+        if self._attach_images:
+            await self._materialize_images(chunks, state)
+        children = []
+        for chunk in chunks:
+            child = _stored_child(
+                state.chunks.get(chunk.chunk_id, chunk),
+                rrf_score=0.0,
+                retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
+            )
+            child.metadata["retrieval_admission_stage"] = "reference"
+            children.append(child)
+        return [*children, *_stored_parents(children, state)]
 
     async def _prefetch_reference_documents(
         self, scope: dict[str, str], state: _SearchState, anchors: Sequence[RetrievedChunk]

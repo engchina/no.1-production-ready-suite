@@ -2391,6 +2391,55 @@ async def test_section_expansion_keeps_caller_filters_for_sections_not_reached_b
     assert "doc-a:第3章 手順" not in reads
 
 
+async def test_reference_in_section_expansion_chunk_reaches_generation(
+    section_scope: SectionScopeMap,
+) -> None:
+    """章節の拡張で文脈に入った索引の chunk の参照先を読み、生成の入力と引用に入れる(#5315)。"""
+    hit = _retrieved(
+        "doc-x:cs-1:0",
+        "合成の操作の一覧。",
+        "第1章 一覧",
+        document_id="doc-x",
+        file_name="合成索引X.md",
+    )
+    listed = _retrieved(
+        "doc-x:cs-1:1",
+        "合成文書B.md",
+        "第1章 一覧",
+        document_id="doc-x",
+        file_name="合成索引X.md",
+        targets=[ReferenceTarget("合成文書B", "document", "合成文書B", "合成文書B")],
+    )
+    target = _retrieved(
+        "doc-b:cs-9:1",
+        _SECTION_ANSWER,
+        "第3章 手順",
+        document_id="doc-b",
+        file_name="合成文書B.md",
+        chunk_set_id="cs-9",
+    )
+    section_scope.chunks = [hit, listed, target]
+    section_scope.knowledge_bases = {_SECTION_KB: {"doc-x", "doc-b"}}
+    oracle = SectionReferenceOracle(
+        [hit], [hit, listed, target], knowledge_bases={_SECTION_KB: {"doc-x", "doc-b"}}
+    )
+
+    outcome = await _section_engine(oracle).run(
+        SearchRequest(query="合成の操作の手順は？", filters={"knowledge_base_id": _SECTION_KB})
+    )
+
+    searches = outcome.diagnostics["reference_expansion"]["searches"]
+    assert [search["origin"] for search in searches] == ["search", "context"]
+    (source,) = searches[-1]["sources"]
+    assert source["chunk_id"] == "doc-x:cs-1:1"
+    assert source["anchor_origin"] == "section_expansion"
+    (added,) = outcome.diagnostics["reference_expansion"]["chunks"]
+    assert added["chunk_id"] == "doc-b:cs-9:1"
+    assert added["anchor_origin"] == "section_expansion"
+    assert "doc-b:cs-9:1" in {citation.chunk_id for citation in outcome.citations}
+
+
+# ---- MCP の根拠 ----
 # ---- MCP の根拠 ----
 
 
@@ -2954,3 +3003,151 @@ def test_fixed_nfkc_matches_the_previous_default(text: str) -> None:
     from app.rag.cross_references import normalize_text
 
     assert normalize_text(text) == unicodedata.normalize("NFKC", text)
+
+
+# ---- 章節の拡張・親の読取で文脈に入った chunk を起点にした参照(#5315) ----
+
+APPENDIX1 = ReferenceTarget("別紙1", "appendix", "別紙:1", None, "別紙1 申請書様式")
+
+
+def _appendix_chunks(count: int, document_id: str = "doc-1") -> list[RetrievedChunk]:
+    return [
+        _retrieved(
+            f"{document_id}:cs-1:x{n}", f"様式 {n}", "別紙1 申請書様式", document_id=document_id
+        )
+        for n in range(count)
+    ]
+
+
+async def _context_reference_setup(
+    hits: list[RetrievedChunk], sections: list[RetrievedChunk], **settings: Any
+) -> tuple[AnswerEngine, ReferenceOracle, _SearchState, SearchRequest]:
+    oracle = ReferenceOracle(hits, sections)
+    engine = _engine(oracle, **settings)
+    state = _SearchState()
+    request = SearchRequest(query="承認の条件")
+    await engine._search(request, state, retrieval_queries=["承認の条件"])
+    return engine, oracle, state, request
+
+
+async def test_context_chunk_from_section_expansion_becomes_reference_anchor() -> None:
+    """章節の拡張で文脈に入った索引の chunk の参照先を読み、起点の由来を受領記録に残す。"""
+    anchor = _retrieved("doc-1:a", "精算の概要。", "第1章 総則")
+    engine, oracle, state, request = await _context_reference_setup([anchor], _section_chunks(2))
+    assert state.reference_expansions == {}
+    # 章節の拡張が読んだ chunk(検索の候補ではない)。
+    index = _retrieved("doc-1:idx", "承認は第3章を参照。", "第2章 索引", targets=[CHAPTER3])
+    state.chunks[index.chunk_id] = index
+
+    added = await engine._context_reference_expansion(
+        request, state, {"doc-1:idx": "section_expansion"}, ["doc-1:a", "doc-1:idx"]
+    )
+
+    assert [chunk.chunk_uid for chunk in added] == ["doc-1:cs-1:s0", "doc-1:cs-1:s1"]
+    assert added[0].metadata["reference_expansion"]["from_chunk_uid"] == "doc-1:idx"
+    assert {chunk.metadata["retrieval_admission_stage"] for chunk in added} == {"reference"}
+    record = state.reference_sources[-1]
+    assert record["origin"] == "context"
+    (source,) = cast(list[dict[str, Any]], record["sources"])
+    assert source["chunk_id"] == "doc-1:idx"
+    assert source["anchor_origin"] == "section_expansion"
+    assert state.reference_expansions["doc-1:cs-1:s0"]["anchor_origin"] == "section_expansion"
+    assert state.reference_sources[0]["origin"] == "search"
+    assert [call["section_path"] for call in oracle.reference_calls] == ["第3章 承認"]
+
+
+async def test_context_reference_anchor_shares_target_limit_with_search_stage() -> None:
+    """独立に読む参照先の数は、検索の段と合わせて rag_reference_expansion_max_targets まで。"""
+    anchor = _retrieved("doc-1:a", "第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    engine, oracle, state, request = await _context_reference_setup(
+        [anchor],
+        [*_section_chunks(1), *_appendix_chunks(1, "doc-2")],
+        rag_reference_expansion_max_targets=1,
+    )
+    assert state.reference_read_targets == 1
+    index = _retrieved(
+        "doc-2:idx", "様式は別紙1を参照。", "第2章 索引", document_id="doc-2", targets=[APPENDIX1]
+    )
+    state.chunks[index.chunk_id] = index
+
+    added = await engine._context_reference_expansion(
+        request, state, {"doc-2:idx": "context_read"}, ["doc-1:a", "doc-2:idx"]
+    )
+
+    assert added == []
+    assert [call["section_path"] for call in oracle.reference_calls] == ["第3章 承認"]
+    (source,) = cast(list[dict[str, Any]], state.reference_sources[-1]["sources"])
+    assert source["target_outcomes"] == ["target_limit"]
+    assert state.reference_read_targets == 1
+
+
+async def test_context_reference_anchor_stops_before_generation_reserve() -> None:
+    from rag_engine.resources.deadline import Deadline
+
+    anchor = _retrieved("doc-1:a", "精算の概要。", "第1章 総則")
+    engine, oracle, state, request = await _context_reference_setup([anchor], _section_chunks(1))
+    index = _retrieved("doc-1:idx", "承認は第3章を参照。", "第2章 索引", targets=[CHAPTER3])
+    state.chunks[index.chunk_id] = index
+    state.deadline = Deadline(0.0)
+
+    added = await engine._context_reference_expansion(
+        request, state, {"doc-1:idx": "section_expansion"}, ["doc-1:idx"]
+    )
+
+    assert added == []
+    assert oracle.reference_calls == []
+    (source,) = cast(list[dict[str, Any]], state.reference_sources[-1]["sources"])
+    assert source["target_outcomes"] == ["deadline"]
+
+
+async def test_context_reference_anchor_keeps_depth_one() -> None:
+    """検索の段で調べた起点・参照先として足した chunk・参照先の文書の chunk は起点にしない。"""
+    anchor = _retrieved("doc-1:a", "第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    engine, oracle, state, request = await _context_reference_setup(
+        [anchor], [*_section_chunks(1), *_appendix_chunks(1)]
+    )
+    calls = len(oracle.reference_calls)
+    # 参照先の文書(doc-1)の chunk は、参照を持っていても起点にしない。
+    same_document = _retrieved(
+        "doc-1:idx", "様式は別紙1を参照。", "第2章 索引", targets=[APPENDIX1]
+    )
+    state.chunks[same_document.chunk_id] = same_document
+
+    added = await engine._context_reference_expansion(
+        request,
+        state,
+        {
+            "doc-1:a": "context_read",
+            "doc-1:cs-1:s0": "section_expansion",
+            "doc-1:idx": "context_read",
+        },
+        ["doc-1:a", "doc-1:cs-1:s0", "doc-1:idx"],
+    )
+
+    assert added == []
+    assert len(oracle.reference_calls) == calls
+    assert all(search["origin"] == "search" for search in state.reference_sources)
+
+
+@pytest.mark.parametrize("case", ["disabled", "search_stage_not_expanded"])
+async def test_context_reference_anchor_follows_existing_off_conditions(case: str) -> None:
+    anchor = _retrieved("doc-1:a", "精算の概要。", "第1章 総則")
+    oracle = ReferenceOracle([anchor], _section_chunks(1))
+    engine = _engine(oracle, rag_reference_expansion_enabled=case != "disabled")
+    state = _SearchState()
+    request = SearchRequest(query="承認の条件")
+    await engine._search(
+        request,
+        state,
+        retrieval_queries=["承認の条件"],
+        expand_references=case == "disabled",
+    )
+    index = _retrieved("doc-1:idx", "承認は第3章を参照。", "第2章 索引", targets=[CHAPTER3])
+    state.chunks[index.chunk_id] = index
+
+    added = await engine._context_reference_expansion(
+        request, state, {"doc-1:idx": "section_expansion"}, ["doc-1:idx"]
+    )
+
+    assert added == []
+    assert oracle.reference_calls == []

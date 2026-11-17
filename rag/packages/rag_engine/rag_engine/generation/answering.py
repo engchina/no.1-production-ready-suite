@@ -3674,6 +3674,8 @@ def answer_question_result(
         )
         # 章節の拡張が所有の章節を読めなかった起点は、次の補い方（親 → 前後）で補う（#5173）。
         context = _fill_unread_section_anchors(context, settings, section_state, neighbor_child_count=chunk_neighbor_count)
+        # 章節の拡張・親の読取で文脈に入った chunk を起点に参照先を読む（深さ 1。#5315）。
+        context = _add_context_references(context, section_state)
         if guide_plan is not None and guide_step_trace is not None:
             guide_step_trace, step_sources = _finish_guide_steps(
                 guide_plan, guide_results, guide_acquisitions, guide_step_trace, context, added_chunks[GUIDE_STEP_KEY]
@@ -4179,6 +4181,89 @@ def _fill_unread_section_anchors(
             records=[item.record for item in tree],
             evidence_tree=tree,
             expansion_records=tuple(pool.values()),
+        )
+    )
+
+
+# 回答の文脈から参照の起点に渡す chunk の由来（#5315。backend の受領記録の ``anchor_origin``）。
+CONTEXT_REFERENCE_SECTION_ORIGIN = "section_expansion"
+CONTEXT_REFERENCE_READ_ORIGIN = "context_read"
+
+
+def _add_context_references(context: AnswerContext, state: dict[str, Any]) -> AnswerContext:
+    """章節の拡張・親の読取で回答の文脈に入った chunk を起点に参照先を読み、根拠に足す（#5315）。
+
+    検索の候補は検索の段で参照を辿り済みなので、章節の文脈（``section_context``）と前後・親の文脈
+    （``neighbor_context`` / ``parent_context``。検索拡張の根拠を除く）の chunk を由来つきで渡す。深さ・上限・期限・
+    起点にしない chunk は注入した ``context_references`` が決める。足した参照先は検索拡張の根拠と同じ理由
+    （``expansion_evidence``）で根拠の木の最後に置き、``consolidate_context`` でまとめる。
+    """
+    from rag_engine.dependencies import injected_context_references
+    from rag_engine.generation.section_expansion import SECTION_CONTEXT_ROLE
+    from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON
+
+    seeds: dict[str, str] = {}
+    present: list[str] = []
+    for parent in context.evidence_tree:
+        present.append(retrieval_record_id(parent.record))
+        for child in parent.children:
+            uid = retrieval_record_id(child.record)
+            present.append(uid)
+            if child.reason == EXPANSION_EVIDENCE_REASON:
+                continue
+            if child.role == SECTION_CONTEXT_ROLE:
+                seeds.setdefault(uid, CONTEXT_REFERENCE_SECTION_ORIGIN)
+            elif child.role in ("neighbor_context", "parent_context"):
+                seeds.setdefault(uid, CONTEXT_REFERENCE_READ_ORIGIN)
+    if not seeds:
+        return context
+    loaded = injected_context_references(seeds=seeds, present=list(dict.fromkeys(present)))
+    if loaded is None:
+        return context
+    with _execution_step(
+        "文脈の根拠からの参照", "章節の拡張・親の読取で回答の文脈に入った根拠が参照する資料を読み、根拠に加えます。"
+    ) as step:
+        records = [_stored_chunk_answer_record(chunk) for chunk in loaded]
+        children = [record for record in records if record.chunk_level == "child"]
+        step.input({"起点の由来": seeds})
+        added: tuple[Any, ...] = ()
+        if children:
+            filled = build_chunk_context_bundle(
+                ContextBuildRequest(
+                    question="",
+                    ranked_children=children,
+                    active_records=records,
+                    top_k=len(children),
+                    neighbor_child_count=0,
+                    max_anchors_per_parent=len(children),
+                    max_records=len(records),
+                    max_chars=2**31 - 1,
+                )
+            )
+            added = tuple(
+                replace(
+                    group,
+                    reason=EXPANSION_EVIDENCE_REASON,
+                    children=tuple(replace(child, reason=EXPANSION_EVIDENCE_REASON) for child in group.children),
+                )
+                for group in filled.evidence_tree
+            )
+        added_ids = [retrieval_record_id(child.record) for group in added for child in group.children]
+        step.output({"足した参照先の Chunk ID": added_ids})
+        result = state.get("result")
+        if result is not None:
+            result.trace["context_references"] = {"seed_ids": list(seeds), "added_chunk_ids": added_ids}
+        if not added:
+            step.result("足す参照先はありません。")
+            return context
+        step.result(f"参照先の {len(added_ids)} Chunk を根拠に加えました。")
+    tree = (*context.evidence_tree, *added)
+    return consolidate_context(
+        replace(
+            context,
+            records=[item.record for item in tree],
+            evidence_tree=tree,
+            expansion_records=(*context.expansion_records, *records),
         )
     )
 
