@@ -17,7 +17,6 @@ from app.rag import section_map_service
 from app.rag.answer_engine import _SearchState
 from app.rag.cross_references import REFERENCE_SECTION_SEED_KEY, ReferenceTarget
 from app.rag.reference_sections import (
-    DOCUMENT_READ_MAX_CHUNKS,
     FALLBACK_NO_OUTLINE,
     FALLBACK_NO_SELECTION,
     FALLBACK_SECTIONS_EMPTY,
@@ -173,6 +172,7 @@ def _setup(
     pick: Any,
     targets: list[ReferenceTarget] | None = None,
     enabled: bool = True,
+    **settings: Any,
 ) -> tuple[Any, ReferenceOracle, SectionMap, FakeLlm]:
     chunks = [*_doc_chunks(DOC_A, FILE_A, 30), *_doc_chunks(DOC_B, FILE_B, 30)]
     targets = targets or [TARGET_A, TARGET_B]
@@ -189,7 +189,9 @@ def _setup(
     sections = SectionMap(chunks, outlines=outlines)
     monkeypatch.setattr(section_map_service, "section_outline", sections.outline)
     monkeypatch.setattr(section_map_service, "read_section", sections.read)
-    engine = _engine(oracle, FakeGenAi(), rag_reference_outline_selection_enabled=enabled)
+    engine = _engine(
+        oracle, FakeGenAi(), rag_reference_outline_selection_enabled=enabled, **settings
+    )
     llm = FakeLlm(pick)
     engine._reference_llm = llm
     return engine, oracle, sections, llm
@@ -414,7 +416,117 @@ def test_prompt_uses_steps_and_schema_holds_the_field_meaning() -> None:
     schema = ReferenceSectionChoice.model_json_schema()
     assert schema["properties"]["section_ids"]["description"]
     assert schema.get("additionalProperties") is False
-    assert DOCUMENT_READ_MAX_CHUNKS >= 400
+
+
+def test_limits_default_to_the_previous_constants() -> None:
+    """目次の字数・読む章節の数・読む chunk の上限の既定は、設定にする前の定数と同じ(#5335)。"""
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.rag_reference_outline_selection_catalog_max_chars == 40000
+    assert settings.rag_reference_outline_selection_max_sections == 12
+    assert settings.rag_reference_outline_selection_read_max_chunks == 400
+
+
+@pytest.mark.parametrize(
+    ("name", "low", "high"),
+    [
+        ("rag_reference_outline_selection_catalog_max_chars", 2000, 80000),
+        ("rag_reference_outline_selection_max_sections", 1, 50),
+        ("rag_reference_outline_selection_read_max_chunks", 10, 1000),
+    ],
+)
+def test_limits_reject_values_out_of_range(name: str, low: int, high: int) -> None:
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    def build(value: int) -> Settings:
+        values: dict[str, Any] = {name: value}
+        return Settings(_env_file=None, **values)
+
+    assert getattr(build(low), name) == low
+    assert getattr(build(high), name) == high
+    for invalid in (low - 1, high + 1):
+        with pytest.raises(ValidationError):
+            build(invalid)
+
+
+async def test_catalog_limit_is_split_between_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目次の字数の上限は設定の値で、参照先ごとに均等に割る(#5335)。"""
+    from app.rag import section_catalog
+
+    limits: list[int] = []
+    original = section_catalog.compact_section_lines
+
+    async def recording(*args: Any, max_chars: int, **kwargs: Any) -> tuple[list[str], int]:
+        limits.append(max_chars)
+        return await original(*args, max_chars=max_chars, **kwargs)
+
+    monkeypatch.setattr(section_catalog, "compact_section_lines", recording)
+    engine, _oracle, _sections, _llm = _setup(
+        monkeypatch,
+        outlines={DOC_A, DOC_B},
+        pick=lambda context: [],
+        rag_reference_outline_selection_catalog_max_chars=3000,
+    )
+
+    await _search(engine)
+
+    assert limits == [1500, 1500]
+
+
+async def test_section_and_chunk_limits_follow_the_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """読む章節の数と、参照先 1 つから読む chunk の上限は設定の値(#5335)。"""
+
+    def pick_all(context: str) -> list[str]:
+        return [
+            line.split("[", 1)[1].split("]", 1)[0] for line in context.splitlines() if "[S" in line
+        ]
+
+    engine, _oracle, sections, _llm = _setup(
+        monkeypatch,
+        outlines={DOC_A},
+        targets=[TARGET_A],
+        pick=pick_all,
+        rag_reference_outline_selection_max_sections=3,
+    )
+    await _search(engine)
+    assert len(sections.read_calls) == 3
+
+    engine, _oracle, sections, _llm = _setup(
+        monkeypatch,
+        outlines={DOC_A},
+        targets=[TARGET_A],
+        pick=pick_all,
+        rag_reference_outline_selection_max_sections=50,
+        rag_reference_outline_selection_read_max_chunks=10,
+    )
+    result, state = await _search(engine)
+    # 章節は 1 つに 1 chunk の合成なので、10 件で読むのを止める。
+    assert len(sections.read_calls) == 10
+    assert len(result.expansion_chunks) == 10
+    assert _reads(state)[DOC_A]["read_chunk_count"] == 10
+
+
+async def test_full_read_fallback_uses_the_chunk_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """選べずに文書全体で読む退避も、参照先 1 つから読む chunk の上限に従う(#5335)。"""
+    engine, oracle, _sections, _llm = _setup(
+        monkeypatch,
+        outlines=set(),
+        targets=[TARGET_A],
+        pick=lambda context: [],
+        rag_reference_outline_selection_read_max_chunks=10,
+    )
+
+    result, state = await _search(engine)
+
+    assert len(oracle.search_calls) == 1
+    assert len(result.expansion_chunks) == 10
+    read = _reads(state)[DOC_A]
+    assert (read["read_mode"], read["read_chunk_count"]) == (READ_MODE_FULL, 10)
 
 
 async def test_disabled_setting_keeps_the_search_top_candidates(
