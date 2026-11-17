@@ -60,14 +60,10 @@ OUTLINE_SECTION_PROMPT = (
     + "選んだ章節は、質問に答えるために重要な順に並べます。"
 )
 
-# 目次の全体（全文書の合計）の文字数の上限。MCP の rag_outline の compact と同じ。
-CATALOG_MAX_CHARS = 40000
-# 見出しの語の無い章節に添える本文の書き出しの文字数（rag_outline の既定と同じ）。
+# 見出しの語の無い章節に添える本文の書き出しの文字数（rag_outline の既定と同じ。2 つの経路で共有）。
+# 目次の字数の上限・読む章節の数・読む量は設定（文書全体への参照は
+# rag_reference_outline_selection_*、一般の質問は rag_outline_selection_*）。
 CATALOG_LEAD_CHARS = 60
-# 参照先 1 つから読む chunk の上限（選んだ章節の合計・全体で読む退避のどちらも）。
-DOCUMENT_READ_MAX_CHUNKS = 400
-# 参照先 1 つで読む章節の数の上限（モデルの返した順で採る）。
-SELECTED_SECTIONS_MAX = 12
 
 # 読み方。
 READ_MODE_SECTIONS = "outline_selection"

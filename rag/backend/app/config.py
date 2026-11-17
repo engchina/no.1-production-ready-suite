@@ -1049,6 +1049,34 @@ class Settings(
             "上位 8 件を読む。"
         ),
     )
+    rag_reference_outline_selection_catalog_max_chars: int = Field(
+        default=40000,
+        ge=2000,
+        le=80000,
+        description=(
+            "文書全体への参照の参照先の目次を回答のモデルに渡す字数の上限(#5263。参照先の合計を"
+            "参照先ごとに均等に割り、目次の順に入るところまで載せる)。範囲は一般の選択の"
+            "rag_outline_selection_catalog_max_chars と同じ。"
+        ),
+    )
+    rag_reference_outline_selection_max_sections: int = Field(
+        default=12,
+        ge=1,
+        le=50,
+        description=(
+            "文書全体への参照の参照先 1 つで、目次から選んだ章節を読む数の上限(#5263。モデルが"
+            "返した順に採る)。"
+        ),
+    )
+    rag_reference_outline_selection_read_max_chunks: int = Field(
+        default=400,
+        ge=10,
+        le=1000,
+        description=(
+            "文書全体への参照の参照先 1 つから読む chunk の上限(#5263。選んだ章節の合計と、選べない"
+            "ときに文書全体で読む退避のどちらも)。"
+        ),
+    )
     rag_outline_selection_enabled: bool = Field(
         default=False,
         description=(

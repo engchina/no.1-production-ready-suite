@@ -3562,6 +3562,50 @@ def test_answering_settings_toggle_reference_outline_selection(
     assert "RAG_REFERENCE_OUTLINE_SELECTION_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
+def test_answering_settings_save_reference_outline_selection_limits(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """参照先の目次の字数・読む章節の数・読む chunk の上限(#5335)を .env と実行中の設定へ保存する。
+
+    範囲外の値は 422。
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_reference_outline_selection_catalog_max_chars", 40000)
+    monkeypatch.setattr(settings, "rag_reference_outline_selection_max_sections", 12)
+    monkeypatch.setattr(settings, "rag_reference_outline_selection_read_max_chunks", 400)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    data = client.get("/api/settings/answering").json()["data"]
+    assert data["reference_outline_selection_catalog_max_chars"] == 40000
+    assert data["reference_outline_selection_max_sections"] == 12
+    assert data["reference_outline_selection_read_max_chunks"] == 400
+    response = client.patch(
+        "/api/settings/answering",
+        json={
+            "reference_outline_selection_catalog_max_chars": 20000,
+            "reference_outline_selection_max_sections": 24,
+            "reference_outline_selection_read_max_chunks": 200,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()["data"]
+    assert saved["reference_outline_selection_max_sections"] == 24
+    assert settings.rag_reference_outline_selection_catalog_max_chars == 20000
+    assert settings.rag_reference_outline_selection_max_sections == 24
+    assert settings.rag_reference_outline_selection_read_max_chunks == 200
+    text = env_file.read_text(encoding="utf-8")
+    assert "RAG_REFERENCE_OUTLINE_SELECTION_CATALOG_MAX_CHARS=20000" in text
+    assert "RAG_REFERENCE_OUTLINE_SELECTION_MAX_SECTIONS=24" in text
+    assert "RAG_REFERENCE_OUTLINE_SELECTION_READ_MAX_CHUNKS=200" in text
+    for invalid in (
+        {"reference_outline_selection_catalog_max_chars": 1000},
+        {"reference_outline_selection_max_sections": 51},
+        {"reference_outline_selection_read_max_chunks": 5},
+    ):
+        assert client.patch("/api/settings/answering", json=invalid).status_code == 422
+
+
 def test_answering_settings_save_outline_selection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

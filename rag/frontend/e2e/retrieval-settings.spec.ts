@@ -138,6 +138,9 @@ const ANSWERING_SETTINGS = {
   entity_expansion_enabled: true,
   entity_expansion_max_chunks: 3,
   reference_outline_selection_enabled: false,
+  reference_outline_selection_catalog_max_chars: 40000,
+  reference_outline_selection_max_sections: 12,
+  reference_outline_selection_read_max_chunks: 400,
   outline_selection_enabled: false,
   outline_selection_max_documents: 3,
   outline_selection_catalog_max_chars: 40000,
@@ -723,7 +726,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`参照先の文書の目次から章節を選ぶ設定は既定でオフで、オンにして保存できる（${viewport.name}。#5263）`, { tag: "@responsive" }, async ({ page }) => {
+  test(`参照先の文書の目次から章節を選ぶ設定をオンにして、上限と一緒に保存できる（${viewport.name}。#5263・#5335）`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockRetrievalCards(page);
@@ -734,12 +737,29 @@ for (const viewport of [
 
     const toggle = page.getByRole("switch", { name: "参照先の文書の目次から章節をモデルが選ぶ", exact: true });
     await expect(toggle).not.toBeChecked();
+    const sections = page.getByRole("combobox", { name: "参照先ごとに読む章節の数", exact: true });
+    await expect(sections).toHaveCount(0);
     await toggle.click();
+    await expect(page.getByRole("combobox", { name: "参照先の目次の字数の上限", exact: true })).toContainText("40,000 字");
+    await expect(sections).toContainText("12");
+    const chunks = page.getByRole("combobox", { name: "参照先ごとに読むチャンクの上限", exact: true });
+    await expect(chunks).toContainText("400 件");
+    await sections.click();
+    await page.getByRole("listbox", { name: "参照先ごとに読む章節の数", exact: true }).getByRole("option", { name: "24", exact: true }).click();
+    await chunks.click();
+    await page.getByRole("listbox", { name: "参照先ごとに読むチャンクの上限", exact: true }).getByRole("option", { name: "800 件", exact: true }).click();
+    await expectNoPageOverflow(page);
     await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
 
     await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({ reference_outline_selection_enabled: true });
+    expect(saved[0]).toMatchObject({
+      reference_outline_selection_enabled: true,
+      reference_outline_selection_catalog_max_chars: 40000,
+      reference_outline_selection_max_sections: 24,
+      reference_outline_selection_read_max_chunks: 800,
+    });
     await expect(toggle).toBeChecked();
+    await expect(chunks).toContainText("800 件");
     await expectNoPageOverflow(page);
   });
 }

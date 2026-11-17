@@ -39,8 +39,11 @@ const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200
   label: t("settings.answering.answerTimeoutOption", { seconds: String(seconds) }),
 }));
 
-// 検索の上位の文書の目次から章節を選ぶ設定の選択肢（#5324。範囲は backend の rag_outline_selection_* と同じ）。
+// 目次から章節を選ぶ設定の選択肢。文書全体への参照（#5335。範囲は backend の rag_reference_outline_selection_*
+// と同じ）と検索の上位の文書（#5324。rag_outline_selection_* と同じ）。目次の字数の選択肢は両方で使う。
 // .env で選択肢の外の値を保存していれば、その値も選べるように足す。
+const REFERENCE_SECTION_CHOICES = [3, 6, 12, 24, 50];
+const REFERENCE_READ_CHUNK_CHOICES = [50, 100, 200, 400, 800, 1000];
 const OUTLINE_DOCUMENT_CHOICES = Array.from({ length: 10 }, (_, n) => n + 1);
 const OUTLINE_CATALOG_CHAR_CHOICES = [10000, 20000, 40000, 80000];
 const OUTLINE_READ_CHAR_CHOICES = [5000, 10000, 20000, 40000, 80000, 200000];
@@ -53,6 +56,10 @@ function countOptions(choices: number[], current: number, label: (value: number)
 
 function charOption(value: number): string {
   return t("settings.answering.charsOption", { chars: value.toLocaleString("ja-JP") });
+}
+
+function chunkOption(value: number): string {
+  return t("settings.answering.chunksOption", { count: value.toLocaleString("ja-JP") });
 }
 
 type AnsweringDraft = Omit<
@@ -74,6 +81,9 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
     reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? true,
+    reference_outline_selection_catalog_max_chars: settings.reference_outline_selection_catalog_max_chars ?? 40000,
+    reference_outline_selection_max_sections: settings.reference_outline_selection_max_sections ?? 12,
+    reference_outline_selection_read_max_chunks: settings.reference_outline_selection_read_max_chunks ?? 400,
     outline_selection_enabled: settings.outline_selection_enabled ?? false,
     outline_selection_max_documents: settings.outline_selection_max_documents ?? 3,
     outline_selection_catalog_max_chars: settings.outline_selection_catalog_max_chars ?? 40000,
@@ -286,14 +296,30 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               onValueChange={(value) => update({ entity_expansion_max_chunks: Number(value) })} />
           </FormGrid> : null}
         </div>
-        <SwitchRow
-          id="answering-reference-outline-selection"
-          label={t("settings.answering.referenceOutlineSelection")}
-          description={t("settings.answering.referenceOutlineSelectionHint")}
-          checked={form.reference_outline_selection_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ reference_outline_selection_enabled: checked })}
-        />
+        <div>
+          <SwitchRow
+            id="answering-reference-outline-selection"
+            label={t("settings.answering.referenceOutlineSelection")}
+            description={t("settings.answering.referenceOutlineSelectionHint")}
+            checked={form.reference_outline_selection_enabled}
+            disabled={disabled}
+            onChange={(checked) => update({ reference_outline_selection_enabled: checked })}
+          />
+          {form.reference_outline_selection_enabled ? <FormGrid className="px-3 pb-3">
+            <SelectField id="answering-reference_outline_selection_catalog_max_chars" label={t("settings.answering.reference_outline_selection_catalog_max_chars")} width="xs"
+              value={String(form.reference_outline_selection_catalog_max_chars)} disabled={disabled}
+              options={countOptions(OUTLINE_CATALOG_CHAR_CHOICES, form.reference_outline_selection_catalog_max_chars, charOption)}
+              onValueChange={(value) => update({ reference_outline_selection_catalog_max_chars: Number(value) })} />
+            <SelectField id="answering-reference_outline_selection_max_sections" label={t("settings.answering.reference_outline_selection_max_sections")} width="xs"
+              value={String(form.reference_outline_selection_max_sections)} disabled={disabled}
+              options={countOptions(REFERENCE_SECTION_CHOICES, form.reference_outline_selection_max_sections, String)}
+              onValueChange={(value) => update({ reference_outline_selection_max_sections: Number(value) })} />
+            <SelectField id="answering-reference_outline_selection_read_max_chunks" label={t("settings.answering.reference_outline_selection_read_max_chunks")} width="xs"
+              value={String(form.reference_outline_selection_read_max_chunks)} disabled={disabled}
+              options={countOptions(REFERENCE_READ_CHUNK_CHOICES, form.reference_outline_selection_read_max_chunks, chunkOption)}
+              onValueChange={(value) => update({ reference_outline_selection_read_max_chunks: Number(value) })} />
+          </FormGrid> : null}
+        </div>
         <div>
           <SwitchRow id="answering-outline-selection" label={t("settings.answering.outlineSelection")}
             description={t("settings.answering.outlineSelectionHint")} checked={form.outline_selection_enabled}
