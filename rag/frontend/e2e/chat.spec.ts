@@ -1432,6 +1432,54 @@ test("回答の根拠は Agent と同じ一覧（まとまりの表示・タブ�
   await expectNoPageOverflow(page);
 });
 
+test("表の行の根拠のチップは章節を 1 つにし、文脈ヘッダ・分割方針を出さない（#5303）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  // 節が 1 段の表の行（見出しと階層が同じシート名）。文脈ヘッダは「ファイル名 > 階層」。
+  const citations = [1, 2].map((row) => ({
+    document_id: "doc-x",
+    chunk_id: `doc-x:cs_x:${row}`,
+    text: `列 A: 合成の値 ${row} / 列 B: 合成の値 ${row + 10}`,
+    score: 0.5,
+    rerank_score: 0.8,
+    file_name: "合成の表.xlsx",
+    category_name: null,
+    metadata: {
+      content_kind: "record",
+      section_title: "シート A",
+      section_path: "シート A",
+      chunk_profile: "structure_v1",
+      context_header: "合成の表.xlsx > シート A",
+      context_header_enabled: true,
+      recipe_slot_no: 1,
+      evidence_model_used: row === 1,
+    },
+  }));
+  const streamBody = [
+    sseStart,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "合成の値は 1 です。" })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [] })}\n\n`,
+    `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(page, "ready", [], { streamBody });
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox").fill("列 A の値は？");
+  await page.getByRole("button", { name: "送信" }).click();
+
+  const summary = page.locator("summary").filter({ hasText: "AI に渡した 2 件 ／ 回答で引用 1 件" });
+  await summary.click();
+  const cards = page.getByTestId("answer-citations").getByTestId("evidence-card");
+  await expect(cards).toHaveCount(2);
+  for (const card of await cards.all()) {
+    await expect(card.getByTestId("evidence-chips").locator("dd")).toHaveText(["表の行", "シート A"]);
+    await expect(card).not.toContainText(/structure_v1|record|合成の表\.xlsx > シート A/);
+  }
+  await page.screenshot({ path: testInfo.outputPath(`chat-evidence-record-chips-${testInfo.project.name}.png`) });
+  await expectNoPageOverflow(page);
+});
+
 test("回答フローの回答ではチャットにも根拠パネルと会話から補った質問を表示する", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const answerDiagnostics = {

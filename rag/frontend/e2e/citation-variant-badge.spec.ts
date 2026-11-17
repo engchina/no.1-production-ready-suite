@@ -166,7 +166,8 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await expect(page.getByText("Rerank #1")).toBeVisible();
   // レシピバッジ(recipe_slot_no)が引用カードに表示される。
   await expect(page.getByText("レシピ1")).toBeVisible();
-  await expect(page.getByText("文書 A > 分類 A > 機能 A > 説明", {exact:true})).toBeVisible();
+  // 文脈ヘッダ（ファイル名 > 階層）はカードの題・章節のチップと重なるので根拠のカードに出さない（#5303）。
+  await expect(page.getByText("文書 A > 分類 A > 機能 A > 説明", {exact:true})).toHaveCount(0);
   await expect(page.getByText("有効", {exact:true})).toHaveCount(0);
 
   const citationText = page.getByTestId("citation-text");
