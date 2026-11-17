@@ -72,6 +72,7 @@ from app.rag.observability import (
 )
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgressCallback
 from app.schemas.evaluation import (
+    ANSWER_GENERATION_FALLBACK,
     EVALUATION_METRIC_NAMES,
     EVALUATION_METRICS_VERSION,
     EVALUATION_REASONING_METRIC_NAMES,
@@ -856,13 +857,14 @@ def summarize_case_results(
     """ケースの結果を集計して評価の結果にする（評価ランナーと `score_case_answers` で共通）。
 
     指標は成功したケースのうち測れたものだけの平均。失敗したケースや、標準回答で評価できなかった
-    ケースがあれば合格にしない。
+    ケース、回答文を生成できず参考情報へ退避したケースがあれば合格にしない。
     """
     results = list(case_results)
     aggregate = _aggregate()
     failure_reason_counts: dict[str, int] = {}
     error_count = 0
     judge_incomplete_count = 0
+    generation_fallback_count = 0
     for result in results:
         count_reasons(failure_reason_counts, result.failure_reasons)
         if result.status != "success":
@@ -871,6 +873,8 @@ def summarize_case_results(
         judgement = result.answer_evaluation
         if judgement is not None and judgement.status != "completed":
             judge_incomplete_count += 1
+        if ANSWER_GENERATION_FALLBACK in result.failure_reasons:
+            generation_fallback_count += 1
         _accumulate_case_metrics(aggregate, result)
     aggregate_values = aggregate.means()
     failures = _threshold_failures(thresholds, aggregate_values)
@@ -882,10 +886,12 @@ def summarize_case_results(
         split_breakdown=split_breakdown(results),
         reasoning_type_breakdown=reasoning_type_breakdown(results),
         hops_breakdown=hops_breakdown(results),
+        # 回答文を生成できず参考情報へ退避したケース（この問は不合格。#5320）があれば、
+        # 全体も合格にしない。
         passed=overall_passed(
             failures=failures,
             error_count=error_count,
-            incomplete_count=judge_incomplete_count,
+            incomplete_count=judge_incomplete_count + generation_fallback_count,
             measured_counts=aggregate.counts(),
             thresholds=_threshold_values(thresholds),
             values=aggregate_values,
@@ -998,6 +1004,14 @@ def _case_result(
                 elapsed_ms=run.response.elapsed_ms,
             )
         )
+    # 退避した回答（#4104）は、回答の記録の構造の印で決める（本文の語では判定しない）。
+    generation_fallback = any(
+        (run.response.diagnostics.answer or {}).get("generation_failure") for run in runs
+    )
+    if generation_fallback and judgement is not None and judgement.status == "completed":
+        # 参考情報の原文は標準回答と合う主張になり得るので、この問は正確性に関わらず
+        # 不合格（#5320）。正確性・網羅の値は判定のまま残す。
+        judgement = judgement.model_copy(update={"passed": False})
     failure_reasons: list[str] = []
     if missing_evidence:
         failure_reasons.append("evidence_miss")
@@ -1009,8 +1023,8 @@ def _case_result(
         if judgement.answer_correctness is not None and judgement.answer_correctness < 1:
             failure_reasons.append("answer_failed")
     # 退避した回答は成功の生成に数えない（#4104）。status は評価の処理の完了のまま。
-    if any((run.response.diagnostics.answer or {}).get("generation_failure") for run in runs):
-        failure_reasons.append("answer_generation_fallback")
+    if generation_fallback:
+        failure_reasons.append(ANSWER_GENERATION_FALLBACK)
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,

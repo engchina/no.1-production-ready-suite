@@ -821,7 +821,7 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
 }
 
 for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
- test(`問ごとの合否・判定の理由・網羅を行で開いて見られ、旧方式の結果は網羅を出さない (#5262, ${viewport.name})`, async ({page}, testInfo)=>{
+ test(`問ごとの合否・判定の理由・網羅を行で開いて見られ、旧方式の結果は網羅を出さず、退避した問は不合格の理由を出す (#5262, #5320, ${viewport.name})`, async ({page}, testInfo)=>{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
   const base=evaluationMetrics("standard");
   const [row]=base.case_results;
@@ -830,10 +830,13 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
    claims:[{verdict:"contradicted",answer:"合成の値は3です。",standard:"合成の値は5。"}],
    points:[{point:"合成の要点 A",covered:true},{point:"合成の要点 B",covered:false}]}};
   const legacy={...row,case_id:"row-3",trace_id:"trace-legacy",answer_correctness:1,answer_evaluation:{status:"completed",passed:true,answer_correctness:1,message:null,reason:"一致している。"}};
-  await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,case_results:[judged,legacy]})});
+  // 回答文を生成できず参考情報へ退避した問は、正確性が 1 でも不合格で、その理由を先頭に出す（#5320）。
+  const fallback={...row,case_id:"row-4",trace_id:"trace-fallback",answer_correctness:1,failure_reasons:["answer_generation_fallback"],answer_evaluation:{status:"completed",passed:false,answer_correctness:1,message:null,rubric_version:34,
+   reason:"標準回答と矛盾する主張はありません。",claims:[{verdict:"supported",answer:"合成の原文。",standard:"合成の値は5。"}],points:[]}};
+  await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,case_results:[judged,legacy,fallback]})});
   await page.goto("/evaluation");await prepareEvaluationRun(page);await page.getByRole("button",{name:"評価実行"}).click();
   const table=page.getByTestId("evaluation-case-scroll-region");
-  const [first,second]=[table.getByTestId("evaluation-case-judgement").nth(0),table.getByTestId("evaluation-case-judgement").nth(1)];
+  const [first,second,third]=[0,1,2].map(index=>table.getByTestId("evaluation-case-judgement").nth(index));
   await expect(first).toContainText("不合格");
   await expect(first.getByTestId("evaluation-case-judgement-reason")).toBeHidden();
   await first.getByTestId("evaluation-case-judgement-toggle").click();
@@ -844,6 +847,9 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await second.getByTestId("evaluation-case-judgement-toggle").click();
   await expect(second).toContainText("網羅は出しません");await expect(second).toContainText("一致している。");
   await expect(second.getByTestId("evaluation-case-judgement-points")).toHaveCount(0);
+  await expect(third).toContainText("不合格");
+  await third.getByTestId("evaluation-case-judgement-toggle").click();
+  await expect(third.getByTestId("evaluation-case-judgement-reason").getByRole("listitem")).toHaveText(["回答文を生成できず参考情報を返した","標準回答と矛盾する主張はありません。"]);
   const headers=await table.getByRole("columnheader").allTextContents();
   const coverage=headers.indexOf("回答: 網羅（参考）");
   expect(coverage).toBeGreaterThan(-1);

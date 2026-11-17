@@ -2,7 +2,7 @@
 
 最終生成の round から ValidationError が出ても、回答エンジンは参考情報へ退避する（#4091）。
 評価はそれを成功の生成に数えず、`case_error`（評価の処理の失敗）とも分ける。
-実装の例外は成功にしない。
+実装の例外は成功にしない。退避した問は正確性に関わらず不合格で、全体も合格にしない（#5320）。
 """
 
 from typing import Any
@@ -18,9 +18,14 @@ from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.models.llm import GroundedApplication
 
 from app.rag.answer_engine import _outcome_from_result, _SearchState
-from app.rag.evaluation import EvaluationRunner
+from app.rag.evaluation import EvaluationRunner, score_case_answers
 from app.rag.pipeline import SearchStageProgressCallback
-from app.schemas.evaluation import EvaluationCase
+from app.schemas.evaluation import (
+    EvaluationAnswerJudgement,
+    EvaluationCase,
+    EvaluationMetrics,
+    EvaluationThresholds,
+)
 from app.schemas.search import SearchDiagnostics, SearchRequest, SearchResponse
 
 QUESTION = "合成の項目の意味は？"
@@ -174,3 +179,115 @@ async def test_a_validation_error_that_reaches_the_evaluation_stays_a_case_error
     assert result.error_type == "ValidationError"
     assert result.failure_reasons == ["case_error"]
     assert metrics.error_count == 1
+
+
+# --- この問の合否と全体の判定（#5320） ---
+
+FALLBACK = {"generation_failure": {"error": "ValidationError", "stage": "answer.generate"}}
+STANDARD_ANSWER = "合成の項目は入力を区別する識別子です。"
+
+
+class _SupportedJudge:
+    """参考情報の原文が標準回答と合う、という判定（正確性 1・合格）の決定論スタブ。"""
+
+    async def __call__(self, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "completed",
+            "passed": True,
+            "answer_correctness": 1.0,
+            "answer_coverage": 1.0,
+            "correctness_reason": "標準回答と矛盾する主張はありません。",
+            "rubric_version": 34,
+        }
+
+
+async def _judged_metrics(
+    *answers: dict[str, Any] | None, threshold: float | None = 0.5
+) -> EvaluationMetrics:
+    """``answers`` の回答の診断ごとに 1 ケース（どれも正確性 1 の判定）を評価する。"""
+
+    class _Pipelines:
+        def __init__(self) -> None:
+            self.index = 0
+
+        async def run(
+            self,
+            request: SearchRequest,
+            trace_id: str | None = None,
+            progress_callback: SearchStageProgressCallback | None = None,
+        ) -> SearchResponse:
+            answer = answers[self.index]
+            self.index += 1
+            return await _Pipeline(answer=answer).run(request, trace_id)
+
+    cases = [
+        EvaluationCase(id=f"case-{index}", query=QUESTION, standard_answer=STANDARD_ANSWER)
+        for index in range(len(answers))
+    ]
+    return await EvaluationRunner(pipeline=_Pipelines(), answer_judge=_SupportedJudge()).run(
+        cases=cases,
+        top_k=5,
+        thresholds=EvaluationThresholds(answer_correctness=threshold),
+    )
+
+
+async def test_a_fallback_case_fails_even_when_the_reference_text_is_correct() -> None:
+    """#5320: 退避した問は、参考情報の原文で正確性が 1 でも不合格。指標の値は判定のまま。"""
+    metrics = await _judged_metrics(FALLBACK)
+    result = metrics.case_results[0]
+
+    assert result.answer_evaluation is not None
+    assert result.answer_evaluation.passed is False
+    assert result.answer_correctness == 1.0
+    assert result.answer_coverage == 1.0
+    assert result.answer_evaluation.answer_correctness == 1.0
+    assert result.answer_evaluation.reason == "標準回答と矛盾する主張はありません。"
+    assert result.failure_reasons == ["answer_generation_fallback"]
+    # 正確性の平均は変えず、全体の判定は合格にしない（閾値は満たす）。
+    assert metrics.answer_correctness == 1.0
+    assert metrics.threshold_failures == []
+    assert metrics.passed is False
+
+
+async def test_a_case_without_fallback_keeps_the_judged_verdict() -> None:
+    """#5320: 退避していない問の合否と全体の判定は今どおり。"""
+    metrics = await _judged_metrics({"generation_failure": {}}, None)
+    result = metrics.case_results[0]
+
+    assert result.answer_evaluation is not None
+    assert result.answer_evaluation.passed is True
+    assert result.failure_reasons == []
+    assert metrics.passed is True
+
+
+async def test_one_fallback_case_fails_the_whole_run_without_changing_the_mean() -> None:
+    """#5320: 退避した問が 1 つでもあれば全体を合格にしない。ほかの問の合否は変えない。"""
+    metrics = await _judged_metrics(None, FALLBACK, None)
+    verdicts = [
+        result.answer_evaluation.passed if result.answer_evaluation else None
+        for result in metrics.case_results
+    ]
+
+    assert verdicts == [True, False, True]
+    assert metrics.answer_correctness == 1.0
+    assert metrics.metric_case_counts["answer_correctness"] == 3
+    assert metrics.failure_reason_counts == {"answer_generation_fallback": 1}
+    assert metrics.passed is False
+
+
+def test_an_incomplete_judgement_of_a_fallback_case_stays_unassessed() -> None:
+    """#5320: 判定を完了できなかった退避の問は「評価できず」のまま（合否を作らない）。"""
+    response = SearchResponse(
+        answer="合成の参考情報",
+        citations=[],
+        trace_id="trace-a",
+        guardrail_warnings=[],
+        elapsed_ms=1.0,
+        diagnostics=SearchDiagnostics(knowledge_base_count=1, answer=FALLBACK),
+    )
+    judgement = EvaluationAnswerJudgement(status="timeout", message="合成の時間切れ")
+    case = EvaluationCase(id="case-a", query=QUESTION, standard_answer=STANDARD_ANSWER)
+    result = score_case_answers(case, [(response, {})], judgement)
+
+    assert result.answer_evaluation == judgement
+    assert result.failure_reasons == ["answer_evaluation_error", "answer_generation_fallback"]

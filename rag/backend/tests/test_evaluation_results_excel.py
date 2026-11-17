@@ -127,6 +127,47 @@ def test_export_writes_case_verdict_reason_and_coverage() -> None:
     assert rows[1] == ["旧方式", "合格", "旧方式: 一致している。"]
 
 
+def _verdict_and_reason(case: EvaluationCaseResult) -> list[Any]:
+    result = EvaluationMetrics(case_count=1, case_results=[case])
+    sheet = load_workbook(BytesIO(evaluation_results_xlsx(result, inputs())))["主条件の結果"]
+    headers = [cell.value for cell in sheet[1]]
+    return [
+        sheet.cell(row=2, column=headers.index(name) + 1).value
+        for name in ("回答の正確性", "この問の合否", "判定の理由", "失敗理由")
+    ]
+
+
+def test_export_explains_the_failed_verdict_of_a_fallback_case() -> None:
+    """#5320: 退避で不合格にした問は、失敗理由の文を判定の理由の先頭に出す。正確性は判定の値のまま。
+
+    保存済みの古い結果（退避でも合格のまま）は、保存した合否のまま出す（書き換えない）。
+    """
+    judged = {
+        "answer_correctness": 1.0,
+        "reason": "標準回答と矛盾する主張はありません。",
+        "rubric_version": 34,
+    }
+    fallback = _judged_case(passed=False, **judged).model_copy(
+        update={"failure_reasons": ["answer_generation_fallback"]}
+    )
+    saved_before = _judged_case(passed=True, **judged).model_copy(
+        update={"failure_reasons": ["answer_generation_fallback"]}
+    )
+    normal = _judged_case(passed=True, **judged)
+
+    assert _verdict_and_reason(fallback) == [
+        1.0,
+        "不合格",
+        "回答文を生成できず参考情報を返した\n標準回答と矛盾する主張はありません。",
+        "回答文を生成できず参考情報を返した",
+    ]
+    assert _verdict_and_reason(saved_before)[1:3] == [
+        "合格",
+        "標準回答と矛盾する主張はありません。",
+    ]
+    assert _verdict_and_reason(normal)[1:3] == ["合格", "標準回答と矛盾する主張はありません。"]
+
+
 def test_saved_old_result_keeps_its_verdict_without_retired_columns() -> None:
     """保存済みの古い結果（網羅・裏付けの値つき）は読めて、合否は保存した値のまま（#4781）。
 
