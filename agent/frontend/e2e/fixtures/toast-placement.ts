@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 /**
  * 通知（Toast）の置き場所の e2e の確認（#1728）。3 製品の e2e に同じ内容の helper を置く
@@ -75,6 +75,19 @@ export async function expectToastPlacement(page: Page) {
   // 下端は画面の下端から --toast-offset-bottom（8rem）。下端に固定された入力欄があれば、その上端から 1rem 上（#2103）。
   expect(Math.abs(offset - 8 * rem)).toBeLessThanOrEqual(1);
   expect(Math.abs(vh - Math.max(offset, clear + rem) - (rect.y + rect.height))).toBeLessThanOrEqual(1);
+}
+
+/**
+ * 要素の入る `PageBody` がページの末尾に空ける通知の置き場所の高さのうち、md 未満の下の余白（1.5rem）を超える分（#5354）。
+ * md 以上は `--toast-reserve-bottom`（14rem）- 1.5rem、md 未満は 0。スクロールしきった末尾の操作の下端の位置を比べるときに引く。
+ */
+export async function pageEndToastReserve(target: Locator) {
+  return target.evaluate((element) => {
+    const body = element.closest("[data-page-body]");
+    if (!body) return 0;
+    const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return Math.max(0, Number.parseFloat(getComputedStyle(body).paddingBottom) - 1.5 * rem);
+  });
 }
 
 /**
