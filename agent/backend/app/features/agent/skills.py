@@ -35,6 +35,31 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+# RAG の MCP から消したツール（#5342）。保存済みのスキル・公開の版に固定したスキルの宣言は、
+# 読み込みで置き換える（`rag_retrieve_evidence` は基本の検索 `rag_search`。業務ガイドの照会は
+# 消す）。指示の文は書き換えない（再公開を画面で案内する）。
+RETIRED_RAG_TOOL_NAMES: dict[str, str | None] = {
+    "rag_retrieve_evidence": "rag_search",
+    "rag_lookup_guides": None,
+}
+
+
+def _migrated_tool_names(names: list[object]) -> list[object]:
+    migrated: list[object] = []
+    for item in names:
+        if isinstance(item, str):
+            item = migrate_tool_name(item)
+            if item in RETIRED_RAG_TOOL_NAMES:
+                item = RETIRED_RAG_TOOL_NAMES[item]
+                if item is None:
+                    continue
+        if item not in migrated:
+            migrated.append(item)
+    # 空の許可リストは「接続のすべてのツール」なので、消したツールだけの宣言は広げずにそのまま残す
+    # （呼び先に無い名前はモデルに渡らない）。
+    return migrated if migrated or not names else list(names)
+
+
 class SkillMcpRequirement(BaseModel):
     """Skill が使う MCP 接続とツールの許可リスト（#757）。
 
@@ -51,13 +76,7 @@ class SkillMcpRequirement(BaseModel):
     @classmethod
     def migrate_saved_names(cls, value: object) -> object:
         if isinstance(value, dict) and isinstance(value.get("tool_names"), list):
-            return {
-                **value,
-                "tool_names": [
-                    migrate_tool_name(item) if isinstance(item, str) else item
-                    for item in value["tool_names"]
-                ],
-            }
+            return {**value, "tool_names": _migrated_tool_names(value["tool_names"])}
         return value
 
 
@@ -73,12 +92,32 @@ class SkillReference(BaseModel):
     content: str = Field(default="", exclude=True)
 
 
+def _declares(requirements: Sequence[SkillMcpRequirement], server_id: str, tool: str) -> bool:
+    return any(
+        item.server_id == server_id and (not item.tool_names or tool in item.tool_names)
+        for item in requirements
+    )
+
+
+class FinalAnswerTool(BaseModel):
+    """結果の回答をそのまま Run の最終の回答にするツール（#5342。RAG の回答のツールを宣言する）。
+
+    SKILL.md の metadata `production-ready-final-answer-tools`（`<接続>:<ツール>` を空白で区切る）。
+    スキルの `mcp_requirements` で宣言したツールだけ。
+    """
+
+    server_id: str
+    tool_name: str
+
+
 class AgentSkillDefinition(BaseModel):
     id: str
     name: str
     description: str = ""
     instructions: str = ""
     mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
+    # 回答をそのまま Run の最終の回答にするツール（#5342）。
+    final_answer_tools: list[FinalAnswerTool] = Field(default_factory=list)
     # 参照文書（`AGENT_SKILLS_DIR` のスキルだけが持つ。画面・API・env の宣言では付けない）。
     references: list[SkillReference] = Field(default_factory=list)
     enabled: bool = True
@@ -88,6 +127,20 @@ class AgentSkillDefinition(BaseModel):
     source: str = "runtime"
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _final_answer_tools_are_declared(self) -> AgentSkillDefinition:
+        undeclared = [
+            f"{item.server_id}:{item.tool_name}"
+            for item in self.final_answer_tools
+            if not _declares(self.mcp_requirements, item.server_id, item.tool_name)
+        ]
+        if undeclared:
+            raise ValueError(
+                "回答をそのまま返すツールは、使う MCP のツールにも宣言してください: "
+                + "、".join(undeclared)
+            )
+        return self
 
 
 class PinnedSkillReference(BaseModel):
@@ -112,6 +165,7 @@ class PinnedSkill(BaseModel):
     description: str = ""
     instructions: str = ""
     mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
+    final_answer_tools: list[FinalAnswerTool] = Field(default_factory=list)
     references: list[PinnedSkillReference] = Field(default_factory=list)
     enabled: bool = True
     # 公開のときの由来層（builtin / project / env / runtime）。
@@ -128,6 +182,7 @@ class PinnedSkill(BaseModel):
             description=self.description,
             instructions=self.instructions,
             mcp_requirements=[item.model_copy(deep=True) for item in self.mcp_requirements],
+            final_answer_tools=[item.model_copy() for item in self.final_answer_tools],
             references=[
                 SkillReference(path=item.path, characters=item.characters)
                 for item in self.references
@@ -160,6 +215,11 @@ def skill_content_hash(skill: AgentSkillDefinition) -> str:
             {"path": item.path, "sha256": _sha256(item.content)} for item in skill.references
         ],
     }
+    if skill.final_answer_tools:
+        # 宣言の無いスキルの hash は変えない（公開済みの版が「更新あり」にならない）。
+        payload["final_answer_tools"] = [
+            f"{item.server_id}:{item.tool_name}" for item in skill.final_answer_tools
+        ]
     return _sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
@@ -171,6 +231,7 @@ def pin_skill(skill: AgentSkillDefinition) -> PinnedSkill:
         description=skill.description,
         instructions=skill.instructions,
         mcp_requirements=[item.model_copy(deep=True) for item in skill.mcp_requirements],
+        final_answer_tools=[item.model_copy() for item in skill.final_answer_tools],
         references=[
             PinnedSkillReference(
                 path=item.path, characters=item.characters, sha256=_sha256(item.content)
@@ -193,18 +254,19 @@ class AgentSkillListOutput(BaseModel):
 # （小文字・数字・ハイフン。フォルダ名と同じ）で、定義は repo 直下の
 # `skills/<name>/SKILL.md`（#1816）。
 # この tuple の順が、スキルの一覧・業務 Agent の編集で組み込みのスキルを先頭に並べる順（#1866）。
-# ID の文字の順ではなく、業務 RAG 調査 → 構造化データ照会 → 資料とデータの横断調査 → 条の目録から
-# 根拠を探す。
-BUSINESS_RAG_RESEARCH_SKILL_ID = "business-rag-research"
+# ID の文字の順ではなく、RAG チャット → RAG 検索 → RAG チャット＋データ → RAG 検索＋データ → 構造化
+# データ照会（#5342。業務 RAG 調査・資料とデータの横断調査・条の目録から根拠を探すは消した）。
+RAG_CHAT_SKILL_ID = "rag-chat"
+RAG_SEARCH_SKILL_ID = "rag-search"
+RAG_CHAT_AND_DATA_SKILL_ID = "rag-chat-and-data"
+RAG_SEARCH_AND_DATA_SKILL_ID = "rag-search-and-data"
 STRUCTURED_DATA_QUERY_SKILL_ID = "structured-data-query"
-RAG_AND_STRUCTURED_DATA_SKILL_ID = "rag-and-structured-data"
-# 条の目録から根拠の条を選んで読むスキル（#2254。business-rag-research と一緒に使う）。
-ARTICLE_CATALOG_LOOKUP_SKILL_ID = "article-catalog-lookup"
 BUILTIN_SKILL_IDS: tuple[str, ...] = (
-    BUSINESS_RAG_RESEARCH_SKILL_ID,
+    RAG_CHAT_SKILL_ID,
+    RAG_SEARCH_SKILL_ID,
+    RAG_CHAT_AND_DATA_SKILL_ID,
+    RAG_SEARCH_AND_DATA_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
-    RAG_AND_STRUCTURED_DATA_SKILL_ID,
-    ARTICLE_CATALOG_LOOKUP_SKILL_ID,
 )
 
 

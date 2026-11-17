@@ -43,10 +43,11 @@ def runtime_skills() -> Iterator[None]:
 
 def test_builtin_skill_ids_are_in_display_order() -> None:
     assert BUILTIN_SKILL_IDS == (
-        "business-rag-research",
+        "rag-chat",
+        "rag-search",
+        "rag-chat-and-data",
+        "rag-search-and-data",
         "structured-data-query",
-        "rag-and-structured-data",
-        "article-catalog-lookup",
     )
 
 

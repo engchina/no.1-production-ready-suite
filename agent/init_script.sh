@@ -337,7 +337,7 @@ install_runtime_env() {
 # 組み込みのスキル（Agent Skills の形式。repo 直下の skills/<name>/SKILL.md）は backend が起動時に読む。
 # repo を丸ごと配備するので通常はあるが、欠けると backend が起動で止まるため、配備の途中で先に知らせる（#1816）。
 BUILTIN_SKILLS_DIR="${SUITE_REPO_DIR}/skills"
-BUILTIN_SKILL_NAMES=(business-rag-research structured-data-query rag-and-structured-data)
+BUILTIN_SKILL_NAMES=(rag-chat rag-search rag-chat-and-data rag-search-and-data structured-data-query)
 
 check_builtin_skills() {
   local name

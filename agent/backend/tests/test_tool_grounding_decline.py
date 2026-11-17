@@ -514,12 +514,11 @@ def test_model_is_told_to_search_before_judging_scope(
         _assert_search_first(instructions)
 
 
-# 拒答の条件を書く組み込みのスキル（調べても確かめられないときの拒答。#1835）。
-# `article-catalog-lookup` は条の目録を読む補助のスキルで、拒答の条件は書かない
-# （同じ規則を 2 つの層に書かないため）。
+# 拒答の条件を書く組み込みのスキル（調べても確かめられないときの拒答。#1835）。RAG だけの
+# スキル（rag-chat・rag-search）は RAG の回答をそのまま返すので書かない（#5342）。
 _SKILLS_STATING_REFUSAL = (
-    "business-rag-research",
-    "rag-and-structured-data",
+    "rag-chat-and-data",
+    "rag-search-and-data",
     "structured-data-query",
 )
 

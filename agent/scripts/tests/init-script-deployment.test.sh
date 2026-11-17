@@ -98,8 +98,8 @@ run_builtin_skills_case present >/dev/null || fail "all built-in skills are pres
 if run_builtin_skills_case missing >/dev/null 2>&1; then
   fail "a missing built-in skill must stop the deployment"
 fi
-# 配備する repo の skills/ に、backend の BUILTIN_SKILL_IDS と同じ 3 つがある。
-for name in business-rag-research structured-data-query rag-and-structured-data; do
+# 配備する repo の skills/ に、backend の BUILTIN_SKILL_IDS と同じ 5 つがある。
+for name in rag-chat rag-search rag-chat-and-data rag-search-and-data structured-data-query; do
   [ -f "${REPO_DIR}/../skills/${name}/SKILL.md" ] || fail "skills/${name}/SKILL.md is missing in the repo"
 done
 

@@ -12,7 +12,7 @@
     {
       "id": "citation-identity",
       "observations": [
-        "steps[].tool_result.output.evidence[].document_id / chunk_id / evidence_id（rag_search・rag_retrieve_evidence）",
+        "steps[].tool_result.output.evidence[].document_id / chunk_id / evidence_id（rag_search・rag_chat）",
         "steps[].tool_result.output.document_id / chunk_id・chunks[].chunk_id（rag_read_source・rag_read_document・rag_read_section）"
       ],
       "used_by": [

@@ -86,12 +86,12 @@ def test_source_shaped_keys_inside_untrusted_body_are_preserved_as_body() -> Non
         **_source("document-a", "document-a:set-a:1"),
         "excerpt": "原文の chunk://9 と [[cite:9]] を書き換えない。",
         "parent_text": "document-a:set-a:1 は原文に含まれる。",
-        "profile_knowledge": {"document_id": "body-only-document", "chunk_id": "body-only-chunk"},
+        "answer": "回答の本文の document-a:set-a:1 も書き換えない。",
     }
     original = deepcopy(output)
     handles.register_output(metadata, "rag", output, tool="rag_read_source")
     encoded = handles.encode_output(metadata, "rag", output)
-    for field in ["text", "excerpt", "parent_text", "profile_knowledge"]:
+    for field in ["text", "excerpt", "parent_text", "answer"]:
         assert encoded[field] == original[field]
     assert output == original
     assert not any(

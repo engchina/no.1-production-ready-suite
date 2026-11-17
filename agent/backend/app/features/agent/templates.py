@@ -2,8 +2,10 @@
 
 よくある業務の業務 Agent の出発点（指示・Skill・質問の例・評価ケース）。業務 Agent の
 新規作成の画面で選ぶと、フォームに入る（テンプレートから業務 Agent を直接は作らない）。
-Skill は組み込みの `business-rag-research`（RAG）・`structured-data-query`（NL2SQL）・
-`rag-and-structured-data`（両方を順序を決めずに使い分ける）。
+Skill は組み込みの `rag-chat`・`rag-search`（RAG の回答をそのまま返す）・`structured-data-query`
+（NL2SQL）・`rag-chat-and-data`・`rag-search-and-data`（RAG と NL2SQL を順序を決めずに使い分ける）。
+RAG だけのテンプレートは、回答を RAG が検索・回答プロファイルの設定で書くので、回答の書き方の指示を
+持たない（#5342。指示は窓口の役割だけ）。
 """
 
 from __future__ import annotations
@@ -12,14 +14,14 @@ from pydantic import BaseModel, Field
 
 from app.features.agent.output_fields import AgentOutputField
 from app.features.agent.skills import (
-    BUSINESS_RAG_RESEARCH_SKILL_ID,
-    RAG_AND_STRUCTURED_DATA_SKILL_ID,
+    RAG_CHAT_AND_DATA_SKILL_ID,
+    RAG_CHAT_SKILL_ID,
+    RAG_SEARCH_AND_DATA_SKILL_ID,
+    RAG_SEARCH_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
 )
 
-RAG = BUSINESS_RAG_RESEARCH_SKILL_ID
 NL2SQL = STRUCTURED_DATA_QUERY_SKILL_ID
-RAG_AND_NL2SQL = RAG_AND_STRUCTURED_DATA_SKILL_ID
 
 _COMMON_RULES = (
     "\n\n## 共通のルール\n"
@@ -60,13 +62,9 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
         name="社内規程の問い合わせ",
         description="就業規則・各種規程・社内手続きの質問に、規程の条項を示して答えます。",
         instructions=(
-            "あなたは総務・人事の問い合わせ窓口です。社員からの社内規程・手続きの質問に答えます。\n"
-            "- 業務 RAG で就業規則・規程・手続きの文書を検索し、該当する条項を引用して答える。\n"
-            "- 手続きは「いつまでに・何を・どこへ」の順で示す。\n"
-            "- 個別の判断（例外の承認・人事評価など）は担当部署へ確認するよう案内する。"
-            + _COMMON_RULES
+            "あなたは総務・人事の問い合わせ窓口です。社員からの社内規程・手続きの質問に答えます。"
         ),
-        skill_ids=[RAG],
+        skill_ids=[RAG_CHAT_SKILL_ID],
         sample_questions=[
             "育児休業はいつから取得できますか？",
             "在宅勤務の申請はどのように行いますか？",
@@ -92,7 +90,7 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             "- 規程に照らして精算できるかを聞かれたら、判断に必要な情報が足りなければ質問し返す。"
             + _COMMON_RULES
         ),
-        skill_ids=[RAG_AND_NL2SQL],
+        skill_ids=[RAG_CHAT_AND_DATA_SKILL_ID],
         sample_questions=[
             "出張の日当の上限はいくらですか？",
             "今月の営業部の交通費の合計は？",
@@ -137,13 +135,9 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             "製品マニュアル・FAQ から、お客様への回答案とエスカレーションの要否を作ります。"
         ),
         instructions=(
-            "あなたはカスタマーサポートの担当者を支援します。お客様の問い合わせへの回答案を作ります。\n"
-            "- 業務 RAG で製品マニュアル・FAQ・既知の不具合を検索し、根拠のある手順だけを書く。\n"
-            "- 回答案は丁寧語で、お客様がそのまま実行できる手順にする。\n"
-            "- 根拠が無い・故障や返金・契約に関わる場合は「エスカレーションが必要」と明記する。"
-            + _COMMON_RULES
+            "あなたはカスタマーサポートの担当者を支援します。お客様の問い合わせへの回答案を作ります。"
         ),
-        skill_ids=[RAG],
+        skill_ids=[RAG_CHAT_SKILL_ID],
         sample_questions=[
             "電源が入らないという問い合わせへの回答案を作ってください。",
             "パスワードを忘れたお客様への案内を教えてください。",
@@ -166,7 +160,7 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             "- 不良率・検査結果は構造化データ照会で取得し、ライン・期間・ロットの条件を示す。\n"
             "- 是正処置を提案するときは、過去の類似の不具合の対策を根拠にする。" + _COMMON_RULES
         ),
-        skill_ids=[RAG_AND_NL2SQL],
+        skill_ids=[RAG_SEARCH_AND_DATA_SKILL_ID],
         sample_questions=[
             "先月のライン別の不良率を教えてください。",
             "溶接の外観検査の判定基準は？",
@@ -186,14 +180,9 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
         description="社内規程・ガイドラインに照らして、業務の可否と必要な手続きを確認します。",
         instructions=(
             "あなたはコンプライアンス部門の相談窓口です。業務の進め方が社内規程・ガイドラインに"
-            "合っているかを確認します。\n"
-            "- 業務 RAG で該当する規程・ガイドラインを検索し、条項を引用する。\n"
-            "- 結論は「可 / 条件付きで可 / 不可 / 判断できない」のどれかで示し、"
-            "条件と必要な手続きを書く。\n"
-            "- 法的な最終判断が必要なときは、法務・コンプライアンス部門への確認を案内する。"
-            + _COMMON_RULES
+            "合っているかを確認します。"
         ),
-        skill_ids=[RAG],
+        skill_ids=[RAG_SEARCH_SKILL_ID],
         sample_questions=[
             "取引先からの接待を受けてもよいですか？",
             "顧客データを外部の委託先に渡すときの手続きは？",
@@ -211,13 +200,9 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
         name="IT ヘルプデスク",
         description="社内システムの手順書・FAQ から、操作方法とトラブルの対処を案内します。",
         instructions=(
-            "あなたは情報システム部門のヘルプデスクです。社内システムの使い方とトラブルの対処を案内します。\n"
-            "- 業務 RAG で手順書・FAQ・障害情報を検索し、手順を番号付きで示す。\n"
-            "- アカウント・権限の変更など申請が必要なものは、申請の方法を案内する。\n"
-            "- 手順で解決しない・障害の可能性があるときは、問い合わせ先と伝える情報を示す。"
-            + _COMMON_RULES
+            "あなたは情報システム部門のヘルプデスクです。社内システムの使い方とトラブルの対処を案内します。"
         ),
-        skill_ids=[RAG],
+        skill_ids=[RAG_CHAT_SKILL_ID],
         sample_questions=[
             "VPN に接続できません。",
             "新しい PC の初期設定の手順を教えてください。",
@@ -240,7 +225,7 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
             "- 発注の実績・納期・取引先ごとの金額は構造化データ照会で取得し、期間と条件を示す。\n"
             "- 新規の取引先・高額の発注は、必要な審査と決裁を案内する。" + _COMMON_RULES
         ),
-        skill_ids=[RAG_AND_NL2SQL],
+        skill_ids=[RAG_CHAT_AND_DATA_SKILL_ID],
         sample_questions=[
             "100 万円を超える発注の決裁者は誰ですか？",
             "今四半期の取引先別の発注金額を教えてください。",

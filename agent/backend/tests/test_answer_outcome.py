@@ -36,7 +36,8 @@ def _search(outcome: str) -> RunStep:
 
 
 def _retrieve() -> RunStep:
-    return _step("rag__rag_retrieve_evidence", {"evidence": EVIDENCE})
+    # 対応を返さない RAG の回答のツールの結果（回答の対応は Agent の回答から決める）。
+    return _step("rag__rag_chat", {"evidence": EVIDENCE})
 
 
 def _outcome(answer: str, steps: list[RunStep]) -> tuple[str, str]:
@@ -81,18 +82,23 @@ def test_answer_without_the_clarification_rag_asked_is_conditional() -> None:
 
 def test_evidence_gathered_after_rag_search_is_judged_from_the_answer() -> None:
     answer = "契約の更新は 30 日前までに申し出ます。"
-    # rag_search の後に根拠を集め直した回答は、rag_search の対応に拠らない。
+    # RAG の回答のツールを複数回呼んだ回答は、RAG の対応に拠らない（#5342）。
     content = answer_outcome(answer, steps=[_search("insufficient_evidence"), _retrieve()])
     assert (content["value"], content["basis"]) == ("answered", "answer_passages")
-    assert content["rag_outcome"] == "insufficient_evidence"
+    # rag_outcome は最後の RAG の回答のツールの対応（対応を返さなければ None）。
+    assert content["rag_outcome"] is None
 
 
-def test_guide_handoff_without_rag_search_is_needs_human() -> None:
-    lookup = _step("rag__rag_lookup_guides", {"guides": [{"guide_id": "g", "decision": "handoff"}]})
-    answer = "この操作は情報システム部の担当者が行います。担当者に依頼してください。"
-    assert _outcome(answer, [lookup]) == ("needs_human", "guide_handoff")
-    # rag_search に拠る回答は、rag_search の対応を使う。
-    assert _outcome(answer, [lookup, _search("answered")]) == ("answered", "rag_search")
+def test_one_rag_answer_uses_its_outcome_and_several_use_the_agent_answer() -> None:
+    """1 Run で RAG の回答のツールが 1 回ならその対応、複数回なら Agent の回答で決める（#5342）。"""
+    answer = "この操作は担当の窓口が行います。窓口に依頼してください。"
+    chat = _step("rag__rag_chat", {"outcome": "needs_human", "evidence": EVIDENCE})
+    assert _outcome(answer, [chat]) == ("needs_human", "rag_chat")
+    assert _outcome(answer, [chat, _search("answered")]) == ("answered", "answer_passages")
+    # RAG の回答をそのまま返した Run は、確認の問いでも RAG の対応のまま。
+    asked = _step("rag__rag_chat", {"outcome": "needs_clarification", "evidence": []})
+    content = answer_outcome("対象はどれですか。", steps=[asked], rag_answer=True)
+    assert (content["value"], content["basis"]) == ("needs_clarification", "rag_chat")
 
 
 def test_environment_tools_without_rag_answer_the_question() -> None:
@@ -130,7 +136,7 @@ LICENSE_FEE_REFUSAL = "\n".join(
         "サンプル業務ポータルの年間ライセンス費用に関する記載は見当たりませんでした。",
         "",
         "**根拠**  ",
-        "- rag__rag_retrieve_evidence で取得した証拠は、アクセス権限の付与手順や検証用アカウントの"
+        "- rag__rag_search で取得した証拠は、アクセス権限の付与手順や検証用アカウントの"
         "登録などの運用手順に関する内容であり、金額や費用に関する記述は含まれていませんでした。  ",
         "- rag__rag_lookup_guides の検索結果でも、今回の質問に該当する業務ガイドは"
         "返ってきませんでした。",
@@ -241,35 +247,11 @@ def test_clarification_question_with_an_annotation_is_needs_clarification() -> N
     # cr-grant-permission（2 回目の実行）: 質問の後ろの「【clarification: target】」の注記で、
     # 確認の質問と見なかった。
     answer = "権限の付与先は、個別の利用者ですか、グループですか？【clarification: target】"
-    assert _outcome(answer, [_step("rag__rag_lookup_guides", {"guides": []})]) == (
+    assert _outcome(answer, []) == (
         "needs_clarification",
         "clarification_question",
     )
 
-
-# ---- 業務ガイドの条件が分からないまま答えた（#1321・#1322） ---------------------------------
-
-
-def _lookup(decision: str, *, unknown: list[dict[str, Any]] | None = None) -> RunStep:
-    return _step(
-        "rag__rag_lookup_guides",
-        {
-            "guides": [
-                {
-                    "guide_id": "g-1",
-                    "revision": 1,
-                    "title": "アカウントの削除",
-                    "decision": decision,
-                    "known_conditions": [],
-                    "unknown_conditions": unknown or [],
-                }
-            ]
-        },
-    )
-
-
-_APPROVAL_UNKNOWN = [{"id": "approved", "label": "部門長の承認", "handling": "ask"}]
-_TARGET_UNKNOWN = [{"id": "target", "label": "付与先", "handling": "ask"}]
 
 # #1317 の実環境の D（run3）の cr-delete-account の回答（承認を前提の条件として答えた）。
 _DELETE_ANSWER = "\n".join(
@@ -308,9 +290,7 @@ _GRANT_ANSWER = "\n".join(
 
 def test_clarification_after_the_guide_asked_is_needs_clarification() -> None:
     question = "所属部署の部門長の承認は得ていますか？（はい／いいえ）"
-    content = answer_outcome(
-        question, steps=[_retrieve(), _lookup("clarify", unknown=_APPROVAL_UNKNOWN)]
-    )
+    content = answer_outcome(question, steps=[_retrieve()])
     assert (content["value"], content["basis"]) == ("needs_clarification", "clarification_question")
 
 
@@ -319,9 +299,7 @@ def test_clarification_with_an_options_line_is_needs_clarification() -> None:
     question = (
         "権限の付与先は、個別の利用者ですか、グループですか？  \n選択肢: **個別**、**グループ**"
     )
-    content = answer_outcome(
-        question, steps=[_retrieve(), _lookup("clarify", unknown=_TARGET_UNKNOWN)]
-    )
+    content = answer_outcome(question, steps=[_retrieve()])
     assert (content["value"], content["basis"]) == ("needs_clarification", "clarification_question")
     # 回答を求める依頼を添えた確認の質問（#1320 の実環境の D の run2 の cr-grant-permission）。
     asked = (

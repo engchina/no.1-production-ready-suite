@@ -444,9 +444,9 @@ def test_run_output_sources_use_the_rag_tool_results_cited_by_the_answer() -> No
             RunStep(
                 run_id="run_sources",
                 status=StepStatus.COMPLETED,
-                tool_call=ToolCall(name="rag__rag_retrieve_evidence", arguments={}),
+                tool_call=ToolCall(name="rag__rag_search", arguments={}),
                 tool_result=ToolResult(
-                    name="rag__rag_retrieve_evidence", success=True, output={"evidence": evidence}
+                    name="rag__rag_search", success=True, output={"evidence": evidence}
                 ),
             )
         ],
@@ -458,7 +458,7 @@ def test_run_output_sources_use_the_rag_tool_results_cited_by_the_answer() -> No
     assert [(item.title, item.location) for item in output.sources] == [
         ("経費精算規程.pdf", "p.1 · 第2条（精算の期限）")
     ]
-    assert output.tools_used == ["rag__rag_retrieve_evidence"]
+    assert output.tools_used == ["rag__rag_search"]
     # 検証が無ければ回答の本文で照合する（「10日」は c1 の値。#115）。当たらなければ全件。
     unvalidated = run.model_copy(update={"artifacts": run.artifacts[:1]})
     assert [item.chunk_id for item in mcp_server.run_output(unvalidated).sources] == ["c1"]
@@ -492,9 +492,9 @@ def test_run_output_sources_list_one_document_at_a_time() -> None:
             RunStep(
                 run_id="run_grouped_sources",
                 status=StepStatus.COMPLETED,
-                tool_call=ToolCall(name="rag__rag_retrieve_evidence", arguments={}),
+                tool_call=ToolCall(name="rag__rag_search", arguments={}),
                 tool_result=ToolResult(
-                    name="rag__rag_retrieve_evidence", success=True, output={"evidence": evidence}
+                    name="rag__rag_search", success=True, output={"evidence": evidence}
                 ),
             )
         ],

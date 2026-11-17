@@ -1,25 +1,20 @@
 """Agent が編成する根拠の取得の決定論テスト。
 
-- 1 回の `rag_retrieve_evidence` は 1 つの質問（#5125）。組み込み Runtime は検索文の主体・追跡 ID・
-  元の質問を足さず、モデルが渡した引数のまま呼ぶ。
 - 保存済みの `evidence_planning`・SKILL.md の metadata `production-ready-evidence-planning` は
   読むときに無視する（移行しない）。
 - 画像を読めないモデルには `rag_read_source` の `include_image` を見せない（本文は読める）。
-- 合成のケース（本文・表・図）で、取得 → 図の確認（`rag_read_source`）→ 回答の順に呼ぶ。
-  RAG に回答を作らせずに（`rag_search` を呼ばずに）通る。
 """
 
 from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from copy import deepcopy
 from typing import Any
 
 import anyio
 import pytest
 from agents import FunctionTool
-from agents.testing import ScriptedModel, assistant_message, function_call
+from agents.testing import ScriptedModel, assistant_message
 from mcp_support import DEFAULT_OUTPUTS, FakeProductMcp, fake_product_mcp
 from pytest import MonkeyPatch
 
@@ -28,8 +23,6 @@ from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.runtime import (
     AgentProfile,
     RunCreateRequest,
-    RunStatus,
-    run_support_task,
     runtime_repository,
 )
 from app.features.agent.skills import (
@@ -48,7 +41,7 @@ ANSWER = "機器 A の点検は毎月 1 回です。確定ボタンは画面の�
 REMOVED_ARGUMENTS = frozenset({"planning", "queries", "request_id", "original_question"})
 
 _TEXT = {
-    **DEFAULT_OUTPUTS["rag_retrieve_evidence"]["evidence"][0],
+    **DEFAULT_OUTPUTS["rag_search"]["evidence"][0],
     "evidence_id": "chunk-text",
     "chunk_id": "chunk-text",
     "file_name": "点検の手順.pdf",
@@ -89,11 +82,9 @@ def _skill() -> AgentSkillDefinition:
     return AgentSkillDefinition(
         id=SKILL_ID,
         name="根拠の取得の Skill",
-        instructions="rag_retrieve_evidence で根拠を集め、根拠から答える。",
+        instructions="rag_search で根拠を集め、根拠から答える。",
         mcp_requirements=[
-            SkillMcpRequirement(
-                server_id="rag", tool_names=["rag_retrieve_evidence", "rag_read_source"]
-            )
+            SkillMcpRequirement(server_id="rag", tool_names=["rag_search", "rag_read_source"])
         ],
     )
 
@@ -152,30 +143,10 @@ def _tools(model: ScriptedModel) -> dict[str, FunctionTool]:
     return {tool.name: tool for tool in model.calls[0].tools if isinstance(tool, FunctionTool)}
 
 
-def test_runtime_sends_one_question_without_adding_arguments(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    model = _script(
-        monkeypatch,
-        [function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検 周期"}, call_id="c1")],
-        [assistant_message(ANSWER)],
-    )
-    run_id = _run()
-
-    run = runtime_repository.get_run(run_id)
-    assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    [call] = mcp.calls_of("rag_retrieve_evidence")
-    assert call["arguments"]["query"] == "機器 A 点検 周期"
-    # 検索文の主体・追跡 ID・元の質問を実行環境が足さない（#5125）。
-    assert not REMOVED_ARGUMENTS & set(call["arguments"])
-    params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema
-    assert not REMOVED_ARGUMENTS & set(params["properties"])
-
-
 def test_saved_evidence_planning_is_ignored() -> None:
     # 移行しない保存済みの値は、読むときに無視する（#5125）。
     requirement = SkillMcpRequirement.model_validate(
-        {"server_id": "rag", "tool_names": ["rag_retrieve_evidence"], "evidence_planning": "caller"}
+        {"server_id": "rag", "tool_names": ["rag_search"], "evidence_planning": "caller"}
     )
     assert "evidence_planning" not in requirement.model_dump()
 
@@ -185,21 +156,21 @@ def test_skill_md_evidence_planning_metadata_is_ignored(tmp_path: Any) -> None:
     folder.mkdir()
     (folder / "SKILL.md").write_text(
         "---\nname: evidence-skill\ndescription: 根拠を集めるときに使う。\nmetadata:\n"
-        '  production-ready-mcp-tools: "rag:rag_retrieve_evidence nl2sql"\n'
+        '  production-ready-mcp-tools: "rag:rag_search nl2sql"\n'
         '  production-ready-evidence-planning: "rag:caller"\n'
         "---\n本文。\n",
         encoding="utf-8",
     )
     [skill] = load_skills_from_dir(str(tmp_path))
     assert [item.model_dump() for item in skill.mcp_requirements] == [
-        {"server_id": "rag", "tool_names": ["rag_retrieve_evidence"]},
+        {"server_id": "rag", "tool_names": ["rag_search"]},
         {"server_id": "nl2sql", "tool_names": []},
     ]
 
 
 @pytest.mark.parametrize(
     "skill_id",
-    ["business-rag-research", "rag-and-structured-data", "article-catalog-lookup"],
+    ["rag-chat", "rag-search", "rag-chat-and-data", "rag-search-and-data"],
 )
 def test_builtin_rag_skills_have_no_evidence_planning(skill_id: str) -> None:
     skill = skill_registry.get(skill_id)
@@ -230,59 +201,3 @@ def test_image_input_schema_only_changes_read_source() -> None:
     assert visible["properties"] == {"chunk_id": {"type": "string"}}
     assert visible["required"] == ["chunk_id"]
     assert image_input_schema("rag__rag_search", schema) is schema
-
-
-def test_agent_orchestrates_retrieval_figure_reading_and_answer(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    """本文・表・図の根拠を取得し、図の根拠だけ元の画像を読んでから答える。"""
-    retrieved = deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"])
-    retrieved["evidence"] = [_TEXT, _TABLE, _FIGURE]
-    mcp.outputs["rag_retrieve_evidence"] = retrieved
-    mcp.outputs["rag_read_source"] = {
-        **deepcopy(DEFAULT_OUTPUTS["rag_read_source"]),
-        "evidence_id": "chunk-figure",
-        "chunk_id": "chunk-figure",
-        "content_kind": "figure",
-        "evidence_type": "figure_description",
-        "image_ref": _FIGURE["image_ref"],
-        "text": "点検の画面の図。確定のボタンは右下。",
-    }
-    _script(
-        monkeypatch,
-        [function_call("rag__rag_retrieve_evidence", {"query": "機器 A 点検"}, call_id="c1")],
-        [
-            function_call(
-                "rag__rag_read_source",
-                {"document_id": "doc-1", "chunk_id": "chunk-figure", "include_image": True},
-                call_id="c2",
-            )
-        ],
-        [assistant_message(ANSWER)],
-        vision=True,
-    )
-    run_id = _run()
-
-    run = runtime_repository.get_run(run_id)
-    assert run.status == RunStatus.COMPLETED, run.events[-1].message
-    # RAG に回答を作らせない（回答の生成・監査は rag_search の経路）。
-    assert mcp.calls_of("rag_search") == []
-    assert len(mcp.calls_of("rag_retrieve_evidence")) == 1
-    assert mcp.calls_of("rag_read_source")[0]["arguments"]["include_image"] is True
-
-
-def test_retired_retrieval_clarification_does_not_become_pending(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
-) -> None:
-    mcp.outputs["rag_retrieve_evidence"] = {
-        **deepcopy(DEFAULT_OUTPUTS["rag_retrieve_evidence"]),
-        "clarifications": [{"condition_id": "retired", "question": "合成の旧い確認"}],
-    }
-    _script(
-        monkeypatch,
-        [function_call("rag__rag_retrieve_evidence", {"query": "合成の質問"}, call_id="c1")],
-        [assistant_message("合成の回答")],
-    )
-    run_id = _run("合成の質問")
-    state = run_support_task(runtime_repository.get_run(run_id)) or {}
-    assert not state.get("content", state).get("pending_clarifications")

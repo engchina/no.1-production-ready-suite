@@ -169,7 +169,7 @@ def run_evidence_items(run: RunState, artifacts: list[Artifact]) -> list[dict[st
     """画面から開いてよい、その Run の RAG の根拠（画面の根拠の一覧と同じ集合。#2427）。
 
     - 画面の根拠の一覧と同じ関数（``answer_evidence.passed_evidence``）で、Run の根拠のツール
-      （``rag_search`` / ``rag_retrieve_evidence``）の step の出力から作る根拠（回答の確定の前も）。
+      （``rag_search`` / ``rag_chat``）の step の出力から作る根拠（回答の確定の前も）。
     - 成果物「回答の根拠」（``answer_evidence``）の ``items``（画面の一覧の正本）。
     - 成果物「検索の根拠」（``rag_evidence``。組み込みの接続 ``rag`` の ``rag_search``）の
       ``evidence``。

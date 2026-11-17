@@ -2658,13 +2658,17 @@ def test_skill_registry_lists_builtin_skills() -> None:
     listed = client.get("/api/skills")
     assert listed.status_code == 200
     skills = {skill["id"]: skill for skill in listed.json()["data"]["skills"]}
-    assert "business-rag-research" in skills
+    assert "rag-chat" in skills
     assert "structured-data-query" in skills
     assert "workspace_command" not in skills
-    assert "tool_calls" not in skills["business-rag-research"]
-    assert skills["business-rag-research"]["mcp_requirements"][0]["tool_names"]
-    assert listed.json()["data"]["metadata"]["count"] >= 3
-    assert skills["business-rag-research"]["mcp_requirements"][0]["server_id"] == "rag"
+    assert "tool_calls" not in skills["rag-chat"]
+    assert skills["rag-chat"]["mcp_requirements"][0]["tool_names"]
+    assert listed.json()["data"]["metadata"]["count"] >= 5
+    assert skills["rag-chat"]["mcp_requirements"][0]["server_id"] == "rag"
+    # 回答をそのまま返すツールの宣言（#5342）。
+    assert skills["rag-chat"]["final_answer_tools"] == [
+        {"server_id": "rag", "tool_name": "rag_chat"}
+    ]
     assert "mcp_tool_call" not in skills
     # Skill を ToolCall の計画へ展開する API は #756 で削除した。
     assert client.post("/api/skills/plan", json={}).status_code in {404, 405}
@@ -3340,13 +3344,10 @@ def test_skill_runtime_crud_and_builtin_protection() -> None:
 
     # 重複・builtin 上書きは拒否
     assert client.post("/api/skills", json={"id": "custom_x", "name": "x"}).status_code == 409
-    assert (
-        client.post("/api/skills", json={"id": "business-rag-research", "name": "x"}).status_code
-        == 409
-    )
+    assert client.post("/api/skills", json={"id": "rag-chat", "name": "x"}).status_code == 409
     # builtin は patch/delete 不可
-    assert client.patch("/api/skills/business-rag-research", json={"name": "x"}).status_code == 400
-    assert client.request("DELETE", "/api/skills/business-rag-research").status_code == 400
+    assert client.patch("/api/skills/rag-chat", json={"name": "x"}).status_code == 400
+    assert client.request("DELETE", "/api/skills/rag-chat").status_code == 400
 
     patched = client.patch("/api/skills/custom_x", json={"enabled": False})
     assert patched.status_code == 200

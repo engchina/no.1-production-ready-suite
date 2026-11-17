@@ -14,7 +14,7 @@
 - 続きの読み取り: `cursor` を渡した呼び出しを、その `next_cursor` を返した章節に対応付ける。
   読めなかった理由は、文書の版が変わった（`stale`）・ツールの呼び出しの上限（`budget`）・
   そのほかの失敗（`failed`）。続きを呼んでいなければ `unread`。
-- 読み始めていない章節（#2503）: 根拠を集めるツール（`rag_search` / `rag_retrieve_evidence`）の
+- 読み始めていない章節（#2503）: 根拠を集めるツール（`rag_search` / `rag_chat`）の
   根拠の章節（`section`）が抜粋より長く、その章節の chunk を根拠ですべて得ていない
   （`chunk_count`）ものは、`rag_read_section` で読み始めていなくても章節として追跡する（理由
   `not_read`）。文書を先頭から `rag_read_document` で終わりまで読んだ文書の章節は読み切ったと

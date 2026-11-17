@@ -449,7 +449,7 @@ def test_program_values_do_not_become_source_citations(repo: AgentRuntimeReposit
     item = repo.create_builtin_run(RunCreateRequest(goal="質問", agent_id=agent))
     repo.begin_builtin_run(item.id)
     chunk = "opaque-source-a"
-    finish_tool(repo, item.id, "rag__rag_retrieve_evidence", {"evidence": [evidence(chunk=chunk)]})
+    finish_tool(repo, item.id, "rag__rag_search", {"evidence": [evidence(chunk=chunk)]})
     original = schema(1)
     original["objects"][0]["columns"][0]["name"] = chunk
     finish_tool(repo, item.id, "nl2sql__nl2sql_get_profile_schema", original, trusted=True)
@@ -549,7 +549,7 @@ def test_SDK_citation_survives_selection_and_final_evidence(
     item = repo.create_builtin_run(
         RunCreateRequest(goal="根拠を示して説明してください。", agent_id=agent)
     )
-    finish_tool(repo, item.id, "rag__rag_retrieve_evidence", {"evidence": [evidence()]})
+    finish_tool(repo, item.id, "rag__rag_search", {"evidence": [evidence()]})
     model = script(
         monkeypatch,
         [
@@ -699,7 +699,7 @@ def test_report_numeric_source_domain_is_separate_from_evidence(
     output = current.steps[0].tool_result.output
     output["evidence"][0]["origin"] = origin
     current.metadata[source_handles.REGISTRY_KEY] = []
-    source_handles.register_output(current.metadata, "rag", output, tool="rag_retrieve_evidence")
+    source_handles.register_output(current.metadata, "rag", output, tool="rag_search")
     text = "| 出典 |\n|---|\n| [[cite:1]] |"
     plan = AnswerPlan.model_validate({"blocks": [{"kind": "narrative", "text": text}]})
     if with_data and origin == "derived":
@@ -721,8 +721,8 @@ def test_report_ambiguous_numeric_source_is_not_resolved_by_short_number() -> No
 
     current, _, _, _ = fixture(True, "123")
     output = {"evidence": [{"document_id": "document-b", "chunk_id": "123", "excerpt": "原文"}]}
-    current.steps.append(_step("rag_retrieve_evidence", output))
-    source_handles.register_output(current.metadata, "rag", output, tool="rag_retrieve_evidence")
+    current.steps.append(_step("rag_search", output))
+    source_handles.register_output(current.metadata, "rag", output, tool="rag_search")
     plan = AnswerPlan.model_validate({"blocks": [{"kind": "narrative", "text": "[[cite:1]]"}]})
     with pytest.raises((DataReferenceError, source_handles.SourceHandleError)):
         builtin_runtime._render_report_body(current, plan, None)

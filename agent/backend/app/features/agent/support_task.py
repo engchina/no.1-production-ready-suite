@@ -46,7 +46,6 @@ from app.features.agent.clarification_cancel import (
     kind_label,
 )
 from app.features.agent.confirmation import CONFIRMATION_TOOL as AGENT_CONFIRMATION_TOOL
-from app.features.agent.guide_steps import guide_plan, guide_step_states, guide_steps_next_step
 from app.features.agent.job_cancel import RUN_CANCEL_TRACE_PREFIX
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
 
@@ -76,28 +75,29 @@ NON_GROUNDING_TOOLS = frozenset(
         "nl2sql_cancel_job",
     }
 )
+# RAG の回答のツール（#5342）。rag_search は基本の検索、rag_chat は RAG のチャットと同じ流れ
+# （業務ガイドの照合・承認済み FAQ・根拠の拡張）で、どちらも回答と根拠を返す。
 RAG_SEARCH = "rag_search"
-RAG_RETRIEVE_EVIDENCE = "rag_retrieve_evidence"
-RAG_LOOKUP_GUIDES = "rag_lookup_guides"
-# rag_search・rag_retrieve_evidence が承認済み FAQ の候補だけを返した状態（#5134・#5136。検索は
-# していない）と、利用者の選択を渡す引数（実行環境が付けるので、モデルに見せない）。
+RAG_CHAT = "rag_chat"
+RAG_ANSWER_TOOLS = frozenset({RAG_SEARCH, RAG_CHAT})
+# RAG の回答のツールが承認済み FAQ の候補だけを返した状態（#5134・#5136。検索はしていない）と、
+# 利用者の選択を渡す引数（実行環境が付けるので、モデルに見せない。入力の schema にあるときだけ）。
 RAG_APPROVED_FAQ_CANDIDATES = "approved_faq_candidates"
 APPROVED_FAQ_ARGUMENTS = ("approved_faq_id", "skip_approved_faq")
-RAG_APPROVED_FAQ_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+RAG_APPROVED_FAQ_TOOLS = RAG_ANSWER_TOOLS
+# 業務ガイドの条件の確認を返させない引数（#5342。利用者に確認しない Run で実行環境が付ける。
+# モデルに見せない）。
+SKIP_CLARIFICATION_ARGUMENT = "skip_clarification"
 # 本文を読むツール（#1330・#1332）。軽いので Run ごとの RAG の上限には数えない。
 RAG_READ_SOURCE = "rag_read_source"
 RAG_READ_DOCUMENT = "rag_read_document"
 # 章節（章節ナビゲーションの章節）の本文を章節の終わりまで読む（#1438）。
 RAG_READ_SECTION = "rag_read_section"
-# Control Plane が自分で呼ぶ業務ガイドの照合（#1322）の呼び出しの trace_id の接頭辞。
-# モデルの予算・消費には数えない（Control Plane の呼び出し）。
-GUIDE_CHECK_TRACE_PREFIX = "guide_check_"
-# Run ごとの上限に数える RAG のツール。検索（と rag_search は回答の生成）を行い、1 回が重い
-# （rag_search は 50〜110 秒）もの。rag_lookup_guides（業務ガイドの照合）と rag_read_source
-# （根拠の本文の読み取り）は軽いため数えない（タスクの通しの上限には数える）。
-RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+# Run ごとの上限に数える RAG のツール。検索と回答の生成を行い、1 回が重い（50〜110 秒）もの。
+# 根拠の本文の読み取り（rag_read_source など）は軽いため数えない（タスクの通しの上限には数える）。
+RAG_BUDGET_TOOLS = RAG_ANSWER_TOOLS
 # 根拠の参照を集める RAG のツール。
-_EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+_EVIDENCE_TOOLS = RAG_ANSWER_TOOLS
 # NL2SQL の SQL の生成・実行。SQL を作る前に確認の項目（SQL の生成前の確認）を返すことが
 # ある（#1441）。
 NL2SQL_QUERY = "nl2sql_query"
@@ -120,8 +120,7 @@ _RUN_BUDGET_LABELS: dict[str, str] = {
 # 質問で同じプロファイルを使わせ、指示語のままの質問で推薦し直させない）。
 _PROFILE_ARGUMENTS: dict[str, tuple[str, str]] = {
     RAG_SEARCH: (KIND_RAG, "search_answer_profile_id"),
-    RAG_RETRIEVE_EVIDENCE: (KIND_RAG, "search_answer_profile_id"),
-    RAG_LOOKUP_GUIDES: (KIND_RAG, "search_answer_profile_id"),
+    RAG_CHAT: (KIND_RAG, "search_answer_profile_id"),
     NL2SQL_QUERY: (KIND_NL2SQL, "profile_id"),
 }
 # 種類ごとのプロファイルの呼び方と、推薦のツール（素の名前）。
@@ -145,8 +144,8 @@ MAX_REFERENCES = 5
 # 根拠の本文が別の文書を参照するとき（取込時に抜き出した evidence の references の document_title。
 # #2396）。参照先の文書は検索の範囲から探す。
 DOCUMENT_REFERENCE_READ_HINT = (
-    "参照先の文書名（document_title）と参照の表記（reference）を query に入れて "
-    "rag_retrieve_evidence を呼び、参照先の文書の該当の箇所を根拠として確かめる。"
+    "参照先の文書名（document_title）と参照の表記（reference）を query に入れてこのツールを"
+    "呼び、参照先の文書の該当の箇所を根拠として確かめる。"
 )
 REFERENCE_READ_HINT = (
     "rag_outline でこの文書の章節の構成を確かめ、"
@@ -188,10 +187,6 @@ NEXT_STEP_ANSWER_WITH_ASSUMPTIONS = "answer_with_assumptions"
 # 利用者が「確認せずに回答」を選んだ Run（#1903）で、NL2SQL の SQL の生成前の確認を聞かずに
 # `skip_clarification` で呼び直す次の手。
 NEXT_STEP_RETRY_WITHOUT_CLARIFICATION = "retry_without_clarification"
-# 業務ガイドの照合（#1322）の次の手: 人へ引き継ぐ / 条件ごとに答える / 業務ガイドに沿って答える。
-NEXT_STEP_HANDOFF = "handoff"
-NEXT_STEP_ANSWER_BY_CONDITIONS = "answer_by_conditions"
-NEXT_STEP_ANSWER_WITH_GUIDE = "answer_with_guide"
 # 承認済み FAQ の候補を利用者が選ぶ確認のカードを待つ（#5134）。
 NEXT_STEP_WAIT_APPROVED_FAQ_CHOICE = "wait_for_approved_faq_choice"
 APPROVED_FAQ_CHOICE_INSTRUCTION = (
@@ -257,9 +252,7 @@ def _executed(step: RunStep) -> bool:
         return False
     if step.status not in {"completed", "failed"}:
         return False
-    if (step.tool_call.trace_id or "").startswith(
-        (GUIDE_CHECK_TRACE_PREFIX, CANCEL_TRACE_PREFIX, RUN_CANCEL_TRACE_PREFIX)
-    ):
+    if (step.tool_call.trace_id or "").startswith((CANCEL_TRACE_PREFIX, RUN_CANCEL_TRACE_PREFIX)):
         return False
     return step.tool_result.error_code not in {_DRY_RUN_CODE, BUDGET_EXCEEDED_CODE}
 
@@ -569,7 +562,7 @@ def is_approved_faq_candidates(output: object) -> bool:
 
 
 def approved_faq_candidates_step(steps: list[RunStep]) -> RunStep | None:
-    """この Run の最後の成功した RAG の検索（`rag_search` / `rag_retrieve_evidence`）が承認済み
+    """この Run の最後の成功した RAG の回答のツール（`rag_search` / `rag_chat`）が承認済み
     FAQ の候補を返したなら、その step。
 
     利用者が候補を選ぶまで検索はしていない（回答前の確認のカードになる。#5134・#5136）。
@@ -601,18 +594,21 @@ def approved_faq_choice_step() -> JsonObject:
 
 
 def approved_faq_schema(function_name: str, schema: JsonObject) -> JsonObject:
-    """モデルに見せる RAG の検索の schema から、承認済み FAQ の選択の引数を外す（#5134・#5136）。
+    """モデルに見せる RAG の回答のツールの schema から、承認済み FAQ の選択と確認を返させない
+    引数を外す（#5134・#5136・#5342）。
 
-    利用者の選択は実行環境が付ける（モデルに id を写させない・候補を代わりに選ばせない）。
+    利用者の選択と、確認するかは実行環境が付ける（モデルに id を写させない・候補を代わりに選ばせ
+    ない・確認を勝手に飛ばさせない）。
     """
     properties = schema.get("properties")
-    if mcp_base_tool_name(function_name) not in RAG_APPROVED_FAQ_TOOLS or not isinstance(
+    if mcp_base_tool_name(function_name) not in RAG_ANSWER_TOOLS or not isinstance(
         properties, dict
     ):
         return schema
-    if not any(name in properties for name in APPROVED_FAQ_ARGUMENTS):
+    hidden = (*APPROVED_FAQ_ARGUMENTS, SKIP_CLARIFICATION_ARGUMENT)
+    if not any(name in properties for name in hidden):
         return schema
-    return _without_properties(schema, APPROVED_FAQ_ARGUMENTS)
+    return _without_properties(schema, hidden)
 
 
 def nl2sql_clarification_pending(steps: list[RunStep]) -> bool:
@@ -629,8 +625,7 @@ def guide_clarification_pending(
 ) -> list[JsonObject]:
     """この Run の最も新しい業務ガイドの判断が、まだ分からない条件を確かめる（clarify）ときの問い。
 
-    業務ガイドの判断は `rag_lookup_guides`（Control Plane の照合・モデルが引いたもの）と
-    `rag_search` の `guide` の新しいほう。根拠の取得（`rag_retrieve_evidence`）は判断を変えない。
+    業務ガイドの判断は RAG の回答のツールの結果の `guide`（rag_chat が業務ガイドを照合する）。
     `known` は分かっている条件の id（前の Run までと、この Run で利用者が答えたもの）で、その問いは
     数えない（答えた条件をカードで聞き直さない）。
     """
@@ -639,17 +634,12 @@ def guide_clarification_pending(
         if call is None or result is None or not result.success:
             continue
         output = result.output if isinstance(result.output, dict) else None
-        base = mcp_base_tool_name(call.name)
-        if output is None or base not in {RAG_LOOKUP_GUIDES, RAG_SEARCH}:
+        if output is None or mcp_base_tool_name(call.name) not in RAG_ANSWER_TOOLS:
             continue
-        if base == RAG_LOOKUP_GUIDES:
-            guides = _records(output.get("guides"))
-            guide: object = guides[0] if guides else None
-        else:
-            guide = output.get("guide")
-            if not isinstance(guide, dict):
-                continue
-        if not isinstance(guide, dict) or guide.get("decision") != "clarify":
+        guide = output.get("guide")
+        if not isinstance(guide, dict):
+            continue
+        if guide.get("decision") != "clarify":
             return []
         return [
             question
@@ -664,7 +654,7 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
 
     その確認事項は Run の完了の後に利用者への確認のカードになる（`builtin_runtime` の
     `_tool_confirmations`）。モデルが同じことを `ask_user_confirmation` で聞き直さないように使う。
-    RAG の検索は、業務ガイドの条件の確認（`rag_search` の `needs_clarification`）。
+    RAG の検索は、業務ガイドの条件の確認（RAG の回答のツールの `needs_clarification`）。
     業務ガイドの判断が条件を確かめる（clarify）ときも、その問いが条件の id 付きのカードになるので
     止まっているとみなす（#2726。Agent 自身の確認で聞くと、答えが業務ガイドの条件に渡らない）。
     `known` は分かっている条件の id。
@@ -682,34 +672,13 @@ def tool_clarification_pending(steps: list[RunStep], known: Collection[str] = ()
         # 承認済み FAQ の候補も、利用者が選ぶ確認のカードになる（#5134・#5136）。
         if is_approved_faq_candidates(result.output):
             return True
-        if mcp_base_tool_name(call.name) == RAG_RETRIEVE_EVIDENCE:
-            return False
         return result.output.get("outcome") == "needs_clarification"
     return False
 
 
-def profile_knowledge_summary(output: JsonObject) -> JsonObject | None:
-    """根拠の取得がモデルへ渡した検索・回答プロファイルの用語の記録（#2701）。
-
-    設定の画面の一致の確かめ（preview）と、実行でモデルに渡った内容を分けて追えるように、数と版
-    だけを返す（本文・名前は業務の内容なのでログに残さない。全文は Run の step の結果にある）。
-    渡していなければ None。
-    """
-    knowledge = output.get("profile_knowledge")
-    if not isinstance(knowledge, dict):
-        return None
-    terms = _records(knowledge.get("terms"))
-    return {
-        "search_answer_profile_id": knowledge.get("search_answer_profile_id"),
-        "revision": knowledge.get("revision"),
-        "terms": len(terms),
-        "terms_omitted": knowledge.get("terms_omitted"),
-        "load_failed": knowledge.get("load_failed") is True,
-    }
-
-
 def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | None, str]]:
-    """参照を探す（document_id, file_name, 本文）。根拠を集める・読むツールの出力だけ。"""
+    """参照を探す（document_id, file_name, 本文）。本文を読むツールの出力だけ（RAG の回答のツールの
+    根拠の参照は RAG が展開する。#5342）。"""
 
     def source(item: JsonObject, *keys: str) -> tuple[str, str | None, str] | None:
         document_id = item.get("document_id")
@@ -719,15 +688,7 @@ def _reference_sources(tool: str, output: JsonObject) -> list[tuple[str, str | N
         text = "\n".join(value for key in keys if isinstance(value := item.get(key), str))
         return document_id, file_name if isinstance(file_name, str) else None, text
 
-    if tool == RAG_RETRIEVE_EVIDENCE:
-        evidence = output.get("evidence")
-        items = (
-            [item for item in evidence if isinstance(item, dict)]
-            if isinstance(evidence, list)
-            else []
-        )
-        found = [source(item, "excerpt") for item in items]
-    elif tool == RAG_READ_SOURCE:
+    if tool == RAG_READ_SOURCE:
         found = [source(output, "text", "parent_text")]
     elif tool in {RAG_READ_DOCUMENT, RAG_READ_SECTION}:
         found = [source(output, "text")]
@@ -900,7 +861,7 @@ RECORD_CODE_HINT = (
     "query の実体に当たる台帳・一覧の行に、略号・区分のような短い値がある。その意味（正式な名前・"
     "区分ごとの規則）は別の資料（略号の表・区分の定義・規程）にあることが多い。答えにこの値の意味が"
     "要るなら、値のまま答えたり一般の規則で補ったりせず、「項目 値」（例: 「担当部署 経」）と"
-    "その意味を定める資料の語で次の段を rag_retrieve_evidence で引いて確かめてから答える。"
+    "その意味を定める資料の語で、次の段をこのツールで引いて確かめてから答える。"
 )
 
 
@@ -1024,7 +985,7 @@ _ASCII_CODE = re.compile(r"[0-9A-Za-z]+")
 UNRESOLVED_HOPS_HINT = (
     "直前の回答は、根拠の台帳・一覧の行にある次の値を確かめずに作られています。"
     "答えにその値の意味が要るなら、略号・区分は「項目 値」（例: 「担当部署 経」）と"
-    "その意味を定める資料の語で rag_retrieve_evidence を呼んで確かめ、略称・別表記はほかの資料に"
+    "その意味を定める資料の語で資料のツールを呼んで確かめ、略称・別表記はほかの資料に"
     "その名前で書かれた記載を同じ対象のこととして使ってから、改めて回答してください。"
     "意味が答えに要らないときは、そのまま回答してください。"
 )
@@ -1474,7 +1435,7 @@ def repeated_query_note(
 ) -> JsonObject | None:
     """同じ Run で同じ（ほぼ同じ）query の検索を繰り返したときの案内（#1351。無ければ None）。
 
-    比べるのは、この Run で成功した同じツール（同じ接続の `rag_search`・`rag_retrieve_evidence`）の
+    比べるのは、この Run で成功した同じツール（同じ接続の `rag_search`・`rag_chat`）の
     呼び出しのうち、検索・回答プロファイル・ナレッジベース・フィルター・条件が同じもの。案内だけで、
     呼び出しは止めない（続けるかはモデルが決める。planner は作らない。#756）。
     """
@@ -1516,7 +1477,7 @@ SUPERSEDED_VERSION_HINT = (
     "質問が名指しする年度・版（matched）か改定前の版は、検索で当たった文書の旧版（新しい版に"
     "置き換えた文書）に当たる。旧版は include_superseded を渡さない検索には出ない。旧版の根拠が"
     "要るなら、同じ query（年度・版の語を入れてよい）に include_superseded: true を足して"
-    " rag_retrieve_evidence（または rag_search）で検索し直し、今の版（superseded=false）と"
+    "このツールで検索し直し、今の版（superseded=false）と"
     "旧版（superseded=true）の根拠を比べて答える。旧版の根拠が無いまま今の版だけで答えない。"
 )
 
@@ -1618,141 +1579,13 @@ def rag_next_step(output: JsonObject, environment_tools: list[str]) -> JsonObjec
     }
 
 
-def _labels(items: object) -> str:
-    return "、".join(label for item in _records(items) if (label := _text(item.get("label"), 100)))
-
-
-# 業務ガイドは答えの根拠ではない（手順・値は資料の根拠で確かめる。#1322）。
-GUIDE_IS_NOT_EVIDENCE = (
-    "業務ガイドは確かめる条件と手順の順を示すもので、資料の根拠ではありません。"
-    "手順・値は rag_retrieve_evidence（または rag_search）で資料の根拠を集めて確かめてから"
-    "答えてください。"
-)
-# 質問に当たる業務ガイドが無いとき（#2504）。業務ガイドが無いことは、資料が無いことではない。
-NO_GUIDE_HINT = (
-    "質問に当たる業務ガイドはありませんが、資料が無いという意味ではありません。"
-    "rag_retrieve_evidence（または rag_search）で資料の根拠を集めてから答えてください。"
-)
-
-
-def guide_check_note(
-    output: JsonObject | None,
-    *,
-    evidence_gathered: bool = True,
-    rag_calls_remaining: int | None = None,
-) -> JsonObject | None:
-    """業務ガイドの照合（`rag_lookup_guides`）の結果を、モデルへの短い案内にする（#1322）。
-
-    根拠を集めるだけの道具（`rag_retrieve_evidence`）は業務ガイド（確かめる条件・分岐・影響範囲）を
-    見ないので、モデルが業務ガイドを引かずに根拠を集めたとき、Control Plane の照合の結果をその根拠の
-    結果に足す。モデルが自分で業務ガイドを引いたときも、次の手をその結果に足す（`evidence_gathered`
-    が False。答える判断なら、業務ガイドだけで答えず資料の根拠を集めるよう添える）。最上位の業務
-    ガイドの判断（decision）で次の手を決める（決定的）。当たる業務ガイドが無ければ None。ただし
-    モデルが自分で引いて（`evidence_gathered` が False）当たる業務ガイドが無ければ、資料の根拠を
-    集める次の手（`NO_GUIDE_HINT`。#2504）を返す。
-
-    答える判断（answer / branch）で手順があれば、手順を段として引く次の手（手順ごとの検索の語と
-    参照の資料・頁。`guide_steps.guide_steps_next_step`。#2396）を足す。`rag_calls_remaining` は
-    この実行で残る検索の回数（手順の数より少なければ、手順の語をまとめて引く案内にする）。
-    """
-    guides = _records(output.get("guides")) if isinstance(output, dict) else []
-    if not guides:
-        if evidence_gathered or not isinstance(output, dict):
-            return None
-        return {
-            "next_step": {
-                "action": NEXT_STEP_CONTINUE_WITH_TOOLS,
-                "reason": "no_guide",
-                "tools": [],
-                "instruction": NO_GUIDE_HINT,
-            }
-        }
-    guide = guides[0]
-    title = _text(guide.get("title"), 200)
-    decision = _text(guide.get("decision"), 20)
-    summary: JsonObject = {
-        key: guide.get(key)
-        for key in (
-            "guide_id",
-            "revision",
-            "title",
-            "decision",
-            "expected_result",
-            "known_conditions",
-            "unknown_conditions",
-            "steps",
-            "impact_scope",
-            "approval_required",
-            "impact_applies",
-            "handoff_contact",
-        )
-        if key in guide
-    }
-    if decision == "clarify":
-        next_step = ask_clarification_step(guide.get("clarifications"), reason="guide_clarify")
-    elif decision == "handoff":
-        contact = _text(guide.get("handoff_contact"), 200) or "担当の窓口"
-        next_step = {
-            "action": NEXT_STEP_HANDOFF,
-            "reason": "guide_handoff",
-            "tools": [],
-            "instruction": (
-                f"業務ガイド「{title}」は、{_labels(guide.get('unknown_conditions')) or '条件'}が"
-                f"分からないと資料だけでは案内できません。{contact}への引き継ぎを示し、"
-                "操作を代わりに進めないでください。"
-            ),
-        }
-    elif decision == "branch":
-        next_step = {
-            "action": NEXT_STEP_ANSWER_BY_CONDITIONS,
-            "reason": "guide_branch",
-            "tools": [],
-            "instruction": (
-                f"業務ガイド「{title}」の条件（{_labels(guide.get('unknown_conditions'))}）が"
-                "分かっていません。断定せず、条件ごとに分けて、どの場合の手順かを示して答えて"
-                "ください。" + ("" if evidence_gathered else GUIDE_IS_NOT_EVIDENCE)
-            ),
-        }
-    else:
-        known = "、".join(
-            f"{_text(item.get('label'), 100) or _text(item.get('id'), 100)}="
-            f"{_text(item.get('value'), _MAX_VALUE_CHARS)}"
-            for item in _records(guide.get("known_conditions"))
-        )
-        parts = [f"業務ガイド「{title}」に沿って答えてください。"]
-        if known:
-            parts.append(f"分かっている条件（{known}）に当たる場合の手順だけを答えてください。")
-        impact = guide.get("impact_applies") is not False and (
-            guide.get("approval_required") is True or guide.get("impact_scope") in {"group", "all"}
-        )
-        if impact:
-            parts.append("影響範囲と、実施の前に承認が要るかを示してください。")
-        if not evidence_gathered:
-            parts.append(GUIDE_IS_NOT_EVIDENCE)
-        next_step = {
-            "action": NEXT_STEP_ANSWER_WITH_GUIDE,
-            "reason": "guide_answer",
-            "tools": [],
-            "instruction": "".join(parts),
-        }
-    if decision in {"answer", "branch"}:
-        plan = guide_steps_next_step(output, rag_calls_remaining)
-        if plan is not None:
-            next_step = {
-                **next_step,
-                "steps": plan["steps"],
-                "instruction": next_step["instruction"] + plan["instruction"],
-            }
-    return {"guide": summary, "next_step": next_step}
-
-
 def run_route(steps: list[RunStep]) -> JsonObject:
     """この Run の回答の経路と理由（ツールの step から決定的に作る。#1283）。
 
     - `path`: `rag`（RAG だけ）/ `rag_then_tools`（RAG が確定できず、現場のデータの道具で続けた）/
       `tools`（RAG を呼ばずにツールを使った）/ `none`（ツールを使っていない）。
-    - `reason`: 最後の `rag_search` の対応（outcome）。呼んでいなければ空。
-    - `environment_data_required`: `rag_search` が現場のデータの確認を求めたか。
+    - `reason`: 最後の RAG の回答のツールの対応（outcome）。呼んでいなければ空。
+    - `environment_data_required`: RAG の回答のツールが現場のデータの確認を求めたか。
     - `continued_with`: その後に呼んだ、現場のデータを確かめる道具（呼んだ順）。
     """
     rag_searches = 0
@@ -1765,7 +1598,7 @@ def run_route(steps: list[RunStep]) -> JsonObject:
             continue
         executed += 1
         name = step.tool_call.name
-        if mcp_base_tool_name(name) == RAG_SEARCH:
+        if mcp_base_tool_name(name) in RAG_ANSWER_TOOLS:
             rag_searches += 1
             output = step.tool_result.output if step.tool_result.success else None
             outcome = output.get("outcome") if isinstance(output, dict) else None
@@ -2153,45 +1986,6 @@ class _StateBuilder:
         if isinstance(gaps, list):
             self.gaps = [text for item in gaps if (text := _text(item))][:MAX_GAPS]
 
-    def apply_retrieve(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
-        """根拠の取得へ利用者が渡した条件を保持する。業務ガイドの確認は照合の結果で扱う。"""
-        conditions = arguments.get("conditions")
-        if isinstance(conditions, dict):
-            for condition_id, value in conditions.items():
-                self.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=at)
-
-    def apply_lookup(self, arguments: JsonObject, output: JsonObject | None, *, at: str) -> None:
-        """`rag_lookup_guides`（モデル・Control Plane の照合。#1322）の最上位の業務ガイド。
-
-        確かめる判断（clarify）なら問いを確かめ中にし、次の Run が利用者の答えを条件として扱える
-        ようにする。
-        """
-        guides = _records(output.get("guides")) if isinstance(output, dict) else []
-        guide = guides[0] if guides else None
-        if guide is not None:
-            self.add_labels(guide.get("known_conditions"))
-            self.add_labels(guide.get("unknown_conditions"))
-            self.add_labels(guide.get("clarifications"))
-        conditions = arguments.get("conditions")
-        if isinstance(conditions, dict):
-            for condition_id, value in conditions.items():
-                self.set_condition(condition_id, value, source=SOURCE_USER_ANSWER, at=at)
-        if guide is None or not _text(guide.get("guide_id"), 200):
-            return
-        self.guide = {
-            "guide_id": _text(guide.get("guide_id"), 200),
-            "revision": _int(guide.get("revision")),
-            "title": _text(guide.get("title"), 200),
-            "decision": _text(guide.get("decision"), 20),
-        }
-        for item in _records(guide.get("known_conditions")):
-            source = SOURCE_USER_ANSWER if item.get("source") == "user" else SOURCE_RAG_GUIDE
-            self.set_condition(_text(item.get("id"), 100), item.get("value"), source=source, at=at)
-        if guide.get("decision") == "clarify":
-            self.set_rag_pending(
-                _questions(guide.get("clarifications"))[:MAX_PENDING_CLARIFICATIONS]
-            )
-
     def apply_evidence(self, output: JsonObject | None) -> None:
         if output is None:
             return
@@ -2286,32 +2080,14 @@ def build_support_task(
         result = step.tool_result
         output = result.output if result is not None and result.success else None
         at = (step.completed_at or step.started_at or now or _now()).isoformat()
-        if base == RAG_SEARCH:
+        if base in RAG_ANSWER_TOOLS:
             builder.apply_search(call.arguments, output, at=at)
-        if base == RAG_RETRIEVE_EVIDENCE:
-            builder.apply_retrieve(call.arguments, output, at=at)
-        if base == RAG_LOOKUP_GUIDES:
-            builder.apply_lookup(call.arguments, output, at=at)
         if base in _EVIDENCE_TOOLS:
             builder.apply_evidence(output)
         if base == NL2SQL_QUERY:
             builder.apply_nl2sql(call.name, call.arguments, result)
-        if (
-            base in _PROFILE_ARGUMENTS
-            and output is not None
-            and not (call.trace_id or "").startswith(GUIDE_CHECK_TRACE_PREFIX)
-        ):
-            # Control Plane の業務ガイドの照合（#1322）はモデルが選んだプロファイルではない。
+        if base in _PROFILE_ARGUMENTS and output is not None:
             builder.apply_profile(call.name, call.arguments)
-    if builder.guide is not None:
-        # 業務ガイドの手順ごとの根拠の有無（#2396。この Run で照合した同じガイドの手順だけ）。
-        plan = guide_plan(steps)
-        same = plan is not None and plan["guide_id"] == builder.guide.get("guide_id")
-        states = guide_step_states(steps) if same else []
-        if states:
-            builder.guide = {**builder.guide, "steps": states}
-        else:
-            builder.guide.pop("steps", None)
     if not ask_rag:
         builder.set_rag_pending([])
     if not ask_nl2sql:

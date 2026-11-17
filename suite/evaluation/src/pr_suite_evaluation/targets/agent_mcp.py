@@ -63,7 +63,7 @@ CANCEL_SCHEMA_VERSION = 1
 # 確認への答えの上限（契約の answers の maxItems）。
 MAX_CONFIRMATION_ANSWERS = 5
 MCP_TOOL_SEPARATOR = "__"
-EVIDENCE_TOOLS = frozenset({"rag_search", "rag_retrieve_evidence"})
+EVIDENCE_TOOLS = frozenset({"rag_search", "rag_chat"})
 APPROVAL_SKIPPED = "approval_skipped"
 OUTCOME_SOURCE_ANSWER = "agent_answer"
 OUTCOME_SOURCE_CONFIRMATION = "agent_confirmation"
