@@ -168,6 +168,8 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_chunk_set_retention_days",
         "rag_chunk_set_retained_versions",
         "rag_answer_timeout_seconds",
+        # DB の呼出し 1 回の上限（#5381）。超えたときの縮退は回答の degraded_steps に残る。
+        "rag_db_call_timeout_seconds",
         "rag_native_index_full_optimize_interval_hours",
         "rag_rerank_max_documents_per_request",
         "rag_support_guide_max_published_revisions",
