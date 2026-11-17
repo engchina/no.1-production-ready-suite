@@ -872,7 +872,7 @@ def _bundle_context(
         relations = [item for read in receipt.reads for item in read.get("relations", []) if item.get("purpose") == "neighbor_context"]
         before_ids = {item["chunk_id"] for item in relations if isinstance(item.get("distance"), int) and item["distance"] < 0}
         after_ids = {item["chunk_id"] for item in relations if isinstance(item.get("distance"), int) and item["distance"] > 0}
-        output = {
+        output: dict[str, Any] = {
             "読み取り記録": receipt.reads,
             "読取 Chunk 数": len(read_ids) if receipt.reads else None,
             "範囲適用後の読取 Chunk 数": len(read_ids - scoped_out) if receipt.reads else None,
@@ -890,7 +890,8 @@ def _bundle_context(
             "選択時の除外": list(bundle.excluded_evidence),
             "隣接候補の選択記録": receipt.selection,
         }
-        output["補い方ごとの起点数"] = {mode: list(modes.values()).count(mode) for mode in dict.fromkeys(modes.values())}
+        counts = {mode: list(modes.values()).count(mode) for mode in dict.fromkeys(modes.values())}
+        output["補い方ごとの起点数"] = counts
         if not selected:
             step.skip("起点根拠がありません。")
             output["実行状態"] = "起点なし"
@@ -899,7 +900,6 @@ def _bundle_context(
             output["実行状態"] = "既読を再利用"
         else:
             output["実行状態"] = "実行済み"
-            counts = output["補い方ごとの起点数"]
             step.result(
                 f"章節 {counts.get('section', 0)} 件・親 {counts.get('parent', 0)} 件・前後 {counts.get('neighbors', 0)} 件の起点を補い、"
                 f"前後の文脈 {len(adopted)} Chunk を回答文脈に採用しました（章節の本文は章節の拡張で読みます）。"
@@ -1973,7 +1973,8 @@ def synthesize_grounded_answer(
         except Exception as exc:
             timed_out = deadline_cut_short()
             input_limited = isinstance(exc, GenerationInputBudgetExceeded)
-            if input_limited:
+            # 保存した bool では例外の型が絞られないので、属性を読む分岐は型で直接確かめる（#4952）。
+            if isinstance(exc, GenerationInputBudgetExceeded):
                 input_diagnostic = exc.diagnostic
             invalid_draft = not timed_out and (
                 isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc) or input_limited
