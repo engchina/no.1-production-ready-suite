@@ -1209,7 +1209,7 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 
 | 決めたこと | 理由 |
 |---|---|
-| 一覧は `position: fixed` で body に出し、トリガーと同じ幅・左端にそろえる。開いている間はスクロール（どの祖先でも）とリサイズに追従する | 親の overflow に切られない。375px でも画面の外にはみ出さない（左右 8px の余白で止める） |
+| 一覧は `position: fixed` で body に出し、左端をトリガーにそろえる。幅はトリガーの幅以上で、選択肢の名前が省略されずに入る幅（`w-max` と `min-width` = トリガーの幅、上限は画面の幅。補足・選べない理由・`wrapOptions` の名前は幅に数えない。#5264）。右に入らなければ左へずらす。開いている間はスクロール（どの祖先でも）とリサイズに追従する | 親の overflow に切られない。375px でも画面の外にはみ出さない（左右 8px の余白で止める）。幅の狭い欄（`xs` の「表を分ける空の行」など）でも選択肢が「1 行…」と切れない |
 | 下に 16rem（`max-h-64` と同じ）が入らず、上のほうが広ければ上に反転する。どちらにも入らなければ広い側に出し、空きの高さまで縮めて内部スクロールにする。反転の向きは `data-floating-menu-placement`（`top` / `bottom`） | 画面の下端のフィールドでも選択肢が見える。E2E が向きを確かめられる |
 | モーダル（`aria-modal="true"` / `<dialog open>`）の中で開いたときは、body ではなくそのモーダルの中に描く | モーダルの外に出すと、支援技術がモーダルの外として読まない（aria-modal）・`<dialog>` の top layer の下に隠れる |
 | z-index を持つ層（モーダル・固定ヘッダーなど）の中では、その層より 1 段上に出す。層の外は `--z-dropdown` のまま | Portal で描くと、`--z-dropdown` のままではモーダルの暗幕や層の下に隠れる |
@@ -1323,7 +1323,7 @@ import { DEFAULT_ROADMAP_LABEL, RoadmapBadge, SelectField } from "@production-re
 |---|---|
 | 左右はボタンの右端にそろえる（従来の位置）。右端揃えで画面（左右 8px の余白の内側）に入らず、左端揃えなら入るときは左端にそろえる。どちらも入らなければ画面の内側にずらす。そろえた端は `data-floating-menu-align`（`start` / `end`） | ボタンがどこにあっても全項目が見えて押せる。E2E が向きを確かめられる |
 | 上下は `SelectField` と同じ（下に入らなければ上に反転、どちらも入らなければ広い側で内部スクロール） | 位置の計算は `computeFloatingMenuLayout` 1 か所にまとめる |
-| 左右の反転は `FloatingActionMenu` を使うすべてのメニュー（`RowActionMenu`・`ObjectActionBar`・`FormActionBar`）に効く。`SelectField`（`stretch`）は反転しない | 同じ問題を同じ仕組みで直す。一覧はトリガーと同じ幅なので反転の必要がない |
+| 左右の反転は `FloatingActionMenu` を使うすべてのメニュー（`RowActionMenu`・`ObjectActionBar`・`FormActionBar`）に効く。`SelectField`（`stretch`）は反転せず、画面に入らなければ左へずらす | 同じ問題を同じ仕組みで直す。一覧の左端はトリガーにそろえ、広い一覧だけを画面の内側へ寄せる |
 | 外側クリックの判定は、ボタン側とメニューの両方を内側とみなす | メニューは DOM 上ヘッダーの外にある |
 | Tab はメニューを閉じてボタンの次の要素へ、Shift+Tab はボタンへ戻す。開く・矢印 / Home / End・Escape（ボタンへ戻る）は従来どおり | メニューは body の末尾にあるため、既定の Tab では文書の末尾へ抜けてしまう |
 
@@ -2246,7 +2246,7 @@ export function isSubmitEnter(event: KeyboardEventLike): boolean;  // key === "E
 ```tsx
 import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/ui";
 
-// 複数選択: 検索欄（combobox）＋ 候補の一覧（開いている間だけ）＋ 選択済みの chip
+// 複数選択: ボタン（選択の 1 行の要約「A、B 他 3 件」）→ 上の層の popover（最上部に検索欄・候補・下部の操作）＋ ボタンの下の chip
 <SearchableMultiSelect
   id="kb-scope"
   label="参照するナレッジベース"
@@ -2260,7 +2260,7 @@ import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/
   labels={{ searchPlaceholder: "ナレッジベースを検索して追加…" /* ほか */ }}
 />
 
-// 単一選択: ボタン（選択中の名前を折り返して全体を出す）→ 検索欄と候補の一覧を重ねて開く
+// 単一選択: ボタン（選択中の名前を折り返して全体を出す）→ 同じ popover（最上部に検索欄・候補）を開く
 <SearchableSelectField
   id="kb-filter"
   label="ナレッジベース"
@@ -2277,15 +2277,18 @@ import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/
 |---|---|
 | 検索欄は `SearchField`（debounce 300ms・Enter はすぐ・IME の変換中は絞らない・× と Esc で消す）を role=combobox で使う。親で遅延させない | #535 の規則を 1 か所で守る。変換の途中の読みで問い合わせない |
 | `remote` を渡さなければ `options` を画面側で絞る（全角半角・大文字小文字を区別しない部分一致、空白区切りはすべて含む）。渡すと絞らず、`onQueryChange` の検索語で呼び出し側が問い合わせる | 件数の少ないときは 1 文字ごとに問い合わせない。多いときは全件を読まない（切り替えの基準は製品が決める。RAG の KB は 201 件以上） |
-| ↑↓ で強調（`aria-activedescendant`）、Enter で選ぶ。IME の変換中の矢印・Enter は候補の操作に使わない。複数選択は選んでも閉じず、「完了」・Esc で閉じて検索欄へ戻る。閉じた後の Esc で検索語を消す | APG の Combobox。続けて複数を選べる。Esc 1 回で入力まで消えない |
-| 単一選択の開いた層は `role="dialog"`（非モーダル）。開くと検索欄へ、選ぶ・Esc・Tab で閉じてボタンへ戻る（Shift+Tab はボタンに止まる）。ボタンの名前はラベルと選択中の名前（`aria-labelledby`） | Portal の層に Tab で入れない問題を避け、フォーカスの行き先を 1 つにする。読み上げで今の値が分かる |
+| **単一・複数とも同じ形**（#5267）: トリガーは `button`（`aria-haspopup="dialog"`）で、開いても大きさ・位置・見た目は変わらない。開いた層（`role="dialog"`、非モーダル）は Portal で上の層に描き（`SearchablePopover`。内部の部品）、下の内容を押さない。検索欄は層の最上部で、開くとそこへフォーカスが移る。ボタンの名前はラベルと値（単一は選択中の名前、複数は要約。`aria-labelledby`）。必須はラベルの「必須」のタグで読む（ボタンは `aria-required` を持てない） | 開くと欄の形・高さが変わり下の内容が動くと、どこを操作しているか見失う。shadcn/ui の Combobox（Popover + Command）・Radix・MUI の Select と同じ「ボタンで開き、層の中で検索する」形に 1 つにそろえる |
+| ↑↓ / PageUp / PageDown で強調（`aria-activedescendant`）、Enter で選ぶ。IME の変換中の矢印・Enter は候補の操作に使わない。単一選択は選んで閉じ、ボタンへ戻る。複数選択は選んでも閉じず（続けて選べる）、「完了」・Esc で閉じてボタンへ戻る。検索語は閉じると消える | APG の Combobox。続けて複数を選べる |
+| Tab: 単一選択は Tab で閉じてボタンへ戻る（Shift+Tab はボタンに止まる）。複数選択は Tab で層の中の操作（さらに表示・表示中をすべて選択・クリア・完了）を順に巡り、最後の操作からの Tab で閉じてボタンの次へ進む。検索欄からの Shift+Tab は閉じてボタンへ戻る。外側のクリック・層の外へのフォーカスの移動でも閉じる（ボタンの下の chip を押しても閉じない） | Portal の層に Tab で入れない問題を避け、フォーカスの行き先を決める |
+| **層の幅はトリガーと同じ幅を 20〜40rem に収める**（`SEARCHABLE_POPOVER_WIDTH_REM`。#5267）。40rem を超えるトリガー（RAG 検索・チャットの `full` の欄）ではトリガーの左端にそろえて 40rem。sm（640px）未満は画面の幅から左右の 1rem を引いた幅。右に入らなければ右端をトリガーにそろえ、それでも入らなければ画面の余白の内側へずらす（`floating-menu` の `widthRange`）。画面の空きが足りないときは候補の一覧だけを縮め、検索欄と下部の行は残す | `full` の欄で層が画面いっぱいに広がると、候補の名前と右端の件数が離れて読みにくい。狭い欄では候補の名前が入る最小の幅を保つ |
+| 複数選択のボタンは 1 行の要約（先頭 2 件の名前と「他 N 件」。`labels.summaryRest`・`summarySeparator`、未選択は `labels.noneSelected`「未選択」）。名前が入らなければ名前を省略し、「他 N 件」は省略しない。全文は `title` とボタンの下の chip | ボタンの高さを固定し、開閉で形を変えない。選んだもの全部は chip で読める |
 | 続きのページは、複数選択は「さらに表示」、単一選択は一覧の下端までのスクロールか最後の候補からの ↓ | 単一選択の層の中に Tab で届くボタンを置かない |
 | 選択済みは chip（`<ul aria-label="選択中の…">`）で、名前を省略せず折り返す。`badge` で状態（アーカイブ済み・見つかりません）を文字で添える | 長い名前を最後まで読める。色だけに頼らない |
 | 単一選択の一覧の高さは一覧側（`bounded-scroll-area`）で決め、層全体は実寸で測る | 層に max-height を掛けると実寸の測り直しで高さが揺れる |
-| **複数選択の開いた一覧（パネル）は欄の幅以上**（#2091）。欄の左端から右へ、読みやすい幅（`SEARCHABLE_PANEL_MIN_WIDTH_REM` 36rem）まで、いちばん近い枠のある箱（Card など）の内容の端の中で広げる。下部の行は左に「N 件選択中」（折り返さない）、右に操作の組（「表示中をすべて選択」「クリア」「完了」。`sm`）を 1 行。右に入らないときだけ、画面・スクロールの箱の余白（1rem）の内側まで右へ広げて左へずらし（375px は画面の幅）、それでも入らなければ件数の文と操作の組を 2 段にする（操作の組は分けない）。隣に並ぶ要素（grid の隣の欄・サイドナビ）の手前で止める。幅は開いたときと大きさの変わったときに測る（`computeSearchablePanelLayout`） | 欄の幅（`lg` 28rem）に縛ると、下部の件数の文が 2 行に折り返し「完了」が次の行へ落ちた。Radix の Popover・MUI Autocomplete の一覧と同じく「トリガーの幅以上・中身に要る幅」にする。一覧は通常の流れの中にある（後ろのカードの下に隠れない）ため、隣の欄・カードの外へは広げない（#1794） |
-| **単一選択の閉じたボタンに虫眼鏡（`Search`）を付けない。** ボタンは選んだ値（未選択なら placeholder）と開閉の印（`ChevronDown`）だけを出し、虫眼鏡は開いた層の中の検索欄（`SearchField`）だけが持つ（#1771） | ボタンで開き、層の中で検索する選択欄（shadcn/ui の Combobox・Radix の Popover + Command・MUI の Select）の一般的な形。ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え、開くと虫眼鏡が 2 つ縦に並ぶ。複数選択（`SearchableMultiSelect`）は欄そのものが検索欄（文字を打てる autocomplete）なので、先頭の虫眼鏡はそのまま |
+| 複数選択の層の下部の行は、左に「N 件選択中」（折り返さない）、右に操作の組（「表示中をすべて選択」「クリア」「完了」。`sm`）。層が 28rem 以上なら 1 行、狭いときは件数の文と操作の組を 2 段にする（操作の組は分けない。#2091） | 件数の文が 2 行に折り返し「完了」が次の行へ落ちない |
+| **閉じたボタンに虫眼鏡（`Search`）を付けない。** ボタンは値（未選択なら placeholder・「未選択」）と開閉の印（`ChevronDown`）だけを出し、虫眼鏡は開いた層の中の検索欄（`SearchField`）だけが持つ（#1771。#5267 で複数選択も同じ） | ボタンで開き、層の中で検索する選択欄の一般的な形。ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え、開くと虫眼鏡が 2 つ縦に並ぶ |
 
-- 開いた一覧の幅の計算は `packages/ui/tests/searchable-panel-layout.test.ts`、実ブラウザの下部の行と位置は共通の e2e の検査 `measureSearchablePanels`（`packages/ui/e2e/layout-checks.ts`。RAG の `expectSearchablePanelFits`・Agent の `agent-data-scope.spec.ts`）（#2091）。
+- 層の幅の計算は `packages/ui/tests/searchable-popover-layout.test.ts`、実ブラウザの幅・下部の行・位置は共通の e2e の検査 `measureSearchablePanels` と `expectedSearchablePopoverWidth`（`packages/ui/e2e/layout-checks.ts`。RAG の `expectSearchablePanelFits`・Agent の `agent-data-scope.spec.ts`）（#2091・#5267）。
 - 単体テストは `packages/ui/tests/searchable-select.test.tsx`（300 件の画面側の絞り込み・`remote`・↑↓/Enter/Esc/Tab・IME の `compositionstart`〜`compositionend` と確定の Enter・chip・hideable・件数の読み上げ・ボタンの名前）。
 - 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・検索・回答プロファイル、desktop / 375px、ライト / ダーク）。
 - 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、検索・回答プロファイルの参照 KB、品質評価、文書詳細の所属先、RAG 検索・チャットの対象の検索・回答プロファイル（#635 で単一選択の `SearchableSelectField` に統一））。RAG 固有の `MultiSelectCombobox` は削除した。
@@ -2910,7 +2913,7 @@ export const FIELD_WIDTH_REM: { xs: 8; sm: 12; md: 20; lg: 28 };       // e2e �
 export function FormGrid(props: ComponentProps<"div"> & { columns?: 1 | 2 }): JSX.Element;  // 既定 2（置き場所 57.5rem 以上で 2 列）
 export const FORM_GRID_TWO_COLUMN_MIN_REM: number;                       // 57.5 = lg 28rem × 2 + 列の間 1.5rem（#1891 段 5）
 TextareaField: width?: FieldWidth;            // 既定は親の幅いっぱい（full）
-SearchableMultiSelect: width?: FieldWidth;    // 部品全体（検索欄・候補・chip）の幅
+SearchableMultiSelect: width?: FieldWidth;    // ボタンと chip の幅（開いた層はボタンに合わせて 20〜40rem。#5267）
 ListToolbarProps.count?: ListCountProps;      // 右側の件数（summary は件数以外の状態の文言だけに使う）
 export function ListCount(props: { total: number; matched?: number; labels?: Partial<ListCountLabels>; live?: boolean; className?: string; testId?: string }): JSX.Element;
 export function listCountText(props: { total: number; matched?: number; labels?: Partial<ListCountLabels> }): string;

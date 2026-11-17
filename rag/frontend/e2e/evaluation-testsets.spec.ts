@@ -140,7 +140,7 @@ test("標準回答が空欄の項目は、個別でも一括でも確認済み�
   await expect(page.getByRole("combobox", { name: "期待する応答の判断" })).toHaveCount(0);
   await page.getByRole("button", { name: "下書きだけ保存", exact: true }).click();
   await expect.poll(() => state.getSaved()?.items.length).toBe(1);
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "選択", exact: true }), /1\./);
+  await chooseSelectFieldOption(page.locator("#testset-batch-picker"), /1\./);
   await page.getByRole("button", { name: "選んだ項目を確認済みにする", exact: true }).click();
   await expect(page.getByText("選んだ項目すべてに、質問と標準回答を入力してください。")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
@@ -160,7 +160,7 @@ test("Excel はプレビュー後も未確認で、明示選択した件数を�
   await page.getByRole("button", { name: "テストセットを保存", exact: true }).click();
   await expect(page.getByTestId("testset-editor")).toBeVisible();
   expect(state.getSaved()?.items.every(value => !value.confirmed)).toBe(true);
-  await chooseSelectFieldOption(page.getByRole("combobox", { name: "選択", exact: true }), /1\./);
+  await chooseSelectFieldOption(page.locator("#testset-batch-picker"), /1\./);
   await page.getByRole("button", { name: "選んだ項目を確認済みにする", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toContainText("1 問を確認済みにしますか？");
   expect(state.getSaved()?.items.every(value => !value.confirmed)).toBe(true);

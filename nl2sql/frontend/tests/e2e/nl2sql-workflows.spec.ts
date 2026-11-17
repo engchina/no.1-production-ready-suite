@@ -3569,6 +3569,7 @@ test("SQL のツールの画面の欄は値の種類の幅で、placeholder が�
       ready: "#nl2sql-question-input",
       // Select AI の今回だけの生成条件（追加条件・ロール）の placeholder も確かめる。
       open: async (target) => {
+        await expect(target.locator("#nl2sql-profile-select")).toBeEnabled();
         await expectSelectFieldValue(target.locator("#nl2sql-profile-select"), "default");
         // 開いた状態は作業状態に残るので、閉じているときだけ開く。
         for (const name of ["今回だけの生成条件", "ロールを上書き"]) {
@@ -3586,8 +3587,11 @@ test("SQL のツールの画面の欄は値の種類の幅で、placeholder が�
       ready: "#sql-to-question-sql-input",
       // 業務プロファイルとスキーマの読み込みの後（Skeleton ではなく内容）で確かめる。
       open: async (target) => {
-        await expectSelectFieldValue(target.locator("#sql-to-question-profile"), "default");
+        // 読み込み中は欄が無効なので、読み込みが終わって押せるようになってから値を確かめる（無効の欄は開けず、
+        // ボタンの文字だけで確かめることになる）。
         await expect(target.getByTestId("sql-to-question-schema-skeleton")).toHaveCount(0);
+        await expect(target.locator("#sql-to-question-profile")).toBeEnabled();
+        await expectSelectFieldValue(target.locator("#sql-to-question-profile"), "default");
       },
       fields: [["#sql-to-question-profile", 28]],
     },

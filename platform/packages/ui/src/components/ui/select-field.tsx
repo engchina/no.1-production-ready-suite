@@ -190,6 +190,7 @@ export function selectPortalContainer(trigger: Pick<Element, "closest"> | null):
 /**
  * 見た目と操作を統一した選択フィールド（W3C APG の select-only combobox）。
  * 一覧は body へ Portal で描き、親の overflow に切られない。画面の下端では上に反転する。
+ * 一覧の幅は欄の幅以上で、選択肢の名前が省略されずに入る幅まで広げる（上限は画面の幅。#5264）。
  */
 export function SelectField<T extends string>({
   id,
@@ -462,7 +463,8 @@ export function SelectField<T extends string>({
             aria-labelledby={labelId}
             data-floating-menu-placement={position?.placement}
             className={cn(
-              "fixed z-[var(--z-dropdown)] max-h-64 overflow-auto overscroll-contain [scrollbar-gutter:stable] rounded-md border border-border bg-surface-raised p-1 shadow-[var(--shadow-popover)]",
+              // 幅は欄の幅以上で、選択肢の名前が入る幅（w-max。上限は画面の幅。floating-menu の stretch。#5264）。
+              "fixed z-[var(--z-dropdown)] w-max max-h-64 overflow-auto overscroll-contain [scrollbar-gutter:stable] rounded-md border border-border bg-surface-raised p-1 shadow-[var(--shadow-popover)]",
               !position && "opacity-0"
             )}
             style={position?.style ?? { left: -9999, top: -9999 }}
@@ -517,19 +519,21 @@ export function SelectField<T extends string>({
                     className={cn("shrink-0 text-accent-fg-strong", selected ? "opacity-100" : "opacity-0")}
                     aria-hidden
                   />
-                  <span className="min-w-0">
+                  {/* 一覧の幅を広げるのは選択肢の名前（と印）だけ。折り返す名前・補足・選べない理由は w-0 min-w-full で
+                      幅に数えず、決まった幅の中で省略・折り返す（#5264）。 */}
+                  <span className={cn("min-w-0", wrapOptions && "w-0 flex-1")}>
                     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <span className={cn("block", wrapOptions ? "whitespace-normal break-words" : "truncate")}>{option.label}</span>
                       {option.badge ? <StatusBadge variant="neutral" icon={false} label={option.badge} /> : null}
                     </span>
                     {option.description ? (
-                      <span className="mt-0.5 block truncate text-xs font-normal text-fg-muted">
+                      <span className="mt-0.5 block w-0 min-w-full truncate text-xs font-normal text-fg-muted">
                         {option.description}
                       </span>
                     ) : null}
                     {disabledReason ? (
                       // 理由は読める濃さ（fg-muted。4.5:1）にし、折り返して全文を見せる（一覧の中では Tooltip を出せない）。
-                      <span className="mt-0.5 block whitespace-normal text-xs font-normal text-fg-muted" data-option-disabled-reason="">
+                      <span className="mt-0.5 block w-0 min-w-full whitespace-normal text-xs font-normal text-fg-muted" data-option-disabled-reason="">
                         {disabledReason}
                       </span>
                     ) : null}

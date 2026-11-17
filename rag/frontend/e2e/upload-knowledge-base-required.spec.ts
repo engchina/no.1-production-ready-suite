@@ -6,6 +6,7 @@ import {
   mockAuthUser,
   mockDatabaseReady,
   mockLocalAuth,
+  openSearchableMultiSelect,
 } from "./_helpers";
 
 // 利用できる KB が制限された利用者のアップロード（#214）。
@@ -95,7 +96,7 @@ test("KB が制限された利用者は、KB を選ばずにアップロード�
   await expectNoPageOverflow(page);
 
   // KB を選ぶと案内が消え、選んだ KB を付けて送る。
-  await page.getByRole("combobox", { name: "所属させるナレッジベース" }).click();
+  await openSearchableMultiSelect(page, "所属させるナレッジベース");
   await page.getByRole("listbox", { name: "所属させるナレッジベース" }).getByRole("option", { name: /社内規程/ }).click();
   await page.keyboard.press("Escape");
   await expect(picker.getByRole("alert")).toHaveCount(0);

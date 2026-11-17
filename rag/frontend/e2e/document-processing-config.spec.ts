@@ -443,9 +443,30 @@ test("Excel の読み方を上書きして保存する", async ({ page }) => {
   await excel.getByRole("group", { name: "1 つのシートの複数の表" }).getByText("分けない").click();
   await expect(excel.getByRole("combobox", { name: "表を分ける空の行" })).toHaveCount(0);
   await excel.getByRole("group", { name: "1 つのシートの複数の表" }).getByText("分けて読む").click();
-  await excel.getByRole("combobox", { name: "表を分ける空の行" }).click();
+  // 幅の狭い欄（xs）の一覧でも、選択肢の名前を「1 行…」と省略しない。一覧は欄の幅以上で画面に収まる（#5264）。
+  const expectOptionsNotClipped = async (name: string) => {
+    const trigger = excel.getByRole("combobox", { name });
+    await trigger.click();
+    const listbox = page.getByRole("listbox", { name });
+    await expect(listbox).toBeVisible();
+    const layout = await listbox.evaluate((node) => ({
+      clipped: Array.from(node.querySelectorAll<HTMLElement>("[role=option] span.truncate"))
+        .filter((label) => label.scrollWidth > label.clientWidth + 1)
+        .map((label) => label.textContent),
+      left: node.getBoundingClientRect().left,
+      right: node.getBoundingClientRect().right,
+      width: node.getBoundingClientRect().width,
+      viewport: document.documentElement.clientWidth,
+    }));
+    const triggerBox = await trigger.boundingBox();
+    expect(layout.clipped).toEqual([]);
+    expect(layout.width).toBeGreaterThanOrEqual((triggerBox?.width ?? 0) - 1);
+    expect(layout.left).toBeGreaterThanOrEqual(0);
+    expect(layout.right).toBeLessThanOrEqual(layout.viewport);
+  };
+  await expectOptionsNotClipped("表を分ける空の行");
   await page.getByRole("option", { name: "2 行以上", exact: true }).click();
-  await excel.getByRole("combobox", { name: "表を分ける空の列" }).click();
+  await expectOptionsNotClipped("表を分ける空の列");
   await page.getByRole("option", { name: "3 列以上", exact: true }).click();
   // 非表示の行・列（#2526）: 既定は読まない。
   const hiddenCells = excel.getByRole("group", { name: "非表示の行・列" });

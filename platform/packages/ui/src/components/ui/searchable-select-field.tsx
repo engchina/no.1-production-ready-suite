@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 
 import { isImeComposing } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
@@ -17,9 +16,8 @@ import { cn } from "../../lib/utils";
 import { useFieldWidthScope } from "./field-width-scope";
 import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, labeledFieldWidthClasses } from "./control-size";
 import { FieldError } from "./field-error";
-import { useFloatingMenuPosition } from "./floating-menu";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
-import { SearchField } from "./search-field";
+import { SearchablePopover, useSearchablePopoverPosition } from "./searchable-popover";
 import {
   DEFAULT_SEARCHABLE_SELECT_LABELS,
   filterSearchableOptions,
@@ -101,7 +99,8 @@ export interface SearchableSelectFieldProps {
 }
 
 /**
- * 検索できる単一選択（#578）。ボタン（選択中の名前を切らずに出す）を押すと、検索欄と候補の一覧を重ねて開く。
+ * 検索できる単一選択（#578）。ボタン（選択中の名前を切らずに出す）を押すと、検索欄と候補の一覧の popover を
+ * 上の層に開く（複数選択の SearchableMultiSelect と同じ popover。幅はボタンに合わせて 20〜40rem。#5267）。
  * 選択肢が数十〜数百件の選択に使う（十数件までの固定の選択肢は SelectField）。
  *
  * - 開くと検索欄へフォーカスが移る。検索欄は SearchField（debounce 300ms・Enter はすぐ・IME の変換中は絞り込まない）。
@@ -161,16 +160,12 @@ export function SearchableSelectField({
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // 外側のクリック（document の pointerdown。開いたときに登録する）から閉じるときも、今の検索語を消す。
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const [activeIndex, setActiveIndex] = useState(-1);
   const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null);
-  const [minWidth, setMinWidth] = useState(0);
-  const position = useFloatingMenuPosition({
-    align: "start",
-    boundary: "viewport",
-    menuRef: popoverRef,
-    open,
-    triggerRef: buttonRef,
-  });
+  const position = useSearchablePopoverPosition({ open, triggerRef: buttonRef, popoverRef });
 
   const visible = useMemo(
     () => (remote ? options : filterSearchableOptions(options, query)),
@@ -250,7 +245,6 @@ export function SearchableSelectField({
     revealActiveRef.current = true;
     setActiveIndex(-1);
     setPortalContainer(selectPortalContainer(buttonRef.current));
-    setMinWidth(Math.round(buttonRef.current?.getBoundingClientRect().width ?? 0));
     openRef.current = true;
     setOpen(true);
   }
@@ -259,7 +253,7 @@ export function SearchableSelectField({
     openRef.current = false;
     setOpen(false);
     setActiveIndex(-1);
-    if (query) {
+    if (queryRef.current) {
       setQuery("");
       onQueryChange?.("");
     }
@@ -331,6 +325,11 @@ export function SearchableSelectField({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       openPopover();
+    } else if (event.key === "Escape" && open) {
+      // 開いたままボタンへフォーカスを戻したとき（ボタンを押した後など）も Esc で閉じる。囲むモーダルへは伝えない。
+      event.preventDefault();
+      event.stopPropagation();
+      close(true);
     }
   }
 
@@ -340,99 +339,79 @@ export function SearchableSelectField({
   }
 
   const popover =
-    open && portalContainer
-      ? createPortal(
-          <div
-            ref={popoverRef}
-            id={popoverId}
-            role="dialog"
+    open && portalContainer ? (
+      <SearchablePopover
+        popoverRef={popoverRef}
+        id={popoverId}
+        label={label}
+        portalContainer={portalContainer}
+        position={position}
+        onKeyDown={(event) => {
+          if (event.target === event.currentTarget || event.target === listboxRef.current) handleSearchKeyDown(event);
+        }}
+        search={{
+          inputRef,
+          id: searchId,
+          label: labels.searchLabel(label),
+          value: query,
+          onSearch: (next) => {
+            if (!openRef.current) return;
+            setQuery(next);
+            setActiveIndex(-1);
+            onQueryChange?.(next);
+          },
+          clearLabel: labels.clearSearch,
+          placeholder: labels.searchPlaceholder,
+          resultCountLabel: searching ? labels.searching : countText,
+          listboxId,
+          activeDescendant: active >= 0 ? searchableOptionId(listboxId, active) : undefined,
+          onKeyDown: handleSearchKeyDown,
+        }}
+      >
+        {visible.length > 0 ? (
+          <ul
+            ref={listboxRef}
+            id={listboxId}
+            role="listbox"
             tabIndex={-1}
-            onKeyDown={(event) => {
-              if (event.target === event.currentTarget || event.target === listboxRef.current) handleSearchKeyDown(event);
-            }}
+            aria-activedescendant={active >= 0 ? searchableOptionId(listboxId, active) : undefined}
             aria-label={label}
-            data-floating-menu-placement={position?.placement}
-            data-searchable-select-popover=""
-            className={cn(
-              // 候補の一覧は自分の高さの上限（bounded-scroll-area）の中でスクロールする。画面の空きが足りないときだけ
-              // 全体を縮めてスクロールにする（高さは中身の実寸で測るので、全体は overflow-y-auto にしておく）。
-              "fixed z-[var(--z-dropdown)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] rounded-md border border-border bg-surface-raised shadow-[var(--shadow-popover)]",
-              !position && "opacity-0"
-            )}
-            style={{ minWidth: minWidth || undefined, ...(position?.style ?? { left: -9999, top: -9999 }) }}
-            // Portal でも React のイベントは祖先（表の行など）へ伝わるため、ここで止める。
-            onClick={(event) => event.stopPropagation()}
+            aria-busy={searching || undefined}
+            onScroll={handleListScroll}
+            className="bounded-scroll-area min-h-0 overscroll-contain py-1"
           >
-            <div className="border-b border-border p-2">
-              <SearchField
-                ref={inputRef}
-                id={searchId}
-                label={labels.searchLabel(label)}
-                labelHidden
-                value={query}
-                onSearch={(next) => {
-                  if (!openRef.current) return;
-                  setQuery(next);
-                  setActiveIndex(-1);
-                  onQueryChange?.(next);
+            {visible.map((option, index) => (
+              <SearchableOptionRow
+                key={option.value}
+                id={searchableOptionId(listboxId, index)}
+                option={option}
+                selected={option.value === value}
+                active={index === active}
+                multiple={false}
+                onSelect={() => choose(option)}
+                onHover={() => {
+                  revealActiveRef.current = false;
+                  setActiveIndex(index);
                 }}
-                clearLabel={labels.clearSearch}
-                resultCountLabel={searching ? labels.searching : countText}
-                placeholder={labels.searchPlaceholder}
-                role="combobox"
-                aria-expanded
-                aria-controls={listboxId}
-                aria-autocomplete="list"
-                aria-activedescendant={active >= 0 ? searchableOptionId(listboxId, active) : undefined}
-                onKeyDown={handleSearchKeyDown}
               />
-            </div>
-            {visible.length > 0 ? (
-              <ul
-                ref={listboxRef}
-                id={listboxId}
-                role="listbox"
-                tabIndex={-1}
-                aria-activedescendant={active >= 0 ? searchableOptionId(listboxId, active) : undefined}
-                aria-label={label}
-                aria-busy={searching || undefined}
-                onScroll={handleListScroll}
-                className="bounded-scroll-area overscroll-contain py-1"
-              >
-                {visible.map((option, index) => (
-                  <SearchableOptionRow
-                    key={option.value}
-                    id={searchableOptionId(listboxId, index)}
-                    option={option}
-                    selected={option.value === value}
-                    active={index === active}
-                    multiple={false}
-                    onSelect={() => choose(option)}
-                    onHover={() => {
-                      revealActiveRef.current = false;
-                      setActiveIndex(index);
-                    }}
-                  />
-                ))}
-              </ul>
-            ) : (
-              <SelectListEmpty searching={searching} searchingLabel={labels.searching}>
-                {query ? labels.noMatch(query) : labels.empty}
-              </SelectListEmpty>
-            )}
-            <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1.5 text-xs text-fg-muted">
-              <span className="tnum">{searching ? labels.searching : countText}</span>
-              {remote?.loadingMore ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Spinner size={14} aria-hidden />
-                  {labels.loadMore}
-                </span>
-              ) : null}
-            </div>
-          </div>,
-          portalContainer
-        )
-      : null;
+            ))}
+          </ul>
+        ) : (
+          <SelectListEmpty searching={searching} searchingLabel={labels.searching}>
+            {query ? labels.noMatch(query) : labels.empty}
+          </SelectListEmpty>
+        )}
+        <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1.5 text-xs text-fg-muted">
+          <span className="tnum">{searching ? labels.searching : countText}</span>
+          {remote?.loadingMore ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Spinner size={14} aria-hidden />
+              {labels.loadMore}
+            </span>
+          ) : null}
+        </div>
+      </SearchablePopover>
+    ) : null;
 
   const widthClasses = labeledFieldWidthClasses(width, widthScope, Boolean(helper || error));
 
