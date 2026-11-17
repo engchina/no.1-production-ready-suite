@@ -57,6 +57,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
+    reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? false,
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
@@ -265,6 +266,14 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               onValueChange={(value) => update({ entity_expansion_max_chunks: Number(value) })} />
           </FormGrid> : null}
         </div>
+        <SwitchRow
+          id="answering-reference-outline-selection"
+          label={t("settings.answering.referenceOutlineSelection")}
+          description={t("settings.answering.referenceOutlineSelectionHint")}
+          checked={form.reference_outline_selection_enabled}
+          disabled={disabled}
+          onChange={(checked) => update({ reference_outline_selection_enabled: checked })}
+        />
         <SwitchRow
           id="answering-graph-expansion"
           label={t("settings.answering.graphExpansion")}

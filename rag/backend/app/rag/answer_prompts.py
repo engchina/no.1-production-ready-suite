@@ -161,6 +161,12 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "question",
         (("system", "app.rag.history_question:HISTORY_REWRITE_SYSTEM_PROMPT"),),
     ),
+    # 文書全体への参照の参照先の目次から、質問に要る章節を選ぶ(#5263)。
+    PromptStage(
+        "reference_sections",
+        "retrieval",
+        (("system", "app.rag.reference_sections:REFERENCE_SECTION_PROMPT"),),
+    ),
     PromptStage(
         "generation",
         "generation",

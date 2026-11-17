@@ -1036,6 +1036,16 @@ class Settings(
             "既読の cache は消費しない。"
         ),
     )
+    rag_reference_outline_selection_enabled: bool = Field(
+        default=False,
+        description=(
+            "文書名・ファイル名だけで文書全体を指す参照の参照先を、目次から回答のモデルが選んだ章節で"
+            "読む(#5263。全体設定だけで決め、検索・回答プロファイルでは上書きしない)。参照先が複数でも"
+            "モデルの呼び出しは 1 回。目次が無い・選べないときは参照先の文書を全体で読む"
+            "(章節の拡張の起点にしない)。既定は無効で、無効なら参照先の中を質問で検索した"
+            "上位 8 件を読む。"
+        ),
+    )
     rag_entity_index_enabled: bool = Field(
         default=True,
         description=(
