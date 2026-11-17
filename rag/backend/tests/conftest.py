@@ -107,6 +107,8 @@ def oracle_schema_locked(
 
     表の形や台帳を一時的に戻すテストが使う。実 Oracle のテストどうしは 1 つの worker で直列に
     動くが、別の worker が遅れて開始すると、途中の形を見て「作成・更新」を当ててしまう。
+    開始の準備は整理の要求（``RAG_NATIVE_INDEX_EVENTS``）も消すので、その表の行の増減を確かめる
+    テストも使う（#5300）。
     """
     with _oracle_schema_lock(tmp_path_factory):
         yield
