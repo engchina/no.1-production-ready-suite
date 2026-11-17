@@ -3323,7 +3323,6 @@ class AnswerEngine:
     ) -> None:
         """回答のモデルに目次を渡して読む章節を選ばせ、目次にある ID だけを計画に入れる(#5263)。"""
         from app.rag.reference_sections import (
-            CATALOG_LEAD_CHARS,
             FALLBACK_NO_SELECTION,
             FALLBACK_SELECTION_ERROR,
             FALLBACK_UNKNOWN_IDS,
@@ -3341,7 +3340,11 @@ class AnswerEngine:
         omitted: list[int] = []
         for _key, plan, outline in selectable:
             rows, skipped = await compact_section_lines(
-                self._oracle, outline, plan.sections, CATALOG_LEAD_CHARS, max_chars=per_document
+                self._oracle,
+                outline,
+                plan.sections,
+                settings.rag_outline_lead_chars,
+                max_chars=per_document,
             )
             lines.append(rows)
             omitted.append(skipped)
@@ -3465,7 +3468,6 @@ class AnswerEngine:
         ``state.outline_selection``(回答の診断の ``outline_selection``)に残す。
         """
         from app.rag.reference_sections import (
-            CATALOG_LEAD_CHARS,
             DOCUMENT_NO_OUTLINE,
             DOCUMENT_OUTLINE_ERROR,
             OUTLINE_SECTION_PROMPT,
@@ -3564,7 +3566,11 @@ class AnswerEngine:
         full: list[list[str]] = []
         for plan, outline in outlines:
             rows, _skipped = await compact_section_lines(
-                self._oracle, outline, plan.sections, CATALOG_LEAD_CHARS, max_chars=2**31 - 1
+                self._oracle,
+                outline,
+                plan.sections,
+                settings.rag_outline_lead_chars,
+                max_chars=2**31 - 1,
             )
             full.append(rows)
         allotted = allot_catalog_chars(

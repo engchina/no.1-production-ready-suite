@@ -348,3 +348,29 @@ def test_prompts_share_the_catalog_reading_and_use_steps() -> None:
     # 目次の読み方と章節の選び方は文書全体への参照と同じ文(何の目次かだけが違う)。
     shared = REFERENCE_SECTION_PROMPT.split("## Step 2: 読む章節を選ぶ\n", 1)[1]
     assert shared in OUTLINE_SECTION_PROMPT
+
+
+@pytest.mark.parametrize(("configured", "expected"), [(None, 60), (9, 9)], ids=["default", "set"])
+async def test_catalog_lead_chars_follow_the_setting(
+    monkeypatch: pytest.MonkeyPatch, configured: int | None, expected: int
+) -> None:
+    """目次の行に添える本文の書き出しの字数は設定 rag_outline_lead_chars(既定 60。#5345)。
+
+    文書全体への参照の目次の選択と同じ 1 つの設定を読む。
+    """
+    from app.rag import section_catalog
+
+    leads: list[int] = []
+    original = section_catalog.compact_section_lines
+
+    async def recording(*args: Any, **kwargs: Any) -> tuple[list[str], int]:
+        leads.append(args[3])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(section_catalog, "compact_section_lines", recording)
+    settings: dict[str, Any] = {} if configured is None else {"rag_outline_lead_chars": configured}
+    engine, _oracle, _sections, _llm = _setup(monkeypatch, **settings)
+
+    await _search(engine)
+
+    assert leads == [expected]
