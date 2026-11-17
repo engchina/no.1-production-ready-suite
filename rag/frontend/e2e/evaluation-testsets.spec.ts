@@ -94,7 +94,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(page).toHaveURL(/testset=draft-a/);
     await chooseEvaluationProfile(page);
     await expect(page.getByText(/確認済み 1 問を使用します/)).toBeVisible();
-    await chooseSelectFieldOption(page.getByRole("combobox", { name: "回答モデル", exact: true }), "合成モデル");
+    await chooseSelectFieldOption(page.locator("#evaluation-answer-model"), "合成モデル");
     await page.screenshot({ path: info.outputPath("saved-set-run-conditions.png"), fullPage: true });
     await page.getByRole("button", { name: "評価実行", exact: true }).click();
     await expect.poll(() => jobs.runPayloads.length).toBe(1);

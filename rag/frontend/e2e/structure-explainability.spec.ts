@@ -254,11 +254,11 @@ for (const viewport of [
       });
     await expect(page.getByText("分類と有効期間を保存しました。")).toBeVisible();
     await expect(save).toBeDisabled();
-    await expect(large).toHaveAttribute("data-value", "10_業務A");
+    await expect(large).toContainText("10_業務A");
     // 大分類を変えたら、下の段は「指定なし」に戻る（必須ではない）。
     await large.click();
     await page.getByRole("option", { name: "20_業務B" }).click();
-    await expect(middle).toHaveAttribute("data-value", "");
+    await expect(middle).toContainText("指定なし");
     await expect(small).toBeDisabled();
     await expectNoHorizontalOverflow(page);
     await page.getByRole("heading", { name: "文書の分類と有効期間" }).scrollIntoViewIfNeeded();

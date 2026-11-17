@@ -522,7 +522,7 @@ for (const viewport of VIEWPORTS) {
       await form.getByLabel("期待するツール").fill("nl2sql_query");
       await set.click();
       await page.getByRole("option", { name: "月次の評価（1 件）" }).click();
-      await expect(set).toHaveAttribute("aria-invalid", "false");
+      await expect(set).not.toHaveAttribute("aria-invalid", "true");
       await expect(form.getByText("同じ質問のケースが既にあります")).toHaveCount(0);
       await expect(form.getByRole("button", { name: "評価ケースに追加" })).toBeInViewport();
       await expectNoPageHorizontalOverflow(page);
