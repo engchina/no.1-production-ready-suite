@@ -13,17 +13,17 @@ import {
   FormStatus,
   PageBody,
   ProcessingIndicator,
+  RadioOptionGroup,
   SelectField,
   StatusBadge,
   TextField,
   TimedLoadingState,
-  cn,
   toast,
   type SelectFieldOption,
 } from "@production-ready/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cloud, HardDrive, RefreshCw, Save, Settings2, ShieldCheck } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useSettingsDraftGuard, type DraftGuardMessages } from "../guards/useSettingsDraftGuard";
 import {
@@ -289,29 +289,17 @@ export function UploadStorageSettingsPage({
               <CardDescription>{m.destinationDescription}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              <fieldset className="space-y-3">
-                <legend className="text-sm font-medium text-fg">{m.fieldBackend}</legend>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <BackendOption
-                    id="upload-storage-local"
-                    value="local"
-                    checked={form.backend === "local"}
-                    icon={<HardDrive size={20} aria-hidden />}
-                    title={m.backendLocal}
-                    description={m.backendLocalDescription}
-                    onChange={(backend) => updateForm({ backend })}
-                  />
-                  <BackendOption
-                    id="upload-storage-oci"
-                    value="oci"
-                    checked={form.backend === "oci"}
-                    icon={<Cloud size={20} aria-hidden />}
-                    title={m.backendOci}
-                    description={m.backendOciDescription}
-                    onChange={(backend) => updateForm({ backend })}
-                  />
-                </div>
-              </fieldset>
+              <RadioOptionGroup<UploadStorageBackend>
+                id="upload-storage"
+                name="upload-storage-backend"
+                legend={m.fieldBackend}
+                options={[
+                  { value: "local", label: m.backendLocal, description: m.backendLocalDescription, icon: HardDrive },
+                  { value: "oci", label: m.backendOci, description: m.backendOciDescription, icon: Cloud },
+                ]}
+                value={form.backend}
+                onValueChange={(backend) => updateForm({ backend })}
+              />
 
               {form.backend === "local" ? (
                 // パスは全幅（FormGrid の最大 60rem まで。#1891）。
@@ -558,58 +546,6 @@ function UploadStorageCheckContent({
         ))}
       </ol>
     </SettingsTestResultPanel>
-  );
-}
-
-function BackendOption({
-  id,
-  value,
-  checked,
-  icon,
-  title,
-  description,
-  onChange,
-}: {
-  id: string;
-  value: UploadStorageBackend;
-  checked: boolean;
-  icon: ReactNode;
-  title: string;
-  description: string;
-  onChange: (value: UploadStorageBackend) => void;
-}) {
-  return (
-    <label
-      htmlFor={id}
-      data-surface-tint={checked ? "info" : undefined}
-      className={cn(
-        "flex min-h-32 cursor-pointer items-start gap-3 rounded-md border bg-surface p-4 text-left transition-colors",
-        checked
-          ? "border-accent-emphasis bg-info-subtle"
-          : "border-border hover:border-accent-emphasis hover:bg-surface-hover",
-      )}
-    >
-      <input
-        id={id}
-        type="radio"
-        name="upload-storage-backend"
-        value={value}
-        checked={checked}
-        onChange={() => onChange(value)}
-        className="mt-1 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
-      />
-      {/* 名前と説明の 2 行のまとまりの横の印の箱（文字の 1 行目にそろえる規則の例外。#2371）。 */}
-      <span
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-accent-fg"
-        data-icon-align-skip=""
-      >
-        {icon}
-      </span>
-      <span>
-        <span className="block text-sm font-semibold text-fg">{title}</span>
-        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">{description}</span>
-      </span>
-    </label>
   );
 }
 

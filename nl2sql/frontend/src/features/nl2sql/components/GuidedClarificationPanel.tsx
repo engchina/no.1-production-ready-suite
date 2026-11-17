@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CheckCircle2, MessageSquareText } from "lucide-react";
 
-import { Button, StatusBadge } from "@production-ready/ui";
+import { Button, RadioOptionGroup, StatusBadge } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 
@@ -245,41 +245,23 @@ export function GuidedClarificationPanel({
   // 入口の前段: 「ALL」の業務プロファイルのときは、推薦から使う業務プロファイルを選ぶ。
   const profileChooser =
     recommendation && !session ? (
-      <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">
-        <legend className="px-1 text-sm font-semibold text-fg">
-          {t("nl2sql.clarification.profileQuestion")}
-        </legend>
-        <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.clarification.profileReason")}</p>
-        <div className="grid gap-2">
-          {recommendation.candidates.slice(0, 3).map((candidate, index) => (
-            <label
-              key={`${candidate.profile_id}:${candidate.ontology_revision_id}`}
-              data-surface-tint="accent"
-              className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
-            >
-              <input
-                type="radio"
-                name="guided-profile"
-                checked={selectedProfileId === candidate.profile_id}
-                onChange={() => setSelectedProfileId(candidate.profile_id)}
-                className="mt-1 h-4 w-4 accent-accent-emphasis"
-              />
-              <span className="min-w-0">
-                <span className="flex flex-wrap items-center gap-2 font-medium text-fg">
-                  {candidate.profile_name}
-                  {index === 0 ? (
-                    <StatusBadge icon={false} variant="info" label={t("nl2sql.clarification.recommended")} />
-                  ) : null}
-                </span>
-                {candidate.reasons_ja.length ? (
-                  <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
-                    {candidate.reasons_ja.join(" ")}
-                  </span>
-                ) : null}
-              </span>
-            </label>
-          ))}
-        </div>
+      <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">
+        <RadioOptionGroup
+          id="guided-profile"
+          legend={t("nl2sql.clarification.profileQuestion")}
+          helper={t("nl2sql.clarification.profileReason")}
+          options={recommendation.candidates.slice(0, 3).map((candidate, index) => ({
+            value: candidate.profile_id,
+            label: candidate.profile_name,
+            badges:
+              index === 0 ? (
+                <StatusBadge icon={false} variant="info" label={t("nl2sql.clarification.recommended")} />
+              ) : undefined,
+            description: candidate.reasons_ja.length ? candidate.reasons_ja.join(" ") : undefined,
+          }))}
+          value={selectedProfileId || null}
+          onValueChange={setSelectedProfileId}
+        />
         <div className="flex flex-wrap justify-end gap-2">
           <Button
             type="button"
@@ -303,7 +285,7 @@ export function GuidedClarificationPanel({
             {t("chat.requirement.skip")}
           </Button>
         </div>
-      </fieldset>
+      </div>
     ) : null;
 
   return (

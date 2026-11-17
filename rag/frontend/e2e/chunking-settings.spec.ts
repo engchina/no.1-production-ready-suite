@@ -92,7 +92,7 @@ for (const viewport of [
       /ページ単位/,
       "ページ内の再分割上限(文字)"
     );
-    await expectStrategyParams(page, /^固定長 /, ["chunk サイズ(文字)", "overlap(文字)"]);
+    await expectStrategyParams(page, /^固定長$/, ["chunk サイズ(文字)", "overlap(文字)"]);
 
     await page.getByRole("radio", { name: /^構造認識/ }).click();
     await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveValue("800");

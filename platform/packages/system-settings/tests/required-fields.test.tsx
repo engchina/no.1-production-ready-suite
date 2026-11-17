@@ -197,7 +197,7 @@ describe("UserManagementPage の必須の欄", () => {
       "必須",
     );
     // ロールは radiogroup の aria-required で伝えるので、legend のタグは読み上げない。
-    const legendBadge = host.querySelector("#security-users-role-legend span");
+    const legendBadge = host.querySelector("#security-users-role legend span");
     expect(legendBadge?.textContent).toBe("必須");
     expect(legendBadge?.getAttribute("aria-hidden")).toBe("true");
     expect(host.querySelector('[role="radiogroup"]')?.getAttribute("aria-required")).toBe("true");

@@ -4025,7 +4025,7 @@ const labels = clarificationLabels({ stage: "SQL の生成", action: "SQL を生
 
 ## RadioOptionGroup — **新規**（#5340）
 
-名前と 1 行の説明を持つ選択肢から 1 つを選ぶラジオの群。仕様と理由は README §4「`RadioOptionGroup`」。
+名前と説明を持つ選択肢から 1 つを選ぶラジオの群。仕様と理由は README §4「`RadioOptionGroup`」。
 
 ```tsx
 import { RadioOptionGroup } from "@production-ready/ui";
@@ -4043,7 +4043,9 @@ import { RadioOptionGroup } from "@production-ready/ui";
 />
 ```
 
-- props: `legend`・`helper`・`error`・`required`（`Fieldset` と同じ）、`options`（`value`・`label`・`description`・`disabled`）、`value`（未選択は `null`）、`onValueChange`、`disabled`（群の全体）、`name`（省略時は `id`）、`testId`（選択肢の並びの要素）。
+- props: `legend`・`helper`・`error`・`required`（`Fieldset` と同じ）、`options`、`value`（未選択は `null`）、`onValueChange`、`disabled`（群の全体）、`id`（各ラジオの id は `${id}-${value}`）、`name`（省略時は `id`）、`testId`（選択肢の並びの要素）。
+- `options` の項目: `value`・`label`（読み上げの名前はこれだけ）・`description`（複数の行・選べない理由を含めてよい）・`disabled`（この選択肢だけ）・`icon`（名前の左の lucide）・`badges`（名前の横。説明の前に `aria-describedby` で結ぶ）・`trailing`（行の右の独立した操作。label の外で、押しても選ばない）・`inputData`（input の `data-*`）（#5343）。
+- 読み込み中は `<RadioOptionGroupSkeleton legend helper count />`（`aria-busy` と名前は置く側の要素に付ける）。
 - 製品でラジオの行・選んだ行の枠と地・44px を手書きしない。
 
 ## RunHistoryTable / RunHistoryToolbar / RunStatusBadge / RunSummary / RunTimeline / RunDetailLayout — **新規**（#1955）

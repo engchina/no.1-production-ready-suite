@@ -43,7 +43,7 @@ test("ユーザーは表示名だけを出して表示名で並べ、ロール�
   assert.doesNotMatch(users, /showUser", \{ name: user\.login_user_id \}/u);
 
   // ロールはロール名（表示名。空ならコード）だけを出し、ID・コードを出さない（#1682）。
-  assert.match(users, /\{roleDisplayName\(role\)\}/u);
+  assert.match(users, /label: roleDisplayName\(role\)/u);
   assert.doesNotMatch(users, /<SecurityIdentityLines id=\{role\.role_code\}/u);
   assert.match(roles, /<RoleNameRowTitleButton\s+securityRole=\{role\}/u);
   assert.match(roles, /compareText\(roleDisplayName\(left\), roleDisplayName\(right\), sort\.direction\)/u);

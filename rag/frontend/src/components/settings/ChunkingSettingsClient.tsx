@@ -11,13 +11,13 @@ import {
   FormActionBar,
   FormGrid,
   FormStatus,
+  RadioOptionGroup,
   TextField,
   TimedLoadingState,
   FormSkeleton,
 } from "@production-ready/ui";
 import { useState } from "react";
 import {
-  CheckCircle2,
   Files,
   Heading,
   Layers,
@@ -59,7 +59,6 @@ import { focusFirstInvalidField, numberRangeError } from "@/lib/required-fields"
 import { t, type I18nKey } from "@/lib/i18n";
 import { useChunkingSettings, useUpdateChunkingSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 
 // 交差参照の解析の語は、入力中の改行・空行を残すため 1 行 1 語の文字列で持つ（保存の時に一覧にする。#2157）。
 // backend が語を返さないとき（null）は欄を出さず、保存でも送らない（空の一覧で上書きしない）。
@@ -262,67 +261,28 @@ function OverviewCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-fg">
-            {t("settings.chunking.strategy")}
-          </div>
-          <div
-            role="radiogroup"
-            aria-label={t("settings.chunking.strategy")}
-            className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"
-          >
-            {strategies.map((strategy) => {
-              const selected = form.strategy === strategy.name;
-              return (
-                <div key={strategy.name} className="relative min-w-0">
-                  <input
-                    id={`settings-chunking-strategy-${strategy.name}`}
-                    className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                    type="radio"
-                    name="settings-chunking-strategy"
-                    value={strategy.name}
-                    checked={selected}
-                    disabled={saving}
-                    onChange={() => onStrategyChange(strategy.name)}
-                  />
-                  <label
-                    data-surface-tint={selected ? "accent" : undefined}
-                    htmlFor={`settings-chunking-strategy-${strategy.name}`}
-                    className={cn(
-                      "block h-full cursor-pointer min-h-[6.57rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-                      selected
-                        ? "border-accent-emphasis bg-accent-subtle text-fg"
-                        : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
-                    )}
-                  >
-                    <span className="flex items-start gap-3">
-                      <ChunkStrategyIcon strategy={strategy.name} selected={selected} />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-semibold">
-                            {strategyLabel(strategy.name)}
-                          </span>
-                          {selected ? (
-                            <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
-                          ) : null}
-                        </span>
-                        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                          {strategyDescription(strategy.name)}
-                        </span>
-                        {strategy.recommended_for.length ? (
-                          <span className="mt-2 block text-xs text-fg-muted">
-                            {t("settings.chunking.recommendedFor")}:{" "}
-                            {strategy.recommended_for.join(", ")}
-                          </span>
-                        ) : null}
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <RadioOptionGroup<ChunkingStrategyName>
+          id="settings-chunking-strategy"
+          legend={t("settings.chunking.strategy")}
+          options={strategies.map((strategy) => ({
+            value: strategy.name,
+            label: strategyLabel(strategy.name),
+            icon: STRATEGY_ICONS[strategy.name],
+            description: (
+              <>
+                <span className="block">{strategyDescription(strategy.name)}</span>
+                {strategy.recommended_for.length ? (
+                  <span className="mt-1 block">
+                    {t("settings.chunking.recommendedFor")}: {strategy.recommended_for.join(", ")}
+                  </span>
+                ) : null}
+              </>
+            ),
+          }))}
+          value={form.strategy}
+          onValueChange={onStrategyChange}
+          disabled={saving}
+        />
         <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <RuntimeFact
             label={t("settings.chunking.strategy")}
@@ -565,11 +525,6 @@ const STRATEGY_ICONS: Record<ChunkingStrategyName, LucideIcon> = {
   fixed_size: Rows3,
   fixed_delimiter: SeparatorHorizontal,
 };
-
-function ChunkStrategyIcon({ strategy, selected }: { strategy: ChunkingStrategyName; selected: boolean }) {
-  const Icon = STRATEGY_ICONS[strategy];
-  return <Icon size={20} aria-hidden className={cn("mt-0.5 shrink-0", selected ? "text-accent-fg" : "text-fg-muted")} />;
-}
 
 function orderedStrategies(strategies: ChunkingStrategyStatusData[]): ChunkingStrategyStatusData[] {
   const byName = new Map(strategies.map((strategy) => [strategy.name, strategy]));

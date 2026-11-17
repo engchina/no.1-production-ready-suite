@@ -18,10 +18,10 @@ import {
   FormStatus,
   ListToolbar,
   OneTimeSecret,
+  RadioOptionGroup,
+  RadioOptionGroupSkeleton,
   SearchableMultiSelect,
   SelectField,
-  SKELETON_CLASS,
-  cn,
   TableSkeleton,
   TextField,
   TimedLoadingState,
@@ -49,8 +49,9 @@ import {
 
 const EXPIRY_OPTIONS = ["30", "90", "365", "none"] as const;
 type ExpiryOption = (typeof EXPIRY_OPTIONS)[number];
-type AgentScopeMode = "all" | "selected";
-// 選択肢のチップ（製品・業務 Agent の範囲。checkbox / radio をラベルで包む）。
+const AGENT_SCOPE_MODES = ["all", "selected"] as const;
+type AgentScopeMode = (typeof AGENT_SCOPE_MODES)[number];
+// 製品の選択肢のチップ（checkbox をラベルで包む）。
 const CHOICE_CLASS =
   "flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle";
 
@@ -218,47 +219,33 @@ export function MyApiKeysPanel({
           </Fieldset>
           {agentSelected && agentScopeLoading ? (
             // 「使える業務 Agent」の欄の形（#4649）。見出しと補足は決まった文なのでそのまま出し、2 つの選択肢を
-            // 同じ寸法の Skeleton にする（選択肢の中身を見えなくして置き、幅と折り返しを読み込み後と同じにする）。
+            // 読み込み後の RadioOptionGroup と同じ並びと高さの Skeleton にする（#5343）。
             <div
               aria-busy="true"
               aria-label={t("apiKeys.create.agentScope.loading")}
               data-skeleton="field"
               data-testid="api-key-agent-scope-loading"
             >
-              <div aria-hidden="true">
-                <Fieldset legend={t("apiKeys.create.agentScope")} helper={t("apiKeys.create.agentScope.hint")}>
-                  <div className="flex flex-wrap gap-2">
-                    {(["all", "selected"] as const).map((mode) => (
-                      <div key={mode} className={cn(CHOICE_CLASS, SKELETON_CLASS, "cursor-default border-transparent")}>
-                        <input type="radio" disabled tabIndex={-1} className="invisible" />
-                        <span className="invisible">{t(`apiKeys.create.agentScope.${mode}`)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Fieldset>
-              </div>
+              <RadioOptionGroupSkeleton
+                legend={t("apiKeys.create.agentScope")}
+                helper={t("apiKeys.create.agentScope.hint")}
+                count={2}
+              />
             </div>
           ) : agentSelected && agentScopeOptions !== undefined ? (
             <div className="grid gap-3">
-              <Fieldset role="radiogroup" legend={t("apiKeys.create.agentScope")} helper={t("apiKeys.create.agentScope.hint")}>
-                <div className="flex flex-wrap gap-2">
-                  {(["all", "selected"] as const).map((mode) => (
-                    <label key={mode} data-surface-tint="accent" className={CHOICE_CLASS}>
-                      {/* 2 つから 1 つを選ぶ。選択肢が 2 つだけなので、ネイティブの radio をラベルで包む。 */}
-                      <input
-                        type="radio"
-                        name="api-key-agent-scope"
-                        value={mode}
-                        checked={agentScope === mode}
-                        onChange={() => setAgentScope(mode)}
-                        className="accent-accent-emphasis"
-                        data-testid={`api-key-agent-scope-${mode}`}
-                      />
-                      {t(`apiKeys.create.agentScope.${mode}`)}
-                    </label>
-                  ))}
-                </div>
-              </Fieldset>
+              <RadioOptionGroup<AgentScopeMode>
+                id="api-key-agent-scope"
+                legend={t("apiKeys.create.agentScope")}
+                helper={t("apiKeys.create.agentScope.hint")}
+                options={AGENT_SCOPE_MODES.map((mode) => ({
+                  value: mode,
+                  label: t(`apiKeys.create.agentScope.${mode}`),
+                  inputData: { "data-testid": `api-key-agent-scope-${mode}` },
+                }))}
+                value={agentScope}
+                onValueChange={setAgentScope}
+              />
               {agentScope === "selected" ? (
                 agentScopeOptions.length === 0 ? (
                   <Fieldset legend={t("apiKeys.create.agentScope.selected")} required error={agentScopeError}>
