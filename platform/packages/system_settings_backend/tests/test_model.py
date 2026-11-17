@@ -121,7 +121,7 @@ def test_patch_saves_key_only_in_env(tmp_path: Path) -> None:
     assert data["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     assert data["secret_source"] == "environment"
     document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
-    assert document["version"] == 6
+    assert document["version"] == 7
     assert "api_key" not in document["enterprise_ai"]
     assert "sk-new" not in json.dumps(document)
     # 製品固有の設定は model-settings.json に書かない（#1701）。
@@ -233,6 +233,7 @@ def test_get_without_models_returns_one_blank_row(tmp_path: Path) -> None:
             "reasoning_effort": "low",
             "max_input_tokens": 128000,
             "max_output_tokens": 32768,
+            "image_input_tokens": 16384,
         }
     ]
 

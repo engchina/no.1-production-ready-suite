@@ -1928,7 +1928,9 @@ def synthesize_grounded_answer(
                     question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
                 ).model_json_schema()
 
+            generation_images = [i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else []
             # 上限内なら 1 回の生成、上限を超えれば原文を外さずに分割読取（組ごとの読取＋最終生成の 1 回。#5098）。
+            # 添付する画像の分も測る（#5316）。
             spans, prompt, input_diagnostic = select_evidence(
                 spans,
                 generation_settings,
@@ -1946,6 +1948,7 @@ def synthesize_grounded_answer(
                 source_scores=_source_question_scores(context),
                 protected_sources=_expansion_sources(context),
                 failed_batches=failed_batches,
+                image_count=len(generation_images),
             )
             selecting_evidence = False
             current = grounded.run_round(
@@ -1959,7 +1962,7 @@ def synthesize_grounded_answer(
                 guide_steps=runtime_knowledge.guide_steps if runtime_knowledge else (),
                 guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
                 assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
-                image_paths=[i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else [],
+                image_paths=generation_images,
                 invalid_output=_invalid_structured_output,
                 confirmed_premises=settings.confirmed_premises,
                 confirmed_premise_sources=settings.confirmed_premise_sources,

@@ -25,6 +25,10 @@
   未完了（`incomplete` / `max_output_tokens`）の送り直しは `enterprise_ai_retry_output_token_budget`
   でモデルの上限まで広げる。共通の LLM / VLM の出力の上限（#1719 より前の
   `llm_max_output_tokens` / `vlm_max_output_tokens`）は持たない
+- 登録モデルごとに画像 1 枚の入力 token `image_input_tokens` を持つ（#5316。既定 16384）。
+  画像を添付する呼び出しの入力の上限の判定は、画像を base64 の文字ではなく、枚数 × この値で数える
+  （値の解釈は `enterprise_ai_image_input_tokens`、画像の部品を除く見積もりは
+  `pr_backend_core.token_estimate.without_image_inputs`）
 - model-settings.json はモデルの設定だけを持ち、製品固有の設定は置かない（他製品の保存で欠けると
   その製品が読めなくなるため。RAG の文書解析の設定は RAG の parser-settings.json。#1701）
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
@@ -61,6 +65,7 @@ from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
 from pr_backend_core.schemas import ApiResponse
 
 # 入力 token の見積もりは backend_core の 1 つ（検索の結果の本文の予算と共有する。#3321）。
+from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS
 from pr_backend_core.token_estimate import estimate_input_tokens as estimate_input_tokens
 from pr_enterprise_ai.errors import (
     classify_enterprise_ai_http_failure,
@@ -111,7 +116,9 @@ ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
 # 6: 登録モデルの `max_output_tokens`（#1719）。共通の `llm_max_output_tokens` /
 # `vlm_max_output_tokens` は持たず、5 の JSON のそれらは読み捨てる（項目の無いモデル =
 # 既定の 32768。入力の上限がそれより小さいモデルは入力の上限）。
-MODEL_SETTINGS_DOCUMENT_VERSION = 6
+# 7: 登録モデルの `image_input_tokens`（#5316）。6 の JSON はそのまま読める
+# （項目が無い = 既定の 16384）。
+MODEL_SETTINGS_DOCUMENT_VERSION = 7
 # この版より前の JSON だけが API key（`enterprise_ai.api_key`）を持てた
 # （v3 から secret は `.env`）。
 MODEL_SETTINGS_SECRET_FREE_DOCUMENT_VERSION = 3
@@ -165,6 +172,14 @@ ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX: Final = 2_000_000
 DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS: Final = 32_768
 ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN: Final = 1
 ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX: Final = 2_000_000
+# 画像 1 枚の入力 token（#5316）。登録モデルごとに持ち、画像を添付する呼び出しの入力の上限の判定で、
+# 画像を枚数 × この値で数える（画像の data URL の base64 は本文の見積もりに入れない）。
+# 画像の token はモデルごとに計算が違うので、モデルの公式の文書にある 1 枚の最大を入れる。
+# 値が無いモデルは既定（実体と根拠は `pr_backend_core.token_estimate.DEFAULT_IMAGE_INPUT_TOKENS`）。
+# 範囲は 1〜入力の上限の最大。
+DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS: Final = DEFAULT_IMAGE_INPUT_TOKENS
+ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN: Final = 1
+ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX: Final = ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
 ModelTestDetails = dict[str, str | int | float | bool | None]
@@ -200,6 +215,13 @@ class EnterpriseAiConfiguredModel(BaseModel):
         default=DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
         ge=ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN,
         le=ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX,
+    )
+    # 画像 1 枚の入力 token（#5316）。未指定（#5316 より前の設定も）は既定の 16384。範囲外は
+    # 読み込み・保存とも検証エラー。
+    image_input_tokens: int = Field(
+        default=DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
+        ge=ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN,
+        le=ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX,
     )
 
     @model_validator(mode="before")
@@ -263,6 +285,14 @@ class EnterpriseAiConfiguredModel(BaseModel):
         """真偽値は検証エラーにする（bool は int の部分型のため）。"""
         if isinstance(value, bool):
             raise ValueError("出力の上限は整数で入力してください。")
+        return value
+
+    @field_validator("image_input_tokens", mode="before")
+    @classmethod
+    def reject_bool_image_input_tokens(cls, value: object) -> object:
+        """真偽値は検証エラーにする（bool は int の部分型のため）。"""
+        if isinstance(value, bool):
+            raise ValueError("画像 1 枚の入力（tokens）は整数で入力してください。")
         return value
 
     @field_validator("connection_id", mode="before")
@@ -832,6 +862,38 @@ def enterprise_ai_max_input_tokens(settings: Any, model_id: str) -> int:
             if model.model_id == normalized
         ),
         DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
+    )
+
+
+def image_input_tokens_to_use(value: object) -> int:
+    """設定の値を、画像 1 枚の入力 token にする（#5316。解釈はここだけ）。
+
+    整数で範囲（1〜2000000）の中ならその値、値なし・範囲外・整数でない値は既定の 16384。
+    """
+    if isinstance(value, bool) or value is None:
+        return DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS
+    if not ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MIN <= number <= ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX:
+        return DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS
+    return number
+
+
+def enterprise_ai_image_input_tokens(settings: Any, model_id: str) -> int:
+    """モデルに設定した画像 1 枚の入力 token（#5316）。
+
+    登録モデルにない ID（env だけで設定した場合など）は、登録モデルの既定と同じ 16384。
+    """
+    normalized = model_id.strip()
+    return next(
+        (
+            image_input_tokens_to_use(model.image_input_tokens)
+            for model in enterprise_ai_model_catalog(settings)
+            if model.model_id == normalized
+        ),
+        DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS,
     )
 
 
@@ -1722,6 +1784,7 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
                         "reasoning_effort",
                         "max_input_tokens",
                         "max_output_tokens",
+                        "image_input_tokens",
                     }
                 )
                 for model in enterprise.models

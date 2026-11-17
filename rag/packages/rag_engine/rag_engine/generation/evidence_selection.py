@@ -28,6 +28,7 @@ def select_evidence(
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
     failed_batches: list[dict[str, Any]] | None = None,
+    image_count: int = 0,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """固定入力も含めて測り、重複を除いた全原文が入れば関連度の順で 1 回の生成の入力にする。
 
@@ -36,11 +37,14 @@ def select_evidence(
 
     文書の本文の先頭の chunk（``FIRST_CHUNK`` の印。#5240）は外さない。1 回の生成でも分割読取の各組・最終生成でも、その文書の
     根拠と一緒に入れ、根拠がすでにその原文を含めば足さない（``with_first_chunks``）。
+
+    ``image_count`` は回答の生成に添付する画像の枚数（#5316）。1 回の生成と分割読取の最終生成の測定に画像の分を含める
+    （分割読取の各組は画像を送らないので含めない）。
     """
 
     def measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         prompt = render(values)
-        measured = model_input_measurement(settings, system, prompt, schema_for(values), provider_id=provider_id)
+        measured = model_input_measurement(settings, system, prompt, schema_for(values), provider_id=provider_id, image_count=image_count)
         chars = len(evidence_text(values))
         return prompt, {**measured, "rendered_chars": chars, "fits": measured["fits"] and chars <= settings.evidence_budget_chars}
 
@@ -92,5 +96,6 @@ def select_evidence(
         failed_batches=failed_batches,
         source_scores=source_scores,
         protected_sources=protected_sources,
+        image_count=image_count,
     )
     return selected, prompt, {**measurement, **counts, "selection": "batched_reading"}
