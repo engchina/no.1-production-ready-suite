@@ -1,32 +1,36 @@
-"""融合順位の下位にある必要な原文が、rerank の判断を受けて回答まで届くことを確かめる（#4114）。
+"""融合順位の下位にある必要な原文が、rerank の判断を受けて回答まで届くことを確かめる。
 
-合成の資料だけを使う。質問と異なる書き方で開始日を持つ原文を、融合の 396 位に置く。同じ文書の別の
-chunk は候補の上位にある（「同じ文書が候補にある」と「必要な原文が候補にある」は別）。
+#4114・#5443。
+
+合成の資料だけを使う。質問と異なる書き方で開始日を持つ原文を、取得件数の上限（100）の
+下位に置く。
+同じ文書の別の chunk は候補の上位にある（「同じ文書が候補にある」と「必要な原文が候補にある」は別）。
+取得した候補は融合の順位で切らずにすべて rerank へ進む（#5443）。
 """
 
 import json
 import re
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from rag_engine.generation.answer_records import _retrieval_candidate_limit
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft
 
 from app.config import Settings
-from app.rag.answer_engine import AnswerEngine, _SearchState, build_engine_settings
+from app.rag.answer_engine import AnswerEngine, _SearchState
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 
 QUESTION = "合成制度の義務者が変わったのはいつから？"
 NEEDED_TEXT = "この要綱は、合成契約の成立が2031年4月1日以降であるものに適用します。"
 NEEDED_DATE = "2031年4月1日"
-NEEDED_ID = "doc-needed:396"
-NEEDED_RANK = 396
-# 同じ文書の別の chunk の融合順位。上位と、多様化の文書ごとの枠（5 件）を先に使う位置に置く。
-SIBLING_RANKS = (5, 160, 170, 180, 190, 200)
-TOTAL = 450
+NEEDED_ID = "doc-needed:96"
+NEEDED_RANK = 96
+# 同じ文書の別の chunk の融合順位。
+SIBLING_RANKS = (5, 60, 70, 80, 90)
+TOTAL = 150
+# 検索経路ごとの取得件数（RAG_RETRIEVAL_QUERY_LIMIT の上限）。
+QUERY_LIMIT = 100
 
 
 def _chunk(chunk_id: str, document_id: str, text: str, seq: int) -> RetrievedChunk:
@@ -126,10 +130,7 @@ def _settings(**overrides: Any) -> Settings:
             "oci_compartment_id": "ocid1.compartment.oc1..example",
             "rag_query_strategy": "simple_retrieval",
             "rag_answer_flow": "standard_rag",
-            # 融合順位の深い候補を rerank まで届ける広い枠を明示する（既定の枠では落ちる）。
-            "rag_retrieval_query_limit": 600,
-            "rag_retrieval_candidate_limit": 1000,
-            "rag_rerank_candidate_limit": 0,
+            "rag_retrieval_query_limit": QUERY_LIMIT,
             **overrides,
         }
     )
@@ -176,9 +177,7 @@ def _llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) 
     )
 
 
-async def _fusion_stage(
-    settings: Settings, candidate_limit: int, rows: list[RetrievedChunk]
-) -> Any:
+async def _fusion_stage(settings: Settings, rows: list[RetrievedChunk]) -> Any:
     state = _SearchState()
     await AnswerEngine(
         settings,
@@ -188,77 +187,94 @@ async def _fusion_stage(
         SearchRequest(query=QUESTION),
         state,
         retrieval_queries=[QUESTION],
-        candidate_limit=candidate_limit,
         expand_references=False,
         defer_context=True,
     )
     return next(stage for stage in state.retrieval_stages if stage["stage"] == "candidate_fusion")
 
 
-async def test_needed_source_below_old_budget_is_dropped_while_its_document_stays() -> None:
-    """従来の上限では、同じ文書の候補は残るのに必要な原文が融合順位で落ちる（脱落の再現）。"""
-    stage = await _fusion_stage(_settings(), 150, _ranked_chunks())
+async def test_all_fetched_candidates_reach_rerank_without_a_fusion_cut() -> None:
+    """取得した候補は融合の順位で切らない。取得の数は検索経路ごとの取得件数だけで決まる（#5443）。"""
+    stage = await _fusion_stage(_settings(), _ranked_chunks())
 
-    assert stage["fused_ids"][NEEDED_RANK - 1] == NEEDED_ID
-    assert NEEDED_ID not in stage["selected_ids"]
-    assert {"id": NEEDED_ID, "reason": "fusion_candidate_budget"} in stage["excluded"]
-    # 診断は chunk の単位で残り、同じ文書が候補にあることと区別できる。
-    assert any(item.startswith("doc-needed:") for item in stage["selected_ids"])
-
-
-async def test_wide_budget_gives_the_needed_source_to_rerank(tmp_path: Path) -> None:
-    settings = _settings()
-    limit = _retrieval_candidate_limit(50, build_engine_settings(settings, output_dir=tmp_path))
-    stage = await _fusion_stage(settings, limit, _ranked_chunks())
-
-    assert limit == settings.rag_retrieval_candidate_limit == 1000
+    assert len(stage["selected_ids"]) == QUERY_LIMIT
     assert NEEDED_ID in stage["selected_ids"]
-    assert stage["excluded"] == []
-
-
-async def test_candidate_budget_stays_an_upper_limit() -> None:
-    """無制限にしない: 上限を超えた候補は理由を残して外す。"""
-    stage = await _fusion_stage(_settings(rag_candidate_diversity_depth=0), 200, _ranked_chunks())
-
-    assert stage["base_limit"] == 200
-    assert len(stage["selected_ids"]) == 200
-    assert len(stage["excluded"]) == TOTAL - 200
-    assert {item["reason"] for item in stage["excluded"]} == {"fusion_candidate_budget"}
+    assert "excluded" not in stage
+    assert any(item.startswith("doc-needed:") for item in stage["selected_ids"])
 
 
 async def test_answer_uses_low_fusion_rank_source_chosen_by_rerank(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """融合順位が低くても rerank の点数が高い原文は、回答の根拠と引用に届く（修正前後の比較）。"""
+    """融合順位が低くても rerank の点数が高い原文は、回答の根拠と引用に届く。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _llm)
-    before_genai = _ScoredGenAi(needed_score=0.9)
-    before = await AnswerEngine(
-        _settings(rag_retrieval_candidate_limit=150),
-        oracle=cast(Any, _RankedOracle(_ranked_chunks())),
-        genai=cast(Any, before_genai),
-    ).run(SearchRequest(query=QUESTION, generate_answer=True))
-    after_genai = _ScoredGenAi(needed_score=0.9)
-    after = await AnswerEngine(
+    genai = _ScoredGenAi(needed_score=0.9)
+    outcome = await AnswerEngine(
         _settings(),
         oracle=cast(Any, _RankedOracle(_ranked_chunks())),
-        genai=cast(Any, after_genai),
+        genai=cast(Any, genai),
     ).run(SearchRequest(query=QUESTION, generate_answer=True))
 
-    assert NEEDED_ID not in {citation.chunk_id for citation in before.citations}
-    assert NEEDED_DATE not in (before.answer or "")
-    assert NEEDED_ID in {citation.chunk_id for citation in after.citations}
-    assert NEEDED_DATE in (after.answer or "")
-    # 根拠の再現と引き換えの費用は rerank の入力の件数。呼び出しの回数は変わらない。
-    assert max(before_genai.document_counts) < max(after_genai.document_counts) <= TOTAL
-    assert len(before_genai.document_counts) == len(after_genai.document_counts)
+    assert NEEDED_ID in {citation.chunk_id for citation in outcome.citations}
+    assert NEEDED_DATE in (outcome.answer or "")
+    assert max(genai.document_counts) <= QUERY_LIMIT
 
 
-async def test_source_below_minimum_score_is_reported_as_insufficient(
+async def test_threshold_is_lowered_once_when_no_candidate_reaches_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """合格点より下の原文は渡さない（合格点は下げない。#5165）。日付を推測せず、資料不足を明示する。"""
+    """資料の候補が 1 件も下限 0.3 に届かないとき、下限を 0.5 倍（0.15）にして 1 回だけ判断し直す。
+
+    #5443。
+    """
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _llm)
+    outcome = await AnswerEngine(
+        _settings(),
+        oracle=cast(Any, _RankedOracle(_ranked_chunks())),
+        genai=cast(Any, _ScoredGenAi(needed_score=0.2)),
+    ).run(SearchRequest(query=QUESTION, generate_answer=True))
+
+    assert NEEDED_ID in {citation.chunk_id for citation in outcome.citations}
+    stages = outcome.diagnostics["retrieval_stages"]
+    threshold = next(stage for stage in stages if stage["stage"] == "rerank_threshold")
+    assert threshold["relaxed"] is True
+    assert (threshold["configured_minimum"], threshold["minimum"]) == (0.3, 0.15)
+    decision = next(item for item in threshold["decisions"] if item["candidate_id"] == NEEDED_ID)
+    assert decision["status"] == "kept"
+    # 0.1 の候補は下げた下限にも届かない。
+    assert {item["status"] for item in threshold["decisions"]} == {"kept", "excluded"}
+
+
+async def test_threshold_is_not_lowered_when_the_ratio_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _llm)
+    outcome = await AnswerEngine(
+        _settings(rag_rerank_min_relevance_fallback_ratio=0.0),
+        oracle=cast(Any, _RankedOracle(_ranked_chunks())),
+        genai=cast(Any, _ScoredGenAi(needed_score=0.2)),
+    ).run(SearchRequest(query=QUESTION, generate_answer=True))
+
+    assert outcome.diagnostics["outcome"] == "insufficient_evidence"
+    threshold = next(
+        stage
+        for stage in outcome.diagnostics["retrieval_stages"]
+        if stage["stage"] == "rerank_threshold"
+    )
+    assert threshold["relaxed"] is False
+    assert threshold["minimum"] == 0.3
+
+
+async def test_source_below_the_lowered_threshold_is_reported_as_insufficient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """下げた下限（0.15）にも届かない原文は渡さない。日付を推測せず、資料不足を明示する。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _llm)
@@ -273,11 +289,8 @@ async def test_source_below_minimum_score_is_reported_as_insufficient(
     assert NEEDED_ID not in {citation.chunk_id for citation in outcome.citations}
     stages = outcome.diagnostics["retrieval_stages"]
     threshold = next(stage for stage in stages if stage["stage"] == "rerank_threshold")
-    # 候補に入って最低点で外れたことが、融合の予算で落ちたことと区別して残る。
     decision = next(item for item in threshold["decisions"] if item["candidate_id"] == NEEDED_ID)
     assert decision["status"] == "excluded"
-    # 全部が合格点未満でも合格点を下げてやり直さない（#5165）。
-    assert "relaxed_from" not in threshold
-    assert threshold["minimum"] == 0.3
+    assert threshold["minimum"] == 0.15
     fusion = next(stage for stage in stages if stage["stage"] == "candidate_fusion")
     assert NEEDED_ID in fusion["selected_ids"]

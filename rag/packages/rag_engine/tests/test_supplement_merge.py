@@ -25,7 +25,7 @@ from rag_engine.retrieval.guide_steps import GuidePlan
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizationResult
 
-# chunk ごとに違う語の本文（MMR が似た本文を後ろへ回さないように）。
+# chunk ごとに違う語の本文。
 _WORDS = ("赤", "青", "黄", "緑", "白", "黒", "茶", "紫", "灰", "桃")
 
 
@@ -227,7 +227,7 @@ def test_guide_step_supplements_use_the_same_cut_and_merge(monkeypatch: pytest.M
     result = _run(monkeypatch, harness, guide=guide, request=None, guide_step_chunks_per_step=2)
 
     step_searches = [kwargs for query, kwargs in harness.searches if "工程F" in query]
-    assert step_searches and {kwargs["candidate_limit"] for kwargs in step_searches} == {a._retrieval_candidate_limit(2, None)}
+    assert step_searches and all("candidate_limit" not in kwargs for kwargs in step_searches)
     # 手順の検索も主の検索の根拠にある A2 を切りの前に除き（#5175）、上位 2 件（F1・F2）で切る。F3 は F2 の前後の文脈。
     assert _evidence(result) == ["A1", "A2", "A3", "C1", "C2", "C3", "F1", "F2", "F3"]
     assert _keeps_main_evidence(_evidence(result))

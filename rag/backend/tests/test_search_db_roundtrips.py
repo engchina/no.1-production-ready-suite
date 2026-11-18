@@ -19,7 +19,6 @@ from rag_engine.generation import step_details
 from rag_engine.generation.answer_records import _stored_chunk_answer_record
 from rag_engine.resources.tracing import bind_trace_observer
 from rag_engine.retrieval.search_stages import (
-    CANDIDATE_DIVERSITY_STAGE,
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
     ENTITY_EXPANSION_STAGE,
@@ -1024,7 +1023,6 @@ async def test_injected_search_reports_db_search_stages_and_channels(
     assert sorted(started[:2]) == sorted([VECTOR_SEARCH_STAGE, TEXT_SEARCH_STAGE])
     assert started[2:] == [
         "検索結果の統合（RRF）",
-        CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
     ]
     assert sorted(entry[2] for entry in observed if entry[0] == "end") == sorted(started)
@@ -1130,7 +1128,6 @@ async def test_injected_search_reports_stages_after_db_search(
 
     expected = [
         "検索結果の統合（RRF）",
-        CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
         IMAGE_EVIDENCE_STAGE,
         REFERENCE_EXPANSION_STAGE,
@@ -1179,7 +1176,6 @@ async def test_search_stages_are_skipped_when_there_is_nothing_to_do() -> None:
     # 候補の chunk は chunk_set を持たず(文書の背景を読まない)、足した根拠も無い。
     assert first == [
         "検索結果の統合（RRF）",
-        CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
     ]
     assert observed == first

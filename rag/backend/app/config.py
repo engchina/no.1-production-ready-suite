@@ -1425,6 +1425,16 @@ class Settings(
     )
     rag_min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
+    rag_rerank_min_relevance_fallback_ratio: float = Field(
+        default=0.5,
+        ge=0.0,
+        lt=1.0,
+        allow_inf_nan=False,
+        description=(
+            "rerank の後、資料の候補が 1 件も関連度の下限に届かないとき、下限に掛けて 1 回だけ下げる比"
+            "(既定 0.5 = 0.30 → 0.15。0 は下げない。#5443)。"
+        ),
+    )
     rag_hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
         "oracle_hybrid_index"
     )
@@ -1493,28 +1503,12 @@ class Settings(
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
     rag_retrieval_query_limit: int = Field(
-        default=60,
-        ge=0,
-        le=2000,
-        description="検索文ごとに各検索経路から取得する上限。起点数・多様化の有無とは独立。",
-    )
-    rag_retrieval_candidate_limit: int = Field(
-        default=140,
-        ge=1,
-        le=2000,
+        default=50,
+        ge=5,
+        le=100,
         description=(
-            "融合順位から rerank へ進める基本候補の上限。回答起点数 top_k とは独立。"
-            "選別は rerank の点数で行うので、融合の順位では費用を抑える上限としてだけ切る(#4114)。"
-        ),
-    )
-    rag_rerank_candidate_limit: int = Field(
-        default=200,
-        ge=0,
-        le=2000,
-        description=(
-            "明示参照・多様化・各種拡張を含む rerank の入力の合計上限。"
-            "候補は段ごとの枠の中で先着で入り、融合 → 多様化 → 画面の順に"
-            "合計まで採る。0 は有効な各段の上限の合計を使う。"
+            "検索経路(ベクトル・全文)ごとに取得する件数。取得した候補は重複を除いてすべて rerank に"
+            "渡す(rerank の入力は最大 100 × 2 = 200 件。#5443)。"
         ),
     )
     rag_rerank_max_documents_per_request: int = Field(
@@ -1522,41 +1516,8 @@ class Settings(
         ge=1,
         le=1000,
         description=(
-            "rerank の 1 回の要求に載せる候補数。OCI の上限は 1000 件で、超える候補は分けて送る"
-            "(1 件 1 件の点数は変わらない。#4114)。"
-        ),
-    )
-    rag_candidate_diversity_depth: int = Field(
-        default=420,
-        ge=0,
-        le=2000,
-        description=(
-            "多様化を探す融合順位の深さ(0 は無効)。"
-            "DB の取得上限は rag_retrieval_query_limit で独立。"
-            "融合の上位(候補の上限)"
-            "は変えず、その外から文書ごとの上位を rerank の候補に足す。1 つの文書が融合の上位を"
-            "占めても、別の文書の根拠が rerank の判断を受ける(#2228)。"
-        ),
-    )
-    rag_candidate_diversity_new_document: int = Field(
-        default=10,
-        ge=0,
-        le=50,
-        description="候補の多様化で、融合の上位に 1 件も無い文書から足す件数(#2228)。",
-    )
-    rag_candidate_diversity_present_document: int = Field(
-        default=5,
-        ge=0,
-        le=50,
-        description="候補の多様化で、融合の上位にある文書から続きを足す件数(#2228)。",
-    )
-    rag_candidate_diversity_max_extra: int = Field(
-        default=20,
-        ge=0,
-        le=1000,
-        description=(
-            "候補の多様化で足す件数の合計の上限(#2228)。融合の順に足すので、上限で切るのは融合の"
-            "点の低い候補。rerank の候補の数(時間)を抑える。"
+            "rerank の 1 回の要求に載せる候補数。OCI は 1001 件で 400 を返す(#4114 の実測)ため、"
+            "超える候補は分けて送る(1 件 1 件の点数は変わらない)。"
         ),
     )
     rag_approved_faq_semantic_enabled: bool = Field(

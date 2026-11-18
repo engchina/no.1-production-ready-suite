@@ -117,8 +117,11 @@ class EvidenceBudgetTraceTest(unittest.TestCase):
 def test_rerank_defaults_and_explicit_values():
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.rerank_min_relevance_score == 0.3
-    assert defaults.rerank_candidate_limit == 200
-    assert defaults.retrieval_candidate_limit == 140
+    assert defaults.rerank_min_relevance_fallback_ratio == 0.5
+    # rerank の入力の合計上限と融合後の基本候補の上限は削除した（#5443）。
+    assert not hasattr(defaults, "rerank_candidate_limit")
+    assert not hasattr(defaults, "retrieval_candidate_limit")
+    assert get_settings(environ={"RERANK_MIN_RELEVANCE_FALLBACK_RATIO": "0"}, dotenv_path=None).rerank_min_relevance_fallback_ratio == 0.0
     # rerank の後の件数の切りは top_k の 1 回だけで、Top-N の設定は無い（#5165）。
     assert not hasattr(defaults, "rerank_top_n")
     explicit = get_settings(environ={"RERANK_MIN_RELEVANCE_SCORE": "0.4"}, dotenv_path=None)

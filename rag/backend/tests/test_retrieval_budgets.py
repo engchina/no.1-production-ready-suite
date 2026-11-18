@@ -41,7 +41,6 @@ async def test_search_defers_original_context_until_ranked_anchors_are_known(
         SearchRequest(query="合成の質問"),
         state,
         retrieval_queries=["合成の質問"],
-        candidate_limit=2,
         expand_references=False,
         defer_context=True,
     )
@@ -56,11 +55,12 @@ async def test_search_defers_original_context_until_ranked_anchors_are_known(
     assert len(calls) == 1
 
 
-def test_backend_budget_settings_reach_the_engine(tmp_path: Path) -> None:
-    settings = Settings(rag_retrieval_candidate_limit=77, rag_rerank_candidate_limit=91)
+def test_backend_threshold_settings_reach_the_engine(tmp_path: Path) -> None:
+    settings = Settings(rag_rerank_min_relevance_fallback_ratio=0.25)
     engine = build_engine_settings(settings, output_dir=tmp_path)
-    assert engine.retrieval_candidate_limit == 77
-    assert engine.rerank_candidate_limit == 91
+    assert engine.rerank_min_relevance_fallback_ratio == 0.25
+    assert not hasattr(engine, "retrieval_candidate_limit")
+    assert not hasattr(engine, "rerank_candidate_limit")
 
 
 def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path) -> None:
@@ -68,11 +68,7 @@ def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path)
     settings = Settings()
     engine = build_engine_settings(settings, output_dir=tmp_path)
     expected = {
-        "RAG_RETRIEVAL_QUERY_LIMIT": (settings.rag_retrieval_query_limit, 60),
-        "RAG_RETRIEVAL_CANDIDATE_LIMIT": (settings.rag_retrieval_candidate_limit, 140),
-        "RAG_CANDIDATE_DIVERSITY_DEPTH": (settings.rag_candidate_diversity_depth, 420),
-        "RAG_CANDIDATE_DIVERSITY_MAX_EXTRA": (settings.rag_candidate_diversity_max_extra, 20),
-        "RAG_RERANK_CANDIDATE_LIMIT": (settings.rag_rerank_candidate_limit, 200),
+        "RAG_RETRIEVAL_QUERY_LIMIT": (settings.rag_retrieval_query_limit, 50),
         "RAG_MAX_ANCHORS_PER_DOCUMENT": (settings.rag_max_anchors_per_document, 5),
         "RAG_SEARCH_TOP_K_DEFAULT": (settings.rag_search_top_k_default, 30),
         "RAG_EVIDENCE_BUDGET_CHARS": (settings.rag_evidence_budget_chars, 40000),
@@ -87,17 +83,25 @@ def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path)
         assert int(example[name]) == value, name
     assert settings.rag_rerank_min_relevance_score == 0.3
     assert float(example["RAG_RERANK_MIN_RELEVANCE_SCORE"]) == 0.3
-    assert (engine.retrieval_candidate_limit, engine.rerank_candidate_limit) == (140, 200)
+    assert settings.rag_rerank_min_relevance_fallback_ratio == 0.5
+    assert float(example["RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO"]) == 0.5
+    assert engine.rerank_min_relevance_fallback_ratio == 0.5
+    for removed in (
+        "RAG_RETRIEVAL_CANDIDATE_LIMIT",
+        "RAG_RERANK_CANDIDATE_LIMIT",
+        "RAG_CANDIDATE_DIVERSITY_DEPTH",
+        "RAG_CANDIDATE_DIVERSITY_MAX_EXTRA",
+    ):
+        assert removed not in example, removed
     assert (engine.max_anchors_per_document, engine.rerank_min_relevance_score) == (5, 0.3)
     assert engine.evidence_budget_chars == 40000
     engine_defaults = engine_settings(environ={}, dotenv_path=None)
     assert (
-        engine_defaults.retrieval_candidate_limit,
-        engine_defaults.rerank_candidate_limit,
         engine_defaults.max_anchors_per_document,
         engine_defaults.rerank_min_relevance_score,
+        engine_defaults.rerank_min_relevance_fallback_ratio,
         engine_defaults.evidence_budget_chars,
-    ) == (140, 200, 5, 0.3, 40000)
+    ) == (5, 0.3, 0.5, 40000)
 
 
 def test_text_search_limits_reach_the_engine_and_match_env_example(tmp_path: Path) -> None:
@@ -157,16 +161,8 @@ def test_text_search_limits_reach_the_engine_and_match_env_example(tmp_path: Pat
     )
 
 
-def test_default_total_budget_excludes_search_expansions(tmp_path: Path) -> None:
-    """rerank の入力の枠は検索の候補だけ。検索拡張は rerank の候補に入らない(#5162)。"""
-    from rag_engine.retrieval.candidate_budget import stage_limits
+def test_search_expansions_are_not_rerank_candidates() -> None:
+    """rerank の入力は検索の候補と添付だけ。検索拡張は rerank の候補に入らない(#5162)。"""
+    from rag_engine.retrieval.candidate_budget import RERANK_STAGES
 
-    engine = build_engine_settings(
-        Settings(rag_entity_expansion_enabled=True, rag_graph_expansion_enabled=True),
-        output_dir=tmp_path,
-    )
-    limits = stage_limits(engine, [])
-    assert limits["fusion"] == 140
-    assert limits["diversity"] == 20
-    assert not {"reference", "entity", "structure", "article"} & set(limits)
-    assert sum(limits.values()) == 160
+    assert {"fusion", "attachment"} == RERANK_STAGES

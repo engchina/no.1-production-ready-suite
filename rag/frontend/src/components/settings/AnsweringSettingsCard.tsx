@@ -71,7 +71,7 @@ type AnsweringDraft = Omit<
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
-    retrieval_query_limit: settings.retrieval_query_limit ?? 60,
+    retrieval_query_limit: settings.retrieval_query_limit ?? 50,
     min_similarity: settings.min_similarity ?? 0.2,
     rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.3,
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_hybrid_index",
@@ -163,7 +163,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   const invalidThreshold = [form.min_similarity, form.rerank_min_relevance_score].some(
     (value) => value == null || !Number.isFinite(value) || value < 0 || value > 1
   );
-  const invalidCount = !Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 0 || (form.retrieval_query_limit ?? 0) > 2000;
+  const invalidCount = !Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 5 || (form.retrieval_query_limit ?? 0) > 100;
   const invalidRatio = [form.rrf_method_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
 
   function update(patch: Partial<AnsweringDraft>) {
@@ -217,11 +217,11 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           onChange={(event) => update({ min_similarity: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />
         <TextField
-          id="answering-retrieval-query-limit" type="number" min={0} max={2000} step={1} width="sm"
+          id="answering-retrieval-query-limit" type="number" min={5} max={100} step={1} width="sm"
           label={t("settings.answering.retrievalQueryLimit")}
           helper={t("settings.answering.retrievalQueryLimitHint")}
           value={Number.isFinite(form.retrieval_query_limit) ? String(form.retrieval_query_limit) : ""}
-          error={!Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 0 || (form.retrieval_query_limit ?? 0) > 2000 ? t("settings.answering.retrievalQueryLimitInvalid") : undefined}
+          error={!Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 5 || (form.retrieval_query_limit ?? 0) > 100 ? t("settings.answering.retrievalQueryLimitInvalid") : undefined}
           disabled={disabled}
           onChange={(event) => update({ retrieval_query_limit: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />

@@ -63,6 +63,8 @@ DEFAULT_MAX_CONTEXT_RECORDS = 12
 DEFAULT_EVIDENCE_BUDGET_CHARS = 40000
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
 DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.3
+# 下限以上が 0 件のとき、下限に掛けて 1 回だけ下げる比（0 は下げない。#5443）。
+DEFAULT_RERANK_MIN_RELEVANCE_FALLBACK_RATIO = 0.5
 # Reciprocal Rank Fusion の平滑化定数。ADB の hybrid 検索と回答側の順位融合で同じ値を使う。
 RRF_K = 60
 
@@ -245,6 +247,7 @@ class Settings:
     rerank_retry_initial_wait_seconds: float
     rerank_retry_max_wait_seconds: float
     rerank_min_relevance_score: float
+    rerank_min_relevance_fallback_ratio: float
     embedding_region: str
     embedding_endpoint: str
     embedding_model: str
@@ -300,11 +303,6 @@ class Settings:
     auth_disabled: bool = False
     # 検索の起点 child 数（UI の既定値。API・SDK は引数で指定）、context に入れる parent 数、生成の原文予算（文字）(#1054)。
     retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K_SETTING
-    # 基本候補と、拡張を含む精排入力の合計は回答起点数から独立する。
-    retrieval_candidate_limit: int = 140
-    rerank_candidate_limit: int = 200
-    # 呼出元が解決した、各候補経路の既存の上限。KB/レシピには設定しない。
-    retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
     # 分割読取の同じ pass の組を並行に読む上限（#4997。1 は順次）。
@@ -542,6 +540,10 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             0.0,
             _env_float(env, "RERANK_MIN_RELEVANCE_SCORE", DEFAULT_RERANK_MIN_RELEVANCE_SCORE),
         ),
+        rerank_min_relevance_fallback_ratio=min(
+            1.0,
+            max(0.0, _env_float(env, "RERANK_MIN_RELEVANCE_FALLBACK_RATIO", DEFAULT_RERANK_MIN_RELEVANCE_FALLBACK_RATIO)),
+        ),
         embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip() or DEFAULT_EMBEDDING_REGION,
         embedding_endpoint=env.get("EMBEDDING_ENDPOINT", "").strip(),
         embedding_model=env.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL).strip() or DEFAULT_EMBEDDING_MODEL,
@@ -563,11 +565,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
         max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
-        retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 140)),
-        rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 200)),
-        retrieval_stage_limits={
-            str(key): max(0, int(value)) for key, value in json.loads(env.get("RAG_ENGINE_RETRIEVAL_STAGE_LIMITS", "{}")).items()
-        },
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),
         batch_read_workers=min(8, max(1, _env_int(env, "RAG_ENGINE_BATCH_READ_WORKERS", 1))),

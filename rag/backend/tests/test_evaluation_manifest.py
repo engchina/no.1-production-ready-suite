@@ -344,20 +344,20 @@ async def test_manifest_does_not_guess_model_when_profile_is_unavailable(readabl
     assert models["judge"] == "unverified"
 
 
-async def test_manifest_fingerprint_changes_when_candidate_limit_changes() -> None:
+async def test_manifest_fingerprint_changes_when_retrieval_limit_changes() -> None:
     """候補の上限の違いを、2 つの結果の条件の差として読める（#4141）。"""
     oracle = FakeOracle()
 
     async def manifest(limit: int) -> dict[str, Any]:
         return await build_run_manifest(
             _request(),
-            settings=get_settings().model_copy(update={"rag_retrieval_candidate_limit": limit}),
+            settings=get_settings().model_copy(update={"rag_retrieval_query_limit": limit}),
             oracle=oracle,
             as_of=date(2026, 10, 31),
             as_of_source="run_start",
         )
 
-    assert comparison_differences(await manifest(150), await manifest(1000)) == [
+    assert comparison_differences(await manifest(20), await manifest(100)) == [
         "settings.rag_config_fingerprint"
     ]
 
