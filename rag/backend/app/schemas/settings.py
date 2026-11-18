@@ -798,7 +798,7 @@ class AnsweringSettingsData(BaseModel):
     runtime_terms_answer_enabled: bool = False
     neighbor_child_count: int = Field(ge=1, le=5)
     rerank_enabled: bool
-    # 以下の拡張(実体・目次からの章節の選択・章節の拡張・関係情報)は RAG チャット・品質評価・MCP の
+    # 以下の拡張(実体・目次からの章節の選択・章節の拡張)は RAG チャット・品質評価・MCP の
     # 経路だけに効き、RAG 検索(基本の RAG)では使わない(#5332)。
     # 実体・別名による検索拡張(#1362。全体設定だけで決める。既定 ON。#5187)。
     entity_expansion_enabled: bool
@@ -820,7 +820,6 @@ class AnsweringSettingsData(BaseModel):
     section_expansion_enabled: bool
     section_expansion_max_levels: int
     section_expansion_input_token_percent: int
-    graph_expansion_enabled: bool
     # 回答生成の通しの上限(秒。#5280)。画面は 150 / 300 / 600 / 1200 から選ぶ(.env は 150〜1200)。
     answer_timeout_seconds: int
     config_source: Literal["runtime"] = "runtime"
@@ -850,8 +849,6 @@ class AnsweringSettingsUpdate(BaseModel):
     runtime_terms_answer_enabled: bool | None = None
     neighbor_child_count: int | None = Field(default=None, ge=1, le=5)
     rerank_enabled: bool | None = None
-    graph_expansion_enabled: bool | None = None
-
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
     # 範囲は Settings の rag_reference_section_read_max_chunks と同じ(#5348)。

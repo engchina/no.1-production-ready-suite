@@ -1,8 +1,8 @@
-"""検索拡張の根拠（参照先・実体・関係情報・目次から選んだ章節）を、最後の根拠の並びへ合わせる規則（#5097・#5162）。
+"""検索拡張の根拠（参照先・実体・目次から選んだ章節）を、最後の根拠の並びへ合わせる規則（#5097・#5162）。
 
-backend は回答の検索で、上位の候補から拡張（交差参照の参照先 #1280・実体の 1 段 #1362・関係情報 #2055・目次から
-回答のモデルが選んだ章節 #5324）で chunk を集め、metadata の ``reference_expansion`` / ``entity_expansion`` /
-``graph_expansion`` / ``outline_selection`` に足した理由を付け、
+backend は回答の検索で、上位の候補から拡張（交差参照の参照先 #1280・実体の 1 段 #1362・目次から回答のモデルが
+選んだ章節 #5324）で chunk を集め、metadata の ``reference_expansion`` / ``entity_expansion`` /
+``outline_selection`` に足した理由を付け、
 rerank の前の候補とは分けて渡す。拡張の根拠は rerank にかけず、全体の下限・``top_k``・context の枠に数えない。
 rerank・下限・起点の選択が終わって最後の根拠の並びが決まった後に、回答・検索だけ・MCP の 3 つの経路がこの規則で
 1 回だけ合わせる。
@@ -29,10 +29,9 @@ from typing import Any
 # backend が拡張の根拠の metadata に付ける印のキー（``app.rag.answer_engine._stored_child``）。
 REFERENCE_EXPANSION_KEY = "reference_expansion"
 ENTITY_EXPANSION_KEY = "entity_expansion"
-GRAPH_EXPANSION_KEY = "graph_expansion"
 # 起点の文書の目次から回答のモデルが選んだ章節の根拠の印（#5324。backend の ``app.rag.reference_sections``）。
 OUTLINE_SELECTION_KEY = "outline_selection"
-EXPANSION_KEYS = (REFERENCE_EXPANSION_KEY, ENTITY_EXPANSION_KEY, GRAPH_EXPANSION_KEY, OUTLINE_SELECTION_KEY)
+EXPANSION_KEYS = (REFERENCE_EXPANSION_KEY, ENTITY_EXPANSION_KEY, OUTLINE_SELECTION_KEY)
 # 補いの検索の根拠の印のキー（#5173）。値は検索の記録（要求 ID・手順 ID・種類など）。
 QUERY_OVERFLOW_KEY = "query_overflow"
 GUIDE_STEP_KEY = "guide_step"
@@ -105,7 +104,6 @@ __all__ = [
     "ENTITY_EXPANSION_KEY",
     "EXPANSION_EVIDENCE_REASON",
     "EXPANSION_KEYS",
-    "GRAPH_EXPANSION_KEY",
     "GUIDE_STEP_KEY",
     "MERGE_MARK_KEYS",
     "OUTLINE_SELECTION_KEY",

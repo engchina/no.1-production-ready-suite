@@ -27,12 +27,10 @@ for (const viewport of [
     await expect(page.locator('label[for="settings-graph-profile-off"]')).toContainText("既定");
     await expect(page.locator('label[for="settings-graph-profile-entities"]')).not.toContainText("既定");
     await expect(page.getByRole("radio", { name: /構築する/ })).toBeVisible();
-    // 何に使うか(文書構造グラフと、検索方法で有効にしたときの回答の検索。#2055)を書き、内部の英語の
-    // 用語と保存値を出さない。
+    // 何に使うか(文書構造グラフ)を書き、内部の英語の用語と保存値を出さない。
     const main = page.getByRole("main");
     await expect(main).toContainText("文書構造グラフ");
-    await expect(main).toContainText("「文書構造による検索拡張」");
-    await expect(main).toContainText("既定は使いません");
+    await expect(main).not.toContainText("文書構造による検索拡張");
     // 取込済みの文書への反映は、文書の詳細の処理レシピの「再処理」（画面の操作の名前）で案内する。
     await expect(main).toContainText("「再処理」してください");
     for (const term of ["entities", "relationships", "claims", "community", "GraphRAG", "現行挙動"]) {

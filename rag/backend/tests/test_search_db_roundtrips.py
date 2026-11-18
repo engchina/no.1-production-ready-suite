@@ -22,7 +22,6 @@ from rag_engine.retrieval.search_stages import (
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
     ENTITY_EXPANSION_STAGE,
-    GRAPH_EXPANSION_STAGE,
     IMAGE_EVIDENCE_STAGE,
     REFERENCE_EXPANSION_STAGE,
     TEXT_SEARCH_STAGE,
@@ -1052,13 +1051,12 @@ async def test_injected_search_reports_stages_after_db_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """回答に注入する検索は、DB の検索の後の工程(前後の文脈・図の切り出し・文書の先頭ページ)と、
-    切った起点からの検索拡張(参照先・実体・関係情報。#5389)を「文書の検索」の子の段にする(#3464)。
+    切った起点からの検索拡張(参照先・実体。#5389)を「文書の検索」の子の段にする(#3464)。
     各工程の処理は段の中で行う。"""
     client = _SearchOracle()
     settings = Settings(
         rag_reference_expansion_enabled=True,
         rag_entity_expansion_enabled=True,
-        rag_graph_expansion_enabled=True,
     )
     engine = AnswerEngine(settings, oracle=client, genai=_GenAi())  # type: ignore[arg-type]
     observed: list[tuple[str, str]] = []
@@ -1085,7 +1083,6 @@ async def test_injected_search_reports_stages_after_db_search(
     monkeypatch.setattr(client, "context_group_siblings", recording("siblings", []))
     monkeypatch.setattr(engine, "_reference_expansion", recording("references", {}))
     monkeypatch.setattr(engine, "_entity_expansion", recording("entities", []))
-    monkeypatch.setattr(engine, "_graph_expansion", recording("graph", []))
     monkeypatch.setattr(engine, "_attach_images", True)
     monkeypatch.setattr(engine, "_materialize_image_evidence", recording("images", None))
     monkeypatch.setattr(client, "chunk_set_first_page_contexts", recording("first_pages", {}))
@@ -1132,7 +1129,6 @@ async def test_injected_search_reports_stages_after_db_search(
         IMAGE_EVIDENCE_STAGE,
         REFERENCE_EXPANSION_STAGE,
         ENTITY_EXPANSION_STAGE,
-        GRAPH_EXPANSION_STAGE,
     ]
     # 段は順に開いて閉じる(重ならない)。
     assert observed == [(event, name) for name in expected for event in ("start", "end")]
@@ -1141,7 +1137,6 @@ async def test_injected_search_reports_stages_after_db_search(
         "siblings": CONTEXT_SIBLINGS_STAGE,
         "references": REFERENCE_EXPANSION_STAGE,
         "entities": ENTITY_EXPANSION_STAGE,
-        "graph": GRAPH_EXPANSION_STAGE,
         "images": IMAGE_EVIDENCE_STAGE,
     }
     assert {name for name, _stages in ran} == set(stage_of)
@@ -1161,7 +1156,6 @@ async def test_search_stages_are_skipped_when_there_is_nothing_to_do() -> None:
     settings = Settings(
         rag_reference_expansion_enabled=False,
         rag_entity_expansion_enabled=False,
-        rag_graph_expansion_enabled=False,
     )
     engine = AnswerEngine(settings, oracle=client, genai=_GenAi())  # type: ignore[arg-type]
     state = _SearchState()
@@ -1448,11 +1442,9 @@ async def test_keyword_list_without_a_search_expression_is_not_executed(
     assert not hits
 
 
-@pytest.mark.parametrize("kind", ["entity", "graph"])
 @pytest.mark.parametrize("mode", ["disabled", "page_scope", "no_match", "failed"])
 async def test_expansion_records_actual_skip_empty_failure_and_reuse(
     monkeypatch: pytest.MonkeyPatch,
-    kind: str,
     mode: str,
 ) -> None:
     import app.rag.answer_engine as module
@@ -1466,8 +1458,8 @@ async def test_expansion_records_actual_skip_empty_failure_and_reuse(
             raise RuntimeError("synthetic")
         return []
 
-    monkeypatch.setattr(module, f"plan_{kind}_expansion", plan)
-    target = ENTITY_EXPANSION_STAGE if kind == "entity" else GRAPH_EXPANSION_STAGE
+    monkeypatch.setattr(module, "plan_entity_expansion", plan)
+    target = ENTITY_EXPANSION_STAGE
 
     class Observation(_Observation):
         def display(self, *args: object, **kwargs: Any) -> None:
@@ -1479,10 +1471,8 @@ async def test_expansion_records_actual_skip_empty_failure_and_reuse(
         yield Observation() if name == target else _Observation()
 
     settings = Settings(
-        rag_entity_expansion_enabled=kind == "entity" and mode != "disabled",
-        rag_graph_expansion_enabled=kind == "graph" and mode != "disabled",
+        rag_entity_expansion_enabled=mode != "disabled",
         rag_entity_expansion_max_chunks=3,
-        rag_graph_expansion_max_chunks=3,
     )
     engine = AnswerEngine(settings, oracle=_SearchOracle(), genai=_GenAi())  # type: ignore[arg-type]
     request = SearchRequest(query="検索文 1", filters={"knowledge_base_id": "kb-1"})
