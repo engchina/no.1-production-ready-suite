@@ -58,7 +58,6 @@ from rag_parser_core.json_source_map import (
 )
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import (
-    NEVER,
     alternation,
     format_kanji_number,
     parse_number,
@@ -1199,92 +1198,6 @@ def xml_tree_citation_key(text: str) -> str:
     return re.sub(rf"({patterns.prefix}|{connectors})({patterns.kanji}+)", replace, normalized)
 
 
-_query_citations: dict[str, re.Pattern[str]] = {}
-
-
-def _query_citation() -> re.Pattern[str]:
-    """質問の中の引用ラベルと、その直前の語（文書名）。
-
-    ラベルは〔附属の部〕第N〈単位〉〔のN〕〔第N〈段落〉〕〔第N〈細目〉〕。部の前置き・番号の前置き・
-    枝番のつなぎ・単位・記号は言語資源（#2181）。質問は NFKC でそろえてから当てる。
-    """
-    pack = current_pack()
-    text = text_patterns(pack)
-    cached = _query_citations.get(pack.hash)
-    if cached is not None:
-        return cached
-    number = text.number
-    connector = alternation(pack.words("numbers", "branch_connectors"))
-    part = alternation(pack.words("references", "part_prefixes"))
-    brackets = [pair for pair in pack.words("symbols", "bracket_pairs") if len(pair) == 2]
-    qualifier = (
-        "|".join(
-            rf"{re.escape(open_)}[^{re.escape(close)}]{{1,40}}{re.escape(close)}"
-            for open_, close in ((pair[0], pair[1]) for pair in brackets)
-        )
-        or NEVER
-    )
-    stops = "".join(
-        [
-            *(w for w in pack.words("symbols", "clause_separator_chars") if len(w) == 1),
-            *(w for w in pack.words("symbols", "sentence_end_chars") if len(w) == 1),
-            *(char for pair in pack.words("symbols", "quote_brackets") for char in pair),
-            *(char for pair in brackets for char in pair),
-            ".",
-        ]
-    )
-    prefix = text.prefix
-    pattern = re.compile(
-        rf"(?P<title>[^\s{re.escape(stops)}]{{1,40}}?)?\s*"
-        rf"(?P<label>(?:{part}(?:{qualifier})?)?"
-        rf"{prefix}{number}{text.article_units}(?:{connector}{number})*"
-        rf"(?:{prefix}{number}{text.paragraph_units})?"
-        rf"(?:{prefix}{number}{text.item_units}(?:{connector}{number})*)?)"
-    )
-    if len(_query_citations) >= 16:
-        _query_citations.clear()
-    _query_citations[pack.hash] = pattern
-    return pattern
-
-
-_MAX_QUERY_CITATIONS = 3
-
-
-def _supplement_tail() -> re.Pattern[str]:
-    """語の末尾の附属の部の印（「附則」「附則(〜)」。部の前置き・括弧は言語資源）。"""
-    pack = current_pack()
-    part = alternation(pack.words("references", "part_prefixes"))
-    brackets = [pair for pair in pack.words("symbols", "bracket_pairs") if len(pair) == 2]
-    qualifier = (
-        "|".join(
-            rf"{re.escape(open_)}[^{re.escape(close)}]*{re.escape(close)}"
-            for open_, close in ((pair[0], pair[1]) for pair in brackets)
-        )
-        or NEVER
-    )
-    return re.compile(rf"{part}(?:{qualifier})?$")
-
-
-def query_citation_keys(query: str) -> list[str]:
-    """質問の中の引用ラベルの照合の key（文書名つきの key を先に。最大 3 つのラベル）。
-
-    番号は漢数字でも算用数字でもよい（``xml_tree_citation_key`` で同じ key にする）。
-    """
-    keys: list[str] = []
-    query = unicodedata.normalize("NFKC", query)
-    for match in list(_query_citation().finditer(query))[:_MAX_QUERY_CITATIONS]:
-        label = match.group("label")
-        title = (match.group("title") or "").strip()
-        # 附属の部の印（附則）は直前の語に入りやすいので、ラベルの側へ戻す。
-        if supplement := _supplement_tail().search(title):
-            title, label = title[: supplement.start()], supplement.group(0) + label
-        label = xml_tree_citation_key(label)
-        for key in ((xml_tree_citation_key(f"{title}{label}") if title else ""), label):
-            if key and key not in keys:
-                keys.append(key)
-    return keys
-
-
 def xml_tree_lookup_keys(metadata: Mapping[str, object]) -> list[str]:
     """chunk の引用ラベルの照合の key（段落・細目・別の書き方。文書名つきと無し）。"""
     title = _metadata_str(metadata, "xml_tree_document_title")
@@ -1450,7 +1363,6 @@ __all__ = [
     "numbered_label",
     "parse_kanji_number",
     "parse_xml_tree_json",
-    "query_citation_keys",
     "revision_ref_labels",
     "xml_tree_citation_key",
     "xml_tree_citation_labels",

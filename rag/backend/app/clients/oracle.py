@@ -51,7 +51,6 @@ from rag_parser_core.extraction import (
     DERIVED_FLAG_KEYS,
     DOCUMENT_SUMMARY_CONTENT_KIND,
 )
-from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
 from app.clients.native_hybrid_schema import hybrid_payload_sql
@@ -957,10 +956,7 @@ class OracleClient:
         mode: SearchMode = SearchMode.HYBRID,
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
-        """各経路の上位 ``top_k`` を RRF で合併し、全候補を後段へ渡す。
-
-        引用ラベルがある場合は、既存の優先・件数制限を適用する。
-        """
+        """各経路の上位 ``top_k`` を RRF で合併し、全候補を後段へ渡す。"""
         if mode == SearchMode.VECTOR:
             return await self.vector_search(embedding, top_k, filters, query=query)
         if mode == SearchMode.KEYWORD:
@@ -972,73 +968,11 @@ class OracleClient:
             return await self._native_search_hits(query, embedding, top_k, filters or {}, mode)
 
         # vector と keyword は独立しているので並行に読む(#1490)。融合は順位だけで決まる。
-        vector_hits, keyword_hits, citation_hits = await asyncio.gather(
+        vector_hits, keyword_hits = await asyncio.gather(
             self.vector_search(embedding, top_k, filters, query=query),
             self.keyword_search(query, top_k, filters),
-            self.citation_label_search(query, filters),
         )
-        return _with_citation_hits(
-            citation_hits, self._fuse_hybrid_hits(vector_hits, keyword_hits), top_k
-        )
-
-    async def citation_label_search(
-        self, query: str, filters: dict[str, str] | None = None
-    ) -> list[RetrievedChunk]:
-        """質問の中の引用ラベルに一致する XML ツリー JSON の段落(#2024)。
-
-        ラベルが無い質問は SQL を実行しない。文書名つきの key に一致した段落があればそれだけを、
-        無ければ文書名なしの key に一致した段落を返す(検索と同じ見え方の条件。最大 5 件)。
-        """
-        keys = query_citation_keys(query)
-        if not keys:
-            return []
-        where_sql, binds = _oracle_retrieval_where(filters or {})
-        key_binds = {f"citation_key_{index}": key for index, key in enumerate(keys)}
-        key_sql = " OR ".join(
-            "DBMS_LOB.INSTR(JSON_VALUE(c.metadata_json, '$.xml_tree_lookup_keys' "
-            f"RETURNING CLOB), :{name}) > 0"
-            for name in key_binds
-        )
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT
-                c.document_id,
-                c.chunk_id,
-                c.chunk_text,
-                c.metadata_json,
-                c.chunk_index,
-                c.chunk_set_id,
-                d.file_name,
-                d.category_name,
-                d.superseded_by_document_id,
-                0 AS score
-            FROM rag_chunks c
-            JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE {where_sql}
-              AND ({key_sql})
-            ORDER BY c.chunk_index
-            FETCH FIRST 50 ROWS ONLY
-            """,
-                where_sql=where_sql,
-                key_sql=key_sql,
-            ),
-            {**binds, **key_binds},
-        )
-        matches: dict[str, list[RetrievedChunk]] = {}
-        for row in rows:
-            chunk = _retrieved_chunk_from_row(row)
-            chunk_keys = set(str(chunk.metadata.get("xml_tree_lookup_keys") or "").splitlines())
-            for key in keys:
-                if key in chunk_keys:
-                    matches.setdefault(key, []).append(chunk)
-        for key in keys:
-            if matches.get(key):
-                return [
-                    _with_retrieval_metadata(chunk, retrieval_mode="citation", citation_rank=rank)
-                    for rank, chunk in enumerate(matches[key][:5], start=1)
-                ]
-        return []
+        return self._fuse_hybrid_hits(vector_hits, keyword_hits)
 
     async def search_many(
         self,
@@ -1257,19 +1191,8 @@ class OracleClient:
             elif not hits:
                 result.status = "empty"
             branch_hits[index] = result
-        # 質問の中の引用ラベルに一致する段落(#2024。ラベルの無い検索文は SQL を実行しない)。
-        citation_hits = await asyncio.gather(
-            *(
-                self.citation_label_search(query, filters)
-                if mode == SearchMode.HYBRID
-                else _no_citation_hits()
-                for query, _embedding, mode in searches
-            )
-        )
         results: list[list[RetrievedChunk]] = []
-        for (vector_branch, keyword_branch, mode), citations in zip(
-            plan, citation_hits, strict=True
-        ):
+        for vector_branch, keyword_branch, mode in plan:
             vector_hits = branch_hits[vector_branch] if vector_branch is not None else []
             keyword_hits = branch_hits[keyword_branch] if keyword_branch is not None else []
             if mode == SearchMode.VECTOR:
@@ -1282,13 +1205,7 @@ class OracleClient:
                 else:
                     results.append(keyword_hits)
             else:
-                results.append(
-                    _with_citation_hits(
-                        citations,
-                        self._fuse_hybrid_hits(vector_hits, keyword_hits),
-                        top_k,
-                    )
-                )
+                results.append(self._fuse_hybrid_hits(vector_hits, keyword_hits))
         return results
 
     def _fuse_hybrid_hits(
@@ -19149,10 +19066,6 @@ def _retrieved_chunk_score_sort_key(
     return (-score, chunk.document_id, stable_index, chunk.chunk_id)
 
 
-async def _no_citation_hits() -> list[RetrievedChunk]:
-    return []
-
-
 @contextmanager
 def _search_call_io(
     observation: CallObservation | None,
@@ -19207,23 +19120,6 @@ async def _observed_reads(
         await asyncio.gather(*reads)
         if details is not None:
             observation.display(details=details())
-
-
-def _with_citation_hits(
-    citation_hits: list[RetrievedChunk], fused: list[RetrievedChunk], top_k: int
-) -> list[RetrievedChunk]:
-    """引用ラベルに一致した段落を先頭に置く(#2024)。融合の結果の順位の metadata は残す。"""
-    if not citation_hits:
-        return fused
-    by_id = {hit.chunk_id: hit for hit in fused}
-    head = [
-        hit.model_copy(update={"metadata": {**by_id[hit.chunk_id].metadata, **hit.metadata}})
-        if hit.chunk_id in by_id
-        else hit
-        for hit in citation_hits
-    ]
-    head_ids = {hit.chunk_id for hit in head}
-    return [*head, *(hit for hit in fused if hit.chunk_id not in head_ids)][: top_k or None]
 
 
 def _with_retrieval_metadata(
