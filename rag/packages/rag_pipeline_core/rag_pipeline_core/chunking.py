@@ -165,6 +165,8 @@ class _ElementSpan:
     sheet_table_index: int | None = None
     # 図の本文を Vision（VLM）が書いたか（解析の OCR・キャプションのままなら False。#1282）。
     vision_described: bool = False
+    # 原本でこの要素の前に空行がある（#5422）。chunk の本文で要素の間を空行にする。
+    blank_line_before: bool = False
     # XML ツリー JSON の解析の要素の引用ラベルなどの metadata（``xml_tree_`` で始まる key。#2024）。
     xml_tree_metadata: tuple[tuple[str, str | int | float | bool | None], ...] = ()
     # 要素の由来の metadata（``ELEMENT_PROVENANCE_METADATA_KEYS``。#2590）。
@@ -1316,9 +1318,10 @@ def _element_spans(
     spans: list[_ElementSpan] = []
     cursor = 0
     for occurrence, element in enumerate(elements):
+        # 行頭の字下げは本文として残す（手順・設定の行の揃え。#5422）。
         projection = projected_element_text(
             element.element_id or "", element.text, element.metadata, occurrence=occurrence
-        ).stripped()
+        ).stripped(keep_indent=True)
         text = projection.text
         if not text:
             continue
@@ -1349,6 +1352,7 @@ def _element_spans(
             _ElementSpan(
                 text=text,
                 vision_projection=projection,
+                blank_line_before=element.metadata.get("source_blank_line_before") is True,
                 start_offset=start_offset,
                 end_offset=end_offset,
                 kind=element.kind,
@@ -1781,14 +1785,12 @@ def _chunk_span_group(
     separators: Sequence[str] = (),
 ) -> list[Chunk]:
     """非 table element group を chunk 化する。"""
-    projection = ProjectedVisionText.join(
-        [
-            span.vision_projection or ProjectedVisionText(span.text)
-            for span in group
-            if span.text.strip()
-        ],
-        "\n",
-    ).stripped()
+    pieces: list[ProjectedVisionText] = []
+    for span in (span for span in group if span.text.strip()):
+        if pieces:
+            pieces.append(ProjectedVisionText(_span_separator(span)))
+        pieces.append(span.vision_projection or ProjectedVisionText(span.text))
+    projection = ProjectedVisionText.join(pieces, "").stripped()
     text = projection.text
     metadata = _span_group_metadata(group)
     start_offset = min(span.start_offset for span in group)
@@ -2745,9 +2747,17 @@ def _split_lines_by_size(text: str, chunk_size: int) -> list[str]:
     return parts
 
 
+def _span_separator(span: _ElementSpan) -> str:
+    """要素の前の区切り。原本で前に空行がある要素は空行にする（#5422）。"""
+    return "\n\n" if span.blank_line_before else "\n"
+
+
 def _join_span_text(group: list[_ElementSpan]) -> str:
     """複数 element のテキストを chunk text として結合する。"""
-    return "\n".join(span.text for span in group if span.text.strip()).strip()
+    parts = [span for span in group if span.text.strip()]
+    return "".join(
+        (_span_separator(span) if index else "") + span.text for index, span in enumerate(parts)
+    ).strip()
 
 
 def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:

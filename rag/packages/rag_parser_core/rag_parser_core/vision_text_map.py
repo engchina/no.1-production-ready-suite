@@ -103,8 +103,11 @@ class ProjectedVisionText:
             raise ValueError("本文の置換位置が範囲外です。")
         return self.join([self.slice(0, start), replacement, self.slice(end, len(self.text))], "")
 
-    def stripped(self) -> ProjectedVisionText:
+    def stripped(self, *, keep_indent: bool = False) -> ProjectedVisionText:
+        """前後の空白を除く。``keep_indent`` なら先頭の行の字下げは残す（#5422）。"""
         start = len(self.text) - len(self.text.lstrip())
+        if keep_indent:
+            start = self.text.rfind("\n", 0, start) + 1
         end = max(start, len(self.text.rstrip()))
         return self.slice(start, end)
 
