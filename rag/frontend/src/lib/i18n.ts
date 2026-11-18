@@ -2443,6 +2443,8 @@ export const ja = {
   "upload.storageNotice.title": "現在の保存先",
   "upload.storageNotice.unset": "未設定",
   "upload.knowledgeBases.title": "所属させるナレッジベース",
+  "upload.classification.description":
+    "RAG 検索の「文書の分類」での絞り込みと基準日の検索に使います（どれも任意）。この回のすべてのファイルに同じ値を設定します。後から各文書の詳細で変えられます。",
   "upload.knowledgeBases.loading": "ナレッジベースを読み込んでいます",
   "upload.knowledgeBases.loadError": "登録先のナレッジベースの候補を読み込めませんでした。",
   "upload.knowledgeBases.loadErrorHint":
@@ -2924,9 +2926,8 @@ export const ja = {
   "flow.extractionExport.loadErrorHint": "抽出結果の保存状態を確認して再読み込みしてください。",
   "flow.extractionExport.empty": "抽出結果がありません",
   "flow.extractionExport.emptyHint": "このレシピの抽出が完了すると、Markdown・HTML・JSON で持ち出せます。",
-  "flow.size": "サイズ",
-  "flow.uploadedAt": "アップロード日時",
-  "flow.indexedAt": "索引日時",
+  "documents.detail.meta.uploaded": "アップロード {date}",
+  "documents.detail.meta.indexed": "索引 {date}",
   "flow.preview": "原本プレビュー",
   "flow.preview.before": "処理前",
   "flow.preview.after": "処理後",
@@ -3287,7 +3288,7 @@ export const ja = {
     "文書は 1 件以上の有効なナレッジベースに所属させてください。",
   "documents.knowledgeBases.noneSelected": "所属先が未選択です。",
   "documents.knowledgeBases.required": "所属先を 1 件以上選択してください。",
-  "documents.knowledgeBases.save": "所属先を保存",
+  "documents.knowledgeBases.save": "保存",
   "documents.knowledgeBases.saved": "所属ナレッジベースを保存しました。",
   "documents.knowledgeBases.saveError":
     "所属ナレッジベースの保存に失敗しました。状態を確認して再試行してください。",
@@ -3329,7 +3330,7 @@ export const ja = {
   "documents.classification.periodError": "終了日は開始日より後の日付にしてください。",
   "documents.classification.unset": "未設定",
   "documents.classification.periodSummary": "有効期間 {from}〜{to}",
-  "documents.classification.save": "分類を保存",
+  "documents.classification.save": "保存",
   "documents.classification.saved": "分類と有効期間を保存しました。",
   "documents.classification.saveError": "分類と有効期間の保存に失敗しました。入力を確認して再試行してください。",
   // 文書の分類の一覧（大分類 → 中分類 → 小分類。#2131）。
@@ -3395,7 +3396,7 @@ export const ja = {
   "documents.version.pickerLabel": "この文書を置き換えた新しい版",
   "documents.version.pickerPlaceholder": "新しい版の文書を選択",
   "documents.version.candidatesLoadError": "新しい版の候補の文書を読み込めませんでした。",
-  "documents.version.save": "版を保存",
+  "documents.version.save": "保存",
   "documents.version.clear": "置き換えを解除",
   "documents.version.saved": "新しい版を保存しました。この文書は旧版として回答の検索の対象から外れます。",
   "documents.version.cleared": "置き換えを解除しました。この文書は今有効な版として回答の検索の対象に戻ります。",

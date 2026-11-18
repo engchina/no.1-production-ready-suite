@@ -807,6 +807,20 @@ export interface DocumentDetail extends DocumentSummary {
 }
 
 /** 文書の分類と有効期間。日付は YYYY-MM-DD、終了日は排他的(当日は期間外)。 */
+/** アップロードの form に所属先の KB と、選んだときだけ分類と有効期間（JSON。#5464）を付ける。 */
+function appendUploadFields(
+  form: FormData,
+  knowledgeBaseIds: string[],
+  classification: DocumentClassification | null | undefined,
+) {
+  for (const id of knowledgeBaseIds) {
+    form.append("knowledge_base_ids", id);
+  }
+  if (classification && Object.values(classification).some(Boolean)) {
+    form.append("classification", JSON.stringify(classification));
+  }
+}
+
 export interface DocumentClassification {
   large_category: string | null;
   middle_category: string | null;
@@ -3652,26 +3666,24 @@ export const api = {
     file: File,
     knowledgeBaseIds: string[] = [],
     onUploadProgress?: (progress: UploadTransferProgress) => void,
+    classification?: DocumentClassification | null,
   ) => {
     const form = new FormData();
     form.append("file", file);
-    for (const id of knowledgeBaseIds) {
-      form.append("knowledge_base_ids", id);
-    }
+    appendUploadFields(form, knowledgeBaseIds, classification);
     return requestUpload<UploadResult>("/api/documents/upload", form, onUploadProgress);
   },
   batchUploadDocuments: (
     files: File[],
     knowledgeBaseIds: string[] = [],
     onUploadProgress?: (progress: UploadTransferProgress) => void,
+    classification?: DocumentClassification | null,
   ) => {
     const form = new FormData();
     for (const file of files) {
       form.append("files", file);
     }
-    for (const id of knowledgeBaseIds) {
-      form.append("knowledge_base_ids", id);
-    }
+    appendUploadFields(form, knowledgeBaseIds, classification);
     return requestUpload<BatchUploadResult>(
       "/api/documents/batch-upload",
       form,
