@@ -200,6 +200,51 @@ def test_rows_with_the_same_citation_line_share_one_number() -> None:
     assert [len(items) for items in cited] == [2]
 
 
+def _table(result: str, rows: list[list[int]]) -> GroundedApplication:
+    indexes = list(dict.fromkeys(index for row in rows for index in row))
+    return GroundedApplication.model_validate(
+        {
+            "item_indexes": indexes,
+            "result": result,
+            "table": {
+                "columns": ["項目"],
+                "rows": [{"cells": [f"行 {position}"], "item_indexes": row} for position, row in enumerate(rows, 1)],
+            },
+        }
+    )
+
+
+def test_source_numbers_run_through_the_whole_answer_across_tables() -> None:
+    # 表が 2 つあっても番号は回答全体の通し番号（#5489）。同じ出典行は表をまたいで同じ番号、別の出典行は別の番号。
+    first = CheckedApplication(_table("合成の題 1", [[0], [1]]), entries=[_entry(None, 0, 3), _entry(None, 1, 7)])
+    # 2 つ目の表の行に結ばれない規則（p.11）も、出た順に番号を持つ（列の印は付かない）。
+    second = CheckedApplication(_table("合成の題 2", [[2], [0]]), entries=[_entry(None, 2, 9), _entry(None, 0, 3), _entry(None, 3, 11)])
+    numbers: dict[str, int] = {}
+
+    def citation(span: dict) -> str:
+        return f"根拠：synthetic.txt p.{span['page']}"
+
+    lines = [
+        *table_block_lines(first, citation, lambda _items: None, numbers),
+        *table_block_lines(second, citation, lambda _items: None, numbers),
+    ]
+    assert [line for line in lines if line.startswith("| 行")] == ["| 行 1 | [1] |", "| 行 2 | [2] |", "| 行 1 | [3] |", "| 行 2 | [1] |"]
+    # 番号は出典行が回答の中で最初に出た順（画面は表の下の出典行を同じ規則で数える）。
+    assert [line for line in lines if line.startswith("根拠：")] == [
+        "根拠：synthetic.txt p.3",
+        "根拠：synthetic.txt p.7",
+        "根拠：synthetic.txt p.9",
+        "根拠：synthetic.txt p.3",
+        "根拠：synthetic.txt p.11",
+    ]
+    assert numbers == {
+        "根拠：synthetic.txt p.3": 1,
+        "根拠：synthetic.txt p.7": 2,
+        "根拠：synthetic.txt p.9": 3,
+        "根拠：synthetic.txt p.11": 4,
+    }
+
+
 def _table_parts(units: dict[str, str]) -> dict[str, Any]:
     first, second = units[FIRST], units[SECOND]
     part = table_part([(["失敗の判定", "応答が 30 秒ない要求を失敗とする"], [first]), (["再試行の回数", "最大 5 回"], [second])])

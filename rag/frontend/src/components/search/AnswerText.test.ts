@@ -104,3 +104,60 @@ describe("AnswerText の表（issue 4734）", () => {
     expect(sections).not.toContain("<table");
   });
 });
+
+// #5489: 根拠の行の番号は回答全体の通し番号。同じ根拠の行はどの段落でも同じ番号、別の行は別の番号にする。
+describe("AnswerText の根拠の行の番号（issue 5489）", () => {
+  const markers = (html: string) =>
+    [...html.matchAll(/data-testid="answer-citation-marker"[^>]*>([^<]*)</g)].map((match) => match[1]);
+  const anchors = (html: string) => [...html.matchAll(/id="([^"]*-sources-\d+)"/g)].map((match) => match[1]);
+
+  it("段落をまたいで同じ根拠の行は同じ番号にし、id は最初の行にだけ付ける", () => {
+    const html = render(
+      [
+        "合成の原則の文です。",
+        "根拠：文書 A.pdf p.3",
+        "合成の例外の文です。",
+        "根拠：文書 B.pdf p.5",
+        "根拠：文書 C.pdf p.7",
+        "",
+        "合成の原則の続きです。",
+        "根拠：文書 A.pdf p.3",
+        "根拠：文書 C.pdf p.7",
+      ].join("\n"),
+    );
+    expect(markers(html)).toEqual(["[1]", "[2]", "[3]", "[1]", "[3]"]);
+    const ids = anchors(html);
+    expect(ids.map((id) => id.replace(/^.*-sources-/, ""))).toEqual(["1", "2", "3"]);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("2 つの表の出典の列の印は通し番号の根拠の行（最初に出る行）へ移る", () => {
+    const html = render(
+      [
+        "合成の表の題 1",
+        "| 項目 | 出典 |",
+        "| --- | --- |",
+        "| 行 1 | [1] |",
+        "| 行 2 | [2] |",
+        "根拠：文書 A.pdf p.3",
+        "根拠：文書 B.pdf p.5",
+        "",
+        "合成の表の題 2",
+        "| 項目 | 出典 |",
+        "| --- | --- |",
+        "| 行 1 | [3] |",
+        "| 行 2 | [1] |",
+        "根拠：文書 C.pdf p.7",
+        "根拠：文書 A.pdf p.3",
+      ].join("\n"),
+      { diagnostics: { answer_format: { table_source_column: "出典" } } },
+    );
+    expect(markers(html)).toEqual(["[1]", "[2]", "[3]", "[1]"]);
+    const ids = anchors(html);
+    expect([...html.matchAll(/data-testid="answer-source-mark"/g)]).toHaveLength(4);
+    const targets = [...html.matchAll(/href="#([^"]*)"/g)].map((match) => match[1]);
+    // 印の移り先はすべて実在する id（2 つ目の表の [1] は 1 つ目の表の下の行）。
+    expect(targets.map((id) => id.replace(/^.*-sources-/, ""))).toEqual(["1", "2", "3", "1"]);
+    expect(targets.every((id) => ids.includes(id))).toBe(true);
+  });
+});
