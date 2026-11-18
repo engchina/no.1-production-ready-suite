@@ -1045,6 +1045,60 @@ async def test_oci_adapter_rejects_invalid_response_path() -> None:
     assert transport.calls
 
 
+async def test_oci_generate_logs_llm_call_usage(caplog: pytest.LogCaptureFixture) -> None:
+    """backend の呼び出しも、本文を出さずに llm_call_usage を残す（#5433）。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {
+                "input_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 20},
+                "output_tokens": 30,
+                "output_tokens_details": {"reasoning_tokens": 10},
+            },
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+    caplog.set_level("INFO", logger="app.clients.oci_enterprise_ai")
+
+    with pytest.raises(EnterpriseAiIncompleteResponseError):
+        await client.generate(
+            "合成の質問",
+            "合成の根拠",
+            system_prompt="合成の指示",
+            response_schema={"type": "object"},
+            response_schema_name="synthetic_schema",
+        )
+
+    record = next(r for r in caplog.records if getattr(r, "event", "") == "llm_call_usage")
+    fields = vars(record)
+    assert fields["llm_schema"] == "synthetic_schema"
+    assert fields["llm_status"] == "incomplete"
+    assert fields["llm_incomplete_reason"] == "max_output_tokens"
+    assert (fields["input_tokens"], fields["cached_tokens"]) == (120, 20)
+    assert (fields["output_tokens"], fields["reasoning_tokens"]) == (30, 10)
+    assert "合成の" not in record.getMessage() + str(fields)
+
+
+async def test_oci_generate_logs_failed_call(caplog: pytest.LogCaptureFixture) -> None:
+    """失敗した呼び出しも、失敗の種類つきで llm_call_usage を残す（#5433）。"""
+
+    class TimeoutTransport(FakeEnterpriseAiTransport):
+        async def post_json(self, *args: Any, **kwargs: Any) -> Mapping[str, Any]:
+            raise httpx.ReadTimeout("synthetic timeout")
+
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=TimeoutTransport({}))
+    caplog.set_level("INFO", logger="app.clients.oci_enterprise_ai")
+
+    with pytest.raises(EnterpriseAiTimeoutError):
+        await client.generate("合成の質問", "合成の根拠", system_prompt="合成の指示")
+
+    record = next(r for r in caplog.records if getattr(r, "event", "") == "llm_call_usage")
+    assert vars(record)["llm_status"] == "failed"
+    assert vars(record)["llm_failure"] == {"error_type": "EnterpriseAiTimeoutError"}
+
+
 class FakeEnterpriseAiTransport:
     """Enterprise AI HTTP transport の fake。"""
 

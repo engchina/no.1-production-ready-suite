@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -119,6 +121,18 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
     async def _post_enterprise_ai(
         self, path: str, payload: Mapping[str, Any], *, vision: bool = False
     ) -> Mapping[str, Any]:
+        started = time.perf_counter()
+        try:
+            response = await self._post_enterprise_ai_observed(path, payload, vision=vision)
+        except Exception as error:
+            _log_call(payload, None, time.perf_counter() - started, error=error)
+            raise
+        _log_call(payload, response, time.perf_counter() - started)
+        return response
+
+    async def _post_enterprise_ai_observed(
+        self, path: str, payload: Mapping[str, Any], *, vision: bool
+    ) -> Mapping[str, Any]:
         with observed_span(
             "gen_ai.chat",
             kind="client",
@@ -133,3 +147,63 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
             span.set_call_output(response)
             record_genai_usage(span, response.get("usage"))
             return response
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _tokens(usage: object, key: str, detail: str | None = None) -> int:
+    if not isinstance(usage, Mapping):
+        return 0
+    value = usage.get(key)
+    if detail is not None:
+        value = value.get(detail) if isinstance(value, Mapping) else None
+    return value if type(value) is int and value >= 0 else 0
+
+
+def _log_call(
+    payload: Mapping[str, Any],
+    response: Mapping[str, Any] | None,
+    seconds: float,
+    *,
+    error: BaseException | None = None,
+) -> None:
+    """回答の生成と同じ `llm_call_usage` を残す（#5433）。本文は出さない。"""
+    text = payload.get("text")
+    fmt = text.get("format") if isinstance(text, Mapping) else None
+    body = response or {}
+    usage = body.get("usage")
+    details = body.get("incomplete_details")
+    status_code = getattr(getattr(error, "response", None), "status_code", None)
+    _logger.info(
+        "llm_call_usage",
+        extra={
+            "event": "llm_call_usage",
+            "llm_model": str(payload.get("model") or ""),
+            "llm_schema": str(fmt.get("name") or "-") if isinstance(fmt, Mapping) else "-",
+            "llm_seconds": round(seconds, 1),
+            "llm_status": "failed" if error else str(body.get("status") or "completed"),
+            "llm_incomplete_reason": str(details.get("reason") or "")
+            if isinstance(details, Mapping)
+            else "",
+            **(
+                {"llm_max_output_tokens": payload["max_output_tokens"]}
+                if isinstance(payload.get("max_output_tokens"), int)
+                else {}
+            ),
+            **(
+                {
+                    "llm_failure": {
+                        "error_type": type(error).__name__,
+                        **({"status_code": status_code} if status_code else {}),
+                    }
+                }
+                if error
+                else {}
+            ),
+            "input_tokens": _tokens(usage, "input_tokens"),
+            "cached_tokens": _tokens(usage, "input_tokens_details", "cached_tokens"),
+            "output_tokens": _tokens(usage, "output_tokens"),
+            "reasoning_tokens": _tokens(usage, "output_tokens_details", "reasoning_tokens"),
+        },
+    )
