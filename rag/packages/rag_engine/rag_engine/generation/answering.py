@@ -1208,9 +1208,7 @@ def build_adb_hybrid_answer_context(
     # 切った起点から集める（#5389）。rerank にかけず、context を作るときに最後の根拠の並びへ合わせる（#5162）。
     # 拡張を注入しない呼び出し（SDK・評価の注入・RAG 検索の経路）は拡張しない。
     # 起点が 0 件（全部が下限未満）でも、質問の実体・見出しの語からの拡張は行う（検索の段で行っていたときと同じ）。
-    expanded = injected_search_expansions(
-        anchors=[record.chunk_uid for record in selected], candidate_ids=candidate_ids, **search_options
-    )
+    expanded = injected_search_expansions(anchors=[record.chunk_uid for record in selected], candidate_ids=candidate_ids, **search_options)
     expansion_candidates = tuple(_stored_chunk_answer_record(chunk) for chunk in expanded)
     known_ids = {retrieval_record_id(record) for record in active_records}
     active_records.extend(record for record in expansion_candidates if retrieval_record_id(record) not in known_ids)
