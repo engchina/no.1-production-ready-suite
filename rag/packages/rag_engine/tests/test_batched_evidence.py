@@ -984,3 +984,87 @@ def test_last_unfit_trial_keeps_the_citations_of_the_final_generation(monkeypatc
     assert snapshot["snapshot_status"] == "recorded" and not snapshot["unrecorded_evidence_ids"]
     assert len(trace["citation_lines"]) == 1
     assert not re.search(r"\[E[0-9]+\.[0-9]+\]", result.answer_text)
+
+
+PARALLEL_INPUTS = [span(i, f"条件{i}。" + "補足本文。" * 300) for i in range(8)]
+
+
+def _batch_reader(calls, *, hold=None):
+    """各組の出典を記録する読取。``hold`` は (止める組の先頭の出典, 待つ Event)。"""
+
+    def read(system, prompt, schema):
+        values = json.loads(prompt)["evidence"]
+        sources = [value["source"] for value in values]
+        calls.append(sources)
+        if hold is not None and sources[0] == hold[0]:
+            assert hold[1].wait(5), "空いた枠から次の組が始まらない"
+        return schema.model_validate({"findings": [finding(value) for value in values]})
+
+    return read
+
+
+def test_parallel_reading_fills_free_slots_and_merges_in_batch_order():
+    """同じ段の組を並行に読み、空いた枠から次の組を始め、統合・記録・ContextVar は順次と同じにする（#4997）。"""
+    import contextvars
+    import threading
+
+    sequential_calls = []
+    expected = prepare(PARALLEL_INPUTS, _batch_reader(sequential_calls))
+    assert len(sequential_calls) >= 4
+    marker = contextvars.ContextVar("marker", default="")
+    marker.set("要求の文脈")
+    seen_markers = []
+    fourth_started = threading.Event()
+    calls = []
+    reader = _batch_reader(calls, hold=(sequential_calls[0][0], fourth_started))
+
+    def read(system, prompt, schema):
+        seen_markers.append(marker.get())
+        if json.loads(prompt)["evidence"][0]["source"] == sequential_calls[3][0]:
+            fourth_started.set()
+        return reader(system, prompt, schema)
+
+    # 最初の組は 4 番目の組が始まるまで終わらない。3 本の枠の 2・3 番目が空けば 4 番目が始まる。
+    actual = prepare(PARALLEL_INPUTS, read, batch_read_workers=3)
+    assert actual == expected
+    assert sorted(map(tuple, calls)) == sorted(map(tuple, sequential_calls))
+    assert set(seen_markers) == {"要求の文脈"}
+    assert [batch["index"] for batch in actual[2]["batches"]] == list(range(1, len(sequential_calls) + 1))
+
+
+def test_parallel_reading_stops_new_batches_after_a_hard_failure():
+    calls = []
+
+    def read(system, prompt, schema):
+        calls.append(prompt)
+        raise RuntimeError("合成の失敗")
+
+    with pytest.raises(RuntimeError):
+        prepare(PARALLEL_INPUTS, read, batch_read_workers=2)
+    assert len(calls) <= 3
+
+
+def test_input_over_the_lower_bound_is_split_without_rendering_the_whole(monkeypatch):
+    """下限で文字予算を超える入力は、全体を描画せずに分割する。読む範囲と結果は変わらない（#4993）。"""
+    expected = prepare(PARALLEL_INPUTS, _batch_reader([]))
+    rendered_sizes = []
+
+    def render(values):
+        rendered_sizes.append(sum(len(value["text"]) for value in values))
+        return block(values)
+
+    actual = prepare_batched_evidence(
+        PARALLEL_INPUTS,
+        config(),
+        question="各資料の条件を比較する",
+        render=render,
+        evidence_text=render,
+        system="指示",
+        schema={"type": "object"},
+        read=_batch_reader([]),
+        unusable_output=_invalid_structured_output,
+        evidence_size_lower_bound=lambda values, _stop: sum(len(value["text"]) for value in values),
+    )
+    assert actual == expected
+    # 描画したのは各組と、読取で絞った最終の入力だけ。全原文をまとめて描画しない。
+    assert max(rendered_sizes) <= config().evidence_budget_chars < sum(len(value["text"]) for value in PARALLEL_INPUTS)

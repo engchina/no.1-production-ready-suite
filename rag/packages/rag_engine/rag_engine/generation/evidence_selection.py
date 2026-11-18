@@ -29,6 +29,7 @@ def select_evidence(
     protected_sources: Collection[str] = (),
     failed_batches: list[dict[str, Any]] | None = None,
     image_count: int = 0,
+    evidence_size_lower_bound: Callable[[Sequence[dict[str, Any]], int], int] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """固定入力も含めて測り、重複を除いた全原文が入れば関連度の順で 1 回の生成の入力にする。
 
@@ -40,6 +41,9 @@ def select_evidence(
 
     ``image_count`` は回答の生成に添付する画像の枚数（#5316）。1 回の生成と分割読取の最終生成の測定に画像の分を含める
     （分割読取の各組は画像を送らないので含めない）。
+
+    ``evidence_size_lower_bound`` は ``evidence_text`` の字数の下限（#4993）。下限が文字予算を超えれば、全体を描画・測定せずに
+    分割読取へ渡す（入ることは実際の描画で確かめる）。
     """
 
     def measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
@@ -76,10 +80,14 @@ def select_evidence(
         counts["first_chunk_covered_document_count"] = len(
             first_documents - {document_key(span) for span in whole if span.get(FIRST_CHUNK)}
         )
-    selected = tag(whole)
-    prompt, measurement = measure(selected)
-    if measurement["fits"]:
-        return selected, prompt, {**measurement, **counts, "selection": "relevance_within_budget", "batch_count": 0}
+    if (
+        evidence_size_lower_bound is None
+        or evidence_size_lower_bound(whole, settings.evidence_budget_chars) <= settings.evidence_budget_chars
+    ):
+        selected = tag(whole)
+        prompt, measurement = measure(selected)
+        if measurement["fits"]:
+            return selected, prompt, {**measurement, **counts, "selection": "relevance_within_budget", "batch_count": 0}
     selected, prompt, measurement = prepare_batched_evidence(
         [*unique, *firsts],
         settings,
@@ -97,5 +105,6 @@ def select_evidence(
         source_scores=source_scores,
         protected_sources=protected_sources,
         image_count=image_count,
+        evidence_size_lower_bound=evidence_size_lower_bound,
     )
     return selected, prompt, {**measurement, **counts, "selection": "batched_reading"}

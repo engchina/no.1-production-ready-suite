@@ -167,3 +167,34 @@ def test_every_batch_and_the_final_input_carry_the_first_chunk_of_their_document
     final_firsts = [value["text"] for value in selected if value.get("document_first_chunk")]
     documents = {tuple(value["document_scope"]) for value in selected if not value.get("document_first_chunk")}
     assert sorted(final_firsts) == sorted(first[key[0]]["text"] for key in documents)
+
+
+def test_input_over_the_lower_bound_goes_to_batched_reading_without_a_whole_render(monkeypatch):
+    """下限で文字予算を超える原文は、1 回の生成の全体を描画せずに分割読取へ渡す（#4993）。"""
+    import rag_engine.generation.evidence_selection as module
+
+    passed = {}
+
+    def batched(spans, settings, **kwargs):
+        passed.update(kwargs, spans=spans)
+        return list(spans), "", {"fits": True}
+
+    monkeypatch.setattr(module, "prepare_batched_evidence", batched)
+    inputs = [span(i, "合成の本文です。" * 50) for i in range(4)]
+    rendered = []
+    _, _, diagnostic = select_evidence(
+        inputs,
+        get_settings(environ={}, dotenv_path=None),
+        question="合成の質問",
+        render=lambda values: rendered.append(len(values)) or json.dumps(values, ensure_ascii=False),
+        evidence_text=lambda values: "".join(value["text"] for value in values),
+        tag=list,
+        system="合成の指示",
+        schema_for=lambda _values: {"type": "object"},
+        read=no_read,
+        unusable_output=lambda error: False,
+        evidence_size_lower_bound=lambda values, _stop: 10**9,
+    )
+    assert diagnostic["selection"] == "batched_reading"
+    assert rendered == [0]
+    assert passed["evidence_size_lower_bound"] is not None and len(passed["spans"]) == 4

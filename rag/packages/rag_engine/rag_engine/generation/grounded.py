@@ -258,70 +258,7 @@ def tag_spans(spans: Sequence[dict]) -> list[dict]:
         tags = ["image_generated"] if not span.get("document_background_only") and _image_generated(span) else []
         tagged.append({**span, "tags": tags, "function": function_key(span), "label": f"E{len(tagged) + 1}"})
     _unify_prefixed_function_labels(tagged)
-    for span in tagged:
-        # 画面キャプチャの説明。画面に表示されるキー番号とボタン名の対応（実行(F5)）は本文に書かれないことが
-        # 多く、その画面の説明だけが根拠になる (#637)。span 自身が画面説明の場合もその text を含める。
-        # screen_texts は対応の照合にだけ使うため本文の代用にはならず、除くと画面が 1 枚の文書で画像内だけに
-        # ある対応を確認できない (#776)。
-        # 範囲は同じ文書の近傍ページという確実な事実で決める。解析した見出しから求める機能（_same_function_scope）
-        # は範囲を広げるだけで、狭める条件にはしない。柱が信頼されたかどうかで機能ラベルの粒度が変わり、同じ画面の
-        # 画面説明と操作説明が別機能に割れるため、機能で絞ると画面に実在するボタンでも照合できない (#1088)。
-        span["screen_texts"] = [
-            other["text"]
-            for other in tagged
-            if "image_generated" in other["tags"] and (_near_page(span, other) or _same_function_scope(span, other))
-        ]
-        # 同じ機能の本文（生成説明を除く）。手順が隣の span に分かれても、ボタン名の存在は機能の本文で確認できる (#658)。
-        # 上位の見出し（章の概要文「以下の画面で設定変更を行ってください。（１）…（２）…」）の span には、
-        # 配下の節の本文も同じ機能として含める (#680)。
-        span["function_texts"] = [
-            other["text"]
-            for other in tagged
-            if other is not span
-            and _same_function_scope(span, other)
-            and "image_generated" not in other["tags"]
-            and other.get("origin") != "image_extraction"
-        ]
-        # 同じ文書の本文（生成説明を除く）。画面経路の番号（「マスタ管理 2 タブ」）のように文書の別の箇所にある
-        # 数値を、引用にないというだけで疑わない (#678)。
-        span["document_texts"] = [
-            other["text"]
-            for other in tagged
-            if other is not span
-            and _document_key(other) == _document_key(span)
-            and "image_generated" not in other["tags"]
-            and other.get("origin") != "image_extraction"
-        ]
-        # 同じ文書の隣のページの本文（生成説明を除く）。section_path の推定が誤って 1 つの手順が別機能に分かれるのは
-        # ページ境界（柱や見出しの誤検出）で起きやすいので、ボタン名の存在はここでも確認する (#809)。同じページの
-        # 兄弟機能（(１)(２)）は #680 のとおり含めない。
-        span["adjacent_texts"] = [
-            other["text"]
-            for other in tagged
-            if other is not span
-            and _document_key(other) == _document_key(span)
-            and _adjacent_page(span, other)
-            and "image_generated" not in other["tags"]
-            and other.get("origin") != "image_extraction"
-        ]
     return tagged
-
-
-def _adjacent_page(span: dict, other: dict) -> bool:
-    """両方の頁が分かっていて、ちょうど 1 ページ違いか。"""
-    page, other_page = int(span.get("page") or 0), int(other.get("page") or 0)
-    return page > 0 and other_page > 0 and abs(page - other_page) == 1
-
-
-def _near_page(span: dict, other: dict) -> bool:
-    """同じ文書で、頁が同じか 1 ページ違いか。解析結果に依らない範囲の判定 (#1088)。
-
-    画面説明とその操作説明は同じ頁か次の頁に載る。見出しの解析は誤り得るが、文書の同一性と頁は誤らない。
-    """
-    if _document_key(other) != _document_key(span):
-        return False
-    page, other_page = int(span.get("page") or 0), int(other.get("page") or 0)
-    return page > 0 and other_page > 0 and abs(page - other_page) <= 1
 
 
 _TRUSTED_HEADING_SOURCES = frozenset({"section_header", "title"})
@@ -378,18 +315,6 @@ def _unify_prefixed_function_labels(tagged: list[dict]) -> None:
         for span in tagged:
             if tuple(span["function"][:-1]) == document and span["function"][-1] in mapping:
                 span["function"] = (*document, mapping[span["function"][-1]])
-
-
-def _same_function_scope(span: dict, other: dict) -> bool:
-    """other が span と同じ機能か、同じ文書で span の節の配下（section_path が span の path を接頭辞に持つ）か。
-
-    兄弟の機能（（１）と（２））は含めない。配下の判定は同じ文書に限る。見出しは出所の確かなものだけで比べる (#820)。
-    """
-    if other["function"] == span["function"]:
-        return True
-    path = _trusted_section_path(span)
-    other_path = _trusted_section_path(other)
-    return bool(path) and len(other_path) > len(path) and other_path[: len(path)] == path and _document_key(other) == _document_key(span)
 
 
 def _document_key(span: dict) -> tuple[str, ...]:
@@ -2500,6 +2425,23 @@ def guide_notice_lines(
 def evidence_block_text(spans: Sequence[dict]) -> str:
     """生成の入力の根拠ブロック（``build_context_block`` の境界の内側）の本文。文字予算の診断も同じ本文で数える (#3776)。"""
     return neutralize_boundary_markers(format_functions(spans, model_view=True))
+
+
+def evidence_text_lower_bound(spans: Sequence[dict[str, Any]], stop_after: int) -> int:
+    """``evidence_block_text`` の字数の下限。必ず描画する本文（引用単位の本文、単位が無ければ全文）だけを幅をそろえて数える。
+
+    ``stop_after`` を超えた時点で数えるのをやめる。上限を超えることの確定にだけ使い、入ることの判定には使わない
+    （#4993。大量の原文を全体の描画・引用の記録より前に分割へ回す）。
+    """
+    total = 0
+    for span in spans:
+        text = str(span.get("text") or "")
+        units = () if span.get("document_background_only") else span_citation_units(span)
+        for piece in (text[start:end] for start, end in units) if units else (text,):
+            total += len(fold_width(piece))
+            if total > stop_after:
+                return total
+    return total
 
 
 def evidence_metadata_text(span: Mapping[str, Any]) -> str:

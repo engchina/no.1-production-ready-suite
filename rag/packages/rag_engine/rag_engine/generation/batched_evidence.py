@@ -6,7 +6,12 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import closing
+from contextvars import copy_context
+from dataclasses import dataclass
+from itertools import islice
 from types import GenericAlias
 from typing import Any, cast
 
@@ -184,6 +189,52 @@ def candidate_block(values: Sequence[Mapping[str, Any]]) -> str:
     )
 
 
+@dataclass
+class _BatchOutcome:
+    """1 組の読取の結果。例外も値として返し、統合は呼び出し側が組の順に行う。"""
+
+    batch: list[dict[str, Any]]
+    receipt: dict[str, Any]
+    reading_schema: Mapping[str, Any]
+    reading: BatchReading | None = None
+    mismatch: BatchRangeInvalid | None = None
+    error: Exception | None = None
+
+
+def _ordered_parallel[T, R](function: Callable[[T], R], values: Iterable[T], *, workers: int) -> Generator[R]:
+    """``function`` を最大 ``workers`` 本ずつ並行に呼び、空いた枠から次を始め、結果は元の順に返す（#4997）。
+
+    次の値は枠が空いたときに取り出す（``values`` の側で読み始める直前の判定ができる）。各呼出は呼び出し側の
+    ContextVar の写しで動く。途中で閉じられたら、まだ始まっていない呼出を取り消し、始まった呼出の終了を待つ。
+    """
+    if workers <= 1:
+        yield from map(function, values)
+        return
+    source = enumerate(values)
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rag-batch-read")
+    pending: dict[Future[R], int] = {}
+    finished: dict[int, R] = {}
+
+    def submit(count: int) -> None:
+        for index, value in islice(source, count):
+            pending[executor.submit(copy_context().run, function, value)] = index
+
+    try:
+        submit(workers)
+        expected = 0
+        while pending or expected in finished:
+            if expected in finished:
+                yield finished.pop(expected)
+                expected += 1
+                continue
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                finished[pending.pop(future)] = future.result()
+            submit(len(done))
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
 def prepare_batched_evidence(
     spans: Sequence[dict[str, Any]],
     settings: Settings,
@@ -202,6 +253,7 @@ def prepare_batched_evidence(
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
     image_count: int = 0,
+    evidence_size_lower_bound: Callable[[Sequence[dict[str, Any]], int], int] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。
 
@@ -220,6 +272,10 @@ def prepare_batched_evidence(
     ``answer_generation_round_estimate_seconds``）と確定の分（``ANSWER_FINALIZE_RESERVE_SECONDS``）より少なければ、
     残りの組を読まない。読み終わった組の結果と、読まなかった組の入力を優先の順に入る分だけ最終生成へ渡し、入らなかった
     出典の数を ``excluded_span_count``、止めた理由を ``stop_reason="deadline"`` と ``deadline`` に残す。
+
+    ``evidence_size_lower_bound`` は ``evidence_text`` の字数の下限（#4993）。下限が文字予算を超える入力は、描画・測定せずに
+    入らないと決める（大量の原文を全体の描画と引用の記録より前に分割へ回す）。入ることは従来どおり実際の描画で確かめる。
+    同じ pass の組は互いの結果を使わないので、設定の ``batch_read_workers`` 本まで並行に読み、結果は組の順に統合する（#4997）。
     """
     reading_system = BATCH_READING_PROMPT
     protected = frozenset(protected_sources)
@@ -250,7 +306,16 @@ def prepare_batched_evidence(
         values = order_document_spans(values, priority=document_order)
         return "\n\n".join(part for part in (render(values), candidate_block(values)) if part)
 
+    def over_budget(values: Sequence[dict[str, Any]]) -> int | None:
+        """下限で文字予算を超えることが確定すれば、その下限の字数。"""
+        if evidence_size_lower_bound is None:
+            return None
+        minimum = evidence_size_lower_bound(values, settings.evidence_budget_chars)
+        return minimum if minimum > settings.evidence_budget_chars else None
+
     def final_measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+        if (minimum := over_budget(values)) is not None:
+            return "", {"fits": False, "rendered_chars_at_least": minimum}
         prompt = final_prompt(values)
         measured = model_input_measurement(
             settings,
@@ -295,7 +360,7 @@ def prepare_batched_evidence(
 
     def fits(values: Sequence[dict[str, Any]]) -> bool:
         # 修復の指摘の上限まで含めて測る。どの組も、読取の不合格を指摘する再試行が入力の予算に必ず入る（#4229）。
-        if (
+        if over_budget(values) is not None or (
             len(evidence_text(values)) + sum(len(value.get(CONTINUED_TABLE_HEADER_KEY, "")) for value in values)
             > settings.evidence_budget_chars
         ):
@@ -543,29 +608,46 @@ def prepare_batched_evidence(
             if not selected or remaining_passes <= 0:
                 stop_reduction("batch_reduction_did_not_fit")
             remaining_passes -= 1
-            previous_size = len(prompt)
+            previous_size = sum(len(value["text"]) for value in selected)
             reduced: dict[tuple[str, int, int], dict[str, Any]] = {}
             pass_batches = list(partition(selected))
-            for batch_index, batch in enumerate(pass_batches, 1):
-                left = remaining_seconds()
-                if left is not None and left < generation_reserve:
-                    # 残りは最後の生成と確定に使い、この組から先は読まない（#5204）。
-                    skipped = pass_batches[batch_index - 1 :]
-                    unread_inputs = [value for group in skipped for value in group]
-                    deadline_stop.update(
-                        remaining_seconds=round(left, 3),
-                        reserve_seconds=generation_reserve,
-                        pass_index=pass_index,
-                        completed_batch_count=batch_index - 1,
-                        skipped_batch_count=len(skipped),
-                        skipped_input_count=len(unread_inputs),
-                    )
-                    break
-                # 組の本文の文書ごとに、本文の先頭の chunk を先頭に足す（#5240）。
-                batch = order_document_spans(with_firsts(batch), priority=document_order)
+            batch_offset = len(batches)
+
+            def admitted(
+                pass_batches: Sequence[list[dict[str, Any]]] = pass_batches, pass_index: int = pass_index
+            ) -> Iterator[tuple[int, list[dict[str, Any]]]]:
+                """読む組を順に渡す。組を読み始める直前に期限の残りを確かめる（#5204）。"""
+                nonlocal unread_inputs
+                for batch_index, batch in enumerate(pass_batches, 1):
+                    left = remaining_seconds()
+                    if left is not None and left < generation_reserve:
+                        # 残りは最後の生成と確定に使い、この組から先は読まない（#5204）。読み始めた組は読み終える。
+                        skipped = pass_batches[batch_index - 1 :]
+                        unread_inputs = [value for group in skipped for value in group]
+                        deadline_stop.update(
+                            remaining_seconds=round(left, 3),
+                            reserve_seconds=generation_reserve,
+                            pass_index=pass_index,
+                            completed_batch_count=batch_index - 1,
+                            skipped_batch_count=len(skipped),
+                            skipped_input_count=len(unread_inputs),
+                        )
+                        return
+                    # 組の本文の文書ごとに、本文の先頭の chunk を先頭に足す（#5240）。
+                    yield batch_index, order_document_spans(with_firsts(batch), priority=document_order)
+
+            def read_batch(
+                item: tuple[int, list[dict[str, Any]]],
+                *,
+                pass_batches: Sequence[list[dict[str, Any]]] = pass_batches,
+                pass_index: int = pass_index,
+                batch_offset: int = batch_offset,
+            ) -> _BatchOutcome:
+                """1 組を読む。並行に呼ばれるので、共有の状態は変えずに結果と例外を返す。"""
+                batch_index, batch = item
                 payload = read_prompt(batch)
                 receipt: dict[str, Any] = {
-                    "index": len(batches) + 1,
+                    "index": batch_offset + batch_index,
                     "pass_index": pass_index,
                     "batch_index": batch_index,
                     "batch_count": len(pass_batches),
@@ -589,19 +671,11 @@ def prepare_batched_evidence(
                     ],
                     "first_chunk_source_ids": list(dict.fromkeys(value["source_id"] for value in batch if value.get(FIRST_CHUNK))),
                 }
-                batches.append(receipt)
                 reading_model = _reading_model(batch)
                 reading_schema = reading_model.model_json_schema()
 
-                def repair(
-                    error: Exception,
-                    will_retry: bool,
-                    *,
-                    original: str = payload,
-                    batch_schema: Mapping[str, Any] = reading_schema,
-                    batch_receipt: dict[str, Any] = receipt,
-                ) -> str | None:
-                    detail = batch_validation_detail(error, batch_schema)
+                def repair(error: Exception, will_retry: bool) -> str | None:
+                    detail = batch_validation_detail(error, reading_schema)
                     is_unit_error = any(row.get("protocol_code") == UNIT_INVALID_CODE for row in detail.get("validation_errors", []))
                     is_range_error = batch_range_invalid(error) is not None or is_unit_error
                     update_call_context(
@@ -612,15 +686,15 @@ def prepare_batched_evidence(
                             else "invalid_structured_output",
                         }
                     )
-                    batch_receipt.setdefault("validation_failures", []).append(detail)
+                    receipt.setdefault("validation_failures", []).append(detail)
                     if not will_retry:
                         return None
-                    corrected = batch_repair_prompt(original, detail)
-                    batch_receipt["repair_input"] = {"original_prompt_chars": len(original), "retry_prompt_chars": len(corrected)}
+                    corrected = batch_repair_prompt(payload, detail)
+                    receipt["repair_input"] = {"original_prompt_chars": len(payload), "retry_prompt_chars": len(corrected)}
                     return corrected
 
+                outcome = _BatchOutcome(batch, receipt, reading_schema)
                 try:
-                    mismatch: BatchRangeInvalid | None = None
                     with (
                         call_context(
                             {
@@ -633,66 +707,86 @@ def prepare_batched_evidence(
                         bind_structured_output_repair(repair),
                     ):
                         try:
-                            wire_reading = read(reading_system, payload, reading_model)
-                            reading = _canonical_reading(wire_reading, batch)
+                            outcome.reading = _canonical_reading(read(reading_system, payload, reading_model), batch)
                         except ValidationError as exc:
-                            mismatch = batch_range_invalid(exc)
-                            if mismatch is None:
+                            outcome.mismatch = batch_range_invalid(exc)
+                            if outcome.mismatch is None:
                                 raise
-                            reading = mismatch.reading
-                            unverified_failure = (exc, receipt)
-                    by_id = {f"B{index}": value for index, value in enumerate(batch, 1)}
-                    unit_counts = reading_unit_counts(batch)
-                    for finding in reading.findings:
-                        if range_error_reason(finding.start_line, finding.end_line, unit_counts) is not None:
-                            # 再試行の後も無効な範囲は、その answer ごと使わない（範囲を推測で直さない）。
-                            if mismatch is not None:
-                                continue
-                            raise ValueError(RANGE_INVALID_CODE)
-                        evidence_id, first, last = parse_line_range(finding.start_line, finding.end_line)
-                        original = by_id[evidence_id]
-                        units = reading_units(original)
-                        # 原文と座標は番号からコードが切り出す。モデルの文字列を原文として受け取らない。
-                        excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
-                        key = (excerpt["source_id"], excerpt["start"], excerpt["end"])
-                        answers = (reduced.get(key, {}).get("batch_answer"), verified_candidate(finding.answer, excerpt["text"]))
-                        answer = "\n".join(item for item in answers if item)
-                        if answer:
-                            excerpt["batch_answer"] = answer
-                        reduced[key] = excerpt
-                        receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
-                    if mismatch is not None:
-                        # 不合格の範囲を組から入力へ絞る（#4090）。その finding を採らず、その入力の原文を残す。
-                        retained = [by_id[key] for key in mismatch.diagnostic["retained_evidence_ids"]]
-                        retain_whole(retained, reduced)
-                        receipt["range_unverified"] = {
-                            "unmatched_count": mismatch.diagnostic["unmatched_count"],
-                            "reasons": mismatch.diagnostic["reasons"],
-                            "retained_input_count": len(retained),
-                        }
-                    read_sources.update(value["source_id"] for value in batch)
-                    unverified = mismatch.diagnostic["unmatched_count"] if mismatch is not None else 0
-                    receipt.update(status="completed", finding_count=len(reading.findings) - unverified)
+                            outcome.reading = outcome.mismatch.reading
+                            outcome.error = exc
                 except Exception as exc:
-                    receipt.update(status="failed", error=type(exc).__name__)
-                    if isinstance(exc, ValidationError) and not receipt.get("validation_failures"):
-                        receipt["validation_failures"] = [batch_validation_detail(exc, reading_schema)]
-                    if not unusable_output(exc):
-                        if failed_batches is not None:
-                            failed_batches.append(receipt)
-                        raise
-                    # 使える出力が得られなかった組で問の全体をあきらめない（#4229）。その組の原文を残し、ほかの組の結果と合わせて続ける。
-                    retain_whole(batch, reduced)
-                    receipt["retained_input_count"] = len(batch)
-                    unverified_failure = (exc, receipt)
-                finally:
-                    record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
+                    outcome.reading, outcome.mismatch, outcome.error = None, None, exc
+                return outcome
+
+            workers = settings.batch_read_workers
+            with closing(_ordered_parallel(read_batch, admitted(), workers=workers)) as outcomes:
+                for outcome in outcomes:
+                    batch, receipt, reading_schema, reading, mismatch = (
+                        outcome.batch,
+                        outcome.receipt,
+                        outcome.reading_schema,
+                        outcome.reading,
+                        outcome.mismatch,
+                    )
+                    batches.append(receipt)
+                    try:
+                        if reading is None:
+                            raise cast(Exception, outcome.error)
+                        if mismatch is not None:
+                            unverified_failure = (cast(Exception, outcome.error), receipt)
+                        by_id = {f"B{index}": value for index, value in enumerate(batch, 1)}
+                        unit_counts = reading_unit_counts(batch)
+                        for finding in reading.findings:
+                            if range_error_reason(finding.start_line, finding.end_line, unit_counts) is not None:
+                                # 再試行の後も無効な範囲は、その answer ごと使わない（範囲を推測で直さない）。
+                                if mismatch is not None:
+                                    continue
+                                raise ValueError(RANGE_INVALID_CODE)
+                            evidence_id, first, last = parse_line_range(finding.start_line, finding.end_line)
+                            original = by_id[evidence_id]
+                            units = reading_units(original)
+                            # 原文と座標は番号からコードが切り出す。モデルの文字列を原文として受け取らない。
+                            excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
+                            key = (excerpt["source_id"], excerpt["start"], excerpt["end"])
+                            answers = (reduced.get(key, {}).get("batch_answer"), verified_candidate(finding.answer, excerpt["text"]))
+                            answer = "\n".join(item for item in answers if item)
+                            if answer:
+                                excerpt["batch_answer"] = answer
+                            reduced[key] = excerpt
+                            receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
+                        if mismatch is not None:
+                            # 不合格の範囲を組から入力へ絞る（#4090）。その finding を採らず、その入力の原文を残す。
+                            retained = [by_id[key] for key in mismatch.diagnostic["retained_evidence_ids"]]
+                            retain_whole(retained, reduced)
+                            receipt["range_unverified"] = {
+                                "unmatched_count": mismatch.diagnostic["unmatched_count"],
+                                "reasons": mismatch.diagnostic["reasons"],
+                                "retained_input_count": len(retained),
+                            }
+                        read_sources.update(value["source_id"] for value in batch)
+                        unverified = mismatch.diagnostic["unmatched_count"] if mismatch is not None else 0
+                        receipt.update(status="completed", finding_count=len(reading.findings) - unverified)
+                    except Exception as exc:
+                        receipt.update(status="failed", error=type(exc).__name__)
+                        if isinstance(exc, ValidationError) and not receipt.get("validation_failures"):
+                            receipt["validation_failures"] = [batch_validation_detail(exc, reading_schema)]
+                        if not unusable_output(exc):
+                            if failed_batches is not None:
+                                failed_batches.append(receipt)
+                            raise
+                        # 使える出力が得られなかった組で問の全体をあきらめない（#4229）。
+                        # その組の原文を残し、ほかの組の結果と合わせて続ける。
+                        retain_whole(batch, reduced)
+                        receipt["retained_input_count"] = len(batch)
+                        unverified_failure = (exc, receipt)
+                    finally:
+                        record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
             if deadline_stop:
                 selected, prompt, measurement = keep_unread(list(reduced.values()), unread_inputs)
                 break
             selected = order_document_spans(tag(with_firsts(list(reduced.values()))), priority=document_order)
             prompt, measurement = final_measure(selected)
-            if not measurement["fits"] and len(prompt) >= previous_size:
+            if not measurement["fits"] and sum(len(value["text"]) for value in selected) >= previous_size:
                 stop_reduction("batch_reduction_did_not_shrink")
         selected, prompt, measurement, reduction = fill_to_budget(selected)
     selected = order_document_spans(selected, priority=document_order)
