@@ -172,3 +172,17 @@ def test_html_roles_and_table_captions_reach_prompt_without_changing_citation_bo
     assert "footer" in grounded.evidence_block_text(spans)
     assert "原文の表題" in grounded.evidence_block_text(spans)
     assert {span["text"] for span in spans} == {footer.text, table.text}
+
+
+def test_document_version_attributes_reach_the_final_prompt_without_changing_the_quote():
+    """目録の文書の版の属性は、引用の本文を変えずに出典の補助情報として最終の入力に届く（#5044）。"""
+    identity = {"source_key": "S-1", "revision_key": "R-2", "effective_date": "2026-01-01"}
+    base = make_record(1, ["分類 A", "説明"])
+    record = replace(base, metadata={**base.metadata, "source_identities": [identity]})
+    ctx = AnswerContext(records=[record], text=record.text)
+    spans = _grounded_spans("説明", ctx, (), None)
+    prompt = _grounded_prompt("説明", spans, ctx, (), None, None)
+    span = next(s for s in spans if s["text"] == record.text)
+    assert span["text"] == base.text
+    assert json.dumps([identity], ensure_ascii=False) in grounded._source_note(span)
+    assert "R-2" in prompt

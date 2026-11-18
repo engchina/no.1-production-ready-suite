@@ -1324,6 +1324,45 @@ class Settings(
         le=12000,
         description="Wiki の埋め込みの入力に添える原文の文字数。引用に使う原文は切らない。",
     )
+    # Wiki の検索の経路（#4941）。検索・回答プロファイルの「Wiki を使用する」（既定 OFF）で
+    # 有効にし、
+    # 通常検索の候補とは別に、原質問から目録・ファイル・章節を選んで現在の原文を足す。
+    rag_wiki_search_enabled: bool = Field(
+        default=False,
+        description=(
+            "Wiki の検索の経路を使う。検索・回答プロファイルの指定で決める（全体の既定は OFF）。"
+        ),
+    )
+    rag_wiki_candidates: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        description="Wiki の案内のベクトル・全文検索と、原文の選択に渡す単位の候補の上限。",
+    )
+    rag_wiki_selected_documents: int = Field(
+        default=8, ge=1, le=30, description="Wiki の計画で選べるファイルの数の上限。"
+    )
+    rag_wiki_selected_units: int = Field(
+        default=32, ge=1, le=200, description="Wiki の計画で選べる原文単位の数の上限。"
+    )
+    rag_wiki_selected_sections: int = Field(
+        default=24, ge=1, le=100, description="Wiki の計画で選べる章節の数の上限。"
+    )
+    rag_wiki_section_catalog_limit: int = Field(
+        default=48,
+        ge=1,
+        le=200,
+        description=(
+            "Wiki の章節の候補の数の上限。選んだファイルの全原文を覆う章節をこの数まで細かくする。"
+            "選んだ文書の保存版の数より小さいと Wiki の検索は失敗する。"
+        ),
+    )
+    rag_wiki_query_timeout_seconds: float = Field(
+        default=180.0,
+        ge=10.0,
+        le=1800.0,
+        description="Wiki の検索の時間の上限（秒）。回答の期限の残りが短ければそちらで切る。",
+    )
     # 見出しの階層の推定（#2277）。しおりの深さを当てられず、番号の体系でも多くの見出しの深さを
     # 決められない文書（Docling の結果）だけ、見出しの文字列を OCI Enterprise AI に渡して階層を
     # 受け取る。

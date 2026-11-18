@@ -62,6 +62,8 @@ class AnswerDependencies:
     current_section_paths: Callable[[Sequence[str]], Mapping[str, Sequence[str]]] | None = None
     context_references: Callable[..., Sequence[Any]] | None = None
     search_expansions: Callable[..., Sequence[Any]] | None = None
+    # 独立の経路（Wiki。#4941）の原文。通常検索の候補を渡さず、根拠の最後に集合として足す。
+    additional_sources: Callable[[], Sequence[Any]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -112,6 +114,12 @@ def injected_current_section_paths(chunk_ids: Sequence[str]) -> Mapping[str, Seq
     """注入された chunk の今の章節（#4682）。注入が無ければ空（取込の章節で区切る）。"""
     current = _active.get()
     return {} if current is None or current.current_section_paths is None else current.current_section_paths(chunk_ids)
+
+
+def injected_additional_sources() -> list[Any]:
+    """注入された独立の経路の原文（#4941）。注入が無ければ空。"""
+    current = _active.get()
+    return [] if current is None or current.additional_sources is None else list(current.additional_sources())
 
 
 def injected_context_references(*, seeds: Mapping[str, str], present: Sequence[str]) -> list[Any] | None:

@@ -14,6 +14,10 @@ def source_context(record: Any) -> dict[str, Any]:
     if isinstance(path, str):
         path = [part.strip() for part in path.split(" > ") if part.strip()]
     context: dict[str, Any] = {"document_name": str(getattr(record, "source", "") or "")}
+    # 目録の文書の版の属性（Wiki の経路。#5044）。解析器が抽出に残した値の写しで、引用の対象にしない。
+    identities = metadata.get("source_identities")
+    if isinstance(identities, list) and identities and all(isinstance(identity, dict) for identity in identities):
+        context["source_identities"] = [dict(identity) for identity in identities]
     if isinstance(path, (list, tuple)):
         context["section_path"] = [str(part) for part in path]
     header = metadata.get("context_header")

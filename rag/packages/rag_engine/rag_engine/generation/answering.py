@@ -1565,6 +1565,20 @@ def _grounded_spans(
     return tag_spans(spans)
 
 
+def _with_independent_sources(context: AnswerContext) -> AnswerContext:
+    """独立の経路（Wiki。#4941）の原文を根拠に集合として足す。同じ位置・保存版の原文は足さない。"""
+    from rag_engine.dependencies import injected_additional_sources
+    from rag_engine.generation.answer_records import _stored_chunk_answer_record
+    from rag_engine.generation.evidence_union import union_sources
+
+    additional = [_stored_chunk_answer_record(chunk) for chunk in injected_additional_sources()]
+    if not additional:
+        return context
+    merged, added = union_sources(context, additional)
+    record_retrieval_stage({"stage": "independent_source_union", "fusion": "set_union", "source_count": len(additional), "added": added})
+    return merged
+
+
 def _grounded_prompt(
     question: str,
     spans: Sequence[dict[str, Any]],
@@ -3489,6 +3503,7 @@ def answer_question_result(
         )
         if expanded is not None:
             context, runtime_knowledge = expanded.context, expanded.runtime_knowledge
+        context = _with_independent_sources(context)
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = dict(expanded.trace) if expanded is not None else {}
         if not context.records or not context.text.strip():

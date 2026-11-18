@@ -16,7 +16,7 @@ import {
 } from "./_helpers";
 
 /** 検索・回答プロファイルの query が持つ欄（ほかの欄は backend が検証エラーにする。#4784）。 */
-const PROFILE_QUERY_FIELDS = ["max_anchors_per_document", "support_guide_enabled"];
+const PROFILE_QUERY_FIELDS = ["max_anchors_per_document", "support_guide_enabled", "wiki_search_enabled"];
 
 // #3719: 空・単一ページでも表示し、3一覧のページ操作と作業状態を確かめる。
 for (const [tab, paginationId, kind] of [
@@ -186,6 +186,8 @@ for (const viewport of [
       // 出力の検査を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
       "出力の検査を通らなかったときのモデル",
       "業務ガイドを使用する",
+      // Wiki の検索の経路（#4941）。KB の自動構築とは別の指定。
+      "Wiki を使用する",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
     // 品質評価は検索・回答プロファイルで上書きしない(評価はグローバル設定だけで決まる。#301)。
@@ -397,6 +399,28 @@ test("業務ガイドは既定 OFF の単一スイッチで保存・再表示す
     await page.reload();
     await expect(toggle).toHaveAttribute("aria-checked", String(enabled));
     await panel.screenshot({ path: testInfo.outputPath(`guide-usage-${enabled ? "on" : "off"}.png`) });
+    await expectNoPageOverflow(page);
+  }
+});
+
+test("Wiki の使用は既定 OFF の単一スイッチで保存・再表示する (#4941)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  let body = null as Record<string, unknown> | null;
+  await mockDefaultSearchAnswerProfile(page, (value) => { body = value; });
+  await page.goto("/search-answer-profiles?id=bv-default");
+  const panel = page.getByTestId("search-answer-profile-wiki-search");
+  const toggle = panel.getByRole("switch", { name: "Wiki を使用する" });
+  const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(toggle).toHaveAccessibleDescription(/既定値は OFF です/);
+  await expect(panel).toContainText("OFF");
+  await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
+  for (const enabled of [true, false]) {
+    await toggle.click();
+    await save.click();
+    await expect.poll(() => (body?.config as { query?: { wiki_search_enabled?: boolean } })?.query?.wiki_search_enabled).toBe(enabled);
+    await page.reload();
+    await expect(toggle).toHaveAttribute("aria-checked", String(enabled));
+    await panel.screenshot({ path: testInfo.outputPath(`wiki-search-${enabled ? "on" : "off"}.png`) });
     await expectNoPageOverflow(page);
   }
 });

@@ -204,6 +204,10 @@ def resolve_search_answer_profile_settings(
     if settings.rag_support_guide_enabled != guide_enabled:
         settings = settings.model_copy(update={"rag_support_guide_enabled": guide_enabled})
         applied = True
+    wiki_enabled = config.query.wiki_search_enabled is True
+    if settings.rag_wiki_search_enabled != wiki_enabled:
+        settings = settings.model_copy(update={"rag_wiki_search_enabled": wiki_enabled})
+        applied = True
     if apply_answer_model and config.answer_model_id:
         settings = settings.model_copy(
             update={"oci_enterprise_ai_default_text_model": config.answer_model_id}

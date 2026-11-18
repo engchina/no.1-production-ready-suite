@@ -1034,6 +1034,29 @@ function SearchAnswerProfileEditor({
                       className="shrink-0"
                     />
                   </div>
+                  {/* Wiki の検索の経路（#4941）。KB の「Wiki を自動構築する」とは別の指定。 */}
+                  <div
+                    className="flex items-start justify-between gap-4 rounded-lg border border-border p-3"
+                    data-testid="search-answer-profile-wiki-search"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <h3 className="text-sm font-medium text-fg">{t("searchAnswerProfiles.field.wikiSearch")}</h3>
+                      <p id="search-answer-profile-wiki-search-helper" className="text-xs leading-relaxed text-fg-muted">
+                        {t("searchAnswerProfiles.field.wikiSearchHelper")}
+                      </p>
+                      <p className="text-sm font-medium text-fg" aria-live="polite">
+                        {config.query.wiki_search_enabled === true ? t("searchAnswerProfiles.field.guideEnabledOn") : t("searchAnswerProfiles.field.guideEnabledOff")}
+                      </p>
+                    </div>
+                    <Switch
+                      aria-label={t("searchAnswerProfiles.field.wikiSearch")}
+                      aria-describedby="search-answer-profile-wiki-search-helper"
+                      checked={config.query.wiki_search_enabled === true}
+                      disabled={locked}
+                      onCheckedChange={(value) => updateQuery({ wiki_search_enabled: value })}
+                      className="shrink-0"
+                    />
+                  </div>
                 </div>
               </fieldset>
               {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。ルールごとの確認は下の「プロファイルの知識」。 */}

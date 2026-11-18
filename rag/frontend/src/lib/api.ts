@@ -1199,6 +1199,8 @@ export interface KnowledgeBaseQueryConfig {
   max_anchors_per_document?: number | null;
   /** 業務ガイドの使用。未指定・null は OFF（全体の ON を継承しない）。 */
   support_guide_enabled?: boolean | null;
+  /** Wiki の検索の経路の使用（#4941）。未指定・null は OFF。KB の自動構築の指定とは独立。 */
+  wiki_search_enabled?: boolean | null;
 }
 
 /**

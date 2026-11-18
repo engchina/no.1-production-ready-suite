@@ -178,6 +178,19 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
             resolved_settings.rag_support_guide_close_match_clarification_enabled
         ),
         "support_guide_close_match_margin": resolved_settings.rag_support_guide_close_match_margin,
+        # Wiki の検索の経路(#4941)。使用・候補と選択の上限・時間の上限。
+        "wiki_search": {
+            key.removeprefix("rag_wiki_"): getattr(resolved_settings, key)
+            for key in (
+                "rag_wiki_search_enabled",
+                "rag_wiki_candidates",
+                "rag_wiki_selected_documents",
+                "rag_wiki_selected_units",
+                "rag_wiki_selected_sections",
+                "rag_wiki_section_catalog_limit",
+                "rag_wiki_query_timeout_seconds",
+            )
+        },
         # 最終照合の入力の分け方(#4141)。
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

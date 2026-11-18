@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from rag_parser_core.extraction import is_derived_content
+from rag_parser_core.xml_tree_json import XML_TREE_DOCUMENT_ARTIFACT_KEY
 
 from app.clients.oracle import (
     OracleClient,
@@ -22,6 +23,7 @@ from app.clients.oracle import (
     _oracle_in_predicate,
     _oracle_knowledge_base_access_predicate_sql,
     _oracle_retrieval_where,
+    _oracle_text_query,
     _require_active_knowledge_base,
     _retrieved_chunk_from_row,
     _with_tenant_bind,
@@ -104,6 +106,23 @@ CURRENT_WIKI_SOURCE_SQL = """NOT EXISTS (
         WHERE current_set.document_id=c.document_id AND current_set.is_active=1
           AND current_set.status='INDEXED' AND current_set.chunk_set_id=saved_set.set_id)
 )"""
+
+
+# 検索に使える案内: 公開済み・現在の構築条件・現在の原文の保存版の案内だけ。
+WIKI_PAGE_FROM = """FROM rag_wiki_pages p
+JOIN rag_wiki_documents w ON w.document_id=p.document_id
+JOIN rag_chunks c ON c.chunk_id=p.source_chunk_id AND c.chunk_set_id=p.chunk_set_id
+JOIN rag_documents d ON d.document_id=c.document_id"""
+WIKI_PUBLISHED_SQL = f"""w.status='READY' AND w.compiler_fingerprint=:wiki_compiler
+AND w.published_fingerprint=w.source_fingerprint AND p.source_fingerprint=w.published_fingerprint
+AND {CURRENT_WIKI_SOURCE_SQL}"""
+# 目録に写す文書の版の属性（解析器が抽出に残した値。モデルや規則で推測しない。#5044）。
+SOURCE_IDENTITY_FIELDS = {
+    "source_key": "document_id",
+    "revision_key": "revision_id",
+    "effective_date": "revision_date",
+    "source_status": "revision_status",
+}
 
 
 def wiki_scope(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
@@ -543,3 +562,126 @@ class WikiStore:
             ):
                 valid.update(unit.source_chunk_ids)
         return [_retrieved_chunk_from_row(found[sid]) for sid in ids if sid in valid]
+
+    async def catalog(self, filters: dict[str, str], compiler: str) -> list[dict[str, Any]]:
+        """検索に使える案内のある文書の目録（タイトルと保存版の版の属性）。"""
+        where, binds = wiki_scope(filters)
+        identities = ",".join(
+            f"""JSON_VALUE(ex.extraction_json,
+            '$.parser_artifacts.{XML_TREE_DOCUMENT_ARTIFACT_KEY}.{path}') {name}"""
+            for name, path in SOURCE_IDENTITY_FIELDS.items()
+        )
+        rows = await self.oracle._fetch_all(
+            f"""SELECT DISTINCT d.document_id,d.file_name,{identities}
+            {WIKI_PAGE_FROM}
+            JOIN rag_chunk_sets catalog_set ON catalog_set.chunk_set_id=c.chunk_set_id
+            LEFT JOIN rag_document_extractions ex ON ex.document_id=c.document_id
+              AND ex.extraction_recipe_id=catalog_set.extraction_recipe_id
+            WHERE {where} AND {WIKI_PUBLISHED_SQL} ORDER BY d.document_id""",
+            {**binds, "wiki_compiler": compiler},
+        )
+        documents: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            did = str(row["document_id"])
+            card = documents.setdefault(
+                did,
+                {
+                    "document_id": did,
+                    "title": str(row.get("file_name") or ""),
+                    "source_identities": [],
+                },
+            )
+            identity = {key: str(row[key]) for key in SOURCE_IDENTITY_FIELDS if row.get(key)}
+            if identity and identity not in card["source_identities"]:
+                card["source_identities"].append(identity)
+        return list(documents.values())
+
+    async def pages(
+        self,
+        filters: dict[str, str],
+        compiler: str,
+        *,
+        document_ids: Sequence[str] | None = None,
+        unit_ids: Sequence[str] | None = None,
+        query_vector: Sequence[float] | None = None,
+        limit: int | None = None,
+    ) -> list[WikiPage]:
+        """検索に使える案内。
+
+        ``query_vector`` と ``limit`` があれば近い順の上位だけを、ID の順位を決めてから読む。
+        """
+        where, binds = wiki_scope(filters)
+        binds["wiki_compiler"] = compiler
+        for column, prefix, values in (
+            ("c.document_id", "wiki_doc", document_ids),
+            ("p.unit_id", "wiki_unit", unit_ids),
+        ):
+            if values is not None:
+                if not values:
+                    return []
+                clause, added = _oracle_in_predicate(column, prefix, values)
+                where += " AND " + clause
+                binds.update(added)
+        if query_vector is not None and limit is not None:
+            rows = await self.oracle._fetch_all(
+                f"""SELECT p.unit_id {WIKI_PAGE_FROM} WHERE {where} AND {WIKI_PUBLISHED_SQL}
+                ORDER BY VECTOR_DISTANCE(p.embedding,:wiki_vector,COSINE),p.document_id,p.unit_id
+                FETCH FIRST :wiki_limit ROWS ONLY""",
+                {**binds, "wiki_vector": array("f", query_vector), "wiki_limit": limit},
+            )
+            return await self._hydrate([str(row["unit_id"]) for row in rows], filters, compiler)
+        rows = await self.oracle._fetch_all(
+            f"""SELECT p.page_json {WIKI_PAGE_FROM} WHERE {where} AND {WIKI_PUBLISHED_SQL}
+            ORDER BY p.document_id,p.unit_id""",
+            binds,
+        )
+        return [WikiPage.model_validate(_json_loads(row["page_json"])) for row in rows]
+
+    async def _hydrate(
+        self, ids: list[str], filters: dict[str, str], compiler: str
+    ) -> list[WikiPage]:
+        found = {
+            page.unit.unit_id: page for page in await self.pages(filters, compiler, unit_ids=ids)
+        }
+        return [found[uid] for uid in ids if uid in found]
+
+    async def text_rankings(
+        self,
+        expression: str,
+        filters: dict[str, str],
+        compiler: str,
+        *,
+        limit: int,
+        document_ids: Sequence[str] | None = None,
+    ) -> list[tuple[str, str]]:
+        """全文検索の順位（文書 ID, 単位 ID）を 1 回の SQL で取る（#4986）。本文は読まない。
+
+        ``document_ids`` が無ければ全体の上位 ``limit`` 件を点数の順に、
+        あれば文書ごとの上位 ``limit`` 件を文書ごとに点数の順に返す。
+        """
+        text = _oracle_text_query(expression)
+        if not text or limit <= 0 or (document_ids is not None and not document_ids):
+            return []
+        where, binds = wiki_scope(filters)
+        order, tail = "text_score DESC,p.document_id,p.unit_id", "FETCH FIRST :wiki_limit ROWS ONLY"
+        if document_ids is not None:
+            clause, values = _oracle_in_predicate("c.document_id", "wiki_text_doc", document_ids)
+            where += " AND " + clause
+            binds.update(values)
+            order, tail = "p.document_id,text_score DESC,p.unit_id", ""
+        else:
+            binds["wiki_limit"] = limit
+        rows = await self.oracle._fetch_all(
+            f"""SELECT p.document_id,p.unit_id,SCORE(1) AS text_score {WIKI_PAGE_FROM}
+            WHERE CONTAINS(p.search_text,:wiki_text,1)>0 AND {where} AND {WIKI_PUBLISHED_SQL}
+            ORDER BY {order} {tail}""",
+            {**binds, "wiki_text": text, "wiki_compiler": compiler},
+        )
+        counts: dict[str, int] = {}
+        ranking = []
+        for row in rows:
+            did = str(row["document_id"])
+            counts[did] = counts.get(did, 0) + 1
+            if counts[did] <= limit:
+                ranking.append((did, str(row["unit_id"])))
+        return ranking

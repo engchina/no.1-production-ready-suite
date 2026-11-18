@@ -115,10 +115,31 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert (await store.status_counts(filters))["READY"] == 1
     assert len(await store.saved_pages(source)) == len(pages)
     assert len(await store.read_sources(pages, filters)) == len(pages)
+    # 検索の経路（#4941）: 目録・案内・ベクトルの上位・全文検索の順位は、公開済み・現在の構築条件の
+    # 案内だけを返す。全文検索の順位は文書ごとに 1 回の SQL で取る（#4986）。
+    compiler = source.compiler_fingerprint
+    catalog = await store.catalog(filters, compiler)
+    assert [row["document_id"] for row in catalog] == [did]
+    assert catalog[0]["source_identities"] == []
+    unit_ids = sorted(page.unit.unit_id for page in pages)
+    assert sorted(p.unit.unit_id for p in await store.pages(filters, compiler)) == unit_ids
+    top = await store.pages(filters, compiler, query_vector=_EMBEDDING, limit=1)
+    assert len(top) == 1 and top[0].unit.unit_id in unit_ids
+    by_unit = await store.pages(filters, compiler, unit_ids=unit_ids[:1], document_ids=[did])
+    assert [p.unit.unit_id for p in by_unit] == unit_ids[:1]
+    ranking = await store.text_rankings("syntheticnavigation", filters, compiler, limit=10)
+    assert sorted(uid for _, uid in ranking) == unit_ids
+    per_document = await store.text_rankings(
+        "syntheticnavigation", filters, compiler, limit=1, document_ids=[did]
+    )
+    assert len(per_document) == 1 and per_document[0][0] == did
+    assert not await store.catalog(filters, fingerprint("compiler-b"))
+    assert not await store.pages(filters, fingerprint("compiler-b"))
     await store.set_enabled(first.id, False)
     # 無効にした KB からは読めないが、保存済みの案内は残り、別の有効な KB では使える。
     assert not await store.read_sources(pages, filters)
     assert not await store.document_ids(filters)
+    assert not await store.catalog(filters, compiler)
     assert len(await store.read_sources(pages, other)) == len(pages)
     assert (await store.status_counts(filters))["READY"] == 1
     await oracle.remove_document_from_knowledge_base(second.id, did)
