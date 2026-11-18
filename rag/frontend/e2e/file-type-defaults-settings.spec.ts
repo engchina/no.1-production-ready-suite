@@ -242,6 +242,12 @@ test("既定に戻すは組み込みの値を画面に入れ、保存で確定�
   });
   await page.goto("/settings/file-type-defaults");
   await expect(page.getByTestId("file-type-powerpoint-parser")).toContainText("全体の既定に従う");
+  // 並びは 保存 → 変更を破棄 → 既定に戻す（#5458。FormActionBar の restoreDefaultsAction）。
+  await expect(page.getByRole("group", { name: "形式別の既定の操作" }).getByRole("button")).toHaveText([
+    "保存",
+    "変更を破棄",
+    "既定に戻す",
+  ]);
 
   await page.getByRole("button", { name: "既定に戻す" }).click();
 

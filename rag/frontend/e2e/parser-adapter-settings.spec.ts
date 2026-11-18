@@ -517,6 +517,12 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(editor.getByLabel("項目名").nth(2)).toHaveValue("発行日・作成日");
     const resetButton = editor.getByRole("button", { name: "標準の項目に戻す" });
     await expect(resetButton).toBeDisabled();
+    // 並びは 保存 → 変更を破棄 → 標準の項目に戻す（#5458）。
+    await expect(editor.getByRole("group", { name: "項目の定義の操作" }).getByRole("button")).toHaveText([
+      "項目の定義を保存",
+      "変更を破棄",
+      "標準の項目に戻す",
+    ]);
     if (SCREENSHOT_DIR) {
       await item.screenshot({
         path: `${SCREENSHOT_DIR}/extraction-fields-standard-${testInfo.project.name}-${scheme}.png`,
@@ -618,6 +624,12 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
   ]);
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("保存済みの解析結果にある見出しと階層を使います");
+  // 既定に戻すは「その他の操作」に畳まず、保存 → 変更を破棄 の後ろに置く（#5458）。
+  await expect(editor.locator("[data-form-action-bar]").getByRole("button")).toHaveText([
+    "保存",
+    "変更を破棄",
+    "既定に戻す",
+  ]);
 
   // プリセット（法令）を独自の規則として編集する。
   await editor.getByRole("combobox", { name: "方式" }).click();

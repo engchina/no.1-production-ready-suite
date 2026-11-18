@@ -9,7 +9,7 @@ import {
   FormSkeleton,
   TimedLoadingState,
 } from "@production-ready/ui";
-import { CopyPlus, ListChecks, Undo2 } from "lucide-react";
+import { CopyPlus, History, ListChecks } from "lucide-react";
 
 import { ExtractionFieldsForm } from "@/components/settings/ExtractionFieldsEditor";
 import { ApiErrorState } from "@/components/StateViews";
@@ -134,19 +134,14 @@ export function KnowledgeBaseExtractionFields({
         save={save}
         description={t("knowledgeBases.extractionFields.ownDescription")}
         testId="knowledge-base-extraction-fields-editor"
-        extraActions={
-          <Button
-            type="button"
-            variant="secondary"
-            icon={Undo2}
-            loading={reset.isPending}
-            disabled={save.isPending}
-            onClick={() => void resetToDefault()}
-            className="w-full sm:w-auto"
-          >
-            {t("knowledgeBases.extractionFields.reset")}
-          </Button>
-        }
+        restoreDefaultsAction={{
+          id: "reset-to-default",
+          label: t("knowledgeBases.extractionFields.reset"),
+          icon: History,
+          loading: reset.isPending,
+          disabled: save.isPending,
+          onClick: () => void resetToDefault(),
+        }}
       />
     );
   }
