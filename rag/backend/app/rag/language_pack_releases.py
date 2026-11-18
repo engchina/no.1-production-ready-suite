@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 
 from rag_parser_core.language import (
     FIELD_SPECS,
@@ -48,18 +49,18 @@ _STAGE_ORDER = ("PREPROCESS", "EXTRACT", "CHUNK", "INDEX")
 
 
 def pack_from_release(release: LanguagePackRelease) -> LanguagePack:
-    """完全な現行スナップショットと保存時の hash を検証する。"""
+    """公開版の全項目の内容から言語資源を作る。hash は公開版の値(保存時の値)を使う。
+
+    保存した内容と hash の照合は保存先の読み取り(language_pack_release_store._release)が行う。
+    そこで欠けた項目を組み込みの値で補うので、全項目から hash を計算し直すと保存時と違う(#5476)。
+    """
     try:
         pack = build_pack(release.effective)
     except ValueError as exc:
         raise LanguagePackSnapshotError("保存済み言語資源の項目が現在の契約に合いません。") from exc
-    if (
-        pack.to_dict() != release.effective
-        or pack.hash != release.hash
-        or pack.ingest_hash != release.ingest_hash
-    ):
+    if pack.to_dict() != release.effective:
         raise LanguagePackSnapshotError("言語資源の公開版と保存した内容の照合に失敗しました。")
-    return pack
+    return replace(pack, hash=release.hash, ingest_hash=release.ingest_hash)
 
 
 @contextmanager

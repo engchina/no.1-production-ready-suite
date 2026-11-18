@@ -1,4 +1,4 @@
-"""配備の確認（`system_schema_cli check`）の言語資源の検査を、合成の行で確かめる（#4695）。"""
+"""配備の確認（`system_schema_cli check`）の言語資源の検査を合成の行で確かめる（#4695・#5476）。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
 _SAVED_VALUE = "合成の保存済みの値"
 _MISSING = "answer_labels.applications_section"
 _DRAFT_MISSING = "grounding_cues.citation_unit_words"
-_REPAIR_CLI = "app.rag.language_pack_repair_cli"
+_GUIDE = "rag/docs/language-pack-current-contract.md"
 _READY = {"status": "ready", "operation_state": {"status": "idle"}}
 
 
@@ -60,9 +60,13 @@ def _state_row(draft: dict[str, Any], **overrides: object) -> dict[str, object]:
 def _run_check(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    results: list[list[dict[str, object]]],
+    effective: dict[str, Any],
+    draft: dict[str, Any],
+    **release: object,
 ) -> tuple[int, str, FakeOraclePool]:
-    pool = FakeOraclePool(execute_results=results)
+    pool = FakeOraclePool(
+        execute_results=[[_state_row(draft)], [_release_row(effective, **release)]]
+    )
     oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     monkeypatch.setattr("app.clients.oracle.OracleClient", lambda: oracle)
     monkeypatch.setattr(system_schema_manager, "status", lambda: _READY)
@@ -78,26 +82,16 @@ def _assert_read_only(pool: FakeOraclePool) -> None:
 
 
 def _assert_reports(output: str) -> None:
-    """suite-health は最後の行を要約に使うので 1 行で出し、修復の手順を含め、値は出さない。"""
+    """suite-health は最後の行を要約に使うので 1 行で出し、手順の文書を示し、値は出さない。"""
     assert len(output.strip().splitlines()) == 1
-    assert _REPAIR_CLI in output
-    assert "#4697・#4745" in output
+    assert _GUIDE in output
     assert _SAVED_VALUE not in output
-
-
-def _unread(effective: dict[str, Any], draft: dict[str, Any]) -> list[list[dict[str, object]]]:
-    """厳格な読み取りが失敗し、項目を調べ直すときの行（厳格な読み取りと調べ直しで 2 回ずつ）。"""
-    state, release = [_state_row(draft)], [_release_row(effective)]
-    return [state, release, state, release]
 
 
 def test_conforming_current_and_draft_pass(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    complete = _complete()
-    code, output, pool = _run_check(
-        monkeypatch, capsys, [[_state_row(complete)], [_release_row(complete)]]
-    )
+    code, output, pool = _run_check(monkeypatch, capsys, _complete(), _complete())
     assert code == 0
     assert output.strip() == "status=ready"
     _assert_read_only(pool)
@@ -107,74 +101,60 @@ def test_environment_without_release_passes(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """状態行も公開版も無い新しい環境は合格（初期化の前の配備を止めない）。"""
-    code, output, pool = _run_check(monkeypatch, capsys, [[], []])
+    pool = FakeOraclePool(execute_results=[[], []])
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    monkeypatch.setattr("app.clients.oracle.OracleClient", lambda: oracle)
+    monkeypatch.setattr(system_schema_manager, "status", lambda: _READY)
+    assert system_schema_cli.main(["check"]) == 0
+    assert capsys.readouterr().out.strip() == "status=ready"
+    _assert_read_only(pool)
+
+
+def test_missing_fields_pass(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """項目を足す前に保存した公開版・下書きは、読み取りで組み込みの値を補うので合格（#5476）。"""
+    effective = _without(_MISSING)
+    saved = build_pack(effective, fill_missing=True)
+    code, output, pool = _run_check(
+        monkeypatch,
+        capsys,
+        effective,
+        _without(_DRAFT_MISSING),
+        content_hash=saved.hash,
+        ingest_hash=saved.ingest_hash,
+    )
     assert code == 0
     assert output.strip() == "status=ready"
     _assert_read_only(pool)
 
 
-def test_nonconforming_current_fails_with_field_names(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    code, output, pool = _run_check(monkeypatch, capsys, _unread(_without(_MISSING), _complete()))
-    assert code == 1
-    assert "status=ready" in output
-    assert "公開版" in output
-    assert _MISSING in output
-    assert "下書き" not in output
-    _assert_reports(output)
-    _assert_read_only(pool)
-
-
-def test_nonconforming_draft_fails_with_field_names(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    code, output, pool = _run_check(
-        monkeypatch, capsys, _unread(_complete(), _without(_DRAFT_MISSING))
-    )
-    assert code == 1
-    assert "下書き" in output
-    assert _DRAFT_MISSING in output
-    assert "公開版" not in output
-    _assert_reports(output)
-    _assert_read_only(pool)
-
-
-def test_both_report_their_own_fields(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    code, output, _ = _run_check(
-        monkeypatch, capsys, _unread(_without(_MISSING), _without(_DRAFT_MISSING))
-    )
-    assert code == 1
-    current, _, draft = output.partition("下書き")
-    assert _MISSING in current and _DRAFT_MISSING not in current
-    assert _DRAFT_MISSING in draft and _MISSING not in draft
-    _assert_reports(output)
-
-
-def test_invalid_value_reports_only_the_name(
+def test_invalid_current_value_reports_only_the_name(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     spec = next(item for item in FIELD_SPECS if item.kind is FieldKind.ENUM_MAP)
     invalid_value = "合成の不正な選択肢"
     effective = _complete()
     effective[spec.section][spec.key] = [f"合成の語={invalid_value}"]
-    code, output, _ = _run_check(monkeypatch, capsys, _unread(effective, _complete()))
+    code, output, pool = _run_check(monkeypatch, capsys, effective, _complete())
     assert code == 1
+    assert "status=ready" in output
+    assert "現在の公開版" in output
     assert f"{spec.section}.{spec.key}" in output
     assert invalid_value not in output
     _assert_reports(output)
+    _assert_read_only(pool)
 
 
-def test_unnormalized_value_reports_the_name(
+def test_unnormalized_draft_value_reports_the_name(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """検証は通るが保存の形が現行とそろわない値（`_validated` の完全一致の失敗）も名前を出す。"""
+    """検証は通るが保存の形が正規の形とそろわない値も名前を出す。"""
     draft = _complete()
     draft["answer_labels"]["gaps_section"] = f"  {_SAVED_VALUE}  "
-    code, output, _ = _run_check(monkeypatch, capsys, _unread(_complete(), draft))
+    code, output, _ = _run_check(monkeypatch, capsys, _complete(), draft)
     assert code == 1
+    assert "下書き" in output
     assert "answer_labels.gaps_section" in output
     _assert_reports(output)
 
@@ -182,10 +162,10 @@ def test_unnormalized_value_reports_the_name(
 def test_hash_mismatch_reports_the_column_name_without_hash(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    complete = _complete()
     stale_hash = "f" * 16
-    state, release = [_state_row(complete)], [_release_row(complete, content_hash=stale_hash)]
-    code, output, _ = _run_check(monkeypatch, capsys, [state, release, state, release])
+    code, output, _ = _run_check(
+        monkeypatch, capsys, _complete(), _complete(), content_hash=stale_hash
+    )
     assert code == 1
     assert "content_hash" in output
     assert stale_hash not in output
@@ -197,7 +177,7 @@ def test_section_of_wrong_shape_is_reported(
 ) -> None:
     draft: dict[str, Any] = deepcopy(_complete())
     draft["answer_labels"] = [_SAVED_VALUE]
-    code, output, _ = _run_check(monkeypatch, capsys, _unread(_complete(), draft))
+    code, output, _ = _run_check(monkeypatch, capsys, _complete(), draft)
     assert code == 1
     assert "answer_labels" in output
     _assert_reports(output)
@@ -210,7 +190,7 @@ def test_undeterminable_value_shape_still_fails(
     spec = next(item for item in FIELD_SPECS if item.kind is FieldKind.WORDS)
     draft = _complete()
     draft[spec.section][spec.key] = 90210
-    code, output, _ = _run_check(monkeypatch, capsys, _unread(_complete(), draft))
+    code, output, _ = _run_check(monkeypatch, capsys, _complete(), draft)
     assert code == 1
     assert "90210" not in output
     _assert_reports(output)
@@ -219,9 +199,12 @@ def test_undeterminable_value_shape_still_fails(
 def test_missing_current_pointer_fails(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    state = [_state_row(_complete(), current_release_id=None)]
-    code, output, pool = _run_check(monkeypatch, capsys, [state, state])
-    assert code == 1
+    pool = FakeOraclePool(execute_results=[[_state_row(_complete(), current_release_id=None)]])
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    monkeypatch.setattr("app.clients.oracle.OracleClient", lambda: oracle)
+    monkeypatch.setattr(system_schema_manager, "status", lambda: _READY)
+    assert system_schema_cli.main(["check"]) == 1
+    output = capsys.readouterr().out
     assert "現在版ポインタ" in output
     _assert_reports(output)
     _assert_read_only(pool)

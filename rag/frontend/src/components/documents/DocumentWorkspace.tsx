@@ -108,6 +108,7 @@ import {
   ListSkeleton,
   ProcessingIndicator,
   SelectField,
+  type EntityAction,
   type SelectFieldOption,
   Skeleton,
   TabPanel,
@@ -1330,9 +1331,7 @@ export function DocumentWorkspace({
     enqueueIngestion.isPending &&
     enqueueIngestion.variables?.recipeId === selectedRecipeId &&
     (phase === undefined || enqueueIngestion.variables?.phase === phase);
-  const showActionButtons =
-    Boolean(selectedRecipeId) &&
-    (actionPlan.primary != null || actionPlan.reprocessPhases.length > 0);
+  const showActionButtons = Boolean(selectedRecipeId) && actionPlan.primary != null;
   const documentActionButtons = showActionButtons ? (
     <>
       {actionPlan.primary?.kind === "approve" ? (
@@ -1407,23 +1406,20 @@ export function DocumentWorkspace({
           {t(phaseRetryLabelKey(retryPhase))}
         </Button>
       ) : null}
-      {actionPlan.reprocessPhases.map((phase) => (
-        <Button
-          key={phase}
-          variant="ghost"
-          icon={RotateCcw}
-          onClick={() => void handlePhaseRestart(phase, "reprocess")}
-          loading={enqueuePendingFor(phase)}
-          disabled={
-            approveDocument.isPending ||
-            (enqueueIngestion.isPending && !enqueuePendingFor(phase))
-          }
-        >
-          {t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey)}
-        </Button>
-      ))}
     </>
   ) : null;
+  // 工程からの再処理はレシピの操作なので、レシピのカードの「その他の操作」のメニューに工程の順で入れる（#5478）。
+  const reprocessActions: EntityAction[] = selectedRecipeId
+    ? actionPlan.reprocessPhases.map((phase) => ({
+        id: `reprocess-${phase.toLowerCase()}`,
+        label: t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey),
+        icon: RotateCcw,
+        menuOnly: true,
+        onSelect: () => void handlePhaseRestart(phase, "reprocess"),
+        loading: enqueuePendingFor(phase),
+        disabled: approveDocument.isPending || (enqueueIngestion.isPending && !enqueuePendingFor(phase)),
+      }))
+    : [];
   // 押した操作の結果。投入・承認の失敗は文書の失敗状態とは別の出来事なので、ERROR の文書で「再試行」が
   // 失敗したときもボタンの直下に出す（#281）。投入した処理が実行中の案内に変わったら、開始の文は重ねない
   // （同じ場所の案内が「実行中」を示す。messaging §10.2。#2034）。
@@ -1553,6 +1549,7 @@ export function DocumentWorkspace({
           sourceModality={sourceProfile?.modality ?? null}
           // 未保存の抽出確認の修正があるあいだは、レシピの操作からも承認させない（本文側の承認と同じ。#944）。
           approveBlocked={status === "REVIEW" && hasReviewEdits}
+          reprocessActions={reprocessActions}
           languagePack={(recipe) => (
             <LanguagePackRecipeSummary
               key={recipe.recipe_id}
@@ -1581,9 +1578,10 @@ export function DocumentWorkspace({
           />
         ) : null}
         {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。
-            工程の操作（承認・実行・再試行・再処理）はこの案内の中に置き、押した結果（投入の失敗・開始・承認の失敗）は
+            工程の操作（承認・実行・再試行）はこの案内の中に置き、押した結果（投入の失敗・開始・承認の失敗）は
             同じ案内の中のボタンの直下に出す（UX 契約 messaging §10.1・§10.2。#2034）。押した後の実行中は、同じ場所の
-            案内が「実行中」に変わる。案内が無い状態（未処理・索引済み）は、同じ場所にボタンと結果だけを出す。 */}
+            案内が「実行中」に変わる。案内が無い状態（未処理・索引済み）は、同じ場所にボタンと結果だけを出す。工程からの再処理はレシピのカードの
+            「その他の操作」（#5478）。押した結果はここに出す。 */}
         {slotBanner ? (
           <div data-testid="document-status-actions">
             <Banner
