@@ -11,6 +11,7 @@ from typing import Any
 
 from pr_system_settings.auth.visibility import can_view_all_users_data
 
+from app.clients.ai_calls import make_ai_caller
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -238,6 +239,7 @@ class WikiJobs:
                         saved=saved,
                         authorize=authorize,
                         checkpoint=checkpoint,
+                        caller=make_ai_caller(settings, "wiki_build"),
                     )
                     embedder = self.embedder_factory(settings)
                     for offset in range(0, len(pages), settings.rag_wiki_build_batch_units):
@@ -279,7 +281,15 @@ class WikiJobs:
                             if isinstance(error, PermissionError)
                             else "build_failed",
                         )
-                logger.warning("wiki_build_failed", extra={"error_type": type(error).__name__})
+                logger.warning(
+                    "wiki_build_failed",
+                    extra={
+                        "error_type": type(error).__name__,
+                        # 共通の実行器の失敗は、最後の失敗の種類と HTTP の状態コードを持つ。
+                        "error_kind": str(getattr(error, "kind", "") or ""),
+                        "http_status": getattr(error, "status", None),
+                    },
+                )
             finally:
                 if context_token is not None:
                     reset_audit_request_context(context_token)
