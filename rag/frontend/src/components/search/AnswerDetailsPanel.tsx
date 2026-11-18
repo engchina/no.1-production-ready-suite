@@ -1,5 +1,5 @@
 import { Banner, CombinedBanner, RunUsedModels, type CombinedBannerItem } from "@production-ready/ui";
-import { answerFromApprovedFaq, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
+import { answerCitationMissing, answerFromApprovedFaq, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
 import { answerModelCascadeView } from "@/lib/model-cascade";
 
@@ -70,6 +70,21 @@ export function AnswerNotices({
   return <CombinedBanner testId="answer-notices" items={[...answerNoticeItems(diagnostics, savedMessage), ...extra]} />;
 }
 
+/**
+ * 資料で答えた本文に、再試行の後も引用の印が無かった回答の案内（#5391）。取得した資料を引用とは見せず、根拠の一覧で
+ * 確かめてもらう。チャット・RAG 検索・実行履歴の回答の下に出す。該当しなければ null。
+ */
+export function citationMissingNoticeItem(diagnostics: unknown, savedMessage: unknown = null): CombinedBannerItem | null {
+  if (!answerCitationMissing(diagnostics, savedMessage)) return null;
+  return {
+    id: "citation-missing",
+    severity: "warning",
+    title: t("search.answerDetails.citationMissing.title"),
+    testId: "answer-citation-missing",
+    children: <p>{t("search.answerDetails.citationMissing.body")}</p>,
+  };
+}
+
 /** 回答の診断から、回答を読むときに要る案内の項目を作る。 */
 export function answerNoticeItems(diagnostics: unknown, savedMessage: unknown = null): CombinedBannerItem[] {
   const data = parseAnswerDiagnostics(diagnostics);
@@ -86,6 +101,8 @@ export function answerNoticeItems(diagnostics: unknown, savedMessage: unknown = 
       children: <p className="break-words">{t("search.answerDetails.faqDirect.body")}</p>,
     });
   }
+  const citationMissing = citationMissingNoticeItem(diagnostics, savedMessage);
+  if (citationMissing) items.push(citationMissing);
   if (data?.guideLoadFailed) {
     // 公開の業務ガイドを読めず、使わずに答えた（ガイドが無かったときと区別する。#1278 / #1287）。
     items.push({

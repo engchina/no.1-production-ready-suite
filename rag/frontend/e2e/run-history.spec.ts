@@ -1065,6 +1065,26 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.getByTestId("answer-degraded-steps")).toHaveCount(0);
   });
 
+  test("詳細: 本文に引用を対応付けられなかった回答は回答の下に案内を出し、ほかの実行には出さない (#5391)", async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    await mockRuns(page, [
+      run(1, { question: "合成の質問", answer: "合成の回答です。", citations: [], answer_diagnostics: { outcome: "answered", confidence: "low", citation_missing: true } }),
+      run(3, { question: "合成の質問", answer: "合成の回答です。", citations: [], answer_diagnostics: { outcome: "answered", confidence: "low" } }),
+    ]);
+    await page.goto("/history/run-1");
+    const answer = page.getByTestId("run-history-answer");
+    const notice = answer.getByTestId("answer-citation-missing");
+    // 色だけにしない: 見出しと文で示す。回答の本文の下に、畳まずに出す。
+    await expect(notice).toContainText("本文と根拠を対応付けられませんでした");
+    await expect(notice).toContainText("下の根拠の一覧で内容を確かめてください。");
+    await expect(answer.getByTestId("answer-notices")).toHaveCount(1);
+    await expectNoPageOverflow(page);
+    await notice.screenshot({ path: testInfo.outputPath("citation-missing.png") });
+    await page.goto("/history/run-3");
+    await expect(page.getByTestId("run-history-answer")).toContainText("合成の回答です。");
+    await expect(page.getByTestId("answer-citation-missing")).toHaveCount(0);
+  });
+
   test("詳細: 概要にモデル・token・モデルの呼び出しを Agent と同じ形で出し、不明は未計測・一部計測と出す（Issue 3419）", async ({
     page,
   }, testInfo) => {

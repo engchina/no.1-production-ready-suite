@@ -1571,6 +1571,8 @@ export interface ChatMessage {
   answer_attached_images?: number;
   /** 利用者が選んだ登録済みQ&Aの回答をそのまま返した ASSISTANT の回答か（#5107）。 */
   approved_faq_answer?: boolean;
+  /** 資料で答えた本文に引用を対応付けられなかった ASSISTANT の回答か（#5391）。 */
+  answer_citation_missing?: boolean;
 }
 
 export interface ConversationSummary {

@@ -364,7 +364,7 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
         generated.append(prompt)
         return schema.model_validate(
             {
-                "response_kind": "answered",
+                "response_kind": "insufficient_evidence",
                 "answer_body": "合成の不足",
                 "confidence": "low",
             }
@@ -549,7 +549,7 @@ def _synthesize(records, read_findings, *, budget=12000):
         generated.append(prompt)
         return schema.model_validate(
             {
-                "response_kind": "answered",
+                "response_kind": "insufficient_evidence",
                 "answer_body": "合成の不足",
                 "confidence": "low",
             }

@@ -5,6 +5,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+# 構造化出力の検証の context の鍵。値が真なら、この検証の不合格では再試行しない（最後の試行。#5391）。
+# 再試行で直させる検査は、最後の試行では不合格にせず、呼び出し側が結果を見て扱う。
+FINAL_ATTEMPT_CONTEXT_KEY = "final_attempt"
+
 
 @dataclass
 class _RetryInput:

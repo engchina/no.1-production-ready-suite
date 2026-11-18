@@ -100,7 +100,8 @@ async def test_long_chat_answer_saves_on_real_oracle() -> None:
                 "rewritten_question": "合成の質問",
                 "answer": LONG_ANSWER,
                 "citations": CITATIONS,
-                "diagnostics": {"answer_format": answer_format},
+                # 引用を対応付けられなかった回答の印（#5391）も、回答の記録の診断から読み直す。
+                "diagnostics": {"answer_format": answer_format, "citation_missing": True},
                 "evaluation_input": None,
             }
         )
@@ -146,3 +147,4 @@ async def test_long_chat_answer_saves_on_real_oracle() -> None:
     assert len(message.citations) == len(CITATIONS)
 
     assert message.answer_format == answer_format
+    assert message.answer_citation_missing is True

@@ -6,6 +6,10 @@ from pydantic import ValidationError
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.full_answer_wire import canonical_full_answer, full_answer_model, render_full_answer
+from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY
+
+# 再試行の後の最後の試行の検証（引用の印の欠落では不合格にしない。#5391）。
+FINAL = {FINAL_ATTEMPT_CONTEXT_KEY: True}
 
 
 def catalog():
@@ -26,9 +30,16 @@ def catalog():
 @pytest.mark.parametrize("kind", ["answered", "insufficient_evidence", "conditional", "needs_clarification", "needs_environment_data"])
 @pytest.mark.parametrize("cited", [False, True])
 def test_preserves_complete_body_regardless_of_type_or_citation_count(kind, cited):
+    """最後の試行の本文は、種別と引用の数で書き換えない。資料で答えた種別の印の無い本文は、それより前の試行では不合格（#5391）。"""
     units, unit = catalog()
     body = "入力電圧は12 Vです。" + (f"[{unit}]" if cited else "")
-    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": kind, "confidence": "high"})
+    payload = {"answer_body": body, "response_kind": kind, "confidence": "high"}
+    if not cited and kind in {"answered", "conditional"}:
+        with pytest.raises(ValidationError, match="根拠のラベルが 1 つもありません"):
+            full_answer_model(units).model_validate(payload)
+    else:
+        full_answer_model(units).model_validate(payload)
+    wire = full_answer_model(units).model_validate(payload, context=FINAL)
     draft = canonical_full_answer(wire, units)
     checked, dropped = grounded.verify("入力電圧は？", draft, [units.snapshots[0].span()])
     result = render_full_answer(draft, checked)
@@ -71,7 +82,9 @@ def test_unavailable_unit_is_a_format_failure():
 def test_label_of_evidence_not_sent_stays_as_text():
     """今回送っていない根拠のラベルは印にしない（本文の字として残し、意味は解析しない）。"""
     units, _unit = catalog()
-    wire = full_answer_model(units).model_validate({"answer_body": "合成の回答[E7]", "response_kind": "answered", "confidence": "high"})
+    wire = full_answer_model(units).model_validate(
+        {"answer_body": "合成の回答[E7]", "response_kind": "answered", "confidence": "high"}, context=FINAL
+    )
     draft = canonical_full_answer(wire, units)
     assert draft.items == []
     assert render_full_answer(draft, []).text == "合成の回答[E7]"
@@ -121,7 +134,7 @@ def test_replays_the_correct_text_misclassified_as_a_gap_before_the_new_contract
     assert old._response_kind == "insufficient_evidence"
     new_schema = full_answer_model(units)
     new = canonical_full_answer(
-        new_schema.model_validate({"answer_body": correct, "response_kind": "answered", "confidence": "high"}),
+        new_schema.model_validate({"answer_body": correct, "response_kind": "answered", "confidence": "high"}, context=FINAL),
         units,
     )
     assert new._response_kind == "answered"
@@ -290,7 +303,9 @@ def test_padded_marks_still_reject_units_not_sent_and_keep_labels_not_sent_as_te
     for body in ("合成の回答[ E1.9 ]", "合成の回答[​E1.9]", "合成の回答［　E1.9　］"):
         with pytest.raises(ValidationError):
             full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
-    wire = full_answer_model(units).model_validate({"answer_body": "合成の回答[ E7 ]", "response_kind": "answered", "confidence": "high"})
+    wire = full_answer_model(units).model_validate(
+        {"answer_body": "合成の回答[ E7 ]", "response_kind": "answered", "confidence": "high"}, context=FINAL
+    )
     draft = canonical_full_answer(wire, units)
     assert draft.items == []
     assert render_full_answer(draft, []).text == "合成の回答[ E7 ]"

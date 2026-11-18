@@ -372,6 +372,15 @@ export function answerFromApprovedFaq(diagnostics: unknown, savedMessage: unknow
 }
 
 /**
+ * 資料で答えた本文に引用を対応付けられなかった回答か（#5391）。作成した直後の回答は配信の診断の
+ * `citation_missing`、保存した回答は会話のメッセージの `answer_citation_missing` から読む。
+ */
+export function answerCitationMissing(diagnostics: unknown, savedMessage: unknown): boolean {
+  if (record(diagnostics).citation_missing === true) return true;
+  return record(savedMessage).answer_citation_missing === true;
+}
+
+/**
  * 回答の見出し（「回答モデル: {名前}」。根拠の画像を添付した回答は「（画像も参照）」を添える。#3439・#3444）。
  * チャットの列と RAG 検索の回答で同じ文言にする（#3488）。名前が無ければ null。
  */

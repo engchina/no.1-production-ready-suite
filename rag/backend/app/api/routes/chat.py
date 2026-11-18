@@ -278,6 +278,7 @@ def _to_chat_message(
         ),
         answer_format=(message.answer_format if message.status == "COMPLETE" else None),
         approved_faq_answer=message.approved_faq_answer and message.status == "COMPLETE",
+        answer_citation_missing=message.answer_citation_missing and message.status == "COMPLETE",
     )
 
 
@@ -1168,6 +1169,8 @@ async def _generate_chat_answer(
                 (result.diagnostics.answer or {}).get("answer_format")
             ),
             approved_faq_answer=is_approved_faq_answer(result.diagnostics.answer),
+            answer_citation_missing=(result.diagnostics.answer or {}).get("citation_missing")
+            is True,
         )
     except Exception as exc:
         await run_recorder.record(

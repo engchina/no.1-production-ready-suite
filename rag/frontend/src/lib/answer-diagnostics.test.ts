@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   answerAttachedImages,
+  answerCitationMissing,
   answerFromApprovedFaq,
   unreadSectionLinks,
   confidenceVariant,
@@ -134,6 +135,16 @@ describe("parseAnswerDiagnostics", () => {
     expect(answerFromApprovedFaq({ answer_source: "grounded" }, null)).toBe(false);
     expect(answerFromApprovedFaq(null, { approved_faq_answer: "true" })).toBe(false);
     expect(answerFromApprovedFaq(null, null)).toBe(false);
+  });
+
+  // #5391
+  it("本文に引用を対応付けられなかった回答かは、配信の診断か保存した会話のメッセージから読む", () => {
+    expect(answerCitationMissing({ citation_missing: true }, null)).toBe(true);
+    expect(answerCitationMissing(null, { answer_citation_missing: true })).toBe(true);
+    // 印の無い回答・壊れた値は該当しない。
+    expect(answerCitationMissing({ outcome: "answered" }, null)).toBe(false);
+    expect(answerCitationMissing({ citation_missing: "true" }, { answer_citation_missing: 1 })).toBe(false);
+    expect(answerCitationMissing(null, null)).toBe(false);
   });
 
   // 関係情報で加えた根拠（Issue 2055）。
