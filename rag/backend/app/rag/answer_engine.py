@@ -28,7 +28,7 @@ import re
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -921,6 +921,14 @@ class AnswerEngine:
 
             return call
 
+        # Wiki の検索の経路(#4941)は原質問だけで通常検索と独立に探すので、回答の始めに
+        # event loop で走らせ、通常検索・rerank・根拠の補いと並行させる。合わせ込みで待つ(#5437)。
+        wiki = (
+            _start_on_loop(lambda: self._wiki_sources(request, state), loop)
+            if self._settings.rag_wiki_search_enabled
+            else None
+        )
+
         dependencies = AnswerDependencies(
             search=lambda **kwargs: run_async(
                 lambda: self._search(request, state, defer_context=True, **kwargs)
@@ -935,12 +943,8 @@ class AnswerEngine:
             check_ready=lambda **kwargs: None,
             parse_text=checked(parse_text_response),
             parse_images=checked(parse_multimodal_response),
-            # Wiki の検索の経路(#4941)。検索・回答プロファイルで使用を指定したときだけ。
-            additional_sources=(
-                (lambda: run_async(lambda: self._wiki_sources(request, state)))
-                if self._settings.rag_wiki_search_enabled
-                else None
-            ),
+            # Wiki の検索の経路(#4941)。プロファイルで使用を指定したときだけ。始めた結果を待つ。
+            additional_sources=(lambda: _wait_on_loop(wiki)) if wiki is not None else None,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
@@ -1010,7 +1014,11 @@ class AnswerEngine:
             prompt_overrides(overrides or {}),
             bind_step_listener(notify_step if step_callback is not None else None),
             bind_step_metrics(db_stats.step_snapshot if db_stats is not None else None),
+            # 合わせ込みの前に終わった回答(確認の質問・根拠なし・失敗)では、Wiki の経路を止める。
+            ExitStack() as cleanup,
         ):
+            if wiki is not None:
+                cleanup.callback(wiki.cancel)
             return answer_question_result(
                 request.query,
                 ENGINE_SOURCE_RUN_ID,
@@ -3852,8 +3860,19 @@ def _run_on_loop[R](factory: Callable[[], Awaitable[R]], loop: asyncio.AbstractE
     取り消して ``DeadlineExceeded`` にする(打ち切った回答の検索・rerank を続けない)。期限が無くても
     待つ上限は ``_IO_TIMEOUT_SECONDS``。
     """
+    return _wait_on_loop(_start_on_loop(factory, loop))
+
+
+def _start_on_loop[R](
+    factory: Callable[[], Awaitable[R]], loop: asyncio.AbstractEventLoop
+) -> concurrent.futures.Future[R]:
+    """回答の thread から非同期 I/O を event loop で始め、待たずに返す(待つのは別の関数)。"""
     check_deadline()
-    future = asyncio.run_coroutine_threadsafe(_call(factory), loop)
+    return asyncio.run_coroutine_threadsafe(_call(factory), loop)
+
+
+def _wait_on_loop[R](future: concurrent.futures.Future[R]) -> R:
+    """``_start_on_loop`` で始めた I/O を、期限と待つ上限を見ながら待つ。"""
     started = time.monotonic()
     while True:
         waited = time.monotonic() - started

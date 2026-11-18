@@ -94,9 +94,9 @@ async function mockKb(
   );
 }
 
-// 文書構造グラフの開閉の見出し（共有の Disclosure の <summary>。#1135）。
-function disclosureSummary(page: Page, name: string) {
-  return page.locator("summary", { hasText: name });
+// 文書構造グラフの開閉の見出し（共有の Disclosure の <summary>。#1135）。見出しは開閉で変わらない（#5480）。
+function disclosureSummary(page: Page) {
+  return page.getByTestId("knowledge-base-graph-disclosure").locator("summary");
 }
 
 test.beforeEach(async ({ page }) => {
@@ -111,14 +111,14 @@ test("文書構造グラフは KB の全文書を出す", async ({ page }) => {
     edges: [{ id: "a:b", source: "a", target: "b", count: 3 }],
   });
 
-  // 画面を開いただけでは graph を読まず、「表示」を押してから読む（#5453）。
+  // 画面を開いただけでは graph を読まず、見出しを押して開いてから読む（#5453）。
   const graphRequests: string[] = [];
   page.on("request", (request) => {
     if (/\/api\/knowledge-bases\/[^/]+\/graph\//.test(request.url())) graphRequests.push(request.url());
   });
 
   await page.goto("/knowledge-bases/kb-1");
-  const summary = disclosureSummary(page, "文書構造グラフを表示");
+  const summary = disclosureSummary(page);
   await expect(summary).toBeVisible();
   await page.waitForLoadState("networkidle");
   expect(graphRequests).toEqual([]);
@@ -148,7 +148,7 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
   await mockKb(page, EMPTY_OVERVIEW);
 
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
 
   await expect(page.getByText("文書構造索引がまだありません。")).toBeVisible();
   // 画面に無い操作（再取込）ではなく、文書の詳細の処理レシピの「再処理」を案内する。
@@ -158,16 +158,33 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
   await expect(hint).not.toContainText("再取込");
 });
 
-// 文書構造索引の構築のカードは「説明 → 区切り線 → [既存文書に構築] → 区切り線 → 文書構造グラフ」の順（#5453。保存は #5484 で削除）。
-// 開閉の見出しは共有の Disclosure（plain）の高さ（sm。タッチ端末は 44px）。
-test("文書構造グラフは構築のカードの最下部にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+// 文書構造索引の構築のカードは「説明 → 区切り線 → [既存文書に構築] → 文書構造グラフ」の順（#5453。保存は #5484 で削除）。
+// 開閉の領域は共有の Disclosure の card（カードの中なので sunken）で、見出しは開閉で変えない固定の名詞、
+// 補足は見出しの下（description）。見出しの行は card の高さ（lg。タッチ端末は 44px）以上（#397 / #5480）。
+test("文書構造グラフは構築のカードの最下部の sunken の card で、見出しを変えずにキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, EMPTY_OVERVIEW);
   await page.goto("/knowledge-bases/kb-1");
 
-  const expected = await expectedControlHeight(page, "sm");
+  const expected = await expectedControlHeight(page, "lg");
   const card = page.getByTestId("knowledge-base-structure-settings");
-  const summary = card.locator("summary", { hasText: "文書構造グラフを表示" });
+  const disclosure = card.getByTestId("knowledge-base-graph-disclosure");
+  const summary = disclosure.locator("summary");
   await expect(summary).toBeVisible();
+  await expect(summary).toContainText("文書構造グラフ");
+  // 補足は閉じていても見出しの下に見える。
+  await expect(summary).toContainText("このナレッジベースの文書と、その章・節・表・図の見出しのつながりを図で見られます。");
+  const closedSummaryText = await summary.innerText();
+  // 枠付きの card で、地はカードの中の sunken。
+  const surface = await disclosure.evaluate((element) => {
+    const probe = document.createElement("div");
+    probe.className = "bg-surface-sunken";
+    document.body.append(probe);
+    const sunken = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    const style = getComputedStyle(element);
+    return { sunken: style.backgroundColor === sunken, border: parseFloat(style.borderTopWidth) };
+  });
+  expect(surface).toEqual({ sunken: true, border: 1 });
   const actions = card.getByRole("group", { name: "文書構造索引の構築", exact: true }).first();
   const build = actions.getByRole("button", { name: "既存文書に構築", exact: true });
   await expect(actions.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
@@ -184,21 +201,23 @@ test("文書構造グラフは構築のカードの最下部にあり、標準�
   expect(buildBox!.y + buildBox!.height).toBeLessThan(graphBox!.y);
   expect(graphBox!.y + graphBox!.height).toBeLessThan(cardBox!.y + cardBox!.height);
   expect(cardBox!.y + cardBox!.height).toBeLessThan(searchBox!.y);
-  expect(Math.round(graphBox!.height)).toBe(expected);
+  expect(Math.round(graphBox!.height)).toBeGreaterThanOrEqual(expected);
   await expectNoPageOverflow(page);
+  await summary.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("knowledge-base-graph-closed.png"), fullPage: false });
 
-  // キーボード（Enter）で開閉でき、開くと見出しの文言が「隠す」になる。
-  const graph = disclosureSummary(page, "文書構造グラフを表示");
-  await graph.focus();
+  // キーボード（Enter）で開閉でき、見出しの文言は開いても変わらない。
+  await summary.focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator("details").filter({ has: page.locator("#knowledge-base-graph") })).toHaveAttribute("open", "");
+  await expect(disclosure).toHaveAttribute("open", "");
   await expect(page.getByText("文書構造索引がまだありません。")).toBeVisible();
-  await expect(disclosureSummary(page, "文書構造グラフを隠す")).toBeFocused();
+  await expect(summary).toBeFocused();
+  expect(await summary.innerText()).toBe(closedSummaryText);
+  await page.screenshot({ path: testInfo.outputPath("knowledge-base-graph-open.png"), fullPage: false });
   await page.keyboard.press("Enter");
   await expect(page.locator("#knowledge-base-graph")).toHaveCount(0);
-  await expect(disclosureSummary(page, "文書構造グラフを表示")).toBeVisible();
-  await summary.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("knowledge-base-section-order.png"), fullPage: false });
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  expect(await summary.innerText()).toBe(closedSummaryText);
 });
 
 // 関係情報を読み取れないときは、「関係情報がまだありません」と区別して、原因と再試行を出す（#4217）。
@@ -229,7 +248,7 @@ for (const viewport of [
     });
 
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page, "文書構造グラフを表示").click();
+    await disclosureSummary(page).click();
     await expect.poll(() => graphRequests).toBe(1);
     // 自動の再試行（間隔を空けて 2 回）を進める。
     await page.clock.runFor(5_100);
@@ -273,7 +292,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(theme === "dark");
-    await disclosureSummary(page, "文書構造グラフを表示").click();
+    await disclosureSummary(page).click();
 
     const region = page.getByRole("region", { name: "文書構造グラフ" });
     await expect(region.getByText("合成文書A", { exact: true })).toBeVisible();
@@ -335,7 +354,7 @@ for (const count of [30, 80]) {
       edges: [{ id: "node-0:node-1", source: "node-0", target: "node-1", count: 4 }],
     });
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page, "文書構造グラフを表示").click();
+    await disclosureSummary(page).click();
     const graph = page.getByRole("region", { name: "文書構造グラフ" });
     await expect(graph.locator(".react-flow__node")).toHaveCount(count);
     const fits = () => graph.evaluate((region) => {
@@ -379,7 +398,7 @@ test("長い共通の接頭辞を持つ章節は末尾の見出しで区別で�
     })),
   });
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const graph = page.locator("#knowledge-base-graph");
   const documentNode = graph.locator('.react-flow__node[data-id="doc"]');
   await documentNode.focus();
@@ -520,7 +539,7 @@ for (const width of [1280, 1920, 375]) {
       });
       await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: "section-b", index: 1 }] }) }));
       await page.goto("/knowledge-bases/kb-1");
-      await disclosureSummary(page, "文書構造グラフを表示").click();
+      await disclosureSummary(page).click();
       const graph = page.locator("#knowledge-base-graph");
       const nodeOf = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
       const documentNode = nodeOf("doc");
@@ -609,7 +628,7 @@ test("明示参照の方向を分け、未表示の参照先を取得して位�
     return route.fulfill({ json: ok({ items: isTarget && direction === "outgoing" ? [] : [{ id: "ref-a", label: "合成章 Bを参照", status: "resolved", source, target }, { id: "ref-b", label: "同名の参照", status: "ambiguous", source, target: null }], offset: 0, has_more: false, direction }) });
   });
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const node = page.locator(`.react-flow__node[data-id="${source.id}"]`);
   await node.focus(); await page.keyboard.press("Enter");
   const references = page.getByTestId("graph-references");
@@ -648,7 +667,7 @@ test("1 段の 100 件を超える章節は続きを読み、読み込みの失�
     return route.fulfill({ status: 503, json: { error_messages: ["一時的に取得できません。"] } });
   });
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const graph = page.locator("#knowledge-base-graph");
   const nodes = graph.locator(".react-flow__node");
   await graph.locator('.react-flow__node[data-id="doc"]').focus();
@@ -718,7 +737,7 @@ test("参照一覧の取得失敗を再試行でき、次のページだけを�
     return route.fulfill({ json: ok({ items: [{ id: `ref-${offset}`, label: offset ? "後続の参照" : "先頭の参照", status: "ambiguous", source, target: null }], offset, has_more: offset === 0, direction: "outgoing" }) });
   });
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const node = page.locator(`.react-flow__node[data-id="${source.id}"]`);
   await node.focus(); await page.keyboard.press("Enter");
   const panel = page.getByTestId("graph-references");
@@ -760,7 +779,7 @@ for (const theme of ["light", "dark"] as const) {
         return route.fulfill({json:ok({revision:"set-doc",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"anchor",text:"保存位置250：合成の保存本文26",offset:250,highlights:[[8,17]],cited:true}],previous_cursor:null,next_cursor:null,outline:[]})});
       });
       await page.goto("/knowledge-bases/kb-1");
-      await disclosureSummary(page,"文書構造グラフを表示").click();
+      await disclosureSummary(page).click();
       const graph=page.locator("#knowledge-base-graph");
       await graph.locator('.react-flow__node[data-id="doc"]').click();
       await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
@@ -809,7 +828,7 @@ for (const theme of ["light", "dark"] as const) {
       return route.fulfill({ json: ok({ revision: "set-doc", anchor_status: "exact", section_path: ["合成章", "合成節"], scope: "paragraph", blocks: [{ id: "anchor", text: "保存位置300：合成の節の本文28", offset: 292, highlights: [[8, 17]], cited: true }], previous_cursor: null, next_cursor: null, outline: [] }) });
     });
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page, "文書構造グラフを表示").click();
+    await disclosureSummary(page).click();
     const graph = page.locator("#knowledge-base-graph");
     const node = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
     await node("doc").click();
@@ -861,7 +880,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
     await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 1000 }] }) }));
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page, "文書構造グラフを表示").click();
+    await disclosureSummary(page).click();
     const graph = page.locator("#knowledge-base-graph");
     await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
     try {
@@ -893,7 +912,7 @@ test("節点を開く間の表示は画布の上に重ね、画布を押し下�
     await route.fallback();
   });
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const graph = page.locator("#knowledge-base-graph");
   const canvas = graph.getByRole("region", { name: "文書構造グラフ", exact: true });
   await expect(canvas).toBeVisible();
@@ -942,7 +961,7 @@ test("章節の位置移動で空の続きページをエラーにし、再試�
   await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
   await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 200 }] }) }));
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const graph = page.locator("#knowledge-base-graph");
   await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
   await expect(graph.getByRole("alert")).toBeVisible();
@@ -964,7 +983,7 @@ for (const state of ["empty", "error"] as const) {
       ? route.fulfill({json:ok({items:[],total:0,offset:0})})
       : route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}}));
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page,"文書構造グラフを表示").click();
+    await disclosureSummary(page).click();
     const graph=page.locator("#knowledge-base-graph");
     await graph.locator('.react-flow__node[data-id="doc"]').click();
     await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
@@ -986,7 +1005,7 @@ test("旧索引の仮想の本文はチャンクを読まずに再構築を案�
     return route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}});
   });
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page,"文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const graph=page.locator("#knowledge-base-graph");
   await graph.locator('.react-flow__node[data-id="doc"]').click();
   await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
@@ -1012,7 +1031,7 @@ test("本文の件数が減って末頁が空になったら有効なページ�
     return route.fulfill({json:ok({items:rows.slice(offset,offset+25),total:rows.length,offset})});
   });
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page,"文書構造グラフを表示").click();
+  await disclosureSummary(page).click();
   const graph=page.locator("#knowledge-base-graph");
   await graph.locator('.react-flow__node[data-id="doc"]').click();
   await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
@@ -1034,7 +1053,7 @@ for (const theme of ["light", "dark"] as const) {
     await mockTree(page, fixture.trees);
     await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok(fixture.locate) }));
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page, "文書構造グラフを表示").click();
+    await disclosureSummary(page).click();
     const graph = page.locator("#knowledge-base-graph");
     const node = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
     await node("doc").focus(); await page.keyboard.press("Enter");

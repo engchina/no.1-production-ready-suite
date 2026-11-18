@@ -81,3 +81,41 @@ async def test_wiki_is_not_started_when_the_deadline_only_leaves_the_generation(
     stored = await engine(retriever)._wiki_sources(request(), state)
     assert stored == [] and retriever.calls == []
     assert state.wiki_trace["failure_code"] == "TimeoutError"
+
+
+def test_wiki_runs_alongside_the_answer_flow_and_is_awaited_or_cancelled() -> None:
+    """Wiki の経路は回答の始めに始まり、合わせ込みで待つ。待たずに終われば止める（#5437）。"""
+    import asyncio
+    import threading
+
+    from app.rag.answer_engine import _start_on_loop, _wait_on_loop
+
+    loop = asyncio.new_event_loop()
+    worker = threading.Thread(target=loop.run_forever, daemon=True)
+    worker.start()
+    try:
+        started = threading.Event()
+
+        async def wiki() -> str:
+            started.set()
+            await asyncio.sleep(0.05)
+            return "原文"
+
+        future = _start_on_loop(wiki, loop)
+        # 待つ前に始まっている（通常検索の間に進む）。
+        assert started.wait(2.0)
+        assert _wait_on_loop(future) == "原文"
+
+        blocked = threading.Event()
+
+        async def slow() -> None:
+            blocked.set()
+            await asyncio.sleep(30)
+
+        pending = _start_on_loop(slow, loop)
+        assert blocked.wait(2.0)
+        pending.cancel()
+        assert pending.cancelled()
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        worker.join(2.0)
