@@ -265,9 +265,11 @@ def test_numeric_mapping_metadata_exposes_minimum() -> None:
     assert minimums["roman_digits"] == minimums["kanji_multipliers"] == 1
 
 
-def test_incomplete_draft_api_is_rejected_without_writes(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("invalid", [False, True])
+def test_draft_api_fills_missing_fields_and_rejects_only_invalid_values(
+    monkeypatch: pytest.MonkeyPatch, invalid: bool
 ) -> None:
+    """欠けた項目は組み込みの値で読み、値が検証に通らないときだけ項目の名前つきで 409(#5476)。"""
     from copy import deepcopy
 
     from app.clients.language_pack_release_store import LanguagePackReleaseStore
@@ -284,6 +286,8 @@ def test_incomplete_draft_api_is_rejected_without_writes(
         "answer_evidence_budget_limited",
     ):
         del draft["answer_labels"][key]
+    if invalid:
+        draft["answer_labels"]["gaps_section"] = "合成の値" * 200
     before = deepcopy(draft)
     pool = FakeOraclePool(
         execute_results=[
@@ -304,12 +308,16 @@ def test_incomplete_draft_api_is_rejected_without_writes(
 
     monkeypatch.setattr(language_pack, "release_store", initialized)
     response = client.get("/api/settings/language-pack/draft")
-    assert response.status_code == 409
     data = response.json()
-    assert data["data"] is None
-    assert data["error_messages"] == [
-        "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"
-    ]
+    if invalid:
+        assert response.status_code == 409
+        assert data["data"] is None
+        [message] = data["error_messages"]
+        assert "下書き" in message and "answer_labels.gaps_section" in message
+        assert "合成の値" not in message
+    else:
+        assert response.status_code == 200
+        assert data["data"]["draft_effective"] == row["effective_json"]
     assert draft == before
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
 

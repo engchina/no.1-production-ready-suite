@@ -129,33 +129,70 @@ def legacy_release_row(mask: int = (1 << len(_COMPAT_KEYS)) - 1) -> dict[str, ob
     return row
 
 
-def test_incomplete_release_is_rejected_without_defaulting() -> None:
-    row = release_row()
-    effective = builtin_pack().to_dict()
-    del effective["grounding_cues"]["citation_unit_words"]
-    row["effective_json"] = effective
-    row["content_hash"] = _stored_hash(effective)
+@pytest.mark.parametrize("ingest", [True, False])
+def test_release_saved_before_field_added_reads_builtin_value_with_stored_hash(
+    monkeypatch: pytest.MonkeyPatch, ingest: bool
+) -> None:
+    """組み込みに項目を足したあと、その項目の無い保存済みの公開版を読む(#5476)。
+
+    欠けた項目は組み込みの値になり、hash は保存時の値のまま(取込済みの文書の関係を変えない)。
+    """
+    import rag_parser_core.language as language
+
+    from app.rag.language_pack_releases import pack_from_release
+
+    added = next(spec for spec in language.FIELD_SPECS if spec.ingest is ingest)
+    builtin = builtin_pack().to_dict()
+    effective = deepcopy(builtin)
+    del effective[added.section][added.key]
+    # 項目を足す前のコードで保存した公開版(その時の項目の集合で hash を計算)。
+    with monkeypatch.context() as before_added:
+        before_added.setattr(
+            language, "FIELD_SPECS", tuple(s for s in language.FIELD_SPECS if s != added)
+        )
+        before_added.setattr(
+            language, "_SPECS", {k: v for k, v in language._SPECS.items() if v != added}
+        )
+        saved = language.build_pack(effective)
+    row = {
+        **release_row(),
+        "effective_json": effective,
+        "content_hash": saved.hash,
+        "ingest_hash": saved.ingest_hash,
+    }
     untouched = deepcopy(row)
-    with pytest.raises(ValueError):
-        _release(row)
+    release = _release(row)
+    assert release.effective == builtin
+    assert (release.hash, release.ingest_hash) == (saved.hash, saved.ingest_hash)
+    pack = pack_from_release(release)
+    assert (pack.hash, pack.ingest_hash) == (saved.hash, saved.ingest_hash)
+    assert pack.value(added.section, added.key) == builtin_pack().value(added.section, added.key)
     assert row == untouched
 
 
 @pytest.mark.parametrize("mask", range(1 << len(_COMPAT_KEYS)))
-def test_release_requires_current_fields_without_changing_custom_values(mask: int) -> None:
+def test_release_missing_fields_keeps_custom_values(mask: int) -> None:
     from app.rag.language_pack_releases import pack_from_release
 
     row = legacy_release_row(mask)
     untouched = deepcopy(row)
-    if mask:
-        with pytest.raises(ValueError):
-            _release(row)
-    else:
-        release = _release(row)
-        assert (
-            pack_from_release(release).text("answer_labels", "gaps_section") == "合成の保存済み文言"
-        )
+    release = _release(row)
+    pack = pack_from_release(release)
+    assert pack.text("answer_labels", "gaps_section") == "合成の保存済み文言"
+    for key in _COMPAT_KEYS:
+        assert pack.text("answer_labels", key) == builtin_pack().text("answer_labels", key)
+    assert pack.hash == row["content_hash"]
     assert row == untouched
+
+
+def test_invalid_saved_value_is_rejected_with_field_name_only() -> None:
+    row = release_row()
+    effective = row["effective_json"]
+    assert isinstance(effective, dict)
+    effective["answer_labels"]["gaps_section"] = "合成の値" * 200
+    with pytest.raises(ValueError, match=r"answer_labels\.gaps_section") as raised:
+        _release(row)
+    assert "合成の値" not in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -182,6 +219,9 @@ def test_legacy_release_does_not_weaken_integrity(mutation: str) -> None:
         effective["answer_labels"]["gaps_section"] += " "
     with pytest.raises(ValueError):
         _release(row)
+    if mutation in ("hash", "ingest"):
+        # hash の照合は保存先の読み取り(_release)が行う。pack_from_release は公開版の hash を使う。
+        return
     broken = original.model_copy(
         update={
             "effective": effective,
@@ -194,11 +234,12 @@ def test_legacy_release_does_not_weaken_integrity(mutation: str) -> None:
 
 
 @pytest.mark.parametrize("missing_extra", [False, True])
-def test_incomplete_draft_read_is_rejected_without_writes(missing_extra: bool) -> None:
+def test_draft_missing_fields_reads_builtin_values_without_writes(missing_extra: bool) -> None:
     from app.clients.language_pack_release_store import _state
 
     row = release_row()
     draft = builtin_pack().to_dict()
+    draft["answer_labels"]["gaps_section"] = "合成の下書きの文言"
     del draft["answer_labels"]["insufficient_evidence_summary"]
     if missing_extra:
         del draft["grounding_cues"]["citation_unit_words"]
@@ -215,8 +256,10 @@ def test_incomplete_draft_read_is_rejected_without_writes(missing_extra: bool) -
             [row],
         ]
     )
-    with pytest.raises(ValueError):
-        _state(pool.connection)
+    state = _state(pool.connection)
+    expected = builtin_pack().to_dict()
+    expected["answer_labels"]["gaps_section"] = "合成の下書きの文言"
+    assert state.draft_effective == expected
     assert draft == original_draft
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
 

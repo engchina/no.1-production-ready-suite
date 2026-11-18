@@ -264,7 +264,9 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return api_error_response(
             409,
-            ["保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"],
+            # 項目の名前だけを含む(値は含まない)。欠けた項目は読み取りで補うので、ここに来るのは
+            # 保存した値が検証に通らないときだけ(#5476)。
+            [f"{exc} データの準備が必要です（rag/docs/language-pack-current-contract.md）。"],
             request_id=_response_request_id(request),
         )
 
