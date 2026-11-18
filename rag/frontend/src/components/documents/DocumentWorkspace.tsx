@@ -1700,6 +1700,8 @@ export function DocumentWorkspace({
                 onPageChange={reportInspectorPage}
                 onTextRangeChange={reportTextRange}
                 focusElementId={previewFocusSource === "element" || previewFocusSource === "chunk" ? selectedElementId : requestedElementId ?? (requestedChunkId ? focusedChunkQuery.data?.items[0]?.element_ids[0] : null)}
+                // chunk を選んだときは chunk の全要素を強調する（窓は先頭の要素。#5417）。
+                focusElementIds={previewFocusSource === "chunk" ? selectedChunk?.element_ids : previewFocusSource === "element" || requestedElementId ? undefined : requestedChunkId ? focusedChunkQuery.data?.items[0]?.element_ids : undefined}
                 focusSectionId={sectionFocus?.id}
 
                 focusRequestKey={sectionFocus?.key ?? urlFallbackFocus?.key ?? focusRequest?.key ?? null}

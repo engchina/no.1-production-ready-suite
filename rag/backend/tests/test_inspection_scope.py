@@ -178,3 +178,32 @@ def test_json_selection_highlights_only_the_current_long_source_window() -> None
     assert result["next_offset"] is not None
     next_window = source_inspection(payload, data, offset=result["next_offset"], limit=1000)
     assert next_window["highlights"] == []
+
+
+def test_chunk_elements_are_all_highlighted_and_window_starts_at_first() -> None:
+    """chunk の全要素の範囲を強調し、窓は先頭の要素の位置で決める（#5417）。"""
+    from rag_parser_core.source_map import SCHEME_TEXT_CHAR, SourceRange, source_map_artifact
+
+    text = "前置き\n見出しについて：\n合成の本文1。\n合成の本文2。\n別の段落"
+    data = text.encode()
+    ranges = {"h": (4, 12), "p1": (13, 20), "p2": (21, 28), "other": (29, 33)}
+    payload = {
+        "elements": [{"element_id": key, "text": text[a:b]} for key, (a, b) in ranges.items()],
+        "parser_artifacts": {
+            "source_map": source_map_artifact(
+                data,
+                text,
+                SCHEME_TEXT_CHAR,
+                {key: [SourceRange(a, b, f"char={a},{b}")] for key, (a, b) in ranges.items()},
+            )
+        },
+    }
+    result = source_inspection(payload, data, offset=0, limit=8192, element_ids=["h", "p1", "p2"])
+    assert [result["text"][a:b] for a, b in result["highlights"]] == [
+        "見出しについて：",
+        "合成の本文1。",
+        "合成の本文2。",
+    ]
+    # 1 つの要素の指定は従来どおりその要素だけ。
+    single = source_inspection(payload, data, offset=0, limit=8192, element_id="h")
+    assert [single["text"][a:b] for a, b in single["highlights"]] == ["見出しについて："]

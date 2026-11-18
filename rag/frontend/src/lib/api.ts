@@ -3437,9 +3437,10 @@ export const api = {
     for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
     return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/source-map?${search}`, { signal });
   },
-  documentRecipeReader: (id: string, recipeId: string, revision: string, elementId: string | null, input: EvidenceReadingInput, signal: AbortSignal) => {
+  documentRecipeReader: (id: string, recipeId: string, revision: string, elementId: string | null, elementIds: readonly string[], input: EvidenceReadingInput, signal: AbortSignal) => {
     const search = new URLSearchParams({expected_revision:revision});
     if(elementId) search.set("element_id",elementId);
+    for(const value of elementIds) search.append("element_ids",value);
     for(const [key,value] of Object.entries(input)) if(value !== undefined) search.set(key,String(value));
     return request<EvidenceReadingWindow>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/reader?${search}`,{signal});
   },
@@ -3448,7 +3449,7 @@ export const api = {
     for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
     return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/source-map?${search}`, { signal });
   },
-  documentTextWindow: (id: string, recipeId: string | null, body: { offset: number; limit: number; variant: string; focus?: string | null; element_id?: string | null; section_id?: string | null }, signal: AbortSignal) =>
+  documentTextWindow: (id: string, recipeId: string | null, body: { offset: number; limit: number; variant: string; focus?: string | null; element_id?: string | null; element_ids?: readonly string[]; section_id?: string | null }, signal: AbortSignal) =>
     request<{ text: string; offset: number; total: number; limit: number; highlights?: [number, number][]; revision?: string; previous_offset?: number | null; next_offset?: number | null }>(`/api/documents/${encodeURIComponent(id)}${recipeId ? `/recipes/${encodeURIComponent(recipeId)}` : ""}/text-window`, { ...jsonBody(body), signal }),
   documentExtractionView: (id: string, recipeId: string, options: Record<string, string | number>, signal?: AbortSignal) =>
     request<DocumentExtractionExport & { offset: number; total: number; limit: number; text_offset?: number; text_total?: number; cell_offset?: number; cell_total?: number; scope_status?: string; complete?: boolean }>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/extraction-view?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),

@@ -130,3 +130,36 @@ def test_json_reader_selects_saved_unit_intersecting_unique_citation() -> None:
     assert result["pointer"] == "/b"
     assert result["text"] == '"b":"second"'
     assert result["source_count"] == 1
+
+
+def test_generic_reader_reads_every_chunk_element_in_order() -> None:
+    """chunk の全要素の範囲を要素の順に数え、source_index で順に読む（#5417）。"""
+    source = "<main><h2>見出し</h2><p>合成の本文</p><p>別の段落</p></main>"
+    data = source.encode()
+    spans = {}
+    for key, (open_tag, close_tag, text) in {
+        "h": ("<h2>", "</h2>", "見出し"),
+        "p": ("<p>", "</p>", "合成の本文"),
+    }.items():
+        start = source.index(open_tag + text)
+        end = source.index(close_tag, start) + len(close_tag)
+        spans[key] = (start, end, text)
+    mapping = source_map_artifact(
+        data,
+        source,
+        "html_source",
+        {key: [SourceRange(a, b, key, 0, len(text))] for key, (a, b, text) in spans.items()},
+    )
+    payload = {
+        "elements": [{"element_id": key, "text": text} for key, (_, _, text) in spans.items()],
+        "parser_artifacts": {"source_map": mapping},
+    }
+    first = source_map_window(payload, data, element_id="h", element_ids=["h", "p"])
+    second = source_map_window(
+        payload, data, element_id="h", element_ids=["h", "p"], source_index=1
+    )
+    assert (first["status"], first["source_count"]) == ("exact", 2)
+    assert first["text"] == "<h2>見出し</h2>"
+    assert second["text"] == "<p>合成の本文</p>"
+    # 1 つの要素の指定は従来どおりその要素の範囲だけ。
+    assert source_map_window(payload, data, element_id="h")["source_count"] == 1

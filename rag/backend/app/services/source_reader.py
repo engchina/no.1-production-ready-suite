@@ -394,6 +394,8 @@ async def read_original_context(
     result = await load_source_map_window(
         payload,
         element_id=target,
+        # 要素を指定しないときは chunk の全要素を強調する（#5417）。
+        element_ids=() if element_id else tuple(ids),
         revision=extraction_id,
         quote=chunk.text if target in ids else "",
         load=load,

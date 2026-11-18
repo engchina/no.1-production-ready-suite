@@ -30,7 +30,7 @@ from fastapi import (
 )
 from pr_backend_core.api import OffsetParams, offset_params, paginate
 from pr_backend_core.oracle_errors import oracle_error_codes
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from rag_parser_core.structured_records import (
     RecordBoundaryError,
     is_structured_records_content_type,
@@ -1791,6 +1791,8 @@ async def document_recipe_source_reader(
     recipe_id: str,
     expected_revision: Annotated[str, Query(min_length=1, max_length=256)],
     element_id: Annotated[str | None, Query(max_length=128)] = None,
+    # chunk の全要素（#5417）。窓は先頭の要素の位置、強調は全要素。
+    element_ids: Annotated[list[Annotated[str, Field(max_length=128)]], Query(max_length=256)] = [],  # noqa: B006
     cursor: Annotated[str | None, Query(max_length=2048)] = None,
     direction: Literal["before", "after"] = "after",
     scope: Literal["paragraph", "section", "parent"] = "paragraph",
@@ -1813,14 +1815,14 @@ async def document_recipe_source_reader(
     raw_payload = (saved or {}).get("extraction_json")
     payload: Mapping[str, Any] = raw_payload if isinstance(raw_payload, Mapping) else {}
     elements = payload.get("elements") or []
-    anchor = element_id or next(
-        (str(element["element_id"]) for element in elements if element.get("element_id")), ""
-    )
+    anchors = list(dict.fromkeys([*([element_id] if element_id else []), *element_ids])) or [
+        next((str(element["element_id"]) for element in elements if element.get("element_id")), "")
+    ]
     result = await asyncio.to_thread(
         reading_window,
         payload,
         revision=expected_revision,
-        anchor_ids=[anchor],
+        anchor_ids=anchors,
         quote="",
         cursor=cursor,
         direction=direction,
@@ -6344,7 +6346,9 @@ async def document_recipe_text_window(
         if recipe_id:
             from app.services.inspection_scope import source_inspection
 
-            target = request.element_id
+            requested = [request.element_id] if request.element_id else []
+            targets = list(dict.fromkeys([*requested, *request.element_ids]))
+            target = targets[0] if targets else None
             if request.section_id:
                 node = next(
                     (
@@ -6355,9 +6359,12 @@ async def document_recipe_text_window(
                     None,
                 )
                 target = (node.get("element_ids") or [None])[0] if node else None
-            result = source_inspection(payload, data, offset=offset, limit=limit, element_id=target)
-            if (request.element_id or request.section_id) and (
-                not target or target not in result["element_starts"]
+                targets = [target] if target else []
+            result = source_inspection(
+                payload, data, offset=offset, limit=limit, element_ids=targets
+            )
+            if (targets or request.section_id) and not any(
+                item in result["element_starts"] for item in targets
             ):
                 raise HTTPException(
                     409, "この位置に対応する原本の情報がありません。文書の再解析が必要です。"
