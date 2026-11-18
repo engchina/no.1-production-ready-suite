@@ -1564,7 +1564,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 - **`rag_answer_records.answer_engine` の列**: 保存済みの回答の記録（履歴）が、どの回答の方式で作られたかを表す。新しい記録には常に同じ値を書く。
 - **監査 `rag_search_audit` の標準の回答フローの内訳の列**（`memory_plan_id`・`agent_memory_*` など）: 既存の監査の行を変えないため残し、今は既定値を書く。
-- **文書構造索引の構築（`rag_graph_*`）と navigation の要約の取り込み**: ナレッジベースの関係図と文書詳細が使う（回答の検索は #5452 から読まない。関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
+- **文書構造索引の構築（`rag_graph_*`）と navigation の要約の取り込み**: ナレッジベースの関係図と文書詳細が使う（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
 
 ### 手順
 

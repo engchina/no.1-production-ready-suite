@@ -2129,8 +2129,8 @@ class Settings(
     rag_graph_profile: GraphProfile = Field(
         default="off",
         description=(
-            "文書構造索引の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
-            "構築する(LLM は使わない)。ナレッジベースの文書構造グラフで見られる。"
+            "文書構造索引の構築。off(既定)は構築しない、entities は取込のときに文書→章・節→表・図→"
+            "原文の断片のつながりを構築する(LLM は使わない)。ナレッジベースの文書構造グラフで見る。"
         ),
     )
     rag_vector_index_profile: VectorIndexProfile = Field(
