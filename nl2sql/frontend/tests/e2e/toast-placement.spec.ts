@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "./_helpers/test";
 
-import { expectToastPlacement, overlaps, pageEndToastReserve } from "./_helpers/toast";
+import { expectNoToastReserveWithoutToast, expectToastPlacement, overlaps, pageEndToastReserve } from "./_helpers/toast";
 import { FIXTURE_BASE_URL } from "./_helpers/web-server";
 
 // `tests/fixtures/*.tsx` を `/@react-refresh` と一緒に読み込むので、dev server の変換が要る。preview（PR の CI）でも
@@ -10,9 +10,9 @@ test.use({ baseURL: FIXTURE_BASE_URL });
 // #1728: 通知は画面幅ごとに決まった 1 か所に出し、ページの内容（PageHeader の操作の有無・スクロール）で動かさない。
 // desktop は画面の右下（右端から 1rem、下端から --toast-offset-bottom = 8rem）、375px は上端のバー。
 // 以前（#411）は PageHeader の操作の位置を測ってその左に置いたため、操作の有無で位置が変わった。
-// desktop のページの末尾は PageBody が通知 1 件の置き場所の高さ（--toast-reserve-bottom = 14rem）を空けるので、
-// スクロールしきった「SQL 生成」は通知の上に来て、ポインタが通知に乗って自動の消去が止まって（#351）も押せる（#5354）。
-// 一時停止はそのまま残す。
+// desktop のページの末尾は、通知の表示中だけ PageBody が通知の領域の高さ（--toast-reserve-bottom。<Toaster/> が測る）を
+// 空けるので、通知を積んでもスクロールしきった「SQL 生成」は通知の上に来て、ポインタが通知に乗って自動の消去が止まって
+// （#351）も押せる（#5354・#5388）。通知が出てもページは自動でスクロールしない。一時停止はそのまま残す。
 async function openFixture(page: Page, theme: "light" | "dark") {
   await page.route(/\/__toast-placement(\?.*)?$/, (route) => route.fulfill({ contentType: "text/html", body:
     `<html class="${theme === "dark" ? "dark" : ""}" lang="ja"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/tests/fixtures/toast-placement.tsx"></script></body></html>` }));
@@ -80,30 +80,37 @@ for (const theme of ["light", "dark"] as const) {
     await expect(counts).toContainText("コピー 1 回");
     await page.screenshot({ path: testInfo.outputPath(`toast-placement-header-${theme}.png`) });
 
-    // ページの末尾の主操作: スクロールしきると画面の下端（desktop は PageBody が空ける通知の置き場所の高さの上。#5354）に来る。
-    // desktop の置き場所の高さは通知 1 件分なので、2 件以上を積むと末尾の主操作に届きうる（messaging.md §3.1
-    // 「それでも覆いうるもの」）。desktop は積んだ通知が消えてから、末尾の主操作の通知 1 件で確かめる。
-    if (!mobile) {
-      await page.clock.runFor(4_100);
-      await expect(region.getByRole("status")).toHaveCount(0);
-    }
-    await page.locator("main").evaluate((main) => {
-      main.scrollTop = main.scrollHeight;
-    });
+    // ページの末尾の主操作: スクロールしきると画面の下端（desktop は通知の表示中だけ PageBody が空ける通知の領域の高さの上。
+    // #5388）に来る。desktop は積んだ通知（stacked 件）を出したままでも、空ける高さが通知の領域に従うので覆わない
+    // （#5354 の通知 1 件分の固定の余白では、2 件以上を積むと末尾の主操作に届いた）。
+    const scrollToEnd = () =>
+      page.locator("main").evaluate((main) => {
+        main.scrollTop = main.scrollHeight;
+        return main.scrollTop;
+      });
+    await scrollToEnd();
     const generate = page.getByRole("group", { name: "SQL 生成の操作" }).getByRole("button", { name: "SQL 生成" });
     const viewport = page.viewportSize()!;
     const generateBox = (await generate.boundingBox())!;
     expect(viewport.height - (generateBox.y + generateBox.height) - (await pageEndToastReserve(generate))).toBeLessThan(120);
+    expect(overlaps((await region.boundingBox())!, generateBox)).toBe(false);
+    // desktop は積んだ通知の領域の高さ（1 件分より高い）だけ空いている。
+    if (!mobile) expect(await pageEndToastReserve(generate)).toBeGreaterThan(8 * 14);
 
     await expectHitsItself(generate);
+    const scrollBeforeToast = await page.locator("main").evaluate((main) => main.scrollTop);
     await generate.click({ timeout: 3_000 });
     await expect(counts).toContainText("生成 1 回");
-    await expect(region.getByRole("status")).toHaveCount(mobile ? stacked + 1 : 1);
+    await expect(region.getByRole("status")).toHaveCount(stacked + 1);
+    // 通知が増えてページの末尾の余白が伸びても、ページは自動でスクロールしない。
+    expect(await page.locator("main").evaluate((main) => main.scrollTop)).toBe(scrollBeforeToast);
     if (!mobile) {
-      // 通知にポインタを乗せると止まる（desktop）。止めたままでも、覆われていない末尾の主操作を押せる。
+      // もう一度末尾までスクロールすると、増えた通知の上に来る。通知にポインタを乗せると止まる（desktop）。
+      // 止めたままでも、覆われていない末尾の主操作を押せる。
+      await scrollToEnd();
       await region.getByRole("status").first().hover();
       await page.clock.runFor(10_000);
-      await expect(region.getByRole("status")).toHaveCount(1);
+      await expect(region.getByRole("status")).toHaveCount(stacked + 1);
       await expectHitsItself(generate);
     }
     await expectToastPlacement(page);
@@ -114,10 +121,11 @@ for (const theme of ["light", "dark"] as const) {
     expect(overlaps((await region.boundingBox())!, (await generate.boundingBox())!)).toBe(false);
     await page.screenshot({ path: testInfo.outputPath(`toast-placement-end-${theme}.png`) });
 
-    // 離れたら残り時間から再開し、4 秒で消える。
+    // 離れたら残り時間から再開し、4 秒で消える。消えるとページの末尾の余白は 1.5rem に戻る（#5388）。
     await page.mouse.move(0, 0);
     await page.clock.runFor(4_100);
     await expect(region.getByRole("status")).toHaveCount(0);
+    await expectNoToastReserveWithoutToast(page);
 
     // PageHeader にページの操作が無い画面でも、同じ位置に出る（以前は操作の有無で位置が変わった）。
     await page.goto("/__toast-placement?actions=none");

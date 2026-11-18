@@ -586,13 +586,9 @@ async function expectNoExcessBottomWhitespace(page: Page) {
         .filter((rect) => rect.width > 0 && rect.height > 0)
         .map((rect) => rect.bottom)
     );
-    // md 以上の PageBody がページの末尾に空ける通知の置き場所の高さ（1.5rem を超える分。#5354）は余白に数えない。
-    const body = cards[0].closest("[data-page-body]");
-    const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
-    const toastReserve = body ? Math.max(0, Number.parseFloat(getComputedStyle(body).paddingBottom) - 1.5 * rem) : 0;
 
     return {
-      bottomWhitespace: Math.round(mainBottom - lastVisibleCardBottom - toastReserve),
+      bottomWhitespace: Math.round(mainBottom - lastVisibleCardBottom),
       scrollHeight: scroller.scrollHeight,
       clientHeight: scroller.clientHeight,
     };

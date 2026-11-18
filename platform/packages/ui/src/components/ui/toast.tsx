@@ -10,6 +10,7 @@ import { useToastStore, type ToastItem } from "../../store/toast-store";
 import { Button } from "./button";
 import { toneIcon, toneRole, toneText } from "./feedback-tone";
 import { MessageText } from "./message-text";
+import { useToastBottomReserve } from "./use-toast-bottom-reserve";
 import { useToastTopClearance } from "./use-toast-top-clearance";
 
 export interface ToasterProps {
@@ -25,6 +26,8 @@ export interface ToasterProps {
  *   下端からの距離は、画面の下端に固定された主操作（チャットの入力欄と送信）とページの末尾の操作の上に出る共通の定数。
  *   下端に固定された入力欄がそれより高い画面（チャット）では、入力欄の上端から 1rem 上に持ち上げる（#2103。`ChatLayout` の
  *   `useToastClearance`）。
+ *   通知が出ている間だけ、`PageBody` がページの末尾に通知の領域の高さを空け、スクロールしきると末尾の操作（表の行メニュー・
+ *   末尾のボタン）が通知の上に来る（#5388。`useToastBottomReserve`）。
  * - md 未満: 上端の全幅。上端のバーに重ね、メニューのボタンは覆わない。バーを超える高さは AppShell が確保し、戻る操作や本文に重ねない。
  * どちらも DOM の順（読み上げ・Tab の順）と見た目の上下の順は同じ（古い通知が上、新しい通知が下）。
  *
@@ -49,6 +52,9 @@ export function Toaster({ dismissLabel = "閉じる", regionLabel = "通知" }: 
   const [mounted, setMounted] = useState(false);
   const regionRef = useRef<HTMLDivElement>(null);
   useToastTopClearance(regionRef, mounted && narrow && toasts.length > 0);
+  // md 以上は通知の領域の実際の高さを測り、通知が出ている間だけページの末尾に空ける（`PageBody`。#5388）。
+  // 空の領域は高さ 0 で、何も空けない（閉じる動きの間も領域の高さに従う）。
+  useToastBottomReserve(regionRef, mounted && !narrow);
   // ホバー・フォーカス中の通知（`hover:<id>` / `focus:<id>`）。1 つでもあれば止める。
   const engaged = useRef(new Set<string>());
   const setEngaged = useCallback(

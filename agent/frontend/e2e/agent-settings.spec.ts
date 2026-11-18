@@ -910,8 +910,8 @@ test.describe("Agent Runtime settings", () => {
       await expect.poll(saves).toBe(1);
       await expectToastPlacement(page);
 
-      // ページの末尾までスクロールすると、保存ボタンは画面の下端（desktop は PageBody が空ける通知の置き場所の高さの上。
-      // #5354）に来る。
+      // ページの末尾までスクロールすると、保存ボタンは画面の下端（desktop は通知の表示中だけ PageBody が空ける通知の領域の
+      // 高さの上。#5354・#5388）に来る。
       await chooseSelectFieldOption(defaultMode, "approval");
       await page.locator("main").evaluate((main) => {
         main.scrollTop = main.scrollHeight;

@@ -33,6 +33,7 @@ import {
 } from "../../lib/list-detail";
 import { cn } from "../../lib/utils";
 import { useMediaQuery } from "../chat/use-chat-history-panel";
+import { pageBodyRestingBottomInset } from "./PageBody";
 import { Button } from "../ui/button";
 import { Card } from "../ui/card";
 
@@ -126,10 +127,11 @@ function measureListColumn(root: HTMLElement): ListColumnFit | null {
     columnTop = rootRect.top + window.scrollY;
   }
   // 置き場所の下の余白（PageBody の下の padding など）。スクロール領域の外の枠は含めない。
+  // PageBody は通常の下の余白だけを数え、通知の表示中だけ足す余白（#5388）は数えない（通知の表示中に測り直しても列が低くならない）。
   let bottomInset = cssPx(window.getComputedStyle(root).marginBottom);
   for (let node = root.parentElement; node; node = node.parentElement) {
     const style = window.getComputedStyle(node);
-    bottomInset += cssPx(style.paddingBottom);
+    bottomInset += node.hasAttribute("data-page-body") ? pageBodyRestingBottomInset(node) : cssPx(style.paddingBottom);
     if (node === scroller || node === document.documentElement) break;
     bottomInset += cssPx(style.borderBottomWidth);
   }

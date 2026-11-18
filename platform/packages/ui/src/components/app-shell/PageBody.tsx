@@ -13,18 +13,34 @@ export function measureClass(wide: boolean) {
 }
 
 /**
- * md 以上でページの末尾に空ける下の余白（#5354）。通知（Toast）は md 以上で画面の右下（下端から 8rem）に決まって出るので、
- * 通知の置き場所の高さ（`--toast-reserve-bottom` = 14rem）を空け、スクロールしきったとき通知の範囲の下に内容（表の行メニュー・
- * 末尾のボタン）を置かない。md 未満は通知が上端に出るので空けない（1.5rem のまま）。
+ * md 以上で、通知（Toast）が出ている間だけページの末尾に空ける下の余白（#5388。#5354 の常時の 14rem を置き換えた）。
+ * 通知は md 以上で画面の右下（下端から 8rem）に出る。`<Toaster/>` が通知の表示中だけ通知の領域の上端から画面の下端までの
+ * 高さ + 1rem を `--toast-reserve-bottom` に書き（`useToastBottomReserve`）、ここでその高さを下の余白にする。スクロールしきったとき
+ * 通知の範囲の下に内容（表の行メニュー・末尾のボタン）を置かない。通知を積めばその高さまで伸び、通知が無いときは変数が無く
+ * 1.5rem（`py-6`）に戻る。ページは自動でスクロールしない。md 未満は通知が上端に出るので空けない（1.5rem のまま）。
  * 下端に固定された入力欄（`ChatLayout`。埋め込みを除く）を持つ本文は、通知が入力欄の上に出る（`--toast-clear-bottom`。#2103）
  * ので空けない。
  */
 const PAGE_BODY_TOAST_RESERVE_CLASS =
-  "md:pb-[var(--toast-reserve-bottom)] md:has-[[data-chat-layout]:not([data-chat-layout-embedded])]:pb-6";
+  "md:pb-[max(var(--space-6),var(--toast-reserve-bottom,0px))] md:has-[[data-chat-layout]:not([data-chat-layout-embedded])]:pb-6";
+
+/** `PageBody` の通常の下の余白（`py-6` = 1.5rem。rem の数）。 */
+const PAGE_BODY_RESTING_BOTTOM_REM = 1.5;
+
+/**
+ * `PageBody` の通常の下の余白（px）。通知の表示中だけ足す余白（`--toast-reserve-bottom`）を含めない（#5388）。
+ * 表・一覧の列の高さを画面に合わせて測るときに使う（通知の表示中に測り直しても低くならない）。製品の `pb-0` などで
+ * 通常の余白より小さいときはその値。
+ */
+export function pageBodyRestingBottomInset(body: Element) {
+  const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const padding = Number.parseFloat(getComputedStyle(body).paddingBottom) || 0;
+  return Math.min(padding, PAGE_BODY_RESTING_BOTTOM_REM * rem);
+}
 
 /**
  * PageHeader の直後に置く本文コンテナ（左右ガター 2rem / 上 1.5rem / セクション間 1.5rem。
- * 下は md 未満 1.5rem、md 以上は通知の置き場所の高さ。`PAGE_BODY_TOAST_RESERVE_CLASS`）。
+ * 下は 1.5rem。md 以上は通知の表示中だけ通知の領域の高さまで広げる。`PAGE_BODY_TOAST_RESERVE_CLASS`）。
  * 手書きの `<div style={{ padding: "1.5rem 2rem" }}>` を置き換える。
  * 表を画面幅いっぱいに出す画面だけ `wide`（PageHeader にも同じ値を渡す）。
  */

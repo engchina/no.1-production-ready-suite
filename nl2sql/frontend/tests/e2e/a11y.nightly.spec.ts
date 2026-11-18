@@ -315,6 +315,7 @@ test.describe("画面の a11y（axe）", { tag: "@a11y" }, () => {
   // #1728: 通知（Toast）の決まった置き場所（desktop は画面の右下、375px は上端のバー）が、主操作（PageHeader の
   // ページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信・ページの末尾の操作・表の行メニュー。#5354）と重ならない。
   // 通知は本文より上に重なるので、重なると操作が隠れる（WCAG 2.2 の 2.4.11 Focus Not Obscured の考え方）。
+  // 通知を出してから末尾までスクロールして確かめ、通知が無いときはページの末尾に通知の分の余白が無いことも確かめる（#5388）。
   for (const screen of [...SCREENS, ...NON_NAV_SCREENS]) {
     test(`${screen.path} の主操作は通知の置き場所と重ならない`, { tag: "@responsive" }, async ({ page }) => {
       await openScreen(page, screen, "light");

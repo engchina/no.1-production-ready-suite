@@ -8,6 +8,8 @@ import { expect, type Locator, type Page } from "@playwright/test";
  * - desktop（md 以上）: 画面の右下。右端から 1rem、下端から `--toast-offset-bottom`（8rem）。下端に固定された入力欄
  *   （チャット）がそれより高い画面では、入力欄の上端から 1rem 上（`--toast-clear-bottom`。#2103）。
  * - 375px（md 未満）: 上端のバーに重ねる。上端から 0.5rem、右端から 1rem、左はメニューのボタンの後ろ（1rem + 44px）。
+ * desktop のページの末尾は、通知の表示中だけ `PageBody` が通知の領域の高さを空ける（`--toast-reserve-bottom`。#5354・#5388）。
+ * 通知が無いときは 1.5rem のまま（常に空けない）。
  */
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -20,6 +22,8 @@ export function overlaps(a: Box, b: Box) {
 const TOAST_WIDTH_MAX_REM = 32;
 /** 主操作と重ならないかを確かめる通知の高さ。本文と補足（description）の 1 件（約 72px）に余裕を見た高さ。 */
 const TOAST_ZONE_HEIGHT_REM = 6;
+/** `PageBody` の通常の下の余白（`py-6`）。通知が無いときはこれを超えない（#5388）。 */
+const PAGE_BODY_RESTING_BOTTOM_REM = 1.5;
 
 interface ToastGeometry {
   mode: string | undefined;
@@ -78,43 +82,83 @@ export async function expectToastPlacement(page: Page) {
 }
 
 /**
- * 要素の入る `PageBody` がページの末尾に空ける通知の置き場所の高さのうち、md 未満の下の余白（1.5rem）を超える分（#5354）。
- * md 以上は `--toast-reserve-bottom`（14rem）- 1.5rem、md 未満は 0。スクロールしきった末尾の操作の下端の位置を比べるときに引く。
+ * 要素の入る `PageBody` の下の余白のうち、通常の 1.5rem を超える分（md 以上で通知の表示中だけ空ける通知の領域の高さ。
+ * #5354・#5388。通知が無いとき・md 未満は 0）。スクロールしきった末尾の操作の下端の位置を比べるときに引く。
  */
 export async function pageEndToastReserve(target: Locator) {
-  return target.evaluate((element) => {
+  return target.evaluate((element, restingRem) => {
     const body = element.closest("[data-page-body]");
     if (!body) return 0;
     const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
-    return Math.max(0, Number.parseFloat(getComputedStyle(body).paddingBottom) - 1.5 * rem);
-  });
+    return Math.max(0, Number.parseFloat(getComputedStyle(body).paddingBottom) - restingRem * rem);
+  }, PAGE_BODY_RESTING_BOTTOM_REM);
+}
+
+/** 通知が無いとき、ページの末尾に通知の分の余白が空いていない（すべての `PageBody` の下の余白が 1.5rem 以下。#5388）。 */
+export async function expectNoToastReserveWithoutToast(page: Page) {
+  const region = page.getByRole("region", { name: "通知", exact: true });
+  await expect(region.locator(":scope > *"), "通知が出ていない").toHaveCount(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate((restingRem) => {
+          const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+          return Array.from(document.querySelectorAll("[data-page-body]"))
+            .map((body) => Number.parseFloat(getComputedStyle(body).paddingBottom))
+            .filter((padding) => padding > restingRem * rem + 1)
+            .map((padding) => Math.round(padding));
+        }, PAGE_BODY_RESTING_BOTTOM_REM),
+      { message: "通知が無いときに 1.5rem を超える PageBody の下の余白（px）" }
+    )
+    .toEqual([]);
+}
+
+/** `<Toaster/>` が md 以上で通知の領域を測って書く、ページの末尾に空ける高さ（`--toast-reserve-bottom`）。通知が無ければ空。 */
+function toastReserveVar(page: Page) {
+  return page.evaluate(() => document.documentElement.style.getPropertyValue("--toast-reserve-bottom"));
 }
 
 /**
- * 通知が出たときに覆う範囲（最も広い通知・本文と補足の 1 件）。通知の領域の位置（実際の CSS）から求める。
- * desktop は右下の角から左と上へ、375px は上端のバーから下へ広がる。
+ * 通知の領域に、最も広く高い通知（幅 `--toast-width-max`・本文と補足の 1 件に余裕を見た 6rem）と同じ大きさの箱を出す。
+ * md 以上の `<Toaster/>` は通知の領域の実際の高さを測ってページの末尾に場所を空ける（`useToastBottomReserve`）ので、
+ * どの画面でも本物の通知と同じ仕組みで確かめられる。戻り値で取り除く。
  */
-export async function toastZone(page: Page): Promise<Box> {
-  const { rect, rem, vw } = await readToastGeometry(page);
-  const height = TOAST_ZONE_HEIGHT_REM * rem;
-  if (vw < 768) return { x: rect.x, y: rect.y, width: rect.width, height };
-  const right = rect.x + rect.width;
-  const width = Math.min(TOAST_WIDTH_MAX_REM * rem, vw - 2 * rem);
-  return { x: right - width, y: rect.y + rect.height - height, width, height };
+async function showToastProbe(page: Page) {
+  const region = page.getByRole("region", { name: "通知", exact: true });
+  await expect(region).toBeAttached();
+  await region.evaluate((element, size) => {
+    const probe = document.createElement("div");
+    probe.dataset.e2eToastProbe = "";
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.cssText = `flex:none;width:${size.width}rem;max-width:100%;height:${size.height}rem`;
+    element.append(probe);
+  }, { width: TOAST_WIDTH_MAX_REM, height: TOAST_ZONE_HEIGHT_REM });
+  // md 以上は `<Toaster/>` が通知の領域を測ってページの末尾に空ける高さを待つ（md 未満は通知が上端なので空けない）。
+  const desktop = await page.evaluate(() => document.documentElement.clientWidth >= 768);
+  if (desktop) await expect.poll(() => toastReserveVar(page), { message: "通知の表示中にページの末尾に空ける高さ" }).not.toBe("");
+  return async () => {
+    await region.evaluate((element) => element.querySelector(":scope > [data-e2e-toast-probe]")?.remove());
+    await expect.poll(() => toastReserveVar(page), { message: "通知を消した後に残るページの末尾の高さ" }).toBe("");
+  };
 }
 
 /**
- * 主操作が通知の範囲と重ならない。2 つの状態で確かめる。
- * - 開いたまま（スクロールの前）: PageHeader のページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信。
- * - すべてのスクロールの領域を末尾までスクロールした後: ページの末尾の操作（本文の最後のボタン。それ以上スクロール
- *   できないので画面の下端に来る）・チャットの入力欄と送信と、画面の下半分にある上の 3 種の操作と表の行メニュー
- *   （`RowActionMenu` の起動のボタン `[data-row-action-menu]`。#5354）。画面の上半分へスクロールで動いた操作は、
- *   スクロールを戻せば通知から離れるので対象にしない（375px の通知は上端）。
- *   desktop はページの末尾に通知の置き場所の高さ（`--toast-reserve-bottom`）が空くので、スクロールしきると通知の範囲の
- *   下に内容が来ない（`PageBody`）。
+ * 主操作が通知の範囲と重ならない。
+ * 1. 通知が無いとき、ページの末尾に通知の分の余白が空いていない（`expectNoToastReserveWithoutToast`。#5388）。
+ * 2. 通知（最も広く高い 1 件と同じ大きさ。`showToastProbe`）を出し、2 つの状態で確かめる。範囲は出した通知の実際の位置。
+ *    - 開いたまま（スクロールの前）: PageHeader のページの操作・FormActionBar・ObjectActionBar・チャットの入力欄と送信。
+ *    - すべてのスクロールの領域を末尾までスクロールした後: ページの末尾の操作（本文の最後のボタン。それ以上スクロール
+ *      できないので画面の下端に来る）・チャットの入力欄と送信と、画面の下半分にある上の 3 種の操作と表の行メニュー
+ *      （`RowActionMenu` の起動のボタン `[data-row-action-menu]`。#5354）。画面の上半分へスクロールで動いた操作は、
+ *      スクロールを戻せば通知から離れるので対象にしない（375px の通知は上端）。
+ *    desktop は通知の表示中だけページの末尾に通知の領域の高さ（`--toast-reserve-bottom`）が空くので、スクロールしきると
+ *    通知の範囲の下に内容が来ない（`PageBody`）。通知を出してもページは自動でスクロールしない。
+ * 3. 通知を消すと、余白が 1.5rem に戻る。
  */
 export async function expectMainActionsClearOfToast(page: Page) {
-  const zone = await toastZone(page);
+  await expectNoToastReserveWithoutToast(page);
+  const hideProbe = await showToastProbe(page);
+  const { rect: zone } = await readToastGeometry(page);
   const collect = (scrolledToEnd: boolean) =>
     page.evaluate((atEnd) => {
       const visible = (element: Element) => {
@@ -168,4 +212,6 @@ export async function expectMainActionsClearOfToast(page: Page) {
   });
   const after = covered(await collect(true));
   expect({ before, after }, "通知の範囲と重なる主操作").toEqual({ before: [], after: [] });
+  await hideProbe();
+  await expectNoToastReserveWithoutToast(page);
 }
