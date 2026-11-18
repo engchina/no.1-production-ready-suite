@@ -1542,8 +1542,10 @@ def render_answer(
         return _body_sections(checked, applications, lines, lambda entries: citation_entries.append(list(entries)))
 
     # 表の結論は要約の直後に 1 回だけ、表の下に行ごとの出典行を付けて出す（#4812）。本文で最初の出典行なので先に数える。
+    # 出典の列の番号は表をまたいだ通し番号（#5489）なので、出典行ごとの番号を表のあいだで共有する。
+    source_numbers: dict[str, int] = {}
     tables = [
-        "\n".join(table_block_lines(entry, _citation, lambda entries: citation_entries.append(list(entries))))
+        "\n".join(table_block_lines(entry, _citation, lambda entries: citation_entries.append(list(entries)), source_numbers))
         for entry in applications
         if entry.published and entry.application.table is not None
     ]

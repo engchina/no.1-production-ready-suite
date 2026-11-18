@@ -117,12 +117,18 @@ def table_block_lines(
     entry: CheckedApplication,
     citation: Callable[[dict], str],
     cite: Callable[[Sequence[Any]], None],
+    numbers: dict[str, int] | None = None,
 ) -> list[str]:
     """冒頭の回答に出す表の結論の行（題・出典の列つきの表・表の下の出典行。#4812）。
 
-    出典行は行の順に、同じ出典行になる規則をまとめて 1 行にする（``render_lines`` と同じ形）。出典の列の番号は表の下の
-    出典行の順（1 始まり）で、番号はコードが振る。``cite`` にはその行にまとめた規則（CheckedItem）を出典行の順に渡す。
+    出典行は行の順に、同じ出典行になる規則をまとめて 1 行にする（``render_lines`` と同じ形）。``cite`` にはその行に
+    まとめた規則（CheckedItem）を出典行の順に渡す。
+
+    出典の列の番号は回答全体の通し番号（#5489）: 出典行の文字が回答の中で最初に出た順に 1 から振り、同じ出典行は
+    表をまたいでも同じ番号にする。``numbers`` は回答全体で共有する出典行ごとの番号（表を出す順に同じ dict を渡す）。
+    番号はコードが振る。画面は表の下の出典行を同じ規則で数えて番号と移り先を付ける。
     """
+    numbers = {} if numbers is None else numbers
     application = entry.application
     table = application.table
     if table is None:
@@ -131,7 +137,7 @@ def table_block_lines(
     shown: dict[str, list[Any]] = {}
     marks: list[str] = []
     for row in table.rows:
-        numbers: list[int] = []
+        row_numbers: list[int] = []
         for index in row.item_indexes:
             item = by_index.get(index)
             if item is None or not item.span:
@@ -140,12 +146,15 @@ def table_block_lines(
             items = shown.setdefault(line, [])
             if all(item is not other for other in items):
                 items.append(item)
-            numbers.append(list(shown).index(line) + 1)
-        marks.append(source_marks(numbers))
-    # 行に結ばれていない規則（行の根拠の外の item）も、出典行として表の下に残す（番号の印は付かない）。
+            row_numbers.append(numbers.setdefault(line, len(numbers) + 1))
+        marks.append(source_marks(row_numbers))
+    # 行に結ばれていない規則（行の根拠の外の item）も、出典行として表の下に残す（列の印は付かないが、出典行の番号は
+    # 出た順に振る）。
     for item in entry.entries:
         if item.span and all(item is not other for items in shown.values() for other in items):
-            shown.setdefault(citation(item.span), []).append(item)
+            line = citation(item.span)
+            shown.setdefault(line, []).append(item)
+            numbers.setdefault(line, len(numbers) + 1)
     lines = [
         application.result.strip(),
         *table_markdown(table, source_column=answer_labels().table_source_column, sources=marks).splitlines(),

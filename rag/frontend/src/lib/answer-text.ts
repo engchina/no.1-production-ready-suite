@@ -19,8 +19,9 @@ export type AnswerTextEntry =
 
 export type AnswerTextBlock =
   /**
-   * 節の前の段落。`citations` は段落の直後の「根拠：」の行（回答エンジンが冒頭の回答の表の下に出す行ごとの出典行。
-   * #4812）と、その本文の何番目の行か（`citationLines`）。
+   * 節の前の段落。`citations` は段落の直後の「根拠：」の行（全文の回答の段落の出典行と、回答エンジンが冒頭の回答の
+   * 表の下に出す行ごとの出典行。#4812）と、その本文の何番目の行か（`citationLines`）。画面はこの行に回答全体の通し番号を
+   * 付ける（#5489）。
    */
   | { kind: "paragraph"; text: string; citations?: string[]; citationLines?: number[] }
   | { kind: "section"; title: string; ordered: boolean; entries: AnswerTextEntry[] };

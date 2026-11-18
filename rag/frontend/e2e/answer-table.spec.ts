@@ -15,6 +15,7 @@ import {
 // #4812: その表は冒頭の回答に 1 回だけ出し、右端の出典の列の印（[1][2]）から表の下の番号つきの根拠の行へ移れる。
 // 回答の表はセルの全文を折り返して出し（省略しない）、「すべての行を見る」を出さず、CSV は残す。
 // 「資料をもとに導いた結論」には表の題と上の表の案内だけを出す。
+// #5489: 根拠の行の番号は回答全体の通し番号。同じ根拠の行はどの段落・表でも同じ番号、印の移り先は最初に出る行。
 
 const PROFILE = {
   id: "profile-a",
@@ -91,7 +92,32 @@ function citation(document: string, file: string, page: number, lines: number[])
   };
 }
 
-async function ask(page: Page, answerText = ANSWER, firstFile = "文書 A.pdf") {
+// #5489: 段落ごとに根拠の行が続く全文の回答と、その後ろの表。番号は回答全体の通し番号（[1] 文書 A・[2] 文書 B・
+// [3] 文書 C）。各行の後ろの値は本文の何番目の根拠の行か（回答エンジンの answer_citation_lines と同じ数え方）。
+const NUMBERED_ANSWER = [
+  "合成の原則の文です。",
+  "根拠：文書 A.pdf p.3", // 1
+  "合成の例外の文です。",
+  "根拠：文書 B.pdf p.5", // 2
+  "",
+  "合成の原則の続きです。",
+  "根拠：文書 A.pdf p.3", // 3
+  "",
+  "合成の表の題です。",
+  "| 項目 | 出典 |",
+  "| --- | --- |",
+  "| 行 1 | [3] |",
+  "| 行 2 | [1] |",
+  "根拠：文書 C.pdf p.7", // 4
+  "根拠：文書 A.pdf p.3", // 5
+].join("\n");
+
+async function ask(
+  page: Page,
+  answerText = ANSWER,
+  firstFile = "文書 A.pdf",
+  sources = [citation("doc-a", firstFile, 3, [1, 3, 4, 5]), citation("doc-b", "文書 B.pdf", 5, [2])],
+) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -121,10 +147,7 @@ async function ask(page: Page, answerText = ANSWER, firstFile = "文書 A.pdf") 
           },
         })}\n\n`,
         `event: delta\ndata: ${JSON.stringify({ text: answerText })}\n\n`,
-        `event: citations\ndata: ${JSON.stringify([
-          citation("doc-a", firstFile, 3, [1, 3, 4, 5]),
-          citation("doc-b", "文書 B.pdf", 5, [2]),
-        ])}\n\n`,
+        `event: citations\ndata: ${JSON.stringify(sources)}\n\n`,
         `event: done\ndata: ${JSON.stringify({ trace_id: "trace-table" })}\n\n`,
       ].join(""),
     })
@@ -140,7 +163,7 @@ async function ask(page: Page, answerText = ANSWER, firstFile = "文書 A.pdf") 
   return answer;
 }
 
-test.describe("回答の本文の表（issue 4734・4812・4822）", { tag: "@responsive" }, () => {
+test.describe("回答の本文の表（issue 4734・4812・4822・5489）", { tag: "@responsive" }, () => {
   test("定型の節が無い完成本文の根拠を開ける", async ({ page }, testInfo) => {
     await page.route("**/api/feedback/current?**", route => route.fulfill({ json: envelope(null) }));
     await page.route("**/api/documents/doc-a/content**", route => route.fulfill({ contentType: "text/plain; charset=utf-8", body: CITATION_TEXT }));
@@ -315,5 +338,42 @@ test.describe("回答の本文の表（issue 4734・4812・4822）", { tag: "@re
     // 表の下の根拠の行と、項目・結論の根拠の行は今までどおり押せる。
     await expect(answer.getByRole("button", { name: "[2] 根拠：文書 B.pdf p.5 の原文を開く" })).toBeVisible();
     await expect(answer.getByRole("button", { name: "根拠：文書 A.pdf p.3 の原文を開く", exact: true })).toHaveCount(3);
+  });
+  test("根拠の行の番号は段落と表をまたいだ通し番号で、表の印は最初に出る根拠の行の原文を開く", async ({ page }, testInfo) => {
+    const answer = await ask(page, NUMBERED_ANSWER, "文書 A.pdf", [
+      citation("doc-a", "文書 A.pdf", 3, [1, 3, 5]),
+      citation("doc-b", "文書 B.pdf", 5, [2]),
+      citation("doc-c", "文書 C.pdf", 7, [4]),
+    ]);
+    // 同じ根拠の行（文書 A）はどの段落・表の下でも [1]、別の行は別の番号。
+    await expect(answer.getByTestId("answer-citation-marker")).toHaveText(["[1]", "[2]", "[1]", "[3]", "[1]"]);
+    await expect(answer.getByRole("button", { name: "[1] 根拠：文書 A.pdf p.3 の原文を開く", exact: true })).toHaveCount(3);
+    await expect(answer.getByRole("button", { name: "[3] 根拠：文書 C.pdf p.7 の原文を開く", exact: true })).toHaveCount(1);
+    const table = answer.getByRole("table");
+    await expect(table.getByTestId("answer-source-mark")).toHaveText(["[3]", "[1]"]);
+    await answer.screenshot({ path: testInfo.outputPath(`global-citation-numbers-${testInfo.project.name}.png`) });
+
+    // 表の [1] は、その出典が最初に出る根拠の行（第 1 段落の文書 A）を指し、その原文を開く。
+    const first = table.getByRole("link", { name: "[1] の原文を開く" });
+    const href = await first.getAttribute("href");
+    expect(href).toMatch(/-sources-1$/);
+    const target = answer.locator(`[id="${href!.slice(1)}"]`);
+    await expect(target).toHaveCount(1);
+    await expect(target).toHaveAccessibleName("[1] 根拠：文書 A.pdf p.3 の原文を開く");
+    await first.click();
+    const source = page.getByRole("dialog", { name: "回答の根拠" });
+    await expect(source).toBeVisible();
+    await expect(source).toContainText("文書 A.pdf");
+    await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
+    await expect(first).toBeFocused();
+
+    // 表の [3] は表の下の文書 C の行の原文を開く。
+    await table.getByRole("link", { name: "[3] の原文を開く" }).click();
+    await expect(source).toBeVisible();
+    await expect(source).toContainText("文書 C.pdf");
+    await page.keyboard.press("Escape");
+    await expect(source).toBeHidden();
+    await expectNoPageOverflow(page);
   });
 });
