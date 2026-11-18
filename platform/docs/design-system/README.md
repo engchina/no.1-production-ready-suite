@@ -279,7 +279,21 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 
 ### 指示の編集欄の既定への復帰（#3753）
 
-各指示の編集欄では、欄の末尾の `FormActionBar` に操作をまとめる。保存を `primaryActions`、「変更を破棄」と「既定に戻す」をこの順で `secondaryActions` に置く。復帰は保存前の編集で、保存するまでサーバーの設定を変えない。「変更を破棄」は最後に保存した内容へ戻す。既定値の状態バッジは表示せず、復帰後は保存が必要なことを `FormActionBar` の `status` で伝える。
+各指示の編集欄では、欄の末尾の `FormActionBar` に操作をまとめる。保存を `primaryActions`、「変更を破棄」を `secondaryActions`、「既定に戻す」を `restoreDefaultsAction` に置く（並びは下の「フォームの操作の並び」）。復帰は保存前の編集で、保存するまでサーバーの設定を変えない。「変更を破棄」は最後に保存した内容へ戻す。既定値の状態バッジは表示せず、復帰後は保存が必要なことを `FormActionBar` の `status` で伝える。
+
+### フォームの操作の並び（#5458）
+
+フォームの末尾の操作は **保存 → 変更を破棄 → 既定に戻す** の順に並べる。並びは `FormActionBar` が決め、画面ごとに決めない。
+
+| 決めたこと | 理由 |
+|---|---|
+| 保存は `primaryActions`、「変更を破棄」は `secondaryActions`、フォーム全体を既定に戻す操作は `restoreDefaultsAction`（1 つ）。部品は primary → secondary → 既定に戻すの順に描く | 画面ごとに `secondaryActions` の並びや手書きのボタンで置いていたため、形式別の既定は「保存 → 既定に戻す → 変更を破棄」、抽出する項目は「保存 → 変更を破棄 → 全体の既定に戻す」、章節の抽出規則は「その他の操作」の中と、画面ごとに違った |
+| 主操作（保存）が先頭、その反対の「変更を破棄」がすぐ右 | 左寄せの確定の行は主操作から読む（§4「詳細・作成・編集の画面の操作」）。「変更を破棄」は保存の取り消しで、保存と組で使う |
+| 既定に戻すは最後に、secondary の見た目で、前の 2 つから少し離す（sm 以上は左に 0.5rem、縦に積む sm 未満は上に 0.5rem を足す） | 使う頻度が低く、編集中の内容を置き換えて影響が大きい。主操作の隣に置くと押し間違える。Tab の順は見た目の順と同じ |
+| 既定に戻すは既定値をフォームに入れるだけで、「保存」で確定する。保存した定義を消す画面（章節の抽出規則・抽出する項目）は確認のダイアログを出してから実行する | 保存前に見直せる。押しただけでサーバーの設定を変えない |
+| アイコンは「変更を破棄」が `RotateCcw`、既定に戻すが `History` | 2 つの「戻す」を見分ける |
+| 文言は意味に合わせたまま（「全体の既定に戻す」「標準の項目に戻す」「既定の文に戻す」） | 戻る先が違う。並びだけをそろえる |
+| 欄ごとの「既定に戻す」（言語資源の欄など）は対象外 | フォームの操作ではなく、欄の中の操作 |
 
 ### `Button`（変更）— ★ アイコンと loading の統一基準
 
@@ -1493,6 +1507,7 @@ QA に事前共有してください。**189点あります。**
 | 210 | **md 以上でページの末尾に通知の置き場所の分の余白（14rem）が空く**（#5354。`PageBody`。#5388 で通知の表示中だけに変えた → 211） | 下の余白 1.5rem → md 以上は `--toast-reserve-bottom`（14rem = 196px）。md 未満と下端に固定された入力欄（チャット）の本文は 1.5rem のまま。`growToViewport` の表はその分だけ低くなる | 右下の通知（下端から 8rem + 通知 1 件 約 6rem）の下に内容が来ず、スクロールしきると表の最後の行の行メニュー・末尾のボタンが通知に覆われない（§4「Toaster」） |
 | 211 | **md 以上のページの末尾の通知の分の余白を、通知の表示中だけ空ける**（#5388。`PageBody`・`<Toaster/>`） | 210 の常時の 14rem → 通知が無いときは 1.5rem（全画面の末尾の大きな空白が消える）。通知の表示中は通知の領域の実際の高さ + 1rem（積んだ通知の分も伸びる）。通知が出てもページは自動でスクロールしない。`growToViewport` の表・`ListDetailLayout` の列は 210 の前と同じ高さに戻る | 通知の無いときの空白を無くし、通知の表示中は件数によらず末尾の操作（表の行メニュー・末尾のボタン）を通知で覆わない。#3751 の上端の通知の確保と同じ型（§4「Toaster」） |
 | 212 | **チャットの空の状態は、会話の欄が低くても先頭から見える**（#5397。`useChatAutoScroll` の `empty`） | 会話の無い空の状態も、開いたとき・高さが変わったときに会話の欄の末尾へ送っていた（375px で入力欄の下の通知が出ると、空の状態のアイコンと見出しの上が隠れた）→ 空の状態の間は末尾へ送らず先頭を見せ、会話が始まったら従来どおり末尾から読む | 空の状態の文言とアイコンは最初に読むもの。3 製品の会話の欄で同じ振る舞い |
+| 213 | **フォームの操作の並びが「保存 → 変更を破棄 → 既定に戻す」にそろう**（#5458。`FormActionBar` の `restoreDefaultsAction`） | RAG の形式別の既定は「保存 → 既定に戻す → 変更を破棄」、抽出する項目（全体の既定・ナレッジベース）は手書きの行の「保存 → 変更を破棄 → 標準の項目に戻す / 全体の既定に戻す」、章節の抽出規則は「既定に戻す」が「その他の操作」の中 → すべて `FormActionBar` の保存 → 変更を破棄 → 既定に戻す（少し離す）。回答の指示・回答の注意（platform）も同じ位置へ | §4「フォームの操作の並び」 |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 
@@ -1500,6 +1515,7 @@ QA に事前共有してください。**189点あります。**
 
 | 対象 | 変更 |
 |---|---|
+| `FormActionBar`（#5458） | `restoreDefaultsAction?: FormActionDescriptor` を追加（フォーム全体を既定に戻す操作。secondary の後ろに少し離して描く）。既定に戻すを `secondaryActions` に入れている画面はこちらへ移す |
 | `ListPickerSheet` / `SideSheet` / `ListPicker`（#5279） | **新規 export** `ListPickerSheet` / `ListPickerSheetProps`（一覧から選んで追加するシート）。`SideSheetProps` に `footer` / `initialFocusRef` / `fullScreenBelowSm`、`ListPickerProps` に `fill`（置かれた縦の領域を埋める）を追加。`ListPicker` の `disabledReason` は文字 → 中立の `StatusBadge` で `meta` の左（DOM の順も理由 → `meta`、`aria-describedby` も同じ順。`data-list-picker-reason`）。既存の props は互換 |
 | `RenderErrorBoundary`（#4800） | **新規 export** `RenderErrorBoundary` / `RenderErrorBoundaryProps` / `RenderErrorBoundaryLabels` / `DEFAULT_RENDER_ERROR_BOUNDARY_LABELS`。描画の例外を受け止める境界（RAG の `CardErrorBoundary` を移した）。`serviceName`（診断のログ）・`label`・`labels`・`placement`（`page` は本文の余白の中に出す）。別の画面へ移ったら解くには `key` に `pathname` を渡す |
 | `FieldSkeleton`（#4654） | **新規 export** `FieldSkeleton` / `FieldSkeletonProps`。欄（ラベル + 入力欄 + 案内）の形の読み込み中の表示（`width`・`size`・`fieldLabel`・`helperText` / `helperLines`・`label`）。Agent・RAG・NL2SQL が持っていた同じ役割の実装を置き換えた。既存の部品の props は変えない |

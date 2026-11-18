@@ -1,5 +1,7 @@
 import {
   Button,
+  FormActionBar,
+  type FormActionDescriptor,
   FormSkeleton,
   FormStatus,
   SelectField,
@@ -9,7 +11,7 @@ import {
   TimedLoadingState,
 } from "@production-ready/ui";
 import type { UseMutationResult } from "@tanstack/react-query";
-import { Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
+import { History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
@@ -116,20 +118,15 @@ export function ExtractionFieldsEditor() {
           />
         ) : null
       }
-      extraActions={
-        <Button
-          type="button"
-          variant="secondary"
-          icon={Undo2}
-          loading={reset.isPending}
-          // 標準の項目を使っている間は戻すものが無い（編集中の変更は「変更を破棄」で戻す）。
-          disabled={usesStandard || save.isPending}
-          onClick={() => void resetToStandard()}
-          className="w-full sm:w-auto"
-        >
-          {t("settings.extractionFields.resetStandard")}
-        </Button>
-      }
+      restoreDefaultsAction={{
+        id: "reset-standard",
+        label: t("settings.extractionFields.resetStandard"),
+        icon: History,
+        loading: reset.isPending,
+        // 標準の項目を使っている間は戻すものが無い（編集中の変更は「変更を破棄」で戻す）。
+        disabled: usesStandard || save.isPending,
+        onClick: () => void resetToStandard(),
+      }}
     />
   );
 }
@@ -147,7 +144,7 @@ export function ExtractionFieldsForm({
   save,
   description,
   notice,
-  extraActions,
+  restoreDefaultsAction,
   testId = "extraction-fields-editor",
 }: {
   saved: ExtractionFieldDefinition[];
@@ -155,8 +152,8 @@ export function ExtractionFieldsForm({
   description: string;
   /** 説明の下に出す定義の状態（全体の既定の「標準の項目を使っています」など）。 */
   notice?: ReactNode;
-  /** 保存・破棄の後ろに並べる操作（KB の「全体の既定に戻す」など）。 */
-  extraActions?: ReactNode;
+  /** 既定に戻す操作（全体の既定の「標準の項目に戻す」・KB の「全体の既定に戻す」。#5458）。 */
+  restoreDefaultsAction?: FormActionDescriptor;
   testId?: string;
 }) {
   const [rows, setRows] = useState<ExtractionFieldRow[]>(() => rowsFromDefinitions(saved));
@@ -301,42 +298,43 @@ export function ExtractionFieldsForm({
           </span>
         ) : null}
       </div>
-      <div className="flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:flex-wrap sm:items-center">
-        <Button
-          type="button"
-          icon={Save}
-          loading={save.isPending}
-          disabled={!dirty}
-          onClick={submit}
-          className="w-full sm:w-auto"
-        >
-          {t("settings.extractionFields.save")}
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          icon={RotateCcw}
-          disabled={!dirty || save.isPending}
-          onClick={discard}
-          className="w-full sm:w-auto"
-        >
-          {t("settings.extractionFields.discard")}
-        </Button>
-        {extraActions}
-        {save.isSuccess && !dirty ? (
-          <FormStatus tone="success" message={t("settings.extractionFields.saved")} />
-        ) : null}
-        {save.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              save.error instanceof ApiError
-                ? save.error.message
-                : t("settings.extractionFields.saveError")
-            }
-          />
-        ) : null}
-      </div>
+      <FormActionBar
+        ariaLabel={t("settings.extractionFields.actionsLabel")}
+        primaryActions={[
+          {
+            id: "save",
+            label: t("settings.extractionFields.save"),
+            icon: Save,
+            loading: save.isPending,
+            disabled: !dirty,
+            onClick: submit,
+          },
+        ]}
+        secondaryActions={[
+          {
+            id: "discard",
+            label: t("settings.extractionFields.discard"),
+            icon: RotateCcw,
+            disabled: !dirty || save.isPending,
+            onClick: discard,
+          },
+        ]}
+        restoreDefaultsAction={restoreDefaultsAction}
+        status={
+          save.isError ? (
+            <FormStatus
+              tone="danger"
+              message={
+                save.error instanceof ApiError
+                  ? save.error.message
+                  : t("settings.extractionFields.saveError")
+              }
+            />
+          ) : save.isSuccess && !dirty ? (
+            <FormStatus tone="success" message={t("settings.extractionFields.saved")} />
+          ) : null
+        }
+      />
     </div>
   );
 }
