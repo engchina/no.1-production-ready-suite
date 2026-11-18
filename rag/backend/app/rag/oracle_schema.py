@@ -81,7 +81,7 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
-from app.clients.wiki_store import wiki_schema_sql
+from app.clients.wiki_store import wiki_link_schema_sql, wiki_schema_sql
 from app.rag.approved_faq_5107_migration import (
     removed_approved_faq_fields_sql,
     removed_faq_answer_prompt_sql,
@@ -425,6 +425,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
         # Wiki の構築（#4941）。解析済みの原文を参照し、本文の処理方式を変えない。
         OracleSchemaSection(
             name="document_wiki", table_name="rag_wiki_documents", sql=wiki_schema_sql()
+        ),
+        # 文書をまたぐ Wiki の関連（#5492）。Wiki の案内を参照する。
+        OracleSchemaSection(
+            name="document_wiki_links",
+            table_name="rag_wiki_links",
+            sql=wiki_link_schema_sql(),
         ),
         # 文書全体の要約（#4793）。文書を参照する。
         OracleSchemaSection(
@@ -1234,6 +1240,14 @@ END;
             sql=wiki_build_actor_migration_sql()
             + "\n"
             + _create_missing_objects_sql(wiki_schema_sql(), "Wiki"),
+        )
+    )
+    # 文書をまたぐ Wiki の関連（#5492）。無い表・索引だけを足す。
+    sections.append(
+        OracleSchemaSection(
+            name="20261119_5492_wiki_links",
+            table_name="rag_wiki_links",
+            sql=_create_missing_objects_sql(wiki_link_schema_sql(), "Wiki の関連"),
         )
     )
     return sections

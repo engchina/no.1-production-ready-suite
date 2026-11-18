@@ -72,6 +72,20 @@ class Store:
         self.by_id = {p.unit.unit_id: p for p in pages}
         self.missing = missing
         self.calls: list[tuple[str, Any]] = []
+        # 文書をまたぐ関連（起点, 終点, 関係）。両端が今の範囲で読めるものだけを返す（#5492）。
+        self.link_rows: list[tuple[str, str, str]] = []
+
+    async def links(
+        self, unit_ids: list[str], filters: dict[str, str], compiler: str
+    ) -> list[tuple[str, str, str]]:
+        self.calls.append(("links", tuple(unit_ids)))
+        return [
+            row
+            for row in self.link_rows
+            if (row[0] in unit_ids or row[1] in unit_ids)
+            and row[0] in self.by_id
+            and row[1] in self.by_id
+        ]
 
     async def catalog(self, filters: dict[str, str], compiler: str) -> list[dict[str, Any]]:
         self.calls.append(("catalog", filters["knowledge_base_id"]))
@@ -146,7 +160,9 @@ class Llm:
         )
 
 
-def retriever(store: Store, llm: Llm, *, enabled: bool = True) -> WikiRetriever:
+def retriever(
+    store: Store, llm: Llm, *, enabled: bool = True, settings: Settings | None = None
+) -> WikiRetriever:
     profile = SimpleNamespace(
         status="ACTIVE",
         config=SimpleNamespace(query=SimpleNamespace(wiki_search_enabled=enabled)),
@@ -164,7 +180,7 @@ def retriever(store: Store, llm: Llm, *, enabled: bool = True) -> WikiRetriever:
         async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
             return [[0.1] * 4 for _ in texts]
 
-    return WikiRetriever(Settings(), Oracle(), GenAi(), llm, store=store)  # type: ignore[arg-type]
+    return WikiRetriever(settings or Settings(), Oracle(), GenAi(), llm, store=store)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -281,3 +297,104 @@ def test_section_candidates_never_mix_versions_and_reject_a_too_small_limit() ->
     assert len(sections) == 3
     with pytest.raises(ValueError):
         section_frontier(pages, limit=2, ranked_ids={})
+
+
+# ---- 依存と文書をまたぐ関連の辿り（#5492） ----
+
+LINKED = [*PAGES, page("doc-c", "c1", ["通知"]), page("doc-d", "d1", ["別表"])]
+
+
+def _units(result: Any) -> list[str]:
+    return [p.unit.unit_id for p in result.pages]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("depth", "expected", "hops"),
+    [
+        (0, set(), []),
+        (1, {"doc-a-a4", "doc-c-c1"}, [{"depth": 1, "dependency_units": 1, "link_units": 1}]),
+        (
+            2,
+            {"doc-a-a4", "doc-c-c1", "doc-d-d1"},
+            [
+                {"depth": 1, "dependency_units": 1, "link_units": 1},
+                {"depth": 2, "dependency_units": 0, "link_units": 1},
+            ],
+        ),
+    ],
+)
+async def test_links_are_followed_both_ways_up_to_the_configured_depth(
+    depth: int, expected: set[str], hops: list[dict[str, int]]
+) -> None:
+    """入る向きの関連（通知 c1 → 本文 a2）も辿り、段数の設定で 2 段目（c1 → d1）まで読む。"""
+    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store.link_rows = [
+        ("doc-c-c1", "doc-a-a2", "exception"),
+        ("doc-c-c1", "doc-d-d1", "reference"),
+    ]
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=depth)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    followed = set(_units(result)) - {"doc-a-a1", "doc-a-a2"}
+    assert followed == expected
+    assert result.trace["link_hops"] == hops
+    assert result.trace["dependency_units"] == len(expected)
+    assert result.trace["model_calls"] == 2  # 辿るのは DB だけ
+    if depth == 0:
+        assert not [call for call in store.calls if call[0] == "links"]
+
+
+@pytest.mark.asyncio
+async def test_budget_keeps_exceptions_and_prerequisites_before_references() -> None:
+    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store.link_rows = [
+        ("doc-a-a2", "doc-c-c1", "reference"),
+        ("doc-d-d1", "doc-a-a2", "prerequisite"),
+    ]
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_max_units=2)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    followed = [uid for uid in _units(result) if uid not in {"doc-a-a1", "doc-a-a2"}]
+    # 例外（同じ文書の依存 a4）と前提（d1）を先に足し、参照（c1）は上限で外す。
+    assert followed == ["doc-a-a4", "doc-d-d1"]
+    assert result.trace["dependency_units"] == 2
+
+
+@pytest.mark.asyncio
+async def test_cycles_stop_and_each_unit_is_read_once() -> None:
+    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store.link_rows = [
+        ("doc-a-a2", "doc-c-c1", "prerequisite"),
+        ("doc-c-c1", "doc-a-a2", "exception"),
+        ("doc-c-c1", "doc-d-d1", "warning"),
+        ("doc-d-d1", "doc-c-c1", "warning"),
+        ("doc-d-d1", "doc-a-a2", "reference"),
+    ]
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=3)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    units = _units(result)
+    assert len(units) == len(set(units))
+    assert {"doc-c-c1", "doc-d-d1", "doc-a-a4"} <= set(units)
+    # 3 段目は新しい単位が無いので、辿りはそこで止まる。
+    assert len([call for call in store.calls if call[0] == "links"]) <= 3
+
+
+@pytest.mark.asyncio
+async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_budget() -> None:
+    """今の範囲で読めない終点（別の KB・未公開・古い保存版）は足さず、読めなかった数に残す。"""
+
+    class OutOfScope(Store):
+        async def links(
+            self, unit_ids: list[str], filters: dict[str, str], compiler: str
+        ) -> list[tuple[str, str, str]]:
+            return [("doc-a-a2", "doc-z-z1", "exception"), ("doc-a-a2", "doc-c-c1", "reference")]
+
+    store, llm = OutOfScope(LINKED), Llm(["文書A"], units=["a2"])
+    result = await retriever(
+        store, llm, settings=Settings(rag_wiki_link_depth=1, rag_wiki_link_max_units=2)
+    ).search(QUESTION, profile_id="p", filters={}, timeout=None)
+    units = _units(result)
+    assert "doc-z-z1" not in units and "doc-c-c1" in units
+    assert result.trace["missing_dependency_units"] == 1

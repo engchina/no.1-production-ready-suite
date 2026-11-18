@@ -50,11 +50,23 @@ class WikiUnit(WikiModel):
         return self
 
 
+WikiRelation = Literal[
+    "prerequisite", "continuation", "warning", "exception", "reference", "expected_result"
+]
+# 辿るときの優先の順（例外・前提を先、参照を後）。
+WIKI_RELATION_PRIORITY: tuple[str, ...] = (
+    "exception",
+    "prerequisite",
+    "warning",
+    "continuation",
+    "expected_result",
+    "reference",
+)
+
+
 class WikiDependency(WikiModel):
     unit_id: str
-    relation: Literal[
-        "prerequisite", "continuation", "warning", "exception", "reference", "expected_result"
-    ]
+    relation: WikiRelation
 
 
 class WikiContext(WikiModel):
@@ -100,6 +112,57 @@ def context_schema(targets: Sequence[str], all_units: Sequence[str]) -> type[Wik
         __base__=WikiContexts,
         __validators__=validators,
         items=(list[item], Field(min_length=len(targets), max_length=len(targets))),
+    )
+
+
+class WikiLinkChoice(WikiModel):
+    unit_id: str
+    relation: WikiRelation
+    reason: str = Field(max_length=160)
+
+
+class WikiLinkJudgment(WikiModel):
+    unit_id: str
+    links: list[WikiLinkChoice]
+
+
+class WikiLinkJudgments(WikiModel):
+    items: list[WikiLinkJudgment]
+
+
+def link_schema(
+    sources: Sequence[str], candidates: Sequence[str], *, max_links: int
+) -> type[WikiLinkJudgments]:
+    """起点ごとの関連の出力 schema（#5492）。終点は候補の単位だけ・起点は全件を一意に返す。"""
+    if not sources or not candidates or set(sources) & set(candidates):
+        raise ValueError("Wiki の関連の起点と候補が不正です。")
+    allowed: Any = Literal.__getitem__(tuple(sorted(set(candidates))))
+    requested: Any = Literal.__getitem__(tuple(sorted(set(sources))))
+    choice = create_model("ScopedWikiLinkChoice", __base__=WikiLinkChoice, unit_id=(allowed, ...))
+    item = create_model(
+        "ScopedWikiLinkJudgment",
+        __base__=WikiLinkJudgment,
+        unit_id=(requested, ...),
+        links=(list[choice], Field(max_length=max_links)),
+    )
+    expected = set(sources)
+
+    def complete(value: Any) -> Any:
+        returned = [entry.unit_id for entry in value.items]
+        if len(returned) != len(set(returned)) or set(returned) != expected:
+            raise ValueError("Wiki の関連の出力に起点の重複または欠落があります。")
+        for entry in value.items:
+            targets = [link.unit_id for link in entry.links]
+            if len(targets) != len(set(targets)):
+                raise ValueError("Wiki の関連の出力で同じ候補が重複しています。")
+        return value
+
+    validators: dict[str, Any] = {"complete": model_validator(mode="after")(complete)}
+    return create_model(
+        "ScopedWikiLinkJudgments",
+        __base__=WikiLinkJudgments,
+        __validators__=validators,
+        items=(list[item], Field(min_length=len(sources), max_length=len(sources))),
     )
 
 

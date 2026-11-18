@@ -180,6 +180,9 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
                 "rag_wiki_selected_units",
                 "rag_wiki_selected_sections",
                 "rag_wiki_section_catalog_limit",
+                # 依存と文書をまたぐ関連を辿る段数と足す数の上限（#5492）。
+                "rag_wiki_link_depth",
+                "rag_wiki_link_max_units",
                 "rag_wiki_query_timeout_seconds",
             )
         },

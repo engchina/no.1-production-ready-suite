@@ -126,6 +126,10 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_wiki_lease_",
     "rag_wiki_poll_",
     "rag_wiki_embedding_",
+    # Wiki の文書をまたぐ関連の構築（#5492）。成果は関連の構築の条件の指紋と関連の行に残る。
+    "rag_wiki_link_candidates",
+    "rag_wiki_link_batch_",
+    "rag_wiki_link_source_",
     "rag_field_extraction_",
     "rag_auto_",
     # 運用・実行の並行数・待ち時間・再試行・cache。結果の定義を変えない。

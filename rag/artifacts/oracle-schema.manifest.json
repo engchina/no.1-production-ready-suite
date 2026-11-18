@@ -231,6 +231,12 @@
       "table_name": "rag_wiki_documents"
     },
     {
+      "name": "document_wiki_links",
+      "sha256": "e2708ea7c2498f0ef449b97df1fe1ef90c3dfc36f6380412c2935c669480e31c",
+      "statement_count": 6,
+      "table_name": "rag_wiki_links"
+    },
+    {
       "name": "document_summaries",
       "sha256": "cf94515fccb6f6b8938b79c658af9716cf379bd83f83dd37d047c47058c53cb8",
       "statement_count": 1,
@@ -285,8 +291,8 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "4d6e89ba8c86e9388e1bc95be5e53e0c366d2ba1962b115fa1fc89673ee467c5",
-  "statement_count": 173,
+  "sha256": "5c236f6f6f89eddd59cf52a5daf834b113015c2f09530d736de8f00debb30f0b",
+  "statement_count": 179,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {
     "distance": "COSINE",
