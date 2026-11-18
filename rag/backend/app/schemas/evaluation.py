@@ -506,6 +506,8 @@ class EvaluationJudgedClaim(BaseModel):
     """回答の主張 1 つの判定の印（#5262）。原文はコードが段落・文の番号から切り出したもの。"""
 
     verdict: Literal["supported", "contradicted", "not_in_standard"]
+    # 判定のモデルが条件・適用範囲ごと 1 文で書いた主張（#5408。rubric 35 から。旧い結果は空）。
+    claim: str = ""
     answer: str
     standard: str = ""
 

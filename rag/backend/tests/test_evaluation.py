@@ -2065,14 +2065,22 @@ def test_summarize_answer_judgement_keeps_claims_points_coverage_and_version() -
             "correctness_reason": "回答の「A」と標準回答の「B」が食い違う。",
             "rubric_version": 33,
             "correctness_claims": [
-                {"verdict": "contradicted", "answer": "A", "standard": "B"},
+                {
+                    "verdict": "contradicted",
+                    "claim": "条件つきの A",
+                    "answer": "A",
+                    "standard": "B",
+                },
                 {"verdict": "unknown", "answer": "C"},
+                {"verdict": "supported", "answer": "D", "standard": "E"},
             ],
             "coverage_points": [{"point": "要点 1", "covered": True}, "壊れた値"],
         }
     )
     assert judgement.answer_coverage == 0.5 and judgement.rubric_version == 33
-    assert [claim.verdict for claim in judgement.claims] == ["contradicted"]
+    assert [claim.verdict for claim in judgement.claims] == ["contradicted", "supported"]
+    # 主張の文は rubric 35 から（#5408）。旧い結果の行は空のまま読める。
+    assert [claim.claim for claim in judgement.claims] == ["条件つきの A", ""]
     assert [(point.point, point.covered) for point in judgement.points] == [("要点 1", True)]
     assert judgement.passed is False
     # 版の無い結果（主張ごとの判定の前の旧方式）は版を持たない。
