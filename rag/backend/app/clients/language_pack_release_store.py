@@ -15,6 +15,7 @@ from rag_parser_core.language import (
 from app.rag.language_pack_contract import (
     LanguagePackNotInitializedError,
     LanguagePackSnapshotError,
+    stored_pack,
 )
 from app.schemas.language_pack_release import (
     LanguagePackRelease,
@@ -113,16 +114,21 @@ def _release(row: dict[str, object]) -> LanguagePackRelease:
             "change_note": row.get("change_note") or "",
         }
     )
-    pack = _validated(release.effective)
-    if (
-        pack.hash,
-        pack.ingest_hash,
-    ) != (
-        release.hash,
-        release.ingest_hash,
-    ):
-        raise LanguagePackSnapshotError("言語資源の保存内容と公開版の照合に失敗しました。")
-    return release
+    pack = stored_pack(release.effective)
+    mismatched = [
+        column
+        for column, computed, recorded in (
+            ("content_hash", pack.hash, release.hash),
+            ("ingest_hash", pack.ingest_hash, release.ingest_hash),
+        )
+        if computed != recorded
+    ]
+    if mismatched:
+        raise LanguagePackSnapshotError(
+            f"言語資源の保存内容と公開版の照合に失敗しました（{', '.join(mismatched)}）。"
+        )
+    # 欠けた項目を補った全項目の内容を渡す(hash は保存時の値のまま。#5476)。
+    return release.model_copy(update={"effective": pack.to_dict()})
 
 
 def _state(connection: OracleConnectionProtocol, *, lock: bool = False) -> LanguagePackReleaseState:
@@ -149,11 +155,16 @@ def _state(connection: OracleConnectionProtocol, *, lock: bool = False) -> Langu
             raise LanguagePackSnapshotError("公開履歴に対応する言語資源の状態行がありません。")
     if not row.get("current_release_id"):
         raise LanguagePackSnapshotError("言語資源の現在版ポインタがありません。")
-    current = _get(connection, str(row["current_release_id"]))
+    try:
+        current = _get(connection, str(row["current_release_id"]))
+    except LanguagePackSnapshotError as exc:
+        raise LanguagePackSnapshotError(f"現在の公開版: {exc}") from exc
     if current is None:
         raise LanguagePackSnapshotError("言語資源の現在の公開版が見つかりません。")
-    draft = _json_loads(row["draft_effective_json"])
-    validated_draft = _validated(draft).to_dict()
+    try:
+        validated_draft = stored_pack(_json_loads(row["draft_effective_json"])).to_dict()
+    except LanguagePackSnapshotError as exc:
+        raise LanguagePackSnapshotError(f"下書き: {exc}") from exc
     return LanguagePackReleaseState(
         draft_revision=int(str(row["draft_revision"])),
         draft_effective=validated_draft,

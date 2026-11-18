@@ -611,12 +611,21 @@ def _builtin_data(locale: str = DEFAULT_LOCALE) -> dict[str, Any]:
     return data
 
 
-def build_pack(data: Mapping[str, Any]) -> LanguagePack:
-    """現在の全項目を要求し、欠け・余り・形の誤りを拒否する。"""
+def build_pack(data: Mapping[str, Any], *, fill_missing: bool = False) -> LanguagePack:
+    """現在の全項目を要求し、欠け・余り・形の誤りを拒否する。
+
+    ``fill_missing`` は保存済みの言語資源を読むとき用: 欠けた項目(項目を足す前に保存したもの)に
+    組み込みの値を補い、hash は渡された項目だけから計算する(保存時の hash と同じ値になる)。
+    """
     errors: dict[str, str] = {}
     sections: dict[str, dict[str, Any]] = {section: {} for section in SECTIONS}
+    locale = str(data.get("locale") or DEFAULT_LOCALE)
+    given: list[FieldSpec] = []
     for spec in FIELD_SPECS:
         raw = (data.get(spec.section) or {}).get(spec.key)
+        if raw is None and fill_missing:
+            sections[spec.section][spec.key] = builtin_pack(locale).value(spec.section, spec.key)
+            continue
         if raw is None:
             errors[f"{spec.section}.{spec.key}"] = "値がありません。"
             continue
@@ -624,6 +633,7 @@ def build_pack(data: Mapping[str, Any]) -> LanguagePack:
         if error:
             errors[f"{spec.section}.{spec.key}"] = error
         sections[spec.section][spec.key] = value
+        given.append(spec)
     for section, fields in data.items():
         if section in ("locale", "version"):
             continue
@@ -632,12 +642,11 @@ def build_pack(data: Mapping[str, Any]) -> LanguagePack:
                 errors[f"{section}.{key}"] = "知らない項目です。"
     if errors:
         raise LanguagePackError(errors)
-    locale = str(data.get("locale") or DEFAULT_LOCALE)
     return LanguagePack(
         locale=locale,
         sections=sections,
-        hash=_digest(locale, sections, FIELD_SPECS),
-        ingest_hash=_digest(locale, sections, tuple(spec for spec in FIELD_SPECS if spec.ingest)),
+        hash=_digest(locale, sections, tuple(given)),
+        ingest_hash=_digest(locale, sections, tuple(spec for spec in given if spec.ingest)),
     )
 
 
