@@ -2145,22 +2145,6 @@ export const ja = {
   "knowledgeBases.error.documents":
     "文書一覧の取得に失敗しました。接続状態を確認して再試行してください。",
 
-  "knowledgeBases.searchTest.title": "このナレッジで検索テスト",
-  "knowledgeBases.searchTest.description":
-    "検索・回答プロファイルを作らずに、このナレッジベース単体で検索の手応えをその場で確認できます。",
-  "knowledgeBases.searchTest.placeholder": "このナレッジベースに質問してみる…",
-  "knowledgeBases.searchTest.button": "検索テスト",
-  "knowledgeBases.searchTest.cancel": "停止",
-  "knowledgeBases.searchTest.initialHint":
-    "質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。",
-  "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",
-  "knowledgeBases.searchTest.archived": "アーカイブ済みのナレッジベースでは検索テストを行えません。",
-  "knowledgeBases.searchTest.archivedHint":
-    "アーカイブ済みのナレッジベースは検索の対象から外れています。",
-  "knowledgeBases.searchTest.needsIndexedHint":
-    "先に文書を追加し、索引が完了するとここで検索を試せます。",
-  "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
-  "knowledgeBases.searchTest.resultMeta": "{count} 件 / {ms} ms",
   "wiki.title": "Wiki ナビゲーション",
   "wiki.build": "Wiki を自動構築する",
   "wiki.buildHelp": "所属文書の解析済みの原文から、検索用の案内をバックグラウンドで増分構築します。規則・例外・手順が複数の文書に分かれている KB で効果があり、単一の文書だけの KB では効果が出にくいです。無効にしても保存済みの案内は保持します。",
@@ -2739,9 +2723,7 @@ export const ja = {
   "sectionRules.action.save": "保存",
   "sectionRules.action.discard": "変更を破棄",
   "sectionRules.reset.action": "既定に戻す",
-  "sectionRules.reset.confirm.title": "章節の抽出規則を既定に戻しますか？",
-  "sectionRules.reset.confirm.description":
-    "保存した方式と独自の規則を削除し、「解析エンジンの見出し」に戻します。この操作は元に戻せません。",
+  "sectionRules.unsaved": "変更は「保存」を押すまで反映されません。",
   "sectionRules.error.load": "章節の抽出規則を取得できませんでした。再試行してください。",
   "sectionRules.error.save": "章節の抽出規則を保存できませんでした。時間をおいて、もう一度お試しください。",
   "sectionRules.error.fix": "入力に問題がある規則があります。欄の下のメッセージを確認してください。",
@@ -2749,7 +2731,6 @@ export const ja = {
   "sectionRules.error.patternRequired": "正規表現を入力してください。",
   "sectionRules.error.patternInvalid": "正規表現として読めません。括弧の対応などを確認してください。",
   "sectionRules.toast.saved": "章節の抽出規則を保存しました。",
-  "sectionRules.toast.reset": "章節の抽出規則を既定に戻しました。",
   "sections.summaryMismatch": "保存済みの要約 {count} 件は、現在の章節に対応していません。現在の「章節の抽出規則」で要約を生成するには、文書の処理レシピで抽出から再処理してください。",
   "sections.loading": "章節を読み込んでいます",
   "sections.error.load": "章節を取得できませんでした。再試行してください。",

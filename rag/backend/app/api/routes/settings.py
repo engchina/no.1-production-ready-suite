@@ -118,7 +118,6 @@ from app.rag.section_map_service import schedule_refresh_all_section_maps
 from app.rag.section_rules import (
     SectionRulesSettingsData,
     SectionRulesStore,
-    reset_section_rules,
     save_section_rules,
     section_rules_settings,
 )
@@ -935,17 +934,6 @@ async def update_section_rules_settings(
     # 章節が変わる文書の章節と chunk の対応を作り直す（#1438。chunk・embedding は変えない）。
     schedule_refresh_all_section_maps(reason="section_rules_saved")
     return ApiResponse(data=section_rules_settings(store))
-
-
-@router.delete("/section-rules", response_model=ApiResponse[SectionRulesSettingsData])
-async def reset_section_rules_settings() -> ApiResponse[SectionRulesSettingsData]:
-    """保存した全体の既定を消し、「解析エンジンの見出し」に戻す(#715)。"""
-    try:
-        reset_section_rules()
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail="章節の抽出規則を戻せませんでした。") from exc
-    schedule_refresh_all_section_maps(reason="section_rules_reset")
-    return ApiResponse(data=section_rules_settings())
 
 
 @router.get("/vector-index", response_model=ApiResponse[VectorIndexSettingsData])

@@ -1041,8 +1041,7 @@ test("アーカイブ済みの詳細は読み取り専用で、保存できな�
 });
 
 // アーカイブ済みは文書の追加・解除ができない（案内のとおり、所属文書の行に「外す」を出さない）。
-// 検索テストは索引済みの文書があっても使えないので、理由はアーカイブ済みであることを示す。
-test("アーカイブ済みの詳細は所属文書を外す操作を出さず、検索テストはアーカイブ済みを理由に示す", async ({
+test("アーカイブ済みの詳細は所属文書を外す操作を出さない", async ({
   page,
 }) => {
   const state = createKnowledgeBaseState();
@@ -1070,8 +1069,8 @@ test("アーカイブ済みの詳細は所属文書を外す操作を出さず�
   await expect(page.getByTestId("knowledge-base-documents-list")).toContainText("old-policy.txt");
   await expect(page.getByTestId("knowledge-base-document-actions-doc-old")).toHaveCount(0);
   await expect(page.getByTestId("knowledge-base-add-documents-open")).toHaveCount(0);
-  await expect(page.getByText("アーカイブ済みのナレッジベースでは検索テストを行えません。")).toBeVisible();
-  await expect(page.getByText("索引済みの文書がありません。")).toHaveCount(0);
+  // 検索テストの欄は削除した（#5455）。
+  await expect(page.getByRole("heading", { name: "このナレッジで検索テスト" })).toHaveCount(0);
 });
 
 /** エディタの「一覧へ戻る」。ページの左上（タイトルの上）にあり、375px でもメニューに畳まない（#618）。 */

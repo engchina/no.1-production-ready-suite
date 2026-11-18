@@ -1107,8 +1107,8 @@ async def _stream_search_events_with_timeout(
 
     最初に実行の id（`run`。trace_id）を送る。処理の経過は配信では送らず、画面が実行の trace の
     API（`GET /search/runs/{trace_id}/trace`。共通の span の表の snapshot。#3226）で読む。実行履歴
-    には表を引く trace id と工程の詳細を残す。工程の開始・終了の `stage` は状態の 1 行（ナレッジベ
-    ースの検索テスト）だけに使う。
+    には表を引く trace id と工程の詳細を残す。工程の開始・終了の `stage` も送る（使っていた
+    ナレッジベースの検索テストの欄は #5455 で削除した）。
     """
     request, settings, applied_kb, applied_view = resolved
     started_at = perf_counter()

@@ -578,7 +578,7 @@ async function mockSectionRules(page: Page) {
     numbered: [{ name: "1.", pattern: "^[0-9]+\\.\\s", level: 1, enabled: true }],
   };
   const envelope = () => ({
-    data: { mode: state.mode, rules: state.rules, presets },
+    data: { mode: state.mode, rules: state.rules, presets, default_mode: "parser", default_rules: [] },
     error_messages: [],
     warning_messages: [],
   });
@@ -662,6 +662,17 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
       ],
     },
   ]);
+
+  // 既定に戻すは製品の既定をフォームに入れるだけで、確認も保存もしない。「保存」で確定する（#5468）。
+  const restore = editor.getByRole("button", { name: "既定に戻す", exact: true });
+  await restore.click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(editor.getByRole("combobox", { name: "方式" })).toContainText("解析済みの見出しを使う");
+  await expect(editor.getByText("変更は「保存」を押すまで反映されません。")).toBeVisible();
+  await expect(restore).toBeDisabled();
+  expect(state.patches).toHaveLength(1);
+  await editor.getByRole("button", { name: "保存" }).click();
+  await expect.poll(() => state.patches.at(-1)).toEqual({ mode: "parser", rules: [] });
   await expectNoHorizontalOverflow(page);
 });
 

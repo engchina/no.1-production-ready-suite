@@ -2287,7 +2287,7 @@ import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/
 | 続きのページは、複数選択は「さらに表示」、単一選択は一覧の下端までのスクロールか最後の候補からの ↓ | 単一選択の層の中に Tab で届くボタンを置かない |
 | 選択済みは chip（`<ul aria-label="選択中の…">`）で、名前を省略せず折り返す。`badge` で状態（アーカイブ済み・見つかりません）を文字で添える | 長い名前を最後まで読める。色だけに頼らない |
 | 単一選択の一覧の高さは一覧側（`bounded-scroll-area`）で決め、層全体は実寸で測る | 層に max-height を掛けると実寸の測り直しで高さが揺れる |
-| 複数選択の層の下部の行は、左に「N 件選択中」（折り返さない）、右に操作の組（「表示中をすべて選択」「クリア」「完了」。`sm`）。層が 28rem 以上なら 1 行、狭いときは件数の文と操作の組を 2 段にする（操作の組は分けない。#2091） | 件数の文が 2 行に折り返し「完了」が次の行へ落ちない |
+| 複数選択の層の下部の行は、左に「N 件選択中」（折り返さない）、右に操作の組（「表示中をすべて選択」「クリア」「完了」。`sm`。ボタンの間は `gap-1`。#5465）。層が 28rem 以上なら 1 行、狭いときは件数の文と操作の組を 2 段にする（操作の組は分けない。#2091） | 件数の文が 2 行に折り返し「完了」が次の行へ落ちない |
 | **閉じたボタンに虫眼鏡（`Search`）を付けない。** ボタンは値（未選択なら placeholder・「未選択」）と開閉の印（`ChevronDown`）だけを出し、虫眼鏡は開いた層の中の検索欄（`SearchField`）だけが持つ（#1771。#5267 で複数選択も同じ） | ボタンで開き、層の中で検索する選択欄の一般的な形。ボタンは文字を打てる欄ではなく、虫眼鏡を付けると検索欄に見え、開くと虫眼鏡が 2 つ縦に並ぶ |
 
 - 層の幅の計算は `packages/ui/tests/searchable-popover-layout.test.ts`、実ブラウザの幅・下部の行・位置は共通の e2e の検査 `measureSearchablePanels` と `expectedSearchablePopoverWidth`（`packages/ui/e2e/layout-checks.ts`。RAG の `expectSearchablePanelFits`・Agent の `agent-data-scope.spec.ts`）（#2091・#5267）。

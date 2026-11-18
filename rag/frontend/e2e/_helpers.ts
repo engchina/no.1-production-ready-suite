@@ -295,6 +295,8 @@ export async function expectSearchablePanelFits(page: Page): Promise<void> {
     ...(panel.panelWidth >= 28 * panel.rem - 1 ? { footerOneRow: true } : {}),
   });
   expect(Math.abs(panel.panelWidth - expectedSearchablePopoverWidth(panel)), JSON.stringify(panel)).toBeLessThanOrEqual(2);
+  // 操作のボタンは接さず、0.25rem 空ける（#5465）。
+  expect(panel.actionGap ?? 0, JSON.stringify(panel)).toBeGreaterThanOrEqual(0.25 * panel.rem - 1);
   expect(panel.left).toBeGreaterThanOrEqual(0);
   expect(panel.right).toBeLessThanOrEqual(panel.viewport);
 }
