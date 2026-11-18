@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from rag_engine.retrieval.evidence_selection import span_location
+
 # 2: 段落の印（passage_marks）・外した段落（removed_passages）・回答全体の警告（answer_warnings）と、
 #    items の印（mark）を足した（#2738）。
 ENVELOPE_SCHEMA_VERSION = 3
@@ -180,7 +182,7 @@ def envelope_item(entry: Any) -> dict[str, Any]:
         "text": str(item.quote if entry.quote_only else item.text),
         "evidence_id": str(span.get("evidence_id") or ""),
         "source": str(span.get("source") or ""),
-        "location": str(span.get("location") or (f"p.{span['page']}" if span.get("page") else "")),
+        "location": span_location(span, f"p.{span['page']}" if span.get("page") else ""),
         "applies": applies,
         "condition": str(item.condition or ""),
     }

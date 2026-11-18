@@ -51,6 +51,10 @@ class AnswerLabels:
     table_above_note: str
     # 文書全体の要約（取込のときに作った説明）を根拠にしたときの、出典の場所の表示（#4793）。
     document_summary_location: str
+    # 頁の無い原本（テキスト・Markdown など）の根拠の場所。最下位の見出しと原本の行の範囲（#5450）。
+    section_location: str
+    line_location: str
+    line_range: str
     # render() が決定的に出力する見出し行と出典行、「参考情報」の節の原文の行と節の箇条の行。
     structural_line: re.Pattern[str]
     quote_only_line: re.Pattern[str]
@@ -62,6 +66,14 @@ class AnswerLabels:
 
     def sheet(self, sheet: str, cell_range: str) -> str:
         return self.sheet_location.format(sheet=sheet, cell_range=cell_range)
+
+    def lines(self, title: str, start: int | None, end: int | None) -> str:
+        """頁の無い根拠の場所（見出しと行の範囲。分からない部分は出さず、どちらも無ければ空）。"""
+        section = self.section_location.format(title=title) if title else ""
+        if start is None:
+            return section
+        span = str(start) if end is None or end <= start else self.line_range.format(start=start, end=end)
+        return section + self.line_location.format(lines=span)
 
     def quote(self, text: str) -> str:
         return self.quote_template.format(quote=text)
@@ -145,6 +157,9 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         table_source_column=text("table_source_column"),
         table_above_note=text("table_above_note"),
         document_summary_location=text("document_summary_location"),
+        section_location=text("section_location"),
+        line_location=text("line_location"),
+        line_range=text("line_range"),
         structural_line=re.compile(
             "|".join(re.escape(title) for title in titles)
             + rf"|(?:{steps})(?:{re.escape(title_open)}.+{re.escape(title_close)})?|"

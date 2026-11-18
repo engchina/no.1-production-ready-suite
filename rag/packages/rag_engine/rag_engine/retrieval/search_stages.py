@@ -13,7 +13,6 @@ CHUNK_POOL_LOAD_STAGE = "検索対象のチャンクの読み込み"
 
 # DB の検索の後に、候補から根拠を集める工程（backend の検索。#3464）。
 # 実体・関係情報の補充は、入口で判断した未実行も理由付きで記録する。未到達の工程は作らない。
-CANDIDATE_DIVERSITY_STAGE = "文書の多様性を補う候補の追加"
 DERIVED_SOURCE_STAGE = "要約・抽出値の原文の読み込み"
 CONTEXT_SIBLINGS_STAGE = "前後の文脈の読み込み"
 REFERENCE_EXPANSION_STAGE = "参照先の根拠の追加"

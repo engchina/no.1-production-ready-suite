@@ -119,7 +119,6 @@ from rag_engine.generation.answer_records import (
     _records_by_rerank_ranks,
     _rerank_configured,
     _rerank_document,
-    _retrieval_candidate_limit,
     _search_terms_for_queries,
     _split_text_rerank_candidates,
     _stored_chunk_answer_record,
@@ -185,7 +184,7 @@ from rag_engine.retrieval.answer_requirements import answer_requirements
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.candidate_budget import artifact_key as retrieval_artifact_key
 from rag_engine.retrieval.candidate_budget import record_id as retrieval_record_id
-from rag_engine.retrieval.candidate_budget import select_candidates, stage_limits
+from rag_engine.retrieval.candidate_budget import select_candidates
 from rag_engine.retrieval.character_forms import fold_model_view, fold_width
 from rag_engine.retrieval.context_builder import (
     MAX_ANCHORS_PER_PARENT,
@@ -226,7 +225,6 @@ from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
 from rag_engine.retrieval.request_coverage import CoverageBudget, CoverageUsage
-from rag_engine.retrieval.rerank_order import order_reranked_candidates
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
@@ -284,8 +282,7 @@ def rerank_records(
 ) -> list[AnswerRecord]:
     """候補 record を外部 rerank model で再順位付けします。
 
-    candidate_limit は並べ替える候補数。既定の None は取得できた候補すべてで、取得幅（`_retrieval_candidate_limit`）が
-    top_k に応じて広がれば rerank 幅も追従する。定数で固定すると、取得した候補のうち後ろの方は一段目の順位のまま
+    candidate_limit は並べ替える候補数。既定の None は取得できた候補すべて。定数で固定すると、取得した候補のうち後ろの方は一段目の順位のまま
     残り、context の起点が先頭 top_k 件で埋まるため質問に合致していても context に入らない (#1084)。
     """
     with _execution_step("Rerank", "検索の候補を、質問との関連度（並べ替えのモデル）の高い順に並べ替えます。") as step:
@@ -447,28 +444,6 @@ def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | No
     return ""
 
 
-def _order_by_score(
-    records: Sequence[AnswerRecord], settings: Settings, step: Any, receipt: dict[str, Any], *, rerank_phase: str
-) -> list[AnswerRecord]:
-    """合格した候補を rerank の点数の順（MMR）に並べ、工程の記録に残す（#5165。検索の順は混ぜない）。"""
-    tokenizer_config = TextSearchTokenizerConfig(
-        sudachi_dict_type=getattr(settings, "text_search_tokenizer_sudachi_dict", ""),
-        sudachi_config_path=getattr(settings, "text_search_tokenizer_sudachi_config", ""),
-        latin_stemmer=getattr(settings, "text_search_tokenizer_latin_stemmer", ""),
-    )
-    ordered = order_reranked_candidates(records, tokenizer_config=tokenizer_config)
-    receipt["並び"] = "rerank の点数の順（MMR で内容の似た候補を後ろへ）"
-    step.field("並び", "rerank の点数の順（MMR で内容の似た候補を後ろへ回します）")
-    record_retrieval_stage(
-        {
-            "stage": "rerank_order",
-            "phase": rerank_phase,
-            "order": [retrieval_record_id(record) for record in ordered],
-        }
-    )
-    return ordered
-
-
 def _rerank_records(
     question: str,
     records: Sequence[AnswerRecord],
@@ -481,11 +456,11 @@ def _rerank_records(
     rerank_phase: str = "other",
     receipt: dict[str, Any] | None = None,
 ) -> list[AnswerRecord]:
-    """rerank 本体。無効・未設定・失敗時は取得順を保持する（MMR も行わない）。
+    """rerank 本体。無効・未設定・失敗時は取得順を保持する。
 
-    成功したときは関連度の下限（``rerank_min_relevance_score``）未満を外し、残りを rerank の点数の順（MMR）に並べる。
-    下限以上が 0 件なら根拠なしで、下限を下げてやり直さない（#5165）。件数はここで切らず、起点数（top_k）で 1 回だけ
-    切る（context の組み立て）。
+    成功したときは関連度の下限（``rerank_min_relevance_score``）未満を外し、残りを rerank の点数の順に並べる。
+    資料の候補が 1 件も下限に届かないときは、下限に ``rerank_min_relevance_fallback_ratio`` を掛けて 1 回だけ下げる
+    （#5443）。件数はここで切らず、起点数（top_k）で 1 回だけ切る（context の組み立て）。
 
     extra_queries（呼び出し元の検索文、質問に用語・同義語を足した検索文など）があれば、候補ごとに原質問と各検索文の関連度の最高値で
     並べる（#2161）。長い事例の質問の全体と比べると、要求の一部にだけ答える根拠（条文など）の関連度が薄まるため。
@@ -544,12 +519,19 @@ def _rerank_records(
         candidate_indices=rerankable_indices,
         decisions=threshold_rows,
     )
-    # 全部が下限未満なら根拠なし（下限を下げてやり直さない。#5165）。
+    # 資料の候補が全部下限未満なら、下限を 1 回だけ下げた値で判断している（#5443。下げた下限にも届かなければ根拠なし）。
+    configured_minimum = float(getattr(settings, "rerank_min_relevance_score", 0.0) or 0.0)
+    relaxed = float(cast(float, threshold_rows[0]["minimum"])) < configured_minimum
     receipt["関連度下限の判断"] = threshold_rows
     excluded = sum(row["status"] == "excluded" for row in threshold_rows)
     unscored = sum(row["status"] == "kept_unscored" for row in threshold_rows)
     attachments = sum(row["status"] == "kept_attachment" for row in threshold_rows)
-    step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
+    step.field(
+        "関連度スコアの下限",
+        f"{threshold_rows[0]['minimum']}（設定 {configured_minimum} に届く候補が無いため下げた値）"
+        if relaxed
+        else str(threshold_rows[0]["minimum"]),
+    )
     step.field(
         "関連度による選別",
         f"採用 {len(reranked_candidates)} 件 / 下限未満で除外 {excluded} 件 / "
@@ -569,6 +551,8 @@ def _rerank_records(
             "stage": "rerank_threshold",
             "phase": rerank_phase,
             "minimum": threshold_rows[0]["minimum"],
+            "configured_minimum": configured_minimum,
+            "relaxed": relaxed,
             "decisions": threshold_rows,
             "excluded_count": excluded,
             "unscored_kept_count": unscored,
@@ -576,8 +560,6 @@ def _rerank_records(
             "outside_scoring_count": len(protected_candidates) + len(remainder),
         }
     )
-    if any(row["adopted_score"] is not None for row in threshold_rows):
-        reranked_candidates = _order_by_score(reranked_candidates, cast(Settings, settings), step, receipt, rerank_phase=rerank_phase)
     return _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
 
 
@@ -1140,7 +1122,6 @@ def build_adb_hybrid_answer_context(
         "retrieval_queries": queries,
         "settings": settings,
         "preferred_engine_ids": preferred_engines,
-        "candidate_limit": _retrieval_candidate_limit(top_k, settings),
         "retrieval_scope": scope,
         "classification_filter": classification_filter,
         # 注入された検索実装の既存シグネチャを壊さないよう、指定時だけ渡す。
@@ -1161,11 +1142,9 @@ def build_adb_hybrid_answer_context(
         )
 
     candidate_ids = [record.chunk_uid for record in ranked_children]
-    with _execution_step("再ランキング候補の選択", "既存の順位を保ち、重複と各経路・総量の上限を適用します。") as step:
-        limits = stage_limits(settings, ranked_children)
-        configured_limit = max(0, int(getattr(settings, "rerank_candidate_limit", 0)))
-        step.input({"総量の指定": configured_limit, "経路ごとの上限": limits, "候補": candidate_snapshot(ranked_children)})
-        ranked_children, candidate_trace = select_candidates(ranked_children, configured_limit, stage_limits=limits)
+    with _execution_step("再ランキング候補の選択", "既存の順位を保ち、重複と、rerank に入れない経路（検索拡張）の候補を除きます。") as step:
+        step.input({"候補": candidate_snapshot(ranked_children)})
+        ranked_children, candidate_trace = select_candidates(ranked_children)
         record_retrieval_stage({"stage": "rerank_input", **candidate_trace})
         step.output({"判断": candidate_trace, "採用候補": candidate_snapshot(ranked_children)})
         step.result(f"再ランキングへ渡す候補 {len(ranked_children)} 件")
@@ -1180,7 +1159,7 @@ def build_adb_hybrid_answer_context(
         rerank_phase=rerank_phase,
     )
     record_retrieval_stage({"stage": "post_rerank_policies", "selected_ids": [retrieval_record_id(record) for record in ranked_children]})
-    # rerank の後は「並び（rerank の点数と MMR）→ 関連度の下限 → 文書ごとの上限 → top_k で切る → 検索拡張の合わせ込み」
+    # rerank の後は「並び（rerank の点数）→ 関連度の下限 → 文書ごとの上限 → top_k で切る → 検索拡張の合わせ込み」
     # の順で、以後は足すだけで削除・並べ替えをしない（#5165）。top_k の切りは context の組み立てで 1 回だけ行う。
     # 補いの検索は、文書ごとの上限の前に主の検索の根拠にすでにある候補を除く（#5175）。
     covered: tuple[tuple[AnswerRecord, str], ...] = ()
@@ -2926,7 +2905,6 @@ def _retrieval_query_plan_payload(
         lexical_queries=dedupe_queries(lexical_queries),
         retrieval_scope=normalize_retrieval_scope(retrieval_scope),
         top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
-        candidate_limit=_retrieval_candidate_limit(top_k, settings),
         metadata_filter=_retrieval_metadata_filter(
             classification_filter,
         ),

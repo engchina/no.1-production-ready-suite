@@ -685,6 +685,19 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     assert body["delimiter"] == ["\\n---\\n"]
     assert body["context_header_enabled"] is False
     assert body["config_source"] == "runtime"
+    # 製品の既定は Settings の項目の既定値で、現在の値(.env)に左右されない(#5451)。
+    assert body["builtin"] == {
+        "strategy": "small_to_big",
+        "chunk_size": 800,
+        "overlap": 120,
+        "min_chars": 120,
+        "delimiter": ["<<<JSONL_RECORD_BOUNDARY>>>"],
+        "chunk_child_target_chars": 1000,
+        "chunk_table_child_target_chars": 3000,
+        "chunk_parent_target_chars": 6000,
+        "chunk_parent_max_pages": 3,
+        "chunk_parent_max_children": 12,
+    }
     names = [item["name"] for item in body["strategies"]]
     # 親子階層（small-to-big）は、削除した親子階層の位置(3 番目)に並ぶ(#271)。
     assert names == [
@@ -4038,7 +4051,7 @@ def test_retrieval_thresholds_reject_invalid_without_persisting(
     assert (env_file.read_text() if env_file.exists() else "") == before
 
 
-@pytest.mark.parametrize("value", [0, 1, 600, 2000])
+@pytest.mark.parametrize("value", [5, 50, 100])
 def test_retrieval_counts_save_reload_and_preserve_other_settings(
     value: int, monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4070,8 +4083,9 @@ def test_removed_rerank_order_and_top_n_settings_are_not_exposed(
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("retrieval_query_limit", -1),
-        ("retrieval_query_limit", 2001),
+        ("retrieval_query_limit", 0),
+        ("retrieval_query_limit", 4),
+        ("retrieval_query_limit", 101),
         ("retrieval_query_limit", True),
     ],
 )
@@ -4094,7 +4108,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
         settings.rag_min_similarity,
         settings.rag_retrieval_query_limit,
         settings.rag_rerank_min_relevance_score,
-    ) == (0.2, 60, 0.3)
+    ) == (0.2, 50, 0.3)
     fields = AnsweringSettingsData.model_fields
     assert tuple(
         fields[name].default
@@ -4103,14 +4117,14 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
             "retrieval_query_limit",
             "rerank_min_relevance_score",
         )
-    ) == (0.2, 60, 0.3)
+    ) == (0.2, 50, 0.3)
     custom = settings.model_copy(
         update={
             "rag_min_similarity": 0.35,
-            "rag_retrieval_query_limit": 120,
+            "rag_retrieval_query_limit": 80,
             "rag_rerank_min_relevance_score": 0.45,
         }
     )
-    assert (custom.rag_min_similarity, custom.rag_retrieval_query_limit) == (0.35, 120)
+    assert (custom.rag_min_similarity, custom.rag_retrieval_query_limit) == (0.35, 80)
     engine = build_engine_settings(custom, output_dir=tmp_path)
     assert engine.rerank_min_relevance_score == 0.45

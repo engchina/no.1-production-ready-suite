@@ -33,7 +33,7 @@ def request() -> EvaluationRunRequest:
 
 def test_variants_preserve_cases_scope_and_unrelated_overrides() -> None:
     baseline = request()
-    plan = prepare_plan(baseline, total_caps=[100, 200, 100])
+    plan = prepare_plan(baseline)
     assert not plan["executed"] and plan["requires_effective_settings_snapshot"]
     assert plan["unavailable_controls"] == []
     for variant in plan["variants"]:
@@ -43,9 +43,11 @@ def test_variants_preserve_cases_scope_and_unrelated_overrides() -> None:
         assert parsed.rag_overrides is not None and parsed.rag_overrides.rerank_enabled
         if variant["id"] == "without-reference":
             assert parsed.rag_overrides.reference_expansion_enabled is False
-        if variant["id"] == "without-diversity":
-            assert variant["environment_overlay"] == {"RAG_CANDIDATE_DIVERSITY_MAX_EXTRA": "0"}
-    assert sum(value["id"].startswith("total-cap-") for value in plan["variants"]) == 2
+    # 候補の多様化と rerank の入力の合計上限は削除した（#5443）。
+    assert not any(
+        value["id"] in {"without-diversity"} or value["id"].startswith("total-cap-")
+        for value in plan["variants"]
+    )
     assert baseline == request()
 
 
@@ -53,7 +55,7 @@ def test_cli_generates_valid_inputs_and_refuses_to_overwrite(tmp_path: Path) -> 
     source = tmp_path / "request.json"
     source.write_text(request().model_dump_json(), encoding="utf-8")
     output = tmp_path / "prepared"
-    assert main([str(source), "--output-dir", str(output), "--total-cap", "123"]) == 0
+    assert main([str(source), "--output-dir", str(output)]) == 0
     manifest = json.loads((output / "manifest.json").read_text())
     for variant in manifest["variants"]:
         prepared = EvaluationRunRequest.model_validate_json(
@@ -62,9 +64,3 @@ def test_cli_generates_valid_inputs_and_refuses_to_overwrite(tmp_path: Path) -> 
         assert prepared.cases == request().cases
     with pytest.raises(FileExistsError):
         main([str(source), "--output-dir", str(output)])
-
-
-@pytest.mark.parametrize("cap", [0, -1, 2001])
-def test_invalid_cap_never_prepares_requests(cap: int) -> None:
-    with pytest.raises(ValueError):
-        prepare_plan(request(), total_caps=[cap])

@@ -4182,7 +4182,7 @@
                 "type": "null"
               }
             ],
-            "default": 30,
+            "default": 50,
             "description": "検索する件数。",
             "title": "Top K"
           },

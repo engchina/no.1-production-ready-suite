@@ -807,7 +807,7 @@ def search_adb_hybrid_chunks(
     retrieval_queries: Sequence[str],
     settings: Settings,
     preferred_engine_ids: Iterable[str] = (),
-    candidate_limit: int = 24,
+    candidate_limit: int = 50,  # 検索経路ごとの取得件数（backend の RAG_RETRIEVAL_QUERY_LIMIT の既定と同じ。#5443）
     query_embedder: QueryEmbeddingFunction = embed_query,
     metadata_filter: RetrievalMetadataFilter | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,

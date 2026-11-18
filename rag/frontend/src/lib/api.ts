@@ -2752,6 +2752,8 @@ export interface ChunkingSettingsData {
   chunk_parent_max_children: number;
   strategies: ChunkingStrategyStatusData[];
   config_source: "runtime";
+  /** 製品の既定（既定の分割方式とその推奨のパラメータ）。「既定に戻す」がフォームに入れる（保存はしない）。 */
+  builtin: ChunkingSettingsUpdate;
 }
 
 export interface ChunkingSettingsUpdate {
