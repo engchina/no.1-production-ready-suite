@@ -488,3 +488,11 @@ export async function closeFileListFilters(page: Page) {
   const sheet = page.getByTestId("file-list-toolbar-filters-sheet");
   if (await sheet.isVisible()) await sheet.getByRole("button", { name: "絞り込みを閉じる" }).click();
 }
+
+/** 文書詳細の処理レシピの「その他の操作」を開き、メニューを返す（工程からの再処理と削除。#5478）。 */
+export async function openRecipeActionMenu(page: Page): Promise<Locator> {
+  await page.getByTestId("document-recipe-actions").getByRole("button", { name: "その他の操作" }).click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  return menu;
+}
