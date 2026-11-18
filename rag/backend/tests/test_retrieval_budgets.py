@@ -162,7 +162,7 @@ def test_default_total_budget_excludes_search_expansions(tmp_path: Path) -> None
     from rag_engine.retrieval.candidate_budget import stage_limits
 
     engine = build_engine_settings(
-        Settings(rag_entity_expansion_enabled=True, rag_graph_expansion_enabled=True),
+        Settings(rag_entity_expansion_enabled=True),
         output_dir=tmp_path,
     )
     limits = stage_limits(engine, [])

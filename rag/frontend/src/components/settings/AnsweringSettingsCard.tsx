@@ -79,7 +79,6 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
-    graph_expansion_enabled: settings.graph_expansion_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
     reference_section_read_max_chunks: settings.reference_section_read_max_chunks ?? 8,
@@ -354,14 +353,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               onValueChange={(value) => update({ entity_expansion_max_chunks: Number(value) })} />
           </FormGrid> : null}
         </div>
-        <SwitchRow
-          id="answering-graph-expansion"
-          label={t("settings.answering.graphExpansion")}
-          description={t("settings.answering.graphExpansionHint")}
-          checked={form.graph_expansion_enabled}
-          disabled={disabled}
-          onChange={(checked) => update({ graph_expansion_enabled: checked })}
-        />
       </SettingsGroup>
       <SettingsGroup id="evidence-context-title" title={t("settings.answering.evidenceContextTitle")} flush>
         <div className="p-3">

@@ -396,7 +396,7 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
 # - basic: 基本の RAG。⑤ 検索（vector / keyword / native hybrid）→ 融合（RRF）→ rerank ＋
 #   ⑥ 親・前後の読取 → ⑧ 回答。画面の RAG 検索・検索だけ（retrieval_only）・staging の確かめ。
 # - expanded: 登録済みQ&A・③ 業務ガイドの照合と ⑦ 根拠の拡張（章節の拡張・参照の展開・目次から
-#   の章節の選択・実体・関係情報・検索上限の要求別補完・業務ガイドの手順ごとの検索）あり。
+#   の章節の選択・実体・検索上限の要求別補完・業務ガイドの手順ごとの検索）あり。
 #   RAG チャット・品質評価・業務ガイドの下書きの試答・MCP。
 # ② 会話の履歴による補完（``run(history=...)``）と ④ 会話の添付（``attachment_conversation_id``）は
 # 経路と別の引数で渡す。

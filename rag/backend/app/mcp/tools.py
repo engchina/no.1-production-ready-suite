@@ -2332,7 +2332,7 @@ ENTITY_EXPANSION_ROLE = "entity_expansion"
 _RANKED_ROLES = frozenset({RETRIEVED_ANCHOR_ROLE, ENTITY_EXPANSION_ROLE})
 
 
-# 検索拡張（参照先・実体・関係情報）で最後の根拠の並びに足した根拠の印（#5162。
+# 検索拡張（参照先・実体・目次から選んだ章節）で最後の根拠の並びに足した根拠の印（#5162。
 # ``answer_engine.EVIDENCE_EXPANSION_KEY``）。evidence_limit に数えない。
 EVIDENCE_EXPANSION_KEY = "evidence_expansion"
 # evidence_limit のうち、検索で当たった上位の chunk の前後の文脈・章の参照の先に確保する割合

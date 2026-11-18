@@ -11,7 +11,7 @@ from app.clients.oracle import OracleClient
 from app.clients.structure_graph_store import StructureGraphStore
 from app.rag.graph_index import _clean_label, _graph_id, graph_section_node_id
 from app.rag.structure_index import rebuild_document_structure_index
-from tests.test_graph_expansion_oracle import _chunks, _indexed_document
+from tests.test_structure_graph_oracle import _chunks, _indexed_document
 
 
 async def _reference_pairs(
@@ -386,7 +386,7 @@ async def test_entity_chunks_read_actual_saved_links_in_version_scope() -> None:
         set_audit_request_context,
     )
     from app.schemas.extraction import StructuredExtraction
-    from tests.test_graph_expansion_oracle import _EMBEDDING
+    from tests.test_structure_graph_oracle import _EMBEDDING
 
     def metadata(index: int) -> dict[str, Any]:
         if index == 1:
@@ -736,7 +736,7 @@ async def test_body_chunk_opened_after_version_switch_keeps_listed_version() -> 
     from app.api.routes import documents as document_routes
     from app.rag.graph_index import graph_body_node_id
     from app.schemas.extraction import StructuredExtraction
-    from tests.test_graph_expansion_oracle import _EMBEDDING
+    from tests.test_structure_graph_oracle import _EMBEDDING
 
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-body-version-{uuid4().hex[:8]}")

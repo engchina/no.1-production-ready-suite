@@ -554,7 +554,6 @@ async def update_answering_settings(
             ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
-            ("rag_graph_expansion_enabled", payload.graph_expansion_enabled),
             ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
             ("rag_entity_expansion_max_chunks", payload.entity_expansion_max_chunks),
             (
@@ -655,9 +654,6 @@ async def update_answering_settings(
                 "RAG_RRF_METHOD_RATIO": json.dumps(candidate.rag_rrf_method_ratio),
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
-                "RAG_GRAPH_EXPANSION_ENABLED": _format_env_bool(
-                    candidate.rag_graph_expansion_enabled
-                ),
                 "RAG_ANSWER_TIMEOUT_SECONDS": str(round(candidate.rag_answer_timeout_seconds)),
             },
             section_comment="# 回答の検索と生成",
@@ -679,7 +675,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         rrf_method_ratio=settings.rag_rrf_method_ratio,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
-        graph_expansion_enabled=settings.rag_graph_expansion_enabled,
         entity_expansion_enabled=settings.rag_entity_expansion_enabled,
         entity_expansion_max_chunks=settings.rag_entity_expansion_max_chunks,
         reference_section_read_max_chunks=settings.rag_reference_section_read_max_chunks,

@@ -15,7 +15,6 @@ from rag_engine.resources.tracing import bind_trace_observer
 from rag_engine.retrieval.search_stages import (
     DERIVED_SOURCE_STAGE,
     ENTITY_EXPANSION_STAGE,
-    GRAPH_EXPANSION_STAGE,
     REFERENCE_EXPANSION_STAGE,
 )
 
@@ -42,13 +41,11 @@ def engine(oracle: FakeOracle) -> AnswerEngine:
     return AnswerEngine(
         Settings(
             rag_entity_expansion_enabled=True,
-            rag_graph_expansion_enabled=True,
             rag_reference_expansion_enabled=True,
         ),
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
         entity_store=cast(Any, object()),
-        graph_store=cast(Any, object()),
     )
 
 
@@ -95,7 +92,6 @@ async def test_expansion_empty_and_failure_keep_actual_scope(
         return []
 
     monkeypatch.setattr(module, "plan_entity_expansion", plan)
-    monkeypatch.setattr(module, "plan_graph_expansion", plan)
     oracle = FakeOracle()
     oracle.chunks = [row("seed-a")]
     state = _SearchState()
@@ -110,7 +106,7 @@ async def test_expansion_empty_and_failure_keep_actual_scope(
         )
     assert seen and result.child_chunks
     captured = calls(summary)
-    for name in [ENTITY_EXPANSION_STAGE, GRAPH_EXPANSION_STAGE, REFERENCE_EXPANSION_STAGE]:
+    for name in [ENTITY_EXPANSION_STAGE, REFERENCE_EXPANSION_STAGE]:
         call = captured[name]
         assert call.capture_enabled is enabled
         assert "private-error-body" not in call.model_dump_json()
@@ -122,7 +118,7 @@ async def test_expansion_empty_and_failure_keep_actual_scope(
         else:
             assert call.input.text == call.output.text == ""
     if enabled:
-        output = json.loads(captured[GRAPH_EXPANSION_STAGE].output.text)
+        output = json.loads(captured[ENTITY_EXPANSION_STAGE].output.text)
         assert bool(output["回答内の縮退記録（累計）"]) is (outcome == "failed")
         assert (
             json.loads(captured[ENTITY_EXPANSION_STAGE].input.text)["起点"][0]["text"]
@@ -139,11 +135,7 @@ async def test_empty_anchors_still_record_an_executed_question_expansion(
         assert kwargs["seed_chunks"] == []
         return [SimpleNamespace(chunk=row("entity-a"), info={})]
 
-    async def graph(*args: Any, **kwargs: Any) -> list[Any]:
-        return []
-
     monkeypatch.setattr(module, "plan_entity_expansion", entity)
-    monkeypatch.setattr(module, "plan_graph_expansion", graph)
     oracle = FakeOracle()
     oracle.chunks = []
     with (
@@ -206,14 +198,8 @@ async def test_returned_expansions_keep_their_actual_origin_and_exclusions(
     async def entity(*args: Any, **kwargs: Any) -> list[Any]:
         return [SimpleNamespace(chunk=row("entity-a"), info={})]
 
-    async def graph(*args: Any, **kwargs: Any) -> list[Any]:
-        assert {"seed-a", "reference-a", "entity-a"} <= kwargs["exclude_chunk_ids"]
-        kwargs["diagnostics"]["status"] = "read"
-        return [SimpleNamespace(chunk=row("graph-a"), info={})]
-
     monkeypatch.setattr(AnswerEngine, "_reference_expansion", reference)
     monkeypatch.setattr(module, "plan_entity_expansion", entity)
-    monkeypatch.setattr(module, "plan_graph_expansion", graph)
     oracle = FakeOracle()
     oracle.chunks = [row("seed-a")]
     with (
@@ -232,15 +218,10 @@ async def test_returned_expansions_keep_their_actual_origin_and_exclusions(
     ref = json.loads(captured[REFERENCE_EXPANSION_STAGE].output.text)
     assert ref["起点と返した Chunk"]["seed-a"][0]["chunk_id"] == "reference-a"
     assert ref["今回の探索判断"]["sources"][0]["source_chunk_id"] == "seed-a"
-    graph_input = json.loads(captured[GRAPH_EXPANSION_STAGE].input.text)
-    assert set(graph_input["除外 ID"]) == {"seed-a", "reference-a", "entity-a"}
-    graph_output = json.loads(captured[GRAPH_EXPANSION_STAGE].output.text)
-    assert graph_output["返した固有 Chunk 数"] == 1
-    assert graph_output["返した候補"][0]["chunk_id"] == "graph-a"
-    assert graph_output["回答内の関係情報の探索記録（累計）"] == [{"status": "read"}]
+    entity_output = json.loads(captured[ENTITY_EXPANSION_STAGE].output.text)
+    assert entity_output["返した候補"][0]["chunk_id"] == "entity-a"
     assert {item.chunk_uid for item in result.child_chunks} == {"seed-a"}
     assert {item.chunk_uid for item in result.expansion_chunks} == {
         "reference-a",
         "entity-a",
-        "graph-a",
     }
