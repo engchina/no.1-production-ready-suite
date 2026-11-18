@@ -116,6 +116,8 @@ def test_wiki_runs_alongside_the_answer_flow_and_is_awaited_or_cancelled() -> No
         assert blocked.wait(2.0)
         pending.cancel()
         assert pending.cancelled()
+        # loop に取り消しを処理させてから止める。
+        asyncio.run_coroutine_threadsafe(asyncio.sleep(0.05), loop).result(2.0)
     finally:
         loop.call_soon_threadsafe(loop.stop)
         worker.join(2.0)
