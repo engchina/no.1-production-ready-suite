@@ -173,7 +173,7 @@ import { toast } from "@/lib/toast";
 import { t, type I18nKey } from "@/lib/i18n";
 import { recipeQueueWait } from "@/lib/ingestion-queue";
 import { useCustomLeaveGuard, useLeaveGuard } from "@/lib/leave-guard";
-import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
+import { formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import {
   nearestVerticalScrollContainer,
   revealWithinScrollContainer,
@@ -1598,27 +1598,6 @@ export function DocumentWorkspace({
             {documentActionResult}
           </div>
         ) : null}
-
-        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-          <div>
-            <dt className="text-xs text-fg-muted">{t("flow.size")}</dt>
-            <dd className="tnum mt-0.5 font-medium text-fg">
-              {formatBytes(doc.file_size_bytes)}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-fg-muted">{t("flow.uploadedAt")}</dt>
-            <dd className="tnum mt-0.5 font-medium text-fg">
-              {formatDateTime(doc.uploaded_at)}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-fg-muted">{t("flow.indexedAt")}</dt>
-            <dd className="tnum mt-0.5 font-medium text-fg">
-              {formatDateTime(doc.indexed_at)}
-            </dd>
-          </div>
-        </dl>
 
         {/* 文書全体の要約（#4793）。取込の後に作る文書の説明。 */}
         <DocumentSummaryPanel
@@ -3496,9 +3475,13 @@ function DocumentKnowledgeBaseEditor({
   };
 
   return (
-    <section className="space-y-3 border-t border-border pt-4">
+    <section
+      className="space-y-3 border-t border-border pt-4"
+      aria-labelledby="document-knowledge-bases-title"
+      data-testid="document-knowledge-bases"
+    >
       <div>
-        <h3 className="text-sm font-semibold text-fg">
+        <h3 id="document-knowledge-bases-title" className="text-sm font-semibold text-fg">
           {t("documents.knowledgeBases.title")}
         </h3>
         <p className="mt-1 text-xs text-fg-muted">{t("documents.knowledgeBases.description")}</p>
