@@ -139,15 +139,8 @@ async def test_section_chunks_failure_is_recorded_with_the_read_error(
             "entity_expansion",
             lambda engine, request, state, seeds: engine._entity_expansion(request, state, seeds),
         ),
-        (
-            "plan_graph_expansion",
-            "graph_expansion",
-            lambda engine, request, state, seeds: engine._graph_expansion(
-                request, state, seeds, exclude=set()
-            ),
-        ),
     ],
-    ids=["entity", "graph"],
+    ids=["entity"],
 )
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
 async def test_expansion_planner_failure_is_recorded(
@@ -161,9 +154,7 @@ async def test_expansion_planner_failure_is_recorded(
         return []
 
     monkeypatch.setattr(answer_engine_module, planner, _aboom if fail else empty)
-    engine = _engine(
-        FakeOracle(), rag_entity_expansion_enabled=True, rag_graph_expansion_enabled=True
-    )
+    engine = _engine(FakeOracle(), rag_entity_expansion_enabled=True)
     state = _SearchState()
     request = SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"})
 
@@ -311,12 +302,11 @@ async def _run(monkeypatch: pytest.MonkeyPatch, oracle: FakeOracle) -> Any:
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
-    # 実体・関係情報の拡張は、この試験の外(FakeOracle に無い SQL を読む。処理ごとの試験は
+    # 実体の拡張は、この試験の外(FakeOracle に無い SQL を読む。処理ごとの試験は
     # 上にある)。章節の拡張は既定のまま(FakeOracle の文書は章節の対応を持たず、広げない)。
     engine = _engine(
         oracle,
         rag_entity_expansion_enabled=False,
-        rag_graph_expansion_enabled=False,
     )
     return await engine.run(
         SearchRequest(query="登録の手順は？", filters={"knowledge_base_id": "kb-1"})
@@ -381,7 +371,7 @@ async def test_entity_expansion_db_call_timeout_is_degraded_and_answer_continues
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     store = _TimedOutEntityStore()
     engine = AnswerEngine(
-        Settings(rag_entity_expansion_enabled=True, rag_graph_expansion_enabled=False),
+        Settings(rag_entity_expansion_enabled=True),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         entity_store=store,
@@ -602,7 +592,7 @@ async def _run_with_failing_embedding(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     genai = _EmbedFails()
     outcome = await AnswerEngine(
-        Settings(rag_entity_expansion_enabled=False, rag_graph_expansion_enabled=False),
+        Settings(rag_entity_expansion_enabled=False),
         oracle=oracle,  # type: ignore[arg-type]
         genai=genai,  # type: ignore[arg-type]
     ).run(SearchRequest(query="登録の手順は？", filters={"knowledge_base_id": "kb-1"}))

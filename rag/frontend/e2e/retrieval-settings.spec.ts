@@ -133,7 +133,6 @@ const ANSWERING_SETTINGS = {
   runtime_terms_answer_enabled: false,
   neighbor_child_count: 3,
   rerank_enabled: true,
-  graph_expansion_enabled: false,
   config_source: "runtime",
   entity_expansion_enabled: true,
   entity_expansion_max_chunks: 3,
@@ -594,12 +593,13 @@ test("回答の検索と生成の設定は処理の順の群ごとに枠と見�
   }
   expect(tops).toEqual([...tops].sort((left, right) => left - right));
   await expect(card.getByRole("group", { name: "回答の検索のオプション", exact: true })).toHaveCount(0);
-  // 検索拡張の群の中も処理の順（参照 → 起点の文書の目次 → 実体・別名 → 文書構造）。
+  // 検索拡張の群の中も処理の順（参照 → 起点の文書の目次 → 実体・別名）。
   const expansion = card.getByRole("region", { name: "検索拡張", exact: true });
-  const switches = ["参照先の文書の目次から章節をモデルが選ぶ", "起点の文書の目次から章節をモデルが選ぶ", "実体・別名による検索拡張", "文書構造による検索拡張"];
+  const switches = ["参照先の文書の目次から章節をモデルが選ぶ", "起点の文書の目次から章節をモデルが選ぶ", "実体・別名による検索拡張"];
   const switchTops: number[] = [];
   for (const name of switches) switchTops.push((await expansion.getByRole("switch", { name, exact: true }).boundingBox())?.y ?? 0);
   expect(switchTops).toEqual([...switchTops].sort((left, right) => left - right));
+  await expect(expansion.getByRole("switch", { name: "文書構造による検索拡張" })).toHaveCount(0);
   await expect(card.getByRole("region", { name: "根拠の文脈の補完", exact: true }).getByRole("switch", { name: "章節で広げる根拠", exact: true })).toBeVisible();
   // 区切りの線は切り替えの行の上にだけあり、下限の欄は切り替えの行の続きとして余白を持つ。
   const rerankBlock = card.getByRole("region", { name: "検索候補の並べ替え（Rerank）", exact: true }).getByTestId("answering-rerank-block");

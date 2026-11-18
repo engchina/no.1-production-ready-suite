@@ -50,7 +50,6 @@ from rag_engine.retrieval.search_stages import (
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
     ENTITY_EXPANSION_STAGE,
-    GRAPH_EXPANSION_STAGE,
     IMAGE_EVIDENCE_STAGE,
     OUTLINE_SELECTION_STAGE,
     REFERENCE_EXPANSION_STAGE,
@@ -129,13 +128,6 @@ from app.rag.entity_expansion import (
     expansion_metadata,
     plan_entity_expansion,
 )
-from app.rag.graph_expansion import (
-    GRAPH_EXPANSION_KEY,
-    GRAPH_SEED_ANCHORS,
-    GraphExpansionStore,
-    graph_expansion_metadata,
-    plan_graph_expansion,
-)
 from app.rag.reference_sections import OUTLINE_SELECTION_KEY
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
@@ -183,8 +175,6 @@ REFERENCE_ORIGIN_CONTEXT = "context"
 REFERENCE_ANCHOR_SEARCH_CANDIDATE = "search_candidate"
 # 診断に出す交差参照の起点の記録の、検索の回数の上限(要求ごとの再検索)。
 _REFERENCE_DIAGNOSTICS_SEARCHES = 4
-# 診断に出す、関係情報で使った entity の数の上限。
-_GRAPH_DIAGNOSTICS_ENTITIES = 10
 # 検索拡張の工程の記録の「最終採用」(#5162)。
 _EXPANSION_ADOPTION_NOTE = "rerank にかけず、rerank と起点の選択の後に最後の根拠へ合わせます。"
 # 検索拡張・補いの検索で最後の根拠の並びに足した根拠の引用の印(#5162・#5173)。MCP は
@@ -303,11 +293,6 @@ class _SearchState:
     entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     entity_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
     entity_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
-    # 関係情報(#2055)で足した chunk の記録(診断に出す。chunk_id → entity・理由)と、同じ起点での
-    # 計画(同じ起点なら SQL を読み直さない)。
-    graph_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
-    graph_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
-    graph_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
     # 取込で参照先を解決していない chunk の参照先(#1382。chunk_id ごと)と、その解決に使う
     # 文書の見出しの列((document_id, chunk_set_id) ごと。1 回の回答で 1 回だけ読む)。
     query_reference_targets: dict[str, list[ReferenceTarget]] = field(default_factory=dict)
@@ -395,7 +380,7 @@ def _section_chain(sections: Sequence[Any], owner_section_id: str) -> list[str]:
 
 
 def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
-    """実体・関係情報の拡張の範囲: 利用者が指定した検索条件をすべて残す(#3260)。
+    """実体の拡張・目次からの章節の選択の範囲: 利用者が指定した検索条件をすべて残す(#3260)。
 
     ``filters`` は利用者が指定した条件(画面・検索・回答プロファイル・呼び出し元の
     ``request.filters``)で、ナレッジベース・旧版の扱い・基準日に加えて文書名・ページ・分類・項目の
@@ -725,7 +710,6 @@ class _SearchExpansions:
     referenced: list[RetrievedChunk] = field(default_factory=list)
     outline_chunks: list[RetrievedChunk] = field(default_factory=list)
     entity_chunks: list[RetrievedChunk] = field(default_factory=list)
-    graph_chunks: list[RetrievedChunk] = field(default_factory=list)
 
 
 class AnswerEngine:
@@ -741,7 +725,6 @@ class AnswerEngine:
         answer_model_id: str | None = None,
         scope: AnswerScope | None = None,
         entity_store: EntityExpansionStore | None = None,
-        graph_store: GraphExpansionStore | None = None,
         attachment_chunks: Sequence[RetrievedChunk] = (),
         degraded: DegradedSteps | None = None,
         materialize_images: bool = True,
@@ -758,8 +741,6 @@ class AnswerEngine:
         self._attachment_chunks = list(attachment_chunks)
         # 実体の表を読む SQL(#1362)。None は Oracle(``EntityStore``)。テストは同じ規則の表を渡す。
         self._entity_store = entity_store
-        # 関係情報の表を読む SQL(#2055)。None は Oracle(``OracleGraphStore``)。
-        self._graph_store = graph_store
         self._genai = genai
         self._runtime_knowledge_payload = runtime_knowledge_payload
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
@@ -783,8 +764,8 @@ class AnswerEngine:
         # Wiki の計画のモデル(テストで差し替える。None は回答のモデル)。
         self._wiki_llm: Any | None = None
         # ⑦ 根拠の拡張をするか(#5332。``RagPipeline`` の経路が expanded のとき)。しないとき
-        # (RAG 検索の経路)は切った起点からの検索拡張(参照の展開・目次からの章節の選択・実体・
-        # 関係情報)を呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
+        # (RAG 検索の経路)は切った起点からの検索拡張(参照の展開・目次からの章節の選択・実体)
+        # を呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
         self._expand = expand
 
     async def run(
@@ -863,12 +844,6 @@ class AnswerEngine:
                 "max_chunks": self._settings.rag_entity_expansion_max_chunks,
                 "chunks": list(state.entity_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
             }
-        if self._settings.rag_graph_expansion_enabled:
-            outcome.diagnostics["graph_expansion"] = _graph_expansion_diagnostics(
-                state.graph_expansions,
-                max_chunks=self._settings.rag_graph_expansion_max_chunks,
-                attempts=list(state.graph_attempts.values()),
-            )
         if state.reference_expansions or any(
             search.get("sources") for search in state.reference_sources
         ):
@@ -1496,7 +1471,6 @@ class AnswerEngine:
         state: _SearchState,
         *,
         anchors: Sequence[str],
-        candidate_ids: Sequence[str],
         retrieval_queries: Sequence[str],
         page_ranges: Sequence[Mapping[str, Any]] = (),
         **_: object,
@@ -1504,9 +1478,9 @@ class AnswerEngine:
         """⑦ 切った起点からの検索拡張(Chat の経路だけ。#5389)。
 
         rag_engine が検索ごとに rerank・下限・文書ごとの上限・``top_k`` の切りの後に、切った起点の
-        ID(``anchors``。rerank の後の順)と rerank に渡した候補の ID(``candidate_ids``)と、その検索の
-        条件で呼ぶ。会話の添付は起点にしない。集めた chunk は rerank にかけず、最後の根拠の並びへ
-        合わせる(#5162)。頁に絞った検索は ``_search`` と同じく参照・目次・実体・文書構造を辿らない。
+        ID(``anchors``。rerank の後の順)と、その検索の条件で呼ぶ。会話の添付は起点にしない。集めた
+        chunk は rerank にかけず、最後の根拠の並びへ合わせる(#5162)。頁に絞った検索は ``_search`` と
+        同じく参照・目次・実体を辿らない。
         """
         from rag_engine.retrieval.weighted_rrf import unique_queries
 
@@ -1526,7 +1500,6 @@ class AnswerEngine:
             request,
             state,
             seeds,
-            ranked=candidate_ids,
             fused={chunk_id: score for chunk_id, (_, score) in state.fused_ranks.items()},
             queries=queries,
             embeddings={
@@ -1541,7 +1514,6 @@ class AnswerEngine:
             ("reference", found.referenced),
             ("outline_selection", found.outline_chunks),
             ("entity", found.entity_chunks),
-            ("structure", found.graph_chunks),
         ):
             for chunk in chunks:
                 if chunk.chunk_id in expansions:
@@ -1569,7 +1541,6 @@ class AnswerEngine:
         state: _SearchState,
         anchors: list[RetrievedChunk],
         *,
-        ranked: Sequence[str],
         fused: Mapping[str, float],
         queries: Sequence[str],
         embeddings: Mapping[str, list[float]],
@@ -1580,8 +1551,8 @@ class AnswerEngine:
         """⑦ 切った起点からの検索拡張の本体(``_expanded_search`` が呼ぶ。#5389)。
 
         切った起点(``anchors``。rerank の後の順)を起点に、参照の展開(#1280。文書全体への参照は
-        目次からの章節の選択 #5263)・起点の文書の目次からの章節の選択(#5324)・実体(#1362)・
-        関係情報(#2055)の chunk を集める。集めた chunk は rerank にかけず、最後の根拠の並びへ
+        目次からの章節の選択 #5263)・起点の文書の目次からの章節の選択(#5324)・実体(#1362)の
+        chunk を集める。集めた chunk は rerank にかけず、最後の根拠の並びへ
         合わせる(#5162)。頁に絞った検索(``page_ranges``・``context_scope``)は
         ``expand_references=False`` で辿らない。
         """
@@ -1669,7 +1640,6 @@ class AnswerEngine:
                     )
         anchors = [state.chunks.get(chunk.chunk_id, chunk) for chunk in anchors]
         referenced = [chunk for chunks in references.values() for chunk in chunks]
-        promoted = {chunk.chunk_id for chunk in referenced}
         # 起点の文書の目次から回答のモデルが選んだ章節の chunk(#5324。既定は無効)。参照先と
         # 同じく rerank の候補に入れず、最後の根拠の並びへ合わせる(context の枠に数えない)。
         # 無効なら段も出さない。
@@ -1707,7 +1677,6 @@ class AnswerEngine:
                             "最終採用": _EXPANSION_ADOPTION_NOTE,
                         }
                     )
-        outline_ids = {chunk.chunk_id for chunk in outline_chunks}
         # 質問と起点の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
         entity_chunks: list[RetrievedChunk] = []
         with _search_stage(ENTITY_EXPANSION_STAGE) as observation:
@@ -1749,70 +1718,11 @@ class AnswerEngine:
                             "最終採用": _EXPANSION_ADOPTION_NOTE,
                         }
                     )
-        entity_ids = {chunk.chunk_id for chunk in entity_chunks}
-        # 関係情報(#2055)で、起点と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
-        # 章節の chunk を足す。候補・前後の文脈・参照先・実体の拡張にある chunk は足さない。
-        graph_chunks: list[RetrievedChunk] = []
-        with _search_stage(GRAPH_EXPANSION_STAGE) as observation:
-            skip_reason = (
-                "configuration_disabled"
-                if not self._settings.rag_graph_expansion_enabled
-                else "page_scope"
-                if not expand_references
-                else ""
-            )
-            if skip_reason:
-                _expansion_stage_outcome(observation, reason=skip_reason)
-            else:
-                attempt_key = _expansion_attempt_key(request, anchors[:GRAPH_SEED_ANCHORS])
-                reused = attempt_key in state.graph_plans
-                graph_exclude = {
-                    *ranked,
-                    *promoted,
-                    *outline_ids,
-                    *entity_ids,
-                }
-                if observation is not None:
-                    observation.request(
-                        lambda: {
-                            "質問": request.query,
-                            "範囲": _expansion_scope(request.filters),
-                            "起点": _trace_chunks(anchors[:GRAPH_SEED_ANCHORS]),
-                            "除外 ID": sorted(graph_exclude),
-                            "最大追加 Chunk 数": self._settings.rag_graph_expansion_max_chunks,
-                        }
-                    )
-                with db_call_label("graph"):
-                    graph_chunks = await self._graph_expansion(
-                        request,
-                        state,
-                        anchors,
-                        exclude=graph_exclude,
-                    )
-                _expansion_stage_outcome(
-                    observation,
-                    chunks=graph_chunks,
-                    reused=reused,
-                    failed=state.graph_attempts.get(attempt_key, {}).get("status") == "error",
-                )
-                if observation is not None:
-                    observation.response(
-                        lambda: {
-                            "返した候補": _trace_chunks(graph_chunks),
-                            "返した固有 Chunk 数": len({item.chunk_id for item in graph_chunks}),
-                            "回答内の関係情報の探索記録（累計）": list(
-                                state.graph_attempts.values()
-                            ),
-                            "回答内の縮退記録（累計）": state.degraded_steps(),
-                            "最終採用": _EXPANSION_ADOPTION_NOTE,
-                        }
-                    )
         return _SearchExpansions(
             references=references,
             referenced=referenced,
             outline_chunks=outline_chunks,
             entity_chunks=entity_chunks,
-            graph_chunks=graph_chunks,
         )
 
     async def _context_chunks(
@@ -2225,73 +2135,6 @@ class AnswerEngine:
             )
             added.append(marked)
         return added
-
-    async def _graph_expansion(
-        self,
-        request: SearchRequest,
-        state: _SearchState,
-        anchors: Sequence[RetrievedChunk],
-        *,
-        exclude: set[str],
-    ) -> list[RetrievedChunk]:
-        """関係情報(#2055)で、起点(#5389)の章節・表と質問の見出しの語から chunk を足す。
-
-        関係情報は文書レシピで「文書構造索引の構築」を「構築する」にした文書にだけあり、無ければ何も
-        足さない。足す chunk は主の検索と同じ範囲(利用者が指定した条件と権限。
-        ``_expansion_scope``)の中だけで、合計 ``rag_graph_expansion_max_chunks`` 件まで。読めない
-        ときは足さずに回答を続ける。LLM は呼ばない。
-        """
-        if not self._settings.rag_graph_expansion_enabled:
-            # 既定は off。検索方法の画面・検索・回答プロファイル(と評価の rag_overrides)で on。
-            return []
-        scope = _expansion_scope(request.filters)
-        seeds = list(anchors[:GRAPH_SEED_ANCHORS])
-        key = _expansion_attempt_key(request, seeds)
-        plan = state.graph_plans.get(key)
-        if plan is None:
-            try:
-                attempt: dict[str, object] = {}
-                state.graph_attempts[key] = attempt
-                plan = await plan_graph_expansion(
-                    self._graph_store_or_default(),
-                    scope,
-                    question=request.query,
-                    seed_chunks=seeds,
-                    exclude_chunk_ids=set(exclude),
-                    max_chunks=self._settings.rag_graph_expansion_max_chunks,
-                    diagnostics=attempt,
-                )
-            except Exception as exc:  # noqa: BLE001 - 関係情報の拡張は補助。足さずに回答を続ける。
-                logger.warning("graph expansion failed", exc_info=True)
-                state.record_degraded("graph_expansion", exc)
-                state.graph_attempts[key] = {"status": "error", "error_type": type(exc).__name__}
-                plan = []
-            state.graph_plans[key] = plan
-        added: list[RetrievedChunk] = []
-        for item in plan:
-            if item.chunk.chunk_id in exclude or is_derived_chunk(item.chunk):
-                continue
-            marked = graph_expansion_metadata(
-                state.chunks.get(item.chunk.chunk_id, item.chunk), item.info
-            )
-            state.chunks[item.chunk.chunk_id] = marked
-            state.graph_expansions.setdefault(
-                item.chunk.chunk_id,
-                {
-                    "chunk_id": item.chunk.chunk_id,
-                    "document_id": item.chunk.document_id,
-                    **item.info,
-                },
-            )
-            added.append(marked)
-        return added
-
-    def _graph_store_or_default(self) -> GraphExpansionStore:
-        if self._graph_store is None:
-            from app.clients.oracle_graph_store import OracleGraphStore
-
-            self._graph_store = OracleGraphStore(self._oracle)
-        return self._graph_store
 
     def _entity_store_or_default(self) -> EntityExpansionStore:
         if self._entity_store is None:
@@ -3435,7 +3278,7 @@ class AnswerEngine:
         (``rag_outline`` の compact と同じ目録。合計 ``rag_outline_selection_catalog_max_chars``
         字まで)を回答のモデルに 1 回だけ渡して章節を選ばせる(文書全体への参照の #5263 と同じ部品)。
         目次にある ID の章節をモデルが返した順に ``read_section`` で読み、本文の合計が
-        ``rag_outline_selection_read_max_chars`` 字に達したら止める。範囲は実体・関係情報の拡張と
+        ``rag_outline_selection_read_max_chars`` 字に達したら止める。範囲は実体の拡張と
         同じ(``_expansion_scope``)。1 回の回答で 1 回だけ選び、以後の検索は同じ chunk を返す。
 
         回答の期限の残りが選択と読取の予約(生成の 1 回の見積もりの 2 回分と確定の分)より少なければ
@@ -4380,7 +4223,7 @@ def _with_effective_as_of(request: SearchRequest, as_of: str = "") -> SearchRequ
     """検索の基準日(as_of)を決めた要求(#2602)。
 
     基準日の無い要求は今日にする(``OracleClient`` の有効期間の判定の既定と同じ日)。主検索・先読み・
-    交差参照・実体・関係情報の拡張・章節の読み取りはこの要求の条件を使うので、回答の途中で
+    交差参照・実体の拡張・章節の読み取りはこの要求の条件を使うので、回答の途中で
     日付が変わっても、すべての検索が同じ日で有効期間を判定する。明示した基準日は変えない。
     ``as_of`` は入口の最初に決めた日（``Settings.rag_answer_as_of``。#5099）。
     """
@@ -4572,9 +4415,6 @@ def _stored_child(
     if isinstance(expansion := chunk.metadata.get(ENTITY_EXPANSION_KEY), dict):
         # 実体の 1 段の拡張で足した chunk(#1362)。
         metadata["entity_expansion"] = dict(expansion)
-    if isinstance(graph := chunk.metadata.get(GRAPH_EXPANSION_KEY), dict):
-        # 関係情報で足した chunk(#2055)。
-        metadata[GRAPH_EXPANSION_KEY] = dict(graph)
     if isinstance(outline := chunk.metadata.get(OUTLINE_SELECTION_KEY), dict):
         # 起点の文書の目次から回答のモデルが選んだ章節の chunk(#5324)。
         metadata[OUTLINE_SELECTION_KEY] = dict(outline)
@@ -5392,57 +5232,6 @@ def _zero_evidence_diagnostics(
         # 失敗して空のまま続けた補助の処理(#3259)。0 件が「当たらなかった」のか
         # 「読めなかった」のかを分ける(処理の種類・回数・例外の型の名前だけ)。
         "degraded_steps": state.degraded_steps(),
-    }
-
-
-def _graph_expansion_diagnostics(
-    expansions: Mapping[str, Mapping[str, object]],
-    *,
-    max_chunks: int,
-    attempts: Sequence[Mapping[str, object]] = (),
-) -> dict[str, Any]:
-    """関係情報で足した chunk の記録(#2055)。使った entity(名前・理由・足した数)と足した chunk。"""
-    entities: dict[str, dict[str, Any]] = {}
-    for item in expansions.values():
-        entity_id = str(item.get("entity_id") or "")
-        entry = entities.setdefault(
-            entity_id,
-            {
-                "entity_id": entity_id,
-                "entity": str(item.get("entity") or ""),
-                "kind": str(item.get("kind") or ""),
-                "document_id": str(item.get("document_id") or ""),
-                "added_count": 0,
-            },
-        )
-        entry["added_count"] += 1
-        if item.get("match"):
-            entry["match"] = str(item["match"])
-
-    def unique_count(key: str) -> int:
-        values: set[str] = set()
-        for attempt in attempts:
-            items = attempt.get(key)
-            if isinstance(items, list):
-                values.update(str(item) for item in items)
-        return len(values)
-
-    return {
-        "status": "error"
-        if any(item.get("status") == "error" for item in attempts)
-        else "completed"
-        if attempts
-        else "not_run",
-        "graph_available": any(item.get("graph_available") for item in attempts),
-        "seed_entity_count": unique_count("seed_entity_ids"),
-        "name_entity_count": unique_count("name_entity_ids"),
-        "planned_count": unique_count("planned_chunk_ids"),
-        "skipped_existing_count": unique_count("skipped_existing_chunk_ids"),
-        "added_count": len(expansions),
-        "max_chunks": max_chunks,
-        "entity_count": len(entities),
-        "entities": list(entities.values())[:_GRAPH_DIAGNOSTICS_ENTITIES],
-        "chunks": list(expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
     }
 
 

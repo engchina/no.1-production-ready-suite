@@ -1,6 +1,6 @@
 """回答の検索の入口(``AnswerEngine.run``)から、利用者の範囲が残ることを確かめる(#3260)。
 
-すべての検索(CRAG の補正検索を含む)と実体・関係情報の拡張に、利用者が指定した条件(文書名・分類・
+すべての検索(CRAG の補正検索を含む)と実体の拡張に、利用者が指定した条件(文書名・分類・
 手の項目の条件・ナレッジベース・旧版の扱い)・基準日・認可の範囲(監査 context の predicate)が残る。
 本文が明記した参照を辿る交差参照(#1280)でも、利用者が指定した文書名・分類の範囲を保つ。
 DB と LLM は呼ばない(決定論の代役。内容は合成)。
@@ -96,7 +96,7 @@ class ScopeRecordingOracle(FakeOracle):
 
 
 class PlanRecorder:
-    """実体・関係情報の拡張の計画の代役。渡された範囲と監査 context を記録し、何も足さない。"""
+    """実体の拡張の計画の代役。渡された範囲と監査 context を記録し、何も足さない。"""
 
     def __init__(self) -> None:
         self.scopes: list[dict[str, str]] = []
@@ -109,11 +109,10 @@ class PlanRecorder:
 
 
 @pytest.fixture
-def plans(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[PlanRecorder, PlanRecorder]]:
-    entity, graph = PlanRecorder(), PlanRecorder()
+def plans(monkeypatch: pytest.MonkeyPatch) -> Iterator[PlanRecorder]:
+    entity = PlanRecorder()
     monkeypatch.setattr(answer_engine, "plan_entity_expansion", entity)
-    monkeypatch.setattr(answer_engine, "plan_graph_expansion", graph)
-    yield entity, graph
+    yield entity
 
 
 def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
@@ -121,13 +120,11 @@ def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
         Settings(
             rag_reference_expansion_enabled=True,
             rag_entity_expansion_enabled=True,
-            rag_graph_expansion_enabled=True,
             **settings,
         ),
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
         entity_store=cast(Any, object()),
-        graph_store=cast(Any, object()),
     )
 
 
@@ -160,11 +157,11 @@ def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
 async def test_user_conditions_as_of_and_access_stay_in_every_search(
     monkeypatch: pytest.MonkeyPatch,
     access: AuditRequestContext,
-    plans: tuple[PlanRecorder, PlanRecorder],
+    plans: PlanRecorder,
     question: str,
     user_filters: dict[str, str],
 ) -> None:
-    """すべての検索と、実体・関係情報の拡張に、利用者の条件・基準日・認可の範囲が残る。"""
+    """すべての検索と、実体の拡張に、利用者の条件・基準日・認可の範囲が残る。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
@@ -189,14 +186,14 @@ async def test_user_conditions_as_of_and_access_stay_in_every_search(
             key: value for key, value in expected.items() if key != "extraction_fields"
         }
         assert (MANUAL_FIELD.name, MANUAL_FIELD.value) in _field_values(item)
-    # 実体・関係情報の拡張は、主の検索と同じ利用者の範囲の中で広げる(文書名・分類・項目も残す)。
-    entity, graph = plans
-    assert entity.scopes and graph.scopes
-    assert all(scope == expected for scope in [*entity.scopes, *graph.scopes])
+    # 実体の拡張は、主の検索と同じ利用者の範囲の中で広げる(文書名・分類・項目も残す)。
+    entity = plans
+    assert entity.scopes
+    assert all(scope == expected for scope in entity.scopes)
     # 認可の範囲は、すべての検索と拡張で同じ監査 context の述語で当たる。
     assert oracle.contexts
     assert set(oracle.contexts) == {access}
-    assert set(entity.contexts) == set(graph.contexts) == {access}
+    assert set(entity.contexts) == {access}
     # その context で組む検索の SQL は、文書・分類・ナレッジベースの認可の述語を持つ。
     assert {"access_document_id_0", "access_category_name_0", "access_knowledge_base_id_0"} <= set(
         _access_binds(oracle.filters[-1])
@@ -263,21 +260,19 @@ def _reference_corpus() -> ContextReferenceOracle:
     return ContextReferenceOracle([anchor], [referenced])
 
 
-async def test_reference_entity_and_graph_expansion_keep_the_explicit_file_name(
-    access: AuditRequestContext, plans: tuple[PlanRecorder, PlanRecorder]
+async def test_reference_and_entity_expansion_keep_the_explicit_file_name(
+    access: AuditRequestContext, plans: PlanRecorder
 ) -> None:
-    """明示参照・実体・関係の補充は、全て明示範囲・基準日・認可を保つ(#4026)。"""
+    """明示参照・実体の補充は、全て明示範囲・基準日・認可を保つ(#4026)。"""
     oracle = _reference_corpus()
     engine = AnswerEngine(
         Settings(
             rag_reference_expansion_enabled=True,
             rag_entity_expansion_enabled=True,
-            rag_graph_expansion_enabled=True,
         ),
         oracle=cast(Any, oracle),
         genai=cast(Any, ReferenceGenAi()),
         entity_store=cast(Any, object()),
-        graph_store=cast(Any, object()),
     )
     filters = {
         "knowledge_base_id": "kb-a",
@@ -301,14 +296,13 @@ async def test_reference_entity_and_graph_expansion_keep_the_explicit_file_name(
     assert reference_filters
     kept = filters
     assert all(item == kept for item in reference_filters)
-    # 実体・関係情報の拡張は、利用者が指定した文書名・分類を残す。
-    entity, graph = plans
+    # 実体の拡張は、利用者が指定した文書名・分類を残す。
+    entity = plans
     assert entity.scopes == [filters]
-    assert graph.scopes == [filters]
     # 認可の範囲は、参照を辿るときも同じ監査 context の述語で当たる。
     assert oracle.contexts
     assert set(oracle.contexts) == {access}
-    assert set(entity.contexts) == set(graph.contexts) == {access}
+    assert set(entity.contexts) == {access}
 
 
 class ScopeRecordingCoverageOracle(CoverageOracle):
