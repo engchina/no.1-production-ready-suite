@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
+from pr_backend_core.observability.tracing import SpanDisplay, observed_span
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, _filter_id_values
 from app.clients.wiki_store import WikiStore
 from app.config import Settings, get_settings
+from app.rag.span_display import ANSWER_STEP_KIND
 from app.rag.wiki_jobs import compiler_fingerprint
 from app.rag.wiki_models import WikiFilePlan, WikiModel, WikiPage, WikiReadPlan, scoped_plan
 from app.rag.wiki_navigation import Handles, section_frontier
@@ -49,6 +52,17 @@ READ_PROMPT = """## Step 1: 質問と、選んだファイルの単位・章節�
 
 class WikiSourceChanged(RuntimeError):
     """案内を読んだ後に設定・所属・原文が変わった。"""
+
+
+@contextmanager
+def _stage(name: str) -> Iterator[None]:
+    """Wiki の経路の段を回答の工程と同じ span で記録する（時間のかかる段を見る。#5437）。"""
+    with observed_span(
+        "rag.engine.stage",
+        attributes={"pr.stage": name},
+        display=SpanDisplay(kind=ANSWER_STEP_KIND, params={"name": name}),
+    ):
+        yield
 
 
 @dataclass(frozen=True)
@@ -120,16 +134,19 @@ class WikiRetriever:
             raise WikiSourceChanged("Wiki の原文の保存版・所属・権限が変わりました。")
         return chunks
 
-    async def plan[T: WikiModel](self, prompt: str, data: Mapping[str, Any], schema: type[T]) -> T:
-        text = await async_call_with_model_purpose(
-            "document.read",
-            self.llm.generate,
-            "",
-            json.dumps(data, ensure_ascii=False),
-            system_prompt=prompt,
-            response_schema=schema.model_json_schema(),
-            response_schema_name="wiki_plan",
-        )
+    async def plan[T: WikiModel](
+        self, prompt: str, data: Mapping[str, Any], schema: type[T], *, stage: str = "Wiki: 選択"
+    ) -> T:
+        with _stage(stage):
+            text = await async_call_with_model_purpose(
+                "wiki.select",
+                self.llm.generate,
+                "",
+                json.dumps(data, ensure_ascii=False),
+                system_prompt=prompt,
+                response_schema=schema.model_json_schema(),
+                response_schema_name="wiki_plan",
+            )
         return schema.model_validate_json(text)
 
     async def search(
@@ -151,15 +168,20 @@ class WikiRetriever:
         self, question: str, profile_id: str | None, scope: dict[str, str]
     ) -> WikiSearchResult:
         opts, store, compiler = self.settings, self.store, self.compiler
-        catalog = await store.catalog(scope, compiler)
+        with _stage("Wiki: 目録の読み込み"):
+            catalog = await store.catalog(scope, compiler)
         if not catalog:
             return WikiSearchResult(trace={"status": "not_ready", "model_calls": 0})
-        vector = (await self.genai.embed([question], input_type="SEARCH_QUERY"))[0]
-        vector_pages, text_ranking = await asyncio.gather(
-            store.pages(scope, compiler, query_vector=vector, limit=opts.rag_wiki_candidates),
-            store.text_rankings(question, scope, compiler, limit=opts.rag_wiki_candidates),
-        )
-        text_pages = await store.pages(scope, compiler, unit_ids=[uid for _, uid in text_ranking])
+        with _stage("Wiki: 質問のベクトル化"):
+            vector = (await self.genai.embed([question], input_type="SEARCH_QUERY"))[0]
+        with _stage("Wiki: 案内の候補の検索"):
+            vector_pages, text_ranking = await asyncio.gather(
+                store.pages(scope, compiler, query_vector=vector, limit=opts.rag_wiki_candidates),
+                store.text_rankings(question, scope, compiler, limit=opts.rag_wiki_candidates),
+            )
+            text_pages = await store.pages(
+                scope, compiler, unit_ids=[uid for _, uid in text_ranking]
+            )
         by_id = {page.unit.unit_id: page for page in text_pages}
         candidates = interleave(
             [vector_pages, [by_id[uid] for _, uid in text_ranking if uid in by_id]],
@@ -194,6 +216,7 @@ class WikiRetriever:
                     )
                 },
             ),
+            stage="Wiki: 読むファイルの選択（1 回目のモデル）",
         )
         document_ids = handles.real(files.document_ids)
         unresolved = list(files.unresolved)
@@ -202,21 +225,22 @@ class WikiRetriever:
         if document_ids:
             # 選んだファイルの案内を 1 回で読み、検索表現ごとの順位は本文を読まずに
             # 1 回ずつ取る（#4986）。
-            file_pages, rankings = await asyncio.gather(
-                store.pages(scope, compiler, document_ids=document_ids),
-                asyncio.gather(
-                    *(
-                        store.text_rankings(
-                            text,
-                            scope,
-                            compiler,
-                            limit=opts.rag_wiki_candidates,
-                            document_ids=document_ids,
+            with _stage("Wiki: 選んだファイルの案内と順位の読み込み"):
+                file_pages, rankings = await asyncio.gather(
+                    store.pages(scope, compiler, document_ids=document_ids),
+                    asyncio.gather(
+                        *(
+                            store.text_rankings(
+                                text,
+                                scope,
+                                compiler,
+                                limit=opts.rag_wiki_candidates,
+                                document_ids=document_ids,
+                            )
+                            for text in [question, *files.search_expressions]
                         )
-                        for text in [question, *files.search_expressions]
-                    )
-                ),
-            )
+                    ),
+                )
             pages.update((page.unit.unit_id, page) for page in file_pages)
             per_document = [
                 interleave(
@@ -289,6 +313,7 @@ class WikiRetriever:
                         ),
                     },
                 ),
+                stage="Wiki: 読む単位と章節の選択（2 回目のモデル）",
             )
             unresolved.extend(choice.unresolved)
             # 選んだ各ファイルの最上位の単位は、章節の選択で失わない。
@@ -304,12 +329,15 @@ class WikiRetriever:
             if dep.unit_id not in selected
         ]
         missing = [uid for uid in dict.fromkeys(dependencies) if uid not in pages]
-        pages.update(
-            (page.unit.unit_id, page)
-            for page in await store.pages(scope, compiler, unit_ids=missing)
-        )
-        required = [pages[uid] for uid in dict.fromkeys([*selected, *dependencies]) if uid in pages]
-        originals = await self.current_sources(profile_id, scope, required)
+        with _stage("Wiki: 依存の案内と原文の読み込み"):
+            pages.update(
+                (page.unit.unit_id, page)
+                for page in await store.pages(scope, compiler, unit_ids=missing)
+            )
+            required = [
+                pages[uid] for uid in dict.fromkeys([*selected, *dependencies]) if uid in pages
+            ]
+            originals = await self.current_sources(profile_id, scope, required)
         identities = {row["document_id"]: row["source_identities"] for row in catalog}
         chunks = tuple(
             chunk.model_copy(
