@@ -249,6 +249,7 @@ class WikiStore:
         )
 
     async def status_counts(self, filters: dict[str, str]) -> dict[str, int]:
+        # 進んだ時間切れ（`interrupted`）は次の照合で自動で続くので、待機に数える（#5430）。
         where, binds = _oracle_retrieval_where(
             {key: value for key, value in filters.items() if key != "chunk_set_id"}
         )
@@ -256,6 +257,7 @@ class WikiStore:
             f"""SELECT state,COUNT(*) AS total FROM (
             SELECT DISTINCT c.document_id,CASE WHEN w.status='READY'
                 AND NOT ({CURRENT_WIKI_SOURCE_SQL}) THEN 'STALE'
+                WHEN w.status='FAILED' AND w.failure_code='interrupted' THEN 'QUEUED'
                 ELSE NVL(w.status,'NOT_BUILT') END AS state
             FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
             LEFT JOIN rag_wiki_documents w ON w.document_id=c.document_id

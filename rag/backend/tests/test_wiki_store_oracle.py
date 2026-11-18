@@ -110,6 +110,12 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     # 埋め込みが揃うまで公開しない。
     with pytest.raises(ValueError, match="未完了"):
         await store.finish(source, lease)
+    # 進んだ時間切れは自動で続くので待機に数え、再試行の要る失敗にしない（#5430）。
+    await store.finish(source, lease, failure_code="interrupted")
+    assert (await store.status_counts(filters)) == {"QUEUED": 1}
+    assert await store.enqueue(source)
+    lease = await store.claim(source, lease_seconds=300)
+    assert lease
     await store.checkpoint(source, lease, pages, vectors=[_EMBEDDING] * len(pages))
     await store.finish(source, lease)
     assert (await store.status_counts(filters))["READY"] == 1
