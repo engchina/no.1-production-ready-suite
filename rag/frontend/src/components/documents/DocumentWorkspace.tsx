@@ -25,7 +25,12 @@ import { useQuery } from "@tanstack/react-query";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ChunkDelimiterSelect } from "@/components/settings/ChunkDelimiterSelect";
-import { CategorySelectFields } from "./CategorySelectFields";
+import {
+  DocumentClassificationFields,
+  EMPTY_CLASSIFICATION,
+  classificationEffectiveToId,
+  classificationSummary,
+} from "./DocumentClassificationFields";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
 import { DocumentSummaryPanel } from "./DocumentSummaryPanel";
@@ -3563,15 +3568,6 @@ function DocumentKnowledgeBaseEditor({
 const DOCUMENT_KB_PICKER_ID = "document-knowledge-base-picker";
 const DOCUMENT_KB_REQUIRED_ERROR_ID = "document-knowledge-base-required-error";
 
-const EMPTY_CLASSIFICATION: DocumentClassification = {
-  large_category: null,
-  middle_category: null,
-  small_category: null,
-  effective_from: null,
-  effective_to: null,
-};
-const CLASSIFICATION_DATE_FIELDS = ["effective_from", "effective_to"] as const;
-
 /** 文書の分類と有効期間（rag_poc の「ファイル分類」）。検索の分類フィルタと基準日の絞り込みに使う。 */
 function DocumentClassificationEditor({
   documentId,
@@ -3591,15 +3587,11 @@ function DocumentClassificationEditor({
   useLeaveGuard(isDirty);
   // 期間の誤りは送る前に終了日の欄の直下で知らせる。backend の 422 は技術的な形（`body: Value error, …`）で返るため（#944）。
   const [periodError, setPeriodError] = useState<string | null>(null);
-  const update = (key: keyof DocumentClassification, value: string) => {
-    setForm((current) => ({ ...current, [key]: value || null }));
-    if (key === "effective_from" || key === "effective_to") setPeriodError(null);
-  };
   const onSave = () => {
     if (!isDirty) return;
     if (!classificationPeriodIsValid(form)) {
       setPeriodError(t("documents.classification.periodError"));
-      document.getElementById("document-classification-effective_to")?.focus();
+      document.getElementById(classificationEffectiveToId("document-classification"))?.focus();
       return;
     }
     save.mutate({ id: documentId, payload: form });
@@ -3621,48 +3613,16 @@ function DocumentClassificationEditor({
         data-testid="document-classification"
       >
         <p className="text-xs text-fg-muted">{t("documents.classification.description")}</p>
-        {/* 分類は「文書の分類」の一覧から選ぶ（必須ではない。#2131）。名前の段（md）、有効期間の開始日・終了日は
-            日付の段（sm）のペア（#1891）。 */}
-        <FormGrid>
-          <CategorySelectFields
-            idPrefix="document-classification"
-            labels={{
-              large_category: t("documents.classification.large_category"),
-              middle_category: t("documents.classification.middle_category"),
-              small_category: t("documents.classification.small_category"),
-            }}
-            values={{
-              large_category: form.large_category ?? "",
-              middle_category: form.middle_category ?? "",
-              small_category: form.small_category ?? "",
-            }}
-            disabled={save.isPending}
-            onChange={(values) =>
-              setForm((current) => ({
-                ...current,
-                large_category: values.large_category || null,
-                middle_category: values.middle_category || null,
-                small_category: values.small_category || null,
-              }))
-            }
-          />
-        </FormGrid>
-        <FormGrid>
-          {CLASSIFICATION_DATE_FIELDS.map((key) => (
-            <TextField
-              key={key}
-              id={`document-classification-${key}`}
-              width="sm"
-              type="date"
-              label={t(`documents.classification.${key}`)}
-              helper={key === "effective_to" ? t("documents.classification.effectiveToHelper") : undefined}
-              error={key === "effective_to" ? (periodError ?? undefined) : undefined}
-              value={form[key] ?? ""}
-              disabled={save.isPending}
-              onValueChange={(value) => update(key, value)}
-            />
-          ))}
-        </FormGrid>
+        <DocumentClassificationFields
+          idPrefix="document-classification"
+          value={form}
+          periodError={periodError}
+          disabled={save.isPending}
+          onChange={(next) => {
+            setForm(next);
+            setPeriodError(null);
+          }}
+        />
         <div className="flex flex-wrap items-center gap-3">
           <Button
             type="button"
@@ -3687,16 +3647,6 @@ function DocumentClassificationEditor({
       </Disclosure>
     </section>
   );
-}
-
-/** 閉じた見出しの下に出す保存済みの分類と有効期間（無ければ「未設定」）。 */
-function classificationSummary(value: DocumentClassification): string {
-  const categories = [value.large_category, value.middle_category, value.small_category].filter(Boolean).join(" / ");
-  const period =
-    value.effective_from || value.effective_to
-      ? t("documents.classification.periodSummary", { from: value.effective_from ?? "", to: value.effective_to ?? "" })
-      : "";
-  return [categories, period].filter(Boolean).join("・") || t("documents.classification.unset");
 }
 
 function idSetKey(ids: string[]) {

@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -29,6 +29,7 @@ from app.clients.oracle import (
     oracle_error_log_fields,
 )
 from app.schemas.document import (
+    DocumentClassification,
     FileStatus,
     IngestionJob,
     IngestionJobStatus,
@@ -271,6 +272,35 @@ async def test_create_document_creates_recipe_one_in_same_transaction() -> None:
     assert recipe_insert.parameters["recipe_id"] == _default_recipe_id(detail.id)
     assert recipe_insert.parameters["document_id"] == detail.id
     assert recipe_insert.parameters["status"] == FileStatus.UPLOADED.value
+    assert pool.connection.commits == 1
+
+
+async def test_create_document_inserts_classification_in_same_statement() -> None:
+    """分類と有効期間は文書行の INSERT に含めて同じ transaction で保存する(#5464)。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    detail = await client.create_document(
+        file_name="policy.txt",
+        object_storage_path="oci://bucket/policy.txt",
+        content_type="text/plain",
+        knowledge_base_ids=["kb-1"],
+        classification=DocumentClassification(
+            large_category="分類 A", effective_from=date(2026, 4, 1)
+        ),
+    )
+
+    document_insert = next(
+        call
+        for call in pool.connection.calls
+        if call.statement.lstrip().upper().startswith("INSERT INTO RAG_DOCUMENTS ")
+    )
+    assert json.loads(str(document_insert.parameters["classification"])) == {
+        "large_category": "分類 A",
+        "effective_from": "2026-04-01",
+    }
+    assert detail.classification is not None
+    assert detail.classification.large_category == "分類 A"
     assert pool.connection.commits == 1
 
 
