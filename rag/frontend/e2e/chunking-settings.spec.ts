@@ -596,7 +596,7 @@ test("分割符はスクロールバーとタッチ操作でも閉じず、選�
   await page.screenshot({ path: info.outputPath("delimiter-scrollbar-open.png") });
 });
 
-// #5451: 方式とパラメータを 1 枚のカードにまとめ、操作（保存・既定に戻す・変更を破棄）はパラメータの下に 1 組だけ、
+// #5451: 方式とパラメータを 1 枚のカードにまとめ、操作（保存 → 変更を破棄 → 既定に戻す）はパラメータの下に 1 組だけ、
 // 摘要は操作の直上に置く。「既定に戻す」は製品の既定をフォームに入れるだけで、保存で確定する。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
@@ -622,7 +622,7 @@ for (const viewport of [
     const actions = page.getByRole("group", { name: "文書分割の設定の操作" });
     await expect(actions).toHaveCount(1);
     await expect(card.getByRole("group", { name: "文書分割の設定の操作" })).toBeVisible();
-    await expect(actions.getByRole("button")).toHaveText(["保存", "既定に戻す", "変更を破棄"]);
+    await expect(actions.getByRole("button")).toHaveText(["保存", "変更を破棄", "既定に戻す"]);
 
     // 上から 方式の選択 → 区切りの線とパラメータ → 摘要 → 操作 の順。
     const top = async (locator: ReturnType<Page["locator"]>) => (await locator.boundingBox())?.y ?? Number.NaN;
