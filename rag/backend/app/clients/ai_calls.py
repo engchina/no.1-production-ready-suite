@@ -38,6 +38,7 @@ AiCallStage = Literal[
     "rerank",
     "evaluation",
     "guide_import",
+    "wiki_build",
 ]
 
 STAGE_LABELS: dict[str, str] = {
@@ -50,6 +51,7 @@ STAGE_LABELS: dict[str, str] = {
     "rerank": "リランク",
     "evaluation": "品質評価",
     "guide_import": "業務ガイドの下書きの作成",
+    "wiki_build": "Wiki の構築",
 }
 
 # 空の応答・件数の食い違いは「出力の形の誤り」（今の schema の再試行と同じく回数を絞って再試行）。

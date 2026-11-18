@@ -4,8 +4,10 @@ import asyncio
 from dataclasses import replace
 from typing import Any
 
+import httpx
 import pytest
 
+from app.clients import ai_calls
 from app.clients.wiki_store import WikiSnapshot
 from app.config import Settings
 from app.rag import wiki_jobs as module
@@ -210,4 +212,34 @@ async def test_timeout_without_progress_stops_until_retry(
     await jobs.reconcile()
     await asyncio.gather(*list(jobs.tasks.values()))
     assert len(calls) == 1 and store.state["failure_code"] == "timeout"
+    await jobs.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_transient_model_failure_is_retried_by_shared_caller(
+    setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, store, _ = setup
+    base, failures = Model(), [503]
+
+    async def no_wait(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(ai_calls, "_sleep", no_wait)
+
+    class FlakyModel:
+        async def generate(self, *args: Any, **kwargs: Any) -> str:
+            if failures:
+                request = httpx.Request("POST", "https://example.invalid/v1/responses")
+                raise httpx.HTTPStatusError(
+                    "合成の一時的な失敗",
+                    request=request,
+                    response=httpx.Response(failures.pop(), request=request),
+                )
+            return await base.generate(*args, **kwargs)
+
+    jobs.model_factory = lambda settings: FlakyModel()
+    await jobs.build("document-a", "owner-a")
+    assert store.state["status"] == "READY" and not failures
+    assert len(base.calls) == 1 and len(store.embedded) == 4
     await jobs.shutdown()
