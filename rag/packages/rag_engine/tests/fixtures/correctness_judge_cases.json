@@ -79,46 +79,51 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "ただし、この手順は版5以降の基盤にだけ適用できるため、お使いの基盤の版を確かめてください。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S3"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "ただし、この手順は版5以降の基盤にだけ適用できるため、お使いの基盤の版を確かめてください。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- 詳しい作業の一覧は別添Bに記載とされていますが、別添Bは資料に含まれていません。",
           "answer_ids": [
             "A4"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S4"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- 詳しい作業の一覧は別添Bに記載とされていますが、別添Bは資料に含まれていません。",
           "answer_ids": [
             "A4"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -258,54 +263,60 @@
           "answer_ids": [
             "A2"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "1. ログの設定画面で詳細レベルをDEBUGにします。",
           "answer_ids": [
             "A4"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "2. 接続の記録を開き、証明書の期限の警告を確かめます。",
           "answer_ids": [
             "A5"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- E2の原因と調べ方は、検索された資料からは確認できませんでした。",
           "answer_ids": [
             "A7"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "E2について必要な情報は提供できません。",
           "answer_ids": [
             "A8"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- 運用手引きC 第7章 キューの管理",
           "answer_ids": [
             "A10"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -431,10 +442,11 @@
           "answer_ids": [
             "A2"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。 - 診断ログを取得する画面と操作",
@@ -442,16 +454,18 @@
             "A3",
             "A9"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "本質問の条件への該当は確認できていません。",
           "answer_ids": [
             "A6"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -561,34 +575,38 @@
           "answer_ids": [
             "A2"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。",
           "answer_ids": [
             "A3"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "本質問の条件への該当は確認できていません。",
           "answer_ids": [
             "A6"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- 「ログの表示画面では、表示する期間と種類を選んで［表示］を押す。」",
           "answer_ids": [
             "A7"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -671,30 +689,33 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "金額は担当窓口に確認してください。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- 保守の料金",
           "answer_ids": [
             "A4"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -752,10 +773,11 @@
             "A1",
             "A2"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -854,24 +876,27 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- E1の原因と調べ方",
           "answer_ids": [
             "A3"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- E2の原因と調べ方",
           "answer_ids": [
             "A4"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -986,24 +1011,27 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- E1の原因",
           "answer_ids": [
             "A3"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- E2の原因",
           "answer_ids": [
             "A4"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1122,20 +1150,22 @@
           "answer_ids": [
             "A2"
           ],
-          "verdict": "contradicted",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": false
         },
         {
           "claim": "不要なファイルを消してください。",
           "answer_ids": [
             "A3"
           ],
-          "verdict": "contradicted",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": false
         },
         {
           "claim": "資料から確認できなかった事項 - E2の原因と調べ方",
@@ -1143,8 +1173,9 @@
             "A4",
             "A5"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1254,20 +1285,22 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "この手順は版4以前の基盤にだけ適用できます。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "contradicted",
           "standard_ids": [
             "S3"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": false
         },
         {
           "claim": "資料から確認できなかった事項 - 詳しい作業の一覧",
@@ -1275,8 +1308,9 @@
             "A3",
             "A4"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1356,20 +1390,22 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "次に検証用の1台に適用して動作を確かめ、問題が無ければ残りの機器へ数台ずつ広げます。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1449,26 +1485,29 @@
           "answer_ids": [
             "A2"
           ],
-          "verdict": "contradicted",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": false
         },
         {
           "claim": "- 停止時間を短くするため、すべての機器へ一度に適用します。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "- 影響範囲を確認する方法",
           "answer_ids": [
             "A4"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1540,18 +1579,20 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "原因と対処を記した本文が資料に含まれていないため、共通の解決策としては確定できません。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1623,24 +1664,27 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "原因・対処の本文が資料に無く、共通の解決策として確定できないため、具体的な対処は提案できません。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         },
         {
           "claim": "原因・対処の本文が資料に無く、共通の解決策として確定できないため、具体的な対処は提案できません。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1697,10 +1741,11 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "supported",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
@@ -1772,28 +1817,31 @@
           "answer_ids": [
             "A1"
           ],
-          "verdict": "contradicted",
           "standard_ids": [
             "S1"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": false
         },
         {
           "claim": "変更は通常の稼働中でもできます。",
           "answer_ids": [
             "A2"
           ],
-          "verdict": "contradicted",
           "standard_ids": [
             "S2"
-          ]
+          ],
+          "states_source_gap": false,
+          "consistent": false
         },
         {
           "claim": "上限を超えたときの動作は資料では確認できませんでした。",
           "answer_ids": [
             "A3"
           ],
-          "verdict": "not_in_standard",
-          "standard_ids": []
+          "standard_ids": [],
+          "states_source_gap": false,
+          "consistent": true
         }
       ],
       "points": [
