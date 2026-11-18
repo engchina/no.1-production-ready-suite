@@ -685,6 +685,19 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     assert body["delimiter"] == ["\\n---\\n"]
     assert body["context_header_enabled"] is False
     assert body["config_source"] == "runtime"
+    # 製品の既定は Settings の項目の既定値で、現在の値(.env)に左右されない(#5451)。
+    assert body["builtin"] == {
+        "strategy": "small_to_big",
+        "chunk_size": 800,
+        "overlap": 120,
+        "min_chars": 120,
+        "delimiter": ["<<<JSONL_RECORD_BOUNDARY>>>"],
+        "chunk_child_target_chars": 1000,
+        "chunk_table_child_target_chars": 3000,
+        "chunk_parent_target_chars": 6000,
+        "chunk_parent_max_pages": 3,
+        "chunk_parent_max_children": 12,
+    }
     names = [item["name"] for item in body["strategies"]]
     # 親子階層（small-to-big）は、削除した親子階層の位置(3 番目)に並ぶ(#271)。
     assert names == [

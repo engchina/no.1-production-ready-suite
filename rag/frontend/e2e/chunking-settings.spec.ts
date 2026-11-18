@@ -335,6 +335,16 @@ const SMALL_TO_BIG_DEFAULTS = {
   chunk_parent_max_children: 12,
 };
 
+// 製品の既定（backend の Settings の項目の既定値。「既定に戻す」がフォームに入れる。#5451）。
+const CHUNKING_BUILTIN = {
+  strategy: "small_to_big",
+  chunk_size: 800,
+  overlap: 120,
+  min_chars: 120,
+  delimiter: ["<<<JSONL_RECORD_BOUNDARY>>>"],
+  ...SMALL_TO_BIG_DEFAULTS,
+};
+
 type ChunkingOverrides = {
   strategy?: string;
   chunk_size?: number;
@@ -384,6 +394,7 @@ function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
         selected: spec.name === strategy,
       })),
       config_source: "runtime",
+      builtin: CHUNKING_BUILTIN,
     },
     error_messages: [],
     warning_messages: [],
@@ -584,3 +595,70 @@ test("分割符はスクロールバーとタッチ操作でも閉じず、選�
   await exerciseSelectScrollbar(page, list, Boolean(info.project.use.isMobile));
   await page.screenshot({ path: info.outputPath("delimiter-scrollbar-open.png") });
 });
+
+// #5451: 方式とパラメータを 1 枚のカードにまとめ、操作（保存・既定に戻す・変更を破棄）はパラメータの下に 1 組だけ、
+// 摘要は操作の直上に置く。「既定に戻す」は製品の既定をフォームに入れるだけで、保存で確定する。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`文書分割の設定は 1 枚のカードで、既定に戻すは保存で確定する（#5451, ${viewport.name}）`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let savedPayload: unknown = null;
+    await page.route("**/api/settings/chunking", async (route) => {
+      if (route.request().method() === "PATCH") {
+        savedPayload = route.request().postDataJSON();
+        await route.fulfill({ json: chunkingEnvelope(CHUNKING_BUILTIN) });
+        return;
+      }
+      await route.fulfill({ json: chunkingEnvelope() });
+    });
+    await page.goto("/settings/chunking");
+
+    const card = page.getByTestId("settings-chunking-card");
+    await expect(page.getByTestId("settings-chunking-card")).toHaveCount(1);
+    await expect(card.getByRole("heading", { name: "文書分割方式" })).toBeVisible();
+    await expect(card.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
+    const actions = page.getByRole("group", { name: "文書分割の設定の操作" });
+    await expect(actions).toHaveCount(1);
+    await expect(card.getByRole("group", { name: "文書分割の設定の操作" })).toBeVisible();
+    await expect(actions.getByRole("button")).toHaveText(["保存", "既定に戻す", "変更を破棄"]);
+
+    // 上から 方式の選択 → 区切りの線とパラメータ → 摘要 → 操作 の順。
+    const top = async (locator: ReturnType<Page["locator"]>) => (await locator.boundingBox())?.y ?? Number.NaN;
+    const radios = await top(page.getByRole("radiogroup", { name: "分割方式" }));
+    const params = await top(card.getByRole("heading", { name: "戦略別パラメータ" }));
+    const lastField = await top(page.getByLabel("最小 chunk 文字数"));
+    const summary = await top(card.locator("dl"));
+    const actionsTop = await top(actions);
+    expect(radios).toBeLessThan(params);
+    expect(params).toBeLessThan(lastField);
+    expect(lastField).toBeLessThan(summary);
+    expect(summary).toBeLessThan(actionsTop);
+    await expectNoPageOverflow(page);
+    await card.screenshot({ path: testInfo.outputPath(`chunking-card-${viewport.name}.png`) });
+
+    // 既定に戻す: 製品の既定（親子階層とその推奨のパラメータ）を入れるだけで、保存しない。
+    const restore = actions.getByRole("button", { name: "既定に戻す" });
+    await restore.click();
+    await expect(page.getByRole("radio", { name: /親子階層（small-to-big）/ })).toBeChecked();
+    await expect(page.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("1000");
+    await expect(page.getByRole("spinbutton", { name: "親チャンク最大 child 数", exact: true })).toHaveValue("12");
+    await expect(actions).toContainText("未保存の変更があります。");
+    await expect(restore).toBeDisabled();
+    expect(savedPayload).toBeNull();
+
+    // 変更を破棄で保存済みの値へ戻り、既定に戻すも再び押せる。
+    await actions.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(page.getByRole("radio", { name: /^構造認識/ })).toBeChecked();
+    await expect(restore).toBeEnabled();
+
+    // 保存で確定する。
+    await restore.click();
+    await actions.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
+    expect(savedPayload).toEqual(CHUNKING_BUILTIN);
+    await expect(restore).toBeDisabled();
+    await expect(actions.getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+}

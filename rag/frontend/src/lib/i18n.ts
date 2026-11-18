@@ -1226,6 +1226,7 @@ export const ja = {
   "settings.chunking.actions.label": "文書分割の設定の操作",
   "settings.chunking.actions.saved": "文書分割の設定を保存しました。",
   "settings.chunking.actions.reset": "変更を破棄",
+  "settings.chunking.actions.restoreDefaults": "既定に戻す",
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
   "settings.chunking.loadError": "文書分割の設定を取得できませんでした。",
   "settings.chunking.saveError": "文書分割の設定を保存できませんでした。",

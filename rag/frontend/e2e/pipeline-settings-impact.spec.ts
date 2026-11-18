@@ -93,6 +93,18 @@ async function mockChunking(page: Page) {
           { name: "structure_aware", origin: "x", recommended_for: ["pdf"], selected: true },
         ],
         config_source: "runtime",
+        builtin: {
+          strategy: "small_to_big",
+          chunk_size: 800,
+          overlap: 120,
+          min_chars: 120,
+          delimiter: ["<<<JSONL_RECORD_BOUNDARY>>>"],
+          chunk_child_target_chars: 1000,
+          chunk_table_child_target_chars: 3000,
+          chunk_parent_target_chars: 6000,
+          chunk_parent_max_pages: 3,
+          chunk_parent_max_children: 12,
+        },
       }),
     })
   );
