@@ -1,10 +1,10 @@
-import { Banner, Button, Card, CardContent, CardHeader, CardTitle, Disclosure, FormSkeleton, FormStatus, PagedDataTable, PAGE_SIZE_OPTIONS, SaveErrorBanner, StatusBadge, Switch, TimedLoadingState, type StatusVariant } from "@production-ready/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Banner, Button, Card, CardContent, CardHeader, CardTitle, DataTable, Disclosure, FormSkeleton, FormStatus, INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS, OffsetPagination, PAGE_SIZE_OPTIONS, SaveErrorBanner, StatusBadge, Switch, TimedLoadingState, type StatusVariant } from "@production-ready/ui";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, CircleCheck, Clock, FileText, History, Hourglass, RotateCcw, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
-import { api, type KnowledgeBaseWikiData, type KnowledgeBaseWikiDocument } from "@/lib/api";
+import { api, type KnowledgeBaseWikiData, type KnowledgeBaseWikiDocument, type Page } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useClientListPaging } from "@/lib/list-paging";
@@ -36,18 +36,23 @@ function failureReason(code: string | null | undefined): string {
 /** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）。本文は表示しない。 */
 export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: boolean }) {
   const cache = useQueryClient();
-  const key = ["knowledge-base-wiki", id];
+  // 文書ごとの状態は server 側で名前の順にページングする。表示件数とページは KB ごとに保つ。
+  const paging = useClientListPaging("knowledgeBases.wikiDocumentsPaging", id);
+  const limit = paging.pageSize;
+  const offset = (paging.page - 1) * limit;
+  const key = ["knowledge-base-wiki", id, offset, limit];
   const query = useQuery({
     queryKey: key,
-    queryFn: () => api.getKnowledgeBaseWiki(id),
+    queryFn: () => api.getKnowledgeBaseWiki(id, offset, limit),
+    placeholderData: keepPreviousData,
     // 構築は背景で進むので、有効な間だけ状態を読み直す。
     refetchInterval: (current) => (current.state.data?.enabled ? 5000 : false),
   });
   const [retryStatus, setRetryStatus] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
   const saved = (data: KnowledgeBaseWikiData) => cache.setQueryData(key, data);
-  const update = useMutation({ mutationFn: (enabled: boolean) => api.setKnowledgeBaseWiki(id, enabled), onSuccess: saved });
+  const update = useMutation({ mutationFn: (enabled: boolean) => api.setKnowledgeBaseWiki(id, enabled, offset, limit), onSuccess: saved });
   const retry = useMutation({
-    mutationFn: () => api.retryKnowledgeBaseWiki(id),
+    mutationFn: () => api.retryKnowledgeBaseWiki(id, offset, limit),
     // 応答は待機へ戻した後の状態。押した直後に一覧と件数が変わり、結果を起点のボタンの直下に出す。
     onSuccess: (data, failed: number) => {
       saved(data);
@@ -57,10 +62,9 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
   });
   const data = query.data;
   const counts = data?.counts ?? {};
-  const documents = data?.documents ?? [];
   const failed = counts.FAILED ?? 0;
   const ready = counts.READY ?? 0;
-  const total = documents.length;
+  const total = data?.documents?.total ?? 0;
   const blocked = data?.blocked_reason === "actor_unavailable";
   const showRetry = Boolean(data?.enabled) && (failed > 0 || blocked || retry.isPending || retryStatus != null);
   const progressLabel = failed > 0 ? t("wiki.progressFailed", { ready, total, failed }) : t("wiki.progress", { ready, total });
@@ -95,7 +99,7 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
           </div>
           {retryStatus ? <FormStatus tone={retryStatus.tone} message={retryStatus.message} /> : null}
         </div> : null}
-        {total > 0 ? <WikiDocuments id={id} documents={documents} failed={failed} expanded={failed > 0 || retryStatus != null} /> : null}
+        {total > 0 && data.documents ? <WikiDocuments page={data.documents} paging={paging} expanded={failed > 0 || retryStatus != null} /> : null}
         <SaveErrorBanner message={update.error ? t("wiki.saveError") : null} attemptKey={update.submittedAt} />
       </> : null}
     </CardContent>
@@ -103,38 +107,46 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
 }
 
 /**
- * 文書ごとの構築状態。失敗があるとき・再試行の結果を出しているときは開いた状態で出す（文書解析の段の一覧と同じ。
- * 再試行で失敗が待機に変わっても畳まず、変わった行を見せ続ける）。
+ * 文書ごとの構築状態。失敗があるとき・再試行の結果を出しているときは開いた状態で出す（再試行で失敗が待機に
+ * 変わっても畳まず、変わった行を見せ続ける）。表は状態色の面に置かず、失敗は行の状態と理由・進捗の件数で示す。
  */
-function WikiDocuments({ id, documents, failed, expanded }: { id: string; documents: KnowledgeBaseWikiDocument[]; failed: number; expanded: boolean }) {
-  const paging = useClientListPaging("knowledgeBases.wikiDocumentsPaging", id);
+function WikiDocuments({ page, paging, expanded }: { page: Page<KnowledgeBaseWikiDocument>; paging: ReturnType<typeof useClientListPaging>; expanded: boolean }) {
   return <Disclosure
     key={expanded ? "expanded" : "collapsed"}
     defaultOpen={expanded}
-    tone={failed > 0 ? "danger" : "neutral"}
     surface="sunken"
     icon={FileText}
     summary={t("wiki.documents.title")}
     description={t("wiki.documents.hint")}
-    meta={<span className="tnum text-xs text-fg-muted">{t("wiki.documents.count", { count: documents.length })}</span>}
+    meta={<span className="tnum text-xs text-fg-muted">{t("wiki.documents.count", { count: page.total })}</span>}
     data-testid="knowledge-base-wiki-documents"
   >
-    <PagedDataTable<KnowledgeBaseWikiDocument>
-      viewport="bounded"
-      paginationLabels={paginationLabels()}
-      {...paging}
-      pageSizeOptions={PAGE_SIZE_OPTIONS}
-      paginationAriaLabel={t("wiki.documents.pagination")}
-      rows={documents}
-      getRowKey={(row) => row.document_id}
-      ariaLabel={t("wiki.documents.title")}
-      rowProps={() => ({ "data-testid": "knowledge-base-wiki-document" })}
-      columns={[
-        { key: "file_name", header: t("wiki.documents.column.file"), rowHeader: true, className: "min-w-[10rem] break-all font-medium text-fg", render: (row) => row.file_name || row.document_id },
-        { key: "status", header: t("wiki.documents.column.status"), className: "whitespace-nowrap", render: (row) => <WikiStatusBadge status={row.status} /> },
-        { key: "failure", header: t("wiki.documents.column.failure"), className: "min-w-[12rem] break-words text-xs text-fg-muted", render: (row) => failureReason(row.failure_code) },
-        { key: "updated_at", header: t("wiki.documents.column.updated"), className: "tnum whitespace-nowrap text-xs text-fg-muted", render: (row) => (row.updated_at ? formatDateTime(row.updated_at) : "—") },
-      ]}
-    />
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2">
+      <DataTable<KnowledgeBaseWikiDocument>
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        rows={page.items}
+        getRowKey={(row) => row.document_id}
+        ariaLabel={t("wiki.documents.title")}
+        rowProps={() => ({ "data-testid": "knowledge-base-wiki-document", className: INFORMATION_TABLE_ROW_CLASS })}
+        columns={[
+          { key: "file_name", header: t("wiki.documents.column.file"), rowHeader: true, className: "min-w-[10rem] break-all font-medium text-fg", render: (row) => row.file_name || row.document_id },
+          { key: "status", header: t("wiki.documents.column.status"), className: "whitespace-nowrap", render: (row) => <WikiStatusBadge status={row.status} /> },
+          { key: "failure", header: t("wiki.documents.column.failure"), className: "min-w-[12rem] break-words text-xs text-fg-muted", render: (row) => failureReason(row.failure_code) },
+          { key: "updated_at", header: t("wiki.documents.column.updated"), className: "tnum whitespace-nowrap text-xs text-fg-muted", render: (row) => (row.updated_at ? formatDateTime(row.updated_at) : "—") },
+        ]}
+      />
+      <OffsetPagination
+        total={page.total}
+        offset={page.offset}
+        limit={page.limit}
+        count={page.items.length}
+        onPageChange={(next) => paging.onPageChange(next)}
+        onPageSizeChange={paging.onPageSizeChange}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        ariaLabel={t("wiki.documents.pagination")}
+        labels={paginationLabels()}
+      />
+    </div>
   </Disclosure>;
 }

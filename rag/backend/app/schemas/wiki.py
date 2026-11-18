@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.schemas import Page
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
@@ -22,7 +23,8 @@ class KnowledgeBaseWikiDocument(BaseModel):
 
 class KnowledgeBaseWikiData(BaseModel):
     enabled: bool
+    # 状態ごとの件数は KB 全体、documents は名前の順の 1 ページ分（#5466）。
     counts: dict[str, int] = Field(default_factory=dict)
-    documents: list[KnowledgeBaseWikiDocument] = Field(default_factory=list)
+    documents: Page[KnowledgeBaseWikiDocument]
     # 構築が進まない理由。`actor_unavailable` は構築を指定した利用者が権限を失った（#5466）。
     blocked_reason: Literal["actor_unavailable"] | None = None

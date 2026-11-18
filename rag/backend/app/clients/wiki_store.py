@@ -248,14 +248,14 @@ class WikiStore:
             {"id": document_id},
         )
 
-    async def document_statuses(self, filters: dict[str, str]) -> list[dict[str, Any]]:
-        """所属文書ごとの構築状態。失敗の理由は再試行の要る失敗だけに付ける（#5466）。"""
+    @staticmethod
+    def _document_states_sql(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
+        """所属文書ごとの構築状態の行（文書の一覧と件数で同じ判定を使う）。"""
         # 進んだ時間切れ（`interrupted`）は次の照合で自動で続くので、待機に数える（#5430）。
-        # ponytail: KB の全文書を 1 回で返す。数千件で重くなったら server 側でページングする。
         where, binds = _oracle_retrieval_where(
             {key: value for key, value in filters.items() if key != "chunk_set_id"}
         )
-        rows = await self.oracle._fetch_all(
+        return (
             f"""SELECT DISTINCT c.document_id,d.file_name,CASE WHEN w.status='READY'
                 AND NOT ({CURRENT_WIKI_SOURCE_SQL}) THEN 'STALE'
                 WHEN w.status='FAILED' AND w.failure_code='interrupted' THEN 'QUEUED'
@@ -264,8 +264,21 @@ class WikiStore:
                 THEN w.failure_code END AS failure_code,w.updated_at
             FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
             LEFT JOIN rag_wiki_documents w ON w.document_id=c.document_id
-            WHERE {where} ORDER BY d.file_name,c.document_id""",
+            WHERE {where}""",
             binds,
+        )
+
+    async def document_statuses(
+        self, filters: dict[str, str], *, limit: int | None = None, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """所属文書ごとの構築状態を名前の順に。失敗の理由は再試行の要る失敗だけに付ける（#5466）。"""
+        states, binds = self._document_states_sql(filters)
+        page = ""
+        if limit is not None:
+            page = " OFFSET :page_offset ROWS FETCH NEXT :page_limit ROWS ONLY"
+            binds = {**binds, "page_offset": offset, "page_limit": limit}
+        rows = await self.oracle._fetch_all(
+            f"SELECT * FROM ({states}) ORDER BY file_name,document_id{page}", binds
         )
         return [
             {
@@ -277,6 +290,14 @@ class WikiStore:
             }
             for row in rows
         ]
+
+    async def status_counts(self, filters: dict[str, str]) -> dict[str, int]:
+        """所属文書の構築状態ごとの件数（ページに関わらず KB 全体。#5466）。"""
+        states, binds = self._document_states_sql(filters)
+        rows = await self.oracle._fetch_all(
+            f"SELECT state,COUNT(*) AS n FROM ({states}) GROUP BY state", binds
+        )
+        return {str(row["state"]): int(str(row["n"])) for row in rows}
 
     async def requeue_failed(self, filters: dict[str, str]) -> None:
         """再試行の要る失敗を待機へ戻す。構築は次の照合が進める（#5466）。"""
