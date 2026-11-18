@@ -170,6 +170,8 @@ export interface ProcessingIndicatorProps extends UseOperationTimingOptions {
   className?: string;
   testId?: string;
   showSlowMessage?: boolean;
+  /** 遅延の案内の行を最初から予約する（既定 true。#902）。false なら遅延したときだけ行を足す（#5435）。 */
+  reserveSlowLine?: boolean;
   /** 遅延案内を live region にするか。別の status が状態を担う場合は false。 */
   announceSlow?: boolean;
   /**
@@ -201,6 +203,7 @@ export function ProcessingIndicator({
   className = "",
   testId,
   showSlowMessage = true,
+  reserveSlowLine = true,
   announceSlow = true,
   activityIcon = "spinner",
   announceActivity = true,
@@ -258,7 +261,7 @@ export function ProcessingIndicator({
               予約する（#902）。後から行を足すと領域が 1 行高くなり、下の内容を押し下げる。role="status" は遅延してから付ける（予約の行を status に
               しない。処理中の見出しの status と 2 つにならないよう、従来どおり遅延の案内だけを status にする）。
             */}
-            {showSlowLine ? (
+            {showSlowLine && (slow || reserveSlowLine) ? (
               <span
                 className="min-w-0 break-words text-xs font-normal leading-5 text-fg-muted"
                 role={announceSlow && slow ? "status" : undefined}
@@ -326,6 +329,8 @@ export interface TimedLoadingStateProps {
    * 置かず 1 行の高さにする（経過時間は出す。#5415）。
    */
   showSlowMessage?: boolean;
+  /** 遅延の案内の行を最初から予約する（既定 true）。残りの高さを占める領域の中では false にできる（#5435）。 */
+  reserveSlowLine?: boolean;
 }
 
 /**
@@ -346,6 +351,7 @@ export function TimedLoadingState({
   activityIcon,
   labels,
   showSlowMessage = true,
+  reserveSlowLine = true,
 }: TimedLoadingStateProps) {
   const effectiveActivityIcon = activityIcon ?? (placement === "result" ? "none" : "spinner");
 
@@ -368,6 +374,7 @@ export function TimedLoadingState({
         activityIcon={effectiveActivityIcon}
         labels={labels}
         showSlowMessage={showSlowMessage}
+        reserveSlowLine={reserveSlowLine}
         surface="plain"
       />
       {children}

@@ -20,7 +20,10 @@ describe("EvidenceReader", () => {
     await act(async () => root.render(<EvidenceReader readingKey="d1:c1" loadWindow={load} enabled={false} />));
     expect(load).not.toHaveBeenCalled();
     await act(async () => root.render(<EvidenceReader readingKey="d1:c1" loadWindow={load} />));
-    expect(host.querySelector('[data-testid="evidence-reader-loading"]')).not.toBeNull();
+    // 最初の読み込みは本文の領域の中で、遅延の案内の行を予約しない（#5435）。
+    const loading = host.querySelector('[data-testid="evidence-reader-loading"]');
+    expect(loading?.closest('[data-testid="evidence-reader-content"]')).not.toBeNull();
+    expect(loading?.querySelector("[data-processing-slow]")).toBeNull();
     await act(async () => root.unmount());
     expect(signal?.aborted).toBe(true); host.remove();
   });
