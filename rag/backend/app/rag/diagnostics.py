@@ -12,7 +12,7 @@ from app.schemas.common import JsonValue
 from app.schemas.search import SearchDiagnostics, SearchRequest
 
 # 回答の経路。grounded は根拠付き回答、retrieval_only は検索だけ
-# (KB の検索テスト・レシピの検索比較。#593)、blocked は質問の安全チェックで止めたもの。
+# (レシピの検索比較。#593)、blocked は質問の安全チェックで止めたもの。
 RetrievalPath = Literal["grounded", "retrieval_only", "blocked"]
 
 

@@ -1027,7 +1027,7 @@ test("lease の期限を過ぎた操作は回さず、止まった可能性を�
   expect(requests).toBe(1);
 });
 
-test("HNSW 索引の vector memory の見込みの必要量と今の空きを出す（#5278）", { tag: "@responsive" }, async ({ page }) => {
+test("HNSW 索引の vector memory の見込みの必要量・今の空き・使用中を上段のカードに出す（#5278・#5473）", { tag: "@responsive" }, async ({ page }) => {
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, {
       ...systemTables("ready"),
@@ -1053,10 +1053,7 @@ test("HNSW 索引の vector memory の見込みの必要量と今の空きを出
   );
   await page.goto("/settings/system-tables");
   const section = page.getByTestId("system-tables-vector-memory");
-  await expect(section).toContainText("IX_NL2SQL_ONT_NODE_EMBED");
-  await expect(section).toContainText("見込みの必要量12.0 MB");
-  await expect(section).toContainText("今の空き48.0 MB");
-  await expect(section).toContainText("使用中10.0 MB");
-  await expect(section).not.toContainText("見込みの必要量が今の空きを超えています。");
+  // 上段の数値のカードの行に、索引名と 3 つの値のカードとして並ぶ（#5473）。
+  await expect(section).toHaveText("IX_NL2SQL_ONT_NODE_EMBED" + "12.0 MB / 48.0 MB / 10.0 MB" + "見込みの必要量 / 今の空き / 使用中" + "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。");
   await expectNoPageHorizontalOverflow(page);
 });

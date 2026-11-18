@@ -137,7 +137,7 @@ type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[Non
 
 # 回答の記録の保存の工程（#2342）。失敗しても回答は返し、処理の経過で失敗にする。
 ANSWER_RECORD_SAVE_STAGE: StorageFailureStep = "answer_record_save"
-# 回答を作らない RAG 検索の全体の工程（質問の理解から根拠の検索まで。#3506）。KB の検索テストの
+# 回答を作らない RAG 検索の全体の工程（質問の理解から根拠の検索まで。#3506）。レシピの検索比較の
 # 「retrieval」（回答フローを通らない検索だけ）とは分ける。
 EVIDENCE_STAGE = "evidence"
 # 会話の履歴から引き継ぐ確認済みの前提の上限。
@@ -1001,7 +1001,7 @@ class RagPipeline:
     ) -> SearchResponse:
         """回答と同じ流れで根拠を集め、回答を作らずに引用として返す(#593・#5173)。
 
-        KB の検索テストとレシピの検索比較が使う(``SearchRequest.retrieval_only``)。回答の LLM を
+        レシピの検索比較が使う(``SearchRequest.retrieval_only``)。回答の LLM を
         呼ばず、回答記録・質問履歴も保存しない。回答側の安全チェックは回答が無いので行わない。
         """
         if request.query != query_guardrail.sanitized_text:
