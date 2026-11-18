@@ -308,6 +308,7 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
   const autoScroll = useChatAutoScroll({
     contentKey: `${lastRunId ?? ""}:${lastRunStatus ?? ""}:${runs.at(-1)?.steps.length ?? 0}:${pending?.localId ?? ""}:${pending?.status ?? ""}`,
     resetKey: `${selectedAgentId}:${threadId ?? ""}`,
+    empty: runs.length === 0 && !pending,
   });
 
   // 評価を保存した Run を、会話の取り直しを待たずに差し替える（#774）。操作の応答の Run には見ている利用者から見た

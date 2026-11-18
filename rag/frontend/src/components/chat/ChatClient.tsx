@@ -884,6 +884,8 @@ export function ChatClient() {
     // 前提の読み込み中は会話の欄の先頭に文言と経過時間を出すので、末尾へ送らない（狭い画面で先頭が隠れる）。
     // 読み終えたら末尾から読み始める（#4649）。
     enabled: !(prerequisitesLoading && !liveTurn),
+    // 空の状態（プロファイル未選択・往復なし）は先頭から見せる（#5397）。
+    empty: !searchAnswerProfileId || (persistedMessages.length === 0 && !liveTurn && !pendingChoice),
   });
 
   useEffect(() => {

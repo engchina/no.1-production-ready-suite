@@ -23,8 +23,8 @@ function stubMetrics(element: HTMLDivElement) {
   }) as typeof element.scrollTo;
 }
 
-function Harness({ contentKey, resetKey }: { contentKey: unknown; resetKey?: unknown }) {
-  api = useChatAutoScroll({ contentKey, resetKey });
+function Harness({ contentKey, resetKey, empty }: { contentKey: unknown; resetKey?: unknown; empty?: boolean }) {
+  api = useChatAutoScroll({ contentKey, resetKey, empty });
   return (
     <div
       ref={(element) => {
@@ -60,8 +60,8 @@ function resize() {
   });
 }
 
-function render(contentKey: unknown, resetKey?: unknown) {
-  act(() => root.render(<Harness contentKey={contentKey} resetKey={resetKey} />));
+function render(contentKey: unknown, resetKey?: unknown, empty?: boolean) {
+  act(() => root.render(<Harness contentKey={contentKey} resetKey={resetKey} empty={empty} />));
 }
 
 function userScrollTo(top: number) {
@@ -88,6 +88,26 @@ afterEach(() => {
 });
 
 describe("useChatAutoScroll", () => {
+  it("空の状態は会話の欄より高くても末尾へ送らず先頭を見せ、会話が始まったら末尾から読む (#5397)", () => {
+    // 入力欄の下の通知で会話の欄が低くなり、空の状態の方が高い（内容 1000・欄 400）。
+    render(0, "c1", true);
+    expect(log!.scrollTop).toBe(0);
+    contentHeight = 1100;
+    resize();
+    render("profile-changed", "c1", true);
+    expect(log!.scrollTop).toBe(0);
+    expect(api.showLatest).toBe(false);
+    render(1, "c1", false);
+    expect(log!.scrollTop).toBe(700);
+  });
+
+  it("会話を変えて空の状態に戻ったら先頭へ戻す (#5397)", () => {
+    render(1, "c1", false);
+    expect(log!.scrollTop).toBe(600);
+    render(0, "c2", true);
+    expect(log!.scrollTop).toBe(0);
+  });
+
   it("会話を開くと末尾から読み始め、末尾を見ている間は新しい内容に合わせて末尾へ追う", () => {
     render(1, "c1");
     expect(log!.scrollTop).toBe(600);

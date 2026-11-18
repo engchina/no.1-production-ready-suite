@@ -3780,6 +3780,7 @@ const autoScroll = useChatAutoScroll({
   contentKey: `${turns.length}:${lastStatus}:${pending?.localId ?? ""}`,  // 内容が変わったことを表す値
   resetKey: `${targetId}:${conversationId}`,                              // 会話が変わったら末尾から
   enabled: active,                                                         // keep-alive で隠れている間は止める
+  empty: turns.length === 0 && !pending,                                   // 空の状態の間は先頭を見せる（#5397）
 });
 
 function submit() {
@@ -3801,6 +3802,7 @@ function submit() {
 | ボタンは `role="log"` の外に置く | 会話の読み上げにボタンの文言を混ぜない |
 | 会話を開いた・変えた（`resetKey`）・画面に戻ったときと送信の瞬間は、上を読んでいても末尾へ | 新しい会話は最新から読む。送った質問がすぐ見える（messaging.md §11.1） |
 | 動かすのは会話の欄の `scrollTo` だけ | 祖先（ページ）を動かさない（README §4「AppShell」） |
+| 会話が無く空の状態を出している間（`empty`）は末尾へ送らず先頭を見せ、高さが変わっても追わない。会話が始まったら末尾から（#5397） | 狭い画面で入力欄の下の通知が会話の欄を低くすると、空の状態の方が高くなり、末尾へ送ると上端（アイコン・見出し）が隠れていた |
 
 - 単体テストは `packages/ui/tests/chat-auto-scroll.test.tsx`。実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1161」。
 - 会話の欄の中の特定の位置へ動かすとき（RAG の `#message-{id}` の回答へ移る）は、`logElementRef` の `scrollTo` を使う。
