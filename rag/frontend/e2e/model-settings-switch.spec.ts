@@ -1,5 +1,6 @@
 import { exerciseModelKeyDeletion } from "../../../platform/packages/system-settings/e2e/model-key-deletion";
 import { expect, test, type Locator, type Page } from "./fixtures/test";
+import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 const SECONDARY_CONNECTION = {
@@ -918,9 +919,11 @@ for (const viewport of [
     const image2 = page.getByRole("spinbutton", { name: "モデル 2 の画像 1 枚の入力（tokens）" });
     // 値の無い保存済みのモデルは空欄で、使う値（API の既定）を placeholder と説明に出す（#5334）。
     await expect(image2).toHaveValue("");
-    await expect(image2).toHaveAttribute("placeholder", "1792（既定）");
+    await expect(image2).toHaveAttribute("placeholder", "1792");
     await expect(image2).toHaveAccessibleDescription(/画像 1 枚を何 token として数えるか/);
     await expect(image2).toHaveAccessibleDescription(/未入力のときは 1792 を使います/);
+    // placeholder は欄の幅に収める（#5395）。
+    expect(await findClippedPlaceholders(page, { root: "#enterprise-model-catalog" })).toEqual([]);
     if (viewport.name === "wide") {
       // 広い画面（2xl）は表頭に出し、出力の上限の右に同じ行・同じ高さで並べる。
       await expect(

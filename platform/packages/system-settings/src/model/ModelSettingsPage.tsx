@@ -1527,12 +1527,9 @@ function ModelCatalogEditor({
                 max={ENTERPRISE_AI_IMAGE_INPUT_TOKENS_MAX}
                 step={1}
                 value={model.image_input_tokens ?? ""}
+                // 空欄で使う既定の値を数字だけで出す。「既定」の意味は説明（aria-describedby）に書く（xs の幅に収める。#5395）。
                 placeholder={
-                  defaultImageInputTokens === undefined
-                    ? undefined
-                    : t("settings.model.enterprise.imageInputTokensPlaceholder", {
-                        value: defaultImageInputTokens,
-                      })
+                  defaultImageInputTokens === undefined ? undefined : String(defaultImageInputTokens)
                 }
                 width="xs"
                 aria-describedby={IMAGE_INPUT_TOKENS_HELP_ID}

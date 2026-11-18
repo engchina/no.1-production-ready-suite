@@ -221,7 +221,7 @@ describe("ModelSettingsPage の登録モデルの画像 1 枚の入力（#5316�
 
     const field = input("enterprise-model-image-input-tokens-0");
     expect(field?.value).toBe("");
-    expect(field?.placeholder).toBe("1792（既定）");
+    expect(field?.placeholder).toBe("1792");
     expect(field?.getAttribute("aria-describedby")).toContain(
       "enterprise-model-image-input-tokens-help",
     );
