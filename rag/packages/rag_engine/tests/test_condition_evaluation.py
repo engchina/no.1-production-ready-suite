@@ -101,7 +101,12 @@ def test_points_default_to_standard_sentences_and_answer_ids_run_across_turns():
 def test_correctness_is_computed_from_claim_verdicts(verdicts, correctness):
     inputs = judge_inputs(_payload())
     claims = [
-        {"answer_ids": [f"A{index}"], "verdict": verdict, "standard_ids": [] if verdict == "not_in_standard" else [f"S{index}"]}
+        {
+            "claim": "合成の主張",
+            "answer_ids": [f"A{index}"],
+            "verdict": verdict,
+            "standard_ids": [] if verdict == "not_in_standard" else [f"S{index}"],
+        }
         for index, verdict in enumerate(verdicts, 1)
     ]
     scores = score_judgement(inputs, _output(claims, [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": False}]))
@@ -113,23 +118,28 @@ def test_correctness_is_computed_from_claim_verdicts(verdicts, correctness):
 def test_reason_lists_each_contradiction_with_the_original_text():
     inputs = judge_inputs(_payload(answer_text="項目Aは3です。項目Bは8です。"))
     claims = [
-        {"answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": ["S1"]},
-        {"answer_ids": ["A2"], "verdict": "supported", "standard_ids": ["S2"]},
+        {"claim": "項目Aは3です。", "answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": ["S1"]},
+        {"claim": "項目Bは8です。", "answer_ids": ["A2"], "verdict": "supported", "standard_ids": ["S2"]},
     ]
     scores = score_judgement(inputs, _output(claims, [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": True}]))
     assert scores["correctness_reason"] == "回答の「項目Aは3です。」と標準回答の「項目Aは5。」が食い違う。"
-    assert scores["correctness_claims"][0] == {"verdict": "contradicted", "answer": "項目Aは3です。", "standard": "項目Aは5。"}
+    assert scores["correctness_claims"][0] == {
+        "verdict": "contradicted",
+        "claim": "項目Aは3です。",
+        "answer": "項目Aは3です。",
+        "standard": "項目Aは5。",
+    }
 
 
 @pytest.mark.parametrize(
     ("claims", "points"),
     [
-        ([{"answer_ids": ["A9"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2"]),
-        ([{"answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": ["S9"]}], ["P1", "P2"]),
-        ([{"answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": []}], ["P1", "P2"]),
-        ([{"answer_ids": [], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2"]),
-        ([{"answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1"]),
-        ([{"answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2", "P3"]),
+        ([{"claim": "合成の主張", "answer_ids": ["A9"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2"]),
+        ([{"claim": "合成の主張", "answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": ["S9"]}], ["P1", "P2"]),
+        ([{"claim": "合成の主張", "answer_ids": ["A1"], "verdict": "contradicted", "standard_ids": []}], ["P1", "P2"]),
+        ([{"claim": "合成の主張", "answer_ids": [], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2"]),
+        ([{"claim": "合成の主張", "answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1"]),
+        ([{"claim": "合成の主張", "answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}], ["P1", "P2", "P3"]),
     ],
     ids=["unknown_answer_id", "unknown_standard_id", "contradiction_without_standard", "no_answer_id", "missing_point", "extra_point"],
 )
@@ -162,12 +172,19 @@ def test_verdict_definitions_live_only_in_the_comparison_step():
     assert "同時には真になれない" in definitions["contradicted"]
     assert "確認できない" in definitions["not_in_standard"] and "答えや進め方を示す" in definitions["not_in_standard"]
     assert "確定できない" in definitions["supported"]
+    # 矛盾は同じ対象・同じ条件・同じ観点のときだけ。条件・範囲・観点が違い両立し得る主張は矛盾にしない（#5408）。
+    assert "同じ対象・同じ条件・同じ観点" in definitions["contradicted"]
+    assert "同時に真になり得る" in definitions["not_in_standard"]
     schema = AnswerCorrectnessOutput.model_json_schema()
     assert "description" not in schema["$defs"]["JudgedClaim"]["properties"]["verdict"]
     # 実際に送る指示（項目の説明の Step を足した文）でも、定義は 1 回だけ。
     guided, _stripped = with_schema_field_guide(CORRECTNESS_PROMPT, schema)
     assert all(guided.count(f"- {verdict}:") == 1 for verdict in verdicts)
     assert "`claims[].verdict`" not in guided
+    # 主張は条件ごと取り出して claim に書く（#5408）。条件を主張の種類として別に取り出させない。
+    step2 = CORRECTNESS_PROMPT.split("## Step 2:", 1)[1].split("## Step 3:", 1)[0]
+    assert "条件と結論を別の主張に分けない" in step2 and "claim" in step2
+    assert list(schema["$defs"]["JudgedClaim"]["properties"])[0] == "claim"
     # 点・理由はコードが作るので、出力に点・理由の項目は無い。
     assert set(AnswerCorrectnessOutput.model_fields) == {"claims", "points"}
 
@@ -176,7 +193,7 @@ def test_reservation_only_answer_scores_zero_without_calling_it_a_contradiction(
     """本文がすべて留保（標準回答と合う主張が無い）なら 0。理由は矛盾ではなく、合う主張が無いこと。"""
     inputs = judge_inputs(_payload(answer_text="項目Aと項目Bは資料で確認できず、確定できません。"))
     output = _output(
-        [{"answer_ids": ["A1"], "verdict": "not_in_standard", "standard_ids": []}],
+        [{"claim": "合成の主張", "answer_ids": ["A1"], "verdict": "not_in_standard", "standard_ids": []}],
         [{"point_id": "P1", "covered": False}, {"point_id": "P2", "covered": False}],
     )
     scores = score_judgement(inputs, output)
@@ -206,10 +223,37 @@ def test_coverage_does_not_override_correctness(standard_answer, verdict, correc
     )
     standard_ids = [] if verdict == "not_in_standard" else ["S1"]
     output = _output(
-        [{"answer_ids": ["A1"], "verdict": verdict, "standard_ids": standard_ids}],
+        [{"claim": "合成の主張", "answer_ids": ["A1"], "verdict": verdict, "standard_ids": standard_ids}],
         [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": True}],
     )
     scores = score_judgement(inputs, output)
     assert (scores["answer_correctness"], scores["answer_coverage"]) == (correctness, 1.0)
     if verdict == "not_in_standard":
         assert "標準回答に具体的な答えが無いか" in scores["correctness_reason"]
+
+
+def test_contradiction_reason_quotes_the_claim_with_its_condition():
+    """#5408: 矛盾の理由には、判定のモデルが条件ごと書いた主張を出す（条件の無い段落だけを引かない）。"""
+    inputs = judge_inputs(
+        _payload(
+            standard_answer="全体を再起動したときは、サービスAの起動を確かめる。",
+            answer_text="全体を再起動する場合について説明します。サービスAの確認は不要です。",
+        )
+    )
+    output = _output(
+        [
+            {
+                "claim": "全体を再起動する場合、サービスAの確認は不要。",
+                "answer_ids": ["A1", "A2"],
+                "verdict": "contradicted",
+                "standard_ids": ["S1"],
+            }
+        ],
+        [{"point_id": "P1", "covered": False}],
+    )
+    scores = score_judgement(inputs, output)
+    assert scores["answer_correctness"] == 0.0
+    assert scores["correctness_reason"] == (
+        "回答の「全体を再起動する場合、サービスAの確認は不要。」と標準回答の「全体を再起動したときは、サービスAの起動を確かめる。」が食い違う。"
+    )
+    assert scores["correctness_claims"][0]["answer"] == "全体を再起動する場合について説明します。 サービスAの確認は不要です。"
