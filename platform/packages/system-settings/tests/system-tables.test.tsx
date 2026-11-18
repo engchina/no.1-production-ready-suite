@@ -637,6 +637,7 @@ describe("vector memory の見積もり（#5278・#5473）", () => {
     // 載っていない索引の使用中は「—」。
     expect(html).toContain("80.0 MB / 40.0 MB / —");
     expect(html).toContain("見込みの必要量 / 今の空き / 使用中");
+    expect(html).toContain("今の空きは目安です。");
     expect(html).not.toContain("vector memory の見積もり");
     expect(html).not.toContain("超えています");
   });

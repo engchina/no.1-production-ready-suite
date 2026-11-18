@@ -1054,6 +1054,6 @@ test("HNSW 索引の vector memory の見込みの必要量・今の空き・使
   await page.goto("/settings/system-tables");
   const section = page.getByTestId("system-tables-vector-memory");
   // 上段の数値のカードの行に、索引名と 3 つの値のカードとして並ぶ（#5473）。
-  await expect(section).toHaveText("IX_NL2SQL_ONT_NODE_EMBED" + "12.0 MB / 48.0 MB / 10.0 MB" + "見込みの必要量 / 今の空き / 使用中");
+  await expect(section).toHaveText("IX_NL2SQL_ONT_NODE_EMBED" + "12.0 MB / 48.0 MB / 10.0 MB" + "見込みの必要量 / 今の空き / 使用中" + "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。");
   await expectNoPageHorizontalOverflow(page);
 });

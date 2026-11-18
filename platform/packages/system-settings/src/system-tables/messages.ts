@@ -86,6 +86,8 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.vectorMemory.estimated": "見込みの必要量",
   "settings.database.systemTables.vectorMemory.free": "今の空き",
   "settings.database.systemTables.vectorMemory.used": "使用中",
+  "settings.database.systemTables.vectorMemory.freeHint":
+    "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。",
   "settings.database.systemTables.operation.no_op": "システムテーブルは最新です。変更はありません。",
   "settings.database.systemTables.operation.initialized": "システムテーブルを初期作成しました。",
   "settings.database.systemTables.operation.migrated": "システムテーブルを更新しました。",

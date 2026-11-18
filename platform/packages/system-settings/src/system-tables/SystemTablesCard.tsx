@@ -638,6 +638,7 @@ export function SystemTablesCard({
                     text("settings.database.systemTables.vectorMemory.free"),
                     text("settings.database.systemTables.vectorMemory.used"),
                   ].join(" / ")}
+                  note={text("settings.database.systemTables.vectorMemory.freeHint")}
                 />
               ))}
             </div>
@@ -1002,6 +1003,7 @@ function SummaryItem({
   value,
   description,
   descriptionClassName,
+  note,
   testId,
 }: {
   label: string;
@@ -1009,6 +1011,8 @@ function SummaryItem({
   value: string;
   description?: string;
   descriptionClassName?: string;
+  /** description の下に同じ書式で足す 1 行（例: 今の空きは目安であること）。 */
+  note?: string;
   testId?: string;
 }) {
   return (
@@ -1022,6 +1026,7 @@ function SummaryItem({
       {description ? (
         <p className={cn("mt-1 text-xs leading-relaxed text-fg-muted", descriptionClassName)}>{description}</p>
       ) : null}
+      {note ? <p className="mt-1 text-xs leading-relaxed text-fg-muted">{note}</p> : null}
     </div>
   );
 }

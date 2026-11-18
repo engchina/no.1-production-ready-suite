@@ -1052,7 +1052,7 @@ for (const theme of ["light", "dark"] as const) {
     // 上段の数値のカードの行に、索引名と 3 つの値のカードとして並ぶ（見出し・説明・警告は無い。#5473）。
     const section = page.getByTestId("system-tables-vector-memory");
     await expect(section).toHaveText(
-      "RAG_CHUNKS_EMBEDDING_HNSW_IDX" + "57.1 MB / 32.0 MB / —" + "見込みの必要量 / 今の空き / 使用中"
+      "RAG_CHUNKS_EMBEDDING_HNSW_IDX" + "57.1 MB / 32.0 MB / —" + "見込みの必要量 / 今の空き / 使用中" + "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。"
     );
     const contrast = await minimumTextContrast(page, "[data-testid='system-tables-vector-memory']");
     expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
