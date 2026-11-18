@@ -21,7 +21,6 @@ import { useState } from "react";
 
 import { SECTION_RULES_OPTIONS } from "@/components/documents/DocumentProcessingConfigPanel.values";
 import { ApiErrorState } from "@/components/StateViews";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
   type SectionRule,
@@ -30,7 +29,6 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
-  useResetSectionRulesSettings,
   useSaveSectionRulesSettings,
   useSectionRulesSettings,
 } from "@/lib/queries";
@@ -45,6 +43,15 @@ type Draft = { mode: SectionRulesMode; rules: SectionRule[] };
 
 function draftFrom(data: SectionRulesSettingsData): Draft {
   return { mode: data.mode, rules: data.rules };
+}
+
+/** 製品の既定（「既定に戻す」が下書きに入れる。保存するまで確定しない。#5468）。 */
+function defaultDraftFrom(data: SectionRulesSettingsData): Draft {
+  return { mode: data.default_mode, rules: data.default_rules };
+}
+
+function sameDraft(a: Draft, b: Draft): boolean {
+  return a.mode === b.mode && JSON.stringify(a.rules) === JSON.stringify(b.rules);
 }
 
 /** 正規表現として読めるか（backend の検証と同じく、保存の前に欄の下で知らせる）。 */
@@ -73,8 +80,6 @@ function move<T>(items: readonly T[], from: number, to: number): T[] {
 export function SectionRulesEditor() {
   const query = useSectionRulesSettings();
   const save = useSaveSectionRulesSettings();
-  const reset = useResetSectionRulesSettings();
-  const confirm = useConfirm();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
@@ -120,25 +125,6 @@ export function SectionRulesEditor() {
         setDraft(null);
         setSubmitted(false);
         toast.success(t("sectionRules.toast.saved"));
-      },
-      onError: (failure) =>
-        setError(failure instanceof ApiError ? failure.message : t("sectionRules.error.save")),
-    });
-  };
-
-  const resetToDefault = async () => {
-    const confirmed = await confirm({
-      title: t("sectionRules.reset.confirm.title"),
-      description: t("sectionRules.reset.confirm.description"),
-      confirmLabel: t("sectionRules.reset.action"),
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    reset.mutate(undefined, {
-      onSuccess: () => {
-        setDraft(null);
-        setSubmitted(false);
-        toast.success(t("sectionRules.toast.reset"));
       },
       onError: (failure) =>
         setError(failure instanceof ApiError ? failure.message : t("sectionRules.error.save")),
@@ -314,7 +300,7 @@ export function SectionRulesEditor() {
             label: t("sectionRules.action.save"),
             icon: Save,
             loading: save.isPending,
-            disabled: !dirty || reset.isPending,
+            disabled: !dirty,
             onClick: submit,
           },
         ]}
@@ -335,12 +321,21 @@ export function SectionRulesEditor() {
           id: "reset",
           label: t("sectionRules.reset.action"),
           icon: History,
-          loading: reset.isPending,
-          // 保存の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
-          disabled: save.isPending,
-          onClick: () => void resetToDefault(),
+          disabled: save.isPending || sameDraft(current, defaultDraftFrom(data)),
+          // 既定値を下書きに入れるだけで、「保存」で確定する（#5468）。
+          onClick: () => {
+            setDraft(defaultDraftFrom(data));
+            setSubmitted(false);
+            setError("");
+          },
         }}
-        status={error ? <FormStatus tone="danger" message={error} /> : null}
+        status={
+          error ? (
+            <FormStatus tone="danger" message={error} />
+          ) : dirty ? (
+            <FormStatus tone="warning" message={t("sectionRules.unsaved")} />
+          ) : null
+        }
       />
 
     </div>

@@ -2737,9 +2737,7 @@ export const ja = {
   "sectionRules.action.save": "保存",
   "sectionRules.action.discard": "変更を破棄",
   "sectionRules.reset.action": "既定に戻す",
-  "sectionRules.reset.confirm.title": "章節の抽出規則を既定に戻しますか？",
-  "sectionRules.reset.confirm.description":
-    "保存した方式と独自の規則を削除し、「解析エンジンの見出し」に戻します。この操作は元に戻せません。",
+  "sectionRules.unsaved": "変更は「保存」を押すまで反映されません。",
   "sectionRules.error.load": "章節の抽出規則を取得できませんでした。再試行してください。",
   "sectionRules.error.save": "章節の抽出規則を保存できませんでした。時間をおいて、もう一度お試しください。",
   "sectionRules.error.fix": "入力に問題がある規則があります。欄の下のメッセージを確認してください。",
@@ -2747,7 +2745,6 @@ export const ja = {
   "sectionRules.error.patternRequired": "正規表現を入力してください。",
   "sectionRules.error.patternInvalid": "正規表現として読めません。括弧の対応などを確認してください。",
   "sectionRules.toast.saved": "章節の抽出規則を保存しました。",
-  "sectionRules.toast.reset": "章節の抽出規則を既定に戻しました。",
   "sections.summaryMismatch": "保存済みの要約 {count} 件は、現在の章節に対応していません。現在の「章節の抽出規則」で要約を生成するには、文書の処理レシピで抽出から再処理してください。",
   "sections.loading": "章節を読み込んでいます",
   "sections.error.load": "章節を取得できませんでした。再試行してください。",

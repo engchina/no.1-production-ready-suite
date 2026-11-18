@@ -83,6 +83,9 @@ class SectionRulesSettingsData(BaseModel):
     mode: SectionRulesMode
     rules: list[SectionRule]
     presets: dict[str, list[SectionRule]]
+    # 製品の既定（「既定に戻す」がフォームに入れる値。保存するまで確定しない。#5468）。
+    default_mode: SectionRulesMode
+    default_rules: list[SectionRule]
 
 
 class SectionRulesStore(BaseModel):
@@ -167,11 +170,6 @@ def save_section_rules(store: SectionRulesStore) -> SectionRulesStore:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(store.model_dump_json(indent=2), encoding="utf-8")
     return store
-
-
-def reset_section_rules() -> None:
-    """保存した全体の既定を消し、「解析エンジンの見出し」に戻す。"""
-    _section_rules_path().unlink(missing_ok=True)
 
 
 def rules_for_mode(mode: SectionRulesMode, store: SectionRulesStore) -> list[SectionRule] | None:
@@ -303,10 +301,13 @@ def extraction_section_anchors(
 
 def section_rules_settings(store: SectionRulesStore | None = None) -> SectionRulesSettingsData:
     current = store or load_section_rules()
+    default = SectionRulesStore()
     return SectionRulesSettingsData(
         mode=current.mode,
         rules=current.rules,
         presets=preset_rules(),
+        default_mode=default.mode,
+        default_rules=default.rules,
     )
 
 

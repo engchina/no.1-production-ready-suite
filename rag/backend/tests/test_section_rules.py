@@ -108,10 +108,12 @@ def rules_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-def test_settings_save_reset_and_reject_invalid_patterns(rules_file: Path) -> None:
+def test_settings_save_restore_defaults_and_reject_invalid_patterns(rules_file: Path) -> None:
     data = client.get("/api/settings/section-rules").json()["data"]
     assert data["mode"] == "parser"
     assert set(data["presets"]) == {"legal", "official", "numbered"}
+    # 「既定に戻す」がフォームに入れる製品の既定（#5468）。
+    assert (data["default_mode"], data["default_rules"]) == ("parser", [])
 
     saved = client.patch(
         "/api/settings/section-rules",
@@ -127,8 +129,13 @@ def test_settings_save_reset_and_reject_invalid_patterns(rules_file: Path) -> No
     )
     assert bad.status_code == 422
 
-    assert client.delete("/api/settings/section-rules").json()["data"]["mode"] == "parser"
-    assert not rules_file.exists()
+    # 既定に戻すは既定値を保存する（削除の API は無い。#5468）。
+    assert client.delete("/api/settings/section-rules").status_code == 405
+    restored = client.patch(
+        "/api/settings/section-rules",
+        json={"mode": data["default_mode"], "rules": data["default_rules"]},
+    ).json()["data"]
+    assert (restored["mode"], restored["rules"]) == ("parser", [])
 
 
 class RulesOracle:
