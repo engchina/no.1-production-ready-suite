@@ -106,6 +106,14 @@ test.describe("削除されたスキルと RAG の回答をそのまま返すス
     await expect(warning).toContainText("この業務 Agent は削除されたスキルを選んでいます");
     await expect(warning).toContainText("送信すると実行が失敗することがあります。");
     await expect(warning).toContainText(REMOVED_SKILL);
+    // 警告で会話の欄が低くなっても（375px）、空の状態は末尾へ送らず先頭から見せる（上端が隠れない。#5397）。
+    const log = page.getByRole("log");
+    const emptyTitle = log.getByText("質問を入力して会話を始めます");
+    await expect(emptyTitle).toBeVisible();
+    await expect.poll(() => log.evaluate((element) => element.scrollTop)).toBe(0);
+    const logBox = await log.boundingBox();
+    const emptyIconBox = await log.locator("svg").first().boundingBox();
+    expect(emptyIconBox!.y).toBeGreaterThanOrEqual(logBox!.y);
     await page.getByLabel("質問").fill("合成の質問");
     await expect(page.getByTestId("chat-send")).toBeEnabled();
     await expectNoPageHorizontalOverflow(page);

@@ -192,6 +192,7 @@ export function DbAdminChatPage() {
     ].join(":"),
     resetKey: conversationId,
     enabled: active,
+    empty: !conversationId && !pending,
   });
 
   const generate = useCallback(

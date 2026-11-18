@@ -10,6 +10,11 @@ export interface UseChatAutoScrollOptions {
   resetKey?: unknown;
   /** 画面が見えている間だけ動かす（keep-alive で隠れている間は動かさない）。既定 true。 */
   enabled?: boolean;
+  /**
+   * 会話が無く、空の状態（`EmptyState`）を出している間は true。末尾へ送らず先頭を見せる（狭い画面で入力欄の下の
+   * 通知が会話の欄を低くしても、空の状態の上端が隠れない。#5397）。会話が始まったら末尾から読む。既定 false。
+   */
+  empty?: boolean;
   threshold?: number;
 }
 
@@ -51,8 +56,11 @@ export function useChatAutoScroll({
   contentKey,
   resetKey,
   enabled = true,
+  empty = false,
   threshold = CHAT_AUTO_SCROLL_THRESHOLD_PX,
 }: UseChatAutoScrollOptions): ChatAutoScroll {
+  const emptyRef = useRef(empty);
+  emptyRef.current = empty;
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const logElementRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
@@ -106,7 +114,7 @@ export function useChatAutoScroll({
   useLayoutEffect(() => {
     if (!enabled || !element || typeof ResizeObserver === "undefined") return;
     const resizeObserver = new ResizeObserver(() => {
-      if (followResizeRef.current && atBottomRef.current) {
+      if (followResizeRef.current && atBottomRef.current && !emptyRef.current) {
         pinnedTopRef.current = Math.max(0, element.scrollHeight - element.clientHeight);
         element.scrollTo({ top: element.scrollHeight });
       }
@@ -133,18 +141,24 @@ export function useChatAutoScroll({
     };
   }, [enabled, element]);
 
-  // 会話を開いた・変えた・画面に戻った・会話の欄が描かれたときは末尾から。
+  // 会話を開いた・変えた・画面に戻った・会話の欄が描かれた・会話が始まったときは末尾から。空の状態は先頭から。
   useLayoutEffect(() => {
     if (!enabled || !element) return;
+    if (empty) {
+      pinnedTopRef.current = null;
+      setShowLatest(false);
+      element.scrollTo({ top: 0 });
+      return;
+    }
     scrollToLatest();
-  }, [resetKey, enabled, element, scrollToLatest]);
+  }, [resetKey, enabled, element, empty, scrollToLatest]);
 
   // 新しい内容: 末尾を見ていれば追い、上を読んでいれば「最新へ」を出す。
   const previousContentKey = useRef(contentKey);
   useLayoutEffect(() => {
     if (Object.is(previousContentKey.current, contentKey)) return;
     previousContentKey.current = contentKey;
-    if (!enabled || !element) return;
+    if (!enabled || !element || emptyRef.current) return;
     if (atBottomRef.current) scrollToLatest();
     else setShowLatest(true);
   }, [contentKey, enabled, element, scrollToLatest]);
