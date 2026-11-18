@@ -3667,6 +3667,34 @@ test("構造化要素から解析版を固定して原本ノードを開く", {t
   await expectNoPageOverflow(page);
 });
 
+test("複数の要素の Chunk を選ぶと、原本プレビューは Chunk の全要素を強調する (#5417)", {tag:"@responsive"}, async ({page},testInfo) => {
+  await mockDocumentWorkspace(page);
+  const parts = {h:"見出しについて：", p1:"合成の本文1。", p2:"合成の本文2。"};
+  const rawText = `前置き\n${parts.h}\n${parts.p1}\n${parts.p2}\n別の段落`;
+  const range = (text:string) => { const start = Array.from(rawText.slice(0, rawText.indexOf(text))).length; return [start, start + Array.from(text).length]; };
+  await page.route("**/recipes/recipe-1/extraction-view?**",route => route.fulfill({json:{data:{payload:{raw_text:rawText,elements:Object.entries(parts).map(([id,text],order)=>({element_id:id,kind:"text",text,order,source_parser:"text",metadata:{}}))},offset:0,total:3,limit:25}}}));
+  const requests: {element_id?: string|null; element_ids?: string[]}[] = [];
+  await page.route("**/recipes/recipe-1/text-window", route => {
+    const input = route.request().postDataJSON();
+    requests.push(input);
+    // backend と同じく、指定した全要素の範囲を強調する。
+    const ids: string[] = [...new Set([input.element_id, ...(input.element_ids ?? [])].filter(Boolean))];
+    return route.fulfill({json:{data:{text:rawText,offset:0,total:Array.from(rawText).length,limit:8192,revision:"synthetic-source",highlights:ids.map(id => range(parts[id as keyof typeof parts]))}}});
+  });
+  await page.route("**/recipes/recipe-1/chunk-window?**",route => route.fulfill({json:{data:{items:[{document_id:"doc-1",chunk_id:"multi-chunk",chunk_index:0,text:Object.values(parts).join("\n"),element_ids:Object.keys(parts),metadata:{}}],total:1,offset:0,limit:25,complete:true,scope_status:"exact"}}}));
+  await page.goto("/documents/doc-1");
+  await page.getByTestId("document-inspector-pane").getByRole("tab",{name:/Chunk \/ Citation/}).click();
+  await page.getByTestId("document-chunk-list").getByRole("button").filter({hasText:parts.h}).first().click();
+  await expect.poll(() => requests.some(input => JSON.stringify(input.element_ids) === JSON.stringify(Object.keys(parts)))).toBe(true);
+  await expect(page.getByTestId("preview-text").locator("mark")).toHaveText(Object.values(parts));
+  await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`multi-element-chunk-${testInfo.project.name}.png`),animations:"disabled"});
+  // 構造化要素で 1 つの要素を選んだときは、その要素だけを強調する。
+  await page.getByTestId("document-inspector-pane").getByRole("tab",{name:"構造化要素",exact:true}).click();
+  await page.getByRole("button",{name:new RegExp(parts.p1)}).first().click();
+  await expect(page.getByTestId("preview-text").locator("mark")).toHaveText([parts.p1]);
+  await expectNoPageOverflow(page);
+});
+
 for (const scenario of ["unlocated", "mixed", "unrecorded"] as const) {
   test(`原本同期は位置未確認 Chunk を別領域で有界表示する ${scenario}`, {tag:"@responsive"}, async ({page},testInfo) => {
     await mockDocumentWorkspace(page);

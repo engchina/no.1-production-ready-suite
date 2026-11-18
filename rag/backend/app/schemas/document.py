@@ -2,7 +2,7 @@
 
 from datetime import date
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pr_backend_core.timezones import UtcDatetime
 from pydantic import (
@@ -1143,4 +1143,8 @@ class DocumentTextWindowRequest(BaseModel):
     variant: Literal["original", "prepared"] = "original"
     focus: str | None = Field(default=None, max_length=8192)
     element_id: str | None = Field(default=None, max_length=512)
+    # chunk の全要素（#5417）。窓は先頭の要素の位置、強調は全要素の範囲。
+    element_ids: list[Annotated[str, Field(max_length=512)]] = Field(
+        default_factory=list, max_length=256
+    )
     section_id: str | None = Field(default=None, max_length=64)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal
 
 from rag_parser_core.json_source_map import raw_string_ranges
@@ -32,7 +32,7 @@ def _generic_window(
     mapping: Mapping[str, Any],
     data: bytes,
     *,
-    element_id: str,
+    element_ids: Sequence[str],
     source_index: int,
     offset: int | None,
     max_chars: int,
@@ -47,7 +47,8 @@ def _generic_window(
         and isinstance(row.get("element_id"), str)
         and isinstance(row.get("text"), str)
     }
-    if element_id not in elements:
+    targets = [element for element in element_ids if element in elements]
+    if not targets:
         return {**empty, "status": "unresolved"}
     resolved = resolve_source_map(
         mapping, data=data, text_length=len(source), element_texts=elements
@@ -55,9 +56,11 @@ def _generic_window(
     if resolved.status != "exact":
         return {**empty, "status": resolved.status}
     try:
-        spans = mapping["elements"].get(element_id) or []
-        text = elements[element_id]
-        position = text.find(quote) if quote else -1
+        # chunk の全要素の範囲を要素の順に並べ、source_index で順に読む（#5417）。
+        spans = [span for element in targets for span in mapping["elements"].get(element) or []]
+        text = elements[targets[0]]
+        # 引用の文で絞るのは 1 要素のときだけ（複数の要素の chunk の文は 1 要素に収まらない）。
+        position = text.find(quote) if quote and len(targets) == 1 else -1
         unique = position >= 0 and text.find(quote, position + 1) < 0
         if (
             unique
@@ -108,20 +111,25 @@ def source_map_window(
     data: bytes,
     *,
     element_id: str,
+    element_ids: Sequence[str] = (),
     source_index: int = 0,
     offset: int | None = None,
     max_chars: int = MAX_SOURCE_CHARS,
     quote: str = "",
 ) -> dict[str, Any]:
-    """古い記録・版違い・壊れた対応は文字検索で補わない。座標は codepoint。"""
+    """古い記録・版違い・壊れた対応は文字検索で補わない。座標は codepoint。
+
+    `element_ids` は chunk の全要素（#5417）。窓は先頭の要素から始め、強調は全要素の範囲を合わせる。
+    """
     empty = {"text": "", "highlights": [], "coordinate_unit": "unicode_codepoint"}
+    targets = list(dict.fromkeys([element_id, *element_ids]))
     mapping = _mapping(payload)
     if isinstance(mapping, Mapping) and mapping.get("scheme") in {"json_pointer", "html_source"}:
         return _generic_window(
             payload,
             mapping,
             data,
-            element_id=element_id,
+            element_ids=targets,
             source_index=source_index,
             offset=offset,
             max_chars=max_chars,
@@ -136,14 +144,29 @@ def source_map_window(
         return {**empty, "status": "unrecorded"}
     if hashlib.sha256(data).hexdigest() != mapping["sha256"]:
         return {**empty, "status": "version_mismatch"}
-    element = next(
-        (row for row in payload.get("elements", []) if row.get("element_id") == element_id), None
-    )
+    texts = {
+        row.get("element_id"): row.get("text")
+        for row in payload.get("elements", [])
+        if row.get("element_id") in targets
+    }
     source_elements = mapping.get("elements")
-    spans = source_elements.get(element_id) if isinstance(source_elements, Mapping) else None
-    if element is None or not isinstance(spans, list) or not spans:
+    if not isinstance(source_elements, Mapping):
         return {**empty, "status": "unresolved"}
-    position = element["text"].find(quote) if quote else -1
+    # 各範囲に照合する要素の文を添え、chunk の全要素の範囲を要素の順に並べる（#5417）。
+    spans = []
+    for target in targets:
+        recorded = source_elements.get(target)
+        if target not in texts or not isinstance(recorded, list):
+            continue
+        for span in recorded:
+            if not isinstance(span, Mapping):
+                return {**empty, "status": "unresolved"}
+            spans.append({**span, "_text": texts[target]})
+    if not spans:
+        return {**empty, "status": "unresolved"}
+    element = {"text": spans[0]["_text"]}
+    # 引用の文で絞るのは 1 要素のときだけ（複数の要素の chunk の文は 1 要素に収まらない）。
+    position = element["text"].find(quote) if quote and len(texts) == 1 else -1
     exact_quote = position >= 0 and element["text"].find(quote, position + 1) < 0
     if exact_quote:
         selected = []
@@ -190,12 +213,12 @@ def source_map_window(
             if (
                 type(start) is not int
                 or type(end) is not int
-                or not 0 <= start < end <= len(element["text"])
+                or not 0 <= start < end <= len(span["_text"])
             ):
                 raise ValueError
             a, b = span["source_start"], span["source_end"]
             raw_start, raw_end = node.raw_range(a, b)
-            if element["text"][start:end] != node.value[a:b]:
+            if span["_text"][start:end] != node.value[a:b]:
                 raise ValueError
             ranges.append((raw_start, raw_end))
         # 結合セルなどの一対多対応は原本上で重なる。返す強調範囲を重複させない。
@@ -241,6 +264,7 @@ async def load_source_map_window(
     payload: Mapping[str, Any],
     *,
     element_id: str,
+    element_ids: Sequence[str] = (),
     revision: str,
     load: Callable[[Literal["original", "prepared"]], Awaitable[bytes]],
     source_index: int = 0,
@@ -255,7 +279,10 @@ async def load_source_map_window(
     mapping = _mapping(payload)
     base = {"revision": revision, "element_id": element_id}
     if not isinstance(mapping, Mapping) or not mapping.get("sha256"):
-        return {**base, **source_map_window(payload, b"", element_id=element_id)}
+        return {
+            **base,
+            **source_map_window(payload, b"", element_id=element_id, element_ids=element_ids),
+        }
     variants: tuple[Literal["original", "prepared"], ...] = ("original", "prepared")
     loaded = False
     for variant in variants:
@@ -272,6 +299,7 @@ async def load_source_map_window(
                 payload,
                 data,
                 element_id=element_id,
+                element_ids=element_ids,
                 source_index=source_index,
                 offset=offset,
                 quote=quote,

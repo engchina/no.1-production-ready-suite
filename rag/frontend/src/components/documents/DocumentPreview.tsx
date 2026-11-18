@@ -90,6 +90,7 @@ export function DocumentPreview({
   onPageChange,
   onTextRangeChange,
   focusElementId = null,
+  focusElementIds,
   focusSectionId = null,
   focusRequestKey = null,
   focusBbox = null,
@@ -117,6 +118,8 @@ export function DocumentPreview({
   onPageChange?: (page: number) => void;
   onTextRangeChange?: (range: DocumentTextRange) => void;
   focusElementId?: string | null;
+  /** chunk の全要素（#5417）。強調は全要素、窓は `focusElementId`（先頭の要素）の位置。 */
+  focusElementIds?: readonly string[];
   focusSectionId?: string | null;
   focusRequestKey?: string | null;
   focusBbox?: number[] | null;
@@ -162,15 +165,17 @@ export function DocumentPreview({
     pdfVariant,
     sharedKind === "pdf",
   );
+  // 配列の参照が描画ごとに変わっても読み直さないよう、内容を文字列の key にする。
+  const focusElementIdsKey = (focusElementIds ?? []).join("\n");
   const loadTextRange = useCallback((offset: number, signal: AbortSignal) =>
     api.documentTextWindow(documentId, recipeId, { offset, limit: 8192, variant,
       focus: offset === 0 ? focusText : null,
-      element_id: offset === 0 ? focusElementId : null, section_id: offset === 0 ? focusSectionId : null }, signal), [documentId, recipeId, variant, focusText, focusElementId, focusSectionId]);
+      element_id: offset === 0 ? focusElementId : null, element_ids: offset === 0 ? focusElementIdsKey ? focusElementIdsKey.split("\n") : [] : [], section_id: offset === 0 ? focusSectionId : null }, signal), [documentId, recipeId, variant, focusText, focusElementId, focusElementIdsKey, focusSectionId]);
 
   const loadRecordWindow = useCallback((input:EvidenceReadingInput,signal:AbortSignal) =>
-    api.documentRecipeReader(documentId,recipeId!,extractionRevision!,focusElementId ?? null,input,signal),[documentId,recipeId,extractionRevision,focusElementId]);
+    api.documentRecipeReader(documentId,recipeId!,extractionRevision!,focusElementId ?? null,focusElementIdsKey ? focusElementIdsKey.split("\n") : [],input,signal),[documentId,recipeId,extractionRevision,focusElementId,focusElementIdsKey]);
   const structured = preparedArtifact?.content_type?.split(";",1)[0]?.trim().toLowerCase() === "application/vnd.production-ready.structured-records+jsonl";
-  if(structured && recipeId && extractionRevision) return <EvidenceReader readingKey={`${documentId}:${recipeId}:${extractionRevision}:${focusElementId ?? ""}`} loadWindow={loadRecordWindow} purpose="selection"/>;
+  if(structured && recipeId && extractionRevision) return <EvidenceReader readingKey={`${documentId}:${recipeId}:${extractionRevision}:${focusElementId ?? ""}:${focusElementIdsKey}`} loadWindow={loadRecordWindow} purpose="selection"/>;
 
   // やり直しても開けないので、再試行の案内や iframe の表示に戻さない。
   if (versionStale) return <SourceVersionStaleNotice />;
@@ -185,7 +190,7 @@ export function DocumentPreview({
       pages={pages}
       iframeUrl={pdfPreviewUrl(pdfUrl, focusPage)}
       loadTextRange={loadTextRange}
-      textKey={`${url}:${focusElementId ?? ""}:${focusSectionId ?? ""}`}
+      textKey={`${url}:${focusElementId ?? ""}:${focusElementIdsKey}:${focusSectionId ?? ""}`}
       focusText={focusText}
       // 表示できない形式（Office の原本・処理後の JSONL など）は、形式によらず共通の案内の 1 文にする（#2679）。
       downloadUrl={showFallbackDownload ? downloadUrl : null}

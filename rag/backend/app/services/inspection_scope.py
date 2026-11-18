@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import bisect
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from rag_parser_core.json_source_map import raw_string_ranges
@@ -125,9 +125,16 @@ def source_inspection(
     offset: int,
     limit: int,
     element_id: str | None = None,
+    element_ids: Sequence[str] = (),
     expected_revision: str | None = None,
 ) -> dict[str, Any]:
-    """Unicode codepoint の半開区間。原本対応は記録か決定的な再計算だけを使い、推測しない。"""
+    """Unicode codepoint の半開区間。原本対応は記録か決定的な再計算だけを使い、推測しない。
+
+    `element_ids` は chunk の全要素（#5417）。表示の窓は先頭の要素（`element_id` があればそれ）の
+    位置で決め、強調は全要素の範囲を合わせる。
+    """
+    targets = list(dict.fromkeys([*([element_id] if element_id else []), *element_ids]))
+    element_id = targets[0] if targets else None
     revision = hashlib.sha256(data).hexdigest()
     text = decode_inspection_text(data)
     starts: dict[str, int] = {}
@@ -178,7 +185,7 @@ def source_inspection(
                             raise ValueError("source map mismatch")
                         raw_start, raw_end = node.raw_range(a, b)
                         positions.append(raw_start)
-                        if eid == element_id:
+                        if eid in targets:
                             json_highlights.append((raw_start, raw_end))
                     if positions:
                         starts[eid] = min(positions)
@@ -222,8 +229,9 @@ def source_inspection(
         and source_map.get("sha256") == revision
     ):
         # 対応表の版・原本hash・座標を検証した場合だけ、原本の保存範囲を窓へ投影する。
-        spans = (source_map.get("elements") or {}).get(element_id, [])
-        for span in spans:
+        recorded = source_map.get("elements") or {}
+        spans = [span for target in targets for span in recorded.get(target, [])]
+        for span in sorted(spans, key=lambda item: item["source_start"]):
             a, b = max(start, span["source_start"]), min(end, span["source_end"])
             if a < b:
                 highlights.append([a - start, b - start])
