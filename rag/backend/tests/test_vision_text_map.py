@@ -48,8 +48,9 @@ def test_normalization_preserves_fullwidth_characters_and_mixed_native_sources()
     ]
     whole = ProjectedVisionText.join(parts, "\n")
     normalized = whole.whitespace_normalized()
-    assert normalized.text == "原生 Ａ１２ 保存 原生末尾"
-    assert "Ａ１２ 保存" in "".join(normalized.text[r.start : r.end] for r in normalized.ranges)
+    # 改行・空行・行頭の字下げ（全角の空白を含む）は残し、行の中の空白だけを 1 つにする（#5419）。
+    assert normalized.text == "原生\n　Ａ１２\n　保存\n\n原生末尾"
+    assert "Ａ１２\n　保存" in "".join(normalized.text[r.start : r.end] for r in normalized.ranges)
     assert all("原生" not in normalized.text[r.start : r.end] for r in normalized.ranges)
     assert all(r.source.element_id == "image-a" for r in normalized.ranges)
 
