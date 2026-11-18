@@ -157,12 +157,12 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
     {/* 本文を出したままの読み直しは本文の上に 1 行（#5415）。最初の読み込みは本文の領域の中に置く（#5435）。 */}
     {state.pending && blocks.length ? <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} showSlowMessage={false} testId="evidence-reader-loading" /> : null}
     <Button variant="secondary" size="sm" disabled={!first?.previous_cursor || state.pending} onClick={() => read({ cursor: first!.previous_cursor!, direction: "before" })}><ArrowLeft size={14} aria-hidden />{labels.before}</Button>
-    <div ref={viewport} role="region" aria-label={labels.body} tabIndex={0} aria-busy={state.pending} data-surface-tint={state.pending ? "neutral" : undefined} className={`${outline.key === readingKey && outline.open && !state.pending ? "min-h-[min(16rem,30dvh)]" : "min-h-0"} flex-1 space-y-4 overflow-y-auto overscroll-contain [overflow-anchor:none] ${state.pending ? "bg-surface-sunken" : ""}`} data-testid="evidence-reader-content">
+    <div ref={viewport} role="region" aria-label={labels.body} tabIndex={0} aria-busy={state.pending} data-surface-tint={state.pending && blocks.length ? "neutral" : undefined} className={`${outline.key === readingKey && outline.open && !state.pending ? "min-h-[min(16rem,30dvh)]" : "min-h-0"} flex-1 space-y-4 overflow-y-auto overscroll-contain [overflow-anchor:none] ${state.pending && blocks.length ? "bg-surface-sunken" : ""}`} data-testid="evidence-reader-content">
       {state.pending && !blocks.length ? (
-        // 本文が出る場所に、処理名と経過時間の 1 行と本文の行の形の Skeleton を置く（その場の占位。#5435）。
-        // 本文の領域は残りの高さを占めるので、遅延の案内は予約せず遅延したときだけ足す。
-        <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} reserveSlowLine={false} testId="evidence-reader-loading">
-          <div className="space-y-2" aria-hidden="true">{["w-full", "w-11/12", "w-full", "w-3/4"].map((width, index) => <Skeleton key={index} className={`h-4 ${width}`} />)}</div>
+        // 本文が出る場所を 1 つの灰色の枠で埋め、処理名と経過時間の 1 行と本文の行の形の Skeleton を置く（その場の占位。#5435）。
+        // 灰色は枠だけに持たせ（領域には付けない）、領域は残りの高さを占めるので遅延の案内は予約せず遅延したときだけ足す。
+        <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} reserveSlowLine={false} testId="evidence-reader-loading" className="h-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+          <div className="space-y-2 overflow-hidden" aria-hidden="true">{Array.from({ length: 4 }, () => ["w-full", "w-11/12", "w-full", "w-3/4"]).flat().map((width, index) => <Skeleton key={index} className={`h-4 ${width}`} />)}</div>
         </TimedLoadingState>
       ) : null}
       {readerGroups(blocks).map(group => {
