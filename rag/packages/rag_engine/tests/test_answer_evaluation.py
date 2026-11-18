@@ -46,7 +46,8 @@ def verdict(value="supported"):
             {
                 "claim": "ログを確認して原因を特定します。",
                 "answer_ids": ["A1"],
-                "verdict": value,
+                "states_source_gap": False,
+                "consistent": value != "contradicted",
                 "standard_ids": [] if value == "not_in_standard" else ["S1"],
             }
         ]
@@ -103,6 +104,8 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
                 "claim": "ログを確認して原因を特定します。",
                 "answer": "ログを確認して原因を特定します。",
                 "standard": standard,
+                "states_source_gap": False,
+                "consistent": value != "contradicted",
             }
         ],
         "coverage_points": [{"point": "ログを確認して原因を特定する。", "covered": True}],

@@ -31,17 +31,27 @@ ClaimVerdict = Literal["supported", "contradicted", "not_in_standard"]
 
 
 class JudgedClaim(BaseModel):
-    """本文の主張 1 つの印。原文はモデルに写させず、段落・文の番号で指させる。"""
+    """本文の主張 1 つの照合。原文はモデルに写させず、段落・文の番号で指させる。
+
+    印（``ClaimVerdict``）はモデルに選ばせず、同じ点を述べる文・資料の欠けを述べる主張か・両立するかの答えからコードが決める
+    （``claim_verdict``。#5408）。各項目の答え方は指示の Step 2・3 にだけ書く（schema の説明に重ねない。#5250）。
+    """
 
     model_config = ConfigDict(extra="forbid")
-    # 主張を条件・適用範囲ごと 1 文で書かせる（#5408。書き方は指示の Step 2 にだけ書く）。判定の理由に出す。
     claim: str = Field(description="Step 2 で取り出した主張の文。")
     answer_ids: list[str] = Field(description="この主張を述べた本文の段落の id（A1 など）。")
-    # 印の定義と区別は照らし方の判断の基準なので、指示の Step 3 にだけ書く（schema の説明に重ねない。#5302）。
-    verdict: ClaimVerdict
-    standard_ids: list[str] = Field(
-        description="supported・contradicted のとき、照らした標準回答の文の id（S1 など）。not_in_standard は空。"
-    )
+    standard_ids: list[str] = Field(description="Step 3 の standard_ids（標準回答の文の id。S1 など）。")
+    states_source_gap: bool
+    consistent: bool
+
+
+def claim_verdict(claim: JudgedClaim) -> ClaimVerdict:
+    """照合の答えから印を決める。矛盾は、同じ点を述べる文があり、両立せず、資料の欠けを述べる主張でもないときだけ（#5408）。"""
+    if not claim.standard_ids:
+        return "not_in_standard"
+    if claim.consistent:
+        return "supported"
+    return "not_in_standard" if claim.states_source_gap else "contradicted"
 
 
 class PointCoverage(BaseModel):
@@ -53,10 +63,10 @@ class PointCoverage(BaseModel):
 
 
 class AnswerCorrectnessOutput(BaseModel):
-    """本文の主張ごとの印と、要点ごとの網羅（点は付けさせない）。"""
+    """本文の主張ごとの照合と、要点ごとの網羅（点・印は付けさせない）。"""
 
     model_config = ConfigDict(extra="forbid")
-    claims: list[JudgedClaim] = Field(description="本文の主張ごとの印。主張が無ければ空。")
+    claims: list[JudgedClaim] = Field(description="本文の主張ごとの照合。主張が無ければ空。")
     points: list[PointCoverage] = Field(description="points のすべての要点を 1 回ずつ。")
 
 
@@ -71,20 +81,18 @@ CORRECTNESS_PROMPT = (
     "主張には、それが成り立つ条件・適用範囲・観点を、前後の段落に書かれていても含める。条件と結論を別の主張に分けない。"
     "claim に主張を条件ごと 1 文で書く。\n"
     "\n## Step 3: 主張を標準回答と照らす\n"
-    "各主張に次のどれか 1 つの印を付ける。言い換えは意味で照らし、表示の形式は問わない。\n"
-    "- supported: 主張と標準回答の文が同じ事実・結論を述べる。標準回答がその点を資料では確定できない・"
-    "原文に記載が無いと述べ、主張も同じ点を確定できないと述べるときも supported。\n"
-    "- contradicted: 主張と標準回答の文が、同じ対象・同じ条件・同じ観点について、同時には真になれない事実を述べる"
-    "（結論・数値・対象・否定・例外が食い違う）。\n"
-    "- not_in_standard: 標準回答がこの主張の点に触れていない。主張の条件・適用範囲・観点が標準回答の文と違い、"
-    "両方が同時に真になり得るときも not_in_standard。主張がその点を資料では確認できない・確定できないと"
-    "述べ、標準回答がその点の答えや進め方を示すときも not_in_standard（確認できないという主張は、"
-    "標準回答と食い違う事実を述べていない）。\n"
+    "各主張について次の 3 つに答える。言い換えは意味で照らし、表示の形式は問わない。\n"
+    "- standard_ids: 主張と同じ点（同じ対象について、同じ条件・適用範囲・観点）を述べる標準回答の文の id。"
+    "条件・適用範囲・観点が違う文と、その点に触れない文は入れない。無ければ空。\n"
+    "- states_source_gap: 主張が、その点について資料（根拠）に記載が無い・資料では確認できない・確定できないと述べる"
+    "主張なら true（資料にある範囲を限って述べる主張を含む）。\n"
+    "- consistent: 主張と standard_ids の文が同時に真になり得るなら true（同じ事実・結論を述べる、"
+    "または両方がその点を確定できないと述べる）。standard_ids が空なら true。\n"
     "\n## Step 4: 要点の網羅を確かめる\n"
     "points の各要点について、本文がその内容を述べたかを返す。\n"
 )
 # 判定の指示・入力・出力の契約の版。
-RUBRIC_VERSION = 35
+RUBRIC_VERSION = 36
 
 
 class InvalidJudgeReference(ValueError):
@@ -285,17 +293,18 @@ def score_judgement(inputs: dict[str, Any], output: AnswerCorrectnessOutput) -> 
     points = {row["id"]: row["text"] for row in inputs["points"]}
     claims: list[dict[str, Any]] = []
     for claim in output.claims:
-        unknown = [i for i in claim.answer_ids if i not in answer] + [
-            i for i in claim.standard_ids if i not in standard and claim.verdict != "not_in_standard"
-        ]
-        if not claim.answer_ids or unknown or (claim.verdict == "contradicted" and not claim.standard_ids):
+        unknown = [i for i in claim.answer_ids if i not in answer] + [i for i in claim.standard_ids if i not in standard]
+        if not claim.answer_ids or unknown:
             raise InvalidJudgeReference
+        verdict = claim_verdict(claim)
         claims.append(
             dict(
-                verdict=claim.verdict,
+                verdict=verdict,
                 claim=claim.claim.strip(),
                 answer=" ".join(answer[i].strip() for i in claim.answer_ids),
-                standard="" if claim.verdict == "not_in_standard" else " ".join(standard[i].strip() for i in claim.standard_ids),
+                standard=" ".join(standard[i].strip() for i in claim.standard_ids),
+                states_source_gap=claim.states_source_gap,
+                consistent=claim.consistent,
             )
         )
     returned = [point.point_id for point in output.points]

@@ -229,7 +229,8 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
                     {
                         "claim": "合成の主張",
                         "answer_ids": ["A1"],
-                        "verdict": "supported",
+                        "states_source_gap": False,
+                        "consistent": True,
                         "standard_ids": ["S1"],
                     }
                 ],
