@@ -3794,6 +3794,9 @@ export const ja = {
   "settings.answerPrompts.stage.wiki_build": "Wiki の案内の構築",
   "settings.answerPrompts.stage.wiki_build.condition":
     "ナレッジベースの「Wiki を自動構築する」を有効にしたとき（所属文書の原文または構築の条件が変わった文書ごとに、背景で実行）",
+  "settings.answerPrompts.stage.wiki_links": "Wiki の文書をまたぐ関連の判定",
+  "settings.answerPrompts.stage.wiki_links.condition":
+    "ナレッジベースの「Wiki を自動構築する」を有効にしたとき（案内を作った文書ごとに、同じナレッジベースのほかの文書の候補との関連を背景で判定）",
   "settings.answerPrompts.stage.support_guide_conditions": "質問から業務ガイドの自由入力条件を読み取る",
   "settings.answerPrompts.stage.support_guide_conditions.condition":
     "回答・確認の対象に選んだ業務ガイドに、利用者が答える未確認の自由入力条件があるとき",
