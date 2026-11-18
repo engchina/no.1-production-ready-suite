@@ -60,7 +60,6 @@ import type {
   SystemTableSchemaStatus,
   SystemTablesApi,
   SystemTablesStatusData,
-  SystemTableVectorMemory,
 } from "./types";
 
 const STATUS_VARIANTS = {
@@ -620,6 +619,27 @@ export function SystemTablesCard({
                 label={text("settings.database.systemTables.summary.epoch")}
                 value={formatNumber(data.operation_state.schema_epoch)}
               />
+              {/* HNSW 索引ごとの vector memory（見込みの必要量 / 今の空き / 使用中。#5278・#5473）。取れない値は「—」。 */}
+              {data.vector_memory?.indexes.map((index) => (
+                <SummaryItem
+                  key={index.name}
+                  testId="system-tables-vector-memory"
+                  label={index.name}
+                  labelClassName="font-mono [overflow-wrap:anywhere]"
+                  value={[
+                    index.estimated_bytes,
+                    data.vector_memory?.available ? data.vector_memory.pool_free_bytes : null,
+                    index.loaded ? index.used_bytes : null,
+                  ]
+                    .map((bytes) => (bytes != null ? formatMegabytes(bytes) : "—"))
+                    .join(" / ")}
+                  description={[
+                    text("settings.database.systemTables.vectorMemory.estimated"),
+                    text("settings.database.systemTables.vectorMemory.free"),
+                    text("settings.database.systemTables.vectorMemory.used"),
+                  ].join(" / ")}
+                />
+              ))}
             </div>
 
             {statusUnavailable ? null : noticeBlock}
@@ -653,8 +673,6 @@ export function SystemTablesCard({
                 {text("settings.database.systemTables.action.refresh")}
               </Button>
             </div>
-
-            {data.vector_memory ? <VectorMemorySummary vectorMemory={data.vector_memory} text={text} /> : null}
 
             <SystemTablesDetails data={data} text={text} renderObjectName={renderObjectName} />
 
@@ -766,77 +784,6 @@ function OperationProgress({ state, text }: { state: SystemTableOperationState; 
         elapsed,
       })}
     </p>
-  );
-}
-
-/**
- * HNSW 索引ごとの vector memory の「見込みの必要量 / 今の空き」（#5278）。読めない値は「取得できません」。
- * 見込みが空きを超え、索引がまだ vector memory に無いときは、アイコンと文で知らせる（色だけにしない）。
- */
-function VectorMemorySummary({ vectorMemory, text }: { vectorMemory: SystemTableVectorMemory; text: Text }) {
-  const unavailable = vectorMemory.error_code
-    ? text("settings.database.systemTables.vectorMemory.unavailableWithCode", { code: vectorMemory.error_code })
-    : text("settings.database.systemTables.vectorMemory.unavailable");
-  const free = vectorMemory.available && vectorMemory.pool_free_bytes != null ? vectorMemory.pool_free_bytes : null;
-  return (
-    <section
-      aria-labelledby="system-tables-vector-memory-title"
-      data-testid="system-tables-vector-memory"
-      data-surface-tint="neutral"
-      className="min-w-0 rounded-md border border-border bg-surface-hover p-3"
-    >
-      <h3 id="system-tables-vector-memory-title" className="text-sm font-semibold text-fg">
-        {text("settings.database.systemTables.vectorMemory.title")}
-      </h3>
-      <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-        {text("settings.database.systemTables.vectorMemory.description")}
-      </p>
-      <ul className="mt-2 space-y-2">
-        {vectorMemory.indexes.map((index) => {
-          const shortage =
-            free != null && index.estimated_bytes != null && index.loaded !== true && index.estimated_bytes > free;
-          return (
-            <li key={index.name} className="min-w-0" data-testid="system-tables-vector-memory-index">
-              <span className="block font-mono text-xs font-semibold text-fg [overflow-wrap:anywhere]">
-                {index.name}
-              </span>
-              <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg">
-                <div className="flex gap-1">
-                  <dt className="text-fg-muted">{text("settings.database.systemTables.vectorMemory.estimated")}</dt>
-                  <dd className="tabular-nums">
-                    {index.estimated_bytes != null
-                      ? formatMegabytes(index.estimated_bytes)
-                      : index.error_code
-                        ? text("settings.database.systemTables.vectorMemory.unavailableWithCode", {
-                            code: index.error_code,
-                          })
-                        : text("settings.database.systemTables.vectorMemory.unavailable")}
-                  </dd>
-                </div>
-                <div className="flex gap-1">
-                  <dt className="text-fg-muted">{text("settings.database.systemTables.vectorMemory.free")}</dt>
-                  <dd className="tabular-nums">{free != null ? formatMegabytes(free) : unavailable}</dd>
-                </div>
-                {index.loaded && index.used_bytes != null ? (
-                  <div className="flex gap-1">
-                    <dt className="text-fg-muted">{text("settings.database.systemTables.vectorMemory.used")}</dt>
-                    <dd className="tabular-nums">{formatMegabytes(index.used_bytes)}</dd>
-                  </div>
-                ) : null}
-              </dl>
-              {shortage ? (
-                <p className="mt-1 flex items-start gap-1.5 text-xs text-warning-fg">
-                  <span className="pr-icon-line">
-                    <AlertTriangle size={14} aria-hidden />
-                  </span>
-                  <span>{text("settings.database.systemTables.vectorMemory.shortage")}</span>
-                </p>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-    </section>
   );
 }
 
@@ -1051,18 +998,26 @@ function DestructiveMigrationList({ migrations }: { migrations: SystemTableDestr
 
 function SummaryItem({
   label,
+  labelClassName,
   value,
   description,
   descriptionClassName,
+  testId,
 }: {
   label: string;
+  labelClassName?: string;
   value: string;
   description?: string;
   descriptionClassName?: string;
+  testId?: string;
 }) {
   return (
-    <div data-surface-tint="neutral" className="min-w-0 rounded-md border border-border bg-surface-hover p-3">
-      <p className="text-xs text-fg-muted">{label}</p>
+    <div
+      data-testid={testId}
+      data-surface-tint="neutral"
+      className="min-w-0 rounded-md border border-border bg-surface-hover p-3"
+    >
+      <p className={cn("text-xs text-fg-muted", labelClassName)}>{label}</p>
       <p className="mt-1 break-words font-sans text-sm font-semibold text-fg">{value}</p>
       {description ? (
         <p className={cn("mt-1 text-xs leading-relaxed text-fg-muted", descriptionClassName)}>{description}</p>

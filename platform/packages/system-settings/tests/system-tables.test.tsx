@@ -608,7 +608,7 @@ describe("SystemTablesCard の状態ごとの表示", () => {
   });
 });
 
-describe("vector memory の見積もり（#5278）", () => {
+describe("vector memory の見積もり（#5278・#5473）", () => {
   const index = {
     name: "DEMO_EMBEDDING_HNSW_IDX",
     table_name: "DEMO_EMBEDDINGS",
@@ -618,7 +618,7 @@ describe("vector memory の見積もり（#5278）", () => {
     used_bytes: null,
   };
 
-  it("HNSW 索引ごとに見込みの必要量と今の空きを出し、足りなければアイコンと文で知らせる", () => {
+  it("HNSW 索引ごとに上段のカードを 1 枚足し、索引名と 3 つの値を出す（警告・説明は出さない。#5473）", () => {
     const html = renderCard(
       clientWith(
         statusData("partial", {
@@ -634,14 +634,14 @@ describe("vector memory の見積もり（#5278）", () => {
     );
     expect(html).toContain('data-testid="system-tables-vector-memory"');
     expect(html).toContain("DEMO_EMBEDDING_HNSW_IDX");
-    expect(html).toContain("見込みの必要量");
-    expect(html).toContain("80.0 MB");
-    expect(html).toContain("今の空き");
-    expect(html).toContain("40.0 MB");
-    expect(html).toContain("見込みの必要量が今の空きを超えています。");
+    // 載っていない索引の使用中は「—」。
+    expect(html).toContain("80.0 MB / 40.0 MB / —");
+    expect(html).toContain("見込みの必要量 / 今の空き / 使用中");
+    expect(html).not.toContain("vector memory の見積もり");
+    expect(html).not.toContain("超えています");
   });
 
-  it("載っている索引は使用中の量を出し、不足の警告は出さない", () => {
+  it("載っている索引は使用中の量を出す", () => {
     const html = renderCard(
       clientWith(
         statusData("ready", {
@@ -653,26 +653,22 @@ describe("vector memory の見積もり（#5278）", () => {
         }),
       ),
     );
-    expect(html).toContain("使用中");
-    expect(html).toContain("75.0 MB");
-    expect(html).not.toContain("見込みの必要量が今の空きを超えています。");
+    expect(html).toContain("80.0 MB / 10.0 MB / 75.0 MB");
   });
 
-  it("取れない環境（権限・ビューが無い）では「取得できません」と出す", () => {
+  it("取れない環境（権限・ビューが無い）では取れない値を「—」にする", () => {
     const html = renderCard(
       clientWith(
         statusData("ready", {
           vector_memory: {
             available: false,
             error_code: "ORA-00942",
-            indexes: [{ ...index, estimated_bytes: null, error_code: "ORA-06550" }],
+            indexes: [{ ...index, loaded: null, estimated_bytes: null, error_code: "ORA-06550" }],
           },
         }),
       ),
     );
-    expect(html).toContain("取得できません（ORA-06550）");
-    expect(html).toContain("取得できません（ORA-00942）");
-    expect(html).not.toContain("見込みの必要量が今の空きを超えています。");
+    expect(html).toContain("— / — / —");
   });
 
   it("HNSW 索引を持たない製品（vector_memory が無い）は出さない", () => {
