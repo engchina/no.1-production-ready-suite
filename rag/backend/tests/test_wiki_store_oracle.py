@@ -79,6 +79,11 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     statuses = await store.document_statuses(filters)
     assert [(row["document_id"], row["status"]) for row in statuses] == [(did, "NOT_BUILT")]
     assert statuses[0]["file_name"] and statuses[0]["failure_code"] is None
+    # 名前の順の 1 ページ分と、ページに関わらない KB 全体の件数（#5466）。
+    later, _, _ = await _indexed_document(oracle, knowledge_base_id=first.id, token=f"{token}z")
+    page = await store.document_statuses(filters, limit=1, offset=1)
+    assert [row["document_id"] for row in page] == [later]
+    assert await store.status_counts(filters) == {"NOT_BUILT": 2}
     await store.set_enabled(first.id, True)
     await store.set_enabled(second.id, True)
     assert {kb for kb, _ in await store.enabled_knowledge_bases()} >= {first.id, second.id}
