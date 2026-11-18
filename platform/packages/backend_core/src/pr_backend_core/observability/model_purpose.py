@@ -41,6 +41,7 @@ MODEL_CALL_PURPOSES = frozenset(
         "requirement.clarify",
         "evaluation.judge",
         "document.read",
+        "wiki.select",
         "document.extract",
         "document.summarize",
         "document.infer_headings",
