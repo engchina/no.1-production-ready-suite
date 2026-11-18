@@ -20,18 +20,19 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
   const isEmpty = query.data && (query.data.status === "empty" || query.data.documents.length === 0);
 
   return (
-    // 文書構造索引の構築のカードの最下部に、区切り線（操作行と同じ border-t）の下で開閉する。開いたときだけ取得して描く（#5453）。
-    <div className="border-t border-border pt-4">
+    // 文書構造索引の構築のカードの最下部に置く。カードの中の開閉の領域なので sunken の card にし、見出しは開閉で変えない
+    // 固定の名詞、補足は description（#397 / #5480）。開いたときだけ取得して描く（#5453）。
     <Disclosure
-      variant="plain"
-      summary={open ? t("knowledgeBases.graph.hide") : t("knowledgeBases.graph.show")}
+      surface="sunken"
+      summary={t("knowledgeBases.graph.title")}
+      description={t("knowledgeBases.graph.hint")}
       icon={Share2}
       open={open}
       onOpenChange={setOpen}
+      data-testid="knowledge-base-graph-disclosure"
     >
       {open ? (
         <div id="knowledge-base-graph" className="space-y-2">
-          <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.hint")}</p>
           {query.isPending ? (
             <TimedLoadingState
               label={t("knowledgeBases.graph.loading")}
@@ -60,6 +61,5 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
         </div>
       ) : null}
     </Disclosure>
-    </div>
   );
 }

@@ -63,12 +63,15 @@ test("選んだ分類と有効期間を、この回のすべてのファイル�
   const bodies = await mockUploadPage(page);
   await page.goto("/upload");
 
-  // ナレッジベースの欄の下に、閉じた状態で置く。閉じたままでも今の値（未設定）を見せる。
+  // ナレッジベースの欄の下に、閉じた状態で置く。閉じたままでも今の値（未設定）を見出しの下（description）に見せる（#5480）。
   const disclosure = page.getByTestId("upload-classification");
   await expect(disclosure).not.toHaveAttribute("open", "");
-  await expect(page.getByTestId("upload-classification-current")).toHaveText("未設定");
+  await expect(disclosure.locator("summary").getByTestId("upload-classification-current")).toHaveText("未設定");
+  const summaryText = await disclosure.locator("summary").innerText();
   const pickerBox = (await page.getByTestId("upload-knowledge-base-picker").boundingBox())!;
   expect((await disclosure.boundingBox())!.y).toBeGreaterThan(pickerBox.y + pickerBox.height - 1);
+  await disclosure.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("upload-classification-closed.png"), fullPage: false });
 
   await disclosure.locator("summary").click();
   await page.getByRole("button", { name: /^大分類 / }).click();
@@ -80,6 +83,9 @@ test("選んだ分類と有効期間を、この回のすべてのファイル�
   await expect(page.getByTestId("upload-classification-current")).toHaveText(
     "分類A / 分類A-1・有効期間 2026-04-01〜2027-04-01"
   );
+  // 見出しは開閉で変えない固定の名詞（変わるのは description の現在値だけ）。
+  await expect(disclosure.locator("summary")).toContainText("文書の分類と有効期間");
+  expect(summaryText).toContain("文書の分類と有効期間");
   // 保存ボタンは置かない（開始の時に一緒に送る）。
   await expect(disclosure.getByRole("button", { name: /保存/ })).toHaveCount(0);
   await expectNoPageOverflow(page);

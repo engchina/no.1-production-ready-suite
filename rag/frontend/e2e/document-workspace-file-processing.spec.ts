@@ -1289,9 +1289,21 @@ test("抽出セグメント失敗時は原因と復旧導線を表示する", as
 
   await page.goto("/documents/doc-1");
 
-  // 段の一覧は既定で畳むが、失敗した段があるときは開く（#2001）。
+  // 段の一覧は既定で畳むが、失敗した段があるときは開く（#2001）。一覧は状態色の面に置かず中立の sunken にする
+  // （失敗は行の「失敗」と理由・既定で開くこと・再試行の領域で示す。#5480）。
   const segments = page.getByTestId("document-segments");
   await expect(segments).toHaveAttribute("open", "");
+  await expect(segments).not.toHaveAttribute("data-surface-tint");
+  expect(
+    await segments.evaluate((element) => {
+      const probe = document.createElement("div");
+      probe.className = "bg-surface-sunken";
+      document.body.append(probe);
+      const sunken = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return getComputedStyle(element).backgroundColor === sunken;
+    })
+  ).toBe(true);
   // 失敗 code は segment パネルに残す。
   await expect(page.getByText("enterprise_ai_response_validation_error")).toBeVisible();
   // 原因(confidence...)は上部の原因バナーに 1 本化し、diagnostics に埋もれさせない（§9 P2/P3）。
