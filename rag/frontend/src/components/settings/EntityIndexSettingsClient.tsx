@@ -72,12 +72,13 @@ export function EntityIndexSettingsClient() {
               {
                 value: "off",
                 label: t("settings.graph.profile.off"),
-                badges: <StatusBadge variant="neutral" icon={false} label={t("settings.graph.defaultTag")} />,
                 description: t("settings.entityIndex.off.description"),
               },
               {
                 value: "on",
                 label: t("settings.graph.profile.entities"),
+                // 全体の既定(backend の Settings.rag_entity_index_enabled の既定 True)に「既定」と添える。
+                badges: <StatusBadge variant="neutral" icon={false} label={t("settings.graph.defaultTag")} />,
                 description: t("settings.entityIndex.on.description"),
               },
             ]}
