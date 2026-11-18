@@ -1,5 +1,6 @@
 """全文の分割契約。保存の64k制限やUTF-8境界で原文を失わない。"""
 
+import copy
 import hashlib
 from dataclasses import replace
 from typing import Any
@@ -112,11 +113,21 @@ class OwnerCursor:
         self.part_rows: dict[str, list[tuple[Any, ...]]] = {}
         self.failures: dict[str, str] = {}
         self.rows: list[tuple[Any, ...]] = []
+        self.savepoints: dict[str, tuple[Any, ...]] = {}
 
-    def execute(self, sql: str, binds: dict[str, Any]) -> None:
+    def execute(self, sql: str, binds: dict[str, Any] | None = None) -> None:
         sql = " ".join(sql.split())
+        binds = binds or {}
         body_id = binds.get("body_id", "")
-        if sql.startswith("MERGE INTO PLATFORM_TRACE_BODIES "):
+        if sql.startswith("SAVEPOINT "):
+            self.savepoints[sql.removeprefix("SAVEPOINT ")] = copy.deepcopy(
+                (self.manifests, self.owners, self.parts, self.part_rows, self.failures)
+            )
+        elif sql.startswith("ROLLBACK TO SAVEPOINT "):
+            (self.manifests, self.owners, self.parts, self.part_rows, self.failures) = (
+                copy.deepcopy(self.savepoints[sql.removeprefix("ROLLBACK TO SAVEPOINT ")])
+            )
+        elif sql.startswith("MERGE INTO PLATFORM_TRACE_BODIES "):
             self.manifests.setdefault(
                 body_id,
                 [binds[key] for key in ("sha256", "characters", "bytes", "parts", "visibility")]
