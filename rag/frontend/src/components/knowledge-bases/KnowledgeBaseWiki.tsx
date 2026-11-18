@@ -64,7 +64,7 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
   const counts = data?.counts ?? {};
   const failed = counts.FAILED ?? 0;
   const ready = counts.READY ?? 0;
-  const total = data?.documents.total ?? 0;
+  const total = data?.documents?.total ?? 0;
   const blocked = data?.blocked_reason === "actor_unavailable";
   const showRetry = Boolean(data?.enabled) && (failed > 0 || blocked || retry.isPending || retryStatus != null);
   const progressLabel = failed > 0 ? t("wiki.progressFailed", { ready, total, failed }) : t("wiki.progress", { ready, total });
@@ -99,7 +99,7 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
           </div>
           {retryStatus ? <FormStatus tone={retryStatus.tone} message={retryStatus.message} /> : null}
         </div> : null}
-        {data.documents.total > 0 ? <WikiDocuments page={data.documents} paging={paging} expanded={failed > 0 || retryStatus != null} /> : null}
+        {total > 0 && data.documents ? <WikiDocuments page={data.documents} paging={paging} expanded={failed > 0 || retryStatus != null} /> : null}
         <SaveErrorBanner message={update.error ? t("wiki.saveError") : null} attemptKey={update.submittedAt} />
       </> : null}
     </CardContent>
