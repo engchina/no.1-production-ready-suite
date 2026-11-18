@@ -20,8 +20,10 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
   const isEmpty = query.data && (query.data.status === "empty" || query.data.documents.length === 0);
 
   return (
-    // 共有の Disclosure（card）。見出しの高さは 40px・タッチ端末 44px（#1135）。関係情報は開いたときだけ取得して描く。
+    // 文書構造索引の構築のカードの最下部に、区切り線（操作行と同じ border-t）の下で開閉する。開いたときだけ取得して描く（#5453）。
+    <div className="border-t border-border pt-4">
     <Disclosure
+      variant="plain"
       summary={open ? t("knowledgeBases.graph.hide") : t("knowledgeBases.graph.show")}
       icon={Share2}
       open={open}
@@ -58,5 +60,6 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
         </div>
       ) : null}
     </Disclosure>
+    </div>
   );
 }

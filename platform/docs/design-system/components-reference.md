@@ -2505,6 +2505,17 @@ type PreconditionBannerProps = {
 </form>
 ```
 
+フォーム全体を既定に戻す操作は `restoreDefaultsAction` に渡す（#5458）。並びは部品が決め、保存（primary）→ 変更を破棄（secondary）→ 既定に戻す（secondary の見た目で、sm 以上は左に・sm 未満は上に 0.5rem 離す）になる。既定に戻すは既定値をフォームに入れるだけで、保存で確定する。規則は README §4「フォームの操作の並び」。
+
+```tsx
+<FormActionBar
+  ariaLabel={t("…actions.label")}
+  primaryActions={[{ id: "save", label: t("…save"), icon: Save, disabled: !dirty, onClick: submit }]}
+  secondaryActions={[{ id: "discard", label: t("…discard"), icon: RotateCcw, disabled: !dirty, onClick: discard }]}
+  restoreDefaultsAction={{ id: "restore-defaults", label: t("…restoreDefaults"), icon: History, disabled: isDefault, onClick: fillDefaults }}
+/>
+```
+
 | 決めたこと | 理由 |
 |---|---|
 | 1 枚のカードのフォームはカードの中のフォームの**最後の子**、複数のカードを 1 つの保存で確定する画面（Agent のエディタなど）は保存の対象の節を包む `div` の最後の子（最後のカードの下）。設定のカードの末尾の行（RAG の言語資源など）と同じ形 | 行が保存の対象のフォームの末尾にだけあり、節ごとに保存する下の節（検索・回答プロファイルの「プロファイルの知識」など）の近くにページの保存が出ない |
@@ -2513,7 +2524,7 @@ type PreconditionBannerProps = {
 | 直置きのボタンは mousedown でフォーカスを動かさず、click でボタンへフォーカスを移してから操作する | 押した瞬間の入力欄の blur の検証でエラーが出て行が動き、クリックが外れるのを防ぐ。キーボード・押した後のフォーカス（loading の間もボタンに残る。#835）は変わらない |
 | 行の目印は `data-form-action-bar` | e2e の `findFloatingFormActionBars`（`packages/ui/e2e/layout-checks.ts`）が、本文を上から下までスクロールして行が画面に貼り付かず、`PageHeader` の上に描かれないことを確かめる |
 
-- 単体テストは `packages/ui/tests/action-components.test.tsx`（sticky / fixed / z を持たない・区切り線・並び）。
+- 単体テストは `packages/ui/tests/action-components.test.tsx`（sticky / fixed / z を持たない・区切り線・並び・既定に戻すの位置）。
 - E2E: RAG `security-management.spec.ts`（ユーザー・ロールの作成と編集の確定の位置・順・左端と、貼り付き・重なりが無いこと）、RAG `search-answer-profiles.spec.ts`（長いフォームの末尾に置き、「プロファイルの知識」まで進んでも貼り付かず `PageHeader` に重ならない）、Agent `entity-archetypes.spec.ts`（最後のカードの下の行と失敗の Banner の位置）。
 
 ---

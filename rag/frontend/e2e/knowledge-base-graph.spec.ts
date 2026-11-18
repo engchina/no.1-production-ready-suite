@@ -113,11 +113,22 @@ test("文書構造グラフは KB の全文書を出す", async ({ page }) => {
     edges: [{ id: "a:b", source: "a", target: "b", count: 3 }],
   });
 
+  // 画面を開いただけでは graph を読まず、「表示」を押してから読む（#5453）。
+  const graphRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/api\/knowledge-bases\/[^/]+\/graph\//.test(request.url())) graphRequests.push(request.url());
+  });
+
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const summary = disclosureSummary(page, "文書構造グラフを表示");
+  await expect(summary).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(graphRequests).toEqual([]);
+  await summary.click();
 
   const graph = page.getByRole("region", { name: "文書構造グラフ" });
   await expect(graph).toBeVisible();
+  expect(graphRequests.some((url) => url.includes("/graph/overview"))).toBe(true);
   await expect(graph.getByText("合成文書A", { exact: true })).toBeVisible();
   await expect(graph.getByText("合成文書B", { exact: true })).toBeVisible();
   // 文書の間の参照は操作なしで見え、件数を出す。
@@ -149,24 +160,38 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
   await expect(hint).not.toContainText("再取込");
 });
 
-// 開閉の見出しは共有の Disclosure の高さ（lg 40px・タッチ端末 44px）。以前は手書きの min-h-11 で 38.5px（#1135）。
-test("文書構造グラフは抽出項目と検索テストの間にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+// 文書構造索引の構築のカードは「説明 → 区切り線 → [保存][既存文書に構築] → 区切り線 → 文書構造グラフ」の順（#5453）。
+// 開閉の見出しは共有の Disclosure（plain）の高さ（sm。タッチ端末は 44px）。
+test("文書構造グラフは構築のカードの最下部にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, EMPTY_OVERVIEW);
   await page.goto("/knowledge-bases/kb-1");
 
-  const expected = await expectedControlHeight(page, "lg");
-  const summary = disclosureSummary(page, "文書構造グラフを表示");
+  const expected = await expectedControlHeight(page, "sm");
+  const card = page.getByTestId("knowledge-base-structure-settings");
+  const summary = card.locator("summary", { hasText: "文書構造グラフを表示" });
   await expect(summary).toBeVisible();
-  const fields = page.getByRole("heading", { name: "抽出する項目", exact: true });
+  const actions = card.getByRole("group", { name: "文書構造索引の構築", exact: true }).first();
+  const save = actions.getByRole("button", { name: "保存", exact: true });
+  const build = actions.getByRole("button", { name: "既存文書に構築", exact: true });
+  await expect(save).toBeVisible();
+  await expect(build).toBeVisible();
+  const existing = card.getByText("「既存文書に構築」は保存済みのチャンクの見出し・階層情報から構築し");
+  await expect(existing).toBeVisible();
+  await expect(card).not.toContainText("構造拡張");
   const search = page.getByRole("heading", { name: "このナレッジで検索テスト", exact: true });
-  await expect(fields).toBeVisible();
   await expect(search).toBeVisible();
-  const [fieldsBox, graphBox, searchBox] = await Promise.all([
-    fields.boundingBox(), summary.boundingBox(), search.boundingBox(),
+  const [existingBox, saveBox, buildBox, graphBox, cardBox, searchBox] = await Promise.all([
+    existing.boundingBox(), save.boundingBox(), build.boundingBox(), summary.boundingBox(), card.boundingBox(), search.boundingBox(),
   ]);
-  expect(fieldsBox!.y + fieldsBox!.height).toBeLessThan(graphBox!.y);
-  expect(graphBox!.y + graphBox!.height).toBeLessThan(searchBox!.y);
-  expect(Math.round((await summary.boundingBox())?.height ?? 0)).toBe(expected);
+  expect(existingBox!.y + existingBox!.height).toBeLessThan(saveBox!.y);
+  // desktop は同じ行に並べ、狭い画面は縦に積む（FormActionBar）。
+  if ((page.viewportSize()?.width ?? 0) >= 640) expect(Math.round(buildBox!.y)).toBe(Math.round(saveBox!.y));
+  else expect(buildBox!.y).toBeGreaterThan(saveBox!.y);
+  expect(Math.max(saveBox!.y + saveBox!.height, buildBox!.y + buildBox!.height)).toBeLessThan(graphBox!.y);
+  expect(graphBox!.y + graphBox!.height).toBeLessThan(cardBox!.y + cardBox!.height);
+  expect(cardBox!.y + cardBox!.height).toBeLessThan(searchBox!.y);
+  expect(Math.round(graphBox!.height)).toBe(expected);
+  await expectNoPageOverflow(page);
 
   // キーボード（Enter）で開閉でき、開くと見出しの文言が「隠す」になる。
   const graph = disclosureSummary(page, "文書構造グラフを表示");
