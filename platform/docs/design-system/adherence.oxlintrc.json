@@ -116,6 +116,14 @@
             "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@production-ready/ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
           },
           {
+            "selector": "JSXOpeningElement[name.name='Disclosure'] > JSXAttribute[name.name='summary'] > JSXExpressionContainer > ConditionalExpression",
+            "message": "Disclosure の summary を三項式で切り替えない（summary={open ? \"…を隠す\" : \"…を表示\"} など）。summary は開閉にかかわらず固定の名詞にし、開閉の状態は DisclosureChevron が示す。現在値・補足は description、件数・状態は meta に置く（docs/design-system/README.md §4「Disclosure」、#397 / #5480）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name='Disclosure'] > JSXAttribute[name.name='summaryFooter']",
+            "message": "製品で Disclosure の summaryFooter を使わない。summaryFooter は ChatProgress の処理の経過の案内（遅延・再接続。#2426）のための行で、現在値・補足は description、件数・状態は meta に置く（docs/design-system/README.md §4「Disclosure」、#397）。"
+          },
+          {
             "selector": ":matches(JSXAttribute[name.name='placeholder'] Literal[value=/任意/], JSXAttribute[name.name='placeholder'] TemplateElement[value.raw=/任意/], Property[key.value=/[Pp]laceholder/] > Literal[value=/任意/], Property[key.name=/[Pp]laceholder/] > Literal[value=/任意/], Literal[value=/[(（]\\s*任意\\s*[)）・、,，]/], TemplateElement[value.raw=/[(（]\\s*任意\\s*[)）・、,，]/], JSXText[value=/[(（]\\s*任意\\s*[)）・、,，]/])",
             "message": "任意の欄を「(任意)」や placeholder で示さない。任意の欄には何も付けず、必須の欄だけに required で「必須」のタグを出す（placeholder は入力を始めると消え、ラベルの代わりにならない。WCAG 3.3.2。docs/design-system/README.md §4「必須の表示」、#531）。"
           },

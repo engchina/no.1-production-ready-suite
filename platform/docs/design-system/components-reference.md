@@ -1936,7 +1936,10 @@ import { Wrench } from "lucide-react";
 <Disclosure summary="構造化要素" meta={<span className="tnum text-xs text-fg-muted">{count}</span>} surface="sunken">…</Disclosure>
 
 // 状態が変わったら開き直す（失敗したら開く）: key を状態で変え、defaultOpen を渡す
-<Disclosure key={failed ? "failed" : "active"} defaultOpen={failed} tone="warning" summary={`警告 (${n})`}>…</Disclosure>
+<Disclosure key={failed ? "failed" : "active"} defaultOpen={failed} tone="warning" summary="警告" meta={<span className="tnum text-xs">{n}</span>}>…</Disclosure>
+
+// 閉じたまま現在値を見せるフォームの区画（カードの中）: card + sunken、見出しは固定の名詞、現在値は description
+<Disclosure surface="sunken" summary="文書の分類と有効期間" description={classificationSummary(saved)}>…</Disclosure>
 
 // 表のセルの中・回答の補足: plain + sm。summary に data-testid を付けるときは summaryProps
 <Disclosure variant="plain" size="sm" summary="分析" summaryProps={{ "data-testid": "analysis-toggle" }}>…</Disclosure>
@@ -1956,13 +1959,13 @@ export interface DisclosureProps
   icon?: LucideIcon;             // 先頭のアイコン（md 16px / sm 14px、--color-fg-muted）
   description?: ReactNode;       // 見出しの下の補足（card のみ、12px）
   meta?: ReactNode;              // 見出しと Chevron の間（件数・StatusBadge）
-  summaryFooter?: ReactNode;     // 見出しの行の下に、見出しの行の全幅で出す短い補足（押せる見出しの中。開閉にかかわらず見える。ChatProgress の遅延・再接続の案内。#2426）
+  summaryFooter?: ReactNode;     // 見出しの行の下に、見出しの行の全幅で出す短い補足（押せる見出しの中。開閉にかかわらず見える）。ChatProgress の遅延・再接続の案内（#2426）専用で、製品では使わない（現在値・補足は description。#5480）
   open?: boolean;                // 受控。渡すときは onOpenChange も渡す
   defaultOpen?: boolean;         // 非受控の初期状態
   onOpenChange?: (open: boolean) => void;
   variant?: DisclosureVariant;   // 既定 "card"
   surface?: DisclosureSurface;   // card の地。既定 "surface"
-  tone?: DisclosureTone;         // card の状態色。既定 "neutral"
+  tone?: DisclosureTone;         // card の状態色。既定 "neutral"。警告の文の一覧・危険な操作だけ（表・一覧には使わない。#5480）
   size?: DisclosureSize;         // 見出しの文字。md 14px / sm 12px
   summaryProps?: HTMLAttributes<HTMLElement>;  // data-testid など
   summaryClassName?: string;     // 見出しの局所的な調整（sticky・余白など）
@@ -1971,6 +1974,7 @@ export interface DisclosureProps
 }
 ```
 
+- **見出しと面の規則**（README §4「`Disclosure`」。#5480）: `summary` は開閉で変えない固定の名詞（`summary={open ? … : …}` は adherence の lint が検出）。入力欄・図を畳む区画は `card`（カードの中は `surface="sunken"`）で、`plain` は回答の根拠・表のセル・結果の中の小さな「詳細」だけ。`summaryFooter` は製品で使わない（adherence の lint が検出）。`tone` は警告の文の一覧・危険な操作の区画だけで、表・一覧を状態色の面に置かない。
 - ルートの `<details>` は `data-state="open" | "closed"`、Chevron は `data-state="expanded" | "collapsed"` を持ちます。E2E は `summary` を押して、`details` の `open` 属性か Chevron の `data-state` で確かめます（Chevron に独自の testid を付けない）。
 - 見出しの高さは `--button-height-lg`（card、タッチ端末 44px）/ `--button-height-sm`（plain）。hover の地は `--color-surface-hover`（`tone` のときは文字色の 5%）。フォーカスは outline（card は枠の内側）。
 - summary のクリックは部品が状態を切り替えます（ブラウザの切り替えを止める）。`summaryProps.onClick` で `preventDefault()` すると開閉しません。

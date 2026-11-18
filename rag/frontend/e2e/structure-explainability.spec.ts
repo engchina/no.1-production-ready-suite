@@ -225,10 +225,25 @@ for (const viewport of [
 
     await page.goto("/documents/doc-1");
 
-    // 最初は閉じ、見出しの下に保存済みの値（無ければ「未設定」）を出す（#5440）。
+    // 最初は閉じ、見出しの下（description）に保存済みの値（無ければ「未設定」）を出す（#5440）。
+    // カードの中のフォームの区画なので、枠付きの sunken の card にする（#397 / #5480）。
     const classification = page.getByTestId("document-classification");
     await expect(classification).not.toHaveAttribute("open", "");
-    await expect(page.getByTestId("document-classification-current")).toHaveText("未設定");
+    await expect(classification.locator("summary").getByTestId("document-classification-current")).toHaveText("未設定");
+    const surface = await classification.evaluate((element) => {
+      const probe = document.createElement("div");
+      probe.className = "bg-surface-sunken";
+      document.body.append(probe);
+      const sunken = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      const style = getComputedStyle(element);
+      return { sunken: style.backgroundColor === sunken, border: parseFloat(style.borderTopWidth) };
+    });
+    expect(surface).toEqual({ sunken: true, border: 1 });
+    await classification.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath(`document-classification-closed-${viewport.name}-${viewport.theme}.png`),
+    });
     await classification.locator("summary").click();
     const save = classification.getByRole("button", { name: "保存", exact: true });
     await expect(save).toBeDisabled();
