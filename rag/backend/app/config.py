@@ -1301,7 +1301,10 @@ class Settings(
         default=600.0,
         ge=30.0,
         le=7200.0,
-        description="Wiki の構築の 1 文書あたりの時間の上限（生成・埋め込み・保存を含む秒数）。",
+        description=(
+            "Wiki の構築の 1 回の時間の上限（生成・埋め込み・保存を含む秒数）。"
+            "保存できた回は次の照合で続きから作る。"
+        ),
     )
     rag_wiki_build_workers: int = Field(
         default=2, ge=1, le=16, description="Wiki の構築を同時に行う文書数の上限。"
