@@ -183,8 +183,6 @@ for (const viewport of [
     // 「1 つの文書から採る根拠の上限」は画面に出さない（#5443）。
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
       "回答モデル",
-      // 出力の検査を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
-      "出力の検査を通らなかったときのモデル",
       "業務ガイドを使用する",
       // Wiki の検索の経路（#4941）。KB の自動構築とは別の指定。
       "Wiki を使用する",
@@ -197,10 +195,10 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 / 上書きを選ぶのは回答モデルの選択欄と、出力の検査を通らなかったときのモデルだけ（文書ごとの根拠上限は画面に出さない。#5443）。
+    // 継承 / 上書きを選ぶのは回答モデルの選択欄だけ（文書ごとの根拠上限は画面に出さない。#5443）。
     await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(1);
     await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(1);
-    await expect(settings.getByRole("button", { name: "使わない" })).toHaveCount(1);
+    await expect(settings.getByRole("button", { name: "使わない" })).toHaveCount(0);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
     await expect(settings.getByTestId("answer-prompt-unused-note")).toHaveCount(0);
@@ -280,7 +278,7 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   expect(Object.keys(config.query ?? {}).filter((key) => !PROFILE_QUERY_FIELDS.includes(key))).toEqual([]);
 });
 
-test("出力の検査を通らなかったときのモデルは既定で使わず、回答モデル以外の登録モデルを選んで保存する (#4581)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("回答モデルを選んで保存し、出力の検査を通らなかったときのモデルは選ばせない (#5463)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   await mockSearchAnswerProfiles(page, [], (value) => { body = value; });
   await page.goto("/search-answer-profiles?id=new");
@@ -293,25 +291,16 @@ test("出力の検査を通らなかったときのモデルは既定で使わ�
   await model.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
   await model.locator("#search-answer-profile-answer-model").click();
   await page.getByRole("option", { name: "モデル A", exact: true }).click();
-  // 「回答モデル」の直下に置き、既定は「使わない」（全体の既定は持たない）。
-  const escalation = page.getByRole("heading", { name: "出力の検査を通らなかったときのモデル", level: 3 }).locator("..");
-  const headings = await page.getByRole("heading", { level: 3 }).allTextContents();
-  expect(headings.indexOf("出力の検査を通らなかったときのモデル")).toBe(headings.indexOf("回答モデル") + 1);
-  await expect(escalation.getByRole("button", { name: "使わない" })).toHaveAttribute("aria-pressed", "true");
-  await expect(escalation.locator("#search-answer-profile-escalation-model")).toHaveCount(0);
-  await expect(escalation.getByText(/検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
-  await escalation.getByRole("button", { name: "モデルを選ぶ" }).click();
-  await escalation.locator("#search-answer-profile-escalation-model").click();
-  // 回答モデルと同じモデルは候補に出さない。
-  await expect(page.getByRole("option", { name: "モデル A", exact: true })).toHaveCount(0);
-  await page.getByRole("option", { name: "モデル B", exact: true }).click();
-  await escalation.screenshot({ path: testInfo.outputPath("escalation-model.png") });
+  // 回答は 1 つのモデルだけで行う（2 つ目のモデルで回答し直す設定は無い）。
+  await expect(page.getByRole("heading", { name: "出力の検査を通らなかったときのモデル" })).toHaveCount(0);
+  await expect(page.locator("#search-answer-profile-escalation-model")).toHaveCount(0);
+  await model.screenshot({ path: testInfo.outputPath("answer-model.png") });
   await expectNoPageOverflow(page);
   await page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "作成", exact: true }).click();
   await expect.poll(() => body?.name).toBe("プロファイル A");
-  const config = body?.config as { answer_model_id?: string; escalation_model_id?: string | null };
+  const config = body?.config as Record<string, unknown>;
   expect(config.answer_model_id).toBe("model-a");
-  expect(config.escalation_model_id).toBe("model-b");
+  expect(config).not.toHaveProperty("escalation_model_id");
 });
 
 test("モデル・継承する窓口・言語資源の読み取りの失敗は、それぞれの欄の直下に欄ごとの文と再試行を出す (#4817)", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -338,19 +327,14 @@ test("モデル・継承する窓口・言語資源の読み取りの失敗は�
   );
   await page.goto("/search-answer-profiles?id=new");
 
-  // モデルの 2 つの欄は同じ読み取りに支えられるが、見出しは欄ごとの文（同じ文を 2 つ出さない）。
   const answerModel = page.getByTestId("search-answer-profile-answer-model-load-failed");
   await expect(answerModel.getByRole("alert")).toHaveText("回答モデルの候補を読み込めませんでした。", { timeout: 15_000 });
-  const escalationModel = page.getByTestId("search-answer-profile-escalation-model-load-failed");
-  await expect(escalationModel.getByRole("alert")).toHaveText(
-    "出力の検査を通らなかったときのモデルの候補を読み込めませんでした。"
-  );
   // 欄の説明はそのまま出す（読み取りの失敗を説明の文に差し替えない）。
-  await expect(page.getByText(/検査を通らなかったときだけ、取得した根拠のまま、このモデルで回答し直します/)).toBeVisible();
+  await expect(page.getByText("この回答設定で使うモデルです。質問でモデルを選んだ場合は、その選択を優先します。")).toBeVisible();
   const contact = page.getByTestId("search-answer-profile-contact-load-failed");
   await expect(contact.getByRole("alert")).toHaveText("継承するシステム設定の窓口を読み込めませんでした。");
   await expect(page.locator("#search-answer-profile-contact-override")).toBeEditable();
-  expect(await findFieldLoadFailureViolations(page, { expectCount: 4 })).toEqual([]);
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 3 })).toEqual([]);
   await answerModel.evaluate((element) => element.scrollIntoView({ block: "center" }));
   await page.screenshot({ path: testInfo.outputPath(`profile-models-load-failed-${testInfo.project.name}.png`) });
   await contact.evaluate((element) => element.scrollIntoView({ block: "center" }));
@@ -359,16 +343,15 @@ test("モデル・継承する窓口・言語資源の読み取りの失敗は�
   // 初期状態のまま言語資源の失敗と再試行が見える。Disclosureを先に開く必要はない。
   const languagePack = page.getByTestId("search-answer-profile-language-pack-load-failed");
   await expect(languagePack.getByRole("alert")).toHaveText("言語資源の上書きの欄を読み込めませんでした。");
-  expect(await findFieldLoadFailureViolations(page, { expectCount: 4 })).toEqual([]);
+  expect(await findFieldLoadFailureViolations(page, { expectCount: 3 })).toEqual([]);
   await expectNoPageOverflow(page);
   await languagePack.evaluate((element) => element.scrollIntoView({ block: "center" }));
   await page.screenshot({ path: testInfo.outputPath(`profile-language-pack-load-failed-${testInfo.project.name}.png`) });
 
-  // 再試行で読み取れたら、失敗の表示を消す（モデルは 1 つの読み取りなので 2 つとも消える）。
+  // 再試行で読み取れたら、失敗の表示を消す。
   fail = false;
   await answerModel.getByRole("button", { name: "再試行" }).click();
   await expect(answerModel).toHaveCount(0);
-  await expect(escalationModel).toHaveCount(0);
   await contact.getByRole("button", { name: "再試行" }).click();
   await expect(contact).toHaveCount(0);
   await languagePack.getByRole("button", { name: "再試行" }).click();
@@ -1582,12 +1565,14 @@ test("プロファイルの知識の Tab は段階順で、質問の理解を出
 });
 
 
-test("固定返信は公開済み全体値を継承し、二欄を別々に戻しても他の上書きを残す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("固定返信は全体の値ではなく組み込みの値を使い、二欄を別々に戻しても他の上書きを残す (#5463)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   const unchanged = { answer_check_cues: { related_stopwords: ["合成の保持語"] }, answer_labels: { abstention_guidance: "合成の保持する案内。" } };
   await mockDefaultSearchAnswerProfile(page, value => { body = value; }, {}, { language_pack: unchanged });
-  const labels = { insufficient_evidence_summary: "公開済みの合成要約。", empty_search_guidance: "公開済みの合成案内。", abstention_guidance: "全体の別案内。" };
-  const effective = { answer_labels: labels, answer_check_cues: { related_stopwords: ["全体の語"] }, question_cues: { subquestion_reference_followers: ["合成の印"] } };
+  // 固定返信は組み込みの値を使う。以前に全体で変えた値（effective）は使わない（#5463）。
+  const labels = { insufficient_evidence_summary: "組み込みの合成要約。", empty_search_guidance: "組み込みの合成案内。", abstention_guidance: "全体の別案内。" };
+  const effective = { answer_labels: { ...labels, insufficient_evidence_summary: "旧い全体の合成要約。", empty_search_guidance: "旧い全体の合成案内。" }, answer_check_cues: { related_stopwords: ["全体の語"] }, question_cues: { subquestion_reference_followers: ["合成の印"] } };
+  const builtin = { ...effective, answer_labels: labels };
   const fields = [
     ...Object.keys(labels).map(key => ({ section: "answer_labels", key, kind: "text", multiline: true, choices: [], ingest: false, max_chars: 2000 })),
     { section: "answer_check_cues", key: "related_stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
@@ -1598,7 +1583,7 @@ test("固定返信は公開済み全体値を継承し、二欄を別々に戻�
     draftReads += 1;
     await route.fulfill({ json: { data: { draft_effective: { answer_labels: { insufficient_evidence_summary: "未公開の草稿。" } } }, error_messages: [], warning_messages: [] } });
   });
-  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: { data: { fields, builtin: effective, overrides: {}, effective, hash: "published-v2", current_release: { id: "v2", version: 2, effective } }, error_messages: [], warning_messages: [] } }));
+  await page.route("**/api/settings/language-pack", route => route.fulfill({ json: { data: { fields, builtin, overrides: {}, effective, hash: "published-v2", current_release: { id: "v2", version: 2, effective } }, error_messages: [], warning_messages: [] } }));
   await page.goto("/search-answer-profiles?id=bv-default");
   const section = page.getByTestId("empty-evidence-response-settings");
   const summary = section.getByLabel("根拠不足の前置き", { exact: true });
@@ -1609,7 +1594,13 @@ test("固定返信は公開済み全体値を継承し、二欄を別々に戻�
   await expect(guidance).toHaveValue(labels.empty_search_guidance);
   await expect(preview).toHaveJSProperty("textContent", labels.insufficient_evidence_summary + labels.empty_search_guidance);
   expect(draftReads).toBe(0);
-  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(2);
+  await expect(section).not.toContainText("旧い全体の");
+  // 「窓口」と同じ枠（見出しは legend。入力欄とプレビューは枠の内側。#5463）。
+  await expect(section).toHaveJSProperty("tagName", "FIELDSET");
+  await expect(section.locator("legend")).toHaveText("根拠がないときの固定返信");
+  await expect(page.getByRole("group", { name: "根拠がないときの固定返信" })).toContainText("基本本文のプレビュー");
+  await section.screenshot({ path: testInfo.outputPath("empty-evidence-profile-framed.png") });
+  await expect(section.getByText("組み込みの値", { exact: true })).toHaveCount(2);
   const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
   const expected = (extra: Record<string, string>) => ({ ...unchanged, answer_labels: { ...unchanged.answer_labels, ...extra } });
   await summary.fill("プロファイルの合成要約。");
@@ -1625,23 +1616,23 @@ test("固定返信は公開済み全体値を継承し、二欄を別々に戻�
   await advanced.getByRole("tab", { name: "回答を確かめて表す", exact: true }).click();
   await expect(advanced.getByLabel("根拠不足の前置き", { exact: true })).toHaveCount(0);
   await expect(advanced.getByLabel("検索で根拠がないときの確認案内", { exact: true })).toHaveCount(0);
-  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).nth(0).click();
+  await section.getByRole("button", { name: "組み込みの値に戻す", exact: true }).nth(0).click();
   await expect(summary).toHaveValue(labels.insufficient_evidence_summary);
   await expect(guidance).toHaveValue("プロファイルの合成案内。");
-  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(1);
+  await expect(section.getByText("組み込みの値", { exact: true })).toHaveCount(1);
   await expect(section.getByText("このプロファイルで上書き", { exact: true })).toHaveCount(1);
   await save.click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual(expected({ empty_search_guidance: "プロファイルの合成案内。" }));
-  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).click();
+  await section.getByRole("button", { name: "組み込みの値に戻す", exact: true }).click();
   await save.click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual(unchanged);
   await page.reload();
   await expect(summary).toHaveValue(labels.insufficient_evidence_summary);
   await expect(guidance).toHaveValue(labels.empty_search_guidance);
   await expect(preview).toHaveJSProperty("textContent", labels.insufficient_evidence_summary + labels.empty_search_guidance);
-  await expect(section.getByRole("button", { name: "全体の値に戻す", exact: true })).toHaveCount(0);
+  await expect(section.getByRole("button", { name: "組み込みの値に戻す", exact: true })).toHaveCount(0);
   expect(draftReads).toBe(0);
-  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(2);
+  await expect(section.getByText("組み込みの値", { exact: true })).toHaveCount(2);
   await section.scrollIntoViewIfNeeded();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("empty-evidence-profile-restored.png"), fullPage: true });
@@ -1722,7 +1713,7 @@ async function mockProfileLanguagePackSuccess(page: Page) {
 }
 
 
-test("固定返信の保存済みBOMは保持し、NEL編集と個別の継承復元を区別する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("固定返信の保存済みBOMは保持し、NEL編集と個別の組み込みの値への復元を区別する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let body = null as Record<string, unknown> | null;
   const globalLabels = { insufficient_evidence_summary: "\uFEFF合成の公開済み前置き。\uFEFF", empty_search_guidance: "\uFEFF合成の全体案内。\uFEFF", abstention_guidance: "\uFEFF合成の汎用全体案内。\uFEFF" };
   const savedGuidance = "\uFEFF合成の保存済み上書き。\uFEFF";
@@ -1743,7 +1734,7 @@ test("固定返信の保存済みBOMは保持し、NEL編集と個別の継承�
   await expect(guidance).toHaveValue(savedGuidance);
   // Python stripはBOMを除去しない。未編集の保存値へJavaScript trimを再適用しない。
   await expect(preview).toHaveJSProperty("textContent", globalLabels.insufficient_evidence_summary + savedGuidance);
-  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(1);
+  await expect(section.getByText("組み込みの値", { exact: true })).toHaveCount(1);
   await expect(section.getByText("このプロファイルで上書き", { exact: true })).toHaveCount(1);
   const edited = "\u0085合成の編集中前置き。\u0085";
   await summary.fill(edited);
@@ -1753,20 +1744,20 @@ test("固定返信の保存済みBOMは保持し、NEL編集と個別の継承�
   await save.click();
   // NELは現在の保存用JS trimでは残り、backendで本文にする際だけ除去される。
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual({ ...unrelated, answer_labels: { ...unrelated.answer_labels, insufficient_evidence_summary: edited, empty_search_guidance: savedGuidance } });
-  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).nth(0).click();
+  await section.getByRole("button", { name: "組み込みの値に戻す", exact: true }).nth(0).click();
   await expect(summary).toHaveValue(globalLabels.insufficient_evidence_summary);
   await expect(preview).toHaveJSProperty("textContent", globalLabels.insufficient_evidence_summary + savedGuidance);
   await save.click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual({ ...unrelated, answer_labels: { ...unrelated.answer_labels, empty_search_guidance: savedGuidance } });
-  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).click();
+  await section.getByRole("button", { name: "組み込みの値に戻す", exact: true }).click();
   await save.click();
   await expect.poll(() => (body?.config as { language_pack?: unknown } | undefined)?.language_pack).toEqual(unrelated);
   await page.reload();
   await expect(summary).toHaveValue(globalLabels.insufficient_evidence_summary);
   await expect(guidance).toHaveValue(globalLabels.empty_search_guidance);
   await expect(preview).toHaveJSProperty("textContent", globalLabels.insufficient_evidence_summary + globalLabels.empty_search_guidance);
-  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(2);
-  await expect(section.getByRole("button", { name: "全体の値に戻す", exact: true })).toHaveCount(0);
+  await expect(section.getByText("組み込みの値", { exact: true })).toHaveCount(2);
+  await expect(section.getByRole("button", { name: "組み込みの値に戻す", exact: true })).toHaveCount(0);
   // 高度な一覧の同じ復元操作も、保存済みBOMを再直列化せずキーだけを削除する。
   const advanced = page.getByTestId("search-answer-profile-language-pack");
   await advanced.locator("summary").click();
@@ -1808,7 +1799,7 @@ test("プロファイルの説明は3行で編集し、Enterで保存せず内�
   await page.screenshot({ path: testInfo.outputPath("multiline-profile-description.png") });
 });
 
-test("固定返信の本文は3行で編集し、改行を保存して再表示し全体へ復帰できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("固定返信の本文は3行で編集し、改行を保存して再表示し組み込みの値へ戻せる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const updates: Record<string, unknown>[] = [];
   await mockDefaultSearchAnswerProfile(page, (body) => updates.push(body));
   await mockProfileLanguagePackSuccess(page);
@@ -1827,12 +1818,12 @@ test("固定返信の本文は3行で編集し、改行を保存して再表示�
   await page.reload();
   await expect(summary).toHaveValue(text);
   await expect(section.getByTestId("empty-evidence-response-preview")).toHaveJSProperty("textContent", text + "合成の確認案内。");
-  await section.getByRole("button", { name: "全体の値に戻す", exact: true }).click();
+  await section.getByRole("button", { name: "組み込みの値に戻す", exact: true }).click();
   await save.click();
   await expect.poll(() => (updates.at(-1)?.config as { language_pack?: unknown })?.language_pack).toEqual({});
   await page.reload();
   await expect(summary).toHaveValue("合成の前置き。");
-  await expect(section.getByText("全体設定を継承", { exact: true })).toHaveCount(2);
+  await expect(section.getByText("組み込みの値", { exact: true })).toHaveCount(2);
   await expectNoPageOverflow(page);
   await section.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("multiline-fixed-response-profile.png") });

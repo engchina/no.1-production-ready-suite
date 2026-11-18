@@ -86,7 +86,6 @@ def test_new_keys_do_not_grow_the_stored_record_much() -> None:
         pipeline="grounded",
         llm_calls=1,
         final_fact_count=3,
-        escalation_signals=["structured_output_invalid"],
         same_unit_fill={"applied": False, "reason": "no_new_compatible_evidence"},
         retrieval_counts={
             "candidate_count": 12,

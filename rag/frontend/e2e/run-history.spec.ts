@@ -967,7 +967,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await models.screenshot({ path: testInfo.outputPath("recorded-model-display.png") });
   });
 
-  test("詳細: 高性能モデルで回答し直した実行はモデルごとの token と理由を出し、本文には出さない (#4581)", async ({ page }, testInfo) => {
+  test("詳細: 2 つのモデルを呼んだ実行はモデルごとの token を出す (#4599)", async ({ page }, testInfo) => {
     await mockLocalAuth(page);
     const usage = {
       models: ["model-light", "model-strong"], requests: 3, input_tokens: 9000, output_tokens: 900, total_tokens: 9900,
@@ -977,16 +977,15 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
         { model: "model-strong", requests: 2, input_tokens: 6000, output_tokens: 600, total_tokens: 6600 },
       ],
     };
-    const cascade = { primary_model: "model-light", escalation_model: "model-strong", escalated: true, reasons: ["structured_output_invalid"], stage: "answer.generate" };
     await mockRuns(page, [
       run(1, {
         question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light", usage,
-        answer_diagnostics: { models: { llm: { model_id: "model-light", label: "モデル Light" } }, model_cascade: cascade },
+        answer_diagnostics: { models: { llm: { model_id: "model-light", label: "モデル Light" } } },
       }),
       run(2, {
         question: "合成の質問", answer: "合成の回答", citations: [], model_id: "model-light",
         usage: { ...usage, models: ["model-light"], by_model: usage.by_model.slice(0, 1) },
-        answer_diagnostics: { models: { llm: { model_id: "model-light", label: "モデル Light" } }, model_cascade: { ...cascade, escalated: false, reasons: [] } },
+        answer_diagnostics: { models: { llm: { model_id: "model-light", label: "モデル Light" } } },
       }),
     ]);
     const summary = page.getByTestId("run-history-summary");
@@ -1005,23 +1004,16 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     expect(monoSize).toBe("12px");
     expect(await modelIds.evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).fontSize))).toEqual([monoSize, monoSize]);
     expect(await fact("modelTokens").evaluate((node) => getComputedStyle(node).fontSize)).toBe("14px");
-    await expect(fact("modelCascade")).toHaveText("あり（生成の出力が形式の検査を通らなかった）");
-    // 本文には出さず、畳んだ「処理の詳細」を開いたときだけ見える。
-    await expect(page.getByTestId("answer-model-cascade")).toBeHidden();
-    await page.getByTestId("run-history-timeline-summary").click();
-    await page.getByTestId("run-history-process-details").click();
-    const line = page.getByTestId("answer-model-cascade");
-    await expect(line).toContainText("最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました");
-    await expect(line).toContainText("理由: 生成の出力が形式の検査を通らなかった");
-    await expect(page.getByTestId("answer-models").locator("dd")).toContainText(["モデル Light", "model-strong"]);
+    // 回答し直しの行は無い（回答は 1 つのモデルだけで行う。#5463）。
+    await expect(summary.locator('[data-run-fact="modelCascade"]')).toHaveCount(0);
     await expectNoPageOverflow(page);
     for (const theme of ["light", "dark"]) {
       await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
-      await summary.screenshot({ path: testInfo.outputPath(`cascade-summary-${theme}.png`) });
+      await summary.screenshot({ path: testInfo.outputPath(`model-tokens-summary-${theme}.png`) });
     }
-    // 回答し直さなかった実行は「なし」、モデルが 1 つならモデルごとの token は出さない。
+    // モデルが 1 つならモデルごとの token は出さない。
     await page.goto("/history/run-2");
-    await expect(fact("modelCascade")).toHaveText("なし");
+    await expect(fact("model")).toBeVisible();
     await expect(summary.locator('[data-run-fact="modelTokens"]')).toHaveCount(0);
   });
 

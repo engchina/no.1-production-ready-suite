@@ -100,8 +100,6 @@ export type AnswerDiagnostics = {
    * 無効なら空。
    */
   models: { llm: ModelRef | null; attachedImages: number; embedding: string; rerank: string };
-  /** モデルのカスケード（#4581）。カスケードしない実行・古い記録は null。 */
-  modelCascade: ModelCascadeRecord | null;
   /** 失敗して省いた補助の工程の、利用者向けの名前（#4681）。縮退が無ければ空。 */
   degradedSteps: string[];
   /** 検索の件数（基準で絞り込む前の候補・基準を通過・回答に使用。#4735）。項目の無い記録は null（行を出さない）。 */
@@ -229,7 +227,6 @@ export function parseAnswerDiagnostics(
     generatedQueries: list(raw.generated_queries).map(String).filter(Boolean),
     graphExpansion: parseGraphExpansion(raw.graph_expansion),
     models: parseModels(raw.models),
-    modelCascade: parseModelCascade(raw.model_cascade),
     degradedSteps: parseDegradedSteps(raw.degraded_steps),
     retrievalCounts: parseRetrievalCounts(raw.retrieval_counts),
     steps: list(raw.execution_steps).map((step) => {
@@ -387,27 +384,6 @@ export function answerCitationMissing(diagnostics: unknown, savedMessage: unknow
 export function answerModelHeading(label: string | null | undefined, attachedImages: number): string | null {
   if (!label) return null;
   return attachedImages > 0 ? t("chat.column.modelWithImages", { name: label }) : t("chat.column.model", { name: label });
-}
-
-/** モデルのカスケードの記録（backend の `pr_backend_core.model_cascade.cascade_record`。#4581）。 */
-export interface ModelCascadeRecord {
-  primaryModel: string;
-  escalationModel: string;
-  escalated: boolean;
-  /** 昇格の理由（`ESCALATION_SIGNALS` の語。昇格しなかった実行は空）。 */
-  reasons: string[];
-}
-
-function parseModelCascade(value: unknown): ModelCascadeRecord | null {
-  const raw = record(value);
-  const escalationModel = String(raw.escalation_model ?? "");
-  if (!escalationModel) return null;
-  return {
-    primaryModel: String(raw.primary_model ?? ""),
-    escalationModel,
-    escalated: raw.escalated === true,
-    reasons: raw.escalated === true ? list(raw.reasons).map(String).filter(Boolean) : [],
-  };
 }
 
 function parseModels(value: unknown): AnswerDiagnostics["models"] {

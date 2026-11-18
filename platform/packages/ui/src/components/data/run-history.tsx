@@ -95,7 +95,7 @@ export interface RunModelTokenUsageRecord {
 }
 
 /**
- * 「モデルごとのトークン数」の値（モデルのカスケードで 2 つ以上のモデルを呼んだ実行。#4581）。モデルが 1 つ・内訳の無い
+ * 「モデルごとのトークン数」の値（2 つ以上のモデルを呼んだ実行。#4581）。モデルが 1 つ・内訳の無い
  * 記録・計測できない実行は null（行を出さない）。数は桁区切り。モデルの ID は「モデル」の行と同じ等幅の書体・大きさ
  * （`RUN_FACT_IDENTIFIER_CLASS`。#4599・#4605）で出し、数の文言（`label`。製品の i18n で上書きできる）は本文の書体・大きさのまま。
  */
@@ -115,46 +115,6 @@ export function runModelTokensView(
       {`: ${label({ tokens: formatPaginationNumber(row.total_tokens), requests: formatPaginationNumber(row.requests) })}`}
     </Fragment>
   ));
-}
-
-/** モデルのカスケードの記録（backend の `pr_backend_core.model_cascade.cascade_record`。#4581）。 */
-export interface ModelCascadeView {
-  escalated: boolean;
-  /** 「詳細」に出す 1 行（昇格しなかった実行は「回答し直していません」）。 */
-  line: string;
-  /** 昇格の理由（表示名を「、」で並べる）。昇格しなかった実行は null。 */
-  reasons: string | null;
-}
-
-/** モデルのカスケードの文言（製品の i18n で上書きできる）。理由の語は `ESCALATION_SIGNALS`。 */
-export interface ModelCascadeLabels {
-  escalated: string;
-  notEscalated: string;
-  reasons: Record<string, string>;
-}
-
-export const DEFAULT_MODEL_CASCADE_LABELS: ModelCascadeLabels = {
-  escalated: "最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました",
-  notEscalated: "回答し直していません（最初のモデルの出力が検査を通りました）",
-  reasons: {
-    structured_output_invalid: "生成の出力が形式の検査を通らなかった",
-  },
-};
-
-/** モデルのカスケードの表示（3 製品で同じ規則）。カスケードしない実行・古い記録は null（何も出さない）。 */
-export function modelCascadeView(
-  record: { escalated: boolean; reasons: readonly string[] } | null | undefined,
-  labels: Partial<ModelCascadeLabels> = {}
-): ModelCascadeView | null {
-  if (!record) return null;
-  const merged = { ...DEFAULT_MODEL_CASCADE_LABELS, ...labels };
-  const reasons = { ...DEFAULT_MODEL_CASCADE_LABELS.reasons, ...labels.reasons };
-  if (!record.escalated) return { escalated: false, line: merged.notEscalated, reasons: null };
-  return {
-    escalated: true,
-    line: merged.escalated,
-    reasons: record.reasons.length ? record.reasons.map((reason) => reasons[reason] ?? reason).join("、") : null,
-  };
 }
 
 /** 利用量の文言（製品の i18n で上書きできる）。 */

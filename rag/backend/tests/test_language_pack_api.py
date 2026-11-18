@@ -54,16 +54,29 @@ def test_paragraph_editor_metadata_preserves_multiline_values_and_published_pack
     response = client.put(
         "/api/settings/language-pack/draft",
         json={
-            "overrides": {"answer_labels": {"insufficient_evidence_summary": body}},
+            "overrides": {"labels": {"graph_section": body}},
             "expected_revision": 1,
         },
     )
     assert response.status_code == 200
-    assert (
-        response.json()["data"]["draft_effective"]["answer_labels"]["insufficient_evidence_summary"]
-        == body
-    )
+    assert response.json()["data"]["draft_effective"]["labels"]["graph_section"] == body
     assert client.get("/api/settings/language-pack").json()["data"] == before
+
+
+@pytest.mark.parametrize("key", ["insufficient_evidence_summary", "empty_search_guidance"])
+def test_empty_evidence_reply_is_not_saved_globally(key: str) -> None:
+    """根拠がないときの固定返信は検索・回答プロファイルだけで設定する(#5463)。全体では保存させない。"""
+    response = client.put(
+        "/api/settings/language-pack/draft",
+        json={
+            "overrides": {"answer_labels": {key: "合成の全体の固定文。"}},
+            "expected_revision": 1,
+        },
+    )
+    assert response.status_code == 422
+    assert f"answer_labels.{key}" in str(response.json())
+    state = client.get("/api/settings/language-pack/draft").json()["data"]
+    assert state["draft_revision"] == 1
 
 
 def test_added_builtin_stopwords_come_back_with_reset_to_default() -> None:

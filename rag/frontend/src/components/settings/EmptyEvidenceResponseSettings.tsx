@@ -2,63 +2,64 @@ import { FormGrid, resolveContentLang } from "@production-ready/ui";
 
 import { LanguageField, languagePackFieldId } from "./LanguagePackFieldsPanel";
 import type { LanguagePackField, LanguagePackSections } from "@/lib/api";
-import { EMPTY_EVIDENCE_RESPONSE_KEYS, emptyEvidenceResponsePreview, effectiveEmptyEvidenceResponsePreview, isEmptyEvidenceResponseField } from "@/lib/empty-evidence-response";
+import { EMPTY_EVIDENCE_RESPONSE_KEYS, effectiveEmptyEvidenceResponsePreview, isEmptyEvidenceResponseField } from "@/lib/empty-evidence-response";
 import { t } from "@/lib/i18n";
 import type { LanguagePackTexts } from "@/lib/language-pack";
 
-/** 全体とプロファイルで共通の、根拠がないときの基本本文の編集と確認。 */
+/**
+ * 検索・回答プロファイルの、根拠がないときの基本本文の編集と確認。全体では設定せず、上書きしない項目は組み込みの値を
+ * 使う（#5463）。同じ画面の「窓口」の区画と同じ枠に入れる。
+ */
 export function EmptyEvidenceResponseSettings({
-  idPrefix, fields, baseline, texts, errors, disabled, profileOverrides, previewValues, onChange, onReset,
+  idPrefix, fields, baseline, texts, errors, disabled, profileOverrides, onChange, onReset,
 }: {
   idPrefix: string;
   fields: LanguagePackField[];
+  /** 固定返信の 2 項目は組み込みの値（`withBuiltinEmptyEvidenceResponse`）。 */
   baseline: LanguagePackSections;
   texts: LanguagePackTexts;
   errors: Record<string, string>;
   disabled: boolean;
-  profileOverrides?: LanguagePackSections;
-  previewValues?: LanguagePackSections;
+  profileOverrides: LanguagePackSections;
   onChange: (key: string, value: string) => void;
-  onReset?: (key: string) => void;
+  onReset: (key: string) => void;
 }) {
-  const profile = profileOverrides !== undefined;
   const id = `${idPrefix}-empty-evidence-response`;
-  const preview = profile ? effectiveEmptyEvidenceResponsePreview(baseline, profileOverrides)
-    : previewValues ? effectiveEmptyEvidenceResponsePreview(previewValues) : emptyEvidenceResponsePreview(texts);
+  const preview = effectiveEmptyEvidenceResponsePreview(baseline, profileOverrides);
   return (
-    <section aria-labelledby={id} className="space-y-4" data-testid="empty-evidence-response-settings">
-      <div className="space-y-2">
-        <h3 id={id} className="text-base font-semibold text-fg">{t("settings.language.emptyEvidence.title")}</h3>
-        <p className="text-sm text-fg-muted">{t("settings.language.emptyEvidence.helper")}</p>
-        <p className="text-xs text-fg-muted">{t(profile ? "settings.language.emptyEvidence.profileSave" : "settings.language.emptyEvidence.globalSave")}</p>
+    <fieldset className="space-y-3 rounded-lg border border-border p-4" data-testid="empty-evidence-response-settings">
+      <legend className="px-1 text-sm font-semibold text-fg">{t("settings.language.emptyEvidence.title")}</legend>
+      <p className="text-xs text-fg-muted">{t("settings.language.emptyEvidence.helper")}</p>
+      <p className="text-xs text-fg-muted">{t("settings.language.emptyEvidence.profileSave")}</p>
+      <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-3">
+        <FormGrid>
+          {fields.filter(isEmptyEvidenceResponseField).sort((left, right) =>
+            EMPTY_EVIDENCE_RESPONSE_KEYS.findIndex((key) => key === left.key) - EMPTY_EVIDENCE_RESPONSE_KEYS.findIndex((key) => key === right.key),
+          ).map((field) => {
+            const key = `${field.section}.${field.key}`;
+            return <LanguageField
+              key={key}
+              id={languagePackFieldId(idPrefix, field)}
+              field={field}
+              baseline={baseline}
+              texts={texts}
+              error={errors[key]}
+              disabled={disabled}
+              overridden={Object.hasOwn(profileOverrides[field.section] ?? {}, field.key)}
+              changedLabel={t("settings.language.emptyEvidence.overridden")}
+              unchangedLabel={t("settings.language.emptyEvidence.builtin")}
+              resetLabel={t("settings.language.emptyEvidence.reset")}
+              onChange={(value) => onChange(key, value)}
+              onReset={() => onReset(key)}
+            />;
+          })}
+        </FormGrid>
+        <div className="space-y-2" role="region" aria-labelledby={`${id}-preview-title`}>
+          <h4 id={`${id}-preview-title`} className="text-sm font-semibold text-fg">{t("settings.language.emptyEvidence.preview")}</h4>
+          <p className="text-xs text-fg-muted">{t("settings.language.emptyEvidence.previewHelp")}</p>
+          <p lang={resolveContentLang(undefined, preview)} className="whitespace-pre-wrap break-words text-sm text-fg" data-testid="empty-evidence-response-preview">{preview}</p>
+        </div>
       </div>
-      <FormGrid>
-        {fields.filter(isEmptyEvidenceResponseField).sort((left, right) =>
-          EMPTY_EVIDENCE_RESPONSE_KEYS.findIndex((key) => key === left.key) - EMPTY_EVIDENCE_RESPONSE_KEYS.findIndex((key) => key === right.key),
-        ).map((field) => {
-          const key = `${field.section}.${field.key}`;
-          return <LanguageField
-            key={key}
-            id={languagePackFieldId(idPrefix, field)}
-            field={field}
-            baseline={baseline}
-            texts={texts}
-            error={errors[key]}
-            disabled={disabled}
-            overridden={profile ? Object.hasOwn(profileOverrides[field.section] ?? {}, field.key) : undefined}
-            changedLabel={t(profile ? "settings.language.emptyEvidence.overridden" : "settings.language.changed")}
-            unchangedLabel={t(profile ? "settings.language.emptyEvidence.inherited" : "settings.language.emptyEvidence.builtin")}
-            resetLabel={t(profile ? "searchAnswerProfiles.languagePack.reset" : "settings.language.resetField")}
-            onChange={(value) => onChange(key, value)}
-            onReset={onReset ? () => onReset(key) : undefined}
-          />;
-        })}
-      </FormGrid>
-      <div className="space-y-2" role="region" aria-labelledby={`${id}-preview-title`}>
-        <h4 id={`${id}-preview-title`} className="text-sm font-semibold text-fg">{t("settings.language.emptyEvidence.preview")}</h4>
-        <p className="text-xs text-fg-muted">{t("settings.language.emptyEvidence.previewHelp")}</p>
-        <p lang={resolveContentLang(undefined, preview)} className="whitespace-pre-wrap break-words text-sm text-fg" data-testid="empty-evidence-response-preview">{preview}</p>
-      </div>
-    </section>
+    </fieldset>
   );
 }

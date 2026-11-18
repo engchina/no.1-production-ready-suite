@@ -381,8 +381,6 @@ def test_build_engine_settings_passes_image_input_tokens(tmp_path: Any) -> None:
     )
     from rag_engine.config import get_llm_provider
 
-    from app.rag.answer_engine import escalation_model_environ
-
     models = [
         EnterpriseAiConfiguredModel(
             model_id="llm-a", vision_enabled=True, image_input_tokens=2_500
@@ -402,10 +400,6 @@ def test_build_engine_settings_passes_image_input_tokens(tmp_path: Any) -> None:
     answer = get_llm_provider(engine, engine.default_answer_llm)
     vision = get_llm_provider(engine, engine.default_vision_llm)
     assert (answer.image_input_tokens, vision.image_input_tokens) == (2_500, 6_000)
-    escalation = escalation_model_environ(
-        settings.model_copy(update={"rag_answer_escalation_model": "vlm-a"}), "llm-a"
-    )
-    assert escalation["RAG_ENGINE_ESCALATION_IMAGE_INPUT_TOKENS"] == "6000"
     other = build_engine_settings(settings, output_dir=tmp_path, answer_model_id="llm-b")
     assert (
         get_llm_provider(other, other.default_answer_llm).image_input_tokens
