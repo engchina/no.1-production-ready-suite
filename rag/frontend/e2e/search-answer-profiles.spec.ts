@@ -197,9 +197,9 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 / 上書きを選ぶのは文書ごとの根拠上限と回答モデルの2選択欄だけ。
+    // 継承 / 上書きを選ぶのは回答モデルの選択欄と、出力の検査を通らなかったときのモデルだけ（文書ごとの根拠上限は画面に出さない。#5443）。
     await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(1);
-    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(2);
+    await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(1);
     await expect(settings.getByRole("button", { name: "使わない" })).toHaveCount(1);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
     await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
