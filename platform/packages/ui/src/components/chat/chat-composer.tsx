@@ -44,7 +44,12 @@ export interface ChatComposerProps {
   rows?: number;
   /** 入力欄の上の設定の行（`ChatComposerOption`。RAG「回答するモデル」、NL2SQL「生成方法」）。 */
   options?: ReactNode;
-  /** 入力欄の下の通知（停止の失敗・会話の件数の上限など）。 */
+  /**
+   * 送信の前に知らせる案内（送ると失敗しうる・送れない条件。#5412）。入力欄の領域の先頭（設定の行・添付・入力欄の
+   * 上）に出し、送信のボタンより前に読ませる。
+   */
+  notices?: ReactNode;
+  /** 操作の後の通知（停止の失敗・会話の件数の上限など）。送信 / 停止のボタンの直下（入力欄の下）に出す。 */
   footer?: ReactNode;
   /**
    * 会話の添付（#2517）。渡すと「ファイルを添付」の行と添付の一覧を入力欄の上に出し、入力欄の領域への
@@ -67,6 +72,8 @@ export interface ChatComposerProps {
  * - 送れない間（入力が空・`submitBlocked`）のボタンは `aria-disabled`（フォーカスを受ける）。
  * - 閲覧だけの会話（他の利用者の会話。#3244）では、この部品の代わりに `ChatReadOnlyNotice` を置く。
  * - 添付（`attachments`）は「ファイルを添付」の行と一覧を入力欄の上に出す（#2517）。
+ * - 送信の前の案内は `notices`（入力欄の領域の先頭）、操作の後の通知は `footer`（ボタンの直下）。案内は起点の
+ *   操作の前に読ませる（#5412）。
  */
 export function ChatComposer({
   id,
@@ -85,6 +92,7 @@ export function ChatComposer({
   maxLength,
   rows = 3.5,
   options,
+  notices,
   footer,
   sendTestId,
   attachments,
@@ -146,6 +154,7 @@ export function ChatComposer({
   );
   return (
     <>
+      {notices}
       {options}
       {attachments ? <ChatComposerAttachmentArea attachments={attachments}>{input}</ChatComposerAttachmentArea> : input}
       {footer}

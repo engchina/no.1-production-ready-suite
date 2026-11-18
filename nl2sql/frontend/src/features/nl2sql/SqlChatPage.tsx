@@ -318,7 +318,7 @@ export function SqlChatPage() {
   );
   const engineDescriptionId = useId();
   // Select AI / Select AI Agent の生成は Select AI の Credential が前提（#1688）。無いと分かったら
-  // 入力欄の下に事前条件を示し、送信を止める（OCI Enterprise AI の生成は止めない）。
+  // 入力欄の上に事前条件を示し、送信を止める（OCI Enterprise AI の生成は止めない）。
   const selectAiCredential = useSelectAiCredentialReadiness();
   const selectAiCredentialBlocked =
     engineUsesSelectAiCredential(engine) && selectAiCredential.missing;
@@ -887,7 +887,8 @@ export function SqlChatPage() {
                   }
                   // 会話の添付（#2517。運用設定で有効なときだけ）。
                   attachments={chatAttachments.composer}
-                  footer={
+                  // 送信の前の案内（添付を使わないエンジン・Select AI の認証の前提）は入力欄の上（#5412）。
+                  notices={
                     <>
                       {attachmentEngineMismatch ? (
                         <p className="text-sm text-fg-muted" data-testid="sql-chat-attachment-engine">
@@ -899,13 +900,17 @@ export function SqlChatPage() {
                           id="sql-chat-credential-precondition"
                           testId="sql-chat-credential-precondition"
                           operation={t("selectAiCredential.precondition.operation.generate")}
-          action={t("chat.send")}
-          credentialName={selectAiCredential.credentialName}
+                          action={t("chat.send")}
+                          credentialName={selectAiCredential.credentialName}
                           canOpenSettings={selectAiCredential.canOpenSettings}
                           rechecking={selectAiCredential.rechecking}
                           onRecheck={() => void selectAiCredential.recheck()}
                         />
                       ) : null}
+                    </>
+                  }
+                  footer={
+                    <>
                       {stop.isError ? (
                         <ApiErrorBanner
                           error={stop.error}
