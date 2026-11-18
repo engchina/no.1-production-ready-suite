@@ -819,25 +819,27 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
                 sendTestId="chat-send"
                 // 会話の添付（#2517。運用設定で有効な製品だけ）。
                 attachments={attachments.composer}
+                // 選んだ業務 Agent が削除されたスキルを選んでいる（#5342）。送信は止めず、実行が失敗しうることを
+                // 送信の前に入力欄の上で示す（業務 Agent の一覧の unavailable_skill_ids。#5412）。
+                notices={
+                  <CombinedBanner
+                    items={[
+                      selectedAgent?.unavailable_skill_ids?.length
+                        ? {
+                            id: "skills-unavailable",
+                            severity: "warning",
+                            title: t("chat.agentSkillUnavailable.title"),
+                            testId: "chat-agent-skills-unavailable",
+                            children: t("chat.agentSkillUnavailable.message", {
+                              skills: selectedAgent.unavailable_skill_ids.join("、"),
+                            }),
+                          }
+                        : null,
+                    ]}
+                  />
+                }
                 footer={
                   <>
-                    {/* 選んだ業務 Agent が削除されたスキルを選んでいる（#5342）。送信は止めず、実行が失敗しうることを
-                        送信の前に示す（業務 Agent の一覧の unavailable_skill_ids）。 */}
-                    <CombinedBanner
-                      items={[
-                        selectedAgent?.unavailable_skill_ids?.length
-                          ? {
-                              id: "skills-unavailable",
-                              severity: "warning",
-                              title: t("chat.agentSkillUnavailable.title"),
-                              testId: "chat-agent-skills-unavailable",
-                              children: t("chat.agentSkillUnavailable.message", {
-                                skills: selectedAgent.unavailable_skill_ids.join("、"),
-                              }),
-                            }
-                          : null,
-                      ]}
-                    />
                     {cancel.error ? (
                       // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
                       <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />

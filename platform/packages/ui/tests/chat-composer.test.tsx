@@ -49,6 +49,7 @@ function Harness({
           <span>select</span>
         </ChatComposerOption>
       }
+      notices={<p data-testid="notices">送信の前の案内</p>}
       footer={<p data-testid="footer">通知</p>}
     />
   );
@@ -76,9 +77,11 @@ afterEach(() => {
 });
 
 describe("ChatComposer", () => {
-  it("設定の行・入力欄と送信・通知の順に並び、入力欄は名前を読み上げだけで持つ", () => {
+  it("送信の前の案内・設定の行・入力欄と送信・通知の順に並び、入力欄は名前を読み上げだけで持つ", () => {
     act(() => root.render(<Harness onSubmit={vi.fn()} onStop={vi.fn()} />));
     const ids = Array.from(host.querySelectorAll("[data-testid]")).map((el) => el.getAttribute("data-testid"));
+    // 送信の前の案内は送信のボタンより前に読ませる（#5412）。
+    expect(ids.indexOf("notices")).toBe(0);
     expect(ids.indexOf("option")).toBeLessThan(ids.indexOf("send"));
     expect(ids.indexOf("send")).toBeLessThan(ids.indexOf("footer"));
     expect(host.querySelector('label[for="composer"]')!.textContent).toBe("質問");

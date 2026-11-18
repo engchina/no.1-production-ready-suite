@@ -3669,6 +3669,7 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
       <SelectField id="engine" label={t("chat.engine")} labelHidden size="sm" width="sm" … />
     </ChatComposerOption>
   }
+  notices={credentialBlocked ? <SelectAiCredentialPrecondition … /> : null}  // 送信の前の案内（入力欄の上）
   footer={stopError ? <ApiErrorBanner error={stopError} fallback={t("chat.stopFailed")} /> : null}
 />
 ```
@@ -3680,7 +3681,8 @@ import { ChatComposer, ChatComposerOption } from "@production-ready/ui";
 | 入力欄は回答の作成中も書ける。書けないのは前提（対象の一覧・会話の内容）の読み込み中（`disabled`）だけ。送れない間の送信のボタンは `aria-disabled`（フォーカスを受ける） | 次の質問を書ける（messaging.md §11.1）。送信の後に入力欄が空になってもフォーカスが外れない（#355） |
 | 入力欄の名前は「質問」に 3 製品でそろえ、画面には出さない（placeholder で目的を示す） | 製品ごとに「メッセージを入力…」「クエリ」「質問」と違っていた。目的は会話の領域から分かる |
 | 設定の行は「名前・info アイコン・選択」。説明は常設しない | 入力欄の上を説明の文で埋めない（#901） |
-| 停止の失敗などの通知は `footer`（入力欄の下）に出す | 起点の操作（送信 / 停止のボタン）の直下（messaging.md §10） |
+| 送信の前の案内（送ると失敗しうる・送れない条件。Agent の削除されたスキル、NL2SQL の Select AI の認証の前提・添付を使わないエンジン）は `notices`（入力欄の領域の先頭）に出す（#5412） | 案内は起点の操作の前・原因の近くに読ませる。入力欄・送信のボタンの下に出すと、送った後に気づく（NN/g のエラー表示の指針、Carbon の inline notification。チャットの送信の欄の直上は Slack・Teams・ChatGPT と同じ） |
+| 停止の失敗などの操作の後の通知は `footer`（入力欄の下）に出す | 起点の操作（送信 / 停止のボタン）の直下（messaging.md §10） |
 | 閲覧だけの会話（system_admin が開いた他の利用者の会話）では、この部品を置かず `ChatReadOnlyNotice` を置く（#3244。#1954 の送る前の案内 `notice` は外した） | 他の利用者の会話には送れない（backend も 403）。送れない入力欄を無効にして残さない |
 
 - 単体テストは `packages/ui/tests/chat-composer.test.tsx`。

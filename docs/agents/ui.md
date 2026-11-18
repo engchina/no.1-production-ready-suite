@@ -75,6 +75,7 @@
 正本は [`messaging.md` §10](../../platform/docs/ux-contracts/messaging.md#10-操作の結果状態の出し方位置幅形出す情報705)。新しい画面は最初から、既存の画面は触るときに従う。結果は起点の操作の**直下**に**全幅**で出し、テスト・接続確認は結果パネル、保存は Toast / `FormStatus`、処理の失敗は danger の `Banner`、対象の状態は見出しの `StatusBadge`。技術的な詳細は「詳細」に畳み、自動で消さない。
 
 - **同じ区画（カード・フォーム・1 つの回答）の案内の枠は 1 つ**（#5183。正本は `messaging.md` §3.4.3）。複数の事柄は共有の `CombinedBanner` の項目で同じ枠に並べ、`Banner` を積まない。色は最も重い項目（danger > warning > info）、見出しは最も重い事柄にし、見出しの `StatusBadge` の文字を繰り返さない。区画で数える（チャットは回答ごとに 1 つ）。製品で重複の除去を個別に書かない。
+- **チャットの送信の前の案内（送ると失敗しうる・送れない条件）は `ChatComposer` の `notices`（入力欄の上）、操作の後の通知（停止の失敗・件数の上限）は `footer`（送信 / 停止のボタンの下）に出す**（#5412。正本は components-reference の `ChatComposer`）。案内を送信のボタンの後に置かない。
 - **欄の候補・欄の値の読み取りの失敗は、共有の `DataLoadFailureState` の `layout="field"`（製品の `components/DataLoadStates.tsx` の `DataLoadFailure`）で欄の直下に出す**（#4817。正本は `messaging.md` §3.6.1）。`fallback` には欄ごとの文（「〈欄の名前〉の候補を読み込めませんでした。」。i18n）を渡し、製品で `Banner`・警告の文・`helper` / `error` の文・手書きの枠を作らない。候補が無いままの失敗を「候補なし」「すべて」だけと見せない・欄ごと消さない。e2e は `findFieldLoadFailureViolations` で確かめる。
 
 ## lint

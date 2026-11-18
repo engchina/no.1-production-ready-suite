@@ -93,7 +93,7 @@ test.describe("削除されたスキルと RAG の回答をそのまま返すス
     await expect(notices).toContainText(REMOVED_SKILL);
   });
 
-  test("チャット: 選んだ業務 Agent に削除されたスキルがあれば、送信の前に警告を出す（送信は止めない）", async (
+  test("チャット: 選んだ業務 Agent に削除されたスキルがあれば、送信の前に警告を出す（送信は止めない）", { tag: "@responsive" }, async (
     { page, mockApi },
     testInfo
   ) => {
@@ -106,6 +106,12 @@ test.describe("削除されたスキルと RAG の回答をそのまま返すス
     await expect(warning).toContainText("この業務 Agent は削除されたスキルを選んでいます");
     await expect(warning).toContainText("送信すると実行が失敗することがあります。");
     await expect(warning).toContainText(REMOVED_SKILL);
+    // 送信の前の案内なので入力欄の上に出す（送信のボタンの後に置かない。#5412）。
+    const warningBox = await warning.boundingBox();
+    const composerBox = await page.getByLabel("質問").boundingBox();
+    const sendBox = await page.getByTestId("chat-send").boundingBox();
+    expect(warningBox!.y + warningBox!.height).toBeLessThanOrEqual(composerBox!.y);
+    expect(warningBox!.y + warningBox!.height).toBeLessThanOrEqual(sendBox!.y);
     // 警告で会話の欄が低くなっても（375px）、空の状態は末尾へ送らず先頭から見せる（上端が隠れない。#5397）。
     const log = page.getByRole("log");
     const emptyTitle = log.getByText("質問を入力して会話を始めます");

@@ -2279,7 +2279,7 @@ test("確認の途中で再読込しても、同じ確認を続けられる (#14
   expect(state.requests[0]).toMatchObject({ requirement_session_id: REQUIREMENT_SESSION_ID });
 });
 
-test("Select AI Credential が無いと Select AI の送信を止めて入力欄の下に事前条件を示し、Enterprise AI は送れる (#1688)", { tag: "@responsive" }, async ({
+test("Select AI Credential が無いと Select AI の送信を止めて入力欄の上に事前条件を示し、Enterprise AI は送れる (#1688)", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   const state = await setup(page);
@@ -2309,10 +2309,10 @@ test("Select AI Credential が無いと Select AI の送信を止めて入力欄
   await composer.press("Enter");
   await expect(composer).toHaveValue("カテゴリ別売上");
   expect(state.requests).toHaveLength(0);
-  // 入力欄の下（送信の行の直下）に全幅で出す。
+  // 送信の前の案内なので入力欄の上に全幅で出す（送信のボタンの後に置かない。#5412）。
   const composerBox = (await composer.boundingBox())!;
   const noticeBox = (await precondition.boundingBox())!;
-  expect(noticeBox.y).toBeGreaterThanOrEqual(composerBox.y + composerBox.height);
+  expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(composerBox.y);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
