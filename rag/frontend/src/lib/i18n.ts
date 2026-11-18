@@ -3093,7 +3093,6 @@ export const ja = {
   "documents.recipes.resume": "処理を再開",
   "documents.recipes.run": "処理を開始",
   "documents.recipes.retry": "失敗した工程から再試行",
-  "documents.recipes.reprocessAction": "再処理",
   "documents.recipes.loading": "処理レシピを読み込んでいます",
   "documents.recipes.loadError": "処理レシピを読み込めませんでした",
   "documents.recipes.empty": "処理レシピがありません",

@@ -7,6 +7,7 @@ SSE は pipeline を stub して event 列と永続化を検証する。実 SQL 
 import asyncio
 import json
 from collections.abc import Sequence
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
@@ -1605,10 +1606,11 @@ def test_stream_message_delivers_answer_when_chat_message_save_fails(
     assert assistant.trace_id == metadata["trace_id"]
 
 
-def test_incomplete_active_language_pack_rejects_conversation_without_writes(
+def test_active_language_pack_missing_new_field_reads_builtin_value(
     fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
 ) -> None:
-    from rag_parser_core.language import current_pack
+    """項目を足す前に保存した公開版でも会話を作れ、欠けた項目は組み込みの値になる(#5476)。"""
+    from rag_parser_core.language import builtin_pack, current_pack
 
     from app.clients.language_pack_release_store import _release
     from app.rag import published_language_runtime
@@ -1616,6 +1618,7 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
     from tests.test_language_pack_release_store import legacy_release_row
 
     row = legacy_release_row()
+    untouched = deepcopy(row)
     seen: list[str] = []
 
     class LegacyStore:
@@ -1631,8 +1634,8 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
     async def capture_create(
         *, search_answer_profile_id: str, title: str | None = None
     ) -> StoredConversation:
-        seen.append(current_pack().text("answer_labels", "insufficient_evidence_summary"))
         seen.append(current_pack().text("answer_labels", "gaps_section"))
+        seen.append(current_pack().text("answer_labels", "guide_acquisition_incomplete_template"))
         return await original_create(search_answer_profile_id=search_answer_profile_id, title=title)
 
     monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)
@@ -1640,12 +1643,12 @@ def test_incomplete_active_language_pack_rejects_conversation_without_writes(
         "/api/chat/conversations",
         json={"search_answer_profile_id": "bv-1", "title": "合成の契約確認"},
     )
-    assert response.status_code == 409
-    assert response.json()["data"] is None
-    assert seen == []
-    effective = row["effective_json"]
-    assert isinstance(effective, dict)
-    assert effective["answer_labels"].get("guide_acquisition_incomplete_template") is None
+    assert response.status_code == 200
+    assert seen == [
+        "合成の保存済み文言",
+        builtin_pack().text("answer_labels", "guide_acquisition_incomplete_template"),
+    ]
+    assert row == untouched
 
 
 def test_chat_stream_reports_inner_ai_network_failure(

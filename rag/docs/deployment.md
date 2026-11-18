@@ -221,17 +221,26 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5476 保存済みの言語資源の欠けた項目を組み込みの値で読む）
+
+組み込みの言語資源に項目を足しても、保存済みの公開版・下書きを「契約に合わない」として RAG の API を 409 で止めない。
+欠けた項目は読み取りで組み込みの値を補い、`content_hash` / `ingest_hash` は保存していた項目だけから計算して照合する
+（公開版の hash と文書の再処理の判定は変わらない）。値が今の検証に通らないときだけ、項目の名前つきで失敗する。
+
+- migration・設定の追加は無い。本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけ。
+- 言語資源の修復 CLI（`app.rag.language_pack_repair_cli`）を消した。項目を足した変更の配備のあとに流す作業は無い。
+- 詳細は [言語資源の保存契約](./language-pack-current-contract.md)。
+
 ## 既存環境の更新手順（#5450 頁の無い文書の根拠の場所を見出しと行で示す）
 
 頁の無い原本（テキスト・Markdown・HTML・XML・JSONL など）を根拠にした回答の「根拠：」の行は、すべて `p.1` ではなく
 最下位の見出しと原本の行の範囲（例: `根拠：文書 A.txt 「見出し B」12〜30 行目`）にする。行が分からない chunk は見出しだけ、
 見出しも無ければ文書名だけ。頁のある PDF・PowerPoint・画像は `p.N` のまま。
 
-- migration・設定の追加は無い。本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` のあとに、次の言語資源の修復を行う。
+- migration・設定の追加は無い。本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけ。
 - 言語資源に `answer_labels.section_location`（既定 `「{title}」`）・`line_location`（既定 `{lines} 行目`）・`line_range`
-  （既定 `{start}〜{end}`）を足した。公開済みの言語資源は項目が欠けて契約に合わなくなる（回答が止まる）ので、
-  [言語資源の現在版の契約](./language-pack-current-contract.md)の手順（`language_pack_repair_cli` の dry-run → 許可 → 適用）で、
-  欠けた項目に組み込みの値を足した版を発行する（`ingest_hash` は変わらず、この修復のための文書の再処理は要らない）。
+  （既定 `{start}〜{end}`）を足した。公開済みの言語資源の欠けた項目は、読み取りで組み込みの値を補う（#5476 から。
+  [言語資源の保存契約](./language-pack-current-contract.md)）。
 - 原本の位置（`parser_artifacts.source_map`）の範囲ごとに原本の行を記録するようにし、抽出結果の版
   （`EXTRACTION_ARTIFACT_SCHEMA_VERSION`）を 18 に上げた。行は取込の分割のときに chunk の metadata
   （`source_line_start` / `source_line_end`、small-to-big の親は `parent_source_line_*`・`parent_section_title`）に入るので、
@@ -685,7 +694,7 @@ LLM に渡して回答を作る経路と、その指示（`faq_answer.system`）
                        WHERE s.DOCUMENT_ID = d.DOCUMENT_ID AND s.STATUS = 'READY');
    ```
 
-4. 言語資源に、要約を根拠にしたときの出典の場所の表示（`answer_labels.document_summary_location`。既定「文書の要約」）を足した。公開済みの言語資源は項目が欠けて契約に合わなくなるので、[言語資源の現在版の契約](./language-pack-current-contract.md)の手順（`language_pack_repair_cli` の dry-run → 許可 → 適用）で、欠けた項目に組み込みの値を足した版を発行する（`ingest_hash` は変わらず、文書の再処理は要らない）。
+4. 言語資源に、要約を根拠にしたときの出典の場所の表示（`answer_labels.document_summary_location`。既定「文書の要約」）を足した。公開済みの言語資源の欠けた項目は、読み取りで組み込みの値を補う（#5476 から。[言語資源の保存契約](./language-pack-current-contract.md)）。
 5. 使わない環境は、文書解析の設定の「解析後の処理」の「文書の要約」を無効にする（`RAG_DOCUMENT_SUMMARY_ENABLED=false`）。作成済みの要約と要約の chunk は残る（次の再取込の版には入らない）。入力の予算は `RAG_DOCUMENT_SUMMARY_MAX_INPUT_CHARS`（既定 16000 字。超える文書は先頭の本文と見出しの一覧から作る）。
 
 ## 既存環境の更新手順（#4811 品質評価の過去の評価の一覧と見え方）
@@ -945,7 +954,7 @@ uv run python -m rag_engine.knowledge.answer_migration /path/to/answer.json --ap
 
 `init_script.sh` は承認を付けずに `initialize` を実行する。データを削除する migration が未適用なら、WARNING を出して配備を続ける（backend は起動する）ので、上の手順で書き出してから適用する。
 
-データを削除する migration を当てた DB では、消した表・列を読む前の commit へコードだけを戻すことはできない。配備の後の確認が言語資源の不適合で NG になったときも、コードを戻さず [修復の手順](./language-pack-current-contract.md) で直す。
+データを削除する migration を当てた DB では、消した表・列を読む前の commit へコードだけを戻すことはできない。配備の後の確認が言語資源の不適合で NG になったときも、コードを戻さず [言語資源の保存契約](./language-pack-current-contract.md)「契約に合わない保存済みの言語資源」の手順で直す。
 
 ### 書き出す前に消えたデータを、DB のバックアップから取り出す
 

@@ -119,6 +119,7 @@ export function DocumentRecipeManager({
   chunkSets,
   sourceModality = null,
   approveBlocked = false,
+  reprocessActions = [],
   languagePack,
 }: {
   documentId: string;
@@ -132,6 +133,8 @@ export function DocumentRecipeManager({
   sourceModality?: string | null;
   /** 選んでいるレシピの承認を止める（抽出確認の未保存の修正がある。#944）。 */
   approveBlocked?: boolean;
+  /** 選んでいるレシピの工程からの再処理（`menuOnly`）。「その他の操作」のメニューに工程の順で入れる（#5478）。 */
+  reprocessActions?: EntityAction[];
   /** 選んでいるレシピの言語資源の要約の行（#4566）。工程の下に置く。 */
   languagePack?: (recipe: DocumentRecipeView) => ReactNode;
 }) {
@@ -318,12 +321,15 @@ export function DocumentRecipeManager({
     deleteRecipe.variables?.recipeId === selected.recipe_id ? deleteRecipe.error : null;
   const layerStatuses = recipeLayerStatuses(selected, chunkSets);
   const layerRebuild = recipeLayerRebuildSummary(layerStatuses);
-  // 選択中のレシピの操作（buttons.md §5.1）。処理は非破壊の高頻度操作として表示し、
-  // 削除は danger として「その他の操作」に入れ、確認ダイアログ（handleDelete）を通す。
+  // 選択中のレシピの操作（buttons.md §5.1）。処理は非破壊の高頻度操作として表示し、工程からの再処理は
+  // 「その他の操作」のメニューにだけ入れ（#5478）、削除は danger として最後に置き、確認ダイアログ（handleDelete）を通す。
+  // 検索対象のレシピを最初から処理し直すのは「ファイル準備から再処理」と同じなので、処理のボタンは出さない。
+  const processLabel = processButtonLabel(selected);
   const recipeActions: EntityAction[] = [
     {
       id: "process",
-      label: processButtonLabel(selected),
+      label: processLabel ?? "",
+      visible: processLabel != null,
       icon: selected.status === "ERROR" ? RotateCcw : Play,
       loading: processPending,
       disabled:
@@ -332,6 +338,7 @@ export function DocumentRecipeManager({
         (approveBlocked && ["PREPROCESSED", "REVIEW", "CHUNKED"].includes(selected.status)),
       onSelect: handleProcess,
     },
+    ...reprocessActions,
     {
       id: "delete",
       label: t("documents.recipes.delete"),
@@ -808,13 +815,13 @@ function recipeName(recipe: DocumentRecipeView) {
   return t("documents.recipes.name", { slot: recipe.slot_no });
 }
 
-function processButtonLabel(recipe: DocumentRecipeView) {
+function processButtonLabel(recipe: DocumentRecipeView): string | null {
   if (recipeIsActive(recipe)) return t("documents.recipes.status.running");
   if (recipe.status === "ERROR") return t("documents.recipes.retry");
-  if (recipe.searchable) return t("documents.recipes.reprocessAction");
   if (["PREPROCESSED", "REVIEW", "CHUNKED"].includes(recipe.status)) {
     return t("documents.recipes.resume");
   }
+  if (recipe.searchable) return null;
   return t("documents.recipes.run");
 }
 

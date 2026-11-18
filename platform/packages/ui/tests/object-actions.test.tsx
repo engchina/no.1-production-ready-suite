@@ -26,6 +26,16 @@ describe("EntityAction の振り分け", () => {
     expect(inline.map((a) => a.id)).toEqual(["edit", "reset"]);
     expect(overflow.map((a) => a.id)).toEqual(["unlock", "delete"]);
   });
+
+  it("menuOnly の操作はボタンに出さず、並びのままメニューに入れる", () => {
+    const { inline, overflow } = splitObjectActions([
+      { id: "rerun", label: "やり直す", menuOnly: true, onSelect: noop },
+      { id: "edit", label: "編集", onSelect: noop },
+      { id: "delete", label: "削除", tone: "danger", onSelect: noop },
+    ]);
+    expect(inline.map((a) => a.id)).toEqual(["edit"]);
+    expect(overflow.map((a) => a.id)).toEqual(["rerun", "delete"]);
+  });
 });
 
 describe("ObjectActionBar", () => {

@@ -42,14 +42,15 @@ def changed_pack(*, ingest: bool) -> LanguagePack:
     return resolve(builtin_pack(), {spec.section: {spec.key: ["合成の語"]}})
 
 
-def test_release_reconstructs_only_complete_content_and_rejects_tampering() -> None:
+def test_release_reconstructs_only_complete_content_with_stored_hash() -> None:
     original = release(changed_pack(ingest=True))
     assert pack_from_release(original).to_dict() == original.effective
     broken = original.model_copy(update={"effective": {"locale": "ja"}})
     with pytest.raises(ValueError):
         pack_from_release(broken)
-    with pytest.raises(ValueError, match="照合"):
-        pack_from_release(original.model_copy(update={"ingest_hash": "incorrect"}))
+    # hash は公開版の値を使う(保存した内容との照合は保存先の読み取りが行う。#5476)。
+    stored = original.model_copy(update={"ingest_hash": "stored-ingest-hash"})
+    assert pack_from_release(stored).ingest_hash == "stored-ingest-hash"
 
 
 def test_version_number_does_not_determine_rebuild_requirement() -> None:

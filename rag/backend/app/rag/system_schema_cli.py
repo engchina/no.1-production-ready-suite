@@ -22,8 +22,10 @@ from pr_system_settings.system_schema import (
     operation_failure_fields,
 )
 
-from app.rag.language_pack_contract import LanguagePackSnapshotError
-from app.rag.language_pack_repair import inspect_language_pack_contract
+from app.rag.language_pack_contract import (
+    LanguagePackNotInitializedError,
+    LanguagePackSnapshotError,
+)
 from app.rag.request_context import with_system_access
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
@@ -32,9 +34,8 @@ from app.rag.system_schema import (
     system_schema_manager,
 )
 
-_LANGUAGE_PACK_REPAIR_GUIDE = (
-    "修復は backend で .venv/bin/python -m app.rag.language_pack_repair_cli の dry-run から"
-    "（rag/docs/language-pack-current-contract.md「不適合の言語資源の修復（#4697・#4745）」）"
+_LANGUAGE_PACK_GUIDE = (
+    "（rag/docs/language-pack-current-contract.md「契約に合わない保存済みの言語資源」）"
 )
 
 
@@ -166,21 +167,20 @@ def _check() -> int:
 
 
 def _language_pack_contract_problem() -> str | None:
-    """今の公開版と下書きが現行の契約に合わないときの、値を含まない 1 行の説明を返す。"""
+    """今の公開版と下書きを実行時と同じ読み取りで読み、読めないときだけ値を含まない 1 行を返す。
+
+    欠けた項目は読み取りで組み込みの値を補うので、不適合にしない(#5476)。
+    """
+    from app.clients.language_pack_release_store import LanguagePackReleaseStore
     from app.clients.oracle import OracleClient
 
     try:
-        issues = asyncio.run(inspect_language_pack_contract(OracleClient()))
-    except LanguagePackSnapshotError as exc:
-        return f"{exc}{_LANGUAGE_PACK_REPAIR_GUIDE}"
-    if issues is None:
+        asyncio.run(LanguagePackReleaseStore(OracleClient()).state())
+    except LanguagePackNotInitializedError:
         return None
-    details = "／".join(
-        f"{label} {len(names)} 件: {', '.join(names)}"
-        for label, names in (("公開版", issues.current), ("下書き", issues.draft))
-        if names
-    )
-    return f"言語資源が現行の契約に合いません（{details}）。{_LANGUAGE_PACK_REPAIR_GUIDE}"
+    except LanguagePackSnapshotError as exc:
+        return f"言語資源が現行の契約に合いません: {exc}{_LANGUAGE_PACK_GUIDE}"
+    return None
 
 
 def _connect_kwargs() -> Mapping[str, object]:

@@ -2,7 +2,7 @@ import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
 
 import type { DocumentProcessingConfig, DocumentRecipeStep } from "../src/lib/api";
-import { expectNoPageOverflow, mockAuthUser, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockAuthUser, mockDatabaseReady, mockLocalAuth, openRecipeActionMenu } from "./_helpers";
 
 const documentDetail = {
   id: "doc-1",
@@ -893,9 +893,11 @@ for (const viewport of [
       await page.goto("/documents/doc-1");
 
       const panel = page.getByRole("region", { name: "処理レシピ", exact: true });
-      const actions = panel.getByTestId("document-recipe-actions");
-      await actions.getByRole("button", { name: "再処理", exact: true }).click();
-      await expect(panel.getByText(conflict)).toBeVisible();
+      await (await openRecipeActionMenu(page)).getByRole("menuitem", { name: "ファイル準備から再処理" }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "再処理する" }).click();
+      // 押した結果は状態の操作の場所（処理レシピの直下）に出す。
+      const result = page.getByTestId("document-action-result");
+      await expect(result.getByText(conflict)).toBeVisible();
       expect(state.ingestionPosts()).toBe(1);
 
       // 原因の設定を直して保存したら、前の失敗の文は出し続けない(#2639)。
@@ -905,7 +907,7 @@ for (const viewport of [
       await page.getByRole("option", { name: "Dots.OCR" }).click();
       await panel.getByRole("button", { name: "構築設定を保存" }).click();
       await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
-      await expect(panel.getByText(conflict)).toHaveCount(0);
+      await expect(page.getByText(conflict)).toHaveCount(0);
       await expectNoPageOverflow(page);
     }
   );
@@ -1173,7 +1175,9 @@ for (const theme of ["light", "dark"] as const) {
     await expect(page.getByTestId("recipe-layer-rebuild")).toContainText(
       "項目抽出は、作成後に項目の定義が変わりました。レシピの再処理で作り直すまで"
     );
-    await expect(page.getByRole("button", { name: "再処理" }).first()).toBeVisible();
+    const menu = await openRecipeActionMenu(page);
+    await expect(menu.getByRole("menuitem", { name: /から再処理/ }).first()).toBeVisible();
+    await page.keyboard.press("Escape");
     await expectNoPageOverflow(page);
     await page.screenshot({
       path: testInfo.outputPath(`layer-rebuild-${theme}.png`),
