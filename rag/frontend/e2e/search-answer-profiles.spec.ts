@@ -180,8 +180,8 @@ for (const viewport of [
     await expect(page.getByRole("option", { name: /社内規程/ })).toBeVisible();
     const settings = page.locator("fieldset").filter({ hasText: "検索・回答設定" });
     // 検索方法・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt・既定言語）は削除した(#595)。
+    // 「1 つの文書から採る根拠の上限」は画面に出さない（#5443）。
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
-      "1 つの文書から採る根拠の上限",
       "回答モデル",
       // 出力の検査を通らなかったときのモデル（#4581。全体の既定を持たないので「使わない」/「モデルを選ぶ」）。
       "出力の検査を通らなかったときのモデル",
@@ -198,7 +198,7 @@ for (const viewport of [
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
     // 継承 / 上書きを選ぶのは文書ごとの根拠上限と回答モデルの2選択欄だけ。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(2);
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(1);
     await expect(settings.getByRole("button", { name: "検索・回答プロファイルで上書き" })).toHaveCount(2);
     await expect(settings.getByRole("button", { name: "使わない" })).toHaveCount(1);
     await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
@@ -265,11 +265,6 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("プロファイル A");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
-  const perDocument = page.getByRole("heading", { name: "1 つの文書から採る根拠の上限", level: 3 }).locator("..");
-  await expect(perDocument.getByText(/^未指定のときは全体設定（既定は 5）です。並べ替えの後、/)).toBeVisible();
-  await perDocument.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
-  await perDocument.getByRole("combobox").click();
-  await page.getByRole("option", { name: "上限なし" }).click();
   const model = page.getByRole("heading", { name: "回答モデル", level: 3 }).locator("..");
   await model.getByRole("button", { name: "検索・回答プロファイルで上書き" }).click();
   await model.locator("#search-answer-profile-answer-model").click();
@@ -280,7 +275,7 @@ test("個別設定は残した項目だけを保存する", { tag: "@responsive"
   await expect.poll(() => body?.name).toBe("プロファイル A");
   const config = body?.config as { answer_model_id?: string; query?: Record<string, unknown> };
   expect(config.answer_model_id).toBe("model-b");
-  expect(config.query?.max_anchors_per_document).toBe(0);
+  expect(config.query).not.toHaveProperty("max_anchors_per_document");
   expect(config.query?.support_guide_enabled).toBe(true);
   expect(Object.keys(config.query ?? {}).filter((key) => !PROFILE_QUERY_FIELDS.includes(key))).toEqual([]);
 });
@@ -1000,7 +995,7 @@ test("エディタの見出しに状態と参照 KB の件数を出し、アー�
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   await expect(
-    page.getByRole("group", { name: "1 つの文書から採る根拠の上限" }).getByRole("button", { name: "検索・回答プロファイルで上書き" })
+    page.getByRole("group", { name: "回答モデル" }).getByRole("button", { name: "検索・回答プロファイルで上書き" })
   ).toBeDisabled();
   await expectNoPageOverflow(page);
 });

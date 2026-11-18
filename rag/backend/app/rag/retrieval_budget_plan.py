@@ -56,7 +56,7 @@ def prepare_plan(request: EvaluationRunRequest) -> ComparisonPlan:
         )
     variants.append(
         {
-            "id": "without-anchor-document-cap",
+            "id": "with-anchor-document-cap",
             "request": request.model_copy(
                 update={
                     "rag_overrides": EvaluationRagOverrides(
@@ -66,7 +66,7 @@ def prepare_plan(request: EvaluationRunRequest) -> ComparisonPlan:
                                 if request.rag_overrides
                                 else {}
                             ),
-                            "max_anchors_per_document": 0,
+                            "max_anchors_per_document": 5,
                         }
                     )
                 }

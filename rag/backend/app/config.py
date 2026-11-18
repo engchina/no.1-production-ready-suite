@@ -119,7 +119,7 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
-from app.search_defaults import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX
+from app.search_defaults import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_DEFAULT_MIN, SEARCH_TOP_K_MAX
 
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
@@ -1233,12 +1233,12 @@ class Settings(
         ),
     )
     rag_max_anchors_per_document: int = Field(
-        default=5,
+        default=0,
         ge=0,
         le=20,
         description=(
             "rerank の後、1 つの文書から回答の根拠の起点に採る chunk の上限(#2167・#5165。"
-            "既定 5。0 は上限なし)。超えた chunk は根拠に使わない。検索・回答プロファイルの"
+            "既定 0 = 上限なし。#5443)。超えた chunk は根拠に使わない。検索・回答プロファイルの"
             "max_anchors_per_document で上書きできる。"
         ),
     )
@@ -1552,7 +1552,7 @@ class Settings(
     )
     rag_search_top_k_default: int = Field(
         default=SEARCH_TOP_K_DEFAULT,
-        ge=1,
+        ge=SEARCH_TOP_K_DEFAULT_MIN,
         le=SEARCH_TOP_K_MAX,
         description="検索・チャット・MCP で top_k を省略したときの基準件数。",
     )

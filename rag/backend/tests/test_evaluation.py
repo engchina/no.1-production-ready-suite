@@ -1058,7 +1058,7 @@ def test_evaluation_api_ignores_removed_run_fields(monkeypatch: MonkeyPatch) -> 
     assert response.status_code == 200
     assert "mode" not in captured
     # 省略時はチャット・RAG 検索と同じ既定（#3512）。
-    assert captured["top_k"] == 30
+    assert captured["top_k"] == 50
 
 
 @pytest.mark.parametrize(

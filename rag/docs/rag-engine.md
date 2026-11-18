@@ -33,7 +33,7 @@ rerank の後の工程は次の順で 1 回ずつ行い、以後は足すだけ�
 2. 関連度の下限（`RAG_RERANK_MIN_RELEVANCE_SCORE`。既定 0.30）: 下限未満を外す。資料の候補（添付を除く）が 1 件も
    下限に届かないときは、下限に `RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO`（既定 0.5。0 は下げない）を掛けて 1 回だけ
    判断し直し、下げた下限にも届かなければ根拠なし（#5443。WeKnora の下限の引き下げと同じ考え方）。明示の添付は外さない。
-3. 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`。既定 5、0 = 上限なし）: 1 つの文書から採る候補を上限までにし、
+3. 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`。既定 0 = 上限なし。#5443）: 1 つの文書から採る候補を上限までにし、
    超えた候補は外す（起点に戻さない。外した候補の所有の章節は、章節の拡張が残りの予算で読むことがある。#5209。
    下の `RAG_SECTION_EXPANSION_ENABLED`）。
 4. 起点数（`top_k`）で 1 回だけ切る（context の組み立て。親の枠 `RAG_ENGINE_MAX_CONTEXT_RECORDS` と同じ親の起点の
