@@ -33,6 +33,7 @@ from app.rag.reference_sections import (
     without_descendants,
 )
 from app.schemas.search import RetrievedChunk, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 from tests.test_cross_references import (
     CHAPTER3,
     FakeGenAi,
@@ -118,8 +119,8 @@ def _setup(
 
 async def _search(engine: Any) -> tuple[Any, _SearchState]:
     state = _SearchState()
-    result = await engine._search(
-        SearchRequest(query=QUESTION), state, retrieval_queries=[QUESTION]
+    result = await search_with_expansions(
+        engine, SearchRequest(query=QUESTION), state, retrieval_queries=[QUESTION]
     )
     return result, state
 
@@ -327,7 +328,9 @@ async def test_numbered_reference_does_not_use_the_outline(
     engine._reference_llm = llm
     state = _SearchState()
 
-    result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+    result = await search_with_expansions(
+        engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
 
     assert [child.chunk_uid for child in result.expansion_chunks] == [
         "doc-1:cs-1:s0",
@@ -352,7 +355,9 @@ async def test_numbered_reference_reads_up_to_the_section_chunk_limit(enabled: b
         engine = _engine(oracle, rag_reference_outline_selection_enabled=enabled, **settings)
         state = _SearchState()
 
-        result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+        result = await search_with_expansions(
+            engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+        )
 
         assert [child.chunk_uid for child in result.expansion_chunks] == [
             f"doc-1:cs-1:s{n}" for n in range(expected)

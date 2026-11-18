@@ -164,7 +164,7 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("PLATFORM_MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
     monkeypatch.setenv("RAG_PARSER_SETTINGS_FILE", str(tmp_path / "parser-settings.json"))
     monkeypatch.setenv("RAG_FILE_TYPE_DEFAULTS_FILE", str(tmp_path / "file-type-defaults.json"))
-    # 検索の上位の文書の目次から章節を選ぶ段(#5324)は本番既定で有効(#5362)。回答のたびに LLM を
+    # 起点の文書の目次から章節を選ぶ段(#5324)は本番既定で有効(#5362)。回答のたびに LLM を
     # 1 回呼んで根拠に章節を足すので、既存テストは無効を前提にし、この段は test_outline_selection.py
     # で有効にして確かめる(文書全体の要約と同じ扱い)。
     monkeypatch.setenv("RAG_OUTLINE_SELECTION_ENABLED", "false")

@@ -1,6 +1,6 @@
-"""検索の上位の文書の目次から回答のモデルが選んだ章節を、rerank の枠の外で根拠に足す(#5324)。
+"""起点の文書の目次から回答のモデルが選んだ章節を、rerank の枠の外で根拠に足す(#5324)。
 
-全体設定が有効なら、検索の上位の文書のうち章節の木を持つ文書の目次を回答のモデルに 1 回だけ渡し、
+全体設定が有効なら、起点の文書のうち章節の木を持つ文書の目次を回答のモデルに 1 回だけ渡し、
 目次にある ID の章節を ``read_section`` で読んで検索拡張の chunk(``expansion_chunks``)として渡す。
 無効なら今の挙動と同じで、LLM の呼び出しは増えない。fixture はすべて合成の内容。
 """
@@ -30,6 +30,7 @@ from app.rag.reference_sections import (
 )
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.schemas.search import RetrievedChunk, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 from tests.test_cross_references import (
     FakeGenAi,
     FakeLlm,
@@ -110,8 +111,8 @@ def _setup(
 
 async def _search(engine: Any, state: _SearchState | None = None) -> tuple[Any, _SearchState]:
     state = state or _SearchState()
-    result = await engine._search(
-        SearchRequest(query=QUESTION), state, retrieval_queries=[QUESTION]
+    result = await search_with_expansions(
+        engine, SearchRequest(query=QUESTION), state, retrieval_queries=[QUESTION]
     )
     return result, state
 
@@ -273,7 +274,7 @@ async def test_document_without_section_tree_is_not_a_target(
 
 
 async def test_max_documents_limits_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
-    """対象は検索の上位の文書を順位の順に設定の数まで。目次は 1 回の呼び出しにまとめる。"""
+    """対象は起点の文書を順位の順に設定の数まで。目次は 1 回の呼び出しにまとめる。"""
     engine, _oracle, sections, llm = _setup(
         monkeypatch,
         documents=("doc-a", "doc-b", "doc-c"),

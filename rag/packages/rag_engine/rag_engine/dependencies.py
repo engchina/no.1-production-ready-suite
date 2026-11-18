@@ -39,6 +39,10 @@ class AnswerDependencies:
     context_references は章節の拡張・親の読取で回答の文脈に入った chunk を起点にした参照先（#5315）。keyword の
     seeds（{chunk の ID: 由来}。文脈の順）と present（文脈にある chunk の ID）を受け取り、足す参照先の chunk（child と親の
     StoredChunk。``reference_expansion`` の印つき）を返す。深さ・上限・期限は呼び出し元が持つ。省略時は辿らない。
+    search_expansions は検索拡張（参照の展開・目次からの章節の選択・実体・文書構造。#5389）。検索ごとに rerank・下限・
+    文書ごとの上限・``top_k`` の切りの後に呼ぶ。keyword の anchors（切った起点の chunk_uid。rerank の後の順）と candidate_ids
+    （rerank に渡した検索の候補の chunk_uid）と、その検索に渡した検索の条件（``search`` と同じ keyword）を受け取り、拡張の
+    根拠の StoredChunk（rerank にかけず最後の根拠の並びへ合わせる。#5162）を返す。省略時は拡張しない。
     """
 
     search: Callable[..., Any]
@@ -57,6 +61,7 @@ class AnswerDependencies:
     document_background: Callable[..., Sequence[Mapping[str, Any]]] | None = None
     current_section_paths: Callable[[Sequence[str]], Mapping[str, Sequence[str]]] | None = None
     context_references: Callable[..., Sequence[Any]] | None = None
+    search_expansions: Callable[..., Sequence[Any]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -127,6 +132,14 @@ def report_degraded(kind: str, exc: BaseException) -> None:
 def search_adb_hybrid_chunks(**kwargs):
     """注入された検索実装へ既存検索要求を転送する。"""
     return _get().search(**kwargs)
+
+
+def injected_search_expansions(**kwargs: Any) -> list[Any]:
+    """切った起点からの検索拡張の根拠（#5389）。注入が無ければ空。"""
+    current = _active.get()
+    if current is None or current.search_expansions is None:
+        return []
+    return list(current.search_expansions(**kwargs))
 
 
 def check_adb_hybrid_search_ready(**kwargs):

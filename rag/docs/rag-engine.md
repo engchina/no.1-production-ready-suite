@@ -38,7 +38,7 @@ rerank の後の工程は次の順で 1 回ずつ行い、以後は足すだけ�
    下の `RAG_SECTION_EXPANSION_ENABLED`）。
 4. 起点数（`top_k`）で 1 回だけ切る（context の組み立て。親の枠 `RAG_ENGINE_MAX_CONTEXT_RECORDS` と同じ親の起点の
    上限は context の組み立ての規則のまま）。
-5. 検索拡張の根拠を合わせる（下の「検索拡張の根拠の合わせ方」）。
+5. 切った起点から検索拡張の根拠を集めて合わせる（下の「検索拡張の根拠の合わせ方」）。
 6. 補いの検索（語数上限の要求別の補完・業務ガイドの手順の検索）の根拠を同じ規則で合わせる（下の「補いの検索と
    3 つの経路」）。
 7. 文脈を補う（下の「文脈の補完」。章節の拡張を含む）。
@@ -56,11 +56,12 @@ rerank が無効・失敗・有効な点が 1 件も無いときは、並べ替�
 ## 検索拡張の根拠の合わせ方（#5097・#5162）
 
 交差参照の参照先（`RAG_REFERENCE_EXPANSION_*`）・実体・別名による検索拡張（`RAG_ENTITY_EXPANSION_*`）・
-文書構造による検索拡張（`RAG_GRAPH_EXPANSION_*`）の 3 つは、検索の上位の候補から chunk を集めるところまでが
-拡張ごとの処理で、集めた chunk の扱いは同じ 1 つの規則（`rag_engine/retrieval/expansion_merge.py`）にする。
+文書構造による検索拡張（`RAG_GRAPH_EXPANSION_*`）の 3 つ（と目次からの章節の選択 `RAG_OUTLINE_SELECTION_*`）は、
+検索ごとに Rerank・関連度下限・文書ごとの上限・`top_k` の切りの後に、切った起点（rerank の後の順）から chunk を
+集める（#5389。`AnswerDependencies.search_expansions` → backend の `AnswerEngine._expanded_search`）。集めるところ
+までが拡張ごとの処理で、集めた chunk の扱いは同じ 1 つの規則（`rag_engine/retrieval/expansion_merge.py`）にする。
 
-- 集めた chunk は rerank の候補（`HybridSearchResult.child_chunks`）に入れず、`expansion_chunks` で渡す。
-  Rerank・全体の関連度下限（`RAG_RERANK_MIN_RELEVANCE_SCORE`）・文書ごとの上限・起点の選択
+- 集めた chunk は rerank にかけない。Rerank・全体の関連度下限（`RAG_RERANK_MIN_RELEVANCE_SCORE`）・文書ごとの上限・起点の選択
   （`top_k`）・context の親の枠（`RAG_ENGINE_MAX_CONTEXT_RECORDS`）が終わって最後の根拠の並びが決まった後に、
   1 回だけ合わせる。`top_k`・MCP の `evidence_limit`・検索結果の件数には数えない（1 回の検索で拡張ごとの
   上限まで）。
@@ -205,7 +206,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 親子階層（small-to-big） | 文書レシピ | 取込・検索・回答設定 > 文書分割「親子階層（small-to-big）」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
 | Approved FAQ / 用語・同義語 / ドメインキーワード | 検索・回答プロファイル | 検索・回答プロファイルを編集 >「検索・回答プロファイルの知識」 |
 | 回答の検索の上書き（根拠の起点に採る同じ文書の chunk の上限・業務ガイドの使用） | 検索・回答プロファイル | 検索・回答プロファイルを編集 > 検索・回答設定（上書きできるのは `app/rag/kb_adapter_config.py` の `KnowledgeBaseQueryConfig` の欄だけ。ほかの欄を API に送ると検証エラー。#4784） |
-| 回答の検索と生成の全体設定（根拠の前後から加える数・Rerank・実体・別名と章節・関係情報の拡張（件数の上限を含む）・不足要求の再検索・業務ガイドの手順ごとの検索の ON / OFF と回数・時間の上限・回答の上限時間〔150 / 300 / 600 / 1200 秒。既定 600。#5280〕・番号で参照する節から読むチャンクの上限〔既定 8。#5348〕・参照先の文書の目次から章節をモデルが選ぶ〔既定 ON。#5263・#5296。オフなら文書名だけの参照の参照先は読まない。#5348〕・検索の上位の文書の目次から章節をモデルが選ぶ（対象の文書の数・目次の字数・読む章節の字数の上限を含む）〔既定 OFF。#5324〕） | global | 取込・検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。全体設定だけで決め、検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない。#3053・#4784） |
+| 回答の検索と生成の全体設定（根拠の前後から加える数・Rerank・実体・別名と章節・関係情報の拡張（件数の上限を含む）・不足要求の再検索・業務ガイドの手順ごとの検索の ON / OFF と回数・時間の上限・回答の上限時間〔150 / 300 / 600 / 1200 秒。既定 600。#5280〕・番号で参照する節から読むチャンクの上限〔既定 8。#5348〕・参照先の文書の目次から章節をモデルが選ぶ〔既定 ON。#5263・#5296。オフなら文書名だけの参照の参照先は読まない。#5348〕・起点の文書の目次から章節をモデルが選ぶ（対象の文書の数・目次の字数・読む章節の字数の上限を含む）〔既定 OFF。#5324〕） | global | 取込・検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。全体設定だけで決め、検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない。#3053・#4784） |
 
 | 文書の分類の一覧（大分類 → 中分類 → 小分類） | global | ナレッジ構築 >「文書の分類」（`GET` / `POST /api/document-categories`、`PATCH` / `DELETE /api/document-categories/{id}`、`POST /api/document-categories/{id}/move`。権限 `menu.document_categories`。表 `rag_document_categories`。#2131） |
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`。分類は「文書の分類」の一覧から選ぶ。どれも任意） |

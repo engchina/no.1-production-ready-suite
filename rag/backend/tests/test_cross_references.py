@@ -47,6 +47,7 @@ from app.rag.cross_references import (
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.rag.section_map_service import SectionNotFoundError, SectionOutline, SectionText
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 
 # ---- 抽出 ----
 
@@ -1045,7 +1046,8 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
     )
     state = _SearchState()
 
-    result = await _engine(oracle)._search(
+    result = await search_with_expansions(
+        _engine(oracle),
         SearchRequest(
             query="承認の条件",
             filters={"knowledge_base_id": "kb-1", "file_name": "経費", "large_category": "業務A"},
@@ -1099,8 +1101,10 @@ async def test_search_reference_expansion_adds_every_target_and_caches_targets()
     state = _SearchState()
     engine = _engine(oracle)
 
-    result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
-    await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q2"])
+    result = await search_with_expansions(
+        engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
+    await search_with_expansions(engine, SearchRequest(query="q"), state, retrieval_queries=["q2"])
 
     # 個数の上限で依存群ごと捨てず(#5243)、2 つの参照先の読めた chunk をすべて足す。
     assert sorted(child.chunk_uid for child in result.expansion_chunks) == sorted(
@@ -1118,8 +1122,11 @@ async def test_search_skips_reference_expansion_when_disabled_and_search_only_ex
     anchor = _retrieved("doc-1:a", "第3章を参照。", "第1章 総則", targets=[CHAPTER3])
     oracle = ReferenceOracle([anchor], _section_chunks(2))
 
-    disabled = await _engine(oracle, rag_reference_expansion_enabled=False)._search(
-        SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
+    disabled = await search_with_expansions(
+        _engine(oracle, rag_reference_expansion_enabled=False),
+        SearchRequest(query="q"),
+        _SearchState(),
+        retrieval_queries=["q"],
     )
     assert _order(disabled) == ["doc-1:a"]
     assert oracle.reference_calls == []
@@ -1157,8 +1164,8 @@ async def test_search_continues_when_reference_target_cannot_be_read() -> None:
     oracle = ReferenceOracle([anchor], _section_chunks(2))
     oracle.fail = True
 
-    result = await _engine(oracle)._search(
-        SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
+    result = await search_with_expansions(
+        _engine(oracle), SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
     )
 
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a"]
@@ -1201,7 +1208,8 @@ async def test_search_resolves_other_document_reference_within_scope(
         ("doc-3", "旧経費精算マニュアル集.pdf", ()),
     ]
 
-    result = await _engine(oracle)._search(
+    result = await search_with_expansions(
+        _engine(oracle),
         SearchRequest(query="q", filters={"knowledge_base_id": "kb-1", "category_name": "経費"}),
         _SearchState(),
         retrieval_queries=["q"],
@@ -1270,7 +1278,9 @@ async def test_search_matches_other_document_titles_in_one_read() -> None:
     async def search(fail_batch: bool) -> tuple[list[str], ReferenceOracle]:
         oracle = ReferenceOracle([first, second], manual)
         oracle.fail_batch = fail_batch
-        result = await _engine(oracle)._search(request, _SearchState(), retrieval_queries=["q"])
+        result = await search_with_expansions(
+            _engine(oracle), request, _SearchState(), retrieval_queries=["q"]
+        )
         return _order(result), oracle
 
     batched, oracle = await search(fail_batch=False)
@@ -1296,8 +1306,8 @@ async def test_search_does_not_follow_other_document_outside_scope() -> None:
     anchor = _retrieved("doc-1:a", "出張旅費規程の第2章を参照。", "第1章", targets=[target])
     oracle = ReferenceOracle([anchor], [])
 
-    result = await _engine(oracle)._search(
-        SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
+    result = await search_with_expansions(
+        _engine(oracle), SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
     )
 
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a"]
@@ -1314,7 +1324,8 @@ async def test_search_resolves_references_of_chunks_without_ingest_targets() -> 
     oracle = ReferenceOracle([first, second, marked, plain], _section_chunks(3))
     state = _SearchState()
 
-    result = await _engine(oracle)._search(
+    result = await search_with_expansions(
+        _engine(oracle),
         SearchRequest(query="q", filters={"knowledge_base_id": "kb-1", "file_name": "経費"}),
         state,
         retrieval_queries=["q"],
@@ -1349,8 +1360,8 @@ async def test_search_skips_section_read_for_other_document_references_only() ->
     anchor = _retrieved("doc-1:a", "出張旅費規程の第2章の規定で決める。", "第1章 総則")
     oracle = ReferenceOracle([anchor], [])
 
-    result = await _engine(oracle)._search(
-        SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
+    result = await search_with_expansions(
+        _engine(oracle), SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
     )
 
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a"]
@@ -1439,7 +1450,8 @@ async def test_multi_hop_common_window_reference_reaches_chapter_two(resolved_at
     )
     state = _SearchState()
 
-    result = await _engine(oracle)._search(
+    result = await search_with_expansions(
+        _engine(oracle),
         SearchRequest(query="保守枠", filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=["保守枠"],
@@ -1478,7 +1490,8 @@ async def test_multi_hop_common_window_reference_stays_within_knowledge_base() -
     oracle = ReferenceOracle([current[0]], current, knowledge_bases={_PLAN_KB: set()})
     state = _SearchState()
 
-    result = await _engine(oracle)._search(
+    result = await search_with_expansions(
+        _engine(oracle),
         SearchRequest(query="保守枠", filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=["保守枠"],
@@ -1681,7 +1694,8 @@ async def test_multi_hop_document_name_reference_reaches_maintenance_plan(
     state = _SearchState()
     engine, section_map, llm = _outline_engine(monkeypatch, oracle, genai)
 
-    result = await engine._search(
+    result = await search_with_expansions(
+        engine,
         SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=[case["query"]],
@@ -1747,7 +1761,8 @@ async def test_document_name_reference_outside_scope_adds_nothing() -> None:
     )
     state = _SearchState()
 
-    result = await _engine(oracle)._search(
+    result = await search_with_expansions(
+        _engine(oracle),
         SearchRequest(query="作業の時間帯", filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=["作業の時間帯"],
@@ -1766,7 +1781,9 @@ async def test_document_name_reference_needs_exact_title() -> None:
     oracle = ReferenceOracle([partial, generic], plan)
     state = _SearchState()
 
-    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+    result = await search_with_expansions(
+        _engine(oracle), SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
 
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a", "doc-1:b"]
     # 一般語は照合の SQL も読まない。
@@ -1787,7 +1804,8 @@ async def test_document_name_reference_keeps_search_order_without_rerank(
     settings = {"rag_rerank_enabled": False} if mode == "disabled" else {}
     engine, _section_map, _llm = _outline_engine(monkeypatch, oracle, genai, **settings)
 
-    result = await engine._search(
+    result = await search_with_expansions(
+        engine,
         SearchRequest(query="q", filters={"knowledge_base_id": _PLAN_KB}),
         _SearchState(),
         retrieval_queries=["q"],
@@ -1814,7 +1832,9 @@ async def test_reference_target_in_lower_candidates_stays_and_is_also_an_expansi
     oracle = ReferenceOracle([anchor, *others, sections[1]], sections)
     state = _SearchState()
 
-    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+    result = await search_with_expansions(
+        _engine(oracle), SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
 
     assert [child.chunk_uid for child in result.child_chunks] == [
         "doc-1:a",
@@ -1832,8 +1852,8 @@ async def test_reference_target_in_lower_candidates_stays_and_is_also_an_expansi
 
     # 上位 5 件の起点の中にある参照先は、その位置のまま(重ねて足さない)。
     top = ReferenceOracle([anchor, sections[1], *others], sections)
-    result = await _engine(top)._search(
-        SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
+    result = await search_with_expansions(
+        _engine(top), SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"]
     )
     assert [child.chunk_uid for child in result.child_chunks] == [
         "doc-1:a",
@@ -1890,7 +1910,8 @@ async def test_document_name_reference_outside_top_five_is_followed(
     state = _SearchState()
     engine, _section_map, _llm = _outline_engine(monkeypatch, oracle, genai)
 
-    result = await engine._search(
+    result = await search_with_expansions(
+        engine,
         SearchRequest(query=case["query"], top_k=top_k, filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=[case["query"]],
@@ -1997,7 +2018,8 @@ async def test_document_name_reference_adds_sentence_citing_selected_section(
     state = _SearchState()
     engine, _section_map, _llm = _outline_engine(monkeypatch, oracle, genai)
 
-    result = await engine._search(
+    result = await search_with_expansions(
+        engine,
         SearchRequest(query=case["query"], filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=[case["query"]],
@@ -2035,7 +2057,9 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
     oracle = ReferenceOracle([*_filler(5), source, citing], [*chapter, *appendix])
     state = _SearchState()
 
-    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+    result = await search_with_expansions(
+        _engine(oracle), SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
 
     assert _order(result)[5:] == [
         "doc-1:cs-1:s0",
@@ -2057,7 +2081,9 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
     oracle = ReferenceOracle([*_filler(5), first, later], [*chapter, *appendix])
     state = _SearchState()
 
-    result = await _engine(oracle)._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+    result = await search_with_expansions(
+        _engine(oracle), SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
 
     assert _order(result)[5:] == ["doc-1:f", "doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:cs-1:s2"]
     (search,) = state.reference_sources
@@ -2715,8 +2741,11 @@ async def test_legacy_abbreviation_reference_reaches_base_document(
     )
     oracle = ReferenceOracle([anchor], [base])
 
-    result = await _engine(oracle)._search(
-        SearchRequest(query="合成の質問"), _SearchState(), retrieval_queries=["合成の質問"]
+    result = await search_with_expansions(
+        _engine(oracle),
+        SearchRequest(query="合成の質問"),
+        _SearchState(),
+        retrieval_queries=["合成の質問"],
     )
 
     assert _order(result) == ["doc-1:a", "doc-2:cs-2:0"]
@@ -2929,8 +2958,11 @@ async def test_legacy_reference_does_not_bypass_ambiguous_target_validation() ->
         _retrieved("synthetic:two", "合成本文B", "第2章 > 第2節"),
     ]
     oracle = ReferenceOracle([anchor], rows)
-    result = await _engine(oracle)._search(
-        SearchRequest(query="synthetic"), _SearchState(), retrieval_queries=["synthetic"]
+    result = await search_with_expansions(
+        _engine(oracle),
+        SearchRequest(query="synthetic"),
+        _SearchState(),
+        retrieval_queries=["synthetic"],
     )
     assert [child.chunk_uid for child in result.child_chunks] == [anchor.chunk_id]
     assert oracle.section_calls
@@ -2945,8 +2977,11 @@ async def test_equally_matching_documents_do_not_select_first_target() -> None:
         ("synthetic-a", "合成参照文書.pdf", ()),
         ("synthetic-b", "合成参照文書.txt", ()),
     ]
-    result = await _engine(oracle)._search(
-        SearchRequest(query="synthetic"), _SearchState(), retrieval_queries=["synthetic"]
+    result = await search_with_expansions(
+        _engine(oracle),
+        SearchRequest(query="synthetic"),
+        _SearchState(),
+        retrieval_queries=["synthetic"],
     )
     assert [child.chunk_uid for child in result.child_chunks] == [anchor.chunk_id]
     assert oracle.reference_calls == []
@@ -3160,7 +3195,7 @@ async def _context_reference_setup(
     engine = _engine(oracle, **settings)
     state = _SearchState()
     request = SearchRequest(query="承認の条件")
-    await engine._search(request, state, retrieval_queries=["承認の条件"])
+    await search_with_expansions(engine, request, state, retrieval_queries=["承認の条件"])
     return engine, oracle, state, request
 
 
@@ -3270,12 +3305,11 @@ async def test_context_reference_anchor_follows_existing_off_conditions(case: st
     engine = _engine(oracle, rag_reference_expansion_enabled=case != "disabled")
     state = _SearchState()
     request = SearchRequest(query="承認の条件")
-    await engine._search(
-        request,
-        state,
-        retrieval_queries=["承認の条件"],
-        expand_references=case == "disabled",
-    )
+    if case == "disabled":
+        await search_with_expansions(engine, request, state, retrieval_queries=["承認の条件"])
+    else:
+        # 検索拡張をしない経路(RAG 検索)は検索だけで、切った起点からの拡張を呼ばない(#5389)。
+        await engine._search(request, state, retrieval_queries=["承認の条件"])
     index = _retrieved("doc-1:idx", "承認は第3章を参照。", "第2章 索引", targets=[CHAPTER3])
     state.chunks[index.chunk_id] = index
 

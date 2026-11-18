@@ -23,6 +23,7 @@ from app.rag.answer_engine import AnswerEngine, _SearchState
 from app.rag.cross_references import ReferenceTarget
 from app.rag.entity_expansion import EntitySeedRow
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 from tests.test_answer_engine import (
     EmptyWithKeysOracle,
     FakeGenAi,
@@ -184,8 +185,8 @@ async def test_reference_load_failure_is_recorded() -> None:
     oracle.fail = True
     state = _SearchState()
 
-    result = await reference_engine(oracle)._search(
-        SearchRequest(query="q"), state, retrieval_queries=["q"]
+    result = await search_with_expansions(
+        reference_engine(oracle), SearchRequest(query="q"), state, retrieval_queries=["q"]
     )
 
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a"]
@@ -198,8 +199,11 @@ async def test_reference_without_target_rows_is_not_degraded() -> None:
     anchor = _retrieved("doc-1:a", "第3章を参照。", "第1章 総則", targets=[CHAPTER3])
     state = _SearchState()
 
-    await reference_engine(ReferenceOracle([anchor], []))._search(
-        SearchRequest(query="q"), state, retrieval_queries=["q"]
+    await search_with_expansions(
+        reference_engine(ReferenceOracle([anchor], [])),
+        SearchRequest(query="q"),
+        state,
+        retrieval_queries=["q"],
     )
 
     assert state.degraded_steps() == []
@@ -211,7 +215,9 @@ async def test_reference_resolve_failure_is_recorded(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(engine, "_anchor_reference_targets", _aboom)
     state = _SearchState()
 
-    result = await engine._search(SearchRequest(query="q"), state, retrieval_queries=["q"])
+    result = await search_with_expansions(
+        engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
 
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a"]
     _assert_degraded(state, "reference_resolve")
@@ -225,7 +231,8 @@ async def test_reference_prefetch_failure_is_recorded() -> None:
     oracle.fail_batch = True
     state = _SearchState()
 
-    await reference_engine(oracle)._search(
+    await search_with_expansions(
+        reference_engine(oracle),
         SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"}),
         state,
         retrieval_queries=["q"],
@@ -253,7 +260,8 @@ async def test_reference_rerank_failure_is_recorded(
 
     engine, _sections, _llm = _outline_engine(monkeypatch, oracle, genai)
 
-    await engine._search(
+    await search_with_expansions(
+        engine,
         SearchRequest(query="q", filters={"knowledge_base_id": _PLAN_KB}),
         state,
         retrieval_queries=["q"],

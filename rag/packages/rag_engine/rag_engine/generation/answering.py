@@ -42,6 +42,7 @@ from rag_engine.dependencies import (
     check_adb_hybrid_search_ready,
     injected_context_chunks,
     injected_embedder,
+    injected_search_expansions,
     parse_multimodal_response,
     parse_text_response,
     record_retrieval_stage,
@@ -1099,7 +1100,8 @@ def build_adb_hybrid_answer_context(
 
     fill=False は文脈を補わずに、検索 → rerank → 下限 → 文書ごとの上限 → ``top_k`` で切った起点だけを返す（#5173。
     回答の流れの主の検索と補いの検索）。records と根拠の木は起点（rerank の後の順）、expansion_records は検索の候補の
-    原文、expansion_candidates は検索拡張の根拠。文脈は ``fill_answer_context`` で、補いの検索の根拠と一緒に 1 回補う。
+    原文、expansion_candidates は切った起点からの検索拡張の根拠（#5389）。文脈は ``fill_answer_context`` で、補いの検索の
+    根拠と一緒に 1 回補う。
 
     exclude は補いの検索で、主の検索の根拠にすでにある候補の理由のコードを返す関数（#5175。``_main_evidence_overlap``）。
     rerank と下限の後、文書ごとの上限と ``top_k`` の切りの前にその候補を除き（``covered_candidates`` に残す）、
@@ -1150,9 +1152,6 @@ def build_adb_hybrid_answer_context(
     search_result = search_adb_hybrid_chunks(**search_options)
     active_records = [_stored_chunk_answer_record(chunk) for chunk in search_result.all_chunks]
     ranked_children = [_stored_chunk_answer_record(chunk) for chunk in search_result.child_chunks]
-    # 検索拡張の根拠（#5162）。rerank の候補に入れず、context を作るときに最後の根拠の並びへ合わせる。
-    # 拡張を持たない検索の実装（SDK・評価の注入）は expansion_chunks を返さない。
-    expansion_candidates = tuple(_stored_chunk_answer_record(chunk) for chunk in getattr(search_result, "expansion_chunks", None) or ())
     if not ranked_children:
         return AnswerContext(
             records=[],
@@ -1161,6 +1160,7 @@ def build_adb_hybrid_answer_context(
             insufficient_reason="retrieval returned no active child chunks",
         )
 
+    candidate_ids = [record.chunk_uid for record in ranked_children]
     with _execution_step("再ランキング候補の選択", "既存の順位を保ち、重複と各経路・総量の上限を適用します。") as step:
         limits = stage_limits(settings, ranked_children)
         configured_limit = max(0, int(getattr(settings, "rerank_candidate_limit", 0)))
@@ -1203,6 +1203,17 @@ def build_adb_hybrid_answer_context(
                 ),
             )
             step.output({"処理後の候補": candidate_snapshot(kept_children)})
+    selected = _cut_anchors(question, kept_children, active_records, settings, top_k=top_k, max_records=max_records)
+    # 検索拡張（参照の展開・目次からの章節の選択・実体・文書構造）は、rerank・下限・文書ごとの上限・top_k の切りの後に
+    # 切った起点から集める（#5389）。rerank にかけず、context を作るときに最後の根拠の並びへ合わせる（#5162）。
+    # 拡張を注入しない呼び出し（SDK・評価の注入・RAG 検索の経路）は拡張しない。
+    # 起点が 0 件（全部が下限未満）でも、質問の実体・見出しの語からの拡張は行う（検索の段で行っていたときと同じ）。
+    expanded = injected_search_expansions(
+        anchors=[record.chunk_uid for record in selected], candidate_ids=candidate_ids, **search_options
+    )
+    expansion_candidates = tuple(_stored_chunk_answer_record(chunk) for chunk in expanded)
+    known_ids = {retrieval_record_id(record) for record in active_records}
+    active_records.extend(record for record in expansion_candidates if retrieval_record_id(record) not in known_ids)
     anchors = AnswerContext(
         records=[],
         text="",
@@ -1223,7 +1234,6 @@ def build_adb_hybrid_answer_context(
             max_chars=max_chars,
             section_fill=section_fill,
         )
-    selected = _cut_anchors(question, kept_children, active_records, settings, top_k=top_k, max_records=max_records)
     if summary_research is not None and derived_hits_by_document(selected):
         selected, more_covered, more_records = _research_summary_hits(
             selected,

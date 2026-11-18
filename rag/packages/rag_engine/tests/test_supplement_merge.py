@@ -94,12 +94,12 @@ class Harness:
             scope = json.dumps(kwargs["page_ranges"], ensure_ascii=False)
             names = next((names for key, names in self.scoped.items() if key in query), [])
             children = [_scoped(self.chunks[name], scope) for name in names]
-            return SimpleNamespace(child_chunks=children, all_chunks=list(children), expansion_chunks=[])
+            return SimpleNamespace(child_chunks=children, all_chunks=list(children))
         names = next((names for key, names in self.candidates.items() if key in query), [])
         children = [self.chunks[name] for name in names]
         pool = next((names for key, names in self.pools.items() if key in query), None)
         all_chunks = list(self.chunks.values()) if pool is None else [self.chunks[name] for name in pool]
-        return SimpleNamespace(child_chunks=children, all_chunks=all_chunks, expansion_chunks=[])
+        return SimpleNamespace(child_chunks=children, all_chunks=all_chunks)
 
     def rerank(self, question: str, documents: list[str], settings: Any, top_n: int | None = None) -> list[RerankTextRank]:
         names = [next(name for name in self.chunks if document.split("\n")[-1].startswith(f"{name} ")) for document in documents]
