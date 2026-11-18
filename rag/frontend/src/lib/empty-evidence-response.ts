@@ -1,5 +1,4 @@
 import type { LanguagePackField, LanguagePackSections } from "./api";
-import type { LanguagePackTexts } from "./language-pack";
 
 export const EMPTY_EVIDENCE_RESPONSE_KEYS = [
   "insufficient_evidence_summary",
@@ -24,9 +23,16 @@ function backendStrip(text: string): string {
   return characters.slice(start, end).join("");
 }
 
-/** 保存後の実効値から、正常な根拠なし応答の本文を区切りなしで組み立てる。 */
-export function emptyEvidenceResponsePreview(texts: LanguagePackTexts): string {
-  return EMPTY_EVIDENCE_RESPONSE_KEYS.map((key) => backendStrip((texts[`answer_labels.${key}`] ?? "").trim())).join("");
+/**
+ * プロファイルの上書きの土台: 全体の値のうち、根拠がないときの固定返信の 2 項目だけを組み込みの値にする（#5463。
+ * 固定返信は全体では設定せず、プロファイルの上書きか組み込みの値だけを使う。backend の PROFILE_ONLY_LANGUAGE_PACK_FIELDS）。
+ */
+export function withBuiltinEmptyEvidenceResponse(effective: LanguagePackSections, builtin: LanguagePackSections): LanguagePackSections {
+  const labels = { ...effective.answer_labels };
+  for (const key of EMPTY_EVIDENCE_RESPONSE_KEYS) {
+    if (builtin.answer_labels && key in builtin.answer_labels) labels[key] = builtin.answer_labels[key];
+  }
+  return { ...effective, answer_labels: labels };
 }
 
 /** 保存済み実効値に現在の payload を重ねる。未編集の値を再度フロントの trim に通さない。 */

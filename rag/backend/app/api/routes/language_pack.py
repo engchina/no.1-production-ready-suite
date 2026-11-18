@@ -34,6 +34,7 @@ from app.clients.oracle import OracleClient
 from app.rag.cross_references import document_name_aliases, extract_references, heading_keys
 from app.rag.language_pack_releases import compare_releases, pack_from_release
 from app.rag.published_language import initialized_release_store
+from app.rag.search_answer_profile_config import PROFILE_ONLY_LANGUAGE_PACK_FIELDS
 from app.schemas.common import ApiResponse
 from app.schemas.language_pack_release import (
     LanguagePackDocumentStatus,
@@ -66,6 +67,14 @@ def _sections(pack: LanguagePack) -> dict[str, dict[str, object]]:
 
 
 def _resolve(overrides: Mapping[str, Mapping[str, Any]]) -> LanguagePack:
+    # プロファイルだけで設定する項目(根拠がないときの固定返信。#5463)は全体では受け付けない。
+    profile_only = {
+        f"{section}.{key}": "検索・回答プロファイルで設定する項目です。"
+        for section, key in sorted(PROFILE_ONLY_LANGUAGE_PACK_FIELDS)
+        if key in (overrides.get(section) or {})
+    }
+    if profile_only:
+        raise HTTPException(status_code=422, detail=profile_only)
     try:
         return resolve(builtin_pack(), overrides)
     except LanguagePackError as exc:

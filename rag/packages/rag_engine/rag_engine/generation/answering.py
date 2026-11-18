@@ -18,8 +18,6 @@ from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
-from pr_backend_core.model_cascade import SIGNAL_STRUCTURED_OUTPUT_INVALID, decide_escalation, escalation_reasons
-from pr_backend_core.model_cascade import cascade_record as model_cascade_record
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation
@@ -51,7 +49,7 @@ from rag_engine.dependencies import (
     search_adb_hybrid_chunks,
 )
 from rag_engine.generation import applications as answer_applications
-from rag_engine.generation import form_field_kinds, model_cascade
+from rag_engine.generation import form_field_kinds
 from rag_engine.generation.answer_envelope import (
     REFERENCE_CONFIRMATION_PREFIX,
     build_envelope,
@@ -1817,8 +1815,6 @@ def synthesize_grounded_answer(
     unread_sections: Sequence[Any] = (),
     unread_documents: Collection[str] = (),
     evidence_budget_chars: int | None = None,
-    escalation_probe: bool = False,
-    shared_steps: model_cascade.SharedSteps | None = None,
 ) -> GroundedAnswer:
     """主張と引用の対で回答を 1 回生成し、引用の実在と形式だけを確かめて本文にする（#4714）。
 
@@ -1826,11 +1822,7 @@ def synthesize_grounded_answer(
     回答を条件つきにする。出すのは、回答が根拠にした文書と ``unread_documents`` の章節だけ（#2828）。
     evidence_budget_chars は章節を広げたときの原文の予算（None は `settings.evidence_budget_chars`）。
     検索で候補が残らなければ、モデルを呼ばず定型文を返す。
-
-    escalation_probe はモデルのカスケード（#4581）の 1 つ目のモデルの実行で、構造化出力が契約を満たさなければ
-    ``model_cascade.EscalationRequested`` を送出する。
     """
-    shared = shared_steps if shared_steps is not None else model_cascade.SharedSteps()
     if runtime_knowledge is not None:
         runtime_knowledge = runtime_knowledge.with_term_usage(
             search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled
@@ -1858,9 +1850,7 @@ def synthesize_grounded_answer(
     generation_settings = settings_for_llm_purpose(settings, LLM_PURPOSE_GENERATION)
     images, mode = tuple(image_evidence), image_prompt_mode
     context, unit_fill = _fill_same_unit(question, context)
-    if not shared.term_usage_recorded:
-        _record_term_usage(runtime_knowledge, answer=True)
-        shared.term_usage_recorded = True
+    _record_term_usage(runtime_knowledge, answer=True)
     document_background_reader.remember(context)
     context = without_embedded_background(context)
     field_kinds = form_field_kinds.question_field_kinds(question, context)
@@ -1896,7 +1886,6 @@ def synthesize_grounded_answer(
     generation_failure = ""
     generation_failure_stage = "answer.generate"
     generation_failure_detail: dict[str, Any] = {}
-    structured_output_failed = False
     with _execution_step("回答文の生成と引用の確認", "主張と原文引用の対で回答を作り、引用が資料に実在するかを確かめます。") as step:
         step.input(
             lambda spans=spans: {
@@ -1981,10 +1970,6 @@ def synthesize_grounded_answer(
             generation_failure_stage = (
                 ("evidence.batch_read" if failed_batches else "evidence.select") if selecting_evidence else "answer.generate"
             )
-            if invalid_draft and not input_limited:
-                structured_output_failed = True
-                if escalation_probe:
-                    raise model_cascade.EscalationRequested((SIGNAL_STRUCTURED_OUTPUT_INVALID,)) from exc
             generation_failure_detail = (
                 {"category": "input_budget_exceeded", "reason": str(input_diagnostic.get("reason", ""))}
                 if input_limited
@@ -2100,7 +2085,6 @@ def synthesize_grounded_answer(
         "same_unit_fill": unit_fill,
         "retrieval_counts": _retrieval_counts(context, spans),
         "rounds": rounds,
-        "escalation_signals": list(escalation_reasons((SIGNAL_STRUCTURED_OUTPUT_INVALID,) if structured_output_failed else ())),
         **(
             {"generation_failure": {"error": generation_failure, "stage": generation_failure_stage, **generation_failure_detail}}
             if generation_failure
@@ -2229,36 +2213,6 @@ def _retrieval_counts(context: AnswerContext, spans: Sequence[Mapping[str, Any]]
         "top_score": max(scores) if scores else None,
         "threshold": next((row["min_relevance_score"] for row in reranked if row.get("min_relevance_score") is not None), None),
     }
-
-
-_ESCALATION_REASON_LABELS = {"structured_output_invalid": "生成の出力が形式の検査を通らなかった"}
-
-
-def synthesize_with_model_cascade(
-    question: str,
-    context: AnswerContext,
-    settings: Settings,
-    *,
-    answer_llm_provider: str | None = None,
-    image_evidence: Sequence[dict[str, Any]] = (),
-    image_prompt_mode: str,
-    **options: Any,
-) -> GroundedAnswer:
-    """同じ回答モデルで一度生成する。技術再試行は adapter の共通枠だけで行う。"""
-    return synthesize_grounded_answer(
-        question,
-        context,
-        settings,
-        answer_llm_provider=answer_llm_provider,
-        image_evidence=image_evidence,
-        image_prompt_mode=image_prompt_mode,
-        **options,
-    )
-
-
-def _with_model_cascade(answer: GroundedAnswer, record: dict[str, Any]) -> GroundedAnswer:
-    response = replace(answer.response, generation_trace={**(answer.response.generation_trace or {}), "model_cascade": record})
-    return replace(answer, response=response)
 
 
 def draft_structure(draft: Any, settled: Any) -> dict[str, Any]:
@@ -3887,7 +3841,7 @@ def _answer_from_evidence(
     """⑧ 集めた根拠で回答する（RAG 検索と Chat の経路で同じ）。
 
     回答に添付する画像 → 文書の背景と最初の chunk・根拠の選択・分割読取・回答の生成・引用の検証・参考情報への退避
-    （``synthesize_with_model_cascade``）→ 参照の整形。``expanded`` は ⑦ の結果（RAG 検索の経路は None）。
+    （``synthesize_grounded_answer``）→ 参照の整形。``expanded`` は ⑦ の結果（RAG 検索の経路は None）。
     """
     section_expansion = expanded.section_expansion if expanded is not None else None
 
@@ -3956,7 +3910,7 @@ def _answer_from_evidence(
 
     unread_for_answer = list(section_expansion.unread) if section_expansion is not None else []
 
-    grounded_answer = synthesize_with_model_cascade(
+    grounded_answer = synthesize_grounded_answer(
         request_text,
         context,
         settings,

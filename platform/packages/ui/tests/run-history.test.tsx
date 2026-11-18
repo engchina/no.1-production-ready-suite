@@ -28,7 +28,6 @@ import {
   runListUsage,
   runUsageView,
   runModelTokensView,
-  modelCascadeView,
   isRunActive,
   runPeriodSince,
   runStatusIcon,
@@ -213,21 +212,6 @@ describe("書式と絞り込みの値", () => {
     expect(runModelTokensView({ ...usage, by_model: usage.by_model?.slice(0, 1) })).toBeNull();
     expect(runModelTokensView({ ...usage, by_model: undefined })).toBeNull();
     expect(runModelTokensView(null)).toBeNull();
-  });
-
-  it("モデルのカスケードの表示: 昇格・昇格しない・カスケードしない（#4581）", () => {
-    expect(modelCascadeView({ escalated: true, reasons: ["structured_output_invalid", "unknown_signal"] })).toEqual({
-      escalated: true,
-      line: "最初のモデルの出力が検査を通らなかったため、高性能モデルで回答し直しました",
-      reasons: "生成の出力が形式の検査を通らなかった、unknown_signal",
-    });
-    expect(modelCascadeView({ escalated: false, reasons: [] })).toEqual({
-      escalated: false,
-      line: "回答し直していません（最初のモデルの出力が検査を通りました）",
-      reasons: null,
-    });
-    expect(modelCascadeView(null)).toBeNull();
-    expect(modelCascadeView({ escalated: true, reasons: ["structured_output_invalid"] }, { reasons: { structured_output_invalid: "x" } })?.reasons).toBe("x");
   });
 
   it("期間の開始は now から引いた ISO、すべては null", () => {

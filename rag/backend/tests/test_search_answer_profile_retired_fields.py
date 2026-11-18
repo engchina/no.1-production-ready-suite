@@ -102,7 +102,6 @@ def test_only_retired_fields_are_removed_and_kept_values_do_not_change() -> None
     config = SearchAnswerProfileConfig.model_validate(_profiles(db)[0])
     assert config.model_dump(mode="json") == {
         **_KEPT_PROFILE,
-        "escalation_model_id": None,
         # 後で足した欄（#4941）は既定のまま読める。
         "query": {**_KEPT_PROFILE["query"], "wiki_search_enabled": None},
     }

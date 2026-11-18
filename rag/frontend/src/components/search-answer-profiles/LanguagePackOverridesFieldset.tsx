@@ -4,7 +4,7 @@ import { Disclosure, FormSkeleton, StatusBadge, TimedLoadingState } from "@produ
 import { useState } from "react";
 
 import { EmptyEvidenceResponseSettings } from "@/components/settings/EmptyEvidenceResponseSettings";
-import { isEmptyEvidenceResponseField } from "@/lib/empty-evidence-response";
+import { isEmptyEvidenceResponseField, withBuiltinEmptyEvidenceResponse } from "@/lib/empty-evidence-response";
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
 import type { LanguagePackSections } from "@/lib/api";
@@ -38,6 +38,7 @@ const PROFILE_SECTIONS: readonly string[] = [
 /**
  * 検索・回答プロファイルの言語資源の上書き（#2181）。全体の言語資源の値に重ね、このプロファイルの検索・回答の
  * 間だけ使う。取込の項目は文書の分割と食い違うので出さない（検索と回答で読む節の項目だけ）。
+ * 根拠がないときの固定返信は全体の値ではなく組み込みの値に重ねる（#5463）。
  */
 export function LanguagePackOverridesFieldset({
   value,
@@ -54,16 +55,17 @@ export function LanguagePackOverridesFieldset({
   const [draft, setDraft] = useState<{ key: string; texts: LanguagePackTexts }>({ key: valueKey, texts: {} });
   const data = query.data;
   const fields = data ? data.fields.filter((field) => !field.ingest && PROFILE_SECTIONS.includes(field.section)) : [];
+  const base = data ? withBuiltinEmptyEvidenceResponse(data.effective, data.builtin) : {};
   // 継承値は最新の全体値から描画し、入力途中の文字だけを保持する。保存・破棄では入力も同期する。
   if (draft.key !== valueKey) setDraft({ key: valueKey, texts: {} });
-  const baseline = data ? textsFromSections(fields, overlay(data.effective, value)) : {};
+  const baseline = data ? textsFromSections(fields, overlay(base, value)) : {};
   const texts = { ...baseline, ...(draft.key === valueKey ? draft.texts : {}) };
   const count = fields.filter((field) => field.key in (value[field.section] ?? {})).length;
 
   const update = (key: string, text: string) => {
     const field = fields.find((item) => textKey(item) === key);
     if (!field || !data) return;
-    const changed = overridesFromTexts([field], { [key]: text }, data.effective);
+    const changed = overridesFromTexts([field], { [key]: text }, base);
     const section = { ...value[field.section] };
     if (changed[field.section]) section[field.key] = changed[field.section][field.key];
     else delete section[field.key];
@@ -116,7 +118,7 @@ export function LanguagePackOverridesFieldset({
       <EmptyEvidenceResponseSettings
         idPrefix="profile-language"
         fields={fields}
-        baseline={data.effective}
+        baseline={base}
         texts={texts}
         errors={languagePackErrors(fields, texts)}
         disabled={disabled}
@@ -143,7 +145,7 @@ export function LanguagePackOverridesFieldset({
         <LanguagePackFieldsPanel
           idPrefix="profile-language"
           fields={fields.filter((field) => !isEmptyEvidenceResponseField(field))}
-          baseline={data.effective}
+          baseline={base}
           texts={texts}
           errors={languagePackErrors(fields, texts)}
           disabled={disabled}

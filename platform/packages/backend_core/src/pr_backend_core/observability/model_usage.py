@@ -84,8 +84,8 @@ class RunModelUsage(BaseModel):
     measured_requests: int = Field(default=0, ge=0)
     # 利用量を計測できない呼び出しの出どころ（Select AI など。最初に呼んだ順。回数は数えない）。
     unmeasured_sources: list[str] = Field(default_factory=list)
-    # モデルごとの内訳（`models` と同じ順。モデルの ID が無い呼び出しは含めない）。モデルの
-    # カスケードで 2 つのモデルを呼んだ実行の token を分けて示す（#4581）。古い記録は空。
+    # モデルごとの内訳（`models` と同じ順。モデルの ID が無い呼び出しは含めない）。2 つ以上の
+    # モデルを呼んだ実行の token を分けて示す（#4581）。古い記録は空。
     by_model: list[ModelTokenUsage] = Field(default_factory=list)
 
 

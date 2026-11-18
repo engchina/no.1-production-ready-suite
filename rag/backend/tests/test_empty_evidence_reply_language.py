@@ -1,4 +1,4 @@
-"""空根拠の固定文が公開済み全体設定と当該プロファイルだけから解決する。"""
+"""空根拠の固定文は当該プロファイルの上書きと組み込みの値だけから解決する（全体の値は使わない。#5463）。"""
 
 from datetime import UTC, datetime
 
@@ -17,19 +17,22 @@ from app.rag.search_answer_profile_config import (
 )
 from app.schemas.language_pack_release import LanguagePackRelease
 
+BUILTIN_SUMMARY = builtin_pack().text("answer_labels", "insufficient_evidence_summary")
+BUILTIN_GUIDANCE = builtin_pack().text("answer_labels", "empty_search_guidance")
+
 
 @pytest.mark.parametrize(
     ("overrides", "summary", "guidance"),
     [
-        ({}, "全体の固定文。", "全体の案内。"),
+        ({}, BUILTIN_SUMMARY, BUILTIN_GUIDANCE),
         (
             {"insufficient_evidence_summary": "個別の固定文。"},
             "個別の固定文。",
-            "全体の案内。",
+            BUILTIN_GUIDANCE,
         ),
         (
             {"empty_search_guidance": "個別の案内。"},
-            "全体の固定文。",
+            BUILTIN_SUMMARY,
             "個別の案内。",
         ),
         (
@@ -41,17 +44,19 @@ from app.schemas.language_pack_release import LanguagePackRelease
             "個別の案内。",
         ),
     ],
-    ids=["inherit", "override-summary-only", "override-guidance-only", "override-both"],
+    ids=["builtin", "override-summary-only", "override-guidance-only", "override-both"],
 )
-def test_empty_evidence_uses_effective_reply_without_answer_model(
+def test_empty_evidence_uses_profile_or_builtin_reply_without_answer_model(
     overrides: dict[str, str], summary: str, guidance: str
 ) -> None:
+    # 以前に全体で変えた値が公開版に残っていても使わない。
     published = resolve(
         builtin_pack(),
         {
             "answer_labels": {
                 "insufficient_evidence_summary": "全体の固定文。",
                 "empty_search_guidance": "全体の案内。",
+                "abstention_guidance": "全体の別案内。",
             }
         },
     )
@@ -74,6 +79,8 @@ def test_empty_evidence_uses_effective_reply_without_answer_model(
     with bind_release(published_release), profile_language_scope(settings):
         assert answer_labels().insufficient_evidence_summary == summary
         assert answer_labels().empty_search_guidance == guidance
+        # ほかの項目は全体の値に重ねる。
+        assert answer_labels().abstention_guidance == "全体の別案内。"
         result = GenerationService(UnusedGenerator()).generate(
             GenerationRequest(question="合成の質問", evidence=())
         )
@@ -84,5 +91,5 @@ def test_empty_evidence_uses_effective_reply_without_answer_model(
         get_settings(), SearchAnswerProfileConfig(language_pack={})
     )
     with bind_release(published_release), profile_language_scope(restored):
-        assert answer_labels().insufficient_evidence_summary == "全体の固定文。"
-        assert answer_labels().empty_search_guidance == "全体の案内。"
+        assert answer_labels().insufficient_evidence_summary == BUILTIN_SUMMARY
+        assert answer_labels().empty_search_guidance == BUILTIN_GUIDANCE

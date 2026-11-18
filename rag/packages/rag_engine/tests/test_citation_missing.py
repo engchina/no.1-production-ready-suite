@@ -12,10 +12,9 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from pr_backend_core.model_cascade import SIGNAL_STRUCTURED_OUTPUT_INVALID
 from test_answer_flow_single_generation import _run_traced, context, record, retrying_parse
 
-from rag_engine.generation import grounded, model_cascade
+from rag_engine.generation import grounded
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.full_answer_wire import CITATION_MISSING_MESSAGE, full_answer_model, lacks_citation
 
@@ -69,14 +68,13 @@ def test_a_missing_citation_is_retried_once_with_the_finding_and_the_retry_binds
     assert "citation_missing" not in response.generation_trace
 
 
-def test_a_citation_still_missing_after_the_retry_keeps_the_body_without_escalation():
-    response, calls, _prompts = _run_traced(QUESTION, _context(), _reply(), escalation_probe=True)
+def test_a_citation_still_missing_after_the_retry_keeps_the_body():
+    response, calls, _prompts = _run_traced(QUESTION, _context(), _reply())
     assert calls == ["FullAnswerWire", "FullAnswerWire"]
     assert response.answer_text == BODY
     assert response.envelope["outcome"] == "answered"
     assert response.confidence == "low"
     assert response.generation_trace["citation_missing"] is True
-    assert response.generation_trace["escalation_signals"] == []
     assert "generation_failure" not in response.generation_trace
     # 取得しただけの資料を引用に昇格させない。
     assert not response.cited_evidence
@@ -98,15 +96,12 @@ def test_a_conditional_answer_also_needs_a_citation():
 
 
 def test_an_unknown_unit_label_keeps_the_existing_failure_and_resend():
-    """未知の単位のラベルは従来どおり同じ入力で送り直し、最後も不合格なら生成の失敗（カスケードの昇格の理由）にする。"""
+    """未知の単位のラベルは従来どおり同じ入力で送り直し、最後も不合格なら生成の失敗にする。"""
     response, calls, prompts = _run_traced(QUESTION, _context(), _reply(mark="[E1.9]", cited_from=0))
     assert calls == ["FullAnswerWire", "FullAnswerWire"]
     assert prompts[1] == prompts[0]
     assert response.generation_trace["generation_failure"]["stage"] == "answer.generate"
-    assert response.generation_trace["escalation_signals"] == [SIGNAL_STRUCTURED_OUTPUT_INVALID]
     assert "citation_missing" not in response.generation_trace
-    with pytest.raises(model_cascade.EscalationRequested):
-        _run_traced(QUESTION, _context(), _reply(mark="[E1.9]", cited_from=0), escalation_probe=True)
 
 
 @pytest.mark.parametrize("mark", ["[ {unit} ]", "［{unit}］", "[​{unit}]"], ids=["space", "full-width", "zero-width-space"])

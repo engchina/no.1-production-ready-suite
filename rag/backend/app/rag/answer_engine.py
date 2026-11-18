@@ -37,7 +37,6 @@ from typing import Any, Literal, TypeVar, cast
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.output_budget import configured_online_output_tokens
 from pr_backend_core.timezones import configured_timezone_name
-from pr_system_settings.model import EnterpriseAiModelNotRegisteredError
 from rag_engine.generation.answer_models import ANSWER_USES
 from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.resources.deadline import Deadline, check_deadline, current_deadline
@@ -419,43 +418,6 @@ def _reasoning_effort_override(value: str) -> str:
     return "" if value == "model" else value
 
 
-def escalation_model_environ(settings: Settings, answer_model: str) -> dict[str, str]:
-    """確認を通らなかったときのモデル(モデルのカスケード。#4581)の接続を rag_engine へ渡す env。
-
-    検索・回答プロファイルの設定(``rag_answer_escalation_model``。利用者がモデルを明示した実行では空)が
-    回答のモデルと違うときだけ渡す。登録の確認は設定の解決(``validate_profile_answer_model``)で済ませ、
-    ここで登録の無いモデルは渡さない(回答のモデルや別の接続へ暗黙に切り替えない)。
-    """
-    model_id = settings.rag_answer_escalation_model.strip()
-    if not model_id or model_id == answer_model:
-        return {}
-    try:
-        connection = enterprise_ai_connection_for_model(settings, model_id)
-    except EnterpriseAiModelNotRegisteredError:
-        return {}
-    return {
-        "RAG_ENGINE_ESCALATION_MODEL": model_id,
-        "RAG_ENGINE_ESCALATION_ENDPOINT": connection.base_url,
-        "RAG_ENGINE_ESCALATION_API_KEY": connection.api_key,
-        "RAG_ENGINE_ESCALATION_PROJECT_OCID": connection.project_ocid,
-        "RAG_ENGINE_ESCALATION_VISION": (
-            "1" if answer_model_reads_images(settings, model_id) else "0"
-        ),
-        "RAG_ENGINE_ESCALATION_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
-            settings, model_id
-        ),
-        "RAG_ENGINE_ESCALATION_MAX_INPUT_TOKENS": str(
-            enterprise_ai_max_input_tokens(settings, model_id)
-        ),
-        "RAG_ENGINE_ESCALATION_MAX_OUTPUT_TOKENS": str(
-            enterprise_ai_output_token_budget(settings, model_id)
-        ),
-        "RAG_ENGINE_ESCALATION_IMAGE_INPUT_TOKENS": str(
-            enterprise_ai_image_input_tokens(settings, model_id)
-        ),
-    }
-
-
 def build_engine_settings(
     settings: Settings,
     *,
@@ -599,8 +561,6 @@ def build_engine_settings(
         # 構造化出力の JSON の文字列の外の空白の連続の上限(#5077)。超えた出力は送り直す。
         "RAG_ENGINE_LLM_JSON_WHITESPACE_RUN_LIMIT": str(settings.rag_llm_json_whitespace_run_limit),
     }
-    # 生成の出力が形式の確認を通らなかったときのモデル(モデルのカスケード。#4581)。
-    environ.update(escalation_model_environ(settings, answer_model))
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
