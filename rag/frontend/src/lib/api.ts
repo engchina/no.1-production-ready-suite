@@ -1248,8 +1248,10 @@ export interface KnowledgeBaseWikiDocument {
 /** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）。 */
 export interface KnowledgeBaseWikiData {
   enabled: boolean;
+  /** 状態ごとの件数（KB 全体）。 */
   counts: Record<string, number>;
-  documents?: KnowledgeBaseWikiDocument[];
+  /** 名前の順の 1 ページ分（offset / limit）。 */
+  documents: Page<KnowledgeBaseWikiDocument>;
   /** 構築が進まない理由。`actor_unavailable` は自動構築を有効にした利用者が権限を失った。 */
   blocked_reason?: "actor_unavailable" | null;
 }
@@ -3869,9 +3871,10 @@ export const api = {
     request<KnowledgeBaseDetail>(
       `/api/knowledge-bases/${encodeURIComponent(id)}`,
     ),
-  getKnowledgeBaseWiki: (id: string) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki`),
-  setKnowledgeBaseWiki: (id: string, enabled: boolean) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }),
-  retryKnowledgeBaseWiki: (id: string) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry`, { method: "POST" }),
+  // 文書ごとの状態は offset / limit の 1 ページ分。変更・再試行の応答も同じページで返る。
+  getKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`),
+  setKnowledgeBaseWiki: (id: string, enabled: boolean, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }),
+  retryKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry?offset=${offset}&limit=${limit}`, { method: "POST" }),
   getStructureBuildPlan: (id: string, offset = 0, limit = 25) => request<StructureBuildPlan>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/plan?offset=${offset}&limit=${limit}`),
   getStructureBuildJob: (id: string, offset = 0, limit = 25) => request<StructureBuildJob | null>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job?offset=${offset}&limit=${limit}`),
   startStructureBuild: (id: string, mode: StructureBuildMode) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }),

@@ -209,26 +209,20 @@ test("Wiki の自動構築を保存し、進捗と文書ごとの失敗の理由
     { document_id: "doc-b", file_name: "synthetic-b.pdf", status: "READY", failure_code: null, updated_at: "2026-01-01T00:00:00Z" },
     { document_id: "doc-c", file_name: "synthetic-c-with-a-very-long-file-name-for-wrapping.pdf", status: "FAILED", failure_code: "timeout", updated_at: "2026-01-01T00:00:00Z" },
   ];
-  const body = () => ({
-    enabled,
-    counts: documents.reduce<Record<string, number>>((all, row) => ({ ...all, [row.status]: (all[row.status] ?? 0) + 1 }), {}),
-    documents,
-    blocked_reason: enabled && blocked ? "actor_unavailable" : null,
-  });
   let releaseRetry: () => void = () => undefined;
   await page.route("**/api/knowledge-bases/kb-1/wiki**", async (route) => {
     if (route.request().method() === "PUT") {
       enabled = (route.request().postDataJSON() as { enabled: boolean }).enabled;
       writes.push(enabled);
     }
-    if (route.request().url().endsWith("/retry")) {
+    if (new URL(route.request().url()).pathname.endsWith("/retry")) {
       retries += 1;
       // 押した直後はボタンが loading になることを確かめてから応答する。
       await new Promise<void>((resolve) => { releaseRetry = resolve; });
       blocked = false;
       documents[2] = { ...documents[2], status: "QUEUED", failure_code: null };
     }
-    await route.fulfill(envelope(body()));
+    await route.fulfill(envelope(wikiBody(enabled, documents, route.request().url(), enabled && blocked)));
   });
   await page.goto("/knowledge-bases/kb-1");
   const panel = page.getByTestId("knowledge-base-wiki");
@@ -279,9 +273,9 @@ test("Wiki の構築状態の読込の失敗を再試行でき、アーカイブ
   await mockKnowledgeBases(page, defaultKnowledgeBases());
   await mockDocuments(page);
   let failing = true;
-  await page.route("**/api/knowledge-bases/kb-old/wiki", (route) => failing
+  await page.route("**/api/knowledge-bases/kb-old/wiki**", (route) => failing
     ? route.fulfill({ status: 503, json: { data: null, error_messages: ["合成の読込失敗"], warning_messages: [] } })
-    : route.fulfill(envelope({ enabled: false, counts: {}, documents: [] })));
+    : route.fulfill(envelope(wikiBody(false, [], route.request().url(), false))));
   await page.goto("/knowledge-bases/kb-old");
   const panel = page.getByTestId("knowledge-base-wiki");
   await expect(panel).toContainText("合成の読込失敗", { timeout: 15000 });
@@ -293,6 +287,66 @@ test("Wiki の構築状態の読込の失敗を再試行でき、アーカイブ
   await panel.scrollIntoViewIfNeeded();
   await testInfo.attach("wiki-archived", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
 });
+
+test("Wiki の文書ごとの状態は server 側で名前の順にページングし、件数は KB 全体で数える", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKnowledgeBases(page, defaultKnowledgeBases());
+  await mockDocuments(page);
+  // 合成の 30 件。28 件目だけ失敗（2 ページ目に入る）。
+  const documents = Array.from({ length: 30 }, (_, index) => {
+    const n = String(index + 1).padStart(2, "0");
+    const failed = index === 27;
+    return { document_id: `doc-${n}`, file_name: `synthetic-${n}.md`, status: failed ? "FAILED" : "READY", failure_code: failed ? "build_failed" : null, updated_at: "2026-01-01T00:00:00Z" };
+  });
+  const requested: string[] = [];
+  await page.route("**/api/knowledge-bases/kb-1/wiki**", async (route) => {
+    const url = new URL(route.request().url());
+    requested.push(`${url.searchParams.get("offset")}/${url.searchParams.get("limit")}`);
+    await route.fulfill(envelope(wikiBody(true, documents, route.request().url(), false)));
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const panel = page.getByTestId("knowledge-base-wiki");
+  const progress = panel.getByTestId("knowledge-base-wiki-progress");
+  // 進捗と失敗の件数は表示中のページではなく KB 全体。
+  await expect(progress).toContainText("準備済み 29 / 30 件（失敗 1 件）");
+  const list = panel.getByTestId("knowledge-base-wiki-documents");
+  await expect(list).toContainText("30 件");
+  const rows = panel.getByTestId("knowledge-base-wiki-document");
+  await expect(rows).toHaveCount(25);
+  await expect(rows.first()).toContainText("synthetic-01.md");
+  const pagination = panel.getByRole("navigation", { name: "文書ごとの構築状態のページ" });
+  await expect(pagination).toContainText("1–25 / 30 件");
+  await panel.scrollIntoViewIfNeeded();
+  await testInfo.attach("wiki-page-1", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(pagination).toContainText("26–30 / 30 件");
+  await expect(rows).toHaveCount(5);
+  await expect(rows.first()).toContainText("synthetic-26.md");
+  await expect(rows.nth(2)).toContainText("synthetic-28.md");
+  await expect(rows.nth(2)).toContainText("失敗");
+  await expect(progress).toContainText("準備済み 29 / 30 件（失敗 1 件）");
+  await expectNoPageOverflow(page);
+  await testInfo.attach("wiki-page-2", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  // 表示件数を変えると 1 ページ目に戻る。
+  await pagination.getByRole("combobox", { name: "表示件数" }).click();
+  await page.getByRole("option", { name: "10 件" }).click();
+  await expect(pagination).toContainText("1–10 / 30 件");
+  await expect(rows).toHaveCount(10);
+  expect(requested).toEqual(expect.arrayContaining(["0/25", "25/25", "0/10"]));
+});
+
+/** Wiki の API の応答（`offset` / `limit` の 1 ページ分と、KB 全体の件数）。 */
+function wikiBody(enabled: boolean, documents: { status: string }[], url: string, blocked: boolean) {
+  const params = new URL(url).searchParams;
+  const offset = Number(params.get("offset") ?? 0);
+  const limit = Number(params.get("limit") ?? 25);
+  const items = documents.slice(offset, offset + limit);
+  return {
+    enabled,
+    counts: documents.reduce<Record<string, number>>((all, row) => ({ ...all, [row.status]: (all[row.status] ?? 0) + 1 }), {}),
+    documents: { items, total: documents.length, limit, offset, has_next: offset + items.length < documents.length },
+    blocked_reason: blocked ? "actor_unavailable" : null,
+  };
+}
 
 function defaultKnowledgeBases(): KnowledgeBaseFixture[] {
   return [

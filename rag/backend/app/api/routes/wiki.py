@@ -1,8 +1,9 @@
 """Wiki の背景構築の指定。本文は返さず、KB の見え方で状態だけを返す。"""
 
-from collections import Counter
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from pr_backend_core.api import OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.clients.wiki_store import WikiStore
@@ -19,6 +20,8 @@ from app.schemas.wiki import (
 )
 
 router = APIRouter()
+# 文書ごとの状態の一覧のページ（画面の既定 25 件・選択肢 10/25/50/100）。
+Paging = Annotated[OffsetParams, Depends(offset_params(default=25, max_limit=100))]
 
 
 async def _actor_unavailable(store: WikiStore, knowledge_base_id: str) -> bool:
@@ -43,23 +46,30 @@ async def _set_enabled(knowledge_base_id: str, enabled: bool) -> None:
 
 
 @router.get("/{knowledge_base_id}/wiki", response_model=ApiResponse[KnowledgeBaseWikiData])
-async def get_wiki_settings(knowledge_base_id: str) -> ApiResponse[KnowledgeBaseWikiData]:
+async def get_wiki_settings(
+    knowledge_base_id: str, paging: Paging
+) -> ApiResponse[KnowledgeBaseWikiData]:
     oracle = OracleClient()
     kb = await oracle.get_knowledge_base_config(knowledge_base_id)
     if kb is None:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
     store = WikiStore(oracle)
-    documents = [
-        KnowledgeBaseWikiDocument.model_validate(row)
-        for row in await store.document_statuses({"knowledge_base_id": knowledge_base_id})
-    ]
+    filters = {"knowledge_base_id": knowledge_base_id}
+    counts = await store.status_counts(filters)
+    rows = await store.document_statuses(filters, limit=paging.limit, offset=paging.offset)
+    documents = paginate(
+        [KnowledgeBaseWikiDocument.model_validate(row) for row in rows],
+        total=sum(counts.values()),
+        limit=paging.limit,
+        offset=paging.offset,
+    )
     enabled = (
         kb.status == KnowledgeBaseStatus.ACTIVE and kb.retrieval_config.get(WIKI_BUILD_KEY) is True
     )
     return ApiResponse(
         data=KnowledgeBaseWikiData(
             enabled=enabled,
-            counts=dict(Counter(document.status for document in documents)),
+            counts=counts,
             documents=documents,
             blocked_reason="actor_unavailable"
             if enabled and await _actor_unavailable(store, knowledge_base_id)
@@ -70,14 +80,14 @@ async def get_wiki_settings(knowledge_base_id: str) -> ApiResponse[KnowledgeBase
 
 @router.put("/{knowledge_base_id}/wiki", response_model=ApiResponse[KnowledgeBaseWikiData])
 async def update_wiki_settings(
-    knowledge_base_id: str, request: KnowledgeBaseWikiUpdate
+    knowledge_base_id: str, request: KnowledgeBaseWikiUpdate, paging: Paging
 ) -> ApiResponse[KnowledgeBaseWikiData]:
     # 保存領域の読み取りを先に確かめ、保存の後で未更新の schema に気付かないようにする。
-    await get_wiki_settings(knowledge_base_id)
+    await get_wiki_settings(knowledge_base_id, paging)
     await _set_enabled(knowledge_base_id, request.enabled)
     if request.enabled:
         wiki_jobs.notify(knowledge_base_id)
-    return await get_wiki_settings(knowledge_base_id)
+    return await get_wiki_settings(knowledge_base_id, paging)
 
 
 @router.post(
@@ -85,8 +95,10 @@ async def update_wiki_settings(
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ApiResponse[KnowledgeBaseWikiData],
 )
-async def retry_wiki_build(knowledge_base_id: str) -> ApiResponse[KnowledgeBaseWikiData]:
-    current = await get_wiki_settings(knowledge_base_id)
+async def retry_wiki_build(
+    knowledge_base_id: str, paging: Paging
+) -> ApiResponse[KnowledgeBaseWikiData]:
+    current = await get_wiki_settings(knowledge_base_id, paging)
     if not current.data or not current.data.enabled:
         raise HTTPException(status_code=409, detail="Wiki の構築を有効にしてください。")
     # 権限を失った利用者の指定のまま止まらないよう、再試行した利用者で構築する（#5466）。
@@ -94,4 +106,4 @@ async def retry_wiki_build(knowledge_base_id: str) -> ApiResponse[KnowledgeBaseW
     await WikiStore(OracleClient()).requeue_failed({"knowledge_base_id": knowledge_base_id})
     wiki_jobs.notify(knowledge_base_id)
     # 待機へ戻した後の状態を返し、画面が再試行の前の件数で上書きしないようにする。
-    return await get_wiki_settings(knowledge_base_id)
+    return await get_wiki_settings(knowledge_base_id, paging)
