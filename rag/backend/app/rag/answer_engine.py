@@ -4716,6 +4716,14 @@ def _stored_child(
         metadata["location_label"], metadata["parent_location_label"] = xml_tree_location
         # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にして説明する。
         metadata[ARTICLE_UNIT_KEY] = True
+    if (
+        "location_label" not in metadata
+        and "sheet_location" not in metadata
+        and not _has_page(chunk.metadata)
+    ):
+        # 頁の無い原本(テキスト・Markdown など)の根拠(#5450)。「p.1」にせず、最下位の見出しと
+        # 原本の行の範囲にする(分からなければ空で、出典は文書名だけ)。
+        metadata["location_label"] = _line_location_label(chunk.metadata)
     if chunk.metadata.get("document_superseded") is True:
         # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として
         # 公開しない(#1492)。
@@ -4809,6 +4817,25 @@ def _source_file_name(chunk: RetrievedChunk) -> str:
 
 
 _CELL_RANGE = re.compile(r"^([A-Z]+)(\d+):([A-Z]+)(\d+)$")
+
+
+def _has_page(metadata: Mapping[str, object]) -> bool:
+    """解析が頁を記録した chunk か(PDF・PowerPoint・画像など)。"""
+    return bool(metadata.get("page_start") or metadata.get("page_number"))
+
+
+def _line_location_label(metadata: Mapping[str, object], *, prefix: str = "") -> str:
+    """頁の無い根拠の場所(最下位の見出しと原本の行の範囲。#5450)。``prefix`` は親の値の接頭辞。"""
+    from rag_engine.generation.answer_labels import answer_labels
+
+    title = metadata.get(f"{prefix}section_title")
+    start = metadata.get(f"{prefix}source_line_start")
+    end = metadata.get(f"{prefix}source_line_end")
+    return answer_labels().lines(
+        title.strip() if isinstance(title, str) else "",
+        start if type(start) is int else None,
+        end if type(end) is int else None,
+    )
 
 
 def _xml_tree_location_labels(metadata: Mapping[str, object]) -> tuple[str, str] | None:
@@ -4993,6 +5020,14 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         if parent_text and isinstance(parent_label := metadata.get("parent_location_label"), str):
             # XML ツリー JSON の親(単位)の場所(#2024)。
             metadata["location_label"] = parent_label
+        if (
+            parent_text
+            and "parent_location_label" not in metadata
+            and "sheet_location" not in metadata
+            and not _has_page(source_metadata)
+        ):
+            # 頁の無い原本の親の場所は、親(子の全体)の行の範囲(#5450)。
+            metadata["location_label"] = _line_location_label(source_metadata, prefix="parent_")
         if location := (
             _parent_sheet_location(source.metadata if source else {}) if parent_text else None
         ) or _merged_sheet_location([child.metadata.get("sheet_location") for child in members]):
