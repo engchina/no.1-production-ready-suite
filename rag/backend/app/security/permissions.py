@@ -715,7 +715,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
     ),
     ("PATCH", "/settings/section-rules"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
-    ("DELETE", "/settings/section-rules"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("GET", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),
