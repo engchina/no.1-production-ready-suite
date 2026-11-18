@@ -142,6 +142,12 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "ingestion",
         (("instruction", "app.rag.ingestion_prompts:DOCUMENT_SUMMARY_PROMPT"),),
     ),
+    # Wiki の案内の構築（#4941）。KB で構築を有効にしたときだけ背景で使う。
+    PromptStage(
+        "wiki_build",
+        "knowledge",
+        (("instruction", "app.rag.wiki_compiler:WIKI_CONTEXT_PROMPT"),),
+    ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。
     PromptStage(
         "support_guide_draft",

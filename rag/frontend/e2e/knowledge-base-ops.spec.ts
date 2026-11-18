@@ -197,6 +197,64 @@ test("アーカイブ済みのナレッジベースは名前・説明を読み�
   await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
 });
 
+test("Wiki の自動構築を保存し、失敗した構築を再試行でき、無効にしても状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKnowledgeBases(page, defaultKnowledgeBases());
+  await mockDocuments(page);
+  let enabled = false;
+  const writes: boolean[] = [];
+  const counts = { READY: 2, FAILED: 1, QUEUED: 0 };
+  await page.route("**/api/knowledge-bases/kb-1/wiki**", async (route) => {
+    if (route.request().method() === "PUT") {
+      enabled = (route.request().postDataJSON() as { enabled: boolean }).enabled;
+      writes.push(enabled);
+    }
+    if (route.request().url().endsWith("/retry")) {
+      counts.FAILED = 0;
+      counts.QUEUED = 1;
+    }
+    await route.fulfill(envelope({ enabled, counts }));
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const panel = page.getByTestId("knowledge-base-wiki");
+  const toggle = panel.getByRole("switch", { name: "Wiki を自動構築する" });
+  await expect(toggle).not.toBeChecked();
+  await expect(panel.getByRole("button", { name: "失敗した構築を再試行" })).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await expect(panel).toContainText("準備済み 2 件");
+  await panel.getByRole("button", { name: "失敗した構築を再試行" }).click();
+  await expect(panel).toContainText("待機 1 件");
+  await expect(panel).toContainText("失敗 0 件");
+  await panel.scrollIntoViewIfNeeded();
+  await testInfo.attach("wiki-enabled", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  await expect(panel).toContainText("保存済みの案内は保持しています");
+  await expect(panel).toContainText("準備済み 2 件");
+  expect(writes).toEqual([true, false]);
+  await expectNoPageOverflow(page);
+  await testInfo.attach("wiki-disabled", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+});
+
+test("Wiki の構築状態の読込の失敗を再試行でき、アーカイブ済みでは構築の指定を変えられない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKnowledgeBases(page, defaultKnowledgeBases());
+  await mockDocuments(page);
+  let failing = true;
+  await page.route("**/api/knowledge-bases/kb-old/wiki", (route) => failing
+    ? route.fulfill({ status: 503, json: { data: null, error_messages: ["合成の読込失敗"], warning_messages: [] } })
+    : route.fulfill(envelope({ enabled: false, counts: {} })));
+  await page.goto("/knowledge-bases/kb-old");
+  const panel = page.getByTestId("knowledge-base-wiki");
+  await expect(panel).toContainText("合成の読込失敗", { timeout: 15000 });
+  failing = false;
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel.getByRole("switch", { name: "Wiki を自動構築する" })).toBeDisabled();
+  await expect(panel).toContainText("検索可能な文書を追加すると構築が始まります");
+  await expectNoPageOverflow(page);
+  await panel.scrollIntoViewIfNeeded();
+  await testInfo.attach("wiki-archived", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+});
+
 function defaultKnowledgeBases(): KnowledgeBaseFixture[] {
   return [
     { id: "kb-default", name: "DEFAULT", description: null, status: "ACTIVE" },

@@ -1221,6 +1221,12 @@ export interface StructureBuildItem { document_id: string; name: string; status:
 export interface StructureBuildPlan { items: StructureBuildItem[]; total: number; offset: number; limit: number; counts: Record<string, number> }
 export interface StructureBuildJob extends StructureBuildPlan { job_id: string; status: string; partial_visibility?: boolean; started_at: string; finished_at: string | null }
 
+/** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態の件数（#4941）。 */
+export interface KnowledgeBaseWikiData {
+  enabled: boolean;
+  counts: Record<string, number>;
+}
+
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   searchable_chunk_count: number;
   structure_index_enabled?: boolean | null;
@@ -3861,6 +3867,9 @@ export const api = {
     request<KnowledgeBaseDetail>(
       `/api/knowledge-bases/${encodeURIComponent(id)}`,
     ),
+  getKnowledgeBaseWiki: (id: string) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki`),
+  setKnowledgeBaseWiki: (id: string, enabled: boolean) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }),
+  retryKnowledgeBaseWiki: (id: string) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry`, { method: "POST" }),
   updateKnowledgeBaseStructureIndex: (id: string, enabled: boolean | null) =>
     request<{ enabled: boolean | null; global_enabled: boolean }>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/structure-index`,

@@ -848,10 +848,17 @@
       "sha256": "75db52d3cad5660c2bb9db3b6c04930282aa78164e932b582a5d40064e85d56e",
       "statement_count": 1,
       "table_name": "rag_evaluation_jobs"
+    },
+    {
+      "destructive": false,
+      "name": "20261118_4941_document_wiki",
+      "sha256": "0f4f6de78b47fe471ac17d9c3b3622bbcd7629b0bbc919f51f8922faece0ccfc",
+      "statement_count": 2,
+      "table_name": "rag_wiki_documents"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "671f3f975d7da8246cc8b87523e7580261503971880339eee038892e8f396cbc",
-  "statement_count": 182
+  "sha256": "dc6ce048e9db9d4dbb525ce39d8ebf23ac87450bac4a5b241bdd46dd6ef64344",
+  "statement_count": 184
 }

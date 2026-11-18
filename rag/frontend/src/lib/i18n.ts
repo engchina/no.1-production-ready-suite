@@ -2154,6 +2154,17 @@ export const ja = {
     "先に文書を追加し、索引が完了するとここで検索を試せます。",
   "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
   "knowledgeBases.searchTest.resultMeta": "{count} 件 / {ms} ms",
+  "wiki.title": "Wiki ナビゲーション",
+  "wiki.build": "Wiki を自動構築する",
+  "wiki.buildHelp": "所属文書の解析済みの原文から、検索用の案内をバックグラウンドで増分構築します。無効にしても保存済みの案内は保持します。",
+  "wiki.loading": "Wiki の構築状態を読み込んでいます",
+  "wiki.loadError": "Wiki の構築状態を読み込めませんでした。",
+  "wiki.saveError": "Wiki の構築の設定を保存できませんでした。もう一度操作してください。",
+  "wiki.enabled": "自動構築は有効です。原文の追加・変更に合わせて構築します。",
+  "wiki.disabled": "自動構築は無効です。保存済みの案内は保持しています。",
+  "wiki.progress": "未構築 {pending} 件・待機 {queued} 件・構築中 {running} 件・準備済み {ready} 件・更新待ち {stale} 件・失敗 {failed} 件",
+  "wiki.retry": "失敗した構築を再試行",
+  "wiki.empty": "検索可能な文書を追加すると構築が始まります。",
   "knowledgeBases.structure.build.visibleOnly": "現在の権限で閲覧でき、このKBに所属している文書だけを表示しています。",
   "knowledgeBases.structure.build.help": "保存済みのチャンクの見出し・階層情報から構築します。解析・埋め込み・検索索引の再作成や、検索時の構造拡張の有効化は行いません。",
   "knowledgeBases.structure.build.preview": "既存文書に構築",
@@ -3801,6 +3812,9 @@ export const ja = {
   "settings.answerPrompts.stage.document_summary": "文書全体の要約",
   "settings.answerPrompts.stage.document_summary.condition":
     "解析後の処理の「文書の要約」を有効にしたとき（索引の後に文書ごとに 1 回。文書の詳細の「作り直す」でも使います）",
+  "settings.answerPrompts.stage.wiki_build": "Wiki の案内の構築",
+  "settings.answerPrompts.stage.wiki_build.condition":
+    "ナレッジベースの「Wiki を自動構築する」を有効にしたとき（所属文書の原文または構築の条件が変わった文書ごとに、背景で実行）",
   "settings.answerPrompts.stage.support_guide_conditions": "質問から業務ガイドの自由入力条件を読み取る",
   "settings.answerPrompts.stage.support_guide_conditions.condition":
     "回答・確認の対象に選んだ業務ガイドに、利用者が答える未確認の自由入力条件があるとき",
