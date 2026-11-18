@@ -17,11 +17,13 @@ class Handles:
     def __init__(self) -> None:
         self._short: dict[tuple[str, str], str] = {}
         self._real: dict[str, str] = {}
+        self._counts: dict[str, int] = {}
 
     def short(self, prefix: str, value: str) -> str:
         key = (prefix, value)
         if key not in self._short:
-            handle = f"{prefix}{sum(1 for kind, _ in self._short if kind == prefix) + 1}"
+            self._counts[prefix] = self._counts.get(prefix, 0) + 1
+            handle = f"{prefix}{self._counts[prefix]}"
             self._short[key] = handle
             self._real[handle] = value
         return self._short[key]
