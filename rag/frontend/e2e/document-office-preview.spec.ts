@@ -211,9 +211,12 @@ for(const source of ["csv","xlsx","docx"] as const) {
     await page.getByTestId("document-preview-pane").scrollIntoViewIfNeeded();
     await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`structured-source-initial-${source}.png`),animations:"disabled"});
 
-    await expect(reader.locator("mark").first()).toBeVisible();
+    // 引用した記録は項目と値の縦の一覧で枠ごと強調する（値ごとの mark は付けない。Word の段落の文は mark。#5415）。
+    await expect(reader.locator("[data-source-record-cited]").first()).toBeVisible();
+    await expect(reader.locator("[data-source-record-cited] mark")).toHaveCount(0);
+    if (source === "docx") await expect(reader.locator("mark").first()).toBeVisible();
     expect(requests[0].get("expected_revision")).toBe("er-recipe-1-r1");
-    await expect(reader.getByRole("table").last()).toBeVisible();
+    if (source === "csv") await expect(reader.getByRole("table").last()).toBeVisible();
     const inspector=page.getByTestId("document-inspector-pane");
     await inspector.getByRole("tab",{name:"構造化要素",exact:true}).click();
     const element=inspector.getByRole("button").filter({hasText:selected.text.split("\n")[0]}).last();
@@ -221,7 +224,7 @@ for(const source of ["csv","xlsx","docx"] as const) {
     await expect.poll(()=>requests.some(query=>query.get("element_id")===anchor)).toBe(true);
     await inspector.getByRole("tab",{name:/Chunk \/ Citation/}).click();
     await page.getByTestId("document-chunk-list").getByRole("button").filter({hasText:selected.text.split("\n")[0]}).click();
-    await expect(reader.locator("mark").first()).toBeVisible();
+    await expect(reader.locator("[data-source-record-cited]").first()).toBeVisible();
 
     await page.getByTestId("document-preview-pane").screenshot({path:testInfo.outputPath(`structured-source-${source}.png`),animations:"disabled"});
     await page.getByTestId("document-preview-pane").getByRole("tab",{name:"処理後",exact:true}).click();

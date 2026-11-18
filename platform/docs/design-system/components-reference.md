@@ -1532,6 +1532,7 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
   - 選択肢を並べる `Fieldset` の読み込み中は `FieldSkeleton` ではなく、実際の `Fieldset`（legend・helper はそのまま）の中で選択肢を `invisible` にして `SKELETON_CLASS` で覆います（読み込み後と同じ寸法になる。見本は `MyApiKeysPanel`）。
 - `DataTable` の `loading` の行・`LoadingState` の棒も同じ `SKELETON_CLASS` を使います。`DataTable` の `loading` は、`loadingRows` を省略すると `visibleRows` の行数（無ければ 3 行）の Skeleton で高さを予約します。
 - 同じ取得の経過時間は 1 か所だけに出します。2 つの領域が同じ取得を待つときは、片方は形だけ（`TableSkeleton` を `TimedLoadingState` で包まない）にします。
+- 内容を出したまま一部を読み直す短い表示（引用の前後の読み込みなど）は `showSlowMessage={false}` にし、遅延の案内の予約の行（#902）を置かず 1 行の高さにします（経過時間は出します。#5415）。内容の無い最初の読み込みは既定のままです。
 - **面は灰色の枠で 1 つ**です（#4649）。`TimedLoadingState` は常に灰色の枠（`PROCESSING_FRAME_CLASS` = `rounded-md border border-border bg-surface-sunken`）で全幅を使い、枠を外す指定を持ちません。単独の `ProcessingIndicator`（操作の進行・再読み込みの行を含む）も既定で同じ枠（`surface="framed"`）を持ち、すでに灰色の枠を持つ部品の中に入れるときだけ `surface="plain"` にします。処理の名前と経過時間の並びは置かれた領域の幅（`@container/processing`）で切り替わり、狭い列・375px では経過時間を処理の名前の下へ回します。`LoadingState`・`ListPicker`・`ChatHistoryList`・`LoadMoreFooter` の再読み込みの行も同じ面です。e2e は `platform/packages/ui/e2e/loading-checks.ts` の `findLoadingStandardViolations` で確かめます。
 - **位置と幅は全画面で 1 つ**です（#2510）。影響を受ける領域の先頭に、領域と同じ幅の行で出し、その下を内容の形の Skeleton で覆います。画面の中央に浮かせる・内容の幅のカードにする・ページの上に重ねる・見出しの文言を差し替える・右寄せのバッジにする、はしません。
   - ページ全体が使えない初期処理（認証の確認・DB の状態の確認・画面のコードの読み込み）は `PageLoadingState`（全幅の `PageBody` の先頭の行 + 本文の形の Skeleton。画面と同じく常に全幅で、`wide` は渡さない。#3311。`AppShell` の外では `<main className="min-h-screen bg-canvas">` で包む）。
@@ -4278,7 +4279,7 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 
 ## 構造化した原文の共通表示（#4888）
 
-`EvidenceReader`は`blocks[].record`があるとき、共有の`SourceRecordView`でCSV/Excelの表行列とWord段落/表を表示する。表は`DataTable`、記録の文字の強調は`CodepointHighlight`。保存された記録単位の強調を文字単位の精密な引用と区別し、原生の行列/段落位置を出す。引用に含まれない前後文と、`highlight=false`の未確定の引用は強調しない。
+`EvidenceReader`は`blocks[].record`があるとき、共有の`SourceRecordView`でCSV/Excelの表行列とWord段落/表を表示する。引用した記録の表は「項目 → 値」の縦の一覧（`RunFactList`。375px は 1 段、改行・40 文字超の値は全幅、空の値は「—」）にし、記録の枠ごと左の線と薄い背景で強調する（値ごとの下線は付けない。#5415）。前後の記録の表は`DataTable`で、セルを上にそろえ、長い値の列に最小幅 20rem を付ける。段落の文の強調は`CodepointHighlight`。保存された記録単位の強調を文字単位の精密な引用と区別し、原生の行列/段落位置を出す。引用に含まれない前後文と、`highlight=false`の未確定の引用は強調しない。
 
 解析画面は`purpose="selection"`で選択位置の文言を使い、Chatは既定の引用の文言を使う。位置と版の検証は製品backend、配色・文字・表・フォーカス・明暗テーマは共有UIが担う。取得失敗/再試行・版失効・有限の前後文・目次の既存動作を維持する。
 
