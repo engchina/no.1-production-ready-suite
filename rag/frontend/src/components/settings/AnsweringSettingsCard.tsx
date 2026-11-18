@@ -40,7 +40,7 @@ const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200
 }));
 
 // 目次から章節を選ぶ設定の選択肢。文書全体への参照（#5335。範囲は backend の rag_reference_outline_selection_*
-// と同じ）と検索の上位の文書（#5324。rag_outline_selection_* と同じ）。目次の字数の選択肢は両方で使う。
+// と同じ）と起点の文書（#5324。rag_outline_selection_* と同じ）。目次の字数の選択肢は両方で使う。
 // .env で選択肢の外の値を保存していれば、その値も選べるように足す。
 const REFERENCE_SECTION_CHOICES = [3, 6, 12, 24, 50];
 // 番号つきの参照の節から読むチャンクの上限（#5348。範囲は backend の rag_reference_section_read_max_chunks と同じ 1〜50）。
@@ -102,14 +102,17 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
  * 回答の検索と生成の全体既定（根拠の前後の数・rerank。#593）。
  * 検索・回答プロファイルでは上書きしない（プロファイルの `query` はこれらの欄を持たない）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
-/** 見出しと枠のある設定の群。枠の中の切り替えの一覧と同じ線と余白にそろえる（#4238）。 */
-function SettingsGroup({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+/**
+ * 見出しと枠のある設定の群（#4238）。``flush`` は切り替えの行を並べる群で、行ごとに区切りの線を引き、
+ * 余白は各行が持つ。
+ */
+function SettingsGroup({ id, title, flush = false, children }: { id: string; title: string; flush?: boolean; children: ReactNode }) {
   return (
     <section aria-labelledby={id} className="divide-y divide-border rounded-md border border-border">
       <h3 id={id} className="px-3 py-3 text-sm font-medium text-fg">
         {title}
       </h3>
-      <div className="space-y-4 p-3">{children}</div>
+      <div className={flush ? "divide-y divide-border" : "space-y-4 p-3"}>{children}</div>
     </section>
   );
 }
@@ -258,30 +261,33 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         ))}
         {invalidRatio ? <p role="alert" className="text-sm text-danger-fg">{t("settings.answering.rrfInvalid")}</p> : null}
       </SettingsGroup>
-      <SettingsGroup id="answer-generation-title" title={t("settings.answering.answerGenerationTitle")}>
-      <FormGrid>
-        <SelectField
-          id="answering-neighbor-child-count"
-          className="min-w-0"
+      {/* 以下の群は回答の処理の順（rerank → 切った起点からの検索拡張 → 文脈の補完 → 生成。#5389）に並べる。 */}
+      <SettingsGroup id="rerank-title" title={t("settings.answering.rerankTitle")} flush>
+        <div data-testid="answering-rerank-block">
+        <SwitchRow
+          id="answering-rerank"
+          label={t("settings.answering.rerank")}
+          description={t("settings.answering.rerankHint")}
+          checked={form.rerank_enabled}
           disabled={disabled}
-          label={t("settings.answering.neighborChildCount")}
-          helper={t("settings.answering.neighborChildCountHint")}
-          value={String(form.neighbor_child_count)}
-          options={NEIGHBOR_OPTIONS}
-          width="xs"
-          onValueChange={(value) => update({ neighbor_child_count: Number(value) })}
+          onChange={(checked) => update({ rerank_enabled: checked })}
         />
-        <SelectField
-          id="answering-answer-timeout"
-          className="min-w-0"
-          disabled={disabled}
-          label={t("settings.answering.answerTimeout")}
-          helper={t("settings.answering.answerTimeoutHint")}
-          value={String(form.answer_timeout_seconds)}
-          options={ANSWER_TIMEOUT_OPTIONS}
-          width="xs"
-          onValueChange={(value) => update({ answer_timeout_seconds: Number(value) })}
+        <FormGrid className="px-3 pb-3">
+        <TextField
+          id="answering-rerank-min-score" type="number" min={0} max={1} step="any" width="sm"
+          label={t("settings.answering.rerankMinScore")}
+          helper={t("settings.answering.rerankMinScoreHint")}
+          value={Number.isFinite(form.rerank_min_relevance_score) ? String(form.rerank_min_relevance_score) : ""}
+          error={form.rerank_min_relevance_score == null || !Number.isFinite(form.rerank_min_relevance_score) || form.rerank_min_relevance_score < 0 || form.rerank_min_relevance_score > 1 ? t("settings.answering.thresholdInvalid") : undefined}
+          disabled={disabled || !form.rerank_enabled}
+          onChange={(event) => update({ rerank_min_relevance_score: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />
+        </FormGrid>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup id="search-expansion-title" title={t("settings.answering.searchExpansionTitle")} flush>
+        <div className="p-3">
+        <FormGrid>
         <SelectField
           id="answering-reference-section-read-max-chunks"
           className="min-w-0"
@@ -293,22 +299,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           width="xs"
           onValueChange={(value) => update({ reference_section_read_max_chunks: Number(value) })}
         />
-      </FormGrid>
-      </SettingsGroup>
-      <div
-        role="group"
-        aria-label={t("settings.answering.options")}
-        className="divide-y divide-border rounded-md border border-border"
-      >
-        <div>
-          <SwitchRow id="answering-entity-expansion" label={t("settings.answering.entityExpansion")}
-            description={t("settings.answering.entityExpansionHint")} checked={form.entity_expansion_enabled}
-            disabled={disabled} onChange={(checked) => update({ entity_expansion_enabled: checked })} />
-          {form.entity_expansion_enabled ? <FormGrid className="px-3 pb-3">
-            <SelectField id="answering-entity_expansion_max_chunks" label={t("settings.answering.entity_expansion_max_chunks")} width="xs"
-              value={String(form.entity_expansion_max_chunks)} disabled={disabled} options={Array.from({ length: 10 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
-              onValueChange={(value) => update({ entity_expansion_max_chunks: Number(value) })} />
-          </FormGrid> : null}
+        </FormGrid>
         </div>
         <div>
           <SwitchRow
@@ -353,6 +344,16 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               onValueChange={(value) => update({ outline_selection_read_max_chars: Number(value) })} />
           </FormGrid> : null}
         </div>
+        <div>
+          <SwitchRow id="answering-entity-expansion" label={t("settings.answering.entityExpansion")}
+            description={t("settings.answering.entityExpansionHint")} checked={form.entity_expansion_enabled}
+            disabled={disabled} onChange={(checked) => update({ entity_expansion_enabled: checked })} />
+          {form.entity_expansion_enabled ? <FormGrid className="px-3 pb-3">
+            <SelectField id="answering-entity_expansion_max_chunks" label={t("settings.answering.entity_expansion_max_chunks")} width="xs"
+              value={String(form.entity_expansion_max_chunks)} disabled={disabled} options={Array.from({ length: 10 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
+              onValueChange={(value) => update({ entity_expansion_max_chunks: Number(value) })} />
+          </FormGrid> : null}
+        </div>
         <SwitchRow
           id="answering-graph-expansion"
           label={t("settings.answering.graphExpansion")}
@@ -361,24 +362,20 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled}
           onChange={(checked) => update({ graph_expansion_enabled: checked })}
         />
-        <div data-testid="answering-rerank-block">
-        <SwitchRow
-          id="answering-rerank"
-          label={t("settings.answering.rerank")}
-          description={t("settings.answering.rerankHint")}
-          checked={form.rerank_enabled}
+      </SettingsGroup>
+      <SettingsGroup id="evidence-context-title" title={t("settings.answering.evidenceContextTitle")} flush>
+        <div className="p-3">
+        <FormGrid>
+        <SelectField
+          id="answering-neighbor-child-count"
+          className="min-w-0"
           disabled={disabled}
-          onChange={(checked) => update({ rerank_enabled: checked })}
-        />
-        <FormGrid className="px-3 pb-3">
-        <TextField
-          id="answering-rerank-min-score" type="number" min={0} max={1} step="any" width="sm"
-          label={t("settings.answering.rerankMinScore")}
-          helper={t("settings.answering.rerankMinScoreHint")}
-          value={Number.isFinite(form.rerank_min_relevance_score) ? String(form.rerank_min_relevance_score) : ""}
-          error={form.rerank_min_relevance_score == null || !Number.isFinite(form.rerank_min_relevance_score) || form.rerank_min_relevance_score < 0 || form.rerank_min_relevance_score > 1 ? t("settings.answering.thresholdInvalid") : undefined}
-          disabled={disabled || !form.rerank_enabled}
-          onChange={(event) => update({ rerank_min_relevance_score: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
+          label={t("settings.answering.neighborChildCount")}
+          helper={t("settings.answering.neighborChildCountHint")}
+          value={String(form.neighbor_child_count)}
+          options={NEIGHBOR_OPTIONS}
+          width="xs"
+          onValueChange={(value) => update({ neighbor_child_count: Number(value) })}
         />
         </FormGrid>
         </div>
@@ -395,7 +392,22 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               onValueChange={(value) => update({ section_expansion_input_token_percent: Number(value) })} />
           </FormGrid> : null}
         </div>
-      </div>
+      </SettingsGroup>
+      <SettingsGroup id="answer-generation-title" title={t("settings.answering.answerGenerationTitle")}>
+      <FormGrid>
+        <SelectField
+          id="answering-answer-timeout"
+          className="min-w-0"
+          disabled={disabled}
+          label={t("settings.answering.answerTimeout")}
+          helper={t("settings.answering.answerTimeoutHint")}
+          value={String(form.answer_timeout_seconds)}
+          options={ANSWER_TIMEOUT_OPTIONS}
+          width="xs"
+          onValueChange={(value) => update({ answer_timeout_seconds: Number(value) })}
+        />
+      </FormGrid>
+      </SettingsGroup>
       <FormActionBar
         ariaLabel={t("settings.answering.actions.label")}
         primaryActions={[

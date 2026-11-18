@@ -576,23 +576,33 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
-test("回答の検索と生成の設定は群ごとに枠と見出しがあり、Rerank の下限は切り替えと同じ塊に入る (#4238)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("回答の検索と生成の設定は処理の順の群ごとに枠と見出しがあり、Rerank の下限は切り替えと同じ塊に入る (#4238・#5389)", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockRetrievalCards(page);
   await mockAnsweringSettings(page, []);
   await page.goto("/settings/retrieval");
   await expect(page.getByRole("switch", { name: "画面目録で操作画面を探す", exact: true })).toHaveCount(0);
   const card = page.getByTestId("answering-settings-card");
-  for (const title of ["検索文の作成", "検索の実行", "検索結果の統合（RRF）", "回答の生成"]) {
+  // 群は回答の処理の順（検索 → 統合 → Rerank → 切った起点からの検索拡張 → 文脈の補完 → 生成）に並ぶ。
+  const titles = ["検索文の作成", "検索の実行", "検索結果の統合（RRF）", "検索候補の並べ替え（Rerank）", "検索拡張", "根拠の文脈の補完", "回答の生成"];
+  const tops: number[] = [];
+  for (const title of titles) {
     const group = card.getByRole("region", { name: title, exact: true });
     await expect(group).toBeVisible();
     await expect(group).toHaveCSS("border-top-style", "solid");
     await expect(group).toHaveCSS("border-top-width", "1px");
+    tops.push((await group.boundingBox())?.y ?? 0);
   }
+  expect(tops).toEqual([...tops].sort((left, right) => left - right));
+  await expect(card.getByRole("group", { name: "回答の検索のオプション", exact: true })).toHaveCount(0);
+  // 検索拡張の群の中も処理の順（参照 → 起点の文書の目次 → 実体・別名 → 文書構造）。
+  const expansion = card.getByRole("region", { name: "検索拡張", exact: true });
+  const switches = ["参照先の文書の目次から章節をモデルが選ぶ", "起点の文書の目次から章節をモデルが選ぶ", "実体・別名による検索拡張", "文書構造による検索拡張"];
+  const switchTops: number[] = [];
+  for (const name of switches) switchTops.push((await expansion.getByRole("switch", { name, exact: true }).boundingBox())?.y ?? 0);
+  expect(switchTops).toEqual([...switchTops].sort((left, right) => left - right));
+  await expect(card.getByRole("region", { name: "根拠の文脈の補完", exact: true }).getByRole("switch", { name: "章節で広げる根拠", exact: true })).toBeVisible();
   // 区切りの線は切り替えの行の上にだけあり、下限の欄は切り替えの行の続きとして余白を持つ。
-  const rerankBlock = card.getByTestId("answering-rerank-block");
-  const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
-  const boxes = await Promise.all([rerankBlock.boundingBox(), options.boundingBox()]);
-  expect(Math.abs((boxes[0]?.width ?? 0) - (boxes[1]?.width ?? 0))).toBeLessThanOrEqual(2); // 親の枠の分だけ狭い
+  const rerankBlock = card.getByRole("region", { name: "検索候補の並べ替え（Rerank）", exact: true }).getByTestId("answering-rerank-block");
   await expect(rerankBlock.locator("#answering-rerank-min-score")).toBeVisible();
   const label = page.getByText("再ランキングの関連度スコア下限", { exact: true });
   const [labelBox, rowBox] = await Promise.all([label.boundingBox(), rerankBlock.boundingBox()]);
@@ -602,6 +612,9 @@ test("回答の検索と生成の設定は群ごとに枠と見出しがあり�
   await page.screenshot({ path: testInfo.outputPath("rerank-block.png") });
   await card.getByRole("region", { name: "検索文の作成", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("groups.png") });
+  await expansion.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("expansion-group.png") });
+  await card.screenshot({ path: testInfo.outputPath("answering-card.png") });
 });
 
 test("実体・別名による検索拡張の上限は 1〜10 から選び、保存値を表示する (#5097)", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -791,7 +804,7 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 
-  test(`検索の上位の文書の目次から章節を選ぶ設定は既定でオフで、オンにして上限と一緒に保存できる（${viewport.name}。#5324）`, { tag: "@responsive" }, async ({ page }) => {
+  test(`起点の文書の目次から章節を選ぶ設定は既定でオフで、オンにして上限と一緒に保存できる（${viewport.name}。#5324）`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockRetrievalCards(page);
@@ -800,7 +813,7 @@ for (const viewport of [
 
     await page.goto("/settings/retrieval");
 
-    const toggle = page.getByRole("switch", { name: "検索の上位の文書の目次から章節をモデルが選ぶ", exact: true });
+    const toggle = page.getByRole("switch", { name: "起点の文書の目次から章節をモデルが選ぶ", exact: true });
     await expect(toggle).not.toBeChecked();
     const documents = page.getByRole("combobox", { name: "目次を渡す文書の数", exact: true });
     await expect(documents).toHaveCount(0);

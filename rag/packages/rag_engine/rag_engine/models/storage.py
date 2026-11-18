@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -126,6 +126,3 @@ class HybridSearchResult:
 
     child_chunks: list[StoredChunk]
     all_chunks: list[StoredChunk]
-    # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。rerank の候補（child_chunks）に入れず、
-    # 最後の根拠の並びへ合わせる。本文は all_chunks にも入れる。
-    expansion_chunks: list[StoredChunk] = field(default_factory=list)

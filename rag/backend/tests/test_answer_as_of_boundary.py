@@ -20,6 +20,7 @@ from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, _SearchState, _with_effective_as_of
 from app.rag.cross_references import ReferenceTarget
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 from tests.test_cross_references import FakeGenAi, ReferenceOracle, _retrieved
 
 # 文書ごとの有効期間(開始日, 終了日)。None は期間の端が無い。
@@ -171,8 +172,8 @@ async def test_main_search_and_expansions_use_the_same_as_of(
         },
     )
 
-    result = await _engine(oracle)._search(
-        request, _SearchState(), retrieval_queries=["合成の手順"]
+    result = await search_with_expansions(
+        _engine(oracle), request, _SearchState(), retrieval_queries=["合成の手順"]
     )
 
     ids = [child.chunk_uid for child in [*result.child_chunks, *result.expansion_chunks]]
@@ -233,7 +234,9 @@ async def test_missing_as_of_is_resolved_once_even_when_the_date_changes(
         SearchRequest(query="合成の手順", filters={"knowledge_base_id": "kb-a"})
     )
 
-    await _engine(oracle)._search(request, _SearchState(), retrieval_queries=["合成の手順"])
+    await search_with_expansions(
+        _engine(oracle), request, _SearchState(), retrieval_queries=["合成の手順"]
+    )
 
     assert request.filters["as_of"] == "2026-04-01"
     assert oracle.all_filters()

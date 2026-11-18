@@ -3639,7 +3639,7 @@ def test_answering_settings_save_reference_section_read_max_chunks(
 def test_answering_settings_save_outline_selection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """検索の上位の文書の目次から章節を選ぶ設定(#5324)は既定 ON(#5362)で、開閉と上限を .env と
+    """起点の文書の目次から章節を選ぶ設定(#5324)は既定 ON(#5362)で、開閉と上限を .env と
     実行中の設定へ反映する。範囲の外の上限は保存しない。"""
     from app.config import Settings
 

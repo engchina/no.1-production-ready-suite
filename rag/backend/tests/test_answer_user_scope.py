@@ -27,6 +27,7 @@ from app.rag.request_context import (
     set_audit_request_context,
 )
 from app.schemas.search import ExtractionFieldCondition, RetrievedChunk, SearchMode, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 from tests.test_answer_engine import CoverageOracle, FakeGenAi, FakeOracle, _fake_llm
 from tests.test_cross_references import FakeGenAi as ReferenceGenAi
 from tests.test_cross_references import ReferenceOracle, _retrieved
@@ -287,7 +288,9 @@ async def test_reference_entity_and_graph_expansion_keep_the_explicit_file_name(
     }
     request = SearchRequest(query="合成の手順", filters=filters)
 
-    result = await engine._search(request, _SearchState(), retrieval_queries=["合成の手順"])
+    result = await search_with_expansions(
+        engine, request, _SearchState(), retrieval_queries=["合成の手順"]
+    )
 
     # 範囲外の参照先を根拠に足さず、候補の照合にも明示条件を渡す。
     assert "doc-b:cs-9:0" not in [child.chunk_uid for child in result.child_chunks]

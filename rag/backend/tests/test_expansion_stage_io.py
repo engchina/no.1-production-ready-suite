@@ -24,6 +24,7 @@ from app.rag import answer_engine as module
 from app.rag.answer_engine import AnswerEngine, _SearchState
 from app.rag.pipeline import _observe_engine_call
 from app.schemas.search import RetrievedChunk, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 from tests.test_answer_engine import FakeGenAi, FakeOracle
 
 
@@ -104,8 +105,8 @@ async def test_expansion_empty_and_failure_keep_actual_scope(
         operation_trace("rag.search", operation_id="synthetic") as summary,
         bind_trace_observer(_observe_engine_call),
     ):
-        result = await engine(oracle)._search(
-            request, state, retrieval_queries=[request.query], defer_context=True
+        result = await search_with_expansions(
+            engine(oracle), request, state, retrieval_queries=[request.query], defer_context=True
         )
     assert seen and result.child_chunks
     captured = calls(summary)
@@ -150,8 +151,12 @@ async def test_empty_anchors_still_record_an_executed_question_expansion(
         operation_trace("rag.search", operation_id="synthetic") as summary,
         bind_trace_observer(_observe_engine_call),
     ):
-        result = await engine(oracle)._search(
-            SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"], defer_context=True
+        result = await search_with_expansions(
+            engine(oracle),
+            SearchRequest(query="q"),
+            _SearchState(),
+            retrieval_queries=["q"],
+            defer_context=True,
         )
     captured = calls(summary)
     output = json.loads(captured[ENTITY_EXPANSION_STAGE].output.text)
@@ -216,8 +221,12 @@ async def test_returned_expansions_keep_their_actual_origin_and_exclusions(
         operation_trace("rag.search", operation_id="synthetic") as summary,
         bind_trace_observer(_observe_engine_call),
     ):
-        result = await engine(oracle)._search(
-            SearchRequest(query="q"), _SearchState(), retrieval_queries=["q"], defer_context=True
+        result = await search_with_expansions(
+            engine(oracle),
+            SearchRequest(query="q"),
+            _SearchState(),
+            retrieval_queries=["q"],
+            defer_context=True,
         )
     captured = calls(summary)
     ref = json.loads(captured[REFERENCE_EXPANSION_STAGE].output.text)

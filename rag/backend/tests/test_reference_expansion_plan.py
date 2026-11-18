@@ -5,6 +5,7 @@ from typing import Any
 from app.rag.answer_engine import _SearchState
 from app.rag.cross_references import ReferenceTarget
 from app.schemas.search import RetrievedChunk, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 from tests.test_cross_references import ReferenceOracle, _engine
 
 
@@ -208,8 +209,11 @@ async def test_document_reference_without_search_input_is_not_counted_as_read() 
 async def test_existing_anchor_dependency_is_retained_without_spending_supplement_budget() -> None:
     a, b = chunk("a", "起点", [target(2)]), chunk("b", "第2章")
     state = _SearchState()
-    result = await _engine(ReferenceOracle([a, b], [b]))._search(
-        SearchRequest(query="合成の質問"), state, retrieval_queries=["合成の質問"]
+    result = await search_with_expansions(
+        _engine(ReferenceOracle([a, b], [b])),
+        SearchRequest(query="合成の質問"),
+        state,
+        retrieval_queries=["合成の質問"],
     )
     assert [row.chunk_uid for row in result.child_chunks] == ["a", "b"]
     assert state.reference_sources[0]["added_count"] == 0
