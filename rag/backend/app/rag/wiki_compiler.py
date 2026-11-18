@@ -6,6 +6,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
+from pr_backend_core.bounded_calls import Attempt, BoundedCaller
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
 from rag_parser_core.oci_enterprise_ai import (
@@ -80,11 +81,13 @@ async def compile_pages(
     saved: Sequence[WikiPage] = (),
     authorize: Callable[[], Awaitable[None]],
     checkpoint: Callable[[Sequence[WikiPage]], Awaitable[None]],
+    caller: BoundedCaller | None = None,
 ) -> list[WikiPage]:
     """各出力を検証して保存する。
 
     切断・JSON・schema の不正は対象を二分して小さい出力で取り直す（#4977）。
-    単一対象でも不正なら保存せずに失敗する。
+    単一対象でも不正なら保存せずに失敗する。一時的な失敗（429・5xx・接続・時間切れ）は
+    ``caller``（共通の上限つきの実行器）が再試行する（#5426）。
     """
     if not units or batch_size < 1:
         return []
@@ -119,20 +122,27 @@ async def compile_pages(
             return
         schema = context_schema([unit.unit_id for unit in missing], list(expected))
         await authorize()
-        try:
-            with sdk_retries_disabled():
-                raw = await async_call_with_model_purpose(
-                    "document.extract",
-                    model.generate,
-                    "",
-                    json.dumps(data, ensure_ascii=False),
-                    system_prompt=WIKI_CONTEXT_PROMPT,
-                    response_schema=schema.model_json_schema(),
-                    response_schema_name="wiki_contexts",
-                )
-        except EnterpriseAiIncompleteResponseError:
-            if len(missing) == 1:
-                raise
+
+        async def once(attempt: Attempt | None = None) -> str | None:
+            # 出力の途切れは再試行せず、呼び出しの外で対象を二分する。
+            try:
+                with sdk_retries_disabled():
+                    return await async_call_with_model_purpose(
+                        "document.extract",
+                        model.generate,
+                        "",
+                        json.dumps(data, ensure_ascii=False),
+                        system_prompt=WIKI_CONTEXT_PROMPT,
+                        response_schema=schema.model_json_schema(),
+                        response_schema_name="wiki_contexts",
+                    )
+            except EnterpriseAiIncompleteResponseError:
+                if len(missing) == 1:
+                    raise
+                return None
+
+        raw = await (caller.call(once, label="wiki_build") if caller else once())
+        if raw is None:
             await split(missing)
             return
         try:
