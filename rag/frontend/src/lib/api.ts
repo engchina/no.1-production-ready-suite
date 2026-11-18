@@ -2798,8 +2798,6 @@ export interface AnsweringSettingsData {
   runtime_terms_answer_enabled?: boolean;
   neighbor_child_count: number;
   rerank_enabled: boolean;
-  /** 関係情報で根拠の候補を広げる(#2055。既定 false)。 */
-  graph_expansion_enabled: boolean;
   entity_expansion_enabled: boolean;
   entity_expansion_max_chunks: number;
   /** 番号つきの参照の参照先 1 つで、番号で定位した節から読むチャンクの上限（#5348。既定 8）。 */

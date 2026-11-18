@@ -1,4 +1,4 @@
-"""検索拡張（参照先・実体・関係情報）の根拠を、rerank の後に最後の根拠の並びへ合わせる（#5097・#5162）。
+"""検索拡張（参照先・実体・目次から選んだ章節）の根拠を、rerank の後に最後の根拠の並びへ合わせる（#5097・#5162）。
 
 拡張の根拠は rerank の候補に入れず、rerank・関連度の下限・``top_k``・context の枠で消さず、最後の根拠の
 並びへ同じ規則で 1 回だけ合わせる（同じ chunk・親にあれば印だけ、同じ文書があれば文書の chunk の順、無ければ最後）。
@@ -16,7 +16,6 @@ from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chun
 from rag_engine.retrieval.expansion_merge import (
     ENTITY_EXPANSION_KEY,
     EXPANSION_EVIDENCE_REASON,
-    GRAPH_EXPANSION_KEY,
     OUTLINE_SELECTION_KEY,
     REFERENCE_EXPANSION_KEY,
     expansion_kinds,
@@ -58,13 +57,12 @@ def test_other_documents_go_last_grouped_by_document_in_chunk_order():
     assert _merge(ordered, expansions) == ["a2", "c3", "c7", "d1"]
 
 
-def test_expansion_kinds_cover_reference_entity_and_graph():
+def test_expansion_kinds_cover_reference_and_entity():
     record = child("x", 1, "本文", "X.txt", "px")
     assert not is_expansion_record(record)
     record.metadata[REFERENCE_EXPANSION_KEY] = {"from_chunk_uid": "run:a"}
     record.metadata[ENTITY_EXPANSION_KEY] = {"hop": 0}
-    record.metadata[GRAPH_EXPANSION_KEY] = {"kind": "section"}
-    assert expansion_kinds(record) == (REFERENCE_EXPANSION_KEY, ENTITY_EXPANSION_KEY, GRAPH_EXPANSION_KEY)
+    assert expansion_kinds(record) == (REFERENCE_EXPANSION_KEY, ENTITY_EXPANSION_KEY)
 
 
 def test_outline_selection_mark_is_an_expansion_kept_outside_the_window():
@@ -109,7 +107,7 @@ def test_bundle_places_expansions_by_document_order_without_counting_them():
     a2, b1 = child("a2", 2, "A の 2", "A.txt", "pa2"), child("b1", 1, "B の 1", "B.txt", "pb1")
     a1 = _marked(child("a1", 1, "A の 1", "A.txt", "pa1"))
     a3 = _marked(child("a3", 3, "A の 3", "A.txt", "pa3"), REFERENCE_EXPANSION_KEY)
-    c1 = _marked(child("c1", 1, "C の 1", "C.txt", "pc1"), GRAPH_EXPANSION_KEY)
+    c1 = _marked(child("c1", 1, "C の 1", "C.txt", "pc1"), ENTITY_EXPANSION_KEY)
     parents = [
         parent(name, 1, f"{name} の親", source)
         for name, source in (("pa1", "A.txt"), ("pa2", "A.txt"), ("pa3", "A.txt"), ("pb1", "B.txt"), ("pc1", "C.txt"))

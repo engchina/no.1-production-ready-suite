@@ -13,7 +13,6 @@ from app.schemas.evaluation import EvaluationRagOverrides, EvaluationRunRequest
 _REQUEST_STAGES = {
     "reference": "reference_expansion_enabled",
     "entity": "entity_expansion_enabled",
-    "structure": "graph_expansion_enabled",
     "section": "section_expansion_enabled",
 }
 

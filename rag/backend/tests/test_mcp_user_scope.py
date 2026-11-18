@@ -3,7 +3,7 @@
 
 ``rag_search``(基本の検索。#5352)を、サービストークン
 (claim ``profile_ids``。#1379)で呼ぶ。検索 API の解決・
-``RagPipeline``・``AnswerEngine`` は本物を動かし、Oracle・embedding・LLM と実体・関係情報の拡張の
+``RagPipeline``・``AnswerEngine`` は本物を動かし、Oracle・embedding・LLM と実体の拡張の
 計画だけを決定論の代役にする(内容は合成)。
 
 - すべての検索に、呼び出し元の条件と基準日が残り、根拠の拡張（実体・関係情報）はしない。
@@ -104,7 +104,6 @@ def auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
     for name, value in {
         "rag_reference_expansion_enabled": True,
         "rag_entity_expansion_enabled": True,
-        "rag_graph_expansion_enabled": True,
     }.items():
         monkeypatch.setattr(settings, name, value)
     monkeypatch.setattr(profile_scope, "OracleClient", lambda *_a, **_k: ScopedViewOracle(VIEWS))
@@ -115,11 +114,10 @@ def auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
 
 
 @pytest.fixture
-def plans(monkeypatch: MonkeyPatch) -> Iterator[tuple[PlanRecorder, PlanRecorder]]:
-    entity, graph = PlanRecorder(), PlanRecorder()
+def plans(monkeypatch: MonkeyPatch) -> Iterator[PlanRecorder]:
+    entity = PlanRecorder()
     monkeypatch.setattr(answer_engine, "plan_entity_expansion", entity)
-    monkeypatch.setattr(answer_engine, "plan_graph_expansion", graph)
-    yield entity, graph
+    yield entity
 
 
 def _install(monkeypatch: MonkeyPatch, oracle: Any, genai: Any) -> None:
@@ -205,7 +203,7 @@ def _access_knowledge_bases(context: AuditRequestContext, filters: dict[str, str
 def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     auth: ProductionAuth,
     monkeypatch: MonkeyPatch,
-    plans: tuple[PlanRecorder, PlanRecorder],
+    plans: PlanRecorder,
     tool: str,
     extra: dict[str, Any],
     caller_filters: dict[str, str],
@@ -262,9 +260,9 @@ def test_mcp_keeps_caller_conditions_as_of_and_token_scope(
     for item in oracle.filters:
         assert {key: item.get(key) for key in scalar} == scalar
         assert _field_values(item) == [manual]
-    # 基本の検索は実体・関係情報の拡張をしない。
-    entity, graph = plans
-    assert not entity.scopes and not graph.scopes
+    # 基本の検索は実体の拡張をしない。
+    entity = plans
+    assert not entity.scopes
     # 認可の範囲は、すべての検索で、トークンの範囲に絞った監査 context の述語で当たる。
     _assert_token_scope(oracle.contexts)
     assert _access_knowledge_bases(oracle.contexts[-1], expected) == set(SCOPED_KNOWLEDGE_BASES)

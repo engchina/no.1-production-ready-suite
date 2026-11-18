@@ -218,7 +218,7 @@ class ContextBuildRequest:
     max_anchors_per_parent: int = MAX_ANCHORS_PER_PARENT
     # 原文の遅延取得のための起点選択専用。返した本文は回答に使わず、親参照で起点をまとめる。
     select_anchors_only: bool = False
-    # 検索拡張（参照先・実体・関係情報）の根拠（#5162）。起点・親・前後の文脈が決まった後に、
+    # 検索拡張（参照先・実体・目次から選んだ章節）の根拠（#5162）。起点・親・前後の文脈が決まった後に、
     # ``expansion_merge`` の規則で 1 回だけ合わせる。``top_k``・``max_records`` に数えない。
     expansion_children: Sequence[Any] = ()
     # 補いの検索（要求別の補完・業務ガイドの手順ごとの検索。#5173）で rerank・下限・``top_k`` の切りを通した根拠。

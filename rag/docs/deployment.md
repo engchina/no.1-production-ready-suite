@@ -596,7 +596,7 @@ rerank の後の工程を「rerank の点数の順（MMR）→ 関連度の下�
 
 ## 既存環境の更新手順（#5097・#5162 検索拡張の根拠を rerank の後に合わせる）
 
-交差参照の参照先・実体・別名による検索拡張・文書構造による検索拡張で足す chunk を、rerank の前の候補に入れず、
+交差参照の参照先・実体・別名による検索拡張で足す chunk を、rerank の前の候補に入れず、
 rerank・関連度の下限・Top-N・起点の選択の後に同じ規則で最後の根拠へ合わせるようにした
 （[rag-engine.md の「検索拡張の根拠の合わせ方」](./rag-engine.md#検索拡張の根拠の合わせ方50975162)）。
 表・migration・API path は変えていない。
@@ -1218,13 +1218,12 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
    `rag_evaluation_jobs` を書き出す。
 2. backend の更新との順序は問わない（更新の前のコードも、消す列・値を使っていない）。
 
-## 既存環境の更新手順（#2055 関係情報を回答の検索に使う）
+## 既存環境の更新手順（#5452 文書構造による検索拡張の削除）
 
-#2055 で、文書構造索引の構築（`RAG_GRAPH_PROFILE=entities`）で作った章節・表 / 図の見出しの entity と chunk の対応を、回答の検索の候補を広げるのにも使えるようにした。既定は OFF で、更新しただけでは回答は変わらない。
+回答の検索で文書構造索引の章節・表 / 図の見出しから根拠を足す「文書構造による検索拡張」（#2055。既定 OFF）を削除した。同じ章節の根拠は章節の拡張（`RAG_SECTION_EXPANSION_*`）が読む。
 
-- **schema の変更は無い。** 既存の表（`rag_graph_entities`・`rag_graph_entity_chunks`）を読むだけで、migration は要らない。
-- **新しい設定**: `RAG_GRAPH_EXPANSION_ENABLED`（既定 `false`。検索方法の画面の「文書構造による検索拡張」が書く）と `RAG_GRAPH_EXPANSION_MAX_CHUNKS`（既定 `6`。1〜20）。どちらも全体設定だけで決め、検索・回答プロファイルでは上書きしない（`RAG_GRAPH_EXPANSION_MAX_CHUNKS` は #3523 から。保存済みのプロファイルの `graph_expansion_max_chunks` は適用せず、次の保存で消える）。
-- **関係情報の無い文書には効かない。** 文書構造索引の構築を「構築しない」で取り込んだ文書は、文書の詳細の処理レシピで「文書構造索引の構築」を「構築する」にして「再処理」するまで、何も足さない。
+- **schema の変更は無い。** 文書構造索引の構築（`RAG_GRAPH_PROFILE`）と表（`rag_graph_entities`・`rag_graph_entity_chunks`）、ナレッジベースの「文書構造グラフ」はそのまま使う。
+- **消えた設定**: `RAG_GRAPH_EXPANSION_ENABLED`・`RAG_GRAPH_EXPANSION_MAX_CHUNKS`。`backend/.env` に残っていても読まない（消してよい）。評価の上書き（`rag_overrides`）の `graph_expansion_enabled`・`graph_expansion_max_chunks` と、`ablate` の工程 `graph_expansion` も削除した（送ると検証エラー）。
 
 ## 既存環境の更新手順（#2042 XML ツリー JSON を使用エンジンにする・OCI Vision / ASR の parser とファイル準備の 2 つの変換方式の削除）
 
@@ -1584,7 +1583,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 - **`rag_answer_records.answer_engine` の列**: 保存済みの回答の記録（履歴）が、どの回答の方式で作られたかを表す。新しい記録には常に同じ値を書く。
 - **監査 `rag_search_audit` の標準の回答フローの内訳の列**（`memory_plan_id`・`agent_memory_*` など）: 既存の監査の行を変えないため残し、今は既定値を書く。
-- **文書構造索引の構築（`rag_graph_*`）と navigation の要約の取り込み**: ナレッジベースの関係図と文書詳細が使い、関係情報は `RAG_GRAPH_EXPANSION_ENABLED`（既定 OFF。#2055）を ON にしたときに回答の検索も読む（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
+- **文書構造索引の構築（`rag_graph_*`）と navigation の要約の取り込み**: ナレッジベースの関係図と文書詳細が使う（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
 
 ### 手順
 
