@@ -1,7 +1,7 @@
 import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, openRecipeActionMenu } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -480,7 +480,7 @@ test("原本プレビューで処理前/処理後を切り替え、ファイル�
     /\/api\/documents\/doc-1\/recipes\/recipe-1\/content\?variant=prepared&disposition=attachment$/
   );
 
-  await page.getByRole("button", { name: "ファイル準備から再処理" }).click();
+  await (await openRecipeActionMenu(page)).getByRole("menuitem", { name: "ファイル準備から再処理" }).click();
   await page.getByRole("button", { name: "再処理する" }).click();
 
   expect(state.enqueueRequest).toEqual({
@@ -675,7 +675,9 @@ test("変換なしでも REVIEW では抽出確認を促す", async ({
   await page.goto("/documents/doc-1");
 
   await expect(page.getByText("抽出確認待ち", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "抽出から再処理" })).toHaveCount(0);
+  const menu = await openRecipeActionMenu(page);
+  await expect(menu.getByRole("menuitem", { name: "ファイル準備から再処理" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "抽出から再処理" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -693,10 +695,10 @@ test("PREPROCESSED ではファイル準備を確認し、解析へ進む承認�
   ).toBeVisible();
   const approve = page.getByRole("button", { name: "承認して解析へ" });
   const actionButtons = approve.locator("xpath=parent::div").getByRole("button");
-  await expect(actionButtons.nth(0)).toHaveText("承認して解析へ");
-  await expect(actionButtons.nth(1)).toHaveText("ファイル準備から再処理");
+  // 案内の中は承認だけ。工程からの再処理はレシピの「その他の操作」（#5478）。
+  await expect(actionButtons).toHaveText(["承認して解析へ"]);
   await expect(page.getByRole("button", { name: "却下" })).toHaveCount(0);
-  await actionButtons.nth(1).click();
+  await (await openRecipeActionMenu(page)).getByRole("menuitem", { name: "ファイル準備から再処理" }).click();
   await page.getByRole("button", { name: "再処理する" }).click();
   await expect.poll(() => state.enqueueRequest).toEqual({
     method: "POST",
@@ -717,13 +719,16 @@ test("CHUNKED では承認と段階別再処理だけを表示する", async ({ 
 
   const approve = page.getByRole("button", { name: "承認して Embedding / 索引" });
   const actionButtons = approve.locator("xpath=parent::div").getByRole("button");
-  await expect(actionButtons).toHaveText([
-    "承認して Embedding / 索引",
+  await expect(actionButtons).toHaveText(["承認して Embedding / 索引"]);
+  await expect(page.getByRole("button", { name: "却下" })).toHaveCount(0);
+  // 工程からの再処理はレシピの「その他の操作」に工程の順で入れ、削除は最後（#5478）。
+  const menu = await openRecipeActionMenu(page);
+  await expect(menu.getByRole("menuitem")).toHaveText([
     "ファイル準備から再処理",
     "抽出から再処理",
     "Chunk から再処理",
+    "レシピを削除",
   ]);
-  await expect(page.getByRole("button", { name: "却下" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -747,7 +752,7 @@ test("PREPROCESSED で処理後ファイルが未保存なら危険バナーと�
   // 409 になる承認は出さず、復旧導線(再処理)を出す。
   await expect(page.getByRole("button", { name: "承認して解析へ" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
+  await expect((await openRecipeActionMenu(page)).getByRole("menuitem", { name: /から再処理/ })).toHaveCount(0);
   // 「処理後」プレビューは保存物が無いので無効。
   await expect(page.getByRole("tab", { name: "処理後" })).toBeDisabled();
   await expectNoPageOverflow(page);
@@ -770,7 +775,7 @@ test("PREPROCESSED で処理後ファイルが欠落(converted以外)でも再�
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "承認して解析へ" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
+  await expect((await openRecipeActionMenu(page)).getByRole("menuitem", { name: /から再処理/ })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -1404,7 +1409,8 @@ test(
     const retry = failureBanner.getByRole("button", { name: "抽出を再実行" });
     await expect(retry).toBeVisible();
     await expect(page.getByRole("button", { name: "抽出を再実行" })).toHaveCount(1);
-    await expect(failureBanner.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
+    // 工程からの再処理は案内に並べず、レシピの「その他の操作」に置く（#5478）。
+    await expect(failureBanner.getByRole("button", { name: "ファイル準備から再処理" })).toHaveCount(0);
     // 案内（と操作）は処理レシピの直下にある。押した後の結果も同じ場所に出ることを、処理レシピとの位置で確かめる。
     const recipes = page.locator('section[aria-label="処理レシピ"]');
     await expectBelow(block, recipes);
@@ -2034,7 +2040,7 @@ test("バックグラウンド失敗後は開始 message を消し、失敗原�
   await expect(startedMessage).toHaveCount(0);
   await expect(page.getByText("取込処理に失敗しました。")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
+  await expect((await openRecipeActionMenu(page)).getByRole("menuitem", { name: /から再処理/ })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -2074,9 +2080,9 @@ test("ERROR は失敗 phase と前段の再処理ボタンを表示する", asyn
   await page.goto("/documents/doc-1");
 
   await expect(page.getByRole("button", { name: "Chunk 作成を再実行" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "抽出から再処理" })).toBeVisible();
   await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toHaveCount(0);
+  const menu = await openRecipeActionMenu(page);
+  await expect(menu.getByRole("menuitem", { name: /から再処理/ })).toHaveText(["ファイル準備から再処理", "抽出から再処理"]);
   await expectNoPageOverflow(page);
 });
 
@@ -2104,9 +2110,13 @@ test("Embedding / 索引の失敗は保存済みの Chunk から索引を再実�
   await expect(alert).toContainText(cause);
   await expect(page.getByRole("button", { name: "Embedding / 索引を再実行" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Chunk 作成を再実行" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Chunk から再処理" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "抽出から再処理" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
+  const menu = await openRecipeActionMenu(page);
+  await expect(menu.getByRole("menuitem", { name: /から再処理/ })).toHaveText([
+    "ファイル準備から再処理",
+    "抽出から再処理",
+    "Chunk から再処理",
+  ]);
+  await page.keyboard.press("Escape");
   await expectNoPageOverflow(page);
 
   await page.getByRole("button", { name: "Embedding / 索引を再実行" }).click();
@@ -2125,7 +2135,10 @@ test("索引済みレシピの再処理待ちでは後続3工程が灰色にな�
   const recipes = page.locator('section[aria-label="処理レシピ"]');
   const steps = recipes.getByRole("list");
   await expect(steps.locator(".bg-success-emphasis")).toHaveCount(4);
-  await recipes.getByRole("button", { name: "再処理", exact: true }).click();
+  // 検索対象のレシピを最初から処理し直すボタンは「ファイル準備から再処理」と重なるので出さない（#5478）。
+  await expect(recipes.getByRole("button", { name: "再処理", exact: true })).toHaveCount(0);
+  await (await openRecipeActionMenu(page)).getByRole("menuitem", { name: "ファイル準備から再処理" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "再処理する" }).click();
   await expect(recipes.getByText("ファイル準備の順番待ち", { exact: true }).filter({ visible: true }).first()).toBeVisible();
   await expect(steps.locator(".bg-success-emphasis")).toHaveCount(0);
   const items = steps.getByRole("listitem");
@@ -2288,7 +2301,7 @@ test("ERROR は前提 artifact が無ければファイル準備の再実行だ�
 
   await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
   await expect(page.getByRole("button", { name: "抽出を再実行" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
+  await expect((await openRecipeActionMenu(page)).getByRole("menuitem", { name: /から再処理/ })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 

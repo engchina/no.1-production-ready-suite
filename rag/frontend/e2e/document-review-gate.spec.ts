@@ -1,6 +1,6 @@
 import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, type Route, test } from "./fixtures/test";
-import { expandSidebarSections, mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { expandSidebarSections, mockDatabaseReady, mockLocalAuth, openRecipeActionMenu, openSidebarNav } from "./_helpers";
 
 // 段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の REVIEW ゲート UI を検証する。
 // 文書状態が REVIEW のとき、DocumentWorkspace に「承認して Chunk 作成」と段階別再処理、
@@ -298,8 +298,11 @@ test("REVIEW 文書は確認待ち表示と承認・再処理導線だけを出�
     page.getByText("内容を確認し、問題なければ Chunk 作成へ進めてください", { exact: false })
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "承認して Chunk 作成" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
   await expect(page.getByRole("button", { name: "却下" })).toHaveCount(0);
+  // 工程からの再処理はレシピの「その他の操作」にだけ置く（#5478）。
+  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toHaveCount(0);
+  const menu = await openRecipeActionMenu(page);
+  await expect(menu.getByRole("menuitem", { name: "ファイル準備から再処理" })).toBeVisible();
 });
 
 // 表頭を推定できなかった Excel のシートがあって確認で止めたときは、理由と次の操作を出す（#1229）。
@@ -568,7 +571,7 @@ test("REVIEW の再処理は確認ダイアログを挟む", async ({ page }) =>
   await mockReviewWorkspace(page);
   await page.goto(`/documents/${DOC_ID}`);
 
-  await page.getByRole("button", { name: "ファイル準備から再処理" }).click();
+  await (await openRecipeActionMenu(page)).getByRole("menuitem", { name: "ファイル準備から再処理" }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("ファイル準備から再処理しますか?")).toBeVisible();
