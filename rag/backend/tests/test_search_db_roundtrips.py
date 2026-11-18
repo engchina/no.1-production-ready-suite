@@ -43,6 +43,7 @@ from app.clients.oracle_read_stats import (
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, _SearchState
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from tests.search_expansion_support import search_with_expansions
 
 
 class _Lob:
@@ -1025,8 +1026,6 @@ async def test_injected_search_reports_db_search_stages_and_channels(
         "検索結果の統合（RRF）",
         CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
-        ENTITY_EXPANSION_STAGE,
-        GRAPH_EXPANSION_STAGE,
     ]
     assert sorted(entry[2] for entry in observed if entry[0] == "end") == sorted(started)
     assert {entry[1] for entry in observed} == {"stage"}
@@ -1054,8 +1053,9 @@ async def test_injected_search_reports_db_search_stages_and_channels(
 async def test_injected_search_reports_stages_after_db_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回答に注入する検索は、DB の検索の後の工程(前後の文脈・参照先・実体・関係情報・図の切り出し・
-    文書の先頭ページ)を「文書の検索」の子の段にする(#3464)。各工程の処理は段の中で行う。"""
+    """回答に注入する検索は、DB の検索の後の工程(前後の文脈・図の切り出し・文書の先頭ページ)と、
+    切った起点からの検索拡張(参照先・実体・関係情報。#5389)を「文書の検索」の子の段にする(#3464)。
+    各工程の処理は段の中で行う。"""
     client = _SearchOracle()
     settings = Settings(
         rag_reference_expansion_enabled=True,
@@ -1116,7 +1116,8 @@ async def test_injected_search_reports_stages_after_db_search(
     def in_answer_thread() -> Any:
         with bind_trace_observer(observer):
             return answer_engine_module._run_on_loop(
-                lambda: engine._search(
+                lambda: search_with_expansions(
+                    engine,
                     SearchRequest(query="検索文 1", filters={"knowledge_base_id": "kb-1"}),
                     state,
                     retrieval_queries=["検索文 1"],
@@ -1131,10 +1132,10 @@ async def test_injected_search_reports_stages_after_db_search(
         "検索結果の統合（RRF）",
         CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
+        IMAGE_EVIDENCE_STAGE,
         REFERENCE_EXPANSION_STAGE,
         ENTITY_EXPANSION_STAGE,
         GRAPH_EXPANSION_STAGE,
-        IMAGE_EVIDENCE_STAGE,
     ]
     # 段は順に開いて閉じる(重ならない)。
     assert observed == [(event, name) for name in expected for event in ("start", "end")]
@@ -1180,16 +1181,8 @@ async def test_search_stages_are_skipped_when_there_is_nothing_to_do() -> None:
         "検索結果の統合（RRF）",
         CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
-        ENTITY_EXPANSION_STAGE,
-        GRAPH_EXPANSION_STAGE,
     ]
-    assert observed == [
-        "検索結果の統合（RRF）",
-        CANDIDATE_DIVERSITY_STAGE,
-        CONTEXT_SIBLINGS_STAGE,
-        ENTITY_EXPANSION_STAGE,
-        GRAPH_EXPANSION_STAGE,
-    ]
+    assert observed == first
 
 
 async def test_original_anchors_stage_only_for_derived_candidates(
@@ -1460,7 +1453,7 @@ async def test_keyword_list_without_a_search_expression_is_not_executed(
 
 
 @pytest.mark.parametrize("kind", ["entity", "graph"])
-@pytest.mark.parametrize("mode", ["disabled", "caller_scope", "no_match", "failed"])
+@pytest.mark.parametrize("mode", ["disabled", "page_scope", "no_match", "failed"])
 async def test_expansion_records_actual_skip_empty_failure_and_reuse(
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
@@ -1500,11 +1493,16 @@ async def test_expansion_records_actual_skip_empty_failure_and_reuse(
     state = _SearchState()
     with bind_trace_observer(observer):
         for _ in range(2):
-            await engine._search(
+            await search_with_expansions(
+                engine,
                 request,
                 state,
                 retrieval_queries=["検索文 1"],
-                expand_references=mode != "caller_scope",
+                page_ranges=(
+                    [{"document_id": "doc-x", "page_start": 1, "page_end": 1}]
+                    if mode == "page_scope"
+                    else ()
+                ),
             )
     assert len(records) == 2
     assert len(calls) == (1 if mode in {"no_match", "failed"} else 0)

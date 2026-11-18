@@ -175,16 +175,23 @@ def test_answer_context_does_not_rerank_expansions_and_keeps_them_after_threshol
     expansion = _marked(child("x1", 1, "拡張の本文", "X.txt", "px1"))
     parents = [*(parent(f"p{i}", i, f"合成本文 {i}", "C.txt") for i in range(3)), parent("px1", 1, "拡張の本文", "X.txt")]
     reranked = []
+    calls = []
 
     def provider(question, documents, settings, top_n):
         reranked.append(list(documents))
+        calls.append("rerank")
         return [RerankTextRank(i, score) for i, score in enumerate([0.9, 0.1, 0.8])]
+
+    def expand(*, anchors, candidate_ids, **_):
+        calls.append(("expand", list(anchors), list(candidate_ids)))
+        return [expansion]
 
     monkeypatch.setattr(
         a,
         "search_adb_hybrid_chunks",
-        lambda **_: SimpleNamespace(child_chunks=records, all_chunks=[*records, expansion, *parents], expansion_chunks=[expansion]),
+        lambda **_: SimpleNamespace(child_chunks=records, all_chunks=[*records, *parents]),
     )
+    monkeypatch.setattr(a, "injected_search_expansions", expand)
     monkeypatch.setattr(a, "_stored_chunk_answer_record", lambda record: record)
     monkeypatch.setattr(a, "_rerank_configured", lambda _: True)
     monkeypatch.setattr(a, "rerank_text_with_scores", provider)
@@ -203,3 +210,5 @@ def test_answer_context_does_not_rerank_expansions_and_keeps_them_after_threshol
     # 下限 0.4・top_k 1 の後でも拡張の根拠は残り、別の文書なので最後に置く。
     assert [record.id for record in context.records] == ["p0", "px1"]
     assert context.expansion_candidates == (expansion,)
+    # 検索拡張は rerank・下限・top_k の切りの後に、切った起点（rerank の後の順）から 1 回だけ集める（#5389）。
+    assert calls == ["rerank", ("expand", ["run:c0"], ["run:c0", "run:c1", "run:c2"])]

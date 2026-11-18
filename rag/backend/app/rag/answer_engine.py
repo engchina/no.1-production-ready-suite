@@ -294,6 +294,8 @@ class _SearchState:
     # 回答の検索の統合(RRF)の順位と点(chunk_id → (順位, 点)。複数回の検索では最も上の順位。
     # #1549)。根拠の木に出す。
     fused_ranks: dict[str, tuple[int, float]] = field(default_factory=dict)
+    # 検索文ごとの embedding(検索の段で作ったもの)。切った起点からの検索拡張(#5389)が使い直す。
+    query_embeddings: dict[str, list[float]] = field(default_factory=dict)
     # 実体の 1 段の拡張(#1362)で足した chunk の記録(診断に出す。chunk_id → 実体・段・起点)と、
     # 同じ起点での計画(同じ起点なら SQL を読み直さない)。
     entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -318,7 +320,7 @@ class _SearchState:
     # #5263・#5348)と、章節を選ぶ呼び出しの記録。
     reference_reads: dict[tuple[str, ...], Any] = field(default_factory=dict)
     reference_section_selections: list[dict[str, object]] = field(default_factory=list)
-    # 検索の上位の文書の目次から章節を選んだ記録(#5324。1 回の回答で 1 回だけ選ぶ。None は
+    # 起点の文書の目次から章節を選んだ記録(#5324。1 回の回答で 1 回だけ選ぶ。None は
     # 未実行)と、読んで足した chunk(以後の検索は同じ chunk を返す)。
     outline_selection: dict[str, object] | None = None
     outline_selection_ids: list[str] = field(default_factory=list)
@@ -721,9 +723,8 @@ def _confirmed_validation_premises(
 
 @dataclass(frozen=True)
 class _SearchExpansions:
-    """検索の段の検索拡張(``AnswerEngine._search_expansions``)の結果。RAG 検索の経路は起点だけ。"""
+    """切った起点からの検索拡張(``AnswerEngine._search_expansions``。#5389)の結果。"""
 
-    anchors: list[RetrievedChunk]
     references: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
     referenced: list[RetrievedChunk] = field(default_factory=list)
     outline_chunks: list[RetrievedChunk] = field(default_factory=list)
@@ -784,8 +785,8 @@ class AnswerEngine:
         # (テストは代役を入れる)。
         self._reference_llm: Any | None = None
         # ⑦ 根拠の拡張をするか(#5332。``RagPipeline`` の経路が expanded のとき)。しないとき
-        # (RAG 検索の経路)は検索の段の検索拡張(参照の展開・目次からの章節の選択・実体・関係情報)を
-        # 呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
+        # (RAG 検索の経路)は切った起点からの検索拡張(参照の展開・目次からの章節の選択・実体・
+        # 関係情報)を呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
         self._expand = expand
 
     async def run(
@@ -880,7 +881,7 @@ class AnswerEngine:
                 "searches": list(state.reference_sources),
             }
         if state.outline_selection is not None:
-            # 検索の上位の文書の目次から章節を選んだ記録(#5324。対象の文書・選んだ章節・読んだ字数・
+            # 起点の文書の目次から章節を選んだ記録(#5324。対象の文書・選んだ章節・読んだ字数・
             # 飛ばした理由)。
             outcome.diagnostics["outline_selection"] = state.outline_selection
         if state.derived_hits:
@@ -1019,6 +1020,16 @@ class AnswerEngine:
                 if self._settings.rag_reference_expansion_enabled
                 else None
             ),
+            # 切った起点からの検索拡張(#5389)。Chat の経路だけ(#5332)。
+            search_expansions=(
+                (
+                    lambda **kwargs: run_async(
+                        lambda: self._expanded_search(request, state, **kwargs)
+                    )
+                )
+                if self._expand
+                else None
+            ),
             # 長い根拠を分ける区切りに使う今の章節(#4682)。章節の拡張の設定には関係なく読む。
             current_section_paths=lambda chunk_ids: run_async(
                 lambda: self._current_section_paths(state, chunk_ids)
@@ -1085,7 +1096,6 @@ class AnswerEngine:
         retrieval_queries: Sequence[str],
         candidate_limit: int = 24,
         settings: Any = None,
-        expand_references: bool = True,
         defer_context: bool = False,
         page_ranges: Sequence[Mapping[str, Any]] = (),
         text_queries: Mapping[str, str] | None = None,
@@ -1109,10 +1119,8 @@ class AnswerEngine:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
         await self._ensure_search_filters(request, state)
         assert state.filters is not None
-        if page_ranges:
-            expand_references = False
-            if not _with_page_ranges(state.filters, page_ranges):
-                return HybridSearchResult(child_chunks=[], all_chunks=[])
+        if page_ranges and not _with_page_ranges(state.filters, page_ranges):
+            return HybridSearchResult(child_chunks=[], all_chunks=[])
         depth = self._read_depth(candidate_limit)
         from rag_engine.retrieval.weighted_rrf import query_key
 
@@ -1135,6 +1143,7 @@ class AnswerEngine:
             modes = (SearchMode.KEYWORD,)
         else:
             embeddings = dict(zip(queries, embedded, strict=True))
+            state.query_embeddings.update(embeddings)
             modes = (
                 (SearchMode.HYBRID,)
                 if self._settings.rag_hybrid_search_backend == "oracle_hybrid_index"
@@ -1353,8 +1362,6 @@ class AnswerEngine:
         context_scope = (
             (_with_page_ranges(state.filters, page_ranges) or {}) if page_ranges else state.filters
         ).get(PAGE_RANGES_FILTER_KEY, "")
-        if context_scope:
-            expand_references = False
         anchors = await self._original_anchors(
             state,
             [state.chunks[chunk_id] for chunk_id in ranked],
@@ -1422,55 +1429,13 @@ class AnswerEngine:
         ]
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
-        # 検索の段の検索拡張(⑦。参照の展開・目次からの章節の選択・実体・関係情報)。RAG 検索の経路
-        # (#5332)は呼ばない。
-        search_expansions = (
-            await self._search_expansions(
-                request,
-                state,
-                anchors,
-                siblings,
-                ranked=ranked,
-                fused=fused,
-                queries=queries,
-                embeddings=embeddings,
-                page_ranges=page_ranges,
-                context_scope=context_scope,
-                expand_references=expand_references,
-            )
-            if self._expand
-            else _SearchExpansions(anchors=anchors)
-        )
-        anchors = search_expansions.anchors
-        references = search_expansions.references
-        referenced = search_expansions.referenced
-        outline_chunks = search_expansions.outline_chunks
-        entity_chunks = search_expansions.entity_chunks
-        graph_chunks = search_expansions.graph_chunks
+        # 検索拡張(参照の展開・目次からの章節の選択・実体・文書構造)はここでは行わず、rerank と
+        # 起点の切りの後に rag_engine が切った起点で呼ぶ(#5389。``_expanded_search``)。
         if self._attach_images and not defer_context:
-            evidence = [
-                *anchors,
-                *siblings,
-                *referenced,
-                *outline_chunks,
-                *entity_chunks,
-                *graph_chunks,
-            ]
-            await self._materialize_images(evidence, state)
+            await self._materialize_images([*anchors, *siblings], state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
-            references = {
-                anchor_id: [state.chunks.get(chunk.chunk_id, chunk) for chunk in chunks]
-                for anchor_id, chunks in references.items()
-            }
-            outline_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in outline_chunks]
-            entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
-            graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
-        added = [*referenced, *outline_chunks, *entity_chunks, *graph_chunks]
-        evidence = [*anchors, *siblings, *added]
-        _require_projected_vision_chunks([*evidence, *self._attachment_chunks])
-        # rerank の候補は検索の候補だけ。検索拡張(参照先・実体・関係情報)の chunk は候補に入れず、
-        # rerank・下限・起点の選択の後に最後の根拠の並びへ合わせる(#5162。expansion_chunks)。
+        _require_projected_vision_chunks([*anchors, *siblings, *self._attachment_chunks])
         children = []
         for chunk in anchors:
             child = _stored_child(
@@ -1482,26 +1447,7 @@ class AnswerEngine:
                 "fusion" if chunk.chunk_id in fusion_ids else "diversity"
             )
             children.append(child)
-        expansions: dict[str, Any] = {}
-        for stage, chunks in (
-            ("reference", referenced),
-            ("outline_selection", outline_chunks),
-            ("entity", entity_chunks),
-            ("structure", graph_chunks),
-        ):
-            for chunk in chunks:
-                if chunk.chunk_id in expansions:
-                    continue
-                stored = _stored_child(
-                    state.chunks.get(chunk.chunk_id, chunk),
-                    rrf_score=0.0,
-                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
-                )
-                stored.metadata["retrieval_admission_stage"] = stage
-                expansions[chunk.chunk_id] = stored
         all_children = {chunk.chunk_uid: chunk for chunk in children}
-        for uid, stored in expansions.items():
-            all_children.setdefault(uid, stored)
         for sibling in siblings:
             all_children.setdefault(
                 sibling.chunk_id,
@@ -1528,9 +1474,6 @@ class AnswerEngine:
         all_children = {
             uid: _with_context_scope(child, context_scope) for uid, child in all_children.items()
         }
-        expansion_children = [
-            _with_context_scope(child, context_scope) for child in expansions.values()
-        ]
         parents = [] if defer_context else _stored_parents(list(all_children.values()), state)
         state.retrieval_stages.append(
             {
@@ -1552,22 +1495,92 @@ class AnswerEngine:
                 ],
                 "base_limit": candidate_limit,
                 "selected_ids": [child.chunk_uid for child in children],
-                "expansion_ids": [child.chunk_uid for child in expansion_children],
                 "context_deferred": defer_context,
             }
         )
         return HybridSearchResult(
             child_chunks=children,
             all_chunks=[*all_children.values(), *parents],
-            expansion_chunks=expansion_children,
         )
+
+    async def _expanded_search(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        *,
+        anchors: Sequence[str],
+        candidate_ids: Sequence[str],
+        retrieval_queries: Sequence[str],
+        page_ranges: Sequence[Mapping[str, Any]] = (),
+        **_: object,
+    ) -> list[Any]:
+        """⑦ 切った起点からの検索拡張(Chat の経路だけ。#5389)。
+
+        rag_engine が検索ごとに rerank・下限・文書ごとの上限・``top_k`` の切りの後に、切った起点の
+        ID(``anchors``。rerank の後の順)と rerank に渡した候補の ID(``candidate_ids``)と、その検索の
+        条件で呼ぶ。会話の添付は起点にしない。集めた chunk は rerank にかけず、最後の根拠の並びへ
+        合わせる(#5162)。頁に絞った検索は ``_search`` と同じく参照・目次・実体・文書構造を辿らない。
+        """
+        from rag_engine.retrieval.weighted_rrf import unique_queries
+
+        attached = {chunk.chunk_id for chunk in self._attachment_chunks}
+        seeds = [
+            state.chunks[chunk_id]
+            for chunk_id in anchors
+            if chunk_id in state.chunks and chunk_id not in attached
+        ]
+        queries = unique_queries(retrieval_queries)
+        if not queries or state.filters is None:
+            return []
+        context_scope = (
+            (_with_page_ranges(state.filters, page_ranges) or {}) if page_ranges else state.filters
+        ).get(PAGE_RANGES_FILTER_KEY, "")
+        found = await self._search_expansions(
+            request,
+            state,
+            seeds,
+            ranked=candidate_ids,
+            fused={chunk_id: score for chunk_id, (_, score) in state.fused_ranks.items()},
+            queries=queries,
+            embeddings={
+                q: state.query_embeddings[q] for q in queries if q in state.query_embeddings
+            },
+            page_ranges=page_ranges,
+            context_scope=context_scope,
+            expand_references=not page_ranges and not context_scope,
+        )
+        expansions: dict[str, Any] = {}
+        for stage, chunks in (
+            ("reference", found.referenced),
+            ("outline_selection", found.outline_chunks),
+            ("entity", found.entity_chunks),
+            ("structure", found.graph_chunks),
+        ):
+            for chunk in chunks:
+                if chunk.chunk_id in expansions:
+                    continue
+                stored = _stored_child(
+                    state.chunks.get(chunk.chunk_id, chunk),
+                    rrf_score=0.0,
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
+                )
+                stored.metadata["retrieval_admission_stage"] = stage
+                expansions[chunk.chunk_id] = _with_context_scope(stored, context_scope)
+        _require_projected_vision_chunks(list(expansions.values()))
+        state.retrieval_stages.append(
+            {
+                "stage": "search_expansion",
+                "anchor_ids": [chunk.chunk_id for chunk in seeds],
+                "expansion_ids": list(expansions),
+            }
+        )
+        return list(expansions.values())
 
     async def _search_expansions(
         self,
         request: SearchRequest,
         state: _SearchState,
         anchors: list[RetrievedChunk],
-        siblings: Sequence[RetrievedChunk],
         *,
         ranked: Sequence[str],
         fused: Mapping[str, float],
@@ -1577,18 +1590,18 @@ class AnswerEngine:
         context_scope: str,
         expand_references: bool,
     ) -> _SearchExpansions:
-        """⑦ 検索の段の検索拡張(Chat の経路だけ。#5332)。
+        """⑦ 切った起点からの検索拡張の本体(``_expanded_search`` が呼ぶ。#5389)。
 
-        上位の候補(``anchors``)を起点に、参照の展開(#1280。文書全体への参照は目次からの章節の
-        選択 #5263)・検索の上位の文書の目次からの章節の選択(#5324)・実体(#1362)・関係情報(#2055)の
-        chunk を集める。集めた chunk は rerank の候補に入れず、rerank・下限・起点の選択の後に最後の
-        根拠の並びへ合わせる(#5162。呼び出し元の ``expansion_chunks``)。頁に絞った検索
-        (``page_ranges``・``context_scope``)は ``expand_references=False`` で辿らない。
+        切った起点(``anchors``。rerank の後の順)を起点に、参照の展開(#1280。文書全体への参照は
+        目次からの章節の選択 #5263)・起点の文書の目次からの章節の選択(#5324)・実体(#1362)・
+        関係情報(#2055)の chunk を集める。集めた chunk は rerank にかけず、最後の根拠の並びへ
+        合わせる(#5162)。頁に絞った検索(``page_ranges``・``context_scope``)は
+        ``expand_references=False`` で辿らない。
         """
-        # 上位の候補が本文で参照する節の chunk(#1280)。rerank の候補には入れず、最後の根拠の並びへ
-        # 合わせる(#5162)。参照先が下位の候補・前後の文脈(siblings)にあっても候補の位置は動かさず、
-        # 並びに残ればそのまま印を付け、残らなければ拡張の根拠として足す。上位の起点は足さない。
-        # 起点は統合の上位 5 件と、その外で回答の文脈に入りうる上位(top_k)の参照を持つ候補(#1549)。
+        # 起点が本文で参照する節の chunk(#1280)。rerank の候補には入れず、最後の根拠の並びへ
+        # 合わせる(#5162)。参照先が候補・前後の文脈にあっても候補の位置は動かさず、並びに残れば
+        # そのまま印を付け、残らなければ拡張の根拠として足す。上位の起点は足さない。
+        # 起点は上位 5 件と、その外で回答の文脈に入りうる上位(top_k)の参照を持つ起点(#1549)。
         source_ids = {chunk.chunk_id for chunk in anchors[:_REFERENCE_SOURCE_ANCHORS]}
         references: dict[str, list[RetrievedChunk]] = {}
         if expand_references and self._settings.rag_reference_expansion_enabled:
@@ -1670,7 +1683,7 @@ class AnswerEngine:
         anchors = [state.chunks.get(chunk.chunk_id, chunk) for chunk in anchors]
         referenced = [chunk for chunks in references.values() for chunk in chunks]
         promoted = {chunk.chunk_id for chunk in referenced}
-        # 検索の上位の文書の目次から回答のモデルが選んだ章節の chunk(#5324。既定は無効)。参照先と
+        # 起点の文書の目次から回答のモデルが選んだ章節の chunk(#5324。既定は無効)。参照先と
         # 同じく rerank の候補に入れず、最後の根拠の並びへ合わせる(context の枠に数えない)。
         # 無効なら段も出さない。
         outline_chunks: list[RetrievedChunk] = []
@@ -1708,15 +1721,13 @@ class AnswerEngine:
                         }
                     )
         outline_ids = {chunk.chunk_id for chunk in outline_chunks}
-        # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
+        # 質問と起点の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
         entity_chunks: list[RetrievedChunk] = []
         with _search_stage(ENTITY_EXPANSION_STAGE) as observation:
             skip_reason = (
                 "configuration_disabled"
                 if not self._settings.rag_entity_expansion_enabled
                 else "page_scope"
-                if not expand_references and (page_ranges or context_scope)
-                else "caller_scope"
                 if not expand_references
                 else ""
             )
@@ -1752,7 +1763,7 @@ class AnswerEngine:
                         }
                     )
         entity_ids = {chunk.chunk_id for chunk in entity_chunks}
-        # 関係情報(#2055)で、上位の候補と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
+        # 関係情報(#2055)で、起点と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
         # 章節の chunk を足す。候補・前後の文脈・参照先・実体の拡張にある chunk は足さない。
         graph_chunks: list[RetrievedChunk] = []
         with _search_stage(GRAPH_EXPANSION_STAGE) as observation:
@@ -1760,8 +1771,6 @@ class AnswerEngine:
                 "configuration_disabled"
                 if not self._settings.rag_graph_expansion_enabled
                 else "page_scope"
-                if not expand_references and (page_ranges or context_scope)
-                else "caller_scope"
                 if not expand_references
                 else ""
             )
@@ -1772,7 +1781,6 @@ class AnswerEngine:
                 reused = attempt_key in state.graph_plans
                 graph_exclude = {
                     *ranked,
-                    *(chunk.chunk_id for chunk in siblings),
                     *promoted,
                     *outline_ids,
                     *entity_ids,
@@ -1813,7 +1821,6 @@ class AnswerEngine:
                         }
                     )
         return _SearchExpansions(
-            anchors=anchors,
             references=references,
             referenced=referenced,
             outline_chunks=outline_chunks,
@@ -2184,12 +2191,12 @@ class AnswerEngine:
         state: _SearchState,
         anchors: Sequence[RetrievedChunk],
     ) -> list[RetrievedChunk]:
-        """質問と上位の候補の実体から、関連する chunk を 1 段だけ足す(#1362)。
+        """質問と起点(rerank と切りの後。#5389)の実体から、関連する chunk を 1 段だけ足す(#1362)。
 
         実体は文書レシピで実体の抽出を選んだ文書にだけある。足す chunk は主の検索と同じ範囲
         (利用者が指定した条件と権限。``_expansion_scope``)の中だけで、合計
         ``rag_entity_expansion_max_chunks`` 件まで。
-        上位の候補(起点)は足さない(すでに候補の先頭にある)。読めないとき(実体の表が無い古い
+        起点は足さない(すでに根拠にある)。読めないとき(実体の表が無い古い
         schema など)は足さずに回答を続ける。LLM は呼ばない。
         """
         if not self._settings.rag_entity_expansion_enabled:
@@ -2244,7 +2251,7 @@ class AnswerEngine:
         *,
         exclude: set[str],
     ) -> list[RetrievedChunk]:
-        """関係情報(#2055)で、上位の候補の章節・表と質問の見出しの語から chunk を足す。
+        """関係情報(#2055)で、起点(#5389)の章節・表と質問の見出しの語から chunk を足す。
 
         関係情報は文書レシピで「文書構造索引の構築」を「構築する」にした文書にだけあり、無ければ何も
         足さない。足す chunk は主の検索と同じ範囲(利用者が指定した条件と権限。
@@ -3397,9 +3404,9 @@ class AnswerEngine:
     async def _outline_selection(
         self, request: SearchRequest, state: _SearchState, anchors: Sequence[RetrievedChunk]
     ) -> list[RetrievedChunk]:
-        """検索の上位の文書の目次から回答のモデルが選んだ章節の chunk(#5324。章節の中の順)。
+        """起点の文書の目次から回答のモデルが選んだ章節の chunk(#5324。章節の中の順)。
 
-        検索の上位の候補(``anchors``。統合の順)の文書を版ごとに順位の順で
+        切った起点(``anchors``。rerank の後の順。#5389)の文書を版ごとに順位の順で
         ``rag_outline_selection_max_documents`` 件まで採り、章節の木を持つ文書の目次
         (``rag_outline`` の compact と同じ目録。合計 ``rag_outline_selection_catalog_max_chars``
         字まで)を回答のモデルに 1 回だけ渡して章節を選ばせる(文書全体への参照の #5263 と同じ部品)。
@@ -4668,7 +4675,7 @@ def _stored_child(
         # 関係情報で足した chunk(#2055)。
         metadata[GRAPH_EXPANSION_KEY] = dict(graph)
     if isinstance(outline := chunk.metadata.get(OUTLINE_SELECTION_KEY), dict):
-        # 検索の上位の文書の目次から回答のモデルが選んだ章節の chunk(#5324)。
+        # 起点の文書の目次から回答のモデルが選んだ章節の chunk(#5324)。
         metadata[OUTLINE_SELECTION_KEY] = dict(outline)
     if source := str(chunk.metadata.get(REFERENCE_FROM_KEY) or ""):
         # 交差参照で足した参照先(#1280・#1400)。

@@ -30,7 +30,7 @@ from typing import Any
 REFERENCE_EXPANSION_KEY = "reference_expansion"
 ENTITY_EXPANSION_KEY = "entity_expansion"
 GRAPH_EXPANSION_KEY = "graph_expansion"
-# 検索の上位の文書の目次から回答のモデルが選んだ章節の根拠の印（#5324。backend の ``app.rag.reference_sections``）。
+# 起点の文書の目次から回答のモデルが選んだ章節の根拠の印（#5324。backend の ``app.rag.reference_sections``）。
 OUTLINE_SELECTION_KEY = "outline_selection"
 EXPANSION_KEYS = (REFERENCE_EXPANSION_KEY, ENTITY_EXPANSION_KEY, GRAPH_EXPANSION_KEY, OUTLINE_SELECTION_KEY)
 # 補いの検索の根拠の印のキー（#5173）。値は検索の記録（要求 ID・手順 ID・種類など）。

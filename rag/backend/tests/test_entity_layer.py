@@ -39,6 +39,7 @@ from tests.entity_layer_support import (
     multi_hop_corpus,
     retrieved,
 )
+from tests.search_expansion_support import search_with_expansions
 
 KB = {"knowledge_base_id": "kb-1"}
 LEDGER = "file:system-ledger.xlsx"
@@ -826,7 +827,8 @@ async def test_search_passes_entity_expansion_outside_the_rerank_candidates() ->
     hits = _approval_hits(store)
     state = _SearchState()
 
-    result = await _engine(store, hits)._search(
+    result = await search_with_expansions(
+        _engine(store, hits),
         SearchRequest(query=QUESTION, filters={"knowledge_base_id": "kb-1", "file_name": "承認"}),
         state,
         retrieval_queries=[QUESTION],
@@ -861,13 +863,16 @@ async def test_search_caches_the_plan_skips_when_disabled_and_expands_search_onl
     engine = _engine(store, hits)
     state = _SearchState()
 
-    await engine._search(request, state, retrieval_queries=[QUESTION])
-    await engine._search(request, state, retrieval_queries=[QUESTION, "言い換え"])
+    await search_with_expansions(engine, request, state, retrieval_queries=[QUESTION])
+    await search_with_expansions(engine, request, state, retrieval_queries=[QUESTION, "言い換え"])
     # 同じ起点（質問と上位の候補）なら、CRAG の各回で実体の表を読み直さない。
     assert store.calls == ["seed", "definition", "hop"]
 
-    disabled = await _engine(store, hits, rag_entity_expansion_enabled=False)._search(
-        request, _SearchState(), retrieval_queries=[QUESTION]
+    disabled = await search_with_expansions(
+        _engine(store, hits, rag_entity_expansion_enabled=False),
+        request,
+        _SearchState(),
+        retrieval_queries=[QUESTION],
     )
     assert [child.chunk_uid for child in disabled.child_chunks] == [hit.chunk_id for hit in hits]
     assert disabled.expansion_chunks == []
@@ -893,8 +898,11 @@ async def test_search_continues_when_the_entity_tables_cannot_be_read() -> None:
     hits = _approval_hits(store)
     state = _SearchState()
 
-    result = await _engine(Broken(chunks=store.chunks), hits)._search(
-        SearchRequest(query=QUESTION), state, retrieval_queries=[QUESTION]
+    result = await search_with_expansions(
+        _engine(Broken(chunks=store.chunks), hits),
+        SearchRequest(query=QUESTION),
+        state,
+        retrieval_queries=[QUESTION],
     )
 
     assert [child.chunk_uid for child in result.child_chunks] == [hit.chunk_id for hit in hits]

@@ -26,6 +26,7 @@ from app.rag.graph_expansion import (
 from app.rag.graph_index import GraphIndex, build_graph_index
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.search import RetrievedChunk
+from tests.search_expansion_support import search_with_expansions
 
 CHUNK_SET_ID = "cs-1"
 KB = {"knowledge_base_id": "kb-1"}
@@ -329,8 +330,11 @@ async def test_search_passes_graph_chunks_outside_the_rerank_candidates() -> Non
     hits = [store.chunks[a[16]], store.chunks[a[8]]]
     state = _SearchState()
 
-    result = await _engine(store, hits)._search(
-        SearchRequest(query=QUESTION, filters=dict(KB)), state, retrieval_queries=[QUESTION]
+    result = await search_with_expansions(
+        _engine(store, hits),
+        SearchRequest(query=QUESTION, filters=dict(KB)),
+        state,
+        retrieval_queries=[QUESTION],
     )
 
     # rerank の候補は検索の候補だけ。名前の一致（第 2 章）と広げ（第 4 章の 2 つ目）は rerank に
@@ -358,15 +362,18 @@ async def test_search_caches_the_plan_skips_when_disabled_and_expands_search_onl
     engine = _engine(store, hits)
     state = _SearchState()
 
-    await engine._search(request, state, retrieval_queries=[QUESTION])
-    await engine._search(request, state, retrieval_queries=[QUESTION, "言い換え"])
+    await search_with_expansions(engine, request, state, retrieval_queries=[QUESTION])
+    await search_with_expansions(engine, request, state, retrieval_queries=[QUESTION, "言い換え"])
     # 同じ起点なら、CRAG の各回で関係情報の表を読み直さない。
     assert store.calls == ["seed", "name", "chunks"]
 
     # 既定（OFF）なら表を読まず、候補は今までと同じ。
     off_store = _store()
-    disabled = await _engine(off_store, hits, rag_graph_expansion_enabled=False)._search(
-        request, _SearchState(), retrieval_queries=[QUESTION]
+    disabled = await search_with_expansions(
+        _engine(off_store, hits, rag_graph_expansion_enabled=False),
+        request,
+        _SearchState(),
+        retrieval_queries=[QUESTION],
     )
     assert [child.chunk_uid for child in disabled.child_chunks] == [a[16]]
     assert off_store.calls == []
@@ -400,8 +407,11 @@ async def test_search_continues_when_the_graph_tables_cannot_be_read() -> None:
     hits = [store.chunks[a[16]]]
     state = _SearchState()
 
-    result = await _engine(cast(Any, Broken({})), hits)._search(
-        SearchRequest(query=QUESTION), state, retrieval_queries=[QUESTION]
+    result = await search_with_expansions(
+        _engine(cast(Any, Broken({})), hits),
+        SearchRequest(query=QUESTION),
+        state,
+        retrieval_queries=[QUESTION],
     )
 
     assert [child.chunk_uid for child in result.child_chunks] == [a[16]]
