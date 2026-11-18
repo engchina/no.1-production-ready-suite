@@ -2313,8 +2313,9 @@ class OracleClient:
         content_sha256: str | None = None,
         duplicate_of_document_id: str | None = None,
         knowledge_base_ids: Sequence[str] | None = None,
+        classification: DocumentClassification | None = None,
     ) -> DocumentDetail:
-        """ドキュメント行を作成する。"""
+        """ドキュメント行を作成する。分類と有効期間は同じ transaction で保存する(#5464)。"""
         return await self._create_document_with_oracle(
             file_name=file_name,
             object_storage_path=object_storage_path,
@@ -2323,6 +2324,7 @@ class OracleClient:
             content_sha256=content_sha256,
             duplicate_of_document_id=duplicate_of_document_id,
             knowledge_base_ids=knowledge_base_ids,
+            classification=classification,
         )
 
     async def create_knowledge_base(
@@ -8906,6 +8908,7 @@ class OracleClient:
         content_sha256: str | None,
         duplicate_of_document_id: str | None,
         knowledge_base_ids: Sequence[str] | None,
+        classification: DocumentClassification | None = None,
     ) -> DocumentDetail:
         """Oracle document table へ文書行を作成する。"""
         document_id = uuid4().hex
@@ -8921,6 +8924,11 @@ class OracleClient:
             content_sha256=content_sha256,
             duplicate_of_document_id=duplicate_of_document_id,
             tenant_id_hash=_current_tenant_id_hash(),
+            classification=(
+                None
+                if classification is None or classification.is_empty()
+                else classification.model_dump(mode="json", exclude_none=True)
+            ),
         )
         requested_knowledge_base_ids = _unique_optional_sequence(knowledge_base_ids or [])
 
@@ -8946,7 +8954,8 @@ class OracleClient:
                     file_size_bytes,
                     content_sha256,
                     duplicate_of_document_id,
-                    uploaded_at
+                    uploaded_at,
+                    classification
                 ) VALUES (
                     :document_id,
                     :file_name,
@@ -8957,10 +8966,18 @@ class OracleClient:
                     :file_size_bytes,
                     :content_sha256,
                     :duplicate_of_document_id,
-                    :uploaded_at
+                    :uploaded_at,
+                    :classification
                 )
                 """,
-                _document_binds(document),
+                {
+                    **_document_binds(document),
+                    "classification": (
+                        None
+                        if document.classification is None
+                        else _json_dumps(document.classification)
+                    ),
+                },
             )
             _insert_document_knowledge_base_rows(
                 connection,

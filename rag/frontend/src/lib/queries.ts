@@ -604,23 +604,12 @@ export function useSectionRulesSettings() {
   });
 }
 
-/** 章節の抽出規則の保存・既定に戻す（#715）。章節ナビゲーションは取得のたびに規則を当てるので読み直す。 */
+/** 章節の抽出規則の保存（#715。「既定に戻す」も既定値の保存。#5468）。章節ナビゲーションは取得のたびに規則を当てるので読み直す。 */
 export function useSaveSectionRulesSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
       api.saveSectionRulesSettings(body),
-    onSuccess: (data) => {
-      qc.setQueryData(["settings", "section-rules"], data);
-      void qc.invalidateQueries({ queryKey: ["documents"] });
-    },
-  });
-}
-
-export function useResetSectionRulesSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.resetSectionRulesSettings(),
     onSuccess: (data) => {
       qc.setQueryData(["settings", "section-rules"], data);
       void qc.invalidateQueries({ queryKey: ["documents"] });
@@ -1006,15 +995,21 @@ export function useUploadDocument() {
     mutationFn: ({
       file,
       knowledgeBaseIds = [],
+      classification,
       onProgress,
     }: {
       file: File;
       knowledgeBaseIds?: string[];
+      /** すべてのファイルに設定する分類と有効期間（未選択なら設定しない。#5464）。 */
+      classification?: DocumentClassification | null;
       /** 送信の進み具合（送信済み / 合計のバイト数。#306）。 */
       onProgress?: (progress: UploadProgress) => void;
     }) =>
-      api.uploadDocument(file, knowledgeBaseIds, (transfer) =>
-        onProgress?.(uploadProgressOf(0, file.size, transfer, file.size)),
+      api.uploadDocument(
+        file,
+        knowledgeBaseIds,
+        (transfer) => onProgress?.(uploadProgressOf(0, file.size, transfer, file.size)),
+        classification,
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["documents"] });
@@ -1037,11 +1032,14 @@ export function useBatchUploadDocuments() {
     mutationFn: async ({
       files,
       knowledgeBaseIds = [],
+      classification,
       maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
       onProgress,
     }: {
       files: File[];
       knowledgeBaseIds?: string[];
+      /** すべてのファイルに設定する分類と有効期間（未選択なら設定しない。#5464）。 */
+      classification?: DocumentClassification | null;
       /** 1 ファイルの上限（upload-storage 設定の `max_upload_bytes`）。 */
       maxUploadBytes?: number;
       /** 送信の進み具合（送信済み / 合計のバイト数。#306）。 */
@@ -1062,8 +1060,11 @@ export function useBatchUploadDocuments() {
         const groupBytes = totalUploadBytes(group);
         try {
           results.push(
-            await api.batchUploadDocuments(group, knowledgeBaseIds, (transfer) =>
-              onProgress?.(uploadProgressOf(doneBytes, groupBytes, transfer, totalBytes)),
+            await api.batchUploadDocuments(
+              group,
+              knowledgeBaseIds,
+              (transfer) => onProgress?.(uploadProgressOf(doneBytes, groupBytes, transfer, totalBytes)),
+              classification,
             ),
           );
         } catch (error) {

@@ -807,6 +807,20 @@ export interface DocumentDetail extends DocumentSummary {
 }
 
 /** 文書の分類と有効期間。日付は YYYY-MM-DD、終了日は排他的(当日は期間外)。 */
+/** アップロードの form に所属先の KB と、選んだときだけ分類と有効期間（JSON。#5464）を付ける。 */
+function appendUploadFields(
+  form: FormData,
+  knowledgeBaseIds: string[],
+  classification: DocumentClassification | null | undefined,
+) {
+  for (const id of knowledgeBaseIds) {
+    form.append("knowledge_base_ids", id);
+  }
+  if (classification && Object.values(classification).some(Boolean)) {
+    form.append("classification", JSON.stringify(classification));
+  }
+}
+
 export interface DocumentClassification {
   large_category: string | null;
   middle_category: string | null;
@@ -1445,6 +1459,9 @@ export interface SectionRulesSettingsData {
   mode: SectionRulesMode;
   rules: SectionRule[];
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
+  /** 製品の既定（「既定に戻す」が下書きに入れる。#5468）。 */
+  default_mode: SectionRulesMode;
+  default_rules: SectionRule[];
 }
 
 export type DocumentRecipeStepStatus =
@@ -3609,8 +3626,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  resetSectionRulesSettings: () =>
-    request<SectionRulesSettingsData>("/api/settings/section-rules", { method: "DELETE" }),
   listDocumentCategories: () => request<DocumentCategory[]>("/api/document-categories"),
   createDocumentCategory: (body: { parent_id: string | null; name: string }) =>
     request<DocumentCategory[]>("/api/document-categories", { ...jsonBody(body), method: "POST" }),
@@ -3654,26 +3669,24 @@ export const api = {
     file: File,
     knowledgeBaseIds: string[] = [],
     onUploadProgress?: (progress: UploadTransferProgress) => void,
+    classification?: DocumentClassification | null,
   ) => {
     const form = new FormData();
     form.append("file", file);
-    for (const id of knowledgeBaseIds) {
-      form.append("knowledge_base_ids", id);
-    }
+    appendUploadFields(form, knowledgeBaseIds, classification);
     return requestUpload<UploadResult>("/api/documents/upload", form, onUploadProgress);
   },
   batchUploadDocuments: (
     files: File[],
     knowledgeBaseIds: string[] = [],
     onUploadProgress?: (progress: UploadTransferProgress) => void,
+    classification?: DocumentClassification | null,
   ) => {
     const form = new FormData();
     for (const file of files) {
       form.append("files", file);
     }
-    for (const id of knowledgeBaseIds) {
-      form.append("knowledge_base_ids", id);
-    }
+    appendUploadFields(form, knowledgeBaseIds, classification);
     return requestUpload<BatchUploadResult>(
       "/api/documents/batch-upload",
       form,
