@@ -6,8 +6,6 @@ from rag_engine.config import get_settings
 from rag_engine.generation import answering
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
-from rag_engine.retrieval.expansion_merge import ENTITY_EXPANSION_KEY
-from rag_engine.retrieval.rerank_order import keeps_position
 from tests.record_fixtures import child
 
 
@@ -54,10 +52,8 @@ def test_order_follows_rerank_scores_only(monkeypatch):
     # 点数は素点のまま（合成点を作らない）。
     assert ranked[-1].metadata["rerank"]["relevance_score"] == scores[0]
     assert ranked[0].metadata["rerank"]["rank"] == 1
-    trace = next(row for row in stages if row["stage"] == "rerank_order")
-    assert trace["order"] == [r.chunk_uid for r in ranked]
-    assert not any(row["stage"] in {"rerank_slot_order", "rerank_selection"} for row in stages)
-    assert "並び" in step.fields
+    # rerank の後に並べ直す工程（MMR）は無い（#5443）。
+    assert not any(row["stage"] in {"rerank_order", "rerank_slot_order", "rerank_selection"} for row in stages)
 
 
 def test_similar_candidates_are_not_moved_back(monkeypatch):
@@ -78,20 +74,6 @@ def test_fixed_candidates_stay_in_place(monkeypatch):
     ranked, _ = _run(monkeypatch, records, scores, _settings())
     assert [r.id for r in ranked].index("c3") == 3
     assert sorted(r.id for r in ranked) == sorted(r.id for r in records)
-
-
-def test_keeps_position_covers_unscored_and_attachment_candidates():
-    scored = child("a", 1, "alpha", "a.txt", "p", 0.8)
-    unscored = child("b", 2, "bravo", "b.txt", "p")
-    attached = child("c", 3, "charlie", "c.txt", "p", 0.8)
-    attached.metadata[ATTACHMENT_EVIDENCE_KEY] = True
-    # 拡張の印は rerank の後の並びに効かない（検索拡張の根拠は rerank の候補に入らない。#5162）。
-    marked = child("d", 4, "delta", "d.txt", "p", 0.8)
-    marked.metadata[ENTITY_EXPANSION_KEY] = {"hop": 0}
-    assert keeps_position(unscored) is True
-    assert keeps_position(attached) is True
-    assert keeps_position(scored) is False
-    assert keeps_position(marked) is False
 
 
 def test_all_below_threshold_lowers_the_minimum_once(monkeypatch):

@@ -225,7 +225,6 @@ from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key
 from rag_engine.retrieval.query_overflow import search_overflow_requests
 from rag_engine.retrieval.question_planning import QuestionPlan, plan_question
 from rag_engine.retrieval.request_coverage import CoverageBudget, CoverageUsage
-from rag_engine.retrieval.rerank_order import order_reranked_candidates
 from rag_engine.retrieval.rerank_scores import best_rerank_score, question_rerank_score, rerank_first_key, rerank_score
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
@@ -445,21 +444,6 @@ def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | No
     return ""
 
 
-def _order_by_score(records: Sequence[AnswerRecord], step: Any, receipt: dict[str, Any], *, rerank_phase: str) -> list[AnswerRecord]:
-    """合格した候補を rerank の点数の順に並べ、工程の記録に残す（#5165。検索の順は混ぜない）。"""
-    ordered = order_reranked_candidates(records)
-    receipt["並び"] = "rerank の点数の順"
-    step.field("並び", "rerank の点数の順")
-    record_retrieval_stage(
-        {
-            "stage": "rerank_order",
-            "phase": rerank_phase,
-            "order": [retrieval_record_id(record) for record in ordered],
-        }
-    )
-    return ordered
-
-
 def _rerank_records(
     question: str,
     records: Sequence[AnswerRecord],
@@ -576,8 +560,6 @@ def _rerank_records(
             "outside_scoring_count": len(protected_candidates) + len(remainder),
         }
     )
-    if any(row["adopted_score"] is not None for row in threshold_rows):
-        reranked_candidates = _order_by_score(reranked_candidates, step, receipt, rerank_phase=rerank_phase)
     return _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
 
 

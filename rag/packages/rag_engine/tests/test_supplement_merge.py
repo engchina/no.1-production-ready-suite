@@ -104,7 +104,9 @@ class Harness:
     def rerank(self, question: str, documents: list[str], settings: Any, top_n: int | None = None) -> list[RerankTextRank]:
         names = [next(name for name in self.chunks if document.split("\n")[-1].startswith(f"{name} ")) for document in documents]
         self.reranked.append(names)
-        return [RerankTextRank(index, self.scores.get(name, 0.0)) for index, name in enumerate(names)]
+        # OCI の rerank の結果は点数の高い順に返る（backend の client が並べる）。
+        ranks = [RerankTextRank(index, self.scores.get(name, 0.0)) for index, name in enumerate(names)]
+        return sorted(ranks, key=lambda rank: -(rank.relevance_score or 0.0))
 
 
 def _scoped(record: Any, scope: str) -> Any:
