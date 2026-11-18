@@ -270,8 +270,9 @@ def judge_inputs(payload: dict[str, Any]) -> dict[str, Any]:
 def score_judgement(inputs: dict[str, Any], output: AnswerCorrectnessOutput) -> dict[str, Any]:
     """印から点と理由を計算する。入力に無い id・要点の過不足は ``InvalidJudgeReference``。
 
-    正確性は、矛盾する主張が 1 つでもあれば 0、無ければ 1。ただし標準回答と合う主張が 1 つも無い回答
-    （質問に答えていない回答）は 0。網羅は覆った要点の数 / 要点の数。
+    正確性は、矛盾する主張が 1 つでもあれば 0、無ければ 1。ただし標準回答と合う主張が 1 つも無い回答は 0
+    （標準回答に照らせる具体的な答えが無いのか、回答が質問に答えていないのかは印から区別できないので、
+    理由はどちらとも断定しない）。網羅は覆った要点の数 / 要点の数。
     """
     answer = {row["id"]: row["text"] for response in inputs["actual_responses"] for row in response["answer"]}
     standard = {row["id"]: row["text"] for row in inputs["standard_answer"]}
@@ -301,7 +302,7 @@ def score_judgement(inputs: dict[str, Any], output: AnswerCorrectnessOutput) -> 
             f"回答の「{_quote(claim['answer'])}」と標準回答の「{_quote(claim['standard'])}」が食い違う。" for claim in contradicted
         )
     elif not supported:
-        reason = "標準回答と合う主張がありません（質問に答えていません）。"
+        reason = "標準回答と合う主張がありません（標準回答に具体的な答えが無いか、回答が質問に答えていません）。"
     else:
         reason = "標準回答と矛盾する主張はありません。"
     return dict(

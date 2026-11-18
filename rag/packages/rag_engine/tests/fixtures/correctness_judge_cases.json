@@ -874,7 +874,7 @@
     },
     "expected_correctness": 0.0,
     "recorded_coverage": 0.2,
-    "recorded_reason": "標準回答と合う主張がありません（質問に答えていません）。"
+    "recorded_reason": "標準回答と合う主張がありません（標準回答に具体的な答えが無いか、回答が質問に答えていません）。"
   },
   {
     "id": "b_refusal_answerable",
@@ -1003,7 +1003,7 @@
     },
     "expected_correctness": 0.0,
     "recorded_coverage": 0.2,
-    "recorded_reason": "標準回答と合う主張がありません（質問に答えていません）。"
+    "recorded_reason": "標準回答と合う主張がありません（標準回答に具体的な答えが無いか、回答が質問に答えていません）。"
   },
   {
     "id": "h_contra_with_gaps",
@@ -1612,7 +1612,7 @@
     },
     "expected_correctness": 0.0,
     "recorded_coverage": 0.0,
-    "recorded_reason": "標準回答と合う主張がありません（質問に答えていません）。"
+    "recorded_reason": "標準回答と合う主張がありません（標準回答に具体的な答えが無いか、回答が質問に答えていません）。"
   },
   {
     "id": "r_reservation_matches_standard",

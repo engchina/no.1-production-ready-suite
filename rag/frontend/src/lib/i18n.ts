@@ -1461,7 +1461,7 @@ export const ja = {
   "settings.vectorIndex.reindexSql.copy": "SQL をコピー",
   "settings.evaluation.subtitle": "品質評価の合否の判定に使う評価の基準(閾値のプリセット)を選び、評価に使うプロンプトを確認します。",
   "settings.evaluation.overview.title": "評価の基準",
-  "settings.evaluation.overview.description": "検索 2 項目・回答 1 項目の三指標です。正解の根拠と、標準回答や必須要点を用意します。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。必要な評価情報がない指標は未評価となり、0 点や合格にはしません。",
+  "settings.evaluation.overview.description": "検索 2 項目・回答 1 項目の三指標です。正解の根拠と、標準回答や必須要点を用意します。標準回答には期待する答えの結論・数値・手順を書きます。「〜を提案できる」のような能力の説明は、回答と照らし合わせられません。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。必要な評価情報がない指標は未評価となり、0 点や合格にはしません。",
   "settings.evaluation.suite": "評価の基準",
   "settings.evaluation.thresholds": "閾値",
   "settings.evaluation.metrics.title": "{suite}の指標と閾値",
@@ -4316,7 +4316,7 @@ export const ja = {
   "evaluation.import.dropzoneHint": ".xlsx・{rows} 行・{size}MB まで",
   "evaluation.import.template": "テンプレートをダウンロード",
   "evaluation.import.templateHint":
-    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「回答の過程」の 5 つで、質問だけが必須です。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。標準回答が空欄の行は、回答の正確性が未評価になります。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧（ファイル名・文書 ID）が入ります。",
+    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「回答の過程」の 5 つで、質問だけが必須です。標準回答には期待する答えの結論・数値・手順を書きます。「〜を提案できる」のような能力の説明は、回答と照らし合わせられません。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。標準回答が空欄の行は、回答の正確性が未評価になります。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧（ファイル名・文書 ID）が入ります。",
   "evaluation.import.templateDone": "テンプレートをダウンロードしました。",
   "evaluation.import.storedNotice": "検証した Excel は、結果を足してダウンロードするために保存します（見られるのはアップロードした本人だけ）。",
   "evaluation.import.templateError":
@@ -5080,7 +5080,7 @@ export const ja = {
   "evaluation.testsets.downloadError": "テストデータを書き出せませんでした。",
   "evaluation.testsets.questionHelp": "評価で AI に送る質問です。",
   "evaluation.testsets.standard": "標準回答",
-  "evaluation.testsets.standardHelp": "正しい回答として比較する内容です。保留・確認を期待する質問は、期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。空欄の場合、収録を確認できません。",
+  "evaluation.testsets.standardHelp": "正しい回答として比較する内容です。結論・数値・手順を書きます。「〜を提案できる」のような能力の説明は、回答と照らし合わせられません。保留・確認を期待する質問は、期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。空欄の場合、収録を確認できません。",
   "evaluation.testsets.reference": "参考：生成された回答と根拠",
   "evaluation.testsets.noReference": "参考の回答は残っていません。",
   "evaluation.testsets.adopt": "標準回答に使う",
