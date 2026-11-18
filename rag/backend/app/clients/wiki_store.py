@@ -19,6 +19,7 @@ from app.clients.oracle import (
     _int_value,
     _json_bind,
     _json_input_sizes,
+    _json_list,
     _json_loads,
     _oracle_in_predicate,
     _oracle_knowledge_base_access_predicate_sql,
@@ -889,11 +890,7 @@ class WikiStore:
                 or (same and row["status"] == "READY")
             ):
                 return None
-            done = (
-                [str(key) for key in (_json_loads(row.get("done_json")) or [])]
-                if row and same
-                else []
-            )
+            done = _json_list(row.get("done_json")) if row and same else []
             if not same:
                 _execute(
                     connection,
@@ -1005,7 +1002,7 @@ class WikiStore:
                         found.target_unit_id,found.target_fingerprint,:relation,:reason)""",
                     {"source": source, "target": target, "relation": relation, "reason": reason},
                 )
-            saved = [str(key) for key in (_json_loads(row.get("done_json")) or [])]
+            saved = _json_list(row.get("done_json"))
             _execute(
                 connection,
                 """UPDATE rag_wiki_link_documents SET done_json=:done,updated_at=SYSTIMESTAMP
