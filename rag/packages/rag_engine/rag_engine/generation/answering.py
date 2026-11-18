@@ -1575,9 +1575,7 @@ def _with_independent_sources(context: AnswerContext) -> AnswerContext:
     if not additional:
         return context
     merged, added = union_sources(context, additional)
-    record_retrieval_stage(
-        {"stage": "independent_source_union", "fusion": "set_union", "source_count": len(additional), "added": added}
-    )
+    record_retrieval_stage({"stage": "independent_source_union", "fusion": "set_union", "source_count": len(additional), "added": added})
     return merged
 
 

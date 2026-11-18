@@ -35,9 +35,7 @@ def native_context():
 
 def test_only_sources_at_new_positions_are_appended_without_reordering():
     context = native_context()
-    merged, added = union_sources(
-        context, [record("c1"), record("c3"), record("c9"), record("c9"), record("c1", version="cs-new")]
-    )
+    merged, added = union_sources(context, [record("c1"), record("c3"), record("c9"), record("c9"), record("c1", version="cs-new")])
     assert added == 2
     assert [r.chunk_id for r in merged.records] == ["p1", "c9", "c1"]
     assert merged.records[2].metadata["chunk_set_id"] == "cs-new"  # 別の保存版は同じ原文にしない
