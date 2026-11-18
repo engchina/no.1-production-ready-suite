@@ -155,3 +155,59 @@ async def test_policy_change_during_generation_blocks_publication(setup: Any) ->
     assert not store.pages and store.state["status"] == "FAILED"
     assert store.state["failure_code"] == "authorization_changed"
     await jobs.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_progress_resumes_on_next_reconcile(
+    setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, store, _ = setup
+    settings = Settings(rag_wiki_build_batch_units=2).model_copy(
+        update={"rag_wiki_build_timeout_seconds": 0.2}
+    )
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    base, blocked = Model(), asyncio.Event()
+
+    class SlowSecondBatch:
+        async def generate(self, *args: Any, **kwargs: Any) -> str:
+            if base.calls and not blocked.is_set():
+                await asyncio.Event().wait()
+            return await base.generate(*args, **kwargs)
+
+    jobs.model_factory = lambda settings: SlowSecondBatch()
+    await jobs.build("document-a", "owner-a")
+    assert store.state["status"] == "FAILED" and store.state["failure_code"] == "interrupted"
+    assert len(store.pages) == 2 and not store.embedded
+
+    # 次の照合（再試行の指定なし）で保存済みの 2 単位を再利用し、残りだけを作る。
+    blocked.set()
+    await jobs.reconcile()
+    await asyncio.gather(*list(jobs.tasks.values()))
+    assert store.state["status"] == "READY"
+    assert len(base.calls) == 2 and len(store.embedded) == 4
+    await jobs.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_timeout_without_progress_stops_until_retry(
+    setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, store, _ = setup
+    settings = Settings().model_copy(update={"rag_wiki_build_timeout_seconds": 0.2})
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+
+    calls: list[int] = []
+
+    class Hanging:
+        async def generate(self, *args: Any, **kwargs: Any) -> str:
+            calls.append(1)
+            await asyncio.Event().wait()
+            return ""
+
+    jobs.model_factory = lambda settings: Hanging()
+    await jobs.build("document-a", "owner-a")
+    assert store.state["failure_code"] == "timeout" and not store.pages
+    await jobs.reconcile()
+    await asyncio.gather(*list(jobs.tasks.values()))
+    assert len(calls) == 1 and store.state["failure_code"] == "timeout"
+    await jobs.shutdown()

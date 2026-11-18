@@ -159,6 +159,8 @@ class WikiJobs:
         async with self.capacity:
             store = self.store_factory()
             snapshot, lease, context_token = None, None, None
+            # この回で案内を保存したか。時間切れでも進んでいれば、次の照合で続きから作る。
+            progressed = False
             try:
                 context_token = set_audit_request_context(await self.actor(owner, settings))
                 compiler = compiler_fingerprint(settings)
@@ -216,6 +218,7 @@ class WikiJobs:
                         raise PermissionError("Wiki の構築設定・原文・所属が変更されました。")
 
                 async def checkpoint(pages: Sequence[WikiPage]) -> None:
+                    nonlocal progressed
                     await authorize()
                     await store.checkpoint(
                         snapshot,
@@ -223,6 +226,7 @@ class WikiJobs:
                         pages,
                         original_chars=settings.rag_wiki_embedding_source_chars,
                     )
+                    progressed = True
 
                 async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
                     pages = await compile_pages(
@@ -268,7 +272,8 @@ class WikiJobs:
                         await store.finish(
                             snapshot,
                             lease,
-                            failure_code="timeout"
+                            # 案内を 1 件も足せない時間切れだけ止める（毎回進むので終わる）。
+                            failure_code=("interrupted" if progressed else "timeout")
                             if isinstance(error, TimeoutError)
                             else "authorization_changed"
                             if isinstance(error, PermissionError)
