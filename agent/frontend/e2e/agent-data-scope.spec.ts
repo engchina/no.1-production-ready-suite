@@ -113,6 +113,8 @@ test("データの範囲の開いた一覧の下部が 1 行に並び、画面�
       ...(panel.panelWidth >= 28 * panel.rem - 1 ? { footerOneRow: true } : {}),
     });
     expect(Math.abs(panel.panelWidth - expectedSearchablePopoverWidth(panel)), JSON.stringify(panel)).toBeLessThanOrEqual(2);
+    // 操作のボタンは接さず、0.25rem 空ける（#5465）。
+    expect(panel.actionGap ?? 0, JSON.stringify(panel)).toBeGreaterThanOrEqual(0.25 * panel.rem - 1);
     // 開いてもボタンの大きさ・位置は変わらない（popover は上の層）。
     expect(await trigger.boundingBox()).toEqual(closedBox);
     expect(panel.left).toBeGreaterThanOrEqual(0);

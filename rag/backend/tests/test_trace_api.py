@@ -48,7 +48,6 @@ from app.rag.trace_store import AnswerTrace, mcp_request_trace, operation_trace_
 from app.security.permissions import (
     MENU_CHAT,
     MENU_HISTORY,
-    MENU_KNOWLEDGE_BASES,
     MENU_SEARCH,
     permission_for_route,
 )
@@ -389,9 +388,8 @@ def test_trace_endpoints_are_registered_with_the_record_permissions() -> None:
         "GET", "/chat/conversations/{conversation_id}/messages/{assistant_message_id}/trace"
     ) == frozenset({MENU_CHAT})
     assert permission_for_route("GET", "/history/runs/{run_id}/trace") == frozenset({MENU_HISTORY})
-    assert permission_for_route("GET", "/search/runs/{run_id}/trace") == frozenset(
-        {MENU_SEARCH, MENU_KNOWLEDGE_BASES}
-    )
+    # KB の検索テストは削除した（#5455）。RAG 検索の画面だけ。
+    assert permission_for_route("GET", "/search/runs/{run_id}/trace") == frozenset({MENU_SEARCH})
     assert permission_for_route("GET", "/search/answers/{trace_id}/trace") == permission_for_route(
         "GET", "/search/answers/{trace_id}"
     )

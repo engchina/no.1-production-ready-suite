@@ -2145,22 +2145,6 @@ export const ja = {
   "knowledgeBases.error.documents":
     "文書一覧の取得に失敗しました。接続状態を確認して再試行してください。",
 
-  "knowledgeBases.searchTest.title": "このナレッジで検索テスト",
-  "knowledgeBases.searchTest.description":
-    "検索・回答プロファイルを作らずに、このナレッジベース単体で検索の手応えをその場で確認できます。",
-  "knowledgeBases.searchTest.placeholder": "このナレッジベースに質問してみる…",
-  "knowledgeBases.searchTest.button": "検索テスト",
-  "knowledgeBases.searchTest.cancel": "停止",
-  "knowledgeBases.searchTest.initialHint":
-    "質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。",
-  "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",
-  "knowledgeBases.searchTest.archived": "アーカイブ済みのナレッジベースでは検索テストを行えません。",
-  "knowledgeBases.searchTest.archivedHint":
-    "アーカイブ済みのナレッジベースは検索の対象から外れています。",
-  "knowledgeBases.searchTest.needsIndexedHint":
-    "先に文書を追加し、索引が完了するとここで検索を試せます。",
-  "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
-  "knowledgeBases.searchTest.resultMeta": "{count} 件 / {ms} ms",
   "wiki.title": "Wiki ナビゲーション",
   "wiki.build": "Wiki を自動構築する",
   "wiki.buildHelp": "所属文書の解析済みの原文から、検索用の案内をバックグラウンドで増分構築します。規則・例外・手順が複数の文書に分かれている KB で効果があり、単一の文書だけの KB では効果が出にくいです。無効にしても保存済みの案内は保持します。",
