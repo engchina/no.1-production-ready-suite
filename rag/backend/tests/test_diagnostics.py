@@ -240,7 +240,10 @@ def test_rag_config_fingerprint_exempt_list_has_only_existing_settings() -> None
 
 
 def test_rag_config_fingerprint_changes_when_retrieval_limit_changes() -> None:
-    """検索経路ごとの取得件数（rerank の入力の数を決める）で fingerprint が変わる（#4141・#5443）。"""
+    """検索経路ごとの取得件数（rerank の入力の数を決める）で fingerprint が変わる。
+
+    #4141・#5443。
+    """
     assert rag_config_fingerprint(Settings(rag_retrieval_query_limit=20)) != rag_config_fingerprint(
         Settings(rag_retrieval_query_limit=100)
     )

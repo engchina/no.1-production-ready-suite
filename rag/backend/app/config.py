@@ -1431,8 +1431,8 @@ class Settings(
         lt=1.0,
         allow_inf_nan=False,
         description=(
-            "rerank の後、資料の候補が 1 件も関連度の下限に届かないとき、下限に掛けて 1 回だけ下げる比"
-            "(既定 0.5 = 0.30 → 0.15。0 は下げない。#5443)。"
+            "rerank の後、資料の候補が 1 件も関連度の下限に届かないとき、下限に掛けて"
+            " 1 回だけ下げる比(既定 0.5 = 0.30 → 0.15。0 は下げない。#5443)。"
         ),
     )
     rag_hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
