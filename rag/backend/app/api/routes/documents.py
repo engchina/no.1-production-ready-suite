@@ -352,13 +352,16 @@ async def upload_document(
     http_request: Request,
     file: Annotated[UploadFile, File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
+    classification: Annotated[str | None, Form()] = None,
 ) -> ApiResponse[UploadResult]:
     """ドキュメントファイルをアップロードし、Object Storage へ保管する。
 
     原本の保存と文書行の登録までを行い、取込 job は作らない（取込は文書ごとに明示して始める）。
+    ``classification`` は分類と有効期間の JSON で、文書行と同じ transaction で保存する(#5464)。
     """
     enforce_rate_limit("upload", http_request)
-    result = await _store_uploaded_document(file, knowledge_base_ids)
+    parsed_classification = _parse_upload_classification(classification)
+    result = await _store_uploaded_document(file, knowledge_base_ids, parsed_classification)
     return ApiResponse(data=result)
 
 
@@ -367,16 +370,21 @@ async def batch_upload_documents(
     http_request: Request,
     files: Annotated[list[UploadFile], File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
+    classification: Annotated[str | None, Form()] = None,
 ) -> ApiResponse[BatchUploadResult]:
-    """複数ドキュメントをまとめてアップロードし、Object Storage へ保管する。"""
+    """複数ドキュメントをまとめてアップロードし、Object Storage へ保管する。
+
+    ``classification`` はすべてのファイルに同じ値を設定する(#5464)。
+    """
     enforce_rate_limit("upload", http_request)
     if not files:
         raise HTTPException(status_code=400, detail="アップロード対象ファイルを選択してください。")
+    parsed_classification = _parse_upload_classification(classification)
     items: list[UploadResult] = []
     failed_items: list[BatchUploadFailedItem] = []
     for file in files:
         try:
-            result = await _store_uploaded_document(file, knowledge_base_ids)
+            result = await _store_uploaded_document(file, knowledge_base_ids, parsed_classification)
             items.append(result)
         except HTTPException as exc:
             source_profile = await _failed_upload_source_profile(file)
@@ -477,9 +485,30 @@ def _is_allowed_upload_content_type(
     )
 
 
+def _parse_upload_classification(raw: str | None) -> DocumentClassification | None:
+    """アップロードの form の分類と有効期間(JSON)を検証する。空なら設定しない(#5464)。"""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        classification = DocumentClassification.model_validate_json(raw)
+    except ValidationError as exc:
+        # 期間の前後の誤りは利用者の文言をそのまま返し、それ以外は形式の誤りとして返す。
+        messages = [
+            str(error["ctx"]["error"])
+            for error in exc.errors(include_input=False, include_url=False)
+            if error["type"] == "value_error" and "ctx" in error
+        ]
+        raise HTTPException(
+            status_code=422,
+            detail=messages[0] if messages else "文書の分類と有効期間の形式が正しくありません。",
+        ) from exc
+    return None if classification.is_empty() else classification
+
+
 async def _store_uploaded_document(
     file: UploadFile,
     knowledge_base_ids: list[str] | None,
+    classification: DocumentClassification | None = None,
 ) -> UploadResult:
     """単一 UploadFile を保存し、取込前の upload result を返す。"""
     settings = get_settings()
@@ -562,6 +591,7 @@ async def _store_uploaded_document(
             content_sha256=content_sha256,
             duplicate_of_document_id=duplicate.id if duplicate is not None else None,
             knowledge_base_ids=selected_knowledge_base_ids or None,
+            classification=classification,
         )
     except Exception as exc:
         # 文書行を作れなかった原本は、どの文書からも参照されず保存先に残り続ける。
