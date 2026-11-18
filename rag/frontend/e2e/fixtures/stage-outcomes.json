@@ -14,10 +14,10 @@
   },
   {
     "key": "empty",
-    "name": "文書構造による検索拡張",
+    "name": "参照先の根拠の追加",
     "status": "done",
     "params": {
-      "name": "文書構造による検索拡張",
+      "name": "参照先の根拠の追加",
       "result_count": 0,
       "reused": false,
       "execution_kind": "processing",
@@ -27,10 +27,10 @@
   },
   {
     "key": "failed",
-    "name": "文書構造による検索拡張",
+    "name": "参照先の根拠の追加",
     "status": "failed",
     "params": {
-      "name": "文書構造による検索拡張",
+      "name": "参照先の根拠の追加",
       "result_count": 0,
       "reused": false,
       "execution_kind": "processing",
@@ -53,10 +53,10 @@
   },
   {
     "key": "success",
-    "name": "文書構造による検索拡張",
+    "name": "参照先の根拠の追加",
     "status": "done",
     "params": {
-      "name": "文書構造による検索拡張",
+      "name": "参照先の根拠の追加",
       "result_count": 2,
       "reused": false,
       "execution_kind": "processing",

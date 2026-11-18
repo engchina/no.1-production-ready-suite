@@ -3549,7 +3549,7 @@ def _expand_evidence(
 
     検索上限の要求別補完（要約のヒットの本文の再検索を含む）→ 業務ガイドの手順ごとの検索 → 補いの検索の根拠の合わせ込み →
     章節の拡張と読めなかった起点の補い → 文脈の根拠からの参照 → 業務ガイドの手順と根拠の結び直し。検索の段の検索拡張
-    （参照の展開・目次からの章節の選択・実体・関係情報）は backend の検索が同じ経路の値で行う。
+    （参照の展開・目次からの章節の選択・実体）は backend の検索が同じ経路の値で行う。
     """
     extra_budget = ExtraRetrievalBudget.from_settings(settings)
     if guide_plan is not None and settings.guide_step_retrieval_enabled:

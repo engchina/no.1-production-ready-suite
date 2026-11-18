@@ -58,7 +58,6 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
         rag_support_guide_enabled=False,
         rag_reference_expansion_enabled=False,
         rag_entity_expansion_enabled=False,
-        rag_graph_expansion_enabled=False,
     )
     request, effective, _, _ = await _resolve_query_context(
         SearchRequest(query="合成項目", search_answer_profile_id=profile.id), settings

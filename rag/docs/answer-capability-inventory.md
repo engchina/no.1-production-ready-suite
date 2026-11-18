@@ -11,7 +11,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 #3284・#3286 で、例外の文を診断に残していた経路と、`DS` に入っていなかった縮退を直し、該当の行を更新した（コードの静的確認と決定論のスタブの pytest。実 Oracle・実 LLM では未確認）。
 
-#5332 で経路を 2 つに分けた: RAG 検索（`POST /api/search`・`/stream`・検索だけ）は基本の経路で、登録済みQ&A・業務ガイドの照合・根拠の拡張（参照の展開・目次からの章節の選択・実体・関係情報・章節の拡張・検索上限の要求別補完・業務ガイドの手順ごとの検索）の行の能力を使わない。チャット・MCP は拡張の経路で、下の行の能力をすべて使う。品質評価は回答の方法（#5340）で経路を選ぶ（チャット＝拡張、RAG 検索＝基本）。
+#5332 で経路を 2 つに分けた: RAG 検索（`POST /api/search`・`/stream`・検索だけ）は基本の経路で、登録済みQ&A・業務ガイドの照合・根拠の拡張（参照の展開・目次からの章節の選択・実体・章節の拡張・検索上限の要求別補完・業務ガイドの手順ごとの検索）の行の能力を使わない。チャット・MCP は拡張の経路で、下の行の能力をすべて使う。品質評価は回答の方法（#5340）で経路を選ぶ（チャット＝拡張、RAG 検索＝基本）。
 
 この文書は現状の一覧で、契約（どの能力を必須にするか）は決めない。契約の差分は #3262 の後の段（#3250〜#3253 の後）で決める。
 
@@ -22,7 +22,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `DS` | 回答の診断の `degraded_steps`（処理の種類・回数・例外の型の名前。#3259）。根拠 0 件のときは `zero_evidence.degraded_steps` にも入る。回答エンジンの前の段（`pipeline.py`）の縮退も、同じ記録を回答エンジンへ渡して入れる | `rag/backend/app/rag/degraded_steps.py::DegradedSteps`・`rag/backend/app/rag/answer_engine.py::_SearchState.record_degraded`・`rag/packages/rag_engine/rag_engine/dependencies.py::report_degraded` |
 | `ZE` | 根拠 0 件の診断 `zero_evidence`（0 件になった段・検索の記録・効いていた自動の条件） | `rag/backend/app/rag/answer_engine.py::_zero_evidence_diagnostics` |
 | `GD` | 検索の診断の `guardrail_degraded`（OCI Guardrails で検査できなかった） | `rag/backend/app/schemas/search.py::SearchDiagnostics`・`platform/packages/system_settings_backend/src/pr_system_settings/guardrails.py::GuardrailResult` |
-| `DX` | 回答の診断のその能力の項目（`graph_expansion`・`section_expansion`・`request_coverage`・`strategy` など） | `rag/backend/app/rag/answer_engine.py::_outcome_from_result` |
+| `DX` | 回答の診断のその能力の項目（`entity_expansion`・`section_expansion`・`request_coverage`・`strategy` など） | `rag/backend/app/rag/answer_engine.py::_outcome_from_result` |
 | `ST` | 回答の診断の `execution_steps`（rag_engine の工程の `status` の文言と詳細の行）。rag_engine の工程の span（`rag.engine.stage`）の表示にも同じ値が出る。span の状態は例外のときだけ失敗で、縮退の文言だけでは成功のまま | `rag/packages/rag_engine/rag_engine/generation/execution_record.py::_execution_step` |
 | `SP` | backend の工程の span（`rag.<stage>`）と工程の結果（`success` / `skipped` / `error`） | `rag/backend/app/rag/pipeline.py::_observe_stage` |
 | `RT` | rag_engine の結果の trace だけ（backend の診断に写していない） | `rag/packages/rag_engine/rag_engine/generation/answering.py` |
@@ -74,7 +74,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
 | 実体の拡張（#1362） | 任意（全体設定 `RAG_ENTITY_EXPANSION_ENABLED`。既定 on。#5187。上限 `RAG_ENTITY_EXPANSION_MAX_CHUNKS` は既定 3・1〜10。足した根拠は rerank にかけず、rerank と起点の選択の後に最後の根拠へ合わせる。#5097・#5162） | 読めない・DB の呼出し 1 回の上限（`RAG_DB_CALL_TIMEOUT_SECONDS`。既定 60 秒。#5381）を超えた → 足さずに続ける | `DS`（`entity_expansion`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
-| 関係情報の拡張（#2055） | 任意（`RAG_GRAPH_EXPANSION_ENABLED`。既定 off。足した根拠は実体の拡張と同じ規則で合わせる。#5162） | 読めない → 足さずに続ける | `DS`（`graph_expansion`）・`DX`（`graph_expansion.attempts` の `status: error`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._graph_expansion` |
 | 交差参照の参照先の解決・読み込み（#1280・#1400。番号つきの参照は番号で定位した節を先頭から `RAG_REFERENCE_SECTION_READ_MAX_CHUNKS` 件まで読む。文書全体への参照は目次から回答のモデルが選んだ章節だけを読み、選べない・目次の選択が無効なら読まない。#5263・#5348） | 任意（`RAG_REFERENCE_EXPANSION_ENABLED`。文書全体への参照の目次の選択は `RAG_REFERENCE_OUTLINE_SELECTION_ENABLED` で、上限は `RAG_REFERENCE_OUTLINE_SELECTION_CATALOG_MAX_CHARS`・`RAG_REFERENCE_OUTLINE_SELECTION_MAX_SECTIONS`・`RAG_REFERENCE_OUTLINE_SELECTION_READ_MAX_CHUNKS`。#5335。目次の行の書き出しの字数は `RAG_OUTLINE_LEAD_CHARS`。#5345。足した参照先は実体の拡張と同じ規則で合わせる。#5162） | 解決・読み込みの失敗 → その参照を辿らない / 足さない。目次・章節の選択・章節の読み込みの失敗 → その参照先を読まない（理由を `document_reads` の `skip_reason` に残す。#5348） | `DS`（`reference_resolve`・`reference_load`・`reference_outline`・`reference_section_select`・`reference_section_read`）・`DX`（`reference_expansion.searches`・`document_reads`・`section_selections`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
 | 起点の文書の目次から選んだ章節（#5324） | 任意（全体設定 `RAG_OUTLINE_SELECTION_ENABLED`。既定 on（#5362）。Rerank で選んだ起点の文書のうち（#5389）章節の木を持つ文書の目次を回答のモデルに 1 回だけ渡し、選んだ章節を読む。上限は `RAG_OUTLINE_SELECTION_MAX_DOCUMENTS`・`RAG_OUTLINE_SELECTION_CATALOG_MAX_CHARS`・`RAG_OUTLINE_SELECTION_READ_MAX_CHARS`。足した根拠は実体の拡張と同じ規則で合わせる。#5162） | 回答の期限の残りが選択と読取の予約より少ない・目次・章節の選択・章節の読み込みの失敗 → 足さずに続ける（今の経路で回答する） | `DS`（`outline_load`・`outline_section_select`・`outline_section_read`）・`DX`（`outline_selection`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._outline_selection` |
 | 参照先の文書の先読み | 任意 | 失敗 → 辿るときに 1 つずつ照合する | `DS`（`reference_prefetch`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._prefetch_reference_documents` |
@@ -127,7 +126,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `runtime_terms` | 登録用語の照合に失敗し、全文検索の文に語を足さずに続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |
 | `entity_expansion` | 実体の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
-| `graph_expansion` | 関係情報の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._graph_expansion` |
 | `reference_resolve` | 参照先の解決 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
 | `reference_load` | 参照先の chunk の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
 | `reference_outline` | 文書全体への参照の参照先の目次（読めなければその参照先を読まない。#5263・#5348） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._plan_document_reads` |

@@ -1187,25 +1187,6 @@ class Settings(
             "検索方法の全体設定で選ぶ（#1388）。"
         ),
     )
-    rag_graph_expansion_enabled: bool = Field(
-        default=False,
-        description=(
-            "回答の検索で、文書構造索引の構築（rag_graph_profile=entities）で作った章節・表 / 図の"
-            "見出しの entity と chunk の対応から候補を足す（#2055。既定 OFF。LLM の呼び出しは"
-            "増えない）。検索の上位の chunk と同じ狭い章節・表の chunk と、質問に見出しの語が"
-            "含まれる章節の chunk を足す。検索方法の画面で選ぶ（全体設定だけで決め、"
-            "検索・回答プロファイルでは上書きしない）。文書構造索引の無い文書では何もしない。"
-        ),
-    )
-    rag_graph_expansion_max_chunks: int = Field(
-        default=6,
-        ge=1,
-        le=20,
-        description=(
-            "文書構造による検索拡張で 1 回の検索に足す chunk 数の上限（#2055）。"
-            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
-        ),
-    )
     rag_section_expansion_enabled: bool = Field(
         default=True,
         description=(
@@ -2094,9 +2075,8 @@ class Settings(
     rag_graph_profile: GraphProfile = Field(
         default="off",
         description=(
-            "文書構造索引の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
-            "構築する(LLM は使わない)。ナレッジベースの文書構造グラフで見られ、"
-            "rag_graph_expansion_enabled を ON にすると回答の検索の候補を広げるのにも使う(#2055)。"
+            "文書構造索引の構築。off(既定)は構築しない、entities は取込のときに文書→章・節→表・図→"
+            "原文の断片のつながりを構築する(LLM は使わない)。ナレッジベースの文書構造グラフで見る。"
         ),
     )
     rag_vector_index_profile: VectorIndexProfile = Field(

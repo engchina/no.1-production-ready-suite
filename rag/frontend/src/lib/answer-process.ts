@@ -67,7 +67,6 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "文脈の補完": "answer.step.fillContext",
   "参照先の根拠の追加": "answer.step.expandReferences",
   "実体・別名による検索拡張": "answer.step.expandEntities",
-  "文書構造による検索拡張": "answer.step.expandStructure",
   "根拠の図の切り出し": "answer.step.prepareFigures",
   "文書の先頭ページの読み込み": "answer.step.loadDocumentInfo",
 };

@@ -31,7 +31,7 @@ const DEFAULT_PROFILE: GraphProfileName = "off";
 
 /**
  * 文書構造索引を取込のときに構築するかを選ぶ設定画面。
- * 構築した索引は文書構造グラフで確認でき、検索方法の全体設定で検索にも利用できる。
+ * 構築した索引はナレッジベースの文書構造グラフで確認する。
  */
 export function GraphSettingsClient() {
   const query = useGraphSettings();

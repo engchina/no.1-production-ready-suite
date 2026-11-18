@@ -5,9 +5,7 @@
 
 - ``off``(既定): 構築しない。
 - ``entities``: 文書と章・節の見出しのつながり(entity + relationship)を構築する。LLM は使わない
-  (``app/rag/graph_index.py``)。構築した関係情報はナレッジベースの「文書構造グラフ」で見られ、
-  ``rag_graph_expansion_enabled``(既定 OFF)を ON にすると回答の検索の候補を広げるのにも使う
-  (``app/rag/graph_expansion.py``。#2055)。
+  (``app/rag/graph_index.py``)。構築した関係情報はナレッジベースの「文書構造グラフ」で見られる。
 
 claims / community summary まで作る ``full`` と legacy の ``RAG_GRAPH_ENABLED`` は、読む経路が
 無かったため #621 で削除した。外部グラフ DB は導入しない。

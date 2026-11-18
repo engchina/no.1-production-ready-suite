@@ -1,9 +1,7 @@
-"""関係情報で検索の候補を足す SQL（#2055）を、実 Oracle AI Database で確かめる。
+"""文書構造索引(#621)の保存と「文書構造グラフ」の読み取りを、実 Oracle AI Database で確かめる。
 
-合成の文書（架空の手順書）を chunk として保存し、取込と同じ ``build_graph_index`` で関係情報の表を
-作り、当たった chunk と同じ狭い章節の chunk・質問に見出しの語が含まれる章節の chunk が SQL の join
-で返ること、範囲の外（別のナレッジベース）の文書を返さないことを確かめる。未到達なら oracle_db
-fixture が skip し、作成行は後始末する（AI は使わない）。
+合成の文書を chunk として保存し、取込と同じ ``build_graph_index`` で関係情報の表を作る。未到達なら
+oracle_db fixture が skip し、作成行は後始末する（AI は使わない）。
 """
 
 from __future__ import annotations
@@ -14,11 +12,9 @@ from uuid import uuid4
 import pytest
 
 from app.clients.oracle import OracleClient
-from app.clients.oracle_graph_store import OracleGraphStore
 from app.clients.structure_graph_store import StructureGraphStore
 from app.rag.chunking import Chunk
-from app.rag.graph_expansion import GRAPH_KIND_NAME, GRAPH_KIND_NEIGHBOR, plan_graph_expansion
-from app.rag.graph_index import GraphIndex, build_graph_index
+from app.rag.graph_index import build_graph_index
 from app.rag.request_context import (
     current_audit_request_context,
     reset_audit_request_context,
@@ -26,7 +22,6 @@ from app.rag.request_context import (
 )
 from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
-from app.schemas.search import RetrievedChunk
 
 _EMBEDDING = [0.1] * 1536
 
@@ -211,68 +206,6 @@ async def _indexed_document(
     )
     await client.replace_document_graph_index(document_id, graph, chunk_set_id=chunk_set_id)
     return document_id, chunk_set_id
-
-
-@pytest.mark.usefixtures("oracle_db")
-async def test_graph_expansion_joins_on_real_oracle() -> None:
-    client = OracleClient()
-    store = OracleGraphStore(client)
-    token = uuid4().hex[:8]
-    kb = await client.create_knowledge_base(name=f"graph-{token}")
-    other_kb = await client.create_knowledge_base(name=f"graph-other-{token}")
-    sections = [
-        ("手順書 > 第 1 章 目的", 1),
-        ("手順書 > 第 2 章 作業の準備", 3),
-        ("手順書 > 第 3 章 作業の記録の保管", 2),
-    ]
-    saved = [
-        await _indexed_document(
-            client,
-            file_name=f"graph-{token}-a.pdf",
-            chunks=_chunks(sections),
-            knowledge_base_id=kb.id,
-        ),
-        # 別のナレッジベースの同じ見出しの文書（範囲の外）。
-        await _indexed_document(
-            client,
-            file_name=f"graph-{token}-b.pdf",
-            chunks=_chunks(sections),
-            knowledge_base_id=other_kb.id,
-        ),
-    ]
-    try:
-        document_id, chunk_set_id = saved[0]
-        ids = [f"{document_id}:{chunk_set_id}:{index}" for index in range(6)]
-        seed_chunk = RetrievedChunk(
-            document_id=document_id,
-            chunk_id=ids[2],
-            text="手順書 > 第 2 章 作業の準備 の本文 2",
-            score=1.0,
-            metadata={"chunk_index": 2},
-        )
-
-        plan = await plan_graph_expansion(
-            store,
-            {"knowledge_base_id": kb.id},
-            question="作業の記録の保管の期間は？",
-            seed_chunks=[seed_chunk],
-            exclude_chunk_ids={ids[2]},
-            max_chunks=6,
-        )
-
-        # 名前の一致（第 3 章）と、当たった chunk と同じ第 2 章の chunk（近い順）。
-        assert [item.chunk.chunk_id for item in plan] == [ids[4], ids[5], ids[1], ids[3]]
-        assert [item.info["kind"] for item in plan] == [GRAPH_KIND_NAME] * 2 + [
-            GRAPH_KIND_NEIGHBOR
-        ] * 2
-        assert plan[0].chunk.text == "手順書 > 第 3 章 作業の記録の保管 の本文 1"
-        # 範囲の外のナレッジベースの文書は返さない。
-        assert {item.chunk.document_id for item in plan} == {document_id}
-    finally:
-        for document_id, chunk_set_id in saved:
-            await client.replace_document_graph_index(
-                document_id, GraphIndex(), chunk_set_id=chunk_set_id
-            )
 
 
 @pytest.mark.usefixtures("oracle_db")
