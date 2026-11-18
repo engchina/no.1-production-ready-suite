@@ -320,7 +320,8 @@ def _any(*codes: str) -> frozenset[str]:
 # 複数の画面から使う API の許可集合。
 _DOCUMENT_WORKSPACE = _any(MENU_UPLOAD, MENU_FILE_LIST)
 # 文書の要約・レシピ・原本表示は、文書ワークスペースと引用カードのプレビュー（検索・チャット・
-# KB の検索テスト）が使う。文書の詳細の画面はワークスペース専用の API も使うため、frontend は
+# KB の詳細の文書構造グラフ）が使う。文書の詳細の画面はワークスペース専用の API も使うため、
+# frontend は
 # `_DOCUMENT_WORKSPACE` の権限がある利用者にだけ詳細へのリンクを出す（#303）。
 _DOCUMENT_VIEW = _any(MENU_UPLOAD, MENU_FILE_LIST, MENU_SEARCH, MENU_CHAT, MENU_KNOWLEDGE_BASES)
 _KNOWLEDGE_BASE_READ = _any(
@@ -531,13 +532,11 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- 検索・回答プロファイル: 検索と回答履歴 ----
     # 文書ワークスペースのレシピ検索テストも同期検索を使う。
     ("POST", "/search"): _any(MENU_SEARCH, MENU_UPLOAD, MENU_FILE_LIST),
-    # KB 詳細の検索テストもストリーム検索を使う。
-    ("POST", "/search/stream"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
+    # KB 詳細の検索テストは削除した（#5455）。ストリーム検索は RAG 検索の画面だけが使う。
+    ("POST", "/search/stream"): _any(MENU_SEARCH),
     # ストリーム検索の実行の処理の経過（共通の span の表の snapshot。#3226）。
-    ("GET", "/search/runs/{run_id}/trace"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
-    ("GET", "/search/runs/{run_id}/trace/spans/{span_id}/{slot}/body"): _any(
-        MENU_SEARCH, MENU_KNOWLEDGE_BASES
-    ),
+    ("GET", "/search/runs/{run_id}/trace"): _any(MENU_SEARCH),
+    ("GET", "/search/runs/{run_id}/trace/spans/{span_id}/{slot}/body"): _any(MENU_SEARCH),
     # 検索の絞り込みに使える項目（検索・回答プロファイルの KB の項目抽出の定義。#549）。
     ("GET", "/search/extraction-fields"): _any(MENU_SEARCH),
     # RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。

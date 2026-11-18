@@ -150,7 +150,7 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
 });
 
 // 開閉の見出しは共有の Disclosure の高さ（lg 40px・タッチ端末 44px）。以前は手書きの min-h-11 で 38.5px（#1135）。
-test("文書構造グラフは抽出項目と検索テストの間にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("文書構造グラフは抽出項目と Wiki ナビゲーションの間にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, EMPTY_OVERVIEW);
   await page.goto("/knowledge-bases/kb-1");
 
@@ -158,7 +158,7 @@ test("文書構造グラフは抽出項目と検索テストの間にあり、�
   const summary = disclosureSummary(page, "文書構造グラフを表示");
   await expect(summary).toBeVisible();
   const fields = page.getByRole("heading", { name: "抽出する項目", exact: true });
-  const search = page.getByRole("heading", { name: "このナレッジで検索テスト", exact: true });
+  const search = page.getByRole("heading", { name: "Wiki ナビゲーション", exact: true });
   await expect(fields).toBeVisible();
   await expect(search).toBeVisible();
   const [fieldsBox, graphBox, searchBox] = await Promise.all([
