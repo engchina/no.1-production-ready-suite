@@ -711,6 +711,8 @@ export interface SearchablePanelLayout {
   countWrapped: boolean;
   /** 操作の組（表示中をすべて選択・クリア・完了）が 2 行に分かれている。 */
   actionsSplit: boolean;
+  /** 操作の組の隣り合うボタンの間の最小の隙間（px。ボタンが 1 つ以下なら null。#5465）。 */
+  actionGap: number | null;
   /** popover の左右の端（px）と画面の幅（documentElement の clientWidth）。 */
   left: number;
   right: number;
@@ -728,7 +730,7 @@ export interface SearchablePanelLayout {
  *
  * 規則（README §4「検索して選ぶ選択欄の popover」）: popover はトリガーと同じ幅を 20〜40rem に収め（sm 未満は画面の幅から
  * 左右の 1rem を引いた幅）、画面からはみ出さない。下部の「N 件選択中」は折り返さず、操作の組（表示中をすべて選択・クリア・
- * 完了）は分けない。幅が足りないときだけ件数の文と操作の組を 2 段にする。
+ * 完了）は分けず、ボタンの間は 0.25rem 空ける（#5465）。幅が足りないときだけ件数の文と操作の組を 2 段にする。
  *
  * ```ts
  * const [panel] = await measureSearchablePanels(page);
@@ -744,6 +746,7 @@ export async function measureSearchablePanels(page: EvaluatePage): Promise<Searc
       footerOneRow: boolean;
       countWrapped: boolean;
       actionsSplit: boolean;
+      actionGap: number | null;
       left: number;
       right: number;
       viewport: number;
@@ -763,7 +766,9 @@ export async function measureSearchablePanels(page: EvaluatePage): Promise<Searc
       const countRect = count.getBoundingClientRect();
       const actionsRect = actions.getBoundingClientRect();
       const lineHeight = Number.parseFloat(getComputedStyle(count).lineHeight) || countRect.height;
-      const tops = Array.from(actions.children).map((child) => child.getBoundingClientRect().top);
+      const buttons = Array.from(actions.children).map((child) => child.getBoundingClientRect());
+      const tops = buttons.map((rect) => rect.top);
+      const gaps = buttons.slice(1).map((rect, index) => rect.left - buttons[index].right);
       const panelRect = panel.getBoundingClientRect();
       const triggerRect = trigger.getBoundingClientRect();
       results.push({
@@ -771,6 +776,7 @@ export async function measureSearchablePanels(page: EvaluatePage): Promise<Searc
         footerOneRow: Math.abs(center(countRect) - center(actionsRect)) <= 2,
         countWrapped: countRect.height > lineHeight * 1.5,
         actionsSplit: tops.length > 0 && Math.max(...tops) - Math.min(...tops) > 1,
+        actionGap: gaps.length > 0 ? Math.round(Math.min(...gaps) * 10) / 10 : null,
         left: Math.round(panelRect.left),
         right: Math.round(panelRect.right),
         viewport: document.documentElement.clientWidth,
