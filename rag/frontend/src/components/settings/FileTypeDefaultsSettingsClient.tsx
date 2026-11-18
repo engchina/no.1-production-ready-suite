@@ -12,7 +12,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@production-ready/ui";
 import { useState } from "react";
-import { RotateCcw, Save, Undo2 } from "lucide-react";
+import { History, RotateCcw, Save } from "lucide-react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import {
@@ -263,16 +263,6 @@ export function FileTypeDefaultsSettingsClient() {
             ]}
             secondaryActions={[
               {
-                id: "restore-defaults",
-                label: t("settings.fileTypeDefaults.actions.restoreDefaults"),
-                icon: Undo2,
-                disabled: save.isPending || draftsEqual(draft, draftFromBuiltin(settings)),
-                onClick: () => {
-                  save.reset();
-                  setDraft(draftFromBuiltin(settings));
-                },
-              },
-              {
                 id: "reset",
                 label: t("settings.fileTypeDefaults.actions.reset"),
                 icon: RotateCcw,
@@ -283,6 +273,16 @@ export function FileTypeDefaultsSettingsClient() {
                 },
               },
             ]}
+            restoreDefaultsAction={{
+              id: "restore-defaults",
+              label: t("settings.fileTypeDefaults.actions.restoreDefaults"),
+              icon: History,
+              disabled: save.isPending || draftsEqual(draft, draftFromBuiltin(settings)),
+              onClick: () => {
+                save.reset();
+                setDraft(draftFromBuiltin(settings));
+              },
+            }}
             status={
               save.isError ? (
                 <FormStatus tone="danger" message={saveError} />
