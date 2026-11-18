@@ -727,6 +727,7 @@ test("分類の有効期間の終了日が開始日より後でなければ、�
     });
   });
   await page.goto(`/documents/${DOC_ID}`);
+  await page.getByTestId("document-classification").locator("summary").click();
 
   const from = page.getByLabel("有効期間の開始日");
   const to = page.getByLabel("有効期間の終了日");

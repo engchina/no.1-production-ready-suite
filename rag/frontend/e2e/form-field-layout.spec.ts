@@ -527,7 +527,7 @@ async function openDocumentChunkPreview(page: Page) {
   await page.getByRole("tab", { name: "Chunk" }).click();
   const preview = page.getByRole("region", { name: "分割プレビュー" });
   await expect(preview.getByRole("combobox", { name: "分割方式" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "文書の分類と有効期間" })).toBeVisible();
+  await expect(page.getByTestId("document-classification").locator("summary")).toContainText("文書の分類と有効期間");
 }
 
 // ---- 業務ガイドの編集・下書きで試す ----

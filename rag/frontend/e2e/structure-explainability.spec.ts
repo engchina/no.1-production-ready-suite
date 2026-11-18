@@ -223,7 +223,11 @@ for (const viewport of [
 
     await page.goto("/documents/doc-1");
 
-    await expect(page.getByRole("heading", { name: "文書の分類と有効期間" })).toBeVisible();
+    // 最初は閉じ、見出しの下に保存済みの値（無ければ「未設定」）を出す（#5440）。
+    const classification = page.getByTestId("document-classification");
+    await expect(classification).not.toHaveAttribute("open", "");
+    await expect(page.getByTestId("document-classification-current")).toHaveText("未設定");
+    await classification.locator("summary").click();
     const save = page.getByRole("button", { name: "分類を保存" });
     await expect(save).toBeDisabled();
     // 分類は「文書の分類」の一覧から選ぶ（#2131）。中分類・小分類は上の段を選ぶまで選べない。
@@ -255,6 +259,7 @@ for (const viewport of [
       });
     await expect(page.getByText("分類と有効期間を保存しました。")).toBeVisible();
     await expect(save).toBeDisabled();
+    await expect(page.getByTestId("document-classification-current")).toHaveText("10_業務A / 種別X / 項目1・有効期間 2026-04-01〜");
     await expect(large).toContainText("10_業務A");
     // 大分類を変えたら、下の段は「指定なし」に戻る（必須ではない）。
     await large.click();
@@ -262,7 +267,7 @@ for (const viewport of [
     await expect(middle).toContainText("指定なし");
     await expect(small).toBeDisabled();
     await expectNoHorizontalOverflow(page);
-    await page.getByRole("heading", { name: "文書の分類と有効期間" }).scrollIntoViewIfNeeded();
+    await classification.scrollIntoViewIfNeeded();
     await page.screenshot({
       path: testInfo.outputPath(`document-classification-${viewport.name}-${viewport.theme}.png`),
     });
@@ -694,7 +699,8 @@ for (const viewport of [
 
     await page.goto("/documents/doc-1");
 
-    // 分類: 3 つの欄の直下に失敗と再試行（保存済みの値の欄は残す）。
+    // 分類: 3 つの欄の直下に失敗と再試行（保存済みの値の欄は残す）。欄は開いて見る（#5440）。
+    await page.getByTestId("document-classification").locator("summary").click();
     const categoryFailure = page.getByTestId("document-classification-category-load-failed");
     await expect(categoryFailure).toBeVisible({ timeout: 15_000 });
     // 見出しは欄ごとの文（何を読めなかったか）。backend の文は畳んだ「詳細」に入れる（#4817）。
