@@ -113,11 +113,22 @@ test("文書構造グラフは KB の全文書を出す", async ({ page }) => {
     edges: [{ id: "a:b", source: "a", target: "b", count: 3 }],
   });
 
+  // 画面を開いただけでは graph を読まず、「表示」を押してから読む（#5453）。
+  const graphRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/api\/knowledge-bases\/[^/]+\/graph\//.test(request.url())) graphRequests.push(request.url());
+  });
+
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const summary = disclosureSummary(page, "文書構造グラフを表示");
+  await expect(summary).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(graphRequests).toEqual([]);
+  await summary.click();
 
   const graph = page.getByRole("region", { name: "文書構造グラフ" });
   await expect(graph).toBeVisible();
+  expect(graphRequests.some((url) => url.includes("/graph/overview"))).toBe(true);
   await expect(graph.getByText("合成文書A", { exact: true })).toBeVisible();
   await expect(graph.getByText("合成文書B", { exact: true })).toBeVisible();
   // 文書の間の参照は操作なしで見え、件数を出す。
