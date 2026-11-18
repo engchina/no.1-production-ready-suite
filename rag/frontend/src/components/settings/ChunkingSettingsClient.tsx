@@ -20,6 +20,7 @@ import { useState } from "react";
 import {
   Files,
   Heading,
+  History,
   Layers,
   ListTree,
   type LucideIcon,
@@ -29,7 +30,6 @@ import {
   Scissors,
   SeparatorHorizontal,
   SlidersHorizontal,
-  Undo2,
   WrapText,
 } from "lucide-react";
 
@@ -231,7 +231,7 @@ export function ChunkingSettingsClient() {
 
 /**
  * 方式の選択・区切りの線・方式ごとのパラメータ・摘要・操作を 1 枚に並べる（操作は 1 組だけ。#5451）。
- * 操作の順は 3 製品で共通の「保存 → 変更を破棄 → 既定に戻す」。
+ * 操作の順は 3 製品で共通の「保存 → 変更を破棄 → 既定に戻す」（`FormActionBar` の `restoreDefaultsAction`。#5458）。
  */
 function ChunkingCard({
   dirty,
@@ -334,14 +334,14 @@ function ChunkingCard({
               disabled: !dirty || saving,
               onClick: onReset,
             },
-            {
-              id: "restore-defaults",
-              label: t("settings.chunking.actions.restoreDefaults"),
-              icon: Undo2,
-              disabled: saving || atBuiltin,
-              onClick: onRestoreDefaults,
-            },
           ]}
+          restoreDefaultsAction={{
+            id: "restore-defaults",
+            label: t("settings.chunking.actions.restoreDefaults"),
+            icon: History,
+            disabled: saving || atBuiltin,
+            onClick: onRestoreDefaults,
+          }}
           status={
             errorMessage ? (
               <FormStatus tone="danger" message={errorMessage} />
