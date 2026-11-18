@@ -221,6 +221,25 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5450 頁の無い文書の根拠の場所を見出しと行で示す）
+
+頁の無い原本（テキスト・Markdown・HTML・XML・JSONL など）を根拠にした回答の「根拠：」の行は、すべて `p.1` ではなく
+最下位の見出しと原本の行の範囲（例: `根拠：文書 A.txt 「見出し B」12〜30 行目`）にする。行が分からない chunk は見出しだけ、
+見出しも無ければ文書名だけ。頁のある PDF・PowerPoint・画像は `p.N` のまま。
+
+- migration・設定の追加は無い。本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` のあとに、次の言語資源の修復を行う。
+- 言語資源に `answer_labels.section_location`（既定 `「{title}」`）・`line_location`（既定 `{lines} 行目`）・`line_range`
+  （既定 `{start}〜{end}`）を足した。公開済みの言語資源は項目が欠けて契約に合わなくなる（回答が止まる）ので、
+  [言語資源の現在版の契約](./language-pack-current-contract.md)の手順（`language_pack_repair_cli` の dry-run → 許可 → 適用）で、
+  欠けた項目に組み込みの値を足した版を発行する（`ingest_hash` は変わらず、この修復のための文書の再処理は要らない）。
+- 原本の位置（`parser_artifacts.source_map`）の範囲ごとに原本の行を記録するようにし、抽出結果の版
+  （`EXTRACTION_ARTIFACT_SCHEMA_VERSION`）を 18 に上げた。行は取込の分割のときに chunk の metadata
+  （`source_line_start` / `source_line_end`、small-to-big の親は `parent_source_line_*`・`parent_section_title`）に入るので、
+  **既存の文書は解析から再処理する**と行が出る。再処理するまでは見出しだけ（見出しも無ければ文書名だけ）になる。
+- 変わらないもの: 頁のある形式、Excel のシートとセル範囲、XML ツリー JSON の引用ラベル、文書の要約の表示。分割の方式が
+  「再帰文字・固定長・見出し単位」の chunk は解析の要素を持たないので行は出ず、見出しだけになる。CSV / JSON の単位の範囲
+  （1 つの要素が文書全体になる形式）の行は chunk に付けない（CSV の行の記録が持つ行はそのまま使う）。
+
 ## 既存環境の更新手順（#5359 PowerPoint の図形と接続線を図の読み取りに渡す）
 
 PowerPoint（`.pptx` / `.pptm`）を「ファイル準備」の **Office→PDF** で変換して解析し、「図・画像を AI で読み取る」が有効な

@@ -82,6 +82,7 @@ from rag_engine.resources.structured_failures import failure_summary_fields, str
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.answer_requirements import answer_requirements
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text_with_positions, fold_width
+from rag_engine.retrieval.evidence_selection import span_location
 from rag_engine.retrieval.operation_context import operation_labels
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -1049,8 +1050,8 @@ def citation_source(span: Mapping[str, Any]) -> str:
     page = span.get("page", "")
     end = span.get("page_end")
     pages = f"{page}-{end}" if isinstance(page, int) and isinstance(end, int) and end > page else page
-    location = span.get("location") or answer_labels().page(pages)
-    return f"{span.get('source', '')} {location}"
+    # 場所が空（頁も見出しも行も無い根拠。#5450）は文書名だけにする。
+    return f"{span.get('source', '')} {span_location(span, answer_labels().page(pages))}".strip()
 
 
 def _citation(span: dict) -> str:
@@ -2200,7 +2201,9 @@ def _rendered_evidence_span(
     else:
         body = text
     return (
-        f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
+        f"[{span['label']}] "
+        + (f"{location} " if (location := span_location(span, f"p.{span.get('page', '')}")) else "")
+        + f"origin={span.get('origin', 'unclassified')}"
         + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
         + _source_note(dict(span))
         + "\n"

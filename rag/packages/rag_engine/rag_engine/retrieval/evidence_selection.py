@@ -1005,11 +1005,17 @@ def evidence_packet(question: str, records: Sequence[Any], *, budget: int = EVID
     return format_evidence_packet(evidence_spans(question, records, budget=budget))
 
 
+def span_location(span: Mapping[str, Any], page: str) -> str:
+    """根拠の場所の表示。場所が無い（None）根拠は頁の表示 ``page``、空の場所は空のまま（#5450）。"""
+    location = span.get("location")
+    return page if location is None else str(location)
+
+
 def format_evidence_packet(spans: Sequence[dict[str, Any]]) -> str:
     """選択済みの原文を再切出しせず、生成と引用の確認へ同じIDで渡す。"""
     return "\n\n".join(
         f"Source ID: {span['source_id']}\nEvidence ID: {span['evidence_id']}\n"
-        f"Document: {span['source']} / {span.get('location') or 'page ' + str(span['page'])}\n"
+        f"Document: {span['source']}" + (f" / {location}" if (location := span_location(span, f"page {span['page']}")) else "") + "\n"
         f"Section: {json.dumps(span['section_path'], ensure_ascii=False)}\n"
         f"Origin: {span.get('origin', 'unclassified')}\n"
         f"Value context: {span.get('value_context', 'reference_document')} (not verified as current case data)\n"
@@ -1024,11 +1030,13 @@ def record_location_label(record: Any) -> str | None:
     """頁の無い根拠の場所の表示（例: 「シート「費目コード」A3:D6」。#1224）。無ければ None。
 
     backend が Excel の行の記録（#1221）の chunk の場所を ``metadata["sheet_location"]`` に入れる。
-    XML ツリー JSON の段落（#2024）は ``metadata["location_label"]``（引用ラベル）に入れる。
+    XML ツリー JSON の段落（#2024）は ``metadata["location_label"]``（引用ラベル）、頁の無い原本は
+    見出しと行の範囲（#5450。分からなければ空）に入れる。
     """
     metadata = getattr(record, "metadata", {}) or {}
     label = metadata.get("location_label")
-    if isinstance(label, str) and label.strip():
+    if isinstance(label, str):
+        # 空は場所の無い根拠（頁も見出しも行も無い原本。#5450）。出典は文書名だけにし、頁にしない。
         return label.strip()
     location = metadata.get("sheet_location")
     if not isinstance(location, dict):
