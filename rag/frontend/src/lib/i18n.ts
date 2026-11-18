@@ -3710,6 +3710,8 @@ export const ja = {
   "search.answerDetails.guideLoadFailed.body":
     "業務ガイドの条件を確かめずに、資料だけで回答しました。時間をおいて質問し直すと、業務ガイドに沿って回答します。",
   "search.answerDetails.humanReview": "人手確認が必要",
+  "search.answerDetails.citationMissing.title": "本文と根拠を対応付けられませんでした",
+  "search.answerDetails.citationMissing.body": "この回答の本文には出典がありません。下の根拠の一覧で内容を確かめてください。",
   "search.answerDetails.faqDirect.title": "登録済みQ&Aの回答をそのまま表示しています",
   "search.answerDetails.faqDirect.body":
     "選んだ登録済みQ&Aの回答をそのまま返しました。資料の検索と回答の生成はしていません。引用はありません。",

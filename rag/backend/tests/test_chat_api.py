@@ -278,6 +278,7 @@ class FakeChatOracle:
         current.progress = message.progress
         current.answer_format = message.answer_format
         current.approved_faq_answer = message.approved_faq_answer
+        current.answer_citation_missing = message.answer_citation_missing
         current.heartbeat_at = datetime.now(UTC)
         return True
 
@@ -808,6 +809,29 @@ def test_approved_faq_answer_mark_reaches_saved_chat_response(monkeypatch: Monke
     detail = client.get("/api/chat/conversations/conv-faq").json()["data"]
     answers = [m for m in detail["messages"] if m["role"] == "ASSISTANT"]
     assert [m["approved_faq_answer"] for m in answers] == [False, True]
+
+
+def test_citation_missing_mark_reaches_saved_chat_response(monkeypatch: MonkeyPatch) -> None:
+    """本文に引用を対応付けられなかった回答の印を、開き直した会話へ渡す（#5391）。"""
+
+    class CitationMissingPipeline(_FakePipeline):
+        def _response(self, request: Any, trace_id: str | None) -> SearchResponse:
+            response = super()._response(request, trace_id)
+            response.diagnostics.answer = {"citation_missing": True}
+            return response
+
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-citation")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    url = "/api/chat/conversations/conv-citation/messages/stream"
+    # いつもの回答には付かない。
+    assert client.post(url, json={"content": "合成の質問 A"}).status_code == 200
+    monkeypatch.setattr(chat_route, "RagPipeline", CitationMissingPipeline)
+    assert client.post(url, json={"content": "合成の質問 B"}).status_code == 200
+
+    detail = client.get("/api/chat/conversations/conv-citation").json()["data"]
+    answers = [m for m in detail["messages"] if m["role"] == "ASSISTANT"]
+    assert [m["answer_citation_missing"] for m in answers] == [False, True]
 
 
 def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:

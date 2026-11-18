@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from test_grounded_answer import context, record
 
 from rag_engine.config import get_settings
@@ -19,6 +20,7 @@ from rag_engine.generation import grounded
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY, notify_invalid_output, structured_output_prompt
 
 ROW = "項目Aの保存年数は5年とする。"
 OTHER = "委託先は年1回の点検を行う。"
@@ -40,17 +42,47 @@ def _unused(*_args: Any, **_kwargs: Any) -> Any:
     raise AssertionError("不要な外部呼出")
 
 
-def _run(question: str, ctx: Any, parts: Any, **options: Any) -> tuple[Any, list[str]]:
+def retrying_parse(schema: Any, prompt: str, payload: Any, *, retries: int, calls: list[str], prompts: list[str]) -> Any:
+    """adapter と同じく、形式の不合格を共通の枠（``retries`` 回）でやり直す生成の stub の本体。
+
+    最後の試行だけ検証の context に ``FINAL_ATTEMPT_CONTEXT_KEY`` を付け、再試行の入力は修正入力の仕組み
+    （``structured_output_prompt``）から読む。``payload`` は試行ごとに送った入力で呼ぶ。
+    """
+    attempts = retries + 1
+    for attempt in range(attempts):
+        calls.append(schema.__name__)
+        sent = structured_output_prompt(prompt)
+        prompts.append(sent)
+        final = attempt == attempts - 1
+        try:
+            return schema.model_validate(payload(sent), context={FINAL_ATTEMPT_CONTEXT_KEY: final})
+        except ValidationError as exc:
+            notify_invalid_output(exc, not final)
+            if final:
+                raise
+    raise AssertionError("到達しない")
+
+
+def _run_traced(question: str, ctx: Any, parts: Any, **options: Any) -> tuple[Any, list[str], list[str]]:
+    """``parts`` は試行ごとに、送った入力の単位のラベルで呼ぶ。送った入力を試行ごとに返す。"""
     calls: list[str] = []
+    prompts: list[str] = []
+    settings = _settings()
 
     def model(_system: str, prompt: str, _settings: Any, schema: Any, **_kwargs: Any) -> Any:
-        calls.append(schema.__name__)
         if not getattr(schema, "_uses_unit_ids", False):
             raise AssertionError(f"生成のほかの呼び出し: {schema.__name__}")
-        return schema.model_validate(parts(_units(prompt)))
+        return retrying_parse(
+            schema, prompt, lambda sent: parts(_units(sent)), retries=settings.llm_max_retries, calls=calls, prompts=prompts
+        )
 
     with bind_dependencies(AnswerDependencies(_unused, _unused, model, _unused, _unused)):
-        response = synthesize_grounded_answer(question, ctx, _settings(), image_prompt_mode="text_only", **options).response
+        response = synthesize_grounded_answer(question, ctx, settings, image_prompt_mode="text_only", **options).response
+    return response, calls, prompts
+
+
+def _run(question: str, ctx: Any, parts: Any, **options: Any) -> tuple[Any, list[str]]:
+    response, calls, _prompts = _run_traced(question, ctx, parts, **options)
     return response, calls
 
 
@@ -79,15 +111,19 @@ def _gap(request_id: str, requirement: str, text: str) -> dict[str, Any]:
         "資料に記載がなく、回答できません。",
     ],
 )
-def test_keeps_the_complete_body_without_another_generation(body):
+def test_keeps_the_complete_body_when_the_citation_stays_missing_after_the_retry(body):
+    """#5391: 資料で答えた本文に引用の印が無ければ 1 回だけ再試行し、それでも無ければ本文を保持して返す。"""
     response, calls = _run(
         "保存年数は？",
         context(record(0, ROW, "合成の規則", source="synthetic.md")),
         lambda _units: {"answer_body": body, "response_kind": "answered", "confidence": "high"},
     )
-    assert calls == ["FullAnswerWire"]
+    assert calls == ["FullAnswerWire", "FullAnswerWire"]
     assert response.answer_text == body
     assert response.envelope["outcome"] == "answered"
+    assert response.confidence == "low"
+    assert response.generation_trace["citation_missing"] is True
+    assert "generation_failure" not in response.generation_trace
     assert response.generation_trace["llm_calls"] == 1
 
 

@@ -49,6 +49,7 @@ import {
   TableSkeleton,
   TimedLoadingState,
   ClearActionButton,
+  CombinedBanner,
   Card,
   formatRunDateTime,
   useActionPending,
@@ -61,7 +62,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
-import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
+import { AnswerDetailsPanel, citationMissingNoticeItem } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { AnswerCitations, CitationList } from "@/components/search/CitationList";
 import { parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
@@ -572,6 +573,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
                   citations={canPreview ? run.citations : []}
                   diagnostics={run.answer_diagnostics}
                 />
+                {/* 本文に引用を対応付けられなかった回答の案内（チャット・RAG 検索と同じ項目。#5391）。 */}
+                <CombinedBanner testId="answer-notices" items={[citationMissingNoticeItem(run.answer_diagnostics)]} />
                 {/* 回答に付けた注意書き（そのときの文。#2405）。 */}
                 <AnswerNotice notice={run.answer_notice} label={t("answer.notice.label")} />
               </div>

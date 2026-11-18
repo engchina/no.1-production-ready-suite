@@ -2084,6 +2084,13 @@ def synthesize_grounded_answer(
     # 根拠に結べた引用が 1 つも無い回答は、全文の回答でも宣言の確かさを使わない（本文の印が読めないまま
     # high で返さない。#5186）。本文と回答の種別は書き換えない。
     confidence = current.draft.confidence if published else "low"
+    # 再試行の後も、資料で答えた本文に引用の印が無かった（#5391）。本文は保持し、診断と画面の案内で示す。
+    from rag_engine.generation.full_answer_wire import lacks_citation
+
+    full_answer = current.draft._full_answer
+    citation_missing = full_answer is not None and lacks_citation(
+        str(full_answer["body"]), str(current.draft._declared_response_kind), full_answer["catalog"]
+    )
     unsettled = [e for e in published if e.item.applies != "matched"]
     if confidence == "high" and (gaps or unsettled or unread or unsupported_parts):
         confidence = "medium"
@@ -2107,6 +2114,7 @@ def synthesize_grounded_answer(
             else {}
         ),
         "llm_calls": rounds[0].get("timing", {}).get("generation_calls", 1),
+        **({"citation_missing": True} if citation_missing else {}),
         "response_kind": {
             "declared": current.draft._declared_response_kind,
             "recorded": current.draft._response_kind,

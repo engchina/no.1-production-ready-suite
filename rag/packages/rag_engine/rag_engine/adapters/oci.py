@@ -90,7 +90,7 @@ from rag_engine.resources.rerank_diagnostics import (
 )
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import structured_failure_details
-from rag_engine.resources.structured_output_retry import notify_invalid_output, structured_output_prompt
+from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY, notify_invalid_output, structured_output_prompt
 from rag_engine.resources.tracing import observe_call
 
 VISION_SYSTEM_PROMPT = "## Step 1: 画像説明を作成する\nあなたは問い合わせRAG用の画像説明作成担当です。\n"
@@ -422,7 +422,7 @@ def _parse_image_with_retry[StructuredOutputT: BaseModel](
 ) -> StructuredOutputT:
     label = "Responses vision"
     return _parse_with_retry(
-        lambda: _parse_image_once(system_prompt, prompt, image_path, settings, text_format, provider),
+        lambda: _parse_image_once(system_prompt, structured_output_prompt(prompt), image_path, settings, text_format, provider),
         label,
         settings,
     )
@@ -438,7 +438,7 @@ def _parse_multimodal_with_retry[StructuredOutputT: BaseModel](
 ) -> StructuredOutputT:
     label = "Responses vision"
     return _parse_with_retry(
-        lambda: _parse_multimodal_once(system_prompt, prompt, image_paths, settings, text_format, provider),
+        lambda: _parse_multimodal_once(system_prompt, structured_output_prompt(prompt), image_paths, settings, text_format, provider),
         label,
         settings,
     )
@@ -1002,7 +1002,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 if not streamed and _JsonWhitespaceRun(_json_whitespace_run_limit(settings)).feed(_response_output_text(response)):
                     # streaming しない呼び出しは途中で打ち切れないので、返った出力の文で同じ基準を確かめる（#5077）。
                     raise LlmJsonWhitespaceRun(_json_whitespace_run_limit(settings))
-                parsed = _parsed_response(response, text_format, provider)
+                # 検証で不合格なら、共通の枠でやり直すか（外側の `_parse_with_retry` の中で、枠が残っているときだけ）。
+                parsed = _parsed_response(
+                    response, text_format, provider, final_attempt=_llm_retry_budget.get() is not retry_budget or not retry_budget.available
+                )
             except IncompleteResponse as exc:
                 observation_attributes(observation, {"pr.call.validation_status": "incomplete"})
                 record_usage()
@@ -1741,7 +1744,10 @@ def _parsed_response[StructuredOutputT: BaseModel](
     response: Any,
     text_format: type[StructuredOutputT],
     provider: LlmProviderSettings,
+    *,
+    final_attempt: bool = True,
 ) -> StructuredOutputT:
+    """完了した応答の本文を検証する。``final_attempt`` は検証の context で渡す（不合格でもやり直さない試行。#5391）。"""
     status = _value(response, "status")
     if status == "incomplete":
         reason = str(_value(_value(response, "incomplete_details"), "reason") or "unknown")
@@ -1755,7 +1761,7 @@ def _parsed_response[StructuredOutputT: BaseModel](
     if not text:
         raise RuntimeError(f"{provider.label} の Responses API 応答に本文がありません。")
     # 完了した応答の本文を検証する。不正な JSON は pydantic の ValidationError（再実行の対象）のまま。
-    output = text_format.model_validate_json(text)
+    output = text_format.model_validate_json(text, context={FINAL_ATTEMPT_CONTEXT_KEY: final_attempt})
     if "_provider_output_text" in output.__private_attributes__:
         cast(Any, output)._provider_output_text = text
     return output

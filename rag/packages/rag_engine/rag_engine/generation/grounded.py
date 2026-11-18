@@ -79,6 +79,7 @@ from rag_engine.parsing.content_labels import content_labels
 from rag_engine.resources.llm_usage import usage_delta, usage_snapshot
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import failure_summary_fields, structured_failure_details
+from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.answer_requirements import answer_requirements
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text_with_positions, fold_width
 from rag_engine.retrieval.operation_context import operation_labels
@@ -2745,22 +2746,36 @@ def run_round(
 
     # 回答文の生成の呼び出しだけに段の出力の上限を掛ける（#5368。分割読取などほかの呼び出しは変えない）。
     answer_settings = settings_for_answer_generation(settings)
+
+    def citation_repair(error: Exception, will_retry: bool) -> str | None:
+        # 引用の印の欠落（#5391）だけは、指摘の Step を同じ入力の後へ付けて再試行する。ほかの不合格は同じ入力で送り直す。
+        from pr_backend_core.response_schema import with_schema_field_guide
+
+        from rag_engine.generation.full_answer_wire import citation_missing_error, citation_repair_step
+
+        if not will_retry or not citation_missing_error(error):
+            return None
+        # 番号は送る指示（adapter が最後に足す項目の説明の Step を含む）の続き。
+        sent_system, _schema = with_schema_field_guide(generation_system, generation_model.model_json_schema())
+        return prompt + "\n\n" + continue_prompt_steps(sent_system, citation_repair_step())
+
     try:
-        if image_paths:
-            draft = call_with_model_purpose(
-                "answer.generate",
-                parse_images,
-                generation_system,
-                prompt,
-                list(image_paths),
-                answer_settings,
-                generation_model,
-                provider_id=provider_id,
-            )
-        else:
-            draft = call_with_model_purpose(
-                "answer.generate", parse_text, generation_system, prompt, answer_settings, generation_model, provider_id=provider_id
-            )
+        with bind_structured_output_repair(citation_repair):
+            if image_paths:
+                draft = call_with_model_purpose(
+                    "answer.generate",
+                    parse_images,
+                    generation_system,
+                    prompt,
+                    list(image_paths),
+                    answer_settings,
+                    generation_model,
+                    provider_id=provider_id,
+                )
+            else:
+                draft = call_with_model_purpose(
+                    "answer.generate", parse_text, generation_system, prompt, answer_settings, generation_model, provider_id=provider_id
+                )
     except Exception as exc:
         if invalid_output is None or not invalid_output(exc):
             raise

@@ -103,6 +103,9 @@ class ChatMessage(BaseModel):
     # 利用者が選んだ登録済みQ&Aの回答をそのまま返した回答か（ASSISTANT の終わった回答だけ。
     # #5107）。true なら、回答の見出しと案内に、検索と回答の生成をしていないことを出す。
     approved_faq_answer: bool = False
+    # 資料で答えた本文に引用を対応付けられなかった回答か（ASSISTANT の終わった回答だけ。回答の記録の
+    # 診断の ``citation_missing``。#5391）。true なら、回答の下に根拠の一覧で確かめる案内を出す。
+    answer_citation_missing: bool = False
 
 
 class ChatAnswerCancelResult(BaseModel):

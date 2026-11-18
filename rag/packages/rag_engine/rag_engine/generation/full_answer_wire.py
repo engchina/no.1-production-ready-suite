@@ -8,11 +8,22 @@ import unicodedata
 from collections.abc import Sequence
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, create_model, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    ValidationInfo,
+    create_model,
+    field_validator,
+    model_validator,
+)
 
 from rag_engine.generation.answer_envelope import AnswerOutcome
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, unit_label
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, ResponseLanguage
+from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY
 from rag_engine.retrieval.character_forms import format_characters
 
 # 回答種別（response_kind）の各値の定義。本文が質問の要求にどう応じたかで定める。
@@ -97,8 +108,47 @@ def _cited_labels(run: str, marker: re.Pattern[str], catalog: SentUnitCatalog) -
     return tuple(dict.fromkeys(labels))
 
 
+# 資料で答えたと宣言した種別。本文に引用の印を求める（#5391）。
+CITED_RESPONSE_KINDS: frozenset[AnswerOutcome] = frozenset({"answered", "conditional"})
+CITATION_MISSING_MESSAGE = (
+    "answer_body に根拠のラベルが 1 つもありません。根拠に基づく各説明の後に、根拠の各行に示したラベルを書いてください。"
+)
+
+
+class CitationMissing(ValueError):
+    """資料で答えた本文に、引用の印が 1 つも無い（#5391）。本文は固定の指摘で、モデルの出力の文を持たない。"""
+
+    def __init__(self) -> None:
+        super().__init__(CITATION_MISSING_MESSAGE)
+
+
+def citation_repair_step() -> str:
+    """再試行の入力の後に付ける指摘の Step（番号は呼び出し側が送る指示の続きに振り直す）。"""
+    return f"## Step 1: 引用のラベルを書く\n- {CITATION_MISSING_MESSAGE}\n"
+
+
+def citation_missing_error(error: Exception) -> bool:
+    """構造化出力の検証の失敗に、引用の印の欠落が含まれるか。"""
+    if not isinstance(error, ValidationError):
+        return False
+    return any(
+        isinstance((row.get("ctx") or {}).get("error"), CitationMissing) for row in error.errors(include_input=False, include_url=False)
+    )
+
+
+def lacks_citation(body: str, response_kind: str, catalog: SentUnitCatalog) -> bool:
+    """資料で答えた種別の本文に、今回送った根拠を指す印が 1 つも無いか（根拠の目録が空なら求めない）。"""
+    marker = citation_marker(catalog)
+    return marker is not None and response_kind in CITED_RESPONSE_KINDS and marker.search(body) is None
+
+
 def full_answer_model(catalog: SentUnitCatalog) -> type[BaseModel]:
-    """引用は本文の印だけで受ける。印が指せるのは、この入力に実際に提示した根拠と単位だけ。"""
+    """引用は本文の印だけで受ける。印が指せるのは、この入力に実際に提示した根拠と単位だけ。
+
+    資料で答えた種別（``answered``・``conditional``）の本文に印が 1 つも無ければ、形式の不合格として既存の再試行に
+    渡す（#5391）。最後の試行（検証の context の ``FINAL_ATTEMPT_CONTEXT_KEY``）では不合格にせず本文を保持し、
+    呼び出し側が引用の欠落として扱う。
+    """
     marker = citation_marker(catalog)
 
     def known_units(value: str) -> str:
@@ -116,7 +166,17 @@ def full_answer_model(catalog: SentUnitCatalog) -> type[BaseModel]:
             )
         return value
 
-    validators: dict[str, Any] = {"known_units": field_validator("answer_body")(known_units)}
+    def cites_evidence(value: Any, info: ValidationInfo) -> Any:
+        if (info.context or {}).get(FINAL_ATTEMPT_CONTEXT_KEY):
+            return value
+        if lacks_citation(value.answer_body, value.response_kind, catalog):
+            raise CitationMissing()
+        return value
+
+    validators: dict[str, Any] = {
+        "known_units": field_validator("answer_body")(known_units),
+        "cites_evidence": model_validator(mode="after")(cites_evidence),
+    }
     return create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
 
 

@@ -11,12 +11,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from pydantic import ValidationInfo, model_validator
 
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
 from rag_engine.models.llm import TextOutput
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline
 from rag_engine.resources.llm_usage import LlmUsage, llm_usage
+from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY
 from tests.test_llm_stall_resend import PROVIDER, USAGE, _Client, _Clock, _script
 
 FAILED_EVENT = SimpleNamespace(type="response.failed", response=SimpleNamespace(error=SimpleNamespace(message="overloaded")))
@@ -152,6 +154,49 @@ class SharedBudgetTest(_Base):
         with self.assertRaises(TimeoutError):
             self.call(client, self.plain_settings)
         self.assertEqual(client.calls, 6)
+
+
+class _RetriedCheck(TextOutput):
+    """最後の試行かを検証の context で受け、最後でなければ不合格にする合成の検査（#5391）。"""
+
+    @model_validator(mode="after")
+    def record_attempt(self, info: ValidationInfo) -> "_RetriedCheck":
+        final = bool((info.context or {}).get(FINAL_ATTEMPT_CONTEXT_KEY))
+        FINAL_ATTEMPTS.append(final)
+        if not final:
+            raise ValueError("合成の検査で不合格")
+        return self
+
+
+FINAL_ATTEMPTS: list[bool] = []
+
+
+class FinalAttemptContextTest(_Base):
+    """検証の context の最後の試行は、共通の枠が残っていない試行だけ（#5391）。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        FINAL_ATTEMPTS.clear()
+        self.addCleanup(FINAL_ATTEMPTS.clear)
+        self.settings = replace(self.plain_settings, llm_max_retries=1)
+
+    def parse(self, client, *, outer: bool = True):
+        call = lambda: oci._openai_parsed([{"role": "user", "content": "合成の質問"}], self.settings, _RetriedCheck, PROVIDER)  # noqa: E731
+        with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), bind_deadline(Deadline(600)):
+            return oci._parse_with_retry(call, "synthetic", self.settings) if outer else call()
+
+    def test_the_last_send_within_the_budget_is_the_final_attempt(self):
+        result = self.parse(_ParseClient([VALID, VALID]))
+        self.assertEqual(result.text, "ok")
+        self.assertEqual(FINAL_ATTEMPTS, [False, True])
+
+    def test_a_transport_retry_that_used_the_budget_makes_the_next_send_final(self):
+        self.parse(_ParseClient([TimeoutError("a"), VALID]))
+        self.assertEqual(FINAL_ATTEMPTS, [True])
+
+    def test_a_call_without_the_shared_retry_is_the_final_attempt(self):
+        self.parse(_ParseClient([VALID]), outer=False)
+        self.assertEqual(FINAL_ATTEMPTS, [True])
 
 
 class RetryWaitTest(_Base):

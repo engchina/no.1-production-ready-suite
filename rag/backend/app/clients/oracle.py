@@ -416,6 +416,9 @@ class StoredMessage:
     # 利用者が選んだ登録済みQ&Aの回答をそのまま返した回答か（ASSISTANT の回答だけ。回答の記録の
     # 診断の ``answer_source`` が ``approved_faq``。#5107）。
     approved_faq_answer: bool = False
+    # 資料で答えた本文に引用を対応付けられなかった回答か（ASSISTANT の回答だけ。回答の記録の診断の
+    # ``citation_missing``。#5391）。
+    answer_citation_missing: bool = False
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -5410,7 +5413,8 @@ class OracleClient:
                     AS answer_format_json,
                 JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
                     AS answer_attached_images,
-                JSON_VALUE(r.diagnostics_json, '$.answer_source') AS answer_source
+                JSON_VALUE(r.diagnostics_json, '$.answer_source') AS answer_source,
+                JSON_VALUE(r.diagnostics_json, '$.citation_missing') AS answer_citation_missing
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -17002,6 +17006,8 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         answer_format=answer_format_record(_json_loads(row.get("answer_format_json"))),
         answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
         approved_faq_answer=row.get("answer_source") == "approved_faq",
+        # JSON の真偽値は JSON_VALUE で文字列の 'true' になる。
+        answer_citation_missing=str(row.get("answer_citation_missing") or "").lower() == "true",
     )
 
 

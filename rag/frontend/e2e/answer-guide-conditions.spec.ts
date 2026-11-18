@@ -232,6 +232,22 @@ test("回答の案内（業務ガイド・資料で決まらない値・安全�
   await screenshot(notices, "answer-notices-combined", testInfo.project.name);
 });
 
+test("本文に引用を対応付けられなかった回答は、回答の下の案内の枠に出す（#5391）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockApi(page, { outcome: "answered", confidence: "low", citation_missing: true }, [
+    citation("doc-1:cs_1:0", { page_start: 2, page_end: 2 }),
+  ]);
+  await ask(page);
+  const notices = page.getByTestId("answer-notices");
+  await expect(notices).toHaveCount(1);
+  const notice = notices.getByTestId("answer-citation-missing");
+  await expect(notice).toContainText("本文と根拠を対応付けられませんでした");
+  await expect(notice).toContainText("下の根拠の一覧で内容を確かめてください。");
+  // 取得した資料は根拠の一覧に残る（引用には昇格させない）。
+  await expect(page.locator("[data-testid=citation-main]")).toHaveCount(1);
+  await expectNoPageOverflow(page);
+  await screenshot(notices, "answer-citation-missing", testInfo.project.name);
+});
+
 test("処理の詳細の診断は識別子とモデルに統一する", { tag: "@responsive" }, async ({ page }) => {
   await mockApi(page, {}, []);
   const panel = await ask(page);
