@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { EditorTargetState } from "@/components/layout/EntityLayout";
 import { StatusBadge } from "@/components/StatusBadge";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { recipeQueueWait } from "@/lib/ingestion-queue";
 import { confirmPendingLeave } from "@/lib/leave-guard";
@@ -13,7 +14,7 @@ import { documentDisplayStatus, selectDocumentRecipe } from "./DocumentWorkspace
 
 /**
  * 文書詳細（`/documents/:id`）。見出しはナレッジベース・検索・回答プロファイルの詳細と同じ構成にする（#581）:
- * `PageHeader`（パンくず「文書インデックス › ファイル名」・状態のバッジ・「一覧へ戻る」）→ `PageBody` の本文
+ * `PageHeader`（パンくず「文書インデックス › ファイル名」・状態のバッジ・基本情報の meta・「一覧へ戻る」）→ `PageBody` の本文
  * （`DocumentWorkspace`。処理レシピ・処理の開始 / 承認 / 再試行・プレビューなどは本文のまま）。
  *
  * - 読み込み中・見つからない・取得の失敗は、KB・検索・回答プロファイルと共有の `EditorTargetState` で、同じ見出しを
@@ -62,6 +63,16 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
         wide
         title={doc.file_name}
         status={<StatusBadge status={status} queuedPhase={queuedPhase} />}
+        // 基本情報はナレッジベースなどの詳細と同じく見出しの下の meta の行に出す（#5462）。索引の前は索引日時を出さない。
+        meta={
+          <span className="tnum flex flex-wrap gap-x-3 gap-y-1" data-testid="document-meta">
+            <span>{formatBytes(doc.file_size_bytes)}</span>
+            <span>{t("documents.detail.meta.uploaded", { date: formatDateTime(doc.uploaded_at) })}</span>
+            {doc.indexed_at ? (
+              <span>{t("documents.detail.meta.indexed", { date: formatDateTime(doc.indexed_at) })}</span>
+            ) : null}
+          </span>
+        }
         // 一覧へ戻るは左上（#618）。
         back={{
           label: t("common.backToList"),
