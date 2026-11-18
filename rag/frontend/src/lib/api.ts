@@ -1445,6 +1445,9 @@ export interface SectionRulesSettingsData {
   mode: SectionRulesMode;
   rules: SectionRule[];
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
+  /** 製品の既定（「既定に戻す」が下書きに入れる。#5468）。 */
+  default_mode: SectionRulesMode;
+  default_rules: SectionRule[];
 }
 
 export type DocumentRecipeStepStatus =
@@ -3609,8 +3612,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  resetSectionRulesSettings: () =>
-    request<SectionRulesSettingsData>("/api/settings/section-rules", { method: "DELETE" }),
   listDocumentCategories: () => request<DocumentCategory[]>("/api/document-categories"),
   createDocumentCategory: (body: { parent_id: string | null; name: string }) =>
     request<DocumentCategory[]>("/api/document-categories", { ...jsonBody(body), method: "POST" }),

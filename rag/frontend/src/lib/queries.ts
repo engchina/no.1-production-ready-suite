@@ -604,23 +604,12 @@ export function useSectionRulesSettings() {
   });
 }
 
-/** 章節の抽出規則の保存・既定に戻す（#715）。章節ナビゲーションは取得のたびに規則を当てるので読み直す。 */
+/** 章節の抽出規則の保存（#715。「既定に戻す」も既定値の保存。#5468）。章節ナビゲーションは取得のたびに規則を当てるので読み直す。 */
 export function useSaveSectionRulesSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
       api.saveSectionRulesSettings(body),
-    onSuccess: (data) => {
-      qc.setQueryData(["settings", "section-rules"], data);
-      void qc.invalidateQueries({ queryKey: ["documents"] });
-    },
-  });
-}
-
-export function useResetSectionRulesSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.resetSectionRulesSettings(),
     onSuccess: (data) => {
       qc.setQueryData(["settings", "section-rules"], data);
       void qc.invalidateQueries({ queryKey: ["documents"] });
