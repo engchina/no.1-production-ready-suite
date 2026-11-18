@@ -1217,7 +1217,14 @@ def _fake_evaluation_llm(
     inputs = json.loads(prompt)
     return AnswerCorrectnessOutput.model_validate(
         {
-            "claims": [{"answer_ids": ["A1"], "verdict": "supported", "standard_ids": ["S1"]}],
+            "claims": [
+                {
+                    "claim": "合成の主張",
+                    "answer_ids": ["A1"],
+                    "verdict": "supported",
+                    "standard_ids": ["S1"],
+                }
+            ],
             "points": [{"point_id": p["id"], "covered": True} for p in inputs["points"]],
         }
     )
