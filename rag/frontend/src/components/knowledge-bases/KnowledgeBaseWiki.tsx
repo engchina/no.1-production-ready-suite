@@ -99,7 +99,7 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
           </div>
           {retryStatus ? <FormStatus tone={retryStatus.tone} message={retryStatus.message} /> : null}
         </div> : null}
-        {data.documents.total > 0 ? <WikiDocuments page={data.documents} paging={paging} failed={failed} expanded={failed > 0 || retryStatus != null} /> : null}
+        {data.documents.total > 0 ? <WikiDocuments page={data.documents} paging={paging} expanded={failed > 0 || retryStatus != null} /> : null}
         <SaveErrorBanner message={update.error ? t("wiki.saveError") : null} attemptKey={update.submittedAt} />
       </> : null}
     </CardContent>
@@ -107,14 +107,13 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
 }
 
 /**
- * 文書ごとの構築状態。失敗があるとき・再試行の結果を出しているときは開いた状態で出す（文書解析の段の一覧と同じ。
- * 再試行で失敗が待機に変わっても畳まず、変わった行を見せ続ける）。
+ * 文書ごとの構築状態。失敗があるとき・再試行の結果を出しているときは開いた状態で出す（再試行で失敗が待機に
+ * 変わっても畳まず、変わった行を見せ続ける）。表は状態色の面に置かず、失敗は行の状態と理由・進捗の件数で示す。
  */
-function WikiDocuments({ page, paging, failed, expanded }: { page: Page<KnowledgeBaseWikiDocument>; paging: ReturnType<typeof useClientListPaging>; failed: number; expanded: boolean }) {
+function WikiDocuments({ page, paging, expanded }: { page: Page<KnowledgeBaseWikiDocument>; paging: ReturnType<typeof useClientListPaging>; expanded: boolean }) {
   return <Disclosure
     key={expanded ? "expanded" : "collapsed"}
     defaultOpen={expanded}
-    tone={failed > 0 ? "danger" : "neutral"}
     surface="sunken"
     icon={FileText}
     summary={t("wiki.documents.title")}
