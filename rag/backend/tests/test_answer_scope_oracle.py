@@ -4,6 +4,7 @@
 AI は決定論スタブ(oracle_db fixture)で、SQL だけを実 DB で評価する。
 """
 
+from datetime import date
 from uuid import uuid4
 
 import pytest
@@ -696,3 +697,29 @@ async def test_accessible_document_ids_follow_the_viewer_scope_on_real_oracle() 
             assert await client.accessible_document_ids(ids) == expected
         finally:
             reset_audit_request_context(scoped)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_create_document_saves_classification_on_real_oracle() -> None:
+    """登録の時に渡した分類と有効期間を、文書行と同じ transaction で保存する(#5464)。"""
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    classification = DocumentClassification(
+        large_category="分類 A", effective_from=date(2026, 4, 1), effective_to=date(2027, 4, 1)
+    )
+    detail = await client.create_document(
+        file_name=f"classified-{token}.pdf",
+        object_storage_path=f"local://classified-{token}.pdf",
+        content_type="application/pdf",
+        classification=classification,
+    )
+    plain = await client.create_document(
+        file_name=f"plain-{token}.pdf",
+        object_storage_path=f"local://plain-{token}.pdf",
+        content_type="application/pdf",
+    )
+
+    stored = await client.get_document(detail.id)
+    assert stored is not None and stored.classification == classification
+    plain_stored = await client.get_document(plain.id)
+    assert plain_stored is not None and plain_stored.classification is None

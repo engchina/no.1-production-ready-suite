@@ -2472,6 +2472,8 @@ export const ja = {
   "upload.storageNotice.title": "現在の保存先",
   "upload.storageNotice.unset": "未設定",
   "upload.knowledgeBases.title": "所属させるナレッジベース",
+  "upload.classification.description":
+    "RAG 検索の「文書の分類」での絞り込みと基準日の検索に使います（どれも任意）。この回のすべてのファイルに同じ値を設定します。後から各文書の詳細で変えられます。",
   "upload.knowledgeBases.loading": "ナレッジベースを読み込んでいます",
   "upload.knowledgeBases.loadError": "登録先のナレッジベースの候補を読み込めませんでした。",
   "upload.knowledgeBases.loadErrorHint":

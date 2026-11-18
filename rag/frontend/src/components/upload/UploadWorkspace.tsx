@@ -38,7 +38,15 @@ import { useKnowledgeBaseSelectionHealth } from "@/components/knowledge-bases/Kn
 import { useAuth } from "@/components/security/AuthProvider";
 import { ErrorState } from "@/components/StateViews";
 import {
+  DocumentClassificationFields,
+  EMPTY_CLASSIFICATION,
+  classificationEffectiveToId,
+  classificationSummary,
+} from "@/components/documents/DocumentClassificationFields";
+import { classificationPeriodIsValid } from "@/components/documents/DocumentWorkspace.logic";
+import {
   type BatchUploadFailedItem,
+  type DocumentClassification,
   type UploadResult,
   type UploadStorageSettingsData,
 } from "@/lib/api";
@@ -80,6 +88,10 @@ export function UploadWorkspace() {
   // KB が制限された利用者は、登録先の KB を選ばないとアップロードできない（#214）。
   const knowledgeBaseRequired = uploadKnowledgeBaseRequired(user);
   const [knowledgeBaseMissing, setKnowledgeBaseMissing] = useState(false);
+  // この回のすべてのファイルに設定する分類と有効期間（保存ボタンは無く、開始の時に一緒に送る。#5464）。
+  const [classification, setClassification] = useState<DocumentClassification>(EMPTY_CLASSIFICATION);
+  const [classificationOpen, setClassificationOpen] = useState(false);
+  const [periodError, setPeriodError] = useState<string | null>(null);
   const [sendingCount, setSendingCount] = useState(0);
   // 送信済み / 合計のバイト数（#306）。送信を始めるたびに 0 から数え直す。
   const [sendProgress, setSendProgress] = useState<UploadProgress | null>(null);
@@ -118,6 +130,15 @@ export function UploadWorkspace() {
       return;
     }
     setKnowledgeBaseMissing(false);
+    if (!classificationPeriodIsValid(classification)) {
+      // 期間の誤りは送らずに終了日の欄の直下で知らせる（閉じていれば開いてからフォーカスする）。
+      setPeriodError(t("documents.classification.periodError"));
+      setClassificationOpen(true);
+      requestAnimationFrame(() =>
+        document.getElementById(classificationEffectiveToId(UPLOAD_CLASSIFICATION_ID_PREFIX))?.focus()
+      );
+      return;
+    }
     setSentFiles(files);
     setUploaded(null);
     setBatchItems([]);
@@ -133,7 +154,7 @@ export function UploadWorkspace() {
     // 上限を超える 1 ファイルは、一括アップロードの経路で送らずに失敗として示す。
     if (files.length === 1 && files[0].size <= maxUploadBytes) {
       upload.mutate(
-        { file: files[0], knowledgeBaseIds, onProgress: setSendProgress },
+        { file: files[0], knowledgeBaseIds, classification, onProgress: setSendProgress },
         {
           onSuccess: (result) => {
             setSelectedFiles([]);
@@ -146,7 +167,7 @@ export function UploadWorkspace() {
       return;
     }
     batchUpload.mutate(
-      { files, knowledgeBaseIds, maxUploadBytes, onProgress: setSendProgress },
+      { files, knowledgeBaseIds, classification, maxUploadBytes, onProgress: setSendProgress },
       {
         onSuccess: (result) => {
           setBatchFailedItems(result.failed_items);
@@ -175,6 +196,17 @@ export function UploadWorkspace() {
               required={knowledgeBaseRequired}
               missing={knowledgeBaseMissing}
               canManageKnowledgeBases={hasPermission(MENU_PERMISSIONS.knowledgeBases)}
+            />
+            <UploadClassificationPicker
+              value={classification}
+              onChange={(next) => {
+                setClassification(next);
+                setPeriodError(null);
+              }}
+              open={classificationOpen}
+              onOpenChange={setClassificationOpen}
+              periodError={periodError}
+              disabled={isBusy}
             />
             <Dropzone
               onFiles={(files) => setSelectedFiles((current) => mergeUploadSelection(current, files))}
@@ -391,6 +423,53 @@ function BatchMetric({ label, value }: { label: string; value: number }) {
 
 /** 原本のままでは解析できず、ファイル準備で変換が要る形式の案内のコード（backend の parser_source_guard。#2470）。 */
 const OFFICE_CONVERSION_NOTICE_CODES = new Set(["office_conversion_required", "office_to_pdf_spreadsheet_not_supported"]);
+
+const UPLOAD_CLASSIFICATION_ID_PREFIX = "upload-classification";
+
+/**
+ * アップロードするファイルの分類と有効期間（任意。#5464）。文書の詳細の「文書の分類と有効期間」と同じ欄・
+ * 検証・閉じたときの要約で、使う場面が限られるので最初は閉じる。保存ボタンは置かない。
+ */
+function UploadClassificationPicker({
+  value,
+  onChange,
+  open,
+  onOpenChange,
+  periodError,
+  disabled,
+}: {
+  value: DocumentClassification;
+  onChange: (value: DocumentClassification) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  periodError: string | null;
+  disabled: boolean;
+}) {
+  return (
+    <Disclosure
+      summary={t("documents.classification.title")}
+      summaryClassName="font-semibold"
+      summaryFooter={
+        <span className="block text-xs font-normal text-fg-muted" data-testid="upload-classification-current">
+          {classificationSummary(value)}
+        </span>
+      }
+      open={open}
+      onOpenChange={onOpenChange}
+      contentClassName="space-y-3"
+      data-testid="upload-classification"
+    >
+      <p className="text-xs text-fg-muted">{t("upload.classification.description")}</p>
+      <DocumentClassificationFields
+        idPrefix={UPLOAD_CLASSIFICATION_ID_PREFIX}
+        value={value}
+        onChange={onChange}
+        periodError={periodError}
+        disabled={disabled}
+      />
+    </Disclosure>
+  );
+}
 
 const UPLOAD_KNOWLEDGE_BASE_PICKER_ID = "upload-knowledge-base-picker";
 const UPLOAD_KNOWLEDGE_BASE_INPUT_ID = "upload-knowledge-base-input";
