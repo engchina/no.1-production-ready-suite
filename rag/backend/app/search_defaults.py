@@ -2,7 +2,9 @@
 
 from typing import Any
 
-SEARCH_TOP_K_DEFAULT = 30
+SEARCH_TOP_K_DEFAULT = 50
+# 全体設定の省略時の値の下限（#5443）。リクエストで明示する top_k は 1 から受ける。
+SEARCH_TOP_K_DEFAULT_MIN = 10
 SEARCH_TOP_K_MAX = 100
 
 

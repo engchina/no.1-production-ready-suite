@@ -266,6 +266,13 @@ export function parseCitationLine(line: string, format?: AnswerFormat): AnswerCi
     const pagePattern = templatePattern(format.page_location ?? "p.{page}", { page: "(?<page>[0-9]*(?:[-–][0-9]+)?(?:\\s*,\\s*[0-9]+(?:[-–][0-9]+)?)*)" });
     const page = new RegExp("^(?<file>.+?)\\s+" + pagePattern + "$").exec(body)?.groups;
     if (page) return { fileName: page.file.trim(), ...parseCitationPages(page.page ?? "") };
+    // 頁の無い原本の場所（最下位の見出しと原本の行の範囲。backend の answer_labels.lines。#5450）。
+    const section = templatePattern(format.section_location ?? "「{title}」", { title: ".+" });
+    const lines = templatePattern(format.line_location ?? "{lines} 行目", {
+      lines: "(?:" + templatePattern(format.line_range ?? "{start}〜{end}", { start: "[0-9]+", end: "[0-9]+" }) + "|[0-9]+)",
+    });
+    const located = new RegExp("^(?<file>.+?)\\s+(?:(?:" + section + ")(?:" + lines + ")?|" + lines + ")$").exec(body)?.groups;
+    if (located) return { fileName: located.file.trim(), page: null };
     return body.trim() ? { fileName: body.trim(), page: null } : null;
   }
   const trimmed = line.trim();

@@ -299,3 +299,35 @@ for (const precise of [false, true]) {
     await expectNoPageOverflow(page);
   });
 }
+
+// issue 5450: 頁の無い原本（テキスト）の根拠の行は「見出し＋行の範囲」。行の対応を持たない記録でも、行の前までを
+// 文書名として読み、同じ文書の原文を開ける。
+test("頁の無い原本の根拠の行は見出しと行の範囲で出し、原文を開ける", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const text = (chunkId: string, body: string) => ({
+    ...citation(chunkId, body, { evidence_model_used: true }),
+    file_name: "文書 B.txt",
+    metadata: { context_role: "evidence", content_kind: "text", evidence_model_used: true },
+  });
+  // backend が回答ごとに渡す表示形式（言語資源の answer_labels の既定値）。
+  const format = {
+    rules_section: "資料により確認できた事項", citation_prefix: "根拠：", page_location: "p.{page}",
+    sheet_location: "シート「{sheet}」{cell_range}", section_location: "「{title}」", line_location: "{lines} 行目",
+    line_range: "{start}〜{end}",
+  };
+  const answer = await ask(page, [text("doc-a:c-1", HEADING), text("doc-a:c-2", OPERATION)], format, {
+    text: [
+      "資料により確認できた事項",
+      "・合成の見出しの説明です。",
+      "根拠：文書 B.txt 「節 A」3〜5 行目",
+      "・合成の操作を行います。",
+      "根拠：文書 B.txt 「節 B」10〜11 行目",
+    ].join("\n"),
+  });
+  for (const line of ["根拠：文書 B.txt 「節 A」3〜5 行目", "根拠：文書 B.txt 「節 B」10〜11 行目"]) {
+    await expect(answer.getByRole("button", { name: `${line} の原文を開く`, exact: true })).toBeVisible();
+  }
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath(`citation-source-lines-${testInfo.project.name}.png`) });
+  await answer.getByRole("button", { name: "根拠：文書 B.txt 「節 A」3〜5 行目 の原文を開く", exact: true }).click();
+  expect((await openedSheet(page)).excerpt).toBe(HEADING);
+});

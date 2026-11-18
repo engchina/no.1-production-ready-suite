@@ -884,6 +884,12 @@ export const ja = {
   "settings.language.field.table_above_note.help": "「資料をもとに導いた結論」で、表の題の下に出す案内です。表は回答の冒頭に 1 回だけ出します。",
   "settings.language.field.document_summary_location": "文書の要約の出典の表示",
   "settings.language.field.document_summary_location.help": "取込の後に作った文書全体の要約を根拠にしたときに、出典のページの代わりに出す表示です。",
+  "settings.language.field.section_location": "見出しの表示",
+  "settings.language.field.section_location.help": "ページの無い文書（テキスト・Markdown など）の出典の、最下位の見出しの表示の型です。{title} が見出しに入ります。",
+  "settings.language.field.line_location": "行の表示",
+  "settings.language.field.line_location.help": "ページの無い文書の出典の、原本の行の表示の型です。{lines} が行の番号か範囲に入ります（見出しの表示の後ろに続けます）。",
+  "settings.language.field.line_range": "行の範囲",
+  "settings.language.field.line_range.help": "行の表示の {lines} に入る範囲の型です。{start} が最初の行、{end} が最後の行に入ります。",
   "settings.language.section.answer_check_cues": "回答の検査の手がかり",
   "settings.language.section.answer_check_cues.help": "回答の草稿を原文で確かめるときの語です（確定の操作・限定・未説明・保証・推測・条件の句・但し書き・版の廃止など）。検索・回答のときだけ使います。",
   "settings.language.field.ignored_quote_chars": "引用の照合で無視する字",
@@ -1226,6 +1232,7 @@ export const ja = {
   "settings.chunking.actions.label": "文書分割の設定の操作",
   "settings.chunking.actions.saved": "文書分割の設定を保存しました。",
   "settings.chunking.actions.reset": "変更を破棄",
+  "settings.chunking.actions.restoreDefaults": "既定に戻す",
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
   "settings.chunking.loadError": "文書分割の設定を取得できませんでした。",
   "settings.chunking.saveError": "文書分割の設定を保存できませんでした。",
@@ -1766,10 +1773,6 @@ export const ja = {
   "listPicker.keyboardHint": "上下の矢印キーで移動し、Space キーで選択を切り替えます。",
 
   "searchAnswerProfiles.field.neighborChildCount": "根拠の前後から加える数",
-  "searchAnswerProfiles.field.maxAnchorsPerDocument": "1 つの文書から採る根拠の上限",
-  "searchAnswerProfiles.field.maxAnchorsPerDocumentHelper":
-    "未指定のときは全体設定（既定は 5）です。並べ替えの後、1 つの文書から根拠の起点に採る数の上限です。超えた分は根拠に使わず、関連する別の文書を根拠に入れます。",
-  "searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited": "上限なし",
   "searchAnswerProfiles.field.answerOptions": "回答の検索のオプション",
   "searchAnswerProfiles.field.rerank": "Rerank で検索候補を並べ替える",
   "searchAnswerProfiles.languagePack.title": "言語資源の上書き",
@@ -3868,8 +3871,8 @@ export const ja = {
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.retrievalQueryLimit": "検索候補数の上限",
-  "settings.answering.retrievalQueryLimitHint": "既定は 60 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。",
-  "settings.answering.retrievalQueryLimitInvalid": "0～2000 の整数を入力してください。",
+  "settings.answering.retrievalQueryLimitHint": "既定は 50 件です。5～100 件で指定します。検索経路（ベクトル・全文）ごとに取得する候補の数で、取得した候補は重複を除いてすべて再ランキングに渡します。回答に使う根拠数とは異なります。",
+  "settings.answering.retrievalQueryLimitInvalid": "5～100 の整数を入力してください。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
     "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各処理は有効な設定・対象資料・呼び出し方に応じて実行され、省略や繰り返しがあります。",
@@ -3935,7 +3938,7 @@ export const ja = {
   "settings.answering.minSimilarity": "コサイン類似度の下限",
   "settings.answering.minSimilarityHint": "0〜1で指定します。ベクトル検索の候補を選ぶ下限です。全文検索で独立して一致した候補は保持します。RRFスコアや回答の正確さを表す値ではありません。",
   "settings.answering.rerankMinScore": "再ランキングの関連度スコア下限",
-  "settings.answering.rerankMinScoreHint": "0〜1で指定します。原質問と有効な追加質問の最高関連度が下限以上の候補を採用し、関連度の順に並べます。下限以上の候補が無いときは根拠なしとし、下限を下げません。0はスコアで除外しません。無効時は適用しません。未採点の候補と明示添付は保持し、採点失敗時は検索結果の順序を保ちます。",
+  "settings.answering.rerankMinScoreHint": "0〜1で指定します。原質問と有効な追加質問の最高関連度が下限以上の候補を採用し、関連度の順に並べます。下限以上の候補が無いときは、下限を 1 回だけ下げて（既定は 0.5 倍）判断し直し、それでも無ければ根拠なしとします。0はスコアで除外しません。無効時は適用しません。未採点の候補と明示添付は保持し、採点失敗時は検索結果の順序を保ちます。",
   "settings.answering.thresholdInvalid": "類似度と関連度の下限は、0から1までの数値で入力してください。",
   "settings.answering.rerankHint":
     "OCI Generative AI の Rerank で、検索候補を質問との関連の強さの順に並べ替えます。",

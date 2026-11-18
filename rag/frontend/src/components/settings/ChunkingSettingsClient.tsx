@@ -29,6 +29,7 @@ import {
   Scissors,
   SeparatorHorizontal,
   SlidersHorizontal,
+  Undo2,
   WrapText,
 } from "lucide-react";
 
@@ -150,6 +151,7 @@ export function ChunkingSettingsClient() {
   if (!settings || !form) return null;
 
   const dirty = serializeForm(form) !== serializeForm(formFromSettings(settings));
+  const builtin = settings.builtin;
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.chunking.saveError");
   const strategies = orderedStrategies(settings.strategies);
@@ -169,6 +171,11 @@ export function ChunkingSettingsClient() {
     save.reset();
     setForm(formFromSettings(settings));
     setFieldErrors({});
+  }
+
+  // 製品の既定をフォームに入れるだけで、保存は「保存」で行う（「形式別の既定」と同じ。#5451）。
+  function restoreDefaults() {
+    updateForm({ ...builtin });
   }
 
   function submit() {
@@ -197,12 +204,13 @@ export function ChunkingSettingsClient() {
 
   return (
     <PageBody wide>
-      <OverviewCard
+      <ChunkingCard
         dirty={dirty}
+        atBuiltin={serializeForm(form) === serializeForm(builtin)}
         form={form}
         strategies={strategies}
         saving={save.isPending}
-        hasFieldErrors={Object.values(fieldErrors).some(Boolean)}
+        errors={fieldErrors}
         errorMessage={save.isError ? saveError : null}
         onStrategyChange={(strategy) => {
           const preset = chunkingStrategyPreset(strategy);
@@ -212,43 +220,51 @@ export function ChunkingSettingsClient() {
             overlap: preset.overlap,
           });
         }}
+        onChange={updateForm}
+        onRestoreDefaults={restoreDefaults}
         onReset={resetForm}
         onSubmit={submit}
-      />
-      <ParamsCard
-        form={form}
-        saving={save.isPending}
-        errors={fieldErrors}
-        onChange={updateForm}
       />
     </PageBody>
   );
 }
 
-function OverviewCard({
+/**
+ * 方式の選択・区切りの線・方式ごとのパラメータ・摘要・操作を 1 枚に並べる（操作は 1 組だけ。#5451）。
+ * 操作の順は 3 製品で共通の「保存 → 変更を破棄 → 既定に戻す」。
+ */
+function ChunkingCard({
   dirty,
+  atBuiltin,
   form,
   strategies,
   saving,
-  hasFieldErrors,
+  errors,
   errorMessage,
   onStrategyChange,
+  onChange,
+  onRestoreDefaults,
   onReset,
   onSubmit,
 }: {
   dirty: boolean;
+  /** フォームが製品の既定と同じか（同じなら「既定に戻す」を押せない）。 */
+  atBuiltin: boolean;
   form: ChunkingForm;
   strategies: ChunkingStrategyStatusData[];
   saving: boolean;
-  /** 欄のエラーがあるか（内容は欄の直下に出す。ここでは未保存の表示を控えるだけ）。 */
-  hasFieldErrors: boolean;
+  errors: ChunkingFieldErrors;
   errorMessage: string | null;
   onStrategyChange: (strategy: ChunkingStrategyName) => void;
+  onChange: (update: Partial<ChunkingForm>) => void;
+  onRestoreDefaults: () => void;
   onReset: () => void;
   onSubmit: () => void;
 }) {
+  // 欄のエラーの内容は欄の直下に出す。ここでは未保存の表示を控えるだけ。
+  const hasFieldErrors = Object.values(errors).some(Boolean);
   return (
-    <Card>
+    <Card data-testid="settings-chunking-card">
       <CardHeader>
         <div className="flex items-start gap-3">
           <div data-surface-tint="info" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
@@ -283,6 +299,7 @@ function OverviewCard({
           onValueChange={onStrategyChange}
           disabled={saving}
         />
+        <ParamsSection form={form} saving={saving} errors={errors} onChange={onChange} />
         <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <RuntimeFact
             label={t("settings.chunking.strategy")}
@@ -317,6 +334,13 @@ function OverviewCard({
               disabled: !dirty || saving,
               onClick: onReset,
             },
+            {
+              id: "restore-defaults",
+              label: t("settings.chunking.actions.restoreDefaults"),
+              icon: Undo2,
+              disabled: saving || atBuiltin,
+              onClick: onRestoreDefaults,
+            },
           ]}
           status={
             errorMessage ? (
@@ -331,7 +355,7 @@ function OverviewCard({
   );
 }
 
-function ParamsCard({
+function ParamsSection({
   form,
   saving,
   errors,
@@ -385,75 +409,72 @@ function ParamsCard({
     />
   ) : null;
 
+  // 方式の選択との区切りの線（カードの中の区切りと同じ border-t。#5451）。
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start gap-3">
-          <div data-surface-tint="success" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-success-subtle text-success-fg">
-            <SlidersHorizontal size={20} aria-hidden />
-          </div>
-          <div>
-            <CardTitle>{t("settings.chunking.params.title")}</CardTitle>
-            <CardDescription>{paramsDescription(form.strategy)}</CardDescription>
-          </div>
+    <div className="space-y-4 border-t border-border pt-5">
+      <div className="flex items-start gap-3">
+        <div data-surface-tint="success" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-success-subtle text-success-fg">
+          <SlidersHorizontal size={20} aria-hidden />
         </div>
-      </CardHeader>
-      <CardContent>
-        <FormGrid>
-          {smallToBig
-            ? SMALL_TO_BIG_PARAMS.map((spec) => (
-                <NumberField
-                  key={spec.field}
-                  id={chunkingFieldId(spec.field)}
-                  error={errors[spec.field]}
-                  label={t(spec.labelKey)}
-                  value={form[spec.field]}
-                  min={spec.min}
-                  max={spec.max}
-                  step={spec.step}
-                  disabled={saving}
-                  helper={t(spec.hintKey)}
-                  onChange={(value) => onChange({ [spec.field]: value })}
-                />
-              ))
-            : null}
-          {hasField("delimiter") ? (
-            <ChunkDelimiterSelect
-              id="chunking-delimiter"
-              value={form.delimiter}
-              disabled={saving}
-              helper={t("settings.chunking.params.delimiterHint")}
-              error={errors.delimiter ?? undefined}
-              required
-              onChange={(value) => onChange({ delimiter: value })}
-            />
-          ) : null}
-          {semanticBoundary ? (
-            <Disclosure
-              key={form.strategy}
-              summary={t("settings.chunking.params.semanticDetails")}
-              surface="sunken"
-              className="col-span-full"
-            >
-              <p className="mb-3 text-xs leading-relaxed text-fg-muted">
-                {paramsDescription(form.strategy)}
-              </p>
-              <FormGrid>
-                {chunkSizeField}
-                {overlapField}
-                {minCharsField}
-              </FormGrid>
-            </Disclosure>
-          ) : (
-            <>
+        <div>
+          <CardTitle>{t("settings.chunking.params.title")}</CardTitle>
+          <CardDescription>{paramsDescription(form.strategy)}</CardDescription>
+        </div>
+      </div>
+      <FormGrid>
+        {smallToBig
+          ? SMALL_TO_BIG_PARAMS.map((spec) => (
+              <NumberField
+                key={spec.field}
+                id={chunkingFieldId(spec.field)}
+                error={errors[spec.field]}
+                label={t(spec.labelKey)}
+                value={form[spec.field]}
+                min={spec.min}
+                max={spec.max}
+                step={spec.step}
+                disabled={saving}
+                helper={t(spec.hintKey)}
+                onChange={(value) => onChange({ [spec.field]: value })}
+              />
+            ))
+          : null}
+        {hasField("delimiter") ? (
+          <ChunkDelimiterSelect
+            id="chunking-delimiter"
+            value={form.delimiter}
+            disabled={saving}
+            helper={t("settings.chunking.params.delimiterHint")}
+            error={errors.delimiter ?? undefined}
+            required
+            onChange={(value) => onChange({ delimiter: value })}
+          />
+        ) : null}
+        {semanticBoundary ? (
+          <Disclosure
+            key={form.strategy}
+            summary={t("settings.chunking.params.semanticDetails")}
+            surface="sunken"
+            className="col-span-full"
+          >
+            <p className="mb-3 text-xs leading-relaxed text-fg-muted">
+              {paramsDescription(form.strategy)}
+            </p>
+            <FormGrid>
               {chunkSizeField}
               {overlapField}
-            </>
-          )}
-          {!semanticBoundary ? minCharsField : null}
-        </FormGrid>
-      </CardContent>
-    </Card>
+              {minCharsField}
+            </FormGrid>
+          </Disclosure>
+        ) : (
+          <>
+            {chunkSizeField}
+            {overlapField}
+          </>
+        )}
+        {!semanticBoundary ? minCharsField : null}
+      </FormGrid>
+    </div>
   );
 }
 

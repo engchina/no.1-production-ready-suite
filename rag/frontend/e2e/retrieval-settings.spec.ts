@@ -25,7 +25,7 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
-    await expect(page.getByText("既定は 60 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
+    await expect(page.getByText("既定は 50 件です。5～100 件で指定します。検索経路（ベクトル・全文）ごとに取得する候補の数で、取得した候補は重複を除いてすべて再ランキングに渡します。回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
     await page.locator('[id^="answering-retrieval-query-limit-"][id$="-hint"]').screenshot({ path: testInfo.outputPath("retrieval-query-limit-hint.png") });
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "保存期間を保存" })).toHaveCount(0);
@@ -646,14 +646,14 @@ for (const theme of ["light", "dark"] as const) {
     const score = card.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true });
     const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
     const reset = card.getByRole("button", { name: "変更を破棄", exact: true });
-    await expect(search).toHaveValue("60");
+    await expect(search).toHaveValue("50");
     await expect(min).toHaveValue("0.2");
     await expect(score).toHaveValue("0.3");
     // rerank の後は点数の順で並べ、件数は起点数で 1 回だけ切る（#5165）。並びの比率と Top-N の欄は無い。
     await expect(card.getByRole("spinbutton", { name: "再ランキング後の採用件数（Top-N）", exact: true })).toHaveCount(0);
     await expect(card.getByRole("spinbutton", { name: "再ランキングの順から取る件数", exact: true })).toHaveCount(0);
     await expect(card.getByRole("spinbutton", { name: "検索の順から取る件数", exact: true })).toHaveCount(0);
-    await expect(score).toHaveAccessibleDescription(/下限以上の候補が無いときは根拠なし/);
+    await expect(score).toHaveAccessibleDescription(/下限を 1 回だけ下げて/);
     const boxes = await Promise.all([search.boundingBox(), min.boundingBox()]);
     if ((page.viewportSize()?.width ?? 0) >= 1280) {
       expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThanOrEqual(2);
@@ -667,36 +667,36 @@ for (const theme of ["light", "dark"] as const) {
     const rerankGroup = card.getByTestId("answering-rerank-block");
     await rerankGroup.scrollIntoViewIfNeeded();
     await rerankGroup.screenshot({ path: testInfo.outputPath("rerank-block.png") });
-    for (const invalid of ["", "-1", "1.5", "2001"]) {
+    for (const invalid of ["", "4", "1.5", "101"]) {
       await search.fill(invalid);
       await expect(save).toBeDisabled();
     }
-    await search.fill("0");
+    await search.fill("5");
     await expect(save).toBeEnabled();
     await save.click();
-    expect(saved.at(-1)).toMatchObject({retrieval_query_limit: 0});
+    expect(saved.at(-1)).toMatchObject({retrieval_query_limit: 5});
     expect(saved.at(-1)).not.toHaveProperty("rerank_top_n");
     expect(saved.at(-1)).not.toHaveProperty("rerank_slot_ratio");
     // 保存後のフォームの再作成が終わってから次の編集を始める。
     await expect(search).toBeEnabled();
     await expect(reset).toBeDisabled();
-    await expect(search).toHaveAccessibleDescription(/0 は追加制限なし/);
-    await search.fill("150");
+    await expect(search).toHaveAccessibleDescription(/5～100 件/);
+    await search.fill("80");
     await save.click();
     await expect(save).toBeDisabled();
-    expect(saved.at(-1)).toMatchObject({ retrieval_query_limit: 150 });
+    expect(saved.at(-1)).toMatchObject({ retrieval_query_limit: 80 });
     await page.reload();
-    await expect(search).toHaveValue("150");
+    await expect(search).toHaveValue("80");
     await page.route("**/api/settings/answering", async route => {
       if (route.request().method() !== "PATCH") return route.fallback();
       await route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の保存失敗"], warning_messages: [] } });
     });
-    await search.fill("180");
+    await search.fill("90");
     await save.click();
     await expect(card).toContainText("合成の保存失敗");
-    await expect(search).toHaveValue("180");
+    await expect(search).toHaveValue("90");
     await reset.click();
-    await expect(search).toHaveValue("150");
+    await expect(search).toHaveValue("80");
     const rerank = card.getByRole("switch", { name: "Rerank で検索候補を並べ替える", exact: true });
     await rerank.click();
     await expect(score).toBeDisabled();

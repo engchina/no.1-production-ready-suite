@@ -25,13 +25,13 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
 rerank の後の工程は次の順で 1 回ずつ行い、以後は足すだけで削除・並べ替えをしない
 （`rag_engine/generation/answering.py` の `_rerank_records`・`cap_anchors_per_document`・`_bundle_context`）。
 
-1. 並べる: rerank の点数（原質問と検索文の最高値。#2161）の順に、MMR（λ=0.7。`body_text or text` を全文検索と
-   同じ部品で分割した語の Jaccard。LLM は呼ばない）で内容の似た候補を後ろへ回す（`rag_engine/retrieval/rerank_order.py`）。
-   検索の順位は混ぜない。点数の足し算（合成点）はしない。会話の添付と rerank の点の無い候補（画像のベクトルだけで
-   当たった候補など）は rerank の工程が決めた位置に残す。
-2. 関連度の下限（`RAG_RERANK_MIN_RELEVANCE_SCORE`）: 下限未満を外す。下限以上が 0 件なら根拠なし（下限を下げて
-   やり直さない）。明示の添付は外さない。
-3. 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`。既定 5、0 = 上限なし）: 1 つの文書から採る候補を上限までにし、
+1. 並べる: rerank の点数（原質問と検索文の最高値。#2161）の順。検索の順位は混ぜない。点数の足し算（合成点）は
+   しない。MMR は #5443 で削除した。会話の添付と rerank の点の無い候補（画像のベクトルだけで当たった候補など）は
+   rerank の工程が決めた位置に残す。
+2. 関連度の下限（`RAG_RERANK_MIN_RELEVANCE_SCORE`。既定 0.30）: 下限未満を外す。資料の候補（添付を除く）が 1 件も
+   下限に届かないときは、下限に `RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO`（既定 0.5。0 は下げない）を掛けて 1 回だけ
+   判断し直し、下げた下限にも届かなければ根拠なし（#5443。WeKnora の下限の引き下げと同じ考え方）。明示の添付は外さない。
+3. 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`。既定 0 = 上限なし。#5443）: 1 つの文書から採る候補を上限までにし、
    超えた候補は外す（起点に戻さない。外した候補の所有の章節は、章節の拡張が残りの予算で読むことがある。#5209。
    下の `RAG_SECTION_EXPANSION_ENABLED`）。
 4. 起点数（`top_k`）で 1 回だけ切る（context の組み立て。親の枠 `RAG_ENGINE_MAX_CONTEXT_RECORDS` と同じ親の起点の
@@ -43,7 +43,8 @@ rerank の後の工程は次の順で 1 回ずつ行い、以後は足すだけ�
 
 rerank の入力の文は「文書の名前・章節の見出し・当たった chunk の原文」だけで、検索文の文脈行（親の要約・キーワード・
 分類など）・引用の ID・前後の文脈は入れない（`answer_records._rerank_document`）。派生の chunk（章節の要約・項目抽出の値）は
-rerank の前に原文の chunk に置き換える（#2641）。rerank の入力の候補の上限は `RAG_RERANK_CANDIDATE_LIMIT`（200）。
+rerank の前に原文の chunk に置き換える（#2641）。rerank の入力は検索経路ごとに取得した候補（`RAG_RETRIEVAL_QUERY_LIMIT`、
+既定 50・5〜100）の全部で、件数では切らない（最大 100 × 2 = 200 件。#5443）。
 rerank が無効・失敗・有効な点が 1 件も無いときは、並べ替えと下限を行わず検索の順のまま 3 以降へ進む。
 
 削除した規則（#5165。互換は持たない）: rerank の順と検索の順を枠で混ぜる並び（`RAG_RERANK_SLOT_RATIO`。#4664）、

@@ -670,6 +670,8 @@ class ChunkingSettingsData(BaseModel):
     chunk_parent_max_children: int
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
+    # 製品の既定(Settings の項目の既定値)。画面の「既定に戻す」がフォームに入れる値(保存はしない)。
+    builtin: "ChunkingSettingsUpdate"
 
 
 class ChunkingSettingsUpdate(BaseModel):
@@ -723,6 +725,9 @@ class ChunkingSettingsUpdate(BaseModel):
         ):
             raise ValueError("min_chars は chunk_size より小さくしてください。")
         return self
+
+
+ChunkingSettingsData.model_rebuild()
 
 
 class AnswerRecordSettingsData(BaseModel):
@@ -782,7 +787,7 @@ class AnsweringSettingsData(BaseModel):
     (プロファイルの ``query`` に欄を持たない)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
-    retrieval_query_limit: int = Field(default=60, ge=0, le=2000, strict=True)
+    retrieval_query_limit: int = Field(default=50, ge=5, le=100, strict=True)
     min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
     hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
@@ -823,7 +828,7 @@ class AnsweringSettingsData(BaseModel):
 class AnsweringSettingsUpdate(BaseModel):
     """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
 
-    retrieval_query_limit: int | None = Field(default=None, ge=0, le=2000, strict=True)
+    retrieval_query_limit: int | None = Field(default=None, ge=5, le=100, strict=True)
     min_similarity: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float | None = Field(
         default=None, ge=0.0, le=1.0, allow_inf_nan=False

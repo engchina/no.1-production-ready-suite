@@ -191,7 +191,6 @@ class RetrievalQueryPlan:
     lexical_queries: tuple[str, ...] = ()
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN
     top_k: int = DEFAULT_RETRIEVAL_TOP_K
-    candidate_limit: int = 0  # 実行時に `_retrieval_candidate_limit(top_k)` を入れる。trace 表示用
     metadata_filter: dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
@@ -208,7 +207,6 @@ class RetrievalQueryPlan:
             "lexical_queries": list(self.lexical_queries),
             "retrieval_scope": self.retrieval_scope,
             "top_k": self.top_k,
-            "candidate_limit": self.candidate_limit,
             "metadata_filter": dict(self.metadata_filter),
         }
 

@@ -7,9 +7,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TypedDict
 
-from pydantic import TypeAdapter
-
-from app.config import Settings
 from app.schemas.evaluation import EvaluationRagOverrides, EvaluationRunRequest
 
 # 実行時の設定経路を持つ項目だけ。文書選択の無効化はbackendから指定できない。
@@ -17,9 +14,6 @@ _REQUEST_STAGES = {
     "reference": "reference_expansion_enabled",
     "entity": "entity_expansion_enabled",
     "section": "section_expansion_enabled",
-}
-_ENV_STAGES = {
-    "diversity": {"RAG_CANDIDATE_DIVERSITY_MAX_EXTRA": "0"},
 }
 
 
@@ -38,19 +32,10 @@ class ComparisonPlan(TypedDict):
     variants: list[PlanVariant]
 
 
-def prepare_plan(
-    request: EvaluationRunRequest, *, total_caps: Sequence[int] = ()
-) -> ComparisonPlan:
+def prepare_plan(request: EvaluationRunRequest) -> ComparisonPlan:
     """ケース・範囲・モデル以外の既存入力を保ち、一度に一項目だけ変える。"""
     if request.compare_search_answer_profile_id:
         raise ValueError("別プロファイルとの同時比較を外してから準備してください。")
-    if any(value <= 0 for value in total_caps):
-        raise ValueError("比較する総上限は正の整数で指定してください。")
-    cap_adapter = TypeAdapter[int](
-        Settings.model_fields["rag_rerank_candidate_limit"].rebuild_annotation()
-    )
-    for value in total_caps:
-        cap_adapter.validate_python(value)
     baseline = request.model_dump(mode="json", exclude_none=True)
     variants: list[PlanVariant] = [
         {"id": "baseline", "request": baseline, "environment_overlay": {}}
@@ -68,13 +53,9 @@ def prepare_plan(
                 "environment_overlay": {},
             }
         )
-    for name, overlay in _ENV_STAGES.items():
-        variants.append(
-            {"id": f"without-{name}", "request": baseline, "environment_overlay": overlay}
-        )
     variants.append(
         {
-            "id": "without-anchor-document-cap",
+            "id": "with-anchor-document-cap",
             "request": request.model_copy(
                 update={
                     "rag_overrides": EvaluationRagOverrides(
@@ -84,7 +65,7 @@ def prepare_plan(
                                 if request.rag_overrides
                                 else {}
                             ),
-                            "max_anchors_per_document": 0,
+                            "max_anchors_per_document": 5,
                         }
                     )
                 }
@@ -92,14 +73,6 @@ def prepare_plan(
             "environment_overlay": {},
         }
     )
-    for cap in dict.fromkeys(total_caps):
-        variants.append(
-            {
-                "id": f"total-cap-{cap}",
-                "request": baseline,
-                "environment_overlay": {"RAG_RERANK_CANDIDATE_LIMIT": str(cap)},
-            }
-        )
     digest = hashlib.sha256(
         json.dumps(baseline, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
@@ -117,10 +90,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("request", type=Path, help="既存 EvaluationRunRequest JSON")
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--total-cap", type=int, action="append", default=[])
     args = parser.parse_args(argv)
     request = EvaluationRunRequest.model_validate_json(args.request.read_text(encoding="utf-8"))
-    plan = prepare_plan(request, total_caps=args.total_cap)
+    plan = prepare_plan(request)
     # 既存結果や入力を上書きせず、新しい比較のディレクトリだけを作る。
     args.output_dir.mkdir(parents=True, exist_ok=False)
     for variant in plan["variants"]:
