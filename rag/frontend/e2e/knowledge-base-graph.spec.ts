@@ -158,7 +158,7 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
   await expect(hint).not.toContainText("再取込");
 });
 
-// 文書構造索引の構築のカードは「説明 → 区切り線 → [保存][既存文書に構築] → 区切り線 → 文書構造グラフ」の順（#5453）。
+// 文書構造索引の構築のカードは「説明 → 区切り線 → [既存文書に構築] → 区切り線 → 文書構造グラフ」の順（#5453。保存は #5484 で削除）。
 // 開閉の見出しは共有の Disclosure（plain）の高さ（sm。タッチ端末は 44px）。
 test("文書構造グラフは構築のカードの最下部にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, EMPTY_OVERVIEW);
@@ -169,23 +169,19 @@ test("文書構造グラフは構築のカードの最下部にあり、標準�
   const summary = card.locator("summary", { hasText: "文書構造グラフを表示" });
   await expect(summary).toBeVisible();
   const actions = card.getByRole("group", { name: "文書構造索引の構築", exact: true }).first();
-  const save = actions.getByRole("button", { name: "保存", exact: true });
   const build = actions.getByRole("button", { name: "既存文書に構築", exact: true });
-  await expect(save).toBeVisible();
+  await expect(actions.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
   await expect(build).toBeVisible();
-  const existing = card.getByText("「既存文書に構築」は保存済みのチャンクの見出し・階層情報から構築し");
+  const existing = card.getByText("取込では作りません。必要なときに「既存文書に構築」で構築します。", { exact: false });
   await expect(existing).toBeVisible();
   await expect(card).not.toContainText("構造拡張");
   const search = page.getByRole("heading", { name: "Wiki ナビゲーション", exact: true });
   await expect(search).toBeVisible();
-  const [existingBox, saveBox, buildBox, graphBox, cardBox, searchBox] = await Promise.all([
-    existing.boundingBox(), save.boundingBox(), build.boundingBox(), summary.boundingBox(), card.boundingBox(), search.boundingBox(),
+  const [existingBox, buildBox, graphBox, cardBox, searchBox] = await Promise.all([
+    existing.boundingBox(), build.boundingBox(), summary.boundingBox(), card.boundingBox(), search.boundingBox(),
   ]);
-  expect(existingBox!.y + existingBox!.height).toBeLessThan(saveBox!.y);
-  // desktop は同じ行に並べ、狭い画面は縦に積む（FormActionBar）。
-  if ((page.viewportSize()?.width ?? 0) >= 640) expect(Math.round(buildBox!.y)).toBe(Math.round(saveBox!.y));
-  else expect(buildBox!.y).toBeGreaterThan(saveBox!.y);
-  expect(Math.max(saveBox!.y + saveBox!.height, buildBox!.y + buildBox!.height)).toBeLessThan(graphBox!.y);
+  expect(existingBox!.y + existingBox!.height).toBeLessThan(buildBox!.y);
+  expect(buildBox!.y + buildBox!.height).toBeLessThan(graphBox!.y);
   expect(graphBox!.y + graphBox!.height).toBeLessThan(cardBox!.y + cardBox!.height);
   expect(cardBox!.y + cardBox!.height).toBeLessThan(searchBox!.y);
   expect(Math.round(graphBox!.height)).toBe(expected);

@@ -221,6 +221,19 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5484 文書構造索引を取込で作らず KB の画面の手動の構築だけにする）
+
+文書構造索引は取込のときに作らず、ナレッジベースの詳細の「文書構造索引の構築」の「既存文書に構築」で手動で構築するだけにした。
+構築の有無の設定（設定のナビの「文書構造索引」・`RAG_GRAPH_PROFILE`・文書レシピの `graph_profile`・KB ごとの「構築する / 構築しない」）を削除した。
+
+- **migration・DDL は無い。** 表（`rag_graph_*`・`rag_structure_index_*`）と構築済みの索引はそのまま残り、文書構造グラフでそのまま見られる。
+- **環境変数**: `backend/.env` の `RAG_GRAPH_PROFILE` は読まない（残っていても起動は止まらない。消してよい）。
+- **保存済みの値**: 文書レシピ・KB・取込ジョブの `graph_profile` と、KB の `retrieval_config.structure_index_enabled` は読み込みで捨てる（次の保存で消える）。
+- **API**: `GET` / `PATCH /api/settings/graph` と、KB の `GET` / `PUT /api/knowledge-bases/{kb}/structure-index`（構築の有無の設定）を削除した。構築の計画・ジョブ（`…/structure-index/plan`・`…/structure-index/job`）と文書構造グラフ（`…/graph/*`）は変わらない。
+- **権限**: メニュー権限 `menu.settings_graph` を削除した。保存済みのロールの値はカタログに無い code として読み捨てる。
+- **動作**: KB を編集できる利用者は、設定に関わらず「既存文書に構築」を実行できる。取込の後に索引が要るときは、KB の画面から構築する（取込のたびには作らない）。
+- 本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけ。
+
 ## 既存環境の更新手順（#5476 保存済みの言語資源の欠けた項目を組み込みの値で読む）
 
 組み込みの言語資源に項目を足しても、保存済みの公開版・下書きを「契約に合わない」として RAG の API を 409 で止めない。
@@ -910,7 +923,7 @@ PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン D
 
 ## 既存環境の更新手順（#3218 pipeline の段のサービスへの委譲を削除）
 
-検索インデックス・文書構造索引の構築・安全チェック・評価の基準の段は、backend の中で実行する（`rag_pipeline_core` の決定論の解決）。段のサービス（`services/pipeline/{vector_index,graphrag,guardrail,evaluation}`）と、そこへ HTTP で委譲する仕組み（`app/clients/pipeline_stage.py`）を削除し、サービス管理の一覧からも外した。これらのサービスは配備の対象ではなく（systemd の unit も無い）、委譲の許可の既定が有効だったため、Chunk 作成の job ごとに接続に失敗して WARNING「pipeline stage service unavailable; falling back to in-process」を出していた。
+検索インデックス・文書構造索引の構築（#5484 で取込の段から外した）・安全チェック・評価の基準の段は、backend の中で実行する（`rag_pipeline_core` の決定論の解決）。段のサービス（`services/pipeline/{vector_index,graphrag,guardrail,evaluation}`）と、そこへ HTTP で委譲する仕組み（`app/clients/pipeline_stage.py`）を削除し、サービス管理の一覧からも外した。これらのサービスは配備の対象ではなく（systemd の unit も無い）、委譲の許可の既定が有効だったため、Chunk 作成の job ごとに接続に失敗して WARNING「pipeline stage service unavailable; falling back to in-process」を出していた。
 
 - **環境変数**: 次は読まない（`backend/.env` に残っていても無視する。消さなくてもよい）。
   - `RAG_VECTOR_INDEX_SERVICE_ENABLED`・`RAG_VECTOR_INDEX_SERVICE_URL`・`RAG_GRAPH_SERVICE_ENABLED`・`RAG_GRAPH_SERVICE_URL`・`RAG_GUARDRAIL_SERVICE_ENABLED`・`RAG_GUARDRAIL_SERVICE_URL`・`RAG_EVALUATION_SERVICE_ENABLED`・`RAG_EVALUATION_SERVICE_URL`・`RAG_PIPELINE_STAGE_TIMEOUT_SECONDS`

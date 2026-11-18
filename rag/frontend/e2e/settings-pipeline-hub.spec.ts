@@ -354,7 +354,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.goto("/settings/pipeline");
     const items = page.getByTestId("pipeline-recipe-defaults");
     const links = items.getByRole("link");
-    await expect(links).toHaveCount(12);
+    await expect(links).toHaveCount(11);
     for (const link of await links.all()) {
       expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toContain("underline");
       const colors = await link.evaluate((element) => ({
