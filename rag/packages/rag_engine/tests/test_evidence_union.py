@@ -6,7 +6,7 @@ from rag_engine.generation.evidence_union import union_sources
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 
 
-def record(chunk_id, *, children=(), version="cs", text=None):
+def record(chunk_id, *, children=(), version="cs", text=None, document="doc", identities=None):
     return AnswerRecord(
         id=chunk_id,
         engine="e",
@@ -18,7 +18,11 @@ def record(chunk_id, *, children=(), version="cs", text=None):
         source="合成.md",
         chunk_id=chunk_id,
         child_chunk_ids=tuple(children),
-        metadata={"document_id": "doc", "chunk_set_id": version},
+        metadata={
+            "document_id": document,
+            "chunk_set_id": version,
+            **({"source_identities": identities} if identities else {}),
+        },
     )
 
 
@@ -66,3 +70,17 @@ def test_injected_sources_are_unioned_and_recorded(monkeypatch):
 def test_no_injected_sources_leaves_the_context_unchanged():
     context = native_context()
     assert answering._with_independent_sources(context) is context
+
+
+def test_document_identities_reach_overlapping_sources_of_the_same_document():
+    # 通常検索がすでに拾った原文と重なっても、文書の版の属性は同じ文書・保存版の根拠に付く（#5444）。
+    identity = [{"source_key": "S", "effective_date": "2000-01-01", "source_status": "Current"}]
+    context = native_context()
+    other = record("o1", document="other")
+    context = AnswerContext(records=[*context.records, other], text="", evidence_tree=context.evidence_tree)
+    merged, added = union_sources(context, [record("c3", identities=identity), record("c1", version="old", identities=identity)])
+    assert added == 1  # 重なる原文は足さない
+    assert merged.records[0].metadata["source_identities"] == identity
+    assert merged.evidence_tree[0].record.metadata["source_identities"] == identity
+    assert merged.evidence_tree[0].children[0].record.metadata["source_identities"] == identity
+    assert "source_identities" not in merged.records[1].metadata  # 別の文書には付けない

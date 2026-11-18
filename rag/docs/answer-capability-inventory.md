@@ -54,7 +54,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 全文検索（Oracle Text） | 必須（hybrid の方式で検索するとき） | SQL の失敗は例外を送出 → **エラー**。質問から検索語が作れないとき（`_oracle_text_query` が `None`）は全文検索を飛ばす（失敗ではない） | `SP` | 見せない | `rag/backend/app/clients/oracle.py::_read_keyword_branch`・`_oracle_text_query` |
 | 全文検索の語の分割（Sudachi） | 任意 | Sudachi・辞書が使えない・分割に失敗 → 文字種の区切りだけで検索語を作る | `DS`（`text_search_tokenizer`。使えないときは回答ごとに 1 回、分割の失敗は 1 回ごと）。使えるかの確認は process ごとに 1 回（例外を cache する） | 見せない（縮退は `DS` で分かる） | `rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py::_sudachi_failure`・`sudachi_unavailable`・`_content_terms`・`rag/packages/rag_engine/rag_engine/generation/answering.py::answer_question_result` |
 | 全文検索の語の trace（工程の詳細） | 任意 | 作れない → 工程の詳細に「抽出に失敗（型の名前）」 | `ST` | 見せない（表示だけの trace。実際の検索語は backend が作る） | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_question_text_search_info` |
-| 引用ラベルの検索（#2024） | 必須（ラベルのある質問だけ SQL を実行） | 例外を送出 → **エラー** | `SP` | 見せない | `rag/backend/app/clients/oracle.py::citation_label_search` |
 | 文脈の補完の親・前後の文脈（#5168。章節で補う根拠は前後を読まない。所有の章節を読めなかった根拠は前後か親で補う。#5173） | 必須 | 例外を送出 → **エラー** | `SP`・`ST` | 見せる | `rag/backend/app/rag/answer_engine.py::AnswerEngine._context_chunks` |
 | 最終根拠の文書の先頭Chunk・先頭頁全文 | 必須（最終選択後・正式生成前） | 取得例外は**エラー**。範囲外・未解析・無ページは状態を記録。旧欠落値は同じ版の不変解析から復元できなければ不完全と明示 | `SP`・`ST`・`DX` | 見せる（実範囲・版・再利用） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._selected_document_backgrounds`・`rag/packages/rag_engine/rag_engine/generation/document_background.py::DocumentBackgroundReader.append` |
 | 派生の chunk の原文への置き換え（#2641） | 必須（派生の chunk が当たったとき） | 読み込みの例外は**エラー**。原文が無いときは根拠に渡さない | `DX`（`derived_evidence.unresolved_count`） | 見せない（要約の文を確かめた記載にしない） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._original_anchors` |
@@ -153,7 +152,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 ## 一覧から分かったこと
 
-- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、vector 検索（embedding を作れたとき）、全文検索の SQL、引用ラベルの検索、前後の文脈・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）。主の検索（Oracle の SQL）の失敗は 0 件にせずエラーにする（#3259 のテスト）。質問の embedding の失敗はエラーにせず全文検索へ縮退する（#4663）。
+- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、vector 検索（embedding を作れたとき）、全文検索の SQL、前後の文脈・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）。主の検索（Oracle の SQL）の失敗は 0 件にせずエラーにする（#3259 のテスト）。質問の embedding の失敗はエラーにせず全文検索へ縮退する（#4663）。
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
 - **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・会話の書き換え・会話の添付・Sudachi・章節の子の並べ替え）は `DS` に入れた。例外ではない縮退（書き換えの安全チェックの拒否・呼び出し元の検索文の拒否）は `DS` に入れない。
 - **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・同義語の読み込みは、例外の型の名前だけにした（#3284）。

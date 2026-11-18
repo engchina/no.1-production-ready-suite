@@ -24,6 +24,9 @@ test("実体・別名索引は既定 ON で、切り替え・保存・再読込�
   const save = page.getByRole("button", { name: "保存", exact: true });
   await expect(toggle).toBeChecked();
   await expect(page.getByText(/^既定は有効です。/)).toBeVisible();
+  // 「既定」のバッジは全体の既定(構築する)に付ける(#5447)。
+  await expect(toggle).toHaveAccessibleDescription(/^既定/);
+  await expect(off).not.toHaveAccessibleDescription(/既定/);
   await expect(save).toBeDisabled();
   await off.click();
   await page.getByRole("button", { name: "変更を破棄" }).click();

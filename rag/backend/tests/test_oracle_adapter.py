@@ -3102,6 +3102,46 @@ async def test_oci_hybrid_search_uses_normalized_keyword_query() -> None:
     assert "？" not in text_query
 
 
+async def test_hybrid_search_passes_same_candidates_with_or_without_citation_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """引用ラベルの有無で、後段へ渡す候補の規則は同じ（専用の照合も件数の切り捨ても無い。#5442）。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    def hits(prefix: str, top_k: int) -> list[RetrievedChunk]:
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id=f"{prefix}{rank}",
+                text="本文",
+                score=1.0 / rank,
+                metadata={"chunk_index": rank},
+            )
+            for rank in range(1, top_k + 1)
+        ]
+
+    async def vector_search(
+        _embedding: list[float], top_k: int, *_args: object, **_kwargs: object
+    ) -> list[RetrievedChunk]:
+        return hits("v", top_k)
+
+    async def keyword_search(_query: str, top_k: int, *_args: object) -> list[RetrievedChunk]:
+        return hits("k", top_k)
+
+    monkeypatch.setattr(client, "vector_search", vector_search)
+    monkeypatch.setattr(client, "keyword_search", keyword_search)
+
+    labeled, plain = [
+        await client.hybrid_search(query=query, embedding=[1.0, 0.0, 0.0], top_k=60)
+        for query in ("第七条第一項の範囲は", "対象の範囲はどこまでか")
+    ]
+
+    assert len(labeled) == len(plain) == 120
+    assert [hit.chunk_id for hit in labeled] == [hit.chunk_id for hit in plain]
+    assert pool.connection.calls == []
+
+
 def test_oracle_document_schema_includes_ingestion_metadata_columns() -> None:
     """Oracle document DDL 例は ingestion 監査用メタデータ列を含む。"""
     ddl = oracle_document_schema_sql()

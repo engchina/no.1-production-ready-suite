@@ -1315,23 +1315,7 @@ class AnswerEngine:
                     "candidates": len(fused),
                 }
             )
-        citation_ids: list[str] = []
-        citation_search = getattr(self._oracle, "citation_label_search", None)
-        if citation_search is not None:
-            for query in dict.fromkeys([*queries, *texts.values()]):
-                hits = await citation_search(
-                    query,
-                    filters=(_with_page_ranges(state.filters, page_ranges) or {})
-                    if page_ranges
-                    else dict(state.filters),
-                )
-                for hit in hits:
-                    state.chunks.setdefault(hit.chunk_id, hit)
-                    fused.setdefault(hit.chunk_id, 0.0)
-                    citation_ids.append(hit.chunk_id)
-        ordered = list(
-            dict.fromkeys([*citation_ids, *sorted(fused, key=lambda chunk_id: -fused[chunk_id])])
-        )
+        ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
         unique: list[str] = []
         source_keys: dict[tuple[Any, ...], str] = {}
         duplicates: list[dict[str, str]] = []
@@ -4254,7 +4238,7 @@ def _image_materialization_input(chunk: RetrievedChunk, state: _SearchState) -> 
 def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
     """検索文 1 本の当たりの経路(rag_engine の検索の実装と同じ形。#3443)。
 
-    ``vector_rank`` / ``keyword_rank`` / ``citation_rank``(``OracleClient`` の検索の結果の
+    ``vector_rank`` / ``keyword_rank``(``OracleClient`` の検索の結果の
     metadata)から決める。順位の無い結果は ``retrieval_mode`` から決める。
     """
     metadata = hit.metadata
@@ -4271,8 +4255,6 @@ def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
         channels.add(f"vector:{query}")
     if "keyword_rank" in metadata or mode in {"keyword", "hybrid"}:
         channels.add(f"keyword:oracle_text:{query}")
-    if "citation_rank" in metadata or mode == "citation":
-        channels.add("citation")
     return channels
 
 
