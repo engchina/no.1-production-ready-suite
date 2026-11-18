@@ -1879,6 +1879,15 @@ class Settings(
             "使った予算と送った根拠の文字数は回答の診断の evidence_budget に残る。"
         ),
     )
+    rag_batch_read_workers: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        description=(
+            "根拠が文字予算を超えて分割読取するとき、同じ段の組を並行に読む上限"
+            "（#4997。1 は順次）。結果は組の順に統合する。全体設定だけで決める。"
+        ),
+    )
     rag_answer_timeout_seconds: float = Field(
         default=RAG_ANSWER_TIMEOUT_DEFAULT_SECONDS,
         ge=RAG_ANSWER_TIMEOUT_MIN_SECONDS,

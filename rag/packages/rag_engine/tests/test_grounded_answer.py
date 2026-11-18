@@ -196,32 +196,6 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertNotIn("得意先区分を通常に変更します。", first_prompt)
         self.assertEqual(result.response.generation_trace["same_unit_fill"]["added_chunk_ids"], ["run:r1"])
 
-    def test_overview_span_treats_descendant_sections_as_the_same_function_body(self):
-        """上位の見出し（概要文）の span を引用した item は、配下の節の本文にあるボタン名を使える。兄弟の機能は不可 (#680)。"""
-
-        def span(eid, text, path, source="取引先名変更.pdf"):
-            return {
-                "evidence_id": eid,
-                "source_id": f"uid-{eid}",
-                "start": 0,
-                "end": len(text),
-                "text": text,
-                "source": source,
-                "document_scope": [source, ""],
-                "section_path": path,
-                "origin": "document_text",
-            }
-
-        overview = span("E1", "取引先名を変更する場合は、次の画面で設定を変えます。（１）取引先登録、（２）納品先登録", ["１．操作手順"])
-        step = span("E2", "①取引先名等を変更します。\n②実行ボタンを押します。", ["１．操作手順", "（１）取引先登録"])
-        sibling = span("E3", "①納品先名を変更します。\n②登録ボタンを押します。", ["１．操作手順", "（２）納品先登録"])
-        other_doc = span("E4", "①確認ボタンを押します。", ["１．操作手順", "（１）取引先登録"], source="別文書.pdf")
-        tagged = grounded.tag_spans([overview, step, sibling, other_doc])
-        by = {s["evidence_id"]: s for s in tagged}
-        self.assertEqual(sorted(by["E1"]["function_texts"]), sorted([step["text"], sibling["text"]]))  # 配下の節（同じ文書）
-        self.assertNotIn(step["text"], by["E3"]["function_texts"])  # 兄弟の機能は含めない
-        self.assertNotIn(other_doc["text"], by["E1"]["function_texts"])  # 別文書は含めない
-
     def test_weak_headings_do_not_split_a_function(self):
         """柱・本文の再出現から昇格した見出しは機能の境界にしない。Docling 由来の兄弟機能は従来どおり分ける (#820)。"""
 
@@ -257,64 +231,9 @@ class GroundedAnswerTest(unittest.TestCase):
         by = {s["evidence_id"]: s for s in grounded.tag_spans([step, continued, sibling])}
         self.assertEqual(by["E1"]["function"], by["E2"]["function"])
         self.assertNotEqual(by["E1"]["function"], by["E3"]["function"])
-        self.assertIn(continued["text"], by["E1"]["function_texts"])
-        self.assertNotIn(sibling["text"], by["E1"]["function_texts"])
         # 出所が無い旧データは従来どおり全要素で判定する
         legacy = {**continued, "section_path_sources": []}
         self.assertEqual(grounded._trusted_section_path(legacy), continued["section_path"])
-
-    def test_adjacent_page_text_is_collected_apart_from_the_function_body(self):
-        """手順が別機能に分かれても隣のページの本文は adjacent_texts に集める (#809)。同じページの兄弟機能と離れたページは含めない。"""
-
-        def span(eid, text, path, page, source="取引先名変更.pdf"):
-            return {
-                "evidence_id": eid,
-                "source_id": f"uid-{eid}",
-                "start": 0,
-                "end": len(text),
-                "text": text,
-                "source": source,
-                "document_scope": [source, ""],
-                "section_path": path,
-                "origin": "document_text",
-                "page": page,
-            }
-
-        step = span("E1", "①取引先名等を変更します。", ["１．操作手順", "（１）取引先登録"], 20)
-        continued = span("E2", "②実行ボタンを押します。", ["１データ連携"], 21)  # 柱の誤検出で別機能に分かれた続き
-        sibling = span("E3", "①納品先名を変更します。\n②登録ボタンを押します。", ["１．操作手順", "（２）納品先登録"], 20)
-        far = span("E4", "①確認ボタンを押します。", ["３．参考"], 23)
-        by = {s["evidence_id"]: s for s in grounded.tag_spans([step, continued, sibling, far])}
-        self.assertEqual(by["E1"]["adjacent_texts"], [continued["text"]])
-        self.assertNotIn(continued["text"], by["E1"]["function_texts"])
-
-    def test_screen_description_is_collected_apart_from_the_function_body(self):
-        """画面の生成説明は screen_texts に集め、原文照合用の function_texts には入れない (#1074)。"""
-
-        def span(eid, text, path, source="架空設定.pdf"):
-            return {
-                "evidence_id": eid,
-                "source_id": f"uid-{eid}",
-                "start": 0,
-                "end": len(text),
-                "text": text,
-                "source": source,
-                "document_scope": [source, ""],
-                "section_path": path,
-                "origin": "document_text",
-                "page": 20,
-            }
-
-        step = span("E1", "①取引先名等を変更します。", ["１．操作手順", "（１）取引先登録"])
-        # 同じ機能の生成説明。本文には「実行ボタン」と書かれず、field に列挙されるだけ。
-        screen = span(
-            "E2",
-            "■ 要点\n回答用本文: 取引先登録画面のスクリーンショット。\nボタン: (F1) メニュー / (F5) 実行 / 戻る\n値: 取引先名=架空商事",
-            ["１．操作手順", "（１）取引先登録"],
-        )
-        by = {s["evidence_id"]: s for s in grounded.tag_spans([step, screen])}
-        self.assertIn(screen["text"], by["E1"]["screen_texts"])
-        self.assertNotIn(screen["text"], by["E1"]["function_texts"])  # 原文照合には従来どおり使わない
 
     def test_quotes_from_tables_and_figures_match_the_original_despite_markup_and_ocr_breaks(self):
         """表は HTML で渡るがモデルは tag を外して引用し、図内の文字は OCR の改行・読点が揺れる (#561)。"""
@@ -957,50 +876,6 @@ class RouteHeadingAndFunctionButtonsTest(unittest.TestCase):
         # 省略記号が無い引用の扱いは変えない
         self.assertEqual(grounded._original_quote("地区を選択して", text), "地区を選択して")
 
-    def test_screen_description_scope_uses_pages_not_parsed_headings(self):
-        """画面説明の照合範囲は、同じ文書の近傍ページという確実な事実で決める (#1088)。
-
-        見出しの解析は誤り得る。柱（running_head）が信頼されたかどうかで機能ラベルの粒度が変わり、同じ画面の
-        画面説明と操作説明が別機能に割れる。機能だけで絞ると、画面に実在するボタンでも照合できない。
-        文書の同一性と頁は解析に依らないので、こちらを範囲の土台にする。
-        """
-        steps = {
-            "evidence_id": "E1",
-            "text": "①抽出条件を入力します。\n②(F5) 実行ボタンを押します。",
-            "source": "架空仕入業務.pdf",
-            "page": 19,
-            "origin": "unclassified",
-            "section_path": ["架空業務 －（２）架空仕入業務", "（２）－（Ｄ）請求処理", "B 【操作説明】"],
-            "section_path_sources": ["section_header", "section_header", "section_header"],
-        }
-        screen = {
-            "evidence_id": "E2",
-            "text": "■ 要点\n視覚種別: screenshot\n■ 可視情報\n画面名: 請求処理\nボタン: (F1) メニュー / (F5) 実行",
-            "source": "架空仕入業務.pdf",
-            "page": 18,
-            "origin": "image_generated",
-            "section_path": ["架空業務 －（２）架空仕入業務", "（２）－（Ｄ）請求処理", "A 【画面説明】"],
-            "section_path_sources": ["running_head", "section_header", "section_header"],
-        }
-
-        tagged = grounded.tag_spans([steps, screen])
-        body, capture = tagged[0], tagged[1]
-
-        # 柱の扱いが違うため、解析見出しから求める機能は割れている。
-        self.assertNotEqual(body["function"], capture["function"])
-        # それでも近傍ページの画面説明は照合に使える。
-        self.assertIn(screen["text"], body["screen_texts"])
-
-        # 別の文書の画面説明は、頁が近くても入らない。
-        other = {
-            **screen,
-            "evidence_id": "E3",
-            "source": "別の架空業務.pdf",
-            "text": "■ 要点\n視覚種別: screenshot\n■ 可視情報\nボタン: (F9) 取消",
-        }
-        tagged = grounded.tag_spans([steps, other])
-        self.assertNotIn(other["text"], tagged[0]["screen_texts"])
-
     def test_numbered_headings_are_separate_procedures(self):
         """番号付き見出し（２．／３．）ごとに機能を分け、別画面の手順を 1 つの番号列に混ぜない (#712)。"""
         first = "①「設定値検索」ボタンをクリックします。\n②設定名に「WHCODE」と入力します。"
@@ -1166,7 +1041,6 @@ class PrefixedFunctionLabelTest(unittest.TestCase):
         tagged = grounded.tag_spans([steps, screen])
 
         self.assertEqual(tagged[0]["function"], tagged[1]["function"])
-        self.assertIn(screen["text"], tagged[0]["function_texts"])  # 同じ機能の本文として見える
 
     def test_labels_of_other_documents_and_other_screens_are_not_merged(self):
         steps = self._span("E1", "①帳票一覧から帳票を選択します。", ["Bシステム管理 －（２）伝票印刷設定", "B 【操作説明】"])

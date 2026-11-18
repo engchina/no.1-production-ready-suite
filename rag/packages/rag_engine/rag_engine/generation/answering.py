@@ -1736,15 +1736,6 @@ def _fill_same_unit(question: str, context: AnswerContext) -> tuple[AnswerContex
     return filled, {"applied": bool(added), "added_chunk_ids": added}
 
 
-# tag_spans が検査用に span へ付ける、同じ機能・文書・隣接ページの本文の複製。span 数 n に対して O(n²) の本文になるため
-# 回答 JSON と UI へ渡す trace には残さない (#829)。読み手（answer_payload・viewer）は evidence_id / source_id / text / page を使う。
-_CHECK_ONLY_SPAN_KEYS = frozenset({"screen_texts", "function_texts", "document_texts", "adjacent_texts"})
-
-
-def _public_span(span: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in span.items() if key not in _CHECK_ONLY_SPAN_KEYS}
-
-
 def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None, spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """生成に渡した根拠の文字予算の診断（#3776）。技術の数値だけを残し、本文・プロンプトは残さない。
 
@@ -1957,6 +1948,7 @@ def synthesize_grounded_answer(
                 protected_sources=_expansion_sources(context),
                 failed_batches=failed_batches,
                 image_count=len(generation_images),
+                evidence_size_lower_bound=grounded.evidence_text_lower_bound,
             )
             selecting_evidence = False
             current = grounded.run_round(
@@ -2109,7 +2101,7 @@ def synthesize_grounded_answer(
         "provided_evidence_scope": capture_provided_scope(current.citation_trace),
         "pipeline": "grounded",
         "task_contract": task_contract(question),
-        "selected_evidence": [_public_span(s) for s in spans],
+        "selected_evidence": list(spans),
         "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
         "generation_input_budget": input_diagnostic,
         "same_unit_fill": unit_fill,
