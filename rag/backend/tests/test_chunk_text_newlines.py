@@ -12,6 +12,7 @@ PROCEDURE = "".join(
 
 def test_long_element_chunks_keep_line_breaks() -> None:
     """空行の無い長い手順（子 chunk の上限を超える 1 要素）でも、chunk の本文の改行が残る。"""
+    assert extraction is not None
     extraction = _text_result(PROCEDURE.encode(), parser_profile="local_text_structure").extraction
     assert max(len(element.text) for element in extraction.elements) > 1000
     chunks = build_parent_child_chunks(extraction, params=SmallToBigParams())
