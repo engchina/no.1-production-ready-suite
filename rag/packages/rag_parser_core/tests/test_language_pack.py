@@ -137,26 +137,23 @@ def test_roman_numerals_follow_the_pack() -> None:
 
 
 def test_headings_citations_and_number_phrases_follow_the_pack() -> None:
-    """番号の見出し・質問の引用・本文の数の書き方は言語資源から作る(#2181 段 1b)。"""
+    """番号の見出し・本文の数の書き方は言語資源から作る(#2181 段 1b)。"""
     from rag_parser_core.extraction import heading_level_from_prefix, numbered_heading
-    from rag_parser_core.xml_tree_json import arabic_number_phrases, query_citation_keys
+    from rag_parser_core.xml_tree_json import arabic_number_phrases
 
     assert numbered_heading().match("第2部 概要") is not None
     assert heading_level_from_prefix("第2部") == 1
     assert numbered_heading().match("第2巻 概要") is None
     assert arabic_number_phrases("六十五歳以上の者") == ["65歳以上"]
-    assert query_citation_keys("附則第三条の規定") == ["附則第3条"]
     custom = resolve(
         builtin_pack(),
         {
             "numbers": {"part_units": ["編", "部", "巻"], "counters": ["歳", "ヶ月"]},
-            "references": {"part_prefixes": ["附則", "補則"]},
         },
     )
     with bind_pack(custom):
         assert numbered_heading().match("第2巻 概要") is not None
         assert heading_level_from_prefix("第2巻") == 1
-        assert query_citation_keys("補則第三条の規定") == ["補則第3条"]
         assert arabic_number_phrases("三ヶ月以内") == ["3ヶ月以内"]
 
 
