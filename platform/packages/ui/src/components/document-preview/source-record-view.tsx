@@ -1,5 +1,6 @@
 import { INFORMATION_TABLE_FIXED_VISIBLE_ROWS } from "../../lib/list-density";
 import { DataTable, type DataTableColumn } from "../data/data-table";
+import { RunFactList } from "../data/run-detail";
 import { excerptPlainText } from "../../lib/excerpt-text";
 import { resolveContentLang } from "../../lib/content-lang";
 import { CodepointHighlight } from "./codepoint-highlight";
@@ -27,7 +28,16 @@ export function SourceRecordView({record,cited,highlight,fallback}:{record:Sourc
     {record.parts.length ? record.parts.map((part,index)=>{
       if(part.kind === "text")return <p key={index} lang={resolveContentLang(undefined,part.text)} className="whitespace-pre-wrap break-words text-sm leading-relaxed">{mark(part.text)}</p>;
       type Row=typeof part.rows[number];
-      const columns:DataTableColumn<Row>[]=[{key:"row",header:"行",rowHeader:true,render:row=>row.label},...part.columns.map((label,column)=>({key:`column-${column}`,header:label,render:(row:Row)=><span lang={resolveContentLang(undefined,row.cells[column] ?? "")} className="whitespace-pre-wrap break-words">{mark(row.cells[column] ?? "")}</span>}))];
+      // 長い値（改行・40 文字超）の列は狭く折り返さない（#5415）。
+      const longColumns=new Set(part.columns.map((_,column)=>column).filter(column=>part.rows.some(row=>{const value=row.cells[column] ?? "";return value.includes("\n") || Array.from(value).length>40;})));
+      if(cited) {
+        // 引用した記録は「項目 → 値」で縦に並べ、記録の枠ごと強調する（横のスクロールを出さない。#5415）。
+        return <div key={index} className="space-y-3">{part.rows.map(row=><section key={row.label} aria-label={`行 ${row.label}`} data-source-record-cited="" className={highlight ? "space-y-2 rounded-md border-l-4 border-accent-emphasis bg-accent-subtle p-3" : "space-y-2"}>
+          <p className="text-xs font-medium text-fg-muted">行 {row.label}</p>
+          <RunFactList facts={part.columns.map((label,column)=>{const value=row.cells[column] ?? "";return {id:`column-${column}`,label,wide:longColumns.has(column),value:value ? <span lang={resolveContentLang(undefined,value)} className="whitespace-pre-wrap">{value}</span> : <span className="text-fg-muted">—</span>};})}/>
+        </section>)}</div>;
+      }
+      const columns:DataTableColumn<Row>[]=[{key:"row",header:"行",rowHeader:true,className:"align-top",render:row=>row.label},...part.columns.map((label,column)=>({key:`column-${column}`,header:label,className:longColumns.has(column) ? "align-top min-w-[20rem]" : "align-top",render:(row:Row)=><span lang={resolveContentLang(undefined,row.cells[column] ?? "")} className="whitespace-pre-wrap break-words">{mark(row.cells[column] ?? "")}</span>}))];
       return <DataTable key={index} columns={columns} rows={part.rows} getRowKey={(_,row)=>row} dense stickyHeader visibleRows={INFORMATION_TABLE_FIXED_VISIBLE_ROWS} scrollAriaLabel="原文の表" ariaLabel="原文の表"/>;
     }) : <p lang={resolveContentLang(undefined,fallback)} className="whitespace-pre-wrap break-words text-sm leading-relaxed">{mark(excerptPlainText(fallback))}</p>}
   </div>;

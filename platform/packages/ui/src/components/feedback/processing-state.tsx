@@ -321,6 +321,11 @@ export interface TimedLoadingStateProps {
   testId?: string;
   activityIcon?: ProcessingActivityIcon;
   labels?: Partial<ProcessingLabels>;
+  /**
+   * 遅延の案内の行（既定 true）。内容を出したまま一部を読み直す短い表示（引用の前後など）は false にし、予約の空行を
+   * 置かず 1 行の高さにする（経過時間は出す。#5415）。
+   */
+  showSlowMessage?: boolean;
 }
 
 /**
@@ -340,6 +345,7 @@ export function TimedLoadingState({
   testId,
   activityIcon,
   labels,
+  showSlowMessage = true,
 }: TimedLoadingStateProps) {
   const effectiveActivityIcon = activityIcon ?? (placement === "result" ? "none" : "spinner");
 
@@ -361,6 +367,7 @@ export function TimedLoadingState({
         testId={testId ? `${testId}-processing` : undefined}
         activityIcon={effectiveActivityIcon}
         labels={labels}
+        showSlowMessage={showSlowMessage}
         surface="plain"
       />
       {children}

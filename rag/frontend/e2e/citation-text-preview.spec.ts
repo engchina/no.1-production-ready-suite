@@ -317,8 +317,16 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
     const reader=page.getByTestId("evidence-reader-content");
     if(structured) {
       await expect(reader.locator("[data-source-record]")).not.toHaveCount(0);
-      await expect(reader.locator("mark").first()).toBeVisible();
-      await expect(reader.getByRole("table").last()).toBeVisible();
+      // 引用した記録の表は項目と値の縦の一覧にして枠ごと強調し（値ごとの mark は付けない）、前後の記録は表のまま
+      // （#5415）。Word の段落の文は従来どおり mark で強調する。
+      const citedRecord = reader.locator("[data-source-record-cited]");
+      await expect(citedRecord.first()).toBeVisible();
+      await expect(citedRecord.first().locator("dt").first()).toBeVisible();
+      await expect(citedRecord.locator("mark")).toHaveCount(0);
+      await expect(citedRecord.getByRole("table")).toHaveCount(0);
+      if (extension === "docx") await expect(reader.locator("mark").first()).toBeVisible();
+      if (extension === "csv") await expect(reader.getByRole("table").last()).toBeVisible();
+      await expectNoPageOverflow(page);
     } else if (extension === "unresolved.md") await expect(reader.locator("mark")).toHaveCount(0);
     else await expect(reader.locator("mark")).toHaveText(["見出し","合成😀の本文です。"]);
     await expect(reader.locator('[data-reader-cited="false"] mark')).toHaveCount(0);
@@ -341,6 +349,8 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
         await root.getByRole("button",{name:direction,exact:true}).click();
         const loading = root.getByTestId("evidence-reader-loading");
         await expect(loading).toBeVisible();
+        // 本文を出したままの読み直しは 1 行の高さ（遅延の案内の予約の行を置かない。#5415）。
+        await expect(loading.locator("[data-processing-slow]")).toHaveCount(0);
         const afterButton = root.getByRole("button",{name:"後文を読む",exact:true});
         const afterBox = (await afterButton.boundingBox())!;
         expect(afterBox.y + afterBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);

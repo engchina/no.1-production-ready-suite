@@ -55,6 +55,12 @@ describe("ProcessingIndicator", () => {
     expect(html).not.toContain('aria-busy="true"');
   });
 
+  it("TimedLoadingState の showSlowMessage={false} は遅延の案内の予約の行を置かない（#5415）", () => {
+    const markup = renderToStaticMarkup(<TimedLoadingState label="x" testId="t" showSlowMessage={false} />);
+    expect(markup).not.toContain("data-processing-slow");
+    expect(renderToStaticMarkup(<TimedLoadingState label="x" testId="t" />)).toContain('data-processing-slow="false"');
+  });
+
   it("遅延の案内の行は最初から高さを予約し、文言は遅延してから中身に出す（#902）", () => {
     const before = renderToStaticMarkup(<ProcessingIndicator active label="x" testId="p" />);
     expect(before).toContain('data-processing-slow="false"');
