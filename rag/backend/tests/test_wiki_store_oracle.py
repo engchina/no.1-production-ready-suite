@@ -76,7 +76,9 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     filters = {"knowledge_base_id": first.id}
     other = {"knowledge_base_id": second.id}
     assert not await store.document_ids(filters)
-    assert (await store.status_counts(filters)) == {"NOT_BUILT": 1}
+    statuses = await store.document_statuses(filters)
+    assert [(row["document_id"], row["status"]) for row in statuses] == [(did, "NOT_BUILT")]
+    assert statuses[0]["file_name"] and statuses[0]["failure_code"] is None
     await store.set_enabled(first.id, True)
     await store.set_enabled(second.id, True)
     assert {kb for kb, _ in await store.enabled_knowledge_bases()} >= {first.id, second.id}
@@ -112,13 +114,14 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
         await store.finish(source, lease)
     # 進んだ時間切れは自動で続くので待機に数え、再試行の要る失敗にしない（#5430）。
     await store.finish(source, lease, failure_code="interrupted")
-    assert (await store.status_counts(filters)) == {"QUEUED": 1}
+    assert [row["status"] for row in await store.document_statuses(filters)] == ["QUEUED"]
+    assert (await store.document_statuses(filters))[0]["failure_code"] is None
     assert await store.enqueue(source)
     lease = await store.claim(source, lease_seconds=300)
     assert lease
     await store.checkpoint(source, lease, pages, vectors=[_EMBEDDING] * len(pages))
     await store.finish(source, lease)
-    assert (await store.status_counts(filters))["READY"] == 1
+    assert [row["status"] for row in await store.document_statuses(filters)] == ["READY"]
     assert len(await store.saved_pages(source)) == len(pages)
     assert len(await store.read_sources(pages, filters)) == len(pages)
     # 検索の経路（#4941）: 目録・案内・ベクトルの上位・全文検索の順位は、公開済み・現在の構築条件の
@@ -147,7 +150,26 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert not await store.document_ids(filters)
     assert not await store.catalog(filters, compiler)
     assert len(await store.read_sources(pages, other)) == len(pages)
-    assert (await store.status_counts(filters))["READY"] == 1
+    assert [row["status"] for row in await store.document_statuses(filters)] == ["READY"]
+
+    # 再試行の要る失敗は理由つきで返し、再試行で待機へ戻す（#5466）。
+    def fail(connection: OracleConnectionProtocol) -> None:
+        _execute(
+            connection,
+            """UPDATE rag_wiki_documents SET status='FAILED',failure_code='timeout'
+            WHERE document_id=:id""",
+            {"id": did},
+        )
+
+    await oracle._run_transaction(fail)
+    failed = await store.document_statuses(filters)
+    assert [(row["status"], row["failure_code"]) for row in failed] == [("FAILED", "timeout")]
+    assert failed[0]["updated_at"] is not None
+    await store.requeue_failed(filters)
+    assert [row["status"] for row in await store.document_statuses(filters)] == ["QUEUED"]
+    lease = await store.claim(source, lease_seconds=300)
+    assert lease
+    await store.finish(source, lease)
     await oracle.remove_document_from_knowledge_base(second.id, did)
     assert not await store.read_sources(pages, other)
     await store.set_enabled(first.id, True)

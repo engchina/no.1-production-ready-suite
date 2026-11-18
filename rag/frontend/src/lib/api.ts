@@ -1223,10 +1223,22 @@ export interface StructureBuildItem { document_id: string; name: string; status:
 export interface StructureBuildPlan { items: StructureBuildItem[]; total: number; offset: number; limit: number; counts: Record<string, number> }
 export interface StructureBuildJob extends StructureBuildPlan { job_id: string; status: string; partial_visibility?: boolean; started_at: string; finished_at: string | null }
 
-/** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態の件数（#4941）。 */
+/** 所属文書ごとの Wiki の構築状態（#5466）。`failure_code` は再試行の要る失敗だけに付く。 */
+export interface KnowledgeBaseWikiDocument {
+  document_id: string;
+  file_name: string;
+  status: string;
+  failure_code?: string | null;
+  updated_at?: string | null;
+}
+
+/** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）。 */
 export interface KnowledgeBaseWikiData {
   enabled: boolean;
   counts: Record<string, number>;
+  documents?: KnowledgeBaseWikiDocument[];
+  /** 構築が進まない理由。`actor_unavailable` は自動構築を有効にした利用者が権限を失った。 */
+  blocked_reason?: "actor_unavailable" | null;
 }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {

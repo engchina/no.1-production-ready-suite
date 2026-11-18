@@ -104,12 +104,12 @@ class WikiJobs:
         self.reconciliations: set[asyncio.Task[None]] = set()
         self.capacity: asyncio.Semaphore | None = None
 
-    def notify(self, kb_id: str | None = None, *, retry: bool = False) -> None:
-        task = asyncio.create_task(self.reconcile(kb_id, retry=retry))
+    def notify(self, kb_id: str | None = None) -> None:
+        task = asyncio.create_task(self.reconcile(kb_id))
         self.reconciliations.add(task)
         task.add_done_callback(self.reconciliations.discard)
 
-    async def reconcile(self, kb_id: str | None = None, *, retry: bool = False) -> None:
+    async def reconcile(self, kb_id: str | None = None) -> None:
         if self.default_store and not get_settings().oracle_dsn.strip():
             return
         try:
@@ -137,7 +137,7 @@ class WikiJobs:
                     ):
                         if did in self.tasks and not self.tasks[did].done():
                             continue
-                        task = asyncio.create_task(self.build(did, owner, retry=retry))
+                        task = asyncio.create_task(self.build(did, owner))
                         self.tasks[did] = task
 
                         def finished(completed: asyncio.Task[None], did: str = did) -> None:
@@ -153,7 +153,7 @@ class WikiJobs:
             # schema 未更新や接続失敗も、通常の検索・起動を止めない。
             logger.warning("wiki_reconcile_failed", extra={"error_type": type(error).__name__})
 
-    async def build(self, document_id: str, owner: str | None, *, retry: bool = False) -> None:
+    async def build(self, document_id: str, owner: str | None) -> None:
         settings = get_settings()
         if self.capacity is None:
             self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
@@ -178,10 +178,10 @@ class WikiJobs:
                         state["status"] == "RUNNING" and state["leased"]
                     ):
                         return
+                    # 失敗は再試行の API（`requeue_failed`）が待機へ戻すまで作り直さない。
                     if (
                         state["status"] == "FAILED"
                         and state.get("failure_code") != "interrupted"
-                        and not retry
                         and not (
                             state.get("failure_code") == "authorization_changed"
                             and state.get("owner_user_uuid") != owner
