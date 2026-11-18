@@ -58,6 +58,14 @@ class VisionTextRange:
     source: VisionTextSource
 
 
+def _collapsed_space(run: str) -> str:
+    """空白の連なりを圧縮する。改行を含むなら改行（空行は 2 つ）と次の行の字下げを残す（#5419）。"""
+    lines = re.split(r"\r\n|\r|\n", run)
+    if len(lines) == 1:
+        return " "
+    return ("\n" if len(lines) == 2 else "\n\n") + lines[-1]
+
+
 @dataclass(frozen=True)
 class ProjectedVisionText:
     text: str
@@ -101,9 +109,15 @@ class ProjectedVisionText:
         return self.slice(start, end)
 
     def whitespace_normalized(self) -> ProjectedVisionText:
-        """既存の空白圧縮と同じ本文を作り、原文を検索せず各出力文字の由来を写す。"""
+        """空白を圧縮した本文を作り、原文を検索せず各出力文字の由来を写す。
+
+        chunk の本文（引用・根拠の表示）なので、改行・空行・行頭の字下げは残す（#5419）。
+        行の中の空白の連なりは空白 1 つ、改行を含む連なりは改行（空行なら 2 つ）と字下げにする。
+        """
         if not self.ranges:
-            return ProjectedVisionText(re.sub(r"\s+", " ", self.text).strip())
+            return ProjectedVisionText(
+                re.sub(r"\s+", lambda match: _collapsed_space(match.group()), self.text).strip()
+            )
         owners: list[VisionTextSource | None] = [None] * len(self.text)
         for item in self.ranges:
             owners[item.start : item.end] = [item.source] * (item.end - item.start)
@@ -113,12 +127,16 @@ class ProjectedVisionText:
             if match.group().isspace():
                 if match.start() == 0 or match.end() == len(self.text):
                     continue
-                output.append(" ")
+                collapsed = _collapsed_space(match.group())
+                output.extend(collapsed)
                 source = owners[match.start()]
-                output_owners.append(
-                    source
-                    if all(owner == source for owner in owners[match.start() : match.end()])
-                    else None
+                output_owners.extend(
+                    [
+                        source
+                        if all(owner == source for owner in owners[match.start() : match.end()])
+                        else None
+                    ]
+                    * len(collapsed)
                 )
             else:
                 output.extend(match.group())

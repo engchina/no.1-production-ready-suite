@@ -212,7 +212,10 @@ def test_min_chars_absorbs_small_chunks() -> None:
     """min_chars 未満の微小 chunk は同一 group 内の隣接 chunk へ吸収する。"""
     # 節の末尾の短い文だけが残る本文(収まらなかった文は次の chunk の先頭にする。#3380)。
     extraction = StructuredExtraction(
-        raw_text="# 概要\n本文の長い一文目の文章です。短い。本文の長い三文目の文章です。短い。"
+        # 文の間は元のまま（空白を足さない。#5419）。末尾の短い文が単独で残る長さにする。
+        raw_text=(
+            "# 概要\n本文の長い一文目の文章です。短い。本文のとても長い三文目の文章です。短い。"
+        )
     )
     without_absorb = chunk_extraction_with_strategy(
         extraction,

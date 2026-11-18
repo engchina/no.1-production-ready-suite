@@ -304,7 +304,7 @@ def _chunk_sectioned_text(
         normalized = (
             segment_projection.text
             if segment_projection is not None
-            else re.sub(r"\s+", " ", segment.text).strip()
+            else ProjectedVisionText(segment.text).whitespace_normalized().text
         )
         if not normalized:
             continue
@@ -1189,6 +1189,40 @@ def _extraction_vision_projection(extraction: StructuredExtraction) -> Projected
     return value
 
 
+def _packed_sentence_ranges(
+    text: str, sentences: Sequence[str], chunk_size: int
+) -> list[tuple[int, int]]:
+    """文を本文の中の位置で ``chunk_size`` まで詰め、chunk ごとの本文の範囲を返す。
+
+    chunk の本文は本文の連続した範囲なので、文の間の改行・空行・空白は元のまま残る（#5419）。
+    収まらない 1 文だけを文字数で切る。
+    """
+    ranges: list[tuple[int, int]] = []
+    buffer: tuple[int, int] | None = None
+    position = 0
+    for sentence in sentences:
+        start = text.find(sentence, position)
+        if start < 0:
+            raise ValueError("文の位置が本文にありません。")
+        end = position = start + len(sentence)
+        if buffer and end - buffer[0] <= chunk_size:
+            buffer = (buffer[0], end)
+            continue
+        if buffer:
+            ranges.append(buffer)
+            buffer = None
+        if end - start <= chunk_size:
+            # 収まらなかった文は次の chunk の先頭にする(文だけの小さな chunk にしない。#3380)。
+            buffer = (start, end)
+            continue
+        ranges.extend(
+            (offset, min(end, offset + chunk_size)) for offset in range(start, end, chunk_size)
+        )
+    if buffer:
+        ranges.append(buffer)
+    return ranges
+
+
 def _chunk_projected_sentences(
     value: ProjectedVisionText,
     *,
@@ -1199,54 +1233,19 @@ def _chunk_projected_sentences(
     start_index: int,
     units: Sequence[ProjectedVisionText] | None = None,
 ) -> list[Chunk]:
-    if units is not None:
-        sentences = list(units)
-    else:
-        sentences = []
-        previous = 0
-        for match in sentence_boundary().finditer(value.text):
-            sentences.append(value.slice(previous, match.end()).stripped())
-            previous = match.end()
-        sentences.append(value.slice(previous, len(value.text)).stripped())
-        sentences = [part for part in sentences if part.text]
+    sentences = [unit.text for unit in units] if units is not None else _split_sentences(value.text)
     chunks = []
-    cursor = 0
-    buffer = ProjectedVisionText("")
-    buffer_start = 0
-
-    def append(part: ProjectedVisionText, start: int) -> None:
+    for start, end in _packed_sentence_ranges(value.text, sentences, chunk_size):
+        part = value.slice(start, end)
         chunks.append(
             Chunk(
                 text=part.text,
                 index=start_index + len(chunks),
                 start_offset=base_offset + start,
-                end_offset=base_offset + start + len(part.text),
+                end_offset=base_offset + end,
                 metadata={**metadata, **chunk_projection_metadata(part)},
             )
         )
-
-    for sentence in sentences:
-        if not buffer.text:
-            buffer_start = cursor
-        projected = ProjectedVisionText.join([buffer, sentence], " ").stripped()
-        if len(projected.text) <= chunk_size:
-            buffer = projected
-            cursor += len(sentence.text) + 1
-            continue
-        if buffer.text:
-            append(buffer, buffer_start)
-        if len(sentence.text) <= chunk_size:
-            buffer = sentence
-            buffer_start = cursor
-            cursor += len(sentence.text) + 1
-            continue
-        for start in range(0, len(sentence.text), chunk_size):
-            part = sentence.slice(start, min(start + chunk_size, len(sentence.text)))
-            append(part, cursor)
-            cursor += len(part.text)
-        buffer = ProjectedVisionText("")
-    if buffer.text:
-        append(buffer, buffer_start)
     return _apply_overlap(chunks, overlap) if overlap and len(chunks) > 1 else chunks
 
 
@@ -1288,65 +1287,21 @@ def _chunk_normalized_text(
         [
             unit
             for start, end in separator_unit_spans(raw_text, separators, chunk_size)
-            if (unit := re.sub(r"\s+", " ", raw_text[start:end]).strip())
+            if (unit := ProjectedVisionText(raw_text[start:end]).whitespace_normalized().text)  # noqa: E501
         ]
         if separators and raw_text is not None
         else _split_sentences(text)
     )
-    chunks: list[Chunk] = []
-    cursor = 0
-    buffer = ""
-    buffer_start = 0
-
-    for sentence in sentences:
-        if not buffer:
-            buffer_start = cursor
-        projected = f"{buffer} {sentence}".strip()
-        if len(projected) <= chunk_size:
-            buffer = projected
-            cursor += len(sentence) + 1
-            continue
-
-        if buffer:
-            chunks.append(
-                Chunk(
-                    text=buffer,
-                    index=start_index + len(chunks),
-                    start_offset=base_offset + buffer_start,
-                    end_offset=base_offset + buffer_start + len(buffer),
-                    metadata=dict(metadata),
-                )
-            )
-        if len(sentence) <= chunk_size:
-            # 収まらなかった文は次の chunk の先頭にする(文だけの小さな chunk にしない。#3380)。
-            buffer = sentence
-            buffer_start = cursor
-            cursor += len(sentence) + 1
-            continue
-        for part in _split_long_sentence(sentence, chunk_size, 0):
-            chunks.append(
-                Chunk(
-                    text=part,
-                    index=start_index + len(chunks),
-                    start_offset=base_offset + cursor,
-                    end_offset=base_offset + cursor + len(part),
-                    metadata=dict(metadata),
-                )
-            )
-            cursor += len(part)
-        buffer = ""
-
-    if buffer:
-        chunks.append(
-            Chunk(
-                text=buffer,
-                index=start_index + len(chunks),
-                start_offset=base_offset + buffer_start,
-                end_offset=base_offset + buffer_start + len(buffer),
-                metadata=dict(metadata),
-            )
+    chunks = [
+        Chunk(
+            text=text[start:end],
+            index=start_index + index,
+            start_offset=base_offset + start,
+            end_offset=base_offset + end,
+            metadata=dict(metadata),
         )
-
+        for index, (start, end) in enumerate(_packed_sentence_ranges(text, sentences, chunk_size))
+    ]
     return _apply_overlap(chunks, overlap) if overlap and len(chunks) > 1 else chunks
 
 

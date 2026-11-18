@@ -1,6 +1,7 @@
 """原文からの再帰分割で番号参照と出所を保持する合成回帰。"""
 
 import pytest
+from rag_parser_core.vision_text_map import ProjectedVisionText
 
 from app.rag.chunking import chunk_extraction_with_strategy
 from app.rag.cross_references import (
@@ -37,7 +38,9 @@ def test_recursive_raw_headings_keep_numbers_and_resolve(heading: str, reference
     assert target.metadata["section_title"] == heading
     assert target.metadata["section_level"] == (2 if heading.startswith("5.2") else 1)
     for chunk in chunks:
-        assert chunk.text == " ".join(text[chunk.start_offset : chunk.end_offset].split())
+        # chunk の本文は原本の範囲の改行を残して空白だけを圧縮したもの（#5419）。
+        source_range = text[chunk.start_offset : chunk.end_offset]
+        assert chunk.text == ProjectedVisionText(source_range).whitespace_normalized().text
     annotate_cross_references(chunks)
     source = next(chunk for chunk in chunks if "詳細は" in chunk.text)
     (resolved,) = reference_targets(source.metadata)
