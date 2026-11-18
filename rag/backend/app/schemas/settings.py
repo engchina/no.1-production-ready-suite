@@ -670,6 +670,8 @@ class ChunkingSettingsData(BaseModel):
     chunk_parent_max_children: int
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
+    # 製品の既定(Settings の項目の既定値)。画面の「既定に戻す」がフォームに入れる値(保存はしない)。
+    builtin: "ChunkingSettingsUpdate"
 
 
 class ChunkingSettingsUpdate(BaseModel):
@@ -723,6 +725,9 @@ class ChunkingSettingsUpdate(BaseModel):
         ):
             raise ValueError("min_chars は chunk_size より小さくしてください。")
         return self
+
+
+ChunkingSettingsData.model_rebuild()
 
 
 class AnswerRecordSettingsData(BaseModel):
