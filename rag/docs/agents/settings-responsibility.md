@@ -28,6 +28,7 @@ KB は **どの文書を検索対象にするか（membership）だけ**を持�
 - 文書 membership（N:N。1 文書が複数 KB に所属可、1 KB が複数文書を束ねる）。
 - 名称 / 説明 / スコープ。
 - 文書構造索引の構築だけは、KBごとの未指定/ON/OFFでレシピ・全体設定を上書きできる。未指定は従来のレシピ/全体設定に従う。解析・分割・embedding・検索拡張は上書きしない。保存だけでは既存成果を変更せず、KB詳細の補建操作で現在有効なChunkの構造情報から構築する。構築の進捗と版をOracleに保存し、他KBの図は変更しない。OFFでも既存図を削除しない。
+- Wiki の自動構築（`wiki_build_enabled`。既定 OFF。#4941）は KB ごとに指定する。ON の KB の所属文書だけを、解析済みの原文から背景で増分構築する（文書レシピ・分割・検索の設定は変えない）。OFF でも保存済みの案内は消さず、同じ文書を含む別の ON の KB では再利用する。構築を指定した利用者の現在の権限で原文を読み、原文の保存版・所属・構築の条件が変わった出力は公開しない。検索での使用は KB の層では持たない。詳細は [wiki-navigation.md](../wiki-navigation.md)。
 - 例外として、項目抽出の項目の定義（何を取り出すか）は KB ごとに持てる（無ければ全体の既定、複数 KB に属する文書は和集合。docs/knowledge-base-management.md の 8.4.1a）。項目抽出を行うかどうかは文書レシピ / global が決める。
 
 文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない（再プラン / materialize / GC を起こさない）。KB UI から preprocess / parser / chunking・検索方法・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。

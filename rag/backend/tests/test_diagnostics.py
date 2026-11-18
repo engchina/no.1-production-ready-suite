@@ -121,6 +121,11 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_navigation_summary_",
     # 取込の後段の文書全体の要約（#4793）。結果は文書の要約の行と要約の chunk に残る。
     "rag_document_summary_",
+    # Wiki の背景構築（#4941）。成果は構築の入力の指紋と Wiki の保存の行に残る。
+    "rag_wiki_build_",
+    "rag_wiki_lease_",
+    "rag_wiki_poll_",
+    "rag_wiki_embedding_",
     "rag_field_extraction_",
     "rag_auto_",
     # 運用・実行の並行数・待ち時間・再試行・cache。結果の定義を変えない。

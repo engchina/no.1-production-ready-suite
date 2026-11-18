@@ -17985,6 +17985,7 @@ CREATE TABLE {knowledge_base_table} (
     status                VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
     default_search_mode   VARCHAR2(16) DEFAULT 'hybrid' NOT NULL,
     retrieval_config      JSON,
+    wiki_build_actor_uuid VARCHAR2(64),
     extraction_fields     JSON,
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,

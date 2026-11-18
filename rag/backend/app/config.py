@@ -1283,6 +1283,47 @@ class Settings(
             "超えたら要約なしとして記録し、取込は成功のままにする。"
         ),
     )
+    # Wiki の背景構築（#4941）。KB ごとの構築の指定（既定 OFF）で有効な文書だけを、
+    # OCI Enterprise AI の案内と OCI Generative AI の埋め込みにして Oracle に保存する。
+    rag_wiki_build_input_chars: int = Field(
+        default=120000,
+        ge=2000,
+        le=1000000,
+        description="Wiki の構築の 1 回の入力の原文の文字数の上限。原文単位は途中で切らない。",
+    )
+    rag_wiki_build_batch_units: int = Field(
+        default=24,
+        ge=1,
+        le=64,
+        description="Wiki の構築の 1 回の出力の対象単位数。途切れた出力は対象を二分して取り直す。",
+    )
+    rag_wiki_build_timeout_seconds: float = Field(
+        default=600.0,
+        ge=30.0,
+        le=7200.0,
+        description="Wiki の構築の 1 文書あたりの時間の上限（生成・埋め込み・保存を含む秒数）。",
+    )
+    rag_wiki_build_workers: int = Field(
+        default=2, ge=1, le=16, description="Wiki の構築を同時に行う文書数の上限。"
+    )
+    rag_wiki_lease_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=14400,
+        description="Wiki の構築の lease の秒数。時間の上限 + 60 秒より短い値は使わない。",
+    )
+    rag_wiki_poll_seconds: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=3600.0,
+        description="Wiki の構築の対象を照合する間隔（秒）。通知の漏れと再起動から回復する。",
+    )
+    rag_wiki_embedding_source_chars: int = Field(
+        default=4096,
+        ge=100,
+        le=12000,
+        description="Wiki の埋め込みの入力に添える原文の文字数。引用に使う原文は切らない。",
+    )
     # 見出しの階層の推定（#2277）。しおりの深さを当てられず、番号の体系でも多くの見出しの深さを
     # 決められない文書（Docling の結果）だけ、見出しの文字列を OCI Enterprise AI に渡して階層を
     # 受け取る。

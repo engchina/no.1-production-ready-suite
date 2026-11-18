@@ -1,5 +1,6 @@
 "use client";
 import { KnowledgeBaseStructureIndex } from "./KnowledgeBaseStructureIndex";
+import { KnowledgeBaseWiki } from "./KnowledgeBaseWiki";
 
 import { FilePlus2, Files, Unlink } from "lucide-react";
 import { type RefObject, useRef, useState } from "react";
@@ -126,6 +127,9 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
       {/* 項目の定義の後に文書の構造を確認する。展開時のみ subgraph を取得。 */}
       <KnowledgeBaseStructureIndex key={kb.id} kb={kb} editable={isActive} />
       <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
+
+      {/* Wiki の背景構築の指定（#4941）。 */}
+      <KnowledgeBaseWiki key={`wiki-${kb.id}`} id={kb.id} editable={isActive} />
 
       {/* このナレッジ単体で検索の手応えを確認する(検索・回答プロファイル不要)。構築の設定(関係情報・抽出する項目)を
           見た後に、最後に検索で確かめる流れにするため、いちばん下に置く(#616)。 */}

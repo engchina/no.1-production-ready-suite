@@ -31,6 +31,7 @@ from app.api.routes import (
     source_previews,
     support_guide_process_import,
     support_guides,
+    wiki,
 )
 from app.rag.prompt_runtime import published_prompt_dependency
 from app.rag.published_language_runtime import published_language_dependency
@@ -63,6 +64,7 @@ api_router.include_router(
     prefix="/search-answer-profiles",
     tags=["search-answer-profiles"],
 )
+api_router.include_router(wiki.router, prefix="/knowledge-bases", tags=["knowledge-bases"])
 api_router.include_router(
     search_answer_profile_knowledge.router,
     dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],
