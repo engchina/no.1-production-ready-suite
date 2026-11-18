@@ -161,7 +161,9 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
         const blockKey = (block: ReaderBlock) => `${block.id}:${block.offset}`;
         const currentBlock = state.notice ? group.items.find(block => state.target === blockKey(block)) : undefined;
         // 区画の先頭が章節の見出しそのものなら、太字の章節名を重ねずにその本文を太字にする（#5428）。
-        const leadIsHeading = group.items[0].kind === "title" && group.items[0].text.trim() === group.heading?.at(-1)?.trim();
+        // 章節名は空白を詰めて保存するので、空白（全角を含む）を詰めて比べる。
+        const squash = (value: string | undefined) => value?.replace(/\s+/g, " ").trim();
+        const leadIsHeading = group.items[0].kind === "title" && squash(group.items[0].text) === squash(group.heading?.at(-1));
         return <section key={`group:${blockKey(group.items[0])}`} data-reader-group="" className="space-y-1">
           <p className="text-xs text-fg-muted">{currentBlock ? `${labels.current} · ` : ""}{group.cited ? purpose === "selection" ? "選択した原文の記録" : labels.cited : labels.context}</p>
           {group.heading?.length && !leadIsHeading ? <p className="text-sm font-semibold">{group.heading.join(" › ")}</p> : null}

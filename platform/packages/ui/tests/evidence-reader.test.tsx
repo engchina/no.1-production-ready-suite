@@ -227,10 +227,11 @@ describe("EvidenceReader の区画（#5428）", () => {
     const window: EvidenceReadingWindow = {
       ...windowData,
       blocks: [
-        { id: "h", text: "合成の章", offset: 0, highlights: [], cited: false, kind: "title", heading: ["合成の章"] },
-        { id: "l1", text: "合成の項目A", offset: 0, highlights: [], cited: false, kind: "list", heading: ["合成の章"] },
-        { id: "l2", text: "合成の項目B", offset: 0, highlights: [], cited: false, kind: "list", heading: ["合成の章"] },
-        { id: "c", text: "合成の引用", offset: 0, highlights: [[0, 5]], cited: true, heading: ["合成の章"] },
+        // 本文の全角の空白は、章節名（空白を詰めたもの）と同じとみなす。
+        { id: "h", text: "合成の　章", offset: 0, highlights: [], cited: false, kind: "title", heading: ["合成の 章"] },
+        { id: "l1", text: "合成の項目A", offset: 0, highlights: [], cited: false, kind: "list", heading: ["合成の 章"] },
+        { id: "l2", text: "合成の項目B", offset: 0, highlights: [], cited: false, kind: "list", heading: ["合成の 章"] },
+        { id: "c", text: "合成の引用", offset: 0, highlights: [[0, 5]], cited: true, heading: ["合成の 章"] },
       ],
     };
     await act(async () => { root.render(<EvidenceReader readingKey="d1:c1" loadWindow={vi.fn().mockResolvedValue(window)} />); await settle(); });
@@ -239,11 +240,11 @@ describe("EvidenceReader の区画（#5428）", () => {
     expect(groups[0].querySelectorAll("[data-reader-block]")).toHaveLength(3);
     expect(groups[0].textContent?.match(/追加の参考文脈/g)).toHaveLength(1);
     // 先頭が章節の見出しそのものなら、太字の章節名を重ねずにその本文を太字にする。
-    expect(groups[0].textContent?.match(/合成の章/g)).toHaveLength(1);
+    expect(groups[0].textContent?.match(/合成の.章/g)).toHaveLength(1);
     expect(groups[0].querySelector("[data-reader-block='h:0'] p")?.className).toContain("font-semibold");
     // 引用の元は別の区画で、章節名を出す。
     expect(groups[1].textContent).toContain("引用の元となる段落");
-    expect(groups[1].querySelector("p.font-semibold")?.textContent).toBe("合成の章");
+    expect(groups[1].querySelector("p.font-semibold")?.textContent).toBe("合成の 章");
     expect(groups[1].querySelector("mark")?.textContent).toBe("合成の引用");
     await act(async () => root.unmount()); host.remove();
   });
