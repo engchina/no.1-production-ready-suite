@@ -82,9 +82,14 @@ def source_map_artifact(
     scheme: str,
     elements: Mapping[str, Sequence[SourceRange]],
 ) -> dict[str, Any] | None:
-    """``parser_artifacts`` に置く形にする。要素が 1 つも無ければ置かない。"""
+    """``parser_artifacts`` に置く形にする。要素が 1 つも無ければ置かない。
+
+    範囲ごとに原本の行（1 始まりの閉区間。``line_start`` / ``line_end``）も記録する。頁の無い原本の
+    根拠の場所を行で示すのに使う（#5450）。
+    """
     if not elements:
         return None
+    lines = LineIndex(text)
     return {
         "version": SOURCE_MAP_VERSION,
         "coordinate_unit": "unicode_codepoint",
@@ -92,7 +97,14 @@ def source_map_artifact(
         "source_length": len(text),
         "scheme": scheme,
         "elements": {
-            element_id: [item.to_dict() for item in ranges]
+            element_id: [
+                {
+                    **item.to_dict(),
+                    "line_start": lines.line_of(item.source_start) + 1,
+                    "line_end": lines.line_of(max(item.source_start, item.source_end - 1)) + 1,
+                }
+                for item in ranges
+            ]
             for element_id, ranges in elements.items()
         },
     }

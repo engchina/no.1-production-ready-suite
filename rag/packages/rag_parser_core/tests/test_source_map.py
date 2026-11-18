@@ -219,9 +219,42 @@ def test_artifact_records_version_and_source_digest() -> None:
         "sha256": hashlib.sha256(data).hexdigest(),
         "source_length": 2,
         "scheme": "text_char",
-        "elements": {"e": [{"source_start": 0, "source_end": 2, "locator": "char=0,2"}]},
+        "elements": {
+            "e": [
+                {
+                    "source_start": 0,
+                    "source_end": 2,
+                    "locator": "char=0,2",
+                    "line_start": 1,
+                    "line_end": 1,
+                }
+            ]
+        },
     }
     assert source_map_artifact(data, text, "text_char", {}) is None
+
+
+def test_artifact_records_one_based_source_lines_of_each_range() -> None:
+    """範囲ごとの原本の行（1 始まりの閉区間。末尾の改行は次の行に数えない。#5450）。"""
+    text = "見出し\n\n一行目\n二行目\n\n最後"
+    data = text.encode()
+    second = text.index("一行目")
+    artifact = source_map_artifact(
+        data,
+        text,
+        "text_char",
+        {
+            "a": [SourceRange(0, 4, "a")],
+            "b": [SourceRange(second, text.index("\n\n最後") + 1, "b")],
+            "c": [SourceRange(text.index("最後"), len(text), "c")],
+        },
+    )
+    assert artifact is not None
+    lines = {
+        key: [(item["line_start"], item["line_end"]) for item in ranges]
+        for key, ranges in artifact["elements"].items()
+    }
+    assert lines == {"a": [(1, 1)], "b": [(3, 4)], "c": [(6, 6)]}
 
 
 def test_no_private_unstructured_names_are_imported() -> None:

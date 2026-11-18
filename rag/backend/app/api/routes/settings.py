@@ -1623,6 +1623,26 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
             for status in runtime.strategies
         ],
         config_source="runtime",
+        builtin=_builtin_chunking_settings(),
+    )
+
+
+def _builtin_chunking_settings() -> ChunkingSettingsUpdate:
+    """製品の既定の文書分割設定(Settings の項目の既定値。.env の値は含めない)。"""
+    fields = Settings.model_fields
+
+    def default(name: str) -> object:
+        return fields[name].get_default(call_default_factory=True)
+
+    return ChunkingSettingsUpdate.model_validate(
+        {
+            "strategy": default("rag_chunking_strategy"),
+            "chunk_size": default("rag_chunk_size"),
+            "overlap": default("rag_chunk_overlap"),
+            "min_chars": default("rag_chunk_min_chars"),
+            "delimiter": default("rag_chunk_delimiter"),
+            **{name.removeprefix("rag_"): default(name) for name in SMALL_TO_BIG_SETTING_FIELDS},
+        }
     )
 
 

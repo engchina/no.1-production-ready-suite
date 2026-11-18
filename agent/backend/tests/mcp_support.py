@@ -44,7 +44,7 @@ class _RagScopeIn(_ContractInput):
     search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] | None = None
     # 既定は契約の既定（#3240）。null は省略と同じ。
-    top_k: int | None = Field(default=30, ge=1, le=100)
+    top_k: int | None = Field(default=50, ge=1, le=100)
     filters: dict[str, str] | None = None
     # 旧版も検索するかは専用の真偽値（#1392。filters の値は文字列だけ）。
     include_superseded: bool = False

@@ -264,6 +264,18 @@ describe("parseCitationLine", () => {
   });
 });
 
+describe("頁の無い原本の根拠の行（Issue 5450）", () => {
+  const format = { citation_prefix: "根拠：", page_location: "p.{page}", sheet_location: "シート「{sheet}」{cell_range}",
+    section_location: "「{title}」", line_location: "{lines} 行目", line_range: "{start}〜{end}" };
+  it("見出しと行の範囲の前までをファイル名として読む", () => {
+    expect(parseCitationLine("根拠：手順 A.txt 「見出し B」12〜30 行目", format)).toEqual({ fileName: "手順 A.txt", page: null });
+    expect(parseCitationLine("根拠：手順 A.md 「見出し B」", format)).toEqual({ fileName: "手順 A.md", page: null });
+    expect(parseCitationLine("根拠：手順 A.md 7 行目", format)).toEqual({ fileName: "手順 A.md", page: null });
+    expect(parseCitationLine("根拠：手順 A.txt", format)).toEqual({ fileName: "手順 A.txt", page: null });
+    expect(citationLocation("根拠：手順 A.txt 「見出し B」12〜30 行目", "手順 A.txt")).toBe("「見出し B」12〜30 行目");
+  });
+});
+
 describe("matchCitation", () => {
   const citations = [
     chunk("manual.pdf", 2),

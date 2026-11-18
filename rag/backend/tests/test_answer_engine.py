@@ -2635,49 +2635,30 @@ async def test_guide_preview_is_recorded_without_extra_model_calls(
     assert response.diagnostics.answer[GUIDE_PREVIEW_KEY] == marker
 
 
-def test_diverse_candidates_adds_each_document_tail_without_changing_the_head() -> None:
-    """融合の上位は変えず、上位に無い文書は上位 N 件、ある文書は続きの M 件を足す(#2228)。"""
-    from app.rag.answer_engine import _diverse_candidates
-
-    ordered = ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "c1"]
-    head = ordered[:2]  # 上位は文書 a だけ
-    extra = _diverse_candidates(
-        ordered, len(head), lambda chunk_id: chunk_id[0], new_document=2, present_document=1
-    )
-    assert extra == ["a3", "b1", "b2", "c1"]
-    # 足す件数が 0 なら何も足さない。
-    assert _diverse_candidates(ordered, 2, lambda c: c[0], new_document=0, present_document=0) == []
-
-
-@pytest.mark.parametrize("diversity", [0, 100, 600])
-def test_read_depth_is_independent_of_diversity_and_anchor_count(diversity: int) -> None:
-    engine = AnswerEngine(
-        Settings(rag_retrieval_query_limit=321, rag_candidate_diversity_depth=diversity),
-        oracle=cast(Any, TwoDocumentOracle()),
-        genai=cast(Any, FakeGenAi()),
-    )
-    assert engine._read_depth(50) == engine._read_depth(150) == 321
-
-
-async def test_search_without_diversity_keeps_only_the_fused_head() -> None:
-    """``DEPTH=0`` と ``MAX_EXTRA=0`` では、融合の上位の外の候補を足さない(#2228)。"""
+async def test_search_reads_the_configured_query_limit_and_keeps_every_fused_candidate() -> None:
+    """検索経路ごとの取得件数は RAG_RETRIEVAL_QUERY_LIMIT だけで決まり、取得した候補は融合の順位で
+    切らない(#5443)。"""
     from app.rag.answer_engine import _SearchState
 
-    for depth, max_extra, expected in ((0, 100, 1), (600, 0, 1), (600, 100, 2)):
-        engine = AnswerEngine(
-            Settings(
-                rag_candidate_diversity_depth=depth, rag_candidate_diversity_max_extra=max_extra
-            ),
-            oracle=cast(Any, TwoDocumentOracle()),
-            genai=cast(Any, FakeGenAi()),
-        )
-        result = await engine._search(
-            SearchRequest(query="q"),
-            _SearchState(),
-            retrieval_queries=["受注の登録"],
-            candidate_limit=1,
-        )
-        assert len({chunk.chunk_uid for chunk in result.child_chunks}) == expected
+    oracle = TwoDocumentOracle()
+    limits: list[int] = []
+    original = oracle.hybrid_search
+
+    async def recorded(query: str, embedding: list[float], top_k: int, **kwargs: Any) -> Any:
+        limits.append(top_k)
+        return await original(query, embedding, top_k, **kwargs)
+
+    oracle.hybrid_search = recorded  # type: ignore[method-assign,assignment]
+    engine = AnswerEngine(
+        Settings(rag_retrieval_query_limit=37),
+        oracle=cast(Any, oracle),
+        genai=cast(Any, FakeGenAi()),
+    )
+    result = await engine._search(
+        SearchRequest(query="q"), _SearchState(), retrieval_queries=["受注の登録"]
+    )
+    assert limits and set(limits) == {37}
+    assert len({chunk.chunk_uid for chunk in result.child_chunks}) == 2
 
 
 async def test_evidence_images_are_cropped_once_per_chunk_in_an_answer(
@@ -2808,107 +2789,6 @@ def test_context_parent_uses_only_stored_parent_text_and_artifact_scope() -> Non
     parents = _stored_parents([_stored_child(c, rrf_score=0.9) for c in versions], state)
     assert len(parents) == 2
     assert parents[0].chunk_uid != parents[1].chunk_uid
-
-
-@pytest.mark.parametrize(
-    "depth,max_extra,new_document,present_document,expected,status,reason",
-    [
-        (0, 3, 2, 1, [], "skipped", "depth_disabled"),
-        (5, 0, 2, 1, [], "skipped", "extra_limit_zero"),
-        (5, 3, 0, 0, [], "skipped", "document_limits_zero"),
-        (1, 3, 2, 1, [], "completed", "no_match"),
-        (5, 2, 2, 1, ["a2", "b1"], "completed", "added"),
-        (5, 5, 2, 1, ["a2", "b1", "b2"], "completed", "added"),
-    ],
-)
-def test_diversity_stage_records_configuration_and_actual_result(
-    monkeypatch: pytest.MonkeyPatch,
-    depth: int,
-    max_extra: int,
-    new_document: int,
-    present_document: int,
-    expected: list[str],
-    status: str,
-    reason: str,
-) -> None:
-    from contextlib import contextmanager
-
-    from rag_engine.retrieval.search_stages import CANDIDATE_DIVERSITY_STAGE
-
-    import app.rag.answer_engine as module
-
-    record: dict[str, Any] = {}
-
-    class Observation:
-        def request(self, value: Any, **kwargs: Any) -> None:
-            record["request"] = value() if callable(value) else value
-
-        def response(self, value: Any) -> None:
-            record["response"] = value() if callable(value) else value
-
-        def display(self, **kwargs: Any) -> None:
-            record.update(kwargs)
-
-    @contextmanager
-    def observe(operation: str, name: str) -> Any:
-        assert (operation, name) == ("stage", CANDIDATE_DIVERSITY_STAGE)
-        yield Observation()
-
-    monkeypatch.setattr(module, "observe_call", observe)
-    actual = module._observed_diverse_candidates(
-        ["a1", "a2", "b1", "b2", "b3"],
-        1,
-        lambda value: value[0],
-        depth=depth,
-        max_extra=max_extra,
-        new_document=new_document,
-        present_document=present_document,
-    )
-    assert actual == expected
-    assert record["params"]["status"] == status
-    assert record["params"]["reason_code"] == reason
-    assert record["response"]["added_ids"] == expected
-    assert record["response"]["added_count"] == len(expected)
-    assert record["response"]["after_count"] == 1 + len(expected)
-    assert record["response"]["max_extra"] == max_extra
-    assert record["response"]["limit_reached"] is (reason == "added" and max_extra == 2)
-    if not expected:
-        assert record["response"]["added_document_count"] == 0
-
-
-def test_diversity_without_capture_does_not_build_trace_details(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from contextlib import contextmanager
-
-    import app.rag.answer_engine as module
-
-    class Observation:
-        capture_enabled = False
-
-        def display(self, **kwargs: Any) -> None:
-            assert "details" not in kwargs
-            assert kwargs["params"]["added_count"] == 1
-
-    @contextmanager
-    def observe(operation: str, name: str) -> Any:
-        yield Observation()
-
-    monkeypatch.setattr(module, "observe_call", observe)
-    monkeypatch.setattr(module, "_diverse_candidates", lambda *args, **kwargs: ["a2"])
-
-    def document_of(value: str) -> str:
-        return value[0]
-
-    assert module._observed_diverse_candidates(
-        ["a1", "a2"],
-        1,
-        document_of,
-        depth=2,
-        max_extra=1,
-        new_document=1,
-        present_document=1,
-    ) == ["a2"]
 
 
 def test_build_engine_settings_passes_online_budget_without_changing_fixed_budget(
