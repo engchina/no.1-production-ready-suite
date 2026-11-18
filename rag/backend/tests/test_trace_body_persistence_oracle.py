@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -14,10 +15,13 @@ import pytest
 from pr_backend_core.observability.call_details import call_content
 from pr_backend_core.observability.trace_bodies import (
     BodyOwner,
+    attach_body_owner,
+    prepare_body,
     read_body_page,
     release_body_owners,
 )
 from pr_backend_core.observability.trace_body_persistence import TraceBodyPersistence
+from pr_backend_core.observability.trace_body_registry import write_registered_body
 
 from app.clients.oracle import OracleClient, StoredMessage, _execute
 from app.clients.oracle_run_history import RunHistoryStore
@@ -156,3 +160,70 @@ async def test_rag_body_roundtrip_and_real_primary_lifetimes(
                     {"body_id": content.body_reference.body_id},
                 )
             native.commit()
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("outcome", ["commit", "rollback"])
+def test_writer_waits_for_uncommitted_registration_on_real_oracle(outcome: str) -> None:
+    """登録の取引の commit 前に writer が着いても、その取引の終了を待ってから判断する(#5394)。
+
+    commit 前の manifest は別の接続から見えない。待たずに読むと所属なしとして本文を落とし、
+    本文が pending のまま残る。
+    """
+    oracle = OracleClient()
+    body = prepare_body(
+        "合成の未確定本文。" * 4000, part_characters=get_settings().trace_body_part_characters
+    )
+    owner = BodyOwner("rag", "history", uuid4().hex)
+    registering: Any = oracle.acquire_connection()
+    writer: Any = oracle.acquire_connection()
+    result: dict[str, bool] = {}
+    try:
+        with registering.cursor() as cursor:
+            attach_body_owner(cursor, owner, [body.reference])  # まだ commit しない
+
+        def write() -> None:
+            with writer.cursor() as cursor:
+                result["written"] = write_registered_body(
+                    cursor, body, clob_type=oracledb.DB_TYPE_CLOB
+                )
+            writer.commit()
+
+        thread = threading.Thread(target=write)
+        thread.start()
+        thread.join(2)
+        # 主キーの競合で、登録の取引が終わるまで待っている（所属なしとして終わっていない）。
+        assert thread.is_alive() and not result
+        if outcome == "commit":
+            registering.commit()
+        else:
+            registering.rollback()
+        thread.join(60)
+        assert not thread.is_alive()
+        assert result["written"] is (outcome == "commit")
+        with registering.cursor() as cursor:
+            cursor.execute(
+                "SELECT STATUS FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id",
+                {"body_id": body.reference.body_id},
+            )
+            row = cursor.fetchone()
+        if outcome == "commit":
+            assert row is not None and row[0] == "complete"
+            with registering.cursor() as cursor:
+                page = read_body_page(cursor, owner, body.reference)
+            assert page is not None and page.status == "complete"
+        else:
+            # rollback した登録の箱を writer が作り直さない。
+            assert row is None
+    finally:
+        writer.rollback()
+        registering.rollback()
+        with registering.cursor() as cursor:
+            release_body_owners(cursor, [owner])
+            cursor.execute(
+                "DELETE FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id",
+                {"body_id": body.reference.body_id},
+            )
+        registering.commit()
+        writer.close()
+        registering.close()

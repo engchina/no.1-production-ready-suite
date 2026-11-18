@@ -6,7 +6,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..chat_progress import ChatProgressStepDetails
-from .trace_bodies import BodyFailure, BodyReference, PreparedBody, mark_body_incomplete, write_body
+from .trace_bodies import (
+    BodyDeleted,
+    BodyFailure,
+    BodyReference,
+    PreparedBody,
+    lock_body_manifest,
+    mark_body_incomplete,
+    write_body,
+)
 
 
 def call_body_references(span_details: Mapping[str, Any]) -> tuple[BodyReference, ...]:
@@ -81,28 +89,27 @@ def mark_call_body_failures(
 
 
 def _registered(cursor: Any, reference: BodyReference) -> bool:
-    # 正本保存取引がattachしたmanifestだけをロックする。writerは箱も所属も作らない。
-    cursor.execute(
-        """SELECT CONTENT_SHA256, CHARACTER_COUNT, BYTE_COUNT, PART_COUNT, VISIBILITY, STATUS
-        FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id FOR UPDATE""",
-        {"body_id": reference.body_id},
-    )
-    row = cursor.fetchone()
-    if row is None or row[5] == "deleted":
+    """正本保存取引がattachしたmanifestだけをロックする。writerは箱も所属も作らない。
+
+    登録の取引は manifest の作成と所属の attach を commit 前に writer へ渡す。commit 前の行は
+    別の接続から見えないので、SELECT だけでは「まだ commit していない」と「rollback した」を
+    区別できない（#5394）。登録と同じ MERGE で主キーを競合させ、Oracle にその取引の終了を
+    待たせる: commit 済みなら ORA-00001 を経て行をロックし、rollback 済みなら作った行を
+    savepoint まで戻して書かない。
+    """
+    cursor.execute("SAVEPOINT trace_body_writer")
+    try:
+        lock_body_manifest(cursor, reference)
+    except BodyDeleted:
         return False
-    if tuple(row[:5]) != (
-        reference.sha256,
-        reference.character_count,
-        reference.byte_count,
-        reference.part_count,
-        reference.visibility,
-    ):
-        raise ValueError("registered trace body reference mismatch")
     cursor.execute(
         "SELECT COUNT(*) FROM PLATFORM_TRACE_BODY_OWNERS WHERE BODY_ID = :body_id",
         {"body_id": reference.body_id},
     )
-    return bool(cursor.fetchone()[0])
+    if cursor.fetchone()[0]:
+        return True
+    cursor.execute("ROLLBACK TO SAVEPOINT trace_body_writer")
+    return False
 
 
 def write_registered_body(cursor: Any, body: PreparedBody, *, clob_type: Any) -> bool:
