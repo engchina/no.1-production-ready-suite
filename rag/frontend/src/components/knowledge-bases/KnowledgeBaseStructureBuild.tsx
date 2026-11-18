@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Construction, RefreshCw, Square, Play } from "lucide-react";
-import { Button, DataTable, ListToolbar, OffsetPagination, TableSkeleton, TimedLoadingState, INFORMATION_TABLE_VISIBLE_ROWS, FormActionBar, FormStatus, ApiErrorBanner, type DataTableColumn, type FormActionDescriptor } from "@production-ready/ui";
+import { Button, DataTable, ListToolbar, OffsetPagination, TableSkeleton, TimedLoadingState, INFORMATION_TABLE_VISIBLE_ROWS, FormActionBar, FormStatus, ApiErrorBanner, type DataTableColumn } from "@production-ready/ui";
 import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { queryKeys } from "@/lib/queries";
@@ -28,7 +28,6 @@ const reasonLabels: Record<string, I18nKey> = {
   no_structure: "knowledgeBases.structure.build.reason.no_structure",
   source_changed: "knowledgeBases.structure.build.reason.source_changed",
   builder_changed: "knowledgeBases.structure.build.reason.builder_changed",
-  disabled: "knowledgeBases.structure.build.reason.disabled",
   membership_changed: "knowledgeBases.structure.build.reason.membership_changed",
   authorization_changed: "knowledgeBases.structure.build.reason.authorization_changed",
   invalid_chunk_id: "knowledgeBases.structure.build.reason.invalid_chunk_id",
@@ -44,7 +43,7 @@ const jobLabels: Record<string, I18nKey> = {
   COMPLETED: "knowledgeBases.structure.build.job.COMPLETED",
  };
 
-export function KnowledgeBaseStructureBuild({ kbId, enabled, editable, saveAction }: { kbId: string; enabled: boolean; editable: boolean; saveAction?: FormActionDescriptor }) {
+export function KnowledgeBaseStructureBuild({ kbId, editable }: { kbId: string; editable: boolean }) {
   const [preview, setPreview] = useState(false);
   const [offset, setOffset] = useState(0);
   const [limit, setLimit] = useState(25);
@@ -87,12 +86,12 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable, saveActio
     { key: "reason", header: t("knowledgeBases.structure.build.reason"), render: detail },
   ];
   return <div className="grid gap-3" data-testid="knowledge-base-structure-build">
-    {/* 設定の保存と既存文書への構築を 1 つの操作行に並べる。 */}
-    {editable ? <FormActionBar ariaLabel={t("knowledgeBases.structure.title")} primaryActions={saveAction ? [saveAction] : []} secondaryActions={[
-      { id: "preview", icon: Construction, label: t("knowledgeBases.structure.build.preview"), disabled: !enabled || active || action.isPending, onClick: () => { setOffset(0); setPreview(true); } },
+    {/* 構築の有無の設定は持たない。KB を編集できれば、いつでも手動で構築できる（#5484）。 */}
+    {editable ? <FormActionBar ariaLabel={t("knowledgeBases.structure.title")} primaryActions={[]} secondaryActions={[
+      { id: "preview", icon: Construction, label: t("knowledgeBases.structure.build.preview"), disabled: active || action.isPending, onClick: () => { setOffset(0); setPreview(true); } },
       ...(active ? [{ id: "stop", icon: Square, label: t("knowledgeBases.structure.build.stop"), loading: action.isPending, disabled: job.data?.status === "STOPPING", onClick: () => action.mutate("stop") }] : []),
-      ...(["STOPPED", "INTERRUPTED"].includes(job.data?.status ?? "") ? [{ id: "continue", icon: Play, label: t("knowledgeBases.structure.build.continue"), disabled: !enabled || action.isPending, onClick: () => void start("continue") }] : []),
-      ...(!active && (job.data?.counts?.FAILED ?? 0) > 0 ? [{ id: "retry", icon: RefreshCw, label: t("knowledgeBases.structure.build.retry"), disabled: !enabled || action.isPending, onClick: () => void start("retry") }] : []),
+      ...(["STOPPED", "INTERRUPTED"].includes(job.data?.status ?? "") ? [{ id: "continue", icon: Play, label: t("knowledgeBases.structure.build.continue"), disabled: action.isPending, onClick: () => void start("continue") }] : []),
+      ...(!active && (job.data?.counts?.FAILED ?? 0) > 0 ? [{ id: "retry", icon: RefreshCw, label: t("knowledgeBases.structure.build.retry"), disabled: action.isPending, onClick: () => void start("retry") }] : []),
     ]} /> : null}
     {job.data?.partial_visibility ? <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.build.visibleOnly")}</p> : null}
     {action.isError ? <ApiErrorBanner error={action.error} fallback={t("knowledgeBases.structure.build.error")} summary={t("knowledgeBases.structure.build.error")} nextAction={t("knowledgeBases.structure.build.errorNext")} action={<Button icon={RefreshCw} variant="secondary" loading={action.isPending} onClick={() => { if (action.variables) action.mutate(action.variables); }}>{t("common.retry")}</Button>} /> : null}
@@ -106,8 +105,8 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable, saveActio
       <DataTable columns={columns} rows={view.items} getRowKey={(item) => item.document_id} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} tableClassName="min-w-[42rem]" />
       <OffsetPagination total={view.total} offset={offset} limit={limit} count={view.items.length} onPageChange={(_page, nextOffset) => setOffset(nextOffset)} onPageSizeChange={(value) => { setLimit(value); setOffset(0); }} ariaLabel={t("knowledgeBases.structure.build.preview")} labels={paginationLabels()} />
       {preview && editable ? <FormActionBar ariaLabel={t("knowledgeBases.structure.build.preview")}
-        primaryActions={[{ id: "build", icon: Construction, label: t("knowledgeBases.structure.build.start"), loading: action.isPending, disabled: !enabled || active || (plan.data?.counts.MISSING ?? 0) + (plan.data?.counts.STALE ?? 0) === 0, onClick: () => start("missing") }]}
-        secondaryActions={[{ id: "rebuild", icon: RefreshCw, label: t("knowledgeBases.structure.build.rebuild"), disabled: !enabled || active || action.isPending || (view.total - (plan.data?.counts.UNAVAILABLE ?? 0)) === 0, onClick: () => start("rebuild") }]}
+        primaryActions={[{ id: "build", icon: Construction, label: t("knowledgeBases.structure.build.start"), loading: action.isPending, disabled: active || (plan.data?.counts.MISSING ?? 0) + (plan.data?.counts.STALE ?? 0) === 0, onClick: () => start("missing") }]}
+        secondaryActions={[{ id: "rebuild", icon: RefreshCw, label: t("knowledgeBases.structure.build.rebuild"), disabled: active || action.isPending || (view.total - (plan.data?.counts.UNAVAILABLE ?? 0)) === 0, onClick: () => start("rebuild") }]}
       /> : null}
     </> : null}
   </div>;

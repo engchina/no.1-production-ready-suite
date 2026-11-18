@@ -108,7 +108,6 @@ from app.config import (
     EvaluationSuite,
     FileType,
     FileTypeDefaultEntry,
-    GraphProfile,
     ParserAdapterBackend,
     PreprocessProfile,
     VectorIndexProfile,
@@ -1027,16 +1026,6 @@ class EvaluationSettingsUpdate(BaseModel):
     suite: EvaluationSuiteName
 
 
-GraphProfileName = GraphProfile
-
-
-class GraphProfileStatusData(BaseModel):
-    """文書構造索引の構築の 1 プロファイル(off = 構築しない / entities = 構築する)の選択状態。"""
-
-    name: GraphProfileName
-    selected: bool
-
-
 class EntityIndexSettingsData(BaseModel):
     """実体・別名索引を構築する全体の既定。"""
 
@@ -1047,18 +1036,3 @@ class EntityIndexSettingsUpdate(BaseModel):
     """文書レシピで上書きできる索引構築の既定。"""
 
     enabled: bool
-
-
-class GraphSettingsData(BaseModel):
-    """関係情報設定の非機密 runtime snapshot。"""
-
-    profile: GraphProfileName
-    enabled: bool
-    profiles: list[GraphProfileStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class GraphSettingsUpdate(BaseModel):
-    """関係情報設定の更新 payload。"""
-
-    profile: GraphProfileName

@@ -145,6 +145,22 @@ def test_dump_parse_round_trip() -> None:
     assert restored.ingestion == config.ingestion
 
 
+@pytest.mark.parametrize("value", ["entities", "off", "full"])
+def test_saved_graph_profile_is_dropped_before_validation(value: str) -> None:
+    """文書構造索引の構築の指定(graph_profile。#5484)が保存済みのレシピ・KB に残っていても読める。
+
+    ``DocumentProcessingConfig`` は ``extra="forbid"`` なので、検証の前に取り除く。
+    """
+    recipe = DocumentProcessingConfig.model_validate(
+        {"graph_profile": value, "chunking_strategy": "page_level"}
+    )
+    assert recipe.chunking_strategy == "page_level"
+    assert "graph_profile" not in recipe.model_dump()
+    config = parse_adapter_config({"version": 2, "ingestion": {"graph_profile": value}})
+    assert config.settings_overrides() == {}
+    assert "graph_profile" not in str(dump_adapter_config(config))
+
+
 @pytest.mark.parametrize(
     "removed", ["marker", "unlimited_ocr", "glm_ocr", "oci_genai_vision", "enterprise_ai_vlm"]
 )
@@ -218,11 +234,10 @@ def test_recipe_put_rejects_roadmap_parser_engine_before_saving() -> None:
 
 
 def test_ingestion_scope_overlays_advanced_axes() -> None:
-    """取込側の高度軸(graph / field / vision / nav)も KB 上書きで effective に反映される。"""
+    """取込側の高度軸(field / vision / nav)も KB 上書きで effective に反映される。"""
     settings = get_settings()
     config = _config(
         ingestion={
-            "graph_profile": "entities",
             "field_extraction_enabled": True,
             "vision_enabled": True,
             "navigation_summary_enabled": True,
@@ -231,14 +246,12 @@ def test_ingestion_scope_overlays_advanced_axes() -> None:
 
     overrides = config.settings_overrides()
     assert overrides == {
-        "rag_graph_profile": "entities",
         "rag_field_extraction_enabled": True,
         "rag_vision_enabled": True,
         "rag_navigation_summary_enabled": True,
     }
 
     effective = resolve_effective_settings(settings, config, scope="ingestion")
-    assert effective.rag_graph_profile == "entities"
     assert effective.rag_field_extraction_enabled is True
     assert effective.rag_vision_enabled is True
     assert effective.rag_navigation_summary_enabled is True

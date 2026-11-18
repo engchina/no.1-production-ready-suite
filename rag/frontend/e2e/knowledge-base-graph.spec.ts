@@ -1,7 +1,6 @@
 import structureLevelsReader from "./fixtures/structure-levels-reader.json";
 import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
 import { expect, type Page, test } from "./fixtures/test";
-import { expectToastPlacement } from "./_toast-placement";
 import { expectedControlHeight, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 function ok(json: unknown) {
@@ -18,7 +17,6 @@ const nullIngestion = {
   chunk_overlap: null,
   chunk_min_chars: null,
   chunk_context_header_enabled: null,
-  graph_profile: null,
   field_extraction_enabled: null,
   vision_enabled: null,
   navigation_summary_enabled: null,
@@ -410,10 +408,9 @@ test("長い共通の接頭辞を持つ章節は末尾の見出しで区別で�
   await expectNoPageOverflow(page);
 });
 
-test("構造索引は保存と補建を分け、停止・再開の状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+// 文書構造索引は取込で作らず、設定（全体・KB の上書き）も持たない。KB を編集できれば手動で構築できる（#5484）。
+test("構造索引は設定を持たずに手動で構築し、停止・再開の状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, EMPTY_OVERVIEW);
-  let enabled: boolean | null = null;
-  let saves = 0;
   let starts = 0;
   let job: Record<string, unknown> | null = null;
   const items = [
@@ -427,12 +424,6 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
     { ...items[0], index_status: status === "COMPLETED" ? "CURRENT" : "MISSING", index_quality: status === "COMPLETED" ? "PARTIAL" : null, status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
     { ...items[1], status: "SKIPPED", index_status: "CURRENT", reason: "current" }, { ...items[2], index_status: "UNAVAILABLE" },
   ], counts: { PARTIAL: status === "COMPLETED" ? 1 : 0, QUEUED: status === "COMPLETED" ? 0 : 1, SKIPPED: 1, UNAVAILABLE: 1 }, total: 3, offset: 0, limit: 25 });
-  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: enabled, structure_index_global_enabled: false }) }));
-  await page.route("**/api/knowledge-bases/kb-1/structure-index", async (route) => {
-    enabled = route.request().postDataJSON().enabled;
-    saves++;
-    await route.fulfill({ json: ok({ enabled, global_enabled: false }) });
-  });
   await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items: planItems, counts: { MISSING: 1, STALE: 1, CURRENT: 1, UNAVAILABLE: 1 }, total: 4, offset: 0, limit: 25 }) }));
   await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", async (route) => {
     if (route.request().method() === "POST") {
@@ -443,10 +434,12 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   });
   await page.goto("/knowledge-bases/kb-1");
   const settings = page.getByTestId("knowledge-base-structure-settings");
-  await settings.getByRole("combobox").click();
-  await page.getByRole("option", { name: "構築する", exact: true }).click();
-  await settings.getByRole("button", { name: "保存", exact: true }).click();
-  await expect.poll(() => saves).toBe(1);
+  await expect(settings.getByText("取込では作りません。必要なときに「既存文書に構築」で構築します。", { exact: false })).toBeVisible();
+  await expect(settings.getByRole("combobox")).toHaveCount(0);
+  await expect(settings.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+  await expect(settings.getByRole("button", { name: "既存文書に構築", exact: true })).toBeEnabled();
+  await settings.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("structure-card.png"), fullPage: false });
   expect(starts).toBe(0);
   await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
   await expect(settings.getByText("未構築 1 件・更新が必要 1 件・構築済み 1 件・準備不足 1 件")).toBeVisible();
@@ -476,17 +469,11 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   expect(starts).toBe(2);
 });
 
-test("構造索引の保存失敗を保持し、操作の再試行で要求を再送する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("構造索引の操作の失敗を保持し、再試行で要求を再送する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, EMPTY_OVERVIEW);
-  let saveAttempts = 0;
   let jobAttempts = 0;
   let job: Record<string, unknown> | null = null;
   const item = { document_id: "doc-a", name: "synthetic-a.txt", status: "MISSING", reason: null };
-  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: null, structure_index_global_enabled: false }) }));
-  await page.route("**/api/knowledge-bases/kb-1/structure-index", async (route) => {
-    saveAttempts++;
-    await route.fulfill(saveAttempts === 1 ? { status: 503, json: { detail: "一時的に保存できません。" } } : { json: ok({ enabled: true, global_enabled: false }) });
-  });
   await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items: [item], counts: { MISSING: 1 }, total: 1, offset: 0, limit: 25 }) }));
   await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", async (route) => {
     if (route.request().method() === "POST") {
@@ -498,19 +485,6 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
   });
   await page.goto("/knowledge-bases/kb-1");
   const settings = page.getByTestId("knowledge-base-structure-settings");
-  await settings.getByRole("combobox").click();
-  await page.getByRole("option", { name: "構築する", exact: true }).click();
-  await settings.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(settings.getByRole("alert")).toBeVisible();
-  await expect(settings.getByRole("combobox")).toContainText("構築する");
-  await settings.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("01-save-error.png") });
-  await settings.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByText("文書構造索引の構築設定を保存しました。", { exact: true })).toBeVisible();
-  await expect(settings.getByRole("alert")).toHaveCount(0);
-  await page.getByRole("region", { name: "通知", exact: true }).evaluate(async (element) => { await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => undefined))); });
-  await expectToastPlacement(page);
-  await page.screenshot({ path: testInfo.outputPath("02-save-toast.png") });
   await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
   await settings.getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
@@ -522,39 +496,6 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
   await expect(settings.getByRole("button", { name: "失敗分を再試行", exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("04-partial-failure.png") });
-});
-
-// 構造索引の構築の選択欄は、既定の長い文言「個別設定なし（…に従う）」を、選択中の値も一覧の選択肢も省略せず読める幅にする（#4227）。
-test("構造索引の構築の選択欄は選択中の値と選択肢を省略せずに出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockKb(page, EMPTY_OVERVIEW);
-  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: null, structure_index_global_enabled: false }) }));
-  await page.goto("/knowledge-bases/kb-1");
-  const settings = page.getByTestId("knowledge-base-structure-settings");
-  const select = settings.getByRole("combobox");
-  await select.scrollIntoViewIfNeeded();
-  await expect(select).toContainText("個別設定なし（文書レシピ・全体設定に従う）");
-
-  // 文言が省略（text-overflow: ellipsis）で切れていない = 内容の幅が表示の幅に収まる。
-  const clipped = (root: string) => page.evaluate((selector) => {
-    return [...document.querySelectorAll<HTMLElement>(`${selector} .truncate`)]
-      .filter((element) => element.scrollWidth > element.clientWidth + 1)
-      .map((element) => element.textContent);
-  }, root);
-  // 375px はカードの内側（約 310px）が文言より狭く、閉じた状態の値は共有部品の既定どおり省略になる。全文は開いた一覧で折り返して読める。
-  const mobile = page.viewportSize()!.width < 640;
-  if (!mobile) expect(await clipped('[data-testid="knowledge-base-structure-settings"] [role="combobox"]')).toEqual([]);
-
-  await select.click();
-  const listbox = page.getByRole("listbox", { name: "文書構造索引の構築" });
-  await expect(listbox.getByRole("option")).toHaveCount(3);
-  await expect(listbox.getByRole("option", { name: "個別設定なし（文書レシピ・全体設定に従う）" })).toBeVisible();
-  expect(await clipped('[role="listbox"]')).toEqual([]);
-  const viewportWidth = page.viewportSize()!.width;
-  const box = (await listbox.boundingBox())!;
-  expect(box.x).toBeGreaterThanOrEqual(0);
-  expect(box.x + box.width).toBeLessThanOrEqual(viewportWidth);
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("structure-select-open.png") });
 });
 
 for (const width of [1280, 1920, 375]) {

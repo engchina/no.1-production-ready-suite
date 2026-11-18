@@ -160,7 +160,6 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_entity_name_columns",
         "rag_extraction_artifact_cache_enabled",
         "rag_extraction_artifact_prefix",
-        "rag_graph_profile",
         "rag_review_gate_enabled",
         "rag_segment_checkpoint_enabled",
         "rag_vision_concurrency",

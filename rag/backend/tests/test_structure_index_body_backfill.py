@@ -110,14 +110,14 @@ class MemoryOracle:
     async def get_knowledge_base_config(self, kb_id: str) -> Any:
         if kb_id not in {KB, OTHER_KB}:
             return None
-        return SimpleNamespace(retrieval_config={"structure_index_enabled": True})
+        return SimpleNamespace(retrieval_config={})
 
     async def get_document_summary(self, document_id: str) -> Any:
         doc = self.documents.get(document_id)
         return SimpleNamespace(file_name=doc["name"]) if doc else None
 
-    async def document_structure_index_preferences(self, document_id: str) -> dict[str, Any]:
-        return {self.documents[document_id]["kb"]: True}
+    async def document_structure_index_knowledge_base_ids(self, document_id: str) -> list[str]:
+        return [self.documents[document_id]["kb"]]
 
     def _scoped(self, binds: dict[str, Any], prefix: str) -> set[str] | None:
         values = {str(v) for k, v in binds.items() if k.startswith(prefix)}
@@ -145,7 +145,6 @@ class MemoryOracle:
                 "document_id": did,
                 "file_name": doc["name"],
                 "chunk_set_id": doc["chunk_set"],
-                "recipe_graph_profile": None,
                 "chunks": len(doc["chunks"]),
                 "headings": 0,
             }
@@ -218,7 +217,6 @@ class MemoryOracle:
                     "content_kind": _json_value(meta, "content_kind"),
                     "page_number": _json_value(meta, "page_number"),
                     "stored_references": None,
-                    "recipe_graph_profile": None,
                 }
             )
         return rows

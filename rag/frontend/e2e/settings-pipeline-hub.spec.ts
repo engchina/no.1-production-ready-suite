@@ -25,7 +25,6 @@ const RECIPE_DEFAULTS = {
   chunk_size: 800,
   chunk_overlap: 120,
   chunk_min_chars: 120,
-  graph_profile: "off",
   // 実体・別名索引の全体の既定は ON（#5187）。
   entity_index_enabled: true,
   entity_name_columns: [],
@@ -114,19 +113,14 @@ test("取込・検索・回答設定の概要ハブが工程をフェーズ別�
     "href",
     "/settings/retrieval"
   );
-  // 関係情報の工程は取込時の構築の設定なので「文書構造索引」の名前でナレッジ構築フェーズに並ぶ(#301)。
-  await expect(
-    page
-      .getByRole("region", { name: "ナレッジ構築" })
-      .getByRole("link", { name: "文書構造索引 の設定を開く" })
-  ).toHaveAttribute("href", "/settings/graph");
+  // 文書構造索引は取込で作らず、ナレッジベースの画面で手動で構築する（#5484）。設定の工程は無い。
+  await expect(page.getByRole("link", { name: "文書構造索引 の設定を開く" })).toHaveCount(0);
 
   const ingestion = page.getByRole("region", { name: "ナレッジ構築" });
   await expect(ingestion.getByRole("link", { name: "実体・別名索引 の設定を開く" })).toContainText("6.");
-  await expect(ingestion.getByRole("link", { name: "文書構造索引 の設定を開く" })).toContainText("7.");
-  await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toContainText("8.");
-  // 安全チェックはセキュリティ設定へ移した（#5061）ので、評価の基準は 10 番目。
-  await expect(page.getByRole("link", { name: "評価の基準 の設定を開く" })).toContainText("10.");
+  await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toContainText("7.");
+  // 安全チェックはセキュリティ設定へ移した（#5061）ので、評価の基準は 9 番目。
+  await expect(page.getByRole("link", { name: "評価の基準 の設定を開く" })).toContainText("9.");
 
   // カードから実際に詳細設定へ遷移できる。
   await page.getByRole("link", { name: "文書分割 の設定を開く" }).click();
@@ -146,7 +140,7 @@ test("サイドバーの設定の概要リンクからハブへ到達できる",
 test("サイドバーの取込・検索・回答設定の名前と順番は設定の概要の工程と同じ（#267）", async ({ page }) => {
   await page.goto("/settings/pipeline");
   await expect(page.getByRole("heading", { name: "設定の概要" })).toBeVisible();
-  // 概要の工程カード（1. 〜 12.）の名前を順番どおりに読む。
+  // 概要の工程カード（1. 〜 11.）の名前を順番どおりに読む。
   const cardNames = await page
     .getByRole("link", { name: / の設定を開く$/ })
     .evaluateAll((links) => links.map((link) => (link.getAttribute("aria-label") ?? "").replace(/ の設定を開く$/, "")));
@@ -166,7 +160,7 @@ test("サイドバーの取込・検索・回答設定の名前と順番は設�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 14 項目を、選択中レシピの設定と同じ処理順で出す（実体・別名索引は #1388）。
+// #528: レシピ 13 項目を、選択中レシピの設定と同じ処理順で出す（実体・別名索引は #1388）。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
@@ -181,11 +175,10 @@ const PROCESSING_ORDER = [
   "auto_index_after_chunk_enabled",
   "vector_index",
   "entity_index_enabled",
-  "graph_profile",
 ];
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`取込の流れは検索インデックスと 14 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
+  test(`取込の流れは検索インデックスと 13 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -239,7 +232,7 @@ for (const scheme of ["light", "dark"] as const) {
       items.getByRole("link", { name: "設定画面へ（見出しの階層の推定（AI））" })
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-heading-levels");
     await expect(items.locator('[data-config-field="heading_level_inference_enabled"]')).toContainText("無効");
-    await expect(items.getByRole("link", { name: /^設定画面へ（.+）$/ })).toHaveCount(12);
+    await expect(items.getByRole("link", { name: /^設定画面へ（.+）$/ })).toHaveCount(11);
     // 索引構築の全体の既定は ON。専用の設定画面から変更できる。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
     await expect(entityIndex).toContainText("有効");

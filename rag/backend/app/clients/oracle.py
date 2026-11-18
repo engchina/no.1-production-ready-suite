@@ -2468,14 +2468,10 @@ class OracleClient:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
 
-    async def document_structure_index_preferences(
-        self, document_id: str
-    ) -> dict[str, bool | None] | None:
-        """現在の所属と利用者の範囲内にあるKBの構築指定だけを読む。"""
-        from app.rag.structure_index import PREFERENCE_KEY
-
+    async def document_structure_index_knowledge_base_ids(self, document_id: str) -> list[str]:
+        """文書が今所属し、利用者の範囲内にある有効な KB の ID だけを読む。"""
         rows = await self._fetch_all(
-            f"""SELECT kb.knowledge_base_id, kb.retrieval_config
+            f"""SELECT kb.knowledge_base_id
             FROM rag_document_knowledge_bases member
             JOIN rag_knowledge_bases kb ON kb.knowledge_base_id=member.knowledge_base_id
             JOIN rag_documents d ON d.document_id=member.document_id
@@ -2484,52 +2480,7 @@ class OracleClient:
               AND {_oracle_access_predicate_sql(alias="d")}""",
             _with_tenant_bind({"document_id": document_id}),
         )
-        if not rows:
-            unassigned = await self._fetch_one(
-                f"""SELECT d.document_id FROM rag_documents d
-                WHERE d.document_id=:document_id
-                AND {_oracle_access_predicate_sql(alias="d")}
-                AND NOT EXISTS (SELECT 1 FROM rag_document_knowledge_bases m
-                    WHERE m.document_id=d.document_id)""",
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            return None if unassigned else {}
-        result: dict[str, bool | None] = {}
-        for row in rows:
-            config = _json_loads(row.get("retrieval_config"))
-            value = config.get(PREFERENCE_KEY) if isinstance(config, dict) else None
-            result[str(row["knowledge_base_id"])] = value if isinstance(value, bool) else None
-        return result
-
-    async def set_knowledge_base_structure_index(
-        self, knowledge_base_id: str, enabled: bool | None
-    ) -> None:
-        """構築設定の1項目だけを行lock内で更新する。既存graphは削除しない。"""
-        from app.rag.structure_index import PREFERENCE_KEY
-
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _fetch_all(
-                connection,
-                f"""SELECT knowledge_base_id FROM rag_knowledge_bases
-                WHERE knowledge_base_id=:id
-                  AND {_oracle_knowledge_base_access_predicate_sql()} FOR UPDATE""",
-                _with_tenant_bind({"id": knowledge_base_id}),
-            )
-            kb = _require_active_knowledge_base(connection, knowledge_base_id)
-            config = dict(kb.retrieval_config)
-            if enabled is None:
-                config.pop(PREFERENCE_KEY, None)
-            else:
-                config[PREFERENCE_KEY] = enabled
-            _execute(
-                connection,
-                f"""UPDATE rag_knowledge_bases SET retrieval_config=:config, updated_at=SYSTIMESTAMP
-                WHERE knowledge_base_id=:id AND {_oracle_knowledge_base_access_predicate_sql()}""",
-                _with_tenant_bind({"id": knowledge_base_id, "config": _json_bind(config)}),
-                input_sizes=_json_input_sizes("config"),
-            )
-
-        await self._run_transaction(operation)
+        return [str(row["knowledge_base_id"]) for row in rows]
 
     async def get_knowledge_base_extraction_fields(
         self, knowledge_base_id: str
@@ -19298,15 +19249,10 @@ def _to_knowledge_base_detail(
     knowledge_base: StoredKnowledgeBase,
 ) -> KnowledgeBaseDetail:
     adapter_config = parse_adapter_config(knowledge_base.retrieval_config)
-    structure_override = knowledge_base.retrieval_config.get("structure_index_enabled")
     return KnowledgeBaseDetail(
         **_to_knowledge_base_summary(knowledge_base).model_dump(),
         retrieval_config=knowledge_base.retrieval_config,
         adapter_config=adapter_config,
-        structure_index_enabled=structure_override
-        if isinstance(structure_override, bool)
-        else None,
-        structure_index_global_enabled=get_settings().rag_graph_profile == "entities",
     )
 
 

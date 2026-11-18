@@ -252,9 +252,10 @@ def test_pipeline_settings_report_auto_advance_and_recipe_defaults(settings: Set
         "auto_chunk_after_extract_enabled",
         "chunking_strategy",
         "auto_index_after_chunk_enabled",
-        "graph_profile",
     ):
         assert defaults[field] is not None, field
+    # 文書構造索引は取込で作らない(#5484)。レシピの既定にも出さない。
+    assert "graph_profile" not in defaults
     assert defaults["vision_enabled"] is True
     assert defaults["auto_chunk_after_extract_enabled"] is False
     assert defaults["parser_adapter_backend"] == "docling"

@@ -5,7 +5,6 @@ from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_extraction_recipe_id,
-    compute_graph_layer_id,
 )
 from app.rag.variant_planner import (
     _select_extractions_within_limit,
@@ -72,19 +71,14 @@ def test_different_parser_axis_splits_extraction_recipes() -> None:
     )
 
 
-def test_graph_axis_shares_chunk_set_splits_graph_layer() -> None:
-    """graph だけ違う 2 KB は chunk_set 共有、graph 層は分裂。"""
-    off = _settings(rag_graph_profile="off")
-    entities = _settings(rag_graph_profile="entities")
-    plan = plan_materializations(SRC, {"kb-1": off, "kb-2": entities})
+def test_plan_has_no_structure_index_layer() -> None:
+    """文書構造索引は取込で作らない(#5484)。計画に graph 層を持たない。"""
+    plan = plan_materializations(SRC, {"kb-1": _settings()})
+    chunk_set_id = compute_chunk_set_id(SRC, _settings())
 
-    assert len(plan.chunk_sets) == 1
-    chunk_set_id = compute_chunk_set_id(SRC, off)
-    assert plan.refcount(chunk_set_id) == 2
-    assert plan.layer_ids_for_chunk_set(chunk_set_id, "graph")
-    assert len(plan.graph_layers) == 2
-    assert plan.refcount(compute_graph_layer_id(chunk_set_id, off)) == 1
-    assert plan.refcount(compute_graph_layer_id(chunk_set_id, entities)) == 1
+    assert not hasattr(plan, "graph_layers")
+    assert plan.layer_ids_for_chunk_set(chunk_set_id, "graph") == ()
+    assert not any(layer_id.startswith("gr_") for layer_id in plan.all_ids())
 
 
 def test_diff_to_create_for_new_materialization() -> None:
@@ -140,18 +134,6 @@ def test_plan_from_kb_configs_ignores_kb_chunk_override() -> None:
     assert len(plan.chunk_sets) == 1
     assert len(plan.extraction_recipes) == 1
     assert next(iter(plan.chunk_sets.values())) == frozenset({"kb-1", "kb-2"})
-
-
-def test_plan_from_kb_configs_ignores_kb_graph_override() -> None:
-    """3 層モデル: graph_profile の KB 上書きも無視され、graph 層も分裂しない。"""
-    settings = get_settings()
-    plan = plan_document_materializations(
-        SRC,
-        settings,
-        {"kb-1": KnowledgeBaseAdapterConfig(), "kb-2": _config(graph_profile="entities")},
-    )
-    assert len(plan.chunk_sets) == 1
-    assert len(plan.graph_layers) == 1
 
 
 def test_membership_count_does_not_change_single_chunk_set() -> None:
@@ -284,7 +266,7 @@ def test_plan_from_kb_configs_collapses_to_single_recipe_regardless_of_overrides
         {
             "kb-1": KnowledgeBaseAdapterConfig(),
             "kb-2": _config(chunk_size=settings.rag_chunk_size + 512),
-            "kb-3": _config(parser_adapter_backend="docling", graph_profile="entities"),
+            "kb-3": _config(parser_adapter_backend="docling"),
         },
     )
     assert len(plan.extraction_recipes) == 1

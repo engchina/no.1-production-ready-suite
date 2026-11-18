@@ -26,7 +26,6 @@ async def _reference_pairs(
 async def test_cross_document_reference_rebuild_and_directional_pages() -> None:
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-reference-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     source_chunks = _chunks([("第1条", 1)])
     source_chunks[0].text = "合成参照規程の第100条を参照する。"
     source_id, source_set = await _indexed_document(
@@ -108,7 +107,6 @@ async def test_long_section_paths_keep_distinct_nodes_and_references() -> None:
     """#4051: 先頭が共通の長いパスでも、補建後のノード・参照の辺・参照元が章節ごとに分かれる。"""
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-long-path-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     common = "合成の長い親階層" * 80
     first, second = f"{common} > 第1条", f"{common} > 第2条"
     assert first[:512] == second[:512]
@@ -151,7 +149,6 @@ async def test_rebuild_reads_section_paths_over_4000_bytes() -> None:
     """補建の読み取りで長いパスを失わない（同一性が取込と変わらない）。"""
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-long-read-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     path = "合成の長い親階層" * 170 + " > 第1条"
     assert len(path.encode()) > 4000
     chunks = _chunks([(path, 1)])
@@ -184,7 +181,6 @@ async def test_same_document_reference_over_the_column_limit_does_not_fail_the_b
     """#4126: 参照元・参照先のパスが列を超えても構築でき、辺と参照元・参照先が節ごとに分かれる。"""
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-over-limit-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     first, second = f"{parent} > 第1条", f"{parent} > 第2条"
     chunks = _chunks([(first, 1), (second, 1)])
     chunks[0].text = "第2条を参照する。"
@@ -230,7 +226,6 @@ async def test_reference_path_at_the_bind_boundary_is_written(
     """#4126: VARCHAR の bind で入る最長のパスは完全なまま、次の長さは表示名で保存する。"""
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-boundary-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     first, second = f"{parent} > 第1条", f"{parent} > 第2条"
     assert len(second.encode()) == (3999 if stored_whole else 4000)
     chunks = _chunks([(first, 1), (second, 1)])
@@ -260,7 +255,6 @@ async def test_cross_document_reference_resolves_a_section_over_the_column_limit
     """#4126: 目録が長いパスを失わず、別文書の長いパスの節へ解決できる。"""
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-cross-limit-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     wanted = f"{parent} > 第2条"
     target_chunks = _chunks([(f"{parent} > 第1条", 1), (wanted, 1)])
     for chunk in target_chunks:
@@ -340,7 +334,6 @@ async def test_refresh_resolves_references_after_target_document_is_added() -> N
 
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-refresh-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     chunks = _chunks([("第1条", 1)])
     chunks[0].text = "合成後続規程の第2条を参照する。"
     source_id, source_set = await _indexed_document(
@@ -604,7 +597,6 @@ async def test_index_built_before_body_nodes_is_stale_and_rebuild_links_body() -
 
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-body-old-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     chunks = _body_fixture_chunks("合成本文")
     document, chunk_set = await _indexed_document(
         client, file_name="synthetic-body-old.pdf", chunks=chunks, knowledge_base_id=kb.id
@@ -799,7 +791,6 @@ async def test_build_saved_by_an_older_builder_is_stale_until_rebuilt() -> None:
 
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"synthetic-builder-{uuid4().hex[:8]}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     chunks = _chunks([("合成章 > 第1条", 1), ("合成章 > 第2条", 1)])
     chunks[0].text = "第2条を参照する。"
     document, chunk_set = await _indexed_document(

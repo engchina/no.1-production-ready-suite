@@ -59,7 +59,7 @@ def jobs(monkeypatch: pytest.MonkeyPatch) -> tuple[module.StructureIndexJobs, di
 
 class Oracle:
     async def get_knowledge_base_config(self, kb: str) -> Any:
-        return SimpleNamespace(retrieval_config={"structure_index_enabled": True})
+        return SimpleNamespace(retrieval_config={})
 
 
 async def test_partial_failure_and_retry_only_failed(
@@ -178,3 +178,26 @@ def test_public_response_is_bounded_and_excludes_internal_source() -> None:
     assert len(result["items"]) == 25 and result["items"][0]["document_id"] == "25"
     assert "chunk_sets" not in result["items"][0]
     assert result["counts"]["QUEUED"] == 70
+
+
+async def test_saved_kb_preference_does_not_block_manual_build(
+    jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KB に残った構築の指定(削除した設定。#5484)は読まず、手動の構築を始められる。"""
+    service, saved = jobs
+    calls: list[str] = []
+
+    async def build(oracle: Any, kb: str, doc: str, **kwargs: Any) -> Any:
+        calls.append(doc)
+        return {"quality": "COMPLETE"}
+
+    class DisabledOracle:
+        async def get_knowledge_base_config(self, kb: str) -> Any:
+            return SimpleNamespace(retrieval_config={"structure_index_enabled": False})
+
+    monkeypatch.setattr(module, "rebuild_document_structure_index", build)
+    await service.start(DisabledOracle(), "kb", "missing")
+    await asyncio.gather(*service.tasks)
+    assert calls == ["a", "b"]
+    assert saved["kb"]["status"] == "COMPLETED"

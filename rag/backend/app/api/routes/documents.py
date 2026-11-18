@@ -166,7 +166,6 @@ from app.rag.staging_recipes import StagingRuntimeOptions, apply_staging_runtime
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_extraction_recipe_id,
-    compute_graph_layer_id,
     compute_isolated_extraction_id,
     compute_metadata_layer_id,
     compute_nav_layer_id,
@@ -335,7 +334,6 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "chunk_separators",
         *SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS,
     ),
-    "graph_profile": ("graph_profile",),
     # 実体の層（#1362）。索引の保存の後に作るため、変えると索引からやり直す。
     "entity_index_enabled": (
         "entity_index_enabled",
@@ -2990,28 +2988,10 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 persisted_layers,
                 current_inputs=current_inputs,
             )
-        if chunk_set.layer_statuses is not None and chunk_set.layer_statuses.graph.requested:
-            count = graph_counts.get(chunk_set.chunk_set_id, 0)
-            if chunk_set.status in {"ERROR", "FAILED"}:
-                chunk_set.layer_statuses.graph = chunk_set.layer_statuses.graph.model_copy(
-                    update={
-                        "status": DocumentLayerStatusName.ERROR,
-                        "reason": (
-                            "索引の処理に失敗したため、文書構造索引の構築は完了していません。"
-                        ),
-                    }
-                )
-            elif count > 0 or chunk_set.status == "INDEXED":
-                chunk_set.layer_statuses.graph = chunk_set.layer_statuses.graph.model_copy(
-                    update={
-                        "status": DocumentLayerStatusName.MATERIALIZED,
-                        "reason": f"文書構造索引を構築済みです（{count} 件）。"
-                        if count
-                        else (
-                            "文書構造索引の構築は完了しましたが、対象の見出しがありません（0 件）。"
-                        ),
-                    }
-                )
+        if chunk_set.layer_statuses is not None:
+            chunk_set.layer_statuses.graph = _structure_index_layer_status(
+                graph_counts.get(chunk_set.chunk_set_id, 0)
+            )
         chunk_sets.append(chunk_set)
     return ApiResponse(data=chunk_sets)
 
@@ -3399,15 +3379,7 @@ def _layer_statuses_for_chunk_set(
             user_label="項目抽出",
             current_inputs=current_inputs,
         ),
-        graph=_layer_status_for_chunk_set(
-            chunk_set_id,
-            plan,
-            effective_by_kb,
-            persisted_layers or {},
-            layer="graph",
-            user_label="文書構造索引",
-            current_inputs=current_inputs,
-        ),
+        graph=_structure_index_layer_status(0),
         navigation=_layer_status_for_chunk_set(
             chunk_set_id,
             plan,
@@ -3452,6 +3424,24 @@ def _layer_status_for_chunk_set(
         persisted_layers,
         user_label=user_label,
         current_inputs=current_inputs,
+    )
+
+
+def _structure_index_layer_status(count: int) -> DocumentMaterializationLayerStatus:
+    """文書構造索引の状態。取込では作らず、ナレッジベースの画面で手動で構築する(#5484)。
+
+    構築の有無の設定は無いため、構築済みの件数(構築した節点の数)だけで示す。
+    """
+    if count:
+        return DocumentMaterializationLayerStatus(
+            requested=True,
+            status=DocumentLayerStatusName.MATERIALIZED,
+            reason=f"文書構造索引を構築済みです（{count} 件）。",
+        )
+    return DocumentMaterializationLayerStatus(
+        requested=False,
+        status=DocumentLayerStatusName.NOT_REQUESTED,
+        reason="文書構造索引は取込では作りません。ナレッジベースの画面から構築します。",
     )
 
 
@@ -3502,7 +3492,6 @@ def _requested_layer_status(
 # 派生情報レイヤー(chunk_set に重なる層)と利用者向けの名前。
 _ARTIFACT_LAYER_LABELS: tuple[tuple[str, str], ...] = (
     ("metadata", "項目抽出"),
-    ("graph", "文書構造索引"),
     ("navigation", "ナビゲーション"),
 )
 
@@ -3511,8 +3500,6 @@ def _recipe_layer_id(chunk_set_id: str, settings: Settings, layer: str) -> str:
     """レシピの chunk_set に重なる派生層の ID(planner と同じ規則で chunk_set_id から作る)。"""
     if layer == "metadata":
         return compute_metadata_layer_id(chunk_set_id, settings)
-    if layer == "graph":
-        return compute_graph_layer_id(chunk_set_id, settings)
     return compute_nav_layer_id(chunk_set_id, settings)
 
 
@@ -3544,7 +3531,7 @@ def _recipe_layer_statuses_for_chunk_set(
     }
     return DocumentChunkSetLayerStatuses(
         metadata=statuses["metadata"],
-        graph=statuses["graph"],
+        graph=_structure_index_layer_status(0),
         navigation=statuses["navigation"],
     )
 
@@ -3595,15 +3582,6 @@ async def _record_recipe_artifact_layers(
             settings=settings,
             field_definitions_configured=fields_configured,
         )
-        if layer == "graph":
-            counts = await oracle.graph_entity_counts_for_chunk_sets([chunk_set_id])
-            count = counts.get(chunk_set_id, 0)
-            status = DocumentLayerStatusName.MATERIALIZED
-            reason = (
-                f"文書構造索引を構築済みです（{count} 件）。"
-                if count
-                else "文書構造索引の構築は完了しましたが、対象の見出しがありません（0 件）。"
-            )
         await oracle.upsert_artifact_layer(
             layer_id=_recipe_layer_id(chunk_set_id, settings, layer),
             layer_kind=layer,
@@ -3627,7 +3605,6 @@ def _requested_layer_ids_for_chunk_set(
     knowledge_base_ids = plan.chunk_sets.get(chunk_set_id, frozenset())
     layer_map = {
         "metadata": plan.metadata_layers,
-        "graph": plan.graph_layers,
         "navigation": plan.nav_layers,
     }.get(layer)
     if not knowledge_base_ids or layer_map is None:
@@ -3647,8 +3624,6 @@ def _requested_layer_ids_for_chunk_set(
 def _layer_requested(layer: str, settings: Settings) -> bool:
     if layer == "metadata":
         return bool(settings.rag_field_extraction_enabled)
-    if layer == "graph":
-        return settings.rag_graph_profile != "off"
     if layer == "navigation":
         return bool(settings.rag_navigation_summary_enabled)
     return False

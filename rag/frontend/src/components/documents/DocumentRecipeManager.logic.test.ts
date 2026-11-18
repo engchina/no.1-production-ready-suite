@@ -26,7 +26,6 @@ const emptyConfig: DocumentProcessingConfig = {
   chunk_size: null,
   chunk_overlap: null,
   chunk_min_chars: null,
-  graph_profile: null,
   field_extraction_enabled: null,
   navigation_summary_enabled: null,
   auto_parse_after_preprocess_enabled: null,

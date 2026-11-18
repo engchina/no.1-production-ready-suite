@@ -67,18 +67,18 @@ export function EntityIndexSettingsClient() {
         <CardContent className="space-y-5">
           <RadioOptionGroup<"off" | "on">
             id="entity-index-build"
-            legend={t("settings.graph.profile")}
+            legend={t("settings.entityIndex.profile")}
             options={[
               {
                 value: "off",
-                label: t("settings.graph.profile.off"),
+                label: t("settings.entityIndex.profile.off"),
                 description: t("settings.entityIndex.off.description"),
               },
               {
                 value: "on",
-                label: t("settings.graph.profile.entities"),
+                label: t("settings.entityIndex.profile.on"),
                 // 全体の既定(backend の Settings.rag_entity_index_enabled の既定 True)に「既定」と添える。
-                badges: <StatusBadge variant="neutral" icon={false} label={t("settings.graph.defaultTag")} />,
+                badges: <StatusBadge variant="neutral" icon={false} label={t("settings.entityIndex.defaultTag")} />,
                 description: t("settings.entityIndex.on.description"),
               },
             ]}
@@ -90,16 +90,16 @@ export function EntityIndexSettingsClient() {
           <FormActionBar
             ariaLabel={t("settings.entityIndex.actions")}
             primaryActions={[{
-              id: "save", label: t("settings.graph.actions.save"), icon: Save,
+              id: "save", label: t("settings.entityIndex.actions.save"), icon: Save,
               loading: save.isPending, disabled: !dirty,
               onClick: () => save.mutate({ enabled }, { onSuccess: () => toast.success(t("settings.entityIndex.saved")) }),
             }]}
             secondaryActions={[{
-              id: "reset", label: t("settings.graph.actions.reset"), icon: RotateCcw,
+              id: "reset", label: t("settings.entityIndex.actions.reset"), icon: RotateCcw,
               disabled: !dirty || save.isPending,
               onClick: () => { save.reset(); setEnabled(query.data?.enabled ?? false); },
             }]}
-            status={save.isError ? <FormStatus tone="danger" message={save.error instanceof ApiError ? save.error.message : t("settings.entityIndex.error")} /> : dirty ? <FormStatus tone="warning" message={t("settings.graph.actions.unsaved")} /> : null}
+            status={save.isError ? <FormStatus tone="danger" message={save.error instanceof ApiError ? save.error.message : t("settings.entityIndex.error")} /> : dirty ? <FormStatus tone="warning" message={t("settings.entityIndex.actions.unsaved")} /> : null}
           />
         </CardContent>
       </Card>

@@ -108,7 +108,6 @@ def recorded_layer_fingerprint(
         max_nodes = artifacts.get(NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY)
         if isinstance(max_nodes, int) and not isinstance(max_nodes, bool):
             fingerprint[NAVIGATION_SUMMARY_MAX_NODES_INPUT] = max_nodes
-    # 関係情報(graph)は実体化しない(計画だけ)ため、比べる入力を持たない。
     return fingerprint or None
 
 

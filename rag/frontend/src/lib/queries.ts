@@ -88,8 +88,6 @@ import {
   type EvaluationSettingsData,
   type EvaluationSettingsUpdate,
   type EntityIndexSettingsData,
-  type GraphSettingsData,
-  type GraphSettingsUpdate,
   type ApprovedFaqListData,
   type ApprovedFaqMutationData,
   type RuntimeKnowledgeEditRequest,
@@ -216,7 +214,6 @@ export const queryKeys = {
   vectorIndexSettings: ["settings", "vector-index"] as const,
   evaluationSettings: ["settings", "evaluation-suite"] as const,
   entityIndexSettings: ["settings", "entity-index"] as const,
-  graphSettings: ["settings", "graph"] as const,
   services: ["services"] as const,
   serviceCatalog: ["services", "catalog"] as const,
   serviceStatus: (serviceId: string) =>
@@ -2237,27 +2234,6 @@ export function useUpdateEntityIndexSettings() {
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.entityIndexSettings, data);
       void qc.invalidateQueries({ queryKey: queryKeys.pipelineSettings });
-    },
-  });
-}
-
-/** 文書構造索引の構築（構築する / しない）の設定。 */
-export function useGraphSettings() {
-  return useQuery<GraphSettingsData>({
-    queryKey: queryKeys.graphSettings,
-    queryFn: api.getGraphSettings,
-    retry: false,
-  });
-}
-
-/** 文書構造索引の構築の設定をランタイム保存。 */
-export function useUpdateGraphSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: GraphSettingsUpdate) =>
-      api.updateGraphSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.graphSettings, data);
     },
   });
 }

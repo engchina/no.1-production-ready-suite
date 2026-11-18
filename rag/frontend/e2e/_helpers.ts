@@ -27,7 +27,6 @@ export const MENU_PERMISSION_CODES = [
   "menu.settings_guardrail",
   "menu.settings_evaluation",
   "menu.settings_entity_index",
-  "menu.settings_graph",
   "menu.security_permissions",
   "menu.security_users",
   "menu.security_roles",

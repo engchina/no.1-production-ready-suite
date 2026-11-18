@@ -8,7 +8,6 @@ from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
-    compute_graph_layer_id,
     compute_layer_ids,
     compute_metadata_layer_id,
     compute_nav_layer_id,
@@ -186,17 +185,6 @@ def test_chunk_set_id_changes_with_source() -> None:
     assert compute_chunk_set_id(SRC, settings) != compute_chunk_set_id(SRC2, settings)
 
 
-def test_graph_axis_shares_chunk_set_but_splits_graph_layer() -> None:
-    """graph_profile だけ違うとき chunk_set は共有、graph 層だけ別になる。"""
-    off = get_settings().model_copy(update={"rag_graph_profile": "off"})
-    entities = get_settings().model_copy(update={"rag_graph_profile": "entities"})
-
-    cs_off = compute_chunk_set_id(SRC, off)
-    cs_entities = compute_chunk_set_id(SRC, entities)
-    assert cs_off == cs_entities
-    assert compute_graph_layer_id(cs_off, off) != compute_graph_layer_id(cs_entities, entities)
-
-
 def test_field_extraction_axis_splits_chunks_and_metadata_layer() -> None:
     """項目の検索用 Chunk が増えるため chunk_set と metadata 層を分ける。"""
     off = get_settings().model_copy(update={"rag_field_extraction_enabled": False})
@@ -218,7 +206,7 @@ def test_nav_axis_splits_chunks_and_nav_layer() -> None:
 
 
 def test_layer_ids_are_consistent_bundle() -> None:
-    """compute_layer_ids は個別計算と一致し、5 層キーを返す。"""
+    """compute_layer_ids は個別計算と一致し、4 層キーを返す(文書構造索引の層は持たない。#5484)。"""
     settings = get_settings()
     bundle = compute_layer_ids(SRC, settings)
     er = compute_extraction_recipe_id(SRC, settings)
@@ -227,13 +215,11 @@ def test_layer_ids_are_consistent_bundle() -> None:
     assert bundle["extraction_recipe_id"] == er
     assert bundle["chunk_set_id"] == cs
     assert bundle["metadata_layer_id"] == compute_metadata_layer_id(cs, settings)
-    assert bundle["graph_layer_id"] == compute_graph_layer_id(cs, settings)
     assert bundle["nav_layer_id"] == compute_nav_layer_id(cs, settings)
     assert set(bundle) == {
         "extraction_recipe_id",
         "chunk_set_id",
         "metadata_layer_id",
-        "graph_layer_id",
         "nav_layer_id",
     }
 
@@ -244,7 +230,6 @@ def test_ids_carry_layer_prefixes() -> None:
     assert bundle["extraction_recipe_id"].startswith("er_")
     assert bundle["chunk_set_id"].startswith("cs_")
     assert bundle["metadata_layer_id"].startswith("md_")
-    assert bundle["graph_layer_id"].startswith("gr_")
     assert bundle["nav_layer_id"].startswith("nv_")
 
 

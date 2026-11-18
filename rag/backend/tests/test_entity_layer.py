@@ -775,7 +775,7 @@ async def _save_index(settings: Settings) -> _IngestOracle:
 
 async def test_recipe_without_entity_index_does_not_touch_the_entity_tables() -> None:
     """明示 OFF は実体の表に触らない（SQL も実行しない）。"""
-    oracle = await _save_index(Settings(rag_graph_profile="off", rag_entity_index_enabled=False))
+    oracle = await _save_index(Settings(rag_entity_index_enabled=False))
 
     assert oracle.saved == [ORG]
     assert oracle.transactions == 0
@@ -784,11 +784,7 @@ async def test_recipe_without_entity_index_does_not_touch_the_entity_tables() ->
 @pytest.mark.parametrize("explicit", [False, True])
 async def test_enabled_recipe_saves_the_entity_index_after_the_index(explicit: bool) -> None:
     """構築を選んだとき（未指定は既定 ON。#5187）は、列の指定が無くても索引を保存する。"""
-    settings = (
-        Settings(rag_graph_profile="off", rag_entity_index_enabled=True)
-        if explicit
-        else Settings(_env_file=None, rag_graph_profile="off")
-    )
+    settings = Settings(rag_entity_index_enabled=True) if explicit else Settings(_env_file=None)
     oracle = await _save_index(settings)
 
     assert oracle.saved == [ORG]

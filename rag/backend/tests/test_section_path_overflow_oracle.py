@@ -182,7 +182,6 @@ async def test_structure_plan_counts_long_heading(field: str, parent: str) -> No
     client = OracleClient()
     token = uuid4().hex[:8]
     kb = await client.create_knowledge_base(name=f"合成参照 KB {token}")
-    await client.set_knowledge_base_structure_index(kb.id, True)
     document_id = await _indexed_document(
         client,
         file_name=f"plan-{token}.pdf",

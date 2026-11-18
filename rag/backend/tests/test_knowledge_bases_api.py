@@ -951,13 +951,13 @@ def test_existence_and_config_checks_do_not_load_the_detail_counts(
         f"/api/knowledge-bases/{archived_id}/extraction-fields", json={"fields": []}
     )
     assert archived.status_code == 409
-    assert client.get(f"{base}/structure-index").status_code == 200
+    # 構築の有無の設定(GET / PUT structure-index)は削除した(#5484)。
+    assert client.get(f"{base}/structure-index").status_code == 404
     job = client.get(f"{base}/structure-index/job")
     assert job.status_code == 200
     assert job.json()["data"] is None
     for path in (
         "extraction-fields",
-        "structure-index",
         "structure-index/job",
     ):
         assert client.get(f"/api/knowledge-bases/kb-missing/{path}").status_code == 404

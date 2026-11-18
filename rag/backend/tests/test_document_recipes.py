@@ -45,7 +45,6 @@ from app.rag.layer_fingerprint import (
     field_schema_hash,
 )
 from app.rag.variant_keys import (
-    compute_graph_layer_id,
     compute_metadata_layer_id,
     compute_nav_layer_id,
 )
@@ -1657,13 +1656,11 @@ async def test_recipe_job_source_fetch_failure_marks_only_recipe_error(
 def _layer_settings(*, enabled: bool) -> Settings:
     if enabled:
         settings = Settings(
-            rag_graph_profile="entities",
             rag_field_extraction_enabled=True,
             rag_navigation_summary_enabled=True,
         )
     else:
         settings = Settings(
-            rag_graph_profile="off",
             rag_field_extraction_enabled=False,
             rag_navigation_summary_enabled=False,
         )
@@ -1694,7 +1691,6 @@ async def test_recipe_job_records_layers_and_chunk_sets_endpoint_reports_them(
     assert fake.activated == ["chunk-set-pending"]
     expected_ids = {
         "metadata": compute_metadata_layer_id("chunk-set-pending", settings),
-        "graph": compute_graph_layer_id("chunk-set-pending", settings),
         "navigation": compute_nav_layer_id("chunk-set-pending", settings),
     }
     assert {
@@ -1712,12 +1708,13 @@ async def test_recipe_job_records_layers_and_chunk_sets_endpoint_reports_them(
     statuses = response.data[0].layer_statuses
     by_layer = {
         "metadata": statuses.metadata,
-        "graph": statuses.graph,
         "navigation": statuses.navigation,
     }
     assert all(status.requested for status in by_layer.values())
     assert {name: status.layer_id for name, status in by_layer.items()} == expected_ids
     assert statuses.navigation.status == DocumentLayerStatusName.MATERIALIZED
+    # 文書構造索引は取込で作らず記録もしない(#5484)。手動で構築した件数だけで示す。
+    assert statuses.graph.layer_id is None
     assert statuses.graph.status == DocumentLayerStatusName.MATERIALIZED
     assert "4 件" in (statuses.graph.reason or "")
 
@@ -1741,9 +1738,11 @@ async def test_recipe_chunk_set_reports_not_requested_layers_without_recording(
     assert fake.layers == {}
     assert response.data is not None
     statuses = response.data[0].layer_statuses
-    for status in (statuses.metadata, statuses.graph, statuses.navigation):
+    for status in (statuses.metadata, statuses.navigation):
         assert status.requested is False
         assert status.status == DocumentLayerStatusName.NOT_REQUESTED
+    # 文書構造索引はレシピの設定に関わらず、手動で構築した件数で示す(#5484)。
+    assert statuses.graph.status == DocumentLayerStatusName.MATERIALIZED
 
 
 # --- 作り直しが必要の判定(#550) ---
@@ -2052,13 +2051,13 @@ async def test_index_reprocess_clones_active_chunks_and_activates_only_after_suc
 @pytest.mark.parametrize(
     ("chunk_status", "count", "expected"),
     [
-        ("INDEXED", 0, DocumentLayerStatusName.MATERIALIZED),
+        ("INDEXED", 0, DocumentLayerStatusName.NOT_REQUESTED),
         ("INDEXED", 4, DocumentLayerStatusName.MATERIALIZED),
-        ("ERROR", 4, DocumentLayerStatusName.ERROR),
-        ("CHUNKED", 0, DocumentLayerStatusName.PLANNED_ONLY),
+        ("ERROR", 4, DocumentLayerStatusName.MATERIALIZED),
+        ("CHUNKED", 0, DocumentLayerStatusName.NOT_REQUESTED),
     ],
 )
-async def test_graph_layer_uses_materialization_result(
+async def test_graph_layer_reports_manually_built_count(
     monkeypatch: pytest.MonkeyPatch,
     chunk_status: str,
     count: int,
@@ -2081,8 +2080,10 @@ async def test_graph_layer_uses_materialization_result(
     result = await documents_route.list_document_chunk_sets("doc-1")
     assert result.data is not None
     graph = result.data[0].layer_statuses.graph
+    # 取込では作らず、KB の画面で手動で構築した件数だけで示す(#5484)。
     assert graph.status == expected
-    if chunk_status == "INDEXED":
+    assert graph.requested is bool(count)
+    if count:
         assert f"{count} 件" in (graph.reason or "")
 
 
