@@ -212,6 +212,8 @@ async function mockParserAdapters(page: Page) {
           { name: "条", pattern: "^第[0-9]+条", level: 2, enabled: true },
         ],
         presets: { legal: [{ name: "章", pattern: "^第[0-9]+章", level: 2, enabled: true }] },
+        default_mode: "parser",
+        default_rules: [],
       }),
     })
   );

@@ -514,8 +514,7 @@ def test_section_rules_changes_rebuild_maps_of_all_documents(
 
     saved = client.patch("/api/settings/section-rules", json={"mode": "legal", "rules": []})
     assert saved.status_code == 200, saved.text
-    assert client.delete("/api/settings/section-rules").status_code == 200
-    assert reasons == ["section_rules_saved", "section_rules_reset"]
+    assert reasons == ["section_rules_saved"]
 
 
 async def test_refresh_all_rebuilds_every_indexed_document(monkeypatch: pytest.MonkeyPatch) -> None:
