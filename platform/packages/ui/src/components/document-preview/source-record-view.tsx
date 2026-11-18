@@ -32,7 +32,7 @@ export function SourceRecordView({record,cited,highlight,fallback}:{record:Sourc
       const longColumns=new Set(part.columns.map((_,column)=>column).filter(column=>part.rows.some(row=>{const value=row.cells[column] ?? "";return value.includes("\n") || Array.from(value).length>40;})));
       if(cited) {
         // 引用した記録は「項目 → 値」で縦に並べ、記録の枠ごと強調する（横のスクロールを出さない。#5415）。
-        return <div key={index} className="space-y-3">{part.rows.map(row=><section key={row.label} aria-label={`行 ${row.label}`} data-source-record-cited="" className={highlight ? "space-y-2 rounded-md border-l-4 border-accent-emphasis bg-accent-subtle p-3" : "space-y-2"}>
+        return <div key={index} className="space-y-3">{part.rows.map(row=><section key={row.label} aria-label={`行 ${row.label}`} data-source-record-cited="" data-surface-tint={highlight ? "accent" : undefined} className={highlight ? "space-y-2 rounded-md border-l-4 border-accent-emphasis bg-accent-subtle p-3" : "space-y-2"}>
           <p className="text-xs font-medium text-fg-muted">行 {row.label}</p>
           <RunFactList facts={part.columns.map((label,column)=>{const value=row.cells[column] ?? "";return {id:`column-${column}`,label,wide:longColumns.has(column),value:value ? <span lang={resolveContentLang(undefined,value)} className="whitespace-pre-wrap">{value}</span> : <span className="text-fg-muted">—</span>};})}/>
         </section>)}</div>;
