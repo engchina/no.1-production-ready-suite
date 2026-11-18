@@ -108,6 +108,12 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
     await section.screenshot({ path: test.info().outputPath(`kb-extraction-fields-${theme}.png`) });
 
+    // 並びは 保存 → 変更を破棄 → 全体の既定に戻す（#5458）。
+    await expect(section.getByRole("group", { name: "項目の定義の操作" }).getByRole("button")).toHaveText([
+      "項目の定義を保存",
+      "変更を破棄",
+      "全体の既定に戻す",
+    ]);
     await section.getByRole("button", { name: "全体の既定に戻す" }).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("全体の既定に戻しますか？");

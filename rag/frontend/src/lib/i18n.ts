@@ -406,6 +406,7 @@ export const ja = {
   "settings.extractionFields.limit": "項目は {max} 件まで定義できます。",
   "settings.extractionFields.save": "項目の定義を保存",
   "settings.extractionFields.discard": "変更を破棄",
+  "settings.extractionFields.actionsLabel": "項目の定義の操作",
   "settings.extractionFields.saved": "項目の定義を保存しました。",
   "settings.extractionFields.saveError": "項目の定義を保存できませんでした。",
   "settings.extractionFields.loading": "項目の定義を読み込んでいます",

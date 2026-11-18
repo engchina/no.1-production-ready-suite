@@ -20,7 +20,7 @@ import {
   toast,
 } from "@production-ready/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, MessageSquareWarning, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { Eye, History, MessageSquareWarning, RefreshCw, Save } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { formatMessage } from "../auth/messages";
@@ -316,15 +316,13 @@ export function AnswerNoticeSettingsPage({
                 <FormActionBar
                   ariaLabel={m.actionsLabel}
                   primaryActions={[{ id: "save", type: "submit", label: m.save, icon: Save, loading: save.isPending }]}
-                  secondaryActions={[
-                    {
-                      id: "reset",
-                      label: m.resetToDefault,
-                      icon: RotateCcw,
-                      disabled: isDefaultText || save.isPending,
-                      onClick: () => updateForm({ text: data.default_text, contact: defaultContact }),
-                    },
-                  ]}
+                  restoreDefaultsAction={{
+                    id: "reset",
+                    label: m.resetToDefault,
+                    icon: History,
+                    disabled: isDefaultText || save.isPending,
+                    onClick: () => updateForm({ text: data.default_text, contact: defaultContact }),
+                  }}
                   status={save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
                 />
               </CardContent>

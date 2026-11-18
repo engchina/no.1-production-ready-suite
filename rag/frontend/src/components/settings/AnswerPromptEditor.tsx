@@ -173,14 +173,14 @@ function AnswerPromptEditor({
             disabled: !dirty || save.isPending,
             onClick: discard,
           },
-          {
-            id: "restore-default",
-            label: t("settings.answerPrompts.reset"),
-            icon: History,
-            disabled: save.isPending || (content === prompt.default_content && (!prompt.customized || restoreDefault)),
-            onClick: reset,
-          },
         ]}
+        restoreDefaultsAction={{
+          id: "restore-default",
+          label: t("settings.answerPrompts.reset"),
+          icon: History,
+          disabled: save.isPending || (content === prompt.default_content && (!prompt.customized || restoreDefault)),
+          onClick: reset,
+        }}
         status={
           save.isError ? (
             <FormStatus
