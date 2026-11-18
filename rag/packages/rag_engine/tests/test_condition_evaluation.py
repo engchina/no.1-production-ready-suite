@@ -181,5 +181,35 @@ def test_reservation_only_answer_scores_zero_without_calling_it_a_contradiction(
     )
     scores = score_judgement(inputs, output)
     assert scores["answer_correctness"] == 0.0
-    assert scores["correctness_reason"] == "標準回答と合う主張がありません（質問に答えていません）。"
+    assert scores["correctness_reason"] == "標準回答と合う主張がありません（標準回答に具体的な答えが無いか、回答が質問に答えていません）。"
     assert "食い違う" not in scores["correctness_reason"]
+
+
+@pytest.mark.parametrize(
+    ("standard_answer", "verdict", "correctness"),
+    [
+        ("架空のサービスAの状態と処理記録に基づいた確認手順を提案できる。", "not_in_standard", 0.0),
+        ("状態画面でstatusがreadyであることを確かめる。処理記録の完了件数は3件。", "supported", 1.0),
+        ("状態画面でstatusがstoppedであることを確かめる。処理記録の完了件数は8件。", "contradicted", 0.0),
+    ],
+)
+def test_coverage_does_not_override_correctness(standard_answer, verdict, correctness):
+    """#5398: 要点をすべて覆っても、正確性は主張の印だけで決まる。合う主張が無いときの理由は、標準回答に
+    具体的な答えが無い場合と質問に答えていない場合のどちらとも断定しない。"""
+    inputs = judge_inputs(
+        _payload(
+            question="架空のサービスAの起動をどう確認しますか。",
+            standard_answer=standard_answer,
+            answer_points=["起動状態の確認方法", "処理完了件数の確認方法"],
+            answer_text="状態画面でstatusがreadyであることを確かめます。処理記録で完了件数が3件であることを確かめます。",
+        )
+    )
+    standard_ids = [] if verdict == "not_in_standard" else ["S1"]
+    output = _output(
+        [{"answer_ids": ["A1"], "verdict": verdict, "standard_ids": standard_ids}],
+        [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": True}],
+    )
+    scores = score_judgement(inputs, output)
+    assert (scores["answer_correctness"], scores["answer_coverage"]) == (correctness, 1.0)
+    if verdict == "not_in_standard":
+        assert "標準回答に具体的な答えが無いか" in scores["correctness_reason"]

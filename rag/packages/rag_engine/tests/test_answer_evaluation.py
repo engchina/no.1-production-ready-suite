@@ -88,7 +88,7 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
         "correctness_reason": {
             "supported": "標準回答と矛盾する主張はありません。",
             "contradicted": "回答の「ログを確認して原因を特定します。」と標準回答の「ログを確認して原因を特定する。」が食い違う。",
-            "not_in_standard": "標準回答と合う主張がありません（質問に答えていません）。",
+            "not_in_standard": "標準回答と合う主張がありません（標準回答に具体的な答えが無いか、回答が質問に答えていません）。",
         }[value],
         "correctness_claims": [{"verdict": value, "answer": "ログを確認して原因を特定します。", "standard": standard}],
         "coverage_points": [{"point": "ログを確認して原因を特定する。", "covered": True}],
