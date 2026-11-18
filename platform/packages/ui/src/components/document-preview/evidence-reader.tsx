@@ -44,6 +44,23 @@ const labels = {
   anchorShown: "引用位置へ戻りました。",
 };
 const EMPTY_INPUT: EvidenceReadingInput = {};
+type ReaderBlock = EvidenceReadingWindow["blocks"][number];
+
+/**
+ * 続くブロックの役割（引用の元 / 追加の参考文脈）と章節が同じなら 1 つの区画にまとめる（#5428）。
+ * 1 行が 1 要素の原本・リストの項目を、役割と章節名の繰り返しで細切れにしない。CSV・Excel の記録は
+ * 記録ごとの位置を出すのでまとめない。
+ */
+export function readerGroups(blocks: readonly ReaderBlock[]): { cited: boolean; heading?: string[]; items: ReaderBlock[] }[] {
+  const groups: { key: string; cited: boolean; heading?: string[]; items: ReaderBlock[] }[] = [];
+  for (const block of blocks) {
+    const key = `${block.cited}:${(block.heading ?? []).join("\u0000")}`;
+    const last = groups.at(-1);
+    if (last && last.key === key && !block.record && !last.items.at(-1)?.record) last.items.push(block);
+    else groups.push({ key, cited: block.cited, heading: block.heading, items: [block] });
+  }
+  return groups;
+}
 
 export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true, loadOriginal, purpose = "citation" }: {
   readingKey: string;
@@ -140,12 +157,22 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
     {state.pending ? <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} showSlowMessage={!blocks.length} testId="evidence-reader-loading">{!blocks.length ? <Skeleton className="h-16 w-full" /> : null}</TimedLoadingState> : null}
     <Button variant="secondary" size="sm" disabled={!first?.previous_cursor || state.pending} onClick={() => read({ cursor: first!.previous_cursor!, direction: "before" })}><ArrowLeft size={14} aria-hidden />{labels.before}</Button>
     <div ref={viewport} role="region" aria-label={labels.body} tabIndex={0} aria-busy={state.pending} data-surface-tint={state.pending ? "neutral" : undefined} className={`${outline.key === readingKey && outline.open && !state.pending ? "min-h-[min(16rem,30dvh)]" : "min-h-0"} flex-1 space-y-4 overflow-y-auto overscroll-contain [overflow-anchor:none] ${state.pending ? "bg-surface-sunken" : ""}`} data-testid="evidence-reader-content">
-      {blocks.map(block => <section key={`${block.id}:${block.offset}`} data-reader-block={`${block.id}:${block.offset}`} data-reader-cited={block.cited} data-reader-current={Boolean(state.notice && state.target === `${block.id}:${block.offset}`)} className="space-y-1">
-        <p className="text-xs text-fg-muted">{state.notice && state.target === `${block.id}:${block.offset}` ? `${labels.current} · ` : ""}{block.cited ? purpose === "selection" ? "選択した原文の記録" : labels.cited : labels.context}</p>
-        {block.heading?.length ? <p className="text-sm font-semibold">{block.heading.join(" › ")}</p> : null}
-        {block.record ? <SourceRecordView record={block.record} cited={block.cited} highlight={highlight} fallback={block.text}/> : block.kind === "table" ? <div className="space-y-1"><ExcerptContent contentKind="table" text={block.text} highlights={highlight && block.cited ? block.highlights : undefined} tableLabel={labels.table} className="text-sm leading-relaxed" /></div> : <p lang={resolveContentLang(undefined, block.text)} className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? <CodepointHighlight text={block.text} ranges={block.highlights} /> : block.text}</p>}
-        {loadOriginal && current ? <OriginalSourcePanel key={`${block.id}:${current.revision}`} readingKey={readingKey} elementId={block.id} revision={current.revision} loadWindow={loadOriginal} enabled={enabled} /> : null}
-      </section>)}
+      {readerGroups(blocks).map(group => {
+        const blockKey = (block: ReaderBlock) => `${block.id}:${block.offset}`;
+        const currentBlock = state.notice ? group.items.find(block => state.target === blockKey(block)) : undefined;
+        // 区画の先頭が章節の見出しそのものなら、太字の章節名を重ねずにその本文を太字にする（#5428）。
+        // 章節名は空白を詰めて保存するので、空白（全角を含む）を詰めて比べる。
+        const squash = (value: string | undefined) => value?.replace(/\s+/g, " ").trim();
+        const leadIsHeading = group.items[0].kind === "title" && squash(group.items[0].text) === squash(group.heading?.at(-1));
+        return <section key={`group:${blockKey(group.items[0])}`} data-reader-group="" className="space-y-1">
+          <p className="text-xs text-fg-muted">{currentBlock ? `${labels.current} · ` : ""}{group.cited ? purpose === "selection" ? "選択した原文の記録" : labels.cited : labels.context}</p>
+          {group.heading?.length && !leadIsHeading ? <p className="text-sm font-semibold">{group.heading.join(" › ")}</p> : null}
+          {group.items.map((block, index) => <div key={blockKey(block)} data-reader-block={blockKey(block)} data-reader-cited={block.cited} data-reader-current={currentBlock === block} className="space-y-1">
+            {block.record ? <SourceRecordView record={block.record} cited={block.cited} highlight={highlight} fallback={block.text}/> : block.kind === "table" ? <div className="space-y-1"><ExcerptContent contentKind="table" text={block.text} highlights={highlight && block.cited ? block.highlights : undefined} tableLabel={labels.table} className="text-sm leading-relaxed" /></div> : <p lang={resolveContentLang(undefined, block.text)} className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${leadIsHeading && index === 0 ? "font-semibold" : ""}`}>{highlight && block.highlights.length ? <CodepointHighlight text={block.text} ranges={block.highlights} /> : block.text}</p>}
+            {loadOriginal && current ? <OriginalSourcePanel key={`${block.id}:${current.revision}`} readingKey={readingKey} elementId={block.id} revision={current.revision} loadWindow={loadOriginal} enabled={enabled} /> : null}
+          </div>)}
+        </section>;
+      })}
       {!blocks.length && !state.pending && !state.error ? <p className="text-sm text-fg-muted">{labels.empty}</p> : null}
     </div>
     <Button variant="secondary" size="sm" disabled={!last?.next_cursor || state.pending} onClick={() => read({ cursor: last!.next_cursor!, direction: "after" })}>{labels.after}<ArrowRight size={14} aria-hidden /></Button>
