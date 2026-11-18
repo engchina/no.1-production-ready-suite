@@ -2623,11 +2623,11 @@ function IngestionSegmentsPanel({
   // 段の一覧は既定で畳み、失敗した段があるときだけ開く（主の進捗は工程の行の 1 か所。#2001）。
   // 状態が変わったら開き直すため、失敗の有無を key にする（Disclosure の defaultOpen）。再試行の結果を
   // 出しているあいだは開いたままにする（段が待機中に変わって畳まれ、押した結果が見えなくならない。#2034）。
+  // 一覧は状態色の面に置かず中立の sunken にし、失敗は行の「失敗」と理由・既定で開くこと・再試行の領域で示す（#397 / #5480）。
   return (
     <Disclosure
       key={showRetry ? "failed" : "active"}
       defaultOpen={showRetry}
-      tone={hasFailedSegments ? "danger" : "neutral"}
       surface="sunken"
       icon={Route}
       summary={t("flow.segments.title")}
@@ -3579,54 +3579,48 @@ function DocumentClassificationEditor({
   };
 
   return (
-    // 入力は縦に長く、使う場面が限られるので最初は閉じる。閉じたままでも保存済みの値を見出しの下に出す（#5440）。
-    <section className="border-t border-border pt-4">
-      <Disclosure
-        variant="plain"
-        summary={t("documents.classification.title")}
-        summaryClassName="font-semibold"
-        summaryFooter={
-          <span className="block text-xs font-normal text-fg-muted" data-testid="document-classification-current">
-            {classificationSummary(saved)}
-          </span>
-        }
-        contentClassName="space-y-3 pt-3"
-        data-testid="document-classification"
-      >
-        <p className="text-xs text-fg-muted">{t("documents.classification.description")}</p>
-        <DocumentClassificationFields
-          idPrefix="document-classification"
-          value={form}
-          periodError={periodError}
-          disabled={save.isPending}
-          onChange={(next) => {
-            setForm(next);
-            setPeriodError(null);
-          }}
-        />
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            type="button"
-            size="md"
-            onClick={onSave}
-            loading={save.isPending}
-            disabled={!isDirty}
-            icon={Save}
-          >
-            {t("documents.classification.save")}
-          </Button>
-          {save.isSuccess && !isDirty ? (
-            <FormStatus tone="success" message={t("documents.classification.saved")} />
-          ) : null}
-          {save.isError ? (
-            <FormStatus
-              tone="danger"
-              message={errorMessage(save.error, t("documents.classification.saveError"))}
-            />
-          ) : null}
-        </div>
-      </Disclosure>
-    </section>
+    // 入力は縦に長く、使う場面が限られるので最初は閉じる。閉じたままでも保存済みの値を見出しの下（description）に出す
+    // （#5440）。カードの中のフォームの区画なので sunken の card にする（#397）。
+    <Disclosure
+      surface="sunken"
+      summary={t("documents.classification.title")}
+      description={<span data-testid="document-classification-current">{classificationSummary(saved)}</span>}
+      contentClassName="space-y-3"
+      data-testid="document-classification"
+    >
+      <p className="text-xs text-fg-muted">{t("documents.classification.description")}</p>
+      <DocumentClassificationFields
+        idPrefix="document-classification"
+        value={form}
+        periodError={periodError}
+        disabled={save.isPending}
+        onChange={(next) => {
+          setForm(next);
+          setPeriodError(null);
+        }}
+      />
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          size="md"
+          onClick={onSave}
+          loading={save.isPending}
+          disabled={!isDirty}
+          icon={Save}
+        >
+          {t("documents.classification.save")}
+        </Button>
+        {save.isSuccess && !isDirty ? (
+          <FormStatus tone="success" message={t("documents.classification.saved")} />
+        ) : null}
+        {save.isError ? (
+          <FormStatus
+            tone="danger"
+            message={errorMessage(save.error, t("documents.classification.saveError"))}
+          />
+        ) : null}
+      </div>
+    </Disclosure>
   );
 }
 

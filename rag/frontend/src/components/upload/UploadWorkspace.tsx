@@ -428,7 +428,7 @@ const UPLOAD_CLASSIFICATION_ID_PREFIX = "upload-classification";
 
 /**
  * アップロードするファイルの分類と有効期間（任意。#5464）。文書の詳細の「文書の分類と有効期間」と同じ欄・
- * 検証・閉じたときの要約で、使う場面が限られるので最初は閉じる。保存ボタンは置かない。
+ * 検証・閉じたときの要約（見出しの下の description。#397）で、使う場面が限られるので最初は閉じる。保存ボタンは置かない。
  */
 function UploadClassificationPicker({
   value,
@@ -448,12 +448,7 @@ function UploadClassificationPicker({
   return (
     <Disclosure
       summary={t("documents.classification.title")}
-      summaryClassName="font-semibold"
-      summaryFooter={
-        <span className="block text-xs font-normal text-fg-muted" data-testid="upload-classification-current">
-          {classificationSummary(value)}
-        </span>
-      }
+      description={<span data-testid="upload-classification-current">{classificationSummary(value)}</span>}
       open={open}
       onOpenChange={onOpenChange}
       contentClassName="space-y-3"

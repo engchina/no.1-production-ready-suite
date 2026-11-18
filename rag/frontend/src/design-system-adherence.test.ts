@@ -10,6 +10,8 @@ const LOADING_ICON = "loading を渡す Button には icon を渡す";
 const FOCUS_RING = "フォーカスの表示を ring";
 const HANDWRITTEN_SEARCH = "アイコン付きの入力欄（検索欄）を手書きしない";
 const HANDWRITTEN_DISCLOSURE = "開閉できる領域は <details> / <summary> を手書きせず";
+const DISCLOSURE_SUMMARY_TERNARY = "Disclosure の summary を三項式で切り替えない";
+const DISCLOSURE_SUMMARY_FOOTER = "製品で Disclosure の summaryFooter を使わない";
 const HANDWRITTEN_TEXTAREA = "複数行の入力欄は <textarea> を手書きせず";
 const NATIVE_SELECT = "選択欄はネイティブの <select> を手書きせず";
 const LIST_SEARCH = "一覧の絞り込みの検索欄は SearchField";
@@ -127,6 +129,22 @@ const d = <button aria-expanded={open}>詳細<DisclosureChevron expanded={open} 
 const e = <div data-details="x">詳細</div>;
 `);
     expect(linesWith(messages, HANDWRITTEN_DISCLOSURE)).toEqual([2, 3]);
+  });
+});
+
+describe("adherence: Disclosure の見出しは固定の名詞・summaryFooter は処理の経過の案内だけ（#397 / #5480）", () => {
+  it("summary の三項式と製品の summaryFooter を検出し、固定の summary・description・meta・ほかの部品は許す", async () => {
+    const messages = await lint(`
+const a = <Disclosure summary={open ? t("graph.hide") : t("graph.show")} open={open} onOpenChange={setOpen}>本文</Disclosure>;
+const b = <Disclosure summary="分類" summaryFooter={<span>{current}</span>}>本文</Disclosure>;
+const c = <Disclosure summary={t("graph.title")} description={t("graph.hint")} meta={<span>{count}</span>}>本文</Disclosure>;
+const d = <Disclosure summary={t(index ? "main" : "aux")}>本文</Disclosure>;
+const e = <LoadMoreFooter summary={loading ? "" : count} />;
+const f = <Disclosure summary="見出し" description={open ? "a" : "b"}>本文</Disclosure>;
+const g = <Other summaryFooter={<span>{current}</span>} />;
+`);
+    expect(linesWith(messages, DISCLOSURE_SUMMARY_TERNARY)).toEqual([2]);
+    expect(linesWith(messages, DISCLOSURE_SUMMARY_FOOTER)).toEqual([3]);
   });
 });
 

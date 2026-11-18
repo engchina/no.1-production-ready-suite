@@ -2298,8 +2298,6 @@ export const ja = {
   "knowledgeBases.graph.selectedNode": "選択したノード",
   "knowledgeBases.graph.selectedEdge": "選択した関係",
   "knowledgeBases.graph.clearSelection": "選択を解除",
-  "knowledgeBases.graph.show": "文書構造グラフを表示",
-  "knowledgeBases.graph.hide": "文書構造グラフを隠す",
   "knowledgeBases.graph.title": "文書構造グラフ",
   "knowledgeBases.graph.loading": "グラフを読み込んでいます",
   "knowledgeBases.graph.hint":
