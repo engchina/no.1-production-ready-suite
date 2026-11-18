@@ -168,11 +168,6 @@ const SCOPE_ERROR_ID = "search-answer-profile-scope-error";
 const NAME_MAX_LENGTH = 256;
 const DESCRIPTION_MAX_LENGTH = 2000;
 
-// 0〜20(backend の rag_max_anchors_per_document と同じ範囲。0 は上限なし。#2167)。
-const MAX_ANCHORS_PER_DOCUMENT_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
-  value: String(n),
-  label: n === 0 ? t("searchAnswerProfiles.field.maxAnchorsPerDocumentUnlimited") : String(n),
-}));
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {};
 }
@@ -932,25 +927,8 @@ function SearchAnswerProfileEditor({
                 </legend>
                 <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.query.helper")}</p>
                 <div className="space-y-3">
-                  <QuerySelectRow
-                    id="search-answer-profile-max-anchors-per-document"
-                    label={t("searchAnswerProfiles.field.maxAnchorsPerDocument")}
-                    helper={t("searchAnswerProfiles.field.maxAnchorsPerDocumentHelper")}
-                    value={
-                      config.query.max_anchors_per_document == null
-                        ? null
-                        : String(config.query.max_anchors_per_document)
-                    }
-                    options={MAX_ANCHORS_PER_DOCUMENT_OPTIONS}
-                    width="sm"
-                    defaultOnOverride="5"
-                    disabled={locked}
-                    onChange={(value) =>
-                      updateQuery({
-                        max_anchors_per_document: value === null ? null : Number(value),
-                      })
-                    }
-                  />
+                  {/* 「1 つの文書から採る根拠の上限」（query.max_anchors_per_document）は画面に出さない（#5443。
+                      全体設定の既定は上限なし）。保存済みの値は config に残し、そのまま保存し直す。 */}
                   <QuerySelectRow
                     id="search-answer-profile-answer-model"
                     width="md"

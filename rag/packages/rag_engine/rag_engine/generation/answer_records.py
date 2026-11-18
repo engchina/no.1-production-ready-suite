@@ -36,8 +36,6 @@ MAX_CONTEXT_RECORDS = 12
 
 MAX_RECORD_TEXT_CHARS = 1200
 
-DEFAULT_RETRIEVAL_CANDIDATE_LIMIT = 140
-
 
 def validate_run_id(run_id: Any) -> str:
     """run_id を安全な保存パス要素として使える文字列に検証します。"""
@@ -157,11 +155,6 @@ def _rank_records_with_scores(
 
 def _rerank_configured(settings: Settings) -> bool:
     return bool(str(getattr(settings, "rerank_model", "") or "").strip() and str(getattr(settings, "oci_compartment_id", "") or "").strip())
-
-
-def _retrieval_candidate_limit(top_k: int, settings: Settings | None = None) -> int:
-    """融合後の基本候補数。回答起点数 top_k から召回・精排の幅を推測しない。"""
-    return max(1, int(getattr(settings, "retrieval_candidate_limit", DEFAULT_RETRIEVAL_CANDIDATE_LIMIT)))
 
 
 def _engine_labels(raw_engines: Any) -> dict[str, str]:
@@ -482,6 +475,21 @@ def _records_by_rerank_ranks(
     selected: list[AnswerRecord] = []
     seen: set[int] = set()
     min_score = max(0.0, float(getattr(settings, "rerank_min_relevance_score", 0.0) or 0.0))
+    # 資料の候補（添付を除く）が 1 件も下限に届かないときだけ、下限に比を掛けて 1 回だけ下げる（#5443。WeKnora の
+    # 下限の引き下げと同じ考え方）。下げた下限にも届かなければ根拠なし。
+    ratio = max(0.0, float(getattr(settings, "rerank_min_relevance_fallback_ratio", 0.0) or 0.0))
+    if (
+        min_score > 0
+        and 0 < ratio < 1
+        and not any(
+            rank.relevance_score is not None
+            and rank.relevance_score >= min_score
+            and 0 <= rank.index < len(records)
+            and not is_attachment_evidence(records[rank.index])
+            for rank in ranks
+        )
+    ):
+        min_score *= ratio
     for rank_position, rank in enumerate(ranks, start=1):
         index = rank.index
         if index in seen or index < 0 or index >= len(records):

@@ -239,11 +239,14 @@ def test_rag_config_fingerprint_exempt_list_has_only_existing_settings() -> None
     assert not _FINGERPRINT_EXEMPT_FIELDS - set(Settings.model_fields)
 
 
-def test_rag_config_fingerprint_changes_when_candidate_limit_changes() -> None:
-    """rerank へ進める基本候補の上限（150 → 1000）で fingerprint が変わる（#4141）。"""
-    assert rag_config_fingerprint(
-        Settings(rag_retrieval_candidate_limit=150)
-    ) != rag_config_fingerprint(Settings(rag_retrieval_candidate_limit=1000))
+def test_rag_config_fingerprint_changes_when_retrieval_limit_changes() -> None:
+    """検索経路ごとの取得件数（rerank の入力の数を決める）で fingerprint が変わる。
+
+    #4141・#5443。
+    """
+    assert rag_config_fingerprint(Settings(rag_retrieval_query_limit=20)) != rag_config_fingerprint(
+        Settings(rag_retrieval_query_limit=100)
+    )
 
 
 def test_image_purpose_changes_parse_identity_without_reinterpreting_query_settings() -> None:

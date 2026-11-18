@@ -1,6 +1,6 @@
 """1 つの文書から採る chunk の上限(#2167・#5165・#5170)の設定。
 
-既定 5(backend と engine で同じ)、.env とプロファイルで選び、engine へ渡す。
+既定 0 = 上限なし(backend と engine で同じ。#5443)、.env とプロファイルで選び、engine へ渡す。
 """
 
 from __future__ import annotations
@@ -18,10 +18,10 @@ from app.rag.search_answer_profile_config import (
 )
 
 
-def test_default_is_five_in_backend_and_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_is_unlimited_in_backend_and_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RAG_MAX_ANCHORS_PER_DOCUMENT", raising=False)
-    assert Settings(_env_file=None).rag_max_anchors_per_document == 5
-    assert DEFAULT_MAX_ANCHORS_PER_DOCUMENT == 5
+    assert Settings(_env_file=None).rag_max_anchors_per_document == 0
+    assert DEFAULT_MAX_ANCHORS_PER_DOCUMENT == 0
 
 
 def test_env_selects_the_limit_and_zero_means_unlimited(monkeypatch: pytest.MonkeyPatch) -> None:

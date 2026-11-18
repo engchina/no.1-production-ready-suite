@@ -47,7 +47,6 @@ from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.evidence_selection import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.expansion_merge import EXPANSION_EVIDENCE_REASON
 from rag_engine.retrieval.search_stages import (
-    CANDIDATE_DIVERSITY_STAGE,
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
     ENTITY_EXPANSION_STAGE,
@@ -548,6 +547,9 @@ def build_engine_settings(
         "EMBEDDING_ENDPOINT": genai_endpoint(settings.oci_genai_embedding_region),
         "OCI_RERANK_ENDPOINT": genai_endpoint(settings.oci_genai_rerank_region),
         "RERANK_MIN_RELEVANCE_SCORE": str(settings.rag_rerank_min_relevance_score),
+        "RERANK_MIN_RELEVANCE_FALLBACK_RATIO": str(
+            settings.rag_rerank_min_relevance_fallback_ratio
+        ),
         "RAG_HYBRID_SEARCH_BACKEND": settings.rag_hybrid_search_backend,
         # 全文検索の語の上限と式の文字数の上限(#5157)。
         "RAG_TEXT_SEARCH_MAX_TOKENS": str(settings.rag_text_search_max_tokens),
@@ -556,17 +558,6 @@ def build_engine_settings(
         "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",
         "RUNTIME_TERMS_ANSWER_ENABLED": "1" if settings.rag_runtime_terms_answer_enabled else "0",
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
-        "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
-        "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),
-        # rerank の入力の経路ごとの上限。検索拡張の chunk は rerank の候補に入らない(#5162)。
-        "RAG_ENGINE_RETRIEVAL_STAGE_LIMITS": json.dumps(
-            {
-                "fusion": settings.rag_retrieval_candidate_limit,
-                "diversity": settings.rag_candidate_diversity_max_extra
-                if settings.rag_candidate_diversity_depth > 0
-                else 0,
-            }
-        ),
         # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
@@ -1124,7 +1115,6 @@ class AnswerEngine:
         state: _SearchState,
         *,
         retrieval_queries: Sequence[str],
-        candidate_limit: int = 24,
         settings: Any = None,
         defer_context: bool = False,
         page_ranges: Sequence[Mapping[str, Any]] = (),
@@ -1151,7 +1141,8 @@ class AnswerEngine:
         assert state.filters is not None
         if page_ranges and not _with_page_ranges(state.filters, page_ranges):
             return HybridSearchResult(child_chunks=[], all_chunks=[])
-        depth = self._read_depth(candidate_limit)
+        # 検索経路ごとの取得件数。取得した候補はすべて rerank へ進む(#5443)。
+        depth = self._settings.rag_retrieval_query_limit
         from rag_engine.retrieval.weighted_rrf import query_key
 
         query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
@@ -1360,17 +1351,8 @@ class AnswerEngine:
                 source_keys[key] = chunk_id
             unique.append(chunk_id)
         ordered = unique
-        ranked = ordered[:candidate_limit]
-        ranked += _observed_diverse_candidates(
-            ordered,
-            candidate_limit,
-            lambda chunk_id: state.chunks[chunk_id].document_id,
-            depth=self._settings.rag_candidate_diversity_depth,
-            max_extra=self._settings.rag_candidate_diversity_max_extra,
-            new_document=self._settings.rag_candidate_diversity_new_document,
-            present_document=self._settings.rag_candidate_diversity_present_document,
-        )
-        selected_fused_ids = set(ranked)
+        # 取得した候補は重複を除いてすべて rerank へ進める(件数は検索経路ごとの取得件数。#5443)。
+        ranked = ordered
         # 当たった派生の chunk(要約・項目抽出の値)は検索の手がかり。回答の根拠には、その chunk が
         # 指す原文の chunk を同じ位置に置く(原文が読めなければ根拠に渡さない。#2641)。
         context_scope = (
@@ -1390,7 +1372,6 @@ class AnswerEngine:
             if contained(chunk.document_id, chunk.metadata, context_scope)
         ]
         ranked = [chunk.chunk_id for chunk in anchors]
-        fusion_ids = set(ranked[:candidate_limit])
         for rank, chunk_id in enumerate(ranked, start=1):
             known = state.fused_ranks.get(chunk_id)
             if known is None or rank < known[0]:
@@ -1457,9 +1438,7 @@ class AnswerEngine:
                 rrf_score=fused.get(chunk.chunk_id, 0.0),
                 retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
             )
-            child.metadata["retrieval_admission_stage"] = (
-                "fusion" if chunk.chunk_id in fusion_ids else "diversity"
-            )
+            child.metadata["retrieval_admission_stage"] = "fusion"
             children.append(child)
         all_children = {chunk.chunk_uid: chunk for chunk in children}
         for sibling in siblings:
@@ -1498,16 +1477,10 @@ class AnswerEngine:
                 "fused_count": len(fused),
                 "fused_ids": ordered,
                 "duplicates": duplicates,
-                "excluded": [
-                    {"id": chunk_id, "reason": "fusion_candidate_budget"}
-                    for chunk_id in ordered
-                    if chunk_id not in selected_fused_ids
-                ],
                 "query_results": [
                     {"query_index": index, "count": len(hits)}
                     for index, hits in enumerate(all_hits)
                 ],
-                "base_limit": candidate_limit,
                 "selected_ids": [child.chunk_uid for child in children],
                 "context_deferred": defer_context,
             }
@@ -2142,10 +2115,6 @@ class AnswerEngine:
             state.record_degraded("query_embedding", exc)
             state.query_embedding_failed = True
             return None
-
-    def _read_depth(self, candidate_limit: int) -> int:
-        """検索文ごとの取得上限。融合後の候補数・多様化の有無・起点数とは独立。"""
-        return self._settings.rag_retrieval_query_limit
 
     async def _query_hits(
         self,
@@ -4448,139 +4417,6 @@ def _int(value: object, default: int = 0) -> int:
 
 def _group_id(chunk: RetrievedChunk) -> str:
     return str(chunk.metadata.get("chunk_group_id") or chunk.chunk_id)
-
-
-def _observed_diverse_candidates(
-    ordered: Sequence[str],
-    head_size: int,
-    document_of: Callable[[str], str],
-    *,
-    depth: int,
-    max_extra: int,
-    new_document: int,
-    present_document: int,
-) -> list[str]:
-    """融合の上位を保持したまま追加する候補と、その時点の実行結果を記録する。"""
-    with observe_call("stage", CANDIDATE_DIVERSITY_STAGE) as observation:
-        reason = (
-            "depth_disabled"
-            if depth <= 0
-            else "extra_limit_zero"
-            if max_extra <= 0
-            else "document_limits_zero"
-            if new_document <= 0 and present_document <= 0
-            else ""
-        )
-        eligible = (
-            []
-            if reason
-            else _diverse_candidates(
-                ordered[:depth],
-                head_size,
-                document_of,
-                new_document=new_document,
-                present_document=present_document,
-            )
-        )
-        added = eligible[:max_extra] if not reason else []
-        before = len(ordered[:head_size])
-        present = {document_of(chunk_id) for chunk_id in ordered[:head_size]}
-        added_documents = {document_of(chunk_id) for chunk_id in added}
-        reason_text = {
-            "depth_disabled": "調査する順位の上限が 0 のため実行しません",
-            "extra_limit_zero": "追加候補の上限が 0 のため実行しません",
-            "document_limits_zero": "文書ごとの追加上限がすべて 0 のため実行しません",
-        }.get(
-            reason, "追加候補はありません" if not added else f"候補 {len(added)} 件を追加しました"
-        )
-        counts = {
-            "depth": depth,
-            "max_extra": max_extra,
-            "new_document_limit": new_document,
-            "present_document_limit": present_document,
-            "inspected_count": len(ordered[:depth][head_size:]) if not reason else 0,
-            "eligible_count": len(eligible),
-            "added_count": len(added),
-            "added_document_count": len(added_documents),
-            "new_document_count": len(added_documents - present),
-            "present_document_count": len(added_documents & present),
-            "before_count": before,
-            "after_count": before + len(added),
-            "limit_reached": len(eligible) > max_extra,
-        }
-        observation.display(
-            params={
-                "status": "skipped" if reason else "completed",
-                "reason_code": reason or ("added" if added else "no_match"),
-                **counts,
-            },
-        )
-        if not getattr(observation, "capture_enabled", True):
-            return added
-        observation.display(
-            details={
-                "fields": [
-                    {"label": "結果", "value": reason_text},
-                    {"label": "調査する順位の設定上限", "value": str(depth)},
-                    {"label": "実際に調べた上位外の候補", "value": str(counts["inspected_count"])},
-                    {"label": "追加候補の設定上限", "value": str(max_extra)},
-                    {"label": "実際に追加した候補", "value": str(len(added))},
-                    {"label": "追加した文書", "value": str(len(added_documents))},
-                    {
-                        "label": "記録の対象",
-                        "value": "原文の読み込み・根拠数の制限を適用する前の検索候補",
-                    },
-                ]
-            },
-        )
-        observation.request(
-            lambda: {
-                "head_size": head_size,
-                "candidate_ids": list(ordered),
-                "depth": depth,
-                "max_extra": max_extra,
-                "new_document": new_document,
-                "present_document": present_document,
-            }
-        )
-        observation.response(
-            lambda: {
-                **counts,
-                "reason_code": reason or ("added" if added else "no_match"),
-                "added_ids": added,
-                "added_candidates": [
-                    {"chunk_id": chunk_id, "document_id": document_of(chunk_id)}
-                    for chunk_id in added
-                ],
-            }
-        )
-        return added
-
-
-def _diverse_candidates(
-    ordered: Sequence[str],
-    head_size: int,
-    document_of: Callable[[str], str],
-    *,
-    new_document: int,
-    present_document: int,
-) -> list[str]:
-    """融合の上位 ``head_size`` 件の外から、文書ごとの上位を足す候補(#2228)。
-
-    1 つの文書が融合の上位を占めると、派生の検索文だけが当てた別の文書の根拠は上限の外に落ち、
-    rerank の判断を受けない。上位に無い文書は上位 ``new_document`` 件、上位にある文書は続きの
-    ``present_document`` 件を融合の順で足す。上位の候補は変えない(削ると上位の正解が落ちる)。
-    """
-    present = {document_of(chunk_id) for chunk_id in ordered[:head_size]}
-    taken: dict[str, int] = {}
-    extra: list[str] = []
-    for chunk_id in ordered[head_size:]:
-        document = document_of(chunk_id)
-        limit = present_document if document in present else new_document
-        if taken.get(document, 0) < limit:
-            taken[document] = taken.get(document, 0) + 1
-            extra.append(chunk_id)
-    return extra
 
 
 def _reference_generation_reserve_seconds(settings: Settings) -> float:

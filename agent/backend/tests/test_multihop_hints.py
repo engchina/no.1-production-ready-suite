@@ -288,11 +288,11 @@ def _contract_schema(tool_name: str) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [
-        ({"top_k": 5}, {"top_k": {"requested": 5, "sent": 30}}),
+        ({"top_k": 5}, {"top_k": {"requested": 5, "sent": 50}}),
         (
             {"top_k": 10, "evidence_limit": 5},
             {
-                "top_k": {"requested": 10, "sent": 30},
+                "top_k": {"requested": 10, "sent": 50},
                 "evidence_limit": {"requested": 5, "sent": 12},
             },
         ),
@@ -303,7 +303,7 @@ def _contract_schema(tool_name: str) -> dict[str, Any]:
             },
         ),
         ({"top_k": 500}, {"top_k": {"requested": 500, "sent": 100}}),
-        ({"top_k": 0}, {"top_k": {"requested": 0, "sent": 30}}),
+        ({"top_k": 0}, {"top_k": {"requested": 0, "sent": 50}}),
         ({"top_k": 50, "evidence_limit": 50}, {}),
         ({"top_k": None}, {}),
         ({"query": "勤怠管理システム 担当部署"}, {}),
@@ -321,7 +321,7 @@ def test_search_limits_follow_the_rag_contract(
 def test_rag_search_evidence_limit_default_stays_at_the_contract_value() -> None:
     schema = _contract_schema("rag_search")
     assert adjusted_search_limits({"top_k": 5, "evidence_limit": 5}, schema) == {
-        "top_k": {"requested": 5, "sent": 30},
+        "top_k": {"requested": 5, "sent": 50},
         "evidence_limit": {"requested": 5, "sent": 12},
     }
 
@@ -506,22 +506,22 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
     )
     run = _run()
 
-    # 既定（30）より小さい top_k は既定に引き上げ、上限（evidence_limit 50）を超える値は上限に
+    # 既定（50）より小さい top_k は既定に引き上げ、上限（evidence_limit 50）を超える値は上限に
     # 丸める。呼び先の入力検証（fake は契約の上限で検証する）で失敗させない（#1403）。
     sent = [call["arguments"] for call in mcp.calls_of("rag_search")]
     assert [(args.get("top_k"), args.get("evidence_limit")) for args in sent] == [
-        (30, None),
+        (50, None),
         (100, 50),
-        (30, None),
+        (50, None),
     ]
     assert all(step.tool_result is not None and step.tool_result.success for step in run.steps)
     # step には送った値を残す。
     recorded = [step.tool_call.arguments for step in run.steps if step.tool_call is not None]
-    assert recorded[0]["top_k"] == 30
+    assert recorded[0]["top_k"] == 50
     assert recorded[1]["evidence_limit"] == 50
     # モデルへの結果に、直した値と次から省略する案内を残す（記録する step の結果は RAG のまま）。
     assert _tool_output(model, 1, "call-1")["adjusted_limits"] == {
-        "top_k": {"requested": 5, "sent": 30},
+        "top_k": {"requested": 5, "sent": 50},
         "next_step": ADJUSTED_LIMITS_HINT,
     }
     assert _tool_output(model, 2, "call-2")["adjusted_limits"] == {
@@ -530,7 +530,7 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
     }
     assert _tool_output(model, 3, "call-3")["adjusted_limits"]["top_k"] == {
         "requested": 10,
-        "sent": 30,
+        "sent": 50,
     }
     outputs = [step.tool_result.output for step in run.steps if step.tool_result is not None]
     assert all("adjusted_limits" not in (output or {}) for output in outputs)
