@@ -2,11 +2,12 @@
 
 from dataclasses import replace
 from datetime import date
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute
+from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute, _fetch_one
 from app.clients.wiki_store import WikiStore
 from app.rag.wiki_models import WikiContext, WikiPage, fingerprint
 from app.schemas.document import DocumentClassification
@@ -194,3 +195,150 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     await oracle.delete_document(did)
     assert not await store.saved_pages(source)
     assert await store.document_state(did) is None
+
+
+# 構築の条件の指紋は CHAR(64)（実際の値と同じ長さにする。短い値は空白で埋まる）。
+LINKS = fingerprint("links-1")
+
+
+async def _published(store: WikiStore, did: str, context: str) -> tuple[Any, list[WikiPage]]:
+    """合成の案内を作って公開した文書（保存版と案内）。"""
+    revision = await store.revision_fingerprint(did)
+    source = await store.source_units(did)
+    assert revision is not None and source is not None
+    source = replace(
+        source, compiler_fingerprint=fingerprint("compiler-a"), revision_fingerprint=revision
+    )
+    await store.enqueue(source)
+    lease = await store.claim(source, lease_seconds=300)
+    assert lease
+    pages = [
+        WikiPage(
+            unit=u,
+            navigation=WikiContext(
+                unit_id=u.unit_id,
+                context=context,
+                possible_questions=[],
+                dependencies=[],
+                unresolved=[],
+            ),
+            input_fingerprint="input-a",
+        )
+        for u in source.units
+    ]
+    await store.checkpoint(source, lease, pages, vectors=[_EMBEDDING] * len(pages))
+    await store.finish(source, lease)
+    return source, pages
+
+
+async def test_cross_document_links_follow_current_versions_scope_and_cascade() -> None:
+    """文書をまたぐ関連（#5492）: 候補の除外・lease・checkpoint・両向きの読取・所属・削除。"""
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store = WikiStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-links-{token}")
+    only_a = await oracle.create_knowledge_base(name=f"synthetic-links-only-a-{token}")
+    a, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=f"{token}a")
+    b, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=f"{token}b")
+    await oracle.assign_documents_to_knowledge_base(only_a.id, [a])
+    await store.set_enabled(kb.id, True)
+    await store.set_enabled(only_a.id, True)
+    source_a, pages_a = await _published(store, a, "合成の原則 syntheticprinciple。")
+    _, pages_b = await _published(store, b, "合成の例外 syntheticexception。")
+    compiler = source_a.compiler_fingerprint
+    filters, narrow = {"knowledge_base_id": kb.id}, {"knowledge_base_id": only_a.id}
+    assert await store.link_knowledge_bases(a) == sorted([kb.id, only_a.id])
+    assert await store.link_knowledge_bases(b) == [kb.id]
+    # 候補はほかの文書の案内だけ（ベクトル・全文の両方）。
+    near = await store.pages(
+        filters, compiler, query_vector=_EMBEDDING, limit=50, exclude_document_ids=[a]
+    )
+    assert near and {p.unit.document_id for p in near} == {b}
+    ranking = await store.text_rankings(
+        "syntheticexception",
+        filters,
+        compiler,
+        limit=50,
+        exclude_document_ids=[a],
+    )
+    assert ranking and {did for did, _ in ranking} == {b}
+
+    first_a, first_b = pages_a[0].unit.unit_id, pages_b[0].unit.unit_id
+    fingerprint_a = source_a.source_fingerprint
+    claimed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
+    assert claimed is not None and claimed[1] == []
+    lease = claimed[0]
+    assert await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300) is None
+    with pytest.raises(ValueError, match="組"):
+        await store.save_links(
+            a,
+            lease,
+            sources=[first_a],
+            candidates=[],
+            links=[(first_a, first_b, "exception", "")],
+            done=[],
+        )
+    await store.save_links(
+        a,
+        lease,
+        sources=[first_a],
+        candidates=[first_b],
+        links=[(first_a, first_b, "exception", "合成の理由")],
+        done=[f"forward:{first_a}"],
+    )
+    # 出る向きと入る向きの両方で読める。
+    expected = [(first_a, first_b, "exception")]
+    assert await store.links([first_a], filters, compiler) == expected
+    assert await store.links([first_b], filters, compiler) == expected
+    # 終点の文書が今の KB に無ければ辿らない（案内は KB をまたいで再利用されるので読むときに照合）。
+    assert await store.links([first_a], narrow, compiler) == []
+    # 構築条件が今と違う案内の関連は辿らない。
+    assert await store.links([first_a], filters, fingerprint("compiler-b")) == []
+    # 中断の後は判定済みの鍵を返して続きから作る。
+    await store.finish_links(a, lease, failure_code="interrupted")
+    resumed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
+    assert resumed is not None and resumed[1] == [f"forward:{first_a}"]
+    await store.finish_links(a, resumed[0], failure_code="build_failed")
+    state = await store.link_state(a)
+    assert state and state["status"] == "FAILED" and state["failure_code"] == "build_failed"
+    # 再試行は関連の構築の失敗も待機へ戻す。
+    await store.requeue_failed(filters)
+    state = await store.link_state(a)
+    assert state and state["status"] == "QUEUED"
+    again = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
+    assert again is not None
+    await store.finish_links(a, again[0])
+    assert await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300) is None
+    # 原文の保存版が変われば、古い保存版の関連を消して作り直す。
+    renewed = await store.claim_links(a, fingerprint("source-new"), LINKS, lease_seconds=300)
+    assert renewed is not None and renewed[1] == []
+    assert await store.links([first_a], filters, compiler) == []
+    await store.finish_links(a, renewed[0])
+    # 逆向き（B → A）の関連も同じ表に置き、文書の削除は外部キーで関連の行と状態を消す。
+    reverse = await store.claim_links(b, fingerprint("source-b"), LINKS, lease_seconds=300)
+    assert reverse is not None
+    await store.save_links(
+        b,
+        reverse[0],
+        sources=[first_b],
+        candidates=[first_a],
+        links=[(first_b, first_a, "prerequisite", "合成の理由")],
+        done=[f"reverse:{first_b}"],
+    )
+    assert await store.links([first_a], filters, compiler) == [(first_b, first_a, "prerequisite")]
+
+    def count(connection: OracleConnectionProtocol) -> Any:
+        return _fetch_one(
+            connection,
+            """SELECT (SELECT COUNT(*) FROM rag_wiki_links
+                WHERE source_document_id IN (:a,:b) OR target_document_id IN (:a,:b)) AS links,
+            (SELECT COUNT(*) FROM rag_wiki_link_documents WHERE document_id IN (:a,:b)) AS states
+            FROM dual""",
+            {"a": a, "b": b},
+        )
+
+    await oracle.delete_document(a)
+    row = await oracle._run_transaction(count)
+    assert row is not None and int(str(row["links"])) == 0 and int(str(row["states"])) == 1
+    await oracle.delete_document(b)
+    row = await oracle._run_transaction(count)
+    assert row is not None and int(str(row["states"])) == 0

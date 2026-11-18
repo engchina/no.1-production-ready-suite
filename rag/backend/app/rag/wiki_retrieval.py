@@ -22,8 +22,15 @@ from app.clients.wiki_store import WikiStore
 from app.config import Settings, get_settings
 from app.rag.span_display import ANSWER_STEP_KIND
 from app.rag.wiki_jobs import compiler_fingerprint
-from app.rag.wiki_models import WikiFilePlan, WikiModel, WikiPage, WikiReadPlan, scoped_plan
-from app.rag.wiki_navigation import Handles, section_frontier
+from app.rag.wiki_models import (
+    WIKI_RELATION_PRIORITY,
+    WikiFilePlan,
+    WikiModel,
+    WikiPage,
+    WikiReadPlan,
+    scoped_plan,
+)
+from app.rag.wiki_navigation import Handles, interleave, section_frontier
 from app.schemas.search import RetrievedChunk
 
 FILE_PROMPT = """## Step 1: 質問と文書の目録を読む
@@ -70,20 +77,6 @@ class WikiSearchResult:
     chunks: tuple[RetrievedChunk, ...] = ()
     pages: tuple[WikiPage, ...] = ()
     trace: dict[str, Any] = field(default_factory=dict)
-
-
-def interleave(groups: Sequence[Sequence[WikiPage]], limit: int) -> list[WikiPage]:
-    """各経路の順位を保って交互に並べる。経路の点数を足さず、同じ単位は最初の 1 回だけ。"""
-    seen: set[str] = set()
-    result: list[WikiPage] = []
-    for index in range(max((len(group) for group in groups), default=0)):
-        for group in groups:
-            if index < len(group) and group[index].unit.unit_id not in seen:
-                seen.add(group[index].unit.unit_id)
-                result.append(group[index])
-                if len(result) == limit:
-                    return result
-    return result
 
 
 class WikiRetriever:
@@ -148,6 +141,65 @@ class WikiRetriever:
                 response_schema_name="wiki_plan",
             )
         return schema.model_validate_json(text)
+
+    async def follow(
+        self, scope: dict[str, str], pages: dict[str, WikiPage], selected: Sequence[str]
+    ) -> tuple[list[str], list[dict[str, int]], int]:
+        """選んだ単位から、同じ文書の依存と文書をまたぐ関連（出る向き・入る向き）を辿る（#5492）。
+
+        ``RAG_WIKI_LINK_DEPTH`` 段まで、段ごとに関係の種類の順（例外・前提を先）で、まだ読んでいない
+        単位を ``RAG_WIKI_LINK_MAX_UNITS`` まで足す。一度見た単位は辿り直さない（循環を止める）。
+        読めない単位（未公開・古い保存版・範囲の外）は数に入れない。辿るのは DB だけで、
+        モデルは呼ばない。
+        返す値は（足した単位 ID・段ごとの数・読めなかった単位の数）。``pages`` に読んだ案内を足す。
+        """
+        opts, store = self.settings, self.store
+        budget = opts.rag_wiki_link_max_units
+        priority = {relation: index for index, relation in enumerate(WIKI_RELATION_PRIORITY)}
+        seen, frontier = set(selected), list(selected)
+        added: list[str] = []
+        hops: list[dict[str, int]] = []
+        missing = 0
+        for depth in range(1, opts.rag_wiki_link_depth + 1):
+            if not frontier or len(added) >= budget:
+                break
+            offers: list[tuple[str, str, str]] = [
+                (dependency.unit_id, dependency.relation, "dependency")
+                for uid in frontier
+                for dependency in pages[uid].navigation.dependencies
+            ]
+            current = set(frontier)
+            for source, target, relation in await store.links(frontier, scope, self.compiler):
+                if source in current:
+                    offers.append((target, relation, "link"))
+                if target in current:
+                    offers.append((source, relation, "link"))
+            found: dict[str, tuple[int, str]] = {}
+            for uid, relation, kind in offers:
+                rank = priority.get(relation, len(priority))
+                if uid not in seen and (uid not in found or rank < found[uid][0]):
+                    found[uid] = (rank, kind)
+            ordered = sorted(found, key=lambda uid: found[uid][0])
+            unknown = [uid for uid in ordered if uid not in pages]
+            if unknown:
+                pages.update(
+                    (page.unit.unit_id, page)
+                    for page in await store.pages(scope, self.compiler, unit_ids=unknown)
+                )
+            readable = [uid for uid in ordered if uid in pages]
+            missing += len(ordered) - len(readable)
+            chosen = readable[: budget - len(added)]
+            seen.update(ordered)
+            added.extend(chosen)
+            frontier = chosen
+            hops.append(
+                {
+                    "depth": depth,
+                    "dependency_units": sum(found[uid][1] == "dependency" for uid in chosen),
+                    "link_units": sum(found[uid][1] == "link" for uid in chosen),
+                }
+            )
+        return added, hops, missing
 
     async def search(
         self,
@@ -321,22 +373,11 @@ class WikiRetriever:
             selected.extend(handles.real(choice.unit_ids))
             selected.extend(uid for sid in handles.real(choice.section_ids) for uid in members[sid])
         selected = list(dict.fromkeys(selected))
-        # 案内が示す依存（前提・例外・警告など）を 1 段だけ辿る。
-        dependencies = [
-            dep.unit_id
-            for uid in selected
-            for dep in pages[uid].navigation.dependencies
-            if dep.unit_id not in selected
-        ]
-        missing = [uid for uid in dict.fromkeys(dependencies) if uid not in pages]
-        with _stage("Wiki: 依存の案内と原文の読み込み"):
-            pages.update(
-                (page.unit.unit_id, page)
-                for page in await store.pages(scope, compiler, unit_ids=missing)
-            )
-            required = [
-                pages[uid] for uid in dict.fromkeys([*selected, *dependencies]) if uid in pages
-            ]
+        # 案内の依存（同じ文書）と文書をまたぐ関連（両向き）を、予算の内で段ごとに辿る（#5492）。
+        with _stage("Wiki: 依存と関連の辿り"):
+            followed, hops, missing = await self.follow(scope, pages, selected)
+        with _stage("Wiki: 原文の読み込み"):
+            required = [pages[uid] for uid in [*selected, *followed]]
             originals = await self.current_sources(profile_id, scope, required)
         identities = {row["document_id"]: row["source_identities"] for row in catalog}
         chunks = tuple(
@@ -361,8 +402,9 @@ class WikiRetriever:
                 "candidate_units": len(candidates),
                 "selected_documents": len(document_ids),
                 "selected_units": len(selected),
-                "dependency_units": len(required) - len(selected),
-                "missing_dependency_units": len(set(dependencies) - set(pages)),
+                "dependency_units": len(followed),
+                "missing_dependency_units": missing,
+                "link_hops": hops,
                 "source_count": len(chunks),
                 "navigation_unresolved": unresolved,
             },

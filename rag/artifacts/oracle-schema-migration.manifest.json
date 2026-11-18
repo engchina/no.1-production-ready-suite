@@ -855,10 +855,17 @@
       "sha256": "0f4f6de78b47fe471ac17d9c3b3622bbcd7629b0bbc919f51f8922faece0ccfc",
       "statement_count": 2,
       "table_name": "rag_wiki_documents"
+    },
+    {
+      "destructive": false,
+      "name": "20261119_5492_wiki_links",
+      "sha256": "e93141e04f98bbad378973661573d99d532e7ac79972a31f3c870e58626fd7ea",
+      "statement_count": 1,
+      "table_name": "rag_wiki_links"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "dc6ce048e9db9d4dbb525ce39d8ebf23ac87450bac4a5b241bdd46dd6ef64344",
-  "statement_count": 184
+  "sha256": "ade0a11eb7ee0ae47409eee6b0755e3bcc8504959e38b30d42b5bdeefdbb848f",
+  "statement_count": 185
 }

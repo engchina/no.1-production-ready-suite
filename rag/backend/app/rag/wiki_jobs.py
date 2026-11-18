@@ -31,7 +31,16 @@ from app.rag.request_context import (
     system_access_context,
 )
 from app.rag.wiki_compiler import WIKI_CONTEXT_PROMPT, compile_pages
+from app.rag.wiki_links import (
+    WIKI_LINK_PROMPT,
+    WIKI_LINK_SCHEMA_VERSION,
+    WikiLinkDecision,
+    WikiLinkItem,
+    judge_links,
+    link_query_text,
+)
 from app.rag.wiki_models import WIKI_SCHEMA_VERSION, WikiPage, fingerprint
+from app.rag.wiki_navigation import interleave
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +58,26 @@ def compiler_fingerprint(settings: Settings) -> str:
             settings.rag_wiki_build_timeout_seconds,
             settings.rag_wiki_embedding_source_chars,
             settings.oci_genai_embedding_model,
+        ]
+    )
+
+
+def link_fingerprint(settings: Settings, compiler: str, knowledge_bases: Sequence[str]) -> str:
+    """文書をまたぐ関連の構築の条件（#5492）。
+
+    所属する KB が変われば候補の範囲が変わるので作り直す。
+    """
+    model_id = enterprise_ai_default_model_id(settings)
+    return fingerprint(
+        [
+            WIKI_LINK_SCHEMA_VERSION,
+            WIKI_LINK_PROMPT,
+            compiler,
+            model_id,
+            settings.rag_wiki_link_candidates,
+            settings.rag_wiki_link_batch_units,
+            settings.rag_wiki_link_source_chars,
+            sorted(knowledge_bases),
         ]
     )
 
@@ -154,145 +183,354 @@ class WikiJobs:
             logger.warning("wiki_reconcile_failed", extra={"error_type": type(error).__name__})
 
     async def build(self, document_id: str, owner: str | None) -> None:
+        """文書の案内を作り、公開できていれば文書をまたぐ関連を作る（関連の失敗は案内を止めない）。"""
         settings = get_settings()
         if self.capacity is None:
             self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
         async with self.capacity:
-            store = self.store_factory()
-            snapshot, lease, context_token = None, None, None
-            # この回で案内を保存したか。時間切れでも進んでいれば、次の照合で続きから作る。
-            progressed = False
-            try:
-                context_token = set_audit_request_context(await self.actor(owner, settings))
-                compiler = compiler_fingerprint(settings)
-                revision = await store.revision_fingerprint(document_id)
-                if revision is None:
-                    return
-                state = await store.document_state(document_id)
+            if await self._build_pages(document_id, owner, settings):
+                await self._build_links(document_id, owner, get_settings())
+
+    async def _build_pages(self, document_id: str, owner: str | None, settings: Settings) -> bool:
+        """文書の案内を作る。今の原文・構築条件で公開済み（``READY``）なら True。"""
+        store = self.store_factory()
+        snapshot, lease, context_token = None, None, None
+        # この回で案内を保存したか。時間切れでも進んでいれば、次の照合で続きから作る。
+        progressed = False
+        try:
+            context_token = set_audit_request_context(await self.actor(owner, settings))
+            compiler = compiler_fingerprint(settings)
+            revision = await store.revision_fingerprint(document_id)
+            if revision is None:
+                return False
+            state = await store.document_state(document_id)
+            if (
+                state
+                and state["compiler_fingerprint"] == compiler
+                and state["revision_fingerprint"] == revision
+            ):
+                if state["status"] == "READY":
+                    return True
+                if state["status"] == "RUNNING" and state["leased"]:
+                    return False
+                # 失敗は再試行の API（`requeue_failed`）が待機へ戻すまで作り直さない。
                 if (
-                    state
-                    and state["compiler_fingerprint"] == compiler
-                    and state["revision_fingerprint"] == revision
+                    state["status"] == "FAILED"
+                    and state.get("failure_code") != "interrupted"
+                    and not (
+                        state.get("failure_code") == "authorization_changed"
+                        and state.get("owner_user_uuid") != owner
+                    )
                 ):
-                    if state["status"] == "READY" or (
-                        state["status"] == "RUNNING" and state["leased"]
-                    ):
-                        return
-                    # 失敗は再試行の API（`requeue_failed`）が待機へ戻すまで作り直さない。
-                    if (
-                        state["status"] == "FAILED"
-                        and state.get("failure_code") != "interrupted"
-                        and not (
-                            state.get("failure_code") == "authorization_changed"
-                            and state.get("owner_user_uuid") != owner
-                        )
-                    ):
-                        return
-                raw = await store.source_units(document_id)
-                if raw is None:
-                    return
-                snapshot = replace(
-                    raw, compiler_fingerprint=compiler, revision_fingerprint=revision
-                )
-                await store.enqueue(snapshot)
-                lease = await store.claim(
+                    return False
+            raw = await store.source_units(document_id)
+            if raw is None:
+                return False
+            snapshot = replace(raw, compiler_fingerprint=compiler, revision_fingerprint=revision)
+            await store.enqueue(snapshot)
+            lease = await store.claim(
+                snapshot,
+                lease_seconds=int(
+                    max(
+                        settings.rag_wiki_lease_seconds,
+                        settings.rag_wiki_build_timeout_seconds + 60,
+                    )
+                ),
+            )
+            if lease is None:
+                return False
+            saved = await store.saved_pages(snapshot)
+            expected_revision, expected_compiler = revision, compiler
+
+            async def authorize() -> None:
+                current = get_settings()
+                set_audit_request_context(await self.actor(owner, current))
+                if (
+                    compiler_fingerprint(current) != expected_compiler
+                    or await store.revision_fingerprint(document_id) != expected_revision
+                ):
+                    raise PermissionError("Wiki の構築設定・原文・所属が変更されました。")
+
+            async def checkpoint(pages: Sequence[WikiPage]) -> None:
+                nonlocal progressed
+                await authorize()
+                await store.checkpoint(
                     snapshot,
-                    lease_seconds=int(
-                        max(
-                            settings.rag_wiki_lease_seconds,
-                            settings.rag_wiki_build_timeout_seconds + 60,
-                        )
-                    ),
+                    lease,
+                    pages,
+                    original_chars=settings.rag_wiki_embedding_source_chars,
                 )
-                if lease is None:
-                    return
-                saved = await store.saved_pages(snapshot)
-                expected_revision, expected_compiler = revision, compiler
+                progressed = True
 
-                async def authorize() -> None:
-                    current = get_settings()
-                    set_audit_request_context(await self.actor(owner, current))
-                    if (
-                        compiler_fingerprint(current) != expected_compiler
-                        or await store.revision_fingerprint(document_id) != expected_revision
-                    ):
-                        raise PermissionError("Wiki の構築設定・原文・所属が変更されました。")
-
-                async def checkpoint(pages: Sequence[WikiPage]) -> None:
-                    nonlocal progressed
+            async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
+                pages = await compile_pages(
+                    snapshot.units,
+                    model=self.model_factory(settings),
+                    model_id=enterprise_ai_default_model_id(settings),
+                    max_input_chars=settings.rag_wiki_build_input_chars,
+                    batch_size=settings.rag_wiki_build_batch_units,
+                    saved=saved,
+                    authorize=authorize,
+                    checkpoint=checkpoint,
+                    caller=make_ai_caller(settings, "wiki_build"),
+                )
+                embedder = self.embedder_factory(settings)
+                for offset in range(0, len(pages), settings.rag_wiki_build_batch_units):
+                    batch = pages[offset : offset + settings.rag_wiki_build_batch_units]
+                    await authorize()
+                    vectors = await embedder.embed(
+                        [
+                            page.search_text(
+                                original_chars=settings.rag_wiki_embedding_source_chars
+                            )
+                            for page in batch
+                        ]
+                    )
                     await authorize()
                     await store.checkpoint(
                         snapshot,
                         lease,
-                        pages,
+                        batch,
+                        vectors=vectors,
                         original_chars=settings.rag_wiki_embedding_source_chars,
                     )
-                    progressed = True
+                await authorize()
+                await store.finish(snapshot, lease)
+            return True
+        except asyncio.CancelledError:
+            if snapshot is not None and lease:
+                with suppress(Exception):
+                    await store.finish(snapshot, lease, failure_code="interrupted")
+            raise
+        except Exception as error:
+            if snapshot is not None and lease:
+                with suppress(Exception):
+                    await store.finish(
+                        snapshot,
+                        lease,
+                        # 案内を 1 件も足せない時間切れだけ止める（毎回進むので終わる）。
+                        failure_code=("interrupted" if progressed else "timeout")
+                        if isinstance(error, TimeoutError)
+                        else "authorization_changed"
+                        if isinstance(error, PermissionError)
+                        else "build_failed",
+                    )
+            logger.warning(
+                "wiki_build_failed",
+                extra={
+                    "error_type": type(error).__name__,
+                    # 共通の実行器の失敗は、最後の失敗の種類と HTTP の状態コードを持つ。
+                    "error_kind": str(getattr(error, "kind", "") or ""),
+                    "http_status": getattr(error, "status", None),
+                },
+            )
+        finally:
+            if context_token is not None:
+                reset_audit_request_context(context_token)
+        return False
 
-                async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
-                    pages = await compile_pages(
-                        snapshot.units,
-                        model=self.model_factory(settings),
-                        model_id=enterprise_ai_default_model_id(settings),
+    async def _build_links(self, document_id: str, owner: str | None, settings: Settings) -> None:
+        """文書をまたぐ関連を作る（#5492）。状態・lease・checkpoint は案内と別に持つ。
+
+        この文書から出る関連と、この文書の案内が候補に入るほかの文書の単位からこの文書への関連だけを
+        作り、KB 全体は作り直さない。失敗しても文書の案内は ``READY`` のまま使える。
+        """
+        if settings.rag_wiki_link_candidates <= 0:
+            return
+        store = self.store_factory()
+        token, context_token, progressed = None, None, False
+        try:
+            context_token = set_audit_request_context(await self.actor(owner, settings))
+            compiler = compiler_fingerprint(settings)
+            state = await store.document_state(document_id)
+            if not state or state["status"] != "READY" or state["compiler_fingerprint"] != compiler:
+                return
+            source = str(state["source_fingerprint"])
+            knowledge_bases = await store.link_knowledge_bases(document_id)
+            if not knowledge_bases:
+                return
+            links = link_fingerprint(settings, compiler, knowledge_bases)
+            current = await store.link_state(document_id)
+            if (
+                current
+                and current["source_fingerprint"] == source
+                and current["link_fingerprint"] == links
+                and (
+                    current["status"] == "READY"
+                    or (current["status"] == "RUNNING" and current["leased"])
+                    # 失敗は再試行の API（`requeue_failed`）が待機へ戻すまで作り直さない。
+                    or (
+                        current["status"] == "FAILED"
+                        and current.get("failure_code") != "interrupted"
+                    )
+                )
+            ):
+                return
+            claimed = await store.claim_links(
+                document_id,
+                source,
+                links,
+                lease_seconds=int(
+                    max(
+                        settings.rag_wiki_lease_seconds,
+                        settings.rag_wiki_build_timeout_seconds + 60,
+                    )
+                ),
+            )
+            if claimed is None:
+                return
+            lease, done = claimed
+            token = lease
+
+            async def authorize() -> None:
+                latest = get_settings()
+                set_audit_request_context(await self.actor(owner, latest))
+                now = await store.document_state(document_id)
+                if (
+                    compiler_fingerprint(latest) != compiler
+                    or not now
+                    or now["status"] != "READY"
+                    or now["source_fingerprint"] != source
+                    or await store.link_knowledge_bases(document_id) != knowledge_bases
+                ):
+                    raise PermissionError("Wiki の案内・構築設定・所属が変更されました。")
+
+            async def checkpoint(
+                batch: Sequence[WikiLinkItem],
+                candidates: Sequence[str],
+                decisions: Sequence[WikiLinkDecision],
+            ) -> None:
+                nonlocal progressed
+                await authorize()
+                await store.save_links(
+                    document_id,
+                    lease,
+                    sources=[item.source.unit.unit_id for item in batch],
+                    candidates=candidates,
+                    links=[
+                        (d.source_unit_id, d.target_unit_id, d.relation, d.reason)
+                        for d in decisions
+                    ],
+                    done=[item.key for item in batch],
+                )
+                progressed = True
+
+            async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
+                items = await self._link_items(store, document_id, knowledge_bases, settings)
+                skip = set(done)
+                model, caller = self.model_factory(settings), make_ai_caller(settings, "wiki_build")
+                # 前向き（この文書 → ほか）と逆向き（ほか → この文書）は起点と候補が入れ替わるので、
+                # 同じ判定に混ぜない。
+                for group in items:
+                    await judge_links(
+                        [item for item in group if item.key not in skip],
+                        model=model,
+                        batch_size=settings.rag_wiki_link_batch_units,
+                        original_chars=settings.rag_wiki_link_source_chars,
                         max_input_chars=settings.rag_wiki_build_input_chars,
-                        batch_size=settings.rag_wiki_build_batch_units,
-                        saved=saved,
                         authorize=authorize,
                         checkpoint=checkpoint,
-                        caller=make_ai_caller(settings, "wiki_build"),
+                        caller=caller,
                     )
-                    embedder = self.embedder_factory(settings)
-                    for offset in range(0, len(pages), settings.rag_wiki_build_batch_units):
-                        batch = pages[offset : offset + settings.rag_wiki_build_batch_units]
-                        await authorize()
-                        vectors = await embedder.embed(
-                            [
-                                page.search_text(
-                                    original_chars=settings.rag_wiki_embedding_source_chars
-                                )
-                                for page in batch
-                            ]
-                        )
-                        await authorize()
-                        await store.checkpoint(
-                            snapshot,
-                            lease,
-                            batch,
-                            vectors=vectors,
-                            original_chars=settings.rag_wiki_embedding_source_chars,
-                        )
-                    await authorize()
-                    await store.finish(snapshot, lease)
-            except asyncio.CancelledError:
-                if snapshot is not None and lease:
-                    with suppress(Exception):
-                        await store.finish(snapshot, lease, failure_code="interrupted")
-                raise
-            except Exception as error:
-                if snapshot is not None and lease:
-                    with suppress(Exception):
-                        await store.finish(
-                            snapshot,
-                            lease,
-                            # 案内を 1 件も足せない時間切れだけ止める（毎回進むので終わる）。
-                            failure_code=("interrupted" if progressed else "timeout")
-                            if isinstance(error, TimeoutError)
-                            else "authorization_changed"
-                            if isinstance(error, PermissionError)
-                            else "build_failed",
-                        )
-                logger.warning(
-                    "wiki_build_failed",
-                    extra={
-                        "error_type": type(error).__name__,
-                        # 共通の実行器の失敗は、最後の失敗の種類と HTTP の状態コードを持つ。
-                        "error_kind": str(getattr(error, "kind", "") or ""),
-                        "http_status": getattr(error, "status", None),
-                    },
+                await authorize()
+                await store.finish_links(document_id, lease)
+        except asyncio.CancelledError:
+            if token:
+                with suppress(Exception):
+                    await store.finish_links(document_id, token, failure_code="interrupted")
+            raise
+        except Exception as error:
+            if token:
+                with suppress(Exception):
+                    await store.finish_links(
+                        document_id,
+                        token,
+                        failure_code=("interrupted" if progressed else "timeout")
+                        if isinstance(error, TimeoutError)
+                        else "authorization_changed"
+                        if isinstance(error, PermissionError)
+                        else "build_failed",
+                    )
+            logger.warning(
+                "wiki_link_failed",
+                extra={
+                    "error_type": type(error).__name__,
+                    "error_kind": str(getattr(error, "kind", "") or ""),
+                    "http_status": getattr(error, "status", None),
+                },
+            )
+        finally:
+            if context_token is not None:
+                reset_audit_request_context(context_token)
+
+    async def _link_items(
+        self, store: Any, document_id: str, knowledge_bases: Sequence[str], settings: Settings
+    ) -> tuple[list[WikiLinkItem], list[WikiLinkItem]]:
+        """前向きと逆向きの候補の組を DB だけで作る（モデルは呼ばない）。
+
+        起点の単位ごとに、属する KB ごとのほかの文書の案内をベクトル・全文で探し、上位を候補にする。
+        逆向きは、候補になったほかの文書の単位を起点に、その単位を見つけたこの文書の単位を候補にする。
+        """
+        compiler, limit = compiler_fingerprint(settings), settings.rag_wiki_link_candidates
+        own = await store.pages(
+            {
+                "knowledge_base_id": ",".join(knowledge_bases),
+                "document_id": document_id,
+                "include_superseded": "true",
+            },
+            compiler,
+        )
+        own = [page for page in own if link_query_text(page)]
+        texts = [link_query_text(page) for page in own]
+        embedder = self.embedder_factory(settings)
+        vectors: list[Sequence[float]] = []
+        step = settings.rag_wiki_build_batch_units
+        for offset in range(0, len(texts), step):
+            vectors.extend(
+                await embedder.embed(texts[offset : offset + step], input_type="SEARCH_QUERY")
+            )
+        forward: list[WikiLinkItem] = []
+        found_by: dict[str, tuple[WikiPage, list[tuple[int, WikiPage]]]] = {}
+        for page, text, vector in zip(own, texts, vectors, strict=True):
+            groups: list[list[WikiPage]] = []
+            for kb in knowledge_bases:
+                scope = {"knowledge_base_id": kb, "include_superseded": "true"}
+                near, ranking = await asyncio.gather(
+                    store.pages(
+                        scope,
+                        compiler,
+                        query_vector=vector,
+                        limit=limit,
+                        exclude_document_ids=[document_id],
+                    ),
+                    store.text_rankings(
+                        text, scope, compiler, limit=limit, exclude_document_ids=[document_id]
+                    ),
                 )
-            finally:
-                if context_token is not None:
-                    reset_audit_request_context(context_token)
+                texts_found = await store.pages(
+                    scope, compiler, unit_ids=[uid for _, uid in ranking]
+                )
+                by_id = {found.unit.unit_id: found for found in texts_found}
+                groups.extend([near, [by_id[uid] for _, uid in ranking if uid in by_id]])
+            candidates = [
+                found
+                for found in interleave(groups, limit)
+                if found.unit.document_id != document_id
+            ]
+            if not candidates:
+                continue
+            forward.append(WikiLinkItem(f"forward:{page.unit.unit_id}", page, tuple(candidates)))
+            for rank, found in enumerate(candidates):
+                found_by.setdefault(found.unit.unit_id, (found, []))[1].append((rank, page))
+        reverse = [
+            WikiLinkItem(
+                f"reverse:{uid}",
+                found,
+                tuple(page for _, page in sorted(sources, key=lambda entry: entry[0])[:limit]),
+            )
+            for uid, (found, sources) in found_by.items()
+        ]
+        return forward, reverse
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         while not stop.is_set():

@@ -221,6 +221,24 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5492 Wiki の文書をまたぐ関連）
+
+Wiki の構築で、文書の案内を作った後に、同じ KB のほかの文書の単位との関連（例外・前提・参照など）を作り、Wiki の検索で
+同じ文書の依存と一緒に両向き・複数段に辿るようにした（[Wiki ナビゲーション](./wiki-navigation.md)）。
+
+- **migration**（`20261119_5492_wiki_links`）は表 `RAG_WIKI_LINKS`・`RAG_WIKI_LINK_DOCUMENTS` と索引を足すだけで、データは変えない。
+  本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけでよい。
+- **既存の案内に関連を作る**: 作業は要らない。案内の構築の条件は変えていないので保存済みの案内はそのまま使い、背景の照合
+  （`RAG_WIKI_POLL_SECONDS` ごと）が「Wiki を自動構築する」が ON の KB の準備済みの文書ごとに関連を作る。関連の構築の間も、
+  案内は今のまま検索に使える。関連を作らない場合は `backend/.env` に `RAG_WIKI_LINK_CANDIDATES=0` を書く。
+- **構築の AI の呼び出し**: 文書ごとに、案内の検索文の埋め込みが `ceil(単位数 / RAG_WIKI_BUILD_BATCH_UNITS)` 回、関連の判定が
+  `ceil(候補のある単位数 / RAG_WIKI_LINK_BATCH_UNITS)` 回（前向き）と `ceil(候補になったほかの文書の単位数 / RAG_WIKI_LINK_BATCH_UNITS)`
+  回（逆向き）増える。全組み合わせでは比べない。
+- **検索**: 既定は 2 段（`RAG_WIKI_LINK_DEPTH`）・足す単位の上限 24（`RAG_WIKI_LINK_MAX_UNITS`）。これまでの「同じ文書の依存を 1 段」に
+  戻すときは `RAG_WIKI_LINK_DEPTH=1` を書く（関連がまだ無い文書では同じ動き）。辿った数は回答の診断の `wiki.link_hops` に段ごとに出る。
+- 関連の構築の失敗は、KB の「Wiki ナビゲーション」の再試行（`POST …/wiki/retry`）で案内の失敗と一緒に待機へ戻る。画面の件数には
+  関連の構築の状態を出していない（失敗はログ `wiki_link_failed` で確かめる）。
+
 ## 既存環境の更新手順（#5484 文書構造索引を取込で作らず KB の画面の手動の構築だけにする）
 
 文書構造索引は取込のときに作らず、ナレッジベースの詳細の「文書構造索引の構築」の「既存文書に構築」で手動で構築するだけにした。

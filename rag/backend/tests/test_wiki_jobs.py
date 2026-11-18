@@ -42,6 +42,7 @@ class Store:
 
     async def enqueue(self, snapshot: Any) -> bool:
         self.state = {
+            "source_fingerprint": snapshot.source_fingerprint,
             "status": "QUEUED",
             "compiler_fingerprint": snapshot.compiler_fingerprint,
             "revision_fingerprint": snapshot.revision_fingerprint,
@@ -66,6 +67,10 @@ class Store:
     async def finish(self, snapshot: Any, token: str, *, failure_code: str | None = None) -> None:
         assert self.state is not None
         self.state.update(status="FAILED" if failure_code else "READY", failure_code=failure_code)
+
+    async def link_knowledge_bases(self, did: str) -> list[str]:
+        # 文書をまたぐ関連（#5492）は test_wiki_links.py で確かめる。ここでは候補の範囲を空にする。
+        return []
 
 
 @pytest.fixture
@@ -242,4 +247,28 @@ async def test_transient_model_failure_is_retried_by_shared_caller(
     await jobs.build("document-a", "owner-a")
     assert store.state["status"] == "READY" and not failures
     assert len(base.calls) == 1 and len(store.embedded) == 4
+    await jobs.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_links_are_built_only_after_the_document_is_ready(
+    setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文書をまたぐ関連（#5492）は案内を公開した後だけ作る。案内の失敗では作らない。"""
+    jobs, store, _ = setup
+    linked: list[str] = []
+
+    async def build_links(did: str, owner: Any, settings: Any) -> None:
+        linked.append(did)
+
+    monkeypatch.setattr(jobs, "_build_links", build_links)
+    store.enabled = False
+    await jobs.build("document-a", "owner-a")
+    assert linked == []
+    store.enabled = True
+    await jobs.build("document-a", "owner-a")
+    assert store.state["status"] == "READY" and linked == ["document-a"]
+    # 公開済みの文書も、照合のたびに関連の状態を確かめる（作るかは関連の状態で決める）。
+    await jobs.build("document-a", "owner-a")
+    assert linked == ["document-a", "document-a"]
     await jobs.shutdown()

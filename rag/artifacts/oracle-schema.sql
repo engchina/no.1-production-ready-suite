@@ -1392,6 +1392,46 @@ CREATE INDEX rag_wiki_queue_idx ON rag_wiki_documents(status,lease_until);
 CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text)
     INDEXTYPE IS CTXSYS.CONTEXT PARAMETERS ('LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)');
 
+-- section: document_wiki_links
+CREATE TABLE rag_wiki_link_documents (
+    document_id VARCHAR2(64) PRIMARY KEY,
+    source_fingerprint CHAR(64) NOT NULL,
+    link_fingerprint CHAR(64) NOT NULL,
+    done_json JSON,
+    status VARCHAR2(16) DEFAULT 'QUEUED' NOT NULL,
+    lease_token VARCHAR2(64),
+    lease_until TIMESTAMP WITH TIME ZONE,
+    failure_code VARCHAR2(64),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_wiki_link_doc_fk FOREIGN KEY (document_id)
+        REFERENCES rag_documents(document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_link_status_ck
+        CHECK (status IN ('QUEUED','RUNNING','READY','FAILED'))
+);
+CREATE TABLE rag_wiki_links (
+    source_page_id VARCHAR2(64) NOT NULL,
+    target_page_id VARCHAR2(64) NOT NULL,
+    source_document_id VARCHAR2(64) NOT NULL,
+    source_unit_id VARCHAR2(64) NOT NULL,
+    source_fingerprint CHAR(64) NOT NULL,
+    target_document_id VARCHAR2(64) NOT NULL,
+    target_unit_id VARCHAR2(64) NOT NULL,
+    target_fingerprint CHAR(64) NOT NULL,
+    relation VARCHAR2(32) NOT NULL,
+    reason VARCHAR2(800),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_wiki_link_pk PRIMARY KEY (source_page_id,target_page_id),
+    CONSTRAINT rag_wiki_link_source_fk FOREIGN KEY (source_page_id)
+        REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_link_target_fk FOREIGN KEY (target_page_id)
+        REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_link_relation_ck CHECK (relation IN ('exception','prerequisite','warning','continuation','expected_result','reference'))
+);
+CREATE INDEX rag_wiki_link_target_page_idx ON rag_wiki_links(target_page_id);
+CREATE INDEX rag_wiki_link_source_unit_idx ON rag_wiki_links(source_unit_id);
+CREATE INDEX rag_wiki_link_target_unit_idx ON rag_wiki_links(target_unit_id);
+CREATE INDEX rag_wiki_link_queue_idx ON rag_wiki_link_documents(status,lease_until);
+
 -- section: document_summaries
 CREATE TABLE rag_document_summaries (
     document_id      VARCHAR2(64) NOT NULL,
