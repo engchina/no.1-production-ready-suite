@@ -1404,7 +1404,9 @@ def _unstructured_adapter_result(
         template=template_for_source_profile(source_profile),
         parser_backend="unstructured",
         parser_version=version,
-        refine_heading=_unstructured_heading_refiner(elements),
+        refine_heading=_unstructured_heading_refiner(
+            elements, source_text=decode_source_text(source_bytes)
+        ),
         extra_artifacts={
             "unstructured_text_contract": UNSTRUCTURED_TEXT_CONTRACT,
             **({"html_main_scope": "full_document"} if main_expanded else {}),
@@ -1473,12 +1475,17 @@ def _unstructured_refined_heading(item: object, kind: str, text: str) -> tuple[s
 
 def _unstructured_heading_refiner(
     elements: Sequence[object],
+    *,
+    source_text: str | None = None,
 ) -> Callable[[object, str, str], tuple[str, int | None]]:
     """要素ごとの見出しの判定に、要素の並びの判定を重ねる(#5315)。
 
     プレーンテキストで階層の手がかり(番号・``category_depth``)を持たない Title が、本文の要素を
     挟まずに次の見出しか文書の終わりに続く(本文の無い見出しが並ぶ)とき、その Title は一覧の項目と
     みなして本文にし、直前の見出しの本文に含める。判定は要素の並びだけで、字数・語では判定しない。
+
+    同じ Title が原本で段の先頭の行（前の行が空行か文書の先頭）でないときも、段の途中の行
+    （手順のコマンドの行など）とみなして本文にする（#5425）。原本の行の並びだけで判定する。
     """
     refined: list[tuple[object, str, int | None]] = []
     for item in elements:
@@ -1487,6 +1494,7 @@ def _unstructured_heading_refiner(
         if kind == "page_break" or not text:
             continue
         refined.append((item, *_unstructured_refined_heading(item, kind, text)))
+    block_start = _plain_text_block_starts(refined, source_text)
     demoted: set[int] = set()
     for index, (item, kind, level) in enumerate(refined):
         following = refined[index + 1][1] if index + 1 < len(refined) else None
@@ -1495,7 +1503,7 @@ def _unstructured_heading_refiner(
             kind == "title"
             and level is None
             and filetype == "text/plain"
-            and following in {"title", None}
+            and (following in {"title", None} or block_start.get(id(item)) is False)
         ):
             demoted.add(id(item))
 
@@ -1505,6 +1513,30 @@ def _unstructured_heading_refiner(
         return _unstructured_refined_heading(item, kind, text)
 
     return refine
+
+
+def _plain_text_block_starts(
+    refined: Sequence[tuple[object, str, int | None]], source_text: str | None
+) -> dict[int, bool]:
+    """要素の行が原本で段の先頭（前の行が空行か文書の先頭）かを、原本の行の並びで返す（#5425）。
+
+    要素の本文を原本の中で順に探し、見つからない要素は含めない（判定しない）。
+    """
+    starts: dict[int, bool] = {}
+    if not source_text:
+        return starts
+    cursor = 0
+    for item, _, _ in refined:
+        text = _adapter_element_text(item).strip()
+        found = source_text.find(text, cursor) if text else -1
+        if found < 0:
+            continue
+        line_start = source_text.rfind("\n", 0, found) + 1
+        previous_start = source_text.rfind("\n", 0, max(0, line_start - 1)) + 1
+        previous_line = source_text[previous_start : max(0, line_start - 1)]
+        starts[id(item)] = line_start == 0 or not previous_line.strip()
+        cursor = found + len(text)
+    return starts
 
 
 def _numbered_section_level(text: str) -> int | None:
