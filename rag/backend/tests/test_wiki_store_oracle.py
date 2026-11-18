@@ -197,6 +197,10 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert await store.document_state(did) is None
 
 
+# 構築の条件の指紋は CHAR(64)（実際の値と同じ長さにする。短い値は空白で埋まる）。
+LINKS = fingerprint("links-1")
+
+
 async def _published(store: WikiStore, did: str, context: str) -> tuple[Any, list[WikiPage]]:
     """合成の案内を作って公開した文書（保存版と案内）。"""
     revision = await store.revision_fingerprint(did)
@@ -260,10 +264,10 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
 
     first_a, first_b = pages_a[0].unit.unit_id, pages_b[0].unit.unit_id
     fingerprint_a = source_a.source_fingerprint
-    claimed = await store.claim_links(a, fingerprint_a, "links-1", lease_seconds=300)
+    claimed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
     assert claimed is not None and claimed[1] == []
     lease = claimed[0]
-    assert await store.claim_links(a, fingerprint_a, "links-1", lease_seconds=300) is None
+    assert await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300) is None
     with pytest.raises(ValueError, match="組"):
         await store.save_links(
             a,
@@ -291,7 +295,7 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     assert await store.links([first_a], filters, fingerprint("compiler-b")) == []
     # 中断の後は判定済みの鍵を返して続きから作る。
     await store.finish_links(a, lease, failure_code="interrupted")
-    resumed = await store.claim_links(a, fingerprint_a, "links-1", lease_seconds=300)
+    resumed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
     assert resumed is not None and resumed[1] == [f"forward:{first_a}"]
     await store.finish_links(a, resumed[0], failure_code="build_failed")
     state = await store.link_state(a)
@@ -300,17 +304,17 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     await store.requeue_failed(filters)
     state = await store.link_state(a)
     assert state and state["status"] == "QUEUED"
-    again = await store.claim_links(a, fingerprint_a, "links-1", lease_seconds=300)
+    again = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
     assert again is not None
     await store.finish_links(a, again[0])
-    assert await store.claim_links(a, fingerprint_a, "links-1", lease_seconds=300) is None
+    assert await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300) is None
     # 原文の保存版が変われば、古い保存版の関連を消して作り直す。
-    renewed = await store.claim_links(a, fingerprint("source-new"), "links-1", lease_seconds=300)
+    renewed = await store.claim_links(a, fingerprint("source-new"), LINKS, lease_seconds=300)
     assert renewed is not None and renewed[1] == []
     assert await store.links([first_a], filters, compiler) == []
     await store.finish_links(a, renewed[0])
     # 逆向き（B → A）の関連も同じ表に置き、文書の削除は外部キーで関連の行と状態を消す。
-    reverse = await store.claim_links(b, fingerprint("source-b"), "links-1", lease_seconds=300)
+    reverse = await store.claim_links(b, fingerprint("source-b"), LINKS, lease_seconds=300)
     assert reverse is not None
     await store.save_links(
         b,
