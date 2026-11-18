@@ -2648,7 +2648,7 @@ async def test_search_reads_the_configured_query_limit_and_keeps_every_fused_can
         limits.append(top_k)
         return await original(query, embedding, top_k, **kwargs)
 
-    oracle.hybrid_search = recorded  # type: ignore[method-assign]
+    oracle.hybrid_search = recorded  # type: ignore[method-assign,assignment]
     engine = AnswerEngine(
         Settings(rag_retrieval_query_limit=37),
         oracle=cast(Any, oracle),
