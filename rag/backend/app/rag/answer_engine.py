@@ -282,6 +282,9 @@ class _SearchState:
     # 回答の期限(回答の thread の文脈の期限。#1422)。検索は event loop で動き文脈の期限を見られない
     # ので、回答の thread で写す。参照先の読取を生成の予約で止めるのに使う(#5243)。None は期限なし。
     deadline: Deadline | None = None
+    # Wiki の検索の経路(#4941)。足した原文の案内(回答前の照合に使う)と記録。
+    wiki_pages: tuple[Any, ...] = ()
+    wiki_trace: dict[str, Any] = field(default_factory=dict)
     # 交差参照で足した chunk を起点にした章節の拡張で読む章節((document_id, chunk_set_id,
     # section_id)。所有の章節から根まで)。参照先と同じ範囲(``_reference_scope``)で読む(#3325)。
     reference_sections: set[tuple[str, str, str]] = field(default_factory=set)
@@ -786,6 +789,8 @@ class AnswerEngine:
         # 文書全体への参照の章節を選ぶモデル(#5263)。None は回答のモデルの client を使うときに作る
         # (テストは代役を入れる)。
         self._reference_llm: Any | None = None
+        # Wiki の計画のモデル(テストで差し替える。None は回答のモデル)。
+        self._wiki_llm: Any | None = None
         # ⑦ 根拠の拡張をするか(#5332。``RagPipeline`` の経路が expanded のとき)。しないとき
         # (RAG 検索の経路)は切った起点からの検索拡張(参照の展開・目次からの章節の選択・実体・
         # 関係情報)を呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
@@ -895,6 +900,8 @@ class AnswerEngine:
                 "unresolved_count": sum(1 for hit in hits if not hit["source_chunk_ids"]),
                 "chunks": hits[:_REFERENCE_DIAGNOSTICS_LIMIT],
             }
+        if state.wiki_trace:
+            outcome.diagnostics["wiki"] = state.wiki_trace
         if degraded := state.degraded_steps():
             # 失敗して空のまま続けた補助の処理(#3259)。根拠 0 件の診断にも入れる。
             outcome.diagnostics["degraded_steps"] = degraded
@@ -973,6 +980,21 @@ class AnswerEngine:
         # 検索は event loop で動くので、回答の期限を検索の状態へ写す(参照先の読取の停止。#5243)。
         state.deadline = current_deadline()
 
+        def checked(parse: Callable[..., Any]) -> Callable[..., Any]:
+            """Wiki の原文を足した回答は、モデルを呼ぶ前に設定・所属・権限・原文の版を
+            照合し直す(#4941)。"""
+
+            def call(*args: Any, **kwargs: Any) -> Any:
+                if state.wiki_pages:
+                    run_async(
+                        lambda: self._wiki_retriever().current_sources(
+                            request.search_answer_profile_id, request.filters, state.wiki_pages
+                        )
+                    )
+                return parse(*args, **kwargs)
+
+            return call
+
         dependencies = AnswerDependencies(
             search=lambda **kwargs: run_async(
                 lambda: self._search(request, state, defer_context=True, **kwargs)
@@ -985,8 +1007,14 @@ class AnswerEngine:
             ),
             record_retrieval=lambda stage: state.retrieval_stages.append(dict(stage)),
             check_ready=lambda **kwargs: None,
-            parse_text=parse_text_response,
-            parse_images=parse_multimodal_response,
+            parse_text=checked(parse_text_response),
+            parse_images=checked(parse_multimodal_response),
+            # Wiki の検索の経路(#4941)。検索・回答プロファイルで使用を指定したときだけ。
+            additional_sources=(
+                (lambda: run_async(lambda: self._wiki_sources(request, state)))
+                if self._settings.rag_wiki_search_enabled
+                else None
+            ),
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
@@ -3328,6 +3356,47 @@ class AnswerEngine:
             else:
                 plan.skip(SKIP_NO_SELECTION)
 
+    def _wiki_retriever(self) -> Any:
+        from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+        from app.rag.wiki_retrieval import WikiRetriever
+
+        llm = self._wiki_llm or OciEnterpriseAiClient(
+            settings=self._settings,
+            model_id=self._answer_model_id or enterprise_ai_default_model_id(self._settings),
+        )
+        return WikiRetriever(self._settings, self._oracle, self._genai, llm)
+
+    async def _wiki_sources(self, request: SearchRequest, state: _SearchState) -> list[Any]:
+        """Wiki の検索の経路の原文(#4941)。
+
+        失敗・時間切れは記録して空で続ける(通常検索は止めない)。
+        """
+        deadline = state.deadline
+        left = deadline.remaining() if deadline is not None else None
+        timeout = (
+            None if left is None else left - _reference_generation_reserve_seconds(self._settings)
+        )
+        try:
+            if timeout is not None and timeout <= 0:
+                raise TimeoutError("回答の期限の残りが生成の予約より少ない")
+            result = await self._wiki_retriever().search(
+                request.query,
+                profile_id=request.search_answer_profile_id,
+                filters=request.filters,
+                timeout=timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 - 独立の経路の失敗で通常検索を止めない。
+            state.record_degraded("wiki", exc)
+            state.wiki_trace = {"status": "degraded", "failure_code": type(exc).__name__}
+            return []
+        state.wiki_pages, state.wiki_trace = result.pages, result.trace
+        for chunk in result.chunks:
+            state.chunks.setdefault(chunk.chunk_id, chunk)
+        return [
+            _stored_child(chunk, rrf_score=0.0, retrieval_channels={"wiki"})
+            for chunk in result.chunks
+        ]
+
     async def _choose_sections(
         self,
         request: SearchRequest,
@@ -4637,6 +4706,10 @@ def _stored_child(
     if retrieval_channels:
         metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
     metadata["document_id"] = chunk.document_id
+    # Wiki の経路の原文の印と、目録の文書の版の属性(#4941・#5044)。原文の本文・座標は変えない。
+    for key in ("wiki_source", "source_identities"):
+        if key in chunk.metadata:
+            metadata[key] = chunk.metadata[key]
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
     for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
         metadata[key] = chunk.metadata.get(key, "")

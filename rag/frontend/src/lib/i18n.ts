@@ -1783,6 +1783,9 @@ export const ja = {
   "searchAnswerProfiles.field.guideEnabled": "業務ガイドを使用する",
   "searchAnswerProfiles.field.guideEnabledHelper":
     "既定値は OFF です。ON にすると、チャット・品質評価・MCP で質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。RAG 検索では業務ガイドを使用しません。",
+  "searchAnswerProfiles.field.wikiSearch": "Wiki を使用する",
+  "searchAnswerProfiles.field.wikiSearchHelper":
+    "既定値は OFF です。ON にすると、ナレッジベースで「Wiki を自動構築する」を有効にした準備済みの文書から、通常の検索とは別に質問に要るファイルと章節を回答のモデルで選び、その原文を回答の根拠に加えます（AI の呼び出しが最大 2 回増えます）。Wiki の案内そのものは根拠にしません。準備ができていないときや失敗したときは、通常の検索の根拠だけで回答します。",
   "searchAnswerProfiles.field.graphExpansion": "文書構造による検索拡張",
   "searchAnswerProfiles.field.graphExpansionHelper": "文書構造索引を使い、上位の検索候補と同じ狭い章・節・表・図の根拠や、質問に見出しの語が含まれる章・節・表・図の根拠を、Rerank と根拠の選択の後に回答の根拠へ加えます。文書構造索引を作った文書だけに効きます。AI の呼び出しは増えません。検索方法の全体設定を使います。RAG チャットと品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
   "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
@@ -3638,6 +3641,7 @@ export const ja = {
   "search.answerDetails.degraded.hint": "次の処理に失敗したため、その結果を使わずに回答を続けました。",
   "search.answerDetails.degraded.step.retrieval": "検索の一部",
   "search.answerDetails.degraded.step.query_embedding": "質問のベクトル化",
+  "search.answerDetails.degraded.step.wiki": "Wiki からの原文の検索",
   "search.answerDetails.degraded.step.evidence_section_paths": "長い根拠の区切りに使う章節の読み出し",
   "search.answerDetails.degraded.step.runtime_terms": "登録用語の照合",
   "search.answerDetails.degraded.step.query_overflow": "全文検索の語の補完",
@@ -3823,6 +3827,12 @@ export const ja = {
   "settings.answerPrompts.stage.reference_sections": "参照先の文書の目次から読む章節を選ぶ",
   "settings.answerPrompts.stage.reference_sections.condition":
     "検索の根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき（参照先が複数でも 1 回）。目次が無い文書や章節を選べなかったときは文書の全体を読みます",
+  "settings.answerPrompts.stage.wiki_files": "Wiki の目録から読むファイルを選ぶ",
+  "settings.answerPrompts.stage.wiki_files.condition":
+    "検索・回答プロファイルの「Wiki を使用する」を有効にしたとき、回答で 1 回。準備済みの Wiki が無いときは使いません",
+  "settings.answerPrompts.stage.wiki_units": "Wiki の単位・章節から読む原文を選ぶ",
+  "settings.answerPrompts.stage.wiki_units.condition":
+    "Wiki の目録から読むファイルを選んだとき、続けて 1 回",
   "settings.answerPrompts.stage.outline_sections": "起点の文書の目次から読む章節を選ぶ",
   "settings.answerPrompts.stage.outline_sections.condition":
     "検索方法の「起点の文書の目次から章節をモデルが選ぶ」を有効にしたとき、回答で 1 回。章節の木を持つ文書が無いときや、回答の期限の残りが足りないときは使いません",

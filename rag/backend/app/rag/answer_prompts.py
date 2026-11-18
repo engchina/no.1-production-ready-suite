@@ -183,6 +183,13 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "retrieval",
         (("system", "app.rag.reference_sections:OUTLINE_SECTION_PROMPT"),),
     ),
+    # Wiki の検索の経路(#4941)。目録から読むファイルを選び、その単位・章節から読む原文を選ぶ。
+    PromptStage(
+        "wiki_files", "retrieval", (("instruction", "app.rag.wiki_retrieval:FILE_PROMPT"),)
+    ),
+    PromptStage(
+        "wiki_units", "retrieval", (("instruction", "app.rag.wiki_retrieval:READ_PROMPT"),)
+    ),
     PromptStage(
         "generation",
         "generation",

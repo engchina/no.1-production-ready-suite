@@ -127,3 +127,33 @@ class WikiPage(WikiModel):
                 self.unit.text[:original_chars],
             ]
         )
+
+
+class WikiFilePlan(WikiModel):
+    """読むファイルの選択。ID は要求内の短いハンドル。"""
+
+    document_ids: list[str]
+    search_expressions: list[Annotated[str, Field(max_length=200)]] = Field(max_length=8)
+    unresolved: list[Annotated[str, Field(max_length=180)]] = Field(max_length=8)
+
+
+class WikiReadPlan(WikiModel):
+    """読む原文単位と章節の選択。ID は要求内の短いハンドル。"""
+
+    unit_ids: list[str]
+    section_ids: list[str]
+    unresolved: list[Annotated[str, Field(max_length=180)]] = Field(max_length=8)
+
+
+def scoped_plan[T: WikiModel](
+    base: type[T], fields: dict[str, tuple[Sequence[str], int]]
+) -> type[T]:
+    """選べる ID を候補のハンドルだけ・件数を上限までに絞った schema。
+
+    候補が無い欄は空だけを許す。
+    """
+    definitions: dict[str, Any] = {}
+    for name, (values, limit) in fields.items():
+        allowed: Any = Literal.__getitem__(tuple(sorted(set(values)))) if values else str
+        definitions[name] = (list[allowed], Field(max_length=limit if values else 0))
+    return create_model(base.__name__ + "Scoped", __base__=base, **definitions)
