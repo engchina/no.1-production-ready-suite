@@ -510,8 +510,9 @@ export function SearchableMultiSelect({
           data-searchable-panel-footer=""
         >
           <span className="tnum shrink-0 whitespace-nowrap text-xs text-fg-muted">{footerText}</span>
-          {/* 操作の間隔はボタンの余白に任せ（gap なし）、欄の幅（lg 28rem）の popover で件数の文と 1 行に入れる。 */}
-          <span className="ml-auto flex flex-wrap items-center justify-end" data-searchable-panel-actions="">
+          {/* ボタンの地・枠が接しないよう、操作の間は gap-1 を空ける（#5465。gap-2 は lg 28rem の popover で件数の文と
+              1 行に入らない）。 */}
+          <span className="ml-auto flex flex-wrap items-center justify-end gap-1" data-searchable-panel-actions="">
             <Button
               type="button"
               size="sm"

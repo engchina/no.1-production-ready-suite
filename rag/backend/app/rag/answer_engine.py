@@ -901,7 +901,7 @@ class AnswerEngine:
     async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
         """回答を作らずに根拠だけを集め、根拠の並びの順に返す(#593)。
 
-        KB の検索テストとレシピの検索比較で、引用の候補を確かめるために使う。回答と同じ流れ
+        レシピの検索比較で、引用の候補を確かめるために使う。回答と同じ流れ
         (主の検索 → rerank → 切る → 文脈の補完。``expand`` なら検索拡張と補いの検索の合わせ込みも)
         で集め(#5173・#5332)、回答の生成の手前で止める。回答の LLM は呼ばない。件数(起点の数)は
         ``request.top_k``。
