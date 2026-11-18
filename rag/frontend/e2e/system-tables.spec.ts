@@ -1020,7 +1020,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
   });
 
-  test(`HNSW 索引ごとに vector memory の見込みの必要量と今の空きを出す（#5278・${theme}）`, { tag: "@responsive" }, async ({
+  test(`HNSW 索引ごとに vector memory の見込みの必要量・今の空き・使用中を上段のカードに出す（#5278・#5473・${theme}）`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await useTheme(page, theme);
@@ -1049,12 +1049,11 @@ for (const theme of ["light", "dark"] as const) {
       },
     });
     await page.goto("/settings/system-tables");
+    // 上段の数値のカードの行に、索引名と 3 つの値のカードとして並ぶ（見出し・説明・警告は無い。#5473）。
     const section = page.getByTestId("system-tables-vector-memory");
-    await expect(section).toContainText("vector memory の見積もり（HNSW 索引）");
-    await expect(section).toContainText("RAG_CHUNKS_EMBEDDING_HNSW_IDX");
-    await expect(section).toContainText("見込みの必要量57.1 MB");
-    await expect(section).toContainText("今の空き32.0 MB");
-    await expect(section).toContainText("見込みの必要量が今の空きを超えています。");
+    await expect(section).toHaveText(
+      "RAG_CHUNKS_EMBEDDING_HNSW_IDX" + "57.1 MB / 32.0 MB / —" + "見込みの必要量 / 今の空き / 使用中" + "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。"
+    );
     const contrast = await minimumTextContrast(page, "[data-testid='system-tables-vector-memory']");
     expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
     const pageOverflow = await page.evaluate(
@@ -1062,7 +1061,8 @@ for (const theme of ["light", "dark"] as const) {
     );
     expect(pageOverflow).toBeLessThanOrEqual(1);
     const width = testInfo.project.name === "mobile" ? 375 : 1280;
-    await section.screenshot({
+    // 上段のカードの行ごと撮り、ほかのカードとそろっていることを見る。
+    await section.locator("xpath=..").screenshot({
       path: screenshotDir
         ? `${screenshotDir}/system-tables-vector-memory-estimate-${theme}-${width}.png`
         : testInfo.outputPath(`vector-memory-estimate-${theme}-${width}.png`),
@@ -1071,7 +1071,7 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
-test("vector memory を取得できない環境では「取得できません」と出す（#5278）", async ({ page }) => {
+test("vector memory を取得できない環境では取れない値を「—」にする（#5278・#5473）", async ({ page }) => {
   await mockSettings(page, {
     initialStatus: "ready",
     statusExtra: {
@@ -1094,6 +1094,5 @@ test("vector memory を取得できない環境では「取得できません」
   });
   await page.goto("/settings/system-tables");
   const section = page.getByTestId("system-tables-vector-memory");
-  await expect(section).toContainText("取得できません（ORA-06550）");
-  await expect(section).toContainText("取得できません（ORA-00942）");
+  await expect(section).toContainText("— / — / —");
 });
