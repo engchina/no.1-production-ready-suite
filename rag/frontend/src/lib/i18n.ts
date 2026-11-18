@@ -3326,6 +3326,8 @@ export const ja = {
   "documents.classification.effective_to": "有効期間の終了日",
   "documents.classification.effectiveToHelper": "この日から期間外になります。",
   "documents.classification.periodError": "終了日は開始日より後の日付にしてください。",
+  "documents.classification.unset": "未設定",
+  "documents.classification.periodSummary": "有効期間 {from}〜{to}",
   "documents.classification.save": "分類を保存",
   "documents.classification.saved": "分類と有効期間を保存しました。",
   "documents.classification.saveError": "分類と有効期間の保存に失敗しました。入力を確認して再試行してください。",

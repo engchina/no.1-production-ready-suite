@@ -1639,8 +1639,8 @@ export function DocumentWorkspace({
 
         <DocumentVersionEditor document={doc} />
 
-        {/* 左右の閲覧領域は共有の高い一覧の標準を使う。幅は xl でほぼ半分、2xl で2:1にする。 */}
-        <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] 2xl:grid-cols-[minmax(0,2fr)_minmax(35rem,1fr)]">
+        {/* 左右の閲覧領域は共有の高い一覧の標準を使う。幅は xl でほぼ半分、2xl で2:1にする。上の欄と同じ区切りの線を付ける（#5440）。 */}
+        <div className="grid grid-cols-1 items-start gap-5 border-t border-border pt-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] 2xl:grid-cols-[minmax(0,2fr)_minmax(35rem,1fr)]">
           <section
             data-testid="document-preview-pane"
             className="flex min-w-0 flex-col"
@@ -3606,76 +3606,97 @@ function DocumentClassificationEditor({
   };
 
   return (
-    <section className="space-y-3 border-t border-border pt-4">
-      <div>
-        <h3 className="text-sm font-semibold text-fg">{t("documents.classification.title")}</h3>
-        <p className="mt-1 text-xs text-fg-muted">{t("documents.classification.description")}</p>
-      </div>
-      {/* 分類は「文書の分類」の一覧から選ぶ（必須ではない。#2131）。名前の段（md）、有効期間の開始日・終了日は
-          日付の段（sm）のペア（#1891）。 */}
-      <FormGrid>
-        <CategorySelectFields
-          idPrefix="document-classification"
-          labels={{
-            large_category: t("documents.classification.large_category"),
-            middle_category: t("documents.classification.middle_category"),
-            small_category: t("documents.classification.small_category"),
-          }}
-          values={{
-            large_category: form.large_category ?? "",
-            middle_category: form.middle_category ?? "",
-            small_category: form.small_category ?? "",
-          }}
-          disabled={save.isPending}
-          onChange={(values) =>
-            setForm((current) => ({
-              ...current,
-              large_category: values.large_category || null,
-              middle_category: values.middle_category || null,
-              small_category: values.small_category || null,
-            }))
-          }
-        />
-      </FormGrid>
-      <FormGrid>
-        {CLASSIFICATION_DATE_FIELDS.map((key) => (
-          <TextField
-            key={key}
-            id={`document-classification-${key}`}
-            width="sm"
-            type="date"
-            label={t(`documents.classification.${key}`)}
-            helper={key === "effective_to" ? t("documents.classification.effectiveToHelper") : undefined}
-            error={key === "effective_to" ? (periodError ?? undefined) : undefined}
-            value={form[key] ?? ""}
+    // 入力は縦に長く、使う場面が限られるので最初は閉じる。閉じたままでも保存済みの値を見出しの下に出す（#5440）。
+    <section className="border-t border-border pt-4">
+      <Disclosure
+        variant="plain"
+        summary={t("documents.classification.title")}
+        summaryClassName="font-semibold"
+        summaryFooter={
+          <span className="block text-xs font-normal text-fg-muted" data-testid="document-classification-current">
+            {classificationSummary(saved)}
+          </span>
+        }
+        contentClassName="space-y-3 pt-3"
+        data-testid="document-classification"
+      >
+        <p className="text-xs text-fg-muted">{t("documents.classification.description")}</p>
+        {/* 分類は「文書の分類」の一覧から選ぶ（必須ではない。#2131）。名前の段（md）、有効期間の開始日・終了日は
+            日付の段（sm）のペア（#1891）。 */}
+        <FormGrid>
+          <CategorySelectFields
+            idPrefix="document-classification"
+            labels={{
+              large_category: t("documents.classification.large_category"),
+              middle_category: t("documents.classification.middle_category"),
+              small_category: t("documents.classification.small_category"),
+            }}
+            values={{
+              large_category: form.large_category ?? "",
+              middle_category: form.middle_category ?? "",
+              small_category: form.small_category ?? "",
+            }}
             disabled={save.isPending}
-            onValueChange={(value) => update(key, value)}
+            onChange={(values) =>
+              setForm((current) => ({
+                ...current,
+                large_category: values.large_category || null,
+                middle_category: values.middle_category || null,
+                small_category: values.small_category || null,
+              }))
+            }
           />
-        ))}
-      </FormGrid>
-      <div className="flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          size="md"
-          onClick={onSave}
-          loading={save.isPending}
-          disabled={!isDirty}
-          icon={Save}
-        >
-          {t("documents.classification.save")}
-        </Button>
-        {save.isSuccess && !isDirty ? (
-          <FormStatus tone="success" message={t("documents.classification.saved")} />
-        ) : null}
-        {save.isError ? (
-          <FormStatus
-            tone="danger"
-            message={errorMessage(save.error, t("documents.classification.saveError"))}
-          />
-        ) : null}
-      </div>
+        </FormGrid>
+        <FormGrid>
+          {CLASSIFICATION_DATE_FIELDS.map((key) => (
+            <TextField
+              key={key}
+              id={`document-classification-${key}`}
+              width="sm"
+              type="date"
+              label={t(`documents.classification.${key}`)}
+              helper={key === "effective_to" ? t("documents.classification.effectiveToHelper") : undefined}
+              error={key === "effective_to" ? (periodError ?? undefined) : undefined}
+              value={form[key] ?? ""}
+              disabled={save.isPending}
+              onValueChange={(value) => update(key, value)}
+            />
+          ))}
+        </FormGrid>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            size="md"
+            onClick={onSave}
+            loading={save.isPending}
+            disabled={!isDirty}
+            icon={Save}
+          >
+            {t("documents.classification.save")}
+          </Button>
+          {save.isSuccess && !isDirty ? (
+            <FormStatus tone="success" message={t("documents.classification.saved")} />
+          ) : null}
+          {save.isError ? (
+            <FormStatus
+              tone="danger"
+              message={errorMessage(save.error, t("documents.classification.saveError"))}
+            />
+          ) : null}
+        </div>
+      </Disclosure>
     </section>
   );
+}
+
+/** 閉じた見出しの下に出す保存済みの分類と有効期間（無ければ「未設定」）。 */
+function classificationSummary(value: DocumentClassification): string {
+  const categories = [value.large_category, value.middle_category, value.small_category].filter(Boolean).join(" / ");
+  const period =
+    value.effective_from || value.effective_to
+      ? t("documents.classification.periodSummary", { from: value.effective_from ?? "", to: value.effective_to ?? "" })
+      : "";
+  return [categories, period].filter(Boolean).join("・") || t("documents.classification.unset");
 }
 
 function idSetKey(ids: string[]) {
