@@ -252,7 +252,7 @@ class SearchRequest(BaseModel):
         default=False,
         description=(
             "回答フローを通らずに検索だけを行う(回答の生成の LLM を呼ばない)。"
-            "KB の検索テストとレシピの検索比較が使う(#593)。"
+            "レシピの検索比較が使う(#593)。"
         ),
     )
     conditions: dict[str, str] = Field(

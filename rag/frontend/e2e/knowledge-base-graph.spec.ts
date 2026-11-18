@@ -178,7 +178,7 @@ test("文書構造グラフは構築のカードの最下部にあり、標準�
   const existing = card.getByText("「既存文書に構築」は保存済みのチャンクの見出し・階層情報から構築し");
   await expect(existing).toBeVisible();
   await expect(card).not.toContainText("構造拡張");
-  const search = page.getByRole("heading", { name: "このナレッジで検索テスト", exact: true });
+  const search = page.getByRole("heading", { name: "Wiki ナビゲーション", exact: true });
   await expect(search).toBeVisible();
   const [existingBox, saveBox, buildBox, graphBox, cardBox, searchBox] = await Promise.all([
     existing.boundingBox(), save.boundingBox(), build.boundingBox(), summary.boundingBox(), card.boundingBox(), search.boundingBox(),
