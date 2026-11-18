@@ -15,7 +15,7 @@ import {
   type SelectFieldOption,
   ListScrollRegion,
 } from "@production-ready/ui";
-import { ArrowDown, ArrowUp, Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
+import { ArrowDown, ArrowUp, History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 
@@ -322,7 +322,7 @@ export function SectionRulesEditor() {
           {
             id: "discard",
             label: t("sectionRules.action.discard"),
-            icon: Undo2,
+            icon: RotateCcw,
             disabled: !dirty,
             onClick: () => {
               setDraft(null);
@@ -331,17 +331,15 @@ export function SectionRulesEditor() {
             },
           },
         ]}
-        dangerActions={[
-          {
-            id: "reset",
-            label: t("sectionRules.reset.action"),
-            icon: RotateCcw,
-            loading: reset.isPending,
-            // 保存の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
-            disabled: save.isPending,
-            onClick: () => void resetToDefault(),
-          },
-        ]}
+        restoreDefaultsAction={{
+          id: "reset",
+          label: t("sectionRules.reset.action"),
+          icon: History,
+          loading: reset.isPending,
+          // 保存の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
+          disabled: save.isPending,
+          onClick: () => void resetToDefault(),
+        }}
         status={error ? <FormStatus tone="danger" message={error} /> : null}
       />
 

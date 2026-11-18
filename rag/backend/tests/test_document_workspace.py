@@ -33,6 +33,7 @@ from app.rag.source_profile import (
 )
 from app.schemas.document import (
     DocumentChunkView,
+    DocumentClassification,
     DocumentDetail,
     DocumentExtractionExportFormat,
     DocumentPreprocessArtifact,
@@ -135,6 +136,7 @@ class FakeWorkspaceOracle:
         content_sha256: str | None,
         duplicate_of_document_id: str | None,
         knowledge_base_ids: list[str] | None = None,
+        classification: DocumentClassification | None = None,
     ) -> DocumentDetail:
         document_id = uuid4().hex
         knowledge_bases = [
@@ -152,6 +154,7 @@ class FakeWorkspaceOracle:
             duplicate_of_document_id=duplicate_of_document_id,
             uploaded_at=datetime.now(UTC),
             knowledge_bases=knowledge_bases,
+            classification=classification,
         )
         self.documents[document_id] = detail
         # 正式実装と同じく新規登録時に初期レシピを明示準備する。
@@ -961,6 +964,76 @@ def test_document_upload_returns_assigned_knowledge_bases() -> None:
         {"id": "kb-1", "name": "KB kb-1"},
         {"id": "kb-2", "name": "KB kb-2"},
     ]
+
+
+def test_document_upload_saves_classification_for_every_file(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """upload で指定した分類と有効期間は、その回のすべてのファイルに同じ値で保存する(#5464)。"""
+    classification = {"large_category": "分類 A", "effective_from": "2026-04-01"}
+    single = client.post(
+        "/api/documents/upload",
+        data={"classification": json.dumps(classification)},
+        files={"file": ("a.txt", b"A", "text/plain")},
+    )
+    batch = client.post(
+        "/api/documents/batch-upload",
+        data={"classification": json.dumps(classification)},
+        files=[
+            ("files", ("b.txt", b"B", "text/plain")),
+            ("files", ("c.txt", b"C", "text/plain")),
+        ],
+    )
+
+    assert single.status_code == 200
+    assert batch.status_code == 200
+    ids = [single.json()["data"]["id"], *(item["id"] for item in batch.json()["data"]["items"])]
+    for document_id in ids:
+        saved = fake_document_dependencies.documents[document_id].classification
+        assert saved is not None
+        assert saved.model_dump(mode="json", exclude_none=True) == classification
+
+
+def test_document_upload_without_classification_leaves_it_unset(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """分類を送らない・空の分類を送ったときは設定しない(#5464)。"""
+    for data in ({}, {"classification": json.dumps({"large_category": ""})}):
+        resp = client.post(
+            "/api/documents/upload",
+            data=data,
+            files={"file": (f"{uuid4().hex}.txt", uuid4().bytes, "text/plain")},
+        )
+        assert resp.status_code == 200
+        assert (
+            fake_document_dependencies.documents[resp.json()["data"]["id"]].classification is None
+        )
+
+
+@pytest.mark.parametrize(
+    ("classification", "message"),
+    [
+        (
+            {"effective_from": "2026-04-01", "effective_to": "2026-04-01"},
+            "有効期間の終了日は開始日より後の日付にしてください。",
+        ),
+        ({"effective_from": "not-a-date"}, "文書の分類と有効期間の形式が正しくありません。"),
+    ],
+)
+def test_document_upload_rejects_invalid_classification_before_storing(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    classification: dict[str, str],
+    message: str,
+) -> None:
+    """誤った分類・有効期間は 422 にし、原本も文書行も保存しない(#5464)。"""
+    for path, files in (
+        ("/api/documents/upload", {"file": ("a.txt", b"A", "text/plain")}),
+        ("/api/documents/batch-upload", [("files", ("a.txt", b"A", "text/plain"))]),
+    ):
+        resp = client.post(path, data={"classification": json.dumps(classification)}, files=files)
+        assert resp.status_code == 422
+        assert resp.json()["error_messages"] == [message]
+    assert fake_document_dependencies.documents == {}
 
 
 def test_duplicate_upload_keeps_direct_knowledge_base_memberships(

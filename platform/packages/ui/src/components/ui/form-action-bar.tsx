@@ -6,6 +6,8 @@
  * - `status` は操作行の左側に出す状態（`FormStatus` など）。
  * - 一覧・詳細の `EntityAction` は `entityActionToFormAction` でそのまま渡せる。
  * - 詳細・作成・編集の画面の確定（「作成」「保存」と「変更を破棄」）も、フォームの末尾のこの行に置く（#1786）。
+ * - 「既定に戻す」は `restoreDefaultsAction` に渡す。並びは部品が決める: 保存（primary）→ 変更を破棄（secondary）
+ *   → 既定に戻す（secondary の後ろに少し離す）。画面ごとに `secondaryActions` の並びで置き場所を決めない（#5458）。
  *   行は画面の下端に貼り付けず、内容と一緒にスクロールする（#2715。README §4「詳細・作成・編集の画面の操作」）。
  */
 import {
@@ -49,6 +51,11 @@ export interface FormActionBarProps {
   primaryActions?: readonly FormActionDescriptor[];
   secondaryActions?: readonly FormActionDescriptor[];
   dangerActions?: readonly FormActionDescriptor[];
+  /**
+   * フォーム全体を既定に戻す操作（「既定に戻す」「全体の既定に戻す」など。#5458）。secondary の後ろに、
+   * 少し離して secondary の見た目で描く。欄ごとの「既定に戻す」はここに入れない。
+   */
+  restoreDefaultsAction?: FormActionDescriptor;
   status?: ReactNode;
   ariaLabel: string;
   testId?: string;
@@ -87,11 +94,13 @@ function ActionContent({ action, iconSize = 16 }: { action: FormActionDescriptor
 function VisibleAction({
   action,
   variant,
+  className: extraClassName,
 }: {
   action: FormActionDescriptor;
   variant: "primary" | "secondary";
+  className?: string;
 }) {
-  const className = "w-full whitespace-nowrap sm:w-auto";
+  const className = cn("w-full whitespace-nowrap sm:w-auto", extraClassName);
 
   if (action.href) {
     const enabled = actionEnabled(action);
@@ -326,6 +335,7 @@ export function FormActionBar({
   dangerActions = [],
   primaryActions = [],
   secondaryActions = [],
+  restoreDefaultsAction,
   status,
   testId,
   moreLabel = "その他の操作",
@@ -346,6 +356,10 @@ export function FormActionBar({
         {secondaryActions.map((action) => (
           <VisibleAction key={action.id} action={action} variant="secondary" />
         ))}
+        {restoreDefaultsAction ? (
+          // 使う頻度が低く、編集中の内容を置き換えるので、保存・変更を破棄から少し離す（縦に積む sm 未満は上、横の sm 以上は左）。
+          <VisibleAction action={restoreDefaultsAction} variant="secondary" className="mt-2 sm:ml-2 sm:mt-0" />
+        ) : null}
         {status ? <div className="min-w-0 sm:flex-1">{status}</div> : null}
         <DangerActionsMenu actions={dangerActions} moreLabel={moreLabel} context={ariaLabel} />
       </div>

@@ -54,7 +54,6 @@ import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
 import { KnowledgeBaseEditor } from "./KnowledgeBaseEditor";
 import { KnowledgeBaseExtractionFields } from "./KnowledgeBaseExtractionFields";
-import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 
 /**
@@ -124,9 +123,8 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
       {/* 項目抽出で取り出す項目の定義。無ければ全体の既定を使う。 */}
       <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
 
-      {/* 項目の定義の後に文書の構造を確認する。展開時のみ subgraph を取得。 */}
+      {/* 項目の定義の後に文書の構造を確認する。文書構造グラフはこのカードの最下部で、開いたときだけ取得する。 */}
       <KnowledgeBaseStructureIndex key={kb.id} kb={kb} editable={isActive} />
-      <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
 
       {/* Wiki の背景構築の指定（#4941）。 */}
       <KnowledgeBaseWiki key={`wiki-${kb.id}`} id={kb.id} editable={isActive} />

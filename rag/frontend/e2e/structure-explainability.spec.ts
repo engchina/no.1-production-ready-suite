@@ -187,6 +187,8 @@ test("文書詳細で所属ナレッジベースを更新できる", async ({ pa
 
   await page.goto("/documents/doc-1");
 
+  // 基本情報は見出しの下の meta の行に出す（#5462）。
+  await expect(page.getByTestId("document-meta")).toHaveText(/^120 B\s*アップロード \S.*索引 \S/);
   await expect(page.getByRole("heading", { name: "所属ナレッジベース" })).toBeVisible();
   // 既存の所属はチップで可視化される。
   await expect(page.getByLabel("社内規程 を選択から外す")).toBeVisible();
@@ -196,7 +198,7 @@ test("文書詳細で所属ナレッジベースを更新できる", async ({ pa
   // 「完了」で一覧を閉じる（#316）。
   await page.getByRole("button", { name: "完了" }).click();
   await expect(page.getByRole("listbox", { name: "所属先" })).toHaveCount(0);
-  await page.getByRole("button", { name: "所属先を保存" }).click();
+  await page.getByRole("region", { name: "所属ナレッジベース" }).getByRole("button", { name: "保存", exact: true }).click();
 
   await expect
     .poll(() => state.lastReplacePayload)
@@ -228,7 +230,7 @@ for (const viewport of [
     await expect(classification).not.toHaveAttribute("open", "");
     await expect(page.getByTestId("document-classification-current")).toHaveText("未設定");
     await classification.locator("summary").click();
-    const save = page.getByRole("button", { name: "分類を保存" });
+    const save = classification.getByRole("button", { name: "保存", exact: true });
     await expect(save).toBeDisabled();
     // 分類は「文書の分類」の一覧から選ぶ（#2131）。中分類・小分類は上の段を選ぶまで選べない。
     const large = page.getByRole("button", { name: /^大分類 / });
@@ -596,7 +598,7 @@ for (const viewport of [
     const section = page.getByTestId("document-version");
     await expect(section.getByRole("heading", { name: "版" })).toBeVisible();
     await expect(section).toContainText("今有効な版です。");
-    const save = section.getByRole("button", { name: "版を保存" });
+    const save = section.getByRole("button", { name: "保存", exact: true });
     await expect(save).toBeDisabled();
     // 候補は欄に触れるまで読まない（文書詳細を開くたびに一覧を読まない）。
     expect(state.listQueries).toEqual([]);
@@ -653,7 +655,7 @@ test("文書詳細の版の保存の失敗は、操作の行に理由を出す",
     .getByRole("listbox", { name: "この文書を置き換えた新しい版" })
     .getByRole("option", { name: /経費精算規程/ })
     .click();
-  await section.getByRole("button", { name: "版を保存" }).click();
+  await section.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect(section.getByText(/循環します/)).toBeVisible();
   await expect(section).toContainText("今有効な版です。");
@@ -1388,7 +1390,7 @@ test("文書詳細の所属先を 0 件にすると、保存時に欄の下へ�
 
   await page.goto("/documents/doc-1");
   await page.getByLabel("社内規程 を選択から外す").click();
-  const save = page.getByRole("button", { name: "所属先を保存" });
+  const save = page.getByRole("region", { name: "所属ナレッジベース" }).getByRole("button", { name: "保存", exact: true });
   await expect(save).toBeEnabled();
   await save.click();
 

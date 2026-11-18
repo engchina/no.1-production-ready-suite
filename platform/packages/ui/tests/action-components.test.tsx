@@ -128,6 +128,23 @@ describe("FormActionBar", () => {
     expect(html).not.toContain(">削除<");
   });
 
+  it("既定に戻すは渡した順に関わらず 保存 → 変更を破棄 の後ろに、少し離して secondary で描く（#5458）", () => {
+    const html = renderToStaticMarkup(
+      <FormActionBar
+        ariaLabel="設定の操作"
+        restoreDefaultsAction={{ id: "restore-defaults", label: "既定に戻す", onClick: noop }}
+        secondaryActions={[{ id: "discard", label: "変更を破棄", onClick: noop }]}
+        primaryActions={[{ id: "save", label: "保存", onClick: noop }]}
+      />
+    );
+    const order = [">保存<", ">変更を破棄<", ">既定に戻す<"].map((label) => html.indexOf(label));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const restore = html.match(/<button\b[^>]*data-form-action-id="restore-defaults"[^>]*>/)?.[0] ?? "";
+    expect(restore).toContain('data-form-action-kind="secondary"');
+    expect(restore).toContain("sm:ml-2");
+  });
+
   it("メニューの見出しは moreLabel で差し替えられ、danger がなければメニューを出さない", () => {
     const withLabel = renderToStaticMarkup(
       <FormActionBar
