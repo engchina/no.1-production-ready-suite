@@ -34,6 +34,8 @@
  */
 
 /** `page.evaluate` を持つもの（Playwright の `Page`）。 */
+import { NUMBER_SPIN_BUTTON_WIDTH_PX } from "../src/components/ui/number-spin-button";
+
 export interface EvaluatePage {
   evaluate<R, A>(pageFunction: (arg: A) => R | Promise<R>, arg: A): Promise<R>;
 }
@@ -168,7 +170,7 @@ export async function findClippedPlaceholders(
   options: FieldScanOptions = {}
 ): Promise<ClippedPlaceholder[]> {
   return page.evaluate(
-    ({ root, tolerance }) => {
+    ({ root, tolerance, spinButtonWidth }) => {
       const scope = document.querySelector(root) ?? document.body;
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
@@ -211,11 +213,13 @@ export async function findClippedPlaceholders(
         context.font = style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
         // input の clientWidth は Chromium 158 から左右の padding を含まない（#5286）。input は版に依らない offsetWidth から
         // 枠線と padding を引き、textarea は縦のスクロールバーを除くため clientWidth から padding を引く（部品の placeholder-fit と同じ）。
+        // number の欄は上下の矢印の幅（DOM から測れない）も引く（#5402。部品の number-spin-button と同じ値・同じ条件）。
         const padding = px(style.paddingLeft) + px(style.paddingRight);
+        const spin = field.type === "number" && style.appearance !== "textfield" ? spinButtonWidth : 0;
         const availableWidth =
           field instanceof HTMLTextAreaElement
             ? field.clientWidth - padding
-            : field.offsetWidth - px(style.borderLeftWidth) - px(style.borderRightWidth) - padding;
+            : field.offsetWidth - px(style.borderLeftWidth) - px(style.borderRightWidth) - padding - spin;
         if (availableWidth <= 0) continue;
         const lines = field.placeholder.split("\n").map((line) => context.measureText(line).width);
         const textWidth = Math.max(...lines);
@@ -258,7 +262,7 @@ export async function findClippedPlaceholders(
       }
       return results;
     },
-    { root: options.root ?? "main", tolerance: options.tolerance ?? 1 }
+    { root: options.root ?? "main", tolerance: options.tolerance ?? 1, spinButtonWidth: NUMBER_SPIN_BUTTON_WIDTH_PX }
   );
 }
 

@@ -12,6 +12,8 @@
  */
 import { type Ref, useCallback, useLayoutEffect, useState } from "react";
 
+import { NUMBER_SPIN_BUTTON_WIDTH_PX, reservesSpinButton } from "./number-spin-button";
+
 let measureContext: CanvasRenderingContext2D | null | undefined;
 
 function canvasContext(): CanvasRenderingContext2D | null {
@@ -60,14 +62,19 @@ function px(value: string) {
 }
 
 /**
- * 欄の内側の幅（px。枠線・padding・スクロールバーを除く）。`<input>` の `clientWidth` は Chromium 158 から
- * 左右の padding を含まなくなった（#5286）ため、input は版に依らない `offsetWidth` から枠線と padding を引く
- * （入力欄はスクロールバーを持たない）。textarea は縦のスクロールバーを除くため `clientWidth` から padding を引く。
+ * 欄の内側の幅（px。枠線・padding・スクロールバー・number の上下の矢印を除く）。`<input>` の `clientWidth` は
+ * Chromium 158 から左右の padding を含まなくなった（#5286）ため、input は版に依らない `offsetWidth` から枠線と
+ * padding を引く（入力欄はスクロールバーを持たない）。`type="number"` は上下の矢印の幅も引く（#5402）。textarea は
+ * 縦のスクロールバーを除くため `clientWidth` から padding を引く。
  */
-function fieldContentWidth(element: HTMLInputElement | HTMLTextAreaElement, style: CSSStyleDeclaration) {
+export function fieldContentWidth(
+  element: HTMLInputElement | HTMLTextAreaElement,
+  style: Pick<CSSStyleDeclaration, "paddingLeft" | "paddingRight" | "borderLeftWidth" | "borderRightWidth" | "appearance">
+) {
   const padding = px(style.paddingLeft) + px(style.paddingRight);
   if (element instanceof HTMLTextAreaElement) return element.clientWidth - padding;
-  return element.offsetWidth - px(style.borderLeftWidth) - px(style.borderRightWidth) - padding;
+  const spin = reservesSpinButton(element.type, style.appearance) ? NUMBER_SPIN_BUTTON_WIDTH_PX : 0;
+  return element.offsetWidth - px(style.borderLeftWidth) - px(style.borderRightWidth) - padding - spin;
 }
 
 /** 欄の placeholder が収まらないかを測る（測れない環境では false）。 */

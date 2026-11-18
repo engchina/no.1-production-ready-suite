@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -11,6 +12,7 @@ import {
   SelectField,
   TextareaField,
 } from "../src";
+import { fieldContentWidth } from "../src/components/ui/placeholder-fit";
 
 // #1891: 幅の基準（TextareaField・SearchableMultiSelect の width、FormGrid の最大幅）と placeholder の切れの判定。
 
@@ -37,6 +39,19 @@ describe("placeholderOverflows", () => {
 
   it("測れない（幅 0）ときは切れていない扱い", () => {
     expect(placeholderOverflows({ lineWidths: [500], availableWidth: 0, multiline: false })).toBe(false);
+  });
+
+  it("number の欄は上下の矢印の幅も内側の幅から引く（appearance: textfield で矢印を消した欄は引かない。#5402）", () => {
+    const style = { paddingLeft: "12px", paddingRight: "12px", borderLeftWidth: "1px", borderRightWidth: "1px", appearance: "auto" };
+    const input = (type: string) => Object.assign(document.createElement("input"), { type });
+    const sized = (element: HTMLInputElement) => {
+      Object.defineProperty(element, "offsetWidth", { value: 112 });
+      return element;
+    };
+    // xs（112px）: text は 112 − 2 − 24 = 86px、number は矢印の 16px も引いて 70px。
+    expect(fieldContentWidth(sized(input("text")), style)).toBe(86);
+    expect(fieldContentWidth(sized(input("number")), style)).toBe(70);
+    expect(fieldContentWidth(sized(input("number")), { ...style, appearance: "textfield" })).toBe(86);
   });
 });
 
