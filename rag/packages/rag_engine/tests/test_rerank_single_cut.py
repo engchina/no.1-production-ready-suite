@@ -53,8 +53,10 @@ def test_rerank_does_not_cut_by_count(monkeypatch, mode):
         requests.append(top_n)
         if mode == "failed":
             raise RuntimeError("synthetic failure")
-        # 検索の順の逆に点数を付ける。
-        return [SimpleNamespace(index=i, relevance_score=None if mode == "unscored" else (i + 1) / 10) for i in range(len(documents))]
+        # 検索の順の逆に点数を付ける。OCI の rerank の結果は点数の高い順に返る（backend の client が並べる）。
+        if mode == "unscored":
+            return [SimpleNamespace(index=i, relevance_score=None) for i in range(len(documents))]
+        return [SimpleNamespace(index=i, relevance_score=(i + 1) / 10) for i in reversed(range(len(documents)))]
 
     monkeypatch.setattr(answering, "rerank_text_with_scores", rank)
     result = rerank_records("合成の質問", records, settings, enabled=mode != "off")

@@ -12,7 +12,7 @@ from app.schemas.chat import ChatMessageRequest
 from app.schemas.search import SearchRequest
 
 
-@pytest.mark.parametrize("value", [1, 37, 50, 100])
+@pytest.mark.parametrize("value", [10, 37, 50, 100])
 def test_omitted_top_k_and_public_schema_use_current_setting(
     value: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -31,7 +31,7 @@ def test_omitted_top_k_and_public_schema_use_current_setting(
     assert SearchInput(query="q", top_k=12).top_k == 12
 
 
-@pytest.mark.parametrize("value", ["0", "101", "invalid"])
+@pytest.mark.parametrize("value", ["0", "9", "101", "invalid"])
 def test_invalid_environment_value_is_rejected(value: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RAG_SEARCH_TOP_K_DEFAULT", value)
     with pytest.raises(ValidationError):
@@ -61,4 +61,4 @@ def test_default_is_not_frozen_at_import_or_after_file_reload(
     assert ChatMessageRequest(content="q").top_k == 17
     assert SearchInput(query="q").top_k == 17
     path.write_text("")
-    assert SearchRequest(query="q").top_k == 30
+    assert SearchRequest(query="q").top_k == 50

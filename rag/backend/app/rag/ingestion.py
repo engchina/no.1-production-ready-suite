@@ -181,6 +181,7 @@ from app.rag.pdf_segment_merge import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
+from app.rag.source_lines import apply_source_lines
 from app.rag.structure_index import structure_index_targets
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
@@ -232,7 +233,8 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 15: プレーンテキストの本文の無い見出しの並びを、直前の見出しの本文に含める。#5315)。
 # 16: PowerPoint の原本の図形と接続線を、図の読み取りの入力と図の説明に入れる。#5359。
 # 17: 原本の接続線の行に、両端の図形の文字も書く。#5386。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 17
+# 18: 原本の位置(source_map)の範囲ごとに原本の行を記録する。#5450。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 18
 # 原本の図形と接続線を読む PowerPoint の形式（OOXML。Office→PDF で変換して解析するとき。#5359）。
 _PRESENTATION_SHAPE_EXTENSIONS = frozenset({".pptx", ".pptm"})
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
@@ -2364,6 +2366,8 @@ class IngestionPipeline:
             result_attributes=lambda result: {"chunk_count": len(result)},
         )
         apply_page_labels(chunks, labels_from_artifacts(extraction.parser_artifacts))
+        # 頁の無い原本の根拠の場所に使う、原本の行の範囲(#5450)。
+        apply_source_lines(chunks, extraction.parser_artifacts)
         # 本文の交差参照(「第3章を参照」など)を同じ文書の節に解決して metadata に残す(#1280)。
         annotate_cross_references(chunks, document_title=source_name)
         # XML ツリー JSON の段落の検索の文に、参照先の条の内容を足す(読替え規定。#2148)。

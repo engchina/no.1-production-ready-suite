@@ -143,14 +143,9 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         "rrf_method_ratio": resolved_settings.rag_rrf_method_ratio,
         "retrieval_query_limit": resolved_settings.rag_retrieval_query_limit,
-        "retrieval_candidate_limit": resolved_settings.rag_retrieval_candidate_limit,
-        "rerank_candidate_limit": resolved_settings.rag_rerank_candidate_limit,
         "rerank_min_relevance_score": resolved_settings.rag_rerank_min_relevance_score,
-        "candidate_diversity_depth": resolved_settings.rag_candidate_diversity_depth,
-        "candidate_diversity_max_extra": resolved_settings.rag_candidate_diversity_max_extra,
-        "candidate_diversity_new_document": resolved_settings.rag_candidate_diversity_new_document,
-        "candidate_diversity_present_document": (
-            resolved_settings.rag_candidate_diversity_present_document
+        "rerank_min_relevance_fallback_ratio": (
+            resolved_settings.rag_rerank_min_relevance_fallback_ratio
         ),
         # 段ごとの追加の検索の予算(#4141)。
         "request_coverage_chunks_per_subquestion": (

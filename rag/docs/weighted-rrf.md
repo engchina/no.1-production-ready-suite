@@ -6,7 +6,7 @@
 
 未保存の環境にも新しい既定値を使う。非負の有限値で指定し、組内の全ゼロを拒否する。候補の件数と rerank は独立で、結果の件数や回答内容の比率を約束する設定ではない。rerank に渡る候補は変わり得る。KB は対象範囲、文書レシピは取込の責務を維持し、比重を保存しない。
 
-RRF の順位は rerank の入力の候補を選ぶ順と、rerank が無効・失敗したときの並びにだけ使う。rerank が成功した後の並びは rerank の点数（と MMR）だけで決め、RRF の順位（検索の順）を枠で混ぜない（#5165。`RAG_RERANK_SLOT_RATIO` は削除。[rag-engine.md の「rerank の後の並びと切り」](./rag-engine.md#rerank-の後の並びと切り5165)）。
+RRF の順位は rerank の入力の候補を選ぶ順と、rerank が無効・失敗したときの並びにだけ使う。rerank が成功した後の並びは rerank の点数だけで決め、RRF の順位（検索の順）を枠で混ぜない（#5165。`RAG_RERANK_SLOT_RATIO` は削除。[rag-engine.md の「rerank の後の並びと切り」](./rag-engine.md#rerank-の後の並びと切り5165)）。
 
 ## 計算
 

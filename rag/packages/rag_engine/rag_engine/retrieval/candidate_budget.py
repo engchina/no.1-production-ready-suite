@@ -1,10 +1,11 @@
-"""精排入力の予算と、同一成果物の同じ原文の重複除去。関連度は再判定しない。"""
+"""rerank の入力の選択（同一成果物の同じ原文の重複除去と、rerank に入れない経路の除外）。関連度は再判定しない。"""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
-# 融合順位の基本候補の既定の上限。backend の既定（RAG_RETRIEVAL_CANDIDATE_LIMIT）と同じ値。
-DEFAULT_FUSION_LIMIT = 140
+# rerank に入れる経路。検索拡張（参照・実体・構造・目録）の chunk は rerank の候補に入らない（#5162）。
+# 件数は検索経路ごとの取得件数（backend の RAG_RETRIEVAL_QUERY_LIMIT）で決まり、ここでは切らない（#5443）。
+RERANK_STAGES = frozenset({"fusion", "attachment"})
 
 
 def record_id(record: Any) -> str:
@@ -22,17 +23,16 @@ def artifact_key(record: Any) -> tuple[str, ...]:
     )
 
 
-def select_candidates(
-    records: Sequence[Any], limit: int, *, stage_limits: Mapping[str, int] | None = None
-) -> tuple[list[Any], dict[str, Any]]:
-    """既存の順位を保ち、同じ成果物の同文だけを統合してから合計上限を適用する。
+def select_candidates(records: Sequence[Any]) -> tuple[list[Any], dict[str, Any]]:
+    """既存の順位を保ち、同じ成果物の同文だけを統合し、rerank に入れない経路の候補を除く。
 
     別文書・版・レシピの同文は統合しない。範囲の異なる部分一致も、同じ事実との推測では消さない。
     """
     seen_ids: set[tuple[Any, ...]] = set()
     originals: dict[tuple[Any, ...], str] = {}
-    unique: list[Any] = []
+    selected: list[Any] = []
     excluded: list[dict[str, str]] = []
+    admitted: dict[str, int] = {}
     for record in records:
         uid = record_id(record)
         text = str(record.text or "").strip()
@@ -48,36 +48,15 @@ def select_candidates(
         seen_ids.add(identity)
         if text:
             originals[key] = uid
-        unique.append(record)
-    limits = dict(stage_limits if stage_limits is not None else {"fusion": DEFAULT_FUSION_LIMIT})
-    effective_limit = max(1, limit) if limit > 0 else sum(limits.values())
-    selected: list[Any] = []
-    admitted: dict[str, int] = {}
-    for record in unique:
         stage = str(record.metadata.get("retrieval_admission_stage") or "fusion")
-        if admitted.get(stage, 0) >= limits.get(stage, 0):
-            excluded.append({"id": record_id(record), "reason": "stage_admission_budget", "stage": stage})
-        elif len(selected) >= effective_limit:
-            excluded.append({"id": record_id(record), "reason": "rerank_input_budget"})
-        else:
-            selected.append(record)
-            admitted[stage] = admitted.get(stage, 0) + 1
+        if stage not in RERANK_STAGES:
+            excluded.append({"id": uid, "reason": "not_rerank_stage", "stage": stage})
+            continue
+        selected.append(record)
+        admitted[stage] = admitted.get(stage, 0) + 1
     return selected, {
         "input_count": len(records),
-        "configured_limit": limit,
-        "limit": effective_limit,
-        "limit_policy": "total_cap" if limit > 0 else "sum_of_stage_limits",
-        "stage_limits": limits,
         "admitted": admitted,
         "selected_ids": [record_id(record) for record in selected],
         "excluded": excluded,
     }
-
-
-def stage_limits(settings: Any, records: Sequence[Any]) -> dict[str, int]:
-    """既存各段の上限の和。付加された件数を最適な予算と見なさない。"""
-    limits = dict(getattr(settings, "retrieval_stage_limits", {}) or {})
-    limits.setdefault("fusion", max(1, int(getattr(settings, "retrieval_candidate_limit", DEFAULT_FUSION_LIMIT))))
-    # 添付の読取件数は呼出元の既存制約で確定している。今回渡された明示入力だけに枠を割り当てる。
-    limits["attachment"] = sum(record.metadata.get("retrieval_admission_stage") == "attachment" for record in records)
-    return limits
