@@ -29,10 +29,6 @@ from rag_engine.retrieval.text_search_tokenizer import (
 # 回答系(生成)と Vision(図説明)で model だけを分ける。
 ENTERPRISE_AI_LLM_PROVIDER = "enterprise-ai"
 ENTERPRISE_AI_VISION_LLM_PROVIDER = "enterprise-ai-vision"
-# 確認を通らなかったときのモデル(モデルのカスケード。#4581)。backend が検索・回答プロファイルの設定の接続を
-# RAG_ENGINE_ESCALATION_* で渡したときだけ作る(利用者がモデルを明示した実行には渡さない)。
-ESCALATION_LLM_PROVIDER = "enterprise-ai-escalation"
-ESCALATION_ENV_PREFIX = "RAG_ENGINE_ESCALATION"
 
 
 DEFAULT_LLM_PROVIDER = ENTERPRISE_AI_LLM_PROVIDER
@@ -347,11 +343,6 @@ class Settings:
     # 問い・前提・例)。それぞれの段の呼び出しにだけ当てる。
     # 工程ごとのモデル(1 回の呼び出しの provider ID。`llm_providers` のキー)。空は呼び出し側が渡した provider
     # (回答のモデル)のまま。`get_settings` は RAG_ENGINE_<段>_MODEL があれば段の provider を作ってこれにする
-    # 確認を通らなかったときのモデルの provider ID(モデルのカスケード。#4581)。空はカスケードしない。
-    # 回答のモデルの出力が機械で判定できる確認を通らなかったときだけ、失敗した段をこのモデルでやり直す。
-    escalation_llm: str = ""
-    # そのモデルの入力の上限(tokens。回答のモデルの `answer_max_input_tokens` の代わりに使う)。
-    escalation_max_input_tokens: int = 128_000
     # 回答の期限のある LLM の呼び出しを streaming で受け、応答の event が来なくなったら打ち切って送り直す
     # (#1926・#4736。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。止まった判定は無音だけ。
     llm_stall_detection: bool = False
@@ -460,21 +451,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             image_input_tokens=vision_image_tokens,
         ),
     }
-    escalation_model = env.get(f"{ESCALATION_ENV_PREFIX}_MODEL", "").strip()
-    if escalation_model:
-        llm_providers[ESCALATION_LLM_PROVIDER] = LlmProviderSettings(
-            provider_id=ESCALATION_LLM_PROVIDER,
-            label=llm_provider_label("Enterprise AI 確認を通らなかったときのモデル", escalation_model),
-            region="",
-            project_id=env.get(f"{ESCALATION_ENV_PREFIX}_PROJECT_OCID", "").strip(),
-            api_key=env.get(f"{ESCALATION_ENV_PREFIX}_API_KEY", "").strip(),
-            model=escalation_model,
-            supports_vision=_env_bool(env, f"{ESCALATION_ENV_PREFIX}_VISION", False),
-            endpoint=env.get(f"{ESCALATION_ENV_PREFIX}_ENDPOINT", "").strip(),
-            reasoning_effort=env.get(f"{ESCALATION_ENV_PREFIX}_REASONING_EFFORT", "").strip(),
-            max_output_tokens=_positive_int(env, f"{ESCALATION_ENV_PREFIX}_MAX_OUTPUT_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
-            image_input_tokens=_positive_int(env, f"{ESCALATION_ENV_PREFIX}_IMAGE_INPUT_TOKENS", DEFAULT_IMAGE_INPUT_TOKENS),
-        )
     default_vision_llm = normalize_llm_provider_id(
         env.get("DEFAULT_VISION_LLM"),
         ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -611,8 +587,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
-        escalation_llm=ESCALATION_LLM_PROVIDER if escalation_model else "",
-        escalation_max_input_tokens=max(1, _env_int(env, f"{ESCALATION_ENV_PREFIX}_MAX_INPUT_TOKENS", 128_000)),
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
     )
 

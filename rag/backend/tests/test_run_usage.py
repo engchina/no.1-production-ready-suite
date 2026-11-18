@@ -64,7 +64,7 @@ def test_usage_sums_llm_calls_without_double_counting_stages() -> None:
     usage = trace.model_usage(primary_model="model-answer")
     assert usage == RunModelUsage(
         models=["model-answer", "model-rewrite"],
-        # モデルごとの内訳（カスケードで 2 つのモデルを呼んだ実行の token を分ける。#4581）。
+        # モデルごとの内訳（2 つのモデルを呼んだ実行の token を分ける。#4581）。
         by_model=[
             ModelTokenUsage(
                 model="model-answer",

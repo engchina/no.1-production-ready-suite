@@ -43,27 +43,3 @@ def test_new_generation_requires_an_explicit_existing_kind():
     assert draft._response_kind == "insufficient_evidence"
     assert "response_kind" not in draft.model_dump()
     assert GroundedDraft.model_validate({"items": [], "summary": "", "confidence": "low"})._response_kind is None
-
-
-def test_configured_secondary_model_does_not_add_another_generation(monkeypatch):
-    from types import SimpleNamespace
-
-    from rag_engine.generation import answering
-
-    calls = []
-    result = object()
-
-    def generate(*args, **options):
-        calls.append(options.get("answer_llm_provider"))
-        return result
-
-    monkeypatch.setattr(answering, "synthesize_grounded_answer", generate)
-    returned = answering.synthesize_with_model_cascade(
-        "合成の質問",
-        object(),
-        SimpleNamespace(escalation_llm="secondary"),
-        answer_llm_provider="primary",
-        image_prompt_mode="text_only",
-    )
-    assert returned is result
-    assert calls == ["primary"]

@@ -24,7 +24,6 @@ import { Link } from "react-router-dom";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
-import { EmptyEvidenceResponseSettings } from "@/components/settings/EmptyEvidenceResponseSettings";
 import { isEmptyEvidenceResponseField } from "@/lib/empty-evidence-response";
 import { LanguagePackHistoryCard } from "@/components/settings/LanguagePackHistoryCard";
 import {
@@ -48,6 +47,11 @@ import { useLanguagePack, usePreviewLanguagePack } from "@/lib/queries";
 import { focusFirstInvalidField } from "@/lib/required-fields";
 import { toast } from "@/lib/toast";
 import { APP_ROUTES } from "@/lib/routes";
+
+/** 全体で設定する項目。根拠がないときの固定返信は検索・回答プロファイルだけで設定する（#5463）。 */
+function globalFields(data: LanguagePackData) {
+  return data.fields.filter((field) => !isEmptyEvidenceResponseField(field));
+}
 
 /** 言語資源（文書と質問を読むときの言語の書き方。#2181）の全体の設定。 */
 export function LanguagePackSettingsClient() {
@@ -111,18 +115,19 @@ export function LanguagePackSettingsClient() {
 
   function submit() {
     if (!data || !texts || save.isPending) return;
-    const found = languagePackErrors(data.fields, texts);
+    const fields = globalFields(data);
+    const found = languagePackErrors(fields, texts);
     setErrors(found);
-    const firstInvalid = data.fields.find((field) => found[textKey(field)]);
+    const firstInvalid = fields.find((field) => found[textKey(field)]);
     if (firstInvalid) {
       // 誤りのある項目の節を開いてから（検索中なら検索を解く）、その欄へ移す。
       panel.reveal(firstInvalid.section);
       requestAnimationFrame(() =>
-        focusFirstInvalidField(data.fields.map((field) => [fieldId(field), found[textKey(field)]] as const)),
+        focusFirstInvalidField(fields.map((field) => [fieldId(field), found[textKey(field)]] as const)),
       );
       return;
     }
-    save.mutate(overridesFromTexts(data.fields, texts, data.builtin), {
+    save.mutate(overridesFromTexts(fields, texts, data.builtin), {
       onSuccess: (saved) => {
         const next = textsFromSections(data.fields, saved.draft_effective);
         setBase(JSON.stringify(next));
@@ -160,19 +165,9 @@ export function LanguagePackSettingsClient() {
           <CardDescription>{t("settings.language.fields.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <EmptyEvidenceResponseSettings
-            idPrefix="language"
-            fields={data.fields}
-            baseline={data.builtin}
-            texts={texts}
-            errors={errors}
-            disabled={save.isPending}
-            previewValues={dirty ? undefined : (draft.data?.draft_effective ?? data.effective)}
-            onChange={update}
-          />
           <LanguagePackFieldsPanel
             idPrefix="language"
-            fields={data.fields.filter((field) => !isEmptyEvidenceResponseField(field))}
+            fields={globalFields(data)}
             baseline={data.builtin}
             texts={texts}
             errors={errors}
@@ -258,7 +253,7 @@ function PreviewCard({ data, texts }: { data: LanguagePackData; texts: LanguageP
             loading={preview.isPending}
             disabled={!text.trim() || invalid}
             onClick={() =>
-              preview.mutate({ text, overrides: overridesFromTexts(data.fields, texts, data.builtin) })
+              preview.mutate({ text, overrides: overridesFromTexts(globalFields(data), texts, data.builtin) })
             }
           >
             {t("settings.language.preview.run")}
