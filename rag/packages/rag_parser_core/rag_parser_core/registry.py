@@ -74,6 +74,8 @@ from rag_parser_core.source import (
 )
 from rag_parser_core.source_map import (
     SCHEME_JSONL_LINE,
+    SCHEME_MARKDOWN_SOURCE,
+    SCHEME_TEXT_CHAR,
     SOURCE_MAP_KEY,
     SOURCE_WINDOW_CODEPOINTS,
     decode_source_text,
@@ -1192,6 +1194,90 @@ def _with_structured_records_source_map(
     )
 
 
+def _restored_line_breaks(value: str, source: str) -> str:
+    """要素の本文の空白のうち、原本で改行だった所だけを改行に戻す（#5422）。
+
+    要素の本文の文字を原本の範囲の中で順に探し、隣り合う文字の間の原本が空白だけで改行を含む
+    ときに限り、その間の空白を改行にする。記法（``**``・リンクの URL）を挟む所は変えない。
+    文字は増減しない。
+    """
+    output: list[str] = []
+    position = 0
+    for char in value:
+        if char.isspace():
+            output.append(char)
+            continue
+        found = source.find(char, position)
+        if found < 0:
+            return value
+        gap = source[position:found]
+        if output and output[-1] == " " and gap and not gap.strip() and "\n" in gap:
+            output[-1] = "\n"
+        output.append(char)
+        position = found + 1
+    return "".join(output)
+
+
+def _with_source_layout(
+    extraction: StructuredExtraction, source_bytes: bytes, source_map: Mapping[str, Any]
+) -> StructuredExtraction:
+    """テキスト・Markdown の要素の本文に原本の改行・字下げ・空行を戻す（#5422）。
+
+    Unstructured は Markdown の段落の改行を空白にし、テキストの行頭の字下げと空行を落とす。位置の
+    対応で記録した原本の範囲から、Markdown は段落の中の改行を、テキストは行頭の字下げを本文に戻し、
+    前に空行がある要素には ``source_blank_line_before`` を付ける（分割が要素の間を空行にする）。
+    要素の数・ID・位置の対応は変えない。
+    """
+    scheme = source_map.get("scheme")
+    recorded = source_map.get("elements")
+    if scheme not in {SCHEME_MARKDOWN_SOURCE, SCHEME_TEXT_CHAR}:
+        return extraction
+    if not isinstance(recorded, Mapping):
+        return extraction
+    source = decode_source_text(source_bytes)
+    elements: list[DocumentElement] = []
+    previous_end: int | None = None
+    changed = False
+    for element in extraction.elements:
+        spans = recorded.get(element.element_id or "")
+        if not spans or len(spans) != 1:
+            elements.append(element)
+            continue
+        start, end = spans[0]["source_start"], spans[0]["source_end"]
+        text = element.text
+        if scheme == SCHEME_MARKDOWN_SOURCE:
+            text = _restored_line_breaks(text, source[start:end])
+        else:
+            indent = source[source.rfind("\n", 0, start) + 1 : start]
+            if text == source[start:end] and indent and not indent.strip():
+                text = indent + text
+        metadata = dict(element.metadata)
+        if previous_end is not None and re.search(r"\n[^\S\n]*\n", source[previous_end:start]):
+            metadata["source_blank_line_before"] = True
+        # 範囲が後ろの空行を含む（Markdown のリスト）ときも、次の要素との間の空行を見落とさない。
+        previous_end = start + len(source[start:end].rstrip())
+        if text != element.text or metadata != element.metadata:
+            changed = True
+            element = element.model_copy(update={"text": text, "metadata": metadata})
+        elements.append(element)
+    if not changed:
+        return extraction
+    update: dict[str, Any] = {"elements": elements}
+    # raw_text は要素の本文から作るので、同じ作り方のときだけ、原本の区切り（空行の有無）と字下げで
+    # 作り直す（要素の間を一律に空行にしない）。
+    if extraction.raw_text == _adapter_raw_text(extraction.elements):
+        update["raw_text"] = "".join(
+            ("\n\n" if element.metadata.get("source_blank_line_before") else "\n") + element.text
+            for element in elements
+            if element.text.strip()
+        ).strip("\n")
+    return extraction.model_copy(update=update)
+
+
+def _adapter_raw_text(elements: Sequence[DocumentElement]) -> str:
+    return _clean_text("\n\n".join(element.text for element in elements if element.text.strip()))
+
+
 def _xml_tree_json_adapter_result(source_bytes: bytes) -> ParserRegistryResult:
     """XML ツリー JSON を、段落を 1 要素にした抽出にする(#2024)。
 
@@ -1506,7 +1592,10 @@ def _with_unstructured_source_map(
     source_profile: SourceProfile | None,
     content_type: str,
 ) -> StructuredExtraction:
-    """原本の位置の対応を ``parser_artifacts`` に足す（要素・本文は変えない。#4100）。"""
+    """原本の位置の対応を ``parser_artifacts`` に足す（#4100）。
+
+    テキスト・Markdown は対応した原本の範囲から本文に改行・字下げを戻す（#5422）。
+    """
     from rag_parser_core.unstructured_source_map import unstructured_source_map
 
     source_map = unstructured_source_map(
@@ -1523,6 +1612,7 @@ def _with_unstructured_source_map(
     )
     if source_map is None:
         return extraction
+    extraction = _with_source_layout(extraction, source_bytes, source_map)
     return extraction.model_copy(
         update={"parser_artifacts": {**extraction.parser_artifacts, SOURCE_MAP_KEY: source_map}}
     )
@@ -3842,9 +3932,7 @@ def _structured_from_adapter_elements(
         mapped_elements,
         mapped_tables,
     )
-    raw_text = _clean_text(
-        "\n\n".join(element.text for element in mapped_elements if element.text.strip())
-    )
+    raw_text = _adapter_raw_text(mapped_elements)
 
     extraction = StructuredExtraction(
         raw_text=raw_text,
