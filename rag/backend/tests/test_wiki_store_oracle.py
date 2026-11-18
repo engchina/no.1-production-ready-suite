@@ -1,6 +1,7 @@
 """実 Oracle で原文の参照・有効 KB・公開前の検査と削除を確かめる。AI は合成応答。"""
 
 from dataclasses import replace
+from datetime import date
 from uuid import uuid4
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute
 from app.clients.wiki_store import WikiStore
 from app.rag.wiki_models import WikiContext, WikiPage, fingerprint
+from app.schemas.document import DocumentClassification
 from tests.test_document_summary_oracle import _EMBEDDING, _indexed_document
 
 pytestmark = pytest.mark.usefixtures("oracle_db")
@@ -136,7 +138,15 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     compiler = source.compiler_fingerprint
     catalog = await store.catalog(filters, compiler)
     assert [row["document_id"] for row in catalog] == [did]
-    assert catalog[0]["source_identities"] == []
+    # 形式に関わらない版の属性（版の状態と分類の有効期間）を、どの文書にも渡す（#5446 の続き）。
+    assert catalog[0]["source_identities"] == [{"version_status": "current"}]
+    await oracle.save_document_classification(
+        did,
+        DocumentClassification(effective_from=date(2026, 4, 1), effective_to=date(2027, 4, 1)),
+    )
+    assert (await store.catalog(filters, compiler))[0]["source_identities"] == [
+        {"version_status": "current", "effective_from": "2026-04-01", "effective_to": "2027-04-01"}
+    ]
     unit_ids = sorted(page.unit.unit_id for page in pages)
     assert sorted(p.unit.unit_id for p in await store.pages(filters, compiler)) == unit_ids
     top = await store.pages(filters, compiler, query_vector=_EMBEDDING, limit=1)

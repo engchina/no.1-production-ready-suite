@@ -125,6 +125,16 @@ SOURCE_IDENTITY_FIELDS = {
 }
 
 
+def _document_identity(row: dict[str, Any]) -> dict[str, str]:
+    """文書の形式に関わらない版の属性（版の状態・分類の有効期間）。"""
+    identity = {"version_status": str(row.get("doc_version_status") or "current")}
+    for key in ("effective_from", "effective_to"):
+        value = row.get(f"doc_{key}")
+        if value:
+            identity[key] = str(value)
+    return identity
+
+
 def wiki_scope(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     """元の検索条件に、有効な KB からの Wiki 利用という条件だけを加える。"""
     # 明示した版を現在の版に読み替えない。退役版の指定では Wiki は使わない。
@@ -625,8 +635,14 @@ class WikiStore:
             '$.parser_artifacts.{XML_TREE_DOCUMENT_ARTIFACT_KEY}.{path}') {name}"""
             for name, path in SOURCE_IDENTITY_FIELDS.items()
         )
+        # どの形式の文書にもある版の属性（分類の有効期間と、新しい版への置き換え）。XML の解析器が
+        # 抽出に残した版の属性（上の identities）は別の項目として今のまま渡す。
         rows = await self.oracle._fetch_all(
-            f"""SELECT DISTINCT d.document_id,d.file_name,{identities}
+            f"""SELECT DISTINCT d.document_id,d.file_name,{identities},
+            JSON_VALUE(d.classification,'$.effective_from') AS doc_effective_from,
+            JSON_VALUE(d.classification,'$.effective_to') AS doc_effective_to,
+            CASE WHEN d.superseded_by_document_id IS NULL THEN 'current' ELSE 'superseded'
+              END AS doc_version_status
             {WIKI_PAGE_FROM}
             JOIN rag_chunk_sets catalog_set ON catalog_set.chunk_set_id=c.chunk_set_id
             LEFT JOIN rag_document_extractions ex ON ex.document_id=c.document_id
@@ -642,7 +658,7 @@ class WikiStore:
                 {
                     "document_id": did,
                     "title": str(row.get("file_name") or ""),
-                    "source_identities": [],
+                    "source_identities": [_document_identity(row)],
                 },
             )
             identity = {key: str(row[key]) for key in SOURCE_IDENTITY_FIELDS if row.get(key)}
