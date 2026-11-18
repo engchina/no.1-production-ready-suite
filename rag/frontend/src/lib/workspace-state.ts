@@ -73,6 +73,7 @@ export type WorkspaceField =
   | "runtimeKnowledge.listPaging"
   | "approvedFaqs.listPaging"
   | "documentCategories.searchPaging"
+  | "knowledgeBases.wikiDocumentsPaging"
   // 品質評価の期待の下書きの一覧（#4636）
   | "evaluation.processDraftsPaging";
 

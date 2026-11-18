@@ -1,12 +1,39 @@
-import { Button, Card, CardContent, CardHeader, CardTitle, FormSkeleton, SaveErrorBanner, Switch, TimedLoadingState } from "@production-ready/ui";
+import { Banner, Button, Card, CardContent, CardHeader, CardTitle, Disclosure, FormSkeleton, FormStatus, PagedDataTable, PAGE_SIZE_OPTIONS, SaveErrorBanner, StatusBadge, Switch, TimedLoadingState, type StatusVariant } from "@production-ready/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, RefreshCw } from "lucide-react";
+import { BookOpen, CircleCheck, Clock, FileText, History, Hourglass, RotateCcw, type LucideIcon } from "lucide-react";
+import { useState } from "react";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
-import { api, type KnowledgeBaseWikiData } from "@/lib/api";
-import { t } from "@/lib/i18n";
+import { api, type KnowledgeBaseWikiData, type KnowledgeBaseWikiDocument } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
+import { t, type I18nKey } from "@/lib/i18n";
+import { useClientListPaging } from "@/lib/list-paging";
+import { paginationLabels } from "@/lib/pagination-labels";
 
-/** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941）。本文は表示しない。 */
+/** 構築状態の並び（凡例と一覧の表示の順）と、バッジの形。色だけにしないよう状態ごとにアイコンも変える。 */
+const WIKI_STATUSES: { status: string; variant: StatusVariant; icon: LucideIcon | true }[] = [
+  { status: "READY", variant: "success", icon: CircleCheck },
+  { status: "RUNNING", variant: "info", icon: Hourglass },
+  { status: "QUEUED", variant: "neutral", icon: Clock },
+  { status: "STALE", variant: "warning", icon: History },
+  { status: "NOT_BUILT", variant: "neutral", icon: true },
+  { status: "FAILED", variant: "danger", icon: true },
+];
+
+function WikiStatusBadge({ status, count }: { status: string; count?: number }) {
+  const badge = WIKI_STATUSES.find((item) => item.status === status) ?? WIKI_STATUSES[4];
+  const label = t(`wiki.status.${badge.status}` as I18nKey);
+  return <StatusBadge variant={badge.variant} icon={badge.icon} label={count == null ? label : t("wiki.legendItem", { label, count })} />;
+}
+
+function failureReason(code: string | null | undefined): string {
+  if (!code) return "—";
+  const key = `wiki.failure.${code}`;
+  // 未知のコードは汎用の説明にする（backend が理由を足しても画面が壊れない）。
+  return t((["timeout", "build_failed", "authorization_changed"].includes(code) ? key : "wiki.failure.build_failed") as I18nKey);
+}
+
+/** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）。本文は表示しない。 */
 export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: boolean }) {
   const cache = useQueryClient();
   const key = ["knowledge-base-wiki", id];
@@ -16,12 +43,27 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
     // 構築は背景で進むので、有効な間だけ状態を読み直す。
     refetchInterval: (current) => (current.state.data?.enabled ? 5000 : false),
   });
+  const [retryStatus, setRetryStatus] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
   const saved = (data: KnowledgeBaseWikiData) => cache.setQueryData(key, data);
   const update = useMutation({ mutationFn: (enabled: boolean) => api.setKnowledgeBaseWiki(id, enabled), onSuccess: saved });
-  const retry = useMutation({ mutationFn: () => api.retryKnowledgeBaseWiki(id), onSuccess: saved });
+  const retry = useMutation({
+    mutationFn: () => api.retryKnowledgeBaseWiki(id),
+    // 応答は待機へ戻した後の状態。押した直後に一覧と件数が変わり、結果を起点のボタンの直下に出す。
+    onSuccess: (data, failed: number) => {
+      saved(data);
+      setRetryStatus({ tone: "success", message: failed > 0 ? t("wiki.retryQueued", { count: failed }) : t("wiki.retryResumed") });
+    },
+    onError: () => setRetryStatus({ tone: "danger", message: t("wiki.retryError") }),
+  });
   const data = query.data;
   const counts = data?.counts ?? {};
-  const actionError = update.error ?? retry.error;
+  const documents = data?.documents ?? [];
+  const failed = counts.FAILED ?? 0;
+  const ready = counts.READY ?? 0;
+  const total = documents.length;
+  const blocked = data?.blocked_reason === "actor_unavailable";
+  const showRetry = Boolean(data?.enabled) && (failed > 0 || blocked || retry.isPending || retryStatus != null);
+  const progressLabel = failed > 0 ? t("wiki.progressFailed", { ready, total, failed }) : t("wiki.progress", { ready, total });
   return <Card data-testid="knowledge-base-wiki">
     <CardHeader><CardTitle className="flex items-center gap-2 text-base"><BookOpen className="size-4 text-fg-muted" aria-hidden />{t("wiki.title")}</CardTitle></CardHeader>
     <CardContent className="space-y-4">
@@ -33,16 +75,66 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
             <p className="text-sm font-medium">{t("wiki.build")}</p>
             <p id={`wiki-build-help-${id}`} className="text-xs text-fg-muted">{t("wiki.buildHelp")}</p>
           </div>
-          <Switch aria-label={t("wiki.build")} aria-describedby={`wiki-build-help-${id}`} checked={data.enabled} onCheckedChange={(enabled) => { retry.reset(); update.mutate(enabled); }} disabled={!editable || update.isPending} className="shrink-0" />
+          <Switch aria-label={t("wiki.build")} aria-describedby={`wiki-build-help-${id}`} checked={data.enabled} onCheckedChange={(enabled) => { retry.reset(); setRetryStatus(null); update.mutate(enabled); }} disabled={!editable || update.isPending} className="shrink-0" />
         </div>
-        <div aria-live="polite" className="space-y-2 text-sm text-fg-muted">
-          <p>{t(data.enabled ? "wiki.enabled" : "wiki.disabled")}</p>
-          <p className="tnum">{t("wiki.progress", { pending: counts.NOT_BUILT ?? 0, queued: counts.QUEUED ?? 0, running: counts.RUNNING ?? 0, ready: counts.READY ?? 0, stale: counts.STALE ?? 0, failed: counts.FAILED ?? 0 })}</p>
-          {Object.values(counts).every((count) => count === 0) ? <p>{t("wiki.empty")}</p> : null}
-        </div>
-        <SaveErrorBanner message={actionError ? t("wiki.saveError") : null} attemptKey={update.submittedAt || retry.submittedAt} />
-        {data.enabled && (counts.FAILED ?? 0) > 0 ? <Button variant="secondary" icon={RefreshCw} loading={retry.isPending} disabled={!editable} onClick={() => { update.reset(); retry.mutate(); }}>{t("wiki.retry")}</Button> : null}
+        <p aria-live="polite" className="text-sm text-fg-muted">{t(data.enabled ? "wiki.enabled" : "wiki.disabled")}</p>
+        {data.enabled && blocked ? <Banner severity="warning" title={t("wiki.blocked.title")}>{t("wiki.blocked.actor")}</Banner> : null}
+        {total === 0 ? <p className="text-sm text-fg-muted">{t("wiki.empty")}</p> : (
+          <div className="space-y-2 rounded-md border border-border bg-surface-sunken px-3 py-2" data-testid="knowledge-base-wiki-progress">
+            <p aria-live="polite" className="tnum text-xs font-medium text-fg">{progressLabel}</p>
+            <progress className="h-2 w-full" value={ready} max={total} aria-label={progressLabel} />
+            <ul aria-label={t("wiki.legend")} className="flex flex-wrap gap-1.5">
+              {WIKI_STATUSES.filter(({ status }) => (counts[status] ?? 0) > 0).map(({ status }) => <li key={status}><WikiStatusBadge status={status} count={counts[status]} /></li>)}
+            </ul>
+          </div>
+        )}
+        {showRetry ? <div className="min-w-0 space-y-2" data-testid="knowledge-base-wiki-retry">
+          <p className="text-xs leading-relaxed text-fg-muted">{t(blocked ? "wiki.retryHelpBlocked" : "wiki.retryHelp")}</p>
+          <div>
+            <Button variant="secondary" size="sm" icon={RotateCcw} loading={retry.isPending} disabled={!editable || (failed === 0 && !blocked && !retry.isPending)} onClick={() => { update.reset(); setRetryStatus(null); retry.mutate(failed); }}>{t("wiki.retry")}</Button>
+          </div>
+          {retryStatus ? <FormStatus tone={retryStatus.tone} message={retryStatus.message} /> : null}
+        </div> : null}
+        {total > 0 ? <WikiDocuments id={id} documents={documents} failed={failed} expanded={failed > 0 || retryStatus != null} /> : null}
+        <SaveErrorBanner message={update.error ? t("wiki.saveError") : null} attemptKey={update.submittedAt} />
       </> : null}
     </CardContent>
   </Card>;
+}
+
+/**
+ * 文書ごとの構築状態。失敗があるとき・再試行の結果を出しているときは開いた状態で出す（文書解析の段の一覧と同じ。
+ * 再試行で失敗が待機に変わっても畳まず、変わった行を見せ続ける）。
+ */
+function WikiDocuments({ id, documents, failed, expanded }: { id: string; documents: KnowledgeBaseWikiDocument[]; failed: number; expanded: boolean }) {
+  const paging = useClientListPaging("knowledgeBases.wikiDocumentsPaging", id);
+  return <Disclosure
+    key={expanded ? "expanded" : "collapsed"}
+    defaultOpen={expanded}
+    tone={failed > 0 ? "danger" : "neutral"}
+    surface="sunken"
+    icon={FileText}
+    summary={t("wiki.documents.title")}
+    description={t("wiki.documents.hint")}
+    meta={<span className="tnum text-xs text-fg-muted">{t("wiki.documents.count", { count: documents.length })}</span>}
+    data-testid="knowledge-base-wiki-documents"
+  >
+    <PagedDataTable<KnowledgeBaseWikiDocument>
+      viewport="bounded"
+      paginationLabels={paginationLabels()}
+      {...paging}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
+      paginationAriaLabel={t("wiki.documents.pagination")}
+      rows={documents}
+      getRowKey={(row) => row.document_id}
+      ariaLabel={t("wiki.documents.title")}
+      rowProps={() => ({ "data-testid": "knowledge-base-wiki-document" })}
+      columns={[
+        { key: "file_name", header: t("wiki.documents.column.file"), rowHeader: true, className: "min-w-[10rem] break-all font-medium text-fg", render: (row) => row.file_name || row.document_id },
+        { key: "status", header: t("wiki.documents.column.status"), className: "whitespace-nowrap", render: (row) => <WikiStatusBadge status={row.status} /> },
+        { key: "failure", header: t("wiki.documents.column.failure"), className: "min-w-[12rem] break-words text-xs text-fg-muted", render: (row) => failureReason(row.failure_code) },
+        { key: "updated_at", header: t("wiki.documents.column.updated"), className: "tnum whitespace-nowrap text-xs text-fg-muted", render: (row) => (row.updated_at ? formatDateTime(row.updated_at) : "—") },
+      ]}
+    />
+  </Disclosure>;
 }

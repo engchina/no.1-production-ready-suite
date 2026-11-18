@@ -197,40 +197,79 @@ test("アーカイブ済みのナレッジベースは名前・説明を読み�
   await expect(page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
 });
 
-test("Wiki の自動構築を保存し、失敗した構築を再試行でき、無効にしても状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("Wiki の自動構築を保存し、進捗と文書ごとの失敗の理由を見て再試行でき、無効にしても状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKnowledgeBases(page, defaultKnowledgeBases());
   await mockDocuments(page);
   let enabled = false;
+  let blocked = true;
   const writes: boolean[] = [];
-  const counts = { READY: 2, FAILED: 1, QUEUED: 0 };
+  let retries = 0;
+  const documents = [
+    { document_id: "doc-a", file_name: "synthetic-a.pdf", status: "READY", failure_code: null, updated_at: "2026-01-01T00:00:00Z" },
+    { document_id: "doc-b", file_name: "synthetic-b.pdf", status: "READY", failure_code: null, updated_at: "2026-01-01T00:00:00Z" },
+    { document_id: "doc-c", file_name: "synthetic-c-with-a-very-long-file-name-for-wrapping.pdf", status: "FAILED", failure_code: "timeout", updated_at: "2026-01-01T00:00:00Z" },
+  ];
+  const body = () => ({
+    enabled,
+    counts: documents.reduce<Record<string, number>>((all, row) => ({ ...all, [row.status]: (all[row.status] ?? 0) + 1 }), {}),
+    documents,
+    blocked_reason: enabled && blocked ? "actor_unavailable" : null,
+  });
+  let releaseRetry: () => void = () => undefined;
   await page.route("**/api/knowledge-bases/kb-1/wiki**", async (route) => {
     if (route.request().method() === "PUT") {
       enabled = (route.request().postDataJSON() as { enabled: boolean }).enabled;
       writes.push(enabled);
     }
     if (route.request().url().endsWith("/retry")) {
-      counts.FAILED = 0;
-      counts.QUEUED = 1;
+      retries += 1;
+      // 押した直後はボタンが loading になることを確かめてから応答する。
+      await new Promise<void>((resolve) => { releaseRetry = resolve; });
+      blocked = false;
+      documents[2] = { ...documents[2], status: "QUEUED", failure_code: null };
     }
-    await route.fulfill(envelope({ enabled, counts }));
+    await route.fulfill(envelope(body()));
   });
   await page.goto("/knowledge-bases/kb-1");
   const panel = page.getByTestId("knowledge-base-wiki");
   const toggle = panel.getByRole("switch", { name: "Wiki を自動構築する" });
+  const retry = panel.getByRole("button", { name: "失敗した構築を再試行" });
   await expect(toggle).not.toBeChecked();
-  await expect(panel.getByRole("button", { name: "失敗した構築を再試行" })).toHaveCount(0);
+  await expect(retry).toHaveCount(0);
   await toggle.click();
   await expect(toggle).toBeChecked();
-  await expect(panel).toContainText("準備済み 2 件");
-  await panel.getByRole("button", { name: "失敗した構築を再試行" }).click();
-  await expect(panel).toContainText("待機 1 件");
-  await expect(panel).toContainText("失敗 0 件");
+  const progress = panel.getByTestId("knowledge-base-wiki-progress");
+  await expect(progress).toContainText("準備済み 2 / 3 件（失敗 1 件）");
+  await expect(progress.locator("progress")).toHaveAttribute("value", "2");
+  await expect(progress.getByRole("list", { name: "構築状態ごとの件数" })).toContainText("失敗 1 件");
+  await expect(panel).toContainText("構築が止まっています");
+  // 失敗があるときは文書ごとの一覧が開き、失敗の理由を日本語で出す。
+  const rows = panel.getByTestId("knowledge-base-wiki-document");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(2)).toContainText("失敗");
+  await expect(rows.nth(2)).toContainText("時間内に案内を 1 件も作れませんでした");
   await panel.scrollIntoViewIfNeeded();
-  await testInfo.attach("wiki-enabled", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await testInfo.attach("wiki-failed", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await retry.click();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  releaseRetry();
+  // 応答は再試行の後の状態。押した直後に結果と一覧が変わる。
+  await expect(panel.getByTestId("knowledge-base-wiki-retry")).toContainText("失敗した 1 件の文書の構築を再試行のキューに追加しました。");
+  // 失敗が待機に変わっても一覧は畳まず、変わった行を見せる。
+  await expect(rows.nth(2)).toBeVisible();
+  await expect(rows.nth(2)).toContainText("待機");
+  await expect(progress).toContainText("準備済み 2 / 3 件");
+  await expect(progress).not.toContainText("失敗");
+  await expect(panel).not.toContainText("構築が止まっています");
+  await expect(retry).toBeDisabled();
+  expect(retries).toBe(1);
+  await expectNoPageOverflow(page);
+  await testInfo.attach("wiki-retried", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   await toggle.click();
   await expect(toggle).not.toBeChecked();
   await expect(panel).toContainText("保存済みの案内は保持しています");
-  await expect(panel).toContainText("準備済み 2 件");
+  await expect(progress).toContainText("準備済み 2 / 3 件");
+  await expect(retry).toHaveCount(0);
   expect(writes).toEqual([true, false]);
   await expectNoPageOverflow(page);
   await testInfo.attach("wiki-disabled", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
@@ -242,7 +281,7 @@ test("Wiki の構築状態の読込の失敗を再試行でき、アーカイブ
   let failing = true;
   await page.route("**/api/knowledge-bases/kb-old/wiki", (route) => failing
     ? route.fulfill({ status: 503, json: { data: null, error_messages: ["合成の読込失敗"], warning_messages: [] } })
-    : route.fulfill(envelope({ enabled: false, counts: {} })));
+    : route.fulfill(envelope({ enabled: false, counts: {}, documents: [] })));
   await page.goto("/knowledge-bases/kb-old");
   const panel = page.getByTestId("knowledge-base-wiki");
   await expect(panel).toContainText("合成の読込失敗", { timeout: 15000 });

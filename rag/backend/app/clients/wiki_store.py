@@ -248,23 +248,54 @@ class WikiStore:
             {"id": document_id},
         )
 
-    async def status_counts(self, filters: dict[str, str]) -> dict[str, int]:
+    async def document_statuses(self, filters: dict[str, str]) -> list[dict[str, Any]]:
+        """所属文書ごとの構築状態。失敗の理由は再試行の要る失敗だけに付ける（#5466）。"""
         # 進んだ時間切れ（`interrupted`）は次の照合で自動で続くので、待機に数える（#5430）。
+        # ponytail: KB の全文書を 1 回で返す。数千件で重くなったら server 側でページングする。
         where, binds = _oracle_retrieval_where(
             {key: value for key, value in filters.items() if key != "chunk_set_id"}
         )
         rows = await self.oracle._fetch_all(
-            f"""SELECT state,COUNT(*) AS total FROM (
-            SELECT DISTINCT c.document_id,CASE WHEN w.status='READY'
+            f"""SELECT DISTINCT c.document_id,d.file_name,CASE WHEN w.status='READY'
                 AND NOT ({CURRENT_WIKI_SOURCE_SQL}) THEN 'STALE'
                 WHEN w.status='FAILED' AND w.failure_code='interrupted' THEN 'QUEUED'
-                ELSE NVL(w.status,'NOT_BUILT') END AS state
+                ELSE NVL(w.status,'NOT_BUILT') END AS state,
+            CASE WHEN w.status='FAILED' AND w.failure_code<>'interrupted'
+                THEN w.failure_code END AS failure_code,w.updated_at
             FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
             LEFT JOIN rag_wiki_documents w ON w.document_id=c.document_id
-            WHERE {where}) GROUP BY state""",
+            WHERE {where} ORDER BY d.file_name,c.document_id""",
             binds,
         )
-        return {str(row["state"]): _int_value(row["total"]) for row in rows}
+        return [
+            {
+                "document_id": str(row["document_id"]),
+                "file_name": str(row.get("file_name") or ""),
+                "status": str(row["state"]),
+                "failure_code": row.get("failure_code"),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in rows
+        ]
+
+    async def requeue_failed(self, filters: dict[str, str]) -> None:
+        """再試行の要る失敗を待機へ戻す。構築は次の照合が進める（#5466）。"""
+        where, binds = _oracle_retrieval_where(
+            {key: value for key, value in filters.items() if key != "chunk_set_id"}
+        )
+
+        def operation(connection: Any) -> None:
+            _execute(
+                connection,
+                f"""UPDATE rag_wiki_documents SET status='QUEUED',failure_code=NULL,
+                lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
+                WHERE status='FAILED' AND document_id IN (SELECT c.document_id
+                FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
+                WHERE {where})""",
+                binds,
+            )
+
+        await self.oracle._run_transaction(operation)
 
     async def source_units(self, document_id: str) -> WikiSnapshot | None:
         where, binds = wiki_scope({"document_id": document_id, "include_superseded": "true"})
