@@ -19,7 +19,6 @@ const INGESTION_HREFS = new Set<string>([
   APP_ROUTES.settingsFileTypeDefaults,
   APP_ROUTES.settingsVectorIndex,
   APP_ROUTES.settingsEntityIndex,
-  APP_ROUTES.settingsGraph,
 ]);
 
 // 1 つの工程ではなく全工程が使う設定（言語資源。#2181）。番号を付けず、工程の前に出す。

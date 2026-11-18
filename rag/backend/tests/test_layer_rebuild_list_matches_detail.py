@@ -28,7 +28,6 @@ DEFAULT_RECIPE_ID = "recipe-a-1"
 def _global_settings() -> Settings:
     """全体の既定では派生層を使わない(レシピの上書きで使う)。"""
     return Settings(
-        rag_graph_profile="off",
         rag_field_extraction_enabled=False,
         rag_navigation_summary_enabled=False,
     )

@@ -95,8 +95,6 @@ from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.cross_references import (
     annotate_cross_references,
     apply_reference_search_context,
-    extract_references,
-    reference_targets,
 )
 from app.rag.entity_index import EntityIndex, EntityIndexOptions, build_entity_index
 from app.rag.extracted_text_duplicate import ExtractedTextDuplicateError, ExtractedTextGate
@@ -119,8 +117,6 @@ from app.rag.field_extraction_units import (
     FieldValueCandidate,
     field_extraction_text_budget,
 )
-from app.rag.graph_adapter import resolve_graph_adapter
-from app.rag.graph_index import GraphIndex, build_graph_index
 from app.rag.heading_levels import (
     HEADING_LEVELS_RESPONSE_SCHEMA,
     HeadingLevelOptions,
@@ -182,7 +178,6 @@ from app.rag.pdf_segment_merge import (
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
 from app.rag.source_lines import apply_source_lines
-from app.rag.structure_index import structure_index_targets
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
@@ -3865,37 +3860,6 @@ class IngestionPipeline:
         await self._save_entity_index_if_enabled(
             trace_id, document_id, extraction, chunks, chunk_set_id=chunk_set_id
         )
-        graph_targets = await structure_index_targets(
-            self._oracle, document_id, default=resolve_graph_adapter(self._settings).enabled
-        )
-        if graph_targets == []:
-            return
-        try:
-            await _observe_ingestion_stage(
-                trace_id,
-                "graph_indexing",
-                self._save_graph_index(
-                    document_id,
-                    extraction,
-                    chunks,
-                    chunk_set_id=chunk_set_id,
-                    **({"knowledge_base_ids": graph_targets} if graph_targets is not None else {}),
-                ),
-                attributes={
-                    "chunk_count": len(chunks),
-                    "element_count": len(extraction.elements),
-                },
-                result_attributes=_graph_index_result_attributes,
-            )
-        except Exception as exc:
-            logger.info(
-                "graph_indexing_failed",
-                extra={"document_id": document_id, "error_type": type(exc).__name__},
-            )
-            raise IngestionUserError(
-                "文書構造索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "文書構造索引の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
-            ) from exc
 
     async def _save_embeddings_for_chunk_set(
         self,
@@ -3919,37 +3883,6 @@ class IngestionPipeline:
         await self._save_entity_index_if_enabled(
             trace_id, document_id, extraction, chunks, chunk_set_id=chunk_set_id
         )
-        graph_targets = await structure_index_targets(
-            self._oracle, document_id, default=resolve_graph_adapter(self._settings).enabled
-        )
-        if graph_targets == []:
-            return
-        try:
-            await _observe_ingestion_stage(
-                trace_id,
-                "graph_indexing",
-                self._save_graph_index(
-                    document_id,
-                    extraction,
-                    chunks,
-                    chunk_set_id=chunk_set_id,
-                    **({"knowledge_base_ids": graph_targets} if graph_targets is not None else {}),
-                ),
-                attributes={
-                    "chunk_count": len(chunks),
-                    "element_count": len(extraction.elements),
-                },
-                result_attributes=_graph_index_result_attributes,
-            )
-        except Exception as exc:
-            logger.info(
-                "graph_indexing_failed",
-                extra={"document_id": document_id, "error_type": type(exc).__name__},
-            )
-            raise IngestionUserError(
-                "文書構造索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "文書構造索引の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
-            ) from exc
 
     async def _save_entity_index_if_enabled(
         self,
@@ -4014,61 +3947,6 @@ class IngestionPipeline:
             document_id, chunk_set_id, index
         )
         return index
-
-    async def _save_graph_index(
-        self,
-        document_id: str,
-        extraction: StructuredExtraction,
-        chunks: list[Chunk],
-        *,
-        chunk_set_id: str | None = None,
-        knowledge_base_ids: list[str] | None = None,
-    ) -> GraphIndex:
-        """構造化抽出から関係情報(文書と章・節の見出しのつながり)を作り Oracle へ保存する。"""
-        knowledge_bases = await self._oracle.list_document_knowledge_bases(document_id)
-        document = await self._oracle.get_document(document_id)
-        from app.clients.graph_reference_store import GraphReferenceStore
-
-        kb_ids = (
-            knowledge_base_ids
-            if knowledge_base_ids is not None
-            else [kb.id for kb in knowledge_bases]
-        )
-        graph_index = GraphIndex()
-        index_targets: list[str | None] = list(kb_ids) if kb_ids else [None]
-        for kb_id in index_targets:
-            catalog = (
-                await GraphReferenceStore(self._oracle).documents(kb_id)
-                if kb_id
-                and any(
-                    extract_references(chunk.text) or reference_targets(chunk.metadata)
-                    for chunk in chunks
-                )
-                else ()
-            )
-            part = await asyncio.to_thread(
-                build_graph_index,
-                document_id=document_id,
-                knowledge_base_ids=[kb_id] if kb_id else [],
-                extraction=extraction,
-                chunks=chunks,
-                chunk_set_id=chunk_set_id,
-                document_name=document.file_name if document is not None else None,
-                reference_documents=catalog,
-            )
-            graph_index.entities.extend(part.entities)
-            graph_index.relationships.extend(part.relationships)
-            graph_index.entity_chunk_links.extend(part.entity_chunk_links)
-            graph_index.references.extend(part.references)
-        await self._oracle.replace_document_graph_index(
-            document_id,
-            graph_index,
-            chunk_set_id=chunk_set_id,
-            **(
-                {"knowledge_base_ids": knowledge_base_ids} if knowledge_base_ids is not None else {}
-            ),
-        )
-        return graph_index
 
 
 def _safe_persistent_error_message(error: Exception) -> str:
@@ -5184,15 +5062,6 @@ def _entity_index_result_attributes(index: EntityIndex) -> Mapping[str, object]:
         "entity_count": len(index.entities),
         "entity_alias_count": index.alias_count,
         "entity_chunk_link_count": len(index.links),
-    }
-
-
-def _graph_index_result_attributes(graph_index: GraphIndex) -> Mapping[str, object]:
-    """文書構造索引の構築結果から件数だけを trace attribute にする。"""
-    return {
-        "graph_entity_count": len(graph_index.entities),
-        "graph_relationship_count": len(graph_index.relationships),
-        "graph_entity_chunk_link_count": len(graph_index.entity_chunk_links),
     }
 
 

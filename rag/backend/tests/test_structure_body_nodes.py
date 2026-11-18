@@ -72,12 +72,10 @@ def test_empty_is_not_fabricated_body() -> None:
 
 
 @pytest.mark.parametrize("headed", [False, True])
-async def test_saved_body_build_is_complete_and_disabled_is_preserved(
-    monkeypatch: pytest.MonkeyPatch, headed: bool
-) -> None:
+async def test_saved_body_build_is_complete(monkeypatch: pytest.MonkeyPatch, headed: bool) -> None:
     from app.clients.structure_index_store import StructureIndexStore
     from app.rag.structure_index import rebuild_document_structure_index
-    from tests.test_structure_index_settings import SavedOracle
+    from tests.test_structure_index_rebuild import SavedOracle
 
     oracle = SavedOracle()
     if not headed:
@@ -111,9 +109,6 @@ async def test_saved_body_build_is_complete_and_disabled_is_preserved(
     assert result["quality"] == "COMPLETE"
     body = _graph_id("body", "cs", "a")
     assert any(link.entity_id == body for link in oracle.saved[0].entity_chunk_links)
-    oracle.enabled = False
-    with pytest.raises(ValueError, match="disabled"):
-        await rebuild_document_structure_index(oracle, "a", "doc")
 
 
 @pytest.mark.parametrize(

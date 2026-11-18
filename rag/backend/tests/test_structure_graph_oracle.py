@@ -239,15 +239,13 @@ async def test_subgraph_hides_pending_graph_until_activation() -> None:
 
 
 @pytest.mark.usefixtures("oracle_db")
-async def test_kb_structure_override_and_rebuild_preserve_shared_document(
+async def test_kb_manual_rebuild_preserves_shared_document(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.config import get_settings
-    from app.rag.structure_index import rebuild_document_structure_index, structure_index_targets
+    """手動の構築は KB ごとに作り、同じ文書を共有する別の KB の索引と本文を変えない(#5484)。"""
+    from app.rag.structure_index import rebuild_document_structure_index
 
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_graph_profile", "off")
-    client = OracleClient(settings)
+    client = OracleClient()
     token = uuid4().hex[:8]
     a = await client.create_knowledge_base(name=f"合成構造A {token}")
     b = await client.create_knowledge_base(name=f"合成構造B {token}")
@@ -267,9 +265,7 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
         ],
     )
     await client.assign_documents_to_knowledge_base(b.id, [doc])
-    await client.set_knowledge_base_structure_index(a.id, False)
-    await client.set_knowledge_base_structure_index(b.id, True)
-    assert await structure_index_targets(client, doc, default=False) == [b.id]
+    assert set(await client.document_structure_index_knowledge_base_ids(doc)) == {a.id, b.id}
     before_a = await _visible_graph(client, a.id)
     before = await client._fetch_all(
         "SELECT c.chunk_id,c.chunk_text,e.embedding FROM rag_chunks c "
@@ -319,11 +315,9 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
     assert before == after
     state = await client.get_chunk_set(cs)
     assert state is not None and state["is_active"] == 1
-    await client.set_knowledge_base_structure_index(b.id, False)
-    with pytest.raises(ValueError, match="disabled"):
+    await client.remove_document_from_knowledge_base(b.id, doc)
+    with pytest.raises(ValueError, match="membership_changed"):
         await rebuild_document_structure_index(client, b.id, doc)
-    await client.set_knowledge_base_structure_index(b.id, None)
-    assert await structure_index_targets(client, doc, default=False) == []
 
 
 @pytest.mark.usefixtures("oracle_db")

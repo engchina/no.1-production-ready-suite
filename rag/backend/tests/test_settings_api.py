@@ -1222,63 +1222,10 @@ def test_update_evaluation_settings_rejects_unknown_suite() -> None:
     assert resp.status_code == 422
 
 
-def test_graph_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_graph_profile", "entities")
-
-    resp = client.get("/api/settings/graph")
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body == {
-        "profile": "entities",
-        "enabled": True,
-        # 選択肢は「構築しない」「構築する」の 2 つ(#621)。
-        "profiles": [
-            {"name": "off", "selected": False},
-            {"name": "entities", "selected": True},
-        ],
-        "config_source": "runtime",
-    }
-
-
-def test_graph_settings_off_disables_build(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_graph_profile", "off")
-
-    resp = client.get("/api/settings/graph")
-
-    body = resp.json()["data"]
-    assert body["profile"] == "off"
-    assert body["enabled"] is False
-
-
-def test_update_graph_settings_persists_env_and_mutates_runtime(
-    monkeypatch: MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_graph_profile", "off")
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-
-    resp = client.patch("/api/settings/graph", json={"profile": "entities"})
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["profile"] == "entities"
-    assert resp.json()["data"]["enabled"] is True
-    assert settings.rag_graph_profile == "entities"
-    env_text = env_file.read_text(encoding="utf-8")
-    assert "RAG_GRAPH_PROFILE=entities" in env_text
-    # legacy の RAG_GRAPH_ENABLED は #621 で廃止した(書かない)。
-    assert "RAG_GRAPH_ENABLED" not in env_text
-
-
-def test_update_graph_settings_rejects_unknown_profile() -> None:
-    resp = client.patch("/api/settings/graph", json={"profile": "neo4j"})
-    assert resp.status_code == 422
-    # claims / community summary まで作る full は #621 で削除した。
-    resp = client.patch("/api/settings/graph", json={"profile": "full"})
-    assert resp.status_code == 422
+def test_graph_settings_api_is_removed() -> None:
+    """文書構造索引の構築の全体の設定(/settings/graph)は削除した(#5484)。"""
+    assert client.get("/api/settings/graph").status_code == 404
+    assert client.patch("/api/settings/graph", json={"profile": "entities"}).status_code == 404
 
 
 def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> None:

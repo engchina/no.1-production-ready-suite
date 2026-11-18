@@ -20,7 +20,6 @@ REASONS = {
     "no_chunks",
     "no_structure",
     "source_changed",
-    "disabled",
     "membership_changed",
     "invalid_chunk_id",
     "authorization_changed",
@@ -91,11 +90,7 @@ def public_state(
         offset=offset,
         limit=limit,
         items=[
-            {
-                k: v
-                for k, v in item.items()
-                if k not in {"chunk_sets", "build_chunk_sets", "fingerprint"}
-            }
+            {k: v for k, v in item.items() if k not in {"chunk_sets", "fingerprint"}}
             for item in items[offset : offset + limit]
         ],
     )
@@ -122,7 +117,7 @@ async def current_public_state(
     enriched = []
     for item in result["items"]:
         snapshot = current.get(item["document_id"], {})
-        status = snapshot.get("index_status", snapshot.get("status", "UNKNOWN"))
+        status = snapshot.get("status", "UNKNOWN")
         enriched.append(
             {
                 **item,
@@ -150,8 +145,6 @@ class StructureIndexJobs:
         kb = await oracle.get_knowledge_base_config(kb_id)
         if kb is None:
             raise KeyError("ナレッジベースが見つかりません。")
-        if kb.retrieval_config.get("structure_index_enabled") is False:
-            raise ValueError("文書構造索引の構築設定がオフです。")
         previous = await store.get(kb_id)
         if mode in {"retry", "continue"} and previous is None:
             raise ValueError("再開する構築の記録がありません。")
@@ -249,7 +242,6 @@ class StructureIndexJobs:
                             did,
                             expected_source=item["chunk_sets"],
                             expected_job_id=job_id,
-                            build_chunk_sets=item.get("build_chunk_sets"),
                             reference_catalog_cache=reference_catalog_cache,
                         )
                     finally:

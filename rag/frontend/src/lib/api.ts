@@ -1189,7 +1189,6 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_parent_target_chars?: number | null;
   chunk_parent_max_pages?: number | null;
   chunk_parent_max_children?: number | null;
-  graph_profile: GraphProfileName | null;
   /**
    * 実体・別名索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
    * 既定（無効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
@@ -1259,8 +1258,6 @@ export interface KnowledgeBaseWikiData {
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   searchable_chunk_count: number;
-  structure_index_enabled?: boolean | null;
-  structure_index_global_enabled?: boolean;
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
 }
@@ -2928,28 +2925,8 @@ export interface EvaluationSettingsUpdate {
   suite: EvaluationSuiteName;
 }
 
-// --- 設定: 文書構造索引の構築 ---
-/** off = 構築しない(既定)、entities = 文書と章・節の見出しのつながりを構築する(#621)。 */
-export type GraphProfileName = "off" | "entities";
-
-export interface GraphProfileStatusData {
-  name: GraphProfileName;
-  selected: boolean;
-}
-
 export interface EntityIndexSettingsData {
   enabled: boolean;
-}
-
-export interface GraphSettingsData {
-  profile: GraphProfileName;
-  enabled: boolean;
-  profiles: GraphProfileStatusData[];
-  config_source: "runtime";
-}
-
-export interface GraphSettingsUpdate {
-  profile: GraphProfileName;
 }
 
 // --- 設定: OCI config ---
@@ -3898,11 +3875,6 @@ export const api = {
   getKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`),
   setKnowledgeBaseWiki: (id: string, enabled: boolean, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }),
   retryKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry?offset=${offset}&limit=${limit}`, { method: "POST" }),
-  updateKnowledgeBaseStructureIndex: (id: string, enabled: boolean | null) =>
-    request<{ enabled: boolean | null; global_enabled: boolean }>(
-      `/api/knowledge-bases/${encodeURIComponent(id)}/structure-index`,
-      {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled})},
-    ),
   getStructureBuildPlan: (id: string, offset = 0, limit = 25) => request<StructureBuildPlan>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/plan?offset=${offset}&limit=${limit}`),
   getStructureBuildJob: (id: string, offset = 0, limit = 25) => request<StructureBuildJob | null>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job?offset=${offset}&limit=${limit}`),
   startStructureBuild: (id: string, mode: StructureBuildMode) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }),
@@ -4706,17 +4678,10 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // 設定: 文書構造索引の構築
+  // 設定: 実体・別名索引の構築
   getEntityIndexSettings: () => request<EntityIndexSettingsData>("/api/settings/entity-index"),
   updateEntityIndexSettings: (body: EntityIndexSettingsData) =>
     request<EntityIndexSettingsData>("/api/settings/entity-index", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
-  updateGraphSettings: (body: GraphSettingsUpdate) =>
-    request<GraphSettingsData>("/api/settings/graph", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

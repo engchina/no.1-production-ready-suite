@@ -86,11 +86,11 @@ async def test_current_snapshot_is_derived_from_live_chunk_sets_and_saved_build(
 
     class Oracle:
         source = "synthetic-set-a"
-        enabled = True
         sqls: list[tuple[str, Any]] = []
 
         async def get_knowledge_base_config(self, _kb: str) -> Any:
-            return SimpleNamespace(retrieval_config={"structure_index_enabled": self.enabled})
+            # 保存済みの構築の指定(削除した設定。#5484)は計画に効かない。
+            return SimpleNamespace(retrieval_config={"structure_index_enabled": False})
 
         async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
             self.sqls.append((sql, binds))
@@ -121,11 +121,7 @@ async def test_current_snapshot_is_derived_from_live_chunk_sets_and_saved_build(
     oracle = Oracle()
     before = await structure_index_plan(oracle, "kb", document_ids=["synthetic-doc"])
     assert before[0]["status"] == "CURRENT"
-    oracle.enabled = False
-    disabled = await structure_index_plan(oracle, "kb", document_ids=["synthetic-doc"])
-    assert disabled[0]["status"] == "UNAVAILABLE"
-    assert disabled[0]["index_status"] == "CURRENT"
-    oracle.enabled = True
+    assert before[0]["reason"] is None
     oracle.source = "synthetic-set-b"
     after = await structure_index_plan(oracle, "kb", document_ids=["synthetic-doc"])
     assert after[0]["status"] == "STALE"

@@ -1,4 +1,7 @@
-"""KB別の文書構造索引設定。解析・分割や検索の設定は変更しない。"""
+"""KB の文書構造索引の手動の構築。解析・分割や検索の設定は変更しない。
+
+取込では作らない。KB の画面の操作で、所属文書の有効な Chunk 集合から構築する(#5484)。
+"""
 
 from __future__ import annotations
 
@@ -7,28 +10,6 @@ import json
 from typing import Any
 
 from app.rag import graph_index
-
-PREFERENCE_KEY = "structure_index_enabled"
-
-
-def structure_index_enabled(override: object, default: bool) -> bool:
-    """bool以外の旧値をONへ変換しない。未指定はレシピ/globalを継承する。"""
-    return override if isinstance(override, bool) else default
-
-
-async def structure_index_targets(
-    oracle: Any, document_id: str, *, default: bool
-) -> list[str] | None:
-    loader = getattr(oracle, "document_structure_index_preferences", None)
-    if loader is None:
-        # 決定論の旧I/O adapterはKB別設定を持たない。
-        return None if default else []
-    preferences = await loader(document_id)
-    if preferences is None:
-        return None if default else []
-    return [
-        kb_id for kb_id, value in preferences.items() if structure_index_enabled(value, default)
-    ]
 
 
 def source_fingerprint(chunk_sets: list[str]) -> str:
@@ -69,7 +50,6 @@ async def structure_index_plan(
     )
     rows = await oracle._fetch_all(
         f"""SELECT d.document_id,d.file_name,cs.chunk_set_id,
-        JSON_VALUE(r.processing_config,'$.graph_profile') AS recipe_graph_profile,
         COUNT(c.chunk_id) AS chunks,
         SUM(CASE WHEN JSON_VALUE(c.metadata_json,'$.section_title') IS NOT NULL
             OR JSON_EXISTS(c.metadata_json,'$.section_path[0]')
@@ -79,18 +59,12 @@ async def structure_index_plan(
         FROM rag_document_knowledge_bases m JOIN rag_documents d ON d.document_id=m.document_id
         LEFT JOIN rag_chunk_sets cs ON cs.document_id=d.document_id AND cs.is_active=1
         LEFT JOIN rag_chunks c ON c.chunk_set_id=cs.chunk_set_id
-        LEFT JOIN rag_document_recipes r ON r.recipe_id=cs.recipe_id
         WHERE m.knowledge_base_id=:kb AND {_oracle_access_predicate_sql(alias="d")}
         AND {scope_sql}
-        GROUP BY d.document_id,d.file_name,cs.chunk_set_id,
-            JSON_VALUE(r.processing_config,'$.graph_profile')
+        GROUP BY d.document_id,d.file_name,cs.chunk_set_id
         ORDER BY d.document_id,cs.chunk_set_id""",
         _with_tenant_bind({"kb": knowledge_base_id, **scope_binds}),
     )
-    from app.config import get_settings
-
-    default = get_settings().rag_graph_profile == "entities"
-    override = kb.retrieval_config.get(PREFERENCE_KEY)
     builds = await StructureIndexStore(oracle).builds(knowledge_base_id)
     documents: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -101,28 +75,19 @@ async def structure_index_plan(
                 "document_id": did,
                 "name": str(row["file_name"]),
                 "chunk_sets": [],
-                "build_chunk_sets": [],
             },
         )
         if row.get("chunk_set_id"):
             item["chunk_sets"].append(str(row["chunk_set_id"]))
-            recipe_profile = row.get("recipe_graph_profile")
-            recipe_default = (
-                recipe_profile == "entities" if recipe_profile in {"off", "entities"} else default
-            )
-            if structure_index_enabled(override, recipe_default):
-                item["build_chunk_sets"].append(str(row["chunk_set_id"]))
             if not row.get("chunks"):
                 item["unavailable"] = "no_chunks"
-    # 指紋が一致する文書だけ、補建が作る版（構築設定OFFなら既存の版）の本文の結び付きを確かめる。
+    # 指紋が一致する文書だけ、本文の結び付きを確かめる。
     checked: dict[str, list[str]] = {}
     for item in documents.values():
-        if item["chunk_sets"] and not item["build_chunk_sets"]:
-            item["unavailable"] = "disabled"
         item["fingerprint"] = source_fingerprint(item["chunk_sets"])
         built = builds.get(item["document_id"])
         if built and item["chunk_sets"] and built["source_fingerprint"] == item["fingerprint"]:
-            checked[item["document_id"]] = item["build_chunk_sets"] or item["chunk_sets"]
+            checked[item["document_id"]] = item["chunk_sets"]
     gaps = (
         await StructureGraphStore(oracle).body_link_gaps(
             knowledge_base_id, sorted({cs for sets in checked.values() for cs in sets})
@@ -152,12 +117,6 @@ async def structure_index_plan(
             and built.get("builder_version") != graph_index.STRUCTURE_INDEX_BUILDER_VERSION
         ):
             item["reason"] = "builder_changed"
-        # 構築設定OFFは新しい作業の可否であり、既存索引を無効にはしない。
-        item["index_status"] = (
-            ("CURRENT" if fresh else "STALE")
-            if built and item["chunk_sets"] and item["reason"] == "disabled"
-            else item["status"]
-        )
     return list(documents.values())
 
 
@@ -168,7 +127,6 @@ async def rebuild_document_structure_index(
     *,
     expected_source: list[str] | None = None,
     expected_job_id: str | None = None,
-    build_chunk_sets: list[str] | None = None,
     reference_catalog_cache: dict[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """保存済みactive成果から補建する。参照再抽出に本文を読み、embeddingは変更しない。"""
@@ -183,14 +141,10 @@ async def rebuild_document_structure_index(
     document = await oracle.get_document_summary(document_id)
     if not kb_visible or document is None:
         raise KeyError("対象が見つかりません。")
-    preferences = await oracle.document_structure_index_preferences(document_id) or {}
-    if knowledge_base_id not in preferences:
+    if knowledge_base_id not in await oracle.document_structure_index_knowledge_base_ids(
+        document_id
+    ):
         raise ValueError("membership_changed")
-    from app.config import get_settings
-
-    fixed_target = expected_job_id is not None and build_chunk_sets is not None
-    if not fixed_target and preferences[knowledge_base_id] is False:
-        raise ValueError("disabled")
     where, binds = _oracle_retrieval_where(
         {"knowledge_base_id": knowledge_base_id, "document_id": document_id}
     )
@@ -202,8 +156,7 @@ async def rebuild_document_structure_index(
         JSON_VALUE(c.metadata_json,'$.content_kind') AS content_kind,
         JSON_VALUE(c.metadata_json,'$.page_number') AS page_number,
         JSON_QUERY(c.metadata_json,'$.reference_targets_json' RETURNING CLOB WITH WRAPPER)
-            AS stored_references,
-        JSON_VALUE(r.processing_config,'$.graph_profile') AS recipe_graph_profile
+            AS stored_references
         FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
         LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id=c.chunk_set_id
         LEFT JOIN rag_document_recipes r ON r.recipe_id=cs.recipe_id
@@ -243,20 +196,6 @@ async def rebuild_document_structure_index(
         "quality": "COMPLETE",
     }
     for chunk_set_id, group in groups.items():
-        recipe_profile = group[0].get("recipe_graph_profile")
-        recipe_default = (
-            (recipe_profile == "entities")
-            if recipe_profile in {"off", "entities"}
-            else get_settings().rag_graph_profile == "entities"
-        )
-        enabled = (
-            chunk_set_id in (build_chunk_sets or [])
-            if fixed_target
-            else structure_index_enabled(preferences[knowledge_base_id], recipe_default)
-        )
-        if not enabled:
-            counts["quality"] = "PARTIAL"
-            continue
         chunks = []
         for row in group:
             index = int(row["chunk_index"])
@@ -303,9 +242,6 @@ async def rebuild_document_structure_index(
         counts["links"] += len(graph.entity_chunk_links)
         for status, count in graph_reference_status_counts(graph.references).items():
             counts["references"][status] = counts["references"].get(status, 0) + count
-    if not graphs:
-        raise ValueError("disabled")
-    counts["chunk_sets"] = len(graphs)
     await StructureIndexStore(oracle).publish(
         knowledge_base_id,
         document_id,

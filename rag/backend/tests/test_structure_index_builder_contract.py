@@ -251,7 +251,7 @@ class _PlanOracle:
         self.build = build
 
     async def get_knowledge_base_config(self, _kb: str) -> Any:
-        return SimpleNamespace(retrieval_config={"structure_index_enabled": True})
+        return SimpleNamespace(retrieval_config={})
 
     async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
         if "AS body_links" in sql:

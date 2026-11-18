@@ -336,13 +336,6 @@ EvaluationSuite = Literal[
     "standard",
     "strict",
 ]
-# 文書構造索引の構築(#621)。off = 構築しない、entities = 文書と章・節の見出しのつながりを構築する。
-GraphProfile = Literal[
-    "off",
-    "entities",
-]
-# #621 で削除した文書構造索引の構築の値。backend/.env に残っていると起動を止めて書き換えを促す。
-REMOVED_GRAPH_PROFILES = frozenset({"full"})
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 # RAG 固有の設定（`RAG_*`）を置く `backend/.env`。
@@ -2072,13 +2065,8 @@ class Settings(
             "request の thresholds が最優先。閾値は、そのケースの集合で測れた指標だけに適用する。"
         ),
     )
-    rag_graph_profile: GraphProfile = Field(
-        default="off",
-        description=(
-            "文書構造索引の構築。off(既定)は構築しない、entities は取込のときに文書→章・節→表・図→"
-            "原文の断片のつながりを構築する(LLM は使わない)。ナレッジベースの文書構造グラフで見る。"
-        ),
-    )
+    # 文書構造索引は取込で作らず、ナレッジベースの画面から手動で構築する(#5484)。構築の有無の
+    # 設定 RAG_GRAPH_PROFILE は削除した。backend/.env に残っていても extra=ignore で読み捨てる。
     rag_vector_index_profile: VectorIndexProfile = Field(
         default="accurate",
         description=(
@@ -2557,17 +2545,6 @@ class Settings(
         """廃止済み旧値は起動互換のため files_api へ寄せる。"""
         if str(value).strip().casefold() == "auto":
             return "files_api"
-        return value
-
-    @field_validator("rag_graph_profile", mode="before")
-    @classmethod
-    def reject_removed_graph_profile(cls, value: object) -> object:
-        """削除した full(#621)は読み替えず、書き換え先を示して起動を止める。"""
-        if str(value).strip().casefold() in REMOVED_GRAPH_PROFILES:
-            raise ValueError(
-                "RAG_GRAPH_PROFILE=full は廃止しました(#621)。backend/.env の値を entities"
-                "(構築する)か off(構築しない)に書き換えてください。"
-            )
         return value
 
     @field_validator(

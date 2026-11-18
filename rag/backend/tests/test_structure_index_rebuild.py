@@ -1,52 +1,17 @@
-"""KBだけの構築設定・scope分離・保存済み成果からの補建を合成データで確認する。"""
+"""KB の画面からの文書構造索引の手動の構築(保存済み成果からの補建)を合成データで確認する。"""
 
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
-from app.clients.oracle import KnowledgeBaseConfig
-from app.rag.structure_index import (
-    rebuild_document_structure_index,
-    structure_index_enabled,
-    structure_index_targets,
-)
+from app.rag.structure_index import rebuild_document_structure_index
 from app.schemas.document import DocumentDetail, FileStatus
-from app.schemas.knowledge_base import (
-    KnowledgeBaseStatus,
-    KnowledgeBaseStructureIndexUpdate,
-)
-
-
-@pytest.mark.parametrize("default", [False, True])
-@pytest.mark.parametrize("override", [None, False, True])
-def test_override_is_independent_of_default(default: bool, override: bool | None) -> None:
-    assert structure_index_enabled(override, default) == (default if override is None else override)
-    assert structure_index_enabled("true", default) == default
-
-
-def test_api_rejects_implicit_enable_and_unknown_fields() -> None:
-    for data in ({"enabled": "true"}, {"enabled": 1}, {"enabled": False, "embedding": True}):
-        with pytest.raises(ValidationError):
-            KnowledgeBaseStructureIndexUpdate.model_validate(data)
-
-
-async def test_current_memberships_have_independent_preferences() -> None:
-    class Oracle:
-        async def document_structure_index_preferences(
-            self, document_id: str
-        ) -> dict[str, bool | None]:
-            return {"a": True, "b": False, "c": None}
-
-    oracle = Oracle()
-    assert await structure_index_targets(oracle, "doc", default=False) == ["a"]
-    assert await structure_index_targets(oracle, "doc", default=True) == ["a", "c"]
 
 
 class SavedOracle:
     def __init__(self) -> None:
-        self.enabled: bool | None = True
+        self.memberships = ["a", "b"]
         self.rows = [
             {
                 "chunk_id": "doc:cs:0",
@@ -71,10 +36,8 @@ class SavedOracle:
             uploaded_at=datetime.now(UTC),
         )
 
-    async def document_structure_index_preferences(
-        self, document_id: str
-    ) -> dict[str, bool | None]:
-        return {"a": self.enabled, "b": False}
+    async def document_structure_index_knowledge_base_ids(self, document_id: str) -> list[str]:
+        return list(self.memberships)
 
     async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
         assert "embedding" not in sql
@@ -127,57 +90,13 @@ async def test_rebuild_reads_only_structure_and_preserves_other_kb(
         e.entity_id for e in oracle.saved[1].entities
     ]
     assert any(e.canonical_name == "合成章 > 合成節" for e in oracle.saved[0].entities)
-    oracle.enabled = False
-    with pytest.raises(ValueError, match="disabled"):
+    oracle.memberships = ["b"]
+    with pytest.raises(ValueError, match="membership_changed"):
         await rebuild_document_structure_index(oracle, "a", "doc")
-    oracle.enabled = True
+    oracle.memberships = ["a", "b"]
     oracle.rows = []
     with pytest.raises(ValueError, match="no_chunks"):
         await rebuild_document_structure_index(oracle, "a", "doc")
-
-
-def test_api_persists_nullable_override_and_rejects_other_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.api.routes import knowledge_bases as routes
-    from app.config import Settings
-    from app.main import app
-    from tests.support import AsgiTestClient
-
-    class Oracle:
-        def __init__(self) -> None:
-            self.config: dict[str, object] = {"unrelated": "preserved"}
-
-        async def get_knowledge_base_config(self, kb_id: str) -> KnowledgeBaseConfig | None:
-            if kb_id != "a":
-                return None
-            return KnowledgeBaseConfig(
-                id=kb_id, status=KnowledgeBaseStatus.ACTIVE, retrieval_config=self.config
-            )
-
-        async def set_knowledge_base_structure_index(
-            self, kb_id: str, enabled: bool | None
-        ) -> None:
-            if kb_id != "a":
-                raise KeyError(kb_id)
-            if enabled is None:
-                self.config.pop("structure_index_enabled", None)
-            else:
-                self.config["structure_index_enabled"] = enabled
-
-    oracle = Oracle()
-    monkeypatch.setattr(routes, "OracleClient", lambda: oracle)
-    monkeypatch.setattr(routes, "get_settings", lambda: Settings(rag_graph_profile="off"))
-    client = AsgiTestClient(app)
-    path = "/api/knowledge-bases/a/structure-index"
-    for value in (True, False, None):
-        response = client.put(path, json={"enabled": value})
-        assert response.status_code == 200
-        assert response.json()["data"] == {"enabled": value, "global_enabled": False}
-        assert client.get(path).json()["data"]["enabled"] == value
-        assert oracle.config["unrelated"] == "preserved"
-    assert client.put(path, json={"enabled": "true"}).status_code == 422
-    assert client.get("/api/knowledge-bases/missing/structure-index").status_code == 404
 
 
 async def test_missing_headings_builds_body_without_fabricating_sections(
@@ -293,54 +212,6 @@ async def test_old_job_cannot_publish_after_replacement(monkeypatch: pytest.Monk
             {},
             expected_job_id="old",
         )
-
-
-async def test_unassigned_document_preserves_global_graph_behavior() -> None:
-    class Oracle:
-        async def document_structure_index_preferences(
-            self, document_id: str
-        ) -> dict[str, bool | None] | None:
-            return None
-
-    assert await structure_index_targets(Oracle(), "doc", default=True) is None
-    assert await structure_index_targets(Oracle(), "doc", default=False) == []
-
-
-async def test_empty_authorized_kb_scope_does_not_fall_back_to_global() -> None:
-    class Oracle:
-        async def document_structure_index_preferences(
-            self, document_id: str
-        ) -> dict[str, bool | None]:
-            return {}
-
-    assert await structure_index_targets(Oracle(), "doc", default=True) == []
-
-
-async def test_setting_off_does_not_change_already_confirmed_job_target(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.clients.structure_index_store import StructureIndexStore
-
-    published: list[Any] = []
-
-    async def publish(*args: Any, **kwargs: Any) -> None:
-        assert kwargs["expected_job_id"] == "confirmed-job"
-        published.append(args)
-
-    monkeypatch.setattr(StructureIndexStore, "publish", publish)
-    oracle = SavedOracle()
-    oracle.enabled = False
-    result = await rebuild_document_structure_index(
-        oracle,
-        "a",
-        "doc",
-        expected_source=["cs"],
-        expected_job_id="confirmed-job",
-        build_chunk_sets=["cs"],
-    )
-    assert result["entities"] > 1 and len(published) == 1
-    with pytest.raises(ValueError, match="disabled"):
-        await rebuild_document_structure_index(oracle, "a", "doc")
 
 
 async def test_rebuild_revalidates_saved_references_without_embedding_or_model(

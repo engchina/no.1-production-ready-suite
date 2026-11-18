@@ -386,7 +386,6 @@ const SCREENS: Screen[] = [
   },
   { path: "/settings/vector-index" },
   { path: "/settings/entity-index" },
-  { path: "/settings/graph" },
   { path: "/settings/retrieval" },
   { path: "/settings/prompts" },
   { path: "/settings/evaluation" },

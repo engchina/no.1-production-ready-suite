@@ -1384,10 +1384,10 @@ async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
         assert "active_extraction_recipe_id" not in row
 
 
-async def test_ingestion_pipeline_writes_graph_index_when_enabled(
+async def test_ingestion_pipeline_does_not_build_structure_index(
     isolated_preprocess_save: None,
 ) -> None:
-    """関係情報を構築する設定(entities)のときは、取込結果から関係情報を保存する。"""
+    """文書構造索引は取込では作らない(#5484)。KB の画面の手動の構築だけが作る。"""
     oracle = FakeOracle()
     settings = Settings.model_construct(
         # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
@@ -1395,7 +1395,6 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled(
         rag_parser_adapter_backend="local",
         rag_review_gate_enabled=False,
         rag_auto_parse_after_preprocess_enabled=True,
-        rag_graph_profile="entities",
         rag_chunk_size=800,
         rag_chunk_overlap=120,
         oci_genai_embedding_model="cohere.embed-v4.0",
@@ -1421,15 +1420,8 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled(
     )
 
     assert detail.status == FileStatus.INDEXED
-    assert oracle.graph_document_id == "doc-graph"
-    assert oracle.saved_graph_index is not None
-    assert {entity.knowledge_base_id for entity in oracle.saved_graph_index.entities} == {"kb-1"}
-    assert oracle.saved_graph_index.relationships
-    assert oracle.saved_graph_index.entity_chunk_links
-    # 文書の節点はファイル名で区別できる(#2051)。
-    assert "文書全体: policy.pdf" in {
-        entity.canonical_name for entity in oracle.saved_graph_index.entities
-    }
+    assert oracle.graph_document_id is None
+    assert oracle.saved_graph_index is None
 
 
 def test_checkpoint_parser_profile_prefers_external_adapter_lineage() -> None:
@@ -1752,7 +1744,6 @@ async def test_index_chunked_rebuilds_context_header_without_document_lookup() -
         settings=Settings(
             rag_chunk_context_header_enabled=True,
             rag_entity_index_enabled=True,
-            rag_graph_profile="off",
         ),
         recipe_id="recipe-1",
         recipe_revision=1,
@@ -1794,7 +1785,7 @@ async def test_recipe_index_chunked_records_single_success_audit_with_document_s
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, _ResumeOracle()),
         object_storage=cast(Any, FakeObjectStorage()),
-        settings=Settings(rag_graph_profile="off"),
+        settings=Settings(),
         recipe_id="recipe-1",
         recipe_revision=1,
     )
@@ -1839,7 +1830,7 @@ def _resume_pipeline(
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, FakeObjectStorage()),
-        settings=Settings(rag_graph_profile="off"),
+        settings=Settings(),
         recipe_id="recipe-1",
         recipe_revision=1,
     )

@@ -78,7 +78,6 @@ MENU_SETTINGS_PROMPTS = "menu.settings_prompts"
 MENU_SETTINGS_GUARDRAIL = "menu.settings_guardrail"
 MENU_SETTINGS_EVALUATION = "menu.settings_evaluation"
 MENU_SETTINGS_ENTITY_INDEX = "menu.settings_entity_index"
-MENU_SETTINGS_GRAPH = "menu.settings_graph"
 MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_SETTINGS_HUGGINGFACE = "menu.settings_huggingface"
 MENU_SETTINGS_SERVICES = "menu.settings_services"
@@ -143,7 +142,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_FILE_TYPE_DEFAULTS, _GROUP_PIPELINE, "形式別の既定"),
     _menu_permission(MENU_SETTINGS_VECTOR_INDEX, _GROUP_PIPELINE, "検索インデックス"),
     _menu_permission(MENU_SETTINGS_ENTITY_INDEX, _GROUP_PIPELINE, "実体・別名索引"),
-    _menu_permission(MENU_SETTINGS_GRAPH, _GROUP_PIPELINE, "文書構造索引"),
     _menu_permission(MENU_SETTINGS_RETRIEVAL, _GROUP_PIPELINE, "検索方法"),
     _menu_permission(MENU_SETTINGS_PROMPTS, _GROUP_PIPELINE, "回答プロンプト"),
     _menu_permission(MENU_SETTINGS_EVALUATION, _GROUP_PIPELINE, "評価の基準"),
@@ -440,8 +438,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_KB}/graph/documents/{{document_id}}/references"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/search"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/references"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/structure-index"): _any(MENU_KNOWLEDGE_BASES),
-    ("PUT", f"{_KB}/structure-index"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("PUT", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/wiki/retry"): _any(MENU_KNOWLEDGE_BASES),
@@ -724,8 +720,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/evaluation-suite"): _any(MENU_SETTINGS_EVALUATION),
     ("GET", "/settings/entity-index"): _any(MENU_SETTINGS_ENTITY_INDEX),
     ("PATCH", "/settings/entity-index"): _any(MENU_SETTINGS_ENTITY_INDEX),
-    ("GET", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
-    ("PATCH", "/settings/graph"): _any(MENU_SETTINGS_GRAPH),
     # ---- ユーザーとロール（platform の共通 router。NL2SQL と同じ割り当て）----
     # 前方一致で割り当てず、route ごとに登録する（新しい route は登録するまで拒否。#476）。
     ("GET", "/security/users"): _any(MENU_SECURITY_USERS),
