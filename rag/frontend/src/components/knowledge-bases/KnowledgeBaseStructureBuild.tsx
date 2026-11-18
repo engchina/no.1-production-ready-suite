@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Construction, RefreshCw, Square, Play } from "lucide-react";
-import { Button, DataTable, ListToolbar, OffsetPagination, TableSkeleton, TimedLoadingState, INFORMATION_TABLE_VISIBLE_ROWS, FormActionBar, FormStatus, ApiErrorBanner, type DataTableColumn } from "@production-ready/ui";
+import { Button, DataTable, ListToolbar, OffsetPagination, TableSkeleton, TimedLoadingState, INFORMATION_TABLE_VISIBLE_ROWS, FormActionBar, FormStatus, ApiErrorBanner, type DataTableColumn, type FormActionDescriptor } from "@production-ready/ui";
 import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { queryKeys } from "@/lib/queries";
@@ -44,7 +44,7 @@ const jobLabels: Record<string, I18nKey> = {
   COMPLETED: "knowledgeBases.structure.build.job.COMPLETED",
  };
 
-export function KnowledgeBaseStructureBuild({ kbId, enabled, editable }: { kbId: string; enabled: boolean; editable: boolean }) {
+export function KnowledgeBaseStructureBuild({ kbId, enabled, editable, saveAction }: { kbId: string; enabled: boolean; editable: boolean; saveAction?: FormActionDescriptor }) {
   const [preview, setPreview] = useState(false);
   const [offset, setOffset] = useState(0);
   const [limit, setLimit] = useState(25);
@@ -87,13 +87,13 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable }: { kbId:
     { key: "reason", header: t("knowledgeBases.structure.build.reason"), render: detail },
   ];
   return <div className="grid gap-3" data-testid="knowledge-base-structure-build">
-    <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.build.help")}</p>
-    <div className="flex flex-wrap items-center gap-2">
-      {editable ? <Button icon={Construction} variant="secondary" disabled={!enabled || active || action.isPending} onClick={() => { setOffset(0); setPreview(true); }}>{t("knowledgeBases.structure.build.preview")}</Button> : null}
-      {editable && active ? <Button icon={Square} variant="secondary" loading={action.isPending} disabled={job.data?.status === "STOPPING"} onClick={() => action.mutate("stop")}>{t("knowledgeBases.structure.build.stop")}</Button> : null}
-      {editable && ["STOPPED", "INTERRUPTED"].includes(job.data?.status ?? "") ? <Button icon={Play} variant="secondary" disabled={!enabled || action.isPending} onClick={() => void start("continue")}>{t("knowledgeBases.structure.build.continue")}</Button> : null}
-      {editable && !active && (job.data?.counts?.FAILED ?? 0) > 0 ? <Button icon={RefreshCw} variant="secondary" disabled={!enabled || action.isPending} onClick={() => void start("retry")}>{t("knowledgeBases.structure.build.retry")}</Button> : null}
-    </div>
+    {/* 設定の保存と既存文書への構築を 1 つの操作行に並べる。 */}
+    {editable ? <FormActionBar ariaLabel={t("knowledgeBases.structure.title")} primaryActions={saveAction ? [saveAction] : []} secondaryActions={[
+      { id: "preview", icon: Construction, label: t("knowledgeBases.structure.build.preview"), disabled: !enabled || active || action.isPending, onClick: () => { setOffset(0); setPreview(true); } },
+      ...(active ? [{ id: "stop", icon: Square, label: t("knowledgeBases.structure.build.stop"), loading: action.isPending, disabled: job.data?.status === "STOPPING", onClick: () => action.mutate("stop") }] : []),
+      ...(["STOPPED", "INTERRUPTED"].includes(job.data?.status ?? "") ? [{ id: "continue", icon: Play, label: t("knowledgeBases.structure.build.continue"), disabled: !enabled || action.isPending, onClick: () => void start("continue") }] : []),
+      ...(!active && (job.data?.counts?.FAILED ?? 0) > 0 ? [{ id: "retry", icon: RefreshCw, label: t("knowledgeBases.structure.build.retry"), disabled: !enabled || action.isPending, onClick: () => void start("retry") }] : []),
+    ]} /> : null}
     {job.data?.partial_visibility ? <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.build.visibleOnly")}</p> : null}
     {action.isError ? <ApiErrorBanner error={action.error} fallback={t("knowledgeBases.structure.build.error")} summary={t("knowledgeBases.structure.build.error")} nextAction={t("knowledgeBases.structure.build.errorNext")} action={<Button icon={RefreshCw} variant="secondary" loading={action.isPending} onClick={() => { if (action.variables) action.mutate(action.variables); }}>{t("common.retry")}</Button>} /> : null}
     {job.isError ? <ApiErrorState error={job.error} fallback={t("knowledgeBases.structure.build.loadError")} onRetry={() => void job.refetch()} /> : null}
