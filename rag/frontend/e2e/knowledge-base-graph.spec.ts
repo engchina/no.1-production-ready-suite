@@ -63,9 +63,45 @@ const UNIT_A1 = {
   ],
 };
 
+// 実データに近い件数の合成の KB（#5520）: 6 文書 × 章節 10・単位 10（章節ごとに 1 つ）、文書をまたぐ関連 30。
+const LARGE_RELATIONS = ["exception", "prerequisite", "warning", "continuation", "expected_result", "reference"] as const;
+const largeDoc = (d: number) => `doc-${d}`;
+const largeSection = (d: number, s: number) => ID(`c${d}${s}`);
+const largeUnit = (d: number, s: number) => ID(`e${d}${s}`);
+const largeSectionLabel = (s: number) => `第${s + 1}節 合成の手続の見出し${s + 1}`;
+const LARGE_OVERVIEW = {
+  status: "ok",
+  documents: Array.from({ length: 6 }, (_, index) => ({
+    id: largeDoc(index + 1), document_id: largeDoc(index + 1), name: `合成文書0${index + 1}_合成の長い名前.md`, unit_count: 10, outgoing_links: 5, incoming_links: 5,
+  })),
+};
+const LARGE_TREES: Record<string, ReturnType<typeof node>[]> = {};
+for (let d = 1; d <= 6; d += 1) {
+  LARGE_TREES[`${largeDoc(d)}:root`] = Array.from({ length: 10 }, (_, s) => node(largeSection(d, s), "section", largeSectionLabel(s), null, largeDoc(d), {
+    child_count: 1, unit_count: 1, outgoing_links: s < 5 ? 1 : 0, incoming_links: s < 5 ? 1 : 0,
+  }));
+  for (let s = 0; s < 10; s += 1) {
+    // 文書 d の単位 0〜4 → 次の文書の同じ番号の単位（6 文書 × 5 = 30 件の文書をまたぐ関連）。
+    const next = (d % 6) + 1;
+    LARGE_TREES[`${largeDoc(d)}:${largeSection(d, s)}`] = [node(largeUnit(d, s), "unit", largeSectionLabel(s), largeSection(d, s), largeDoc(d), {
+      summary: `合成の案内 ${d}-${s + 1}`, path: [largeSectionLabel(s)], outgoing_links: s < 5 ? 1 : 0, incoming_links: s < 5 ? 1 : 0,
+      outgoing: s < 5 ? [{ target: largeUnit(next, s), relation: LARGE_RELATIONS[s], scope: "cross_document" }] : [],
+    })];
+  }
+}
+// 単位の案内の関係（相手の単位の名前と理由が長い）。
+const LARGE_UNIT = {
+  ...UNIT_A1, id: largeUnit(1, 0), label: largeSectionLabel(0), path: [largeSectionLabel(0)], document_id: largeDoc(1), document_name: LARGE_OVERVIEW.documents[0].name,
+  relations: LARGE_RELATIONS.map((relation, index) => ({
+    direction: index % 2 ? "incoming" : "outgoing", relation, scope: "cross_document", reason: `合成の判定の理由の長い説明の例 ${index + 1}。相手の単位を一緒に読む理由を書いた文。`,
+    unit: { id: largeUnit(2, index), label: largeSectionLabel(index), path: ["合成の長い章の見出しの例", `${largeSectionLabel(index)}の続きの長い見出し`], document_id: largeDoc(2), document_name: LARGE_OVERVIEW.documents[1].name },
+  })),
+};
+
 interface Calls { requests: string[] }
 
-async function mockKb(page: Page, overview: unknown): Promise<Calls> {
+async function mockKb(page: Page, overview: unknown, data: { trees?: Record<string, unknown[]>; unit?: (unitId: string) => unknown } = {}): Promise<Calls> {
+  const trees = data.trees ?? TREES;
   const calls: Calls = { requests: [] };
   page.on("request", (request) => {
     const url = request.url();
@@ -84,7 +120,7 @@ async function mockKb(page: Page, overview: unknown): Promise<Calls> {
   await page.route(/\/api\/knowledge-bases\/kb-1\/wiki\/graph\/documents\/[^/]+\/tree/, (route) => {
     const url = new URL(route.request().url());
     const documentId = url.pathname.split("/").at(-2)!;
-    const all = TREES[`${documentId}:${url.searchParams.get("parent") ?? "root"}`] ?? [];
+    const all = trees[`${documentId}:${url.searchParams.get("parent") ?? "root"}`] ?? [];
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const limit = Number(url.searchParams.get("limit") ?? 100);
     return route.fulfill({ json: ok({ items: all.slice(offset, offset + limit), total: all.length, offset }) });
@@ -99,8 +135,9 @@ async function mockKb(page: Page, overview: unknown): Promise<Calls> {
     return route.fulfill({ json: ok({ items, total: items.length, offset: 0 }) });
   });
   await page.route("**/api/knowledge-bases/kb-1/wiki/graph/units/**", (route) => {
-    const unitId = new URL(route.request().url()).pathname.split("/").at(-1);
-    const detail = unitId === UA1 ? UNIT_A1 : { ...UNIT_A1, id: unitId, context: "合成の別の案内。", relations: [], possible_questions: [], unresolved: [] };
+    const unitId = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    const custom = data.unit?.(unitId);
+    const detail = custom ? custom : unitId === UA1 ? UNIT_A1 : { ...UNIT_A1, id: unitId, context: "合成の別の案内。", relations: [], possible_questions: [], unresolved: [] };
     return route.fulfill({ json: ok(detail) });
   });
   await page.route("**/api/documents/doc-a/chunks/chunk-a1", (route) => route.fulfill({ json: ok({
@@ -129,6 +166,32 @@ async function openGraph(page: Page) {
 /** 図の節点を押す（React Flow の節点の ID）。 */
 async function clickNode(page: Page, id: string) {
   await page.locator(`#wiki-graph .react-flow__node[data-id="${id}"]`).click();
+}
+
+/** 読める縮尺の下限（共有の GRAPH_READABLE_MIN_ZOOM）での節点の幅（節点の幅 220 の 0.8 倍）。 */
+const READABLE_NODE_WIDTH = 220 * 0.8;
+
+/** 画布に見えている節点の、画布の左上からの矩形。 */
+async function visibleNodes(page: Page) {
+  return page.evaluate(() => {
+    const frame = document.querySelector('#wiki-graph [role="region"]')!.getBoundingClientRect();
+    return [...document.querySelectorAll("#wiki-graph .react-flow__node")].map((element) => {
+      const rect = element.getBoundingClientRect();
+      const box = { id: element.getAttribute("data-id")!, x: rect.x - frame.x, y: rect.y - frame.y, width: rect.width, height: rect.height };
+      return { ...box, inside: box.x >= 0 && box.y >= 0 && box.x + box.width <= frame.width + 0.5 && box.y + box.height <= frame.height + 0.5 };
+    }).filter((box) => box.x < frame.width && box.x + box.width > 0 && box.y < frame.height && box.y + box.height > 0);
+  });
+}
+
+/** 画布に見えている節点がすべて読める大きさで、`ids` の節点が画布の中に収まっていること。 */
+async function expectReadableNodes(page: Page, ids: string[]) {
+  await expect.poll(async () => {
+    const nodes = await visibleNodes(page);
+    return {
+      tooSmall: nodes.filter((box) => box.width < READABLE_NODE_WIDTH - 0.5).map((box) => box.id),
+      missing: ids.filter((id) => !nodes.some((box) => box.id === id && box.inside)),
+    };
+  }).toEqual({ tooSmall: [], missing: [] });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -232,14 +295,16 @@ test("文書 → 章節 → 原文単位を段階的に開き、関係を矢印�
   await expect(labels.filter({ hasText: "例外" })).toHaveCount(0);
   await legend.getByRole("button", { name: "例外" }).click();
 
-  // 文書 B を開くと、文書をまたぐ関連の線も引く。
+  // 文書 B を開くと、文書をまたぐ関連の線も引く。開いた段に読める縮尺で合わせるので、
+  // 狭い画面では文書 B が画布の外にある。「全体表示」で全体を収めてから押す（#5520）。
+  await graph.getByRole("button", { name: "全体表示", exact: true }).click();
   await clickNode(page, "doc-b");
   await clickNode(page, SB);
   await expect(labels.filter({ hasText: "前提" })).toHaveCount(1);
   // 旧の文書構造索引の API は呼ばない。
   expect(calls.requests.every((path) => path.startsWith("/api/knowledge-bases/kb-1/wiki/graph"))).toBe(true);
   await expectNoPageOverflow(page);
-  // 開いても今の見え方を保つ。「全体表示」で開いた節点をすべて収める。
+  // 「全体表示」で開いた節点をすべて収める（縮尺の下限は付けない）。
   await graph.getByRole("button", { name: "全体表示", exact: true }).click();
   await graph.scrollIntoViewIfNeeded();
   await shot(page, testInfo, "wiki-graph-expanded");
@@ -292,4 +357,49 @@ test("検索欄で原文単位へ移り、段を開いて選ぶ", { tag: "@respo
   await expect(graph.getByText("合成の手続の後続の案内。")).toBeVisible();
   await expect(page.getByTestId("wiki-graph-unit")).toBeVisible();
   await expectNoPageOverflow(page);
+});
+
+// 実データに近い件数で、初めの文書の表示と、開いた段の表示を読める縮尺に保ち、凡例は画布の外に置き、小地図は出さない（#5520）。
+test("実データに近い件数でも節点を読める大きさで出し、凡例は画布に重ねず、関係の表の文字を切らない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, LARGE_OVERVIEW, { trees: LARGE_TREES, unit: (unitId) => (unitId === largeUnit(1, 0) ? LARGE_UNIT : null) });
+  await page.goto("/knowledge-bases/kb-1");
+  const graph = await openGraph(page);
+
+  // 凡例は画布の上の行で、画布と重ならない。小地図は出さない。
+  const legend = page.getByTestId("wiki-graph-legend");
+  await expect(legend.getByRole("button", { name: "参照" })).toBeVisible();
+  const [legendBox, graphBox] = await Promise.all([legend.boundingBox(), graph.boundingBox()]);
+  expect(legendBox!.y + legendBox!.height).toBeLessThanOrEqual(graphBox!.y);
+  expect(legendBox!.x + legendBox!.width).toBeLessThanOrEqual(graphBox!.x + graphBox!.width + 0.5);
+  await expect(graph.locator(".react-flow__minimap")).toHaveCount(0);
+
+  // 初めの文書だけの表示も読める大きさ（狭い画面では文書を縦に積む）。先頭の文書は画布に収まる。
+  await expectReadableNodes(page, [largeDoc(1)]);
+  await graph.scrollIntoViewIfNeeded();
+  await shot(page, testInfo, "wiki-graph-large-documents");
+
+  // 文書を開くと、開いた段（文書と章節）に合わせる。全体に合わせて極小にしない。
+  await clickNode(page, largeDoc(1));
+  await expect(graph.getByText(largeSectionLabel(0), { exact: true })).toBeVisible();
+  await expectReadableNodes(page, [largeSection(1, 0)]);
+  await shot(page, testInfo, "wiki-graph-large-opened");
+
+  // 章節を開くと単位に合わせ、単位を押すと案内を出す。
+  await clickNode(page, largeSection(1, 0));
+  await expectReadableNodes(page, [largeUnit(1, 0)]);
+  await clickNode(page, largeUnit(1, 0));
+  const panel = page.getByTestId("wiki-graph-unit");
+  const relations = panel.getByRole("table", { name: "関係" });
+  await expect(relations.getByText(`${largeSectionLabel(0)}の続きの長い見出し`, { exact: false })).toBeVisible();
+  // 関係の表は横にはみ出さず、どのセルの文字も右で切れない（折り返す）。
+  const clipped = await relations.evaluate((table) => {
+    const scroller = table.parentElement!;
+    const cells = [...table.querySelectorAll("th, td")].filter((cell) => cell.scrollWidth > cell.clientWidth + 1).map((cell) => cell.textContent);
+    return { horizontal: scroller.scrollWidth - scroller.clientWidth, cells };
+  });
+  expect(clipped).toEqual({ horizontal: 0, cells: [] });
+  await expect(relations.getByRole("button", { name: "図で位置を確認" })).toHaveCount(LARGE_RELATIONS.length);
+  await expectNoPageOverflow(page);
+  await panel.scrollIntoViewIfNeeded();
+  await shot(page, testInfo, "wiki-graph-large-unit");
 });

@@ -32,15 +32,19 @@ export function WikiGraphUnitPanel({ kbId, unitId, onClose, onLocate }: {
     queryFn: () => api.getDocumentCitationChunk(query.data!.document_id, opened!.chunkId),
     enabled: Boolean(query.data && opened), retry: false,
   });
+  // 案内は図の横の狭い列（26rem）や 375px の図の下に出すので、関係の種類・向き・相手の単位・理由を 1 つの列にまとめて
+  // 文に幅を残し、固定の幅を付けずに DataTable の既定のまま折り返す（#5520）。位置の確認はアイコンのボタン（名前は読み上げとツールチップ）。
   const columns: DataTableColumn<WikiGraphRelationItem>[] = [
-    { key: "relation", header: t("wiki.graph.relation"), className: "whitespace-nowrap", render: (item) => <WikiRelationLabel relation={item.relation} /> },
-    { key: "direction", header: t("wiki.graph.direction"), className: "min-w-[8rem] text-xs text-fg-muted", render: (item) => t(item.direction === "outgoing" ? "wiki.graph.direction.outgoing" : "wiki.graph.direction.incoming") },
-    { key: "unit", header: t("wiki.graph.relatedUnit"), className: "min-w-[12rem]", render: (item) => <div className="grid gap-0.5 break-words">
+    { key: "relation", header: t("wiki.graph.relation"), render: (item) => <div className="grid min-w-0 gap-0.5 break-words">
+      <span className="flex flex-wrap items-center gap-x-2">
+        <WikiRelationLabel relation={item.relation} />
+        <span className="text-xs text-fg-muted">{t(item.direction === "outgoing" ? "wiki.graph.direction.outgoing" : "wiki.graph.direction.incoming")}</span>
+      </span>
       <span className="text-xs text-fg-muted">{item.scope === "cross_document" ? t("wiki.graph.otherDocument", { name: item.unit.document_name }) : t("wiki.graph.sameDocument")}</span>
       <span>{item.unit.path.length ? item.unit.path.join(" > ") : item.unit.label}</span>
       {item.reason ? <span className="text-xs text-fg-muted" lang={resolveContentLang(undefined, item.reason)}>{item.reason}</span> : null}
     </div> },
-    { key: "locate", header: t("wiki.graph.locate"), render: (item) => <Button icon={LocateFixed} size="sm" variant="ghost" onClick={() => onLocate(item.unit)}>{t("wiki.graph.locate")}</Button> },
+    { key: "locate", header: <span className="sr-only">{t("wiki.graph.locate")}</span>, render: (item) => <Button icon={LocateFixed} size="sm" variant="ghost" aria-label={t("wiki.graph.locate")} tooltip={t("wiki.graph.locate")} onClick={() => onLocate(item.unit)} /> },
   ];
   const detail = query.data;
   return <GraphSelectionDetails
