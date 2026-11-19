@@ -49,8 +49,7 @@ UNSUPPORTED_UPLOAD_FORMAT_MESSAGE = (
 # 画面の案内(frontend の upload-selection.ts の REJECTED_UPLOAD_FORMATS と i18n.ts)と
 # 同じ形式・文言にする(tests/test_upload_format_contract.py で照合する)。
 HEIC_UPLOAD_REJECTED_MESSAGE = (
-    "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください"
-    "（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。"
+    "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください。"
 )
 EPUB_UPLOAD_REJECTED_MESSAGE = (
     "EPUB の電子書籍は対応していません。PDF に変換してからアップロードしてください。"

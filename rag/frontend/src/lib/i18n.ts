@@ -2299,11 +2299,11 @@ export const ja = {
     "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。選んだファイルは下の一覧で確かめてから送ります。",
   "upload.dropzoneFormats": "対応形式: {formats}",
   "upload.dropzoneUnsupported":
-    "HEIC / HEIF の画像・EPUB・音声・動画のファイルは対応していません。画像は JPEG / PNG、EPUB は PDF に変換し、音声・動画は内容をテキストに書き起こしてからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
+    "HEIC / HEIF の画像・EPUB・音声・動画のファイルは対応していません。画像は JPEG / PNG、EPUB は PDF に変換し、音声・動画は内容をテキストに書き起こしてからアップロードしてください。",
   "upload.rejected.unsupported":
     "この形式は対応していません。PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・HTML・JPEG / PNG のいずれかに変換してからアップロードしてください。",
   "upload.rejected.heicImage":
-    "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できます）。",
+    "HEIC / HEIF の画像は対応していません。JPEG / PNG に変換してからアップロードしてください。",
   "upload.rejected.epubBook": "EPUB の電子書籍は対応していません。PDF に変換してからアップロードしてください。",
   "upload.rejected.audioVideo":
     "音声・動画のファイル（MP3・WAV・OGG・MP4 など）は対応していません。内容をテキストに書き起こしてからアップロードしてください。",

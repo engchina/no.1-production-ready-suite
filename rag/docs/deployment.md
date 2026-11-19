@@ -151,7 +151,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 | 旧形式の Office（`.doc` / `.ppt` / `.xls`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
 | テキスト・Markdown・CSV・JSON・HTML（`.txt` / `.md` / `.markdown` / `.csv` / `.json` / `.html` / `.htm`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ（XML ツリー JSON の形の `.json` は下の **XML ツリー JSON** を選ぶ） |
 | 上の表にない形式（GIF・WEBP・TIF / TIFF・RST・ORG・TSV・JSONL・NDJSON・XML・XHTML・EML・MSG・マクロ付きとテンプレートの Office・ODT・RTF など） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める。#4730） | 表のいずれかの形式に変換してからアップロードする |
-| HEIC / HEIF の画像（`.heic` / `.heif`）・EPUB（`.epub`） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める） | 画像は JPEG / PNG（iPhone は「設定 › カメラ › フォーマット › 互換性優先」で JPEG で保存できる）、EPUB は PDF に変換してからアップロードする |
+| HEIC / HEIF の画像（`.heic` / `.heif`）・EPUB（`.epub`） | アップロードできない（画面の選択と API の 415 で、変換の方法を添えて止める） | 画像は JPEG / PNG、EPUB は PDF に変換してからアップロードする |
 | 音声・動画（`.mp3` / `.wav` / `.m4a` / `.flac` / `.ogg` / `.aac`・`.mp4` / `.mov` / `.webm` など、`audio/*` / `video/*`） | アップロードできない（画面の選択と API の 415 で止める。#3369） | 内容をテキストに書き起こしてからアップロードする |
 
 - **HEIC / HEIF・EPUB・ODT・RTF の原本を解析する依存は入れない（#3351）。** Unstructured の解析サービスは `unstructured[all-docs]`
