@@ -68,3 +68,62 @@ def test_resolving_many_references_parses_each_catalog_document_once(
     # 文書のファイル名の1回と、見出しになれる章節ごとの1回を超えない。
     assert len(alias_calls) <= 2 + len(target.section_paths) + len(other.section_paths)
     assert index_calls == [target.section_paths]
+
+
+def _titled(document_id: str, title: str) -> ReferenceDocument:
+    """題名(番号の無い先頭の見出し)と条の見出しを持つ合成の文書。ファイル名は題名と関係しない。"""
+    return ReferenceDocument(
+        document_id,
+        f"cs-{document_id}",
+        f"{document_id}.md",
+        (f"{title} > 第3条（対象）",),
+        title=title,
+    )
+
+
+@pytest.mark.parametrize(
+    "note", ["", "（合成の注記）", "(合成の注記)"], ids=["none", "full", "half"]
+)
+def test_abbreviation_reaches_base_document_with_trailing_parenthetical(note: str) -> None:
+    """派生の文書の題名の末尾に括弧書きがあっても「法第N条」は本体の文書の条になる(#5527)。
+
+    括弧書きの無い題名の結果と同じ。名前の似た別の文書(別の法令・同じ本体の別の派生の文書)とは結ばない。
+    """
+    source = _titled("source", f"合成A法施行令{note}")
+    documents = (
+        source,
+        _titled("rule", f"合成A法施行規則{note}"),
+        _titled("other", f"合成B法{note}"),
+        _titled("base", f"合成A法{note}"),
+    )
+    resolved = resolve_scoped_reference(
+        ReferenceSpec("第3条", "article", "3", "法"),
+        source=source,
+        citing_path="",
+        documents=documents,
+    )
+    assert resolved.status == "resolved"
+    assert resolved.target is not None and resolved.target.document_id == "base"
+
+
+def test_parenthetical_does_not_pick_one_of_same_named_base_documents() -> None:
+    """括弧書きだけが違う同名の本体の文書が 2 つあれば、どちらにも決めない(#5527)。"""
+    source = _titled("source", "合成A法施行令（合成の注記）")
+    documents = (source, _titled("first", "合成A法（甲）"), _titled("second", "合成A法（乙）"))
+    resolved = resolve_scoped_reference(
+        ReferenceSpec("第3条", "article", "3", "法"),
+        source=source,
+        citing_path="",
+        documents=documents,
+    )
+    assert resolved.status == "ambiguous"
+    # 本体の文書が範囲に無ければ、自分の文書の条にも別の派生の文書の条にもしない。
+    assert (
+        resolve_scoped_reference(
+            ReferenceSpec("第3条", "article", "3", "合成A法"),
+            source=source,
+            citing_path="",
+            documents=(source, _titled("rule", "合成A法施行規則（合成の注記）")),
+        ).status
+        == "not_found"
+    )

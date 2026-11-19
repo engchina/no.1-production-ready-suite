@@ -44,6 +44,7 @@ from app.rag.cross_references import (
     section_path_within,
     title_key,
 )
+from app.rag.reference_grammar import current_grammar
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.rag.section_map_service import SectionNotFoundError, SectionOutline, SectionText
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
@@ -2678,6 +2679,69 @@ def test_abbreviation_references_point_to_the_base_document(
     chunks = [_chunk(0, "法第七条の規定による", path)]
     annotate_cross_references(chunks, document_title="テスト法施行規則.json")
     assert json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))[0]["document_title"] == "法"
+
+
+@pytest.mark.parametrize(
+    ("section_path", "file_name"),
+    [
+        ("テスト法施行規則（合成の注記） > 第二条(届出)", "a.json"),
+        ("テスト法施行規則 (合成の注記) > 第二条(届出)", "a.json"),
+        ("テスト法施行規則【甲】（合成の注記） > 第二条(届出)", "a.json"),
+        ("第二条(届出)", "テスト法施行規則（令和元年合成規則第1号）.json"),
+    ],
+    ids=["title-fullwidth", "title-halfwidth", "title-repeated", "file-name"],
+)
+def test_abbreviation_expands_past_trailing_parenthetical(
+    section_path: str, file_name: str
+) -> None:
+    """参照元の名前の末尾の括弧書きは、派生の語尾の判定から除く(#5527)。括弧の中身は本体の名前に入れない。"""
+    chunks = [
+        _chunk(0, "法第七条第一項の規定による届出。令第三条に定める書類を添える。", section_path)
+    ]
+
+    annotate_cross_references(chunks, document_title=file_name)
+
+    targets = json.loads(str(chunks[0].metadata[REFERENCE_TARGETS_KEY]))
+    assert [(t["key"], t["document_title"]) for t in targets] == [
+        ("7", "テスト法"),
+        ("3", "テスト法施行令"),
+    ]
+
+
+def test_trailing_parenthetical_comes_from_language_pack_and_keeps_other_names(
+    reference_words: Callable[..., None],
+) -> None:
+    """括弧は言語資源の括弧の組で決める。途中の括弧書き・括弧書きだけの名前は語尾にしない(#5527)。"""
+    vocabulary = current_grammar().vocabulary
+    assert vocabulary.abbreviation_title("法", "テスト法施行令(注記)") == "テスト法"
+    # 括弧書きの後に名前が続く・括弧書きを外すと語尾だけ・括弧書きだけの名前は展開しない。
+    assert vocabulary.abbreviation_title("法", "テスト法施行令(注記)解説") is None
+    assert vocabulary.abbreviation_title("法", "施行令(注記)") is None
+    assert vocabulary.abbreviation_title("法", "(注記)") is None
+    reference_words(bracket_pairs=[])
+    assert current_grammar().vocabulary.abbreviation_title("法", "テスト法施行令(注記)") is None
+
+
+def test_trailing_parenthetical_does_not_make_base_reference_self() -> None:
+    """ファイル名の末尾に括弧書きのある派生の文書でも、本体の名前の参照を自分の条にしない(#5527)。"""
+    assert not same_document_title("テスト法", "テスト法施行令（合成の注記）.json")
+    assert not same_document_title("テスト法", "テスト法施行令 (合成の注記).json")
+    # 括弧書きの無い名前・同じ文書の名前の挙動は変えない。
+    assert not same_document_title("テスト法", "テスト法施行令.json")
+    assert same_document_title("テスト法施行令", "テスト法施行令（合成の注記）.json")
+    assert same_document_title("組織規程", "組織規程(合成の担当).pdf")
+
+    path = "第一章 > 第三条(対象)"
+    chunks = [
+        _chunk(0, "対象を定める。", path),
+        _chunk(1, "テスト法第三条の規定による。", "第一章 > 第五条(届出)"),
+    ]
+    annotate_cross_references(chunks, document_title="テスト法施行令（合成の注記）.json")
+
+    targets = json.loads(str(chunks[1].metadata[REFERENCE_TARGETS_KEY]))
+    assert [(t["key"], t["document_title"], t["resolved"]) for t in targets] == [
+        ("3", "テスト法", False)
+    ]
 
 
 # 参照の解決の版の無い chunk(#4026 より前の分割)の回答のとき(#5311)。合成の文書名。

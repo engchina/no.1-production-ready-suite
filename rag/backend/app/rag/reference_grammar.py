@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, fields
 from functools import lru_cache
 
@@ -144,6 +145,8 @@ class ReferenceVocabulary:
         """参照の文書名が略称なら、参照元の文書の名前から決めた参照先の文書名。
 
         決まらなければ None（略称でない・参照元の名前が派生の語尾で終わらない）。
+        参照元の名前の末尾の括弧書き（公布の番号・略称・注記）は、語尾の判定から除く（#5527）。
+        括弧の中身は本体の名前に入れない。
         """
         pairs = (item.partition(ABBREVIATION_SEPARATOR) for item in self.abbreviation_targets)
         targets = {
@@ -155,9 +158,12 @@ class ReferenceVocabulary:
         if template is None:
             return None
         title = citing_title.strip()
-        for suffix in sorted(self.derived_document_suffixes, key=len, reverse=True):
-            if title.endswith(suffix) and len(title) > len(suffix):
-                return template.replace(BASE_NAME_PLACEHOLDER, title[: -len(suffix)])
+        bare = build_grammar(self).without_trailing_parenthetical(title)
+        suffixes = sorted(self.derived_document_suffixes, key=len, reverse=True)
+        for name_form in dict.fromkeys((title, bare)):
+            for suffix in suffixes:
+                if name_form.endswith(suffix) and len(name_form) > len(suffix):
+                    return template.replace(BASE_NAME_PLACEHOLDER, name_form[: -len(suffix)])
         return None
 
     @classmethod
@@ -247,6 +253,8 @@ class ReferenceGrammar:
     name_prefix_split: re.Pattern[str]
     possessive_tail: re.Pattern[str]
     parenthetical: re.Pattern[str]
+    # 名前の末尾の括弧書き（1 段の括弧書きが 1 つ以上並んだもの。#5527）。
+    trailing_parenthetical: re.Pattern[str]
     name_label_tail: re.Pattern[str]
     document_name_before: re.Pattern[str]
     document_name_coordinated: re.Pattern[str]
@@ -270,6 +278,15 @@ class ReferenceGrammar:
 
     def starts_with_same_word(self, name: str) -> bool:
         return any(name.startswith(word) for word in self.vocabulary.same_words)
+
+    def without_trailing_parenthetical(self, name: str) -> str:
+        """名前（NFKC）の末尾の括弧書きを外した形。外すと空なら NFKC にそろえた名前（#5527）。
+
+        題名・ファイル名の末尾の公布の番号・略称・注記を、文書の種類の語尾の判定から除くのに使う。
+        括弧は言語資源の括弧の組で、中に括弧の無い 1 段だけ（``parenthetical`` と同じ）。
+        """
+        text = unicodedata.normalize("NFKC", name or "").strip()
+        return self.trailing_parenthetical.sub("", text).strip() or text
 
 
 # 年度・版・日付の型の記号（#2177）。
@@ -477,6 +494,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
             rf"(?![\s{bracket_chars}{quote_chars}]|{separators}|{sentence_ends}|\.|{prefix}|\d)"
         ),
         parenthetical=re.compile(parenthetical),
+        trailing_parenthetical=re.compile(rf"(?:\s*(?:{parenthetical}))+\s*$"),
         name_label_tail=re.compile(rf"^{name_label}"),
         document_name_before=re.compile(
             rf"(?P<open>{title_open})?(?P<name>(?:{NAME_CHAR}(?:\s(?={NAME_CHAR}))?){{2,40}})"

@@ -54,7 +54,8 @@ REFERENCE_TARGETS_KEY = "reference_targets_json"
 REFERENCE_RESOLUTION_VERSION_KEY = "reference_resolution_version"
 # 参照先を決める規則の版。規則を変えたら上げる(古い印は回答のときに本文から解決し直す)。
 # unique-v2: 番号の無い単位の語だけの別紙の参照を、同じ名前の見出しがあるときだけ残す(#5251)。
-REFERENCE_RESOLUTION_VERSION = "unique-v2"
+# unique-v3: 参照元の名前の末尾の括弧書きを、略称の展開と同じ文書かの種類の語の判定から除く(#5527)。
+REFERENCE_RESOLUTION_VERSION = "unique-v3"
 # 回答で参照先として足した chunk に付ける印(起点の chunk_id と参照の表記)。
 REFERENCE_FROM_KEY = "reference_from_chunk_id"
 REFERENCE_LABEL_KEY = "reference_label"
@@ -887,15 +888,27 @@ def same_document_title(document_title: str, file_name: str) -> bool:
         if _FILE_EXTENSION.search(own):
             return own == wanted
         return own == _FILE_EXTENSION.sub("", wanted)
+    grammar = current_grammar()
+    own_name = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", normalize_text(file_name))
     title = title_key(document_title)
-    stem = title_key(re.sub(r"\.[A-Za-z0-9]{1,5}$", "", normalize_text(file_name)))
+    stem = title_key(own_name)
     if len(title) < 2 or len(stem) < 2:
         return False
     if title not in stem and stem not in title:
         return False
     # 「テスト法」と「テスト法施行令」は別の法令(長い方の残りが法令の種類の語で終わる。#2147)。
-    shorter, longer = sorted((title, stem), key=len)
-    return not current_grammar().document_kind_tail.search(longer.replace(shorter, "", 1))
+    # 末尾の括弧書き(「テスト法施行令(注記)」)は種類の語の判定から除く(#5527)。同じ文書とみなす
+    # 組は増やさず、種類の違う別の文書を同じ文書とみなさない方向だけに使う。
+    pairs = {(title, stem)}
+    bare_title = title_key(grammar.without_trailing_parenthetical(document_title))
+    bare_stem = title_key(grammar.without_trailing_parenthetical(own_name))
+    if len(bare_title) >= 2 and len(bare_stem) >= 2:
+        pairs.add((bare_title, bare_stem))
+    for left, right in pairs:
+        shorter, longer = sorted((left, right), key=len)
+        if shorter in longer and grammar.document_kind_tail.search(longer.replace(shorter, "", 1)):
+            return False
+    return True
 
 
 # ---- 取込 ----
