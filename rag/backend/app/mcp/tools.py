@@ -310,6 +310,8 @@ MCP_SERVER_NAME = "production-ready-rag"
 #     画面と同じ経路）にし、入力の conditions・approved_faq_id・skip_approved_faq・
 #     original_question と、出力の status・approved_faq_candidates・approved_faq・clarifications・
 #     guide を外した（rag_chat だけが持つ。#5352）。
+# （版を変えない追加）根拠の場所の source_line_start・source_line_end を、頁の無いテキストの原本
+#     （テキスト・Markdown など）の根拠にも入れた。出力の形は変えない（#5536）。
 MCP_OUTPUT_SCHEMA_VERSION = 47
 # rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
@@ -1086,10 +1088,12 @@ ROW_BASIS_DESCRIPTION = (
     "数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。"
 )
 SOURCE_LINE_START_DESCRIPTION = (
-    "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録は"
-    "source_line_end と違う）。"
+    "原本のテキストの開始の物理行（1 始まり。row_basis=csv の記録と、頁の無いテキストの原本だけ。"
+    "引用符の中の改行を含む CSV の記録は source_line_end と違う）。"
 )
-SOURCE_LINE_END_DESCRIPTION = "原本のテキストの終了の物理行（row_basis=csv だけ）。"
+SOURCE_LINE_END_DESCRIPTION = (
+    "原本のテキストの終了の物理行（row_basis=csv の記録と、頁の無いテキストの原本だけ）。"
+)
 TABLE_INDEX_DESCRIPTION = (
     "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、"
     "sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。"
@@ -2041,6 +2045,15 @@ def _source_lines(metadata: dict[str, Any]) -> tuple[int | None, int | None]:
     return start, end
 
 
+def _recorded_source_lines(metadata: dict[str, Any]) -> tuple[int | None, int | None]:
+    """取込が記録した原本の行の範囲だけ（CSV の記録の番号への読み替えはしない）。"""
+    start = _metadata_int(metadata, SOURCE_LINE_START_KEY)
+    end = _metadata_int(metadata, SOURCE_LINE_END_KEY)
+    if start is None or end is None or end < start:
+        return None, None
+    return start, end
+
+
 def evidence_row_location(metadata: dict[str, Any]) -> dict[str, Any]:
     """根拠の行の番号の基準と行の範囲（``EvidenceLocator`` と同じ名前・値。行が分からなければ空）。
 
@@ -2068,7 +2081,13 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     sheet_name = _metadata_str(metadata, "sheet_name")
     rows = _table_rows(metadata, sheet_name)
     basis, table_index, row_start, row_end = rows if rows is not None else (None, None, None, None)
-    source_lines = _source_lines(metadata) if basis == ROW_BASIS_CSV else (None, None)
+    if basis == ROW_BASIS_CSV:
+        source_lines = _source_lines(metadata)
+    elif basis is None and page_start is None and sheet_name is None:
+        # 頁の無い原本（テキスト・Markdown など）の、取込が記録した行の範囲（#5450・#5536）。
+        source_lines = _recorded_source_lines(metadata)
+    else:
+        source_lines = (None, None)
     # セルの座標は表計算・CSV の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
     table_row = (
         _metadata_int(metadata, TABLE_ROW_KEY)

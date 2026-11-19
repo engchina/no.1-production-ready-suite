@@ -207,3 +207,18 @@ def test_fragment_scheme_ranges_do_not_become_chunk_lines() -> None:
     apply_source_lines(chunks, artifacts)
 
     assert "source_line_start" not in chunks[0].metadata
+
+
+def test_mcp_locator_returns_recorded_lines_only_for_pageless_text() -> None:
+    """MCP の根拠の場所も、頁の無いテキストの原本では取込が記録した行の範囲を返す（#5536）。"""
+    from app.mcp.tools import _locator
+
+    pageless = _locator({"source_line_start": 3, "source_line_end": 7})
+    assert (pageless.source_line_start, pageless.source_line_end) == (3, 7)
+    # 頁のある原本・行を記録していない chunk・CSV 以外の記録の番号からは行を作らない。
+    assert (
+        _locator({"page_start": 2, "source_line_start": 3, "source_line_end": 7}).source_line_start
+        is None
+    )
+    assert _locator({}).source_line_start is None
+    assert _locator({"row_start": 3, "row_end": 4}).source_line_start is None

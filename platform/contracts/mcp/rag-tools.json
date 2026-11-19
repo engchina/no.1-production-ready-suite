@@ -494,7 +494,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv の記録と、頁の無いテキストの原本だけ。引用符の中の改行を含む CSV の記録は source_line_end と違う）。",
                 "title": "Source Line Start"
               },
               "source_line_end": {
@@ -507,7 +507,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "description": "原本のテキストの終了の物理行（row_basis=csv の記録と、頁の無いテキストの原本だけ）。",
                 "title": "Source Line End"
               },
               "cell_range": {
@@ -2397,7 +2397,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv の記録と、頁の無いテキストの原本だけ。引用符の中の改行を含む CSV の記録は source_line_end と違う）。",
                 "title": "Source Line Start"
               },
               "source_line_end": {
@@ -2410,7 +2410,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "description": "原本のテキストの終了の物理行（row_basis=csv の記録と、頁の無いテキストの原本だけ）。",
                 "title": "Source Line End"
               },
               "cell_range": {
@@ -2866,7 +2866,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv の記録と、頁の無いテキストの原本だけ。引用符の中の改行を含む CSV の記録は source_line_end と違う）。",
                 "title": "Source Line Start"
               },
               "source_line_end": {
@@ -2879,7 +2879,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "description": "原本のテキストの終了の物理行（row_basis=csv の記録と、頁の無いテキストの原本だけ）。",
                 "title": "Source Line End"
               },
               "cell_range": {
@@ -3373,7 +3373,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv の記録と、頁の無いテキストの原本だけ。引用符の中の改行を含む CSV の記録は source_line_end と違う）。",
                 "title": "Source Line Start"
               },
               "source_line_end": {
@@ -3386,7 +3386,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "description": "原本のテキストの終了の物理行（row_basis=csv の記録と、頁の無いテキストの原本だけ）。",
                 "title": "Source Line End"
               },
               "cell_range": {
@@ -4562,7 +4562,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv の記録と、頁の無いテキストの原本だけ。引用符の中の改行を含む CSV の記録は source_line_end と違う）。",
                 "title": "Source Line Start"
               },
               "source_line_end": {
@@ -4575,7 +4575,7 @@
                   }
                 ],
                 "default": null,
-                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "description": "原本のテキストの終了の物理行（row_basis=csv の記録と、頁の無いテキストの原本だけ）。",
                 "title": "Source Line End"
               },
               "cell_range": {
