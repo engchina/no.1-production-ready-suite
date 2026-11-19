@@ -105,13 +105,23 @@ const BLOCK_COLUMN_GAP = GRAPH_NODE_CARD_SIZE.width;
 const BLOCK_ROW_GAP = GRAPH_NODE_CARD_SIZE.height;
 
 /**
+ * つながらない文書の格子の列の数の上限。画布の幅に、読める縮尺（`zoom`）の文書の節点が何列入るか。
+ * 狭い画布（375px など）で横に並べて縮尺を下げずに、縦に積む（#5520）。
+ */
+export function wikiGridColumns(canvasWidth: number, zoom: number, padding: number): number {
+  return Math.max(1, Math.floor((canvasWidth / zoom - padding * 2 + BLOCK_ROW_GAP) / (GRAPH_NODE_CARD_SIZE.width + BLOCK_ROW_GAP)));
+}
+
+/**
  * 配置の戦略。文書の中は親を左・子を右の階層にして 1 つのまとまりにし、
  * 表示中の関連でつながる文書は関連の向きで段に並べ、つながらない文書はその右に格子で置く（横長の画布に収める）。
+ * 格子の列の数は `maxColumns`（画布の幅で決める上限）を超えない。
  */
 export function layoutWiki(
   nodes: readonly WikiViewNode[],
   documentEdges: ReadonlyArray<{ source: string; target: string }>,
   sizes: ReadonlyMap<string, GraphNodeDimensions>,
+  maxColumns = Infinity,
 ): Map<string, GraphPoint> {
   const groups = new Map<string, WikiViewNode[]>();
   for (const node of nodes) groups.set(node.documentNode, [...(groups.get(node.documentNode) ?? []), node]);
@@ -149,7 +159,7 @@ export function layoutWiki(
     left += BLOCK_COLUMN_GAP;
   }
   const isolated = [...blocks.keys()].filter((id) => !linked.has(id));
-  const columns = Math.max(4, Math.ceil(Math.sqrt(isolated.length * 2)));
+  const columns = Math.max(1, Math.min(maxColumns, Math.max(4, Math.ceil(Math.sqrt(isolated.length * 2)))));
   let x = left, y = 0, rowHeight = 0;
   isolated.forEach((id, index) => {
     if (index && index % columns === 0) { x = left; y += rowHeight + BLOCK_ROW_GAP; rowHeight = 0; }

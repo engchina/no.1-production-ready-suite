@@ -1,9 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
 import { FileText, Heading, MoreHorizontal, TextQuote, type LucideIcon } from "lucide-react";
 import { Banner, ProcessingIndicator, SelectField } from "@production-ready/ui";
-import { applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, graphEdgeStyle, GraphLegend, graphNeighborIds, GraphNodeCard, GraphParallelEdge, GraphSearchNavigation, GraphSelectionDetails, selectGraphEdgeHandles, type GraphNodeDimensions, type GraphPoint } from "@production-ready/ui/graph";
+import { applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GRAPH_READABLE_MIN_ZOOM, graphBounds, GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, graphEdgeStyle, GraphLegend, graphNeighborIds, GraphNodeCard, GraphParallelEdge, graphReadableViewport, GraphSearchNavigation, GraphSelectionDetails, selectGraphEdgeHandles, type GraphNodeDimensions, type GraphPoint } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
@@ -12,7 +12,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useStructureNodeMeasurements } from "./use-structure-node-measurements";
 import { WikiGraphUnitPanel } from "./WikiGraphUnitPanel";
 import { WIKI_RELATION_ICONS, wikiRelationText } from "./wiki-graph-labels";
-import { emptyWikiTree, layoutWiki, WIKI_GRAPH_PAGE_SIZE, WIKI_RELATIONS, visibleWikiNodes, wikiRelationEdges, type WikiNodeKind, type WikiTreeState, type WikiViewNode } from "./wiki-graph";
+import { emptyWikiTree, layoutWiki, WIKI_GRAPH_PAGE_SIZE, WIKI_RELATIONS, visibleWikiNodes, wikiGridColumns, wikiRelationEdges, type WikiNodeKind, type WikiTreeState, type WikiViewNode } from "./wiki-graph";
 
 interface WikiNodeData extends Record<string, unknown> {
   item: WikiViewNode;
@@ -20,9 +20,15 @@ interface WikiNodeData extends Record<string, unknown> {
   dimmed: boolean;
 }
 type Selection = { type: "node" | "edge"; id: string } | null;
+/** 表示範囲を合わせる対象。all = 表示中のすべて、level = 開いた節点とその子（#5520）。 */
+type FitRequest = { kind: "all" } | { kind: "level"; id: string };
 
 const SEARCH_DEBOUNCE_MS = 400;
 const SEARCH_PAGE_SIZE = 25;
+/** 表示範囲を合わせるときの画布の内側の余白（画面の px）。上は右上の拡大・縮小の操作の下に空ける（節点を押せなくしない）。 */
+const FIT_PADDING = { top: 64, right: 24, bottom: 24, left: 24 } as const;
+/** 節点の実測を待つ上限。超えたら既定の寸法で合わせる。 */
+const FIT_MEASURE_WAIT_MS = 300;
 const NODE_KINDS: readonly WikiNodeKind[] = ["document", "section", "unit"];
 
 function kindLabel(kind: WikiNodeKind) {
@@ -69,6 +75,18 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   const flow = useReactFlow<Node<WikiNodeData>, Edge>();
   const filterId = useId();
   const canvasAnchor = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  // つながらない文書の格子の列の数（開いたときの画布の幅で 1 度だけ決める。案内を横に出して幅が変わっても並べ替えない）。
+  const [gridColumns, setGridColumns] = useState(Infinity);
+  useLayoutEffect(() => {
+    const width = frameRef.current?.clientWidth;
+    if (width) setGridColumns(wikiGridColumns(width, GRAPH_READABLE_MIN_ZOOM, FIT_PADDING.left));
+  }, []);
+  const [fitRequest, setFitRequest] = useState<FitRequest & { at: number }>(() => ({ kind: "all", at: Date.now() }));
+  const requestFit = (request: FitRequest) => setFitRequest({ ...request, at: Date.now() });
+  // 合わせ終えた要求（同じ要求で 2 度動かさない）。
+  const fittedRequest = useRef<object | null>(null);
+  const [fitTick, setFitTick] = useState(0);
   const [tree, setTree] = useState<WikiTreeState>(emptyWikiTree);
   // 読み込みの中で最新の木を読む（開く操作の連続で古い state に重ねない）。
   const treeRef = useRef(tree);
@@ -140,6 +158,8 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
     void run(async () => {
       await loadChildren(id, WIKI_GRAPH_PAGE_SIZE);
       setExpanded(id, true);
+      // 開いた段（押した節点と子）に合わせる。閉じる・続きを読むときは今の見え方を保つ。
+      requestFit({ kind: "level", id });
     });
   };
 
@@ -196,14 +216,31 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   const relationEdges = useMemo(() => wikiRelationEdges(viewNodes, (relation) => !disabledLegend.has(relationLegendId(relation))), [viewNodes, disabledLegend]);
   const containsEdges = useMemo(() => viewNodes.flatMap((node) => (node.parent && visibleIds.has(node.parent) ? [{ id: `contains:${node.id}`, source: node.parent, target: node.id }] : [])), [viewNodes, visibleIds]);
   const documentEdges = useMemo(() => relationEdges.filter((edge) => edge.scope === "cross_document").map((edge) => ({ source: viewById.get(edge.source)!.documentNode, target: viewById.get(edge.target)!.documentNode })), [relationEdges, viewById]);
-  const layout = useMemo(() => layoutWiki(viewNodes, documentEdges, sizes), [viewNodes, documentEdges, sizes]);
+  const layout = useMemo(() => layoutWiki(viewNodes, documentEdges, sizes, gridColumns), [viewNodes, documentEdges, sizes, gridColumns]);
   const positionOf = (id: string) => overrides.get(id) ?? layout.get(id) ?? { x: 0, y: 0 };
 
-  // 種類の切替だけで表示範囲を合わせ、開閉や検索の移動では今の見え方を保つ。
+  // 表示範囲は、最初・種類の切替で表示中のすべてに、節点を開いたときは開いた段に合わせる。
+  // 縮尺は読める大きさを下限にし（全体を収めるために極小にしない）、収まらない分は端をそろえて図を動かして見る（#5520）。
   useEffect(() => {
-    if (pendingFocus && focusedNode.current !== pendingFocus) return;
-    void flow.fitView({ padding: 0.18, duration: 0 });
-  }, [flow, kind, pendingFocus]);
+    if (fittedRequest.current === fitRequest) return;
+    const frame = frameRef.current;
+    if (!frame?.clientWidth || !frame.clientHeight) return;
+    if (fitRequest.kind === "level" && !tree.expanded.has(fitRequest.id)) return;
+    const ids = fitRequest.kind === "all" ? viewNodes.map((node) => node.id)
+      : [fitRequest.id, ...viewNodes.filter((node) => node.parent === fitRequest.id).map((node) => node.id)].filter((id) => viewById.has(id));
+    // 寸法を実測してから合わせる（未描画の節点は測れないので、待つのは上限まで）。
+    const waited = Date.now() - fitRequest.at;
+    if (viewNodes.length <= 150 && waited < FIT_MEASURE_WAIT_MS && ids.some((id) => !sizes.has(id))) {
+      const timer = setTimeout(() => setFitTick((value) => value + 1), FIT_MEASURE_WAIT_MS - waited);
+      return () => clearTimeout(timer);
+    }
+    const bounds = graphBounds(ids.map((id) => ({ ...positionOf(id), ...(sizes.get(id) ?? GRAPH_NODE_CARD_SIZE) })));
+    fittedRequest.current = fitRequest;
+    if (!bounds) return;
+    // 開いた段が横に収まらない（375px など）ときは、子の列を見せるように右端をそろえる。
+    void flow.setViewport(graphReadableViewport({ bounds, frame: { width: frame.clientWidth, height: frame.clientHeight }, padding: FIT_PADDING, align: { x: fitRequest.kind === "level" ? "end" : "start" } }), { duration: 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 位置は layout と overrides から読む。要求・配置・寸法・時間切れのときだけ動かす。
+  }, [fitRequest, fitTick, layout, sizes, viewNodes, viewById, tree, flow]);
 
   useEffect(() => {
     if (!pendingFocus || focusedNode.current === pendingFocus) return;
@@ -311,26 +348,27 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   return <div className="grid min-w-0 gap-3">
     <div className="flex min-w-0 flex-wrap items-start gap-2">
       <GraphSearchNavigation labels={{ search: t("wiki.graph.search"), clear: t("common.clearSearch"), previous: t("wiki.graph.previousMatch"), next: t("wiki.graph.nextMatch"), noMatch: t("wiki.graph.noMatch"), scope: t("wiki.graph.searchScope") }} value={search} onChange={searchChanged} count={matchCount} cursor={cursor} onPrevious={() => jump(-1)} onNext={() => jump(1)} debounceMs={SEARCH_DEBOUNCE_MS} testId="wiki-graph-search" />
-      <SelectField id={filterId} label={t("wiki.graph.kind")} labelHidden size="lg" width="md" value={kind} onValueChange={(value) => { setKind(value); setSelection(null); }} options={[{ value: "", label: t("wiki.graph.allKinds") }, ...NODE_KINDS.map((value) => ({ value, label: kindLabel(value) }))]} />
+      <SelectField id={filterId} label={t("wiki.graph.kind")} labelHidden size="lg" width="md" value={kind} onValueChange={(value) => { setKind(value); setSelection(null); requestFit({ kind: "all" }); }} options={[{ value: "", label: t("wiki.graph.allKinds") }, ...NODE_KINDS.map((value) => ({ value, label: kindLabel(value) }))]} />
     </div>
     {searchQuery.isError && query ? <Banner severity="danger" title={t("wiki.graph.searchError")} /> : null}
     {failure ? <DataLoadFailure error={failure.error} fallback={t("wiki.graph.expandError")} onRetry={failure.retry} /> : null}
     {/* 単位を選ぶと案内を横に出す。置き場所が狭い（375px など）ときは図の下に回す。 */}
     <div className="@container min-w-0">
       <div className={unitSelected ? "grid min-w-0 gap-3 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]" : "grid min-w-0"}>
-        <div ref={canvasAnchor} className="relative min-w-0">
-          <GraphCanvasFrame role="region" aria-label={t("wiki.graph.title")}>
+        <div ref={canvasAnchor} className="relative grid min-w-0 gap-2">
+          {/* 凡例は関係の種類（アイコンと文字）。画布の外の上に置き、狭い画面でも節点を覆わない（#5520）。節点の種類は節点の上の文字と「種類」の絞り込みで示す。 */}
+          <GraphLegend placement="inline" label={t("wiki.graph.legend")} items={WIKI_RELATIONS.map((relation) => {
+            const Icon = WIKI_RELATION_ICONS[relation];
+            return { id: relationLegendId(relation), label: wikiRelationText(relation), marker: <Icon className="size-4 shrink-0" aria-hidden /> };
+          })} disabledIds={disabledLegend} onToggle={toggleLegend} testId="wiki-graph-legend" />
+          <GraphCanvasFrame ref={frameRef} role="region" aria-label={t("wiki.graph.title")}>
             <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
               onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}
               onNodeMouseEnter={(_event, node) => setHoveredNode(node.id)} onNodeMouseLeave={() => setHoveredNode(null)}
               onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)} onEdgeMouseLeave={() => setHoveredEdge(null)}
-              miniMap={viewNodes.length > 12 ? { "aria-label": t("wiki.graph.minimap"), nodeColor: (node) => KIND_FILLS[(node.data as WikiNodeData).item.kind] } : false}>
+              // 小地図は出さない: 右下で節点に重なり、狭い画面では置き場所が無い。位置は検索・「図で位置を確認」・全体表示で移る（#5520）。
+              fitView={false} miniMap={false}>
               <GraphCanvasControls labels={{ zoomIn: t("wiki.graph.zoomIn"), zoomOut: t("wiki.graph.zoomOut"), fit: t("wiki.graph.fitView"), reset: t("wiki.graph.reset") }} onReset={() => setOverrides(new Map())} resetDisabled={overrides.size === 0} />
-              {/* 凡例は関係の種類（アイコンと文字）。節点の種類は節点の上の文字と「種類」の絞り込みで示す（375px で画布を覆わない）。 */}
-              <GraphLegend label={t("wiki.graph.legend")} items={WIKI_RELATIONS.map((relation) => {
-                const Icon = WIKI_RELATION_ICONS[relation];
-                return { id: relationLegendId(relation), label: wikiRelationText(relation), marker: <Icon className="size-4 shrink-0" aria-hidden /> };
-              })} disabledIds={disabledLegend} onToggle={toggleLegend} testId="wiki-graph-legend" />
             </GraphCanvas>
           </GraphCanvasFrame>
           {/* 節点を開く間の表示は画布の上に重ね、画布を押し下げない（#4649）。 */}

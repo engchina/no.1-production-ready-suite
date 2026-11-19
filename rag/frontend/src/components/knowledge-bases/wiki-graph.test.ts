@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { WikiGraphOverview, WikiGraphTreeNode } from "@/lib/api";
 
-import { emptyWikiTree, layoutWiki, moreNodeId, stripExtension, visibleWikiNodes, wikiRelationEdges, type WikiTreeState } from "./wiki-graph";
+import { emptyWikiTree, layoutWiki, moreNodeId, stripExtension, visibleWikiNodes, wikiGridColumns, wikiRelationEdges, type WikiTreeState } from "./wiki-graph";
 
 const documentNode = (id: string, extra = {}) => ({ id, document_id: id, name: `${id}.pdf`, unit_count: 3, outgoing_links: 0, incoming_links: 0, ...extra });
 const overview: WikiGraphOverview = { status: "ok", documents: [documentNode("a"), documentNode("b"), documentNode("c", { unit_count: 0 })] };
@@ -81,6 +81,22 @@ describe("layoutWiki", () => {
     expect(positions.get("u1")!.x).toBeGreaterThan(positions.get("s1")!.x);
     const seen = new Set([...positions.values()].map((point) => `${point.x}:${point.y}`));
     expect(seen.size).toBe(positions.size);
+  });
+
+  it("つながらない文書の格子は画布の幅で決めた列の数を超えず、狭い画布では縦に積む", () => {
+    const nodes = visibleWikiNodes(overview, emptyWikiTree(), all);
+    const wide = layoutWiki(nodes, [], new Map());
+    expect(new Set(["a", "b", "c"].map((id) => wide.get(id)!.y)).size).toBe(1);
+    const narrow = layoutWiki(nodes, [], new Map(), 1);
+    expect(["a", "b", "c"].map((id) => narrow.get(id)!.x)).toEqual([0, 0, 0]);
+    expect(narrow.get("a")!.y).toBeLessThan(narrow.get("b")!.y);
+    expect(narrow.get("b")!.y).toBeLessThan(narrow.get("c")!.y);
+  });
+
+  it("格子の列の数は読める縮尺の節点が画布の幅に入る数で、少なくとも 1", () => {
+    expect(wikiGridColumns(343, 0.8, 24)).toBe(1);
+    expect(wikiGridColumns(1100, 0.8, 24)).toBe(4);
+    expect(wikiGridColumns(100, 0.8, 24)).toBe(1);
   });
 
   it("循環でも有限の位置を返す", () => {

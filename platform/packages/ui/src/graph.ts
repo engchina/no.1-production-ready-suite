@@ -20,4 +20,5 @@ export {
 export { applyGraphNodeDimensionChanges, type GraphNodeDimensions, layoutGraphHierarchy, type GraphPoint, type GraphLayoutInput, type GraphLayoutResult, type GraphLayoutPositions, type GraphLayoutStrategy } from "./lib/graph-layout";
 export { aggregateGraphEdges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, graphEdgeStyle, graphNeighborIds, graphParallelEdgeGeometry, selectGraphEdgeHandles, type GraphAggregatedEdge, type GraphChainEdge, type GraphEdgeHandleSelection } from "./lib/graph-edges";
 export { graphPathLabel, type GraphPathLabel } from "./lib/graph-path-label";
+export { GRAPH_READABLE_MIN_ZOOM, graphBounds, graphReadableViewport, type GraphRect, type GraphViewport, type GraphViewportPadding } from "./lib/graph-viewport";
 export { normalizeGraphSearch } from "./lib/graph-search";
