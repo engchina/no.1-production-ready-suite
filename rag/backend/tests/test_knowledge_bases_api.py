@@ -824,12 +824,14 @@ def test_knowledge_base_extraction_fields_default_then_own_then_reset(
     assert saved.status_code == 200
     assert saved.json()["data"]["inherits_default"] is False
     assert [field["name"] for field in saved.json()["data"]["fields"]] == ["契約日", "金額"]
+    # KB の定義があっても、「全体の既定に戻す」が編集欄に入れる全体の既定を返す（#5543）。
+    assert [field["name"] for field in saved.json()["data"]["default_fields"]] == ["請求書番号"]
     assert [field.name for field in fake_oracle.extraction_fields[kb_id]] == ["契約日", "金額"]
     assert client.get(url).json()["data"]["fields"][0]["value_type"] == "date"
 
     # 空の定義は「この KB では抽出しない」で、既定には戻さない。
     empty = client.put(url, json={"fields": []}).json()["data"]
-    assert empty == {"inherits_default": False, "fields": []}
+    assert (empty["inherits_default"], empty["fields"]) == (False, [])
 
     reset = client.put(url, json={"fields": None}).json()["data"]
     assert reset["inherits_default"] is True

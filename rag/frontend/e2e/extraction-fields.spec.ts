@@ -68,7 +68,7 @@ async function mockKnowledgeBase(page: Page, { delayMs = 0 } = {}) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
     await route.fulfill(
-      envelope({ inherits_default: own === null, fields: own ?? DEFAULT_FIELDS })
+      envelope({ inherits_default: own === null, fields: own ?? DEFAULT_FIELDS, default_fields: DEFAULT_FIELDS })
     );
   });
   return puts;
@@ -114,10 +114,16 @@ for (const theme of ["light", "dark"] as const) {
       "変更を破棄",
       "全体の既定に戻す",
     ]);
+    // 全体の既定に戻すは全体の既定の項目を編集欄に入れるだけで、確認も送信もしない（#5543）。
+    const putCount = puts.length;
     await section.getByRole("button", { name: "全体の既定に戻す" }).click();
-    const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText("全体の既定に戻しますか？");
-    await dialog.getByRole("button", { name: "全体の既定に戻す" }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect(puts).toHaveLength(putCount);
+    await expect(section.getByRole("textbox", { name: /項目名/ })).toHaveCount(1);
+    await expect(section.getByRole("textbox", { name: /項目名/ })).toHaveValue("請求書番号");
+    await expect(section).toContainText("全体の既定の項目を入れました。「保存」でこのナレッジベースの定義を消し、全体の既定を使います。");
+    // そのまま保存すると、写しではなく KB の定義の削除（fields: null）を送り、全体の既定を使う。
+    await section.getByRole("button", { name: "項目の定義を保存" }).click();
     await expect(section).toContainText("全体の既定の項目（1 件）を使っています");
     expect(puts.at(-1)).toEqual({ fields: null });
   });

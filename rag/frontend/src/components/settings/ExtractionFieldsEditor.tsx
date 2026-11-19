@@ -1,7 +1,6 @@
 import {
   Button,
   FormActionBar,
-  type FormActionDescriptor,
   FormSkeleton,
   FormStatus,
   SelectField,
@@ -15,7 +14,6 @@ import { History, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, type ExtractionFieldDefinition, type ExtractionFieldValueType } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -24,7 +22,6 @@ import {
   useResetExtractionFieldsSettings,
   useUpdateExtractionFieldsSettings,
 } from "@/lib/queries";
-import { toast } from "@/lib/toast";
 
 import {
   EXTRACTION_FIELD_DESCRIPTION_MAX,
@@ -48,38 +45,13 @@ const VALUE_TYPE_OPTIONS: SelectFieldOption<ExtractionFieldValueType>[] =
 /**
  * 項目抽出で取り出す項目の定義（`/api/settings/extraction-fields`）を編集する（#528）。
  * 全体の既定の定義（KB に定義が無い文書に使う。#548）。文書解析の「解析後の処理」の項目抽出の中に置く。
- * 一度も保存していない環境は標準の項目を使い、「標準の項目に戻す」で保存した定義を消せる（#556）。
+ * 一度も保存していない環境は標準の項目を使う（#556）。「標準の項目に戻す」は標準の項目を編集欄に入れるだけで、
+ * 「保存」で保存した定義を消す（#5543）。
  */
 export function ExtractionFieldsEditor() {
   const query = useExtractionFieldsSettings();
   const save = useUpdateExtractionFieldsSettings();
   const reset = useResetExtractionFieldsSettings();
-  const confirm = useConfirm();
-  // 標準の項目に戻したら、編集中の内容も捨てて編集欄を作り直す（編集中なら保存値へそろわないため）。
-  const [formKey, setFormKey] = useState(0);
-
-  const resetToStandard = async () => {
-    const ok = await confirm({
-      title: t("settings.extractionFields.resetStandard.title"),
-      description: t("settings.extractionFields.resetStandard.description"),
-      confirmLabel: t("settings.extractionFields.resetStandard"),
-      tone: "warning",
-    });
-    if (!ok) return;
-    save.reset();
-    reset.mutate(undefined, {
-      onSuccess: () => {
-        setFormKey((key) => key + 1);
-        toast.success(t("settings.extractionFields.resetStandard.done"));
-      },
-      onError: (error) =>
-        toast.error(
-          error instanceof ApiError
-            ? error.message
-            : t("settings.extractionFields.resetStandard.error")
-        ),
-    });
-  };
 
   if (query.isPending) {
     // ほかの読み込み中と同じく、先頭に文言と経過時間の行、その下に内容の形の Skeleton（#2510）。
@@ -105,7 +77,6 @@ export function ExtractionFieldsEditor() {
   const usesStandard = query.data.uses_standard;
   return (
     <ExtractionFieldsForm
-      key={formKey}
       saved={query.data.fields}
       save={save}
       description={t("settings.extractionFields.description")}
@@ -118,14 +89,13 @@ export function ExtractionFieldsEditor() {
           />
         ) : null
       }
-      restoreDefaultsAction={{
-        id: "reset-standard",
+      restoreDefaults={{
         label: t("settings.extractionFields.resetStandard"),
-        icon: History,
-        loading: reset.isPending,
+        fields: query.data.standard_fields,
         // 標準の項目を使っている間は戻すものが無い（編集中の変更は「変更を破棄」で戻す）。
-        disabled: usesStandard || save.isPending,
-        onClick: () => void resetToStandard(),
+        available: !usesStandard,
+        pendingMessage: t("settings.extractionFields.resetStandard.pending"),
+        save: reset,
       }}
     />
   );
@@ -138,13 +108,29 @@ export type ExtractionFieldsSaveMutation = UseMutationResult<
   ExtractionFieldDefinition[]
 >;
 
+/**
+ * 既定に戻す（全体の既定の「標準の項目に戻す」・KB の「全体の既定に戻す」。#5543）。押すと `fields` を
+ * 編集欄に入れるだけで、そのまま「保存」すると `save`（保存した定義を消す）を送る。写しを保存しないので、
+ * 戻す先が後で変わっても追従する。戻した後に項目を編集したら、ふつうの保存（自分の定義）になる。
+ */
+export interface ExtractionFieldsRestoreDefaults {
+  label: string;
+  fields: ExtractionFieldDefinition[];
+  /** 戻すものがあるか（全体の既定は標準の項目を使っている間は無い）。 */
+  available: boolean;
+  /** 戻した後、保存するまでの案内。 */
+  pendingMessage: string;
+  save: UseMutationResult<{ fields: ExtractionFieldDefinition[] }, Error, void>;
+  onSaved?: () => void;
+}
+
 /** 項目の定義の編集欄。保存先は `save` が決める（全体の既定か KB の定義）。 */
 export function ExtractionFieldsForm({
   saved,
   save,
   description,
   notice,
-  restoreDefaultsAction,
+  restoreDefaults,
   testId = "extraction-fields-editor",
 }: {
   saved: ExtractionFieldDefinition[];
@@ -152,8 +138,7 @@ export function ExtractionFieldsForm({
   description: string;
   /** 説明の下に出す定義の状態（全体の既定の「標準の項目を使っています」など）。 */
   notice?: ReactNode;
-  /** 既定に戻す操作（全体の既定の「標準の項目に戻す」・KB の「全体の既定に戻す」。#5458）。 */
-  restoreDefaultsAction?: FormActionDescriptor;
+  restoreDefaults?: ExtractionFieldsRestoreDefaults;
   testId?: string;
 }) {
   const [rows, setRows] = useState<ExtractionFieldRow[]>(() => rowsFromDefinitions(saved));
@@ -161,23 +146,34 @@ export function ExtractionFieldsForm({
   // （編集中の内容は背景の再取得で上書きしない。UX 契約 workspace-state）。
   const [base, setBase] = useState(saved);
   const [attempted, setAttempted] = useState(false);
+  // 既定に戻した後、編集せずにいるか（保存で戻す先の削除を送る）。
+  const [restorePending, setRestorePending] = useState(false);
+  const restoreSave = restoreDefaults?.save;
+  const saving = save.isPending || Boolean(restoreSave?.isPending);
+  const saveError = save.error ?? restoreSave?.error ?? null;
   if (saved !== base) {
     setBase(saved);
     if (sameDefinitions(base, rows)) setRows(rowsFromDefinitions(saved));
   }
-  const dirty = !sameDefinitions(saved, rows);
+  const dirty = restorePending || !sameDefinitions(saved, rows);
   useLeaveGuard(dirty);
   const errors = validateExtractionFieldRows(rows);
   const visibleErrors = attempted ? errors : {};
   const atLimit = rows.length >= MAX_EXTRACTION_FIELDS;
 
-  function edit(key: string, update: Partial<ExtractionFieldDefinition>) {
+  function clearStatus() {
     save.reset();
+    restoreSave?.reset();
+    setRestorePending(false);
+  }
+
+  function edit(key: string, update: Partial<ExtractionFieldDefinition>) {
+    clearStatus();
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...update } : row)));
   }
 
   function add() {
-    save.reset();
+    clearStatus();
     const row = newExtractionFieldRow();
     setRows((current) => [...current, row]);
     // 追加した行の項目名へフォーカスを移す（描画の後）。
@@ -185,30 +181,48 @@ export function ExtractionFieldsForm({
   }
 
   function remove(key: string) {
-    save.reset();
+    clearStatus();
     setRows((current) => current.filter((row) => row.key !== key));
   }
 
   function discard() {
-    save.reset();
+    clearStatus();
     setAttempted(false);
     setRows(rowsFromDefinitions(saved));
   }
 
+  function restore() {
+    if (!restoreDefaults) return;
+    clearStatus();
+    setAttempted(false);
+    setRows(rowsFromDefinitions(restoreDefaults.fields));
+    setRestorePending(true);
+  }
+
+  function applySaved(fields: ExtractionFieldDefinition[]) {
+    setAttempted(false);
+    setRestorePending(false);
+    setBase(fields);
+    setRows(rowsFromDefinitions(fields));
+  }
+
   function submit() {
+    if (restorePending && restoreSave) {
+      restoreSave.mutate(undefined, {
+        onSuccess: (data) => {
+          applySaved(data.fields);
+          restoreDefaults?.onSaved?.();
+        },
+      });
+      return;
+    }
     setAttempted(true);
     const firstError = rows.find((row) => errors[row.key]);
     if (firstError) {
       document.getElementById(`${firstError.key}-name`)?.focus();
       return;
     }
-    save.mutate(definitionsFromRows(rows), {
-      onSuccess: (data) => {
-        setAttempted(false);
-        setBase(data.fields);
-        setRows(rowsFromDefinitions(data.fields));
-      },
-    });
+    save.mutate(definitionsFromRows(rows), { onSuccess: (data) => applySaved(data.fields) });
   }
 
   return (
@@ -241,7 +255,7 @@ export function ExtractionFieldsForm({
                     value={row.name}
                     maxLength={EXTRACTION_FIELD_NAME_MAX}
                     autoComplete="off"
-                    disabled={save.isPending}
+                    disabled={saving}
                     error={error ? t(`settings.extractionFields.error.${error}`) : undefined}
                     onValueChange={(name) => edit(row.key, { name })}
                   />
@@ -253,7 +267,7 @@ export function ExtractionFieldsForm({
                     value={row.description}
                     maxLength={EXTRACTION_FIELD_DESCRIPTION_MAX}
                     autoComplete="off"
-                    disabled={save.isPending}
+                    disabled={saving}
                     onValueChange={(description) => edit(row.key, { description })}
                   />
                   <SelectField
@@ -273,7 +287,7 @@ export function ExtractionFieldsForm({
                       iconOnly
                       icon={Trash2}
                       aria-label={t("settings.extractionFields.remove", { index: index + 1 })}
-                      disabled={save.isPending}
+                      disabled={saving}
                       onClick={() => remove(row.key)}
                     />
                   </div>
@@ -287,7 +301,7 @@ export function ExtractionFieldsForm({
           type="button"
           variant="secondary"
           icon={Plus}
-          disabled={atLimit || save.isPending}
+          disabled={atLimit || saving}
           onClick={add}
         >
           {t("settings.extractionFields.add")}
@@ -305,7 +319,7 @@ export function ExtractionFieldsForm({
             id: "save",
             label: t("settings.extractionFields.save"),
             icon: Save,
-            loading: save.isPending,
+            loading: saving,
             disabled: !dirty,
             onClick: submit,
           },
@@ -315,22 +329,34 @@ export function ExtractionFieldsForm({
             id: "discard",
             label: t("settings.extractionFields.discard"),
             icon: RotateCcw,
-            disabled: !dirty || save.isPending,
+            disabled: !dirty || saving,
             onClick: discard,
           },
         ]}
-        restoreDefaultsAction={restoreDefaultsAction}
+        restoreDefaultsAction={
+          restoreDefaults
+            ? {
+                id: "restore-defaults",
+                label: restoreDefaults.label,
+                icon: History,
+                disabled: saving || restorePending || !restoreDefaults.available,
+                onClick: restore,
+              }
+            : undefined
+        }
         status={
-          save.isError ? (
+          saveError ? (
             <FormStatus
               tone="danger"
               message={
-                save.error instanceof ApiError
-                  ? save.error.message
+                saveError instanceof ApiError
+                  ? saveError.message
                   : t("settings.extractionFields.saveError")
               }
             />
-          ) : save.isSuccess && !dirty ? (
+          ) : restorePending && restoreDefaults ? (
+            <FormStatus tone="warning" message={restoreDefaults.pendingMessage} />
+          ) : (save.isSuccess || restoreSave?.isSuccess) && !dirty ? (
             <FormStatus tone="success" message={t("settings.extractionFields.saved")} />
           ) : null
         }

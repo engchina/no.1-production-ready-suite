@@ -2844,6 +2844,8 @@ export interface ExtractionFieldDefinition {
 export interface ExtractionFieldsSettingsData {
   fields: ExtractionFieldDefinition[];
   uses_standard: boolean;
+  /** 標準の項目（「標準の項目に戻す」が編集欄に入れる。#5543）。 */
+  standard_fields: ExtractionFieldDefinition[];
 }
 
 /** 検索の絞り込みに使える項目（#549）。 */
@@ -2855,6 +2857,8 @@ export interface SearchExtractionFieldsData {
 export interface KnowledgeBaseExtractionFieldsData {
   inherits_default: boolean;
   fields: ExtractionFieldDefinition[];
+  /** 全体の既定の項目（「全体の既定に戻す」が編集欄に入れる。#5543）。 */
+  default_fields: ExtractionFieldDefinition[];
 }
 
 // --- 設定: Vector Index アダプター ---

@@ -178,11 +178,17 @@ def _extraction_fields_data(
     fields: list[FieldDefinition] | None,
 ) -> ApiResponse[KnowledgeBaseExtractionFieldsData]:
     """KB の定義(None なら全体の既定)を API 形にする。"""
-    effective = load_field_schema().fields if fields is None else fields
+    default = [
+        FieldDefinitionData.model_validate(field.model_dump())
+        for field in load_field_schema().fields
+    ]
     return ApiResponse(
         data=KnowledgeBaseExtractionFieldsData(
             inherits_default=fields is None,
-            fields=[FieldDefinitionData.model_validate(field.model_dump()) for field in effective],
+            fields=default
+            if fields is None
+            else [FieldDefinitionData.model_validate(field.model_dump()) for field in fields],
+            default_fields=default,
         )
     )
 

@@ -1154,7 +1154,7 @@ export function useUpdateKnowledgeBaseExtractionFields(id: string) {
   });
 }
 
-/** ナレッジベースの項目抽出の定義を消し、全体の既定に戻す（#548）。 */
+/** ナレッジベースの項目抽出の定義を消し、全体の既定に戻す（#548。「全体の既定に戻す」の後の保存。#5543）。 */
 export function useResetKnowledgeBaseExtractionFields(id: string) {
   const onSuccess = useKnowledgeBaseExtractionFieldsSaved(id);
   return useMutation({
@@ -2466,7 +2466,7 @@ export function useUpdateExtractionFieldsSettings() {
   });
 }
 
-/** 保存した全体の既定を消し、標準の項目に戻す（#556）。 */
+/** 保存した全体の既定を消し、標準の項目に戻す（#556。「標準の項目に戻す」の後の保存。#5543）。 */
 export function useResetExtractionFieldsSettings() {
   const onSuccess = useExtractionFieldsSettingsSaved();
   return useMutation({ mutationFn: () => api.resetExtractionFieldsSettings(), onSuccess });
