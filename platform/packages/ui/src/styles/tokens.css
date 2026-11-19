@@ -78,6 +78,8 @@
   --color-warning-border: var(--color-warning-border);
   --color-danger-fg: var(--color-danger-fg);
   --color-danger-emphasis: var(--color-danger-emphasis);
+  --color-danger-emphasis-hover: var(--color-danger-emphasis-hover);
+  --color-danger-emphasis-active: var(--color-danger-emphasis-active);
   --color-danger-subtle: var(--color-danger-subtle);
   --color-danger-border: var(--color-danger-border);
   --color-info-fg: var(--color-info-fg);

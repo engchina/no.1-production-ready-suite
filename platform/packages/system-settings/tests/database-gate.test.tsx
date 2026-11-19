@@ -183,7 +183,7 @@ describe("DatabaseGate（表示）", () => {
       const html = renderGate("/profiles?tab=list", clientWith(data), <p>業務画面</p>, admin);
       expect(html).not.toContain("業務画面");
       expect(html).toMatch(/<section[^>]*aria-labelledby="database-unavailable-title"/);
-      expect(html).toContain(`<h1 id="database-unavailable-title" class="mt-5 text-lg font-semibold text-fg">${title}</h1>`);
+      expect(html).toContain(`<h1 id="database-unavailable-title" class="mt-5 text-xl font-semibold text-fg">${title}</h1>`);
       expect(html).toContain(message);
       expect(html).toContain(`href="${href}"`);
       expect(html).toContain(DATABASE_GATE_MESSAGES["dbGate.openDatabaseSettings"]);

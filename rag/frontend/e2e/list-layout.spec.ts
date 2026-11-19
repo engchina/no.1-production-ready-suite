@@ -401,6 +401,13 @@ test.describe("一覧の絞り込みの部品と条件のクリア (#1933)", { t
       await expect(sheet.getByRole("combobox", { name: "評価", exact: true })).toContainText("評価:役に立たなかった");
       await expect(sheet.getByRole("combobox", { name: "期間" })).toBeVisible();
       expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+      // 確定の操作はシートの footer（下端に固定。絞り込みが多くても本文と一緒にスクロールしない。#5522）。
+      const footer = page.getByTestId("feedback-filters-toolbar-filters-sheet-footer");
+      await expect(footer.getByRole("button", { name: "40 件を表示" })).toBeVisible();
+      // 開くアニメーションが終わってから撮る（右端が画面に収まる）。
+      await expect.poll(async () => (await sheet.boundingBox())!.x + (await sheet.boundingBox())!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+      const viewportHeight = page.viewportSize()!.height;
+      expect((await footer.boundingBox())!.y + (await footer.boundingBox())!.height).toBeLessThanOrEqual(viewportHeight + 1);
       await page.screenshot({ path: testInfo.outputPath("feedback-filters-sheet-mobile.png") });
       await sheet.getByRole("button", { name: "40 件を表示" }).click();
       await expect(sheet).toBeHidden();

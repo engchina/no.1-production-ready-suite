@@ -256,7 +256,7 @@ export function useFloatingMenuPosition({
       (Number.parseFloat(menuStyle.borderTopWidth) || 0) +
       (Number.parseFloat(menuStyle.borderBottomWidth) || 0);
     const rootFontSize =
-      Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
+      Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 14; // ルートは 14px（tokens/base.css）
     const scrollableAncestor =
       boundary === "scroll-ancestor" ? getScrollableAncestor(trigger) : null;
     const layout = computeFloatingMenuLayout({

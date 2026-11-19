@@ -120,10 +120,10 @@ export function GraphCanvasControls({
   const flow = useReactFlow();
   return (
     <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-surface p-1 shadow-sm">
-      <Button type="button" size="sm" variant="ghost" icon={Plus} aria-label={labels.zoomIn} tooltip={labels.zoomIn} onClick={() => void flow.zoomIn({ duration: 0 })} />
-      <Button type="button" size="sm" variant="ghost" icon={Minus} aria-label={labels.zoomOut} tooltip={labels.zoomOut} onClick={() => void flow.zoomOut({ duration: 0 })} />
-      <Button type="button" size="sm" variant="ghost" icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={onFit ?? (() => void flow.fitView({ padding: 0.18, duration: 0 }))} />
-      {onReset ? <Button type="button" size="sm" variant="ghost" icon={RotateCcw} aria-label={labels.reset} tooltip={labels.reset} onClick={onReset} disabled={resetDisabled} data-testid={resetTestId} /> : null}
+      <Button type="button" size="sm" variant="ghost" iconOnly icon={Plus} aria-label={labels.zoomIn} tooltip={labels.zoomIn} onClick={() => void flow.zoomIn({ duration: 0 })} />
+      <Button type="button" size="sm" variant="ghost" iconOnly icon={Minus} aria-label={labels.zoomOut} tooltip={labels.zoomOut} onClick={() => void flow.zoomOut({ duration: 0 })} />
+      <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={onFit ?? (() => void flow.fitView({ padding: 0.18, duration: 0 }))} />
+      {onReset ? <Button type="button" size="sm" variant="ghost" iconOnly icon={RotateCcw} aria-label={labels.reset} tooltip={labels.reset} onClick={onReset} disabled={resetDisabled} data-testid={resetTestId} /> : null}
     </div>
   );
 }
@@ -172,10 +172,10 @@ export function GraphSearchNavigation({
             aria-label={labels.search} placeholder={labels.search} clearLabel={labels.clear}
             aria-describedby={scopeId} data-testid={testId} />
         </div>
-        {value.trim() ? <div className="flex h-[var(--control-height-lg)] items-center gap-0.5 rounded-md border border-border bg-surface px-1 shadow-sm" data-testid={testId ? `${testId}-nav` : undefined}>
+        {value.trim() ? <div className="flex h-[var(--control-height-lg)] items-center gap-1 rounded-md border border-border bg-surface px-1 shadow-sm" data-testid={testId ? `${testId}-nav` : undefined}>
           <span className="px-1 text-xs tabular-nums text-fg-muted" aria-live="polite">{result}</span>
-          <Button type="button" size="sm" variant="ghost" icon={ChevronLeft} aria-label={labels.previous} tooltip={labels.previous} disabled={!count} onClick={onPrevious} data-testid={testId ? `${testId}-prev` : undefined} />
-          <Button type="button" size="sm" variant="ghost" icon={ChevronRight} aria-label={labels.next} tooltip={labels.next} disabled={!count} onClick={onNext} data-testid={testId ? `${testId}-next` : undefined} />
+          <Button type="button" size="sm" variant="ghost" iconOnly icon={ChevronLeft} aria-label={labels.previous} tooltip={labels.previous} disabled={!count} onClick={onPrevious} data-testid={testId ? `${testId}-prev` : undefined} />
+          <Button type="button" size="sm" variant="ghost" iconOnly icon={ChevronRight} aria-label={labels.next} tooltip={labels.next} disabled={!count} onClick={onNext} data-testid={testId ? `${testId}-next` : undefined} />
         </div> : null}
       </div>
       <p id={scopeId} className={scopeHintHidden ? "sr-only" : "text-xs text-fg-muted"}>{labels.scope}</p>

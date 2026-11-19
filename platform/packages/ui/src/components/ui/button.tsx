@@ -15,7 +15,7 @@ import { Tooltip, type TooltipPlacement } from "./tooltip";
  */
 export const buttonVariants = cva(
   [
-    "inline-flex max-w-full min-w-[32px] cursor-pointer items-center justify-center gap-[var(--button-gap)] overflow-hidden whitespace-nowrap",
+    "inline-flex max-w-full min-w-[var(--button-height-sm)] cursor-pointer items-center justify-center gap-[var(--button-gap)] overflow-hidden whitespace-nowrap",
     "rounded-control border border-transparent text-sm font-medium leading-5 transition-colors",
     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
     "disabled:cursor-not-allowed disabled:border-border disabled:bg-surface-disabled disabled:text-fg-disabled disabled:shadow-none",
@@ -36,7 +36,7 @@ export const buttonVariants = cva(
         ghost:
           "bg-transparent text-fg hover:enabled:not-aria-disabled:bg-surface-hover active:enabled:not-aria-disabled:bg-[color-mix(in_srgb,var(--color-fg)_12%,var(--color-surface))]",
         danger:
-          "bg-danger-emphasis text-fg-on-emphasis hover:enabled:not-aria-disabled:bg-[color-mix(in_srgb,var(--color-danger-emphasis)_88%,#000)] active:enabled:not-aria-disabled:bg-[color-mix(in_srgb,var(--color-danger-emphasis)_76%,#000)] forced-colors:bg-[Highlight] forced-colors:text-[HighlightText] forced-colors:forced-color-adjust-none",
+          "bg-danger-emphasis text-fg-on-emphasis hover:enabled:not-aria-disabled:bg-danger-emphasis-hover active:enabled:not-aria-disabled:bg-danger-emphasis-active forced-colors:bg-[Highlight] forced-colors:text-[HighlightText] forced-colors:forced-color-adjust-none",
       },
       size: {
         sm: "h-[var(--button-height-sm)] min-h-[var(--button-height-sm)] px-[var(--button-padding-sm)]",

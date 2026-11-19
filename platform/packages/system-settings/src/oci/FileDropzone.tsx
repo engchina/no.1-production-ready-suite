@@ -182,7 +182,7 @@ export function FileDropzone({
       data-testid={dataTestId}
     >
       <FieldLabel htmlFor={inputId} label={label} required={required} />
-      <div className="grid min-w-0 grid-cols-1 gap-[8px] sm:grid-cols-[minmax(0,1fr)_auto]">
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <label
           htmlFor={inputId}
           data-testid={dataTestId ? `${dataTestId}-dropzone` : undefined}
@@ -219,7 +219,8 @@ export function FileDropzone({
           )}
         >
           <span
-            data-surface-tint="accent"
+            // 未選択の灰色の面は neutral、選択済み・ドラッグ中の淡青の面は accent。
+            data-surface-tint={hasSelection || isDragActive ? "accent" : "neutral"}
             className={cn(
               "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
               hasSelection || isDragActive

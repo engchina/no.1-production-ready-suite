@@ -256,16 +256,19 @@ export function ListToolbar({
           side="right"
           id={sheetId}
           data-testid={testId ? `${testId}-filters-sheet` : undefined}
+          // 確定の操作はシートの下端に固定する（絞り込みが多くても本文と一緒にスクロールして隠れない）。
+          footer={
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="primary" size="md" onClick={() => setSheetOpen(false)}>
+                {labels.showResults(matchedText)}
+              </Button>
+              {clearButton}
+            </div>
+          }
         >
-          <div className="flex flex-col gap-3 pb-4" data-list-toolbar-sheet-filters="">
+          <div className="flex flex-col gap-3" data-list-toolbar-sheet-filters="">
             {/* シートの中は @container の外なので、container の基準の欄は全幅になる。 */}
             <FieldWidthScopeProvider scope="container">{filters}{secondaryFilters}</FieldWidthScopeProvider>
-          </div>
-          <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <Button type="button" variant="primary" size="md" onClick={() => setSheetOpen(false)}>
-              {labels.showResults(matchedText)}
-            </Button>
-            {clearButton}
           </div>
         </SideSheet>
       ) : null}

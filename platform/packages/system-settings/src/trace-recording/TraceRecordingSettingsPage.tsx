@@ -165,7 +165,7 @@ export function TraceRecordingSettingsPage({
               </div>
               <section className="space-y-2" aria-labelledby="trace-recording-scope-title">
                 <div className="space-y-1">
-                  <h3 id="trace-recording-scope-title" className="text-sm font-medium text-fg">
+                  <h3 id="trace-recording-scope-title" className="text-sm font-semibold text-fg">
                     {m.scopeTitle}
                   </h3>
                   <p className="text-xs text-fg-muted">{m.scopeDescription}</p>

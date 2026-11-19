@@ -129,7 +129,7 @@ export function Sidebar({
           <Tooltip content={nav.labels.close} placement="bottom">
             <button
               type="button"
-              className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+              className="inline-flex h-[var(--control-height-lg)] w-[var(--control-height-lg)] shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
               aria-label={nav.labels.close}
               data-testid="nav-drawer-close"
               onClick={nav.closeDrawer}
@@ -141,7 +141,7 @@ export function Sidebar({
           <Tooltip content={collapsed ? labels.expand : labels.collapse} placement="bottom">
             <button
               type="button"
-              className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+              className="inline-flex h-[var(--control-height-lg)] w-[var(--control-height-lg)] shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
               aria-label={collapsed ? labels.expand : labels.collapse}
               aria-expanded={!collapsed}
               onClick={onToggleCollapsed}
@@ -652,7 +652,10 @@ function SidebarTooltip({
               role="tooltip"
               aria-hidden
               data-surface="inverted"
-              className="pointer-events-none fixed z-[var(--z-popover)] max-w-[16rem] -translate-y-1/2 truncate whitespace-nowrap rounded-md bg-surface-overlay px-2.5 py-1.5 text-xs font-medium text-fg shadow-[var(--shadow-popover)] ring-1 ring-border"
+              // 枠・余白・強制カラーは共有の Tooltip と同じ（共有の Tooltip は上下にしか出せないため右に出すこの部品が残る）。
+              // 重なり順は --z-popover のまま。本文の固定の PageHeader（--z-sticky）は AppShell の fixed の外枠の積み重ねの中に
+              // 閉じるので、body に出したこの吹き出しが上になる（e2e の sidebar-accordion で確かめる）。
+              className="pointer-events-none fixed z-[var(--z-popover)] max-w-[16rem] -translate-y-1/2 truncate whitespace-nowrap rounded-md border border-border bg-surface-overlay px-2 py-1 text-xs font-medium text-fg shadow-[var(--shadow-popover)] forced-colors:border-[CanvasText]"
               style={{ top: coords.top, left: coords.left }}
             >
               {label}

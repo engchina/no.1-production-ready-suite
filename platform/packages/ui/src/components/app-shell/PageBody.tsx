@@ -33,7 +33,8 @@ const PAGE_BODY_RESTING_BOTTOM_REM = 1.5;
  * 通常の余白より小さいときはその値。
  */
 export function pageBodyRestingBottomInset(body: Element) {
-  const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  // ルートの文字サイズは 14px（tokens/base.css）。読めないときもその値で計算する。
+  const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 14;
   const padding = Number.parseFloat(getComputedStyle(body).paddingBottom) || 0;
   return Math.min(padding, PAGE_BODY_RESTING_BOTTOM_REM * rem);
 }

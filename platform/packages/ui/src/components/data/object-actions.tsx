@@ -221,7 +221,7 @@ export function ObjectActionBar({
   return (
     <div
       ref={containerRef}
-      className="relative flex flex-col gap-[8px] sm:flex-row sm:flex-wrap xl:justify-end"
+      className="relative flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end"
       role="group"
       aria-label={ariaLabel}
       data-testid={testId}

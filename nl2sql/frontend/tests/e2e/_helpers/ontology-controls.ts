@@ -88,9 +88,11 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   await expect(legend).toHaveCSS("text-decoration-line", "none");
 
   const zoom = scope.getByRole("button", { name: "グラフを拡大", exact: true });
-  // 共有 Button sm（32px、タッチ端末は 44px）。
-  await expect(zoom).toHaveCSS("height", mobile ? "44px" : "32px");
-  await expect(zoom).toHaveCSS("padding-left", "12px");
+  // 共有 Button sm の iconOnly（32px の正方形、タッチ端末は 44px。#5522）。
+  const side = mobile ? "44px" : "32px";
+  await expect(zoom).toHaveCSS("height", side);
+  await expect(zoom).toHaveCSS("width", side);
+  await expect(zoom).toHaveCSS("padding-left", "0px");
   await expect(zoom.locator("svg")).toHaveCSS("width", "16px");
   if (originalMode) await scope.getByTestId(originalMode).click();
 }

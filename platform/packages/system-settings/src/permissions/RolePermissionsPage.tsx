@@ -809,7 +809,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                           <div key={group} className="rounded-md border border-border p-3">
                             <div className="mb-2 grid gap-2">
                               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                                <h3 className="text-sm font-semibold">{group}</h3>
+                                <h3 className="text-sm font-semibold text-fg">{group}</h3>
                                 {/* 群の中の有効な権限の件数（継承を含む）。見出しの名前には含めない。 */}
                                 <span className="text-xs tabular-nums text-fg-muted">
                                   {formatMessage(m.permissionCountOfTotal, {
