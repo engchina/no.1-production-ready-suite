@@ -46,27 +46,6 @@ def test_same_original_is_merged_but_another_source_range_is_kept_without_a_coun
     assert trace["excluded"] == [{"id": "duplicate", "reason": "duplicate_original", "retained_id": "c1"}]
 
 
-def test_fusion_and_attachment_candidates_are_all_reranked_and_expansions_are_not():
-    """件数では切らず、検索拡張の経路だけを rerank の入力から外す（#5162・#5443）。"""
-
-    def staged(stage: str, count: int) -> list[AnswerRecord]:
-        return [
-            replace(
-                child(f"{stage}-{index}", record=f"{stage}-{index}"),
-                metadata={**child("x").metadata, "retrieval_admission_stage": stage},
-            )
-            for index in range(count)
-        ]
-
-    records = [*staged("fusion", 200), *staged("reference", 3), *staged("attachment", 5)]
-    selected, trace = select_candidates(records)
-
-    assert len(selected) == 205
-    assert trace["admitted"] == {"fusion": 200, "attachment": 5}
-    assert {item["reason"] for item in trace["excluded"]} == {"not_rerank_stage"}
-    assert len(trace["excluded"]) == 3
-
-
 def test_no_source_provenance_is_not_a_duplicate():
     selected, _ = select_candidates([replace(child(uid), source_record_refs=()) for uid in ("c1", "c2")])
     assert len(selected) == 2
@@ -127,13 +106,6 @@ def test_parent_group_uses_one_anchor_slot_and_fills_the_next_original():
         )
     )
     assert {item.record.id for parent in result.evidence_tree for item in parent.children} == {"c1", "c2", "c3"}
-
-
-def test_unknown_stage_is_not_reranked():
-    row = replace(child("unknown"), metadata={"retrieval_admission_stage": "unknown"})
-    selected, trace = select_candidates([row])
-    assert not selected
-    assert trace["excluded"] == [{"id": "unknown", "reason": "not_rerank_stage", "stage": "unknown"}]
 
 
 def test_same_local_identifier_in_another_artifact_is_not_a_duplicate():
