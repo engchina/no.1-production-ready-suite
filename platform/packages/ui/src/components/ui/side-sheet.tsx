@@ -186,7 +186,7 @@ export function SideSheet({
         onKeyDown={onPanelKeyDown}
       >
         <div className="flex shrink-0 items-center gap-2 border-b border-border py-2 pl-4 pr-2">
-          <h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">
+          <h2 id={titleId} className="min-w-0 flex-1 truncate text-base font-semibold text-fg">
             {title}
           </h2>
           {pager ? <ListDetailPager {...pager} /> : null}

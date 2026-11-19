@@ -43,14 +43,14 @@
 .pr-button--secondary.pr-button--danger-tone { border-color: var(--color-danger-fg); }
 @media (hover: hover) {
   .pr-button--primary:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--color-accent-emphasis-hover); }
-  .pr-button--danger:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--color-danger-emphasis) 88%, #000); }
+  .pr-button--danger:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--color-danger-emphasis-hover); }
   .pr-button--secondary:hover:not(:disabled):not([aria-disabled="true"]),
   .pr-button--ghost:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--color-surface-hover); }
   .pr-button--danger-tone:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--color-danger-subtle); color: var(--color-danger-fg); }
 }
 .pr-button:active:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--color-fg) 12%, var(--color-surface)); }
 .pr-button--primary:active:not(:disabled):not([aria-disabled="true"]) { background: var(--color-accent-emphasis-active); }
-.pr-button--danger:active:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--color-danger-emphasis) 76%, #000); }
+.pr-button--danger:active:not(:disabled):not([aria-disabled="true"]) { background: var(--color-danger-emphasis-active); }
 .pr-button[aria-pressed="true"] {
   border-color: var(--color-accent-fg);
   background: var(--color-accent-muted);

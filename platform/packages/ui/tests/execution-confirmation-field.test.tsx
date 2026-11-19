@@ -75,12 +75,14 @@ describe("ExecutionConfirmationField", () => {
     expect(tag).toContain('spellCheck="false"');
   });
 
-  it("フォーカス: lg（--control-height-lg）の入力欄で、フォーカス中は枠線を danger 色にし、ring を重ねない", () => {
+  it("フォーカス: lg（--control-height-lg）の共有の入力欄で、フォーカスの輪を残し、枠線を danger 色にする", () => {
     const tag = input(render());
-    expect(tag).toContain("h-[var(--control-height-lg)]");
-    expect(tag).toContain("border border-border-control bg-surface");
-    expect(tag).toContain("focus:border-danger-fg");
-    expect(tag).not.toMatch(/focus(-visible)?:ring-/);
+    expect(tag).toContain("min-h-[var(--control-height-lg)]");
+    expect(tag).toContain("border-border-control");
+    expect(tag).toContain("focus-visible:outline-2");
+    expect(tag).toContain("focus-visible:border-danger-fg");
+    expect(tag).toContain("disabled:bg-surface-disabled");
+    expect(tag).not.toMatch(/focus(-visible)?:(ring-|outline-none)/);
   });
 
   it("不一致: aria-invalid を付け、説明文とバッジだけを danger 色にする", () => {
@@ -134,7 +136,7 @@ describe("ExecutionConfirmationField", () => {
         </Button>
       ),
     });
-    expect(withActions).toMatch(/<div class="flex min-w-0 flex-col gap-\[8px\] border-t border-border pt-3[^"]*"><button/);
+    expect(withActions).toMatch(/<div class="flex min-w-0 flex-col gap-2 border-t border-border pt-3[^"]*"><button/);
     expect(input(withActions)).toContain("disabled");
     expect(render()).not.toContain("border-t border-border pt-3");
   });

@@ -435,7 +435,7 @@ export function SecurityManagementStatusBar({
             >
               <dt className="text-xs font-medium text-fg-muted">{metric.label}</dt>
               <dd
-                className={cn("mt-1 font-semibold tabular-nums text-fg", metric.emphasis && "text-lg")}
+                className={cn("mt-1 font-semibold tabular-nums text-fg", metric.emphasis && "text-xl")}
                 data-testid={metric.testId}
               >
                 {metric.value}

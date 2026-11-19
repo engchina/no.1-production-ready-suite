@@ -347,9 +347,9 @@ export function FormActionBar({
       data-testid={testId}
       // e2e がフォームの確定の行を見分ける目印（画面に貼り付かず、PageHeader に重ならないことを確かめる。#2715）。
       data-form-action-bar=""
-      className="grid min-w-0 gap-[8px] border-t border-border pt-4"
+      className="grid min-w-0 gap-2 border-t border-border pt-4"
     >
-      <div className="flex min-w-0 flex-col gap-[8px] sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         {primaryActions.map((action) => (
           <VisibleAction key={action.id} action={action} variant="primary" />
         ))}

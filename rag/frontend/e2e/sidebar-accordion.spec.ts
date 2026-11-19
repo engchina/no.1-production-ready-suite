@@ -107,4 +107,28 @@ test.describe("サイドナビのセクション折りたたみ", { tag: "@respo
     await expandSidebarSections(sidebar, "取込・検索・回答設定");
     await expect(sidebar.getByRole("link", { name: "検索方法" })).toBeVisible();
   });
+
+  test("折りたたんだサイドバーの吹き出しは、固定の PageHeader に隠れず、共有の Tooltip と同じ枠で出る（#5522）", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await mockApi(page);
+    await page.goto("/settings/appearance");
+    const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+    await sidebar.getByRole("button", { name: "サイドバーを折りたたむ" }).click();
+    await sidebar.getByRole("link", { name: "チャット", exact: true }).hover();
+    const tooltip = page.getByRole("tooltip", { includeHidden: true }).filter({ hasText: /^チャット$/ });
+    await expect(tooltip).toBeVisible();
+    // 吹き出しの中心で一番上にある要素が吹き出し自身（見出しの下に潜らない）。
+    const topmost = await tooltip.evaluate((el: HTMLElement) => {
+      const rect = el.getBoundingClientRect();
+      // 吹き出しは pointer-events: none（elementFromPoint が飛ばす）なので、判定の間だけ当たるようにする。
+      el.style.pointerEvents = "auto";
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      el.style.pointerEvents = "";
+      const header = document.querySelector("#pr-main header")!.getBoundingClientRect();
+      return { onTop: el === hit || el.contains(hit), overHeader: rect.top < header.bottom && rect.right > header.left };
+    });
+    expect(topmost).toEqual({ onTop: true, overHeader: true });
+    await expect(tooltip).toHaveCSS("border-top-width", "1px");
+    await page.screenshot({ path: testInfo.outputPath("collapsed-sidebar-tooltip.png"), clip: { x: 0, y: 0, width: 640, height: 240 } });
+  });
 });

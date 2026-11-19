@@ -186,7 +186,7 @@ export function ChatAttachmentSettingsPage({
               </div>
               <section className="space-y-2" aria-labelledby="chat-attachments-limits-title">
                 <div className="space-y-1">
-                  <h3 id="chat-attachments-limits-title" className="text-sm font-medium text-fg">
+                  <h3 id="chat-attachments-limits-title" className="text-sm font-semibold text-fg">
                     {m.limitsTitle}
                   </h3>
                   <p className="text-xs text-fg-muted">{m.limitsDescription}</p>

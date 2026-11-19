@@ -399,7 +399,7 @@ function McpEndpointsCard({
                       <span className="text-xs text-fg-muted">{kindLabel}</span>
                       <span className="flex min-w-0 flex-wrap items-center gap-2">
                         <code
-                          className="min-w-0 break-all rounded-md bg-surface-sunken px-3 py-2 font-mono text-sm text-fg"
+                          className="min-w-0 break-all rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-sm text-fg"
                           data-testid={`api-keys-endpoint-${row.product}-${line.kind}`}
                         >
                           {line.url}

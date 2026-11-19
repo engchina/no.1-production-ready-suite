@@ -63,7 +63,7 @@ export function BlockedPageNotice({
         >
           <Icon size={24} />
         </div>
-        <h1 id={titleId} className="mt-5 text-lg font-semibold text-fg">
+        <h1 id={titleId} className="mt-5 text-xl font-semibold text-fg">
           {title}
         </h1>
         {message ? (

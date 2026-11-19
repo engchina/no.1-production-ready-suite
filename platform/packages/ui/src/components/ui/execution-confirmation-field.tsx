@@ -3,6 +3,7 @@ import { Fragment, type ReactNode, useId } from "react";
 import { surfaceTintFor } from "../../lib/surface-tint";
 import { cn } from "../../lib/utils";
 
+import { fieldControlClassName } from "./control-size";
 import { RequiredBadge } from "./required-badge";
 
 /** 確認語欄の文言。製品は翻訳済みの文字列を渡す（未指定の項目は既定の日本語）。 */
@@ -159,7 +160,8 @@ export function ExecutionConfirmationField({
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         // 下の操作行（実行・取消）は lg なので、入力欄も lg（40px、タッチ端末は 44px。#613）。
-        className="h-[var(--control-height-lg)] w-full rounded-control border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted focus:border-danger-fg disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
+        // フォーカスの輪・無効の面は共有の入力欄と同じ（outline-none で消さない）。枠だけ危険の色にする。
+        className={fieldControlClassName({ size: "lg", className: "focus-visible:border-danger-fg" })}
         placeholder={placeholder ?? expectedLabel}
         disabled={disabled}
         required
@@ -175,7 +177,7 @@ export function ExecutionConfirmationField({
         {helper}
       </p>
       {actions ? (
-        <div className="flex min-w-0 flex-col gap-[8px] border-t border-border pt-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:flex-wrap sm:items-center">
           {actions}
         </div>
       ) : null}
