@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Sequence
+import re
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from pr_backend_core.bounded_calls import Attempt, BoundedCaller
@@ -23,6 +24,10 @@ from app.rag.wiki_models import WikiLinkJudgments, WikiPage, link_schema
 from app.rag.wiki_navigation import Handles
 
 WIKI_LINK_SCHEMA_VERSION = "1"
+
+# 保存先の列（rag_wiki_links.reason VARCHAR2(800)）のバイト数。短い ID を見出しへ置き換えると
+# 理由が長くなるので、保存の前にこの長さへ収める。
+WIKI_LINK_REASON_BYTES = 800
 
 WIKI_LINK_PROMPT = """## Step 1: 起点と候補の原文単位を読む
 sources は起点の原文単位、candidates は別の文書の原文単位です。
@@ -66,6 +71,38 @@ def link_query_text(page: WikiPage) -> str:
     ).strip()
 
 
+def _heading(page: WikiPage, document_names: Mapping[str, str]) -> str:
+    """利用者が読む単位の指し方（文書名と章節。Wiki の図・回答の補助情報と同じ）。"""
+    unit = page.unit
+    parts = [document_names.get(unit.document_id, ""), *unit.section_path]
+    return "「" + (" > ".join(part for part in parts if part) or unit.title) + "」"
+
+
+def _handle_pattern(handles: Iterable[str]) -> re.Pattern[str]:
+    """短い ID と完全に一致する所だけ。前後が英数字・下線の所（``C12`` の中の ``C1``）は除く。"""
+    return re.compile(
+        r"(?<![0-9A-Za-z_])(?:"
+        + "|".join(re.escape(handle) for handle in sorted(handles, key=len, reverse=True))
+        + r")(?![0-9A-Za-z_])"
+    )
+
+
+def _readable_reason(reason: str, headings: Mapping[str, str]) -> str:
+    """理由の中の、この呼び出しが付けた短い ID だけを単位の見出しへ置き換える。
+
+    短い ID は要求の中だけの記号で、保存した後に読む利用者・モデルには意味が無い。
+    """
+    text = reason
+    if reason and headings:
+        text = _handle_pattern(headings).sub(lambda match: headings[match.group(0)], reason)
+    data = text.encode("utf-8")
+    if len(data) <= WIKI_LINK_REASON_BYTES:
+        return text
+    ellipsis = "…"
+    room = WIKI_LINK_REASON_BYTES - len(ellipsis.encode("utf-8"))
+    return data[:room].decode("utf-8", errors="ignore") + ellipsis
+
+
 def _card(handle: str, page: WikiPage, original_chars: int) -> dict[str, object]:
     return {
         "unit_id": handle,
@@ -84,6 +121,7 @@ async def judge_links(
     batch_size: int,
     original_chars: int,
     max_input_chars: int,
+    document_names: Mapping[str, str],
     authorize: Callable[[], Awaitable[None]],
     checkpoint: Callable[
         [Sequence[WikiLinkItem], Sequence[str], Sequence[WikiLinkDecision]], Awaitable[None]
@@ -95,7 +133,8 @@ async def judge_links(
     ``checkpoint`` は（判定した起点・候補の単位 ID・関連）を受け取り、判定した起点と候補の組の
     関連を置き換える。入力が ``max_input_chars`` を超える組と、切断・JSON・schema の不正は起点を
     二分して取り直し、単一の起点でも不正なら失敗にする（案内の構築と同じ。#4977）。
-    返す値はモデルの呼び出しの回数。
+    理由に残った短い ID は、``document_names``（文書 ID → 文書名）で作る見出しへ置き換えて
+    保存する（#5514）。返す値はモデルの呼び出しの回数。
     """
     calls = 0
 
@@ -162,12 +201,27 @@ async def judge_links(
         if output is None:
             await split(targets)
             return
+        headings = {
+            **{handle: _heading(item.source, document_names) for handle, item in sources.items()},
+            **{handle: _heading(page, document_names) for handle, page in options.items()},
+        }
+        # 同じ記号が渡した資料（章節・案内・原文）にもあれば、理由のその記号が短い ID か資料の語かを
+        # 決められないので置き換えない。
+        material = json.dumps(
+            [
+                {key: value for key, value in card.items() if key != "unit_id"}
+                for card in [*data["sources"], *data["candidates"]]
+            ],
+            ensure_ascii=False,
+        )
+        for handle in set(_handle_pattern(headings).findall(material)):
+            headings.pop(handle)
         decisions = [
             WikiLinkDecision(
                 source_unit_id=sources[entry.unit_id].source.unit.unit_id,
                 target_unit_id=options[link.unit_id].unit.unit_id,
                 relation=link.relation,
-                reason=link.reason,
+                reason=_readable_reason(link.reason, headings),
             )
             for entry in output.items
             for link in entry.links

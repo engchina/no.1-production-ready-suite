@@ -416,18 +416,21 @@ class WikiJobs:
                 progressed = True
 
             async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
-                items = await self._link_items(store, document_id, knowledge_bases, settings)
+                forward, reverse, names = await self._link_items(
+                    store, document_id, knowledge_bases, settings
+                )
                 skip = set(done)
                 model, caller = self.model_factory(settings), make_ai_caller(settings, "wiki_build")
                 # 前向き（この文書 → ほか）と逆向き（ほか → この文書）は起点と候補が入れ替わるので、
                 # 同じ判定に混ぜない。
-                for group in items:
+                for group in (forward, reverse):
                     await judge_links(
                         [item for item in group if item.key not in skip],
                         model=model,
                         batch_size=settings.rag_wiki_link_batch_units,
                         original_chars=settings.rag_wiki_link_source_chars,
                         max_input_chars=settings.rag_wiki_build_input_chars,
+                        document_names=names,
                         authorize=authorize,
                         checkpoint=checkpoint,
                         caller=caller,
@@ -465,29 +468,34 @@ class WikiJobs:
 
     async def _link_items(
         self, store: Any, document_id: str, knowledge_bases: Sequence[str], settings: Settings
-    ) -> tuple[list[WikiLinkItem], list[WikiLinkItem]]:
-        """前向きと逆向きの候補の組を DB だけで作る（モデルは呼ばない）。
+    ) -> tuple[list[WikiLinkItem], list[WikiLinkItem], dict[str, str]]:
+        """前向きと逆向きの候補の組と、範囲の目録の文書名（文書 ID → 名前）を DB だけで作る。
 
-        起点の単位ごとに、属する KB ごとのほかの文書の案内をベクトル・全文で探し、上位を候補にする。
-        逆向きは、候補になったほかの文書の単位を起点に、その単位を見つけたこの文書の単位を候補にする。
+        モデルは呼ばない。起点の単位ごとに、属する KB ごとのほかの文書の案内をベクトル・全文で探し、
+        上位を候補にする。逆向きは、候補になったほかの文書の単位を起点に、その単位を見つけたこの
+        文書の単位を候補にする。文書名は関連の理由の見出しに使う（#5514）。
         """
         compiler, limit = compiler_fingerprint(settings), settings.rag_wiki_link_candidates
-        own = await store.pages(
-            await store.resolve(
-                {
-                    "knowledge_base_id": ",".join(knowledge_bases),
-                    "document_id": document_id,
-                    "include_superseded": "true",
-                },
-                compiler,
-            )
+        own_scope = await store.resolve(
+            {
+                "knowledge_base_id": ",".join(knowledge_bases),
+                "document_id": document_id,
+                "include_superseded": "true",
+            },
+            compiler,
         )
+        own = await store.pages(own_scope)
         own = [page for page in own if link_query_text(page)]
         # KB ごとの範囲は 1 回だけ決め、起点の単位ごとの候補の検索で使い回す（#5499）。
         scopes = [
             await store.resolve({"knowledge_base_id": kb, "include_superseded": "true"}, compiler)
             for kb in (knowledge_bases if own else ())
         ]
+        names = {
+            str(row["document_id"]): str(row.get("title") or "")
+            for scope in (own_scope, *scopes)
+            for row in scope.catalog
+        }
         texts = [link_query_text(page) for page in own]
         embedder = self.embedder_factory(settings)
         vectors: list[Sequence[float]] = []
@@ -533,7 +541,7 @@ class WikiJobs:
             )
             for uid, (found, sources) in found_by.items()
         ]
-        return forward, reverse
+        return forward, reverse, names
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
