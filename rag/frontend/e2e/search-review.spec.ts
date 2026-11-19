@@ -309,30 +309,32 @@ test("検索・回答プロファイルの読み込み中は読み込み中の�
 test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
-  const advanced = page.getByRole("button", { name: /詳細条件/ });
-  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  // 開閉は共有の Disclosure（<details>）。状態は data-state で見る（#5522）。
+  const advanced = page.getByTestId("search-advanced-toggle");
+  const advancedPanel = page.getByTestId("search-advanced");
+  await expect(advancedPanel).toHaveAttribute("data-state", "closed");
 
   await advanced.click();
-  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await expect(advancedPanel).toHaveAttribute("data-state", "open");
   await expect(page.locator("#search-top-k")).toHaveCount(0);
-  await page.locator('button[aria-controls="search-classification-filters"]').click();
+  await page.getByTestId("search-classification-toggle").click();
   await page.locator("#search-as_of").fill("2026-04-01");
   await page.screenshot({ path: testInfo.outputPath("search-default-conditions.png") });
 
   // 条件があっても閉じられる。閉じている間は「設定中」で条件が効いていることを示す。
   await advanced.click();
-  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await expect(advancedPanel).toHaveAttribute("data-state", "closed");
   await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveCount(0);
   await expect(advanced).toContainText("設定中");
 
   // キーボード（Space / Enter）でも開閉できる。
   await advanced.focus();
   await page.keyboard.press("Space");
-  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await expect(advancedPanel).toHaveAttribute("data-state", "open");
   await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
   await expect(advanced).not.toContainText("設定中");
   await page.keyboard.press("Enter");
-  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await expect(advancedPanel).toHaveAttribute("data-state", "closed");
   await expectNoPageOverflow(page);
 });
 
@@ -355,7 +357,7 @@ test("検索のボタンは詳細条件の下にあり、実行中は同じ位�
 
   // 配置: フォームの最後（詳細条件の下）。
   const button = page.getByTestId("search-run-stop");
-  const advanced = page.getByRole("button", { name: "詳細条件" });
+  const advanced = page.getByTestId("search-advanced-toggle");
   const [buttonBox, advancedBox] = await Promise.all([button.boundingBox(), advanced.boundingBox()]);
   if (!buttonBox || !advancedBox) throw new Error("ボタンの位置を計測できません。");
   expect(buttonBox.y).toBeGreaterThan(advancedBox.y + advancedBox.height);
@@ -681,7 +683,7 @@ test("旧取得件数の URL・保存値を無視し、検索・再試行に top
   await page.goto("/search?question=sample&search_answer_profile_id=bv-1&top_k=100");
   await expect(page).toHaveURL(/\/search$/);
   await expect(page.locator("#search-query")).toHaveValue("sample");
-  await page.getByRole("button", { name: /詳細条件/ }).click();
+  await page.getByTestId("search-advanced-toggle").click();
   await expect(page.locator("#search-top-k")).toHaveCount(0);
   await page.getByRole("button", { name: "検索", exact: true }).click();
   const alert = page.getByRole("alert").filter({ hasText: "タイムアウトしました" });

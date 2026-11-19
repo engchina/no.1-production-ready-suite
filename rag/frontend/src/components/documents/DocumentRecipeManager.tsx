@@ -408,7 +408,7 @@ export function DocumentRecipeManager({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold text-fg">{recipeName(selected)}</h3>
+              <h3 className="text-sm font-semibold text-fg">{recipeName(selected)}</h3>
               {/* 実行中の工程のスピナーは下の工程の丸が出す（同じ処理のスピナーは 1 つ。#416）。 */}
               <RecipeStatusBadge recipe={selected} spin={false} />
               {selected.needs_reprocessing ? (

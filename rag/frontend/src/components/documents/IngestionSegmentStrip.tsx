@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { Circle, CircleCheck, CircleDot, CircleMinus, CircleX, type LucideIcon } from "lucide-react";
-import { Tooltip } from "@production-ready/ui";
+import { Tooltip, surfaceTintFor } from "@production-ready/ui";
 
 import type { IngestionParseSegmentStatus } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -93,6 +93,7 @@ export function IngestionSegmentStrip({ view }: { view: SegmentStripView }) {
                 tabIndex={itemIndex === index ? 0 : -1}
                 aria-label={item.label}
                 data-status={item.status}
+                data-surface-tint={surfaceTintFor(STATUS_CLASS[item.status])}
                 data-testid="ingestion-segment-strip-item"
                 onFocus={() => setActiveIndex(itemIndex)}
                 className={cn(

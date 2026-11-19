@@ -1,5 +1,5 @@
 import {
-  Button,
+  FormActionBar,
   FormStatus,
   SearchableSelectField,
   StatusBadge,
@@ -169,49 +169,53 @@ export function DocumentVersionEditor({ document: doc }: { document: DocumentDet
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          size="md"
-          icon={Save}
-          onClick={() => submit(selectedId || null)}
-          loading={save.isPending && lastAction === "set"}
-          disabled={!isDirty || !selectedId || save.isPending}
-        >
-          {t("documents.version.save")}
-        </Button>
-        {superseded ? (
-          <Button
-            type="button"
-            size="md"
-            variant="secondary"
-            icon={Undo2}
-            onClick={() => submit(null)}
-            loading={save.isPending && lastAction === "clear"}
-            disabled={save.isPending}
-          >
-            {t("documents.version.clear")}
-          </Button>
-        ) : null}
-        {save.isSuccess && !isDirty && lastAction ? (
-          <FormStatus
-            tone="success"
-            message={
-              lastAction === "set" ? t("documents.version.saved") : t("documents.version.cleared")
-            }
-          />
-        ) : null}
-        {save.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              save.error instanceof ApiError
-                ? save.error.message
-                : t("documents.version.saveError")
-            }
-          />
-        ) : null}
-      </div>
+      {/* 確定の行は共有の FormActionBar（保存 → 置き換えを解除。間隔・375px の縦積みは部品に任せる。#5522）。 */}
+      <FormActionBar
+        ariaLabel={t("documents.version.actions")}
+        primaryActions={[
+          {
+            id: "save",
+            label: t("documents.version.save"),
+            icon: Save,
+            onClick: () => submit(selectedId || null),
+            loading: save.isPending && lastAction === "set",
+            disabled: !isDirty || !selectedId || save.isPending,
+          },
+        ]}
+        secondaryActions={
+          superseded
+            ? [
+                {
+                  id: "clear",
+                  label: t("documents.version.clear"),
+                  icon: Undo2,
+                  onClick: () => submit(null),
+                  loading: save.isPending && lastAction === "clear",
+                  disabled: save.isPending,
+                },
+              ]
+            : []
+        }
+        status={
+          save.isError ? (
+            <FormStatus
+              tone="danger"
+              message={
+                save.error instanceof ApiError
+                  ? save.error.message
+                  : t("documents.version.saveError")
+              }
+            />
+          ) : save.isSuccess && !isDirty && lastAction ? (
+            <FormStatus
+              tone="success"
+              message={
+                lastAction === "set" ? t("documents.version.saved") : t("documents.version.cleared")
+              }
+            />
+          ) : null
+        }
+      />
     </section>
   );
 }

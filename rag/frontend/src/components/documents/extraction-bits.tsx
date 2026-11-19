@@ -73,10 +73,13 @@ export function InfoChip({
   icon: Icon,
   label,
   title,
+  mono = false,
 }: {
   icon?: LucideIcon;
   label: string;
   title?: string;
+  /** ID などの識別子を等幅（`font-mono`）で出す。 */
+  mono?: boolean;
 }) {
   return (
     <span
@@ -84,7 +87,7 @@ export function InfoChip({
       title={title ?? label}
     >
       {Icon ? <Icon size={14} className="shrink-0" aria-hidden /> : null}
-      <span className="truncate">{label}</span>
+      <span className={mono ? "truncate font-mono" : "truncate"}>{label}</span>
     </span>
   );
 }

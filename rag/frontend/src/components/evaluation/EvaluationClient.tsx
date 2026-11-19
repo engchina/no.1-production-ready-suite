@@ -1267,7 +1267,7 @@ function ReferenceMetrics({ metrics }: { metrics: EvaluationMetrics }) {
             <Card key={metric} data-testid={`evaluation-reference-${metric}`}>
               <CardContent className="space-y-1.5 pt-5">
                 <p className="text-xs font-medium text-fg-muted">{referenceMetricLabel(metric)}</p>
-                <p className="tnum text-lg font-semibold text-fg">{formatMetricValue(metricValue(metrics, metric))}</p>
+                <p className="tnum text-xl font-semibold text-fg">{formatMetricValue(metricValue(metrics, metric))}</p>
                 {count !== null ? (
                   <p className="tnum text-xs text-fg-muted">{t("evaluation.metric.caseCount", { count })}</p>
                 ) : null}

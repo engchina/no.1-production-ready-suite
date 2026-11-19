@@ -770,7 +770,7 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
           <article key={`${citation.chunk_id}-${index}`} data-surface-tint={targeted ? "accent" : undefined} className={cn("rounded-lg border border-border p-3", targeted && "border-accent-emphasis bg-accent-subtle")}>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-fg">{citation.file_name ?? citation.document_id}</p>
+                <p className={cn("truncate text-sm font-medium text-fg", !citation.file_name && "font-mono")}>{citation.file_name ?? citation.document_id}</p>
                 <p className="mt-0.5 text-xs text-fg-muted">{[citation.section_title, citation.page_number ? t("feedback.detail.page", { count: citation.page_number }) : null].filter(Boolean).join(" / ") || "—"}</p>
               </div>
               {targeted ? <StatusBadge variant="info" icon={false} label={t("feedback.detail.targetCitation")} className="shrink-0" /> : null}

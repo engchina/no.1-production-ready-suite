@@ -416,7 +416,7 @@ function BatchMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border border-border bg-surface-sunken px-3 py-2">
       <p className="text-xs text-fg-muted">{label}</p>
-      <p className="tnum mt-1 text-lg font-semibold text-fg">{value}</p>
+      <p className="tnum mt-1 text-xl font-semibold text-fg">{value}</p>
     </div>
   );
 }

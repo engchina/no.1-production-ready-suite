@@ -2343,7 +2343,7 @@ function PhaseJobRow({
             {embeddingLabel}
           </span>
         ) : null}
-        <span className="tnum ml-auto break-all text-xs text-fg-muted" title={job.id}>
+        <span className="ml-auto break-all font-mono text-xs text-fg-muted" title={job.id}>
           {t("flow.jobs.jobId", { id: shortJobId(job.id) })}
         </span>
       </div>
