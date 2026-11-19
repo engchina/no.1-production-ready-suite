@@ -93,6 +93,7 @@ def _run(
                 "abcdef",
                 ["docling"],
                 settings,
+                chunk_top_k=20,
             )
         with bind_trace_observer(observer.observe):
             return answer_question_result(
@@ -100,6 +101,7 @@ def _run(
                 "abcdef",
                 ["docling"],
                 settings,
+                chunk_top_k=20,
             )
 
 
@@ -183,6 +185,7 @@ def test_chosen_conditions_are_kept_out_of_the_terms_step(tmp_path: Path, scope:
             "abcdef",
             ["docling"],
             settings,
+            chunk_top_k=20,
             scope=scope,
         )
     steps = _steps(result)

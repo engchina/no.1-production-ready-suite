@@ -125,6 +125,7 @@ def _answer_with_stubs(
             "abcdef",
             ["docling"],
             settings,
+            chunk_top_k=20,
         )
     return result, reported
 

@@ -34,7 +34,7 @@ class AnswerExecutionTests(unittest.TestCase):
         """実環境に接続せず、通常 RAG を既定として回答を作る。"""
         options = {}
         options.update(kwargs)
-        return generation.answer_question_result(question, "abcdef", ["docling"], self.settings, **options)
+        return generation.answer_question_result(question, "abcdef", ["docling"], self.settings, chunk_top_k=20, **options)
 
     def assert_order(self, display, *sections):
         """文字列または見出し pattern の出現順を確認する。"""

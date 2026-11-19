@@ -73,6 +73,7 @@ class QuestionPlanningTests(unittest.TestCase):
                 "abcdef",
                 ["docling"],
                 settings,
+                chunk_top_k=20,
             )
 
         prompt = parse.call_args.args[1]

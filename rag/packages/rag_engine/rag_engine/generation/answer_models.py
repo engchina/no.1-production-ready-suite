@@ -7,7 +7,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from rag_engine.chunking import DEFAULT_RETRIEVAL_TOP_K
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.context_builder import ContextEvidence, ContextParentEvidence
 from rag_engine.retrieval.query_identity import dedupe_queries
@@ -190,7 +189,7 @@ class RetrievalQueryPlan:
     llm_expansion_queries: tuple[str, ...] = ()
     lexical_queries: tuple[str, ...] = ()
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN
-    top_k: int = DEFAULT_RETRIEVAL_TOP_K
+    top_k: int = field(kw_only=True)
     metadata_filter: dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:

@@ -251,6 +251,7 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                     "abcdef",
                     ["docling"],
                     settings,
+                    chunk_top_k=20,
                 )
 
         tokenized_questions = [call.args[0] for call in tokenize.call_args_list]
