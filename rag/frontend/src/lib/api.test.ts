@@ -1584,16 +1584,16 @@ it("結果 Excel の取得は job ID と入力を POST し、ファイル名を�
   expect(file.fileName).toBe("evaluation_results.xlsx");
 });
 
-it("構造グラフの節点のチャンクは節点・版・ページを指定して読む", async () => {
-  const page = { items: [{ chunk_id: "doc:set:3", chunk_index: 3, page_number: 2 }], total: 26, offset: 25 };
-  const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: page, error_messages: [], warning_messages: [] }));
+it("Wiki の図の木は文書・親の章節・ページを指定して読み、文書の直下は parent を付けない", async () => {
+  const page = { items: [], total: 0, offset: 25 };
+  const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({ data: page, error_messages: [], warning_messages: [] }));
   vi.stubGlobal("fetch", fetchMock);
 
-  const result = await api.getStructureGraphEntityChunks("kb/1", "doc 1", "set", "a".repeat(64), 25, 50);
+  expect(await api.getWikiGraphTree("kb/1", "doc 1", "a".repeat(64), 25, 50)).toEqual(page);
+  await api.getWikiGraphTree("kb/1", "doc 1", null, 0, 100);
 
-  expect(result).toEqual(page);
-  const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
-  const url = new URL(path, "http://localhost");
-  expect(url.pathname).toBe("/api/knowledge-bases/kb%2F1/graph/documents/doc%201/entity-chunks");
-  expect(Object.fromEntries(url.searchParams)).toEqual({ chunk_set_id: "set", node_id: "a".repeat(64), offset: "25", limit: "50" });
+  const urls = fetchMock.mock.calls.map(([path]) => new URL(path as string, "http://localhost"));
+  expect(urls[0].pathname).toBe("/api/knowledge-bases/kb%2F1/wiki/graph/documents/doc%201/tree");
+  expect(Object.fromEntries(urls[0].searchParams)).toEqual({ offset: "25", limit: "50", parent: "a".repeat(64) });
+  expect(Object.fromEntries(urls[1].searchParams)).toEqual({ offset: "0", limit: "100" });
 });

@@ -53,7 +53,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-文書構造索引（文書と章・節の見出しのつながり）は、どの層の設定にも持たない。KB 詳細の操作で手動で構築し、ナレッジベースの文書構造グラフで見る（#5484。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
+文書構造索引（文書と章・節の見出しのつながり）は、どの層の設定にも持たない。KB 詳細の構築と図は #5502 で外した（KB の図は Wiki の案内の「Wiki の図」。#5484。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
 
 検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB は `query` の値を持たない（#4784）。
 

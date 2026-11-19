@@ -1,102 +1,134 @@
-import structureLevelsReader from "./fixtures/structure-levels-reader.json";
 import { findLoadingStandardViolations } from "../../../platform/packages/ui/e2e/loading-checks";
-import { expect, type Page, test } from "./fixtures/test";
+import { expect, type Page, type TestInfo, test } from "./fixtures/test";
 import { expectedControlHeight, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+
+// KB 詳細の Wiki の図（#5502）。文書構造索引のカードは KB 詳細から外し、図は Wiki ナビゲーションのカードの最下部に置く。
 
 function ok(json: unknown) {
   return { data: json, error_messages: [], warning_messages: [] };
 }
 
 const nullIngestion = {
-  preprocess_profile: null,
-  parser_adapter_backend: null,
-  parser_docling_enabled: null,
-  parser_unstructured_enabled: null,
-  chunking_strategy: null,
-  chunk_size: null,
-  chunk_overlap: null,
-  chunk_min_chars: null,
-  chunk_context_header_enabled: null,
-  field_extraction_enabled: null,
-  vision_enabled: null,
-  navigation_summary_enabled: null,
-  auto_parse_after_preprocess_enabled: null,
-  auto_chunk_after_extract_enabled: null,
-  auto_index_after_chunk_enabled: null,
-};
-const nullQuery = {
-  guardrail_policy: null,
+  preprocess_profile: null, parser_adapter_backend: null, parser_docling_enabled: null, parser_unstructured_enabled: null,
+  chunking_strategy: null, chunk_size: null, chunk_overlap: null, chunk_min_chars: null, chunk_context_header_enabled: null,
+  field_extraction_enabled: null, vision_enabled: null, navigation_summary_enabled: null, auto_parse_after_preprocess_enabled: null,
+  auto_chunk_after_extract_enabled: null, auto_index_after_chunk_enabled: null,
 };
 const kbDetail = {
-  id: "kb-1",
-  name: "社内規程",
-  description: "就業規則",
-  status: "ACTIVE",
-  default_search_mode: "hybrid",
-  document_count: 1,
-  indexed_document_count: 1,
-  error_document_count: 0,
-  searchable_chunk_count: 10,
-  created_at: "2026-06-15T00:00:00Z",
-  updated_at: "2026-06-15T00:00:00Z",
-  archived_at: null,
-  retrieval_config: {},
-  adapter_config: { version: 1, ingestion: nullIngestion, query: nullQuery },
+  id: "kb-1", name: "合成のナレッジベース", description: "合成の説明", status: "ACTIVE", default_search_mode: "hybrid",
+  document_count: 2, indexed_document_count: 2, error_document_count: 0, searchable_chunk_count: 10,
+  created_at: "2026-06-15T00:00:00Z", updated_at: "2026-06-15T00:00:00Z", archived_at: null, retrieval_config: {},
+  adapter_config: { version: 1, ingestion: nullIngestion, query: { guardrail_policy: null } },
 };
 
-const EMPTY_OVERVIEW = { status: "empty", documents: [], edges: [] };
 const ID = (value: string) => value.padEnd(64, "0");
-const structureDocument = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
-  id, document_id: `doc-${id}`, chunk_set_id: `set-${id}`, name, has_sections: true, outgoing_count: 0, incoming_count: 0, ...extra,
+const EMPTY = { status: "empty", documents: [] };
+const OVERVIEW = {
+  status: "ok",
+  documents: [
+    { id: "doc-a", document_id: "doc-a", name: "合成文書A.pdf", unit_count: 3, outgoing_links: 1, incoming_links: 0 },
+    { id: "doc-b", document_id: "doc-b", name: "合成文書B.pdf", unit_count: 1, outgoing_links: 0, incoming_links: 1 },
+  ],
+};
+const S1 = ID("a1"), UA1 = ID("aa1"), UA2 = ID("aa2"), UA3 = ID("aa3"), SB = ID("b1"), UB1 = ID("bb1");
+const node = (id: string, kind: "section" | "unit", label: string, parent: string | null, documentId: string, extra: Record<string, unknown> = {}) => ({
+  id, kind, label, path: kind === "section" ? [label] : ["第 1 章"], document_id: documentId, document_name: `${documentId}.pdf`, parent_id: parent,
+  child_count: 0, unit_count: kind === "unit" ? 1 : 0, outgoing_links: 0, incoming_links: 0, outgoing: [], summary: "", ...extra,
 });
-const treeNode = (id: string, label: string, parent: { id: string } | null, documentId: string, extra: Record<string, unknown> = {}) => ({
-  id, name: label, label, type: "section", document_id: `doc-${documentId}`, document_name: `${documentId}.pdf`, chunk_set_id: `set-${documentId}`,
-  parent_id: parent?.id ?? null, virtual: false, child_count: 0, ...extra,
-});
+// 文書 A: 第 1 章 > 単位 a1（a2 は a1 の例外、b1 は a1 の前提）・a2（a3 は a2 の続く手順）・a3。文書 B: 付録 > 単位 b1。
+const TREES: Record<string, ReturnType<typeof node>[]> = {
+  "doc-a:root": [node(S1, "section", "第 1 章", null, "doc-a", { child_count: 3, unit_count: 3, outgoing_links: 1 })],
+  [`doc-a:${S1}`]: [
+    node(UA1, "unit", "第 1 章", S1, "doc-a", { summary: "合成の手続の原則の案内。", outgoing_links: 1, outgoing: [
+      { target: UA2, relation: "exception", scope: "same_document" },
+      { target: UB1, relation: "prerequisite", scope: "cross_document" },
+    ] }),
+    node(UA2, "unit", "第 1 章", S1, "doc-a", { summary: "合成の手続の例外の案内。", outgoing: [{ target: UA3, relation: "continuation", scope: "same_document" }] }),
+    node(UA3, "unit", "第 1 章", S1, "doc-a", { summary: "合成の手続の後続の案内。" }),
+  ],
+  "doc-b:root": [node(SB, "section", "付録", null, "doc-b", { child_count: 1, unit_count: 1, incoming_links: 1 })],
+  [`doc-b:${SB}`]: [node(UB1, "unit", "付録", SB, "doc-b", { summary: "合成の前提の案内。", incoming_links: 1, path: ["付録"] })],
+};
+const LOCATIONS: Record<string, { id: string; index: number }[]> = {
+  [UA3]: [{ id: S1, index: 0 }, { id: UA3, index: 2 }],
+  [UB1]: [{ id: SB, index: 0 }, { id: UB1, index: 0 }],
+};
+const UNIT_A1 = {
+  id: UA1, label: "第 1 章", path: ["第 1 章"], document_id: "doc-a", document_name: "合成文書A.pdf",
+  context: "合成の手続の原則の案内。", possible_questions: ["合成の手続はいつ使えますか？"], unresolved: ["合成の期限は本文にありません。"],
+  source_chunks: [{ chunk_id: "chunk-a1", chunk_index: 0 }],
+  relations: [
+    { direction: "outgoing", relation: "exception", scope: "same_document", unit: { id: UA2, label: "第 1 章", path: ["第 1 章"], document_id: "doc-a", document_name: "合成文書A.pdf" } },
+    { direction: "outgoing", relation: "prerequisite", scope: "cross_document", reason: "合成の判定の理由。", unit: { id: UB1, label: "付録", path: ["付録"], document_id: "doc-b", document_name: "合成文書B.pdf" } },
+  ],
+};
 
-/** 章節の木の合成の応答（親 → 子。parent が無ければ文書の直下）。 */
-async function mockTree(page: Page, trees: Record<string, ReturnType<typeof treeNode>[]>, references: Record<string, unknown[]> = {}) {
-  await page.route(/\/api\/knowledge-bases\/kb-1\/graph\/documents\/[^/]+\/tree/, (route) => {
+interface Calls { requests: string[] }
+
+async function mockKb(page: Page, overview: unknown): Promise<Calls> {
+  const calls: Calls = { requests: [] };
+  page.on("request", (request) => {
+    const url = request.url();
+    if (/\/api\/knowledge-bases\/kb-1\/(graph|structure-index|wiki\/graph)/.test(url)) calls.requests.push(new URL(url).pathname);
+  });
+  await page.route("**/api/documents**", (route) => route.fulfill({ json: ok({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) }));
+  // generic を先に、具体ルートを後に登録（Playwright は後勝ち）。
+  await page.route("**/api/knowledge-bases**", (route) => route.fulfill({ json: ok({ items: [kbDetail], total: 1, limit: 20, offset: 0, has_next: false }) }));
+  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok(kbDetail) }));
+  await page.route("**/api/knowledge-bases/kb-1/extraction-fields", (route) => route.fulfill({ json: ok({ inherits_default: true, fields: [] }) }));
+  await page.route(/\/api\/knowledge-bases\/kb-1\/wiki(\?.*)?$/, (route) => route.fulfill({ json: ok({
+    enabled: false, counts: { READY: 2 }, blocked_reason: null,
+    documents: { items: [], total: 2, limit: 25, offset: 0, has_next: false },
+  }) }));
+  await page.route("**/api/knowledge-bases/kb-1/wiki/graph", (route) => route.fulfill({ json: ok(overview) }));
+  await page.route(/\/api\/knowledge-bases\/kb-1\/wiki\/graph\/documents\/[^/]+\/tree/, (route) => {
     const url = new URL(route.request().url());
-    const key = url.searchParams.get("parent") ?? `root:${url.searchParams.get("chunk_set_id")}`;
-    const all = trees[key] ?? [];
+    const documentId = url.pathname.split("/").at(-2)!;
+    const all = TREES[`${documentId}:${url.searchParams.get("parent") ?? "root"}`] ?? [];
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const limit = Number(url.searchParams.get("limit") ?? 100);
     return route.fulfill({ json: ok({ items: all.slice(offset, offset + limit), total: all.length, offset }) });
   });
-  await page.route(/\/api\/knowledge-bases\/kb-1\/graph\/documents\/[^/]+\/references/, (route) =>
-    route.fulfill({ json: ok({ items: references[new URL(route.request().url()).searchParams.get("chunk_set_id") ?? ""] ?? [] }) })
-  );
+  await page.route(/\/api\/knowledge-bases\/kb-1\/wiki\/graph\/documents\/[^/]+\/locate/, (route) => {
+    const nodeId = new URL(route.request().url()).searchParams.get("node") ?? "";
+    return route.fulfill({ json: ok({ path: LOCATIONS[nodeId] ?? [] }) });
+  });
+  await page.route("**/api/knowledge-bases/kb-1/wiki/graph/search**", (route) => {
+    const q = new URL(route.request().url()).searchParams.get("q") ?? "";
+    const items = q.includes("後続") ? [{ id: UA3, label: "第 1 章", document_id: "doc-a", document_name: "合成文書A.pdf" }] : [];
+    return route.fulfill({ json: ok({ items, total: items.length, offset: 0 }) });
+  });
+  await page.route("**/api/knowledge-bases/kb-1/wiki/graph/units/**", (route) => {
+    const unitId = new URL(route.request().url()).pathname.split("/").at(-1);
+    const detail = unitId === UA1 ? UNIT_A1 : { ...UNIT_A1, id: unitId, context: "合成の別の案内。", relations: [], possible_questions: [], unresolved: [] };
+    return route.fulfill({ json: ok(detail) });
+  });
+  await page.route("**/api/documents/doc-a/chunks/chunk-a1", (route) => route.fulfill({ json: ok({
+    chunk_id: "chunk-a1", document_id: "doc-a", file_name: "合成文書A.pdf", text: "合成の原文の本文。", score: null, metadata: {},
+  }) }));
+  return calls;
 }
 
-async function mockKb(
-  page: Page,
-  graph: unknown,
-  warnings: () => string[] = () => []
-): Promise<void> {
-  await page.route("**/api/documents**", (route) =>
-    route.fulfill({ json: ok({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
-  );
-  // generic を先に、具体ルートを後に登録(Playwright は後勝ち)。
-  await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({ json: ok({ items: [kbDetail], total: 1, limit: 20, offset: 0, has_next: false }) })
-  );
-  await page.route("**/api/knowledge-bases/kb-1/graph**", (route) =>
-    route.fulfill({ json: { ...ok(graph), warning_messages: warnings() } })
-  );
-  await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [], total: 0, offset: 0 }) }));
-  await page.route("**/api/knowledge-bases/kb-1/graph/references**", (route) => route.fulfill({ json: ok({ items: [], offset: 0, has_more: false, direction: "outgoing" }) }));
-  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", (route) => route.fulfill({ json: ok(null) }));
-  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok(kbDetail) }));
-  // KB の抽出する項目（#548）。上の wildcard の一覧を返さない。
-  await page.route("**/api/knowledge-bases/kb-1/extraction-fields", (route) =>
-    route.fulfill({ json: ok({ inherits_default: true, fields: [] }) })
-  );
+function disclosure(page: Page) {
+  return page.getByTestId("wiki-graph-disclosure");
 }
 
-// 文書構造グラフの開閉の見出し（共有の Disclosure の <summary>。#1135）。見出しは開閉で変わらない（#5480）。
-function disclosureSummary(page: Page) {
-  return page.getByTestId("knowledge-base-graph-disclosure").locator("summary");
+/** 合成の mock の画面を ./tmp/wiki-graph/ に集めるための出力（WIKI_GRAPH_SHOTS があるときだけ）。 */
+async function shot(page: Page, testInfo: TestInfo, name: string) {
+  const path = process.env.WIKI_GRAPH_SHOTS ? `${process.env.WIKI_GRAPH_SHOTS}/${testInfo.project.name}-${name}.png` : testInfo.outputPath(`${name}.png`);
+  await page.screenshot({ path, fullPage: false });
+}
+
+async function openGraph(page: Page) {
+  await disclosure(page).locator("summary").click();
+  const graph = page.getByRole("region", { name: "Wiki の図" });
+  await expect(graph).toBeVisible();
+  return graph;
+}
+
+/** 図の節点を押す（React Flow の節点の ID）。 */
+async function clickNode(page: Page, id: string) {
+  await page.locator(`#wiki-graph .react-flow__node[data-id="${id}"]`).click();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -104,78 +136,20 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("文書構造グラフは KB の全文書を出す", async ({ page }) => {
-  await mockKb(page, {
-    status: "ok",
-    documents: [structureDocument("a", "合成文書A.pdf"), structureDocument("b", "合成文書B.pdf")],
-    edges: [{ id: "a:b", source: "a", target: "b", count: 3 }],
-  });
-
-  // 画面を開いただけでは graph を読まず、見出しを押して開いてから読む（#5453）。
-  const graphRequests: string[] = [];
-  page.on("request", (request) => {
-    if (/\/api\/knowledge-bases\/[^/]+\/graph\//.test(request.url())) graphRequests.push(request.url());
-  });
-
+// 開閉の領域は共有の Disclosure の card（カードの中なので sunken）で、見出しは開閉で変えない固定の名詞（#397 / #5480）。
+test("Wiki の図は Wiki のカードの最下部の sunken の card で、開いたときだけ読み、キーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const calls = await mockKb(page, EMPTY);
   await page.goto("/knowledge-bases/kb-1");
-  const summary = disclosureSummary(page);
+
+  // 文書構造索引のカードは無く、旧の /graph/*・/structure-index/* を呼ばない。
+  await expect(page.getByText("文書構造索引の構築")).toHaveCount(0);
+  const card = page.getByTestId("knowledge-base-wiki");
+  const summary = card.getByTestId("wiki-graph-disclosure").locator("summary");
   await expect(summary).toBeVisible();
-  await page.waitForLoadState("networkidle");
-  expect(graphRequests).toEqual([]);
-  await summary.click();
-
-  const graph = page.getByRole("region", { name: "文書構造グラフ" });
-  await expect(graph).toBeVisible();
-  expect(graphRequests.some((url) => url.includes("/graph/overview"))).toBe(true);
-  await expect(graph.getByText("合成文書A", { exact: true })).toBeVisible();
-  await expect(graph.getByText("合成文書B", { exact: true })).toBeVisible();
-  // 文書の間の参照は操作なしで見え、件数を出す。
-  await expect(graph.locator(".react-flow__edge-text")).toHaveText("参照 3 件");
-
-  // ホイールは NL2SQL の図と同じく図の拡大・縮小で、ページを動かさない。
-  const main = page.locator("main");
-  await graph.scrollIntoViewIfNeeded();
-  const mainScrollTop = await main.evaluate((element) => element.scrollTop);
-  const viewport = graph.locator(".react-flow__viewport");
-  const before = await viewport.getAttribute("style");
-  await graph.hover();
-  await page.mouse.wheel(0, 600);
-  await expect.poll(() => viewport.getAttribute("style")).not.toBe(before);
-  expect(await main.evaluate((element) => element.scrollTop)).toBe(mainScrollTop);
-});
-
-test("関係情報が無い KB は空状態を出す", async ({ page }) => {
-  await mockKb(page, EMPTY_OVERVIEW);
-
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-
-  await expect(page.getByText("文書構造索引がまだありません。")).toBeVisible();
-  // 画面に無い操作（再取込）ではなく、文書の詳細の処理レシピの「再処理」を案内する。
-  const hint = page.locator("#knowledge-base-graph");
-  await expect(hint).toContainText("「既存文書に構築」");
-  await expect(hint).toContainText("再処理");
-  await expect(hint).not.toContainText("再取込");
-});
-
-// 文書構造索引の構築のカードは「説明 → 区切り線 → [既存文書に構築] → 文書構造グラフ」の順（#5453。保存は #5484 で削除）。
-// 開閉の領域は共有の Disclosure の card（カードの中なので sunken）で、見出しは開閉で変えない固定の名詞、
-// 補足は見出しの下（description）。見出しの行は card の高さ（lg。タッチ端末は 44px）以上（#397 / #5480）。
-test("文書構造グラフは構築のカードの最下部の sunken の card で、見出しを変えずにキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockKb(page, EMPTY_OVERVIEW);
-  await page.goto("/knowledge-bases/kb-1");
-
-  const expected = await expectedControlHeight(page, "lg");
-  const card = page.getByTestId("knowledge-base-structure-settings");
-  const disclosure = card.getByTestId("knowledge-base-graph-disclosure");
-  const summary = disclosure.locator("summary");
-  await expect(summary).toBeVisible();
-  await expect(summary).toContainText("文書構造グラフ");
-  // 補足は閉じていても見出しの下に見える。
-  await expect(summary).toContainText("このナレッジベースの文書と、その章・節・表・図の見出しのつながりを図で見られます。");
+  await expect(summary).toContainText("Wiki の図");
+  await expect(summary).toContainText("保存済みの案内の文書・章節・原文単位と、一緒に読む単位のつながり");
   const closedSummaryText = await summary.innerText();
-  // 枠付きの card で、地はカードの中の sunken。
-  const surface = await disclosure.evaluate((element) => {
+  const surface = await disclosure(page).evaluate((element) => {
     const probe = document.createElement("div");
     probe.className = "bg-surface-sunken";
     document.body.append(probe);
@@ -185,896 +159,137 @@ test("文書構造グラフは構築のカードの最下部の sunken の card 
     return { sunken: style.backgroundColor === sunken, border: parseFloat(style.borderTopWidth) };
   });
   expect(surface).toEqual({ sunken: true, border: 1 });
-  const actions = card.getByRole("group", { name: "文書構造索引の構築", exact: true }).first();
-  const build = actions.getByRole("button", { name: "既存文書に構築", exact: true });
-  await expect(actions.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
-  await expect(build).toBeVisible();
-  const existing = card.getByText("取込では作りません。必要なときに「既存文書に構築」で構築します。", { exact: false });
-  await expect(existing).toBeVisible();
-  await expect(card).not.toContainText("構造拡張");
-  const search = page.getByRole("heading", { name: "Wiki ナビゲーション", exact: true });
-  await expect(search).toBeVisible();
-  const [existingBox, buildBox, graphBox, cardBox, searchBox] = await Promise.all([
-    existing.boundingBox(), build.boundingBox(), summary.boundingBox(), card.boundingBox(), search.boundingBox(),
+  // カードの最下部（文書ごとの構築状態の後）に置く。
+  const [documentsBox, summaryBox, cardBox] = await Promise.all([
+    card.getByTestId("knowledge-base-wiki-documents").boundingBox(), summary.boundingBox(), card.boundingBox(),
   ]);
-  expect(existingBox!.y + existingBox!.height).toBeLessThan(buildBox!.y);
-  expect(buildBox!.y + buildBox!.height).toBeLessThan(graphBox!.y);
-  expect(graphBox!.y + graphBox!.height).toBeLessThan(cardBox!.y + cardBox!.height);
-  expect(cardBox!.y + cardBox!.height).toBeLessThan(searchBox!.y);
-  expect(Math.round(graphBox!.height)).toBeGreaterThanOrEqual(expected);
+  expect(documentsBox!.y + documentsBox!.height).toBeLessThan(summaryBox!.y);
+  expect(summaryBox!.y + summaryBox!.height).toBeLessThan(cardBox!.y + cardBox!.height);
+  expect(Math.round(summaryBox!.height)).toBeGreaterThanOrEqual(await expectedControlHeight(page, "lg"));
+  await page.waitForLoadState("networkidle");
+  expect(calls.requests).toEqual([]);
   await expectNoPageOverflow(page);
-  await summary.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("knowledge-base-graph-closed.png"), fullPage: false });
 
-  // キーボード（Enter）で開閉でき、見出しの文言は開いても変わらない。
+  // キーボード（Enter）で開閉でき、見出しの文言は開いても変わらない。空のときは構築の案内を出す。
   await summary.focus();
   await page.keyboard.press("Enter");
-  await expect(disclosure).toHaveAttribute("open", "");
-  await expect(page.getByText("文書構造索引がまだありません。")).toBeVisible();
+  await expect(disclosure(page)).toHaveAttribute("open", "");
+  await expect(page.getByText("Wiki を構築すると、文書・章節・案内のつながりを図で見られます。")).toBeVisible();
   await expect(summary).toBeFocused();
   expect(await summary.innerText()).toBe(closedSummaryText);
-  await page.screenshot({ path: testInfo.outputPath("knowledge-base-graph-open.png"), fullPage: false });
+  expect(calls.requests).toEqual(["/api/knowledge-bases/kb-1/wiki/graph"]);
+  await summary.scrollIntoViewIfNeeded();
+  await shot(page, testInfo, "wiki-graph-empty");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#knowledge-base-graph")).toHaveCount(0);
-  await expect(disclosure).not.toHaveAttribute("open", "");
+  await expect(page.locator("#wiki-graph")).toHaveCount(0);
   expect(await summary.innerText()).toBe(closedSummaryText);
 });
 
-// 関係情報を読み取れないときは、「関係情報がまだありません」と区別して、原因と再試行を出す（#4217）。
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 900 },
-  { name: "mobile", width: 375, height: 812 },
-]) {
-  test(`関係情報を取得できないときは空と区別して出し、再試行で取り直す (${viewport.name})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.clock.install();
-    await mockKb(page, EMPTY_OVERVIEW);
-    let failing = true;
-    let graphRequests = 0;
-    await page.route("**/api/knowledge-bases/kb-1/graph**", async (route) => {
-      graphRequests += 1;
-      if (!failing) return route.fallback();
-      return route.fulfill({
-        status: 503,
-        json: {
-          data: null,
-          error_messages: ["データの読み取りがタイムアウトしました。"],
-          warning_messages: [],
-          error_code: "database_read_timeout",
-        },
-      });
-    });
-
-    await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page).click();
-    await expect.poll(() => graphRequests).toBe(1);
-    // 自動の再試行（間隔を空けて 2 回）を進める。
-    await page.clock.runFor(5_100);
-    await expect.poll(() => graphRequests).toBe(2);
-    await page.clock.runFor(15_100);
-    await expect.poll(() => graphRequests).toBe(3);
-
-    const section = page.locator("#knowledge-base-graph");
-    await expect(section.getByRole("alert")).toContainText("読み取りがタイムアウトしました");
-    await expect(section.getByText("文書構造索引がまだありません。")).toHaveCount(0);
-    await expectNoPageOverflow(page);
-
-    // 復旧したら再試行で取り直し、本当に空なら空の状態を出す。
-    failing = false;
-    await section.getByRole("button", { name: "再試行" }).click();
-    await expect(section.getByText("文書構造索引がまだありません。")).toBeVisible();
-    await expect(section.getByRole("alert")).toHaveCount(0);
-  });
-}
-
-// React Flow の操作部と辺のラベルはテーマに合わせ、帰属リンクは表示しない。
-// React Flow の既定の配色は colorMode="dark" のときだけダークになり、ダークテーマでも白い地のまま出ていた。
-// platform/packages/ui の integrations/react-flow.css が React Flow の変数をトークンに結び付ける。
-for (const theme of ["light", "dark"] as const) {
-  test(`文書構造グラフの操作はテーマに合わせ帰属リンクを表示しない (${theme})`, { tag: "@responsive" }, async ({
-    page,
-  }, testInfo) => {
-    await page.addInitScript((value) => {
-      window.localStorage.setItem(
-        "production-ready-rag.ui",
-        JSON.stringify({ state: { theme: value }, version: 0 })
-      );
-    }, theme);
-    await mockKb(page, {
-      status: "ok",
-      documents: [structureDocument("a", "合成文書A.pdf"), structureDocument("b", "合成文書B.pdf")],
-      edges: [{ id: "a:b", source: "a", target: "b", count: 2 }],
-    });
-
-    await page.goto("/knowledge-bases/kb-1");
-    await expect
-      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
-      .toBe(theme === "dark");
-    await disclosureSummary(page).click();
-
-    const region = page.getByRole("region", { name: "文書構造グラフ" });
-    await expect(region.getByText("合成文書A", { exact: true })).toBeVisible();
-
-    // トークンの色を同じ場所（図の中）で解決して、React Flow の部品の色と比べる。
-    const colors = await region.evaluate((element) => {
-      const probe = document.createElement("div");
-      element.append(probe);
-      const token = (name: string) => {
-        probe.style.backgroundColor = `var(${name})`;
-        return getComputedStyle(probe).backgroundColor;
-      };
-      const tokens = {
-        surface: token("--color-surface"),
-        raised: token("--color-surface-raised"),
-        fg: token("--color-fg"),
-        fgMuted: token("--color-fg-muted"),
-      };
-      probe.remove();
-      const style = (selector: string) => {
-        const target = element.querySelector(selector);
-        return target ? getComputedStyle(target) : null;
-      };
-      const buttons = [...element.querySelectorAll("button")].filter(button => ["拡大", "縮小", "全体表示"].includes(button.getAttribute("aria-label") ?? ""));
-      return {
-        tokens,
-        buttonCount: buttons.length,
-        buttonBackgrounds: buttons.map((button) => getComputedStyle(button).backgroundColor),
-        buttonColors: buttons.map((button) => getComputedStyle(button).color),
-        edgeLabelBackground: style(".react-flow__edge-textbg")?.fill ?? null,
-      };
-    });
-    expect(colors.buttonCount).toBe(3);
-    // 共通 ghost Button は透明な面を通して親の surface を表示する。
-    expect(new Set(colors.buttonBackgrounds)).toEqual(new Set(["rgba(0, 0, 0, 0)"]));
-    expect(new Set(colors.buttonColors)).toEqual(new Set([colors.tokens.fg]));
-    await region.screenshot({ path: testInfo.outputPath(`graph-attribution-${theme}.png`) });
-    await expect(region.locator(".react-flow__attribution")).toHaveCount(0);
-    const viewport = region.locator(".react-flow__viewport");
-    const beforeZoom = await viewport.getAttribute("style");
-    await region.getByRole("button", { name: "拡大", exact: true }).click();
-    await expect(viewport).not.toHaveAttribute("style", beforeZoom!);
-    await region.getByRole("button", { name: "全体表示", exact: true }).click();
-    if (colors.edgeLabelBackground !== null) {
-      expect(colors.edgeLabelBackground).toBe(colors.tokens.surface);
-    }
-    // 参照の辺のラベルは常に出す。
-    await expect(region.locator(".react-flow__edge-textbg")).toHaveCount(1);
-    await expectNoPageOverflow(page);
-  });
-}
-
-
-for (const count of [30, 80]) {
-  test(`${count} 文書の総覧を全体表示できる`, { tag: "@responsive" }, async ({ page }) => {
-    await mockKb(page, {
-      status: "ok",
-      documents: Array.from({ length: count }, (_, index) => structureDocument(`node-${index}`, `合成文書 ${index}.pdf`)),
-      edges: [{ id: "node-0:node-1", source: "node-0", target: "node-1", count: 4 }],
-    });
-    await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page).click();
-    const graph = page.getByRole("region", { name: "文書構造グラフ" });
-    await expect(graph.locator(".react-flow__node")).toHaveCount(count);
-    const fits = () => graph.evaluate((region) => {
-      const bounds = region.getBoundingClientRect();
-      return [...region.querySelectorAll(".react-flow__node")].every((node) => {
-        const box = node.getBoundingClientRect();
-        return box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom;
-      });
-    });
-    await expect.poll(fits).toBe(true);
-    await graph.getByRole("button", { name: "全体表示", exact: true }).click();
-    await expect.poll(fits).toBe(true);
-    // 英語の内部名を出さない（#3028）。
-    await expect(graph.locator(".react-flow__edge-text").first()).toHaveText("参照 4 件");
-    // 小地図の viewBox は有限の値で、ノードが描かれる（#4078）。375px は小地図を出さない。
-    const minimap = graph.locator(".react-flow__minimap svg");
-    await expect(graph.locator(".react-flow__minimap-node")).toHaveCount(count);
-    const viewBox = (await minimap.getAttribute("viewBox"))!.split(" ").map(Number);
-    expect(viewBox).toHaveLength(4);
-    expect(viewBox.every(Number.isFinite)).toBe(true);
-    expect(viewBox[2]).toBeGreaterThan(0);
-    expect(viewBox[3]).toBeGreaterThan(0);
-    if (page.viewportSize()!.width >= 640) await expect(minimap).toBeVisible();
-    else await expect(minimap).toBeHidden();
-    await graph.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: test.info().outputPath(`graph-${count}.png`) });
-    await expectNoPageOverflow(page);
-  });
-}
-
-test("長い共通の接頭辞を持つ章節は末尾の見出しで区別でき、完全な名前を詳細で読める", { tag: "@responsive" }, async ({ page }) => {
-  // #4079: 文書名が長いと、先頭から出す表示は行数の上限で同じ文字列に見えていた。
-  const common = "合成の長い文書名".repeat(40);
-  const paths = [`${common} > 第1章 > 第1条`, `${common} > 第1章 > 第2条`, `${common} > 第2章 > 第1条`];
-  const document = structureDocument("doc", `${common}.pdf`);
-  await mockKb(page, { status: "ok", documents: [document], edges: [] });
-  await mockTree(page, {
-    "root:set-doc": paths.map((name, index) => ({
-      ...treeNode(`section-${index}`, name.split(" > ").at(-1)!, null, "doc"),
-      name,
-    })),
-  });
+// 読み取れないときは「まだありません」と区別して、原因と再試行を出す（#4217）。
+test("Wiki の図を読めないときは空と区別して出し、再試行で取り直す", { tag: "@responsive" }, async ({ page }) => {
+  await mockKb(page, EMPTY);
+  let failing = true;
+  await page.route("**/api/knowledge-bases/kb-1/wiki/graph", (route) => failing
+    ? route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の読み取りの失敗です。"], warning_messages: [] } })
+    : route.fallback());
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const graph = page.locator("#knowledge-base-graph");
-  const documentNode = graph.locator('.react-flow__node[data-id="doc"]');
-  await documentNode.focus();
-  await page.keyboard.press("Enter");
-  const node = (index: number) => graph.locator(`.react-flow__node[data-id="section-${index}"]`);
-  await expect(node(0)).toBeVisible();
+  await disclosure(page).locator("summary").click();
+  const section = page.locator("#wiki-graph");
+  await expect(section.getByRole("alert")).toContainText("合成の読み取りの失敗です。", { timeout: 15_000 });
+  await expect(section.getByText("Wiki を構築すると")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  failing = false;
+  await section.getByRole("button", { name: "再試行" }).click();
+  await expect(section.getByText("Wiki を構築すると、文書・章節・案内のつながりを図で見られます。")).toBeVisible();
+});
 
-  const label = async (index: number) => (await node(index).innerText()).split("\n").slice(1).join(" / ");
-  expect(await label(0)).toBe("第1条 / … > 第1章");
-  expect(await label(1)).toBe("第2条 / … > 第1章");
-  expect(await label(2)).toBe("第1条 / … > 第2章");
+test("文書 → 章節 → 原文単位を段階的に開き、関係を矢印と種類の文字で表示中の単位の間に引く", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const calls = await mockKb(page, OVERVIEW);
+  await page.goto("/knowledge-bases/kb-1");
+  const graph = await openGraph(page);
 
-  // 完全な名前は title（ポインター）と選択の詳細（タッチ・キーボード）で読める。
-  await expect(node(1).locator("[title]").first()).toHaveAttribute("title", paths[1]!);
-  await expect(node(1)).toHaveAttribute("aria-label", `章・節：${paths[1]}`);
-  await node(1).focus();
-  await page.keyboard.press("Enter");
-  await expect(graph.getByRole("region", { name: "選択したノード" }).getByText(paths[1]!, { exact: true })).toBeVisible();
+  // 初めは文書だけ。文書をまたぐ関連は節点に件数で示し、線は引かない。
+  await expect(graph.getByText("合成文書A", { exact: true })).toBeVisible();
+  await expect(graph.getByText("他文書へ 1")).toBeVisible();
+  await expect(graph.locator(".react-flow__edge")).toHaveCount(0);
+  expect(calls.requests.some((path) => path.includes("/tree"))).toBe(false);
 
-  // 文書の節点はファイル名で（拡張子を外す）、階層のパスとして分けない。
-  await expect(documentNode.locator(".font-semibold")).toHaveText(common);
+  await clickNode(page, "doc-a");
+  await expect(graph.getByText("第 1 章", { exact: true })).toBeVisible();
+  expect(calls.requests.filter((path) => path.includes("/tree"))).toHaveLength(1);
+  await clickNode(page, S1);
+  await expect(graph.getByText("合成の手続の原則の案内。")).toBeVisible();
+  // 同じ文書の依存は種類の文字（例外・続く手順）で、向きは矢印（終点の marker）。文書 B は閉じているので前提の線は無い。
+  const labels = graph.locator(".react-flow__edge-text");
+  await expect(labels.filter({ hasText: "例外" })).toHaveCount(1);
+  await expect(labels.filter({ hasText: "続く手順" })).toHaveCount(1);
+  await expect(labels.filter({ hasText: "前提" })).toHaveCount(0);
+  await expect(graph.locator(".react-flow__edge-path[marker-end]").first()).toBeAttached();
+  // 凡例は関係の種類をアイコンと文字で示し、押すとその種類の線を隠す。
+  const legend = page.getByTestId("wiki-graph-legend");
+  await expect(legend.getByRole("button", { name: "例外" }).locator("svg")).toBeAttached();
+  await legend.getByRole("button", { name: "例外" }).click();
+  await expect(labels.filter({ hasText: "例外" })).toHaveCount(0);
+  await legend.getByRole("button", { name: "例外" }).click();
+
+  // 文書 B を開くと、文書をまたぐ関連の線も引く。
+  await clickNode(page, "doc-b");
+  await clickNode(page, SB);
+  await expect(labels.filter({ hasText: "前提" })).toHaveCount(1);
+  // 旧の文書構造索引の API は呼ばない。
+  expect(calls.requests.every((path) => path.startsWith("/api/knowledge-bases/kb-1/wiki/graph"))).toBe(true);
+  await expectNoPageOverflow(page);
+  // 開いても今の見え方を保つ。「全体表示」で開いた節点をすべて収める。
+  await graph.getByRole("button", { name: "全体表示", exact: true }).click();
+  await graph.scrollIntoViewIfNeeded();
+  await shot(page, testInfo, "wiki-graph-expanded");
+});
+
+test("単位を押すと案内と関係を横に出し、原文を開き、関係から図の位置へ移る", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, OVERVIEW);
+  await page.goto("/knowledge-bases/kb-1");
+  const graph = await openGraph(page);
+  await clickNode(page, "doc-a");
+  await clickNode(page, S1);
+  await clickNode(page, UA1);
+
+  const panel = page.getByTestId("wiki-graph-unit");
+  await expect(panel.getByText("AI が作った案内です。回答の根拠ではありません。")).toBeVisible();
+  await expect(panel.getByText("合成の手続の原則の案内。")).toBeVisible();
+  await expect(panel.getByText("合成の手続はいつ使えますか？")).toBeVisible();
+  await expect(panel.getByText("合成の期限は本文にありません。")).toBeVisible();
+  const relations = panel.getByRole("table", { name: "関係" });
+  await expect(relations.getByText("別の文書：合成文書B.pdf")).toBeVisible();
+  await expect(relations.locator('[data-relation="prerequisite"] svg')).toBeAttached();
+  const loading = await findLoadingStandardViolations(page);
+  expect(loading).toEqual([]);
+  // 広い画面では図の横、狭い画面（375px）では図の下に出す。
+  const [graphBox, panelBox] = await Promise.all([graph.boundingBox(), panel.boundingBox()]);
+  if (testInfo.project.name === "desktop") expect(panelBox!.x).toBeGreaterThanOrEqual(graphBox!.x + graphBox!.width);
+  else expect(panelBox!.y).toBeGreaterThanOrEqual(graphBox!.y + graphBox!.height);
+  await expectNoPageOverflow(page);
+  await panel.scrollIntoViewIfNeeded();
+  await shot(page, testInfo, "wiki-graph-unit");
+
+  await panel.getByRole("button", { name: "原文を開く" }).click();
+  // 既存の原文の表示（根拠の要約と原文のプレビュー）で、単位の原文を開く。
+  const sheet = page.getByRole("dialog", { name: "「第 1 章」の原文" });
+  await expect(sheet.getByRole("region", { name: "根拠の要約" })).toContainText("合成文書A.pdf");
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+
+  // 別の文書の単位の位置を確認すると、その文書の段を開いて選ぶ。
+  await relations.getByRole("row").filter({ hasText: "合成文書B.pdf" }).getByRole("button", { name: "図で位置を確認" }).click();
+  await expect(graph.getByText("合成の前提の案内。")).toBeVisible();
+  await expect(page.getByTestId("wiki-graph-unit").getByText("合成の別の案内。")).toBeVisible();
+});
+
+test("検索欄で原文単位へ移り、段を開いて選ぶ", { tag: "@responsive" }, async ({ page }) => {
+  await mockKb(page, OVERVIEW);
+  await page.goto("/knowledge-bases/kb-1");
+  const graph = await openGraph(page);
+  await graph.page().getByRole("searchbox", { name: "図の中を検索", exact: true }).fill("後続");
+  await expect(graph.getByText("合成の手続の後続の案内。")).toBeVisible();
+  await expect(page.getByTestId("wiki-graph-unit")).toBeVisible();
   await expectNoPageOverflow(page);
 });
-
-// 文書構造索引は取込で作らず、設定（全体・KB の上書き）も持たない。KB を編集できれば手動で構築できる（#5484）。
-test("構造索引は設定を持たずに手動で構築し、停止・再開の状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockKb(page, EMPTY_OVERVIEW);
-  let starts = 0;
-  let job: Record<string, unknown> | null = null;
-  const items = [
-    { document_id: "doc-a", name: "synthetic-a.txt", status: "MISSING", reason: null },
-    { document_id: "doc-b", name: "synthetic-b.txt", status: "CURRENT", reason: null },
-    { document_id: "doc-c", name: "synthetic-c.txt", status: "UNAVAILABLE", reason: "no_chunks" },
-  ];
-  // 構築器の版が変わった旧い索引は、計画の詳細に理由を出す（#4549）。ジョブの結果には含めない。
-  const planItems = [...items, { document_id: "doc-d", name: "synthetic-d.txt", status: "STALE", reason: "builder_changed" }];
-  const result = (status: string) => ({ job_id: "job-a", status, started_at: "2026-01-01T00:00:00Z", finished_at: null, items: [
-    { ...items[0], index_status: status === "COMPLETED" ? "CURRENT" : "MISSING", index_quality: status === "COMPLETED" ? "PARTIAL" : null, status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
-    { ...items[1], status: "SKIPPED", index_status: "CURRENT", reason: "current" }, { ...items[2], index_status: "UNAVAILABLE" },
-  ], counts: { PARTIAL: status === "COMPLETED" ? 1 : 0, QUEUED: status === "COMPLETED" ? 0 : 1, SKIPPED: 1, UNAVAILABLE: 1 }, total: 3, offset: 0, limit: 25 });
-  await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items: planItems, counts: { MISSING: 1, STALE: 1, CURRENT: 1, UNAVAILABLE: 1 }, total: 4, offset: 0, limit: 25 }) }));
-  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", async (route) => {
-    if (route.request().method() === "POST") {
-      if (new URL(route.request().url()).pathname.endsWith("/stop")) job = result("STOPPED");
-      else { starts++; job = result(route.request().postDataJSON().mode === "continue" ? "COMPLETED" : "RUNNING"); }
-    }
-    await route.fulfill({ json: ok(job) });
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  const settings = page.getByTestId("knowledge-base-structure-settings");
-  await expect(settings.getByText("取込では作りません。必要なときに「既存文書に構築」で構築します。", { exact: false })).toBeVisible();
-  await expect(settings.getByRole("combobox")).toHaveCount(0);
-  await expect(settings.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
-  await expect(settings.getByRole("button", { name: "既存文書に構築", exact: true })).toBeEnabled();
-  await settings.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("structure-card.png"), fullPage: false });
-  expect(starts).toBe(0);
-  await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
-  await expect(settings.getByText("未構築 1 件・更新が必要 1 件・構築済み 1 件・準備不足 1 件")).toBeVisible();
-  await expect(settings.getByRole("cell", { name: "構築の方式が更新されました。「不足・更新分を構築」で作り直してください。", exact: true })).toBeVisible();
-  await settings.getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
-  await expect(page.getByText("構築を開始しました。ページを離れても処理は続きます。", { exact: true })).toBeVisible();
-  await expect(settings.getByRole("button", { name: "停止", exact: true })).toBeVisible();
-  await settings.getByRole("button", { name: "停止", exact: true }).click();
-  await expect(settings.getByText("停止済み", { exact: true })).toBeVisible();
-  await page.reload();
-  await expect(settings.getByText("停止済み", { exact: true })).toBeVisible();
-  await settings.getByRole("button", { name: "残りを続ける", exact: true }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "残りを続ける", exact: true }).click();
-  await expect(settings.getByText("処理終了。文書ごとの結果を確認してください。")).toBeVisible();
-  await expect(settings.getByRole("cell", { name: "部分構築", exact: true })).toBeVisible();
-  await expect(settings.getByText("作成済みの章節情報をすべて表示します。章節情報がない箇所や、構築していない処理レシピの構造は表示されません。")).toBeVisible();
-  await expectNoPageOverflow(page);
-  await settings.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("structure-build-completed.png"), fullPage: false });
-  await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
-  await settings.getByRole("button", { name: "再構築", exact: true }).click();
-  const dialog = page.getByRole("alertdialog");
-  await expect(dialog.getByRole("heading", { name: "構築済みも含めて再構築しますか？" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "再構築", exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
-  expect(starts).toBe(2);
-});
-
-test("構造索引の操作の失敗を保持し、再試行で要求を再送する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockKb(page, EMPTY_OVERVIEW);
-  let jobAttempts = 0;
-  let job: Record<string, unknown> | null = null;
-  const item = { document_id: "doc-a", name: "synthetic-a.txt", status: "MISSING", reason: null };
-  await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items: [item], counts: { MISSING: 1 }, total: 1, offset: 0, limit: 25 }) }));
-  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", async (route) => {
-    if (route.request().method() === "POST") {
-      jobAttempts++;
-      if (jobAttempts === 1) { await route.fulfill({ status: 503, json: { detail: "一時的に開始できません。" } }); return; }
-      job = { job_id: "job-retry", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z", items: [{ ...item, status: "FAILED", index_status: "MISSING", reason: "processing_error" }], counts: { FAILED: 1 }, total: 1, offset: 0, limit: 25 };
-    }
-    await route.fulfill({ json: ok(job) });
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  const settings = page.getByTestId("knowledge-base-structure-settings");
-  await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
-  await settings.getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
-  await expect(settings.getByRole("button", { name: "再試行", exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("03-start-error.png") });
-  await settings.getByRole("button", { name: "再試行", exact: true }).click();
-  await expect.poll(() => jobAttempts).toBe(2);
-  await expect(settings.getByRole("cell", { name: /^失敗：/ })).toBeVisible();
-  await expect(settings.getByRole("button", { name: "失敗分を再試行", exact: true })).toBeVisible();
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("04-partial-failure.png") });
-});
-
-for (const width of [1280, 1920, 375]) {
-  for (const theme of ["light", "dark"] as const) {
-    test(`共通の文書構造画布で階層・検索・選択と種類切替を操作する ${width}px ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-      await page.setViewportSize({ width, height: 900 });
-      await page.addInitScript((state) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })), { theme, sidebarCollapsed: width === 375 });
-      const sectionA = treeNode("section-a", "合成章 A", null, "doc", { child_count: 2 });
-      const sectionB = treeNode("section-b", "合成章 B", null, "doc");
-      const table = treeNode("table", "合成表 A", sectionA, "doc", { type: "table_section" });
-      const article = treeNode("article", "合成条 A", sectionA, "doc", { virtual: true });
-      const extras = Array.from({ length: 10 }, (_, index) => treeNode(`extra-${index}`, `合成節 ${index}`, null, "doc"));
-      await mockKb(page, {
-        status: "ok",
-        documents: [structureDocument("doc", "合成文書A.pdf", { outgoing_count: 2 }), structureDocument("other", "合成文書B.pdf", { incoming_count: 2 })],
-        edges: [{ id: "doc:other", source: "doc", target: "other", count: 2 }],
-      });
-      await mockTree(page, { "root:set-doc": [sectionA, sectionB, ...extras], "section-a": [table, article] }, {
-        "set-doc": [{ source_set: "set-doc", target_set: "set-other", source_chain: ["section-a", "article"], target_chain: [], count: 2 }],
-      });
-      await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => {
-        const q = new URL(route.request().url()).searchParams.get("q");
-        return route.fulfill({ json: ok(q === "合成章 B"
-          ? { items: [{ id: "section-b", name: "合成章 B", type: "section", document_id: "doc-doc", document_name: "doc.pdf", chunk_set_id: "set-doc" }], total: 1, offset: 0 }
-          : { items: [], total: 0, offset: 0 }) });
-      });
-      await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: "section-b", index: 1 }] }) }));
-      await page.goto("/knowledge-bases/kb-1");
-      await disclosureSummary(page).click();
-      const graph = page.locator("#knowledge-base-graph");
-      const nodeOf = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
-      const documentNode = nodeOf("doc");
-      const sectionNode = nodeOf("section-a");
-      const edgeTexts = graph.locator(".react-flow__edge-text");
-      await expect(documentNode).toBeVisible();
-      await expect(nodeOf("other")).toBeVisible();
-      await expect(sectionNode).toHaveCount(0);
-      await expect(edgeTexts).toHaveText("参照 2 件");
-      // 文書を開くと章が出て、参照の辺は見えている章へ移り、件数を保つ。
-      await documentNode.focus();
-      await page.keyboard.press("Enter");
-      await expect(sectionNode).toBeVisible();
-      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("合成文書A.pdf");
-      await expect.poll(async () => (await documentNode.boundingBox())!.x < (await sectionNode.boundingBox())!.x).toBe(true);
-      await expect(graph.locator('.react-flow__edge[data-id="section-a:other"]')).toHaveCount(1);
-      await expect(edgeTexts).toHaveText("参照 2 件");
-      // 下の段を開くと、辺はさらに下の段へ移る。実体の無い段は参照の一覧を出さない。
-      await sectionNode.focus();
-      await page.keyboard.press("Enter");
-      await expect(nodeOf("article")).toBeVisible();
-      await expect(graph.locator('.react-flow__edge[data-id="article:other"]')).toHaveCount(1);
-      await nodeOf("article").focus();
-      await page.keyboard.press("Enter");
-      await expect(graph.getByText("この段に本文はありません。下の段を開いてください。", { exact: true })).toBeVisible();
-      // 閉じると辺は文書へ戻る。
-      await documentNode.focus();
-      await page.keyboard.press("Enter");
-      await expect(sectionNode).toHaveCount(0);
-      await expect(graph.locator('.react-flow__edge[data-id="doc:other"]')).toHaveCount(1);
-      await documentNode.focus();
-      await page.keyboard.press("Enter");
-      await expect(sectionNode).toBeVisible();
-      const search = graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true });
-      await expect(search).toHaveAccessibleDescription("このナレッジベース全体の文書名と章節名を検索します。");
-      await search.fill("合成章 B");
-      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("合成章 B");
-      await expect(nodeOf("section-b")).toBeInViewport();
-      await graph.getByRole("button", { name: "検索語をクリア", exact: true }).click();
-      const edge = graph.locator('.react-flow__edge[data-id="contains:section-b"]');
-      await edge.focus();
-      await page.keyboard.press("Space");
-      await expect(graph.getByRole("region", { name: "選択した関係" })).toContainText("合成文書A.pdf");
-      await expect(graph.getByRole("region", { name: "選択した関係" }).locator(".font-mono")).toHaveText("contains:section-b");
-      const kinds = graph.getByRole("combobox", { name: "種類", exact: true });
-      await kinds.click();
-      await page.getByRole("option", { name: "章・節", exact: true }).click();
-      await expect(documentNode).toHaveCount(0);
-      await expect(sectionNode).toBeVisible();
-      await kinds.click();
-      await page.getByRole("option", { name: "すべての種類", exact: true }).click();
-      const sectionLegend = graph.getByRole("group", { name: "表示する種類" }).getByRole("button", { name: "章・節", exact: true });
-      await sectionLegend.click();
-      await expect(sectionLegend).toHaveAttribute("aria-pressed", "false");
-      await expect(sectionNode).toHaveCount(0);
-      await sectionLegend.click();
-      await expect(sectionNode).toBeVisible();
-      await expectNoPageOverflow(page);
-      // 固定headerと長い親領域を避け、表示中の画布を確認してから撮る。
-      const canvas = graph.getByRole("region", { name: "文書構造グラフ", exact: true });
-      await page.setViewportSize({ width, height: 1200 });
-      await canvas.evaluate(element => element.scrollIntoView({ block: "center" }));
-      await expect(canvas.locator(".react-flow__node").first()).toBeVisible();
-      await canvas.getByRole("button", { name: "全体表示", exact: true }).click();
-      await canvas.screenshot({ path: testInfo.outputPath(`shared-structure-graph-${width}-${theme}.png`) });
-    });
-  }
-}
-
-test("明示参照の方向を分け、未表示の参照先を取得して位置を示す", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const sourceDocument = structureDocument("a".repeat(64), "合成文書A.pdf", { has_sections: false });
-  const targetDocument = structureDocument("c".repeat(64), "合成文書B.pdf");
-  const source = { id: sourceDocument.id, name: "合成文書A.pdf", type: "document", document_name: "合成文書A.pdf", document_id: sourceDocument.document_id, chunk_set_id: sourceDocument.chunk_set_id, section_path: null };
-  const target = { id: "b".repeat(64), name: "合成章 B", type: "section", document_name: "合成文書B.pdf", document_id: targetDocument.document_id, chunk_set_id: targetDocument.chunk_set_id, section_path: "合成章 B" };
-  await mockKb(page, { status: "ok", documents: [sourceDocument, targetDocument], edges: [{ id: "a:c", source: sourceDocument.id, target: targetDocument.id, count: 1 }] });
-  await mockTree(page, { [`root:${targetDocument.chunk_set_id}`]: [treeNode(target.id, "合成章 B", null, targetDocument.id)] }, {
-    [targetDocument.chunk_set_id]: [{ source_set: sourceDocument.chunk_set_id, target_set: targetDocument.chunk_set_id, source_chain: [], target_chain: [target.id], count: 1 }],
-  });
-  await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 0 }] }) }));
-  const directions: string[] = [];
-  await page.route("**/api/knowledge-bases/kb-1/graph/references**", (route) => {
-    const url = new URL(route.request().url());
-    const direction = url.searchParams.get("direction") ?? "outgoing";
-    directions.push(direction);
-    const isTarget = url.searchParams.get("node_id") === target.id;
-    return route.fulfill({ json: ok({ items: isTarget && direction === "outgoing" ? [] : [{ id: "ref-a", label: "合成章 Bを参照", status: "resolved", source, target }, { id: "ref-b", label: "同名の参照", status: "ambiguous", source, target: null }], offset: 0, has_more: false, direction }) });
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const node = page.locator(`.react-flow__node[data-id="${source.id}"]`);
-  await node.focus(); await page.keyboard.press("Enter");
-  const references = page.getByTestId("graph-references");
-  await expect(references.getByText("同名の候補が複数あります", { exact: true })).toBeVisible();
-  await expect(references.getByRole("button", { name: "図で位置を確認" })).toHaveCount(1);
-  await references.getByRole("tab", { name: "参照元", exact: true }).click();
-  await expect.poll(() => directions.includes("incoming")).toBe(true);
-  await references.getByRole("tab", { name: "参照先", exact: true }).click();
-  await references.screenshot({ path: testInfo.outputPath("reference-directions.png") });
-  await references.getByRole("button", { name: "図で位置を確認" }).click();
-  const destination = page.locator(`.react-flow__node[data-id="${target.id}"]`);
-  await expect(destination).toBeVisible();
-  await expect(destination).toBeInViewport();
-  await expect(destination).toHaveClass(/selected/);
-  await expect(page.locator(`.react-flow__edge[data-id="${sourceDocument.id}:${target.id}"]`)).toHaveCount(1);
-  await expect(page.locator(`.react-flow__edge[data-id="contains:${target.id}"]`)).toHaveCount(1);
-  await expect(page.locator(".react-flow__edge-text")).toHaveText("参照 1 件");
-  await expectNoPageOverflow(page);
-  for (const theme of ["light", "dark"]) {
-    await page.evaluate(value => {document.documentElement.dataset.theme=value;}, theme);
-    await page.screenshot({ path: testInfo.outputPath(`reference-navigation-${theme}.png`), fullPage: true });
-  }
-});
-
-test("1 段の 100 件を超える章節は続きを読み、読み込みの失敗は再試行できる", { tag: "@responsive" }, async ({ page }) => {
-  const document = structureDocument("doc", "合成文書A.pdf");
-  await mockKb(page, { status: "ok", documents: [document], edges: [] });
-  const sections = Array.from({ length: 130 }, (_, index) => treeNode(`section-${index}`, `合成節 ${index}`, null, "doc"));
-  await mockTree(page, { "root:set-doc": sections });
-  let failed = false;
-  const offsets: number[] = [];
-  await page.route(/\/graph\/documents\/[^/]+\/tree/, (route) => {
-    offsets.push(Number(new URL(route.request().url()).searchParams.get("offset")));
-    if (failed) return route.fallback();
-    failed = true;
-    return route.fulfill({ status: 503, json: { error_messages: ["一時的に取得できません。"] } });
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const graph = page.locator("#knowledge-base-graph");
-  const nodes = graph.locator(".react-flow__node");
-  await graph.locator('.react-flow__node[data-id="doc"]').focus();
-  await page.keyboard.press("Enter");
-  await expect(graph.getByRole("alert")).toContainText("一時的に取得できません。");
-  await graph.getByRole("button", { name: "再試行", exact: true }).click();
-  await expect(nodes).toHaveCount(102);
-  const more = graph.locator('.react-flow__node[data-id="more:doc"]');
-  await expect(more).toHaveAttribute("aria-label", "さらに 30 件を表示");
-  await more.focus();
-  await page.keyboard.press("Enter");
-  await expect(nodes).toHaveCount(131);
-  await expect(more).toHaveCount(0);
-  expect(offsets).toEqual([0, 0, 100]);
-  await expectNoPageOverflow(page);
-});
-
-test("構造索引の現在状態と今回の結果を分け、版変更後に再確認する", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  await mockKb(page, EMPTY_OVERVIEW);
-  let changed = false;
-  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", (route) => route.fulfill({ json: ok({
-    job_id: "synthetic-state-job", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z",
-    items: [
-      { document_id: "synthetic-skip", name: "synthetic-skip.txt", status: "SKIPPED", reason: "current", index_status: changed ? "STALE" : "CURRENT", index_quality: "COMPLETE" },
-      { document_id: "synthetic-fail", name: "synthetic-fail.txt", status: "FAILED", reason: "processing_error", index_status: "CURRENT", index_quality: "COMPLETE" },
-      { document_id: "synthetic-old", name: "synthetic-old.txt", status: "SUCCEEDED", index_status: "STALE" },
-      { document_id: "synthetic-active", name: "synthetic-active.txt", status: "RUNNING", index_status: "MISSING" },
-      { document_id: "synthetic-unready", name: "synthetic-unready.txt", status: "UNAVAILABLE", reason: "no_chunks", index_status: "UNAVAILABLE", index_reason: "no_chunks" },
-      { document_id: "synthetic-pending", name: "synthetic-pending.txt", status: "QUEUED", index_status: "MISSING" },
-    ], counts: { SKIPPED: 1, FAILED: 1, SUCCEEDED: 1, RUNNING: 1, UNAVAILABLE: 1, QUEUED: 1 }, total: 6, offset: 0, limit: 25,
-  }) }));
-  await page.goto("/knowledge-bases/kb-1");
-  const build = page.getByTestId("knowledge-base-structure-build");
-  const row = (name: string) => build.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
-  await expect(row("synthetic-skip.txt").getByRole("cell").nth(1)).toHaveText("構築済み");
-  await expect(row("synthetic-skip.txt").getByRole("cell").nth(2)).toContainText("スキップ：処理対象の版は構築済みでした。");
-  await expect(row("synthetic-fail.txt").getByRole("cell").nth(1)).toHaveText("構築済み");
-  await expect(row("synthetic-fail.txt").getByRole("cell").nth(2)).toContainText("失敗：");
-  await expect(row("synthetic-old.txt").getByRole("cell").nth(1)).toHaveText("更新が必要");
-  await expect(row("synthetic-old.txt").getByRole("cell").nth(2)).toHaveText("成功");
-  await expect(row("synthetic-active.txt").getByRole("cell").nth(1)).toHaveText("未構築");
-  await expect(row("synthetic-active.txt").getByRole("cell").nth(2)).toHaveText("構築中");
-  await expect(row("synthetic-unready.txt").getByRole("cell").nth(1)).toHaveText("準備不足");
-  await expect(row("synthetic-pending.txt").getByRole("cell").nth(2)).toHaveText("待機中");
-  await build.scrollIntoViewIfNeeded();
-  await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("current-index-and-operation.png") });
-  if (testInfo.project.name === "mobile") {
-    await row("synthetic-skip.txt").getByRole("cell").nth(2).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath("current-index-operation-details.png") });
-  }
-  changed = true;
-  await page.reload();
-  await expect(row("synthetic-skip.txt").getByRole("cell").nth(1)).toHaveText("更新が必要");
-  await expect(row("synthetic-skip.txt").getByRole("cell").nth(2)).toContainText("スキップ：");
-});
-
-test("参照一覧の取得失敗を再試行でき、次のページだけを読む", { tag: "@responsive" }, async ({ page }) => {
-  const document = structureDocument("a".repeat(64), "合成文書A.pdf", { has_sections: false });
-  const source = { id: document.id, name: "合成文書A.pdf", type: "document", document_name: "合成文書A.pdf", document_id: document.document_id, chunk_set_id: document.chunk_set_id, section_path: null };
-  await mockKb(page, { status: "ok", documents: [document], edges: [] });
-  let attempts = 0;
-  await page.route("**/api/knowledge-bases/kb-1/graph/references**", (route) => {
-    attempts += 1;
-    if (attempts === 1) return route.fulfill({ status: 503, json: { error_messages: ["一時的に取得できません。"] } });
-    const offset = Number(new URL(route.request().url()).searchParams.get("offset"));
-    return route.fulfill({ json: ok({ items: [{ id: `ref-${offset}`, label: offset ? "後続の参照" : "先頭の参照", status: "ambiguous", source, target: null }], offset, has_more: offset === 0, direction: "outgoing" }) });
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const node = page.locator(`.react-flow__node[data-id="${source.id}"]`);
-  await node.focus(); await page.keyboard.press("Enter");
-  const panel = page.getByTestId("graph-references");
-  await expect(panel.getByRole("alert")).toContainText("一時的に取得できません。");
-  await panel.getByRole("button", { name: "再試行", exact: true }).click();
-  await expect(panel.getByText("先頭の参照", { exact: true })).toBeVisible();
-  await panel.getByRole("button", { name: "次へ", exact: true }).click();
-  await expect(panel.getByText("後続の参照", { exact: true })).toBeVisible();
-  await expect(panel.getByText("先頭の参照", { exact: true })).toHaveCount(0);
-  await expectNoPageOverflow(page);
-});
-
-
-for (const theme of ["light", "dark"] as const) {
-  for (const mixed of [false, true]) {
-    test(`章節のない本文を選び全件の原文と保存位置を読む (${mixed ? "mixed" : "allmissing"} ${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
-      await page.addInitScript(value => localStorage.setItem("production-ready-rag.ui",JSON.stringify({state:{theme:value,sidebarCollapsed:true},version:0})), theme);
-      const body = treeNode(ID("body"), "本文", null, "doc", {type:"body"});
-      const nodes = mixed ? [treeNode(ID("named-body"), "本文", null,"doc"),body] : [body];
-      await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
-      await mockTree(page,{"root:set-doc":nodes});
-      const ids = Array.from({length:26},(_,index)=>({chunk_id:`doc-doc:set-doc:${index}`,chunk_index:index,page_number:null}));
-      const reads: string[] = [];
-      await page.route("**/graph/documents/doc-doc/entity-chunks?**", route => {
-        const params=new URL(route.request().url()).searchParams;
-        expect(params.get("chunk_set_id")).toBe("set-doc");
-        expect(params.get("node_id")).toBe(body.id);
-        const offset=Number(params.get("offset"));
-        return route.fulfill({json:ok({items:ids.slice(offset,offset+25),total:26,offset})});
-      });
-      await page.route("**/api/documents/doc-doc/chunks/**",route=>{
-        const id=decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
-        reads.push(id);
-        return route.fulfill({json:ok({document_id:"doc-doc",chunk_id:id,text:"合成の保存本文26",file_name:"synthetic.txt",score:0,metadata:{chunk_set_id:"set-doc",recipe_id:"recipe-1",start_offset:258,end_offset:267}})});
-      });
-      await page.route("**/api/documents/doc-doc/reader?**",route=>{
-        const params=new URL(route.request().url()).searchParams;
-        expect(params.get("chunk_id")).toBe(ids[25]!.chunk_id);
-        return route.fulfill({json:ok({revision:"set-doc",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"anchor",text:"保存位置250：合成の保存本文26",offset:250,highlights:[[8,17]],cited:true}],previous_cursor:null,next_cursor:null,outline:[]})});
-      });
-      await page.goto("/knowledge-bases/kb-1");
-      await disclosureSummary(page).click();
-      const graph=page.locator("#knowledge-base-graph");
-      await graph.locator('.react-flow__node[data-id="doc"]').click();
-      await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
-      const panel=page.getByTestId("graph-chunks");
-      await expect(panel.getByText("チャンク 1",{exact:true})).toBeVisible();
-      await panel.getByRole("button",{name:"次へ",exact:true}).click();
-      await expect(panel.getByText("チャンク 26",{exact:true})).toBeVisible();
-      await panel.getByRole("button",{name:"原文を表示",exact:true}).click();
-      await expect(page.getByRole("dialog", {name:"「本文」の原文", exact:true})).toBeVisible();
-      const reader=page.getByTestId("evidence-reader");
-      await expect(reader).toContainText("合成の保存本文26");
-      await expect(reader.locator("mark")).toBeVisible();
-      expect(reads).toEqual([ids[25]!.chunk_id]);
-      await expectNoPageOverflow(page);
-      await page.screenshot({path:testInfo.outputPath(`structure-body-${mixed ? "mixed":"allmissing"}-${theme}.png`), animations: "disabled"});
-      await expect(page.getByRole("dialog", {name:"「本文」の原文", exact:true}).getByTestId("citation-score-panel")).toHaveCount(0, { timeout: 500 });
-    });
-  }
-}
-
-for (const theme of ["light", "dark"] as const) {
-  test(`章から節を開き、節のチャンクを保存順に読んで原文の位置を示す (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value, sidebarCollapsed: true }, version: 0 })), theme);
-    // 章は木だけにある仮想の祖先、節は構造索引に実体のある葉（#4544）。
-    const chapter = treeNode(ID("chapter"), "合成章", null, "doc", { virtual: true, child_count: 1 });
-    const leaf = { ...treeNode(ID("leaf"), "合成章 > 合成節", chapter, "doc"), label: "合成節" };
-    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "synthetic.txt")], edges: [] });
-    await mockTree(page, { "root:set-doc": [chapter], [chapter.id]: [leaf] });
-    const ids = Array.from({ length: 26 }, (_, index) => ({ chunk_id: `doc-doc:set-doc:${index + 3}`, chunk_index: index + 3, page_number: index + 1 }));
-    const listed: string[] = [];
-    const reads: string[] = [];
-    await page.route("**/graph/documents/doc-doc/entity-chunks?**", (route) => {
-      const params = new URL(route.request().url()).searchParams;
-      listed.push(params.get("node_id") ?? "");
-      expect(params.get("chunk_set_id")).toBe("set-doc");
-      const offset = Number(params.get("offset"));
-      return route.fulfill({ json: ok({ items: ids.slice(offset, offset + 25), total: 26, offset }) });
-    });
-    await page.route("**/api/documents/doc-doc/chunks/**", (route) => {
-      const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
-      reads.push(id);
-      return route.fulfill({ json: ok({ document_id: "doc-doc", chunk_id: id, text: "合成の節の本文28", file_name: "synthetic.txt", score: 0, metadata: { chunk_set_id: "set-doc", recipe_id: "recipe-1", start_offset: 300, end_offset: 309 } }) });
-    });
-    await page.route("**/api/documents/doc-doc/reader?**", (route) => {
-      expect(new URL(route.request().url()).searchParams.get("chunk_id")).toBe(ids[25]!.chunk_id);
-      return route.fulfill({ json: ok({ revision: "set-doc", anchor_status: "exact", section_path: ["合成章", "合成節"], scope: "paragraph", blocks: [{ id: "anchor", text: "保存位置300：合成の節の本文28", offset: 292, highlights: [[8, 17]], cited: true }], previous_cursor: null, next_cursor: null, outline: [] }) });
-    });
-    await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page).click();
-    const graph = page.locator("#knowledge-base-graph");
-    const node = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
-    await node("doc").click();
-    await node(chapter.id).click();
-    // 仮想の章は chunk を読まず、下の段を案内する。
-    await expect(graph.getByText("この段に本文はありません。下の段を開いてください。", { exact: true })).toBeVisible();
-    await node(leaf.id).click();
-    await expect(page.getByTestId("graph-references")).toBeVisible();
-    await page.getByTestId("graph-references").scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath(`structure-section-chunks-selected-${theme}.png`), animations: "disabled" });
-    const panel = page.getByTestId("graph-chunks");
-    await expect(panel.getByText("チャンク 4", { exact: true })).toBeVisible();
-    await expect(panel.getByText("全 26 件", { exact: true })).toBeVisible();
-    await panel.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath(`structure-section-chunks-list-${theme}.png`), animations: "disabled" });
-    await panel.getByRole("button", { name: "次へ", exact: true }).click();
-    await expect(panel.getByText("チャンク 29", { exact: true })).toBeVisible();
-    await expect(panel.getByText("26 ページ", { exact: true })).toBeVisible();
-    expect([...new Set(listed)]).toEqual([leaf.id]);
-    await panel.getByRole("button", { name: "原文を表示", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "「合成節」の原文", exact: true });
-    await expect(dialog).toBeVisible();
-    const reader = page.getByTestId("evidence-reader");
-    await expect(reader).toContainText("合成の節の本文28");
-    await expect(reader.locator("mark")).toBeVisible();
-    expect(reads).toEqual([ids[25]!.chunk_id]);
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`structure-section-chunks-source-${theme}.png`), animations: "disabled" });
-  });
-}
-
-for (const theme of ["light", "dark"] as const) {
-  test(`1001番目の章節の検索位置へページを分けて移動する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value, sidebarCollapsed: true }, version: 0 })), theme);
-    const all = Array.from({ length: 1101 }, (_, index) => treeNode(index.toString(16).padStart(64, "0"), `合成章節${index + 1}`, null, "doc"));
-    const target = all[1000]!;
-    const reads: { offset: number; limit: number }[] = [];
-    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
-    await mockTree(page, { "root:set-doc": all });
-    // 正式tree APIと同じlimit上限。既存mockの無制限sliceで不具合を隠さない。
-    await page.route(/\/graph\/documents\/[^/]+\/tree/, (route) => {
-      const url = new URL(route.request().url());
-      const offset = Number(url.searchParams.get("offset") ?? 0);
-      const limit = Number(url.searchParams.get("limit") ?? 100);
-      reads.push({ offset, limit });
-      if (limit > 1000) return route.fulfill({ status: 422, json: { detail: "ページの表示件数が上限を超えています。" } });
-      return route.fulfill({ json: ok({ items: all.slice(offset, offset + limit), total: all.length, offset }) });
-    });
-    await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
-    await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 1000 }] }) }));
-    await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page).click();
-    const graph = page.locator("#knowledge-base-graph");
-    await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
-    try {
-      // 11 ページを順に読み、1101 件の節点を配置してから選ぶ。配置は main thread の処理で、nightly の
-      // JS coverage の記録（E2E_IMPACT_DIR）の下では 5 秒を超える（#4574）。待ちの上限だけを広げる。
-      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label, { timeout: 15_000 });
-      expect(reads.every((r) => r.limit <= 1000)).toBe(true);
-      expect(reads.map((r) => r.offset)).toEqual(Array.from({ length: 11 }, (_, index) => index * 100));
-      await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();
-      await expectNoPageOverflow(page);
-    } finally {
-      console.log("structure-tree-requests", JSON.stringify(reads));
-      await testInfo.attach("tree-requests", { body: JSON.stringify(reads), contentType: "application/json" });
-      await page.screenshot({ path: testInfo.outputPath(`structure-reveal-1001-${theme}.png`) });
-    }
-  });
-}
-
-
-test("節点を開く間の表示は画布の上に重ね、画布を押し下げない（#4649）", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const chapter = treeNode(ID("chapter"), "合成章", null, "doc", { virtual: true, child_count: 1 });
-  await mockKb(page, { status: "ok", documents: [structureDocument("doc", "synthetic.txt")], edges: [] });
-  await mockTree(page, { "root:set-doc": [chapter] });
-  // 文書の下の段の取得を止める（mockTree より後に登録して先に当てる）。
-  let release: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => (release = resolve));
-  await page.route(/\/api\/knowledge-bases\/kb-1\/graph\/documents\/[^/]+\/tree/, async (route) => {
-    await gate;
-    await route.fallback();
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const graph = page.locator("#knowledge-base-graph");
-  const canvas = graph.getByRole("region", { name: "文書構造グラフ", exact: true });
-  await expect(canvas).toBeVisible();
-  // 画布の位置はグラフの領域の上端からの距離で比べる（クリックでページがスクロールしても変わらない）。
-  const offset = async () => (await canvas.boundingBox())!.y - (await graph.boundingBox())!.y;
-  const before = await offset();
-
-  await graph.locator('.react-flow__node[data-id="doc"]').click();
-  const expanding = graph.getByTestId("structure-graph-expanding");
-  await expect(expanding).toContainText("章節を読み込んでいます");
-  // 画布は動かない（表示は画布の上に重なる）。
-  expect(Math.abs((await offset()) - before)).toBeLessThanOrEqual(1);
-  expect(await findLoadingStandardViolations(page, { expectCount: 1 })).toEqual([]);
-  await page.screenshot({ path: testInfo.outputPath("loading-graph-expand.png"), animations: "disabled" });
-  // 画面の中にあり、固定の見出しなどに隠れていない（重ねた表示はクリックを通すので、確かめる間だけ当たりを戻す）。
-  await expect(expanding).toBeInViewport({ ratio: 1 });
-  const visibleOnTop = await expanding.evaluate((element) => {
-    const anchor = element.closest<HTMLElement>('[data-testid="structure-graph-expanding-anchor"]')!;
-    anchor.style.pointerEvents = "auto";
-    const rect = element.getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-    anchor.style.pointerEvents = "";
-    return Boolean(hit && element.contains(hit));
-  });
-  expect(visibleOnTop).toBe(true);
-
-  release();
-  await expect(expanding).toHaveCount(0);
-  await expect(graph.locator(`.react-flow__node[data-id="${chapter.id}"]`)).toBeVisible();
-});
-
-test("章節の位置移動で空の続きページをエラーにし、再試行は既読の続きから読む", async ({ page }) => {
-  const all = Array.from({ length: 201 }, (_, index) => treeNode(index.toString(16).padStart(64, "0"), `合成章節${index + 1}`, null, "doc"));
-  const target = all[200]!;
-  let empty = true;
-  const offsets: number[] = [];
-  await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
-  await mockTree(page, { "root:set-doc": all });
-  await page.route(/\/graph\/documents\/[^/]+\/tree/, (route) => {
-    const url = new URL(route.request().url());
-    const offset = Number(url.searchParams.get("offset") ?? 0);
-    const limit = Number(url.searchParams.get("limit") ?? 100);
-    offsets.push(offset);
-    return route.fulfill({ json: ok({ items: empty && offset === 100 ? [] : all.slice(offset, offset + limit), total: all.length, offset }) });
-  });
-  await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
-  await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 200 }] }) }));
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const graph = page.locator("#knowledge-base-graph");
-  await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
-  await expect(graph.getByRole("alert")).toBeVisible();
-  expect(offsets).toEqual([0, 100]);
-  empty = false;
-  await graph.getByRole("button", { name: "再試行", exact: true }).click();
-  await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label);
-  await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();
-  expect(offsets).toEqual([0, 100, 100, 200]);
-});
-
-
-for (const state of ["empty", "error"] as const) {
-  test(`本文のチャンクの空・取得失敗を原文なしと断定しない (${state})`, {tag:"@responsive"}, async ({page}) => {
-    const body=treeNode(ID("body"),"本文",null,"doc",{type:"body"});
-    await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
-    await mockTree(page,{"root:set-doc":[body]});
-    await page.route("**/graph/documents/doc-doc/entity-chunks?**",route=>state==="empty"
-      ? route.fulfill({json:ok({items:[],total:0,offset:0})})
-      : route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}}));
-    await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page).click();
-    const graph=page.locator("#knowledge-base-graph");
-    await graph.locator('.react-flow__node[data-id="doc"]').click();
-    await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
-    const panel=page.getByTestId("graph-chunks");
-    if (state==="empty") await expect(panel).toContainText("文書構造索引を再構築してください");
-    else await expect(panel.getByRole("alert")).toContainText("対象が見つかりません");
-    await expect(graph).not.toContainText("この段に本文はありません");
-    await expect(panel.getByRole("button",{name:"原文を表示",exact:true})).toHaveCount(0);
-  });
-}
-
-test("旧索引の仮想の本文はチャンクを読まずに再構築を案内する", {tag:"@responsive"}, async ({page}) => {
-  const body=treeNode(ID("body"),"本文",null,"doc",{type:"body",virtual:true});
-  const listed:string[]=[];
-  await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
-  await mockTree(page,{"root:set-doc":[body]});
-  await page.route("**/graph/documents/doc-doc/entity-chunks?**",route=>{
-    listed.push(route.request().url());
-    return route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}});
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const graph=page.locator("#knowledge-base-graph");
-  await graph.locator('.react-flow__node[data-id="doc"]').click();
-  await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
-  await expect(graph.getByText("本文の位置がまだありません。文書構造索引を再構築してください。",{exact:true})).toBeVisible();
-  await expect(graph).not.toContainText("この段に本文はありません");
-  await expect(page.getByTestId("graph-chunks")).toHaveCount(0);
-  expect(listed).toEqual([]);
-});
-
-
-test("本文の件数が減って末頁が空になったら有効なページへ戻る", {tag:"@responsive"}, async ({page}) => {
-  const body=treeNode(ID("body"),"本文",null,"doc",{type:"body"});
-  const all=Array.from({length:26},(_,index)=>({chunk_id:`doc-doc:set-doc:${index}`,chunk_index:index,page_number:null}));
-  const offsets:number[]=[];
-  let changed=false;
-  await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
-  await mockTree(page,{"root:set-doc":[body]});
-  await page.route("**/graph/documents/doc-doc/entity-chunks?**",route=>{
-    const offset=Number(new URL(route.request().url()).searchParams.get("offset"));
-    offsets.push(offset);
-    if (offset>0) changed=true;
-    const rows=changed ? all.slice(0,5) : all;
-    return route.fulfill({json:ok({items:rows.slice(offset,offset+25),total:rows.length,offset})});
-  });
-  await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page).click();
-  const graph=page.locator("#knowledge-base-graph");
-  await graph.locator('.react-flow__node[data-id="doc"]').click();
-  await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
-  const panel=page.getByTestId("graph-chunks");
-  await expect(panel.getByText("チャンク 1",{exact:true})).toBeVisible();
-  await panel.getByRole("button",{name:"次へ",exact:true}).click();
-  await expect(panel.getByText("チャンク 1",{exact:true})).toBeVisible();
-  await expect(panel.getByText("チャンク 6",{exact:true})).toHaveCount(0);
-  await expect.poll(()=>offsets).toEqual([0,25,0]);
-});
-
-for (const theme of ["light", "dark"] as const) {
-  test(`保存された共通の章と中間階層を残して実節を開く ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
-    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 })), theme);
-    // 正式StructureGraphStore.children/locateを修前後同じ合成保存行に実行した応答。
-    const fixture = process.env.STRUCTURE_LEVEL_FIXTURE === "before" ? structureLevelsReader.before : structureLevelsReader.after;
-    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
-    await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, name: "合成ナレッジベース", description: "構造階層の合成データ" }) }));
-    await mockTree(page, fixture.trees);
-    await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok(fixture.locate) }));
-    await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page).click();
-    const graph = page.locator("#knowledge-base-graph");
-    const node = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
-    await node("doc").focus(); await page.keyboard.press("Enter");
-    if (process.env.STRUCTURE_LEVEL_FIXTURE === "before") await page.screenshot({ path: testInfo.outputPath(`structure-recorded-levels-before-${theme}.png`), fullPage: true });
-    await expect(node(fixture.rootID)).toBeVisible();
-    await node(fixture.rootID).focus(); await page.keyboard.press("Enter");
-    await expect(node(fixture.middleID)).toBeVisible();
-    await expect(graph.getByText("この段に本文はありません。下の段を開いてください。", { exact: true })).toBeVisible();
-    await node(fixture.middleID).focus(); await page.keyboard.press("Enter");
-    await expect(node(fixture.leafID)).toBeVisible();
-    await node(fixture.leafID).focus(); await page.keyboard.press("Enter");
-    await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("第1章 > 接続 > 形式1");
-    await expect(page.getByTestId("graph-references")).toBeVisible();
-    await expect(graph.locator(`.react-flow__edge[data-id="contains:${fixture.middleID}"]`)).toHaveCount(1);
-    await expect(graph.locator(`.react-flow__edge[data-id="contains:${fixture.leafID}"]`)).toHaveCount(1);
-    await graph.getByRole("button", { name: "全体表示", exact: true }).click();
-    await graph.scrollIntoViewIfNeeded();
-    await expect(node(fixture.rootID)).toBeInViewport();
-    await expect(node(fixture.middleID)).toBeInViewport();
-    await expect(node(fixture.leafID)).toBeInViewport();
-    await expectNoPageOverflow(page);
-    await page.screenshot({ path: testInfo.outputPath(`structure-recorded-levels-${theme}.png`), fullPage: true });
-  });
-}

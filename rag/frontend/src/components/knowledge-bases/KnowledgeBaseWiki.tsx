@@ -9,6 +9,7 @@ import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
+import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 
 /** 構築状態の並び（凡例と一覧の表示の順）と、バッジの形。色だけにしないよう状態ごとにアイコンも変える。 */
 const WIKI_STATUSES: { status: string; variant: StatusVariant; icon: LucideIcon | true }[] = [
@@ -33,7 +34,7 @@ function failureReason(code: string | null | undefined): string {
   return t((["timeout", "build_failed", "authorization_changed"].includes(code) ? key : "wiki.failure.build_failed") as I18nKey);
 }
 
-/** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）。本文は表示しない。 */
+/** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）と、最下部の Wiki の図（#5502）。 */
 export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: boolean }) {
   const cache = useQueryClient();
   // 文書ごとの状態は server 側で名前の順にページングする。表示件数とページは KB ごとに保つ。
@@ -102,6 +103,8 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
         {total > 0 && data.documents ? <WikiDocuments page={data.documents} paging={paging} expanded={failed > 0 || retryStatus != null} /> : null}
         <SaveErrorBanner message={update.error ? t("wiki.saveError") : null} attemptKey={update.submittedAt} />
       </> : null}
+      {/* Wiki の図はカードの最下部に常に置く。構築の状態の読み込みと別に、開いたときだけ読む（#5502）。 */}
+      <KnowledgeBaseGraphView knowledgeBaseId={id} />
     </CardContent>
   </Card>;
 }

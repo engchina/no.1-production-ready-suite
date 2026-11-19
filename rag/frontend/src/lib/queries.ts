@@ -169,7 +169,7 @@ export const queryKeys = {
   knowledgeBaseSearch: (params: { status?: KnowledgeBaseStatus; q?: string }) =>
     ["knowledge-bases", "search", params] as const,
   knowledgeBase: (id: string) => ["knowledge-bases", id] as const,
-  knowledgeBaseGraph: (id: string) => ["knowledge-bases", id, "graph"] as const,
+  knowledgeBaseWikiGraph: (id: string) => ["knowledge-bases", id, "wiki-graph"] as const,
   knowledgeBaseExtractionFields: (id: string) =>
     ["knowledge-bases", id, "extraction-fields"] as const,
   searchExtractionFields: (searchAnswerProfileId: string) =>
@@ -1181,10 +1181,11 @@ export function useSearchExtractionFields(searchAnswerProfileId: string | null, 
   });
 }
 
-export function useStructureGraphOverview(id: string | null) {
+/** KB 詳細の Wiki の図の総覧（#5502）。開いたときだけ読む（`id` が null の間は読まない）。 */
+export function useWikiGraphOverview(id: string | null) {
   return useQuery({
-    queryKey: queryKeys.knowledgeBaseGraph(id ?? ""),
-    queryFn: () => api.getStructureGraphOverview(id as string),
+    queryKey: queryKeys.knowledgeBaseWikiGraph(id ?? ""),
+    queryFn: () => api.getWikiGraphOverview(id as string),
     enabled: id != null,
   });
 }

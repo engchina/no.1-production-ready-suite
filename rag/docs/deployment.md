@@ -221,6 +221,15 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5502 KB 詳細の文書構造グラフを Wiki の図にする）
+
+KB 詳細の「文書構造索引の構築」のカードを外し、図を「Wiki ナビゲーション」のカードの最下部の「Wiki の図」にした（[Wiki ナビゲーション](./wiki-navigation.md)）。
+
+- **migration・DDL・設定の変更は無い。** 本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけでよい。
+- **API**: `GET /api/knowledge-bases/{kb}/wiki/graph` と `…/wiki/graph/*`（読み取りだけ）を足した。画面は文書構造索引の `…/structure-index/*`・`…/graph/*` を呼ばない。
+  これらの API・表（`rag_graph_*`・`rag_structure_index_*`）・構築済みの索引は次の変更で削除するまで残る（画面からは構築も閲覧もできない）。
+- **見え方**: 図は保存済みの Wiki の案内だけを出す。案内の無い KB は「Wiki を構築すると、文書・章節・案内のつながりを図で見られます」を出す。
+
 ## 既存環境の更新手順（#5492 Wiki の文書をまたぐ関連）
 
 Wiki の構築で、文書の案内を作った後に、同じ KB のほかの文書の単位との関連（例外・前提・参照など）を作り、Wiki の検索で
