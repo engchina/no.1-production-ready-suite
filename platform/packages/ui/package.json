@@ -42,6 +42,7 @@
     "build": "vite build && tsc -p tsconfig.build.json && node ./scripts/copy-css.mjs",
     "dev": "vite build --watch",
     "test": "vitest run",
+    "lint": "oxlint --deny-warnings src",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "prepublishOnly": "npm run build"
   },

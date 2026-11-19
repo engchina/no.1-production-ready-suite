@@ -34,5 +34,7 @@ export default {
   meta: { name: "design-system" },
   // list-height は一覧の高さの規則（#4636）。同じ実装を別名で公開し、restricted-syntax の設定を上書きせずに
   // ファイルごとに外せるようにする（ESLint の製品は同じオプションを no-restricted-syntax に足す）。
-  rules: { "restricted-syntax": restrictedSyntax, "list-height": restrictedSyntax },
+  // ui-tokens は packages/ui 自身にも掛ける規則（生の hex・px の余白・outline-none・text-lg。#5522）。
+  // packages/ui はこの規則だけを有効にする（packages/ui/.oxlintrc.json）。
+  rules: { "restricted-syntax": restrictedSyntax, "list-height": restrictedSyntax, "ui-tokens": restrictedSyntax },
 };

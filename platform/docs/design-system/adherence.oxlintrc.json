@@ -28,14 +28,6 @@
         "design-system/restricted-syntax": [
           "error",
           {
-            "selector": "Literal[value=/#[0-9a-fA-F]{3,8}(?![\\w-])/]",
-            "message": "生の hex 色は使わない。色トークン（bg-surface / text-fg-muted / var(--color-*)）を使う。"
-          },
-          {
-            "selector": "TemplateElement[value.raw=/#[0-9a-fA-F]{3,8}(?![\\w-])/]",
-            "message": "生の hex 色は使わない。色トークン（bg-surface / text-fg-muted / var(--color-*)）を使う。"
-          },
-          {
             "selector": "JSXAttribute[name.name='style'] Literal[value=/\\b\\d+px\\b/]",
             "message": "inline style に生の px を書かない。余白・寸法トークン（var(--space-*) / var(--button-height-*) 等）か Tailwind のユーティリティを使う。"
           },
@@ -198,6 +190,29 @@
           {
             "selector": "JSXOpeningElement[name.name=/^(?:SelectField|SearchableSelectField|SearchableMultiSelect|FilterSelect)$/] > JSXAttribute[name.name=/^(?:helper|error)$/] :matches(MemberExpression[property.name='isError'], Identifier[name=/[lL]oad(?:Failed|Error)$/], MemberExpression[property.name=/[lL]oad(?:Failed|Error)$/])",
             "message": "選択欄の候補の読み取りの失敗を、欄の helper / error の文で出さない（候補なしと区別できず、再試行も無い）。欄の直下に共有の DataLoadFailureState の layout=\"field\"（製品の components/DataLoadStates.tsx の DataLoadFailure）を置き、fallback に欄ごとの文を渡す（docs/ux-contracts/messaging.md §3.6.1「欄の候補・欄の値」、#4817）。"
+          }
+        ],
+        "design-system/ui-tokens": [
+          "error",
+          {
+            "selector": "Literal[value=/#[0-9a-fA-F]{3,8}(?![\\w-])/]",
+            "message": "生の hex 色は使わない（color-mix(…, #000) の混ぜる色も）。色トークン（bg-surface / text-fg-muted / var(--color-*)）を使い、暗く・明るくするなら専用のトークン（--color-accent-emphasis-hover 等）か color-mix(in srgb, var(--color-*) …) にする（生の色はダークテーマで切り替わらない。#5522）。"
+          },
+          {
+            "selector": "TemplateElement[value.raw=/#[0-9a-fA-F]{3,8}(?![\\w-])/]",
+            "message": "生の hex 色は使わない（color-mix(…, #000) の混ぜる色も）。色トークン（bg-surface / text-fg-muted / var(--color-*)）を使い、暗く・明るくするなら専用のトークン（--color-accent-emphasis-hover 等）か color-mix(in srgb, var(--color-*) …) にする（生の色はダークテーマで切り替わらない。#5522）。"
+          },
+          {
+            "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*!?-?(?:gap(?:-[xy])?|space-[xy]|[pm][xytrblse]?)-\\[-?[\\d.]+px\\]/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*!?-?(?:gap(?:-[xy])?|space-[xy]|[pm][xytrblse]?)-\\[-?[\\d.]+px\\]/])",
+            "message": "余白（gap / space / p / m）を任意の px（gap-[8px] / px-[6px] 等）で書かない。余白は rem のトークン（gap-2 = --gap-action / p-3 等。docs/agents/ui.md「単位の境界」）を使う。px で書くとルートの文字サイズ（14px）の rem と 1px ずれる（#5522）。"
+          },
+          {
+            "selector": ":matches(Literal[value=/(?:^|\\s)!?outline-none(?![\\w-])/]:not([value=/focus-visible:outline-(?!none)/]), TemplateElement[value.raw=/(?:^|\\s)!?outline-none(?![\\w-])/]:not([value.raw=/focus-visible:outline-(?!none)/])):not(JSXOpeningElement:has(JSXAttribute[name.name='tabIndex'] UnaryExpression[operator='-'][argument.value=1]) *):not(CallExpression:has(> Literal[value=/focus-visible:outline-(?!none)/]) > Literal)",
+            "message": "focus-visible:outline-* の無い outline-none を書かない。グローバルの :focus-visible（outline）が消え、キーボードでフォーカスの位置が見えなくなる（WCAG 2.4.7）。outline-none を外して表示はグローバルに任せるか、同じ className（cn の引数）に focus-visible:outline-* で代わりの表示を書く。tabIndex={-1} の、プログラムでだけフォーカスを移す容器は対象外（docs/design-system/README.md §4「フォーカスの表示」、#5522）。"
+          },
+          {
+            "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*!?text-lg(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*!?text-lg(?![\\w-])/])",
+            "message": "text-lg を使わない（型のスケールの外。tokens.css の --text-lg は仕様外）。本文・ラベルは text-sm、セクションの見出しは text-base、ページの見出しは text-xl を使う（docs/design-system/README.md §3、#5522）。"
           }
         ],
         "design-system/list-height": [

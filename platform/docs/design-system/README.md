@@ -16,7 +16,7 @@
 |---|---|---|
 | `ARCHITECTURE.md` | **3アプリがこの DS をどう使うかの契約書。3チーム全員が読む** | 最初にこれを読む |
 | `css/` | design system の**実ソース**（プレーン CSS） | `packages/ui/src/styles/` に**ほぼそのまま移植できます** |
-| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替え / 任意の表示（「(任意)」・placeholder の「任意」）/ 手書きの必須表示 / 淡い色の面の `data-surface-tint` の付け忘れを検出する lint ルール | 各製品の lint 設定から相対パス（`../../platform/…`）で参照する（`platform/AGENTS.md`「lint」節） |
+| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / 余白の任意の px / focus-visible の無い outline-none / text-lg / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替え / 任意の表示（「(任意)」・placeholder の「任意」）/ 手書きの必須表示 / 淡い色の面の `data-surface-tint` の付け忘れを検出する lint ルール | 各製品の lint 設定から相対パス（`../../platform/…`）で参照する（`platform/AGENTS.md`「lint」節） |
 | `components-reference.md` | 新規・変更されたコンポーネントの**参照実装**（React + インラインスタイル） | **そのまま出荷しない。** `packages/ui` の既存 `.tsx` / Tailwind の書き方に合わせて書き直す |
 | `reference/` | **目視確認用の HTML** | ブラウザで開いて見た目を確認するだけ。製品コードではない |
 
