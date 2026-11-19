@@ -76,13 +76,16 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
     system, prompt, _settings, schema = parse.call_args.args
     assert system == CORRECTNESS_PROMPT and schema is AnswerCorrectnessOutput
     assert parse.call_args.kwargs["provider_id"] == "chosen"
-    # 渡すのは質問・標準回答の文・要点・出典の行を除いた回答の本文の段落だけ（取得した根拠は渡さない）。
+    # 渡すのは質問・標準回答の文・要点・回答の本文の段落と、段落に添えた出典の行だけ（取得した根拠は渡さない）。
     assert json.loads(prompt) == {
         "question": "今回の取込失敗の原因は？",
         "standard_answer": [{"id": "S1", "text": "ログを確認して原因を特定する。"}],
         "points": [{"id": "P1", "text": "ログを確認して原因を特定する。"}],
         "actual_responses": [
-            {"question": "今回の取込失敗の原因は？", "answer": [{"id": "A1", "text": "ログを確認して原因を特定します。"}]}
+            {
+                "question": "今回の取込失敗の原因は？",
+                "answer": [{"id": "A1", "text": "ログを確認して原因を特定します。", "sources": ["根拠：manual.pdf p.3"]}],
+            }
         ],
     }
     standard = "" if value == "not_in_standard" else "ログを確認して原因を特定する。"
