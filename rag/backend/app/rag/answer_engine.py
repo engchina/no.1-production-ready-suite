@@ -27,8 +27,16 @@ import math
 import re
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from contextlib import AbstractContextManager, ExitStack, nullcontext
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -167,6 +175,10 @@ AS_OF_FILTER_KEY = "as_of"
 _REFERENCE_DOCUMENT_CANDIDATES = 20
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
+# 検索拡張の秒の累計の鍵(回答の診断の項目の名前と同じ。#5518)。
+ENTITY_EXPANSION_DIAGNOSTICS = "entity_expansion"
+OUTLINE_SELECTION_DIAGNOSTICS = "outline_selection"
+REFERENCE_EXPANSION_DIAGNOSTICS = "reference_expansion"
 # 交差参照の起点の由来(受領記録の ``origin`` / ``anchor_origin``。#5315)。検索の候補か、回答の文脈
 # (章節の拡張・親の読取。由来の名前は rag_engine が渡す)か。
 REFERENCE_ORIGIN_SEARCH = "search"
@@ -273,6 +285,9 @@ class _SearchState:
     # Wiki の検索の経路(#4941)。足した原文の案内(回答前の照合に使う)と記録。
     wiki_pages: tuple[Any, ...] = ()
     wiki_trace: dict[str, Any] = field(default_factory=dict)
+    # 検索拡張(``entity_expansion``・``outline_selection``・``reference_expansion``)の秒の累計
+    # (1 回の回答の中で何度呼んでも足す)。回答の診断の各項目の ``elapsed_seconds``(#5518)。
+    expansion_seconds: dict[str, float] = field(default_factory=dict)
     # 交差参照で足した chunk を起点にした章節の拡張で読む章節((document_id, chunk_set_id,
     # section_id)。所有の章節から根まで)。参照先と同じ範囲(``_reference_scope``)で読む(#3325)。
     reference_sections: set[tuple[str, str, str]] = field(default_factory=set)
@@ -798,25 +813,34 @@ class AnswerEngine:
         outcome.diagnostics.setdefault("provenance", {})["prompt_version"] = answer_prompt_version(
             overrides
         )
-        if state.entity_expansions:
+        # 検索拡張の秒(#5518)。行った拡張は、足した chunk が 0 件でも秒を出す。
+        seconds = state.expansion_seconds
+        if state.entity_expansions or ENTITY_EXPANSION_DIAGNOSTICS in seconds:
             outcome.diagnostics["entity_expansion"] = {
                 "added_count": len(state.entity_expansions),
                 "max_chunks": self._settings.rag_entity_expansion_max_chunks,
                 "chunks": list(state.entity_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
+                "elapsed_seconds": seconds.get(ENTITY_EXPANSION_DIAGNOSTICS, 0.0),
             }
-        if state.reference_expansions or any(
-            search.get("sources") for search in state.reference_sources
+        if (
+            state.reference_expansions
+            or any(search.get("sources") for search in state.reference_sources)
+            or REFERENCE_EXPANSION_DIAGNOSTICS in seconds
         ):
             outcome.diagnostics["reference_expansion"] = {
                 "added_count": len(state.reference_expansions),
                 "chunks": list(state.reference_expansions.values())[:_REFERENCE_DIAGNOSTICS_LIMIT],
                 # 検索ごとの、参照を持つ候補の統合の順位と辿った結果・辿らなかった理由(#1549)。
                 "searches": list(state.reference_sources),
+                "elapsed_seconds": seconds.get(REFERENCE_EXPANSION_DIAGNOSTICS, 0.0),
             }
         if state.outline_selection is not None:
             # 起点の文書の目次から章節を選んだ記録(#5324。対象の文書・選んだ章節・読んだ字数・
-            # 飛ばした理由)。
-            outcome.diagnostics["outline_selection"] = state.outline_selection
+            # 飛ばした理由)。秒は目次と章節の読取・選ぶモデルの呼び出しを含む全体(#5518)。
+            outcome.diagnostics["outline_selection"] = {
+                **state.outline_selection,
+                "elapsed_seconds": seconds.get(OUTLINE_SELECTION_DIAGNOSTICS, 0.0),
+            }
         if state.derived_hits:
             # 当たった派生の chunk と、根拠に置き換えた原文(#2641)。原文が無いものは根拠に
             # 渡していない。
@@ -1575,7 +1599,10 @@ class AnswerEngine:
                             "起点の融合スコア": fused,
                         }
                     )
-                with db_call_label("reference"):
+                with (
+                    db_call_label("reference"),
+                    _timed(state.expansion_seconds, REFERENCE_EXPANSION_DIAGNOSTICS),
+                ):
                     references = await self._reference_expansion(
                         request,
                         state,
@@ -1633,7 +1660,10 @@ class AnswerEngine:
                             "同じ回答の選択の再利用": reused,
                         }
                     )
-                with db_call_label("outline"):
+                with (
+                    db_call_label("outline"),
+                    _timed(state.expansion_seconds, OUTLINE_SELECTION_DIAGNOSTICS),
+                ):
                     outline_chunks = await self._outline_selection(request, state, anchors)
                 if observation is not None:
                     observation.response(
@@ -1669,7 +1699,10 @@ class AnswerEngine:
                             "最大追加 Chunk 数": self._settings.rag_entity_expansion_max_chunks,
                         }
                     )
-                with db_call_label("entity"):
+                with (
+                    db_call_label("entity"),
+                    _timed(state.expansion_seconds, ENTITY_EXPANSION_DIAGNOSTICS),
+                ):
                     entity_chunks = await self._entity_expansion(request, state, anchors)
                 _expansion_stage_outcome(
                     observation,
@@ -2585,7 +2618,10 @@ class AnswerEngine:
         ]
         if not anchors:
             return []
-        with db_call_label("reference"):
+        with (
+            db_call_label("reference"),
+            _timed(state.expansion_seconds, REFERENCE_EXPANSION_DIAGNOSTICS),
+        ):
             references = await self._reference_expansion(
                 request,
                 state,
@@ -3140,6 +3176,17 @@ class AnswerEngine:
         timeout = (
             None if left is None else left - _reference_generation_reserve_seconds(self._settings)
         )
+        # Wiki の検索の全体の秒と段ごとの秒(#5518)。段の秒は段の span と同じ範囲で
+        # 検索の経路が書く(失敗・時間切れでも、それまでの段)。
+        started = time.monotonic()
+        stage_seconds: dict[str, float] = {}
+
+        def timing() -> dict[str, Any]:
+            return {
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "stage_seconds": dict(stage_seconds),
+            }
+
         try:
             if timeout is not None and timeout <= 0:
                 raise TimeoutError("回答の期限の残りが生成の予約より少ない")
@@ -3148,12 +3195,23 @@ class AnswerEngine:
                 profile_id=request.search_answer_profile_id,
                 filters=request.filters,
                 timeout=timeout,
+                stage_seconds=stage_seconds,
             )
         except Exception as exc:  # noqa: BLE001 - 独立の経路の失敗で通常検索を止めない。
             state.record_degraded("wiki", exc)
-            state.wiki_trace = {"status": "degraded", "failure_code": type(exc).__name__}
+            state.wiki_trace = {
+                "status": "degraded",
+                "failure_code": type(exc).__name__,
+                **timing(),
+            }
             return []
-        state.wiki_pages, state.wiki_trace = result.pages, result.trace
+        state.wiki_pages = result.pages
+        # Wiki を使わないプロファイルでは検索していないので秒を出さない。
+        state.wiki_trace = (
+            result.trace
+            if result.trace.get("status") == "profile_disabled"
+            else {**result.trace, **timing()}
+        )
         for chunk in result.chunks:
             state.chunks.setdefault(chunk.chunk_id, chunk)
         return [
@@ -4010,6 +4068,19 @@ def _expansion_stage_outcome(
     )
     if reason:
         observation.response({"status": status, "reason_code": reason_code, "result_count": 0})
+
+
+@contextmanager
+def _timed(seconds: dict[str, float], key: str) -> Iterator[None]:
+    """囲んだ範囲の秒を ``seconds[key]`` に足す(回答の診断の ``elapsed_seconds``。#5518)。
+
+    span を保存しない評価でも、回答の記録から検索拡張の時間を見るため。失敗で抜けても足す。
+    """
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        seconds[key] = round(seconds.get(key, 0.0) + time.monotonic() - started, 3)
 
 
 def _search_stage(

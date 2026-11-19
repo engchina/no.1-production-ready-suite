@@ -383,3 +383,65 @@ async def test_catalog_lead_chars_follow_the_setting(
     await _search(engine)
 
     assert leads == [expected]
+
+
+class _NoEntities:
+    """実体の表に当たりが無い代役(実体の拡張を行って 0 件)。"""
+
+    async def entity_seed_aliases(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def entity_definition_chunks(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def entity_attribute_definition_chunks(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+
+def _answer_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rag_engine.adapters.oci as engine_oci
+
+    from tests.test_answer_engine import _fake_llm
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+
+
+async def test_answer_diagnostics_carry_the_seconds_of_each_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答の診断の 3 つの検索拡張に秒を出す(#5518)。実体は 0 件でも行ったので出す。"""
+    _answer_llm(monkeypatch)
+    engine, _oracle, _sections, _llm = _setup(monkeypatch)
+    engine._entity_store = _NoEntities()
+
+    outcome = await engine.run(SearchRequest(query=QUESTION))
+
+    diagnostics = outcome.diagnostics
+    outline = diagnostics["outline_selection"]
+    assert isinstance(outline["elapsed_seconds"], float) and outline["elapsed_seconds"] >= 0
+    # 既存の項目はそのまま(選ぶモデルの呼び出しの秒は selection の中に残る)。
+    assert outline["added_count"] == 1 and outline["skip_reason"] is None
+    assert isinstance(outline["selection"]["elapsed_seconds"], float)
+    entity = diagnostics["entity_expansion"]
+    assert entity["added_count"] == 0 and entity["chunks"] == []
+    assert isinstance(entity["elapsed_seconds"], float)
+    assert isinstance(diagnostics["reference_expansion"]["elapsed_seconds"], float)
+
+
+async def test_answer_diagnostics_have_no_expansion_seconds_when_expansions_are_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """拡張を行わない設定では、拡張の診断も秒も出さない(#5518)。"""
+    _answer_llm(monkeypatch)
+    engine, _oracle, _sections, llm = _setup(
+        monkeypatch,
+        rag_outline_selection_enabled=False,
+        rag_entity_expansion_enabled=False,
+        rag_reference_expansion_enabled=False,
+    )
+
+    outcome = await engine.run(SearchRequest(query=QUESTION))
+
+    assert llm.calls == []
+    for name in ("outline_selection", "entity_expansion", "reference_expansion", "wiki"):
+        assert name not in outcome.diagnostics
