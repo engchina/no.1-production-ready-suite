@@ -207,6 +207,53 @@ test("初回ログインは強制パスワード変更へ移り、変更後は C
   ]);
 });
 
+test("ログインとパスワード変更の送信中はボタンの loading だけを出し、経過時間を出さない（#5495）", { tag: "@responsive" }, async ({
+  page,
+}, testInfo) => {
+  await mockAuthApi(page, null);
+  // 応答を遅らせ、送信中の画面を確かめる（後に登録した route が先に呼ばれる）。
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/api\/auth\/(login|password\/change)$/, async (route) => {
+    await held;
+    await route.fallback();
+  });
+
+  await page.goto("/login");
+  await page.getByLabel("ログインユーザーID").fill("first.user");
+  await page.getByLabel("パスワード").fill("TemporaryPass!123");
+  const login = page.getByRole("button", { name: "ログイン" });
+  await login.click();
+  await expect(login).toBeDisabled();
+  await page.waitForTimeout(1200);
+  await expect(page.getByText("経過時間")).toHaveCount(0);
+  await expect(page.locator('[data-testid="auth-login-processing"]')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("login-busy.png") });
+  release();
+
+  await expect(page).toHaveURL(/\/password\/change$/);
+  let releaseChange = () => {};
+  const heldChange = new Promise<void>((resolve) => (releaseChange = resolve));
+  await page.unroute(/\/api\/auth\/(login|password\/change)$/);
+  await page.route(/\/api\/auth\/password\/change$/, async (route) => {
+    await heldChange;
+    await route.fallback();
+  });
+  await page.getByLabel("現在のパスワード").fill("TemporaryPass!123");
+  await page.locator("#auth-password-new").fill("IndependentPass!456");
+  await page.getByLabel("新しいパスワード（確認）").fill("IndependentPass!456");
+  const change = page.getByRole("button", { name: "パスワードを変更" });
+  await change.click();
+  await expect(change).toBeDisabled();
+  await page.waitForTimeout(1200);
+  await expect(page.getByText("経過時間")).toHaveCount(0);
+  await expect(page.locator('[data-testid="auth-password-processing"]')).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("password-busy.png") });
+  releaseChange();
+  await expect(page).toHaveURL(/\/login$/);
+});
+
 test("ログイン中に API が 401 を返したらログイン画面へ戻す", async ({ page }) => {
   await mockAuthApi(page, loginTarget("admin.user"));
   let expired = false;
