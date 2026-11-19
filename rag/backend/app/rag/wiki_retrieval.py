@@ -79,6 +79,41 @@ class WikiSearchResult:
     trace: dict[str, Any] = field(default_factory=dict)
 
 
+def _relations(
+    pages: Sequence[WikiPage], edges: set[tuple[str, str, str]], names: Mapping[str, str]
+) -> dict[str, list[dict[str, Any]]]:
+    """辿りで見た関係のうち、両端が回答の原文に入るものを、単位ごとの相手の場所つきで返す（#5500）。
+
+    ``role_of`` は関係の役割を持つ側（``this`` はこの単位、``other`` は相手）。相手は文書名と
+    章節で示す（根拠の ID は根拠を描くときに決まるので使わない）。関係の種類の順（例外・前提を先）
+    に並べる。
+    """
+    by_id = {page.unit.unit_id: page for page in pages}
+    priority = {relation: index for index, relation in enumerate(WIKI_RELATION_PRIORITY)}
+    found: dict[str, list[tuple[int, str, str, str]]] = {}
+    for source, target, relation in edges:
+        if source == target or source not in by_id or target not in by_id:
+            continue
+        rank = priority.get(relation, len(priority))
+        found.setdefault(source, []).append((rank, relation, "other", target))
+        found.setdefault(target, []).append((rank, relation, "this", source))
+    result: dict[str, list[dict[str, Any]]] = {}
+    for uid, rows in found.items():
+        entries: list[dict[str, Any]] = []
+        for _, relation, role_of, other in sorted(set(rows)):
+            unit = by_id[other].unit
+            entry = {
+                "relation": relation,
+                "role_of": role_of,
+                "document_name": names.get(unit.document_id) or unit.document_id,
+                "section_path": list(unit.section_path),
+            }
+            if entry not in entries:
+                entries.append(entry)
+        result[uid] = entries
+    return result
+
+
 class WikiRetriever:
     def __init__(
         self,
@@ -144,14 +179,16 @@ class WikiRetriever:
 
     async def follow(
         self, scope: dict[str, str], pages: dict[str, WikiPage], selected: Sequence[str]
-    ) -> tuple[list[str], list[dict[str, int]], int]:
+    ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]]]:
         """選んだ単位から、同じ文書の依存と文書をまたぐ関連（出る向き・入る向き）を辿る（#5492）。
 
         ``RAG_WIKI_LINK_DEPTH`` 段まで、段ごとに関係の種類の順（例外・前提を先）で、まだ読んでいない
         単位を ``RAG_WIKI_LINK_MAX_UNITS`` まで足す。一度見た単位は辿り直さない（循環を止める）。
         読めない単位（未公開・古い保存版・範囲の外）は数に入れない。辿るのは DB だけで、
         モデルは呼ばない。
-        返す値は（足した単位 ID・段ごとの数・読めなかった単位の数）。``pages`` に読んだ案内を足す。
+        返す値は（足した単位 ID・段ごとの数・読めなかった単位の数・辿りで見た関係）。関係は
+        （起点, 終点, 関係の種類）で、終点が起点に対してその役割を持つ（#5500）。``pages`` に読んだ
+        案内を足す。
         """
         opts, store = self.settings, self.store
         budget = opts.rag_wiki_link_max_units
@@ -160,6 +197,7 @@ class WikiRetriever:
         added: list[str] = []
         hops: list[dict[str, int]] = []
         missing = 0
+        edges: set[tuple[str, str, str]] = set()
         for depth in range(1, opts.rag_wiki_link_depth + 1):
             if not frontier or len(added) >= budget:
                 break
@@ -168,8 +206,14 @@ class WikiRetriever:
                 for uid in frontier
                 for dependency in pages[uid].navigation.dependencies
             ]
+            edges.update(
+                (uid, dependency.unit_id, dependency.relation)
+                for uid in frontier
+                for dependency in pages[uid].navigation.dependencies
+            )
             current = set(frontier)
             for source, target, relation in await store.links(frontier, scope, self.compiler):
+                edges.add((source, target, relation))
                 if source in current:
                     offers.append((target, relation, "link"))
                 if target in current:
@@ -199,7 +243,7 @@ class WikiRetriever:
                     "link_units": sum(found[uid][1] == "link" for uid in chosen),
                 }
             )
-        return added, hops, missing
+        return added, hops, missing, edges
 
     async def search(
         self,
@@ -375,11 +419,14 @@ class WikiRetriever:
         selected = list(dict.fromkeys(selected))
         # 案内の依存（同じ文書）と文書をまたぐ関連（両向き）を、予算の内で段ごとに辿る（#5492）。
         with _stage("Wiki: 依存と関連の辿り"):
-            followed, hops, missing = await self.follow(scope, pages, selected)
+            followed, hops, missing, edges = await self.follow(scope, pages, selected)
         with _stage("Wiki: 原文の読み込み"):
             required = [pages[uid] for uid in [*selected, *followed]]
             originals = await self.current_sources(profile_id, scope, required)
         identities = {row["document_id"]: row["source_identities"] for row in catalog}
+        names = {row["document_id"]: row["title"] for row in catalog}
+        relations = _relations(required, edges, names)
+        units = {sid: page.unit.unit_id for page in required for sid in page.unit.source_chunk_ids}
         chunks = tuple(
             chunk.model_copy(
                 update={
@@ -387,6 +434,11 @@ class WikiRetriever:
                         **chunk.metadata,
                         "wiki_source": True,
                         "source_identities": identities.get(chunk.document_id, []),
+                        **(
+                            {"wiki_relations": found}
+                            if (found := relations.get(units[chunk.chunk_id]))
+                            else {}
+                        ),
                     }
                 }
             )

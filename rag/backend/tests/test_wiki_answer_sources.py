@@ -13,6 +13,12 @@ from app.rag.wiki_retrieval import WikiSearchResult
 from app.schemas.search import RetrievedChunk, SearchRequest
 
 IDENTITY = {"source_key": "S-1", "revision_key": "R-1"}
+RELATION = {
+    "relation": "exception",
+    "role_of": "this",
+    "document_name": "合成B.md",
+    "section_path": ["章1"],
+}
 
 
 def engine(retriever: Any) -> AnswerEngine:
@@ -40,7 +46,12 @@ class Retriever:
             file_name="合成.md",
             text="合成の原文。",
             score=0.0,
-            metadata={"chunk_set_id": "cs", "wiki_source": True, "source_identities": [IDENTITY]},
+            metadata={
+                "chunk_set_id": "cs",
+                "wiki_source": True,
+                "source_identities": [IDENTITY],
+                "wiki_relations": [RELATION],
+            },
         )
         return WikiSearchResult((chunk,), ("page",), {"status": "ready"})  # type: ignore[arg-type]
 
@@ -56,6 +67,7 @@ async def test_wiki_sources_keep_the_version_attributes_and_mark_the_channel() -
     assert [chunk.chunk_id for chunk in stored] == ["c1"]
     metadata = stored[0].metadata
     assert metadata["wiki_source"] is True and metadata["source_identities"] == [IDENTITY]
+    assert metadata["wiki_relations"] == [RELATION]
     assert metadata["adb_hybrid"] == {"retrieval_channels": ["wiki"]}
     assert (
         state.wiki_pages == ("page",)
