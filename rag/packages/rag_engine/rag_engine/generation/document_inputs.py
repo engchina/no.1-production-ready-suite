@@ -1,7 +1,7 @@
 """選択順位・文書の版・原文位置を保つ生成入力の並べ方。"""
 
 import math
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any
 
 # 文書の先頭ページの背景（引用の対象外の補助の原文）の span の印。
@@ -68,6 +68,74 @@ def document_priority(
 
     ordered = sorted(groups, key=rank)
     return {document_key(members[0]): index for index, members in enumerate(ordered)}
+
+
+def _components(count: int, pairs: Iterable[tuple[int, int]]) -> list[list[int]]:
+    """``0..count-1`` を ``pairs`` で結んだ連結成分。成分は最小の番号の順、成分の中は番号の順。"""
+    parent = list(range(count))
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for left, right in pairs:
+        a, b = root(left), root(right)
+        if a != b:
+            parent[max(a, b)] = min(a, b)
+    groups: dict[int, list[int]] = {}
+    for index in range(count):
+        groups.setdefault(root(index), []).append(index)
+    return list(groups.values())
+
+
+def _contexts(span: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    context = span.get("source_context")
+    if not isinstance(context, Mapping):
+        return []
+    return [context, *(child for child in context.get("children") or () if isinstance(child, Mapping))]
+
+
+def _place(value: Mapping[str, Any]) -> tuple[str, tuple[str, ...]] | None:
+    path = value.get("section_path")
+    if not isinstance(path, list | tuple):
+        return None
+    return str(value.get("document_name") or ""), tuple(str(part) for part in path)
+
+
+def related_spans(spans: Sequence[Mapping[str, Any]]) -> list[list[int]]:
+    """Wiki の辿りで見た原文の間の関係（出典情報の ``wiki_relations``。#5500）で互いに結ばれた根拠の位置の組。
+
+    関係の相手は、関係の文書名と章節が、出典情報（子を含む）の文書名と章節に完全に一致する根拠。一致する根拠が
+    複数の文書（``document_key``）にまたがるときは、同名の別文書・別の版と誤って結ばないよう結ばない。関係の無い根拠は
+    1 件の組。組は最も前の根拠の順、組の中は与えた順（``wiki_relations`` が無ければ各根拠が与えた順の 1 件の組）。
+    """
+    places: dict[tuple[str, tuple[str, ...]], set[int]] = {}
+    for index, span in enumerate(spans):
+        for context in _contexts(span):
+            if (place := _place(context)) is not None:
+                places.setdefault(place, set()).add(index)
+    pairs = []
+    for index, span in enumerate(spans):
+        for context in _contexts(span):
+            for relation in context.get("wiki_relations") or ():
+                place = _place(relation) if isinstance(relation, Mapping) else None
+                targets = places.get(place, set()) if place is not None else set()
+                if len({document_key(spans[target]) for target in targets}) == 1:
+                    pairs.extend((index, target) for target in targets)
+    return _components(len(spans), pairs)
+
+
+def related_documents(documents: Sequence[Sequence[dict[str, Any]]]) -> list[list[Sequence[dict[str, Any]]]]:
+    """``related_spans`` で結ばれた根拠を含む文書（``document_groups`` の各組）を 1 つの単位にまとめる。
+
+    単位は最も前の文書の位置に置き、単位の中の文書は与えた順。関係が無ければ各文書が与えた順の 1 件の単位。
+    """
+    owners = [position for position, members in enumerate(documents) for _ in members]
+    groups = related_spans([value for members in documents for value in members])
+    pairs = [(owners[group[0]], owners[index]) for group in groups for index in group[1:]]
+    return [[documents[position] for position in unit] for unit in _components(len(documents), pairs)]
 
 
 def with_first_chunks(values: Sequence[dict[str, Any]], firsts: Sequence[dict[str, Any]] | None = None) -> list[dict[str, Any]]:

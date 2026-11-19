@@ -38,6 +38,8 @@ from rag_engine.generation.document_inputs import (
     document_key,
     document_priority,
     order_document_spans,
+    related_documents,
+    related_spans,
     with_first_chunks,
 )
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
@@ -263,6 +265,9 @@ def prepare_batched_evidence(
     ``protected_sources`` は検索拡張の印を持つ根拠の出典（#5162・#5098）。その文書を最初の組から読み（関連度の高い根拠と
     同じ組に入りやすくし、点数の低い橋渡しの根拠を最後の組へ回さない）、読取で選ばれなかったときは補う順の先頭にする。
     最終生成へ渡す並びは関連度の順（``document_order``）のまま。
+    Wiki の辿りで見た原文の間の関係（出典情報の ``wiki_relations``。#5500・#5512）で結ばれた根拠は、組分けではその文書を
+    1 つの単位にして同じ組で読み、補う順では 1 つの単位にしてまとめて足す（``related_documents``・``related_spans``）。
+    単位が予算に入らなければ、文書・原文ごとの今の扱いに戻す。
     ``image_count`` は最終生成に添付する画像の枚数（#5316）。最終生成の測定だけに含める（各組は画像を送らない）。
 
     文書の本文の先頭の chunk（``FIRST_CHUNK`` の印。#5240）は組分けの対象にせず、各組と最終生成の入力に、そこに出てくる文書の
@@ -443,35 +448,49 @@ def prepare_batched_evidence(
     def partition(values: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         result: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
-        for document in document_groups(main_of(values), priority=reading_order):
-            if batch_fits([*current, *document]):
-                current.extend(document)
-                continue
-            if current:
-                result.append(current)
-                current = []
-            if batch_fits(document):
-                current.extend(document)
-                continue
-            # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。字数は入るかどうかの確認だけに使う。
-            for value in document:
-                cuts = evidence_cuts(value, current_section_paths())
-                offset = 0
-                while offset < len(value["text"]):
-                    rest = piece(value, cuts, offset, len(value["text"]))
-                    if batch_fits([*current, rest]):
-                        current.append(rest)
-                        break
-                    if current:
-                        result.append(current)
-                        current = []
-                        continue
-                    end = cut_end(value, cuts, offset)
-                    result.append([piece(value, cuts, offset, end)])
-                    offset = end
-            if current:
-                result.append(current)
-                current = []
+        # Wiki の関係で結ばれた根拠を含む文書は 1 つの単位にし、同じ組で読む（#5512）。
+        for unit in related_documents(document_groups(main_of(values), priority=reading_order)):
+            if len(unit) > 1:
+                members = [value for document in unit for value in document]
+                if batch_fits([*current, *members]):
+                    current.extend(members)
+                    continue
+                if current:
+                    result.append(current)
+                    current = []
+                if batch_fits(members):
+                    current.extend(members)
+                    continue
+                # 単位が 1 組に入らなければ、単位の中の文書に文書の扱い（続く組へ詰め、文書単独でも入らなければ分ける）を掛ける。
+            for document in unit:
+                if batch_fits([*current, *document]):
+                    current.extend(document)
+                    continue
+                if current:
+                    result.append(current)
+                    current = []
+                if batch_fits(document):
+                    current.extend(document)
+                    continue
+                # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。字数は入るかどうかの確認だけに使う。
+                for value in document:
+                    cuts = evidence_cuts(value, current_section_paths())
+                    offset = 0
+                    while offset < len(value["text"]):
+                        rest = piece(value, cuts, offset, len(value["text"]))
+                        if batch_fits([*current, rest]):
+                            current.append(rest)
+                            break
+                        if current:
+                            result.append(current)
+                            current = []
+                            continue
+                        end = cut_end(value, cuts, offset)
+                        result.append([piece(value, cuts, offset, end)])
+                        offset = end
+                if current:
+                    result.append(current)
+                    current = []
         if current:
             result.append(current)
         return result
@@ -494,30 +513,52 @@ def prepare_batched_evidence(
                 and excerpt.get("end", len(excerpt["text"])) <= value.get("end", len(value["text"]))
             )
 
-        def extended(count: int, candidates: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        def extended(count: int, candidates: Sequence[list[dict[str, Any]]]) -> list[dict[str, Any]]:
             result = list(chosen)
-            for value in candidates[:count]:
+            for value in (value for unit in candidates[:count] for value in unit):
                 answers = [excerpt["batch_answer"] for excerpt in result if inside(excerpt, value) and excerpt.get("batch_answer")]
                 result = [excerpt for excerpt in result if not inside(excerpt, value)]
                 result.append({**value, **({"batch_answer": "\n".join(answers)} if answers else {})})
             return order_document_spans(tag(with_firsts(result)), priority=document_order)
 
+        def growth(value: dict[str, Any], estimated: Sequence[dict[str, Any]]) -> int | None:
+            """``value`` を足して増える字数の見積もり。同じ原文がすでにあれば None。"""
+            if any(excerpt["text"] == value["text"] and inside(excerpt, value) for excerpt in estimated):
+                return None
+            replaced = [excerpt for excerpt in estimated if inside(excerpt, value)]
+            return len(evidence_text(tag([value]))) - sum(len(excerpt["text"]) for excerpt in replaced)
+
+        def admit(value: dict[str, Any], estimated: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [*(excerpt for excerpt in estimated if not inside(excerpt, value)), value]
+
         # 文字数は根拠のブロックの大きさで見積もり、入らない大きな原文は飛ばして次の順位を足す。
         # 全文へ置き換えると消える抜粋の本文の分は差し引く（#5033。書式の分は差し引かず、増える量を多めに見積もる）。
         # 実際に入るかは、下の全体の判定で文字数と token を測る。
+        # Wiki の関係で結ばれた原文は 1 つの単位にし、単位の中の最も上の順位の位置で、全部が入るときだけまとめて足す。
+        # 入らなければ単位の中の原文を順に、入るものだけ足す（#5512）。足す件数の二分探索は単位で数える。
         room = settings.evidence_budget_chars - len(evidence_text(tag(list(chosen))))
-        candidates = []
+        candidates: list[list[dict[str, Any]]] = []
         estimated = list(chosen)
-        for value in sorted(main_of(spans), key=rank):
-            if any(excerpt["text"] == value["text"] and inside(excerpt, value) for excerpt in estimated):
-                continue
-            replaced = [excerpt for excerpt in estimated if inside(excerpt, value)]
-            size = len(evidence_text(tag([value]))) - sum(len(excerpt["text"]) for excerpt in replaced)
-            if size <= room:
-                candidates.append(value)
-                room -= size
-                estimated = [excerpt for excerpt in estimated if not inside(excerpt, value)]
-                estimated.append(value)
+        ranked = sorted(main_of(spans), key=rank)
+        for group in related_spans(ranked):
+            members = [ranked[index] for index in group]
+            if len(members) > 1:
+                trial, total, kept = estimated, 0, []
+                for value in members:
+                    if (size := growth(value, trial)) is not None:
+                        total, trial = total + size, admit(value, trial)
+                        kept.append(value)
+                if total <= room:
+                    if kept:
+                        candidates.append(kept)
+                        room -= total
+                        estimated = trial
+                    continue
+            for value in members:
+                if (size := growth(value, estimated)) is not None and size <= room:
+                    candidates.append([value])
+                    room -= size
+                    estimated = admit(value, estimated)
 
         # token を含む判定は全体で行う。入らなければ、足す件数を二分探索で減らす。``chosen`` だけなら入ることは確かめ済み。
         def attempt(count: int) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
@@ -538,7 +579,7 @@ def prepare_batched_evidence(
                     count = low = middle
                 else:
                     high = middle - 1
-        added = candidates[:count]
+        added = [value for unit in candidates[:count] for value in unit]
 
         def size_of(values: Sequence[Mapping[str, Any]]) -> dict[str, int]:
             return {"count": len(values), "chars": sum(len(value["text"]) for value in values)}
