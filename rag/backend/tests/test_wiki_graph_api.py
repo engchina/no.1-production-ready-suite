@@ -42,8 +42,7 @@ def _page(unit: WikiUnit, deps: list[tuple[str, str]] = ()) -> WikiPage:  # type
             context=f"{unit.title} の合成の案内。",
             possible_questions=["合成の質問？"],
             dependencies=[
-                WikiDependency(unit_id=target, relation=relation)  # type: ignore[arg-type]
-                for target, relation in deps
+                WikiDependency(unit_id=target, relation=relation) for target, relation in deps
             ],
             unresolved=["合成の未確認の点。"],
         ),
