@@ -863,6 +863,7 @@ export function DbObjectListDetail({
   loadMoreError = "",
   error = "",
   loadingActivityIcon,
+  refreshIndicator,
   detail,
   detailLabel,
   emptyDetail,
@@ -889,6 +890,11 @@ export function DbObjectListDetail({
   /** 選んでいる対象（`OWNER.NAME`）。未選択は空文字。 */
   selectedName: string;
   loading: boolean;
+  /**
+   * 前の行を残した一覧の取り直しの表示（`ProcessingIndicator`）。最初の読み込みと同じ一覧の領域の先頭に出す
+   * （components-reference「読み込み中」。パネルの上に出すと、最初の読み込みと位置が変わる）。
+   */
+  refreshIndicator?: ReactNode;
   search: string;
   ownerPrefix: DbObjectOwnerPrefix;
   sort: DbObjectSortState;
@@ -1021,125 +1027,128 @@ export function DbObjectListDetail({
           </div>
         ) : (
           // 全幅の表。表頭を固定し、md 未満 5 行・md 以上 8 行（画面の高さまで伸ばす）の中で縦にスクロールする（#4645）。
-          <DataTable
-            columns={[
-              {
-                key: "name",
-                header: labels.objectName,
-                sortable: true,
-                rowHeader: true,
-                className: "align-top",
-                render: (item, index) => {
-                  const qualifiedName = formatDbObjectName(item);
-                  const commentId = `${idPrefix}-comment-${index}`;
-                  const narrowSummary = [
-                    kindLabel ? kindLabel(item) : "",
-                    showComments ? item.comment?.trim() || "" : "",
-                    showRowCount ? formatRowCount(item.row_count) : "",
-                  ].filter(Boolean);
-                  return (
-                    <RowTitleButton
-                      title={<DbObjectName value={qualifiedName} size="xs" />}
-                      // md 未満は名前の列だけを残し、種類・コメント・行数を名前の下の 1 行に畳む（横にスクロールさせない）。
-                      subtitle={
-                        narrowSummary.length > 0 ? (
-                          <span
-                            id={commentId}
-                            className="line-clamp-2 [overflow-wrap:anywhere] md:hidden"
-                            data-testid={`${idPrefix}-row-summary`}
-                          >
-                            {narrowSummary.join(" · ")}
-                          </span>
-                        ) : undefined
-                      }
-                      current={qualifiedName === selectedName}
-                      aria-label={labels.showObject(qualifiedName)}
-                      // 名前の下に畳んだ値（種類・コメント・行数）は、ボタンの読み上げ名の補足として読む。
-                      aria-describedby={narrowSummary.length > 0 ? commentId : undefined}
-                      onClick={() => onSelect(qualifiedName)}
-                    />
-                  );
+          <div className="grid min-w-0 gap-2">
+            {refreshIndicator}
+            <DataTable
+              columns={[
+                {
+                  key: "name",
+                  header: labels.objectName,
+                  sortable: true,
+                  rowHeader: true,
+                  className: "align-top",
+                  render: (item, index) => {
+                    const qualifiedName = formatDbObjectName(item);
+                    const commentId = `${idPrefix}-comment-${index}`;
+                    const narrowSummary = [
+                      kindLabel ? kindLabel(item) : "",
+                      showComments ? item.comment?.trim() || "" : "",
+                      showRowCount ? formatRowCount(item.row_count) : "",
+                    ].filter(Boolean);
+                    return (
+                      <RowTitleButton
+                        title={<DbObjectName value={qualifiedName} size="xs" />}
+                        // md 未満は名前の列だけを残し、種類・コメント・行数を名前の下の 1 行に畳む（横にスクロールさせない）。
+                        subtitle={
+                          narrowSummary.length > 0 ? (
+                            <span
+                              id={commentId}
+                              className="line-clamp-2 [overflow-wrap:anywhere] md:hidden"
+                              data-testid={`${idPrefix}-row-summary`}
+                            >
+                              {narrowSummary.join(" · ")}
+                            </span>
+                          ) : undefined
+                        }
+                        current={qualifiedName === selectedName}
+                        aria-label={labels.showObject(qualifiedName)}
+                        // 名前の下に畳んだ値（種類・コメント・行数）は、ボタンの読み上げ名の補足として読む。
+                        aria-describedby={narrowSummary.length > 0 ? commentId : undefined}
+                        onClick={() => onSelect(qualifiedName)}
+                      />
+                    );
+                  },
                 },
-              },
-              ...(kindLabel
-                ? [
-                    {
-                      key: "kind",
-                      header: labels.kind ?? "",
-                      headerClassName: "hidden w-[7rem] md:table-cell",
-                      className: "hidden align-top md:table-cell",
-                      render: (item: DbAdminObjectSummary) => (
-                        <StatusBadge
-                          icon={false}
-                          variant={item.object_type === "view" ? "info" : "neutral"}
-                          label={kindLabel(item)}
-                        />
-                      ),
-                    } satisfies DataTableColumn<DbAdminObjectSummary>,
-                  ]
-                : []),
-              ...(showComments
-                ? [
-                    {
-                      key: "comment",
-                      header: labels.comment ?? "",
-                      headerClassName: "hidden md:table-cell",
-                      className: "hidden align-top md:table-cell",
-                      render: (item: DbAdminObjectSummary, index: number) => (
-                        <DbObjectCommentText id={`${idPrefix}-comment-cell-${index}`} comment={item.comment} />
-                      ),
-                    } satisfies DataTableColumn<DbAdminObjectSummary>,
-                  ]
-                : []),
-              ...(showRowCount
-                ? [
-                    {
-                      key: "row_count",
-                      header: labels.rows,
-                      sortable: true,
-                      align: "right",
-                      headerClassName: "hidden w-[8rem] md:table-cell",
-                      className: "hidden whitespace-nowrap align-top font-sans tabular-nums md:table-cell",
-                      render: (item: DbAdminObjectSummary) => formatRowCount(item.row_count),
-                    } satisfies DataTableColumn<DbAdminObjectSummary>,
-                  ]
-                : []),
-              ...(rowActions
-                ? [
-                    {
-                      key: "actions",
-                      header: <span className="sr-only">{labels.actions ?? ""}</span>,
-                      align: "right",
-                      // 列の幅は固定（table-fixed）なので、タッチ端末の 44px のボタンとセルの余白が収まる幅にする。
-                      headerClassName: "w-[5rem]",
-                      className: "align-top",
-                      render: (item: DbAdminObjectSummary) => (
-                        <RowActionMenu
-                          actions={rowActions(item)}
-                          ariaLabel={`${labels.actions ?? ""}: ${formatDbObjectName(item)}`}
-                          testId={`${idPrefix}-row-actions-${formatDbObjectName(item)}`}
-                        />
-                      ),
-                    } satisfies DataTableColumn<DbAdminObjectSummary>,
-                  ]
-                : []),
-            ]}
-            rows={items}
-            getRowKey={(item) => formatDbObjectName(item)}
-            sort={sort}
-            onSortChange={(nextSort) => onSortChange(nextSort.key as DbObjectSortKey)}
-            selectedRowKey={selectedName || null}
-            onRowClick={(item) => onSelect(formatDbObjectName(item))}
-            rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
-            testId={`${idPrefix}-grid`}
-            scrollTestId="db-admin-object-list"
-            scrollAriaLabel={labels.title}
-            // 列の幅は表の幅で決め、長い値で表を押し広げない（横にスクロールさせない。#4645）。
-            tableClassName="w-full table-fixed"
-            stickyHeader
-            visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-            growToViewport
-          />
+                ...(kindLabel
+                  ? [
+                      {
+                        key: "kind",
+                        header: labels.kind ?? "",
+                        headerClassName: "hidden w-[7rem] md:table-cell",
+                        className: "hidden align-top md:table-cell",
+                        render: (item: DbAdminObjectSummary) => (
+                          <StatusBadge
+                            icon={false}
+                            variant={item.object_type === "view" ? "info" : "neutral"}
+                            label={kindLabel(item)}
+                          />
+                        ),
+                      } satisfies DataTableColumn<DbAdminObjectSummary>,
+                    ]
+                  : []),
+                ...(showComments
+                  ? [
+                      {
+                        key: "comment",
+                        header: labels.comment ?? "",
+                        headerClassName: "hidden md:table-cell",
+                        className: "hidden align-top md:table-cell",
+                        render: (item: DbAdminObjectSummary, index: number) => (
+                          <DbObjectCommentText id={`${idPrefix}-comment-cell-${index}`} comment={item.comment} />
+                        ),
+                      } satisfies DataTableColumn<DbAdminObjectSummary>,
+                    ]
+                  : []),
+                ...(showRowCount
+                  ? [
+                      {
+                        key: "row_count",
+                        header: labels.rows,
+                        sortable: true,
+                        align: "right",
+                        headerClassName: "hidden w-[8rem] md:table-cell",
+                        className: "hidden whitespace-nowrap align-top font-sans tabular-nums md:table-cell",
+                        render: (item: DbAdminObjectSummary) => formatRowCount(item.row_count),
+                      } satisfies DataTableColumn<DbAdminObjectSummary>,
+                    ]
+                  : []),
+                ...(rowActions
+                  ? [
+                      {
+                        key: "actions",
+                        header: <span className="sr-only">{labels.actions ?? ""}</span>,
+                        align: "right",
+                        // 列の幅は固定（table-fixed）なので、タッチ端末の 44px のボタンとセルの余白が収まる幅にする。
+                        headerClassName: "w-[5rem]",
+                        className: "align-top",
+                        render: (item: DbAdminObjectSummary) => (
+                          <RowActionMenu
+                            actions={rowActions(item)}
+                            ariaLabel={`${labels.actions ?? ""}: ${formatDbObjectName(item)}`}
+                            testId={`${idPrefix}-row-actions-${formatDbObjectName(item)}`}
+                          />
+                        ),
+                      } satisfies DataTableColumn<DbAdminObjectSummary>,
+                    ]
+                  : []),
+              ]}
+              rows={items}
+              getRowKey={(item) => formatDbObjectName(item)}
+              sort={sort}
+              onSortChange={(nextSort) => onSortChange(nextSort.key as DbObjectSortKey)}
+              selectedRowKey={selectedName || null}
+              onRowClick={(item) => onSelect(formatDbObjectName(item))}
+              rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
+              testId={`${idPrefix}-grid`}
+              scrollTestId="db-admin-object-list"
+              scrollAriaLabel={labels.title}
+              // 列の幅は表の幅で決め、長い値で表を押し広げない（横にスクロールさせない。#4645）。
+              tableClassName="w-full table-fixed"
+              stickyHeader
+              visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              growToViewport
+            />
+          </div>
         )
       }
       listFooter={

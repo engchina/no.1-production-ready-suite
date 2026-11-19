@@ -63,6 +63,38 @@ export type ProcessingSurface = "framed" | "plain";
 /** 処理中の表示の灰色の枠（`TimedLoadingState` と単独の `ProcessingIndicator` で共通）。 */
 export const PROCESSING_FRAME_CLASS = "rounded-md border border-border bg-surface-sunken";
 
+/**
+ * 前の内容を出したままの取り直しの表示を待つ時間（ms）。これより早く終わる取り直しは何も出さない（一瞬の点滅を避ける）。
+ * 最初の読み込みの Skeleton は場所を確保するので待たない（components-reference「読み込み中」）。
+ */
+export const REFRESH_REVEAL_DELAY_MS = 300;
+
+/**
+ * 条件（検索語・絞り込み・ページ）を変えて取り直している間、前の条件の内容を薄くする class。薄くなるのは
+ * `REFRESH_REVEAL_DELAY_MS` の後で、新しい内容が届いたらすぐ戻す（transition-delay は入るときだけ）。
+ * 条件の変わらない取り直し（定期・invalidate）では薄くしない（内容はまだ正しい）。
+ */
+export function staleContentClass(stale: boolean): string {
+  return stale
+    ? "opacity-60 transition-opacity delay-300 duration-150 ease-out motion-reduce:transition-none"
+    : "transition-opacity duration-150 ease-out motion-reduce:transition-none";
+}
+
+/** `active` になってから `delayMs` 経つまで false を返す（`delayMs` が 0 なら常に true）。 */
+function useRevealAfter(active: boolean, delayMs: number): boolean {
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    if (delayMs <= 0) return undefined;
+    if (!active) {
+      setRevealed(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setRevealed(true), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [active, delayMs]);
+  return delayMs <= 0 || !active || revealed;
+}
+
 export interface UseOperationTimingOptions {
   active: boolean;
   /** 同じ component instance で別処理へ切り替わるとき timer をリセットする識別子。 */
@@ -184,6 +216,11 @@ export interface ProcessingIndicatorProps extends UseOperationTimingOptions {
   labels?: Partial<ProcessingLabels>;
   /** 既定は灰色の枠。灰色の枠を持つ部品の中に入れるときだけ "plain"。 */
   surface?: ProcessingSurface;
+  /**
+   * `active` になってから表示するまで待つ時間（ms。既定 0）。前の内容を出したままの取り直しには
+   * `REFRESH_REVEAL_DELAY_MS` を渡し、早く終わる取り直しで点滅させない。
+   */
+  revealDelayMs?: number;
 }
 
 /**
@@ -209,6 +246,7 @@ export function ProcessingIndicator({
   announceActivity = true,
   labels: labelOverrides,
   surface = "framed",
+  revealDelayMs = 0,
   ...timingOptions
 }: ProcessingIndicatorProps) {
   const labels = { ...DEFAULT_PROCESSING_LABELS, ...labelOverrides };
@@ -217,6 +255,8 @@ export function ProcessingIndicator({
   const slow = useLatchedSlow(timing.slow, { active: showSlowLine, resetKey: timingOptions.operationKey ?? null });
   const displayLabel = timing.active ? label : finalLabel ?? labels.completed;
   const showActivityIcon = activityIcon === "spinner";
+  const revealed = useRevealAfter(timing.active, revealDelayMs);
+  if (!revealed) return null;
 
   return (
     <div

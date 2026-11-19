@@ -170,6 +170,7 @@ export function DocumentPickerSheet({
       }}
       loading={scopePending || (candidates.isPending && candidates.fetchStatus !== "idle")}
       refreshing={candidates.isFetching && candidates.isPlaceholderData}
+      stale={candidates.isFetching && candidates.isPlaceholderData}
       error={
         scopeError ?? (candidates.isError && !candidates.data ? errorMessage(candidates.error) : undefined)
       }

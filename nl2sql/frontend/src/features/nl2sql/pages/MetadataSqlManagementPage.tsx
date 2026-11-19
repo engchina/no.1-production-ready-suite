@@ -22,7 +22,6 @@ import {
   ContentActionBar,
   ListPicker,
   type ListPickerItem,
-  ProcessingIndicator,
   TextareaField,
   TextField,
   FormGrid,
@@ -595,18 +594,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           testId={`${pageId}-schema-sync-notice`}
           processingTestId={`${pageId}-schema-sync-processing`}
         />
+        {/* 対象の一覧の取り直しは、最初の読み込みと同じ一覧の先頭に 1 か所だけ出す（ListPicker の refreshing）。
+            ここ（タブの上）にも出すと 2 か所になり、位置も最初の読み込みと変わる。DB 構造の再取得はページの処理なのでここ。 */}
         {schemaRefreshing && !schemaSync.ownsProgress ? (
           <SchemaRefreshProcessing testId={`${pageId}-workspace-processing`} />
-        ) : objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data) &&
-          !noticeRetry.pending ? (
-          <ProcessingIndicator
-            active
-            label={t("common.processing.refreshing")}
-            operationKey="metadata-objects-refresh"
-            placement="workspace"
-            testId={`${pageId}-workspace-processing`}
-            activityIcon={manualRefresh.pending ? "none" : "spinner"}
-          />
         ) : null}
 
         <DbObjectManagementTabs

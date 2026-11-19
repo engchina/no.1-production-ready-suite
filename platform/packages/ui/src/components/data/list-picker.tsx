@@ -16,7 +16,12 @@ import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from ".
 import { prefixOffsets, scrollTopToReveal, visibleRange } from "../../lib/list-window";
 import { cn } from "../../lib/utils";
 import { EmptyState, ErrorState } from "../feedback/state-views";
-import { TimedLoadingState } from "../feedback/processing-state";
+import {
+  ProcessingIndicator,
+  REFRESH_REVEAL_DELAY_MS,
+  staleContentClass,
+  TimedLoadingState,
+} from "../feedback/processing-state";
 import { BulkSelectionActions } from "../ui/bulk-selection-actions";
 import { ClearActionButton } from "../ui/clear-action-button";
 import { SearchField, type SearchFieldProps } from "../ui/search-field";
@@ -165,8 +170,13 @@ export interface ListPickerProps {
   hasActiveFilter?: boolean;
   /** 最初の読み込み中。 */
   loading?: boolean;
-  /** 条件を変えて取り直している間（前の候補を出したまま）。 */
+  /** 取り直している間（前の候補を出したまま、一覧の先頭に表示する）。 */
   refreshing?: boolean;
+  /**
+   * 出している候補が前の条件（検索語・絞り込み・ページ）のもの（TanStack Query の `isPlaceholderData`）。候補を薄くする。
+   * 条件の変わらない取り直し（定期・invalidate）では渡さない。
+   */
+  stale?: boolean;
   /** 最初の読み込みの失敗。 */
   error?: string;
   onRetry?: () => void;
@@ -271,6 +281,7 @@ export function ListPicker({
   hasActiveFilter = false,
   loading = false,
   refreshing = false,
+  stale = false,
   error,
   onRetry,
   hasMore = false,
@@ -670,7 +681,7 @@ export function ListPicker({
               aria-label={listboxName}
               aria-describedby={hintId}
               aria-activedescendant={activeInGroup >= 0 ? `${baseId}-option-${activeInGroup}` : undefined}
-              aria-busy={refreshing || undefined}
+              aria-busy={refreshing || stale || undefined}
               aria-disabled={disabled || undefined}
               tabIndex={disabled ? -1 : 0}
               className="group/listbox absolute inset-x-0 focus-visible:-outline-offset-2"
@@ -761,7 +772,24 @@ export function ListPicker({
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
         data-testid={testId ? `${testId}-scroll-region` : undefined}
       >
-        {renderBody()}
+        {/* 前の行を残した取り直しも、最初の読み込みと同じ一覧の先頭に出す（高さ 0 の sticky。スクロールしても先頭に残る。
+            components-reference「読み込み中」）。一覧の下（フッター）に出すと、最初の読み込みと位置が変わる。 */}
+        {(refreshing || stale) && !loading ? (
+          <div className="pointer-events-none sticky left-0 top-0 z-10 h-0 w-full">
+            <div className="p-2">
+              <ProcessingIndicator
+                active
+                label={labels.refreshing}
+                placement="action"
+                showSlowMessage={false}
+                revealDelayMs={REFRESH_REVEAL_DELAY_MS}
+                className="shadow-sm"
+                testId={testId ? `${testId}-refreshing` : undefined}
+              />
+            </div>
+          </div>
+        ) : null}
+        <div className={staleContentClass(stale && !loading)}>{renderBody()}</div>
       </div>
       <LoadMoreFooter
         summary={loading ? "" : footerCount}
@@ -771,8 +799,6 @@ export function ListPicker({
         onLoadMore={onLoadMore}
         loadMoreLabel={labels.loadMore}
         retryLabel={labels.retry}
-        refreshing={refreshing && !loading}
-        refreshingLabel={labels.refreshing}
         testId={testId ? `${testId}-footer` : undefined}
       />
       {actions}

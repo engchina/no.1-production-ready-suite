@@ -557,6 +557,8 @@ export {
   type ProcessingActivityIcon,
   type ProcessingSurface,
   PROCESSING_FRAME_CLASS,
+  REFRESH_REVEAL_DELAY_MS,
+  staleContentClass,
   type ProcessingLabels,
   type UseOperationTimingOptions,
   type OperationTiming,

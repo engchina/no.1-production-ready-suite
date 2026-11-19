@@ -7,6 +7,7 @@ import {
   DEFAULT_LIST_PICKER_LABELS,
   ListPicker,
   ListToolbar,
+  REFRESH_REVEAL_DELAY_MS,
   SEARCH_FIELD_DEBOUNCE_MS,
   type ListPickerGroup,
   type ListPickerItem,
@@ -413,6 +414,28 @@ describe("ListPicker", () => {
     );
     expect(host.querySelector('[data-skeleton="list"]')).not.toBeNull();
     expect(listboxes()).toHaveLength(0);
+  });
+
+  it("取り直し: 一覧の先頭の表示は 300ms 待って出し、前の条件の候補（stale）だけ薄くする", () => {
+    vi.useFakeTimers();
+    try {
+      const items = makeItems(3);
+      render(<Harness items={items} refreshing />);
+      const refreshing = () => host.querySelector('[data-testid="picker-refreshing"]');
+      expect(refreshing()).toBeNull();
+      act(() => vi.advanceTimersByTime(REFRESH_REVEAL_DELAY_MS));
+      expect(refreshing()).not.toBeNull();
+      // 条件の変わらない取り直しは候補を薄くしない。
+      expect(host.querySelector(".opacity-60")).toBeNull();
+      render(<Harness items={items} stale />);
+      expect(listboxes()[0].getAttribute("aria-busy")).toBe("true");
+      expect(listboxes()[0].closest(".opacity-60")).not.toBeNull();
+      render(<Harness items={items} />);
+      expect(refreshing()).toBeNull();
+      expect(host.querySelector(".opacity-60")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

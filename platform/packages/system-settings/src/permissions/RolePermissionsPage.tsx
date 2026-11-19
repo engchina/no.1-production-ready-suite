@@ -1291,6 +1291,8 @@ function TargetPicker<R extends PermissionRole>({
       }}
       loading={loading && firstLoad}
       refreshing={loading && !firstLoad}
+      // 検索語を変えた取り直しの間だけ前の候補を薄くする（同じ検索語の再試行では薄くしない）。
+      stale={loading && !firstLoad && result.query !== search}
       error={error || undefined}
       onRetry={() => void request(search, 0)}
       hasMore={!firstLoad && result.items.length < result.total}
