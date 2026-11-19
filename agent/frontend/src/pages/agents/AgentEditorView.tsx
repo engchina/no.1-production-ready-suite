@@ -578,7 +578,7 @@ export function AgentEditorView({
                         checked={saveDraftCases}
                         onChange={(event) => setSaveDraftCases(event.target.checked)}
                         aria-describedby="agent-draft-evaluation-set-helper"
-                        className="mt-0.5 h-4 w-4 shrink-0"
+                        className="mt-0.5 h-4 w-4 shrink-0 accent-accent-emphasis"
                       />
                       <span className="min-w-0">
                         <span className="block font-medium">

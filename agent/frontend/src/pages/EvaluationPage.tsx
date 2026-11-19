@@ -205,30 +205,30 @@ export function EvaluationPage() {
     );
   }
   if (editorTarget.kind === "edit") {
-    if (editingSet.isLoading) {
-      return (
-        <PageBody wide>
-          <TimedLoadingState label={t("loading.evaluationSet")} testId="evaluation-set-loading">
-            <ListSkeleton rows={4} />
-          </TimedLoadingState>
-        </PageBody>
-      );
-    }
-    if (editingSet.isError && editingSet.data === undefined && !(editingSet.error instanceof ApiError && editingSet.error.status === 404)) {
-      return (
-        <PageBody wide>
-          <DataLoadFailure
-            error={editingSet.error}
-            fallback={t("common.error.load")}
-            onRetry={() => void editingSet.refetch()}
-            retrying={editingSet.isFetching}
-            testId="evaluationpage-detail-load-failed"
-          />
-        </PageBody>
-      );
-    }
     if (!editingSet.data) {
-      return <MissingEditorTarget id={editorTarget.id} onBack={() => editor.backToList({ replace: true })} />;
+      // 読み込み中・失敗・見つからないときも画面の見出しを保つ（AppShell → PageHeader → PageBody。#5522）。
+      return (
+        <>
+          <PageHeader wide title={t("nav.evaluation")} />
+          <PageBody wide>
+            {editingSet.isLoading ? (
+              <TimedLoadingState label={t("loading.evaluationSet")} testId="evaluation-set-loading">
+                <ListSkeleton rows={4} />
+              </TimedLoadingState>
+            ) : editingSet.isError && !(editingSet.error instanceof ApiError && editingSet.error.status === 404) ? (
+              <DataLoadFailure
+                error={editingSet.error}
+                fallback={t("common.error.load")}
+                onRetry={() => void editingSet.refetch()}
+                retrying={editingSet.isFetching}
+                testId="evaluationpage-detail-load-failed"
+              />
+            ) : (
+              <MissingEditorTarget id={editorTarget.id} onBack={() => editor.backToList({ replace: true })} />
+            )}
+          </PageBody>
+        </>
+      );
     }
     return (
       <EvaluationSetEditor

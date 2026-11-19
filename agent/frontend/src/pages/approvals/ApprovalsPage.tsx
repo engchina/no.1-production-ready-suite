@@ -468,7 +468,7 @@ export function ApprovalsPage() {
                         className="sm:col-span-2"
                       />
                       <ApprovalFact label={t("approval.createdAt")} value={approvalDate(selected.approval.created_at)} />
-                      <ApprovalFact label={t("approval.id")} value={selected.approval.id} />
+                      <ApprovalFact label={t("approval.id")} value={selected.approval.id} mono />
                     </dl>
                     {selected.approval.status === "pending" && !capabilities.decideApprovals ? (
                       <Banner severity="info">{t("approval.viewOnly")}</Banner>
@@ -513,7 +513,7 @@ export function ApprovalsPage() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <dl className="grid gap-4 sm:grid-cols-2">
-                      <ApprovalFact label={t("audit.runId")} value={selected.run.id} />
+                      <ApprovalFact label={t("audit.runId")} value={selected.run.id} mono />
                       <ApprovalFact label={t("audit.runStatus")} value={runStatusView(selected.run.status).label} />
                     </dl>
                     {capabilities.viewRuns ? (
@@ -537,11 +537,22 @@ export function ApprovalsPage() {
   );
 }
 
-function ApprovalFact({ label, value, className }: { label: string; value: string; className?: string }) {
+function ApprovalFact({
+  label,
+  value,
+  className,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+  /** ID など文字幅の整列が要る値（#5522）。 */
+  mono?: boolean;
+}) {
   return (
     <div className={className}>
       <dt className="text-xs text-fg-muted">{label}</dt>
-      <dd className="break-words text-sm text-fg [overflow-wrap:anywhere]">{value}</dd>
+      <dd className={`break-words text-sm text-fg [overflow-wrap:anywhere]${mono ? " font-mono" : ""}`}>{value}</dd>
     </div>
   );
 }

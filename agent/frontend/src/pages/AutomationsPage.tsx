@@ -157,30 +157,30 @@ export function AutomationsPage() {
     );
   }
   if (target.kind === "edit") {
-    if (detail.isLoading) {
-      return (
-        <PageBody wide>
-          <TimedLoadingState label={t("loading.automation")} testId="automation-loading">
-            <ListSkeleton rows={4} />
-          </TimedLoadingState>
-        </PageBody>
-      );
-    }
-    if (detail.isError && detail.data === undefined && !(detail.error instanceof ApiError && detail.error.status === 404)) {
-      return (
-        <PageBody wide>
-          <DataLoadFailure
-            error={detail.error}
-            fallback={t("common.error.load")}
-            onRetry={() => void detail.refetch()}
-            retrying={detail.isFetching}
-            testId="automationspage-detail-load-failed"
-          />
-        </PageBody>
-      );
-    }
     if (!detail.data) {
-      return <MissingEditorTarget id={target.id} onBack={() => editor.backToList({ replace: true })} />;
+      // 読み込み中・失敗・見つからないときも画面の見出しを保つ（AppShell → PageHeader → PageBody。#5522）。
+      return (
+        <>
+          <PageHeader wide title={t("nav.automations")} />
+          <PageBody wide>
+            {detail.isLoading ? (
+              <TimedLoadingState label={t("loading.automation")} testId="automation-loading">
+                <ListSkeleton rows={4} />
+              </TimedLoadingState>
+            ) : detail.isError && !(detail.error instanceof ApiError && detail.error.status === 404) ? (
+              <DataLoadFailure
+                error={detail.error}
+                fallback={t("common.error.load")}
+                onRetry={() => void detail.refetch()}
+                retrying={detail.isFetching}
+                testId="automationspage-detail-load-failed"
+              />
+            ) : (
+              <MissingEditorTarget id={target.id} onBack={() => editor.backToList({ replace: true })} />
+            )}
+          </PageBody>
+        </>
+      );
     }
     return (
       <AutomationEditor
@@ -791,14 +791,15 @@ function AutomationEditor({
                         {WEEKDAYS.map((day) => (
                           <label
                             key={day}
-                            data-surface-tint="accent"
+                            // 淡い面を塗るのは選んだときだけ（未選択は bg-surface）。#5522
+                            data-surface-tint={draft.schedule.weekdays.includes(day) ? "accent" : undefined}
                             className="flex cursor-pointer items-center gap-2 rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
                           >
                             <input
                               type="checkbox"
                               checked={draft.schedule.weekdays.includes(day)}
                               onChange={() => toggleWeekday(day)}
-                              className="accent-accent-emphasis"
+                              className="h-4 w-4 shrink-0 accent-accent-emphasis"
                             />
                             {t(`automation.weekday.${day}` as I18nKey)}
                           </label>

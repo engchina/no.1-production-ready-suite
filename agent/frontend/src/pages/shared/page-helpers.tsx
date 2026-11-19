@@ -33,7 +33,7 @@ export function JsonPreview({ value, label }: { value: unknown; label?: string }
       tabIndex={0}
       role={label ? "region" : undefined}
       aria-label={label}
-      className="mt-2 max-h-64 w-full min-w-0 max-w-full overflow-auto rounded-md bg-surface-sunken p-3 text-xs leading-5 text-fg"
+      className="mt-2 max-h-64 w-full min-w-0 max-w-full overflow-auto rounded-md border border-border bg-surface-sunken p-3 text-xs leading-5 text-fg"
     >
       {JSON.stringify(value, null, 2)}
     </pre>

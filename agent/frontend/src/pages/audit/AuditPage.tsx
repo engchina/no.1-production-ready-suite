@@ -381,7 +381,7 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
       render: (record) => (
         <>
           <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{record.run_goal}</p>
-          <p className="mt-1 break-all text-xs text-fg-muted">{record.run_id}</p>
+          <p className="mt-1 break-all font-mono text-xs text-fg-muted">{record.run_id}</p>
           <p className="mt-1 text-xs text-fg-muted">{formatDate(record.run_created_at)}</p>
         </>
       ),
@@ -397,9 +397,9 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
       header: t("audit.toolName"),
       render: (record) => (
         <>
-          <p className="break-all font-medium text-fg">{record.tool_name}</p>
+          <p className="break-all font-mono font-medium text-fg">{record.tool_name}</p>
           {record.error_code ? (
-            <p className="mt-1 break-words text-xs text-danger-fg [overflow-wrap:anywhere]">{record.error_code}</p>
+            <p className="mt-1 break-words font-mono text-xs text-danger-fg [overflow-wrap:anywhere]">{record.error_code}</p>
           ) : null}
         </>
       ),
@@ -472,7 +472,7 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
       className: "max-w-48",
       render: (record) => (
         <>
-          <p className="break-all text-xs text-fg-muted">{record.trace_id ?? "-"}</p>
+          <p className={`break-all text-xs text-fg-muted${record.trace_id ? " font-mono" : ""}`}>{record.trace_id ?? "-"}</p>
           {record.artifact_ids.length ? (
             <p className="mt-1 text-xs text-fg-muted">{`${t("run.auditArtifacts")}: ${record.artifact_ids.length}`}</p>
           ) : null}

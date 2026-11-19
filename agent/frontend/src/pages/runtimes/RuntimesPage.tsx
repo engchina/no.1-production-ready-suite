@@ -111,12 +111,12 @@ export function RuntimesPage() {
                     <dl className={RUNTIME_FACTS_CLASS}>
                       <dt className="text-fg-muted">{t("runtime.builtin.sdk")}</dt>
                       <dd className="break-words">
-                        <code>{data.sdk}</code> {data.sdk_version}
+                        <code>{`${data.sdk} ${data.sdk_version}`}</code>
                       </dd>
                       <dt className="text-fg-muted">{t("runtime.builtin.provider")}</dt>
                       <dd>{data.model_provider}</dd>
                       <dt className="text-fg-muted">{t("runtime.builtin.defaultModel")}</dt>
-                      <dd className="break-words">{data.model_id || t("runtime.builtin.modelUnset")}</dd>
+                      <dd className={data.model_id ? "break-words font-mono" : "break-words"}>{data.model_id || t("runtime.builtin.modelUnset")}</dd>
                       <dt className="text-fg-muted">{t("runtime.builtin.models")}</dt>
                       <dd className="break-words">
                         {data.models.length
