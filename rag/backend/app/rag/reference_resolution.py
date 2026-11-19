@@ -1,10 +1,8 @@
-"""画面と検索が共有する、版と範囲を固定した明示参照の解決。I/Oは呼び手が担う。"""
+"""検索が使う、版と範囲を固定した明示参照の解決。I/Oは呼び手が担う。"""
 
 from __future__ import annotations
 
 import re
-from collections import Counter
-from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import Literal
@@ -16,17 +14,7 @@ from app.rag.cross_references import (
     document_reference_rank,
     same_document_title,
     split_section_path,
-    title_heading,
 )
-
-
-def document_title_from_paths(section_paths: Iterable[str]) -> str | None:
-    """文書の題名。見出しの過半の先頭の段で、章・条などの番号が無いもの。無ければ None。"""
-    heads = Counter(parts[0] for path in section_paths if (parts := split_section_path(path)))
-    if not heads:
-        return None
-    head, count = heads.most_common(1)[0]
-    return head if count * 2 > sum(heads.values()) and title_heading(head) else None
 
 
 @dataclass(frozen=True)

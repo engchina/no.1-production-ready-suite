@@ -137,8 +137,8 @@ class KbAdapterConfigError(ValueError):
     """KB 構築設定がグローバル設定と整合しないときに送出する。"""
 
 
-# 削除した文書解析エンジン(#270)の有効化フラグと、取込で作らなくなった文書構造索引の構築の
-# 指定(``graph_profile``。#5484)。保存済みの KB 構築設定・文書レシピ・取込ジョブの snapshot に
+# 削除した文書解析エンジン(#270)の有効化フラグと、削除した関係情報の構築の指定
+# (``graph_profile``。#5484・#5511)。保存済みの KB 構築設定・文書レシピ・取込ジョブの snapshot に
 # 残っていても読めるよう、検証前に取り除く。
 _REMOVED_INGESTION_FIELDS = frozenset(
     {

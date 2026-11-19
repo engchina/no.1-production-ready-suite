@@ -592,13 +592,6 @@
     },
     {
       "destructive": false,
-      "name": "20261102_001_graph_name_characters",
-      "sha256": "6fcca0cecb341f224706da2f3bdcaf79ab5e25e99aa9ac7a5cfed33793f88bc3",
-      "statement_count": 1,
-      "table_name": "rag_graph_entities"
-    },
-    {
-      "destructive": false,
       "name": "20261102_002_native_missing_scopes",
       "sha256": "6501d98d0e577969ba62a61e0abf62c100350e56ecfbd609c7168b102ca638ac",
       "statement_count": 2,
@@ -617,13 +610,6 @@
       "sha256": "f45d1449337852030334ed8390da08cb6ad66549f7c02a67c55a63de487a707f",
       "statement_count": 5,
       "table_name": "rag_native_index_maintenance"
-    },
-    {
-      "destructive": false,
-      "name": "20261102_005_graph_references",
-      "sha256": "224a96ee40dc8793a5fdeb26dc532f3067cc9e60f2b198bcc87e118f586ac1fe",
-      "statement_count": 1,
-      "table_name": "rag_graph_references"
     },
     {
       "destructive": false,
@@ -687,13 +673,6 @@
       "sha256": "b2d7cfe30027e850972371168ac615471d0efc9c216c1b5c4df2e0452a86c366",
       "statement_count": 1,
       "table_name": "rag_documents"
-    },
-    {
-      "destructive": false,
-      "name": "20261108_4628_foreign_key_lock_indexes",
-      "sha256": "117929c315e253eb8c751e344d9c8cf4133515606d1645c4a8c7db8c7f02d6b8",
-      "statement_count": 1,
-      "table_name": "rag_graph_references"
     },
     {
       "destructive": true,
@@ -862,10 +841,17 @@
       "sha256": "e93141e04f98bbad378973661573d99d532e7ac79972a31f3c870e58626fd7ea",
       "statement_count": 1,
       "table_name": "rag_wiki_links"
+    },
+    {
+      "destructive": true,
+      "name": "20261119_5511_retire_structure_index",
+      "sha256": "fa40e400981e143902b9c714f018aaec6b0e68ee8538c6c022b1cb278764de0e",
+      "statement_count": 1,
+      "table_name": "rag_knowledge_bases"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "ade0a11eb7ee0ae47409eee6b0755e3bcc8504959e38b30d42b5bdeefdbb848f",
-  "statement_count": 185
+  "sha256": "8df5b958c305ba0b384072d6630ab3942f6dc4c92454c1c4dfdfcd42ebb8d846",
+  "statement_count": 183
 }

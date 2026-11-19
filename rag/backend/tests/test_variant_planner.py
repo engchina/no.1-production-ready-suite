@@ -71,8 +71,8 @@ def test_different_parser_axis_splits_extraction_recipes() -> None:
     )
 
 
-def test_plan_has_no_structure_index_layer() -> None:
-    """文書構造索引は取込で作らない(#5484)。計画に graph 層を持たない。"""
+def test_plan_has_no_graph_layer() -> None:
+    """関係情報は作らない(#5484・#5511)。計画に graph 層を持たない。"""
     plan = plan_materializations(SRC, {"kb-1": _settings()})
     chunk_set_id = compute_chunk_set_id(SRC, _settings())
 

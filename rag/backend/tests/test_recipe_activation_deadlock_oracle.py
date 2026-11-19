@@ -120,11 +120,10 @@ async def test_every_foreign_key_has_an_index_led_by_its_columns() -> None:
 @pytest.mark.parametrize(
     ("child_table", "parent_kind"),
     [
-        ("rag_graph_references", "chunk_set"),
-        ("rag_graph_relationships", "graph_entity"),
-        ("rag_structure_index_builds", "document"),
+        ("rag_artifact_layers", "chunk_set"),
+        ("rag_wiki_documents", "document"),
     ],
-    ids=["graph-references", "graph-relationships", "structure-builds"],
+    ids=["artifact-layers", "wiki-documents"],
 )
 async def test_parent_deletes_of_two_documents_do_not_deadlock_on_child_table(
     child_table: str, parent_kind: str
@@ -132,24 +131,9 @@ async def test_parent_deletes_of_two_documents_do_not_deadlock_on_child_table(
     """子の表を変更中の 2 つの transaction が、それぞれ別の親の行を消しても両方通る。"""
     client = OracleClient()
     documents = [await _document_with_chunk_set(client, f"fk-{n}") for n in ("a", "b")]
-    entity_ids = [f"ent_{uuid4().hex[:16]}" for _ in documents]
     if parent_kind == "chunk_set":
         delete_sql = "DELETE FROM rag_chunk_sets WHERE chunk_set_id = :id"
         targets = [chunk_set_id for _, _, chunk_set_id in documents]
-    elif parent_kind == "graph_entity":
-        delete_sql = "DELETE FROM rag_graph_entities WHERE entity_id = :id"
-        targets = entity_ids
-
-        def insert_entities(connection: OracleConnectionProtocol) -> None:
-            for entity_id in entity_ids:
-                _execute(
-                    connection,
-                    "INSERT INTO rag_graph_entities (entity_id, canonical_name) "
-                    "VALUES (:id, :name)",
-                    {"id": entity_id, "name": f"合成の見出し {entity_id}"},
-                )
-
-        await client._run_transaction(insert_entities)
     else:
         delete_sql = "DELETE FROM rag_documents WHERE document_id = :id"
         targets = [document_id for document_id, _, _ in documents]
@@ -171,20 +155,8 @@ async def test_parent_deletes_of_two_documents_do_not_deadlock_on_child_table(
                 return "deadlock"
             raise
 
-    try:
-        results = await asyncio.gather(*(asyncio.to_thread(remove, target) for target in targets))
-        assert results == ["deleted", "deleted"]
-    finally:
-
-        def cleanup(connection: OracleConnectionProtocol) -> None:
-            for entity_id in entity_ids:
-                _execute(
-                    connection,
-                    "DELETE FROM rag_graph_entities WHERE entity_id = :id",
-                    {"id": entity_id},
-                )
-
-        await client._run_transaction(cleanup)
+    results = await asyncio.gather(*(asyncio.to_thread(remove, target) for target in targets))
+    assert results == ["deleted", "deleted"]
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -210,12 +182,12 @@ async def test_parallel_activations_of_two_documents_both_succeed(
         document_id: str,
         chunk_sets: Sequence[Mapping[str, object]],
     ) -> Any:
-        # 最初の 2 回だけ、2 つの transaction が関係情報の参照の表を変更中（その transaction の
+        # 最初の 2 回だけ、2 つの transaction が chunk set の子の表を変更中（その transaction の
         # 前の削除の連鎖と同じ SX）のまま、同時に削除へ入るようそろえる。
         with lock:
             first_round = next(waits, None) is not None
         if first_round:
-            _execute(connection, "LOCK TABLE rag_graph_references IN ROW EXCLUSIVE MODE", {})
+            _execute(connection, "LOCK TABLE rag_artifact_layers IN ROW EXCLUSIVE MODE", {})
             barrier.wait(timeout=30)
         return original(connection, document_id=document_id, chunk_sets=chunk_sets)
 

@@ -221,13 +221,37 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5511 文書構造索引の backend を削除する）
+
+#5502 で画面から外した文書構造索引の構築（KB の構築の job）・旧 API・表・参照の解決し直しの常駐の処理を削除した。
+検索・回答は文書構造索引を読んでいなかったので、検索・回答の結果は変わらない。KB の図は「Wiki の図」（#5502）のまま。
+
+1. **データを削除する migration `20261119_5511_retire_structure_index` を含むので、承認（CLI の `--allow-destructive`・
+   画面の確認ダイアログ）が要る**（下の「既存環境の更新手順の共通の注意」）。表 `RAG_STRUCTURE_INDEX_BUILDS`・
+   `RAG_STRUCTURE_INDEX_JOBS`・`RAG_GRAPH_REFERENCES`・`RAG_GRAPH_ENTITY_CHUNKS`・`RAG_GRAPH_RELATIONSHIPS`・
+   `RAG_GRAPH_ENTITIES` を索引・制約ごと削除する。Wiki・Wiki の関連・実体の層（`RAG_ENTITIES` など）・文書・chunk・
+   埋め込みは変えない。構築済みの索引を残す場合は、適用の前に同表を書き出す（削除後は復元できず、作り直す機能も無い）。
+
+   ```bash
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+2. **API**: `GET /api/knowledge-bases/{kb}/graph/*`（総覧・章節の木・位置・参照・検索・原文の chunk・参照の一覧）と
+   `…/structure-index/plan`・`…/structure-index/job`（`GET`・`POST`）・`…/structure-index/job/stop` を削除した（404）。
+   画面は #5502 から呼んでいない。
+3. **文書の詳細**: `GET /api/documents/{id}/chunk-sets` の `layer_statuses` から `graph`（文書構造索引の状態）を外した
+   （`metadata`・`navigation` だけ）。文書のレシピの「派生の層」の表示からも文書構造索引が消える。
+4. **常駐の処理**: 取込の worker の参照の解決し直し（ログ `reference_refresh_completed`・`reference_refresh_failed`）は
+   動かなくなる。設定・環境変数の変更は無い。
+5. 本番（OCI Compute）は 1 の承認の後に `sudo platform/deploy/suite-update.sh` を実行する。
+
 ## 既存環境の更新手順（#5502 KB 詳細の文書構造グラフを Wiki の図にする）
 
 KB 詳細の「文書構造索引の構築」のカードを外し、図を「Wiki ナビゲーション」のカードの最下部の「Wiki の図」にした（[Wiki ナビゲーション](./wiki-navigation.md)）。
 
 - **migration・DDL・設定の変更は無い。** 本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけでよい。
 - **API**: `GET /api/knowledge-bases/{kb}/wiki/graph` と `…/wiki/graph/*`（読み取りだけ）を足した。画面は文書構造索引の `…/structure-index/*`・`…/graph/*` を呼ばない。
-  これらの API・表（`rag_graph_*`・`rag_structure_index_*`）・構築済みの索引は次の変更で削除するまで残る（画面からは構築も閲覧もできない）。
+  これらの API・表（`rag_graph_*`・`rag_structure_index_*`）・構築済みの索引は #5511 で削除した（上の手順）。
 - **見え方**: 図は保存済みの Wiki の案内だけを出す。案内の無い KB は「Wiki を構築すると、文書・章節・案内のつながりを図で見られます」を出す。
 
 ## 既存環境の更新手順（#5492 Wiki の文書をまたぐ関連）

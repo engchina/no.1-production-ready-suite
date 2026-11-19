@@ -184,32 +184,6 @@ def test_scoped_resolution_uses_exact_file_name_and_reports_ambiguity() -> None:
     )
 
 
-def test_reference_records_skip_file_names_outside_catalog() -> None:
-    """文書構造の参照の記録も、範囲の文書に当たったファイル名だけを残す(範囲に無いものは捨てる)。"""
-    from app.rag.chunking import Chunk
-    from app.rag.reference_records import build_reference_records
-
-    source = ReferenceDocument("doc-list", "cs-list", "一覧.xlsx", ("作業の一覧",))
-    chunks = [
-        Chunk(
-            text="作業の参照先\n  手順A.txt\n  未登録.txt\n",
-            index=0,
-            start_offset=0,
-            end_offset=20,
-            metadata={"section_path": "作業の一覧"},
-        )
-    ]
-    target = ReferenceDocument("doc-a", "cs-a", "手順A.txt", ("手順1",))
-
-    records = build_reference_records(
-        knowledge_base_id="kb", source=source, chunks=chunks, documents=(target,)
-    )
-
-    assert [(record.label, record.status, record.target_document_id) for record in records] == [
-        ("手順A.txt", "resolved", "doc-a")
-    ]
-
-
 # ---- 回答の検索での補充 ----
 
 

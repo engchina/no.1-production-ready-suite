@@ -29,7 +29,7 @@ function kindLabel(kind: WikiNodeKind) {
   return t(`wiki.graph.kind.${kind}` as I18nKey);
 }
 const KIND_ICONS: Record<WikiNodeKind, LucideIcon> = { document: FileText, section: Heading, unit: TextQuote, more: MoreHorizontal };
-// 種類 = 塗り（文書構造グラフ・NL2SQL の図と同じ語彙）。
+// 種類 = 塗り（NL2SQL の図と同じ語彙）。
 const KIND_FILLS: Record<WikiNodeKind, string> = {
   document: "var(--color-graph-entity)", section: "var(--color-graph-term)", unit: "var(--color-graph-metric)", more: "var(--color-graph-default)",
 };

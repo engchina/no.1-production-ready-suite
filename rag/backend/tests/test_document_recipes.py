@@ -1256,9 +1256,6 @@ class _CompletingRecipeOracle(_FakeRecipeJobOracle):
             "language_pack_release_id": "synthetic-release",
         }
 
-    async def graph_entity_counts_for_chunk_sets(self, chunk_set_ids: list[str]) -> dict[str, int]:
-        return {chunk_set_id: 4 for chunk_set_id in chunk_set_ids}
-
     async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
         _ = chunk_set_id
         return 3
@@ -1713,10 +1710,7 @@ async def test_recipe_job_records_layers_and_chunk_sets_endpoint_reports_them(
     assert all(status.requested for status in by_layer.values())
     assert {name: status.layer_id for name, status in by_layer.items()} == expected_ids
     assert statuses.navigation.status == DocumentLayerStatusName.MATERIALIZED
-    # 文書構造索引は取込で作らず記録もしない(#5484)。手動で構築した件数だけで示す。
-    assert statuses.graph.layer_id is None
-    assert statuses.graph.status == DocumentLayerStatusName.MATERIALIZED
-    assert "4 件" in (statuses.graph.reason or "")
+    assert not hasattr(statuses, "graph")
 
 
 async def test_recipe_chunk_set_reports_not_requested_layers_without_recording(
@@ -1741,8 +1735,6 @@ async def test_recipe_chunk_set_reports_not_requested_layers_without_recording(
     for status in (statuses.metadata, statuses.navigation):
         assert status.requested is False
         assert status.status == DocumentLayerStatusName.NOT_REQUESTED
-    # 文書構造索引はレシピの設定に関わらず、手動で構築した件数で示す(#5484)。
-    assert statuses.graph.status == DocumentLayerStatusName.MATERIALIZED
 
 
 # --- 作り直しが必要の判定(#550) ---
@@ -1848,7 +1840,7 @@ async def test_layer_without_fingerprint_is_unknown_and_not_flagged(
 
     statuses = await _layer_statuses()
 
-    for status in (statuses.metadata, statuses.graph, statuses.navigation):
+    for status in (statuses.metadata, statuses.navigation):
         assert status.rebuild_required is False
         assert status.rebuild_inputs == []
 
@@ -2046,45 +2038,6 @@ async def test_index_reprocess_clones_active_chunks_and_activates_only_after_suc
     assert candidate != "active-set"
     assert fake.cloned[0]["source_chunk_set_id"] == "active-set"
     assert fake.activated == ([] if fails else [candidate])
-
-
-@pytest.mark.parametrize(
-    ("chunk_status", "count", "expected"),
-    [
-        ("INDEXED", 0, DocumentLayerStatusName.NOT_REQUESTED),
-        ("INDEXED", 4, DocumentLayerStatusName.MATERIALIZED),
-        ("ERROR", 4, DocumentLayerStatusName.MATERIALIZED),
-        ("CHUNKED", 0, DocumentLayerStatusName.NOT_REQUESTED),
-    ],
-)
-async def test_graph_layer_reports_manually_built_count(
-    monkeypatch: pytest.MonkeyPatch,
-    chunk_status: str,
-    count: int,
-    expected: DocumentLayerStatusName,
-) -> None:
-    class GraphOracle(_CompletingRecipeOracle):
-        async def graph_entity_counts_for_chunk_sets(
-            self, chunk_set_ids: list[str]
-        ) -> dict[str, int]:
-            return {chunk_set_id: count for chunk_set_id in chunk_set_ids}
-
-        async def list_document_chunk_sets(self, document_id: str) -> list[dict[str, object]]:
-            rows = await super().list_document_chunk_sets(document_id)
-            return [{**row, "status": chunk_status} for row in rows]
-
-    fake = GraphOracle()
-    fake.activated = ["chunk-set-test"]
-    monkeypatch.setattr(documents_route, "OracleClient", lambda: fake)
-    monkeypatch.setattr(documents_route, "get_settings", lambda: _layer_settings(enabled=True))
-    result = await documents_route.list_document_chunk_sets("doc-1")
-    assert result.data is not None
-    graph = result.data[0].layer_statuses.graph
-    # 取込では作らず、KB の画面で手動で構築した件数だけで示す(#5484)。
-    assert graph.status == expected
-    assert graph.requested is bool(count)
-    if count:
-        assert f"{count} 件" in (graph.reason or "")
 
 
 @pytest.mark.parametrize("fails", [False, True])

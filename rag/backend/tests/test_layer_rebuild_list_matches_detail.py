@@ -127,11 +127,6 @@ class _LegacyServingOracle:
     ) -> list[list[FieldDefinition] | None]:
         return [None]
 
-    async def graph_entity_counts_for_chunk_sets(
-        self, chunk_set_ids: Sequence[str]
-    ) -> dict[str, int]:
-        return {}
-
 
 def _summary() -> DocumentSummary:
     return DocumentSummary(
@@ -183,7 +178,6 @@ async def test_list_flag_matches_detail_for_serving_chunk_set_without_recipe(
         for chunk_set in detail.data
         for status in (
             chunk_set.layer_statuses.metadata,
-            chunk_set.layer_statuses.graph,
             chunk_set.layer_statuses.navigation,
         )
     )

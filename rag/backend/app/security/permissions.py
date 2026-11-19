@@ -318,9 +318,8 @@ def _any(*codes: str) -> frozenset[str]:
 # 複数の画面から使う API の許可集合。
 _DOCUMENT_WORKSPACE = _any(MENU_UPLOAD, MENU_FILE_LIST)
 # 文書の要約・レシピ・原本表示は、文書ワークスペースと引用カードのプレビュー（検索・チャット・
-# KB の詳細の文書構造グラフ）が使う。文書の詳細の画面はワークスペース専用の API も使うため、
-# frontend は
-# `_DOCUMENT_WORKSPACE` の権限がある利用者にだけ詳細へのリンクを出す（#303）。
+# KB の詳細の Wiki の図）が使う。文書の詳細の画面はワークスペース専用の API も使うため、
+# frontend は `_DOCUMENT_WORKSPACE` の権限がある利用者にだけ詳細へのリンクを出す（#303）。
 _DOCUMENT_VIEW = _any(MENU_UPLOAD, MENU_FILE_LIST, MENU_SEARCH, MENU_CHAT, MENU_KNOWLEDGE_BASES)
 _KNOWLEDGE_BASE_READ = _any(
     MENU_UPLOAD,
@@ -431,13 +430,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/knowledge-bases"): _any(KNOWLEDGE_BASES_MANAGE),
     ("GET", _KB): _KNOWLEDGE_BASE_READ,
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/graph/overview"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/graph/documents/{{document_id}}/tree"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/graph/documents/{{document_id}}/entity-chunks"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/graph/documents/{{document_id}}/locate"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/graph/documents/{{document_id}}/references"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/graph/search"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/graph/references"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("PUT", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/wiki/retry"): _any(MENU_KNOWLEDGE_BASES),
@@ -447,10 +439,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_KB}/wiki/graph/documents/{{document_id}}/locate"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki/graph/search"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki/graph/units/{{unit_id}}"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/structure-index/plan"): _any(MENU_KNOWLEDGE_BASES),
-    ("GET", f"{_KB}/structure-index/job"): _any(MENU_KNOWLEDGE_BASES),
-    ("POST", f"{_KB}/structure-index/job"): _any(MENU_KNOWLEDGE_BASES),
-    ("POST", f"{_KB}/structure-index/job/stop"): _any(MENU_KNOWLEDGE_BASES),
     # KB ごとの項目抽出の定義（#548）。
     ("GET", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),
     ("PUT", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),

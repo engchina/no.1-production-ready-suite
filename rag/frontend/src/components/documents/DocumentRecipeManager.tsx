@@ -660,7 +660,6 @@ function RecipeStatusBadge({ recipe, spin = true }: { recipe: DocumentRecipeView
 
 const LAYER_LABEL_KEYS: Record<RecipeLayerStatusView["layer"], I18nKey> = {
   metadata: "knowledgeBases.variant.layer.metadata",
-  graph: "knowledgeBases.variant.layer.graph",
   navigation: "knowledgeBases.variant.layer.navigation",
 };
 

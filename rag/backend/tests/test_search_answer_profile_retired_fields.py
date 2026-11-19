@@ -83,7 +83,7 @@ def test_only_retired_fields_are_removed_and_kept_values_do_not_change() -> None
                 "version": 2,
                 "ingestion": {"chunk_size": 1200},
                 "query": {"rerank_enabled": False},
-                "structure_index_enabled": True,
+                "synthetic_kept_flag": True,
             },
             {"ingestion": {"chunk_size": 800}},
         ],
@@ -93,7 +93,7 @@ def test_only_retired_fields_are_removed_and_kept_values_do_not_change() -> None
 
     assert _profiles(db) == [_KEPT_PROFILE, _KEPT_PROFILE, {}]
     assert [row["retrieval_config"] for row in db.tables["RAG_KNOWLEDGE_BASES"]] == [
-        {"version": 2, "ingestion": {"chunk_size": 1200}, "structure_index_enabled": True},
+        {"version": 2, "ingestion": {"chunk_size": 1200}, "synthetic_kept_flag": True},
         {"ingestion": {"chunk_size": 800}},
     ]
     # 消すものが無い行は書き換えない。

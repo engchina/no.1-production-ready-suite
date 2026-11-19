@@ -555,9 +555,6 @@ class DocumentChunkSetLayerStatuses(BaseModel):
     metadata: DocumentMaterializationLayerStatus = Field(
         default_factory=DocumentMaterializationLayerStatus
     )
-    graph: DocumentMaterializationLayerStatus = Field(
-        default_factory=DocumentMaterializationLayerStatus
-    )
     navigation: DocumentMaterializationLayerStatus = Field(
         default_factory=DocumentMaterializationLayerStatus
     )

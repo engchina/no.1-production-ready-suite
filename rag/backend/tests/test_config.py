@@ -141,7 +141,7 @@ def test_unknown_evaluation_suite_is_rejected() -> None:
 
 
 def test_removed_graph_profile_env_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
-    """文書構造索引の構築の設定(RAG_GRAPH_PROFILE)は削除した。.env に残っていても起動できる。"""
+    """関係情報の構築の設定(RAG_GRAPH_PROFILE)は削除した。.env に残っていても起動できる。"""
     monkeypatch.setenv("RAG_GRAPH_PROFILE", "entities")
     monkeypatch.setenv("RAG_GRAPH_ENABLED", "true")
     settings = Settings()

@@ -292,7 +292,6 @@ jobs:
             # backend のテストが読む frontend のファイル（ナビ・権限・i18n の一致、引用の fixture）。backend のテストが
             # frontend のファイルを新しく読んだら、ここに足す（ci_frontend_paths.py が検出する。#1592）。
             rag_backend_frontend:
-              - "rag/frontend/e2e/fixtures/structure-levels-reader.json"
               - "rag/frontend/e2e/fixtures/native-only-rrf-trace.json"
               - "rag/frontend/src/components/layout/nav-config.ts"
               - "rag/frontend/src/lib/i18n.ts"
@@ -434,7 +433,6 @@ jobs:
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/store.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/trace_recording.py"
             rag_oracle:
-              - "rag/backend/tests/test_graph_references_oracle.py"
               - "rag/backend/tests/test_trace_body_persistence_oracle.py"
               - "rag/backend/tests/test_rag_flow.py"
               - "rag/backend/tests/test_ingestion_attempt_receipts_oracle.py"
@@ -480,8 +478,6 @@ jobs:
               - "rag/backend/app/clients/section_map_store.py"
               # 字のとおりの検索（MCP の rag_grep）の SQL の見え方の条件（#5293）。
               - "rag/backend/tests/test_rag_grep_oracle.py"
-              - "rag/backend/app/clients/structure_graph_store.py"
-              - "rag/backend/app/rag/reference_refresh.py"
               - "rag/backend/app/rag/section_map_service.py"
               - "rag/backend/app/rag/document_crop.py"
               - "rag/backend/tests/test_chunk_set_bound_artifacts_oracle.py"
@@ -492,13 +488,9 @@ jobs:
               - "rag/backend/tests/test_recipe_activation_baseline_oracle.py"
               # 解析後の本文の重複の SQL（#5313）。
               - "rag/backend/tests/test_extracted_text_duplicate_oracle.py"
-              - "rag/backend/app/clients/structure_index_store.py"
-              - "rag/backend/app/clients/graph_reference_store.py"
               - "rag/backend/app/clients/extraction_revision_store.py"
               - "rag/backend/app/clients/section_revision_store.py"
               - "rag/backend/app/rag/reference_*.py"
-              - "rag/backend/app/rag/graph_index.py"
-              - "rag/backend/app/rag/structure_index*.py"
               - "rag/backend/tests/conftest.py"
               - "rag/backend/tests/_oracle_test_db.py"
               - "rag/backend/tests/_ai_stubs.py"

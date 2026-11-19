@@ -21,7 +21,6 @@ from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_testset_store import oracle_evaluation_testset_schema_sql
 from app.clients.evaluation_workbook_store import oracle_evaluation_source_workbook_schema_sql
 from app.clients.extraction_revision_store import oracle_extraction_revision_schema_sql
-from app.clients.graph_reference_store import graph_reference_schema_sql
 from app.clients.language_pack_release_store import language_pack_release_statements
 from app.clients.native_hybrid_schema import (
     NATIVE_SCOPE_COVER_INDEX_SQL,
@@ -57,12 +56,10 @@ from app.clients.oracle import (
     oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
-    oracle_graph_name_character_migration_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
-    oracle_knowledge_graph_schema_sql,
     oracle_message_schema_sql,
     oracle_role_access_schema_sql,
     oracle_search_answer_profile_knowledge_schema_sql,
@@ -75,7 +72,6 @@ from app.clients.oracle_run_history import oracle_run_history_schema_sql
 from app.clients.recipe_version_log import recipe_version_log_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
 from app.clients.section_revision_store import oracle_section_revision_schema_sql
-from app.clients.structure_index_store import structure_index_schema_sql
 from app.clients.support_guide_store import (
     oracle_support_guide_embedding_schema_sql,
     oracle_support_guide_revision_schema_sql,
@@ -252,11 +248,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_knowledge_base_schema_sql(),
         ),
         OracleSchemaSection(
-            name="structure_index_jobs",
-            table_name="rag_structure_index_jobs",
-            sql=structure_index_schema_sql(),
-        ),
-        OracleSchemaSection(
             name="search_answer_profiles",
             table_name="rag_search_answer_profiles",
             sql=oracle_search_answer_profile_schema_sql(),
@@ -381,22 +372,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="ingestion_audit",
             table_name="rag_ingestion_audit",
             sql=oracle_ingestion_audit_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="knowledge_graph",
-            table_name="rag_graph_entities",
-            sql=oracle_knowledge_graph_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="graph_references",
-            table_name="rag_graph_references",
-            sql=graph_reference_schema_sql(),
-        ),
-        # 親の行を消す FK の子の列の索引（#4628）。親の表をすべて作った後に置く。
-        OracleSchemaSection(
-            name="foreign_key_lock_indexes",
-            table_name="rag_graph_references",
-            sql=foreign_key_lock_index_sql(),
         ),
         OracleSchemaSection(
             name="document_extraction_revisions",
@@ -752,13 +727,6 @@ END;
     )
     sections.append(
         OracleSchemaSection(
-            name="20261102_001_graph_name_characters",
-            table_name="rag_graph_entities",
-            sql=oracle_graph_name_character_migration_sql(),
-        )
-    )
-    sections.append(
-        OracleSchemaSection(
             name="20261102_002_native_missing_scopes",
             table_name="rag_chunks",
             sql=native_hybrid_missing_scope_migration_sql(),
@@ -778,13 +746,6 @@ END;
             sql=_create_missing_objects_sql(native_maintenance_tables_sql(), "原生索引の整理要求")
             + "\n\n"
             + native_maintenance_activation_sql(),
-        )
-    )
-    sections.append(
-        OracleSchemaSection(
-            name="20261102_005_graph_references",
-            table_name="rag_graph_references",
-            sql=_create_missing_objects_sql(graph_reference_schema_sql(), "明示参照"),
         )
     )
     sections.append(
@@ -869,13 +830,6 @@ END;
                 "保存先のファイル・"
                 "レシピ・抽出の版・chunk は削除しません。削除後は復元できません。"
             ),
-        )
-    )
-    sections.append(
-        OracleSchemaSection(
-            name="20261108_4628_foreign_key_lock_indexes",
-            table_name="rag_graph_references",
-            sql=_create_missing_objects_sql(foreign_key_lock_index_sql(), "FK の子の列の索引"),
         )
     )
     sections.append(
@@ -1250,7 +1204,46 @@ END;
             sql=_create_missing_objects_sql(wiki_link_schema_sql(), "Wiki の関連"),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261119_5511_retire_structure_index",
+            table_name="rag_knowledge_bases",
+            sql=retire_structure_index_sql(),
+            destructive_note=(
+                "文書構造索引を Wiki に置き換えたため、文書構造索引の表（"
+                + "・".join(RETIRED_STRUCTURE_INDEX_TABLES)
+                + "）を行ごと削除します（構築の記録・構築の job の状態・章節の見出しのつながり・"
+                "明示参照の記録）。Wiki・Wiki の関連・実体の層（RAG_ENTITIES など）・文書・"
+                "chunk・埋め込みは変えず、検索・回答の結果も変わりません。記録を残す必要があれば"
+                "適用前に同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
     return sections
+
+
+# 文書構造索引の表（#5511）。子の表を先に並べる（CASCADE CONSTRAINTS で消すので順は問わない）。
+RETIRED_STRUCTURE_INDEX_TABLES: tuple[str, ...] = (
+    "RAG_STRUCTURE_INDEX_BUILDS",
+    "RAG_STRUCTURE_INDEX_JOBS",
+    "RAG_GRAPH_REFERENCES",
+    "RAG_GRAPH_ENTITY_CHUNKS",
+    "RAG_GRAPH_RELATIONSHIPS",
+    "RAG_GRAPH_ENTITIES",
+)
+
+
+def retire_structure_index_sql() -> str:
+    """文書構造索引の表を索引・制約ごと消す（#5511）。表が無い環境でも適用できる（冪等）。"""
+    names = ", ".join(f"'{name}'" for name in RETIRED_STRUCTURE_INDEX_TABLES)
+    return f"""BEGIN
+    FOR retired IN (
+        SELECT table_name FROM user_tables WHERE table_name IN ({names})
+    ) LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || retired.table_name || ' CASCADE CONSTRAINTS PURGE';
+    END LOOP;
+END;
+/"""
 
 
 def chunk_embeddings_migration_sql() -> str:
@@ -1319,29 +1312,6 @@ BEGIN
     END IF;
 END;
 /
-""".strip()
-
-
-def foreign_key_lock_index_sql() -> str:
-    """親の行を消す FK の、子の列を先頭に持つ索引（#4628。#2865 と同じ扱い）。
-
-    子の列を先頭に持つ索引が無い FK は、親の行の DELETE のたびに子の表全体の lock を取る。
-    別の transaction が子の表を変更中（SX）なら待ち、2 つの transaction が同時に親の行を消すと
-    ORA-00060 になる（別々の文書の行でも起きる）。既存の (tenant / KB, 列) の索引は FK の判定に
-    使えないため、列だけの索引を足す。
-    """
-    return """
-CREATE INDEX rag_graph_refs_source_set_idx
-    ON rag_graph_references (source_chunk_set_id);
-
-CREATE INDEX rag_graph_rel_source_entity_idx
-    ON rag_graph_relationships (source_entity_id);
-
-CREATE INDEX rag_graph_rel_target_entity_idx
-    ON rag_graph_relationships (target_entity_id);
-
-CREATE INDEX rag_structure_builds_doc_idx
-    ON rag_structure_index_builds (document_id);
 """.strip()
 
 

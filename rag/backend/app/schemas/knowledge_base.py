@@ -1,10 +1,9 @@
 """ナレッジベース関連スキーマ。"""
 
 from enum import StrEnum
-from typing import Literal
 
 from pr_backend_core.timezones import UtcDatetime
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.schemas.search import SearchMode
@@ -173,117 +172,3 @@ def _unique_clean_ids(values: list[str]) -> list[str]:
     if not cleaned_values:
         raise ValueError("ID を 1 件以上指定してください。")
     return cleaned_values
-
-
-class StructureGraphDocument(BaseModel):
-    """文書構造グラフの総覧の文書（文書の entity）。"""
-
-    id: str
-    document_id: str
-    chunk_set_id: str
-    name: str
-    has_sections: bool = False
-    outgoing_count: int = 0
-    incoming_count: int = 0
-
-
-class StructureGraphDocumentEdge(BaseModel):
-    """文書の組の間の、解決済みの参照の件数。"""
-
-    id: str
-    source: str
-    target: str
-    count: int
-
-
-class StructureGraphOverview(BaseModel):
-    """KB の全文書と、文書の間の参照。"""
-
-    status: Literal["ok", "empty"] = "empty"
-    documents: list[StructureGraphDocument] = Field(default_factory=list)
-    edges: list[StructureGraphDocumentEdge] = Field(default_factory=list)
-
-
-class StructureGraphTreeNode(BaseModel):
-    """章節の木の 1 節点。``virtual`` はパスの途中の段で、構造索引に実体が無い。"""
-
-    id: str
-    name: str
-    label: str
-    type: str
-    document_id: str
-    document_name: str
-    chunk_set_id: str
-    parent_id: str | None = None
-    virtual: bool = False
-    child_count: int = 0
-
-
-class StructureGraphTreePage(BaseModel):
-    items: list[StructureGraphTreeNode] = Field(default_factory=list)
-    total: int = 0
-    offset: int = 0
-
-
-class StructureGraphLocatedStep(BaseModel):
-    id: str
-    index: int
-
-
-class StructureGraphLocation(BaseModel):
-    """根から節点までの段と、各段の中の位置。"""
-
-    path: list[StructureGraphLocatedStep] = Field(default_factory=list)
-
-
-class StructureGraphReference(BaseModel):
-    """章節の組の参照。祖先の列（根 → 節点）で、見えている段へ画面がまとめる。"""
-
-    source_set: str
-    target_set: str
-    source_chain: list[str] = Field(default_factory=list)
-    target_chain: list[str] = Field(default_factory=list)
-    count: int = 1
-
-
-class StructureGraphReferences(BaseModel):
-    items: list[StructureGraphReference] = Field(default_factory=list)
-
-
-class StructureGraphSearchItem(BaseModel):
-    id: str
-    name: str
-    type: str
-    document_id: str
-    document_name: str
-    chunk_set_id: str
-
-
-class StructureGraphSearchPage(BaseModel):
-    items: list[StructureGraphSearchItem] = Field(default_factory=list)
-    total: int = 0
-    offset: int = 0
-
-
-class StructureIndexStartRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    mode: Literal["missing", "rebuild", "retry", "continue"] = "missing"
-    # 指定した文書だけを対象にする（少数の文書での試験の補建。#4543）。省略は KB の全文書。
-    document_ids: list[str] | None = Field(None, min_length=1, max_length=200)
-
-    @field_validator("document_ids")
-    @classmethod
-    def normalize_document_ids(cls, values: list[str] | None) -> list[str] | None:
-        return None if values is None else _unique_clean_ids(values)
-
-
-class StructureGraphChunk(BaseModel):
-    chunk_id: str
-    chunk_index: int
-    page_number: int | None = None
-
-
-class StructureGraphChunkPage(BaseModel):
-    items: list[StructureGraphChunk] = Field(default_factory=list)
-    total: int = 0
-    offset: int = 0

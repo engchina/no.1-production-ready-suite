@@ -20,7 +20,6 @@ from app.config import Settings
 from app.rag import ingestion as ingestion_module
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk
-from app.rag.graph_index import GraphIndex
 from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
@@ -77,8 +76,6 @@ class FakeOracle(UneditedPromptOracle):
         self.saved_extraction: StructuredExtraction | None = None
         self.saved_chunk_count = 0
         self.atomic_index_save_count = 0
-        self.saved_graph_index: GraphIndex | None = None
-        self.graph_document_id: str | None = None
         self.statuses: list[FileStatus] = []
         self.error_messages: list[str | None] = []
         self.segments: dict[str, IngestionSegment] = {}
@@ -180,17 +177,6 @@ class FakeOracle(UneditedPromptOracle):
                 uploaded_at=datetime.now(UTC),
             )
         return SimpleNamespace(file_name="policy.pdf")
-
-    async def replace_document_graph_index(
-        self,
-        document_id: str,
-        graph_index: GraphIndex,
-        *,
-        chunk_set_id: str | None = None,
-    ) -> None:
-        _ = chunk_set_id
-        self.graph_document_id = document_id
-        self.saved_graph_index = graph_index
 
     async def replace_ingestion_segments(
         self,
@@ -1382,46 +1368,6 @@ async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
         row = oracle.recipe_rows.get(recipe_id, {})
         assert row.get("status") != FileStatus.REVIEW.value
         assert "active_extraction_recipe_id" not in row
-
-
-async def test_ingestion_pipeline_does_not_build_structure_index(
-    isolated_preprocess_save: None,
-) -> None:
-    """文書構造索引は取込では作らない(#5484)。KB の画面の手動の構築だけが作る。"""
-    oracle = FakeOracle()
-    settings = Settings.model_construct(
-        # 項目抽出は対象外(stub の VLM は応答しないため、有効なら取込が止まる。#2481)。
-        rag_field_extraction_enabled=False,
-        rag_parser_adapter_backend="local",
-        rag_review_gate_enabled=False,
-        rag_auto_parse_after_preprocess_enabled=True,
-        rag_chunk_size=800,
-        rag_chunk_overlap=120,
-        oci_genai_embedding_model="cohere.embed-v4.0",
-        oci_enterprise_ai_models=[],
-        oci_enterprise_ai_default_text_model="",
-        oci_enterprise_ai_default_vision_model="enterprise-vlm",
-    )
-    pipeline = IngestionPipeline(
-        vlm=CapturingVlm(),
-        genai=FakeEmbeddingClient(),
-        oracle=cast(Any, oracle),
-        recipe_id=_formal_extraction_recipe(oracle, "doc-graph"),
-        recipe_revision=1,
-        object_storage=cast(Any, FakeObjectStorage()),
-        settings=settings,
-    )
-
-    detail = await pipeline.ingest(
-        "doc-graph",
-        b"pdfdata",
-        content_type="application/pdf",
-        source_profile=_pdf_source_profile(file_size_bytes=7),
-    )
-
-    assert detail.status == FileStatus.INDEXED
-    assert oracle.graph_document_id is None
-    assert oracle.saved_graph_index is None
 
 
 def test_checkpoint_parser_profile_prefers_external_adapter_lineage() -> None:
