@@ -43,10 +43,7 @@ files の案内は検索用で、原文の代わりにはしません。資料�
 
 ## Step 2: 読むファイルを選ぶ
 直接の規則・手順に加え、条件・例外・前提・警告・参照先を含み得るファイルの ID と、
-そのファイルの中を探す検索表現を返します。
-
-## Step 3: 未確認の点を残す
-目録だけでは確かめられない点を unresolved に残します。異なる版・対象を混ぜません。
+そのファイルの中を探す検索表現を返します。異なる版・対象を混ぜません。
 """
 
 READ_PROMPT = """## Step 1: 質問と、選んだファイルの単位・章節の案内を読む
@@ -55,9 +52,7 @@ READ_PROMPT = """## Step 1: 質問と、選んだファイルの単位・章節�
 ## Step 2: 回答に要る原文を選ぶ
 直接の答えと、版・前提・否定・例外・連続する手順・警告・完了の条件を支える単位の ID を返します。
 条件や定義が離れた箇所に分かれていれば、その章節の ID を返して章節の全体の原文を読みます。
-
-## Step 3: 未確認の点を残す
-候補の範囲で確かめられない点は unresolved に残します。質問に無い条件を作りません。
+質問に無い条件を作りません。
 """
 
 
@@ -386,7 +381,6 @@ class WikiRetriever:
             stage="Wiki: 読むファイルの選択（1 回目のモデル）",
         )
         document_ids = handles.real(files.document_ids)
-        unresolved = list(files.unresolved)
         selected: list[str] = []
         pages = {page.unit.unit_id: page for page in candidates}
         if document_ids:
@@ -483,7 +477,6 @@ class WikiRetriever:
                 calls=calls,
                 stage="Wiki: 読む単位と章節の選択（2 回目のモデル）",
             )
-            unresolved.extend(choice.unresolved)
             # 選んだ各ファイルの最上位の単位は、章節の選択で失わない。
             selected.extend(group[0].unit.unit_id for group in per_document if group)
             selected.extend(handles.real(choice.unit_ids))
@@ -548,6 +541,5 @@ class WikiRetriever:
                     ),
                     "link": source_ids([uid for uid in followed if origins[uid] == "link"]),
                 },
-                "navigation_unresolved": unresolved,
             },
         )

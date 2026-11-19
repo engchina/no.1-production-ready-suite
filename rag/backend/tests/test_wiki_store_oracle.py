@@ -1,5 +1,6 @@
 """実 Oracle で原文の参照・有効 KB・公開前の検査と削除を確かめる。AI は合成応答。"""
 
+import json
 from dataclasses import replace
 from datetime import date
 from typing import Any
@@ -8,7 +9,8 @@ from uuid import uuid4
 import pytest
 
 from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute, _fetch_one
-from app.clients.wiki_store import WikiStore
+from app.clients.wiki_graph_store import WikiGraphStore
+from app.clients.wiki_store import CURRENT_WIKI_SOURCE_SQL, WikiStore
 from app.rag.wiki_models import WikiContext, WikiPage, fingerprint
 from app.schemas.document import DocumentClassification
 from tests.test_document_summary_oracle import _EMBEDDING, _indexed_document
@@ -418,3 +420,121 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
         sorted(uid for _, uid in await store.text_rankings("syntheticrenewed", current, limit=50))
         == units_a
     )
+
+
+# 公開の条件の以前の形（JSON_TABLE の入れ子。#5533 で書き直した）。今の形と同じ判定かを見る。
+_JSON_TABLE_REFERENCE_SQL = """NOT EXISTS (
+    SELECT 1 FROM rag_chunk_sets current_set
+    JOIN rag_document_recipes current_recipe ON current_recipe.recipe_id=current_set.recipe_id
+    WHERE current_set.document_id=c.document_id AND current_set.is_active=1
+      AND current_set.status='INDEXED' AND NOT EXISTS (
+        SELECT 1 FROM JSON_TABLE(w.chunk_sets_json,'$[*]'
+            COLUMNS (set_id VARCHAR2(64) PATH '$')) saved_set
+        WHERE saved_set.set_id=current_set.chunk_set_id)
+) AND NOT EXISTS (
+    SELECT 1 FROM JSON_TABLE(w.chunk_sets_json,'$[*]'
+        COLUMNS (set_id VARCHAR2(64) PATH '$')) saved_set
+    WHERE NOT EXISTS (SELECT 1 FROM rag_chunk_sets current_set
+        JOIN rag_document_recipes current_recipe
+          ON current_recipe.recipe_id=current_set.recipe_id
+        WHERE current_set.document_id=c.document_id AND current_set.is_active=1
+          AND current_set.status='INDEXED' AND current_set.chunk_set_id=saved_set.set_id)
+)"""
+
+
+async def test_publication_requires_saved_chunk_sets_to_equal_current_sets() -> None:
+    """公開の条件（#5533）: 構築の保存版の chunk_set の集合が、今の有効で索引済みの集合と同じとき
+    だけ、目録・案内・構築状態・図に出す。以前の形（JSON_TABLE）と同じ判定になる。"""
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store, graph = WikiStore(oracle), WikiGraphStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-sets-{token}")
+    did, _, first_set = await _indexed_document(oracle, knowledge_base_id=kb.id, token=token)
+    await store.set_enabled(kb.id, True)
+    source, pages = await _published(store, did, "合成の案内 syntheticsets。")
+    compiler, filters = source.compiler_fingerprint, {"knowledge_base_id": kb.id}
+    units = sorted(page.unit.unit_id for page in pages)
+    # 原文の chunk の無い 2 つ目のレシピの chunk_set（有効・索引済みにすると今の保存版に入る）。
+    recipe = await oracle.create_document_recipe(did)
+    second_set = f"cs_sets_{uuid4().hex[:16]}"
+    await oracle.upsert_chunk_set(
+        chunk_set_id=second_set,
+        document_id=did,
+        recipe_id=str(recipe["recipe_id"]),
+        extraction_recipe_id=f"ex_{token}_2",
+    )
+    await oracle.mark_chunk_set_indexed(chunk_set_id=second_set, chunk_count=0, vector_count=0)
+
+    async def update(sql: str, **binds: object) -> None:
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(connection, sql, binds)
+
+        await oracle._run_transaction(operation)
+
+    async def judged() -> tuple[bool, bool]:
+        """今の形と以前の形の判定。"""
+
+        def operation(connection: OracleConnectionProtocol) -> Any:
+            return _fetch_one(
+                connection,
+                f"""SELECT CASE WHEN {CURRENT_WIKI_SOURCE_SQL} THEN 1 ELSE 0 END AS now_value,
+                CASE WHEN {_JSON_TABLE_REFERENCE_SQL} THEN 1 ELSE 0 END AS reference_value
+                FROM rag_wiki_documents w JOIN rag_documents c ON c.document_id=w.document_id
+                WHERE w.document_id=:id""",
+                {"id": did},
+            )
+
+        row = await oracle._run_transaction(operation)
+        assert row is not None
+        return int(str(row["now_value"])) == 1, int(str(row["reference_value"])) == 1
+
+    async def expect(published: bool) -> None:
+        assert await judged() == (published, published)
+        scope = await store.resolve(filters, compiler)
+        assert [row["document_id"] for row in scope.catalog] == ([did] if published else [])
+        assert {value for value, _, _ in scope.sources} == ({did} if published else set())
+        assert sorted(p.unit.unit_id for p in await store.pages(scope)) == (
+            units if published else []
+        )
+        statuses = await store.document_statuses(filters)
+        assert [row["status"] for row in statuses] == ["READY" if published else "STALE"]
+        overview = await graph.overview(kb.id)
+        assert [doc["document_id"] for doc in overview["documents"]] == ([did] if published else [])
+
+    async def save_sets(sets: list[str] | None) -> None:
+        if sets is None:
+            await update(
+                "UPDATE rag_wiki_documents SET chunk_sets_json=NULL WHERE document_id=:id", id=did
+            )
+            return
+        await update(
+            "UPDATE rag_wiki_documents SET chunk_sets_json=JSON(:sets) WHERE document_id=:id",
+            sets=json.dumps(sets),
+            id=did,
+        )
+
+    await expect(True)
+    # 今の保存版に chunk_set が増えた（保存版 ⊂ 今）。
+    await update("UPDATE rag_chunk_sets SET is_active=1 WHERE chunk_set_id=:id", id=second_set)
+    await expect(False)
+    # 保存版にも同じ 2 つ（複数の chunk_set の一致）。
+    await save_sets(sorted([first_set, second_set]))
+    await expect(True)
+    # 今の保存版から外れた（保存版 ⊃ 今）: 索引済みでない・有効でない chunk_set は数えない。
+    await update(
+        "UPDATE rag_chunk_sets SET status='INGESTING' WHERE chunk_set_id=:id", id=second_set
+    )
+    await expect(False)
+    await update(
+        "UPDATE rag_chunk_sets SET status='INDEXED',is_active=0 WHERE chunk_set_id=:id",
+        id=second_set,
+    )
+    await expect(False)
+    # 数は同じでも別の chunk_set。
+    await save_sets([second_set])
+    await expect(False)
+    # 保存版の集合が無い。
+    await save_sets(None)
+    await expect(False)
+    await save_sets([first_set])
+    await expect(True)
+    await oracle.delete_document(did)

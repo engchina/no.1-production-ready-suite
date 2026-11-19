@@ -44,11 +44,13 @@ async def test_later_reads_use_the_resolved_set_and_keep_chunk_row_filters() -> 
     await store.text_rankings("合成", scope, limit=3)
     await store.links(["unit-a"], scope)
     first, *later = statements
-    assert "JSON_TABLE(w.chunk_sets_json" in first[0] and "kb-a" in first[1].values()
+    assert "w.chunk_sets_json" in first[0] and "kb-a" in first[1].values()
+    # 公開の条件は JSON_TABLE を使わない（解析が重い。#5533）。
+    assert "JSON_TABLE" not in first[0]
     assert len(later) == 3
     for sql, binds in later:
         # 重い範囲の条件（公開・所属・権限）は評価し直さず、決めた集合で読む。
-        assert "JSON_TABLE" not in sql and "rag_knowledge_bases" not in sql
+        assert "chunk_sets_json" not in sql and "rag_knowledge_bases" not in sql
         assert "rag_wiki_documents" not in sql and "kb-a" not in binds.values()
         assert binds["wiki_set0_0"] == "set-a" and binds["wiki_fp0_0"] == "fp-a"
         # chunk の行の条件は集合で表せないので、後の読取でも当てる。

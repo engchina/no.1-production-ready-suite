@@ -157,7 +157,6 @@ class Llm:
                 {
                     "document_ids": [handles[t] for t in self.files],
                     "search_expressions": ["合成の表現"],
-                    "unresolved": [],
                 }
             )
         units = {u["context"]: u["unit_id"] for u in payload["units"]}
@@ -165,7 +164,6 @@ class Llm:
             {
                 "unit_ids": [units[f"{name} の案内"] for name in self.units],
                 "section_ids": [s["section_id"] for s in payload["sections"][: self.sections]],
-                "unresolved": ["合成の未確認"],
             }
         )
 
@@ -237,7 +235,8 @@ async def test_two_plans_read_units_sections_and_dependencies_with_version_attri
         chunk.metadata["source_identities"] == CATALOG[0]["source_identities"]
         for chunk in result.chunks
     )
-    assert result.trace["navigation_unresolved"] == ["合成の未確認"]
+    # 選択の出力は読む対象だけで、未確認の点は作らせない（#5533）。
+    assert "navigation_unresolved" not in result.trace
 
 
 @pytest.mark.asyncio
@@ -412,8 +411,8 @@ async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_b
 
 # ---- 範囲の重い条件は 1 問に 1 回（#5499） ----
 
-# 範囲の重い条件の目印: 公開・今の保存版の条件（JSON_TABLE）と、有効な KB の所属の EXISTS。
-PUBLISHED_MARK = "JSON_TABLE(w.chunk_sets_json"
+# 範囲の重い条件の目印: 公開・今の保存版の条件（構築の保存版の集合）と、有効な KB の所属の EXISTS。
+PUBLISHED_MARK = "w.chunk_sets_json"
 MEMBERSHIP_MARK = "rag_document_knowledge_bases wm"
 
 
@@ -702,7 +701,7 @@ class FlakyLlm(Llm):
     [
         pytest.param("empty", id="empty-response"),
         pytest.param(
-            json.dumps({"document_ids": ["D99"], "search_expressions": [], "unresolved": []}),
+            json.dumps({"document_ids": ["D99"], "search_expressions": []}),
             id="unknown-handle",
         ),
         pytest.param('{"document_ids": [', id="broken-json"),
@@ -759,7 +758,7 @@ def test_failure_reason_keeps_only_the_kind_and_the_schema_location() -> None:
     schema = scoped_plan(WikiFilePlan, {"document_ids": (["D1"], 8)})
     with pytest.raises(ValueError) as caught:
         schema.model_validate_json(
-            json.dumps({"document_ids": ["合成の値"], "search_expressions": [], "unresolved": []})
+            json.dumps({"document_ids": ["合成の値"], "search_expressions": []})
         )
     reason = failure_reason(caught.value)
     assert reason == "invalid_output:literal_error@document_ids.0"

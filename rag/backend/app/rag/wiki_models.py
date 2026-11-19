@@ -197,7 +197,6 @@ class WikiFilePlan(WikiModel):
 
     document_ids: list[str]
     search_expressions: list[Annotated[str, Field(max_length=200)]] = Field(max_length=8)
-    unresolved: list[Annotated[str, Field(max_length=180)]] = Field(max_length=8)
 
 
 class WikiReadPlan(WikiModel):
@@ -205,7 +204,6 @@ class WikiReadPlan(WikiModel):
 
     unit_ids: list[str]
     section_ids: list[str]
-    unresolved: list[Annotated[str, Field(max_length=180)]] = Field(max_length=8)
 
 
 def scoped_plan[T: WikiModel](
