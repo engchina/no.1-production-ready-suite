@@ -653,6 +653,58 @@ def test_background_initialize_returns_running_state_and_finishes_later() -> Non
     assert "vector_memory" not in screen
 
 
+class _HeldVectorMemory:
+    """保持している見積もりを返す estimator の代わり（DB の advisor を呼ばない）。"""
+
+    def __init__(self) -> None:
+        self.data: dict[str, Any] | None = {"available": True, "indexes": [{"name": "DEMO_IDX"}]}
+        self.invalidated = 0
+
+    def estimate(self) -> dict[str, Any] | None:
+        return self.data
+
+    def invalidate(self) -> None:
+        self.invalidated += 1
+        self.data = None
+
+
+def test_background_initialize_returns_the_screen_fields_while_running() -> None:
+    """操作を始めた応答も画面の状態と同じ形にし、操作中も見積もりを出す（#5501）。
+
+    画面は応答で状態を置き換えるため、`vector_memory` が無いと操作中にカードが消える。
+    """
+
+    database = _FakeDatabase()
+    manager = _BlockingManager(database)
+    held = _HeldVectorMemory()
+    manager._vector_memory = held  # type: ignore[assignment]
+
+    started = manager.start_initialize_in_background()
+    assert started["operation_state"]["status"] == "running"
+    assert started["vector_memory"] == {"available": True, "indexes": [{"name": "DEMO_IDX"}]}
+    assert manager.entered.wait(5)
+    assert held.invalidated == 0
+
+    manager.release.set()
+    assert manager._background_thread is not None
+    manager._background_thread.join(5)
+    # 終わったら見積もりを捨て、次の取得で取り直す。
+    assert held.invalidated == 1
+
+
+def test_delete_orphaned_rows_returns_the_screen_fields() -> None:
+    """参照先のない行の削除の応答にも、画面の状態と同じ `vector_memory` を足す（#5501）。"""
+
+    manager = _ForeignKeyManager(_orphaned_database(3))
+    manager._vector_memory = _HeldVectorMemory()  # type: ignore[assignment]
+
+    result = manager.delete_orphaned_rows(
+        constraint_name="DEMO_ITEMS_PARENT_FK", expected_orphan_rows=3
+    )
+    assert result["operation"] == "orphans_deleted"
+    assert result["vector_memory"] == {"available": True, "indexes": [{"name": "DEMO_IDX"}]}
+
+
 def test_background_initialize_records_failure_and_checks_before_starting() -> None:
     database = _FakeDatabase()
     manager = _DemoManager(database, fail_with="ORA-00600 internal")
