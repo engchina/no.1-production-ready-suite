@@ -840,17 +840,16 @@ def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsDa
 def _extraction_fields_data() -> ExtractionFieldsSettingsData:
     """field schema 定義を非機密 API 形へ変換する。未保存なら標準の項目(#556)。"""
     saved = load_saved_field_schema()
-    fields = standard_field_definitions() if saved is None else saved.fields
+    standard = [
+        FieldDefinitionData.model_validate(field.model_dump())
+        for field in standard_field_definitions()
+    ]
     return ExtractionFieldsSettingsData(
-        fields=[
-            FieldDefinitionData(
-                name=field.name,
-                description=field.description,
-                value_type=field.value_type,
-            )
-            for field in fields
-        ],
+        fields=standard
+        if saved is None
+        else [FieldDefinitionData.model_validate(field.model_dump()) for field in saved.fields],
         uses_standard=saved is None,
+        standard_fields=standard,
     )
 
 

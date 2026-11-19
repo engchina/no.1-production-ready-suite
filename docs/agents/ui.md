@@ -38,7 +38,7 @@
 
 - この構成を外れた画面は review で差し戻す。`PageHeader` の `actions` は配列で渡す（JSX を渡さない。danger → utility → secondary → primary の順に並び、右端が primary）。画面を移るだけの操作は `ButtonLink`（`<Link className={buttonVariants(...)}>` に手書きしない）。
 - **詳細・作成・編集の画面**: 「一覧へ戻る」は `PageHeader` の `back`。「作成」「保存」（primary）と「変更を破棄」（その右）はフォームの末尾の `FormActionBar` に置き、左端を入力欄の左端にそろえる（`PageHeader` の右端に置かない。画面の下端に貼り付けない。#1786 / #2715）。一覧の「新規作成」は `PageHeader` のまま。対象への操作は最初のカードの `ObjectActionBar` 1 か所、保存の失敗は確定の行の直上の `SaveErrorBanner`。例外を含む正本は README §4「詳細・作成・編集の画面の操作」。
-- **フォームの操作の並びは「保存 → 変更を破棄 → 既定に戻す」**（#5458）。保存は `FormActionBar` の `primaryActions`、「変更を破棄」は `secondaryActions`、フォーム全体を既定に戻す操作（「既定に戻す」「全体の既定に戻す」など。文言は意味に合わせたまま）は `restoreDefaultsAction` に渡し、並びと間隔は部品に任せる（`secondaryActions` の並びや手書きのボタンで置き場所を決めない）。既定に戻すは既定値をフォームに入れるだけで、「保存」で確定する（保存した定義を消す画面は確認のダイアログを出す）。欄ごとの「既定に戻す」（言語資源の欄など）はフォームの操作ではないので対象外。
+- **フォームの操作の並びは「保存 → 変更を破棄 → 既定に戻す」**（#5458）。保存は `FormActionBar` の `primaryActions`、「変更を破棄」は `secondaryActions`、フォーム全体を既定に戻す操作（「既定に戻す」「全体の既定に戻す」など。文言は意味に合わせたまま）は `restoreDefaultsAction` に渡し、並びと間隔は部品に任せる（`secondaryActions` の並びや手書きのボタンで置き場所を決めない）。既定に戻すは既定値をフォームに入れるだけで、「保存」で確定する（確認のダイアログは出さない。戻す先を継承する画面は、戻した後に編集せずに保存したら写しではなく保存した定義を消す）。欄ごとの「既定に戻す」（言語資源の欄など）はフォームの操作ではないので対象外。
 - `PageHeader` と `PageBody` の `wide` は必ず同じ値にする（1920px で左端がずれる）。
 - 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。本文は `"Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Roboto", "Google Sans Code", system-ui, sans-serif` の 14px（3 書体とも可変書体。JP に無い字だけを SC → TC で補う。`Noto Sans JP Fallback` は寸法を合わせた端末の書体。書体の並びは `tokens/fonts.css` だけに書く）。
 - **ID・ログ・SQL・code / pre など、文字幅の整列が必要な表示は `--font-mono`（`font-mono`）を使い、Google Sans Code を優先する。** 本文の書体の優先順とは別の契約とし、製品の個別指定で上書きしない。

@@ -901,6 +901,8 @@ class ExtractionFieldsSettingsData(BaseModel):
 
     fields: list[FieldDefinitionData] = Field(default_factory=list)
     uses_standard: bool = False
+    # 標準の項目（「標準の項目に戻す」が編集欄に入れる。保存するまで確定しない。#5543）。
+    standard_fields: list[FieldDefinitionData] = Field(default_factory=list)
     config_source: Literal["runtime"] = "runtime"
 
 
@@ -918,6 +920,8 @@ class KnowledgeBaseExtractionFieldsData(BaseModel):
 
     inherits_default: bool
     fields: list[FieldDefinitionData] = Field(default_factory=list)
+    # 全体の既定の項目（「全体の既定に戻す」が編集欄に入れる。保存するまで確定しない。#5543）。
+    default_fields: list[FieldDefinitionData] = Field(default_factory=list)
 
 
 class KnowledgeBaseExtractionFieldsUpdate(BaseModel):

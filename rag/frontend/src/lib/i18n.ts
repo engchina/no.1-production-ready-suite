@@ -393,11 +393,8 @@ export const ja = {
   "settings.extractionFields.usingStandard":
     "標準の項目を使っています（まだ保存していません）。編集して保存すると、保存した項目を使います。",
   "settings.extractionFields.resetStandard": "標準の項目に戻す",
-  "settings.extractionFields.resetStandard.title": "標準の項目に戻しますか？",
-  "settings.extractionFields.resetStandard.description":
-    "保存した項目の定義を削除し、標準の 4 項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を使います。編集中の変更も破棄します。抽出済みの値は次の取込まで変わりません。",
-  "settings.extractionFields.resetStandard.done": "標準の項目に戻しました。",
-  "settings.extractionFields.resetStandard.error": "標準の項目に戻せませんでした。",
+  "settings.extractionFields.resetStandard.pending":
+    "標準の項目を入れました。「保存」で保存した定義を消し、標準の項目を使います。",
   "settings.extractionFields.name": "項目名",
   "settings.extractionFields.fieldDescription": "説明",
   "settings.extractionFields.valueType": "値の型",
@@ -2063,9 +2060,8 @@ export const ja = {
     "このナレッジベースの項目です。全体の既定は使いません。項目を 0 件にすると、このナレッジベースでは項目を抽出しません。",
   "knowledgeBases.extractionFields.defineOwn": "既定をもとに項目を定義",
   "knowledgeBases.extractionFields.reset": "全体の既定に戻す",
-  "knowledgeBases.extractionFields.reset.title": "全体の既定に戻しますか？",
-  "knowledgeBases.extractionFields.reset.description":
-    "このナレッジベースの項目の定義を削除し、全体の既定の項目を使います。抽出済みの値は次の取込まで変わりません。",
+  "knowledgeBases.extractionFields.reset.pending":
+    "全体の既定の項目を入れました。「保存」でこのナレッジベースの定義を消し、全体の既定を使います。",
   "knowledgeBases.extractionFields.reset.done": "全体の既定の項目に戻しました。",
   "knowledgeBases.documents.loading": "所属文書を読み込んでいます",
   "knowledgeBases.documents.empty.title": "所属文書がありません。",

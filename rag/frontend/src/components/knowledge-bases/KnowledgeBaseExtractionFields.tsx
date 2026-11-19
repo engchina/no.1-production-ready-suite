@@ -9,11 +9,10 @@ import {
   FormSkeleton,
   TimedLoadingState,
 } from "@production-ready/ui";
-import { CopyPlus, History, ListChecks } from "lucide-react";
+import { CopyPlus, ListChecks } from "lucide-react";
 
 import { ExtractionFieldsForm } from "@/components/settings/ExtractionFieldsEditor";
 import { ApiErrorState } from "@/components/StateViews";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, type ExtractionFieldDefinition } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -25,7 +24,8 @@ import { toast } from "@/lib/toast";
 
 /**
  * ナレッジベースの「抽出する項目」（#548）。KB に定義が無ければ全体の既定を表示し、既定を写して
- * KB の定義を作れる。KB の定義は編集でき、「全体の既定に戻す」で消す。アーカイブ済みは表示だけ。
+ * KB の定義を作れる。KB の定義は編集でき、「全体の既定に戻す」で全体の既定の項目を編集欄に入れ、「保存」で
+ * KB の定義を消す（#5543）。アーカイブ済みは表示だけ。
  */
 export function KnowledgeBaseExtractionFields({
   knowledgeBaseId,
@@ -37,26 +37,6 @@ export function KnowledgeBaseExtractionFields({
   const query = useKnowledgeBaseExtractionFields(knowledgeBaseId);
   const save = useUpdateKnowledgeBaseExtractionFields(knowledgeBaseId);
   const reset = useResetKnowledgeBaseExtractionFields(knowledgeBaseId);
-  const confirm = useConfirm();
-
-  const resetToDefault = async () => {
-    const ok = await confirm({
-      title: t("knowledgeBases.extractionFields.reset.title"),
-      description: t("knowledgeBases.extractionFields.reset.description"),
-      confirmLabel: t("knowledgeBases.extractionFields.reset"),
-      tone: "warning",
-    });
-    if (!ok) return;
-    save.reset();
-    reset.mutate(undefined, {
-      onSuccess: () => toast.success(t("knowledgeBases.extractionFields.reset.done")),
-      onError: (error) =>
-        toast.error(
-          error instanceof ApiError ? error.message : t("settings.extractionFields.saveError")
-        ),
-    });
-  };
-
   const defineOwn = (fields: ExtractionFieldDefinition[]) => {
     save.mutate(fields, {
       onError: (error) =>
@@ -134,13 +114,13 @@ export function KnowledgeBaseExtractionFields({
         save={save}
         description={t("knowledgeBases.extractionFields.ownDescription")}
         testId="knowledge-base-extraction-fields-editor"
-        restoreDefaultsAction={{
-          id: "reset-to-default",
+        restoreDefaults={{
           label: t("knowledgeBases.extractionFields.reset"),
-          icon: History,
-          loading: reset.isPending,
-          disabled: save.isPending,
-          onClick: () => void resetToDefault(),
+          fields: query.data.default_fields,
+          available: true,
+          pendingMessage: t("knowledgeBases.extractionFields.reset.pending"),
+          save: reset,
+          onSaved: () => toast.success(t("knowledgeBases.extractionFields.reset.done")),
         }}
       />
     );

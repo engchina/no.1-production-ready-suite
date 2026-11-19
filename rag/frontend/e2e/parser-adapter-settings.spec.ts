@@ -248,7 +248,7 @@ async function mockExtractionFields(
       fields = payload.fields;
     }
     await route.fulfill({
-      json: { data: { fields, uses_standard: false }, error_messages: [], warning_messages: [] },
+      json: { data: { fields, uses_standard: false, standard_fields: [] }, error_messages: [], warning_messages: [] },
     });
   });
   return patches;
@@ -279,7 +279,11 @@ async function mockStandardExtractionFields(page: Page) {
       usesStandard = true;
     }
     await route.fulfill({
-      json: { data: { fields, uses_standard: usesStandard }, error_messages: [], warning_messages: [] },
+      json: {
+        data: { fields, uses_standard: usesStandard, standard_fields: STANDARD_FIELDS },
+        error_messages: [],
+        warning_messages: [],
+      },
     });
   });
   return calls;
@@ -539,22 +543,25 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(editor.getByText(/標準の項目を使っています/)).toHaveCount(0);
     await expect(resetButton).toBeEnabled();
 
-    // 編集中でも戻せる。確認ダイアログを取り消すと何もしない。
+    // 編集中でも戻せる。戻すは標準の項目を編集欄に入れるだけで、確認も送信もしない（#5543）。
     await editor.getByLabel("項目名").first().fill("文書種別");
     await resetButton.click();
-    const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText("標準の項目に戻しますか？");
-    await expect(dialog).toContainText("編集中の変更も破棄します");
-    await dialog.getByRole("button", { name: "キャンセル" }).click();
-    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
     expect(calls).toEqual(["PATCH"]);
-    await expect(editor.getByLabel("項目名").first()).toHaveValue("文書種別");
+    await expect(editor.getByLabel("項目名")).toHaveCount(4);
+    await expect(editor.getByLabel("項目名").first()).toHaveValue("文書の種類");
+    await expect(editor.getByText("標準の項目を入れました。「保存」で保存した定義を消し、標準の項目を使います。")).toBeVisible();
+    await expect(resetButton).toBeDisabled();
+    // 「変更を破棄」で保存した定義に戻せる。
+    await editor.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(editor.getByLabel("項目名")).toHaveCount(3);
+    expect(calls).toEqual(["PATCH"]);
 
+    // 戻してそのまま保存すると、写しではなく保存した定義の削除を送り、標準の項目を使う。
     await resetButton.click();
-    await page.getByRole("alertdialog").getByRole("button", { name: "標準の項目に戻す" }).click();
-    await expect(page.getByText("標準の項目に戻しました。")).toBeVisible();
+    await editor.getByRole("button", { name: "項目の定義を保存" }).click();
+    await expect(editor.getByText("項目の定義を保存しました。")).toBeVisible();
     expect(calls).toEqual(["PATCH", "DELETE"]);
-    // 編集中の変更も捨て、標準の 4 項目に戻る。
     await expect(editor.getByLabel("項目名")).toHaveCount(4);
     await expect(editor.getByLabel("項目名").first()).toHaveValue("文書の種類");
     await expect(editor.getByText(/標準の項目を使っています/)).toBeVisible();

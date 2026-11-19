@@ -199,6 +199,7 @@ async function mockParserAdapters(page: Page) {
           { name: "契約日", description: "", value_type: "date" },
         ],
         uses_standard: false,
+        standard_fields: [],
       }),
     })
   );
@@ -377,6 +378,7 @@ async function mockKnowledgeBase(page: Page) {
       json: apiEnvelope({
         inherits_default: false,
         fields: [{ name: "契約番号", description: "契約書の右上の番号", value_type: "string" }],
+        default_fields: [],
       }),
     })
   );

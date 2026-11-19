@@ -220,6 +220,8 @@ def test_extraction_fields_settings_api_returns_saved_schema() -> None:
     data = client.get("/api/settings/extraction-fields").json()["data"]
     assert [f["name"] for f in data["fields"]] == ["請求書番号"]
     assert data["uses_standard"] is False
+    # 保存した定義があっても、「標準の項目に戻す」が編集欄に入れる標準の項目を返す（#5543）。
+    assert [f["name"] for f in data["standard_fields"]] == _STANDARD_NAMES
 
 
 # ---- 標準の項目（未保存の環境の全体の既定。#556）----
