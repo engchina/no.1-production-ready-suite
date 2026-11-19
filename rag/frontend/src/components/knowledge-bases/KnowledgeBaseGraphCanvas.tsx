@@ -1,80 +1,78 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
-import { FileText, Heading, Image, Layers, MoreHorizontal, Table2, type LucideIcon } from "lucide-react";
+import { FileText, Heading, MoreHorizontal, TextQuote, type LucideIcon } from "lucide-react";
 import { Banner, ProcessingIndicator, SelectField } from "@production-ready/ui";
-import { aggregateGraphEdges, applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphParallelEdge, graphPathLabel, GraphSearchNavigation, GraphSelectionDetails, selectGraphEdgeHandles, type GraphNodeDimensions, type GraphPoint } from "@production-ready/ui/graph";
+import { applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, graphEdgeStyle, GraphLegend, graphNeighborIds, GraphNodeCard, GraphParallelEdge, GraphSearchNavigation, GraphSelectionDetails, selectGraphEdgeHandles, type GraphNodeDimensions, type GraphPoint } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
-import { api, type GraphReferenceEndpoint, type StructureGraphDocument, type StructureGraphOverview } from "@/lib/api";
-import { t } from "@/lib/i18n";
+import { api, type WikiGraphOverview, type WikiGraphRelation, type WikiGraphUnitRef } from "@/lib/api";
+import { t, type I18nKey } from "@/lib/i18n";
 import { useStructureNodeMeasurements } from "./use-structure-node-measurements";
-import { GraphChunkPanel } from "./GraphChunkPanel";
-import { GraphReferencePanel } from "./GraphReferencePanel";
-import { emptyStructureTree, layoutStructure, STRUCTURE_PAGE_SIZE, structureReferenceChains, visibleStructureNodes, type StructureTreeState, type StructureViewNode } from "./structure-graph";
+import { WikiGraphUnitPanel } from "./WikiGraphUnitPanel";
+import { WIKI_RELATION_ICONS, wikiRelationText } from "./wiki-graph-labels";
+import { emptyWikiTree, layoutWiki, WIKI_GRAPH_PAGE_SIZE, WIKI_RELATIONS, visibleWikiNodes, wikiRelationEdges, type WikiNodeKind, type WikiTreeState, type WikiViewNode } from "./wiki-graph";
 
-interface StructureNodeData extends Record<string, unknown> {
-  item: StructureViewNode;
+interface WikiNodeData extends Record<string, unknown> {
+  item: WikiViewNode;
   matched: boolean;
   dimmed: boolean;
 }
 type Selection = { type: "node" | "edge"; id: string } | null;
 
-const SECTION_PATH_SEPARATOR = " > ";
 const SEARCH_DEBOUNCE_MS = 400;
 const SEARCH_PAGE_SIZE = 25;
+const NODE_KINDS: readonly WikiNodeKind[] = ["document", "section", "unit"];
 
-function kindLabel(kind: string | null) {
-  const names: Record<string, Parameters<typeof t>[0]> = {
-    document: "knowledgeBases.graph.kind.document", section: "knowledgeBases.graph.kind.section",
-    table_section: "knowledgeBases.graph.kind.table", figure_section: "knowledgeBases.graph.kind.figure",
-    more: "knowledgeBases.graph.kind.more", body: "knowledgeBases.graph.body",
-  };
-  return t(names[kind ?? ""] ?? "knowledgeBases.graph.kind.other");
+function kindLabel(kind: WikiNodeKind) {
+  return t(`wiki.graph.kind.${kind}` as I18nKey);
 }
-const KIND_ICONS: Record<string, LucideIcon> = { document: FileText, section: Heading, table_section: Table2, figure_section: Image, more: MoreHorizontal };
-// 種類 = 塗り（NL2SQL の図と同じ語彙。状態の枠はこの図には無い）。
-const KIND_FILLS: Record<string, string> = {
-  document: "var(--color-graph-entity)", section: "var(--color-graph-term)",
-  table_section: "var(--color-graph-sql)", figure_section: "var(--color-graph-metric)",
+const KIND_ICONS: Record<WikiNodeKind, LucideIcon> = { document: FileText, section: Heading, unit: TextQuote, more: MoreHorizontal };
+// 種類 = 塗り（文書構造グラフ・NL2SQL の図と同じ語彙）。
+const KIND_FILLS: Record<WikiNodeKind, string> = {
+  document: "var(--color-graph-entity)", section: "var(--color-graph-term)", unit: "var(--color-graph-metric)", more: "var(--color-graph-default)",
 };
-const kindFill = (kind: string | null) => KIND_FILLS[kind ?? ""] ?? "var(--color-graph-default)";
+const relationLegendId = (relation: WikiGraphRelation) => relation;
 
-function nodeStats(item: StructureViewNode): string[] {
+function nodeStats(item: WikiViewNode): string[] {
   const stats: string[] = [];
-  if (item.document?.outgoing_count) stats.push(t("knowledgeBases.graph.outgoingCount", { count: item.document.outgoing_count }));
-  if (item.document?.incoming_count) stats.push(t("knowledgeBases.graph.incomingCount", { count: item.document.incoming_count }));
-  if (item.expandable) stats.push(t(item.expanded ? "knowledgeBases.graph.close" : "knowledgeBases.graph.open"));
+  const counts = item.document ?? item.tree;
+  if (item.document) stats.push(t("wiki.graph.unitCount", { count: item.document.unit_count }));
+  else if (item.tree?.kind === "section") stats.push(t("wiki.graph.unitCount", { count: item.tree.unit_count }));
+  // 文書をまたぐ関連は、端が図に無くても件数で示す（線は表示中の節点の間だけ）。
+  if (counts?.outgoing_links) stats.push(t("wiki.graph.outgoingLinks", { count: counts.outgoing_links }));
+  if (counts?.incoming_links) stats.push(t("wiki.graph.incomingLinks", { count: counts.incoming_links }));
+  if (item.expandable) stats.push(t(item.expanded ? "wiki.graph.close" : "wiki.graph.open"));
   return stats;
 }
 
-function StructureNode({ data, selected }: NodeProps<Node<StructureNodeData>>) {
+function WikiNode({ data, selected }: NodeProps<Node<WikiNodeData>>) {
   const { item } = data;
   if (item.kind === "more") {
-    return <GraphNodeCard icon={MoreHorizontal} kindLabel={kindLabel("more")} primary={t("knowledgeBases.graph.more", { count: item.remaining ?? 0 })} dimmed={data.dimmed} data-testid="structure-graph-more" />;
+    return <GraphNodeCard icon={MoreHorizontal} kindLabel={kindLabel("more")} primary={t("wiki.graph.more", { count: item.remaining ?? 0 })} dimmed={data.dimmed} data-testid="wiki-graph-more" />;
   }
-  const label = item.tree ? graphPathLabel(item.tree.name, SECTION_PATH_SEPARATOR) : { primary: item.label };
-  return <GraphNodeCard icon={KIND_ICONS[item.kind] ?? Layers} kindLabel={kindLabel(item.kind)} primary={item.tree ? item.tree.label : label.primary} secondary={item.tree ? label.context : undefined}
-    stats={nodeStats(item)} fill={kindFill(item.kind)} selected={selected} matched={data.matched} dimmed={data.dimmed} title={item.name} data-expanded={item.expandable ? String(item.expanded) : undefined} />;
+  return <GraphNodeCard icon={KIND_ICONS[item.kind]} kindLabel={kindLabel(item.kind)} primary={item.label} secondary={item.kind === "unit" ? item.tree?.label : undefined}
+    stats={nodeStats(item)} fill={KIND_FILLS[item.kind]} selected={selected} matched={data.matched} dimmed={data.dimmed} title={item.name}
+    data-kind={item.kind} data-expanded={item.expandable ? String(item.expanded) : undefined} />;
 }
-const NODE_TYPES = { structure: StructureNode };
+const NODE_TYPES = { wiki: WikiNode };
 const EDGE_TYPES = { parallel: GraphParallelEdge };
 
-function nodeAriaLabel(item: StructureViewNode) {
-  if (item.kind === "more") return t("knowledgeBases.graph.more", { count: item.remaining ?? 0 });
-  const state = item.expandable ? `（${t(item.expanded ? "knowledgeBases.graph.close" : "knowledgeBases.graph.open")}）` : "";
+function nodeAriaLabel(item: WikiViewNode) {
+  if (item.kind === "more") return t("wiki.graph.more", { count: item.remaining ?? 0 });
+  const state = item.expandable ? `（${t(item.expanded ? "wiki.graph.close" : "wiki.graph.open")}）` : "";
   return `${kindLabel(item.kind)}：${item.name}${state}`;
 }
 
-function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGraphOverview; knowledgeBaseId: string }) {
-  const flow = useReactFlow<Node<StructureNodeData>, Edge>();
+function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview; knowledgeBaseId: string }) {
+  const flow = useReactFlow<Node<WikiNodeData>, Edge>();
   const filterId = useId();
   const canvasAnchor = useRef<HTMLDivElement>(null);
-  const [tree, setTree] = useState<StructureTreeState>(emptyStructureTree);
+  const [tree, setTree] = useState<WikiTreeState>(emptyWikiTree);
   // 読み込みの中で最新の木を読む（開く操作の連続で古い state に重ねない）。
   const treeRef = useRef(tree);
-  const updateTree = (change: (current: StructureTreeState) => StructureTreeState) => {
+  const updateTree = (change: (current: WikiTreeState) => WikiTreeState) => {
     treeRef.current = change(treeRef.current);
     setTree(treeRef.current);
   };
@@ -83,7 +81,7 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const [search, setSearch] = useState("");
   const [cursor, setCursor] = useState(0);
   const [kind, setKind] = useState("");
-  const [disabledKinds, setDisabledKinds] = useState<Set<string>>(new Set());
+  const [disabledLegend, setDisabledLegend] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Selection>(null);
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const focusedNode = useRef<string | null>(null);
@@ -94,7 +92,6 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
 
   const documents = useMemo(() => new Map(overview.documents.map((document) => [document.id, document])), [overview]);
-  const documentBySet = useMemo(() => new Map(overview.documents.map((document) => [document.chunk_set_id, document])), [overview]);
 
   async function run(work: () => Promise<void>): Promise<void> {
     setPending((value) => value + 1);
@@ -108,19 +105,16 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
     }
   }
 
-  const documentOf = (id: string): StructureGraphDocument | undefined => {
-    const node = treeRef.current.nodes.get(id);
-    return node ? documentBySet.get(node.chunk_set_id) : documents.get(id);
-  };
+  const documentIdOf = (id: string): string | undefined => documents.get(id)?.document_id ?? treeRef.current.nodes.get(id)?.document_id;
 
   /** 親の段を、`count` 件まで読む（読み込み済みの続きから）。 */
   const loadChildren = async (parent: string, count: number) => {
-    const document = documentOf(parent);
-    if (!document) return;
+    const documentId = documentIdOf(parent);
+    if (!documentId) return;
     let loaded = treeRef.current.children.get(parent);
     while (!loaded || loaded.ids.length < Math.min(count, loaded.total)) {
       const offset = loaded?.ids.length ?? 0;
-      const page = await api.getStructureGraphTree(knowledgeBaseId, document.document_id, document.chunk_set_id, documents.has(parent) ? null : parent, offset, Math.min(STRUCTURE_PAGE_SIZE, Math.max(count - offset, 1)));
+      const page = await api.getWikiGraphTree(knowledgeBaseId, documentId, documents.has(parent) ? null : parent, offset, Math.min(WIKI_GRAPH_PAGE_SIZE, Math.max(count - offset, 1)));
       updateTree((current) => ({
         ...current,
         nodes: new Map([...current.nodes, ...page.items.map((item) => [item.id, item] as const)]),
@@ -128,15 +122,9 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
       }));
       loaded = treeRef.current.children.get(parent)!;
       if (loaded.ids.length <= offset && loaded.ids.length < Math.min(count, loaded.total)) {
-        throw new Error(t("knowledgeBases.graph.expandError"));
+        throw new Error(t("wiki.graph.expandError"));
       }
     }
-  };
-
-  const loadReferences = async (document: StructureGraphDocument) => {
-    if (treeRef.current.references.has(document.chunk_set_id)) return;
-    const { items } = await api.getStructureGraphReferences(knowledgeBaseId, document.document_id, document.chunk_set_id);
-    updateTree((current) => ({ ...current, references: new Map(current.references).set(document.chunk_set_id, items) }));
   };
 
   const setExpanded = (id: string, expanded: boolean) => {
@@ -150,40 +138,36 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const toggle = (id: string) => {
     if (treeRef.current.expanded.has(id)) { setExpanded(id, false); return; }
     void run(async () => {
-      const document = documentOf(id);
-      await loadChildren(id, STRUCTURE_PAGE_SIZE);
-      if (document) await loadReferences(document);
+      await loadChildren(id, WIKI_GRAPH_PAGE_SIZE);
       setExpanded(id, true);
     });
   };
 
   /** 文書の中の節点まで段を開く。節点が段の先の方にあるときは、そこまで読む。 */
-  const reveal = async (target: { id: string; document_id: string; chunk_set_id: string }) => {
-    const document = documentBySet.get(target.chunk_set_id);
-    if (!document) return;
-    if (target.id !== document.id) {
-      const { path } = await api.locateStructureGraphNode(knowledgeBaseId, target.document_id, target.chunk_set_id, target.id);
-      let parent = document.id;
+  const reveal = async (target: { id: string; document_id: string }) => {
+    if (!documents.has(target.document_id)) return;
+    if (target.id !== target.document_id) {
+      const { path } = await api.locateWikiGraphNode(knowledgeBaseId, target.document_id, target.id);
+      let parent = target.document_id;
       for (const step of path) {
-        await loadChildren(parent, (Math.floor(step.index / STRUCTURE_PAGE_SIZE) + 1) * STRUCTURE_PAGE_SIZE);
+        await loadChildren(parent, (Math.floor(step.index / WIKI_GRAPH_PAGE_SIZE) + 1) * WIKI_GRAPH_PAGE_SIZE);
         setExpanded(parent, true);
         parent = step.id;
       }
-      await loadReferences(document);
     }
-    setKind(""); setDisabledKinds(new Set());
+    setKind("");
     setSelection({ type: "node", id: target.id });
     focusedNode.current = null;
     setPendingFocus(target.id);
   };
 
-  const locateReference = (target: GraphReferenceEndpoint) => { void run(() => reveal(target)); };
+  const locateUnit = (unit: WikiGraphUnitRef) => { void run(() => reveal(unit)); };
 
   const query = search.trim();
   const searchPage = Math.floor(cursor / SEARCH_PAGE_SIZE) * SEARCH_PAGE_SIZE;
   const searchQuery = useQuery({
-    queryKey: ["structure-graph-search", knowledgeBaseId, query, searchPage],
-    queryFn: () => api.searchStructureGraph(knowledgeBaseId, query, searchPage),
+    queryKey: ["wiki-graph-search", knowledgeBaseId, query, searchPage],
+    queryFn: () => api.searchWikiGraph(knowledgeBaseId, query, searchPage),
     enabled: query.length > 0, retry: false,
   });
   const matches = useMemo(() => (query ? searchQuery.data?.items ?? [] : []), [query, searchQuery.data]);
@@ -205,21 +189,21 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   };
   const searchChanged = (value: string) => { setSearch(value); setCursor(0); };
 
-  const viewNodes = useMemo(() => visibleStructureNodes(overview, tree, (value) => (!kind || value === kind) && !disabledKinds.has(value)), [overview, tree, kind, disabledKinds]);
+  const viewNodes = useMemo(() => visibleWikiNodes(overview, tree, (value) => !kind || value === kind || value === "more"), [overview, tree, kind]);
   const viewById = useMemo(() => new Map(viewNodes.map((node) => [node.id, node])), [viewNodes]);
   const visibleIds = useMemo(() => new Set(viewNodes.map((node) => node.id)), [viewNodes]);
   useStructureNodeMeasurements(sizes, visibleIds);
-  const referenceEdges = useMemo(() => aggregateGraphEdges(structureReferenceChains(overview, tree), visibleIds), [overview, tree, visibleIds]);
+  const relationEdges = useMemo(() => wikiRelationEdges(viewNodes, (relation) => !disabledLegend.has(relationLegendId(relation))), [viewNodes, disabledLegend]);
   const containsEdges = useMemo(() => viewNodes.flatMap((node) => (node.parent && visibleIds.has(node.parent) ? [{ id: `contains:${node.id}`, source: node.parent, target: node.id }] : [])), [viewNodes, visibleIds]);
-  const documentEdges = useMemo(() => referenceEdges.map((edge) => ({ source: viewById.get(edge.source)!.documentNode, target: viewById.get(edge.target)!.documentNode })), [referenceEdges, viewById]);
-  const layout = useMemo(() => layoutStructure(viewNodes, documentEdges, sizes), [viewNodes, documentEdges, sizes]);
+  const documentEdges = useMemo(() => relationEdges.filter((edge) => edge.scope === "cross_document").map((edge) => ({ source: viewById.get(edge.source)!.documentNode, target: viewById.get(edge.target)!.documentNode })), [relationEdges, viewById]);
+  const layout = useMemo(() => layoutWiki(viewNodes, documentEdges, sizes), [viewNodes, documentEdges, sizes]);
   const positionOf = (id: string) => overrides.get(id) ?? layout.get(id) ?? { x: 0, y: 0 };
 
   // 種類の切替だけで表示範囲を合わせ、開閉や検索の移動では今の見え方を保つ。
   useEffect(() => {
     if (pendingFocus && focusedNode.current !== pendingFocus) return;
     void flow.fitView({ padding: 0.18, duration: 0 });
-  }, [flow, kind, disabledKinds, pendingFocus]);
+  }, [flow, kind, pendingFocus]);
 
   useEffect(() => {
     if (!pendingFocus || focusedNode.current === pendingFocus) return;
@@ -233,10 +217,11 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
     if (sizes.has(pendingFocus)) focusedNode.current = pendingFocus;
   }, [pendingFocus, layout, overrides, sizes, flow]);
 
-  const allEdges = useMemo(() => [...containsEdges.map((edge) => ({ ...edge, isReference: false, count: 0 })), ...referenceEdges.map((edge) => ({ ...edge, isReference: true }))], [containsEdges, referenceEdges]);
+  type ViewEdge = { id: string; source: string; target: string; relation?: WikiGraphRelation; scope?: "same_document" | "cross_document" };
+  const allEdges: ViewEdge[] = useMemo(() => [...containsEdges, ...relationEdges], [containsEdges, relationEdges]);
   const neighbors = graphNeighborIds(hoveredNode, allEdges);
-  const nodes: Node<StructureNodeData>[] = viewNodes.map((item) => ({
-    id: item.id, type: "structure", position: positionOf(item.id),
+  const nodes: Node<WikiNodeData>[] = viewNodes.map((item) => ({
+    id: item.id, type: "wiki", position: positionOf(item.id),
     ...(sizes.has(item.id) ? { measured: sizes.get(item.id) } : {}),
     ariaLabel: nodeAriaLabel(item),
     data: { item, matched: matchedNodes.has(item.id), dimmed: Boolean(neighbors && !neighbors.has(item.id)) },
@@ -247,12 +232,13 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const pairKey = (edge: { source: string; target: string }) => [edge.source, edge.target].sort().join("::");
   for (const edge of allEdges) pairCounts.set(pairKey(edge), (pairCounts.get(pairKey(edge)) ?? 0) + 1);
   const pairSeen = new Map<string, number>();
-  const edgeLabel = (edge: { isReference: boolean; count: number }) => (edge.isReference ? t("knowledgeBases.graph.referenceEdge", { count: edge.count }) : t("knowledgeBases.graph.contains"));
+  const edgeLabel = (edge: ViewEdge) => (edge.relation ? wikiRelationText(edge.relation) : t("wiki.graph.contains"));
+  const edgeScope = (edge: ViewEdge) => (edge.scope ? t(edge.scope === "cross_document" ? "wiki.graph.scope.cross_document" : "wiki.graph.scope.same_document") : "");
   const nodeName = (id: string) => viewById.get(id)?.name || id;
   const edges: Edge[] = allEdges.map((edge) => {
     const selected = selection?.type === "edge" && selection.id === edge.id;
     // 包含は親が左・子が右の配置なので、常に横につなぐ（縦に回すと兄弟の節点を貫通する）。
-    const { sourceHandle, targetHandle, orientation } = edge.isReference
+    const { sourceHandle, targetHandle, orientation } = edge.relation
       ? selectGraphEdgeHandles(positionOf(edge.source), positionOf(edge.target))
       : ({ sourceHandle: "s-right", targetHandle: "t-left", orientation: "horizontal" } as const);
     const key = pairKey(edge);
@@ -262,16 +248,17 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
     return {
       id: edge.id, source: edge.source, target: edge.target, sourceHandle, targetHandle, markerEnd: GRAPH_EDGE_MARKER,
       ...(orientation === "vertical" ? { type: "smoothstep" } : parallelCount > 1 ? { type: "parallel", data: { parallelOffset: (parallelIndex - (parallelCount - 1) / 2) * 20 } } : {}),
-      // 参照は実線で件数を常に出す。包含は多いので点線で、選択と hover のときだけラベルを出す。
-      label: edge.isReference || selected || hoveredEdge === edge.id ? edgeLabel(edge) : undefined,
-      ariaLabel: t("knowledgeBases.graph.connection", { from: nodeName(edge.source), to: nodeName(edge.target), relation: edgeLabel(edge) }),
+      // 関係は矢印（起点 → 終点）と種類の文字を常に出す。包含は多いので点線で、選択と hover のときだけ文字を出す。
+      label: edge.relation || selected || hoveredEdge === edge.id ? edgeLabel(edge) : undefined,
+      ariaLabel: t("wiki.graph.connection", { from: nodeName(edge.source), to: nodeName(edge.target), relation: [edgeLabel(edge), edgeScope(edge)].filter(Boolean).join("・") }),
       selected,
-      style: graphEdgeStyle({ emphasized: selected, width: edge.isReference ? 1.25 : 1, dash: edge.isReference ? undefined : "4 3", opacity: neighbors && edge.source !== hoveredNode && edge.target !== hoveredNode ? 0.35 : 1 }),
+      // 文書をまたぐ関連は太い実線、同じ文書の依存は実線、包含は点線（色だけで区別しない）。
+      style: graphEdgeStyle({ emphasized: selected, width: edge.scope === "cross_document" ? 2 : edge.relation ? 1.25 : 1, dash: edge.relation ? undefined : "4 3", opacity: neighbors && edge.source !== hoveredNode && edge.target !== hoveredNode ? 0.35 : 1 }),
       ...GRAPH_EDGE_LABEL_PROPS,
     };
   });
 
-  const nodesChanged = (changes: NodeChange<Node<StructureNodeData>>[]) => {
+  const nodesChanged = (changes: NodeChange<Node<WikiNodeData>>[]) => {
     setOverrides((before) => applyGraphNodePositionChanges(before, changes));
     setSizes((before) => applyGraphNodeDimensionChanges(before, changes));
   };
@@ -281,66 +268,85 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
     if (item.kind === "more") {
       const parent = item.parent!;
       const loaded = tree.children.get(parent)?.ids.length ?? 0;
-      void run(() => loadChildren(parent, loaded + STRUCTURE_PAGE_SIZE));
+      void run(() => loadChildren(parent, loaded + WIKI_GRAPH_PAGE_SIZE));
       return;
     }
     setSelection({ type: "node", id });
     if (item.expandable) toggle(id);
   };
+  const toggleLegend = (id: string) => {
+    setDisabledLegend((before) => { const next = new Set(before); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+    setSelection(null);
+  };
 
-  const legendKinds = useMemo(() => {
-    const present = new Set<string>(["document"]);
-    for (const node of tree.nodes.values()) present.add(node.type);
-    return [...present];
-  }, [tree.nodes]);
   const selectedNode = selection?.type === "node" ? viewById.get(selection.id) : undefined;
   const selectedEdge = selection?.type === "edge" ? allEdges.find((edge) => edge.id === selection.id) : undefined;
-  const fields = selectedNode ? [
-    { label: t("knowledgeBases.graph.name"), value: selectedNode.name },
-    ...(selectedNode.tree ? [{ label: t("knowledgeBases.structure.build.document"), value: selectedNode.tree.document_name }] : []),
-    { label: t("knowledgeBases.graph.kind"), value: kindLabel(selectedNode.kind) },
-    { label: t("knowledgeBases.graph.identifier"), value: selectedNode.id, technical: true },
+  const fields = selectedNode && selectedNode.kind !== "unit" ? [
+    { label: t("wiki.graph.name"), value: selectedNode.name },
+    ...(selectedNode.tree ? [{ label: t("wiki.graph.document"), value: selectedNode.tree.document_name }] : []),
+    { label: t("wiki.graph.kind"), value: kindLabel(selectedNode.kind) },
+    { label: t("wiki.graph.units"), value: String(selectedNode.document?.unit_count ?? selectedNode.tree?.unit_count ?? 0) },
   ] : selectedEdge ? [
-    { label: t("knowledgeBases.graph.relationship"), value: edgeLabel(selectedEdge) },
-    { label: t("knowledgeBases.graph.from"), value: nodeName(selectedEdge.source) },
-    { label: t("knowledgeBases.graph.to"), value: nodeName(selectedEdge.target) },
-    { label: t("knowledgeBases.graph.identifier"), value: selectedEdge.id, technical: true },
+    { label: t("wiki.graph.relation"), value: edgeLabel(selectedEdge) },
+    ...(selectedEdge.scope ? [{ label: t("wiki.graph.scope"), value: edgeScope(selectedEdge) }] : []),
+    { label: t("wiki.graph.from"), value: nodeName(selectedEdge.source) },
+    { label: t("wiki.graph.to"), value: nodeName(selectedEdge.target) },
   ] : [];
+  const unitSelected = selectedNode?.kind === "unit";
+  // 案内を横に出すと画布の幅が変わるので、選んだ単位を画布の中央に戻す（拡大率は保つ）。
+  const selectedUnitId = unitSelected ? selectedNode.id : null;
+  useEffect(() => {
+    if (!selectedUnitId) return;
+    const frame = requestAnimationFrame(() => {
+      const point = flow.getNode(selectedUnitId)?.position;
+      if (!point) return;
+      const size = sizes.get(selectedUnitId) ?? GRAPH_NODE_CARD_SIZE;
+      void flow.setCenter(point.x + size.width / 2, point.y + size.height / 2, { zoom: flow.getZoom(), duration: 0 });
+    });
+    return () => cancelAnimationFrame(frame);
+    // 選んだときだけ動かす（配置・寸法の更新では動かさない）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedUnitId, flow]);
 
   return <div className="grid min-w-0 gap-3">
     <div className="flex min-w-0 flex-wrap items-start gap-2">
-      <GraphSearchNavigation labels={{ search: t("knowledgeBases.graph.search"), clear: t("common.clearSearch"), previous: t("knowledgeBases.graph.previousMatch"), next: t("knowledgeBases.graph.nextMatch"), noMatch: t("knowledgeBases.graph.noMatch"), scope: t("knowledgeBases.graph.searchScope") }} value={search} onChange={searchChanged} count={matchCount} cursor={cursor} onPrevious={() => jump(-1)} onNext={() => jump(1)} debounceMs={SEARCH_DEBOUNCE_MS} testId="knowledge-base-graph-search" />
-      <SelectField id={filterId} label={t("knowledgeBases.graph.kind")} labelHidden size="lg" width="md" value={kind} onValueChange={(value) => { setKind(value); setSelection(null); }} options={[{ value: "", label: t("knowledgeBases.graph.allKinds") }, ...legendKinds.map((value) => ({ value, label: kindLabel(value) }))]} />
+      <GraphSearchNavigation labels={{ search: t("wiki.graph.search"), clear: t("common.clearSearch"), previous: t("wiki.graph.previousMatch"), next: t("wiki.graph.nextMatch"), noMatch: t("wiki.graph.noMatch"), scope: t("wiki.graph.searchScope") }} value={search} onChange={searchChanged} count={matchCount} cursor={cursor} onPrevious={() => jump(-1)} onNext={() => jump(1)} debounceMs={SEARCH_DEBOUNCE_MS} testId="wiki-graph-search" />
+      <SelectField id={filterId} label={t("wiki.graph.kind")} labelHidden size="lg" width="md" value={kind} onValueChange={(value) => { setKind(value); setSelection(null); }} options={[{ value: "", label: t("wiki.graph.allKinds") }, ...NODE_KINDS.map((value) => ({ value, label: kindLabel(value) }))]} />
     </div>
-    {searchQuery.isError && query ? <Banner severity="danger" title={t("knowledgeBases.graph.searchError")} /> : null}
-    {failure ? <DataLoadFailure error={failure.error} fallback={t("knowledgeBases.graph.expandError")} onRetry={failure.retry} /> : null}
-    <div ref={canvasAnchor} className="relative">
-      <GraphCanvasFrame role="region" aria-label={t("knowledgeBases.graph.title")}>
-        <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
-          onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}
-          onNodeMouseEnter={(_event, node) => setHoveredNode(node.id)} onNodeMouseLeave={() => setHoveredNode(null)}
-          onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)} onEdgeMouseLeave={() => setHoveredEdge(null)}
-          miniMap={viewNodes.length > 12 ? { "aria-label": t("knowledgeBases.graph.minimap"), nodeColor: (node) => kindFill((node.data as StructureNodeData).item.kind) } : false}>
-          <GraphCanvasControls labels={{ zoomIn: t("knowledgeBases.graph.zoomIn"), zoomOut: t("knowledgeBases.graph.zoomOut"), fit: t("knowledgeBases.graph.fitView"), reset: t("knowledgeBases.graph.reset") }} onReset={() => setOverrides(new Map())} resetDisabled={overrides.size === 0} />
-          <GraphLegend label={t("knowledgeBases.graph.legend")} items={legendKinds.map((value) => ({ id: value, label: kindLabel(value), marker: <GraphLegendSwatch fill={kindFill(value)} /> }))} disabledIds={disabledKinds} onToggle={(id) => { setDisabledKinds((before) => { const next = new Set(before); if (next.has(id)) next.delete(id); else next.add(id); return next; }); setSelection(null); }} testId="knowledge-base-graph-legend" />
-        </GraphCanvas>
-      </GraphCanvasFrame>
-      {/* 節点を開く間の表示は画布の上に重ね、画布を押し下げない（#4649）。画布は画面より高いことがあり、上端は固定の
-          見出しの下に隠れるので、下端に置き、画布の下端が画面の外にある間は画面の下端に留める（sticky）。凡例の上に置く。 */}
-      {pending > 0 ? <div className="pointer-events-none sticky bottom-3 z-20 h-0" data-testid="structure-graph-expanding-anchor">
-        <div className="absolute inset-x-3 bottom-20">
-          <ProcessingIndicator active label={t("knowledgeBases.graph.expanding")} operationKey="structure-graph-expand" testId="structure-graph-expanding" className="shadow-sm" />
+    {searchQuery.isError && query ? <Banner severity="danger" title={t("wiki.graph.searchError")} /> : null}
+    {failure ? <DataLoadFailure error={failure.error} fallback={t("wiki.graph.expandError")} onRetry={failure.retry} /> : null}
+    {/* 単位を選ぶと案内を横に出す。置き場所が狭い（375px など）ときは図の下に回す。 */}
+    <div className="@container min-w-0">
+      <div className={unitSelected ? "grid min-w-0 gap-3 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]" : "grid min-w-0"}>
+        <div ref={canvasAnchor} className="relative min-w-0">
+          <GraphCanvasFrame role="region" aria-label={t("wiki.graph.title")}>
+            <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
+              onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}
+              onNodeMouseEnter={(_event, node) => setHoveredNode(node.id)} onNodeMouseLeave={() => setHoveredNode(null)}
+              onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)} onEdgeMouseLeave={() => setHoveredEdge(null)}
+              miniMap={viewNodes.length > 12 ? { "aria-label": t("wiki.graph.minimap"), nodeColor: (node) => KIND_FILLS[(node.data as WikiNodeData).item.kind] } : false}>
+              <GraphCanvasControls labels={{ zoomIn: t("wiki.graph.zoomIn"), zoomOut: t("wiki.graph.zoomOut"), fit: t("wiki.graph.fitView"), reset: t("wiki.graph.reset") }} onReset={() => setOverrides(new Map())} resetDisabled={overrides.size === 0} />
+              {/* 凡例は関係の種類（アイコンと文字）。節点の種類は節点の上の文字と「種類」の絞り込みで示す（375px で画布を覆わない）。 */}
+              <GraphLegend label={t("wiki.graph.legend")} items={WIKI_RELATIONS.map((relation) => {
+                const Icon = WIKI_RELATION_ICONS[relation];
+                return { id: relationLegendId(relation), label: wikiRelationText(relation), marker: <Icon className="size-4 shrink-0" aria-hidden /> };
+              })} disabledIds={disabledLegend} onToggle={toggleLegend} testId="wiki-graph-legend" />
+            </GraphCanvas>
+          </GraphCanvasFrame>
+          {/* 節点を開く間の表示は画布の上に重ね、画布を押し下げない（#4649）。 */}
+          {pending > 0 ? <div className="pointer-events-none sticky bottom-3 z-20 h-0" data-testid="wiki-graph-expanding-anchor">
+            <div className="absolute inset-x-3 bottom-20">
+              <ProcessingIndicator active label={t("wiki.graph.expanding")} operationKey="wiki-graph-expand" testId="wiki-graph-expanding" className="shadow-sm" />
+            </div>
+          </div> : null}
         </div>
-      </div> : null}
+        {unitSelected && selectedNode ? <WikiGraphUnitPanel key={selectedNode.id} kbId={knowledgeBaseId} unitId={selectedNode.id} onClose={() => setSelection(null)} onLocate={locateUnit} /> : null}
+      </div>
     </div>
-    {selectedNode?.tree && !selectedNode.tree.virtual ? <GraphChunkPanel key={`chunks:${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} documentId={selectedNode.tree.document_id} chunkSetId={selectedNode.tree.chunk_set_id} nodeId={selectedNode.id} nodeLabel={selectedNode.tree.label} /> : null}
-    {selectedNode && !selectedNode.tree?.virtual ? <GraphReferencePanel key={`${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} nodeId={selectedNode.id} onLocate={locateReference} /> : null}
-    {/* 仮想の節点（木だけにある祖先・旧索引の本文）は実体が無いので、チャンクを読まずに案内だけを出す。 */}
-    {selectedNode?.tree?.virtual ? <p className="text-sm text-fg-muted">{t(selectedNode.kind === "body" ? "knowledgeBases.graph.chunkRebuild" : "knowledgeBases.graph.virtualNode")}</p> : null}
-    {fields.length ? <GraphSelectionDetails title={t(selectedNode ? "knowledgeBases.graph.selectedNode" : "knowledgeBases.graph.selectedEdge")} closeLabel={t("knowledgeBases.graph.clearSelection")} onClose={() => setSelection(null)} fields={fields} /> : null}
+    {fields.length ? <GraphSelectionDetails title={t(selectedNode ? "wiki.graph.selectedNode" : "wiki.graph.selectedEdge")} closeLabel={t("wiki.graph.clearSelection")} onClose={() => setSelection(null)} fields={fields} /> : null}
   </div>;
 }
 
-export function KnowledgeBaseGraphCanvas({ overview, knowledgeBaseId }: { overview: StructureGraphOverview; knowledgeBaseId: string }) {
-  return <GraphCanvasProvider><StructureCanvas overview={overview} knowledgeBaseId={knowledgeBaseId} /></GraphCanvasProvider>;
+export function KnowledgeBaseGraphCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview; knowledgeBaseId: string }) {
+  return <GraphCanvasProvider><WikiCanvas overview={overview} knowledgeBaseId={knowledgeBaseId} /></GraphCanvasProvider>;
 }

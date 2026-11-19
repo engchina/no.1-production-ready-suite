@@ -1,5 +1,4 @@
 "use client";
-import { KnowledgeBaseStructureIndex } from "./KnowledgeBaseStructureIndex";
 import { KnowledgeBaseWiki } from "./KnowledgeBaseWiki";
 
 import { FilePlus2, Files, Unlink } from "lucide-react";
@@ -122,10 +121,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
       {/* 項目抽出で取り出す項目の定義。無ければ全体の既定を使う。 */}
       <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
 
-      {/* 項目の定義の後に文書の構造を確認する。文書構造グラフはこのカードの最下部で、開いたときだけ取得する。 */}
-      <KnowledgeBaseStructureIndex key={kb.id} kb={kb} editable={isActive} />
-
-      {/* Wiki の背景構築の指定（#4941）。 */}
+      {/* Wiki の背景構築の指定（#4941）と、カードの最下部の Wiki の図（#5502）。 */}
       <KnowledgeBaseWiki key={`wiki-${kb.id}`} id={kb.id} editable={isActive} />
     </KnowledgeBaseEditor>
   );

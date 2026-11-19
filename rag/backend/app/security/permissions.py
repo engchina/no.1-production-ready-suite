@@ -441,6 +441,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("PUT", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/wiki/retry"): _any(MENU_KNOWLEDGE_BASES),
+    # KB 詳細の Wiki の図（#5502）。
+    ("GET", f"{_KB}/wiki/graph"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/wiki/graph/documents/{{document_id}}/tree"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/wiki/graph/documents/{{document_id}}/locate"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/wiki/graph/search"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/wiki/graph/units/{{unit_id}}"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/structure-index/plan"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/structure-index/job"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/structure-index/job"): _any(MENU_KNOWLEDGE_BASES),
