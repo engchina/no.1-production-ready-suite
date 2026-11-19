@@ -439,7 +439,9 @@ def _strip_releases(connection: Any) -> None:
         if stripped is None:
             continue
         try:
-            pack = build_pack(stripped)
+            # 読むときと同じく、項目を足す前に保存した版の欠けた項目は補って読む。hash は保存して
+            # いた項目だけから計算するので、読むときの照合と一致する(#5476・#5524)。
+            pack = build_pack(stripped, fill_missing=True)
         except ValueError:
             # 別の項目の欠けで今の契約では読めない版。本文も hash も書き換えず、そのまま残す
             # (#5035。本文だけを変えると保存した content_hash と対応しなくなる。

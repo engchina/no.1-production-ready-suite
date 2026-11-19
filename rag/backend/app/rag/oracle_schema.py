@@ -1238,6 +1238,8 @@ END;
                 "（RAG_RECIPE_VERSION_LOG）・抽出の成果物（RAG_DOCUMENT_EXTRACTIONS・"
                 "RAG_DOCUMENT_EXTRACTION_REVISIONS の parser_artifacts）に残した取込 hash も新しい"
                 "値に書き換えます（どの処理も読まない項目なので、取込済みの文書の再処理は要りません）。"
+                "以前の廃止の migration が、項目を足す前に保存した公開版を読めずに飛ばして"
+                "廃止項目が残った環境（#5524）では、その公開版からもすべての廃止項目を消します。"
                 "ほかの項目・版の番号・公開の履歴は変えません。削除後は復元できません。"
             ),
         )
