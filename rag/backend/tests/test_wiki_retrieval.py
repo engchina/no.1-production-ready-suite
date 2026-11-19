@@ -583,3 +583,88 @@ def test_answer_reading_rule_names_every_wiki_relation() -> None:
         if line.startswith("- wiki_relations: ")
     )
     assert all(f"{relation}=" in line for relation in get_args(WikiRelation))
+
+
+# ---- 回答の診断の測定用の値（#5518） ----
+
+WIKI_STAGES = [
+    "Wiki: 目録の読み込み",
+    "Wiki: 質問のベクトル化",
+    "Wiki: 案内の候補の検索",
+    "Wiki: 読むファイルの選択（1 回目のモデル）",
+    "Wiki: 選んだファイルの案内と順位の読み込み",
+    "Wiki: 読む単位と章節の選択（2 回目のモデル）",
+    "Wiki: 依存と関連の辿り",
+    "Wiki: 原文の読み込み",
+]
+
+
+@pytest.mark.asyncio
+async def test_trace_lists_the_source_chunk_ids_by_origin_and_the_stage_seconds() -> None:
+    """根拠に渡した原文の chunk ID と、選んだ単位・依存・関連ごとの chunk ID を記録に残す。"""
+    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store.link_rows = [("doc-c-c1", "doc-a-a2", "exception")]
+    seconds: dict[str, float] = {}
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=1)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
+    )
+
+    trace = result.trace
+    assert trace["source_chunk_ids"] == [chunk.chunk_id for chunk in result.chunks]
+    assert len(trace["source_chunk_ids"]) == trace["source_count"]
+    assert trace["source_chunk_ids_by_origin"] == {
+        "selected": ["doc-a-a1-chunk", "doc-a-a2-chunk"],
+        "dependency": ["doc-a-a4-chunk"],
+        "link": ["doc-c-c1-chunk"],
+    }
+    # 由来ごとの chunk ID は根拠の chunk ID と同じ集合（DB を読み足さない）。
+    by_origin = trace["source_chunk_ids_by_origin"]
+    assert {sid for ids in by_origin.values() for sid in ids} == set(trace["source_chunk_ids"])
+    # 段（span）ごとの秒は、渡した記録に段の順で入る。全体の秒は回答の側で測る。
+    assert list(seconds) == WIKI_STAGES
+    assert all(isinstance(value, float) and value >= 0 for value in seconds.values())
+    assert "elapsed_seconds" not in trace and "stage_seconds" not in trace
+
+
+@pytest.mark.asyncio
+async def test_source_chunk_ids_follow_the_diagnostics_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag import wiki_retrieval
+
+    monkeypatch.setattr(wiki_retrieval, "_SOURCE_DIAGNOSTICS_LIMIT", 1)
+    store, llm = Store(PAGES), Llm(["文書A"], units=["a2"])
+    result = await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
+    trace = result.trace
+    assert trace["source_count"] > 1 and len(trace["source_chunk_ids"]) == 1
+    assert all(len(ids) <= 1 for ids in trace["source_chunk_ids_by_origin"].values())
+
+
+@pytest.mark.asyncio
+async def test_stage_seconds_keep_the_stage_that_failed() -> None:
+    """失敗した段も、それまでの秒を残す（時間切れの段を記録から見る）。"""
+
+    class Broken(Store):
+        async def read_sources(
+            self, pages: list[WikiPage], filters: dict[str, str]
+        ) -> list[RetrievedChunk]:
+            raise RuntimeError("合成の失敗")
+
+    store, llm = Broken(PAGES), Llm(["文書A"], units=["a2"])
+    seconds: dict[str, float] = {}
+    with pytest.raises(RuntimeError):
+        await retriever(store, llm).search(
+            QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
+        )
+    assert list(seconds) == WIKI_STAGES
+
+
+@pytest.mark.asyncio
+async def test_profile_without_wiki_search_records_no_measurement() -> None:
+    store, llm = Store(PAGES), Llm([])
+    seconds: dict[str, float] = {}
+    result = await retriever(store, llm, enabled=False).search(
+        QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
+    )
+    assert result.trace == {"status": "profile_disabled", "model_calls": 0}
+    assert seconds == {}

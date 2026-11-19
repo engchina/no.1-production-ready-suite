@@ -32,12 +32,17 @@ def engine(retriever: Any) -> AnswerEngine:
 
 
 class Retriever:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None, *, disabled: bool = False) -> None:
         self.error = error
+        self.disabled = disabled
         self.calls: list[dict[str, Any]] = []
 
     async def search(self, question: str, **kwargs: Any) -> WikiSearchResult:
         self.calls.append(kwargs)
+        if self.disabled:
+            return WikiSearchResult(trace={"status": "profile_disabled", "model_calls": 0})
+        # 検索の経路は段（span）ごとの秒を渡された記録に書く（#5518）。
+        kwargs["stage_seconds"]["Wiki: 目録の読み込み"] = 0.25
         if self.error:
             raise self.error
         chunk = RetrievedChunk(
@@ -69,11 +74,14 @@ async def test_wiki_sources_keep_the_version_attributes_and_mark_the_channel() -
     assert metadata["wiki_source"] is True and metadata["source_identities"] == [IDENTITY]
     assert metadata["wiki_relations"] == [RELATION]
     assert metadata["adb_hybrid"] == {"retrieval_channels": ["wiki"]}
-    assert (
-        state.wiki_pages == ("page",)
-        and state.wiki_trace == {"status": "ready"}
-        and "c1" in state.chunks
-    )
+    assert state.wiki_pages == ("page",) and "c1" in state.chunks
+    # 検索の経路の記録に、全体の秒と段ごとの秒を足す（#5518）。
+    elapsed = state.wiki_trace.pop("elapsed_seconds")
+    assert isinstance(elapsed, float) and elapsed >= 0
+    assert state.wiki_trace == {
+        "status": "ready",
+        "stage_seconds": {"Wiki: 目録の読み込み": 0.25},
+    }
 
 
 @pytest.mark.asyncio
@@ -81,8 +89,23 @@ async def test_wiki_failure_is_recorded_and_normal_search_continues() -> None:
     state = _SearchState()
     stored = await engine(Retriever(RuntimeError("合成の失敗")))._wiki_sources(request(), state)
     assert stored == [] and state.wiki_pages == ()
-    assert state.wiki_trace == {"status": "degraded", "failure_code": "RuntimeError"}
+    # 失敗しても、それまでの段の秒と全体の秒を残す（#5518）。
+    assert isinstance(state.wiki_trace.pop("elapsed_seconds"), float)
+    assert state.wiki_trace == {
+        "status": "degraded",
+        "failure_code": "RuntimeError",
+        "stage_seconds": {"Wiki: 目録の読み込み": 0.25},
+    }
     assert [step["kind"] for step in state.degraded_steps()] == ["wiki"]
+
+
+@pytest.mark.asyncio
+async def test_profile_without_wiki_keeps_the_trace_without_measurements() -> None:
+    """Wiki を使わないプロファイルは検索していないので、秒を足さない（#5518）。"""
+    state = _SearchState()
+    stored = await engine(Retriever(disabled=True))._wiki_sources(request(), state)
+    assert stored == []
+    assert state.wiki_trace == {"status": "profile_disabled", "model_calls": 0}
 
 
 @pytest.mark.asyncio

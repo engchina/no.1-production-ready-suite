@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -57,19 +58,31 @@ READ_PROMPT = """## Step 1: 質問と、選んだファイルの単位・章節�
 """
 
 
+# 回答の診断に出す原文の chunk ID の数の上限（由来ごとの一覧も。#5518）。数は ``source_count``。
+_SOURCE_DIAGNOSTICS_LIMIT = 200
+
+
 class WikiSourceChanged(RuntimeError):
     """案内を読んだ後に設定・所属・原文が変わった。"""
 
 
 @contextmanager
-def _stage(name: str) -> Iterator[None]:
-    """Wiki の経路の段を回答の工程と同じ span で記録する（時間のかかる段を見る。#5437）。"""
+def _stage(name: str, seconds: dict[str, float]) -> Iterator[None]:
+    """Wiki の経路の段を回答の工程と同じ span で記録する（時間のかかる段を見る。#5437）。
+
+    span の中の同じ範囲の秒を ``seconds`` の段の名前に足す（span を保存しない評価でも回答の診断で
+    時間を見る。#5518）。失敗・時間切れで抜けた段も、それまでの秒を残す。
+    """
     with observed_span(
         "rag.engine.stage",
         attributes={"pr.stage": name},
         display=SpanDisplay(kind=ANSWER_STEP_KIND, params={"name": name}),
     ):
-        yield
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            seconds[name] = round(seconds.get(name, 0.0) + time.perf_counter() - started, 3)
 
 
 @dataclass(frozen=True)
@@ -163,9 +176,15 @@ class WikiRetriever:
         return chunks
 
     async def plan[T: WikiModel](
-        self, prompt: str, data: Mapping[str, Any], schema: type[T], *, stage: str = "Wiki: 選択"
+        self,
+        prompt: str,
+        data: Mapping[str, Any],
+        schema: type[T],
+        *,
+        seconds: dict[str, float],
+        stage: str = "Wiki: 選択",
     ) -> T:
-        with _stage(stage):
+        with _stage(stage, seconds):
             text = await async_call_with_model_purpose(
                 "wiki.select",
                 self.llm.generate,
@@ -179,22 +198,24 @@ class WikiRetriever:
 
     async def follow(
         self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
-    ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]]]:
+    ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]], dict[str, str]]:
         """選んだ単位から、同じ文書の依存と文書をまたぐ関連（出る向き・入る向き）を辿る（#5492）。
 
         ``RAG_WIKI_LINK_DEPTH`` 段まで、段ごとに関係の種類の順（例外・前提を先）で、まだ読んでいない
         単位を ``RAG_WIKI_LINK_MAX_UNITS`` まで足す。一度見た単位は辿り直さない（循環を止める）。
         読めない単位（未公開・古い保存版・範囲の外）は数に入れない。辿るのは DB だけで、
         モデルは呼ばない。
-        返す値は（足した単位 ID・段ごとの数・読めなかった単位の数・辿りで見た関係）。関係は
-        （起点, 終点, 関係の種類）で、終点が起点に対してその役割を持つ（#5500）。``pages`` に読んだ
-        案内を足す。
+        返す値は（足した単位 ID・段ごとの数・読めなかった単位の数・辿りで見た関係・
+        足した単位の由来）。関係は（起点, 終点, 関係の種類）で、終点が起点に対してその役割を持つ
+        （#5500）。由来は足した単位 ID ごとの ``dependency``（案内の依存）か ``link``（文書を
+        またぐ関連）で、段ごとの数と同じ値（#5518）。``pages`` に読んだ案内を足す。
         """
         opts, store = self.settings, self.store
         budget = opts.rag_wiki_link_max_units
         priority = {relation: index for index, relation in enumerate(WIKI_RELATION_PRIORITY)}
         seen, frontier = set(selected), list(selected)
         added: list[str] = []
+        origins: dict[str, str] = {}
         hops: list[dict[str, int]] = []
         missing = 0
         edges: set[tuple[str, str, str]] = set()
@@ -234,6 +255,7 @@ class WikiRetriever:
             chosen = readable[: budget - len(added)]
             seen.update(ordered)
             added.extend(chosen)
+            origins.update((uid, found[uid][1]) for uid in chosen)
             frontier = chosen
             hops.append(
                 {
@@ -242,7 +264,7 @@ class WikiRetriever:
                     "link_units": sum(found[uid][1] == "link" for uid in chosen),
                 }
             )
-        return added, hops, missing, edges
+        return added, hops, missing, edges, origins
 
     async def search(
         self,
@@ -251,28 +273,36 @@ class WikiRetriever:
         profile_id: str | None,
         filters: Mapping[str, str],
         timeout: float | None,
+        stage_seconds: dict[str, float] | None = None,
     ) -> WikiSearchResult:
+        """``stage_seconds`` には段（``_stage``）ごとの秒を書く（失敗・時間切れでも、それまでの
+        段）。"""
         scoped = await self.scope(profile_id, filters)
         if scoped is None:
             return WikiSearchResult(trace={"status": "profile_disabled", "model_calls": 0})
         limit = self.settings.rag_wiki_query_timeout_seconds
+        seconds = {} if stage_seconds is None else stage_seconds
         async with asyncio.timeout(limit if timeout is None else min(limit, timeout)):
-            return await self._search(question, profile_id, scoped)
+            return await self._search(question, profile_id, scoped, seconds)
 
     async def _search(
-        self, question: str, profile_id: str | None, scope: dict[str, str]
+        self,
+        question: str,
+        profile_id: str | None,
+        scope: dict[str, str],
+        seconds: dict[str, float],
     ) -> WikiSearchResult:
         opts, store = self.settings, self.store
         # 範囲（有効な KB・権限・公開・今の保存版）を評価するのはここの 1 回だけ。後の読取は
         # 決めた案内の集合の中だけを読み、回答に使う原文は current_sources で照合し直す（#5499）。
-        with _stage("Wiki: 目録の読み込み"):
+        with _stage("Wiki: 目録の読み込み", seconds):
             wiki = await store.resolve(scope, self.compiler)
         catalog = list(wiki.catalog)
         if not catalog:
             return WikiSearchResult(trace={"status": "not_ready", "model_calls": 0})
-        with _stage("Wiki: 質問のベクトル化"):
+        with _stage("Wiki: 質問のベクトル化", seconds):
             vector = (await self.genai.embed([question], input_type="SEARCH_QUERY"))[0]
-        with _stage("Wiki: 案内の候補の検索"):
+        with _stage("Wiki: 案内の候補の検索", seconds):
             vector_pages, text_ranking = await asyncio.gather(
                 store.pages(wiki, query_vector=vector, limit=opts.rag_wiki_candidates),
                 store.text_rankings(question, wiki, limit=opts.rag_wiki_candidates),
@@ -312,6 +342,7 @@ class WikiRetriever:
                     )
                 },
             ),
+            seconds=seconds,
             stage="Wiki: 読むファイルの選択（1 回目のモデル）",
         )
         document_ids = handles.real(files.document_ids)
@@ -321,7 +352,7 @@ class WikiRetriever:
         if document_ids:
             # 選んだファイルの案内を 1 回で読み、検索表現ごとの順位は本文を読まずに
             # 1 回ずつ取る（#4986）。
-            with _stage("Wiki: 選んだファイルの案内と順位の読み込み"):
+            with _stage("Wiki: 選んだファイルの案内と順位の読み込み", seconds):
                 file_pages, rankings = await asyncio.gather(
                     store.pages(wiki, document_ids=document_ids),
                     asyncio.gather(
@@ -408,6 +439,7 @@ class WikiRetriever:
                         ),
                     },
                 ),
+                seconds=seconds,
                 stage="Wiki: 読む単位と章節の選択（2 回目のモデル）",
             )
             unresolved.extend(choice.unresolved)
@@ -417,9 +449,9 @@ class WikiRetriever:
             selected.extend(uid for sid in handles.real(choice.section_ids) for uid in members[sid])
         selected = list(dict.fromkeys(selected))
         # 案内の依存（同じ文書）と文書をまたぐ関連（両向き）を、予算の内で段ごとに辿る（#5492）。
-        with _stage("Wiki: 依存と関連の辿り"):
-            followed, hops, missing, edges = await self.follow(wiki, pages, selected)
-        with _stage("Wiki: 原文の読み込み"):
+        with _stage("Wiki: 依存と関連の辿り", seconds):
+            followed, hops, missing, edges, origins = await self.follow(wiki, pages, selected)
+        with _stage("Wiki: 原文の読み込み", seconds):
             required = [pages[uid] for uid in [*selected, *followed]]
             originals = await self.current_sources(profile_id, scope, required)
         identities = {row["document_id"]: row["source_identities"] for row in catalog}
@@ -443,6 +475,11 @@ class WikiRetriever:
             )
             for chunk in originals
         )
+
+        def source_ids(unit_ids: Sequence[str]) -> list[str]:
+            ids = (sid for uid in unit_ids for sid in pages[uid].unit.source_chunk_ids)
+            return list(dict.fromkeys(ids))[:_SOURCE_DIAGNOSTICS_LIMIT]
+
         return WikiSearchResult(
             chunks,
             tuple(required),
@@ -457,6 +494,18 @@ class WikiRetriever:
                 "missing_dependency_units": missing,
                 "link_hops": hops,
                 "source_count": len(chunks),
+                # 回答の根拠に渡した原文の chunk ID（通常検索との重複を外す前）と、案内の単位の
+                # 由来（選んだ単位・依存・関連）ごとの chunk ID。記録から重複率を出す（#5518）。
+                "source_chunk_ids": [chunk.chunk_id for chunk in chunks][
+                    :_SOURCE_DIAGNOSTICS_LIMIT
+                ],
+                "source_chunk_ids_by_origin": {
+                    "selected": source_ids(selected),
+                    "dependency": source_ids(
+                        [uid for uid in followed if origins[uid] == "dependency"]
+                    ),
+                    "link": source_ids([uid for uid in followed if origins[uid] == "link"]),
+                },
                 "navigation_unresolved": unresolved,
             },
         )
