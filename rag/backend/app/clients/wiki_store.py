@@ -146,22 +146,20 @@ class WikiSnapshot:
     revision_fingerprint: str = ""
 
 
-CURRENT_WIKI_SOURCE_SQL = """NOT EXISTS (
-    SELECT 1 FROM rag_chunk_sets current_set
+# 今の有効で索引済みの chunk_set（文書の保存版）。
+_CURRENT_SETS_SQL = """FROM rag_chunk_sets current_set
     JOIN rag_document_recipes current_recipe ON current_recipe.recipe_id=current_set.recipe_id
     WHERE current_set.document_id=c.document_id AND current_set.is_active=1
-      AND current_set.status='INDEXED' AND NOT EXISTS (
-        SELECT 1 FROM JSON_TABLE(w.chunk_sets_json,'$[*]'
-            COLUMNS (set_id VARCHAR2(64) PATH '$')) saved_set
-        WHERE saved_set.set_id=current_set.chunk_set_id)
-) AND NOT EXISTS (
-    SELECT 1 FROM JSON_TABLE(w.chunk_sets_json,'$[*]'
-        COLUMNS (set_id VARCHAR2(64) PATH '$')) saved_set
-    WHERE NOT EXISTS (SELECT 1 FROM rag_chunk_sets current_set
-        JOIN rag_document_recipes current_recipe
-          ON current_recipe.recipe_id=current_set.recipe_id
-        WHERE current_set.document_id=c.document_id AND current_set.is_active=1
-          AND current_set.status='INDEXED' AND current_set.chunk_set_id=saved_set.set_id)
+      AND current_set.status='INDEXED'"""
+# 構築の保存版（``chunk_sets_json``。重複の無い chunk_set ID の配列）が今の保存版の集合と同じ。
+# 集合の一致を「今の集合 ⊆ 保存版」と「件数が同じ」で判定する。JSON_TABLE を入れ子にした形は
+# SQL の解析（hard parse）が重く、目録の読み込みの時間の大半を占めていた（#5533）。
+CURRENT_WIKI_SOURCE_SQL = f"""NOT EXISTS (
+    SELECT 1 {_CURRENT_SETS_SQL}
+      AND NOT JSON_EXISTS(w.chunk_sets_json,'$[*]?(@ == $set_id)'
+        PASSING current_set.chunk_set_id AS "set_id")
+) AND NVL(JSON_VALUE(w.chunk_sets_json,'$.size()' RETURNING NUMBER),0)=(
+    SELECT COUNT(*) {_CURRENT_SETS_SQL}
 )"""
 
 
