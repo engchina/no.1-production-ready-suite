@@ -1005,7 +1005,6 @@ export interface DocumentMaterializationLayerStatus {
 
 export interface DocumentChunkSetLayerStatuses {
   metadata: DocumentMaterializationLayerStatus;
-  graph: DocumentMaterializationLayerStatus;
   navigation: DocumentMaterializationLayerStatus;
 }
 

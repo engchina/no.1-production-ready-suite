@@ -2950,11 +2950,6 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
         effective_settings,
         current_field_definitions(await oracle.list_document_extraction_field_sets(document_id)),
     )
-    graph_counts = (
-        await oracle.graph_entity_counts_for_chunk_sets([str(row["chunk_set_id"]) for row in rows])
-        if rows
-        else {}
-    )
     chunk_sets: list[DocumentChunkSet] = []
     for row in rows:
         chunk_set = DocumentChunkSet.model_validate(row)
@@ -2987,10 +2982,6 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
                 effective_by_kb,
                 persisted_layers,
                 current_inputs=current_inputs,
-            )
-        if chunk_set.layer_statuses is not None:
-            chunk_set.layer_statuses.graph = _structure_index_layer_status(
-                graph_counts.get(chunk_set.chunk_set_id, 0)
             )
         chunk_sets.append(chunk_set)
     return ApiResponse(data=chunk_sets)
@@ -3379,7 +3370,6 @@ def _layer_statuses_for_chunk_set(
             user_label="項目抽出",
             current_inputs=current_inputs,
         ),
-        graph=_structure_index_layer_status(0),
         navigation=_layer_status_for_chunk_set(
             chunk_set_id,
             plan,
@@ -3424,24 +3414,6 @@ def _layer_status_for_chunk_set(
         persisted_layers,
         user_label=user_label,
         current_inputs=current_inputs,
-    )
-
-
-def _structure_index_layer_status(count: int) -> DocumentMaterializationLayerStatus:
-    """文書構造索引の状態。取込では作らず、ナレッジベースの画面で手動で構築する(#5484)。
-
-    構築の有無の設定は無いため、構築済みの件数(構築した節点の数)だけで示す。
-    """
-    if count:
-        return DocumentMaterializationLayerStatus(
-            requested=True,
-            status=DocumentLayerStatusName.MATERIALIZED,
-            reason=f"文書構造索引を構築済みです（{count} 件）。",
-        )
-    return DocumentMaterializationLayerStatus(
-        requested=False,
-        status=DocumentLayerStatusName.NOT_REQUESTED,
-        reason="文書構造索引は取込では作りません。ナレッジベースの画面から構築します。",
     )
 
 
@@ -3531,7 +3503,6 @@ def _recipe_layer_statuses_for_chunk_set(
     }
     return DocumentChunkSetLayerStatuses(
         metadata=statuses["metadata"],
-        graph=_structure_index_layer_status(0),
         navigation=statuses["navigation"],
     )
 

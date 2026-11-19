@@ -2105,8 +2105,6 @@ class Settings(
             "request の thresholds が最優先。閾値は、そのケースの集合で測れた指標だけに適用する。"
         ),
     )
-    # 文書構造索引は取込で作らず、ナレッジベースの画面から手動で構築する(#5484)。構築の有無の
-    # 設定 RAG_GRAPH_PROFILE は削除した。backend/.env に残っていても extra=ignore で読み捨てる。
     rag_vector_index_profile: VectorIndexProfile = Field(
         default="accurate",
         description=(

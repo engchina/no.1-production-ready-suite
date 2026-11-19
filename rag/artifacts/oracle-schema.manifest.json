@@ -33,12 +33,6 @@
       "table_name": "rag_knowledge_bases"
     },
     {
-      "name": "structure_index_jobs",
-      "sha256": "4fde1b823adf438f7f7b3707eff056f0f873161a64b3b63dae2c239ecd5ecde2",
-      "statement_count": 2,
-      "table_name": "rag_structure_index_jobs"
-    },
-    {
       "name": "search_answer_profiles",
       "sha256": "96ee2152101b127d80a263bf1cd969ec9cc5ee2ea8472bdddf4a3e9581d02b44",
       "statement_count": 3,
@@ -183,24 +177,6 @@
       "table_name": "rag_ingestion_audit"
     },
     {
-      "name": "knowledge_graph",
-      "sha256": "61395b9d187e6c1b8e822d332440cd08f21375b3070125b4d29599980e613358",
-      "statement_count": 9,
-      "table_name": "rag_graph_entities"
-    },
-    {
-      "name": "graph_references",
-      "sha256": "3cc278ac7a91d9609e9187738c9b708d8bd77d65ae8ffeed2db83b3b1d967fde",
-      "statement_count": 3,
-      "table_name": "rag_graph_references"
-    },
-    {
-      "name": "foreign_key_lock_indexes",
-      "sha256": "00cacce2c963823a239361874fe4ec5089b84ea3db0330c205ebf0660b6aa8ec",
-      "statement_count": 4,
-      "table_name": "rag_graph_references"
-    },
-    {
       "name": "document_extraction_revisions",
       "sha256": "7464f9f43549f13f19a95962ac16840b552274f557710f15519f6882a5f0017f",
       "statement_count": 1,
@@ -291,8 +267,8 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "5c236f6f6f89eddd59cf52a5daf834b113015c2f09530d736de8f00debb30f0b",
-  "statement_count": 179,
+  "sha256": "df7c0990a91313d9b64e514a94619f99977ff009467412b0483db1b11674ab53",
+  "statement_count": 161,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {
     "distance": "COSINE",

@@ -11,7 +11,6 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
 from app.clients.oracle import KnowledgeBaseConfig, KnowledgeBaseNameConflictError
-from app.clients.structure_graph_store import StructureGraphStore
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.extraction_field_adapter import FieldDefinition
@@ -170,10 +169,6 @@ class FakeKnowledgeBaseOracle:
             self.extraction_fields.pop(knowledge_base_id, None)
         else:
             self.extraction_fields[knowledge_base_id] = fields
-
-    async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
-        assert "rag_graph_references" in sql
-        return []
 
     async def update_knowledge_base(
         self,
@@ -482,56 +477,6 @@ def test_knowledge_base_without_description_still_loads(
     )
     assert updated.status_code == 200
     assert updated.json()["data"]["description"] == "旧の就業規則"
-
-
-def test_structure_graph_overview_endpoint(
-    fake_oracle: FakeKnowledgeBaseOracle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """総覧の endpoint が空/データ/404 を返す。"""
-    kb_id = client.post(
-        "/api/knowledge-bases", json={"name": "合成の KB", "description": "説明"}
-    ).json()["data"]["id"]
-    result: dict[str, object] = {"status": "empty", "documents": [], "edges": []}
-
-    async def overview(_store: StructureGraphStore, _kb: str) -> dict[str, object]:
-        return result
-
-    monkeypatch.setattr(StructureGraphStore, "overview", overview)
-    empty = client.get(f"/api/knowledge-bases/{kb_id}/graph/overview")
-    assert empty.status_code == 200
-    assert empty.json()["data"]["status"] == "empty"
-    result = {
-        "status": "ok",
-        "documents": [
-            {"id": "e1", "document_id": "d1", "chunk_set_id": "s1", "name": "合成A.pdf"},
-            {"id": "e2", "document_id": "d2", "chunk_set_id": "s2", "name": "合成B.pdf"},
-        ],
-        "edges": [{"id": "e1:e2", "source": "e1", "target": "e2", "count": 3}],
-    }
-    data = client.get(f"/api/knowledge-bases/{kb_id}/graph/overview").json()["data"]
-    assert [item["name"] for item in data["documents"]] == ["合成A.pdf", "合成B.pdf"]
-    assert data["edges"][0]["count"] == 3
-    assert client.get("/api/knowledge-bases/does-not-exist/graph/overview").status_code == 404
-
-
-def test_structure_graph_hidden_document_is_404(
-    fake_oracle: FakeKnowledgeBaseOracle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """権限の外・KB の外の文書と、木に無い節点は同じ 404 にする。"""
-    kb_id = client.post(
-        "/api/knowledge-bases", json={"name": "合成の KB", "description": "説明"}
-    ).json()["data"]["id"]
-
-    async def hidden(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise KeyError("hidden")
-
-    monkeypatch.setattr(StructureGraphStore, "children", hidden)
-    monkeypatch.setattr(StructureGraphStore, "locate", hidden)
-    monkeypatch.setattr(StructureGraphStore, "assert_document", hidden)
-    base = f"/api/knowledge-bases/{kb_id}/graph/documents/d1"
-    assert client.get(f"{base}/tree?chunk_set_id=s1").status_code == 404
-    assert client.get(f"{base}/locate?chunk_set_id=s1&node={'a' * 64}").status_code == 404
-    assert client.get(f"{base}/references?chunk_set_id=s1").status_code == 404
 
 
 def test_update_and_archive_knowledge_base(fake_oracle: FakeKnowledgeBaseOracle) -> None:
@@ -929,16 +874,6 @@ def test_existence_and_config_checks_do_not_load_the_detail_counts(
     fake_oracle: FakeKnowledgeBaseOracle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """詳細の画面が並行して呼ぶ API は、件数を集計する詳細の読み取りを使わない(#4553)。"""
-    from app.clients.structure_index_store import StructureIndexStore
-
-    async def no_state(_self: object, _kb: str) -> None:
-        return None
-
-    async def visible_state(_self: object, _kb: str, state: object) -> object:
-        return state
-
-    monkeypatch.setattr(StructureIndexStore, "get", no_state)
-    monkeypatch.setattr(StructureIndexStore, "visible_state", visible_state)
     kb_id = _new_knowledge_base("synthetic-light-checks")
     archived_id = _new_knowledge_base("synthetic-light-archived")
     client.post(f"/api/knowledge-bases/{archived_id}/archive")
@@ -951,23 +886,7 @@ def test_existence_and_config_checks_do_not_load_the_detail_counts(
         f"/api/knowledge-bases/{archived_id}/extraction-fields", json={"fields": []}
     )
     assert archived.status_code == 409
-    # 構築の有無の設定(GET / PUT structure-index)は削除した(#5484)。
-    assert client.get(f"{base}/structure-index").status_code == 404
-    job = client.get(f"{base}/structure-index/job")
-    assert job.status_code == 200
-    assert job.json()["data"] is None
-    for path in (
-        "extraction-fields",
-        "structure-index/job",
-    ):
-        assert client.get(f"/api/knowledge-bases/kb-missing/{path}").status_code == 404
-    assert client.post("/api/knowledge-bases/kb-missing/structure-index/job/stop").status_code == (
-        404
-    )
-    references = client.get(
-        "/api/knowledge-bases/kb-missing/graph/references", params={"node_id": "a" * 64}
-    )
-    assert references.status_code == 404
+    assert client.get("/api/knowledge-bases/kb-missing/extraction-fields").status_code == 404
 
 
 def test_detail_read_failure_is_an_api_failure(

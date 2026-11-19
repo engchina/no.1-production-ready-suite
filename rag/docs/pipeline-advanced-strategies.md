@@ -21,7 +21,7 @@
 | `reasoning_tree_search`(PageIndex 型) | 検索方式 | PageIndex-lite の実装(navigation 要約から LLM が section を選ぶ)と検索モードの選択は #595 で削除した。番号付き見出しから操作画面を選ぶ旧機能も廃止した（#4845） |
 | `colpali_visual_retrieval`(ColPali 型) | 検索方式 | 戦略の登録ごと #595 で削除した。未着手 |
 | `self_reflective`(Self-RAG) | 回答生成 | 未着手。回答フローは生成の後に LLM で確かめない(引用の実在と形式だけをコードで確かめる。#4714) |
-| Temporal GraphRAG | 文書構造索引の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) |
+| Temporal GraphRAG | 関係情報の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) |
 
 ---
 
@@ -75,8 +75,8 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 - **Temporal GraphRAG**: 取込時に entity / relationship へ timestamp(`valid_from/valid_to`)を付与し、
   検索時に query の時間文脈(「最新の」「2024 年時点」)を抽出して Oracle の条件でフィルタする。
   回答の検索で graph を使う経路は #595 で削除したため、検索時の利用から設計し直す。設定は実装と同時に
-  追加する(未実装の設定は置かない。#301)。今の文書構造索引の構築(`entities`)は文書と章・節の見出しの
-  つながりだけを作る(読む経路の無かった claims / community summary は #621 で削除した)。
+  追加する(未実装の設定は置かない。#301)。関係情報(旧の文書構造索引)は #5511 で削除し、entity /
+  relationship の表は持たない(読む経路の無かった claims / community summary は #621 で削除した)。
 
 ---
 

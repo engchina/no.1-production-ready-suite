@@ -492,10 +492,7 @@ def test_document_chunk_sets_endpoint_lists_single_variant(monkeypatch: MonkeyPa
 
 
 def test_document_chunk_sets_endpoint_reports_layer_statuses(monkeypatch: MonkeyPatch) -> None:
-    """/chunk-sets は global で有効にしたレイヤー(field / navigation)の状態を返す。
-
-    文書構造索引(graph)は取込で作らない(#5484)。手動で構築するまでは要求されない。
-    """
+    """/chunk-sets は global で有効にしたレイヤー(field / navigation)の状態を返す。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_review_gate_enabled", False)
     # レイヤー軸は KB 上書きではなく global で有効化する(3 層モデル)。
@@ -514,7 +511,7 @@ def test_document_chunk_sets_endpoint_reports_layer_statuses(monkeypatch: Monkey
     assert resp.status_code == 200
     chunk_sets = cast(list[dict[str, Any]], resp.json()["data"])
     assert len(chunk_sets) == 1
-    assert set(chunk_sets[0]["layer_statuses"]) == {"metadata", "graph", "navigation"}
+    assert set(chunk_sets[0]["layer_statuses"]) == {"metadata", "navigation"}
     planned_layers = [
         (name, status)
         for name, status in chunk_sets[0]["layer_statuses"].items()

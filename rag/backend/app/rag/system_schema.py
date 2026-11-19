@@ -55,6 +55,7 @@ from app.clients.oracle import (
     oracle_error_log_fields,
 )
 from app.rag.oracle_schema import (
+    RETIRED_STRUCTURE_INDEX_TABLES,
     SCHEMA_VERSION,
     OracleSchemaSection,
     oracle_schema_migration_sections,
@@ -139,8 +140,6 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_DOCUMENTS",
     "RAG_DOCUMENT_RECIPES",
     "RAG_KNOWLEDGE_BASES",
-    "RAG_STRUCTURE_INDEX_JOBS",
-    "RAG_STRUCTURE_INDEX_BUILDS",
     "RAG_DOCUMENT_KNOWLEDGE_BASES",
     "RAG_SEARCH_ANSWER_PROFILES",
     "RAG_ANSWER_RECORDS",
@@ -177,10 +176,6 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_ARTIFACT_LAYERS",
     "RAG_SEARCH_AUDIT",
     "RAG_INGESTION_AUDIT",
-    "RAG_GRAPH_ENTITIES",
-    "RAG_GRAPH_RELATIONSHIPS",
-    "RAG_GRAPH_ENTITY_CHUNKS",
-    "RAG_GRAPH_REFERENCES",
     # 実体の層（#1362）。RAG_CHUNK_SETS・RAG_DOCUMENTS・RAG_CHUNKS を参照する。
     "RAG_ENTITIES",
     "RAG_ENTITY_ALIASES",
@@ -300,18 +295,6 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_INGESTION_AUDIT_SOURCE_SHA256_IDX",
     "RAG_INGESTION_AUDIT_TENANT_CREATED_IDX",
     "RAG_INGESTION_AUDIT_TRACE_IDX",
-    "RAG_GRAPH_ENTITIES_CHUNK_SET_IDX",
-    "RAG_GRAPH_ENTITIES_TENANT_NAME_IDX",
-    "RAG_GRAPH_REL_SOURCE_IDX",
-    "RAG_GRAPH_REFS_SOURCE_IDX",
-    "RAG_GRAPH_REFS_TARGET_IDX",
-    "RAG_GRAPH_REL_TARGET_IDX",
-    "RAG_GRAPH_REFS_SOURCE_SET_IDX",
-    "RAG_GRAPH_REL_SOURCE_ENTITY_IDX",
-    "RAG_GRAPH_REL_TARGET_ENTITY_IDX",
-    "RAG_STRUCTURE_BUILDS_DOC_IDX",
-    "RAG_GRAPH_ENTITY_CHUNKS_CHUNK_IDX",
-    "RAG_GRAPH_ENTITY_CHUNKS_CHUNK_SET_IDX",
     "RAG_ENTITIES_CHUNK_SET_IDX",
     "RAG_ENTITIES_DOCUMENT_IDX",
     "RAG_ENTITY_ALIASES_KEY_IDX",
@@ -386,6 +369,9 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     ("RAG_EVALUATION_LABEL_ITEMS", "TABLE"),
     ("RAG_EVALUATION_LABELS", "TABLE"),
     ("RAG_EVALUATION_CALIBRATIONS", "TABLE"),
+    # 文書構造索引の表（#5511。Wiki に置き換えた）。更新では migration
+    # `20261119_5511_retire_structure_index` が消す。全再作成のためにここにも載せる。
+    *((name, "TABLE") for name in RETIRED_STRUCTURE_INDEX_TABLES),
 )
 
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
@@ -1106,14 +1092,6 @@ class SystemSchemaManager(SystemSchemaManagerBase):
 
     def _assert_no_active_jobs(self, connection: Any) -> None:
         objects = self._load_objects(connection)
-        if ("RAG_STRUCTURE_INDEX_JOBS", "TABLE") in objects:
-            with connection.cursor() as cursor:
-                cursor.execute("""SELECT COUNT(*) FROM RAG_STRUCTURE_INDEX_JOBS
-                    WHERE STATUS IN ('RUNNING','STOPPING')
-                    AND heartbeat_at >= SYSTIMESTAMP - INTERVAL '120' SECOND""")
-                structure_row = cursor.fetchone()
-            if structure_row and int(structure_row[0] or 0) > 0:
-                raise SystemSchemaActiveJobsError()
         if ("RAG_INGESTION_JOBS", "TABLE") not in objects:
             return
         placeholders, binds = bind_list("job_status_", _ACTIVE_JOB_STATES)

@@ -125,8 +125,6 @@ async def test_reset_document_ingestion_outputs_does_not_clear_document_extracti
     )
     monkeypatch.setattr(oracle_module, "_select_document_state", lambda *_: document)
     monkeypatch.setattr(oracle_module, "_lock_document_with_served_output", lambda *_: False)
-    monkeypatch.setattr(oracle_module, "_select_graph_entity_ids_for_document", lambda *_: [])
-    monkeypatch.setattr(oracle_module, "_delete_graph_rows_for_document", lambda *_, **__: None)
     monkeypatch.setattr(oracle_module, "_document_detail_in_transaction", lambda *_: object())
 
     await client.reset_document_ingestion_outputs("doc-a")

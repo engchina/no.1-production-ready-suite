@@ -27,7 +27,6 @@ KB は **どの文書を検索対象にするか（membership）だけ**を持�
 
 - 文書 membership（N:N。1 文書が複数 KB に所属可、1 KB が複数文書を束ねる）。
 - 名称 / 説明 / スコープ。
-- 文書構造索引は取込で作らず、構築の有無の設定（全体・文書レシピ・KB の上書き）も持たない（#5484）。KB 詳細の「既存文書に構築」で、現在有効な Chunk の構造情報から手動で構築する（設定ではなく、索引を作る操作）。解析・分割・embedding・検索の設定は変えない。構築の進捗と版を Oracle に保存し、他 KB の図は変更しない。
 - Wiki の自動構築（`wiki_build_enabled`。既定 OFF。#4941）は KB ごとに指定する。ON の KB の所属文書だけを、解析済みの原文から背景で増分構築する（文書レシピ・分割・検索の設定は変えない）。OFF でも保存済みの案内は消さず、同じ文書を含む別の ON の KB では再利用する。構築を指定した利用者の現在の権限で原文を読み、原文の保存版・所属・構築の条件が変わった出力は公開しない。検索での使用は KB の層では持たず、検索・回答プロファイルの `query.wiki_search_enabled`（「Wiki を使用する」。既定 OFF）で選ぶ。詳細は [wiki-navigation.md](../wiki-navigation.md)。
 - 例外として、項目抽出の項目の定義（何を取り出すか）は KB ごとに持てる（無ければ全体の既定、複数 KB に属する文書は和集合。docs/knowledge-base-management.md の 8.4.1a）。項目抽出を行うかどうかは文書レシピ / global が決める。
 
@@ -53,7 +52,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-文書構造索引（文書と章・節の見出しのつながり）は、どの層の設定にも持たない。KB 詳細の構築と図は #5502 で外した（KB の図は Wiki の案内の「Wiki の図」。#5484。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
+文書構造索引（文書と章・節の見出しのつながり）は #5511 で削除した（KB の図は Wiki の案内の「Wiki の図」。#5502。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
 
 検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB は `query` の値を持たない（#4784）。
 

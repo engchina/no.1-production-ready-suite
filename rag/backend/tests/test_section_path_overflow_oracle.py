@@ -11,7 +11,6 @@ import pytest
 from app.clients.oracle import OracleClient, _metadata_text_filter, _oracle_retrieval_where
 from app.config import Settings
 from app.rag.chunking import Chunk
-from app.rag.structure_index import structure_index_plan
 from tests.test_answer_scope_oracle import _chunk, _indexed_document
 
 # 既定の RETURNING VARCHAR2(4000) を超える 3 つの長さ。
@@ -172,26 +171,6 @@ async def test_section_filter_accepts_value_over_bind_limit() -> None:
     assert await _filtered_texts(
         client, {"file_name": f"filter-{token}", "section_path": word}
     ) == ["長い一致"]
-
-
-@pytest.mark.usefixtures("oracle_db")
-@pytest.mark.parametrize("field", ["section_path", "section_title"])
-@pytest.mark.parametrize("parent", _LONG)
-async def test_structure_plan_counts_long_heading(field: str, parent: str) -> None:
-    """見出しが長いだけの文書を「構造が無い」にしない。"""
-    client = OracleClient()
-    token = uuid4().hex[:8]
-    kb = await client.create_knowledge_base(name=f"合成参照 KB {token}")
-    document_id = await _indexed_document(
-        client,
-        file_name=f"plan-{token}.pdf",
-        chunks=[_metadata_chunk(0, "長い見出しの本文", **{field: parent})],
-        knowledge_base_ids=[kb.id],
-    )
-
-    [item] = await structure_index_plan(client, kb.id, document_ids=[document_id])
-
-    assert item["reason"] is None
 
 
 def test_section_filter_uses_like_for_short_value_and_instr_for_large_value() -> None:

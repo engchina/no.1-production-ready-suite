@@ -3920,22 +3920,6 @@ END;~';
 END;
 /
 
--- migration: 20261102_001_graph_name_characters
-
-DECLARE
-    v_char_used VARCHAR2(1);
-    v_char_length NUMBER;
-BEGIN
-    SELECT char_used, char_length INTO v_char_used, v_char_length
-    FROM user_tab_columns
-    WHERE table_name = 'RAG_GRAPH_ENTITIES' AND column_name = 'CANONICAL_NAME';
-    IF v_char_used <> 'C' OR v_char_length < 512 THEN
-        EXECUTE IMMEDIATE
-            'ALTER TABLE rag_graph_entities MODIFY (canonical_name VARCHAR2(512 CHAR))';
-    END IF;
-END;
-/
-
 -- migration: 20261102_002_native_missing_scopes
 INSERT INTO rag_native_search_scopes (chunk_set_id)
 SELECT cs.chunk_set_id FROM rag_chunk_sets cs
@@ -4036,50 +4020,6 @@ WHERE state_key='hybrid_vectors' AND bootstrap_requested=0;
 
 UPDATE RAG_NATIVE_INDEX_MAINTENANCE SET bootstrap_requested=1
 WHERE state_key='hybrid_vectors' AND bootstrap_requested=0;
-
--- migration: 20261102_005_graph_references
-DECLARE
-    v_count NUMBER;
-BEGIN
-    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_GRAPH_REFERENCES';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE TABLE rag_graph_references ( '
-            || 'reference_id CHAR(64) PRIMARY KEY, '
-            || 'knowledge_base_id VARCHAR2(64) NOT NULL, '
-            || 'source_document_id VARCHAR2(64) NOT NULL, '
-            || 'source_chunk_set_id VARCHAR2(64) NOT NULL, '
-            || 'source_chunk_id VARCHAR2(128) NOT NULL, '
-            || 'source_section_path VARCHAR2(4000 CHAR), '
-            || 'label VARCHAR2(2000 CHAR) NOT NULL, '
-            || 'kind VARCHAR2(24) NOT NULL, '
-            || 'reference_key VARCHAR2(2000 CHAR), '
-            || 'document_title VARCHAR2(2000 CHAR), '
-            || 'resolution_status VARCHAR2(32) NOT NULL, '
-            || 'target_document_id VARCHAR2(64), '
-            || 'target_chunk_set_id VARCHAR2(64), '
-            || 'target_section_path VARCHAR2(4000 CHAR), '
-            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
-            || 'CONSTRAINT rag_graph_refs_kb_fk FOREIGN KEY (knowledge_base_id) '
-            || 'REFERENCES rag_knowledge_bases(knowledge_base_id) ON DELETE CASCADE, '
-            || 'CONSTRAINT rag_graph_refs_source_fk FOREIGN KEY (source_chunk_set_id) '
-            || 'REFERENCES rag_chunk_sets(chunk_set_id) ON DELETE CASCADE '
-            || ')';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REFS_SOURCE_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_graph_refs_source_idx ON rag_graph_references '
-            || '(knowledge_base_id,source_chunk_set_id)';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REFS_TARGET_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_graph_refs_target_idx ON rag_graph_references '
-            || '(knowledge_base_id,target_chunk_set_id)';
-    END IF;
-END;
-/
 
 -- migration: 20261102_006_recipe_version_log
 DECLARE
@@ -4339,37 +4279,6 @@ BEGIN
     WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'PROCESSING_CONFIG';
     IF v_count > 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN processing_config';
-    END IF;
-END;
-/
-
--- migration: 20261108_4628_foreign_key_lock_indexes
-DECLARE
-    v_count NUMBER;
-BEGIN
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REFS_SOURCE_SET_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_graph_refs_source_set_idx '
-            || 'ON rag_graph_references (source_chunk_set_id)';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REL_SOURCE_ENTITY_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_graph_rel_source_entity_idx '
-            || 'ON rag_graph_relationships (source_entity_id)';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REL_TARGET_ENTITY_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_graph_rel_target_entity_idx '
-            || 'ON rag_graph_relationships (target_entity_id)';
-    END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_STRUCTURE_BUILDS_DOC_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_structure_builds_doc_idx '
-            || 'ON rag_structure_index_builds (document_id)';
     END IF;
 END;
 /
@@ -4942,5 +4851,15 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_wiki_link_queue_idx ON rag_wiki_link_documents(status,lease_until)';
     END IF;
+END;
+/
+
+-- migration: 20261119_5511_retire_structure_index
+BEGIN
+    FOR retired IN (
+        SELECT table_name FROM user_tables WHERE table_name IN ('RAG_STRUCTURE_INDEX_BUILDS', 'RAG_STRUCTURE_INDEX_JOBS', 'RAG_GRAPH_REFERENCES', 'RAG_GRAPH_ENTITY_CHUNKS', 'RAG_GRAPH_RELATIONSHIPS', 'RAG_GRAPH_ENTITIES')
+    ) LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || retired.table_name || ' CASCADE CONSTRAINTS PURGE';
+    END LOOP;
 END;
 /

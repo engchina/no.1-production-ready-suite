@@ -74,8 +74,9 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "parser_backend         VARCHAR2(80)" in sql
     assert "segment_count          NUMBER(10) DEFAULT 0 NOT NULL" in sql
     assert "failed_segment_count   NUMBER(10) DEFAULT 0 NOT NULL" in sql
-    assert "-- section: knowledge_graph" in sql
-    assert "CREATE TABLE rag_graph_entities" in sql
+    # 文書構造索引の表は #5511 で削除した。
+    assert "rag_graph_" not in sql
+    assert "rag_structure_index_" not in sql
     assert "-- section: citation_feedback" in sql
     assert "CREATE TABLE rag_citation_feedback" in sql
     assert "-- section: feedback_details" in sql
@@ -112,7 +113,6 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "documents",
         "document_recipes",
         "knowledge_bases",
-        "structure_index_jobs",
         "search_answer_profiles",
         "answer_records",
         "answer_prompts",
@@ -137,9 +137,6 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "native_search_scopes",
         "search_audit",
         "ingestion_audit",
-        "knowledge_graph",
-        "graph_references",
-        "foreign_key_lock_indexes",
         "document_extraction_revisions",
         "entities",
         "section_map",
@@ -519,7 +516,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 185
+    assert len(statements) == 183
     assert all(
         statement.startswith(
             (
@@ -649,11 +646,9 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261101_002_native_hybrid_ivf",
         "20261101_004_native_hybrid_sync_columns",
         "20261101_003_native_hybrid_scope",
-        "20261102_001_graph_name_characters",
         "20261102_002_native_missing_scopes",
         "20261102_003_native_text_search_only",
         "20261102_004_native_index_maintenance",
-        "20261102_005_graph_references",
         "20261102_006_recipe_version_log",
         "20261102_007_chunk_set_retired_at",
         "20261102_008_document_extraction_revisions",
@@ -663,7 +658,6 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261105_4396_evaluation_testsets",
         "20261107_4185_drop_document_preprocess_artifact",
         "20261108_4617_drop_document_extraction_processing_config",
-        "20261108_4628_foreign_key_lock_indexes",
         "20261109_4666_language_pack_retired_question_cues",
         "20261109_4712_answer_prompt_reading_rules",
         "20261109_4714_language_pack_retired_answer_checks",
@@ -688,6 +682,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261117_5340_evaluation_job_answer_mode",
         "20261118_4941_document_wiki",
         "20261119_5492_wiki_links",
+        "20261119_5511_retire_structure_index",
     ]
 
 
@@ -902,16 +897,28 @@ def test_checked_in_migration_artifacts_match_the_generator() -> None:
     )
 
 
-def test_graph_name_migration_preserves_data_and_uses_characters() -> None:
+def test_structure_index_retirement_drops_only_its_tables() -> None:
+    """文書構造索引の表だけを、無い環境でも失敗せずに消す（#5511）。"""
     sections = {
         section.name: section for section in oracle_schema.oracle_schema_migration_sections()
     }
-    sql = sections["20261102_001_graph_name_characters"].sql.upper()
-    assert "CHAR_USED" in sql and "CHAR_LENGTH" in sql
-    assert "CANONICAL_NAME VARCHAR2(512 CHAR)" in sql
-    assert not any(word in sql for word in ("DROP", "DELETE", "TRUNCATE"))
-    baseline = " ".join(oracle_schema.oracle_schema_sql().upper().split())
-    assert "CANONICAL_NAME VARCHAR2(512 CHAR)" in baseline
+    section = sections["20261119_5511_retire_structure_index"]
+    assert section.destructive
+    sql = section.sql
+    assert "FROM user_tables WHERE table_name IN (" in sql
+    for table in oracle_schema.RETIRED_STRUCTURE_INDEX_TABLES:
+        assert f"'{table}'" in sql
+        assert table in section.destructive_note
+    assert set(oracle_schema.RETIRED_STRUCTURE_INDEX_TABLES) == {
+        "RAG_STRUCTURE_INDEX_BUILDS",
+        "RAG_STRUCTURE_INDEX_JOBS",
+        "RAG_GRAPH_REFERENCES",
+        "RAG_GRAPH_ENTITY_CHUNKS",
+        "RAG_GRAPH_RELATIONSHIPS",
+        "RAG_GRAPH_ENTITIES",
+    }
+    assert "CASCADE CONSTRAINTS PURGE" in sql
+    assert "DELETE" not in sql.upper()
 
 
 def test_ivf_migration_rebuilds_only_the_derived_index() -> None:

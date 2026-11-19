@@ -75,14 +75,8 @@ class DeleteCursor(FakeOracleCursor):
                     ]
             elif "FROM rag_documents" in sql:
                 rows = [_oracle_document_row(status="UPLOADED")] if self.state.visible else []
-            elif "FROM rag_chunk_sets" in sql:
-                rows = (
-                    [{"cnt": 2}]
-                    if "COUNT(*)" in sql
-                    else [{"chunk_set_id": "set-a"}, {"chunk_set_id": "set-b"}]
-                )
-            elif "FROM rag_graph_entities" in sql:
-                rows = [{"entity_id": "entity-a"}]
+            elif "FROM rag_chunk_sets" in sql and "COUNT(*)" in sql:
+                rows = [{"cnt": 2}]
             else:
                 raise AssertionError(f"想定外のSELECT: {sql}")
             self.state._execute_results.append(rows)
@@ -163,7 +157,7 @@ async def test_active_recipe_delete_stays_protected(active_status: str) -> None:
 
 
 @pytest.mark.parametrize("recipe_id", [_default_recipe_id(), "formal-recipe"])
-async def test_existing_recipe_delete_keeps_graph_and_chunk_cleanup(recipe_id: str) -> None:
+async def test_existing_recipe_delete_keeps_chunk_cleanup(recipe_id: str) -> None:
     rows = [_recipe_row(recipe_id=recipe_id), _recipe_row(recipe_id="formal-other", slot_no=2)]
     client, connection = client_for(rows)
     removed = await client.delete_document_recipe("doc-1", recipe_id)
@@ -173,9 +167,7 @@ async def test_existing_recipe_delete_keeps_graph_and_chunk_cleanup(recipe_id: s
     assert "FOR UPDATE" in connection.calls[0].statement
     assert "FOR UPDATE OF r.recipe_id" in connection.calls[1].statement
     writes = [call for call in connection.calls if call.statement.lstrip().startswith("DELETE")]
-    graph = [call for call in writes if "rag_graph_" in call.statement]
-    assert len(graph) == 6
-    assert {call.parameters["chunk_set_id"] for call in graph} == {"set-a", "set-b"}
+    assert not any("rag_graph_" in call.statement for call in writes)
     assert [" ".join(call.statement.split()).split()[2] for call in writes[-4:]] == [
         "rag_chunk_set_sections",
         "rag_chunks",

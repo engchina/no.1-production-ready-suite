@@ -932,13 +932,6 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
           serving_knowledge_base_ids: ["kb-1"],
           layer_statuses: {
             metadata: { layer_id: null, requested: false, status: "not_requested", reason: null },
-            // 文書構造索引は KB の画面で手動で構築した件数で示す（#5484）。
-            graph: {
-              layer_id: null,
-              requested: true,
-              status: "materialized",
-              reason: "文書構造索引を構築済みです（3 件）。",
-            },
             navigation: {
               layer_id: "nv-1",
               requested: true,
@@ -991,7 +984,7 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
 
   // レシピヘッダに派生 layer 状態チップ(not_requested は出さない)。
   const layerChips = page.getByTestId("recipe-layer-statuses");
-  await expect(layerChips.getByTestId("recipe-layer-graph")).toContainText("構築済み");
+  await expect(layerChips.getByTestId("recipe-layer-graph")).toHaveCount(0);
   await expect(layerChips.getByTestId("recipe-layer-navigation")).toContainText("構築済み");
   await expect(layerChips.getByTestId("recipe-layer-metadata")).toHaveCount(0);
 
@@ -1139,7 +1132,6 @@ for (const theme of ["light", "dark"] as const) {
                 rebuild_required: true,
                 rebuild_inputs: ["field_schema_hash"],
               },
-              graph: { layer_id: null, requested: false, status: "not_requested", reason: null },
               navigation: {
                 layer_id: "nv-1",
                 requested: true,

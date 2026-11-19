@@ -2079,7 +2079,6 @@ export const ja = {
   "knowledgeBases.documents.empty.title": "所属文書がありません。",
   "knowledgeBases.documents.empty.hint": "「文書を追加」から既存の文書を追加してください。",
   "knowledgeBases.variant.layer.metadata": "項目抽出",
-  "knowledgeBases.variant.layer.graph": "文書構造索引",
   "knowledgeBases.variant.layer.navigation": "ナビ",
   "knowledgeBases.variant.layerStatus.not_requested": "未使用",
   "knowledgeBases.variant.layerStatus.planned_only": "計画のみ",

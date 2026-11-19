@@ -159,9 +159,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # このプロセスで実行中の品質評価の job を打ち切り、失敗にする（#390。別のプロセスは
             # 引き継がない）。
             await get_evaluation_job_service().shutdown()
-            from app.rag.structure_index_jobs import structure_index_jobs
-
-            await structure_index_jobs.shutdown()
             wiki_stop.set()
             wiki_task.cancel()
             with suppress(asyncio.CancelledError):

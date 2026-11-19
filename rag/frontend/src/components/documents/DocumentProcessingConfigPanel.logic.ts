@@ -25,7 +25,6 @@ import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
  *   → 「Chunk 後に Embedding / 索引へ進む」のゲート（CHUNKED で止まり、
  *   `rag_auto_index_after_chunk_enabled` なら INDEX の job を積む）
  * - INDEX: embedding と索引の保存の後に実体・別名索引（`_save_entity_index_if_enabled`。#1362）を作る
- *   （文書構造索引は取込で作らず、ナレッジベースの画面で手動で構築する。#5484）
  */
 
 type SelectConfigField =
