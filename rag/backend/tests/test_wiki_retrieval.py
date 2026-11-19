@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
 from app.rag.wiki_navigation import section_frontier
@@ -75,9 +76,14 @@ class Store:
         # 文書をまたぐ関連（起点, 終点, 関係）。両端が今の範囲で読めるものだけを返す（#5492）。
         self.link_rows: list[tuple[str, str, str]] = []
 
-    async def links(
-        self, unit_ids: list[str], filters: dict[str, str], compiler: str
-    ) -> list[tuple[str, str, str]]:
+        # resolve で決めた範囲（後の読取がこれだけを受け取ることを確かめる。#5499）。
+        self.scope: WikiScope | None = None
+
+    def _scoped(self, scope: WikiScope) -> None:
+        assert scope is self.scope, "範囲は resolve の結果だけで読む"
+
+    async def links(self, unit_ids: list[str], scope: WikiScope) -> list[tuple[str, str, str]]:
+        self._scoped(scope)
         self.calls.append(("links", tuple(unit_ids)))
         return [
             row
@@ -87,15 +93,20 @@ class Store:
             and row[1] in self.by_id
         ]
 
-    async def catalog(self, filters: dict[str, str], compiler: str) -> list[dict[str, Any]]:
-        self.calls.append(("catalog", filters["knowledge_base_id"]))
-        return [
-            row
-            for row in CATALOG
-            if any(p.unit.document_id == row["document_id"] for p in self.by_id.values())
-        ]
+    async def resolve(self, filters: dict[str, str], compiler: str) -> WikiScope:
+        self.calls.append(("resolve", filters["knowledge_base_id"]))
+        self.scope = WikiScope(
+            tuple(
+                row
+                for row in CATALOG
+                if any(p.unit.document_id == row["document_id"] for p in self.by_id.values())
+            ),
+            tuple(sorted({(p.unit.document_id, p.unit.chunk_set_id, "f") for p in PAGES})),
+        )
+        return self.scope
 
-    async def pages(self, filters: dict[str, str], compiler: str, **kwargs: Any) -> list[WikiPage]:
+    async def pages(self, scope: WikiScope, **kwargs: Any) -> list[WikiPage]:
+        self._scoped(scope)
         self.calls.append(("pages", {k: v for k, v in kwargs.items() if k != "query_vector"}))
         values = list(self.by_id.values())
         if kwargs.get("document_ids") is not None:
@@ -104,9 +115,8 @@ class Store:
             values = [self.by_id[uid] for uid in kwargs["unit_ids"] if uid in self.by_id]
         return values[: kwargs["limit"]] if kwargs.get("limit") else values
 
-    async def text_rankings(
-        self, expression: str, filters: dict[str, str], compiler: str, **kwargs: Any
-    ) -> Any:
+    async def text_rankings(self, expression: str, scope: WikiScope, **kwargs: Any) -> Any:
+        self._scoped(scope)
         self.calls.append(("text_rankings", (expression, tuple(kwargs.get("document_ids") or ()))))
         documents = kwargs.get("document_ids")
         return [
@@ -209,7 +219,9 @@ async def test_two_plans_read_units_sections_and_dependencies_with_version_attri
 
     assert result.trace["status"] == "ready" and result.trace["model_calls"] == 2
     # 有効な KB だけで探す。
-    assert store.calls[0] == ("catalog", "kb-a")
+    assert store.calls[0] == ("resolve", "kb-a")
+    # 範囲を決めるのは最初の 1 回だけ（#5499）。
+    assert [name for name, _ in store.calls].count("resolve") == 1
     # モデルへは要求内の短い ID だけを渡す。
     sent = json.dumps(llm.inputs, ensure_ascii=False)
     assert "doc-a" not in sent and "doc-a-a2" not in sent
@@ -386,9 +398,7 @@ async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_b
     """今の範囲で読めない終点（別の KB・未公開・古い保存版）は足さず、読めなかった数に残す。"""
 
     class OutOfScope(Store):
-        async def links(
-            self, unit_ids: list[str], filters: dict[str, str], compiler: str
-        ) -> list[tuple[str, str, str]]:
+        async def links(self, unit_ids: list[str], scope: WikiScope) -> list[tuple[str, str, str]]:
             return [("doc-a-a2", "doc-z-z1", "exception"), ("doc-a-a2", "doc-c-c1", "reference")]
 
     store, llm = OutOfScope(LINKED), Llm(["文書A"], units=["a2"])
@@ -398,6 +408,114 @@ async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_b
     units = _units(result)
     assert "doc-z-z1" not in units and "doc-c-c1" in units
     assert result.trace["missing_dependency_units"] == 1
+
+
+# ---- 範囲の重い条件は 1 問に 1 回（#5499） ----
+
+# 範囲の重い条件の目印: 公開・今の保存版の条件（JSON_TABLE）と、有効な KB の所属の EXISTS。
+PUBLISHED_MARK = "JSON_TABLE(w.chunk_sets_json"
+MEMBERSHIP_MARK = "rag_document_knowledge_bases wm"
+
+
+class SqlOracle:
+    """SQL を記録し、合成の行を返す Oracle の代役（実 SQL は test_wiki_store_oracle.py）。"""
+
+    def __init__(self, pages: list[WikiPage]) -> None:
+        self.by_id = {p.unit.unit_id: p for p in pages}
+        self.sql: list[str] = []
+
+    async def get_search_answer_profile(self, profile_id: str) -> Any:
+        return SimpleNamespace(
+            status="ACTIVE",
+            config=SimpleNamespace(query=SimpleNamespace(wiki_search_enabled=True)),
+            knowledge_bases=[SimpleNamespace(id="kb-a", status="ACTIVE")],
+        )
+
+    @staticmethod
+    def _values(binds: dict[str, Any], prefix: str) -> list[str] | None:
+        values = [v for k, v in binds.items() if k.startswith(f"{prefix}_")]
+        return values or None
+
+    async def _fetch_all(self, sql: str, binds: dict[str, Any]) -> list[dict[str, Any]]:
+        self.sql.append(sql)
+        pages = list(self.by_id.values())
+        if "wiki_chunk_set_id" in sql:
+            return [
+                {
+                    "document_id": p.unit.document_id,
+                    "file_name": "文書A" if p.unit.document_id == "doc-a" else p.unit.document_id,
+                    "wiki_chunk_set_id": p.unit.chunk_set_id,
+                    "wiki_fingerprint": "f",
+                }
+                for p in pages
+            ]
+        if "rag_wiki_links" in sql:
+            return []
+        if "VECTOR_DISTANCE" in sql:
+            return [{"unit_id": uid} for uid in self.by_id]
+        if "CONTAINS(" in sql:
+            documents = self._values(binds, "wiki_text_doc")
+            return [
+                {"document_id": p.unit.document_id, "unit_id": p.unit.unit_id}
+                for p in pages
+                if documents is None or p.unit.document_id in documents
+            ]
+        if "p.page_json" in sql:
+            units, documents = self._values(binds, "wiki_unit"), self._values(binds, "wiki_doc")
+            return [
+                {"page_json": p.model_dump()}
+                for p in pages
+                if (units is None or p.unit.unit_id in units)
+                and (documents is None or p.unit.document_id in documents)
+            ]
+        assert "c.chunk_text" in sql, sql
+        wanted = set(self._values(binds, "wiki_source") or [])
+        return [
+            {
+                "document_id": p.unit.document_id,
+                "chunk_id": sid,
+                "chunk_set_id": p.unit.chunk_set_id,
+                "chunk_text": p.unit.text,
+                "chunk_index": 0,
+            }
+            for p in pages
+            for sid in p.unit.source_chunk_ids
+            if sid in wanted
+        ]
+
+
+@pytest.mark.asyncio
+async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> None:
+    """範囲（所属・権限・公開・今の保存版）の重い条件は目録の 1 回だけで評価し、後の読取は決めた
+    集合だけで絞る。回答に使う原文は read_sources が今の範囲で照合し直す。"""
+    oracle = SqlOracle(LINKED)
+    llm = Llm(["文書A"], units=["a2"])
+
+    class GenAi:
+        async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
+            return [[0.1] * 4 for _ in texts]
+
+    wiki = WikiRetriever(
+        Settings(rag_wiki_link_depth=2),
+        oracle,  # type: ignore[arg-type]
+        GenAi(),  # type: ignore[arg-type]
+        llm,
+        store=WikiStore(oracle),  # type: ignore[arg-type]
+    )
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
+
+    assert result.trace["status"] == "ready" and result.chunks
+    published = [sql for sql in oracle.sql if PUBLISHED_MARK in sql]
+    membership = [sql for sql in oracle.sql if MEMBERSHIP_MARK in sql]
+    # 目録（範囲を決める 1 回）と、回答の前の原文の照合（read_sources）だけ。
+    assert len(published) == 1 and "wiki_chunk_set_id" in published[0]
+    assert len(membership) == 2 and "c.chunk_text" in membership[1]
+    later = [sql for sql in oracle.sql if PUBLISHED_MARK not in sql and MEMBERSHIP_MARK not in sql]
+    # 候補・全文の順位・ID の読み込み・関連の辿りは、決めた集合の条件で読む。
+    assert len(later) >= 6
+    assert all("p.chunk_set_id IN" in sql and "p.source_fingerprint IN" in sql for sql in later)
+    assert not any("rag_document_knowledge_bases" in sql for sql in later)
+    assert any("rag_wiki_links" in sql for sql in later)
 
 
 def _relations(result: Any) -> dict[str, Any]:
