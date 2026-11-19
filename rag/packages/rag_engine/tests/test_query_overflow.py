@@ -203,6 +203,7 @@ def test_answer_flow_does_not_search_multiline_question_again(monkeypatch):
         "abcdef",
         ["docling"],
         replace(get_settings(environ={}, dotenv_path=None), extra_retrieval_max_queries=1),
+        chunk_top_k=20,
         generate_answer=False,
     )
     assert [kwargs["retrieval_queries"] for _, kwargs in calls] == [

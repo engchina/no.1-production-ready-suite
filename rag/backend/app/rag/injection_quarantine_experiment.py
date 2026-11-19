@@ -282,6 +282,7 @@ def backend_answer() -> tuple[Answer, dict[str, Any]]:
             context = build_chunk_answer_context(
                 question,
                 records,
+                top_k=settings.rag_search_top_k_default,
                 neighbor_child_count=0,
                 rerank_enabled=False,
                 settings=engine_settings,

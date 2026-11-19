@@ -127,6 +127,7 @@ class AnswerGenerationTests(unittest.TestCase):
                     "",
                     ["docling"],
                     replace(get_settings(), output_dir=Path(tmp)),
+                    chunk_top_k=20,
                     retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
                 )
             self.assertIn("十分な根拠", result.answer_text)
@@ -157,6 +158,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 "",
                 ["docling"],
                 replace(get_settings(), output_dir=Path(tmp)),
+                chunk_top_k=20,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
             )
         notice = "※ 検索範囲に旧 schema の文書が 2 件あり、検索対象外です。"
@@ -659,7 +661,7 @@ class AnswerGenerationTests(unittest.TestCase):
             settings = replace(get_settings(), output_dir=output_dir)
 
             with patch("rag_engine.generation.answering.parse_text_response") as parse:
-                answer = answer_question("概要は？", "abcdef", ["docling"], settings)
+                answer = answer_question("概要は？", "abcdef", ["docling"], settings, chunk_top_k=20)
 
         self.assertIn("ADB hybrid search", answer)
         self.assertIn("チャンキング", answer)
@@ -961,6 +963,7 @@ class AnswerGenerationTests(unittest.TestCase):
                     "abcdef",
                     ["docling"],
                     settings,
+                    chunk_top_k=20,
                 )
 
         self.assertIn("ADB hybrid search", result.answer_text)
@@ -1000,6 +1003,7 @@ class AnswerGenerationTests(unittest.TestCase):
                     "abcdef",
                     ["docling"],
                     settings,
+                    chunk_top_k=20,
                 )
 
         self.assertIn("ADB hybrid search を使用できません", answer)

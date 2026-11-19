@@ -25,7 +25,6 @@ from rag_parser_core.language.text import alternation
 from rag_engine.chunking import (
     CHILD_CHUNK_LEVEL,
     DEFAULT_NEIGHBOR_CHILD_COUNT,
-    DEFAULT_RETRIEVAL_TOP_K,
     load_chunk_run_by_id,
     load_latest_or_source_chunk_run,
 )
@@ -609,7 +608,7 @@ def build_chunk_answer_context(
     question: str,
     chunk_records: Sequence[AnswerRecord],
     *,
-    top_k: int = DEFAULT_RETRIEVAL_TOP_K,
+    top_k: int,
     neighbor_child_count: int = DEFAULT_NEIGHBOR_CHILD_COUNT,
     max_records: int = MAX_CONTEXT_RECORDS,
     max_chars: int = MAX_CONTEXT_CHARS,
@@ -638,7 +637,7 @@ def build_chunk_answer_context(
             question=question,
             ranked_children=ranked_children,
             active_records=active_records,
-            top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
+            top_k=max(1, int(top_k)),
             neighbor_child_count=neighbor_child_count,
             support_record_limit=3,
             max_anchors_per_parent=_max_anchors_per_parent(settings),
@@ -749,7 +748,7 @@ def _bundle_context(
         question=question,
         ranked_children=list(ranked_children),
         active_records=list(active_records),
-        top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
+        top_k=max(1, int(top_k)),
         neighbor_child_count=neighbor_child_count,
         support_record_limit=3,
         max_anchors_per_parent=_max_anchors_per_parent(settings),
@@ -1048,7 +1047,7 @@ def build_adb_hybrid_answer_context(
     preferred_engines: Iterable[str],
     settings: Settings,
     *,
-    top_k: int = DEFAULT_RETRIEVAL_TOP_K,
+    top_k: int,
     neighbor_child_count: int = DEFAULT_NEIGHBOR_CHILD_COUNT,
     max_records: int | None = None,
     max_chars: int = MAX_CONTEXT_CHARS,
@@ -1272,7 +1271,7 @@ def _cut_anchors(
             question=question,
             ranked_children=list(kept_children),
             active_records=list(active_records),
-            top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
+            top_k=max(1, int(top_k)),
             neighbor_child_count=0,
             max_anchors_per_parent=_max_anchors_per_parent(settings),
             max_records=max_records,
@@ -1399,7 +1398,7 @@ def capped_candidate_ids(context: AnswerContext, settings: Settings | None, *, t
     ranked = list(context.ranked_candidates)
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) <= 0 or not ranked:
         return []
-    limit = max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K))
+    limit = max(1, int(top_k))
     kept = {id(record) for record in cap_anchors_per_document(ranked, settings)[:limit]}
     return list(dict.fromkeys(retrieval_record_id(record) for record in ranked[:limit] if id(record) not in kept))
 
@@ -2858,7 +2857,7 @@ def _retrieval_query_plan_payload(
         llm_expansion_queries=tuple(expansion.generated_queries),
         lexical_queries=dedupe_queries(lexical_queries),
         retrieval_scope=normalize_retrieval_scope(retrieval_scope),
-        top_k=max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K)),
+        top_k=max(1, int(top_k)),
         metadata_filter=_retrieval_metadata_filter(
             classification_filter,
         ),
@@ -3049,7 +3048,7 @@ def answer_question(
     preferred_engines: Iterable[str],
     settings: Settings,
     *,
-    chunk_top_k: int = DEFAULT_RETRIEVAL_TOP_K,
+    chunk_top_k: int,
     chunk_neighbor_count: int = DEFAULT_NEIGHBOR_CHILD_COUNT,
     rerank_enabled: bool | None = None,
     answer_llm_provider: str | None = None,
@@ -3090,7 +3089,7 @@ def answer_question_result(
     preferred_engines: Iterable[str],
     settings: Settings,
     *,
-    chunk_top_k: int = DEFAULT_RETRIEVAL_TOP_K,
+    chunk_top_k: int,
     chunk_neighbor_count: int = DEFAULT_NEIGHBOR_CHILD_COUNT,
     rerank_enabled: bool | None = None,
     answer_llm_provider: str | None = None,
@@ -4424,7 +4423,7 @@ def _answer_question_result(
     evidence_tree: Sequence[ContextParentEvidence] = (),
     retrieval_queries: Sequence[str] | None = None,
     lexical_queries: Sequence[str] = (),
-    retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K,
+    retrieval_top_k: int,
     request_question: str = "",
 ) -> AnswerQuestionResult:
     """``request_question`` は要求の単位の正本の質問（#2665。空なら検索の質問 ``expansion.original_question``）。"""

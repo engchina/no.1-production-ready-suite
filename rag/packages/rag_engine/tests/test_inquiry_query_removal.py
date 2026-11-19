@@ -57,6 +57,7 @@ class InquiryQueryRemovalTests(unittest.TestCase):
                 "abcdef",
                 ["docling"],
                 _rerank_ready_settings(),
+                chunk_top_k=20,
                 rerank_enabled=True,
             )
         return result, search, rerank_calls

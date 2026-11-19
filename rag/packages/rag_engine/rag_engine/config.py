@@ -51,10 +51,9 @@ DEFAULT_MAX_ANCHORS_PER_PARENT = 2
 # rerank の後、1 つの文書から起点に採る child の上限（#2167・#5170）。0 は上限なし。
 # backend の rag_max_anchors_per_document の既定と同じ値（一致は backend の tests/test_anchor_document_cap_settings.py で確認する）。
 DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
-# 検索の起点 child 数（UI の既定値）、context に入れる parent 数、生成に渡す原文の総予算（文字）の既定値 (#1054)。
-# chunking.constants.DEFAULT_RETRIEVAL_TOP_K / answer_records.MAX_CONTEXT_RECORDS / evidence_selection.EVIDENCE_BUDGET_CHARS
+# context に入れる parent 数と、生成に渡す原文の総予算（文字）の既定値 (#1054)。
+# answer_records.MAX_CONTEXT_RECORDS / evidence_selection.EVIDENCE_BUDGET_CHARS
 # と同じ値（循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
-DEFAULT_RETRIEVAL_TOP_K_SETTING = 20
 DEFAULT_MAX_CONTEXT_RECORDS = 12
 DEFAULT_EVIDENCE_BUDGET_CHARS = 40000
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
@@ -297,8 +296,7 @@ class Settings:
     auth_password: str = ""
     # 真のときだけ UI を認証なしで公開する。ローカル検証専用の逸脱で、既定は必ず False。
     auth_disabled: bool = False
-    # 検索の起点 child 数（UI の既定値。API・SDK は引数で指定）、context に入れる parent 数、生成の原文予算（文字）(#1054)。
-    retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K_SETTING
+    # context に入れる parent 数と、生成の原文予算（文字）(#1054)。検索の起点 child 数は呼び出し側が引数で渡す。
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
     # 分割読取の同じ pass の組を並行に読む上限（#4997。1 は順次）。
@@ -540,7 +538,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ),
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
         max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
-        retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),
         batch_read_workers=min(8, max(1, _env_int(env, "RAG_ENGINE_BATCH_READ_WORKERS", 1))),

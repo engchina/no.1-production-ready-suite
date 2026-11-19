@@ -72,6 +72,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
                 "abcdef",
                 ["docling"],
                 settings or _rerank_ready_settings(),
+                chunk_top_k=20,
                 rerank_enabled=True,
                 **options,
             )
