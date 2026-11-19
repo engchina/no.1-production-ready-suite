@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from array import array
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ from app.clients.oracle import (
     _oracle_in_predicate,
     _oracle_knowledge_base_access_predicate_sql,
     _oracle_retrieval_where,
+    _oracle_retrieval_where_split,
     _oracle_text_query,
     _require_active_knowledge_base,
     _retrieved_chunk_from_row,
@@ -217,6 +219,63 @@ def wiki_scope(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
           AND JSON_VALUE(kb.retrieval_config, '$.{WIKI_BUILD_KEY}')='true'
     )"""
     return f"({where}) AND {enabled}", binds
+
+
+@dataclass(frozen=True)
+class WikiScope:
+    """1 問の検索の範囲を ``WikiStore.resolve`` で 1 回だけ決めた結果（#5499）。
+
+    ``sources`` は検索に使える案内の（文書 ID, chunk_set ID, 公開の指紋）。後の読取はこの集合と
+    chunk の行の条件（``row_sql``）だけで絞り、``wiki_scope`` と公開の条件を評価し直さない。
+    回答に使う原文は ``read_sources`` が範囲・所属・権限・原文の保存版を照合し直す。
+    """
+
+    catalog: tuple[dict[str, Any], ...] = ()
+    sources: tuple[tuple[str, str, str], ...] = ()
+    row_sql: str = "1 = 1"
+    row_binds: Mapping[str, object] = field(default_factory=dict)
+
+
+# 範囲を決めた後の読取: 案内と、行の条件に使う原文の chunk・文書だけを読む（#5499）。
+WIKI_SCOPED_FROM = """FROM rag_wiki_pages p
+JOIN rag_chunks c ON c.chunk_id=p.source_chunk_id AND c.chunk_set_id=p.chunk_set_id
+JOIN rag_documents d ON d.document_id=c.document_id"""
+# Oracle の IN の値の並びの上限。
+_IN_LIST_LIMIT = 1000
+
+
+def _uses_bind(sql: str, name: str) -> bool:
+    return re.search(rf":{re.escape(name)}(?!\w)", sql) is not None
+
+
+def _in_many(column: str, prefix: str, values: Sequence[str]) -> tuple[str, dict[str, object]]:
+    """上限を超える値の並びを、上限ごとの IN を OR で結んだ条件にする。"""
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for index in range(0, len(values), _IN_LIST_LIMIT):
+        clause, added = _oracle_in_predicate(
+            column, f"{prefix}{index // _IN_LIST_LIMIT}", values[index : index + _IN_LIST_LIMIT]
+        )
+        clauses.append(clause)
+        binds.update(added)
+    return "(" + " OR ".join(clauses) + ")", binds
+
+
+def _scoped_where(scope: WikiScope) -> tuple[str, dict[str, object]]:
+    """``resolve`` で決めた案内の集合と chunk の行の条件（重い範囲の条件は評価し直さない）。
+
+    chunk_set は 1 つの文書に属し、公開の指紋は文書の ID を含む原文の単位から作るので、
+    chunk_set と指紋の組み合わせで、範囲を決めたときの（文書・保存版）の案内だけが残る。
+    """
+    chunk_sets, binds = _in_many(
+        "p.chunk_set_id", "wiki_set", sorted({chunk_set for _, chunk_set, _ in scope.sources})
+    )
+    published, added = _in_many(
+        "p.source_fingerprint", "wiki_fp", sorted({value for _, _, value in scope.sources})
+    )
+    binds.update(added)
+    binds.update(scope.row_binds)
+    return f"{chunk_sets} AND {published} AND ({scope.row_sql})", binds
 
 
 class WikiStore:
@@ -684,8 +743,13 @@ class WikiStore:
                 valid.update(unit.source_chunk_ids)
         return [_retrieved_chunk_from_row(found[sid]) for sid in ids if sid in valid]
 
-    async def catalog(self, filters: dict[str, str], compiler: str) -> list[dict[str, Any]]:
-        """検索に使える案内のある文書の目録（タイトルと保存版の版の属性）。"""
+    async def resolve(self, filters: dict[str, str], compiler: str) -> WikiScope:
+        """検索の範囲を 1 回の SQL で決める（#5499）。
+
+        今の検索範囲（有効な KB・利用者の権限）と、公開済み・今の構築条件・今の原文の保存版の
+        条件で、検索に使える案内のある文書の目録（タイトルと保存版の版の属性）と、案内の
+        （文書 ID, chunk_set ID, 公開の指紋）の集合を返す。後の読取はこの集合の中だけを読む。
+        """
         where, binds = wiki_scope(filters)
         identities = ",".join(
             f"""JSON_VALUE(ex.extraction_json,
@@ -699,7 +763,8 @@ class WikiStore:
             JSON_VALUE(d.classification,'$.effective_from') AS doc_effective_from,
             JSON_VALUE(d.classification,'$.effective_to') AS doc_effective_to,
             CASE WHEN d.superseded_by_document_id IS NULL THEN 'current' ELSE 'superseded'
-              END AS doc_version_status
+              END AS doc_version_status,
+            p.chunk_set_id AS wiki_chunk_set_id,p.source_fingerprint AS wiki_fingerprint
             {WIKI_PAGE_FROM}
             JOIN rag_chunk_sets catalog_set ON catalog_set.chunk_set_id=c.chunk_set_id
             LEFT JOIN rag_document_extractions ex ON ex.document_id=c.document_id
@@ -708,8 +773,10 @@ class WikiStore:
             {**binds, "wiki_compiler": compiler},
         )
         documents: dict[str, dict[str, Any]] = {}
+        sources: set[tuple[str, str, str]] = set()
         for row in rows:
             did = str(row["document_id"])
+            sources.add((did, str(row["wiki_chunk_set_id"]), str(row["wiki_fingerprint"])))
             card = documents.setdefault(
                 did,
                 {
@@ -721,12 +788,18 @@ class WikiStore:
             identity = {key: str(row[key]) for key in SOURCE_IDENTITY_FIELDS if row.get(key)}
             if identity and identity not in card["source_identities"]:
                 card["source_identities"].append(identity)
-        return list(documents.values())
+        # chunk の行の条件（内容の種類・ページなど）は集合で表せないので、後の読取でも当てる。
+        _, row_sql, row_binds = _oracle_retrieval_where_split(dict(filters))
+        return WikiScope(
+            tuple(documents.values()),
+            tuple(sorted(sources)),
+            row_sql,
+            {key: value for key, value in row_binds.items() if _uses_bind(row_sql, key)},
+        )
 
     async def pages(
         self,
-        filters: dict[str, str],
-        compiler: str,
+        scope: WikiScope,
         *,
         document_ids: Sequence[str] | None = None,
         unit_ids: Sequence[str] | None = None,
@@ -734,13 +807,14 @@ class WikiStore:
         limit: int | None = None,
         exclude_document_ids: Sequence[str] = (),
     ) -> list[WikiPage]:
-        """検索に使える案内。
+        """``resolve`` で決めた範囲の案内。
 
         ``query_vector`` と ``limit`` があれば近い順の上位だけを、ID の順位を決めてから読む。
         ``exclude_document_ids`` の文書は除く（文書をまたぐ関連の候補。#5492）。
         """
-        where, binds = wiki_scope(filters)
-        binds["wiki_compiler"] = compiler
+        if not scope.sources:
+            return []
+        where, binds = _scoped_where(scope)
         if exclude_document_ids:
             clause, added = _oracle_in_predicate("c.document_id", "wiki_skip", exclude_document_ids)
             where += f" AND NOT ({clause})"
@@ -757,32 +831,27 @@ class WikiStore:
                 binds.update(added)
         if query_vector is not None and limit is not None:
             rows = await self.oracle._fetch_all(
-                f"""SELECT p.unit_id {WIKI_PAGE_FROM} WHERE {where} AND {WIKI_PUBLISHED_SQL}
+                f"""SELECT p.unit_id {WIKI_SCOPED_FROM} WHERE {where}
                 ORDER BY VECTOR_DISTANCE(p.embedding,:wiki_vector,COSINE),p.document_id,p.unit_id
                 FETCH FIRST :wiki_limit ROWS ONLY""",
                 {**binds, "wiki_vector": array("f", query_vector), "wiki_limit": limit},
             )
-            return await self._hydrate([str(row["unit_id"]) for row in rows], filters, compiler)
+            return await self._hydrate([str(row["unit_id"]) for row in rows], scope)
         rows = await self.oracle._fetch_all(
-            f"""SELECT p.page_json {WIKI_PAGE_FROM} WHERE {where} AND {WIKI_PUBLISHED_SQL}
+            f"""SELECT p.page_json {WIKI_SCOPED_FROM} WHERE {where}
             ORDER BY p.document_id,p.unit_id""",
             binds,
         )
         return [WikiPage.model_validate(_json_loads(row["page_json"])) for row in rows]
 
-    async def _hydrate(
-        self, ids: list[str], filters: dict[str, str], compiler: str
-    ) -> list[WikiPage]:
-        found = {
-            page.unit.unit_id: page for page in await self.pages(filters, compiler, unit_ids=ids)
-        }
+    async def _hydrate(self, ids: list[str], scope: WikiScope) -> list[WikiPage]:
+        found = {page.unit.unit_id: page for page in await self.pages(scope, unit_ids=ids)}
         return [found[uid] for uid in ids if uid in found]
 
     async def text_rankings(
         self,
         expression: str,
-        filters: dict[str, str],
-        compiler: str,
+        scope: WikiScope,
         *,
         limit: int,
         document_ids: Sequence[str] | None = None,
@@ -792,12 +861,17 @@ class WikiStore:
 
         ``document_ids`` が無ければ全体の上位 ``limit`` 件を点数の順に、
         あれば文書ごとの上位 ``limit`` 件を文書ごとに点数の順に返す。
-        ``exclude_document_ids`` の文書は除く（#5492）。
+        ``exclude_document_ids`` の文書は除く（#5492）。範囲は ``resolve`` で決めた集合。
         """
         text = _oracle_text_query(expression)
-        if not text or limit <= 0 or (document_ids is not None and not document_ids):
+        if (
+            not text
+            or limit <= 0
+            or not scope.sources
+            or (document_ids is not None and not document_ids)
+        ):
             return []
-        where, binds = wiki_scope(filters)
+        where, binds = _scoped_where(scope)
         if exclude_document_ids:
             clause, added = _oracle_in_predicate(
                 "c.document_id", "wiki_text_skip", exclude_document_ids
@@ -813,10 +887,10 @@ class WikiStore:
         else:
             binds["wiki_limit"] = limit
         rows = await self.oracle._fetch_all(
-            f"""SELECT p.document_id,p.unit_id,SCORE(1) AS text_score {WIKI_PAGE_FROM}
-            WHERE CONTAINS(p.search_text,:wiki_text,1)>0 AND {where} AND {WIKI_PUBLISHED_SQL}
+            f"""SELECT p.document_id,p.unit_id,SCORE(1) AS text_score {WIKI_SCOPED_FROM}
+            WHERE CONTAINS(p.search_text,:wiki_text,1)>0 AND {where}
             ORDER BY {order} {tail}""",
-            {**binds, "wiki_text": text, "wiki_compiler": compiler},
+            {**binds, "wiki_text": text},
         )
         counts: dict[str, int] = {}
         ranking = []
@@ -1033,27 +1107,26 @@ class WikiStore:
 
         await self.oracle._run_transaction(operation)
 
-    async def links(
-        self, unit_ids: Sequence[str], filters: dict[str, str], compiler: str
-    ) -> list[tuple[str, str, str]]:
+    async def links(self, unit_ids: Sequence[str], scope: WikiScope) -> list[tuple[str, str, str]]:
         """単位から出る関連と入る関連（起点の単位 ID, 終点の単位 ID, 関係）。
 
-        両方の案内が今の保存版・今の構築条件で公開済みで、今の検索範囲（有効な KB・利用者の権限）に
-        ある関連だけを返す。案内は KB をまたいで再利用されるので、所属は読むときに照合する。
+        起点と終点の両方の案内が ``resolve`` で決めた範囲（今の検索範囲・公開済み・今の構築条件・
+        今の原文の保存版）にある関連だけを返す。案内は KB をまたいで再利用されるので、所属は
+        読むときに範囲で照合する。
         """
-        if not unit_ids:
+        if not unit_ids or not scope.sources:
             return []
-        where, binds = wiki_scope(filters)
+        where, binds = _scoped_where(scope)
         outgoing, out_binds = _oracle_in_predicate("l.source_unit_id", "link_from", unit_ids)
         incoming, in_binds = _oracle_in_predicate("l.target_unit_id", "link_to", unit_ids)
-        current = f"SELECT 1 {WIKI_PAGE_FROM} WHERE {where} AND {WIKI_PUBLISHED_SQL}"
+        current = f"SELECT 1 {WIKI_SCOPED_FROM} WHERE {where}"
         rows = await self.oracle._fetch_all(
             f"""SELECT l.source_unit_id,l.target_unit_id,l.relation FROM rag_wiki_links l
             WHERE ({outgoing} OR {incoming})
               AND EXISTS ({current} AND p.page_id=l.source_page_id)
               AND EXISTS ({current} AND p.page_id=l.target_page_id)
             ORDER BY l.source_unit_id,l.target_unit_id""",
-            {**binds, **out_binds, **in_binds, "wiki_compiler": compiler},
+            {**binds, **out_binds, **in_binds},
         )
         return [
             (str(row["source_unit_id"]), str(row["target_unit_id"]), str(row["relation"]))

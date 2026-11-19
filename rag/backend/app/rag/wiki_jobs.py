@@ -473,14 +473,21 @@ class WikiJobs:
         """
         compiler, limit = compiler_fingerprint(settings), settings.rag_wiki_link_candidates
         own = await store.pages(
-            {
-                "knowledge_base_id": ",".join(knowledge_bases),
-                "document_id": document_id,
-                "include_superseded": "true",
-            },
-            compiler,
+            await store.resolve(
+                {
+                    "knowledge_base_id": ",".join(knowledge_bases),
+                    "document_id": document_id,
+                    "include_superseded": "true",
+                },
+                compiler,
+            )
         )
         own = [page for page in own if link_query_text(page)]
+        # KB ごとの範囲は 1 回だけ決め、起点の単位ごとの候補の検索で使い回す（#5499）。
+        scopes = [
+            await store.resolve({"knowledge_base_id": kb, "include_superseded": "true"}, compiler)
+            for kb in (knowledge_bases if own else ())
+        ]
         texts = [link_query_text(page) for page in own]
         embedder = self.embedder_factory(settings)
         vectors: list[Sequence[float]] = []
@@ -493,23 +500,19 @@ class WikiJobs:
         found_by: dict[str, tuple[WikiPage, list[tuple[int, WikiPage]]]] = {}
         for page, text, vector in zip(own, texts, vectors, strict=True):
             groups: list[list[WikiPage]] = []
-            for kb in knowledge_bases:
-                scope = {"knowledge_base_id": kb, "include_superseded": "true"}
+            for scope in scopes:
                 near, ranking = await asyncio.gather(
                     store.pages(
                         scope,
-                        compiler,
                         query_vector=vector,
                         limit=limit,
                         exclude_document_ids=[document_id],
                     ),
                     store.text_rankings(
-                        text, scope, compiler, limit=limit, exclude_document_ids=[document_id]
+                        text, scope, limit=limit, exclude_document_ids=[document_id]
                     ),
                 )
-                texts_found = await store.pages(
-                    scope, compiler, unit_ids=[uid for _, uid in ranking]
-                )
+                texts_found = await store.pages(scope, unit_ids=[uid for _, uid in ranking])
                 by_id = {found.unit.unit_id: found for found in texts_found}
                 groups.extend([near, [by_id[uid] for _, uid in ranking if uid in by_id]])
             candidates = [

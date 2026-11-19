@@ -137,36 +137,36 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     # 検索の経路（#4941）: 目録・案内・ベクトルの上位・全文検索の順位は、公開済み・現在の構築条件の
     # 案内だけを返す。全文検索の順位は文書ごとに 1 回の SQL で取る（#4986）。
     compiler = source.compiler_fingerprint
-    catalog = await store.catalog(filters, compiler)
-    assert [row["document_id"] for row in catalog] == [did]
+    scope = await store.resolve(filters, compiler)
+    assert [row["document_id"] for row in scope.catalog] == [did]
     # 形式に関わらない版の属性（版の状態と分類の有効期間）を、どの文書にも渡す（#5446 の続き）。
-    assert catalog[0]["source_identities"] == [{"version_status": "current"}]
+    assert scope.catalog[0]["source_identities"] == [{"version_status": "current"}]
     await oracle.save_document_classification(
         did,
         DocumentClassification(effective_from=date(2026, 4, 1), effective_to=date(2027, 4, 1)),
     )
-    assert (await store.catalog(filters, compiler))[0]["source_identities"] == [
+    assert (await store.resolve(filters, compiler)).catalog[0]["source_identities"] == [
         {"version_status": "current", "effective_from": "2026-04-01", "effective_to": "2027-04-01"}
     ]
     unit_ids = sorted(page.unit.unit_id for page in pages)
-    assert sorted(p.unit.unit_id for p in await store.pages(filters, compiler)) == unit_ids
-    top = await store.pages(filters, compiler, query_vector=_EMBEDDING, limit=1)
+    assert sorted(p.unit.unit_id for p in await store.pages(scope)) == unit_ids
+    top = await store.pages(scope, query_vector=_EMBEDDING, limit=1)
     assert len(top) == 1 and top[0].unit.unit_id in unit_ids
-    by_unit = await store.pages(filters, compiler, unit_ids=unit_ids[:1], document_ids=[did])
+    by_unit = await store.pages(scope, unit_ids=unit_ids[:1], document_ids=[did])
     assert [p.unit.unit_id for p in by_unit] == unit_ids[:1]
-    ranking = await store.text_rankings("syntheticnavigation", filters, compiler, limit=10)
+    ranking = await store.text_rankings("syntheticnavigation", scope, limit=10)
     assert sorted(uid for _, uid in ranking) == unit_ids
     per_document = await store.text_rankings(
-        "syntheticnavigation", filters, compiler, limit=1, document_ids=[did]
+        "syntheticnavigation", scope, limit=1, document_ids=[did]
     )
     assert len(per_document) == 1 and per_document[0][0] == did
-    assert not await store.catalog(filters, fingerprint("compiler-b"))
-    assert not await store.pages(filters, fingerprint("compiler-b"))
+    stale = await store.resolve(filters, fingerprint("compiler-b"))
+    assert not stale.catalog and not stale.sources and not await store.pages(stale)
     await store.set_enabled(first.id, False)
     # 無効にした KB からは読めないが、保存済みの案内は残り、別の有効な KB では使える。
     assert not await store.read_sources(pages, filters)
     assert not await store.document_ids(filters)
-    assert not await store.catalog(filters, compiler)
+    assert not (await store.resolve(filters, compiler)).catalog
     assert len(await store.read_sources(pages, other)) == len(pages)
     assert [row["status"] for row in await store.document_statuses(filters)] == ["READY"]
 
@@ -212,7 +212,14 @@ async def _published(store: WikiStore, did: str, context: str) -> tuple[Any, lis
     await store.enqueue(source)
     lease = await store.claim(source, lease_seconds=300)
     assert lease
-    pages = [
+    pages = _pages(source.units, context)
+    await store.checkpoint(source, lease, pages, vectors=[_EMBEDDING] * len(pages))
+    await store.finish(source, lease)
+    return source, pages
+
+
+def _pages(units: Any, context: str) -> list[WikiPage]:
+    return [
         WikiPage(
             unit=u,
             navigation=WikiContext(
@@ -224,11 +231,8 @@ async def _published(store: WikiStore, did: str, context: str) -> tuple[Any, lis
             ),
             input_fingerprint="input-a",
         )
-        for u in source.units
+        for u in units
     ]
-    await store.checkpoint(source, lease, pages, vectors=[_EMBEDDING] * len(pages))
-    await store.finish(source, lease)
-    return source, pages
 
 
 async def test_cross_document_links_follow_current_versions_scope_and_cascade() -> None:
@@ -246,19 +250,17 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     _, pages_b = await _published(store, b, "合成の例外 syntheticexception。")
     compiler = source_a.compiler_fingerprint
     filters, narrow = {"knowledge_base_id": kb.id}, {"knowledge_base_id": only_a.id}
+    scope, narrow_scope = (
+        await store.resolve(filters, compiler),
+        await store.resolve(narrow, compiler),
+    )
     assert await store.link_knowledge_bases(a) == sorted([kb.id, only_a.id])
     assert await store.link_knowledge_bases(b) == [kb.id]
     # 候補はほかの文書の案内だけ（ベクトル・全文の両方）。
-    near = await store.pages(
-        filters, compiler, query_vector=_EMBEDDING, limit=50, exclude_document_ids=[a]
-    )
+    near = await store.pages(scope, query_vector=_EMBEDDING, limit=50, exclude_document_ids=[a])
     assert near and {p.unit.document_id for p in near} == {b}
     ranking = await store.text_rankings(
-        "syntheticexception",
-        filters,
-        compiler,
-        limit=50,
-        exclude_document_ids=[a],
+        "syntheticexception", scope, limit=50, exclude_document_ids=[a]
     )
     assert ranking and {did for did, _ in ranking} == {b}
 
@@ -287,12 +289,14 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     )
     # 出る向きと入る向きの両方で読める。
     expected = [(first_a, first_b, "exception")]
-    assert await store.links([first_a], filters, compiler) == expected
-    assert await store.links([first_b], filters, compiler) == expected
+    assert await store.links([first_a], scope) == expected
+    assert await store.links([first_b], scope) == expected
     # 終点の文書が今の KB に無ければ辿らない（案内は KB をまたいで再利用されるので読むときに照合）。
-    assert await store.links([first_a], narrow, compiler) == []
+    assert await store.links([first_a], narrow_scope) == []
     # 構築条件が今と違う案内の関連は辿らない。
-    assert await store.links([first_a], filters, fingerprint("compiler-b")) == []
+    assert (
+        await store.links([first_a], await store.resolve(filters, fingerprint("compiler-b"))) == []
+    )
     # 中断の後は判定済みの鍵を返して続きから作る。
     await store.finish_links(a, lease, failure_code="interrupted")
     resumed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
@@ -311,7 +315,7 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     # 原文の保存版が変われば、古い保存版の関連を消して作り直す。
     renewed = await store.claim_links(a, fingerprint("source-new"), LINKS, lease_seconds=300)
     assert renewed is not None and renewed[1] == []
-    assert await store.links([first_a], filters, compiler) == []
+    assert await store.links([first_a], scope) == []
     await store.finish_links(a, renewed[0])
     # 逆向き（B → A）の関連も同じ表に置き、文書の削除は外部キーで関連の行と状態を消す。
     reverse = await store.claim_links(b, fingerprint("source-b"), LINKS, lease_seconds=300)
@@ -324,7 +328,7 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
         links=[(first_b, first_a, "prerequisite", "合成の理由")],
         done=[f"reverse:{first_b}"],
     )
-    assert await store.links([first_a], filters, compiler) == [(first_b, first_a, "prerequisite")]
+    assert await store.links([first_a], scope) == [(first_b, first_a, "prerequisite")]
 
     def count(connection: OracleConnectionProtocol) -> Any:
         return _fetch_one(
@@ -342,3 +346,75 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     await oracle.delete_document(b)
     row = await oracle._run_transaction(count)
     assert row is not None and int(str(row["states"])) == 0
+
+
+async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> None:
+    """範囲を 1 回で決めた後の軽い読取（#5499）: 今の保存版・公開済み・範囲の中の案内だけを返し、
+    古い保存版・未公開・別の KB の文書の案内を返さない。"""
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store = WikiStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-scope-{token}")
+    other = await oracle.create_knowledge_base(name=f"synthetic-scope-other-{token}")
+    a, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=f"{token}a")
+    unpublished, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=f"{token}u")
+    outside, _, _ = await _indexed_document(oracle, knowledge_base_id=other.id, token=f"{token}o")
+    await store.set_enabled(kb.id, True)
+    await store.set_enabled(other.id, True)
+    source_a, pages_a = await _published(store, a, "合成の案内 syntheticscope。")
+    await _published(store, outside, "合成の案内 syntheticscope。")
+    # 未公開: 案内と埋め込みは保存したが、公開（finish）していない文書。
+    revision = await store.revision_fingerprint(unpublished)
+    draft = await store.source_units(unpublished)
+    assert revision is not None and draft is not None
+    draft = replace(
+        draft, compiler_fingerprint=source_a.compiler_fingerprint, revision_fingerprint=revision
+    )
+    await store.enqueue(draft)
+    lease = await store.claim(draft, lease_seconds=300)
+    assert lease
+    draft_pages = _pages(draft.units, "合成の案内 syntheticscope。")
+    await store.checkpoint(draft, lease, draft_pages, vectors=[_EMBEDDING] * len(draft_pages))
+
+    compiler, filters = source_a.compiler_fingerprint, {"knowledge_base_id": kb.id}
+    units_a = sorted(page.unit.unit_id for page in pages_a)
+
+    async def read(scope: Any) -> tuple[list[str], list[str], list[str], list[str]]:
+        return (
+            sorted(p.unit.unit_id for p in await store.pages(scope)),
+            sorted(
+                p.unit.unit_id for p in await store.pages(scope, query_vector=_EMBEDDING, limit=50)
+            ),
+            sorted(uid for _, uid in await store.text_rankings("syntheticscope", scope, limit=50)),
+            sorted(
+                {did for did, _ in await store.text_rankings("syntheticscope", scope, limit=50)}
+            ),
+        )
+
+    scope = await store.resolve(filters, compiler)
+    assert [row["document_id"] for row in scope.catalog] == [a]
+    assert {did for did, _, _ in scope.sources} == {a}
+    assert {value for _, _, value in scope.sources} == {source_a.source_fingerprint}
+    assert await read(scope) == (units_a, units_a, units_a, [a])
+    # 別の KB・未公開の文書は、ID で指定しても読まない。
+    assert not await store.pages(scope, document_ids=[unpublished, outside])
+
+    # 古い保存版: 同じ単位で新しい保存版の案内を作って公開すると、決め直した範囲は新しい保存版の
+    # 案内だけを読み、古い保存版の案内（表に残る）を読まない。
+    renewed = replace(source_a, source_fingerprint=fingerprint(f"renewed-{token}"))
+    assert await store.enqueue(renewed)
+    lease = await store.claim(renewed, lease_seconds=300)
+    assert lease
+    renewed_pages = _pages(renewed.units, "合成の新しい案内 syntheticrenewed。")
+    await store.checkpoint(renewed, lease, renewed_pages, vectors=[_EMBEDDING] * len(pages_a))
+    # 公開の前に決めた範囲は、作り直し中の新しい保存版の案内を読まない。
+    assert await read(scope) == (units_a, units_a, units_a, [a])
+    assert not await store.text_rankings("syntheticrenewed", scope, limit=50)
+    await store.finish(renewed, lease)
+    current = await store.resolve(filters, compiler)
+    assert {value for _, _, value in current.sources} == {renewed.source_fingerprint}
+    assert sorted(p.unit.unit_id for p in await store.pages(current)) == units_a
+    assert not await store.text_rankings("syntheticscope", current, limit=50)
+    assert (
+        sorted(uid for _, uid in await store.text_rankings("syntheticrenewed", current, limit=50))
+        == units_a
+    )

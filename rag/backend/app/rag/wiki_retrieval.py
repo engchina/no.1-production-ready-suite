@@ -18,7 +18,7 @@ from pr_backend_core.observability.tracing import SpanDisplay, observed_span
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, _filter_id_values
-from app.clients.wiki_store import WikiStore
+from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings, get_settings
 from app.rag.span_display import ANSWER_STEP_KIND
 from app.rag.wiki_jobs import compiler_fingerprint
@@ -143,7 +143,7 @@ class WikiRetriever:
         return schema.model_validate_json(text)
 
     async def follow(
-        self, scope: dict[str, str], pages: dict[str, WikiPage], selected: Sequence[str]
+        self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
     ) -> tuple[list[str], list[dict[str, int]], int]:
         """選んだ単位から、同じ文書の依存と文書をまたぐ関連（出る向き・入る向き）を辿る（#5492）。
 
@@ -169,7 +169,7 @@ class WikiRetriever:
                 for dependency in pages[uid].navigation.dependencies
             ]
             current = set(frontier)
-            for source, target, relation in await store.links(frontier, scope, self.compiler):
+            for source, target, relation in await store.links(frontier, scope):
                 if source in current:
                     offers.append((target, relation, "link"))
                 if target in current:
@@ -183,8 +183,7 @@ class WikiRetriever:
             unknown = [uid for uid in ordered if uid not in pages]
             if unknown:
                 pages.update(
-                    (page.unit.unit_id, page)
-                    for page in await store.pages(scope, self.compiler, unit_ids=unknown)
+                    (page.unit.unit_id, page) for page in await store.pages(scope, unit_ids=unknown)
                 )
             readable = [uid for uid in ordered if uid in pages]
             missing += len(ordered) - len(readable)
@@ -219,21 +218,22 @@ class WikiRetriever:
     async def _search(
         self, question: str, profile_id: str | None, scope: dict[str, str]
     ) -> WikiSearchResult:
-        opts, store, compiler = self.settings, self.store, self.compiler
+        opts, store = self.settings, self.store
+        # 範囲（有効な KB・権限・公開・今の保存版）を評価するのはここの 1 回だけ。後の読取は
+        # 決めた案内の集合の中だけを読み、回答に使う原文は current_sources で照合し直す（#5499）。
         with _stage("Wiki: 目録の読み込み"):
-            catalog = await store.catalog(scope, compiler)
+            wiki = await store.resolve(scope, self.compiler)
+        catalog = list(wiki.catalog)
         if not catalog:
             return WikiSearchResult(trace={"status": "not_ready", "model_calls": 0})
         with _stage("Wiki: 質問のベクトル化"):
             vector = (await self.genai.embed([question], input_type="SEARCH_QUERY"))[0]
         with _stage("Wiki: 案内の候補の検索"):
             vector_pages, text_ranking = await asyncio.gather(
-                store.pages(scope, compiler, query_vector=vector, limit=opts.rag_wiki_candidates),
-                store.text_rankings(question, scope, compiler, limit=opts.rag_wiki_candidates),
+                store.pages(wiki, query_vector=vector, limit=opts.rag_wiki_candidates),
+                store.text_rankings(question, wiki, limit=opts.rag_wiki_candidates),
             )
-            text_pages = await store.pages(
-                scope, compiler, unit_ids=[uid for _, uid in text_ranking]
-            )
+            text_pages = await store.pages(wiki, unit_ids=[uid for _, uid in text_ranking])
         by_id = {page.unit.unit_id: page for page in text_pages}
         candidates = interleave(
             [vector_pages, [by_id[uid] for _, uid in text_ranking if uid in by_id]],
@@ -279,13 +279,12 @@ class WikiRetriever:
             # 1 回ずつ取る（#4986）。
             with _stage("Wiki: 選んだファイルの案内と順位の読み込み"):
                 file_pages, rankings = await asyncio.gather(
-                    store.pages(scope, compiler, document_ids=document_ids),
+                    store.pages(wiki, document_ids=document_ids),
                     asyncio.gather(
                         *(
                             store.text_rankings(
                                 text,
-                                scope,
-                                compiler,
+                                wiki,
                                 limit=opts.rag_wiki_candidates,
                                 document_ids=document_ids,
                             )
@@ -375,7 +374,7 @@ class WikiRetriever:
         selected = list(dict.fromkeys(selected))
         # 案内の依存（同じ文書）と文書をまたぐ関連（両向き）を、予算の内で段ごとに辿る（#5492）。
         with _stage("Wiki: 依存と関連の辿り"):
-            followed, hops, missing = await self.follow(scope, pages, selected)
+            followed, hops, missing = await self.follow(wiki, pages, selected)
         with _stage("Wiki: 原文の読み込み"):
             required = [pages[uid] for uid in [*selected, *followed]]
             originals = await self.current_sources(profile_id, scope, required)

@@ -17,6 +17,50 @@ def test_explicit_version_is_not_replaced_with_current_version() -> None:
 
 
 @pytest.mark.asyncio
+async def test_later_reads_use_the_resolved_set_and_keep_chunk_row_filters() -> None:
+    """範囲は resolve の 1 回で決め、後の読取は決めた集合と chunk の行の条件だけで絞る（#5499）。"""
+    statements: list[tuple[str, dict[str, Any]]] = []
+
+    class Oracle:
+        async def _fetch_all(self, sql: str, binds: Any) -> Any:
+            statements.append((sql, binds))
+            if "wiki_chunk_set_id" in sql:
+                return [
+                    {
+                        "document_id": "doc-a",
+                        "file_name": "合成.txt",
+                        "wiki_chunk_set_id": "set-a",
+                        "wiki_fingerprint": "fp-a",
+                    }
+                ]
+            return []
+
+    store = WikiStore(cast(Any, Oracle()))
+    filters = {"knowledge_base_id": "kb-a", "content_kind": "table"}
+    scope = await store.resolve(filters, "compiler-a")
+    assert scope.sources == (("doc-a", "set-a", "fp-a"),)
+    assert [row["document_id"] for row in scope.catalog] == ["doc-a"]
+    await store.pages(scope, query_vector=[0.1], limit=3)
+    await store.text_rankings("合成", scope, limit=3)
+    await store.links(["unit-a"], scope)
+    first, *later = statements
+    assert "JSON_TABLE(w.chunk_sets_json" in first[0] and "kb-a" in first[1].values()
+    assert len(later) == 3
+    for sql, binds in later:
+        # 重い範囲の条件（公開・所属・権限）は評価し直さず、決めた集合で読む。
+        assert "JSON_TABLE" not in sql and "rag_knowledge_bases" not in sql
+        assert "rag_wiki_documents" not in sql and "kb-a" not in binds.values()
+        assert binds["wiki_set0_0"] == "set-a" and binds["wiki_fp0_0"] == "fp-a"
+        # chunk の行の条件は集合で表せないので、後の読取でも当てる。
+        assert ":filter_content_kind" in sql and binds["filter_content_kind"] == "table"
+    # 範囲に案内が無ければ DB を読まない。
+    empty = type(scope)()
+    assert not await store.pages(empty) and not await store.links(["unit-a"], empty)
+    assert not await store.text_rankings("合成", empty, limit=3)
+    assert len(statements) == 4
+
+
+@pytest.mark.asyncio
 async def test_changed_body_is_not_returned_as_the_cached_original() -> None:
     unit = units()[0]
 

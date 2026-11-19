@@ -179,6 +179,7 @@ class LinkStore:
         self.doc["source_fingerprint"] = "source-a"
         self.state: dict[str, Any] | None = None
         self.saved: list[dict[str, Any]] = []
+        self.resolved: list[dict[str, str]] = []
 
     async def document_state(self, did: str) -> Any:
         return dict(self.doc)
@@ -219,15 +220,20 @@ class LinkStore:
             status="FAILED" if failure_code else "READY", failure_code=failure_code, leased=0
         )
 
-    async def pages(self, filters: dict[str, str], compiler: str, **kwargs: Any) -> Any:
-        if filters.get("document_id") == "doc-a":
+    async def resolve(self, filters: dict[str, str], compiler: str) -> Any:
+        """範囲を決めた回数を数える（KB ごとに 1 回だけ。#5499）。"""
+        self.resolved.append(dict(filters))
+        return dict(filters)
+
+    async def pages(self, scope: dict[str, str], **kwargs: Any) -> Any:
+        if scope.get("document_id") == "doc-a":
             return self.a
         if kwargs.get("unit_ids") is not None:
             return [p for p in self.b if p.unit.unit_id in kwargs["unit_ids"]]
         assert kwargs["exclude_document_ids"] == ["doc-a"]
         return self.b[: kwargs["limit"]]
 
-    async def text_rankings(self, text: str, filters: Any, compiler: str, **kwargs: Any) -> Any:
+    async def text_rankings(self, text: str, scope: Any, **kwargs: Any) -> Any:
         assert kwargs["exclude_document_ids"] == ["doc-a"]
         return [(p.unit.document_id, p.unit.unit_id) for p in self.b]
 
@@ -271,6 +277,8 @@ async def test_links_are_built_both_ways_from_candidates_once(link_setup: Any) -
     assert forward["candidates"] == ["doc-b-b1"]
     assert reverse["sources"] == ["doc-b-b1"] and reverse["candidates"] == ["doc-a-a1", "doc-a-a2"]
     assert reverse["links"] == [("doc-b-b1", "doc-a-a1", "exception", "合成")]
+    # 範囲は自分の文書と KB ごとに 1 回だけ決め、起点の単位（2 つ）ごとには決め直さない（#5499）。
+    assert [scope.get("document_id") for scope in store.resolved] == ["doc-a", None]
     # 同じ原文・同じ条件なら作り直さない。
     await jobs._build_links("doc-a", "owner-a", settings)
     assert len(model.calls) == 2
