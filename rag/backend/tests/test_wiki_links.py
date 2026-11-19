@@ -14,7 +14,12 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.rag import wiki_jobs as module
 from app.rag.request_context import AuditRequestContext
-from app.rag.wiki_links import WikiLinkItem, judge_links, link_query_text
+from app.rag.wiki_links import (
+    WIKI_LINK_REASON_BYTES,
+    WikiLinkItem,
+    judge_links,
+    link_query_text,
+)
 from app.rag.wiki_models import WikiContext, WikiPage, WikiUnit, fingerprint, link_schema
 
 
@@ -116,6 +121,7 @@ async def test_judge_sends_short_ids_and_checkpoints_real_ids() -> None:
         batch_size=4,
         original_chars=20,
         max_input_chars=100000,
+        document_names={},
         authorize=allow,
         checkpoint=checkpoint,
     )
@@ -141,6 +147,7 @@ async def test_invalid_output_is_split_and_a_single_invalid_source_fails() -> No
             batch_size=2,
             original_chars=100,
             max_input_chars=100000,
+            document_names={},
             authorize=allow,
             checkpoint=lambda *args: allow(),
         )
@@ -158,6 +165,7 @@ async def test_sources_and_candidates_must_not_overlap() -> None:
             batch_size=2,
             original_chars=100,
             max_input_chars=100000,
+            document_names={},
             authorize=allow,
             checkpoint=lambda *args: allow(),
         )
@@ -166,6 +174,12 @@ async def test_sources_and_candidates_must_not_overlap() -> None:
 def test_query_text_uses_the_navigation_not_the_original() -> None:
     text = link_query_text(page("doc-a", "a1", text="原文だけの語"))
     assert "a1 の案内" in text and "例外は別の通知" in text and "原文だけの語" not in text
+
+
+class Scope(dict[str, str]):
+    """検索の範囲の合成。条件（dict）と目録（``catalog``）を持つ。"""
+
+    catalog: tuple[dict[str, str], ...] = ()
 
 
 class LinkStore:
@@ -223,7 +237,10 @@ class LinkStore:
     async def resolve(self, filters: dict[str, str], compiler: str) -> Any:
         """範囲を決めた回数を数える（KB ごとに 1 回だけ。#5499）。"""
         self.resolved.append(dict(filters))
-        return dict(filters)
+        scope = Scope(filters)
+        docs = ["doc-a"] if filters.get("document_id") else ["doc-a", "doc-b"]
+        scope.catalog = tuple({"document_id": d, "title": f"{d}.pdf"} for d in docs)
+        return scope
 
     async def pages(self, scope: dict[str, str], **kwargs: Any) -> Any:
         if scope.get("document_id") == "doc-a":
@@ -350,7 +367,109 @@ async def test_oversized_input_is_split_before_calling_the_model() -> None:
         batch_size=2,
         original_chars=100,
         max_input_chars=400,
+        document_names={},
         authorize=allow,
         checkpoint=lambda *args: allow(),
     )
     assert calls == 2 and [len(call["sources"]) for call in model.calls] == [1, 1]
+
+
+class ReasonModel(LinkModel):
+    """各起点を最初の候補へ結び、理由に ``reason`` を返す（短い ID を含む理由の合成）。"""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+    async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+        data = json.loads(context)
+        self.calls.append(data)
+        target = data["candidates"][0]["unit_id"]
+        link = {"unit_id": target, "relation": "exception", "reason": self.reason}
+        return json.dumps(
+            {
+                "items": [
+                    {"unit_id": source["unit_id"], "links": [link]} for source in data["sources"]
+                ]
+            }
+        )
+
+
+async def saved_reasons(
+    reason: str, *, candidates: tuple[WikiPage, ...], names: dict[str, str]
+) -> list[str]:
+    saved: list[str] = []
+
+    async def checkpoint(batch: Any, found: Any, decisions: Any) -> None:
+        saved.extend(d.reason for d in decisions)
+
+    await judge_links(
+        [WikiLinkItem("forward:doc-a-a1", page("doc-a", "a1"), candidates)],
+        model=ReasonModel(reason),
+        batch_size=4,
+        original_chars=100,
+        max_input_chars=100000,
+        document_names=names,
+        authorize=allow,
+        checkpoint=checkpoint,
+    )
+    return saved
+
+
+@pytest.mark.asyncio
+async def test_short_ids_in_the_reason_are_saved_as_headings() -> None:
+    # 起点 S1・候補 C1・C2 だけを作る。C12・XC1・C1_ は作った短い ID ではないので変えない。
+    candidates = (page("doc-b", "b1"), page("doc-c", "c1"))
+    names = {"doc-a": "文書A.pdf", "doc-b": "文書B.pdf", "doc-c": "文書C.pdf"}
+    reasons = await saved_reasons(
+        "S1 の例外はC2と C1 の記述で定まる。C12・XC1・C1_ は別。",
+        candidates=candidates,
+        names=names,
+    )
+    assert reasons == [
+        "「文書A.pdf > 合成の章」 の例外は「文書C.pdf > 合成の章」と 「文書B.pdf > 合成の章」 の"
+        "記述で定まる。C12・XC1・C1_ は別。"
+    ]
+    # 短い ID を含まない理由はそのまま。
+    plain = "例外の記述から判断した。"
+    assert await saved_reasons(plain, candidates=candidates, names=names) == [plain]
+    # 文書名が分からなければ章節で示す。
+    assert await saved_reasons("C1 を参照", candidates=candidates, names={}) == [
+        "「合成の章」 を参照"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_short_id_that_also_appears_in_the_material_is_kept() -> None:
+    # 候補の原文に C1 という語があると、理由の C1 が短い ID か原文の語かを決められない。
+    candidates = (page("doc-b", "b1", text="表の C1 の値を使う。"),)
+    reasons = await saved_reasons(
+        "C1 の値と S1 の条件", candidates=candidates, names={"doc-a": "文書A.pdf"}
+    )
+    assert reasons == ["C1 の値と 「文書A.pdf > 合成の章」 の条件"]
+
+
+@pytest.mark.asyncio
+async def test_a_reason_with_long_headings_fits_the_saved_column() -> None:
+    names = {"doc-b": "長い文書名" * 40}
+    reasons = await saved_reasons("C1 " * 50, candidates=(page("doc-b", "b1"),), names=names)
+    assert len(reasons[0].encode("utf-8")) <= WIKI_LINK_REASON_BYTES
+    assert reasons[0].startswith("「長い文書名") and reasons[0].endswith("…")
+
+
+@pytest.mark.asyncio
+async def test_built_links_name_the_other_unit_by_its_document_and_section(
+    link_setup: Any,
+) -> None:
+    jobs, store, _, settings, _ = link_setup
+    model = ReasonModel("C2 を前提にする")
+    jobs.model_factory = lambda settings: model
+    await jobs._build_links("doc-a", "owner-a", settings)
+    forward, reverse = store.saved
+    # 前向きの候補は C1 だけなので、C2 は作っていない記号としてそのまま残る。
+    assert {link[3] for link in forward["links"]} == {"C2 を前提にする"}
+    # 逆向きの C2 は文書 A の 2 つ目の単位。文書名は範囲の目録から取る。
+    assert reverse["links"] == [
+        ("doc-b-b1", "doc-a-a1", "exception", "「doc-a.pdf > 合成の章」 を前提にする")
+    ]
+    await jobs.shutdown()
