@@ -886,7 +886,7 @@ function runningState(kind: "initialize" | "recreate", startedMsAgo: number) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`外で始まった作成・更新も「作成・更新」を回し、開始と経過を隣に出し、終われば戻す（#5278・${theme}）`, { tag: "@responsive" }, async ({
+  test(`外で始まった作成・更新も「作成・更新」を回し、ボタンの行の直下に実行中と経過を出し、終われば戻す（#5278・${theme}）`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await useTheme(page, theme);
@@ -912,8 +912,22 @@ for (const theme of ["light", "dark"] as const) {
     await expect(initialize).toHaveAttribute("aria-disabled", "true");
     await expect(initialize).not.toHaveAttribute("disabled", /.*/);
     await expect(initialize).toHaveText("作成・更新");
+    // ボタンの行の直下の灰色の枠に、左に「作成・更新を実行中」、右に経過時間（mm:ss。backend の開始時刻から数える）。
     const progress = card.getByTestId("system-tables-operation-progress");
-    await expect(progress).toHaveText(/^作成・更新を実行中（開始 \d{2}:\d{2}・経過 1 分未満）$/);
+    await expect(progress).toHaveAttribute("data-processing-placement", "action");
+    await expect(progress).toHaveAttribute("data-processing-surface", "framed");
+    await expect(progress.locator("[data-processing-label]")).toHaveText("作成・更新を実行中");
+    await expect(card.getByTestId("system-tables-operation-progress-timer")).toHaveText(/^経過時間00:1\d$/);
+    await expect(progress).not.toContainText("開始");
+    const rowBox = await initialize.locator("xpath=..").boundingBox();
+    const progressBox = await progress.boundingBox();
+    expect(rowBox && progressBox && progressBox.y).toBeGreaterThanOrEqual((rowBox?.y ?? 0) + (rowBox?.height ?? 0));
+    if (testInfo.project.name !== "mobile") {
+      // desktop は処理の名前と経過時間を 1 行に並べる。
+      const labelBox = await progress.locator("[data-processing-label]").boundingBox();
+      const timerBox = await card.getByTestId("system-tables-operation-progress-timer").boundingBox();
+      expect(Math.abs((labelBox?.y ?? 0) + (labelBox?.height ?? 0) / 2 - ((timerBox?.y ?? 0) + (timerBox?.height ?? 0) / 2))).toBeLessThanOrEqual(4);
+    }
     await expect(card.getByText("操作中", { exact: true })).toBeVisible();
     // 回るのは「作成・更新」の 1 つだけ。
     await expect(card.locator("svg.animate-spin:visible")).toHaveCount(1);
@@ -922,11 +936,22 @@ for (const theme of ["light", "dark"] as const) {
     );
     expect(pageOverflow).toBeLessThanOrEqual(1);
     const width = testInfo.project.name === "mobile" ? 375 : 1280;
-    // 操作の行（「作成・更新」・開始と経過・「最新情報を取得」）。
-    await progress.locator("xpath=..").screenshot({
+    // 操作の行（「作成・更新」・「最新情報を取得」）と直下の実行中の表示を合わせて撮る。
+    // 画面の中に入れてから viewport の座標で撮る（boundingBox は viewport の座標）。
+    await progress.scrollIntoViewIfNeeded();
+    const shotRow = await initialize.locator("xpath=..").boundingBox();
+    const shotProgress = await progress.boundingBox();
+    const top = shotRow?.y ?? 0;
+    await page.screenshot({
       path: screenshotDir
         ? `${screenshotDir}/system-tables-running-${theme}-${width}.png`
         : testInfo.outputPath(`running-${theme}-${width}.png`),
+      clip: {
+        x: Math.min(shotRow?.x ?? 0, shotProgress?.x ?? 0),
+        y: top,
+        width: Math.max(shotRow?.width ?? 0, shotProgress?.width ?? 0),
+        height: (shotProgress?.y ?? 0) + (shotProgress?.height ?? 0) - top,
+      },
       animations: "disabled",
     });
 
@@ -972,7 +997,7 @@ test("押した「作成・更新」は 202 の後も操作中は回り続け、
   await expect.poll(() => posts.length).toBe(1);
   await expect(initialize).toHaveAttribute("aria-busy", "true");
   await expect(initialize).toBeFocused();
-  await expect(card.getByTestId("system-tables-operation-progress")).toContainText("作成・更新を実行中");
+  await expect(card.getByTestId("system-tables-operation-progress").locator("[data-processing-label]")).toHaveText("作成・更新を実行中");
   // loading の間の Enter は二重に送らない。
   await page.keyboard.press("Enter");
   await page.waitForTimeout(300);
@@ -1052,8 +1077,20 @@ for (const theme of ["light", "dark"] as const) {
     // 上段の数値のカードの行に、索引名と 3 つの値のカードとして並ぶ（見出し・説明・警告は無い。#5473）。
     const section = page.getByTestId("system-tables-vector-memory");
     await expect(section).toHaveText(
-      "RAG_CHUNKS_EMBEDDING_HNSW_IDX" + "57.1 MB / 32.0 MB / —" + "見込みの必要量 / 今の空き / 使用中" + "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。"
+      "RAG_CHUNKS_EMBEDDING_HNSW_IDX" + "57.1 MB / 32.0 MB / —" + "見込みの必要量 / 今の空き / 使用中" + "今の空きは目安です（Vector Pool は自動で増減）。"
     );
+    // 目安の注記は desktop で 1 行に収め、375px は切らずに折り返す（#5501）。
+    const note = section.getByText("今の空きは目安です（Vector Pool は自動で増減）。", { exact: true });
+    const noteLines = await note.evaluate((element) => {
+      const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
+      return Math.round(element.getBoundingClientRect().height / lineHeight);
+    });
+    if (testInfo.project.name === "mobile") {
+      expect(noteLines).toBeGreaterThanOrEqual(1);
+    } else {
+      expect(noteLines).toBe(1);
+    }
+    await expect(note).not.toHaveCSS("text-overflow", "ellipsis");
     const contrast = await minimumTextContrast(page, "[data-testid='system-tables-vector-memory']");
     expect(contrast.minimum.ratio, contrast.minimum.text).toBeGreaterThanOrEqual(4.5);
     const pageOverflow = await page.evaluate(
@@ -1070,6 +1107,80 @@ for (const theme of ["light", "dark"] as const) {
     });
   });
 }
+
+test("「作成・更新」を押した後の操作中も、vector memory のカードを出したままにする（#5501）", { tag: "@responsive" }, async ({
+  page,
+}) => {
+  const vectorMemory = {
+    available: true,
+    error_code: null,
+    pool_allocated_bytes: 128 * 1048576,
+    pool_used_bytes: 96 * 1048576,
+    pool_free_bytes: 32 * 1048576,
+    indexes: [
+      {
+        name: "RAG_CHUNKS_EMBEDDING_HNSW_IDX",
+        table_name: "RAG_CHUNK_EMBEDDINGS",
+        column_name: "EMBEDDING",
+        loaded: true,
+        estimated_bytes: 57.1 * 1048576,
+        used_bytes: 48 * 1048576,
+        error_code: null,
+      },
+    ],
+  };
+  await mockSettings(page, { initialStatus: "outdated" });
+  let started = false;
+  let finished = false;
+  await page.route("**/api/settings/database/system-tables", async (route) => {
+    const base = { ...systemTables(finished ? "ready" : "outdated"), vector_memory: vectorMemory };
+    await route.fulfill({
+      json: {
+        data: finished
+          ? { ...base, operation_state: { ...base.operation_state, schema_epoch: 4 } }
+          : started
+            ? { ...base, operation_state: runningState("initialize", 1_000) }
+            : base,
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  // 操作を始めた応答（202）も、状態の取得と同じく保持している見積もりを含む。
+  await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
+    started = true;
+    const base = systemTables("outdated");
+    await route.fulfill({
+      status: 202,
+      json: {
+        data: { ...base, operation_state: runningState("initialize", 0), vector_memory: vectorMemory },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#system-tables");
+  const section = page.getByTestId("system-tables-vector-memory");
+  const values = "57.1 MB / 32.0 MB / 48.0 MB";
+  await expect(section).toContainText(values);
+
+  const initialize = card.getByRole("button", { name: "作成・更新", exact: true });
+  await initialize.click();
+  await expect(card.getByTestId("system-tables-operation-progress").locator("[data-processing-label]")).toHaveText("作成・更新を実行中");
+  // 応答で状態を置き換えた直後も、polling の間も、カードは消えない。
+  await expect(section).toContainText(values);
+  await page.waitForTimeout(500);
+  await expect(section).toContainText(values);
+
+  finished = true;
+  await expect(initialize).not.toHaveAttribute("aria-busy", "true", { timeout: 10_000 });
+  await expect(section).toContainText(values);
+  const pageOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(pageOverflow).toBeLessThanOrEqual(1);
+});
 
 test("vector memory を取得できない環境では取れない値を「—」にする（#5278・#5473）", async ({ page }) => {
   await mockSettings(page, {

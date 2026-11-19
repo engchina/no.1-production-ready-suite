@@ -229,7 +229,7 @@
   - **`loading` は押したボタンだけが持つ（#819）。** `loading` を true にするのは、**そのボタンが始めた処理**の間だけ（Material・Carbon・Apple HIG と同じ。スピナーは利用者が操作した部品に出す）。同じ処理の間に使えない他のボタンは `disabled` にするだけで、スピナーを出さない。
     - 複数のボタンが 1 つの mutation・関数を共有するとき（「保存」と「情報を再取得」が同じ保存を呼ぶ、行ごとの同じ操作など）は、どのボタンが始めたかを `activeOperation` の state・`mutation.variables`（`isPending` のときだけ読む。完了後も前の値が残る）・行の id で区別する。共有の `busy` / `pending` を複数のボタンの `loading` に渡さない（`disabled` には渡してよい）。
     - 「最新情報を取得」などの再取得のボタンは、**押した取り直しの間だけ** `loading` にする。query の `isFetching` をそのまま渡すと、定期の取り直し（`refetchInterval`）・他の操作の後の invalidate・絞り込みやページの切り替え（`keepPreviousData`）でも回る。押した取り直しを state で持つ（共通の `useActionPending` など）。初回の読込でどちらがスピナーを出すかは [messaging.md §3.7](./messaging.md) に従う。
-    - **ボタンが表す操作そのものが進行中なら、誰が始めたかに関わらず `loading`（Spinner・押せない）にする（#5278）。** 押したこの画面の操作だけでなく、別のタブ・CLI・配備のスクリプトが始めた操作も、サーバーの状態が「進行中」の間は同じに見せる（Autonomous Database の「起動」と `STARTING`、「停止」と `STOPPING`、システムテーブルの「作成・更新」「すべて再作成」と lease の `running`）。ラベルは差し替えず、状態の文言（「〈操作〉を実行中（開始 hh:mm・経過 n 分）」など）はボタンの隣に出す。進行中の状態は polling で取り直し、終われば自動で元に戻す。止まった可能性がある状態（lease の期限切れなど）は回し続けず、案内の枠で知らせて再実行できるようにする。
+    - **ボタンが表す操作そのものが進行中なら、誰が始めたかに関わらず `loading`（Spinner・押せない）にする（#5278）。** 押したこの画面の操作だけでなく、別のタブ・CLI・配備のスクリプトが始めた操作も、サーバーの状態が「進行中」の間は同じに見せる（Autonomous Database の「起動」と `STARTING`、「停止」と `STOPPING`、システムテーブルの「作成・更新」「すべて再作成」と lease の `running`）。ラベルは差し替えず、状態の文言（「〈操作〉を実行中」と経過時間など）はボタンの行の直下に共有の `ProcessingIndicator`（`placement="action"`・`activityIcon="none"`）で出す（#5501）。進行中の状態は polling で取り直し、終われば自動で元に戻す。止まった可能性がある状態（lease の期限切れなど）は回し続けず、案内の枠で知らせて再実行できるようにする。
     - 例外: 進行の表示を別に持つ durable job（NL2SQL の `WorkflowProgressStrip` など）は、開始のボタンは送信の間だけ `loading`、job の間は `disabled` にし、スピナーは進行の表示が出す（[messaging.md §3.7](./messaging.md)）。
 - emoji をアイコンに使わない（`no-emoji-icons`）。
 

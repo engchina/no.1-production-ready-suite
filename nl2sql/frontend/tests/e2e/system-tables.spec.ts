@@ -976,7 +976,7 @@ function runningSystemTables(startedMsAgo: number, status: "running" | "stale" =
   };
 }
 
-test("外で始まった作成・更新も「作成・更新」を回し、開始と経過を出し、終われば戻す（#5278）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("外で始まった作成・更新も「作成・更新」を回し、ボタンの行の直下に実行中と経過を出し、終われば戻す（#5278）", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let finished = false;
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, finished ? finishedSystemTables(8) : runningSystemTables(5_000))
@@ -987,12 +987,13 @@ test("外で始まった作成・更新も「作成・更新」を回し、開�
   await expect(initialize).toHaveAttribute("aria-busy", "true");
   await expect(initialize).toHaveAttribute("aria-disabled", "true");
   await expect(initialize).toHaveText("作成・更新");
-  await expect(card.getByTestId("system-tables-operation-progress")).toHaveText(
-    /^作成・更新を実行中（開始 \d{2}:\d{2}・経過 1 分未満）$/
-  );
+  const progress = card.getByTestId("system-tables-operation-progress");
+  await expect(progress).toHaveAttribute("data-processing-placement", "action");
+  await expect(progress.locator("[data-processing-label]")).toHaveText("作成・更新を実行中");
+  await expect(card.getByTestId("system-tables-operation-progress-timer")).toHaveText(/^経過時間00:0\d$/);
   await expect(card.locator("svg.animate-spin:visible")).toHaveCount(1);
   await expectNoPageHorizontalOverflow(page);
-  await card.getByTestId("system-tables-operation-progress").locator("xpath=..").screenshot({
+  await progress.screenshot({
     path: testInfo.outputPath(`system-tables-running-${testInfo.project.name}.png`),
   });
 
@@ -1054,6 +1055,6 @@ test("HNSW 索引の vector memory の見込みの必要量・今の空き・使
   await page.goto("/settings/system-tables");
   const section = page.getByTestId("system-tables-vector-memory");
   // 上段の数値のカードの行に、索引名と 3 つの値のカードとして並ぶ（#5473）。
-  await expect(section).toHaveText("IX_NL2SQL_ONT_NODE_EMBED" + "12.0 MB / 48.0 MB / 10.0 MB" + "見込みの必要量 / 今の空き / 使用中" + "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。");
+  await expect(section).toHaveText("IX_NL2SQL_ONT_NODE_EMBED" + "12.0 MB / 48.0 MB / 10.0 MB" + "見込みの必要量 / 今の空き / 使用中" + "今の空きは目安です（Vector Pool は自動で増減）。");
   await expectNoPageHorizontalOverflow(page);
 });
