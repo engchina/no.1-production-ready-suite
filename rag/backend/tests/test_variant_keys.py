@@ -285,6 +285,7 @@ def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contr
     改名の hash 入力は維持し、解析の内容が変わった場合は別の抽出・Chunk 集合にする。
     同梱の言語資源の取込の項目を消すと取込の hash が変わるので、期待値も変わる（#4784）。
     画像の説明の見出しに原ファイルの図形のグループと項目を足した（#5359）。
+    文書構造索引の削除で読まれなくなった取込の項目を消した（#5515）。
     """
     # 改名時の明示設定で比較し、その後の既定値変更から独立させる。
     base = Settings(
@@ -296,9 +297,9 @@ def test_chunk_set_id_uses_legacy_chunking_names_with_current_docling_text_contr
     )
     structure = base.model_copy(update={"rag_chunking_strategy": "structure_aware"})
 
-    assert compute_chunk_set_id(SRC, small_to_big) == "cs_cd4f0590276432be"
-    assert compute_chunk_set_id(SRC, tuned) == "cs_a0fd4e9f07816397"
-    assert compute_chunk_set_id(SRC, structure) == "cs_c5527857031d7344"
+    assert compute_chunk_set_id(SRC, small_to_big) == "cs_6f1ffb0a22a87a71"
+    assert compute_chunk_set_id(SRC, tuned) == "cs_cec24ccad52ecc97"
+    assert compute_chunk_set_id(SRC, structure) == "cs_39c88724faeb6abd"
 
 
 def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:
