@@ -61,17 +61,24 @@ def test_recorded_judge_outputs_replay_to_expected_scores(case):
     assert result["correctness_reason"] == case["recorded_reason"]
 
 
-def test_inputs_number_standard_points_and_answer_without_citations_or_merging():
-    """標準回答・要点・本文を番号つきの単位で渡す。要点は標準回答に結合せず、出典の行は除く。"""
+def test_inputs_number_standard_points_and_attach_citations_to_their_passage():
+    """標準回答・要点・本文を番号つきの単位で渡す。要点は標準回答に結合しない。出典の行は本文の段落にせず、
+    直前の段落の sources に添える（網羅の要点が根拠の場所に触れるときに読む）。"""
     inputs = judge_inputs(_payload(answer_points=["項目Aの値", "確かめる条件"]))
     assert inputs["standard_answer"] == [{"id": "S1", "text": "項目Aは5。"}, {"id": "S2", "text": "項目Bは8。"}]
     assert inputs["points"] == [{"id": "P1", "text": "項目Aの値"}, {"id": "P2", "text": "確かめる条件"}]
     (response,) = inputs["actual_responses"]
     assert response["answer"] == [
-        {"id": "A1", "text": "項目Aは5です。"},
+        {"id": "A1", "text": "項目Aは5です。", "sources": ["根拠：synthetic.pdf p.1"]},
         {"id": "A2", "text": "項目Bは資料で確認できませんでした。"},
     ]
-    assert "synthetic.pdf" not in json.dumps(inputs, ensure_ascii=False)
+
+
+def test_citation_lines_before_any_passage_are_not_attached():
+    """先頭の出典の行は添える段落が無いので渡さない。段落の番号は出典の行の有無で変わらない。"""
+    inputs = judge_inputs(_payload(answer_text="根拠：synthetic.pdf p.1\n項目Aは5です。\n根拠：synthetic.pdf p.2"))
+    (response,) = inputs["actual_responses"]
+    assert response["answer"] == [{"id": "A1", "text": "項目Aは5です。", "sources": ["根拠：synthetic.pdf p.2"]}]
 
 
 def test_points_default_to_standard_sentences_and_answer_ids_run_across_turns():

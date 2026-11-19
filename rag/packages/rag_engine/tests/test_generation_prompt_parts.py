@@ -48,7 +48,7 @@ def test_only_marks_present_on_the_evidence_are_explained() -> None:
 def test_word_based_evidence_tags_are_not_part_of_the_reading_rules() -> None:
     """語の一致で付ける印はやめた。形から分かる読み方だけが残る（#4668）。"""
     keys = grounded.reading_line_keys(grounded.EVIDENCE_READING_PROMPT)
-    assert keys == ["image_generated", "補助情報", "画面の値", "表の値", "回答候補"]
+    assert keys == ["image_generated", "補助情報", "wiki_relations", "画面の値", "表の値", "回答候補"]
     assert not any(tag in " ".join(keys) for tag in ("definition", "operation_entry", "completion", "constraint", "multi_condition"))
     assert "aggregate_only" not in " ".join(keys)
     tagged = grounded.tag_spans(
@@ -83,6 +83,22 @@ def test_context_note_is_explained_only_when_present() -> None:
     assert "- 補助情報: " not in reading_part([span()])
     noted = span(answer_context="文書種別: 合成の説明書")
     assert "- 補助情報: " in reading_part([noted])
+
+
+def test_wiki_relations_are_explained_only_when_a_source_carries_them() -> None:
+    """原文の間の関係（#5500）の読み方は、出典にその項目があるときだけ 1 行渡す。判断の規則は足さない。"""
+    relation = {"relation": "exception", "role_of": "this", "document_name": "合成B.md", "section_path": ["通知"]}
+    plain = span(source_context={"document_name": "synthetic.pdf", "section_path": ["合成の説明"]})
+    assert "- wiki_relations: " not in reading_part([plain])
+    for context in (
+        {"document_name": "synthetic.pdf", "wiki_relations": [relation]},
+        {"document_name": "synthetic.pdf", "children": [{"source_id": "c1", "wiki_relations": [relation]}]},
+    ):
+        notes = reading_part([plain, span(source_context=context)])
+        assert notes.count("- wiki_relations: ") == 1 and "- 補助情報: " in notes
+    line = next(line for line in grounded.EVIDENCE_READING_PROMPT.splitlines() if line.startswith("- wiki_relations: "))
+    assert "優先" not in line  # どちらを適用するかの判断はこの行に書かない
+    assert "wiki_relations" not in grounded.generation_system_prompt()
 
 
 def test_screen_values_are_explained_for_image_evidence_or_attached_images() -> None:

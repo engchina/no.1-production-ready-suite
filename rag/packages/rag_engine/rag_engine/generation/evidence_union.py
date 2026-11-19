@@ -28,21 +28,45 @@ def _with_identities(record: Any, identities: dict[tuple[str, str], Any]) -> Any
     return replace(record, metadata={**record.metadata, "source_identities": found})
 
 
+def _with_relations(record: Any, relations: dict[tuple[str, str, str], list[Any]]) -> Any:
+    """独立の経路が示した原文の間の関係（#5500）を、同じ原文（位置・保存版）を含む根拠にも付ける。"""
+    found = list(record.metadata.get("wiki_relations") or ())
+    for chunk_id in (record.chunk_id, *record.child_chunk_ids):
+        for relation in relations.get(_position(record, chunk_id), ()) if chunk_id else ():
+            if relation not in found:
+                found.append(relation)
+    if found == list(record.metadata.get("wiki_relations") or ()):
+        return record
+    return replace(record, metadata={**record.metadata, "wiki_relations": found})
+
+
 def _identified(context: AnswerContext, additional: Sequence[AnswerRecord]) -> AnswerContext:
-    """版の属性は文書の属性。重なりで足さない原文の属性を、通常検索が拾った同じ文書の根拠へ写す。"""
+    """重なりで足さない原文の属性を、通常検索が拾った根拠へ写す。
+
+    版の属性は文書の属性なので同じ文書・保存版の根拠へ、原文の間の関係は同じ原文を含む根拠へ写す。
+    """
     identities = {
         _position(record, "")[:2]: record.metadata["source_identities"] for record in additional if record.metadata.get("source_identities")
     }
-    if not identities:
+    relations = {
+        _position(record, record.chunk_id): record.metadata["wiki_relations"]
+        for record in additional
+        if record.chunk_id and record.metadata.get("wiki_relations")
+    }
+    if not identities and not relations:
         return context
+
+    def attach(record: Any) -> Any:
+        return _with_relations(_with_identities(record, identities), relations)
+
     return replace(
         context,
-        records=[_with_identities(record, identities) for record in context.records],
+        records=[attach(record) for record in context.records],
         evidence_tree=tuple(
             replace(
                 parent,
-                record=_with_identities(parent.record, identities),
-                children=tuple(replace(child, record=_with_identities(child.record, identities)) for child in parent.children),
+                record=attach(parent.record),
+                children=tuple(replace(child, record=attach(child.record)) for child in parent.children),
             )
             for parent in context.evidence_tree
         ),
