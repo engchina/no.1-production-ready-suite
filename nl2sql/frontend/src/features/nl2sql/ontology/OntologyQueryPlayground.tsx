@@ -342,8 +342,10 @@ function RelationshipCard({
   return (
     <button
       type="button"
-      className={`grid w-full cursor-pointer gap-2 rounded-md border bg-surface-sunken px-3 py-2 text-left transition-colors motion-reduce:transition-none ${
-        selected ? "border-accent-emphasis ring-2 ring-accent-emphasis" : "border-border hover:border-accent-emphasis"
+      aria-pressed={selected}
+      data-surface-tint={selected ? "accent" : undefined}
+      className={`grid w-full cursor-pointer gap-2 rounded-md border px-3 py-2 text-left transition-colors motion-reduce:transition-none ${
+        selected ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface-sunken hover:border-accent-emphasis"
       }`}
       onClick={() => onSelect?.(row.edge_id)}
       data-testid={`ontology-inspector-relationship-${row.edge_id}`}

@@ -3,6 +3,7 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { findClippedPlaceholders, jumpToPage, measureHorizontalOverflow } from "../../../../platform/packages/ui/e2e/layout-checks";
+import { FONT_MONO_FAMILY } from "../../../../platform/packages/ui/e2e/font-checks";
 
 const basePath = "/api/nl2sql/quality-evaluations";
 
@@ -674,6 +675,10 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   await analysisToggle.click();
   await expect.poll(() => analysisChevron.evaluate((icon) => getComputedStyle(icon).rotate)).toBe("0deg");
   const tableBox = await visibleBox(page.getByTestId("quality-evaluation-results-table"));
+  // 評価ケースの ID は等幅（#5522）。
+  await expect(
+    page.getByTestId("quality-evaluation-results-table").getByText("CASE-001", { exact: true }).first()
+  ).toHaveCSS("font-family", FONT_MONO_FAMILY);
   const analysisCellBox = await visibleBox(analysisToggle.locator("xpath=ancestor::td[1]"));
   const analysisToggleBox = await visibleBox(analysisToggle);
   const analysisBox = await visibleBox(
@@ -1223,6 +1228,8 @@ test("mobile constrains result cards to an internal vertical scroll region", { t
     "結果明細一覧。必要に応じて縦方向または横方向にスクロールできます。"
   );
   await expect(cardRegion.locator("article")).toHaveCount(8);
+  // 評価ケースの ID は等幅（#5522）。
+  await expect(cardRegion.locator("article h3").first()).toHaveCSS("font-family", FONT_MONO_FAMILY);
   const cardMetrics = await cardRegion.evaluate((node) => {
     node.scrollTop = node.scrollHeight;
     const computed = window.getComputedStyle(node);

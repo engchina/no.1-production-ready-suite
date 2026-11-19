@@ -161,7 +161,7 @@ export function SelectAiFeedbackAddPanel({
             error={contentError || undefined}
             placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
           />
-          <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <FormStatus
               tone="danger"
               message={message}
@@ -172,7 +172,7 @@ export function SelectAiFeedbackAddPanel({
             <div
               role="group"
               aria-label={t("nl2sql.selectAiFeedbackAdd.rating")}
-              className="flex flex-wrap items-center gap-3"
+              className="flex flex-wrap items-center gap-2"
             >
               <Button
                 type="button"

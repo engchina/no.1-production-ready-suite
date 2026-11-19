@@ -144,7 +144,9 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
         placement="job"
         testId="synthetic-run-processing"
       />}
-      <p className="break-all text-sm" data-testid="synthetic-run-reference">{t("syntheticRun.reference", { id: run.run_id })}</p>
+      <p className="break-all text-sm" data-testid="synthetic-run-reference">
+        {t("syntheticRun.referenceLabel")}: <span className="font-mono">{run.run_id}</span>
+      </p>
       <p className="text-sm text-fg-muted" data-testid="synthetic-run-checked">
         {t("syntheticRun.checkedAt", { time: formatDateTime(run.checked_at) })}
       </p>

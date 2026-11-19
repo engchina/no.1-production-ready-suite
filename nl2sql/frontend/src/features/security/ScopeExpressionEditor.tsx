@@ -753,7 +753,7 @@ function RelatedEditor({
               <Button
                 iconOnly
                 variant="ghost"
-                size="sm"
+                size="md"
                 type="button"
                 disabled={
                   node.relation_source !== "MANUAL" ||

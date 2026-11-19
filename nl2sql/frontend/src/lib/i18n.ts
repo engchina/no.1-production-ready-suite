@@ -3298,7 +3298,7 @@ const nl2sqlJa = {
   "syntheticRun.targetCount": "対象テーブル: {count} 件",
   "syntheticRun.unverified": "未確認",
   "syntheticRun.finishedAt": "処理終了: {time}",
-  "syntheticRun.reference": "生成番号: {id}",
+  "syntheticRun.referenceLabel": "生成番号",
   "syntheticRun.refresh": "生成状況の最新情報を取得",
   "syntheticRun.refreshUnchanged": "最新の状況を取得しました（{time}）。生成状況に変更はありません。",
   "syntheticRun.refreshUpdated": "最新の状況を取得しました（{time}）。生成状況を更新しました。",

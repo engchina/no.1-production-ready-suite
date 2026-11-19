@@ -36,14 +36,6 @@ export const ja = {
   "settings.testResult.troubleshooting": "確認ポイント",
   "settings.testResult.errorType": "エラー種別",
 
-  "settings.preview.env.title": ".env プレビュー",
-  "settings.preview.json.title": "JSON プレビュー",
-  "settings.preview.copy": "コピー",
-  "settings.preview.actions": "{label} 操作",
-  "settings.preview.env.copy": ".env をコピー",
-  "settings.preview.json.copy": "JSON をコピー",
-  "settings.preview.copy.failed": "コピーできませんでした",
-
   // ページタイトルは AGENTS.md 準拠の正式名を維持し、サイドバー表示のみ短縮形(*.sidebar)。
   "nav.settingsOci": "OCI 認証設定",
   "nav.settingsOci.sidebar": "OCI 認証",

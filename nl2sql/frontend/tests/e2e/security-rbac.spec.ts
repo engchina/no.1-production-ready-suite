@@ -6743,6 +6743,12 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   await related.getByRole("button", { name: "関連キーを追加", exact: true }).click();
   await chooseSelectFieldOption(related.getByLabel("対象テーブルの列").nth(1), "DISPLAY_NAME");
   await chooseSelectFieldOption(related.getByLabel("関連テーブルの列").nth(1), "TENANT");
+  // 関連キーの行の削除は、同じ行の列の選択欄と同じ高さ（md）にそろえる（#5522）。
+  const [keyFieldBox, removeKeyBox] = await Promise.all([
+    related.getByLabel("対象テーブルの列").nth(1).boundingBox(),
+    related.getByRole("button", { name: "関連キーを削除", exact: true }).nth(1).boundingBox(),
+  ]);
+  expect(Math.abs(keyFieldBox!.height - removeKeyBox!.height)).toBeLessThanOrEqual(0.5);
   await chooseSelectFieldOption(related.getByRole("button", { name: /^列 / }), "LOCATION");
   await related.getByLabel("値", { exact: true }).fill("東京");
   await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();

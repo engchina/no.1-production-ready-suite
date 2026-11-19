@@ -221,7 +221,7 @@ export function FileDropzone({
           )}
         >
           <span
-            data-surface-tint="accent"
+            data-surface-tint={hasSelection || isDragActive ? "accent" : "neutral"}
             className={cn(
               "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
               hasSelection || isDragActive
