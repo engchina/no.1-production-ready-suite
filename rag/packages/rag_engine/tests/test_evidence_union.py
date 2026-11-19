@@ -6,7 +6,7 @@ from rag_engine.generation.evidence_union import union_sources
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 
 
-def record(chunk_id, *, children=(), version="cs", text=None, document="doc", identities=None):
+def record(chunk_id, *, children=(), version="cs", text=None, document="doc", identities=None, relations=None):
     return AnswerRecord(
         id=chunk_id,
         engine="e",
@@ -22,6 +22,7 @@ def record(chunk_id, *, children=(), version="cs", text=None, document="doc", id
             "document_id": document,
             "chunk_set_id": version,
             **({"source_identities": identities} if identities else {}),
+            **({"wiki_relations": relations} if relations else {}),
         },
     )
 
@@ -84,3 +85,31 @@ def test_document_identities_reach_overlapping_sources_of_the_same_document():
     assert merged.evidence_tree[0].record.metadata["source_identities"] == identity
     assert merged.evidence_tree[0].children[0].record.metadata["source_identities"] == identity
     assert "source_identities" not in merged.records[1].metadata  # 別の文書には付けない
+
+
+def test_wiki_relations_reach_the_sources_that_already_hold_the_same_original():
+    # 重なりで足さない原文の関係（#5500）は、同じ位置・保存版の原文を含む根拠（親の子 ID・子の根拠）に写す。
+    exception = {"relation": "exception", "role_of": "this", "document_name": "合成B.md", "section_path": ["通知"]}
+    reference = {"relation": "reference", "role_of": "other", "document_name": "合成C.md", "section_path": ["別表"]}
+    context = native_context()
+    merged, added = union_sources(
+        context,
+        [
+            record("c1", relations=[exception]),
+            record("c2", relations=[exception, reference]),
+            record("c3", relations=[reference]),
+            record("c1", version="old", relations=[reference]),
+        ],
+    )
+    assert added == 1  # 別の保存版だけを足す
+    assert merged.records[0].metadata["wiki_relations"] == [exception, reference]  # 親は子 c1・c2 を含む
+    assert merged.evidence_tree[0].record.metadata["wiki_relations"] == [exception, reference]
+    assert merged.evidence_tree[0].children[0].record.metadata["wiki_relations"] == [reference]
+    assert merged.records[1].metadata["wiki_relations"] == [reference]  # 足した原文は自分の関係のまま
+
+
+def test_sources_without_wiki_relations_are_left_unchanged():
+    context = native_context()
+    merged, _ = union_sources(context, [record("c1")])
+    assert all("wiki_relations" not in r.metadata for r in merged.records)
+    assert merged.evidence_tree[0] == context.evidence_tree[0]

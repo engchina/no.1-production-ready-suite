@@ -186,3 +186,39 @@ def test_document_version_attributes_reach_the_final_prompt_without_changing_the
     assert span["text"] == base.text
     assert json.dumps([identity], ensure_ascii=False) in grounded._source_note(span)
     assert "R-2" in prompt
+
+
+def test_wiki_relations_reach_the_final_prompt_without_changing_the_quote():
+    """Wiki の辿りで見た原文の間の関係（#5500）は、引用の本文を変えずに出典の補助情報として届き、読み方が付く。"""
+    relation = {"relation": "exception", "role_of": "this", "document_name": "document-b.txt", "section_path": ["規則", "第 3 条"]}
+    base = make_record(1, ["通知"])
+    record = replace(base, metadata={**base.metadata, "wiki_relations": [relation]})
+    ctx = AnswerContext(records=[record], text=record.text)
+    spans = _grounded_spans("説明", ctx, (), None)
+    prompt = _grounded_prompt("説明", spans, ctx, (), None, None)
+    span = next(s for s in spans if s["text"] == record.text)
+    assert span["text"] == base.text
+    assert span["source_context"]["wiki_relations"] == [relation]
+    assert json.dumps([relation], ensure_ascii=False) in grounded._source_note(span)
+    assert "- wiki_relations: " in prompt and '"role_of": "this"' in prompt
+
+
+def test_children_do_not_repeat_the_wiki_relations_of_their_block():
+    from rag_engine.retrieval.source_context import prompt_source_context
+
+    relation = {"relation": "exception", "role_of": "this", "document_name": "document-b.txt", "section_path": ["規則"]}
+    other = {"relation": "reference", "role_of": "other", "document_name": "document-c.txt", "section_path": ["別表"]}
+    context = {
+        "document_name": "document-a.txt",
+        "section_path": ["通知"],
+        "wiki_relations": [relation],
+        "children": [
+            {"source_id": "c1", "document_name": "document-a.txt", "section_path": ["通知"], "wiki_relations": [relation]},
+            {"source_id": "c2", "document_name": "document-a.txt", "section_path": ["通知"], "wiki_relations": [other]},
+        ],
+    }
+    assert prompt_source_context(context, document_name="document-a.txt") == {
+        "section_path": ["通知"],
+        "wiki_relations": [relation],
+        "children": [{"wiki_relations": [other]}],
+    }

@@ -146,6 +146,10 @@ EVIDENCE_READING_PROMPT = (
     "### 根拠の読み方（今回の根拠に現れるもの）\n"
     "- image_generated: 画像からの生成説明・OCR（`origin=image_extraction` と同じ扱い）。\n"
     "- 補助情報: 根拠の見出しの行の下の補助情報の囲みは文書の属性を示し、本文ではない。読んでよいが原文の出典にはしない。\n"
+    "- wiki_relations: 補助情報の wiki_relations は、資料の案内がこの根拠の原文と別の原文（document_name・section_path）を結んだ関係である。"
+    "relation は役割（prerequisite=前提、continuation=続く手順、warning=警告、exception=例外、reference=参照先、expected_result=完了の条件）で、"
+    "role_of=this はこの原文が相手に対して、role_of=other は相手がこの原文に対してその役割を持つ。"
+    "関係の内容は両方の原文の記載で確かめる。\n"
     "- 画面の値: 画面キャプチャ・Vision 生成説明に見える値（年月・金額・氏名・番号・コード・選択状態）は文書の例示で、今回の実データではない。"
     "表示されているだけで既定値・必須値・許容範囲と断定しない。値に触れるときは「画面例では〇〇」と書く。"
     "実際の値として案内できるのは、本文が「〜と入力します」のように指定している場合か、利用者が質問で明示した場合だけ。"
@@ -2459,6 +2463,13 @@ def evidence_reading_rules(spans: Sequence[dict[str, Any]], *, attached_images: 
     keys: set[str] = {str(tag) for span in spans for tag in span.get("tags", ())}
     if fold_width(CONTEXT_NOTE_BEGIN) in evidence_block_text(spans):
         keys.add("補助情報")
+    if any(
+        context.get("wiki_relations")
+        for span in spans
+        for context in (span.get("source_context") or {}, *((span.get("source_context") or {}).get("children") or ()))
+        if isinstance(context, dict)
+    ):
+        keys.add("wiki_relations")
     if attached_images or "image_generated" in keys:
         keys.add("画面の値")
     if any(has_table_structure(str(span.get("text") or "")) for span in spans):
