@@ -352,8 +352,8 @@ function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; truste
               <McpToolApprovalBadge tool={tool} trusted={trusted} />
             </div>
             <p className="mt-1 text-sm leading-6 text-fg-muted">{tool.description || "-"}</p>
-            <dl className="mt-3 grid grid-cols-1 gap-2 text-xs text-fg-muted">
-              <McpToolMeta label={t("settings.mcpConnections.functionName")} value={tool.function_name ?? "-"} />
+            <dl className="mt-3 grid grid-cols-1 gap-2 text-xs">
+              <McpToolMeta label={t("settings.mcpConnections.functionName")} value={tool.function_name ?? "-"} mono={Boolean(tool.function_name)} />
               <McpToolMeta label={t("settings.mcpDiscovery.inputSchema")} value={schemaSummary(tool.input_schema)} />
             </dl>
           </div>
@@ -374,11 +374,12 @@ function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; truste
   );
 }
 
-function McpToolMeta({ label, value }: { label: string; value: string }) {
+function McpToolMeta({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  // 他の <dl> と同じく、見出し（dt）は副次の色・値（dd）は本文の色（#5522）。
   return (
     <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-2">
-      <dt className="font-medium text-fg">{label}</dt>
-      <dd className="min-w-0 break-words">{value}</dd>
+      <dt className="text-fg-muted">{label}</dt>
+      <dd className={`min-w-0 break-words text-fg${mono ? " font-mono" : ""}`}>{value}</dd>
     </div>
   );
 }
@@ -1113,7 +1114,7 @@ function McpConnectionTable({
       key: "base_url",
       header: t("settings.mcpConnections.url"),
       className: "max-w-xs break-all text-fg-muted",
-      render: (connection) => connection.base_url || "-",
+      render: (connection) => (connection.base_url ? <span className="font-mono">{connection.base_url}</span> : "-"),
     },
     {
       key: "auth_mode",

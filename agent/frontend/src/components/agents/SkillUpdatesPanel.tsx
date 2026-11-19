@@ -198,7 +198,7 @@ export function SkillUpdatesPanel({
                         checked={!excluded.has(agent.id)}
                         onChange={(event) => setSelected(agent.id, event.target.checked)}
                         aria-describedby={helperId}
-                        className="mt-0.5 h-4 w-4 shrink-0"
+                        className="mt-0.5 h-4 w-4 shrink-0 accent-accent-emphasis"
                       />
                       <span className="min-w-0">
                         <span className="block font-medium">{agent.name}</span>

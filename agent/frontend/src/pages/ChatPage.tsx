@@ -1277,7 +1277,7 @@ function RunChatTurn({
                 <p className="break-words">
                   {t("chat.approval.message", { tool: approval.tool_call.name })}
                 </p>
-                <pre className="max-h-40 overflow-auto rounded-sm bg-surface-sunken p-2 text-xs">
+                <pre className="max-h-40 overflow-auto rounded-md border border-border bg-surface-sunken p-2 text-xs">
                   {JSON.stringify(approval.tool_call.arguments ?? {}, null, 2)}
                 </pre>
                 {canDecide ? (

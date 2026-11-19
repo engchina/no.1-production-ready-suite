@@ -66,6 +66,9 @@ for (const viewport of VIEWPORTS) {
       await page.locator("#automation-goal").fill("先週の不良率を確認し、基準を超えたラインを報告してください。");
       await chooseSelectFieldOption(page.locator("#automation-frequency"), "weekly");
       await page.getByRole("checkbox", { name: "水" }).check();
+      // 淡い面の印（data-surface-tint）は選んだ曜日だけ（未選択は白い面。#5522）。
+      await expect(page.locator("label").filter({ has: page.getByRole("checkbox", { name: "水" }) })).toHaveAttribute("data-surface-tint", "accent");
+      await expect(page.locator("label").filter({ has: page.getByRole("checkbox", { name: "火" }) })).not.toHaveAttribute("data-surface-tint");
       await page.getByLabel("時刻").fill("08:30");
       await page.screenshot({ path: testInfo.outputPath(`automation-editor-${viewport.name}-${theme}.png`), fullPage: true });
       await page.getByRole("button", { name: "作成", exact: true }).first().click();
@@ -363,6 +366,8 @@ test("詳細の読み取り失敗を対象なしと見せず、再試行で回�
   await page.goto("/automations?id=synthetic-detail");
   const panel = page.getByTestId("automationspage-detail-load-failed");
   await expect(panel).toBeVisible();
+  // 失敗の間も画面の見出し（PageHeader）を保つ（#5522）。
+  await expect(page.getByRole("heading", { name: "自動実行", level: 1 })).toBeVisible();
   await expect(page.getByText("見つかりません", { exact: false })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("detail-read-failure.png") });
   failure.recover();

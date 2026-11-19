@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ApiErrorState, Disclosure, ListSkeleton, StatusBadge, TimedLoadingState } from "@production-ready/ui";
+import { ApiErrorState, Disclosure, ListSkeleton, StatusBadge, TimedLoadingState, surfaceTintFor } from "@production-ready/ui";
 
 import { agentApi, type SkillDiffLine, type SkillUpdateDetail } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -66,7 +66,11 @@ function SkillUpdateItem({ item }: { item: SkillUpdateDetail }) {
             aria-label={t("agent.skillUpdates.instructionsLabel", { name: item.current?.name ?? item.pinned.name })}
           >
             {item.instructions_diff.map((line, index) => (
-              <li key={`${index}-${line.kind}`} className={`flex gap-2 px-2 ${LINE_CLASS[line.kind]}`}>
+              <li
+                key={`${index}-${line.kind}`}
+                className={`flex gap-2 px-2 ${LINE_CLASS[line.kind]}`}
+                data-surface-tint={surfaceTintFor(LINE_CLASS[line.kind])}
+              >
                 <span aria-hidden className="w-3 shrink-0 select-none">
                   {LINE_MARK[line.kind]}
                 </span>

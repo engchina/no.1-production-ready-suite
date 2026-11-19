@@ -799,6 +799,8 @@ test("詳細の読み取り失敗を対象なしと見せず、再試行で回�
   await page.goto("/evaluation?id=synthetic-detail");
   const panel = page.getByTestId("evaluationpage-detail-load-failed");
   await expect(panel).toBeVisible();
+  // 失敗の間も画面の見出し（PageHeader）を保つ（#5522）。
+  await expect(page.getByRole("heading", { name: "品質評価", level: 1 })).toBeVisible();
   await expect(page.getByText("見つかりません", { exact: false })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("detail-read-failure.png") });
   failure.recover();
