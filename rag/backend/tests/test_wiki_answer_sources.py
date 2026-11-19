@@ -94,6 +94,7 @@ async def test_wiki_failure_is_recorded_and_normal_search_continues() -> None:
     assert state.wiki_trace == {
         "status": "degraded",
         "failure_code": "RuntimeError",
+        "failure_reason": "unknown",
         "stage_seconds": {"Wiki: 目録の読み込み": 0.25},
     }
     assert [step["kind"] for step in state.degraded_steps()] == ["wiki"]
@@ -116,6 +117,7 @@ async def test_wiki_is_not_started_when_the_deadline_only_leaves_the_generation(
     stored = await engine(retriever)._wiki_sources(request(), state)
     assert stored == [] and retriever.calls == []
     assert state.wiki_trace["failure_code"] == "TimeoutError"
+    assert state.wiki_trace["failure_reason"] == "timeout"
 
 
 def test_wiki_runs_alongside_the_answer_flow_and_is_awaited_or_cancelled() -> None:
