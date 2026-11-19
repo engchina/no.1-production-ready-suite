@@ -1140,7 +1140,7 @@ def build_adb_hybrid_answer_context(
         )
 
     candidate_ids = [record.chunk_uid for record in ranked_children]
-    with _execution_step("再ランキング候補の選択", "既存の順位を保ち、重複と、rerank に入れない経路（検索拡張）の候補を除きます。") as step:
+    with _execution_step("再ランキング候補の選択", "既存の順位を保ち、同じ原文の重複を除きます。") as step:
         step.input({"候補": candidate_snapshot(ranked_children)})
         ranked_children, candidate_trace = select_candidates(ranked_children)
         record_retrieval_stage({"stage": "rerank_input", **candidate_trace})

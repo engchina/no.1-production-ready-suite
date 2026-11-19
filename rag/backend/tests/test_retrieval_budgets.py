@@ -159,10 +159,3 @@ def test_text_search_limits_reach_the_engine_and_match_env_example(tmp_path: Pat
         TEXT_SEARCH_MAX_TOKENS_RANGE[1],
         TEXT_SEARCH_MAX_QUERY_CHARS_RANGE[0],
     )
-
-
-def test_search_expansions_are_not_rerank_candidates() -> None:
-    """rerank の入力は検索の候補と添付だけ。検索拡張は rerank の候補に入らない(#5162)。"""
-    from rag_engine.retrieval.candidate_budget import RERANK_STAGES
-
-    assert {"fusion", "attachment"} == RERANK_STAGES

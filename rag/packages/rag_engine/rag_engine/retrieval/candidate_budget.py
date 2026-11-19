@@ -1,11 +1,11 @@
-"""rerank の入力の選択（同一成果物の同じ原文の重複除去と、rerank に入れない経路の除外）。関連度は再判定しない。"""
+"""rerank の入力の選択（同一成果物の同じ原文の重複除去）。関連度は再判定しない。
+
+検索拡張（参照・目次・実体）は rerank と ``top_k`` の切りの後に足すので、ここには届かない（#5389・#5507）。
+件数は検索経路ごとの取得件数（backend の RAG_RETRIEVAL_QUERY_LIMIT）で決まり、ここでは切らない（#5443）。
+"""
 
 from collections.abc import Sequence
 from typing import Any
-
-# rerank に入れる経路。検索拡張（参照・実体・構造・目録）の chunk は rerank の候補に入らない（#5162）。
-# 件数は検索経路ごとの取得件数（backend の RAG_RETRIEVAL_QUERY_LIMIT）で決まり、ここでは切らない（#5443）。
-RERANK_STAGES = frozenset({"fusion", "attachment"})
 
 
 def record_id(record: Any) -> str:
@@ -24,7 +24,7 @@ def artifact_key(record: Any) -> tuple[str, ...]:
 
 
 def select_candidates(records: Sequence[Any]) -> tuple[list[Any], dict[str, Any]]:
-    """既存の順位を保ち、同じ成果物の同文だけを統合し、rerank に入れない経路の候補を除く。
+    """既存の順位を保ち、同じ成果物の同文だけを統合する。
 
     別文書・版・レシピの同文は統合しない。範囲の異なる部分一致も、同じ事実との推測では消さない。
     """
@@ -32,7 +32,6 @@ def select_candidates(records: Sequence[Any]) -> tuple[list[Any], dict[str, Any]
     originals: dict[tuple[Any, ...], str] = {}
     selected: list[Any] = []
     excluded: list[dict[str, str]] = []
-    admitted: dict[str, int] = {}
     for record in records:
         uid = record_id(record)
         text = str(record.text or "").strip()
@@ -48,15 +47,9 @@ def select_candidates(records: Sequence[Any]) -> tuple[list[Any], dict[str, Any]
         seen_ids.add(identity)
         if text:
             originals[key] = uid
-        stage = str(record.metadata.get("retrieval_admission_stage") or "fusion")
-        if stage not in RERANK_STAGES:
-            excluded.append({"id": uid, "reason": "not_rerank_stage", "stage": stage})
-            continue
         selected.append(record)
-        admitted[stage] = admitted.get(stage, 0) + 1
     return selected, {
         "input_count": len(records),
-        "admitted": admitted,
         "selected_ids": [record_id(record) for record in selected],
         "excluded": excluded,
     }
