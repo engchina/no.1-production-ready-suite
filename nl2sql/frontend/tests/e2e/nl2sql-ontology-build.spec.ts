@@ -3822,6 +3822,8 @@ test("公開前の確認は graph の構成と、初回は差分の 1 行だけ�
   for (const [label, value] of [["オブジェクト型（Object Type）", "3"], ["リンク型（Link Type）", "1"], ["プロパティ（Property）", "3"]]) {
     await expect(graph.getByText(label, { exact: true }).first().locator("xpath=following-sibling::dd")).toHaveText(value);
   }
+  // 件数は規定の文字サイズの段（20px）。仕様外の 18px を使わない（#5522）。
+  await expect(graph.locator("dd").first()).toHaveCSS("font-size", "20px");
   await expect(graph.getByText("ADMIN.V_EMP_DEPT", { exact: true })).toBeVisible();
   const objects = graph.getByRole("list", { name: "オブジェクト型の一覧", exact: true });
   await expect(objects.locator(":scope > li")).toHaveCount(3);

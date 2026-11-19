@@ -3,7 +3,6 @@ import {
   Check,
   Code2,
   Download,
-  RefreshCw,
   Table2,
   Trash2,
   X,
@@ -57,7 +56,6 @@ import { listCountLabels, listToolbarLabels } from "@/lib/pagination-labels";
 import { FIXED_SPLIT_STORAGE_PREFIX, LIST_DETAIL_STORAGE_PREFIX } from "@/lib/ui-store";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
-import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -144,15 +142,6 @@ export interface DbObjectDetailLabels {
   drop: string;
 }
 
-export interface DbObjectStatusBarLabels {
-  ariaLabel: string;
-  count: string;
-  runtime: string;
-  refreshedAt: string;
-  refresh: string;
-  schemaRefresh: string;
-}
-
 export interface DbObjectDropDialogLabels {
   title: string;
   subtitle: string;
@@ -168,13 +157,6 @@ export interface DbObjectTab<T extends string> {
   id: T;
   label: string;
   icon: LucideIcon;
-}
-
-export interface DbObjectStatusMetric {
-  label: string;
-  value: string;
-  testId?: string;
-  emphasis?: boolean;
 }
 
 export function dbObjectSortValue(item: DbAdminObjectSummary, key: DbObjectSortKey) {
@@ -828,140 +810,6 @@ export function DbObjectStepIndicator({
         );
       })}
     </ol>
-  );
-}
-
-export function DbObjectStatusMetricItem({
-  label,
-  value,
-  testId,
-  emphasis = false,
-  density = "default",
-}: DbObjectStatusMetric & { density?: "default" | "compact" }) {
-  if (density === "compact") {
-    return (
-      <div className="flex min-w-0 items-baseline gap-2 py-1">
-        <dt className="shrink-0 text-xs font-medium text-fg-muted">{label}</dt>
-        <dd
-          className={`min-w-0 break-words font-semibold tabular-nums text-fg [overflow-wrap:anywhere] ${
-            emphasis ? "text-base" : "text-sm"
-          }`}
-          data-testid={testId}
-        >
-          {value}
-        </dd>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-md border border-border bg-surface-sunken px-3 py-2">
-      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
-      <dd
-        className={`mt-1 font-semibold text-fg ${emphasis ? "text-lg" : ""}`}
-        data-testid={testId}
-      >
-        {value}
-      </dd>
-    </div>
-  );
-}
-
-export function DbObjectManagementStatusBar({
-  ariaLabel,
-  metrics,
-  actions,
-  metricColumnsClass = "sm:grid-cols-3",
-  density = "default",
-}: {
-  ariaLabel: string;
-  metrics: DbObjectStatusMetric[];
-  actions?: ReactNode;
-  metricColumnsClass?: string;
-  density?: "default" | "compact";
-}) {
-  if (density === "compact") {
-    return (
-      <section
-        className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
-        aria-label={ariaLabel}
-        data-density="compact"
-      >
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <dl className="flex min-w-0 flex-1 flex-wrap items-center gap-x-5 gap-y-1">
-            {metrics.map((metric) => (
-              <DbObjectStatusMetricItem
-                key={`${metric.label}-${metric.value}`}
-                {...metric}
-                density="compact"
-              />
-            ))}
-          </dl>
-          {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section
-      className="rounded-md border border-border bg-surface px-4 py-3 shadow-sm"
-      aria-label={ariaLabel}
-      data-density="default"
-    >
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <dl className={`grid gap-3 ${metricColumnsClass} xl:flex xl:flex-wrap xl:items-center`}>
-          {metrics.map((metric) => (
-            <DbObjectStatusMetricItem key={`${metric.label}-${metric.value}`} {...metric} />
-          ))}
-        </dl>
-        {actions && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{actions}</div>}
-      </div>
-    </section>
-  );
-}
-
-export function DbObjectStatusBar({
-  count,
-  runtime,
-  refreshedAt,
-  loading,
-  labels,
-  onRefresh,
-  onSchemaRefresh,
-}: {
-  count: number;
-  runtime: string;
-  refreshedAt: string;
-  loading: string;
-  labels: DbObjectStatusBarLabels;
-  onRefresh: () => void;
-  onSchemaRefresh: () => void;
-}) {
-  return (
-    <DbObjectManagementStatusBar
-      ariaLabel={labels.ariaLabel}
-      metrics={[
-        { label: labels.count, value: formatNumber(count), emphasis: true },
-        { label: labels.runtime, value: runtime },
-        { label: labels.refreshedAt, value: formatDateTime(refreshedAt) },
-      ]}
-      actions={
-        <>
-          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={onRefresh} icon={RefreshCw}>
-            <span>{labels.refresh}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            loading={loading === "schema-refresh"}
-            onClick={onSchemaRefresh} icon={RefreshCw}>
-            <span>{labels.schemaRefresh}</span>
-          </Button>
-        </>
-      }
-    />
   );
 }
 

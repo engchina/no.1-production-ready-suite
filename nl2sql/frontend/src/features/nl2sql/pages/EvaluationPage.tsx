@@ -1195,6 +1195,7 @@ function JobProgress({
         <Metric
           label={t("qualityEvaluation.progress.currentCase")}
           value={job.current_case_id || "-"}
+          mono={Boolean(job.current_case_id)}
         />
         <Metric
           label={t("qualityEvaluation.progress.currentEngine")}
@@ -1218,11 +1219,22 @@ function JobProgress({
   );
 }
 
-function Metric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
+function Metric({
+  label,
+  value,
+  danger = false,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  danger?: boolean;
+  /** ID など文字幅の整列が要る値は等幅にする。 */
+  mono?: boolean;
+}) {
   return (
     <div data-surface-tint="neutral" className="min-w-0 rounded-lg border border-border bg-surface-hover p-3">
       <dt className="text-xs text-fg-muted">{label}</dt>
-      <dd className={`mt-1 break-words text-sm font-semibold ${danger ? "text-danger-fg" : "text-fg"}`}>
+      <dd className={`mt-1 break-words text-sm font-semibold ${danger ? "text-danger-fg" : "text-fg"} ${mono ? "font-mono" : ""}`}>
         {value}
       </dd>
     </div>
@@ -1277,7 +1289,7 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
             className: "max-w-56 py-3 align-top",
             render: (result) => (
               <>
-                <div className="font-semibold text-fg">{result.case_id}</div>
+                <div className="break-all font-mono font-semibold text-fg">{result.case_id}</div>
                 <QuestionText value={result.question} variant="compact" maxLines={2} className="mt-1 text-fg-muted" />
               </>
             ),
@@ -1346,7 +1358,7 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
           <article key={result.result_id} className="grid min-w-0 gap-3 rounded-lg border border-border p-4">
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
-                <h3 className="break-words font-semibold text-fg">{result.case_id}</h3>
+                <h3 className="break-all font-mono font-semibold text-fg">{result.case_id}</h3>
                 <QuestionText
                   value={result.question}
                   variant="compact"

@@ -1314,6 +1314,21 @@ test("Join 条件を持たない関係カードは空枠ではなく物理対応
   for (const text of await details.allInnerTexts()) {
     expect(text.trim()).not.toBe("-");
   }
+
+  // 選んだ関係カードは、他の画面の選択と同じ淡い accent の面と枠で示し、押下状態を読み上げる（#5522）。
+  await expect(containsCard).toHaveAttribute("aria-pressed", "false");
+  await containsCard.click();
+  await expect(containsCard).toHaveAttribute("aria-pressed", "true");
+  await expect(containsCard).toHaveAttribute("data-surface-tint", "accent");
+  const accentSubtle = await containsCard.evaluate((element) => {
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = "var(--color-accent-subtle)";
+    element.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  });
+  await expect(containsCard).toHaveCSS("background-color", accentSubtle);
 });
 
 test("ノードはドラッグで移動でき、リセットで決定論レイアウトに戻る", async ({ page }, testInfo) => {

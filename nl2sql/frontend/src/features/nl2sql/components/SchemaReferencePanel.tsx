@@ -403,7 +403,8 @@ function SchemaTableItem({
       className="min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-surface"
       data-testid="nl2sql-schema-table-item"
     >
-      <div className="flex min-h-9 w-full min-w-0 items-stretch">
+      {/* 開閉と挿入のボタンは同じ size（sm）で、行の高さはボタンに任せ、間を gap-1 空ける（#5522）。 */}
+      <div className="flex w-full min-w-0 items-center gap-1">
         {/* chevron=展開/折りたたみ、表名クリック=挿入（列行と同じ「クリック=挿入」で一貫）。 */}
         <Button
           variant="ghost"

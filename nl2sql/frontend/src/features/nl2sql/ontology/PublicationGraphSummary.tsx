@@ -20,7 +20,7 @@ export function PublicationGraphSummary({ definitions }: { definitions: Publicat
     <dl className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-4">
       {counts.map(count => <div key={count.key} className="grid min-w-0 gap-1">
         <dt className="text-xs text-fg-muted">{count.label}</dt>
-        <dd className="tnum text-lg font-semibold">{count.value}</dd>
+        <dd className="tnum text-xl font-semibold">{count.value}</dd>
       </div>)}
     </dl>
     {summary.objectCount > 0 && summary.linkCount === 0 && <p className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.graph.noLinks")}</p>}

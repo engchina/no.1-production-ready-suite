@@ -3139,6 +3139,15 @@ async function expectQuerySingleColumnLayout(page: Page) {
   expect(shellBox).not.toBeNull();
   expect(tableBox).not.toBeNull();
   expect(tableBox!.x + tableBox!.width).toBeLessThanOrEqual(shellBox!.x + shellBox!.width + 1);
+  // 表の行の開閉と挿入のボタンは同じ高さ・同じ縦の中心で、間を空ける（行の枠がボタンより高くならない。#5522）。
+  const tableRow = await firstTable.getByRole("button").evaluateAll((buttons) => {
+    const [toggle, insert] = buttons.slice(0, 2).map((button) => button.getBoundingClientRect());
+    const row = buttons[0].parentElement!.getBoundingClientRect();
+    return { toggle, insert, rowHeight: row.height };
+  });
+  expect(tableRow.insert.left - tableRow.toggle.right).toBeGreaterThanOrEqual(3.5);
+  expect(Math.abs(tableRow.toggle.height - tableRow.insert.height)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(tableRow.rowHeight - tableRow.toggle.height)).toBeLessThanOrEqual(0.5);
   await expectNoHorizontalScroll(page);
 }
 
@@ -13638,6 +13647,8 @@ test("synthetic validation rejection shows its reference and zero rows without a
   await page.goto(`/data-management?synthetic_run=${run.run_id}`);
   const panel = page.getByTestId("synthetic-run-panel");
   await expect(panel.getByTestId("synthetic-run-reference")).toHaveText(`生成番号: ${run.run_id}`);
+  // 生成番号の値（ID）だけを等幅にする（#5522）。
+  await expect(panel.getByTestId("synthetic-run-reference").getByText(run.run_id, { exact: true })).toHaveCSS("font-family", FONT_MONO_FAMILY);
   await expect(panel.getByTestId("synthetic-run-checked")).toContainText("生成状況の最終確認:");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("データを生成できませんでした");
   await expect(panel).toContainText("今回の追加件数: 0 件");

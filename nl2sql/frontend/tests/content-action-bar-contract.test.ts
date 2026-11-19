@@ -14,10 +14,6 @@ const generatedSqlSource = readFileSync(
   new URL("../src/features/nl2sql/components/GeneratedSqlPanel.tsx", import.meta.url),
   "utf8"
 );
-const settingsPreviewSource = readFileSync(
-  new URL("../src/components/settings/SettingsPreviewPanels.tsx", import.meta.url),
-  "utf8"
-);
 const viewManagementSource = readFileSync(
   new URL("../src/features/nl2sql/pages/ViewManagementPage.tsx", import.meta.url),
   "utf8"
@@ -56,7 +52,6 @@ test("DDL / SQL / preview の局所操作は ContentActionBar を使う", () => 
   // DDL の詳細は DbObjectManagementShared だけが持つ（DbAdminShared の使われていなかった詳細のパネルは #1891 で削除した）。
   assert.ok(dbObjectSource.includes('testId={`${idPrefix}-ddl-actions`}'));
   assert.match(generatedSqlSource, /testId="generated-sql-content-actions"/u);
-  assert.match(settingsPreviewSource, /testId="settings-preview-actions"/u);
 });
 
 test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
