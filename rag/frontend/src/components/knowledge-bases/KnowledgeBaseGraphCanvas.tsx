@@ -361,22 +361,23 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
             const Icon = WIKI_RELATION_ICONS[relation];
             return { id: relationLegendId(relation), label: wikiRelationText(relation), marker: <Icon className="size-4 shrink-0" aria-hidden /> };
           })} disabledIds={disabledLegend} onToggle={toggleLegend} testId="wiki-graph-legend" />
-          <GraphCanvasFrame ref={frameRef} role="region" aria-label={t("wiki.graph.title")}>
-            <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
-              onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}
-              onNodeMouseEnter={(_event, node) => setHoveredNode(node.id)} onNodeMouseLeave={() => setHoveredNode(null)}
-              onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)} onEdgeMouseLeave={() => setHoveredEdge(null)}
-              // 小地図は出さない: 右下で節点に重なり、狭い画面では置き場所が無い。位置は検索・「図で位置を確認」・全体表示で移る（#5520）。
-              fitView={false} miniMap={false}>
-              <GraphCanvasControls labels={{ zoomIn: t("wiki.graph.zoomIn"), zoomOut: t("wiki.graph.zoomOut"), fit: t("wiki.graph.fitView"), reset: t("wiki.graph.reset") }} onReset={() => setOverrides(new Map())} resetDisabled={overrides.size === 0} />
-            </GraphCanvas>
-          </GraphCanvasFrame>
-          {/* 節点を開く間の表示は画布の上に重ね、画布を押し下げない（#4649）。 */}
-          {pending > 0 ? <div className="pointer-events-none sticky bottom-3 z-20 h-0" data-testid="wiki-graph-expanding-anchor">
-            <div className="absolute inset-x-3 bottom-20">
+          <div className="relative min-w-0">
+            <GraphCanvasFrame ref={frameRef} role="region" aria-label={t("wiki.graph.title")}>
+              <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} onNodesChange={nodesChanged} elementsSelectable={false} onlyRenderVisibleElements={viewNodes.length > 150}
+                onSelectNode={selectNode} onSelectEdge={(id) => setSelection({ type: "edge", id })}
+                onNodeMouseEnter={(_event, node) => setHoveredNode(node.id)} onNodeMouseLeave={() => setHoveredNode(null)}
+                onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)} onEdgeMouseLeave={() => setHoveredEdge(null)}
+                // 小地図は出さない: 右下で節点に重なり、狭い画面では置き場所が無い。位置は検索・「図で位置を確認」・全体表示で移る（#5520）。
+                fitView={false} miniMap={false}>
+                <GraphCanvasControls labels={{ zoomIn: t("wiki.graph.zoomIn"), zoomOut: t("wiki.graph.zoomOut"), fit: t("wiki.graph.fitView"), reset: t("wiki.graph.reset") }} onReset={() => setOverrides(new Map())} resetDisabled={overrides.size === 0} />
+              </GraphCanvas>
+            </GraphCanvasFrame>
+            {/* 節点を開く間の表示は画布の先頭（拡大・縮小の操作と同じ行）に重ね、画布を押し下げない（#4649）。最初の読み込みと同じく
+                領域の先頭に出す（components-reference「読み込み中」）。狭い画面では操作の下の行に回す。 */}
+            {pending > 0 ? <div className="pointer-events-none absolute inset-x-3 top-16 z-20 md:right-48 md:top-3" data-testid="wiki-graph-expanding-anchor">
               <ProcessingIndicator active label={t("wiki.graph.expanding")} operationKey="wiki-graph-expand" testId="wiki-graph-expanding" className="shadow-sm" />
-            </div>
-          </div> : null}
+            </div> : null}
+          </div>
         </div>
         {unitSelected && selectedNode ? <WikiGraphUnitPanel key={selectedNode.id} kbId={knowledgeBaseId} unitId={selectedNode.id} onClose={() => setSelection(null)} onLocate={locateUnit} /> : null}
       </div>

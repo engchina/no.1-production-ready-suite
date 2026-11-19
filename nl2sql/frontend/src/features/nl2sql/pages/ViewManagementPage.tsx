@@ -19,6 +19,7 @@ import {
   PageBody,
   ContentActionBar,
   ProcessingIndicator,
+  REFRESH_REVEAL_DELAY_MS,
   Skeleton,
   TextareaField,
   TimedLoadingState,
@@ -731,8 +732,16 @@ export function ViewManagementPage() {
               processing={
                 schemaRefreshing && !schemaSync.ownsProgress ? (
                   <SchemaRefreshProcessing testId="view-management-workspace-processing" />
-                ) : viewObjectsQuery.data && !noticeRetry.pending &&
-                  viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage ? (
+                ) : undefined
+              }
+            >
+            <DbObjectListDetail
+              showComments
+              idPrefix={VIEW_MANAGEMENT_ID}
+              refreshIndicator={
+                // 一覧の取り直しは、最初の読み込みと同じ一覧の領域の先頭に出す（DB 構造の再取得はパネルの上のまま）。
+                viewObjectsQuery.data && !noticeRetry.pending && !(schemaRefreshing && !schemaSync.ownsProgress) &&
+                viewObjectsQuery.isFetching && !viewObjectsQuery.isFetchingNextPage ? (
                   <ProcessingIndicator
                     active
                     label={t("viewMgmt.workspace.refreshing")}
@@ -740,13 +749,10 @@ export function ViewManagementPage() {
                     placement="workspace"
                     testId="view-management-workspace-processing"
                     activityIcon={manualRefresh.pending ? "none" : "spinner"}
+                    revealDelayMs={REFRESH_REVEAL_DELAY_MS}
                   />
                 ) : undefined
               }
-            >
-            <DbObjectListDetail
-              showComments
-              idPrefix={VIEW_MANAGEMENT_ID}
               headingId="view-grid-heading"
               icon={Eye}
               items={filteredViews}

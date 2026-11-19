@@ -2366,14 +2366,15 @@ test("明示的な一覧再取得はヘッダーではなくテーブル作業�
     .getByTestId("management-panel-shell")
     .filter({ has: page.getByTestId("list-detail-table-management") });
   await expect(shell.getByTestId("table-management-workspace-processing")).toBeVisible();
+  // 最初の読み込みと同じ一覧の領域の先頭（検索欄の下・表の上）に出す。
   expect(
     await processing.evaluate((element) => {
-      const split = document.querySelector(
-        '[data-testid="list-detail-table-management"]',
-      );
+      const split = document.querySelector('[data-testid="list-detail-table-management"]');
+      const table = split?.querySelector("table");
       return Boolean(
-        split &&
-          element.compareDocumentPosition(split) & Node.DOCUMENT_POSITION_FOLLOWING,
+        split?.contains(element) &&
+          table &&
+          element.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
       );
     }),
   ).toBe(true);

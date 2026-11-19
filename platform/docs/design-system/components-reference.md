@@ -1538,6 +1538,7 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
   - ページ全体が使えない初期処理（認証の確認・DB の状態の確認・画面のコードの読み込み）は `PageLoadingState`（全幅の `PageBody` の先頭の行 + 本文の形の Skeleton。画面と同じく常に全幅で、`wide` は渡さない。#3311。`AppShell` の外では `<main className="min-h-screen bg-canvas">` で包む）。
   - 汎用の行の形は `LoadingState`（`label` 必須。行 + 棒の Skeleton）。検索つきの選択欄の取得中は、一覧の先頭に同じ形の行を出します（部品が持つ）。
   - スクロールする表示領域（`PreviewViewer` のページ）は、高さ 0 の `sticky` の中に全幅の行を置き、スクロールしても先頭に残し、内容の位置と高さを動かしません。
+- **前の内容を出したままの取り直しは Skeleton で覆いません。** 最初の読み込みと同じ領域の先頭に `ProcessingIndicator` を 1 つ出し、`revealDelayMs={REFRESH_REVEAL_DELAY_MS}`（300ms）を渡して、早く終わる取り直しでは何も出しません（点滅させない）。条件（検索語・絞り込み・ページ）を変えて前の条件の内容を出している間（`isPlaceholderData`）だけ、内容を `staleContentClass(true)` で薄くし（300ms の後に薄くなり、届いたらすぐ戻る）、`aria-busy` を付けます。条件の変わらない取り直し（定期・invalidate・再試行）は薄くしません。`ListPicker` は `refreshing`（先頭の表示）と `stale`（薄くする）を分けて受けます。
 
 標準の組み合わせ:
 
@@ -2703,7 +2704,7 @@ import { FormActionBar, FormStatus, ListPicker, ListPickerSheet, ListToolbar, Se
   selectedItems={selectedItems}          // 任意:「選択中だけ表示（K）」
   search={{ label: "表・ビューを検索", value: q, onSearch: setQ }}
   total={total} hasMore={hasMore} loadingMore={loadingMore} loadMoreError={error} onLoadMore={loadMore}
-  loading={isPending} refreshing={isPlaceholderData}
+  loading={isPending} refreshing={isPlaceholderData} stale={isPlaceholderData}  // 条件の変わらない取り直しは refreshing だけ
   disabled={saving}                      // 任意: 保存中は切り替えない（<fieldset disabled> の中も同じ）
   fixedHeight                            // 任意: 並べた 2 つの一覧の高さをそろえる
   labels={…}                             // 翻訳済みの文言（既定は日本語。DEFAULT_LIST_PICKER_LABELS）

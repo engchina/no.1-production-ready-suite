@@ -18,6 +18,7 @@ import {
   PageBody,
   ClearActionButton,
   ProcessingIndicator,
+  REFRESH_REVEAL_DELAY_MS,
   ExecutionConfirmationField,
   FormGrid,
   TextField,
@@ -929,8 +930,16 @@ export function TableManagementPage() {
               processing={
                 schemaRefreshing && !schemaSync.ownsProgress ? (
                   <SchemaRefreshProcessing testId="table-management-workspace-processing" />
-                ) : tableObjectsQuery.data && !noticeRetry.pending &&
-                  tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage ? (
+                ) : undefined
+              }
+            >
+            <DbObjectListDetail
+              showComments
+              idPrefix="table-management"
+              refreshIndicator={
+                // 一覧の取り直しは、最初の読み込みと同じ一覧の領域の先頭に出す（DB 構造の再取得はパネルの上のまま）。
+                tableObjectsQuery.data && !noticeRetry.pending && !(schemaRefreshing && !schemaSync.ownsProgress) &&
+                tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage ? (
                   <ProcessingIndicator
                     active
                     label={t("tableMgmt.workspace.refreshing")}
@@ -938,13 +947,10 @@ export function TableManagementPage() {
                     placement="workspace"
                     testId="table-management-workspace-processing"
                     activityIcon={manualRefresh.pending ? "none" : "spinner"}
+                    revealDelayMs={REFRESH_REVEAL_DELAY_MS}
                   />
                 ) : undefined
               }
-            >
-            <DbObjectListDetail
-              showComments
-              idPrefix="table-management"
               headingId="table-grid-heading"
               icon={Table2}
               items={filteredTables}
