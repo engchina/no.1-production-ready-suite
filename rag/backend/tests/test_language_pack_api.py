@@ -47,19 +47,18 @@ def test_paragraph_editor_metadata_preserves_multiline_values_and_published_pack
     assert fields["answer_labels", "insufficient_evidence_summary"]["multiline"] is True
     assert fields["answer_labels", "empty_search_guidance"]["multiline"] is True
     assert fields["answer_labels", "applications_section"]["multiline"] is False
-    assert fields["labels", "graph_section"]["multiline"] is True
     assert fields["labels", "field_id"]["multiline"] is False
     assert all(item["kind"] == "text" for item in fields.values() if item["multiline"])
     body = "合成の前置き。\n合成の末尾の案内。"
     response = client.put(
         "/api/settings/language-pack/draft",
         json={
-            "overrides": {"labels": {"graph_section": body}},
+            "overrides": {"answer_labels": {"deadline_summary": body}},
             "expected_revision": 1,
         },
     )
     assert response.status_code == 200
-    assert response.json()["data"]["draft_effective"]["labels"]["graph_section"] == body
+    assert response.json()["data"]["draft_effective"]["answer_labels"]["deadline_summary"] == body
     assert client.get("/api/settings/language-pack").json()["data"] == before
 
 
