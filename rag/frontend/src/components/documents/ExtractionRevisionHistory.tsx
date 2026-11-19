@@ -409,7 +409,7 @@ function RevisionChange({ change }: { change: ExtractionRevisionElementChange })
         {change.page_number != null ? (
           <span className="tnum">{t("flow.review.revisions.page", { page: change.page_number })}</span>
         ) : null}
-        <span className="break-all">{change.element_id}</span>
+        <span className="break-all font-mono">{change.element_id}</span>
       </div>
       <div className="grid min-w-0 gap-2 md:grid-cols-2">
         <RevisionText label={t("flow.review.revisions.before")} text={change.before} />

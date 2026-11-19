@@ -320,17 +320,18 @@ async function mockSearch(page: Page) {
 }
 
 /** 開閉のボタンを開く（作業状態から開いたまま戻っていれば押さない）。 */
-async function expand(page: Page, name: string | RegExp) {
-  const toggle = page.getByRole("button", { name });
-  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+/** 検索の詳細条件の Disclosure（`search-<name>`）を開く（#5522）。 */
+async function expand(page: Page, name: "advanced" | "classification" | "extraction") {
+  const panel = page.getByTestId(`search-${name}`);
+  if ((await panel.getAttribute("data-state")) !== "open") await page.getByTestId(`search-${name}-toggle`).click();
+  await expect(panel).toHaveAttribute("data-state", "open");
 }
 
 async function openSearchConditions(page: Page) {
   await selectSearchAnswerProfile(page, /契約ビュー/);
-  await expand(page, /詳細条件/);
-  await expand(page, "文書の分類で絞り込む");
-  await expand(page, "抽出項目の値で絞り込む");
+  await expand(page, "advanced");
+  await expand(page, "classification");
+  await expand(page, "extraction");
   // 候補の読込中は保存済みの条件欄も描画されない。読込後に既存行を確かめ、テーマ変更で重ねて追加しない。
   await expect(page.getByTestId("search-extraction-field-filters")).toBeVisible();
   if ((await page.getByRole("button", { name: /^項目 / }).count()) > 0) return;

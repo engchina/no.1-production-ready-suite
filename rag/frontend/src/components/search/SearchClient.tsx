@@ -3,7 +3,7 @@
 
 import {
   AnswerFooter,
-  DisclosureChevron,
+  Disclosure,
   PageBody,
   PageHeader,
   Banner,
@@ -526,46 +526,40 @@ export function SearchClient() {
                 </div>
               ) : null}
 
-              <div className="rounded-md border border-border bg-surface-sunken">
-                <button
-                  type="button"
-                  aria-expanded={advancedOpen}
-                  aria-controls="search-advanced-conditions"
-                  onClick={() => setAdvancedOpen((open) => !open)}
-                  className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
-                  {t("search.filters.advanced")}
-                  {!advancedOpen && hasAdvancedSettings ? (
+              {/* 開閉は共有の Disclosure（#5522）。中身は開いているときだけ描く（閉じた詳細条件の候補を読まない）。 */}
+              <Disclosure
+                data-testid="search-advanced"
+                summaryProps={{ "data-testid": "search-advanced-toggle" }}
+                surface="sunken"
+                icon={SlidersHorizontal}
+                summary={t("search.filters.advanced")}
+                meta={
+                  !advancedOpen && hasAdvancedSettings ? (
                     <StatusBadge variant="info" label={t("search.filters.active")} />
-                  ) : null}
-                  <DisclosureChevron
-                    expanded={advancedOpen}
-                    size={14}
-                    className="ml-auto text-fg-muted"
-                  />
-                </button>
+                  ) : undefined
+                }
+                open={advancedOpen}
+                onOpenChange={setAdvancedOpen}
+              >
                 {advancedOpen ? (
-                <fieldset id="search-advanced-conditions" className="space-y-4 border-t border-border p-3">
+                <fieldset id="search-advanced-conditions" className="space-y-4">
                   <legend className="sr-only">{t("search.filters.title")}</legend>
-                  <div className="rounded-md border border-border bg-surface">
-                    <button
-                      type="button"
-                      aria-expanded={classificationVisible}
-                      aria-controls="search-classification-filters"
-                      onClick={() => setClassificationOpen((open) => !open)}
-                      className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      <span>{t("search.filters.classificationGroup")}</span>
-                      <span className="flex items-center gap-2">
-                        {!classificationVisible && hasClassificationFilters ? (
-                          <StatusBadge variant="info" label={t("search.filters.active")} />
-                        ) : null}
-                        <DisclosureChevron expanded={classificationVisible} size={14} className="text-fg-muted" />
-                      </span>
-                    </button>
+                  <Disclosure
+                    data-testid="search-classification"
+                    summaryProps={{ "data-testid": "search-classification-toggle" }}
+                    size="sm"
+                    summary={t("search.filters.classificationGroup")}
+                    meta={
+                      !classificationVisible && hasClassificationFilters ? (
+                        <StatusBadge variant="info" label={t("search.filters.active")} />
+                      ) : undefined
+                    }
+                    open={classificationVisible}
+                    onOpenChange={setClassificationOpen}
+                    contentClassName="p-0"
+                  >
                     {classificationVisible ? (
-                      <div id="search-classification-filters" className="space-y-3 border-t border-border p-3">
+                      <div id="search-classification-filters" className="space-y-3 p-3">
                         <p className="text-xs leading-relaxed text-fg-muted">
                           {t("search.filters.classificationHelper")}
                         </p>
@@ -595,26 +589,24 @@ export function SearchClient() {
                         </FormGrid>
                       </div>
                     ) : null}
-                  </div>
+                  </Disclosure>
 
-                  <div className="rounded-md border border-border bg-surface">
-                    <button
-                      type="button"
-                      aria-expanded={extractionOpen}
-                      aria-controls="search-extraction-field-filters"
-                      onClick={() => setExtractionOpen((open) => !open)}
-                      className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      <span>{t("search.filters.fields.group")}</span>
-                      <span className="flex items-center gap-2">
-                        {!extractionOpen && hasExtractionFieldFilters ? (
-                          <StatusBadge variant="info" label={t("search.filters.active")} />
-                        ) : null}
-                        <DisclosureChevron expanded={extractionOpen} size={14} className="text-fg-muted" />
-                      </span>
-                    </button>
+                  <Disclosure
+                    data-testid="search-extraction"
+                    summaryProps={{ "data-testid": "search-extraction-toggle" }}
+                    size="sm"
+                    summary={t("search.filters.fields.group")}
+                    meta={
+                      !extractionOpen && hasExtractionFieldFilters ? (
+                        <StatusBadge variant="info" label={t("search.filters.active")} />
+                      ) : undefined
+                    }
+                    open={extractionOpen}
+                    onOpenChange={setExtractionOpen}
+                    contentClassName="p-0"
+                  >
                     {extractionOpen ? (
-                      <div id="search-extraction-field-filters" className="space-y-3 border-t border-border p-3">
+                      <div id="search-extraction-field-filters" className="space-y-3 p-3">
                         <p className="text-xs leading-relaxed text-fg-muted">
                           {t("search.filters.fields.helper")}
                         </p>
@@ -641,7 +633,7 @@ export function SearchClient() {
                         )}
                       </div>
                     ) : null}
-                  </div>
+                  </Disclosure>
 
                   <div className="flex justify-end">
                     <Button
@@ -656,7 +648,7 @@ export function SearchClient() {
                   </div>
                 </fieldset>
                 ) : null}
-              </div>
+              </Disclosure>
 
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">

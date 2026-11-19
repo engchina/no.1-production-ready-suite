@@ -185,8 +185,8 @@ async function mockSearchPage(page: Page) {
 async function openFieldFilters(page: Page) {
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /契約ビュー/);
-  await page.getByRole("button", { name: /詳細条件/ }).click();
-  await page.getByRole("button", { name: "抽出項目の値で絞り込む" }).click();
+  await page.getByTestId("search-advanced-toggle").click();
+  await page.getByTestId("search-extraction-toggle").click();
 }
 
 async function addCondition(page: Page, fieldLabel: RegExp) {

@@ -156,9 +156,9 @@ test("OCI リージョンの候補を指定順で表示し、選択できる", a
 
 test("検索条件に候補取得数の入力を表示しない", async ({ page }) => {
   await page.goto("/search");
-  await page.getByRole("button", { name: "詳細条件" }).click();
+  await page.getByTestId("search-advanced-toggle").click();
   await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveCount(0);
-  await expect(page.locator('button[aria-controls="search-classification-filters"]')).toBeVisible();
+  await expect(page.getByTestId("search-classification-toggle")).toBeVisible();
 });
 
 // ── #352: Portal・反転・typeahead・選択肢のスクロール ──────────────────────────

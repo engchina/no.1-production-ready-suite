@@ -308,8 +308,8 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
 
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
-  await page.getByRole("button", { name: "詳細条件" }).press("Enter");
-  await page.getByRole("button", { name: "文書の分類で絞り込む" }).press("Enter");
+  await page.getByTestId("search-advanced-toggle").press("Enter");
+  await page.getByTestId("search-classification-toggle").press("Enter");
   await page.getByRole("button", { name: /^大分類 / }).click();
   await page.getByRole("option", { name: "10_業務A" }).click();
   await page.getByLabel("基準日").fill("2026-04-01");

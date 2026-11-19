@@ -3317,6 +3317,7 @@ export const ja = {
   "documents.version.candidatesLoadError": "新しい版の候補の文書を読み込めませんでした。",
   "documents.version.save": "保存",
   "documents.version.clear": "置き換えを解除",
+  "documents.version.actions": "版の操作",
   "documents.version.saved": "新しい版を保存しました。この文書は旧版として回答の検索の対象から外れます。",
   "documents.version.cleared": "置き換えを解除しました。この文書は今有効な版として回答の検索の対象に戻ります。",
   "documents.version.saveError": "版の保存に失敗しました。選んだ文書を確認して再試行してください。",

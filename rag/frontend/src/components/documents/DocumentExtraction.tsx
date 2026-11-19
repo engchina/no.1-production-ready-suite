@@ -437,7 +437,7 @@ function StatTile({
         <Icon size={14} className="text-accent-fg" aria-hidden />
         <span>{label}</span>
       </div>
-      <p className="tnum mt-2 text-lg font-semibold text-fg">{value}</p>
+      <p className="tnum mt-2 text-xl font-semibold text-fg">{value}</p>
     </div>
   );
 }
@@ -527,6 +527,7 @@ function ElementItem({
           ) : null}
           <InfoChip
             icon={Hash}
+            mono
             label={element.source_parser ? `${id} / ${element.source_parser}` : id}
           />
         </div>
@@ -563,7 +564,7 @@ function TableCellsPanel({
               data-testid="extraction-table-cells"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="break-all text-xs font-medium text-fg">
+                <span className={cn("break-all text-xs font-medium text-fg", !table.caption && "font-mono")}>
                   {table.caption || table.table_id}
                 </span>
                 {typeof table.page_number === "number" ? (
