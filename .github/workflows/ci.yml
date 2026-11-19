@@ -22,6 +22,8 @@ name: CI
 # 製品横断の評価（suite/evaluation。独立の uv project）は Suite / Evaluation が、platform の採点の部品
 # （platform/packages/evaluation_scoring）は Platform / evaluation_scoring と、それを使う RAG / Backend・Agent / Backend・Suite / Evaluation が
 # 確かめる（#3240）。採点の部品は platform_other から外し、ほかの製品の job は動かさない。
+# Anthropic Claude の Messages API の呼び出しの部品（platform/packages/anthropic_messages。#5546）は
+# Platform / anthropic_messages が確かめる。platform_other から外し、使う製品が path で依存するまでは製品の job を動かさない。
 # platform の Markdown（AGENTS.md・README・docs/ux-contracts・docs/design-system 等）だけの変更では製品の job を動かさない
 # （docs/design-system/ の Markdown 以外（lint の設定・plugin・reference）は frontend に数える。#1592）。
 # RAG の外部 parser のサービス（rag/services/parsers/<name>。uv の venv が独立）の pytest は、その parser と
@@ -146,6 +148,11 @@ jobs:
         ${{ steps.filter.outputs.platform_evaluation_scoring == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_enterprise_ai_deps: >-
         ${{ steps.filter.outputs.platform_enterprise_ai_deps == 'true' || steps.filter.outputs.ci == 'true' }}
+      # Anthropic Claude の Messages API の呼び出しの部品（#5546）。
+      platform_anthropic_messages: >-
+        ${{ steps.filter.outputs.platform_anthropic_messages == 'true' || steps.filter.outputs.ci == 'true' }}
+      platform_anthropic_messages_deps: >-
+        ${{ steps.filter.outputs.platform_anthropic_messages_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       platform_evaluation_scoring_deps: >-
         ${{ steps.filter.outputs.platform_evaluation_scoring_deps == 'true' || steps.filter.outputs.ci == 'true' }}
       # 製品横断の評価（suite/evaluation。#3240）と、そのテストが読む platform・製品の評価セットのファイル。
@@ -232,6 +239,13 @@ jobs:
             platform_enterprise_ai_deps:
               - "platform/packages/enterprise_ai/uv.lock"
               - "platform/packages/enterprise_ai/pyproject.toml"
+            # Anthropic Claude の Messages API の呼び出しの部品（#5546）。失敗の分類は pr_enterprise_ai を使う。
+            platform_anthropic_messages:
+              - "platform/packages/anthropic_messages/**"
+              - "platform/packages/enterprise_ai/**"
+            platform_anthropic_messages_deps:
+              - "platform/packages/anthropic_messages/uv.lock"
+              - "platform/packages/anthropic_messages/pyproject.toml"
             platform_evaluation_scoring_deps:
               - "platform/packages/evaluation_scoring/uv.lock"
               - "platform/packages/evaluation_scoring/pyproject.toml"
@@ -540,6 +554,7 @@ jobs:
               - "!platform/packages/system_settings_backend/**"
               - "!platform/packages/evaluation_scoring/**"
               - "!platform/packages/enterprise_ai/**"
+              - "!platform/packages/anthropic_messages/**"
               - "!platform/docs/design-system/**"
               - "!platform/package.json"
               - "!platform/package-lock.json"
@@ -910,6 +925,57 @@ jobs:
 
       - name: Dependency audit
         if: needs.changes.outputs.platform_enterprise_ai_deps == 'true'
+        run: uv run pip-audit --skip-editable
+
+  # Anthropic Claude の Messages API を公式の SDK で呼ぶ部品（#5546）。テストは録画の応答で、実の API は呼ばない。
+  platform-anthropic-messages:
+    name: Platform / anthropic_messages (pr_anthropic_messages)
+    needs: changes
+    if: needs.changes.outputs.platform_anthropic_messages == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: platform/packages/anthropic_messages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          prune-cache: true
+          cache-dependency-glob: platform/packages/anthropic_messages/uv.lock
+          save-cache: ${{ github.event_name == 'push' }}
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy src
+
+      - name: Test
+        run: uv run pytest -n auto --durations=20
+
+      - name: Security scan
+        run: uv run bandit -r src
+
+      - name: Dependency audit
+        if: needs.changes.outputs.platform_anthropic_messages_deps == 'true'
         run: uv run pip-audit --skip-editable
 
   # ---------------------------------------------------------------- rag
@@ -2153,6 +2219,7 @@ jobs:
       - platform-system-settings-backend
       - platform-evaluation-scoring
       - platform-enterprise-ai
+      - platform-anthropic-messages
       - rag-backend
       - rag-engine
       - services-scripts-lint
