@@ -710,6 +710,8 @@ test(
     await expect(page.getByTestId("upload-dropzone-unsupported")).toContainText(
       "HEIC / HEIF の画像・EPUB・音声・動画のファイルは対応していません"
     );
+    // 端末ごとの操作の手順は案内に書かない（#5541）。
+    await expect(page.getByTestId("upload-dropzone-unsupported")).not.toContainText("iPhone");
 
     await page.locator('input[type="file"]').setInputFiles([
       { name: "photo.HEIC", mimeType: "image/heic", buffer: Buffer.alloc(6, 1) },
@@ -723,7 +725,6 @@ test(
     const heic = selection.getByRole("listitem").filter({ hasText: "photo.HEIC" });
     await expect(heic).toContainText("HEIC / HEIF は対応していません");
     await expect(heic.getByTestId("upload-selection-guide")).toContainText("JPEG / PNG に変換して");
-    await expect(heic.getByTestId("upload-selection-guide")).toContainText("互換性優先");
     const epub = selection.getByRole("listitem").filter({ hasText: "book.epub" });
     await expect(epub).toContainText("EPUB は対応していません");
     await expect(epub.getByTestId("upload-selection-guide")).toContainText("PDF に変換して");

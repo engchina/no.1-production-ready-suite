@@ -97,7 +97,6 @@ def test_rejected_formats_match_between_frontend_and_backend() -> None:
     assert AUDIO_VIDEO_UPLOAD_REJECTED_MESSAGE in i18n
     assert UNSUPPORTED_UPLOAD_FORMAT_MESSAGE in i18n
     assert "JPEG / PNG" in HEIC_UPLOAD_REJECTED_MESSAGE
-    assert "互換性優先" in HEIC_UPLOAD_REJECTED_MESSAGE
 
 
 @pytest.mark.parametrize(
