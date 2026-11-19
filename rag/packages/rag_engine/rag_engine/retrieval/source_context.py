@@ -20,6 +20,10 @@ def source_context(record: Any) -> dict[str, Any]:
         context["source_identities"] = [dict(identity) for identity in identities]
     if isinstance(path, (list, tuple)):
         context["section_path"] = [str(part) for part in path]
+    # Wiki の辿りで見た、この原文と別の原文の関係（#5500）。案内の写しで、引用の対象にしない。
+    relations = metadata.get("wiki_relations")
+    if isinstance(relations, list) and relations and all(isinstance(relation, dict) for relation in relations):
+        context["wiki_relations"] = [dict(relation) for relation in relations]
     header = metadata.get("context_header")
     if isinstance(header, str) and header.strip():
         context["search_context_header"] = header
@@ -75,8 +79,14 @@ def prompt_source_context(context: dict[str, Any], *, document_name: str = "") -
     for child in context.get("children") or ():
         if not isinstance(child, dict):
             continue
-        # 子の文書名は親と同じなら省く。子の章節はブロックの章節と同じなら省く。
-        own = _shown_fields(child, document_name=str(context.get("document_name") or ""), section_path=context.get("section_path"))
+        # 子の文書名は親と同じなら省く。子の章節はブロックの章節と同じなら省く。ほかの値も親と同じなら繰り返さない。
+        own = {
+            key: value
+            for key, value in _shown_fields(
+                child, document_name=str(context.get("document_name") or ""), section_path=context.get("section_path")
+            ).items()
+            if key not in shown or shown[key] != value
+        }
         if own and own not in children:
             children.append(own)
     if children:

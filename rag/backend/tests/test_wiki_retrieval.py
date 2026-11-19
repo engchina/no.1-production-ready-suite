@@ -398,3 +398,70 @@ async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_b
     units = _units(result)
     assert "doc-z-z1" not in units and "doc-c-c1" in units
     assert result.trace["missing_dependency_units"] == 1
+
+
+def _relations(result: Any) -> dict[str, Any]:
+    return {chunk.chunk_id: chunk.metadata.get("wiki_relations") for chunk in result.chunks}
+
+
+@pytest.mark.asyncio
+async def test_followed_relations_reach_both_sources_with_the_other_location() -> None:
+    """辿りで見た関係（#5500）は、両端の原文に、役割を持つ側と相手の文書名・章節つきで付く。"""
+    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store.link_rows = [("doc-a-a2", "doc-c-c1", "exception"), ("doc-c-c1", "doc-d-d1", "reference")]
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=1)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    relations = _relations(result)
+    # c1 は a2 の例外。a2 から見ると相手（c1）が役割を持つ。同じ文書の依存（a2 → a4）も載る。
+    assert relations["doc-a-a2-chunk"] == [
+        {
+            "relation": "exception",
+            "role_of": "other",
+            "document_name": "文書A",
+            "section_path": ["章2"],
+        },
+        {
+            "relation": "exception",
+            "role_of": "other",
+            "document_name": "doc-c",
+            "section_path": ["通知"],
+        },
+    ]
+    assert relations["doc-c-c1-chunk"] == [
+        {
+            "relation": "exception",
+            "role_of": "this",
+            "document_name": "文書A",
+            "section_path": ["章1", "節1"],
+        }
+    ]
+    # 段数で辿らなかった d1 は原文に入らないので、c1 → d1 の関係は載せない。
+    assert relations["doc-a-a1-chunk"] is None
+    assert result.trace["model_calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_no_relations_are_attached_when_links_are_not_followed() -> None:
+    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store.link_rows = [("doc-a-a2", "doc-c-c1", "exception")]
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=0)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    assert all(value is None for value in _relations(result).values())
+
+
+def test_answer_reading_rule_names_every_wiki_relation() -> None:
+    """回答のモデルへの読み方（rag_engine）は、Wiki の関係の種類をすべて説明する（#5500）。"""
+    from typing import get_args
+
+    from rag_engine.generation.grounded import EVIDENCE_READING_PROMPT
+
+    from app.rag.wiki_models import WikiRelation
+
+    line = next(
+        line
+        for line in EVIDENCE_READING_PROMPT.splitlines()
+        if line.startswith("- wiki_relations: ")
+    )
+    assert all(f"{relation}=" in line for relation in get_args(WikiRelation))

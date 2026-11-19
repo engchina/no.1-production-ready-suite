@@ -4346,8 +4346,9 @@ def _stored_child(
     if retrieval_channels:
         metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
     metadata["document_id"] = chunk.document_id
-    # Wiki の経路の原文の印と、目録の文書の版の属性(#4941・#5044)。原文の本文・座標は変えない。
-    for key in ("wiki_source", "source_identities"):
+    # Wiki の経路の原文の印と、目録の文書の版の属性(#4941・#5044)、辿りで見た原文の間の関係
+    # (#5500)。原文の本文・座標は変えない。
+    for key in ("wiki_source", "source_identities", "wiki_relations"):
         if key in chunk.metadata:
             metadata[key] = chunk.metadata[key]
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。

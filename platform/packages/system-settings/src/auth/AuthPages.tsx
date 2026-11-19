@@ -9,7 +9,6 @@ import {
   CardHeader,
   CardTitle,
   Disclosure,
-  ProcessingIndicator,
   TextField,
   toast,
   type FieldWidth,
@@ -168,16 +167,6 @@ export function LoginPage({ brand, routes, entryRoute, messages, describeLoginEr
             <Button size="lg" className="w-full" loading={busy} type="submit" icon={LogIn}>
               {m.loginSubmit}
             </Button>
-            {busy ? (
-              <ProcessingIndicator
-                active
-                label={m.loginSubmit}
-                operationKey="auth-login"
-                placement="action"
-                testId="auth-login-processing"
-                activityIcon="none"
-              />
-            ) : null}
           </form>
           {/* パスワードを忘れた場合（#1873）。メールの送信は無いので、管理者に一時パスワードの発行を依頼する案内を
               同じ画面に開く。一時パスワードでログインすると、今どおり強制の変更の画面へ移る。 */}
@@ -400,17 +389,6 @@ export function PasswordChangePage({ brand, routes, entryRoute, messages, descri
                   {m.passwordSubmit}
                 </Button>
               </div>
-              {form.busy ? (
-                <ProcessingIndicator
-                  active
-                  label={m.passwordSubmit}
-                  operationKey="auth-password-change"
-                  placement="action"
-                  className="mt-3"
-                  testId="auth-password-processing"
-                  activityIcon="none"
-                />
-              ) : null}
             </div>
           </form>
         </CardContent>
