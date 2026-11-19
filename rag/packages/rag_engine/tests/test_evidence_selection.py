@@ -198,3 +198,80 @@ def test_input_over_the_lower_bound_goes_to_batched_reading_without_a_whole_rend
     assert diagnostic["selection"] == "batched_reading"
     assert rendered == [0]
     assert passed["evidence_size_lower_bound"] is not None and len(passed["spans"]) == 4
+
+
+def placed_span(index, document, path, text, *, relations=()):
+    """文書の範囲と出典情報（文書名・章節、Wiki の関係）を持つ合成の根拠（#5500・#5512）。"""
+    context = {"document_name": document, "section_path": list(path)}
+    if relations:
+        context["wiki_relations"] = [
+            {"relation": "exception", "role_of": "other", "document_name": name, "section_path": list(other)} for name, other in relations
+        ]
+    return {**span(index, text), "source": document, "document_scope": [document], "source_context": context}
+
+
+def related_inputs(*, related=True):
+    """4 文書の根拠。related なら 1 番目（点数が最も高い）と 4 番目（最も低い）を Wiki の関係で結ぶ。"""
+    relation = [("文書D", ["第2章"])] if related else []
+    return [
+        placed_span(0, "文書A", ["第1章"], "合成の根拠0。" + "補足の文。" * 80, relations=relation),
+        placed_span(1, "文書B", ["第1章"], "合成の根拠1。" + "補足の文。" * 80),
+        placed_span(2, "文書C", ["第1章"], "合成の根拠2。" + "補足の文。" * 80),
+        placed_span(3, "文書D", ["第2章"], "合成の根拠3。" + "補足の文。" * 80),
+    ]
+
+
+RELATED_SCORES = {"s0": 0.9, "s1": 0.5, "s2": 0.4, "s3": 0.3}
+
+
+def test_wiki_related_evidence_is_read_in_one_batch_and_kept_together_across_the_budget_boundary():
+    """#5512: Wiki の関係で結ばれた根拠は、点数で予算の境界をまたぐ並びでも同じ組で読み、補う順でもまとめて残す。"""
+    spans = related_inputs()
+    calls: list[list[str]] = []
+    selected, _, diagnostic = select(spans, source_scores=RELATED_SCORES, read=recording_reader(calls))
+    assert diagnostic["selection"] == "batched_reading"
+    assert spans[0]["text"] in calls[0] and spans[3]["text"] in calls[0]
+    assert [value["source_id"] for value in selected] == ["s0", "s3"]
+
+    # 関係が無ければ、同じ並びで別の組に分かれ、補う順は点数だけで決まる。
+    unrelated_calls: list[list[str]] = []
+    unrelated, _, _ = select(related_inputs(related=False), source_scores=RELATED_SCORES, read=recording_reader(unrelated_calls))
+    assert spans[3]["text"] not in unrelated_calls[0]
+    assert [value["source_id"] for value in unrelated] == ["s0", "s1"]
+
+
+def test_unrelated_documents_keep_their_order_and_a_related_unit_takes_its_first_position():
+    """#5512: 関係の無い文書の並びは変えない。単位は最も前の文書の位置に置き、単位の中は与えた順。"""
+    from rag_engine.generation.document_inputs import related_documents
+
+    documents = [[value] for value in related_inputs()]
+    units = related_documents(documents)
+    assert [[document[0]["source_id"] for document in unit] for unit in units] == [["s0", "s3"], ["s1"], ["s2"]]
+    plain = [[value] for value in related_inputs(related=False)]
+    assert related_documents(plain) == [[document] for document in plain]
+
+
+def test_a_relation_whose_place_matches_several_documents_links_nothing():
+    """#5512: 文書名と章節が同じ根拠が別の文書（別の版など）にもあれば、どちらとも結ばない。子の出典情報でも相手を特定する。"""
+    from rag_engine.generation.document_inputs import related_spans
+
+    spans = related_inputs()
+    twin = {**placed_span(4, "文書D", ["第2章"], "同名の別の版の根拠。"), "document_scope": ["文書D", "v2"]}
+    assert related_spans([*spans, twin]) == [[0], [1], [2], [3], [4]]
+    child = {**spans[3], "source_context": {"document_name": "文書D", "section_path": [], "children": [spans[3]["source_context"]]}}
+    assert related_spans([spans[0], spans[1], child]) == [[0, 2], [1]]
+
+
+def test_without_wiki_relations_the_result_is_identical_to_document_and_source_units(monkeypatch):
+    """#5512: wiki_relations が無い入力（Wiki を使わないプロファイル）は、文書ごと・原文ごとの単位と同じ組・同じ結果になる。"""
+    import rag_engine.generation.batched_evidence as module
+
+    def run():
+        calls: list[list[str]] = []
+        result = select(related_inputs(related=False), source_scores=RELATED_SCORES, read=recording_reader(calls))
+        return calls, result
+
+    current = run()
+    monkeypatch.setattr(module, "related_documents", lambda documents: [[document] for document in documents])
+    monkeypatch.setattr(module, "related_spans", lambda spans: [[index] for index in range(len(spans))])
+    assert current == run()
