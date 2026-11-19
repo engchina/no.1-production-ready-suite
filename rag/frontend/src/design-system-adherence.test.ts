@@ -34,6 +34,10 @@ const LOADER_ICON = "回転用の lucide のアイコン";
 const INLINE_SPIN = "inline style の animation で回転";
 const SURFACE_TINT = "淡い色の面（bg-accent-subtle";
 const SELECT_SEARCH_ICON = "検索して選ぶ選択欄（SearchableSelectField）の閉じたボタンに虫眼鏡";
+const RAW_HEX = "生の hex 色は使わない";
+const PX_SPACING = "余白（gap / space / p / m）を任意の px";
+const BARE_OUTLINE_NONE = "focus-visible:outline-* の無い outline-none";
+const TEXT_LG = "text-lg を使わない";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -45,7 +49,12 @@ async function lint(code: string) {
           parser: (await import("@typescript-eslint/parser")).default,
           parserOptions: { ecmaFeatures: { jsx: true }, ecmaVersion: "latest", sourceType: "module" },
         },
-        rules: { "no-restricted-syntax": adherence.overrides[0].rules["design-system/restricted-syntax"] as never },
+        rules: {
+          "no-restricted-syntax": [
+            ...adherence.overrides[0].rules["design-system/restricted-syntax"],
+            ...adherence.overrides[0].rules["design-system/ui-tokens"].slice(1),
+          ] as never,
+        },
       },
     ],
   });
@@ -475,6 +484,51 @@ const e = <Button icon={Search}>検索</Button>;
   });
 });
 
+
+describe("adherence: packages/ui と共通の規則（design-system/ui-tokens。#5522）", () => {
+  it("生の hex（color-mix の混ぜる色も）を検出し、トークンは許す", async () => {
+    const messages = await lint(`
+const a = { background: "color-mix(in srgb, var(--color-danger-emphasis) 85%, #000)" };
+const b = <div style={{ color: \`#fff\` }} />;
+const c = { background: "var(--color-danger-emphasis-hover)" };
+const d = <a href="#top">top</a>;
+`);
+    expect(linesWith(messages, RAW_HEX)).toEqual([2, 3]);
+  });
+
+  it("余白の任意の px を検出し、rem のトークン・余白以外の px は許す", async () => {
+    const messages = await lint(`
+const a = <div className="flex gap-[8px]" />;
+const b = <div className={\`md:px-[6px] \${x}\`} />;
+const c = <div className="-mt-[2px] space-y-[4px]" />;
+const d = <div className="gap-2 p-3 gap-[0.5rem] w-[8px] min-w-[var(--control-height-sm)]" />;
+`);
+    expect(linesWith(messages, PX_SPACING)).toEqual([2, 3, 4]);
+  });
+
+  it("focus-visible:outline-* の無い outline-none を検出し、代わりの表示・tabIndex={-1} の容器は許す", async () => {
+    const messages = await lint(`
+const a = <input className="outline-none" />;
+const b = <div className={\`outline-none \${x}\`} />;
+const c = <div tabIndex={0} className="outline-none" />;
+const d = <input className="outline-none focus-visible:outline-2" />;
+const e = <input className={cn("outline-none", "focus-visible:outline-2 focus-visible:outline-focus-ring")} />;
+const f = <section tabIndex={-1} className={cn("min-w-0 outline-none", x)} />;
+const g = <div className="focus-visible:outline-offset-2" />;
+`);
+    expect(linesWith(messages, BARE_OUTLINE_NONE)).toEqual([2, 3, 4]);
+  });
+
+  it("text-lg を検出し、型のスケールの文字サイズは許す", async () => {
+    const messages = await lint(`
+const a = <h2 className="text-lg font-semibold" />;
+const b = <p className="sm:text-lg" />;
+const c = <h2 className="text-base font-semibold" />;
+const d = <h1 className="text-xl text-lg-custom" />;
+`);
+    expect(linesWith(messages, TEXT_LG)).toEqual([2, 3]);
+  });
+});
 
 describe("adherence: 共通図の公開入口", () => {
   it("公開graphとCSSだけを許可し、内部パスの禁止を維持する", async () => {

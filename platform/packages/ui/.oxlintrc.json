@@ -1,0 +1,18 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  // 共有 UI 自身には、製品と共通の規則（design-system/ui-tokens: 生の hex・px の余白・outline-none・text-lg）だけを掛ける（#5522）。
+  // ほかの adherence の規則は「共有部品を使う」側の規則で、部品を実装する packages/ui には当てはまらない（Spinner・<table> 等を実装する）。
+  // 正本は platform の docs/design-system/adherence.oxlintrc.json（コピーしない）。
+  "extends": ["../../docs/design-system/adherence.oxlintrc.json"],
+  "categories": { "correctness": "off" },
+  "overrides": [
+    {
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "rules": {
+        "design-system/restricted-syntax": "off",
+        "design-system/list-height": "off",
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
+}
