@@ -255,7 +255,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "labels",
         _T,
         "default_document_type",
-        "whole_document",
         "main_part",
         "original_supplement",
         "remarks",
@@ -275,14 +274,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "field_abbrev",
         "field_category",
         "field_revision_date",
-    ),
-    *_fields(
-        "labels",
-        _T,
-        "graph_contains",
-        "graph_document",
-        "graph_section",
-        multiline=True,
     ),
     *_fields("labels", _P, "label_brackets"),
     # 表・図の内容のラベル（chunk の本文と検索の文に入る）。変えたら文書の分割し直しが要る。

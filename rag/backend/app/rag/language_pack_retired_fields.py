@@ -322,6 +322,10 @@ RETIRED_4784_FIELDS = (
     | RETIRED_4784_EVIDENCE_CUE_FIELDS
     | RETIRED_4784_SECTIONS
 )
+# 文書構造索引の構築器を消して(#5511)、読まれなくなった表示のラベル(#5515)。取込の項目。
+RETIRED_5515_LABEL_FIELDS = frozenset(
+    {"whole_document", "graph_contains", "graph_document", "graph_section"}
+)
 _RETIRED_BY_SECTION = {
     "question_cues": (
         RETIRED_QUESTION_CUE_FIELDS
@@ -347,6 +351,7 @@ _RETIRED_BY_SECTION = {
     ),
     "numbers": RETIRED_4784_NUMBER_FIELDS,
     "symbols": RETIRED_4784_SYMBOL_FIELDS,
+    "labels": RETIRED_5515_LABEL_FIELDS,
     "search_terms": RETIRED_UNREAD_SEARCH_TERM_FIELDS,
     "evidence_cues": (
         RETIRED_UNREAD_EVIDENCE_CUE_FIELDS
@@ -365,6 +370,7 @@ _ALL_RETIRED_SECTIONS = (
 _RETIRED_INGEST_FIELDS = {
     "numbers": RETIRED_4784_NUMBER_FIELDS,
     "symbols": RETIRED_4784_SYMBOL_FIELDS,
+    "labels": RETIRED_5515_LABEL_FIELDS,
 }
 _RETIRED_INGEST_SECTIONS = RETIRED_4784_SECTIONS
 PROFILE_TABLE = "rag_search_answer_profiles"
@@ -433,7 +439,9 @@ def _strip_releases(connection: Any) -> None:
         if stripped is None:
             continue
         try:
-            pack = build_pack(stripped)
+            # 読むときと同じく、項目を足す前に保存した版の欠けた項目は補って読む。hash は保存して
+            # いた項目だけから計算するので、読むときの照合と一致する(#5476・#5524)。
+            pack = build_pack(stripped, fill_missing=True)
         except ValueError:
             # 別の項目の欠けで今の契約では読めない版。本文も hash も書き換えず、そのまま残す
             # (#5035。本文だけを変えると保存した content_hash と対応しなくなる。

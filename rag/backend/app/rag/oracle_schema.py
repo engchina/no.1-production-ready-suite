@@ -85,6 +85,7 @@ from app.rag.approved_faq_5107_migration import (
 from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.language_pack_retired_fields import (
     RETIRED_4784_FIELDS,
+    RETIRED_5515_LABEL_FIELDS,
     RETIRED_ANSWER_CHECK_CUE_FIELDS,
     RETIRED_ANSWER_LABEL_FIELDS,
     RETIRED_CRAG_ANSWER_LABEL_FIELDS,
@@ -1216,6 +1217,30 @@ END;
                 "明示参照の記録）。Wiki・Wiki の関連・実体の層（RAG_ENTITIES など）・文書・"
                 "chunk・埋め込みは変えず、検索・回答の結果も変わりません。記録を残す必要があれば"
                 "適用前に同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261119_5515_language_pack_retired_structure_labels",
+            table_name="rag_language_pack_releases",
+            # 処理は data_step。項目の一覧を書くので、項目を変えると checksum も変わる。
+            sql="BEGIN\n  NULL; -- " + ",".join(sorted(RETIRED_5515_LABEL_FIELDS)) + "\nEND;\n/",
+            data_step=remove_retired_language_pack_fields,
+            destructive_note=(
+                "言語資源の公開版（RAG_LANGUAGE_PACK_RELEASES.EFFECTIVE_JSON）・下書き"
+                "（RAG_LANGUAGE_PACK_STATE.DRAFT_EFFECTIVE_JSON）・検索・回答プロファイルの上書き"
+                "（RAG_SEARCH_ANSWER_PROFILES.PROFILE_CONFIG の language_pack）から、文書構造索引の"
+                "削除で読まれなくなった表示のラベル（labels の whole_document・graph_contains・"
+                "graph_document・graph_section）の値を削除し、公開版の CONTENT_HASH と"
+                " INGEST_HASH を計算し直します。その版で作った索引の集合（RAG_CHUNK_SETS）・"
+                "版の切り替えの記録"
+                "（RAG_RECIPE_VERSION_LOG）・抽出の成果物（RAG_DOCUMENT_EXTRACTIONS・"
+                "RAG_DOCUMENT_EXTRACTION_REVISIONS の parser_artifacts）に残した取込 hash も新しい"
+                "値に書き換えます（どの処理も読まない項目なので、取込済みの文書の再処理は要りません）。"
+                "以前の廃止の migration が、項目を足す前に保存した公開版を読めずに飛ばして"
+                "廃止項目が残った環境（#5524）では、その公開版からもすべての廃止項目を消します。"
+                "ほかの項目・版の番号・公開の履歴は変えません。削除後は復元できません。"
             ),
         )
     )

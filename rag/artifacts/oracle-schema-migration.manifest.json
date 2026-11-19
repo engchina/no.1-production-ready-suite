@@ -848,10 +848,17 @@
       "sha256": "fa40e400981e143902b9c714f018aaec6b0e68ee8538c6c022b1cb278764de0e",
       "statement_count": 1,
       "table_name": "rag_knowledge_bases"
+    },
+    {
+      "destructive": true,
+      "name": "20261119_5515_language_pack_retired_structure_labels",
+      "sha256": "68fd5af6e197bc02434090b543cb4f3a66f6f669afa3c12f51c1b1fc57ff4088",
+      "statement_count": 1,
+      "table_name": "rag_language_pack_releases"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "8df5b958c305ba0b384072d6630ab3942f6dc4c92454c1c4dfdfcd42ebb8d846",
-  "statement_count": 183
+  "sha256": "2a6c72b0894b822fcd5ad826e64e435daebd904b936b689b88e06d243eb94e53",
+  "statement_count": 184
 }

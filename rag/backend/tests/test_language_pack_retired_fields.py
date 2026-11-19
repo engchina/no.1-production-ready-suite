@@ -187,9 +187,12 @@ def test_missing_tables_and_empty_tables_do_not_fail() -> None:
 
 
 def test_release_unreadable_for_another_reason_keeps_its_content_and_hash() -> None:
-    """廃止項目と別の必須項目の欠けがある公開版は、本文も hash も書き換えない(#5035)。"""
+    """廃止項目と、別の項目の値の誤りがある公開版は、本文も hash も書き換えない(#5035)。
+
+    欠けた項目は読むときに補うので読める版として扱う(#5476・#5524)。値の誤りだけが読めない版。
+    """
     old = _with_retired(builtin_pack().to_dict())
-    del old["question_cues"][_KEEP]
+    old["answer_labels"]["deadline_summary"] = "合" * 1000
     db = _db(
         _release(copy.deepcopy(old), content_hash="kept"),
         draft=builtin_pack().to_dict(),
@@ -564,3 +567,68 @@ def test_release_with_non_nfkc_normalization_keeps_documents_reprocess_recommend
     release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
     assert release["ingest_hash"] == builtin_pack().ingest_hash
     assert db.tables["RAG_CHUNK_SETS"][0]["language_pack_ingest_hash"] == "old-ingest"
+
+
+def test_5515_structure_labels_are_retired_and_ingest_hash_is_repointed() -> None:
+    """文書構造索引の削除で読まれなくなった表示のラベルを消し、取込 hash もそろえる(#5515)。"""
+    current = builtin_pack().to_dict()
+    old = copy.deepcopy(current)
+    old["labels"].update({key: "合成語" for key in module.RETIRED_5515_LABEL_FIELDS})
+    db = _Db(
+        rag_language_pack_releases=[_release(old) | {"ingest_hash": "old-ingest"}],
+        rag_language_pack_state=[
+            {"singleton_id": 1, "draft_revision": 7, "draft_effective_json": old}
+        ],
+        rag_search_answer_profiles=[],
+        rag_chunk_sets=[
+            {"language_pack_release_id": "r1", "language_pack_ingest_hash": "old-ingest"}
+        ],
+        rag_recipe_version_log=[],
+    )
+
+    remove_retired_language_pack_fields(db)
+
+    pack = builtin_pack()
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    assert release["effective_json"] == current
+    assert (release["content_hash"], release["ingest_hash"]) == (pack.hash, pack.ingest_hash)
+    assert db.tables["RAG_LANGUAGE_PACK_STATE"][0]["draft_effective_json"] == current
+    assert db.tables["RAG_CHUNK_SETS"][0]["language_pack_ingest_hash"] == pack.ingest_hash
+    section = next(
+        s
+        for s in oracle_schema_migration_sections()
+        if s.name == "20261119_5515_language_pack_retired_structure_labels"
+    )
+    assert section.data_step is remove_retired_language_pack_fields
+    assert section.destructive_note
+
+
+def test_release_saved_before_fields_were_added_is_still_stripped() -> None:
+    """項目を足す前の公開版(欠けた項目がある)も、廃止項目を消して hash を計算し直す(#5524)。"""
+    from app.rag.language_pack_contract import stored_pack
+
+    current = builtin_pack().to_dict()
+    old = copy.deepcopy(current)
+    del old["labels"]["field_id"]
+    old["labels"].update({key: "合成語" for key in module.RETIRED_5515_LABEL_FIELDS})
+    old["answer_labels"]["removed_section"] = "合成語"
+    db = _Db(
+        rag_language_pack_releases=[_release(old) | {"ingest_hash": "old-ingest"}],
+        rag_language_pack_state=[
+            {"singleton_id": 1, "draft_revision": 7, "draft_effective_json": current}
+        ],
+        rag_search_answer_profiles=[],
+        rag_chunk_sets=[],
+        rag_recipe_version_log=[],
+    )
+
+    remove_retired_language_pack_fields(db)
+
+    release = db.tables["RAG_LANGUAGE_PACK_RELEASES"][0]
+    saved = release["effective_json"]
+    assert "removed_section" not in saved["answer_labels"]
+    assert not module.RETIRED_5515_LABEL_FIELDS & saved["labels"].keys()
+    # 欠けた項目は補わずに保存したまま。読むときの hash と保存した hash が一致する。
+    assert "field_id" not in saved["labels"]
+    pack = stored_pack(saved)
+    assert (release["content_hash"], release["ingest_hash"]) == (pack.hash, pack.ingest_hash)

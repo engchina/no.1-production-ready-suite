@@ -4863,3 +4863,9 @@ BEGIN
     END LOOP;
 END;
 /
+
+-- migration: 20261119_5515_language_pack_retired_structure_labels
+BEGIN
+  NULL; -- graph_contains,graph_document,graph_section,whole_document
+END;
+/
