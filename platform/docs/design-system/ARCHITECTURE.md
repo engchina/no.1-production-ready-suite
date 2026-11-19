@@ -180,8 +180,12 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 
 `docs/design-system/adherence.oxlintrc.json` を3アプリの lint 設定から参照すると、`src/**/*.{ts,tsx}` の以下がエラーになります。
 取り込み方（oxlint は `extends`、ESLint は同じ JSON を `no-restricted-syntax` に渡す）は、`platform/AGENTS.md`「lint」節を参照してください。
+最初の 4 つ（ルール名 `design-system/ui-tokens`）は、部品を実装する `packages/ui` 自身にも掛かります（`packages/ui/.oxlintrc.json`。ほかの規則は部品を使う側の規則なので掛けない。#5522）。
 
-- 生の hex（`#1a73c1` など）→ 色トークンを使う
+- 生の hex（`#1a73c1` など。`color-mix(…, #000)` の混ぜる色も）→ 色トークンを使う（暗くするなら `--color-*-emphasis-hover` 等の専用のトークン）
+- 余白（`gap` / `space` / `p` / `m`）の任意の px（`gap-[8px]`）→ rem のトークン（`gap-2` = `--gap-action`）
+- `focus-visible:outline-*` の無い `outline-none` → 外してグローバルの `:focus-visible` に任せる（同じ className か `cn` の引数に `focus-visible:outline-*` を書くか、`tabIndex={-1}` のプログラムでだけフォーカスを移す容器なら許す）
+- `text-lg`（型のスケールの外）→ `text-sm` / `text-base` / `text-xl`
 - inline style の生の px → 余白・寸法トークンか Tailwind のユーティリティを使う（Tailwind のレイアウト寸法 `min-w-[640px]` 等は画面固有のレイアウトとして許容）
 - デザインシステムに無い書体 → `var(--font-sans)` / `var(--font-mono)`
 - 文字サイズ・行間・字間・角丸の任意値（`text-[10px]` / `rounded-[3px]`）→ `text-xs` / `rounded-md` 等のトークン

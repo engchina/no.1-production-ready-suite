@@ -4,7 +4,7 @@
 
 `docs/design-system/adherence.oxlintrc.json` がデザインシステムの遵守ルールの正本。新しいコードにこの lint を通すことで、デザインシステムからのずれを止める。
 
-- 対象は各製品の `frontend/src/**/*.{ts,tsx}` と `packages/system-settings/src`（`packages/system-settings/.oxlintrc.json`。`npm run lint`。CI は `Platform / UI`。#1891）。検出する規則の一覧と理由は、adherence の各ルールの `message` と README の表（§0）にある。
+- 対象は各製品の `frontend/src/**/*.{ts,tsx}` と `packages/system-settings/src`（`packages/system-settings/.oxlintrc.json`。#1891）。`packages/ui/src` には製品と共通の規則 `design-system/ui-tokens` だけを掛ける（`packages/ui/.oxlintrc.json` がほかの規則を off にする。#5522）。platform は `npm run lint` で両方を検査する（CI は `Platform / UI`）。検出する規則の一覧と理由は、adherence の各ルールの `message` と README の表（§0）にある。
 - 規則のテストは RAG の `frontend/src/design-system-adherence.test.ts`（ESLint の `lintText` で検出と許容の例を確かめる）。規則を足すときは同じテストに例を足す。
 - prop の妥当性は TypeScript の型チェックに任せ、lint では検査しない。
 - oxlint にはネイティブの `no-restricted-syntax` が無いため、同じ `{selector, message}` を受け取る JS プラグイン `docs/design-system/design-system-plugin.mjs` を置き、adherence 設定から相対パスで読み込む。
@@ -35,4 +35,5 @@ export default [
 
 - adherence 設定は oxlint と ESLint の両方が読むため、コメントや独自キーの無い純粋な JSON に保つ（未知のキーがあると oxlint が読み込みに失敗する）。
 - ルールを変えるときは、NL2SQL（oxlint）と RAG / Agent（ESLint）の `src` で違反件数を確かめて PR の `検証結果` に書く。違反が残るなら、同じ PR で製品を直すか、製品ごとの追従 Issue を作ってから merge する。
+- `packages/ui` にも当てはまる規則（部品の実装でも守る値の規則）は `design-system/ui-tokens` に、部品を使う側の規則は `design-system/restricted-syntax` に足す。ESLint の製品（RAG / Agent）は両方を `no-restricted-syntax` に並べる。
 - 製品固有のルールは各製品の設定に足してよいが、同じルール名（`design-system/restricted-syntax` / `no-restricted-syntax`）は上書きしない（adherence のセレクタが消える）。
