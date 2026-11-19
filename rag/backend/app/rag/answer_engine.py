@@ -3198,10 +3198,14 @@ class AnswerEngine:
                 stage_seconds=stage_seconds,
             )
         except Exception as exc:  # noqa: BLE001 - 独立の経路の失敗で通常検索を止めない。
+            from app.rag.wiki_retrieval import failure_reason
+
             state.record_degraded("wiki", exc)
             state.wiki_trace = {
                 "status": "degraded",
                 "failure_code": type(exc).__name__,
+                # 型名だけでは分からない失敗の区別（空の応答・schema の不一致・時間切れ。#5528）。
+                "failure_reason": failure_reason(exc),
                 **timing(),
             }
             return []

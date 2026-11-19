@@ -14,9 +14,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+from pr_backend_core.bounded_calls import ErrorKind, chain_classifiers
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pr_backend_core.observability.tracing import SpanDisplay, observed_span
+from pydantic import ValidationError
 
+from app.clients.ai_calls import rag_error_kind
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, _filter_id_values
 from app.clients.wiki_store import WikiScope, WikiStore
@@ -60,6 +63,23 @@ READ_PROMPT = """## Step 1: 質問と、選んだファイルの単位・章節�
 
 # 回答の診断に出す原文の chunk ID の数の上限（由来ごとの一覧も。#5518）。数は ``source_count``。
 _SOURCE_DIAGNOSTICS_LIMIT = 200
+
+# 失敗の種類（空の応答・schema に合わない出力は ``invalid_output``）。取込の呼び出しと同じ分類。
+_classify = chain_classifiers(rag_error_kind)
+
+
+def failure_reason(exc: BaseException) -> str:
+    """Wiki の経路の失敗の、記録に残せる短い理由（#5528）。
+
+    失敗の種類（``invalid_output``・``timeout`` など）に、schema に合わない出力なら最初の誤りの
+    種類と位置（項目名と番号）を足す。例外の本文・入力の値・応答の本文は入れない。
+    """
+    kind = _classify(exc).kind.value
+    if isinstance(exc, ValidationError) and exc.error_count():
+        first = exc.errors(include_url=False, include_context=False, include_input=False)[0]
+        location = ".".join(str(part) for part in first["loc"])
+        return f"{kind}:{first['type']}@{location}"
+    return kind
 
 
 class WikiSourceChanged(RuntimeError):
@@ -182,19 +202,37 @@ class WikiRetriever:
         schema: type[T],
         *,
         seconds: dict[str, float],
+        calls: list[str],
         stage: str = "Wiki: 選択",
     ) -> T:
+        """選択のモデルを呼び、出力を ``schema`` で検証して返す。
+
+        空の応答・schema に合わない出力（``invalid_output``）は、同じ入力で
+        ``RAG_LLM_MAX_RETRIES`` 回まで取り直す（回答の生成と同じ枠。時間は ``search`` の期限の中。
+        #5528）。ほかの失敗（時間切れ・認証・応答の誤り・出力の打ち切り）は取り直さない。
+        ``calls`` には呼び出しごとに段の名前を足す（取り直しも数える）。
+        """
+        context = json.dumps(data, ensure_ascii=False)
+        retries = self.settings.rag_llm_max_retries
+        attempt = 0
         with _stage(stage, seconds):
-            text = await async_call_with_model_purpose(
-                "wiki.select",
-                self.llm.generate,
-                "",
-                json.dumps(data, ensure_ascii=False),
-                system_prompt=prompt,
-                response_schema=schema.model_json_schema(),
-                response_schema_name="wiki_plan",
-            )
-        return schema.model_validate_json(text)
+            while True:
+                calls.append(stage)
+                try:
+                    text = await async_call_with_model_purpose(
+                        "wiki.select",
+                        self.llm.generate,
+                        "",
+                        context,
+                        system_prompt=prompt,
+                        response_schema=schema.model_json_schema(),
+                        response_schema_name="wiki_plan",
+                    )
+                    return schema.model_validate_json(text)
+                except Exception as exc:
+                    if attempt >= retries or _classify(exc).kind is not ErrorKind.INVALID_OUTPUT:
+                        raise
+                    attempt += 1
 
     async def follow(
         self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
@@ -314,6 +352,7 @@ class WikiRetriever:
             opts.rag_wiki_candidates,
         )
         handles = Handles()
+        calls: list[str] = []
 
         # 1 回目: 目録（版の属性つき）から読むファイルを選ぶ。
         files = await self.plan(
@@ -343,6 +382,7 @@ class WikiRetriever:
                 },
             ),
             seconds=seconds,
+            calls=calls,
             stage="Wiki: 読むファイルの選択（1 回目のモデル）",
         )
         document_ids = handles.real(files.document_ids)
@@ -440,6 +480,7 @@ class WikiRetriever:
                     },
                 ),
                 seconds=seconds,
+                calls=calls,
                 stage="Wiki: 読む単位と章節の選択（2 回目のモデル）",
             )
             unresolved.extend(choice.unresolved)
@@ -485,7 +526,8 @@ class WikiRetriever:
             tuple(required),
             {
                 "status": "ready",
-                "model_calls": 2 if document_ids else 1,
+                # 取り直しを含む選択のモデルの呼び出しの数（#5528）。
+                "model_calls": len(calls),
                 "catalog_documents": len(catalog),
                 "candidate_units": len(candidates),
                 "selected_documents": len(document_ids),

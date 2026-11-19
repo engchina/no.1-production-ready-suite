@@ -668,3 +668,101 @@ async def test_profile_without_wiki_search_records_no_measurement() -> None:
     )
     assert result.trace == {"status": "profile_disabled", "model_calls": 0}
     assert seconds == {}
+
+
+def empty_response() -> ValueError:
+    """Enterprise AI が HTTP 200 で text も usage も無い本文を返したときの例外（#5528）。"""
+    from rag_parser_core.oci_enterprise_ai import _parse_generated_text
+
+    with pytest.raises(ValueError) as caught:
+        _parse_generated_text({"object": "response", "status": "completed", "output": []})
+    return caught.value
+
+
+class FlakyLlm(Llm):
+    """1 回目の選択（目録）の最初の ``len(failures)`` 回だけ、決めた失敗を返す。"""
+
+    def __init__(self, failures: list[Exception | str], *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.failures = list(failures)
+
+    async def generate(self, prompt: str, data: str, **kwargs: Any) -> str:
+        if "files" in json.loads(data) and self.failures:
+            self.inputs.append(json.loads(data))
+            failure = self.failures.pop(0)
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+        return await super().generate(prompt, data, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param("empty", id="empty-response"),
+        pytest.param(
+            json.dumps({"document_ids": ["D99"], "search_expressions": [], "unresolved": []}),
+            id="unknown-handle",
+        ),
+        pytest.param('{"document_ids": [', id="broken-json"),
+    ],
+)
+async def test_invalid_selection_output_is_retried_with_the_same_input(failure: str) -> None:
+    """空の応答・schema に合わない出力は、同じ入力で取り直して Wiki の原文を返す（#5528）。"""
+    store = Store(PAGES)
+    llm = FlakyLlm([empty_response() if failure == "empty" else failure], ["文書A"], units=["a2"])
+    result = await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
+
+    assert result.trace["status"] == "ready" and result.chunks
+    # 取り直しも呼び出しの数に入る（1 回目の選択 2 回・2 回目の選択 1 回）。
+    assert result.trace["model_calls"] == 3
+    assert llm.inputs[0] == llm.inputs[1] and "files" in llm.inputs[0]
+
+
+@pytest.mark.asyncio
+async def test_selection_fails_after_the_retry_budget_with_the_reason() -> None:
+    """取り直しは ``RAG_LLM_MAX_RETRIES`` 回まで。使い切ると例外にし、理由を区別できる。"""
+    from app.rag.wiki_retrieval import failure_reason
+
+    store = Store(PAGES)
+    llm = FlakyLlm([empty_response() for _ in range(5)], ["文書A"])
+    with pytest.raises(ValueError) as caught:
+        await retriever(store, llm, settings=Settings(rag_llm_max_retries=2)).search(
+            QUESTION, profile_id="p", filters={}, timeout=None
+        )
+    assert len(llm.inputs) == 3
+    assert failure_reason(caught.value) == "invalid_output"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("合成の失敗"), id="unknown"),
+        pytest.param(TimeoutError(), id="timeout"),
+        pytest.param(ValueError("OCI Enterprise AI response error: 合成"), id="response-error"),
+    ],
+)
+async def test_other_selection_failures_are_not_retried(error: Exception) -> None:
+    store, llm = Store(PAGES), FlakyLlm([error], ["文書A"])
+    with pytest.raises(type(error)):
+        await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
+    assert len(llm.inputs) == 1
+
+
+def test_failure_reason_keeps_only_the_kind_and_the_schema_location() -> None:
+    """記録に残す理由は種類と、schema の誤りの種類・位置だけ（入力の値・本文を入れない）。"""
+    from app.rag.wiki_models import WikiFilePlan, scoped_plan
+    from app.rag.wiki_retrieval import failure_reason
+
+    schema = scoped_plan(WikiFilePlan, {"document_ids": (["D1"], 8)})
+    with pytest.raises(ValueError) as caught:
+        schema.model_validate_json(
+            json.dumps({"document_ids": ["合成の値"], "search_expressions": [], "unresolved": []})
+        )
+    reason = failure_reason(caught.value)
+    assert reason == "invalid_output:literal_error@document_ids.0"
+    assert "合成" not in reason
+    assert failure_reason(TimeoutError()) == "timeout"
+    assert failure_reason(RuntimeError("合成の失敗")) == "unknown"
