@@ -267,7 +267,7 @@ for (const theme of ["light", "dark"] as const) {
 // ---- 後台の作成・更新と止まった操作（#5278） --------------------------------------------------
 
 test(
-  "外で始まった作成・更新も「作成・更新」を回し、開始と経過を出し、lease の期限を過ぎたら止まった可能性を出す（#5278）",
+  "外で始まった作成・更新も「作成・更新」を回し、ボタンの行の直下に実行中と経過を出し、lease の期限を過ぎたら止まった可能性を出す（#5278）",
   { tag: "@responsive" },
   async ({ page, mockApi }, testInfo) => {
     const legacy = mockApi.state.systemTables as Record<string, unknown>;
@@ -289,10 +289,12 @@ test(
     await expect(initialize).toHaveAttribute("aria-disabled", "true");
     await expect(initialize).toHaveText("作成・更新");
     const progress = card.getByTestId("system-tables-operation-progress");
-    await expect(progress).toHaveText(/^作成・更新を実行中（開始 \d{2}:\d{2}・経過 1 分未満）$/);
+    await expect(progress).toHaveAttribute("data-processing-placement", "action");
+    await expect(progress.locator("[data-processing-label]")).toHaveText("作成・更新を実行中");
+    await expect(card.getByTestId("system-tables-operation-progress-timer")).toHaveText(/^経過時間00:0\d$/);
     await expect(card.locator("svg.animate-spin:visible")).toHaveCount(1);
     await expectNoPageHorizontalOverflow(page);
-    await progress.locator("xpath=..").screenshot({ path: testInfo.outputPath("running.png") });
+    await progress.screenshot({ path: testInfo.outputPath("running.png") });
 
     // 異常終了で lease の期限を過ぎた（状態は stale）。回さず、止まった可能性を出し、再実行できる。
     mockApi.state.systemTables = {

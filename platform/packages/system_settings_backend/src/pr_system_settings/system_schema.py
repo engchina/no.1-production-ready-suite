@@ -1376,6 +1376,8 @@ class SystemSchemaManagerBase(ABC):
     ) -> dict[str, Any]:
         """lease を取ったら操作を後台の thread で続け、開始した時点の状態を返す（画面の API）。
 
+        返す状態は `screen_status()` と同じ形（画面は応答で状態を置き換える。#5501）。
+
         前提の確認・lease の取得の失敗（確認語・承認・実行中）は、ここで `SystemSchemaError` を
         投げる（API は 4xx を返す）。後台の失敗は制御テーブルに記録され（状態の `failed` と
         `last_error_code`）、画面は状態の polling で知る。成功したときは `on_finished` に結果を
@@ -1413,7 +1415,8 @@ class SystemSchemaManagerBase(ABC):
         )
         thread.start()
         self._background_thread = thread
-        return self.status()
+        # 画面は応答で状態を置き換えるため、GET と同じ形で返す（操作中も見積もりを出す。#5501）。
+        return self.screen_status()
 
     def screen_status(self) -> dict[str, Any]:
         """画面の API（`GET .../system-tables`）の状態。
@@ -1423,7 +1426,15 @@ class SystemSchemaManagerBase(ABC):
         足す。DB ゲート・取込 worker・配備の確認は `status()` を使う（advisor を呼ばない）。
         """
 
-        data = self.status()
+        return self._with_screen_fields(self.status())
+
+    def _with_screen_fields(self, data: dict[str, Any]) -> dict[str, Any]:
+        """状態に画面だけが使う項目（`last_operation`・`vector_memory`）を足す。
+
+        画面の状態を置き換える応答（状態の取得・操作の開始・参照先のない行の削除）はすべて通す。
+        見積もりは保持している値を使い、後台の操作が終わると捨てる（`invalidate`）。
+        """
+
         if self._last_operation is not None:
             data["last_operation"] = self._last_operation
         vector_memory = self._vector_memory.estimate()
@@ -1932,7 +1943,7 @@ class SystemSchemaManagerBase(ABC):
         clear_database_status_cache()
         try:
             with self._connection_factory() as connection:
-                return self._delete_orphaned_rows_on(
+                result = self._delete_orphaned_rows_on(
                     connection,
                     owner,
                     target_name,
@@ -1958,6 +1969,8 @@ class SystemSchemaManagerBase(ABC):
                     status_code=409,
                 ) from exc
             raise self._operation_error(code) from exc
+        # 画面は応答で状態を置き換えるため、状態の取得と同じ項目を足す（#5501）。
+        return self._with_screen_fields(result)
 
     def _delete_orphaned_rows_on(
         self,

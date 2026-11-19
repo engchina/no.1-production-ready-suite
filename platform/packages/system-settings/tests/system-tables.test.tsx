@@ -237,7 +237,7 @@ describe("SystemTablesCard の取得状態と操作可否の分離", () => {
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<button).)*?作成・更新/s);
   });
 
-  it("外の操作（CLI・別のタブ）でも、操作中は「作成・更新」を回し、開始と経過を隣に出す（#5278）", () => {
+  it("外の操作（CLI・別のタブ）でも、操作中は「作成・更新」を回し、ボタンの行の直下に実行中と経過を出す（#5278）", () => {
     const startedAt = new Date(Date.now() - 3 * 60_000 - 5_000).toISOString();
     const data = statusData("ready", {
       operation_state: {
@@ -254,9 +254,16 @@ describe("SystemTablesCard の取得状態と操作可否の分離", () => {
     expect(initialize).toContain('aria-busy="true"');
     expect(initialize).toContain('aria-disabled="true"');
     expect(initialize).not.toContain('disabled=""');
-    // ラベルは変えず、状態の文言は隣に出す。
+    // ラベルは変えず、状態の文言はボタンの行の直下の共有の処理中の表示（灰色の枠）に出す。
     expect(html).toContain('data-testid="system-tables-operation-progress"');
-    expect(html).toMatch(/作成・更新を実行中（開始 \d{2}:\d{2}・経過 3 分）/);
+    expect(html).toContain('data-processing-placement="action"');
+    expect(html).toContain('data-processing-surface="framed"');
+    // ボタンが loading を出すので、処理中の表示は印を出さない（動くスピナーは 1 つ）。
+    expect(html).toContain('data-processing-activity-icon="none"');
+    expect(html).toMatch(/data-processing-label="true">作成・更新を実行中</);
+    // 経過は backend の開始時刻から共有の形式（mm:ss）で数え、開始の時刻は出さない。
+    expect(html).toMatch(/data-testid="system-tables-operation-progress-timer"[^>]*>.*03:0[4-6]/);
+    expect(html).not.toContain("開始 ");
     // 全再作成は loading にしない（押せないだけ）。
     expect(recreateButton(html)).not.toContain('aria-busy="true"');
     expect(recreateButton(html)).toContain('disabled=""');
@@ -276,8 +283,8 @@ describe("SystemTablesCard の取得状態と操作可否の分離", () => {
     expect(recreateButton(html)).not.toContain('disabled=""');
     expect(initializeButton(html)).toContain('disabled=""');
     expect(initializeButton(html)).not.toContain('aria-busy="true"');
-    expect(html).toContain("すべて再作成を実行中（開始");
-    expect(html).toContain("経過 1 分未満");
+    expect(html).toMatch(/data-processing-label="true">すべて再作成を実行中</);
+    expect(html).toMatch(/data-testid="system-tables-operation-progress-timer"[^>]*>.*00:1[0-2]/);
   });
 
   it("lease の期限を過ぎた操作（stale）は回さず、止まった可能性を出して再実行できる（#5278）", () => {
@@ -637,7 +644,7 @@ describe("vector memory の見積もり（#5278・#5473）", () => {
     // 載っていない索引の使用中は「—」。
     expect(html).toContain("80.0 MB / 40.0 MB / —");
     expect(html).toContain("見込みの必要量 / 今の空き / 使用中");
-    expect(html).toContain("今の空きは目安です。");
+    expect(html).toContain("今の空きは目安です（Vector Pool は自動で増減）。");
     expect(html).not.toContain("vector memory の見積もり");
     expect(html).not.toContain("超えています");
   });

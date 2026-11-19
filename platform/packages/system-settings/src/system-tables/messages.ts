@@ -76,18 +76,15 @@ export const SYSTEM_TABLES_MESSAGES = {
   "settings.database.systemTables.operation.stale": "停止の可能性",
   "settings.database.systemTables.operation.kind.initialize": "作成・更新",
   "settings.database.systemTables.operation.kind.recreate": "すべて再作成",
-  // 操作中のボタンの隣に出す状態（ボタンのラベルは変えない。buttons.md §8。#5278）。
-  "settings.database.systemTables.operation.progress": "{operation}を実行中（開始 {startedAt}・経過 {elapsed}）",
-  "settings.database.systemTables.operation.elapsedMinutes": "{minutes} 分",
-  "settings.database.systemTables.operation.elapsedUnderMinute": "1 分未満",
+  // 操作中のボタンの行の直下に出す状態（ボタンのラベルは変えない。buttons.md §8。#5278）。
+  "settings.database.systemTables.operation.inProgress": "{operation}を実行中",
   "settings.database.systemTables.stale.title": "前回の操作が止まった可能性があります",
   "settings.database.systemTables.stale.detail":
     "{operation}（開始 {startedAt}）が、処理中の印の期限（{expiresAt}）を過ぎても終わっていません。操作したプロセスが異常終了した可能性があります。サーバーで処理が動いていないことを確かめてから、もう一度実行してください。",
   "settings.database.systemTables.vectorMemory.estimated": "見込みの必要量",
   "settings.database.systemTables.vectorMemory.free": "今の空き",
   "settings.database.systemTables.vectorMemory.used": "使用中",
-  "settings.database.systemTables.vectorMemory.freeHint":
-    "Autonomous Database は Vector Pool を自動で増減するため、今の空きは目安です。",
+  "settings.database.systemTables.vectorMemory.freeHint": "今の空きは目安です（Vector Pool は自動で増減）。",
   "settings.database.systemTables.operation.no_op": "システムテーブルは最新です。変更はありません。",
   "settings.database.systemTables.operation.initialized": "システムテーブルを初期作成しました。",
   "settings.database.systemTables.operation.migrated": "システムテーブルを更新しました。",

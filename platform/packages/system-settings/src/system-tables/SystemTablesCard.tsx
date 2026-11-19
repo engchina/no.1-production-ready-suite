@@ -17,6 +17,7 @@ import {
   ExecutionConfirmationField,
   ListScrollRegion,
   ListToolbar,
+  ProcessingIndicator,
   Skeleton,
   StatusBadge,
   TimedLoadingState,
@@ -80,8 +81,6 @@ const dateTimeFormat = displayDateTimeFormat({
 
 // 操作の開始時刻（「13:45」。#5278）。
 const timeFormat = displayDateTimeFormat({ hour: "2-digit", minute: "2-digit" });
-// 経過時間の表示を進める間隔（分の単位で出すため、秒ごとには描き直さない）。
-const ELAPSED_TICK_MS = 15_000;
 const megabyteFormat = new Intl.NumberFormat("ja-JP", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 function formatNumber(value: number): string {
@@ -624,6 +623,8 @@ export function SystemTablesCard({
                 <SummaryItem
                   key={index.name}
                   testId="system-tables-vector-memory"
+                  // 4 列の幅では目安の注記が折り返すため、2 列分を使って 1 行に収める（#5501）。
+                  className="xl:col-span-2"
                   label={index.name}
                   labelClassName="font-mono [overflow-wrap:anywhere]"
                   value={[
@@ -659,9 +660,6 @@ export function SystemTablesCard({
                   {text("settings.database.systemTables.action.initialize")}
                 </Button>
               ) : null}
-              {runningKind === "initialize" && operationState ? (
-                <OperationProgress state={operationState} text={text} />
-              ) : null}
               <Button
                 type="button"
                 size="md"
@@ -674,6 +672,9 @@ export function SystemTablesCard({
                 {text("settings.database.systemTables.action.refresh")}
               </Button>
             </div>
+            {runningKind === "initialize" && operationState ? (
+              <OperationProgress state={operationState} text={text} />
+            ) : null}
 
             <SystemTablesDetails data={data} text={text} renderObjectName={renderObjectName} />
 
@@ -756,35 +757,25 @@ function operationKindLabel(state: SystemTableOperationState, text: Text): strin
 }
 
 /**
- * 操作中のボタンの隣の「〈操作〉を実行中（開始 hh:mm・経過 n 分）」（#5278）。ボタンのラベルは変えない
- * （buttons.md §8）ため、状態の文言はここに出す。経過は backend の開始時刻から分の単位で数え、15 秒ごとに
- * 描き直す（1 秒ごとに読み上げない timer）。
+ * 操作中の「〈操作〉を実行中」と経過時間（#5278）。押したボタンの行の直下に共有の処理中の表示（灰色の枠）で出す。
+ * ボタンのラベルは変えず（buttons.md §8）、ボタンが loading を出すので印は出さない（動くスピナーは 1 つ。
+ * messaging §3.7）。経過は backend の開始時刻から数え、CLI・別のタブで始めた操作も同じに出す。
  */
 function OperationProgress({ state, text }: { state: SystemTableOperationState; text: Text }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
-    return () => window.clearInterval(timer);
-  }, []);
-  const startedAt = state.started_at ? Date.parse(state.started_at) : Number.NaN;
-  const minutes = Number.isFinite(startedAt) ? Math.floor(Math.max(0, now - startedAt) / 60_000) : null;
-  const elapsed =
-    minutes == null || minutes < 1
-      ? text("settings.database.systemTables.operation.elapsedUnderMinute")
-      : text("settings.database.systemTables.operation.elapsedMinutes", { minutes: formatNumber(minutes) });
   return (
-    <p
-      role="timer"
-      aria-live="off"
-      data-testid="system-tables-operation-progress"
-      className="min-w-0 text-xs leading-relaxed text-fg-muted tabular-nums [overflow-wrap:anywhere]"
-    >
-      {text("settings.database.systemTables.operation.progress", {
+    <ProcessingIndicator
+      active
+      label={text("settings.database.systemTables.operation.inProgress", {
         operation: operationKindLabel(state, text),
-        startedAt: formatTime(state.started_at),
-        elapsed,
       })}
-    </p>
+      operationKey={`system-tables-${state.operation_kind ?? "initialize"}-${state.started_at ?? ""}`}
+      startedAt={state.started_at}
+      placement="action"
+      activityIcon="none"
+      // 作成・更新は数分かかることがあり、遅延の案内は出さない（経過時間だけを出す）。
+      showSlowMessage={false}
+      testId="system-tables-operation-progress"
+    />
   );
 }
 
@@ -1005,6 +996,7 @@ function SummaryItem({
   descriptionClassName,
   note,
   testId,
+  className,
 }: {
   label: string;
   labelClassName?: string;
@@ -1014,12 +1006,14 @@ function SummaryItem({
   /** description の下に同じ書式で足す 1 行（例: 今の空きは目安であること）。 */
   note?: string;
   testId?: string;
+  /** grid の中の配置（列の幅）だけを足す。 */
+  className?: string;
 }) {
   return (
     <div
       data-testid={testId}
       data-surface-tint="neutral"
-      className="min-w-0 rounded-md border border-border bg-surface-hover p-3"
+      className={cn("min-w-0 rounded-md border border-border bg-surface-hover p-3", className)}
     >
       <p className={cn("text-xs text-fg-muted", labelClassName)}>{label}</p>
       <p className="mt-1 break-words font-sans text-sm font-semibold text-fg">{value}</p>

@@ -142,8 +142,10 @@ describe("後台の作成・更新（#5278）", () => {
     expect(initializeButton().getAttribute("aria-busy")).toBe("true");
     expect(initializeButton().disabled).toBe(false);
     expect(document.activeElement).toBe(initializeButton());
-    expect(host.querySelector('[data-testid="system-tables-operation-progress"]')?.textContent).toMatch(
-      /^作成・更新を実行中（開始 \d{2}:\d{2}・経過 1 分未満）$/,
+    const progress = host.querySelector('[data-testid="system-tables-operation-progress"]');
+    expect(progress?.querySelector("[data-processing-label]")?.textContent).toBe("作成・更新を実行中");
+    expect(progress?.querySelector('[data-testid="system-tables-operation-progress-timer"]')?.textContent).toMatch(
+      /^経過時間\d{2}:\d{2}$/,
     );
     expect(toastSuccess).not.toHaveBeenCalled();
 
