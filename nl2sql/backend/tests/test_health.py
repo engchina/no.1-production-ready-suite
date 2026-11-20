@@ -710,6 +710,7 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
 
     assert preview.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
     assert preview.sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
+    assert preview.engine_meta["provider"] == "oci_enterprise_ai"
     assert preview.engine_meta["runtime"] == "oci_enterprise_ai"
     assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
     # 件数未指定時は total result maximum を設定せず、SQL にも fetch 上限を足さない。
@@ -720,6 +721,34 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     assert "SELECT または WITH" in fake_client.calls[0]["system_prompt"]
     assert "FETCH FIRST 100" not in fake_client.calls[0]["system_prompt"]
     assert "勝手に付けないでください" in fake_client.calls[0]["system_prompt"]
+
+
+def test_enterprise_ai_direct_preview_reports_the_called_api_of_the_model_connection() -> None:
+    """クォータナリ接続（Anthropic Claude）のモデルでは、provider・runtime に呼んだ API を入れる
+    （#5593）。"""
+
+    class _AnthropicConnectionClient(_FakeEnterpriseAiClient):
+        def connection(self, model_id: str) -> SimpleNamespace:
+            assert model_id == "enterprise-nl2sql-model"
+            return SimpleNamespace(uses_anthropic_messages=True)
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample_with_profile(service)
+    service._enterprise_ai_client = _AnthropicConnectionClient(
+        '{"sql":"SELECT EMPLOYEE_NAME FROM EMPLOYEE","explanation":"社員を取得します。"}'
+    )
+
+    preview = service.preview(
+        PreviewRequest(
+            question="社員一覧を見たい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id="sql_assist_sample",
+        )
+    )
+
+    assert preview.engine_meta["provider"] == "anthropic_messages"
+    assert preview.engine_meta["runtime"] == "anthropic_messages"
+    assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
 
 
 def test_enterprise_ai_direct_preview_respects_use_glossary_flag() -> None:

@@ -21,12 +21,13 @@ from pr_anthropic_messages import AnthropicMessagesError, anthropic_failure_acti
 from pr_backend_core.bounded_calls import BoundedCallAborted
 
 from app.features.nl2sql import enterprise_ai_client
-from app.features.nl2sql.ai_calls import make_ai_caller
+from app.features.nl2sql.ai_calls import BoundedEnterpriseAiClient, make_ai_caller
 from app.features.nl2sql.enterprise_ai_client import (
     EnterpriseAiDirectError,
     OciEnterpriseAiDirectClient,
     _anthropic_direct_error,
     enterprise_ai_configuration_failure_message,
+    enterprise_ai_direct_provider,
 )
 from app.features.nl2sql.reverse_generation import REASONS, ReverseStageError, generate_stage
 from app.features.nl2sql.structured_outputs import SqlOutput, TextOutput, response_format
@@ -216,6 +217,21 @@ def _generate(settings: Settings, **kwargs: Any) -> str:
     }
     values.update(kwargs)
     return OciEnterpriseAiDirectClient(settings).generate(**values)
+
+
+def test_direct_provider_follows_the_model_connection() -> None:
+    """直接の生成の engine_meta の provider・runtime は、モデルの接続で決める（#5593）。"""
+    claude_client = OciEnterpriseAiDirectClient(_settings())
+    oci_client = OciEnterpriseAiDirectClient(
+        _settings(oci_enterprise_ai_default_text_model="text-a")
+    )
+    wrapped = BoundedEnterpriseAiClient(claude_client, cast(Any, None))
+
+    assert enterprise_ai_direct_provider(claude_client, CLAUDE) == "anthropic_messages"
+    assert enterprise_ai_direct_provider(wrapped, CLAUDE) == "anthropic_messages"
+    # ほかの接続（OpenAI 互換）の値は変えない。
+    assert enterprise_ai_direct_provider(oci_client, "text-a") == "oci_enterprise_ai"
+    assert enterprise_ai_direct_provider(object(), CLAUDE) == "oci_enterprise_ai"
 
 
 # --------------------------------------------------------------------------- 成功
