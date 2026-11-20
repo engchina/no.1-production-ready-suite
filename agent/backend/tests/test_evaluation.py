@@ -1630,6 +1630,7 @@ class _RoutedModel(ScriptedModel):
         self.peak = {"answer": 0, "judge": 0}
         self.counts = {"answer": 0, "judge": 0}
         self.delay = 0.02
+        self.answer_gate: anyio.Event | None = None
 
     async def get_response(
         self, system_instructions: Any, input: Any, *args: Any, **kwargs: Any
@@ -1639,6 +1640,10 @@ class _RoutedModel(ScriptedModel):
         self.in_flight[role] += 1
         self.peak[role] = max(self.peak[role], self.in_flight[role])
         try:
+            if role == "answer" and self.answer_gate is not None:
+                if self.counts[role] == 2:
+                    self.answer_gate.set()
+                await self.answer_gate.wait()
             await anyio.sleep(self.delay)
             if role == "judge":
                 if self.judge_errors:
@@ -1696,7 +1701,13 @@ def test_cases_run_with_bounded_concurrency_and_429_waits_globally(
     model, targets = _routed(monkeypatch, answers, [_HttpError(429), _HttpError(429)])
     job = _job(*(_case(f"c{number}", f"質問{number}", f"回答{number}") for number in range(1, 5)))
 
-    anyio.run(run_evaluation_job, job.id)
+    async def run() -> None:
+        # sleep の重なりに依存せず、最初の2件が実際に同時に進むことを確かめる。
+        model.answer_gate = anyio.Event()
+        with anyio.fail_after(10):
+            await run_evaluation_job(job.id)
+
+    anyio.run(run)
 
     finished = evaluation_store.get(job.id)
     assert finished.status == JobStatus.COMPLETED
