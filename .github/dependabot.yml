@@ -266,6 +266,14 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: vite
         update-types: ["version-update:semver-major"]
+      # Node の API の型は、実行する Node.js の major（CI の setup-node と配備の init_script.sh の nodejs:24）に合わせる
+      # （#5570）。Node の major を上げるときに、この上限と 3 製品・platform の @types/node を一緒に上げる。
+      - dependency-name: "@types/node"
+        versions: [">=25.0.0"]
+      # TypeScript 7 は typescript-eslint の peer（<6.1.0）が許さず、baseUrl の削除で tsconfig の書き換えも要る。
+      # 移行は #5569 で 3 製品と platform をそろえて行い、そのときに外す。
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
 
   # platform の frontend の workspace（packages/ui・packages/system-settings。#1588）。3 製品の package-lock.json が
   # file: で入れて依存を書き写しているので、lock だけを上げる（lockfile-only。冒頭の「対象範囲」）。monthly の理由は上と同じで、
