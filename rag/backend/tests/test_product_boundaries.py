@@ -1,8 +1,8 @@
 """製品の境界（#3240）: rag は Agent・NL2SQL・suite の内部に依存しない。
 
-依存の向きは Agent → RAG だけで、RAG は Agent を呼ばない（root の AGENTS.md「構成」）。製品同士は
-コードで依存せず、呼ぶ側が公開の MCP の契約だけを使う。rag の Python のコード（backend・packages・
-services。テストを含む）を静的に調べ、次を確かめる:
+依存の向きは Agent → RAG だけで、RAG は Agent を呼ばない（root の AGENTS.md「依存の向き」）。
+製品同士はコードで依存せず、呼ぶ側が公開の MCP の契約だけを使う。rag の Python のコード
+（backend・packages・services。テストを含む）を静的に調べ、次を確かめる:
 
 - import: `app.*` は rag の backend の `app` にある module だけ（3 製品の backend は同じ `app` の
   名前を使うので、Agent・NL2SQL の module は名前だけでは区別できない）。suite の package を

@@ -1,6 +1,6 @@
 # NL2SQL の技術スタック
 
-> nl2sql/AGENTS.md の詳細。nl2sql/AGENTS.md の規則と同じ強さで守る。AI / DB の分担は root の AGENTS.md「共通の技術方針」が正本。
+> nl2sql/AGENTS.md の詳細。nl2sql/AGENTS.md の規則と同じ強さで守る。AI / DB の分担は root の [docs/agents/tech-stack.md](../../../docs/agents/tech-stack.md) が正本。
 
 | 用途 | 採用 | 重要な制約 |
 |---|---|---|

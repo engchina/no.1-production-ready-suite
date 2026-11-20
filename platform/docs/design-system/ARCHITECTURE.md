@@ -293,14 +293,14 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 | 意図的な見た目の変更（QA 共有用） | `README.md` §7 |
 | 検収基準 | `README.md` §9 |
 | まだ決まっていないこと | `README.md` §11 |
-| UI 変更時の禁止事項とレビュー観点 | リポジトリ直下の `docs/agents/ui.md`（要約は `AGENTS.md`「デザインシステム / UI」節） |
+| UI 変更時の禁止事項とレビュー観点 | リポジトリ直下の `docs/agents/ui.md`（直下の `AGENTS.md`「作業ごとに読む文書」から参照） |
 
 ---
 
 ## 10. この文書の位置
 
 この文書はリポジトリの `docs/design-system/ARCHITECTURE.md` にあります。
-`AGENTS.md` の「デザインシステム / UI」節から参照されており、Claude Code（2.1.277
+`AGENTS.md` の「作業ごとに読む文書」の表から参照されており、Claude Code（2.1.277
 以降）と Codex は `AGENTS.md` を直接読むため、**UI に触るとき自動でこのルールを
 読みます**。zip を配布したりプロンプトを貼る運用は不要です。
 
