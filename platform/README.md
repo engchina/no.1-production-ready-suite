@@ -200,10 +200,16 @@ API は 422 で「既定のテキストモデルを選択してください。�
 - **クォータナリ接続（#5546）は Anthropic Claude の Messages API 向け。** API key だけが必須で、Endpoint URL は任意（空なら
   Anthropic の公式の API。既定の URL は `pr_system_settings.model.ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT` だけに書き、画面には API の
   `default_anthropic_endpoint` で示す。指定するなら base URL まで）。Project OCID は持たない。key が接続のあることを決めるので、
-  保存済みの key だけを消す指定はなく、消すときはクォータナリ接続ごと削除する。**いまは 3 製品の呼び出しの層が未対応**で、
-  この接続のモデルは保存・選択はできるが、呼ぶと（接続テストを含む）OpenAI 互換の URL（接続の `base_url` / `request_url()`）を
-  引いた時点で `EnterpriseAiConnectionNotSupportedError`（code `enterprise_ai_connection_not_supported`。「まだ呼び出せません」）に
-  なる（別の接続へ切り替えない）。呼び出しは共通の部品 `pr_anthropic_messages` で、製品への接続は #5546 の 3 段目。
+  保存済みの key だけを消す指定はなく、消すときはクォータナリ接続ごと削除する。
+  - **呼び方の選び方**: 3 製品の呼び出しの層は、`enterprise_ai_connection_for_model(settings, model_id)` で引いた接続の
+    `uses_anthropic_messages` が真なら共通の部品 `pr_anthropic_messages`（Messages API）で、偽なら従来の Responses API で呼ぶ。
+    Messages API の URL は接続の `effective_endpoint`（空の設定では `ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT`）を `endpoint_url` に渡す。
+  - **接続テスト**: 「システム設定 › モデル」のテストは、この接続のモデルでは製品の `run_model_test` を呼ばず、共通の
+    `pr_system_settings.anthropic_model_test` が `pr_anthropic_messages` で短い要求を 1 回送る（保存前のモデルの推論の量・出力の上限で送る）。
+    失敗は `AnthropicMessagesError.kind` からクォータナリ接続向けの案内（OCI の IAM・Project OCID の文は出さない）にする。
+  - **製品の回答・解析などの呼び出しは未対応**（#5546 の 3 段目で製品ごとにつなぐ）。それまでは OpenAI 互換の URL（接続の
+    `base_url` / `request_url()`）を引いた時点で `EnterpriseAiConnectionNotSupportedError`（code `enterprise_ai_connection_not_supported`。
+    「まだ呼び出せません」）になる（別の接続へ切り替えない）。この誤りは 3 製品がつなぎ終えた最後の PR で消す。
 - プライマリ接続の後ろの接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL（クォータナリ接続は
   Endpoint URL か API key）があるときだけその接続が有効になる。
 
