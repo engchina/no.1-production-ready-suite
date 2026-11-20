@@ -45,6 +45,7 @@ from rag_engine.generation.document_inputs import (
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
 from rag_engine.generation.grounded import span_citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
+from rag_engine.generation.partial_answers import SUMMARY_SYSTEM, SummaryClaim, SummaryClaims, combine_partial_answers
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.resources.call_context import call_context, update_call_context
 from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS, remaining_seconds
@@ -125,10 +126,16 @@ def _labeled_text(label: str, value: Mapping[str, Any]) -> str:
     """引用単位の ID を、選択する原文の隣へ示す。"""
     text = str(value["text"])
     snapshot = EvidenceUnitSnapshot.create({**value, "label": label}, reading_units(value), "batch_read_units_v1")
-    return "\n".join(
-        f"{label}-{number}| [{name}] {text[start:end]}"
-        for number, ((start, end), name) in enumerate(zip(snapshot.units, snapshot.unit_labels, strict=True), 1)
-    )
+    parts = []
+    offset = 0
+    for number, ((start, end), name) in enumerate(zip(snapshot.units, snapshot.unit_labels, strict=True), 1):
+        if context := text[offset:start].strip():
+            parts.append(context)
+        parts.append(f"{label}-{number}| [{name}] {text[start:end]}")
+        offset = end
+    if context := text[offset:].strip():
+        parts.append(context)
+    return "\n".join(parts)
 
 
 def _reading_model(values: Sequence[Mapping[str, Any]]) -> type[BatchReading]:
@@ -252,6 +259,7 @@ def prepare_batched_evidence(
     provider_id: str | None = None,
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
     failed_batches: list[dict[str, Any]] | None = None,
+    summarize: Callable[[str], SummaryClaims] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
     image_count: int = 0,
@@ -288,11 +296,34 @@ def prepare_batched_evidence(
     reading_order = document_priority(spans, source_scores, first=protected) if protected else document_order
     firsts = [value for value in spans if value.get(FIRST_CHUNK)]
 
+    versioned = {document_key(value) for value in firsts}
+
+    def chunk_key(value: Mapping[str, Any]) -> tuple[tuple[str, ...], str]:
+        return document_key(value), value["source_id"]
+
+    # 同じ chunk が頁や出典の境界で複数 span になる場合も、送る単位は同じ版の chunk 全体。
+    chunk_members: dict[tuple[tuple[str, ...], str], list[dict[str, Any]]] = {}
+    for value in with_first_chunks(spans, firsts):
+        if document_key(value) in versioned:
+            chunk_members.setdefault(chunk_key(value), []).append(value)
+
     def with_firsts(values: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-        return with_first_chunks(values, firsts)
+        full = []
+        added = set()
+        annotated = {(chunk_key(value), value.get("start", 0)): value for value in values if value.get("batch_answer")}
+        for value in values:
+            key = chunk_key(value)
+            if key not in chunk_members:
+                full.append(value)
+            elif key not in added:
+                added.add(key)
+                for member in chunk_members[key]:
+                    full.append(annotated.get((key, member.get("start", 0)), member))
+        return with_first_chunks(full, firsts)
 
     def main_of(values: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [value for value in values if not value.get(FIRST_CHUNK)]
+        body_docs = {document_key(value) for value in values if not value.get(FIRST_CHUNK)}
+        return [value for value in values if not value.get(FIRST_CHUNK) or document_key(value) not in body_docs]
 
     selected = order_document_spans(with_firsts(spans), priority=document_order)
     batches: list[dict[str, Any]] = []
@@ -381,16 +412,16 @@ def prepare_batched_evidence(
         """組の本文に、その文書の先頭の chunk を足しても読取の入力に入るか。"""
         return fits(with_firsts(values))
 
-    def retain_whole(values: Sequence[dict[str, Any]], reduced: dict[tuple[str, int, int], dict[str, Any]]) -> None:
+    def retain_whole(values: Sequence[dict[str, Any]], reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]]) -> None:
         """読取の結果を確かめられない入力の原文の全体を最終生成へ残す。引用の検査は最終生成の出典にも掛かる。"""
         for value in values:
             whole = _slice(value, 0, len(value["text"]))
             start, end = whole.get("start", 0), whole.get("end", len(whole["text"]))
-            inside = [key for key in reduced if key[0] == whole["source_id"] and start <= key[1] and key[2] <= end]
+            inside = [key for key in reduced if key[:2] == chunk_key(whole) and start <= key[2] and key[3] <= end]
             answers = [answer for answer in (reduced.pop(key).get("batch_answer") for key in inside) if answer]
             if answers:
                 whole["batch_answer"] = "\n".join(answers)
-            reduced[(whole["source_id"], start, end)] = whole
+            reduced[(*chunk_key(whole), start, end)] = whole
 
     # 原文を残した最後の組とその失敗。入らなければ、容量ではなくその失敗として回答全体を退避させる。
     unverified_failure: tuple[Exception, dict[str, Any]] | None = None
@@ -473,6 +504,27 @@ def prepare_batched_evidence(
                     current.extend(document)
                     continue
                 # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。字数は入るかどうかの確認だけに使う。
+                if document_key(document[0]) in versioned:
+                    seen_chunks = set()
+                    for value in document:
+                        key = chunk_key(value)
+                        if key in seen_chunks:
+                            continue
+                        seen_chunks.add(key)
+                        members = chunk_members[key]
+                        if current and not batch_fits([*current, *members]):
+                            result.append(current)
+                            current = []
+                        if not current and not batch_fits(members):
+                            fail(
+                                "complete_chunk_group_exceeds_limit",
+                                source=str(value.get("source") or ""),
+                                document_scope=list(key[0]),
+                                source_ids=list(dict.fromkeys(item["source_id"] for item in with_firsts(members))),
+                                configured_chars=settings.evidence_budget_chars,
+                            )
+                        current.extend(members)
+                    continue
                 for value in document:
                     cuts = evidence_cuts(value, current_section_paths())
                     offset = 0
@@ -508,7 +560,7 @@ def prepare_batched_evidence(
 
         def inside(excerpt: Mapping[str, Any], value: Mapping[str, Any]) -> bool:
             return bool(
-                excerpt["source_id"] == value["source_id"]
+                chunk_key(excerpt) == chunk_key(value)
                 and excerpt.get("start", 0) >= value.get("start", 0)
                 and excerpt.get("end", len(excerpt["text"])) <= value.get("end", len(value["text"]))
             )
@@ -650,9 +702,10 @@ def prepare_batched_evidence(
                 stop_reduction("batch_reduction_did_not_fit")
             remaining_passes -= 1
             previous_size = sum(len(value["text"]) for value in selected)
-            reduced: dict[tuple[str, int, int], dict[str, Any]] = {}
+            reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]] = {}
             pass_batches = list(partition(selected))
             batch_offset = len(batches)
+            partials: dict[tuple[Any, ...], dict[str, Any]] = {}
 
             def admitted(
                 pass_batches: Sequence[list[dict[str, Any]]] = pass_batches, pass_index: int = pass_index
@@ -788,12 +841,20 @@ def prepare_batched_evidence(
                             units = reading_units(original)
                             # 原文と座標は番号からコードが切り出す。モデルの文字列を原文として受け取らない。
                             excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
-                            key = (excerpt["source_id"], excerpt["start"], excerpt["end"])
+                            kept = original if document_key(original) in versioned else excerpt
+                            key = (*chunk_key(kept), kept.get("start", 0), kept.get("end", len(kept["text"])))
                             answers = (reduced.get(key, {}).get("batch_answer"), verified_candidate(finding.answer, excerpt["text"]))
-                            answer = "\n".join(item for item in answers if item)
-                            if answer:
-                                excerpt["batch_answer"] = answer
-                            reduced[key] = excerpt
+                            answer = "\n".join(dict.fromkeys(item for item in answers if item))
+                            reduced[key] = {**kept, **({"batch_answer": answer} if answer else {})}
+                            if (
+                                summarize
+                                and not original.get("document_background_only")
+                                and (verified := verified_candidate(finding.answer, excerpt["text"]))
+                            ):
+                                identity = (document_key(excerpt), excerpt["source_id"], excerpt.get("start"), excerpt.get("end"))
+                                item = partials.setdefault(identity, {**excerpt, "answers": []})
+                                if verified not in item["answers"]:
+                                    item["answers"].append(verified)
                             receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
                         if mismatch is not None:
                             # 不合格の範囲を組から入力へ絞る（#4090）。その finding を採らず、その入力の原文を残す。
@@ -827,6 +888,55 @@ def prepare_batched_evidence(
                 break
             selected = order_document_spans(tag(with_firsts(list(reduced.values()))), priority=document_order)
             prompt, measurement = final_measure(selected)
+            if not measurement["fits"] and versioned and summarize and unverified_failure is None:
+                if pass_index == 1:
+                    # 次の回は採用した chunk 全体と各文書の先頭で局所回答を作る。
+                    continue
+                if not partials:
+                    fail("partial_answers_without_verified_references")
+                sources = tag(list(partials.values()))
+                claims = [
+                    SummaryClaim(answer=answer, references=[source["label"]]) for source in sources for answer in source.pop("answers")
+                ]
+                # 元の回答条件は保持する。最終モデルに送る根拠は局所回答と番号で、原文は引用の照合用にだけ残す。
+                prefix = render([])
+
+                def measure_summary(block: str, *, prefix: str = prefix, sources: list[dict[str, Any]] = sources) -> dict[str, Any]:
+                    measured = model_input_measurement(
+                        settings,
+                        system,
+                        prefix + "\n" + block,
+                        schema_for(sources) if schema_for else schema,
+                        provider_id=provider_id,
+                        image_count=image_count,
+                    )
+                    return {**measured, "fits": bool(measured["fits"] and len(block) <= settings.evidence_budget_chars)}
+
+                def local_fits(prompt: str) -> bool:
+                    if (left := remaining_seconds()) is not None and left < generation_reserve:
+                        fail("batch_reduction_deadline")
+                    return len(prompt) <= settings.evidence_budget_chars and bool(
+                        model_input_measurement(
+                            settings, SUMMARY_SYSTEM, prompt, SummaryClaims.model_json_schema(), provider_id=provider_id
+                        )["fits"]
+                    )
+
+                block, measured, calls = combine_partial_answers(
+                    claims, question=question, final_measure=measure_summary, local_fits=local_fits, summarize=summarize
+                )
+                return (
+                    sources,
+                    prefix + "\n" + block,
+                    {
+                        **measured,
+                        "partial_answer_synthesis": True,
+                        "summary_calls": calls,
+                        "batch_count": len(batches),
+                        "batches": batches,
+                        "read_source_count": len(read_sources),
+                        "configured_chars": settings.evidence_budget_chars,
+                    },
+                )
             if not measurement["fits"] and sum(len(value["text"]) for value in selected) >= previous_size:
                 stop_reduction("batch_reduction_did_not_shrink")
         selected, prompt, measurement, reduction = fill_to_budget(selected)

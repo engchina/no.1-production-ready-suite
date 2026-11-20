@@ -228,17 +228,24 @@ def test_first_chunk_already_in_evidence_is_kept_for_batches_but_sent_once():
 
 def test_batches_split_inside_one_document_each_carry_its_first_chunk():
     """#5240: 1 つの文書の長い根拠を組に分けても、どの組にもその文書の先頭の chunk を入れ、最終生成にも 1 回だけ入れる。"""
-    original = replace(record(), text="".join(f"条件{index}は合成の値です。" + "補足本文。" * 100 + "\n\n" for index in range(10)))
+    originals = [
+        replace(
+            record(), id=f"part-{i}", chunk_id=f"part-{i}", chunk_uid=f"part-{i}", chunk_seq=i, text=f"条件{i}です。" + "補足本文。" * 230
+        )
+        for i in range(1, 7)
+    ]
     with bind_dependencies(
-        deps(lambda **kw: [{"document_scope": list(document_context_key(original)), "first_chunk": first_chunk(original)}])
+        deps(lambda **kw: [{"document_scope": list(document_context_key(originals[0])), "first_chunk": first_chunk(originals[0])}])
     ):
-        _, spans, _ = DocumentBackgroundReader().append("条件は？", AnswerContext([original], "本文。"), selected(original))
+        _, spans, _ = DocumentBackgroundReader().append(
+            "条件は？", AnswerContext(originals, "本文。"), [span for record_ in originals for span in selected(record_)]
+        )
     seen: list[list[str]] = []
 
     def read(system, prompt, schema):
         values = json.loads(prompt)["evidence"]
         seen.append([body(value) for value in values])
-        return schema.model_validate({"findings": [finding(value) for value in values]})
+        return schema.model_validate({"findings": [finding(value) for value in values if body(value).startswith("条件1")]})
 
     final, _, diagnostic = prepare_batched_evidence(
         spans,
@@ -256,3 +263,12 @@ def test_batches_split_inside_one_document_each_carry_its_first_chunk():
     assert all(call.count("合成の文書の題名と前提。") == 1 for call in seen)
     assert all(batch["first_chunk_source_ids"] == ["first"] for batch in diagnostic["batches"])
     assert sum(value["text"] == "合成の文書の題名と前提。" for value in final) == 1
+
+
+def test_head_is_identified_by_version_chunk_and_range_even_when_text_is_repeated():
+    head = {"document_scope": ["a", "v1"], "source_id": "first", "text": "見出し", FIRST_CHUNK: True}
+    other = {**head, "source_id": "third", "text": "見出しも含む本文", FIRST_CHUNK: False}
+    for values in ([other], [other, head], [other, {**head, FIRST_CHUNK: False}]):
+        assert [value["source_id"] for value in with_first_chunks(values, [head])] == ["first", "third"]
+    different_version = {**other, "document_scope": ["a", "v2"]}
+    assert with_first_chunks([different_version], [head]) == [different_version]

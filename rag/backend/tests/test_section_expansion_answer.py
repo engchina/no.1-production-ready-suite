@@ -140,9 +140,12 @@ def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
 
 
 def _engine(**settings: Any) -> AnswerEngine:
+    oracle = FakeOracle()
+    for chunk in oracle.chunks:
+        chunk.metadata["chunk_set_id"] = "cs-1"
     return AnswerEngine(
         Settings(rag_domain_keywords=["受注番号"], **settings),
-        oracle=FakeOracle(),  # type: ignore[arg-type]
+        oracle=oracle,  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
 

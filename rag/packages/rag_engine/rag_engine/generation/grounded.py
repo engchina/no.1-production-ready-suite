@@ -2028,7 +2028,9 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             "source": view.source,
             "content_sha256": hashlib.sha256(view.text.encode()).hexdigest(),
             "view_sha256": view.view_sha256,
-            "view_scope": "evidence_block_after_width_and_boundary_normalization",
+            "view_scope": "verified_partial_answer_reference"
+            if unit_binding and unit_binding.snapshot.contract == "verified_partial_answer_v1"
+            else "evidence_block_after_width_and_boundary_normalization",
         }
     )
     snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
@@ -2554,6 +2556,7 @@ def run_round(
     settings: Any,
     *,
     prompt: str,
+    partial_answer_synthesis: bool = False,
     image_paths: Sequence[str],
     provider_id: str | None,
     parse_text: Callable[..., Any],
@@ -2626,19 +2629,35 @@ def run_round(
             if current_spans.get(key) is span
         }
     )
-    unit_catalog = generation_unit_catalog(spans, sent_only=True)
+    if partial_answer_synthesis:
+        # 局所回答に付けた番号だけを、前段で実際に選択・照合した原文範囲に結ぶ。
+        unit_catalog = SentUnitCatalog(
+            [EvidenceUnitSnapshot.create(span, [(0, len(span["text"]))], "verified_partial_answer_v1") for span in spans]
+        )
+    else:
+        unit_catalog = generation_unit_catalog(spans, sent_only=True)
     generation_base = _generation_base_model(guided=bool(guide_step_contracts))
     generation_model = generation_language_schema(
         generation_output_model(question, guided=bool(guide_step_contracts), unit_catalog=unit_catalog), question
     )
     input_snapshot = {
-        "capture_scope": "application_evidence_blocks",
+        "capture_scope": "verified_partial_answer_references" if partial_answer_synthesis else "application_evidence_blocks",
         "transport_capture": "not_recorded",
         "system_prompt": generation_system,
         "prompt": prompt,
         "image_payload_capture": "not_recorded" if image_paths else "not_applicable",
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "evidence": input_rows,
+        **(
+            {
+                "partial_answer_references": [
+                    {"label": snap.label, "source_id": snap.span().get("source_id"), "snapshot_id": snap.snapshot_id}
+                    for snap in unit_catalog.snapshots
+                ]
+            }
+            if partial_answer_synthesis
+            else {}
+        ),
         "expected_evidence_count": len(spans),
         "snapshot_status": "partial"
         if input_views and (unrecorded_input_ids or any(not row["present_in_prompt"] for row in input_rows))
