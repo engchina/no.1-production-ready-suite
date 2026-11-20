@@ -101,6 +101,7 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     overview = await graph.overview(kb.id)
     docs = {doc["document_id"]: doc for doc in overview["documents"]}
     assert set(docs) == {a, b}
+    assert await graph.document_count(kb.id) == {"total": 2}
     assert not overview["has_more"]
     assert (await graph.overview(kb.id, limit=1))["has_more"]
 
@@ -142,6 +143,7 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     await oracle.remove_document_from_knowledge_base(kb.id, b)
     overview = await graph.overview(kb.id)
     assert [doc["document_id"] for doc in overview["documents"]] == [a]
+    assert await graph.document_count(kb.id) == {"total": 1}
     assert not overview["has_more"]
     assert all(
         r["scope"] == "same_document"

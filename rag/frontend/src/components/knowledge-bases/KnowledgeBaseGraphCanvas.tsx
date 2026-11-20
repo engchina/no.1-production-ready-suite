@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
 import { FileText, Heading, MoreHorizontal, TextQuote, type LucideIcon } from "lucide-react";
@@ -70,7 +70,9 @@ function nodeAriaLabel(item: WikiViewNode) {
   return `${kindLabel(item.kind)}：${item.name}${state}`;
 }
 
-function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview; knowledgeBaseId: string }) {
+interface WikiCanvasProps { overview: WikiGraphOverview; knowledgeBaseId: string; pagination: ReactNode }
+
+function WikiCanvas({ overview, knowledgeBaseId, pagination }: WikiCanvasProps) {
   const flow = useReactFlow<Node<WikiNodeData>, Edge>();
   const filterId = useId();
   const canvasAnchor = useRef<HTMLDivElement>(null);
@@ -378,6 +380,7 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
     <div className="flex min-w-0 flex-wrap items-start gap-2">
       <GraphSearchNavigation labels={{ search: t("wiki.graph.search"), clear: t("common.clearSearch"), previous: t("wiki.graph.previousMatch"), next: t("wiki.graph.nextMatch"), noMatch: t("wiki.graph.noMatch"), scope: t("wiki.graph.searchScope") }} value={search} onChange={searchChanged} count={matchCount} cursor={cursor} onPrevious={() => jump(-1)} onNext={() => jump(1)} debounceMs={SEARCH_DEBOUNCE_MS} testId="wiki-graph-search" />
       <SelectField id={filterId} label={t("wiki.graph.kind")} labelHidden size="lg" width="md" value={kind} onValueChange={(value) => { setKind(value); setSelection(null); requestFit({ kind: "all" }); }} options={[{ value: "", label: t("wiki.graph.allKinds") }, ...NODE_KINDS.map((value) => ({ value, label: kindLabel(value) }))]} />
+      {pagination}
     </div>
     {searchQuery.isError && query ? <Banner severity="danger" title={t("wiki.graph.searchError")} /> : null}
     {failure ? <DataLoadFailure error={failure.error} fallback={t("wiki.graph.expandError")} onRetry={failure.retry} /> : null}
@@ -423,6 +426,6 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   </div>;
 }
 
-export function KnowledgeBaseGraphCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview; knowledgeBaseId: string }) {
-  return <GraphCanvasProvider><WikiCanvas overview={overview} knowledgeBaseId={knowledgeBaseId} /></GraphCanvasProvider>;
+export function KnowledgeBaseGraphCanvas(props: WikiCanvasProps) {
+  return <GraphCanvasProvider><WikiCanvas {...props} /></GraphCanvasProvider>;
 }

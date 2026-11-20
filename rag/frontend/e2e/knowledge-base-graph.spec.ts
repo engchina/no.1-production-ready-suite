@@ -328,6 +328,15 @@ test("単位を押すと案内と関係を横に出し、原文を開き、関�
   await expect(panel.getByText("合成の手続はいつ使えますか？")).toBeVisible();
   await expect(panel.getByText("合成の期限は本文にありません。")).toBeVisible();
   await panel.getByRole("button", { name: "関係を表示" }).click();
+  const details = panel.locator("..").locator("dl").first();
+  const label = await details.locator("dt").first().boundingBox();
+  const value = await details.locator("dd").first().boundingBox();
+  if (testInfo.project.name === "desktop") {
+    expect(value!.x - label!.x).toBeLessThan(value!.width / 2);
+    expect(value!.y).toBe(label!.y);
+  } else {
+    expect(value!.y).toBeGreaterThan(label!.y);
+  }
   const relations = panel.getByRole("table", { name: "関係" });
   await expect(relations.getByText("別の文書：合成文書B.pdf")).toBeVisible();
   await expect(relations.locator('[data-relation="prerequisite"] svg')).toBeAttached();
@@ -429,4 +438,45 @@ test("選んだ文書の直属の子を25件読み、指定時だけ続きの100
   await expect(page.getByRole("button", { name: "さらに 5 件を表示", exact: true }).last()).toBeVisible();
   expect(reads.map((url) => [url.searchParams.get("offset"), url.searchParams.get("limit")])).toEqual([["0", "25"], ["25", "100"]]);
   expect(reads.every((url) => url.pathname.endsWith("/documents/doc-a/tree"))).toBe(true);
+});
+
+test("図の文書範囲を先に表示し、総数が届いた後も独立してページを移動する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, EMPTY);
+  const documents = Array.from({ length: 51 }, (_, i) => ({ id: `doc-${i}`, document_id: `doc-${i}`, name: `合成文書${i + 1}` }));
+  await page.route(/\/kb-1\/wiki\/graph\?offset=/, (route) => {
+    const offset = Number(new URL(route.request().url()).searchParams.get("offset"));
+    return route.fulfill({ json: ok({ status: "ok", documents: documents.slice(offset, offset + 25), has_more: offset + 25 < documents.length }) });
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/wiki/graph/document-count", async (route) => {
+    await gate;
+    await route.fulfill({ json: ok({ total: documents.length }) });
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await openGraph(page);
+  const pager = page.getByTestId("wiki-graph-pagination");
+  await expect(pager.getByText("1–25 件", { exact: true })).toBeVisible();
+  release();
+  await expect(pager.getByText("1–25 / 51 件")).toBeVisible();
+  const next = pager.getByRole("button", { name: "次の文書へ" });
+  const search = page.getByRole("searchbox", { name: "図の中を検索", exact: true });
+  const [searchBox, nextBox] = await Promise.all([search.boundingBox(), next.boundingBox()]);
+  if (testInfo.project.name === "desktop") {
+    expect(Math.abs(searchBox!.y - nextBox!.y)).toBeLessThan(searchBox!.height);
+  } else {
+    expect(nextBox!.y).toBeGreaterThanOrEqual(searchBox!.y + searchBox!.height);
+    const previous = await pager.getByRole("button", { name: "前の文書へ" }).boundingBox();
+    expect(previous!.y).toBe(nextBox!.y);
+  }
+  await expectNoPageOverflow(page);
+  await next.click();
+  await expect(pager.getByText("26–50 / 51 件")).toBeVisible();
+  await next.click();
+  await expect(pager.getByText("51–51 / 51 件")).toBeVisible();
+  await expect(next).toBeDisabled();
+  await pager.getByRole("button", { name: "前の文書へ" }).click();
+  await expect(pager.getByText("26–50 / 51 件")).toBeVisible();
+  await pager.scrollIntoViewIfNeeded();
+  await shot(page, testInfo, "wiki-graph-document-range");
 });

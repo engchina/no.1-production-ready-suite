@@ -17,6 +17,10 @@ class WikiGraphDocument(BaseModel):
     name: str
 
 
+class WikiGraphDocumentCount(BaseModel):
+    total: int
+
+
 class WikiGraphOverview(BaseModel):
     has_more: bool = False
     status: Literal["ok", "empty"] = "empty"

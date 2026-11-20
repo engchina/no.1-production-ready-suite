@@ -96,6 +96,8 @@ class FakeOracle:
         pages = self._pages()
         if "FROM rag_documents doc" in statement:
             documents = sorted({page.unit.document_id for _, page in pages})
+            if statement.startswith("SELECT COUNT(*) AS total"):
+                return [{"total": len(documents)}]
             start = binds["graph_offset"]
             return [
                 {"document_id": did, "file_name": DOC_NAMES[did]}
@@ -226,6 +228,7 @@ async def test_overview_reads_only_one_document_page_without_link_counts() -> No
         "documents": [{"id": "doc-a", "document_id": "doc-a", "name": DOC_NAMES["doc-a"]}],
     }
     assert len(oracle.statements) == 1 and "rag_wiki_links" not in oracle.statements[0][0]
+    assert await store.document_count(KB) == {"total": 2}
     last = await store.overview(KB, offset=1, limit=1)
     assert not last["has_more"] and last["documents"][0]["id"] == "doc-b"
 

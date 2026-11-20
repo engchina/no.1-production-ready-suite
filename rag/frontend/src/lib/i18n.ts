@@ -1697,6 +1697,7 @@ export const ja = {
   "documents.detail.loading": "文書を読み込んでいます",
   "pager.prev": "前へ",
   "pager.next": "次へ",
+  "wiki.graph.rangeWithoutTotal": "{start}–{end} 件",
   "pager.range": "{start}–{end} / {total} 件",
   "pager.page": "{page} / {total} ページ",
   "pager.label": "ページ送り",
