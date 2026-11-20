@@ -40,7 +40,7 @@ result.text  # 構造化出力なら JSON の文字列（Pydantic で検証し�
 result.usage.as_responses_usage()  # llm_call_usage・record_genai_usage に渡す
 ```
 
-失敗は `AnthropicMessagesError`（`kind`・`retryable`・`configuration_error`・`error_code`・`incomplete`・`http_failure`）。`incomplete` は `enterprise_ai_incomplete_message` にそのまま渡せる。確かめる所の案内は `anthropic_failure_actions(exc.kind, status_code=exc.status_code, endpoint=...)` の文を使い、OCI の IAM・Project OCID 前提の `enterprise_ai_failure_actions` には渡さない（#5587）。上限つきの並行の実行器では `chain_classifiers(..., hint=anthropic_failure_hint)` で、job を止める・件の失敗の文に同じ案内を付ける。
+失敗は `AnthropicMessagesError`（`kind`・`retryable`・`configuration_error`・`error_code`・`incomplete`・`http_failure`・`status_code`・API の誤りの種類 `error_type`（`invalid_request_error` など）・`request_id`）。`incomplete` は `enterprise_ai_incomplete_message` にそのまま渡せる。確かめる所の案内は `anthropic_failure_actions(exc.kind, status_code=exc.status_code, endpoint=...)` の文を使い、OCI の IAM・Project OCID 前提の `enterprise_ai_failure_actions` には渡さない（#5587）。上限つきの並行の実行器では `chain_classifiers(..., hint=anthropic_failure_hint)` で、job を止める・件の失敗の文に同じ案内を付ける。
 
 ## 要求の組み方
 
@@ -125,7 +125,7 @@ turn.content  # 次の要求の assistant の message にそのまま入れる b
 | `messages` | `anthropic_messages` が同じ役割の続く message を 1 つにまとめ、user の message では `tool_result` を先頭に置く（並列のツールの結果は 1 つの user の message で返す） |
 | `anthropic_tool_result_block` | `tool_result`（本文、または text と画像の block。失敗は `is_error`） |
 | `tools` | `strict` のツールは `input_schema` を構造化出力と同じ変換（`anthropic_response_schema`）で送り、`strict: true` を付ける |
-| `tool_choice`・`tool_name`・`parallel_tool_calls` | `{"type": "auto" / "any" / "none" / "tool"}`、`parallel_tool_calls=False` は `disable_parallel_tool_use`。forced の `any` / `tool` を受け付けないモデル（Claude Opus 5.5 など）の 400 は `request` の失敗のまま（別の指定へ読み替えない） |
+| `tool_choice`・`tool_name`・`parallel_tool_calls` | `{"type": "auto" / "any" / "none" / "tool"}`、`parallel_tool_calls=False` は `disable_parallel_tool_use`。forced の `any` / `tool` を受け付けないモデル（Claude Opus 5.5 など）の 400 は `request` の失敗のまま（部品は別の指定へ読み替えない。Agent の経路は forced を送らない。#5590） |
 | 思考の block（推論の量を送る呼び出し） | 前の応答の thinking / redacted_thinking を変えずに戻し、`thinking.block_binding.prefix_mismatch_behavior="drop_block"`（beta `thinking-binding-controls-2026-08-01`。beta の messages で送る）を付ける。指示・ツール・前の message が変わって検証に通らない block は API が外して続ける（外した数は `dropped_thinking_blocks`） |
 | 思考の block（推論の量 none） | `block_binding` は adaptive のときだけ送れるので、モデルの既定の思考の block を戻さない（会話の前の部分が変わったときの 400 を避ける） |
 | `stop_reason` | `end_turn`・`stop_sequence`・`tool_use` は終わり。`pause_turn`（server tool のループの途中。この部品は server tool を送らない）・`max_tokens` などは `incomplete`、`refusal` は `refusal`。本文もツールの呼び出しも無い応答・`tool_use` で止まって呼び出しの無い応答は `response_format` |

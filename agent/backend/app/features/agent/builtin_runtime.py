@@ -71,6 +71,7 @@ from openai import (
 )
 from openai.types.shared import Reasoning, ReasoningEffort
 from opentelemetry import trace
+from pr_anthropic_messages import AnthropicMessagesError
 from pr_backend_core.chat_history import (
     CHAT_HISTORY_UNTRUSTED_NOTE,
     ChatHistoryBudget,
@@ -5782,10 +5783,13 @@ def _record_failure(run_id: str, exc: Exception) -> None:
         message = "ツールの呼び出しが上限の回数に達したため止めました。"
     else:
         code = "runtime.model_failed"
-        # OCI の error code（`invalid_value` など）まで残す（型名だけでは原因が分からない。#1215）。
-        model_code = model_error_code(exc)
-        reason = f"{type(exc).__name__}: {model_code}" if model_code else type(exc).__name__
+        # OCI の error code（`invalid_value` など）・Messages API の失敗の種類・HTTP status・
+        # API の誤りの種類まで残す（型名だけでは原因が分からない。#1215・#5590）。
+        reason = type(exc).__name__
+        if detail := _model_failure_detail(exc):
+            reason = f"{reason}: {detail}"
         message = f"モデルの呼び出しに失敗しました（{reason}）。"
+    anthropic_failure = exc if isinstance(exc, AnthropicMessagesError) else None
     logger.warning(
         "builtin_runtime_failed",
         extra={
@@ -5795,9 +5799,30 @@ def _record_failure(run_id: str, exc: Exception) -> None:
             "model_error_code": model_error_code(exc),
             # OCI の API のメッセージ（モデル名と理由。業務データ・資格情報は含まない）。
             "model_error_message": _model_error_message(exc),
+            # Messages API の失敗の分類（応答の本文の値は入れない。#5590）。
+            "model_error_kind": anthropic_failure.kind if anthropic_failure else None,
+            "model_http_status": anthropic_failure.status_code if anthropic_failure else None,
+            "model_error_type": (anthropic_failure.error_type or None)
+            if anthropic_failure
+            else None,
+            "model_request_id": (anthropic_failure.request_id or None)
+            if anthropic_failure
+            else None,
         },
     )
     runtime_repository.fail_builtin_run(run_id, code=code, detail=message)
+
+
+def _model_failure_detail(exc: BaseException) -> str:
+    """Run の失敗に残すモデルの呼び出しの失敗の分類（応答の本文・秘密の値は入れない）。
+
+    OpenAI 互換 API は error code（`invalid_value` など）、Messages API は部品の失敗の種類・
+    HTTP status・API の誤りの種類（`error.type`）。分からなければ ""。
+    """
+    if isinstance(exc, AnthropicMessagesError):
+        status = f"HTTP {exc.status_code}" if exc.status_code is not None else ""
+        return "・".join(part for part in (exc.kind, status, exc.error_type) if part)
+    return model_error_code(exc) or ""
 
 
 def _model_error_message(exc: BaseException) -> str | None:

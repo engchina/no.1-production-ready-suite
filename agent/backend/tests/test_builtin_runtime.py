@@ -21,6 +21,7 @@ from agents import FunctionTool, Usage
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from clock_support import RuntimeClock
 from mcp_support import fake_product_mcp
+from pr_anthropic_messages import AnthropicMessagesError
 from pr_backend_core.chat_history import CHAT_HISTORY_UNTRUSTED_NOTE, ChatHistoryTurn
 from pr_system_settings.answer_notice import DEFAULT_ANSWER_NOTICE_TEXT
 from pytest import MonkeyPatch
@@ -1047,6 +1048,50 @@ def test_model_failure_records_the_api_error_code(monkeypatch: MonkeyPatch, call
     failed = run.events[-1]
     assert failed.payload["error_code"] == "runtime.model_failed"
     assert failed.message == "モデルの呼び出しに失敗しました（BadRequestError: invalid_value）。"
+
+
+def test_messages_api_failure_records_kind_status_and_error_type(
+    monkeypatch: MonkeyPatch, calls: _Calls, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Messages API の失敗は、種類・HTTP status・API の誤りの種類を Run とログに残す（#5590）。
+
+    応答の本文の値（API のメッセージ）は Run の失敗の文に入れない。
+    """
+    del calls
+    error = AnthropicMessagesError(
+        "合成の失敗",
+        kind="request",
+        model_id="claude-model-a",
+        status_code=400,
+        provider_message="合成の API のメッセージ (invalid_request_error)",
+        error_type="invalid_request_error",
+        request_id="req_synthetic",
+    )
+
+    class _FailingModel(ScriptedModel):
+        async def get_response(self, *args: Any, **kwargs: Any) -> Any:
+            raise error
+
+    _script(monkeypatch)
+    monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: _FailingModel([]))
+    run_id = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="規程を調べて", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
+    ).id
+
+    with caplog.at_level("WARNING", logger=builtin_runtime.logger.name):
+        anyio.run(builtin_runtime.execute_run, run_id)
+
+    failed = runtime_repository.get_run(run_id).events[-1]
+    assert failed.payload["error_code"] == "runtime.model_failed"
+    assert failed.message == (
+        "モデルの呼び出しに失敗しました"
+        "（AnthropicMessagesError: request・HTTP 400・invalid_request_error）。"
+    )
+    [record] = [r for r in caplog.records if r.getMessage() == "builtin_runtime_failed"]
+    assert record.__dict__["model_error_kind"] == "request"
+    assert record.__dict__["model_http_status"] == 400
+    assert record.__dict__["model_error_type"] == "invalid_request_error"
+    assert record.__dict__["model_request_id"] == "req_synthetic"
 
 
 # ---------------------------------------------------------------------------

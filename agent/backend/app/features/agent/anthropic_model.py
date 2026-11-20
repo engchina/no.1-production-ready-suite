@@ -25,7 +25,7 @@ Messages API の呼び出しは platform の共通の部品 `pr_anthropic_messag
 - `reasoning`（`encrypted_content` に思考の block を JSON で持つ）→ assistant の thinking /
   redacted_thinking の block（変えずに戻す）
 - `tools`（function・strict）→ `tools`（strict の schema は部品が変換する）
-- `tool_choice` の auto / required / none / 名前 → auto / any / none / tool
+- `tool_choice` の auto / none → auto / none。forced の required・名前の指定も auto（#5590）
 - `parallel_tool_calls=False` → `disable_parallel_tool_use`
 - `text.format` の JSON schema → `output_config.format`
 - `reasoning.effort` → adaptive thinking と `output_config.effort`（none は送らない）
@@ -320,16 +320,24 @@ def _tools(target: ModelTarget, tools: Any) -> tuple[AnthropicTool, ...]:
     return tuple(converted)
 
 
-def _tool_choice(target: ModelTarget, value: Any) -> tuple[str, str]:
-    if not _given(value) or value == "auto":
-        return "auto", ""
-    if value == "required":
-        return "any", ""
+def _tool_choice(target: ModelTarget, value: Any) -> str:
+    """SDK の `tool_choice` を Messages API の指定にする（forced の指定は auto。#5590）。
+
+    Claude Opus 5.5・Claude Sonnet 5.5 などは、思考の設定にかかわらず forced の `any` / `tool` を
+    400（`tool_choice: type "tool" and "any" are not supported for this model.`）で拒否する。
+    Anthropic の文書（Define tools の「Forcing tool use」・API errors の「Forced tool use not
+    supported」）が示す代わりは `auto`（strict のツール・指示でツールを選ばせる）。forced を
+    受け付けるモデルでも forced の呼び出しは思考を飛ばす（同じ文書）。モデルごとの一覧は持たず、
+    この接続では forced の指定（`required`・名前の指定）を常に `auto` で送る。ツールを呼ばずに
+    答えた応答は、呼ぶ側の検証（回答案の選択など）がそのまま扱う（ここで補わない）。
+    """
+    if not _given(value) or value == "auto" or value == "required":
+        return "auto"
     if value == "none":
-        return "none", ""
+        return "none"
     choice = _plain(value)
     if choice.get("type") == "function" and choice.get("name"):
-        return "tool", str(choice["name"])
+        return "auto"
     _unsupported(target, f"Messages API に写せない tool_choice（{choice.get('type') or value}）")
 
 
@@ -360,7 +368,7 @@ def anthropic_request(
     if unknown:
         _unsupported(target, "未対応の引数 " + ", ".join(unknown))
     tools = _tools(target, request.get("tools")) if _given(request.get("tools")) else ()
-    choice, tool_name = _tool_choice(target, request.get("tool_choice"))
+    choice = _tool_choice(target, request.get("tool_choice"))
     instructions = request.get("instructions")
     max_tokens = request.get("max_output_tokens")
     return AnthropicConversationRequest(
@@ -369,7 +377,6 @@ def anthropic_request(
         messages=_messages(target, request.get("input")),
         tools=tools,
         tool_choice=cast(Any, choice),
-        tool_name=tool_name,
         parallel_tool_calls=request.get("parallel_tool_calls") is not False,
         response_schema=_response_schema(request.get("text")),
         reasoning_effort=_request_reasoning_effort(request),

@@ -229,8 +229,13 @@ def test_forced_tool_choice_rejection_is_a_request_failure(fake_api: FakeMessage
             _request(tools=(AnthropicTool(name="search", input_schema=SCHEMA),), tool_choice="any"),
         )
 
-    assert (raised.value.kind, raised.value.status_code) == ("request", 400)
-    assert "not supported for this model" in raised.value.provider_message
+    error = raised.value
+    assert (error.kind, error.status_code, error.error_type) == (
+        "request",
+        400,
+        "invalid_request_error",
+    )
+    assert "not supported for this model" in error.provider_message
 
 
 def test_dropped_thinking_blocks_are_counted(fake_api: FakeMessagesApi) -> None:
