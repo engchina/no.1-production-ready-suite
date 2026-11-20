@@ -23,7 +23,7 @@
     "@production-ready/system-settings": "file:../../platform/packages/system-settings",
     "@production-ready/ui": "file:../../platform/packages/ui",
     "@tanstack/react-query": "^5.107.1",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.73.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-router-dom": "^7.18.5",
