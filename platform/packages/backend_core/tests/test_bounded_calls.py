@@ -348,6 +348,53 @@ def test_chain_classifiers_lets_caller_override_kind() -> None:
     assert custom(RuntimeError()).kind is ErrorKind.SAFETY
 
 
+def _provider_hint(exc: BaseException) -> str | None:
+    """呼び先に合わせた案内のスタブ（例外の文に印があるときだけ）。"""
+    return "呼び先に合わせた案内。" if "provider" in str(exc) else None
+
+
+def test_chain_classifiers_hint_keeps_kind_and_status() -> None:
+    """``hint`` は種類・status を変えずに案内だけを足す（#5587）。"""
+    classify = chain_classifiers(hint=_provider_hint)
+    info = classify(StubError(403, "provider"))
+    assert (info.kind, info.status, info.hint) == (
+        ErrorKind.PERMISSION,
+        403,
+        "呼び先に合わせた案内。",
+    )
+    assert classify(StubError(403, "other")).hint == ""
+    assert chain_classifiers()(StubError(403, "provider")).hint == ""
+
+
+def _hint_caller(vt: VirtualTime) -> BoundedCaller:
+    return BoundedCaller(
+        "test",
+        BoundedCallPolicy(max_concurrency=1),
+        label="テストの段",
+        classifier=chain_classifiers(hint=_provider_hint),
+        clock=vt.clock,
+        sleep=vt.sleep,
+        random=lambda: 0.5,
+    )
+
+
+async def test_hint_replaces_the_abort_hint_and_is_added_to_item_failures() -> None:
+    """job を止める文は種類の既定の案内の代わりに、件の失敗の文には後ろに案内を出す（#5587）。"""
+    vt = VirtualTime()
+    service = Service(vt)
+    service.plan["x"] = [StubError(403, "provider")]
+    with pytest.raises(BoundedCallAborted) as raised:
+        await vt.run(_hint_caller(vt).map(["x"], service))
+    assert "呼び先に合わせた案内。" in str(raised.value)
+    assert "IAM" not in str(raised.value)
+
+    service.plan["y"] = [StubError(400, "provider")]
+    outcomes = await vt.run(_hint_caller(vt).map(["y"], service))
+    error = outcomes[0].error
+    assert error is not None and error.kind is ErrorKind.BAD_REQUEST
+    assert str(error).endswith(" 呼び先に合わせた案内。")
+
+
 def test_default_rules_follow_the_table() -> None:
     rules = DEFAULT_KIND_RULES
     assert rules[ErrorKind.RATE_LIMITED].throttle and rules[ErrorKind.RATE_LIMITED].retries > 0

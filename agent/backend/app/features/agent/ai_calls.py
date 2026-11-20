@@ -14,6 +14,7 @@ import asyncio
 import random
 from dataclasses import replace
 
+from pr_anthropic_messages import anthropic_failure_hint
 from pr_backend_core.bounded_calls import (
     BoundedCaller,
     BoundedCallPolicy,
@@ -74,7 +75,7 @@ def make_ai_caller(stage: str, *, max_concurrency: int) -> BoundedCaller:
         f"agent.{stage}",
         BoundedCallPolicy(max_concurrency=max(1, max_concurrency)),
         label=STAGE_LABELS.get(stage, stage),
-        classifier=chain_classifiers(agent_error_kind),
+        classifier=chain_classifiers(agent_error_kind, hint=anthropic_failure_hint),
         sleep=lambda seconds: _sleep(seconds),
         random=lambda: _random(),
     )

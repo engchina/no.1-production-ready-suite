@@ -27,6 +27,7 @@ from pr_anthropic_messages import (
     AnthropicMessagesError,
     AnthropicMessagesRequest,
     AnthropicMessagesResult,
+    anthropic_failure_actions,
     create_anthropic_message,
 )
 from pr_backend_core.llm_request_params_httpx import send_dropping_parameters
@@ -104,9 +105,12 @@ class EnterpriseAiDirectError(RuntimeError):
         timeout_seconds: float | None = None,
         user_message: str = "",
         headers: Mapping[str, str] | None = None,
+        anthropic_messages: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
+        # クォータナリ接続（Messages API）の呼び出しの失敗か（#5587）。案内の文を分ける。
+        self.anthropic_messages = anthropic_messages
         self.retryable = retryable
         self.http_failure = http_failure
         self.model_id = model_id
@@ -145,7 +149,17 @@ class EnterpriseAiDirectError(RuntimeError):
         return self.http_failure is not None and self.http_failure.configuration_error
 
     def failure_actions(self) -> list[str]:
-        """確かめる所の案内（HTTP の失敗でなければ空）。"""
+        """確かめる所の案内（HTTP の失敗でなければ空）。
+
+        クォータナリ接続の失敗は、HTTP 以外の種類も含めて platform のクォータナリ接続向けの文
+        （OCI の IAM・Project OCID・リージョンを前提にしない。#5587）。
+        """
+        if self.anthropic_messages:
+            return anthropic_failure_actions(
+                self.failure_kind,
+                status_code=self.status_code,
+                endpoint=self.endpoint_host,
+            )
         if self.http_failure is None:
             return []
         return enterprise_ai_failure_actions(
@@ -188,6 +202,15 @@ def enterprise_ai_configuration_failure_message(
     error: EnterpriseAiDirectError, subject: str
 ) -> str:
     """設定の誤りによる失敗の、利用者向けの文（時間をおいても直らないことと、確かめる所）。"""
+    if error.anthropic_messages:
+        # クォータナリ接続は OCI Enterprise AI の前提（業務プロファイルの Region など）を添えない。
+        return " ".join(
+            [
+                f"{subject}Anthropic Claude（クォータナリ接続）の呼び出しが設定の誤りで"
+                "失敗しました。時間をおいても直りません。管理者に次の確認を依頼してください。",
+                *error.failure_actions(),
+            ]
+        )
     return " ".join(
         [
             f"{subject}OCI Enterprise AI の呼び出しが設定の誤りで失敗しました。"
@@ -928,6 +951,7 @@ def _anthropic_direct_error(
         upstream_request_id=exc.request_id,
         attempts=attempts,
         timeout_seconds=timeout_seconds,
+        anthropic_messages=True,
     )
 
 

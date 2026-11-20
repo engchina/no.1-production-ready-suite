@@ -6,22 +6,29 @@ OpenAI 互換の接続の HTTP（httpx）は、クォータナリ接続のモデ
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, cast
 
 import anthropic
 import httpx
 import httpx2
 import pytest
+from pr_anthropic_messages import AnthropicMessagesError, anthropic_failure_actions
+from pr_backend_core.bounded_calls import BoundedCallAborted
 
 from app.features.nl2sql import enterprise_ai_client
+from app.features.nl2sql.ai_calls import make_ai_caller
 from app.features.nl2sql.enterprise_ai_client import (
     EnterpriseAiDirectError,
     OciEnterpriseAiDirectClient,
+    _anthropic_direct_error,
+    enterprise_ai_configuration_failure_message,
 )
+from app.features.nl2sql.reverse_generation import REASONS, ReverseStageError, generate_stage
 from app.features.nl2sql.structured_outputs import SqlOutput, TextOutput, response_format
 from app.settings import EnterpriseAiConfiguredModel, Settings
 
@@ -479,3 +486,102 @@ def test_other_connections_keep_the_responses_api(monkeypatch: pytest.MonkeyPatc
 
     assert json.loads(raw) == {"text": "ok"}
     assert urls == [f"{PRIMARY}/responses"]
+
+
+# --------------------------------------------------------------------------- 失敗の案内（#5587）
+
+# OpenAI 互換の接続（OCI Enterprise AI）の案内にだけある語。クォータナリ接続の失敗には出さない。
+OCI_ONLY_WORDS = ("IAM", "Project OCID", "リージョン", "OCI", "Region")
+
+FAILURES = [
+    (_error(401, "authentication_error", "invalid x-api-key"), "authentication", 401),
+    (_error(403, "permission_error", "not allowed"), "authorization", 403),
+    (_error(404, "not_found_error", f"model: {CLAUDE}"), "model_not_found", 404),
+    (_error(429, "rate_limit_error", "rate limited"), "rate_limit", 429),
+    (_error(500, "api_error", "internal"), "unavailable", 500),
+    (httpx2.ReadTimeout("timed out"), "timeout", None),
+    (httpx2.ConnectError("refused"), "connection", None),
+]
+FAILURE_IDS = ["401", "403", "404", "429", "5xx", "timeout", "connection"]
+
+
+@pytest.mark.parametrize(("response", "kind", "status_code"), FAILURES, ids=FAILURE_IDS)
+def test_failure_actions_use_the_platform_quaternary_text(
+    claude: FakeMessagesApi,
+    response: httpx2.Response | Exception,
+    kind: str,
+    status_code: int | None,
+) -> None:
+    claude.responses.append(response)
+
+    with pytest.raises(EnterpriseAiDirectError) as caught:
+        _generate(_settings())
+
+    error = caught.value
+    assert error.code == kind
+    actions = error.failure_actions()
+    assert actions == anthropic_failure_actions(
+        kind, status_code=status_code, endpoint="api.anthropic.com"
+    )
+    for word in OCI_ONLY_WORDS:
+        assert word not in " ".join(actions)
+    if error.configuration_error:
+        message = enterprise_ai_configuration_failure_message(error, "SQL の生成で ")
+        assert message.startswith("SQL の生成で Anthropic Claude（クォータナリ接続）の呼び出し")
+        assert actions[0] in message
+        for word in OCI_ONLY_WORDS:
+            assert word not in message
+
+
+def _quaternary_authorization_error() -> EnterpriseAiDirectError:
+    cause = AnthropicMessagesError("失敗", kind="authorization", status_code=403)
+    error = _anthropic_direct_error(
+        cause,
+        model_id=CLAUDE,
+        endpoint_host="api.anthropic.com",
+        attempts=1,
+        timeout_seconds=10.0,
+    )
+    error.__cause__ = cause
+    return error
+
+
+def test_reverse_generation_warning_uses_the_platform_quaternary_text() -> None:
+    error = _quaternary_authorization_error()
+
+    class FailingClient:
+        def generate(self, **_kwargs: Any) -> str:
+            raise error
+
+    with pytest.raises(ReverseStageError) as caught:
+        generate_stage(
+            client=cast(Any, FailingClient()),
+            stage="structure_analysis",
+            prompt="SQL A",
+            context="",
+            system_prompt="## Step 1",
+            parse=str,
+            timeout_seconds=10.0,
+            max_retries=2,
+            deadline=time.monotonic() + 60,
+        )
+
+    warning = caught.value.warning()
+    assert anthropic_failure_actions("authorization", status_code=403)[0] in warning
+    assert REASONS["authorization"] not in warning
+    for word in OCI_ONLY_WORDS:
+        assert word not in warning
+
+
+def test_bounded_caller_hint_uses_the_platform_quaternary_text() -> None:
+    error = _quaternary_authorization_error()
+
+    async def fail(_attempt: Any) -> str:
+        raise error
+
+    caller = make_ai_caller(_settings(), "metadata_sql")
+    with pytest.raises(BoundedCallAborted) as caught:
+        asyncio.run(caller.call(fail, label="x"))
+
+    assert anthropic_failure_actions("authorization", status_code=403)[0] in str(caught.value)
+    assert "IAM" not in str(caught.value)
