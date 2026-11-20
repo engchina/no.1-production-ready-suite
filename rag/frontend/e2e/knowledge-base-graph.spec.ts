@@ -466,6 +466,8 @@ test("図の文書範囲を先に表示し、総数が届いた後も独立し�
     expect(Math.abs(searchBox!.y - nextBox!.y)).toBeLessThan(searchBox!.height);
   } else {
     expect(nextBox!.y).toBeGreaterThanOrEqual(searchBox!.y + searchBox!.height);
+    const previous = await pager.getByRole("button", { name: "前の文書へ" }).boundingBox();
+    expect(previous!.y).toBe(nextBox!.y);
   }
   await expectNoPageOverflow(page);
   await next.click();

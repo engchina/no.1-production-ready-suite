@@ -36,8 +36,14 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
         {total === undefined || total < end ? t("wiki.graph.rangeWithoutTotal", { start: offset + 1, end })
           : t("pager.range", { start: offset + 1, end, total })}
       </span> : null}
-      <Button variant="secondary" disabled={offset === 0} onClick={() => setOffset(offset - 25)}>{t("wiki.graph.previousDocuments")}</Button>
-      <Button variant="secondary" disabled={!query.data?.has_more} onClick={() => setOffset(offset + 25)}>{t("wiki.graph.nextDocuments")}</Button>
+      <Button variant="secondary" aria-label={t("wiki.graph.previousDocuments")} disabled={offset === 0} onClick={() => setOffset(offset - 25)}>
+        <span className="sm:hidden">{t("pager.prev")}</span>
+        <span className="hidden sm:inline">{t("wiki.graph.previousDocuments")}</span>
+      </Button>
+      <Button variant="secondary" aria-label={t("wiki.graph.nextDocuments")} disabled={!query.data?.has_more} onClick={() => setOffset(offset + 25)}>
+        <span className="sm:hidden">{t("pager.next")}</span>
+        <span className="hidden sm:inline">{t("wiki.graph.nextDocuments")}</span>
+      </Button>
     </div>
   );
 
