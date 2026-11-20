@@ -10,8 +10,6 @@ export const MODEL_MESSAGES = {
   "settings.model.connection.error.apiKeyRequired": "API key を入力してください。",
   "settings.model.connection.error.endpointRequired":
     "Endpoint URL を入力してください。",
-  "settings.model.connection.error.projectRequired":
-    "Project OCID を入力してください。",
   "settings.model.connection.error.missing":
     "「{model}」の接続がありません。登録されている接続から選び直してください。",
   "settings.model.connection.error.unsaved":
@@ -28,11 +26,18 @@ export const MODEL_MESSAGES = {
     "プライマリ接続に移して削除",
   "settings.model.connection.removeConfirm.title":
     "{connection}を削除しますか？",
+  "settings.model.connection.quaternary": "クォータナリ接続",
+  "settings.model.connection.quaternaryDescription":
+    "登録モデルの「接続」でクォータナリ接続を選んだモデルは、この接続で呼び出します。Anthropic Claude（Messages API）のモデル用です。",
+  "settings.model.connection.quaternaryEmpty.hint":
+    "Anthropic Claude（Messages API）のモデルを使うときに設定します。設定すると、API key は必須です。Endpoint URL は、Anthropic の公式の API 以外（ゲートウェイなど）を使うときだけ入力します。",
+  "settings.model.connection.quaternaryEmpty.title":
+    "クォータナリ接続は設定されていません。",
   "settings.model.connection.secondary": "セカンダリ接続",
   "settings.model.connection.secondaryDescription":
     "登録モデルの「接続」でセカンダリ接続を選んだモデルは、この接続で呼び出します。",
   "settings.model.connection.secondaryEmpty.hint":
-    "別のリージョンや Project にあるモデルを使うときに設定します。設定すると、Endpoint URL・Project OCID・API key はすべて必須です。",
+    "別のリージョンや Project にあるモデルを使うときに設定します。設定すると、Endpoint URL と API key は必須です。Project OCID は任意です。",
   "settings.model.connection.secondaryEmpty.title":
     "セカンダリ接続は設定されていません。",
   "settings.model.connection.tabs": "OCI Enterprise AI の接続",
@@ -78,6 +83,8 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.apiKey": "API key",
   "settings.model.enterprise.apiKeyHelp":
     "OpenAI-compatible gateway の Bearer 認証で使います。保存先はサーバーの .env のみで、JSON や API 応答には含めません。",
+  "settings.model.enterprise.apiKeyHelpQuaternary":
+    "Anthropic の API key です。保存先はサーバーの .env のみで、JSON や API 応答には含めません。保存済みの key を消すときは、クォータナリ接続を削除します。",
   "settings.model.enterprise.apiKeyHide": "API key を隠す",
   "settings.model.enterprise.apiKeyNotSet": "未設定",
   "settings.model.enterprise.apiKeySaved": "保存済み",
@@ -86,13 +93,15 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.connection": "接続",
   "settings.model.enterprise.connectionOfModel": "モデル {number} の接続",
   "settings.model.enterprise.description":
-    "回答生成と画像・OCR の解析に使う Enterprise AI の接続情報を設定します。プライマリ接続に加えてセカンダリ接続と、OpenAI や OpenAI 互換 API にも使えるターシャリ接続を設定でき、登録モデルごとに使う接続を選べます。",
+    "回答生成と画像・OCR の解析に使うモデルの接続情報を設定します。プライマリ接続（既定）に加えて、セカンダリ接続、OpenAI や OpenAI 互換 API にも使えるターシャリ接続、Anthropic Claude（Messages API）用のクォータナリ接続を設定でき、登録モデルごとに使う接続を選べます。",
   "settings.model.enterprise.displayName": "表示名",
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointDocs":
     "公式ドキュメント（新しいタブで開く）",
   "settings.model.enterprise.endpointHelp":
     "公式 docs の OpenAI-compatible base URL を /openai/v1 まで指定します。入力した URL に Responses API の /responses を付けて呼び出し、path は補いません。",
+  "settings.model.enterprise.endpointHelpQuaternary":
+    "空にすると、Anthropic の公式の API（{url}）を使います。ゲートウェイなどを使うときだけ、Messages API の base URL を入力します。",
   "settings.model.enterprise.endpointHelpTertiary":
     "API の base URL を path まで指定します（OpenAI は https://api.openai.com/v1、OpenAI 互換 API は https://api.deepseek.com/v1 など、OCI Enterprise AI は …/openai/v1）。入力した URL に /responses を付けて呼び出し、path は補いません。",
   "settings.model.enterprise.modelId": "モデル ID",
@@ -104,7 +113,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.modelsSaved": "登録モデルを保存しました。",
   "settings.model.enterprise.project": "Project OCID",
   "settings.model.enterprise.projectHelp":
-    "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",
+    "OCI の OpenAI-compatible API の Generative AI project OCID です。入力したときだけ OpenAI-Project ヘッダーで送ります。",
   "settings.model.enterprise.projectHelpTertiary":
     "OCI Enterprise AI を使うときだけ、Generative AI project OCID を入力します（入力したときだけ OpenAI-Project ヘッダーで送ります）。OpenAI や OpenAI 互換 API では空のままにします。",
   "settings.model.enterprise.parameterHelp": "推論の量・入力と出力の上限・画像 1 枚の入力について",

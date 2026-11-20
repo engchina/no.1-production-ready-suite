@@ -84,6 +84,9 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oci_enterprise_ai_tertiary_endpoint",
         "oci_enterprise_ai_tertiary_project_ocid",
         "oci_enterprise_ai_tertiary_api_key",
+        # クォータナリ接続（#5546。Anthropic Claude の Messages API 向け。Project OCID なし）。
+        "oci_enterprise_ai_quaternary_endpoint",
+        "oci_enterprise_ai_quaternary_api_key",
         "oci_enterprise_ai_models",
         "oci_enterprise_ai_default_text_model",
         "oci_enterprise_ai_default_vision_model",

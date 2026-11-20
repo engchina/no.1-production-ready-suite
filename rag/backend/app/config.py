@@ -576,6 +576,9 @@ class Settings(
     oci_enterprise_ai_tertiary_endpoint: str = Field(default="")
     oci_enterprise_ai_tertiary_project_ocid: str = Field(default="")
     oci_enterprise_ai_tertiary_api_key: str = Field(default="")
+    # クォータナリ接続（#5546。Anthropic Claude の Messages API 向け。Endpoint URL は任意）。
+    oci_enterprise_ai_quaternary_endpoint: str = Field(default="")
+    oci_enterprise_ai_quaternary_api_key: str = Field(default="")
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     online_max_output_tokens: int = Field(default=DEFAULT_ONLINE_MAX_OUTPUT_TOKENS, ge=1)
     # 既定のテキストモデルと既定の Vision モデル（#499。画面・API では 2 つとも必須。#566）。

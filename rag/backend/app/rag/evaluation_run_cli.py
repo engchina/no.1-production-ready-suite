@@ -429,7 +429,7 @@ def _diff(left_path: Path, right_path: Path) -> int:
 
 def fill_replay_connections(settings: Settings) -> None:
     """再生では API キー・Endpoint が無くても動くよう、空の接続の設定に印の値を入れる。"""
-    for slot in ("", "secondary_", "tertiary_"):
+    for slot in ("", "secondary_", "tertiary_", "quaternary_"):
         if not getattr(settings, f"oci_enterprise_ai_{slot}api_key"):
             setattr(settings, f"oci_enterprise_ai_{slot}api_key", REPLAY_PLACEHOLDER_KEY)
         if not getattr(settings, f"oci_enterprise_ai_{slot}endpoint"):

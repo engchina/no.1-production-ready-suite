@@ -9,11 +9,17 @@ export type ModelSettingsTestTargetType =
   "enterprise_text" | "enterprise_vision" | "embedding" | "rerank";
 
 /**
- * OCI Enterprise AI の接続の ID（#533）。接続ごとに backend の Settings の属性・env 名が決まっている。
- * 画面の名前は「プライマリ接続」「セカンダリ接続」「ターシャリ接続」（#542 / #786）。
- * ターシャリ接続は OpenAI / OpenAI 互換 API 向けで、Project OCID は任意。
+ * モデルの接続の ID（#533）。接続ごとに backend の Settings の属性・env 名が決まっている。
+ * 画面の名前は「プライマリ接続」「セカンダリ接続」「ターシャリ接続」「クォータナリ接続」
+ * （#542 / #786 / #5546）。ターシャリ接続までは OpenAI 互換の API（Project OCID は任意）で、
+ * ターシャリ接続は OpenAI / OpenAI 互換 API 向け。クォータナリ接続は Anthropic Claude の Messages API
+ * 向けで、Project OCID を持たず、Endpoint URL は任意。
  */
-export type EnterpriseAiConnectionId = "primary" | "secondary" | "tertiary";
+export type EnterpriseAiConnectionId =
+  | "primary"
+  | "secondary"
+  | "tertiary"
+  | "quaternary";
 /**
  * 接続の並び（プライマリ接続が既定）。タブの並びと、保存する接続の並びもこの順。
  * backend の ENTERPRISE_AI_CONNECTION_IDS と同じ。
@@ -22,6 +28,7 @@ export const ENTERPRISE_AI_CONNECTION_IDS: readonly EnterpriseAiConnectionId[] =
   "primary",
   "secondary",
   "tertiary",
+  "quaternary",
 ];
 /** 接続の上限（backend の MAX_ENTERPRISE_AI_CONNECTIONS と同じ）。 */
 export const MAX_ENTERPRISE_AI_CONNECTIONS = ENTERPRISE_AI_CONNECTION_IDS.length;
@@ -91,7 +98,7 @@ export interface EnterpriseAiConfiguredModel {
 }
 
 /**
- * OCI Enterprise AI の接続 1 件（#533）。`api_key` は書き込み専用で、応答では空。
+ * モデルの接続 1 件（#533）。`api_key` は書き込み専用で、応答では空。
  * 表示名は持たない（#542。画面は ID から「プライマリ接続」などと表示する）。
  */
 export interface EnterpriseAiConnectionSettings {
@@ -105,8 +112,8 @@ export interface EnterpriseAiConnectionSettings {
 
 export interface EnterpriseAiModelSettings {
   /**
-   * 1 件目（プライマリ接続）が既定。セカンダリ接続・ターシャリ接続は任意（#533 / #786）。
-   * 並びは ENTERPRISE_AI_CONNECTION_IDS の順（セカンダリ接続なしでターシャリ接続だけも可）。
+   * 1 件目（プライマリ接続）が既定。セカンダリ接続・ターシャリ接続・クォータナリ接続は任意
+   * （#533 / #786 / #5546）。並びは ENTERPRISE_AI_CONNECTION_IDS の順（途中の接続を飛ばしてもよい）。
    */
   connections: EnterpriseAiConnectionSettings[];
   models: EnterpriseAiConfiguredModel[];
@@ -157,6 +164,11 @@ export interface ModelSettingsData {
   /** 値の無い登録モデルに使う画像 1 枚の入力 token の既定と、その出典の URL（#5334。backend の既定）。 */
   default_image_input_tokens?: number;
   default_image_input_tokens_source_url?: string;
+  /**
+   * クォータナリ接続（Anthropic Claude の Messages API。#5546）の Endpoint URL が空のときに使う URL
+   * （backend の既定。画面は書き写さずにこの値を示す）。
+   */
+  default_anthropic_endpoint?: string;
 }
 
 /** 保存（PATCH）の body。`base_revision` は読み込んだ時点の `ModelSettingsData.revision`（#1037）。 */

@@ -1,13 +1,17 @@
 """モデル設定の API（3製品共通。NL2SQL の実装を基準に移設。#103）。
 
 - OCI Enterprise AI（回答生成 / Vision）と OCI Generative AI（埋め込み / リランク）の設定
-- OCI Enterprise AI の接続（Endpoint URL・Project OCID・API key）は、プライマリ接続・
-  セカンダリ接続・ターシャリ接続の 3 件まで（#533 / #542 / #786）。ターシャリ接続は OpenAI /
-  OpenAI 互換 API 向けで、Project OCID は任意。登録モデルごとに `connection_id` で使う接続を選ぶ
-  （未指定ならプライマリ接続）。実行時は `enterprise_ai_connection_for_model` でモデルから接続を引く
+- モデルの接続は、プライマリ接続・セカンダリ接続・ターシャリ接続・クォータナリ接続の 4 件まで
+  （#533 / #542 / #786 / #5546）。プライマリ接続（既定）からターシャリ接続までは OpenAI 互換の
+  API（Endpoint URL・Project OCID・API key。Project OCID は任意）で、ターシャリ接続は OpenAI /
+  OpenAI 互換 API 向け。クォータナリ接続は Anthropic Claude の Messages API 向けで、Endpoint URL
+  は任意（空なら `ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT`）・Project OCID は持たない。登録モデルごとに
+  `connection_id` で使う接続を選ぶ（未指定ならプライマリ接続）。実行時は
+  `enterprise_ai_connection_for_model` でモデルから接続を引く
 - API key は共通 `.env`（`platform/.env`）の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY`
   （プライマリ接続）・`PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（セカンダリ接続）・
-  `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`（ターシャリ接続）だけに保存し、JSON には書かない
+  `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`（ターシャリ接続）・
+  `PLATFORM_OCI_ENTERPRISE_AI_QUATERNARY_API_KEY`（クォータナリ接続）だけに保存し、JSON には書かない
 - それ以外は `model-settings.json`（`version: 4`）へ保存し、起動時と mtime の変化時に読み込む
 - 登録に無いモデルは、別の接続へ切り替えずに失敗させる（#3240）
 - 登録モデルごとに推論（思考）の量 `reasoning_effort` を持つ（#1425。既定は low。#3004）。
@@ -90,29 +94,36 @@ logger = logging.getLogger(__name__)
 ENTERPRISE_AI_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_API_KEY"
 ENTERPRISE_AI_SECONDARY_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY"
 ENTERPRISE_AI_TERTIARY_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY"
-# OCI Enterprise AI の接続（#533）。プライマリ接続が既定。接続ごとに Settings の属性（env 名）が
+ENTERPRISE_AI_QUATERNARY_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_QUATERNARY_API_KEY"
+# モデルの接続（#533）。プライマリ接続が既定。接続ごとに Settings の属性（env 名）が
 # 決まっているので、ID は枠の名前にする。画面の名前は「プライマリ接続」「セカンダリ接続」
-# 「ターシャリ接続」（#542 / #786）。プライマリ接続は #533 より前からの属性・env 名をそのまま使う。
+# 「ターシャリ接続」「クォータナリ接続」（#542 / #786 / #5546）。プライマリ接続は #533 より前からの
+# 属性・env 名をそのまま使う。
 ENTERPRISE_AI_PRIMARY_CONNECTION_ID: Final = "primary"
 ENTERPRISE_AI_SECONDARY_CONNECTION_ID: Final = "secondary"
 ENTERPRISE_AI_TERTIARY_CONNECTION_ID: Final = "tertiary"
+ENTERPRISE_AI_QUATERNARY_CONNECTION_ID: Final = "quaternary"
 ENTERPRISE_AI_CONNECTION_IDS = (
     ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
     ENTERPRISE_AI_SECONDARY_CONNECTION_ID,
     ENTERPRISE_AI_TERTIARY_CONNECTION_ID,
+    ENTERPRISE_AI_QUATERNARY_CONNECTION_ID,
 )
 MAX_ENTERPRISE_AI_CONNECTIONS = len(ENTERPRISE_AI_CONNECTION_IDS)
 # 既定の判定モデル（`default_judge_model_id`。#3574）の「回答と同じモデル」を表す明示の値。
 # 空（既定）は既定のテキストモデル、それ以外は登録モデルの ID。
 # 解決は `enterprise_ai_judge_model_id` だけで行う。
 ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER: Final = "same_as_answer"
-# 設定してもしなくてもよい接続（プライマリ接続の後ろ）。Endpoint URL があるときだけ有効になる。
+# 設定してもしなくてもよい接続（プライマリ接続の後ろ）。Endpoint URL（クォータナリ接続は
+# Endpoint URL か API key）があるときだけ有効になる。
 _OPTIONAL_CONNECTION_IDS = ENTERPRISE_AI_CONNECTION_IDS[1:]
-# Project OCID を任意にする接続（#786）。ターシャリ接続は OpenAI / OpenAI 互換 API 向けで、
-# Project OCID（`OpenAI-Project` ヘッダー）は OCI Enterprise AI に使うときだけ要る。
-ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
-    {ENTERPRISE_AI_TERTIARY_CONNECTION_ID}
-)
+# Anthropic Claude の Messages API で呼ぶ接続（#5546）。Project OCID を持たず、Endpoint URL は任意
+# （空なら `ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT`）、API key は必須。それ以外の接続は OpenAI 互換の
+# API で、Project OCID は任意（入れたときだけ `OpenAI-Project` ヘッダーを送る。#786 / #5546）。
+ANTHROPIC_MESSAGES_CONNECTION_IDS: Final = frozenset({ENTERPRISE_AI_QUATERNARY_CONNECTION_ID})
+# Messages API の接続の Endpoint URL が空のときに使う URL（Anthropic の公式の API）。既定の URL は
+# ここだけに書き、画面には API の応答（`ModelSettingsData.default_anthropic_endpoint`）で示す。
+ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT: Final = "https://api.anthropic.com"
 # 4: 登録モデルの `reasoning_effort`（#1425）。3 の JSON はそのまま読める
 # （項目が無い = 既定の low）。
 # 5: 登録モデルの `max_input_tokens`（#1437）。4 の JSON はそのまま読める
@@ -130,7 +141,7 @@ MODEL_SETTINGS_FILE_MODE = 0o600
 MODEL_SETTINGS_DIRECTORY_MODE = 0o700
 
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
-EnterpriseAiConnectionId = Literal["primary", "secondary", "tertiary"]
+EnterpriseAiConnectionId = Literal["primary", "secondary", "tertiary", "quaternary"]
 ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
 # 推論（思考）の量（#1425。Responses API の `reasoning.effort`）。選択肢は 4 つで、既定は low
 # （推論が出力の上限を使い切って未完了のときは、送り直しで 1 段下げる。#2023）。
@@ -318,9 +329,10 @@ EnterpriseAiModelEntrySettings = EnterpriseAiConfiguredModel
 
 
 class EnterpriseAiConnectionSettings(BaseModel):
-    """OCI Enterprise AI の接続 1 件（#533）。`api_key` は書き込み専用で、応答では空にする。
+    """モデルの接続 1 件（#533）。`api_key` は書き込み専用で、応答では空にする。
 
     接続の表示名は持たない（#542。画面は ID から「プライマリ接続」などと表示する）。
+    Messages API の接続（クォータナリ接続。#5546）の `project_ocid` は使わない（保存しない）。
     #533 の表示名（`display_name`）を含む payload も、知らない key として無視して受け付ける。
     """
 
@@ -337,6 +349,13 @@ class EnterpriseAiConnectionSettings(BaseModel):
         """前後空白を設定値へ混入させない。"""
         return value.strip()
 
+    @model_validator(mode="after")
+    def drop_project_ocid_of_messages_api(self) -> EnterpriseAiConnectionSettings:
+        """Messages API の接続（#5546）は Project OCID を持たないので、送られても空にする。"""
+        if self.connection_id in ANTHROPIC_MESSAGES_CONNECTION_IDS:
+            self.project_ocid = ""
+        return self
+
 
 # #533 より前の payload の接続の key（プライマリ接続の 1 組を top-level に持つ形）。
 _LEGACY_CONNECTION_KEYS = ("endpoint", "project_ocid", "api_key", "has_api_key", "clear_api_key")
@@ -345,7 +364,8 @@ _LEGACY_CONNECTION_KEYS = ("endpoint", "project_ocid", "api_key", "has_api_key",
 class EnterpriseAiModelSettings(BaseModel):
     """OCI Enterprise AI モデル provider 設定。"""
 
-    # 1 件目（プライマリ接続）が既定。セカンダリ接続・ターシャリ接続は任意（#533 / #786）。
+    # 1 件目（プライマリ接続）が既定。セカンダリ接続・ターシャリ接続・クォータナリ接続は任意
+    # （#533 / #786 / #5546）。
     connections: list[EnterpriseAiConnectionSettings] = Field(
         default_factory=lambda: [EnterpriseAiConnectionSettings()],
         min_length=1,
@@ -388,9 +408,10 @@ class EnterpriseAiModelSettings(BaseModel):
     def validate_connection_order(
         cls, value: list[EnterpriseAiConnectionSettings]
     ) -> list[EnterpriseAiConnectionSettings]:
-        """接続はプライマリ接続を先頭に「セカンダリ → ターシャリ」の順で、重複なく並べる。
+        """接続はプライマリ接続を先頭に「セカンダリ → ターシャリ → クォータナリ」の順で、
+        重複なく並べる。
 
-        セカンダリ接続を置かずにターシャリ接続だけを置いてもよい（#786）。
+        途中の接続を置かずに後ろの接続だけを置いてもよい（#786 / #5546）。
         """
         positions = [
             ENTERPRISE_AI_CONNECTION_IDS.index(connection.connection_id) for connection in value
@@ -398,7 +419,8 @@ class EnterpriseAiModelSettings(BaseModel):
         if not positions or positions[0] != 0 or positions != sorted(set(positions)):
             raise ValueError(
                 "接続はプライマリ接続（primary）を先頭に、セカンダリ接続（secondary）、"
-                "ターシャリ接続（tertiary）の順で、重複なく指定してください。"
+                "ターシャリ接続（tertiary）、クォータナリ接続（quaternary）の順で、"
+                "重複なく指定してください。"
             )
         return value
 
@@ -504,6 +526,8 @@ class ModelSettingsData(BaseModel):
     # 画像 1 枚の入力 token の既定と出典（#5334）。値の無いモデルに使う値を画面に示す。
     default_image_input_tokens: int = DEFAULT_ENTERPRISE_AI_IMAGE_INPUT_TOKENS
     default_image_input_tokens_source_url: str = DEFAULT_IMAGE_INPUT_TOKENS_SOURCE_URL
+    # クォータナリ接続（Messages API。#5546）の Endpoint URL が空のときに使う URL。画面に示す。
+    default_anthropic_endpoint: str = ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT
 
 
 class ModelSettingsTestRequest(BaseModel):
@@ -571,6 +595,7 @@ class ModelSecretStateMixin(BaseModel):
         environment_api_key: str | None = None,
         environment_secondary_api_key: str | None = None,
         environment_tertiary_api_key: str | None = None,
+        environment_quaternary_api_key: str | None = None,
     ) -> None:
         """JSON 再読込前に環境由来 secret を基準値へ戻す。
 
@@ -579,6 +604,7 @@ class ModelSecretStateMixin(BaseModel):
         environment_keys = {
             ENTERPRISE_AI_SECONDARY_CONNECTION_ID: environment_secondary_api_key,
             ENTERPRISE_AI_TERTIARY_CONNECTION_ID: environment_tertiary_api_key,
+            ENTERPRISE_AI_QUATERNARY_CONNECTION_ID: environment_quaternary_api_key,
         }
         if not self._model_secret_state_initialized:
             self._environment_enterprise_ai_api_key = _api_key_of(self).strip()
@@ -641,17 +667,19 @@ def _api_key_of(settings: Any) -> str:
 
 @dataclass(frozen=True)
 class _ConnectionFields:
-    """接続ごとの Settings の属性名と、API key の env 名。"""
+    """接続ごとの Settings の属性名と、API key の env 名（Project OCID を持たない接続は None）。"""
 
     endpoint: str
-    project_ocid: str
+    project_ocid: str | None
     api_key: str
     api_key_env: str
 
 
 # プライマリ接続は #533 より前からの属性・env 名（既存環境の更新は要らない）。セカンダリ接続は
-# `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*`、ターシャリ接続は `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_*`
-# （どちらも `PLATFORM_SETTING_FIELDS` に登録）。
+# `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*`、ターシャリ接続は
+# `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_*`、クォータナリ接続は
+# `PLATFORM_OCI_ENTERPRISE_AI_QUATERNARY_*`（Project OCID なし）
+# （いずれも `PLATFORM_SETTING_FIELDS` に登録）。
 _PRIMARY_FIELDS = _ConnectionFields(
     endpoint="oci_enterprise_ai_endpoint",
     project_ocid="oci_enterprise_ai_project_ocid",
@@ -670,18 +698,47 @@ _TERTIARY_FIELDS = _ConnectionFields(
     api_key="oci_enterprise_ai_tertiary_api_key",
     api_key_env=ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
 )
+_QUATERNARY_FIELDS = _ConnectionFields(
+    endpoint="oci_enterprise_ai_quaternary_endpoint",
+    project_ocid=None,
+    api_key="oci_enterprise_ai_quaternary_api_key",
+    api_key_env=ENTERPRISE_AI_QUATERNARY_API_KEY_ENV,
+)
 _CONNECTION_FIELDS: dict[str, _ConnectionFields] = {
     ENTERPRISE_AI_PRIMARY_CONNECTION_ID: _PRIMARY_FIELDS,
     ENTERPRISE_AI_SECONDARY_CONNECTION_ID: _SECONDARY_FIELDS,
     ENTERPRISE_AI_TERTIARY_CONNECTION_ID: _TERTIARY_FIELDS,
+    ENTERPRISE_AI_QUATERNARY_CONNECTION_ID: _QUATERNARY_FIELDS,
 }
+
+
+class EnterpriseAiConnectionNotSupportedError(ValueError):
+    """製品の呼び出しの層がまだ対応していない接続のモデルを呼ぼうとした（#5546）。
+
+    クォータナリ接続（Anthropic Claude の Messages API）は、設定と登録モデルでの選択はできるが、
+    3 製品の呼び出しの層は OpenAI 互換の API だけを呼ぶ。OpenAI 互換の URL
+    （`EnterpriseAiConnection.base_url` / `request_url`）を引いた時点でこの誤りにし、別の接続へ
+    暗黙に切り替えない。文はそのまま利用者に見せてよい（接続の名前だけを含み、secret を含まない）。
+    """
+
+    code: Final = "enterprise_ai_connection_not_supported"
+    safe_for_user: Final = True
+
+    def __init__(self, connection_id: str) -> None:
+        self.connection_id = connection_id
+        super().__init__(
+            f"{connection_label(connection_id)}（Anthropic Claude の Messages API）のモデルは、"
+            "まだ呼び出せません。システム設定 > モデル で、登録モデルの「接続」をほかの接続に"
+            "変えてください。"
+        )
 
 
 @dataclass(frozen=True)
 class EnterpriseAiConnection:
-    """モデルの呼び出しに使う OCI Enterprise AI の接続（#533）。
+    """モデルの呼び出しに使う接続（#533）。
 
-    API key を含むので、API の応答やログに出さない。
+    API key を含むので、API の応答やログに出さない。`endpoint` は保存した値のまま（Messages API の
+    接続で空なら、呼び出しの URL は `effective_endpoint`）。
     """
 
     connection_id: str
@@ -689,18 +746,40 @@ class EnterpriseAiConnection:
     project_ocid: str
     api_key: str = field(repr=False)
 
+    @property
+    def uses_anthropic_messages(self) -> bool:
+        """Anthropic Claude の Messages API で呼ぶ接続か（クォータナリ接続。#5546）。"""
+        return self.connection_id in ANTHROPIC_MESSAGES_CONNECTION_IDS
+
+    @property
+    def effective_endpoint(self) -> str:
+        """呼び出しに使う Endpoint URL（Messages API の接続で空なら Anthropic の公式の API）。"""
+        if self.uses_anthropic_messages:
+            return self.endpoint or ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT
+        return self.endpoint
+
     def is_configured(self) -> bool:
         """Endpoint と API key がそろっているか（Project OCID は任意）。"""
-        return bool(self.endpoint and self.api_key)
+        return bool(self.effective_endpoint and self.api_key)
 
     @property
     def base_url(self) -> str:
-        """OpenAI 互換 API の base URL（`enterprise_ai_base_url`。#1440）。"""
+        """OpenAI 互換 API の base URL（`enterprise_ai_base_url`。#1440）。
+
+        Messages API の接続は OpenAI 互換の URL を持たないので、
+        `EnterpriseAiConnectionNotSupportedError`。
+        """
+        self._require_openai_compatible()
         return enterprise_ai_base_url(self.endpoint)
 
     def request_url(self, api_path: str = DEFAULT_ENTERPRISE_AI_API_PATH) -> str:
-        """API を呼ぶ URL（`enterprise_ai_request_url`。#1440）。"""
+        """API を呼ぶ URL（`enterprise_ai_request_url`。#1440）。Messages API の接続は誤り。"""
+        self._require_openai_compatible()
         return enterprise_ai_request_url(self.endpoint, api_path)
+
+    def _require_openai_compatible(self) -> None:
+        if self.uses_anthropic_messages:
+            raise EnterpriseAiConnectionNotSupportedError(self.connection_id)
 
 
 def _connection_from_settings(settings: Any, connection_id: str) -> EnterpriseAiConnection:
@@ -708,7 +787,7 @@ def _connection_from_settings(settings: Any, connection_id: str) -> EnterpriseAi
     return EnterpriseAiConnection(
         connection_id=connection_id,
         endpoint=_setting_text(settings, fields.endpoint),
-        project_ocid=_setting_text(settings, fields.project_ocid),
+        project_ocid=_setting_text(settings, fields.project_ocid) if fields.project_ocid else "",
         api_key=_setting_text(settings, fields.api_key),
     )
 
@@ -717,11 +796,13 @@ def enterprise_ai_connections(settings: Any) -> list[EnterpriseAiConnection]:
     """設定済みの接続の一覧。
 
     プライマリ接続は常にあり、セカンダリ接続・ターシャリ接続は Endpoint URL があるときだけある。
+    クォータナリ接続は Endpoint URL が任意なので、Endpoint URL か API key があるときにある
+    （#5546）。
     """
     connections = [_connection_from_settings(settings, ENTERPRISE_AI_PRIMARY_CONNECTION_ID)]
     for connection_id in _OPTIONAL_CONNECTION_IDS:
         connection = _connection_from_settings(settings, connection_id)
-        if connection.endpoint:
+        if connection.endpoint or (connection.uses_anthropic_messages and connection.api_key):
             connections.append(connection)
     return connections
 
@@ -1130,6 +1211,7 @@ ENTERPRISE_AI_CONNECTION_LABELS: Final[Mapping[str, str]] = {
     ENTERPRISE_AI_PRIMARY_CONNECTION_ID: "プライマリ接続",
     ENTERPRISE_AI_SECONDARY_CONNECTION_ID: "セカンダリ接続",
     ENTERPRISE_AI_TERTIARY_CONNECTION_ID: "ターシャリ接続",
+    ENTERPRISE_AI_QUATERNARY_CONNECTION_ID: "クォータナリ接続",
 }
 
 
@@ -1146,29 +1228,27 @@ def validate_enterprise_ai_connections(
     *,
     allow_missing_api_keys: Collection[str] = (),
 ) -> list[ModelFieldError]:
-    """接続と、登録モデルが指す接続を確かめる（#533 / #542）。
+    """接続と、登録モデルが指す接続を確かめる（#533 / #542 / #5546）。
 
-    - セカンダリ接続を設定したら、Endpoint URL・Project OCID・API key はすべて必須。
-      ターシャリ接続（OpenAI / OpenAI 互換 API 向け。#786）は Endpoint URL・API key が必須で、
-      Project OCID は任意（OCI Enterprise AI に使うときだけ入れる）。
+    - 接続（プライマリ接続を含む）は Endpoint URL と API key が必須で、Project OCID は任意
+      （入れたときだけ `OpenAI-Project` ヘッダーを送る）。
       API key は保存後の値（`resolve_api_keys` の結果。空欄は保存済みの値を保持）で確かめるので、
       `api_keys` を渡したときだけ確かめる。明示削除と、削除済みの保存状態は許可する。
-    - プライマリ接続は OCI で運用するときだけ必須（画面は「OCI 運用時必須」）なので、
-      ここでは確かめない
+    - クォータナリ接続（Messages API）は Endpoint URL が任意（空なら Anthropic の公式の API）で、
+      API key は常に必須（key が接続のあることを決めるので、key の削除は接続の削除で行う）
     - 登録モデルは、存在する接続を指す
     """
     errors: list[ModelFieldError] = []
     for index, connection in enumerate(enterprise.connections):
-        if connection.connection_id == ENTERPRISE_AI_PRIMARY_CONNECTION_ID:
-            continue
         label = connection_label(connection.connection_id)
-        required = [("endpoint", "Endpoint URL", bool(connection.endpoint))]
-        if connection.connection_id not in ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS:
-            required.append(("project_ocid", "Project OCID", bool(connection.project_ocid)))
-        if (
-            api_keys is not None
-            and not connection.clear_api_key
-            and connection.connection_id not in allow_missing_api_keys
+        messages_api = connection.connection_id in ANTHROPIC_MESSAGES_CONNECTION_IDS
+        required = [] if messages_api else [("endpoint", "Endpoint URL", bool(connection.endpoint))]
+        if api_keys is not None and (
+            messages_api
+            or (
+                not connection.clear_api_key
+                and connection.connection_id not in allow_missing_api_keys
+            )
         ):
             required.append(
                 ("api_key", "API key", bool(api_keys.get(connection.connection_id, "")))
@@ -1341,10 +1421,11 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     generative = payload.generative_ai
     models = [model.model_copy() for model in enterprise.models if model.model_id]
     for connection_id, fields in _CONNECTION_FIELDS.items():
-        # payload にない接続（セカンダリ接続・ターシャリ接続を削除した場合）は空にする。
+        # payload にない接続（セカンダリ接続など任意の接続を削除した場合）は空にする。
         connection = enterprise.connection(connection_id) or EnterpriseAiConnectionSettings()
         _set_if_field(settings, fields.endpoint, connection.endpoint)
-        _set_if_field(settings, fields.project_ocid, connection.project_ocid)
+        if fields.project_ocid:
+            _set_if_field(settings, fields.project_ocid, connection.project_ocid)
     settings.oci_enterprise_ai_models = models
     settings.oci_enterprise_ai_default_text_model = enterprise.default_text_model_id
     settings.oci_enterprise_ai_default_vision_model = enterprise.default_vision_model_id
@@ -1598,6 +1679,9 @@ class ModelSettingsStore:
             self._environment_api_key(
                 settings, refresh=refresh_secret, name=ENTERPRISE_AI_TERTIARY_API_KEY_ENV
             ),
+            self._environment_api_key(
+                settings, refresh=refresh_secret, name=ENTERPRISE_AI_QUATERNARY_API_KEY_ENV
+            ),
         )
         path = self.path(settings)
         if not path.is_file():
@@ -1655,18 +1739,21 @@ class ModelSettingsStore:
         api_key: str,
         secondary_api_key: str | None = None,
         tertiary_api_key: str | None = None,
+        quaternary_api_key: str | None = None,
     ) -> None:
         """`.env` の API key → JSON の順に保存する。JSON に失敗したら `.env` を元に戻す。
 
         `.env` を先に書くのは、JSON の mtime を見て再読込する別 worker が新しい key を読めるように
         するため。`lock()` の中で呼ぶ。失敗時は OSError を送出する。
-        `secondary_api_key`（セカンダリ接続）・`tertiary_api_key`（ターシャリ接続）を省くと今の値の
-        まま。payload にその接続がなければ消す。
+        `secondary_api_key`（セカンダリ接続）・`tertiary_api_key`（ターシャリ接続）・
+        `quaternary_api_key`（クォータナリ接続）を省くと今の値のまま。payload にその接続が
+        なければ消す。
         """
         api_key_values: dict[str, str | None] = {ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None}
         optional_keys = {
             ENTERPRISE_AI_SECONDARY_CONNECTION_ID: secondary_api_key,
             ENTERPRISE_AI_TERTIARY_CONNECTION_ID: tertiary_api_key,
+            ENTERPRISE_AI_QUATERNARY_CONNECTION_ID: quaternary_api_key,
         }
         for connection_id, connection_key in optional_keys.items():
             fields = _CONNECTION_FIELDS[connection_id]
@@ -2029,8 +2116,14 @@ async def run_model_settings_test(
             target_type=request.target_type,
             model_id=request.model_id,
             message=_model_test_failure_message(request.target_type, request.model_id),
-            troubleshooting=_model_test_troubleshooting(
-                request.target_type, raw_error, type(exc).__name__, network_cause
+            # 呼び出しの層がまだ対応していない接続（#5546）は、Endpoint・API key などの確認項目を
+            # 並べずに、接続を変える案内だけを出す（要求は送っていない）。
+            troubleshooting=(
+                [str(exc)]
+                if isinstance(exc, EnterpriseAiConnectionNotSupportedError)
+                else _model_test_troubleshooting(
+                    request.target_type, raw_error, type(exc).__name__, network_cause
+                )
             ),
             raw_error=raw_error,
             error_type=type(exc).__name__,
@@ -2086,15 +2179,13 @@ def save_model_settings(
 
     登録モデルか既定のモデルを変える保存では既定のモデルを検証する（不正なら HTTPException(422)）。
     変えない保存（接続情報・Generative AI の節だけの保存）は、保存済みの状態が不正でも止めない。
-    接続（セカンダリ接続・ターシャリ接続の必須の欄。#542 / #786）と、登録モデルが指す接続は
-    毎回検証する（#533）。
+    接続（必須の欄。#542 / #786 / #5546）と、登録モデルが指す接続は毎回検証する（#533）。
     `base_revision`（画面が読み込んだ時点の版。#1037）を渡したときは、lock の中で読み直した後の版と
     違えば HTTPException(409) にして保存しない。
     永続化の失敗は HTTPException(500)。
     """
     # 接続（#533）は毎回確かめる。直す欄は同じ画面にあるので、保存済みの状態が不正でも止める。
-    # セカンダリ接続・ターシャリ接続の API key は、保存後の値（空欄は保存済みの値を保持）で
-    # 確かめる（#542）。
+    # API key は、保存後の値（空欄は保存済みの値を保持）で確かめる（#542）。
     errors = validate_enterprise_ai_connections(
         payload.enterprise_ai,
         api_keys=resolve_api_keys(settings, payload),
@@ -2138,6 +2229,7 @@ def save_model_settings(
                 api_key=keys[ENTERPRISE_AI_PRIMARY_CONNECTION_ID],
                 secondary_api_key=keys[ENTERPRISE_AI_SECONDARY_CONNECTION_ID],
                 tertiary_api_key=keys[ENTERPRISE_AI_TERTIARY_CONNECTION_ID],
+                quaternary_api_key=keys[ENTERPRISE_AI_QUATERNARY_CONNECTION_ID],
             )
     except OSError as exc:
         raise HTTPException(

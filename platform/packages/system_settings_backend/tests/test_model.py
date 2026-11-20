@@ -17,6 +17,7 @@ from pydantic import Field
 from pr_system_settings import model as shared_model
 from pr_system_settings.model import (
     ENTERPRISE_AI_API_KEY_ENV,
+    ENTERPRISE_AI_QUATERNARY_API_KEY_ENV,
     ENTERPRISE_AI_SECONDARY_API_KEY_ENV,
     ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
     EnterpriseAiConfiguredModel,
@@ -40,6 +41,8 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_tertiary_endpoint: str = ""
     oci_enterprise_ai_tertiary_project_ocid: str = ""
     oci_enterprise_ai_tertiary_api_key: str = ""
+    oci_enterprise_ai_quaternary_endpoint: str = ""
+    oci_enterprise_ai_quaternary_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""
@@ -79,6 +82,7 @@ def _no_process_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENTERPRISE_AI_API_KEY_ENV, raising=False)
     monkeypatch.delenv(ENTERPRISE_AI_SECONDARY_API_KEY_ENV, raising=False)
     monkeypatch.delenv(ENTERPRISE_AI_TERTIARY_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(ENTERPRISE_AI_QUATERNARY_API_KEY_ENV, raising=False)
 
 
 def make_store(tmp_path: Path) -> ModelSettingsStore:
@@ -627,6 +631,8 @@ def test_saving_other_sections_is_not_blocked_by_saved_duplicate_model_ids(
             {
                 "version": 3,
                 "enterprise_ai": {
+                    # プライマリ接続の Endpoint URL は必須（#5546）。
+                    "endpoint": "https://example.invalid/openai/v1",
                     "models": [
                         {"model_id": "vlm-b", "vision_enabled": True},
                         {"model_id": "vlm-b", "vision_enabled": True},
@@ -736,6 +742,8 @@ def test_saving_legacy_json_writes_new_keys(tmp_path: Path) -> None:
             {
                 "version": 3,
                 "enterprise_ai": {
+                    # プライマリ接続の Endpoint URL は必須（#5546）。
+                    "endpoint": "https://example.invalid/openai/v1",
                     "models": [
                         {"model_id": "llm-a", "vision_enabled": False},
                         {"model_id": "vlm-b", "vision_enabled": True},

@@ -1,6 +1,6 @@
-"""OCI Enterprise AI の接続（プライマリ / セカンダリ / ターシャリ）を持ち、モデルごとに選ぶ。
+"""モデルの接続（プライマリ / セカンダリ / ターシャリ / クォータナリ）を持ち、モデルごとに選ぶ。
 
-#533 / #542 / #786。
+#533 / #542 / #786 / #5546。
 """
 
 from __future__ import annotations
@@ -15,11 +15,14 @@ from test_model import FakeSettings, make_client, make_store
 
 from pr_system_settings import model as shared_model
 from pr_system_settings.model import (
+    ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT,
     ENTERPRISE_AI_API_KEY_ENV,
+    ENTERPRISE_AI_QUATERNARY_API_KEY_ENV,
     ENTERPRISE_AI_SECONDARY_API_KEY_ENV,
     ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
     MAX_ENTERPRISE_AI_CONNECTIONS,
     EnterpriseAiConfiguredModel,
+    EnterpriseAiConnectionNotSupportedError,
     EnterpriseAiModelNotRegisteredError,
     EnterpriseAiModelSettings,
     ModelSettingsTestRequest,
@@ -39,6 +42,7 @@ def _no_process_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENTERPRISE_AI_API_KEY_ENV, raising=False)
     monkeypatch.delenv(ENTERPRISE_AI_SECONDARY_API_KEY_ENV, raising=False)
     monkeypatch.delenv(ENTERPRISE_AI_TERTIARY_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(ENTERPRISE_AI_QUATERNARY_API_KEY_ENV, raising=False)
 
 
 def two_connection_payload(**secondary: Any) -> dict[str, Any]:
@@ -75,11 +79,11 @@ def two_connection_payload(**secondary: Any) -> dict[str, Any]:
     }
 
 
-def test_max_connections_is_three() -> None:
-    assert MAX_ENTERPRISE_AI_CONNECTIONS == 3
+def test_max_connections_is_four() -> None:
+    assert MAX_ENTERPRISE_AI_CONNECTIONS == 4
     with pytest.raises(ValueError):
         EnterpriseAiModelSettings.model_validate(
-            {"connections": [{"connection_id": "primary"}] * 4}
+            {"connections": [{"connection_id": "primary"}] * 5}
         )
 
 
@@ -93,7 +97,12 @@ def test_connections_must_start_with_primary_without_duplicates() -> None:
             {"connection_id": "tertiary"},
             {"connection_id": "secondary"},
         ],
-        [{"connection_id": "primary"}, {"connection_id": "quaternary"}],
+        [
+            {"connection_id": "primary"},
+            {"connection_id": "quaternary"},
+            {"connection_id": "tertiary"},
+        ],
+        [{"connection_id": "primary"}, {"connection_id": "quinary"}],
     ):
         with pytest.raises(ValueError):
             EnterpriseAiModelSettings.model_validate({"connections": connections})
@@ -106,11 +115,20 @@ def test_connections_must_start_with_primary_without_duplicates() -> None:
         ["primary", "secondary"],
         ["primary", "tertiary"],
         ["primary", "secondary", "tertiary"],
+        ["primary", "quaternary"],
+        ["primary", "secondary", "tertiary", "quaternary"],
     ],
-    ids=["primary", "primary-secondary", "primary-tertiary", "all"],
+    ids=[
+        "primary",
+        "primary-secondary",
+        "primary-tertiary",
+        "three",
+        "primary-quaternary",
+        "all",
+    ],
 )
 def test_connections_allow_any_subset_with_primary_in_order(ids: list[str]) -> None:
-    """セカンダリ接続を置かずにターシャリ接続だけを置いてもよい（#786）。"""
+    """途中の接続を置かずに後ろの接続だけを置いてもよい（#786 / #5546）。"""
     settings = EnterpriseAiModelSettings.model_validate(
         {"connections": [{"connection_id": connection_id} for connection_id in ids]}
     )
@@ -312,7 +330,7 @@ def test_saved_json_with_unknown_connections_is_read_leniently(tmp_path: Path) -
         "version": 3,
         "enterprise_ai": {
             "connections": [
-                {"connection_id": "quaternary", "endpoint": "https://x.invalid"},
+                {"connection_id": "quinary", "endpoint": "https://x.invalid"},
                 {"connection_id": "secondary", "endpoint": SECONDARY_ENDPOINT},
             ],
             "models": [],
@@ -348,29 +366,65 @@ def test_connection_labels_are_tab_names() -> None:
     assert connection_label("primary") == "プライマリ接続"
     assert connection_label("secondary") == "セカンダリ接続"
     assert connection_label("tertiary") == "ターシャリ接続"
+    assert connection_label("quaternary") == "クォータナリ接続"
     assert connection_label("unknown") == "プライマリ接続"
 
 
-@pytest.mark.parametrize(
-    ("field", "label"),
-    [("endpoint", "Endpoint URL"), ("project_ocid", "Project OCID")],
-)
-def test_secondary_connection_requires_each_field(field: str, label: str) -> None:
-    payload = two_connection_payload(**{field: ""})
+def test_secondary_connection_requires_endpoint() -> None:
+    payload = two_connection_payload(endpoint="")
     enterprise = EnterpriseAiModelSettings.model_validate(payload["enterprise_ai"])
     errors = validate_enterprise_ai_connections(enterprise)
     assert [(e.field, e.message) for e in errors] == [
-        (f"connections.1.{field}", f"セカンダリ接続の {label} を入力してください。")
+        ("connections.1.endpoint", "セカンダリ接続の Endpoint URL を入力してください。")
     ]
 
 
-def test_primary_connection_fields_stay_optional() -> None:
-    """プライマリ接続は OCI で運用するときだけ必須（画面は「OCI 運用時必須」）。保存は止めない。"""
+def test_project_ocid_is_optional_for_primary_and_secondary() -> None:
+    """Project OCID はどの接続でも任意（入れたときだけ OpenAI-Project ヘッダーを送る。#5546）。"""
+    payload = two_connection_payload()
+    for connection in payload["enterprise_ai"]["connections"]:
+        connection["project_ocid"] = ""
+    enterprise = EnterpriseAiModelSettings.model_validate(payload["enterprise_ai"])
+    keys = {"primary": "sk-primary", "secondary": "sk-secondary"}
+    assert validate_enterprise_ai_connections(enterprise, api_keys=keys) == []
+
+
+def test_primary_connection_requires_endpoint_and_api_key() -> None:
+    """プライマリ接続の Endpoint URL と API key は必須（#5546）。API key は保存後の値で確かめ、
+    明示削除と、削除済みの保存状態は許可する（ほかの接続と同じ）。"""
     payload = two_connection_payload()
     payload["enterprise_ai"]["connections"][0].update(endpoint="", project_ocid="", api_key="")
     enterprise = EnterpriseAiModelSettings.model_validate(payload["enterprise_ai"])
     keys = {"primary": "", "secondary": "sk-secondary"}
+    errors = validate_enterprise_ai_connections(enterprise, api_keys=keys)
+    assert [(e.field, e.message) for e in errors] == [
+        ("connections.0.endpoint", "プライマリ接続の Endpoint URL を入力してください。"),
+        ("connections.0.api_key", "プライマリ接続の API key を入力してください。"),
+    ]
+    payload["enterprise_ai"]["connections"][0]["endpoint"] = PRIMARY_ENDPOINT
+    enterprise = EnterpriseAiModelSettings.model_validate(payload["enterprise_ai"])
+    assert (
+        validate_enterprise_ai_connections(
+            enterprise, api_keys=keys, allow_missing_api_keys={"primary"}
+        )
+        == []
+    )
+    payload["enterprise_ai"]["connections"][0]["clear_api_key"] = True
+    enterprise = EnterpriseAiModelSettings.model_validate(payload["enterprise_ai"])
     assert validate_enterprise_ai_connections(enterprise, api_keys=keys) == []
+
+
+def test_saving_without_primary_endpoint_is_rejected(tmp_path: Path) -> None:
+    """プライマリ接続の Endpoint URL が空の保存は、どの節の保存でも 422 にする（#5546）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    payload = two_connection_payload()
+    payload["enterprise_ai"]["connections"][0]["endpoint"] = ""
+    response = make_client(settings, store).patch("/api/settings/model", json=payload)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "プライマリ接続の Endpoint URL を入力してください。"
+    assert not (tmp_path / "model-settings.json").exists()
 
 
 def test_secondary_connection_requires_api_key(tmp_path: Path) -> None:
@@ -747,7 +801,9 @@ def test_stale_save_from_other_product_is_rejected_and_keeps_secondary_connectio
 ) -> None:
     """画面を開いた後に別の製品が保存していたら、古い値での保存は 409 にして上書きしない。"""
     store_a, store_b = make_store(tmp_path), make_store(tmp_path)
-    product_a, product_b = FakeSettings(), FakeSettings()
+    # プライマリ接続の Endpoint URL は必須（#5546）なので、設定済みの環境で確かめる。
+    product_a = FakeSettings(oci_enterprise_ai_endpoint=PRIMARY_ENDPOINT)
+    product_b = FakeSettings(oci_enterprise_ai_endpoint=PRIMARY_ENDPOINT)
     store_a.load(product_a)
     store_b.load(product_b)
     client_a, client_b = make_client(product_a, store_a), make_client(product_b, store_b)
@@ -813,3 +869,184 @@ def test_revision_is_same_across_workers_and_save_without_base_revision_is_allow
 
     legacy = client_a.patch("/api/settings/model", json=saved["settings"])
     assert legacy.status_code == 200
+
+
+# ------------------------------------------------------------------- クォータナリ接続（#5546）
+
+QUATERNARY_ENDPOINT = "https://messages.invalid"
+
+
+def four_connection_payload(**quaternary: Any) -> dict[str, Any]:
+    """クォータナリ接続（Messages API 向け。Endpoint URL は任意）を足した payload。"""
+    payload = three_connection_payload()
+    payload["enterprise_ai"]["connections"].append(
+        {"connection_id": "quaternary", "endpoint": "", "api_key": "sk-quaternary", **quaternary}
+    )
+    payload["enterprise_ai"]["models"].append(
+        {"model_id": "claude-d", "display_name": "D", "connection_id": "quaternary"}
+    )
+    return payload
+
+
+def test_quaternary_connection_requires_only_api_key() -> None:
+    """クォータナリ接続は API key だけが必須で、Endpoint URL は任意、Project OCID は持たない。"""
+    keys = {
+        "primary": "sk-primary",
+        "secondary": "sk-secondary",
+        "tertiary": "sk-tertiary",
+        "quaternary": "sk-quaternary",
+    }
+    enterprise = EnterpriseAiModelSettings.model_validate(
+        four_connection_payload(project_ocid="ocid1.project.ignored")["enterprise_ai"]
+    )
+    assert enterprise.connections[3].project_ocid == ""
+    assert validate_enterprise_ai_connections(enterprise, api_keys=keys) == []
+
+    errors = validate_enterprise_ai_connections(enterprise, api_keys={**keys, "quaternary": ""})
+    assert [(e.field, e.message) for e in errors] == [
+        ("connections.3.api_key", "クォータナリ接続の API key を入力してください。")
+    ]
+    # key が接続のあることを決めるので、保存済みの key の削除・削除済みの状態は許可しない
+    # （key を消すときは接続を削除する）。
+    cleared = EnterpriseAiModelSettings.model_validate(
+        four_connection_payload(api_key="", clear_api_key=True)["enterprise_ai"]
+    )
+    errors = validate_enterprise_ai_connections(
+        cleared, api_keys={**keys, "quaternary": ""}, allow_missing_api_keys={"quaternary"}
+    )
+    assert [e.field for e in errors] == ["connections.3.api_key"]
+
+
+def test_save_and_load_quaternary_connection(tmp_path: Path) -> None:
+    """Endpoint URL が空のクォータナリ接続も、API key で接続があると読み、既定の URL で呼ぶ。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+
+    response = make_client(settings, store).patch(
+        "/api/settings/model", json=four_connection_payload()
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["default_anthropic_endpoint"] == ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT
+    enterprise = data["settings"]["enterprise_ai"]
+    assert enterprise["connections"][3] == {
+        "connection_id": "quaternary",
+        "endpoint": "",
+        "project_ocid": "",
+        "api_key": "",
+        "has_api_key": True,
+        "clear_api_key": False,
+    }
+    assert enterprise["models"][3]["connection_id"] == "quaternary"
+    assert "sk-quaternary" not in response.text
+    raw = (tmp_path / "model-settings.json").read_text(encoding="utf-8")
+    assert "sk-quaternary" not in raw
+    assert json.loads(raw)["enterprise_ai"]["connections"][3] == {
+        "connection_id": "quaternary",
+        "endpoint": "",
+        "project_ocid": "",
+    }
+    assert dotenv_values(tmp_path / ".env")[ENTERPRISE_AI_QUATERNARY_API_KEY_ENV] == "sk-quaternary"
+
+    worker_b = FakeSettings()
+    make_store(tmp_path).load(worker_b)
+    connection = enterprise_ai_connection_for_model(worker_b, "claude-d")
+    assert (connection.connection_id, connection.endpoint, connection.api_key) == (
+        "quaternary",
+        "",
+        "sk-quaternary",
+    )
+    assert connection.uses_anthropic_messages
+    assert connection.effective_endpoint == ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT
+    assert connection.is_configured()
+
+
+def test_quaternary_connection_is_not_callable_through_openai_compatible_urls() -> None:
+    """3 製品の呼び出しの層（OpenAI 互換の URL）は、クォータナリ接続のモデルを分かる誤りにする。"""
+    settings = FakeSettings(
+        oci_enterprise_ai_endpoint=PRIMARY_ENDPOINT,
+        oci_enterprise_ai_api_key="sk-primary",
+        oci_enterprise_ai_quaternary_endpoint=QUATERNARY_ENDPOINT,
+        oci_enterprise_ai_quaternary_api_key="sk-quaternary",
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="claude-d", connection_id="quaternary")
+        ],
+    )
+    connection = enterprise_ai_connection_for_model(settings, "claude-d")
+    assert connection.effective_endpoint == QUATERNARY_ENDPOINT
+    for read_url in (lambda: connection.base_url, lambda: connection.request_url("/responses")):
+        with pytest.raises(EnterpriseAiConnectionNotSupportedError) as raised:
+            read_url()
+        assert raised.value.code == "enterprise_ai_connection_not_supported"
+        assert "クォータナリ接続" in str(raised.value)
+        assert "sk-" not in str(raised.value)
+    # ほかの接続の URL はそのまま。
+    primary = shared_model.enterprise_ai_connection(settings, "primary")
+    assert primary.base_url == PRIMARY_ENDPOINT
+
+
+def test_model_test_of_quaternary_model_reports_unsupported_connection(tmp_path: Path) -> None:
+    """接続テストは、要求を送らずに「まだ呼び出せない」と接続を変える案内だけを返す。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+
+    async def run_test(candidate: Any, request: ModelSettingsTestRequest) -> dict[str, Any]:
+        connection = enterprise_ai_connection_for_model(candidate, request.model_id)
+        raise_for = connection.request_url("/responses")
+        raise AssertionError(raise_for)
+
+    data = (
+        make_client(settings, store, run_model_test=run_test)
+        .post(
+            "/api/settings/model/test",
+            json={
+                "settings": four_connection_payload(),
+                "target_type": "enterprise_text",
+                "model_id": "claude-d",
+            },
+        )
+        .json()["data"]
+    )
+    assert data["status"] == "failed"
+    assert data["error_type"] == "EnterpriseAiConnectionNotSupportedError"
+    assert data["troubleshooting"] == [data["raw_error"]]
+    assert "クォータナリ接続" in data["raw_error"]
+
+
+def test_quaternary_connection_from_environment_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """env の API key（`PLATFORM_OCI_ENTERPRISE_AI_QUATERNARY_API_KEY`）だけでも接続がある。"""
+    monkeypatch.setenv(ENTERPRISE_AI_QUATERNARY_API_KEY_ENV, "sk-env-quaternary")
+    settings = FakeSettings(oci_enterprise_ai_quaternary_api_key="sk-env-quaternary")
+    make_store(tmp_path).load(settings)
+    connections = enterprise_ai_connections(settings)
+    assert [c.connection_id for c in connections] == ["primary", "quaternary"]
+    assert connections[1].effective_endpoint == ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT
+
+
+def test_removing_quaternary_clears_its_settings_and_key(tmp_path: Path) -> None:
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    payload = four_connection_payload(endpoint=QUATERNARY_ENDPOINT)
+    assert client.patch("/api/settings/model", json=payload).status_code == 200
+    assert settings.oci_enterprise_ai_quaternary_endpoint == QUATERNARY_ENDPOINT
+
+    payload["enterprise_ai"]["connections"].pop()
+    payload["enterprise_ai"]["models"][3]["connection_id"] = "primary"
+    response = client.patch("/api/settings/model", json=payload)
+
+    assert response.status_code == 200, response.text
+    assert ENTERPRISE_AI_QUATERNARY_API_KEY_ENV not in dotenv_values(tmp_path / ".env")
+    assert settings.oci_enterprise_ai_quaternary_endpoint == ""
+    assert settings.oci_enterprise_ai_quaternary_api_key == ""
+    assert [c.connection_id for c in enterprise_ai_connections(settings)] == [
+        "primary",
+        "secondary",
+        "tertiary",
+    ]

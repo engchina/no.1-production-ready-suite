@@ -167,6 +167,22 @@ def test_readiness_oci_requires_enterprise_ai_model_catalog(
     assert resp.json()["data"]["checks"]["enterprise_ai"] == "missing"
 
 
+def test_readiness_enterprise_ai_does_not_require_project_ocid(
+    monkeypatch: MonkeyPatch,
+    wallet_dir: Path,
+) -> None:
+    """Project OCID は任意（入れたときだけ OpenAI-Project ヘッダーを送る。#5546）。"""
+    _configure_oci_readiness(monkeypatch, oracle_wallet_dir=str(wallet_dir))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_enterprise_ai_project_ocid", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_payload_template", LLM_TEMPLATE)
+    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_payload_template", VLM_TEMPLATE)
+
+    resp = client.get("/api/ready")
+
+    assert resp.json()["data"]["checks"]["enterprise_ai"] == "ok"
+
+
 @pytest.mark.parametrize("environment", ["staging", "production"])
 def test_readiness_production_oci_requires_audit_salt(
     monkeypatch: MonkeyPatch, wallet_dir: Path, environment: str

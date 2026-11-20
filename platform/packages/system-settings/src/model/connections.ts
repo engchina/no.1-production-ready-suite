@@ -1,6 +1,6 @@
 /**
- * OCI Enterprise AI の接続（プライマリ接続・セカンダリ接続・ターシャリ接続）と、登録モデルが使う接続
- * （#533 / #542 / #786）。
+ * モデルの接続（プライマリ接続・セカンダリ接続・ターシャリ接続・クォータナリ接続）と、登録モデルが
+ * 使う接続（#533 / #542 / #786 / #5546）。
  * 検証の規則は backend の `pr_system_settings.model.validate_enterprise_ai_connections` と同じ。
  */
 import type { SelectFieldOption } from "@production-ready/ui";
@@ -23,14 +23,15 @@ import {
 export const PRIMARY_CONNECTION_ID: EnterpriseAiConnectionId = "primary";
 export const SECONDARY_CONNECTION_ID: EnterpriseAiConnectionId = "secondary";
 export const TERTIARY_CONNECTION_ID: EnterpriseAiConnectionId = "tertiary";
+export const QUATERNARY_CONNECTION_ID: EnterpriseAiConnectionId = "quaternary";
 
 /**
- * Project OCID を任意にする接続（#786）。ターシャリ接続は OpenAI / OpenAI 互換 API 向けで、
- * Project OCID（`OpenAI-Project` ヘッダー）は OCI Enterprise AI に使うときだけ要る。
- * backend の ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS と同じ。
+ * Anthropic Claude の Messages API で呼ぶ接続か（#5546。backend の ANTHROPIC_MESSAGES_CONNECTION_IDS と
+ * 同じ）。Project OCID を持たず、Endpoint URL は任意（空なら backend の既定の URL）、API key は必須で、
+ * 保存済みの key の削除は接続の削除で行う。ほかの接続は OpenAI 互換の API で、Project OCID は任意。
  */
-export function isProjectOcidOptional(connectionId: EnterpriseAiConnectionId): boolean {
-  return connectionId === TERTIARY_CONNECTION_ID;
+export function usesAnthropicMessages(connectionId: EnterpriseAiConnectionId): boolean {
+  return connectionId === QUATERNARY_CONNECTION_ID;
 }
 
 /** 接続の入力欄（検証とフォーカスの順）。 */
@@ -67,6 +68,7 @@ const CONNECTION_LABEL_KEYS = {
   primary: "settings.model.connection.primary",
   secondary: "settings.model.connection.secondary",
   tertiary: "settings.model.connection.tertiary",
+  quaternary: "settings.model.connection.quaternary",
 } as const satisfies Record<EnterpriseAiConnectionId, Parameters<typeof t>[0]>;
 
 function isConnectionId(value: string): value is EnterpriseAiConnectionId {
@@ -74,8 +76,9 @@ function isConnectionId(value: string): value is EnterpriseAiConnectionId {
 }
 
 /**
- * 利用者に見せる接続の名前（タブの名前と同じ「プライマリ接続」「セカンダリ接続」「ターシャリ接続」。
- * #542 / #786）。知らない ID はプライマリ接続（backend の `connection_label` と同じ）。
+ * 利用者に見せる接続の名前（タブの名前と同じ「プライマリ接続」「セカンダリ接続」「ターシャリ接続」
+ * 「クォータナリ接続」。#542 / #786 / #5546）。知らない ID はプライマリ接続（backend の
+ * `connection_label` と同じ）。
  */
 export function connectionLabel(connectionId: string): string {
   return t(
@@ -97,7 +100,7 @@ export function sortConnections<T extends { connection_id: EnterpriseAiConnectio
 }
 
 /**
- * 接続を「設定」する（空の入力欄を足す）。ターシャリ接続を先に設定してからセカンダリ接続を設定しても、
+ * 接続を「設定」する（空の入力欄を足す）。後ろの接続を先に設定してから前の接続を設定しても、
  * タブの順に並べる。すでにある接続はそのまま。
  */
 export function addConnection(
@@ -126,7 +129,7 @@ export function emptyConnection(
   };
 }
 
-/** その接続が画面にあるか（セカンダリ接続・ターシャリ接続は「設定」したときだけある）。 */
+/** その接続が画面にあるか（プライマリ接続の後ろの接続は「設定」したときだけある）。 */
 export function hasConnection(
   connections: readonly EnterpriseAiConnectionSettings[],
   connectionId: EnterpriseAiConnectionId,
@@ -193,11 +196,12 @@ export type ConnectionErrors = Partial<
   Record<EnterpriseAiConnectionId, Partial<Record<ConnectionField, string>>>
 >;
 
+/** 必須の欄（Project OCID はどの接続でも任意。#5546）。 */
+type RequiredConnectionField = Exclude<ConnectionField, "project_ocid">;
 const CONNECTION_REQUIRED_MESSAGES = {
   endpoint: "settings.model.connection.error.endpointRequired",
-  project_ocid: "settings.model.connection.error.projectRequired",
   api_key: "settings.model.connection.error.apiKeyRequired",
-} as const satisfies Record<ConnectionField, Parameters<typeof t>[0]>;
+} as const satisfies Record<RequiredConnectionField, Parameters<typeof t>[0]>;
 
 /** 保存後に API key があるか（新しい key の入力、または保存済みの key を削除しない）。 */
 export function connectionHasApiKey(connection: EnterpriseAiConnectionSettings): boolean {
@@ -207,10 +211,10 @@ export function connectionHasApiKey(connection: EnterpriseAiConnectionSettings):
 }
 
 /**
- * 接続の入力のエラー（#542 / #786）。
- * - 新しく設定するセカンダリ接続は Endpoint URL・Project OCID・API key が必須
- * - ターシャリ接続は Project OCID が任意。保存済み API key の明示削除と削除後の再保存を許可する
- * - プライマリ接続は OCI で運用するときだけ必須（「OCI 運用時必須」の表示だけで、保存は止めない）
+ * 接続の入力のエラー（#542 / #786 / #5546。backend の `validate_enterprise_ai_connections` と同じ）。
+ * - 接続（プライマリ接続を含む）は Endpoint URL と API key が必須で、Project OCID は任意
+ * - 保存済み API key の明示削除と、削除した後の再保存は許可する
+ * - クォータナリ接続（Messages API）は Endpoint URL が任意で、API key は常に必須
  */
 export function validateConnections(
   connections: readonly EnterpriseAiConnectionSettings[],
@@ -218,22 +222,23 @@ export function validateConnections(
 ): ConnectionErrors {
   const errors: ConnectionErrors = {};
   for (const connection of connections) {
-    if (connection.connection_id === PRIMARY_CONNECTION_ID) continue;
-    const present: Record<ConnectionField, boolean> = {
-      endpoint: Boolean(connection.endpoint.trim()),
-      project_ocid:
-        isProjectOcidOptional(connection.connection_id) ||
-        Boolean(connection.project_ocid.trim()),
+    const messagesApi = usesAnthropicMessages(connection.connection_id);
+    const present: Record<RequiredConnectionField, boolean> = {
+      endpoint: messagesApi || Boolean(connection.endpoint.trim()),
       api_key:
         connectionHasApiKey(connection) ||
-        connection.clear_api_key ||
-        savedConnections.some(
-          (saved) => saved.connection_id === connection.connection_id && !saved.has_api_key,
-        ),
+        (!messagesApi &&
+          (connection.clear_api_key ||
+            savedConnections.some(
+              (saved) =>
+                saved.connection_id === connection.connection_id && !saved.has_api_key,
+            ))),
     };
     const fieldErrors: Partial<Record<ConnectionField, string>> = {};
     for (const field of CONNECTION_FIELD_ORDER) {
-      if (!present[field]) fieldErrors[field] = t(CONNECTION_REQUIRED_MESSAGES[field]);
+      if (field !== "project_ocid" && !present[field]) {
+        fieldErrors[field] = t(CONNECTION_REQUIRED_MESSAGES[field]);
+      }
     }
     if (Object.keys(fieldErrors).length) errors[connection.connection_id] = fieldErrors;
   }

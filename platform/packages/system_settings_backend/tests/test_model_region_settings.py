@@ -106,7 +106,11 @@ def test_saved_tokyo_remains_readable_without_migration(tmp_path: Path) -> None:
 
 
 def test_unchanged_tokyo_does_not_block_other_model_settings(tmp_path: Path) -> None:
-    settings = RegionSettings(oci_genai_embedding_region="ap-tokyo-1")
+    # プライマリ接続の Endpoint URL は必須（#5546）なので、設定済みの環境で確かめる。
+    settings = RegionSettings(
+        oci_genai_embedding_region="ap-tokyo-1",
+        oci_enterprise_ai_endpoint="https://example.invalid/openai/v1",
+    )
     store = make_store(tmp_path)
     store.load(settings)
     client = make_client(settings, store)
