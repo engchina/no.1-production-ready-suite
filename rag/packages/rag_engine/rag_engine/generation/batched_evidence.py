@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import unicodedata
@@ -16,7 +15,6 @@ from types import GenericAlias
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
-from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges, slice_ranges
 
 from rag_engine.config import Settings
 from rag_engine.dependencies import injected_current_section_paths, record_retrieval_stage
@@ -42,6 +40,7 @@ from rag_engine.generation.document_inputs import (
     related_spans,
     with_first_chunks,
 )
+from rag_engine.generation.document_inputs import slice_span as _slice
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
 from rag_engine.generation.grounded import span_citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
@@ -161,21 +160,6 @@ def _canonical_reading(reading: BatchReading, values: Sequence[Mapping[str, Any]
                 BatchFinding(start_line=f"{label}-{binding.first + 1}", end_line=f"{label}-{binding.last + 1}", answer=finding.answer)
             )
     return BatchReading(findings=findings)
-
-
-def _slice(span: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
-    """親本文の座標と元の出典を保持し、分割範囲に固有の ID を付ける。"""
-    if start == 0 and end == len(span["text"]):
-        return dict(span)
-    absolute = int(span.get("start", 0)) + start
-    text = span["text"][start:end]
-    uid = "E" + hashlib.sha256(f"{span['source_id']}:{absolute}:{absolute + len(text)}:{text}".encode()).hexdigest()[:20]
-    sliced = {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
-    # 解析器が付けた原文に無い範囲は、分けた本文の座標に移す（#5305）。
-    sliced.pop(NON_SOURCE_RANGES_KEY, None)
-    if non_source := slice_ranges(load_ranges(span.get(NON_SOURCE_RANGES_KEY), len(span["text"])), start, end):
-        sliced[NON_SOURCE_RANGES_KEY] = [list(item) for item in non_source]
-    return sliced
 
 
 def candidate_block(values: Sequence[Mapping[str, Any]]) -> str:
@@ -717,6 +701,8 @@ def prepare_batched_evidence(
                     context = render([])
                     # 原質問は保持し、原文による説明だけを追加で読む。
                     question = json.dumps({"original_question": question, "remaining_request": remainder}, ensure_ascii=False)
+                    # 追加要求と集計結果のぶんだけ入力が増えた条件で、完全なチャンクの組を測り直す。
+                    pass_batches = partition(selected)
             batch_offset = len(batches)
             partials: dict[tuple[Any, ...], dict[str, Any]] = {}
 

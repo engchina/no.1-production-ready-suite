@@ -1925,9 +1925,14 @@ def synthesize_grounded_answer(
         )
 
         if extrema.result and extrema.result.remaining_request:
+            verified_results = [
+                {"source": g["source"], "range": g["range"], "value": g.get("value"), "rows": g["winners"]} for g in extrema.result.groups
+            ]
             prompt += (
-                "\n数値の比較は検証済みです。ここでは次の追加要求だけを原文に基づいて回答してください。資料に理由が無ければその旨を示してください。\n"
-                + json.dumps(extrema.result.remaining_request, ensure_ascii=False)
+                "\n比較結果を補助情報にして、追加要求だけに原文で回答してください。理由が確認できないときは明記してください。\n"
+                + json.dumps(
+                    {"remaining_request": extrema.result.remaining_request, "comparison_results": verified_results}, ensure_ascii=False
+                )
             )
         return prompt
 

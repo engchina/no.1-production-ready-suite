@@ -1,14 +1,32 @@
 """選択順位・文書の版・原文位置を保つ生成入力の並べ方。"""
 
+import hashlib
 import math
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any
+
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges, slice_ranges
 
 # 文書の先頭ページの背景（引用の対象外の補助の原文）の span の印。
 BACKGROUND_ONLY = "document_background_only"
 # 根拠に入った文書の本文の先頭の chunk の span の印（#5240）。生成・分割読取の各組・最終生成の入力に、その文書の根拠と
 # 一緒に必ず入れる（``with_first_chunks``）。
 FIRST_CHUNK = "document_first_chunk"
+
+
+def slice_span(span: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
+    """親本文の座標と元の出典を保持し、分割範囲に固有の ID を付ける。"""
+    if start == 0 and end == len(span["text"]):
+        return dict(span)
+    absolute = int(span.get("start", 0)) + start
+    text = span["text"][start:end]
+    uid = "E" + hashlib.sha256(f"{span['source_id']}:{absolute}:{absolute + len(text)}:{text}".encode()).hexdigest()[:20]
+    sliced = {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
+    # 解析器が付けた原文に無い範囲は、分けた本文の座標に移す（#5305）。
+    sliced.pop(NON_SOURCE_RANGES_KEY, None)
+    if non_source := slice_ranges(load_ranges(span.get(NON_SOURCE_RANGES_KEY), len(span["text"])), start, end):
+        sliced[NON_SOURCE_RANGES_KEY] = [list(item) for item in non_source]
+    return sliced
 
 
 def document_key(span: Mapping[str, Any]) -> tuple[str, ...]:
