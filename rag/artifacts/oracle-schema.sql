@@ -1303,6 +1303,29 @@ CREATE INDEX rag_wiki_link_source_unit_idx ON rag_wiki_links(source_unit_id);
 CREATE INDEX rag_wiki_link_target_unit_idx ON rag_wiki_links(target_unit_id);
 CREATE INDEX rag_wiki_link_queue_idx ON rag_wiki_link_documents(status,lease_until);
 
+-- section: wiki_graph_nodes
+CREATE TABLE rag_wiki_graph_nodes (
+    document_id VARCHAR2(64) NOT NULL,
+    node_id VARCHAR2(64) NOT NULL,
+    parent_id VARCHAR2(64) NOT NULL,
+    sibling_index NUMBER NOT NULL,
+    child_count NUMBER NOT NULL,
+    unit_count NUMBER NOT NULL,
+    path_depth NUMBER NOT NULL,
+    page_id VARCHAR2(64) NOT NULL REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_graph_node_pk PRIMARY KEY (document_id,node_id)
+);
+CREATE UNIQUE INDEX rag_wiki_graph_parent_idx ON rag_wiki_graph_nodes
+    (document_id,parent_id,sibling_index);
+CREATE INDEX rag_wiki_graph_page_idx ON rag_wiki_graph_nodes(page_id);
+CREATE TABLE rag_wiki_graph_deps (
+    page_id VARCHAR2(64) NOT NULL REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
+    target_unit_id VARCHAR2(64) NOT NULL,
+    relation VARCHAR2(32) NOT NULL,
+    CONSTRAINT rag_wiki_graph_dep_pk PRIMARY KEY (page_id,target_unit_id,relation)
+);
+CREATE INDEX rag_wiki_graph_target_idx ON rag_wiki_graph_deps(target_unit_id);
+
 -- section: document_summaries
 CREATE TABLE rag_document_summaries (
     document_id      VARCHAR2(64) NOT NULL,

@@ -77,6 +77,7 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
+from app.clients.wiki_graph_index import GRAPH_SCHEMA, backfill_graph_index
 from app.clients.wiki_store import wiki_link_schema_sql, wiki_schema_sql
 from app.rag.approved_faq_5107_migration import (
     removed_approved_faq_fields_sql,
@@ -407,6 +408,9 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="document_wiki_links",
             table_name="rag_wiki_links",
             sql=wiki_link_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="wiki_graph_nodes", table_name="rag_wiki_graph_nodes", sql=GRAPH_SCHEMA
         ),
         # 文書全体の要約（#4793）。文書を参照する。
         OracleSchemaSection(
@@ -1241,6 +1245,17 @@ END;
                 "以前の廃止の migration が、項目を足す前に保存した公開版を読めずに飛ばして"
                 "廃止項目が残った環境（#5524）では、その公開版からもすべての廃止項目を消します。"
                 "ほかの項目・版の番号・公開の履歴は変えません。削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261120_5599_wiki_graph_nodes",
+            table_name="rag_wiki_graph_nodes",
+            sql=_create_missing_objects_sql(GRAPH_SCHEMA, "Wiki の図"),
+            data_step=backfill_graph_index,
+            destructive_note=(
+                "Wiki の図の派生索引を文書単位で置き換えます。再生成元の公開済み案内は保持します。"
             ),
         )
     )

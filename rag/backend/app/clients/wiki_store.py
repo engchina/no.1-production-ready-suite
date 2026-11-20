@@ -32,6 +32,7 @@ from app.clients.oracle import (
     _with_tenant_bind,
     oracle_text_index_parameters_sql,
 )
+from app.clients.wiki_graph_index import index_document
 from app.rag.request_context import current_audit_request_context
 from app.rag.wiki_models import (
     WIKI_BUILD_KEY,
@@ -694,6 +695,7 @@ class WikiStore:
                 )
                 if not count or _int_value(count["total"]) != len(snapshot.units):
                     raise ValueError("Wiki の原文単位または埋め込みが未完了です。")
+                index_document(connection, snapshot.document_id, snapshot.source_fingerprint)
             _execute(
                 connection,
                 """UPDATE rag_wiki_documents SET status=:status,

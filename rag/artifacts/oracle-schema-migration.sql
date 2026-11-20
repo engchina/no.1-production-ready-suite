@@ -4869,3 +4869,51 @@ BEGIN
   NULL; -- graph_contains,graph_document,graph_section,whole_document
 END;
 /
+
+-- migration: 20261120_5599_wiki_graph_nodes
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_WIKI_GRAPH_NODES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_wiki_graph_nodes ( '
+            || 'document_id VARCHAR2(64) NOT NULL, '
+            || 'node_id VARCHAR2(64) NOT NULL, '
+            || 'parent_id VARCHAR2(64) NOT NULL, '
+            || 'sibling_index NUMBER NOT NULL, '
+            || 'child_count NUMBER NOT NULL, '
+            || 'unit_count NUMBER NOT NULL, '
+            || 'path_depth NUMBER NOT NULL, '
+            || 'page_id VARCHAR2(64) NOT NULL REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_wiki_graph_node_pk PRIMARY KEY (document_id,node_id) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_GRAPH_PARENT_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE UNIQUE INDEX rag_wiki_graph_parent_idx ON rag_wiki_graph_nodes '
+            || '(document_id,parent_id,sibling_index)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_GRAPH_PAGE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_graph_page_idx ON rag_wiki_graph_nodes(page_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_WIKI_GRAPH_DEPS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_wiki_graph_deps ( '
+            || 'page_id VARCHAR2(64) NOT NULL REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE, '
+            || 'target_unit_id VARCHAR2(64) NOT NULL, '
+            || 'relation VARCHAR2(32) NOT NULL, '
+            || 'CONSTRAINT rag_wiki_graph_dep_pk PRIMARY KEY (page_id,target_unit_id,relation) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_GRAPH_TARGET_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_graph_target_idx ON rag_wiki_graph_deps(target_unit_id)';
+    END IF;
+END;
+/

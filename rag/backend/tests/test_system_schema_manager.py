@@ -817,6 +817,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261117_5241_chunk_embeddings",
         _RETIRE_STRUCTURE_INDEX_MIGRATION,
         "20261119_5515_language_pack_retired_structure_labels",
+        "20261120_5599_wiki_graph_nodes",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

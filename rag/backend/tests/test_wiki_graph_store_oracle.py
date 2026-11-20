@@ -91,8 +91,8 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     overview = await graph.overview(kb.id)
     docs = {doc["document_id"]: doc for doc in overview["documents"]}
     assert set(docs) == {a, b}
-    assert docs[a]["unit_count"] == len(pages_a)
-    assert (docs[a]["outgoing_links"], docs[b]["incoming_links"]) == (1, 1)
+    assert not overview["has_more"]
+    assert (await graph.overview(kb.id, limit=1))["has_more"]
 
     # 文書 → 章節（section_path の階層）→ 単位を段階的に開く。
     path = pages_a[0].unit.section_path
@@ -101,10 +101,7 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     leaf = section_id(a, path)
     units = await graph.children(kb.id, a, parent_id=leaf, offset=0, limit=100)
     assert [item["id"] for item in units["items"]] == [page.unit.unit_id for page in pages_a]
-    assert units["items"][0]["outgoing"] == [
-        {"target": pages_a[1].unit.unit_id, "relation": "continuation", "scope": "same_document"},
-        {"target": first_b, "relation": "exception", "scope": "cross_document"},
-    ]
+    assert "outgoing" not in units["items"][0]
     located = await graph.locate(kb.id, a, pages_a[-1].unit.unit_id)
     assert located["path"][-1] == {"id": pages_a[-1].unit.unit_id, "index": len(pages_a) - 1}
 
@@ -113,7 +110,10 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     assert [chunk["chunk_id"] for chunk in detail["source_chunks"]] == (
         pages_a[0].unit.source_chunk_ids
     )
-    assert {(r["direction"], r["scope"], r["unit"]["id"]) for r in detail["relations"]} == {
+    assert {
+        (r["direction"], r["scope"], r["unit"]["id"])
+        for r in (await graph.relations(kb.id, first_a, 0, 25))["items"]
+    } == {
         ("outgoing", "same_document", pages_a[1].unit.unit_id),
         ("outgoing", "cross_document", first_b),
     }
@@ -132,9 +132,10 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     await oracle.remove_document_from_knowledge_base(kb.id, b)
     overview = await graph.overview(kb.id)
     assert [doc["document_id"] for doc in overview["documents"]] == [a]
-    assert overview["documents"][0]["outgoing_links"] == 0
+    assert not overview["has_more"]
     assert all(
-        r["scope"] == "same_document" for r in (await graph.unit(kb.id, first_a))["relations"]
+        r["scope"] == "same_document"
+        for r in (await graph.relations(kb.id, first_a, 0, 25))["items"]
     )
     for did in (a, b, c):
         await oracle.delete_document(did)

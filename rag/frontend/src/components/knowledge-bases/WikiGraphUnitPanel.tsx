@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { BookOpen, LocateFixed } from "lucide-react";
 import { Banner, Button, DataTable, INFORMATION_TABLE_VISIBLE_ROWS, resolveContentLang, Skeleton, TimedLoadingState, type DataTableColumn } from "@production-ready/ui";
 import { GraphSelectionDetails } from "@production-ready/ui/graph";
@@ -22,10 +22,21 @@ function GeneratedList({ items, empty }: { items: string[]; empty: string }) {
  * 選んだ原文単位の案内（要約・想定の質問・本文に無いこと）と、原文と、出る・入る関係（#5502）。
  * 案内は AI が作った検索用の文で、回答の根拠ではないことを先頭に示す。
  */
-export function WikiGraphUnitPanel({ kbId, unitId, onClose, onLocate }: {
+export function WikiGraphUnitPanel({ kbId, unitId, onClose, onLocate, onRelations }: {
+  onRelations: (items: WikiGraphRelationItem[]) => void;
   kbId: string; unitId: string; onClose: () => void; onLocate: (unit: WikiGraphUnitRef) => void;
 }) {
   const query = useQuery({ queryKey: ["wiki-graph-unit", kbId, unitId], queryFn: () => api.getWikiGraphUnit(kbId, unitId), retry: false });
+  const [showRelations, setShowRelations] = useState(false);
+  const relations = useInfiniteQuery({
+    queryKey: ["wiki-graph-relations", kbId, unitId],
+    enabled: showRelations, retry: false, initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.getWikiGraphRelations(kbId, unitId, pageParam),
+    getNextPageParam: (last, pages) => last.has_more ? pages.length * 25 : undefined,
+  });
+  useEffect(() => {
+    if (relations.data) onRelations(relations.data.pages.flatMap((page) => page.items));
+  }, [relations.data, onRelations]);
   const [opened, setOpened] = useState<{ chunkId: string; index: number } | null>(null);
   const source = useQuery({
     queryKey: ["wiki-graph-source", query.data?.document_id, opened?.chunkId],
@@ -83,8 +94,17 @@ export function WikiGraphUnitPanel({ kbId, unitId, onClose, onLocate }: {
           </section>
           <section className="grid min-w-0 gap-1" aria-label={t("wiki.graph.relations")}>
             <h4 className="text-xs font-semibold text-fg-muted">{t("wiki.graph.relations")}</h4>
-            {detail.relations.length ? <DataTable ariaLabel={t("wiki.graph.relations")} columns={columns} rows={detail.relations} getRowKey={(item) => `${item.direction}:${item.scope}:${item.unit.id}`} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} />
-              : <p className="text-sm text-fg-muted">{t("wiki.graph.noRelations")}</p>}
+            {!showRelations ? <Button variant="secondary" onClick={() => setShowRelations(true)}>{t("wiki.graph.showRelations")}</Button> : <>
+              {relations.data ? <DataTable ariaLabel={t("wiki.graph.relations")} columns={columns}
+                rows={relations.data.pages.flatMap((page) => page.items)}
+                getRowKey={(item) => `${item.direction}:${item.scope}:${item.unit.id}:${item.relation}`}
+                stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} /> : null}
+              {relations.isError ? <ApiErrorState error={relations.error} fallback={t("wiki.graph.expandError")}
+                onRetry={() => void (relations.isFetchNextPageError ? relations.fetchNextPage() : relations.refetch())} /> :
+                relations.isFetching ? <TimedLoadingState label={t("wiki.graph.loading")} operationKey={unitId}><Skeleton className="h-24 w-full" /></TimedLoadingState> :
+                relations.hasNextPage ? <Button variant="secondary" onClick={() => void relations.fetchNextPage()}>{t("wiki.graph.more", { count: 25 })}</Button> :
+                !relations.data?.pages[0].items.length ? <p>{t("wiki.graph.noRelations")}</p> : null}
+            </>}
           </section>
           <CitationSourceSheet showScores={false} kind="search" title={t("wiki.graph.sourceTitle", { name: detail.label || detail.document_name })} open={Boolean(opened)} onClose={() => setOpened(null)} index={opened?.index ?? 0}
             chunk={opened ? source.data ?? null : null}

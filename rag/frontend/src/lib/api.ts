@@ -1268,11 +1268,10 @@ export interface WikiGraphDocument {
   id: string;
   document_id: string;
   name: string;
-  unit_count: number;
-  outgoing_links: number;
-  incoming_links: number;
+
 }
 export interface WikiGraphOverview {
+  has_more?: boolean;
   status: "ok" | "empty";
   documents: WikiGraphDocument[];
 }
@@ -3871,14 +3870,16 @@ export const api = {
   getKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`),
   setKnowledgeBaseWiki: (id: string, enabled: boolean, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }),
   retryKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry?offset=${offset}&limit=${limit}`, { method: "POST" }),
-  getWikiGraphOverview: (id: string) =>
-    request<WikiGraphOverview>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph`),
+  getWikiGraphOverview: (id: string, offset = 0) =>
+    request<WikiGraphOverview>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph?offset=${offset}&limit=25`),
   getWikiGraphTree: (id: string, documentId: string, parent: string | null, offset: number, limit: number) =>
     request<WikiGraphTreePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph/documents/${encodeURIComponent(documentId)}/tree?${new URLSearchParams({ offset: String(offset), limit: String(limit), ...(parent ? { parent } : {}) })}`),
   locateWikiGraphNode: (id: string, documentId: string, node: string) =>
     request<WikiGraphLocation>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph/documents/${encodeURIComponent(documentId)}/locate?node=${encodeURIComponent(node)}`),
   searchWikiGraph: (id: string, q: string, offset: number) =>
     request<WikiGraphSearchPage>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph/search?q=${encodeURIComponent(q)}&offset=${offset}`),
+  getWikiGraphRelations: (id: string, unitId: string, offset: number) =>
+    request<{ items: WikiGraphRelationItem[]; has_more: boolean }>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph/units/${encodeURIComponent(unitId)}/relations?offset=${offset}&limit=25`),
   getWikiGraphUnit: (id: string, unitId: string) =>
     request<WikiGraphUnitDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph/units/${encodeURIComponent(unitId)}`),
   // KB ごとの項目抽出の定義（#548）。fields: null で全体の既定に戻す。

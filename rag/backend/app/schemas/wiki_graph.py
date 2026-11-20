@@ -15,12 +15,10 @@ class WikiGraphDocument(BaseModel):
     id: str
     document_id: str
     name: str
-    unit_count: int = 0
-    outgoing_links: int = 0
-    incoming_links: int = 0
 
 
 class WikiGraphOverview(BaseModel):
+    has_more: bool = False
     status: Literal["ok", "empty"] = "empty"
     documents: list[WikiGraphDocument] = Field(default_factory=list)
 
@@ -98,6 +96,11 @@ class WikiGraphRelation(BaseModel):
     unit: WikiGraphUnitRef
     # 文書をまたぐ関連の判定の理由（AI が書いた短い説明）。
     reason: str | None = None
+
+
+class WikiGraphRelations(BaseModel):
+    items: list[WikiGraphRelation]
+    has_more: bool
 
 
 class WikiGraphSourceChunk(BaseModel):

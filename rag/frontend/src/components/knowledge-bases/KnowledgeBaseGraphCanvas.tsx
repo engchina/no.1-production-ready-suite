@@ -1,13 +1,13 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
 import { FileText, Heading, MoreHorizontal, TextQuote, type LucideIcon } from "lucide-react";
-import { Banner, ProcessingIndicator, SelectField } from "@production-ready/ui";
+import { Banner, Button, ProcessingIndicator, SelectField } from "@production-ready/ui";
 import { applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GRAPH_READABLE_MIN_ZOOM, graphBounds, GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, graphEdgeStyle, GraphLegend, graphNeighborIds, GraphNodeCard, GraphParallelEdge, graphReadableViewport, GraphSearchNavigation, GraphSelectionDetails, selectGraphEdgeHandles, type GraphNodeDimensions, type GraphPoint } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
-import { api, type WikiGraphOverview, type WikiGraphRelation, type WikiGraphUnitRef } from "@/lib/api";
+import { api, type WikiGraphOverview, type WikiGraphRelation, type WikiGraphRelationItem, type WikiGraphDocument, type WikiGraphUnitRef } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useStructureNodeMeasurements } from "./use-structure-node-measurements";
 import { WikiGraphUnitPanel } from "./WikiGraphUnitPanel";
@@ -43,9 +43,8 @@ const relationLegendId = (relation: WikiGraphRelation) => relation;
 
 function nodeStats(item: WikiViewNode): string[] {
   const stats: string[] = [];
-  const counts = item.document ?? item.tree;
-  if (item.document) stats.push(t("wiki.graph.unitCount", { count: item.document.unit_count }));
-  else if (item.tree?.kind === "section") stats.push(t("wiki.graph.unitCount", { count: item.tree.unit_count }));
+  const counts = item.tree;
+  if (item.tree?.kind === "section") stats.push(t("wiki.graph.unitCount", { count: item.tree.unit_count }));
   // 文書をまたぐ関連は、端が図に無くても件数で示す（線は表示中の節点の間だけ）。
   if (counts?.outgoing_links) stats.push(t("wiki.graph.outgoingLinks", { count: counts.outgoing_links }));
   if (counts?.incoming_links) stats.push(t("wiki.graph.incomingLinks", { count: counts.incoming_links }));
@@ -56,7 +55,7 @@ function nodeStats(item: WikiViewNode): string[] {
 function WikiNode({ data, selected }: NodeProps<Node<WikiNodeData>>) {
   const { item } = data;
   if (item.kind === "more") {
-    return <GraphNodeCard icon={MoreHorizontal} kindLabel={kindLabel("more")} primary={t("wiki.graph.more", { count: item.remaining ?? 0 })} dimmed={data.dimmed} data-testid="wiki-graph-more" />;
+    return <GraphNodeCard icon={MoreHorizontal} kindLabel={kindLabel("more")} primary={t("wiki.graph.more", { count: Math.min(WIKI_GRAPH_PAGE_SIZE, item.remaining ?? 0) })} dimmed={data.dimmed} data-testid="wiki-graph-more" />;
   }
   return <GraphNodeCard icon={KIND_ICONS[item.kind]} kindLabel={kindLabel(item.kind)} primary={item.label} secondary={item.kind === "unit" ? item.tree?.label : undefined}
     stats={nodeStats(item)} fill={KIND_FILLS[item.kind]} selected={selected} matched={data.matched} dimmed={data.dimmed} title={item.name}
@@ -66,7 +65,7 @@ const NODE_TYPES = { wiki: WikiNode };
 const EDGE_TYPES = { parallel: GraphParallelEdge };
 
 function nodeAriaLabel(item: WikiViewNode) {
-  if (item.kind === "more") return t("wiki.graph.more", { count: item.remaining ?? 0 });
+  if (item.kind === "more") return t("wiki.graph.more", { count: Math.min(WIKI_GRAPH_PAGE_SIZE, item.remaining ?? 0) });
   const state = item.expandable ? `（${t(item.expanded ? "wiki.graph.close" : "wiki.graph.open")}）` : "";
   return `${kindLabel(item.kind)}：${item.name}${state}`;
 }
@@ -109,7 +108,10 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
 
-  const documents = useMemo(() => new Map(overview.documents.map((document) => [document.id, document])), [overview]);
+  const [locatedDocs, setLocatedDocs] = useState<WikiGraphDocument[]>([]);
+  const visibleOverview = useMemo(() => ({ ...overview, documents: [...overview.documents,
+    ...locatedDocs.filter((doc) => !overview.documents.some((item) => item.id === doc.id))] }), [overview, locatedDocs]);
+  const documents = useMemo(() => new Map(visibleOverview.documents.map((doc) => [doc.id, doc])), [visibleOverview]);
 
   async function run(work: () => Promise<void>): Promise<void> {
     setPending((value) => value + 1);
@@ -126,13 +128,13 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   const documentIdOf = (id: string): string | undefined => documents.get(id)?.document_id ?? treeRef.current.nodes.get(id)?.document_id;
 
   /** 親の段を、`count` 件まで読む（読み込み済みの続きから）。 */
-  const loadChildren = async (parent: string, count: number) => {
+  const loadChildren = async (parent: string, count: number, batchSize = WIKI_GRAPH_PAGE_SIZE) => {
     const documentId = documentIdOf(parent);
     if (!documentId) return;
     let loaded = treeRef.current.children.get(parent);
     while (!loaded || loaded.ids.length < Math.min(count, loaded.total)) {
       const offset = loaded?.ids.length ?? 0;
-      const page = await api.getWikiGraphTree(knowledgeBaseId, documentId, documents.has(parent) ? null : parent, offset, Math.min(WIKI_GRAPH_PAGE_SIZE, Math.max(count - offset, 1)));
+      const page = await api.getWikiGraphTree(knowledgeBaseId, documentId, documents.has(parent) ? null : parent, offset, Math.min(batchSize, Math.max(count - offset, 1)));
       updateTree((current) => ({
         ...current,
         nodes: new Map([...current.nodes, ...page.items.map((item) => [item.id, item] as const)]),
@@ -164,13 +166,25 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   };
 
   /** 文書の中の節点まで段を開く。節点が段の先の方にあるときは、そこまで読む。 */
-  const reveal = async (target: { id: string; document_id: string }) => {
-    if (!documents.has(target.document_id)) return;
+  const reveal = async (target: { id: string; document_id: string; document_name: string }) => {
+    if (!documents.has(target.document_id)) {
+      setLocatedDocs((previous) => previous.some((doc) => doc.id === target.document_id) ? previous :
+        [...previous, { id: target.document_id, document_id: target.document_id, name: target.document_name }]);
+    }
     if (target.id !== target.document_id) {
       const { path } = await api.locateWikiGraphNode(knowledgeBaseId, target.document_id, target.id);
       let parent = target.document_id;
       for (const step of path) {
-        await loadChildren(parent, (Math.floor(step.index / WIKI_GRAPH_PAGE_SIZE) + 1) * WIKI_GRAPH_PAGE_SIZE);
+        if (!treeRef.current.nodes.has(step.id)) {
+          const page = await api.getWikiGraphTree(knowledgeBaseId, target.document_id,
+            parent === target.document_id ? null : parent, step.index, 1);
+          const node = page.items[0];
+          if (!node || node.id !== step.id) throw new Error(t("wiki.graph.expandError"));
+          updateTree((current) => ({ ...current, nodes: new Map(current.nodes).set(node.id, node),
+            located: new Map(current.located).set(parent, [...(current.located?.get(parent) ?? []), node.id]),
+            children: current.children.has(parent) ? current.children : new Map(current.children).set(parent, { ids: [], total: page.total }),
+          }));
+        }
         setExpanded(parent, true);
         parent = step.id;
       }
@@ -209,11 +223,26 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
   };
   const searchChanged = (value: string) => { setSearch(value); setCursor(0); };
 
-  const viewNodes = useMemo(() => visibleWikiNodes(overview, tree, (value) => !kind || value === kind || value === "more"), [overview, tree, kind]);
+  const viewNodes = useMemo(() => visibleWikiNodes(visibleOverview, tree, (value) => !kind || value === kind || value === "more"), [visibleOverview, tree, kind]);
   const viewById = useMemo(() => new Map(viewNodes.map((node) => [node.id, node])), [viewNodes]);
   const visibleIds = useMemo(() => new Set(viewNodes.map((node) => node.id)), [viewNodes]);
   useStructureNodeMeasurements(sizes, visibleIds);
-  const relationEdges = useMemo(() => wikiRelationEdges(viewNodes, (relation) => !disabledLegend.has(relationLegendId(relation))), [viewNodes, disabledLegend]);
+  const [knownEdges, setKnownEdges] = useState(new Map<string, ReturnType<typeof wikiRelationEdges>[number]>());
+  const selectedId = selection?.id;
+  const rememberRelations = useCallback((items: WikiGraphRelationItem[]) => {
+    if (!selectedId) return;
+    setKnownEdges((old) => {
+      const next = new Map(old);
+      for (const item of items) {
+        const [source, target] = item.direction === "outgoing" ? [selectedId, item.unit.id] : [item.unit.id, selectedId];
+        const id = `${item.scope}:${source}:${target}:${item.relation}`;
+        next.set(id, { id, source, target, scope: item.scope, relation: item.relation });
+      }
+      return next;
+    });
+  }, [selectedId]);
+  const relationEdges = useMemo(() => [...knownEdges.values()].filter((edge) =>
+    visibleIds.has(edge.source) && visibleIds.has(edge.target) && !disabledLegend.has(edge.relation)), [knownEdges, visibleIds, disabledLegend]);
   const containsEdges = useMemo(() => viewNodes.flatMap((node) => (node.parent && visibleIds.has(node.parent) ? [{ id: `contains:${node.id}`, source: node.parent, target: node.id }] : [])), [viewNodes, visibleIds]);
   const documentEdges = useMemo(() => relationEdges.filter((edge) => edge.scope === "cross_document").map((edge) => ({ source: viewById.get(edge.source)!.documentNode, target: viewById.get(edge.target)!.documentNode })), [relationEdges, viewById]);
   const layout = useMemo(() => layoutWiki(viewNodes, documentEdges, sizes, gridColumns), [viewNodes, documentEdges, sizes, gridColumns]);
@@ -322,7 +351,7 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
     { label: t("wiki.graph.name"), value: selectedNode.name },
     ...(selectedNode.tree ? [{ label: t("wiki.graph.document"), value: selectedNode.tree.document_name }] : []),
     { label: t("wiki.graph.kind"), value: kindLabel(selectedNode.kind) },
-    { label: t("wiki.graph.units"), value: String(selectedNode.document?.unit_count ?? selectedNode.tree?.unit_count ?? 0) },
+    ...(selectedNode.tree ? [{ label: t("wiki.graph.units"), value: String(selectedNode.tree.unit_count) }] : []),
   ] : selectedEdge ? [
     { label: t("wiki.graph.relation"), value: edgeLabel(selectedEdge) },
     ...(selectedEdge.scope ? [{ label: t("wiki.graph.scope"), value: edgeScope(selectedEdge) }] : []),
@@ -379,9 +408,17 @@ function WikiCanvas({ overview, knowledgeBaseId }: { overview: WikiGraphOverview
             </div> : null}
           </div>
         </div>
-        {unitSelected && selectedNode ? <WikiGraphUnitPanel key={selectedNode.id} kbId={knowledgeBaseId} unitId={selectedNode.id} onClose={() => setSelection(null)} onLocate={locateUnit} /> : null}
+        {unitSelected && selectedNode ? <WikiGraphUnitPanel key={selectedNode.id} kbId={knowledgeBaseId} unitId={selectedNode.id} onClose={() => setSelection(null)} onLocate={locateUnit} onRelations={rememberRelations} /> : null}
       </div>
     </div>
+    {selectedNode?.expanded && tree.children.has(selectedNode.id) && (() => {
+      const children = tree.children.get(selectedNode.id)!;
+      if (children.ids.length >= children.total) return null;
+      return <Button variant="secondary" disabled={pending > 0}
+        onClick={() => void run(() => loadChildren(selectedNode.id, children.ids.length + 100, 100))}>
+        {t("wiki.graph.more", { count: Math.min(100, children.total - children.ids.length) })}
+      </Button>;
+    })()}
     {fields.length ? <GraphSelectionDetails title={t(selectedNode ? "wiki.graph.selectedNode" : "wiki.graph.selectedEdge")} closeLabel={t("wiki.graph.clearSelection")} onClose={() => setSelection(null)} fields={fields} /> : null}
   </div>;
 }

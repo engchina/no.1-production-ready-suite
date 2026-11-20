@@ -25,10 +25,10 @@ const opened: WikiTreeState = {
 const all = () => true;
 
 describe("visibleWikiNodes", () => {
-  it("閉じていると文書だけを出し、単位の無い文書は開けない", () => {
+  it("閉じていると公開済みの案内がある文書だけを出す", () => {
     const nodes = visibleWikiNodes(overview, emptyWikiTree(), all);
     expect(nodes.map((node) => node.id)).toEqual(["a", "b", "c"]);
-    expect(nodes.map((node) => node.expandable)).toEqual([true, true, false]);
+    expect(nodes.map((node) => node.expandable)).toEqual([true, true, true]);
   });
 
   it("開いた段と続きの節点を出し、章節を開くと単位まで出す", () => {
