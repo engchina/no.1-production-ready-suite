@@ -594,7 +594,7 @@ _MCP_RETRY_MAX_DELAY_SECONDS = 8.0
 _MCP_RETRY_AFTER_MAX_SECONDS = 30.0
 # 待った後に残っていてほしい時間（秒）。これより短くなるなら再試行しない。
 _MCP_RETRY_MIN_REMAINING_SECONDS = 1.0
-# 再試行の待ち（テストは待たない関数に差し替える。AGENTS.md の CI の規約）。
+# 再試行の待ち（テストは待たない関数に差し替える。docs/agents/ci.md の規約）。
 _retry_sleep: Callable[[float], None] = time.sleep
 _jitter = secrets.SystemRandom()
 

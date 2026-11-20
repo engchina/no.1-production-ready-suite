@@ -1,6 +1,6 @@
 # GitHub の運用と Issue / PR の書き方
 
-> root の [AGENTS.md](../../AGENTS.md) から移した詳細（#2276）。root の規則と同じ強さで守る。規則を変えるときはこのファイルを直し、root には規則の要約と案内だけを書く。
+> 扱う範囲: Issue・ブランチ・PR・CI の待ちと merge・main の取り込み・merge 後の片付け・worktree・開発の ADB の起動・一時ファイルの手順と、Issue / PR の書き方。root の [AGENTS.md](../../AGENTS.md) の目次から読み、root の規則と同じ強さで守る（規則を変えるときはこのファイルを直す）。
 > 正本: 見出しと各項目は [Issue のテンプレート](../../.github/ISSUE_TEMPLATE/issue.md)・[PR のテンプレート](../../.github/PULL_REQUEST_TEMPLATE.md)、merge の判定は `scripts/pr-merge-check.sh`。
 
 ## 開発ワークフロー / GitHub 運用

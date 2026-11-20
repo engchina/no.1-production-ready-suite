@@ -1,6 +1,6 @@
 # デザインシステム / UI の規則
 
-> root の [AGENTS.md](../../AGENTS.md) から移した詳細（#2276）。root の規則と同じ強さで守る。規則を変えるときはこのファイルを直し、root には規則の要約と案内だけを書く。
+> 扱う範囲: UI（画面・共有部品・lint・e2e）の作業で守る規則: 依存の向き・禁止事項・画面の構成・操作部品の高さと幅・読み込み中・一覧・ページング・メッセージ・UI 変更の検証。root の [AGENTS.md](../../AGENTS.md) の目次から読み、root の規則と同じ強さで守る（規則を変えるときはこのファイルを直す）。
 > 正本: [platform/docs/design-system/](../../platform/docs/design-system/)（ARCHITECTURE.md・README.md・components-reference.md）と [UX 契約](../../platform/docs/ux-contracts/README.md)。この文書は UI の作業で守る規則の一覧で、寸法・部品の仕様はそちらにある。
 
 - **UI に触る前に [ARCHITECTURE.md](../../platform/docs/design-system/ARCHITECTURE.md) を読む。** トークン値・部品の仕様・意図的な見た目の変更は [README.md](../../platform/docs/design-system/README.md)（以下 README）、実装の参照は [components-reference.md](../../platform/docs/design-system/components-reference.md)、画面の振る舞いは [UX 契約](../../platform/docs/ux-contracts/README.md)。

@@ -1,6 +1,6 @@
 # RAG の技術スタック・配備・テスト
 
-> rag/AGENTS.md の詳細。rag/AGENTS.md の規則と同じ強さで守る。AI / DB の分担は root の AGENTS.md「共通の技術方針」が正本。
+> rag/AGENTS.md の詳細。rag/AGENTS.md の規則と同じ強さで守る。AI / DB の分担は root の [docs/agents/tech-stack.md](../../../docs/agents/tech-stack.md) が正本。
 
 ## 技術スタック（RAG 固有の分）
 

@@ -1,6 +1,6 @@
 # 設定（`.env`）とデータベース object の命名
 
-> root の [AGENTS.md](../../AGENTS.md) から移した詳細（#2276）。root の規則と同じ強さで守る。規則を変えるときはこのファイルを直し、root には規則の要約と案内だけを書く。
+> 扱う範囲: 設定（`.env`）の置き場所と変数名、DB の object の名前、`.env.example` の分類と配置。root の [AGENTS.md](../../AGENTS.md) の目次から読み、root の規則と同じ強さで守る（規則を変えるときはこのファイルを直す）。
 > 設定の変数名の規則と共通の設定の足し方は [backend-standard.md](../../platform/docs/backend-standard.md)「設定（`.env`）の変数名」。
 
 - **3 製品共通の設定は `platform/.env`（雛形 `platform/.env.example`）1 つで、変数名は `PLATFORM_` で始める。** システム設定画面の保存先・共通認証の設定もここで、`model-settings.json` も共有する。3 製品が同じファイルを読み、場所は `PLATFORM_ENV_FILE` で変えられる。
