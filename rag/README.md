@@ -179,6 +179,6 @@ monorepo root の `.github/workflows/ci.yml`(統合 CI)で secret-scan(gitleaks)
 
 frontend の lint(`npm run lint`)は CI の `RAG / Frontend` で実行する(#1099)。dependency audit(`npm audit`)は CI では実行せず、ローカル検証と PR review で確認する。Playwright は PR では smoke と差分に影響を受ける spec(`e2e-impact`)を実行し、全件は `e2e-nightly.yml` が毎晩実行する(#184・#885)。RAG のサービス(`rag/services`)と `rag_parser_core` の単体テスト・lock の検査は `Lint / services & scripts` が実行する(#1525)。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
 
-`main` の ruleset の必須 check は `CI OK` の 1 つだけ(変更のあった製品の job の結果を集約する。root の [AGENTS.md](../AGENTS.md) の「CI」)。
+`main` の ruleset の必須 check は `CI OK` の 1 つだけ(変更のあった製品の job の結果を集約する。root の [docs/agents/ci.md](../docs/agents/ci.md))。
 
 `.github/workflows/dependabot-auto-merge.yml` は Dependabot PR の patch / minor 更新だけを required checks 成功後に自動 merge する。major 更新と、major を含む grouped PR は自動 merge せず手動レビューで判断する。人間が作成した PR には作用しない。
