@@ -1,6 +1,6 @@
 """OCI Generative AI embedding client boundary for NL2SQL feedback learning.
 
-LLM/VLM は Enterprise AI、embedding は OCI Generative AI という AGENTS.md の
+LLM/VLM は Enterprise AI、embedding は OCI Generative AI という docs/agents/tech-stack.md の
 役割分担を保つため、feedback vector index 用の embedding 呼び出しはここに閉じ込める。
 CI/local は optional import のまま deterministic に動作する。
 """

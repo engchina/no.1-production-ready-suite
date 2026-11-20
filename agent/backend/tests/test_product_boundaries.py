@@ -2,8 +2,8 @@
 
 Agent → RAG / NL2SQL は呼び先の公開の MCP（`POST /api/mcp`）と公開の契約
 （platform/contracts/mcp/*.json・platform/contracts/answer-passages/**）だけで連携する（root の
-AGENTS.md「構成」）。RAG の側の同じ検査は rag/backend/tests/test_product_boundaries.py。Agent の
-Python のコード（backend。テストを含む）を静的に調べ、次を確かめる:
+AGENTS.md「依存の向き」）。RAG の側の同じ検査は rag/backend/tests/test_product_boundaries.py。
+Agent の Python のコード（backend。テストを含む）を静的に調べ、次を確かめる:
 
 - import: `app.*` は Agent の backend の `app` にある module だけ（3 製品の backend は同じ `app` の
   名前を使うので、RAG・NL2SQL の module は名前だけでは区別できない）。RAG の package（`rag_engine`

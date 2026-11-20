@@ -425,7 +425,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
     }
   }
 
-  // 読み込み中は経過時間と、2 枚のカード（認証・Object Storage）の形の Skeleton を出す（AGENTS.md。#1028）。
+  // 読み込み中は経過時間と、2 枚のカード（認証・Object Storage）の形の Skeleton を出す（docs/agents/ui.md。#1028）。
   if (loadState === "loading") return <PageBody wide>
     <TimedLoadingState
       label={t("settings.oci.loading")}
