@@ -14,6 +14,8 @@ soupsieve のセキュリティ更新（#4992）では、4.1 の PyPI 配布 met
 
 OpenTelemetry のセキュリティ更新（#5049・#5050・#5051）では、`opentelemetry-api` / `opentelemetry-sdk` 1.45.2 と、両者に対応する `opentelemetry-semantic-conventions` 0.66b2 の PyPI 配布 metadata で Apache-2.0 と Python >=3.10 を確認しました。3 製品の backend と RAG の package / service の 15 個の lock を更新し、新たな部品は追加していません。再配布時は配布物のライセンス原文・通知を保持してください。
 
+Anthropic Claude の Messages API の呼び出しの部品（`platform/packages/anthropic_messages`。#5546）では、公式の Python SDK `anthropic` 2.8.0（Apache-2.0。`*.dist-info/licenses/` に NOTICE のファイルは無い）と、その実行時の依存 `httpx2` / `httpcore2` 2.16.2（BSD-3-Clause）・`jiter` 0.19.0（MIT）・`docstring-parser` 0.18.0（MIT）・`truststore` 0.10.5（MIT）を PyPI の配布 metadata で確認しました。SDK が同梱する `anthropic/_vendor/httpx_aiohttp`（BSD-3-Clause。出典の記録は同じディレクトリの `NOTICE.md` と `LICENSE`）は使っていません。新たな copyleft の部品は追加していません。再配布時は配布物のライセンス原文を保持してください。
+
 ## 入手の経路と再配布
 
 この repo と、その release（`suite-v*` の Terraform stack の zip）は、自前のソースと配備のスクリプトだけを含み、下の表の第三者の binary を含みません。配備のスクリプトは、配備先の Compute で次のとおり第三者の部品を取得します。
