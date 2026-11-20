@@ -16,6 +16,8 @@ dependencies = [
   "production-ready-backend-core",
   # OCI Enterprise AI の URL の規則と失敗の分類（suite と共有する標準 library だけの package。#3418）
   "production-ready-enterprise-ai",
+  # クォータナリ接続（Anthropic Claude の Messages API）のモデルの接続テスト（#5546）。3 製品の呼び出しの層も使う。
+  "production-ready-anthropic-messages",
   # 会話の添付の解析（#2517）。PDF の文字・Excel の行・Office の XML（zip bomb・XXE を防ぐ）・文字コード。
   "pypdf>=6.4,<7",
   "openpyxl>=3.1",
@@ -30,6 +32,7 @@ oci = ["oci>=2.168"]
 [tool.uv.sources]
 production-ready-backend-core = { path = "../backend_core", editable = true }
 production-ready-enterprise-ai = { path = "../enterprise_ai", editable = true }
+production-ready-anthropic-messages = { path = "../anthropic_messages", editable = true }
 
 [dependency-groups]
 dev = [
