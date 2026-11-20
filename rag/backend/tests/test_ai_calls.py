@@ -705,3 +705,54 @@ def test_evaluation_rate_limit_uses_five_jittered_retries() -> None:
     assert policy.rule(ErrorKind.RATE_LIMITED).retries == 5
     assert policy.backoff_base_seconds == 1.0
     assert policy.rule(ErrorKind.RATE_LIMITED).throttle is True
+
+
+# --- クォータナリ接続の失敗の案内（#5587） --------------------------------------------------
+
+# OpenAI 互換の接続（OCI Enterprise AI）の案内にだけある語。クォータナリ接続の失敗には出さない。
+_OCI_ONLY_WORDS = ("IAM", "Project OCID", "リージョン", "OCI", "generative-ai-family")
+
+
+@pytest.mark.parametrize(
+    ("kind", "status_code"),
+    [
+        ("authentication", 401),
+        ("authorization", 403),
+        ("model_not_found", 404),
+        ("rate_limit", 429),
+        ("unavailable", 500),
+        ("timeout", None),
+        ("connection", None),
+    ],
+    ids=["401", "403", "404", "429", "5xx", "timeout", "connection"],
+)
+def test_quaternary_failures_get_the_platform_text_without_changing_the_kind(
+    kind: Any, status_code: int | None
+) -> None:
+    from pr_anthropic_messages import AnthropicMessagesError, anthropic_failure_actions
+    from pr_backend_core.bounded_calls import chain_classifiers
+
+    error = AnthropicMessagesError("失敗", kind=kind, status_code=status_code)
+    classified = make_ai_caller(_settings(), "vision")._classify(error)
+    assert classified.hint == anthropic_failure_actions(kind, status_code=status_code)[0]
+    assert classified.kind is chain_classifiers(rag_error_kind)(error).kind
+    for word in _OCI_ONLY_WORDS:
+        assert word not in classified.hint
+
+
+async def test_quaternary_permission_failure_stops_the_job_with_the_platform_text() -> None:
+    from pr_anthropic_messages import AnthropicMessagesError, anthropic_failure_actions
+
+    error = AnthropicMessagesError("失敗", kind="authorization", status_code=403)
+
+    async def describe(_attempt: Any) -> str:
+        raise error
+
+    with pytest.raises(BoundedCallAborted) as caught:
+        await make_ai_caller(_settings(), "vision").call(describe, label="図 A")
+
+    assert caught.value.kind is ErrorKind.PERMISSION
+    message = str(caught.value)
+    assert anthropic_failure_actions("authorization", status_code=403)[0] in message
+    for word in _OCI_ONLY_WORDS:
+        assert word not in message

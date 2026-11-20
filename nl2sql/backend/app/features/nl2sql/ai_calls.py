@@ -18,6 +18,7 @@ import random
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
+from pr_anthropic_messages import anthropic_failure_hint
 from pr_backend_core.bounded_calls import (
     BoundedCallAborted,
     BoundedCaller,
@@ -114,7 +115,7 @@ def make_ai_caller(settings: Settings, stage: AiCallStage) -> BoundedCaller:
         f"nl2sql.{stage}",
         policy,
         label=STAGE_LABELS.get(stage, stage),
-        classifier=chain_classifiers(nl2sql_error_kind),
+        classifier=chain_classifiers(nl2sql_error_kind, hint=anthropic_failure_hint),
         sleep=lambda seconds: _sleep(seconds),
         random=lambda: _random(),
     )

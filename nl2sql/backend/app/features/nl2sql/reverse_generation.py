@@ -43,17 +43,27 @@ REASONS = {
 
 
 class ReverseStageError(ValueError):
-    def __init__(self, stage: str, reason: str, attempts: int) -> None:
+    def __init__(
+        self, stage: str, reason: str, attempts: int, *, actions: tuple[str, ...] = ()
+    ) -> None:
         self.stage = stage
         self.reason = reason
         self.attempts = attempts
+        # クォータナリ接続の失敗の、platform の確かめる所の案内（#5587。REASONS の代わりに出す）。
+        self.actions = actions
         super().__init__(f"{stage}: {reason} (attempts={attempts})")
 
     def warning(self) -> str:
         label = STAGE_LABELS[self.stage]
-        message = (
-            f"{label}を完了できませんでした。{REASONS[self.reason]}（試行 {self.attempts} 回）。"
-        )
+        if self.actions:
+            message = f"{label}を完了できませんでした（試行 {self.attempts} 回）。" + " ".join(
+                self.actions
+            )
+        else:
+            message = (
+                f"{label}を完了できませんでした。{REASONS[self.reason]}"
+                f"（試行 {self.attempts} 回）。"
+            )
         if self.stage == "business_question":
             message += "SQL 論理構造は生成済みです。質問候補のみ簡易生成で表示しています。"
         else:
@@ -113,7 +123,12 @@ def generate_stage[T](
                 },
             )
             if not retryable or attempt == limit:
-                raise ReverseStageError(stage, reason, attempt) from exc
+                actions = (
+                    tuple(exc.failure_actions())
+                    if isinstance(exc, EnterpriseAiDirectError) and exc.anthropic_messages
+                    else ()
+                )
+                raise ReverseStageError(stage, reason, attempt, actions=actions) from exc
             delay = min(2 ** (attempt - 1), max(0, deadline - time.monotonic()))
             _retry_sleep(delay)
             if reason == "response_format":
