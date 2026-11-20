@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from .trace_bodies import BodyOwner, BodyReference, PreparedBody
@@ -101,10 +101,20 @@ class BodyCaptureSession:
             self._ids.add(body.reference.body_id)
             return BodySubmission(body.reference, True)
 
-    def close(self) -> None:
+    def close(self, after_checkpoint: Callable[[Callable[[], None]], None] | None = None) -> None:
         """保存しなかった生成の本文を解放する。writerへ移した本文の所属は変更しない。"""
         with self.buffer._lock:
             self._closed = True
+            if not self._ids:
+                return
+        # 新規受付を止め、保存予定が引き取った原文は commit まで同じ有界バッファに残す。
+        if after_checkpoint is None:
+            self._release()
+        else:
+            after_checkpoint(self._release)
+
+    def _release(self) -> None:
+        with self.buffer._lock:
             for body_id in self._ids:
                 entry = self.buffer._bodies.get(body_id)
                 if entry is not None and entry[1] is self:

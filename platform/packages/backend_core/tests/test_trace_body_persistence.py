@@ -1,8 +1,9 @@
 """正本を保存した取引だけが全文を登録し、記録障害は正本を取り消さない。"""
 
 import copy
+import hashlib
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -272,5 +273,51 @@ def test_nested_capture_keeps_failed_pipeline_body_until_outer_error_record_save
         assert persistence.stop()
         assert content.body_reference is not None
         assert database.data.manifests[content.body_reference.body_id][5] == "complete"
+    finally:
+        persistence.stop()
+
+
+@pytest.mark.parametrize("early", [6, 3, 0], ids=["synchronous", "half-delayed", "all-delayed"])
+def test_checkpoint_handoff_preserves_six_complete_inputs(early: int) -> None:
+    database = Database()
+    releases: list[Callable[[], None]] = []
+    persistence = TraceBodyPersistence(
+        database.connection,
+        clob_type=object(),
+        settings=TracingSettings(),
+        after_checkpoint=releases.append,
+    )
+    owner = BodyOwner("agent", "run", "synthetic-run")
+    texts = [f"合成入力{i}。" * 16000 + f"終端{i}" for i in range(6)]
+
+    def save(contents: list[Any]) -> None:
+        details = {
+            str(i): {"call": {"input": item.model_dump()}} for i, item in enumerate(contents)
+        }
+        with database.connection():
+            assert persistence.register(database.data, owner, details) == {}
+            database.commit()
+        persistence.confirm_saved(details)
+
+    persistence.start()
+    try:
+        with persistence.capture():
+            contents = [call_content(text) for text in texts]
+            assert all(item.status == "recorded" and item.preview_only for item in contents)
+            save(contents[:early])
+        assert persistence.buffer.pending[0] == 6 - early
+        for _ in range(3):
+            save(contents)
+        for release in releases:
+            release()
+        assert persistence.stop()
+        for content, text in zip(contents, texts, strict=True):
+            ref = content.body_reference
+            assert ref is not None
+            assert database.data.manifests[ref.body_id][5] == "complete"
+            restored = "".join(database.data.parts[ref.body_id])
+            assert restored == text
+            assert hashlib.sha256(restored.encode()).hexdigest() == ref.sha256
+        assert persistence.buffer.pending == (0, 0)
     finally:
         persistence.stop()

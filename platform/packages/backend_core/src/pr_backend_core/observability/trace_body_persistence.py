@@ -32,7 +32,9 @@ class TraceBodyPersistence:
         *,
         clob_type: Any,
         settings: TracingSettings,
+        after_checkpoint: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
+        self._after_checkpoint = after_checkpoint
         self._connection = connection_factory
         self._clob_type = clob_type
         self._part_characters = settings.trace_body_part_characters
@@ -69,7 +71,7 @@ class TraceBodyPersistence:
                 yield
         finally:
             self._session.reset(token)
-            session.close()
+            session.close(self._after_checkpoint)
 
     def register(
         self, cursor: Any, owner: BodyOwner, span_details: Mapping[str, Any]

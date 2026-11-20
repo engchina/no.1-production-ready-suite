@@ -135,3 +135,33 @@ def test_repository_confirms_body_only_after_successful_commit(
         transition()
         assert events == ["register", "commit", "confirm"]
     assert repository.trace_body_namespace() == "default"
+
+
+async def test_completion_hands_cleanup_to_checkpoint_including_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.agent import runtime
+
+    table = CheckpointTable()
+    repository = AgentRuntimeOracleCheckpointRepository(connect_factory=table.connect)
+    run = repository.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id="default"))
+    monkeypatch.setattr(runtime, "BACKGROUND_WRITES", True)
+    # 保存を手動で進め、実行の終了と checkpoint の commit の順序を固定する。
+    monkeypatch.setattr(repository, "_request_background_write", lambda: None)
+    repository.complete_builtin_run(run.id, "合成の回答")
+    saved = []
+    repository.release_after_checkpoint(lambda: saved.append(table.snapshot().runs[0].status))
+    assert not saved
+    with monkeypatch.context() as patch:
+
+        def fail(_connection: Any) -> None:
+            raise RuntimeError("synthetic commit failure")
+
+        patch.setattr(CheckpointConnection, "commit", fail)
+        with pytest.raises(RuntimeError, match="synthetic commit failure"):
+            repository.flush_writes()
+    assert not saved
+    repository.flush_writes()
+    assert saved == ["completed"]
+    repository.flush_writes()
+    assert saved == ["completed"]

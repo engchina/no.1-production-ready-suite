@@ -31,6 +31,16 @@ def run_body_owner(checkpoint_key: str, run_id: str) -> BodyOwner:
     return BodyOwner("agent", "run", hashlib.sha256(key.encode("utf-8")).hexdigest())
 
 
+def _after_checkpoint(release: Callable[[], None]) -> None:
+    from app.features.agent.runtime import loaded_runtime_repository
+
+    repository = loaded_runtime_repository()
+    if repository is None:
+        release()
+    else:
+        repository.release_after_checkpoint(release)
+
+
 def start_trace_body_persistence(settings: TracingSettings) -> None:
     import oracledb
 
@@ -41,7 +51,10 @@ def start_trace_body_persistence(settings: TracingSettings) -> None:
         if _PERSISTENCE is not None:
             return
         persistence = TraceBodyPersistence(
-            platform_oracle_connection, clob_type=oracledb.DB_TYPE_CLOB, settings=settings
+            platform_oracle_connection,
+            clob_type=oracledb.DB_TYPE_CLOB,
+            settings=settings,
+            after_checkpoint=_after_checkpoint,
         )
         persistence.start()
         _PERSISTENCE = persistence
