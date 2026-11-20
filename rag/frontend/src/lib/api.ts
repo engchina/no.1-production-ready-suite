@@ -1815,7 +1815,7 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
-export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "document_summary";
+export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "document_summary" | "wiki_build" | "wiki_links";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {

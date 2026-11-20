@@ -303,7 +303,12 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     await store.finish_links(a, lease, failure_code="interrupted")
     resumed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
     assert resumed is not None and resumed[1] == [f"forward:{first_a}"]
-    await store.finish_links(a, resumed[0], failure_code="build_failed")
+    await store.finish_links(a, resumed[0], failure_code="interrupted")
+    edited = await store.claim_links(
+        a, fingerprint_a, LINKS, lease_seconds=300, prompt_version="v2"
+    )
+    assert edited is not None and f"forward:{first_a}" not in edited[1]
+    await store.finish_links(a, edited[0], failure_code="build_failed")
     state = await store.link_state(a)
     assert state and state["status"] == "FAILED" and state["failure_code"] == "build_failed"
     # 再試行は関連の構築の失敗も待機へ戻す。

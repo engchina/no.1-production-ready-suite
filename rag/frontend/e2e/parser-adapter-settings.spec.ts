@@ -1753,11 +1753,15 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
     ["field_extraction", "メタデータ/項目抽出プロンプト"],
     ["navigation_summary", "章節の要約プロンプト"],
     ["document_summary", "文書の要約プロンプト"],
+    ["wiki_build", "Wiki の案内を作るプロンプト"],
+    ["wiki_links", "Wiki の文書をまたぐ関連を判定するプロンプト"],
   ]) {
     await verifyFeaturePrompt(page, key, title);
   }
-  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
+  expect(requests.map((item) => item.method)).toEqual(Array.from({ length: 7 }, () => ["PUT", "DELETE"]).flat());
   await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
+  const wiki = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "7. Wiki の構築", exact: true }) });
+  await wiki.screenshot({ path: test.info().outputPath("wiki-prompts.png") });
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
 });
 
@@ -1789,12 +1793,13 @@ test("章節の方式は広い欄と折り返す選択肢で全文を読める",
 });
 
 
-test("文書の要約は解析後の処理の最後の項目で、有効・無効を保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("文書の要約は Wiki の構築の直前にあり、有効・無効を保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const patches = await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
   await mockExtractionFields(page); await mockFeaturePrompts(page);
   await page.goto("/settings/parser-adapters#post-parse-document-summary");
   const item = page.locator("#post-parse-document-summary");
   await expect(item.getByRole("heading", { name: "6. 文書の要約", exact: true })).toBeVisible();
+  await expect(item.locator("xpath=following-sibling::li[1]").getByRole("heading", { name: "7. Wiki の構築" })).toBeVisible();
   await expect(item.getByText(/モデルの呼び出しは 1 文書につき 1 回です/)).toBeVisible();
   // 保存値が無い応答（既定）は有効。
   const toggle = item.getByRole("switch", { name: "文書の要約", exact: true });

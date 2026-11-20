@@ -377,6 +377,8 @@ def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
         "heading_levels",
         "field_extraction",
         "navigation_summary",
+        "wiki_build",
+        "wiki_links",
     ],
 )
 def test_feature_prompts_save_and_reset_with_their_screen_permission(

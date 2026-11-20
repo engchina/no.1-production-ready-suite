@@ -266,6 +266,9 @@ class WikiJobs:
                 pages = await compile_pages(
                     snapshot.units,
                     model=self.model_factory(settings),
+                    system_prompt=(await store.prompt_overrides()).get(
+                        "wiki_build", WIKI_CONTEXT_PROMPT
+                    ),
                     model_id=enterprise_ai_default_model_id(settings),
                     max_input_chars=settings.rag_wiki_build_input_chars,
                     batch_size=settings.rag_wiki_build_batch_units,
@@ -366,10 +369,12 @@ class WikiJobs:
                 )
             ):
                 return
+            prompt = (await store.prompt_overrides()).get("wiki_links", WIKI_LINK_PROMPT)
             claimed = await store.claim_links(
                 document_id,
                 source,
                 links,
+                prompt_version=fingerprint(prompt) if prompt != WIKI_LINK_PROMPT else None,
                 lease_seconds=int(
                     max(
                         settings.rag_wiki_lease_seconds,
@@ -427,6 +432,7 @@ class WikiJobs:
                     await judge_links(
                         [item for item in group if item.key not in skip],
                         model=model,
+                        system_prompt=prompt,
                         batch_size=settings.rag_wiki_link_batch_units,
                         original_chars=settings.rag_wiki_link_source_chars,
                         max_input_chars=settings.rag_wiki_build_input_chars,

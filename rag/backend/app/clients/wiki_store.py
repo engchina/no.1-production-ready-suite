@@ -320,6 +320,9 @@ class WikiStore:
         )
         return [str(row["document_id"]) for row in rows]
 
+    async def prompt_overrides(self) -> dict[str, str]:
+        return await self.oracle.answer_prompt_overrides()
+
     async def enabled_knowledge_bases(self) -> list[tuple[str, str | None]]:
         rows = await self.oracle._fetch_all(
             f"""SELECT kb.knowledge_base_id,
@@ -933,6 +936,7 @@ class WikiStore:
         link_fingerprint: str,
         *,
         lease_seconds: int,
+        prompt_version: str | None = None,
     ) -> tuple[str, list[str]] | None:
         """関連の構築の lease を取る。条件が同じなら判定済みの鍵を返して続きから作る。
 
@@ -965,6 +969,10 @@ class WikiStore:
             ):
                 return None
             done = _json_list(row.get("done_json")) if row and same else []
+            # 保存済みの関連を一斉に無効化せず、再開する途中の作業だけを指示の版で区別する。
+            marker = f"prompt:{prompt_version}" if prompt_version else None
+            if next((key for key in done if key.startswith("prompt:")), None) != marker:
+                done = [marker] if marker else []
             if not same:
                 _execute(
                     connection,
