@@ -99,7 +99,7 @@ describe("DatabaseSettingsPage", () => {
     expect(html).toMatch(/Wallet状態:<\/span><span data-status-variant="success"[^>]*><span class="pr-icon-line"><svg[\s\S]*?<\/svg><\/span><span[^>]*>設定済み<\/span><\/span>/);
   });
 
-  it("ADB のリージョンの保存値が候補に無い us-chicago-1 のときは、値をそのまま出して選び直しを案内する（#660）", () => {
+  it("ADB のリージョンの保存値がChicago のときは案内を出さず、候補に無い保存値だけ選び直しを案内する", () => {
     const settings: DatabaseSettingsData = {
       user: "app",
       dsn: "db_high",
@@ -123,8 +123,10 @@ describe("DatabaseSettingsPage", () => {
     const html = render(<DatabaseSettingsPage api={api} />, client);
 
     expect(html).toMatch(/<button\b[^>]*id="adb-region"[^>]*>[\s\S]*?us-chicago-1/);
-    expect(html).toContain(
-      "保存済みのリージョン us-chicago-1 はサポートしていません。ap-tokyo-1 または ap-osaka-1 を選んで保存してください。",
+    expect(html).not.toContain("はサポートしていません");
+    client.setQueryData(DATABASE_SETTINGS_QUERY_KEY, { ...settings, region: "xx-synthetic-1" });
+    expect(render(<DatabaseSettingsPage api={api} />, client)).toContain(
+      "保存済みのリージョン xx-synthetic-1 はサポートしていません。",
     );
     // Wallet が未設定のときは warning の StatusBadge（#722）。
     const missingWallet = new QueryClient();
