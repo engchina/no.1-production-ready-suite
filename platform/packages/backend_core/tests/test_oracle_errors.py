@@ -37,6 +37,10 @@ def test_connection_errors(message: str) -> None:
         "ORA-00942: table or view does not exist",
         "ORA-01031: insufficient privileges",
         "ORA-00904: invalid identifier",
+        # Oracle Net（ORA-12150〜12699）の後の範囲の SQL のエラー（#5595）。
+        "ORA-12838: cannot read/modify an object after modifying it in parallel",
+        "ORA-12860: deadlock detected while waiting for a sibling row lock",
+        "ORA-12899: value too large for column",
         "KeyError: status",
     ],
 )

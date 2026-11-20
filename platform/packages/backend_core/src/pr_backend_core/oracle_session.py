@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-# 新しい接続ごとに 1 回の ALTER SESSION で次の 2 つを設定する（往復を増やさない）。
+# 新しい接続ごとに 1 回の ALTER SESSION SET で次の 2 つを設定する（往復を増やさない）。
 #
 # - RESULT_CACHE_MODE = MANUAL: ADB の既定は result_cache_mode=FORCE。行の外にある大きな
 #   JSON(OSON) 列を読む SELECT が result cache の内部エラー
@@ -23,6 +23,15 @@ from typing import Any
 #   9 時間ずれる。OS の時間帯に左右されないよう UTC に固定する。地域名('UTC')ではなく
 #   offset にする(名前の時間帯の値は thin mode で読めない: DPY-3022。#3241)。
 SESSION_INIT_SQL = "ALTER SESSION SET RESULT_CACHE_MODE = MANUAL TIME_ZONE = '+00:00'"
+# 並列 DML を使わない（#5314・#5595）。ADB の HIGH / MEDIUM のサービスは並列 DML が既定で有効で、
+# 自動の並列度で DML が並列になると、同じ transaction で同じ表を続けて変更・参照する文が
+# ORA-12838 で、並列の実行サーバーどうしの行ロックの待ち合いが ORA-12860 で失敗する（共通の span
+# の表への `executemany` の MERGE・FK の親の表の削除で起きた）。並列 DML の有無は transaction の
+# 中では変えられない（ORA-12841）ので、接続を作るときに 1 回だけ無効にし、途中で戻さない（pool の
+# どの接続も同じ状態になる）。並列の問い合わせはそのまま使う。文の NO_PARALLEL のヒントは、ADB の
+# Lakehouse の既定（OPTIMIZER_IGNORE_PARALLEL_HINTS = TRUE）で無視されるため使わない。
+# `ALTER SESSION SET` とは同じ文にできない。
+SESSION_SERIAL_DML_SQL = "ALTER SESSION DISABLE PARALLEL DML"
 # session の時間帯を UTC に戻す（`local_session_time_zone` の後）。
 SESSION_UTC_SQL = "ALTER SESSION SET TIME_ZONE = '+00:00'"
 _SESSION_OFFSET = re.compile(r"[+-](?:0\d|1[0-4]):[0-5]\d")
@@ -33,6 +42,7 @@ def init_oracle_session(connection: Any, requested_tag: str | None = None) -> No
     del requested_tag
     with connection.cursor() as cursor:
         cursor.execute(SESSION_INIT_SQL)
+        cursor.execute(SESSION_SERIAL_DML_SQL)
 
 
 @contextmanager
