@@ -1,6 +1,5 @@
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AnswerPlainText } from "@production-ready/ui";
 import { describe, expect, it } from "vitest";
 
 import { AnswerText } from "./AnswerText";
@@ -96,9 +95,13 @@ describe("AnswerText の表（issue 4734）", () => {
     expect(html).toContain('lang="zh-Hans"');
   });
 
-  it("| の無い本文は表にせず、これまでと同じ要素で出す", () => {
+  it("| の無い本文も文と改行を保ち、表にしない", () => {
     const text = "節のない本文です。\n2 行目です。";
-    expect(render(text)).toBe(renderToStaticMarkup(createElement(AnswerPlainText, { text })));
+    const html = render(text);
+    expect(html).toContain("節のない本文です。");
+    expect(html).toContain("2 行目です。");
+    expect(html).toContain("<br");
+    expect(html).not.toContain("<table");
     const sections = render("資料により確認できた事項\n\n・項目です。\n根拠：文書 A.pdf p.3");
     expect(sections).toContain('<li class="whitespace-pre-wrap">');
     expect(sections).not.toContain("<table");
@@ -159,5 +162,49 @@ describe("AnswerText の根拠の行の番号（issue 5489）", () => {
     // 印の移り先はすべて実在する id（2 つ目の表の [1] は 1 つ目の表の下の行）。
     expect(targets.map((id) => id.replace(/^.*-sources-/, ""))).toEqual(["1", "2", "3", "1"]);
     expect(targets.every((id) => ids.includes(id))).toBe(true);
+  });
+});
+
+
+// 本文の経路ごとに同じ装飾が表示され、根拠・原文の記号は残る（#5631）。
+describe("AnswerText の完成本文の Markdown", () => {
+  it.each([
+    ["書式に分けない本文", "**確認方法**: status は `ready` です。"],
+    ["引用つき段落", "**確認方法**: status は `ready` です。\n根拠：文書 A.pdf p.3"],
+    ["節の前の段落", "**確認方法**: status は `ready` です。\n\n資料により確認できた事項\n\n・項目です。"],
+    ["節の項目", "資料により確認できた事項\n\n・**確認方法**: status は `ready` です。\n根拠：文書 A.pdf p.3"],
+    ["項目の続き", "資料により確認できた事項\n\n・項目です。\n**確認方法**: status は `ready` です。\n根拠：文書 A.pdf p.3"],
+  ])("%sの太字・行内コードを描く", (_name, text) => {
+    const html = render(text);
+    expect(html).toMatch(/<strong[^>]*>確認方法<\/strong>/);
+    expect(html).toMatch(/<code[^>]*>ready<\/code>/);
+    expect(html).not.toContain("**確認方法**");
+    expect(html).not.toContain("`ready`");
+    if (text.includes("根拠：")) expect(html).toContain("根拠：文書 A.pdf p.3");
+  });
+
+  it("表の前後の装飾とコード枠を描き、表を維持する", () => {
+    const html = render(`**確認方法**\n\n${TABLE}\n\n\`\`\`text\nready\n\`\`\``);
+    expectRenderedTable(html);
+    expect(html).toMatch(/<strong[^>]*>確認方法<\/strong>/);
+    expect(html).toContain("<pre");
+    expect(html).toContain("ready");
+  });
+
+  it("単独の演算記号・HTMLの原文を保ち、危険なリンクを作らない", () => {
+    const html = render('2 * 3 = 6、a_b_c、<script>alert(1)</script>、[実行](javascript:alert)');
+    expect(html).toContain("2 * 3 = 6");
+    expect(html).toContain("a_b_c");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain('href="javascript:');
+  });
+
+  it("生成中の未完の記法とカーソル、読み上げを保つ", () => {
+    const html = render("**未完の文", { streaming: true, live: true, cursor: createElement("span", { "data-testid": "cursor" }) });
+    expect(html).toContain("**未完の文");
+    expect(html).not.toContain("<strong");
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('data-testid="cursor"');
   });
 });
