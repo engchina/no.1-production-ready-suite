@@ -36,8 +36,10 @@ def select_evidence(
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """固定入力も含めて測り、重複を除いた全原文が入れば関連度の順で 1 回の生成の入力にする。
 
-    入らなければ原文を除外せず、``prepare_batched_evidence`` で容量内の組に分けて全件を読み、選ばれた範囲と回答候補を
-    最終生成の 1 回へまとめる。protected_sources（検索拡張の印を持つ根拠の出典。#5162）は分割読取の組分けと補う順で先にする。
+    入らなければ原文を除外せず、``prepare_batched_evidence`` で容量内の組に分けて全件を読む。結論の前提となる対応・条件も
+    原文の ID で選び、既選択原文を共有して必要な資料を最大1巡補読した後、最終生成の 1 回へまとめる（#4044）。補読の回数は
+    先行する読取の回数まで、入力は共有原文込みの予算内にする。完全な chunk の集約と分批計算は既存の契約を使う。
+    protected_sources（検索拡張の印を持つ根拠の出典。#5162）は分割読取の組分けと補う順で先にする。
     Wiki の関係（``wiki_relations``。#5500）で結ばれた根拠は、分割読取の組分けと補う順で 1 つの単位にする（#5512）。
 
     文書の本文の先頭の chunk（``FIRST_CHUNK`` の印。#5240）は外さない。1 回の生成でも分割読取の各組・最終生成でも、その文書の
@@ -105,6 +107,7 @@ def select_evidence(
         read=read,
         summarize=summarize,
         plan_batches=plan_batches,
+        select_dependencies=True,
         unusable_output=unusable_output,
         provider_id=provider_id,
         tag=tag,

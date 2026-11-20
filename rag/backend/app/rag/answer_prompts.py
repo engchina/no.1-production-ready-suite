@@ -203,6 +203,9 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "generation",
         (
             ("batchReading", "rag_engine.generation.batched_evidence:BATCH_READING_PROMPT"),
+            ("instruction", "rag_engine.generation.dependency_review:SELECTION_PROMPT"),
+            ("rules", "rag_engine.generation.dependency_review:REVIEW_PROMPT"),
+            ("documentSystem", "rag_engine.generation.dependency_review:PLAN_PROMPT"),
             # system = 編集できる役割の文 + 必ず足す固定の部分（+ 未確定の前提）（#4782）。
             ("role", "rag_engine.generation.grounded:GENERATION_ROLE_PROMPT"),
             ("fixed", "rag_engine.generation.grounded:GENERATION_FIXED_PROMPT"),
