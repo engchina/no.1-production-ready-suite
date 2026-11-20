@@ -313,9 +313,14 @@ function WikiCanvas({ overview, knowledgeBaseId, pagination }: WikiCanvasProps) 
     const parallelCount = pairCounts.get(key) ?? 1;
     const parallelIndex = pairSeen.get(key) ?? 0;
     pairSeen.set(key, parallelIndex + 1);
+    // 上下を結ぶ辺はラベルの横幅、左右を結ぶ辺は高さに合わせて間隔を取る。
+    // 逆向きでは曲線の法線も反転するため、同じ節点の組ではずらす向きをそろえる。
+    const spacing = (orientation === "vertical" ? GRAPH_NODE_CARD_SIZE.width : GRAPH_NODE_CARD_SIZE.height) / 2;
+    const lane = parallelIndex - (parallelCount - 1) / 2;
+    const parallelOffset = lane * spacing * (edge.source < edge.target ? 1 : -1);
     return {
       id: edge.id, source: edge.source, target: edge.target, sourceHandle, targetHandle, markerEnd: GRAPH_EDGE_MARKER,
-      ...(orientation === "vertical" ? { type: "smoothstep" } : parallelCount > 1 ? { type: "parallel", data: { parallelOffset: (parallelIndex - (parallelCount - 1) / 2) * 20 } } : {}),
+      ...(parallelCount > 1 ? { type: "parallel", data: { parallelOffset } } : orientation === "vertical" ? { type: "smoothstep" } : {}),
       // 関係は矢印（起点 → 終点）と種類の文字を常に出す。包含は多いので点線で、選択と hover のときだけ文字を出す。
       label: edge.relation || selected || hoveredEdge === edge.id ? edgeLabel(edge) : undefined,
       ariaLabel: t("wiki.graph.connection", { from: nodeName(edge.source), to: nodeName(edge.target), relation: [edgeLabel(edge), edgeScope(edge)].filter(Boolean).join("・") }),

@@ -268,6 +268,28 @@ test("Wiki の図を読めないときは空と区別して出し、再試行で
   await expect(section.getByText("Wiki を構築すると、文書・章節・案内のつながりを図で見られます。")).toBeVisible();
 });
 
+test("同じ原文単位を両向きに結ぶ関係のラベルは重ならない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const target = UNIT_A1.relations[0];
+  await mockKb(page, OVERVIEW, { unit: () => ({
+    ...UNIT_A1,
+    relations: [target, { ...target, direction: "incoming", relation: "expected_result" }, { ...target, relation: "continuation" }],
+  }) });
+  await page.goto("/knowledge-bases/kb-1");
+  const graph = await openGraph(page);
+  await clickNode(page, "doc-a");
+  await clickNode(page, S1);
+  await clickNode(page, UA1);
+  await page.getByRole("button", { name: "関係を表示", exact: true }).click();
+  const labels = graph.locator(".react-flow__edge-textbg").filter({ visible: true });
+  await expect(labels).toHaveCount(3);
+  await expect.poll(() => labels.evaluateAll(elements => {
+    const boxes = elements.map(element => element.getBoundingClientRect());
+    return boxes.every((a, i) => a.width > 0 && a.height > 0 && boxes.slice(i + 1).every(b =>
+      a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top));
+  })).toBe(true);
+  await graph.screenshot({path: testInfo.outputPath("parallel-labels.png")});
+});
+
 test("文書 → 章節 → 原文単位を段階的に開き、関係を矢印と種類の文字で表示中の単位の間に引く", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const calls = await mockKb(page, OVERVIEW);
   await page.goto("/knowledge-bases/kb-1");
