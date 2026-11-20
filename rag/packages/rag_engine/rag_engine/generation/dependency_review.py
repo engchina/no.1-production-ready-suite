@@ -8,6 +8,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, Field, create_model
 
 from rag_engine.generation.document_inputs import document_key
+from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY
 
 SELECTION_PROMPT = """## Step 1: 質問と原文を読む
 question は完全な原質問です。generation_context の条件・否定・確認済み前提を保ち、evidence の全文を読んでください。
@@ -49,7 +50,7 @@ def covered(value: Mapping[str, Any], known: Sequence[Mapping[str, Any]]) -> boo
 
 def known_evidence(values: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """共有するのは原文とその所在。局所回答を根拠の代わりにしない。"""
-    fields = ("source", "page", "page_end", "section_path", "document_background_only")
+    fields = ("source", "page", "page_end", "section_path", "document_background_only", CONTINUED_TABLE_HEADER_KEY)
     return [{**{key: value[key] for key in fields if key in value}, "text": value["text"]} for value in values]
 
 

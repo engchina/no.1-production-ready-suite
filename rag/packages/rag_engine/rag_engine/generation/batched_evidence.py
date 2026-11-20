@@ -409,13 +409,13 @@ def prepare_batched_evidence(
             ensure_ascii=False,
         )
 
+    def reading_chars(values: Sequence[dict[str, Any]], known: Sequence[dict[str, Any]] = ()) -> int:
+        combined = [*known, *values]
+        return len(evidence_text(combined)) + sum(len(value.get(CONTINUED_TABLE_HEADER_KEY, "")) for value in combined)
+
     def fits(values: Sequence[dict[str, Any]]) -> bool:
         # 修復の指摘の上限まで含めて測る。どの組も、読取の不合格を指摘する再試行が入力の予算に必ず入る（#4229）。
-        if over_budget(values) is not None or (
-            len(evidence_text([*(review_carry if reviewing else ()), *values]))
-            + sum(len(value.get(CONTINUED_TABLE_HEADER_KEY, "")) for value in values)
-            > settings.evidence_budget_chars
-        ):
+        if over_budget(values) is not None or reading_chars(values, review_carry if reviewing else ()) > settings.evidence_budget_chars:
             return False
         largest = batch_repair_prompt(read_prompt(values), repair_feedback_upper_bound(reading_unit_counts(values)))
         return bool(
@@ -859,7 +859,7 @@ def prepare_batched_evidence(
                     data = json.loads(payload)
                     data.update(known_evidence=known_evidence(known), review_catalog=catalog.entries)
                     planned_payload = json.dumps(data, ensure_ascii=False)
-                    combined = len(evidence_text([*known, *batch]))
+                    combined = reading_chars(batch, known)
                     largest = batch_repair_prompt(planned_payload, repair_feedback_upper_bound(reading_unit_counts(batch)))
                     planned_measure = model_input_measurement(
                         settings, reading_system + PLAN_PROMPT, largest, planned_model.model_json_schema(), provider_id=provider_id
@@ -874,7 +874,7 @@ def prepare_batched_evidence(
                 if reviewing:
                     receipt["dependency_review"] = {
                         "known_span_count": len(review_carry),
-                        "combined_evidence_chars": len(evidence_text([*review_carry, *batch])),
+                        "combined_evidence_chars": reading_chars(batch, review_carry),
                     }
                 reading_schema = reading_model.model_json_schema()
 

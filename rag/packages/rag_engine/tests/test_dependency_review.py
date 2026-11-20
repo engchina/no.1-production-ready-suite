@@ -10,6 +10,7 @@ from test_batched_evidence import block, config, finding, span
 from rag_engine.generation import batched_evidence as module
 from rag_engine.generation.batched_evidence import prepare_batched_evidence
 from rag_engine.generation.dependency_review import ReviewCatalog
+from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY
 from rag_engine.generation.input_budget import model_input_measurement
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline
 
@@ -230,3 +231,42 @@ def test_review_cannot_add_more_calls_than_the_preceding_reading():
     assert review["status"] == "call_limit"
     assert review["calls"] == review["call_limit"]
     assert diagnostic["batch_count"] == 2 * review["call_limit"]
+
+
+def test_shared_table_rows_keep_their_header_and_count_it_in_the_budget():
+    values = inputs()
+    values[0][CONTINUED_TABLE_HEADER_KEY] = "| 入力 | 対応先 |"
+    seen = []
+
+    def read(system, prompt, schema):
+        data = json.loads(prompt)
+        if "known_evidence" in data:
+            header = next(value for value in data["known_evidence"] if "A の接続先" in value["text"])[CONTINUED_TABLE_HEADER_KEY]
+            seen.append(header)
+            assert header == values[0][CONTINUED_TABLE_HEADER_KEY]
+        ids = [item["id"] for item in data.get("review_catalog", []) if item["source"] == "p1"]
+        selected = {"p0", "p2"} if "review_catalog" in data or "known_evidence" not in data else {"p1"}
+        return response(schema, data["evidence"], selected, ids)
+
+    _, _, diagnostic = run(values, read)
+    assert len(seen) == 2
+    assert all(receipt.get("dependency_review", {}).get("combined_evidence_chars", 0) <= 3500 for receipt in diagnostic["batches"])
+
+
+def test_repartitioned_review_checks_the_deadline_before_each_piece(monkeypatch):
+    calls = []
+    monkeypatch.setattr(module, "remaining_seconds", lambda: 600 if len(calls) < 5 else 100)
+
+    def read(system, prompt, schema):
+        data = json.loads(prompt)
+        calls.append(data)
+        findings = []
+        for value in data["evidence"]:
+            if value["source"] == "p0" and "known_evidence" not in data:
+                findings.append({"unit_ids": finding(value, last=len(value["text"].splitlines()))["unit_ids"]})
+        return schema.model_validate({"findings": findings})
+
+    selected, _, diagnostic = run(inputs(), read)
+    assert selected and len(calls) == 5
+    assert diagnostic["stop_reason"] == "deadline"
+    assert diagnostic["dependency_review"]["status"] == "deadline"
