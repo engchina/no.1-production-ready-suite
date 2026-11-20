@@ -564,7 +564,12 @@ async def test_standard_answer_case_is_judged_with_answer_record() -> None:
                 relevant_document_ids=["doc-1"],
                 standard_answer="合成の標準回答",
             ),
-            EvaluationCase(id="no-standard", query="合成の質問", relevant_document_ids=["doc-1"]),
+            EvaluationCase(
+                id="no-standard",
+                query="合成の質問",
+                relevant_document_ids=["doc-1"],
+                required_answer_points=["合成の必須要点"],
+            ),
         ],
         top_k=5,
         thresholds=resolve_evaluation_suite("strict"),
