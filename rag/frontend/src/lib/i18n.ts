@@ -1493,7 +1493,7 @@ export const ja = {
   "settings.evaluation.suite.standard": "標準",
   "settings.evaluation.suite.standard.description": "日常の確認と毎晩の回帰の判定に使う既定の閾値です。",
   "settings.evaluation.suite.strict": "厳格",
-  "settings.evaluation.suite.strict.description": "リリース前の確認に使う高い閾値です。MRR は 80%、ほかの三指標は 100% を求めます。測定できた範囲の合否であり、評価器がすべての誤りを検出できる保証ではありません。",
+  "settings.evaluation.suite.strict.description": "リリース前の確認に使う高い閾値です。合否に使う指標は、MRR が 80%、それ以外が 100% です。測定できた範囲の合否であり、評価器がすべての誤りを検出できる保証ではありません。",
   "settings.evaluation.applyHint":
     "保存した基準は、次に実行する品質評価から使います。実行済みの評価の合否は変わりません。",
   "settings.evaluation.actions.label": "評価の基準の操作",
