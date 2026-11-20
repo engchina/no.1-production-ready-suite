@@ -1594,10 +1594,12 @@ jobs:
     name: Agent / Backend
     needs: changes
     # MCP ツールの契約（platform/contracts/mcp/）も読む（#1531）。品質評価は platform の採点の部品を使う（#2582）。
+    # クォータナリ接続のモデルは Anthropic Claude の Messages API の部品で呼ぶ（#5546）。
     if: >-
       needs.changes.outputs.agent_backend == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.answer_passages_contract == 'true' || needs.changes.outputs.mcp_contract == 'true'
       || needs.changes.outputs.platform_evaluation_scoring == 'true'
+      || needs.changes.outputs.platform_anthropic_messages == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
