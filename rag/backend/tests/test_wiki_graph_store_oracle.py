@@ -8,7 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, _execute
+from app.clients.wiki_graph_index import backfill_graph_index
 from app.clients.wiki_graph_store import WikiGraphStore, section_id
 from app.clients.wiki_store import WikiSnapshot, WikiStore
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, fingerprint
@@ -88,11 +89,20 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     )
     await store.finish_links(a, claimed[0])
 
+    # 既存の公開版の状態を再現し、移行を繰り返しても同じ章節と依存が読めることを確かめる。
+    await oracle._run_transaction(
+        lambda connection: _execute(
+            connection, "DELETE FROM rag_wiki_graph_nodes WHERE document_id=:doc", {"doc": a}
+        )
+    )
+    await oracle._run_transaction(backfill_graph_index)
+    await oracle._run_transaction(backfill_graph_index)
+
     overview = await graph.overview(kb.id)
     docs = {doc["document_id"]: doc for doc in overview["documents"]}
     assert set(docs) == {a, b}
-    assert docs[a]["unit_count"] == len(pages_a)
-    assert (docs[a]["outgoing_links"], docs[b]["incoming_links"]) == (1, 1)
+    assert not overview["has_more"]
+    assert (await graph.overview(kb.id, limit=1))["has_more"]
 
     # 文書 → 章節（section_path の階層）→ 単位を段階的に開く。
     path = pages_a[0].unit.section_path
@@ -101,10 +111,7 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     leaf = section_id(a, path)
     units = await graph.children(kb.id, a, parent_id=leaf, offset=0, limit=100)
     assert [item["id"] for item in units["items"]] == [page.unit.unit_id for page in pages_a]
-    assert units["items"][0]["outgoing"] == [
-        {"target": pages_a[1].unit.unit_id, "relation": "continuation", "scope": "same_document"},
-        {"target": first_b, "relation": "exception", "scope": "cross_document"},
-    ]
+    assert "outgoing" not in units["items"][0]
     located = await graph.locate(kb.id, a, pages_a[-1].unit.unit_id)
     assert located["path"][-1] == {"id": pages_a[-1].unit.unit_id, "index": len(pages_a) - 1}
 
@@ -113,7 +120,10 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     assert [chunk["chunk_id"] for chunk in detail["source_chunks"]] == (
         pages_a[0].unit.source_chunk_ids
     )
-    assert {(r["direction"], r["scope"], r["unit"]["id"]) for r in detail["relations"]} == {
+    assert {
+        (r["direction"], r["scope"], r["unit"]["id"])
+        for r in (await graph.relations(kb.id, first_a, 0, 25))["items"]
+    } == {
         ("outgoing", "same_document", pages_a[1].unit.unit_id),
         ("outgoing", "cross_document", first_b),
     }
@@ -132,9 +142,10 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     await oracle.remove_document_from_knowledge_base(kb.id, b)
     overview = await graph.overview(kb.id)
     assert [doc["document_id"] for doc in overview["documents"]] == [a]
-    assert overview["documents"][0]["outgoing_links"] == 0
+    assert not overview["has_more"]
     assert all(
-        r["scope"] == "same_document" for r in (await graph.unit(kb.id, first_a))["relations"]
+        r["scope"] == "same_document"
+        for r in (await graph.relations(kb.id, first_a, 0, 25))["items"]
     )
     for did in (a, b, c):
         await oracle.delete_document(did)

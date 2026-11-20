@@ -13,6 +13,7 @@ from app.schemas.common import ApiResponse
 from app.schemas.wiki_graph import (
     WikiGraphLocation,
     WikiGraphOverview,
+    WikiGraphRelations,
     WikiGraphSearchPage,
     WikiGraphTreePage,
     WikiGraphUnitDetail,
@@ -48,10 +49,16 @@ async def _read(
     "/{knowledge_base_id}/wiki/graph",
     response_model=ApiResponse[WikiGraphOverview],
 )
-async def get_wiki_graph_overview(knowledge_base_id: str) -> ApiResponse[WikiGraphOverview]:
-    """案内のある文書と、文書ごとの単位の数・文書をまたぐ関連の数を返す。"""
+async def get_wiki_graph_overview(
+    knowledge_base_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=25),
+) -> ApiResponse[WikiGraphOverview]:
+    """案内のある文書の一覧をページ単位で返す。"""
     data = await _read(
-        knowledge_base_id, "wiki_graph_overview", lambda store: store.overview(knowledge_base_id)
+        knowledge_base_id,
+        "wiki_graph_overview",
+        lambda store: store.overview(knowledge_base_id, offset=offset, limit=limit),
     )
     return ApiResponse(data=WikiGraphOverview(**data))
 
@@ -65,7 +72,7 @@ async def get_wiki_graph_tree(
     document_id: str,
     parent: str | None = Query(default=None, min_length=64, max_length=64, pattern="^[a-f0-9]+$"),
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=1000),
+    limit: int = Query(default=25, ge=1, le=100),
 ) -> ApiResponse[WikiGraphTreePage]:
     """木の 1 段（文書の順）を返す。``parent`` が無ければ文書の直下、あれば章節の直下。"""
     data = await _read(
@@ -125,3 +132,21 @@ async def get_wiki_graph_unit(
         knowledge_base_id, "wiki_graph_unit", lambda store: store.unit(knowledge_base_id, unit_id)
     )
     return ApiResponse(data=WikiGraphUnitDetail(**data))
+
+
+@router.get(
+    "/{knowledge_base_id}/wiki/graph/units/{unit_id}/relations",
+    response_model=ApiResponse[WikiGraphRelations],
+)
+async def get_wiki_graph_relations(
+    knowledge_base_id: str,
+    unit_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> ApiResponse[WikiGraphRelations]:
+    data = await _read(
+        knowledge_base_id,
+        "wiki_graph_relations",
+        lambda store: store.relations(knowledge_base_id, unit_id, offset, limit),
+    )
+    return ApiResponse(data=WikiGraphRelations(**data))

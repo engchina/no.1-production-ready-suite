@@ -1182,10 +1182,10 @@ export function useSearchExtractionFields(searchAnswerProfileId: string | null, 
 }
 
 /** KB 詳細の Wiki の図の総覧（#5502）。開いたときだけ読む（`id` が null の間は読まない）。 */
-export function useWikiGraphOverview(id: string | null) {
+export function useWikiGraphOverview(id: string | null, offset: number) {
   return useQuery({
-    queryKey: queryKeys.knowledgeBaseWikiGraph(id ?? ""),
-    queryFn: () => api.getWikiGraphOverview(id as string),
+    queryKey: [...queryKeys.knowledgeBaseWikiGraph(id ?? ""), offset],
+    queryFn: () => api.getWikiGraphOverview(id as string, offset),
     enabled: id != null,
   });
 }

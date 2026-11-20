@@ -3,7 +3,7 @@ import { GRAPH_NODE_CARD_SIZE, layoutGraphHierarchy, type GraphNodeDimensions, t
 import type { WikiGraphDocument, WikiGraphOverview, WikiGraphRelation, WikiGraphScope, WikiGraphTreeNode } from "@/lib/api";
 
 /** 1 段の表示の上限。超えた分は「さらに表示」で読む。 */
-export const WIKI_GRAPH_PAGE_SIZE = 100;
+export const WIKI_GRAPH_PAGE_SIZE = 25;
 
 /** 関係の種類の並び（凡例・一覧の順。backend の辿る優先の順と同じ）。 */
 export const WIKI_RELATIONS: readonly WikiGraphRelation[] = ["exception", "prerequisite", "warning", "continuation", "expected_result", "reference"];
@@ -15,6 +15,7 @@ export interface WikiTreeState {
   /** 親の節点（文書の節点を含む）→ 読み込み済みの子と、段の全件数。 */
   children: ReadonlyMap<string, { ids: readonly string[]; total: number }>;
   expanded: ReadonlySet<string>;
+  located?: ReadonlyMap<string, readonly string[]>;
 }
 
 export const emptyWikiTree = (): WikiTreeState => ({ nodes: new Map(), children: new Map(), expanded: new Set() });
@@ -56,7 +57,7 @@ export function visibleWikiNodes(overview: WikiGraphOverview, state: WikiTreeSta
     if (!state.expanded.has(parent)) return;
     const loaded = state.children.get(parent);
     if (!loaded) return;
-    for (const id of loaded.ids) {
+    for (const id of new Set([...loaded.ids, ...(state.located?.get(parent) ?? [])])) {
       const tree = state.nodes.get(id);
       if (!tree) continue;
       if (kindVisible(tree.kind)) {
@@ -71,7 +72,7 @@ export function visibleWikiNodes(overview: WikiGraphOverview, state: WikiTreeSta
   };
   for (const document of overview.documents) {
     if (kindVisible("document")) {
-      result.push({ id: document.id, kind: "document", label: stripExtension(document.name), name: document.name, documentNode: document.id, parent: null, document, expandable: document.unit_count > 0, expanded: state.expanded.has(document.id) });
+      result.push({ id: document.id, kind: "document", label: stripExtension(document.name), name: document.name, documentNode: document.id, parent: null, document, expandable: true, expanded: state.expanded.has(document.id) });
     }
     addChildren(document.id, document.id);
   }

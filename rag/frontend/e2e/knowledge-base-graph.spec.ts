@@ -116,7 +116,7 @@ async function mockKb(page: Page, overview: unknown, data: { trees?: Record<stri
     enabled: false, counts: { READY: 2 }, blocked_reason: null,
     documents: { items: [], total: 2, limit: 25, offset: 0, has_next: false },
   }) }));
-  await page.route("**/api/knowledge-bases/kb-1/wiki/graph", (route) => route.fulfill({ json: ok(overview) }));
+  await page.route(/\/kb-1\/wiki\/graph(?:\?.*)?$/, (route) => route.fulfill({ json: ok(overview) }));
   await page.route(/\/api\/knowledge-bases\/kb-1\/wiki\/graph\/documents\/[^/]+\/tree/, (route) => {
     const url = new URL(route.request().url());
     const documentId = url.pathname.split("/").at(-2)!;
@@ -135,10 +135,12 @@ async function mockKb(page: Page, overview: unknown, data: { trees?: Record<stri
     return route.fulfill({ json: ok({ items, total: items.length, offset: 0 }) });
   });
   await page.route("**/api/knowledge-bases/kb-1/wiki/graph/units/**", (route) => {
-    const unitId = new URL(route.request().url()).pathname.split("/").at(-1)!;
-    const custom = data.unit?.(unitId);
-    const detail = custom ? custom : unitId === UA1 ? UNIT_A1 : { ...UNIT_A1, id: unitId, context: "合成の別の案内。", relations: [], possible_questions: [], unresolved: [] };
-    return route.fulfill({ json: ok(detail) });
+    const parts = new URL(route.request().url()).pathname.split("/");
+    const relations = parts.at(-1) === "relations";
+    const unitId = parts.at(relations ? -2 : -1)!;
+    const detail = data.unit?.(unitId) as typeof UNIT_A1 | undefined ??
+      (unitId === UA1 ? UNIT_A1 : { ...UNIT_A1, id: unitId, context: "合成の別の案内。", relations: [], possible_questions: [], unresolved: [] });
+    return route.fulfill({ json: ok(relations ? { items: detail.relations, has_more: false } : { ...detail, relations: [] }) });
   });
   await page.route("**/api/documents/doc-a/chunks/chunk-a1", (route) => route.fulfill({ json: ok({
     chunk_id: "chunk-a1", document_id: "doc-a", file_name: "合成文書A.pdf", text: "合成の原文の本文。", score: null, metadata: {},
@@ -252,7 +254,7 @@ test("Wiki の図は Wiki のカードの最下部の sunken の card で、開�
 test("Wiki の図を読めないときは空と区別して出し、再試行で取り直す", { tag: "@responsive" }, async ({ page }) => {
   await mockKb(page, EMPTY);
   let failing = true;
-  await page.route("**/api/knowledge-bases/kb-1/wiki/graph", (route) => failing
+  await page.route(/\/kb-1\/wiki\/graph(?:\?.*)?$/, (route) => failing
     ? route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の読み取りの失敗です。"], warning_messages: [] } })
     : route.fallback());
   await page.goto("/knowledge-bases/kb-1");
@@ -273,7 +275,7 @@ test("文書 → 章節 → 原文単位を段階的に開き、関係を矢印�
 
   // 初めは文書だけ。文書をまたぐ関連は節点に件数で示し、線は引かない。
   await expect(graph.getByText("合成文書A", { exact: true })).toBeVisible();
-  await expect(graph.getByText("他文書へ 1")).toBeVisible();
+  await expect(graph.getByText("他文書へ 1")).toHaveCount(0);
   await expect(graph.locator(".react-flow__edge")).toHaveCount(0);
   expect(calls.requests.some((path) => path.includes("/tree"))).toBe(false);
 
@@ -283,9 +285,11 @@ test("文書 → 章節 → 原文単位を段階的に開き、関係を矢印�
   await clickNode(page, S1);
   await expect(graph.getByText("合成の手続の原則の案内。")).toBeVisible();
   // 同じ文書の依存は種類の文字（例外・続く手順）で、向きは矢印（終点の marker）。文書 B は閉じているので前提の線は無い。
+  await clickNode(page, UA1);
+  await page.getByRole("button", { name: "関係を表示", exact: true }).click();
   const labels = graph.locator(".react-flow__edge-text");
   await expect(labels.filter({ hasText: "例外" })).toHaveCount(1);
-  await expect(labels.filter({ hasText: "続く手順" })).toHaveCount(1);
+  await expect(labels.filter({ hasText: "続く手順" })).toHaveCount(0);
   await expect(labels.filter({ hasText: "前提" })).toHaveCount(0);
   await expect(graph.locator(".react-flow__edge-path[marker-end]").first()).toBeAttached();
   // 凡例は関係の種類をアイコンと文字で示し、押すとその種類の線を隠す。
@@ -323,6 +327,7 @@ test("単位を押すと案内と関係を横に出し、原文を開き、関�
   await expect(panel.getByText("合成の手続の原則の案内。")).toBeVisible();
   await expect(panel.getByText("合成の手続はいつ使えますか？")).toBeVisible();
   await expect(panel.getByText("合成の期限は本文にありません。")).toBeVisible();
+  await panel.getByRole("button", { name: "関係を表示" }).click();
   const relations = panel.getByRole("table", { name: "関係" });
   await expect(relations.getByText("別の文書：合成文書B.pdf")).toBeVisible();
   await expect(relations.locator('[data-relation="prerequisite"] svg')).toBeAttached();
@@ -389,6 +394,7 @@ test("実データに近い件数でも節点を読める大きさで出し、�
   await expectReadableNodes(page, [largeUnit(1, 0)]);
   await clickNode(page, largeUnit(1, 0));
   const panel = page.getByTestId("wiki-graph-unit");
+  await panel.getByRole("button", { name: "関係を表示" }).click();
   const relations = panel.getByRole("table", { name: "関係" });
   await expect(relations.getByText(`${largeSectionLabel(0)}の続きの長い見出し`, { exact: false })).toBeVisible();
   // 関係の表は横にはみ出さず、どのセルの文字も右で切れない（折り返す）。
@@ -402,4 +408,25 @@ test("実データに近い件数でも節点を読める大きさで出し、�
   await expectNoPageOverflow(page);
   await panel.scrollIntoViewIfNeeded();
   await shot(page, testInfo, "wiki-graph-large-unit");
+});
+
+test("選んだ文書の直属の子を25件読み、指定時だけ続きの100件を一回で読む", { tag: "@responsive" }, async ({ page }) => {
+  const children = Array.from({ length: 130 }, (_, i) => node(ID(i.toString(16).padStart(3, "0")), "unit", `単位 ${i + 1}`, null, "doc-a"));
+  const reads: URL[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/tree")) reads.push(url);
+  });
+  await mockKb(page, OVERVIEW, { trees: { "doc-a:root": children } });
+  await page.goto("/knowledge-bases/kb-1");
+  await openGraph(page);
+  expect(reads).toHaveLength(0);
+  await clickNode(page, "doc-a");
+  const more = page.getByRole("button", { name: "さらに 100 件を表示", exact: true });
+  await expect(more).toBeEnabled();
+  expect(reads.map((url) => url.searchParams.get("limit"))).toEqual(["25"]);
+  await more.click();
+  await expect(page.getByRole("button", { name: "さらに 5 件を表示", exact: true }).last()).toBeVisible();
+  expect(reads.map((url) => [url.searchParams.get("offset"), url.searchParams.get("limit")])).toEqual([["0", "25"], ["25", "100"]]);
+  expect(reads.every((url) => url.pathname.endsWith("/documents/doc-a/tree"))).toBe(true);
 });

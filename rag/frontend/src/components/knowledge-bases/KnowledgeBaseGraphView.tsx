@@ -5,7 +5,7 @@ import { Network } from "lucide-react";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { EmptyState } from "@/components/StateViews";
-import { Disclosure, Skeleton, TimedLoadingState } from "@production-ready/ui";
+import { Button, Disclosure, Skeleton, TimedLoadingState } from "@production-ready/ui";
 import { KnowledgeBaseGraphCanvas } from "./KnowledgeBaseGraphCanvas";
 import { useWikiGraphOverview } from "@/lib/queries";
 import { t } from "@/lib/i18n";
@@ -16,7 +16,8 @@ import { t } from "@/lib/i18n";
  */
 export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const [open, setOpen] = useState(false);
-  const query = useWikiGraphOverview(open ? knowledgeBaseId : null);
+  const [offset, setOffset] = useState(0);
+  const query = useWikiGraphOverview(open ? knowledgeBaseId : null, offset);
   const isEmpty = query.data && (query.data.status === "empty" || query.data.documents.length === 0);
 
   return (
@@ -32,6 +33,12 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
     >
       {open ? (
         <div id="wiki-graph" className="space-y-2">
+          {offset > 0 || query.data?.has_more ? (
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" disabled={offset === 0} onClick={() => setOffset(offset - 25)}>{t("wiki.graph.previousDocuments")}</Button>
+              <Button variant="secondary" disabled={!query.data?.has_more} onClick={() => setOffset(offset + 25)}>{t("wiki.graph.nextDocuments")}</Button>
+            </div>
+          ) : null}
           {query.isPending ? (
             <TimedLoadingState label={t("wiki.graph.loading")} operationKey="wiki-graph-load" testId="wiki-graph-loading">
               <Skeleton className="h-[25.71rem] w-full rounded-md" />
@@ -42,7 +49,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
           ) : isEmpty ? (
             <EmptyState title={t("wiki.graph.empty")} />
           ) : query.data ? (
-            <KnowledgeBaseGraphCanvas overview={query.data} knowledgeBaseId={knowledgeBaseId} />
+            <KnowledgeBaseGraphCanvas key={`${knowledgeBaseId}:${offset}`} overview={query.data} knowledgeBaseId={knowledgeBaseId} />
           ) : null}
         </div>
       ) : null}

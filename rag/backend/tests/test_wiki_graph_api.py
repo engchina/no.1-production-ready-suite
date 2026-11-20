@@ -94,52 +94,77 @@ class FakeOracle:
         binds = dict(binds or {})
         self.statements.append((statement, binds))
         pages = self._pages()
-        if "GROUP BY p.document_id" in statement:
-            docs: dict[str, int] = {}
+        if "FROM rag_documents doc" in statement:
+            documents = sorted({page.unit.document_id for _, page in pages})
+            start = binds["graph_offset"]
+            return [
+                {"document_id": did, "file_name": DOC_NAMES[did]}
+                for did in documents[start : start + binds["graph_limit"]]
+            ]
+        if "neighbors AS" in statement:
+            uid = binds["graph_unit"]
+            by_id = {page.unit.unit_id: page for _, page in pages}
+            edges: list[tuple[str, str, str, str, str | None]] = [
+                (page.unit.unit_id, dep.unit_id, dep.relation, "same_document", None)
+                for page in by_id.values()
+                for dep in page.navigation.dependencies
+            ]
+            edges += [
+                (src, dst, rel, "cross_document", reason) for src, dst, _, _, rel, reason in LINKS
+            ]
+            result = []
+            for src, dst, rel, scope, reason in edges:
+                if uid not in (src, dst) or src == dst or src not in by_id or dst not in by_id:
+                    continue
+                unit = by_id[dst if src == uid else src].unit
+                result.append(
+                    {
+                        "direction": "outgoing" if src == uid else "incoming",
+                        "scope": scope,
+                        "relation": rel,
+                        "reason": reason,
+                        "unit_id": unit.unit_id,
+                        "document_id": unit.document_id,
+                        "file_name": DOC_NAMES[unit.document_id],
+                        "title": unit.title,
+                        "section_path": json.dumps(unit.section_path),
+                    }
+                )
+            return result[binds["graph_offset"] :][: binds["graph_limit"]]
+        if "rag_wiki_graph_nodes" in statement:
+            doc = binds["graph_doc"]
+            children: dict[str, list[str]] = {}
+            nodes = {}
             for _, page in pages:
-                docs[page.unit.document_id] = docs.get(page.unit.document_id, 0) + 1
+                if page.unit.document_id != doc:
+                    continue
+                path = page.unit.section_path
+                parent = doc
+                for depth in range(1, len(path) + 2):
+                    leaf = depth > len(path)
+                    nid = page.unit.unit_id if leaf else section_id(doc, path[:depth])
+                    siblings = children.setdefault(parent, [])
+                    if nid not in nodes:
+                        nodes[nid] = {
+                            "node_id": nid,
+                            "parent_id": parent,
+                            "sibling_index": len(siblings),
+                            "path_depth": -1 if leaf else depth,
+                            "section_path": json.dumps(path),
+                            "title": page.unit.title if leaf else None,
+                            "summary": page.navigation.context if leaf else None,
+                            "file_name": DOC_NAMES[doc],
+                            "unit_count": 0,
+                        }
+                        siblings.append(nid)
+                    nodes[nid]["unit_count"] += 1
+                    parent = nid
+            if "graph_node" in binds:
+                return [nodes[binds["graph_node"]]] if binds["graph_node"] in nodes else []
+            ids = children.get(binds["graph_parent"], [])
             return [
-                {"document_id": did, "file_name": DOC_NAMES[did], "unit_count": n}
-                for did, n in sorted(docs.items())
-            ]
-        if "FROM rag_wiki_links l" in statement:
-            visible_units = {page.unit.unit_id for _, page in pages}
-            rows = [link for link in LINKS if link[0] in visible_units and link[1] in visible_units]
-            if "graph_doc" in binds:
-                rows = [link for link in rows if binds["graph_doc"] in (link[2], link[3])]
-            if "graph_unit" in binds:
-                rows = [link for link in rows if binds["graph_unit"] in (link[0], link[1])]
-            if "GROUP BY l.source_document_id" in statement:
-                return [
-                    {"source_document_id": s, "target_document_id": t, "link_count": 1}
-                    for _, _, s, t, _, _ in rows
-                ]
-            return [
-                {
-                    "source_unit_id": s,
-                    "target_unit_id": t,
-                    "source_document_id": sd,
-                    "target_document_id": td,
-                    "relation": relation,
-                    "reason": reason,
-                }
-                for s, t, sd, td, relation, reason in rows
-            ]
-        if "'$.navigation.dependencies'" in statement:
-            return [
-                {
-                    "unit_id": page.unit.unit_id,
-                    "chunk_index": index,
-                    "file_name": DOC_NAMES[page.unit.document_id],
-                    "title": page.unit.title,
-                    "context": page.navigation.context,
-                    "section_path": json.dumps(page.unit.section_path, ensure_ascii=False),
-                    "dependencies": json.dumps(
-                        [item.model_dump() for item in page.navigation.dependencies]
-                    ),
-                }
-                for index, page in pages
-                if page.unit.document_id == binds["graph_doc"]
+                dict(nodes[nid], total=len(ids), child_count=len(children.get(nid, [])))
+                for nid in ids[binds["graph_offset"] :][: binds["graph_limit"]]
             ]
         if "COUNT(*) OVER ()" in statement:
             needle = str(binds["graph_pattern"]).strip("%")
@@ -191,18 +216,18 @@ def test_scope_reads_saved_guidance_of_kb_documents_without_requiring_enabled_bu
     assert "wiki_compiler" not in where
 
 
-async def test_overview_counts_units_and_cross_document_links_in_both_directions() -> None:
+async def test_overview_reads_only_one_document_page_without_link_counts() -> None:
     oracle = FakeOracle()
-    data = await WikiGraphStore(oracle).overview(KB)  # type: ignore[arg-type]
-    assert data["status"] == "ok"
-    docs = {doc["document_id"]: doc for doc in data["documents"]}
-    assert docs["doc-a"]["unit_count"] == 4 and docs["doc-b"]["unit_count"] == 1
-    assert (docs["doc-a"]["outgoing_links"], docs["doc-a"]["incoming_links"]) == (1, 1)
-    assert (docs["doc-b"]["outgoing_links"], docs["doc-b"]["incoming_links"]) == (1, 1)
-    # 関連の両端を、範囲の中の公開済みの案内に限る。
-    link_sql = [sql for sql, _ in oracle.statements if "rag_wiki_links" in sql]
-    assert link_sql and all("JOIN visible s" in sql and "JOIN visible t" in sql for sql in link_sql)
-    assert (await WikiGraphStore(FakeOracle(empty=True)).overview(KB))["status"] == "empty"  # type: ignore[arg-type]
+    store = WikiGraphStore(oracle)  # type: ignore[arg-type]
+    first = await store.overview(KB, limit=1)
+    assert first == {
+        "status": "ok",
+        "has_more": True,
+        "documents": [{"id": "doc-a", "document_id": "doc-a", "name": DOC_NAMES["doc-a"]}],
+    }
+    assert len(oracle.statements) == 1 and "rag_wiki_links" not in oracle.statements[0][0]
+    last = await store.overview(KB, offset=1, limit=1)
+    assert not last["has_more"] and last["documents"][0]["id"] == "doc-b"
 
 
 async def test_tree_opens_documents_sections_and_units_step_by_step() -> None:
@@ -215,7 +240,6 @@ async def test_tree_opens_documents_sections_and_units_step_by_step() -> None:
     ]
     # 章節は配下の単位の数と、配下の文書をまたぐ関連の数を持つ。
     assert root["items"][0]["unit_count"] == 3 and root["items"][0]["child_count"] == 2
-    assert (root["items"][0]["outgoing_links"], root["items"][0]["incoming_links"]) == (1, 1)
     level = await store.children(KB, "doc-a", parent_id=chapter, offset=0, limit=100)
     section = section_id("doc-a", ["第 1 章", "第 1 節"])
     assert [item["id"] for item in level["items"]] == [section, U["a3"]]
@@ -223,13 +247,7 @@ async def test_tree_opens_documents_sections_and_units_step_by_step() -> None:
     assert units["total"] == 2 and [item["id"] for item in units["items"]] == [U["a2"]]
     first = (await store.children(KB, "doc-a", parent_id=section, offset=0, limit=1))["items"][0]
     assert first["summary"] == "単位 a1 の合成の案内。" and level["items"][0]["summary"] == ""
-    # 単位の線: 同じ文書の依存と、文書をまたぐ関連（どちらも起点 → 終点）。
-    assert first["outgoing"] == [
-        {"target": U["a2"], "relation": "exception", "scope": "same_document"},
-        {"target": U["b1"], "relation": "exception", "scope": "cross_document"},
-    ]
-    # 範囲の外への関連・今の保存版に無い単位・自分への依存は引かない。
-    assert units["items"][0]["outgoing"] == []
+    assert "outgoing" not in first
     with pytest.raises(KeyError):
         await store.children(KB, "doc-a", parent_id=U["a1"], offset=0, limit=100)
     with pytest.raises(KeyError):
@@ -257,22 +275,27 @@ async def test_unit_detail_separates_directions_and_hides_relations_outside_scop
     assert detail["source_chunks"] == [{"chunk_id": f"chunk-{U['a1'][:6]}", "chunk_index": 0}]
     relations = {
         (item["direction"], item["scope"], item["relation"], item["unit"]["id"])
-        for item in detail["relations"]
+        for item in (await store.relations(KB, U["a1"], 0, 25))["items"]
     }
     assert relations == {
         ("outgoing", "same_document", "exception", U["a2"]),
         ("incoming", "same_document", "prerequisite", U["a3"]),
         ("outgoing", "cross_document", "exception", U["b1"]),
     }
-    cross = next(item for item in detail["relations"] if item["scope"] == "cross_document")
+    cross = next(
+        item
+        for item in (await store.relations(KB, U["a1"], 0, 25))["items"]
+        if item["scope"] == "cross_document"
+    )
     assert cross["unit"]["document_name"] == "synthetic-b.pdf" and cross["reason"] == "合成の理由"
-    incoming = await store.unit(KB, U["a3"])
+    incoming = await store.relations(KB, U["a3"], 0, 25)
     assert ("incoming", "cross_document", U["b1"]) in {
-        (item["direction"], item["scope"], item["unit"]["id"]) for item in incoming["relations"]
+        (item["direction"], item["scope"], item["unit"]["id"]) for item in incoming["items"]
     }
     # 終点が範囲の外の関連は出さない。範囲の外の単位は 404。
     assert all(
-        item["unit"]["id"] != U["c1"] for item in (await store.unit(KB, U["a2"]))["relations"]
+        item["unit"]["id"] != U["c1"]
+        for item in (await store.relations(KB, U["a2"], 0, 25))["items"]
     )
     with pytest.raises(KeyError):
         await store.unit(KB, U["c1"])
@@ -297,15 +320,15 @@ async def test_routes_hide_invisible_knowledge_base_and_unknown_nodes(
     monkeypatch.setattr(routes, "OracleClient", Oracle)
     tree = await routes.get_wiki_graph_tree(KB, "doc-a", parent=None, offset=0, limit=100)
     assert tree.data is not None and tree.data.total == 2
-    overview = await routes.get_wiki_graph_overview(KB)
+    overview = await routes.get_wiki_graph_overview(KB, offset=0, limit=25)
     assert overview.data is not None and overview.data.status == "ok"
     unit = await routes.get_wiki_graph_unit(KB, U["a1"])
-    assert unit.data is not None and len(unit.data.relations) == 3
+    assert unit.data is not None and unit.data.relations == []
     with pytest.raises(HTTPException) as caught:
         await routes.locate_wiki_graph_node(KB, "doc-a", node=U["c1"])
     assert caught.value.status_code == 404
     visible["value"] = False
     with pytest.raises(HTTPException) as caught:
-        await routes.get_wiki_graph_overview(KB)
+        await routes.get_wiki_graph_overview(KB, offset=0, limit=25)
     assert caught.value.status_code == 404
     assert module.GRAPH_PUBLISHED_SQL in graph_scope(KB)[0]

@@ -855,10 +855,17 @@
       "sha256": "68fd5af6e197bc02434090b543cb4f3a66f6f669afa3c12f51c1b1fc57ff4088",
       "statement_count": 1,
       "table_name": "rag_language_pack_releases"
+    },
+    {
+      "destructive": true,
+      "name": "20261120_5599_wiki_graph_nodes",
+      "sha256": "9eab445be61577a0b82351d7f077b133c96d4f9f00e32448edb14e193d9ed323",
+      "statement_count": 1,
+      "table_name": "rag_wiki_graph_nodes"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "2a6c72b0894b822fcd5ad826e64e435daebd904b936b689b88e06d243eb94e53",
-  "statement_count": 184
+  "sha256": "60dbb6d9a9542a25cee53d17d2a3bf0ce288933ac4f1ed681a472b14a31729e7",
+  "statement_count": 185
 }
