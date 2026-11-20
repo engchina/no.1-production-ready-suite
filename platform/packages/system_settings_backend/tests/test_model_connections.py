@@ -987,33 +987,7 @@ def test_quaternary_connection_is_not_callable_through_openai_compatible_urls() 
     assert primary.base_url == PRIMARY_ENDPOINT
 
 
-def test_model_test_of_quaternary_model_reports_unsupported_connection(tmp_path: Path) -> None:
-    """接続テストは、要求を送らずに「まだ呼び出せない」と接続を変える案内だけを返す。"""
-    settings = FakeSettings()
-    store = make_store(tmp_path)
-    store.load(settings)
-
-    async def run_test(candidate: Any, request: ModelSettingsTestRequest) -> dict[str, Any]:
-        connection = enterprise_ai_connection_for_model(candidate, request.model_id)
-        raise_for = connection.request_url("/responses")
-        raise AssertionError(raise_for)
-
-    data = (
-        make_client(settings, store, run_model_test=run_test)
-        .post(
-            "/api/settings/model/test",
-            json={
-                "settings": four_connection_payload(),
-                "target_type": "enterprise_text",
-                "model_id": "claude-d",
-            },
-        )
-        .json()["data"]
-    )
-    assert data["status"] == "failed"
-    assert data["error_type"] == "EnterpriseAiConnectionNotSupportedError"
-    assert data["troubleshooting"] == [data["raw_error"]]
-    assert "クォータナリ接続" in data["raw_error"]
+# クォータナリ接続のモデルの接続テスト（Messages API で呼ぶ）は test_anthropic_model_test.py。
 
 
 def test_quaternary_connection_from_environment_only(

@@ -31,7 +31,9 @@ result = create_anthropic_message(
         max_output_tokens=budget,
     ),
     api_key=connection.api_key,
-    endpoint_url=connection.endpoint_url,  # 空なら SDK の既定（https://api.anthropic.com）
+    # pr_system_settings の接続（enterprise_ai_connection_for_model）の effective_endpoint
+    # （空の設定では https://api.anthropic.com）。
+    endpoint_url=connection.effective_endpoint,
     timeout_seconds=timeout_seconds,
 )
 result.text  # 構造化出力なら JSON の文字列（Pydantic で検証して使う）
