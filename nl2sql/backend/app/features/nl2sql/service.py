@@ -16827,10 +16827,11 @@ class Nl2SqlService:
             # PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*。
             DiagnosticCheck(
                 name="PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
-                status="ok" if text_connection.endpoint else "warning",
+                # Messages API の接続（#5546）は Endpoint URL が空でも公式の API を使う。
+                status="ok" if text_connection.effective_endpoint else "warning",
                 message=(
                     f"OCI Enterprise AI endpoint（{text_connection_label}）は設定済みです。"
-                    if text_connection.endpoint
+                    if text_connection.effective_endpoint
                     else f"OCI Enterprise AI endpoint（{text_connection_label}）が未設定です。"
                 ),
             ),
