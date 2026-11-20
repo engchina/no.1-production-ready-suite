@@ -439,6 +439,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_KB}/wiki/graph/documents/{{document_id}}/locate"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki/graph/search"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki/graph/units/{{unit_id}}"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/wiki/graph/units/{{unit_id}}/relations"): _any(MENU_KNOWLEDGE_BASES),
     # KB ごとの項目抽出の定義（#548）。
     ("GET", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),
     ("PUT", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),
