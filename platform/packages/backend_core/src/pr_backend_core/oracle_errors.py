@@ -43,11 +43,12 @@ _CONNECTION_CODES = frozenset(
         "ORA-29024",  # certificate validation failure
     }
 )
-# DPY-6000〜6999（Thin の接続・ネットワーク）と ORA-12150〜12999（Oracle Net。
-# ORA-12170 / 125xx を含む）。
+# DPY-6000〜6999（Thin の接続・ネットワーク）と ORA-12150〜12699（Oracle Net。
+# ORA-12170 / 125xx を含む）。ORA-12700 以降は NLS・並列実行・列の長さ（ORA-12838・ORA-12860・
+# ORA-12899 など）の SQL のエラーで、接続の失敗ではない（#5595）。
 _CONNECTION_CODE_RANGES: tuple[tuple[str, int, int], ...] = (
     ("DPY", 6000, 6999),
-    ("ORA", 12150, 12999),
+    ("ORA", 12150, 12699),
 )
 
 

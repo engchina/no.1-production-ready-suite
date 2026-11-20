@@ -43,6 +43,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
 from ..chat_progress import ChatProgressParamValue
+from ..oracle_errors import is_oracle_connection_error, oracle_error_codes
 from .tracing import SpanListener, SpanUpdate
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,8 @@ class TraceSpanWriter:
     - 通常の queue が満杯なら、新しい span の開始の知らせを捨てて数える（終了の知らせは、
       まだ書いていない
       開始の知らせを押し出して入れる）。境界の span の queue は満杯でも捨てない。
+    - まとめの書き込みが失敗したら、接続の障害でなければ 1 行ずつ書き直し、失敗した行だけを
+      再送する（1 行の失敗で同じまとめの span を失わない。#5595）。
     - 書き込みに失敗した行は間をおいて再送し、`retries` 回で諦めて数える。境界の span は
       `boundary_retry_seconds` まで再送を続ける。
     - `display_name` は製品の工程の利用者向けの名前（`DISPLAY_NAME_PARAM` に入れる。#3272）。
@@ -332,10 +335,42 @@ class TraceSpanWriter:
                 connection.commit()
             return True
         except Exception as exc:
-            logger.warning("trace_span_write_failed", extra={"error_type": type(exc).__name__})
-            self._requeue(batch)
-            time.sleep(min(self.retry_backoff_seconds, self.flush_seconds * 4))
-            return False
+            _log_write_failure(exc, rows=len(batch))
+            # 接続の障害は 1 行ずつ書き直しても同じなので、まとめのまま再送する。
+            failed = (
+                batch
+                if len(batch) == 1 or is_oracle_connection_error(exc)
+                else self._write_each(batch)
+            )
+        if not failed:
+            return True
+        self._requeue(failed)
+        time.sleep(min(self.retry_backoff_seconds, self.flush_seconds * 4))
+        return False
+
+    def _write_each(self, batch: list[_Pending]) -> list[_Pending]:
+        """1 行ずつ書いて commit する（書けなかった行を返す）。まとめの失敗の後だけに使う。"""
+        remaining = list(batch)
+        failed: list[_Pending] = []
+        try:
+            with self.connection_factory() as connection:
+                cursor = connection.cursor()
+                while remaining:
+                    try:
+                        cursor.setinputsizes(**_timestamp_input_sizes(_TIMESTAMP_BINDS))
+                        cursor.execute(_MERGE_SQL, remaining[0].row)
+                        connection.commit()
+                    except Exception as exc:
+                        connection.rollback()
+                        failed.append(remaining.pop(0))
+                        _log_write_failure(exc, rows=1)
+                        if is_oracle_connection_error(exc):
+                            break
+                        continue
+                    remaining.pop(0)
+        except Exception as exc:
+            _log_write_failure(exc, rows=len(remaining))
+        return [*failed, *remaining]
 
     def _requeue(self, batch: Iterable[_Pending]) -> None:
         now = self.clock()
@@ -382,6 +417,18 @@ class TraceSpanWriter:
         )
 
 
+def _log_write_failure(exc: Exception, *, rows: int) -> None:
+    """書き込みの失敗（ORA / DPY のコードと行の数だけ。値・本文はログに出さない）。"""
+    logger.warning(
+        "trace_span_write_failed",
+        extra={
+            "error_type": type(exc).__name__,
+            "error_codes": ",".join(oracle_error_codes(exc)) or None,
+            "rows": rows,
+        },
+    )
+
+
 def purge_trace_spans(
     connection_factory: ConnectionFactory,
     *,
@@ -407,7 +454,13 @@ def purge_trace_spans(
                 if count < batch:
                     break
     except Exception as exc:
-        logger.warning("trace_span_purge_failed", extra={"error_type": type(exc).__name__})
+        logger.warning(
+            "trace_span_purge_failed",
+            extra={
+                "error_type": type(exc).__name__,
+                "error_codes": ",".join(oracle_error_codes(exc)) or None,
+            },
+        )
     return deleted
 
 

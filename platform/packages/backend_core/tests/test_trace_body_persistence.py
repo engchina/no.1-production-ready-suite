@@ -39,7 +39,7 @@ class TransactionCursor(OwnerCursor):
             self.manifests, self.owners, self.parts, self.part_rows, self.failures = self.savepoint
             self.rollback_count += 1
         elif self.fail_attach and "MERGE INTO PLATFORM_TRACE_BODY_OWNERS" in sql:
-            raise RuntimeError("synthetic storage failure")
+            raise RuntimeError("ORA-12838: synthetic storage failure")
         else:
             super().execute(sql, binds or {})
 
@@ -177,8 +177,11 @@ def test_admission_failure_preserves_primary_and_records_actual_reason(
         assert persistence.stop()
 
 
-def test_owner_attach_failure_rolls_back_only_trace_registration() -> None:
+def test_owner_attach_failure_rolls_back_only_trace_registration(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     database = Database()
+    caplog.set_level("WARNING", logger="pr_backend_core.observability.trace_body_persistence")
     persistence = manager(database)
     database.data.fail_attach = True
     with persistence.capture():
@@ -193,6 +196,10 @@ def test_owner_attach_failure_rolls_back_only_trace_registration() -> None:
         assert database.data.primary_saved and database.data.rollback_count == 1
         assert not database.data.manifests and not database.data.owners
     assert persistence.buffer.pending == (0, 0)
+    # 失敗のログは ORA のコードだけ（本文の値は出さない。#5595）。
+    [record] = [r for r in caplog.records if r.getMessage() == "trace_body_registration_failed"]
+    assert record.__dict__["error_codes"] == "ORA-12838"
+    assert "synthetic storage failure" not in str(record.__dict__)
 
 
 def test_inline_content_reconciles_owner_without_creating_external_body() -> None:

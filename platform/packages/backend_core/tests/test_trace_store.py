@@ -78,12 +78,19 @@ class FakeCursor:
         if self.db.fail_writes:
             self.db.fail_writes -= 1
             raise RuntimeError("ORA-03113")
+        if any(row["span_id"] in self.db.poison for row in rows):
+            raise RuntimeError(self.db.poison_error)
         self.db.calls.append(("executemany", sql, [dict(row) for row in rows]))
         for row in rows:
             self.db.rows[(row["trace_id"], row["span_id"])] = dict(row)
 
     def execute(self, sql: str, binds: dict[str, Any]) -> None:
         self.db.calls.append(("execute", sql, dict(binds)))
+        if sql.lstrip().startswith("MERGE INTO PLATFORM_TRACE_SPANS"):
+            if binds["span_id"] in self.db.poison:
+                raise RuntimeError(self.db.row_error or self.db.poison_error)
+            self.db.rows[(binds["trace_id"], binds["span_id"])] = dict(binds)
+            return
         self.rowcount = self.db.purge_counts.pop(0) if self.db.purge_counts else 0
 
     def fetchall(self) -> list[tuple[Any, ...]]:
@@ -100,13 +107,22 @@ class FakeConnection:
     def commit(self) -> None:
         self.db.commits += 1
 
+    def rollback(self) -> None:
+        self.db.rollbacks += 1
+
 
 class FakeDb:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, Any]] = []
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.commits = 0
+        self.rollbacks = 0
         self.fail_writes = 0
+        # この span id の行は書けない（executemany は行を含むまとめごと、execute はその行だけ）。
+        self.poison: set[str] = set()
+        self.poison_error = "ORA-12899: value too large for column (synthetic)"
+        # 1 行ずつの書き直し（execute）のときだけの失敗（None なら `poison_error`）。
+        self.row_error: str | None = None
         self.purge_counts: list[int] = []
         self.select_rows: list[tuple[Any, ...]] = []
 
@@ -226,6 +242,8 @@ def test_failed_writes_retry_then_drop_normal_spans_but_keep_boundary_spans() ->
     writer.flush()
     # 通常の span は 2 回失敗して捨て、数える。境界の span は再送を続ける。
     assert writer.dropped("a" * 32) == 1
+    # 接続の障害（ORA-03113）は 1 行ずつ書き直さない（まとめのまま再送する）。
+    assert not any(call[0] == "execute" for call in db.calls)
     writer.flush()
     assert {row["span_id"].lstrip("0") for row in db.rows.values()} == {"2"}
     # 境界の span も、再送の期限を過ぎたら諦めて数える。
@@ -236,6 +254,58 @@ def test_failed_writes_retry_then_drop_normal_spans_but_keep_boundary_spans() ->
     db.fail_writes = 1
     writer.flush()
     assert writer.dropped("a" * 32) == 2
+
+
+def test_batch_failure_writes_rows_one_by_one_and_requeues_only_failed_rows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """1 行の失敗で同じまとめの span を失わない（#5595）。ログは ORA のコードと行の数だけ。"""
+    db = FakeDb()
+    writer = TraceSpanWriter(db.connect, retries=2, retry_backoff_seconds=0)
+    db.poison = {"2".rjust(16, "0")}
+    db.poison_error = "ORA-12838: synthetic-private-value"
+    writer.submit(update("1", "done"), OWNER)
+    writer.submit(update("2", "done"), OWNER)
+    writer.submit(update("3", "done", root=True), OWNER)
+    caplog.set_level("WARNING", logger=trace_store.logger.name)
+
+    writer.flush()
+
+    assert {row["span_id"].lstrip("0") for row in db.rows.values()} == {"1", "3"}
+    assert db.rollbacks == 1
+    failures = [r for r in caplog.records if r.getMessage() == "trace_span_write_failed"]
+    assert [(r.__dict__["error_codes"], r.__dict__["rows"]) for r in failures] == [
+        ("ORA-12838", 3),
+        ("ORA-12838", 1),
+    ]
+    assert all("synthetic-private-value" not in str(r.__dict__) for r in failures)
+    # 失敗した行だけを再送し、`retries` 回で諦めて数える（書けた行は再送しない）。
+    writer.flush()
+    assert writer.dropped("a" * 32) == 1
+    db.poison = set()
+    writer.flush()
+    assert {row["span_id"].lstrip("0") for row in db.rows.values()} == {"1", "3"}
+
+
+def test_one_by_one_writes_stop_at_connection_failure_and_requeue_the_rest() -> None:
+    """1 行ずつの書き直しの途中で接続が切れたら、残りの行は書かずにまとめて再送する。"""
+    db = FakeDb()
+    writer = TraceSpanWriter(db.connect, retries=3, retry_backoff_seconds=0)
+    db.poison = {"1".rjust(16, "0")}
+    db.poison_error = "ORA-12838: synthetic"
+    db.row_error = "ORA-03113: end-of-file on communication channel"
+    writer.submit(update("1", "done"), OWNER)
+    writer.submit(update("2", "done"), OWNER)
+
+    writer.flush()
+
+    merges = [call for call in db.calls if call[0] == "execute"]
+    assert [call[2]["span_id"].lstrip("0") for call in merges] == ["1"]
+    assert db.rows == {}
+    db.poison = set()
+    writer.flush()
+    assert {row["span_id"].lstrip("0") for row in db.rows.values()} == {"1", "2"}
+    assert writer.dropped("a" * 32) == 0
 
 
 def test_retention_zero_never_deletes_and_positive_days_delete_old_spans() -> None:

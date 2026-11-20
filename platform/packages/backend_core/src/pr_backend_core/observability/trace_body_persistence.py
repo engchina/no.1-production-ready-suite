@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from ..config.tracing import TracingSettings
+from ..oracle_errors import oracle_error_codes
 from .call_body_capture import call_body_capture
 from .trace_bodies import BodyFailure, BodyOwner, mark_body_incomplete, replace_body_owner
 from .trace_body_buffer import BodyCaptureSession, TraceBodyBuffer
@@ -96,10 +97,16 @@ class TraceBodyPersistence:
                     reason = submission.failure_code or "write_failed"
                     mark_body_incomplete(cursor, submission.reference, reason)
                     faults[submission.reference.body_id] = reason
-        except Exception:
+        except Exception as exc:
             with contextlib.suppress(Exception):
                 cursor.execute("ROLLBACK TO SAVEPOINT trace_body_registration")
-            logger.warning("trace_body_registration_failed")
+            logger.warning(
+                "trace_body_registration_failed",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "error_codes": ",".join(oracle_error_codes(exc)) or None,
+                },
+            )
             return {reference.body_id: "storage_unavailable" for reference in references}
         return faults
 

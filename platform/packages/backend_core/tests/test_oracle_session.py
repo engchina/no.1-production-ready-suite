@@ -2,6 +2,7 @@ import pytest
 
 from pr_backend_core.oracle_session import (
     SESSION_INIT_SQL,
+    SESSION_SERIAL_DML_SQL,
     SESSION_UTC_SQL,
     init_oracle_session,
     local_session_time_zone,
@@ -30,15 +31,17 @@ class _Connection:
         return _Cursor(self.executed)
 
 
-def test_init_oracle_session_disables_result_cache_and_pins_utc() -> None:
+def test_init_oracle_session_disables_result_cache_parallel_dml_and_pins_utc() -> None:
     connection = _Connection()
 
     init_oracle_session(connection, "any-tag")
 
-    # 1 回の ALTER SESSION で、result cache を使わず（#333）、
-    # session の時間帯を UTC に固定する（#3255）。
-    assert connection.executed == [SESSION_INIT_SQL]
+    # 1 回の ALTER SESSION SET で、result cache を使わず（#333）、
+    # session の時間帯を UTC に固定する（#3255）。並列 DML は 3 製品のすべての接続で使わない
+    # （ORA-12838 / ORA-12860。#5314・#5595）。
+    assert connection.executed == [SESSION_INIT_SQL, SESSION_SERIAL_DML_SQL]
     assert SESSION_INIT_SQL == "ALTER SESSION SET RESULT_CACHE_MODE = MANUAL TIME_ZONE = '+00:00'"
+    assert SESSION_SERIAL_DML_SQL == "ALTER SESSION DISABLE PARALLEL DML"
 
 
 def test_session_time_zone_is_an_offset_not_a_region_name() -> None:
