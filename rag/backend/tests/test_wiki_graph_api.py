@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
 from app.api.routes import wiki_graph as routes
 from app.clients import wiki_graph_store as module
@@ -335,3 +336,25 @@ async def test_routes_hide_invisible_knowledge_base_and_unknown_nodes(
         await routes.get_wiki_graph_overview(KB, offset=0, limit=25)
     assert caught.value.status_code == 404
     assert module.GRAPH_PUBLISHED_SQL in graph_scope(KB)[0]
+
+
+@pytest.mark.asyncio
+async def test_overview_prompts_unpaged_client_to_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Oracle(FakeOracle):
+        async def knowledge_base_is_visible(self, kb: str) -> bool:
+            return True
+
+    monkeypatch.setattr(routes, "OracleClient", Oracle)
+    app = FastAPI()
+    app.include_router(routes.router)
+    path = f"/{KB}/wiki/graph"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(path)
+        assert response.status_code == 409
+        assert "ブラウザーでページを再読み込み" in response.json()["detail"]
+        for params in ({"offset": 0}, {"limit": 25}, {"offset": 0, "limit": 25}):
+            response = await client.get(path, params=params)
+            assert response.status_code == 200
+            assert response.json()["data"]["documents"][0]["id"] == "doc-a"

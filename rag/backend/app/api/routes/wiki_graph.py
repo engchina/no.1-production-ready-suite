@@ -52,14 +52,20 @@ async def _read(
 )
 async def get_wiki_graph_overview(
     knowledge_base_id: str,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=25, ge=1, le=25),
+    offset: int | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=25),
 ) -> ApiResponse[WikiGraphOverview]:
     """案内のある文書の一覧をページ単位で返す。"""
+    # 配備前の画面はページ指定を送らず、ページングや単位数のない応答を扱えない。
+    if offset is None and limit is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Wiki の図が更新されました。ブラウザーでページを再読み込みしてください。",
+        )
     data = await _read(
         knowledge_base_id,
         "wiki_graph_overview",
-        lambda store: store.overview(knowledge_base_id, offset=offset, limit=limit),
+        lambda store: store.overview(knowledge_base_id, offset=offset or 0, limit=limit or 25),
     )
     return ApiResponse(data=WikiGraphOverview(**data))
 
