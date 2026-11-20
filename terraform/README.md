@@ -38,7 +38,7 @@
   - image を新しくするときは、`schema.yaml`・`variables.tf`・`terraform/scripts/verify_stack_contract.py`（`ORACLE_LINUX_IMAGES`）を同じ PR でそろえます。
   Resource Manager のページ先頭の `Region` で配備先を選びます（東京・大阪・Chicago、既定は大阪）。ADB・Compute・ネットワークの候補と配備はこの選択値を `region` として使用します。CLI では `-var=region=<配備先>` で変更できます。主 Compute と bastion の両方に同じリージョンの image を指定します。Chicago への配備では、両方とも `us-chicago-1` の image を選択してください。
   これら以外のリージョンで stack を作ると、`region` の validation で plan が失敗します。
-- 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢は東京・大阪のみです。Chicago の保存値には非対応の案内が残ります（#3904）。これは画面の案内の制限で、管理 API の失敗を確認したものではありません。
+- 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢も東京・大阪・Chicago です。
 
 ## フォームの入力順
 

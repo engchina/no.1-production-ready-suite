@@ -64,6 +64,7 @@ test.beforeEach(async ({ page }) => {
 
 interface AdbMockHandlers {
   info: () => AdbInfoData;
+  savedRegion?: () => string;
   onStart?: () => AdbInfoData;
   onStop?: () => AdbInfoData;
   onSaveSettings?: (payload: Record<string, unknown>) => AdbInfoData;
@@ -105,7 +106,7 @@ async function mockDatabaseAndAdb(page: Page, handlers: AdbMockHandlers) {
       return;
     }
     if (url.pathname === "/api/settings/database" && method === "GET") {
-      await route.fulfill(envelope(databaseSettings));
+      await route.fulfill(envelope({ ...databaseSettings, region: handlers.savedRegion?.() ?? databaseSettings.region }));
       return;
     }
 
@@ -177,29 +178,44 @@ test("ADB の情報を取得している間は経過時間付きの読み込み�
   await expect(page.getByRole("button", { name: "停止", exact: true })).toBeEnabled();
 });
 
-test("ADB 管理パネルで起動前に設定を保存できる", async ({ page }) => {
+test("ADB 管理パネルで Chicago を保存し再表示できる", async ({ page }, testInfo) => {
+  let region = databaseSettings.region;
   let saveCalls = 0;
   let savedPayload: Record<string, unknown> | null = null;
   await mockDatabaseAndAdb(page, {
-    info: () => adbInfo(),
+    savedRegion: () => region,
+    info: () => adbInfo({ region }),
     onSaveSettings: (payload) => {
       saveCalls += 1;
       savedPayload = payload;
-      return adbInfo();
+      region = String(payload.region);
+      return adbInfo({ region });
     },
   });
 
   await page.goto("/settings/database");
 
+  const select = page.locator("#adb-region");
+  await select.scrollIntoViewIfNeeded();
+  await select.click();
+  await expect(page.getByRole("option")).toHaveText(["ap-tokyo-1", "ap-osaka-1", "us-chicago-1"]);
+  await page.screenshot({ path: testInfo.outputPath("chicago-options.png") });
+  await page.getByRole("option", { name: "us-chicago-1" }).click();
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect.poll(() => saveCalls).toBe(1);
   expect(savedPayload).toEqual({
     adb_ocid: "ocid1.autonomousdatabase.oc1..rag",
-    region: "ap-osaka-1",
+    region: "us-chicago-1",
   });
   await expect(page.getByText("操作履歴")).toBeVisible();
   await expect(page.getByText("データベース情報を取得しました。")).toBeVisible();
+  await page.reload();
+  await expect(select).toContainText("us-chicago-1");
+  await expect(page.getByText(/はサポートしていません/)).toHaveCount(0);
+  await select.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("chicago-saved.png") });
 });
 
 test("起動後に lifecycle がポーリングで自動更新される(STARTING→AVAILABLE)", async ({
