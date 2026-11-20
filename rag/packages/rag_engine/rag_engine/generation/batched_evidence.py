@@ -260,6 +260,7 @@ def prepare_batched_evidence(
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
     failed_batches: list[dict[str, Any]] | None = None,
     summarize: Callable[[str], SummaryClaims] | None = None,
+    plan_batches: Callable[[Sequence[list[dict[str, Any]]]], str | None] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
     image_count: int = 0,
@@ -704,6 +705,18 @@ def prepare_batched_evidence(
             previous_size = sum(len(value["text"]) for value in selected)
             reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]] = {}
             pass_batches = list(partition(selected))
+            if (
+                pass_index == 1
+                and plan_batches is not None
+                and not ((left := remaining_seconds()) is not None and left < generation_reserve)
+            ):
+                remainder = plan_batches([with_firsts(batch) for batch in pass_batches])
+                if remainder == "":
+                    return [], "", {"fits": True, "batch_count": 0, "computed_batch_count": len(pass_batches)}
+                if remainder is not None:
+                    context = render([])
+                    # 原質問は保持し、原文による説明だけを追加で読む。
+                    question = json.dumps({"original_question": question, "remaining_request": remainder}, ensure_ascii=False)
             batch_offset = len(batches)
             partials: dict[tuple[Any, ...], dict[str, Any]] = {}
 

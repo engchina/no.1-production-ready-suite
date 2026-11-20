@@ -1827,10 +1827,12 @@ def synthesize_grounded_answer(
             search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled
         )
     from rag_engine.generation import grounded
+    from rag_engine.generation.batch_extrema import BatchExtrema, BatchPlan
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
     from rag_engine.generation.document_inputs import FIRST_CHUNK, with_first_chunks
     from rag_engine.generation.evidence_selection import select_evidence
+    from rag_engine.generation.full_answer_wire import render_full_answer
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
     from rag_engine.generation.partial_answers import SUMMARY_SYSTEM, SummaryClaims
     from rag_engine.models.llm import GroundedItem
@@ -1897,8 +1899,21 @@ def synthesize_grounded_answer(
             )
             return GroundedAnswer(response, context, images, mode)
 
+    def read_plan(system: str, prompt: str) -> BatchPlan | None:
+        try:
+            return call_with_model_purpose(
+                "evidence.read_batch", parse_text_response, system, prompt, generation_settings, BatchPlan, provider_id=provider
+            )
+        except Exception as exc:
+            if not _invalid_structured_output(exc):
+                raise
+            # 計画が解釈できなければ通常の読取で原質問全体を扱う。
+            return None
+
+    extrema = BatchExtrema(question, generation_settings, provider, read_plan)
+
     def render_generation(selected: Sequence[dict[str, Any]]) -> str:
-        return _grounded_prompt(
+        prompt = _grounded_prompt(
             question,
             selected,
             context,
@@ -1908,6 +1923,13 @@ def synthesize_grounded_answer(
             field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, selected),
             confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
         )
+
+        if extrema.result and extrema.result.remaining_request:
+            prompt += (
+                "\n数値の比較は検証済みです。ここでは次の追加要求だけを原文に基づいて回答してください。資料に理由が無ければその旨を示してください。\n"
+                + json.dumps(extrema.result.remaining_request, ensure_ascii=False)
+            )
+        return prompt
 
     guided = bool(runtime_knowledge is not None and runtime_knowledge.guide_step_contracts)
     generation_failure = ""
@@ -1948,6 +1970,7 @@ def synthesize_grounded_answer(
                 tag=grounded.tag_spans,
                 system=generation_system,
                 schema_for=selected_generation_schema,
+                plan_batches=extrema.prepare if not generation_images and not guided else None,
                 read=lambda system, user, schema: grounded.call_with_model_purpose(
                     "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
                 ),
@@ -1969,24 +1992,27 @@ def synthesize_grounded_answer(
                 evidence_size_lower_bound=grounded.evidence_text_lower_bound,
             )
             selecting_evidence = False
-            current = grounded.run_round(
-                question,
-                spans,
-                generation_settings,
-                prompt=prompt,
-                partial_answer_synthesis=bool(input_diagnostic.get("partial_answer_synthesis")),
-                provider_id=provider,
-                parse_text=parse_text_response,
-                parse_images=parse_multimodal_response,
-                guide_steps=runtime_knowledge.guide_steps if runtime_knowledge else (),
-                guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
-                assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
-                image_paths=[] if input_diagnostic.get("partial_answer_synthesis") else generation_images,
-                invalid_output=_invalid_structured_output,
-                confirmed_premises=settings.confirmed_premises,
-                confirmed_premise_sources=settings.confirmed_premise_sources,
-                guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),
-            )
+            if extrema.result is not None and not extrema.result.remaining_request:
+                current = extrema.result.answer
+            else:
+                current = grounded.run_round(
+                    question,
+                    spans,
+                    generation_settings,
+                    prompt=prompt,
+                    partial_answer_synthesis=bool(input_diagnostic.get("partial_answer_synthesis")),
+                    provider_id=provider,
+                    parse_text=parse_text_response,
+                    parse_images=parse_multimodal_response,
+                    guide_steps=runtime_knowledge.guide_steps if runtime_knowledge else (),
+                    guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
+                    assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
+                    image_paths=[] if input_diagnostic.get("partial_answer_synthesis") else generation_images,
+                    invalid_output=_invalid_structured_output,
+                    confirmed_premises=settings.confirmed_premises,
+                    confirmed_premise_sources=settings.confirmed_premise_sources,
+                    guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),
+                )
             if batch_calls := (input_diagnostic.get("batch_count", 0) + input_diagnostic.get("summary_calls", 0)):
                 current.timing["batch_reading_calls"] = batch_calls
                 current.timing["generation_calls"] = current.timing.get("generation_calls", 0) + batch_calls
@@ -2028,18 +2054,46 @@ def synthesize_grounded_answer(
         else:
             step.result(f"説明 {current.verified} 件")
             step.output(current.trace)
+    extra_answer = None
+    extra_round = None
+    extra_unconfirmed = False
+    if extrema.result is not None:
+        computed = extrema.result
+        if computed.remaining_request:
+            extra_round = current
+            if current.draft._full_answer is not None and current.verified and not generation_failure:
+                extra_answer = render_full_answer(current.draft, current.checked)
+            extra_unconfirmed = extra_answer is None or current.draft._response_kind != "answered"
+            if extra_unconfirmed and computed.answer.draft._response_kind == "answered":
+                computed.answer.draft._response_kind = "conditional"
+            if extra_answer and computed.answer.draft._response_kind == "insufficient_evidence":
+                computed.answer.draft._response_kind = "conditional"
+        current = computed.answer
+        current.timing["generation_calls"] = extrema.calls + (extra_round.timing.get("generation_calls", 0) if extra_round else 0)
+        spans = [*spans, *computed.spans]
+        input_diagnostic["extrema_groups"] = computed.groups
+    if extrema.calls:
+        input_diagnostic["batch_plan_calls"] = extrema.calls
+        if extrema.result is None:
+            current.timing["generation_calls"] = current.timing.get("generation_calls", 0) + extrema.calls
     rounds = [
         {
             **current.trace(),
             **({"error": generation_failure} if generation_failure else {}),
-            **({"timing": {"generation_calls": input_diagnostic.get("batch_count", 0)}} if generation_failure else {}),
+            **({"timing": {"generation_calls": extrema.calls + input_diagnostic.get("batch_count", 0)}} if generation_failure else {}),
         }
     ]
+    if extra_round:
+        rounds.append(extra_round.trace())
     guide_notices = runtime_knowledge.guide_notices if runtime_knowledge is not None else ()
     guide_notes = (runtime_knowledge.guide_title, guide_notices) if runtime_knowledge is not None and guide_notices else None
     guide_notes_first = bool(guide_notes and runtime_knowledge is not None and runtime_knowledge.guide_condition_notices)
     published = [entry for entry in current.checked if entry.span and entry.published]
+    if extra_answer and extra_round:
+        published.extend(entry for entry in extra_round.checked if entry.span and entry.published)
     gaps = [entry.item.text for entry in current.checked if entry.item.kind == "gap"]
+    if extra_unconfirmed and not extra_answer:
+        gaps.append(current_pack().text("answer_labels", "extrema_explanation_missing"))
     from rag_engine.generation.section_expansion import answer_unread_view
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
@@ -2064,7 +2118,9 @@ def synthesize_grounded_answer(
         settled, items=current.draft.confirmation_items(), external_data_required=current.draft.external_data_required
     )
     shown = [entry for entry in current.checked if entry.span]
-    if generation_failure:
+    if extra_answer and extra_round:
+        shown.extend(entry for entry in extra_round.checked if entry.span and entry.published)
+    if generation_failure and extrema.result is None:
         # 生成の出力が無い。質問に関係する資料の記載だけを示す。
         # 選択の前に止まったときの入力には、根拠が原文を含む先頭の chunk も残っている。同じ原文を重ねて示さない（#5240）。
         # 抜粋は検索で当たった子（根拠の木の起点）の範囲を中心にする（#5322）。
@@ -2085,9 +2141,12 @@ def synthesize_grounded_answer(
             summary = grounded.answer_labels().insufficient_evidence_summary
         rendered_items = current.checked
     if current.draft._full_answer is not None:
-        from rag_engine.generation.full_answer_wire import render_full_answer
-
         rendered = render_full_answer(current.draft, current.checked)
+        if extra_answer:
+            rendered.text += "\n\n" + extra_answer.text
+            rendered.citation_lines.extend(extra_answer.citation_lines)
+        elif extra_unconfirmed:
+            rendered.text += "\n\n" + current_pack().text("answer_labels", "extrema_explanation_missing")
         notices = grounded.render_answer("", (), (), unverified=unread, guide_notes=guide_notes, guide_notes_first=guide_notes_first)
         if notices.text:
             rendered.text += "\n\n" + notices.text
@@ -2116,13 +2175,13 @@ def synthesize_grounded_answer(
         str(full_answer["body"]), str(current.draft._declared_response_kind), full_answer["catalog"]
     )
     unsettled = [e for e in published if e.item.applies != "matched"]
-    if confidence == "high" and (gaps or unsettled or unread or unsupported_parts):
+    if confidence == "high" and (gaps or unsettled or unread or unsupported_parts or extra_unconfirmed):
         confidence = "medium"
     from rag_engine.generation.provided_scope import capture_provided_scope
 
     envelope_entries = [entry for entry in shown if entry.span]
     trace: dict[str, Any] = {
-        "provided_evidence_scope": capture_provided_scope(current.citation_trace),
+        "provided_evidence_scope": capture_provided_scope((extra_round or current).citation_trace),
         "pipeline": "grounded",
         "task_contract": task_contract(question),
         "selected_evidence": list(spans),
