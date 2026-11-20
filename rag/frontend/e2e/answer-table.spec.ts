@@ -164,7 +164,7 @@ async function ask(
 }
 
 test.describe("回答の本文の表（issue 4734・4812・4822・5489）", { tag: "@responsive" }, () => {
-  test("定型の節が無い完成本文の根拠を開ける", async ({ page }, testInfo) => {
+  test("完成本文のMarkdownを描き、定型の節が無くても根拠を開ける", async ({ page }, testInfo) => {
     await page.route("**/api/feedback/current?**", route => route.fulfill({ json: envelope(null) }));
     await page.route("**/api/documents/doc-a/content**", route => route.fulfill({ contentType: "text/plain; charset=utf-8", body: CITATION_TEXT }));
     await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill({ json: envelope({
@@ -172,8 +172,13 @@ test.describe("回答の本文の表（issue 4734・4812・4822・5489）", { ta
       blocks: [{ id: "anchor", text: CITATION_TEXT, offset: 0, highlights: [[0, CITATION_TEXT.length]], cited: true }],
       previous_cursor: null, next_cursor: null, outline: [],
     }) }));
-    const answer = await ask(page, "保存年数は5年です。\n根拠：synthetic-a.txt p.3", "synthetic-a.txt");
+    const answer = await ask(page, "**保存年数**は`5年`です。\n根拠：synthetic-a.txt p.3", "synthetic-a.txt");
     await expect(answer).toContainText("保存年数は5年です。");
+    await expect(answer.locator("strong")).toHaveText("保存年数");
+    await expect(answer.locator("code")).toHaveText("5年");
+    await expect(answer).not.toContainText("**保存年数**");
+    await expect(answer).not.toContainText("`5年`");
+    await page.screenshot({ path: testInfo.outputPath("completed-answer-markdown.png") });
     const citation = answer.getByRole("button", { name: "[1] 根拠：synthetic-a.txt p.3 の原文を開く", exact: true });
     await expect(citation).toBeVisible();
     await citation.click();

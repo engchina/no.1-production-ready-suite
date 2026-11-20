@@ -50,7 +50,7 @@ const SOURCE_MARKS = /^(?:\[\d+\])+$/;
 
 /**
  * 回答本文（#651）。回答エンジンの書式（節の見出し・説明・「根拠：」の行）に合う本文は、節・説明・根拠に分けて出す。
- * 生成中と、書式に合わない本文（根拠不足の案内など）はそのままの文字列で出す。
+ * 生成中は文字列の表示を保ち、完了した本文は共有の Markdown 部品で描く。
  * 根拠の行は、当たる引用（`citations`）があれば押せるようにし、その引用の原文のプレビューを開く（#657）。
  * 当たる引用は、回答エンジンが付けた出典行の番号で決める（無ければファイル名と頁。#1330）。位置が確定できない行は
  * 候補の引用を開き、位置は未確定と示して原文を強調しない（#2710）。
@@ -106,23 +106,17 @@ export function AnswerText({
   const fixedTexts = new Set(Object.values(format ?? {}));
   const fixedLang = (value: string) => (fixedTexts.has(value) ? null : undefined);
   if (!blocks) {
-    // 表があれば結果の表で出す（#4734）。AnswerSections の content に入れ、回答の言語の lang と読み上げをそろえる。
-    // 生成の途中は、Agent と同じく表頭と区切りの行がそろった時点から表にする（それまでは文字のまま）。
-    if (hasTable(text)) {
-      return (
-        <AnswerSections
-          live={live}
-          blocks={[{ kind: "content", key: "body", content: <AnswerTableBody text={text} />, passageText: text }]}
-        >
-          {cursor}
-        </AnswerSections>
-      );
+    // 生成中の未完の記法は文字列のまま。表の形がそろった場合と完成本文は共有の描画に渡す。
+    if (streaming && !hasTable(text)) {
+      return <AnswerPlainText text={text} live={live}>{cursor}</AnswerPlainText>;
     }
     return (
-      // 節に分けない本文も共通の部品で出し、回答の言語の字形で描く（#3335）。
-      <AnswerPlainText text={text} live={live}>
+      <AnswerSections
+        live={live}
+        blocks={[{ kind: "content", key: "body", content: <AnswerMarkdownBody text={text} />, passageText: text }]}
+      >
         {cursor}
-      </AnswerPlainText>
+      </AnswerSections>
     );
   }
   // 節・段落・根拠の行の見た目は 3 製品で共通の AnswerSections（#2328）。
@@ -133,9 +127,7 @@ export function AnswerText({
         block.kind === "paragraph" && block.citations?.length
           ? sourcedParagraph(block.text, block.citations, index)
           : block.kind === "paragraph"
-          ? hasTable(block.text)
-            ? { kind: "content", key: String(index), content: <AnswerTableBody text={block.text} />, passageText: block.text, lang: fixedLang(block.text) }
-            : { kind: "paragraph", key: String(index), content: block.text, lang: fixedLang(block.text) }
+          ? { kind: "content", key: String(index), content: <AnswerMarkdownBody text={block.text} lang={fixedLang(block.text)} />, passageText: block.text, lang: fixedLang(block.text) }
           : {
               kind: "section",
               key: String(index),
@@ -190,7 +182,7 @@ export function AnswerText({
     return {
       kind: "content",
       key: String(index),
-      content: <AnswerTableBody text={text} renderTableCell={renderCell} />,
+      content: <AnswerMarkdownBody text={text} renderTableCell={renderCell} lang={fixedLang(text)} />,
       passageText: text,
       lang: fixedLang(text),
       citations: sourceCitations.flatMap((refs, position) => {
@@ -265,8 +257,8 @@ export function AnswerText({
       content: hasDetails ? <>
         {textOrTable(entry.text)}
         {entry.details?.map((detail, position) => hasTable(detail)
-          ? <AnswerTableBody key={position} text={detail} className="text-fg-muted" />
-          : <span key={position} className="block whitespace-pre-line text-fg-muted">{detail}</span>)}
+          ? <AnswerMarkdownBody key={position} text={detail} className="text-fg-muted" />
+          : <span key={position} className="block whitespace-pre-line text-fg-muted"><MarkdownInlineText text={detail} /></span>)}
         {entry.reasoning ? <ReasoningText text={entry.reasoning} /> : null}
       </> : textOrTable(entry.text),
       // 文字列の content と同じ言語の判定を、表を描く要素になっても続ける（#3335）。
@@ -296,17 +288,19 @@ function answerTableLabels(): AnswerBodyLabels {
 }
 
 /**
- * 表を含む本文（表は共通の結果の表、表以外は改行を保った文。#4734）。回答の表はセルの全文を折り返し、省略しない
+ * 完成した本文（表は共通の結果の表、それ以外は Markdown。#4734・#5631）。回答の表はセルの全文を折り返し、省略しない
  * （共通の表の回答のモード。#4812）。
  */
-function AnswerTableBody({
+function AnswerMarkdownBody({
   text,
   className,
   renderTableCell,
+  lang,
 }: {
   text: string;
   className?: string;
   renderTableCell?: (cell: AnswerBodyTableCell) => ReactNode | undefined;
+  lang?: string | null;
 }) {
   return (
     <AnswerBody
@@ -316,14 +310,14 @@ function AnswerTableBody({
       labels={answerTableLabels()}
       className={cn("whitespace-normal", className)}
       testId="answer-table-body"
-      renderText={(segment) => <p className="whitespace-pre-wrap">{segment.trim()}</p>}
+      renderText={(segment) => <MarkdownText text={segment} headingLevel={6} lang={lang} />}
     />
   );
 }
 
-/** 表があれば表を描く要素、無ければ文字列のまま（表の無い本文の描き方を変えない）。 */
+/** 項目の中は行内の Markdown を描き、表だけはブロックとして描く。 */
 function textOrTable(text: string): ReactNode {
-  return hasTable(text) ? <AnswerTableBody text={text} /> : text;
+  return hasTable(text) ? <AnswerMarkdownBody text={text} /> : <MarkdownInlineText text={text} />;
 }
 
 /**
