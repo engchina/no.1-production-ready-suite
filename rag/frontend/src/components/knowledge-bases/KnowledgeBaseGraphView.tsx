@@ -1,13 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { Network } from "lucide-react";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { EmptyState } from "@/components/StateViews";
 import { Button, Disclosure, Skeleton, TimedLoadingState } from "@production-ready/ui";
 import { KnowledgeBaseGraphCanvas } from "./KnowledgeBaseGraphCanvas";
-import { useWikiGraphOverview } from "@/lib/queries";
+import { queryKeys, useWikiGraphOverview } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 
 /**
@@ -19,6 +21,25 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
   const [offset, setOffset] = useState(0);
   const query = useWikiGraphOverview(open ? knowledgeBaseId : null, offset);
   const isEmpty = query.data && (query.data.status === "empty" || query.data.documents.length === 0);
+
+  const count = useQuery({
+    queryKey: [...queryKeys.knowledgeBaseWikiGraph(knowledgeBaseId), "document-count"],
+    queryFn: () => api.getWikiGraphDocumentCount(knowledgeBaseId),
+    enabled: open && Boolean(query.data?.has_more),
+    retry: false,
+  });
+  const end = offset + (query.data?.documents.length ?? 0);
+  const total = query.data?.has_more ? count.data?.total : end;
+  const pagination = (
+    <div className="ms-auto flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto" data-testid="wiki-graph-pagination">
+      {query.data?.documents.length ? <span className="whitespace-nowrap text-sm text-fg-muted" aria-live="polite">
+        {total === undefined || total < end ? t("wiki.graph.rangeWithoutTotal", { start: offset + 1, end })
+          : t("pager.range", { start: offset + 1, end, total })}
+      </span> : null}
+      <Button variant="secondary" disabled={offset === 0} onClick={() => setOffset(offset - 25)}>{t("wiki.graph.previousDocuments")}</Button>
+      <Button variant="secondary" disabled={!query.data?.has_more} onClick={() => setOffset(offset + 25)}>{t("wiki.graph.nextDocuments")}</Button>
+    </div>
+  );
 
   return (
     // カードの中の開閉の区画なので sunken の card にし、見出しは開閉で変えない固定の名詞、補足は description（#397 / #5480）。
@@ -33,12 +54,6 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
     >
       {open ? (
         <div id="wiki-graph" className="space-y-2">
-          {offset > 0 || query.data?.has_more ? (
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" disabled={offset === 0} onClick={() => setOffset(offset - 25)}>{t("wiki.graph.previousDocuments")}</Button>
-              <Button variant="secondary" disabled={!query.data?.has_more} onClick={() => setOffset(offset + 25)}>{t("wiki.graph.nextDocuments")}</Button>
-            </div>
-          ) : null}
           {query.isPending ? (
             <TimedLoadingState label={t("wiki.graph.loading")} operationKey="wiki-graph-load" testId="wiki-graph-loading">
               <Skeleton className="h-[25.71rem] w-full rounded-md" />
@@ -47,9 +62,9 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
             // 読み取れなかったことを「まだありません」と区別する（#4217）。
             <DataLoadFailure error={query.error} fallback={t("wiki.graph.error")} onRetry={() => void query.refetch()} />
           ) : isEmpty ? (
-            <EmptyState title={t("wiki.graph.empty")} />
+            <>{offset > 0 ? pagination : null}<EmptyState title={t("wiki.graph.empty")} /></>
           ) : query.data ? (
-            <KnowledgeBaseGraphCanvas key={`${knowledgeBaseId}:${offset}`} overview={query.data} knowledgeBaseId={knowledgeBaseId} />
+            <KnowledgeBaseGraphCanvas key={`${knowledgeBaseId}:${offset}`} pagination={pagination} overview={query.data} knowledgeBaseId={knowledgeBaseId} />
           ) : null}
         </div>
       ) : null}

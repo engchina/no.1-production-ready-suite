@@ -54,13 +54,25 @@ class WikiGraphStore:
 
     # ---- 総覧 ----
 
+    @staticmethod
+    def _document_scope(kb_id: str) -> tuple[str, dict[str, object]]:
+        where, binds = graph_scope(kb_id)
+        return (
+            f"""FROM rag_documents doc WHERE EXISTS (SELECT 1 {WIKI_PAGE_FROM}
+            WHERE p.document_id=doc.document_id AND {where})""",
+            binds,
+        )
+
+    async def document_count(self, kb_id: str) -> dict[str, Any]:
+        scope, binds = self._document_scope(kb_id)
+        row = await self.oracle._fetch_one(f"SELECT COUNT(*) AS total {scope}", binds)
+        return {"total": _int_value(row["total"]) if row else 0}
+
     async def overview(self, kb_id: str, *, offset: int = 0, limit: int = 25) -> dict[str, Any]:
         """公開済みの案内がある文書を一画面分だけ読む。"""
-        where, binds = graph_scope(kb_id)
+        scope, binds = self._document_scope(kb_id)
         rows = await self.oracle._fetch_all(
-            f"""SELECT doc.document_id,doc.file_name FROM rag_documents doc
-            WHERE EXISTS (SELECT 1 {WIKI_PAGE_FROM}
-                WHERE p.document_id=doc.document_id AND {where})
+            f"""SELECT doc.document_id,doc.file_name {scope}
             ORDER BY doc.file_name,doc.document_id
             OFFSET :graph_offset ROWS FETCH NEXT :graph_limit ROWS ONLY""",
             {**binds, "graph_offset": offset, "graph_limit": limit + 1},

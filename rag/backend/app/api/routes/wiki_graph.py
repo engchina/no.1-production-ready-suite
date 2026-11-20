@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.db_read_failures import read_or_raise
 from app.schemas.common import ApiResponse
 from app.schemas.wiki_graph import (
+    WikiGraphDocumentCount,
     WikiGraphLocation,
     WikiGraphOverview,
     WikiGraphRelations,
@@ -61,6 +62,21 @@ async def get_wiki_graph_overview(
         lambda store: store.overview(knowledge_base_id, offset=offset, limit=limit),
     )
     return ApiResponse(data=WikiGraphOverview(**data))
+
+
+@router.get(
+    "/{knowledge_base_id}/wiki/graph/document-count",
+    response_model=ApiResponse[WikiGraphDocumentCount],
+)
+async def get_wiki_graph_document_count(
+    knowledge_base_id: str,
+) -> ApiResponse[WikiGraphDocumentCount]:
+    data = await _read(
+        knowledge_base_id,
+        "wiki_graph_document_count",
+        lambda store: store.document_count(knowledge_base_id),
+    )
+    return ApiResponse(data=WikiGraphDocumentCount(**data))
 
 
 @router.get(

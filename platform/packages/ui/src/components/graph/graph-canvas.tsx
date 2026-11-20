@@ -332,11 +332,12 @@ export function GraphLegend({
   );
 }
 
-export function GraphSelectionDetails({ title, closeLabel, onClose, fields, children }: {
+export function GraphSelectionDetails({ title, closeLabel, onClose, fields, compactLabels = false, children }: {
   title: string;
   closeLabel: string;
   onClose: () => void;
   fields: { label: string; value: ReactNode; technical?: boolean }[];
+  compactLabels?: boolean;
   children?: ReactNode;
 }) {
   const titleId = useId();
@@ -346,8 +347,8 @@ export function GraphSelectionDetails({ title, closeLabel, onClose, fields, chil
         <h3 id={titleId} className="text-sm font-semibold text-fg">{title}</h3>
         <Button size="sm" variant="ghost" type="button" onClick={onClose}>{closeLabel}</Button>
       </div>
-      <dl className="grid gap-2">
-        {fields.map((field, index) => <div key={index} className="grid gap-1 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)] sm:gap-3">
+      <dl className={cn("grid gap-2", compactLabels && "sm:grid-cols-[max-content_minmax(0,1fr)] sm:gap-x-3")}>
+        {fields.map((field, index) => <div key={index} className={cn("grid gap-1 sm:gap-3", compactLabels ? "sm:col-span-2 sm:grid-cols-subgrid" : "sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)]")}>
           <dt className="text-sm text-fg-muted">{field.label}</dt>
           <dd className={cn("min-w-0 break-words text-sm text-fg", field.technical && "font-mono")}>{field.value}</dd>
         </div>)}

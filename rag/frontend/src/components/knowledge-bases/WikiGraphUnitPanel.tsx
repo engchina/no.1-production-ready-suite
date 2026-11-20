@@ -58,7 +58,7 @@ export function WikiGraphUnitPanel({ kbId, unitId, onClose, onLocate, onRelation
     { key: "locate", header: <span className="sr-only">{t("wiki.graph.locate")}</span>, render: (item) => <Button icon={LocateFixed} size="sm" variant="ghost" aria-label={t("wiki.graph.locate")} tooltip={t("wiki.graph.locate")} onClick={() => onLocate(item.unit)} /> },
   ];
   const detail = query.data;
-  return <GraphSelectionDetails
+  return <GraphSelectionDetails compactLabels
     title={t("wiki.graph.unitTitle")}
     closeLabel={t("wiki.graph.clearSelection")}
     onClose={onClose}

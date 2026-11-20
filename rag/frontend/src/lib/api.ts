@@ -3872,6 +3872,8 @@ export const api = {
   retryKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry?offset=${offset}&limit=${limit}`, { method: "POST" }),
   getWikiGraphOverview: (id: string, offset = 0) =>
     request<WikiGraphOverview>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph?offset=${offset}&limit=25`),
+  getWikiGraphDocumentCount: (id: string) =>
+    request<{ total: number }>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph/document-count`),
   getWikiGraphTree: (id: string, documentId: string, parent: string | null, offset: number, limit: number) =>
     request<WikiGraphTreePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph/documents/${encodeURIComponent(documentId)}/tree?${new URLSearchParams({ offset: String(offset), limit: String(limit), ...(parent ? { parent } : {}) })}`),
   locateWikiGraphNode: (id: string, documentId: string, node: string) =>
