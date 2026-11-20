@@ -30,6 +30,14 @@ from rag_engine.generation.batch_output_repair import (
     repair_feedback_upper_bound,
 )
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
+from rag_engine.generation.dependency_review import (
+    PLAN_PROMPT,
+    REVIEW_PROMPT,
+    SELECTION_PROMPT,
+    ReviewCatalog,
+    covered,
+    known_evidence,
+)
 from rag_engine.generation.document_inputs import (
     FIRST_CHUNK,
     document_groups,
@@ -47,7 +55,12 @@ from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, mo
 from rag_engine.generation.partial_answers import SUMMARY_SYSTEM, SummaryClaim, SummaryClaims, combine_partial_answers
 from rag_engine.knowledge.prompt_files import neutralize_boundary_markers
 from rag_engine.resources.call_context import call_context, update_call_context
-from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS, remaining_seconds
+from rag_engine.resources.deadline import (
+    ANSWER_FINALIZE_RESERVE_SECONDS,
+    DEFAULT_GENERATION_ROUND_SECONDS,
+    check_cancelled,
+    remaining_seconds,
+)
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.rerank_scores import rerank_first_key
 
@@ -70,7 +83,7 @@ class BatchFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     start_line: str = Field(min_length=1, description="回答を支える本文の最初の行の、行頭の番号（例: B1-3）。")
     end_line: str = Field(min_length=1, description="同じ入力の最後の行の、行頭の番号（例: B1-5）。単一の行は最初の行と同じ番号。")
-    answer: str = Field(min_length=1, description="この範囲が支える局所的な回答。条件、例外、否定、数値、比較対象の違いを保つ。")
+    answer: str = Field(default="", description="この範囲が支える局所的な回答。条件、例外、否定、数値、比較対象の違いを保つ。")
 
 
 class BatchReading(BaseModel):
@@ -137,14 +150,15 @@ def _labeled_text(label: str, value: Mapping[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _reading_model(values: Sequence[Mapping[str, Any]]) -> type[BatchReading]:
+def _reading_model(values: Sequence[Mapping[str, Any]], *, select_only: bool = False) -> type[BatchReading]:
     catalog = reading_unit_catalog(values)
     fields: dict[str, Any] = {"answer": (str, Field(min_length=1, description=READING_ANSWER_DESCRIPTION))}
-    finding = create_model("UnitBatchFinding", __base__=catalog.selection_model(), **fields)
+    finding = create_model("UnitBatchFinding", __base__=catalog.selection_model(), **({} if select_only else fields))
     finding_info = Field(description="原文で裏付けた回答候補。該当がなければ空。") if catalog.unit_labels else Field(max_length=0)
     model_fields: dict[str, Any] = {"findings": (GenericAlias(list, finding), finding_info)}
     model = create_model("BatchReading", __base__=BatchReading, **model_fields)
     cast(Any, model)._uses_unit_ids = True
+    cast(Any, model)._select_only = select_only
     return model
 
 
@@ -157,7 +171,9 @@ def _canonical_reading(reading: BatchReading, values: Sequence[Mapping[str, Any]
         for binding in catalog.bind(finding.unit_ids):
             label = binding.snapshot.span()["label"]
             findings.append(
-                BatchFinding(start_line=f"{label}-{binding.first + 1}", end_line=f"{label}-{binding.last + 1}", answer=finding.answer)
+                BatchFinding(
+                    start_line=f"{label}-{binding.first + 1}", end_line=f"{label}-{binding.last + 1}", answer=getattr(finding, "answer", "")
+                )
             )
     return BatchReading(findings=findings)
 
@@ -192,6 +208,7 @@ class _BatchOutcome:
     reading: BatchReading | None = None
     mismatch: BatchRangeInvalid | None = None
     error: Exception | None = None
+    review_sources: frozenset[tuple[str, ...]] | None = None
 
 
 def _ordered_parallel[T, R](function: Callable[[T], R], values: Iterable[T], *, workers: int) -> Generator[R]:
@@ -247,6 +264,7 @@ def prepare_batched_evidence(
     plan_batches: Callable[[Sequence[list[dict[str, Any]]]], str | None] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
+    select_dependencies: bool = False,
     image_count: int = 0,
     evidence_size_lower_bound: Callable[[Sequence[dict[str, Any]], int], int] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
@@ -273,9 +291,20 @@ def prepare_batched_evidence(
 
     ``evidence_size_lower_bound`` は ``evidence_text`` の字数の下限（#4993）。下限が文字予算を超える入力は、描画・測定せずに
     入らないと決める（大量の原文を全体の描画と引用の記録より前に分割へ回す）。入ることは従来どおり実際の描画で確かめる。
-    同じ pass の組は互いの結果を使わないので、設定の ``batch_read_workers`` 本まで並行に読み、結果は組の順に統合する（#4997）。
+    同じ pass の独立した組は設定の ``batch_read_workers`` 本まで並行に読み、結果は組の順に統合する（#4997）。
+    ``select_dependencies`` は局所回答を要求せず、回答の前提となる原文も選ぶ（#4044）。初回の最後の組で既選択原文と
+    未選択資料の目録を合わせて補読先を選び、計画を入れられなければ未選択範囲全体へ戻す。既選択原文を保持して最大1巡
+    補読する。補読は新たに選んだ原文を次の組へ渡すため直列。短い入力・分批計算の経路には補読を足さない。
     """
-    reading_system = BATCH_READING_PROMPT
+    # 根拠選択の入口では局所回答を要求しない。完全な chunk の集約が必要な再縮約だけ既存の局所回答を使う。
+    reading_system = SELECTION_PROMPT if select_dependencies else BATCH_READING_PROMPT
+    select_only = select_dependencies
+    original_inputs = list(spans)
+    review_carry: list[dict[str, Any]] = []
+    reviewing = False
+    review_finished = False
+    review_sources: frozenset[tuple[str, ...]] | None = None
+    review_detail: dict[str, Any] = {}
     protected = frozenset(protected_sources)
     document_order = document_priority(spans, source_scores)
     reading_order = document_priority(spans, source_scores, first=protected) if protected else document_order
@@ -364,6 +393,7 @@ def prepare_batched_evidence(
         return json.dumps(
             {
                 "question": question,
+                **({"known_evidence": known_evidence(review_carry)} if reviewing else {}),
                 "generation_context": context,
                 # モデルには短い呼出し内の番号と、行に番号を付けた本文を渡す。
                 "evidence": [
@@ -382,15 +412,20 @@ def prepare_batched_evidence(
     def fits(values: Sequence[dict[str, Any]]) -> bool:
         # 修復の指摘の上限まで含めて測る。どの組も、読取の不合格を指摘する再試行が入力の予算に必ず入る（#4229）。
         if over_budget(values) is not None or (
-            len(evidence_text(values)) + sum(len(value.get(CONTINUED_TABLE_HEADER_KEY, "")) for value in values)
+            len(evidence_text([*(review_carry if reviewing else ()), *values]))
+            + sum(len(value.get(CONTINUED_TABLE_HEADER_KEY, "")) for value in values)
             > settings.evidence_budget_chars
         ):
             return False
         largest = batch_repair_prompt(read_prompt(values), repair_feedback_upper_bound(reading_unit_counts(values)))
         return bool(
-            model_input_measurement(settings, reading_system, largest, _reading_model(values).model_json_schema(), provider_id=provider_id)[
-                "fits"
-            ]
+            model_input_measurement(
+                settings,
+                reading_system,
+                largest,
+                _reading_model(values, select_only=select_only).model_json_schema(),
+                provider_id=provider_id,
+            )["fits"]
         )
 
     def batch_fits(values: Sequence[dict[str, Any]]) -> bool:
@@ -412,7 +447,16 @@ def prepare_batched_evidence(
     unverified_failure: tuple[Exception, dict[str, Any]] | None = None
 
     def fail(reason: str, **detail: Any) -> None:
-        raise GenerationInputBudgetExceeded({"reason": reason, "fits": False, "batch_count": len(batches), "batches": batches, **detail})
+        raise GenerationInputBudgetExceeded(
+            {
+                "reason": reason,
+                "fits": False,
+                "batch_count": len(batches),
+                "batches": batches,
+                **({"dependency_review": review_detail} if review_detail else {}),
+                **detail,
+            }
+        )
 
     def stop_reduction(reason: str) -> None:
         if unverified_failure is None:
@@ -610,9 +654,9 @@ def prepare_batched_evidence(
             low, high = 0, len(candidates) - 1
             while low < high:
                 middle = (low + high + 1) // 2
-                trial = attempt(middle)
-                if trial[2]["fits"]:
-                    final, final_prompt_text, final_measured = trial
+                attempted = attempt(middle)
+                if attempted[2]["fits"]:
+                    final, final_prompt_text, final_measured = attempted
                     count = low = middle
                 else:
                     high = middle - 1
@@ -681,14 +725,33 @@ def prepare_batched_evidence(
         # 文字予算だけを緩めず、system・schema・出力予約込みで各読取と最終生成を検査する。
         remaining_passes = max(1, sum(len(value["text"]) for value in selected).bit_length())
         pass_index = 0
-        while not measurement["fits"]:
+        while not measurement["fits"] or reviewing:
             pass_index += 1
             if not selected or remaining_passes <= 0:
                 stop_reduction("batch_reduction_did_not_fit")
             remaining_passes -= 1
+            if pass_index > 1 and not reviewing:
+                # 再縮約で選択が変われば、初回の原文を前提にした補読計画は使い直さない。
+                review_sources = None
             previous_size = sum(len(value["text"]) for value in selected)
-            reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]] = {}
-            pass_batches = list(partition(selected))
+            select_only = select_dependencies and not (versioned and summarize and pass_index > 1 and not reviewing)
+            reading_system = (SELECTION_PROMPT if select_only else BATCH_READING_PROMPT) + (REVIEW_PROMPT if reviewing else "")
+            reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]] = (
+                {(*chunk_key(value), value.get("start", 0), value.get("end", len(value["text"]))): value for value in review_carry}
+                if reviewing
+                else {}
+            )
+            try:
+                pass_batches = list(partition(selected))
+            except GenerationInputBudgetExceeded:
+                if not reviewing:
+                    raise
+                # 補読は残りの容量内だけ。既選択の原文を捨てて場所を作らない。
+                selected = order_document_spans(tag(review_carry), priority=document_order)
+                prompt, measurement = final_measure(selected)
+                reviewing, review_finished = False, True
+                review_detail.update(status="budget_exhausted")
+                break
             if (
                 pass_index == 1
                 and plan_batches is not None
@@ -698,6 +761,9 @@ def prepare_batched_evidence(
                 if remainder == "":
                     return [], "", {"fits": True, "batch_count": 0, "computed_batch_count": len(pass_batches)}
                 if remainder is not None:
+                    # 計算後の説明は既存の局所回答・集約の契約を保つ。
+                    select_dependencies, select_only = False, False
+                    reading_system = BATCH_READING_PROMPT
                     context = render([])
                     # 原質問は保持し、原文による説明だけを追加で読む。
                     question = json.dumps({"original_question": question, "remaining_request": remainder}, ensure_ascii=False)
@@ -707,27 +773,44 @@ def prepare_batched_evidence(
             partials: dict[tuple[Any, ...], dict[str, Any]] = {}
 
             def admitted(
-                pass_batches: Sequence[list[dict[str, Any]]] = pass_batches, pass_index: int = pass_index
+                pass_batches: Sequence[list[dict[str, Any]]] = pass_batches, pass_index: int = pass_index, reviewing: bool = reviewing
             ) -> Iterator[tuple[int, list[dict[str, Any]]]]:
                 """読む組を順に渡す。組を読み始める直前に期限の残りを確かめる（#5204）。"""
                 nonlocal unread_inputs
                 for batch_index, batch in enumerate(pass_batches, 1):
-                    left = remaining_seconds()
-                    if left is not None and left < generation_reserve:
-                        # 残りは最後の生成と確定に使い、この組から先は読まない（#5204）。読み始めた組は読み終える。
-                        skipped = pass_batches[batch_index - 1 :]
-                        unread_inputs = [value for group in skipped for value in group]
-                        deadline_stop.update(
-                            remaining_seconds=round(left, 3),
-                            reserve_seconds=generation_reserve,
-                            pass_index=pass_index,
-                            completed_batch_count=batch_index - 1,
-                            skipped_batch_count=len(skipped),
-                            skipped_input_count=len(unread_inputs),
-                        )
-                        return
                     # 組の本文の文書ごとに、本文の先頭の chunk を先頭に足す（#5240）。
-                    yield batch_index, order_document_spans(with_firsts(batch), priority=document_order)
+                    queue = [batch]
+                    while queue:
+                        check_cancelled()
+                        if reviewing and review_detail["calls"] >= review_detail["call_limit"]:
+                            review_detail.update(status="call_limit")
+                            return
+                        part = queue.pop(0)
+                        left = remaining_seconds()
+                        if left is not None and left < generation_reserve:
+                            # 残りは最後の生成と確定に使い、この組から先は読まない（#5204）。読み始めた組は読み終える。
+                            skipped = [part, *queue, *pass_batches[batch_index:]]
+                            unread_inputs = [value for group in skipped for value in group]
+                            deadline_stop.update(
+                                remaining_seconds=round(left, 3),
+                                reserve_seconds=generation_reserve,
+                                pass_index=pass_index,
+                                completed_batch_count=batch_index - 1,
+                                skipped_batch_count=len(skipped),
+                                skipped_input_count=len(unread_inputs),
+                            )
+                            return
+                        if reviewing and not batch_fits(part):
+                            # 補読の途中で原文が増えた分を含めて組み直す。選択済み原文は外さない。
+                            try:
+                                queue[:0] = partition(part)
+                            except GenerationInputBudgetExceeded:
+                                review_detail.update(status="budget_exhausted")
+                                return
+                            continue
+                        if reviewing:
+                            review_detail["calls"] += 1
+                        yield batch_index, order_document_spans(with_firsts(part), priority=document_order)
 
             def read_batch(
                 item: tuple[int, list[dict[str, Any]]],
@@ -735,6 +818,11 @@ def prepare_batched_evidence(
                 pass_batches: Sequence[list[dict[str, Any]]] = pass_batches,
                 pass_index: int = pass_index,
                 batch_offset: int = batch_offset,
+                select_only: bool = select_only,
+                reading_system: str = reading_system,
+                reviewing: bool = reviewing,
+                catalog: ReviewCatalog | None = None,
+                known: Sequence[dict[str, Any]] = (),
             ) -> _BatchOutcome:
                 """1 組を読む。並行に呼ばれるので、共有の状態は変えずに結果と例外を返す。"""
                 batch_index, batch = item
@@ -764,7 +852,30 @@ def prepare_batched_evidence(
                     ],
                     "first_chunk_source_ids": list(dict.fromkeys(value["source_id"] for value in batch if value.get(FIRST_CHUNK))),
                 }
-                reading_model = _reading_model(batch)
+                reading_model = _reading_model(batch, select_only=select_only)
+                call_system = reading_system
+                if catalog is not None:
+                    planned_model = catalog.reading_model(reading_model)
+                    data = json.loads(payload)
+                    data.update(known_evidence=known_evidence(known), review_catalog=catalog.entries)
+                    planned_payload = json.dumps(data, ensure_ascii=False)
+                    combined = len(evidence_text([*known, *batch]))
+                    largest = batch_repair_prompt(planned_payload, repair_feedback_upper_bound(reading_unit_counts(batch)))
+                    planned_measure = model_input_measurement(
+                        settings, reading_system + PLAN_PROMPT, largest, planned_model.model_json_schema(), provider_id=provider_id
+                    )
+                    if combined <= settings.evidence_budget_chars and planned_measure["fits"]:
+                        reading_model = cast(type[BatchReading], planned_model)
+                        payload, call_system = planned_payload, reading_system + PLAN_PROMPT
+                        receipt["dependency_review"] = {"catalog_source_count": len(catalog.entries), "combined_evidence_chars": combined}
+                    else:
+                        catalog = None
+                        receipt["dependency_review"] = {"fallback": "planning_input_exceeds_budget"}
+                if reviewing:
+                    receipt["dependency_review"] = {
+                        "known_span_count": len(review_carry),
+                        "combined_evidence_chars": len(evidence_text([*review_carry, *batch])),
+                    }
                 reading_schema = reading_model.model_json_schema()
 
                 def repair(error: Exception, will_retry: bool) -> str | None:
@@ -800,7 +911,10 @@ def prepare_batched_evidence(
                         bind_structured_output_repair(repair),
                     ):
                         try:
-                            outcome.reading = _canonical_reading(read(reading_system, payload, reading_model), batch)
+                            raw_reading = read(call_system, payload, reading_model)
+                            outcome.reading = _canonical_reading(raw_reading, batch)
+                            if catalog is not None:
+                                outcome.review_sources = catalog.bind(cast(Any, raw_reading).source_ids)
                         except ValidationError as exc:
                             outcome.mismatch = batch_range_invalid(exc)
                             if outcome.mismatch is None:
@@ -811,8 +925,30 @@ def prepare_batched_evidence(
                     outcome.reading, outcome.mismatch, outcome.error = None, None, exc
                 return outcome
 
-            workers = settings.batch_read_workers
-            with closing(_ordered_parallel(read_batch, admitted(), workers=workers)) as outcomes:
+            def pass_outcomes(
+                *,
+                pass_batches: Sequence[list[dict[str, Any]]] = pass_batches,
+                pass_index: int = pass_index,
+                reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]] = reduced,
+                reviewing: bool = reviewing,
+                read_batch: Callable[..., _BatchOutcome] = read_batch,
+                admitted: Callable[[], Iterator[tuple[int, list[dict[str, Any]]]]] = admitted,
+                select_dependencies: bool = select_dependencies,
+            ) -> Generator[_BatchOutcome]:
+                # 先行組は既存どおり並行に読む。最後の組だけは統合済みの原文を受け取って補読先も選ぶ。
+                source = admitted()
+                workers = 1 if reviewing else settings.batch_read_workers
+                split_last = select_dependencies and not reviewing and pass_index == 1 and len(pass_batches) > 1
+                prefix = islice(source, len(pass_batches) - 1) if split_last else source
+                with closing(_ordered_parallel(read_batch, prefix, workers=workers)) as outcomes:
+                    yield from outcomes
+                if split_last:
+                    for item in source:
+                        known = with_firsts(list(reduced.values()))
+                        catalog = ReviewCatalog.build(original_inputs, known) if known else None
+                        yield read_batch(item, catalog=catalog, known=known)
+
+            with closing(pass_outcomes()) as outcomes:
                 for outcome in outcomes:
                     batch, receipt, reading_schema, reading, mismatch = (
                         outcome.batch,
@@ -821,6 +957,7 @@ def prepare_batched_evidence(
                         outcome.reading,
                         outcome.mismatch,
                     )
+                    receipt["index"] = len(batches) + 1
                     batches.append(receipt)
                     try:
                         if reading is None:
@@ -864,6 +1001,9 @@ def prepare_batched_evidence(
                                 "reasons": mismatch.diagnostic["reasons"],
                                 "retained_input_count": len(retained),
                             }
+                        if outcome.review_sources is not None:
+                            review_sources = outcome.review_sources
+                            review_detail.update(status="planned", selected_document_count=len(review_sources))
                         read_sources.update(value["source_id"] for value in batch)
                         unverified = mismatch.diagnostic["unmatched_count"] if mismatch is not None else 0
                         receipt.update(status="completed", finding_count=len(reading.findings) - unverified)
@@ -881,12 +1021,43 @@ def prepare_batched_evidence(
                         receipt["retained_input_count"] = len(batch)
                         unverified_failure = (exc, receipt)
                     finally:
+                        if reviewing:
+                            review_carry[:] = with_firsts(list(reduced.values()))
                         record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
             if deadline_stop:
+                if reviewing:
+                    review_detail.update(status="deadline")
                 selected, prompt, measurement = keep_unread(list(reduced.values()), unread_inputs)
                 break
             selected = order_document_spans(tag(with_firsts(list(reduced.values()))), priority=document_order)
             prompt, measurement = final_measure(selected)
+            if reviewing:
+                reviewing, review_finished = False, True
+                review_detail.update(
+                    status=review_detail.get("status")
+                    if review_detail.get("status") in {"budget_exhausted", "call_limit"}
+                    else "completed",
+                    selected_span_count=len(selected),
+                )
+                # 追加の原文を既選択の原文と一緒に保持できなければ、再縮約で黙って落とさない。
+                if not measurement["fits"]:
+                    stop_reduction("dependency_review_selected_evidence_exceeds_budget")
+            if select_dependencies and not review_finished and measurement["fits"] and selected:
+                pending = [value for value in original_inputs if not covered(value, selected)]
+                if review_sources is not None:
+                    pending = [value for value in pending if document_key(value) in review_sources]
+                review_detail.update(pending_span_count=len(pending), scope="selected" if review_sources is not None else "all_pending")
+                if pending:
+                    review_carry[:] = selected
+                    reviewing = True
+                    # 残り容量で細分化が増えても、補読は先行する読取と同じ回数までで止める。
+                    review_detail.update(status="reading", calls=0, call_limit=len(batches))
+                    reading_system = SELECTION_PROMPT + REVIEW_PROMPT
+                    select_only = True
+                    selected = order_document_spans(with_firsts(pending), priority=document_order)
+                    continue
+                review_finished = True
+                review_detail.update(status="not_needed")
             if not measurement["fits"] and versioned and summarize and unverified_failure is None:
                 if pass_index == 1:
                     # 次の回は採用した chunk 全体と各文書の先頭で局所回答を作る。
@@ -948,6 +1119,7 @@ def prepare_batched_evidence(
         prompt,
         {
             **measurement,
+            **({"dependency_review": review_detail} if review_detail else {}),
             **({"reduction": reduction} if reduction else {}),
             "configured_chars": settings.evidence_budget_chars,
             "excluded_span_count": uncovered_sources(unread_inputs, selected) if deadline_stop else 0,

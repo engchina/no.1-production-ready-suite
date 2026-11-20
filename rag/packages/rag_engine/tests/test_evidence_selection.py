@@ -119,15 +119,17 @@ def test_reading_findings_keep_their_source_positions_in_the_final_input():
     def read(system, prompt, schema):
         values = json.loads(prompt)["evidence"]
         unit = values[0]["text"].split("| [", 1)[1].split("]", 1)[0]
-        return schema.model_validate({"findings": [{"unit_ids": [unit], "answer": "合成の根拠の値です。"}]})
+        return schema.model_validate(
+            {"findings": [{"unit_ids": [unit]}], **({"source_ids": []} if "source_ids" in schema.model_fields else {})}
+        )
 
     selected, prompt, _ = select(spans, read=read)
-    excerpts = [value for value in selected if value.get("batch_answer")]
+    excerpts = [value for value in selected if value.get("excerpt_only")]
     assert excerpts
     for value in excerpts:
         original = next(item for item in spans if item["source_id"] == value["source_id"])
         assert original["text"][value["start"] - 50 : value["end"] - 50] == value["text"]
-    assert "回答候補（evidence_id は根拠のラベル）" in prompt
+    assert "回答候補（evidence_id は根拠のラベル）" not in prompt
 
 
 def document_span(index, document, text, *, first=False):
