@@ -23,7 +23,8 @@ name: CI
 # （platform/packages/evaluation_scoring）は Platform / evaluation_scoring と、それを使う RAG / Backend・Agent / Backend・Suite / Evaluation が
 # 確かめる（#3240）。採点の部品は platform_other から外し、ほかの製品の job は動かさない。
 # Anthropic Claude の Messages API の呼び出しの部品（platform/packages/anthropic_messages。#5546）は
-# Platform / anthropic_messages が確かめる。platform_other から外し、使う製品が path で依存するまでは製品の job を動かさない。
+# Platform / anthropic_messages が確かめる。platform_other から外し、path で依存する製品の job だけを動かす
+# （RAG は rag_backend の filter に入れる）。
 # platform の Markdown（AGENTS.md・README・docs/ux-contracts・docs/design-system 等）だけの変更では製品の job を動かさない
 # （docs/design-system/ の Markdown 以外（lint の設定・plugin・reference）は frontend に数える。#1592）。
 # RAG の外部 parser のサービス（rag/services/parsers/<name>。uv の venv が独立）の pytest は、その parser と
@@ -290,6 +291,8 @@ jobs:
             rag_backend:
               - "rag/**"
               - "!rag/frontend/**"
+              # クォータナリ接続（Anthropic Claude）のモデルを呼ぶ部品（#5546。rag/backend が path で依存する）。
+              - "platform/packages/anthropic_messages/**"
               # 入口の一覧のテスト（tests/test_system_access_entry_points.py）が、配備の後の確認で RAG の CLI を
               # 呼ぶ platform の配備のスクリプトを読む（#3334）。
               - "platform/deploy/*.sh"

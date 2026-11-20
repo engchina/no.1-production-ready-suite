@@ -29,6 +29,7 @@ from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import ValidationError
 
 from rag_parser_core.extraction import StructuredExtraction
+from rag_parser_core.model_api import MODEL_API_RESPONSES, uses_anthropic_messages
 from rag_parser_core.text_encoding import detect_text_match
 
 DEFAULT_LLM_PATH = "/responses"
@@ -65,14 +66,22 @@ class OciEnterpriseAiConfig:
     endpoint(#1440)は OpenAI 互換 API の base URL で、入力どおり使い path を補わない(OCI
     Enterprise AI も `…/openai/v1` まで書く)。backend は platform の `enterprise_ai_base_url` で
     決めた値を渡し、呼ぶ URL は `{endpoint}{path}`(既定 `/responses`)で 3 製品と同じになる。
+
+    呼ぶ API(#5546)は接続ごとで、`oci_enterprise_ai_model_api` がテキストのモデルの接続、
+    `vision_oci_enterprise_ai_model_api` が Vision のモデルの接続の値(`rag_parser_core.model_api`)。
+    クォータナリ接続(Anthropic Claude)は Messages API で呼び、endpoint は Messages API の
+    base URL(空なら Anthropic の公式の API)になる。要求と応答は Responses API の形のまま組み、
+    `rag_parser_core.anthropic_responses` が写す。
     """
 
     oci_enterprise_ai_endpoint: str = ""
     oci_enterprise_ai_api_key: str = ""
     oci_enterprise_ai_project_ocid: str = ""
+    oci_enterprise_ai_model_api: str = MODEL_API_RESPONSES
     vision_oci_enterprise_ai_endpoint: str | None = None
     vision_oci_enterprise_ai_api_key: str | None = None
     vision_oci_enterprise_ai_project_ocid: str | None = None
+    vision_oci_enterprise_ai_model_api: str | None = None
     oci_compartment_id: str = ""
     vision_model_id: str = ""
     default_model_id: str = ""
@@ -99,10 +108,18 @@ class OciEnterpriseAiConfig:
             oci_enterprise_ai_endpoint=self.vision_oci_enterprise_ai_endpoint,
             oci_enterprise_ai_api_key=self.vision_oci_enterprise_ai_api_key or "",
             oci_enterprise_ai_project_ocid=self.vision_oci_enterprise_ai_project_ocid or "",
+            oci_enterprise_ai_model_api=self.vision_oci_enterprise_ai_model_api
+            or MODEL_API_RESPONSES,
             vision_oci_enterprise_ai_endpoint=None,
             vision_oci_enterprise_ai_api_key=None,
             vision_oci_enterprise_ai_project_ocid=None,
+            vision_oci_enterprise_ai_model_api=None,
         )
+
+    @property
+    def uses_anthropic_messages(self) -> bool:
+        """この接続を Messages API で呼ぶか(クォータナリ接続。#5546)。"""
+        return uses_anthropic_messages(self.oci_enterprise_ai_model_api)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> OciEnterpriseAiConfig:
@@ -678,8 +695,14 @@ class OciEnterpriseAiClient:
         *,
         vision: bool = False,
     ) -> Mapping[str, Any]:
-        """Enterprise AI endpoint へ JSON POST する(`vision` は Vision モデルの接続で送る)。"""
+        """Enterprise AI endpoint へ JSON POST する(`vision` は Vision モデルの接続で送る)。
+
+        Messages API の接続(クォータナリ接続。#5546)は、同じ要求を Messages API で送り、
+        Responses API の形の応答を返す(`_post_anthropic_messages`)。
+        """
         config = self._vision_config if vision else self._config
+        if config.uses_anthropic_messages:
+            return await _post_anthropic_messages(config, payload)
         transport = self._vision_http_transport if vision else self._http_transport
         endpoint = _require_value(
             config.oci_enterprise_ai_endpoint,
@@ -719,6 +742,40 @@ class OciEnterpriseAiClient:
         if last_error is not None:
             raise last_error
         raise RuntimeError("OCI Enterprise AI VLM response の検証に失敗しました。")
+
+
+async def _post_anthropic_messages(
+    config: OciEnterpriseAiConfig, payload: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Responses API の要求を Messages API で送り、Responses API の形の応答を返す(#5546)。
+
+    `pr_anthropic_messages` はモデルを呼ぶ backend の venv だけにあるので、ここで import する。
+    SDK の再試行(429・5xx・接続・時間切れ。Retry-After を尊重)の回数は Responses API の経路と同じ
+    (`sdk_max_retries`)。時間切れは `EnterpriseAiTimeoutError`、画像以外のファイルなど Messages API
+    に写せない入力は `EnterpriseAiUnsupportedInputError` にする。ほかの失敗は
+    `AnthropicMessagesError`(HTTP status・`retryable` を持つ)のまま送出する。
+    """
+    from rag_parser_core.anthropic_responses import (
+        AnthropicMessagesError,
+        AnthropicRequestShapeError,
+        acreate_responses_body,
+    )
+
+    timeout = config.oci_enterprise_ai_timeout_seconds
+    try:
+        return await acreate_responses_body(
+            payload,
+            api_key=config.oci_enterprise_ai_api_key,
+            endpoint_url=config.oci_enterprise_ai_endpoint,
+            timeout_seconds=timeout,
+            max_retries=sdk_max_retries(config),
+        )
+    except AnthropicRequestShapeError as exc:
+        raise EnterpriseAiUnsupportedInputError(str(exc)) from exc
+    except AnthropicMessagesError as exc:
+        if exc.kind == "timeout":
+            raise EnterpriseAiTimeoutError("Anthropic Messages API", timeout) from exc
+        raise
 
 
 # 呼び出し側が再試行を受け持つとき(取込の上限つきの並行の実行器。#2002)、SDK の再試行の回数を
@@ -1446,8 +1503,12 @@ def _vlm_input_mode(config: OciEnterpriseAiConfig) -> str:
 
 
 def _should_upload_vlm_input(config: OciEnterpriseAiConfig, *, mime_type: str) -> bool:
-    """VLM 入力を Files API へアップロードするかを設定から決める。"""
-    if config.oci_enterprise_ai_vlm_payload_template.strip():
+    """VLM 入力を Files API へアップロードするかを設定から決める。
+
+    Messages API の接続(#5546)は OCI の Files API を持たないので、画像を要求に入れて送る
+    (画像以外のファイルは送れず、`EnterpriseAiUnsupportedInputError` になる)。
+    """
+    if config.oci_enterprise_ai_vlm_payload_template.strip() or config.uses_anthropic_messages:
         return False
     mode = _vlm_input_mode(config)
     if mode == "files_api":
