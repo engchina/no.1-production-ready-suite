@@ -38,12 +38,14 @@ def units() -> list[WikiUnit]:
 
 class Model:
     def __init__(self, *, clip: bool = False, invalid: bool = False) -> None:
+        self.prompts: list[str] = []
         self.calls: list[dict[str, Any]] = []
         self.clip, self.invalid = clip, invalid
 
     async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
         assert model_purpose_attributes() == {"pr.gen_ai.purpose": "document.extract"}
         data = json.loads(context)
+        self.prompts.append(kwargs["system_prompt"])
         self.calls.append(data)
         targets = data["target_unit_ids"]
         if self.clip and len(targets) > 1:

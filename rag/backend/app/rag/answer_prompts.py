@@ -25,6 +25,8 @@ INGESTION_PROMPT_REFS = {
     "heading_levels": "app.rag.ingestion_prompts:HEADING_LEVEL_PROMPT",
     "field_extraction": "app.rag.ingestion_prompts:FIELD_EXTRACTION_PROMPT",
     "navigation_summary": "app.rag.ingestion_prompts:NAVIGATION_SUMMARY_PROMPT",
+    "wiki_build": "app.rag.wiki_compiler:WIKI_CONTEXT_PROMPT",
+    "wiki_links": "app.rag.wiki_links:WIKI_LINK_PROMPT",
     "document_summary": "app.rag.ingestion_prompts:DOCUMENT_SUMMARY_PROMPT",
 }
 EDITABLE_PROMPT_KEYS = (IMAGE_RETRIEVAL_PROMPT_KEY, *INGESTION_PROMPT_REFS)
@@ -145,13 +147,13 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
     # Wiki の案内の構築（#4941）。KB で構築を有効にしたときだけ背景で使う。
     PromptStage(
         "wiki_build",
-        "knowledge",
+        "ingestion",
         (("instruction", "app.rag.wiki_compiler:WIKI_CONTEXT_PROMPT"),),
     ),
     # 文書をまたぐ Wiki の関連の判定（#5492）。案内を公開した文書ごとに背景で使う。
     PromptStage(
         "wiki_links",
-        "knowledge",
+        "ingestion",
         (("instruction", "app.rag.wiki_links:WIKI_LINK_PROMPT"),),
     ),
     # 回答の過程の表から業務ガイドの下書きを作る(#2397。検索・回答プロファイルの知識の作成)。

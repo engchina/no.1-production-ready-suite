@@ -313,6 +313,7 @@ for (const scheme of ["light", "dark"] as const) {
       "4. 章節の抽出規則",
       "5. 章節の要約",
       "6. 文書の要約",
+      "7. Wiki の構築",
     ]);
     await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
     await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
@@ -628,6 +629,7 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
     "4. 章節の抽出規則",
     "5. 章節の要約",
     "6. 文書の要約",
+    "7. Wiki の構築",
   ]);
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("保存済みの解析結果にある見出しと階層を使います");
@@ -1753,11 +1755,18 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
     ["field_extraction", "メタデータ/項目抽出プロンプト"],
     ["navigation_summary", "章節の要約プロンプト"],
     ["document_summary", "文書の要約プロンプト"],
+    ["wiki_build", "Wiki の案内を作るプロンプト"],
+    ["wiki_links", "Wiki の文書をまたぐ関連を判定するプロンプト"],
   ]) {
     await verifyFeaturePrompt(page, key, title);
   }
-  expect(requests.map((item) => item.method)).toEqual(["PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE", "PUT", "DELETE"]);
+  expect(requests.map((item) => item.method)).toEqual(Array.from({ length: 7 }, () => ["PUT", "DELETE"]).flat());
   await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
+  const wiki = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "7. Wiki の構築", exact: true }) });
+  await wiki.locator("summary").filter({ hasText: "Wiki の案内を作るプロンプト" }).click();
+  await wiki.locator("summary").filter({ hasText: "Wiki の文書をまたぐ関連を判定するプロンプト" }).click();
+  await wiki.evaluate(element => element.scrollIntoView({ block: "center" }));
+  await wiki.screenshot({ path: test.info().outputPath("wiki-prompts.png") });
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
 });
 
@@ -1789,12 +1798,13 @@ test("章節の方式は広い欄と折り返す選択肢で全文を読める",
 });
 
 
-test("文書の要約は解析後の処理の最後の項目で、有効・無効を保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("文書の要約は Wiki の構築の直前にあり、有効・無効を保存できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const patches = await mockParserAdaptersWithPostParse(page, { vision_enabled: false, field_extraction_enabled: false, navigation_summary_enabled: false });
   await mockExtractionFields(page); await mockFeaturePrompts(page);
   await page.goto("/settings/parser-adapters#post-parse-document-summary");
   const item = page.locator("#post-parse-document-summary");
   await expect(item.getByRole("heading", { name: "6. 文書の要約", exact: true })).toBeVisible();
+  await expect(item.locator("xpath=following-sibling::li[1]").getByRole("heading", { name: "7. Wiki の構築" })).toBeVisible();
   await expect(item.getByText(/モデルの呼び出しは 1 文書につき 1 回です/)).toBeVisible();
   // 保存値が無い応答（既定）は有効。
   const toggle = item.getByRole("switch", { name: "文書の要約", exact: true });

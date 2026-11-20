@@ -336,6 +336,14 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
               </Fragment>
             );
           })}
+          <li className="space-y-3 rounded-md border border-border bg-surface p-3">
+            <h3 className="text-sm font-semibold text-fg">
+              {t("settings.parserAdapters.postParse.step", { index: 7, name: t("settings.parserAdapters.postParse.wiki.title") })}
+            </h3>
+            <p className="text-xs text-fg-muted">{t("settings.parserAdapters.postParse.wiki.hint")}</p>
+            <FeaturePromptDisclosure promptKey="wiki_build" />
+            <FeaturePromptDisclosure promptKey="wiki_links" />
+          </li>
         </ol>
         <FormActionBar
           ariaLabel={t("settings.parserAdapters.postParse.actionsLabel")}

@@ -53,11 +53,13 @@ class LinkModel:
     """各起点を最初の候補へ「例外」で結ぶ。``invalid`` なら候補に無い ID を返す。"""
 
     def __init__(self, *, invalid: bool = False, fail: bool = False) -> None:
+        self.prompts: list[str] = []
         self.calls: list[dict[str, Any]] = []
         self.invalid, self.fail = invalid, fail
 
     async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
         data = json.loads(context)
+        self.prompts.append(kwargs["system_prompt"])
         self.calls.append(data)
         if self.fail:
             raise RuntimeError("合成の失敗")
@@ -189,11 +191,15 @@ class LinkStore:
         self.a = [page("doc-a", "a1"), page("doc-a", "a2")]
         self.b = [page("doc-b", "b1")]
         self.kbs = ["kb-a"]
+        self.prompts: dict[str, str] = {}
         self.doc = {"status": "READY", "compiler_fingerprint": "compiler-a"}
         self.doc["source_fingerprint"] = "source-a"
         self.state: dict[str, Any] | None = None
         self.saved: list[dict[str, Any]] = []
         self.resolved: list[dict[str, str]] = []
+
+    async def prompt_overrides(self) -> dict[str, str]:
+        return self.prompts
 
     async def document_state(self, did: str) -> Any:
         return dict(self.doc)
@@ -285,9 +291,12 @@ def link_setup(monkeypatch: pytest.MonkeyPatch) -> Any:
 @pytest.mark.asyncio
 async def test_links_are_built_both_ways_from_candidates_once(link_setup: Any) -> None:
     jobs, store, model, settings, embedded = link_setup
+    store.prompts["wiki_links"] = "合成の編集済み指示"
     await jobs._build_links("doc-a", "owner-a", settings)
     assert store.state["status"] == "READY"
     # 前向き（A の 2 単位 → B）と逆向き（B の単位 → A）を、候補の組だけで 2 回で判定する。
+    assert model.prompts == ["合成の編集済み指示"] * len(model.calls)
+    store.prompts["wiki_links"] = "合成の次回用指示"
     assert len(model.calls) == 2 and len(embedded) == 1
     forward, reverse = store.saved
     assert forward["sources"] == ["doc-a-a1", "doc-a-a2"]
@@ -303,6 +312,7 @@ async def test_links_are_built_both_ways_from_candidates_once(link_setup: Any) -
     store.kbs = ["kb-a", "kb-b"]
     await jobs._build_links("doc-a", "owner-a", settings)
     assert len(model.calls) == 4
+    assert model.prompts[-2:] == ["合成の次回用指示"] * 2
     await jobs.shutdown()
 
 

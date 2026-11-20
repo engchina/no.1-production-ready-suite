@@ -753,6 +753,8 @@ ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
     "heading_levels": MENU_SETTINGS_PARSER_ADAPTERS,
     "field_extraction": MENU_SETTINGS_PARSER_ADAPTERS,
     "navigation_summary": MENU_SETTINGS_PARSER_ADAPTERS,
+    "wiki_build": MENU_SETTINGS_PARSER_ADAPTERS,
+    "wiki_links": MENU_SETTINGS_PARSER_ADAPTERS,
     "document_summary": MENU_SETTINGS_PARSER_ADAPTERS,
 }
 
