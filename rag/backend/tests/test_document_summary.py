@@ -663,6 +663,16 @@ class SummaryHitOracle(FakeOracle):
     def __init__(self, hit: RetrievedChunk) -> None:
         super().__init__()
         self.hit = hit
+        self.chunks = [
+            RetrievedChunk(
+                document_id=hit.document_id,
+                chunk_id=f"{hit.document_id}:cs-1:0",
+                file_name=hit.file_name,
+                text="合成の文書の先頭。",
+                score=0.0,
+                metadata={"chunk_set_id": "cs-1", "chunk_index": 0},
+            )
+        ]
         self.sibling_anchor_ids: list[str] = []
 
     async def hybrid_search(
@@ -719,7 +729,10 @@ async def test_summary_hit_reaches_the_answer_as_summary_evidence(
         SearchRequest(query="この文書は何の文書ですか。", filters={"knowledge_base_id": "kb-1"})
     )
 
-    assert [chunk.chunk_id for chunk in outcome.citations] == [hit.chunk_id]
+    assert [chunk.chunk_id for chunk in outcome.citations] == [
+        hit.chunk_id,
+        oracle.chunks[0].chunk_id,
+    ]
     assert outcome.citations[0].metadata["content_kind"] == "document_summary"
     assert body in outcome.answer
     # モデルへの出典情報に、要約であることの印がある。

@@ -278,6 +278,7 @@ class DerivedHitOracle(FakeOracle):
         super().__init__()
         self.hit = hit
         self.stub = DerivedSourceStub(sources)
+        self.chunks = [chunk for chunk in sources if chunk.metadata.get("content_kind") == "text"]
 
     async def hybrid_search(
         self,
