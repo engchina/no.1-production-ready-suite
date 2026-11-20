@@ -59,12 +59,16 @@ def _previous_paragraphs(elements: list[Any], paths: list[tuple[str, ...]]) -> d
     by_parent: dict[tuple[str, ...], dict[int, list[int]]] = {}
     for index, element in enumerate(elements):
         meta = element.get("metadata") or {}
-        number = str(meta.get("xml_tree_paragraph_num") or "")
+        raw_number = str(meta.get("xml_tree_paragraph_num") or "")
         parent = meta.get("xml_tree_parent_label")
-        if meta.get("xml_tree_unit_kind") != "paragraph" or not parent or not number.isdecimal():
+        if (
+            meta.get("xml_tree_unit_kind") != "paragraph"
+            or not parent
+            or not raw_number.isdecimal()
+        ):
             continue
         key = (*paths[index], str(meta.get("xml_tree_part_ref") or ""), str(parent))
-        by_parent.setdefault(key, {}).setdefault(int(number), []).append(index)
+        by_parent.setdefault(key, {}).setdefault(int(raw_number), []).append(index)
     targets = {}
     for paragraphs in by_parent.values():
         for number, sources in paragraphs.items():

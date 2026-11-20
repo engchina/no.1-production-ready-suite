@@ -222,5 +222,8 @@ def test_previous_paragraph_requires_unique_structured_target() -> None:
     (ref,) = anchor_block()["references"]
     assert (ref["start"], ref["end"]) == (1, 3)
     assert read(payload, cursor=ref["cursor"])["blocks"][0]["id"] == "e23"
+    elements[35]["metadata"]["non_source_text_ranges"] = "[[0,3]]"
+    assert "references" not in anchor_block()
+    del elements[35]["metadata"]["non_source_text_ranges"]
     elements[24]["metadata"] = elements[23]["metadata"].copy()
     assert "references" not in anchor_block()
