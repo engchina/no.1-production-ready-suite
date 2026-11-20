@@ -267,7 +267,7 @@ Wiki の構築で、文書の案内を作った後に、同じ KB のほかの�
 - **構築の AI の呼び出し**: 文書ごとに、案内の検索文の埋め込みが `ceil(単位数 / RAG_WIKI_BUILD_BATCH_UNITS)` 回、関連の判定が
   `ceil(候補のある単位数 / RAG_WIKI_LINK_BATCH_UNITS)` 回（前向き）と `ceil(候補になったほかの文書の単位数 / RAG_WIKI_LINK_BATCH_UNITS)`
   回（逆向き）増える。全組み合わせでは比べない。
-- **検索**: 既定は 2 段（`RAG_WIKI_LINK_DEPTH`）・足す単位の上限 24（`RAG_WIKI_LINK_MAX_UNITS`）。これまでの「同じ文書の依存を 1 段」に
+- **検索**: 既定は 1 段（`RAG_WIKI_LINK_DEPTH`）・足す単位の上限 999（1〜999、`RAG_WIKI_LINK_MAX_UNITS`）。これまでの「同じ文書の依存を 1 段」に
   戻すときは `RAG_WIKI_LINK_DEPTH=1` を書く（関連がまだ無い文書では同じ動き）。辿った数は回答の診断の `wiki.link_hops` に段ごとに出る。
 - 関連の構築の失敗は、KB の「Wiki ナビゲーション」の再試行（`POST …/wiki/retry`）で案内の失敗と一緒に待機へ戻る。画面の件数には
   関連の構築の状態を出していない（失敗はログ `wiki_link_failed` で確かめる）。

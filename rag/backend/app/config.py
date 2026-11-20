@@ -1363,7 +1363,7 @@ class Settings(
         ),
     )
     rag_wiki_link_depth: int = Field(
-        default=2,
+        default=1,
         ge=0,
         le=3,
         description=(
@@ -1372,9 +1372,9 @@ class Settings(
         ),
     )
     rag_wiki_link_max_units: int = Field(
-        default=24,
-        ge=0,
-        le=200,
+        default=999,
+        ge=1,
+        le=999,
         description="Wiki の検索で、依存と関連を辿って足す原文単位の数の上限（全段の合計）。",
     )
     rag_wiki_query_timeout_seconds: float = Field(
