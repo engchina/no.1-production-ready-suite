@@ -1,5 +1,5 @@
 # 空 Issue を許可する（規約テンプレートに当てはまらない起票のため）。
-# ただし本文は AGENTS.md の4項目（問題 / 症状 / 原因 / 修正方針）を満たすこと。
+# ただし本文は docs/agents/github-workflow.md の4項目（問題 / 症状 / 原因 / 修正方針）を満たすこと。
 blank_issues_enabled: true
 contact_links:
   - name: Issue / PR 記述規約（docs/agents/github-workflow.md）

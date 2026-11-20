@@ -209,7 +209,7 @@ export function UploadStorageSettingsPage({
   }
 
   if (query.isPending) {
-    // 読み込み中は経過時間と、保存先のカードの形の Skeleton を出す（AGENTS.md「読み込み中」。#1047）。
+    // 読み込み中は経過時間と、保存先のカードの形の Skeleton を出す（docs/agents/ui.md「読み込み中・一覧・ページング」。#1047）。
     return (
       <PageBody wide>
         <TimedLoadingState

@@ -401,7 +401,7 @@ export function DatabaseSettingsPage({
     return (
       <PageBody wide>
         {loadingFallback ?? (
-          // 読み込み中は経過時間付きの表示と、カードの形の Skeleton で覆う（AGENTS.md「読み込み中」。
+          // 読み込み中は経過時間付きの表示と、カードの形の Skeleton で覆う（docs/agents/ui.md「読み込み中・一覧・ページング」。
           // NL2SQL が渡していた表示を既定にした）。
           <TimedLoadingState
             label={t("settings.database.loading")}
@@ -1052,7 +1052,7 @@ function AdbManagementCard({
 
         {infoQuery.isPending ? (
           // ADB の状態（見出しの StatusBadge）と起動・停止の可否は OCI から取得する。取得の間は
-          // 経過時間付きで示す（起動・停止が押せない理由を空白にしない。AGENTS.md「読み込み中」）。
+          // 経過時間付きで示す（起動・停止が押せない理由を空白にしない。docs/agents/ui.md「読み込み中・一覧・ページング」）。
           // 下を情報のパネルの形の Skeleton で覆い、届いたときに下の内容を押し下げない（#2510）。
           <TimedLoadingState
             label={t("settings.adb.loading")}

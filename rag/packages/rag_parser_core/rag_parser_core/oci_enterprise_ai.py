@@ -1,7 +1,7 @@
 """OCI Enterprise AI クライアント（LLM / VLM）共有 core。
 
 ⚠️ 重要: LLM / VLM は **OCI Enterprise AI** を使う。
-OCI Generative AI の chat 推論 API は使わない（AGENTS.md 参照）。
+OCI Generative AI の chat 推論 API は使わない（docs/agents/tech-stack.md 参照）。
 
 backend `Settings` には依存せず、`OciEnterpriseAiConfig`(env からも構築可能)で駆動する。
 backend は `app.clients.oci_enterprise_ai` の Settings→config adapter / re-export shim 経由で
