@@ -161,6 +161,7 @@ from .enterprise_ai_client import (
     EnterpriseAiDirectError,
     OciEnterpriseAiDirectClient,
     enterprise_ai_configuration_failure_message,
+    enterprise_ai_direct_provider,
     find_enterprise_ai_error,
 )
 from .generation_diagnostics import (
@@ -25457,7 +25458,10 @@ class Nl2SqlService:
                 }
             )
         else:
-            meta.update({"provider": "oci_enterprise_ai", "mode": "direct"})
+            provider = enterprise_ai_direct_provider(
+                self._enterprise_ai_client, self._enterprise_ai_client.model_id()
+            )
+            meta.update({"provider": provider, "mode": "direct"})
         _record_engine_timing(
             engine_timings,
             engine="deterministic",
@@ -25753,12 +25757,14 @@ class Nl2SqlService:
             started=call_started,
             status="success",
         )
+        model_id = self._enterprise_ai_client.model_id()
+        provider = enterprise_ai_direct_provider(self._enterprise_ai_client, model_id)
         meta.update(
             {
-                "provider": "oci_enterprise_ai",
+                "provider": provider,
                 "mode": "direct",
-                "runtime": "oci_enterprise_ai",
-                "model": self._enterprise_ai_client.model_id(),
+                "runtime": provider,
+                "model": model_id,
                 "response_format": "json_schema",
             }
         )

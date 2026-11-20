@@ -221,6 +221,23 @@ def enterprise_ai_configuration_failure_message(
     )
 
 
+# 直接の生成の `engine_meta` の provider・runtime に入れる、呼んだ API の名前（#5593）。
+OCI_ENTERPRISE_AI_PROVIDER = "oci_enterprise_ai"
+ANTHROPIC_MESSAGES_PROVIDER = "anthropic_messages"
+
+
+def enterprise_ai_direct_provider(client: object, model_id: str) -> str:
+    """直接の生成でモデルを呼ぶ API の名前（モデルの接続の種類で決める。#5593）。
+
+    接続を引ける client（`OciEnterpriseAiDirectClient` と、それを包む client）はその接続で決め、
+    接続を持たない client（テストのスタブなど）は OCI Enterprise AI とする。
+    """
+    connection = getattr(client, "connection", None)
+    if callable(connection) and connection(model_id).uses_anthropic_messages:
+        return ANTHROPIC_MESSAGES_PROVIDER
+    return OCI_ENTERPRISE_AI_PROVIDER
+
+
 class EnterpriseAiDirectClient(Protocol):
     """Service が必要とする Enterprise AI direct 境界。"""
 
