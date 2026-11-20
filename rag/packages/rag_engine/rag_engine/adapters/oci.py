@@ -32,6 +32,7 @@ from pr_backend_core.observability.model_purpose import (
 from pr_backend_core.output_budget import online_output_budget, output_limit_message
 from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import BaseModel
+from rag_parser_core.model_api import uses_anthropic_messages
 
 from rag_engine.config import (
     DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS,
@@ -871,6 +872,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     呼び出し（`LlmStreamOutputMissing`。#4197）も、同じ要求を送り直す（#2814）。
     出力の JSON の文字列の外で空白が設定の文字数続いた呼び出し（`LlmJsonWhitespaceRun`。#5077）は、streaming なら途中で、
     streaming しないなら返った出力の文で見分け、出力の不合格として `_parse_with_retry` の共通の枠で送り直す。
+
+    Messages API の provider（クォータナリ接続。#5546）は、同じ要求を Messages API で送り、Responses API の形の応答を
+    受ける（`_anthropic_response`）。応答の後の検証・未完了の送り直し・usage の記録・やり直しの枠は同じ。応答の event を
+    読まないので、停滞の検出（streaming の経路）は使わない。
     """
     budget = llm_output_token_limit(settings, provider)
     # 役目に合わせた上限（`bind_output_cap`）があれば、それで抑えて広げない。
@@ -887,7 +892,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     lowered = False
     from rag_engine.resources.call_context import observation_attributes, update_call_context
 
-    streamed = _stall_detection_enabled(settings)
+    anthropic = uses_anthropic_messages(str(getattr(provider, "model_api", "") or ""))
+    streamed = _stall_detection_enabled(settings) and not anthropic
     attempt = 0
     # 外側の `_parse_with_retry` と同じ枠で数える（直接呼ばれたときだけ、この呼び出しの枠を持つ）。
     retry_budget = _llm_retry_budget.get() or _LlmRetryBudget(max_retries=settings.llm_max_retries)
@@ -951,6 +957,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                         idle_seconds,
                         capture=capture,
                     )
+                elif anthropic:
+                    response = _anthropic_response(provider, wire_request, settings)
                 else:
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
                     # text_format を渡すと SDK が応答の組み立ての中で本文を検証し、上限で切れた応答（未完了）も検証の失敗になって
@@ -1689,6 +1697,29 @@ def _parse_openai_multimodal_once[StructuredOutputT: BaseModel](
     )
 
 
+def _anthropic_response(provider: LlmProviderSettings, request: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Responses API の wire の要求を Messages API で 1 回送り、Responses API の形の応答を返す（#5546）。
+
+    1 回の待ちは LLM 1 回の timeout と回答の期限の残りの短いほう（`_openai_client_with_deadline` と同じ）。SDK の再試行は
+    しない（やり直しは `_parse_with_retry` の共通の枠）。429・5xx・時間切れ・接続の失敗は `AnthropicMessagesError`
+    （HTTP status と原因の例外を持つ）のまま送出し、`_is_retryable_error` が同じ規則で判定する。`pr_anthropic_messages` は
+    モデルを呼ぶ backend の venv だけにあるので、ここで import する。
+    """
+    from rag_parser_core.anthropic_responses import create_responses_body
+
+    timeout = float(settings.llm_request_timeout_seconds)
+    remaining = remaining_seconds()
+    if remaining is not None:
+        timeout = min(timeout, remaining)
+    return create_responses_body(
+        request,
+        api_key=provider.api_key,
+        endpoint_url=provider.base_url,
+        timeout_seconds=max(0.001, timeout),
+        max_retries=0,
+    )
+
+
 def _openai_client_for_provider(provider: LlmProviderSettings, settings: Settings) -> Any:
     return _openai_client(
         provider.provider_id,
@@ -1807,6 +1838,15 @@ def _image_data_url(image_path: Path) -> str:
 
 
 def _is_retryable_error(exc: Exception) -> bool:
+    # Messages API の失敗（#5546）は部品の分類（429・5xx・時間切れ・接続）をそのまま使う。streaming の途中の error event は
+    # HTTP 200 で、status からは分けられない。部品は backend の venv だけにあるので、無ければ下の規則だけで判定する。
+    try:
+        from pr_anthropic_messages import AnthropicMessagesError
+    except ImportError:
+        pass
+    else:
+        if isinstance(exc, AnthropicMessagesError):
+            return exc.retryable
     classified = classify_error(exc)
     if classified.kind in {
         ErrorKind.QUOTA_EXHAUSTED,

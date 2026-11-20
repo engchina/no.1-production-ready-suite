@@ -452,6 +452,8 @@ def build_engine_settings(
     """
     from rag_engine.config import get_settings as engine_get_settings
 
+    from app.clients.oci_enterprise_ai import connection_endpoint, connection_model_api
+
     # 回答のモデルと Vision のモデルは、それぞれのモデルの接続で呼ぶ(#533)。
     answer_model = answer_model_id or enterprise_ai_default_model_id(settings)
     vision_model = enterprise_ai_vision_model_id(settings)
@@ -459,18 +461,21 @@ def build_engine_settings(
     vision = enterprise_ai_connection_for_model(settings, vision_model)
     environ = {
         # Endpoint URL は platform の関数で base URL にして渡す(#1440。rag_engine はそのまま使う)。
-        "OCI_ENTERPRISE_AI_ENDPOINT": answer.base_url,
+        # 呼ぶ API は接続ごと(#5546。クォータナリ接続は Messages API で、URL もその接続の値)。
+        "OCI_ENTERPRISE_AI_ENDPOINT": connection_endpoint(answer),
         "OCI_ENTERPRISE_AI_API_KEY": answer.api_key,
         "OCI_ENTERPRISE_AI_PROJECT_OCID": answer.project_ocid,
+        "OCI_ENTERPRISE_AI_MODEL_API": connection_model_api(answer),
         "OCI_ENTERPRISE_AI_DEFAULT_MODEL": answer_model,
         # 回答のモデルが画像を読めるか(#3444)。読めるときだけ根拠の画像を回答の入力に添付する。
         "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION": (
             "1" if answer_model_reads_images(settings, answer_model) else "0"
         ),
         "OCI_ENTERPRISE_AI_VLM_MODEL": vision_model,
-        "OCI_ENTERPRISE_AI_VLM_ENDPOINT": vision.base_url,
+        "OCI_ENTERPRISE_AI_VLM_ENDPOINT": connection_endpoint(vision),
         "OCI_ENTERPRISE_AI_VLM_API_KEY": vision.api_key,
         "OCI_ENTERPRISE_AI_VLM_PROJECT_OCID": vision.project_ocid,
+        "OCI_ENTERPRISE_AI_VLM_MODEL_API": connection_model_api(vision),
         # 推論(思考)の量はモデルごとの送る値(#1425。none は空 = 送らない)。
         "OCI_ENTERPRISE_AI_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
             settings, answer_model

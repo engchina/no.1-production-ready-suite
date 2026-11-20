@@ -14,6 +14,7 @@ from typing import Any
 
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
+from rag_parser_core.model_api import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_RESPONSES
 from rag_parser_core.oci_enterprise_ai import (
     DEFAULT_MIME_TYPE,
     EnterpriseAiHttpTransport,
@@ -30,6 +31,7 @@ from rag_parser_core.oci_enterprise_ai import (
 )
 
 from app.config import (
+    EnterpriseAiConnection,
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
@@ -50,8 +52,29 @@ __all__ = [
     "OciEnterpriseAiClient",
     "OciEnterpriseAiConfig",
     "config_from_settings",
+    "connection_endpoint",
+    "connection_model_api",
     "_raise_for_status_with_body",
 ]
+
+
+def connection_model_api(connection: EnterpriseAiConnection) -> str:
+    """接続を呼ぶ API(#5546。クォータナリ接続は Messages API、ほかは Responses API)。"""
+    if connection.uses_anthropic_messages:
+        return MODEL_API_ANTHROPIC_MESSAGES
+    return MODEL_API_RESPONSES
+
+
+def connection_endpoint(connection: EnterpriseAiConnection) -> str:
+    """呼び出しに使う Endpoint URL。
+
+    OpenAI 互換の接続は platform の関数で決めた base URL(#1440)、Messages API の接続(#5546)は
+    `effective_endpoint`(空なら Anthropic の公式の API。`pr_anthropic_messages` が SDK の
+    `base_url` にする)。Messages API の接続で `base_url` を引くと platform が誤りにする。
+    """
+    if connection.uses_anthropic_messages:
+        return connection.effective_endpoint
+    return connection.base_url
 
 
 def config_from_settings(
@@ -67,6 +90,7 @@ def config_from_settings(
     解釈は platform の `reasoning_effort_to_send`)。
     出力の上限(#1719)も、それぞれのモデルの値(platform の `enterprise_ai_output_token_budget`。
     モデルの出力の上限と入力の上限の小さい方。prompt はここでは見積もらない)を入れる。
+    呼ぶ API(#5546)も接続ごとに入れる(クォータナリ接続は Messages API)。
     """
     text_model_id = model_id or enterprise_ai_default_model_id(settings)
     vision_model_id = enterprise_ai_vision_model_id(settings)
@@ -75,12 +99,16 @@ def config_from_settings(
     separate_vision = vision.connection_id != text.connection_id
     return OciEnterpriseAiConfig(
         # Endpoint URL は platform の関数で base URL にして渡す(#1440。共有 core はそのまま使う)。
-        oci_enterprise_ai_endpoint=text.base_url,
+        oci_enterprise_ai_endpoint=connection_endpoint(text),
         oci_enterprise_ai_api_key=text.api_key,
         oci_enterprise_ai_project_ocid=text.project_ocid,
-        vision_oci_enterprise_ai_endpoint=vision.base_url if separate_vision else None,
+        oci_enterprise_ai_model_api=connection_model_api(text),
+        vision_oci_enterprise_ai_endpoint=connection_endpoint(vision) if separate_vision else None,
         vision_oci_enterprise_ai_api_key=vision.api_key if separate_vision else None,
         vision_oci_enterprise_ai_project_ocid=vision.project_ocid if separate_vision else None,
+        vision_oci_enterprise_ai_model_api=connection_model_api(vision)
+        if separate_vision
+        else None,
         oci_compartment_id=settings.oci_compartment_id,
         vision_model_id=vision_model_id,
         default_model_id=text_model_id,
@@ -133,12 +161,15 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
     async def _post_enterprise_ai_observed(
         self, path: str, payload: Mapping[str, Any], *, vision: bool
     ) -> Mapping[str, Any]:
+        config = self._vision_config if vision else self._config
         with observed_span(
             "gen_ai.chat",
             kind="client",
             attributes={
                 "gen_ai.operation.name": "chat",
-                "gen_ai.provider.name": "oracle",
+                "gen_ai.provider.name": (
+                    "anthropic" if config.uses_anthropic_messages else "oracle"
+                ),
                 "gen_ai.request.model": str(payload.get("model") or ""),
             },
         ) as span:
@@ -174,7 +205,10 @@ def _log_call(
     body = response or {}
     usage = body.get("usage")
     details = body.get("incomplete_details")
-    status_code = getattr(getattr(error, "response", None), "status_code", None)
+    # httpx の失敗は response の status、Messages API の失敗(#5546)は例外の status_code。
+    status_code = getattr(getattr(error, "response", None), "status_code", None) or getattr(
+        error, "status_code", None
+    )
     _logger.info(
         "llm_call_usage",
         extra={
