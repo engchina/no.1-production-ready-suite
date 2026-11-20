@@ -559,7 +559,10 @@ async def test_image_reader_records_document_read_purpose_and_respects_content_p
         attachment_module,
         "enterprise_ai_connection_for_model",
         lambda *_: SimpleNamespace(
-            base_url="https://model.example.test/v1", api_key="synthetic", project_ocid=None
+            base_url="https://model.example.test/v1",
+            api_key="synthetic",
+            project_ocid=None,
+            uses_anthropic_messages=False,
         ),
     )
     monkeypatch.setattr(attachment_module, "enterprise_ai_reasoning", lambda *_: None)

@@ -21,6 +21,8 @@ dependencies = [
   "production-ready-system-settings-backend",
   # 品質評価の反復試行の集計と区間（#2582。標準 library だけの採点の部品）。
   "production-ready-evaluation-scoring",
+  # クォータナリ接続（Anthropic Claude の Messages API）のモデルを公式の SDK で呼ぶ共通の部品（#5546）。
+  "production-ready-anthropic-messages",
   "openai-agents==0.24.0",
   # 品質評価の評価セットの Excel の取り込み・書き出し（NL2SQL と同じ。#776）。
   "openpyxl>=3.1",
@@ -51,6 +53,7 @@ dev = [
 production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 production-ready-system-settings-backend = { path = "../../platform/packages/system_settings_backend", editable = true }
 production-ready-evaluation-scoring = { path = "../../platform/packages/evaluation_scoring", editable = true }
+production-ready-anthropic-messages = { path = "../../platform/packages/anthropic_messages", editable = true }
 
 [build-system]
 requires = ["hatchling"]

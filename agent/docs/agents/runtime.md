@@ -7,6 +7,7 @@
 - 実行は Control Plane の**組み込み Runtime**（`features/agent/builtin_runtime.py`）。
   - SDK は OpenAI Agents SDK（`openai-agents`。版を固定し、Dependabot の PR で上げる）。
   - モデルは OCI Enterprise AI の Responses API（システム設定 > モデルの接続）。別の LLM provider は組み込まない。
+  - クォータナリ接続（Anthropic Claude の Messages API。#5546）のモデルは、1 回の生成（品質評価の判定・意味の判定・下書きの提案・会話の添付の画像の読み取り）だけを platform の `pr_anthropic_messages` で呼ぶ（`anthropic_model.py`。`model_factory` が `AnthropicMessagesModel` を返し、画像の読み取りも同じ `call_anthropic_messages` を通す）。業務 Agent の実行（ツールの呼び出し・複数のターン）はまだ対応せず、`require_runtime_model` がモデルを呼ぶ前に `runtime.model_connection_not_supported` で失敗にする（別のモデル・接続へ切り替えない）。
   - SDK の tracing は常に無効にする（業務データを外部へ送らない）。
 - 外部の Runtime（OpenClaw / Hermes / DeerFlow など）・Binding・Docker の Runtime は持たない（#754）。
 - 指示は「Agent の指示 + 割り当てた Skill の指示」。ツールは Skill の requirement が必要とするものだけを function tool として渡す。`server_id="control-plane"` は `tool_registry` のツール、それ以外は MCP 接続（`rag` / `nl2sql` / 登録した接続）の `tools/list` のツール（名前は `<接続>__<ツール>`）。Skill の指示は MCP のツールを素の名前（`rag_search`）で書いてよく、Run のときにモデルへ渡す名前へ書き直す。モデルが無い名前のツールを呼んでも Run は落とさず、呼ぶ名前をモデルへ返して呼び直させる（読み替えて実行はしない。#1303）。

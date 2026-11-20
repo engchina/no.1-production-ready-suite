@@ -3,7 +3,8 @@
 保存・解析・見え方・期限は platform の `pr_system_settings.chat_attachments`。Agent が持つのは:
 
 - 会話（thread）の持ち主の判定（添付の API の `conversation_owner`）。
-- 画像の読み取り（既定の Vision モデル。OCI Enterprise AI の Responses API）。送信した後、ツールが
+- 画像の読み取り（既定の Vision モデル。OCI Enterprise AI の Responses API、クォータナリ接続の
+  モデルは Anthropic Claude の Messages API。#5546）。送信した後、ツールが
   画像を初めて読むときに呼ぶ（アップロードでは呼ばない。#2652）。
 - 画像の原本（`chat_attachment_view_image`）: モデルが画像に対応すれば、原画像をツールの結果の
   画像（#2650 の `ToolOutputWithImages`）としてモデルの入力へ渡す。対応しなければ、質問の観点
@@ -38,6 +39,7 @@ from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning,
+    enterprise_ai_reasoning_effort,
     enterprise_ai_vision_model_id,
 )
 
@@ -90,6 +92,30 @@ def _image_reader(
     if not model_id:
         return None
     connection = enterprise_ai_connection_for_model(settings, model_id)
+
+    async def read_with_anthropic(data: bytes, media_type: str) -> str:
+        # クォータナリ接続（Anthropic Claude の Messages API。#5546）。
+        from pr_anthropic_messages import AnthropicImage, AnthropicMessagesRequest
+
+        from app.features.agent.anthropic_model import call_anthropic_messages
+
+        result = await call_anthropic_messages(
+            AnthropicMessagesRequest(
+                model_id=model_id,
+                user_text=prompt,
+                images=(AnthropicImage.from_bytes(media_type, data),),
+                reasoning_effort=enterprise_ai_reasoning_effort(settings, model_id),
+                max_output_tokens=enterprise_ai_output_token_budget(settings, model_id),
+            ),
+            api_key=connection.api_key,
+            endpoint_url=connection.effective_endpoint,
+            timeout_seconds=IMAGE_READ_TIMEOUT_SECONDS,
+            purpose="document.read",
+        )
+        return result.text
+
+    if connection.uses_anthropic_messages:
+        return read_with_anthropic
 
     async def read(data: bytes, media_type: str) -> str:
         from openai import AsyncOpenAI
