@@ -5482,6 +5482,10 @@
       "description": "回答の生成の AI の呼び出しが失敗した。"
     },
     {
+      "code": "answer_model_unavailable",
+      "description": "検索・回答プロファイルの回答のモデルが登録されていない（設定の誤り。message に直し方）。"
+    },
+    {
       "code": "chat_disabled",
       "description": "RAG のチャットが無効に設定されている（rag_chat は使えない）。"
     },
