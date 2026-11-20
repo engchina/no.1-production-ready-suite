@@ -33,7 +33,6 @@ from app.rag.request_context import (
 from app.rag.wiki_compiler import WIKI_CONTEXT_PROMPT, compile_pages
 from app.rag.wiki_links import (
     WIKI_LINK_PROMPT,
-    WIKI_LINK_SCHEMA_VERSION,
     WikiLinkDecision,
     WikiLinkItem,
     judge_links,
@@ -58,26 +57,6 @@ def compiler_fingerprint(settings: Settings) -> str:
             settings.rag_wiki_build_timeout_seconds,
             settings.rag_wiki_embedding_source_chars,
             settings.oci_genai_embedding_model,
-        ]
-    )
-
-
-def link_fingerprint(settings: Settings, compiler: str, knowledge_bases: Sequence[str]) -> str:
-    """文書をまたぐ関連の構築の条件（#5492）。
-
-    所属する KB が変われば候補の範囲が変わるので作り直す。
-    """
-    model_id = enterprise_ai_default_model_id(settings)
-    return fingerprint(
-        [
-            WIKI_LINK_SCHEMA_VERSION,
-            WIKI_LINK_PROMPT,
-            compiler,
-            model_id,
-            settings.rag_wiki_link_candidates,
-            settings.rag_wiki_link_batch_units,
-            settings.rag_wiki_link_source_chars,
-            sorted(knowledge_bases),
         ]
     )
 
@@ -192,23 +171,18 @@ class WikiJobs:
                 await self._build_links(document_id, owner, get_settings())
 
     async def _build_pages(self, document_id: str, owner: str | None, settings: Settings) -> bool:
-        """文書の案内を作る。今の原文・構築条件で公開済み（``READY``）なら True。"""
+        """文書の案内を作る。今の原文で公開済み（``READY``）なら True。"""
         store = self.store_factory()
         snapshot, lease, context_token = None, None, None
         # この回で案内を保存したか。時間切れでも進んでいれば、次の照合で続きから作る。
         progressed = False
         try:
             context_token = set_audit_request_context(await self.actor(owner, settings))
-            compiler = compiler_fingerprint(settings)
             revision = await store.revision_fingerprint(document_id)
             if revision is None:
                 return False
             state = await store.document_state(document_id)
-            if (
-                state
-                and state["compiler_fingerprint"] == compiler
-                and state["revision_fingerprint"] == revision
-            ):
+            if state and state["revision_fingerprint"] == revision:
                 if state["status"] == "READY":
                     return True
                 if state["status"] == "RUNNING" and state["leased"]:
@@ -226,7 +200,11 @@ class WikiJobs:
             raw = await store.source_units(document_id)
             if raw is None:
                 return False
-            snapshot = replace(raw, compiler_fingerprint=compiler, revision_fingerprint=revision)
+            snapshot = replace(
+                raw,
+                compiler_fingerprint=compiler_fingerprint(settings),
+                revision_fingerprint=revision,
+            )
             await store.enqueue(snapshot)
             lease = await store.claim(
                 snapshot,
@@ -240,16 +218,12 @@ class WikiJobs:
             if lease is None:
                 return False
             saved = await store.saved_pages(snapshot)
-            expected_revision, expected_compiler = revision, compiler
 
             async def authorize() -> None:
                 current = get_settings()
                 set_audit_request_context(await self.actor(owner, current))
-                if (
-                    compiler_fingerprint(current) != expected_compiler
-                    or await store.revision_fingerprint(document_id) != expected_revision
-                ):
-                    raise PermissionError("Wiki の構築設定・原文・所属が変更されました。")
+                if await store.revision_fingerprint(document_id) != revision:
+                    raise PermissionError("Wiki の原文・所属が変更されました。")
 
             async def checkpoint(pages: Sequence[WikiPage]) -> None:
                 nonlocal progressed
@@ -269,7 +243,6 @@ class WikiJobs:
                     system_prompt=(await store.prompt_overrides()).get(
                         "wiki_build", WIKI_CONTEXT_PROMPT
                     ),
-                    model_id=enterprise_ai_default_model_id(settings),
                     max_input_chars=settings.rag_wiki_build_input_chars,
                     batch_size=settings.rag_wiki_build_batch_units,
                     saved=saved,
@@ -344,15 +317,14 @@ class WikiJobs:
         token, context_token, progressed = None, None, False
         try:
             context_token = set_audit_request_context(await self.actor(owner, settings))
-            compiler = compiler_fingerprint(settings)
             state = await store.document_state(document_id)
-            if not state or state["status"] != "READY" or state["compiler_fingerprint"] != compiler:
+            if not state or state["status"] != "READY":
                 return
             source = str(state["source_fingerprint"])
             knowledge_bases = await store.link_knowledge_bases(document_id)
             if not knowledge_bases:
                 return
-            links = link_fingerprint(settings, compiler, knowledge_bases)
+            links = fingerprint(sorted(knowledge_bases))
             current = await store.link_state(document_id)
             if (
                 current
@@ -392,13 +364,12 @@ class WikiJobs:
                 set_audit_request_context(await self.actor(owner, latest))
                 now = await store.document_state(document_id)
                 if (
-                    compiler_fingerprint(latest) != compiler
-                    or not now
+                    not now
                     or now["status"] != "READY"
                     or now["source_fingerprint"] != source
                     or await store.link_knowledge_bases(document_id) != knowledge_bases
                 ):
-                    raise PermissionError("Wiki の案内・構築設定・所属が変更されました。")
+                    raise PermissionError("Wiki の案内・所属が変更されました。")
 
             async def checkpoint(
                 batch: Sequence[WikiLinkItem],
@@ -481,20 +452,19 @@ class WikiJobs:
         上位を候補にする。逆向きは、候補になったほかの文書の単位を起点に、その単位を見つけたこの
         文書の単位を候補にする。文書名は関連の理由の見出しに使う（#5514）。
         """
-        compiler, limit = compiler_fingerprint(settings), settings.rag_wiki_link_candidates
+        limit = settings.rag_wiki_link_candidates
         own_scope = await store.resolve(
             {
                 "knowledge_base_id": ",".join(knowledge_bases),
                 "document_id": document_id,
                 "include_superseded": "true",
             },
-            compiler,
         )
         own = await store.pages(own_scope)
         own = [page for page in own if link_query_text(page)]
         # KB ごとの範囲は 1 回だけ決め、起点の単位ごとの候補の検索で使い回す（#5499）。
         scopes = [
-            await store.resolve({"knowledge_base_id": kb, "include_superseded": "true"}, compiler)
+            await store.resolve({"knowledge_base_id": kb, "include_superseded": "true"})
             for kb in (knowledge_bases if own else ())
         ]
         names = {

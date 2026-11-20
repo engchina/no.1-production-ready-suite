@@ -68,7 +68,6 @@ async def compile_pages(
     units: Sequence[WikiUnit],
     *,
     model: WikiTextModel,
-    model_id: str,
     max_input_chars: int,
     batch_size: int,
     saved: Sequence[WikiPage] = (),
@@ -86,7 +85,7 @@ async def compile_pages(
     if not units or batch_size < 1:
         return []
     source = fingerprint([unit.model_dump() for unit in units])
-    version = fingerprint([WIKI_SCHEMA_VERSION, source, model_id, system_prompt, max_input_chars])
+    version = fingerprint([WIKI_SCHEMA_VERSION, source, system_prompt])
     expected = {unit.unit_id: unit for unit in units}
     pages = {
         page.unit.unit_id: page

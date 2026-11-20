@@ -335,7 +335,7 @@ async def test_routes_hide_invisible_knowledge_base_and_unknown_nodes(
     with pytest.raises(HTTPException) as caught:
         await routes.get_wiki_graph_overview(KB, offset=0, limit=25)
     assert caught.value.status_code == 404
-    assert module.GRAPH_PUBLISHED_SQL in graph_scope(KB)[0]
+    assert module.WIKI_PUBLISHED_SQL in graph_scope(KB)[0]
 
 
 @pytest.mark.asyncio

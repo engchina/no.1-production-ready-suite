@@ -37,7 +37,7 @@ async def test_later_reads_use_the_resolved_set_and_keep_chunk_row_filters() -> 
 
     store = WikiStore(cast(Any, Oracle()))
     filters = {"knowledge_base_id": "kb-a", "content_kind": "table"}
-    scope = await store.resolve(filters, "compiler-a")
+    scope = await store.resolve(filters)
     assert scope.sources == (("doc-a", "set-a", "fp-a"),)
     assert [row["document_id"] for row in scope.catalog] == ["doc-a"]
     await store.pages(scope, query_vector=[0.1], limit=3)

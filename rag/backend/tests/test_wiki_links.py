@@ -240,7 +240,7 @@ class LinkStore:
             status="FAILED" if failure_code else "READY", failure_code=failure_code, leased=0
         )
 
-    async def resolve(self, filters: dict[str, str], compiler: str) -> Any:
+    async def resolve(self, filters: dict[str, str]) -> Any:
         """範囲を決めた回数を数える（KB ごとに 1 回だけ。#5499）。"""
         self.resolved.append(dict(filters))
         scope = Scope(filters)
@@ -266,8 +266,6 @@ def link_setup(monkeypatch: pytest.MonkeyPatch) -> Any:
     store, model = LinkStore(), LinkModel()
     settings = Settings(rag_wiki_link_batch_units=8)
     monkeypatch.setattr(module, "get_settings", lambda: settings)
-    monkeypatch.setattr(module, "compiler_fingerprint", lambda settings: "compiler-a")
-    monkeypatch.setattr(module, "enterprise_ai_default_model_id", lambda settings: "model-a")
     embedded: list[list[str]] = []
 
     async def actor(owner: Any, settings: Any) -> Any:
@@ -297,6 +295,7 @@ async def test_links_are_built_both_ways_from_candidates_once(link_setup: Any) -
     # 前向き（A の 2 単位 → B）と逆向き（B の単位 → A）を、候補の組だけで 2 回で判定する。
     assert model.prompts == ["合成の編集済み指示"] * len(model.calls)
     store.prompts["wiki_links"] = "合成の次回用指示"
+    settings.rag_wiki_link_candidates += 1
     assert len(model.calls) == 2 and len(embedded) == 1
     forward, reverse = store.saved
     assert forward["sources"] == ["doc-a-a1", "doc-a-a2"]
@@ -335,7 +334,7 @@ async def test_interrupted_link_build_resumes_from_saved_keys(link_setup: Any) -
     jobs, store, model, settings, _ = link_setup
     store.state = {
         "source_fingerprint": "source-a",
-        "link_fingerprint": module.link_fingerprint(settings, "compiler-a", ["kb-a"]),
+        "link_fingerprint": module.fingerprint(["kb-a"]),
         "status": "FAILED",
         "failure_code": "interrupted",
         "leased": 0,

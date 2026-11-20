@@ -23,9 +23,8 @@ from app.clients.ai_calls import rag_error_kind
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, _filter_id_values
 from app.clients.wiki_store import WikiScope, WikiStore
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.rag.span_display import ANSWER_STEP_KIND
-from app.rag.wiki_jobs import compiler_fingerprint
 from app.rag.wiki_models import (
     WIKI_RELATION_PRIORITY,
     WikiFilePlan,
@@ -154,9 +153,6 @@ class WikiRetriever:
     ) -> None:
         self.settings, self.oracle, self.genai, self.llm = settings, oracle, genai, llm
         self.store = store or WikiStore(oracle)
-        # 背景の構築の条件は全体の設定で決まる。
-        # 回答のモデルのプロファイルの上書きで案内を無効にしない。
-        self.compiler = compiler_fingerprint(get_settings())
 
     async def scope(
         self, profile_id: str | None, filters: Mapping[str, str]
@@ -329,7 +325,7 @@ class WikiRetriever:
         # 範囲（有効な KB・権限・公開・今の保存版）を評価するのはここの 1 回だけ。後の読取は
         # 決めた案内の集合の中だけを読み、回答に使う原文は current_sources で照合し直す（#5499）。
         with _stage("Wiki: 目録の読み込み", seconds):
-            wiki = await store.resolve(scope, self.compiler)
+            wiki = await store.resolve(scope)
         catalog = list(wiki.catalog)
         if not catalog:
             return WikiSearchResult(trace={"status": "not_ready", "model_calls": 0})

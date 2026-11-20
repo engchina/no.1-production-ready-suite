@@ -24,8 +24,6 @@ from app.rag.wiki_compiler import WikiTextModel
 from app.rag.wiki_models import WikiLinkJudgments, WikiPage, link_schema
 from app.rag.wiki_navigation import Handles
 
-WIKI_LINK_SCHEMA_VERSION = "1"
-
 # 保存先の列（rag_wiki_links.reason VARCHAR2(800)）のバイト数。短い ID を見出しへ置き換えると
 # 理由が長くなるので、保存の前にこの長さへ収める。
 WIKI_LINK_REASON_BYTES = 800

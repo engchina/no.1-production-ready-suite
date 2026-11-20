@@ -136,10 +136,9 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert [row["status"] for row in await store.document_statuses(filters)] == ["READY"]
     assert len(await store.saved_pages(source)) == len(pages)
     assert len(await store.read_sources(pages, filters)) == len(pages)
-    # 検索の経路（#4941）: 目録・案内・ベクトルの上位・全文検索の順位は、公開済み・現在の構築条件の
+    # 検索の経路（#4941）: 目録・案内・ベクトルの上位・全文検索の順位は、現在の原文の公開済みの
     # 案内だけを返す。全文検索の順位は文書ごとに 1 回の SQL で取る（#4986）。
-    compiler = source.compiler_fingerprint
-    scope = await store.resolve(filters, compiler)
+    scope = await store.resolve(filters)
     assert [row["document_id"] for row in scope.catalog] == [did]
     # 形式に関わらない版の属性（版の状態と分類の有効期間）を、どの文書にも渡す（#5446 の続き）。
     assert scope.catalog[0]["source_identities"] == [{"version_status": "current"}]
@@ -147,7 +146,7 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
         did,
         DocumentClassification(effective_from=date(2026, 4, 1), effective_to=date(2027, 4, 1)),
     )
-    assert (await store.resolve(filters, compiler)).catalog[0]["source_identities"] == [
+    assert (await store.resolve(filters)).catalog[0]["source_identities"] == [
         {"version_status": "current", "effective_from": "2026-04-01", "effective_to": "2027-04-01"}
     ]
     unit_ids = sorted(page.unit.unit_id for page in pages)
@@ -162,13 +161,18 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
         "syntheticnavigation", scope, limit=1, document_ids=[did]
     )
     assert len(per_document) == 1 and per_document[0][0] == did
-    stale = await store.resolve(filters, fingerprint("compiler-b"))
-    assert not stale.catalog and not stale.sources and not await store.pages(stale)
+    changed = replace(source, compiler_fingerprint=fingerprint("compiler-b"))
+    assert not await store.enqueue(changed)
+    assert await store.claim(changed, lease_seconds=300) is None
+    reused = await store.resolve(filters)
+    assert [row["document_id"] for row in reused.catalog] == [did]
+    assert reused.sources == scope.sources
+    assert len(await store.read_sources(await store.pages(reused), filters)) == len(pages)
     await store.set_enabled(first.id, False)
     # 無効にした KB からは読めないが、保存済みの案内は残り、別の有効な KB では使える。
     assert not await store.read_sources(pages, filters)
     assert not await store.document_ids(filters)
-    assert not (await store.resolve(filters, compiler)).catalog
+    assert not (await store.resolve(filters)).catalog
     assert len(await store.read_sources(pages, other)) == len(pages)
     assert [row["status"] for row in await store.document_statuses(filters)] == ["READY"]
 
@@ -250,11 +254,10 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     await store.set_enabled(only_a.id, True)
     source_a, pages_a = await _published(store, a, "合成の原則 syntheticprinciple。")
     _, pages_b = await _published(store, b, "合成の例外 syntheticexception。")
-    compiler = source_a.compiler_fingerprint
     filters, narrow = {"knowledge_base_id": kb.id}, {"knowledge_base_id": only_a.id}
     scope, narrow_scope = (
-        await store.resolve(filters, compiler),
-        await store.resolve(narrow, compiler),
+        await store.resolve(filters),
+        await store.resolve(narrow),
     )
     assert await store.link_knowledge_bases(a) == sorted([kb.id, only_a.id])
     assert await store.link_knowledge_bases(b) == [kb.id]
@@ -295,10 +298,6 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
     assert await store.links([first_b], scope) == expected
     # 終点の文書が今の KB に無ければ辿らない（案内は KB をまたいで再利用されるので読むときに照合）。
     assert await store.links([first_a], narrow_scope) == []
-    # 構築条件が今と違う案内の関連は辿らない。
-    assert (
-        await store.links([first_a], await store.resolve(filters, fingerprint("compiler-b"))) == []
-    )
     # 中断の後は判定済みの鍵を返して続きから作る。
     await store.finish_links(a, lease, failure_code="interrupted")
     resumed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
@@ -382,7 +381,7 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
     draft_pages = _pages(draft.units, "合成の案内 syntheticscope。")
     await store.checkpoint(draft, lease, draft_pages, vectors=[_EMBEDDING] * len(draft_pages))
 
-    compiler, filters = source_a.compiler_fingerprint, {"knowledge_base_id": kb.id}
+    filters = {"knowledge_base_id": kb.id}
     units_a = sorted(page.unit.unit_id for page in pages_a)
 
     async def read(scope: Any) -> tuple[list[str], list[str], list[str], list[str]]:
@@ -397,7 +396,7 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
             ),
         )
 
-    scope = await store.resolve(filters, compiler)
+    scope = await store.resolve(filters)
     assert [row["document_id"] for row in scope.catalog] == [a]
     assert {did for did, _, _ in scope.sources} == {a}
     assert {value for _, _, value in scope.sources} == {source_a.source_fingerprint}
@@ -417,7 +416,7 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
     assert await read(scope) == (units_a, units_a, units_a, [a])
     assert not await store.text_rankings("syntheticrenewed", scope, limit=50)
     await store.finish(renewed, lease)
-    current = await store.resolve(filters, compiler)
+    current = await store.resolve(filters)
     assert {value for _, _, value in current.sources} == {renewed.source_fingerprint}
     assert sorted(p.unit.unit_id for p in await store.pages(current)) == units_a
     assert not await store.text_rankings("syntheticscope", current, limit=50)
@@ -456,7 +455,7 @@ async def test_publication_requires_saved_chunk_sets_to_equal_current_sets() -> 
     did, _, first_set = await _indexed_document(oracle, knowledge_base_id=kb.id, token=token)
     await store.set_enabled(kb.id, True)
     source, pages = await _published(store, did, "合成の案内 syntheticsets。")
-    compiler, filters = source.compiler_fingerprint, {"knowledge_base_id": kb.id}
+    filters = {"knowledge_base_id": kb.id}
     units = sorted(page.unit.unit_id for page in pages)
     # 原文の chunk の無い 2 つ目のレシピの chunk_set（有効・索引済みにすると今の保存版に入る）。
     recipe = await oracle.create_document_recipe(did)
@@ -494,7 +493,7 @@ async def test_publication_requires_saved_chunk_sets_to_equal_current_sets() -> 
 
     async def expect(published: bool) -> None:
         assert await judged() == (published, published)
-        scope = await store.resolve(filters, compiler)
+        scope = await store.resolve(filters)
         assert [row["document_id"] for row in scope.catalog] == ([did] if published else [])
         assert {value for value, _, _ in scope.sources} == ({did} if published else set())
         assert sorted(p.unit.unit_id for p in await store.pages(scope)) == (
