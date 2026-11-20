@@ -5,6 +5,8 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import * as lucide from "lucide-react";
+
 type ResolveFilename = (request: string, parent: unknown, isMain: boolean, options?: unknown) => string;
 type ModuleWithResolver = { _resolveFilename: ResolveFilename };
 
@@ -96,8 +98,14 @@ test("サイドバーのメニュー icon は機能ごとに期待した Lucide 
     Array.from(EXPECTED_ICON_NAMES_BY_LABEL_KEY.keys())
   );
 
+  // 期待値は import の名前で書く。lucide-react 1.x は旧名（FileCode2 など）を別名として残し、displayName は
+  // 新しい名前になるため、期待の名前の部品の displayName と比べる（#5571）。
+  const lucideIcons = lucide as unknown as Record<string, { displayName?: string } | undefined>;
   for (const item of items) {
-    assert.equal(item.icon.displayName, EXPECTED_ICON_NAMES_BY_LABEL_KEY.get(item.labelKey), item.labelKey);
+    const expectedName = EXPECTED_ICON_NAMES_BY_LABEL_KEY.get(item.labelKey) ?? "";
+    const expectedIcon = lucideIcons[expectedName];
+    assert.ok(expectedIcon, `${item.labelKey}: lucide-react に ${expectedName} が無い`);
+    assert.equal(item.icon.displayName, expectedIcon.displayName, `${item.labelKey}: ${expectedName}`);
   }
 });
 
