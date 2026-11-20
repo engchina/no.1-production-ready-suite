@@ -117,10 +117,18 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
     }
 
 
-def test_no_standard_answer_skips_network_and_keeps_external_status():
+@pytest.mark.parametrize("answer_points", [[], ["合成の必須要点"]])
+def test_no_standard_answer_skips_network_and_keeps_external_status(answer_points):
     with patch(PARSE) as parse:
         result = evaluate_answer_payload(
-            {"standard_answer": "  ", "external_data_required": True, "external_data_items": ["ログ"]}, object()
+            {
+                "standard_answer": "  ",
+                "answer_points": answer_points,
+                "answer_text": "合成の必須要点",
+                "external_data_required": True,
+                "external_data_items": ["ログ"],
+            },
+            object(),
         )
     parse.assert_not_called()
     assert result["status"] == "no_standard_answer"
