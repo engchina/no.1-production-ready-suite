@@ -40,6 +40,11 @@ const tertiary: EnterpriseAiConnectionSettings = {
   endpoint: "https://api.openai.com/v1",
   has_api_key: true,
 };
+// クォータナリ接続（#5546）は Anthropic Claude の Messages API 向けで、Endpoint URL は任意。
+const quaternary: EnterpriseAiConnectionSettings = {
+  ...emptyConnection("quaternary"),
+  has_api_key: true,
+};
 const models: EnterpriseAiConfiguredModel[] = [
   { model_id: "llm-a", display_name: "標準", vision_enabled: false },
   { model_id: "vlm-b", display_name: "", vision_enabled: true, connection_id: "secondary" },
@@ -47,15 +52,21 @@ const models: EnterpriseAiConfiguredModel[] = [
 ];
 
 describe("接続（#533 / #542）", () => {
-  it("接続はプライマリ接続・セカンダリ接続・ターシャリ接続の 3 つで、この順に並ぶ", () => {
-    expect(MAX_ENTERPRISE_AI_CONNECTIONS).toBe(3);
-    expect(ENTERPRISE_AI_CONNECTION_IDS).toEqual(["primary", "secondary", "tertiary"]);
+  it("接続はプライマリ接続・セカンダリ接続・ターシャリ接続・クォータナリ接続の 4 つで、この順に並ぶ", () => {
+    expect(MAX_ENTERPRISE_AI_CONNECTIONS).toBe(4);
+    expect(ENTERPRISE_AI_CONNECTION_IDS).toEqual([
+      "primary",
+      "secondary",
+      "tertiary",
+      "quaternary",
+    ]);
   });
 
   it("名前はタブと同じ「プライマリ接続」「セカンダリ接続」で、選択肢は設定した接続だけ", () => {
     expect(connectionLabel("primary")).toBe("プライマリ接続");
     expect(connectionLabel("secondary")).toBe("セカンダリ接続");
     expect(connectionLabel("tertiary")).toBe("ターシャリ接続");
+    expect(connectionLabel("quaternary")).toBe("クォータナリ接続");
     expect(connectionLabel("unknown")).toBe("プライマリ接続");
     expect(connectionOptions([primary])).toEqual([
       { value: "primary", label: "プライマリ接続" },
@@ -106,13 +117,17 @@ describe("接続（#533 / #542）", () => {
     expect(addConnection([primary, tertiary], "tertiary")).toEqual([primary, tertiary]);
   });
 
-  it("セカンダリ接続を設定したら Endpoint URL・Project OCID・API key は必須（プライマリは止めない）", () => {
-    expect(validateConnections([emptyConnection("primary")])).toEqual({});
+  it("接続は Endpoint URL と API key が必須で、Project OCID は任意（プライマリ接続も。#5546）", () => {
+    expect(validateConnections([emptyConnection("primary")])).toEqual({
+      primary: {
+        endpoint: "Endpoint URL を入力してください。",
+        api_key: "API key を入力してください。",
+      },
+    });
     const errors = validateConnections([primary, emptyConnection("secondary")]);
     expect(errors).toEqual({
       secondary: {
         endpoint: "Endpoint URL を入力してください。",
-        project_ocid: "Project OCID を入力してください。",
         api_key: "API key を入力してください。",
       },
     });
@@ -122,6 +137,22 @@ describe("接続（#533 / #542）", () => {
     });
     expect(validateConnections([primary, secondary])).toEqual({});
     expect(firstConnectionError({})).toBeNull();
+  });
+
+  it("クォータナリ接続は API key だけが必須で、保存済みの key の削除・削除済みの状態は許さない（#5546）", () => {
+    expect(validateConnections([primary, quaternary])).toEqual({});
+    const empty = emptyConnection("quaternary");
+    expect(validateConnections([primary, empty])).toEqual({
+      quaternary: { api_key: "API key を入力してください。" },
+    });
+    expect(validateConnections([primary, { ...empty, api_key: "sk-new" }])).toEqual({});
+    expect(validateConnections([primary, { ...quaternary, clear_api_key: true }])).toEqual({
+      quaternary: { api_key: "API key を入力してください。" },
+    });
+    expect(validateConnections([primary, empty], [primary, empty])).toEqual({
+      quaternary: { api_key: "API key を入力してください。" },
+    });
+    expect(connectionFieldId("quaternary", "endpoint")).toBe("enterprise-quaternary-endpoint");
   });
 
   it("API key は新しい入力か、削除しない保存済みの key があればよい", () => {

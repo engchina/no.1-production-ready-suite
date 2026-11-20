@@ -68,7 +68,6 @@ import {
   connectionOptions,
   firstConnectionError,
   hasConnection,
-  isProjectOcidOptional,
   modelConnectionFieldId,
   modelConnectionId,
   modelsUsingConnection,
@@ -76,6 +75,7 @@ import {
   normalizeModelSettings,
   removeConnection,
   unsavedConnectionIds,
+  usesAnthropicMessages,
   validateConnections,
   validateModelConnections,
   type ConnectionErrors,
@@ -811,9 +811,9 @@ export function ModelSettingsPage({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {/* プライマリ接続・セカンダリ接続・ターシャリ接続は同じ設定（接続）の別の枠なので、共有の Tabs で
-                  この順に切り替える（#542 / #786。README §4「Tabs」）。エラーのあるタブは invalid、保存していない
-                  入力は「未保存」で示す。 */}
+              {/* プライマリ接続・セカンダリ接続・ターシャリ接続・クォータナリ接続は同じ設定（接続）の別の枠なので、
+                  共有の Tabs でこの順に切り替える（#542 / #786 / #5546。README §4「Tabs」）。エラーのあるタブは
+                  invalid、保存していない入力は「未保存」で示す。 */}
               <Tabs
                 idPrefix={CONNECTION_TABS_ID_PREFIX}
                 ariaLabel={t("settings.model.connection.tabs")}
@@ -842,6 +842,7 @@ export function ModelSettingsPage({
                     (connection) => connection.connection_id === connectionTab,
                   )}
                   errors={connectionErrors[connectionTab]}
+                  defaultAnthropicEndpoint={baselineData?.default_anthropic_endpoint}
                   apiKeyVisible={Boolean(apiKeyVisible[connectionTab])}
                   onApiKeyVisibleChange={(visible) =>
                     setApiKeyVisible((current) => ({
@@ -1076,21 +1077,31 @@ const OPTIONAL_CONNECTION_MESSAGES = {
     emptyTitle: "settings.model.connection.tertiaryEmpty.title",
     emptyHint: "settings.model.connection.tertiaryEmpty.hint",
   },
+  quaternary: {
+    description: "settings.model.connection.quaternaryDescription",
+    emptyTitle: "settings.model.connection.quaternaryEmpty.title",
+    emptyHint: "settings.model.connection.quaternaryEmpty.hint",
+  },
 } as const;
 
 /**
- * 接続のタブの中身（#542 / #786）。
- * - プライマリ接続: 入力欄。OCI で運用するときだけ必須なので、3 つの欄とも「OCI 運用時必須」（保存は止めない）
- * - セカンダリ接続・ターシャリ接続（未設定）: 空の状態と「◯◯接続を設定」
- * - セカンダリ接続（設定済み）: 入力欄（3 つとも「必須」）と「セカンダリ接続を削除」。削除は説明の行の右端に置く
- *   （主操作の保存と隣に並べない。README「カード内の操作行」）。保存済み API key の削除は3接続で共通
- * - ターシャリ接続（設定済み）: OpenAI / OpenAI 互換 API 向け。Endpoint URL と API key は「必須」、
- *   Project OCID は任意（OCI Enterprise AI を使うときだけ入れる）。Endpoint URL の例は OpenAI の base URL
+ * 接続のタブの中身（#542 / #786 / #5546）。
+ * - プライマリ接続: 入力欄。Endpoint URL と API key は「必須」、Project OCID は任意
+ * - プライマリ接続の後ろの接続（未設定）: 空の状態と「◯◯接続を設定」
+ * - セカンダリ接続（設定済み）: プライマリ接続と同じ欄と「セカンダリ接続を削除」。削除は説明の行の右端に置く
+ *   （主操作の保存と隣に並べない。README「カード内の操作行」）。保存済み API key の削除は OpenAI 互換の
+ *   3 接続で共通
+ * - ターシャリ接続（設定済み）: OpenAI / OpenAI 互換 API 向け。欄はセカンダリ接続と同じで、Endpoint URL の例は
+ *   OpenAI の base URL、Project OCID の説明は OCI Enterprise AI を使うときだけ入れる旨
+ * - クォータナリ接続（設定済み）: Anthropic Claude の Messages API 向け。Project OCID の欄は出さず、Endpoint URL は
+ *   任意（空なら backend の既定の URL を placeholder と説明で示す）、API key は「必須」。key は接続のあることを
+ *   決めるので保存済みの key の削除の選択肢は出さず、接続の削除で消す
  */
 function ConnectionTabContent({
   connectionId,
   connection,
   errors,
+  defaultAnthropicEndpoint,
   apiKeyVisible,
   onApiKeyVisibleChange,
   onChange,
@@ -1100,6 +1111,8 @@ function ConnectionTabContent({
   connectionId: EnterpriseAiConnectionId;
   connection?: EnterpriseAiConnectionSettings;
   errors?: Partial<Record<ConnectionField, string>>;
+  /** クォータナリ接続の Endpoint URL が空のときに使う URL（API の応答。#5546）。 */
+  defaultAnthropicEndpoint?: string;
   apiKeyVisible: boolean;
   onApiKeyVisibleChange: (visible: boolean) => void;
   onChange: (
@@ -1110,6 +1123,7 @@ function ConnectionTabContent({
 }) {
   const primary = connectionId === PRIMARY_CONNECTION_ID;
   const tertiary = connectionId === TERTIARY_CONNECTION_ID;
+  const messagesApi = usesAnthropicMessages(connectionId);
   const label = connectionLabel(connectionId);
   const messages =
     connectionId === "primary" ? null : OPTIONAL_CONNECTION_MESSAGES[connectionId];
@@ -1134,9 +1148,27 @@ function ConnectionTabContent({
       </div>
     );
   }
-  // プライマリ接続は条件付きの必須（文言で区別。README §4「必須の表示」）。セカンダリ接続・ターシャリ接続は
-  // 既定の「必須」。ターシャリ接続の Project OCID は任意なので印を出さない（#786）。
-  const requiredLabel = primary ? t("settings.model.requiredInOci") : undefined;
+  // Endpoint URL と API key は既定の「必須」（プライマリ接続も。#5546）。Project OCID はどの接続でも任意なので
+  // 印を出さない。クォータナリ接続の Endpoint URL は任意（README §4「必須の表示」）。
+  const endpointHelper = messagesApi ? (
+    t("settings.model.enterprise.endpointHelpQuaternary", {
+      url: defaultAnthropicEndpoint ?? "",
+    })
+  ) : tertiary ? (
+    t("settings.model.enterprise.endpointHelpTertiary")
+  ) : (
+    <>
+      <span className="block">{t("settings.model.enterprise.endpointHelp")}</span>
+      <a
+        href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg"
+      >
+        {t("settings.model.enterprise.endpointDocs")}
+      </a>
+    </>
+  );
   return (
     <div
       data-testid={`enterprise-connection-${connectionId}`}
@@ -1167,60 +1199,42 @@ function ConnectionTabContent({
         <TextField
           id={connectionFieldId(connectionId, "endpoint")}
           label={t("settings.model.enterprise.endpoint")}
-          required
-          requiredLabel={requiredLabel}
+          required={!messagesApi}
           value={connection.endpoint}
           placeholder={
-            tertiary
-              ? t("settings.model.placeholder.endpointTertiary")
-              : t("settings.model.placeholder.endpoint")
+            messagesApi
+              ? defaultAnthropicEndpoint
+              : tertiary
+                ? t("settings.model.placeholder.endpointTertiary")
+                : t("settings.model.placeholder.endpoint")
           }
           error={errors?.endpoint}
-          helper={
-            tertiary ? (
-              t("settings.model.enterprise.endpointHelpTertiary")
-            ) : (
-              <>
-                <span className="block">
-                  {t("settings.model.enterprise.endpointHelp")}
-                </span>
-                <a
-                  href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg"
-                >
-                  {t("settings.model.enterprise.endpointDocs")}
-                </a>
-              </>
-            )
-          }
+          helper={endpointHelper}
           onValueChange={(value) => onChange({ endpoint: value })}
           width="full"
           className="col-span-full"
         />
-        <TextField
-          id={connectionFieldId(connectionId, "project_ocid")}
-          label={t("settings.model.enterprise.project")}
-          required={!isProjectOcidOptional(connectionId)}
-          requiredLabel={requiredLabel}
-          value={connection.project_ocid}
-          placeholder={t("settings.model.placeholder.project")}
-          helper={
-            tertiary
-              ? t("settings.model.enterprise.projectHelpTertiary")
-              : t("settings.model.enterprise.projectHelp")
-          }
-          error={errors?.project_ocid}
-          onValueChange={(value) => onChange({ project_ocid: value })}
-          width="full"
-          className="col-span-full"
-        />
+        {messagesApi ? null : (
+          <TextField
+            id={connectionFieldId(connectionId, "project_ocid")}
+            label={t("settings.model.enterprise.project")}
+            value={connection.project_ocid}
+            placeholder={t("settings.model.placeholder.project")}
+            helper={
+              tertiary
+                ? t("settings.model.enterprise.projectHelpTertiary")
+                : t("settings.model.enterprise.projectHelp")
+            }
+            error={errors?.project_ocid}
+            onValueChange={(value) => onChange({ project_ocid: value })}
+            width="full"
+            className="col-span-full"
+          />
+        )}
         <SecretField
           id={connectionFieldId(connectionId, "api_key")}
           label={t("settings.model.enterprise.apiKey")}
           required
-          requiredLabel={requiredLabel}
           value={connection.api_key}
           onValueChange={(value) => onChange({ api_key: value })}
           visible={apiKeyVisible}
@@ -1231,13 +1245,21 @@ function ConnectionTabContent({
           showLabel={t("settings.model.enterprise.apiKeyShow")}
           hideLabel={t("settings.model.enterprise.apiKeyHide")}
           placeholder={t("settings.model.placeholder.apiKey")}
-          helper={t("settings.model.enterprise.apiKeyHelp")}
+          helper={
+            messagesApi
+              ? t("settings.model.enterprise.apiKeyHelpQuaternary")
+              : t("settings.model.enterprise.apiKeyHelp")
+          }
           error={errors?.api_key}
-          clearOption={{
-            label: t("settings.model.enterprise.clearApiKey"),
-            checked: connection.clear_api_key,
-            onCheckedChange: (clear) => onChange({ clear_api_key: clear }),
-          }}
+          clearOption={
+            messagesApi
+              ? undefined
+              : {
+                  label: t("settings.model.enterprise.clearApiKey"),
+                  checked: connection.clear_api_key,
+                  onCheckedChange: (clear) => onChange({ clear_api_key: clear }),
+                }
+          }
           width="lg"
         />
       </FormGrid>
