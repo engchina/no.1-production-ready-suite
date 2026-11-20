@@ -133,9 +133,10 @@ def _enterprise_ai_check(settings: Settings) -> str:
         )
     }
     for connection in connections.values():
+        # Project OCID は任意（入れたときだけ OpenAI-Project ヘッダーを送る。#5546）。
+        # Endpoint URL は呼び出しに使う値（Messages API の接続で空なら既定の URL）で確かめる。
         required_status = _required_values_check(
-            connection.endpoint,
-            connection.project_ocid,
+            connection.effective_endpoint,
             api_path,
         )
         if required_status != READINESS_OK:

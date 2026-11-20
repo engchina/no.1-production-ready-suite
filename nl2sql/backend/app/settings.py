@@ -127,6 +127,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_tertiary_endpoint: str = ""
     oci_enterprise_ai_tertiary_project_ocid: str = ""
     oci_enterprise_ai_tertiary_api_key: str = ""
+    # クォータナリ接続（#5546。Anthropic Claude の Messages API 向け。Endpoint URL は任意）。
+    oci_enterprise_ai_quaternary_endpoint: str = ""
+    oci_enterprise_ai_quaternary_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""

@@ -8,9 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelSettingsPage, type ModelSettingsApi, type ModelSettingsData } from "../src";
 
-// #542: OCI Enterprise AI の接続は、カードの中の共有 Tabs（プライマリ接続 / セカンダリ接続 / ターシャリ接続）で
-// 切り替える。表示名の欄はなく、セカンダリ接続は「設定」したときだけ入力欄を出し、3 つの欄とも必須にする。
-// #786: ターシャリ接続（OpenAI / OpenAI 互換 API 向け）は Endpoint URL と API key が必須で、Project OCID は任意。
+// #542: モデルの接続は、カードの中の共有 Tabs（プライマリ接続 / セカンダリ接続 / ターシャリ接続 /
+// クォータナリ接続）で切り替える。表示名の欄はなく、プライマリ接続の後ろの接続は「設定」したときだけ入力欄を出す。
+// #786 / #5546: Endpoint URL と API key は必須（プライマリ接続も）で、Project OCID はどの接続でも任意。
+// クォータナリ接続（Anthropic Claude の Messages API 向け）は Project OCID の欄を持たず、Endpoint URL は任意。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -85,6 +86,8 @@ function data(withSecondary = false): ModelSettingsData {
     source: "runtime",
     secret_source: "environment",
     legacy_secret_detected: false,
+    // 画面は既定の URL を書き写さず、API の値を示す（合成の値で確かめる）。
+    default_anthropic_endpoint: "https://messages.example",
   };
 }
 
@@ -155,7 +158,7 @@ async function setInputValue(id: string, value: string) {
 async function submitConnections() {
   const form = host
     .querySelector<HTMLFormElement>(
-      "#enterprise-endpoint, #enterprise-secondary-endpoint, #enterprise-secondary-add, #enterprise-tertiary-endpoint, #enterprise-tertiary-add",
+      "#enterprise-endpoint, #enterprise-secondary-endpoint, #enterprise-secondary-add, #enterprise-tertiary-endpoint, #enterprise-tertiary-add, #enterprise-quaternary-endpoint, #enterprise-quaternary-add",
     )
     ?.closest("form");
   if (!form) throw new Error("connection form not found");
@@ -182,20 +185,21 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
 
     const tablist = host.querySelector('[role="tablist"][aria-label="OCI Enterprise AI の接続"]');
     expect(tablist).not.toBeNull();
-    // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続（#786）。
+    // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続 → クォータナリ接続（#786 / #5546）。
     expect([...tablist!.querySelectorAll('[role="tab"]')].map((item) => item.textContent)).toEqual([
       "プライマリ接続",
       "セカンダリ接続",
       "ターシャリ接続",
+      "クォータナリ接続",
     ]);
     expect(tab("プライマリ接続").getAttribute("aria-selected")).toBe("true");
     expect(tab("セカンダリ接続").getAttribute("aria-selected")).toBe("false");
     expect(host.querySelector("#enterprise-connection-name")).toBeNull();
     expect(host.textContent).not.toContain("表示名を");
-    // プライマリ接続の 3 つの欄は、同じ条件付きの必須（OCI 運用時必須）。
-    expect(labelText("enterprise-endpoint")).toBe("Endpoint URLOCI 運用時必須");
-    expect(labelText("enterprise-project-ocid")).toBe("Project OCIDOCI 運用時必須");
-    expect(labelText("enterprise-api-key")).toBe("API keyOCI 運用時必須");
+    // プライマリ接続の Endpoint URL と API key は必須、Project OCID は任意（#5546）。
+    expect(labelText("enterprise-endpoint")).toBe("Endpoint URL必須");
+    expect(labelText("enterprise-project-ocid")).toBe("Project OCID");
+    expect(labelText("enterprise-api-key")).toBe("API key必須");
     expect(host.textContent).toContain("登録モデルで接続を選ばなければ、プライマリ接続を使います。");
 
     // ← → / Home / End で移る（WAI-ARIA Tabs）。
@@ -217,6 +221,14 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
     expect(host.textContent).toContain("ターシャリ接続は設定されていません。");
     await act(async () => {
       tab("ターシャリ接続").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+      );
+    });
+    expect(tab("クォータナリ接続").getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector('[data-testid="enterprise-connection-quaternary-empty"]')).not.toBeNull();
+    expect(host.textContent).toContain("クォータナリ接続は設定されていません。");
+    await act(async () => {
+      tab("クォータナリ接続").dispatchEvent(
         new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
       );
     });
@@ -235,7 +247,7 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
     await click(buttonByText("セカンダリ接続を設定"));
     expect(document.activeElement?.id).toBe("enterprise-secondary-endpoint");
     expect(labelText("enterprise-secondary-endpoint")).toBe("Endpoint URL必須");
-    expect(labelText("enterprise-secondary-project-ocid")).toBe("Project OCID必須");
+    expect(labelText("enterprise-secondary-project-ocid")).toBe("Project OCID");
     expect(labelText("enterprise-secondary-api-key")).toBe("API key必須");
     // API key だけを消す指定は出さない（消すときはセカンダリ接続ごと削除する）。
     expect(host.querySelector("#enterprise-secondary-api-key-clear")).toBeNull();
@@ -252,9 +264,7 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
     expect(fieldError("enterprise-secondary-endpoint")).toBe(
       "Endpoint URL を入力してください。",
     );
-    expect(fieldError("enterprise-secondary-project-ocid")).toBe(
-      "Project OCID を入力してください。",
-    );
+    expect(fieldError("enterprise-secondary-project-ocid")).toBeUndefined();
     expect(fieldError("enterprise-secondary-api-key")).toBe(
       "API key を入力してください。",
     );
@@ -332,6 +342,101 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
       project_ocid: "",
       api_key: "sk-openai",
     });
+  });
+
+  it("プライマリ接続の Endpoint URL と API key が空なら保存しない（#5546）", async () => {
+    const updateModelSettings = vi.fn(pending);
+    const empty = data();
+    empty.settings.enterprise_ai.connections[0] = {
+      ...empty.settings.enterprise_ai.connections[0]!,
+      endpoint: "",
+      project_ocid: "",
+    };
+    await renderPage({
+      getModelSettings: async () => empty,
+      updateModelSettings,
+      testModelSettings: pending,
+    });
+
+    await setInputValue("enterprise-endpoint", "");
+    await submitConnections();
+    expect(fieldError("enterprise-endpoint")).toBe("Endpoint URL を入力してください。");
+    expect(fieldError("enterprise-project-ocid")).toBeUndefined();
+    expect(document.activeElement?.id).toBe("enterprise-endpoint");
+    expect(updateModelSettings).not.toHaveBeenCalled();
+
+    // Project OCID は空のままで保存できる。
+    await setInputValue("enterprise-endpoint", "https://primary.example");
+    await submitConnections();
+    expect(updateModelSettings).toHaveBeenCalledTimes(1);
+    expect(updateModelSettings.mock.calls[0]![0].enterprise_ai.connections[0]).toMatchObject({
+      endpoint: "https://primary.example",
+      project_ocid: "",
+    });
+  });
+
+  it("クォータナリ接続は API key だけが必須で、Project OCID の欄を出さない（#5546）", async () => {
+    const updateModelSettings = vi.fn(pending);
+    await renderPage({
+      getModelSettings: async () => data(),
+      updateModelSettings,
+      testModelSettings: pending,
+    });
+
+    await click(tab("クォータナリ接続"));
+    expect(host.textContent).toContain("Anthropic Claude（Messages API）");
+    await click(buttonByText("クォータナリ接続を設定"));
+    expect(document.activeElement?.id).toBe("enterprise-quaternary-endpoint");
+    expect(labelText("enterprise-quaternary-endpoint")).toBe("Endpoint URL");
+    expect(host.querySelector("#enterprise-quaternary-project-ocid")).toBeNull();
+    expect(labelText("enterprise-quaternary-api-key")).toBe("API key必須");
+    // 既定の URL は API の値を placeholder と説明で示す。
+    expect(
+      host.querySelector<HTMLInputElement>("#enterprise-quaternary-endpoint")?.placeholder,
+    ).toBe("https://messages.example");
+    expect(host.textContent).toContain("Anthropic の公式の API（https://messages.example）");
+
+    // 未入力の保存は API key だけをエラーにする。
+    await submitConnections();
+    expect(fieldError("enterprise-quaternary-endpoint")).toBeUndefined();
+    expect(fieldError("enterprise-quaternary-api-key")).toBe("API key を入力してください。");
+    expect(updateModelSettings).not.toHaveBeenCalled();
+
+    await setInputValue("enterprise-quaternary-api-key", "sk-synthetic");
+    await submitConnections();
+    expect(updateModelSettings).toHaveBeenCalledTimes(1);
+    const payload = updateModelSettings.mock.calls[0]![0];
+    expect(payload.enterprise_ai.connections.map((c) => c.connection_id)).toEqual([
+      "primary",
+      "quaternary",
+    ]);
+    expect(payload.enterprise_ai.connections[1]).toMatchObject({
+      endpoint: "",
+      api_key: "sk-synthetic",
+    });
+  });
+
+  it("保存済みのクォータナリ接続には key の削除の選択肢を出さない（消すときは接続を削除する）", async () => {
+    const saved = data();
+    saved.settings.enterprise_ai.connections.push({
+      connection_id: "quaternary",
+      endpoint: "",
+      project_ocid: "",
+      api_key: "",
+      has_api_key: true,
+      clear_api_key: false,
+    });
+    await renderPage({
+      getModelSettings: async () => saved,
+      updateModelSettings: pending,
+      testModelSettings: pending,
+    });
+
+    await click(tab("クォータナリ接続"));
+    expect(host.querySelector('[data-testid="enterprise-connection-quaternary"]')).not.toBeNull();
+    expect(host.querySelector("#enterprise-quaternary-api-key-clear")).toBeNull();
+    expect(host.querySelector("#enterprise-api-key-clear")).toBeNull();
+    buttonByText("クォータナリ接続を削除");
   });
 
   it("ターシャリ接続を先に設定してからセカンダリ接続を設定しても、タブの順に送る（#786）", async () => {
