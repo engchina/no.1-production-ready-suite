@@ -8,7 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, _execute
+from app.clients.wiki_graph_index import backfill_graph_index
 from app.clients.wiki_graph_store import WikiGraphStore, section_id
 from app.clients.wiki_store import WikiSnapshot, WikiStore
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, fingerprint
@@ -87,6 +88,15 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
         done=[f"forward:{first_a}"],
     )
     await store.finish_links(a, claimed[0])
+
+    # 既存の公開版の状態を再現し、移行を繰り返しても同じ章節と依存が読めることを確かめる。
+    await oracle._run_transaction(
+        lambda connection: _execute(
+            connection, "DELETE FROM rag_wiki_graph_nodes WHERE document_id=:doc", {"doc": a}
+        )
+    )
+    await oracle._run_transaction(backfill_graph_index)
+    await oracle._run_transaction(backfill_graph_index)
 
     overview = await graph.overview(kb.id)
     docs = {doc["document_id"]: doc for doc in overview["documents"]}

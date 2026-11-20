@@ -104,7 +104,7 @@ class FakeOracle:
         if "neighbors AS" in statement:
             uid = binds["graph_unit"]
             by_id = {page.unit.unit_id: page for _, page in pages}
-            edges = [
+            edges: list[tuple[str, str, str, str, str | None]] = [
                 (page.unit.unit_id, dep.unit_id, dep.relation, "same_document", None)
                 for page in by_id.values()
                 for dep in page.navigation.dependencies
