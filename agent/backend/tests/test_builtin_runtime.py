@@ -626,6 +626,36 @@ def test_missing_model_settings_fail_the_run(monkeypatch: MonkeyPatch, calls: _C
     assert run.events[-1].payload["error_code"] == "runtime.model_not_configured"
 
 
+def test_anthropic_messages_model_fails_the_run_before_calling_the_model(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """クォータナリ接続（Messages API）のモデルは、実行（ツールの呼び出し）にまだ使えない（#5546）。
+
+    モデルを呼ばずに理由の分かる失敗にし、ほかの接続へ切り替えない。
+    """
+    del calls
+    target = ModelTarget(
+        model_id="claude-run-a",
+        endpoint="https://api.anthropic.com",
+        project_ocid="",
+        api_key="sk-ant-synthetic",
+        uses_anthropic_messages=True,
+    )
+    monkeypatch.setattr(builtin_runtime, "resolve_model_target", lambda _model_id="": target)
+    monkeypatch.setattr(
+        builtin_runtime, "model_factory", lambda _target: pytest.fail("モデルを作ってはいけない")
+    )
+    run_id = _create_run()
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.FAILED
+    payload = run.events[-1].payload
+    assert payload["error_code"] == builtin_runtime.MODEL_CONNECTION_NOT_SUPPORTED_CODE
+    assert "claude-run-a" in run.events[-1].message
+
+
 def test_unregistered_model_fails_without_switching_connections(monkeypatch: MonkeyPatch) -> None:
     """登録に無いモデル（登録を消したなど）は、プライマリ接続へ切り替えずに失敗する（#3240）。
 

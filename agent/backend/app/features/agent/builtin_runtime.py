@@ -3,7 +3,8 @@
 Control Plane の中で業務 Agent を実行する。外部の Runtime・Binding・Docker は使わない。
 
 - モデル: システム設定 > モデル の OCI Enterprise AI（Agent の `model_id`、無ければ既定の
-  テキストモデル）。
+  テキストモデル）。クォータナリ接続（Anthropic Claude の Messages API。#5546）のモデルは
+  1 回の生成（`anthropic_model`）だけに使い、Run は `require_runtime_model` で止める。
   SDK の tracing は無効にする（業務データを外部へ送らない）。
 - 指示: Agent の指示と、割り当てた Skill の指示を合わせる。指示の中の MCP のツールの素の名前は、
   モデルに渡す名前（`<接続>__<ツール>`）に書き直す。無い名前のツールを呼んだら、呼ぶ名前をモデルへ
@@ -107,7 +108,9 @@ from pr_system_settings.enterprise_ai_errors import (
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
     DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+    ENTERPRISE_AI_QUATERNARY_CONNECTION_ID,
     EnterpriseAiModelNotRegisteredError,
+    connection_label,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_image_input_tokens,
@@ -425,6 +428,9 @@ class ModelTarget:
     # （pr_backend_core.bounded_calls）を通す呼び出しは 0 にし、再試行を実行器に任せる。
     sdk_max_retries: int | None = None
     online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
+    # クォータナリ接続（Anthropic Claude の Messages API）のモデルか（#5546）。`endpoint` は
+    # Messages API の Endpoint URL（空の設定は Anthropic の公式の API）、`project_ocid` は空。
+    uses_anthropic_messages: bool = False
 
     def __repr__(self) -> str:  # pragma: no cover - API key を出さない
         return f"ModelTarget(model_id={self.model_id!r}, endpoint={self.endpoint!r})"
@@ -462,7 +468,12 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
     return ModelTarget(
         model_id=resolved,
         # OpenAI 互換 API の base URL（Endpoint URL を入力どおり。#1440。platform の関数）。
-        endpoint=connection.base_url,
+        # クォータナリ接続は Messages API の Endpoint URL（#5546）。
+        endpoint=(
+            connection.effective_endpoint
+            if connection.uses_anthropic_messages
+            else connection.base_url
+        ),
         project_ocid=connection.project_ocid,
         api_key=connection.api_key,
         reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),
@@ -472,7 +483,34 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         vision_enabled=model_accepts_images(settings, resolved),
         image_input_tokens=enterprise_ai_image_input_tokens(settings, resolved),
         online_max_output_tokens=configured_online_output_tokens(settings),
+        uses_anthropic_messages=connection.uses_anthropic_messages,
     )
+
+
+MODEL_CONNECTION_NOT_SUPPORTED_CODE = "runtime.model_connection_not_supported"
+
+
+def runtime_model_not_supported(target: ModelTarget) -> BuiltinRuntimeError:
+    """クォータナリ接続のモデルを業務 Agent の実行に使おうとしたときの失敗（#5546）。"""
+    return BuiltinRuntimeError(
+        MODEL_CONNECTION_NOT_SUPPORTED_CODE,
+        f"モデル「{target.model_id}」は"
+        f"{connection_label(ENTERPRISE_AI_QUATERNARY_CONNECTION_ID)}"
+        "（Anthropic Claude の Messages API）のモデルで、業務 Agent の実行（ツールの呼び出し）"
+        "にはまだ使えません。業務 Agent の編集でほかの接続のモデルを選ぶか、システム設定 > "
+        "モデル で既定のテキストモデルをほかの接続のモデルにしてください。",
+    )
+
+
+def require_runtime_model(target: ModelTarget) -> None:
+    """業務 Agent の実行（ツールの呼び出し・複数のターン）に使えるモデルか確かめる（#5546）。
+
+    クォータナリ接続（Anthropic Claude の Messages API）のモデルは、1 回の生成（品質評価の判定・
+    下書きの提案・画像の読み取り）だけに対応する。業務 Agent の実行は、呼び出しの前に理由の分かる
+    失敗にし、別のモデル・接続へ暗黙に切り替えない（#3240 の不変条件 2）。
+    """
+    if target.uses_anthropic_messages:
+        raise runtime_model_not_supported(target)
 
 
 def model_accepts_images(settings: Any, model_id: str) -> bool:
@@ -1134,6 +1172,12 @@ def enterprise_ai_http_client(timeout: float | None = None) -> DefaultAsyncHttpx
 
 
 def _default_model_factory(target: ModelTarget) -> Model:
+    if target.uses_anthropic_messages:
+        # クォータナリ接続は Messages API の 1 回の生成だけ（#5546。ツール・複数のターンは
+        # `require_runtime_model` が実行の前に止める）。
+        from app.features.agent.anthropic_model import AnthropicMessagesModel
+
+        return AnthropicMessagesModel(target)
     headers = {"OpenAI-Project": target.project_ocid} if target.project_ocid else None
     client = AsyncOpenAI(
         base_url=target.endpoint,
@@ -3058,6 +3102,7 @@ def build_sdk_agent(
             "業務 Agent の編集でスキルを選び直して公開してください。",
         )
     target = resolve_model_target(model_id)
+    require_runtime_model(target)
     attachments = thread_attachment_toolset(thread_id)
     mcp_tools, warnings = discover_mcp_tools(
         skill_ids,
@@ -5790,6 +5835,7 @@ def runtime_status() -> dict[str, Any]:
     }
     try:
         target = resolve_model_target("")
+        require_runtime_model(target)
     except BuiltinRuntimeError as exc:
         status.update(error_code=exc.code, message=exc.message)
         return status
