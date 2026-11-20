@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from copy import deepcopy
@@ -1480,6 +1481,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def trace_body_namespace(self) -> str | None: ...
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
+    def release_after_checkpoint(self, release: Callable[[], None]) -> None: ...
     def flush_writes(self, ticket: int | None = None) -> None: ...
     def pending_writes(self) -> int: ...
     def create_builtin_run(
@@ -1786,6 +1788,8 @@ class AgentRuntimeRepository:
         self._pending: list[_StagedChanges] = []
         self._staged_ticket = 0
         self._written_ticket = 0
+        self._release_lock = Lock()
+        self._body_releases: deque[tuple[int, Callable[[], None]]] = deque()
         self._writer_wake = threading.Event()
         self._writer_thread: threading.Thread | None = None
         # span の記録をまとめて保存する予定があるか（`record_builtin_span`。#3226）。
@@ -1924,6 +1928,30 @@ class AgentRuntimeRepository:
                 f"変えた Run・業務 Agent に保存の印がありません（#1939）: {missing[:10]}"
             )
 
+    def release_after_checkpoint(self, release: Callable[[], None]) -> None:
+        """span の遅延保存も予定に含め、当該 ticket の commit 後に未登録の本文を解放する。"""
+        with self._lock:
+            self._persist_locked(background=True)
+            target = self._staged_ticket
+            with self._release_lock:
+                pending = target > self._written_ticket
+                if pending:
+                    self._body_releases.append((target, release))
+        if pending:
+            self._request_background_write()
+        else:
+            release()
+
+    def _advance_written_ticket(self, ticket: int) -> None:
+        ready = []
+        with self._release_lock:
+            self._written_ticket = max(self._written_ticket, ticket)
+            while self._body_releases and self._body_releases[0][0] <= self._written_ticket:
+                _, release = self._body_releases.popleft()
+                ready.append(release)
+        for release in ready:
+            release()
+
     def _flush_after_release(self, ticket: int) -> None:
         """lock を放した後に、積んだ保存の予定を書く（event loop の上ならバックグラウンドで）。"""
         if BACKGROUND_WRITES and _on_event_loop_thread():
@@ -1943,7 +1971,7 @@ class AgentRuntimeRepository:
             self._lock.acquire()
             try:
                 if not self._pending:
-                    self._written_ticket = max(self._written_ticket, target)
+                    self._advance_written_ticket(target)
                     return
                 batch = self._pending.pop(0)
                 while self._pending:
@@ -1961,7 +1989,7 @@ class AgentRuntimeRepository:
                 finally:
                     self._lock.release()
                 raise
-            self._written_ticket = max(self._written_ticket, batch.ticket)
+            self._advance_written_ticket(batch.ticket)
             duration_ms = (time.perf_counter() - started) * 1000
             logger.log(
                 logging.WARNING if duration_ms >= _SLOW_WRITE_MS else logging.DEBUG,
@@ -4672,7 +4700,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         except AgentRuntimeSnapshotCorruptError as exc:
             raise AgentRuntimeCheckpointCorruptError(self._corrupt_message(str(exc))) from exc
         self._pending.clear()
-        self._written_ticket = self._staged_ticket
+        self._advance_written_ticket(self._staged_ticket)
         self._replace_state_locked(snapshot)
         self._load_report = report
         self._synced_version = head.version if head is not None else 0
@@ -4812,7 +4840,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                 raise
             self._synced_version = version
             if batch is not None:
-                self._written_ticket = max(self._written_ticket, batch.ticket)
+                self._advance_written_ticket(batch.ticket)
             return result
 
     def _take_pending_locked(self) -> _StagedChanges | None:
