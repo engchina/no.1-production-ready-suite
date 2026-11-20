@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, Download, LocateFixed } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ExcerptContent } from "../data/excerpt-content";
 import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
@@ -8,7 +8,6 @@ import { Disclosure } from "../ui/disclosure";
 import { Skeleton } from "../ui/skeleton";
 import { CodepointHighlight } from "./codepoint-highlight";
 import { SourceRecordView, type SourceRecordViewData } from "./source-record-view";
-import { OriginalSourcePanel, type OriginalSourceLoader } from "./original-source-panel";
 import { SourceVersionStaleNotice } from "./source-version-stale-notice";
 import { isSourceVersionStale } from "../../lib/api-error";
 import { resolveContentLang } from "../../lib/content-lang";
@@ -23,7 +22,7 @@ export interface EvidenceReadingWindow {
   revision: string;
   anchor_status: "exact" | "element" | "unresolved";
   section_path: string[];
-  blocks: { id: string; text: string; offset: number; highlights: [number, number][]; cited: boolean; kind?: string; heading?: string[]; record?: SourceRecordViewData }[];
+  blocks: { id: string; text: string; offset: number; highlights: [number, number][]; cited: boolean; kind?: string; heading?: string[]; references?: { start: number; end: number; cursor: string }[]; record?: SourceRecordViewData }[];
   previous_cursor: string | null;
   next_cursor: string | null;
   outline: { id: string; title: string; parent_id: string | null; has_children: boolean }[];
@@ -46,6 +45,29 @@ const labels = {
 const EMPTY_INPUT: EvidenceReadingInput = {};
 type ReaderBlock = EvidenceReadingWindow["blocks"][number];
 
+function ReaderText({ block, highlight, disabled, onReference }: {
+  block: ReaderBlock; highlight: boolean; disabled: boolean; onReference: (cursor: string) => void;
+}) {
+  const ranges = highlight ? block.highlights : [];
+  if (!block.references?.length) return ranges.length ? <CodepointHighlight text={block.text} ranges={ranges} /> : block.text;
+  const chars = Array.from(block.text);
+  const segment = (start: number, end: number) => {
+    const clipped: [number, number][] = [];
+    for (const [a, b] of ranges) {
+      const left = Math.max(a, start), right = Math.min(b, end);
+      if (left < right) clipped.push([left - start, right - start]);
+    }
+    return <CodepointHighlight text={chars.slice(start, end).join("")} ranges={clipped} />;
+  };
+  let position = 0;
+  const parts = block.references.map(ref => {
+    const before = segment(position, ref.start);
+    position = ref.end;
+    return <Fragment key={ref.start}>{before}<button type="button" disabled={disabled} className="text-accent-fg underline underline-offset-2" onClick={() => onReference(ref.cursor)}>{segment(ref.start, ref.end)}</button></Fragment>;
+  });
+  return <>{parts}{segment(position, chars.length)}</>;
+}
+
 /**
  * 続くブロックの役割（引用の元 / 追加の参考文脈）と章節が同じなら 1 つの区画にまとめる（#5428）。
  * 1 行が 1 要素の原本・リストの項目を、役割と章節名の繰り返しで細切れにしない。CSV・Excel の記録は
@@ -62,16 +84,15 @@ export function readerGroups(blocks: readonly ReaderBlock[]): { cited: boolean; 
   return groups;
 }
 
-export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true, loadOriginal, purpose = "citation" }: {
+export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true, purpose = "citation" }: {
   readingKey: string;
   loadWindow: (input: EvidenceReadingInput, signal: AbortSignal) => Promise<EvidenceReadingWindow>;
   enabled?: boolean;
   downloadUrl?: string;
   highlight?: boolean;
-  loadOriginal?: OriginalSourceLoader;
   purpose?: "citation" | "selection";
 }) {
-  const [request, setRequest] = useState<{ key: string; input: EvidenceReadingInput; serial: number }>({ key: readingKey, input: {}, serial: 0 });
+  const [request, setRequest] = useState<{ key: string; input: EvidenceReadingInput; serial: number; reference?: boolean }>({ key: readingKey, input: {}, serial: 0 });
   const input = request.key === readingKey ? request.input : EMPTY_INPUT;
   const [outline, setOutline] = useState({ key: readingKey, open: false });
   const focusBody = useRef<string | null>(null);
@@ -90,9 +111,9 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
       const explicit = focusBody.current === readingKey;
       setState(old => {
         const previous = old.key === readingKey && old.windows[0]?.revision === result.revision ? old.windows : [];
-        const windows = input.cursor ? input.direction === "before" ? [result, ...previous].slice(0, 3) : [...previous, result].slice(-3) : [result];
+        const windows = input.cursor && !request.reference ? input.direction === "before" ? [result, ...previous].slice(0, 3) : [...previous, result].slice(-3) : [result];
         const notice = !explicit ? undefined : !result.blocks.length ? labels.empty
-          : input.direction === "before" ? labels.beforeShown : input.direction === "after" ? labels.afterShown
+          : request.reference ? "参照先の項へ移動しました。" : input.direction === "before" ? labels.beforeShown : input.direction === "after" ? labels.afterShown
           : input.scope === "parent" ? labels.parentShown : input.scope || input.section_id ? labels.sectionShown : labels.anchorShown;
         const anchor = !input.cursor && !input.scope && !input.section_id;
         const block = (anchor ? result.blocks.find(block => block.highlights.length || block.cited) : undefined) ?? result.blocks[0];
@@ -129,10 +150,10 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
       if (bounds.bottom > window.innerHeight || bounds.top < 0) node.scrollIntoView({ block: "nearest" });
     }
   }, [outline, readingKey]);
-  const read = (input: EvidenceReadingInput = {}) => {
+  const read = (input: EvidenceReadingInput = {}, reference = false) => {
     focusBody.current = readingKey;
     if (input.section_id || input.scope) setOutline({ key: readingKey, open: false });
-    setRequest(old => ({ key: readingKey, input, serial: old.serial + 1 }));
+    setRequest(old => ({ key: readingKey, input, reference, serial: old.serial + 1 }));
   };
   // 版の失効（#4092）: どの操作も同じ結果になるので、案内だけを出す（保存した抜粋はパネルの要約に残る）。
   if (state.key === readingKey && isSourceVersionStale(state.error)) return <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="evidence-reader"><SourceVersionStaleNotice /></div>;
@@ -176,8 +197,7 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
           <p className="text-xs text-fg-muted">{currentBlock ? `${labels.current} · ` : ""}{group.cited ? purpose === "selection" ? "選択した原文の記録" : labels.cited : labels.context}</p>
           {group.heading?.length && !leadIsHeading ? <p className="text-sm font-semibold">{group.heading.join(" › ")}</p> : null}
           {group.items.map((block, index) => <div key={blockKey(block)} data-reader-block={blockKey(block)} data-reader-cited={block.cited} data-reader-current={currentBlock === block} className="space-y-1">
-            {block.record ? <SourceRecordView record={block.record} cited={block.cited} highlight={highlight} fallback={block.text}/> : block.kind === "table" ? <div className="space-y-1"><ExcerptContent contentKind="table" text={block.text} highlights={highlight && block.cited ? block.highlights : undefined} tableLabel={labels.table} className="text-sm leading-relaxed" /></div> : <p lang={resolveContentLang(undefined, block.text)} className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${leadIsHeading && index === 0 ? "font-semibold" : ""}`}>{highlight && block.highlights.length ? <CodepointHighlight text={block.text} ranges={block.highlights} /> : block.text}</p>}
-            {loadOriginal && current ? <OriginalSourcePanel key={`${block.id}:${current.revision}`} readingKey={readingKey} elementId={block.id} revision={current.revision} loadWindow={loadOriginal} enabled={enabled} /> : null}
+            {block.record ? <SourceRecordView record={block.record} cited={block.cited} highlight={highlight} fallback={block.text}/> : block.kind === "table" ? <div className="space-y-1"><ExcerptContent contentKind="table" text={block.text} highlights={highlight && block.cited ? block.highlights : undefined} tableLabel={labels.table} className="text-sm leading-relaxed" /></div> : <p lang={resolveContentLang(undefined, block.text)} className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${leadIsHeading && index === 0 ? "font-semibold" : ""}`}><ReaderText block={block} highlight={highlight} disabled={state.pending} onReference={cursor => read({ cursor, direction: "after" }, true)} /></p>}
           </div>)}
         </section>;
       })}

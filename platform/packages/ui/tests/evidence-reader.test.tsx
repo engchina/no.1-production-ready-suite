@@ -199,17 +199,7 @@ describe("版の失効（#4092）", () => {
     expect(host.querySelector("mark")?.textContent).toBe("合成の引用");
     await act(async () => root.unmount()); host.remove();
   });
-  it("原本の対応箇所も版の失効は案内にする", async () => {
-    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
-    const original = vi.fn().mockRejectedValue(apiFailure(409, "source_stale"));
-    await act(async () => { root.render(<EvidenceReader readingKey="d1:c1" loadWindow={vi.fn().mockResolvedValue(windowData)} loadOriginal={original} />); await settle(); });
-    const summary = host.querySelector<HTMLElement>('[data-testid="original-source-panel"] summary, [data-testid="original-source-panel"] button')!;
-    await act(async () => { summary.click(); await settle(); });
-    const panel = host.querySelector('[data-testid="original-source-panel"]')!;
-    expect(panel.textContent).toContain(STALE_TEXT);
-    expect(panel.textContent).not.toContain("再試行");
-    await act(async () => root.unmount()); host.remove();
-  });
+
 });
 
 

@@ -203,3 +203,24 @@ def test_unmatched_quote_marks_known_source_paragraphs_as_approximate() -> None:
     )
     assert result["anchor_status"] == "element"
     assert result["blocks"][0]["highlights"] == [[0, 2]]
+
+
+def test_previous_paragraph_requires_unique_structured_target() -> None:
+    payload = fixture()
+    elements = payload["elements"]
+    for index, number in [(23, "1"), (35, "2")]:
+        elements[index]["metadata"].update(
+            xml_tree_unit_kind="paragraph",
+            xml_tree_parent_label="合成の条",
+            xml_tree_paragraph_num=number,
+        )
+    elements[35]["text"] = "😀前項を参照する。"
+
+    def anchor_block() -> dict[str, Any]:
+        return next(row for row in read(payload)["blocks"] if row["id"] == "e35")
+
+    (ref,) = anchor_block()["references"]
+    assert (ref["start"], ref["end"]) == (1, 3)
+    assert read(payload, cursor=ref["cursor"])["blocks"][0]["id"] == "e23"
+    elements[24]["metadata"] = elements[23]["metadata"].copy()
+    assert "references" not in anchor_block()

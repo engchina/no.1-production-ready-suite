@@ -240,45 +240,32 @@ test("前後文の明示移動は新しい本文を表示し、四窓目でも�
   await expect(body.locator('[data-reader-block="window-0:0"]').locator("p").first()).toBeInViewport();
 });
 
-test("原本ノードは展開時だけ取得し、版と対応範囲を保持する", {tag:"@responsive"}, async ({page},testInfo) => {
+test("前項を開き上部の操作で引用位置に戻る", {tag:"@responsive"}, async ({page},testInfo) => {
   await search(page);
-  const inputs: URLSearchParams[] = [];
-  let release!: () => void;
-  const wait = new Promise<void>(resolve => {release = resolve;});
-  let failNext = false;
-  await page.route("**/api/documents/doc-a/source-map?**",async route => {
-    const params = new URL(route.request().url()).searchParams; inputs.push(params);
-    const index = Number(params.get("source_index") ?? 0);
-    await wait;
-    if (failNext) return route.fulfill({status:503,json:{data:null,error_messages:["合成の原本取得失敗"],warning_messages:[]}});
-    return route.fulfill({json:{data:{status:"exact",revision:"ex1",chunk_revision:"v1",element_id:"anchor",variant:"original",pointer:`/nodes/${index}`,source_index:index,source_count:2,text:"😀引用した合成本文",highlights:[[1,3]],coordinate_unit:"unicode_codepoint",next_offset:null,previous_offset:null}}});
+  await page.route("**/api/documents/doc-a/reader?**", route => {
+    const params = new URL(route.request().url()).searchParams;
+    const target = params.get("cursor") === "first";
+    const block = target
+      ? {id:"first",text:"第一項の本文です。",cited:false,highlights:[]}
+      : {id:"second",text:"😀前項を参照する。",cited:true,highlights:[[0,3]],references:[{start:1,end:3,cursor:"first"}]};
+    return route.fulfill({json:{data:{...readerWindow(EXCERPT,params),blocks:[{...block,offset:0}]}}});
   });
   await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
-  const reader=page.getByTestId("evidence-reader");
-  const panel=reader.getByTestId("original-source-panel").first();
-  await expect(panel).toBeVisible(); expect(inputs).toHaveLength(0);
-  await panel.locator("summary").click();
-  await expect(panel.locator("[data-processing-label]")).toBeVisible();
-  await expect(panel).toContainText("00:01",{timeout:4000});
-  release();
-  const content=panel.getByTestId("original-source-content");
-  await expect(content.locator("mark")).toHaveText("引用");
-  expect(inputs[0].get("expected_revision")).toBe("v1");
-  expect(inputs[0].get("element_id")).toBe("anchor");
-  await expect(content).toBeInViewport();
-  await expect(content).toBeFocused();
-  await page.screenshot({path:testInfo.outputPath(`original-node-${testInfo.project.name}.png`),animations:"disabled"});
-  failNext = true;
-  await panel.getByRole("button",{name:"次の原本ノード",exact:true}).click();
-  await expect(panel).toContainText("合成の原本取得失敗");
-  await expect(content).toContainText("/nodes/0");
-  failNext = false;
-  await panel.getByRole("button",{name:"再試行",exact:true}).click();
-  await expect(content).toContainText("/nodes/1");
-  expect(inputs.at(-1)?.get("source_index")).toBe("1");
+  const reader = page.getByTestId("evidence-reader");
+  const reference = reader.getByRole("button",{name:"前項",exact:true});
+  const back = reader.getByRole("button",{name:"引用位置に戻る",exact:true});
+  await expect(reference.locator("mark")).toHaveText("前項");
+  await expect(reader.getByTestId("original-source-panel")).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath("reference.png")});
+  await reference.click();
+  await expect(reader.locator("[data-reader-current=true]")).toContainText("第一項の本文です。");
+  await expect(reference).toHaveCount(0);
+  await expect(back).toHaveCount(1);
+  await page.screenshot({path:testInfo.outputPath("destination.png")});
+  await back.click();
+  await expect(reference).toBeVisible();
   await expectNoPageOverflow(page);
 });
-
 
 for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md", "csv", "xlsx", "docx", "json", "html", "htm"]) {
   test(`Chatの原文の段落を強調する (${extension})`, {tag:"@responsive"}, async ({page}, testInfo) => {
@@ -304,14 +291,6 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
       await page.route("**/api/documents/doc-text/recipes/r1/preview-source?**",route=>route.fulfill({json:{data:{file_name:"synthetic.jsonl",content_type:"application/vnd.production-ready.structured-records+jsonl",is_pdf:false,is_structured_records:true}}}));
       await page.route("**/api/documents/doc-text/reader?**",route=>route.fulfill({json:{data:{...structured.window,revision:"cs1"}}}));
     }
-    const genericOriginal = ["json", "html", "htm"].includes(extension);
-    const original = extension === "json" ? '{"a":"同じ値","b":"同じ値"}' : '<p>同じ値</p><p>同じ値</p>';
-    const selectedOffset = original.lastIndexOf("同じ値");
-    const originalInputs: URLSearchParams[] = [];
-    if (genericOriginal) await page.route("**/api/documents/doc-text/source-map?**", route => {
-      originalInputs.push(new URL(route.request().url()).searchParams);
-      return route.fulfill({json:{data:{status:"exact",revision:"ex1",chunk_revision:"v1",anchor_status:"element",element_id:"a",variant:"original",pointer:extension === "json" ? "/b" : "p[2]",source_index:0,source_count:1,text:original,offset:0,highlights:[[selectedOffset,selectedOffset+3]],coordinate_unit:"unicode_codepoint",previous_offset:null,next_offset:null},error_messages:[],warning_messages:[]}});
-    });
     await page.goto(`/chat?conversation_id=c-text&search_answer_profile_id=${PROFILE.id}`);
     await page.getByTestId("chat-answer-body").getByRole("button").filter({hasText:name}).first().click();
     const reader=page.getByTestId("evidence-reader-content");
@@ -382,16 +361,7 @@ for (const extension of ["txt", "md", "markdown", "candidate.md", "unresolved.md
         else await expect(reader).toContainText("合成の前文");
       }
     }
-    if (genericOriginal) {
-      const panel = page.getByTestId("original-source-panel").first();
-      await panel.locator("summary").focus();
-      await page.keyboard.press("Enter");
-      await expect(panel.locator("mark")).toHaveText("同じ値");
-      expect(originalInputs[0].get("expected_revision")).toBe("v1");
-      const mark = panel.locator("mark");
-      expect(await mark.evaluate(el => el.previousSibling?.textContent)).toBe(original.slice(0,selectedOffset));
-      await expect(panel.getByText("原本 · 1 / 1",{exact:true})).toBeVisible();
-    }
+    await expect(page.getByTestId("original-source-panel")).toHaveCount(0);
     await expectNoPageOverflow(page);
     await page.screenshot({path:testInfo.outputPath(`text-source-chat-${extension}.png`)});
   });
