@@ -22,12 +22,12 @@ from pr_anthropic_messages import (
     AnthropicMessagesRequest,
     AnthropicMessagesResult,
     AnthropicUsage,
+    anthropic_response_schema,
 )
 from pr_enterprise_ai.errors import EnterpriseAiIncomplete
 from rag_parser_core import anthropic_responses
 from rag_parser_core.anthropic_responses import (
     AnthropicRequestShapeError,
-    messages_json_schema,
     messages_request,
     responses_body_for_failure,
 )
@@ -343,25 +343,26 @@ def _rag_response_schemas() -> dict[str, Mapping[str, Any]]:
 @pytest.mark.parametrize("name", sorted(_rag_response_schemas()))
 def test_rag_response_schemas_fit_messages_structured_outputs(name: str) -> None:
     """数・文字列・件数の制約と型の配列は送る schema から外れ、object はすべて閉じる。"""
-    _assert_messages_schema(messages_json_schema(_rag_response_schemas()[name]))
+    # 送る schema は platform の部品が変換する（RAG は元の schema を渡す）。
+    _assert_messages_schema(anthropic_response_schema(_rag_response_schemas()[name]))
 
 
-def test_schema_keeps_nullable_and_enum_meaning() -> None:
-    schema = messages_json_schema(
+def test_request_passes_original_schema_for_single_conversion() -> None:
+    """RAG は text.format の schema をそのまま渡し、変換は部品が送る直前の 1 回だけにする。"""
+    schema = {
+        "type": "object",
+        "properties": {"id": {"type": ["string", "null"], "maxLength": 8}},
+        "required": ["id"],
+    }
+    request = messages_request(
         {
-            "type": "object",
-            "properties": {
-                "id": {"type": ["string", "null"], "maxLength": 8},
-                "kind": {"type": ["string", "null"], "enum": ["a", None]},
-            },
-            "required": ["id", "kind"],
+            "model": "m",
+            "input": "x",
+            "max_output_tokens": 10,
+            "text": {"format": {"type": "json_schema", "name": "r", "schema": schema}},
         }
     )
-    assert schema["properties"]["id"]["anyOf"][0]["type"] == "string"
-    assert schema["properties"]["id"]["anyOf"][1] == {"type": "null"}
-    assert "maxLength: 8" in schema["properties"]["id"]["anyOf"][0]["description"]
-    assert schema["properties"]["kind"] == {"enum": ["a", None]}
-    assert schema["additionalProperties"] is False
+    assert request.response_schema == schema
 
 
 # --------------------------------------------------------------------------- 応答の写し方
@@ -432,8 +433,9 @@ async def test_parser_core_structured_output_sends_schema(
     text = await client.generate("", "合成のデータ", system_prompt="指示", response_schema=schema)
 
     assert text == '{"answer": "合成"}'
-    sent = calls.requests[0].response_schema
-    assert sent is not None
+    passed = calls.requests[0].response_schema
+    assert passed is not None
+    sent = anthropic_response_schema(passed)
     assert sent["additionalProperties"] is False
     assert "maxLength" not in sent["properties"]["answer"]
     # 項目の説明は指示の最後の Step にして送る（#5230。Responses API の経路と同じ）。

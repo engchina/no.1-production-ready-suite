@@ -714,27 +714,6 @@ _CONNECTION_FIELDS: dict[str, _ConnectionFields] = {
 }
 
 
-class EnterpriseAiConnectionNotSupportedError(ValueError):
-    """製品の呼び出しの層がまだ対応していない接続のモデルを呼ぼうとした（#5546）。
-
-    クォータナリ接続（Anthropic Claude の Messages API）は、設定と登録モデルでの選択はできるが、
-    3 製品の呼び出しの層は OpenAI 互換の API だけを呼ぶ。OpenAI 互換の URL
-    （`EnterpriseAiConnection.base_url` / `request_url`）を引いた時点でこの誤りにし、別の接続へ
-    暗黙に切り替えない。文はそのまま利用者に見せてよい（接続の名前だけを含み、secret を含まない）。
-    """
-
-    code: Final = "enterprise_ai_connection_not_supported"
-    safe_for_user: Final = True
-
-    def __init__(self, connection_id: str) -> None:
-        self.connection_id = connection_id
-        super().__init__(
-            f"{connection_label(connection_id)}（Anthropic Claude の Messages API）のモデルは、"
-            "まだ呼び出せません。システム設定 > モデル で、登録モデルの「接続」をほかの接続に"
-            "変えてください。"
-        )
-
-
 @dataclass(frozen=True)
 class EnterpriseAiConnection:
     """モデルの呼び出しに使う接続（#533）。
@@ -768,20 +747,14 @@ class EnterpriseAiConnection:
     def base_url(self) -> str:
         """OpenAI 互換 API の base URL（`enterprise_ai_base_url`。#1440）。
 
-        Messages API の接続は OpenAI 互換の URL を持たないので、
-        `EnterpriseAiConnectionNotSupportedError`。
+        Messages API の接続（`uses_anthropic_messages`）は使わない（呼び出しの URL は
+        `effective_endpoint`）。
         """
-        self._require_openai_compatible()
         return enterprise_ai_base_url(self.endpoint)
 
     def request_url(self, api_path: str = DEFAULT_ENTERPRISE_AI_API_PATH) -> str:
-        """API を呼ぶ URL（`enterprise_ai_request_url`。#1440）。Messages API の接続は誤り。"""
-        self._require_openai_compatible()
+        """API を呼ぶ URL（`enterprise_ai_request_url`。#1440）。Messages API の接続は使わない。"""
         return enterprise_ai_request_url(self.endpoint, api_path)
-
-    def _require_openai_compatible(self) -> None:
-        if self.uses_anthropic_messages:
-            raise EnterpriseAiConnectionNotSupportedError(self.connection_id)
 
 
 def _connection_from_settings(settings: Any, connection_id: str) -> EnterpriseAiConnection:

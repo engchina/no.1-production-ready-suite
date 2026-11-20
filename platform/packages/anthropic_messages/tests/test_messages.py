@@ -19,6 +19,7 @@ from pr_anthropic_messages import (
     acreate_anthropic_message,
     anthropic_base_url,
     anthropic_effort,
+    anthropic_response_schema,
     create_anthropic_message,
 )
 
@@ -153,6 +154,60 @@ def test_structured_output_drops_constraints_messages_api_rejects(
         assert not rejected & set(prop)
     assert sent["properties"]["items"]["items"] == {"type": "string"}
     assert schema == original
+
+
+def test_response_schema_turns_type_lists_into_any_of() -> None:
+    # SDK の transform_schema は型の配列で失敗する（assert_never）。同じ意味の anyOf にしてから
+    # 変換し、型ごとの制約はその型の枝にだけ残して説明に写す。
+    schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": ["string", "null"], "maxLength": 8, "description": "識別子"},
+            "kind": {"type": ["string", "null"], "enum": ["a", None]},
+            "count": {"type": ["integer"], "minimum": 0},
+            "tags": {
+                "type": ["array", "null"],
+                "items": {"type": ["string", "null"]},
+                "maxItems": 3,
+            },
+        },
+        "required": ["id", "kind", "count", "tags"],
+    }
+    original = json.loads(json.dumps(schema))
+
+    sent = anthropic_response_schema(schema)
+
+    assert sent["additionalProperties"] is False
+    id_variants = sent["properties"]["id"]["anyOf"]
+    assert [variant["type"] for variant in id_variants] == ["string", "null"]
+    assert "maxLength" not in id_variants[0]
+    assert "maxLength: 8" in id_variants[0]["description"]
+    assert "識別子" in id_variants[1]["description"]
+    assert sent["properties"]["kind"] == {"enum": ["a", None]}
+    assert sent["properties"]["count"]["type"] == "integer"
+    assert "minimum" not in sent["properties"]["count"]
+    tags = sent["properties"]["tags"]["anyOf"]
+    assert tags[0]["type"] == "array"
+    assert tags[0]["items"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    assert "maxItems" not in tags[0]
+    assert tags[1] == {"type": "null"}
+    assert schema == original
+
+
+def test_response_schema_is_converted_once_when_sent(fake_api: FakeMessagesApi) -> None:
+    # 呼ぶ側は元の schema を渡し、部品が送る直前に 1 回だけ変換する（説明に写した制約が
+    # 二重にならない）。
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": ["string", "null"], "maxLength": 4}},
+        "required": ["name"],
+    }
+    fake_api.reply_stream(recorded_stream(blocks=({"type": "text", "text": '{"name": null}'},)))
+    _call(fake_api, _request(response_schema=schema))
+
+    sent = fake_api.body()["output_config"]["format"]["schema"]
+    assert sent == anthropic_response_schema(schema)
+    assert sent["properties"]["name"]["anyOf"][0]["description"].count("maxLength") == 1
 
 
 def test_images_are_sent_as_base64_blocks_before_text(fake_api: FakeMessagesApi) -> None:

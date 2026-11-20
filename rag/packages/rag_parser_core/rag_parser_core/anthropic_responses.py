@@ -15,9 +15,10 @@ RAG のモデルの呼び出しは 2 か所（共有 core の `OciEnterpriseAiCl
 - ほかの失敗（429・5xx・時間切れ・認証など）は `AnthropicMessagesError` のまま送出する
   （`kind`・`retryable`・`status_code` を持ち、呼ぶ側の再試行・失敗の分類が読む）。
 
-Messages API の structured outputs が受け付けない JSON schema の書き方（数・文字列の制約・
-型の配列など）は、送る schema では公式の SDK の `anthropic.transform_schema` で外し（制約は項目の
-説明に移る）、本文は呼ぶ側が今までどおり Pydantic で検証する。
+構造化出力の JSON schema は `text.format` の schema をそのまま渡す。Messages API の structured
+outputs が受け付けない書き方（数・文字列の制約・型の配列など）は、`pr_anthropic_messages` が送る
+直前に 1 回だけ変換する（`anthropic_response_schema`）。本文は呼ぶ側が今までどおり Pydantic で
+検証する。
 
 この module は `pr_anthropic_messages` に依存する。モデルを呼ぶ backend の venv だけが入れるので、
 呼ぶ側はクォータナリ接続の経路の中で import する（parser のサービスの venv では import しない）。
@@ -28,7 +29,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
-import anthropic
 from pr_anthropic_messages import (
     DEFAULT_TIMEOUT_SECONDS,
     AnthropicImage,
@@ -44,7 +44,6 @@ __all__ = [
     "AnthropicRequestShapeError",
     "acreate_responses_body",
     "create_responses_body",
-    "messages_json_schema",
     "messages_request",
     "responses_body",
     "responses_body_for_failure",
@@ -115,7 +114,7 @@ def messages_request(payload: Mapping[str, Any]) -> AnthropicMessagesRequest:
             raise AnthropicRequestShapeError(
                 "Responses API の text.format に schema がありません。"
             )
-        response_schema = messages_json_schema(schema)
+        response_schema = dict(schema)
     return AnthropicMessagesRequest(
         model_id=str(payload.get("model") or ""),
         system="\n\n".join(part for part in system_parts if part),
@@ -168,54 +167,6 @@ def _image(image_url: object) -> AnthropicImage:
             "クォータナリ接続（Anthropic Claude）のモデルには、画像（JPEG・PNG・GIF・WebP）だけを"
             f"渡せます（{exc}）。"
         ) from exc
-
-
-def messages_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
-    """Messages API の structured outputs が受け付ける形の JSON schema にする。
-
-    公式の SDK の `anthropic.transform_schema`（`messages.parse()` が使う変換）で、受け付けない
-    制約（`minimum`・`maxLength`・`maxItems` など）を項目の説明に移し、すべての object を
-    `additionalProperties: false` にする。SDK の変換が扱わない型の配列（`{"type": ["string",
-    "null"]}`）は、先に同じ意味の `anyOf` にする。
-    """
-    return anthropic.transform_schema(_without_type_lists(schema))
-
-
-def _without_type_lists(node: Any) -> Any:
-    if isinstance(node, Mapping):
-        converted = {key: _without_type_lists(value) for key, value in node.items()}
-        types = converted.get("type")
-        if not isinstance(types, list):
-            return converted
-        rest = {key: value for key, value in converted.items() if key != "type"}
-        if "enum" in rest or "const" in rest:
-            # 値の一覧があれば型は要らない（SDK の変換も型を外す）。
-            return rest
-        if len(types) == 1:
-            return {**rest, "type": types[0]}
-        return {"anyOf": [_typed_variant(rest, str(item)) for item in types]}
-    if isinstance(node, list):
-        return [_without_type_lists(item) for item in node]
-    return node
-
-
-# 型ごとに意味を持つ JSON schema の語。型の配列を anyOf に分けるとき、その型の枝にだけ残す。
-_KEYWORDS_BY_TYPE: Final[Mapping[str, frozenset[str]]] = {
-    "object": frozenset({"properties", "required", "additionalProperties"}),
-    "array": frozenset({"items", "minItems", "maxItems", "uniqueItems"}),
-    "string": frozenset({"minLength", "maxLength", "pattern", "format"}),
-    "number": frozenset({"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}),
-    "integer": frozenset({"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}),
-}
-_TYPED_KEYWORDS: Final = frozenset().union(*_KEYWORDS_BY_TYPE.values())
-
-
-def _typed_variant(rest: Mapping[str, Any], type_name: str) -> dict[str, Any]:
-    own = _KEYWORDS_BY_TYPE.get(type_name, frozenset())
-    return {
-        "type": type_name,
-        **{key: value for key, value in rest.items() if key not in _TYPED_KEYWORDS or key in own},
-    }
 
 
 # --------------------------------------------------------------------------- 応答

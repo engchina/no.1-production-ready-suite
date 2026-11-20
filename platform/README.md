@@ -207,9 +207,12 @@ API は 422 で「既定のテキストモデルを選択してください。�
   - **接続テスト**: 「システム設定 › モデル」のテストは、この接続のモデルでは製品の `run_model_test` を呼ばず、共通の
     `pr_system_settings.anthropic_model_test` が `pr_anthropic_messages` で短い要求を 1 回送る（保存前のモデルの推論の量・出力の上限で送る）。
     失敗は `AnthropicMessagesError.kind` からクォータナリ接続向けの案内（OCI の IAM・Project OCID の文は出さない）にする。
-  - **製品の回答・解析などの呼び出しは未対応**（#5546 の 3 段目で製品ごとにつなぐ）。それまでは OpenAI 互換の URL（接続の
-    `base_url` / `request_url()`）を引いた時点で `EnterpriseAiConnectionNotSupportedError`（code `enterprise_ai_connection_not_supported`。
-    「まだ呼び出せません」）になる（別の接続へ切り替えない）。この誤りは 3 製品がつなぎ終えた最後の PR で消す。
+  - **製品の回答・解析などの呼び出し**: 3 製品（RAG・NL2SQL・Agent）の呼び出しの層が、上の選び方でこの接続のモデルを
+    `pr_anthropic_messages` で呼ぶ（別の接続へ暗黙に切り替えない）。Agent は 1 回の生成（品質評価の判定・下書きの提案・
+    画像の読み取りなど）だけで、業務 Agent の実行（ツールの呼び出し・複数のターン）は `runtime.model_connection_not_supported`
+    で失敗にする（`agent/docs/agents/runtime.md`）。構造化出力の schema は呼ぶ側が元の schema を渡し、
+    部品が送る直前に 1 回だけ Messages API の受け付ける形に変換する（`anthropic_response_schema`）。接続の `base_url` /
+    `request_url()` は OpenAI 互換の接続だけが使う。
 - プライマリ接続の後ろの接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL（クォータナリ接続は
   Endpoint URL か API key）があるときだけその接続が有効になる。
 
