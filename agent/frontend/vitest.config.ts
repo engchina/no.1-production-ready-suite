@@ -10,7 +10,8 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
   },
   resolve: {
-    dedupe: ["react", "react-dom"],
+    // 共有 UI と同じ React と lucide-react を使う（lucide-react 1.x のアイコンは React の context を読む。#5571）。
+    dedupe: ["react", "react-dom", "lucide-react"],
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
 });

@@ -69,7 +69,8 @@ export default defineConfig(() => {
       },
       // 共有 UI パッケージ（file: リンク）の React 重複を防ぐ（"Invalid hook call" 回避）。
       // 共有システム設定パッケージが Router / React Query の context を共有できるよう、これらも 1 コピーへ集約する（#97）。
-      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query"],
+      // lucide-react も 1 コピーにする（1.x のアイコンは React の context を読む。共有 UI と同じ版を使う。#5571）。
+      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query", "lucide-react"],
     },
     server: {
       host: "0.0.0.0",
