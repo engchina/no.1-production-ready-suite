@@ -1759,8 +1759,6 @@ export const ja = {
   "searchAnswerProfiles.languagePack.changed": "全体の値から変更",
   "searchAnswerProfiles.languagePack.reset": "全体の値に戻す",
   "searchAnswerProfiles.languagePack.loadError": "言語資源の上書きの欄を読み込めませんでした。",
-  "searchAnswerProfiles.field.guideEnabledOn": "ON",
-  "searchAnswerProfiles.field.guideEnabledOff": "OFF",
   "searchAnswerProfiles.field.guideEnabled": "業務ガイドを使用する",
   "searchAnswerProfiles.field.guideEnabledHelper":
     "既定値は OFF です。ON にすると、チャット・品質評価・MCP で質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。RAG 検索では業務ガイドを使用しません。",

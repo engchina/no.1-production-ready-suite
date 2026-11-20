@@ -376,6 +376,7 @@ test("業務ガイドは既定 OFF の単一スイッチで保存・再表示す
     await expect.poll(() => (body?.config as { query?: { support_guide_enabled?: boolean } })?.query?.support_guide_enabled).toBe(enabled);
     await page.reload();
     await expect(toggle).toHaveAttribute("aria-checked", String(enabled));
+    await expect(panel.getByText(/^(ON|OFF)$/)).toHaveCount(0);
     await panel.screenshot({ path: testInfo.outputPath(`guide-usage-${enabled ? "on" : "off"}.png`) });
     await expectNoPageOverflow(page);
   }
@@ -390,7 +391,6 @@ test("Wiki の使用は既定 OFF の単一スイッチで保存・再表示す�
   const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(toggle).toHaveAccessibleDescription(/既定値は OFF です/);
-  await expect(panel).toContainText("OFF");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
   for (const enabled of [true, false]) {
     await toggle.click();
@@ -398,6 +398,7 @@ test("Wiki の使用は既定 OFF の単一スイッチで保存・再表示す�
     await expect.poll(() => (body?.config as { query?: { wiki_search_enabled?: boolean } })?.query?.wiki_search_enabled).toBe(enabled);
     await page.reload();
     await expect(toggle).toHaveAttribute("aria-checked", String(enabled));
+    await expect(panel.getByText(/^(ON|OFF)$/)).toHaveCount(0);
     await panel.screenshot({ path: testInfo.outputPath(`wiki-search-${enabled ? "on" : "off"}.png`) });
     await expectNoPageOverflow(page);
   }
