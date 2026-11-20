@@ -210,6 +210,9 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         # 生成の system は役割の文（Step 4 まで）に固定の部分と未確定の前提を続けて足す（#4782）。
         ("generation", "fixed"): 5,
         ("generation", "assumptionSystem"): 9,
+        # 原文選択（Step 2）の後に、補読または補読先の選択を同じ呼出しで続ける。
+        ("generation", "rules"): 3,
+        ("generation", "documentSystem"): 3,
         # 回答生成の user の入力（既定は Step 6 まで）の後ろに足す作り直しの部品（#4586）。
         ("generation", "sourceOnlyDerivation"): 7,
         ("generation", "headerOnlySource"): 7,
