@@ -1011,7 +1011,7 @@ function readerWindow(quote: string, continuation: boolean) {
 }
 
 for (const relative of [false, true]) {
-  test(`署名URLから原本ノードを部分取得し、CookieとRefererを送らない (${relative ? "相対URL" : "絶対URL"})`, {tag:"@responsive"}, async ({page,mockApi,baseURL},testInfo) => {
+  test(`署名URLから原文を部分取得し、CookieとRefererを送らない (${relative ? "相対URL" : "絶対URL"})`, {tag:"@responsive"}, async ({page,mockApi,baseURL},testInfo) => {
     seedRun(mockApi);
     await page.context().addCookies([{ name:"synthetic_session",value:"private",url:baseURL! }]);
     const contentUrl = `${relative ? "/rag" : "http://rag.e2e.test"}/api/source-previews/synthetic/content?scope=synthetic`;
@@ -1026,15 +1026,11 @@ for (const relative of [false, true]) {
     await page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citation-link").first().click();
     const reader=page.getByTestId("evidence-reader-content");
     await expect(reader.locator("mark").first()).toHaveText("合成の引用本文");
-    const panel=page.getByTestId("original-source-panel").first();
-    await expect(panel).toBeVisible(); expect(requests.filter(r=>r.query.get("view")==="source-map")).toHaveLength(0);
-    await panel.locator("summary").click();
-    await expect(panel.locator("mark")).toHaveText("引用");
-    await expect(panel.getByTestId("original-source-content")).toBeInViewport();
+    await expect(page.getByTestId("original-source-panel")).toHaveCount(0);
     await page.getByRole("button",{name:"引用位置に戻る",exact:true}).click();
     await expect(reader.locator("mark").first()).toHaveText("合成の引用本文");
     expect(requests.some(r=>r.query.get("view")==="reader")).toBe(true);
-    expect(requests.some(r=>r.query.get("view")==="source-map")).toBe(true);
+    expect(requests.some(r=>r.query.get("view")==="source-map")).toBe(false);
     for(const request of requests){expect(request.query.get("scope")).toBe("synthetic");expect(request.headers.referer).toBeUndefined();expect(request.headers.cookie).toBeUndefined();}
     await page.screenshot({path:testInfo.outputPath(`agent-original-node-${relative ? "relative" : "absolute"}-${testInfo.project.name}.png`),animations:"disabled"});
     await expectNoHorizontalOverflow(page);

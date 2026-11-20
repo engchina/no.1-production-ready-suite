@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { EvidenceSourceSheet, EvidenceReader, Skeleton, TimedLoadingState, FormStatus, SourceVersionStaleNotice, isSourceVersionStale, evidencePreviewFocus, type OriginalSourceInput, type EvidenceReadingInput } from "@production-ready/ui";
+import { EvidenceSourceSheet, EvidenceReader, Skeleton, TimedLoadingState, FormStatus, SourceVersionStaleNotice, isSourceVersionStale, evidencePreviewFocus, type EvidenceReadingInput } from "@production-ready/ui";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
@@ -80,7 +80,6 @@ function CitationSourcePreview({
   highlight: boolean;
 }) {
   const loadWindow = useCallback((input: EvidenceReadingInput, signal: AbortSignal) => api.documentReader(chunk.document_id, chunk.chunk_id, input, signal), [chunk.document_id, chunk.chunk_id]);
-  const loadOriginal = useCallback((input: OriginalSourceInput, signal: AbortSignal) => api.documentSourceMap(chunk.document_id, chunk.chunk_id, input, signal), [chunk.document_id, chunk.chunk_id]);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
   // 切替の後も、引用した版のファイルの頁を出す（bbox はその版のファイルの座標。#4168）。
@@ -90,7 +89,7 @@ function CitationSourcePreview({
   const focus = evidencePreviewFocus(chunk.metadata);
   if (source.data?.is_structured_records || /\.(?:txt|csv|tsv|md|markdown|json|jsonl|xml|html?|eml|log)$/i.test(previewFileName)) {
     // 回答行の対応と原文内の位置は別に判定する。reader の確認済み範囲を表示する。
-    return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} loadOriginal={/\.(?:json|html?)$/i.test(previewFileName) ? loadOriginal : undefined} enabled={open} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
+    return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} enabled={open} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
   }
   if (office) {
     if (!recipeId || !chunkSetId) return <FormStatus tone="warning" message={t("search.previewSource.missing")} />;

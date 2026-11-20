@@ -11,10 +11,12 @@ from typing import Any, Literal
 
 from fastapi import HTTPException
 from pr_backend_core.source_text import read_source_window
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges
 
 from app.api.errors import SourceVersionStaleError
 from app.clients.oracle import OracleClient
 from app.rag.element_locator import chunk_element_ids
+from app.rag.reference_grammar import current_grammar
 from app.schemas.search import RetrievedChunk
 
 MAX_READER_CHARS = 8192
@@ -50,6 +52,30 @@ def _cursor(revision: str, index: int, offset: int, section: str | None) -> str:
         .decode()
         .rstrip("=")
     )
+
+
+def _previous_paragraphs(elements: list[Any], paths: list[tuple[str, ...]]) -> dict[int, int]:
+    """同じ部・条で、元と先の項番号をそれぞれ一意に特定できる位置だけを結ぶ。"""
+    by_parent: dict[tuple[str, ...], dict[int, list[int]]] = {}
+    for index, element in enumerate(elements):
+        meta = element.get("metadata") or {}
+        raw_number = str(meta.get("xml_tree_paragraph_num") or "")
+        parent = meta.get("xml_tree_parent_label")
+        if (
+            meta.get("xml_tree_unit_kind") != "paragraph"
+            or not parent
+            or not raw_number.isdecimal()
+        ):
+            continue
+        key = (*paths[index], str(meta.get("xml_tree_part_ref") or ""), str(parent))
+        by_parent.setdefault(key, {}).setdefault(int(raw_number), []).append(index)
+    targets = {}
+    for paragraphs in by_parent.values():
+        for number, sources in paragraphs.items():
+            previous = paragraphs.get(number - 1, [])
+            if len(sources) == len(previous) == 1 and previous[0] < sources[0]:
+                targets[sources[0]] = previous[0]
+    return targets
 
 
 def _quoted_ranges(
@@ -207,6 +233,8 @@ def reading_window(
             offset = len(str(elements[index].get("text") or ""))
     first_index, first_offset = index, offset
     blocks: list[dict[str, Any]] = []
+    predecessors = _previous_paragraphs(elements, paths)
+    pattern = current_grammar().previous_paragraph if predecessors else None
     remaining = max_chars
     end_index = index
     end_offset = offset
@@ -252,6 +280,24 @@ def reading_window(
                 "heading": [p[:80] for p in paths[current][-1:]],
             }
         )
+        if current in predecessors and pattern and blocks[-1]["kind"] != "table":
+            destination = predecessors[current]
+            excluded = load_ranges(
+                (elements[current].get("metadata") or {}).get(NON_SOURCE_RANGES_KEY), len(text)
+            )
+            references = [
+                {
+                    "start": match.start(),
+                    "end": match.end(),
+                    "cursor": _cursor(revision, destination, 0, None),
+                }
+                for match in pattern.finditer(piece.text)
+                if not any(
+                    a < start + match.end() and b > start + match.start() for a, b in excluded
+                )
+            ]
+            if references:
+                blocks[-1]["references"] = references
         remaining -= len(piece.text)
         end_index, end_offset = current, end
         if end < stop or upper and (current, end) >= upper:

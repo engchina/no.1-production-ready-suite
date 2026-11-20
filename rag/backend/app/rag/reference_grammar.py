@@ -221,6 +221,7 @@ class ReferenceGrammar:
     number_prefix: re.Pattern[str]
     head_chapter: re.Pattern[str]
     head_jsection: re.Pattern[str]
+    previous_paragraph: re.Pattern[str]
     paragraph_label: re.Pattern[str]
     item_label: re.Pattern[str]
     line_number: re.Pattern[str]
@@ -426,6 +427,7 @@ def build_grammar(vocabulary: ReferenceVocabulary) -> ReferenceGrammar:
     self_words = _alternation(v.self_words)
     return ReferenceGrammar(
         vocabulary=v,
+        previous_paragraph=re.compile(rf"{_alternation(v.previous_words)}{paragraph_unit}"),
         branch=branch,
         number=num,
         kanji_digits=kanji_digits,
