@@ -3,8 +3,9 @@
 Control Plane の中で業務 Agent を実行する。外部の Runtime・Binding・Docker は使わない。
 
 - モデル: システム設定 > モデル の OCI Enterprise AI（Agent の `model_id`、無ければ既定の
-  テキストモデル）。クォータナリ接続（Anthropic Claude の Messages API。#5546）のモデルは
-  1 回の生成（`anthropic_model`）だけに使い、Run は `require_runtime_model` で止める。
+  テキストモデル）。クォータナリ接続（Anthropic Claude の Messages API。#5546・#5580）のモデルは
+  `anthropic_model.AnthropicMessagesModel` で呼ぶ（Responses API の経路と同じ `_OciResponses` の層を
+  通し、一番内側の呼び出しだけを Messages API にする）。
   SDK の tracing は無効にする（業務データを外部へ送らない）。
 - 指示: Agent の指示と、割り当てた Skill の指示を合わせる。指示の中の MCP のツールの素の名前は、
   モデルに渡す名前（`<接続>__<ツール>`）に書き直す。無い名前のツールを呼んだら、呼ぶ名前をモデルへ
@@ -108,9 +109,7 @@ from pr_system_settings.enterprise_ai_errors import (
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
     DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
-    ENTERPRISE_AI_QUATERNARY_CONNECTION_ID,
     EnterpriseAiModelNotRegisteredError,
-    connection_label,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_image_input_tokens,
@@ -487,32 +486,6 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
     )
 
 
-MODEL_CONNECTION_NOT_SUPPORTED_CODE = "runtime.model_connection_not_supported"
-
-
-def runtime_model_not_supported(target: ModelTarget) -> BuiltinRuntimeError:
-    """クォータナリ接続のモデルを業務 Agent の実行に使おうとしたときの失敗（#5546）。"""
-    return BuiltinRuntimeError(
-        MODEL_CONNECTION_NOT_SUPPORTED_CODE,
-        f"モデル「{target.model_id}」は"
-        f"{connection_label(ENTERPRISE_AI_QUATERNARY_CONNECTION_ID)}"
-        "（Anthropic Claude の Messages API）のモデルで、業務 Agent の実行（ツールの呼び出し）"
-        "にはまだ使えません。業務 Agent の編集でほかの接続のモデルを選ぶか、システム設定 > "
-        "モデル で既定のテキストモデルをほかの接続のモデルにしてください。",
-    )
-
-
-def require_runtime_model(target: ModelTarget) -> None:
-    """業務 Agent の実行（ツールの呼び出し・複数のターン）に使えるモデルか確かめる（#5546）。
-
-    クォータナリ接続（Anthropic Claude の Messages API）のモデルは、1 回の生成（品質評価の判定・
-    下書きの提案・画像の読み取り）だけに対応する。業務 Agent の実行は、呼び出しの前に理由の分かる
-    失敗にし、別のモデル・接続へ暗黙に切り替えない（#3240 の不変条件 2）。
-    """
-    if target.uses_anthropic_messages:
-        raise runtime_model_not_supported(target)
-
-
 def model_accepts_images(settings: Any, model_id: str) -> bool:
     """登録モデルが画像の入力に対応するか（#2650。登録モデルに無い ID は対応しないと扱う）。"""
     normalized = model_id.strip()
@@ -854,6 +827,17 @@ class _BufferedStream:
         pass
 
 
+def _anthropic_overflow(exc: BaseException) -> ProviderOverflow | None:
+    """Messages API の 400 が入力の超過なら、その token 数（ほかの失敗は None。#5580）。"""
+    from pr_anthropic_messages import AnthropicMessagesError
+
+    if not isinstance(exc, AnthropicMessagesError) or exc.status_code != 400:
+        return None
+    sdk_error = exc.__cause__
+    message = getattr(sdk_error, "message", None) if sdk_error is not None else None
+    return provider_overflow(None, message if isinstance(message, str) else exc.provider_message)
+
+
 def _provider_usage(response: Any) -> Any:
     usage = getattr(response, "usage", None)
     if usage is None:
@@ -887,12 +871,15 @@ class _OciResponses:
         max_output_tokens: int | None = None,
         max_input_tokens: int | None = None,
         online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS,
+        provider_name: str = "oracle",
     ) -> None:
         self._inner = inner
         self._online_policy = online_policy
         self._output_capacity = max_output_tokens
         self._online_max_output_tokens = online_max_output_tokens
         self._input_capacity = max_input_tokens
+        # span の `gen_ai.provider.name`（クォータナリ接続は anthropic。#5580）。
+        self._provider_name = provider_name
 
     async def create(self, **kwargs: Any) -> Any:
         request = _oci_request(kwargs)
@@ -944,7 +931,18 @@ class _OciResponses:
                     response = await self._send(request, send_attempt)
                 except BadRequestError:
                     raise
-                except BaseException:
+                except BaseException as exc:
+                    overflow = _anthropic_overflow(exc)
+                    window = _ACTIVE_CONTEXT_WINDOW.get()
+                    if overflow is not None and window is not None:
+                        # Messages API の入力の超過（#5580）も Responses API の経路と同じく縮めて
+                        # 1 回だけ送り直す（下の BadRequestError の扱いと同じ）。
+                        if overflow_retried:
+                            window.fail_after_retry(overflow)
+                        request = window.retry_request(request, overflow)
+                        reserve_retry(request)
+                        overflow_retried = True
+                        continue
                     budget = _ACTIVE_RUN_BUDGET.get() if self._online_policy else None
                     if budget is not None:
                         budget.settle_failed(None)
@@ -1064,7 +1062,7 @@ class _OciResponses:
             attributes={
                 "gen_ai.operation.name": "chat",
                 **model_purpose_attributes(default="agent.choose_action"),
-                "gen_ai.provider.name": "oracle",
+                "gen_ai.provider.name": self._provider_name,
                 "gen_ai.request.model": str(request.get("model") or ""),
                 "pr.attempt": attempt,
                 **_model_input_attributes(request),
@@ -1109,12 +1107,14 @@ class _OciCompatClient:
         max_output_tokens: int | None = None,
         max_input_tokens: int | None = None,
         online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS,
+        provider_name: str = "oracle",
     ) -> None:
         self._inner = inner
         self._online_policy = online_policy
         self._max_output_tokens = max_output_tokens
         self._max_input_tokens = max_input_tokens
         self._online_max_output_tokens = online_max_output_tokens
+        self._provider_name = provider_name
 
     @property
     def responses(self) -> _OciResponses:
@@ -1124,6 +1124,7 @@ class _OciCompatClient:
             max_output_tokens=self._max_output_tokens,
             max_input_tokens=self._max_input_tokens,
             online_max_output_tokens=self._online_max_output_tokens,
+            provider_name=self._provider_name,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -1138,6 +1139,8 @@ class OciResponsesModel(OpenAIResponsesModel):
     output_capacity: int | None = None
     input_capacity: int | None = None
     online_max_output_tokens: int = DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
+    # span の `gen_ai.provider.name`。
+    provider_name: str = "oracle"
 
     def _get_client(self) -> AsyncOpenAI:
         return cast(
@@ -1148,6 +1151,7 @@ class OciResponsesModel(OpenAIResponsesModel):
                 max_output_tokens=self.output_capacity,
                 max_input_tokens=self.input_capacity,
                 online_max_output_tokens=self.online_max_output_tokens,
+                provider_name=self.provider_name,
             ),
         )
 
@@ -1173,8 +1177,7 @@ def enterprise_ai_http_client(timeout: float | None = None) -> DefaultAsyncHttpx
 
 def _default_model_factory(target: ModelTarget) -> Model:
     if target.uses_anthropic_messages:
-        # クォータナリ接続は Messages API の 1 回の生成だけ（#5546。ツール・複数のターンは
-        # `require_runtime_model` が実行の前に止める）。
+        # クォータナリ接続は Messages API（#5546・#5580。予算・入力の上限・未完了の扱いは同じ層）。
         from app.features.agent.anthropic_model import AnthropicMessagesModel
 
         return AnthropicMessagesModel(target)
@@ -3102,7 +3105,6 @@ def build_sdk_agent(
             "業務 Agent の編集でスキルを選び直して公開してください。",
         )
     target = resolve_model_target(model_id)
-    require_runtime_model(target)
     attachments = thread_attachment_toolset(thread_id)
     mcp_tools, warnings = discover_mcp_tools(
         skill_ids,
@@ -5835,9 +5837,10 @@ def runtime_status() -> dict[str, Any]:
     }
     try:
         target = resolve_model_target("")
-        require_runtime_model(target)
     except BuiltinRuntimeError as exc:
         status.update(error_code=exc.code, message=exc.message)
         return status
+    if target.uses_anthropic_messages:
+        status["model_provider"] = "Anthropic Claude（Messages API）"
     status.update(model_id=target.model_id, ready=True)
     return status

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -626,34 +627,105 @@ def test_missing_model_settings_fail_the_run(monkeypatch: MonkeyPatch, calls: _C
     assert run.events[-1].payload["error_code"] == "runtime.model_not_configured"
 
 
-def test_anthropic_messages_model_fails_the_run_before_calling_the_model(
-    monkeypatch: MonkeyPatch, calls: _Calls
-) -> None:
-    """クォータナリ接続（Messages API）のモデルは、実行（ツールの呼び出し）にまだ使えない（#5546）。
-
-    モデルを呼ばずに理由の分かる失敗にし、ほかの接続へ切り替えない。
-    """
-    del calls
+def _claude_run_target(monkeypatch: MonkeyPatch, reasoning_effort: str = "medium") -> None:
+    """Run のモデルをクォータナリ接続（Messages API）のモデルにする（#5580）。"""
     target = ModelTarget(
         model_id="claude-run-a",
         endpoint="https://api.anthropic.com",
         project_ocid="",
         api_key="sk-ant-synthetic",
+        reasoning_effort=reasoning_effort,
+        max_input_tokens=200000,
         uses_anthropic_messages=True,
     )
     monkeypatch.setattr(builtin_runtime, "resolve_model_target", lambda _model_id="": target)
-    monkeypatch.setattr(
-        builtin_runtime, "model_factory", lambda _target: pytest.fail("モデルを作ってはいけない")
+
+
+def test_anthropic_messages_run_calls_tools_and_records_usage(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """クォータナリ接続（Messages API）のモデルでも、ツールを呼ぶ Run が完了する（#5580）。
+
+    別の接続へ切り替えず、Run の usage は Messages API の usage（Responses API の形）で残る。
+    """
+    from anthropic_support import FakeMessagesApi, recorded_turn, text, thinking, tool_use
+
+    _claude_run_target(monkeypatch)
+    api = FakeMessagesApi().install(monkeypatch)
+    api.reply(
+        recorded_turn(
+            thinking("合成の思考", "sig-run-1"),
+            tool_use("toolu_run_1", LOOKUP, {"query": "売上"}),
+            stop_reason="tool_use",
+            input_tokens=300,
+            output_tokens=40,
+        )
     )
+    api.reply(recorded_turn(text("今月の売上は 3 件です。"), input_tokens=400, output_tokens=20))
     run_id = _create_run()
 
     anyio.run(builtin_runtime.execute_run, run_id)
 
     run = runtime_repository.get_run(run_id)
-    assert run.status == RunStatus.FAILED
-    payload = run.events[-1].payload
-    assert payload["error_code"] == builtin_runtime.MODEL_CONNECTION_NOT_SUPPORTED_CODE
-    assert "claude-run-a" in run.events[-1].message
+    assert run.status == RunStatus.COMPLETED, run.events[-1].payload
+    assert [(name, args) for name, args, _ in calls.items] == [(LOOKUP, {"query": "売上"})]
+    answer = next(item for item in run.artifacts if item.kind == "answer")
+    assert answer.content["text"] == "今月の売上は 3 件です。"
+    first, second = api.body(0), api.body(1)
+    assert "経理の質問に答える。" in first["system"]
+    assert LOOKUP in [tool["name"] for tool in first["tools"]]
+    assert second["messages"][1]["content"][0] == thinking("合成の思考", "sig-run-1")
+    [result_block] = second["messages"][2]["content"]
+    assert result_block["tool_use_id"] == "toolu_run_1"
+    assert '"rows": 3' in result_block["content"]
+    assert run.usage is not None
+    assert (run.usage.requests, run.usage.total_tokens) == (2, 760)
+
+
+def test_anthropic_messages_run_waits_for_approval_and_resumes_with_thinking(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """承認待ちで保存した SDK の状態から再開し、思考の block とツールの結果を戻す。"""
+    from anthropic_support import FakeMessagesApi, recorded_turn, text, thinking, tool_use
+
+    _claude_run_target(monkeypatch)
+    api = FakeMessagesApi().install(monkeypatch)
+    api.reply(
+        recorded_turn(
+            thinking("合成の思考", "sig-run-2"),
+            tool_use("toolu_run_w", WRITE, {"query": "登録"}),
+            stop_reason="tool_use",
+        )
+    )
+    run_id = _create_run("登録して")
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    waiting = runtime_repository.get_run(run_id)
+    assert waiting.status == RunStatus.WAITING_APPROVAL, waiting.events[-1].payload
+    assert calls.items == []
+    # 保存した SDK の状態は Responses API の形のまま、思考の block を reasoning item に持つ。
+    assert "sig-run-2" in json.dumps(waiting.metadata, ensure_ascii=False)
+    [approval] = waiting.approvals
+    runtime_repository.decide_approval(
+        approval.id, ApprovalDecisionRequest(approved=True, decided_by="approver1")
+    )
+    api.reply(recorded_turn(text("登録しました。")))
+
+    anyio.run(builtin_runtime.resume_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].payload
+    assert [name for name, _, _ in calls.items] == [WRITE]
+    resumed = api.body(1)
+    assert resumed["messages"][1]["content"] == [
+        thinking("合成の思考", "sig-run-2"),
+        tool_use("toolu_run_w", WRITE, {"query": "登録"}),
+    ]
+    [result_block] = resumed["messages"][2]["content"]
+    assert result_block["tool_use_id"] == "toolu_run_w"
+    # 再開で指示が変わっても、検証に通らない思考の block は API が外して続ける。
+    assert resumed["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
 
 
 def test_unregistered_model_fails_without_switching_connections(monkeypatch: MonkeyPatch) -> None:

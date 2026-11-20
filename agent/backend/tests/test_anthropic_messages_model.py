@@ -1,37 +1,35 @@
-"""クォータナリ接続（Anthropic Claude の Messages API）のモデルの呼び出しの経路（#5546）。
+"""クォータナリ接続（Anthropic Claude の Messages API）のモデルの呼び出しの経路（#5546・#5580）。
 
-- 1 回の生成（品質評価の判定・下書きの提案・画像の読み取り）は `pr_anthropic_messages` で呼ぶ。
-- 業務 Agent の実行（ツールの呼び出し・複数のターン）は、モデルを呼ばずに理由の分かる失敗にする
-  （別のモデル・接続へ切り替えない）。
+- 業務 Agent の実行（ツールの呼び出し・並列のツール・複数のターン・思考の block の受け渡し）と
+  1 回の生成（品質評価の判定・下書きの提案）は、`AnthropicMessagesModel` が Responses API の経路と
+  同じ `_OciResponses` の層を通して `pr_anthropic_messages` で呼ぶ。
+- 画像の読み取りは `call_anthropic_messages`（1 回の生成）。
 - ほかの接続のモデルは従来どおり OpenAI 互換の Responses API。
 
-Messages API は呼ばない（`acreate_anthropic_message` を決定論のスタブに置き換える。SDK の要求の
-組み方・応答と失敗の分類は `pr_anthropic_messages` のテストが確かめる）。
+実の Anthropic の API は呼ばない。SDK の HTTP を Messages API の録画の応答（`anthropic_support`）に
+置き換えるか、画像の読み取りは `acreate_anthropic_message` を決定論のスタブに置き換える。
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
-import anthropic
 import anyio
-import httpx2
 import pytest
-from agents import Agent, FunctionTool, Runner
+from agents import Agent, FunctionTool, Runner, ToolOutputImage, ToolOutputText
+from anthropic_support import FakeMessagesApi, recorded_turn, text, thinking, tool_use
 from openai import DEFAULT_MAX_RETRIES
 from pr_anthropic_messages import (
-    DEFAULT_TIMEOUT_SECONDS,
+    THINKING_BINDING_BETA,
     AnthropicMessagesError,
     AnthropicMessagesRequest,
     AnthropicMessagesResult,
     AnthropicUsage,
-    classify_anthropic_error,
+    acreate_anthropic_turn,
 )
 from pr_backend_core.bounded_calls import ErrorKind
-from pr_enterprise_ai.errors import EnterpriseAiIncomplete
 from pr_system_settings.model import (
     ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT,
     EnterpriseAiConfiguredModel,
@@ -45,11 +43,13 @@ from app.features.agent import builtin_runtime, evaluation
 from app.features.agent.ai_calls import make_ai_caller
 from app.features.agent.anthropic_model import AnthropicMessagesModel
 from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.context_window import ProviderOverflow, provider_overflow
 from app.features.agent.evaluation import EvaluationCase
 from app.settings import Settings
 
 CLAUDE = "claude-model-a"
 CASE = EvaluationCase(id="c1", question="合成の質問 A", expected="合成の期待する回答 A")
+PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgo="
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -95,43 +95,36 @@ def _claude_target(**overrides: Any) -> ModelTarget:
     return ModelTarget(**values)
 
 
-class _Stub:
-    """`acreate_anthropic_message` の決定論のスタブ（要求を記録し、台本の結果か失敗を返す）。"""
-
-    def __init__(self, *outcomes: str | BaseException) -> None:
-        self.outcomes = list(outcomes)
-        self.calls: list[tuple[AnthropicMessagesRequest, dict[str, Any]]] = []
-
-    async def __call__(
-        self, request: AnthropicMessagesRequest, **kwargs: Any
-    ) -> AnthropicMessagesResult:
-        self.calls.append((request, kwargs))
-        outcome = self.outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return AnthropicMessagesResult(
-            text=outcome,
-            model=request.model_id,
-            stop_reason="end_turn",
-            usage=AnthropicUsage(
-                input_tokens=10,
-                output_tokens=5,
-                cache_read_input_tokens=3,
-                cache_creation_input_tokens=2,
-                thinking_tokens=4,
-            ),
-            request_id="req_synthetic",
-        )
+@pytest.fixture
+def api(monkeypatch: MonkeyPatch) -> FakeMessagesApi:
+    return FakeMessagesApi().install(monkeypatch)
 
 
-def _install(monkeypatch: MonkeyPatch, stub: _Stub) -> None:
-    monkeypatch.setattr(anthropic_model, "acreate_anthropic_message", stub)
+def _agent(target: ModelTarget, **kwargs: Any) -> Agent[Any]:
+    return Agent(
+        name="synthetic",
+        model=builtin_runtime.model_factory(target),
+        model_settings=builtin_runtime.model_settings_for(target),
+        **kwargs,
+    )
 
 
-def _judgement(verdict: str = "correct") -> str:
-    return json.dumps(
-        {"verdict": verdict, "score": 1, "summary": "合成の理由", "missing_points": []},
-        ensure_ascii=False,
+def _tool(name: str, result: Any, calls: list[dict[str, Any]], **kwargs: Any) -> FunctionTool:
+    async def invoke(_context: Any, arguments: str) -> Any:
+        calls.append(json.loads(arguments))
+        return result
+
+    return FunctionTool(
+        name=name,
+        description=f"合成のツール {name}",
+        params_json_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "minLength": 1}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        on_invoke_tool=invoke,
+        **kwargs,
     )
 
 
@@ -152,7 +145,9 @@ def test_quaternary_model_target_uses_messages_api_endpoint(monkeypatch: MonkeyP
         "sk-ant-synthetic",
     )
     assert (target.reasoning_effort, target.max_output_tokens) == ("high", 4096)
-    assert isinstance(builtin_runtime._default_model_factory(target), AnthropicMessagesModel)  # noqa: SLF001
+    model = builtin_runtime._default_model_factory(target)  # noqa: SLF001
+    assert isinstance(model, AnthropicMessagesModel)
+    assert model.provider_name == "anthropic"
 
     _use_settings(
         monkeypatch,
@@ -169,26 +164,19 @@ def test_other_connections_keep_the_responses_api(monkeypatch: MonkeyPatch) -> N
 
     assert not target.uses_anthropic_messages
     assert target.endpoint == "https://primary.example/openai/v1"
-    assert isinstance(
-        builtin_runtime._default_model_factory(target),  # noqa: SLF001
-        builtin_runtime.OciResponsesModel,
-    )
-    builtin_runtime.require_runtime_model(target)
+    model = builtin_runtime._default_model_factory(target)  # noqa: SLF001
+    assert type(model) is builtin_runtime.OciResponsesModel
+    assert model.provider_name == "oracle"
 
 
-def test_runtime_status_reports_that_runs_need_another_connection(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """既定のテキストモデルがクォータナリ接続なら、実行環境は準備できていないと示す。"""
+def test_runtime_status_is_ready_with_the_messages_api(monkeypatch: MonkeyPatch) -> None:
+    """既定のテキストモデルがクォータナリ接続でも、実行環境は準備できている。"""
     _use_settings(monkeypatch, _settings())
 
     status = builtin_runtime.runtime_status()
 
-    assert (status["ready"], status["error_code"]) == (
-        False,
-        builtin_runtime.MODEL_CONNECTION_NOT_SUPPORTED_CODE,
-    )
-    assert "クォータナリ接続" in status["message"] and CLAUDE in status["message"]
+    assert (status["ready"], status["error_code"], status["model_id"]) == (True, None, CLAUDE)
+    assert status["model_provider"] == "Anthropic Claude（Messages API）"
 
 
 # --------------------------------------------------------------------------- 1 回の生成
@@ -199,88 +187,106 @@ class _Proposal(BaseModel):
     count: int
 
 
-def test_structured_single_turn_calls_messages_api(monkeypatch: MonkeyPatch) -> None:
+def test_structured_single_turn_calls_messages_api(
+    monkeypatch: MonkeyPatch, api: FakeMessagesApi
+) -> None:
     """構造化出力の 1 回の生成: 指示・schema・推論の量・出力の上限・接続で Messages API を呼ぶ。"""
-    stub = _Stub(json.dumps({"title": "合成の値", "count": 2}, ensure_ascii=False))
-    _install(monkeypatch, stub)
-    target = _claude_target()
-    agent = Agent(
-        name="synthetic",
-        instructions="## Step 1: 合成の指示",
-        model=builtin_runtime.model_factory(target),
-        model_settings=builtin_runtime.model_settings_for(target),
-        output_type=_Proposal,
+    seen: list[dict[str, Any]] = []
+    original = acreate_anthropic_turn
+
+    async def spy(request: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return await original(request, **kwargs)
+
+    monkeypatch.setattr(anthropic_model, "acreate_anthropic_turn", spy)
+    api.reply(
+        recorded_turn(
+            text(json.dumps({"title": "合成の値", "count": 2}, ensure_ascii=False)),
+            input_tokens=10,
+            output_tokens=5,
+            thinking_tokens=4,
+        )
     )
+    agent = _agent(_claude_target(), instructions="## Step 1: 合成の指示", output_type=_Proposal)
 
     result = anyio.run(lambda: Runner.run(agent, "合成の入力", max_turns=1))
 
     assert result.final_output == _Proposal(title="合成の値", count=2)
-    [(request, kwargs)] = stub.calls
-    assert (request.model_id, request.user_text, request.images) == (CLAUDE, "合成の入力", ())
-    assert (request.reasoning_effort, request.max_output_tokens) == ("medium", 2048)
+    request = api.requests[0]
+    assert str(request.url).startswith(f"{ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT}/v1/messages")
+    assert request.headers["authorization"] == "Bearer sk-ant-synthetic"
+    body = api.body()
+    assert body["model"] == CLAUDE
+    assert body["max_tokens"] == 2048
+    assert body["messages"] == [{"role": "user", "content": [text("合成の入力")]}]
     # 項目の説明は Responses API の経路と同じく指示の最後の Step に移し、schema から外す（#5238）。
-    assert request.system.startswith("## Step 1: 合成の指示")
-    assert "合成の項目の説明 A" in request.system
-    assert request.response_schema is not None
-    assert "合成の項目の説明 A" not in json.dumps(request.response_schema, ensure_ascii=False)
-    assert request.response_schema["properties"].keys() == {"title", "count"}
-    assert kwargs == {
-        "api_key": "sk-ant-synthetic",
-        "endpoint_url": ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT,
-        "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
-        # 実行器を通す呼び出し（sdk_max_retries=0）は SDK の再試行を使わない。
-        "max_retries": 0,
-    }
+    assert body["system"].startswith("## Step 1: 合成の指示")
+    assert "合成の項目の説明 A" in body["system"]
+    assert body["output_config"]["effort"] == "medium"
+    schema = body["output_config"]["format"]["schema"]
+    assert schema["properties"].keys() == {"title", "count"}
+    assert "合成の項目の説明 A" not in json.dumps(schema, ensure_ascii=False)
+    assert "tools" not in body and "tool_choice" not in body
+    # 実行器を通す呼び出し（sdk_max_retries=0）は SDK の再試行を使わない。
+    [kwargs] = seen
+    assert (kwargs["endpoint_url"], kwargs["max_retries"]) == (
+        ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT,
+        0,
+    )
     usage = result.context_wrapper.usage
     assert (usage.requests, usage.input_tokens, usage.output_tokens, usage.total_tokens) == (
         1,
-        15,
+        10,
         5,
-        20,
+        15,
     )
-    assert usage.input_tokens_details.cached_tokens == 3
     assert usage.output_tokens_details.reasoning_tokens == 4
 
 
-def test_reasoning_none_sends_no_effort(monkeypatch: MonkeyPatch) -> None:
-    """推論の量 none は思考・effort を送らない（モデルの既定）。"""
-    stub = _Stub("合成の回答")
-    _install(monkeypatch, stub)
-    target = _claude_target(reasoning_effort="none", sdk_max_retries=None)
-    agent = Agent(
-        name="synthetic",
-        instructions="合成の指示",
-        model=builtin_runtime.model_factory(target),
-        model_settings=builtin_runtime.model_settings_for(target),
+def test_reasoning_none_sends_no_effort(monkeypatch: MonkeyPatch, api: FakeMessagesApi) -> None:
+    """推論の量 none は思考・effort を送らない。再試行は openai SDK の経路と同じ。"""
+    seen: list[dict[str, Any]] = []
+    original = acreate_anthropic_turn
+
+    async def spy(request: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return await original(request, **kwargs)
+
+    monkeypatch.setattr(anthropic_model, "acreate_anthropic_turn", spy)
+    api.reply(recorded_turn(text("合成の回答")))
+    agent = _agent(
+        _claude_target(reasoning_effort="none", sdk_max_retries=None), instructions="合成の指示"
     )
 
     result = anyio.run(lambda: Runner.run(agent, "合成の入力", max_turns=1))
 
     assert result.final_output == "合成の回答"
-    [(request, kwargs)] = stub.calls
-    assert request.reasoning_effort == ""
-    assert request.response_schema is None
-    # 実行器を通さない呼び出しは openai SDK の経路と同じ既定の再試行。
-    assert kwargs["max_retries"] == DEFAULT_MAX_RETRIES
+    body = api.body()
+    assert "thinking" not in body and "output_config" not in body
+    assert "anthropic-beta" not in api.requests[0].headers
+    assert seen[0]["max_retries"] == DEFAULT_MAX_RETRIES
 
 
 def test_judge_answer_uses_messages_api_and_retries_output_limit(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: MonkeyPatch, api: FakeMessagesApi
 ) -> None:
     """品質評価の判定: 出力の上限で止まったら 1 回だけ送り直す（Responses API の経路と同じ）。"""
-    incomplete = AnthropicMessagesError(
-        "合成の未完了",
-        kind="incomplete",
-        model_id=CLAUDE,
-        incomplete=EnterpriseAiIncomplete(
-            status="incomplete",
-            reason="max_output_tokens",
-            max_output_tokens=4096,
-            output_tokens=4096,
-        ),
+    api.reply(recorded_turn(text('{"verdict"'), stop_reason="max_tokens", output_tokens=4096))
+    api.reply(
+        recorded_turn(
+            text(
+                json.dumps(
+                    {
+                        "verdict": "correct",
+                        "score": 1,
+                        "summary": "合成の理由",
+                        "missing_points": [],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        )
     )
-    stub = _Stub(incomplete, _judgement())
-    _install(monkeypatch, stub)
     settings = _settings(
         oci_enterprise_ai_models=[
             EnterpriseAiConfiguredModel(
@@ -298,131 +304,268 @@ def test_judge_answer_uses_messages_api_and_retries_output_limit(
     judgement, attempts = anyio.run(evaluation.judge_answer, CASE, "合成の回答")
 
     assert (judgement.verdict.value, attempts) == ("correct", 2)
-    first, second = (request for request, _ in stub.calls)
-    assert (first.max_output_tokens, first.reasoning_effort) == (4096, "high")
+    first, second = api.body(0), api.body(1)
+    assert (first["max_tokens"], first["output_config"]["effort"]) == (4096, "high")
     # 上限がもうモデルの出力の上限なので、推論の量を 1 段下げて送り直す（retry_model_target）。
-    assert (second.max_output_tokens, second.reasoning_effort) == (4096, "medium")
-    assert "合成の回答" in first.user_text
+    assert (second["max_tokens"], second["output_config"]["effort"]) == (4096, "medium")
+    assert "合成の回答" in json.dumps(first["messages"], ensure_ascii=False)
 
 
-def test_incomplete_output_is_the_runtime_incomplete_error(monkeypatch: MonkeyPatch) -> None:
+def test_incomplete_output_is_the_runtime_incomplete_error(api: FakeMessagesApi) -> None:
     """未完了は Responses API の経路と同じ code（実行器の「出力の打ち切り」）にする。"""
-    stub = _Stub(
-        AnthropicMessagesError(
-            "合成の未完了",
-            kind="incomplete",
-            incomplete=EnterpriseAiIncomplete(
-                status="incomplete", reason="max_output_tokens", max_output_tokens=2048
-            ),
-        )
-    )
-    _install(monkeypatch, stub)
-    target = _claude_target()
-    agent = Agent(name="synthetic", model=builtin_runtime.model_factory(target))
+    api.reply(recorded_turn(text("途中"), stop_reason="max_tokens", output_tokens=2048))
+    agent = _agent(_claude_target())
 
     with pytest.raises(builtin_runtime.BuiltinRuntimeError) as raised:
         anyio.run(lambda: Runner.run(agent, "合成の入力", max_turns=1))
 
     assert raised.value.code == builtin_runtime.MODEL_OUTPUT_INCOMPLETE_CODE
     assert CLAUDE in raised.value.message
-    assert isinstance(raised.value.__cause__, AnthropicMessagesError)
-    assert (
-        make_ai_caller("evaluation_judge", max_concurrency=1)
-        ._classify(  # noqa: SLF001
-            raised.value
-        )
-        .kind
-        is ErrorKind.TRUNCATED
-    )
-
-
-def _status_error(
-    error: Callable[..., anthropic.APIStatusError], status: int
-) -> AnthropicMessagesError:
-    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
-    response = httpx2.Response(status, request=request, headers={"retry-after": "3"})
-    sdk_error = error("合成の失敗", response=response, body=None)
-    try:
-        raise classify_anthropic_error(sdk_error) from sdk_error
-    except AnthropicMessagesError as exc:
-        return exc
+    caller = make_ai_caller("evaluation_judge", max_concurrency=1)
+    assert caller._classify(raised.value).kind is ErrorKind.TRUNCATED  # noqa: SLF001
 
 
 @pytest.mark.parametrize(
-    ("error", "status", "kind"),
+    ("status", "error_type", "kind"),
     [
-        (anthropic.RateLimitError, 429, ErrorKind.RATE_LIMITED),
-        (anthropic.AuthenticationError, 401, ErrorKind.AUTHENTICATION),
+        (429, "rate_limit_error", ErrorKind.RATE_LIMITED),
+        (401, "authentication_error", ErrorKind.AUTHENTICATION),
     ],
     ids=["rate-limit", "authentication"],
 )
 def test_provider_failures_keep_the_shared_classification(
-    monkeypatch: MonkeyPatch,
-    error: Callable[..., anthropic.APIStatusError],
-    status: int,
-    kind: ErrorKind,
+    api: FakeMessagesApi, status: int, error_type: str, kind: ErrorKind
 ) -> None:
     """Messages API の失敗は部品の分類のまま上げ、実行器は SDK の HTTP status で種類を決める。"""
-    failure = _status_error(error, status)
-    _install(monkeypatch, _Stub(failure))
-    target = _claude_target()
-    agent = Agent(name="synthetic", model=builtin_runtime.model_factory(target))
+    api.reply_error(status, error_type, "合成の失敗")
+    agent = _agent(_claude_target())
 
     with pytest.raises(AnthropicMessagesError) as raised:
         anyio.run(lambda: Runner.run(agent, "合成の入力", max_turns=1))
 
-    assert raised.value is failure
-    classified = make_ai_caller("evaluation_judge", max_concurrency=1)._classify(failure)  # noqa: SLF001
+    assert raised.value.status_code == status
+    classified = make_ai_caller("evaluation_judge", max_concurrency=1)._classify(raised.value)  # noqa: SLF001
     assert (classified.kind, classified.status) == (kind, status)
 
 
 # --------------------------------------------------------------------------- 実行（ツール）
 
 
-def test_tools_are_rejected_without_calling_the_model(monkeypatch: MonkeyPatch) -> None:
-    """ツールを渡す呼び出し（業務 Agent の実行）は、Messages API を呼ばずに理由の分かる失敗。"""
-    stub = _Stub("呼ばれない")
-    _install(monkeypatch, stub)
-
-    async def invoke(_context: Any, _arguments: str) -> str:
-        return "{}"
-
-    tool = FunctionTool(
-        name="synthetic_tool",
-        description="合成のツール",
-        params_json_schema={"type": "object", "properties": {}, "additionalProperties": False},
-        on_invoke_tool=invoke,
+def test_parallel_tool_calls_round_trip_with_thinking(api: FakeMessagesApi) -> None:
+    """並列のツールの呼び出し: 結果を 1 つの user の message で返し、思考の block を戻す。"""
+    api.reply(
+        recorded_turn(
+            thinking("合成の思考 1", "sig-1"),
+            tool_use("toolu_a", "lookup", {"query": "A"}),
+            tool_use("toolu_b", "lookup", {"query": "B"}),
+            stop_reason="tool_use",
+            input_tokens=100,
+            output_tokens=30,
+        )
     )
-    agent = Agent(
-        name="synthetic", model=builtin_runtime.model_factory(_claude_target()), tools=[tool]
+    api.reply(
+        recorded_turn(
+            thinking("合成の思考 2", "sig-2"),
+            text("合成の回答"),
+            input_tokens=160,
+            output_tokens=12,
+        )
+    )
+    calls: list[dict[str, Any]] = []
+    agent = _agent(
+        _claude_target(),
+        instructions="合成の指示",
+        tools=[_tool("lookup", "合成の結果", calls)],
     )
 
-    with pytest.raises(builtin_runtime.BuiltinRuntimeError) as raised:
-        anyio.run(lambda: Runner.run(agent, "合成の入力"))
+    result = anyio.run(lambda: Runner.run(agent, "合成の質問"))
 
-    assert raised.value.code == builtin_runtime.MODEL_CONNECTION_NOT_SUPPORTED_CODE
-    assert stub.calls == []
-
-
-def test_conversation_history_is_rejected(monkeypatch: MonkeyPatch) -> None:
-    """会話の履歴（複数のメッセージ）も 1 回の生成にできないので呼ばない。"""
-    stub = _Stub("呼ばれない")
-    _install(monkeypatch, stub)
-    agent = Agent(name="synthetic", model=builtin_runtime.model_factory(_claude_target()))
-    history: list[Any] = [
-        {"role": "user", "content": "合成の質問 1"},
-        {"role": "assistant", "content": "合成の回答 1"},
-        {"role": "user", "content": "合成の質問 2"},
+    assert result.final_output == "合成の回答"
+    assert calls == [{"query": "A"}, {"query": "B"}]
+    first, second = api.body(0), api.body(1)
+    [sent_tool] = first["tools"]
+    assert (sent_tool["name"], sent_tool["strict"]) == ("lookup", True)
+    # strict のツールは構造化出力と同じ変換で送る（受け付けない制約を外す）。
+    assert "minLength" not in sent_tool["input_schema"]["properties"]["query"]
+    assert first["tool_choice"] == {"type": "auto"}
+    # 推論の量を送る呼び出しは、会話の前の部分が変わった思考の block を外して続ける。
+    assert first["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
+    assert api.requests[0].headers["anthropic-beta"] == THINKING_BINDING_BETA
+    assert second["messages"] == [
+        {"role": "user", "content": [text("合成の質問")]},
+        {
+            "role": "assistant",
+            "content": [
+                thinking("合成の思考 1", "sig-1"),
+                tool_use("toolu_a", "lookup", {"query": "A"}),
+                tool_use("toolu_b", "lookup", {"query": "B"}),
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_a", "content": "合成の結果"},
+                {"type": "tool_result", "tool_use_id": "toolu_b", "content": "合成の結果"},
+            ],
+        },
     ]
+    usage = result.context_wrapper.usage
+    assert (usage.requests, usage.input_tokens, usage.output_tokens) == (2, 260, 42)
+
+
+def test_tool_result_images_are_sent_as_image_blocks(api: FakeMessagesApi) -> None:
+    api.reply(recorded_turn(tool_use("toolu_a", "lookup", {"query": "A"}), stop_reason="tool_use"))
+    api.reply(recorded_turn(text("合成の回答")))
+    output = [ToolOutputText(text="合成の本文"), ToolOutputImage(image_url=PNG_DATA_URL)]
+    agent = _agent(_claude_target(reasoning_effort="none"), tools=[_tool("lookup", output, [])])
+
+    anyio.run(lambda: Runner.run(agent, "合成の質問"))
+
+    [result_block] = api.body(1)["messages"][2]["content"]
+    assert result_block["content"] == [
+        text("合成の本文"),
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+        },
+    ]
+
+
+def test_conversation_history_and_forced_tool_choice_are_sent_as_given(
+    api: FakeMessagesApi,
+) -> None:
+    """会話の履歴は user の message にまとめ、tool_choice は指定どおり（required は any）送る。"""
+    api.reply(recorded_turn(tool_use("toolu_a", "lookup", {"query": "A"}), stop_reason="tool_use"))
+    api.reply(recorded_turn(text("合成の回答")))
+    target = _claude_target(reasoning_effort="none")
+    settings = builtin_runtime.model_settings_for(target)
+    agent = Agent(
+        name="synthetic",
+        model=builtin_runtime.model_factory(target),
+        model_settings=settings.resolve(
+            type(settings)(tool_choice="required", parallel_tool_calls=False)
+        ),
+        tools=[_tool("lookup", "合成の結果", [])],
+        reset_tool_choice=True,
+    )
+    history: list[Any] = [
+        {"role": "user", "content": "合成の履歴"},
+        {"role": "user", "content": "合成の質問"},
+    ]
+
+    anyio.run(lambda: Runner.run(agent, history))
+
+    first = api.body(0)
+    assert first["messages"] == [
+        {"role": "user", "content": [text("合成の履歴"), text("合成の質問")]}
+    ]
+    assert first["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
+
+
+def test_unsupported_requests_fail_without_calling_the_model(api: FakeMessagesApi) -> None:
+    """Messages API に写せない要求は、呼ばずに理由の分かる失敗にする（別の接続へ切り替えない）。"""
+    agent = _agent(_claude_target())
+    history: list[Any] = [{"role": "developer", "content": "合成の指示"}]
 
     with pytest.raises(builtin_runtime.BuiltinRuntimeError) as raised:
         anyio.run(lambda: Runner.run(agent, history, max_turns=1))
 
-    assert raised.value.code == builtin_runtime.MODEL_CONNECTION_NOT_SUPPORTED_CODE
-    assert stub.calls == []
+    assert raised.value.code == "runtime.model_failed"
+    assert "developer" in raised.value.message
+    assert api.requests == []
+
+
+def test_messages_api_overflow_is_parsed_like_other_providers() -> None:
+    assert provider_overflow(
+        None, "prompt is too long: 210000 tokens > 200000 maximum"
+    ) == ProviderOverflow(prompt_tokens=210000, limit_tokens=200000)
+
+
+def test_messages_api_overflow_compacts_and_retries_once(
+    monkeypatch: MonkeyPatch, api: FakeMessagesApi
+) -> None:
+    """入力の超過（400）は Responses API の経路と同じく、縮めた要求で 1 回だけ送り直す。"""
+    api.reply_error(
+        400, "invalid_request_error", "prompt is too long: 210000 tokens > 200000 maximum"
+    )
+    api.reply(recorded_turn(text("合成の回答")))
+    retried: list[ProviderOverflow] = []
+
+    class _Window:
+        provider_limit = None
+        last_input = None
+
+        def retry_request(self, request: dict[str, Any], overflow: ProviderOverflow) -> Any:
+            retried.append(overflow)
+            return {**request, "input": [{"role": "user", "content": "縮めた入力"}]}
+
+        def fail_after_retry(self, overflow: ProviderOverflow) -> Any:
+            pytest.fail("送り直しは 1 回で通る")
+
+        def measure(self, response: Any) -> None:
+            del response
+
+    token = builtin_runtime._ACTIVE_CONTEXT_WINDOW.set(_Window())  # type: ignore[arg-type]  # noqa: SLF001
+    try:
+        result = anyio.run(lambda: Runner.run(_agent(_claude_target()), "長い入力", max_turns=1))
+    finally:
+        builtin_runtime._ACTIVE_CONTEXT_WINDOW.reset(token)  # noqa: SLF001
+
+    assert result.final_output == "合成の回答"
+    assert retried == [ProviderOverflow(prompt_tokens=210000, limit_tokens=200000)]
+    assert api.body(1)["messages"] == [{"role": "user", "content": [text("縮めた入力")]}]
+
+
+def test_model_call_span_records_the_anthropic_provider(api: FakeMessagesApi) -> None:
+    """モデルの呼び出しの span は Responses API の経路と同じ層で残し、provider は anthropic。"""
+    from pr_backend_core.observability.call_policy import call_content_policy
+    from pr_backend_core.observability.tracing import operation_trace
+
+    api.reply(recorded_turn(tool_use("toolu_a", "lookup", {"query": "A"}), stop_reason="tool_use"))
+    api.reply(recorded_turn(text("合成の回答")))
+    agent = _agent(_claude_target(), tools=[_tool("lookup", "合成の結果", [])])
+
+    async def run() -> SimpleNamespace:
+        with (
+            call_content_policy(lambda: True),
+            operation_trace("agent.execute", operation_id="synthetic-anthropic-run") as summary,
+        ):
+            await Runner.run(agent, "合成の質問")
+        return SimpleNamespace(summary=summary)
+
+    summary = anyio.run(run).summary
+    chats = [span for span in summary.spans if span.operation_name == "gen_ai.chat"]
+    assert len(chats) == 2
+    assert {span.attributes["gen_ai.provider.name"] for span in chats} == {"anthropic"}
+    assert {span.attributes["gen_ai.request.model"] for span in chats} == {CLAUDE}
+    assert "sk-ant-synthetic" not in summary.model_dump_json()
 
 
 # --------------------------------------------------------------------------- 画像の読み取り
+
+
+class _Stub:
+    """`acreate_anthropic_message` の決定論のスタブ（要求を記録し、台本の結果を返す）。"""
+
+    def __init__(self, *outcomes: str) -> None:
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple[AnthropicMessagesRequest, dict[str, Any]]] = []
+
+    async def __call__(
+        self, request: AnthropicMessagesRequest, **kwargs: Any
+    ) -> AnthropicMessagesResult:
+        self.calls.append((request, kwargs))
+        return AnthropicMessagesResult(
+            text=self.outcomes.pop(0),
+            model=request.model_id,
+            stop_reason="end_turn",
+            usage=AnthropicUsage(input_tokens=10, output_tokens=5),
+            request_id="req_synthetic",
+        )
+
+
+def _install(monkeypatch: MonkeyPatch, stub: _Stub) -> None:
+    monkeypatch.setattr(anthropic_model, "acreate_anthropic_message", stub)
 
 
 def test_image_reader_calls_messages_api(monkeypatch: MonkeyPatch) -> None:

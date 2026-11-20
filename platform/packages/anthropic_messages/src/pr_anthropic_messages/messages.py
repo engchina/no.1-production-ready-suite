@@ -353,15 +353,24 @@ def _message_params(request: AnthropicMessagesRequest) -> dict[str, Any]:
     }
     if request.system:
         params["system"] = request.system
+    params.update(_reasoning_and_format_params(request.reasoning_effort, request.response_schema))
+    return params
+
+
+def _reasoning_and_format_params(
+    reasoning_effort: str, response_schema: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """思考（adaptive）・推論の量・構造化出力の引数（`thinking`・`output_config`）。"""
+    params: dict[str, Any] = {}
     output_config: dict[str, Any] = {}
-    effort = anthropic_effort(request.reasoning_effort)
+    effort = anthropic_effort(reasoning_effort)
     if effort is not None:
         params["thinking"] = {"type": "adaptive"}
         output_config["effort"] = effort
-    if request.response_schema is not None:
+    if response_schema is not None:
         output_config["format"] = {
             "type": "json_schema",
-            "schema": anthropic_response_schema(request.response_schema),
+            "schema": anthropic_response_schema(response_schema),
         }
     if output_config:
         params["output_config"] = output_config
@@ -433,7 +442,8 @@ def _require_api_key(api_key: str, model_id: str) -> str:
 # --------------------------------------------------------------------------- 応答
 
 
-def _usage(message: Message) -> AnthropicUsage:
+def _usage(message: Any) -> AnthropicUsage:
+    # Message・BetaMessage のどちらも同じ項目を持つ。
     usage = message.usage
     details = usage.output_tokens_details
     return AnthropicUsage(
@@ -445,11 +455,16 @@ def _usage(message: Message) -> AnthropicUsage:
     )
 
 
-def _result(
-    message: Message, request: AnthropicMessagesRequest, *, request_id: str
-) -> AnthropicMessagesResult:
-    model_id = request.model_id.strip()
-    usage = _usage(message)
+def _raise_for_stop_reason(
+    message: Any,
+    *,
+    model_id: str,
+    max_output_tokens: int,
+    usage: AnthropicUsage,
+    request_id: str,
+    completed: frozenset[str] = _COMPLETED_STOP_REASONS,
+) -> str:
+    """停止の理由が終わりでなければ refusal・incomplete の失敗にする（終わりなら理由を返す）。"""
     stop_reason = str(message.stop_reason or "")
     if stop_reason == "refusal":
         category = ""
@@ -472,7 +487,7 @@ def _result(
             refusal_category=category,
             usage=usage,
         )
-    if stop_reason not in _COMPLETED_STOP_REASONS:
+    if stop_reason not in completed:
         incomplete = EnterpriseAiIncomplete(
             status="incomplete",
             reason=(
@@ -480,7 +495,7 @@ def _result(
                 if stop_reason == "max_tokens"
                 else stop_reason
             ),
-            max_output_tokens=request.max_output_tokens,
+            max_output_tokens=max_output_tokens,
             output_tokens=usage.output_tokens,
             reasoning_tokens=usage.thinking_tokens,
         )
@@ -493,16 +508,39 @@ def _result(
             incomplete=incomplete,
             usage=usage,
         )
+    return stop_reason
+
+
+def _empty_response_error(
+    *, model_id: str, stop_reason: str, usage: AnthropicUsage, request_id: str
+) -> AnthropicMessagesError:
+    return AnthropicMessagesError(
+        f"モデル「{model_id}」の応答に本文がありませんでした（stop_reason={stop_reason}）。",
+        kind="response_format",
+        model_id=model_id,
+        provider_message=f"stop_reason={stop_reason}",
+        request_id=request_id,
+        usage=usage,
+    )
+
+
+def _result(
+    message: Message, request: AnthropicMessagesRequest, *, request_id: str
+) -> AnthropicMessagesResult:
+    model_id = request.model_id.strip()
+    usage = _usage(message)
+    stop_reason = _raise_for_stop_reason(
+        message,
+        model_id=model_id,
+        max_output_tokens=request.max_output_tokens,
+        usage=usage,
+        request_id=request_id,
+    )
     # 思考の block（thinking / redacted_thinking）は本文に使わない。
     text = "".join(block.text for block in message.content if block.type == "text")
     if not text.strip():
-        raise AnthropicMessagesError(
-            f"モデル「{model_id}」の応答に本文がありませんでした（stop_reason={stop_reason}）。",
-            kind="response_format",
-            model_id=model_id,
-            provider_message=f"stop_reason={stop_reason}",
-            request_id=request_id,
-            usage=usage,
+        raise _empty_response_error(
+            model_id=model_id, stop_reason=stop_reason, usage=usage, request_id=request_id
         )
     return AnthropicMessagesResult(
         text=text,

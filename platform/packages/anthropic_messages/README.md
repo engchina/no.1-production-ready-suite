@@ -1,9 +1,9 @@
 # production-ready-anthropic-messages (`pr_anthropic_messages`)
 
-Anthropic Claude の Messages API を、公式の Python SDK（`anthropic`）で呼ぶ共通の部品（#5546 の 2 段目）。システム設定 › モデル の「クォータナリ接続」（Anthropic Claude 用）を選んだ登録モデルを、3 製品（RAG・NL2SQL・Agent。Agent は 1 回の生成だけ）の呼び出しの層がこの部品で呼ぶ。OpenAI 互換の shim は使わない。
+Anthropic Claude の Messages API を、公式の Python SDK（`anthropic`）で呼ぶ共通の部品（#5546 の 2 段目）。システム設定 › モデル の「クォータナリ接続」（Anthropic Claude 用）を選んだ登録モデルを、3 製品（RAG・NL2SQL・Agent）の呼び出しの層がこの部品で呼ぶ。Agent は業務 Agent の実行（ツールの呼び出し・複数のターン。#5580）も、下の「会話の履歴とツールの往復」の部品で呼ぶ。OpenAI 互換の shim は使わない。
 
 - 3 製品の OCI Enterprise AI の層（Responses API）と同じ形の結果を返す: 本文・usage（Responses API の形にも写せる）・停止の理由・失敗の分類（`pr_enterprise_ai` の種類と error code）。
-- 製品ごとの処理の流れ（プロンプト・再試行の方針・出力の上限の決め方）は変えない。この部品は 1 回の呼び出しを組み、応答と失敗を写すだけ。SDK の自動の再試行は既定で使わない（`max_retries=0`）。
+- 製品ごとの処理の流れ（プロンプト・再試行の方針・出力の上限の決め方・ツールを実行するループ）は変えない。この部品は 1 回の呼び出しを組み、応答と失敗を写すだけ。SDK の自動の再試行は既定で使わない（`max_retries=0`）。
 - 依存の向き: `anthropic` と `pr_enterprise_ai` だけに依存し、製品・suite・ほかの platform の package を import しない。
 
 ## 置き場所
@@ -82,6 +82,53 @@ result.usage.as_responses_usage()  # llm_call_usage・record_genai_usage に渡�
 | ほかの `APIStatusError` | `error.type` が `rate_limit_error` なら `rate_limit`、`overloaded_error`・`api_error`（streaming の途中の error event）なら `unavailable`、ほかは `request` |
 
 usage: `input_tokens` は cache の外の入力（Messages API の意味）、`total_input_tokens` と `as_responses_usage()` の `input_tokens` は cache の読み書きを含む全体、`thinking_tokens` は出力のうち思考の token（`output_tokens_details.reasoning_tokens` に写す）。
+
+## 会話の履歴とツールの往復（#5580）
+
+```python
+from pr_anthropic_messages import (
+    AnthropicConversationRequest,
+    AnthropicTool,
+    acreate_anthropic_turn,
+    anthropic_messages,
+    anthropic_text_block,
+    anthropic_tool_result_block,
+)
+
+messages = anthropic_messages(
+    [
+        ("user", [anthropic_text_block(question)]),
+        ("assistant", list(previous.content)),  # 前の応答の block（思考の block も署名ごと）
+        ("user", [anthropic_tool_result_block(tool_use.id, result_text)]),
+    ]
+)
+turn = await acreate_anthropic_turn(
+    AnthropicConversationRequest(
+        model_id=model_id,
+        system=system_prompt,
+        messages=messages,
+        tools=(AnthropicTool(name=name, input_schema=schema, description=text, strict=True),),
+        reasoning_effort=reasoning_effort,
+        max_output_tokens=budget,
+    ),
+    api_key=connection.api_key,
+    endpoint_url=connection.effective_endpoint,
+)
+turn.tool_uses  # 呼ぶツール（無ければ最終の回答。本文は turn.text）
+turn.content  # 次の要求の assistant の message にそのまま入れる block
+```
+
+ツールを実行して結果を返すループは呼ぶ側が持つ（Agent は OpenAI Agents SDK の `Runner`）。
+
+| 入力・応答 | Messages API |
+|---|---|
+| `messages` | `anthropic_messages` が同じ役割の続く message を 1 つにまとめ、user の message では `tool_result` を先頭に置く（並列のツールの結果は 1 つの user の message で返す） |
+| `anthropic_tool_result_block` | `tool_result`（本文、または text と画像の block。失敗は `is_error`） |
+| `tools` | `strict` のツールは `input_schema` を構造化出力と同じ変換（`anthropic_response_schema`）で送り、`strict: true` を付ける |
+| `tool_choice`・`tool_name`・`parallel_tool_calls` | `{"type": "auto" / "any" / "none" / "tool"}`、`parallel_tool_calls=False` は `disable_parallel_tool_use`。forced の `any` / `tool` を受け付けないモデル（Claude Opus 5.5 など）の 400 は `request` の失敗のまま（別の指定へ読み替えない） |
+| 思考の block（推論の量を送る呼び出し） | 前の応答の thinking / redacted_thinking を変えずに戻し、`thinking.block_binding.prefix_mismatch_behavior="drop_block"`（beta `thinking-binding-controls-2026-08-01`。beta の messages で送る）を付ける。指示・ツール・前の message が変わって検証に通らない block は API が外して続ける（外した数は `dropped_thinking_blocks`） |
+| 思考の block（推論の量 none） | `block_binding` は adaptive のときだけ送れるので、モデルの既定の思考の block を戻さない（会話の前の部分が変わったときの 400 を避ける） |
+| `stop_reason` | `end_turn`・`stop_sequence`・`tool_use` は終わり。`pause_turn`（server tool のループの途中。この部品は server tool を送らない）・`max_tokens` などは `incomplete`、`refusal` は `refusal`。本文もツールの呼び出しも無い応答・`tool_use` で止まって呼び出しの無い応答は `response_format` |
 
 ## テスト
 
