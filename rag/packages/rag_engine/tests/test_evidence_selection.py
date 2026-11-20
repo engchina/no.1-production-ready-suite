@@ -137,7 +137,7 @@ def document_span(index, document, text, *, first=False):
 
 
 def test_first_chunks_join_one_generation_and_are_not_repeated_when_evidence_has_them():
-    """#5240: 先頭の chunk は主の根拠と一緒に渡す。主の根拠がその原文を含む文書には重ねて足さない。"""
+    """#5240: 先頭の chunk は主の根拠と一緒に渡す。同じ原文を含む別の chunk にも先頭を足す。"""
     spans = [
         document_span(0, "a", "主の根拠A。"),
         document_span(1, "a", "先頭A。", first=True),
@@ -145,10 +145,10 @@ def test_first_chunks_join_one_generation_and_are_not_repeated_when_evidence_has
         document_span(3, "b", "先頭B。", first=True),
     ]
     selected, _, diagnostic = select(spans, source_scores={"s0": 0.9, "s2": 0.5})
-    assert sorted(value["source_id"] for value in selected) == ["s0", "s1", "s2"]
+    assert [value["source_id"] for value in selected] == ["s1", "s0", "s3", "s2"]
     assert diagnostic["selection"] == "relevance_within_budget"
     assert diagnostic["first_chunk_document_count"] == 2
-    assert diagnostic["first_chunk_covered_document_count"] == 1
+    assert diagnostic["first_chunk_covered_document_count"] == 0
     assert diagnostic["duplicate_span_count"] == 0
 
 

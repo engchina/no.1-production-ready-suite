@@ -348,7 +348,11 @@ def test_unread_sections_make_the_answer_conditional():
 
     unread = [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、読み込み量の上限に達したため未反映です。"]
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
-    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+
+    def background(*, spans):
+        return [{"document_scope": spans[0]["document_scope"], "first_chunk": _child("c31a")}]
+
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused, document_background=background)):
         plain = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only")
         limited = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=unread)
     assert plain.response.envelope["outcome"] == "answered"

@@ -42,7 +42,7 @@ def document_groups(
 
 
 def _lead(span: Mapping[str, Any]) -> int:
-    return 0 if span.get(BACKGROUND_ONLY) else 1 if span.get(FIRST_CHUNK) else 2
+    return 0 if span.get(FIRST_CHUNK) else 1 if span.get(BACKGROUND_ONLY) else 2
 
 
 def order_document_spans(spans: Sequence[dict[str, Any]], *, priority: Mapping[tuple[str, ...], int] | None = None) -> list[dict[str, Any]]:
@@ -139,32 +139,26 @@ def related_documents(documents: Sequence[Sequence[dict[str, Any]]]) -> list[lis
 
 
 def with_first_chunks(values: Sequence[dict[str, Any]], firsts: Sequence[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """``values`` の本文に、そこに出てくる文書の本文の先頭の chunk（``FIRST_CHUNK``）を足す（#5240）。
+    """入力に残った各文書・版の先頭 chunk を完全な範囲で一度だけ先頭に置く。"""
 
-    ``firsts`` は先頭の chunk の全文の span（None は ``values`` の中の印の付いた span）。``values`` の中の先頭の chunk と
-    その抜粋はいったん外し、同じ文書の本文がその原文を含まなければ全文を足し直す（同じ原文を 2 回渡さない）。
-    抜粋に付いた分割読取の回答候補は、足し直した全文へ移す。
-    """
-    pool = [value for value in (values if firsts is None else firsts) if value.get(FIRST_CHUNK)]
-    main = [value for value in values if not value.get(FIRST_CHUNK)]
-    result = list(main)
-    added: set[tuple[Any, ...]] = set()
-    for key in dict.fromkeys(document_key(value) for value in values):
-        for first in pool:
-            identity = (first.get("source_id"), first.get("start", 0), first.get("end"))
-            if document_key(first) != key or identity in added:
-                continue
-            added.add(identity)
-            if any(document_key(value) == key and first["text"] in value["text"] for value in main):
-                continue
-            answers = [
-                str(value["batch_answer"])
-                for value in values
-                if value.get(FIRST_CHUNK)
-                and value.get("batch_answer")
-                and value.get("source_id") == first.get("source_id")
-                and value.get("start", 0) >= first.get("start", 0)
-                and value.get("end", len(value["text"])) <= first.get("end", len(first["text"]))
-            ]
-            result.append({**first, **({"batch_answer": "\n".join(dict.fromkeys(answers))} if answers else {})})
-    return result
+    def identity(value: Mapping[str, Any]) -> tuple[Any, ...]:
+        start = value.get("start", 0)
+        return (document_key(value), value["source_id"], start, value.get("end", start + len(value["text"])))
+
+    pool = {identity(value): value for value in (values if firsts is None else firsts) if value.get(FIRST_CHUNK)}
+    needed = {document_key(value) for value in values}
+    answers: dict[tuple[Any, ...], list[str]] = {}
+    main = []
+    for value in values:
+        key = identity(value)
+        if key in pool:
+            if answer := value.get("batch_answer"):
+                answers.setdefault(key, []).append(answer)
+        else:
+            main.append(value)
+    heads = [
+        {**first, **({"batch_answer": "\n".join(dict.fromkeys(answers[key]))} if key in answers else {})}
+        for key, first in pool.items()
+        if document_key(first) in needed
+    ]
+    return order_document_spans([*heads, *main], priority={key: i for i, key in enumerate(dict.fromkeys(document_key(v) for v in values))})

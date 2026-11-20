@@ -9,6 +9,7 @@ from rag_engine.config import Settings
 from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
 from rag_engine.generation.document_inputs import FIRST_CHUNK, document_key, with_first_chunks
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
+from rag_engine.generation.partial_answers import SummaryClaims
 from rag_engine.retrieval.rerank_scores import rerank_first_key
 
 
@@ -25,6 +26,7 @@ def select_evidence(
     read: Callable[[str, str, type[BatchReading]], BatchReading],
     unusable_output: Callable[[Exception], bool],
     provider_id: str | None = None,
+    summarize: Callable[[str], SummaryClaims] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
     failed_batches: list[dict[str, Any]] | None = None,
@@ -62,9 +64,10 @@ def select_evidence(
 
     firsts = [span for span in spans if span.get(FIRST_CHUNK)]
     unique: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[tuple[str, ...], str, int, int]] = set()
     for span in sorted((span for span in spans if not span.get(FIRST_CHUNK)), key=relevance):
-        key = str(span["source_id"]), str(span["text"])
+        start = int(span.get("start", 0))
+        key = document_key(span), str(span["source_id"]), start, int(span.get("end", start + len(span["text"])))
         if key not in seen:
             seen.add(key)
             unique.append(span)
@@ -99,6 +102,7 @@ def select_evidence(
         schema=schema_for([]),
         schema_for=schema_for,
         read=read,
+        summarize=summarize,
         unusable_output=unusable_output,
         provider_id=provider_id,
         tag=tag,

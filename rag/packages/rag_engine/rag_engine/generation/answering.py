@@ -1829,9 +1829,10 @@ def synthesize_grounded_answer(
     from rag_engine.generation import grounded
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
-    from rag_engine.generation.document_inputs import with_first_chunks
+    from rag_engine.generation.document_inputs import FIRST_CHUNK, with_first_chunks
     from rag_engine.generation.evidence_selection import select_evidence
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
+    from rag_engine.generation.partial_answers import SUMMARY_SYSTEM, SummaryClaims
     from rag_engine.models.llm import GroundedItem
     from rag_engine.retrieval.search_stages import DOCUMENT_INFO_STAGE
 
@@ -1868,6 +1869,33 @@ def synthesize_grounded_answer(
         context, spans, background_detail = document_background_reader.append(question, context, spans)
         background_step.output(background_detail)
         background_step.field("選択した文書数", background_detail["selected_documents"])
+
+    # 保存文書では、現在の閲覧範囲内で取得できた同じ版の先頭だけを使う。
+    available = {tuple(value["document_scope"]) for value in spans if value.get(FIRST_CHUNK)}
+    missing = {
+        tuple(value["document_scope"])
+        for value in spans
+        if (background_detail["reader_available"] or value["document_scope"][-1]) and tuple(value["document_scope"]) not in available
+    }
+    notices_missing = []
+    if missing:
+        from rag_engine.retrieval.metadata_context import document_context_key
+
+        names = {tuple(value["document_scope"]): value["source"] for value in spans}
+        notices_missing = [f"{names[scope]} — {current_pack().text('answer_labels', 'missing_document_head')}" for scope in sorted(missing)]
+        spans = [value for value in spans if tuple(value["document_scope"]) not in missing]
+        retained_images = {(r.source, r.source_run_id, r.chunk_id) for r in context.records if document_context_key(r) not in missing}
+        images = tuple(
+            image for image in images if (image.get("source"), image.get("source_run_id"), image.get("chunk_id")) in retained_images
+        )
+        if not spans:
+            empty = _no_candidates_response(context)
+            response = replace(
+                empty,
+                answer_text="\n".join([empty.answer_text, *notices_missing]),
+                generation_trace={**(empty.generation_trace or {}), "document_background": document_background_reader.rounds},
+            )
+            return GroundedAnswer(response, context, images, mode)
 
     def render_generation(selected: Sequence[dict[str, Any]]) -> str:
         return _grounded_prompt(
@@ -1923,6 +1951,15 @@ def synthesize_grounded_answer(
                 read=lambda system, user, schema: grounded.call_with_model_purpose(
                     "evidence.read_batch", parse_text_response, system, user, generation_settings, schema, provider_id=provider
                 ),
+                summarize=lambda prompt: grounded.call_with_model_purpose(
+                    "evidence.read_batch",
+                    parse_text_response,
+                    SUMMARY_SYSTEM,
+                    prompt,
+                    generation_settings,
+                    SummaryClaims,
+                    provider_id=provider,
+                ),
                 unusable_output=_invalid_structured_output,
                 provider_id=provider,
                 source_scores=_source_question_scores(context),
@@ -1937,19 +1974,20 @@ def synthesize_grounded_answer(
                 spans,
                 generation_settings,
                 prompt=prompt,
+                partial_answer_synthesis=bool(input_diagnostic.get("partial_answer_synthesis")),
                 provider_id=provider,
                 parse_text=parse_text_response,
                 parse_images=parse_multimodal_response,
                 guide_steps=runtime_knowledge.guide_steps if runtime_knowledge else (),
                 guide_step_contracts=runtime_knowledge.guide_step_contracts if runtime_knowledge else (),
                 assume_unconfirmed=runtime_knowledge.assume_unconfirmed if runtime_knowledge else False,
-                image_paths=generation_images,
+                image_paths=[] if input_diagnostic.get("partial_answer_synthesis") else generation_images,
                 invalid_output=_invalid_structured_output,
                 confirmed_premises=settings.confirmed_premises,
                 confirmed_premise_sources=settings.confirmed_premise_sources,
                 guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),
             )
-            if batch_calls := input_diagnostic.get("batch_count", 0):
+            if batch_calls := (input_diagnostic.get("batch_count", 0) + input_diagnostic.get("summary_calls", 0)):
                 current.timing["batch_reading_calls"] = batch_calls
                 current.timing["generation_calls"] = current.timing.get("generation_calls", 0) + batch_calls
             if note := llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION, provider):
@@ -2006,6 +2044,13 @@ def synthesize_grounded_answer(
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
     unread = [*unread_view.lines, *(runtime_knowledge.guide_acquisition_notices if runtime_knowledge else ())]
+    unread.extend(notices_missing)
+    if input_diagnostic.get("reason") == "complete_chunk_group_exceeds_limit":
+        unread.append(
+            current_pack().text("answer_labels", "complete_chunk_group_exceeds_limit")
+            + " "
+            + ", ".join(input_diagnostic.get("source_ids", ()))
+        )
     if excluded_count := input_diagnostic.get("excluded_span_count", 0):
         unread.append(current_pack().text("answer_labels", "answer_evidence_budget_limited").format(count=excluded_count))
     settled = grounded.settle_confirmations(
