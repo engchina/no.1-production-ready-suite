@@ -71,7 +71,7 @@ def select_evidence(
         if key not in seen:
             seen.add(key)
             unique.append(span)
-    whole = with_first_chunks(unique, firsts)
+    whole = with_first_chunks([*unique, *firsts], firsts)
     first_documents = {document_key(span) for span in firsts}
     counts: dict[str, Any] = {
         "input_span_count": len(spans),

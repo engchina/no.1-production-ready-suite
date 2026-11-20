@@ -199,9 +199,9 @@ class DocumentBackgroundReader:
                 uid = record.chunk_uid or record.id
                 included = any(
                     uid == value.get("source_id")
+                    and value.get("start", 0) == 0
+                    and value.get("end", len(value["text"])) == len(record.text)
                     and value["text"] == record.text
-                    or any(child.get("id") == uid for child in value.get("child_ranges", ()))
-                    and record.text in value["text"]
                     for value in spans
                     if tuple(value.get("document_scope") or ()) == key
                 )

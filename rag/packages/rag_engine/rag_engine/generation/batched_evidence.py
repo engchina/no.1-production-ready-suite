@@ -518,6 +518,7 @@ def prepare_batched_evidence(
                         if not current and not batch_fits(members):
                             fail(
                                 "complete_chunk_group_exceeds_limit",
+                                source=str(value.get("source") or ""),
                                 document_scope=list(key[0]),
                                 source_ids=list(dict.fromkeys(item["source_id"] for item in with_firsts(members))),
                                 configured_chars=settings.evidence_budget_chars,
