@@ -61,7 +61,7 @@ function isClientListPaging(value: unknown): value is ClientListPaging {
 }
 
 /**
- * `PagedDataTable` のページ番号と表示件数を作業状態（sessionStorage）に残す（AGENTS.md「ページ番号は作業状態に残す」。
+ * `PagedDataTable` のページ番号と表示件数を作業状態（sessionStorage）に残す（docs/agents/ui.md「ページ番号は作業状態に残す」。
  * #1891）。`scope`（対象・絞り込み）が変わったら 1 ページ目に戻し、表示件数は保つ。
  * 戻り値はそのまま `PagedDataTable` に渡す（`page` / `onPageChange` / `pageSize` / `onPageSizeChange` / `resetKey`）。
  */

@@ -1,6 +1,8 @@
 # Excel の作成・編集・分析
 
-Codex では `spreadsheet` skill を使う。Excel の既存の書式と数式を保ち、集計値には数式を使う。成果物は root の `AGENTS.md` に従って `tmp/<作業名>/` に保存し、利用者の業務データを commit しない。
+> 扱う範囲: Excel（.xlsx / .xlsm / .csv / .tsv）の作成・編集・分析の skill の導入と成果物の検証、その他の文書（.docx / .pptx / .pdf）の生成の skill。root の [AGENTS.md](../../AGENTS.md) の目次から読み、root の規則と同じ強さで守る（規則を変えるときはこのファイルを直す）。
+
+Excel（.xlsx / .xlsm / .csv / .tsv）の作成・編集・分析は、Codex では `spreadsheet` skill を使う。その他の文書（.docx / .pptx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。Excel の既存の書式と数式を保ち、集計値には数式を使う。成果物は root の `AGENTS.md` に従って `tmp/<作業名>/` に保存し、利用者の業務データを commit しない。
 
 ## 導入
 

@@ -1,6 +1,6 @@
 # 配備
 
-> root の [AGENTS.md](../../AGENTS.md) から移した詳細（#2276）。root の規則と同じ強さで守る。規則を変えるときはこのファイルを直し、root には規則の要約と案内だけを書く。
+> 扱う範囲: 配備（Terraform・Compute・Nginx・DB ユーザー・systemd の unit・配備の CI・release）。root の [AGENTS.md](../../AGENTS.md) の目次から読み、root の規則と同じ強さで守る（規則を変えるときはこのファイルを直す）。
 > 正本: `terraform/stack/`・`platform/deploy/`・[terraform/README.md](../../terraform/README.md)。
 
 - 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない。Agent も組み込み Runtime で、Docker の Runtime は持たない）。
