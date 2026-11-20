@@ -3,6 +3,9 @@ import { expect, test, type Locator, type Page } from "./fixtures/test";
 import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
+// プライマリ接続の Endpoint URL と API key は必須（#5546）なので、保存済みの値を持たせる。
+const PRIMARY_ENDPOINT = "https://primary.example/openai/v1";
+
 const SECONDARY_CONNECTION = {
   connection_id: "secondary",
   endpoint: "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
@@ -25,7 +28,7 @@ function createModelSettings({
         connections: [
           {
             connection_id: "primary",
-            endpoint: "",
+            endpoint: PRIMARY_ENDPOINT,
             project_ocid: "ocid1.generativeaiproject.oc1.us-chicago-1.example",
             api_key: "",
             has_api_key: true,
@@ -76,6 +79,8 @@ function createModelSettings({
     // 値の無い登録モデルの画像 1 枚の入力 token と出典（#5334。backend の既定）。
     default_image_input_tokens: 1792,
     default_image_input_tokens_source_url: "https://docs.example/image-input-tokens",
+    // クォータナリ接続の Endpoint URL が空のときの URL（#5546。backend の既定。合成の値）。
+    default_anthropic_endpoint: "https://messages.example",
   };
 }
 
@@ -216,7 +221,7 @@ test("モデル設定は節ごとに保存し、画面にない項目は保存�
   expect(savedPayload).toMatchObject({
     enterprise_ai: {
       // 別の節（Enterprise AI 接続）の未保存の入力は送らない。
-      connections: [{ connection_id: "primary", endpoint: "" }],
+      connections: [{ connection_id: "primary", endpoint: PRIMARY_ENDPOINT }],
       api_path: "/responses",
       vlm_input_mode: "files_api",
       text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
@@ -496,8 +501,14 @@ for (const scheme of ["light", "dark"] as const) {
     const primaryTab = tablist.getByRole("tab", { name: "プライマリ接続" });
     const secondaryTab = tablist.getByRole("tab", { name: "セカンダリ接続" });
     const tertiaryTab = tablist.getByRole("tab", { name: "ターシャリ接続" });
-    // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続（#786）。
-    await expect(tablist.getByRole("tab")).toHaveText(["プライマリ接続", "セカンダリ接続", "ターシャリ接続"]);
+    const quaternaryTab = tablist.getByRole("tab", { name: "クォータナリ接続" });
+    // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続 → クォータナリ接続（#786 / #5546）。
+    await expect(tablist.getByRole("tab")).toHaveText([
+      "プライマリ接続",
+      "セカンダリ接続",
+      "ターシャリ接続",
+      "クォータナリ接続",
+    ]);
     await expect(primaryTab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("表示名", { exact: true })).toHaveCount(0);
     await expect(page.locator("#enterprise-connection-name")).toHaveCount(0);
@@ -521,6 +532,11 @@ for (const scheme of ["light", "dark"] as const) {
     await page.keyboard.press("Home");
     await expect(primaryTab).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("End");
+    await expect(quaternaryTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("enterprise-connection-quaternary-empty")).toContainText(
+      "クォータナリ接続は設定されていません。"
+    );
+    await page.keyboard.press("ArrowLeft");
     await expect(tertiaryTab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByTestId("enterprise-connection-tertiary-empty")).toContainText(
       "ターシャリ接続は設定されていません。"
@@ -531,16 +547,17 @@ for (const scheme of ["light", "dark"] as const) {
       path: testInfo.outputPath(`connection-secondary-empty-${scheme}-${testInfo.project.name}.png`),
     });
 
-    // 設定すると入力欄を出し、Endpoint URL・Project OCID・API key はすべて必須。
+    // 設定すると入力欄を出し、Endpoint URL と API key は必須、Project OCID は任意（#5546）。
     await page.getByRole("button", { name: "セカンダリ接続を設定" }).click();
     const secondary = page.getByTestId("enterprise-connection-secondary");
     const secondaryEndpoint = page.locator("#enterprise-secondary-endpoint");
     const secondaryProject = page.locator("#enterprise-secondary-project-ocid");
     const secondaryApiKey = page.locator("#enterprise-secondary-api-key");
     await expect(secondaryEndpoint).toBeFocused();
-    for (const field of [secondaryEndpoint, secondaryProject, secondaryApiKey]) {
+    for (const field of [secondaryEndpoint, secondaryApiKey]) {
       await expect(field).toHaveAttribute("aria-required", "true");
     }
+    await expect(secondaryProject).not.toHaveAttribute("aria-required", "true");
     await expect(page.getByTestId("enterprise-connection-tab-secondary-unsaved")).toHaveText("未保存");
 
     // プライマリ接続のタブから保存しても、エラーのあるセカンダリ接続のタブへ移り、最初の欄へフォーカスする。
@@ -551,7 +568,7 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(secondaryEndpoint).toBeFocused();
     await expect(secondaryEndpoint).toHaveAttribute("aria-invalid", "true");
     await expect(secondary.getByText("Endpoint URL を入力してください。")).toBeVisible();
-    await expect(secondary.getByText("Project OCID を入力してください。")).toBeVisible();
+    await expect(secondary.getByText("Project OCID を入力してください。")).toHaveCount(0);
     await expect(secondary.getByText("API key を入力してください。")).toBeVisible();
     expect(patches).toHaveLength(0);
     await page.screenshot({
@@ -659,7 +676,12 @@ test("ターシャリ接続は Endpoint URL と API key だけで設定し、登
   await page.goto("/settings/model");
 
   const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
-  await expect(tablist.getByRole("tab")).toHaveText(["プライマリ接続", "セカンダリ接続", "ターシャリ接続"]);
+  await expect(tablist.getByRole("tab")).toHaveText([
+    "プライマリ接続",
+    "セカンダリ接続",
+    "ターシャリ接続",
+    "クォータナリ接続",
+  ]);
   const tertiaryTab = tablist.getByRole("tab", { name: "ターシャリ接続" });
   await tertiaryTab.click();
   const empty = page.getByTestId("enterprise-connection-tertiary-empty");
@@ -713,6 +735,86 @@ test("ターシャリ接続は Endpoint URL と API key だけで設定し、登
   await tablist.scrollIntoViewIfNeeded();
   await page.screenshot({
     path: testInfo.outputPath(`connection-tertiary-${testInfo.project.name}.png`),
+  });
+});
+
+test("クォータナリ接続は API key だけで設定し、登録モデルで選べる（#5546）", { tag: "@responsive" }, async ({
+  page,
+}, testInfo) => {
+  const patches: Array<{ enterprise_ai: Record<string, unknown> }> = [];
+  await mockModelSettings(page, (payload) =>
+    patches.push(payload as { enterprise_ai: Record<string, unknown> })
+  );
+  await page.goto("/settings/model");
+
+  const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
+  const quaternaryTab = tablist.getByRole("tab", { name: "クォータナリ接続" });
+  await quaternaryTab.click();
+  const empty = page.getByTestId("enterprise-connection-quaternary-empty");
+  await expect(empty).toContainText("クォータナリ接続は設定されていません。");
+  await expect(empty).toContainText("Anthropic Claude（Messages API）");
+  await expectNoPageOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath(`connection-quaternary-empty-${testInfo.project.name}.png`),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "クォータナリ接続を設定" }).click();
+
+  // API key だけが必須。Endpoint URL は任意（空なら API の既定の URL）、Project OCID の欄は無い。
+  const quaternary = page.getByTestId("enterprise-connection-quaternary");
+  const endpoint = page.locator("#enterprise-quaternary-endpoint");
+  const apiKey = page.locator("#enterprise-quaternary-api-key");
+  await expect(endpoint).toBeFocused();
+  await expect(endpoint).not.toHaveAttribute("aria-required", "true");
+  await expect(apiKey).toHaveAttribute("aria-required", "true");
+  await expect(page.locator("#enterprise-quaternary-project-ocid")).toHaveCount(0);
+  await expect(endpoint).toHaveAttribute("placeholder", "https://messages.example");
+  await expect(quaternary).toContainText("Anthropic の公式の API（https://messages.example）");
+  expect(await findClippedPlaceholders(page, { root: "[data-testid='enterprise-connection-quaternary']" })).toEqual([]);
+
+  // 未入力の保存は API key だけをエラーにする。
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+  await expect(apiKey).toBeFocused();
+  await expect(quaternary.getByText("API key を入力してください。")).toBeVisible();
+  await expect(quaternary.getByText("Endpoint URL を入力してください。")).toHaveCount(0);
+  expect(patches).toHaveLength(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({
+    path: testInfo.outputPath(`connection-quaternary-errors-${testInfo.project.name}.png`),
+    fullPage: true,
+  });
+
+  await apiKey.fill("sk-synthetic-input");
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+  await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
+  expect(patches[0]?.enterprise_ai.connections).toEqual([
+    expect.objectContaining({ connection_id: "primary" }),
+    expect.objectContaining({
+      connection_id: "quaternary",
+      endpoint: "",
+      api_key: "sk-synthetic-input",
+    }),
+  ]);
+
+  // 登録モデルの「接続」で、設定したクォータナリ接続を選べる。
+  const modelConnection1 = page.getByRole("combobox", { name: "モデル 1 の接続" });
+  await modelConnection1.click();
+  const options = page.getByRole("listbox", { name: "モデル 1 の接続" }).getByRole("option");
+  await expect(options).toHaveText(["プライマリ接続", "クォータナリ接続"]);
+  await options.filter({ hasText: "クォータナリ接続" }).click();
+  await expect(modelConnection1).toContainText("クォータナリ接続");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+  expect(patches[1]?.enterprise_ai.models).toMatchObject([
+    { model_id: "enterprise-llm", connection_id: "quaternary" },
+    { model_id: "enterprise-vision", connection_id: "primary" },
+  ]);
+
+  await expectNoPageOverflow(page);
+  await tablist.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath(`connection-quaternary-${testInfo.project.name}.png`),
+    fullPage: true,
   });
 });
 
