@@ -2076,6 +2076,8 @@ def synthesize_grounded_answer(
         }
         shown = grounded.deadline_document_quotes(question, with_first_chunks(spans), anchors=retrieved)
         summary = grounded.answer_labels().neutral_summary
+        if generation_failure == "paragraph_generation_failed":
+            summary = current_pack().text("answer_labels", "all_paragraphs_failed") + summary
         rendered_items = shown
     else:
         summary = str(current.summary or "").strip()
