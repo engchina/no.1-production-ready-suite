@@ -31,7 +31,9 @@ result = create_anthropic_message(
         max_output_tokens=budget,
     ),
     api_key=connection.api_key,
-    endpoint_url=connection.endpoint_url,  # 空なら SDK の既定（https://api.anthropic.com）
+    # pr_system_settings の接続（enterprise_ai_connection_for_model）の effective_endpoint
+    # （空の設定では https://api.anthropic.com）。
+    endpoint_url=connection.effective_endpoint,
     timeout_seconds=timeout_seconds,
 )
 result.text  # 構造化出力なら JSON の文字列（Pydantic で検証して使う）
@@ -46,7 +48,7 @@ result.usage.as_responses_usage()  # llm_call_usage・record_genai_usage に渡�
 |---|---|
 | `system` | `system`（空なら送らない） |
 | `user_text`・`images` | 1 つの user の message（画像の base64 の block を本文の前に置く） |
-| `response_schema` | `output_config.format`（`{"type": "json_schema", "schema": ...}`） |
+| `response_schema` | `output_config.format`（`{"type": "json_schema", "schema": ...}`）。structured outputs が受け付けない制約（文字列の長さ・数の範囲・`pattern`・2 以上の `minItems` など）は SDK の `anthropic.transform_schema`（`anthropic_response_schema`）で外して送る（外した制約は項目の説明に写る）。応答は呼ぶ側が元の schema で検証する |
 | `reasoning_effort` | 下の対応表 |
 | `max_output_tokens` | `max_tokens` |
 | `endpoint_url` | 空なら SDK の既定、指定があれば `base_url`（前後の空白と末尾の `/` だけを除く。`/v1` は SDK が足すので含めない） |

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from pr_backend_core.output_budget import DEFAULT_ONLINE_MAX_OUTPUT_TOKENS
 from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS
+from rag_parser_core.model_api import MODEL_API_RESPONSES
 
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
@@ -196,6 +197,9 @@ class LlmProviderSettings:
     # 画像 1 枚の入力 token(#5316)。画像を添付する呼び出しの入力の上限の判定で、画像を枚数 × この値で数える。
     # backend が platform の `enterprise_ai_image_input_tokens`(登録モデルの値。無ければ platform の既定)で決めて渡す。
     image_input_tokens: int = DEFAULT_IMAGE_INPUT_TOKENS
+    # 呼ぶ API(#5546。`rag_parser_core.model_api`)。クォータナリ接続(Anthropic Claude)は Messages API で、
+    # endpoint は Messages API の base URL。backend が接続から決めて渡す。
+    model_api: str = MODEL_API_RESPONSES
 
     @property
     def base_url(self) -> str:
@@ -398,6 +402,13 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     vision_endpoint = env.get("OCI_ENTERPRISE_AI_VLM_ENDPOINT", "").strip() or endpoint
     vision_project = env.get("OCI_ENTERPRISE_AI_VLM_PROJECT_OCID", "").strip() or project
     vision_api_key = env.get("OCI_ENTERPRISE_AI_VLM_API_KEY", "").strip() or api_key
+    # 呼ぶ API も接続ごと(#5546)。Vision の接続を指定しないときは回答の接続の値。
+    model_api = env.get("OCI_ENTERPRISE_AI_MODEL_API", "").strip() or MODEL_API_RESPONSES
+    vision_model_api = (
+        env.get("OCI_ENTERPRISE_AI_VLM_MODEL_API", "").strip() or MODEL_API_RESPONSES
+        if env.get("OCI_ENTERPRISE_AI_VLM_ENDPOINT", "").strip()
+        else model_api
+    )
     # 推論(思考)の量はモデルごと(#1425)。Vision のモデルを指定しないときは回答のモデルの値。
     answer_reasoning = env.get("OCI_ENTERPRISE_AI_REASONING_EFFORT", "").strip()
     vision_reasoning = (
@@ -434,6 +445,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             reasoning_effort=answer_reasoning,
             max_output_tokens=answer_output_tokens,
             image_input_tokens=answer_image_tokens,
+            model_api=model_api,
         ),
         ENTERPRISE_AI_VISION_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_VISION_LLM_PROVIDER,
@@ -447,6 +459,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             reasoning_effort=vision_reasoning,
             max_output_tokens=vision_output_tokens,
             image_input_tokens=vision_image_tokens,
+            model_api=vision_model_api,
         ),
     }
     default_vision_llm = normalize_llm_provider_id(

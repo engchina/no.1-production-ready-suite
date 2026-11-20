@@ -164,11 +164,14 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
     出力の上限(#1719)は、それぞれのモデルの値を渡す(platform の
     `enterprise_ai_output_token_budget`。共通の LLM / VLM の出力の上限は無い)。
     """
+    from app.clients.oci_enterprise_ai import connection_endpoint
+
     vlm_model = enterprise_ai_vision_model_id(settings)
     default_model = enterprise_ai_default_model_id(settings)
     connection = enterprise_ai_connection_for_model(settings, vlm_model)
     # Endpoint URL は platform の関数で base URL にして渡す(#1440。parser はそのまま使う)。
-    endpoint = connection.base_url
+    # クォータナリ接続(#5546)は Messages API の URL(parser のサービスはモデルを呼ばない)。
+    endpoint = connection_endpoint(connection)
     api_key = connection.api_key
     project = connection.project_ocid
     text_reasoning = enterprise_ai_reasoning_effort_to_send(settings, default_model)

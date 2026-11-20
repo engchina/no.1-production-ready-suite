@@ -42,7 +42,9 @@ result.usage.as_responses_usage()    # Responses API の形の usage（llm_call_
 
 ## 要求の組み方
 
-- 構造化出力は `output_config.format`（`{"type": "json_schema", "schema": ...}`）。
+- 構造化出力は `output_config.format`（`{"type": "json_schema", "schema": ...}`）。schema は
+  :func:`anthropic_response_schema`（SDK の `transform_schema`）で、structured outputs が
+  受け付けない制約（文字列の長さ・数の範囲・`pattern` など）を外してから送る。
 - 思考は adaptive。推論の量は :data:`ANTHROPIC_EFFORT_BY_REASONING_EFFORT` で
   `output_config.effort` に写す（`none` と空は思考・effort を送らず、モデルの既定にする）。
 - 出力の長い呼び出しでも HTTP の時間切れにならないよう、常に streaming で送り
@@ -84,6 +86,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -117,6 +120,7 @@ __all__ = [
     "acreate_anthropic_message",
     "anthropic_base_url",
     "anthropic_effort",
+    "anthropic_response_schema",
     "classify_anthropic_error",
     "create_anthropic_message",
 ]
@@ -355,10 +359,24 @@ def _message_params(request: AnthropicMessagesRequest) -> dict[str, Any]:
         params["thinking"] = {"type": "adaptive"}
         output_config["effort"] = effort
     if request.response_schema is not None:
-        output_config["format"] = {"type": "json_schema", "schema": dict(request.response_schema)}
+        output_config["format"] = {
+            "type": "json_schema",
+            "schema": anthropic_response_schema(request.response_schema),
+        }
     if output_config:
         params["output_config"] = output_config
     return params
+
+
+def anthropic_response_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """JSON schema を Messages API の structured outputs が受け付ける形にする（SDK の変換）。
+
+    structured outputs は文字列の長さ・数の範囲・`pattern`・`minItems`（0・1 以外）などを
+    受け付けず、要求が 400 になる。SDK の `anthropic.transform_schema` で外し（外した制約は項目の
+    説明に写る）、すべての object を `additionalProperties: false` にする。外した制約は送らない
+    だけなので、応答は呼ぶ側が元の schema で検証する（README「要求の組み方」）。
+    """
+    return anthropic.transform_schema(copy.deepcopy(dict(schema)))
 
 
 def _require_api_key(api_key: str, model_id: str) -> str:

@@ -36,7 +36,8 @@
   `pr_backend_core.token_estimate.without_image_inputs`）
 - model-settings.json はモデルの設定だけを持ち、製品固有の設定は置かない（他製品の保存で欠けると
   その製品が読めなくなるため。RAG の文書解析の設定は RAG の parser-settings.json。#1701）
-- モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
+- モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す（クォータナリ接続のモデルは
+  製品を呼ばずに `pr_anthropic_messages` で確かめる。`anthropic_model_test`。#5546）
 - 既定のモデルは 2 つ（#499）。画像を読む呼び出しは「既定の Vision モデル」、
   それ以外は「既定のテキストモデル」を使う。画面・API では 2 つとも必須（#566）
 """
@@ -2092,46 +2093,84 @@ def sanitize_model_test_error(raw_error: str, secrets: Sequence[str]) -> str:
     return sanitized[:2000]
 
 
+def _anthropic_test_connection(
+    settings: Any, request: ModelSettingsTestRequest
+) -> EnterpriseAiConnection | None:
+    """テストするモデルが Messages API の接続（クォータナリ接続）なら、その接続（#5546）。"""
+    if request.target_type not in {"enterprise_text", "enterprise_vision"}:
+        return None
+    connection = enterprise_ai_connection_for_model(settings, request.model_id)
+    return connection if connection.uses_anthropic_messages else None
+
+
 async def run_model_settings_test(
     settings: Any,
     request: ModelSettingsTestRequest,
     run_model_test: RunModelTest,
 ) -> ModelSettingsTestResult:
-    """対象モデルを実 API で呼び、表示用の結果へ変換する（例外は結果に含める）。"""
+    """対象モデルを実 API で呼び、表示用の結果へ変換する（例外は結果に含める）。
+
+    クォータナリ接続（Anthropic Claude の Messages API）のモデルは、製品の `run_model_test` を
+    呼ばずに `pr_anthropic_messages` で短い要求を送る（3 製品で同じ。#5546。
+    `anthropic_model_test`）。
+    """
     started = time.perf_counter()
     candidate = model_test_candidate(settings, request)
+    anthropic_connection: EnterpriseAiConnection | None = None
     try:
         if not request.model_id:
             raise ValueError("テストするモデル ID を入力してください。")
+        anthropic_connection = _anthropic_test_connection(candidate, request)
         # モデルが受け付けない引数（#3539）を外して送ったら、結果の詳細と文に出す。
         with collect_dropped_parameters() as dropped:
-            details = await run_model_test(candidate, request)
+            if anthropic_connection is None:
+                details = await run_model_test(candidate, request)
+            else:
+                details = await _run_anthropic_model_test(candidate, request, anthropic_connection)
     except Exception as exc:  # noqa: BLE001 - 外部 SDK/API の多様な例外を表示用に握る
         raw_error = sanitize_model_test_error(
             str(exc),
             [_setting_text(candidate, fields.api_key) for fields in _CONNECTION_FIELDS.values()],
         )
         network_cause = network_failure_cause(exc)
+        failure_details: ModelTestDetails = (
+            {"network_failure_cause": network_cause} if network_cause else {}
+        )
+        if anthropic_connection is not None:
+            from .anthropic_model_test import (
+                anthropic_model_test_failure_details,
+                anthropic_model_test_failure_message,
+            )
+
+            message = anthropic_model_test_failure_message(request.model_id)
+            troubleshooting = _anthropic_model_test_troubleshooting(
+                exc, anthropic_connection, network_cause
+            )
+            failure_details = {**anthropic_model_test_failure_details(exc), **failure_details}
+        else:
+            message = _model_test_failure_message(request.target_type, request.model_id)
+            troubleshooting = _model_test_troubleshooting(
+                request.target_type, raw_error, type(exc).__name__, network_cause
+            )
         return ModelSettingsTestResult(
             status="failed",
             target_type=request.target_type,
             model_id=request.model_id,
-            message=_model_test_failure_message(request.target_type, request.model_id),
-            # 呼び出しの層がまだ対応していない接続（#5546）は、Endpoint・API key などの確認項目を
-            # 並べずに、接続を変える案内だけを出す（要求は送っていない）。
-            troubleshooting=(
-                [str(exc)]
-                if isinstance(exc, EnterpriseAiConnectionNotSupportedError)
-                else _model_test_troubleshooting(
-                    request.target_type, raw_error, type(exc).__name__, network_cause
-                )
-            ),
+            message=message,
+            troubleshooting=troubleshooting,
             raw_error=raw_error,
             error_type=type(exc).__name__,
             elapsed_ms=_elapsed_ms(started),
-            details={"network_failure_cause": network_cause} if network_cause else {},
+            details=failure_details,
         )
-    message = _model_test_success_message(request.target_type, request.model_id)
+    if anthropic_connection is not None:
+        from .anthropic_model_test import anthropic_model_test_success_message
+
+        message = anthropic_model_test_success_message(
+            vision=request.target_type == "enterprise_vision", model_id=request.model_id
+        )
+    else:
+        message = _model_test_success_message(request.target_type, request.model_id)
     if dropped:
         names = ", ".join(sorted(dropped))
         details = {**details, "dropped_parameters": names}
@@ -2144,6 +2183,39 @@ async def run_model_settings_test(
         elapsed_ms=_elapsed_ms(started),
         details=details,
     )
+
+
+async def _run_anthropic_model_test(
+    settings: Any, request: ModelSettingsTestRequest, connection: EnterpriseAiConnection
+) -> ModelTestDetails:
+    """クォータナリ接続のモデルを Messages API で呼ぶ（推論の量・出力の上限は保存前の値）。"""
+    # anthropic の SDK は接続テストのときだけ読み込む（model の import を重くしない）。
+    from .anthropic_model_test import run_anthropic_model_test
+
+    return await run_anthropic_model_test(
+        model_id=request.model_id,
+        vision=request.target_type == "enterprise_vision",
+        api_key=connection.api_key,
+        endpoint=connection.effective_endpoint,
+        reasoning_effort=enterprise_ai_reasoning_effort(settings, request.model_id),
+        max_output_tokens=enterprise_ai_output_token_budget(settings, request.model_id),
+        timeout_seconds=float(settings.oci_enterprise_ai_timeout_seconds),
+    )
+
+
+def _anthropic_model_test_troubleshooting(
+    exc: BaseException,
+    connection: EnterpriseAiConnection,
+    network_cause: NetworkFailureCause | None,
+) -> list[str]:
+    """クォータナリ接続の失敗の案内（要求が届いていなければ、接続の案内だけ。#4084）。"""
+    from .anthropic_model_test import anthropic_model_test_troubleshooting
+
+    tips = [_network_failure_tip(network_cause)] if network_cause is not None else []
+    if network_cause in UNREACHED_NETWORK_FAILURE_CAUSES:
+        return tips
+    tips.extend(anthropic_model_test_troubleshooting(exc, endpoint=connection.effective_endpoint))
+    return list(dict.fromkeys(tips))
 
 
 def _dropped_parameters_message(names: str) -> str:

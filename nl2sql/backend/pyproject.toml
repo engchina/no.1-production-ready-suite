@@ -18,6 +18,8 @@ dependencies = [
   "prometheus-client>=0.24",
   "production-ready-backend-core",
   "production-ready-system-settings-backend",
+  # クォータナリ接続（Anthropic Claude の Messages API）のモデルを呼ぶ共通の部品（#5546）。
+  "production-ready-anthropic-messages",
   "oci>=2.160",
   "oracledb>=3.4",
   "scikit-learn>=1.7",
@@ -61,6 +63,7 @@ dev = [
 # テンプレを <app>/backend へ展開したときの相対パス。
 production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 production-ready-system-settings-backend = { path = "../../platform/packages/system_settings_backend", editable = true }
+production-ready-anthropic-messages = { path = "../../platform/packages/anthropic_messages", editable = true }
 
 [build-system]
 requires = ["hatchling"]

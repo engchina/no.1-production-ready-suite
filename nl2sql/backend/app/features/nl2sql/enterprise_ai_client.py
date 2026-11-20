@@ -3,6 +3,11 @@
 OCI Generative AI chat API は使わず、Enterprise AI の OpenAI-compatible
 HTTP endpoint contract だけを扱う。未設定の local/CI では service 側が
 deterministic fallback を使う。
+
+クォータナリ接続（Anthropic Claude の Messages API。#5546）のモデルは、送る直前の 1 か所
+（`OciEnterpriseAiDirectClient._post_json`）で platform の `pr_anthropic_messages` に分け、
+応答を Responses API と同じ形に写す。出力の上限・推論の量・送り直し・応答の検査は両方の接続で
+同じ処理を通る。
 """
 
 from __future__ import annotations
@@ -17,6 +22,13 @@ from contextlib import ExitStack
 from typing import Any, Protocol, cast
 
 import httpx
+from pr_anthropic_messages import (
+    AnthropicImage,
+    AnthropicMessagesError,
+    AnthropicMessagesRequest,
+    AnthropicMessagesResult,
+    create_anthropic_message,
+)
 from pr_backend_core.llm_request_params_httpx import send_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
@@ -282,7 +294,9 @@ class OciEnterpriseAiDirectClient:
             else self.settings.oci_enterprise_ai_timeout_seconds
         )
         connection = self.connection(model_id)
-        response_path = self.settings.oci_enterprise_ai_llm_response_path
+        response_path = _openai_compatible_setting(
+            connection, self.settings.oci_enterprise_ai_llm_response_path
+        )
         request_path = self.settings.oci_enterprise_ai_llm_path
         base_payload = _build_payload(
             settings=self.settings,
@@ -292,6 +306,7 @@ class OciEnterpriseAiDirectClient:
             system_prompt=system_prompt,
             max_output_tokens=budget,
             response_format=response_format,
+            use_payload_template=not connection.uses_anthropic_messages,
         )
         if not strict:
             # 実際に送る schema・template・指示も入力の予約に含める。
@@ -383,7 +398,9 @@ class OciEnterpriseAiDirectClient:
                 model_id=model_id,
                 budget=max(1, budget),
                 prompt_tokens=prompt_tokens,
-                can_lower_effort=not self.settings.oci_enterprise_ai_llm_payload_template.strip(),
+                can_lower_effort=not _openai_compatible_setting(
+                    connection, self.settings.oci_enterprise_ai_llm_payload_template
+                ),
                 can_widen=False,
             )
         try:
@@ -511,6 +528,7 @@ class OciEnterpriseAiDirectClient:
                     mime_type=mime_type,
                     max_output_tokens=budget,
                     response_format=response_format,
+                    use_payload_template=not connection.uses_anthropic_messages,
                 ),
                 effort,
             )
@@ -524,7 +542,9 @@ class OciEnterpriseAiDirectClient:
             )
             return _parse_response(
                 response,
-                response_path=self.settings.oci_enterprise_ai_vlm_response_path,
+                response_path=_openai_compatible_setting(
+                    connection, self.settings.oci_enterprise_ai_vlm_response_path
+                ),
                 response_format=response_format,
                 max_output_tokens=budget,
                 model_id=model_id,
@@ -538,7 +558,9 @@ class OciEnterpriseAiDirectClient:
                 self.settings, model_id, prompt_tokens=prompt_tokens
             ),
             prompt_tokens=prompt_tokens,
-            can_lower_effort=not self.settings.oci_enterprise_ai_vlm_payload_template.strip(),
+            can_lower_effort=not _openai_compatible_setting(
+                connection, self.settings.oci_enterprise_ai_vlm_payload_template
+            ),
         )
 
     def _post_json(
@@ -552,15 +574,6 @@ class OciEnterpriseAiDirectClient:
         model_id: str = "",
         deadline: float | None = None,
     ) -> Mapping[str, Any]:
-        # Endpoint URL は入力どおり使い、API path を付ける(#1440。3 製品で platform の関数)。
-        url = connection.request_url(path)
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "authorization": f"Bearer {connection.api_key}",
-        }
-        if project := connection.project_ocid:
-            headers["OpenAI-Project"] = project
         timeout = float(
             timeout_seconds
             if timeout_seconds is not None
@@ -574,6 +587,25 @@ class OciEnterpriseAiDirectClient:
             ),
             0,
         )
+        if connection.uses_anthropic_messages:
+            # クォータナリ接続（#5546）は Messages API で呼び、Responses API の形の応答を返す。
+            return self._post_anthropic_messages(
+                payload,
+                connection=connection,
+                timeout=timeout,
+                retry_count=retry_count,
+                model_id=model_id,
+                deadline=deadline,
+            )
+        # Endpoint URL は入力どおり使い、API path を付ける(#1440。3 製品で platform の関数)。
+        url = connection.request_url(path)
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "authorization": f"Bearer {connection.api_key}",
+        }
+        if project := connection.project_ocid:
+            headers["OpenAI-Project"] = project
         retryable = ENTERPRISE_AI_RETRYABLE_STATUS_CODES
         last_error = ""
         with httpx.Client(timeout=timeout) as client:
@@ -714,6 +746,190 @@ class OciEnterpriseAiDirectClient:
                     return _ResponseBody(parsed, upstream_request_id=_upstream_request_id(response))
         raise EnterpriseAiDirectError(last_error or "OCI Enterprise AI call failed.")
 
+    def _post_anthropic_messages(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        connection: EnterpriseAiConnection,
+        timeout: float,
+        retry_count: int,
+        model_id: str,
+        deadline: float | None,
+    ) -> Mapping[str, Any]:
+        """Messages API（`pr_anthropic_messages`）で呼び、Responses API の形の応答を返す。
+
+        再試行（回数・待ち・処理時間の上限）は Responses API の経路と同じ方針。再試行で直る見込みの
+        ある失敗（429・5xx・時間切れ・接続）だけを送り直し、SDK の自動の再試行は使わない。
+        未完了（出力の上限）・拒否は `EnterpriseAiDirectError` にして、呼び出し側の送り直しの判定
+        （`_with_fixed_output_retry`・`generate`）にそのまま渡す。
+        """
+        request = _anthropic_request(payload, model_id=model_id)
+        endpoint_host = enterprise_ai_endpoint_host(connection.effective_endpoint)
+        for attempt in range(retry_count + 1):
+            attempt_timeout = timeout
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _deadline_exceeded_error(model_id)
+                attempt_timeout = min(timeout, remaining)
+            with ExitStack() as attempt_scope:
+                call_span = attempt_scope.enter_context(
+                    observed_span(
+                        "gen_ai.chat",
+                        kind="client",
+                        attributes={
+                            "gen_ai.operation.name": "chat",
+                            "gen_ai.provider.name": "anthropic",
+                            "gen_ai.request.model": request.model_id,
+                            "pr.attempt": attempt + 1,
+                        },
+                    )
+                )
+                call_span.set_call_input(payload)
+                try:
+                    result = create_anthropic_message(
+                        request,
+                        api_key=connection.api_key,
+                        endpoint_url=connection.endpoint,
+                        timeout_seconds=attempt_timeout,
+                    )
+                except AnthropicMessagesError as exc:
+                    error_type = str(exc.status_code or exc.kind)
+                    call_span.set_call_output({"error_type": error_type})
+                    call_span.set_attributes({"error.type": error_type})
+                    call_span.set_status("failed")
+                    if exc.usage is not None:
+                        record_genai_usage(call_span, exc.usage.as_responses_usage())
+                    attempt_scope.close()
+                    if exc.retryable and attempt < retry_count:
+                        _wait_before_retry(
+                            min(0.2 * (attempt + 1), 1.0), deadline=deadline, model_id=model_id
+                        )
+                        continue
+                    raise _anthropic_direct_error(
+                        exc,
+                        model_id=model_id,
+                        endpoint_host=endpoint_host,
+                        attempts=attempt + 1,
+                        timeout_seconds=attempt_timeout,
+                    ) from exc
+                body = _anthropic_response_body(result)
+                call_span.set_call_output(body)
+                record_genai_usage(call_span, body["usage"])
+                return _ResponseBody(body, upstream_request_id=result.request_id)
+        raise EnterpriseAiDirectError("Anthropic Messages API call failed.", model_id=model_id)
+
+
+def _openai_compatible_setting(connection: EnterpriseAiConnection, value: str) -> str:
+    """OpenAI 互換 API だけに使う設定（payload template・response path）の値。
+
+    Messages API の接続（#5546）の要求と応答は `pr_anthropic_messages` が組むので使わない。
+    """
+    return "" if connection.uses_anthropic_messages else value.strip()
+
+
+def _deadline_exceeded_error(model_id: str) -> EnterpriseAiDirectError:
+    return EnterpriseAiDirectError(
+        "回答の処理時間の上限に達しました。質問を分けてもう一度お試しください。",
+        code="deadline_exceeded",
+        model_id=model_id,
+    )
+
+
+def _wait_before_retry(seconds: float, *, deadline: float | None, model_id: str) -> None:
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _deadline_exceeded_error(model_id)
+        seconds = min(seconds, remaining)
+    time.sleep(seconds)
+
+
+def _anthropic_request(payload: Mapping[str, Any], *, model_id: str) -> AnthropicMessagesRequest:
+    """Responses API の形の payload（`_build_payload` / `_build_image_payload`）を、Messages API の
+    入力にする。
+
+    `instructions` は system、`input` の本文と画像は 1 つの user の message、`text.format` の
+    JSON schema は構造化出力、`reasoning.effort` は推論の量、`max_output_tokens` は出力の上限に
+    写す。`temperature` は送らない（Messages API の新しいモデルが受け付けない）。
+    """
+    texts: list[str] = []
+    images: list[AnthropicImage] = []
+    try:
+        for item in payload.get("input") or []:
+            content = item.get("content") if isinstance(item, Mapping) else item
+            parts = [content] if isinstance(content, str) else content or []
+            for part in parts:
+                if isinstance(part, str):
+                    texts.append(part)
+                elif isinstance(part, Mapping) and part.get("type") == "input_text":
+                    texts.append(str(part.get("text") or ""))
+                elif isinstance(part, Mapping) and part.get("type") == "input_image":
+                    images.append(AnthropicImage.from_data_url(str(part.get("image_url") or "")))
+        text_format = (payload.get("text") or {}).get("format") or {}
+        schema = text_format.get("schema") if text_format.get("type") == "json_schema" else None
+        reasoning = payload.get("reasoning") or {}
+        return AnthropicMessagesRequest(
+            model_id=str(payload.get("model") or model_id),
+            system=str(payload.get("instructions") or ""),
+            user_text="\n\n".join(text for text in texts if text),
+            images=tuple(images),
+            response_schema=schema if isinstance(schema, Mapping) else None,
+            reasoning_effort=str(reasoning.get("effort") or ""),
+            max_output_tokens=int(payload.get("max_output_tokens") or 0),
+        )
+    except ValueError as exc:
+        raise EnterpriseAiDirectError(
+            f"Anthropic Messages API の要求を組めませんでした: {exc}", model_id=model_id
+        ) from exc
+
+
+def _anthropic_response_body(result: AnthropicMessagesResult) -> dict[str, Any]:
+    """Messages API の結果を Responses API の応答の形にする（応答の検査を両方の接続で共有する）。"""
+    return {
+        "id": result.request_id,
+        "object": "response",
+        "model": result.model,
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": result.text}],
+            }
+        ],
+        "usage": result.usage.as_responses_usage(),
+    }
+
+
+def _anthropic_direct_error(
+    exc: AnthropicMessagesError,
+    *,
+    model_id: str,
+    endpoint_host: str,
+    attempts: int,
+    timeout_seconds: float,
+) -> EnterpriseAiDirectError:
+    """Messages API の失敗を、Responses API の経路と同じ code・分類の失敗にする。
+
+    `code` は platform の共通の種類（HTTP の失敗は status の種類、ほかは timeout・connection・
+    incomplete・refusal・response_format）。応答の形の誤りは Responses API の経路と同じく
+    再試行してよい失敗にする。
+    """
+    return EnterpriseAiDirectError(
+        str(exc),
+        code=exc.kind,
+        retryable=exc.retryable or exc.kind == "response_format",
+        http_failure=exc.http_failure,
+        model_id=exc.model_id or model_id,
+        endpoint_host=endpoint_host,
+        incomplete=exc.incomplete,
+        provider_message=exc.provider_message,
+        upstream_request_id=exc.request_id,
+        attempts=attempts,
+        timeout_seconds=timeout_seconds,
+    )
+
 
 class _ResponseBody(dict[str, Any]):
     """応答の本文（JSON object）と、HTTP の header の OCI の request id。"""
@@ -750,7 +966,13 @@ def _build_payload(
     system_prompt: str,
     max_output_tokens: int | None = None,
     response_format: Mapping[str, Any] | None = None,
+    use_payload_template: bool = True,
 ) -> Mapping[str, Any]:
+    """Responses API の要求を組む。
+
+    `use_payload_template` が偽なら payload template を使わない（Messages API の接続。
+    `_openai_compatible_setting`）。
+    """
     if response_format is not None:
         system_prompt += (
             "\n出力形式は text.format の JSON Schema を最優先する。"
@@ -773,14 +995,10 @@ def _build_payload(
         "temperature": 0,
         "response_format": dict(response_format) if response_format is not None else "",
     }
-    if settings.oci_enterprise_ai_llm_payload_template.strip():
-        return _with_output_format(
-            _render_payload_template(
-                settings.oci_enterprise_ai_llm_payload_template,
-                values,
-            ),
-            response_format,
-        )
+    if template := (
+        settings.oci_enterprise_ai_llm_payload_template.strip() if use_payload_template else ""
+    ):
+        return _with_output_format(_render_payload_template(template, values), response_format)
     payload: dict[str, Any] = {
         "model": model_id,
         "instructions": system_prompt,
@@ -800,6 +1018,7 @@ def _build_image_payload(
     mime_type: str,
     max_output_tokens: int | None = None,
     response_format: Mapping[str, Any] | None = None,
+    use_payload_template: bool = True,
 ) -> Mapping[str, Any]:
     if response_format is not None:
         prompt += (
@@ -823,11 +1042,10 @@ def _build_image_payload(
         ),
         "temperature": 0,
     }
-    if settings.oci_enterprise_ai_vlm_payload_template.strip():
-        return _with_output_format(
-            _render_payload_template(settings.oci_enterprise_ai_vlm_payload_template, values),
-            response_format,
-        )
+    if template := (
+        settings.oci_enterprise_ai_vlm_payload_template.strip() if use_payload_template else ""
+    ):
+        return _with_output_format(_render_payload_template(template, values), response_format)
     return _with_output_format(
         _with_reasoning(
             {
