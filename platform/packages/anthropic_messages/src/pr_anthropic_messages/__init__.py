@@ -16,6 +16,7 @@ from pr_anthropic_messages.messages import (
     acreate_anthropic_message,
     anthropic_base_url,
     anthropic_effort,
+    anthropic_response_schema,
     classify_anthropic_error,
     create_anthropic_message,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "acreate_anthropic_message",
     "anthropic_base_url",
     "anthropic_effort",
+    "anthropic_response_schema",
     "classify_anthropic_error",
     "create_anthropic_message",
 ]

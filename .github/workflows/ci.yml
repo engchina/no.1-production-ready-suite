@@ -23,7 +23,7 @@ name: CI
 # （platform/packages/evaluation_scoring）は Platform / evaluation_scoring と、それを使う RAG / Backend・Agent / Backend・Suite / Evaluation が
 # 確かめる（#3240）。採点の部品は platform_other から外し、ほかの製品の job は動かさない。
 # Anthropic Claude の Messages API の呼び出しの部品（platform/packages/anthropic_messages。#5546）は
-# Platform / anthropic_messages が確かめる。platform_other から外し、使う製品が path で依存するまでは製品の job を動かさない。
+# Platform / anthropic_messages が確かめる。platform_other から外し、path で依存する製品の job（NL2SQL / Backend）だけを動かす。
 # platform の Markdown（AGENTS.md・README・docs/ux-contracts・docs/design-system 等）だけの変更では製品の job を動かさない
 # （docs/design-system/ の Markdown 以外（lint の設定・plugin・reference）は frontend に数える。#1592）。
 # RAG の外部 parser のサービス（rag/services/parsers/<name>。uv の venv が独立）の pytest は、その parser と
@@ -1511,9 +1511,11 @@ jobs:
     name: NL2SQL / Backend
     needs: changes
     # MCP ツールの契約（platform/contracts/mcp/nl2sql-tools.json）も読む（#1531）。
+    # クォータナリ接続のモデルの呼び出しに pr_anthropic_messages を使う（#5546）。
     if: >-
       needs.changes.outputs.nl2sql_backend == 'true' || needs.changes.outputs.platform_backend == 'true'
       || needs.changes.outputs.mcp_contract == 'true'
+      || needs.changes.outputs.platform_anthropic_messages == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
