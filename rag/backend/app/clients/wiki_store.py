@@ -164,12 +164,12 @@ CURRENT_WIKI_SOURCE_SQL = f"""NOT EXISTS (
 )"""
 
 
-# 検索に使える案内: 公開済み・現在の構築条件・現在の原文の保存版の案内だけ。
+# 検索に使える案内: 公開済み・現在の原文の保存版の案内だけ。
 WIKI_PAGE_FROM = """FROM rag_wiki_pages p
 JOIN rag_wiki_documents w ON w.document_id=p.document_id
 JOIN rag_chunks c ON c.chunk_id=p.source_chunk_id AND c.chunk_set_id=p.chunk_set_id
 JOIN rag_documents d ON d.document_id=c.document_id"""
-WIKI_PUBLISHED_SQL = f"""w.status='READY' AND w.compiler_fingerprint=:wiki_compiler
+WIKI_PUBLISHED_SQL = f"""w.status='READY'
 AND w.published_fingerprint=w.source_fingerprint AND p.source_fingerprint=w.published_fingerprint
 AND {CURRENT_WIKI_SOURCE_SQL}"""
 # 目録に写す文書の版の属性（解析器が抽出に残した値。モデルや規則で推測しない。#5044）。
@@ -532,14 +532,13 @@ class WikiStore:
                 return False
             prior = _fetch_one(
                 connection,
-                """SELECT source_fingerprint,compiler_fingerprint,status
+                """SELECT source_fingerprint,status
                 FROM rag_wiki_documents WHERE document_id=:id""",
                 {"id": snapshot.document_id},
             )
             if (
                 prior
                 and prior["source_fingerprint"] == snapshot.source_fingerprint
-                and prior["compiler_fingerprint"] == snapshot.compiler_fingerprint
                 and prior["status"] in {"READY", "RUNNING", "QUEUED"}
             ):
                 _execute(
@@ -581,7 +580,7 @@ class WikiStore:
         def operation(connection: Any) -> str | None:
             row = _fetch_one(
                 connection,
-                """SELECT status,source_fingerprint,compiler_fingerprint,
+                """SELECT status,source_fingerprint,
                 CASE WHEN lease_until>SYSTIMESTAMP THEN 1 ELSE 0 END AS leased
                 FROM rag_wiki_documents WHERE document_id=:id FOR UPDATE""",
                 {"id": snapshot.document_id},
@@ -589,7 +588,6 @@ class WikiStore:
             if (
                 not row
                 or row["source_fingerprint"] != snapshot.source_fingerprint
-                or row["compiler_fingerprint"] != snapshot.compiler_fingerprint
                 or (row["status"] == "RUNNING" and row["leased"])
                 or row["status"] == "READY"
             ):
@@ -663,13 +661,11 @@ class WikiStore:
             connection,
             """SELECT document_id FROM rag_wiki_documents
             WHERE document_id=:id AND source_fingerprint=:fingerprint AND lease_token=:token
-              AND compiler_fingerprint=:compiler
               AND lease_until>SYSTIMESTAMP AND status='RUNNING' FOR UPDATE""",
             {
                 "id": snapshot.document_id,
                 "fingerprint": snapshot.source_fingerprint,
                 "token": token,
-                "compiler": snapshot.compiler_fingerprint,
             },
         )
         if not row:
@@ -746,10 +742,10 @@ class WikiStore:
                 valid.update(unit.source_chunk_ids)
         return [_retrieved_chunk_from_row(found[sid]) for sid in ids if sid in valid]
 
-    async def resolve(self, filters: dict[str, str], compiler: str) -> WikiScope:
+    async def resolve(self, filters: dict[str, str]) -> WikiScope:
         """検索の範囲を 1 回の SQL で決める（#5499）。
 
-        今の検索範囲（有効な KB・利用者の権限）と、公開済み・今の構築条件・今の原文の保存版の
+        今の検索範囲（有効な KB・利用者の権限）と、公開済み・今の原文の保存版の
         条件で、検索に使える案内のある文書の目録（タイトルと保存版の版の属性）と、案内の
         （文書 ID, chunk_set ID, 公開の指紋）の集合を返す。後の読取はこの集合の中だけを読む。
         """
@@ -773,7 +769,7 @@ class WikiStore:
             LEFT JOIN rag_document_extractions ex ON ex.document_id=c.document_id
               AND ex.extraction_recipe_id=catalog_set.extraction_recipe_id
             WHERE {where} AND {WIKI_PUBLISHED_SQL} ORDER BY d.document_id""",
-            {**binds, "wiki_compiler": compiler},
+            binds,
         )
         documents: dict[str, dict[str, Any]] = {}
         sources: set[tuple[str, str, str]] = set()
@@ -1118,7 +1114,7 @@ class WikiStore:
     async def links(self, unit_ids: Sequence[str], scope: WikiScope) -> list[tuple[str, str, str]]:
         """単位から出る関連と入る関連（起点の単位 ID, 終点の単位 ID, 関係）。
 
-        起点と終点の両方の案内が ``resolve`` で決めた範囲（今の検索範囲・公開済み・今の構築条件・
+        起点と終点の両方の案内が ``resolve`` で決めた範囲（今の検索範囲・公開済み・
         今の原文の保存版）にある関連だけを返す。案内は KB をまたいで再利用されるので、所属は
         読むときに範囲で照合する。
         """

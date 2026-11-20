@@ -3764,7 +3764,7 @@ export const ja = {
     "解析後の処理の「文書の要約」を有効にしたとき（索引の後に文書ごとに 1 回。文書の詳細の「作り直す」でも使います）",
   "settings.answerPrompts.stage.wiki_build": "Wiki の案内の構築",
   "settings.answerPrompts.stage.wiki_build.condition":
-    "ナレッジベースの「Wiki を自動構築する」を有効にしたとき（所属文書の原文または構築の条件が変わった文書ごとに、背景で実行）",
+    "ナレッジベースの「Wiki を自動構築する」を有効にしたとき（所属文書の案内を背景で作成し、原文の更新時に作り直します）",
   "settings.answerPrompts.stage.wiki_links": "Wiki の文書をまたぐ関連の判定",
   "settings.answerPrompts.stage.wiki_links.condition":
     "ナレッジベースの「Wiki を自動構築する」を有効にしたとき（案内を作った文書ごとに、同じナレッジベースのほかの文書の候補との関連を背景で判定）",

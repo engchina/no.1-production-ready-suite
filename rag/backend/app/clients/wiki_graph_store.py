@@ -23,19 +23,14 @@ from app.clients.oracle import (
     _oracle_retrieval_where,
 )
 from app.clients.wiki_graph_index import section_id as section_id
-from app.clients.wiki_store import CURRENT_WIKI_SOURCE_SQL, WIKI_PAGE_FROM
+from app.clients.wiki_store import WIKI_PAGE_FROM, WIKI_PUBLISHED_SQL
 from app.rag.wiki_models import WikiPage
-
-# 公開済みで、今の原文の保存版に結び付く案内。構築の条件（モデル・指示）は問わない: 条件が変わって
-# 作り直す前でも、利用者は保存済みの案内を確かめられる（Wiki を無効にしたときも同じ）。
-GRAPH_PUBLISHED_SQL = f"""w.status='READY' AND w.published_fingerprint=w.source_fingerprint
-AND p.source_fingerprint=w.published_fingerprint AND {CURRENT_WIKI_SOURCE_SQL}"""
 
 
 def graph_scope(kb_id: str) -> tuple[str, dict[str, object]]:
     """図に出す案内の条件（``WIKI_PAGE_FROM`` の別名）。KB の所属・利用者の権限は検索と同じ判定。"""
     where, binds = _oracle_retrieval_where({"knowledge_base_id": kb_id})
-    return f"({where}) AND {GRAPH_PUBLISHED_SQL}", binds
+    return f"({where}) AND {WIKI_PUBLISHED_SQL}", binds
 
 
 def visible_pages_cte(kb_id: str) -> tuple[str, dict[str, object]]:

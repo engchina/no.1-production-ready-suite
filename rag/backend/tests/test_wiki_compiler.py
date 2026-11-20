@@ -86,7 +86,6 @@ async def test_split_and_resume_reuses_completed_units_and_keeps_original_text()
     result = await compile_pages(
         source,
         model=model,
-        model_id="model-a",
         max_input_chars=2000,
         batch_size=4,
         authorize=authorize,
@@ -99,8 +98,7 @@ async def test_split_and_resume_reuses_completed_units_and_keeps_original_text()
     again = await compile_pages(
         source,
         model=resumed,
-        model_id="model-a",
-        max_input_chars=2000,
+        max_input_chars=1800,
         batch_size=4,
         saved=checkpoints,
         authorize=authorize,
@@ -124,7 +122,6 @@ async def test_invalid_dependency_is_not_checkpointed() -> None:
         await compile_pages(
             units(),
             model=Model(invalid=True),
-            model_id="model-a",
             max_input_chars=2000,
             batch_size=4,
             authorize=authorize,
@@ -156,7 +153,6 @@ async def test_invalid_large_output_is_recovered_without_accepting_invalid_ids(
     result = await compile_pages(
         units(),
         model=model,
-        model_id="synthetic",
         max_input_chars=2000,
         batch_size=4,
         authorize=authorize,
@@ -188,7 +184,6 @@ async def test_authorization_change_after_generation_prevents_checkpoint() -> No
         await compile_pages(
             units(),
             model=Model(),
-            model_id="model-a",
             max_input_chars=2000,
             batch_size=4,
             authorize=authorize,
@@ -235,7 +230,6 @@ async def test_changed_navigation_schema_does_not_reuse_an_old_checkpoint(
 
     options: dict[str, Any] = dict(
         model=model,
-        model_id="model-a",
         max_input_chars=2000,
         batch_size=4,
         authorize=authorize,

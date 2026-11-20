@@ -93,7 +93,7 @@ class Store:
             and row[1] in self.by_id
         ]
 
-    async def resolve(self, filters: dict[str, str], compiler: str) -> WikiScope:
+    async def resolve(self, filters: dict[str, str]) -> WikiScope:
         self.calls.append(("resolve", filters["knowledge_base_id"]))
         self.scope = WikiScope(
             tuple(

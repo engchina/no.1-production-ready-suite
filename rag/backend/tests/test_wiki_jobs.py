@@ -111,6 +111,7 @@ async def test_background_build_without_any_profile_and_cache_reuse(setup: Any) 
     assert len(store.pages) == len(store.embedded) == 4
     assert model.prompts == ["合成の編集済み指示"] * len(model.calls)
     store.prompts["wiki_build"] = "合成の次回用指示"
+    store.state["compiler_fingerprint"] = "previous-settings"
     assert len(model.calls) == 1
     await jobs.build("document-a", "owner-a")
     assert len(model.calls) == 1
