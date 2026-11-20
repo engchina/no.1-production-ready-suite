@@ -21,7 +21,9 @@ import anyio
 import httpx2
 import pytest
 from agents import Agent, FunctionTool, Runner
+from openai import DEFAULT_MAX_RETRIES
 from pr_anthropic_messages import (
+    DEFAULT_TIMEOUT_SECONDS,
     AnthropicMessagesError,
     AnthropicMessagesRequest,
     AnthropicMessagesResult,
@@ -225,7 +227,7 @@ def test_structured_single_turn_calls_messages_api(monkeypatch: MonkeyPatch) -> 
     assert kwargs == {
         "api_key": "sk-ant-synthetic",
         "endpoint_url": ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT,
-        "timeout_seconds": anthropic_model.DEFAULT_TIMEOUT_SECONDS,
+        "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         # 実行器を通す呼び出し（sdk_max_retries=0）は SDK の再試行を使わない。
         "max_retries": 0,
     }
@@ -259,7 +261,7 @@ def test_reasoning_none_sends_no_effort(monkeypatch: MonkeyPatch) -> None:
     assert request.reasoning_effort == ""
     assert request.response_schema is None
     # 実行器を通さない呼び出しは openai SDK の経路と同じ既定の再試行。
-    assert kwargs["max_retries"] == builtin_runtime.DEFAULT_MAX_RETRIES
+    assert kwargs["max_retries"] == DEFAULT_MAX_RETRIES
 
 
 def test_judge_answer_uses_messages_api_and_retries_output_limit(
@@ -279,21 +281,19 @@ def test_judge_answer_uses_messages_api_and_retries_output_limit(
     )
     stub = _Stub(incomplete, _judgement())
     _install(monkeypatch, stub)
-    _use_settings(
-        monkeypatch,
-        _settings(
-            oci_enterprise_ai_models=[
-                EnterpriseAiConfiguredModel(
-                    model_id=CLAUDE,
-                    connection_id="quaternary",
-                    max_input_tokens=200000,
-                    max_output_tokens=4096,
-                    reasoning_effort="high",
-                )
-            ]
-        ),
+    settings = _settings(
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(
+                model_id=CLAUDE,
+                connection_id="quaternary",
+                max_input_tokens=200000,
+                max_output_tokens=4096,
+                reasoning_effort="high",
+            )
+        ]
     )
-    monkeypatch.setattr("app.features.agent.ai_calls.get_settings", builtin_runtime.get_settings)
+    _use_settings(monkeypatch, settings)
+    monkeypatch.setattr("app.features.agent.ai_calls.get_settings", lambda: settings)
 
     judgement, attempts = anyio.run(evaluation.judge_answer, CASE, "合成の回答")
 
