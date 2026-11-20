@@ -2999,6 +2999,33 @@ def test_ai_api_failure_is_a_classified_tool_error_without_question(
     assert question not in json.dumps(result, ensure_ascii=False)
 
 
+def test_unregistered_answer_model_is_the_same_config_error_as_rest(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """回答のモデルが未登録の検索・回答プロファイルは、汎用の内部エラーではなく種類つきの
+    ツールのエラー（設定の誤り）で、REST の 422 と同じ理由の文を返す（#5592）。"""
+    from app.rag.search_answer_profile_config import validate_profile_answer_model
+
+    async def fake_run(_request: SearchRequest, **_: Any) -> SearchResponse:
+        config = SearchAnswerProfileConfig(answer_model_id="unregistered-model-a")
+        validate_profile_answer_model(get_settings(), config)
+        raise AssertionError("未登録のモデルが検証を通った")
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+
+    rest = client.post("/api/search", json={"query": "質問"}, headers=login(client, "searcher"))
+    result = _call("rag_search", {"query": "質問"}, _token(user.user_uuid))
+
+    assert rest.status_code == 422, rest.text
+    assert result["isError"] is True
+    body = result["structuredContent"]
+    assert body["error_code"] == "answer_model_unavailable"
+    assert body["status"] == 422
+    assert body["message"] == rest.json()["error_messages"][0]
+    assert "選び直す" in body["message"]
+
+
 def test_unclassified_search_failure_stays_internal_error(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:

@@ -163,6 +163,7 @@ from app.rag.profile_recommendation import (
     recommend_search_answer_profiles,
 )
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.search_answer_profile_config import ProfileAnswerModelUnavailableError
 from app.rag.section_catalog import compact_section_lines
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.rag.section_map_service import (
@@ -391,6 +392,9 @@ PREVIEW_UNAVAILABLE_CODE = "preview_unavailable"
 PREVIEW_FILE_MISSING_CODE = "preview_file_missing"
 # RAG のチャットが運用の設定（rag_chat_enabled）で無効（rag_chat。#5339）。
 CHAT_DISABLED_CODE = "chat_disabled"
+# 検索・回答プロファイルの回答のモデルが登録に無い（設定の誤り。rag_search・rag_chat。#5592）。
+# message は REST の 422 と同じ理由の文（直し方を含む）。
+ANSWER_MODEL_UNAVAILABLE_CODE = "answer_model_unavailable"
 # ツールの失敗（`isError: true` の結果の `error_code`）の一覧と意味（#3240）。呼び出し側
 # （Agent など）はここに載せた code だけで分岐する。一覧は契約（rag-tools.json の `errors`）に
 # 書き出し、`*_CODE` の定数とツールが raise する code がすべて載ることをテストで確かめる。
@@ -420,6 +424,9 @@ MCP_ERROR_CODES: dict[str, str] = {
     PREVIEW_UNAVAILABLE_CODE: "原文のプレビューを今は作れない（一時的）。",
     PREVIEW_FILE_MISSING_CODE: "原文のプレビューのファイルが保存先に無い。",
     CHAT_DISABLED_CODE: "RAG のチャットが無効に設定されている（rag_chat は使えない）。",
+    ANSWER_MODEL_UNAVAILABLE_CODE: (
+        "検索・回答プロファイルの回答のモデルが登録されていない（設定の誤り。message に直し方）。"
+    ),
 }
 # ブラウザで開く URL（図・原文のプレビュー）を作ってよい呼び出し（Agent の画面の操作）の、
 # サービストークンの
@@ -3940,7 +3947,8 @@ def _within_answer_deadline[A, R](
 async def _run_search(
     request: SearchRequest, *, flow: AnswerFlow, **options: Any
 ) -> SearchResponse:
-    """検索・回答の pipeline を実行し、AI の API の失敗を種類つきのツールのエラーにする（#2475）。
+    """検索・回答の pipeline を実行し、AI の API の失敗と回答のモデルの設定の誤りを種類つきの
+    ツールのエラーにする（#2475・#5592）。
 
     汎用の内部エラー（`MCP_TOOL_INTERNAL_ERROR`）にすると、呼び出し元（業務 Agent）が検索の失敗を
     「資料に根拠が無い」と区別できない。エラーには種類・HTTP status・工程・例外の型だけを入れ、
@@ -3950,6 +3958,10 @@ async def _run_search(
         return await search_route._run_search_with_timeout(
             request, flow=flow, deadline=_ANSWER_DEADLINE.get(), **options
         )
+    except ProfileAnswerModelUnavailableError as exc:
+        # 回答のモデルが未登録の設定の誤り。REST の 422（main.py の handler）と同じ理由の文で返す
+        # （#5592）。
+        raise McpToolError(ANSWER_MODEL_UNAVAILABLE_CODE, str(exc), status=422) from exc
     except search_route.AnswerApiFailedHTTPError as exc:
         # 検索の REST と同じ分類（#2667）を、種類つきのツールのエラーにする。
         failure = exc.failure
