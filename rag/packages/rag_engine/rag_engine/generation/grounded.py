@@ -2640,6 +2640,11 @@ def run_round(
     generation_model = generation_language_schema(
         generation_output_model(question, guided=bool(guide_step_contracts), unit_catalog=unit_catalog), question
     )
+    from rag_engine.generation.paragraph_repair import ParagraphRepair
+
+    paragraph_repair = ParagraphRepair(unit_catalog)
+    if getattr(generation_model, "_uses_full_answer", False):
+        generation_model = paragraph_repair.model(generation_model)
     input_snapshot = {
         "capture_scope": "verified_partial_answer_references" if partial_answer_synthesis else "application_evidence_blocks",
         "transport_capture": "not_recorded",
@@ -2724,17 +2729,26 @@ def run_round(
     # 回答文の生成の呼び出しだけに段の出力の上限を掛ける（#5368。分割読取などほかの呼び出しは変えない）。
     answer_settings = settings_for_answer_generation(settings)
 
+    sent_prompt = prompt
+
     def citation_repair(error: Exception, will_retry: bool) -> str | None:
-        # 引用の印の欠落（#5391）だけは、指摘の Step を同じ入力の後へ付けて再試行する。ほかの不合格は同じ入力で送り直す。
+        nonlocal sent_prompt
+        # 修復の指示は元の入力に足し、再試行の上限は adapter と共有する。
         from pr_backend_core.response_schema import with_schema_field_guide
 
         from rag_engine.generation.full_answer_wire import citation_missing_error, citation_repair_step
 
-        if not will_retry or not citation_missing_error(error):
+        if not will_retry:
+            return None
+        if not (paragraph_repair.pending or citation_missing_error(error)):
+            sent_prompt = prompt
             return None
         # 番号は送る指示（adapter が最後に足す項目の説明の Step を含む）の続き。
         sent_system, _schema = with_schema_field_guide(generation_system, generation_model.model_json_schema())
-        return prompt + "\n\n" + continue_prompt_steps(sent_system, citation_repair_step())
+        step = paragraph_repair.step() if paragraph_repair.pending else citation_repair_step()
+        sent_prompt = prompt + "\n\n" + continue_prompt_steps(sent_system, step)
+
+        return sent_prompt
 
     try:
         with bind_structured_output_repair(citation_repair):
@@ -2754,12 +2768,24 @@ def run_round(
                     "answer.generate", parse_text, generation_system, prompt, answer_settings, generation_model, provider_id=provider_id
                 )
     except Exception as exc:
-        if invalid_output is None or not invalid_output(exc):
+        from rag_engine.resources.deadline import check_cancelled, deadline_cut_short
+
+        check_cancelled()
+        timed_out = bool(paragraph_repair.pending and (isinstance(exc, TimeoutError) or deadline_cut_short()))
+        if not timed_out and (invalid_output is None or not invalid_output(exc)):
             raise
         # 再実行の後も出力が構造化出力の契約を満たさず、草稿が無い（#3849）。呼び出し側が、草稿の無い round
         # （関係する資料の記載だけ）で確定できるよう、ほかの失敗と分けて送出する。
-        raise DraftGenerationInvalid(type(exc).__name__) from exc
-    draft = canonicalize_output(draft, "answer.generate", prompt)
+        from rag_parser_core.language import current_pack
+
+        draft = paragraph_repair.partial(current_pack().text("answer_labels", "paragraph_generation_failed"))
+        if draft is None:
+            if timed_out:
+                raise
+            if paragraph_repair.pending:
+                raise DraftGenerationInvalid("paragraph_generation_failed") from exc
+            raise DraftGenerationInvalid(type(exc).__name__) from exc
+    draft = canonicalize_output(draft, "answer.generate", sent_prompt)
     generation_calls = 1
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
     draft = _without_evidence_labels(draft, question, spans)
@@ -2785,6 +2811,11 @@ def run_round(
         "outputs": generation_outputs,
         "final_draft": draft.model_dump(mode="json", exclude_unset=True),
     }
+    if paragraph_repair.requested:
+        timing["paragraph_repair"] = {
+            "requested": [i // 2 + 1 for i in paragraph_repair.requested],
+            "unrecovered": [i // 2 + 1 for i in paragraph_repair.pending],
+        }
     if plan_rows_added:
         timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
     if plan_sources:

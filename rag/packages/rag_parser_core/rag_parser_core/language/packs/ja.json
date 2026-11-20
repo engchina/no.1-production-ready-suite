@@ -1231,6 +1231,8 @@
     ]
   },
   "answer_labels": {
+    "all_paragraphs_failed": "回答を生成できませんでした。",
+    "paragraph_generation_failed": "第{number}段落は生成できませんでした。",
     "missing_document_head": "同じ版の先頭チャンクを取得できないため、この文書を回答の材料から外しました。",
     "complete_chunk_group_exceeds_limit": "文書の先頭チャンクと対象チャンクの全文を合わせると入力上限を超えるため、送信できませんでした。",
     "answer_evidence_budget_limited": "回答への入力の上限により、取得した根拠のうち {count} 件を回答の材料から省略しました。",

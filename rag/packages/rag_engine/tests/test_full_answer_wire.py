@@ -451,3 +451,62 @@ def test_response_kind_is_defined_once_in_the_schema_and_declared_after_the_body
         assert definition not in system
         # モデルに送る指示（説明の Step を足した後）には 1 回だけ。
         assert guided.count(f"- {kind}: {definition}") == 1
+
+
+@pytest.mark.parametrize("retry", ["damaged", "recovered", "whole", "foreign", "schema", "timeout"])
+def test_generation_repairs_only_second_paragraph(retry):
+    from test_answer_flow_single_generation import ROW, _run_traced, context, record
+
+    attempts = []
+
+    def payload(units):
+        mark = f"[{units[ROW]}]"
+        good = "確定した一段目。" + mark
+        bad = "合成�二段目。" + mark
+        clean = "修復した二段目。" + mark
+        if attempts and retry == "timeout":
+            raise TimeoutError
+        if attempts and retry == "schema":
+            return {"unexpected": "field"}
+        body = (
+            good + "\n\n" + bad
+            if not attempts
+            else {
+                "damaged": bad,
+                "recovered": clean,
+                "whole": "変更された一段目。" + mark + "\n\n" + clean,
+                "foreign": clean + "[E999]",
+            }[retry]
+        )
+        attempts.append(body)
+        return {"answer_body": body, "response_kind": "answered", "confidence": "high"}
+
+    response, calls, prompts = _run_traced("合成の質問", context(record(0, ROW, "合成", source="synthetic.md")), payload)
+    assert len(calls) == 2
+    assert "確定した一段目。" in response.answer_text
+    assert "変更された一段目。" not in response.answer_text
+    assert response.cited_evidence
+    assert "合成�" not in response.answer_text
+    assert prompts[1].startswith(prompts[0])
+    assert "確定した一段目。" not in prompts[1]
+    assert ("第2段落は生成できませんでした。" in response.answer_text) == (retry in {"damaged", "foreign", "schema", "timeout"})
+    assert ("修復した二段目。" in response.answer_text) == (retry in {"recovered", "whole"})
+
+
+def test_literal_replacement_character_requires_matching_cited_line():
+    from test_answer_flow_single_generation import _run_traced, context, record
+
+    row = "合成番号 A�7"
+    other = "合成番号 B17"
+    for cited, expected in [(row, True), (other, False)]:
+        response, calls, _ = _run_traced(
+            "合成番号は？",
+            context(record(0, row, "合成1"), record(1, other, "合成2")),
+            lambda units, cited=cited: {"answer_body": f"「A�7」[{units[cited]}]", "confidence": "high", "response_kind": "answered"},
+        )
+        assert (len(calls) == 1) == expected
+        if expected:
+            assert "A�7" in response.answer_text
+        else:
+            assert len(calls) == 2
+            assert "回答を生成できませんでした。" in response.answer_text
