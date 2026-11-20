@@ -332,7 +332,7 @@ class AnthropicMessagesError(RuntimeError):
 
     @property
     def http_failure(self) -> EnterpriseAiHttpFailure | None:
-        """HTTP の失敗なら、案内の文（`enterprise_ai_failure_actions`）に渡せる分類。"""
+        """HTTP の失敗なら、その分類（案内の文は `anthropic_failure_actions`。#5587）。"""
         if self.status_code is None or self.kind not in _HTTP_KINDS:
             return None
         return EnterpriseAiHttpFailure(kind=cast(Any, self.kind), status_code=self.status_code)

@@ -9,7 +9,6 @@ from typing import Any
 import httpx2
 import pytest
 from conftest import API_KEY, MODEL_ID, FakeMessagesApi, error_body, recorded_stream
-from pr_enterprise_ai.errors import enterprise_ai_failure_actions
 
 from pr_anthropic_messages import (
     ANTHROPIC_EFFORT_BY_REASONING_EFFORT,
@@ -19,6 +18,7 @@ from pr_anthropic_messages import (
     acreate_anthropic_message,
     anthropic_base_url,
     anthropic_effort,
+    anthropic_failure_actions,
     anthropic_response_schema,
     create_anthropic_message,
 )
@@ -436,8 +436,8 @@ def test_http_failures_are_classified(
     assert f"HTTP {status}" in str(error)
     assert error.http_failure is not None
     assert error.http_failure.status_code == status
-    # 製品の案内の文（pr_enterprise_ai）に渡せる。
-    assert enterprise_ai_failure_actions(error.http_failure, model_id=MODEL_ID)
+    # 案内の文はクォータナリ接続向けの platform の文（#5587）。
+    assert anthropic_failure_actions(error.kind, status_code=error.status_code)
     # SDK の自動の再試行は既定で使わない（1 回だけ送る）。
     assert len(fake_api.requests) == 1
 

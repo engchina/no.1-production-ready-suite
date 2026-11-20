@@ -52,7 +52,7 @@ import ssl
 import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -184,12 +184,17 @@ DEFAULT_KIND_RULES: Mapping[ErrorKind, KindRule] = {
 
 @dataclass(frozen=True)
 class ClassifiedError:
-    """分類の結果。``retry_after`` はサーバーが示した待ちの秒数（無ければ None）。"""
+    """分類の結果。``retry_after`` はサーバーが示した待ちの秒数（無ければ None）。
+
+    ``hint`` は呼び先に合わせた、利用者が直す所の案内（例: クォータナリ接続の失敗。#5587）。
+    あれば job を止める文で種類ごとの既定の案内の代わりに使い、件の失敗の文にも足す。
+    """
 
     kind: ErrorKind
     status: int | None = None
     retry_after: float | None = None
     detail: str = ""
+    hint: str = ""
 
 
 ErrorClassifier = Callable[[BaseException], "ClassifiedError | ErrorKind | None"]
@@ -619,10 +624,16 @@ def classify_error(exc: BaseException) -> ClassifiedError:
     return ClassifiedError(ErrorKind.UNKNOWN, detail=detail)
 
 
-def chain_classifiers(*classifiers: ErrorClassifier) -> Callable[[BaseException], ClassifiedError]:
-    """先の分類が決めなかった（None）例外を次へ渡し、最後は ``classify_error``。"""
+def chain_classifiers(
+    *classifiers: ErrorClassifier, hint: Callable[[BaseException], str | None] | None = None
+) -> Callable[[BaseException], ClassifiedError]:
+    """先の分類が決めなかった（None）例外を次へ渡し、最後は ``classify_error``。
 
-    def classify(exc: BaseException) -> ClassifiedError:
+    ``hint`` は種類を決めた後に、呼び先に合わせた案内（``ClassifiedError.hint``）を足す関数
+    （種類・status は変えない。None を返せば足さない）。
+    """
+
+    def decide(exc: BaseException) -> ClassifiedError:
         base = classify_error(exc)
         for classifier in classifiers:
             result = classifier(exc)
@@ -634,6 +645,11 @@ def chain_classifiers(*classifiers: ErrorClassifier) -> Callable[[BaseException]
                 result, status=base.status, retry_after=base.retry_after, detail=base.detail
             )
         return base
+
+    def classify(exc: BaseException) -> ClassifiedError:
+        info = decide(exc)
+        text = hint(exc) if hint is not None else None
+        return replace(info, hint=text) if text else info
 
     return classify
 
@@ -1062,7 +1078,7 @@ class BoundedCaller:
 
     def _abort_message(self, info: ClassifiedError, *, reason: str | None = None) -> str:
         status = f"（HTTP {info.status}）" if info.status else ""
-        hint = reason or _ABORT_HINTS.get(info.kind) or "呼び出しを止めました。"
+        hint = reason or info.hint or _ABORT_HINTS.get(info.kind) or "呼び出しを止めました。"
         detail = f"詳細: {info.detail}" if info.detail else ""
         return " ".join(
             part
@@ -1072,7 +1088,8 @@ class BoundedCaller:
 
     def _failed_message(self, info: ClassifiedError) -> str:
         status = f"（HTTP {info.status}）" if info.status else ""
-        return f"{KIND_LABELS[info.kind]}{status}: {info.detail}"[:600]
+        message = f"{KIND_LABELS[info.kind]}{status}: {info.detail}"[:600]
+        return f"{message} {info.hint}" if info.hint else message
 
     # --- 呼び出し -------------------------------------------------------------------------
 

@@ -40,7 +40,7 @@ result.text  # 構造化出力なら JSON の文字列（Pydantic で検証し�
 result.usage.as_responses_usage()  # llm_call_usage・record_genai_usage に渡す
 ```
 
-失敗は `AnthropicMessagesError`（`kind`・`retryable`・`configuration_error`・`error_code`・`incomplete`・`http_failure`）。`incomplete` は `enterprise_ai_incomplete_message` に、`http_failure` は `enterprise_ai_failure_actions` にそのまま渡せる。
+失敗は `AnthropicMessagesError`（`kind`・`retryable`・`configuration_error`・`error_code`・`incomplete`・`http_failure`）。`incomplete` は `enterprise_ai_incomplete_message` にそのまま渡せる。確かめる所の案内は `anthropic_failure_actions(exc.kind, status_code=exc.status_code, endpoint=...)` の文を使い、OCI の IAM・Project OCID 前提の `enterprise_ai_failure_actions` には渡さない（#5587）。上限つきの並行の実行器では `chain_classifiers(..., hint=anthropic_failure_hint)` で、job を止める・件の失敗の文に同じ案内を付ける。
 
 ## 要求の組み方
 
@@ -115,7 +115,7 @@ turn = await acreate_anthropic_turn(
     endpoint_url=connection.effective_endpoint,
 )
 turn.tool_uses  # 呼ぶツール（無ければ最終の回答。本文は turn.text）
-turn.content    # 次の要求の assistant の message にそのまま入れる block
+turn.content  # 次の要求の assistant の message にそのまま入れる block
 ```
 
 ツールを実行して結果を返すループは呼ぶ側が持つ（Agent は OpenAI Agents SDK の `Runner`）。
