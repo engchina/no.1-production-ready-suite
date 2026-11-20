@@ -123,6 +123,38 @@ def test_structured_output_uses_output_config_format(fake_api: FakeMessagesApi) 
     assert json.loads(result.text) == {"answer": "B"}
 
 
+def test_structured_output_drops_constraints_messages_api_rejects(
+    fake_api: FakeMessagesApi,
+) -> None:
+    # Pydantic の Field(min_length=..., ge=..., pattern=...) が作る制約は structured outputs が
+    # 受け付けない（400）。SDK の transform_schema で外し、呼ぶ側の schema は書き換えない。
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Z]"},
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
+            "items": {"type": "array", "items": {"type": "string"}, "minItems": 2},
+        },
+        "required": ["name", "score", "items"],
+    }
+    original = json.loads(json.dumps(schema))
+    fake_api.reply_stream(
+        recorded_stream(
+            blocks=({"type": "text", "text": '{"name": "A", "score": 0.5, "items": []}'},)
+        )
+    )
+    _call(fake_api, _request(response_schema=schema))
+
+    sent = fake_api.body()["output_config"]["format"]["schema"]
+    assert sent["additionalProperties"] is False
+    assert sent["required"] == ["name", "score", "items"]
+    rejected = {"minLength", "maxLength", "pattern", "minimum", "maximum", "minItems"}
+    for prop in sent["properties"].values():
+        assert not rejected & set(prop)
+    assert sent["properties"]["items"]["items"] == {"type": "string"}
+    assert schema == original
+
+
 def test_images_are_sent_as_base64_blocks_before_text(fake_api: FakeMessagesApi) -> None:
     data_url = "data:image/png;base64," + base64.standard_b64encode(PNG_BYTES).decode()
     fake_api.reply_stream(recorded_stream(blocks=({"type": "text", "text": "画像の文字"},)))
