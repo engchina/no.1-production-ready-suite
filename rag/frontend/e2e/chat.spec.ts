@@ -1646,7 +1646,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   expect(headingStyles.answer).toEqual(headingStyles.section);
   // 節の見出しの前は段落の間（0.75rem）より広い 1.25rem（17.5px）を空け、要約の段落と節を見分けられる（#2325）。
   const headingGap = await answerText.evaluate((element) => {
-    const paragraph = element.querySelector(":scope > p");
+    const paragraph = element.querySelector(":scope > :first-child p:last-child");
     const heading = element.querySelector(":scope > section h4");
     if (!paragraph || !heading) return null;
     return heading.getBoundingClientRect().top - paragraph.getBoundingClientRect().bottom;
