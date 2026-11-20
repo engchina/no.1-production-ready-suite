@@ -300,6 +300,7 @@ class AnthropicMessagesError(RuntimeError):
         model_id: str = "",
         status_code: int | None = None,
         provider_message: str = "",
+        error_type: str = "",
         request_id: str = "",
         incomplete: EnterpriseAiIncomplete | None = None,
         refusal_category: str = "",
@@ -310,6 +311,8 @@ class AnthropicMessagesError(RuntimeError):
         self.model_id = model_id
         self.status_code = status_code
         self.provider_message = provider_message
+        # API の誤りの種類（応答の `error.type`。`invalid_request_error` など。HTTP の失敗だけ）。
+        self.error_type = error_type
         self.request_id = request_id
         self.incomplete = incomplete
         self.refusal_category = refusal_category
@@ -564,6 +567,7 @@ def classify_anthropic_error(exc: anthropic.APIError) -> AnthropicMessagesError:
     """SDK の例外を、型の連鎖（具体的な型から順）で pr_enterprise_ai の種類に分類する。"""
     status_code: int | None = None
     provider_message = ""
+    error_type = ""
     request_id = ""
     kind: EnterpriseAiCallFailureKind
     if isinstance(exc, anthropic.APITimeoutError):
@@ -573,6 +577,7 @@ def classify_anthropic_error(exc: anthropic.APIError) -> AnthropicMessagesError:
     elif isinstance(exc, anthropic.APIStatusError):
         status_code = exc.status_code
         provider_message = _status_provider_message(exc)
+        error_type = str(exc.type or "")
         request_id = str(exc.request_id or "")
         if isinstance(exc, anthropic.AuthenticationError):
             kind = "authentication"
@@ -602,6 +607,7 @@ def classify_anthropic_error(exc: anthropic.APIError) -> AnthropicMessagesError:
         kind=kind,
         status_code=status_code,
         provider_message=provider_message,
+        error_type=error_type,
         request_id=request_id,
     )
 

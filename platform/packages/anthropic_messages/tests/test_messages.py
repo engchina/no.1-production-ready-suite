@@ -432,6 +432,8 @@ def test_http_failures_are_classified(
     assert error.status_code == status
     assert error.retryable is retryable
     assert error.request_id == "req_err"
+    # API の誤りの種類（`error.type`）はログ・Run の失敗の診断に残す（#5590）。
+    assert error.error_type == error_type
     assert message in error.provider_message
     assert f"HTTP {status}" in str(error)
     assert error.http_failure is not None

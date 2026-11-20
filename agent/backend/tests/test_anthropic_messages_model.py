@@ -431,10 +431,14 @@ def test_tool_result_images_are_sent_as_image_blocks(api: FakeMessagesApi) -> No
     ]
 
 
-def test_conversation_history_and_forced_tool_choice_are_sent_as_given(
+def test_conversation_history_and_forced_tool_choice_are_sent_as_auto(
     api: FakeMessagesApi,
 ) -> None:
-    """会話の履歴は user の message にまとめ、tool_choice は指定どおり（required は any）送る。"""
+    """会話の履歴は user の message にまとめ、forced の tool_choice（required）は auto で送る。
+
+    Claude Opus 5.5 などは forced の `any` / `tool` を 400 で拒否する（Anthropic の文書。#5590）。
+    並列の指定（parallel_tool_calls=False）はそのまま `disable_parallel_tool_use` で送る。
+    """
     api.reply(recorded_turn(tool_use("toolu_a", "lookup", {"query": "A"}), stop_reason="tool_use"))
     api.reply(recorded_turn(text("合成の回答")))
     target = _claude_target(reasoning_effort="none")
@@ -459,7 +463,39 @@ def test_conversation_history_and_forced_tool_choice_are_sent_as_given(
     assert first["messages"] == [
         {"role": "user", "content": [text("合成の履歴"), text("合成の質問")]}
     ]
-    assert first["tool_choice"] == {"type": "any", "disable_parallel_tool_use": True}
+    assert first["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        ("required", {"type": "auto"}),
+        ({"type": "function", "name": "lookup"}, {"type": "auto"}),
+        ("auto", {"type": "auto"}),
+        ("none", {"type": "none"}),
+    ],
+    ids=["required", "named", "auto", "none"],
+)
+def test_forced_tool_choice_is_never_sent(tool_choice: Any, expected: dict[str, Any]) -> None:
+    """Messages API の要求は forced の `any` / `tool` を含まない（#5590）。"""
+    request = anthropic_model.anthropic_request(
+        _claude_target(),
+        {
+            "input": "合成の質問",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "合成のツール",
+                    "parameters": {"type": "object", "properties": {}},
+                    "strict": False,
+                }
+            ],
+            "tool_choice": tool_choice,
+        },
+    )
+
+    assert (request.tool_choice, request.tool_name) == (expected["type"], "")
 
 
 def test_unsupported_requests_fail_without_calling_the_model(api: FakeMessagesApi) -> None:
