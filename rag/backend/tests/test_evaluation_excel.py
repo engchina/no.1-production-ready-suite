@@ -870,6 +870,12 @@ def test_template_examples_keep_all_five_case_columns_and_round_trip() -> None:
     cases = book[CASES_SHEET_TITLE]
     assert tuple(cell.value for cell in cases[1]) == HEADERS
     assert all(cell.comment and cell.comment.text for cell in cases[1])
+    assert "参考の網羅率" in cases["D1"].comment.text
+    guide = "\n".join(
+        str(cell.value) for row in book[GUIDE_SHEET_TITLE] for cell in row if cell.value
+    )
+    assert "100% でも回答の完全性" in guide
+    assert "必須の回答要点・確認済みの下書きから追加した要点は参考の網羅率" in guide
     examples = book[EXAMPLES_SHEET_TITLE]
     assert tuple(cell.value for cell in examples[1]) == (*HEADERS[:3], "この例の説明", *HEADERS[3:])
     rows = list(examples.iter_rows(min_row=2, values_only=True))

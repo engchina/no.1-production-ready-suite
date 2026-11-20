@@ -186,7 +186,9 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     # 同じ点は、同じ対象・同じ条件・適用範囲・観点。条件・観点が違う文は照らす文にしない。
     assert "同じ条件・適用範囲・観点" in questions["standard_ids"] and "違う文" in questions["standard_ids"]
     assert "確認できない" in questions["states_source_gap"] and "記載が無い" in questions["states_source_gap"]
-    assert "同時に真になり得る" in questions["consistent"] and "確定できない" in questions["consistent"]
+    assert "同じ事実・結論" in questions["consistent"] and "可能性の一つ" in questions["consistent"]
+    assert "留保を添えていても false" in questions["states_source_gap"]
+    assert "同時に真になり得る" not in questions["consistent"]
     # 主張は条件ごと取り出して claim に書く。条件を主張の種類として別に取り出させない。
     step2 = CORRECTNESS_PROMPT.split("## Step 2:", 1)[1].split("## Step 3:", 1)[0]
     assert "条件と結論を別の主張に分けない" in step2 and "claim" in step2
@@ -302,3 +304,46 @@ def test_contradiction_reason_quotes_the_claim_with_its_condition():
         "回答の「全体を再起動する場合、サービスAの確認は不要。」と標準回答の「全体を再起動したときは、サービスAの起動を確かめる。」が食い違う。"
     )
     assert scores["correctness_claims"][0]["answer"] == "全体を再起動する場合について説明します。 サービスAの確認は不要です。"
+
+
+@pytest.mark.parametrize(
+    ("answer", "comparisons", "expected"),
+    [
+        (
+            "項目Aは5です。項目Bは8か9の可能性があります。",
+            [("項目Aは5。", "A1", ["S1"], False, True), ("項目Bは8か9。", "A2", ["S2"], False, False)],
+            0.0,
+        ),
+        (
+            "項目Aは5です。資料が不足していますが、項目Bは9です。",
+            [
+                ("項目Aは5。", "A1", ["S1"], False, True),
+                ("資料が不足している。", "A2", ["S2"], True, False),
+                ("項目Bは9。", "A2", ["S2"], False, False),
+            ],
+            0.0,
+        ),
+        (
+            "項目Aは5です。項目Cは追加の確認対象です。",
+            [("項目Aは5。", "A1", ["S1"], False, True), ("項目Cは追加の確認対象。", "A2", [], False, True)],
+            1.0,
+        ),
+    ],
+    ids=["alternative_conclusion", "wrong_conclusion_with_reservation", "additional_uncompared_claim"],
+)
+def test_mixed_claims_preserve_correctness_boundaries(answer, comparisons, expected):
+    """合成の照合結果を再生する。意味の分類は実モデルで別途検証する。"""
+    output = _output(
+        [
+            dict(claim=text, answer_ids=[answer_id], standard_ids=standard_ids, states_source_gap=gap, consistent=consistent)
+            for text, answer_id, standard_ids, gap, consistent in comparisons
+        ],
+        [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": False}],
+    )
+    with patch(PARSE, return_value=output):
+        result = evaluate_answer_payload(_payload(answer_text=answer), object())
+    assert result["status"] == "completed"
+    assert result["answer_correctness"] == expected
+    assert result["answer_coverage"] == 0.5
+    verdicts = [claim["verdict"] for claim in result["correctness_claims"]]
+    assert ("contradicted" in verdicts) == (expected == 0.0)
