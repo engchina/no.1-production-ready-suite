@@ -374,6 +374,44 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
 
 既存の Agent の instance（Basic 認証で配備したもの）を更新する手順は [agent/docs/security-rbac.md §8](../agent/docs/security-rbac.md#8-既存環境の更新手順215) を参照してください。
 
+### Agent の sandbox 用 project を手動で用意する（#5132）
+
+sandbox 用の OCI Generative AI project と IAM policy は、必要な環境だけ OCI コンソールで作成・設定します。
+Terraform による自動作成は行いません。project を作るだけでは Agent のコード実行は有効になりません。
+現在の主ブランチには `sandbox_run` と `AGENT_SANDBOX_*` の設定は未実装です（#5128）。
+実行・寿命管理・ファイル入出力・承認の画面は #5128〜#5131 で扱い、本節は OCI 側の事前準備です。
+
+1. OCI コンソールで sandbox の[対応リージョン](https://docs.oracle.com/en-us/iaas/Content/generative-ai/sandbox-regions.htm)
+   （例: `ap-osaka-1`）を選び、Generative AI の project 一覧から作成を開きます。東京は現在対応していません。
+   sandbox は project と同じリージョンを使います。モデルの接続先とは別に選び、実行機能の設定時に project の OCID とリージョンを指定します。
+2. [project の作成](https://docs.oracle.com/en-us/iaas/Content/generative-ai/create-project.htm)の
+   「Sandbox configuration」で「Enable sandboxes in this project」を有効にします。
+   Networking mode は `Managed`、Network policy mode は `DENY_ALL` を選びます。
+   外部接続が必要な場合だけ、[ネットワークの設定](https://docs.oracle.com/en-us/iaas/Content/generative-ai/sandbox-networking.htm)に沿って
+   宛先を限定した `ALLOW` を使います。warm pool は任意です。
+3. 作成して `ACTIVE` になるまで待ち、project の OCID・リージョン・compartment を控えます。
+   sandbox は一度有効にすると無効に戻せません。永続化の有無と Custom networking の構成は有効化後に変更できないため、事前に決めます。
+4. [sandbox の IAM 権限](https://docs.oracle.com/en-us/iaas/Content/generative-ai/sandbox-permissions.htm)を設定します。
+   project を作成・設定する管理者には `manage generative-ai-project` が必要です。
+   実行する Compute の主体には、対象 compartment に対して次の権限を付けます（管理者の権限とは別です）。
+
+   | 認証（`PLATFORM_OCI_AUTH_MODE`） | policy の例 |
+   |---|---|
+   | `config_file`（API キーのユーザー） | `Allow group <group> to manage generative-ai-sandbox in compartment <compartment>` と `Allow group <group> to read generative-ai-project in compartment <compartment>` |
+   | `instance_principal` | Compute を含む dynamic group に `Allow dynamic-group <dynamic-group> to manage generative-ai-sandbox in compartment <compartment>` と `Allow dynamic-group <dynamic-group> to read generative-ai-project in compartment <compartment>` |
+
+   共通の OCI 認証は「システム設定 > OCI 認証」で設定します。上の表は OCI 側の権限であり、
+   未実装の `sandbox_run` から各認証方式を使えることの検証結果ではありません。
+   sandbox 内のコードの resource principal には、既定で追加の権限を与えません。
+   既存の条件なしの `any-user` policy が sandbox の主体にも権限を与えていないか確認します。
+   OCI サービスへのアクセスが必要な場合だけ、`request.principal.type='generativeaisandbox'` と
+   `request.principal.project_id`、対象リソースの条件で絞ります。権限の異なる処理は project を分けます。
+5. OCI 側だけ先に確認する場合は、公式の[作成・実行の手順](https://docs.oracle.com/en-us/iaas/Content/generative-ai/create-sandbox.htm)に沿い、
+   CLI / SDK から短命の sandbox を作成し、合成の入力でコマンド実行と停止を確認します。
+   Agent からの実行確認は #5128〜#5131 の実装後に別途必要です。
+
+project と policy は Terraform state の管理外です。stack の更新・削除では変更・削除されないため、不要になったときは手動で片付けます。
+
 ### Compute・Nginx・HTTPS（3 製品で共通。#1316）
 
 - 3 製品を入れる Compute は 1 台です（bastion の Compute は別。下の「bastion の Compute」）。既定は **4 OCPU / 32 GB / boot volume 200 GB**。RAG の CPU の parser（Docling）が最も多く使うので、
