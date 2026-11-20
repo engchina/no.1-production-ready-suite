@@ -966,9 +966,6 @@ function SearchAnswerProfileEditor({
                       <p id="search-answer-profile-guide-enabled-helper" className="text-xs leading-relaxed text-fg-muted">
                         {t("searchAnswerProfiles.field.guideEnabledHelper")}
                       </p>
-                      <p className="text-sm font-medium text-fg" aria-live="polite">
-                        {config.query.support_guide_enabled === true ? t("searchAnswerProfiles.field.guideEnabledOn") : t("searchAnswerProfiles.field.guideEnabledOff")}
-                      </p>
                     </div>
                     <Switch
                       aria-label={t("searchAnswerProfiles.field.guideEnabled")}
@@ -988,9 +985,6 @@ function SearchAnswerProfileEditor({
                       <h3 className="text-sm font-medium text-fg">{t("searchAnswerProfiles.field.wikiSearch")}</h3>
                       <p id="search-answer-profile-wiki-search-helper" className="text-xs leading-relaxed text-fg-muted">
                         {t("searchAnswerProfiles.field.wikiSearchHelper")}
-                      </p>
-                      <p className="text-sm font-medium text-fg" aria-live="polite">
-                        {config.query.wiki_search_enabled === true ? t("searchAnswerProfiles.field.guideEnabledOn") : t("searchAnswerProfiles.field.guideEnabledOff")}
                       </p>
                     </div>
                     <Switch
