@@ -1,6 +1,6 @@
 # production-ready-anthropic-messages (`pr_anthropic_messages`)
 
-Anthropic Claude の Messages API を、公式の Python SDK（`anthropic`）で呼ぶ共通の部品（#5546 の 2 段目）。システム設定 › モデル の「クォータナリ接続」（Anthropic Claude 用）を選んだ登録モデルを、3 製品の呼び出しの層がこの部品で呼ぶ（製品への接続は 3 段目の PR）。OpenAI 互換の shim は使わない。
+Anthropic Claude の Messages API を、公式の Python SDK（`anthropic`）で呼ぶ共通の部品（#5546 の 2 段目）。システム設定 › モデル の「クォータナリ接続」（Anthropic Claude 用）を選んだ登録モデルを、3 製品（RAG・NL2SQL・Agent。Agent は 1 回の生成だけ）の呼び出しの層がこの部品で呼ぶ。OpenAI 互換の shim は使わない。
 
 - 3 製品の OCI Enterprise AI の層（Responses API）と同じ形の結果を返す: 本文・usage（Responses API の形にも写せる）・停止の理由・失敗の分類（`pr_enterprise_ai` の種類と error code）。
 - 製品ごとの処理の流れ（プロンプト・再試行の方針・出力の上限の決め方）は変えない。この部品は 1 回の呼び出しを組み、応答と失敗を写すだけ。SDK の自動の再試行は既定で使わない（`max_retries=0`）。
@@ -48,7 +48,7 @@ result.usage.as_responses_usage()  # llm_call_usage・record_genai_usage に渡�
 |---|---|
 | `system` | `system`（空なら送らない） |
 | `user_text`・`images` | 1 つの user の message（画像の base64 の block を本文の前に置く） |
-| `response_schema` | `output_config.format`（`{"type": "json_schema", "schema": ...}`）。structured outputs が受け付けない制約（文字列の長さ・数の範囲・`pattern`・2 以上の `minItems` など）は SDK の `anthropic.transform_schema`（`anthropic_response_schema`）で外して送る（外した制約は項目の説明に写る）。応答は呼ぶ側が元の schema で検証する |
+| `response_schema` | `output_config.format`（`{"type": "json_schema", "schema": ...}`）。structured outputs が受け付けない制約（文字列の長さ・数の範囲・`pattern`・2 以上の `minItems` など）は SDK の `anthropic.transform_schema`（`anthropic_response_schema`）で外して送る（外した制約は項目の説明に写る。SDK が扱わない型の配列 `{"type": ["string", "null"]}` は先に同じ意味の `anyOf` にする）。変換は部品の中で 1 回だけ行うので、呼ぶ側は元の schema を渡す（変換済みの schema を渡さない）。応答は呼ぶ側が元の schema で検証する |
 | `reasoning_effort` | 下の対応表 |
 | `max_output_tokens` | `max_tokens` |
 | `endpoint_url` | 空なら SDK の既定、指定があれば `base_url`（前後の空白と末尾の `/` だけを除く。`/v1` は SDK が足すので含めない） |

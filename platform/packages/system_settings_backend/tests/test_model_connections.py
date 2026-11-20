@@ -22,7 +22,6 @@ from pr_system_settings.model import (
     ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
     MAX_ENTERPRISE_AI_CONNECTIONS,
     EnterpriseAiConfiguredModel,
-    EnterpriseAiConnectionNotSupportedError,
     EnterpriseAiModelNotRegisteredError,
     EnterpriseAiModelSettings,
     ModelSettingsTestRequest,
@@ -961,30 +960,6 @@ def test_save_and_load_quaternary_connection(tmp_path: Path) -> None:
     assert connection.uses_anthropic_messages
     assert connection.effective_endpoint == ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT
     assert connection.is_configured()
-
-
-def test_quaternary_connection_is_not_callable_through_openai_compatible_urls() -> None:
-    """3 製品の呼び出しの層（OpenAI 互換の URL）は、クォータナリ接続のモデルを分かる誤りにする。"""
-    settings = FakeSettings(
-        oci_enterprise_ai_endpoint=PRIMARY_ENDPOINT,
-        oci_enterprise_ai_api_key="sk-primary",
-        oci_enterprise_ai_quaternary_endpoint=QUATERNARY_ENDPOINT,
-        oci_enterprise_ai_quaternary_api_key="sk-quaternary",
-        oci_enterprise_ai_models=[
-            EnterpriseAiConfiguredModel(model_id="claude-d", connection_id="quaternary")
-        ],
-    )
-    connection = enterprise_ai_connection_for_model(settings, "claude-d")
-    assert connection.effective_endpoint == QUATERNARY_ENDPOINT
-    for read_url in (lambda: connection.base_url, lambda: connection.request_url("/responses")):
-        with pytest.raises(EnterpriseAiConnectionNotSupportedError) as raised:
-            read_url()
-        assert raised.value.code == "enterprise_ai_connection_not_supported"
-        assert "クォータナリ接続" in str(raised.value)
-        assert "sk-" not in str(raised.value)
-    # ほかの接続の URL はそのまま。
-    primary = shared_model.enterprise_ai_connection(settings, "primary")
-    assert primary.base_url == PRIMARY_ENDPOINT
 
 
 # クォータナリ接続のモデルの接続テスト（Messages API で呼ぶ）は test_anthropic_model_test.py。

@@ -44,7 +44,8 @@ result.usage.as_responses_usage()    # Responses API の形の usage（llm_call_
 
 - 構造化出力は `output_config.format`（`{"type": "json_schema", "schema": ...}`）。schema は
   :func:`anthropic_response_schema`（SDK の `transform_schema`）で、structured outputs が
-  受け付けない制約（文字列の長さ・数の範囲・`pattern` など）を外してから送る。
+  受け付けない制約（文字列の長さ・数の範囲・`pattern` など）を外してから送る（SDK が扱わない
+  型の配列は先に `anyOf` にする）。変換はここで 1 回だけ行うので、呼ぶ側は元の schema を渡す。
 - 思考は adaptive。推論の量は :data:`ANTHROPIC_EFFORT_BY_REASONING_EFFORT` で
   `output_config.effort` に写す（`none` と空は思考・effort を送らず、モデルの既定にする）。
 - 出力の長い呼び出しでも HTTP の時間切れにならないよう、常に streaming で送り
@@ -86,7 +87,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import copy
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -373,10 +373,49 @@ def anthropic_response_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
 
     structured outputs は文字列の長さ・数の範囲・`pattern`・`minItems`（0・1 以外）などを
     受け付けず、要求が 400 になる。SDK の `anthropic.transform_schema` で外し（外した制約は項目の
-    説明に写る）、すべての object を `additionalProperties: false` にする。外した制約は送らない
-    だけなので、応答は呼ぶ側が元の schema で検証する（README「要求の組み方」）。
+    説明に写る）、すべての object を `additionalProperties: false` にする。SDK の変換が扱わない
+    型の配列（`{"type": ["string", "null"]}`）は、先に同じ意味の `anyOf` にする。外した制約は
+    送らないだけなので、応答は呼ぶ側が元の schema で検証する（README「要求の組み方」）。
+    呼ぶ側の schema は書き換えない（新しい dict・list を組んでから変換する）。
     """
-    return anthropic.transform_schema(copy.deepcopy(dict(schema)))
+    return anthropic.transform_schema(_without_type_lists(schema))
+
+
+def _without_type_lists(node: Any) -> Any:
+    if isinstance(node, Mapping):
+        converted = {key: _without_type_lists(value) for key, value in node.items()}
+        types = converted.get("type")
+        if not isinstance(types, list):
+            return converted
+        rest = {key: value for key, value in converted.items() if key != "type"}
+        if "enum" in rest or "const" in rest:
+            # 値の一覧があれば型は要らない（SDK の変換も型を外す）。
+            return rest
+        if len(types) == 1:
+            return {**rest, "type": types[0]}
+        return {"anyOf": [_typed_variant(rest, str(item)) for item in types]}
+    if isinstance(node, list):
+        return [_without_type_lists(item) for item in node]
+    return node
+
+
+# 型ごとに意味を持つ JSON schema の語。型の配列を anyOf に分けるとき、その型の枝にだけ残す。
+_KEYWORDS_BY_TYPE: Final[Mapping[str, frozenset[str]]] = {
+    "object": frozenset({"properties", "required", "additionalProperties"}),
+    "array": frozenset({"items", "minItems", "maxItems", "uniqueItems"}),
+    "string": frozenset({"minLength", "maxLength", "pattern", "format"}),
+    "number": frozenset({"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}),
+    "integer": frozenset({"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}),
+}
+_TYPED_KEYWORDS: Final = frozenset().union(*_KEYWORDS_BY_TYPE.values())
+
+
+def _typed_variant(rest: Mapping[str, Any], type_name: str) -> dict[str, Any]:
+    own = _KEYWORDS_BY_TYPE.get(type_name, frozenset())
+    return {
+        "type": type_name,
+        **{key: value for key, value in rest.items() if key not in _TYPED_KEYWORDS or key in own},
+    }
 
 
 def _require_api_key(api_key: str, model_id: str) -> str:
