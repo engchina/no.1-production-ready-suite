@@ -313,6 +313,7 @@ for (const scheme of ["light", "dark"] as const) {
       "4. 章節の抽出規則",
       "5. 章節の要約",
       "6. 文書の要約",
+      "7. Wiki の構築",
     ]);
     await expect(card).toContainText("Docling の解析結果のうち、PDF のしおりの階層を使えず");
     await expect(card).toContainText("番号から階層を決められない見出しの割合と見出し数が設定の条件を満たす文書が対象です。");
@@ -628,6 +629,7 @@ test("章節の抽出規則を独自の規則にして保存できる", { tag: "
     "4. 章節の抽出規則",
     "5. 章節の要約",
     "6. 文書の要約",
+    "7. Wiki の構築",
   ]);
   const editor = page.getByTestId("section-rules-editor");
   await expect(editor).toContainText("保存済みの解析結果にある見出しと階層を使います");
@@ -1761,6 +1763,8 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
   expect(requests.map((item) => item.method)).toEqual(Array.from({ length: 7 }, () => ["PUT", "DELETE"]).flat());
   await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
   const wiki = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "7. Wiki の構築", exact: true }) });
+  for (const summary of await wiki.locator("details[open] > summary").all()) await summary.click();
+  await wiki.evaluate(element => element.scrollIntoView({ block: "center" }));
   await wiki.screenshot({ path: test.info().outputPath("wiki-prompts.png") });
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
 });
