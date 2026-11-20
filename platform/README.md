@@ -209,8 +209,8 @@ API は 422 で「既定のテキストモデルを選択してください。�
     失敗は `AnthropicMessagesError.kind` からクォータナリ接続向けの案内（OCI の IAM・Project OCID の文は出さない）にする。
   - **製品の回答・解析などの呼び出し**: 3 製品（RAG・NL2SQL・Agent）の呼び出しの層が、上の選び方でこの接続のモデルを
     `pr_anthropic_messages` で呼ぶ（別の接続へ暗黙に切り替えない）。Agent は 1 回の生成（品質評価の判定・下書きの提案・
-    画像の読み取りなど）だけで、業務 Agent の実行（ツールの呼び出し・複数のターン）は `runtime.model_connection_not_supported`
-    で失敗にする（`agent/docs/agents/runtime.md`）。構造化出力の schema は呼ぶ側が元の schema を渡し、
+    画像の読み取りなど）に加え、業務 Agent の実行（ツールの呼び出し・複数のターン・承認待ちからの再開。#5580）も
+    会話の履歴とツールの往復の部品（`acreate_anthropic_turn`）で呼ぶ（`agent/docs/agents/runtime.md`）。構造化出力の schema は呼ぶ側が元の schema を渡し、
     部品が送る直前に 1 回だけ Messages API の受け付ける形に変換する（`anthropic_response_schema`）。接続の `base_url` /
     `request_url()` は OpenAI 互換の接続だけが使う。
 - プライマリ接続の後ろの接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL（クォータナリ接続は

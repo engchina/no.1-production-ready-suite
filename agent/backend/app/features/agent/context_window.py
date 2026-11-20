@@ -913,6 +913,8 @@ _PROMPT_AND_LIMIT = (
         r"maximum context length is (?P<limit>\d+) tokens.*?(?P<prompt>\d+) tokens",
         re.IGNORECASE | re.DOTALL,
     ),
+    # Anthropic の Messages API: "prompt is too long: 210000 tokens > 200000 maximum"（#5580）
+    re.compile(r"prompt is too long: (\d+) tokens > (\d+) maximum", re.IGNORECASE),
 )
 
 
@@ -929,9 +931,12 @@ def provider_overflow(code: str | None, message: str | None) -> ProviderOverflow
     text = message or ""
     if (code or "") not in _OVERFLOW_CODES and not _OVERFLOW_TEXT.search(text):
         return None
-    vllm, openai_style = _PROMPT_AND_LIMIT
-    if match := vllm.search(text):
-        return ProviderOverflow(prompt_tokens=int(match.group(1)), limit_tokens=int(match.group(2)))
+    vllm, openai_style, anthropic_style = _PROMPT_AND_LIMIT
+    for pattern in (vllm, anthropic_style):
+        if match := pattern.search(text):
+            return ProviderOverflow(
+                prompt_tokens=int(match.group(1)), limit_tokens=int(match.group(2))
+            )
     if match := openai_style.search(text):
         return ProviderOverflow(
             prompt_tokens=int(match.group("prompt")), limit_tokens=int(match.group("limit"))

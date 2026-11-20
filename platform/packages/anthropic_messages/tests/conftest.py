@@ -38,28 +38,31 @@ def recorded_stream(
     thinking_tokens: int | None = 25,
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
+    input_transformations: Iterable[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """1 回の応答の SSE の event の並び（本文は delta を 2 つに分けて送る）。"""
-    events: list[dict[str, Any]] = [
-        {
-            "type": "message_start",
-            "message": {
-                "id": "msg_test_1",
-                "type": "message",
-                "role": "assistant",
-                "model": MODEL_ID,
-                "content": [],
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": 1,
-                    "cache_read_input_tokens": cache_read_input_tokens,
-                    "cache_creation_input_tokens": cache_creation_input_tokens,
-                },
-            },
-        }
-    ]
+    """1 回の応答の SSE の event の並び（本文は delta を 2 つに分けて送る）。
+
+    block は text・thinking（`thinking` の本文と `signature`）・redacted_thinking（`data`）・
+    tool_use（`id`・`name`・`input`。引数は input_json_delta で送る）。
+    """
+    message: dict[str, Any] = {
+        "id": "msg_test_1",
+        "type": "message",
+        "role": "assistant",
+        "model": MODEL_ID,
+        "content": [],
+        "stop_reason": None,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": 1,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+        },
+    }
+    if input_transformations is not None:
+        message["input_transformations"] = [dict(item) for item in input_transformations]
+    events: list[dict[str, Any]] = [{"type": "message_start", "message": message}]
     for index, block in enumerate(blocks):
         if block["type"] == "thinking":
             events.append(
@@ -69,13 +72,55 @@ def recorded_stream(
                     "content_block": {"type": "thinking", "thinking": "", "signature": ""},
                 }
             )
+            if block.get("thinking"):
+                events.append(
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {"type": "thinking_delta", "thinking": block["thinking"]},
+                    }
+                )
             events.append(
                 {
                     "type": "content_block_delta",
                     "index": index,
-                    "delta": {"type": "signature_delta", "signature": "sig-test"},
+                    "delta": {
+                        "type": "signature_delta",
+                        "signature": block.get("signature", "sig-test"),
+                    },
                 }
             )
+        elif block["type"] == "redacted_thinking":
+            events.append(
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {"type": "redacted_thinking", "data": block["data"]},
+                }
+            )
+        elif block["type"] == "tool_use":
+            events.append(
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": block["id"],
+                        "name": block["name"],
+                        "input": {},
+                    },
+                }
+            )
+            arguments = json.dumps(block.get("input") or {}, ensure_ascii=False)
+            half = len(arguments) // 2
+            for part in (arguments[:half], arguments[half:]):
+                events.append(
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {"type": "input_json_delta", "partial_json": part},
+                    }
+                )
         else:
             text = str(block["text"])
             half = len(text) // 2

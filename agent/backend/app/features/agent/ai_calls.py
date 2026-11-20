@@ -33,13 +33,9 @@ STAGE_LABELS: dict[str, str] = {
     "agent_drafting": "業務 Agent の下書きの提案",
 }
 
-# モデル・接続が設定されていないか、この呼び出しに使えない（設定の誤り。待っても直らない）。
+# モデル・接続が設定されていない（設定の誤り。待っても直らない）。
 _CONFIGURATION_CODES = frozenset(
-    {
-        "runtime.model_not_configured",
-        "runtime.model_connection_not_configured",
-        builtin_runtime.MODEL_CONNECTION_NOT_SUPPORTED_CODE,
-    }
+    {"runtime.model_not_configured", "runtime.model_connection_not_configured"}
 )
 
 
