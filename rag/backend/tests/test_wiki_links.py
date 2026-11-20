@@ -334,7 +334,7 @@ async def test_interrupted_link_build_resumes_from_saved_keys(link_setup: Any) -
     jobs, store, model, settings, _ = link_setup
     store.state = {
         "source_fingerprint": "source-a",
-        "link_fingerprint": module.fingerprint(["kb-a"]),
+        "link_fingerprint": fingerprint(["kb-a"]),
         "status": "FAILED",
         "failure_code": "interrupted",
         "leased": 0,

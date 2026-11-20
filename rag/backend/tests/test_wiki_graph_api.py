@@ -14,8 +14,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 
 from app.api.routes import wiki_graph as routes
-from app.clients import wiki_graph_store as module
 from app.clients.wiki_graph_store import WikiGraphStore, graph_scope, section_id
+from app.clients.wiki_store import WIKI_PUBLISHED_SQL
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
 
 KB = "kb-a"
@@ -335,7 +335,7 @@ async def test_routes_hide_invisible_knowledge_base_and_unknown_nodes(
     with pytest.raises(HTTPException) as caught:
         await routes.get_wiki_graph_overview(KB, offset=0, limit=25)
     assert caught.value.status_code == 404
-    assert module.WIKI_PUBLISHED_SQL in graph_scope(KB)[0]
+    assert WIKI_PUBLISHED_SQL in graph_scope(KB)[0]
 
 
 @pytest.mark.asyncio
