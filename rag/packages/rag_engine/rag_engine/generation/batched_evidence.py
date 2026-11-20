@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import unicodedata
@@ -16,7 +15,6 @@ from types import GenericAlias
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
-from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges, slice_ranges
 
 from rag_engine.config import Settings
 from rag_engine.dependencies import injected_current_section_paths, record_retrieval_stage
@@ -42,6 +40,7 @@ from rag_engine.generation.document_inputs import (
     related_spans,
     with_first_chunks,
 )
+from rag_engine.generation.document_inputs import slice_span as _slice
 from rag_engine.generation.evidence_cuts import CONTINUED_TABLE_HEADER_KEY, EvidenceCuts, evidence_cuts, section_child_ids
 from rag_engine.generation.grounded import span_citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
@@ -163,21 +162,6 @@ def _canonical_reading(reading: BatchReading, values: Sequence[Mapping[str, Any]
     return BatchReading(findings=findings)
 
 
-def _slice(span: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
-    """親本文の座標と元の出典を保持し、分割範囲に固有の ID を付ける。"""
-    if start == 0 and end == len(span["text"]):
-        return dict(span)
-    absolute = int(span.get("start", 0)) + start
-    text = span["text"][start:end]
-    uid = "E" + hashlib.sha256(f"{span['source_id']}:{absolute}:{absolute + len(text)}:{text}".encode()).hexdigest()[:20]
-    sliced = {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
-    # 解析器が付けた原文に無い範囲は、分けた本文の座標に移す（#5305）。
-    sliced.pop(NON_SOURCE_RANGES_KEY, None)
-    if non_source := slice_ranges(load_ranges(span.get(NON_SOURCE_RANGES_KEY), len(span["text"])), start, end):
-        sliced[NON_SOURCE_RANGES_KEY] = [list(item) for item in non_source]
-    return sliced
-
-
 def candidate_block(values: Sequence[Mapping[str, Any]]) -> str:
     """最終生成の根拠の後に添える回答候補（根拠のラベルごと）。候補が無ければ空。
 
@@ -260,6 +244,7 @@ def prepare_batched_evidence(
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
     failed_batches: list[dict[str, Any]] | None = None,
     summarize: Callable[[str], SummaryClaims] | None = None,
+    plan_batches: Callable[[Sequence[list[dict[str, Any]]]], str | None] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
     image_count: int = 0,
@@ -704,6 +689,20 @@ def prepare_batched_evidence(
             previous_size = sum(len(value["text"]) for value in selected)
             reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]] = {}
             pass_batches = list(partition(selected))
+            if (
+                pass_index == 1
+                and plan_batches is not None
+                and not ((left := remaining_seconds()) is not None and left < generation_reserve)
+            ):
+                remainder = plan_batches([with_firsts(batch) for batch in pass_batches])
+                if remainder == "":
+                    return [], "", {"fits": True, "batch_count": 0, "computed_batch_count": len(pass_batches)}
+                if remainder is not None:
+                    context = render([])
+                    # 原質問は保持し、原文による説明だけを追加で読む。
+                    question = json.dumps({"original_question": question, "remaining_request": remainder}, ensure_ascii=False)
+                    # 追加要求と集計結果のぶんだけ入力が増えた条件で、完全なチャンクの組を測り直す。
+                    pass_batches = partition(selected)
             batch_offset = len(batches)
             partials: dict[tuple[Any, ...], dict[str, Any]] = {}
 

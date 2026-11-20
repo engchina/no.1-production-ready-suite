@@ -7,10 +7,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const viewport of [
-  { name: "desktop", width: 1280, height: 760, collapse: false },
-  { name: "mobile", width: 375, height: 812, collapse: true },
+  { name: "desktop", width: 1280, height: 760, collapse: false, theme: "light" },
+  { name: "1920px, dark", width: 1920, height: 1080, collapse: false, theme: "dark" },
+  { name: "mobile", width: 375, height: 812, collapse: true, theme: "light" },
 ]) {
   test(`評価の基準は品質評価の基準を表示する (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((theme) => {
+      localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme }, version: 0 }));
+    }, viewport.theme);
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockEvaluation(page, "standard");
@@ -34,7 +38,7 @@ for (const viewport of [
     const answer = await metrics.getByRole("heading", { name: "回答", exact: true }).locator("..").boundingBox();
     expect(search).not.toBeNull();
     expect(answer).not.toBeNull();
-    if (viewport.name === "desktop") {
+    if (!viewport.collapse) {
       expect(answer!.x).toBeGreaterThan(search!.x);
       expect(answer!.y).toBe(search!.y);
     } else {
@@ -49,7 +53,11 @@ for (const viewport of [
     );
     await expect(
       page.getByTestId("settings-evaluation-metric-answer_correctness")
-    ).toContainText("標準回答または必須要点が必要");
+    ).toContainText("標準回答が必要");
+    await expect(page.getByTestId("settings-evaluation-metric-answer_correctness")).toContainText(
+      "100% でも回答の完全性や標準回答にない補足の正しさは保証しません。"
+    );
+    await expect(page.getByRole("main")).not.toContainText("標準回答または必須要点");
     // 変更が実行済みの評価に効かないことを案内する（#1029）。品質評価の画面に基準の選択欄は無いので、
     // そこで選ぶとは案内しない（#3738）。
     await expect(page.getByRole("main")).toContainText(
@@ -211,6 +219,8 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
   await page.goto("/settings/evaluation");
   const stage = page.getByTestId("answer-prompt-stage-evaluation");
   await expect(stage).toContainText("回答の品質評価");
+  await expect(stage).toContainText("正確性には標準回答が必要です。");
+  await expect(stage).toContainText("必須要点は参考の網羅率に使います");
   await expect(page.getByTestId("answer-prompt-stages-card")).toBeVisible();
   expect(await page.getByTestId("answer-prompt-stages-card").evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
 

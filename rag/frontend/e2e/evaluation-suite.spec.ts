@@ -791,6 +791,8 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   }
   await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("未評価");
   await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("対象 0 件");
+  await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("標準回答が必要");
+  await expect(page.getByTestId("evaluation-metric-answer_correctness")).not.toContainText("必須要点が必要");
   await expect(page.getByTestId("evaluation-metric-claim_support_rate")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-grounding")).toHaveCount(0);
   await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);

@@ -2013,10 +2013,13 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     span = named[0]
     unit_binding = item.citations[0]._unit_binding if item.citations else None
     view = _citation_view(span, explicit_units=True) if unit_binding is not None else _citation_view(span)
+    computed_row = unit_binding is not None and unit_binding.snapshot.contract == "computed_row_v1"
     if unit_binding is not None:
-        view = replace(view, units=unit_binding.snapshot.units, contract_version=unit_binding.snapshot.contract, present_in_prompt=True)
+        view = replace(
+            view, units=unit_binding.snapshot.units, contract_version=unit_binding.snapshot.contract, present_in_prompt=not computed_row
+        )
         metadata.update(
-            sent_view_status="matched",
+            sent_view_status="not_applicable" if computed_row else "matched",
             snapshot_id=unit_binding.snapshot.snapshot_id,
             selected_unit_ids=json.dumps(unit_binding.unit_ids),
             range_contract="stable_unit_ids",
@@ -2028,7 +2031,9 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             "source": view.source,
             "content_sha256": hashlib.sha256(view.text.encode()).hexdigest(),
             "view_sha256": view.view_sha256,
-            "view_scope": "verified_partial_answer_reference"
+            "view_scope": "computed_source_row"
+            if computed_row
+            else "verified_partial_answer_reference"
             if unit_binding and unit_binding.snapshot.contract == "verified_partial_answer_v1"
             else "evidence_block_after_width_and_boundary_normalization",
         }

@@ -1231,6 +1231,13 @@
     ]
   },
   "answer_labels": {
+    "extrema_header": "| 行の範囲 | {operation} | 該当行（未確定の場合は要確認の行） |",
+    "extrema_min": "最小値",
+    "extrema_max": "最大値",
+    "extrema_missing": "不足する行 {rows}",
+    "extrema_conflicting": "値を一意に確認できない行 {rows}",
+    "extrema_incomplete": "未確定",
+    "extrema_explanation_missing": "追加の質問に答えられる記載を原文で確認できませんでした。",
     "all_paragraphs_failed": "回答を生成できませんでした。",
     "paragraph_generation_failed": "第{number}段落は生成できませんでした。",
     "missing_document_head": "同じ版の先頭チャンクを取得できないため、この文書を回答の材料から外しました。",
