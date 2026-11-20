@@ -1857,7 +1857,7 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
   });
 
   await page.goto("/settings/model");
-  // ラベルには「OCI 運用時必須」のタグも入るので、欄は id で引く（#542）。
+  // ラベルには「必須」のタグも入るので、欄は id で引く（#542）。
   await page.locator("#enterprise-api-key").fill("new-key-fixture");
   await expectModelPreviewPanelsAbsent(page);
   await expect(page.locator("body")).not.toContainText("new-key-fixture");
@@ -2026,11 +2026,12 @@ test("ターシャリ接続は Endpoint URL と API key だけで設定し、登
 
   await page.goto("/settings/model");
   const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
-  // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続。
+  // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続 → クォータナリ接続（#5546）。
   await expect(tablist.getByRole("tab")).toHaveText([
     "プライマリ接続",
     "セカンダリ接続",
     "ターシャリ接続",
+    "クォータナリ接続",
   ]);
   await tablist.getByRole("tab", { name: "ターシャリ接続" }).click();
   await expect(page.getByTestId("enterprise-connection-tertiary-empty")).toContainText(

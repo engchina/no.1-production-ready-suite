@@ -121,7 +121,8 @@ _OPTIONAL_CONNECTION_IDS = ENTERPRISE_AI_CONNECTION_IDS[1:]
 # （空なら `ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT`）、API key は必須。それ以外の接続は OpenAI 互換の
 # API で、Project OCID は任意（入れたときだけ `OpenAI-Project` ヘッダーを送る。#786 / #5546）。
 ANTHROPIC_MESSAGES_CONNECTION_IDS: Final = frozenset({ENTERPRISE_AI_QUATERNARY_CONNECTION_ID})
-# Messages API の接続の Endpoint URL が空のときに使う URL（Anthropic の公式の API）。既定の URL は
+# Messages API の接続の Endpoint URL が空のときに使う URL（Anthropic の公式の API。呼び出しの部品
+# `pr_anthropic_messages` が空の Endpoint URL で使う SDK の既定と同じ）。設定の側の既定の URL は
 # ここだけに書き、画面には API の応答（`ModelSettingsData.default_anthropic_endpoint`）で示す。
 ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT: Final = "https://api.anthropic.com"
 # 4: 登録モデルの `reasoning_effort`（#1425）。3 の JSON はそのまま読める

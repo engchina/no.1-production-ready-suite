@@ -101,7 +101,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.endpointHelp":
     "公式 docs の OpenAI-compatible base URL を /openai/v1 まで指定します。入力した URL に Responses API の /responses を付けて呼び出し、path は補いません。",
   "settings.model.enterprise.endpointHelpQuaternary":
-    "空にすると、Anthropic の公式の API（{url}）を使います。ゲートウェイなどを使うときだけ、Messages API の base URL を入力します。",
+    "空にすると、Anthropic の公式の API（{url}）を使います。ゲートウェイなどを使うときだけ base URL を入力します（/v1/messages は付けて呼ぶので含めません）。",
   "settings.model.enterprise.endpointHelpTertiary":
     "API の base URL を path まで指定します（OpenAI は https://api.openai.com/v1、OpenAI 互換 API は https://api.deepseek.com/v1 など、OCI Enterprise AI は …/openai/v1）。入力した URL に /responses を付けて呼び出し、path は補いません。",
   "settings.model.enterprise.modelId": "モデル ID",

@@ -267,13 +267,14 @@ test.describe("Agent Runtime settings", () => {
 
     await page.goto("/settings/model");
     await expect(page.getByRole("heading", { name: "モデル設定", level: 1 })).toBeVisible();
-    // OCI Enterprise AI の接続はプライマリ接続・セカンダリ接続・ターシャリ接続のタブ（この順）。
-    // 登録モデルごとに接続を選ぶ（#533 / #542 / #786）。
+    // OCI Enterprise AI の接続はプライマリ接続・セカンダリ接続・ターシャリ接続・クォータナリ接続のタブ（この順）。
+    // 登録モデルごとに接続を選ぶ（#533 / #542 / #786 / #5546）。
     const connectionTabs = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
     await expect(connectionTabs.getByRole("tab")).toHaveText([
       "プライマリ接続",
       "セカンダリ接続",
       "ターシャリ接続",
+      "クォータナリ接続",
     ]);
     await expect(connectionTabs.getByRole("tab", { name: "プライマリ接続" })).toHaveAttribute(
       "aria-selected",
@@ -303,13 +304,27 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("combobox", { name: "モデル 1 の接続" })).toContainText(
       "プライマリ接続"
     );
+    // プライマリ接続の Endpoint URL と API key は必須（#5546）。Project OCID は空のままでよい。
+    await expect(page.locator("#enterprise-endpoint")).toHaveAttribute("aria-required", "true");
+    await expect(page.locator("#enterprise-project-ocid")).not.toHaveAttribute("aria-required", "true");
+    await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+    await expect(page.locator("#enterprise-endpoint")).toBeFocused();
+    await expect(page.locator("#enterprise-endpoint")).toHaveAttribute("aria-invalid", "true");
+    await page.locator("#enterprise-endpoint").fill("https://primary.example/openai/v1");
     await page.getByRole("textbox", { name: "API key" }).fill("test-api-key");
     await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
     await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/model")?.body).toMatchObject({
       // 接続情報の節の保存は、既定のモデル 2 つを保存済みの値のまま送る（#499）。
       enterprise_ai: {
-        connections: [{ connection_id: "primary", api_key: "test-api-key" }],
+        connections: [
+          {
+            connection_id: "primary",
+            endpoint: "https://primary.example/openai/v1",
+            project_ocid: "",
+            api_key: "test-api-key",
+          },
+        ],
         default_text_model_id: "enterprise-llm",
         default_vision_model_id: "enterprise-llm",
       },

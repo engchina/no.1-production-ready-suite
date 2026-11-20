@@ -175,13 +175,13 @@ API は 422 で「既定のテキストモデルを選択してください。�
 4. 3 製品の backend と worker を起動する。RAG は、解析サービス（parser）に渡す実行用の env（`RAG_SERVICE_RUNTIME_ENV_FILE`）を
    backend が書き直すので、RAG の「サービス管理」画面から OCI の parser を再起動する（`systemctl restart` だけでは古い env のまま）。
 
-## OCI Enterprise AI のプライマリ接続・セカンダリ接続・ターシャリ接続（#533 / #542 / #786）
+## OCI Enterprise AI のプライマリ接続・セカンダリ接続・ターシャリ接続・クォータナリ接続（#533 / #542 / #786 / #5546）
 
-「システム設定 › モデル」の OCI Enterprise AI は、接続（Endpoint URL・Project OCID・API key）を「プライマリ接続」「セカンダリ接続」
-「ターシャリ接続」の 3 つまで持ち、登録モデルごとに使う接続を選ぶ（未指定のモデルはプライマリ接続）。画面はカードの中の共有の `Tabs` で
-プライマリ接続 → セカンダリ接続 → ターシャリ接続の順に切り替え、登録モデルの「接続」の選択肢もタブと同じ名前を出す（設定していない
-接続は出さない）。内部の ID は `primary` / `secondary` / `tertiary`、上限は `pr_system_settings.model.MAX_ENTERPRISE_AI_CONNECTIONS`（3）。
-接続はプライマリ接続を先頭にこの順で並べ、セカンダリ接続を置かずにターシャリ接続だけを置いてもよい（並びが違う・重複する payload は 422）。
+「システム設定 › モデル」の OCI Enterprise AI は、接続を「プライマリ接続」「セカンダリ接続」「ターシャリ接続」「クォータナリ接続」の
+4 つまで持ち、登録モデルごとに使う接続を選ぶ（未指定のモデルはプライマリ接続）。画面はカードの中の共有の `Tabs` で
+この順に切り替え、登録モデルの「接続」の選択肢もタブと同じ名前を出す（設定していない接続は出さない）。内部の ID は
+`primary` / `secondary` / `tertiary` / `quaternary`、上限は `pr_system_settings.model.MAX_ENTERPRISE_AI_CONNECTIONS`（4）。
+接続はプライマリ接続を先頭にこの順で並べ、途中の接続を置かずに後ろの接続だけを置いてもよい（並びが違う・重複する payload は 422）。
 
 - **既存環境の更新は要らない。** プライマリ接続は今までの属性・変数名（`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_PROJECT_OCID` /
   `_API_KEY`）のままで、保存済みの `model-settings.json`（接続 1 組の形）は、読み込むときにプライマリ接続として扱う。画面で保存し直すと、
@@ -190,15 +190,22 @@ API は 422 で「既定のテキストモデルを選択してください。�
   `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_CONNECTION_NAME` は読まない（旧名との互換は持たない。`.env` に残っていても無視されるので、
   消してよい）。API の接続の `display_name` もない。表示名が残った `model-settings.json`・payload は、その項目を無視して読み込む
   （次に保存すると消える）。
-- 必須の欄: プライマリ接続の 3 つの欄は OCI で運用するときだけ必須（画面は「OCI 運用時必須」。保存は止めない）。セカンダリ接続は、
-  設定したら Endpoint URL・Project OCID・API key がすべて必須（backend も 422 で止める。API key は保存後の値で確かめ、空欄は
-  保存済みの key を保持する）。セカンダリ接続の API key だけを消す指定はなく、消すときはセカンダリ接続ごと削除する。
+- 必須の欄（#5546）: プライマリ接続からターシャリ接続までは Endpoint URL と API key が必須で、Project OCID は任意（入れたときだけ
+  `OpenAI-Project` ヘッダーを送る）。プライマリ接続も必須なので、Endpoint URL が空の保存はどの節の保存でも 422 になる。API key は
+  保存後の値で確かめ（空欄は保存済みの key を保持する）、保存済みの key の明示の削除と、削除した後の保存は許す。
 - **ターシャリ接続（#786）は OpenAI / OpenAI 互換 API 向け**（OCI Enterprise AI にも使える）。設定したら Endpoint URL と API key が
   必須で、Project OCID は任意（OCI Enterprise AI に使うときだけ入れる。入れたときだけ `OpenAI-Project` ヘッダーを送る）。
   呼び出しはほかの接続と同じ Responses API（`{Endpoint URL}/responses`）で、Chat Completions は使わない。画面の Endpoint URL の例は
-  `https://api.openai.com/v1`。API key だけを消す指定はなく、消すときはターシャリ接続ごと削除する（使っていた登録モデルはプライマリ接続へ移す）。
-- セカンダリ接続・ターシャリ接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL があるときだけその接続が
-  有効になる。
+  `https://api.openai.com/v1`。接続を削除すると、使っていた登録モデルはプライマリ接続へ移す。
+- **クォータナリ接続（#5546）は Anthropic Claude の Messages API 向け。** API key だけが必須で、Endpoint URL は任意（空なら
+  Anthropic の公式の API。既定の URL は `pr_system_settings.model.ANTHROPIC_MESSAGES_DEFAULT_ENDPOINT` だけに書き、画面には API の
+  `default_anthropic_endpoint` で示す。指定するなら base URL まで）。Project OCID は持たない。key が接続のあることを決めるので、
+  保存済みの key だけを消す指定はなく、消すときはクォータナリ接続ごと削除する。**いまは 3 製品の呼び出しの層が未対応**で、
+  この接続のモデルは保存・選択はできるが、呼ぶと（接続テストを含む）OpenAI 互換の URL（接続の `base_url` / `request_url()`）を
+  引いた時点で `EnterpriseAiConnectionNotSupportedError`（code `enterprise_ai_connection_not_supported`。「まだ呼び出せません」）に
+  なる（別の接続へ切り替えない）。呼び出しは共通の部品 `pr_anthropic_messages` で、製品への接続は #5546 の 3 段目。
+- プライマリ接続の後ろの接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL（クォータナリ接続は
+  Endpoint URL か API key）があるときだけその接続が有効になる。
 
   | 変数 | 内容 |
   |---|---|
@@ -208,8 +215,10 @@ API は 422 で「既定のテキストモデルを選択してください。�
   | `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_ENDPOINT` | ターシャリ接続の Endpoint URL（例: `https://api.openai.com/v1`） |
   | `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_PROJECT_OCID` | ターシャリ接続の Project OCID（任意。OCI Enterprise AI に使うときだけ） |
   | `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY` | ターシャリ接続の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_QUATERNARY_ENDPOINT` | クォータナリ接続の Endpoint URL（任意。空なら Anthropic の公式の API） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_QUATERNARY_API_KEY` | クォータナリ接続の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
 
-- `.env` だけで設定する場合は、登録モデル（`PLATFORM_OCI_ENTERPRISE_AI_MODELS`）に `"connection_id": "secondary"`（ターシャリ接続は `"tertiary"`）を書く。
+- `.env` だけで設定する場合は、登録モデル（`PLATFORM_OCI_ENTERPRISE_AI_MODELS`）に `"connection_id": "secondary"`（ターシャリ接続は `"tertiary"`、クォータナリ接続は `"quaternary"`）を書く。
 - **Endpoint URL は入力どおり使い、path を補わない（#1440）。** 呼ぶ URL は `{Endpoint URL}{API path}`（既定 `/responses`）で、
   3 製品の呼び出し・接続テストはすべて `pr_system_settings.model` の `enterprise_ai_base_url` / `enterprise_ai_request_url`
   （接続の `base_url` / `request_url()`）で決める（前後の空白と末尾の `/` だけ除く）。OCI Enterprise AI も `/openai/v1` まで書き、
