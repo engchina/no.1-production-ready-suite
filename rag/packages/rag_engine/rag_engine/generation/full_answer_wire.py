@@ -46,8 +46,8 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 class AnswerComparisonRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    cells: list[str] = Field(min_length=1, description="見出しに対応する値または判定。")
-    scope: str = Field(description="この行だけの適用範囲・例外・可否の理由を短い語句で。セルにある値は省く。該当しなければ空文字。")
+    cells: list[str] = Field(min_length=1, description="見出しに対応する値・条件・判定を語句で示す。判定のセルは可否だけ。")
+    scope: str = Field(description="セルから読み取れない適用範囲・例外だけを最短の語句で一つ。判定条件がセルにある行は空文字。")
     sources: list[str] = Field(description="この行を裏付ける入力の引用ラベル（角括弧を含む）。")
 
 
@@ -57,7 +57,9 @@ class AnswerTableBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     headers: list[str] = Field(min_length=1, description="必要な比較軸だけを列にする。")
-    rows: list[AnswerComparisonRow] = Field(min_length=1, description="各対象を一行にし、適用範囲や理由を含めて比較の要求を完結させる。")
+    rows: list[AnswerComparisonRow] = Field(
+        min_length=1, description="理由や可否も尋ねられた対象を含め、各対象を一行にする。理由は該当行だけに置く。"
+    )
 
     def markdown(self) -> str:
         rows = []
@@ -82,7 +84,7 @@ class AnswerBodyInput(BaseModel):
         )
     )
     points: list[str] = Field(
-        description="表で未回答の要求に限り、各一文で直接答えて引用する。手順は操作の順にまとめる。必要な条件・否定・例外を残し、同じ意味の言い換え、表の値の再掲、質問外の案内を省く。ほかに要求がなければ空配列。"
+        description="比較だけの質問は空配列。比較に加えて別の操作等を尋ねられたときは、その別の要求だけに直接答えて引用する。表がない場合は各要求に一文で答える。手順は操作の順にまとめる。必要な条件・否定・例外を残し、同じ意味の言い換え、表の値の再掲、質問外の案内を省く。ほかに要求がなければ空配列。"
     )
 
     def markdown(self) -> str:
