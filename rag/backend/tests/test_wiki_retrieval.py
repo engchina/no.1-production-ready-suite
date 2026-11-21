@@ -8,14 +8,17 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app.clients import oci_enterprise_ai
 from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings
+from app.rag.answer_engine import AnswerEngine
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
 from app.rag.wiki_navigation import section_frontier
-from app.rag.wiki_retrieval import WikiRetriever, WikiSourceChanged
+from app.rag.wiki_retrieval import ModelPlannedWikiRetriever, WikiRetriever, WikiSourceChanged
 from app.schemas.search import RetrievedChunk
 
 QUESTION = "合成の手続の条件を教えて"
@@ -171,7 +174,7 @@ class Llm:
 
 
 def retriever(
-    store: Store, llm: Llm, *, enabled: bool = True, settings: Settings | None = None
+    store: Store, llm: Llm | None = None, *, enabled: bool = True, settings: Settings | None = None
 ) -> WikiRetriever:
     profile = SimpleNamespace(
         status="ACTIVE",
@@ -190,7 +193,61 @@ def retriever(
         async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
             return [[0.1] * 4 for _ in texts]
 
-    return WikiRetriever(settings or Settings(), Oracle(), GenAi(), llm, store=store)  # type: ignore[arg-type]
+    if llm is None:
+        return WikiRetriever(settings or Settings(), Oracle(), GenAi(), store=store)  # type: ignore[arg-type]
+    return ModelPlannedWikiRetriever(settings or Settings(), Oracle(), GenAi(), llm, store=store)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RankedStore(Store):
+        async def text_rankings(self, expression: str, scope: WikiScope, **kwargs: Any) -> Any:
+            await super().text_rankings(expression, scope, **kwargs)
+            return [("doc-b", "doc-b-b1")]
+
+    store = RankedStore([PAGES[1], PAGES[3], PAGES[-1]])
+    clients = retriever(store, settings=Settings(rag_wiki_selected_units=2))
+    engine = AnswerEngine(clients.settings, oracle=clients.oracle, genai=clients.genai)
+    monkeypatch.setattr(
+        oci_enterprise_ai,
+        "OciEnterpriseAiClient",
+        lambda **_: pytest.fail("Wiki が生成クライアントを作成"),
+    )
+    wiki = engine._wiki_retriever()
+    wiki.store = store
+    seconds: dict[str, float] = {}
+    result = await wiki.search(
+        QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
+    )
+
+    assert result.trace["model_calls"] == 0
+    assert result.trace["selected_documents"] == 2
+    assert result.trace["source_chunk_ids_by_origin"] == {
+        "selected": ["doc-a-a2-chunk", "doc-b-b1-chunk"],
+        "dependency": ["doc-a-a4-chunk"],
+        "link": [],
+    }
+    assert [args for name, args in store.calls if name == "text_rankings"] == [(QUESTION, ())]
+    assert all("document_ids" not in args for name, args in store.calls if name == "pages")
+    assert all("モデル" not in stage for stage in seconds)
+
+
+@pytest.mark.asyncio
+async def test_empty_rankings_do_not_reopen_documents_from_the_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = Store(PAGES)
+    pages, rankings = AsyncMock(return_value=[]), AsyncMock(return_value=[])
+    monkeypatch.setattr(store, "pages", pages)
+    monkeypatch.setattr(store, "text_rankings", rankings)
+    result = await retriever(store).search(QUESTION, profile_id="p", filters={}, timeout=None)
+
+    assert result.trace["catalog_documents"] == 2 and result.trace["candidate_units"] == 0
+    assert result.chunks == () and result.trace["model_calls"] == 0
+    assert all("document_ids" not in call.kwargs for call in pages.await_args_list)
+    rankings.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -272,6 +329,8 @@ async def test_changed_source_is_not_returned() -> None:
     store, llm = Store(PAGES, missing={"doc-a-a4-chunk"}), Llm(["文書A"], units=["a2"])
     with pytest.raises(WikiSourceChanged):
         await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
+    with pytest.raises(WikiSourceChanged):
+        await retriever(store).search(QUESTION, profile_id="p", filters={}, timeout=None)
 
 
 @pytest.mark.asyncio
@@ -556,7 +615,7 @@ async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> N
         async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
             return [[0.1] * 4 for _ in texts]
 
-    wiki = WikiRetriever(
+    wiki = ModelPlannedWikiRetriever(
         Settings(rag_wiki_link_depth=2),
         oracle,  # type: ignore[arg-type]
         GenAi(),  # type: ignore[arg-type]

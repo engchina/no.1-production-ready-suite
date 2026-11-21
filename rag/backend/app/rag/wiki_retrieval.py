@@ -150,17 +150,24 @@ def _relations(
     return result
 
 
+@dataclass(frozen=True)
+class _WikiRoots:
+    pages: dict[str, WikiPage]
+    unit_ids: list[str]
+    document_count: int
+    model_calls: int
+
+
 class WikiRetriever:
     def __init__(
         self,
         settings: Settings,
         oracle: OracleClient,
         genai: OciGenAiClient,
-        llm: Any,
         *,
         store: WikiStore | None = None,
     ) -> None:
-        self.settings, self.oracle, self.genai, self.llm = settings, oracle, genai, llm
+        self.settings, self.oracle, self.genai = settings, oracle, genai
         self.store = store or WikiStore(oracle)
 
     async def scope(
@@ -194,45 +201,6 @@ class WikiRetriever:
         }:
             raise WikiSourceChanged("Wiki の原文の保存版・所属・権限が変わりました。")
         return chunks
-
-    async def plan[T: WikiModel](
-        self,
-        prompt: str,
-        data: Mapping[str, Any],
-        schema: type[T],
-        *,
-        seconds: dict[str, float],
-        calls: list[str],
-        stage: str = "Wiki: 選択",
-    ) -> T:
-        """選択のモデルを呼び、出力を ``schema`` で検証して返す。
-
-        空の応答・schema に合わない出力（``invalid_output``）は、同じ入力で
-        ``RAG_LLM_MAX_RETRIES`` 回まで取り直す（回答の生成と同じ枠。時間は ``search`` の期限の中。
-        #5528）。ほかの失敗（時間切れ・認証・応答の誤り・出力の打ち切り）は取り直さない。
-        ``calls`` には呼び出しごとに段の名前を足す（取り直しも数える）。
-        """
-        context = json.dumps(data, ensure_ascii=False)
-        retries = self.settings.rag_llm_max_retries
-        attempt = 0
-        with _stage(stage, seconds):
-            while True:
-                calls.append(stage)
-                try:
-                    text = await async_call_with_model_purpose(
-                        "wiki.select",
-                        self.llm.generate,
-                        "",
-                        context,
-                        system_prompt=prompt,
-                        response_schema=schema.model_json_schema(),
-                        response_schema_name="wiki_plan",
-                    )
-                    return schema.model_validate_json(text)
-                except Exception as exc:
-                    if attempt >= retries or _classify(exc).kind is not ErrorKind.INVALID_OUTPUT:
-                        raise
-                    attempt += 1
 
     async def follow(
         self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
@@ -319,6 +287,22 @@ class WikiRetriever:
         async with asyncio.timeout(limit if timeout is None else min(limit, timeout)):
             return await self._search(question, profile_id, scoped, seconds)
 
+    async def _select_roots(
+        self,
+        question: str,
+        wiki: WikiScope,
+        candidates: Sequence[WikiPage],
+        seconds: dict[str, float],
+    ) -> _WikiRoots:
+        """公開された索引の上位の原文単位を辿りの起点にする。"""
+        roots = candidates[: self.settings.rag_wiki_selected_units]
+        return _WikiRoots(
+            pages={page.unit.unit_id: page for page in candidates},
+            unit_ids=[page.unit.unit_id for page in roots],
+            document_count=len({page.unit.document_id for page in roots}),
+            model_calls=0,
+        )
+
     async def _search(
         self,
         question: str,
@@ -347,6 +331,135 @@ class WikiRetriever:
             [vector_pages, [by_id[uid] for _, uid in text_ranking if uid in by_id]],
             opts.rag_wiki_candidates,
         )
+        roots = await self._select_roots(question, wiki, candidates, seconds)
+        pages = roots.pages
+        selected = roots.unit_ids
+        selected = list(dict.fromkeys(selected))
+        # 案内の依存（同じ文書）と文書をまたぐ関連（出る向き）を、予算の内で段ごとに辿る（#5492）。
+        with _stage("Wiki: 依存と関連の辿り", seconds):
+            followed, hops, missing, edges, origins = await self.follow(wiki, pages, selected)
+        with _stage("Wiki: 原文の読み込み", seconds):
+            required = [pages[uid] for uid in [*selected, *followed]]
+            originals = await self.current_sources(profile_id, scope, required)
+        identities = {row["document_id"]: row["source_identities"] for row in catalog}
+        names = {row["document_id"]: row["title"] for row in catalog}
+        relations = _relations(required, edges, names)
+        units = {sid: page.unit.unit_id for page in required for sid in page.unit.source_chunk_ids}
+        chunks = tuple(
+            chunk.model_copy(
+                update={
+                    "metadata": {
+                        **chunk.metadata,
+                        "wiki_source": True,
+                        "source_identities": identities.get(chunk.document_id, []),
+                        **(
+                            {"wiki_relations": found}
+                            if (found := relations.get(units[chunk.chunk_id]))
+                            else {}
+                        ),
+                    }
+                }
+            )
+            for chunk in originals
+        )
+
+        def source_ids(unit_ids: Sequence[str]) -> list[str]:
+            ids = (sid for uid in unit_ids for sid in pages[uid].unit.source_chunk_ids)
+            return list(dict.fromkeys(ids))[:_SOURCE_DIAGNOSTICS_LIMIT]
+
+        return WikiSearchResult(
+            chunks,
+            tuple(required),
+            {
+                "status": "ready",
+                # 取り直しを含む選択のモデルの呼び出しの数（#5528）。
+                "model_calls": roots.model_calls,
+                "catalog_documents": len(catalog),
+                "candidate_units": len(candidates),
+                "selected_documents": roots.document_count,
+                "selected_units": len(selected),
+                "dependency_units": len(followed),
+                "missing_dependency_units": missing,
+                "link_hops": hops,
+                "source_count": len(chunks),
+                # 回答の根拠に渡した原文の chunk ID（通常検索との重複を外す前）と、案内の単位の
+                # 由来（選んだ単位・依存・関連）ごとの chunk ID。記録から重複率を出す（#5518）。
+                "source_chunk_ids": [chunk.chunk_id for chunk in chunks][
+                    :_SOURCE_DIAGNOSTICS_LIMIT
+                ],
+                "source_chunk_ids_by_origin": {
+                    "selected": source_ids(selected),
+                    "dependency": source_ids(
+                        [uid for uid in followed if origins[uid] == "dependency"]
+                    ),
+                    "link": source_ids([uid for uid in followed if origins[uid] == "link"]),
+                },
+            },
+        )
+
+
+class ModelPlannedWikiRetriever(WikiRetriever):
+    """既存のモデル選択を同条件で比較するための経路。"""
+
+    def __init__(
+        self,
+        settings: Settings,
+        oracle: OracleClient,
+        genai: OciGenAiClient,
+        llm: Any,
+        *,
+        store: WikiStore | None = None,
+    ) -> None:
+        super().__init__(settings, oracle, genai, store=store)
+        self.llm = llm
+
+    async def plan[T: WikiModel](
+        self,
+        prompt: str,
+        data: Mapping[str, Any],
+        schema: type[T],
+        *,
+        seconds: dict[str, float],
+        calls: list[str],
+        stage: str = "Wiki: 選択",
+    ) -> T:
+        """選択のモデルを呼び、出力を ``schema`` で検証して返す。
+
+        空の応答・schema に合わない出力（``invalid_output``）は、同じ入力で
+        ``RAG_LLM_MAX_RETRIES`` 回まで取り直す（回答の生成と同じ枠。時間は ``search`` の期限の中。
+        #5528）。ほかの失敗（時間切れ・認証・応答の誤り・出力の打ち切り）は取り直さない。
+        ``calls`` には呼び出しごとに段の名前を足す（取り直しも数える）。
+        """
+        context = json.dumps(data, ensure_ascii=False)
+        retries = self.settings.rag_llm_max_retries
+        attempt = 0
+        with _stage(stage, seconds):
+            while True:
+                calls.append(stage)
+                try:
+                    text = await async_call_with_model_purpose(
+                        "wiki.select",
+                        self.llm.generate,
+                        "",
+                        context,
+                        system_prompt=prompt,
+                        response_schema=schema.model_json_schema(),
+                        response_schema_name="wiki_plan",
+                    )
+                    return schema.model_validate_json(text)
+                except Exception as exc:
+                    if attempt >= retries or _classify(exc).kind is not ErrorKind.INVALID_OUTPUT:
+                        raise
+                    attempt += 1
+
+    async def _select_roots(
+        self,
+        question: str,
+        wiki: WikiScope,
+        candidates: Sequence[WikiPage],
+        seconds: dict[str, float],
+    ) -> _WikiRoots:
+        opts, store, catalog = self.settings, self.store, wiki.catalog
         handles = Handles()
         calls: list[str] = []
 
@@ -489,65 +602,4 @@ class WikiRetriever:
                 selected.extend(
                     uid for sid in handles.real(choice.section_ids) for uid in members[sid]
                 )
-        selected = list(dict.fromkeys(selected))
-        # 案内の依存（同じ文書）と文書をまたぐ関連（出る向き）を、予算の内で段ごとに辿る（#5492）。
-        with _stage("Wiki: 依存と関連の辿り", seconds):
-            followed, hops, missing, edges, origins = await self.follow(wiki, pages, selected)
-        with _stage("Wiki: 原文の読み込み", seconds):
-            required = [pages[uid] for uid in [*selected, *followed]]
-            originals = await self.current_sources(profile_id, scope, required)
-        identities = {row["document_id"]: row["source_identities"] for row in catalog}
-        names = {row["document_id"]: row["title"] for row in catalog}
-        relations = _relations(required, edges, names)
-        units = {sid: page.unit.unit_id for page in required for sid in page.unit.source_chunk_ids}
-        chunks = tuple(
-            chunk.model_copy(
-                update={
-                    "metadata": {
-                        **chunk.metadata,
-                        "wiki_source": True,
-                        "source_identities": identities.get(chunk.document_id, []),
-                        **(
-                            {"wiki_relations": found}
-                            if (found := relations.get(units[chunk.chunk_id]))
-                            else {}
-                        ),
-                    }
-                }
-            )
-            for chunk in originals
-        )
-
-        def source_ids(unit_ids: Sequence[str]) -> list[str]:
-            ids = (sid for uid in unit_ids for sid in pages[uid].unit.source_chunk_ids)
-            return list(dict.fromkeys(ids))[:_SOURCE_DIAGNOSTICS_LIMIT]
-
-        return WikiSearchResult(
-            chunks,
-            tuple(required),
-            {
-                "status": "ready",
-                # 取り直しを含む選択のモデルの呼び出しの数（#5528）。
-                "model_calls": len(calls),
-                "catalog_documents": len(catalog),
-                "candidate_units": len(candidates),
-                "selected_documents": len(document_ids),
-                "selected_units": len(selected),
-                "dependency_units": len(followed),
-                "missing_dependency_units": missing,
-                "link_hops": hops,
-                "source_count": len(chunks),
-                # 回答の根拠に渡した原文の chunk ID（通常検索との重複を外す前）と、案内の単位の
-                # 由来（選んだ単位・依存・関連）ごとの chunk ID。記録から重複率を出す（#5518）。
-                "source_chunk_ids": [chunk.chunk_id for chunk in chunks][
-                    :_SOURCE_DIAGNOSTICS_LIMIT
-                ],
-                "source_chunk_ids_by_origin": {
-                    "selected": source_ids(selected),
-                    "dependency": source_ids(
-                        [uid for uid in followed if origins[uid] == "dependency"]
-                    ),
-                    "link": source_ids([uid for uid in followed if origins[uid] == "link"]),
-                },
-            },
-        )
+        return _WikiRoots(pages, selected, len(document_ids), len(calls))
