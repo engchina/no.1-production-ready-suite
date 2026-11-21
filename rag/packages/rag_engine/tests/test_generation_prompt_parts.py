@@ -70,7 +70,7 @@ def test_word_based_evidence_tags_are_not_part_of_the_reading_rules() -> None:
 def test_common_reading_rules_are_always_in_the_generation_system_prompt() -> None:
     """共通の 3 行は生成の system に 1 回だけ置く（1 つの規則は 1 つの層）。"""
     for line in (
-        "答えを終える前に、事実の主張が根拠で支えられているか、完了したことと残っていることを分けているかを確かめる。",
+        "原質問への答えのうち、資料で確定できる点と未確定の点を区別し、事実の主張は根拠で裏付ける。",
         "説明の内容を支えない原文は出典にしない。",
         "資料が述べていることと、自分の推論を分ける。",
     ):

@@ -335,7 +335,7 @@ class GroundedAnswerTest(unittest.TestCase):
         # 本文の契約は項目説明に置き、モデルへ送る最後の Step で条件・実環境の境界と合わせて確認する。
         sent, _ = with_schema_field_guide(prompt, FullAnswerWire.model_json_schema())
         self.assertNotIn("別の節にする", prompt)
-        for field in ("answer_body", "結果にも条件", "実環境の確認"):
+        for field in ("answer_body", "結果にも条件", "利用者が何の値を確かめたいか", "取得・確認済みと偽らず"):
             self.assertIn(field, sent)
         self.assertEqual(sent.count(FullAnswerWire.model_fields["answer_body"].description), 1)
 

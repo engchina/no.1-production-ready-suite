@@ -6,7 +6,7 @@ import functools
 import re
 import unicodedata
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
 from pydantic import (
     BaseModel,
@@ -43,27 +43,84 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 )
 
 
+def _check_requested_phrase(phrase: str, question: str | None) -> None:
+    phrase = phrase.strip()
+    if not phrase or (question is not None and phrase not in question):
+        raise ValueError("requested_phrase は原質問にある連続した語句をそのまま選んでください。対応する要求がない補足は掲載しません。")
+
+
 class AnswerFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(description="一つの値・判断・操作または成立条件を、答えに使う短句で書く。独立に省ける補足とは別の要素にする。")
-    sources: list[str] = Field(description="この事実だけを支える原文ラベル。引用はこの欄にまとめる。")
-    required: bool = Field(
+    text: str = Field(description="原文が示す一つの事実。直接答える規則・操作と独立した補足は別候補に分ける。")
+    sources: list[str] = Field(description="この事実を支える原文ラベル。")
+    answers_which_question: str = Field(
+        description="この短句だけを答えとして読んだとき、それで解ける具体的な問いを一つ書く。対象名だけでなく何を判定する問いかを区別する。"
+    )
+    requested_phrase: str | None = Field(
         description=(
-            "この事実を取り除くと質問への判断・操作・必要条件・例外のいずれかが失われる場合だけ true。"
-            "言い換え、他の項目で伝わる総論、質問とは異なる属性を説明する事実は false。"
+            "その問いと同じ具体的な対象・属性を尋ねる原質問の連続した語句を選ぶ。回答欄の総称だけでは対応にならない。"
+            "値を選ぶのに必要な適用範囲や例外は、その値を尋ねた語句に対応する。共通する単語はあっても問われた量や判断が違うとき、"
+            "この短句を省いても別のセルに同じ答えが残るときは null。"
         )
     )
+
+    short_answer: str = Field(
+        description="問われた属性について資料が裏付ける短答。原文に並記された別の属性は外す。"
+        "規則上の可否は判定、求められた理由は適用規則を一節だけ書く。数値欄に転記した値を理由に再掲しない。"
+        "条件・例外そのものに値や境界が必要なら保つ。対応する要求がなければ空文字。"
+    )
+
+    def requested_answer(self, question: str | None) -> str:
+        if self.requested_phrase is None:
+            return ""
+        _check_requested_phrase(self.requested_phrase, question)
+        return self.short_answer.strip()
+
+
+class ComparisonValue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    number: str = Field(
+        min_length=1, description="比較表に載せる数値の表記。桁・小数部を保ち、単位は列名に置く。条件や範囲を伴う値は短句で記す。"
+    )
+    sources: list[str] = Field(description="比較した対象のこの値を示す原文ラベル。")
+
+
+class EvidenceGap(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    requested_phrase: str = Field(min_length=1, description="資料で確定できない具体的な属性を尋ねた原質問の語句。")
+    conclusion: str = Field(min_length=1, description="その属性が資料では不明という短い判断。理由は次の欄に書く。")
+    missing_basis: str = Field(min_length=1, description="その判断の理由。問われた値を決める情報が資料にどう欠けているかを一節で。")
+    sources: list[str] = Field(description="その限界を示す原文ラベル。")
+
+
+def _cell_text(cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None) -> str:
+    if isinstance(cell, EvidenceGap):
+        _check_requested_phrase(cell.requested_phrase, question)
+        return f"{cell.conclusion}（{cell.missing_basis}）" + "".join(dict.fromkeys(cell.sources))
+    # 同じセルで一致する短答は一度だけ示し、その判断を支える出典はすべて残す。
+    sources_by_text: dict[str, list[str]] = {}
+    for fact in cell:
+        text = fact.number if isinstance(fact, ComparisonValue) else fact.requested_answer(question)
+        if text:
+            sources_by_text.setdefault(text, []).extend(fact.sources)
+    return " ".join(text + "".join(dict.fromkeys(sources)) for text, sources in sources_by_text.items())
 
 
 class AnswerRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    label: str = Field(description="質問で尋ねられた項目・対象の短い行名。数値比較の適用範囲は行名だけに添える。")
-    cells: list[list[AnswerFact]] = Field(
+    label: str = Field(
+        description="質問で尋ねられた項目・対象の短い行名。根拠にある複数の規則から値を選んだ場合は、"
+        "選んだ版・区分などその値の適用範囲を該当する行名か見出しに一度明記する。範囲の説明文は添えない。"
+    )
+    cells: list[EvidenceGap | list[AnswerFact | ComparisonValue]] = Field(
         description=(
-            "二列目から順に、各セルを事実の配列で埋める。複数列の先頭列は label。段落と一列表は一セル。"
-            "その対象に問われていない欄は空配列。条件と例外は判定に必要なものを残す。"
+            "二列目から順に、その属性を資料で確定できるかに応じてセルの型を選ぶ。"
+            "未確定なら conclusion と missing_basis の一組で完結する。確定できる場合は根拠のある短句の配列、数値比較は number。"
+            "行名は label、段落と一列表は一セル。該当しない欄は空配列。"
         )
     )
 
@@ -74,27 +131,24 @@ class AnswerTableBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     headers: list[str] = Field(
-        description="数値比較は比較対象ごとに一行、各測定項目を列とする。対象の適用範囲は行名に一度だけ添える。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
+        description="数値比較は適用の可否を尋ねられた対象も独立した一行にし、その対象の値を測定項目の各列に入れる。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
     )
     rows: list[AnswerRow] = Field(
         min_length=1,
         description=(
-            "質問から求める項目名を拾い、それだけを埋める。見出しなしは一行一セル。単純な可否の答えは「可」か「不可」の一語で止める。不可の後に禁止文を添えない。条件付きなら条件を添える。"
-            "複数項目の断定を尋ねたときは各項目に直接答える。資料で決まらない欄は「不明（不足する情報）」で完結し、別の属性の規則で埋めない。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
+            "行名は原質問で求められた具体的な属性。資料で何を確定できるかは属性ごとに一行で答え、全体の可否や不明点をまとめ直す行は作らない。見出しなしは一行一セル。"
+            "規則上の許可・禁止は「可」か「不可」で完結させ、同じ許可文・禁止文を添えない。条件付きならその条件を添える。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
             "特定対象の可否・理由も尋ねられたら専用の列を設け、該当行だけに制約を書く。他の行は空欄。必要な条件・否定・例外を該当するセルに含める。"
         ),
     )
 
-    def markdown(self) -> str:
+    def markdown(self, question: str | None) -> str:
         rows = []
+        value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
         for row in self.rows:
-            value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
             if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
-            values = [
-                " ".join(fact.text.strip() + "".join(dict.fromkeys(fact.sources)) for fact in cell if fact.required and fact.text.strip())
-                for cell in row.cells
-            ]
+            values = [_cell_text(cell, question) for cell in row.cells]
             if not any(values):
                 continue
             cells = [row.label, *values] if len(self.headers) > 1 else values
@@ -111,6 +165,7 @@ class FullAnswerWire(BaseModel):
     _provider_output_text: str | None = PrivateAttr(default=None)
     _uses_unit_ids = True
     _uses_full_answer = True
+    _original_question: ClassVar[str | None] = None
 
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
     answer_body: str = Field(
@@ -126,7 +181,7 @@ class FullAnswerWire(BaseModel):
     @classmethod
     def render_body(cls, value: Any) -> Any:
         # モデルには構造化した入力を示し、保存済みの文字列や段落の再検証には従来の本文を使う。
-        return AnswerTableBody.model_validate(value).markdown() if isinstance(value, dict) else value
+        return AnswerTableBody.model_validate(value).markdown(cls._original_question) if isinstance(value, dict) else value
 
     # 各値の定義はこの項目の説明だけに書き、生成の指示の Step では繰り返さない。adapter が説明を指示の最後の
     # Step にして全モデルに送る（#5230・#5238）。
@@ -218,7 +273,7 @@ def lacks_citation(body: str, response_kind: str, catalog: SentUnitCatalog) -> b
     return marker is not None and response_kind in CITED_RESPONSE_KINDS and marker.search(body) is None
 
 
-def full_answer_model(catalog: SentUnitCatalog) -> type[BaseModel]:
+def full_answer_model(catalog: SentUnitCatalog, *, question: str | None = None) -> type[BaseModel]:
     """引用は本文の印だけで受ける。印が指せるのは、この入力に実際に提示した根拠と単位だけ。
 
     資料で答えた種別（``answered``・``conditional``）の本文に印が 1 つも無ければ、形式の不合格として既存の再試行に
@@ -253,7 +308,9 @@ def full_answer_model(catalog: SentUnitCatalog) -> type[BaseModel]:
         "known_units": field_validator("answer_body")(known_units),
         "cites_evidence": model_validator(mode="after")(cites_evidence),
     }
-    return create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
+    model = create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
+    model._original_question = question
+    return model
 
 
 def canonical_full_answer(value: BaseModel, catalog: SentUnitCatalog) -> GroundedDraft:
