@@ -1237,6 +1237,7 @@
     "extrema_missing": "不足する行 {rows}",
     "extrema_conflicting": "値を一意に確認できない行 {rows}",
     "extrema_incomplete": "未確定",
+    "extrema_reason_missing": "原文には理由が記載されていません。",
     "extrema_explanation_missing": "追加の質問に答えられる記載を原文で確認できませんでした。",
     "all_paragraphs_failed": "回答を生成できませんでした。",
     "paragraph_generation_failed": "第{number}段落は生成できませんでした。",

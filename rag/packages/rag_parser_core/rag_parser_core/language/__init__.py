@@ -427,6 +427,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "extrema_missing",
         "extrema_conflicting",
         "extrema_incomplete",
+        "extrema_reason_missing",
         "extrema_explanation_missing",
         "all_paragraphs_failed",
         "paragraph_generation_failed",

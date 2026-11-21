@@ -853,6 +853,8 @@ export const ja = {
   "settings.language.field.extrema_missing.help": "比較に必要な行が見つからない場合に表示します。{rows} が行番号に置き換わります。",
   "settings.language.field.extrema_conflicting": "値を確認できない行の案内",
   "settings.language.field.extrema_conflicting.help": "同じ行の値が食い違うなど、一意に決まらない場合に表示します。{rows} が行番号に置き換わります。",
+  "settings.language.field.extrema_reason_missing": "原文に理由の記載がない場合の案内",
+  "settings.language.field.extrema_reason_missing.help": "分割読取が完了し、理由を記した原文が見つからなかった場合に表示します。",
   "settings.language.field.extrema_explanation_missing": "追加要求の根拠がない場合の案内",
   "settings.language.field.extrema_explanation_missing.help": "数値は確認できても、追加で尋ねられた事項の根拠を確認できなかった場合に表示します。",
   "settings.language.field.all_paragraphs_failed": "全段落の生成失敗の案内",
@@ -3814,6 +3816,7 @@ export const ja = {
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ システムプロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.batchReading": "根拠を分割して読み、引用付きの回答候補を作る指示（単回の容量を超える場合）",
+  "settings.answerPrompts.part.statedReason": "比較結果の理由が明記された原文を選ぶ指示",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
