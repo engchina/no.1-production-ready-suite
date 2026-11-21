@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from rag_parser_core.language import LanguagePack, builtin_pack, per_pack
 
-
 LEGACY_UNVERIFIED_SECTION = "回答に未反映の関連章節"
 
 
