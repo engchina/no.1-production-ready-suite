@@ -3816,6 +3816,7 @@ export const ja = {
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ システムプロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.batchReading": "根拠を分割して読み、引用付きの回答候補を作る指示（単回の容量を超える場合）",
+  "settings.answerPrompts.part.statedReason": "比較結果の理由が明記された原文を選ぶ指示",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",

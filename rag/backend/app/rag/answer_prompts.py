@@ -203,6 +203,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "generation",
         (
             ("batchReading", "rag_engine.generation.batched_evidence:BATCH_READING_PROMPT"),
+            ("statedReason", "rag_engine.generation.batched_evidence:STATED_REASON_PROMPT"),
             ("instruction", "rag_engine.generation.dependency_review:SELECTION_PROMPT"),
             ("rules", "rag_engine.generation.dependency_review:REVIEW_PROMPT"),
             ("documentSystem", "rag_engine.generation.dependency_review:PLAN_PROMPT"),
