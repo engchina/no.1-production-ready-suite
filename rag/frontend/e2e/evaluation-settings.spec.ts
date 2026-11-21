@@ -22,6 +22,10 @@ for (const viewport of [
     await page.goto("/settings/evaluation");
     await expect(page.getByText(/合否に使う指標は、MRR が 80%、それ以外が 100%/)).toBeVisible();
 
+    await expect(page.getByText(
+      "検索 2 項目・回答 1 項目の三指標です。正解の根拠と、標準回答や必須要点を用意します。標準回答には期待する答えの結論・数値・手順を書きます。資料に答えがない場合、標準回答に期待する返答を書きます（例：「資料に記載がないため回答できません」）。必要な評価情報がない指標は未評価となり、0 点や合格にはしません。",
+      { exact: true }
+    )).toBeVisible();
     await expect(page.getByRole("main")).not.toContainText("ほかの三指標");
     await expect(page.getByRole("heading", { name: "評価の基準", exact: true, level: 1 })).toBeVisible();
     // 基準は標準・厳格の 2 つだけ(#591)。
