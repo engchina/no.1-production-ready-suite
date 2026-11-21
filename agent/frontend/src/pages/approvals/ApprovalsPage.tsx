@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CheckCheck, History, RefreshCw, X } from "lucide-react";
 import {
+  notifyRefreshSuccess,
   Banner,
   ButtonLink,
   Card,
@@ -349,9 +350,10 @@ export function ApprovalsPage() {
             icon: RefreshCw,
             loading: manualRefresh.pending,
             onClick: () =>
-              void manualRefresh.track(async () => {
-                await (isList ? approvals.refetch() : detail.refetch());
-              }),
+              void manualRefresh.track(() => notifyRefreshSuccess(
+                t("common.action.refreshed"),
+                isList ? approvals.refetch() : detail.refetch(),
+              )),
           },
         ]}
       />

@@ -2,6 +2,7 @@ import { KeyRound, RefreshCw, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import {
+  notifyRefreshSuccess,
   Button,
   StatusBadge,
   Banner,
@@ -74,7 +75,7 @@ export function SelectAiCredentialCard() {
   const manualRefresh = useActionPending();
   const refresh = () => {
     setConfirmation("");
-    return manualRefresh.track(() => status.refetch());
+    return manualRefresh.track(() => notifyRefreshSuccess(t("common.action.refreshed"), status.refetch()));
   };
 
   const resetFeedback = () => {

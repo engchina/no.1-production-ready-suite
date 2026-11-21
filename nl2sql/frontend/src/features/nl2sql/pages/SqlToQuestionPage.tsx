@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
 import {
+  toast,
   Button,
   EmptyState,
   PageHeader,
@@ -125,9 +126,11 @@ export function SqlToQuestionPage() {
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   // 読込中・エラー表示の初期化は呼び出し側で行う（effect から呼ぶときは render 中に行う）。
-  const requestReferenceData = useCallback(async () => {
+  const announceDetail = useRef<number | null>(null);
+  const requestReferenceData = useCallback(async (announce = false) => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
+    announceDetail.current = null;
     // 業務プロファイルを選んだときは、続く詳細の読込（下の effect）が読込中の表示を終える。
     // ここで先に終えると、詳細の読込の前に「参照できる表がありません」が一瞬出る。
     let detailPending = false;
@@ -143,6 +146,7 @@ export function SqlToQuestionPage() {
         if (!profilePage.items.length) {
           setLoadError("");
           setLoadUpdatedAt(Date.now());
+          if (announce) toast.success(t("common.action.refreshed"));
         }
         // 保存した業務プロファイルが一覧（この画面の選択肢）に無い（削除・アーカイブ・利用権限の解除）ときは、
         // 先頭のプロファイルへ切り替える。残すと usage-context が 404 / 403 になり、再読込でも抜けられない（#913）。
@@ -153,7 +157,10 @@ export function SqlToQuestionPage() {
         );
         // 一覧が空でなければ、必ずどれかを選ぶ（詳細の読込が続く）。
         detailPending = profilePage.items.length > 0;
-        setReferenceRefreshVersion((current) => current + 1);
+        if (announce && detailPending) {
+          announceDetail.current = sequence;
+        }
+        setReferenceRefreshVersion(sequence);
       }).catch((err: unknown) => {
         if (isAbortError(err)) {
           return;
@@ -167,7 +174,7 @@ export function SqlToQuestionPage() {
   const loadReferenceData = useCallback((origin: "header" | "notice" | null) => {
     setLoading(true);
     setRefreshOrigin(origin);
-    return requestReferenceData();
+    return requestReferenceData(origin !== null);
   }, [requestReferenceData]);
 
   // Profile が未選択になったら、詳細を render 中に消す（読込は下の effect で行う）。
@@ -180,6 +187,8 @@ export function SqlToQuestionPage() {
   useEffect(() => {
     // 業務プロファイルの一覧で選択を確かめてから詳細を読む（一覧の読込前は、保存した ID が今も使えるか分からない。#913）。
     if (!selectedProfileId || referenceRefreshVersion === 0) return;
+    const announce = announceDetail.current === referenceRefreshVersion;
+    announceDetail.current = null;
     const sequence = detailSequence.current + 1;
     detailSequence.current = sequence;
     void runScopedRequest(async (signal) => {
@@ -221,6 +230,7 @@ export function SqlToQuestionPage() {
         setSchemaLoadMoreError("");
         setLoadUpdatedAt(Date.now());
         setLoadError("");
+        if (announce) toast.success(t("common.action.refreshed"));
       } catch (error) {
         if (!isAbortError(error) && sequence === detailSequence.current) {
           setLoadError(actionableError(error, t("sqlToQuestion.error.load")));

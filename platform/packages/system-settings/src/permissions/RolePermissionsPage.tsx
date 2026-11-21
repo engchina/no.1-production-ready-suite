@@ -507,10 +507,10 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
         setTargetLoadWarnings(
           Object.fromEntries(targetRows.filter((row) => row.warning).map((row) => [row.key, row.warning])),
         );
+        if (announce && targetRows.every((row) => !row.warning)) {
+          toast.success(m.refreshed);
+        }
       });
-      if (announce && sequence === loadSequence.current) {
-        toast.success(m.refreshed);
-      }
     } catch (cause) {
       if (isAbortError(cause)) return;
       const nextError = apiErrorMessage(cause, m.loadError);

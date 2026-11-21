@@ -66,7 +66,7 @@ export function GlobalRulesPage() {
       setLastLoadedAt(new Date().toISOString());
       setLoadFailed(false);
       if (announce) {
-        toast.success(t("globalRules.message.serverLoaded"));
+        toast.success(t("common.action.refreshed"));
       }
     } catch (err) {
       if (isAbortError(err) || controller.signal.aborted || sequence !== loadSequence.current) {

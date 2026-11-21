@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  notifyRefreshSuccess,
   PageBody,
   Tabs,
   PageHeader,
@@ -223,7 +224,7 @@ export function FeedbackClient() {
         wide
         title={t("feedback.page.title")}
         subtitle={t("feedback.page.subtitle")}
-        actions={selectedId ? [] : [{ id: "refresh", kind: "utility", label: t("feedback.page.refresh"), icon: RefreshCw, loading: query.isFetching, onClick: () => void query.refetch() }]}
+        actions={selectedId ? [] : [{ id: "refresh", kind: "utility", label: t("feedback.page.refresh"), icon: RefreshCw, loading: query.isFetching, onClick: () => void notifyRefreshSuccess(t("common.action.refreshed"), query.refetch()) }]}
         // 詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
         back={
           selectedId

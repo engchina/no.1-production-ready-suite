@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Database, HardDrive, RefreshCw, Server, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import {
+  notifyRefreshSuccess,
   Banner,
   CombinedBanner,
   ButtonLink,
@@ -60,7 +61,9 @@ export function RuntimesPage() {
             label: t("runtime.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => Promise.all([status.refetch(), storage.refetch()])),
+            onClick: () => void manualRefresh.track(() => notifyRefreshSuccess(
+              t("common.action.refreshed"), status.refetch(), storage.refetch(),
+            )),
           },
         ]}
       />

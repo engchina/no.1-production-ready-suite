@@ -10274,11 +10274,14 @@ test("sql to question page shows a reserved loading state and retries reference-
 
   const errorBanner = page.getByRole("alert");
   await expect(errorBanner).toContainText("接続状態と入力内容を確認して再試行してください。");
+  const completed = page.getByText("最新の状態に更新しました。", { exact: true });
+  await expect(completed).toHaveCount(0);
   failObjectRequests = false;
   await errorBanner.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(errorBanner).toHaveCount(0);
   await expect(page.getByText("請求情報")).toBeVisible();
   await expect(page.getByTestId("sql-to-question-table-count")).toContainText("全 1 件");
+  await expect(completed).toHaveCount(1);
   await expectNoHorizontalScroll(page);
 });
 
@@ -12220,7 +12223,7 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語26" })).toBeVisible();
 
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
-  await expect(page.getByText("サーバーの最新内容を読み込みました。")).toBeVisible();
+  await expect(page.getByText("最新の状態に更新しました。")).toBeVisible();
   // ページ番号は作業状態に残すので、再読み込みしても同じページのまま（#1891）。
   await expect(page.getByTestId("glossary-terms-pagination")).toContainText("2 / 3 ページ");
   await expect(page.getByTestId("glossary-rules-panel-heading-file-input")).toHaveAttribute(
@@ -18086,7 +18089,7 @@ for (const status of ["empty", "completed", "partial", "failed", "no_data"] as c
     const refresh = panel.getByRole("button", { name: "生成状況の最新情報を取得" });
     await refresh.focus();
     await page.keyboard.press("Enter");
-    await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
+    await expect(page.getByText(/生成状況に変更はありません/)).toBeVisible();
     expect(reads).toBe(before + 1);
     expect(writes).toBe(0);
     await expectNoHorizontalScroll(page);
@@ -18179,7 +18182,7 @@ for (const outcome of ["unknown", "unavailable"] as const) {
     fail = false;
     run = syntheticRunFixture("running");
     await panel.getByRole("button", { name: "生成状況の最新情報を取得" }).click();
-    await expect(panel.getByText(/生成状況を更新しました|生成状況に変更はありません/)).toBeVisible();
+    await expect(page.getByText(/生成状況を更新しました|生成状況に変更はありません/)).toBeVisible();
     await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
     run = syntheticRunFixture("completed");
     await page.clock.fastForward(2_000);
@@ -18260,7 +18263,7 @@ test("synthetic manual refresh shows pending unchanged updated and retry feedbac
   const panel = page.getByTestId("synthetic-run-panel");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
   const checked = await panel.getByTestId("synthetic-run-checked").textContent();
-  await expect(panel.getByText(/最新の状況を取得しました/)).toHaveCount(0);
+  await expect(page.getByText("最新の状態に更新しました。", { exact: true })).toHaveCount(0);
   gate = createRequestGate();
   await panel.getByRole("button", { name: "生成状況の最新情報を取得" }).focus();
   await page.keyboard.press("Enter");
@@ -18273,7 +18276,7 @@ test("synthetic manual refresh shows pending unchanged updated and retry feedbac
   await page.screenshot({ path: testInfo.outputPath("synthetic-refresh-pending.png") });
   gate.release();
   gate = null;
-  await expect(panel.getByRole("status").filter({ hasText: /生成状況に変更はありません/ })).toContainText(/\d{2}:\d{2}:\d{2}/);
+  await expect(page.getByRole("status").filter({ hasText: /生成状況に変更はありません/ })).toContainText(/\d{2}:\d{2}:\d{2}/);
   await expect(panel.getByTestId("synthetic-run-checked")).toHaveText(checked!);
   await expect(panel.getByRole("button", { name: "生成状況の最新情報を取得" })).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("synthetic-refresh-unchanged.png") });
@@ -18285,7 +18288,7 @@ test("synthetic manual refresh shows pending unchanged updated and retry feedbac
   fail = false;
   run = { ...run, targets: [{ ...run.targets[0]!, loaded_rows: 3 }] };
   await panel.getByRole("button", { name: "生成状況の最新情報を取得" }).click();
-  await expect(panel.getByRole("status").filter({ hasText: /生成状況を更新しました/ })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: /生成状況を更新しました/ })).toBeVisible();
   await expect(panel.getByTestId("synthetic-run-targets")).toContainText("今回の追加件数: 3 件");
   await expect(panel.getByRole("alert")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
@@ -18317,9 +18320,9 @@ test("synthetic manual refresh discards feedback after switching history", async
   gate.release();
   gate = null;
   await expect(panel.getByRole("button", { name: "生成状況の最新情報を取得" })).toBeEnabled();
-  await expect(panel.getByText(/最新の状況を取得しました/)).toHaveCount(0);
+  await expect(page.getByText("最新の状態に更新しました。", { exact: true })).toHaveCount(0);
   await panel.getByRole("button", { name: "生成状況の最新情報を取得" }).click();
-  await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
+  await expect(page.getByText(/生成状況に変更はありません/)).toBeVisible();
 });
 
 test("synthetic history keeps finished runs after the review window and reads expired previews only", async ({ page }, testInfo) => {

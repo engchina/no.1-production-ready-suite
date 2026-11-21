@@ -407,11 +407,17 @@ test("自動更新の失敗では一覧と選択を残し、失敗を知らせ�
   await page.getByRole("checkbox", { name: "この行を選択" }).nth(1).check();
   await expect(page.getByTestId("file-list-bulk-actions")).toContainText("1 件選択中");
 
+  const refreshed = page.getByText("最新の状態に更新しました。", { exact: true });
+  await expect(refreshed).toHaveCount(0);
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
+  await expect(refreshed).toHaveCount(1);
+
   failing = true;
   await page.clock.runFor(30_000);
 
   // 前回取得した一覧と選択は残し、全面のエラーに置き換えない。
   const warning = page.getByTestId("file-list-refresh-error");
+  await expect(refreshed).toHaveCount(0);
   await expect(warning).toContainText("時点の内容を表示しています");
   await expect(warning).toContainText("DB に接続できません。");
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
