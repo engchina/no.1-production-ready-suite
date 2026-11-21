@@ -7,6 +7,7 @@ import {
   recipeIsActive,
   recipeLayerRebuildSummary,
   recipeLayerStatuses,
+  recipeReprocessingReason,
   resolveSelectedRecipe,
 } from "./DocumentRecipeManager.logic";
 import type {
@@ -72,6 +73,26 @@ function recipe(
     finished_at: null,
   };
 }
+
+describe("recipeReprocessingReason", () => {
+  it("既知の変更は設定の表示名で示し、未知の項目は件数だけを示す", () => {
+    const reason = recipeReprocessingReason({
+      ...recipe("recipe-1", 1),
+      reprocessing_changed_fields: ["chunk_delimiter", "chunk_delimiter", "entity_name_columns", "unknown_field"],
+    });
+    expect(reason).toContain("変更された設定は「分割符、名前の列、ほか1項目」です。");
+    expect(reason).not.toContain("unknown_field");
+  });
+
+  it("比較元の版や変更項目名が分からない場合は現在の設定版だけを示す", () => {
+    const reason = recipeReprocessingReason({
+      ...recipe("recipe-1", 1),
+      materialized_revision: null,
+      reprocessing_changed_fields: ["unknown_field"],
+    });
+    expect(reason).toContain("変更された設定項目を記録から特定できません。現在の設定は第1版です。");
+  });
+});
 
 describe("DocumentRecipeManager logic", () => {
   it("URL の recipe が有効なら選択を保持し、無効ならレシピ1へ戻す", () => {

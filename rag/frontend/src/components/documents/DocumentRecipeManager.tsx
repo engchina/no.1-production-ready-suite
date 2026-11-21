@@ -25,6 +25,7 @@ import {
   canDeleteRecipe,
   recipeConfigLocked,
   recipeIsActive,
+  recipeReprocessingReason,
   recipeLayerRebuildSummary,
   recipeLayerStatuses,
   resolveSelectedRecipe,
@@ -51,6 +52,7 @@ import {
   FormStatus,
   INFORMATION_CARD_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
+  InfoTip,
   ObjectActionBar,
   RadioOptionGroup,
   SelectField,
@@ -412,8 +414,11 @@ export function DocumentRecipeManager({
               {/* 実行中の工程のスピナーは下の工程の丸が出す（同じ処理のスピナーは 1 つ。#416）。 */}
               <RecipeStatusBadge recipe={selected} spin={false} />
               {selected.needs_reprocessing ? (
-                <span data-surface-tint="warning" className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
-                  {t("documents.recipes.reprocess")}
+                <span className="inline-flex items-center gap-1">
+                  <span data-surface-tint="warning" className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
+                    {t("documents.recipes.reprocess")}
+                  </span>
+                  <InfoTip label={t("documents.recipes.reprocess.info")} content={recipeReprocessingReason(selected)} />
                 </span>
               ) : null}
             </div>

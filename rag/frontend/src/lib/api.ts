@@ -1499,6 +1499,7 @@ export interface DocumentRecipeView {
   materialized_revision: number | null;
   searchable: boolean;
   needs_reprocessing: boolean;
+  reprocessing_changed_fields?: string[];
   error_message: string | null;
   steps: DocumentRecipeStep[];
   created_at: string;

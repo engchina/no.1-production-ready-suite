@@ -1,7 +1,7 @@
 import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
 
-import type { DocumentProcessingConfig, DocumentRecipeStep } from "../src/lib/api";
+import type { DocumentProcessingConfig, DocumentRecipeStep, DocumentRecipeView } from "../src/lib/api";
 import { expectNoPageOverflow, mockAuthUser, mockDatabaseReady, mockLocalAuth, openRecipeActionMenu } from "./_helpers";
 
 const documentDetail = {
@@ -101,6 +101,7 @@ async function mockWorkspace(
     putFails?: boolean;
     previewFails?: boolean;
     recipeCount?: number;
+    reprocessing?: Pick<DocumentRecipeView, "config_revision" | "materialized_revision" | "searchable" | "reprocessing_changed_fields">;
     /** プレビュー結果の chunk に足す metadata(例: 親子階層の親の ID と本文)。 */
     previewChunkMetadata?: Record<string, string>;
     /** 保存済みの chunk を 1 件返し、その metadata に足す値(例: 以前の版の縮退の印)。 */
@@ -138,7 +139,8 @@ async function mockWorkspace(
       config_revision: configRevision,
       materialized_revision: status === "INDEXED" ? 1 : null,
       searchable: status === "INDEXED",
-      needs_reprocessing: false,
+      needs_reprocessing: Boolean(options.reprocessing),
+      ...options.reprocessing,
       error_message: null,
       steps: recipeSteps(status),
       created_at: "2026-06-15T00:00:00Z",
@@ -338,6 +340,37 @@ async function mockWorkspace(
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+});
+
+test("再処理が必要な理由をクリックとキーボードで確認できる", { tag: "@responsive" }, async ({ page }) => {
+  await mockWorkspace(page, { reprocessing: {
+    config_revision: 1, materialized_revision: 1, searchable: true,
+    reprocessing_changed_fields: ["preprocess_profile", "parser_adapter_backend", "chunking_strategy"],
+  } });
+  await page.goto("/documents/doc-1");
+  const info = page.getByRole("button", { name: "再処理が必要な理由" });
+  const message = "索引の作成後に、このレシピに適用される「ファイル準備、文書解析、文書分割」の設定が変わりました。現在の索引で引き続き検索できます。新しい設定は再処理で反映されます。";
+  await expect(info).toHaveAccessibleDescription(message);
+  await info.click();
+  const tip = page.getByRole("tooltip").filter({ hasText: message });
+  await expect(tip).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(tip).toBeHidden();
+  await info.focus();
+  await page.keyboard.press("Enter");
+  await expect(tip).toBeVisible();
+  const box = await tip.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual((await page.viewportSize())!.width);
+});
+
+test("旧形式の再処理情報では版の差と現在の検索状態を伝える", async ({ page }) => {
+  await mockWorkspace(page, { reprocessing: { config_revision: 4, materialized_revision: 3, searchable: false } });
+  await page.goto("/documents/doc-1");
+  const info = page.getByRole("button", { name: "再処理が必要な理由" });
+  await expect(info).toHaveAccessibleDescription(
+    "変更された設定項目を記録から特定できません。処理結果は設定の第3版で作られ、現在の設定は第4版です。現在、このレシピは検索対象外です。"
+  );
 });
 
 test("文書処理設定を保存し、手動再処理を案内する", async ({ page }) => {
