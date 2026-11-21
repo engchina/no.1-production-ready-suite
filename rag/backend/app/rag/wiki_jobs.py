@@ -531,6 +531,7 @@ class WikiJobs:
                         authorize=authorize,
                         checkpoint=checkpoint,
                         caller=caller,
+                        measure=getattr(model, "measure_text_input", None),
                     )
                 await authorize()
                 phase = "publish_links"

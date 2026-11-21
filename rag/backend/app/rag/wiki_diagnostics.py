@@ -3,7 +3,13 @@
 from json import JSONDecodeError
 from typing import Any
 
-from pr_backend_core.bounded_calls import BoundedCallError, classify_error
+from pr_backend_core.bounded_calls import (
+    BoundedCallError,
+    ErrorKind,
+    classify_error,
+    network_failure_cause,
+)
+from pr_backend_core.generation_input import GenerationInputLimitError
 from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 from rag_engine.resources.structured_failures import structured_failure_details
@@ -51,6 +57,8 @@ def failure_fields(
     }
     if isinstance(error, BoundedCallError):
         fields["attempts"] = error.attempts
+    if classified.kind == ErrorKind.NETWORK and (network_cause := network_failure_cause(error)):
+        fields["network_cause"] = network_cause
     schema = None
     cause: BaseException | None = error
     for _ in range(4):
@@ -60,6 +68,10 @@ def failure_fields(
             fields["unit_id_hash"] = cause.unit_id_hash
         if isinstance(cause, JSONDecodeError):
             fields.update(json_line=cause.lineno, json_column=cause.colno)
+        if isinstance(cause, GenerationInputLimitError) and "estimated_input_tokens" not in fields:
+            fields.update(
+                estimated_input_tokens=cause.estimated_tokens, input_limit_tokens=cause.limit_tokens
+            )
         if isinstance(cause, ValidationError):
             schema = _MODELS.get(cause.title.removeprefix("Scoped"))
             break

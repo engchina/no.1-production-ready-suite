@@ -1,6 +1,7 @@
 """背景構築の実行器を、合成の保存先・モデルで確認する。"""
 
 import asyncio
+import errno
 import json
 from dataclasses import replace
 from typing import Any
@@ -15,10 +16,22 @@ from app.clients.wiki_store import WikiSnapshot
 from app.config import Settings
 from app.rag import wiki_jobs as module
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
+from app.rag.wiki_diagnostics import failure_fields
 from app.rag.wiki_models import fingerprint
 from app.rag.wiki_paragraphs import Paragraph, SentenceTooLarge
 from app.rag.wiki_prepare import WikiRequestBuilder
 from tests.test_wiki_compiler import Model, units
+
+
+def test_network_diagnostics_report_the_connection_cause_without_the_address() -> None:
+    try:
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "private-host")
+    except ConnectionRefusedError as cause:
+        error = httpx.ConnectError("private-gateway")
+        error.__cause__ = cause
+    fields = failure_fields(error, "doc-a", "generate_pages", "rev-a")
+    assert (fields["error_kind"], fields["network_cause"]) == ("network", "refused")
+    assert "private-" not in str(fields)
 
 
 @pytest.mark.parametrize("recovers", [False, True])
