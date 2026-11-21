@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from rag_parser_core.language import LanguagePack, per_pack
+from rag_parser_core.language import LanguagePack, builtin_pack, per_pack
 
 
 @dataclass(frozen=True)
@@ -98,6 +98,10 @@ def _build(pack: LanguagePack) -> AnswerLabels:
     def text(key: str) -> str:
         return pack.text("answer_labels", key)
 
+    unverified = text("unverified_section")
+    # 保存済みの言語資源が旧既定の見出しを持つ場合も、新しい回答には補読の見出しを使う。
+    if unverified == "回答に未反映の関連章節":
+        unverified = builtin_pack().text("answer_labels", "unverified_section")
     note = text("quote_only_note")
     note_sentences = tuple(sentence for sentence in re.split(r"(?<=。)", note) if sentence)
     page_head = re.escape(text("page_location").split("{", 1)[0])
@@ -120,7 +124,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         note,
         *note_sentences,
         text("gaps_section"),
-        text("unverified_section"),
+        unverified,
+        "回答に未反映の関連章節",
         text("deadline_section"),
         text("guide_notes_section"),
         text("table_above_note"),
@@ -131,7 +136,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         quote_only_section=text("quote_only_section"),
         quote_only_note=note,
         gaps_section=text("gaps_section"),
-        unverified_section=text("unverified_section"),
+        unverified_section=unverified,
         deadline_section=text("deadline_section"),
         confirmations_section=text("confirmations_section"),
         confirmation_only_summary=text("confirmation_only_summary"),

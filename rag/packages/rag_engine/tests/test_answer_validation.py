@@ -30,7 +30,7 @@ def test_unverified_section_titles_match_the_builtin_language_pack() -> None:
     pack = builtin_pack()
     titles = [pack.text("answer_labels", key) for key in ("gaps_section", "unverified_section", "deadline_section")]
 
-    assert vocabulary["unverified_section_titles"] == titles
+    assert vocabulary["unverified_section_titles"] == [*titles, "回答に未反映の関連章節"]
 
 
 def test_passage_ranges_locate_each_passage_in_the_answer() -> None:

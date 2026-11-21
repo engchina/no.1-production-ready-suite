@@ -47,6 +47,8 @@ from dataclasses import dataclass, field, replace
 from time import monotonic
 from typing import Any
 
+from rag_parser_core.language import current_pack
+
 from rag_engine.dependencies import report_degraded
 from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
@@ -85,16 +87,6 @@ STOP_SECTION_CHUNKS = "section_chunks"
 LIMIT_STOPS = frozenset({STOP_MAX_LEVELS, STOP_TOKEN_BUDGET, STOP_TIME_LIMIT})
 # 「回答に未反映の関連章節」に出す行の上限（超えた分は件数の 1 行にする。#2828）。
 MAX_UNREAD_LINES = 10
-# 「回答に未反映の関連章節」の各行の理由（利用者の言葉。#2040）。段・入力・chunk の上限は
-# 利用者から見て同じ意味なので「読み込み量の上限」にまとめる。上限の区別は工程の記録（``_SECTION_STOP_LABELS``）と
-# 回答の診断の ``section_expansion.unread[].reason`` に残す。
-_READ_LIMIT_LABEL = "読み込み量の上限"
-_LIMIT_LABELS = {
-    STOP_MAX_LEVELS: _READ_LIMIT_LABEL,
-    STOP_TOKEN_BUDGET: _READ_LIMIT_LABEL,
-    STOP_TIME_LIMIT: "回答時間の上限",
-    STOP_SECTION_CHUNKS: _READ_LIMIT_LABEL,
-}
 
 
 @dataclass(frozen=True)
@@ -162,11 +154,16 @@ class UnreadSection:
 
     def gap_line(self) -> str:
         """本文の行。影響（回答に未反映）と理由を書き言葉で述べる（#2040）。"""
-        if self.reason == STOP_READ_ERROR:
-            return f"{self.label}は、原文を取得できなかったため未反映です。"
-        if self.reason == STOP_PARTIAL:
-            return f"{self.label}は、原文の一部だけを取得したため未確認の範囲が残っています。"
-        return f"{self.label}は、{_LIMIT_LABELS.get(self.reason, _READ_LIMIT_LABEL)}に達したため未反映です。"
+        pack = current_pack()
+        if self.reason == STOP_TIME_LIMIT:
+            key = "section_skip_time"
+        elif self.reason == STOP_READ_ERROR:
+            key = "section_read_error"
+        elif self.reason == STOP_PARTIAL:
+            key = "section_read_partial"
+        else:
+            key = "section_skip_volume"
+        return pack.text("answer_labels", key).format(label=self.label)
 
     def to_payload(self) -> dict[str, Any]:
         # line は本文の行と同じ文。画面は本文の行をこれで引き当て、その行に原文を開く操作を付ける（#2040）。
@@ -252,7 +249,7 @@ def answer_unread_view(
     limit = max(1, int(max_lines))
     overflow = max(0, len(lines) - limit)
     if overflow:
-        lines = [*lines[:limit], f"ほか {overflow} 件の関連章節も未反映です。"]
+        lines = [*lines[:limit], current_pack().text("answer_labels", "section_overflow").format(count=overflow)]
     return UnreadView(lines=tuple(lines), hidden=tuple(hidden), overflow=overflow)
 
 
