@@ -530,7 +530,7 @@ def test_table_cell_citation_keeps_the_value_without_a_second_explanation():
 def test_structured_table_excludes_competing_prose_and_checks_its_labels():
     units, unit = catalog()
     model = full_answer_model(units)
-    cells = {"headers": ["対象", "値"], "rows": [{"label": "A（共通）", "sources": [f"[{unit}]"], "cells": ["12"]}]}
+    cells = {"headers": ["対象", "値"], "rows": [{"required": True, "label": "A（共通）", "sources": [f"[{unit}]"], "cells": ["12"]}]}
     payload = {"answer_body": cells, "response_kind": "answered", "confidence": "high"}
     wire = model.model_validate(payload)
     assert wire.answer_body.startswith("| 対象")
@@ -556,7 +556,7 @@ def test_empty_structured_body_cannot_become_an_empty_success():
 
 def test_headerless_body_renders_prose_and_explicit_single_column_stays_a_table():
     units, unit = catalog()
-    body = {"headers": [], "rows": [{"label": "A（共通）", "sources": [f"[{unit}]"], "cells": ["説明。"]}]}
+    body = {"headers": [], "rows": [{"required": True, "label": "A（共通）", "sources": [f"[{unit}]"], "cells": ["説明。"]}]}
     wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
     assert wire.answer_body == f"説明。[{unit}]"
     body["headers"] = ["本文"]
@@ -578,8 +578,8 @@ def test_same_reference_is_displayed_once_per_passage_and_retained_in_next_passa
 def test_only_rows_bound_to_a_request_are_shown():
     units, unit = catalog()
     model = full_answer_model(units)
-    row = {"label": "項目Aの値", "cells": ["12"], "sources": [f"[{unit}]"]}
-    background = {**row, "label": None, "cells": ["別の項目"]}
+    row = {"required": True, "label": "項目Aの値", "cells": ["12"], "sources": [f"[{unit}]"]}
+    background = {**row, "required": False, "cells": ["別の項目"]}
     body = {"headers": [], "rows": [row, background]}
     payload = {"answer_body": body, "response_kind": "answered", "confidence": "high"}
     assert model.model_validate(payload).answer_body == f"12[{unit}]"

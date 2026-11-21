@@ -46,10 +46,10 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 class AnswerRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    label: str | None = Field(
+    label: str = Field(
         description=(
             "表示する行名。質問で尋ねられた項目・対象だけを短く名付ける。数値比較は対象名に適用範囲を添える。"
-            "他の行の答えの総括や、関連していても質問で尋ねられていない属性は null（表示しない）。"
+            "同じ語を含んでいても異なる属性は独立した行として扱う。"
         )
     )
     sources: list[str] = Field(
@@ -57,7 +57,15 @@ class AnswerRow(BaseModel):
     )
     cells: list[str] = Field(
         description=(
-            "行名に対する値のみ。複数列の表では先頭列は label なので、二列目から順に記入する。段落と一列表は一セル。引用は sources だけ。"
+            "行名に対する値のみ。複数列の表では先頭列は label なので、二列目から順に記入する。段落と一列表は一セル。"
+            "独立した別の事実を補足としてセルに混ぜず、別行で要否を判断する。引用は sources だけ。"
+        )
+    )
+
+    required: bool = Field(
+        description=(
+            "セルを埋めてから判断する。この行を取り除くと利用者の求めた値・判断・操作またはその必要条件・例外が欠ける場合だけ true。"
+            "項目ごとの判断で答えが揃う場合、その判断をまとめ直した総論は false。周辺知識や別属性の規則も false。"
         )
     )
 
@@ -82,7 +90,7 @@ class AnswerTableBody(BaseModel):
     def markdown(self) -> str:
         rows = []
         for row in self.rows:
-            if row.label is None:
+            if not row.required:
                 continue
             cells = [row.label, *row.cells] if len(self.headers) > 1 else list(row.cells)
             if len(cells) != (len(self.headers) or 1):
