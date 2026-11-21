@@ -8,10 +8,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from pr_backend_core.bounded_calls import Attempt, BoundedCaller
+from pr_backend_core.bounded_calls import (
+    Attempt,
+    BoundedCaller,
+    BoundedCallError,
+    ErrorKind,
+    classify_error,
+)
+from pr_backend_core.generation_input import CompleteInputMeasurement
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
 from rag_parser_core.oci_enterprise_ai import (
@@ -47,6 +54,11 @@ class WikiLinkDecision:
     target_unit_id: str
     relation: str
     reason: str
+
+
+LinkCheckpoint = Callable[
+    [Sequence[WikiLinkItem], Sequence[str], Sequence[WikiLinkDecision]], Awaitable[None]
+]
 
 
 def link_query_text(page: WikiPage) -> str:
@@ -100,29 +112,45 @@ async def judge_links(
     max_input_chars: int,
     document_names: Mapping[str, str],
     authorize: Callable[[], Awaitable[None]],
-    checkpoint: Callable[
-        [Sequence[WikiLinkItem], Sequence[str], Sequence[WikiLinkDecision]], Awaitable[None]
-    ],
+    checkpoint: LinkCheckpoint,
     system_prompt: str = WIKI_LINK_PROMPT,
     caller: BoundedCaller | None = None,
+    measure: Callable[..., CompleteInputMeasurement] | None = None,
 ) -> int:
     """起点を ``batch_size`` 件ずつ判定し、検証した結果をその都度 ``checkpoint`` に渡す。
 
     ``checkpoint`` は（判定した起点・候補の単位 ID・関連）を受け取り、判定した起点と候補の組の
-    関連を置き換える。入力が ``max_input_chars`` を超える組と、切断・JSON・schema の不正は起点を
-    二分して取り直し、単一の起点でも不正なら失敗にする（案内の構築と同じ。#4977）。
+    関連を置き換える。完全入力が上限を超える場合は起点、次にその候補を分ける。
+    同じ起点の候補を分けた場合、全候補の検証後にまとめて保存する。
     理由に残った短い ID は、``document_names``（文書 ID → 文書名）で作る見出しへ置き換えて
     保存する（#5514）。返す値はモデルの呼び出しの回数。
     """
     calls = 0
 
-    async def split(targets: Sequence[WikiLinkItem]) -> None:
+    async def split(targets: Sequence[WikiLinkItem], save: LinkCheckpoint) -> None:
         middle = len(targets) // 2
-        await batch(targets[:middle])
-        await batch(targets[middle:])
+        await batch(targets[:middle], save)
+        await batch(targets[middle:], save)
 
-    async def batch(targets: Sequence[WikiLinkItem]) -> None:
-        nonlocal calls
+    async def split_candidates(
+        item: WikiLinkItem, candidates: Sequence[WikiPage], save: LinkCheckpoint
+    ) -> None:
+        combined: list[WikiLinkDecision] = []
+
+        async def collect(
+            _items: Sequence[WikiLinkItem],
+            _ids: Sequence[str],
+            decisions: Sequence[WikiLinkDecision],
+        ) -> None:
+            combined.extend(decisions)
+
+        middle = len(candidates) // 2
+        for half in (candidates[:middle], candidates[middle:]):
+            await batch([replace(item, candidates=tuple(half))], collect)
+        await authorize()
+        await save([item], [page.unit.unit_id for page in candidates], combined)
+
+    async def batch(targets: Sequence[WikiLinkItem], save: LinkCheckpoint) -> None:
         if not targets:
             return
         handles = Handles()
@@ -143,12 +171,15 @@ async def judge_links(
         }
         context = json.dumps(data, ensure_ascii=False)
         if len(context) > max_input_chars and len(targets) > 1:
-            await split(targets)
+            await split(targets, save)
             return
-        await authorize()
+        response_schema = schema.model_json_schema()
 
         async def once(attempt: Attempt | None = None) -> str | None:
             # 出力の途切れは再試行せず、呼び出しの外で起点を二分する。
+            nonlocal calls
+            await authorize()
+            calls += 1
             try:
                 with sdk_retries_disabled():
                     return await async_call_with_model_purpose(
@@ -157,7 +188,7 @@ async def judge_links(
                         "",
                         context,
                         system_prompt=system_prompt,
-                        response_schema=schema.model_json_schema(),
+                        response_schema=response_schema,
                         response_schema_name="wiki_links",
                     )
             except EnterpriseAiIncompleteResponseError:
@@ -165,8 +196,21 @@ async def judge_links(
                     raise
                 return None
 
-        calls += 1
-        raw = await (caller.call(once, label="wiki_build") if caller else once())
+        try:
+            if measure is not None:
+                measure(
+                    "",
+                    context,
+                    system_prompt=system_prompt,
+                    response_schema=response_schema,
+                    response_schema_name="wiki_links",
+                ).validate()
+            raw = await (caller.call(once, label="wiki_build") if caller else once())
+        except Exception as error:
+            kind = error.kind if isinstance(error, BoundedCallError) else classify_error(error).kind
+            if kind != ErrorKind.TOO_LARGE or (len(targets) == 1 and len(candidates) <= 1):
+                raise
+            raw = None
         output: WikiLinkJudgments | None = None
         if raw is not None:
             try:
@@ -177,7 +221,10 @@ async def judge_links(
                 if len(targets) == 1:
                     raise
         if output is None:
-            await split(targets)
+            if len(targets) == 1:
+                await split_candidates(targets[0], list(candidates.values()), save)
+            else:
+                await split(targets, save)
             return
         headings = {
             **{handle: _heading(item.source, document_names) for handle, item in sources.items()},
@@ -205,10 +252,10 @@ async def judge_links(
             for link in entry.links
         ]
         await authorize()
-        await checkpoint(targets, list(candidates), decisions)
+        await save(targets, list(candidates), decisions)
 
     if batch_size < 1:
         return 0
     for offset in range(0, len(items), batch_size):
-        await batch(items[offset : offset + batch_size])
+        await batch(items[offset : offset + batch_size], checkpoint)
     return calls

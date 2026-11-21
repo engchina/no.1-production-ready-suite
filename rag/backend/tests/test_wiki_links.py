@@ -6,14 +6,21 @@ DB・外部モデルは使わない。実 Oracle の保存と無効化は test_w
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
+from pr_backend_core.bounded_calls import BoundedCaller
+from pr_backend_core.generation_input import GenerationInputLimitError
 from pydantic import ValidationError
+from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiConfig, measure_llm_request
 
 from app.config import Settings
 from app.rag import wiki_jobs as module
 from app.rag.request_context import AuditRequestContext
+from app.rag.wiki_diagnostics import failure_fields
 from app.rag.wiki_links import (
     WIKI_LINK_REASON_BYTES,
     WikiLinkItem,
@@ -79,6 +86,102 @@ class LinkModel:
 
 async def allow() -> None:
     return None
+
+
+async def test_complete_input_budget_keeps_all_candidates_and_checkpoints_whole_sources() -> None:
+    config = OciEnterpriseAiConfig(default_model_id="model-a", text_max_input_tokens=22000)
+    items = [
+        WikiLinkItem(
+            str(i),
+            page("a", str(i), text="文" * 1200),
+            tuple(page("b", f"{i}-{j}", text="文" * 1200) for j in range(6)),
+        )
+        for i in range(2)
+    ]
+    calls = []
+
+    async def generate(prompt: str, context: str, **kwargs: Any) -> str:
+        measure_llm_request(config, prompt, context, **kwargs).validate()
+        data = json.loads(context)
+        calls.append(data)
+        (source,) = data["sources"]
+        links = [
+            dict(unit_id=c["unit_id"], relation="reference", reason="合成")
+            for c in data["candidates"]
+        ]
+        return json.dumps({"items": [dict(unit_id=source["unit_id"], links=links)]})
+
+    model, save = AsyncMock(), AsyncMock()
+    model.generate.side_effect = generate
+    count = await judge_links(
+        items,
+        model=model,
+        measure=partial(measure_llm_request, config),
+        batch_size=8,
+        original_chars=1200,
+        max_input_chars=120000,
+        document_names={},
+        authorize=allow,
+        checkpoint=save,
+    )
+    assert count == len(calls) > 2 and save.await_count == 2
+    for call, item in zip(save.await_args_list, items, strict=True):
+        completed, candidates, decisions = call.args
+        expected = [p.unit.unit_id for p in item.candidates]
+        assert list(completed) == [item] and candidates == expected
+        assert [(d.source_unit_id, d.target_unit_id) for d in decisions] == [
+            (item.source.unit.unit_id, c) for c in expected
+        ]
+
+
+async def test_single_oversized_pair_does_not_publish_the_completed_candidate_subset() -> None:
+    config = OciEnterpriseAiConfig(default_model_id="model-a", text_max_input_tokens=30000)
+    source, small, large = page("a", "s"), page("b", "x"), page("b", "y")
+    large.unit.section_path = ["合成" * 12000]
+    item = WikiLinkItem("s", source, (small, large))
+    model, save = LinkModel(), AsyncMock()
+    with pytest.raises(GenerationInputLimitError) as raised:
+        await judge_links(
+            [item],
+            model=model,
+            measure=partial(measure_llm_request, config),
+            batch_size=8,
+            original_chars=1200,
+            max_input_chars=120000,
+            document_names={},
+            authorize=allow,
+            checkpoint=save,
+        )
+    assert len(model.calls) == 1 and not save.await_count
+    fields = failure_fields(raised.value, "doc-a", "generate_links", "rev-a")
+    assert fields["estimated_input_tokens"] > fields["input_limit_tokens"] == 30000
+
+
+async def test_provider_size_rejection_splits_sources_and_preserves_all_checkpoints() -> None:
+    class Model(LinkModel):
+        async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+            if len(json.loads(context)["sources"]) > 1:
+                raise httpx.HTTPStatusError(
+                    "合成",
+                    request=httpx.Request("POST", "https://example.invalid"),
+                    response=httpx.Response(413),
+                )
+            return await super().generate(prompt, context, **kwargs)
+
+    other, save = page("b", "b"), AsyncMock()
+    items = [WikiLinkItem(key, page("a", key), (other,)) for key in ("x", "y")]
+    count = await judge_links(
+        items,
+        model=Model(),
+        caller=BoundedCaller("wiki_build"),
+        batch_size=8,
+        original_chars=1200,
+        max_input_chars=120000,
+        document_names={},
+        authorize=allow,
+        checkpoint=save,
+    )
+    assert count == 3 and save.await_count == 2
 
 
 def test_link_schema_allows_only_candidates_and_every_source_once() -> None:
@@ -289,9 +392,14 @@ def link_setup(monkeypatch: pytest.MonkeyPatch) -> Any:
 @pytest.mark.asyncio
 async def test_links_are_built_both_ways_from_candidates_once(link_setup: Any) -> None:
     jobs, store, model, settings, embedded = link_setup
+    config = OciEnterpriseAiConfig(default_model_id="model-a")
+    measure = Mock(wraps=partial(measure_llm_request, config))
+    model.measure_text_input = measure
     store.prompts["wiki_links"] = "合成の編集済み指示"
     await jobs._build_links("doc-a", "owner-a", settings)
     assert store.state["status"] == "READY"
+    assert [json.loads(call.args[1]) for call in measure.call_args_list] == model.calls
+    assert [call.kwargs["system_prompt"] for call in measure.call_args_list] == model.prompts
     # 前向き（A の 2 単位 → B）と逆向き（B の単位 → A）を、候補の組だけで 2 回で判定する。
     assert model.prompts == ["合成の編集済み指示"] * len(model.calls)
     store.prompts["wiki_links"] = "合成の次回用指示"
