@@ -67,6 +67,6 @@ def test_generation_request_carries_each_answer_field_meaning_once(role: str | N
 
     body = model.model_fields["answer_body"].description
     assert body and body in tail and body not in system
-    assert "各要求" in body and "条件・否定・例外" in body and "一度だけ" in body
-    assert "引用" in body and "参考情報は省く" in body
+    assert "各要求" in body and "条件・否定・例外" in body and "実行方法" in body
+    assert "引用" in body and "適用範囲" in body
     assert sent["text"]["format"]["schema"]["properties"]["answer_body"]["minLength"] == 1
