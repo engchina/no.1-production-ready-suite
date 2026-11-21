@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import BaseModel, ValidationInfo, create_model, model_validator
+from pydantic import BaseModel, ModelWrapValidatorHandler, ValidationInfo, create_model, model_validator
 
 from rag_engine.generation.full_answer_wire import AnswerFact, AnswerTableBody, EvidenceGap
 from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY
@@ -41,7 +41,7 @@ class RequestRowRepair:
         return candidates
 
     def model(self, base: type[BaseModel]) -> type[BaseModel]:
-        def review(data: Any, handler: Any, info: ValidationInfo) -> Any:
+        def review(cls: type[BaseModel], data: Any, handler: ModelWrapValidatorHandler[BaseModel], info: ValidationInfo) -> BaseModel:
             final = (info.context or {}).get(FINAL_ATTEMPT_CONTEXT_KEY)
             if final is None or not isinstance(data, dict):
                 return handler(data)
@@ -70,7 +70,8 @@ class RequestRowRepair:
                 raise ValueError("質問との対応を確かめる行があります。")
             return result
 
-        return create_model(base.__name__, __base__=base, __validators__={"review_request_rows": model_validator(mode="wrap")(review)})
+        validators: dict[str, Any] = {"review_request_rows": model_validator(mode="wrap")(review)}
+        return create_model(base.__name__, __base__=base, __validators__=validators)
 
     def step(self) -> str:
         return (
