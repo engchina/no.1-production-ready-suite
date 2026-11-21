@@ -1219,7 +1219,7 @@ def call_requirement_llm(
                 f"元の質問: {draft.question_original}\n"
                 f"直す前の要件のまとめ（書き直した質問）: {draft.clarified_question_ja}\n"
                 f"利用者の直しの指示（最後が最新）: {' / '.join(corrections)}\n"
-                "この指示を反映して要件を作り直してください（規則 8）。指示と schema から 1 つに"
+                "この指示を反映して要件を作り直してください。指示と schema から 1 つに"
                 "決まるものは決め、まだ 1 つに決まらない情報だけを挙げてください。"
             )
         else:
