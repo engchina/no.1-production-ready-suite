@@ -154,13 +154,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
-            if not pool_warm_task.done():
-                pool_warm_task.cancel()
+            wiki_stop.set()
+            maintenance_stop.set()
+            # to_thread の SQL は task の取消では止まらない。背景の DB 処理が終わってから
+            # 共有 pool を閉じ、接続の使用中に force close しない。
+            with suppress(asyncio.CancelledError):
+                await pool_warm_task
             # このプロセスで実行中の品質評価の job を打ち切り、失敗にする（#390。別のプロセスは
             # 引き継がない）。
             await get_evaluation_job_service().shutdown()
-            wiki_stop.set()
-            wiki_task.cancel()
             with suppress(asyncio.CancelledError):
                 await wiki_task
             await wiki_jobs.shutdown()
@@ -171,8 +173,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     worker_stop.set()
                 with suppress(asyncio.CancelledError):
                     await worker_task
-            maintenance_stop.set()
-            maintenance_task.cancel()
             with suppress(asyncio.CancelledError):
                 await maintenance_task
             # 待っている span を書いてから接続の pool を閉じる。
