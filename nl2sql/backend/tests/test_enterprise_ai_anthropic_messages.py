@@ -255,7 +255,15 @@ def test_structured_generate_calls_messages_api_with_same_inputs(
     # 指示（schema の項目の説明の Step を含む）は system、文脈と質問は user の本文。
     assert body["system"].startswith("## Step 1: SQL を作る")
     assert body["messages"] == [
-        {"role": "user", "content": [{"type": "text", "text": "表 T の説明\n\n質問:\n質問 A"}]}
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "<context>\n表 T の説明\n</context>\n\n<request>\n質問 A\n</request>",
+                }
+            ],
+        }
     ]
     # 登録モデルの推論の量（high）は adaptive の思考と effort。サンプリングの引数は送らない。
     assert body["thinking"] == {"type": "adaptive"}

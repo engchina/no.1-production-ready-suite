@@ -1216,16 +1216,18 @@ def call_requirement_llm(
             # 「その他（自由入力）」の直しの指示（#1761）。前のまとめの検査ではなく、
             # 指示での作り直しを頼む（前のまとめと食い違う所を「あいまい」として聞き返さない）。
             prompt = (
-                f"元の質問: {draft.question_original}\n"
+                f"## Step 1: 要件確認の入力を読む\n元の質問: {draft.question_original}\n"
                 f"直す前の要件のまとめ（書き直した質問）: {draft.clarified_question_ja}\n"
                 f"利用者の直しの指示（最後が最新）: {' / '.join(corrections)}\n"
+                "\n## Step 2: 利用者の修正を反映する\n"
                 "この指示を反映して要件を作り直してください。指示と schema から 1 つに"
                 "決まるものは決め、まだ 1 つに決まらない情報だけを挙げてください。"
             )
         else:
             prompt = (
-                f"元の質問: {draft.question_original}\n"
+                f"## Step 1: 要件確認の入力を読む\n元の質問: {draft.question_original}\n"
                 f"今の要件のまとめ（書き直した質問）: {draft.clarified_question_ja}\n"
+                "\n## Step 2: 未解決の要件を確認する\n"
                 "このまとめと answered_items を検査し、SQL を作るのにまだ足りない・"
                 "明確でない情報を挙げてください。"
             )

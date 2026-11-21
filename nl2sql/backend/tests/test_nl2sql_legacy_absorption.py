@@ -780,7 +780,7 @@ def test_profile_select_ai_attributes_use_tables_and_views_object_list() -> None
     assert attributes["role"] == "財務 SQL アシスタント"
     instructions = attributes["additional_instructions"]
     assert "## 業務説明" not in instructions
-    assert "## プロファイル追加指示\n金額は円単位で表示する。" in instructions
+    assert "プロファイル追加指示を適用する\n金額は円単位で表示する。" in instructions
     object_list = attributes["object_list"]
     assert [item["name"] for item in object_list] == ["INVOICES", "V_INVOICE_SUMMARY"]
     assert all(item["owner"] for item in object_list)

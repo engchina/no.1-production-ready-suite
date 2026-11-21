@@ -361,8 +361,10 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
             prompt=instruction,
             context=bundle.model_dump_json(),
             system_prompt=(
+                "## Step 1: 変更指示から対象を選ぶ\n"
                 "日本語の変更指示を型付き definitions の差分候補へ変換する。"
                 "変更する定義のみ返す。ID と api_name は維持し、権限やコードは創作しない。"
+                "\n\n## Step 2: 差分候補を返す\n"
                 "削除指示は deleted_definition_ids に既存 ID を明示する。"
                 "削除と更新を同じ ID に指定しない。依存する定義も指示に応じて更新する。"
                 "これは解析でありレビュー・公開ではない。"

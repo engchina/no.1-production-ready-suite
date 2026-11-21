@@ -4116,24 +4116,29 @@ class OracleNl2SqlAdapter:
             "tool_type": "SQL",
             "tool_params": {"profile_name": profile_name},
             "instruction": (
+                "## Step 1: 読み取り SQL を生成する\n"
                 "Use this tool to generate Oracle SELECT/WITH SQL from natural language. "
-                "Use SHOWSQL behavior and do not execute DML, DDL, PL/SQL, or multi-statement SQL."
+                "\n- Use SHOWSQL behavior and do not execute DML, DDL, PL/SQL, or "
+                "multi-statement SQL."
             ),
         }
         agent_attributes = {
             "profile_name": profile_name,
-            "role": description.strip() or "Oracle SQL による業務データ分析を支援します。",
+            "role": description.strip()
+            or "## Step 1: 業務データを分析する\nOracle SQL による業務データ分析を支援します。",
             "tools": [tool_name],
         }
         task_attributes = {
             "instruction": (
+                "## Step 1: SQL ツールで質問を処理する\n"
                 "Use the SQL tool to create exactly one Oracle SELECT statement for the "
                 f"user's request. Invoke tool {tool_name} with JSON keys TOOL_NAME, QUERY, "
                 "and ACTION. TOOL_NAME must be the SQL tool name, QUERY must be the user's "
                 "natural language request, and ACTION must be SHOWSQL. "
-                "Return strict JSON only with keys sql and explanation. "
-                "sql must be a single SELECT/WITH statement without markdown, comments, "
-                "or trailing narration. explanation must be concise and written in Japanese."
+                "\n\n## Step 2: SQL と説明を返す\n"
+                "Return strict JSON only with keys sql and explanation.\n"
+                "- sql must be a single SELECT/WITH statement without markdown, comments, "
+                "or trailing narration.\n- explanation must be concise and written in Japanese."
             ),
             "tools": [tool_name],
             "enable_human_tool": False,

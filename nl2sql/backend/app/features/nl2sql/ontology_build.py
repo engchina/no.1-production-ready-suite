@@ -2058,37 +2058,44 @@ def render_ontology_build_markdown(
 # --- LLM 呼び出し -----------------------------------------------------------------------------
 
 _EXTRACTION_SYSTEM_PROMPT = (
-    "あなたは NL2SQL 用オントロジーの構築支援器です。"
-    "応答 JSON Schema に従った JSON だけを返してください。"
-    "新規生成は definitions を唯一の正本とし、entities/relationships/metrics/synonyms の旧形式へ"
+    "## Step 1: 入力の根拠から定義を抽出する\nあなたは NL2SQL 用オントロジーの構築支援器です。"
+    "\n- 応答 JSON Schema に従った JSON だけを返してください。"
+    "\n- 新規生成は definitions を唯一の正本とし、entities/relationships/metrics/synonyms "
+    "の旧形式へ"
     "同じ候補を二重出力しないでください。"
-    "各入力バッチから主要6種類（Object Type/Property/Link Type/"
+    "\n- 各入力バッチから主要6種類（Object Type/Property/Link Type/"
     "Interface/Function/Action Type）と"
     "補助7種類（Shared Property/Value Type/Enumeration/Metric/"
     "Business Rule/Business Event/Object Set）を"
     "まとめて抽出してください。根拠のない種類は創作せず coverage に未生成の理由を記録してください。"
-    "同一概念の重複定義を作らず、同じ種類と api_name または"
+    "\n\n## Step 2: 定義と物理名の対応を取る\n"
+    "- 同一概念の重複定義を作らず、同じ種類と api_name または"
     "既存 ID が一致する概念を補完してください。"
-    "既存定義にない別の概念は資料・スキーマに根拠があれば追加してください。"
-    "api_name は安定した英語識別子、参照は definitions の api_name とします。"
-    "schema_context に存在しない owner/object/column を参照しないでください。"
-    '引用された物理名は引用符と大文字小文字を保持してください（例: SALES."Mixed_Case"."Amount"）。'
-    "Q/A の schema_resolved_columns/schema_resolved_join_conditions を正とし、"
+    "\n- 既存定義にない別の概念は資料・スキーマに根拠があれば追加してください。"
+    "\n- api_name は安定した英語識別子、参照は definitions の api_name とします。"
+    "\n- schema_context に存在しない owner/object/column を参照しないでください。"
+    "\n- 引用された物理名は引用符と大文字小文字を保持してください（例: "
+    'SALES."Mixed_Case"."Amount"）。'
+    "\n- Q/A の schema_resolved_columns/schema_resolved_join_conditions を正とし、"
     "SQL の alias を物理名にしない。"
-    "名詞をオブジェクト、動詞・述語を関係の手がかりとし、物理表と業務オブジェクトを一対一と決めつけない。"
-    "主識別子 primary_key/properties は所属する Property の api_name を参照し、"
+    "\n- 名詞をオブジェクト、動詞・述語を関係の手がかりとし、物理表と業務オブジェクトを一対一と"
+    "決めつけない。"
+    "\n- 主識別子 primary_key/properties は所属する Property の api_name を参照し、"
     "grain_ja は業務上の粒度、mappings は根拠のある物理表・列を設定する。"
-    "JSON Schema の required はキーの出力要件であり、すべての値が業務上必須という意味ではない。"
+    "\n\n## Step 3: 不足や警告の根拠を確認する\n"
+    "- JSON Schema の required はキーの出力要件であり、すべての値が業務上必須という意味では"
+    "ない。"
     # title_property の書き方は ObjectTypeDefinition の項目の説明にだけ書く（#5250）。
-    "必須項目の不足は対象定義の missing_information_ja に具体的なフィールド名と理由を記録し、"
+    "\n- 必須項目の不足は対象定義の missing_information_ja に具体的なフィールド名と理由を記録し、"
     "キーが required という理由だけで不足を推測しない。必須判定の正本は型と後段の機械的検証である。"
-    "資料にない任意の概念・契約を生成しなかったことや既存 ID の再利用などの"
+    "\n- 資料にない任意の概念・契約を生成しなかったことや既存 ID の再利用などの"
     "正常な処理方針を warnings_ja に重複記録しない。"
-    "warnings_ja は根拠の矛盾や抽出失敗など利用者の確認・修正が必要な問題に限定する。"
-    "業務説明が空、検証メッセージのみ、または根拠資料が不足していること自体は警告にしない。"
-    "記述できる定義を schema_context や資料から生成し、不明な情報は創作せず"
+    "\n- warnings_ja は根拠の矛盾や抽出失敗など利用者の確認・修正が必要な問題に限定する。"
+    "\n- 業務説明が空、検証メッセージのみ、または根拠資料が不足していること自体は警告にしない。"
+    "\n- 記述できる定義を schema_context や資料から生成し、不明な情報は創作せず"
     "missing_information_ja または coverage の理由に記録する。検証メッセージを業務定義にしない。"
-    "関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many を"
+    "\n\n## Step 4: 関係と指標を記録する\n"
+    "- 関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many を"
     "主キー・一意制約と資料から判断し、不明なら unknown と理由を記録する。"
     "指標は expression_sql/filter_sql/aggregation/grain/distinct_keys/"
     "time_property/time_policy_ja/"
@@ -2096,7 +2103,9 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "実装キー・権限・アルゴリズムは創作しない。"
     "インターフェースは必須プロパティ・関係・アクションと実装オブジェクトの対応を定義する。"
     "業務名・説明・同義語は日本語とし、現場の別名・略称を aliases に記録する。"
-    "evidence は入力の source_id と locator、原文の引用を記録し、assertion に対象フィールドを書く。"
+    "\n\n## Step 5: 結果と出典を返す\n"
+    "evidence は入力の source_id と locator、原文の引用を記録し、assertion に対象フィールドを"
+    "書く。"
     "DB は source_id=schema、locator=OWNER.OBJECT または OWNER.OBJECT.COLUMN とする。"
     # graph を作れる範囲を最大にし、足りない項目は推測で埋めない（#1720）。
     "best effort で、schema_context から作れるオブジェクト・プロパティ・関係はすべて作る。"
@@ -4102,7 +4111,7 @@ class OntologyBuildService:
                 ensure_ascii=False,
             )
             glean_prompt = (
-                f"{task.prompt}\n\n【追加パス {pass_index}】前回までに抽出済みの候補は"
+                f"{task.prompt}\n\n### 【追加パス {pass_index}】\n前回までに抽出済みの候補は"
                 f"次のとおりです: {seen_summary} 。多くの候補が見逃されている可能性が"
                 "あります。未抽出候補と、根拠を確認できた不足フィールドの補完だけを返してください。"
                 "補完対象だけを同じ id/api_name と既存の値を保って返し、"
@@ -4815,6 +4824,7 @@ class OntologyBuildService:
         ontology: SchemaOntology | None = None
         if OntologyBuildStepName.SCHEMA_NAMING in step_names:
             prompt = (
+                "## Step 1: スキーマにある概念を抽出する\n"
                 "schema_context を根拠に主要6種類・補助7種類の関連概念を"
                 " definitions に抽出してください。"
                 "各表・ビューの日本語の業務名・説明・同義語、オブジェクトごとの Property、"
@@ -4850,6 +4860,7 @@ class OntologyBuildService:
                 )
             else:
                 prompt = (
+                    "## Step 1: 質問と正解 SQL の対応を読む\n"
                     "入力 JSON の qa_pairs にある質問と正解 SQL から、実際に使われた "
                     "JOIN パスを Link Type に、業務指標を Metric にし、"
                     "根拠のある主要6種類・補助7種類を"
@@ -4902,6 +4913,7 @@ class OntologyBuildService:
                 )
             else:
                 prompt = (
+                    "## Step 1: 各資料の概念と根拠を対応付ける\n"
                     "入力 JSON の business_text_chunks をすべて読み、"
                     "根拠のある主要6種類・補助7種類を"
                     " definitions にまとめて抽出してください。同義語は各定義の aliases に含め、"

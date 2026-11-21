@@ -75,6 +75,19 @@ def test_three_stages_pass_complete_outputs_and_regeneration_uses_only_edited_st
     assert data.logical_structure == logical
     assert data.sql_structure == physical
     assert data.logical_structure_items == []
+    for name, call in zip(
+        ("structure_analysis", "logical_structure", "business_question"),
+        client.calls[:3],
+        strict=True,
+    ):
+        instruction = call["system_prompt"]
+        assert instruction.startswith("## Step 1:")
+        assert f"<sql_assist>\n{source_prompt(name)}\n</sql_assist>" in instruction
+        assert (
+            instruction.index("</sql_assist>")
+            < instruction.index("## Step 2:")
+            < instruction.index("## Step 3:")
+        )
     assert client.calls[0]["prompt"] == sql
     assert json.loads(client.calls[1]["prompt"]) == {"sql_structure": physical, "sql": sql}
     assert client.calls[2]["prompt"] == logical

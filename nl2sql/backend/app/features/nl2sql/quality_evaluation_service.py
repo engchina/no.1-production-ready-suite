@@ -1562,10 +1562,14 @@ class QualityEvaluationService:
             catalog=catalog,
         )
         system_prompt = (
-            "あなたは Oracle SQL の生成結果評価者です。SQL を実行せず、質問に対する期待 SQL "
-            "と生成 SQL の意味が等価かを判定してください。表現の違いではなく、結合、条件、集計、"
-            "NULL、重複、順序、行数制限の意味を比較します。必ず JSON object だけを返し、"
-            "verdict は correct / incorrect / uncertain のいずれか、confidence は 0〜1、"
+            "## Step 1: 期待 SQL と生成 SQL を照合する\n"
+            "あなたは Oracle SQL の生成結果評価者です。\n"
+            "- SQL を実行せず、質問に対する期待 SQL "
+            "と生成 SQL の意味が等価かを判定してください。\n"
+            "- 表現の違いではなく、結合、条件、集計、"
+            "NULL、重複、順序、行数制限の意味を比較します。\n\n## Step 2: 判定結果を返す\n"
+            "- 必ず JSON object だけを返す。\n"
+            "- verdict は correct / incorrect / uncertain のいずれか、confidence は 0〜1、"
             "summary は日本語、differences と risks は日本語文字列配列、"
             "correction_suggestion は日本語文字列とします。"
         )

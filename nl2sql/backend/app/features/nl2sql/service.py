@@ -1635,11 +1635,14 @@ _SQL_RESERVED_OR_FUNCTIONS = {
     "WHEN",
 }
 _SQL_STRUCTURE_SYSTEM_PROMPT = (
+    "## Step 1: Oracle SQL の構造を解析する\n"
     "You are a SQL parser. Output ONLY the requested markdown format. No explanations."
 )
 _SQL_STRUCTURE_ANALYSIS_PROMPT = (
+    "## Step 1: 元の SQL の構造を読み取る\n"
     "Analyze the SQL query and extract its COMPLETE structure in Markdown format.\n"
     "GOAL: Output must contain 100% of SQL information to enable exact SQL reconstruction.\n"
+    "\n\n## Step 2: 出力テンプレートを確認する\n"
     "Output ONLY the markdown text below (no code blocks, no explanations):\n\n"
     "## SQL構造分析\n\n"
     "### SELECT句\n"
@@ -1684,7 +1687,7 @@ _SQL_STRUCTURE_ANALYSIS_PROMPT = (
     "  - FROM: schema.table_name(alias)\n"
     "  - JOIN: **[JOIN_TYPE]** schema.table(alias) ON condition\n"
     "  - WHERE: conditions\n\n"
-    "Rules for 100% SQL Reconstruction:\n"
+    "\n\n## Step 3: 復元に必要な各句の条件を確認する\nRules for 100% SQL Reconstruction:\n"
     "- MUST output ALL columns in SELECT with exact order, aliases, and expressions\n"
     "- MUST preserve ALL literal values, operators, and functions exactly as written\n"
     "- MUST include schema prefix when present in original SQL\n"
@@ -1702,7 +1705,7 @@ _SQL_STRUCTURE_ANALYSIS_PROMPT = (
     "- WITH句(CTE): Expand EACH CTE completely\n"
     "- サブクエリ: Number sequentially and expand completely\n"
     "- If section is empty/not present, omit that section entirely\n\n"
-    "SQL:\n```sql\n{sql}\n```"
+    "\n\n## Step 4: 次の SQL を解析して構造を返す\nSQL:\n```sql\n{sql}\n```"
 )
 
 
@@ -4660,6 +4663,7 @@ _DB_ADMIN_CHAT_MODEL_UNAVAILABLE = (
 # SQL の無い応答（文章だけの答え）の作り直しの回数と、作り直させる理由・最後の失敗（#2333）。
 _DB_ADMIN_CHAT_GENERATION_ATTEMPTS = 2
 _DB_ADMIN_CHAT_NO_SQL_RETRY = (
+    "## Step 1: SQL を含めて応答を作り直す\n"
     "前の応答の sql に実行できる SQL がありませんでした。説明の文章だけで答えず、"
     "質問に答えるための Oracle の SQL を sql に入れてください。"
 )
@@ -8051,18 +8055,25 @@ class Nl2SqlService:
             f"- {rule.strip()}" for rule in self._effective_sql_rules(profile) if rule.strip()
         ]
         if rule_lines:
-            sections.append("## SQL 生成ルール\n" + "\n".join(rule_lines))
+            sections.append("## Step 1: SQL 生成ルールを適用する\n" + "\n".join(rule_lines))
 
         persistent = profile.select_ai_config.additional_instructions.strip()
         if persistent:
-            sections.append(f"## プロファイル追加指示\n{persistent}")
+            sections.append(
+                f"## Step {len(sections) + 1}: プロファイル追加指示を適用する\n{persistent}"
+            )
 
         request_value = request_instructions.strip()
         if request_value:
-            sections.append(f"## 今回の追加指示\n{request_value}")
+            sections.append(
+                f"## Step {len(sections) + 1}: 今回の追加指示を適用する\n{request_value}"
+            )
         ontology_value = ontology_instructions.strip()
         if ontology_value:
-            sections.append(f"## 確認済み Ontology コンテキスト\n{ontology_value}")
+            sections.append(
+                f"## Step {len(sections) + 1}: 確認済み Ontology コンテキストを参照する\n"
+                f"{ontology_value}"
+            )
         return "\n\n".join(sections)
 
     def _select_ai_generate_attributes(
@@ -14137,10 +14148,12 @@ class Nl2SqlService:
                     "logical_structure プレースホルダーは入力本文を参照する。",
                 )
                 + (
-                    "\n語彙の正規化は質問生成と同時に行う。terms_text は context の glossary、"
+                    "\n\n## Step 4: 用語集に照らして質問を確定する\n"
+                    "語彙の正規化は質問生成と同時に行う。terms_text は context の glossary、"
                     "question_text は生成中の質問を指す。文字列リテラルは変更しない。\n"
+                    "<sql_assist>\n"
                     + source_prompt("glossary_question")
-                    + "\n最終出力は question を持つ JSON object とする。"
+                    + "\n</sql_assist>\n最終出力は question を持つ JSON object とする。"
                     if request.use_glossary
                     else ""
                 ),
@@ -14719,7 +14732,9 @@ class Nl2SqlService:
                     catalog=catalog or self._generation_schema_catalog(profile, allowed),
                 ),
                 system_prompt=(
-                    "Oracle SQL を構造化分析してください。JSON object のみを返してください。"
+                    "## Step 1: 対象の Oracle SQL を読む\n"
+                    "Oracle SQL を構造化分析してください。\n\n## Step 2: 分析結果を返す\n"
+                    "JSON object のみを返してください。"
                     "keys: explanation, structure_summary, risk_level, statement_type, "
                     "object_names, column_names, conditions, group_by, order_by, joins, "
                     "aggregations, risk_findings, repair_candidates, natural_language_question, "
@@ -14816,13 +14831,16 @@ class Nl2SqlService:
                 self._enterprise_ai_client.generate,
                 response_format=response_format(CommentsOutput),
                 prompt=(
+                    "## Step 1: 対象のコメントを提案する\n"
                     "表・列・ビュー・マテリアライズドビューの COMMENT ON 候補を"
                     "日本語で生成してください。"
                 ),
                 context=self._comment_generation_context(options.max_items),
                 system_prompt=(
+                    "## Step 1: スキーマからコメントを作る\n"
                     "Oracle schema metadata を読み、業務利用者が理解しやすい日本語 comment "
-                    "を生成してください。JSON object で suggestions 配列だけを返してください。"
+                    "を生成してください。\n\n## Step 2: 提案を返す\n"
+                    "JSON object で suggestions 配列だけを返してください。"
                     "各要素は object_name, object_type, suggested_comment を持ち、"
                     "object_type は table/view/materialized_view/column のいずれかです。"
                 ),
@@ -14993,9 +15011,12 @@ class Nl2SqlService:
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
+                    "## Step 1: 対象の表と列からコメントを作る\n"
                     "以下の情報に基づき、Oracle COMMENT ON 文のみを生成してください。"
                     "説明文、前置き、markdown code fence は出力しないでください。\n\n"
-                    "コメントの書き方(Select AI が業務用語を正しく SQL に変換できるようにする):\n"
+                    "\n\n## Step 2: コメントの根拠を確認する\n"
+                    "コメントの書き方(Select AI が業務用語を正しく SQL に変換できるようにする"
+                    "):\n"
                     "- 表: 1 行が何を表すか"
                     "(例: 'Customer master. One row represents one customer.')\n"
                     "- 列: 業務上の意味に加え、コード値の意味"
@@ -15008,10 +15029,12 @@ class Nl2SqlService:
                 ),
                 context=self._metadata_generation_context(batch),
                 system_prompt=(
+                    "## Step 1: 指定された対象にコメントを付ける\n"
                     "あなたはOracleデータベース専門家です。純粋なCOMMENT ON "
                     "TABLE/COLUMN/MATERIALIZED VIEW ステートメントのみを出力してください。"
                     "通常ビューへのコメントは COMMENT ON TABLE を使用してください。"
                     "対象は必ず OWNER.OBJECT の owner 修飾を保持してください。"
+                    "\n\n## Step 2: 順序と長さを確認する\n"
                     "表・ビューはA-Z順、列は定義順、各説明文は200字以内です。"
                 ),
             )
@@ -15165,6 +15188,7 @@ class Nl2SqlService:
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
+                    "## Step 1: 注釈を付ける対象を読む\n"
                     "以下の情報に基づき、Select AI(NL2SQL)が業務用語を正しく SQL に変換できる"
                     "ように、Oracle ALTER TABLE/ALTER VIEW/ALTER MATERIALIZED VIEW の "
                     "ANNOTATIONS 文のみを生成してください。\n\n"
@@ -15176,7 +15200,7 @@ class Nl2SqlService:
                     "- 既存値を更新するため ADD OR REPLACE を使う\n"
                     "- マテリアライズドビューの列の annotation は生成しない"
                     "(表・ビューの列は生成する)\n\n"
-                    "annotation の語彙(名前は二重引用符で囲む):\n"
+                    "\n\n## Step 2: 注釈の値を選ぶ\nannotation の語彙(名前は二重引用符で囲む):\n"
                     '- "DESCRIPTION": 表なら「1 行が何を表すか」、列なら業務上の意味\n'
                     '- "ALIASES": 利用者が質問で使う同義語を英語と日本語でカンマ区切り\n'
                     "- \"VALUES\": コード値と意味(例: 'A = active (有効); I = inactive (休眠).')。"
@@ -15213,6 +15237,7 @@ class Nl2SqlService:
                 ),
                 context=self._metadata_generation_context(batch),
                 system_prompt=(
+                    "## Step 1: 対象に応じた注釈文を作る\n"
                     "あなたは Oracle Database の専門家です。純粋な annotation SQL のみを"
                     "出力してください。\n"
                     "テーブル: ALTER TABLE <表> ANNOTATIONS (<annotation>);\n"
@@ -15329,6 +15354,7 @@ class Nl2SqlService:
                 response_format=response_format(SqlOutput),
                 max_output_tokens=self._metadata_sql_output_tokens(batch),
                 prompt=(
+                    "## Step 1: 対象の列のドメインを決める\n"
                     "以下の情報に基づき、Oracle AI Database の SQL ドメイン"
                     "(CREATE DOMAIN)と、その列への関連付け"
                     "(ALTER TABLE ... MODIFY (<列>) ADD DOMAIN <ドメイン>)、"
@@ -15384,6 +15410,7 @@ class Nl2SqlService:
                     )
                 ),
                 system_prompt=(
+                    "## Step 1: ドメインを定義して列に関連付ける\n"
                     "あなたは Oracle Database の専門家です。純粋な SQL ドメイン定義と"
                     "列への関連付け SQL のみを出力してください。\n"
                     "定義: CREATE DOMAIN IF NOT EXISTS <OWNER>.<ドメイン> AS <型> "
@@ -18230,7 +18257,10 @@ class Nl2SqlService:
             raw = call_with_model_purpose(
                 "sql.repair",
                 self._enterprise_ai_client.generate,
-                prompt="存在しない列・オブジェクトを参照する文を、実際の列を使って直してください。",
+                prompt=(
+                    "## Step 1: 参照先に存在する列で修復する\n"
+                    "存在しない列・オブジェクトを参照する文を、実際の列を使って直してください。"
+                ),
                 context="\n".join(lines),
                 system_prompt=_DB_ADMIN_CHAT_REPAIR_SYSTEM_PROMPT,
                 response_format=response_format(DbAdminChatRepairOutput, name="DbAdminChatRepair"),
@@ -18539,6 +18569,7 @@ class Nl2SqlService:
                     "sql.analyze",
                     self._enterprise_ai_client.generate,
                     prompt=(
+                        "## Step 1: 失敗の原因を調べて SQL を直す\n"
                         "次の SQL の実行が失敗しました。原因と直し方を示し、"
                         "対象の SQL だけを直してください。"
                     ),
@@ -20476,12 +20507,14 @@ class Nl2SqlService:
                 self._enterprise_ai_client.generate,
                 response_format=response_format(AnalysisOutput),
                 prompt=(
+                    "## Step 1: 失敗した SQL と結果を読む\n"
                     f"以下は Oracle Database での {target_label} SQL とその実行結果です。"
-                    "出力は次の 3 点のみに限定してください。"
-                    "1) エラー原因 2) 解決方法 3) 簡潔な結論"
+                    "\n\n## Step 2: 原因と対処をまとめる\n出力は次の 3 点のみに限定してください。"
+                    "\n- エラー原因\n- 解決方法\n- 簡潔な結論"
                 ),
                 context=f"SQL:\n{request.sql}\n\n実行結果:\n{request.result_text}",
                 system_prompt=(
+                    "## Step 1: SQL の失敗を診断する\n"
                     "あなたはシニア DB エンジニアです。SQL と実行結果の故障診断に特化し、"
                     "エラー原因と実行可能な修復策のみを日本語で簡潔に提示してください。"
                 ),
@@ -26014,13 +26047,16 @@ class Nl2SqlService:
 
     def _enterprise_ai_sql_system_prompt(self) -> str:
         return (
+            "## Step 1: 質問と利用できる表・列を確認する\n"
             "あなたは Oracle AI Database 向け NL2SQL エンジンです。"
-            "与えられた schema/context の表と列だけを使用してください。"
-            "FROM/JOIN の物理 object は必ず OWNER.OBJECT で修飾してください。"
+            "\n- 与えられた schema/context の表と列だけを使用してください。"
+            "\n- FROM/JOIN の物理 object は必ず OWNER.OBJECT で修飾してください。"
+            "\n\n## Step 2: 読み取り用の SQL を組み立てる\n"
             "DDL/DML/PLSQL/複数 statement/説明付き markdown は禁止です。"
-            "必ず SELECT または WITH で始まる 1 つの Oracle SQL を生成してください。"
-            "質問に件数の指定が無い限り、FETCH FIRST n ROWS ONLY などの行数制限を"
+            "\n- 必ず SELECT または WITH で始まる 1 つの Oracle SQL を生成してください。"
+            "\n- 質問に件数の指定が無い限り、FETCH FIRST n ROWS ONLY などの行数制限を"
             "勝手に付けないでください。"
+            "\n\n## Step 3: SQL と説明を返す\n"
             '出力は JSON のみ: {"sql":"...", "explanation":"..."}。'
             "説明は日本語で簡潔にしてください。"
         )
