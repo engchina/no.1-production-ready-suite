@@ -124,8 +124,11 @@ async def test_indivisible_sentence_stops_before_first_model_call() -> None:
 def test_old_artifacts_and_changed_element_fall_back_to_full_paragraph() -> None:
     extraction = _sample(["一文。", "二文。"])
     original = extraction.elements[0]
-    assert element_paragraphs(extraction, original)[0].sentence_ends
+    paragraphs = element_paragraphs(extraction, original)
+    assert paragraphs and paragraphs[0].sentence_ends
     changed = original.model_copy(update={"text": original.text.replace("一", "青")})
-    assert element_paragraphs(extraction, changed)[0].sentence_ends == ()
+    paragraphs = element_paragraphs(extraction, changed)
+    assert paragraphs and paragraphs[0].sentence_ends == ()
     extraction.parser_artifacts.pop("element_text_boundaries")
-    assert element_paragraphs(extraction, original)[0].sentence_ends == ()
+    paragraphs = element_paragraphs(extraction, original)
+    assert paragraphs and paragraphs[0].sentence_ends == ()
