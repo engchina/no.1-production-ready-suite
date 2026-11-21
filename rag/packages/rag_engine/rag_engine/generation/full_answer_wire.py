@@ -52,21 +52,23 @@ def _check_requested_phrase(phrase: str, question: str | None) -> None:
 class AnswerFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(description="原文が示す一つの事実。直接答える規則・操作と独立した補足は別候補に分ける。")
+    text: str = Field(
+        description="原質問の一要求に直接答える原文の事実。複数の値をまとめて尋ねられたときは、同じ対象・条件の項目と値を組にする。"
+    )
     sources: list[str] = Field(description="この事実を支える原文ラベル。")
     answers_which_question: str = Field(
         description="この短句だけを答えとして読んだとき、それで解ける具体的な問いを一つ書く。対象名だけでなく何を判定する問いかを区別する。"
     )
     requested_phrase: str | None = Field(
         description=(
-            "その問いと同じ具体的な対象・属性を尋ねる原質問の連続した語句を選ぶ。回答欄の総称だけでは対応にならない。"
+            "その事実を求めた原質問の連続した語句を選ぶ。項目のまとまりを尋ねていれば、それに属する各値は同じ要求に対応する。"
             "値を選ぶのに必要な適用範囲や例外は、その値を尋ねた語句に対応する。共通する単語はあっても問われた量や判断が違うとき、"
             "この短句を省いても別のセルに同じ答えが残るときは null。"
         )
     )
 
     short_answer: str = Field(
-        description="問われた属性について資料が裏付ける短答。原文に並記された別の属性は外す。"
+        description="問われた範囲を満たす短答。値の組を求められたら該当する項目名と値をそろえ、範囲外の情報を外す。"
         "規則上の可否は判定、求められた理由は適用規則を一節だけ書く。数値欄に転記した値を理由に再掲しない。"
         "条件・例外そのものに値や境界が必要なら保つ。対応する要求がなければ空文字。"
     )
@@ -91,15 +93,11 @@ class EvidenceGap(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     requested_phrase: str = Field(min_length=1, description="資料で確定できない具体的な属性を尋ねた原質問の語句。")
-    conclusion: str = Field(min_length=1, description="その属性が資料では不明という短い判断。理由は次の欄に書く。")
-    missing_basis: str = Field(min_length=1, description="その判断の理由。問われた値を決める情報が資料にどう欠けているかを一節で。")
+    missing_input: str = Field(min_length=1, description="その判断に必要で資料から得られない情報の名前。回答言語の名詞句にする。")
     sources: list[str] = Field(description="その限界を示す原文ラベル。")
 
 
-def _cell_text(cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None) -> str:
-    if isinstance(cell, EvidenceGap):
-        _check_requested_phrase(cell.requested_phrase, question)
-        return f"{cell.conclusion}（{cell.missing_basis}）" + "".join(dict.fromkeys(cell.sources))
+def _known_cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None) -> str:
     # 同じセルで一致する短答は一度だけ示し、その判断を支える出典はすべて残す。
     sources_by_text: dict[str, list[str]] = {}
     for fact in cell:
@@ -119,7 +117,8 @@ class AnswerRow(BaseModel):
     cells: list[EvidenceGap | list[AnswerFact | ComparisonValue]] = Field(
         description=(
             "二列目から順に、その属性を資料で確定できるかに応じてセルの型を選ぶ。"
-            "未確定なら conclusion と missing_basis の一組で完結する。確定できる場合は根拠のある短句の配列、数値比較は number。"
+            "未確定の属性は missing_input のセル一つで答え、その可否を別の行の事実にしない。"
+            "確定できる場合は根拠のある短句の配列、数値比較は number。"
             "行名は label、段落と一列表は一セル。該当しない欄は空配列。"
         )
     )
@@ -130,6 +129,11 @@ class AnswerTableBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    gap_wording: str | None = Field(
+        default=None,
+        description="未確定のセルすべてに共通の、回答言語の短い一文。{missing} を一度だけ置き、"
+        "その情報を資料から得られず判断できないことを示す。個別の対象・理由・規則は含めない。未確定のセルがなければ null。",
+    )
     headers: list[str] = Field(
         description="数値比較は適用の可否を尋ねられた対象も独立した一行にし、その対象の値を測定項目の各列に入れる。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
     )
@@ -148,7 +152,7 @@ class AnswerTableBody(BaseModel):
         for row in self.rows:
             if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
-            values = [_cell_text(cell, question) for cell in row.cells]
+            values = [self._cell_text(cell, question) for cell in row.cells]
             if not any(values):
                 continue
             cells = [row.label, *values] if len(self.headers) > 1 else values
@@ -156,6 +160,14 @@ class AnswerTableBody(BaseModel):
         if not self.headers:
             return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
         return table_markdown(AnswerTable(columns=self.headers, rows=rows)) if rows else ""
+
+    def _cell_text(self, cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None) -> str:
+        if not isinstance(cell, EvidenceGap):
+            return _known_cell_text(cell, question)
+        _check_requested_phrase(cell.requested_phrase, question)
+        if self.gap_wording is None or self.gap_wording.count("{missing}") != 1 or self.gap_wording.strip() == "{missing}":
+            raise ValueError("未確定のセルには、{missing} を一度含む回答言語の gap_wording が必要です。")
+        return self.gap_wording.replace("{missing}", cell.missing_input) + "".join(dict.fromkeys(cell.sources))
 
 
 class FullAnswerWire(BaseModel):
