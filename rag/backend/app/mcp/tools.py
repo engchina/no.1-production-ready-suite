@@ -3175,6 +3175,7 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
 
 
 GREP_TRUNCATED_NEXT_STEP = (
+    "## Step 1: 検索範囲を絞る\n"
     "上限で打ち切りました（まだ一致があり得ます）。document_ids で文書を絞るか、より長い語で"
     "呼び直してください。"
 )
@@ -3882,6 +3883,7 @@ def _check_chat(scope: ProfileScope | None, arguments: ChatInput) -> None:
 LIST_PROFILES_TOOL = "rag_list_search_answer_profiles"
 RECOMMEND_PROFILE_TOOL = "rag_recommend_search_answer_profile"
 QUERY_UNMATCHED_NEXT_STEP = (
+    "## Step 1: 使用するプロファイルを選ぶ\n"
     "query に当たる検索・回答プロファイルが無いため、使える全件を返しました。この中から選ぶか、"
     f"{RECOMMEND_PROFILE_TOOL} に質問を渡して選んでください。"
 )

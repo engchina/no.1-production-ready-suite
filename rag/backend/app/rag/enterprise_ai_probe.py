@@ -15,14 +15,22 @@ from app.config import Settings, get_settings
 
 ProbeSurface = Literal["llm", "vlm", "both"]
 
-PROBE_SYSTEM_PROMPT = "根拠コンテキストだけに基づいて、質問に短く答えてください。"
-DEFAULT_LLM_PROMPT = "Enterprise AI LLM contract probe の確認用キーワードを答えてください。"
+PROBE_SYSTEM_PROMPT = (
+    "## Step 1: 根拠から質問に答える\n根拠コンテキストだけに基づいて、質問に短く答えてください。"
+)
+DEFAULT_LLM_PROMPT = (
+    "## Step 1: 疎通確認用の語を答える\n"
+    "Enterprise AI LLM contract probe の確認用キーワードを答えてください。"
+)
 DEFAULT_LLM_CONTEXT = (
     "[enterprise-ai-probe.txt#probe:0]\n"
     "確認用キーワード: ENTERPRISE_AI_CONTRACT_PROBE\n"
     "この文は Enterprise AI LLM endpoint の staging 契約確認にだけ使います。"
 )
-DEFAULT_VLM_PROMPT = "Enterprise AI VLM contract probe として本文を構造化抽出してください。"
+DEFAULT_VLM_PROMPT = (
+    "## Step 1: 文書の本文を抽出する\n"
+    "Enterprise AI VLM contract probe として本文を構造化抽出してください。"
+)
 DEFAULT_VLM_TEXT = (
     "文書種別: Enterprise AI contract probe\n"
     "確認用キーワード: ENTERPRISE_AI_CONTRACT_PROBE\n"
