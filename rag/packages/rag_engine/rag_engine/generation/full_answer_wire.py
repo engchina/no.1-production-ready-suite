@@ -6,7 +6,7 @@ import functools
 import re
 import unicodedata
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
 from pydantic import (
     BaseModel,
@@ -46,24 +46,57 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 class AnswerFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(description="一つの値・判断・操作または成立条件を、答えに使う短句で書く。独立に省ける補足とは別の要素にする。")
-    sources: list[str] = Field(description="この事実だけを支える原文ラベル。引用はこの欄にまとめる。")
-    required: bool = Field(
+    text: str = Field(description="原文が示す一つの事実。直接答える規則・操作と独立した補足は別候補に分ける。")
+    sources: list[str] = Field(description="この事実を支える原文ラベル。")
+    answers_which_question: str = Field(
+        description="この短句だけを答えとして読んだとき、それで解ける具体的な問いを一つ書く。対象名だけでなく何を判定する問いかを区別する。"
+    )
+    requested_phrase: str | None = Field(
         description=(
-            "この事実を取り除くと質問への判断・操作・必要条件・例外のいずれかが失われる場合だけ true。"
-            "言い換え、他の項目で伝わる総論、質問とは異なる属性を説明する事実は false。"
+            "その問いと同じ判断を実際に求めている原質問の連続した語句を、限定も含めて抜き出す。"
+            "必要な前提・例外ならそれが左右する要求の語句を選ぶ。共通する単語はあっても問われた量や判断が違うとき、"
+            "この短句を省いても別のセルに同じ答えが残るときは null。"
         )
     )
+
+    short_answer: str = Field(
+        description="質問者へ渡す部分だけを抜き出した短答。可否は判定だけ、理由は資料の規則を一節だけ、"
+        "値が決まらない場合は不足する根拠だけ。数値欄に転記した値を理由に再掲しない。"
+        "条件・例外そのものに値や境界が必要なら保つ。対応する要求がなければ空文字。"
+    )
+
+    def fragment(self, question: str | None) -> str:
+        if self.requested_phrase is None:
+            return ""
+        phrase = self.requested_phrase.strip()
+        if not phrase or (question is not None and phrase not in question):
+            raise ValueError(
+                "requested_phrase は原質問にある連続した語句をそのまま選んでください。対応する要求がない場合は null にしてください。"
+            )
+        text = self.short_answer.strip()
+        return text + "".join(dict.fromkeys(self.sources)) if text else ""
+
+
+class ComparisonValue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    number: str = Field(
+        min_length=1, description="比較表に載せる数値の表記。桁・小数部を保ち、単位は列名に置く。条件や範囲を伴う値は短句で記す。"
+    )
+    sources: list[str] = Field(description="比較した対象のこの値を示す原文ラベル。")
+
+    def fragment(self) -> str:
+        return self.number + "".join(dict.fromkeys(self.sources))
 
 
 class AnswerRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str = Field(description="質問で尋ねられた項目・対象の短い行名。数値比較の適用範囲は行名だけに添える。")
-    cells: list[list[AnswerFact]] = Field(
+    cells: list[list[AnswerFact | ComparisonValue]] = Field(
         description=(
-            "二列目から順に、各セルを事実の配列で埋める。複数列の先頭列は label。段落と一列表は一セル。"
-            "その対象に問われていない欄は空配列。条件と例外は判定に必要なものを残す。"
+            "二列目から順にセルを埋める。比較表の数値欄はその対象の number、ほかは根拠のある短句。"
+            "複数列の先頭は label、段落と一列表は一セル。その対象に問われていない欄は空配列。"
         )
     )
 
@@ -79,22 +112,22 @@ class AnswerTableBody(BaseModel):
     rows: list[AnswerRow] = Field(
         min_length=1,
         description=(
-            "質問から求める項目名を拾い、それだけを埋める。見出しなしは一行一セル。単純な可否の答えは「可」か「不可」の一語で止める。不可の後に禁止文を添えない。条件付きなら条件を添える。"
+            "行名には原質問で求められた具体的な属性を置く。複数の判断を一括した可否の行は作らず、各属性の行で直接答える。見出しなしは一行一セル。単純な可否の答えは「可」か「不可」の一語で止める。不可の後に禁止文を添えない。条件付きなら条件を添える。"
             "複数項目の断定を尋ねたときは各項目に直接答える。資料で決まらない欄は「不明（不足する情報）」で完結し、別の属性の規則で埋めない。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
             "特定対象の可否・理由も尋ねられたら専用の列を設け、該当行だけに制約を書く。他の行は空欄。必要な条件・否定・例外を該当するセルに含める。"
         ),
     )
 
-    def markdown(self) -> str:
+    def markdown(self, question: str | None) -> str:
         rows = []
+        value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
         for row in self.rows:
-            value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
             if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
-            values = [
-                " ".join(fact.text.strip() + "".join(dict.fromkeys(fact.sources)) for fact in cell if fact.required and fact.text.strip())
-                for cell in row.cells
-            ]
+            values = []
+            for cell in row.cells:
+                parts = (fact.fragment() if isinstance(fact, ComparisonValue) else fact.fragment(question) for fact in cell)
+                values.append(" ".join(filter(None, parts)))
             if not any(values):
                 continue
             cells = [row.label, *values] if len(self.headers) > 1 else values
@@ -111,6 +144,7 @@ class FullAnswerWire(BaseModel):
     _provider_output_text: str | None = PrivateAttr(default=None)
     _uses_unit_ids = True
     _uses_full_answer = True
+    _original_question: ClassVar[str | None] = None
 
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
     answer_body: str = Field(
@@ -126,7 +160,7 @@ class FullAnswerWire(BaseModel):
     @classmethod
     def render_body(cls, value: Any) -> Any:
         # モデルには構造化した入力を示し、保存済みの文字列や段落の再検証には従来の本文を使う。
-        return AnswerTableBody.model_validate(value).markdown() if isinstance(value, dict) else value
+        return AnswerTableBody.model_validate(value).markdown(cls._original_question) if isinstance(value, dict) else value
 
     # 各値の定義はこの項目の説明だけに書き、生成の指示の Step では繰り返さない。adapter が説明を指示の最後の
     # Step にして全モデルに送る（#5230・#5238）。
@@ -218,7 +252,7 @@ def lacks_citation(body: str, response_kind: str, catalog: SentUnitCatalog) -> b
     return marker is not None and response_kind in CITED_RESPONSE_KINDS and marker.search(body) is None
 
 
-def full_answer_model(catalog: SentUnitCatalog) -> type[BaseModel]:
+def full_answer_model(catalog: SentUnitCatalog, *, question: str | None = None) -> type[BaseModel]:
     """引用は本文の印だけで受ける。印が指せるのは、この入力に実際に提示した根拠と単位だけ。
 
     資料で答えた種別（``answered``・``conditional``）の本文に印が 1 つも無ければ、形式の不合格として既存の再試行に
@@ -253,7 +287,9 @@ def full_answer_model(catalog: SentUnitCatalog) -> type[BaseModel]:
         "known_units": field_validator("answer_body")(known_units),
         "cites_evidence": model_validator(mode="after")(cites_evidence),
     }
-    return create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
+    model = create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
+    model._original_question = question
+    return model
 
 
 def canonical_full_answer(value: BaseModel, catalog: SentUnitCatalog) -> GroundedDraft:

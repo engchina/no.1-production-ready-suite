@@ -530,7 +530,13 @@ def test_table_cell_citation_keeps_the_value_without_a_second_explanation():
 def test_structured_table_excludes_competing_prose_and_checks_its_labels():
     units, unit = catalog()
     model = full_answer_model(units)
-    fact = {"required": True, "text": "12", "sources": [f"[{unit}]"]}
+    fact = {
+        "answers_which_question": "入力は？",
+        "requested_phrase": "入力",
+        "text": "12（補足を含む候補）",
+        "short_answer": "12",
+        "sources": [f"[{unit}]"],
+    }
     cells = {"headers": ["対象", "値"], "rows": [{"label": "A（共通）", "cells": [[fact]]}]}
     payload = {"answer_body": cells, "response_kind": "answered", "confidence": "high"}
     wire = model.model_validate(payload)
@@ -557,7 +563,13 @@ def test_empty_structured_body_cannot_become_an_empty_success():
 
 def test_headerless_body_renders_prose_and_explicit_single_column_stays_a_table():
     units, unit = catalog()
-    fact = {"required": True, "text": "説明。", "sources": [f"[{unit}]"]}
+    fact = {
+        "answers_which_question": "入力は？",
+        "requested_phrase": "入力",
+        "text": "説明。",
+        "short_answer": "説明。",
+        "sources": [f"[{unit}]"],
+    }
     body = {"headers": [], "rows": [{"label": "説明", "cells": [[fact]]}]}
     wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
     assert wire.answer_body == f"説明。[{unit}]"
@@ -577,15 +589,48 @@ def test_same_reference_is_displayed_once_per_passage_and_retained_in_next_passa
     assert all(line["scope_source_ids"] == ["child-a"] for line in rendered.citation_lines)
 
 
-def test_only_rows_bound_to_a_request_are_shown():
+def test_only_facts_bound_to_an_original_request_are_shown():
     units, unit = catalog()
-    model = full_answer_model(units)
-    fact = {"required": True, "text": "12", "sources": [f"[{unit}]"]}
-    incidental = {**fact, "required": False, "text": "別の属性"}
-    row = {"label": "項目Aの値", "cells": [[fact, incidental]]}
+    model = grounded.generation_output_model("入力とその適用条件は？", unit_catalog=units)
+    fact = {
+        "answers_which_question": "入力は？",
+        "requested_phrase": "入力",
+        "text": "12（補足を含む候補）",
+        "short_answer": "12",
+        "sources": [f"[{unit}]"],
+    }
+    incidental = {**fact, "requested_phrase": None, "text": "別の属性", "sources": ["[E1.9]"]}
+    condition = {**fact, "requested_phrase": "適用条件", "short_answer": "対象Aに限る"}
+    row = {"label": "項目Aの値", "cells": [[fact, incidental, condition]]}
     background = {"label": "参考", "cells": [[incidental]]}
     body = {"headers": [], "rows": [row, background]}
     payload = {"answer_body": body, "response_kind": "answered", "confidence": "high"}
-    assert model.model_validate(payload).answer_body == f"12[{unit}]"
+    assert model.model_validate(payload).answer_body == f"12[{unit}] 対象Aに限る[{unit}]"
     with pytest.raises(ValidationError):
         model.model_validate({**payload, "answer_body": {**body, "rows": [background]}})
+    for missing in ("原文にない問い", " "):
+        fact["requested_phrase"] = missing
+        with pytest.raises(ValidationError, match="原質問にある連続した語句"):
+            model.model_validate(payload)
+
+
+def test_comparison_preserves_printed_values_and_uses_only_the_requested_rule():
+    units, unit = catalog()
+    model = grounded.generation_output_model("対象AとBの値を比べ、適用理由も教えて。", unit_catalog=units)
+    marks = [f"[{unit}]"]
+    reason = {
+        "text": "Aの入力は12.00で、範囲外は適用しない",
+        "sources": marks,
+        "answers_which_question": "適用できる条件は？",
+        "requested_phrase": "適用理由",
+        "short_answer": "範囲外は適用しない",
+    }
+    body = {
+        "headers": ["対象", "入力", "理由"],
+        "rows": [
+            {"label": "A", "cells": [[{"number": "12.00", "sources": marks}], [reason]]},
+            {"label": "B", "cells": [[{"number": "0", "sources": marks}], []]},
+        ],
+    }
+    answer = model.model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"}).answer_body
+    assert answer.splitlines()[-2:] == [f"| A | 12.00[{unit}] | 範囲外は適用しない[{unit}] |", f"| B | 0[{unit}] |  |"]
