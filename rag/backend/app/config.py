@@ -1330,9 +1330,7 @@ class Settings(
         le=8000,
         description="Wiki の関連の判定に渡す原文の単位ごとの文字数（先頭から。判定だけに使う）。",
     )
-    # Wiki の検索の経路（#4941）。検索・回答プロファイルの「Wiki を使用する」（既定 OFF）で
-    # 有効にし、
-    # 通常検索の候補とは別に、原質問から目録・ファイル・章節を選んで現在の原文を足す。
+    # チャットは公開済み Wiki の索引順位と関連から、現在の原文を取得する（#5733）。
     rag_wiki_search_enabled: bool = Field(
         default=False,
         description=(

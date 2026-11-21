@@ -42,12 +42,15 @@ PROMPT_NAME = re.compile(
 # 一覧に載せないプロンプトの定数と、その理由。
 EDITABLE_DEFAULT = "編集できるプロンプトの既定値(画面は編集欄で示す)"
 PROBE_ONLY = "Enterprise AI の契約の確認の CLI だけ"
+WIKI_COMPARISON_ONLY = "Wiki の旧方式との比較テストだけ"
 NOT_LISTED = {
     "rag_engine.knowledge.prompt_files:DEFAULT_IMAGE_RETRIEVAL_PROMPT": EDITABLE_DEFAULT,
     # 検証・確認の CLI だけが使う(回答・取込・品質評価の経路では使わない)。
     "app.rag.enterprise_ai_probe:DEFAULT_LLM_PROMPT": PROBE_ONLY,
     "app.rag.enterprise_ai_probe:PROBE_SYSTEM_PROMPT": PROBE_ONLY,
     "app.rag.enterprise_ai_probe:DEFAULT_VLM_PROMPT": PROBE_ONLY,
+    "app.rag.wiki_retrieval:FILE_PROMPT": WIKI_COMPARISON_ONLY,
+    "app.rag.wiki_retrieval:READ_PROMPT": WIKI_COMPARISON_ONLY,
 }
 
 
