@@ -233,7 +233,10 @@ def test_no_room_for_a_complete_chunk_keeps_already_selected_originals():
     selected, _, diagnostic = run(values, read)
     assert any(value["text"] == values[0]["text"] for value in selected)
     assert diagnostic["fits"]
-    assert diagnostic["dependency_review"]["status"] == "budget_exhausted"
+    review = diagnostic["dependency_review"]
+    assert review["budget_skipped_source_ids"] == ["p1"]
+    assert review["calls"] > 0
+    assert review["calls"] <= review["call_limit"]
 
 
 def test_review_cannot_add_more_calls_than_the_preceding_reading():

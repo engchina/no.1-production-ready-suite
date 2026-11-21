@@ -509,7 +509,12 @@ def prepare_batched_evidence(
         result: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
         # Wiki の関係で結ばれた根拠を含む文書は 1 つの単位にし、同じ組で読む（#5512）。
-        for unit in related_documents(document_groups(main_of(values), priority=reading_order)):
+        groups = document_groups(main_of(values), priority=reading_order)
+        if reviewing:
+            known_docs = {document_key(value) for value in review_carry}
+            # 限られた補読回数を、採用済みの根拠がまだない文書から使う。同順位内は検索の優先順を保つ。
+            groups.sort(key=lambda group: document_key(group[0]) in known_docs)
+        for unit in related_documents(groups):
             if len(unit) > 1:
                 members = [value for document in unit for value in document]
                 if batch_fits([*current, *members]):
@@ -545,6 +550,13 @@ def prepare_batched_evidence(
                             result.append(current)
                             current = []
                         if not current and not batch_fits(members):
+                            if reviewing:
+                                # この chunk と既読原文を併せて送れなくても、後続の短い根拠は読める。
+                                skipped_sources = review_detail.setdefault("budget_skipped_source_ids", [])
+                                if key[1] not in skipped_sources:
+                                    skipped_sources.append(key[1])
+                                review_detail.update(status="budget_exhausted")
+                                continue
                             fail(
                                 "complete_chunk_group_exceeds_limit",
                                 source=str(value.get("source") or ""),
@@ -1067,12 +1079,13 @@ def prepare_batched_evidence(
                 if not measurement["fits"]:
                     stop_reduction("dependency_review_selected_evidence_exceeds_budget")
             if select_dependencies and not review_finished and measurement["fits"] and selected:
-                pending = [value for value in with_first_chunks(original_inputs, firsts) if not covered(value, selected)]
+                known_ranges = list(reduced.values())
+                pending = [value for value in with_first_chunks(original_inputs, firsts) if not covered(value, known_ranges)]
                 if review_sources is not None:
                     pending = [value for value in pending if document_key(value) in review_sources]
                 review_detail.update(pending_span_count=len(pending), scope="selected" if review_sources is not None else "all_pending")
                 if pending:
-                    review_carry[:] = list(reduced.values())
+                    review_carry[:] = known_ranges
                     reviewing = True
                     # 残り容量で細分化が増えても、補読は先行する読取と同じ回数までで止める。
                     review_detail.update(status="reading", calls=0, call_limit=len(batches))
