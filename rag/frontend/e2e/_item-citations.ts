@@ -20,7 +20,7 @@ export const itemCitationChunks = ["A", "B"].map((letter, index) => ({
 }));
 
 export async function expectItemCitationSources(page: Page, answer: Locator) {
-  await expect(answer.getByTestId("answer-citation-marker")).toHaveText(["[1]", "[2]", "[2]", "[2]", "[2]"]);
+  await expect(answer.getByTestId("answer-citation-marker")).toHaveText(["[1]", "[2]", "[2]", "[2]", "[2]", "[2]", "[2]"]);
   const rows = answer.getByRole("listitem");
   await expect(rows).toHaveCount(4);
   await expect(rows.nth(0).getByRole("button")).toHaveCount(1);

@@ -177,21 +177,21 @@ export function AnswerText({
 
   function numberedCitations(lines: readonly string[], ordinals: readonly number[] | undefined): AnswerCitationRef[] {
     return lines.flatMap((line, position) => {
-      const [first, ...others] = toCitations(line, ordinals?.[position]);
+      const refs = toCitations(line, ordinals?.[position]);
       const existing = sourceNumbers.get(line);
       const number = existing ?? sourceNumbers.size + 1;
       if (existing === undefined) {
         sourceNumbers.set(line, number);
-        firstSources.set(number, first);
+        firstSources.set(number, refs[0]);
       }
       const marker = `[${number}]`;
-      // 1 行が複数の原文を開くときも印は一つ。各リンクは出現位置ごとの原文を開く。
-      return [{
-        ...first,
+      // 同じ行から複数の原文を開けるときも、どのリンクがこの根拠のものか分かるよう同じ印を付ける。
+      return refs.map((ref, part) => ({
+        ...ref,
         marker,
-        anchorId: existing === undefined ? anchor(number) : undefined,
-        ariaLabel: first.onOpen ? t("search.answerText.openNumberedCitation", { mark: marker, citation: first.label }) : undefined,
-      }, ...others];
+        anchorId: existing === undefined && part === 0 ? anchor(number) : undefined,
+        ariaLabel: ref.onOpen ? t("search.answerText.openNumberedCitation", { mark: marker, citation: ref.label }) : undefined,
+      }));
     });
   }
 
