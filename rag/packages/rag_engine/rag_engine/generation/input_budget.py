@@ -56,15 +56,17 @@ def request_input_estimate(request: Mapping[str, Any], provider: LlmProviderSett
 
 
 def _complete_text_request(
-    system: str, prompt: str, schema: Mapping[str, Any], provider: LlmProviderSettings | None, reserve: int
+    system: str, prompt: str, schema: Mapping[str, Any], provider: LlmProviderSettings | None, reserve: int, *, image_count: int
 ) -> dict[str, Any]:
     # Responses SDK と同じ strict schema と項目の説明を用いる。stream の真偽は最終送信でも確かめる。
     copy = deepcopy(dict(schema))
     strict = _ensure_strict_json_schema(copy, path=(), root=copy)
     instructions, compact = with_schema_field_guide(system, strict)
+    # 画像を除いた後も SDK に送る user.content は本文の部品のリスト。画像の token は呼び元で別に加える。
+    content = [{"type": "input_text", "text": prompt}] if image_count else prompt
     request = {
         "model": provider.model if provider else "",
-        "input": [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}],
+        "input": [{"role": "system", "content": instructions}, {"role": "user", "content": content}],
         "text": {"format": {"type": "json_schema", "strict": True, "name": schema.get("title", "StructuredOutput"), "schema": compact}},
         "max_output_tokens": reserve,
         "temperature": 0.0,
@@ -100,7 +102,7 @@ def model_input_measurement(
     )
     images = image_diagnostic(provider, image_count)
     tokens = estimate_tokens(encoded) + images.get("estimated_image_tokens", 0)
-    payload = _complete_text_request(system, prompt, schema, provider, reserve)
+    payload = _complete_text_request(system, prompt, schema, provider, reserve, image_count=image_count)
     if provider is not None and uses_anthropic_messages(getattr(provider, "model_api", "")):
         from rag_parser_core.anthropic_responses import measure_messages_input
 

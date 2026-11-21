@@ -175,6 +175,7 @@ def usage_line(delta: Mapping[str, Any]) -> str:
     """利用者向けの 1 行（例: 「入力 12,345 tokens・出力 2,345 tokens（推論 1,800）・120.5 秒」）。空なら空文字。"""
     if not delta:
         return ""
+
     def total(label: str, side: str) -> str:
         count = delta.get(f"{side}_tokens")
         missing = int(delta.get(f"unreported_{side}_calls", 0))

@@ -31,10 +31,18 @@ def test_usage_text_distinguishes_missing_and_zero_with_chat_or_responses_counts
         before = usage_delta({})
         record_llm_usage(response_usage({"usage": {"input_tokens": 0, "output_tokens": 0}}))
         assert usage_line(usage_delta(before)).startswith("入力 0 tokens・出力 0 tokens")
-        record_llm_usage(response_usage({"usage": {
-            "prompt_tokens": 127, "completion_tokens": 19,
-            "prompt_tokens_details": {"cached_tokens": 6}, "completion_tokens_details": {"reasoning_tokens": 2},
-        }}))
+        record_llm_usage(
+            response_usage(
+                {
+                    "usage": {
+                        "prompt_tokens": 127,
+                        "completion_tokens": 19,
+                        "prompt_tokens_details": {"cached_tokens": 6},
+                        "completion_tokens_details": {"reasoning_tokens": 2},
+                    }
+                }
+            )
+        )
         totals = usage_delta({})
         assert (totals["calls"], totals["input_tokens"], totals["output_tokens"]) == (3, 127, 19)
         assert (totals["cached_tokens"], totals["reasoning_tokens"]) == (6, 2)
