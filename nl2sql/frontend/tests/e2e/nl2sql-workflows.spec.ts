@@ -10274,11 +10274,14 @@ test("sql to question page shows a reserved loading state and retries reference-
 
   const errorBanner = page.getByRole("alert");
   await expect(errorBanner).toContainText("接続状態と入力内容を確認して再試行してください。");
+  const completed = page.getByText("最新の状態に更新しました。", { exact: true });
+  await expect(completed).toHaveCount(0);
   failObjectRequests = false;
   await errorBanner.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(errorBanner).toHaveCount(0);
   await expect(page.getByText("請求情報")).toBeVisible();
   await expect(page.getByTestId("sql-to-question-table-count")).toContainText("全 1 件");
+  await expect(completed).toHaveCount(1);
   await expectNoHorizontalScroll(page);
 });
 
@@ -18179,7 +18182,7 @@ for (const outcome of ["unknown", "unavailable"] as const) {
     fail = false;
     run = syntheticRunFixture("running");
     await panel.getByRole("button", { name: "生成状況の最新情報を取得" }).click();
-    await expect(panel.getByText(/生成状況を更新しました|生成状況に変更はありません/)).toBeVisible();
+    await expect(page.getByText(/生成状況を更新しました|生成状況に変更はありません/)).toBeVisible();
     await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
     run = syntheticRunFixture("completed");
     await page.clock.fastForward(2_000);
