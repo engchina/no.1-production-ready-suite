@@ -18,7 +18,7 @@ from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag_engine.dependencies import parse_text_response
-from rag_engine.generation.answer_labels import answer_labels
+from rag_engine.generation.answer_labels import LEGACY_UNVERIFIED_SECTION, answer_labels
 from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE, LEGACY_APPLICATIONS_SECTION_TITLES
 from rag_engine.generation.operation_audit import answer_passage_ranges, sentence_ranges
 from rag_engine.resources.deadline import check_deadline
@@ -198,7 +198,7 @@ _NOTE_LABELS = (
 def _section_headers() -> dict[str, bool]:
     """言語資源と組立が定義する表示見出し。本文の意味による見出し推定はしない。"""
     labels = answer_labels()
-    sections: dict[str, bool] = {}
+    sections: dict[str, bool] = {LEGACY_UNVERIFIED_SECTION: True}
     for field, is_note in _SECTION_KINDS:
         title = str(getattr(labels, field, "") or "").strip()
         if title:

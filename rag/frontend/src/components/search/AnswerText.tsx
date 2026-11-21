@@ -227,7 +227,7 @@ export function AnswerText({
   }
 
   function renderSectionLink(text: string, title: string) {
-    if (title !== (format?.unverified_section ?? UNREAD_SECTION_TITLE)) return null;
+    if (title !== UNREAD_SECTION_TITLE && title !== "資料の読み込みに関する補足" && title !== format?.unverified_section) return null;
     const section = unreadSections.find((item) => item.line === text);
     if (!section) return null;
     const query = section.page != null ? `?page=${section.page}` : "";

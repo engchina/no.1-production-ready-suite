@@ -36,7 +36,7 @@ from rag_engine.generation.answer_envelope import (
     SettledConfirmations,
     settle_confirmation_items,
 )
-from rag_engine.generation.answer_labels import answer_labels
+from rag_engine.generation.answer_labels import LEGACY_UNVERIFIED_SECTION, answer_labels
 from rag_engine.generation.answer_models import (
     ANSWER_USE_CONFIRMED,
     ANSWER_USE_REFERENCE,
@@ -552,7 +552,7 @@ def generated_section_lines(answer_text: str) -> set[str]:
     指標の対象にしない。
     """
     labels = answer_labels()
-    titles = {labels.unverified_section, labels.deadline_section}
+    titles = {labels.unverified_section, labels.deadline_section, LEGACY_UNVERIFIED_SECTION}
     lines: set[str] = set()
     in_section = False
     for raw in answer_text.splitlines():

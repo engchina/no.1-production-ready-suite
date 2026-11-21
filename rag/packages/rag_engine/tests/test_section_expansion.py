@@ -249,6 +249,8 @@ def test_answer_deadline_also_limits_time():
     result = _expand(_seed_context("c31a"), _settings(), stub, started_at=0.0, clock=lambda: 10.0, deadline_remaining=lambda: 60.0)
 
     assert result.stop_reason == sections.STOP_TIME_LIMIT and stub.read_calls == []
+    assert result.context.records
+    assert result.gap_lines == [result.unread[0].label + "は、回答生成の時間を確保するため、章節全体の追加読み込みを省略しました。"]
 
 
 def _climbs(settings: SimpleNamespace, remaining: float) -> bool:
@@ -542,7 +544,7 @@ def test_answer_unread_view_caps_the_lines():
     view = sections.answer_unread_view(unread, {DOC})
 
     assert len(view.lines) == sections.MAX_UNREAD_LINES + 1 and view.overflow == 3
-    assert view.lines[-1] == "ほか 3 件の関連章節も未反映です。"
+    assert view.lines[-1] == "ほか 3 件の章節でも追加読み込みを完了できませんでした。"
     assert view.to_payload() == {"shown": sections.MAX_UNREAD_LINES + 1, "hidden": [], "overflow": 3}
 
 
