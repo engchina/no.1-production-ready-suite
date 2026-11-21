@@ -44,6 +44,7 @@ from rag_parser_core.structured_records import record_boundary_plain_text
 from app.config import BACKEND_ROOT
 from app.rag.field_extraction_units import (
     FieldExtractionUnit,
+    FieldSentenceTooLarge,
     FieldValueCandidate,
     UnitCandidates,
     merge_field_candidates,
@@ -601,7 +602,15 @@ async def extract_fields_from_extraction(
     # 構造化レコード JSONL の記録の境界のマーカー(#2457)は LLM に渡さない(単位は要素の本文)。
     if not record_boundary_plain_text(extraction).strip():
         return with_field_extraction_outcome(extraction, "no_text")
-    units = plan_field_extraction_units(extraction, text_budget_tokens=text_budget_tokens)
+    try:
+        units = plan_field_extraction_units(extraction, text_budget_tokens=text_budget_tokens)
+    except FieldSentenceTooLarge as exc:
+        raise FieldExtractionFailed(
+            "input_too_large",
+            run=FieldExtractionRun(unit_count=1, failed=1),
+            kind=ErrorKind.TOO_LARGE,
+            status=None,
+        ) from exc
     if not units:
         return with_field_extraction_outcome(extraction, "no_text")
 

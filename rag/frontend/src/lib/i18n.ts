@@ -3276,6 +3276,7 @@ export const ja = {
   "documents.summary.failure.timeout": "時間の上限までに作成が終わりませんでした。",
   "documents.summary.failure.model_failed": "モデルの呼び出しに失敗しました。モデル設定と接続を確認してください。",
   "documents.summary.failure.invalid_output": "モデルの応答を要約として読み取れませんでした。",
+  "documents.summary.failure.input_too_large": "本文の一文が要約の入力上限を超えています。",
   "documents.summary.failure.no_content": "要約できる本文がありませんでした。",
   "documents.summary.failure.source_missing": "要約の元にする解析結果を読み込めませんでした。文書解析から再処理してください。",
   "documents.summary.failure.index_failed": "要約を索引に保存できませんでした。",

@@ -32,6 +32,7 @@ from pr_backend_core.observability.model_purpose import async_call_with_model_pu
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rag_parser_core.extraction import DOCUMENT_SUMMARY_CONTENT_KIND, is_derived_content
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
+from rag_parser_core.xml_tree_json import SourceParagraph, source_paragraphs
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.document_summary_store import (
@@ -73,6 +74,7 @@ FAILURE_TIMEOUT = "timeout"
 FAILURE_MODEL = "model_failed"
 FAILURE_INVALID_OUTPUT = "invalid_output"
 FAILURE_NO_CONTENT = "no_content"
+FAILURE_INPUT_TOO_LARGE = "input_too_large"
 FAILURE_SOURCE_MISSING = "source_missing"
 FAILURE_INDEX = "index_failed"
 FAILURE_INTERRUPTED = "interrupted"
@@ -122,6 +124,7 @@ class SummarySource:
 
     body: str
     headings: tuple[tuple[int, str], ...]
+    paragraphs: tuple[SourceParagraph, ...] | None = None
 
 
 class _TextModel(Protocol):
@@ -154,7 +157,9 @@ def summary_source(extraction: StructuredExtraction) -> SummarySource:
         for node in extraction.navigation
         if node.title.strip()
     )
-    return SummarySource(body=body, headings=headings)
+    return SummarySource(
+        body=body, headings=headings, paragraphs=source_paragraphs(extraction, body)
+    )
 
 
 def _outline_lines(headings: Sequence[tuple[int, str]], max_depth: int) -> list[str]:
@@ -188,6 +193,13 @@ def _head(text: str, budget: int) -> str:
     return text[: cut if cut > 0 else budget].rstrip()
 
 
+def _source_prefix_end(paragraphs: Sequence[SourceParagraph], available: int) -> int:
+    full = max((p.end for p in paragraphs if p.end <= available), default=0)
+    if full:
+        return full
+    return max((end for end in paragraphs[0].sentence_ends if end <= available), default=0)
+
+
 def build_summary_input(source: SummarySource, *, max_chars: int) -> SummaryInput:
     """入力を作る。予算に収まる文書は本文の全体、超える文書は先頭の本文と見出しの一覧。"""
     body = source.body
@@ -201,7 +213,18 @@ def build_summary_input(source: SummarySource, *, max_chars: int) -> SummaryInpu
             heading_count=0,
         )
     outline, heading_count = _fit_outline(source.headings, max_chars // _OUTLINE_BUDGET_DIVISOR)
-    head = _head(body, max_chars - len(outline))
+    budget = max_chars - len(outline)
+    if source.paragraphs:
+        end = _source_prefix_end(source.paragraphs, budget)
+        if not end and outline:
+            # 先頭段落の一文にも満たない場合だけ、見出しの予算を本文に戻す。
+            outline, heading_count = "", 0
+            end = _source_prefix_end(source.paragraphs, max_chars)
+        if not end:
+            raise SummaryUnavailable(FAILURE_INPUT_TOO_LARGE)
+        head = body[:end].rstrip()
+    else:
+        head = _head(body, budget)
     text = (
         f'<document_body truncated="true" shown_chars="{len(head)}" total_chars="{total}">\n'
         f"{head}\n</document_body>"

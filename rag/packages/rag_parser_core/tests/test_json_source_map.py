@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from rag_parser_core.xml_tree_json import xml_tree_json_extraction
+from rag_parser_core.xml_tree_json import element_paragraphs, xml_tree_json_extraction
 
 
 def _node(tag: str, *children: Any, **attrs: str) -> dict[str, Any]:
@@ -191,7 +191,13 @@ def test_merged_table_cell_records_one_to_many_mapping_without_markdown_syntax()
     paragraph["children"].append(
         _node(
             "TableStruct",
-            _node("Table", _node("TableRow", _node("TableHeaderColumn", "Repeated", colspan="2"))),
+            _node(
+                "Table",
+                _node(
+                    "TableRow",
+                    _node("TableHeaderColumn", _node("Sentence", "Repeated"), colspan="2"),
+                ),
+            ),
         )
     )
     raw = json.dumps(payload).encode()
@@ -203,4 +209,17 @@ def test_merged_table_cell_records_one_to_many_mapping_without_markdown_syntax()
     assert len(repeated) == 2
     assert repeated[0]["pointer"] == repeated[1]["pointer"]
     assert repeated[0]["start"] != repeated[1]["start"]
+    ends = element_paragraphs(extraction, element)[0].sentence_ends
+    assert ends and all(span["end"] in ends for span in repeated)
     assert all("|" not in element.text[span["start"] : span["end"]] for span in spans)
+
+
+def test_single_long_sentence_retains_its_end_and_source_locator() -> None:
+    sentence = "x" * 61_000 + "（補足。）終わり。"
+    extraction = xml_tree_json_extraction(json.dumps(_document(sentence)).encode())
+    assert extraction is not None
+    element = extraction.elements[0]
+    assert element.text.endswith(sentence)
+    assert element_paragraphs(extraction, element)[0].sentence_ends == ()
+    mapped = extraction.parser_artifacts["json_source_map"]["elements"][element.element_id]
+    assert mapped[-1]["source_end"] == len(sentence)

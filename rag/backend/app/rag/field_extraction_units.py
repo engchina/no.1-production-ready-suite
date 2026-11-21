@@ -23,10 +23,11 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pr_system_settings.model import estimate_input_tokens, input_token_budget
 from rag_parser_core.extraction import is_derived_content
+from rag_parser_core.xml_tree_json import element_paragraphs
 
 from app.rag.ingestion_prompts import FIELD_EXTRACTION_PART_HEADER, FIELD_EXTRACTION_PART_PATH
 from app.schemas.extraction import ExtractionField, StructuredExtraction
@@ -52,6 +53,7 @@ class FieldExtractionAtom:
     element_id: str | None = None
     page_number: int | None = None
     section_path: tuple[str, ...] = ()
+    sentence_ends: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -152,9 +154,12 @@ def split_field_extraction_unit(
     if budget < MIN_UNIT_TEXT_TOKENS:
         return []
     atoms: list[FieldExtractionAtom] = []
-    for atom in unit.atoms:
-        atoms.extend(_split_atom(atom, budget - _header_tokens(atom) - 1))
-    parts = _group_atoms(atoms, budget, index=unit.index, total=unit.total, part=unit.part)
+    try:
+        for atom in unit.atoms:
+            atoms.extend(_split_atom(atom, budget - _header_tokens(atom) - 1))
+        parts = _group_atoms(atoms, budget, index=unit.index, total=unit.total, part=unit.part)
+    except FieldSentenceTooLarge:
+        return []
     return parts if len(parts) > 1 else []
 
 
@@ -238,16 +243,27 @@ def _extraction_atoms(extraction: StructuredExtraction, budget: int) -> list[Fie
         text = element.text.strip()
         if not text or is_derived_content(element.content_kind, element.metadata):
             continue
-        atom = FieldExtractionAtom(
-            text=text,
-            tokens=estimate_input_tokens(text),
-            element_id=element.element_id,
-            page_number=element.page_number,
-            section_path=tuple(element.section_path),
+        paragraphs = element_paragraphs(extraction, element)
+        parts = (
+            (
+                (text[p.start : p.end], tuple(end - p.start for end in p.sentence_ends))
+                for p in paragraphs
+            )
+            if paragraphs is not None
+            else [(text, None)]
         )
-        atoms.extend(
-            _split_atom(atom, budget - _header_tokens(atom) - 1, table=element.kind == "table")
-        )
+        for part, ends in parts:
+            atom = FieldExtractionAtom(
+                text=part,
+                tokens=estimate_input_tokens(part),
+                element_id=element.element_id,
+                page_number=element.page_number,
+                section_path=tuple(element.section_path),
+                sentence_ends=ends,
+            )
+            atoms.extend(
+                _split_atom(atom, budget - _header_tokens(atom) - 1, table=element.kind == "table")
+            )
     return atoms
 
 
@@ -290,6 +306,9 @@ def _group_atoms(
         text = "\n".join(
             part_text for part_text in (header, *_texts(carried), *_texts(new)) if part_text
         )
+        tokens = estimate_input_tokens(text)
+        if new[0].sentence_ends is not None and tokens > budget:
+            raise FieldSentenceTooLarge
         units.append(
             FieldExtractionUnit(
                 index=unit_index,
@@ -298,7 +317,7 @@ def _group_atoms(
                 overlap=carried,
                 part=unit_part,
                 text=text,
-                tokens=estimate_input_tokens(text),
+                tokens=tokens,
             )
         )
     return units
@@ -322,6 +341,15 @@ def _tail_overlap(
             used += atom.tokens + 1
             continue
         if not carried:
+            if atom.sentence_ends is not None:
+                # 文脈の末尾を加える場合も、文の途中から読ませない。
+                suffix = _tail_text(atom.text, budget - 1)
+                earliest = len(atom.text) - len(suffix)
+                for start in atom.sentence_ends:
+                    if start >= earliest:
+                        carried.insert(0, _atom_slice(atom, start, len(atom.text)))
+                        break
+                break
             tail = _tail_text(atom.text, budget)
             if tail:
                 carried.insert(
@@ -350,6 +378,31 @@ def _header_tokens(atom: FieldExtractionAtom) -> int:
     return estimate_input_tokens(_header(99_999, 99_999, atom)) + 1
 
 
+class FieldSentenceTooLarge(ValueError):
+    """原文の完全な一文を、項目抽出の本文の予算に収められない。"""
+
+
+def _atom_slice(atom: FieldExtractionAtom, start: int, end: int) -> FieldExtractionAtom:
+    text = atom.text[start:end]
+    ends = tuple(point - start for point in atom.sentence_ends or () if start < point < end)
+    return replace(atom, text=text, tokens=estimate_input_tokens(text), sentence_ends=ends)
+
+
+def _split_at_source_ends(atom: FieldExtractionAtom, limit: int) -> list[FieldExtractionAtom]:
+    pieces = []
+    start = previous = used = 0
+    for end in (*(atom.sentence_ends or ()), len(atom.text)):
+        cost = estimate_input_tokens(atom.text[previous:end])
+        if cost > limit:
+            raise FieldSentenceTooLarge
+        if used + cost > limit:
+            pieces.append(_atom_slice(atom, start, previous))
+            start, used = previous, 0
+        previous, used = end, used + cost
+    pieces.append(_atom_slice(atom, start, previous))
+    return pieces
+
+
 def _split_atom(
     atom: FieldExtractionAtom, limit: int, *, table: bool = False
 ) -> list[FieldExtractionAtom]:
@@ -357,6 +410,8 @@ def _split_atom(
     limit = max(1, limit)
     if atom.tokens <= limit:
         return [atom]
+    if atom.sentence_ends is not None:
+        return _split_at_source_ends(atom, limit)
     lines = atom.text.split("\n")
     header: list[str] = []
     looks_like_table = table or lines[0].lstrip().startswith("|")

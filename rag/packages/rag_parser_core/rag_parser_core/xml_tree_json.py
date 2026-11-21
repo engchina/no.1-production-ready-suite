@@ -46,6 +46,7 @@ from rag_parser_core.extraction import (
     DocumentNavigationNode,
     ExtractionField,
     StructuredExtraction,
+    is_derived_content,
 )
 from rag_parser_core.json_source_map import (
     MappedText,
@@ -68,7 +69,7 @@ from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, dump_ranges
 
 XML_TREE_JSON_BACKEND = "xml_tree_json"
 XML_TREE_JSON_SOURCE_FORMAT = "xml_tree_json"
-XML_TREE_JSON_PARSER_VERSION = "xml_tree_json_v2"
+XML_TREE_JSON_PARSER_VERSION = "xml_tree_json_v3"
 # registry の adapter の版（``_adapter_version``）が読む。
 __version__ = XML_TREE_JSON_PARSER_VERSION
 XML_TREE_JSON_FORMAT_VERSION = 1
@@ -81,8 +82,7 @@ XML_TREE_METADATA_PREFIX = "xml_tree_"
 XML_TREE_LOOKUP_KEYS_KEY = "xml_tree_lookup_keys"
 # 判定のために全体を読む JSON の上限。
 _DETECTION_MAX_BYTES = 128 * 1024 * 1024
-# 1 つの要素の本文の上限（極端に長い別表で chunk を壊さない）。分割は backend が子の上限で行う。
-_ELEMENT_TEXT_MAX_CHARS = 60_000
+_BOUNDARIES_KEY = "element_text_boundaries"
 
 # スキーマの文書の情報・版の情報・木の key。
 _TREE_KEY = "law_full_text"
@@ -964,6 +964,137 @@ def _unit_metadata(
     return values
 
 
+def _structure_leaves(root: object, tag: str) -> dict[str, tuple[int, int]]:
+    """原文の文字列ノードを、それを含む指定の構造と読み順に結びつける。"""
+    leaves: dict[str, tuple[int, int]] = {}
+    count = 0
+
+    def visit(node: object, sentence: int | None) -> None:
+        nonlocal count
+        if isinstance(node, MappedText):
+            if sentence is not None and node.spans:
+                leaves[node.spans[0].pointer] = (sentence, len(leaves))
+            return
+        if _tag(node) == tag:
+            sentence = count
+            count += 1
+        for child in _children(node):
+            visit(child, sentence)
+
+    visit(root, None)
+    return leaves
+
+
+def _rendered_ranges(
+    text: MappedText, leaves: Mapping[str, tuple[int, int]], *, repeat_cells: bool = False
+) -> list[tuple[int, int]]:
+    """組版後の各段落・文の範囲。再掲した結合セルの文は、表示された回ごとに扱う。"""
+    intervals: list[tuple[int, int]] = []
+    # 文ごとの直前の原文位置と、今回の表示に対応する範囲の番号。
+    previous: dict[int, tuple[int, int, int]] = {}
+    for span in text.spans:
+        if span.pointer not in leaves:
+            continue
+        sentence, order = leaves[span.pointer]
+        last = previous.get(sentence)
+        if last is None or (repeat_cells and (order, span.source_start) < last[:2]):
+            index = len(intervals)
+            intervals.append((span.start, span.end))
+        else:
+            index = last[2]
+            intervals[index] = (intervals[index][0], span.end)
+        previous[sentence] = (order, span.source_end, index)
+
+    # 複数の原文が交錯して表示されたときは、そのまとまりの外だけで切れる。
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(intervals):
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _rendered_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class SourceParagraph:
+    """読取テキスト内の段落（文末も同じ Unicode codepoint 座標）。"""
+
+    start: int
+    end: int
+    sentence_ends: tuple[int, ...] = ()
+    source_chars: int | None = None
+
+
+def element_paragraphs(
+    extraction: StructuredExtraction, element: DocumentElement, offset: int = 0
+) -> tuple[SourceParagraph, ...] | None:
+    """原文の段落と文末を読み順の座標に写す。古い抽出や本文変更時は要素全体を不可分にする。"""
+    if not is_xml_tree_json_extraction(extraction):
+        return None
+    length = len(element.text)
+    fallback = (SourceParagraph(offset, offset + length),)
+    records = extraction.parser_artifacts.get(_BOUNDARIES_KEY)
+    record = records.get(element.element_id or "") if isinstance(records, dict) else None
+    if not isinstance(record, dict) or record.get("sha256") != _rendered_digest(element.text):
+        return fallback
+    ranges, ends = record.get("paragraphs"), record.get("sentence_ends")
+    if not isinstance(ranges, list) or not isinstance(ends, list):
+        return fallback
+    sentence_ends: list[int] = []
+    for end in ends:
+        last = sentence_ends[-1] if sentence_ends else 0
+        if type(end) is not int or not last < end < length:
+            return fallback
+        sentence_ends.append(end)
+    paragraphs = []
+    start = 0
+    for index, pair in enumerate(ranges or [[0, length]]):
+        if not isinstance(pair, list) or len(pair) != 2:
+            return fallback
+        a, b = pair
+        if type(a) is not int or type(b) is not int or not start <= a < b <= length:
+            return fallback
+        end = b if index + 1 < len(ranges) else length
+        paragraphs.append(
+            SourceParagraph(
+                offset + start,
+                offset + end,
+                tuple(offset + point for point in sentence_ends if start < point < end),
+                source_chars=b - a,
+            )
+        )
+        start = end
+    return tuple(paragraphs)
+
+
+def source_paragraphs(
+    extraction: StructuredExtraction, text: str
+) -> tuple[SourceParagraph, ...] | None:
+    """組版済みの原文を読み順の段落へ対応させる。タイトルなど要素外の文字も保持する。"""
+    if not is_xml_tree_json_extraction(extraction):
+        return None
+    paragraphs: list[SourceParagraph] = []
+    cursor = 0
+    for element in extraction.elements:
+        if not element.text or is_derived_content(element.content_kind, element.metadata):
+            continue
+        start = text.find(element.text, cursor)
+        if start < 0:
+            # 既存の抽出で対応を確認できない場合は、原文にない切れ目を作らない。
+            return (SourceParagraph(0, len(text)),)
+        if text[cursor:start].strip():
+            paragraphs.append(SourceParagraph(cursor, start))
+        cursor = start + len(element.text)
+        paragraphs.extend(element_paragraphs(extraction, element, start) or ())
+    if text[cursor:].strip():
+        paragraphs.append(SourceParagraph(cursor, len(text)))
+    return tuple(paragraphs)
+
+
 def xml_tree_json_extraction_from_payload(
     payload: Mapping[str, Any],
     *,
@@ -972,7 +1103,11 @@ def xml_tree_json_extraction_from_payload(
     source_sha256: str | None = None,
 ) -> StructuredExtraction:
     """XML ツリー JSON（dict）を、段落を 1 要素にした抽出にする。"""
-    metadata, units = _read_units(mapped_payload(payload) if source_sha256 else payload)
+    mapped = mapped_payload(payload)
+    paragraphs = _structure_leaves(mapped[_TREE_KEY], "Paragraph")
+    sentences = _structure_leaves(mapped[_TREE_KEY], "Sentence")
+    metadata, units = _read_units(mapped)
+    boundaries: dict[str, Any] = {}
     source_maps: dict[str, Any] = {}
     title = metadata.title
     elements: list[DocumentElement] = []
@@ -984,7 +1119,7 @@ def xml_tree_json_extraction_from_payload(
         if not body_lines:
             continue
         heading = f"{title} {unit.citation}{unit.parent_caption}".strip()
-        text = mapped_slice(mapped_join("\n", [heading, *body_lines]), 0, _ELEMENT_TEXT_MAX_CHARS)
+        text = mapped_join("\n", [heading, *body_lines])
         for mark in FORMATTING_COMBINING_MARKS:
             text = mapped_replace(text, mark, "")
         text = mapped_strip(text)
@@ -1001,7 +1136,16 @@ def xml_tree_json_extraction_from_payload(
         )
         content_kind = "table" if unit.unit_kind == "appendix" and unit.has_table else "text"
         order = len(elements)
-        if source_sha256 and isinstance(text, MappedText):
+        boundaries[f"xt-{order:05d}"] = {
+            "sha256": _rendered_digest(text),
+            "paragraphs": [list(pair) for pair in _rendered_ranges(text, paragraphs)],
+            "sentence_ends": [
+                end
+                for _, end in _rendered_ranges(text, sentences, repeat_cells=True)
+                if end < len(text)
+            ],
+        }
+        if source_sha256:
             source_maps[f"xt-{order:05d}"] = [span.to_dict() for span in text.spans]
         elements.append(
             DocumentElement(
@@ -1059,6 +1203,7 @@ def xml_tree_json_extraction_from_payload(
         navigation=_navigation(elements),
         fields=fields,
         parser_artifacts={
+            _BOUNDARIES_KEY: boundaries,
             **(
                 {
                     "json_source_map": {
