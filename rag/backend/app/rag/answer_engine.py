@@ -742,7 +742,6 @@ class AnswerEngine:
         # (テストは代役を入れる)。
         self._reference_llm: Any | None = None
         # Wiki の計画のモデル(テストで差し替える。None は回答のモデル)。
-        self._wiki_llm: Any | None = None
         # ⑦ 根拠の拡張をするか(#5332。``RagPipeline`` の経路が expanded のとき)。しないとき
         # (RAG 検索の経路)は切った起点からの検索拡張(参照の展開・目次からの章節の選択・実体)
         # を呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
@@ -3162,14 +3161,9 @@ class AnswerEngine:
                 plan.skip(SKIP_NO_SELECTION)
 
     def _wiki_retriever(self) -> Any:
-        from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
         from app.rag.wiki_retrieval import WikiRetriever
 
-        llm = self._wiki_llm or OciEnterpriseAiClient(
-            settings=self._settings,
-            model_id=self._answer_model_id or enterprise_ai_default_model_id(self._settings),
-        )
-        return WikiRetriever(self._settings, self._oracle, self._genai, llm)
+        return WikiRetriever(self._settings, self._oracle, self._genai)
 
     async def _wiki_sources(self, request: SearchRequest, state: _SearchState) -> list[Any]:
         """Wiki の検索の経路の原文(#4941)。

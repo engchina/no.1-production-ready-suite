@@ -1343,24 +1343,27 @@ class Settings(
         default=100,
         ge=1,
         le=500,
-        description="Wiki の案内のベクトル・全文検索と、原文の選択に渡す単位の候補の上限。",
+        description="Wiki のベクトル検索と全文検索の順位を合わせる候補数の上限。",
     )
     rag_wiki_selected_documents: int = Field(
-        default=8, ge=1, le=30, description="Wiki の計画で選べるファイルの数の上限。"
+        default=8, ge=1, le=30, description="比較用の旧方式でモデルが選べるファイルの数の上限。"
     )
     rag_wiki_selected_units: int = Field(
-        default=32, ge=1, le=200, description="Wiki の計画で選べる原文単位の数の上限。"
+        default=32,
+        ge=1,
+        le=200,
+        description="Wiki の索引の上位から辿りの起点にする原文単位の数の上限。",
     )
     rag_wiki_selected_sections: int = Field(
-        default=24, ge=1, le=100, description="Wiki の計画で選べる章節の数の上限。"
+        default=24, ge=1, le=100, description="比較用の旧方式でモデルが選べる章節の数の上限。"
     )
     rag_wiki_section_catalog_limit: int = Field(
         default=48,
         ge=1,
         le=200,
         description=(
-            "Wiki の章節の候補の数の上限。選んだファイルの全原文を覆う章節をこの数まで細かくする。"
-            "選んだ文書の保存版の数より小さいと Wiki の検索は失敗する。"
+            "比較用の旧方式で、モデルに渡す章節の候補の数の上限。"
+            "選んだ文書の保存版の数以上を指定する。"
         ),
     )
     rag_wiki_link_depth: int = Field(
