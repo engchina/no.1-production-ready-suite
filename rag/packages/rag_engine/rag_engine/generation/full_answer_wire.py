@@ -254,10 +254,13 @@ class AnswerTableBody(BaseModel):
         ),
     )
 
+    def shared_scope_sources(self, question: str | None) -> tuple[set[int], dict[int, list[str]]]:
+        return _shared_scope_sources(self.rows, question) if len(self.headers) == 2 and question else (set(), {})
+
     def markdown(self, question: str | None, *, can_repair: bool = False) -> str:
         rows = []
         value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
-        omitted, scope_sources = _shared_scope_sources(self.rows, question) if len(self.headers) == 2 and question else (set(), {})
+        omitted, scope_sources = self.shared_scope_sources(question)
         for index, row in enumerate(self.rows):
             if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
