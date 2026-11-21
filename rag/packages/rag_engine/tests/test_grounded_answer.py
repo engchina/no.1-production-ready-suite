@@ -386,7 +386,8 @@ class GroundedAnswerTest(unittest.TestCase):
         from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 
         schema = grounded.generation_output_model(QUESTION, unit_catalog=SentUnitCatalog([snapshot()])).model_json_schema()
-        self.assertEqual(schema["properties"]["answer_body"]["minLength"], 1)
+        self.assertIn("answer_body", schema["required"])
+        self.assertEqual(set(schema["$defs"]["AnswerBodyInput"]["required"]), {"points", "table"})
         for field in ("citations", "answer_parts", "items", "summary", "request_coverage"):
             self.assertNotIn(field, schema["properties"])
         self.assertNotIn("全体が破棄される", grounded.generation_system_prompt())

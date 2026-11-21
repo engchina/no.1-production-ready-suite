@@ -106,7 +106,7 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     assert "重複する item をまとめ" not in generate
     from rag_engine.generation.full_answer_wire import FullAnswerWire
 
-    assert "適用範囲" in FullAnswerWire.model_fields["answer_body"].description
+    assert "各要求" in FullAnswerWire.model_fields["answer_body"].description
     relation = RequestEvidenceScopeRange.model_json_schema()["properties"]["relation"]["description"]
     plan_ids = RequestCoverageRange.model_json_schema()["properties"]["evidence_scope"]["description"]
     assert "直接答える" not in relation + plan_ids
