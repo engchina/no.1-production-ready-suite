@@ -1487,7 +1487,7 @@ export const ja = {
   "settings.vectorIndex.reindexSql.copy": "SQL をコピー",
   "settings.evaluation.subtitle": "品質評価の合否の判定に使う評価の基準(閾値のプリセット)を選び、評価に使うプロンプトを確認します。",
   "settings.evaluation.overview.title": "評価の基準",
-  "settings.evaluation.overview.description": "検索 2 項目・回答 1 項目の三指標です。検索の評価には正解の根拠、正確性の評価には標準回答を用意します。必須要点は参考の網羅率に使います。標準回答には期待する答えの結論・数値・手順を書きます。「〜を提案できる」のような能力の説明は、回答と照らし合わせられません。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。必要な評価情報がない指標は未評価となり、0 点や合格にはしません。",
+  "settings.evaluation.overview.description": "検索 2 項目・回答 1 項目の三指標です。正解の根拠と、標準回答や必須要点を用意します。標準回答には期待する答えの結論・数値・手順を書きます。資料に答えがない場合、標準回答に期待する返答を書きます（例：「資料に記載がないため回答できません」）。必要な評価情報がない指標は未評価となり、0 点や合格にはしません。",
   "settings.evaluation.suite": "評価の基準",
   "settings.evaluation.thresholds": "閾値",
   "settings.evaluation.metrics.title": "{suite}の指標と閾値",
