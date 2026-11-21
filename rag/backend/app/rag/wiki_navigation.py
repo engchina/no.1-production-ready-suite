@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from app.rag.wiki_models import WikiPage, fingerprint
+
+
+def handle_pattern(handles: Iterable[str]) -> re.Pattern[str]:
+    """短い ID と完全に一致する所だけ。前後が英数字・下線の所（``C12`` の中の ``C1``）は除く。"""
+    return re.compile(
+        r"(?<![0-9A-Za-z_])(?:"
+        + "|".join(re.escape(handle) for handle in sorted(handles, key=len, reverse=True))
+        + r")(?![0-9A-Za-z_])"
+    )
 
 
 class Handles:

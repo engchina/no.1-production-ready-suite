@@ -59,7 +59,9 @@ class Model:
                         "possible_questions": ["開始前に何を確認するか。"],
                         "dependencies": [
                             {
-                                "unit_id": "outside" if self.invalid else "unit-1",
+                                "unit_id": "outside"
+                                if self.invalid
+                                else data["outline"][min(1, len(data["outline"]) - 1)][0],
                                 "relation": "warning",
                             }
                         ],

@@ -433,6 +433,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("PUT", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/wiki/retry"): _any(MENU_KNOWLEDGE_BASES),
+    ("POST", f"{_KB}/wiki/documents/{{document_id}}/retry"): _any(MENU_KNOWLEDGE_BASES),
     # KB 詳細の Wiki の図（#5502）。
     ("GET", f"{_KB}/wiki/graph"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki/graph/document-count"): _any(MENU_KNOWLEDGE_BASES),

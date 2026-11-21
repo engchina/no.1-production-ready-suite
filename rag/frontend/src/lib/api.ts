@@ -3871,6 +3871,11 @@ export const api = {
   getKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`),
   setKnowledgeBaseWiki: (id: string, enabled: boolean, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki?offset=${offset}&limit=${limit}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }),
   retryKnowledgeBaseWiki: (id: string, offset = 0, limit = 25) => request<KnowledgeBaseWikiData>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/retry?offset=${offset}&limit=${limit}`, { method: "POST" }),
+  retryKnowledgeBaseWikiDocument: (id: string, documentId: string, offset = 0, limit = 25) =>
+    request<KnowledgeBaseWikiData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/wiki/documents/${encodeURIComponent(documentId)}/retry?offset=${offset}&limit=${limit}`,
+      { method: "POST" },
+    ),
   getWikiGraphOverview: (id: string, offset = 0) =>
     request<WikiGraphOverview>(`/api/knowledge-bases/${encodeURIComponent(id)}/wiki/graph?offset=${offset}&limit=25`),
   getWikiGraphDocumentCount: (id: string) =>

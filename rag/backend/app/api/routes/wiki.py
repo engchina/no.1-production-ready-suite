@@ -2,13 +2,13 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pr_backend_core.api import OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.clients.wiki_store import WikiStore
 from app.config import get_settings
-from app.rag.request_context import system_access_context
+from app.rag.request_context import DOCUMENT_ID_PATTERN, system_access_context
 from app.rag.wiki_jobs import wiki_jobs
 from app.rag.wiki_models import WIKI_BUILD_KEY
 from app.schemas.common import ApiResponse
@@ -106,4 +106,26 @@ async def retry_wiki_build(
     await WikiStore(OracleClient()).requeue_failed({"knowledge_base_id": knowledge_base_id})
     wiki_jobs.notify(knowledge_base_id)
     # 待機へ戻した後の状態を返し、画面が再試行の前の件数で上書きしないようにする。
+    return await get_wiki_settings(knowledge_base_id, paging)
+
+
+@router.post(
+    "/{knowledge_base_id}/wiki/documents/{document_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=ApiResponse[KnowledgeBaseWikiData],
+)
+async def retry_document_wiki_pages(
+    knowledge_base_id: str,
+    document_id: Annotated[str, Path(pattern=DOCUMENT_ID_PATTERN.pattern)],
+    paging: Paging,
+) -> ApiResponse[KnowledgeBaseWikiData]:
+    current = await get_wiki_settings(knowledge_base_id, paging)
+    if not current.data or not current.data.enabled:
+        raise HTTPException(status_code=409, detail="Wiki の構築を有効にしてください。")
+    try:
+        await wiki_jobs.retry_document_pages(knowledge_base_id, document_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="資料が見つかりません。") from error
+    except (PermissionError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return await get_wiki_settings(knowledge_base_id, paging)

@@ -15,6 +15,7 @@ from rag_parser_core.xml_tree_json import XML_TREE_DOCUMENT_ARTIFACT_KEY
 from app.clients.oracle import (
     OracleClient,
     _execute,
+    _execute_count,
     _fetch_one,
     _filter_id_values,
     _int_value,
@@ -33,6 +34,7 @@ from app.clients.oracle import (
     oracle_text_index_parameters_sql,
 )
 from app.clients.wiki_graph_index import index_document
+from app.rag.cross_references import REFERENCE_TARGETS_KEY
 from app.rag.request_context import current_audit_request_context
 from app.rag.wiki_models import (
     WIKI_BUILD_KEY,
@@ -145,6 +147,9 @@ class WikiSnapshot:
     units: tuple[WikiUnit, ...]
     compiler_fingerprint: str = ""
     revision_fingerprint: str = ""
+    source_metadata: Mapping[str, Mapping[str, object]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
 
 # 今の有効で索引済みの chunk_set（文書の保存版）。
@@ -446,6 +451,39 @@ class WikiStore:
 
         await self.oracle._run_transaction(operation)
 
+    async def requeue_failed_document_pages(
+        self, knowledge_base_id: str, document_id: str, revision: str
+    ) -> bool:
+        """指定した有効な KB の失敗した文書一件の案内だけを待機に戻す。"""
+        where, binds = wiki_scope(
+            {"knowledge_base_id": knowledge_base_id, "document_id": document_id}
+        )
+        target = f"""w.document_id=:target AND w.status='FAILED' AND EXISTS (
+            SELECT 1 FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
+            WHERE c.document_id=w.document_id AND {where})"""
+        scoped = {**binds, "target": document_id}
+
+        def operation(connection: Any) -> bool:
+            changed = _execute_count(
+                connection,
+                f"""UPDATE rag_wiki_documents w SET status='QUEUED',failure_code=NULL,
+                lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
+                WHERE {target} AND w.revision_fingerprint=:revision""",
+                {**scoped, "revision": revision},
+            )
+            if changed:
+                return True
+            row = _fetch_one(
+                connection,
+                f"SELECT w.revision_fingerprint FROM rag_wiki_documents w WHERE {target}",
+                scoped,
+            )
+            if row and row["revision_fingerprint"] != revision:
+                raise ValueError("Wiki の原文の版が変わりました。")
+            return False
+
+        return await self.oracle._run_transaction(operation)
+
     async def source_units(self, document_id: str) -> WikiSnapshot | None:
         where, binds = wiki_scope({"document_id": document_id, "include_superseded": "true"})
         rows = await self.oracle._fetch_all(
@@ -518,7 +556,15 @@ class WikiStore:
         if not units:
             return None
         return WikiSnapshot(
-            document_id, fingerprint([unit.model_dump() for unit in units]), tuple(units)
+            document_id,
+            fingerprint([unit.model_dump() for unit in units]),
+            tuple(units),
+            source_metadata={
+                str(row["chunk_id"]): {
+                    k: m[k] for k in ("start_offset", "end_offset", REFERENCE_TARGETS_KEY) if k in m
+                }
+                for row, m in originals
+            },
         )
 
     async def enqueue(self, snapshot: WikiSnapshot) -> bool:

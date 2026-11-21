@@ -7,8 +7,7 @@
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +21,7 @@ from rag_parser_core.oci_enterprise_ai import (
 
 from app.rag.wiki_compiler import WikiTextModel
 from app.rag.wiki_models import WikiLinkJudgments, WikiPage, link_schema
-from app.rag.wiki_navigation import Handles
+from app.rag.wiki_navigation import Handles, handle_pattern
 
 # 保存先の列（rag_wiki_links.reason VARCHAR2(800)）のバイト数。短い ID を見出しへ置き換えると
 # 理由が長くなるので、保存の前にこの長さへ収める。
@@ -65,15 +64,6 @@ def _heading(page: WikiPage, document_names: Mapping[str, str]) -> str:
     return "「" + (" > ".join(part for part in parts if part) or unit.title) + "」"
 
 
-def _handle_pattern(handles: Iterable[str]) -> re.Pattern[str]:
-    """短い ID と完全に一致する所だけ。前後が英数字・下線の所（``C12`` の中の ``C1``）は除く。"""
-    return re.compile(
-        r"(?<![0-9A-Za-z_])(?:"
-        + "|".join(re.escape(handle) for handle in sorted(handles, key=len, reverse=True))
-        + r")(?![0-9A-Za-z_])"
-    )
-
-
 def _readable_reason(reason: str, headings: Mapping[str, str]) -> str:
     """理由の中の、この呼び出しが付けた短い ID だけを単位の見出しへ置き換える。
 
@@ -81,7 +71,7 @@ def _readable_reason(reason: str, headings: Mapping[str, str]) -> str:
     """
     text = reason
     if reason and headings:
-        text = _handle_pattern(headings).sub(lambda match: headings[match.group(0)], reason)
+        text = handle_pattern(headings).sub(lambda match: headings[match.group(0)], reason)
     data = text.encode("utf-8")
     if len(data) <= WIKI_LINK_REASON_BYTES:
         return text
@@ -202,7 +192,7 @@ async def judge_links(
             ],
             ensure_ascii=False,
         )
-        for handle in set(_handle_pattern(headings).findall(material)):
+        for handle in set(handle_pattern(headings).findall(material)):
             headings.pop(handle)
         decisions = [
             WikiLinkDecision(

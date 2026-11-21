@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
+from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.visibility import can_view_all_users_data
 
 from app.clients.ai_calls import make_ai_caller
-from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+from app.clients.oci_enterprise_ai import OciEnterpriseAiClient, config_from_settings
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.clients.wiki_store import WikiStore
@@ -30,7 +32,7 @@ from app.rag.request_context import (
     set_audit_request_context,
     system_access_context,
 )
-from app.rag.wiki_compiler import WIKI_CONTEXT_PROMPT, compile_pages
+from app.rag.wiki_compiler import WIKI_CONTEXT_PROMPT
 from app.rag.wiki_links import (
     WIKI_LINK_PROMPT,
     WikiLinkDecision,
@@ -40,6 +42,9 @@ from app.rag.wiki_links import (
 )
 from app.rag.wiki_models import WIKI_SCHEMA_VERSION, WikiPage, fingerprint
 from app.rag.wiki_navigation import interleave
+from app.rag.wiki_paragraphs import SentenceTooLarge
+from app.rag.wiki_prepare import WikiRequestBuilder
+from app.rag.wiki_source_inputs import source_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +122,88 @@ class WikiJobs:
         self.reconciliations.add(task)
         task.add_done_callback(self.reconciliations.discard)
 
+    def _schedule(
+        self,
+        document_id: str,
+        run: Callable[[], Coroutine[Any, Any, None]],
+        *,
+        after_running: bool = False,
+    ) -> None:
+        prior = self.tasks.get(document_id)
+        if prior is not None and not prior.done() and not after_running:
+            return
+
+        async def after_prior() -> None:
+            if prior is not None and not prior.done():
+                await asyncio.gather(prior, return_exceptions=True)
+            await run()
+
+        task = asyncio.create_task(after_prior())
+        self.tasks[document_id] = task
+
+        def finished(completed: asyncio.Task[None]) -> None:
+            if self.tasks.get(document_id) is completed:
+                self.tasks.pop(document_id, None)
+
+        task.add_done_callback(finished)
+
+    def _worker_capacity(self, settings: Settings) -> asyncio.Semaphore:
+        if self.capacity is None:
+            self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
+        return self.capacity
+
+    async def retry_document_pages(self, kb_id: str, document_id: str) -> None:
+        """操作した利用者と既存の構築担当の両方から見える一文書の案内を再試行する。"""
+        store = self.store_factory()
+        filters = {"knowledge_base_id": kb_id, "document_id": document_id}
+        if document_id not in await store.document_ids(filters):
+            raise KeyError(document_id)
+        owners = dict(await store.enabled_knowledge_bases())
+        if kb_id not in owners:
+            raise ValueError("Wiki の構築を有効にしてください。")
+        owner = owners[kb_id]
+        revision = await store.revision_fingerprint(document_id)
+        if not revision:
+            raise KeyError(document_id)
+
+        async def scoped_actor(user: str | None, settings: Settings) -> AuditRequestContext:
+            try:
+                context = await self.actor(user, settings)
+            except (SecurityApiError, PermissionError) as error:
+                raise PermissionError("Wiki の構築権限が変更されました。") from error
+            if (
+                context.allowed_knowledge_base_ids is not None
+                and kb_id not in context.allowed_knowledge_base_ids
+            ):
+                raise PermissionError("Wiki の構築権限が変更されました。")
+            # 別の KB で同じ資料が見えていても、指定した KB の所属・版を再確認する。
+            context = replace(context, allowed_knowledge_base_ids=frozenset({kb_id}))
+            token = set_audit_request_context(context)
+            try:
+                if await store.revision_fingerprint(document_id) != revision:
+                    raise PermissionError("Wiki の原文・所属が変更されました。")
+            finally:
+                reset_audit_request_context(token)
+            return context
+
+        await scoped_actor(owner, get_settings())
+        if not await store.requeue_failed_document_pages(kb_id, document_id, revision):
+            return
+
+        async def run() -> None:
+            settings = get_settings()
+            worker = WikiJobs(
+                store_factory=self.store_factory,
+                actor=scoped_actor,
+                model_factory=self.model_factory,
+                embedder_factory=self.embedder_factory,
+            )
+            async with self._worker_capacity(settings):
+                await worker._build_pages(document_id, owner, settings)
+
+        # 先行する照合が FAILED を見て終了する途中でも、今回受理した再試行を失わない。
+        self._schedule(document_id, run, after_running=True)
+
     async def reconcile(self, kb_id: str | None = None) -> None:
         if self.default_store and not get_settings().oracle_dsn.strip():
             return
@@ -126,8 +213,6 @@ class WikiJobs:
             with system_access_context():
                 policies = await store.enabled_knowledge_bases()
             settings = get_settings()
-            if self.capacity is None:
-                self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
             for kb, owner in policies:
                 if kb_id is not None and kb != kb_id:
                     continue
@@ -143,16 +228,7 @@ class WikiJobs:
                     for did in await store.document_ids(
                         {"knowledge_base_id": kb, "include_superseded": "true"}
                     ):
-                        if did in self.tasks and not self.tasks[did].done():
-                            continue
-                        task = asyncio.create_task(self.build(did, owner))
-                        self.tasks[did] = task
-
-                        def finished(completed: asyncio.Task[None], did: str = did) -> None:
-                            if self.tasks.get(did) is completed:
-                                self.tasks.pop(did, None)
-
-                        task.add_done_callback(finished)
+                        self._schedule(did, partial(self.build, did, owner))
                 finally:
                     reset_audit_request_context(token)
         except asyncio.CancelledError:
@@ -164,9 +240,7 @@ class WikiJobs:
     async def build(self, document_id: str, owner: str | None) -> None:
         """文書の案内を作り、公開できていれば文書をまたぐ関連を作る（関連の失敗は案内を止めない）。"""
         settings = get_settings()
-        if self.capacity is None:
-            self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
-        async with self.capacity:
+        async with self._worker_capacity(settings):
             if await self._build_pages(document_id, owner, settings):
                 await self._build_links(document_id, owner, get_settings())
 
@@ -237,14 +311,27 @@ class WikiJobs:
                 progressed = True
 
             async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
-                pages = await compile_pages(
+                sources, related = (
+                    await source_inputs(
+                        store.oracle, snapshot.units, snapshot.source_metadata, authorize
+                    )
+                    if snapshot.source_metadata
+                    else ({}, {})
+                )
+                builder = WikiRequestBuilder(
                     snapshot.units,
-                    model=self.model_factory(settings),
+                    config=config_from_settings(settings),
                     system_prompt=(await store.prompt_overrides()).get(
                         "wiki_build", WIKI_CONTEXT_PROMPT
                     ),
-                    max_input_chars=settings.rag_wiki_build_input_chars,
+                    sources=sources,
+                    related=related,
+                    max_source_chars=settings.rag_wiki_build_input_chars,
                     batch_size=settings.rag_wiki_build_batch_units,
+                )
+                pages = await builder.compile(
+                    snapshot.units,
+                    model=self.model_factory(settings),
                     saved=saved,
                     authorize=authorize,
                     checkpoint=checkpoint,
@@ -295,6 +382,15 @@ class WikiJobs:
                 "wiki_build_failed",
                 extra={
                     "error_type": type(error).__name__,
+                    **(
+                        {
+                            "source_anchor_hash": fingerprint(error.source),
+                            "source_window_start": error.start,
+                            "source_window_end": error.end,
+                        }
+                        if isinstance(error, SentenceTooLarge)
+                        else {}
+                    ),
                     # 共通の実行器の失敗は、最後の失敗の種類と HTTP の状態コードを持つ。
                     "error_kind": str(getattr(error, "kind", "") or ""),
                     "http_status": getattr(error, "status", None),
