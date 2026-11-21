@@ -134,6 +134,33 @@ describe("AnswerText の根拠の行の番号（issue 5489）", () => {
     expect(new Set(ids).size).toBe(3);
   });
 
+  it("段落と複数の節で番号を共有し、原文を開けない行にも印を付ける", () => {
+    const html = render([
+      "段落。", "根拠：文書 A p.1", "", "資料により確認できた事項",
+      "・説明。", "根拠：文書 B p.1", "根拠：文書 A p.1", "",
+      "操作手順", "1. 手順。", "根拠：文書 A p.2", "根拠：文書 B p.1",
+    ].join("\n"));
+    expect(markers(html)).toEqual(["[1]", "[2]", "[1]", "[3]", "[2]"]);
+    expect(anchors(html)).toHaveLength(3);
+    expect(html).not.toContain("<button");
+  });
+
+  it("別の回答では節だけでも 1 から始まり、保存された言語の根拠の行を使う", () => {
+    const props = { diagnostics: { answer_format: { rules_section: "Section", citation_prefix: "Source: " } } };
+    const section = "Section\n・Fact A\nSource: A\n・Fact B\nSource: B";
+    expect(markers(render(section, props))).toEqual(["[1]", "[2]"]);
+    expect(markers(render("Section\n・Fact B\nSource: B", props))).toEqual(["[1]"]);
+  });
+
+  it("単独の根拠の行と箇条書きに属さない節の説明でも、本文順に番号を付ける", () => {
+    const html = render([
+      "根拠：文書 A", "", "資料により確認できた事項", "説明。", "根拠：文書 B",
+      "", "・項目。", "根拠：文書 A",
+    ].join("\n"));
+    expect(markers(html)).toEqual(["[1]", "[2]", "[1]"]);
+    expect(anchors(html)).toHaveLength(2);
+  });
+
   it("2 つの表の出典の列の印は通し番号の根拠の行（最初に出る行）へ移る", () => {
     const html = render(
       [

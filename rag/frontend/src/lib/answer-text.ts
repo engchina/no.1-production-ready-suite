@@ -15,7 +15,7 @@ export type AnswerTextEntry =
    * 説明は Markdown（段落・箇条書き・コードの囲み）を含むことがあるので、行の書式で分けずに原文の改行のまま持つ。
    */
   | { kind: "item"; text: string; citations: string[]; citationLines: number[]; details?: string[]; reasoning?: string }
-  | { kind: "text"; text: string };
+  | { kind: "text"; text: string; citations?: string[]; citationLines?: number[] };
 
 export type AnswerTextBlock =
   /**
@@ -109,7 +109,7 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
   const blocks: AnswerTextBlock[] = [];
   let section: Extract<AnswerTextBlock, { kind: "section" }> | null = null;
   let paragraph: string[] = [];
-  // 節の前の段落の直後の根拠の行（冒頭の回答の表の下の出典行。#4812）。
+  // 通常の段落（表の直後、節の箇条書きに属さない文、単独の根拠の行も含む）に付く根拠。
   let paragraphCitations: { line: string; ordinal: number }[] = [];
   // 本文の「根拠：」の行の順番（1 始まり）。回答エンジンが出典行ごとの根拠に付ける番号と同じ数え方（#1330）。
   let citationOrdinal = 0;
@@ -119,18 +119,15 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
     const cited = paragraphCitations;
     paragraph = [];
     paragraphCitations = [];
-    if (!joined) return;
+    if (!joined && !cited.length) return;
+    const sources = cited.length ? {
+      citations: cited.map((entry) => entry.line),
+      citationLines: cited.map((entry) => entry.ordinal),
+    } : {};
     const last = section?.entries[section.entries.length - 1];
     if (isApplication() && last?.kind === "item") (last.details ??= []).push(joined);
-    else if (section) section.entries.push({ kind: "text", text: joined });
-    else if (cited.length) {
-      blocks.push({
-        kind: "paragraph",
-        text: joined,
-        citations: cited.map((entry) => entry.line),
-        citationLines: cited.map((entry) => entry.ordinal),
-      });
-    } else blocks.push({ kind: "paragraph", text: joined });
+    else if (section) section.entries.push({ kind: "text", text: joined, ...sources });
+    else blocks.push({ kind: "paragraph", text: joined, ...sources });
   };
   // 結論の説明（#4393）を集めている項目。根拠の行（回答エンジンは説明の後に必ず根拠の行を置く）か節の見出しで閉じる。
   let reasoning: { entry: Extract<AnswerTextEntry, { kind: "item" }>; lines: string[] } | null = null;
@@ -196,18 +193,17 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
       continued = item;
       continue;
     }
-    if (citation.test(line) && !section && paragraph.length > 0) {
-      paragraphCitations.push({ line, ordinal: citationOrdinal });
+    if (citation.test(line)) {
+      if (isApplication() && current?.kind === "item") flushParagraph();
+      if (current?.kind === "item" && paragraph.length === 0) {
+        current.citations.push(line);
+        current.citationLines.push(citationOrdinal);
+      } else {
+        paragraphCitations.push({ line, ordinal: citationOrdinal });
+      }
       continue;
     }
     if (paragraphCitations.length) flushParagraph();
-    if (citation.test(line) && isApplication()) flushParagraph();
-    const last = section?.entries[section.entries.length - 1];
-    if (citation.test(line) && last?.kind === "item" && paragraph.length === 0) {
-      last.citations.push(line);
-      last.citationLines.push(citationOrdinal);
-      continue;
-    }
     paragraph.push(line);
   }
   closeReasoning();

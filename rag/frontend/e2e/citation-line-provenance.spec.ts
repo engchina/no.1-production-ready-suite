@@ -291,7 +291,7 @@ for (const precise of [false, true]) {
     const answer = await ask(page, [item], undefined, {
       text: "資料により確認できた事項\n・合成の説明です。\n根拠：文書 A.pdf p.3",
     });
-    const label = `根拠：文書 A.pdf p.${precise ? "3" : "3-4"} の原文を開く`;
+    const label = `[1] 根拠：文書 A.pdf p.${precise ? "3" : "3-4"} の原文を開く`;
     await expect(answer.getByRole("button", {name: label, exact: true})).toBeVisible();
     await page.screenshot({path: testInfo.outputPath(`citation-range-${precise ? "single" : "multiple"}.png`)});
     await answer.getByRole("button", {name: label, exact: true}).click();
@@ -323,11 +323,11 @@ test("頁の無い原本の根拠の行は見出しと行の範囲で出し、�
       "根拠：文書 B.txt 「節 B」10〜11 行目",
     ].join("\n"),
   });
-  for (const line of ["根拠：文書 B.txt 「節 A」3〜5 行目", "根拠：文書 B.txt 「節 B」10〜11 行目"]) {
+  for (const line of ["[1] 根拠：文書 B.txt 「節 A」3〜5 行目", "[2] 根拠：文書 B.txt 「節 B」10〜11 行目"]) {
     await expect(answer.getByRole("button", { name: `${line} の原文を開く`, exact: true })).toBeVisible();
   }
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath(`citation-source-lines-${testInfo.project.name}.png`) });
-  await answer.getByRole("button", { name: "根拠：文書 B.txt 「節 A」3〜5 行目 の原文を開く", exact: true }).click();
+  await answer.getByRole("button", { name: "[1] 根拠：文書 B.txt 「節 A」3〜5 行目 の原文を開く", exact: true }).click();
   expect((await openedSheet(page)).excerpt).toBe(HEADING);
 });

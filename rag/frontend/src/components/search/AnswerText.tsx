@@ -1,5 +1,6 @@
 import {
   AnswerBody,
+  AnswerCitationLinks,
   AnswerPlainText,
   AnswerSections,
   AnswerSourceMarks,
@@ -85,23 +86,10 @@ export function AnswerText({
   const anchorPrefix = useId();
   const format = answerFormat(diagnostics);
   const blocks = streaming ? null : parseAnswerText(text, format);
-  // 番号つきの根拠の行（節の前の段落の直後の根拠の行）の番号は回答全体の通し番号（#5489）。根拠の行の文字（同じ文書・
-  // 同じ場所なら同じ行）が回答の中で最初に出た順に 1 から振り、同じ行はどの段落でも同じ番号にする。回答エンジンが
-  // 冒頭の回答の表の出典の列に振る番号（rag_engine の applications.table_block_lines）も同じ規則。番号ごとの移り先は
-  // その出典が最初に出る根拠の行。
+  // 本文順で初めて出る根拠の行に番号を付け、同じ行は段落と節をまたいでも同じ番号にする。
   const sourceNumbers = new Map<string, number>();
-  const firstSources = new Map<number, AnswerCitationRef[]>();
-  const paragraphSources = new Map<number, AnswerCitationRef[][]>();
-  blocks?.forEach((block, index) => {
-    if (block.kind !== "paragraph" || !block.citations?.length) return;
-    const refs = block.citations.map((line, position) => toCitations(line, block.citationLines?.[position]));
-    paragraphSources.set(index, refs);
-    block.citations.forEach((line, position) => {
-      if (sourceNumbers.has(line)) return;
-      sourceNumbers.set(line, sourceNumbers.size + 1);
-      firstSources.set(sourceNumbers.size, refs[position]);
-    });
-  });
+  const firstSources = new Map<number, AnswerCitationRef>();
+  const anchor = (number: number) => `${anchorPrefix}-sources-${number}`;
   // 回答エンジンの決まった文言（保存した表示形式の値と同じ段落・説明）は画面の言語で描く（回答の言語の lang を付けない。#3349）。
   const fixedTexts = new Set(Object.values(format ?? {}));
   const fixedLang = (value: string) => (fixedTexts.has(value) ? null : undefined);
@@ -125,7 +113,7 @@ export function AnswerText({
       live={live}
       blocks={blocks.map((block, index): AnswerSectionsBlock =>
         block.kind === "paragraph" && block.citations?.length
-          ? sourcedParagraph(block.text, block.citations, index)
+          ? sourcedParagraph(block.text, numberedCitations(block.citations, block.citationLines), index)
           : block.kind === "paragraph"
           ? { kind: "content", key: String(index), content: <AnswerMarkdownBody text={block.text} lang={fixedLang(block.text)} />, passageText: block.text, lang: fixedLang(block.text) }
           : {
@@ -156,9 +144,7 @@ export function AnswerText({
    * 付け、その出典が最初に出る行に id を付ける（#5489）。表の出典の列の印は、その行の原文を開くリンクにする（原文を
    * 開けない行は、その行へ移る。#4822）。
    */
-  function sourcedParagraph(text: string, lines: readonly string[], index: number): AnswerSectionsBlock {
-    const anchor = (number: number) => `${anchorPrefix}-sources-${number}`;
-    const sourceCitations = paragraphSources.get(index) ?? [];
+  function sourcedParagraph(text: string, refs: AnswerCitationRef[], index: number): AnswerSectionsBlock {
     const renderCell = ({ value, columnIndex, table }: AnswerBodyTableCell) => {
       const column = table.columns[columnIndex]?.name;
       if (columnIndex !== table.columns.length - 1 || typeof value !== "string" || !SOURCE_MARKS.test(value)) return undefined;
@@ -172,7 +158,7 @@ export function AnswerText({
             // 当たる根拠の行が無い番号は移り先を持たない（印は文字だけで出す）。
             targetId: firstSources.has(number) ? anchor(number) : undefined,
             ariaLabel: t(
-              firstSources.get(number)?.[0]?.onOpen ? "search.answerText.openSourceMark" : "search.answerText.sourceMarkLabel",
+              firstSources.get(number)?.onOpen ? "search.answerText.openSourceMark" : "search.answerText.sourceMarkLabel",
               { mark: `[${number}]` },
             ),
           }))}
@@ -185,23 +171,28 @@ export function AnswerText({
       content: <AnswerMarkdownBody text={text} renderTableCell={renderCell} lang={fixedLang(text)} />,
       passageText: text,
       lang: fixedLang(text),
-      citations: sourceCitations.flatMap((refs, position) => {
-        const number = sourceNumbers.get(lines[position]) ?? 0;
-        return refs.map((ref, part) =>
-          part === 0
-            ? {
-                ...ref,
-                marker: `[${number}]`,
-                // id は番号ごとに 1 つ（その出典が最初に出る行）。後の段落で同じ出典の行は印だけ同じにする。
-                anchorId: firstSources.get(number) === refs ? anchor(number) : undefined,
-                ariaLabel: ref.onOpen
-                  ? t("search.answerText.openNumberedCitation", { mark: `[${number}]`, citation: ref.label })
-                  : undefined,
-              }
-            : ref,
-        );
-      }),
+      citations: refs,
     };
+  }
+
+  function numberedCitations(lines: readonly string[], ordinals: readonly number[] | undefined): AnswerCitationRef[] {
+    return lines.flatMap((line, position) => {
+      const refs = toCitations(line, ordinals?.[position]);
+      const existing = sourceNumbers.get(line);
+      const number = existing ?? sourceNumbers.size + 1;
+      if (existing === undefined) {
+        sourceNumbers.set(line, number);
+        firstSources.set(number, refs[0]);
+      }
+      const marker = `[${number}]`;
+      // 同じ行から複数の原文を開けるときも、どのリンクがこの根拠のものか分かるよう同じ印を付ける。
+      return refs.map((ref, part) => ({
+        ...ref,
+        marker,
+        anchorId: existing === undefined && part === 0 ? anchor(number) : undefined,
+        ariaLabel: ref.onOpen ? t("search.answerText.openNumberedCitation", { mark: marker, citation: ref.label }) : undefined,
+      }));
+    });
   }
 
   function toCitations(citation: string, ordinal: number | undefined): AnswerCitationRef[] {
@@ -249,7 +240,15 @@ export function AnswerText({
 
   function toEntry(entry: AnswerTextEntry, index: number, title: string): AnswerSectionEntry {
     if (entry.kind === "text") {
-      return { key: String(index), content: textOrTable(entry.text), passageText: entry.text, muted: true, lang: fixedLang(entry.text), block: hasTable(entry.text) };
+      const refs = numberedCitations(entry.citations ?? [], entry.citationLines);
+      return {
+        key: String(index),
+        content: <>{textOrTable(entry.text)}{refs.length ? <AnswerCitationLinks citations={refs} /> : null}</>,
+        passageText: entry.text,
+        muted: true,
+        lang: fixedLang(entry.text),
+        block: refs.length > 0 || hasTable(entry.text),
+      };
     }
     const hasDetails = Boolean(entry.details?.length || entry.reasoning);
     return {
@@ -264,7 +263,7 @@ export function AnswerText({
       // 文字列の content と同じ言語の判定を、表を描く要素になっても続ける（#3335）。
       passageText: hasDetails ? undefined : entry.text,
       block: [entry.text, entry.reasoning ?? "", ...(entry.details ?? [])].some(hasTable),
-      citations: entry.citations.flatMap((citation, position) => toCitations(citation, entry.citationLines[position])),
+      citations: numberedCitations(entry.citations, entry.citationLines),
       extra: renderSectionLink(entry.text, title),
     };
   }
