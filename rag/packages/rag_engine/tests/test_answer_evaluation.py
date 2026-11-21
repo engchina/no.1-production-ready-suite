@@ -17,6 +17,7 @@ from rag_engine.evaluation.answer_eval import (
     MAX_EVALUATION_INPUT_BYTES,
     RUBRIC_VERSION,
     AnswerCorrectnessOutput,
+    SourceCheckedJudgement,
     evaluate_answer_payload,
     evaluation_input_budget,
     scored_answer_text,
@@ -46,13 +47,17 @@ def verdict(value="supported"):
             {
                 "claim": "ログを確認して原因を特定します。",
                 "answer_ids": ["A1"],
-                "states_source_gap": False,
                 "consistent": value != "contradicted",
                 "standard_ids": [] if value == "not_in_standard" else ["S1"],
             }
         ]
-        points = [{"point_id": point["id"], "covered": True} for point in inputs["points"]]
-        return AnswerCorrectnessOutput.model_validate({"claims": claims, "points": points})
+        first_answer = inputs["actual_responses"][0]["answer"][0]
+        quote = {"passage_id": first_answer["id"], "quote": first_answer["text"]}
+        points = [
+            {"point_id": point["id"], "target_kind": "value", "answer_evidence": [quote], "evidence_role": "value"}
+            for point in inputs["points"]
+        ]
+        return schema.model_validate({"standard_availability": [], "factual_claims": claims, "source_gaps": [], "points": points})
 
     return fake
 
@@ -74,7 +79,7 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
         result = evaluate_answer_payload(payload(), object(), provider_id="chosen")
     assert parse.call_count == 1
     system, prompt, _settings, schema = parse.call_args.args
-    assert system == CORRECTNESS_PROMPT and schema is AnswerCorrectnessOutput
+    assert system == CORRECTNESS_PROMPT and schema is SourceCheckedJudgement
     assert parse.call_args.kwargs["provider_id"] == "chosen"
     # 渡すのは質問・標準回答の文・要点・回答の本文の段落と、段落に添えた出典の行だけ（取得した根拠は渡さない）。
     assert json.loads(prompt) == {

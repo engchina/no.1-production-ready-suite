@@ -1211,22 +1211,33 @@ async def test_answer_record_save_failure_still_returns_answer(
 def _fake_evaluation_llm(
     system: str, prompt: str, settings: Any, schema: type, **options: Any
 ) -> Any:
-    from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput
+    from rag_engine.evaluation.answer_eval import SourceCheckedJudgement
 
-    assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
+    assert schema is SourceCheckedJudgement, f"unexpected schema: {schema.__name__}"
     inputs = json.loads(prompt)
-    return AnswerCorrectnessOutput.model_validate(
+    first_answer = inputs["actual_responses"][0]["answer"][0]
+    quote = {"passage_id": first_answer["id"], "quote": first_answer["text"]}
+    return schema.model_validate(
         {
-            "claims": [
+            "standard_availability": [],
+            "source_gaps": [],
+            "factual_claims": [
                 {
                     "claim": "合成の主張",
                     "answer_ids": ["A1"],
-                    "states_source_gap": False,
                     "consistent": True,
                     "standard_ids": ["S1"],
                 }
             ],
-            "points": [{"point_id": p["id"], "covered": True} for p in inputs["points"]],
+            "points": [
+                {
+                    "point_id": p["id"],
+                    "target_kind": "value",
+                    "evidence_role": "value",
+                    "answer_evidence": [quote],
+                }
+                for p in inputs["points"]
+            ],
         }
     )
 
