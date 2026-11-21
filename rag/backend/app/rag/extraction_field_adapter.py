@@ -146,12 +146,14 @@ class FieldExtractionFailed(Exception):
         run: FieldExtractionRun,
         kind: ErrorKind,
         status: int | None,
+        source_error: FieldSentenceTooLarge | None = None,
     ) -> None:
         super().__init__(category)
         self.category = category
         self.run = run
         self.kind = kind
         self.status = status
+        self.source_error = source_error
 
 
 class FieldExtractionResponseError(ValueError):
@@ -613,33 +615,36 @@ async def extract_fields_from_extraction(
             run=FieldExtractionRun(unit_count=1, failed=1),
             kind=ErrorKind.TOO_LARGE,
             status=None,
+            source_error=exc,
         ) from exc
     if not units:
         return with_field_extraction_outcome(extraction, "no_text")
 
     pending = deque((unit, 0) for unit in units)
     results: list[UnitCandidates] = []
-    failures: list[BoundedCallFailed] = []
+    failures: list[tuple[BoundedCallFailed, FieldSentenceTooLarge | None]] = []
     reused = resplit = 0
     while pending:
         unit, depth = pending.popleft()
         try:
             outcome = await extract_unit(unit)
         except BoundedCallFailed as exc:
-            parts = (
-                split_field_extraction_unit(
-                    unit,
-                    text_budget_tokens=text_budget_tokens >> (depth + 1),
-                    request_fits=request_fits,
-                )
-                if exc.kind is ErrorKind.TOO_LARGE and depth < MAX_FIELD_EXTRACTION_SPLIT_DEPTH
-                else []
-            )
+            source_error: FieldSentenceTooLarge | None = None
+            parts = []
+            if exc.kind is ErrorKind.TOO_LARGE and depth < MAX_FIELD_EXTRACTION_SPLIT_DEPTH:
+                try:
+                    parts = split_field_extraction_unit(
+                        unit,
+                        text_budget_tokens=text_budget_tokens >> (depth + 1),
+                        request_fits=request_fits,
+                    )
+                except FieldSentenceTooLarge as size_error:
+                    source_error = size_error
             if parts:
                 resplit += 1
                 pending.extendleft((part, depth + 1) for part in reversed(parts))
                 continue
-            failures.append(exc)
+            failures.append((exc, source_error))
             if not results:
                 break
             continue
@@ -654,12 +659,13 @@ async def extract_fields_from_extraction(
         resplit=resplit,
     )
     if failures:
-        first = failures[0]
+        first, source_error = failures[0]
         raise FieldExtractionFailed(
             _FAILURE_CATEGORY_BY_KIND.get(first.kind, "unknown"),
             run=run,
             kind=first.kind,
             status=first.status,
+            source_error=source_error,
         )
 
     merged = merge_field_candidates(results, [definition.name for definition in field_defs])

@@ -122,6 +122,33 @@ class SourceTextPage:
     next_offset: int | None
 
 
+def prose_boundaries(text: str) -> Iterable[tuple[TextRange, tuple[int, ...]]]:
+    """段落の範囲と、単独で切れる文末の原文位置。折返しの改行や括弧内の句点では切らない。"""
+    start = 0
+    for end in [*(m.end() for m in re.finditer(r"\n(?:[^\S\n]*\n)+|\u2029", text)), len(text)]:
+        if end <= start:
+            continue
+        last_char = start + len(text[start:end].rstrip())
+        sentence_ends: list[int] = []
+        depth = 0
+        cursor = start
+        for match in _SENTENCE_END.finditer(text, start, end):
+            for char in text[cursor : match.start()]:
+                category = unicodedata.category(char)
+                if category in {"Ps", "Pi"}:
+                    depth += 1
+                elif category in {"Pe", "Pf"}:
+                    depth = max(0, depth - 1)
+            if depth == 0 and not match.group()[0].isspace() and match.end() < last_char:
+                sentence_ends.append(match.end())
+            for char in match.group():
+                if unicodedata.category(char) in {"Pe", "Pf"}:
+                    depth = max(0, depth - 1)
+            cursor = match.end()
+        yield TextRange(start, end), tuple(sentence_ends)
+        start = end
+
+
 def full_source_text(text: str) -> SourceText:
     """切らない本文。"""
     return SourceText(

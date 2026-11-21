@@ -4918,6 +4918,11 @@ def _field_extraction_failure_message(exc: FieldExtractionFailed, *, checkpoints
         "別経路には切り替えずに取込を停止しました。",
         _FIELD_FAILURE_HINTS[exc.category],
     ]
+    if source := exc.source_error:
+        where = f"原文の第 {source.element_number} 要素" if source.element_number else "原文"
+        if source.page_number:
+            where += f"（{source.page_number} ページ）"
+        parts.append(f"{where}の {source.start + 1}〜{source.end} 文字目を確認してください。")
     if checkpoints and run.succeeded:
         parts.append(f"成功した {run.succeeded} 部分の結果は、再実行のときに使い直します。")
     return "".join(parts)

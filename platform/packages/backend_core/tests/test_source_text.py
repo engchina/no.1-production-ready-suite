@@ -32,6 +32,17 @@ def _sentences(count: int, marker: int | None = None) -> tuple[str, list[str]]:
     return "".join(parts), parts
 
 
+def test_prose_ranges_keep_physical_lines_and_nested_punctuation() -> None:
+    from pr_backend_core.source_text import prose_boundaries
+
+    first = "一文（注。内（注！）続く）後。"
+    soft = "前半\n後半。\n\n"
+    text = first + soft + "次の段落。"
+    paragraphs = list(prose_boundaries(text))
+    assert [text[p.start : p.end] for p, _ in paragraphs] == [first + soft, "次の段落。"]
+    assert [ends for _, ends in paragraphs] == [(len(first),), ()]
+
+
 def test_text_within_the_ceiling_is_returned_whole() -> None:
     text, _ = _sentences(10)
     piece = excerpt_source_text(text, max_tokens=SOURCE_TEXT_ITEM_MAX_TOKENS)
