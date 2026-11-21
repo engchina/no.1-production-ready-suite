@@ -22,8 +22,8 @@
 - 正常に保存されなかった回答は、取消・停止・時間切れ・例外・最終の保存なし・heartbeat の途絶えを
   分けて、原因のコードを処理の経過の記録に保存する（確かめていない原因を断定しない。#4319）。
 - 停止は明示の取消（`cancel`）だけ。同じプロセスなら task をすぐ止めてメッセージを
-  `CANCELLED` にする。別のプロセスの task は、メッセージが `STREAMING` でなくなったことを
-  次の heartbeat で知って止まる。接続の切断は取消ではない。
+  `CANCELLED` にする。別のプロセスへの取消は次の heartbeat で確認する。自分が保存した
+  `COMPLETE` の回答は終端まで配信する。接続の切断は取消ではない。
 - 同じ利用者が同時に作成できる回答の数は `rag_chat_max_active_answers_per_user`（プロセスごと）。
   task 全体の時間は回答の上限（`rag_answer_timeout_seconds`）に余裕を足したもので打ち切る。
 """
@@ -39,7 +39,10 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from app.clients.oracle import StoredMessage
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +151,10 @@ class ChatAnswerStore(Protocol):
     ) -> bool: ...
 
     async def heartbeat_chat_message(self, message_id: str, *, lease_owner: str) -> bool: ...
+
+    async def get_chat_message(
+        self, conversation_id: str, message_id: str
+    ) -> StoredMessage | None: ...
 
     async def close_streaming_chat_message(
         self,
@@ -505,18 +512,27 @@ class ChatAnswerRunService:
             failed = False
             for message_id in open_ids:
                 try:
-                    alive = (
-                        await run.store.heartbeat_chat_message(
-                            message_id, lease_owner=self.worker_id
-                        )
-                        or alive
-                    )
+                    if await run.store.heartbeat_chat_message(
+                        message_id, lease_owner=self.worker_id
+                    ):
+                        alive = True
+                    elif message_id not in run.closed_message_ids:
+                        # 保存の commit と SSE の done の間は heartbeat の更新が 0 行になる。
+                        saved = await run.store.get_chat_message(run.conversation_id, message_id)
+                        if (
+                            saved
+                            and saved.status == "COMPLETE"
+                            and saved.lease_owner == self.worker_id
+                        ):
+                            alive = True
                 except Exception as exc:  # noqa: BLE001 - 一時的な DB の失敗では止めない
                     failed = True
                     logger.warning(
                         "chat_answer_heartbeat_failed",
                         extra={"run_id": run.run_id, "error_type": type(exc).__name__},
                     )
+            if not run.open_message_ids():
+                return
             if not alive and not failed:
                 # 別のプロセスへの取消か、中断として失敗にされた。作成を止める（メッセージの
                 # 状態は書き換えない。閉じる更新は `STREAMING` の行だけに当たる）。

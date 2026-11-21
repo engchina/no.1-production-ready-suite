@@ -461,6 +461,61 @@ async def test_cancel_from_another_process_closes_streaming_answer(
     assert _final_statuses(events) == {"skipped"}
 
 
+async def test_heartbeat_during_committed_answer_delivers_saved_result(
+    fake: FakeChatOracle, monkeypatch: MonkeyPatch
+) -> None:
+    """回答の保存が見えた直後、保存処理が戻る前に heartbeat しても、その回答を配信する。"""
+    service = ChatAnswerRunService(worker_id="pytest-worker", heartbeat_seconds=0.01)
+    monkeypatch.setattr(chat_answer_runs, "_SERVICE", service)
+    _chat_conversation(fake, "conv-control")
+    committed = asyncio.Event()
+    checked = asyncio.Event()
+    release = asyncio.Event()
+    finish = fake.finish_chat_message
+    heartbeat = fake.heartbeat_chat_message
+
+    async def delayed_finish(message: StoredMessage, *, lease_owner: str) -> bool:
+        saved = await finish(message, lease_owner=lease_owner)
+        if message.conversation_id == "conv-r" and saved:
+            committed.set()
+            await release.wait()
+        return saved
+
+    async def check_after_commit(message_id: str, *, lease_owner: str) -> bool:
+        updated = await heartbeat(message_id, lease_owner=lease_owner)
+        if committed.is_set() and message_id == _assistant(fake).id and not updated:
+            checked.set()
+        return updated
+
+    monkeypatch.setattr(fake, "finish_chat_message", delayed_finish)
+    monkeypatch.setattr(fake, "heartbeat_chat_message", check_after_commit)
+    async with _client() as client:
+
+        async def send(conversation: str) -> httpx.Response:
+            return await client.post(
+                f"/api/chat/conversations/{conversation}/messages/stream",
+                json={"content": "欠けた行を含む表の結果は？"},
+            )
+
+        async with asyncio.timeout(5):
+            pending = asyncio.gather(send("conv-r"), send("conv-control"))
+            try:
+                await checked.wait()
+            finally:
+                release.set()
+            delayed, control = await pending
+    saved = _assistant(fake)
+    assert saved.status == "COMPLETE"
+    for response in (delayed, control):
+        assert response.status_code == 200
+        assert not _sse_events(response.text, "error")
+        assert _sse_events(response.text, "done")
+        assert _sse_events(response.text, "all_done")
+    assert "".join(str(e["text"]) for e in _sse_events(delayed.text, "delta")) == saved.content
+    assert _sse_events(delayed.text, "citations")[0]["citations"]
+    assert _sse_events(delayed.text, "done")[0]["message_id"] == saved.id
+
+
 async def test_heartbeat_stops_the_task_when_cancelled_elsewhere(
     fake: FakeChatOracle, gated: _Gate, monkeypatch: MonkeyPatch
 ) -> None:
@@ -771,6 +826,9 @@ class _TerminationStore:
 
     async def heartbeat_chat_message(self, message_id: str, *, lease_owner: str) -> bool:
         return True
+
+    async def get_chat_message(self, conversation_id: str, message_id: str) -> StoredMessage | None:
+        raise AssertionError("heartbeat が成功したときは読み直さない")
 
     async def close_streaming_chat_message(self, message_id: str, **fields: Any) -> bool:
         self.closed.append({"message_id": message_id, **fields})
