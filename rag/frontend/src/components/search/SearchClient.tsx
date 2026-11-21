@@ -15,8 +15,7 @@ import {
   TextareaField,
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
+  ChatAnswerBody,
   Switch,
   TextField,
   TimedLoadingState,
@@ -29,7 +28,6 @@ import {
   Plus,
   Search as SearchIcon,
   SlidersHorizontal,
-  Sparkles,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -461,6 +459,21 @@ export function SearchClient() {
   ) : null;
   const conditionChips = <ActiveFilterChips filters={appliedFilters} />;
 
+  const answerBody = (
+    <AnswerText
+      text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
+      streaming={isStreaming}
+      citations={citations}
+      unreadSections={canOpenSections ? unreadSectionLinks(meta?.diagnostics?.answer) : []}
+      diagnostics={phase === "done" ? meta?.diagnostics?.answer : null}
+      cursor={
+        isStreaming ? (
+          <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
+        ) : null
+      }
+    />
+  );
+
   return (
     <div>
       <PageHeader wide title={t("nav.search")} subtitle={t("search.initial")} />
@@ -745,13 +758,7 @@ export function SearchClient() {
                 <>
                 {processView}
                 <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Sparkles size={16} className="text-accent-fg" aria-hidden />
-                      {t("search.answer")}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
+                  <CardContent className="space-y-3 pt-4">
                     {answerModel ? (
                       <h3
                         className="min-w-0 break-words border-b border-border pb-2 text-sm font-semibold text-fg [overflow-wrap:anywhere]"
@@ -762,18 +769,7 @@ export function SearchClient() {
                       </h3>
                     ) : null}
                     {conditionChips}
-                    <AnswerText
-                      text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
-                      streaming={isStreaming}
-                      citations={citations}
-                      unreadSections={canOpenSections ? unreadSectionLinks(meta?.diagnostics?.answer) : []}
-                      diagnostics={phase === "done" ? meta?.diagnostics?.answer : null}
-                      cursor={
-                        isStreaming ? (
-                          <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
-                        ) : null
-                      }
-                    />
+                    {answer.trim() ? <ChatAnswerBody testId="search-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
                     {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下（「詳細」に畳まない。#2096）。 */}
                     {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} extra={[guardrailItem]} /> : null}
                     {/*
