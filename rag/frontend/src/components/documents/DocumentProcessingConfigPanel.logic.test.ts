@@ -103,16 +103,13 @@ describe("CSV→JSONL・Excel→JSONL の選択", () => {
     expect(labels.indexOf("Word→JSONL")).toBe(labels.indexOf("Excel→JSONL") + 1);
   });
 
-  it("準備中（ロードマップ）の OCI Document Understanding は、灰色のバッジと理由つきで選べない", () => {
-    const roadmap = PARSER_OPTIONS.find((option) => option.value === "oci_document_understanding");
-    expect(roadmap).toMatchObject({
-      disabled: true,
-      badge: "準備中（ロードマップ）",
-      disabledReason: "準備中（ロードマップ）のため、まだ選べません。",
-    });
-    expect(
-      PARSER_OPTIONS.filter((option) => option.disabled).map((option) => option.value)
-    ).toEqual(["oci_document_understanding"]);
+  it("準備中の解析エンジンは、バッジと理由つきで選べない", () => {
+    const roadmap = PARSER_OPTIONS.filter((option) => option.disabled);
+    expect(roadmap.map((option) => option.value)).toEqual(["dots_ocr", "oci_document_understanding"]);
+    for (const option of roadmap) {
+      expect(option.badge).toBe("準備中（ロードマップ）");
+      expect(option.disabledReason).toBe("準備中（ロードマップ）のため、まだ選べません。");
+    }
   });
 
   it("構造化レコード JSONL は XML ツリー JSON の直前に並ぶ", () => {

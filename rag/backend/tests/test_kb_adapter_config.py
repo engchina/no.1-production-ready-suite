@@ -76,7 +76,7 @@ def test_external_parser_backend_enables_feature_flag() -> None:
     """外部 parser backend を選ぶと対応 feature flag が有効になる。"""
     for backend, flag_field in (
         ("unstructured", "rag_parser_unstructured_enabled"),
-        ("dots_ocr", "rag_parser_dots_ocr_enabled"),
+        ("xml_tree_json", "rag_parser_xml_tree_json_enabled"),
     ):
         # グローバル既定が無効でも backend 選択で有効化されることを確かめる。
         settings = get_settings().model_copy(update={flag_field: False})
@@ -191,13 +191,14 @@ def test_removed_parser_engine_in_saved_config_inherits_global_default(removed: 
     assert removed not in str(dumped)
 
 
-def test_saved_roadmap_parser_engine_inherits_global_default() -> None:
+@pytest.mark.parametrize("backend", ["oci_document_understanding", "dots_ocr"])
+def test_saved_roadmap_parser_engine_inherits_global_default(backend: str) -> None:
     """保存済みのレシピに準備中(ロードマップ)のエンジンが残っても global 既定を継承する(#3374)。
 
     画面・取込を壊さず、取込の経路は準備中のエンジンを選ばない。他の上書きは保つ。
     """
     saved = DocumentProcessingConfig.model_validate(
-        {"parser_adapter_backend": "oci_document_understanding", "chunking_strategy": "page_level"}
+        {"parser_adapter_backend": backend, "chunking_strategy": "page_level"}
     )
 
     assert saved.parser_adapter_backend is None
@@ -206,12 +207,11 @@ def test_saved_roadmap_parser_engine_inherits_global_default() -> None:
     assert "rag_parser_adapter_backend" not in config.settings_overrides()
 
 
-def test_recipe_input_rejects_roadmap_parser_engine_with_reason() -> None:
+@pytest.mark.parametrize("backend", ["oci_document_understanding", "dots_ocr"])
+def test_recipe_input_rejects_roadmap_parser_engine_with_reason(backend: str) -> None:
     """処理レシピの保存の入力で準備中のエンジンを選ぶと、理由の分かる検証のエラーにする(#3374)。"""
     with pytest.raises(ValidationError, match="準備中（ロードマップ）"):
-        DocumentProcessingConfigInput.model_validate(
-            {"parser_adapter_backend": "oci_document_understanding"}
-        )
+        DocumentProcessingConfigInput.model_validate({"parser_adapter_backend": backend})
     # 使える解析エンジンと継承(None)はそのまま受ける。
     assert (
         DocumentProcessingConfigInput.model_validate(
@@ -222,11 +222,12 @@ def test_recipe_input_rejects_roadmap_parser_engine_with_reason() -> None:
     assert DocumentProcessingConfigInput.model_validate({}).parser_adapter_backend is None
 
 
-def test_recipe_put_rejects_roadmap_parser_engine_before_saving() -> None:
+@pytest.mark.parametrize("backend", ["oci_document_understanding", "dots_ocr"])
+def test_recipe_put_rejects_roadmap_parser_engine_before_saving(backend: str) -> None:
     """``PUT /api/documents/{id}/recipes/{recipe_id}`` は保存する前に 422 にする(#3374)。"""
     resp = AsgiTestClient(app).put(
         "/api/documents/doc-a/recipes/recipe-a",
-        json={"parser_adapter_backend": "oci_document_understanding"},
+        json={"parser_adapter_backend": backend},
     )
 
     assert resp.status_code == 422

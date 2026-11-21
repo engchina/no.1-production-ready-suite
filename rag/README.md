@@ -74,7 +74,7 @@ XML ツリー JSON(`.json`)は、文書解析の既定か処理レシピの使�
 取込を始める前に止めて、処理レシピで Unstructured(または Office→PDF)を選ぶよう案内する(自動では振り分けない)。
 Unstructured の解析サービスは既定では配備しない。形式ごとの取り込み方は [docs/deployment.md](./docs/deployment.md) の
 「既定の解析エンジン（Docling）で扱える形式と、それ以外の形式の取り込み方」を参照。
-GPU の OCR(dots_ocr)は外部で運用する API を「取込・検索・回答設定 › 文書解析」で指定する。
+外部 GPU で読み取る Dots.OCR は準備中（ロードマップ）。
 
 Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と

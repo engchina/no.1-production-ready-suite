@@ -1215,7 +1215,9 @@ async def test_ingestion_pipeline_does_not_reuse_full_extraction_for_other_parse
     assert artifacts["extraction_artifact_parse_key"] != first_key
 
 
-def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
+def test_ingestion_selected_external_parser_fallback_stops_ingestion(
+    available_external_parser: None,
+) -> None:
     """明示選択 parser が fallback 結果なら Enterprise AI へ進めず止める。"""
     pipeline = object.__new__(IngestionPipeline)
     pipeline._settings = Settings(
@@ -1434,6 +1436,7 @@ def _preflight_pipeline(backend: str, monkeypatch: pytest.MonkeyPatch) -> Ingest
 
 
 def test_partition_source_preflight_blocks_unsupported_format(
+    available_external_parser: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """dots_ocr × Office は外部 API を呼ぶ前に対応形式入りエラーで停止する。"""
@@ -1454,13 +1457,14 @@ def test_partition_source_preflight_blocks_unsupported_format(
 
 
 @pytest.mark.parametrize("content_kind", ["pdf", "office"], ids=["pdf", "office"])
+@pytest.mark.parametrize("backend", ["dots_ocr", "oci_document_understanding"])
 def test_partition_source_blocks_roadmap_engine_before_any_call(
-    monkeypatch: pytest.MonkeyPatch, content_kind: str
+    monkeypatch: pytest.MonkeyPatch, content_kind: str, backend: str
 ) -> None:
     """準備中(ロードマップ)のエンジンは、対応形式でも呼ばずに止める(#3374)。"""
     from app.clients.parser_service import ParserServiceUnavailableError
 
-    pipeline = _preflight_pipeline("oci_document_understanding", monkeypatch)
+    pipeline = _preflight_pipeline(backend, monkeypatch)
     profile = (
         _pdf_source_profile(file_size_bytes=10)
         if content_kind == "pdf"
@@ -1500,6 +1504,7 @@ def test_partition_source_blocks_historical_removed_engine(
 
 
 def test_partition_source_preflight_passes_converted_pdf(
+    available_external_parser: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """office_to_pdf 変換後(content_type=application/pdf)は dots_ocr でも通過する。"""

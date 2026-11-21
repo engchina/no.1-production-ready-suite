@@ -122,11 +122,8 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["unstructured"]["status"] == "disabled"
     # dots_ocr はローカル package/image ではなく外部 API で配信する。
     assert by_backend["dots_ocr"]["install_package"] == "外部 Dots.OCR API"
-    connections = {item["backend"]: item for item in body["connections"]}
-    assert set(connections) == {"dots_ocr"}
-    assert connections["dots_ocr"]["endpoint"] == ""
-    assert connections["dots_ocr"]["api_key_configured"] is False
-    assert "api_key" not in connections["dots_ocr"]
+    assert by_backend["dots_ocr"]["availability"] == "roadmap"
+    assert all(item["backend"] != "dots_ocr" for item in body["connections"])
     assert by_backend["dots_ocr"]["status"] == "disabled"
     # XML ツリー JSON は Docling・Unstructured と同じ使用エンジン(#2042)。
     assert by_backend["xml_tree_json"]["status"] == "disabled"
@@ -202,8 +199,10 @@ def test_parser_adapter_settings_reports_roadmap_service_backend(
     assert service["oci_document_understanding"]["warning_code"] is None
 
 
+@pytest.mark.parametrize("backend", ["oci_document_understanding", "dots_ocr"])
 def test_update_parser_adapter_settings_rejects_roadmap_backend_without_saving(
     monkeypatch: MonkeyPatch,
+    backend: str,
 ) -> None:
     """準備中(ロードマップ)の解析エンジンは選べない(#3374)。
 
@@ -216,7 +215,7 @@ def test_update_parser_adapter_settings_rejects_roadmap_backend_without_saving(
 
     resp = client.patch(
         "/api/settings/parser-adapters",
-        json={"adapter_backend": "oci_document_understanding"},
+        json={"adapter_backend": backend},
     )
 
     assert resp.status_code == 422
@@ -224,6 +223,30 @@ def test_update_parser_adapter_settings_rejects_roadmap_backend_without_saving(
     assert settings.rag_parser_adapter_backend == "docling"
     after = parser_file.read_text(encoding="utf-8") if parser_file.exists() else None
     assert after == before
+
+
+def test_roadmap_external_parser_keeps_saved_connection_and_skips_probe(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_api_host", "https://parser.example.com")
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_api_key", "existing-test-secret")
+    monkeypatch.setattr(ExternalParserClient, "status", lambda *_: pytest.fail("外部接続を実行"))
+    parser_file = PARSER_SETTINGS_STORE.path(settings)
+    before = parser_file.read_bytes() if parser_file.exists() else None
+    path = "/api/settings/parser-adapters"
+
+    assert client.get(path + "/dots_ocr/status").status_code == 422
+    for payload in (
+        {"connections": [{"backend": "dots_ocr", "clear_api_key": True}]},
+        {"dots_ocr_enabled": True},
+    ):
+        response = client.patch(path, json=payload)
+        assert response.status_code == 422
+        assert "準備中（ロードマップ）" in response.text
+    assert settings.rag_parser_dots_ocr_api_key == "existing-test-secret"
+    assert settings.rag_parser_dots_ocr_api_host == "https://parser.example.com"
+    assert (parser_file.read_bytes() if parser_file.exists() else None) == before
 
 
 def test_persisted_roadmap_parser_backend_falls_back_to_default(tmp_path: Path) -> None:
@@ -349,7 +372,7 @@ def test_parser_adapter_settings_no_longer_handle_docling_vision(
     )
 
 
-def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_omitted_flags(
+def test_update_parser_adapter_settings_persists_enabled_adapter_and_preserves_omitted_flags(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """GPU parser flags も保存し、省略された既存 flag は維持する。"""
@@ -357,7 +380,7 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_xml_tree_json_enabled", False)
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
@@ -366,30 +389,31 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     resp = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "dots_ocr",
-            "dots_ocr_enabled": True,
+            "adapter_backend": "xml_tree_json",
+            "xml_tree_json_enabled": True,
         },
     )
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["adapter_backend"] == "dots_ocr"
-    assert body["effective_order"] == ["dots_ocr"]
+    assert body["adapter_backend"] == "xml_tree_json"
+    assert body["effective_order"] == ["xml_tree_json"]
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
     assert by_backend["docling"]["enabled"] is True
-    assert by_backend["dots_ocr"]["enabled"] is True
-    assert settings.rag_parser_adapter_backend == "dots_ocr"
+    assert by_backend["xml_tree_json"]["enabled"] is True
+    assert settings.rag_parser_adapter_backend == "xml_tree_json"
     assert settings.rag_parser_docling_enabled is True
-    assert settings.rag_parser_dots_ocr_enabled is True
+    assert settings.rag_parser_xml_tree_json_enabled is True
     parser = _persisted_parser(settings)
-    assert parser["adapter_backend"] == "dots_ocr"
+    assert parser["adapter_backend"] == "xml_tree_json"
     assert parser["docling_enabled"] is True
-    assert parser["dots_ocr_enabled"] is True
+    assert parser["xml_tree_json_enabled"] is True
     # 削除したエンジン(#270)の項目は保存しない。
     assert not [key for key in parser if "marker" in key or "unlimited" in key or "glm" in key]
 
 
 def test_update_external_parser_connection_retains_and_clears_secret(
+    available_external_parser: None,
     monkeypatch: MonkeyPatch,
 ) -> None:
     settings = get_settings()
@@ -445,6 +469,7 @@ def test_update_external_parser_connection_retains_and_clears_secret(
 
 
 def test_parser_settings_file_reloads_in_worker_and_model_save_does_not_touch_it(
+    available_external_parser: None,
     monkeypatch: MonkeyPatch,
 ) -> None:
     """文書解析の設定は parser-settings.json に保存し、共有の model-settings に書かない(#1701)。"""
@@ -563,6 +588,7 @@ def test_update_parser_adapter_settings_rejects_removed_engine(removed: str) -> 
 
 
 def test_external_parser_status_endpoint_and_unknown_backend(
+    available_external_parser: None,
     monkeypatch: MonkeyPatch,
 ) -> None:
     async def run_inline(function: Any, *args: Any) -> Any:

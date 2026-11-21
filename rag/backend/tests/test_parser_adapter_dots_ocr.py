@@ -99,7 +99,7 @@ def test_routing_only_offers_backends_that_declare_the_source_kind() -> None:
     assert adapter_order_for_source_kind("unknown") == ("unstructured",)
 
 
-def test_readiness_reports_missing_when_package_absent() -> None:
+def test_legacy_enabled_roadmap_adapter_has_no_effective_order() -> None:
     snapshot = parser_adapter_runtime_settings(
         Settings.model_construct(
             rag_parser_adapter_backend="dots_ocr",
@@ -109,8 +109,9 @@ def test_readiness_reports_missing_when_package_absent() -> None:
         )
     )
     status = {adapter.backend: adapter for adapter in snapshot.adapters}
-    # 有効化したが未導入 → missing。flag off かつ未導入 → disabled。
-    assert status["dots_ocr"].status == "missing"
+    assert snapshot.effective_order == ()
+    assert not status["dots_ocr"].enabled
+    assert status["dots_ocr"].status == "disabled"
     assert status["dots_ocr"].install_package == "外部 Dots.OCR API"
     assert status["docling"].status == "disabled"
 

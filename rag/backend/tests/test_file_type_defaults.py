@@ -246,6 +246,7 @@ def test_options_only_list_what_the_type_supports() -> None:
     for file_type in FILE_TYPE_EXTENSIONS:
         options, _ = file_type_parser_options(file_type, "passthrough", settings)
         assert "oci_document_understanding" not in options
+        assert "dots_ocr" not in options
 
 
 def test_preprocess_needing_the_service_is_reported_as_unavailable() -> None:
@@ -275,6 +276,7 @@ def test_preprocess_needing_the_service_is_reported_as_unavailable() -> None:
             {"parser_adapter_backend": "oci_document_understanding"},
             "OCI Document Understanding",
         ),
+        ("pdf", {"parser_adapter_backend": "dots_ocr"}, "Dots.OCR"),
     ],
 )
 def test_invalid_combination_is_rejected_with_a_fix(

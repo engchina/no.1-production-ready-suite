@@ -193,8 +193,8 @@ export function ParserAdapterSettingsClient() {
   }
 
   function submit() {
-    if (!form || save.isPending) return;
-    save.mutate(parserSettingsUpdate(form), {
+    if (!form || !settings || save.isPending) return;
+    save.mutate(parserSettingsUpdate(form, roadmapBackendsFromSettings(settings)), {
       onSuccess: (data) => {
         const next = formFromSettings(data);
         setBase(serializeForm(next));
@@ -558,12 +558,15 @@ function serializeForm(form: ParserAdapterForm) {
   });
 }
 
-function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpdate {
+function parserSettingsUpdate(
+  form: ParserAdapterForm,
+  roadmap: ReadonlySet<ParserAdapterBackend>
+): ParserAdapterSettingsUpdate {
   return {
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
     unstructured_enabled: form.unstructured_enabled,
-    dots_ocr_enabled: form.dots_ocr_enabled,
+    ...(roadmap.has("dots_ocr") ? {} : { dots_ocr_enabled: form.dots_ocr_enabled }),
     structured_records_jsonl_enabled: form.structured_records_jsonl_enabled,
     xml_tree_json_enabled: form.xml_tree_json_enabled,
   };
