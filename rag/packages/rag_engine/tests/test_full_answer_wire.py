@@ -649,14 +649,23 @@ def test_same_short_answer_in_one_cell_keeps_both_sources_and_other_rows():
 
 def test_unresolved_cell_contains_its_reason_and_rejects_unrelated_facts():
     units, unit = catalog()
-    model = grounded.generation_output_model("入力の最大値は？", unit_catalog=units)
-    gap = {"requested_phrase": "入力の最大値", "conclusion": "不明", "missing_basis": "資料に上限の記載なし", "sources": [f"[{unit}]"]}
+    model = grounded.generation_output_model("入力と出力の最大値は？", unit_catalog=units)
+    gap = {"requested_phrase": "入力", "missing_input": "入力の上限", "sources": [f"[{unit}]"]}
+    second = {**gap, "requested_phrase": "出力", "missing_input": "出力の上限"}
 
-    def render(cell):
-        body = {"headers": [], "rows": [{"label": "", "cells": [cell]}]}
+    def render(cells, wording):
+        body = {"headers": [], "gap_wording": wording, "rows": [{"label": "", "cells": [cell]} for cell in cells]}
         return model.model_validate({"answer_body": body, "response_kind": "conditional", "confidence": "high"}).answer_body
 
-    assert render(gap) == f"不明（資料に上限の記載なし）[{unit}]"
-    for invalid in ({**gap, "missing_basis": " "}, {**gap, "requested_phrase": "別の属性"}, {**gap, "facts": ["別の規則"]}):
+    wording = "{missing}が未記載のため判断できない。"
+    assert (
+        render([gap, second], wording)
+        == f"入力の上限が未記載のため判断できない。[{unit}]\n\n出力の上限が未記載のため判断できない。[{unit}]"
+    )
+    assert render([{**gap, "missing_input": "the upper bound"}], "{missing} is unspecified.") == f"the upper bound is unspecified.[{unit}]"
+    for invalid in ({**gap, "missing_input": " "}, {**gap, "requested_phrase": "別の属性"}, {**gap, "missing_basis": "別の規則"}):
         with pytest.raises(ValidationError):
-            render(invalid)
+            render([invalid], wording)
+    for invalid_wording in (None, "情報が無い", " {missing} ", "{missing}が無く{missing}は不明"):
+        with pytest.raises(ValidationError, match="gap_wording"):
+            render([gap], invalid_wording)
