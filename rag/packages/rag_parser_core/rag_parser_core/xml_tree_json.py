@@ -37,7 +37,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from rag_parser_core.extraction import (
@@ -65,7 +65,14 @@ from rag_parser_core.language.text import (
     range_class,
     text_patterns,
 )
-from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, dump_ranges
+from rag_parser_core.non_source_text import (
+    NON_SOURCE_RANGES_KEY,
+    TextRanges,
+    dump_ranges,
+    load_ranges,
+    shift_ranges,
+    slice_ranges,
+)
 
 XML_TREE_JSON_BACKEND = "xml_tree_json"
 XML_TREE_JSON_SOURCE_FORMAT = "xml_tree_json"
@@ -1027,6 +1034,7 @@ class SourceParagraph:
     end: int
     sentence_ends: tuple[int, ...] = ()
     source_chars: int | None = None
+    non_source_ranges: TextRanges = ()
 
 
 def element_paragraphs(
@@ -1089,7 +1097,14 @@ def source_paragraphs(
         if text[cursor:start].strip():
             paragraphs.append(SourceParagraph(cursor, start))
         cursor = start + len(element.text)
-        paragraphs.extend(element_paragraphs(extraction, element, start) or ())
+        marked = shift_ranges(
+            load_ranges(element.metadata.get(NON_SOURCE_RANGES_KEY), len(element.text)), start
+        )
+        for paragraph in element_paragraphs(extraction, element, start) or ():
+            spans = slice_ranges(marked, paragraph.start, paragraph.end)
+            paragraphs.append(
+                replace(paragraph, non_source_ranges=shift_ranges(spans, paragraph.start))
+            )
     if text[cursor:].strip():
         paragraphs.append(SourceParagraph(cursor, len(text)))
     return tuple(paragraphs)

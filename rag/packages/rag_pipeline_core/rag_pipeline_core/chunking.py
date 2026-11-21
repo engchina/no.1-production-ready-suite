@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Annotated
@@ -723,6 +724,15 @@ def _chunk_fixed_delimiter(
         )
         for index, (start, end) in enumerate(spans)
     ]
+    if paragraphs:
+        # 分割符の一部だった解析器の見出しも本文に残る。引用から除く範囲を新しい座標へ写す。
+        marked = [span for paragraph in paragraphs for span in paragraph.non_source_ranges]
+        for chunk in chunks:
+            lo = bisect_right(marked, chunk.start_offset, key=lambda span: span[1])
+            hi = bisect_left(marked, chunk.end_offset, key=lambda span: span[0])
+            _with_non_source_ranges(
+                chunk.metadata, slice_ranges(marked[lo:hi], chunk.start_offset, chunk.end_offset)
+            )
     return [_with_chunk_metadata(chunk) for chunk in chunks]
 
 

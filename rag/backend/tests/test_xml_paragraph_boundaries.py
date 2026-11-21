@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from rag_parser_core.extraction import StructuredExtraction
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges
 from rag_parser_core.xml_tree_json import element_paragraphs, xml_tree_json_extraction
 from rag_pipeline_core.chunking import chunk_extraction_with_strategy
 
@@ -58,6 +59,12 @@ def test_fixed_chunks_preserve_sentences_offsets_and_delimiter_text() -> None:
     assert "".join(c.text for c in chunks).replace("\n", "") == extraction.raw_text.replace(
         "\n", ""
     )
+    headings = [
+        c.text[a:b]
+        for c in chunks
+        for a, b in load_ranges(c.metadata.get(NON_SOURCE_RANGES_KEY), len(c.text))
+    ]
+    assert headings == [e.text.split("\n")[0] for e in extraction.elements]
     for sentence in sentences:
         assert sum(sentence in c.text for c in chunks) == 1
     assert not any(all(sentence in c.text for sentence in sentences) for c in chunks)
