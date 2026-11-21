@@ -634,3 +634,14 @@ def test_comparison_preserves_printed_values_and_uses_only_the_requested_rule():
     }
     answer = model.model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"}).answer_body
     assert answer.splitlines()[-2:] == [f"| A | 12.00[{unit}] | 範囲外は適用しない[{unit}] |", f"| B | 0[{unit}] |  |"]
+
+
+def test_same_short_answer_in_one_cell_keeps_both_sources_and_other_rows():
+    units, unit = catalog()
+    model = grounded.generation_output_model("入力と出力の判定は？", unit_catalog=units)
+    first = {"text": "事実A", "answers_which_question": "入力は？", "requested_phrase": "入力", "short_answer": "不明", "sources": ["[E1]"]}
+    second = {**first, "text": "事実B", "answers_which_question": "出力は？", "requested_phrase": "出力", "sources": [f"[{unit}]"]}
+    rows = [{"label": "入力・出力", "cells": [[first, second, first]]}, {"label": "再掲の指定欄", "cells": [[second]]}]
+    body = {"headers": ["項目", "答え"], "rows": rows}
+    answer = model.model_validate({"answer_body": body, "response_kind": "conditional", "confidence": "high"}).answer_body
+    assert answer.splitlines()[-2:] == [f"| 入力・出力 | 不明[E1][{unit}] |", f"| 再掲の指定欄 | 不明[{unit}] |"]

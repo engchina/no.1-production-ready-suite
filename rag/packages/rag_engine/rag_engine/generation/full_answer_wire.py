@@ -53,19 +53,19 @@ class AnswerFact(BaseModel):
     )
     requested_phrase: str | None = Field(
         description=(
-            "その問いと同じ判断を実際に求めている原質問の連続した語句を、限定も含めて抜き出す。"
+            "その問いと同じ具体的な対象・属性を尋ねる原質問の連続した語句を選ぶ。回答欄の総称だけでは対応にならない。"
             "必要な前提・例外ならそれが左右する要求の語句を選ぶ。共通する単語はあっても問われた量や判断が違うとき、"
             "この短句を省いても別のセルに同じ答えが残るときは null。"
         )
     )
 
     short_answer: str = Field(
-        description="質問者へ渡す部分だけを抜き出した短答。可否は判定だけ、理由は資料の規則を一節だけ、"
+        description="原文に並記された別の属性を外し、問われた属性だけに答える短句。可否は判定だけ、理由は資料の規則を一節だけ、"
         "値が決まらない場合は不足する根拠だけ。数値欄に転記した値を理由に再掲しない。"
         "条件・例外そのものに値や境界が必要なら保つ。対応する要求がなければ空文字。"
     )
 
-    def fragment(self, question: str | None) -> str:
+    def requested_answer(self, question: str | None) -> str:
         if self.requested_phrase is None:
             return ""
         phrase = self.requested_phrase.strip()
@@ -73,8 +73,7 @@ class AnswerFact(BaseModel):
             raise ValueError(
                 "requested_phrase は原質問にある連続した語句をそのまま選んでください。対応する要求がない場合は null にしてください。"
             )
-        text = self.short_answer.strip()
-        return text + "".join(dict.fromkeys(self.sources)) if text else ""
+        return self.short_answer.strip()
 
 
 class ComparisonValue(BaseModel):
@@ -85,8 +84,15 @@ class ComparisonValue(BaseModel):
     )
     sources: list[str] = Field(description="比較した対象のこの値を示す原文ラベル。")
 
-    def fragment(self) -> str:
-        return self.number + "".join(dict.fromkeys(self.sources))
+
+def _cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None) -> str:
+    # 同じセルで一致する短答は一度だけ示し、その判断を支える出典はすべて残す。
+    sources_by_text: dict[str, list[str]] = {}
+    for fact in cell:
+        text = fact.number if isinstance(fact, ComparisonValue) else fact.requested_answer(question)
+        if text:
+            sources_by_text.setdefault(text, []).extend(fact.sources)
+    return " ".join(text + "".join(dict.fromkeys(sources)) for text, sources in sources_by_text.items())
 
 
 class AnswerRow(BaseModel):
@@ -124,10 +130,7 @@ class AnswerTableBody(BaseModel):
         for row in self.rows:
             if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
-            values = []
-            for cell in row.cells:
-                parts = (fact.fragment() if isinstance(fact, ComparisonValue) else fact.fragment(question) for fact in cell)
-                values.append(" ".join(filter(None, parts)))
+            values = [_cell_text(cell, question) for cell in row.cells]
             if not any(values):
                 continue
             cells = [row.label, *values] if len(self.headers) > 1 else values
