@@ -2835,6 +2835,8 @@ def run_round(
             "first_answer_body": row_repair.reviewed_body,
             "candidate_rows": list(row_repair.candidates),
             "removed_rows": row_repair.removed,
+            "candidate_notes": list(row_repair.notes),
+            "removed_notes": row_repair.removed_notes,
             "received_review": row_repair.original is None,
         }
     if plan_rows_added:

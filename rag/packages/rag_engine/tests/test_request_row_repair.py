@@ -4,6 +4,37 @@ import pytest
 from test_answer_flow_single_generation import _run_traced, context, record
 
 
+def test_row_and_number_note_share_one_decision_and_preserve_original_cells():
+    source = "区分Aは左12、右0。実測値は未記載。素子の材質は銅。"
+    question = "左右の設定値と実測値を教えて。分かる点を示して。"
+    attempts = 0
+
+    def reply(units):
+        nonlocal attempts
+        attempts += 1
+        ref = f"[{units[source]}]"
+
+        def fact(asked, phrase, answer):
+            return {"text": source, "answers_which_question": asked, "requested_phrase": phrase, "short_answer": answer, "sources": [ref]}
+
+        if attempts == 1:
+            rows = [
+                {"label": "左右の設定値（区分A）", "cells": [[fact("左右の設定値は？", "左右の設定値", "左12、右0（転記した値）")]]},
+                {"label": "実測値", "cells": [{"requested_phrase": "実測値", "missing_input": "測定結果", "sources": [ref]}]},
+                {"label": "材質", "cells": [[fact("材質は？", "分かる点", "銅")]]},
+            ]
+        else:
+            rows = [{"label": "1.1.1", "cells": [[]]}, {"label": "3", "cells": [[]]}, {"label": "新しい行", "cells": [[]]}]
+        body = {"headers": ["項目", "値"], "gap_wording": "{missing}が必要" if attempts == 1 else "別の{missing}", "rows": rows}
+        return {"answer_body": body, "response_kind": "conditional", "confidence": "high"}
+
+    response, calls, _ = _run_traced(question, context(record(0, source, "合成表")), reply)
+    assert len(calls) == 2
+    assert "左12、右0" in response.answer_text and "測定結果が必要" in response.answer_text
+    assert all(word not in response.answer_text for word in ("転記", "銅", "新しい行", "別の"))
+    assert response.generation_trace["citation_lines"]
+
+
 def test_scope_already_shown_on_another_row_does_not_consume_a_retry():
     source = "当日は規格2で左12、右0。実測値は未記載。"
     question = "当日の左右の設定値と実測値は？"
