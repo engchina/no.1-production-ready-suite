@@ -50,7 +50,12 @@ class AnswerComparisonRow(BaseModel):
         min_length=1,
         description="見出しに対応する値・条件・判定を語句で示す。判定は可否だけ。理由は制約だけを示し、他のセルの値は読み上げない。",
     )
-    scope: str = Field(description="セルから読み取れない適用範囲・例外だけを最短の語句で一つ。判定条件がセルにある行は空文字。")
+    scope: str = Field(
+        description=(
+            "質問の区分より資料の値の区分が粗い場合は、その区別が資料にないことだけを短く示す。"
+            "ほかに必要な適用範囲・例外があれば残す。セルで分かる場合は空文字。"
+        )
+    )
     sources: list[str] = Field(description="この行を裏付ける入力の引用ラベル（角括弧を含む）。")
 
 
@@ -59,12 +64,16 @@ class AnswerTableBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    operations: list[str] = Field(
+        default_factory=list,
+        description="比較・判定のほかに尋ねられた操作だけを、禁止・順序・引用を含めて簡潔に書く。操作を求められていなければ空配列。",
+    )
     headers: list[str] = Field(
         description="複数状態の判定は「対象・成立条件・今回の事実・判定」に分ける。数値比較は項目ごとに列を作る。段落や自由形式は空配列とし各行を本文一セルにする。",
     )
     rows: list[AnswerComparisonRow] = Field(
         min_length=1,
-        description="比較・判定は各対象を一行にし、可否の理由はその行だけに収める。別に尋ねられた操作は順に一行で答える。質問にない手順や補足は加えない。",
+        description="比較・判定は各対象を一行にし、可否の理由はその行だけに収める。質問にない手順や補足は加えない。",
     )
 
     def markdown(self) -> str:
@@ -77,9 +86,12 @@ class AnswerTableBody(BaseModel):
                 cells[0] += f"（{row.scope.strip()}）"
             cells[-1] += "".join(row.sources)
             rows.append(AnswerTableRow(cells=cells))
-        if not self.headers:
-            return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
-        return table_markdown(AnswerTable(columns=self.headers, rows=rows))
+        parts = [step.strip() for step in self.operations if step.strip()]
+        if self.headers:
+            parts.append(table_markdown(AnswerTable(columns=self.headers, rows=rows)))
+        else:
+            parts.extend(row.cells[0].strip() for row in rows if row.cells[0].strip())
+        return "\n\n".join(parts)
 
 
 class FullAnswerWire(BaseModel):
@@ -95,7 +107,7 @@ class FullAnswerWire(BaseModel):
         min_length=1,
         description=(
             "各要求に一度だけ答える。複数の対象の値や状態の判定を尋ねる質問には表を選び、"
-            "可否の理由・適用範囲は該当行に、別に求められた手順・前提は独立した行にまとめる。"
+            "可否の理由・適用範囲を該当行にまとめる。"
             "それ以外の質問は本文一列で答える。必要な条件・否定・例外を残す。利用者の形式指定を優先する。"
         ),
     )

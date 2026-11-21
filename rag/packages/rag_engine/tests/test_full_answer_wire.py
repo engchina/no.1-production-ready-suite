@@ -534,6 +534,8 @@ def test_structured_table_excludes_competing_prose_and_checks_its_labels():
     payload = {"answer_body": cells, "response_kind": "answered", "confidence": "high"}
     wire = model.model_validate(payload)
     assert wire.answer_body.startswith("| 対象")
+    with_step = model.model_validate({**payload, "answer_body": {**cells, "operations": ["操作。"]}})
+    assert with_step.answer_body == "操作。\n\n" + wire.answer_body
     with pytest.raises(ValidationError):
         model.model_validate({**payload, "answer_body": {**cells, "points": ["補足"]}})
     assert wire.answer_body.endswith(f"| A（共通） | 12[{unit}] |")
