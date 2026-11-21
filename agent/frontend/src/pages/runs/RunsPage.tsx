@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, PlayCircle, RefreshCw, X } from "lucide-react";
 import {
+  notifyRefreshSuccess,
   FieldSkeleton,
   Banner,
   CombinedBanner,
@@ -509,9 +510,10 @@ export function RunsPage() {
             icon: RefreshCw,
             loading: manualRefresh.pending,
             onClick: () =>
-              void manualRefresh.track(async () => {
-                await (isList ? runs.refetch() : targetRunId ? runDetail.refetch() : agents.refetch());
-              }),
+              void manualRefresh.track(() => notifyRefreshSuccess(
+                t("common.action.refreshed"),
+                isList ? runs.refetch() : targetRunId ? runDetail.refetch() : agents.refetch(),
+              )),
           },
           ...(isList && capabilities.operateRuns
             ? [

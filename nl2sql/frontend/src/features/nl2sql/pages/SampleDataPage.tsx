@@ -353,7 +353,7 @@ export function SampleDataPage() {
               size="sm"
               loading={pageNoticeActionLoading}
               disabled={pageNoticeActionDisabled}
-              onClick={() => void load(false, "notice")} icon={RefreshCw}>
+              onClick={() => void load(true, "notice")} icon={RefreshCw}>
               <span>
                 {message ? t("common.retry") : t("dataTools.sample.refresh")}
               </span>

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw } from "lucide-react";
 import {
+  notifyRefreshSuccess,
   compareNames,
   Button,
   Card,
@@ -217,7 +218,7 @@ export function AuditPage() {
             icon: RefreshCw,
             loading: manualRefresh.pending,
             disabled: manualApply.pending,
-            onClick: () => void manualRefresh.track(() => audit.refetch()),
+            onClick: () => void manualRefresh.track(() => notifyRefreshSuccess(t("common.action.refreshed"), audit.refetch())),
           },
         ]}
       />

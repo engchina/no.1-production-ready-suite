@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import {
+  notifyRefreshSuccess,
   Card,
   CardContent,
   CardDescription,
@@ -70,7 +71,7 @@ export function UsagePage() {
             label: t("common.action.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => report.refetch()),
+            onClick: () => void manualRefresh.track(() => notifyRefreshSuccess(t("common.action.refreshed"), report.refetch())),
           },
         ]}
       />

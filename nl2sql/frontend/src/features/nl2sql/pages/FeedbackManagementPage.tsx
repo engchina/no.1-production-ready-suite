@@ -948,7 +948,7 @@ export function FeedbackManagementPage() {
                       !profileName.trim() ||
                       (Boolean(loading) && !(loading === "feedback" && refreshOrigin === "entries"))
                     }
-                    onClick={() => void refreshSelectAiFeedback(profileName, false, "entries")} icon={RefreshCw}>
+                    onClick={() => void refreshSelectAiFeedback(profileName, true, "entries")} icon={RefreshCw}>
                     <span>{t("feedbackManagement.action.refresh")}</span>
                   </Button>
                 </div>

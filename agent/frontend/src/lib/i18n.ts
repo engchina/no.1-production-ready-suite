@@ -1553,7 +1553,6 @@ const agentJa = {
   "skills.exportFailed": "スキルを書き出せませんでした。",
   "skills.detail": "詳細",
   "skills.reload": "最新情報を取得",
-  "skills.reloaded": "スキルの最新情報を取得しました",
   "skills.source": "由来",
   "skills.sourceBuiltin": "ビルトイン",
   "skills.sourceProject": "ファイル",
@@ -1695,6 +1694,7 @@ const agentJa = {
   "audit.csvHint": "CSV は、入力中の条件に合う記録を最大 1,000 件まで出力します（表示中のページだけではありません）。",
 
   // 状態のラベル・用語の統一と、操作の失敗の文言（#802）。
+  "common.action.refreshed": "最新の状態に更新しました。",
   "common.action.refresh": "最新情報を取得",
   "common.dismiss": "閉じる",
   "common.notifications": "通知",

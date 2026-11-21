@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  notifyRefreshSuccess,
   PageBody,
   PageHeader,
   Button,
@@ -512,7 +513,7 @@ export function FileListClient() {
             label: t("fileList.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => query.refetch()),
+            onClick: () => void manualRefresh.track(() => notifyRefreshSuccess(t("common.action.refreshed"), query.refetch())),
             testId: "file-list-refresh",
           },
         ]}

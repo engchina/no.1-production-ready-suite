@@ -14,6 +14,7 @@
  */
 
 import {
+  notifyRefreshSuccess,
   AnswerNotice,
   Banner,
   ProcessFailureNotice,
@@ -235,7 +236,7 @@ export function RunHistoryClient() {
             label: t("history.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => query.refetch()),
+            onClick: () => void manualRefresh.track(() => notifyRefreshSuccess(t("common.action.refreshed"), query.refetch())),
           },
         ]}
       />
@@ -401,7 +402,7 @@ export function RunHistoryDetailClient({ runId }: { runId: string }) {
             label: t("history.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => detail.refetch()),
+            onClick: () => void manualRefresh.track(() => notifyRefreshSuccess(t("common.action.refreshed"), detail.refetch())),
           },
         ]}
       />

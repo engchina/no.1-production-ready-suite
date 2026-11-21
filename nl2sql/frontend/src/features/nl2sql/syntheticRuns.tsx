@@ -116,7 +116,10 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
       });
       const unchanged = snapshot(run) === snapshot(latest);
       const time = formatDisplayDateTime(new Date(), DISPLAY_TIME_SECONDS);
-      setRefresh({ scope, pending: false, failed: false, message: t(unchanged ? "syntheticRun.refreshUnchanged" : "syntheticRun.refreshUpdated", { time }) });
+      toast.success(t("common.action.refreshed"), {
+        description: t(unchanged ? "syntheticRun.refreshUnchanged" : "syntheticRun.refreshUpdated", { time }),
+      });
+      setRefresh(null);
     } catch {
       if (sequence !== refreshSequence.current) return;
       setRefresh({ scope, pending: false, failed: true, message: t("syntheticRun.refreshFailed") });
@@ -192,7 +195,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="secondary" size="sm" loading={feedback?.pending} icon={RefreshCw} onClick={() => void refreshStatus()}>{t("syntheticRun.refresh")}</Button>
     </div>
-    {feedback?.message && (feedback.failed || !error) && <FormStatus tone={feedback.failed ? "danger" : "success"} message={feedback.message} />}
+    {feedback?.failed && <FormStatus tone="danger" message={feedback.message} />}
   </section>;
 }
 function targetStatusLabel(status: string) {

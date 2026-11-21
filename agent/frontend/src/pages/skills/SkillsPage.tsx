@@ -119,9 +119,9 @@ export function SkillsPage() {
 
   const reloadMutation = useMutation({
     mutationFn: () => agentApi.reloadSkills(),
-    onSuccess: () => {
-      toast.success(t("skills.reloaded"));
-      void invalidate();
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["skills"] }, { throwOnError: true });
+      toast.success(t("common.action.refreshed"));
     },
     // ヘッダーの操作で固定の面が無いため、失敗は danger の Toast（messaging.md §1「失敗を黙って捨てない」）。
     onError: (error) => toast.error(t("skills.reloadFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),

@@ -48,6 +48,7 @@ export {
   type DisplayDateTimeParts,
 } from "./lib/date-time";
 export { isRepeatedActivationKey, runStopClickAction, type RunStopAction } from "./lib/run-stop";
+export { notifyRefreshSuccess } from "./lib/refresh-feedback";
 export { useActionPending, type ActionPending } from "./lib/action-pending";
 export {
   createOptimisticChatMessage,

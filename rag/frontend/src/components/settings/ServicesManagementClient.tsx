@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  notifyRefreshSuccess,
   ApiErrorBanner,
   Disclosure,
   PageBody,
@@ -294,10 +295,11 @@ export function ServicesManagementClient() {
     : null;
   function refreshServices() {
     setManualRefreshing(true);
-    void Promise.allSettled([
+    void notifyRefreshSuccess(
+      t("common.action.refreshed"),
       query.refetch(),
       ...statusQueries.map((statusQuery) => statusQuery.refetch()),
-    ]).finally(() => setManualRefreshing(false));
+    ).finally(() => setManualRefreshing(false));
   }
 
   function toggleLogs(service: DisplayServiceData) {
@@ -771,7 +773,7 @@ function ServiceLogPanel({
             // （同じ処理のスピナーは 1 つ。messaging §3.7、#416 / #819）。
             loading={manualRefetch.pending}
             disabled={logsQuery.isPending}
-            onClick={() => void manualRefetch.track(() => logsQuery.refetch())}
+            onClick={() => void manualRefetch.track(() => notifyRefreshSuccess(t("common.action.refreshed"), logsQuery.refetch()))}
             aria-label={t("settings.services.logs.refresh")} icon={RefreshCw}>
             {t("settings.services.logs.refresh")}
           </Button>

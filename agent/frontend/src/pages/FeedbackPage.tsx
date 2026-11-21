@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import {
+  notifyRefreshSuccess,
   Button,
   Card,
   CardContent,
@@ -269,9 +270,10 @@ export function FeedbackPage() {
             icon: RefreshCw,
             loading: manualRefresh.pending,
             onClick: () =>
-              void manualRefresh.track(async () => {
-                await (view === "signals" ? signals.refetch() : report.refetch());
-              }),
+              void manualRefresh.track(() => notifyRefreshSuccess(
+                t("common.action.refreshed"),
+                view === "signals" ? signals.refetch() : report.refetch(),
+              )),
           },
         ]}
         tabs={
