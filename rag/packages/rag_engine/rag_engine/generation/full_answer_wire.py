@@ -43,55 +43,29 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 )
 
 
-class AnswerComparisonRow(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    cells: list[str] = Field(
-        min_length=1,
-        description="見出しに対応する値・条件・判定を語句で示す。判定は可否だけ。理由は制約だけを示し、他のセルの値は読み上げない。",
-    )
-    scope: str = Field(
-        description=(
-            "質問の区分より資料の値の区分が粗い場合は、その区別が資料にないことだけを短く示す。"
-            "ほかに必要な適用範囲・例外があれば残す。セルで分かる場合は空文字。"
-        )
-    )
-    sources: list[str] = Field(description="この行を裏付ける入力の引用ラベル（角括弧を含む）。")
-
-
 class AnswerTableBody(BaseModel):
-    """表または段落の本文を行から組み立てる生成時の表現。保存と引用検証には従来の本文を渡す。"""
+    """回答ごとに一組のセルを受け、表または段落を組み立てる。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    operations: list[str] = Field(
-        default_factory=list,
-        description="比較・判定のほかに尋ねられた操作だけを、禁止・順序・引用を含めて簡潔に書く。操作を求められていなければ空配列。",
-    )
     headers: list[str] = Field(
-        description="複数状態の判定は「対象・成立条件・今回の事実・判定」に分ける。数値比較は項目ごとに列を作る。段落や自由形式は空配列とし各行を本文一セルにする。",
+        description="数値比較は対象と値の列。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
     )
-    rows: list[AnswerComparisonRow] = Field(
+    rows: list[list[str]] = Field(
         min_length=1,
-        description="比較・判定は各対象を一行にし、可否の理由はその行だけに収める。質問にない手順や補足は加えない。",
+        description=(
+            "質問から求める項目名を拾い、それだけを埋める。見出しなしは一行一セル。単純な可否は可・不可と引用だけ。条件付きなら条件を添える。"
+            "複数項目の断定を尋ねたときは各項目に直接答える。資料で決まらない欄は「不明（不足する情報）」で完結し、別の属性の規則で埋めない。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
+            "理由を問われた行だけ制約を示し、それ以外の理由欄は空欄。必要な条件・否定・例外と引用を該当するセルに含める。"
+        ),
     )
 
     def markdown(self) -> str:
-        rows = []
-        for row in self.rows:
-            cells = list(row.cells)
-            if len(cells) != (len(self.headers) or 1):
-                raise ValueError("表の各行のセル数を見出しの数に合わせてください。")
-            if row.scope.strip():
-                cells[0] += f"（{row.scope.strip()}）"
-            cells[-1] += "".join(row.sources)
-            rows.append(AnswerTableRow(cells=cells))
-        parts = [step.strip() for step in self.operations if step.strip()]
-        if self.headers:
-            parts.append(table_markdown(AnswerTable(columns=self.headers, rows=rows)))
-        else:
-            parts.extend(row.cells[0].strip() for row in rows if row.cells[0].strip())
-        return "\n\n".join(parts)
+        if any(len(row) != (len(self.headers) or 1) for row in self.rows):
+            raise ValueError("表の各行のセル数を見出しの数に合わせてください。")
+        if not self.headers:
+            return "\n\n".join(row[0].strip() for row in self.rows if row[0].strip())
+        return table_markdown(AnswerTable(columns=self.headers, rows=[AnswerTableRow(cells=row) for row in self.rows]))
 
 
 class FullAnswerWire(BaseModel):
@@ -108,7 +82,7 @@ class FullAnswerWire(BaseModel):
         description=(
             "各要求に一度だけ答える。複数の対象の値や状態の判定を尋ねる質問には表を選び、"
             "可否の理由・適用範囲を該当行にまとめる。"
-            "それ以外の質問は本文一列で答える。必要な条件・否定・例外を残す。利用者の形式指定を優先する。"
+            "それ以外は尋ねられた項目に絞る。必要な条件・否定・例外を残す。利用者の形式指定を優先する。"
         ),
     )
 
@@ -304,9 +278,15 @@ def render_full_answer(draft: GroundedDraft, checked: Sequence[Any]) -> Any:
     pending: list[Any] = []
 
     def append_references() -> None:
+        # 同じ本文行・表内で繰り返した同じ根拠だけを束ね、各引用の位置に対応する子をすべて残す。
+        grouped: dict[tuple[str, str], list[Any]] = {}
         for entry in pending:
-            output.append(grounded._cited_line(entry))
-            lines.append(grounded.citation_line_ref([entry]))
+            label = grounded._cited_line(entry)
+            key = (label, entry.span["evidence_id"])
+            grouped.setdefault(key, []).append(entry)
+        for (label, _), group in grouped.items():
+            output.append(label)
+            lines.append(grounded.citation_line_ref(group))
         pending.clear()
 
     in_table = False
