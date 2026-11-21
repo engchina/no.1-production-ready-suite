@@ -51,4 +51,4 @@ def test_saved_role_keeps_fixed_insufficiency_and_citation_boundaries() -> None:
     with bind_prompt_overrides({"generation.role": "## Step 1: 保存済みの役割"}):
         saved = _step(grounded.generation_system_prompt(), "本文を完成させて引用を選ぶ")
     assert "どの要求の結論" in saved and "推論は直接の記載と区別" in saved
-    assert "複数の文書" in saved and "表のセルの末尾" in saved
+    assert "複数の文書" in saved and "対応する行の sources" in saved

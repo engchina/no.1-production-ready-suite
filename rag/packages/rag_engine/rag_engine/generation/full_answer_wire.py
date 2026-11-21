@@ -43,29 +43,55 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 )
 
 
+class AnswerRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None = Field(
+        description=(
+            "表示する行名。質問で尋ねられた項目・対象だけを短く名付ける。数値比較は対象名に適用範囲を添える。"
+            "他の行の答えの総括や、関連していても質問で尋ねられていない属性は null（表示しない）。"
+        )
+    )
+    sources: list[str] = Field(
+        description="この行が答える質問に直接必要な原文ラベルだけを先に選ぶ。別の対象・別の属性にしか答えない行は選ばない。"
+    )
+    cells: list[str] = Field(
+        description=(
+            "行名に対する値のみ。複数列の表では先頭列は label なので、二列目から順に記入する。段落と一列表は一セル。引用は sources だけ。"
+        )
+    )
+
+
 class AnswerTableBody(BaseModel):
     """回答ごとに一組のセルを受け、表または段落を組み立てる。"""
 
     model_config = ConfigDict(extra="forbid")
 
     headers: list[str] = Field(
-        description="数値比較は対象と値の列。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
+        description="数値比較は比較対象ごとに一行、各測定項目を列とする。対象の適用範囲は行名に一度だけ添える。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
     )
-    rows: list[list[str]] = Field(
+    rows: list[AnswerRow] = Field(
         min_length=1,
         description=(
-            "質問から求める項目名を拾い、それだけを埋める。見出しなしは一行一セル。単純な可否は可・不可と引用だけ。条件付きなら条件を添える。"
+            "質問から求める項目名を拾い、それだけを埋める。見出しなしは一行一セル。単純な可否の答えは「可」か「不可」の一語で止める。不可の後に禁止文を添えない。条件付きなら条件を添える。"
             "複数項目の断定を尋ねたときは各項目に直接答える。資料で決まらない欄は「不明（不足する情報）」で完結し、別の属性の規則で埋めない。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
-            "理由を問われた行だけ制約を示し、それ以外の理由欄は空欄。必要な条件・否定・例外と引用を該当するセルに含める。"
+            "特定対象の可否・理由も尋ねられたら専用の列を設け、該当行だけに制約を書く。他の行は空欄。必要な条件・否定・例外を該当するセルに含める。"
         ),
     )
 
     def markdown(self) -> str:
-        if any(len(row) != (len(self.headers) or 1) for row in self.rows):
-            raise ValueError("表の各行のセル数を見出しの数に合わせてください。")
+        rows = []
+        for row in self.rows:
+            if row.label is None:
+                continue
+            cells = [row.label, *row.cells] if len(self.headers) > 1 else list(row.cells)
+            if len(cells) != (len(self.headers) or 1):
+                raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
+            cells[-1] += "".join(dict.fromkeys(row.sources))
+            rows.append(AnswerTableRow(cells=cells))
         if not self.headers:
-            return "\n\n".join(row[0].strip() for row in self.rows if row[0].strip())
-        return table_markdown(AnswerTable(columns=self.headers, rows=[AnswerTableRow(cells=row) for row in self.rows]))
+            return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
+        return table_markdown(AnswerTable(columns=self.headers, rows=rows)) if rows else ""
 
 
 class FullAnswerWire(BaseModel):

@@ -530,7 +530,7 @@ def test_table_cell_citation_keeps_the_value_without_a_second_explanation():
 def test_structured_table_excludes_competing_prose_and_checks_its_labels():
     units, unit = catalog()
     model = full_answer_model(units)
-    cells = {"headers": ["対象", "値"], "rows": [["A（共通）", f"12[{unit}]"]]}
+    cells = {"headers": ["対象", "値"], "rows": [{"label": "A（共通）", "sources": [f"[{unit}]"], "cells": ["12"]}]}
     payload = {"answer_body": cells, "response_kind": "answered", "confidence": "high"}
     wire = model.model_validate(payload)
     assert wire.answer_body.startswith("| 対象")
@@ -538,10 +538,10 @@ def test_structured_table_excludes_competing_prose_and_checks_its_labels():
         model.model_validate({**payload, "answer_body": {**cells, "points": ["補足"]}})
     assert wire.answer_body.endswith(f"| A（共通） | 12[{unit}] |")
     assert model.model_validate(wire.model_dump()).answer_body == wire.answer_body
-    cells["rows"][0][-1] = "12[E1.99]"
+    cells["rows"][0]["sources"] = ["[E1.99]"]
     with pytest.raises(ValidationError, match="今回の根拠に無い"):
         model.model_validate(payload)
-    cells["rows"][0] = ["A"]
+    cells["rows"][0]["cells"] = []
     with pytest.raises(ValidationError, match="セル数"):
         model.model_validate(payload)
 
@@ -556,7 +556,7 @@ def test_empty_structured_body_cannot_become_an_empty_success():
 
 def test_headerless_body_renders_prose_and_explicit_single_column_stays_a_table():
     units, unit = catalog()
-    body = {"headers": [], "rows": [[f"説明。[{unit}]"]]}
+    body = {"headers": [], "rows": [{"label": "A（共通）", "sources": [f"[{unit}]"], "cells": ["説明。"]}]}
     wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
     assert wire.answer_body == f"説明。[{unit}]"
     body["headers"] = ["本文"]
@@ -573,3 +573,15 @@ def test_same_reference_is_displayed_once_per_passage_and_retained_in_next_passa
     rendered = render_full_answer(draft, checked)
     assert len(rendered.citation_lines) == 2
     assert all(line["scope_source_ids"] == ["child-a"] for line in rendered.citation_lines)
+
+
+def test_only_rows_bound_to_a_request_are_shown():
+    units, unit = catalog()
+    model = full_answer_model(units)
+    row = {"label": "項目Aの値", "cells": ["12"], "sources": [f"[{unit}]"]}
+    background = {**row, "label": None, "cells": ["別の項目"]}
+    body = {"headers": [], "rows": [row, background]}
+    payload = {"answer_body": body, "response_kind": "answered", "confidence": "high"}
+    assert model.model_validate(payload).answer_body == f"12[{unit}]"
+    with pytest.raises(ValidationError):
+        model.model_validate({**payload, "answer_body": {**body, "rows": [background]}})
