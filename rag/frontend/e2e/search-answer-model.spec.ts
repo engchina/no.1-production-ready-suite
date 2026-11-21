@@ -88,7 +88,9 @@ test.describe("RAG 検索の回答の見出しと段落の印の節", { tag: "@r
     await ask(page);
 
     await expect(page.getByTestId("search-answer-model-heading")).toHaveText("回答モデル: 合成のモデル A（画像も参照）");
-    const answer = page.getByTestId("answer-text");
+    await expect(page.getByTestId("search-answer-body")).toBeVisible();
+    const headingBeforeBody = page.locator('[data-testid="search-answer-model-heading"] ~ [data-testid="search-answer-body"]');
+    await expect(headingBeforeBody).toHaveCount(1);
     await expectNoPageOverflow(page);
     if (process.env.RAG_E2E_SCREENSHOT_DIR) {
       await page.getByTestId("search-answer-model-heading").scrollIntoViewIfNeeded();
