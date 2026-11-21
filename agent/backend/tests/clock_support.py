@@ -6,7 +6,7 @@ OS の時計（wall clock）は時刻の同期で後ろへ戻ることがある�
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 
 import pytest
 
@@ -14,14 +14,14 @@ from app.features.agent import runtime as agent_runtime
 
 
 class RuntimeClock:
-    """`runtime._now` の時計（OS の時計から `rewind` で戻した分を引く）。"""
+    """開始時刻を保持し、`rewind` の操作でだけ進行方向を戻すテスト用時計。"""
 
     def __init__(self) -> None:
-        self.offset = timedelta()
+        self.current = datetime.now(UTC)
 
     def rewind(self, seconds: float) -> None:
         """時計を `seconds` 秒戻す（時刻の同期で OS の時計が後ろへ戻ったとき）。"""
-        self.offset += timedelta(seconds=seconds)
+        self.current -= timedelta(seconds=seconds)
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         clock = self
@@ -29,6 +29,7 @@ class RuntimeClock:
         class _RewoundDatetime(datetime):
             @classmethod
             def now(cls, tz: tzinfo | None = None) -> datetime:  # type: ignore[override]
-                return datetime.now(tz) - clock.offset
+                value = clock.current.astimezone(tz)
+                return value if tz is not None else value.replace(tzinfo=None)
 
         monkeypatch.setattr(agent_runtime, "datetime", _RewoundDatetime)
