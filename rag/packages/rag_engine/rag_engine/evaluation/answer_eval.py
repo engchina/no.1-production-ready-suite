@@ -40,8 +40,8 @@ class JudgedClaim(BaseModel):
     model_config = ConfigDict(extra="forbid")
     claim: str = Field(description="Step 2 で取り出した主張の文。")
     answer_ids: list[str] = Field(description="この主張を述べた本文の段落の id（A1 など）。")
-    standard_ids: list[str] = Field(description="Step 3 の standard_ids（標準回答の文の id。S1 など）。")
     states_source_gap: bool
+    standard_ids: list[str] = Field(description="Step 3 の standard_ids（標準回答の文の id。S1 など）。")
     consistent: bool
 
 
@@ -82,27 +82,27 @@ CORRECTNESS_PROMPT = """## Step 1: 評価する JSON の各項目を読む
 ID が付くのは、標準回答の各文、各要点、実際の回答の各段落の 3 種類だけである。
 
 ## Step 2: 実際の回答の段落から主張を取り出す
-- actual_responses[].answer[].text を段落ごとに読み、本文が述べる主張（結論・数値・対象・否定・例外・手順）を一つずつ取り出す。見出し・出典・定型の案内は単独の主張にしない。
-- 条件と結論は一つの主張にまとめ、前後の段落で示された適用範囲・観点も含めて claim に 1 文で書く。具体的な結論と資料の不足による留保が同じ文にあれば、別々の主張にする。
-- answer_ids は actual_responses[].answer[].id から選ぶ。まず本文を一段落だけ読んで、その本文から意味として分かる主張を確定し、その ID 一つを返す。資料が提供されていないなら、それを参照できないことも同じ段落から分かる。同じ内容を表す見出しや前置きは加えない。
-- 本文だけでは主張を復元できない場合だけ、欠けた部分を与える段落の ID を加える。たとえば本文が項目名だけで、何を確認できたか・できなかったかを見出しが示す場合は、その見出しと本文の両方を選ぶ。
+- actual_responses[].answer[].text を一段落ずつ読み、本文が述べた結論・数値・対象・否定・例外・手順を一つずつ claim に 1 文で書く。条件と結論は一つの主張にまとめ、適用範囲・観点を保つ。具体的な結論と資料不足の留保は、同じ文にあっても分ける。
+- answer_ids には、見出しを隠して本文だけを読んでもその主張が分かる場合、本文の actual_responses[].answer[].id 一つを返す。次に、本文で省略された対象・条件・述語だけを前後の段落で補い、そのときだけ補った段落の ID を含める。見出し・出典・定型の案内は単独の主張にしない。
+
+例：「未確認の項目」という見出しの下に「項目X」と「項目Yの資料は未提供です」が並ぶ。X が未確認だと読めるのは見出しと X の段落を合わせたとき。Y の資料を参照できないことは Y の段落だけで分かるので、Y の留保にはその段落だけを引く。
 
 ## Step 3: 各主張を標準回答の文と照らし合わせる
-各 claim を standard_answer[].text と意味で照らし合わせ、次の 3 項目を返す。言い換えや表示形式の違いは問わない。
-- standard_ids: この claim が答えている問いを特定し、同じ対象・条件・適用範囲について同じ問いに答える standard_answer[].id だけを選ぶ。答えが反対でも含める。同じ段落から分けた主張は個別に照合する。資料の内容・記載先を示す文は、その資料の有無や確認の可否を示したことにはならない。該当する文がなければ [] を返す。
+各 claim について、主張の種類を決めてから standard_answer[].text を選び、結論を照合する。言い換えや表示形式の違いは問わない。
 - states_source_gap: その点について「資料に記載がない」「資料では確認できない」「資料からは確定できない」ということだけを述べた主張なら true。具体的な事実や結論を述べた主張は、留保を添えていても false。
+- standard_ids: 同じ対象・条件・適用範囲について、主張と同じ問いに答える standard_answer[].id を選ぶ。states_source_gap が true のときの問いは「その情報を資料から確認できるか」。標準文自体がその情報の有無・確認の可否を述べている場合だけ選ぶ。値・記載先・方針・手順だけを示す文は、この問いに答えない。false のときは具体的な主張の内容を照合する。どちらも、反対の答えは含め、該当する文がなければ [] を返す。
 - consistent: 主張が standard_ids の指す文と同じ事実・結論を述べていれば true。両立するだけでは足りない。標準回答で確定している結論を、主張が複数の可能性の一つにとどめていれば false。双方が同じ点を確定できないと述べていれば true。standard_ids が空の場合も true。
 
 ## Step 4: 実際の回答が各要点をカバーしたかを確かめる
 各 points[].id を point_id に入れる。points[].text が求める内容を actual_responses[].answer[].text が伝えたか、見出し・否定・留保も含めて読み、covered を判定する。
-- 要点が話題だけを示すときは、回答がその話題に具体的に答えていれば true。答えた値や条件が標準回答と異なっても、話題の網羅に数える。
+- 要点が話題だけを示すときは、その要点が尋ねる「対象」と「その対象について何を知りたいか」を分け、後者への具体的な答えを本文から読み取れれば true。値や条件が標準回答と異なっても話題の網羅に数える。対象の識別名は名前を尋ねる要点を満たす。種類を尋ねる要点には、属する分類が分かる呼称や説明が要る。識別名から分類を推測したり、他の対象の属性を移したりしない。
 - 要点自体が値・条件・操作の仕方・結論を指定するときは、それを満たす回答だけが true。逆の内容を答えたり、求める情報を未確認事項に挙げただけなら false。要点が留保を求める場合は、対応する留保で満たす。
 - 要点が根拠の文書名や文書内の場所を求める場合は、該当する段落の actual_responses[].answer[].sources[] も回答に含めて判定する。
 
-例：回答が「手動で行う」なら、要点「実施方法」は true、「自動で行う」は false。「方法は不明」とだけ答えた場合はどちらも false。
+例：「部品Xを手動で検査する」なら、部品の名前と検査方法は true、部品の種類と「自動で検査する」は false。「このばねを手動で検査する」なら、部品の種類も「ばね」と読み取れる。「方法は不明」とだけ答えた場合は、検査方法は false。
 """
 # 判定の指示・入力・出力の契約の版。
-RUBRIC_VERSION = 40
+RUBRIC_VERSION = 41
 
 
 class InvalidJudgeReference(ValueError):
@@ -307,6 +307,14 @@ def judge_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     return dict(question=str(payload.get("question") or ""), standard_answer=standard, points=points, actual_responses=responses)
 
 
+def _reference_text(ids: list[str], passages: dict[str, str]) -> str:
+    """複数の原文は入力の順に引用し、見出しとそれが補う本文を続けて読めるようにする。"""
+    if len(ids) < 2:
+        return " ".join(passages[ref].strip() for ref in ids)
+    selected = set(ids)
+    return " ".join(text.strip() for ref, text in passages.items() if ref in selected)
+
+
 def score_judgement(inputs: dict[str, Any], output: AnswerCorrectnessOutput) -> dict[str, Any]:
     """印から点と理由を計算する。入力に無い id・要点の過不足は ``InvalidJudgeReference``。
 
@@ -327,8 +335,8 @@ def score_judgement(inputs: dict[str, Any], output: AnswerCorrectnessOutput) -> 
             dict(
                 verdict=verdict,
                 claim=claim.claim.strip(),
-                answer=" ".join(answer[i].strip() for i in claim.answer_ids),
-                standard=" ".join(standard[i].strip() for i in claim.standard_ids),
+                answer=_reference_text(claim.answer_ids, answer),
+                standard=_reference_text(claim.standard_ids, standard),
                 states_source_gap=claim.states_source_gap,
                 consistent=claim.consistent,
             )
