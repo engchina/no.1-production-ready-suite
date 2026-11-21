@@ -2736,27 +2736,27 @@ def run_round(
 
     sent_prompt = prompt
 
-    def citation_repair(error: Exception, will_retry: bool) -> str | None:
+    def answer_repair(error: Exception, will_retry: bool) -> str | None:
         nonlocal sent_prompt
         # 修復の指示は元の入力に足し、再試行の上限は adapter と共有する。
         from pr_backend_core.response_schema import with_schema_field_guide
 
-        from rag_engine.generation.full_answer_wire import citation_missing_error, citation_repair_step
+        from rag_engine.generation.full_answer_wire import full_answer_repair_step
 
         if not will_retry:
             return None
-        if not (paragraph_repair.pending or citation_missing_error(error)):
+        step = paragraph_repair.step() if paragraph_repair.pending else full_answer_repair_step(error)
+        if step is None:
             sent_prompt = prompt
             return None
         # 番号は送る指示（adapter が最後に足す項目の説明の Step を含む）の続き。
         sent_system, _schema = with_schema_field_guide(generation_system, generation_model.model_json_schema())
-        step = paragraph_repair.step() if paragraph_repair.pending else citation_repair_step()
         sent_prompt = prompt + "\n\n" + continue_prompt_steps(sent_system, step)
 
         return sent_prompt
 
     try:
-        with bind_structured_output_repair(citation_repair):
+        with bind_structured_output_repair(answer_repair):
             if image_paths:
                 draft = call_with_model_purpose(
                     "answer.generate",
