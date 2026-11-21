@@ -123,10 +123,12 @@ class AgentDraftError(Exception):
     """提案を作れない（画面へ返す文言）。"""
 
 
-DRAFT_INSTRUCTIONS = f"""あなたは業務 Agent の設計を手伝う担当者です。
+DRAFT_INSTRUCTIONS = f"""## Step 1: 業務の目的と候補を読む
+あなたは業務 Agent の設計を手伝う担当者です。
 利用者が書いた業務の説明を読み、その業務に答える業務 Agent の下書きを提案します。
 業務 Agent は、社内の資料（RAG）と業務データ（NL2SQL）を、スキルの手順に沿って調べて答えます。
 
+## Step 2: 下書きの構成を決める
 - description: 利用者が業務 Agent を選ぶときに読む 1 文。
 - skill_ids: 「使えるスキル」から、この業務に要るものの id を選ぶ。
 - data_scopes: 「使えるプロファイル」から、この業務に関係するものだけを接続ごとに選ぶ。関係する
@@ -136,11 +138,12 @@ DRAFT_INSTRUCTIONS = f"""あなたは業務 Agent の設計を手伝う担当者
   項目にする。label は日本語の短い表示名、key はその意味の英語の識別子（半角英小文字と _）。
 - evaluation_cases: 公開の前に確かめる質問を {MIN_EVALUATION_CASES}〜{MAX_EVALUATION_CASES} 件。
 
-資料と業務データの中身は分からない。文書の章・条・頁、数値、日付、人や部署の名前、表の列を
-作らず、何を答えるか・何を根拠に示すかだけを書く（instructions と evaluation_cases の両方）。
-例: expected は「上限の金額と、その根拠の規程の箇所を示す」と書き、「第3章第5条により
-1 日 1 万円」とは書かない。
-業務の説明に無い業務・組織・制度を作らない。文はすべて日本語で書く。"""
+## Step 3: 根拠の範囲で下書きを返す
+- 資料と業務データの中身は分からない。文書の章・条・頁、数値、日付、人や部署の名前、表の列を
+  作らず、何を答えるか・何を根拠に示すかだけを書く（instructions と evaluation_cases の両方）。
+  例: expected は「上限の金額と、その根拠の規程の箇所を示す」と書き、「第3章第5条により
+  1 日 1 万円」とは書かない。
+- 業務の説明に無い業務・組織・制度を作らない。文はすべて日本語で書く。"""
 
 
 def _candidate_lines(items: Sequence[tuple[str, str, str]]) -> str:
@@ -164,9 +167,9 @@ def draft_input(
         if profiles
     )
     return (
-        f"## 業務の説明\n{description}\n\n"
-        f"## 使えるスキル\n{skill_lines or '（なし）'}\n\n"
-        f"## 使えるプロファイル\n{scope_blocks or '（なし）'}"
+        f"## Step 1: 業務の説明を読む\n{description}\n\n"
+        f"## Step 2: 使えるスキルを確認する\n{skill_lines or '（なし）'}\n\n"
+        f"## Step 3: 使えるプロファイルを確認する\n{scope_blocks or '（なし）'}"
     )
 
 
@@ -312,7 +315,8 @@ def _send_back_input(text: str, invented: Sequence[_ProposedCase]) -> str:
     """差し戻しの入力（前の提案の、直す要点を示す）。"""
     lines = "\n".join(f"- {case.expected}" for case in invented)
     return (
-        f"{text}\n\n## 直してほしい点\n前の提案の evaluation_cases の expected に、資料から確かめて"
+        f"{text}\n\n## Step 4: 評価ケースを修正する\n"
+        "前の提案の evaluation_cases の expected に、資料から確かめて"
         f"いない数値・箇所がありました。数値・箇所を書かずに、何を答え、何を根拠に示すかで"
         f"書き直して、提案の全体をもう一度出してください。\n{lines}"
     )

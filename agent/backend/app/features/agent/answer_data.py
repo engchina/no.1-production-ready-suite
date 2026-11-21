@@ -29,15 +29,15 @@ _NUMBER = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)*(?![\w])")
 
 DATA_INSTRUCTIONS = (
     "## Step 1: 取得した表を参照する\n"
-    "全行・全列はanswer_data.tableを単独行に置いて表示します。"
-    "一部の行・列は [[table:T1:rows=1-8:cols=1,2,4]] の投影参照で選びます。"
-    "行・列は1始まりで、*は全件、昇順の範囲やカンマ列挙は指定順に表示します。"
+    "- 全行・全列はanswer_data.tableを単独行に置いて表示します。"
+    "\n- 一部の行・列は [[table:T1:rows=1-8:cols=1,2,4]] の投影参照で選びます。"
+    "\n- 行・列は1始まりで、*は全件、昇順の範囲やカンマ列挙は指定順に表示します。"
     "列番号はcolumn_refsを使います。"
-    "render_charsのwholeは全表のMarkdown文字数、columnsは列番号順のheader文字数と"
+    "\n- render_charsのwholeは全表のMarkdown文字数、columnsは列番号順のheader文字数と"
     "values合計文字数（罫線・区切りを除く）です。画面の字数やtoken数ではありません。"
     "回答の分量に合わせた行列の選択に使います。"
-    "項目を縦に並べる表は [[table:T1:rows=1:cols=2-4:layout=vertical]] と指定します。"
-    "値・見出し・項目名を手書きせず表の参照を優先してください。\n"
+    "\n- 項目を縦に並べる表は [[table:T1:rows=1:cols=2-4:layout=vertical]] と指定します。"
+    "\n- 値・見出し・項目名を手書きせず表の参照を優先してください。\n\n"
     "## Step 2: 本文の値を参照する\n"
     "cellsの [[cell:T1:R2:C3]] を使って値を表示します。"
 )

@@ -262,7 +262,9 @@ def test_invented_numbers_are_sent_back_once(monkeypatch: MonkeyPatch) -> None:
     # 項目を求めない業務では、出力の項目は空のまま。
     assert data["output_fields"] == []
     resent = json.dumps(model.calls[1].input, ensure_ascii=False)
-    assert "直してほしい点" in resent and "上限は第3章により 1 万円と示す" in resent
+    assert (
+        "## Step 4: 評価ケースを修正する" in resent and "上限は第3章により 1 万円と示す" in resent
+    )
 
 
 def test_cases_still_with_numbers_are_dropped(monkeypatch: MonkeyPatch) -> None:

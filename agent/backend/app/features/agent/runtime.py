@@ -6602,6 +6602,7 @@ def _builtin_agents() -> list[AgentProfile]:
                 "使い分けて調べる既定の業務 Agent。"
             ),
             instructions=(
+                "## Step 1: 必要な情報源を選ぶ\n"
                 "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。"
             ),
             skill_ids=[RAG_CHAT_AND_DATA_SKILL_ID],
@@ -6614,7 +6615,9 @@ def _builtin_agents() -> list[AgentProfile]:
                 "社内の資料を RAG のチャットと同じ流れ（登録済みQ&A・業務ガイド・根拠の拡張）で"
                 "調べ、RAG の回答と根拠をそのまま返す業務 Agent。"
             ),
-            instructions="資料の質問に、RAG のチャットの流れで答える。",
+            instructions=(
+                "## Step 1: 資料をチャットで調べる\n資料の質問に、RAG のチャットの流れで答える。"
+            ),
             skill_ids=[RAG_CHAT_SKILL_ID],
             source="builtin",
         ),
@@ -6625,7 +6628,7 @@ def _builtin_agents() -> list[AgentProfile]:
                 "社内の資料を基本の検索（登録済みQ&A・業務ガイド・根拠の拡張なし）で調べ、RAG の"
                 "回答と根拠をそのまま返す業務 Agent。"
             ),
-            instructions="資料の質問に、RAG の基本の検索で答える。",
+            instructions="## Step 1: 資料を検索する\n資料の質問に、RAG の基本の検索で答える。",
             skill_ids=[RAG_SEARCH_SKILL_ID],
             source="builtin",
         ),
@@ -6637,6 +6640,7 @@ def _builtin_agents() -> list[AgentProfile]:
                 "業務 Agent。"
             ),
             instructions=(
+                "## Step 1: 必要な情報源を選ぶ\n"
                 "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。"
             ),
             skill_ids=[RAG_SEARCH_AND_DATA_SKILL_ID],
@@ -6646,7 +6650,10 @@ def _builtin_agents() -> list[AgentProfile]:
             id=DATA_QUERY_AGENT_ID,
             name="データ照会アシスタント",
             description="業務データ（NL2SQL）を照会し、集計の条件と結果を示して答える業務 Agent。",
-            instructions="業務データの照会の結果に基づいて答え、集計の条件（期間・対象）を示す。",
+            instructions=(
+                "## Step 1: 業務データの結果を示す\n"
+                "業務データの照会の結果に基づいて答え、集計の条件（期間・対象）を示す。"
+            ),
             skill_ids=[STRUCTURED_DATA_QUERY_SKILL_ID],
             source="builtin",
         ),

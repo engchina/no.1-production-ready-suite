@@ -518,7 +518,10 @@ def scope_instructions(scopes: AgentDataScopes | None, exposed: list[str]) -> st
             )
     if not lines:
         return ""
-    return "# データの範囲\nこの業務 Agent が使えるデータは次の範囲に限る。\n" + "\n".join(lines)
+    return (
+        "# データの範囲\n## Step 1: 利用できる範囲を確認する\n"
+        "この業務 Agent が使えるデータは次の範囲に限る。\n" + "\n".join(lines)
+    )
 
 
 # ---------------------------------------------------------------------------

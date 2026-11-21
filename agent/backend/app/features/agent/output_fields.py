@@ -247,9 +247,12 @@ def record_output_tool(
             name=RECORD_OUTPUT_TOOL,
             title="出力の項目の記録",
             description=(
-                "この業務 Agent の出力の項目の値を記録する。回答を書く前に、確かめた値で呼ぶ。"
+                "この業務 Agent の出力の項目の値を記録する。\n\n"
+                "## Step 1: 回答を書く前に値を記録する\n回答を書く前に、確かめた値で呼ぶ。"
                 "呼び直すと前の記録を置き換えるので、すべての行をまとめて渡す。"
-                "記録した値は画面の表に表示される。回答本文に記録の報告・同じ値の一覧・このツール名を書かない。"
+                "\n\n## Step 2: 回答を返す\n"
+                "記録した値は画面の表に表示される。回答本文に記録の報告・同じ値の一覧・"
+                "このツール名を書かない。"
             ),
             input_schema=output_input_schema(columns),
             output_schema={"type": "object"},
@@ -261,6 +264,7 @@ def record_output_tool(
 
 
 OUTPUT_RETRY_MESSAGE = (
+    "## Step 1: 確認した出力項目を記録する\n"
     f"この業務 Agent には出力の項目があります。{RECORD_OUTPUT_TOOL} で項目の値を記録してから、"
     "回答をもう一度書いてください。確かめられなかった値は、必須でなければ null にしてください。"
 )

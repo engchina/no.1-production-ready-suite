@@ -33,10 +33,12 @@ ZERO_EVIDENCE_STAGES = frozenset({"retrieval", "evidence_check", "context"})
 NOTICE_GUARDRAIL_DEGRADED = "guardrail_degraded"
 NOTICE_DEGRADED_STEPS = "degraded_steps"
 GUARDRAIL_DEGRADED_HINT = (
+    "## Step 1: 検査の状態に合わせて回答する\n"
     "安全チェックを完了できなかったため、この呼び出しは資料を調べていません。資料に記載が無い"
     "とは答えず、資料を確かめられなかったことを利用者に伝えてください。"
 )
 DEGRADED_ZERO_EVIDENCE_HINT = (
+    "## Step 1: 根拠が得られなかった状況を確かめる\n"
     "根拠は 0 件ですが、補助の処理（degraded_steps）が失敗したため、当たる資料を読めなかった"
     "可能性があります。資料に記載が無いとは断定せず、確かめられなかった点として示してください。"
 )

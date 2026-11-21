@@ -209,8 +209,9 @@ def test_answer_after_the_retry_with_a_tool_is_kept(
     # チャットの Run（方針「確認する」）は ask_user_confirmation を渡すので、本文で聞き返さず
     # 資料のツールか確認のカードで確かめる差し戻しの文にする（#1881）。
     assert _last_user_message(retry_input) == (
-        f"{tool_grounding.RETRY_MESSAGE_CONFIRMABLE}\n\n直前の回答（利用者には出していません）:\n"
-        "締め日は毎月 25 日です。"
+        f"{tool_grounding.RETRY_MESSAGE_CONFIRMABLE}\n\n"
+        "### 直前の回答（利用者には出していません）:\n"
+        "<previous_answer>\n締め日は毎月 25 日です。\n</previous_answer>"
     )
     assert not any(
         isinstance(item, dict) and item.get("role") == "assistant" for item in retry_input
@@ -839,8 +840,8 @@ def test_retry_input_drops_the_assistant_message_and_its_reasoning() -> None:
     assert len(retried) == 4
     content = retried[-1]["content"]
     assert content.startswith(tool_grounding.RETRY_MESSAGE)
-    assert "直前の回答（利用者には出していません）:\nこんにちは！" in content
-    assert content.endswith("…")
+    assert "直前の回答（利用者には出していません）:\n<previous_answer>\nこんにちは！" in content
+    assert content.endswith("…\n</previous_answer>")
 
 
 # 呼び先（RAG）の回答の pipeline で AI の API が失敗したときのツールのエラー（#2475）。
