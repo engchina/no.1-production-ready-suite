@@ -93,6 +93,16 @@ def test_recorded_judge_outputs_replay_to_expected_scores(case):
     assert result["correctness_reason"] == case["recorded_reason"]
 
 
+def test_editing_the_current_default_keeps_its_declared_output_contract():
+    edited = CORRECTNESS_PROMPT.replace("## Step 2:", "## Step 2: 個別の条件を保って") + "\n回答の表記を尊重する。"
+    case = next(case for case in CASES if case["id"] == "r_identifier_under_reservation")
+    response = SourceCheckedJudgement.model_validate(case["recorded_output"])
+    with bind_prompt_overrides({"evaluation.correctness": edited}), patch(PARSE, return_value=response) as model:
+        result = evaluate_answer_payload(case, object())
+    assert result["status"] == "completed" and result["answer_coverage"] == case["recorded_coverage"]
+    assert model.call_args.args[0] == edited and model.call_args.args[3] is SourceCheckedJudgement
+
+
 def test_topic_coverage_and_claim_references_are_scoped_per_item():
     """値を誤っても話題は覆える。同じ段落の記載先と資料不足は、それぞれの参照で表示する。"""
     case = next(case for case in CASES if case["id"] == "r_point_and_claim_scope")
@@ -252,6 +262,29 @@ def test_coverage_evidence_must_belong_to_the_selected_answer_passage(passage_id
     with patch(PARSE, return_value=wire):
         result = evaluate_answer_payload(payload, object())
     assert result["status"] == "error" and result["error_type"] == "InvalidJudgeReference"
+
+
+@pytest.mark.parametrize(
+    ("point", "target", "answer", "quote", "role", "covered"),
+    [
+        ("試料の番号", "value", "試料M8の質量は不明です。", "M8", "value", True),
+        ("試料の種類", "category", "試料M8の質量は不明です。", "M8", "value", False),
+        ("試料の種類", "category", "この合金試料の質量は不明です。", "合金", "category", True),
+    ],
+)
+def test_coverage_of_an_identifier_and_a_category(point, target, answer, quote, role, covered):
+    payload = _payload(answer_points=[point], answer_text=answer)
+    wire = SourceCheckedJudgement.model_validate(
+        {
+            "standard_availability": [],
+            "factual_claims": [],
+            "source_gaps": [],
+            "points": [_point_evidence("P1", "A1", quote, target=target, role=role)],
+        }
+    )
+    with patch(PARSE, return_value=wire):
+        result = evaluate_answer_payload(payload, object())
+    assert result["coverage_points"][0]["covered"] is covered
 
 
 def test_inputs_number_standard_points_and_attach_citations_to_their_passage():
