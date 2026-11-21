@@ -161,8 +161,8 @@ async def test_ingestion_packs_the_actual_request_and_reuses_only_accepted_units
             rag_field_extraction_enabled=True, rag_field_extraction_input_token_percent=90
         ),
         oracle=_NoKbOracle(),  # type: ignore[arg-type]
-        object_storage=_MemoryStorage(),
-    )  # type: ignore[arg-type]
+        object_storage=_MemoryStorage(),  # type: ignore[arg-type]
+    )
     doc = StructuredExtraction(
         elements=[DocumentElement(text=f"第{i}番" + "字" * 440 + "。") for i in range(6)]
     )
