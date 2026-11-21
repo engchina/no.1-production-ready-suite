@@ -504,6 +504,7 @@ def _note(
         done.append(f"ID の無い {stats.dropped} 件を省略")
     summary = "、".join(done) or "一部を省略"
     text = (
+        "## Step 1: 省略された内容が必要かを確かめる\n"
         f"この結果は長いため縮めました（元は {original_chars} 文字。{summary}）。"
         "ID の項目は元のまま残しているので、引用にそのまま使えます。続きの cursor・状態・条件・"
         "除外の理由などの短い値も元のままです。"

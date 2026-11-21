@@ -172,8 +172,10 @@ def _create_run(goal: str = "今月の売上を教えて") -> str:
 
 def test_instructions_and_tools_come_from_agent_and_skills(calls: _Calls) -> None:
     del calls
-    instructions = builtin_runtime.compose_instructions("経理の質問に答える。", [SKILL_ID])
-    assert "経理の質問に答える。" in instructions
+    saved = "## Step 8: 保存済みの手順\n- 質問に答える。"
+    instructions = builtin_runtime.compose_instructions(saved, [SKILL_ID])
+    assert instructions.startswith("## Step 1:") and "\n## Step 2:" in instructions
+    assert f"# 業務の指示\n{saved}" in instructions
     assert "# Skill: テストの Skill" in instructions
     assert builtin_runtime.agent_tool_names([SKILL_ID]) == [LOOKUP, WRITE]
     tools = {

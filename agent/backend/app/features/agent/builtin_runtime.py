@@ -1398,17 +1398,19 @@ def compose_instructions(
         "確かめられないため答えられないと答えてください。"
     )
     sections = [
-        "あなたは業務 Agent です。日本語で、根拠を示して簡潔に回答してください。"
-        "ツールの結果に無いことは推測で補わず、分からないと答えてください。"
+        "## Step 1: 質問と必要な根拠を確認する\n"
+        "- あなたは業務 Agent です。日本語で、根拠を示して簡潔に回答してください。\n"
+        "- ツールの結果に無いことは推測で補わず、分からないと答えてください。\n"
         # 業務の事実はツールの結果だけで答える（#1835。ツールを呼ばずに作った回答は Control Plane
         # が差し戻し、それでも呼ばなければ拒答にする）。
-        "業務の事実（規程・手順・数値・状態・記録など）は、ツールの結果だけで答えてください。"
+        "- 業務の事実（規程・手順・数値・状態・記録など）は、ツールの結果だけで答えてください。\n- "
         + refusal
-        + "質問が曖昧で対象が分からないときは、確認の質問をしてください。"
-        "複数の資料を根拠にするときは、資料（ファイル）ごとにまとめて答え、"
+        + "\n- 質問が曖昧で対象が分からないときは、確認の質問をしてください。\n\n"
+        "## Step 2: 根拠を示して回答する\n"
+        "- 複数の資料を根拠にするときは、資料（ファイル）ごとにまとめて答え、"
         "別の資料の内容を交互に混ぜないでください。"
         # 使ったツール・根拠は回答とは別に示す（チャットの根拠の塊・MCP の sources。#2328）。
-        "どのプロファイルで調べたか（名前・ID）は回答に書かないでください。"
+        "\n- どのプロファイルで調べたか（名前・ID）は回答に書かないでください。"
         "使ったツールと根拠は回答とは別に示します。"
     ]
     if agent_instructions.strip():
@@ -1428,8 +1430,9 @@ def compose_instructions(
         # 本文へ参照文書を詰めず、パスの索引だけを渡す（progressive disclosure。#862 / #1803）。
         for reference in skill.references:
             sections.append(
-                f"参照文書 {reference.path}（skill_id={skill.id}、{reference.characters} 文字）。"
-                "必要な部分だけ skill_reference_read で読んでください。"
+                "### 参照文書\n"
+                f"参照文書 {reference.path}（skill_id={skill.id}、{reference.characters} 文字）"
+                "。必要な部分だけ skill_reference_read で読んでください。"
             )
     return "\n\n".join(sections)
 
@@ -3182,16 +3185,16 @@ def build_sdk_agent(
         composed = f"{composed}\n\n{render_tool_names(scope_text, scope_names)}"
     # ここまでが業務 Agent の版で決まる部分。後ろに Run の状態を足す（#2583 の指紋と見積もり）。
     if output_contract is not None:
-        composed += "\n\n" + report_runtime.REPORT_DATA_INSTRUCTIONS
+        composed += "\n\n# 回答の構成\n" + report_runtime.REPORT_DATA_INSTRUCTIONS
     elif any(mcp_base_tool_name(name) in {NL2SQL_QUERY, "nl2sql_get_job"} for name in exposed):
-        composed += "\n\n" + DATA_INSTRUCTIONS
+        composed += "\n\n# 表データの扱い\n" + DATA_INSTRUCTIONS
     # 根拠の ID と出典の書き方は、モデルが回答を書くときだけ（RAG の回答をそのまま返す
     # ツールは除く）。
     if any(
         mcp_base_tool_name(name) in source_handles.SOURCE_TOOLS and name not in final_names
         for name in exposed
     ):
-        composed += "\n\n" + source_handles.SOURCE_INSTRUCTIONS
+        composed += "\n\n# 根拠の参照\n" + source_handles.SOURCE_INSTRUCTIONS
     static_instructions = composed
     if support_task:
         support_names = instruction_tool_names(skill_ids, exposed, origins)

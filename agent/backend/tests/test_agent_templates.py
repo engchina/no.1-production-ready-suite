@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 import pytest
@@ -21,7 +22,9 @@ def test_templates_are_complete_and_use_registered_skills() -> None:
         assert template.name.strip() and template.description.strip() and template.category.strip()
         # RAG だけのテンプレートは回答の書き方を持たない（回答は RAG が書く。#5342）。
         rag_only = set(template.skill_ids) <= {"rag-chat", "rag-search"}
-        assert ("## 共通のルール" in template.instructions) is not rag_only, template.id
+        steps = re.findall(r"^## Step (\d+):", template.instructions, re.M)
+        assert steps == (["1"] if rag_only else ["1", "2"]), template.id
+        assert ("結論を先に" in template.instructions) is not rag_only, template.id
         assert template.skill_ids, template.id
         for skill_id in template.skill_ids:
             # 組み込みの Skill だけを使う（テンプレートを選んでも Skill が見つからないことが無い）。

@@ -937,7 +937,7 @@ def _enterprise_text_payload(
     context: str,
     project_ocid: str = "",
 ) -> dict[str, object]:
-    system_prompt = "根拠に基づいて日本語で簡潔に回答してください。"
+    system_prompt = "## Step 1: 根拠から回答する\n根拠に基づいて日本語で簡潔に回答してください。"
     user_message = f"{context}\n\n質問: {prompt}" if context else prompt
     max_output_tokens = _model_output_token_budget(settings, _enterprise_text_model_id(settings))
     values = {

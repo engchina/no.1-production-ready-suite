@@ -236,7 +236,9 @@ def test_rag_only_templates_have_no_answer_style_instructions() -> None:
     rag_only = {RAG_CHAT_SKILL_ID, RAG_SEARCH_SKILL_ID}
     for template in AGENT_TEMPLATES:
         if set(template.skill_ids) <= rag_only:
-            assert "\n" not in template.instructions, template.id
+            heading, body = template.instructions.split("\n", 1)
+            assert heading.startswith("## Step 1: "), template.id
+            assert "\n" not in body, template.id
             assert "根拠" not in template.instructions, template.id
 
 

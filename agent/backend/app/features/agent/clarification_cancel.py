@@ -190,7 +190,7 @@ def cancel_instructions(records: list[JsonObject]) -> str:
     ]
     if not kinds:
         return ""
-    lines = ["# 確認の取り消し（利用者の操作）"]
+    lines = ["# 確認の取り消し（利用者の操作）", "## Step 1: 取り消された確認を反映する"]
     for kind in kinds:
         if kind == KIND_NL2SQL:
             lines.append(
