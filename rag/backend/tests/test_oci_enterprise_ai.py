@@ -1049,17 +1049,20 @@ async def test_oci_adapter_rejects_invalid_response_path() -> None:
     assert transport.calls
 
 
-async def test_oci_generate_logs_llm_call_usage(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize("usage_names", [("input", "output"), ("prompt", "completion")])
+async def test_oci_generate_logs_llm_call_usage(
+    caplog: pytest.LogCaptureFixture, usage_names: tuple[str, str]
+) -> None:
     """backend の呼び出しも、本文を出さずに llm_call_usage を残す（#5433）。"""
     transport = FakeEnterpriseAiTransport(
         {
             "status": "incomplete",
             "incomplete_details": {"reason": "max_output_tokens"},
             "usage": {
-                "input_tokens": 120,
-                "input_tokens_details": {"cached_tokens": 20},
-                "output_tokens": 30,
-                "output_tokens_details": {"reasoning_tokens": 10},
+                f"{usage_names[0]}_tokens": 120,
+                f"{usage_names[0]}_tokens_details": {"cached_tokens": 20},
+                f"{usage_names[1]}_tokens": 30,
+                f"{usage_names[1]}_tokens_details": {"reasoning_tokens": 10},
             },
         }
     )
@@ -1103,6 +1106,7 @@ async def test_oci_generate_logs_failed_call(caplog: pytest.LogCaptureFixture) -
     assert vars(record)["llm_status"] == "failed"
     assert vars(record)["llm_failure"] == {"error_type": "EnterpriseAiTimeoutError"}
     assert vars(record)["input_tokens"] is None
+    assert vars(record)["output_tokens"] is None
     assert vars(record)["pr.input.usage_status"] == "unreported"
 
 

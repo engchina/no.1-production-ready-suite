@@ -440,24 +440,34 @@ async def test_parser_core_generate_text_and_usage_log(
     assert fields.reasoning_tokens == 7
 
 
-async def test_messages_transport_blocks_oversized_text_before_send(
-    tmp_path: Path, stub_messages: Callable[..., _Calls]
+@pytest.mark.parametrize("connection", ["primary", "quaternary"])
+async def test_text_transport_blocks_oversized_text_before_send(
+    tmp_path: Path, stub_messages: Callable[..., _Calls], connection: str
 ) -> None:
+    from pr_backend_core.observability.model_usage import run_usage_summary_fields
     from rag_engine.adapters import oci
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
     from rag_engine.models.llm import TextOutput
     from rag_parser_core.oci_enterprise_ai import measure_llm_request
 
+    from app.rag.trace_store import AnswerTrace
+    from tests.span_progress_support import answer_trace
+
     calls = stub_messages()
-    settings = _settings()
+    settings = _settings(text_connection=connection)
     text = "a" * 96_001
     planned = measure_llm_request(config_from_settings(settings), "", text, system_prompt="指示")
-    with pytest.raises(GenerationInputLimitError) as rejected:
-        await _client(settings).generate("", text, system_prompt="指示")
-    assert rejected.value.estimated_tokens == planned.estimated_tokens
-    with pytest.raises(GenerationInputBudgetExceeded):
-        oci.parse_text_response("指示", text, _engine_settings(tmp_path), TextOutput)
+    trace = AnswerTrace("refused-before-send", owner_user_uuid="test")
+    with answer_trace(trace):
+        with pytest.raises(GenerationInputLimitError) as rejected:
+            await _client(settings).generate("", text, system_prompt="指示")
+        assert rejected.value.estimated_tokens == planned.estimated_tokens
+        with pytest.raises(GenerationInputBudgetExceeded):
+            oci.parse_text_response("指示", text, _engine_settings(tmp_path), TextOutput)
     assert not calls.requests
+    usage = trace.model_usage()
+    assert usage is not None and usage.requests == 0
+    assert run_usage_summary_fields(usage) == (None, "unmeasured")
 
 
 async def test_parser_core_structured_output_sends_schema(

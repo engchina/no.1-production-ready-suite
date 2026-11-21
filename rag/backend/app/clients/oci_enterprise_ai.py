@@ -12,8 +12,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from pr_backend_core.generation_input import reported_input_tokens
-from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.genai import genai_usage_attributes, record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
 from rag_parser_core.model_api import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_RESPONSES
 from rag_parser_core.oci_enterprise_ai import (
@@ -201,15 +200,6 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
 _logger = logging.getLogger(__name__)
 
 
-def _tokens(usage: object, key: str, detail: str | None = None) -> int:
-    if not isinstance(usage, Mapping):
-        return 0
-    value = usage.get(key)
-    if detail is not None:
-        value = value.get(detail) if isinstance(value, Mapping) else None
-    return value if type(value) is int and value >= 0 else 0
-
-
 def _log_call(
     payload: Mapping[str, Any],
     response: Mapping[str, Any] | None,
@@ -222,7 +212,7 @@ def _log_call(
     text = payload.get("text")
     fmt = text.get("format") if isinstance(text, Mapping) else None
     body = response or {}
-    usage = body.get("usage")
+    usage = {**genai_usage_attributes(body.get("usage")), **input_measurement}
     details = body.get("incomplete_details")
     # httpx の失敗は response の status、Messages API の失敗(#5546)は例外の status_code。
     status_code = getattr(getattr(error, "response", None), "status_code", None) or getattr(
@@ -255,11 +245,9 @@ def _log_call(
                 else {}
             ),
             **input_measurement,
-            "input_tokens": input_measurement.get(
-                "gen_ai.usage.input_tokens", reported_input_tokens(usage)
-            ),
-            "cached_tokens": _tokens(usage, "input_tokens_details", "cached_tokens"),
-            "output_tokens": _tokens(usage, "output_tokens"),
-            "reasoning_tokens": _tokens(usage, "output_tokens_details", "reasoning_tokens"),
+            "input_tokens": usage.get("gen_ai.usage.input_tokens"),
+            "cached_tokens": usage.get("gen_ai.usage.cache_read.input_tokens", 0),
+            "output_tokens": usage.get("gen_ai.usage.output_tokens"),
+            "reasoning_tokens": usage.get("gen_ai.usage.reasoning.output_tokens", 0),
         },
     )

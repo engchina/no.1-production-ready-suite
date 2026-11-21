@@ -28,10 +28,12 @@ import openai
 from pr_backend_core.generation_input import (
     GENERATION_INPUT_LIMIT,
     CompleteInputMeasurement,
+    GenerationInputLimitError,
+    UnmeasuredGenerationInputError,
     complete_input_measurement,
-    reported_input_tokens,
 )
 from pr_backend_core.llm_request_params_httpx import AsyncParameterDroppingClient
+from pr_backend_core.observability.genai import genai_usage_attributes
 from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import ValidationError
 
@@ -757,6 +759,7 @@ class OciEnterpriseAiClient:
             measurement.validate()
 
         response = None
+        fields: dict[str, object] = {}
         try:
             if config.uses_anthropic_messages:
                 response = await _post_anthropic_messages(
@@ -776,6 +779,9 @@ class OciEnterpriseAiClient:
                 timeout=timeout,
             )
             return response
+        except (GenerationInputLimitError, UnmeasuredGenerationInputError):
+            fields["pr.call.transport_status"] = "not_sent"
+            raise
         except httpx.TimeoutException as exc:
             raise EnterpriseAiTimeoutError("OCI Enterprise AI endpoint", timeout) from exc
         except httpx.HTTPStatusError as exc:
@@ -794,16 +800,20 @@ class OciEnterpriseAiClient:
             raise
         finally:
             if measurement is not None:
-                actual = reported_input_tokens(
+                usage = genai_usage_attributes(
                     response.get("usage") if response is not None else None
                 )
-                fields: dict[str, object] = {
-                    "pr.input.estimated_tokens": measurement.estimated_tokens,
-                    "pr.input.limit_tokens": measurement.limit_tokens,
-                    "pr.input.usage_status": measurement.usage_status(actual),
-                }
-                if actual is not None:
-                    fields["gen_ai.usage.input_tokens"] = actual
+                fields.update(
+                    {
+                        "pr.input.estimated_tokens": measurement.estimated_tokens,
+                        "pr.input.limit_tokens": measurement.limit_tokens,
+                        "pr.input.usage_status": measurement.usage_status(
+                            usage.get("gen_ai.usage.input_tokens")
+                        ),
+                        **usage,
+                    }
+                )
+            if fields:
                 if observe_input is None:
                     logger.info("llm_input_budget", extra={"event": "llm_input_budget", **fields})
                 else:

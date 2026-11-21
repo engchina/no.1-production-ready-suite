@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
+from pr_backend_core.observability.genai import reported_token_counts
+
 # 累積する値（usage の項目）。秒は呼び出しの往復の時間の和（並列の呼び出しは重なる）。
 USAGE_KEYS = ("calls", "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens", "seconds")
 # 応答が最後まで返らなかった（`status=incomplete`）数と、出力の上限で未完了のため上限を広げて送り直した数（#1527）。
@@ -23,7 +25,7 @@ USAGE_KEYS = ("calls", "input_tokens", "cached_tokens", "output_tokens", "reason
 # 停滞（#1926）で打ち切って送り直した数（``stall_resends``）も同じく 0 なら出さない。
 # 出力の上限を広げても未完了のため推論の量を下げて送り直した数（``effort_retries``。#2023）も同じ。
 RETRY_KEYS = ("incomplete_responses", "output_retries", "effort_retries", "stall_resends")
-OPTIONAL_COUNTS = (*RETRY_KEYS, "unreported_input_calls")
+OPTIONAL_COUNTS = (*RETRY_KEYS, "unreported_input_calls", "unreported_output_calls")
 INCOMPLETE_REASONS_KEY = "incomplete_reasons"
 # streaming で受けた呼び出しの時刻（#1926）。最初の event までの秒（待ち）と出力の速さ（delta の event/秒。停滞）を
 # 呼び出しごとに残し、工程の記録には最大の待ち（``first_event_seconds_max``）と最も遅い速さ（``delta_rate_min``）を出す。
@@ -89,22 +91,15 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
-def _int(value: Any) -> int:
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
 def response_usage(response: Any) -> dict[str, int]:
-    """Responses API の応答の ``usage`` から、入力・cache に当たった入力・出力・推論の token の数を読む。"""
-    usage = _value(response, "usage")
-    return {
-        "input_tokens": _int(_value(usage, "input_tokens")),
-        "cached_tokens": _int(_value(_value(usage, "input_tokens_details"), "cached_tokens")),
-        "output_tokens": _int(_value(usage, "output_tokens")),
-        "reasoning_tokens": _int(_value(_value(usage, "output_tokens_details"), "reasoning_tokens")),
-    }
+    """LLM の利用量を集計する。未報告の入出力は、それぞれの件数も残す。"""
+    supplied = reported_token_counts(_value(response, "usage"))
+    totals = {key: supplied.get(key, 0) for key in ("input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens")}
+    if "input_tokens" not in supplied:
+        totals["unreported_input_calls"] = 1
+    if "output_tokens" not in supplied:
+        totals["unreported_output_calls"] = 1
+    return totals
 
 
 def record_llm_usage(values: Mapping[str, Any]) -> None:
@@ -180,10 +175,18 @@ def usage_line(delta: Mapping[str, Any]) -> str:
     """利用者向けの 1 行（例: 「入力 12,345 tokens・出力 2,345 tokens（推論 1,800）・120.5 秒」）。空なら空文字。"""
     if not delta:
         return ""
-    text = f"入力 {int(delta.get('input_tokens', 0)):,} tokens"
+    def total(label: str, side: str) -> str:
+        count = delta.get(f"{side}_tokens")
+        missing = int(delta.get(f"unreported_{side}_calls", 0))
+        if count is None or (missing and missing >= int(delta.get("calls", 0))):
+            return f"{label} 未計測"
+        part = f"{label} {int(count):,} tokens"
+        return f"{part}（ほか {missing} 回は未計測）" if missing else part
+
+    text = total("入力", "input")
     if delta.get("cached_tokens"):
         text += f"（cache {int(delta['cached_tokens']):,}）"
-    text += f"・出力 {int(delta.get('output_tokens', 0)):,} tokens"
+    text += "・" + total("出力", "output")
     if delta.get("reasoning_tokens"):
         text += f"（推論 {int(delta['reasoning_tokens']):,}）"
     text += f"・{float(delta.get('seconds', 0)):.1f} 秒"

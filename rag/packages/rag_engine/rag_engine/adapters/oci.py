@@ -22,7 +22,12 @@ from typing import Any, cast
 from uuid import uuid4
 
 from pr_backend_core.bounded_calls import ErrorKind, classify_error, parse_retry_after
-from pr_backend_core.generation_input import CompleteInputMeasurement, complete_input_measurement, reported_input_tokens
+from pr_backend_core.generation_input import (
+    CompleteInputMeasurement,
+    UnmeasuredGenerationInputError,
+    complete_input_measurement,
+    reported_input_tokens,
+)
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 from pr_backend_core.observability.call_stream import CallStreamCapture
 from pr_backend_core.observability.model_purpose import (
@@ -926,6 +931,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 input_tokens, image_estimate = request_input_estimate(wire_request, provider)
                 room = settings.answer_max_input_tokens - input_tokens
                 if room <= 0:
+                    observation_attributes(observation, {"pr.call.transport_status": "not_sent"})
                     raise GenerationInputBudgetExceeded(
                         {
                             "reason": "final_model_input_exceeds_limit",
@@ -943,11 +949,15 @@ def _openai_parsed[StructuredOutputT: BaseModel](
 
             def check_input(wire: Mapping[str, Any]) -> None:
                 nonlocal measured
-                measured = complete_input_measurement(
-                    wire,
-                    limit_tokens=settings.answer_max_input_tokens,
-                    image_tokens=image_input_tokens(provider),
-                )
+                try:
+                    measured = complete_input_measurement(
+                        wire,
+                        limit_tokens=settings.answer_max_input_tokens,
+                        image_tokens=image_input_tokens(provider),
+                    )
+                except UnmeasuredGenerationInputError:
+                    observation_attributes(observation, {"pr.call.transport_status": "not_sent"})
+                    raise
                 observation_attributes(
                     observation,
                     {
@@ -1002,7 +1012,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 if measured is not None:
                     observation_attributes(observation, {"pr.input.usage_status": measured.usage_status(reported_input_tokens(usage))})
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
-            except GenerationInputBudgetExceeded:
+            except (GenerationInputBudgetExceeded, UnmeasuredGenerationInputError):
                 raise
             except Exception as exc:
                 failed_body = _failed_usage_body(exc)
@@ -1642,6 +1652,7 @@ def _log_call(
     failure_details: dict[str, Any] | None = None,
 ) -> None:
     stream = _timing_fields(timing)
+    reported_output = None if usage.get("unreported_output_calls") else usage["output_tokens"]
     record_llm_usage(
         {
             **usage,
@@ -1653,7 +1664,7 @@ def _log_call(
     )
     # backend の構造化 log は、外部の logger の本文を出さず extra の項目だけを残すので、値は extra で渡す。
     _logger.info(
-        "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%s cached_tokens=%d output_tokens=%d "
+        "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%s cached_tokens=%d output_tokens=%s "
         "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s deadline_capped=%s "
         "first_event_seconds=%s delta_rate=%s max_gap_seconds=%s",
         provider.model,
@@ -1661,7 +1672,7 @@ def _log_call(
         seconds,
         reported_input if reported_input is not None else "-",
         usage["cached_tokens"],
-        usage["output_tokens"],
+        reported_output if reported_output is not None else "-",
         usage["reasoning_tokens"],
         status,
         reason or "-",
@@ -1685,6 +1696,7 @@ def _log_call(
             **{f"llm_{key}": value for key, value in stream.items()},
             **usage,
             "input_tokens": reported_input,
+            "output_tokens": reported_output,
         },
     )
 

@@ -90,10 +90,11 @@ class RunModelUsage(BaseModel):
 
 
 class _Call:
-    __slots__ = ("model", "parent", "status", "tokens")
+    __slots__ = ("model", "not_sent", "parent", "status", "tokens")
 
     def __init__(self) -> None:
         self.model = ""
+        self.not_sent = False
         self.parent: str | None = None
         self.status = "running"
         self.tokens: dict[str, int] = {}
@@ -130,6 +131,8 @@ class ModelUsageCollector:
             call.parent = update.parent_span_id
             call.status = update.status
             attributes = update.attributes
+            if attributes.get("pr.call.transport_status") == "not_sent":
+                call.not_sent = True
             model = attributes.get("gen_ai.response.model") or attributes.get(
                 "gen_ai.request.model"
             )
@@ -164,7 +167,9 @@ class ModelUsageCollector:
                 if parent in calls:
                     outer.add(parent)
                 parent = parents.get(parent)
-        leaves = [call for span_id, call in calls.items() if span_id not in outer]
+        leaves = [
+            call for span_id, call in calls.items() if span_id not in outer and not call.not_sent
+        ]
         models: list[str] = []
         for call in leaves:
             if call.model and call.model not in models:
@@ -185,8 +190,8 @@ class ModelUsageCollector:
             return sum(values) if values else None
 
         measurement: UsageMeasurement
-        if unmeasured and not leaves:
-            # 計測できない呼び出しだけ（Select AI だけの実行）。数を作らない。
+        if (unmeasured or calls) and not leaves:
+            # 送信の前に止めた、または計測できない呼び出しだけの実行では実測値を作らない。
             measurement = "unmeasured"
         elif unmeasured or truncated or len(measured) < len(leaves):
             measurement = "partial"
