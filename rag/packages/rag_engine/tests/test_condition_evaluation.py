@@ -102,6 +102,48 @@ def test_heading_completes_each_gap_and_only_matching_availability_is_cited():
     assert [(point["point"], point["covered"]) for point in result["coverage_points"]] == [("対象の種類", False), ("保存期間", True)]
 
 
+def test_both_complete_passages_are_shown_for_one_claim():
+    payload = _payload(
+        answer_text="項目Aは5です。\n項目Bは8です。\n項目Aの値は5です。",
+        answer_points=["項目Aの値"],
+    )
+    output = _output(
+        [{"claim": "項目Aの値は5。", "answer_ids": ["A1", "A3"], "standard_ids": ["S1"], "states_source_gap": False, "consistent": True}],
+        [{"point_id": "P1", "covered": True}],
+    )
+    with patch(PARSE, return_value=output):
+        result = evaluate_answer_payload(payload, object())
+    (claim,) = result["correctness_claims"]
+    assert claim["answer"] == "項目Aは5です。 項目Aの値は5です。"
+    assert claim["verdict"] == "supported"
+
+
+def test_answering_whether_a_value_can_be_confirmed_counts_even_when_the_standard_disagrees():
+    payload = _payload(
+        question="今回の資料で項目Aの値を確認できますか。",
+        standard_answer="今回の資料で項目Aの値を確認できます。",
+        answer_text="今回の資料では項目Aの値を確認できません。",
+        answer_points=["今回の資料で項目Aの値を確認できるか"],
+    )
+    output = _output(
+        [
+            {
+                "claim": "項目Aの値は資料から確認できない。",
+                "answer_ids": ["A1"],
+                "standard_ids": ["S1"],
+                "states_source_gap": True,
+                "consistent": False,
+            }
+        ],
+        [{"point_id": "P1", "covered": True}],
+    )
+    with patch(PARSE, return_value=output):
+        result = evaluate_answer_payload(payload, object())
+    (claim,) = result["correctness_claims"]
+    assert claim["states_source_gap"] is True and claim["consistent"] is False
+    assert result["answer_correctness"] == 0 and result["answer_coverage"] == 1
+
+
 def test_inline_reservation_keeps_the_reported_retention_separate_from_the_device_type():
     case = next(case for case in CASES if case["id"] == "h_inline_negation")
     output = AnswerCorrectnessOutput.model_validate(case["recorded_output"])
