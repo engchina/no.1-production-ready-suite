@@ -648,6 +648,40 @@ def test_same_short_answer_in_one_cell_keeps_both_sources_and_other_rows():
     assert answer.splitlines()[-2:] == [f"| 入力・出力 | 不明[E1][{unit}] |", f"| 再掲の指定欄 | 不明[{unit}] |"]
 
 
+@pytest.mark.parametrize(
+    ("scope", "short_answer", "expected"),
+    [
+        ("A2・B", "左12、右0（A2・B）", "左12、右0"),
+        ("A2・B", "左・下12・右0（A2・B）", "左・下12・右0"),
+        ("A2・B", "左12 右0（A2・B）", "左12 右0"),
+        ("A2・B", "A2B：左12、右0", "左12、右0"),
+        ("A2・B", "A2B：左12（予備時のみ）、右0（上限）", "左12（予備時のみ）、右0（上限）"),
+        ("A2・B", "A2・B: Left 1,234, Right −0.50", "Left 1,234, Right −0.50"),
+        ("A2・B", "左12、右0（予備時のみ）", "左12、右0（予備時のみ）"),
+        ("A2・B", "左12、右0（A2・B を除く）", "左12、右0（A2・B を除く）"),
+        ("A・B", "AB: 左12、右0", "AB: 左12、右0"),
+        ("1・2", "12: 左12、右0", "12: 左12、右0"),
+        ("A", "左12、右0の場合に適用（A）", "左12、右0の場合に適用（A）"),
+        ("A", "除外する対象（A）", "除外する対象（A）"),
+        ("A", "（A）", "（A）"),
+    ],
+)
+def test_only_a_repeated_row_note_is_removed_from_a_list_of_numeric_values(scope: str, short_answer: str, expected: str):
+    units, unit = catalog()
+    model = full_answer_model(units, question="左右の値は？")
+    fact = {"text": short_answer, "answers_which_question": "左右の値は？", "requested_phrase": "左右の値", "short_answer": short_answer}
+    row = {"label": f"設定 ({scope})", "cells": [[{**fact, "sources": [f"[{unit}]"]}, {**fact, "sources": ["[E1]"]}]]}
+
+    def render(headers):
+        body = {"headers": headers, "rows": [row]}
+        return model.model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"}).answer_body
+
+    marks = f"[{unit}][E1]"
+    assert render(["項目", "答え"]).splitlines()[-1] == f"| 設定 ({scope}) | {expected}{marks} |"
+    assert render([]) == short_answer + marks
+    assert render(["答え"]).splitlines()[-1] == f"| {short_answer}{marks} |"
+
+
 def test_unresolved_cell_contains_its_reason_and_rejects_unrelated_facts():
     units, unit = catalog()
     model = grounded.generation_output_model("入力と出力の最大値は？", unit_catalog=units)
