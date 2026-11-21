@@ -4,8 +4,11 @@
 
 LLM に渡す文（製品の LLM への指示、組み込みのスキル `skills/`、MCP の server instructions・ツールと引数の説明、Agent の組み込み Runtime の指示とツールの結果の案内）は、pi（[badlogic/pi-mono](https://github.com/badlogic/pi-mono) の coding agent。[作者の解説](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)）と DeepSeek Harness（[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) の `.agents/skills/` の `agent-experience`・`dsh-prose-standard`・`dsh-trim-cot-leakage`）の書き方に従う。
 
-- **Agent・RAG・NL2SQL と共通基盤のすべての Prompt は、実際にモデルへ渡す指示を `## Step 1: …`、`## Step 2: …` の形式で処理順に書く。** System Prompt・入力テンプレート・ツールやスキルのモデル向けの手順にも適用する。役割と目的、入力の読み方、判断と制約、出力を必要な Step に整理し、内容に応じた連番にする。画面の表示だけを整形して済ませず、表示と実行の指示を一致させる。既存の意味・安全上の境界・否定・例外・出力契約を保ち、形式を変えた場合も関連テストと初回に渡す字数の前後を確認する。
-- **前の Step を補足する規則は `###` の小節にしてよい。** 根拠などのデータは小節の下に置かず、データを渡す Step と読み方の Step を分ける。
+順序や漏れの有無が結果に関わる指示は、手順や要件を列挙する。Markdown の見出しとリストで階層を示し、指示・例・参考資料は読み分けられる形にする。本 repo では次の Step 表記を使う。[Anthropic の指示の書き方](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#be-clear-and-direct)・[OpenAI の Markdown と XML の使い方](https://developers.openai.com/api/docs/guides/prompt-engineering#message-formatting-with-markdown-and-xml)
+
+- **Agent・RAG・NL2SQL と共通基盤が管理する組み込み指示は、実際にモデルへ渡す文を `## Step 1: …`、`## Step 2: …` の形式で処理順に書く。** System Prompt・入力テンプレート・ツールやスキルのモデル向けの手順にも適用する。役割と目的、入力の読み方、判断と制約、期待する出力を、タスクに必要な数の Step にまとめて連番を付ける。画面の表示と実行時の指示を一致させる。既存の意味・安全上の境界・否定・例外・出力契約を保ち、形式を変えた場合も関連テストと初回に渡す字数の前後を確認する。
+- **順序のある操作は Step で、同じ Step で満たす独立した要件は `-` の箇条書きで示す。** 手順が一つなら Step 1 で完結する。各 Step の指示が一つなら一文でよい。レビューで条件や漏れを見つけられるよう、「対象を特定できないときは利用者に確認する」のように、条件や例外は適用する操作と同じ項目に書く。Step を補足する規則には `###` の小節を使ってよい。
+- **指示・入出力例・参考資料の境界を明示する。** 根拠などのデータを同じメッセージで渡す場合は、読み方とは別の Step を設け、その Step の本文にデータを置く。複数の資料を載せるときは、それぞれの始まりと終わりが分かるタグなどで囲む。利用者が書いた指示や質問、検索した原文、SQL・JSON の例は元の形式を保ち、schema は各タスクの入出力契約に従う。
 - **1 つの規則は 1 つの層にだけ書く**（MCP の instructions / ツールの説明 / 引数の説明 / validator / スキル / Runtime の指示）。引数の既定・範囲・組み合わせ・いつ渡すかは引数の説明、ツールをいつ使うかはツールの説明、複数のツールをつなぐ手順はスキルに置き、ほかの層で繰り返さない。
 - **プログラムで安定して処理できることは LLM に任せない。** LLM の出力の契約を設計・修正するときは、まずコードで決められる部分を外す（原文の写し・ID の写し・件数・位置・形式）。モデルの判断が要るものだけを LLM に残す。
 - **モデルの出力の誤りは、提示文の調整で直さず、誤りが起きない構造に変える。** 例: 原文の引用はモデルに写させず、入力に付けた番号の範囲を返させて、原文はコードが切り出す。「省略しない」と指示しても省略は止まらない。構造を変えた後の実モデルの比較は、回答の質・入力の大きさなどの副作用を見つけて直すために行う。
