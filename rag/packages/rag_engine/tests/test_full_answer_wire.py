@@ -525,3 +525,28 @@ def test_table_cell_citation_keeps_the_value_without_a_second_explanation():
     assert "| 入力電圧 | 12 V" in rendered.text
     assert len(rendered.citation_lines) == 1
     assert rendered.citation_lines[0]["scope_source_ids"] == ["child-a"]
+
+
+def test_structured_body_places_cited_table_after_points_and_checks_its_labels():
+    units, unit = catalog()
+    model = full_answer_model(units)
+    cells = {"headers": ["対象", "値"], "rows": [{"cells": ["A", "12"], "scope": "共通", "sources": [f"[{unit}]"]}]}
+    payload = {"answer_body": {"points": ["先に確認する。"], "table": cells}, "response_kind": "answered", "confidence": "high"}
+    wire = model.model_validate(payload)
+    assert wire.answer_body.startswith("先に確認する。\n\n| 対象")
+    assert wire.answer_body.endswith(f"| A（共通） | 12[{unit}] |")
+    assert model.model_validate(wire.model_dump()).answer_body == wire.answer_body
+    cells["rows"][0]["sources"] = ["[E1.99]"]
+    with pytest.raises(ValidationError, match="今回の根拠に無い"):
+        model.model_validate(payload)
+    cells["rows"][0]["cells"] = ["A"]
+    with pytest.raises(ValidationError, match="セル数"):
+        model.model_validate(payload)
+
+
+def test_empty_structured_body_cannot_become_an_empty_success():
+    units, _ = catalog()
+    with pytest.raises(ValidationError):
+        full_answer_model(units).model_validate(
+            {"answer_body": {"points": [], "table": None}, "response_kind": "answered", "confidence": "high"}
+        )

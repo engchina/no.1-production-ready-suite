@@ -21,8 +21,9 @@ from pydantic import (
 )
 
 from rag_engine.generation.answer_envelope import AnswerOutcome
+from rag_engine.generation.answer_table import table_markdown
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, unit_label
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, ResponseLanguage
+from rag_engine.models.llm import AnswerTable, AnswerTableRow, GroundedCitation, GroundedDraft, GroundedItem, ResponseLanguage
 from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY
 from rag_engine.retrieval.character_forms import format_characters
 
@@ -42,6 +43,55 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 )
 
 
+class AnswerComparisonRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cells: list[str] = Field(min_length=1, description="見出しに対応する値または判定。")
+    scope: str = Field(description="この行だけの適用範囲・例外・可否の理由を短い語句で。セルにある値は省く。該当しなければ空文字。")
+    sources: list[str] = Field(description="この行を裏付ける入力の引用ラベル（角括弧を含む）。")
+
+
+class AnswerTableBody(BaseModel):
+    """表を末尾に組み立てるための生成時の表現。保存と引用検証には従来の本文を渡す。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    headers: list[str] = Field(min_length=1, description="必要な比較軸だけを列にする。")
+    rows: list[AnswerComparisonRow] = Field(min_length=1, description="各対象を一行にし、適用範囲や理由を含めて比較の要求を完結させる。")
+
+    def markdown(self) -> str:
+        rows = []
+        for row in self.rows:
+            cells = list(row.cells)
+            if len(cells) != len(self.headers):
+                raise ValueError("表の各行のセル数を見出しの数に合わせてください。")
+            if row.scope.strip():
+                cells[0] += f"（{row.scope.strip()}）"
+            cells[-1] += "".join(row.sources)
+            rows.append(AnswerTableRow(cells=cells))
+        return table_markdown(AnswerTable(columns=self.headers, rows=rows))
+
+
+class AnswerBodyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: AnswerTableBody | None = Field(
+        description=(
+            "複数の状態のうちどれと言えるかを尋ねられたら、各状態を一行にし、成立条件・今回の事実・判定を短いセルで示す。"
+            "数値比較では対象ごとに一行とし、値・適用範囲・例外をその行で完結させる。単独の可否や手順だけなら null。"
+        )
+    )
+    points: list[str] = Field(
+        description="表で未回答の要求に限り、各一文で直接答えて引用する。手順は操作の順にまとめる。必要な条件・否定・例外を残し、同じ意味の言い換え、表の値の再掲、質問外の案内を省く。ほかに要求がなければ空配列。"
+    )
+
+    def markdown(self) -> str:
+        parts = [point.strip() for point in self.points if point.strip()]
+        if self.table is not None:
+            parts.append(self.table.markdown())
+        return "\n\n".join(parts)
+
+
 class FullAnswerWire(BaseModel):
     """本文はモデルが完成させ、種別は同じ呼び出しの付帯情報にする。"""
 
@@ -53,13 +103,15 @@ class FullAnswerWire(BaseModel):
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
     answer_body: str = Field(
         min_length=1,
-        description=(
-            "各要求に直接答える本文。複数の状態を判定する要求、複数の対象を比較する要求には、その要求の回答全体を一つの表にする。"
-            "判定表の列は「対象｜成立条件｜今回の事実｜判定」。成立条件と観測値のセルは値・論理式、判定欄は可否または状態名のみ。説明文をセルに足さない。各行はその対象だけを扱い、他の行の判定には触れない。比較表には追加で可否や理由を尋ねられた対象も含め、対象名・値・使える条件を各行にまとめる。理由のセルでは他のセルの値を引用し直さず、対応する条件だけを示す。"
-            "表はそれだけで読める形にし、同じ対象の注釈・補足・出典もセルに収める。表のあとに比較値を文章で読み上げない。必要な条件・否定・例外・適用範囲と引用は該当行の中に含める。"
-            "別に尋ねられた手順は操作を順に一度だけ書く。他の要求も必要な詳細と引用を添えて答える。利用者が形式を指定した場合はそれに従う。"
-        ),
+        description=("各要求に一度だけ答える完成本文。先に表を埋め、表で答えた内容は points に含めない。利用者の形式指定を優先する。"),
     )
+
+    @field_validator("answer_body", mode="before", json_schema_input_type=AnswerBodyInput)
+    @classmethod
+    def render_body(cls, value: Any) -> Any:
+        # モデルには構造化した入力を示し、保存済みの文字列や段落の再検証には従来の本文を使う。
+        return AnswerBodyInput.model_validate(value).markdown() if isinstance(value, dict) else value
+
     # 各値の定義はこの項目の説明だけに書き、生成の指示の Step では繰り返さない。adapter が説明を指示の最後の
     # Step にして全モデルに送る（#5230・#5238）。
     response_kind: AnswerOutcome = Field(description=RESPONSE_KIND_DESCRIPTION)
