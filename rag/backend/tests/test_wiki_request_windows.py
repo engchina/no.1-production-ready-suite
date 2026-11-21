@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pr_backend_core.bounded_calls import BoundedCaller
 from pydantic import ValidationError
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiConfig, measure_llm_request
@@ -206,7 +207,10 @@ async def test_large_unit_uses_sentence_ends_and_reassembles_one_page() -> None:
     assert len(fragments) == 3 and save.await_count == 1
 
 
-async def test_large_unit_skips_an_oversized_related_title_and_keeps_later_references() -> None:
+@pytest.mark.parametrize("invalid_once", [None, "original_units", "fragment_navigation"])
+async def test_large_unit_skips_an_oversized_related_title_and_keeps_later_references(
+    invalid_once: str | None,
+) -> None:
     base, long_title, later, *_ = units()
     text = "前段。後段。"
     unit = base.model_copy(
@@ -230,11 +234,16 @@ async def test_large_unit_skips_an_oversized_related_title_and_keeps_later_refer
         batch_size=4,
     )
     originals = []
+    invalid_input = None
 
     async def generate(prompt: str, context: str, **kwargs: Any) -> str:
+        nonlocal invalid_input
         request = json.loads(context)
         assert request["related_titles"] == {"U1": unit.title, "U2": later.title}
         assert builder.measure(context, kwargs["response_schema"]) <= builder.token_limit
+        if invalid_once in request and invalid_input is None:
+            invalid_input = context
+            return '{"items":[]}'
         if "original_units" in request:
             originals.append(request["original_units"][0][1])
         else:
@@ -252,15 +261,16 @@ async def test_large_unit_skips_an_oversized_related_title_and_keeps_later_refer
             }
         )
 
-    async def run(operation: Any, **kwargs: Any) -> str:
-        return str(await operation(None))
-
-    model, caller, save = AsyncMock(), AsyncMock(), AsyncMock()
-    model.generate.side_effect, caller.call.side_effect = generate, run
+    model, save = AsyncMock(), AsyncMock()
+    caller = BoundedCaller("wiki_build", sleep=AsyncMock())
+    model.generate.side_effect = generate
     (page,) = await builder.compile(
         [unit], model=model, saved=[], authorize=AsyncMock(), checkpoint=save, caller=caller
     )
-    assert originals == ["前段。", "後段。"] and model.generate.await_count == 3
+    assert originals == ["前段。", "後段。"]
+    assert model.generate.await_count == (4 if invalid_once else 3)
+    if invalid_once:
+        assert [call.args[1] for call in model.generate.await_args_list].count(invalid_input) == 2
     assert page.navigation.context == "区画 U1 の装置 U2"
     assert [d.unit_id for d in page.navigation.dependencies] == [later.unit_id]
     save.assert_awaited_once_with([page])
@@ -275,10 +285,10 @@ async def test_queued_attempt_rechecks_the_revision_before_dispatch() -> None:
         if not authorized:
             raise PermissionError("原文の版が変わりました。")
 
-    async def queued(operation: Any, **kwargs: Any) -> str:
+    async def queued(operation: Any, **kwargs: Any) -> Any:
         nonlocal authorized
         authorized = False
-        return str(await operation())
+        return await operation()
 
     caller, model, save = AsyncMock(), AsyncMock(), AsyncMock()
     caller.call.side_effect = queued

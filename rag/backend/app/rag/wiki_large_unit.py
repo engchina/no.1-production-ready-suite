@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
+from pr_backend_core.bounded_calls import Attempt, BoundedCaller
+from pydantic import ValidationError
+
 from app.rag.wiki_models import (
     WikiContext,
     WikiDependency,
@@ -15,7 +18,13 @@ from app.rag.wiki_models import (
     WikiUnit,
 )
 from app.rag.wiki_navigation import Handles, handle_pattern
-from app.rag.wiki_packet import SourceContext, WikiInputTooLarge, WikiRequest, local_schema
+from app.rag.wiki_packet import (
+    SourceContext,
+    WikiInputTooLarge,
+    WikiRequest,
+    WikiUnitValidationError,
+    local_schema,
+)
 from app.rag.wiki_paragraphs import Paragraph, pack
 
 
@@ -36,6 +45,7 @@ async def compile_large_unit(
     generate: Callable[[WikiRequest], Awaitable[str]],
     authorize: Callable[[], Awaitable[Mapping[str, WikiUnit]]],
     checkpoint: Callable[[WikiPage], Awaitable[None]] | None = None,
+    caller: BoundedCaller | None = None,
     input_fingerprint: str,
     related: Sequence[WikiUnit] = (),
 ) -> tuple[WikiPage, tuple[tuple[int, int], ...], tuple[WikiDependency, ...]]:
@@ -121,7 +131,18 @@ async def compile_large_unit(
                 req = trial
                 selected.append(candidate)
         await check_scope()
-        (output,) = req.resolve(await generate(req))
+
+        async def once(attempt: Attempt | None = None) -> WikiContext:
+            raw = await generate(req)
+            try:
+                (item,) = req.resolve(raw)
+            except (json.JSONDecodeError, ValidationError) as error:
+                if caller is not None:
+                    raise WikiUnitValidationError(unit.unit_id) from error
+                raise
+            return item
+
+        output = await (caller.call(once, label="wiki_build") if caller else once())
         if output.unit_id != unit.unit_id:
             raise ValueError("別の原文の案内が返されました。")
         return output

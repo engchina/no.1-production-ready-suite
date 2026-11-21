@@ -316,13 +316,17 @@ async def test_links_are_built_both_ways_from_candidates_once(link_setup: Any) -
 
 
 @pytest.mark.asyncio
-async def test_link_failure_keeps_the_document_ready_and_waits_for_retry(link_setup: Any) -> None:
+async def test_link_failure_keeps_the_document_ready_and_waits_for_retry(
+    link_setup: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     jobs, store, _, settings, _ = link_setup
     failing = LinkModel(fail=True)
     jobs.model_factory = lambda settings: failing
     await jobs._build_links("doc-a", "owner-a", settings)
     assert store.state["status"] == "FAILED" and store.state["failure_code"] == "build_failed"
     assert store.doc["status"] == "READY"
+    (record,) = (vars(r) for r in caplog.records if r.getMessage() == "wiki_link_failed")
+    assert (record["document_id"], record["wiki_phase"]) == ("doc-a", "generate_links")
     # 失敗は再試行の API が待機へ戻すまで作り直さない。
     await jobs._build_links("doc-a", "owner-a", settings)
     assert len(failing.calls) == 1

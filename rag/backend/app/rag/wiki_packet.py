@@ -27,6 +27,14 @@ class WikiInputTooLarge(ValueError):
     """必須の情報だけで完全な要求の予算を超えた。"""
 
 
+class WikiUnitValidationError(ValueError):
+    """単一対象の応答の検証失敗。追跡には元の単位 ID のハッシュを使う。"""
+
+    def __init__(self, unit_id: str) -> None:
+        super().__init__("Wiki の単一対象の応答が形式に一致しません。")
+        self.unit_id_hash = fingerprint(unit_id)
+
+
 @dataclass(frozen=True)
 class SourceContext:
     document_id: str

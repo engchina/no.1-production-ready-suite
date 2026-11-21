@@ -33,6 +33,7 @@ from app.rag.request_context import (
     system_access_context,
 )
 from app.rag.wiki_compiler import WIKI_CONTEXT_PROMPT
+from app.rag.wiki_diagnostics import failure_fields
 from app.rag.wiki_links import (
     WIKI_LINK_PROMPT,
     WikiLinkDecision,
@@ -248,6 +249,7 @@ class WikiJobs:
         """文書の案内を作る。今の原文で公開済み（``READY``）なら True。"""
         store = self.store_factory()
         snapshot, lease, context_token = None, None, None
+        phase = "prepare_document"
         # この回で案内を保存したか。時間切れでも進んでいれば、次の照合で続きから作る。
         progressed = False
         try:
@@ -291,17 +293,23 @@ class WikiJobs:
             )
             if lease is None:
                 return False
+            phase = "load_saved_pages"
             saved = await store.saved_pages(snapshot)
 
             async def authorize() -> None:
+                nonlocal phase
+                prior = phase
+                phase = "authorize"
                 current = get_settings()
                 set_audit_request_context(await self.actor(owner, current))
                 if await store.revision_fingerprint(document_id) != revision:
                     raise PermissionError("Wiki の原文・所属が変更されました。")
+                phase = prior
 
             async def checkpoint(pages: Sequence[WikiPage]) -> None:
-                nonlocal progressed
+                nonlocal phase, progressed
                 await authorize()
+                phase = "save_pages"
                 await store.checkpoint(
                     snapshot,
                     lease,
@@ -309,8 +317,10 @@ class WikiJobs:
                     original_chars=settings.rag_wiki_embedding_source_chars,
                 )
                 progressed = True
+                phase = "generate_pages"
 
             async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
+                phase = "prepare_input"
                 sources, related = (
                     await source_inputs(
                         store.oracle, snapshot.units, snapshot.source_metadata, authorize
@@ -329,6 +339,7 @@ class WikiJobs:
                     max_source_chars=settings.rag_wiki_build_input_chars,
                     batch_size=settings.rag_wiki_build_batch_units,
                 )
+                phase = "generate_pages"
                 pages = await builder.compile(
                     snapshot.units,
                     model=self.model_factory(settings),
@@ -337,8 +348,10 @@ class WikiJobs:
                     checkpoint=checkpoint,
                     caller=make_ai_caller(settings, "wiki_build"),
                 )
+                phase = "prepare_embedding"
                 embedder = self.embedder_factory(settings)
                 for offset in range(0, len(pages), settings.rag_wiki_build_batch_units):
+                    phase = "embed_pages"
                     batch = pages[offset : offset + settings.rag_wiki_build_batch_units]
                     await authorize()
                     vectors = await embedder.embed(
@@ -350,6 +363,7 @@ class WikiJobs:
                         ]
                     )
                     await authorize()
+                    phase = "save_embeddings"
                     await store.checkpoint(
                         snapshot,
                         lease,
@@ -358,6 +372,7 @@ class WikiJobs:
                         original_chars=settings.rag_wiki_embedding_source_chars,
                     )
                 await authorize()
+                phase = "publish_pages"
                 await store.finish(snapshot, lease)
             return True
         except asyncio.CancelledError:
@@ -381,7 +396,9 @@ class WikiJobs:
             logger.warning(
                 "wiki_build_failed",
                 extra={
-                    "error_type": type(error).__name__,
+                    **failure_fields(
+                        error, document_id, phase, snapshot.source_fingerprint if snapshot else None
+                    ),
                     **(
                         {
                             "source_anchor_hash": fingerprint(error.source),
@@ -391,9 +408,6 @@ class WikiJobs:
                         if isinstance(error, SentenceTooLarge)
                         else {}
                     ),
-                    # 共通の実行器の失敗は、最後の失敗の種類と HTTP の状態コードを持つ。
-                    "error_kind": str(getattr(error, "kind", "") or ""),
-                    "http_status": getattr(error, "status", None),
                 },
             )
         finally:
@@ -411,6 +425,8 @@ class WikiJobs:
             return
         store = self.store_factory()
         token, context_token, progressed = None, None, False
+        phase = "prepare_links"
+        source = None
         try:
             context_token = set_audit_request_context(await self.actor(owner, settings))
             state = await store.document_state(document_id)
@@ -456,6 +472,9 @@ class WikiJobs:
             token = lease
 
             async def authorize() -> None:
+                nonlocal phase
+                prior = phase
+                phase = "authorize"
                 latest = get_settings()
                 set_audit_request_context(await self.actor(owner, latest))
                 now = await store.document_state(document_id)
@@ -466,14 +485,16 @@ class WikiJobs:
                     or await store.link_knowledge_bases(document_id) != knowledge_bases
                 ):
                     raise PermissionError("Wiki の案内・所属が変更されました。")
+                phase = prior
 
             async def checkpoint(
                 batch: Sequence[WikiLinkItem],
                 candidates: Sequence[str],
                 decisions: Sequence[WikiLinkDecision],
             ) -> None:
-                nonlocal progressed
+                nonlocal phase, progressed
                 await authorize()
+                phase = "save_links"
                 await store.save_links(
                     document_id,
                     lease,
@@ -486,12 +507,15 @@ class WikiJobs:
                     done=[item.key for item in batch],
                 )
                 progressed = True
+                phase = "generate_links"
 
             async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
+                phase = "load_link_candidates"
                 forward, reverse, names = await self._link_items(
                     store, document_id, knowledge_bases, settings
                 )
                 skip = set(done)
+                phase = "generate_links"
                 model, caller = self.model_factory(settings), make_ai_caller(settings, "wiki_build")
                 # 前向き（この文書 → ほか）と逆向き（ほか → この文書）は起点と候補が入れ替わるので、
                 # 同じ判定に混ぜない。
@@ -509,6 +533,7 @@ class WikiJobs:
                         caller=caller,
                     )
                 await authorize()
+                phase = "publish_links"
                 await store.finish_links(document_id, lease)
         except asyncio.CancelledError:
             if token:
@@ -529,11 +554,7 @@ class WikiJobs:
                     )
             logger.warning(
                 "wiki_link_failed",
-                extra={
-                    "error_type": type(error).__name__,
-                    "error_kind": str(getattr(error, "kind", "") or ""),
-                    "http_status": getattr(error, "status", None),
-                },
+                extra=failure_fields(error, document_id, phase, source),
             )
         finally:
             if context_token is not None:
