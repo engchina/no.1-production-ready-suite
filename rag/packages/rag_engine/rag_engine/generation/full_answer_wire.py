@@ -99,7 +99,13 @@ class EvidenceGap(BaseModel):
 
 _ROW_NOTE = re.compile(r"(?:（([^（）]+)）|\(([^()]+)\))$")
 _NOTE_PART = re.compile(r"\d+|[^\d\s・]+")
-_ITEM_SEPARATOR = re.compile(r"(?<=\d)(?:\s*[、，,・；;/／]\s*|\s+)(?=[^\W\d_])")
+_ITEM_SEPARATOR = re.compile(r"(?<=[\d）)])(?:\s*[、，,・；;/／]\s*|\s+)(?=[^\W\d_])")
+
+
+def _is_named_number(item: str) -> bool:
+    # 個々の値の注記は形式の確認時だけ除き、表示する値は書き換えない。
+    value = _ROW_NOTE.sub("", item.strip()).rstrip()
+    return value[-1:].isdecimal() and any(char.isalpha() for char in value)
 
 
 def _value_under_row_note(text: str, note: str) -> str:
@@ -114,7 +120,7 @@ def _value_under_row_note(text: str, note: str) -> str:
             return text
         values = heading[2]
     items = _ITEM_SEPARATOR.split(values)
-    if len(items) > 1 and all(item.rstrip()[-1:].isdecimal() and any(char.isalpha() for char in item) for item in items):
+    if len(items) > 1 and all(_is_named_number(item) for item in items):
         return values
     return text
 
