@@ -1913,8 +1913,9 @@ def synthesize_grounded_answer(
     extrema = BatchExtrema(question, generation_settings, provider, read_plan)
 
     def render_generation(selected: Sequence[dict[str, Any]]) -> str:
+        remainder = extrema.result.remaining_request if extrema.result else ""
         prompt = _grounded_prompt(
-            question,
+            remainder or question,
             selected,
             context,
             images,
@@ -1924,15 +1925,13 @@ def synthesize_grounded_answer(
             confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
         )
 
-        if extrema.result and extrema.result.remaining_request:
+        if extrema.result and remainder:
             verified_results = [
                 {"source": g["source"], "range": g["range"], "value": g.get("value"), "rows": g["winners"]} for g in extrema.result.groups
             ]
             prompt += (
-                "\n比較結果を補助情報にして、追加要求だけに原文で回答してください。理由が確認できないときは明記してください。\n"
-                + json.dumps(
-                    {"remaining_request": extrema.result.remaining_request, "comparison_results": verified_results}, ensure_ascii=False
-                )
+                "\n比較結果の表は別途表示します。原質問の条件を保ち、追加要求だけに出典を付けて回答してください。原文で説明できる範囲と確認できない点を区別してください。\n"
+                + json.dumps({"original_question": question, "comparison_results": verified_results}, ensure_ascii=False)
             )
         return prompt
 
@@ -2001,7 +2000,7 @@ def synthesize_grounded_answer(
                 current = extrema.result.answer
             else:
                 current = grounded.run_round(
-                    question,
+                    extrema.result.remaining_request if extrema.result else question,
                     spans,
                     generation_settings,
                     prompt=prompt,

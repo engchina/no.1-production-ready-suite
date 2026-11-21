@@ -725,6 +725,7 @@ def prepare_batched_evidence(
         # 文字予算だけを緩めず、system・schema・出力予約込みで各読取と最終生成を検査する。
         remaining_passes = max(1, sum(len(value["text"]) for value in selected).bit_length())
         pass_index = 0
+        reading_remainder = False
         while not measurement["fits"] or reviewing:
             pass_index += 1
             if not selected or remaining_passes <= 0:
@@ -734,7 +735,7 @@ def prepare_batched_evidence(
                 # 再縮約で選択が変われば、初回の原文を前提にした補読計画は使い直さない。
                 review_sources = None
             previous_size = sum(len(value["text"]) for value in selected)
-            select_only = select_dependencies and not (versioned and summarize and pass_index > 1 and not reviewing)
+            select_only = reading_remainder or (select_dependencies and not (versioned and summarize and pass_index > 1 and not reviewing))
             reading_system = (SELECTION_PROMPT if select_only else BATCH_READING_PROMPT) + (REVIEW_PROMPT if reviewing else "")
             reduced: dict[tuple[tuple[str, ...], str, int, int], dict[str, Any]] = (
                 {(*chunk_key(value), value.get("start", 0), value.get("end", len(value["text"]))): value for value in review_carry}
@@ -761,13 +762,12 @@ def prepare_batched_evidence(
                 if remainder == "":
                     return [], "", {"fits": True, "batch_count": 0, "computed_batch_count": len(pass_batches)}
                 if remainder is not None:
-                    # 計算後の説明は既存の局所回答・集約の契約を保つ。
-                    select_dependencies, select_only = False, False
-                    reading_system = BATCH_READING_PROMPT
+                    # 計算の根拠は結果に保存済み。残った要求については原文の単位を選び、引用位置と一緒に渡す。
+                    reading_remainder = True
+                    select_dependencies, select_only = False, True
+                    reading_system = SELECTION_PROMPT
+                    question = remainder
                     context = render([])
-                    # 原質問は保持し、原文による説明だけを追加で読む。
-                    question = json.dumps({"original_question": question, "remaining_request": remainder}, ensure_ascii=False)
-                    # 追加要求と集計結果のぶんだけ入力が増えた条件で、完全なチャンクの組を測り直す。
                     pass_batches = partition(selected)
             batch_offset = len(batches)
             partials: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -979,18 +979,22 @@ def prepare_batched_evidence(
                             excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
                             kept = original if document_key(original) in versioned else excerpt
                             key = (*chunk_key(kept), kept.get("start", 0), kept.get("end", len(kept["text"])))
-                            answers = (reduced.get(key, {}).get("batch_answer"), verified_candidate(finding.answer, excerpt["text"]))
+                            verified = verified_candidate(finding.answer, excerpt["text"])
+                            answers = (reduced.get(key, {}).get("batch_answer"), verified)
                             answer = "\n".join(dict.fromkeys(item for item in answers if item))
                             reduced[key] = {**kept, **({"batch_answer": answer} if answer else {})}
-                            if (
-                                summarize
-                                and not original.get("document_background_only")
-                                and (verified := verified_candidate(finding.answer, excerpt["text"]))
-                            ):
-                                identity = (document_key(excerpt), excerpt["source_id"], excerpt.get("start"), excerpt.get("end"))
-                                item = partials.setdefault(identity, {**excerpt, "answers": []})
-                                if verified not in item["answers"]:
-                                    item["answers"].append(verified)
+                            if summarize and not original.get("document_background_only"):
+                                if reading_remainder:
+                                    # 隣接単位の間にある見出しなどの整形文字を、根拠の本文へ混ぜない。
+                                    for start, end in units[first - 1 : last]:
+                                        unit = _slice(original, start, end)
+                                        identity = (*chunk_key(unit), unit.get("start"), unit.get("end"))
+                                        partials.setdefault(identity, {**unit, "answers": [unit["text"]]})
+                                elif verified:
+                                    identity = (document_key(excerpt), excerpt["source_id"], excerpt.get("start"), excerpt.get("end"))
+                                    item = partials.setdefault(identity, {**excerpt, "answers": []})
+                                    if verified not in item["answers"]:
+                                        item["answers"].append(verified)
                             receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
                         if mismatch is not None:
                             # 不合格の範囲を組から入力へ絞る（#4090）。その finding を採らず、その入力の原文を残す。
@@ -1059,7 +1063,7 @@ def prepare_batched_evidence(
                 review_finished = True
                 review_detail.update(status="not_needed")
             if not measurement["fits"] and versioned and summarize and unverified_failure is None:
-                if pass_index == 1:
+                if pass_index == 1 and not reading_remainder:
                     # 次の回は採用した chunk 全体と各文書の先頭で局所回答を作る。
                     continue
                 if not partials:
