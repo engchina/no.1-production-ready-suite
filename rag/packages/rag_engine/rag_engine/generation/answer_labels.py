@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from rag_parser_core.language import LanguagePack, builtin_pack, per_pack
 
 
+LEGACY_UNVERIFIED_SECTION = "回答に未反映の関連章節"
+
+
 @dataclass(frozen=True)
 class AnswerLabels:
     """回答の本文の見出し・定型文・出典の表示。"""
@@ -100,7 +103,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
 
     unverified = text("unverified_section")
     # 保存済みの言語資源が旧既定の見出しを持つ場合も、新しい回答には補読の見出しを使う。
-    if unverified == "回答に未反映の関連章節":
+    if unverified == LEGACY_UNVERIFIED_SECTION:
         unverified = builtin_pack().text("answer_labels", "unverified_section")
     note = text("quote_only_note")
     note_sentences = tuple(sentence for sentence in re.split(r"(?<=。)", note) if sentence)
@@ -125,7 +128,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         *note_sentences,
         text("gaps_section"),
         unverified,
-        "回答に未反映の関連章節",
+        LEGACY_UNVERIFIED_SECTION,
         text("deadline_section"),
         text("guide_notes_section"),
         text("table_above_note"),
