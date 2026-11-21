@@ -3,12 +3,14 @@
 import json
 from typing import Literal
 
+import pytest
 from pydantic import BaseModel, Field
 
 from rag_engine.adapters.oci import _response_wire_request
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.full_answer_wire import full_answer_model
 from rag_engine.generation.grounded import generation_system_prompt
+from rag_engine.resources.runtime import bind_prompt_overrides
 
 
 class _Probe(BaseModel):
@@ -46,9 +48,11 @@ def test_request_without_system_message_gets_one_for_the_step() -> None:
     assert sent["input"][0]["content"].startswith("## Step 1: 応答の各項目を書く\n")
 
 
-def test_generation_request_carries_each_answer_field_meaning_once() -> None:
+@pytest.mark.parametrize("role", [None, "## Step 1: 保存済みの役割"])
+def test_generation_request_carries_each_answer_field_meaning_once(role: str | None) -> None:
     """生成の応答 schema の項目の説明は、固定の指示の Step の後ろに 1 度だけある。"""
-    system = generation_system_prompt()
+    with bind_prompt_overrides({"generation.role": role} if role else {}):
+        system = generation_system_prompt()
     model = full_answer_model(SentUnitCatalog(()))
     sent = _response_wire_request(_request(model, system))
     content = sent["input"][0]["content"]
@@ -60,3 +64,9 @@ def test_generation_request_carries_each_answer_field_meaning_once() -> None:
             assert content.count(info.description) == 1, name
             assert f"`{name}`" in tail
     assert "description" not in json.dumps(sent["text"]["format"]["schema"], ensure_ascii=False)
+
+    body = model.model_fields["answer_body"].description
+    assert body and body in tail and body not in system
+    assert "各要求" in body and "条件・否定・例外" in body and "一度だけ" in body
+    assert "引用" in body and "参考情報は省く" in body
+    assert sent["text"]["format"]["schema"]["properties"]["answer_body"]["minLength"] == 1

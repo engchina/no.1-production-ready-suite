@@ -51,7 +51,15 @@ class FullAnswerWire(BaseModel):
     _uses_full_answer = True
 
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
-    answer_body: str = Field(min_length=1, description="利用者へ返す完成した回答本文。必要に応じて Markdown を使う。")
+    answer_body: str = Field(
+        min_length=1,
+        description=(
+            "利用者へ返す完成した回答本文。原質問の各要求への答えを短い段落・箇条書きで一つずつ書く。比較は表、操作は番号付き手順でよい。"
+            "各答えは結論から始め、必要な理由・条件・否定・例外と引用をその場に添えて完結させる。"
+            "同じ説明は一度だけにし、別の冒頭の総括・理由の節・末尾のまとめは設けない。表の値の引用はセルまたは表の直後に付け、出典を示すために値を本文で繰り返さない。"
+            "原質問への答えやその成立条件を変えない参考情報は省く。Markdown を使える。"
+        ),
+    )
     # 各値の定義はこの項目の説明だけに書き、生成の指示の Step では繰り返さない。adapter が説明を指示の最後の
     # Step にして全モデルに送る（#5230・#5238）。
     response_kind: AnswerOutcome = Field(description=RESPONSE_KIND_DESCRIPTION)

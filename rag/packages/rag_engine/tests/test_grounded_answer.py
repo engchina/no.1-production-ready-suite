@@ -328,11 +328,16 @@ class GroundedAnswerTest(unittest.TestCase):
 
     def test_generation_prompt_maps_shared_layout_policy_onto_answer_fields(self):
         prompt = grounded.generation_system_prompt()
-        # 方針は items 向けに書く (#960)。本文の構成を述べる「別の節にする」は残さず、未確認事項・条件・実データの行き先だけ対応付ける。
+        from pr_backend_core.response_schema import with_schema_field_guide
+
+        from rag_engine.generation.full_answer_wire import FullAnswerWire
+
+        # 本文の契約は項目説明に置き、モデルへ送る最後の Step で条件・実環境の境界と合わせて確認する。
+        sent, _ = with_schema_field_guide(prompt, FullAnswerWire.model_json_schema())
         self.assertNotIn("別の節にする", prompt)
-        mapping = prompt.split("## Step 3:", 1)[1]
         for field in ("answer_body", "結果にも条件", "実環境の確認"):
-            self.assertIn(field, mapping)
+            self.assertIn(field, sent)
+        self.assertEqual(sent.count(FullAnswerWire.model_fields["answer_body"].description), 1)
 
     def test_generation_prompt_names_only_fields_the_model_can_write_or_read(self):
         import re
