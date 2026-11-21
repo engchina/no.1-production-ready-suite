@@ -38,6 +38,7 @@ from pr_backend_core.output_budget import (
     online_output_budget,
     output_limit_message,
 )
+from pr_backend_core.prompt_steps import continue_prompt_steps
 from pr_backend_core.response_schema import with_schema_field_guide
 from pr_system_settings.enterprise_ai_errors import (
     ENTERPRISE_AI_RETRYABLE_STATUS_CODES,
@@ -1015,10 +1016,11 @@ def _build_payload(
     `_openai_compatible_setting`）。
     """
     if response_format is not None:
-        system_prompt += (
-            "\n出力形式は text.format の JSON Schema を最優先する。"
+        system_prompt += "\n\n" + continue_prompt_steps(
+            system_prompt,
+            "## Step 1: 応答の形式を確認する\n出力形式は text.format の JSON Schema を最優先する。"
             "指定された JSON object だけを返す。"
-            "SQL・Markdown・自然言語は対応する文字列 field 内に格納する。"
+            "SQL・Markdown・自然言語は対応する文字列 field 内に格納する。",
         )
         system_prompt, response_format = _with_field_guide(system_prompt, response_format)
     values: dict[str, Any] = {
@@ -1027,7 +1029,7 @@ def _build_payload(
         "context": context,
         "system_prompt": system_prompt,
         "instructions": system_prompt,
-        "user_message": f"{context}\n\n質問:\n{prompt}",
+        "user_message": f"<context>\n{context}\n</context>\n\n<request>\n{prompt}\n</request>",
         "max_output_tokens": int(
             max_output_tokens
             if max_output_tokens is not None
@@ -1062,9 +1064,10 @@ def _build_image_payload(
     use_payload_template: bool = True,
 ) -> Mapping[str, Any]:
     if response_format is not None:
-        prompt += (
-            "\n出力形式は text.format の JSON Schema を最優先する。"
-            "抽出した全文を text に格納した JSON object だけを返す。"
+        prompt += "\n\n" + continue_prompt_steps(
+            prompt,
+            "## Step 1: 抽出結果を返す\n出力形式は text.format の JSON Schema を最優先する。"
+            "抽出した全文を text に格納した JSON object だけを返す。",
         )
         prompt, response_format = _with_field_guide(prompt, response_format)
     image_base64 = b64encode(image_bytes).decode("ascii")

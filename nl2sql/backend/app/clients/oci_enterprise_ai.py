@@ -36,7 +36,9 @@ class OciEnterpriseAiClient:
             lambda: self._client.generate(
                 prompt=prompt,
                 context=context,
-                system_prompt="日本語で簡潔に回答し、text に格納してください。",
+                system_prompt=(
+                    "## Step 1: 日本語で応答する\n日本語で簡潔に回答し、text に格納してください。"
+                ),
                 response_format=response_format(TextOutput),
             )
         )

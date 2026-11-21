@@ -190,9 +190,10 @@ _INSTRUCTIONS = (
     "done / error になるまで続きを取得します。\n\n"
     # 呼び直しの引数の組み立ては requirement_session_id・answer・skip_clarification の説明にある。
     "## Step 3: SQL の生成前の確認に答える\n"
-    "nl2sql_query が needs_clarification を返したら SQL はまだ作っていません。"
-    "requirement.question の問いを利用者に 1 つだけ確かめてから、答えを付けて nl2sql_query を"
-    "呼び直します（利用者が確認せずに進めると選んだら skip_clarification）。"
+    "nl2sql_query が needs_clarification を返したら SQL はまだ作っていません。\n"
+    "- requirement.question の問いを利用者に 1 つだけ確かめてから、答えを付けて nl2sql_query を"
+    "呼び直します。\n"
+    "- 利用者が確認せずに進めると選んだら skip_clarification を使います。"
 )
 
 

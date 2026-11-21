@@ -1072,11 +1072,11 @@ def test_select_ai_request_overrides_use_effective_profile_context() -> None:
     assert "## 業務用語集" not in instructions
     assert "- 四半期:" not in instructions
     assert "- 売上:" not in instructions
-    assert "## SQL 生成ルール" not in instructions
-    assert "## プロファイル追加指示" in instructions
+    assert "SQL 生成ルールを適用する" not in instructions
+    assert "プロファイル追加指示を適用する" in instructions
     assert "SELECT/WITH のみ" in instructions
     assert "日付は DATE 型で返す" in instructions
-    assert instructions.endswith("## 今回の追加指示\n現在日付を基準にしてください。")
+    assert instructions.endswith("今回の追加指示を適用する\n現在日付を基準にしてください。")
     assert preview.engine_meta["select_ai_role_applied"] is True
     assert preview.engine_meta["select_ai_additional_instructions_applied"] is True
     assert preview.engine_meta["select_ai_additional_instructions_length"] == len(
@@ -1132,7 +1132,7 @@ def test_select_ai_job_passes_request_overrides_to_oracle() -> None:
     assert adapter.attributes[0] is not None
     assert adapter.attributes[0]["role"] == "ジョブ専用ロール"
     assert (
-        "## 今回の追加指示\n最新月だけを対象にする。"
+        "今回の追加指示を適用する\n最新月だけを対象にする。"
         in adapter.attributes[0]["additional_instructions"]
     )
 
@@ -1444,7 +1444,7 @@ def test_select_ai_showprompt_uses_ontology_attributes(
     for attributes in adapter.attributes:
         assert attributes is not None
         instructions = attributes["additional_instructions"]
-        assert "## 今回の追加指示" not in instructions
+        assert "今回の追加指示を適用する" not in instructions
         assert "確認済み Ontology コンテキスト" in instructions
         assert published_markdown in instructions
         assert "question_effective:" not in instructions
@@ -1488,10 +1488,10 @@ def test_select_ai_request_and_ontology_instructions_are_separate(
     select_ai_attributes = adapter.attributes[0]
     assert select_ai_attributes is not None
     instructions = select_ai_attributes["additional_instructions"]
-    assert "## 今回の追加指示\n最新月だけを対象にする。" in instructions
-    assert "## 確認済み Ontology コンテキスト\n" in instructions
-    assert instructions.index("## 今回の追加指示") < instructions.index(
-        "## 確認済み Ontology コンテキスト"
+    assert "今回の追加指示を適用する\n最新月だけを対象にする。" in instructions
+    assert "確認済み Ontology コンテキストを参照する\n" in instructions
+    assert instructions.index("今回の追加指示を適用する") < instructions.index(
+        "確認済み Ontology コンテキストを参照する"
     )
     assert published_markdown in instructions
     assert job.result.engine_meta["select_ai_additional_instructions_applied"] is True

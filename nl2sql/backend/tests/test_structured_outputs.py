@@ -152,7 +152,7 @@ def test_schema_descriptions_are_sent_in_the_instructions_step_only(template: st
         response_format=fmt,
     )
     assert payload["instructions"].endswith(
-        "\n\n## Step 2: 応答の各項目を書く\n応答の JSON の各項目は、次の説明に従って書く。"
+        "\n\n## Step 3: 応答の各項目を書く\n応答の JSON の各項目は、次の説明に従って書く。"
         "\n- `sql`: 合成の欄の書き方。"
     )
     sent = payload["text"]["format"]

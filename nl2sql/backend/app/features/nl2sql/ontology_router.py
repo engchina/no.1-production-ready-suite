@@ -3885,10 +3885,13 @@ class OntologyApiRuntime:
             sort_keys=True,
         )
         system_prompt = (
-            "あなたは NL2SQL の質問解釈器です。QuestionIntentGraph の JSON オブジェクトだけを返し、"
+            "## Step 1: 許可された概念を使って質問を解釈する\n"
+            "あなたは NL2SQL の質問解釈器です。QuestionIntentGraph の JSON オブジェクトだけを"
+            "返し、"
             "説明文や Markdown を付けないでください。allowed_nodes / allowed_relationships にない "
             "ID を作らず、業務上確定できない内容は blocking ambiguity として残してください。"
             "profile_view_id と ontology_revision_id は入力値を厳密に維持してください。"
+            "\n\n## Step 2: 解釈を既定の形式で返す\n"
             f"intent_contract.schema_version={_QUESTION_INTENT_SCHEMA_VERSION} の JSON Schema に"
             "従い、"
             "ambiguities[] は id/code/message_ja/options を必ず使ってください。"
