@@ -5,8 +5,8 @@ import type { WikiGraphDocument, WikiGraphOverview, WikiGraphRelation, WikiGraph
 /** 1 段の表示の上限。超えた分は「さらに表示」で読む。 */
 export const WIKI_GRAPH_PAGE_SIZE = 25;
 
-/** 関係の種類の並び（凡例・一覧の順。backend の辿る優先の順と同じ）。 */
-export const WIKI_RELATIONS: readonly WikiGraphRelation[] = ["exception", "prerequisite", "warning", "continuation", "expected_result", "reference"];
+/** Wiki の図の関係フィルターの表示順。 */
+export const WIKI_RELATIONS: readonly WikiGraphRelation[] = ["prerequisite", "exception", "warning", "continuation", "expected_result", "reference"];
 
 export type WikiNodeKind = "document" | "section" | "unit" | "more";
 
