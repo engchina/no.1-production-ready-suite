@@ -39,6 +39,7 @@ from app.rag.derived_evidence import (
 )
 from app.rag.document_summary import (
     DOCUMENT_SUMMARY_PROMPT_KEY,
+    FAILURE_INPUT_TOO_LARGE,
     FAILURE_INTERRUPTED,
     FAILURE_INVALID_OUTPUT,
     FAILURE_MODEL,
@@ -485,6 +486,17 @@ async def test_invalid_output_recovers_on_the_retry() -> None:
 
     assert row is not None and row.status == STATUS_READY
     assert len(model.calls) == 2
+
+
+async def test_persistent_input_limit_records_the_budget_reason() -> None:
+    from pr_backend_core.generation_input import GenerationInputLimitError
+
+    store = FakeStore()
+    model = FakeTextModel(GenerationInputLimitError(96_001, 96_000))
+    with pytest.raises(SummaryUnavailable) as raised:
+        await _generate(store, model)
+    assert raised.value.code == FAILURE_INPUT_TOO_LARGE
+    assert store.failures == [("cs-1", FAILURE_INPUT_TOO_LARGE)]
 
 
 async def test_timeout_records_the_reason() -> None:

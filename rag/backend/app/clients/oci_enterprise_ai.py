@@ -12,6 +12,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from pr_backend_core.generation_input import reported_input_tokens
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.tracing import observed_span
 from rag_parser_core.model_api import MODEL_API_ANTHROPIC_MESSAGES, MODEL_API_RESPONSES
@@ -35,6 +36,7 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_max_input_tokens,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort_to_send,
     enterprise_ai_vision_model_id,
@@ -124,6 +126,7 @@ def config_from_settings(
         oci_enterprise_ai_timeout_seconds=float(settings.oci_enterprise_ai_timeout_seconds),
         oci_enterprise_ai_max_retries=int(settings.oci_enterprise_ai_max_retries),
         text_max_output_tokens=enterprise_ai_output_token_budget(settings, text_model_id),
+        text_max_input_tokens=enterprise_ai_max_input_tokens(settings, text_model_id),
         vision_max_output_tokens=enterprise_ai_output_token_budget(settings, vision_model_id),
         text_reasoning_effort=enterprise_ai_reasoning_effort_to_send(settings, text_model_id),
         vision_reasoning_effort=enterprise_ai_reasoning_effort_to_send(settings, vision_model_id),
@@ -150,16 +153,24 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
         self, path: str, payload: Mapping[str, Any], *, vision: bool = False
     ) -> Mapping[str, Any]:
         started = time.perf_counter()
+        input_measurement: dict[str, object] = {}
         try:
-            response = await self._post_enterprise_ai_observed(path, payload, vision=vision)
+            response = await self._post_enterprise_ai_observed(
+                path, payload, vision=vision, input_measurement=input_measurement
+            )
         except Exception as error:
-            _log_call(payload, None, time.perf_counter() - started, error=error)
+            _log_call(payload, None, time.perf_counter() - started, input_measurement, error=error)
             raise
-        _log_call(payload, response, time.perf_counter() - started)
+        _log_call(payload, response, time.perf_counter() - started, input_measurement)
         return response
 
     async def _post_enterprise_ai_observed(
-        self, path: str, payload: Mapping[str, Any], *, vision: bool
+        self,
+        path: str,
+        payload: Mapping[str, Any],
+        *,
+        vision: bool,
+        input_measurement: dict[str, object],
     ) -> Mapping[str, Any]:
         config = self._vision_config if vision else self._config
         with observed_span(
@@ -174,7 +185,14 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
             },
         ) as span:
             span.set_call_input(payload, restricted=True)
-            response = await super()._post_enterprise_ai(path, payload, vision=vision)
+
+            def observe_input(fields: Mapping[str, object]) -> None:
+                input_measurement.update(fields)
+                span.set_attributes(fields)
+
+            response = await self._request_enterprise_ai(
+                path, payload, vision=vision, observe_input=observe_input
+            )
             span.set_call_output(response)
             record_genai_usage(span, response.get("usage"))
             return response
@@ -196,6 +214,7 @@ def _log_call(
     payload: Mapping[str, Any],
     response: Mapping[str, Any] | None,
     seconds: float,
+    input_measurement: Mapping[str, object],
     *,
     error: BaseException | None = None,
 ) -> None:
@@ -235,7 +254,10 @@ def _log_call(
                 if error
                 else {}
             ),
-            "input_tokens": _tokens(usage, "input_tokens"),
+            **input_measurement,
+            "input_tokens": input_measurement.get(
+                "gen_ai.usage.input_tokens", reported_input_tokens(usage)
+            ),
             "cached_tokens": _tokens(usage, "input_tokens_details", "cached_tokens"),
             "output_tokens": _tokens(usage, "output_tokens"),
             "reasoning_tokens": _tokens(usage, "output_tokens_details", "reasoning_tokens"),

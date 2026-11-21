@@ -66,3 +66,53 @@ def test_large_capacity_keeps_input_room_for_online_generation():
     assert diagnostic["available_input_tokens"] + diagnostic["output_reserved_tokens"] == 500_000
     assert diagnostic["estimated_input_tokens"] + diagnostic["output_reserved_tokens"] <= 500_000
     assert model_input_measurement(settings(answer_max_input_tokens=400), "指示", "本文", {})["output_reserved_tokens"] == 100
+
+
+def test_planning_includes_final_language_contract_and_sdk_wrappers():
+    from pr_backend_core.generation_input import complete_input_measurement
+
+    from rag_engine.adapters.oci import _response_wire_request
+    from rag_engine.generation.citation_unit_ids import SentUnitCatalog
+    from rag_engine.generation.grounded import final_answer_model
+    from rag_engine.generation.paragraph_repair import ParagraphRepair
+    from rag_engine.generation.request_row_repair import RequestRowRepair
+
+    config = settings(answer_max_input_tokens=96_000)
+    provider = config.llm_providers[config.default_answer_llm]
+    question = "資料の記載を説明してください。"
+    units = SentUnitCatalog(())
+    schema = final_answer_model(question, guided=False, unit_catalog=units)
+    validated = RequestRowRepair(question).model(ParagraphRepair(units).model(schema))
+    prompt = '資料の "引用" と改行\n'
+    measured = model_input_measurement(config, "指示", prompt, schema.model_json_schema())
+    actual = _response_wire_request(
+        {
+            "input": [{"role": "system", "content": "指示"}, {"role": "user", "content": prompt}],
+            "model": provider.model,
+            "temperature": 0.0,
+            "text_format": validated,
+            "max_output_tokens": measured["output_reserved_tokens"],
+            **({"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}),
+        }
+    )
+    assert "BoundExplicitResponseLanguage" in actual["text"]["format"]["schema"]["$defs"]
+    assert measured["complete_input_estimated_tokens"] == complete_input_measurement({**actual, "stream": True}).estimated_tokens
+
+
+def test_japanese_body_and_template_are_jointly_limited():
+    measured = model_input_measurement(settings(answer_max_input_tokens=256_000), "指示", "合成本文。" * 5000, {"type": "object"})
+    assert measured["estimated_input_tokens"] < measured["available_input_tokens"]
+    assert measured["complete_input_estimated_tokens"] > measured["complete_input_limit_tokens"] == 96_000
+    assert not measured["fits"]
+
+
+def test_oversize_final_request_never_reaches_client_or_retry(monkeypatch):
+    from rag_engine.adapters import oci
+    from rag_engine.models.llm import TextOutput
+
+    config = settings(answer_max_input_tokens=256_000)
+    provider = config.llm_providers[config.default_answer_llm]
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: pytest.fail("過大な要求の送信"))
+    with pytest.raises(GenerationInputBudgetExceeded) as raised, oci.bind_output_cap(128):
+        oci._openai_parsed([{"role": "user", "content": "x" * 72_000}], config, TextOutput, provider)
+    assert raised.value.diagnostic["complete_input_limit_tokens"] == 96_000

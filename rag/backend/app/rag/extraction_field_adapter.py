@@ -582,6 +582,7 @@ async def extract_fields_from_extraction(
     extract_unit: UnitExtractor,
     *,
     text_budget_tokens: int,
+    request_fits: Callable[[str], bool] | None = None,
 ) -> StructuredExtraction:
     """本文を入力の予算に収まる単位に分けて項目を抽出し、候補を統合して付与する(#2720)。
 
@@ -603,7 +604,9 @@ async def extract_fields_from_extraction(
     if not record_boundary_plain_text(extraction).strip():
         return with_field_extraction_outcome(extraction, "no_text")
     try:
-        units = plan_field_extraction_units(extraction, text_budget_tokens=text_budget_tokens)
+        units = plan_field_extraction_units(
+            extraction, text_budget_tokens=text_budget_tokens, request_fits=request_fits
+        )
     except FieldSentenceTooLarge as exc:
         raise FieldExtractionFailed(
             "input_too_large",
@@ -625,7 +628,9 @@ async def extract_fields_from_extraction(
         except BoundedCallFailed as exc:
             parts = (
                 split_field_extraction_unit(
-                    unit, text_budget_tokens=text_budget_tokens >> (depth + 1)
+                    unit,
+                    text_budget_tokens=text_budget_tokens >> (depth + 1),
+                    request_fits=request_fits,
                 )
                 if exc.kind is ErrorKind.TOO_LARGE and depth < MAX_FIELD_EXTRACTION_SPLIT_DEPTH
                 else []

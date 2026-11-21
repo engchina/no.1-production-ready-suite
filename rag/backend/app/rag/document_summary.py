@@ -361,7 +361,10 @@ async def _summarize(
     try:
         return await caller.call(once, label="document_summary", adaptive=True)
     except BoundedCallError as exc:
-        code = FAILURE_INVALID_OUTPUT if exc.kind == ErrorKind.INVALID_OUTPUT else FAILURE_MODEL
+        code = {
+            ErrorKind.INVALID_OUTPUT: FAILURE_INVALID_OUTPUT,
+            ErrorKind.TOO_LARGE: FAILURE_INPUT_TOO_LARGE,
+        }.get(exc.kind, FAILURE_MODEL)
         raise SummaryUnavailable(code) from exc
 
 

@@ -23,6 +23,7 @@ USAGE_KEYS = ("calls", "input_tokens", "cached_tokens", "output_tokens", "reason
 # 停滞（#1926）で打ち切って送り直した数（``stall_resends``）も同じく 0 なら出さない。
 # 出力の上限を広げても未完了のため推論の量を下げて送り直した数（``effort_retries``。#2023）も同じ。
 RETRY_KEYS = ("incomplete_responses", "output_retries", "effort_retries", "stall_resends")
+OPTIONAL_COUNTS = (*RETRY_KEYS, "unreported_input_calls")
 INCOMPLETE_REASONS_KEY = "incomplete_reasons"
 # streaming で受けた呼び出しの時刻（#1926）。最初の event までの秒（待ち）と出力の速さ（delta の event/秒。停滞）を
 # 呼び出しごとに残し、工程の記録には最大の待ち（``first_event_seconds_max``）と最も遅い速さ（``delta_rate_min``）を出す。
@@ -41,7 +42,7 @@ class LlmUsage:
 
     def add(self, values: Mapping[str, Any]) -> None:
         with self._lock:
-            for key in (*USAGE_KEYS, *RETRY_KEYS):
+            for key in (*USAGE_KEYS, *OPTIONAL_COUNTS):
                 if key in USAGE_KEYS or values.get(key):
                     self._values[key] = self._values.get(key, 0) + float(values.get(key, 0) or 0)
             if reason := values.get("incomplete_reason"):
@@ -156,7 +157,7 @@ def usage_delta(before: Mapping[str, Any]) -> dict[str, Any]:
     for key in USAGE_KEYS:
         diff = after.get(key, 0) - before.get(key, 0)
         delta[key] = round(diff, 1) if key == "seconds" else int(diff)
-    for key in RETRY_KEYS:
+    for key in OPTIONAL_COUNTS:
         if diff := int(after.get(key, 0) - before.get(key, 0)):
             delta[key] = diff
     before_reasons = before.get(INCOMPLETE_REASONS_KEY) or {}

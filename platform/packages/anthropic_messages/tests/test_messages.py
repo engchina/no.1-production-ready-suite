@@ -210,6 +210,30 @@ def test_response_schema_is_converted_once_when_sent(fake_api: FakeMessagesApi) 
     assert sent["properties"]["name"]["anyOf"][0]["description"].count("maxLength") == 1
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_checked_input_equals_sdk_request(
+    fake_api: FakeMessagesApi, asynchronous: bool
+) -> None:
+    checked: list[object] = []
+    request = _request(
+        system="合成の指示",
+        reasoning_effort="medium",
+        response_schema={"type": "object", "properties": {"a": {"type": "string", "maxLength": 8}}},
+    )
+    fake_api.reply_stream(recorded_stream())
+    if asynchronous:
+        await acreate_anthropic_message(
+            request,
+            api_key=API_KEY,
+            http_client=fake_api.async_client(),
+            check_input=checked.append,
+        )
+    else:
+        _call(fake_api, request, check_input=checked.append)
+    assert checked == [fake_api.body()]
+    assert fake_api.body()["stream"] is True
+
+
 def test_images_are_sent_as_base64_blocks_before_text(fake_api: FakeMessagesApi) -> None:
     data_url = "data:image/png;base64," + base64.standard_b64encode(PNG_BYTES).decode()
     fake_api.reply_stream(recorded_stream(blocks=({"type": "text", "text": "画像の文字"},)))

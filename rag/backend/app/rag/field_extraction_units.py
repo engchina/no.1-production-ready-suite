@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
 from pr_system_settings.model import estimate_input_tokens, input_token_budget
@@ -131,7 +132,10 @@ def field_extraction_text_budget(
 
 
 def plan_field_extraction_units(
-    extraction: StructuredExtraction, *, text_budget_tokens: int
+    extraction: StructuredExtraction,
+    *,
+    text_budget_tokens: int,
+    request_fits: Callable[[str], bool] | None = None,
 ) -> list[FieldExtractionUnit]:
     """解析の成果物の要素を、本文の予算(tokens)に収まる単位に分ける。
 
@@ -140,11 +144,14 @@ def plan_field_extraction_units(
     """
     budget = max(MIN_UNIT_TEXT_TOKENS, int(text_budget_tokens))
     atoms = _extraction_atoms(extraction, budget)
-    return _group_atoms(atoms, budget, index=None, total=None, part=())
+    return _group_atoms(atoms, budget, index=None, total=None, part=(), request_fits=request_fits)
 
 
 def split_field_extraction_unit(
-    unit: FieldExtractionUnit, *, text_budget_tokens: int
+    unit: FieldExtractionUnit,
+    *,
+    text_budget_tokens: int,
+    request_fits: Callable[[str], bool] | None = None,
 ) -> list[FieldExtractionUnit]:
     """モデルが入力の上限の超過で拒んだ単位を、小さい予算で分け直す(重ねた範囲は外す)。
 
@@ -157,7 +164,14 @@ def split_field_extraction_unit(
     try:
         for atom in unit.atoms:
             atoms.extend(_split_atom(atom, budget - _header_tokens(atom) - 1))
-        parts = _group_atoms(atoms, budget, index=unit.index, total=unit.total, part=unit.part)
+        parts = _group_atoms(
+            atoms,
+            budget,
+            index=unit.index,
+            total=unit.total,
+            part=unit.part,
+            request_fits=request_fits,
+        )
     except FieldSentenceTooLarge:
         return []
     return parts if len(parts) > 1 else []
@@ -274,6 +288,7 @@ def _group_atoms(
     index: int | None,
     total: int | None,
     part: tuple[int, ...],
+    request_fits: Callable[[str], bool] | None = None,
 ) -> list[FieldExtractionUnit]:
     """最小の本文を、頭書き・重ねる範囲を含めて予算に収まるように詰める。"""
     groups: list[tuple[tuple[FieldExtractionAtom, ...], tuple[FieldExtractionAtom, ...]]] = []
@@ -296,35 +311,108 @@ def _group_atoms(
         used += atom.tokens + 1
     if current:
         groups.append((overlap, tuple(current)))
-    count = len(groups)
-    units: list[FieldExtractionUnit] = []
-    for position, (carried, new) in enumerate(groups):
-        unit_index = position if index is None else index
-        unit_total = count if total is None else total
-        unit_part = part if index is None else (*part, position)
-        header = _header(unit_index, unit_total, new[0]) if unit_total > 1 else ""
-        text = "\n".join(
-            part_text for part_text in (header, *_texts(carried), *_texts(new)) if part_text
-        )
-        tokens = estimate_input_tokens(text)
-        if new[0].sentence_ends is not None and tokens > budget:
-            raise FieldSentenceTooLarge
-        units.append(
-            FieldExtractionUnit(
-                index=unit_index,
-                total=unit_total,
-                atoms=new,
-                overlap=carried,
-                part=unit_part,
-                text=text,
-                tokens=tokens,
+    # 既定の比率は候補を作る目安。番号・重複・schema を含む実際の送信形が予算内かを調べる。
+    while True:
+        count = len(groups) if total is None else total
+        units = [
+            _make_unit(
+                new,
+                carried,
+                position if index is None else index,
+                count,
+                part if index is None else (*part, position),
             )
+            for position, (carried, new) in enumerate(groups)
+        ]
+        if request_fits is None or all(request_fits(unit.text) for unit in units):
+            return units
+        # 再分割で総数の桁数も変わりうる。確定した番号を付けるまでは送信も checkpoint の照合もしない。
+        groups = _pack_complete_requests(atoms, budget, index, count, request_fits)
+
+
+def _make_unit(
+    new: Sequence[FieldExtractionAtom],
+    carried: Sequence[FieldExtractionAtom],
+    index: int,
+    total: int,
+    part: tuple[int, ...],
+) -> FieldExtractionUnit:
+    header = _header(index, total, new[0]) if total > 1 else ""
+    pieces = [header] if header else []
+    previous: FieldExtractionAtom | None = None
+    for atom in (*carried, *new):
+        same_paragraph = (
+            previous is not None
+            and atom.sentence_ends is not None
+            and previous.element_id == atom.element_id
+            and atom.element_id is not None
         )
-    return units
+        if pieces and not same_paragraph:
+            pieces.append("\n")
+        pieces.append(atom.text)
+        previous = atom
+    text = "".join(pieces)
+    return FieldExtractionUnit(
+        index=index,
+        total=total,
+        part=part,
+        atoms=tuple(new),
+        overlap=tuple(carried),
+        text=text,
+        tokens=estimate_input_tokens(text),
+    )
 
 
-def _texts(atoms: Sequence[FieldExtractionAtom]) -> list[str]:
-    return [atom.text for atom in atoms]
+def _pack_complete_requests(
+    atoms: Sequence[FieldExtractionAtom],
+    budget: int,
+    index: int | None,
+    total: int,
+    request_fits: Callable[[str], bool],
+) -> list[tuple[tuple[FieldExtractionAtom, ...], tuple[FieldExtractionAtom, ...]]]:
+    groups: list[tuple[tuple[FieldExtractionAtom, ...], tuple[FieldExtractionAtom, ...]]] = []
+    current: list[FieldExtractionAtom] = []
+    overlap: tuple[FieldExtractionAtom, ...] = ()
+    pending = deque(atoms)
+    while pending:
+        atom = pending[0]
+        candidate = _make_unit(
+            (*current, atom), overlap, len(groups) if index is None else index, total, ()
+        )
+        if candidate.tokens <= budget and request_fits(candidate.text):
+            current.append(pending.popleft())
+        elif current:
+            groups.append((overlap, tuple(current)))
+            overlap = _tail_overlap(current, int(budget * OVERLAP_RATIO))
+            current = []
+        elif overlap:
+            # 単独の段落が収まるなら、任意の重複を外して段落をそのまま読ませる。
+            overlap = ()
+        else:
+            pending.popleft()
+            pending.extendleft(reversed(_smaller_request_atoms(atom)))
+    if current:
+        groups.append((overlap, tuple(current)))
+    return groups
+
+
+def _smaller_request_atoms(atom: FieldExtractionAtom) -> list[FieldExtractionAtom]:
+    if atom.sentence_ends is not None:
+        if not atom.sentence_ends:
+            raise FieldSentenceTooLarge
+        points = (0, *atom.sentence_ends, len(atom.text))
+        pieces = []
+        for start, end in zip(points, points[1:]):
+            text = atom.text[start:end]
+            pieces.append(
+                replace(atom, text=text, tokens=estimate_input_tokens(text), sentence_ends=())
+            )
+        return pieces
+    # 原文の構造を持たない入力はその形式の既存の分割を使い、各結果を改めて全文で測る。
+    parts = _split_atom(atom, max(1, atom.tokens // 2))
+    if len(parts) < 2 or any(len(p.text) >= len(atom.text) for p in parts):
+        raise FieldSentenceTooLarge
+    return parts
 
 
 def _tail_overlap(

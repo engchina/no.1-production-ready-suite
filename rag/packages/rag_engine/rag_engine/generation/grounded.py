@@ -223,6 +223,11 @@ def generation_output_model(question: str, *, guided: bool = False, unit_catalog
     return full_answer_model(unit_catalog or SentUnitCatalog(()), question=question)
 
 
+def final_answer_model(question: str, *, guided: bool, unit_catalog: SentUnitCatalog) -> type[BaseModel]:
+    """入力の計画と実送信で使う、回答言語と今回の引用先を含む契約。"""
+    return generation_language_schema(generation_output_model(question, guided=guided, unit_catalog=unit_catalog), question)
+
+
 # ---- 原文へのタグ付け -------------------------------------------------------
 
 
@@ -2642,9 +2647,7 @@ def run_round(
     else:
         unit_catalog = generation_unit_catalog(spans, sent_only=True)
     generation_base = _generation_base_model(guided=bool(guide_step_contracts))
-    generation_model = generation_language_schema(
-        generation_output_model(question, guided=bool(guide_step_contracts), unit_catalog=unit_catalog), question
-    )
+    generation_model = final_answer_model(question, guided=bool(guide_step_contracts), unit_catalog=unit_catalog)
     from rag_engine.generation.paragraph_repair import ParagraphRepair
     from rag_engine.generation.request_row_repair import RequestRowRepair
 

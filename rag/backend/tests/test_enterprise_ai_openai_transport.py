@@ -6,6 +6,11 @@ from collections.abc import Callable
 import httpx
 import openai
 import pytest
+from pr_backend_core.generation_input import (
+    GENERATION_INPUT_LIMIT,
+    GenerationInputLimitError,
+    complete_input_measurement,
+)
 from rag_parser_core.oci_enterprise_ai import (
     EnterpriseAiTimeoutError,
     OciEnterpriseAiClient,
@@ -100,6 +105,75 @@ async def test_timeout_maps_to_enterprise_ai_timeout(monkeypatch: pytest.MonkeyP
 
     with pytest.raises(EnterpriseAiTimeoutError):
         await _client(monkeypatch, handler).generate("q", "c", system_prompt="合成の指示")
+
+
+@pytest.mark.parametrize(
+    ("status", "usage", "actual", "budget_status"),
+    [
+        (200, {"input_tokens": 0}, 0, "within_limit"),
+        (200, None, None, "unreported"),
+        (
+            200,
+            {"input_tokens": GENERATION_INPUT_LIMIT + 1},
+            GENERATION_INPUT_LIMIT + 1,
+            "over_limit",
+        ),
+        (400, {"prompt_tokens": 32}, 32, "within_limit"),
+    ],
+)
+async def test_text_request_measures_sdk_body_and_reported_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    status: int,
+    usage: dict[str, int] | None,
+    actual: int | None,
+    budget_status: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        body = {"output_text": "回答"} if status == 200 else {"error": {"message": "入力エラー"}}
+        return httpx.Response(
+            status, json={**body, **({"usage": usage} if usage is not None else {})}
+        )
+
+    caplog.set_level("INFO", logger="rag_parser_core.oci_enterprise_ai")
+    client = _client(monkeypatch, handler)
+    generation = client.generate(
+        "質問",
+        "原文",
+        system_prompt="合成の指示",
+        response_schema={"type": "object", "properties": {"answer": {"type": "string"}}},
+        response_schema_name="synthetic",
+    )
+    if status == 200:
+        assert await generation == "回答"
+    else:
+        with pytest.raises(httpx.HTTPStatusError):
+            await generation
+    assert len(requests) == 1
+    sent = json.loads(requests[0].content)
+    assert sent["text"]["format"]["schema"]["properties"]["answer"]["type"] == "string"
+    fields = vars(next(r for r in caplog.records if r.getMessage() == "llm_input_budget"))
+    assert fields["pr.input.estimated_tokens"] == complete_input_measurement(sent).estimated_tokens
+    assert fields["pr.input.limit_tokens"] == GENERATION_INPUT_LIMIT
+    assert fields["pr.input.usage_status"] == budget_status
+    assert fields.get("gen_ai.usage.input_tokens") == actual
+
+
+async def test_schema_can_exceed_limit_before_sdk_sends(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_request(request: httpx.Request) -> httpx.Response:
+        pytest.fail("入力の上限を超えた要求が送信されました。")
+
+    with pytest.raises(GenerationInputLimitError) as caught:
+        await _client(monkeypatch, no_request).generate(
+            "質問",
+            "原文",
+            system_prompt="合成の指示",
+            response_schema={"type": "string", "enum": ["x" * GENERATION_INPUT_LIMIT]},
+        )
+    assert caught.value.estimated_tokens > caught.value.limit_tokens
 
 
 async def test_upload_file_sends_multipart(monkeypatch: pytest.MonkeyPatch) -> None:

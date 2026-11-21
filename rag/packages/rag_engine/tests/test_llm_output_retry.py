@@ -380,7 +380,9 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
         finally:
             llm_usage.reset(usage_token)
         self.assertEqual((usage["calls"], usage["output_tokens"], usage["incomplete_reasons"]), (1, 0, {"TimeoutError": 1}))
+        self.assertEqual(usage["unreported_input_calls"], 1)
         logged = logs.records[0]
+        self.assertIsNone(logged.input_tokens)
         self.assertEqual((logged.llm_status, logged.llm_incomplete_reason, logged.llm_max_output_tokens), ("failed", "TimeoutError", 65536))
         self.assertFalse(hasattr(logged, "llm_deadline_capped"))
 
@@ -541,9 +543,11 @@ def test_online_output_uses_context_room_and_never_sends_when_exhausted(monkeypa
         }
     )
     measured = estimate_tokens(json.dumps(wire, ensure_ascii=False))
-    settings = replace(settings, answer_max_input_tokens=measured + 100)
+    # 構造化した指示・schema が入る小さいモデルで、入力後の残りだけを出力に使う。
+    settings = replace(settings, answer_max_input_tokens=4_000)
+    available_output = settings.answer_max_input_tokens - measured
     assert oci._openai_parsed(messages, settings, TextOutput, PROVIDER).text == "ok"
-    assert client.budgets == [100]
+    assert client.budgets == [available_output]
     token = llm_usage.set(LlmUsage())
     try:
         with pytest.raises(GenerationInputBudgetExceeded):
@@ -551,7 +555,7 @@ def test_online_output_uses_context_room_and_never_sends_when_exhausted(monkeypa
         assert llm_usage.get().snapshot().get("calls", 0) == 0
     finally:
         llm_usage.reset(token)
-    assert client.budgets == [100]
+    assert client.budgets == [available_output]
 
 
 def test_exhausted_deadline_never_forces_one_token(monkeypatch):

@@ -2876,6 +2876,16 @@ class IngestionPipeline:
                 "システム設定 › モデル の既定のテキストモデルの「入力の上限（tokens）」と"
                 " RAG_FIELD_EXTRACTION_INPUT_TOKEN_PERCENT を確認してから再実行してください。"
             )
+
+        def request_fits(text: str) -> bool:
+            return self._vlm.measure_text_input(
+                "",
+                text,
+                system_prompt=prompt,
+                response_schema=FIELD_EXTRACTION_RESPONSE_SCHEMA,
+                response_schema_name="field_extraction",
+            ).fits
+
         scope = _field_checkpoint_scope(model_id, field_defs, prompt, schema_json)
 
         async def _extract_unit(unit: FieldExtractionUnit) -> UnitExtraction:
@@ -2928,7 +2938,13 @@ class IngestionPipeline:
         try:
             with ingestion_ai_calls(self._settings, "field_extraction") as caller:
                 extracted = await extract_fields_from_extraction(
-                    extraction, field_defs, _extract_unit, text_budget_tokens=text_budget
+                    extraction,
+                    field_defs,
+                    _extract_unit,
+                    text_budget_tokens=text_budget,
+                    request_fits=request_fits
+                    if isinstance(self._vlm, OciEnterpriseAiClient)
+                    else None,
                 )
         except BoundedCallAborted as exc:
             logger.warning(
@@ -3030,7 +3046,6 @@ class IngestionPipeline:
         from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
         from rag_engine.resources.runtime import bind_prompt_overrides
 
-        from app.clients.oci_enterprise_ai import config_from_settings
         from app.rag.answer_prompts import default_prompt
 
         saved = await self._saved_prompt_snapshot()
@@ -3045,6 +3060,8 @@ class IngestionPipeline:
         ).strip()
         loop = asyncio.get_running_loop()
         # 図の読み取りは既定の Vision モデルとその接続で行う(#533)。
+        from app.clients.oci_enterprise_ai import config_from_settings
+
         config = config_from_settings(self._settings).for_vision()
 
         def cancel_check() -> None:

@@ -26,7 +26,7 @@ outputs が受け付けない書き方（数・文字列の制約・型の配列
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final
 
 from pr_anthropic_messages import (
@@ -36,14 +36,18 @@ from pr_anthropic_messages import (
     AnthropicMessagesRequest,
     AnthropicMessagesResult,
     acreate_anthropic_message,
+    anthropic_message_params,
     create_anthropic_message,
 )
+from pr_backend_core.generation_input import CompleteInputMeasurement, complete_input_measurement
+from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS
 
 __all__ = [
     "AnthropicMessagesError",
     "AnthropicRequestShapeError",
     "acreate_responses_body",
     "create_responses_body",
+    "measure_messages_input",
     "messages_request",
     "responses_body",
     "responses_body_for_failure",
@@ -69,6 +73,13 @@ class AnthropicRequestShapeError(ValueError):
 
 def messages_request(payload: Mapping[str, Any]) -> AnthropicMessagesRequest:
     """Responses API の要求を Messages API の 1 回の呼び出しの入力にする。"""
+    prompt = payload.get("prompt")
+    if (isinstance(prompt, Mapping) and prompt.get("id")) or any(
+        payload.get(key) for key in ("previous_response_id", "conversation", "tools")
+    ):
+        raise AnthropicRequestShapeError(
+            "会話の参照・保存済みの指示・ツールは Messages API の単発要求に写せません。"
+        )
     system_parts: list[str] = []
     instructions = payload.get("instructions")
     if isinstance(instructions, str):
@@ -123,6 +134,23 @@ def messages_request(payload: Mapping[str, Any]) -> AnthropicMessagesRequest:
         response_schema=response_schema,
         reasoning_effort=str(effort or ""),
         max_output_tokens=max_output_tokens,
+    )
+
+
+def measure_messages_input(
+    payload: Mapping[str, Any],
+    *,
+    limit_tokens: int,
+    image_tokens: int = DEFAULT_IMAGE_INPUT_TOKENS,
+    external_tokens: int = 0,
+) -> CompleteInputMeasurement:
+    """RAG の計画時に、Messages API が送る形の完全な要求を測る。"""
+    params = anthropic_message_params(messages_request(payload))
+    return complete_input_measurement(
+        {**params, "stream": True},
+        limit_tokens=limit_tokens,
+        image_tokens=image_tokens,
+        external_tokens=external_tokens,
     )
 
 
@@ -235,6 +263,7 @@ def create_responses_body(
     endpoint_url: str = "",
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = 0,
+    check_input: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Responses API の要求を Messages API で 1 回送り、Responses API の形の応答を返す。"""
     request = messages_request(payload)
@@ -245,6 +274,7 @@ def create_responses_body(
             endpoint_url=endpoint_url,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            check_input=check_input,
         )
     except AnthropicMessagesError as error:
         body = responses_body_for_failure(error, request)
@@ -261,6 +291,7 @@ async def acreate_responses_body(
     endpoint_url: str = "",
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = 0,
+    check_input: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """:func:`create_responses_body` の非同期版。"""
     request = messages_request(payload)
@@ -271,6 +302,7 @@ async def acreate_responses_body(
             endpoint_url=endpoint_url,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            check_input=check_input,
         )
     except AnthropicMessagesError as error:
         body = responses_body_for_failure(error, request)

@@ -39,6 +39,10 @@ from pr_backend_core.bounded_calls import (
     parse_retry_after,
     policy_with_concurrency,
 )
+from pr_backend_core.generation_input import (
+    GenerationInputLimitError,
+    UnmeasuredGenerationInputError,
+)
 
 # --- 仮想の時間 ---------------------------------------------------------------------------
 
@@ -220,6 +224,9 @@ def calls_of(service: Service, item: object) -> int:
         (StubError(404, "model not found"), ErrorKind.NOT_FOUND),
         (StubError(400, "invalid parameter"), ErrorKind.BAD_REQUEST),
         (StubError(413), ErrorKind.TOO_LARGE),
+        (GenerationInputLimitError(96_001, 96_000), ErrorKind.TOO_LARGE),
+        (UnmeasuredGenerationInputError("参照先の入力が不明"), ErrorKind.UNKNOWN),
+        (ValueError(str(GenerationInputLimitError(96_001, 96_000))), ErrorKind.UNKNOWN),
         (
             OpenAiStatusError(400, "context_length_exceeded: maximum context length"),
             ErrorKind.TOO_LARGE,

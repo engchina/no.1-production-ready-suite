@@ -15,15 +15,22 @@ import base64
 import contextlib
 import dataclasses
 import json
+import logging
 import os
 import re
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
 import openai
+from pr_backend_core.generation_input import (
+    GENERATION_INPUT_LIMIT,
+    CompleteInputMeasurement,
+    complete_input_measurement,
+    reported_input_tokens,
+)
 from pr_backend_core.llm_request_params_httpx import AsyncParameterDroppingClient
 from pr_backend_core.response_schema import with_schema_field_guide
 from pydantic import ValidationError
@@ -31,6 +38,8 @@ from pydantic import ValidationError
 from rag_parser_core.extraction import StructuredExtraction
 from rag_parser_core.model_api import MODEL_API_RESPONSES, uses_anthropic_messages
 from rag_parser_core.text_encoding import detect_text_match
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_LLM_PATH = "/responses"
 DEFAULT_VLM_PATH = "/responses"
@@ -98,6 +107,7 @@ class OciEnterpriseAiConfig:
     vision_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     text_reasoning_effort: str = ""
     vision_reasoning_effort: str = ""
+    text_max_input_tokens: int = GENERATION_INPUT_LIMIT
 
     def for_vision(self) -> OciEnterpriseAiConfig:
         """Vision の呼び出しに使う config(既定の Vision モデルの接続。#533)。"""
@@ -454,6 +464,27 @@ class OciEnterpriseAiClient:
             response_schema_name=response_schema_name,
         )
 
+    def measure_text_input(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str,
+        instruction: str = "",
+        response_schema: Mapping[str, Any] | None = None,
+        response_schema_name: str = "structured_answer",
+    ) -> CompleteInputMeasurement:
+        """このクライアントで実際に使うモデル・接続の入力を、設定値を公開せずに測る。"""
+        return measure_llm_request(
+            self._config,
+            prompt,
+            context,
+            system_prompt=system_prompt,
+            instruction=instruction,
+            response_schema=response_schema,
+            response_schema_name=response_schema_name,
+        )
+
     async def generate_from_image(
         self,
         image_bytes: bytes,
@@ -700,25 +731,83 @@ class OciEnterpriseAiClient:
         Messages API の接続(クォータナリ接続。#5546)は、同じ要求を Messages API で送り、
         Responses API の形の応答を返す(`_post_anthropic_messages`)。
         """
+        return await self._request_enterprise_ai(path, payload, vision=vision)
+
+    async def _request_enterprise_ai(
+        self,
+        path: str,
+        payload: Mapping[str, Any],
+        *,
+        vision: bool,
+        observe_input: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> Mapping[str, Any]:
+        """テキスト要求全体の入力予算と、呼び先が返した使用量を対応付ける。"""
         config = self._vision_config if vision else self._config
-        if config.uses_anthropic_messages:
-            return await _post_anthropic_messages(config, payload)
         transport = self._vision_http_transport if vision else self._http_transport
-        endpoint = _require_value(
-            config.oci_enterprise_ai_endpoint,
-            "OCI Enterprise AI endpoint",
-        )
-        url = _join_endpoint_path(endpoint, path)
         timeout = config.oci_enterprise_ai_timeout_seconds
+        # テキストの入力は、テンプレート・schema・引数を含めて送信する形が決まってから測る。
+        # Vision の Files API で送った PDF の内容をファイル ID の文字数で計数しない。
+        measurement: CompleteInputMeasurement | None = None
+
+        def check_input(wire: Mapping[str, Any]) -> None:
+            nonlocal measurement
+            measurement = complete_input_measurement(
+                wire, limit_tokens=config.text_max_input_tokens
+            )
+            measurement.validate()
+
+        response = None
         try:
-            return await transport.post_json(
+            if config.uses_anthropic_messages:
+                response = await _post_anthropic_messages(
+                    config, payload, check_input=None if vision else check_input
+                )
+                return response
+            endpoint = _require_value(
+                config.oci_enterprise_ai_endpoint, "OCI Enterprise AI endpoint"
+            )
+            url = _join_endpoint_path(endpoint, path)
+            if not vision:
+                check_input(payload)
+            response = await transport.post_json(
                 url,
                 payload,
                 headers=_enterprise_ai_headers(config),
                 timeout=timeout,
             )
+            return response
         except httpx.TimeoutException as exc:
             raise EnterpriseAiTimeoutError("OCI Enterprise AI endpoint", timeout) from exc
+        except httpx.HTTPStatusError as exc:
+            # 呼び先のエラーに usage が含まれる場合も、元の HTTP エラーのまま計測する。
+            if measurement is not None:
+                with contextlib.suppress(ValueError, httpx.ResponseNotRead):
+                    body = exc.response.json()
+                    if isinstance(body, Mapping):
+                        response = body
+            raise
+        except Exception as exc:
+            # Messages API の完了後の検証失敗でも、その呼び出しの実使用量を残す。
+            usage = getattr(exc, "usage", None)
+            if callable(normalize_usage := getattr(usage, "as_responses_usage", None)):
+                response = {"usage": normalize_usage()}
+            raise
+        finally:
+            if measurement is not None:
+                actual = reported_input_tokens(
+                    response.get("usage") if response is not None else None
+                )
+                fields: dict[str, object] = {
+                    "pr.input.estimated_tokens": measurement.estimated_tokens,
+                    "pr.input.limit_tokens": measurement.limit_tokens,
+                    "pr.input.usage_status": measurement.usage_status(actual),
+                }
+                if actual is not None:
+                    fields["gen_ai.usage.input_tokens"] = actual
+                if observe_input is None:
+                    logger.info("llm_input_budget", extra={"event": "llm_input_budget", **fields})
+                else:
+                    observe_input(fields)
 
     async def _post_enterprise_ai_with_schema_retry(
         self,
@@ -745,7 +834,10 @@ class OciEnterpriseAiClient:
 
 
 async def _post_anthropic_messages(
-    config: OciEnterpriseAiConfig, payload: Mapping[str, Any]
+    config: OciEnterpriseAiConfig,
+    payload: Mapping[str, Any],
+    *,
+    check_input: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> Mapping[str, Any]:
     """Responses API の要求を Messages API で送り、Responses API の形の応答を返す(#5546)。
 
@@ -769,6 +861,7 @@ async def _post_anthropic_messages(
             endpoint_url=config.oci_enterprise_ai_endpoint,
             timeout_seconds=timeout,
             max_retries=sdk_max_retries(config),
+            check_input=check_input,
         )
     except AnthropicRequestShapeError as exc:
         raise EnterpriseAiUnsupportedInputError(str(exc)) from exc
@@ -1353,6 +1446,33 @@ def _build_images_text_payload(
             }
         }
     return _with_call_options(payload, effort=config.vision_reasoning_effort)
+
+
+def measure_llm_request(
+    config: OciEnterpriseAiConfig,
+    prompt: str,
+    context: str,
+    *,
+    system_prompt: str,
+    instruction: str = "",
+    response_schema: Mapping[str, Any] | None = None,
+    response_schema_name: str = "structured_answer",
+) -> CompleteInputMeasurement:
+    """generate と同じテンプレート・応答 schema・接続の形式で、送信前の全文を測る。"""
+    payload = _build_llm_payload(
+        config,
+        prompt,
+        context,
+        system_prompt=system_prompt,
+        instruction=instruction,
+        response_schema=response_schema,
+        response_schema_name=response_schema_name,
+    )
+    if config.uses_anthropic_messages:
+        from rag_parser_core.anthropic_responses import measure_messages_input
+
+        return measure_messages_input(payload, limit_tokens=config.text_max_input_tokens)
+    return complete_input_measurement(payload, limit_tokens=config.text_max_input_tokens)
 
 
 def _build_llm_payload(

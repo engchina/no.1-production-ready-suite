@@ -22,6 +22,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from pr_backend_core.bounded_calls import ErrorKind, classify_error, parse_retry_after
+from pr_backend_core.generation_input import CompleteInputMeasurement, complete_input_measurement, reported_input_tokens
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 from pr_backend_core.observability.call_stream import CallStreamCapture
 from pr_backend_core.observability.model_purpose import (
@@ -918,9 +919,9 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 **reasoning,
             }
             wire_request = _response_wire_request(request)
-            if online_policy:
-                from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, request_input_estimate
+            from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, image_input_tokens, request_input_estimate
 
+            if online_policy:
                 # 画像の data URL（base64）は本文として数えず、枚数 × モデルの画像 1 枚の入力 token で数える（#5316）。
                 input_tokens, image_estimate = request_input_estimate(wire_request, provider)
                 room = settings.answer_max_input_tokens - input_tokens
@@ -938,6 +939,36 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     )
                 send_budget = online_output_budget(send_budget, configured=settings.online_max_output_tokens, room=room)
                 wire_request["max_output_tokens"] = send_budget
+            measured: CompleteInputMeasurement | None = None
+
+            def check_input(wire: Mapping[str, Any]) -> None:
+                nonlocal measured
+                measured = complete_input_measurement(
+                    wire,
+                    limit_tokens=settings.answer_max_input_tokens,
+                    image_tokens=image_input_tokens(provider),
+                )
+                observation_attributes(
+                    observation,
+                    {
+                        "pr.input.estimated_tokens": measured.estimated_tokens,
+                        "pr.input.limit_tokens": measured.limit_tokens,
+                        "pr.input.usage_status": "unreported",
+                    },
+                )
+                if not measured.fits:
+                    observation_attributes(observation, {"pr.call.transport_status": "not_sent"})
+                    raise GenerationInputBudgetExceeded(
+                        {
+                            "reason": "final_model_input_exceeds_limit",
+                            "complete_input_limit_tokens": measured.limit_tokens,
+                            "complete_input_estimated_tokens": measured.estimated_tokens,
+                            "fits": False,
+                        }
+                    )
+
+            if not anthropic:
+                check_input({**wire_request, **({"stream": True} if streamed else {})})
             timing: _StreamTiming | None = None
             started = time.monotonic()
             try:
@@ -958,7 +989,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                         capture=capture,
                     )
                 elif anthropic:
-                    response = _anthropic_response(provider, wire_request, settings)
+                    response = _anthropic_response(provider, wire_request, settings, check_input)
                 else:
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
                     # text_format を渡すと SDK が応答の組み立ての中で本文を検証し、上限で切れた応答（未完了）も検証の失敗になって
@@ -968,8 +999,19 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     observation.response(response)
                 observation_attributes(observation, {"pr.call.transport_status": "returned"})
                 usage = _value(response, "usage")
+                if measured is not None:
+                    observation_attributes(observation, {"pr.input.usage_status": measured.usage_status(reported_input_tokens(usage))})
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
+            except GenerationInputBudgetExceeded:
+                raise
             except Exception as exc:
+                failed_body = _failed_usage_body(exc)
+                failed_usage = _value(failed_body, "usage")
+                if measured is not None and failed_usage is not None:
+                    observation_attributes(
+                        observation, {"pr.input.usage_status": measured.usage_status(reported_input_tokens(failed_usage))}
+                    )
+                    observation.usage(failed_usage)
                 observation_attributes(
                     observation,
                     {
@@ -1512,6 +1554,7 @@ def _record_usage(
         seconds,
         provider,
         text_format,
+        reported_input=reported_input_tokens(_value(response, "usage")),
         status="failed" if invalid is not None else status,
         reason=type(invalid).__name__ if invalid is not None else reason,
         failure_details=structured_failure_details(invalid, text_format) if invalid is not None else None,
@@ -1520,6 +1563,14 @@ def _record_usage(
         deadline_capped=deadline_capped,
         timing=timing,
     )
+
+
+def _failed_usage_body(exc: Exception) -> Any:
+    # Messages API の終端時の検証失敗は本体に usage を持ち、cache を含む合計へ正規化できる。
+    normalize = getattr(getattr(exc, "usage", None), "as_responses_usage", None)
+    if callable(normalize):
+        return {"usage": normalize()}
+    return getattr(exc, "body", None)
 
 
 def _record_failed_call(
@@ -1535,16 +1586,18 @@ def _record_failed_call(
 ) -> None:
     """応答が返らなかった呼び出し（timeout・接続の失敗）の秒と理由を残す（#1548）。
 
-    打ち切った呼び出しは usage が返らないので token の数は 0 で、理由（例外の型。timeout は ``APITimeoutError``）を
-    未完了の理由として数える。期限で打ち切った呼び出しが何秒かかっていたかを、工程の記録と log で確かめる。
+    エラー応答に usage があれば記録し、入力の使用量が未報告ならその件数を残す。
+    期限で打ち切った呼び出しが何秒かかっていたかを、工程の記録と log で確かめる。
     無音で打ち切った呼び出し（#1926）の理由は `stall_idle`（event が来ない）。
     """
-    usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+    body = _failed_usage_body(exc)
+    usage = response_usage(body)
     _log_call(
         usage,
         seconds,
         provider,
         text_format,
+        reported_input=reported_input_tokens(_value(body, "usage")),
         status="failed",
         reason=exc.reason
         if isinstance(exc, LlmStreamStalled)
@@ -1579,6 +1632,7 @@ def _log_call(
     provider: LlmProviderSettings,
     text_format: type,
     *,
+    reported_input: int | None,
     status: str,
     reason: str,
     attempt: int,
@@ -1591,6 +1645,7 @@ def _log_call(
     record_llm_usage(
         {
             **usage,
+            "unreported_input_calls": int(reported_input is None),
             "seconds": seconds,
             **({"incomplete_reason": reason} if reason else {}),
             **({"streamed": True, **stream} if timing is not None else {}),
@@ -1598,13 +1653,13 @@ def _log_call(
     )
     # backend の構造化 log は、外部の logger の本文を出さず extra の項目だけを残すので、値は extra で渡す。
     _logger.info(
-        "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%d cached_tokens=%d output_tokens=%d "
+        "LLM の呼び出し: model=%s schema=%s seconds=%.1f input_tokens=%s cached_tokens=%d output_tokens=%d "
         "reasoning_tokens=%d status=%s incomplete_reason=%s attempt=%d max_output_tokens=%s deadline_capped=%s "
         "first_event_seconds=%s delta_rate=%s max_gap_seconds=%s",
         provider.model,
         getattr(text_format, "__name__", str(text_format)),
         seconds,
-        usage["input_tokens"],
+        reported_input if reported_input is not None else "-",
         usage["cached_tokens"],
         usage["output_tokens"],
         usage["reasoning_tokens"],
@@ -1629,6 +1684,7 @@ def _log_call(
             **({"llm_deadline_capped": True} if deadline_capped else {}),
             **{f"llm_{key}": value for key, value in stream.items()},
             **usage,
+            "input_tokens": reported_input,
         },
     )
 
@@ -1697,7 +1753,9 @@ def _parse_openai_multimodal_once[StructuredOutputT: BaseModel](
     )
 
 
-def _anthropic_response(provider: LlmProviderSettings, request: dict[str, Any], settings: Settings) -> dict[str, Any]:
+def _anthropic_response(
+    provider: LlmProviderSettings, request: dict[str, Any], settings: Settings, check_input: Callable[[Mapping[str, Any]], None]
+) -> dict[str, Any]:
     """Responses API の wire の要求を Messages API で 1 回送り、Responses API の形の応答を返す（#5546）。
 
     1 回の待ちは LLM 1 回の timeout と回答の期限の残りの短いほう（`_openai_client_with_deadline` と同じ）。SDK の再試行は
@@ -1717,6 +1775,7 @@ def _anthropic_response(provider: LlmProviderSettings, request: dict[str, Any], 
         endpoint_url=provider.base_url,
         timeout_seconds=max(0.001, timeout),
         max_retries=0,
+        check_input=check_input,
     )
 
 

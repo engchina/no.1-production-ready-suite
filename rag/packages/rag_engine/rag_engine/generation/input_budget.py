@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
+from openai.lib._pydantic import _ensure_strict_json_schema
+from pr_backend_core.generation_input import complete_input_measurement
 from pr_backend_core.output_budget import online_output_budget
+from pr_backend_core.response_schema import with_schema_field_guide
 from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS, without_image_inputs
+from rag_parser_core.model_api import uses_anthropic_messages
 
 from rag_engine.config import LlmProviderSettings, Settings, get_settings
 from rag_engine.generation.section_expansion import estimate_tokens
@@ -50,6 +55,26 @@ def request_input_estimate(request: Mapping[str, Any], provider: LlmProviderSett
     return estimate_tokens(json.dumps(stripped, ensure_ascii=False)) + images.get("estimated_image_tokens", 0), images
 
 
+def _complete_text_request(
+    system: str, prompt: str, schema: Mapping[str, Any], provider: LlmProviderSettings | None, reserve: int
+) -> dict[str, Any]:
+    # Responses SDK と同じ strict schema と項目の説明を用いる。stream の真偽は最終送信でも確かめる。
+    copy = deepcopy(dict(schema))
+    strict = _ensure_strict_json_schema(copy, path=(), root=copy)
+    instructions, compact = with_schema_field_guide(system, strict)
+    request = {
+        "model": provider.model if provider else "",
+        "input": [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}],
+        "text": {"format": {"type": "json_schema", "strict": True, "name": schema.get("title", "StructuredOutput"), "schema": compact}},
+        "max_output_tokens": reserve,
+        "temperature": 0.0,
+        "stream": True,
+    }
+    if provider and provider.reasoning_effort:
+        request["reasoning"] = {"effort": provider.reasoning_effort}
+    return request
+
+
 def model_input_measurement(
     settings: Settings | None,
     system: str,
@@ -75,6 +100,20 @@ def model_input_measurement(
     )
     images = image_diagnostic(provider, image_count)
     tokens = estimate_tokens(encoded) + images.get("estimated_image_tokens", 0)
+    payload = _complete_text_request(system, prompt, schema, provider, reserve)
+    if provider is not None and uses_anthropic_messages(getattr(provider, "model_api", "")):
+        from rag_parser_core.anthropic_responses import measure_messages_input
+
+        complete = measure_messages_input(
+            payload,
+            limit_tokens=settings.answer_max_input_tokens,
+            image_tokens=image_input_tokens(provider),
+            external_tokens=images.get("estimated_image_tokens", 0),
+        )
+    else:
+        complete = complete_input_measurement(
+            payload, limit_tokens=settings.answer_max_input_tokens, external_tokens=images.get("estimated_image_tokens", 0)
+        )
     return {
         "model_input_limit_tokens": settings.answer_max_input_tokens,
         "output_reserved_tokens": reserve,
@@ -82,7 +121,9 @@ def model_input_measurement(
         "estimated_input_tokens": tokens,
         "token_count_method": "estimated_ascii_quarter_non_ascii_one",
         **images,
-        "fits": tokens <= limit,
+        "complete_input_limit_tokens": complete.limit_tokens,
+        "complete_input_estimated_tokens": complete.estimated_tokens,
+        "fits": tokens <= limit and complete.fits,
     }
 
 
