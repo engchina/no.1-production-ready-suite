@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
@@ -200,8 +200,9 @@ class WikiFilePlan(WikiModel):
 
 
 class WikiReadPlan(WikiModel):
-    """読む原文単位と章節の選択。ID は要求内の短いハンドル。"""
+    """質問で指定された起点と、広く検索するときの単位・章節の候補。"""
 
+    root_unit_ids: list[str] | None
     unit_ids: list[str]
     section_ids: list[str]
 
@@ -216,5 +217,8 @@ def scoped_plan[T: WikiModel](
     definitions: dict[str, Any] = {}
     for name, (values, limit) in fields.items():
         allowed: Any = Literal.__getitem__(tuple(sorted(set(values)))) if values else str
-        definitions[name] = (list[allowed], Field(max_length=limit if values else 0))
+        choices: Any = Annotated[list[allowed], Field(max_length=limit if values else 0)]
+        if type(None) in get_args(base.model_fields[name].annotation):
+            choices = choices | None
+        definitions[name] = (choices, ...)
     return create_model(base.__name__ + "Scoped", __base__=base, **definitions)

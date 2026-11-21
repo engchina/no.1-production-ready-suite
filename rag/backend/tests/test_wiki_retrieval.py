@@ -88,9 +88,7 @@ class Store:
         return [
             row
             for row in self.link_rows
-            if (row[0] in unit_ids or row[1] in unit_ids)
-            and row[0] in self.by_id
-            and row[1] in self.by_id
+            if row[0] in unit_ids and row[0] in self.by_id and row[1] in self.by_id
         ]
 
     async def resolve(self, filters: dict[str, str]) -> WikiScope:
@@ -145,6 +143,7 @@ class Store:
 
 class Llm:
     def __init__(self, files: list[str], units: list[str] = (), sections: int = 0) -> None:  # type: ignore[assignment]
+        self.roots: list[str] | None = None
         self.files, self.units, self.sections = files, list(units), sections
         self.inputs: list[dict[str, Any]] = []
 
@@ -162,6 +161,9 @@ class Llm:
         units = {u["context"]: u["unit_id"] for u in payload["units"]}
         return json.dumps(
             {
+                "root_unit_ids": None
+                if self.roots is None
+                else [units[f"{name} の案内"] for name in self.roots],
                 "unit_ids": [units[f"{name} の案内"] for name in self.units],
                 "section_ids": [s["section_id"] for s in payload["sections"][: self.sections]],
             }
@@ -335,13 +337,13 @@ def _units(result: Any) -> list[str]:
         ),
     ],
 )
-async def test_links_are_followed_both_ways_up_to_the_configured_depth(
+async def test_outgoing_links_are_followed_up_to_the_configured_depth(
     depth: int, expected: set[str], hops: list[dict[str, int]]
 ) -> None:
-    """入る向きの関連（通知 c1 → 本文 a2）も辿り、段数の設定で 2 段目（c1 → d1）まで読む。"""
+    """出る向きの関連（a2 → c1）を辿り、2 段のときだけ c1 → d1 を読む。"""
     store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
     store.link_rows = [
-        ("doc-c-c1", "doc-a-a2", "exception"),
+        ("doc-a-a2", "doc-c-c1", "exception"),
         ("doc-c-c1", "doc-d-d1", "reference"),
     ]
     result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=depth)).search(
@@ -356,12 +358,72 @@ async def test_links_are_followed_both_ways_up_to_the_configured_depth(
         assert not [call for call in store.calls if call[0] == "links"]
 
 
+@pytest.mark.parametrize(
+    ("depth", "roots", "expected", "links_read"),
+    [
+        (0, ["a2"], ["doc-a-a2"], []),
+        (1, ["a2"], ["doc-a-a2", "doc-a-a4"], [("doc-a-a2",)]),
+        (2, ["a2"], ["doc-a-a2", "doc-a-a4", "doc-b-b1"], [("doc-a-a2",), ("doc-a-a4",)]),
+        (1, ["a2", "a4"], ["doc-a-a2", "doc-a-a4", "doc-b-b1"], [("doc-a-a2", "doc-a-a4")]),
+        (
+            1,
+            ["a2", "a3"],
+            ["doc-a-a2", "doc-a-a3", "doc-a-a4", "doc-b-b1"],
+            [("doc-a-a2", "doc-a-a3")],
+        ),
+        (1, ["b1"], ["doc-b-b1"], [("doc-b-b1",)]),
+        (1, [], [], []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_only_question_roots_start_at_depth_zero(
+    depth: int, roots: list[str], expected: list[str], links_read: list[tuple[str, ...]]
+) -> None:
+    # 同文書の a2 → a4、別文書への a4 → b1。全単位・章節を選択候補に残す。
+    store = Store(PAGES)
+    store.link_rows = [("doc-a-a4", "doc-b-b1", "reference"), ("doc-a-a3", "doc-b-b1", "reference")]
+    llm = Llm(["文書A", "文書B"], units=["a2", "a4", "b1"], sections=2)
+    llm.roots = roots
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=depth)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    assert _units(result) == expected
+    assert [chunk.chunk_id for chunk in result.chunks] == [f"{uid}-chunk" for uid in expected]
+    assert [value for name, value in store.calls if name == "links"] == links_read
+
+
+@pytest.mark.parametrize(
+    ("depth", "link_chunks"),
+    [(1, ["doc-b-b1-chunk"]), (2, ["doc-b-b1-chunk", "doc-c-c1-chunk"])],
+)
+@pytest.mark.asyncio
+async def test_reference_target_selected_by_both_plans_keeps_its_distance(
+    depth: int, link_chunks: list[str]
+) -> None:
+    store = Store(LINKED)
+    store.link_rows = [
+        ("doc-a-a1", "doc-b-b1", "reference"),
+        ("doc-b-b1", "doc-c-c1", "reference"),
+    ]
+    llm = Llm(["文書A", "文書B"], units=["a1", "b1"])
+    llm.roots = ["a1"]
+    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=depth)).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    assert result.trace["source_chunk_ids_by_origin"] == {
+        "selected": ["doc-a-a1-chunk"],
+        "dependency": [],
+        "link": link_chunks,
+    }
+    assert result.trace["source_chunk_ids"] == ["doc-a-a1-chunk", *link_chunks]
+
+
 @pytest.mark.asyncio
 async def test_budget_keeps_exceptions_and_prerequisites_before_references() -> None:
     store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
     store.link_rows = [
         ("doc-a-a2", "doc-c-c1", "reference"),
-        ("doc-d-d1", "doc-a-a2", "prerequisite"),
+        ("doc-a-a2", "doc-d-d1", "prerequisite"),
     ]
     result = await retriever(store, llm, settings=Settings(rag_wiki_link_max_units=2)).search(
         QUESTION, profile_id="p", filters={}, timeout=None
@@ -602,7 +664,7 @@ WIKI_STAGES = [
 async def test_trace_lists_the_source_chunk_ids_by_origin_and_the_stage_seconds() -> None:
     """根拠に渡した原文の chunk ID と、選んだ単位・依存・関連ごとの chunk ID を記録に残す。"""
     store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
-    store.link_rows = [("doc-c-c1", "doc-a-a2", "exception")]
+    store.link_rows = [("doc-a-a2", "doc-c-c1", "exception")]
     seconds: dict[str, float] = {}
     result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=1)).search(
         QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
