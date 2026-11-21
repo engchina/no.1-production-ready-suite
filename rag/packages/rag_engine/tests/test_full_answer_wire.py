@@ -510,3 +510,18 @@ def test_literal_replacement_character_requires_matching_cited_line():
         else:
             assert len(calls) == 2
             assert "回答を生成できませんでした。" in response.answer_text
+
+
+def test_table_cell_citation_keeps_the_value_without_a_second_explanation():
+    """表の値に直接引用を付けても本文と引用先を保ち、説明文の追加を要しない。"""
+    units, unit = catalog()
+    body = f"| 項目 | 値 |\n|---|---|\n| 入力電圧 | 12 V[{unit}] |"
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+    draft = canonical_full_answer(wire, units)
+    checked, dropped = grounded.verify("入力電圧は？", draft, [units.snapshots[0].span()])
+    rendered = render_full_answer(draft, checked)
+    assert dropped == []
+    assert rendered.text.count("12 V") == 1
+    assert "| 入力電圧 | 12 V" in rendered.text
+    assert len(rendered.citation_lines) == 1
+    assert rendered.citation_lines[0]["scope_source_ids"] == ["child-a"]

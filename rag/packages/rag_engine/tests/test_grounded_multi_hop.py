@@ -104,7 +104,9 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     assert "各出典が text 全体を単独で支える必要はない" in citations
     assert "実際に指定していない原文で不足を補わない" in citations
     assert "重複する item をまとめ" not in generate
-    assert "同じ説明を反復しない" in generate
+    from rag_engine.generation.full_answer_wire import FullAnswerWire
+
+    assert "同じ説明は一度だけ" in FullAnswerWire.model_fields["answer_body"].description
     relation = RequestEvidenceScopeRange.model_json_schema()["properties"]["relation"]["description"]
     plan_ids = RequestCoverageRange.model_json_schema()["properties"]["evidence_scope"]["description"]
     assert "直接答える" not in relation + plan_ids
