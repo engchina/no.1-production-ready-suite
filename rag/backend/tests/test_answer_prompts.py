@@ -108,6 +108,9 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     ]
     assert initial["stages"][0]["phase"] == "ingestion"
     assert initial["stages"][-1]["phase"] == "evaluation"
+    phases = {stage["id"]: stage["phase"] for stage in initial["stages"]}
+    assert phases["wiki_build"] == phases["wiki_links"] == "ingestion"
+    assert {"wiki_files", "wiki_units"}.isdisjoint(phases)
     assert saved.status_code == 200
     assert _prompt(saved.json()["data"], ROLE_KEY)["content"] == CUSTOM_ROLE
     assert _prompt(saved.json()["data"], ROLE_KEY)["customized"] is True

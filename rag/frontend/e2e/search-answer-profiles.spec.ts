@@ -391,6 +391,9 @@ test("Wiki の使用は既定 OFF の単一スイッチで保存・再表示す�
   const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(toggle).toHaveAccessibleDescription(/既定値は OFF です/);
+  await expect(toggle).toHaveAccessibleDescription(/公開済み Wiki の索引とリンク/);
+  await expect(toggle).toHaveAccessibleDescription(/Wiki の検索でファイルや章節を選ぶ生成モデルの呼び出しは 0 回/);
+  await expect(toggle).toHaveAccessibleDescription(/RAG 検索と rag_search は ON の場合も通常検索だけ/);
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
   for (const enabled of [true, false]) {
     await toggle.click();

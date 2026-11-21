@@ -1799,7 +1799,7 @@ export const ja = {
     "既定値は OFF です。ON にすると、チャット・品質評価・MCP で質問に合う業務ガイドを選び、その条件と手順に沿って回答します。OFF のときは業務ガイドを使用しません。RAG 検索では業務ガイドを使用しません。",
   "searchAnswerProfiles.field.wikiSearch": "Wiki を使用する",
   "searchAnswerProfiles.field.wikiSearchHelper":
-    "既定値は OFF です。ON にすると、ナレッジベースで「Wiki を自動構築する」を有効にした準備済みの文書から、通常の検索とは別に質問に要るファイルと章節を回答のモデルで選び、その原文を回答の根拠に加えます（AI の呼び出しが最大 2 回増えます）。Wiki の案内そのものは根拠にしません。準備ができていないときや失敗したときは、通常の検索の根拠だけで回答します。規則・例外・手順が複数の文書に分かれている KB で必要な文書の取りこぼしを減らせますが、回答までの時間は長くなります。",
+    "既定値は OFF です。ON にすると、RAG チャット、品質評価の「チャット」、rag_chat が公開済み Wiki の索引とリンクを使い、関連する原文を回答の根拠に加えます。Wiki の検索でファイルや章節を選ぶ生成モデルの呼び出しは 0 回です。Wiki を利用できないときは通常検索の根拠を使います。RAG 検索と rag_search は ON の場合も通常検索だけを使います。",
   "searchAnswerProfiles.field.guideStepRetrieval": "業務ガイドの手順ごとに探す",
   "searchAnswerProfiles.field.guideStepRetrievalHelper":
     "質問に業務ガイドが当たったとき、ガイドの手順ごとに検索の手がかりで探し、手順が参照する資料の頁の根拠を回答の材料に加えます。AI の呼び出しは増えませんが、手順ごとに数秒かかります。継承時は検索方法の現在の設定を使います。RAG チャットと品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
@@ -3801,12 +3801,6 @@ export const ja = {
   "settings.answerPrompts.stage.reference_sections": "参照先の文書の目次から読む章節を選ぶ",
   "settings.answerPrompts.stage.reference_sections.condition":
     "検索の根拠が文書名・ファイル名だけで別の文書の全体を参照しているとき（参照先が複数でも 1 回）。目次が無い文書や章節を選べなかったときは文書の全体を読みます",
-  "settings.answerPrompts.stage.wiki_files": "Wiki の目録から読むファイルを選ぶ",
-  "settings.answerPrompts.stage.wiki_files.condition":
-    "検索・回答プロファイルの「Wiki を使用する」を有効にしたとき、回答で 1 回。準備済みの Wiki が無いときは使いません",
-  "settings.answerPrompts.stage.wiki_units": "Wiki の単位・章節から読む原文を選ぶ",
-  "settings.answerPrompts.stage.wiki_units.condition":
-    "Wiki の目録から読むファイルを選んだとき、続けて 1 回",
   "settings.answerPrompts.stage.outline_sections": "起点の文書の目次から読む章節を選ぶ",
   "settings.answerPrompts.stage.outline_sections.condition":
     "検索方法の「起点の文書の目次から章節をモデルが選ぶ」を有効にしたとき、回答で 1 回。章節の木を持つ文書が無いときや、回答の期限の残りが足りないときは使いません",
