@@ -1,5 +1,7 @@
 """合成の同じ本文を、引用と種別の違いで書き換えない。"""
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -680,6 +682,43 @@ def test_only_a_repeated_row_note_is_removed_from_a_list_of_numeric_values(scope
     assert render(["項目", "答え"]).splitlines()[-1] == f"| 設定 ({scope}) | {expected}{marks} |"
     assert render([]) == short_answer + marks
     assert render(["答え"]).splitlines()[-1] == f"| {short_answer}{marks} |"
+
+
+@pytest.mark.parametrize(
+    ("first", "repaired", "expected", "calls_expected"),
+    [
+        ("左12、右0（共通）", (), "左12、右0", 1),
+        ("左12、右0（転記した値）", ("左12、右0",), "左12、右0", 2),
+        ("左12、右0（予備時のみ）", ("左12", "右0（予備時のみ）"), "右0（予備時のみ）", 2),
+        ("左12、右0（予備時のみ）", ("左12、右0（予備時のみ）",), "左12、右0（予備時のみ）", 2),
+    ],
+)
+def test_number_list_uses_existing_retry_and_keeps_conditions_on_the_last_attempt(first, repaired, expected, calls_expected):
+    from test_answer_flow_single_generation import _run_traced, context, record
+
+    source = "合成の表。左は12、右は予備時に限り0。"
+    answers = iter([(first,), repaired])
+
+    def reply(units):
+        facts = [
+            {
+                "text": source,
+                "answers_which_question": "左右の値は？",
+                "requested_phrase": "左右の値",
+                "short_answer": text,
+                "sources": [f"[{units[source]}]"],
+            }
+            for text in next(answers)
+        ]
+        body = {"headers": ["項目", "値"], "rows": [{"label": "表の数値（共通）", "cells": [facts]}]}
+        return {"answer_body": body, "response_kind": "answered", "confidence": "high"}
+
+    response, calls, prompts = _run_traced("左右の値は？", context(record(0, source, "合成表")), reply)
+    assert len(calls) == calls_expected
+    assert expected in response.answer_text and response.generation_trace["citation_lines"]
+    if calls_expected == 2:
+        step = prompts[1].removeprefix(prompts[0])
+        assert "数値の組と注記を分ける" in step and json.dumps(first, ensure_ascii=False) in step
 
 
 def test_unresolved_cell_contains_its_reason_and_rejects_unrelated_facts():
