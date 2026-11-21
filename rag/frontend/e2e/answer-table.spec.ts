@@ -303,8 +303,8 @@ test.describe("回答の本文の表（issue 4734・4812・4822・5489）", { ta
     await expect(table.getByRole("columnheader", { name: "出典" })).toBeVisible();
     const marks = table.getByTestId("answer-source-mark");
     await expect(marks).toHaveText(["[1]", "[1]", "[2]"]);
-    // 表の下の根拠の行は番号の印の順（回答エンジンが振った番号）。
-    await expect(answer.getByTestId("answer-citation-marker")).toHaveText(["[1]", "[2]"]);
+    // 表の下の番号は表の印と対応し、後ろの節でも同じ根拠には同じ番号を付ける。
+    await expect(answer.getByTestId("answer-citation-marker")).toHaveText(["[1]", "[2]", "[1]", "[1]", "[1]"]);
 
     // 印を押すと、その番号の根拠の原文をそのまま開く（#4822）。閉じると印へフォーカスが戻る。
     const second = table.getByRole("link", { name: "[2] の原文を開く" });
@@ -342,7 +342,7 @@ test.describe("回答の本文の表（issue 4734・4812・4822・5489）", { ta
 
     // 表の下の根拠の行と、項目・結論の根拠の行は今までどおり押せる。
     await expect(answer.getByRole("button", { name: "[2] 根拠：文書 B.pdf p.5 の原文を開く" })).toBeVisible();
-    await expect(answer.getByRole("button", { name: "根拠：文書 A.pdf p.3 の原文を開く", exact: true })).toHaveCount(3);
+    await expect(answer.getByRole("button", { name: "[1] 根拠：文書 A.pdf p.3 の原文を開く", exact: true })).toHaveCount(4);
   });
   test("根拠の行の番号は段落と表をまたいだ通し番号で、表の印は最初に出る根拠の行の原文を開く", async ({ page }, testInfo) => {
     const answer = await ask(page, NUMBERED_ANSWER, "文書 A.pdf", [

@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from "./fixtures/test";
 
-export const itemCitationText = "資料により確認できた事項\n\n・合成の説明 A。\n根拠：document-a.pdf p.1\n・合成の説明 B。\n根拠：document-a.pdf p.1\n・合成の説明 C。\n根拠：document-a.pdf p.1\n・合成の説明 D。\n根拠：document-a.pdf p.1";
+export const itemCitationText = "合成の要約。\n根拠：document-b.pdf p.2\n\n資料により確認できた事項\n\n・合成の説明 A。\n根拠：document-a.pdf p.1\n・合成の説明 B。\n根拠：document-a.pdf p.1\n・合成の説明 C。\n根拠：document-a.pdf p.1\n・合成の説明 D。\n根拠：document-a.pdf p.1";
 export const itemCitationChunks = ["A", "B"].map((letter, index) => ({
   document_id: "document-a",
   chunk_id: `chunk-${letter.toLowerCase()}`,
@@ -11,8 +11,8 @@ export const itemCitationChunks = ["A", "B"].map((letter, index) => ({
   category_name: null,
   metadata: {
     page_start: 1,
-    answer_citation_lines: index === 0 ? [1, 3, 4] : [2, 3],
-    answer_citation_candidate_lines: index === 1 ? [4] : [],
+    answer_citation_lines: index === 0 ? [2, 4, 5] : [3, 4],
+    answer_citation_candidate_lines: index === 1 ? [5] : [],
     answer_citation_provenance: "child",
     evidence_model_used: true,
     evidence_answer_use: "confirmed",
@@ -20,6 +20,7 @@ export const itemCitationChunks = ["A", "B"].map((letter, index) => ({
 }));
 
 export async function expectItemCitationSources(page: Page, answer: Locator) {
+  await expect(answer.getByTestId("answer-citation-marker")).toHaveText(["[1]", "[2]", "[2]", "[2]", "[2]"]);
   const rows = answer.getByRole("listitem");
   await expect(rows).toHaveCount(4);
   await expect(rows.nth(0).getByRole("button")).toHaveCount(1);
