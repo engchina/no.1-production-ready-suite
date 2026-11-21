@@ -23,9 +23,10 @@ class RequestRowRepair:
     def _candidates(self, body: AnswerTableBody) -> dict[str, dict[str, Any]]:
         if len(body.headers) < 2 or not any(isinstance(cell, EvidenceGap) for row in body.rows for cell in row.cells):
             return {}
+        omitted, _ = body.shared_scope_sources(self.question)
         candidates = {}
         for i, row in enumerate(body.rows, 1):
-            if any(isinstance(cell, EvidenceGap) for cell in row.cells):
+            if i - 1 in omitted or any(isinstance(cell, EvidenceGap) for cell in row.cells):
                 continue
             facts = [fact for cell in row.cells if isinstance(cell, list) for fact in cell]
             if not facts or any(not isinstance(fact, AnswerFact) for fact in facts):

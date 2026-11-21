@@ -4,6 +4,30 @@ import pytest
 from test_answer_flow_single_generation import _run_traced, context, record
 
 
+def test_scope_already_shown_on_another_row_does_not_consume_a_retry():
+    source = "当日は規格2で左12、右0。実測値は未記載。"
+    question = "当日の左右の設定値と実測値は？"
+
+    def reply(units):
+        ref = f"[{units[source]}]"
+
+        def fact(asked, phrase, answer):
+            return {"text": source, "answers_which_question": asked, "requested_phrase": phrase, "short_answer": answer, "sources": [ref]}
+
+        rows = [
+            {"label": "適用規格（当日）", "cells": [[fact("適用する規格は？", "当日の", "規格2")]]},
+            {"label": "左右の設定値（規格2・通常）", "cells": [[fact("左右の設定値は？", "左右の設定値", "左12、右0")]]},
+            {"label": "実測値", "cells": [{"requested_phrase": "実測値", "missing_input": "測定結果", "sources": [ref]}]},
+        ]
+        body = {"headers": ["項目", "値"], "gap_wording": "{missing}が必要", "rows": rows}
+        return {"answer_body": body, "response_kind": "conditional", "confidence": "high"}
+
+    response, calls, _ = _run_traced(question, context(record(0, source, "合成表")), reply)
+    assert len(calls) == 1
+    assert response.answer_text.count("規格2") == 1 and "測定結果が必要" in response.answer_text
+    assert response.generation_trace["citation_lines"]
+
+
 @pytest.mark.parametrize("decision", ["除外", "保持", "不明な番号", "応答なし", "明示要求"])
 def test_review_removes_only_a_confirmed_unrequested_row(decision):
     source = "設計値は低温時のみ12Ω。材質は銅。実測値は未記載。"

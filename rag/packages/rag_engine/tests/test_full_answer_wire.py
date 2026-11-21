@@ -651,6 +651,48 @@ def test_same_short_answer_in_one_cell_keeps_both_sources_and_other_rows():
 
 
 @pytest.mark.parametrize(
+    ("question", "identifier", "scope", "source", "fold"),
+    [
+        ("基準日は当日。左右の設定値を教えて。", "規格2", "規格2・通常", "[E1.2]", True),
+        ("基準日は当日。規格と左右の設定値を教えて。", "規格2", "規格2・通常", "[E1.2]", False),
+        ("基準日は当日。左右の設定値を教えて。", "規格2", "規格20・通常", "[E1.2]", False),
+        ("基準日は当日。左右の設定値を教えて。", "規格2（予備時）", "規格2・通常", "[E1.2]", False),
+        ("基準日は当日。左右の設定値を教えて。", "規格2", "規格2・通常", "[E2.2]", False),
+    ],
+)
+def test_scope_identifier_is_shown_with_its_source_on_the_applicable_row(question, identifier, scope, source, fold):
+    from rag_engine.generation.full_answer_wire import AnswerTableBody
+
+    chosen = {
+        "text": "当日は規格2を適用。",
+        "sources": ["[E1.1]"],
+        "answers_which_question": "適用する規格は？",
+        "requested_phrase": "基準日は当日",
+        "short_answer": identifier,
+    }
+    values = {
+        "text": f"{scope}では左12、右0。",
+        "sources": [source],
+        "answers_which_question": "左右の設定値は？",
+        "requested_phrase": "左右の設定値",
+        "short_answer": "左12、右0（予備時のみ）",
+    }
+    rows = [{"label": "適用する規格（当日）", "cells": [[chosen]]}, {"label": f"左右（{scope}）", "cells": [[values]]}]
+    table = AnswerTableBody.model_validate({"headers": ["項目", "値"], "rows": rows})
+    answer = table.markdown(question)
+    assert ("適用する規格（当日）" not in answer) is fold
+    assert f"左12、右0（予備時のみ）{source}" in answer
+    assert answer.count("[E1.1]") == 1
+    if fold:
+        assert f"左右（{scope}）[E1.1]" in answer
+        ambiguous = table.model_copy(update={"rows": [*table.rows, table.rows[1]]})
+        assert "適用する規格（当日）" in ambiguous.markdown(question)
+        other_day = table.rows[0].model_copy(update={"label": "適用する規格（翌日）"})
+        assert "適用する規格（翌日）" in table.model_copy(update={"rows": [other_day, table.rows[1]]}).markdown(question)
+    assert table.rows[1].label == f"左右（{scope}）"
+
+
+@pytest.mark.parametrize(
     ("scope", "short_answer", "expected"),
     [
         ("A2・B", "左12、右0（A2・B）", "左12、右0"),
