@@ -316,6 +316,7 @@ test("文書 → 章節 → 原文単位を段階的に開き、関係を矢印�
   await expect(graph.locator(".react-flow__edge-path[marker-end]").first()).toBeAttached();
   // 凡例は関係の種類をアイコンと文字で示し、押すとその種類の線を隠す。
   const legend = page.getByTestId("wiki-graph-legend");
+  await expect(legend.getByRole("button")).toHaveText(["前提", "例外", "警告", "続く手順", "完了の条件", "参照"]);
   await expect(legend.getByRole("button", { name: "例外" }).locator("svg")).toBeAttached();
   await legend.getByRole("button", { name: "例外" }).click();
   await expect(labels.filter({ hasText: "例外" })).toHaveCount(0);
