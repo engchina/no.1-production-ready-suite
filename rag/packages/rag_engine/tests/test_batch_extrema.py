@@ -89,12 +89,12 @@ def test_plan_runs_only_once_after_input_overflows(kind):
     assert bool(extrema.result) == (kind in {"mixed", "calculation"})
     assert bool(prompts) == (kind in {"ordinary", "mixed"})
     if kind == "mixed":
-        assert all(json.loads(q) == {"original_question": QUESTION, "remaining_request": "理由"} for q in prompts)
+        assert all(q == "理由" for q in prompts)
 
 
 @pytest.mark.parametrize("mode", ["only", "explanation", "missing_explanation"])
 def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanation(mode):
-    from test_batched_evidence import finding
+    from test_batched_evidence import finding, reading
     from test_generation_document_background import deps, first_chunk, record
 
     from rag_engine.dependencies import bind_dependencies
@@ -103,7 +103,8 @@ def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanat
     from rag_engine.retrieval.metadata_context import document_context_key
 
     base = record()
-    head = first_chunk(base, text="R1 = 5;\n比較前に検査したためです。")
+    reason = "比較前に検査したためです。"
+    head = first_chunk(base, text="R1 = 5;\n" + ("記録の先頭。" if mode == "missing_explanation" else reason))
     records = [
         replace(base, id=f"id{i}", chunk_uid=f"id{i}", chunk_id=f"id{i}", seq_no=i, chunk_seq=i, text=f"R{i} = {i};\n" + "補足資料。" * 360)
         for i in range(2, 6)
@@ -116,13 +117,19 @@ def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanat
             return PLAN.model_copy(update={"remaining_request": "" if mode == "only" else "理由"})
         if schema.__name__ == "BatchReading":
             values = json.loads(user)["evidence"]
-            return schema.model_validate({"findings": [finding(values[0], first=2, answer="比較前に検査したためです。")]})
+            assert json.loads(user)["question"] == "理由"
+            assert getattr(schema, "_select_only", False)
+            return reading(schema, findings=[finding(values[0], first=2), finding(values[-1])] if mode == "explanation" else [])
         assert "理由" in user
         if mode == "missing_explanation":
             return schema.model_validate(
                 {"answer_body": "資料に理由がありません。", "response_kind": "insufficient_evidence", "confidence": "low"}
             )
-        return schema.model_validate({"answer_body": "比較前に検査したためです。[E1]", "response_kind": "answered", "confidence": "high"})
+        assert reason in user
+        claims = json.loads(user.split("原文で照合済みの局所回答と引用番号\nBEGIN_UNTRUSTED_RETRIEVED_CONTEXT\n")[1].split("\n")[0])
+        refs = [claim["references"][0] for claim in claims if claim["answer"] == reason]
+        assert len(refs) == 1
+        return schema.model_validate({"answer_body": f"{reason}[{refs[0]}]", "response_kind": "answered", "confidence": "high"})
 
     scope = document_context_key(base)
     io = replace(deps(lambda **kw: [{"document_scope": list(scope), "first_chunk": head}]), parse_text=model)
@@ -136,7 +143,10 @@ def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanat
     if mode == "only":
         assert calls == ["BatchPlan"]
     if mode == "explanation":
-        assert "比較前に検査したためです。" in response.answer_text
+        assert reason in response.answer_text
+        assert response.generation_trace["generation_input_budget"]["partial_answer_synthesis"]
+        assert any(reason == fact["quote"] for fact in response.evidence_facts)
+        assert response.answer_text.count("| 1–2 | 5 |") == 1
     if mode == "missing_explanation":
         assert "確認できませんでした" in response.answer_text
 
