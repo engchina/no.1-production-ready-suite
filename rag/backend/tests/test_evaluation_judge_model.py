@@ -212,7 +212,7 @@ async def test_judge_model_is_kept_when_judge_fails() -> None:
 def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
     """判定の LLM の決定論スタブ。呼ばれた (schema, model, endpoint, 入力の上限) を記録する。"""
     from rag_engine.config import get_llm_provider
-    from rag_engine.evaluation.answer_eval import SourceCheckedJudgement
+    from rag_engine.evaluation.answer_eval import AnswerCorrectnessOutput
 
     def fake(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         provider = get_llm_provider(
@@ -221,31 +221,20 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
         calls.append(
             (schema.__name__, provider.model, provider.endpoint, settings.answer_max_input_tokens)
         )
-        assert schema is SourceCheckedJudgement, f"unexpected schema: {schema.__name__}"
+        assert schema is AnswerCorrectnessOutput, f"unexpected schema: {schema.__name__}"
         inputs = json.loads(prompt)
-        first_answer = inputs["actual_responses"][0]["answer"][0]
-        quote = {"passage_id": first_answer["id"], "quote": first_answer["text"]}
-        return schema.model_validate(
+        return AnswerCorrectnessOutput.model_validate(
             {
-                "standard_availability": [],
-                "source_gaps": [],
-                "factual_claims": [
+                "claims": [
                     {
                         "claim": "合成の主張",
                         "answer_ids": ["A1"],
+                        "states_source_gap": False,
                         "consistent": True,
                         "standard_ids": ["S1"],
                     }
                 ],
-                "points": [
-                    {
-                        "point_id": p["id"],
-                        "target_kind": "value",
-                        "evidence_role": "value",
-                        "answer_evidence": [quote],
-                    }
-                    for p in inputs["points"]
-                ],
+                "points": [{"point_id": p["id"], "covered": True} for p in inputs["points"]],
             }
         )
 

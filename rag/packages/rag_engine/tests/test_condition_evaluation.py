@@ -10,7 +10,6 @@ from rag_engine.evaluation.answer_eval import (
     CORRECTNESS_PROMPT,
     AnswerCorrectnessOutput,
     JudgedClaim,
-    SourceCheckedJudgement,
     claim_verdict,
     evaluate_answer_payload,
     judge_inputs,
@@ -22,31 +21,12 @@ PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
 # 合成の匿名の対照（正しい部分回答・資料不足の明示・事実の矛盾・標準回答が方向性だけ・答えの無い回答、
 # 資料不足の留保と標準回答の提案の方向・標準回答も確定できない・留保を含む事実の矛盾）。
 # judge_inputs は判定へ実際に渡した入力。claude-opus-5-5 の記録は r_point_and_claim_scope が rubric 40（#5670）、
-# r_heading_gap_and_attribute が 41（#5677・#5682）。r_opposite_availability と r_identifier_under_reservation は gpt-5.5・rubric 42。
-# それ以前は xai.grok-4.7（推論の量 medium）・rubric 34 の実測（#5262・#5302）。
+# r_heading_gap_and_attribute が 41（#5677・#5682）。それ以前は xai.grok-4.7（推論の量 medium）・rubric 34 の実測（#5262・#5302）。
 CASES = json.loads((Path(__file__).with_name("fixtures") / "correctness_judge_cases.json").read_text())
 
 
 def _output(claims, points):
     return AnswerCorrectnessOutput.model_validate({"claims": claims, "points": points})
-
-
-def _claim_groups(claims):
-    groups = {"factual_claims": [], "source_gaps": []}
-    for item in claims:
-        claim = JudgedClaim.model_validate(item)
-        group = "source_gaps" if claim.states_source_gap else "factual_claims"
-        groups[group].append(claim.model_dump(exclude={"states_source_gap"}))
-    return groups
-
-
-def _point_evidence(point_id, passage_id=None, quote=None, *, target="value", role="value"):
-    return {
-        "point_id": point_id,
-        "target_kind": target,
-        "answer_evidence": [{"passage_id": passage_id, "quote": quote}] if passage_id else [],
-        "evidence_role": role if passage_id else "context_only",
-    }
 
 
 def _payload(**fields):
@@ -58,15 +38,11 @@ def _payload(**fields):
     }
 
 
-def _replay_recorded(case):
-    if "standard_availability" in case["recorded_output"]:
-        output = SourceCheckedJudgement.model_validate(case["recorded_output"])
-        prompt = CORRECTNESS_PROMPT
-    else:
-        # 以前の記録は、保存済みのカスタム指示が使う同じ claims / points の契約で再生する。
-        output = AnswerCorrectnessOutput.model_validate(case["recorded_output"])
-        prompt = "主張の照合を claims、要点の網羅を points に返す。"
-    with bind_prompt_overrides({"evaluation.correctness": prompt}), patch(PARSE, return_value=output) as model:
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
+def test_recorded_judge_outputs_replay_to_expected_scores(case):
+    """記録した出力を再生し、渡す入力・点・理由を確かめる（実モデルの意味判断の正しさは保証しない）。"""
+    output = AnswerCorrectnessOutput.model_validate(case["recorded_output"])
+    with patch(PARSE, return_value=output) as model:
         result = evaluate_answer_payload(
             {
                 "question": case["question"],
@@ -76,31 +52,27 @@ def _replay_recorded(case):
             },
             object(),
         )
-    system, data, _settings, schema = model.call_args.args
-    assert system == prompt and schema is type(output)
-    assert json.loads(data) == case["judge_inputs"]
+    system, prompt, _settings, schema = model.call_args.args
+    assert system == CORRECTNESS_PROMPT and schema is AnswerCorrectnessOutput
+    assert json.loads(prompt) == case["judge_inputs"]
     assert model.call_count == 1
-    return result
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
-def test_recorded_judge_outputs_replay_to_expected_scores(case):
-    """記録した出力を再生し、渡す入力・点・理由を確かめる（実モデルの意味判断の正しさは保証しない）。"""
-    result = _replay_recorded(case)
     assert result["status"] == "completed"
     assert result["answer_correctness"] == case["expected_correctness"]
     assert result["answer_coverage"] == case["recorded_coverage"]
     assert result["correctness_reason"] == case["recorded_reason"]
 
 
-def test_editing_the_current_default_keeps_its_declared_output_contract():
-    edited = CORRECTNESS_PROMPT.replace("## Step 2:", "## Step 2: 個別の条件を保って") + "\n回答の表記を尊重する。"
-    case = next(case for case in CASES if case["id"] == "r_identifier_under_reservation")
-    response = SourceCheckedJudgement.model_validate(case["recorded_output"])
-    with bind_prompt_overrides({"evaluation.correctness": edited}), patch(PARSE, return_value=response) as model:
+def test_editing_the_prompt_preserves_the_recorded_claims_and_points_contract():
+    case = next(case for case in CASES if case["id"] == "r_point_and_claim_scope")
+    edited = CORRECTNESS_PROMPT + "\n回答の表記を尊重する。"
+    recorded = AnswerCorrectnessOutput.model_validate(case["recorded_output"])
+    with bind_prompt_overrides({"evaluation.correctness": edited}), patch(PARSE, return_value=recorded) as model:
         result = evaluate_answer_payload(case, object())
-    assert result["status"] == "completed" and result["answer_coverage"] == case["recorded_coverage"]
-    assert model.call_args.args[0] == edited and model.call_args.args[3] is SourceCheckedJudgement
+    system, inputs, _, schema = model.call_args.args
+    assert model.call_count == 1 and system == edited and schema is AnswerCorrectnessOutput
+    assert json.loads(inputs) == case["judge_inputs"]
+    assert result["answer_correctness"] == case["expected_correctness"]
+    assert result["answer_coverage"] == case["recorded_coverage"]
 
 
 def test_topic_coverage_and_claim_references_are_scoped_per_item():
@@ -128,163 +100,6 @@ def test_heading_completes_each_gap_and_only_matching_availability_is_cited():
     gaps = {(claim["answer"], claim["standard"]) for claim in result["correctness_claims"] if claim["states_source_gap"]}
     assert gaps == {(f"{heading} {paragraphs[2]['text']}", ""), (f"{heading} {paragraphs[3]['text']}", matching_gap)}
     assert [(point["point"], point["covered"]) for point in result["coverage_points"]] == [("対象の種類", False), ("保存期間", True)]
-
-
-def test_gap_cites_a_standard_that_explicitly_says_the_information_is_available():
-    """資料での確認可否に相反する答えがあれば、その標準文を原文で表示する。"""
-    case = next(case for case in CASES if case["id"] == "r_opposite_availability")
-    result = _replay_recorded(case)
-    (claim,) = result["correctness_claims"]
-    assert claim["states_source_gap"] and not claim["consistent"]
-    assert claim["standard"] == case["judge_inputs"]["standard_answer"][1]["text"]
-    assert claim["verdict"] == "not_in_standard"
-
-
-def test_identifier_is_covered_when_only_its_reason_is_unknown():
-    case = next(case for case in CASES if case["id"] == "r_identifier_under_reservation")
-    result = _replay_recorded(case)
-    assert [(point["point"], point["covered"]) for point in result["coverage_points"]] == [
-        ("最初の通知の番号", True),
-        ("最初の通知の理由", False),
-        ("もう一件の通知の番号", False),
-    ]
-
-
-def test_gap_references_use_the_verified_standard_quotes_before_scoring():
-    standard = "項目Aの手順は別紙に記載されています。提供済みの資料で項目Aの手順を確認できます。"
-    payload = _payload(
-        standard_answer=standard, answer_text="項目Aの記載先は別紙です。項目Aの手順は資料では確認できません。項目Bの手順も不明です。"
-    )
-    judgement = _output(
-        [
-            dict(claim="項目Aの記載先は別紙。", answer_ids=["A1"], states_source_gap=False, standard_ids=["S1"], consistent=True),
-            dict(
-                claim="項目Aの手順は確認できない。", answer_ids=["A2"], states_source_gap=True, standard_ids=["S1", "S2"], consistent=False
-            ),
-            dict(claim="項目Bの手順は不明。", answer_ids=["A3"], states_source_gap=True, standard_ids=["S1"], consistent=False),
-        ],
-        [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": False}],
-    )
-    output = SourceCheckedJudgement.model_validate(
-        {
-            "standard_availability": [{"passage_id": "S2", "quote": "提供済みの資料で項目Aの手順を確認できます"}],
-            **_claim_groups(judgement.claims),
-            "points": [_point_evidence("P1", "A1", "別紙"), _point_evidence("P2")],
-        }
-    )
-    with patch(PARSE, return_value=output):
-        result = evaluate_answer_payload(payload, object())
-    location, opposite, absent = result["correctness_claims"]
-    assert location["standard"] == "項目Aの手順は別紙に記載されています。"
-    assert opposite["standard"] == "提供済みの資料で項目Aの手順を確認できます。" and not opposite["consistent"]
-    assert absent["standard"] == "" and absent["consistent"]
-    assert result["answer_correctness"] == 1.0 and result["answer_coverage"] == 0.5
-
-
-def test_conclusions_and_reservations_share_a_paragraph_without_sharing_its_standard():
-    payload = _payload(
-        standard_answer="間隔は一定です。",
-        answer_text="項目Aの値は不明です。間隔は一定ですが、秒数は資料から確認できません。",
-        answer_points=["間隔が一定"],
-    )
-    wire = SourceCheckedJudgement.model_validate(
-        {
-            "standard_availability": [],
-            "factual_claims": [{"claim": "間隔は一定。", "answer_ids": ["A2"], "standard_ids": ["S1"], "consistent": True}],
-            "source_gaps": [
-                {"claim": "秒数は不明。", "answer_ids": ["A2"], "standard_ids": ["S1"], "consistent": True},
-                {"claim": "項目Aの値は不明。", "answer_ids": ["A1"], "standard_ids": [], "consistent": True},
-            ],
-            "points": [_point_evidence("P1", "A2", "間隔は一定")],
-        }
-    )
-    with patch(PARSE, return_value=wire):
-        result = evaluate_answer_payload(payload, object())
-    assert [(row["claim"], row["standard"]) for row in result["correctness_claims"]] == [
-        ("項目Aの値は不明。", ""),
-        ("間隔は一定。", "間隔は一定です。"),
-        ("秒数は不明。", ""),
-    ]
-
-
-@pytest.mark.parametrize(("standard_id", "quote"), [("S9", "項目A"), ("S1", "項目Bは8"), ("S1", " ")])
-def test_availability_evidence_must_quote_the_selected_standard_sentence(standard_id, quote):
-    output = SourceCheckedJudgement.model_validate(
-        {
-            "standard_availability": [{"passage_id": standard_id, "quote": quote}],
-            "factual_claims": [],
-            "source_gaps": [],
-            "points": [_point_evidence("P1"), _point_evidence("P2")],
-        }
-    )
-    with patch(PARSE, return_value=output):
-        result = evaluate_answer_payload(_payload(), object())
-    assert result["status"] == "error" and result["error_type"] == "InvalidJudgeReference"
-    assert "answer_correctness" not in result
-
-
-def test_coverage_checks_the_type_and_source_of_each_points_evidence():
-    payload = _payload(
-        answer_points=["根拠の資料名", "項目Bの値", "項目Bの値が資料で確認できないこと", "項目Aの分類", "項目Aは8", "項目Aは5"]
-    )
-    wire = SourceCheckedJudgement.model_validate(
-        {
-            "standard_availability": [],
-            "factual_claims": [],
-            "source_gaps": [],
-            "points": [
-                _point_evidence("P1", "A1", "synthetic.pdf"),
-                _point_evidence("P2", "A2", "資料で確認できませんでした", role="source_gap"),
-                _point_evidence("P3", "A2", "資料で確認できませんでした", target="source_gap", role="source_gap"),
-                _point_evidence("P4", "A1", "項目A", role="context_only"),
-                _point_evidence("P5", "A1", "項目Aは5です", target="requirement"),
-                _point_evidence("P6", "A1", "項目Aは5です", target="requirement", role="requirement"),
-            ],
-        }
-    )
-    with patch(PARSE, return_value=wire):
-        result = evaluate_answer_payload(payload, object())
-    assert [point["covered"] for point in result["coverage_points"]] == [True, False, True, False, False, True]
-    assert result["answer_coverage"] == 0.5
-
-
-@pytest.mark.parametrize(("passage_id", "quote"), [("S1", "項目A"), ("A1", "質問だけの番号"), ("A2", "synthetic.pdf")])
-def test_coverage_evidence_must_belong_to_the_selected_answer_passage(passage_id, quote):
-    payload = _payload(question="質問だけの番号は何ですか。", answer_points=["番号"])
-    wire = SourceCheckedJudgement.model_validate(
-        {
-            "standard_availability": [],
-            "factual_claims": [],
-            "source_gaps": [],
-            "points": [_point_evidence("P1", passage_id, quote)],
-        }
-    )
-    with patch(PARSE, return_value=wire):
-        result = evaluate_answer_payload(payload, object())
-    assert result["status"] == "error" and result["error_type"] == "InvalidJudgeReference"
-
-
-@pytest.mark.parametrize(
-    ("point", "target", "answer", "quote", "role", "covered"),
-    [
-        ("試料の番号", "value", "試料M8の質量は不明です。", "M8", "value", True),
-        ("試料の種類", "category", "試料M8の質量は不明です。", "M8", "value", False),
-        ("試料の種類", "category", "この合金試料の質量は不明です。", "合金", "category", True),
-    ],
-)
-def test_coverage_of_an_identifier_and_a_category(point, target, answer, quote, role, covered):
-    payload = _payload(answer_points=[point], answer_text=answer)
-    wire = SourceCheckedJudgement.model_validate(
-        {
-            "standard_availability": [],
-            "factual_claims": [],
-            "source_gaps": [],
-            "points": [_point_evidence("P1", "A1", quote, target=target, role=role)],
-        }
-    )
-    with patch(PARSE, return_value=wire):
-        result = evaluate_answer_payload(payload, object())
-    assert result["coverage_points"][0]["covered"] is covered
 
 
 def test_inputs_number_standard_points_and_attach_citations_to_their_passage():
@@ -380,10 +195,6 @@ def test_reason_lists_each_contradiction_with_the_original_text():
             [{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "consistent": False, "standard_ids": ["S9"]}],
             ["P1", "P2"],
         ),
-        (
-            [{"claim": "資料では未確認。", "answer_ids": ["A2"], "states_source_gap": True, "consistent": False, "standard_ids": ["S9"]}],
-            ["P1", "P2"],
-        ),
         ([{"claim": "合成の主張", "answer_ids": [], "states_source_gap": False, "consistent": True, "standard_ids": ["S1"]}], ["P1", "P2"]),
         ([{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "consistent": True, "standard_ids": ["S1"]}], ["P1"]),
         (
@@ -391,13 +202,11 @@ def test_reason_lists_each_contradiction_with_the_original_text():
             ["P1", "P2", "P3"],
         ),
     ],
-    ids=["unknown_answer_id", "unknown_standard_id", "unknown_gap_standard_id", "no_answer_id", "missing_point", "extra_point"],
+    ids=["unknown_answer_id", "unknown_standard_id", "no_answer_id", "missing_point", "extra_point"],
 )
 def test_output_pointing_outside_the_input_is_an_evaluation_error(claims, points):
     """入力に無い id・要点の過不足は評価のエラーにする（点を推測で補わない）。"""
-    output = SourceCheckedJudgement.model_validate(
-        {"standard_availability": [], **_claim_groups(claims), "points": [_point_evidence(point) for point in points]}
-    )
+    output = _output(claims, [{"point_id": point, "covered": True} for point in points])
     with patch(PARSE, return_value=output):
         result = evaluate_answer_payload(_payload(), object())
     assert result["status"] == "error" and result["error_type"] == "InvalidJudgeReference"
@@ -416,29 +225,25 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     assert "points[].text" in steps[4] and "actual_responses[].answer[].sources[]" in steps[4]
     step3 = CORRECTNESS_PROMPT.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
     questions = {line.split(":", 1)[0].removeprefix("- "): line for line in step3.splitlines() if line.startswith("- ")}
-    assert tuple(questions) == ("standard_ids", "consistent")
+    assert tuple(questions) == ("states_source_gap", "standard_ids", "consistent")
     # 照合する観点は、その主張が答えている問い。条件と観点の両方を照合に使う。
     assert all(term in questions["standard_ids"] for term in ("対象・条件・適用範囲", "同じ問い", "standard_answer[].id"))
-    assert "factual_claims" in questions["standard_ids"] and "source_gaps" in questions["standard_ids"]
+    assert "確認できない" in questions["states_source_gap"] and "記載がない" in questions["states_source_gap"]
     assert "同じ事実・結論" in questions["consistent"] and "可能性の一つ" in questions["consistent"]
-    assert "両方の配列で引用する" in steps[2]
+    assert "留保を添えていても false" in questions["states_source_gap"]
     assert "同時に真になり得る" not in questions["consistent"]
     # 主張は条件ごと取り出して claim に書く。条件を主張の種類として別に取り出させない。
     step2 = CORRECTNESS_PROMPT.split("## Step 2:", 1)[1].split("## Step 3:", 1)[0]
     assert "条件と結論は一つの主張にまとめ" in step2 and "claim" in step2
-    schema = SourceCheckedJudgement.model_json_schema()
-    claim_properties = schema["$defs"]["ClaimComparison"]["properties"]
+    schema = AnswerCorrectnessOutput.model_json_schema()
+    claim_properties = schema["$defs"]["JudgedClaim"]["properties"]
     assert list(claim_properties) == ["claim", "answer_ids", *questions]
     assert "verdict" not in claim_properties
-    assert "states_source_gap" not in claim_properties and "description" not in claim_properties["consistent"]
+    assert all("description" not in claim_properties[key] for key in ("states_source_gap", "consistent"))
     # 実際に送る指示（項目の説明の Step を足した文）でも、問いの答え方は 1 回だけ。
     guided, _stripped = with_schema_field_guide(CORRECTNESS_PROMPT, schema)
     assert all(guided.count(f"- {key}:") == 1 for key in questions)
     # 点・理由はコードが作るので、出力に点・理由の項目は無い。
-    assert list(SourceCheckedJudgement.model_fields) == ["standard_availability", "factual_claims", "source_gaps", "points"]
-    point_questions = [line.split(":", 1)[0].removeprefix("- ") for line in steps[4].splitlines() if line.startswith("- ")]
-    assert list(schema["$defs"]["JudgedPointEvidence"]["properties"]) == ["point_id", *point_questions]
-    assert "covered" not in point_questions
     assert set(AnswerCorrectnessOutput.model_fields) == {"claims", "points"}
 
 
@@ -578,17 +383,8 @@ def test_mixed_claims_preserve_correctness_boundaries(answer, comparisons, expec
         ],
         [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": False}],
     )
-    payload = _payload(answer_text=answer)
-    first_text = judge_inputs(payload)["actual_responses"][0]["answer"][0]["text"]
-    wire = SourceCheckedJudgement.model_validate(
-        {
-            "standard_availability": [],
-            **_claim_groups(output.claims),
-            "points": [_point_evidence("P1", "A1", first_text), _point_evidence("P2")],
-        }
-    )
-    with patch(PARSE, return_value=wire):
-        result = evaluate_answer_payload(payload, object())
+    with patch(PARSE, return_value=output):
+        result = evaluate_answer_payload(_payload(answer_text=answer), object())
     assert result["status"] == "completed"
     assert result["answer_correctness"] == expected
     assert result["answer_coverage"] == 0.5
