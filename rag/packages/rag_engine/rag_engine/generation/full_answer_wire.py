@@ -54,7 +54,7 @@ class AnswerFact(BaseModel):
     requested_phrase: str | None = Field(
         description=(
             "その問いと同じ具体的な対象・属性を尋ねる原質問の連続した語句を選ぶ。回答欄の総称だけでは対応にならない。"
-            "必要な前提・例外ならそれが左右する要求の語句を選ぶ。共通する単語はあっても問われた量や判断が違うとき、"
+            "値を選ぶのに必要な適用範囲や例外は、その値を尋ねた語句に対応する。共通する単語はあっても問われた量や判断が違うとき、"
             "この短句を省いても別のセルに同じ答えが残るときは null。"
         )
     )
@@ -98,7 +98,10 @@ def _cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None) -
 class AnswerRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    label: str = Field(description="質問で尋ねられた項目・対象の短い行名。比較の行名は対象・期間・区分までで、適用範囲を説明文にしない。")
+    label: str = Field(
+        description="質問で尋ねられた項目・対象の短い行名。根拠にある複数の規則から値を選んだ場合は、"
+        "選んだ版・区分などその値の適用範囲を該当する行名か見出しに一度明記する。範囲の説明文は添えない。"
+    )
     cells: list[list[AnswerFact | ComparisonValue]] = Field(
         description=(
             "二列目から順にセルを埋める。比較表の数値欄はその対象の number、ほかは根拠のある短句。"
