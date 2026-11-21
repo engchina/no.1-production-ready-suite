@@ -75,15 +75,15 @@ def has_answer_text_projection(metadata: object, body: str) -> bool:
     )
 
 
-def answer_text_from_projection(
-    metadata: object, body: str, index_text: str, *, parent: bool = False
-) -> str:
+def answer_text_from_projection(metadata: object, body: str) -> str:
     """未記録の旧契約と、存在するが壊れた新契約を区別する。"""
-    if isinstance(metadata, dict) and "answer_text_projection" in metadata:
-        if not has_answer_text_projection(metadata, body):
-            raise ValueError("回答本文の投影の版またはhashが一致しません。再分割してください。")
-        return body
-    return body if parent else (index_text or body)
+    if (
+        isinstance(metadata, dict)
+        and "answer_text_projection" in metadata
+        and not has_answer_text_projection(metadata, body)
+    ):
+        raise ValueError("回答本文の投影の版またはhashが一致しません。再分割してください。")
+    return body
 
 
 class InvalidVisionProjectionError(ValueError):

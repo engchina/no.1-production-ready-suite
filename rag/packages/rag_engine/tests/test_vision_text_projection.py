@@ -116,7 +116,7 @@ def test_child_parent_answer_units_cannot_select_search_only_fields():
         assert chunk.metadata["answer_text_projection"]["body_sha256"]
 
 
-def test_native_text_named_search_words_keeps_old_answer_and_index_contract():
+def test_native_text_named_search_words_remains_in_original_body():
     from rag_engine.generation.answer_records import _chunk_answer_record
 
     text = "「検索語」と「言い換え」は画面の項目です。"
@@ -124,7 +124,7 @@ def test_native_text_named_search_words_keeps_old_answer_and_index_contract():
         assert text in chunk.text and text in chunk.retrieval_text
         assert "answer_text_projection" not in chunk.metadata
         if chunk.chunk_level == "child":
-            assert _chunk_answer_record(chunk).text == chunk.retrieval_text
+            assert _chunk_answer_record(chunk).text == chunk.text
 
 
 def test_table_supplement_and_contained_picture_keep_index_only_text_outside_body():

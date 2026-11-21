@@ -21,6 +21,21 @@ def test_saved_backend_explicit_vision_without_projection_requires_reparse() -> 
         _stored_child(hit, rrf_score=1.0)
 
 
+def test_unmarked_child_uses_body_for_answers_and_keeps_index_for_search() -> None:
+    body = "画面に検索語を入力します。"
+    index = body + "\n索引用の補足"
+    hit = RetrievedChunk(
+        document_id="document-a",
+        chunk_id="chunk-a",
+        text=body,
+        score=1.0,
+        metadata={"engine_search_text": index},
+    )
+    chunk = _stored_child(hit, rrf_score=1.0)
+    assert chunk.retrieval_text == index
+    assert _stored_chunk_answer_record(chunk).text == body
+
+
 def test_local_generation_explicit_unrecorded_source_requires_reparse() -> None:
     hit = RetrievedChunk(
         document_id="document-a", chunk_id="chunk-a", text="旧画像説明", score=1.0, metadata={}
