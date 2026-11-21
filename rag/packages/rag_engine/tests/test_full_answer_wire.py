@@ -601,11 +601,12 @@ def test_only_facts_bound_to_an_original_request_are_shown():
     }
     incidental = {**fact, "requested_phrase": None, "text": "別の属性", "sources": ["[E1.9]"]}
     condition = {**fact, "requested_phrase": "適用条件", "short_answer": "対象Aに限る"}
-    row = {"label": "項目Aの値", "cells": [[fact, incidental, condition]]}
+    paired = {**fact, "text": "同じ入力のもう一つの値", "short_answer": "8"}
+    row = {"label": "入力の値", "cells": [[fact, paired, incidental, condition]]}
     background = {"label": "参考", "cells": [[incidental]]}
     body = {"headers": [], "rows": [row, background]}
     payload = {"answer_body": body, "response_kind": "answered", "confidence": "high"}
-    assert model.model_validate(payload).answer_body == f"12[{unit}] 対象Aに限る[{unit}]"
+    assert model.model_validate(payload).answer_body == f"12[{unit}] 8[{unit}] 対象Aに限る[{unit}]"
     with pytest.raises(ValidationError):
         model.model_validate({**payload, "answer_body": {**body, "rows": [background]}})
     for missing in ("原文にない問い", " "):

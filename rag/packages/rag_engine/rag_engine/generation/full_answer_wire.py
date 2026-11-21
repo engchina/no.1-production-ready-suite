@@ -52,21 +52,23 @@ def _check_requested_phrase(phrase: str, question: str | None) -> None:
 class AnswerFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(description="原文が示す一つの事実。直接答える規則・操作と独立した補足は別候補に分ける。")
+    text: str = Field(
+        description="原質問の一要求に直接答える原文の事実。複数の値をまとめて尋ねられたときは、同じ対象・条件の項目と値を組にする。"
+    )
     sources: list[str] = Field(description="この事実を支える原文ラベル。")
     answers_which_question: str = Field(
         description="この短句だけを答えとして読んだとき、それで解ける具体的な問いを一つ書く。対象名だけでなく何を判定する問いかを区別する。"
     )
     requested_phrase: str | None = Field(
         description=(
-            "その問いと同じ具体的な対象・属性を尋ねる原質問の連続した語句を選ぶ。回答欄の総称だけでは対応にならない。"
+            "その事実を求めた原質問の連続した語句を選ぶ。項目のまとまりを尋ねていれば、それに属する各値は同じ要求に対応する。"
             "値を選ぶのに必要な適用範囲や例外は、その値を尋ねた語句に対応する。共通する単語はあっても問われた量や判断が違うとき、"
             "この短句を省いても別のセルに同じ答えが残るときは null。"
         )
     )
 
     short_answer: str = Field(
-        description="問われた属性について資料が裏付ける短答。原文に並記された別の属性は外す。"
+        description="問われた範囲を満たす短答。値の組を求められたら該当する項目名と値をそろえ、範囲外の情報を外す。"
         "規則上の可否は判定、求められた理由は適用規則を一節だけ書く。数値欄に転記した値を理由に再掲しない。"
         "条件・例外そのものに値や境界が必要なら保つ。対応する要求がなければ空文字。"
     )
