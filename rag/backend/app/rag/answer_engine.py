@@ -950,11 +950,11 @@ class AnswerEngine:
 
             return call
 
-        # Wiki の検索の経路(#4941)は原質問だけで通常検索と独立に探すので、回答の始めに
-        # event loop で走らせ、通常検索・rerank・根拠の補いと並行させる。合わせ込みで待つ(#5437)。
+        # 拡張の経路で Wiki を使う場合は、回答の始めに原質問で検索を始める。
+        # 通常検索・rerank・根拠の補いと並行させ、合わせ込みで待つ(#5437)。
         wiki = (
             _start_on_loop(lambda: self._wiki_sources(request, state), loop)
-            if self._settings.rag_wiki_search_enabled
+            if self._expand and self._settings.rag_wiki_search_enabled
             else None
         )
 
