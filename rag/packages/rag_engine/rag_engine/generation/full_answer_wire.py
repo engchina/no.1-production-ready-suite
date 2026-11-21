@@ -98,7 +98,7 @@ def _cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None) -
 class AnswerRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    label: str = Field(description="質問で尋ねられた項目・対象の短い行名。数値比較の適用範囲は行名だけに添える。")
+    label: str = Field(description="質問で尋ねられた項目・対象の短い行名。比較の行名は対象・期間・区分までで、適用範囲を説明文にしない。")
     cells: list[list[AnswerFact | ComparisonValue]] = Field(
         description=(
             "二列目から順にセルを埋める。比較表の数値欄はその対象の number、ほかは根拠のある短句。"
@@ -113,13 +113,13 @@ class AnswerTableBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     headers: list[str] = Field(
-        description="数値比較は比較対象ごとに一行、各測定項目を列とする。対象の適用範囲は行名に一度だけ添える。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
+        description="数値比較は適用の可否を尋ねられた対象も独立した一行にし、その対象の値を測定項目の各列に入れる。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
     )
     rows: list[AnswerRow] = Field(
         min_length=1,
         description=(
             "行名は原質問で求められた具体的な属性。資料で何を確定できるかは属性ごとに一行で答え、全体の可否や不明点をまとめ直す行は作らない。見出しなしは一行一セル。"
-            "許可・禁止を問われた欄は判定を一度だけ示し、条件付きなら条件を添える。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
+            "規則上の許可・禁止は「可」か「不可」で完結させ、同じ許可文・禁止文を添えない。条件付きならその条件を添える。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
             "特定対象の可否・理由も尋ねられたら専用の列を設け、該当行だけに制約を書く。他の行は空欄。必要な条件・否定・例外を該当するセルに含める。"
         ),
     )
