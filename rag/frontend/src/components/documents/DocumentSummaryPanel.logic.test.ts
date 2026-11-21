@@ -55,6 +55,7 @@ describe("documentSummaryView", () => {
   it("知らない失敗の理由は一般の文言にする", () => {
     expect(summaryFailureKey("something_new")).toBe("documents.summary.failure.unknown");
     expect(summaryFailureKey(null)).toBe("documents.summary.failure.unknown");
+    expect(summaryFailureKey("input_too_large")).toBe("documents.summary.failure.input_too_large");
     expect(summaryFailureKey("interrupted")).toBe("documents.summary.failure.interrupted");
   });
 });

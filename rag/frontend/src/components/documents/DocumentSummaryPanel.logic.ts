@@ -16,6 +16,7 @@ const FAILURE_KEYS: Record<string, I18nKey> = {
   timeout: "documents.summary.failure.timeout",
   model_failed: "documents.summary.failure.model_failed",
   invalid_output: "documents.summary.failure.invalid_output",
+  input_too_large: "documents.summary.failure.input_too_large",
   no_content: "documents.summary.failure.no_content",
   source_missing: "documents.summary.failure.source_missing",
   index_failed: "documents.summary.failure.index_failed",

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Annotated
@@ -65,6 +66,8 @@ from rag_parser_core.vision_text_map import (
 from rag_parser_core.xml_tree_json import (
     XML_TREE_LOOKUP_KEYS_KEY,
     XML_TREE_METADATA_PREFIX,
+    SourceParagraph,
+    source_paragraphs,
     xml_tree_lookup_keys,
     xml_tree_search_text,
 )
@@ -697,25 +700,68 @@ def _chunk_fixed_delimiter(
         "chunk_template": TEXT_CHUNK_PROFILE,
         "chunk_fixed_delimiter": True,
     }
-    chunks: list[Chunk] = []
-    for start, end in split_delimiter_spans(source, 0, len(source), first):
-        leaves = split_oversized_span(source, start, end, rest, chunk_size)
-        for piece_start, piece_end in _merge_delimiter_spans(source, leaves, chunk_size):
-            chunks.append(
-                Chunk(
-                    text=source[piece_start:piece_end],
-                    index=len(chunks),
-                    start_offset=piece_start,
-                    end_offset=piece_end,
-                    metadata={
-                        **metadata,
-                        **chunk_projection_metadata(
-                            projection.slice(piece_start, piece_end).stripped()
-                        ),
-                    },
-                )
+    paragraphs = source_paragraphs(extraction, source)
+    if paragraphs is None:
+        spans = [
+            span
+            for start, end in split_delimiter_spans(source, 0, len(source), first)
+            for span in _merge_delimiter_spans(
+                source, split_oversized_span(source, start, end, rest, chunk_size), chunk_size
+            )
+        ]
+    else:
+        spans = _fixed_paragraph_spans(source, paragraphs, first, chunk_size)
+    chunks = [
+        Chunk(
+            text=source[start:end],
+            index=index,
+            start_offset=start,
+            end_offset=end,
+            metadata={
+                **metadata,
+                **chunk_projection_metadata(projection.slice(start, end).stripped()),
+            },
+        )
+        for index, (start, end) in enumerate(spans)
+    ]
+    if paragraphs:
+        # 分割符の一部だった解析器の見出しも本文に残る。引用から除く範囲を新しい座標へ写す。
+        marked = [span for paragraph in paragraphs for span in paragraph.non_source_ranges]
+        for chunk in chunks:
+            lo = bisect_right(marked, chunk.start_offset, key=lambda span: span[1])
+            hi = bisect_left(marked, chunk.end_offset, key=lambda span: span[0])
+            _with_non_source_ranges(
+                chunk.metadata, slice_ranges(marked[lo:hi], chunk.start_offset, chunk.end_offset)
             )
     return [_with_chunk_metadata(chunk) for chunk in chunks]
+
+
+def _fixed_paragraph_spans(
+    text: str, paragraphs: Sequence[SourceParagraph], first: str, limit: int
+) -> list[tuple[int, int]]:
+    """段落間の第 1 分割符を尊重し、長い段落だけを原文の文末で区切る。"""
+    spans: list[tuple[int, int]] = []
+    group: list[tuple[int, int]] = []
+    last = 0
+    for paragraph in paragraphs:
+        start, end = paragraph.start, paragraph.end
+        # 分割符に原文が含まれることもある。構造の境界で切り、その原文は落とさない。
+        if group and first in text[max(0, last - len(first)) : start + len(first)]:
+            spans.extend(_merge_delimiter_spans(text, group, limit))
+            group.clear()
+        source_size = paragraph.source_chars if paragraph.source_chars is not None else end - start
+        cuts = paragraph.sentence_ends if source_size > limit else ()
+        for cut in (*cuts, end):
+            group.append((start, cut))
+            start = cut
+        last = end
+    spans.extend(_merge_delimiter_spans(text, group, limit))
+    result = []
+    for start, end in spans:
+        value = text[start:end]
+        if value.strip():
+            result.append((start + len(value) - len(value.lstrip()), start + len(value.rstrip())))
+    return result
 
 
 def _merge_delimiter_spans(

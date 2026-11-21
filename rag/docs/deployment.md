@@ -221,6 +221,12 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#5695 XML ツリー JSON の段落と文の境界）
+
+XML ツリー JSON の解析は、表示した本文の段落と文の位置を抽出結果に記録する。解析サービスと RAG backend を同じリリースに更新する。既存文書に新しい境界を適用する場合は、文書の処理レシピで文書解析から再処理する（抽出結果の版 19）。
+
+固定分割は原文の段落の長さを基準にし、長い段落だけを原文の文末で分ける。解析時に加える見出しや、分けられない一文により、表示上の長さは設定を超える場合がある。項目抽出や要約のモデルの入力に一文も収まらない場合は、該当処理の入力上限超過を記録する。
+
 ## 既存環境の更新手順（#5511 文書構造索引の backend を削除する）
 
 #5502 で画面から外した文書構造索引の構築（KB の構築の job）・旧 API・表・参照の解決し直しの常駐の処理を削除した。

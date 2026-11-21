@@ -137,6 +137,15 @@ test("まだ無い要約は「要約を作る」で作り、作成中と結果�
   expect(posted).toHaveLength(1);
 });
 
+test("一文が入力上限を超えた要約は理由を表示する", { tag: "@responsive" }, async ({ page }) => {
+  await page.route(SUMMARY_URL, (route) => route.fulfill(ok({
+    enabled: true,
+    summary: { ...READY, status: "failed", text: null, topics: [], failure_code: "input_too_large" },
+  })));
+  const panel = await openDocument(page);
+  await expect(panel.getByText("本文の一文が要約の入力上限を超えています。")).toBeVisible();
+});
+
 test("失敗した要約は理由と作り直しを示し、作成中は読み直して結果に替わる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   let state: Record<string, unknown> = {
     enabled: true,
