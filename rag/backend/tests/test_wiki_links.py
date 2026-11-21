@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from functools import partial
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -392,9 +392,14 @@ def link_setup(monkeypatch: pytest.MonkeyPatch) -> Any:
 @pytest.mark.asyncio
 async def test_links_are_built_both_ways_from_candidates_once(link_setup: Any) -> None:
     jobs, store, model, settings, embedded = link_setup
+    config = OciEnterpriseAiConfig(default_model_id="model-a")
+    measure = Mock(wraps=partial(measure_llm_request, config))
+    model.measure_text_input = measure
     store.prompts["wiki_links"] = "合成の編集済み指示"
     await jobs._build_links("doc-a", "owner-a", settings)
     assert store.state["status"] == "READY"
+    assert [json.loads(call.args[1]) for call in measure.call_args_list] == model.calls
+    assert [call.kwargs["system_prompt"] for call in measure.call_args_list] == model.prompts
     # 前向き（A の 2 単位 → B）と逆向き（B の単位 → A）を、候補の組だけで 2 回で判定する。
     assert model.prompts == ["合成の編集済み指示"] * len(model.calls)
     store.prompts["wiki_links"] = "合成の次回用指示"
