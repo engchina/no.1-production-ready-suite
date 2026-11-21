@@ -10,8 +10,12 @@ import base64
 from collections.abc import Sequence
 from typing import Final
 
-MODEL_TEST_TEXT_PROMPT: Final = "モデル接続テストです。短く応答してください。"
-MODEL_TEST_VISION_PROMPT: Final = "白い背景にある大きな図形の色を日本語で1語だけ返してください。"
+MODEL_TEST_TEXT_PROMPT: Final = (
+    "## Step 1: 接続を確認する\nモデル接続テストです。短く応答してください。"
+)
+MODEL_TEST_VISION_PROMPT: Final = (
+    "## Step 1: 図形の色を答える\n白い背景にある大きな図形の色を日本語で1語だけ返してください。"
+)
 MODEL_TEST_EMBEDDING_INPUT: Final = "モデル接続テスト"
 MODEL_TEST_RERANK_QUERY: Final = "モデル接続テスト"
 MODEL_TEST_RERANK_DOCUMENTS: Final[Sequence[str]] = (

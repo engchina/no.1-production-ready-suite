@@ -149,7 +149,7 @@ def batch_repair_prompt(original: str, detail: Mapping[str, Any]) -> str:
     return (
         original
         + "\n\n## Step 4: 読取結果の形式を修正する\n"
-        + "\n".join(guidance)
+        + "\n".join(f"- {item}" for item in guidance)
         + "\n"
         + json.dumps({"validation_errors": shown}, ensure_ascii=False)
     )

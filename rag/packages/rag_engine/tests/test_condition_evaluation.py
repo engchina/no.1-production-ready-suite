@@ -102,6 +102,15 @@ def test_heading_completes_each_gap_and_only_matching_availability_is_cited():
     assert [(point["point"], point["covered"]) for point in result["coverage_points"]] == [("対象の種類", False), ("保存期間", True)]
 
 
+def test_inline_reservation_keeps_the_reported_retention_separate_from_the_device_type():
+    case = next(case for case in CASES if case["id"] == "h_inline_negation")
+    output = AnswerCorrectnessOutput.model_validate(case["recorded_output"])
+    result = score_judgement(case["judge_inputs"], output)
+    points = {row["point"]: row["covered"] for row in result["coverage_points"]}
+    assert points["機器の種類"] is False
+    assert result["answer_coverage"] == 0.25
+
+
 def test_inputs_number_standard_points_and_attach_citations_to_their_passage():
     """標準回答・要点・本文を番号つきの単位で渡す。要点は標準回答に結合しない。出典の行は本文の段落にせず、
     直前の段落の sources に添える（網羅の要点が根拠の場所に触れるときに読む）。"""
