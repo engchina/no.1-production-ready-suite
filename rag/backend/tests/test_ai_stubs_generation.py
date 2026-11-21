@@ -72,3 +72,20 @@ def test_stub_completes_a_generation_round_with_a_verified_citation(model_view: 
     citation = result.checked[0].item.citations[0]
     assert citation.evidence_id == spans[0]["evidence_id"]
     assert citation.quote and citation.quote in TEXT
+
+
+def test_field_input_can_be_prepared_by_the_integration_stub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag.extraction_field_adapter import FIELD_EXTRACTION_RESPONSE_SCHEMA
+    from tests._ai_stubs import DeterministicEnterpriseAi, patch_ai_clients
+
+    patch_ai_clients(monkeypatch)
+    measured = DeterministicEnterpriseAi().measure_text_input(
+        "",
+        "合成の本文。",
+        system_prompt="項目を抽出する。",
+        response_schema=FIELD_EXTRACTION_RESPONSE_SCHEMA,
+        response_schema_name="field_extraction",
+    )
+    assert measured.fits
