@@ -22,8 +22,10 @@ from pr_anthropic_messages import (
     AnthropicMessagesRequest,
     AnthropicMessagesResult,
     AnthropicUsage,
+    anthropic_message_params,
     anthropic_response_schema,
 )
+from pr_backend_core.generation_input import GenerationInputLimitError, complete_input_measurement
 from pr_enterprise_ai.errors import EnterpriseAiIncomplete
 from rag_parser_core import anthropic_responses
 from rag_parser_core.anthropic_responses import (
@@ -100,6 +102,8 @@ class _Calls:
         self.kwargs: list[dict[str, Any]] = []
 
     def _next(self, request: AnthropicMessagesRequest, kwargs: dict[str, Any]) -> Any:
+        if check_input := kwargs.pop("check_input", None):
+            check_input({**anthropic_message_params(request), "stream": True})
         self.requests.append(request)
         self.kwargs.append(kwargs)
         outcome = self.outcomes.pop(0)
@@ -428,9 +432,42 @@ async def test_parser_core_generate_text_and_usage_log(
     assert fields.llm_model == "claude-text"
     assert fields.llm_status == "completed"
     assert fields.input_tokens == 135
+    measured = complete_input_measurement({**anthropic_message_params(request), "stream": True})
+    assert getattr(fields, "pr.input.estimated_tokens") == measured.estimated_tokens
+    assert getattr(fields, "pr.input.usage_status") == "within_limit"
     assert fields.cached_tokens == 30
     assert fields.output_tokens == 20
     assert fields.reasoning_tokens == 7
+
+
+@pytest.mark.parametrize("connection", ["primary", "quaternary"])
+async def test_text_transport_blocks_oversized_text_before_send(
+    tmp_path: Path, stub_messages: Callable[..., _Calls], connection: str
+) -> None:
+    from pr_backend_core.observability.model_usage import run_usage_summary_fields
+    from rag_engine.adapters import oci
+    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
+    from rag_engine.models.llm import TextOutput
+    from rag_parser_core.oci_enterprise_ai import measure_llm_request
+
+    from app.rag.trace_store import AnswerTrace
+    from tests.span_progress_support import answer_trace
+
+    calls = stub_messages()
+    settings = _settings(text_connection=connection)
+    text = "a" * 96_001
+    planned = measure_llm_request(config_from_settings(settings), "", text, system_prompt="指示")
+    trace = AnswerTrace("refused-before-send", owner_user_uuid="test")
+    with answer_trace(trace):
+        with pytest.raises(GenerationInputLimitError) as rejected:
+            await _client(settings).generate("", text, system_prompt="指示")
+        assert rejected.value.estimated_tokens == planned.estimated_tokens
+        with pytest.raises(GenerationInputBudgetExceeded):
+            oci.parse_text_response("指示", text, _engine_settings(tmp_path), TextOutput)
+    assert not calls.requests
+    usage = trace.model_usage()
+    assert usage is not None and usage.requests == 0
+    assert run_usage_summary_fields(usage) == (None, "unmeasured")
 
 
 async def test_parser_core_structured_output_sends_schema(
@@ -585,6 +622,36 @@ def test_engine_parses_structured_output(
     # SDK の再試行はしない（やり直しは rag_engine の共通の枠）。
     assert calls.kwargs[0]["max_retries"] == 0
     assert calls.kwargs[0]["endpoint_url"] == "https://api.anthropic.com"
+
+
+@pytest.mark.parametrize("usage", [None, USAGE])
+async def test_failed_messages_preserves_input_usage(
+    tmp_path: Path,
+    stub_messages: Callable[..., _Calls],
+    caplog: pytest.LogCaptureFixture,
+    usage: AnthropicUsage | None,
+) -> None:
+    from rag_engine.adapters import oci
+    from rag_engine.models.llm import TextOutput
+
+    calls = stub_messages(
+        AnthropicMessagesError("要求の形式", kind="request", status_code=400, usage=usage),
+        AnthropicMessagesError("要求の形式", kind="request", status_code=400, usage=usage),
+    )
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(AnthropicMessagesError):
+            await _client(_settings()).generate("", "本文", system_prompt="指示")
+        with pytest.raises(AnthropicMessagesError):
+            oci.parse_text_response("指示", "本文", _engine_settings(tmp_path), TextOutput)
+    assert len(calls.requests) == 2
+    logs = [
+        vars(record)
+        for record in caplog.records
+        if getattr(record, "event", "") == "llm_call_usage"
+    ]
+    assert [entry["input_tokens"] for entry in logs] == [
+        usage.total_input_tokens if usage else None
+    ] * 2
 
 
 def test_engine_retries_rate_limit_in_shared_budget(

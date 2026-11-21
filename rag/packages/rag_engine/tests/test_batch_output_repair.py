@@ -139,7 +139,7 @@ def test_unknown_validator_context_is_not_serialized():
 
 def test_a_batch_packed_to_the_limit_still_has_room_for_the_repair_feedback(monkeypatch):
     """#4229: 上限の近くまで詰めた組でも、修復の指摘の分が入力の予算に入り、回答全体を退避させない。"""
-    settings = replace(config(answer_max_input_tokens=3000), evidence_budget_chars=200_000)
+    settings = replace(config(answer_max_input_tokens=12_000), evidence_budget_chars=200_000)
     delivered = []
 
     def provider(system, prompt, ignored_settings, schema, ignored):

@@ -7,6 +7,10 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from pr_backend_core.generation_input import (
+    GenerationInputLimitError,
+    UnmeasuredGenerationInputError,
+)
 
 from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
@@ -1045,17 +1049,20 @@ async def test_oci_adapter_rejects_invalid_response_path() -> None:
     assert transport.calls
 
 
-async def test_oci_generate_logs_llm_call_usage(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize("usage_names", [("input", "output"), ("prompt", "completion")])
+async def test_oci_generate_logs_llm_call_usage(
+    caplog: pytest.LogCaptureFixture, usage_names: tuple[str, str]
+) -> None:
     """backend の呼び出しも、本文を出さずに llm_call_usage を残す（#5433）。"""
     transport = FakeEnterpriseAiTransport(
         {
             "status": "incomplete",
             "incomplete_details": {"reason": "max_output_tokens"},
             "usage": {
-                "input_tokens": 120,
-                "input_tokens_details": {"cached_tokens": 20},
-                "output_tokens": 30,
-                "output_tokens_details": {"reasoning_tokens": 10},
+                f"{usage_names[0]}_tokens": 120,
+                f"{usage_names[0]}_tokens_details": {"cached_tokens": 20},
+                f"{usage_names[1]}_tokens": 30,
+                f"{usage_names[1]}_tokens_details": {"reasoning_tokens": 10},
             },
         }
     )
@@ -1074,6 +1081,7 @@ async def test_oci_generate_logs_llm_call_usage(caplog: pytest.LogCaptureFixture
     record = next(r for r in caplog.records if getattr(r, "event", "") == "llm_call_usage")
     fields = vars(record)
     assert fields["llm_schema"] == "synthetic_schema"
+    assert fields["pr.input.usage_status"] == "within_limit"
     assert fields["llm_status"] == "incomplete"
     assert fields["llm_incomplete_reason"] == "max_output_tokens"
     assert (fields["input_tokens"], fields["cached_tokens"]) == (120, 20)
@@ -1097,6 +1105,28 @@ async def test_oci_generate_logs_failed_call(caplog: pytest.LogCaptureFixture) -
     record = next(r for r in caplog.records if getattr(r, "event", "") == "llm_call_usage")
     assert vars(record)["llm_status"] == "failed"
     assert vars(record)["llm_failure"] == {"error_type": "EnterpriseAiTimeoutError"}
+    assert vars(record)["input_tokens"] is None
+    assert vars(record)["output_tokens"] is None
+    assert vars(record)["pr.input.usage_status"] == "unreported"
+
+
+async def test_registered_text_input_limit_and_external_reference() -> None:
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_models = [
+        EnterpriseAiConfiguredModel(model_id="enterprise-llm", max_input_tokens=4096)
+    ]
+    transport = FakeEnterpriseAiTransport({"output_text": "回答"})
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+    with pytest.raises(GenerationInputLimitError) as caught:
+        await client.generate("質問", "文" * 2_000, system_prompt="合成の指示")
+    assert caught.value.limit_tokens == 4096
+
+    with pytest.raises(UnmeasuredGenerationInputError):
+        await client._post_enterprise_ai(
+            "/responses",
+            {"model": "enterprise-llm", "input": "質問", "previous_response_id": "synthetic"},
+        )
+    assert not transport.calls
 
 
 class FakeEnterpriseAiTransport:
@@ -1479,6 +1509,8 @@ async def test_model_call_snapshot_is_attached_to_product_trace() -> None:
             },
         )
     call = next(s for s in trace.spans if s.operation_name == "gen_ai.chat")
+    assert call.attributes["pr.input.usage_status"] == "unreported"
+    assert int(call.attributes["pr.input.estimated_tokens"]) > 0
     assert call.display and call.display.details and call.display.details.call
     captured = call.display.details.call
     assert "synthetic-input" in captured.input.text

@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from pr_backend_core.bounded_calls import BoundedCallAborted, BoundedCallFailed, ErrorKind
+from pr_backend_core.generation_input import GenerationInputLimitError
 from pr_system_settings.model import estimate_input_tokens
 
 from app.clients import ai_calls
@@ -578,15 +579,24 @@ async def test_ingestion_resumes_only_failed_units(
     assert outcome["reused_unit_count"] == outcome["unit_count"] - 1 == failed_calls - 1
 
 
-async def test_ingestion_resplits_on_engine_prompt_length_error(small_model: int) -> None:
-    """vLLM 系の 400(prompt length exceeds max_model_len)は入力の上限の超過として分け直す。"""
+@pytest.mark.parametrize(
+    "over",
+    [
+        _HttpError(
+            400,
+            '{"error":{"message":"The engine prompt length 9 exceeds the max_model_len 8.",'
+            '"type":"invalid_request_error","code":400}}',
+        ),
+        GenerationInputLimitError(96_001, 96_000),
+    ],
+    ids=["provider", "preflight"],
+)
+async def test_ingestion_resplits_on_engine_prompt_length_error(
+    small_model: int, over: Exception
+) -> None:
+    """送信前と呼び先の入力超過は、ともに小さい単位に分け直す。"""
     _ = small_model
     fields_mod.save_field_schema(_DEFS)
-    over = _HttpError(
-        400,
-        '{"error":{"message":"The engine prompt length 9 exceeds the max_model_len 8.",'
-        '"type":"invalid_request_error","code":400}}',
-    )
 
     class _LimitedLlm(_ScriptedLlm):
         async def generate(self, prompt: str, text: str, **options: object) -> str:
@@ -602,6 +612,17 @@ async def test_ingestion_resplits_on_engine_prompt_length_error(small_model: int
     outcome = _outcome(result)
     assert outcome["resplit_count"] >= 1
     assert [field.value for field in result.fields] == ["T-0001"]
+
+
+async def test_ingestion_reports_unsplittable_local_input_limit() -> None:
+    fields_mod.save_field_schema(_DEFS)
+    llm = _ScriptedLlm("段落0000", GenerationInputLimitError(96_001, 96_000))
+    with pytest.raises(IngestionUserError, match="入力の上限") as error:
+        await _pipeline(llm, _MemoryStorage())._attach_extraction_fields(
+            "trace", _paragraphs(1), document_id="doc-a"
+        )
+    assert "段落0000" not in str(error.value)
+    assert len(llm.texts) == 1
 
 
 async def test_ingestion_unclassified_400_is_not_treated_as_too_large(small_model: int) -> None:

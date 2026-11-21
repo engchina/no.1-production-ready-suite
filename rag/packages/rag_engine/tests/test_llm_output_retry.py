@@ -17,11 +17,36 @@ from rag_engine.config import get_settings
 from rag_engine.generation import execution_record
 from rag_engine.models.llm import TextOutput
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline
-from rag_engine.resources.llm_usage import LlmUsage, llm_usage, usage_line
+from rag_engine.resources.llm_usage import LlmUsage, bind_llm_usage, llm_usage, record_llm_usage, response_usage, usage_delta, usage_line
 
 PROVIDER = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="", max_output_tokens=65536)
 MEDIUM_PROVIDER = SimpleNamespace(model="stub-model", label="stub", reasoning_effort="medium", max_output_tokens=65536)
 USAGE = SimpleNamespace(input_tokens=100, output_tokens=50, input_tokens_details=None, output_tokens_details=None)
+
+
+def test_usage_text_distinguishes_missing_and_zero_with_chat_or_responses_counts():
+    with bind_llm_usage():
+        record_llm_usage(response_usage({"usage": None}))
+        assert usage_line(usage_delta({})).startswith("入力 未計測・出力 未計測")
+        before = usage_delta({})
+        record_llm_usage(response_usage({"usage": {"input_tokens": 0, "output_tokens": 0}}))
+        assert usage_line(usage_delta(before)).startswith("入力 0 tokens・出力 0 tokens")
+        record_llm_usage(
+            response_usage(
+                {
+                    "usage": {
+                        "prompt_tokens": 127,
+                        "completion_tokens": 19,
+                        "prompt_tokens_details": {"cached_tokens": 6},
+                        "completion_tokens_details": {"reasoning_tokens": 2},
+                    }
+                }
+            )
+        )
+        totals = usage_delta({})
+        assert (totals["calls"], totals["input_tokens"], totals["output_tokens"]) == (3, 127, 19)
+        assert (totals["cached_tokens"], totals["reasoning_tokens"]) == (6, 2)
+        assert usage_line(totals).startswith("入力 127 tokens（ほか 1 回は未計測）（cache 6）・出力 19 tokens（ほか 1 回は未計測）")
 
 
 class _Client:
@@ -380,7 +405,9 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
         finally:
             llm_usage.reset(usage_token)
         self.assertEqual((usage["calls"], usage["output_tokens"], usage["incomplete_reasons"]), (1, 0, {"TimeoutError": 1}))
+        self.assertEqual(usage["unreported_input_calls"], 1)
         logged = logs.records[0]
+        self.assertIsNone(logged.input_tokens)
         self.assertEqual((logged.llm_status, logged.llm_incomplete_reason, logged.llm_max_output_tokens), ("failed", "TimeoutError", 65536))
         self.assertFalse(hasattr(logged, "llm_deadline_capped"))
 
@@ -541,9 +568,11 @@ def test_online_output_uses_context_room_and_never_sends_when_exhausted(monkeypa
         }
     )
     measured = estimate_tokens(json.dumps(wire, ensure_ascii=False))
-    settings = replace(settings, answer_max_input_tokens=measured + 100)
+    # 構造化した指示・schema が入る小さいモデルで、入力後の残りだけを出力に使う。
+    settings = replace(settings, answer_max_input_tokens=4_000)
+    available_output = settings.answer_max_input_tokens - measured
     assert oci._openai_parsed(messages, settings, TextOutput, PROVIDER).text == "ok"
-    assert client.budgets == [100]
+    assert client.budgets == [available_output]
     token = llm_usage.set(LlmUsage())
     try:
         with pytest.raises(GenerationInputBudgetExceeded):
@@ -551,7 +580,7 @@ def test_online_output_uses_context_room_and_never_sends_when_exhausted(monkeypa
         assert llm_usage.get().snapshot().get("calls", 0) == 0
     finally:
         llm_usage.reset(token)
-    assert client.budgets == [100]
+    assert client.budgets == [available_output]
 
 
 def test_exhausted_deadline_never_forces_one_token(monkeypatch):

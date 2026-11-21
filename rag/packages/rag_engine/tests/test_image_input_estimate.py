@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pr_backend_core.generation_input import complete_input_measurement
 from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS, without_image_inputs
 
 from rag_engine.adapters import oci
@@ -73,12 +74,11 @@ def test_three_images_fit_and_count_per_image_from_model_setting(monkeypatch, im
     """画像 3 枚の wire でも上限を超えず、見積もりは本文 + 3 × 登録モデルの値（base64 の長さに比例しない）。"""
     client = _Client()
     monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: client)
-    provider = _provider(image_input_tokens=2_000)
-    text = _text_tokens("合成の本文")
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_input_tokens=text + 3 * 2_000 + 100)
+    provider = _provider(image_input_tokens=2_000, max_output_tokens=100)
+    settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_input_tokens=12_000)
 
     assert oci._parse_openai_multimodal_once("指示", "合成の本文", images, settings, TextOutput, provider).text == "ok"
-    # 出力の上限は入力の残り（上限 − 本文 − 画像 3 枚）。
+    # 本文・3 枚の画像・完全入力の余白が入り、登録モデルの出力上限まで使える。
     assert client.budgets == [100]
 
 
@@ -148,8 +148,9 @@ def test_measurement_adds_images_and_text_only_is_unchanged():
     providers = {key: replace(value, image_input_tokens=1_500) for key, value in base.llm_providers.items()}
     config = replace(base, llm_providers=providers, answer_max_input_tokens=LIMIT)
 
-    text_only = model_input_measurement(config, "指示", "合成の本文", {"type": "object"})
-    with_images = model_input_measurement(config, "指示", "合成の本文", {"type": "object"}, image_count=3)
+    schema = TextOutput.model_json_schema()
+    text_only = model_input_measurement(config, "指示", "合成の本文", schema)
+    with_images = model_input_measurement(config, "指示", "合成の本文", schema, image_count=3)
 
     assert set(text_only) == {
         "model_input_limit_tokens",
@@ -157,10 +158,30 @@ def test_measurement_adds_images_and_text_only_is_unchanged():
         "available_input_tokens",
         "estimated_input_tokens",
         "token_count_method",
+        "complete_input_limit_tokens",
+        "complete_input_estimated_tokens",
         "fits",
     }
     assert with_images["estimated_input_tokens"] == text_only["estimated_input_tokens"] + 4_500
     assert (with_images["image_count"], with_images["estimated_image_tokens"]) == (3, 4_500)
+    provider = providers[config.default_answer_llm]
+    images = [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}] * 3
+    wire = oci._response_wire_request(
+        {
+            "model": provider.model,
+            "input": [
+                {"role": "system", "content": "指示"},
+                {"role": "user", "content": [{"type": "input_text", "text": "合成の本文"}, *images]},
+            ],
+            "text_format": TextOutput,
+            "max_output_tokens": with_images["output_reserved_tokens"],
+            "temperature": oci.LLM_TEMPERATURE,
+            **({"reasoning": {"effort": provider.reasoning_effort}} if provider.reasoning_effort else {}),
+        }
+    )
+    actual = complete_input_measurement({**wire, "stream": True}, limit_tokens=LIMIT, image_tokens=1_500)
+    assert actual.media_tokens == 4_500
+    assert with_images["complete_input_estimated_tokens"] == actual.estimated_tokens
 
 
 def test_evidence_selection_reserves_attached_images():

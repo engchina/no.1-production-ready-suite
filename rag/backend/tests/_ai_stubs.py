@@ -19,6 +19,7 @@ from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
+from app.config import enterprise_ai_default_model_id, get_settings
 from app.schemas.document import SourceProfile
 from app.schemas.extraction import StructuredExtraction
 from tests.audit_fixtures import is_audit_wire
@@ -141,6 +142,10 @@ def _stub_parser_runner(
 
 def patch_ai_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     """取込・検索パイプラインが既定構築する OCI クライアントを差し替える。"""
+    settings = get_settings()
+    if not enterprise_ai_default_model_id(settings):
+        # 送信しない合成モデルにも、項目抽出の本番の入力計測に使う識別子を割り当てる。
+        monkeypatch.setattr(settings, "oci_enterprise_ai_default_text_model", "stub-model")
     monkeypatch.setattr("app.rag.ingestion.OciEnterpriseAiClient", DeterministicEnterpriseAi)
     monkeypatch.setattr("app.rag.ingestion.OciGenAiClient", DeterministicGenAi)
     monkeypatch.setattr("app.rag.pipeline.OciEnterpriseAiClient", DeterministicEnterpriseAi)

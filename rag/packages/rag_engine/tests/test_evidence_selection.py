@@ -84,10 +84,11 @@ def test_over_limit_splits_a_single_long_source_and_reads_all_of_it():
 
 def test_model_token_budget_is_checked_alongside_character_budget():
     calls: list[list[str]] = []
-    _, _, diagnostic = select([span(0, "合成の本文。" * 300)], chars=100000, tokens=1800, read=recording_reader(calls))
+    _, _, diagnostic = select([span(0, "合成の本文。" * 1000)], chars=100000, tokens=10_000, read=recording_reader(calls))
     assert diagnostic["batch_count"] >= 2
     assert diagnostic["fits"] is True
     assert diagnostic["estimated_input_tokens"] <= diagnostic["available_input_tokens"]
+    assert diagnostic["complete_input_estimated_tokens"] <= diagnostic["complete_input_limit_tokens"]
 
 
 def test_fixed_input_that_cannot_fit_is_a_technical_failure():
@@ -230,14 +231,16 @@ def test_wiki_related_evidence_is_read_in_one_batch_and_kept_together_across_the
     """#5512: Wiki の関係で結ばれた根拠は、点数で予算の境界をまたぐ並びでも同じ組で読み、補う順でもまとめて残す。"""
     spans = related_inputs()
     calls: list[list[str]] = []
-    selected, _, diagnostic = select(spans, source_scores=RELATED_SCORES, read=recording_reader(calls))
+    selected, _, diagnostic = select(spans, tokens=96_000, source_scores=RELATED_SCORES, read=recording_reader(calls))
     assert diagnostic["selection"] == "batched_reading"
     assert spans[0]["text"] in calls[0] and spans[3]["text"] in calls[0]
     assert [value["source_id"] for value in selected] == ["s0", "s3"]
 
     # 関係が無ければ、同じ並びで別の組に分かれ、補う順は点数だけで決まる。
     unrelated_calls: list[list[str]] = []
-    unrelated, _, _ = select(related_inputs(related=False), source_scores=RELATED_SCORES, read=recording_reader(unrelated_calls))
+    unrelated, _, _ = select(
+        related_inputs(related=False), tokens=96_000, source_scores=RELATED_SCORES, read=recording_reader(unrelated_calls)
+    )
     assert spans[3]["text"] not in unrelated_calls[0]
     assert [value["source_id"] for value in unrelated] == ["s0", "s1"]
 

@@ -88,7 +88,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_args
 
@@ -344,7 +344,8 @@ class AnthropicMessagesError(RuntimeError):
 # --------------------------------------------------------------------------- 要求
 
 
-def _message_params(request: AnthropicMessagesRequest) -> dict[str, Any]:
+def anthropic_message_params(request: AnthropicMessagesRequest) -> dict[str, Any]:
+    """構造化出力を変換し、公式 SDK の messages.stream に渡す引数を返す。"""
     content: list[dict[str, Any]] = [image.to_param() for image in request.images]
     if request.user_text:
         content.append({"type": "text", "text": request.user_text})
@@ -651,6 +652,7 @@ def create_anthropic_message(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = 0,
     http_client: anthropic.DefaultHttpxClient | None = None,
+    check_input: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> AnthropicMessagesResult:
     """Messages API を 1 回呼び、本文・usage を返す（失敗は :class:`AnthropicMessagesError`）。
 
@@ -659,7 +661,9 @@ def create_anthropic_message(
     """
     model_id = request.model_id.strip()
     key = _require_api_key(api_key, model_id)
-    params = _message_params(request)
+    params = anthropic_message_params(request)
+    if check_input is not None:
+        check_input({**params, "stream": True})
     try:
         with (
             anthropic.Anthropic(
@@ -686,11 +690,14 @@ async def acreate_anthropic_message(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = 0,
     http_client: anthropic.DefaultAsyncHttpxClient | None = None,
+    check_input: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> AnthropicMessagesResult:
     """:func:`create_anthropic_message` の非同期版（引数・結果・失敗は同じ）。"""
     model_id = request.model_id.strip()
     key = _require_api_key(api_key, model_id)
-    params = _message_params(request)
+    params = anthropic_message_params(request)
+    if check_input is not None:
+        check_input({**params, "stream": True})
     try:
         async with (
             anthropic.AsyncAnthropic(

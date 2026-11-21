@@ -1961,8 +1961,10 @@ def synthesize_grounded_answer(
             selecting_evidence = True
 
             def selected_generation_schema(values: Sequence[dict[str, Any]], *, guided: bool = guided) -> Mapping[str, Any]:
-                return grounded.generation_output_model(
-                    question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
+                return grounded.final_answer_model(
+                    extrema.result.remaining_request if extrema.result and extrema.result.remaining_request else question,
+                    guided=guided,
+                    unit_catalog=grounded.generation_unit_catalog(values),
                 ).model_json_schema()
 
             generation_images = [i["prompt_path"] for i in images if i.get("prompt_path")] if mode == "vision_attachments" else []

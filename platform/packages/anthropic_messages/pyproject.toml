@@ -1,6 +1,6 @@
 [project]
 name = "production-ready-anthropic-messages"
-version = "0.1.0"
+version = "0.2.0"
 description = "Thin shared caller of the Anthropic Claude Messages API (official anthropic SDK) that returns the same result shape and failure classification as the OCI Enterprise AI layers of the No.1 Production Ready products."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

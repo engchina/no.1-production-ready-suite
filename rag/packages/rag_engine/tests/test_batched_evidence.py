@@ -187,12 +187,12 @@ def test_partition_respects_model_tokens_and_preserves_nonzero_parent_offsets():
     def read(system, prompt, schema):
         from rag_engine.generation.input_budget import model_input_measurement
 
-        assert model_input_measurement(config(answer_max_input_tokens=2300), system, prompt, schema.model_json_schema())["fits"]
+        assert model_input_measurement(config(answer_max_input_tokens=10_000), system, prompt, schema.model_json_schema())["fits"]
         values = json.loads(prompt)["evidence"]
         seen.extend(values)
         return reading(schema, findings=[])
 
-    _, _, receipt = prepare([original], read, answer_max_input_tokens=2300)
+    _, _, receipt = prepare([original], read, answer_max_input_tokens=10_000)
     assert receipt["batch_count"] > 1
     assert receipt["batches"][0]["ranges"][0]["start"] == 900
     assert receipt["batches"][-1]["ranges"][-1]["end"] == original["end"]
@@ -238,7 +238,7 @@ def test_nonshrinking_map_results_do_not_silently_discard_sources():
 
 
 def test_parent_larger_than_old_24000_gate_can_use_single_generation():
-    inputs = [span(0, "合成本文。" * 5000)]
+    inputs = [span(0, "合成AB。" * 5000)]
     selected, _, diagnostic = prepare_batched_evidence(
         inputs,
         replace(config(), evidence_budget_chars=80000),

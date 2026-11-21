@@ -57,6 +57,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
+from pr_backend_core.generation_input import GenerationInputLimitError
+
 logger = logging.getLogger(__name__)
 
 
@@ -543,6 +545,8 @@ def _kind_from_status(status: int, text: str) -> ErrorKind:
 
 
 def _kind_from_type(exc: BaseException, text: str) -> ErrorKind | None:
+    if isinstance(exc, GenerationInputLimitError):
+        return ErrorKind.TOO_LARGE
     names = [klass.__name__.casefold() for klass in type(exc).__mro__]
     if isinstance(exc, ssl.SSLCertVerificationError) or (
         isinstance(exc, ssl.SSLError) and any(marker in text for marker in _TLS_MARKERS)

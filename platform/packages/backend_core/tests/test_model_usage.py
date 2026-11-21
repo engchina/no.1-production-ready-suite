@@ -98,6 +98,26 @@ def test_unmeasured_calls_with_llm_calls_are_partial() -> None:
     assert run_usage_summary_fields(usage) == (12, "partial")
 
 
+@pytest.mark.parametrize("sent", [False, True])
+def test_budget_rejected_leaf_and_its_wrapper_do_not_count_as_requests(sent: bool) -> None:
+    collector = ModelUsageCollector()
+    with (
+        operation_trace("run", operation_id="budget", listener=collector.observe),
+        observed_span("gen_ai.chat", kind="client"),
+    ):
+        with observed_span("gen_ai.chat", kind="client") as rejected:
+            rejected.set_attributes(
+                {"gen_ai.request.model": "model-a", "pr.call.transport_status": "not_sent"}
+            )
+        if sent:
+            _llm_call("model-b", {"input_tokens": 0, "output_tokens": 0})
+    usage = collector.summary()
+    assert usage is not None
+    assert (usage.requests, usage.measured_requests) == (int(sent), int(sent))
+    assert run_usage_summary_fields(usage) == ((0, "complete") if sent else (None, "unmeasured"))
+    assert usage.models == (["model-b"] if sent else [])
+
+
 def test_failed_calls_and_truncated_traces_are_partial() -> None:
     collector = ModelUsageCollector()
     with operation_trace("run", operation_id="usage-failed", listener=collector.observe):
