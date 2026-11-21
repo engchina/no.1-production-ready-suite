@@ -46,52 +46,40 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 class AnswerComparisonRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    cells: list[str] = Field(min_length=1, description="見出しに対応する値・条件・判定を語句で示す。判定のセルは可否だけ。")
+    cells: list[str] = Field(
+        min_length=1,
+        description="見出しに対応する値・条件・判定を語句で示す。判定は可否だけ。理由は制約だけを示し、他のセルの値は読み上げない。",
+    )
     scope: str = Field(description="セルから読み取れない適用範囲・例外だけを最短の語句で一つ。判定条件がセルにある行は空文字。")
     sources: list[str] = Field(description="この行を裏付ける入力の引用ラベル（角括弧を含む）。")
 
 
 class AnswerTableBody(BaseModel):
-    """表を末尾に組み立てるための生成時の表現。保存と引用検証には従来の本文を渡す。"""
+    """表または段落の本文を行から組み立てる生成時の表現。保存と引用検証には従来の本文を渡す。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    headers: list[str] = Field(min_length=1, description="必要な比較軸だけを列にする。")
+    headers: list[str] = Field(
+        description="複数状態の判定は「対象・成立条件・今回の事実・判定」に分ける。数値比較は項目ごとに列を作る。段落や自由形式は空配列とし各行を本文一セルにする。",
+    )
     rows: list[AnswerComparisonRow] = Field(
-        min_length=1, description="理由や可否も尋ねられた対象を含め、各対象を一行にする。理由は該当行だけに置く。"
+        min_length=1,
+        description="比較・判定は各対象を一行にし、可否の理由はその行だけに収める。別に尋ねられた操作は順に一行で答える。質問にない手順や補足は加えない。",
     )
 
     def markdown(self) -> str:
         rows = []
         for row in self.rows:
             cells = list(row.cells)
-            if len(cells) != len(self.headers):
+            if len(cells) != (len(self.headers) or 1):
                 raise ValueError("表の各行のセル数を見出しの数に合わせてください。")
             if row.scope.strip():
                 cells[0] += f"（{row.scope.strip()}）"
             cells[-1] += "".join(row.sources)
             rows.append(AnswerTableRow(cells=cells))
+        if not self.headers:
+            return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
         return table_markdown(AnswerTable(columns=self.headers, rows=rows))
-
-
-class AnswerBodyInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    table: AnswerTableBody | None = Field(
-        description=(
-            "複数の状態のうちどれと言えるかを尋ねられたら、各状態を一行にし、成立条件・今回の事実・判定を短いセルで示す。"
-            "数値比較では対象ごとに一行とし、値・適用範囲・例外をその行で完結させる。単独の可否や手順だけなら null。"
-        )
-    )
-    points: list[str] = Field(
-        description="比較だけの質問は空配列。比較に加えて別の操作等を尋ねられたときは、その別の要求だけに直接答えて引用する。表がない場合は各要求に一文で答える。手順は操作の順にまとめる。必要な条件・否定・例外を残し、同じ意味の言い換え、表の値の再掲、質問外の案内を省く。ほかに要求がなければ空配列。"
-    )
-
-    def markdown(self) -> str:
-        parts = [point.strip() for point in self.points if point.strip()]
-        if self.table is not None:
-            parts.append(self.table.markdown())
-        return "\n\n".join(parts)
 
 
 class FullAnswerWire(BaseModel):
@@ -105,14 +93,18 @@ class FullAnswerWire(BaseModel):
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
     answer_body: str = Field(
         min_length=1,
-        description=("各要求に一度だけ答える完成本文。先に表を埋め、表で答えた内容は points に含めない。利用者の形式指定を優先する。"),
+        description=(
+            "各要求に一度だけ答える。複数の対象の値や状態の判定を尋ねる質問には表を選び、"
+            "可否の理由・適用範囲は該当行に、別に求められた手順・前提は独立した行にまとめる。"
+            "それ以外の質問は本文一列で答える。必要な条件・否定・例外を残す。利用者の形式指定を優先する。"
+        ),
     )
 
-    @field_validator("answer_body", mode="before", json_schema_input_type=AnswerBodyInput)
+    @field_validator("answer_body", mode="before", json_schema_input_type=AnswerTableBody)
     @classmethod
     def render_body(cls, value: Any) -> Any:
         # モデルには構造化した入力を示し、保存済みの文字列や段落の再検証には従来の本文を使う。
-        return AnswerBodyInput.model_validate(value).markdown() if isinstance(value, dict) else value
+        return AnswerTableBody.model_validate(value).markdown() if isinstance(value, dict) else value
 
     # 各値の定義はこの項目の説明だけに書き、生成の指示の Step では繰り返さない。adapter が説明を指示の最後の
     # Step にして全モデルに送る（#5230・#5238）。

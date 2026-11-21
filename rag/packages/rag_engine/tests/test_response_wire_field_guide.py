@@ -69,4 +69,4 @@ def test_generation_request_carries_each_answer_field_meaning_once(role: str | N
     assert body and body in tail and body not in system
     assert "各要求" in body and "条件・否定・例外" in tail and "判定" in tail
     assert "引用" in tail and "適用範囲" in tail
-    assert set(sent["text"]["format"]["schema"]["$defs"]["AnswerBodyInput"]["properties"]) == {"points", "table"}
+    assert set(sent["text"]["format"]["schema"]["$defs"]["AnswerTableBody"]["required"]) == {"headers", "rows"}

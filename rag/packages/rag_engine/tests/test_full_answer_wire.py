@@ -527,13 +527,15 @@ def test_table_cell_citation_keeps_the_value_without_a_second_explanation():
     assert rendered.citation_lines[0]["scope_source_ids"] == ["child-a"]
 
 
-def test_structured_body_places_cited_table_after_points_and_checks_its_labels():
+def test_structured_table_excludes_competing_prose_and_checks_its_labels():
     units, unit = catalog()
     model = full_answer_model(units)
     cells = {"headers": ["対象", "値"], "rows": [{"cells": ["A", "12"], "scope": "共通", "sources": [f"[{unit}]"]}]}
-    payload = {"answer_body": {"points": ["先に確認する。"], "table": cells}, "response_kind": "answered", "confidence": "high"}
+    payload = {"answer_body": cells, "response_kind": "answered", "confidence": "high"}
     wire = model.model_validate(payload)
-    assert wire.answer_body.startswith("先に確認する。\n\n| 対象")
+    assert wire.answer_body.startswith("| 対象")
+    with pytest.raises(ValidationError):
+        model.model_validate({**payload, "answer_body": {**cells, "points": ["補足"]}})
     assert wire.answer_body.endswith(f"| A（共通） | 12[{unit}] |")
     assert model.model_validate(wire.model_dump()).answer_body == wire.answer_body
     cells["rows"][0]["sources"] = ["[E1.99]"]
@@ -548,5 +550,15 @@ def test_empty_structured_body_cannot_become_an_empty_success():
     units, _ = catalog()
     with pytest.raises(ValidationError):
         full_answer_model(units).model_validate(
-            {"answer_body": {"points": [], "table": None}, "response_kind": "answered", "confidence": "high"}
+            {"answer_body": {"headers": ["本文"], "rows": []}, "response_kind": "answered", "confidence": "high"}
         )
+
+
+def test_headerless_body_renders_prose_and_explicit_single_column_stays_a_table():
+    units, unit = catalog()
+    body = {"headers": [], "rows": [{"cells": ["説明。"], "scope": "", "sources": [f"[{unit}]"]}]}
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+    assert wire.answer_body == f"説明。[{unit}]"
+    body["headers"] = ["本文"]
+    wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+    assert wire.answer_body.startswith("| 本文 |\n| --- |")
