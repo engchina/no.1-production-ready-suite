@@ -645,3 +645,18 @@ def test_same_short_answer_in_one_cell_keeps_both_sources_and_other_rows():
     body = {"headers": ["項目", "答え"], "rows": rows}
     answer = model.model_validate({"answer_body": body, "response_kind": "conditional", "confidence": "high"}).answer_body
     assert answer.splitlines()[-2:] == [f"| 入力・出力 | 不明[E1][{unit}] |", f"| 再掲の指定欄 | 不明[{unit}] |"]
+
+
+def test_unresolved_cell_contains_its_reason_and_rejects_unrelated_facts():
+    units, unit = catalog()
+    model = grounded.generation_output_model("入力の最大値は？", unit_catalog=units)
+    gap = {"requested_phrase": "入力の最大値", "conclusion": "不明", "missing_basis": "資料に上限の記載なし", "sources": [f"[{unit}]"]}
+
+    def render(cell):
+        body = {"headers": [], "rows": [{"label": "", "cells": [cell]}]}
+        return model.model_validate({"answer_body": body, "response_kind": "conditional", "confidence": "high"}).answer_body
+
+    assert render(gap) == f"不明（資料に上限の記載なし）[{unit}]"
+    for invalid in ({**gap, "missing_basis": " "}, {**gap, "requested_phrase": "別の属性"}, {**gap, "facts": ["別の規則"]}):
+        with pytest.raises(ValidationError):
+            render(invalid)

@@ -43,6 +43,12 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 )
 
 
+def _check_requested_phrase(phrase: str, question: str | None) -> None:
+    phrase = phrase.strip()
+    if not phrase or (question is not None and phrase not in question):
+        raise ValueError("requested_phrase は原質問にある連続した語句をそのまま選んでください。対応する要求がない補足は掲載しません。")
+
+
 class AnswerFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -60,19 +66,15 @@ class AnswerFact(BaseModel):
     )
 
     short_answer: str = Field(
-        description="原文に並記された別の属性を外し、問われた属性だけに答える短句。資料で断定できないときは、"
-        "どの根拠が欠けていて何が分からないかを一節にする。規則上の可否は判定、求められた理由は適用規則を一節だけ書く。数値欄に転記した値を理由に再掲しない。"
+        description="問われた属性について資料が裏付ける短答。原文に並記された別の属性は外す。"
+        "規則上の可否は判定、求められた理由は適用規則を一節だけ書く。数値欄に転記した値を理由に再掲しない。"
         "条件・例外そのものに値や境界が必要なら保つ。対応する要求がなければ空文字。"
     )
 
     def requested_answer(self, question: str | None) -> str:
         if self.requested_phrase is None:
             return ""
-        phrase = self.requested_phrase.strip()
-        if not phrase or (question is not None and phrase not in question):
-            raise ValueError(
-                "requested_phrase は原質問にある連続した語句をそのまま選んでください。対応する要求がない場合は null にしてください。"
-            )
+        _check_requested_phrase(self.requested_phrase, question)
         return self.short_answer.strip()
 
 
@@ -85,7 +87,19 @@ class ComparisonValue(BaseModel):
     sources: list[str] = Field(description="比較した対象のこの値を示す原文ラベル。")
 
 
-def _cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None) -> str:
+class EvidenceGap(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    requested_phrase: str = Field(min_length=1, description="資料で確定できない具体的な属性を尋ねた原質問の語句。")
+    conclusion: str = Field(min_length=1, description="その属性が資料では不明という短い判断。理由は次の欄に書く。")
+    missing_basis: str = Field(min_length=1, description="その判断の理由。問われた値を決める情報が資料にどう欠けているかを一節で。")
+    sources: list[str] = Field(description="その限界を示す原文ラベル。")
+
+
+def _cell_text(cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None) -> str:
+    if isinstance(cell, EvidenceGap):
+        _check_requested_phrase(cell.requested_phrase, question)
+        return f"{cell.conclusion}（{cell.missing_basis}）" + "".join(dict.fromkeys(cell.sources))
     # 同じセルで一致する短答は一度だけ示し、その判断を支える出典はすべて残す。
     sources_by_text: dict[str, list[str]] = {}
     for fact in cell:
@@ -102,10 +116,11 @@ class AnswerRow(BaseModel):
         description="質問で尋ねられた項目・対象の短い行名。根拠にある複数の規則から値を選んだ場合は、"
         "選んだ版・区分などその値の適用範囲を該当する行名か見出しに一度明記する。範囲の説明文は添えない。"
     )
-    cells: list[list[AnswerFact | ComparisonValue]] = Field(
+    cells: list[EvidenceGap | list[AnswerFact | ComparisonValue]] = Field(
         description=(
-            "二列目から順にセルを埋める。比較表の数値欄はその対象の number、ほかは根拠のある短句。"
-            "複数列の先頭は label、段落と一列表は一セル。その対象に問われていない欄は空配列。"
+            "二列目から順に、その属性を資料で確定できるかに応じてセルの型を選ぶ。"
+            "未確定なら conclusion と missing_basis の一組で完結する。確定できる場合は根拠のある短句の配列、数値比較は number。"
+            "行名は label、段落と一列表は一セル。該当しない欄は空配列。"
         )
     )
 
