@@ -1,12 +1,14 @@
 """背景構築の実行器を、合成の保存先・モデルで確認する。"""
 
 import asyncio
+import json
 from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from pr_backend_core.logging import StructuredFormatter
 
 from app.clients import ai_calls
 from app.clients.wiki_store import WikiSnapshot
@@ -17,6 +19,106 @@ from app.rag.wiki_models import fingerprint
 from app.rag.wiki_paragraphs import Paragraph, SentenceTooLarge
 from app.rag.wiki_prepare import WikiRequestBuilder
 from tests.test_wiki_compiler import Model, units
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+async def test_invalid_single_response_retries_or_logs_field_and_rule(
+    setup: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, recovers: bool
+) -> None:
+    jobs, store, model = setup
+    store.source = replace(store.source, units=store.source.units[:1])
+    monkeypatch.setattr(ai_calls, "_sleep", AsyncMock())
+    row = {
+        "unit_id": "U1",
+        "context": "private-content",
+        "possible_questions": ["private-content" * 20],
+        "dependencies": [],
+        "unresolved": [],
+        "private-key": "private-value",
+    }
+    invalid = json.dumps({"items": [row]})
+    generate = AsyncMock(return_value=invalid)
+    if recovers:
+        valid = dict(row, possible_questions=[])
+        del valid["private-key"]
+        generate.side_effect = [invalid, json.dumps({"items": [valid]})]
+    monkeypatch.setattr(model, "generate", generate)
+    await jobs.build("document-a", "owner-a")
+    failures = [r for r in caplog.records if r.getMessage() == "wiki_build_failed"]
+    if recovers:
+        assert store.state["status"] == "READY" and len(store.pages) == len(store.embedded) == 1
+        assert generate.await_count == 2 and not failures
+        return
+    (record,) = failures
+    data = vars(record)
+    assert store.state["status"] == "FAILED" and not store.pages
+    assert (data["document_id"], data["source_fingerprint"]) == ("document-a", "source-a")
+    assert (data["wiki_phase"], data["validation_schema"]) == ("generate_pages", "WikiContexts")
+    assert data["unit_id_hash"] == fingerprint(store.source.units[0].unit_id)
+    assert data["attempts"] == generate.await_count == 3
+    assert data["validation_errors"] == [
+        {"type": "string_too_long", "loc": ["items", 0, "possible_questions", 0]},
+        {"type": "extra_forbidden", "loc": ["items", 0, "<redacted>"]},
+    ]
+    assert data["error_kind"] == "invalid_output" and data["http_status"] is None
+    formatter = StructuredFormatter(
+        service_name="rag",
+        service_version="test",
+        environment="test",
+        component="api",
+        max_record_bytes=32768,
+    )
+    logged = formatter.format(record)
+    assert json.loads(logged)["validation_errors"] == data["validation_errors"]
+    assert "private-" not in logged
+
+
+async def test_embedding_http_failure_and_checkpoint_database_failure_have_distinct_logs(
+    setup: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    jobs, store, _ = setup
+    request = httpx.Request("POST", "https://example.invalid/private-path")
+    error = httpx.HTTPStatusError("private-response", request=request, response=httpx.Response(503))
+    embedder = AsyncMock()
+    embedder.embed.side_effect = error
+    jobs.embedder_factory = lambda _: embedder
+    await jobs.build("document-a", "owner-a")
+    (first,) = (vars(r) for r in caplog.records if r.getMessage() == "wiki_build_failed")
+    assert (first["wiki_phase"], first["error_kind"], first["http_status"]) == (
+        "embed_pages",
+        "unavailable",
+        503,
+    )
+    caplog.clear()
+    store.state = None
+    embedder.embed.side_effect = None
+    embedder.embed.return_value = [[1.0, 0.0]] * len(store.pages)
+
+    async def fail_write(*args: Any, **kwargs: Any) -> None:
+        try:
+            raise ValueError("ORA-03113 private-message")
+        except ValueError as cause:
+            raise RuntimeError("private-wrapper") from cause
+
+    monkeypatch.setattr(store, "checkpoint", fail_write)
+    await jobs.build("document-a", "owner-a")
+    (second,) = (vars(r) for r in caplog.records if r.getMessage() == "wiki_build_failed")
+    assert second["wiki_phase"] == "save_embeddings"
+    assert second["exception_cause_details"][0]["error_code"] == "ORA-03113"
+    assert "private-" not in str([first, second])
+
+
+async def test_invalid_json_logs_position_of_the_failed_response(
+    setup: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    jobs, store, model = setup
+    store.source = replace(store.source, units=store.source.units[:1])
+    monkeypatch.setattr(ai_calls, "_sleep", AsyncMock())
+    monkeypatch.setattr(model, "generate", AsyncMock(return_value='{"items":\n private-content}'))
+    await jobs.build("document-a", "owner-a")
+    (data,) = (vars(r) for r in caplog.records if r.getMessage() == "wiki_build_failed")
+    assert (data["json_line"], data["json_column"], data["error_kind"]) == (2, 2, "invalid_output")
+    assert data["attempts"] == 3 and "private-content" not in str(data)
 
 
 async def test_unsplittable_sentence_logs_hashed_anchor_and_window_offsets(

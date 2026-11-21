@@ -24,13 +24,13 @@ from rag_parser_core.oci_enterprise_ai import (
 
 from app.rag.wiki_models import (
     WIKI_SCHEMA_VERSION,
-    WikiContexts,
+    WikiContext,
     WikiPage,
     WikiUnit,
     context_schema,
     fingerprint,
 )
-from app.rag.wiki_packet import WikiInputTooLarge, WikiRequest
+from app.rag.wiki_packet import WikiInputTooLarge, WikiRequest, WikiUnitValidationError
 
 WIKI_CONTEXT_PROMPT = (Path(__file__).with_name("templates") / "wiki_build.txt").read_text(
     encoding="utf-8"
@@ -90,8 +90,7 @@ async def compile_pages(
     """各出力を検証して保存する。
 
     切断・JSON・schema の不正は対象を二分して小さい出力で取り直す（#4977）。
-    単一対象でも不正なら保存せずに失敗する。一時的な失敗（429・5xx・接続・時間切れ）は
-    ``caller``（共通の上限つきの実行器）が再試行する（#5426）。
+    単一対象の形式の不正と一時的な呼び出しの失敗は、共通の実行器の予算内で再試行する。
     """
     if not units or batch_size < 1:
         return []
@@ -161,12 +160,11 @@ async def compile_pages(
             schema = context_schema([unit.unit_id for unit in missing], list(expected))
             text = json.dumps(data, ensure_ascii=False)
 
-        async def once(attempt: Attempt | None = None) -> str | None:
-            # 出力の途切れは再試行せず、呼び出しの外で対象を二分する。
+        async def once(attempt: Attempt | None = None) -> list[WikiContext] | None:
             await authorize()
             try:
                 with sdk_retries_disabled():
-                    return await async_call_with_model_purpose(
+                    raw = await async_call_with_model_purpose(
                         "document.extract",
                         model.generate,
                         "",
@@ -179,9 +177,22 @@ async def compile_pages(
                 if len(missing) == 1:
                     raise
                 return None
+            try:
+                if request is not None:
+                    return request.resolve(raw, allow_partial=True)
+                start = raw.find("{")
+                parsed, _ = json.JSONDecoder().raw_decode(raw[start:] if start >= 0 else raw)
+                return schema.model_validate(parsed).items
+            except (json.JSONDecodeError, ValidationError) as error:
+                # 複数なら分割し、単一なら形式の誤りを実行器に返して同じ入力だけを再試行する。
+                if len(missing) == 1:
+                    if caller is not None:
+                        raise WikiUnitValidationError(missing[0].unit_id) from error
+                    raise
+                return None
 
         try:
-            raw = await (caller.call(once, label="wiki_build") if caller else once())
+            items = await (caller.call(once, label="wiki_build") if caller else once())
         except Exception as exc:
             kind = exc.kind if isinstance(exc, BoundedCallError) else classify_error(exc).kind
             if request is None or kind != ErrorKind.TOO_LARGE:
@@ -195,21 +206,7 @@ async def compile_pages(
             else:
                 raise
             return
-        if raw is None:
-            await split(missing, smaller_than=smaller_than)
-            return
-        try:
-            if request is not None:
-                items = request.resolve(raw, allow_partial=True)
-            else:
-                decoder = json.JSONDecoder()
-                start = raw.find("{")
-                parsed, _ = decoder.raw_decode(raw[start:] if start >= 0 else raw)
-                output: WikiContexts = schema.model_validate(parsed)
-                items = output.items
-        except (json.JSONDecodeError, ValidationError):
-            if len(missing) == 1:
-                raise
+        if items is None:
             await split(missing, smaller_than=smaller_than)
             return
         completed = [

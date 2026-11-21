@@ -6,7 +6,7 @@ from dataclasses import astuple
 from itertools import islice
 from typing import Any
 
-from pr_backend_core.bounded_calls import Attempt, BoundedCaller
+from pr_backend_core.bounded_calls import BoundedCaller
 from pr_backend_core.generation_input import GENERATION_INPUT_LIMIT
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from rag_parser_core.oci_enterprise_ai import (
@@ -125,20 +125,17 @@ class WikiRequestBuilder:
                 return scope
 
             async def generate(req: WikiRequest) -> str:
-                async def once(attempt: Attempt) -> str:
-                    await authorize()
-                    with sdk_retries_disabled():
-                        return await async_call_with_model_purpose(
-                            "document.extract",
-                            model.generate,
-                            "",
-                            req.text,
-                            system_prompt=self.system_prompt,
-                            response_schema=req.schema.model_json_schema(),
-                            response_schema_name="wiki_contexts",
-                        )
-
-                return await caller.call(once, label="wiki_build")
+                await authorize()
+                with sdk_retries_disabled():
+                    return await async_call_with_model_purpose(
+                        "document.extract",
+                        model.generate,
+                        "",
+                        req.text,
+                        system_prompt=self.system_prompt,
+                        response_schema=req.schema.model_json_schema(),
+                        response_schema_name="wiki_contexts",
+                    )
 
             related = [
                 scope[uid]
@@ -153,6 +150,7 @@ class WikiRequestBuilder:
                 max_source_chars=max_chars,
                 measure=self.measure,
                 generate=generate,
+                caller=caller,
                 authorize=authorized_scope,
                 input_fingerprint=version,
                 related=related,
