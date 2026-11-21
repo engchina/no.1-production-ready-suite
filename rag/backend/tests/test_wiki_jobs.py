@@ -15,6 +15,7 @@ from app.rag import wiki_jobs as module
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.wiki_models import fingerprint
 from app.rag.wiki_paragraphs import Paragraph, SentenceTooLarge
+from app.rag.wiki_prepare import WikiRequestBuilder
 from tests.test_wiki_compiler import Model, units
 
 
@@ -23,7 +24,7 @@ async def test_unsplittable_sentence_logs_hashed_anchor_and_window_offsets(
 ) -> None:
     jobs, store, model = setup
     error = SentenceTooLarge(Paragraph(0, 35, source="anchor-a"), 5, 35)
-    monkeypatch.setattr(module.WikiRequestBuilder, "compile", AsyncMock(side_effect=error))
+    monkeypatch.setattr(WikiRequestBuilder, "compile", AsyncMock(side_effect=error))
     await jobs.build("document-a", "owner-a")
     (record,) = (r for r in caplog.records if r.getMessage() == "wiki_build_failed")
     data = vars(record)
