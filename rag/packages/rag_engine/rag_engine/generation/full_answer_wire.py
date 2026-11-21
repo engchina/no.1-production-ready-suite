@@ -99,7 +99,7 @@ class EvidenceGap(BaseModel):
 
 _ROW_NOTE = re.compile(r"(?:（([^（）]+)）|\(([^()]+)\))$")
 _NOTE_PART = re.compile(r"\d+|[^\d\s・]+")
-_ITEM_SEPARATOR = re.compile(r"[、;；]|(?<!\d)[,，]|[,，](?!\d)")
+_ITEM_SEPARATOR = re.compile(r"(?<=\d)(?:\s*[、，,・；;/／]\s*|\s+)(?=[^\W\d_])")
 
 
 def _value_under_row_note(text: str, note: str) -> str:

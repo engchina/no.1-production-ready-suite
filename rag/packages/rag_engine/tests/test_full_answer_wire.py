@@ -652,6 +652,8 @@ def test_same_short_answer_in_one_cell_keeps_both_sources_and_other_rows():
     ("scope", "short_answer", "expected"),
     [
         ("A2・B", "左12、右0（A2・B）", "左12、右0"),
+        ("A2・B", "左・下12・右0（A2・B）", "左・下12・右0"),
+        ("A2・B", "左12 右0（A2・B）", "左12 右0"),
         ("A2・B", "A2B：左12、右0", "左12、右0"),
         ("A2・B", "A2・B: Left 1,234, Right −0.50", "Left 1,234, Right −0.50"),
         ("A2・B", "左12、右0（予備時のみ）", "左12、右0（予備時のみ）"),
