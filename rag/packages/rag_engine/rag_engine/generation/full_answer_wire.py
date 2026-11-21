@@ -43,29 +43,27 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 )
 
 
+class AnswerFact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(description="一つの値・判断・操作または成立条件を、答えに使う短句で書く。独立に省ける補足とは別の要素にする。")
+    sources: list[str] = Field(description="この事実だけを支える原文ラベル。引用はこの欄にまとめる。")
+    required: bool = Field(
+        description=(
+            "この事実を取り除くと質問への判断・操作・必要条件・例外のいずれかが失われる場合だけ true。"
+            "言い換え、他の項目で伝わる総論、質問とは異なる属性を説明する事実は false。"
+        )
+    )
+
+
 class AnswerRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    label: str = Field(
+    label: str = Field(description="質問で尋ねられた項目・対象の短い行名。数値比較の適用範囲は行名だけに添える。")
+    cells: list[list[AnswerFact]] = Field(
         description=(
-            "表示する行名。質問で尋ねられた項目・対象だけを短く名付ける。数値比較は対象名に適用範囲を添える。"
-            "同じ語を含んでいても異なる属性は独立した行として扱う。"
-        )
-    )
-    sources: list[str] = Field(
-        description="この行が答える質問に直接必要な原文ラベルだけを先に選ぶ。別の対象・別の属性にしか答えない行は選ばない。"
-    )
-    cells: list[str] = Field(
-        description=(
-            "行名に対する値のみ。複数列の表では先頭列は label なので、二列目から順に記入する。段落と一列表は一セル。"
-            "独立した別の事実を補足としてセルに混ぜず、別行で要否を判断する。引用は sources だけ。"
-        )
-    )
-
-    required: bool = Field(
-        description=(
-            "セルを埋めてから判断する。この行を取り除くと利用者の求めた値・判断・操作またはその必要条件・例外が欠ける場合だけ true。"
-            "項目ごとの判断で答えが揃う場合、その判断をまとめ直した総論は false。周辺知識や別属性の規則も false。"
+            "二列目から順に、各セルを事実の配列で埋める。複数列の先頭列は label。段落と一列表は一セル。"
+            "その対象に問われていない欄は空配列。条件と例外は判定に必要なものを残す。"
         )
     )
 
@@ -90,12 +88,16 @@ class AnswerTableBody(BaseModel):
     def markdown(self) -> str:
         rows = []
         for row in self.rows:
-            if not row.required:
-                continue
-            cells = [row.label, *row.cells] if len(self.headers) > 1 else list(row.cells)
-            if len(cells) != (len(self.headers) or 1):
+            value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
+            if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
-            cells[-1] += "".join(dict.fromkeys(row.sources))
+            values = [
+                " ".join(fact.text.strip() + "".join(dict.fromkeys(fact.sources)) for fact in cell if fact.required and fact.text.strip())
+                for cell in row.cells
+            ]
+            if not any(values):
+                continue
+            cells = [row.label, *values] if len(self.headers) > 1 else values
             rows.append(AnswerTableRow(cells=cells))
         if not self.headers:
             return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
