@@ -19,8 +19,8 @@ from rag_engine.evaluation.answer_eval import (
 PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
 # 合成の匿名の対照（正しい部分回答・資料不足の明示・事実の矛盾・標準回答が方向性だけ・答えの無い回答、
 # 資料不足の留保と標準回答の提案の方向・標準回答も確定できない・留保を含む事実の矛盾）。
-# judge_inputs は判定へ実際に渡した入力。r_point_and_claim_scope の recorded_output は claude-opus-5-5・
-# rubric_version 40 の実測（#5670）。従来の記録は xai.grok-4.7（推論の量 medium）・rubric_version 34 の実測（#5262・#5302）。
+# judge_inputs は判定へ実際に渡した入力。claude-opus-5-5 の記録は r_point_and_claim_scope が rubric 40（#5670）、
+# r_heading_gap_and_attribute が 41（#5677・#5682）。それ以前は xai.grok-4.7（推論の量 medium）・rubric 34 の実測（#5262・#5302）。
 CASES = json.loads((Path(__file__).with_name("fixtures") / "correctness_judge_cases.json").read_text())
 
 
@@ -73,6 +73,19 @@ def test_topic_coverage_and_claim_references_are_scoped_per_item():
         ("supported", reference),
         ("not_in_standard", ""),
     }
+
+
+def test_heading_completes_each_gap_and_only_matching_availability_is_cited():
+    case = next(case for case in CASES if case["id"] == "r_heading_gap_and_attribute")
+    output = AnswerCorrectnessOutput.model_validate(case["recorded_output"])
+    inputs = case["judge_inputs"]
+    result = score_judgement(inputs, output)
+    paragraphs = inputs["actual_responses"][0]["answer"]
+    heading = paragraphs[1]["text"]
+    matching_gap = inputs["standard_answer"][1]["text"]
+    gaps = {(claim["answer"], claim["standard"]) for claim in result["correctness_claims"] if claim["states_source_gap"]}
+    assert gaps == {(f"{heading} {paragraphs[2]['text']}", ""), (f"{heading} {paragraphs[3]['text']}", matching_gap)}
+    assert [(point["point"], point["covered"]) for point in result["coverage_points"]] == [("対象の種類", False), ("保存期間", True)]
 
 
 def test_inputs_number_standard_points_and_attach_citations_to_their_passage():
@@ -198,7 +211,7 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     assert "points[].text" in steps[4] and "actual_responses[].answer[].sources[]" in steps[4]
     step3 = CORRECTNESS_PROMPT.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
     questions = {line.split(":", 1)[0].removeprefix("- "): line for line in step3.splitlines() if line.startswith("- ")}
-    assert tuple(questions) == ("standard_ids", "states_source_gap", "consistent")
+    assert tuple(questions) == ("states_source_gap", "standard_ids", "consistent")
     # 照合する観点は、その主張が答えている問い。条件と観点の両方を照合に使う。
     assert all(term in questions["standard_ids"] for term in ("対象・条件・適用範囲", "同じ問い", "standard_answer[].id"))
     assert "確認できない" in questions["states_source_gap"] and "記載がない" in questions["states_source_gap"]
@@ -210,7 +223,7 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     assert "条件と結論は一つの主張にまとめ" in step2 and "claim" in step2
     schema = AnswerCorrectnessOutput.model_json_schema()
     claim_properties = schema["$defs"]["JudgedClaim"]["properties"]
-    assert list(claim_properties) == ["claim", "answer_ids", "standard_ids", "states_source_gap", "consistent"]
+    assert list(claim_properties) == ["claim", "answer_ids", *questions]
     assert "verdict" not in claim_properties
     assert all("description" not in claim_properties[key] for key in ("states_source_gap", "consistent"))
     # 実際に送る指示（項目の説明の Step を足した文）でも、問いの答え方は 1 回だけ。

@@ -2010,5 +2010,115 @@
     "expected_correctness": 0.0,
     "recorded_coverage": 0.6666666666666666,
     "recorded_reason": "回答の「設定Aは9です。」と標準回答の「設定Aは4です。」が食い違う。"
+  },
+  {
+    "id": "r_heading_gap_and_attribute",
+    "question": "項目Aと項目Bの方法、対象Kの種類と保存期間を教えてください。",
+    "standard_answer": "項目Aの方法の記載先は別紙です。項目Bの方法は資料では確認できません。対象Kの保存期間は5日です。",
+    "answer_text": "対象Kの保存期間は5日です。\n\n資料から確認できなかった事項\n- 項目Aの方法\n- 項目Bの方法",
+    "answer_points": [
+      "対象の種類",
+      "保存期間"
+    ],
+    "judge_inputs": {
+      "question": "項目Aと項目Bの方法、対象Kの種類と保存期間を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "項目Aの方法の記載先は別紙です。"
+        },
+        {
+          "id": "S2",
+          "text": "項目Bの方法は資料では確認できません。"
+        },
+        {
+          "id": "S3",
+          "text": "対象Kの保存期間は5日です。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "対象の種類"
+        },
+        {
+          "id": "P2",
+          "text": "保存期間"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "項目Aと項目Bの方法、対象Kの種類と保存期間を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "対象Kの保存期間は5日です。"
+            },
+            {
+              "id": "A2",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A3",
+              "text": "- 項目Aの方法"
+            },
+            {
+              "id": "A4",
+              "text": "- 項目Bの方法"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "claim": "対象Kの保存期間は5日です。",
+          "answer_ids": [
+            "A1"
+          ],
+          "states_source_gap": false,
+          "standard_ids": [
+            "S3"
+          ],
+          "consistent": true
+        },
+        {
+          "claim": "項目Aの方法は資料から確認できなかった。",
+          "answer_ids": [
+            "A3",
+            "A2"
+          ],
+          "states_source_gap": true,
+          "standard_ids": [],
+          "consistent": true
+        },
+        {
+          "claim": "項目Bの方法は資料から確認できなかった。",
+          "answer_ids": [
+            "A4",
+            "A2"
+          ],
+          "states_source_gap": true,
+          "standard_ids": [
+            "S2"
+          ],
+          "consistent": true
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": false
+        },
+        {
+          "point_id": "P2",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 1.0,
+    "recorded_coverage": 0.5,
+    "recorded_reason": "標準回答と矛盾する主張はありません。"
   }
 ]
