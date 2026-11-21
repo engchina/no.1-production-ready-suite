@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import rag_engine.generation.answering as answering
@@ -266,3 +267,26 @@ async def test_pipeline_calls_the_expansion_only_in_the_expanded_flow(
     started = {stage for stage, outcome in steps if outcome == "started"}
     assert ("answer_step:章節の拡張" in started) is expanded
     assert response.answer
+
+
+@pytest.mark.parametrize("flow", [BASIC_FLOW, EXPANDED_FLOW])
+@pytest.mark.parametrize("wiki_enabled", [False, True])
+@pytest.mark.parametrize("generate_answer", [False, True])
+async def test_only_expanded_flow_with_wiki_enabled_starts_wiki(
+    monkeypatch: MonkeyPatch, flow: AnswerFlow, wiki_enabled: bool, generate_answer: bool
+) -> None:
+    """同じプロファイルの有効設定でも、基本の検索は Wiki の取得を一度も始めない。"""
+    monkeypatch.setenv("RAG_WIKI_SEARCH_ENABLED", str(wiki_enabled))
+    wiki = AsyncMock(return_value=[])
+    monkeypatch.setattr(AnswerEngine, "_wiki_sources", wiki)
+
+    response, _, _, _ = await _run_with_progress(
+        monkeypatch,
+        SearchRequest(
+            query=QUESTION, search_answer_profile_id="profile-a", generate_answer=generate_answer
+        ),
+        flow=flow,
+    )
+
+    assert wiki.await_count == int(flow == EXPANDED_FLOW and wiki_enabled)
+    assert response.citations
