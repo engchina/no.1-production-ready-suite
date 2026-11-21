@@ -1112,7 +1112,7 @@ class WikiStore:
         await self.oracle._run_transaction(operation)
 
     async def links(self, unit_ids: Sequence[str], scope: WikiScope) -> list[tuple[str, str, str]]:
-        """単位から出る関連と入る関連（起点の単位 ID, 終点の単位 ID, 関係）。
+        """回答の探索で単位から出る関連（起点の単位 ID, 終点の単位 ID, 関係）。
 
         起点と終点の両方の案内が ``resolve`` で決めた範囲（今の検索範囲・公開済み・
         今の原文の保存版）にある関連だけを返す。案内は KB をまたいで再利用されるので、所属は
@@ -1122,15 +1122,14 @@ class WikiStore:
             return []
         where, binds = _scoped_where(scope)
         outgoing, out_binds = _oracle_in_predicate("l.source_unit_id", "link_from", unit_ids)
-        incoming, in_binds = _oracle_in_predicate("l.target_unit_id", "link_to", unit_ids)
         current = f"SELECT 1 {WIKI_SCOPED_FROM} WHERE {where}"
         rows = await self.oracle._fetch_all(
             f"""SELECT l.source_unit_id,l.target_unit_id,l.relation FROM rag_wiki_links l
-            WHERE ({outgoing} OR {incoming})
+            WHERE {outgoing}
               AND EXISTS ({current} AND p.page_id=l.source_page_id)
               AND EXISTS ({current} AND p.page_id=l.target_page_id)
             ORDER BY l.source_unit_id,l.target_unit_id""",
-            {**binds, **out_binds, **in_binds},
+            {**binds, **out_binds},
         )
         return [
             (str(row["source_unit_id"]), str(row["target_unit_id"]), str(row["relation"]))

@@ -257,7 +257,7 @@ KB 詳細の「文書構造索引の構築」のカードを外し、図を「Wi
 ## 既存環境の更新手順（#5492 Wiki の文書をまたぐ関連）
 
 Wiki の構築で、文書の案内を作った後に、同じ KB のほかの文書の単位との関連（例外・前提・参照など）を作り、Wiki の検索で
-同じ文書の依存と一緒に両向き・複数段に辿るようにした（[Wiki ナビゲーション](./wiki-navigation.md)）。
+同じ文書の依存と一緒に起点から出る向きに複数段に辿る（[Wiki ナビゲーション](./wiki-navigation.md)）。
 
 - **migration**（`20261119_5492_wiki_links`）は表 `RAG_WIKI_LINKS`・`RAG_WIKI_LINK_DOCUMENTS` と索引を足すだけで、データは変えない。
   本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` だけでよい。

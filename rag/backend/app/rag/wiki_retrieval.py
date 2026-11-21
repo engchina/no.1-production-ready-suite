@@ -42,7 +42,7 @@ files の案内は検索用で、原文の代わりにはしません。資料�
 
 ## Step 2: 読むファイルを選ぶ
 直接の規則・手順に加え、条件・例外・前提・警告・参照先を含み得るファイルの ID と、
-そのファイルの中を探す検索表現を返します。異なる版・対象を混ぜません。
+そのファイルの中を探す検索表現を返します。質問が特定の資料や記述から始めるよう求めるときは、その起点のファイルを含めます。異なる版・対象を混ぜません。
 """
 
 READ_PROMPT = """## Step 1: 質問と、選んだファイルの単位・章節の案内を読む
@@ -52,6 +52,13 @@ READ_PROMPT = """## Step 1: 質問と、選んだファイルの単位・章節�
 直接の答えと、版・前提・否定・例外・連続する手順・警告・完了の条件を支える単位の ID を返します。
 条件や定義が離れた箇所に分かれていれば、その章節の ID を返して章節の全体の原文を読みます。
 質問に無い条件を作りません。
+
+## Step 3: 質問で指定された探索の起点を選ぶ
+root_unit_ids には、質問が出発点にしている文書・章節・記述の中で、問いに対応する原文単位を返します。
+参照をたどる質問では、参照を書いた側を選びます。参照先で値を読む必要があっても、それを新たな起点にはしません。
+質問が複数の場所をそれぞれの出発点に指定した場合は、そのすべての起点を含めます。
+起点の指定がない横断的な質問では null にし、unit_ids と section_ids で直接読む候補を選びます。
+指定された起点が候補に見つからなければ空の配列を返します。
 """
 
 
@@ -228,7 +235,7 @@ class WikiRetriever:
     async def follow(
         self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
     ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]], dict[str, str]]:
-        """選んだ単位から、同じ文書の依存と文書をまたぐ関連（出る向き・入る向き）を辿る（#5492）。
+        """選んだ単位から、同じ文書の依存と文書をまたぐ関連を起点から出る向きに辿る（#5492）。
 
         ``RAG_WIKI_LINK_DEPTH`` 段まで、段ごとに関係の種類の順（例外・前提を先）で、まだ読んでいない
         単位を ``RAG_WIKI_LINK_MAX_UNITS`` まで足す。一度見た単位は辿り直さない（循環を止める）。
@@ -261,13 +268,9 @@ class WikiRetriever:
                 for uid in frontier
                 for dependency in pages[uid].navigation.dependencies
             )
-            current = set(frontier)
             for source, target, relation in await store.links(frontier, scope):
                 edges.add((source, target, relation))
-                if source in current:
-                    offers.append((target, relation, "link"))
-                if target in current:
-                    offers.append((source, relation, "link"))
+                offers.append((target, relation, "link"))
             found: dict[str, tuple[int, str]] = {}
             for uid, relation, kind in offers:
                 rank = priority.get(relation, len(priority))
@@ -425,6 +428,10 @@ class WikiRetriever:
             sections.sort(key=lambda section: first_rank(section[1]))
             # 2 回目: 選んだファイルの目録・単位・章節から読む原文を選ぶ。
             # 版の属性を引き継ぐ（#5044）。
+            unit_choices = (
+                [handles.short("U", page.unit.unit_id) for page in read_candidates],
+                opts.rag_wiki_selected_units,
+            )
             choice = await self.plan(
                 READ_PROMPT,
                 {
@@ -459,10 +466,8 @@ class WikiRetriever:
                 scoped_plan(
                     WikiReadPlan,
                     {
-                        "unit_ids": (
-                            [handles.short("U", page.unit.unit_id) for page in read_candidates],
-                            opts.rag_wiki_selected_units,
-                        ),
+                        "root_unit_ids": unit_choices,
+                        "unit_ids": unit_choices,
                         "section_ids": (
                             [handles.short("S", section_id) for section_id, _, _ in sections],
                             opts.rag_wiki_selected_sections,
@@ -473,12 +478,17 @@ class WikiRetriever:
                 calls=calls,
                 stage="Wiki: 読む単位と章節の選択（2 回目のモデル）",
             )
-            # 選んだ各ファイルの最上位の単位は、章節の選択で失わない。
-            selected.extend(group[0].unit.unit_id for group in per_document if group)
-            selected.extend(handles.real(choice.unit_ids))
-            selected.extend(uid for sid in handles.real(choice.section_ids) for uid in members[sid])
+            if choice.root_unit_ids is not None:
+                selected = handles.real(choice.root_unit_ids)
+            else:
+                # 起点を指定しない検索は、各文書の上位単位と選んだ章節を直接読む。
+                selected.extend(group[0].unit.unit_id for group in per_document if group)
+                selected.extend(handles.real(choice.unit_ids))
+                selected.extend(
+                    uid for sid in handles.real(choice.section_ids) for uid in members[sid]
+                )
         selected = list(dict.fromkeys(selected))
-        # 案内の依存（同じ文書）と文書をまたぐ関連（両向き）を、予算の内で段ごとに辿る（#5492）。
+        # 案内の依存（同じ文書）と文書をまたぐ関連（出る向き）を、予算の内で段ごとに辿る（#5492）。
         with _stage("Wiki: 依存と関連の辿り", seconds):
             followed, hops, missing, edges, origins = await self.follow(wiki, pages, selected)
         with _stage("Wiki: 原文の読み込み", seconds):

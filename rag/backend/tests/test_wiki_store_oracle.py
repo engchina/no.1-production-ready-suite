@@ -242,7 +242,7 @@ def _pages(units: Any, context: str) -> list[WikiPage]:
 
 
 async def test_cross_document_links_follow_current_versions_scope_and_cascade() -> None:
-    """文書をまたぐ関連（#5492）: 候補の除外・lease・checkpoint・両向きの読取・所属・削除。"""
+    """文書をまたぐ関連（#5492）: 候補の除外・lease・checkpoint・出る向きの読取・所属・削除。"""
     oracle, token = OracleClient(), uuid4().hex[:12]
     store = WikiStore(oracle)
     kb = await oracle.create_knowledge_base(name=f"synthetic-links-{token}")
@@ -292,10 +292,10 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
         links=[(first_a, first_b, "exception", "合成の理由")],
         done=[f"forward:{first_a}"],
     )
-    # 出る向きと入る向きの両方で読める。
+    # 出る向きだけを探索する。
     expected = [(first_a, first_b, "exception")]
     assert await store.links([first_a], scope) == expected
-    assert await store.links([first_b], scope) == expected
+    assert await store.links([first_b], scope) == []
     # 終点の文書が今の KB に無ければ辿らない（案内は KB をまたいで再利用されるので読むときに照合）。
     assert await store.links([first_a], narrow_scope) == []
     # 中断の後は判定済みの鍵を返して続きから作る。
@@ -334,7 +334,8 @@ async def test_cross_document_links_follow_current_versions_scope_and_cascade() 
         links=[(first_b, first_a, "prerequisite", "合成の理由")],
         done=[f"reverse:{first_b}"],
     )
-    assert await store.links([first_a], scope) == [(first_b, first_a, "prerequisite")]
+    assert await store.links([first_a], scope) == []
+    assert await store.links([first_b], scope) == [(first_b, first_a, "prerequisite")]
 
     def count(connection: OracleConnectionProtocol) -> Any:
         return _fetch_one(
