@@ -91,6 +91,8 @@ def test_points_default_to_standard_sentences_and_answer_ids_run_across_turns():
         )
     )
     assert inputs["points"] == [{"id": "P1", "text": "項目Aは5。"}, {"id": "P2", "text": "項目Bは8。"}]
+    assert inputs["question"] == "項目Aと項目Bの値は？"
+    assert [turn["question"] for turn in inputs["actual_responses"]] == ["質問", "返答"]
     ids = [[row["id"] for row in response["answer"]] for response in inputs["actual_responses"]]
     assert ids == [["A1"], ["A2", "A3"]]
 
@@ -174,24 +176,24 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     """照合の問いの答え方は指示の Step 3 にだけ書く（応答 schema の説明に重ねない。#5250）。印はモデルに選ばせない（#5408）。"""
     from pr_backend_core.response_schema import with_schema_field_guide
 
-    assert [line for line in CORRECTNESS_PROMPT.splitlines() if line.startswith("## Step")] == [
-        "## Step 1: 評価の入力を読む",
-        "## Step 2: 本文を主張に分ける",
-        "## Step 3: 主張を標準回答と照らす",
-        "## Step 4: 要点の網羅を確かめる",
-    ]
+    steps = CORRECTNESS_PROMPT.split("## Step ")
+    assert [step[:2] for step in steps[1:]] == ["1:", "2:", "3:", "4:"]
+    for path in ("actual_responses[].question", "standard_answer[].id", "points[].id", "actual_responses[].answer[].id"):
+        assert path in steps[1]
+    assert "actual_responses[].answer[].text" in steps[2] and "answer_ids" in steps[2]
+    assert "points[].text" in steps[4] and "actual_responses[].answer[].sources[]" in steps[4]
     step3 = CORRECTNESS_PROMPT.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
     questions = {line.split(":", 1)[0].removeprefix("- "): line for line in step3.splitlines() if line.startswith("- ")}
     assert tuple(questions) == ("standard_ids", "states_source_gap", "consistent")
     # 同じ点は、同じ対象・同じ条件・適用範囲・観点。条件・観点が違う文は照らす文にしない。
-    assert "同じ条件・適用範囲・観点" in questions["standard_ids"] and "違う文" in questions["standard_ids"]
-    assert "確認できない" in questions["states_source_gap"] and "記載が無い" in questions["states_source_gap"]
+    assert "対象・条件・適用範囲・観点" in questions["standard_ids"] and "standard_answer[].id" in questions["standard_ids"]
+    assert "確認できない" in questions["states_source_gap"] and "記載がない" in questions["states_source_gap"]
     assert "同じ事実・結論" in questions["consistent"] and "可能性の一つ" in questions["consistent"]
     assert "留保を添えていても false" in questions["states_source_gap"]
     assert "同時に真になり得る" not in questions["consistent"]
     # 主張は条件ごと取り出して claim に書く。条件を主張の種類として別に取り出させない。
     step2 = CORRECTNESS_PROMPT.split("## Step 2:", 1)[1].split("## Step 3:", 1)[0]
-    assert "条件と結論を別の主張に分けない" in step2 and "claim" in step2
+    assert "条件と結論は一つの主張にまとめ" in step2 and "claim" in step2
     schema = AnswerCorrectnessOutput.model_json_schema()
     claim_properties = schema["$defs"]["JudgedClaim"]["properties"]
     assert list(claim_properties) == ["claim", "answer_ids", "standard_ids", "states_source_gap", "consistent"]

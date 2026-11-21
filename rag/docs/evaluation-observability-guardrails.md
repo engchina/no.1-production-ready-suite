@@ -58,7 +58,7 @@
 
 ### 判定の呼び出しの形（#5037・#5262・#5302）
 
-回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`、`rubric_version=38`）は、1件の評価でモデルを1回呼びます。RAGAS の FactualCorrectness（回答を主張に分け、参照と照らす）を参考に、正確性と網羅を分けて測ります。
+回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`、`rubric_version=39`）は、1件の評価でモデルを1回呼びます。RAGAS の FactualCorrectness（回答を主張に分け、参照と照らす）を参考に、正確性と網羅を分けて測ります。
 
 - **入力**: 質問・標準回答の文（`S1`…）・網羅の要点（`P1`…）・回答の本文の段落（`A1`…。複数往復は対話の全体を通し番号）を番号つきで渡します。引用の表示行は本文から除きます（#5039）。取得した根拠は渡しません（資料不足と述べたことの正しさ・検索の取れ具合は判定しません。検索は `required_evidence_recall` で見ます）。
 - **要点**: 必須の回答要点と確かめる条件（`required_answer_points` + `required_conditions`）。どちらも無いケースは標準回答の文を要点にします。必須の回答要点・条件は標準回答に結合せず、正確性は標準回答だけと比べます。
