@@ -600,6 +600,8 @@ def prepare_batched_evidence(
                 answers = [excerpt["batch_answer"] for excerpt in result if inside(excerpt, value) and excerpt.get("batch_answer")]
                 result = [excerpt for excerpt in result if not inside(excerpt, value)]
                 result.append({**value, **({"batch_answer": "\n".join(answers)} if answers else {})})
+            if not count:
+                return list(chosen)
             return order_document_spans(tag(with_firsts(result)), priority=document_order)
 
         def growth(value: dict[str, Any], estimated: Sequence[dict[str, Any]]) -> int | None:
@@ -944,7 +946,7 @@ def prepare_batched_evidence(
                     yield from outcomes
                 if split_last:
                     for item in source:
-                        known = with_firsts(list(reduced.values()))
+                        known = list(reduced.values())
                         catalog = ReviewCatalog.build(original_inputs, known) if known else None
                         yield read_batch(item, catalog=catalog, known=known)
 
@@ -977,7 +979,7 @@ def prepare_batched_evidence(
                             units = reading_units(original)
                             # 原文と座標は番号からコードが切り出す。モデルの文字列を原文として受け取らない。
                             excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
-                            kept = original if document_key(original) in versioned else excerpt
+                            kept = original if document_key(original) in versioned and not select_dependencies else excerpt
                             key = (*chunk_key(kept), kept.get("start", 0), kept.get("end", len(kept["text"])))
                             verified = verified_candidate(finding.answer, excerpt["text"])
                             answers = (reduced.get(key, {}).get("batch_answer"), verified)
@@ -996,6 +998,14 @@ def prepare_batched_evidence(
                                     if verified not in item["answers"]:
                                         item["answers"].append(verified)
                             receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
+                            if select_dependencies:
+                                receipt.setdefault("selected_ranges", []).append(
+                                    {
+                                        "source_id": excerpt["source_id"],
+                                        "start": excerpt.get("start", 0),
+                                        "end": excerpt.get("end", len(excerpt["text"])),
+                                    }
+                                )
                         if mismatch is not None:
                             # 不合格の範囲を組から入力へ絞る（#4090）。その finding を採らず、その入力の原文を残す。
                             retained = [by_id[key] for key in mismatch.diagnostic["retained_evidence_ids"]]
@@ -1026,7 +1036,7 @@ def prepare_batched_evidence(
                         unverified_failure = (exc, receipt)
                     finally:
                         if reviewing:
-                            review_carry[:] = with_firsts(list(reduced.values()))
+                            review_carry[:] = list(reduced.values())
                         record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
             if deadline_stop:
                 if reviewing:
@@ -1035,6 +1045,16 @@ def prepare_batched_evidence(
                 break
             selected = order_document_spans(tag(with_firsts(list(reduced.values()))), priority=document_order)
             prompt, measurement = final_measure(selected)
+            if select_dependencies and not measurement["fits"] and unverified_failure is None:
+                # 各組では先頭を含む完全な原文を読んだ。全文へ戻すと入らない場合だけ、検証済みの原文座標で最終入力を測る。
+                ranges = list(reduced.values())
+                selected_chunks = {chunk_key(value) for value in ranges}
+                # 別の先頭 chunk の前提は残す。同じ chunk なら、すでに読んだ全文の代わりに選ばれた原文を使う。
+                leading = [first for first in firsts if chunk_key(first) not in selected_chunks]
+                excerpts = order_document_spans(tag(with_first_chunks(ranges, leading)), priority=document_order)
+                excerpt_prompt, excerpt_measurement = final_measure(excerpts)
+                if excerpt_measurement["fits"]:
+                    selected, prompt, measurement = excerpts, excerpt_prompt, excerpt_measurement
             if reviewing:
                 reviewing, review_finished = False, True
                 review_detail.update(
@@ -1047,12 +1067,12 @@ def prepare_batched_evidence(
                 if not measurement["fits"]:
                     stop_reduction("dependency_review_selected_evidence_exceeds_budget")
             if select_dependencies and not review_finished and measurement["fits"] and selected:
-                pending = [value for value in original_inputs if not covered(value, selected)]
+                pending = [value for value in with_first_chunks(original_inputs, firsts) if not covered(value, selected)]
                 if review_sources is not None:
                     pending = [value for value in pending if document_key(value) in review_sources]
                 review_detail.update(pending_span_count=len(pending), scope="selected" if review_sources is not None else "all_pending")
                 if pending:
-                    review_carry[:] = selected
+                    review_carry[:] = list(reduced.values())
                     reviewing = True
                     # 残り容量で細分化が増えても、補読は先行する読取と同じ回数までで止める。
                     review_detail.update(status="reading", calls=0, call_limit=len(batches))

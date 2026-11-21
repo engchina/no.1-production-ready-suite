@@ -81,6 +81,31 @@ def test_shared_originals_recover_the_bridge_without_a_planning_call(reverse, wo
     assert all(receipt.get("dependency_review", {}).get("combined_evidence_chars", 0) <= 3500 for receipt in diagnostic["batches"])
 
 
+def test_versioned_documents_recover_an_unselected_range_with_original_offsets():
+    values = [{**value, "document_scope": [value["source"], "version"], "document_first_chunk": True} for value in inputs()]
+
+    def read(system, prompt, schema):
+        data = json.loads(prompt)
+        sources = {"p0", "p2"}
+        if "known_evidence" in data:
+            assert all(len(item["text"]) < 100 for item in data["known_evidence"])
+        if "known_evidence" in data and "review_catalog" not in data:
+            sources = {"p1"}
+        ids = [item["id"] for item in data.get("review_catalog", []) if item["source"] == "p1"]
+        return response(schema, data["evidence"], sources, ids)
+
+    selected, _, diagnostic = run(values, read)
+    batches = diagnostic["batches"]
+    assert {r["source_id"] for b in batches if b["pass_index"] == 1 for r in b.get("selected_ranges", [])} == {"p0", "p2"}
+    recovered = [r for b in batches if b["pass_index"] == 2 for r in b.get("selected_ranges", [])]
+    assert len(recovered) == 1
+    entry = recovered[0]
+    assert entry["source_id"] == "p1"
+    assert values[1]["text"][entry["start"] : entry["end"]].strip() == "X の接続先は Y です。"
+    assert all(any(v["source_id"] == key for v in selected) for key in ["p0", "p1", "p2"])
+    assert diagnostic["fits"]
+
+
 def test_same_names_and_chunk_ids_do_not_cross_document_versions():
     original = [
         {**span(0, "合成 A。"), "source": "same.txt", "document_scope": ["document", "v1"]},
