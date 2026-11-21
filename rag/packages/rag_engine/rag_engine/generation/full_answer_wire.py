@@ -184,6 +184,54 @@ class AnswerRow(BaseModel):
     )
 
 
+def _evidence_blocks(marks: list[str]) -> set[str]:
+    return {m[1] for mark in marks if (m := re.fullmatch(r"\[(E[1-9]\d*)(?:\.[1-9]\d*)?\]", mark))}
+
+
+def _scope_contains(row: AnswerRow, value: str, blocks: set[str]) -> bool:
+    note = _ROW_NOTE.search(row.label.rstrip())
+    if not note or len(row.cells) != 1 or not isinstance(facts := row.cells[0], list):
+        return False
+    scope = (note[1] or note[2]).strip()
+    if value not in (part.strip() for part in re.split(r"[・、，,／/]", scope)):
+        return False
+    shown = [fact for fact in facts if isinstance(fact, AnswerFact) and fact.requested_phrase]
+    items = [item for fact in shown for item in _ITEM_SEPARATOR.split(_value_under_row_note(fact.short_answer, scope))]
+    return (
+        len(items) > 1
+        and all(_is_named_number(item) for item in items)
+        and any(value in fact.text and blocks.intersection(_evidence_blocks(fact.sources)) for fact in shown)
+    )
+
+
+def _shared_scope_sources(rows: list[AnswerRow], question: str) -> tuple[set[int], dict[int, list[str]]]:
+    omitted: set[int] = set()
+    citations: dict[int, list[str]] = {}
+    for index, row in enumerate(rows):
+        if (
+            len(row.cells) != 1
+            or not isinstance(cell := row.cells[0], list)
+            or len(cell) != 1
+            or not isinstance(fact := cell[0], AnswerFact)
+        ):
+            continue
+        note = _ROW_NOTE.search(row.label.rstrip())
+        phrase = fact.requested_phrase
+        value = fact.short_answer.strip()
+        name = re.fullmatch(r"([^\W\d_]+)\s*\d+", value)
+        # 利用者が指定した前提から選んだ識別子に限る。その属性を別に尋ねていれば元の行を残す。
+        if not (phrase and phrase in question and note and (note[1] or note[2]) in phrase and name):
+            continue
+        if name[1] in question or phrase in row.label or phrase in fact.answers_which_question:
+            continue
+        blocks = _evidence_blocks(fact.sources)
+        targets = [i for i, other in enumerate(rows) if i != index and _scope_contains(other, value, blocks)]
+        if len(targets) == 1:
+            omitted.add(index)
+            citations.setdefault(targets[0], []).extend(fact.sources)
+    return omitted, citations
+
+
 class AnswerTableBody(BaseModel):
     """回答ごとに一組のセルを受け、表または段落を組み立てる。"""
 
@@ -209,15 +257,17 @@ class AnswerTableBody(BaseModel):
     def markdown(self, question: str | None, *, can_repair: bool = False) -> str:
         rows = []
         value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
-        for row in self.rows:
+        omitted, scope_sources = _shared_scope_sources(self.rows, question) if len(self.headers) == 2 and question else (set(), {})
+        for index, row in enumerate(self.rows):
             if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
             note = _ROW_NOTE.search(row.label.rstrip()) if len(self.headers) > 1 else None
             row_note = (note[1] or note[2]).strip() if note else ""
             values = [self._cell_text(cell, question, row_note, can_repair) for cell in row.cells]
-            if not any(values):
+            if not any(values) or index in omitted:
                 continue
-            cells = [row.label, *values] if len(self.headers) > 1 else values
+            label = row.label + "".join(dict.fromkeys(scope_sources.get(index, [])))
+            cells = [label, *values] if len(self.headers) > 1 else values
             rows.append(AnswerTableRow(cells=cells))
         if not self.headers:
             return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
