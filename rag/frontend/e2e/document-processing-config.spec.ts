@@ -400,18 +400,17 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
   // 解析エンジンの選択肢は文書解析の画面のカードと同じ並び（PARSER_BACKEND_ORDER。#3359）。
-  // 構造化レコード JSONL は Unstructured の後、XML ツリー JSON の前（#2457）。続いて Dots.OCR →
-  // OCI Document Understanding（利用者の判断）。OCI Document Understanding（#3374）は
-  // 準備中（ロードマップ）の印と理由つきで、選べない選択肢として並ぶ。
+  // 準備中の解析エンジンには選べない理由も表示する。
   await expect(page.getByRole("option")).toHaveText([
     "Docling",
     "Unstructured",
     "構造化レコード JSONL",
     "XML ツリー JSON",
-    "Dots.OCR",
+    /^Dots\.OCR準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
     /^OCI Document Understanding準備中（ロードマップ）準備中（ロードマップ）のため、まだ選べません。$/,
   ]);
-  await page.getByRole("option", { name: "Dots.OCR" }).click();
+  await expect(page.getByRole("option", { name: /^Dots\.OCR/ })).toBeDisabled();
+  await page.getByRole("option", { name: "Unstructured" }).click();
   // Vision は解析エンジンに関係なくレシピで選べる。「図表 VLM 要約」は Vision に統合した(#497)。
   await expect(panel.getByText("図表 VLM 要約")).toHaveCount(0);
   // 概要(読み取り専用)にも同じ見出しがあるので、編集欄(説明付き)に絞る。
@@ -426,7 +425,7 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
 
   await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
   expect(state.saved()).toMatchObject({
-    parser_adapter_backend: "dots_ocr",
+    parser_adapter_backend: "unstructured",
     vision_enabled: true,
     chunk_size: 800,
   });
@@ -855,11 +854,11 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
-  await page.getByRole("option", { name: "Dots.OCR" }).click();
+  await page.getByRole("option", { name: "Unstructured" }).click();
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
 
   await expect(panel).toContainText("取込ジョブの実行中は設定を変更できません");
-  await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("Dots.OCR");
+  await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("Unstructured");
 });
 
 for (const viewport of [
@@ -933,7 +932,7 @@ for (const viewport of [
       await panel.getByRole("button", { name: "処理設定を編集" }).click();
       await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
       await panel.getByRole("combobox", { name: "文書解析" }).click();
-      await page.getByRole("option", { name: "Dots.OCR" }).click();
+      await page.getByRole("option", { name: "Unstructured" }).click();
       await panel.getByRole("button", { name: "構築設定を保存" }).click();
       await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
       await expect(page.getByText(conflict)).toHaveCount(0);
