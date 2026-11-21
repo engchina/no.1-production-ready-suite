@@ -207,6 +207,42 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
 LINKS = fingerprint("links-1")
 
 
+async def test_page_retry_only_requeues_one_failed_member_and_preserves_link_state() -> None:
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store = WikiStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-retry-{token}")
+    await store.set_enabled(kb.id, True)
+    documents = []
+    for suffix in ("a", "b"):
+        did, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=token + suffix)
+        snapshot = await store.source_units(did)
+        revision = await store.revision_fingerprint(did)
+        assert snapshot and revision
+        snapshot = replace(
+            snapshot, compiler_fingerprint=fingerprint("compiler"), revision_fingerprint=revision
+        )
+        await store.enqueue(snapshot)
+        lease = await store.claim(snapshot, lease_seconds=300)
+        assert lease
+        await store.finish(snapshot, lease, failure_code="timeout")
+        claimed = await store.claim_links(
+            did, snapshot.source_fingerprint, LINKS, lease_seconds=300
+        )
+        assert claimed
+        await store.finish_links(did, claimed[0], failure_code="build_failed")
+        documents.append((did, revision))
+    (target, revision), (sibling, _) = documents
+    before_sibling = await store.document_state(sibling)
+    before_links = [await store.link_state(did) for did, _ in documents]
+    assert not await store.requeue_failed_document_pages("absent-kb", target, revision)
+    assert await store.requeue_failed_document_pages(kb.id, target, revision)
+    assert not await store.requeue_failed_document_pages(kb.id, target, revision)
+    state = await store.document_state(target)
+    assert state and state["status"] == "QUEUED"
+    assert await store.document_state(sibling) == before_sibling
+    assert [await store.link_state(did) for did, _ in documents] == before_links
+
+
 async def _published(store: WikiStore, did: str, context: str) -> tuple[Any, list[WikiPage]]:
     """合成の案内を作って公開した文書（保存版と案内）。"""
     revision = await store.revision_fingerprint(did)

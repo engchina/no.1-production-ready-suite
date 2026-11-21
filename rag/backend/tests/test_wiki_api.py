@@ -3,13 +3,15 @@
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from pr_backend_core.api import OffsetParams
 from pydantic import ValidationError
 
 from app.api.routes import wiki as module
 from app.schemas.wiki import KnowledgeBaseWikiUpdate
+from app.security.permissions import MENU_KNOWLEDGE_BASES, permission_for_route
 
 PAGE = OffsetParams(limit=25, offset=0)
 
@@ -73,13 +75,22 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Any:
         if not data["actor_ok"]:
             raise PermissionError("合成の権限の変更")
 
+    async def retry_document_pages(kb: str, did: str) -> None:
+        if did != "doc-a":
+            raise KeyError(did)
+        if not data["actor_ok"]:
+            raise PermissionError("構築権限が変更されました。")
+        data["events"].append((kb, did))
+
     monkeypatch.setattr(module, "OracleClient", Oracle)
     monkeypatch.setattr(module, "WikiStore", Store)
     monkeypatch.setattr(
         module,
         "wiki_jobs",
         SimpleNamespace(
-            notify=lambda *args, **kwargs: data["events"].append((args, kwargs)), actor=actor
+            notify=lambda *args, **kwargs: data["events"].append((args, kwargs)),
+            actor=actor,
+            retry_document_pages=retry_document_pages,
         ),
     )
     return data
@@ -120,6 +131,35 @@ async def test_retry_requires_enabled_build(api: Any) -> None:
     with pytest.raises(HTTPException) as caught:
         await module.retry_wiki_build("kb-a", PAGE)
     assert caught.value.status_code == 409 and not api["events"] and not api["writes"]
+
+
+async def test_document_retry_preserves_kb_actor_and_does_not_notify_whole_kb(api: Any) -> None:
+    app = FastAPI()
+    app.include_router(module.router)
+    template = "/knowledge-bases/{knowledge_base_id}/wiki/documents/{document_id}/retry"
+    assert permission_for_route("POST", template) == frozenset({MENU_KNOWLEDGE_BASES})
+    uri = "/kb-a/wiki/documents/doc-a/retry"
+    legacy = FastAPI()
+    legacy.post("/{knowledge_base_id}/wiki/retry")(module.retry_wiki_build)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=legacy), base_url="http://rag.test"
+    ) as client:
+        assert (await client.post(uri)).status_code == 404
+    assert not api["events"] and not api["writes"]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://rag.test"
+    ) as client:
+        assert (await client.post(uri)).status_code == 409
+        api["enabled"] = True
+        for invalid in ("a,b", " "):
+            assert (await client.post(uri.replace("doc-a", invalid))).status_code == 422
+        assert (await client.post(uri.replace("doc-a", "other"))).status_code == 404
+        api["actor_ok"] = False
+        assert (await client.post(uri)).status_code == 409
+        assert not api["events"] and not api["writes"]
+        api["actor_ok"] = True
+        assert (await client.post(uri)).status_code == 202
+    assert api["events"] == [("kb-a", "doc-a")] and not api["writes"]
 
 
 @pytest.mark.asyncio

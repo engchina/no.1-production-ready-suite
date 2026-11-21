@@ -32,6 +32,18 @@ afterEach(() => {
 });
 
 describe("api.request envelope", () => {
+  it("文書の Wiki 再試行には KB 全体の再試行と別の URL を使う", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: {}, error_messages: [], warning_messages: [] }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.retryKnowledgeBaseWikiDocument("kb-a", "doc-b", 25, 25);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/knowledge-bases/kb-a/wiki/documents/doc-b/retry?offset=25&limit=25");
+    expect(options.method).toBe("POST");
+  });
+
   it("成功時は data を取り出す", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({

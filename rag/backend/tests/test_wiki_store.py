@@ -1,9 +1,11 @@
 """SQL の範囲と、永続化前の原文照合を接続せずに確認する。"""
 
 from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.clients import wiki_store as module
 from app.clients.wiki_store import WikiSnapshot, WikiStore, wiki_scope
 from app.rag.wiki_models import WikiContext, WikiPage, WikiUnit, fingerprint
 from tests.test_wiki_compiler import units
@@ -14,6 +16,30 @@ def test_explicit_version_is_not_replaced_with_current_version() -> None:
     assert "requested-version" in binds.values()
     assert "wiki_current_set.is_active=1" in sql
     assert "wiki_current_set.status='INDEXED'" in sql
+
+
+async def test_document_page_retry_filters_the_current_document_revision_and_enabled_kb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = object()
+    oracle = AsyncMock()
+    oracle._run_transaction.side_effect = lambda op: op(connection)
+    change = Mock(side_effect=[1, 0, 0])
+    remaining = Mock(side_effect=[None, {"revision_fingerprint": "older"}])
+    monkeypatch.setattr(module, "_execute_count", change)
+    monkeypatch.setattr(module, "_fetch_one", remaining)
+    store = WikiStore(oracle)
+    assert await store.requeue_failed_document_pages("kb-a", "doc-a", "current")
+    assert not await store.requeue_failed_document_pages("kb-a", "doc-a", "current")
+    with pytest.raises(ValueError, match="版"):
+        await store.requeue_failed_document_pages("kb-a", "doc-a", "current")
+    for call in change.call_args_list:
+        _, sql, binds = call.args
+        assert "UPDATE rag_wiki_documents" in sql and "rag_wiki_link" not in sql
+        assert "w.document_id=:target" in sql and "w.revision_fingerprint=:revision" in sql
+        assert "w.status='FAILED'" in sql and "wiki_build_enabled" in sql
+        assert binds["target"] == binds["filter_document_id"] == "doc-a"
+        assert "kb-a" in binds.values() and binds["revision"] == "current"
 
 
 @pytest.mark.asyncio

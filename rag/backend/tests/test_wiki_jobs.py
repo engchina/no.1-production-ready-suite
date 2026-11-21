@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -11,9 +12,24 @@ from app.clients import ai_calls
 from app.clients.wiki_store import WikiSnapshot
 from app.config import Settings
 from app.rag import wiki_jobs as module
-from app.rag.request_context import AuditRequestContext
+from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.rag.wiki_models import fingerprint
+from app.rag.wiki_paragraphs import Paragraph, SentenceTooLarge
 from tests.test_wiki_compiler import Model, units
+
+
+async def test_unsplittable_sentence_logs_hashed_anchor_and_window_offsets(
+    setup: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    jobs, store, model = setup
+    error = SentenceTooLarge(Paragraph(0, 35, source="anchor-a"), 5, 35)
+    monkeypatch.setattr(module.WikiRequestBuilder, "compile", AsyncMock(side_effect=error))
+    await jobs.build("document-a", "owner-a")
+    (record,) = (r for r in caplog.records if r.getMessage() == "wiki_build_failed")
+    data = vars(record)
+    assert data["source_anchor_hash"] == fingerprint("anchor-a")
+    assert (data["source_window_start"], data["source_window_end"]) == (5, 35)
+    assert store.state["failure_code"] == "build_failed" and not model.calls
 
 
 class Store:
@@ -84,6 +100,13 @@ def setup(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(module, "get_settings", lambda: settings)
     monkeypatch.setattr(module, "compiler_fingerprint", lambda settings: "compiler-a")
     monkeypatch.setattr(module, "enterprise_ai_default_model_id", lambda settings: "model-a")
+    from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiConfig
+
+    monkeypatch.setattr(
+        module,
+        "config_from_settings",
+        lambda settings: OciEnterpriseAiConfig(default_model_id="model-a"),
+    )
 
     async def actor(owner: Any, settings: Any) -> Any:
         return AuditRequestContext(user_uuid=owner)
@@ -124,6 +147,74 @@ async def test_disabled_build_does_not_instantiate_a_model(setup: Any) -> None:
     store.enabled = False
     await jobs.reconcile()
     assert not jobs.tasks and not model.calls
+    await jobs.shutdown()
+
+
+@pytest.mark.parametrize("change", ["none", "revision", "membership", "actor"])
+async def test_document_retry_shares_capacity_and_only_builds_authorized_pages(
+    setup: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    jobs, store, model = setup
+    store.state = {
+        "status": "FAILED",
+        "failure_code": "timeout",
+        "revision_fingerprint": store.revision,
+    }
+    scopes: list[frozenset[str] | None] = []
+    member = True
+    allowed = {"kb-a", "kb-b"}
+
+    async def actor(owner: str, settings: Settings) -> AuditRequestContext:
+        return AuditRequestContext(user_uuid=owner, allowed_knowledge_base_ids=frozenset(allowed))
+
+    async def revision(did: str) -> str | None:
+        assert did == "document-a"
+        scopes.append(current_audit_request_context().allowed_knowledge_base_ids)
+        if not member and scopes[-1] == frozenset({"kb-a"}):
+            return None
+        return str(store.revision)
+
+    monkeypatch.setattr(jobs, "actor", actor)
+    monkeypatch.setattr(store, "revision_fingerprint", revision)
+    transitions = []
+
+    async def requeue(kb: str, did: str, expected: str) -> bool:
+        assert (kb, did, expected) == ("kb-a", "document-a", "revision-a")
+        if store.state["status"] != "FAILED":
+            return False
+        transitions.append(did)
+        store.state["status"] = "QUEUED"
+        return True
+
+    monkeypatch.setattr(store, "requeue_failed_document_pages", requeue, raising=False)
+    links = AsyncMock()
+    monkeypatch.setattr(module.WikiJobs, "_build_links", links)
+    jobs.capacity = asyncio.Semaphore(0)
+    prior_finished = asyncio.Event()
+    jobs._schedule("document-a", prior_finished.wait)
+    with pytest.raises(KeyError):
+        await jobs.retry_document_pages("kb-a", "outside")
+    await jobs.retry_document_pages("kb-a", "document-a")
+    task = jobs.tasks["document-a"]
+    await jobs.retry_document_pages("kb-a", "document-a")
+    assert jobs.tasks["document-a"] is task and transitions == ["document-a"]
+    prior_finished.set()
+    await asyncio.sleep(0)
+    assert not task.done() and not model.calls
+    if change == "revision":
+        store.revision = "new"
+    elif change == "membership":
+        member = False
+    elif change == "actor":
+        allowed.remove("kb-a")
+    jobs.capacity.release()
+    await task
+    assert scopes[-1] == frozenset({"kb-a"})
+    if change != "none":
+        assert not store.pages and not model.calls
+    else:
+        assert store.state["status"] == "READY" and len(store.pages) == 4
+    links.assert_not_awaited()
     await jobs.shutdown()
 
 
