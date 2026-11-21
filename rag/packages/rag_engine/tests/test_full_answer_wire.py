@@ -727,40 +727,44 @@ def test_only_a_repeated_row_note_is_removed_from_a_list_of_numeric_values(scope
 
 
 @pytest.mark.parametrize(
-    ("first", "repaired", "expected", "calls_expected"),
+    ("first", "drop_note", "expected", "calls_expected"),
     [
-        ("左12、右0（共通）", (), "左12、右0", 1),
-        ("左12、右0（転記した値）", ("左12、右0",), "左12、右0", 2),
-        ("左12、右0（予備時のみ）", ("左12", "右0（予備時のみ）"), "右0（予備時のみ）", 2),
-        ("左12、右0（予備時のみ）", ("左12、右0（予備時のみ）",), "左12、右0（予備時のみ）", 2),
+        ("左12、右0（共通）", False, "左12、右0", 1),
+        ("左12、右0（転記した値）", True, "左12、右0", 2),
+        ("左12、右0（予備時のみ）", False, "左12、右0（予備時のみ）", 2),
     ],
 )
-def test_number_list_uses_existing_retry_and_keeps_conditions_on_the_last_attempt(first, repaired, expected, calls_expected):
+def test_number_list_uses_existing_retry_and_keeps_conditions_on_the_last_attempt(first, drop_note, expected, calls_expected):
     from test_answer_flow_single_generation import _run_traced, context, record
 
     source = "合成の表。左は12、右は予備時に限り0。"
-    answers = iter([(first,), repaired])
+    attempts = 0
 
     def reply(units):
-        facts = [
-            {
-                "text": source,
-                "answers_which_question": "左右の値は？",
-                "requested_phrase": "左右の値",
-                "short_answer": text,
-                "sources": [f"[{units[source]}]"],
-            }
-            for text in next(answers)
-        ]
-        body = {"headers": ["項目", "値"], "rows": [{"label": "表の数値（共通）", "cells": [facts]}]}
+        nonlocal attempts
+        attempts += 1
+        fact = {
+            "text": source,
+            "answers_which_question": "左右の値は？",
+            "requested_phrase": "左右の値",
+            "short_answer": first,
+            "sources": [f"[{units[source]}]"],
+        }
+        if attempts == 1:
+            rows = [{"label": "表の数値（共通）", "cells": [[fact]]}]
+        else:
+            wrong = {**fact, "short_answer": "右99"}
+            rows = [{"label": "1.1.1", "cells": [[]] if drop_note else [[wrong]]}, {"label": "後から付けた条件", "cells": [[wrong]]}]
+        body = {"headers": ["項目", "値"], "rows": rows}
         return {"answer_body": body, "response_kind": "answered", "confidence": "high"}
 
     response, calls, prompts = _run_traced("左右の値は？", context(record(0, source, "合成表")), reply)
     assert len(calls) == calls_expected
     assert expected in response.answer_text and response.generation_trace["citation_lines"]
+    assert "99" not in response.answer_text and "後から付けた条件" not in response.answer_text
     if calls_expected == 2:
         step = prompts[1].removeprefix(prompts[0])
-        assert "数値の組と注記を分ける" in step and json.dumps(first, ensure_ascii=False) in step
+        assert "数値の注記の採否" in step and json.dumps(first, ensure_ascii=False) in step
 
 
 def test_unresolved_cell_contains_its_reason_and_rejects_unrelated_facts():
