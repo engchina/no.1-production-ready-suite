@@ -7,15 +7,47 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from pr_system_settings.auth.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 
 from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute, _fetch_one
 from app.clients.wiki_graph_store import WikiGraphStore
 from app.clients.wiki_store import CURRENT_WIKI_SOURCE_SQL, WikiStore
+from app.rag.request_context import (
+    AuditRequestContext,
+    reset_audit_request_context,
+    set_audit_request_context,
+)
 from app.rag.wiki_models import WikiContext, WikiPage, fingerprint
 from app.schemas.document import DocumentClassification
 from tests.test_document_summary_oracle import _EMBEDDING, _indexed_document
 
 pytestmark = pytest.mark.usefixtures("oracle_db")
+
+
+async def test_set_enabled_never_saves_empty_build_actor() -> None:
+    """担当は操作した利用者 → 保存済みの担当 → 構成管理者の順で決め、空にしない（#5746）。"""
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store = WikiStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-wiki-actor-{token}")
+
+    async def actor() -> str | None:
+        return dict(await store.enabled_knowledge_bases()).get(kb.id)
+
+    # 利用者の無い文脈で、保存済みの担当も無ければ構成管理者にする。
+    await store.set_enabled(kb.id, True)
+    assert await actor() == CONFIGURED_SYSTEM_ADMIN_USER_UUID
+    # 操作した利用者が分かれば、その利用者を担当にする。
+    user = f"synthetic-user-{token}"
+    context = set_audit_request_context(AuditRequestContext(user_uuid=user))
+    try:
+        await store.set_enabled(kb.id, True)
+    finally:
+        reset_audit_request_context(context)
+    assert await actor() == user
+    # 利用者の無い文脈では、保存済みの担当を残す（無効にしても、もう一度有効にしても）。
+    await store.set_enabled(kb.id, False)
+    await store.set_enabled(kb.id, True)
+    assert await actor() == user
 
 
 async def test_virtual_parent_persists_all_original_bindings_and_rejects_changed_member() -> None:

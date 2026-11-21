@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from array import array
 from collections.abc import Mapping, Sequence
@@ -9,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
+from pr_system_settings.auth.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 from rag_parser_core.extraction import is_derived_content
 from rag_parser_core.xml_tree_json import XML_TREE_DOCUMENT_ARTIFACT_KEY
 
@@ -44,6 +46,8 @@ from app.rag.wiki_models import (
     fingerprint,
 )
 from app.schemas.search import RetrievedChunk
+
+logger = logging.getLogger(__name__)
 
 
 def wiki_schema_sql() -> str:
@@ -287,10 +291,16 @@ class WikiStore:
         self.oracle = oracle
 
     async def set_enabled(self, kb_id: str, enabled: bool) -> None:
+        """KB の指定を保存し、構築を指定した利用者を操作した利用者にする。
+
+        担当は空にしない（空の KB は照合で毎回飛ばされ、構築が止まる。#5746）。操作した利用者を
+        確かめられないときは、保存済みの担当を残し、それも無ければ構成管理者にする。
+        """
+
         def operation(connection: Any) -> None:
             kb = _fetch_one(
                 connection,
-                f"""SELECT knowledge_base_id,retrieval_config
+                f"""SELECT knowledge_base_id,retrieval_config,wiki_build_actor_uuid
                 FROM rag_knowledge_bases WHERE knowledge_base_id=:kb_id
                 AND {_oracle_knowledge_base_access_predicate_sql()} FOR UPDATE""",
                 _with_tenant_bind({"kb_id": kb_id}),
@@ -300,6 +310,14 @@ class WikiStore:
             _require_active_knowledge_base(connection, kb_id)
             settings = dict(_json_loads(kb.get("retrieval_config")) or {})
             settings[WIKI_BUILD_KEY] = enabled
+            actor = current_audit_request_context().user_uuid
+            if not actor:
+                saved = str(kb.get("wiki_build_actor_uuid") or "")
+                actor = saved or CONFIGURED_SYSTEM_ADMIN_USER_UUID
+                logger.warning(
+                    "wiki_build_actor_missing",
+                    extra={"fallback": "saved_actor" if saved else "configured_system_admin"},
+                )
             _execute(
                 connection,
                 """UPDATE rag_knowledge_bases SET retrieval_config=:settings,
@@ -308,7 +326,7 @@ class WikiStore:
                 {
                     "kb_id": kb_id,
                     "settings": _json_bind(settings),
-                    "actor": current_audit_request_context().user_uuid,
+                    "actor": actor,
                 },
                 input_sizes=_json_input_sizes("settings"),
             )
