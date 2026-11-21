@@ -97,11 +97,35 @@ class EvidenceGap(BaseModel):
     sources: list[str] = Field(description="その限界を示す原文ラベル。")
 
 
-def _known_cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None) -> str:
+_ROW_NOTE = re.compile(r"(?:（([^（）]+)）|\(([^()]+)\))$")
+_NOTE_PART = re.compile(r"\d+|[^\d\s・]+")
+_ITEM_SEPARATOR = re.compile(r"[、;；]|(?<!\d)[,，]|[,，](?!\d)")
+
+
+def _value_under_row_note(text: str, note: str) -> str:
+    """項目名と数値の列記にだけ適用し、行名に見えている独立した注記を一度にする。"""
+    tail = _ROW_NOTE.search(text)
+    if tail and (tail[1] or tail[2]).strip() == note:
+        values = text[: tail.start()].rstrip()
+    else:
+        heading = re.match(r"^([^:：]+)[:：]\s*(.+)$", text, re.DOTALL)
+        # 見出しの中点の有無で英字や数字のまとまりを結合しない（A・B と AB、1・2 と 12 は別）。
+        if not heading or _NOTE_PART.findall(heading[1]) != _NOTE_PART.findall(note):
+            return text
+        values = heading[2]
+    items = _ITEM_SEPARATOR.split(values)
+    if len(items) > 1 and all(item.rstrip()[-1:].isdecimal() and any(char.isalpha() for char in item) for item in items):
+        return values
+    return text
+
+
+def _known_cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None, row_note: str) -> str:
     # 同じセルで一致する短答は一度だけ示し、その判断を支える出典はすべて残す。
     sources_by_text: dict[str, list[str]] = {}
     for fact in cell:
         text = fact.number if isinstance(fact, ComparisonValue) else fact.requested_answer(question)
+        if row_note and isinstance(fact, AnswerFact):
+            text = _value_under_row_note(text, row_note)
         if text:
             sources_by_text.setdefault(text, []).extend(fact.sources)
     return " ".join(text + "".join(dict.fromkeys(sources)) for text, sources in sources_by_text.items())
@@ -152,7 +176,9 @@ class AnswerTableBody(BaseModel):
         for row in self.rows:
             if len(row.cells) != value_columns:
                 raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
-            values = [self._cell_text(cell, question) for cell in row.cells]
+            note = _ROW_NOTE.search(row.label.rstrip()) if len(self.headers) > 1 else None
+            row_note = (note[1] or note[2]).strip() if note else ""
+            values = [self._cell_text(cell, question, row_note) for cell in row.cells]
             if not any(values):
                 continue
             cells = [row.label, *values] if len(self.headers) > 1 else values
@@ -161,9 +187,9 @@ class AnswerTableBody(BaseModel):
             return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
         return table_markdown(AnswerTable(columns=self.headers, rows=rows)) if rows else ""
 
-    def _cell_text(self, cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None) -> str:
+    def _cell_text(self, cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None, row_note: str) -> str:
         if not isinstance(cell, EvidenceGap):
-            return _known_cell_text(cell, question)
+            return _known_cell_text(cell, question, row_note)
         _check_requested_phrase(cell.requested_phrase, question)
         if self.gap_wording is None or self.gap_wording.count("{missing}") != 1 or self.gap_wording.strip() == "{missing}":
             raise ValueError("未確定のセルには、{missing} を一度含む回答言語の gap_wording が必要です。")
