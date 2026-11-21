@@ -19,8 +19,8 @@ from rag_engine.evaluation.answer_eval import (
 PARSE = "rag_engine.evaluation.answer_eval.parse_text_response"
 # 合成の匿名の対照（正しい部分回答・資料不足の明示・事実の矛盾・標準回答が方向性だけ・答えの無い回答、
 # 資料不足の留保と標準回答の提案の方向・標準回答も確定できない・留保を含む事実の矛盾）。
-# judge_inputs は判定へ実際に渡した入力、recorded_output は xai.grok-4.7（推論の量 medium）・rubric_version 34 の
-# 実呼び出しの出力（#5262・#5302）。
+# judge_inputs は判定へ実際に渡した入力。r_point_and_claim_scope の recorded_output は claude-opus-5-5・
+# rubric_version 40 の実測（#5670）。従来の記録は xai.grok-4.7（推論の量 medium）・rubric_version 34 の実測（#5262・#5302）。
 CASES = json.loads((Path(__file__).with_name("fixtures") / "correctness_judge_cases.json").read_text())
 
 
@@ -59,6 +59,20 @@ def test_recorded_judge_outputs_replay_to_expected_scores(case):
     assert result["answer_correctness"] == case["expected_correctness"]
     assert result["answer_coverage"] == case["recorded_coverage"]
     assert result["correctness_reason"] == case["recorded_reason"]
+
+
+def test_topic_coverage_and_claim_references_are_scoped_per_item():
+    """値を誤っても話題は覆える。同じ段落の記載先と資料不足は、それぞれの参照で表示する。"""
+    case = next(case for case in CASES if case["id"] == "r_point_and_claim_scope")
+    inputs = case["judge_inputs"]
+    result = score_judgement(inputs, AnswerCorrectnessOutput.model_validate(case["recorded_output"]))
+    assert [point["covered"] for point in result["coverage_points"]] == [True, False, True]
+    paragraph = inputs["actual_responses"][0]["answer"][-1]["text"]
+    reference = inputs["standard_answer"][-1]["text"]
+    assert {(claim["verdict"], claim["standard"]) for claim in result["correctness_claims"] if claim["answer"] == paragraph} == {
+        ("supported", reference),
+        ("not_in_standard", ""),
+    }
 
 
 def test_inputs_number_standard_points_and_attach_citations_to_their_passage():
@@ -185,8 +199,8 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     step3 = CORRECTNESS_PROMPT.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
     questions = {line.split(":", 1)[0].removeprefix("- "): line for line in step3.splitlines() if line.startswith("- ")}
     assert tuple(questions) == ("standard_ids", "states_source_gap", "consistent")
-    # 同じ点は、同じ対象・同じ条件・適用範囲・観点。条件・観点が違う文は照らす文にしない。
-    assert "対象・条件・適用範囲・観点" in questions["standard_ids"] and "standard_answer[].id" in questions["standard_ids"]
+    # 照合する観点は、その主張が答えている問い。条件と観点の両方を照合に使う。
+    assert all(term in questions["standard_ids"] for term in ("対象・条件・適用範囲", "同じ問い", "standard_answer[].id"))
     assert "確認できない" in questions["states_source_gap"] and "記載がない" in questions["states_source_gap"]
     assert "同じ事実・結論" in questions["consistent"] and "可能性の一つ" in questions["consistent"]
     assert "留保を添えていても false" in questions["states_source_gap"]

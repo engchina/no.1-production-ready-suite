@@ -1882,5 +1882,133 @@
     "expected_correctness": 0.0,
     "recorded_coverage": 1.0,
     "recorded_reason": "回答の「設定Qの上限値は500です。」と標準回答の「設定Qの上限値は200。」が食い違う。\n回答の「変更は通常の稼働中でもできます。」と標準回答の「変更できるのは保守モードのときだけ。」が食い違う。"
+  },
+  {
+    "id": "r_point_and_claim_scope",
+    "question": "設定Aと設定Bの値、手順の記載先を教えてください。",
+    "standard_answer": "設定Aは4です。設定Bは7です。手順は補足資料に記載されています。",
+    "answer_text": "設定Aは9です。設定Bは7です。\n\n資料から確認できなかった事項\n- 手順は補足資料に記載されていますが、その資料は提供されていません。",
+    "answer_points": [
+      "設定Aの値",
+      "設定Aは4",
+      "設定Bは7"
+    ],
+    "judge_inputs": {
+      "question": "設定Aと設定Bの値、手順の記載先を教えてください。",
+      "standard_answer": [
+        {
+          "id": "S1",
+          "text": "設定Aは4です。"
+        },
+        {
+          "id": "S2",
+          "text": "設定Bは7です。"
+        },
+        {
+          "id": "S3",
+          "text": "手順は補足資料に記載されています。"
+        }
+      ],
+      "points": [
+        {
+          "id": "P1",
+          "text": "設定Aの値"
+        },
+        {
+          "id": "P2",
+          "text": "設定Aは4"
+        },
+        {
+          "id": "P3",
+          "text": "設定Bは7"
+        }
+      ],
+      "actual_responses": [
+        {
+          "question": "設定Aと設定Bの値、手順の記載先を教えてください。",
+          "answer": [
+            {
+              "id": "A1",
+              "text": "設定Aは9です。"
+            },
+            {
+              "id": "A2",
+              "text": "設定Bは7です。"
+            },
+            {
+              "id": "A3",
+              "text": "資料から確認できなかった事項"
+            },
+            {
+              "id": "A4",
+              "text": "- 手順は補足資料に記載されていますが、その資料は提供されていません。"
+            }
+          ]
+        }
+      ]
+    },
+    "recorded_output": {
+      "claims": [
+        {
+          "claim": "設定Aは9です。",
+          "answer_ids": [
+            "A1"
+          ],
+          "standard_ids": [
+            "S1"
+          ],
+          "states_source_gap": false,
+          "consistent": false
+        },
+        {
+          "claim": "設定Bは7です。",
+          "answer_ids": [
+            "A2"
+          ],
+          "standard_ids": [
+            "S2"
+          ],
+          "states_source_gap": false,
+          "consistent": true
+        },
+        {
+          "claim": "手順は補足資料に記載されています。",
+          "answer_ids": [
+            "A4"
+          ],
+          "standard_ids": [
+            "S3"
+          ],
+          "states_source_gap": false,
+          "consistent": true
+        },
+        {
+          "claim": "手順が記載された補足資料は提供されておらず、参照できません。",
+          "answer_ids": [
+            "A4"
+          ],
+          "standard_ids": [],
+          "states_source_gap": true,
+          "consistent": true
+        }
+      ],
+      "points": [
+        {
+          "point_id": "P1",
+          "covered": true
+        },
+        {
+          "point_id": "P2",
+          "covered": false
+        },
+        {
+          "point_id": "P3",
+          "covered": true
+        }
+      ]
+    },
+    "expected_correctness": 0.0,
+    "recorded_coverage": 0.6666666666666666,
+    "recorded_reason": "回答の「設定Aは9です。」と標準回答の「設定Aは4です。」が食い違う。"
   }
 ]
