@@ -8,6 +8,7 @@ LLM は決定論のスタブ。表のデータを LLM に渡さない・範囲�
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
 from datetime import date, timedelta
 from typing import Any
@@ -2801,6 +2802,7 @@ def test_other_free_text_is_sent_to_review_as_a_correction() -> None:
     review_prompt = llm.calls[1]["prompt"]
     assert "利用者の直しの指示（最後が最新）: APP.CUSTOMERS の全列にしてください" in review_prompt
     assert "この指示を反映して要件を作り直してください" in review_prompt
+    assert not re.search(r"規則\s*\d+", review_prompt.splitlines()[-1])
     assert other.tables == []
     assert other.columns == []
     draft = _draft(answered)
