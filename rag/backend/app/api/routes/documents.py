@@ -1416,6 +1416,19 @@ async def _document_recipe_view(
         if row.get("materialized_revision") is not None
         else None
     )
+    revision_changed = (
+        materialized_revision is not None and config_revision != materialized_revision
+    )
+    changed_fields = _recipe_processing_defaults_drift(row, effective)
+    subset = row.get("active_recipe_subset")
+    saved = subset.get("processing_config") if isinstance(subset, Mapping) else None
+    if revision_changed and active_chunk_set_id and isinstance(saved, Mapping):
+        current = config.model_dump(mode="json", exclude_none=True)
+        changed_fields.extend(
+            key
+            for key in DocumentProcessingConfig.model_fields
+            if key not in changed_fields and saved.get(key) != current.get(key)
+        )
     return DocumentRecipeView(
         recipe_id=recipe_id,
         document_id=str(row["document_id"]),
@@ -1449,10 +1462,8 @@ async def _document_recipe_view(
         searchable=(
             active_chunk_set_id is not None and str(row.get("chunk_set_status")) == "INDEXED"
         ),
-        needs_reprocessing=(
-            materialized_revision is not None and config_revision != materialized_revision
-        )
-        or bool(_recipe_processing_defaults_drift(row, effective)),
+        needs_reprocessing=revision_changed or bool(changed_fields),
+        reprocessing_changed_fields=changed_fields,
         error_message=(str(row["error_message"]) if row.get("error_message") else None),
         steps=_recipe_steps(
             row,

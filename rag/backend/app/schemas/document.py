@@ -737,6 +737,9 @@ class DocumentRecipeView(BaseModel):
     materialized_revision: int | None = Field(default=None, ge=1)
     searchable: bool = False
     needs_reprocessing: bool = False
+    reprocessing_changed_fields: list[str] = Field(
+        default_factory=list, description="配信中の索引の記録から違いを確認できた処理設定の項目。"
+    )
     error_message: str | None = None
     steps: list[DocumentRecipeStep] = Field(default_factory=list)
     created_at: UtcDatetime

@@ -2,7 +2,68 @@ import type {
   DocumentChunkSet,
   DocumentLayerStatusName,
   DocumentRecipeView,
+  DocumentProcessingConfig,
+  ParserAdapterBackend,
 } from "@/lib/api";
+
+import { SMALL_TO_BIG_PARAMS } from "@/lib/chunking";
+import { t, type I18nKey } from "@/lib/i18n";
+import { parserBackendLabel } from "@/lib/source-profile-labels";
+import { RECIPE_CONFIG_ITEMS } from "./DocumentProcessingConfigPanel.logic";
+
+const recipeFieldLabels = new Map<string, I18nKey>([
+  ...RECIPE_CONFIG_ITEMS.map(({ field, label }) => [field, label] as const),
+  ...SMALL_TO_BIG_PARAMS.map(({ field, labelKey }) => [field, labelKey] as const),
+  ["excel_options", "documents.excelOptions.title"],
+  ["entity_name_columns", "documents.entityIndex.columns.names"],
+  ["entity_attribute_columns", "documents.entityIndex.columns.attributes"],
+  ["chunk_size", "settings.chunking.params.chunkSize"],
+  ["chunk_overlap", "settings.chunking.params.overlap"],
+  ["chunk_min_chars", "settings.chunking.params.minChars"],
+  ["chunk_delimiter", "settings.chunking.params.delimiter"],
+  ["chunk_separators", "documents.recipes.reprocess.separators"],
+]);
+
+const parserFlags = {
+  parser_docling_enabled: "docling",
+  parser_unstructured_enabled: "unstructured",
+  parser_dots_ocr_enabled: "dots_ocr",
+  parser_structured_records_jsonl_enabled: "structured_records_jsonl",
+  parser_xml_tree_json_enabled: "xml_tree_json",
+} as const satisfies Record<Extract<keyof DocumentProcessingConfig, `parser_${string}_enabled`>, ParserAdapterBackend>;
+
+export function recipeReprocessingReason(recipe: DocumentRecipeView): string {
+  const fields = new Set(recipe.reprocessing_changed_fields);
+  const labels: string[] = [];
+  for (const field of fields) {
+    const label = recipeFieldLabels.get(field);
+    if (label) {
+      labels.push(t(label));
+      continue;
+    }
+    if (Object.hasOwn(parserFlags, field)) {
+      const parser = parserFlags[field as keyof typeof parserFlags];
+      labels.push(t("documents.recipes.reprocess.parserEnabled", { engine: parserBackendLabel(parser) }));
+    }
+  }
+  if (labels.length && labels.length < fields.size) {
+    labels.push(t("documents.recipes.reprocess.otherFields", { count: fields.size - labels.length }));
+  }
+  const current = recipe.config_revision;
+  const previous = recipe.materialized_revision;
+  const changes = labels.length
+    ? t(previous === null ? "documents.recipes.reprocess.fields" : "documents.recipes.reprocess.indexChanges", {
+        fields: labels.join(t("documents.recipes.layerRebuildJoin")),
+      })
+    : t("documents.recipes.reprocess.unknownFields");
+  const revisions = previous === null
+    ? t("documents.recipes.reprocess.noRevision", { current })
+    : previous === current
+      ? ""
+      : t("documents.recipes.reprocess.revisions", { previous, current });
+  const search = t(recipe.searchable ? "documents.recipes.reprocess.searchable" : "documents.recipes.reprocess.unsearchable");
+  return changes + revisions + search;
+}
 
 export function resolveSelectedRecipe(
   recipes: DocumentRecipeView[],

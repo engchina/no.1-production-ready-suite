@@ -465,6 +465,7 @@ def test_recipe_view_uses_file_type_layer_and_shows_drift_after_change() -> None
     assert view.effective_processing_config.parser_adapter_backend == "unstructured"
     assert view.processing_config.parser_adapter_backend is None
     assert view.needs_reprocessing is True
+    assert view.reprocessing_changed_fields == ["parser_adapter_backend"]
 
     # 別の種類の文書には影響しない。
     other = _recipe_row(
@@ -489,7 +490,29 @@ def test_recipe_view_without_snapshot_field_is_not_flagged() -> None:
 
 
 def test_recipe_revision_mismatch_still_flags_reprocessing() -> None:
-    assert _view(_recipe_row(materialized_revision=2, config_revision=3)).needs_reprocessing is True
+    view = _view(_recipe_row(materialized_revision=2, config_revision=3, active_recipe_subset={}))
+    assert view.needs_reprocessing is True
+    assert view.reprocessing_changed_fields == []
+
+
+def test_recipe_view_explains_both_inherited_and_explicit_changes() -> None:
+    _set_defaults(get_settings(), word={"parser_adapter_backend": "unstructured"})
+    snapshot = _snapshot()
+    snapshot["processing_config"] = {"chunk_size": 800}
+    view = _view(
+        _recipe_row(
+            materialized_revision=2,
+            config_revision=3,
+            active_recipe_subset=snapshot,
+            processing_config={"chunk_overlap": 20},
+        )
+    )
+    assert view.needs_reprocessing and view.searchable
+    assert set(view.reprocessing_changed_fields) == {
+        "parser_adapter_backend",
+        "chunk_size",
+        "chunk_overlap",
+    }
 
 
 def test_explicit_recipe_value_ignores_file_type_change() -> None:
