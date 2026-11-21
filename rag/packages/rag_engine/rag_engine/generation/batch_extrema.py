@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from collections import defaultdict
@@ -47,6 +48,9 @@ class BatchPlan(BaseModel):
     document_count: int = Field(ge=0, description="質問が対象にする文書の総数。資料に無い対象も含む。")
     documents: list[DocumentFormat]
     remaining_request: str = Field(description="極値と別に尋ねた要求の原文。無ければ空文字。")
+    reason_only: bool = Field(
+        default=False, description="比較表で未回答の要求が、値や差が生じた理由を原文から示すことだけなら true。他の要求もあれば false。"
+    )
 
 
 def _row_pattern(template: str) -> re.Pattern[str] | None:
@@ -84,6 +88,7 @@ class ExtremaResult:
     spans: list[dict[str, Any]]
     groups: list[dict[str, Any]]
     remaining_request: str
+    reason_only: bool
 
 
 def _label(key: str) -> str:
@@ -212,7 +217,29 @@ def calculate(
     if dropped or len(checked) != len(snapshots):
         return None
     answer = grounded.Round("", draft, checked, [], requests=list(answer_requirements(question)), sent_units=catalog)
-    return ExtremaResult(answer, source_spans, groups, plan.remaining_request)
+    return ExtremaResult(answer, source_spans, groups, plan.remaining_request, bool(plan.remaining_request and plan.reason_only))
+
+
+def stated_reason_round(question: str, spans: list[dict[str, Any]], *, complete: bool) -> grounded.Round:
+    """選んだ原文だけを引用付きで表示する。比較表を生成し直す自由記述欄は設けない。"""
+    snapshots = []
+    marks: dict[tuple[tuple[str, ...], str], list[str]] = {}
+    for span in spans:
+        snapshot = EvidenceUnitSnapshot.create(span, [(0, len(span["text"]))], "stated_reason_v1")
+        snapshots.append(snapshot)
+        # 引用中の Markdown や引用番号を構造にせず、原文との照合は元の文字列で行う。
+        quote = html.escape(" ".join(span["text"].split())).translate({ord(char): f"&#{ord(char)};" for char in "[]［］【】|*_\\`~"})
+        marks.setdefault((document_key(span), quote), []).append(f"[{snapshot.label}.1]")
+    lines = [f"「{quote}」 {''.join(refs)}" for (_, quote), refs in marks.items()]
+    catalog = SentUnitCatalog(snapshots)
+    wire = FullAnswerWire(
+        answer_body="\n\n".join(lines) or _label("reason_missing" if complete else "explanation_missing"),
+        response_kind=("answered" if complete else "conditional") if lines else "insufficient_evidence",
+        confidence="high" if complete else "medium",
+    )
+    draft = canonical_full_answer(wire, catalog)
+    checked, dropped = grounded.verify(question, draft, spans)
+    return grounded.Round("", draft, checked, dropped, sent_units=catalog)
 
 
 class BatchExtrema:
@@ -224,7 +251,7 @@ class BatchExtrema:
         self.calls = 0
         self.result: ExtremaResult | None = None
 
-    def prepare(self, batches: Sequence[list[dict[str, Any]]]) -> str | None:
+    def prepare(self, batches: Sequence[list[dict[str, Any]]]) -> ExtremaResult | None:
         documents = list(dict.fromkeys(document_key(span) for batch in batches for span in batch if not span.get(BACKGROUND_ONLY)))
         heads: dict[tuple[str, ...], dict[str, dict[str, Any]]] = defaultdict(dict)
         for batch in batches:
@@ -255,4 +282,4 @@ class BatchExtrema:
         self.calls += 1
         plan = self.read(PLAN_SYSTEM, payload)
         self.result = calculate(self.question, plan, documents, batches) if plan is not None else None
-        return self.result.remaining_request if self.result else None
+        return self.result

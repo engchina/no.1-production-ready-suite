@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rag_engine.config import Settings
 from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
@@ -11,6 +11,9 @@ from rag_engine.generation.document_inputs import FIRST_CHUNK, document_key, wit
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.generation.partial_answers import SummaryClaims
 from rag_engine.retrieval.rerank_scores import rerank_first_key
+
+if TYPE_CHECKING:
+    from rag_engine.generation.batch_extrema import ExtremaResult
 
 
 def select_evidence(
@@ -27,7 +30,7 @@ def select_evidence(
     unusable_output: Callable[[Exception], bool],
     provider_id: str | None = None,
     summarize: Callable[[str], SummaryClaims] | None = None,
-    plan_batches: Callable[[Sequence[list[dict[str, Any]]]], str | None] | None = None,
+    plan_batches: Callable[[Sequence[list[dict[str, Any]]]], ExtremaResult | None] | None = None,
     source_scores: Mapping[str, float | None] | None = None,
     protected_sources: Collection[str] = (),
     failed_batches: list[dict[str, Any]] | None = None,

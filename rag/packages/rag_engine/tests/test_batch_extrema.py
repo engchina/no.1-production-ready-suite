@@ -92,7 +92,7 @@ def test_plan_runs_only_once_after_input_overflows(kind):
         assert all(q == "理由" for q in prompts)
 
 
-@pytest.mark.parametrize("mode", ["only", "explanation", "missing_explanation"])
+@pytest.mark.parametrize("mode", ["only", "explanation", "missing_explanation", "stated", "missing_reason"])
 def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanation(mode):
     from test_batched_evidence import finding, reading
     from test_generation_document_background import deps, first_chunk, record
@@ -104,7 +104,7 @@ def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanat
 
     base = record()
     reason = "比較前に検査したためです。"
-    head = first_chunk(base, text="R1 = 5;\n" + ("記録の先頭。" if mode == "missing_explanation" else reason))
+    head = first_chunk(base, text="R1 = 5;\n" + ("記録の先頭。" if mode in {"missing_explanation", "missing_reason"} else reason))
     records = [
         replace(base, id=f"id{i}", chunk_uid=f"id{i}", chunk_id=f"id{i}", seq_no=i, chunk_seq=i, text=f"R{i} = {i};\n" + "補足資料。" * 360)
         for i in range(2, 6)
@@ -114,12 +114,19 @@ def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanat
     def model(system, user, settings, schema, **kwargs):
         calls.append(schema.__name__)
         if schema is BatchPlan:
-            return PLAN.model_copy(update={"remaining_request": "" if mode == "only" else "理由"})
+            return PLAN.model_copy(
+                update={"remaining_request": "" if mode == "only" else "理由", "reason_only": mode in {"stated", "missing_reason"}}
+            )
         if schema.__name__ == "BatchReading":
             values = json.loads(user)["evidence"]
             assert json.loads(user)["question"] == "理由"
             assert getattr(schema, "_select_only", False)
+            if mode in {"stated", "missing_reason"}:
+                scope = json.loads(json.loads(user)["generation_context"])
+                assert scope["original_question"] == QUESTION
+                return reading(schema, findings=[finding(values[0], first=2)] if mode == "stated" else [])
             return reading(schema, findings=[finding(values[0], first=2), finding(values[-1])] if mode == "explanation" else [])
+        assert mode not in {"stated", "missing_reason"}, "表を再生成できる自由記述モデルを呼び出している"
         assert "理由" in user
         if mode == "missing_explanation":
             return schema.model_validate(
@@ -142,6 +149,13 @@ def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanat
     assert calls.count("BatchPlan") == 1
     if mode == "only":
         assert calls == ["BatchPlan"]
+    if mode in {"stated", "missing_reason"}:
+        assert response.generation_trace["generation_input_budget"]["stated_reason_read_complete"]
+        assert sum(line.startswith("|") for line in response.answer_text.splitlines()) == 5
+        assert ("原文には理由が記載されていません。" in response.answer_text) == (mode == "missing_reason")
+        if mode == "stated":
+            assert response.answer_text.count(reason) == 1
+            assert any(reason == fact["quote"] for fact in response.evidence_facts)
     if mode == "explanation":
         assert reason in response.answer_text
         assert response.generation_trace["generation_input_budget"]["partial_answer_synthesis"]
@@ -149,6 +163,46 @@ def test_answer_entry_returns_computed_rows_with_citations_and_separate_explanat
         assert response.answer_text.count("| 1–2 | 5 |") == 1
     if mode == "missing_explanation":
         assert "確認できませんでした" in response.answer_text
+
+
+def test_stated_reason_selection_keeps_only_original_units():
+    from test_batched_evidence import finding, reading
+
+    from rag_engine.generation.grounded import tag_spans
+
+    head = {**piece(1, "R1 = 1;"), FIRST_CHUNK: True}
+    records = [piece(i, f"R{i} = {i};\n" + "記録。" * 450) for i in range(2, 6)]
+    derived = {**piece(6, "原因を推測した要約。"), "source_context": {"evidence_kind": "document_summary"}}
+    settings = replace(config(), evidence_budget_chars=2700)
+    extrema = BatchExtrema(QUESTION, settings, None, lambda *_: PLAN.model_copy(update={"remaining_request": "理由", "reason_only": True}))
+
+    def read(system, prompt, schema):
+        batch = json.loads(prompt)["evidence"]
+        assert all("推測した要約" not in row["text"] for row in batch)
+        return reading(schema, findings=[finding(batch[0])])
+
+    selected, _, detail = select_evidence(
+        [head, *records, derived],
+        settings,
+        question=QUESTION,
+        render=block,
+        evidence_text=block,
+        tag=tag_spans,
+        system="生成",
+        schema_for=lambda _: {},
+        read=read,
+        unusable_output=lambda _: False,
+        plan_batches=extrema.prepare,
+    )
+    assert detail["stated_reason_read_complete"] and detail["batch_count"] > 1
+    assert [item["text"] for item in selected] == [head["text"]]
+
+
+def test_incomplete_reason_read_does_not_claim_the_original_has_no_reason():
+    from rag_engine.generation.batch_extrema import stated_reason_round
+
+    partial = stated_reason_round("理由", [], complete=False)
+    assert "理由が記載されていません" not in render_full_answer(partial.draft, partial.checked).text
 
 
 @pytest.mark.parametrize("template", ["R{row} = -{value};", "R0{row} = {value};", "R{row} = {value}."])

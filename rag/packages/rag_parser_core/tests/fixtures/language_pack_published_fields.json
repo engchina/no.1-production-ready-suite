@@ -29,6 +29,7 @@
   "answer_labels.extrema_max",
   "answer_labels.extrema_min",
   "answer_labels.extrema_missing",
+  "answer_labels.extrema_reason_missing",
   "answer_labels.gaps_section",
   "answer_labels.guide_acquisition_incomplete_template",
   "answer_labels.guide_approval_template",

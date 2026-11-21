@@ -853,6 +853,8 @@ export const ja = {
   "settings.language.field.extrema_missing.help": "比較に必要な行が見つからない場合に表示します。{rows} が行番号に置き換わります。",
   "settings.language.field.extrema_conflicting": "値を確認できない行の案内",
   "settings.language.field.extrema_conflicting.help": "同じ行の値が食い違うなど、一意に決まらない場合に表示します。{rows} が行番号に置き換わります。",
+  "settings.language.field.extrema_reason_missing": "原文に理由の記載がない場合の案内",
+  "settings.language.field.extrema_reason_missing.help": "分割読取が完了し、理由を記した原文が見つからなかった場合に表示します。",
   "settings.language.field.extrema_explanation_missing": "追加要求の根拠がない場合の案内",
   "settings.language.field.extrema_explanation_missing.help": "数値は確認できても、追加で尋ねられた事項の根拠を確認できなかった場合に表示します。",
   "settings.language.field.all_paragraphs_failed": "全段落の生成失敗の案内",

@@ -1827,7 +1827,7 @@ def synthesize_grounded_answer(
             search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled
         )
     from rag_engine.generation import grounded
-    from rag_engine.generation.batch_extrema import BatchExtrema, BatchPlan
+    from rag_engine.generation.batch_extrema import BatchExtrema, BatchPlan, stated_reason_round
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
     from rag_engine.generation.document_inputs import FIRST_CHUNK, with_first_chunks
@@ -1929,9 +1929,12 @@ def synthesize_grounded_answer(
             verified_results = [
                 {"source": g["source"], "range": g["range"], "value": g.get("value"), "rows": g["winners"]} for g in extrema.result.groups
             ]
+            scope = json.dumps({"original_question": question, "comparison_results": verified_results}, ensure_ascii=False)
+            if extrema.result.reason_only:
+                return scope
             prompt += (
                 "\n比較結果の表は別途表示します。原質問の条件を保ち、追加要求だけに出典を付けて回答してください。原文で説明できる範囲と確認できない点を区別してください。\n"
-                + json.dumps({"original_question": question, "comparison_results": verified_results}, ensure_ascii=False)
+                + scope
             )
         return prompt
 
@@ -1998,6 +2001,12 @@ def synthesize_grounded_answer(
             selecting_evidence = False
             if extrema.result is not None and not extrema.result.remaining_request:
                 current = extrema.result.answer
+            elif extrema.result is not None and extrema.result.reason_only:
+                current = stated_reason_round(
+                    extrema.result.remaining_request,
+                    spans,
+                    complete=input_diagnostic["stated_reason_read_complete"] and not notices_missing,
+                )
             else:
                 current = grounded.run_round(
                     extrema.result.remaining_request if extrema.result else question,
@@ -2061,10 +2070,13 @@ def synthesize_grounded_answer(
     extra_answer = None
     extra_round = None
     extra_unconfirmed = False
+    missing_notice = current_pack().text("answer_labels", "extrema_explanation_missing")
     if extrema.result is not None:
         computed = extrema.result
         if computed.remaining_request:
             extra_round = current
+            if computed.reason_only and not spans and not generation_failure and current.draft._full_answer:
+                missing_notice = str(current.draft._full_answer["body"])
             if current.draft._full_answer is not None and current.verified and not generation_failure:
                 extra_answer = render_full_answer(current.draft, current.checked)
             extra_unconfirmed = extra_answer is None or current.draft._response_kind != "answered"
@@ -2097,7 +2109,7 @@ def synthesize_grounded_answer(
         published.extend(entry for entry in extra_round.checked if entry.span and entry.published)
     gaps = [entry.item.text for entry in current.checked if entry.item.kind == "gap"]
     if extra_unconfirmed and not extra_answer:
-        gaps.append(current_pack().text("answer_labels", "extrema_explanation_missing"))
+        gaps.append(missing_notice)
     from rag_engine.generation.section_expansion import answer_unread_view
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
@@ -2150,7 +2162,7 @@ def synthesize_grounded_answer(
             rendered.text += "\n\n" + extra_answer.text
             rendered.citation_lines.extend(extra_answer.citation_lines)
         elif extra_unconfirmed:
-            rendered.text += "\n\n" + current_pack().text("answer_labels", "extrema_explanation_missing")
+            rendered.text += "\n\n" + missing_notice
         notices = grounded.render_answer("", (), (), unverified=unread, guide_notes=guide_notes, guide_notes_first=guide_notes_first)
         if notices.text:
             rendered.text += "\n\n" + notices.text
