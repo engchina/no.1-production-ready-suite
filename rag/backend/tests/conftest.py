@@ -357,6 +357,8 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_parser_adapter_backend = "unstructured"
     settings.rag_parser_docling_enabled = False
     settings.rag_parser_unstructured_enabled = True
+    settings.rag_parser_xml_tree_json_enabled = False
+    settings.rag_parser_structured_records_jsonl_enabled = False
     settings.rag_parser_dots_ocr_enabled = False
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
