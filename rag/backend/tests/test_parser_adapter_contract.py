@@ -213,6 +213,7 @@ def test_compatibility_matrix_runs_installed_adapter_remap(
 
 
 def test_compatibility_matrix_uses_parser_service_runner_for_dots_ocr(
+    available_external_parser: None,
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -289,6 +290,7 @@ def test_compatibility_matrix_uses_parser_service_runner_for_dots_ocr(
 
 
 def test_compatibility_matrix_dots_ocr_unconfigured_connection_is_missing(
+    available_external_parser: None,
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:

@@ -450,7 +450,7 @@ async def test_saved_summary_prompt_reaches_the_model_as_system_text() -> None:
 
 @pytest.mark.parametrize("backend", ["docling", "dots_ocr"])
 async def test_partition_loads_the_ocr_prompt_only_for_dots(
-    backend: str, monkeypatch: pytest.MonkeyPatch
+    available_external_parser: None, backend: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from typing import cast
 
@@ -487,6 +487,7 @@ async def test_partition_loads_the_ocr_prompt_only_for_dots(
 
 
 async def test_partition_cleans_progress_poll_if_prompt_loading_is_cancelled(
+    available_external_parser: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import asyncio

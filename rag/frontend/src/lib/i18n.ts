@@ -296,7 +296,7 @@ export const ja = {
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
   "settings.parserAdapters.backend.docling.description": "既定の解析エンジン。PDF と画像を解析",
   "settings.parserAdapters.backend.unstructured.description": "テキスト・HTML・Office・メールなども受ける汎用の解析。選んだ場合だけ使用",
-  "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
+  "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API による PDF・画像の文字の読み取りを予定",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":
     "OCI Document Understanding による OCR・表抽出を予定（未実装）",

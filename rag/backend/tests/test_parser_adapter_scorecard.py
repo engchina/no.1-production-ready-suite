@@ -271,9 +271,8 @@ def test_source_routes_explain_explicit_adapter_source_mismatch(
 ) -> None:
     """明示 adapter が source を扱えない場合も routing evidence に警告を出す。"""
     settings = Settings(
-        rag_parser_adapter_backend="dots_ocr",
-        rag_parser_dots_ocr_enabled=True,
-        rag_parser_dots_ocr_api_host="http://dots.example.com",
+        rag_parser_adapter_backend="docling",
+        rag_parser_docling_enabled=True,
     )
     monkeypatch.setattr(
         parser_adapter_readiness,
@@ -290,7 +289,7 @@ def test_source_routes_explain_explicit_adapter_source_mismatch(
     assert route.attempted_order == ()
     assert route.selected_backend == "local"
     assert "selected_adapter_unsupported_for_source" in route.reason_codes
-    assert "dots_ocr_adapter_source_unsupported" in route.warning_codes
+    assert "docling_adapter_source_unsupported" in route.warning_codes
 
 
 def _docling_installed(

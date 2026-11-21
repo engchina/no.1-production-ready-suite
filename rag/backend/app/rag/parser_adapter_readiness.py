@@ -20,7 +20,7 @@ from app.clients.external_parser import (
     external_parser_connection,
 )
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
-from app.config import ParserAdapterBackend, Settings
+from app.config import ParserAdapterBackend, Settings, is_roadmap_parser_adapter_backend
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +215,9 @@ def _adapter_status(
 
 
 def _adapter_flag(settings: Settings, backend: ParserAdapterName) -> bool:
-    return bool(getattr(settings, f"rag_parser_{backend}_enabled", False))
+    return not is_roadmap_parser_adapter_backend(backend) and bool(
+        getattr(settings, f"rag_parser_{backend}_enabled", False)
+    )
 
 
 def _normalize_adapter_backend(value: object) -> ParserAdapterBackend:

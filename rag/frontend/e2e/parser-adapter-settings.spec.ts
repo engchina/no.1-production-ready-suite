@@ -13,13 +13,16 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`準備中（ロードマップ）の OCI Document Understanding は灰色で選べない (${viewport.name})`, async ({
+  test(`準備中（ロードマップ）の解析エンジンは灰色で選べない (${viewport.name})`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const serviceRequests: string[] = [];
     page.on("request", (request) => {
-      if (request.url().includes("/api/services/parser-oci-document-understanding/")) {
+      if (
+        request.url().includes("/api/services/parser-oci-document-understanding/") ||
+        request.url().includes("/parser-adapters/dots_ocr/status")
+      ) {
         serviceRequests.push(request.url());
       }
     });
@@ -27,6 +30,15 @@ for (const viewport of [
 
     await page.goto("/settings/parser-adapters");
 
+    const dots = page.getByRole("radio", { name: "Dots.OCR", exact: true });
+    const dotsCard = page.locator('label[for="settings-parser-backend-dots_ocr"]');
+    await expect(dots).toBeDisabled();
+    await expect(dots).toHaveAttribute("data-availability", "roadmap");
+    await expect(dots).toHaveAccessibleDescription(/準備中（ロードマップ）のため、まだ選べません。/);
+    await expect(dotsCard.locator("[data-roadmap-badge]")).toHaveText("準備中（ロードマップ）");
+    await expect(dotsCard.getByRole("button", { name: "設定" })).toHaveCount(0);
+    await dotsCard.click({ force: true });
+    await expect(dots).not.toBeChecked();
     const radio = page.getByRole("radio", { name: /OCI Document Understanding/ });
     await expect(radio).toBeDisabled();
     await expect(radio).toHaveAttribute("data-availability", "roadmap");
@@ -88,7 +100,7 @@ for (const viewport of [
       path: test.info().outputPath(`parser-settings-${viewport.name}.png`),
       fullPage: true,
     });
-    await expect(page.getByRole("radio", { name: "Dots.OCR", exact: true })).toHaveAccessibleDescription(/GPU.*設定済み/);
+    await expect(page.getByRole("radio", { name: "Dots.OCR", exact: true })).toHaveAccessibleDescription(/準備中（ロードマップ）/);
     // Marker / Unlimited-OCR / GLM-OCR は #270 で削除した。選択肢に出さない。
     await expect(page.getByRole("radio", { name: /Marker|Unlimited-OCR|GLM-OCR/ })).toHaveCount(0);
     // OCI Generative AI (Vision) は削除した（#2042）。
@@ -162,10 +174,10 @@ for (const viewport of [
         expect(cardBoxes[index].y).toBeGreaterThan(cardBoxes[index - 1].y);
       }
     }
-    // 接続の設定は節として並べず、Dots.OCR のカードの「設定」から右のパネルで開く（#4740）。
+    // 準備中のエンジンには接続設定の入口を表示しない。
     await expect(page.getByText("外部 GPU 解析エンジンの接続")).toHaveCount(0);
     await expect(page.getByLabel("Endpoint")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /の設定$/ })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /の設定$/ })).toHaveCount(0);
     await expect(page.getByText("運用診断", { exact: true })).toHaveCount(0);
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
@@ -1422,6 +1434,7 @@ async function mockParserAdapters(
             },
             {
               backend: "dots_ocr",
+              availability: "roadmap",
               package_name: "external_api",
               import_name: "external_api",
               distribution_name: "openai_chat_completions",

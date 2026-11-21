@@ -1161,12 +1161,14 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
 def test_document_processing_config_is_used_by_ingestion_pipeline() -> None:
     """レシピの上書きは KB を介さず、取込の Settings へ渡る（#488。レシピの job と同じ合成）。"""
     settings, effective = documents_route._merge_document_processing_config(
-        DocumentProcessingConfig(parser_adapter_backend="dots_ocr", chunking_strategy="page_level")
+        DocumentProcessingConfig(
+            parser_adapter_backend="xml_tree_json", chunking_strategy="page_level"
+        )
     )
 
-    assert settings.rag_parser_adapter_backend == "dots_ocr"
+    assert settings.rag_parser_adapter_backend == "xml_tree_json"
     assert settings.rag_chunking_strategy == "page_level"
-    assert effective.parser_adapter_backend == "dots_ocr"
+    assert effective.parser_adapter_backend == "xml_tree_json"
     assert effective.chunking_strategy == "page_level"
 
 

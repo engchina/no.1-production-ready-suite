@@ -64,6 +64,7 @@ from app.config import (
     Settings,
     get_settings,
     is_roadmap_parser_adapter_backend,
+    roadmap_parser_adapter_backend_message,
 )
 from app.rag.answer_prompts import (
     EDITABLE_PROMPT_KEYS,
@@ -375,6 +376,8 @@ async def get_external_parser_status(
     backend: ExternalParserBackend,
 ) -> ApiResponse[ExternalParserConnectionStatusData]:
     """外部 GPU parser の native health/models endpoint を確認する。"""
+    if is_roadmap_parser_adapter_backend(backend):
+        raise HTTPException(status_code=422, detail=roadmap_parser_adapter_backend_message(backend))
     result = await asyncio.to_thread(ExternalParserClient(get_settings()).status, backend)
     return ApiResponse(
         data=ExternalParserConnectionStatusData(
@@ -1190,6 +1193,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
                 configured=connection.configured,
             )
             for backend in ENGINE_SPECS
+            if not is_roadmap_parser_adapter_backend(backend)
             for connection in [external_parser_connection(settings, backend)]
         ],
         scorecard=ParserAdapterScorecardData(

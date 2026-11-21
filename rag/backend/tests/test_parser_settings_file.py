@@ -115,8 +115,8 @@ def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     saved = client.patch(
         "/api/settings/parser-adapters",
         json={
-            "adapter_backend": "dots_ocr",
-            "dots_ocr_enabled": True,
+            "adapter_backend": "xml_tree_json",
+            "xml_tree_json_enabled": True,
         },
     )
     assert saved.status_code == 200
@@ -130,8 +130,8 @@ def test_rag_parser_save_then_nl2sql_save_then_rag_reads() -> None:
     shared = json.loads(model_file.read_text(encoding="utf-8"))
     assert set(shared) == {"version", "enterprise_ai", "generative_ai"}
     assert reloaded.oci_enterprise_ai_endpoint == "https://nl2sql-saved.example.com"
-    assert reloaded.rag_parser_adapter_backend == "dots_ocr"
-    assert reloaded.rag_parser_dots_ocr_enabled is True
+    assert reloaded.rag_parser_adapter_backend == "xml_tree_json"
+    assert reloaded.rag_parser_xml_tree_json_enabled is True
 
 
 def test_parser_section_in_shared_file_is_not_read() -> None:

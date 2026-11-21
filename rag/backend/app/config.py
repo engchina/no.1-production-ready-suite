@@ -160,6 +160,7 @@ DEFAULT_PARSER_ADAPTER_BACKEND: Literal["docling"] = "docling"
 #   global の継承へ寄せる(画面・取込を壊さない)。取込の経路は選ばれていても呼ばずに止める
 #   (ingestion._partition_source)。
 ROADMAP_PARSER_ADAPTER_BACKENDS: dict[str, str] = {
+    "dots_ocr": "Dots.OCR",
     "oci_document_understanding": "OCI Document Understanding",
 }
 

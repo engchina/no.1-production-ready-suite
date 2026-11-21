@@ -477,3 +477,11 @@ def published_prompt_unit_scope(
             return {}
 
     monkeypatch.setattr(prompt_runtime, "OracleClient", PromptOracle)
+
+
+@pytest.fixture
+def available_external_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """外部接続の実装を検証するテストに限り、利用可能なエンジンとして扱う。"""
+    from app.config import ROADMAP_PARSER_ADAPTER_BACKENDS
+
+    monkeypatch.delitem(ROADMAP_PARSER_ADAPTER_BACKENDS, "dots_ocr")

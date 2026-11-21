@@ -275,6 +275,11 @@ class ExternalParserConnectionUpdate(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096)
     clear_api_key: bool = False
 
+    @field_validator("backend", mode="before")
+    @classmethod
+    def require_available_backend(cls, value: object) -> object:
+        return reject_roadmap_parser_adapter_backend(value)
+
     @field_validator("endpoint")
     @classmethod
     def validate_endpoint(cls, value: str | None) -> str | None:
@@ -511,6 +516,13 @@ class ParserAdapterSettingsUpdate(BaseModel):
     navigation_summary_enabled: bool | None = None
     document_summary_enabled: bool | None = None
     vision_concurrency: int | None = Field(default=None, ge=1, le=16)
+
+    @field_validator("dots_ocr_enabled")
+    @classmethod
+    def validate_external_engine_enabled(cls, value: bool | None) -> bool | None:
+        if value:
+            reject_roadmap_parser_adapter_backend("dots_ocr")
+        return value
 
     @field_validator("adapter_backend", mode="before")
     @classmethod
