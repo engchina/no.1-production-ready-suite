@@ -44,3 +44,16 @@ def test_similar_names_keep_the_possibility_of_a_notation_variance() -> None:
     assert len(rule) == 1, body
     assert "表記の揺れの可能性" in rule[0] and "別の原因" in rule[0]
     assert sum("表記の揺れ" in line for line in grounded.generation_system_prompt().splitlines()) == 1
+
+
+def test_answer_scope_stays_in_the_fixed_body_contract_with_a_saved_role() -> None:
+    """回答の範囲は本文の契約で一度だけ渡し、保存した役割でも引用の契約とともに保つ。"""
+    default = grounded.generation_system_prompt()
+    body = _step(default, "本文を完成させて引用を選ぶ")
+    scope = next(line for line in body.splitlines() if "answer_body" in line)
+    assert "各要求" in scope and "要求に不要" in scope and "不足" in scope
+    assert default.count(scope) == 1
+    with bind_prompt_overrides({"generation.role": "## Step 1: 保存済みの役割"}):
+        saved = _step(grounded.generation_system_prompt(), "本文を完成させて引用を選ぶ")
+    assert scope in saved
+    assert "複数の文書" in saved and "段落の末尾" in saved
