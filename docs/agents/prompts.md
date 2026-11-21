@@ -4,7 +4,7 @@
 
 LLM に渡す文（製品の LLM への指示、組み込みのスキル `skills/`、MCP の server instructions・ツールと引数の説明、Agent の組み込み Runtime の指示とツールの結果の案内）は、pi（[badlogic/pi-mono](https://github.com/badlogic/pi-mono) の coding agent。[作者の解説](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)）と DeepSeek Harness（[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) の `.agents/skills/` の `agent-experience`・`dsh-prose-standard`・`dsh-trim-cot-leakage`）の書き方に従う。
 
-順序や漏れの有無が結果に関わる指示は、手順や要件を列挙する。Markdown の見出しとリストで階層を示し、指示・例・参考資料は読み分けられる形にする。本 repo では次の Step 表記を使う。[Anthropic の指示の書き方](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#be-clear-and-direct)・[OpenAI の Markdown と XML の使い方](https://developers.openai.com/api/docs/guides/prompt-engineering#message-formatting-with-markdown-and-xml)
+組み込み指示を書くときは、対象のモデルとタスクに当てはまる Anthropic と OpenAI の公式ガイドの推奨に従う。順序や漏れの有無が結果に関わる手順は列挙し、Markdown の見出しとリストで指示の階層を示す。[Anthropic の指示の書き方](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices#be-clear-and-direct)・[OpenAI の Markdown と XML の使い方](https://developers.openai.com/api/docs/guides/prompt-engineering#message-formatting-with-markdown-and-xml)
 
 - **Agent・RAG・NL2SQL と共通基盤が管理する組み込み指示は、実際にモデルへ渡す文を `## Step 1: …`、`## Step 2: …` の形式で処理順に書く。** System Prompt・入力テンプレート・ツールやスキルのモデル向けの手順にも適用する。役割と目的、入力の読み方、判断と制約、期待する出力を、タスクに必要な数の Step にまとめて連番を付ける。画面の表示と実行時の指示を一致させる。既存の意味・安全上の境界・否定・例外・出力契約を保ち、形式を変えた場合も関連テストと初回に渡す字数の前後を確認する。
 - **順序のある操作は Step で、同じ Step で満たす独立した要件は `-` の箇条書きで示す。** 手順が一つなら Step 1 で完結する。各 Step の指示が一つなら一文でよい。レビューで条件や漏れを見つけられるよう、「対象を特定できないときは利用者に確認する」のように、条件や例外は適用する操作と同じ項目に書く。Step を補足する規則には `###` の小節を使ってよい。
