@@ -341,12 +341,22 @@ class LinkStore:
         }
         return "lease", done
 
+    async def link_plan(self, did: str, token: str, total: int, done: int) -> None:
+        assert total >= done >= 0
+
     async def save_links(self, did: str, token: str, **kwargs: Any) -> None:
         assert self.state is not None
         self.saved.append(kwargs)
         self.state["done"] = [*self.state["done"], *kwargs["done"]]
 
-    async def finish_links(self, did: str, token: str, *, failure_code: str | None = None) -> None:
+    async def finish_links(
+        self,
+        did: str,
+        token: str,
+        *,
+        failure_code: str | None = None,
+        failure_phase: str | None = None,
+    ) -> None:
         assert self.state is not None
         self.state.update(
             status="FAILED" if failure_code else "READY", failure_code=failure_code, leased=0

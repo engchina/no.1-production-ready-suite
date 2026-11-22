@@ -208,7 +208,7 @@
     },
     {
       "name": "document_wiki_links",
-      "sha256": "db369a3fba38b8d5a0246fd03b77a34afed4dcf9ded319f0fb232b9d435ed7b1",
+      "sha256": "ad4fecd8504b32914818eef22b41a3e578586c2dbb513e58d9ca47d66947762d",
       "statement_count": 6,
       "table_name": "rag_wiki_links"
     },
@@ -273,7 +273,7 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "a071ec7b05f2dfb2d6f60595a944bbed4a355881221eb3b07d8a35c0faba7153",
+  "sha256": "5a25ff9a5b37437978d895f1aa5e891f587cb00583dda7f9e07de9d8783ee4c9",
   "statement_count": 166,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {

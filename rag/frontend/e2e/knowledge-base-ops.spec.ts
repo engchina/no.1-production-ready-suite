@@ -519,3 +519,28 @@ async function mockSearchAnswerProfiles(
     await route.fulfill(envelope({ items, total: items.length, limit: 20, offset: 0, has_next: false }));
   });
 }
+
+test("公開済みの文書のリンク進捗とリンクだけの再試行を表示する", async ({ page }) => {
+  await mockKnowledgeBases(page, defaultKnowledgeBases());
+  await mockDocuments(page);
+  let retried = false;
+  await page.route("**/api/knowledge-bases/kb-1/wiki**", async route => {
+    if (route.request().method() === "POST") {
+      expect(new URL(route.request().url()).pathname).toMatch(/\/doc-a\/links\/retry$/);
+      retried = true;
+    }
+    const status = retried ? "QUEUED" : "FAILED";
+    const documents = [{ document_id: "doc-a", file_name: "synthetic-a.md", status: "READY", link_status: status,
+      link_failure_code: retried ? null : "timeout", failure_phase: retried ? null : "generate_links", planned_count: 8, judged_count: 3, link_count: 0 }];
+    const body = wikiBody(true, documents, route.request().url(), false);
+    await route.fulfill(envelope({ ...body, link_counts: { [status]: 1 }, planned_count: 8, judged_count: 3, link_count: 0 }));
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const panel = page.getByTestId("knowledge-base-wiki");
+  await expect(panel.getByTestId("knowledge-base-wiki-progress")).toContainText("判定済み 3 / 8 件");
+  const row = panel.getByTestId("knowledge-base-wiki-document");
+  await expect(row).toContainText("準備済み");
+  await row.getByRole("button", { name: "リンクだけ再試行" }).click();
+  await expect(panel.getByTestId("knowledge-base-wiki-progress")).toContainText("待機 1");
+  expect(retried).toBe(true);
+});

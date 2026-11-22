@@ -97,18 +97,23 @@ CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text)
 """.strip()
 
 
-def wiki_link_schema_sql() -> str:
+def wiki_link_schema_sql(*, include_progress: bool = True) -> str:
     """文書をまたぐ関連と、文書ごとの関連の構築の状態（#5492）。
 
     関連は起点と終点の案内（保存版の指紋を含む page_id）を外部キーで持ち、文書・案内の削除で消える。
     """
     relations = ",".join(f"'{relation}'" for relation in WIKI_RELATION_PRIORITY)
+    progress_columns = (
+        "\n    judged_count NUMBER,\n    planned_count NUMBER,\n    failure_phase VARCHAR2(64),"
+        if include_progress
+        else ""
+    )
     return f"""
 CREATE TABLE rag_wiki_link_documents (
     document_id VARCHAR2(64) PRIMARY KEY,
     source_fingerprint CHAR(64) NOT NULL,
     link_fingerprint CHAR(64) NOT NULL,
-    done_json JSON,
+    done_json JSON,{progress_columns}
     status VARCHAR2(16) DEFAULT 'QUEUED' NOT NULL,
     lease_token VARCHAR2(64),
     lease_until TIMESTAMP WITH TIME ZONE,
@@ -449,6 +454,50 @@ class WikiStore:
             f"SELECT state,COUNT(*) AS n FROM ({states}) GROUP BY state", binds
         )
         return {str(row["state"]): int(str(row["n"])) for row in rows}
+
+    async def link_progress(self, filters: dict[str, str]) -> list[dict[str, Any]]:
+        """KB で読める現行版の両端だけを関連の件数に数える。"""
+        states, binds = self._document_states_sql(filters)
+        return await self.oracle._fetch_all(
+            f"""WITH visible AS ({states}), published AS (
+                SELECT v.document_id,w.published_fingerprint fp FROM visible v
+                JOIN rag_wiki_documents w ON w.document_id=v.document_id WHERE v.state='READY'
+            ), edges AS (
+                SELECT l.source_document_id src,l.target_document_id dst FROM rag_wiki_links l
+                JOIN published s ON s.document_id=l.source_document_id AND s.fp=l.source_fingerprint
+                JOIN published t ON t.document_id=l.target_document_id AND t.fp=l.target_fingerprint
+            ), incident AS (
+                SELECT src doc FROM edges UNION ALL SELECT dst doc FROM edges
+            ), edge_counts AS (SELECT doc,COUNT(*) n FROM incident GROUP BY doc)
+            SELECT v.document_id,CASE
+                WHEN l.status='FAILED' AND l.failure_code='interrupted' THEN 'QUEUED'
+                ELSE NVL(l.status,'NOT_BUILT') END link_status,
+                l.judged_count,l.planned_count,l.failure_phase,l.failure_code link_failure_code,
+                NVL(e.n,0) link_count FROM visible v
+            LEFT JOIN published p ON p.document_id=v.document_id
+            LEFT JOIN rag_wiki_link_documents l ON l.document_id=p.document_id
+                AND l.source_fingerprint=p.fp
+            LEFT JOIN edge_counts e ON e.doc=v.document_id""",
+            binds,
+        )
+
+    async def retry_document_links(self, kb_id: str, document_id: str) -> bool:
+        where, binds = wiki_scope({"knowledge_base_id": kb_id, "document_id": document_id})
+        return bool(
+            await self.oracle._run_transaction(
+                lambda connection: _execute_count(
+                    connection,
+                    f"""UPDATE rag_wiki_link_documents l SET status='QUEUED', failure_code=NULL,
+            failure_phase=NULL,build_started_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
+            WHERE document_id=:target AND status='FAILED' AND EXISTS (
+                SELECT 1 FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
+                JOIN rag_wiki_documents w ON w.document_id=c.document_id
+                WHERE c.document_id=l.document_id AND w.status='READY'
+                AND w.published_fingerprint=l.source_fingerprint AND {where})""",
+                    {**binds, "target": document_id},
+                )
+            )
+        )
 
     async def requeue_failed(self, filters: dict[str, str]) -> None:
         """再試行の要る失敗を待機へ戻す。構築は次の照合が進める（#5466）。"""
@@ -1193,22 +1242,43 @@ class WikiStore:
             saved = _json_list(row.get("done_json"))
             _execute(
                 connection,
-                """UPDATE rag_wiki_link_documents SET done_json=:done,updated_at=SYSTIMESTAMP
+                """UPDATE rag_wiki_link_documents SET done_json=:done,
+                judged_count=LEAST(planned_count,judged_count+:increment),updated_at=SYSTIMESTAMP
                 WHERE document_id=:id""",
-                {"id": document_id, "done": _json_bind(list(dict.fromkeys([*saved, *done])))},
+                {
+                    "id": document_id,
+                    "done": _json_bind(list(dict.fromkeys([*saved, *done]))),
+                    "increment": len(set(done) - set(saved)),
+                },
                 input_sizes=_json_input_sizes("done"),
             )
 
         await self.oracle._run_transaction(operation)
 
+    async def link_plan(self, document_id: str, token: str, total: int, done: int) -> None:
+        await self.oracle._run_transaction(
+            lambda connection: _execute(
+                connection,
+                """UPDATE rag_wiki_link_documents SET planned_count=:total,judged_count=:done
+            WHERE document_id=:id AND lease_token=:token AND status='RUNNING'""",
+                {"id": document_id, "token": token, "total": total, "done": done},
+            )
+        )
+
     async def finish_links(
-        self, document_id: str, token: str, *, failure_code: str | None = None
+        self,
+        document_id: str,
+        token: str,
+        *,
+        failure_code: str | None = None,
+        failure_phase: str | None = None,
     ) -> None:
         def operation(connection: Any) -> None:
             self._require_link_lease(connection, document_id, token)
             _execute(
                 connection,
-                """UPDATE rag_wiki_link_documents SET status=:status,failure_code=:failure,
+                """UPDATE rag_wiki_link_documents SET status=:status,
+                failure_code=:failure,failure_phase=:phase,
                 done_json=CASE WHEN :status='READY' THEN NULL ELSE done_json END,
                 build_started_at=CASE WHEN :status='READY' THEN NULL ELSE build_started_at END,
                 lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
@@ -1217,6 +1287,7 @@ class WikiStore:
                     "id": document_id,
                     "status": "FAILED" if failure_code else "READY",
                     "failure": failure_code,
+                    "phase": failure_phase,
                 },
             )
 

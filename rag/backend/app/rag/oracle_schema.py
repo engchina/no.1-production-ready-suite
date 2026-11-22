@@ -1206,7 +1206,9 @@ END;
         OracleSchemaSection(
             name="20261119_5492_wiki_links",
             table_name="rag_wiki_links",
-            sql=_create_missing_objects_sql(wiki_link_schema_sql(), "Wiki の関連"),
+            sql=_create_missing_objects_sql(
+                wiki_link_schema_sql(include_progress=False), "Wiki の関連"
+            ),
         )
     )
     sections.append(
@@ -1265,6 +1267,13 @@ END;
             name="20261122_5748_wiki_build_started_at",
             table_name="rag_wiki_documents",
             sql=wiki_build_started_at_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261122_5760_wiki_link_progress",
+            table_name="rag_wiki_link_documents",
+            sql=wiki_link_progress_migration_sql(),
         )
     )
     return sections
@@ -2186,6 +2195,26 @@ BEGIN
     END IF;
 END;
 /"""
+
+
+def wiki_link_progress_migration_sql() -> str:
+    return "\n".join(
+        f"""DECLARE
+    n NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO n FROM user_tab_columns
+    WHERE table_name='RAG_WIKI_LINK_DOCUMENTS' AND column_name='{column.upper()}';
+    IF n=0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_wiki_link_documents ADD ({column} {kind})';
+    END IF;
+END;
+/"""
+        for column, kind in (
+            ("judged_count", "NUMBER"),
+            ("planned_count", "NUMBER"),
+            ("failure_phase", "VARCHAR2(64)"),
+        )
+    )
 
 
 def wiki_build_started_at_migration_sql() -> str:
