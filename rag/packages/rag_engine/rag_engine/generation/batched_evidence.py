@@ -939,6 +939,7 @@ def prepare_batched_evidence(
                             {
                                 "pr.call.role": "batch_read",
                                 "pr.batch.pass": pass_index,
+                                "pr.batch.phase": "review" if reviewing else "initial" if pass_index == 1 else "reduction",
                                 "pr.batch.index": batch_index,
                                 "pr.batch.count": len(pass_batches),
                             }

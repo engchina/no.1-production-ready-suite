@@ -52,6 +52,11 @@ export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDeta
     const purposeName = purpose ? labels.modelPurposes?.[purpose] : undefined;
     const legacyGeneration = purpose === "answer.generate" && span.attributes["pr.call.role"] !== "draft_generation";
     name = (!legacyGeneration && purposeName) || (span.operationName === "gen_ai.chat" ? names.chat : target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name]);
+    if (purpose === "evidence.read_batch") {
+      const phase = span.attributes["pr.batch.phase"];
+      if (phase === "initial") name = names.initialRead;
+      if (phase === "review") name = names.reviewRead;
+    }
   }
   const batchIndex = span.attributes["pr.batch.index"];
   const batchCount = span.attributes["pr.batch.count"];

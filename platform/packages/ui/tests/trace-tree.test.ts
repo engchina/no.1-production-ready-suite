@@ -226,3 +226,13 @@ it("分割読取・範囲修正・草稿生成を実際の属性で区別する"
   expect(rows[0].details?.fields).toContainEqual({label: "モデルの応答", value: "応答を受信", mono: false, technical: true});
   expect(rows[0].details?.fields).toContainEqual({label: "結果の検証", value: "検証で不合格", mono: false, technical: true});
 });
+
+it.each([
+  ["initial", "根拠を分割して初読する"],
+  ["review", "残りの根拠を補読する"],
+  ["reduction", "根拠を分割して読む"],
+])("分割読取の段階 %s を表示する", (phase, label) => {
+  const attributes = {"pr.gen_ai.purpose": "evidence.read_batch", "pr.batch.phase": phase, "pr.batch.index": 1, "pr.batch.count": 9};
+  const result = traceTimeline({spans: [{...span("1", "0"), operation_name: "gen_ai.chat", attributes}]}).steps;
+  expect(result[0].label).toBe(label + "（1/9）");
+});

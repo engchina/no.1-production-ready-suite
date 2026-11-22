@@ -78,6 +78,7 @@ _SAFE_ATTRIBUTES = frozenset(
         "pr.attempt",
         "pr.call.role",
         "pr.batch.pass",
+        "pr.batch.phase",
         "pr.batch.index",
         "pr.batch.count",
         "pr.retry.reason",
