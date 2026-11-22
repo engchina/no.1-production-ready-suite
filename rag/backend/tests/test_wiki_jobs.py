@@ -613,3 +613,17 @@ async def test_links_are_built_only_after_the_document_is_ready(
     await jobs.build("document-a", "owner-a")
     assert linked == ["document-a", "document-a"]
     await jobs.shutdown()
+
+
+async def test_wiki_reads_default_for_each_model_call(monkeypatch: Any) -> None:
+    from unittest.mock import AsyncMock
+
+    from app.rag import wiki_jobs
+
+    first, second = AsyncMock(), AsyncMock()
+    first.generate.return_value, second.generate.return_value = "初回", "次回"
+    selected = iter((first, second))
+    monkeypatch.setattr(wiki_jobs, "get_settings", lambda: next(selected))
+    client = wiki_jobs.WikiDefaultTextModel(lambda settings: settings)
+    assert await client.generate("", "", response_schema_name="wiki_contexts") == "初回"
+    assert await client.generate("", "", response_schema_name="wiki_links") == "次回"

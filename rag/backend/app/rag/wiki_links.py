@@ -116,6 +116,7 @@ async def judge_links(
     system_prompt: str = WIKI_LINK_PROMPT,
     caller: BoundedCaller | None = None,
     measure: Callable[..., CompleteInputMeasurement] | None = None,
+    current_measure: Callable[[], Callable[..., CompleteInputMeasurement] | None] | None = None,
 ) -> int:
     """起点を ``batch_size`` 件ずつ判定し、検証した結果をその都度 ``checkpoint`` に渡す。
 
@@ -197,8 +198,9 @@ async def judge_links(
                 return None
 
         try:
-            if measure is not None:
-                measure(
+            batch_measure = current_measure() if current_measure else measure
+            if batch_measure is not None:
+                batch_measure(
                     "",
                     context,
                     system_prompt=system_prompt,

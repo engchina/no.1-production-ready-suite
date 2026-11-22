@@ -138,6 +138,16 @@ async def remaining_seconds(
     return settings.rag_wiki_build_timeout_seconds - elapsed
 
 
+class WikiDefaultTextModel:
+    """Wiki の各モデル要求に、その時点の既定テキストモデルと接続を使う。"""
+
+    def __init__(self, factory: Callable[[Settings], Any]) -> None:
+        self.factory = factory
+
+    async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+        return str(await self.factory(get_settings()).generate(prompt, context, **kwargs))
+
+
 class WikiJobs:
     def __init__(
         self,
@@ -382,6 +392,7 @@ class WikiJobs:
                 builder = WikiRequestBuilder(
                     snapshot.units,
                     config=config_from_settings(settings),
+                    current_config=lambda: config_from_settings(get_settings()),
                     system_prompt=(await store.prompt_overrides()).get(
                         "wiki_build", WIKI_CONTEXT_PROMPT
                     ),
@@ -393,7 +404,7 @@ class WikiJobs:
                 phase = "generate_pages"
                 pages = await builder.compile(
                     snapshot.units,
-                    model=self.model_factory(settings),
+                    model=WikiDefaultTextModel(self.model_factory),
                     saved=saved,
                     authorize=authorize,
                     checkpoint=checkpoint,
@@ -573,13 +584,13 @@ class WikiJobs:
                 )
                 skip = set(done)
                 phase = "generate_links"
-                model, caller = self.model_factory(settings), make_ai_caller(settings, "wiki_build")
+                caller = make_ai_caller(settings, "wiki_build")
                 # 前向き（この文書 → ほか）と逆向き（ほか → この文書）は起点と候補が入れ替わるので、
                 # 同じ判定に混ぜない。
                 for group in (forward, reverse):
                     await judge_links(
                         [item for item in group if item.key not in skip],
-                        model=model,
+                        model=WikiDefaultTextModel(self.model_factory),
                         system_prompt=prompt,
                         batch_size=settings.rag_wiki_link_batch_units,
                         original_chars=settings.rag_wiki_link_source_chars,
@@ -588,7 +599,9 @@ class WikiJobs:
                         authorize=authorize,
                         checkpoint=checkpoint,
                         caller=caller,
-                        measure=getattr(model, "measure_text_input", None),
+                        current_measure=lambda: getattr(
+                            self.model_factory(get_settings()), "measure_text_input", None
+                        ),
                     )
                 await authorize()
                 phase = "publish_links"
