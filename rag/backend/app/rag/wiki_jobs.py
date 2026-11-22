@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from functools import partial
 from typing import Any
@@ -96,6 +96,46 @@ async def current_actor(user_uuid: str | None, settings: Settings) -> AuditReque
         all_users_visible=can_view_all_users_data(principal),
         settings=settings,
     )
+
+
+@asynccontextmanager
+async def keep_lease(
+    store: Any, document_id: str, token: str, *, lease_seconds: int, links: bool = False
+) -> AsyncIterator[None]:
+    """構築の間、lease を ``lease_seconds`` の 1/3 ごとに延ばす（#5748）。
+
+    lease は短く保ち、process が止まれば lease の時間の後に次の照合が続きを拾う。所有権を
+    失ったら延ばすのをやめる（保存の時に所有権を確かめて止まる）。
+    """
+
+    async def renew() -> None:
+        while True:
+            await asyncio.sleep(max(1.0, lease_seconds / 3))
+            try:
+                if not await store.renew_lease(
+                    document_id, token, lease_seconds=lease_seconds, links=links
+                ):
+                    return
+            except Exception as error:
+                logger.warning(
+                    "wiki_lease_renew_failed", extra={"error_type": type(error).__name__}
+                )
+
+    task = asyncio.create_task(renew())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+async def remaining_seconds(
+    store: Any, document_id: str, settings: Settings, *, links: bool = False
+) -> float:
+    """実際に構築を始めてからの上限（``RAG_WIKI_BUILD_TIMEOUT_SECONDS``）の残りの秒数（#5748）。"""
+    elapsed = float(await store.build_elapsed_seconds(document_id, links=links))
+    return settings.rag_wiki_build_timeout_seconds - elapsed
 
 
 class WikiJobs:
@@ -250,8 +290,6 @@ class WikiJobs:
         store = self.store_factory()
         snapshot, lease, context_token = None, None, None
         phase = "prepare_document"
-        # この回で案内を保存したか。時間切れでも進んでいれば、次の照合で続きから作る。
-        progressed = False
         try:
             context_token = set_audit_request_context(await self.actor(owner, settings))
             revision = await store.revision_fingerprint(document_id)
@@ -282,17 +320,13 @@ class WikiJobs:
                 revision_fingerprint=revision,
             )
             await store.enqueue(snapshot)
-            lease = await store.claim(
-                snapshot,
-                lease_seconds=int(
-                    max(
-                        settings.rag_wiki_lease_seconds,
-                        settings.rag_wiki_build_timeout_seconds + 60,
-                    )
-                ),
-            )
+            lease = await store.claim(snapshot, lease_seconds=settings.rag_wiki_lease_seconds)
             if lease is None:
                 return False
+            # 上限は実際に構築を始めた時から数え、中断からの続きでも同じ開始を使う（#5748）。
+            remaining = await remaining_seconds(store, document_id, settings)
+            if remaining <= 0:
+                raise TimeoutError
             phase = "load_saved_pages"
             saved = await store.saved_pages(snapshot)
 
@@ -307,7 +341,7 @@ class WikiJobs:
                 phase = prior
 
             async def checkpoint(pages: Sequence[WikiPage]) -> None:
-                nonlocal phase, progressed
+                nonlocal phase
                 await authorize()
                 phase = "save_pages"
                 await store.checkpoint(
@@ -316,10 +350,14 @@ class WikiJobs:
                     pages,
                     original_chars=settings.rag_wiki_embedding_source_chars,
                 )
-                progressed = True
                 phase = "generate_pages"
 
-            async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
+            async with (
+                keep_lease(
+                    store, document_id, lease, lease_seconds=settings.rag_wiki_lease_seconds
+                ),
+                asyncio.timeout(remaining),
+            ):
                 phase = "prepare_input"
                 sources, related = (
                     await source_inputs(
@@ -386,8 +424,8 @@ class WikiJobs:
                     await store.finish(
                         snapshot,
                         lease,
-                        # 案内を 1 件も足せない時間切れだけ止める（毎回進むので終わる）。
-                        failure_code=("interrupted" if progressed else "timeout")
+                        # 実際の開始からの上限を超えたら止め、再試行を待つ（#5748）。
+                        failure_code="timeout"
                         if isinstance(error, TimeoutError)
                         else "authorization_changed"
                         if isinstance(error, PermissionError)
@@ -424,7 +462,7 @@ class WikiJobs:
         if settings.rag_wiki_link_candidates <= 0:
             return
         store = self.store_factory()
-        token, context_token, progressed = None, None, False
+        token, context_token = None, None
         phase = "prepare_links"
         source = None
         try:
@@ -459,17 +497,15 @@ class WikiJobs:
                 source,
                 links,
                 prompt_version=fingerprint(prompt) if prompt != WIKI_LINK_PROMPT else None,
-                lease_seconds=int(
-                    max(
-                        settings.rag_wiki_lease_seconds,
-                        settings.rag_wiki_build_timeout_seconds + 60,
-                    )
-                ),
+                lease_seconds=settings.rag_wiki_lease_seconds,
             )
             if claimed is None:
                 return
             lease, done = claimed
             token = lease
+            remaining = await remaining_seconds(store, document_id, settings, links=True)
+            if remaining <= 0:
+                raise TimeoutError
 
             async def authorize() -> None:
                 nonlocal phase
@@ -492,7 +528,7 @@ class WikiJobs:
                 candidates: Sequence[str],
                 decisions: Sequence[WikiLinkDecision],
             ) -> None:
-                nonlocal phase, progressed
+                nonlocal phase
                 await authorize()
                 phase = "save_links"
                 await store.save_links(
@@ -506,10 +542,18 @@ class WikiJobs:
                     ],
                     done=[item.key for item in batch],
                 )
-                progressed = True
                 phase = "generate_links"
 
-            async with asyncio.timeout(settings.rag_wiki_build_timeout_seconds):
+            async with (
+                keep_lease(
+                    store,
+                    document_id,
+                    lease,
+                    lease_seconds=settings.rag_wiki_lease_seconds,
+                    links=True,
+                ),
+                asyncio.timeout(remaining),
+            ):
                 phase = "load_link_candidates"
                 forward, reverse, names = await self._link_items(
                     store, document_id, knowledge_bases, settings
@@ -547,7 +591,7 @@ class WikiJobs:
                     await store.finish_links(
                         document_id,
                         token,
-                        failure_code=("interrupted" if progressed else "timeout")
+                        failure_code="timeout"
                         if isinstance(error, TimeoutError)
                         else "authorization_changed"
                         if isinstance(error, PermissionError)

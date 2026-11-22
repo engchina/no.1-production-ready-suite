@@ -4728,6 +4728,7 @@ BEGIN
             || 'lease_token VARCHAR2(64), '
             || 'lease_until TIMESTAMP WITH TIME ZONE, '
             || 'failure_code VARCHAR2(64), '
+            || 'build_started_at TIMESTAMP WITH TIME ZONE, '
             || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
             || 'CONSTRAINT rag_wiki_doc_fk FOREIGN KEY (document_id) '
             || 'REFERENCES rag_documents(document_id) ON DELETE CASCADE, '
@@ -4801,6 +4802,7 @@ BEGIN
             || 'lease_token VARCHAR2(64), '
             || 'lease_until TIMESTAMP WITH TIME ZONE, '
             || 'failure_code VARCHAR2(64), '
+            || 'build_started_at TIMESTAMP WITH TIME ZONE, '
             || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
             || 'CONSTRAINT rag_wiki_link_doc_fk FOREIGN KEY (document_id) '
             || 'REFERENCES rag_documents(document_id) ON DELETE CASCADE, '
@@ -4914,6 +4916,28 @@ BEGIN
     IF v_count = 0 THEN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_wiki_graph_target_idx ON rag_wiki_graph_deps(target_unit_id)';
+    END IF;
+END;
+/
+
+-- migration: 20261122_5748_wiki_build_started_at
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_WIKI_DOCUMENTS' AND column_name = 'BUILD_STARTED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_wiki_documents ADD (build_started_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_WIKI_LINK_DOCUMENTS' AND column_name = 'BUILD_STARTED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_wiki_link_documents ADD (build_started_at TIMESTAMP WITH TIME ZONE)';
     END IF;
 END;
 /

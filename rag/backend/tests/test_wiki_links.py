@@ -300,9 +300,18 @@ class LinkStore:
         self.state: dict[str, Any] | None = None
         self.saved: list[dict[str, Any]] = []
         self.resolved: list[dict[str, str]] = []
+        # 関連の構築を実際に始めてからの秒数（#5748）。
+        self.elapsed = 0.0
 
     async def prompt_overrides(self) -> dict[str, str]:
         return self.prompts
+
+    async def build_elapsed_seconds(self, did: str, *, links: bool = False) -> float:
+        assert links
+        return self.elapsed
+
+    async def renew_lease(self, did: str, token: str, **kwargs: Any) -> bool:
+        return True
 
     async def document_state(self, did: str) -> Any:
         return dict(self.doc)
@@ -457,6 +466,19 @@ async def test_interrupted_link_build_resumes_from_saved_keys(link_setup: Any) -
     assert len(model.calls) == 1 and model.calls[0]["sources"][0]["unit_id"] == "S1"
     assert [entry["sources"] for entry in store.saved] == [["doc-b-b1"]]
     assert store.state["status"] == "READY"
+    await jobs.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_link_build_past_the_deadline_from_its_actual_start_times_out(
+    link_setup: Any,
+) -> None:
+    """関連の上限は関連の構築を実際に始めた時から数え、超えていればモデルを呼ばずに止める（#5748）。"""
+    jobs, store, model, settings, _ = link_setup
+    store.elapsed = settings.rag_wiki_build_timeout_seconds + 1
+    await jobs._build_links("doc-a", "owner-a", settings)
+    assert store.state["status"] == "FAILED" and store.state["failure_code"] == "timeout"
+    assert not model.calls and store.doc["status"] == "READY"
     await jobs.shutdown()
 
 

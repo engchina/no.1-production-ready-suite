@@ -831,14 +831,14 @@
     {
       "destructive": false,
       "name": "20261118_4941_document_wiki",
-      "sha256": "0f4f6de78b47fe471ac17d9c3b3622bbcd7629b0bbc919f51f8922faece0ccfc",
+      "sha256": "699587074a3a21bcd771443ed05707608c53bc6bec885d4510e64da6ff6ba2c7",
       "statement_count": 2,
       "table_name": "rag_wiki_documents"
     },
     {
       "destructive": false,
       "name": "20261119_5492_wiki_links",
-      "sha256": "e93141e04f98bbad378973661573d99d532e7ac79972a31f3c870e58626fd7ea",
+      "sha256": "2663569b0ac6ded54d386b85dbdc56425d1375ffecf67f151a9fde7c2e9b653a",
       "statement_count": 1,
       "table_name": "rag_wiki_links"
     },
@@ -862,10 +862,17 @@
       "sha256": "9eab445be61577a0b82351d7f077b133c96d4f9f00e32448edb14e193d9ed323",
       "statement_count": 1,
       "table_name": "rag_wiki_graph_nodes"
+    },
+    {
+      "destructive": false,
+      "name": "20261122_5748_wiki_build_started_at",
+      "sha256": "aeda5950ddfd57f8eecb8a1b2bbb840e405a901a68b48f5f9c869de61e2349f3",
+      "statement_count": 1,
+      "table_name": "rag_wiki_documents"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "60dbb6d9a9542a25cee53d17d2a3bf0ce288933ac4f1ed681a472b14a31729e7",
-  "statement_count": 185
+  "sha256": "f926d1397e2a1a2f896261d09a568df4140aa8daf9656a18385258a5dbd91de6",
+  "statement_count": 186
 }

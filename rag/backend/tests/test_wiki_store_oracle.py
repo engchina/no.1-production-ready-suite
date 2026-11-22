@@ -275,6 +275,63 @@ async def test_page_retry_only_requeues_one_failed_member_and_preserves_link_sta
     assert [await store.link_state(did) for did, _ in documents] == before_links
 
 
+async def test_build_start_is_recorded_on_claim_and_kept_only_for_interrupted_builds() -> None:
+    """実際に構築を始めた時刻を claim で一度だけ記録し、中断の続きだけで保つ（#5748）。"""
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store = WikiStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-deadline-{token}")
+    await store.set_enabled(kb.id, True)
+    did, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=token)
+    snapshot = await store.source_units(did)
+    revision = await store.revision_fingerprint(did)
+    assert snapshot and revision
+    snapshot = replace(
+        snapshot, compiler_fingerprint=fingerprint("compiler"), revision_fingerprint=revision
+    )
+
+    async def started(table: str) -> Any:
+        row = await oracle._fetch_one(
+            f"SELECT build_started_at FROM {table} WHERE document_id=:id", {"id": did}
+        )
+        return row["build_started_at"] if row else None
+
+    # 待機に入っただけでは数えない。
+    await store.enqueue(snapshot)
+    assert await started("rag_wiki_documents") is None
+    assert await store.build_elapsed_seconds(did) == 0.0
+    lease = await store.claim(snapshot, lease_seconds=300)
+    assert lease
+    first = await started("rag_wiki_documents")
+    assert first is not None and 0.0 <= await store.build_elapsed_seconds(did) < 300
+    # lease は所有者だけが延ばせる。
+    assert await store.renew_lease(did, lease, lease_seconds=300)
+    assert not await store.renew_lease(did, "other-lease", lease_seconds=300)
+    # 中断からの続きは同じ開始を使う。
+    await store.finish(snapshot, lease, failure_code="interrupted")
+    assert await store.enqueue(snapshot)
+    lease = await store.claim(snapshot, lease_seconds=300)
+    assert lease and await started("rag_wiki_documents") == first
+    # 時間切れの後の再試行は数え直す。
+    await store.finish(snapshot, lease, failure_code="timeout")
+    await store.requeue_failed({"knowledge_base_id": kb.id})
+    assert await started("rag_wiki_documents") is None
+    lease = await store.claim(snapshot, lease_seconds=300)
+    assert lease and await started("rag_wiki_documents") is not None
+
+    # 関連は案内と別に数える。
+    claimed = await store.claim_links(did, snapshot.source_fingerprint, LINKS, lease_seconds=300)
+    assert claimed
+    link_first = await started("rag_wiki_link_documents")
+    assert link_first is not None
+    assert await store.renew_lease(did, claimed[0], lease_seconds=300, links=True)
+    assert await store.build_elapsed_seconds(did, links=True) >= 0.0
+    await store.finish_links(did, claimed[0], failure_code="interrupted")
+    claimed = await store.claim_links(did, snapshot.source_fingerprint, LINKS, lease_seconds=300)
+    assert claimed and await started("rag_wiki_link_documents") == link_first
+    await store.finish_links(did, claimed[0])
+    assert await started("rag_wiki_link_documents") is None
+
+
 async def _published(store: WikiStore, did: str, context: str) -> tuple[Any, list[WikiPage]]:
     """合成の案内を作って公開した文書（保存版と案内）。"""
     revision = await store.revision_fingerprint(did)

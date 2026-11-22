@@ -1233,6 +1233,7 @@ CREATE TABLE rag_wiki_documents (
     lease_token VARCHAR2(64),
     lease_until TIMESTAMP WITH TIME ZONE,
     failure_code VARCHAR2(64),
+    build_started_at TIMESTAMP WITH TIME ZONE,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_wiki_doc_fk FOREIGN KEY (document_id)
         REFERENCES rag_documents(document_id) ON DELETE CASCADE,
@@ -1273,6 +1274,7 @@ CREATE TABLE rag_wiki_link_documents (
     lease_token VARCHAR2(64),
     lease_until TIMESTAMP WITH TIME ZONE,
     failure_code VARCHAR2(64),
+    build_started_at TIMESTAMP WITH TIME ZONE,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_wiki_link_doc_fk FOREIGN KEY (document_id)
         REFERENCES rag_documents(document_id) ON DELETE CASCADE,
