@@ -1286,7 +1286,10 @@ class Settings(
         ),
     )
     rag_wiki_build_workers: int = Field(
-        default=2, ge=1, le=16, description="Wiki の構築を同時に行う文書数の上限。"
+        default=2,
+        ge=1,
+        le=16,
+        description="Wiki の案内の構築を同時に行う文書数の上限（process ごと。関連は別の枠）。",
     )
     rag_wiki_lease_seconds: int = Field(
         default=900,
@@ -1318,6 +1321,15 @@ class Settings(
         description=(
             "Wiki の文書をまたぐ関連の候補の数（単位ごと・ベクトルと全文の上位）。"
             "0 は関連を作らない。"
+        ),
+    )
+    rag_wiki_link_workers: int = Field(
+        default=1,
+        ge=1,
+        le=16,
+        description=(
+            "Wiki の文書をまたぐ関連の構築を同時に行う文書数の上限（process ごと。#5751）。"
+            "案内の枠（RAG_WIKI_BUILD_WORKERS）とは別に数え、関連が長くても案内の構築を待たせない。"
         ),
     )
     rag_wiki_link_batch_units: int = Field(

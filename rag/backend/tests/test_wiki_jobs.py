@@ -545,6 +545,53 @@ async def test_transient_model_failure_is_retried_by_shared_caller(
 
 
 @pytest.mark.asyncio
+async def test_long_link_builds_do_not_hold_the_page_build_slots(
+    setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """関連は案内と別の枠で作り、関連が長くてもほかの文書の案内を待たせない（#5751）。"""
+    jobs, _, _ = setup
+    settings = Settings(rag_wiki_build_workers=1, rag_wiki_link_workers=1)
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    release, link_started = asyncio.Event(), asyncio.Event()
+    pages: list[str] = []
+    links: list[str] = []
+    running_links = 0
+    peak_links = 0
+
+    async def build_pages(did: str, owner: Any, settings: Any) -> bool:
+        pages.append(did)
+        return True
+
+    async def build_links(did: str, owner: Any, settings: Any) -> None:
+        nonlocal running_links, peak_links
+        running_links += 1
+        peak_links = max(peak_links, running_links)
+        links.append(did)
+        link_started.set()
+        await release.wait()
+        running_links -= 1
+
+    monkeypatch.setattr(jobs, "_build_pages", build_pages)
+    monkeypatch.setattr(jobs, "_build_links", build_links)
+    first = asyncio.create_task(jobs.build("document-a", "owner-a"))
+    await link_started.wait()
+    # 文書 A の関連が枠を持っている間も、文書 B・C の案内は案内の枠（1）で作れる。
+    second = asyncio.create_task(jobs.build("document-b", "owner-a"))
+    third = asyncio.create_task(jobs.build("document-c", "owner-a"))
+    for _ in range(20):
+        if len(pages) == 3:
+            break
+        await asyncio.sleep(0)
+    assert pages == ["document-a", "document-b", "document-c"]
+    # 関連は関連の枠（1）を超えて同時に作らない。
+    assert links == ["document-a"] and peak_links == 1
+    release.set()
+    await asyncio.gather(first, second, third)
+    assert sorted(links) == ["document-a", "document-b", "document-c"] and peak_links == 1
+    await jobs.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_links_are_built_only_after_the_document_is_ready(
     setup: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
