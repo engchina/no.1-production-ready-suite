@@ -205,6 +205,11 @@ class WikiJobs:
             self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
         return self.capacity
 
+    def _link_model(self, settings: Settings) -> Any:
+        if model_id := settings.rag_wiki_link_model_id.strip():
+            return OciEnterpriseAiClient(settings=settings, model_id=model_id)
+        return self.model_factory(settings)
+
     def _link_capacity(self, settings: Settings) -> asyncio.Semaphore:
         if self.link_capacity is None:
             self.link_capacity = asyncio.Semaphore(settings.rag_wiki_link_workers)
@@ -606,7 +611,7 @@ class WikiJobs:
                 for group in (forward, reverse):
                     await judge_links(
                         [item for item in group if item.key not in skip],
-                        model=WikiDefaultTextModel(self.model_factory),
+                        model=WikiDefaultTextModel(self._link_model),
                         system_prompt=prompt,
                         batch_size=settings.rag_wiki_link_batch_units,
                         original_chars=settings.rag_wiki_link_source_chars,
@@ -616,7 +621,7 @@ class WikiJobs:
                         checkpoint=checkpoint,
                         caller=caller,
                         current_measure=lambda: getattr(
-                            self.model_factory(get_settings()), "measure_text_input", None
+                            self._link_model(get_settings()), "measure_text_input", None
                         ),
                     )
                 await authorize()

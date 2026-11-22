@@ -118,6 +118,7 @@ def reading_window(
     scope: str = "paragraph",
     section_id: str | None = None,
     max_chars: int = MAX_READER_CHARS,
+    occurrence: int | None = None,
 ) -> dict[str, Any]:
     """原要素の順序を保ち、文字数・block 数を制限する。cursor はこの版だけで有効。"""
     max_chars = min(MAX_READER_CHARS, max(1, max_chars))
@@ -126,10 +127,38 @@ def reading_window(
     anchor = next(
         (i for i, row in enumerate(elements) if row.get("element_id") in anchor_ids), None
     )
+    # 要素 ID を保存しない分割では、同じ解析版の全文で引用を検証する。
+    raw_range = None
+    match_count = 0
+    if anchor is None and not anchor_ids and quote.strip():
+        raw = str(payload.get("raw_text") or "").replace("\r\n", "\n").replace("\r", "\n")
+        needle = quote.replace("\r\n", "\n").replace("\r", "\n")
+        start = raw.find(needle)
+        while start >= 0:
+            if match_count == (occurrence or 0):
+                raw_range = (start, start + len(needle))
+            match_count += 1
+            start = raw.find(needle, start + 1)
+        if occurrence is not None and not 0 <= occurrence < match_count:
+            raise HTTPException(422, "引用候補の位置が不正です。")
+        if raw_range and (match_count == 1 or occurrence is not None):
+            start, end = raw_range
+            elements = [
+                {"element_id": name, "text": text}
+                for name, text in (
+                    ("raw-before", raw[:start]),
+                    ("raw-quote", raw[start:end]),
+                    ("raw-after", raw[end:]),
+                )
+                if text
+            ]
+            anchor = int(start > 0)
+            anchor_ids = ["raw-quote"]
     if anchor is None:
         return {
             "revision": revision,
             "anchor_status": "unresolved",
+            **({"occurrence_count": match_count} if match_count > 1 else {}),
             "section_path": [],
             "blocks": [
                 {
@@ -354,6 +383,7 @@ async def read_source_context(
     scope: str = "paragraph",
     section_id: str | None = None,
     expected_revision: str | None = None,
+    occurrence: int | None = None,
     load_structured: Callable[[Mapping[str, Any]], Awaitable[bytes]] | None = None,
 ) -> dict[str, Any]:
     chunk, revision, _, payload = await resolve_source_context(
@@ -366,6 +396,7 @@ async def read_source_context(
         revision=revision,
         anchor_ids=ids,
         quote=chunk.text,
+        occurrence=occurrence,
         cursor=cursor,
         direction=direction,
         scope=scope,

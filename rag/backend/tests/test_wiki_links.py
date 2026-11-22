@@ -626,3 +626,21 @@ async def test_built_links_name_the_other_unit_by_its_document_and_section(
         ("doc-b-b1", "doc-a-a1", "exception", "「doc-a.pdf > 合成の章」 を前提にする")
     ]
     await jobs.shutdown()
+
+
+def test_only_link_judgment_uses_configured_model(monkeypatch: Any) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from app.rag import wiki_jobs as jobs_module
+
+    factory = Mock()
+    override = Mock()
+    monkeypatch.setattr(jobs_module, "OciEnterpriseAiClient", override)
+    jobs = jobs_module.WikiJobs(model_factory=factory)
+    settings: Any = SimpleNamespace(rag_wiki_link_model_id="synthetic-link")
+    assert jobs._link_model(settings) is override.return_value
+    override.assert_called_once_with(settings=settings, model_id="synthetic-link")
+    assert jobs.model_factory(settings) is factory.return_value
+    settings.rag_wiki_link_model_id = ""
+    assert jobs._link_model(settings) is factory.return_value

@@ -1314,6 +1314,9 @@ class Settings(
     )
     # 文書をまたぐ Wiki の関連（#5492）。文書の案内を作った後、各単位の案内で同じ KB のほかの文書の
     # 案内を探し、上位の候補との関連だけをモデルで判定する（全組み合わせでは比べない）。
+    rag_wiki_link_model_id: str = Field(
+        default="", description="文書間リンク判定のモデル ID。空の場合は既定のテキストモデル。"
+    )
     rag_wiki_link_candidates: int = Field(
         default=10,
         ge=0,
