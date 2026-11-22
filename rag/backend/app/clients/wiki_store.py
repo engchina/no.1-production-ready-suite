@@ -1243,12 +1243,12 @@ class WikiStore:
             _execute(
                 connection,
                 """UPDATE rag_wiki_link_documents SET done_json=:done,
-                judged_count=LEAST(planned_count,judged_count+:increment),updated_at=SYSTIMESTAMP
+                judged_count=LEAST(planned_count,judged_count+:judged_delta),updated_at=SYSTIMESTAMP
                 WHERE document_id=:id""",
                 {
                     "id": document_id,
                     "done": _json_bind(list(dict.fromkeys([*saved, *done]))),
-                    "increment": len(set(done) - set(saved)),
+                    "judged_delta": len(set(done) - set(saved)),
                 },
                 input_sizes=_json_input_sizes("done"),
             )
