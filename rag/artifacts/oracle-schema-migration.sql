@@ -4941,3 +4941,35 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261122_5760_wiki_link_progress
+DECLARE
+    n NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO n FROM user_tab_columns
+    WHERE table_name='RAG_WIKI_LINK_DOCUMENTS' AND column_name='JUDGED_COUNT';
+    IF n=0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_wiki_link_documents ADD (judged_count NUMBER)';
+    END IF;
+END;
+/
+DECLARE
+    n NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO n FROM user_tab_columns
+    WHERE table_name='RAG_WIKI_LINK_DOCUMENTS' AND column_name='PLANNED_COUNT';
+    IF n=0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_wiki_link_documents ADD (planned_count NUMBER)';
+    END IF;
+END;
+/
+DECLARE
+    n NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO n FROM user_tab_columns
+    WHERE table_name='RAG_WIKI_LINK_DOCUMENTS' AND column_name='FAILURE_PHASE';
+    IF n=0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_wiki_link_documents ADD (failure_phase VARCHAR2(64))';
+    END IF;
+END;
+/

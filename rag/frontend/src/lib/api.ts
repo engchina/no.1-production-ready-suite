@@ -1232,6 +1232,12 @@ export interface KnowledgeBaseAdapterConfig {
 
 /** 所属文書ごとの Wiki の構築状態（#5466）。`failure_code` は再試行の要る失敗だけに付く。 */
 export interface KnowledgeBaseWikiDocument {
+  link_status?: string;
+  judged_count?: number | null;
+  planned_count?: number | null;
+  link_count?: number;
+  link_failure_code?: string | null;
+  failure_phase?: string | null;
   document_id: string;
   file_name: string;
   status: string;
@@ -1241,6 +1247,10 @@ export interface KnowledgeBaseWikiDocument {
 
 /** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）。 */
 export interface KnowledgeBaseWikiData {
+  link_counts?: Record<string, number>;
+  link_count?: number;
+  judged_count?: number;
+  planned_count?: number | null;
   enabled: boolean;
   /** 状態ごとの件数（KB 全体）。 */
   counts: Record<string, number>;
@@ -3874,6 +3884,11 @@ export const api = {
   retryKnowledgeBaseWikiDocument: (id: string, documentId: string, offset = 0, limit = 25) =>
     request<KnowledgeBaseWikiData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/wiki/documents/${encodeURIComponent(documentId)}/retry?offset=${offset}&limit=${limit}`,
+      { method: "POST" },
+    ),
+  retryWikiLinks: (id: string, documentId: string, offset = 0, limit = 25) =>
+    request<KnowledgeBaseWikiData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/wiki/documents/${encodeURIComponent(documentId)}/links/retry?offset=${offset}&limit=${limit}`,
       { method: "POST" },
     ),
   getWikiGraphOverview: (id: string, offset = 0) =>

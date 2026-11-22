@@ -267,6 +267,20 @@ class WikiJobs:
         # 先行する照合が FAILED を見て終了する途中でも、今回受理した再試行を失わない。
         self._schedule(document_id, run, after_running=True)
 
+    async def retry_document_links(self, kb_id: str, document_id: str) -> None:
+        store = self.store_factory()
+        owners = dict(await store.enabled_knowledge_bases())
+        if kb_id not in owners or not await store.retry_document_links(kb_id, document_id):
+            raise ValueError("再試行できる文書間リンクの構築がありません。")
+        owner = owners[kb_id]
+
+        async def run() -> None:
+            settings = get_settings()
+            async with self._link_capacity(settings):
+                await self._build_links(document_id, owner, settings)
+
+        self._schedule(document_id, run, after_running=True)
+
     async def reconcile(self, kb_id: str | None = None) -> None:
         if self.default_store and not get_settings().oracle_dsn.strip():
             return
@@ -588,6 +602,8 @@ class WikiJobs:
                     store, document_id, knowledge_bases, settings
                 )
                 skip = set(done)
+                planned = {item.key for group in (forward, reverse) for item in group}
+                await store.link_plan(document_id, lease, len(planned), len(planned & skip))
                 phase = "generate_links"
                 caller = make_ai_caller(settings, "wiki_build")
                 # 前向き（この文書 → ほか）と逆向き（ほか → この文書）は起点と候補が入れ替わるので、
@@ -627,6 +643,7 @@ class WikiJobs:
                         else "authorization_changed"
                         if isinstance(error, PermissionError)
                         else "build_failed",
+                        failure_phase=phase,
                     )
             logger.warning(
                 "wiki_link_failed",
