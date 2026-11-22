@@ -176,7 +176,7 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
       const occurrence = Number(new FormData(event.currentTarget).get("occurrence")) - 1;
       if (Number.isInteger(occurrence) && occurrence >= 0) read({ occurrence: String(occurrence) });
     }}>
-      <TextField name="occurrence" label={labels.candidates} helper={`候補は ${current.occurrence_count} 件です。`} type="number" min={1} max={current.occurrence_count} defaultValue={1} />
+      <TextField id={`citation-occurrence-${readingKey}`} name="occurrence" label={labels.candidates} helper={`候補は ${current.occurrence_count} 件です。`} type="number" min={1} max={current.occurrence_count} defaultValue={1} />
       <Button type="submit" variant="secondary" size="sm">選んだ位置を読む</Button>
     </form> : null}
     {current && !current.occurrence_count && (current.anchor_status !== "exact" || !highlight) ? <p className="text-sm text-fg-muted" role="status">{current.anchor_status === "unresolved" || !highlight ? labels.unresolved : purpose === "selection" ? "保存された要素の範囲を表示しています。" : labels.approximate}</p> : null}
