@@ -27,6 +27,7 @@ class WikiRequestBuilder:
         units: Sequence[WikiUnit],
         *,
         config: OciEnterpriseAiConfig,
+        current_config: Callable[[], OciEnterpriseAiConfig] | None = None,
         system_prompt: str,
         sources: Mapping[str, SourceContext],
         related: Mapping[str, Sequence[str]],
@@ -34,6 +35,7 @@ class WikiRequestBuilder:
         batch_size: int,
     ):
         self.config = config
+        self.current_config = current_config
         self.system_prompt = system_prompt
         self.sources = sources
         self.related = related
@@ -58,6 +60,9 @@ class WikiRequestBuilder:
         )
 
     def __call__(self, targets: Sequence[WikiUnit], include_optional: bool) -> WikiRequest:
+        if self.current_config:
+            self.config = self.current_config()
+            self.token_limit = min(GENERATION_INPUT_LIMIT, self.config.text_max_input_tokens)
         first = targets[0]
         key = (first.document_id, first.chunk_set_id)
         scope = self.scopes[key]
