@@ -1259,6 +1259,14 @@ END;
             ),
         )
     )
+    # Wiki の構築の実際の開始の時刻（#5748）。列を足すだけでデータは変えない。
+    sections.append(
+        OracleSchemaSection(
+            name="20261122_5748_wiki_build_started_at",
+            table_name="rag_wiki_documents",
+            sql=wiki_build_started_at_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -2177,6 +2185,29 @@ BEGIN
             'ALTER TABLE rag_knowledge_bases ADD (wiki_build_actor_uuid VARCHAR2(64))';
     END IF;
 END;
+/"""
+
+
+def wiki_build_started_at_migration_sql() -> str:
+    """Wiki の案内・関連の構築の状態に、実際に構築を始めた時刻の列を無ければ足す（#5748）。
+
+    列を足すだけでデータは変えない。既存の行は NULL のままで、次に構築を始めた時に記録する。
+    """
+    blocks = "\n".join(
+        f"""    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = '{table.upper()}' AND column_name = 'BUILD_STARTED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE {table} ADD (build_started_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+"""
+        for table in ("rag_wiki_documents", "rag_wiki_link_documents")
+    )
+    return f"""DECLARE
+    v_count NUMBER;
+BEGIN
+{blocks}END;
 /"""
 
 

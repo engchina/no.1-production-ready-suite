@@ -64,6 +64,7 @@ CREATE TABLE rag_wiki_documents (
     lease_token VARCHAR2(64),
     lease_until TIMESTAMP WITH TIME ZONE,
     failure_code VARCHAR2(64),
+    build_started_at TIMESTAMP WITH TIME ZONE,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_wiki_doc_fk FOREIGN KEY (document_id)
         REFERENCES rag_documents(document_id) ON DELETE CASCADE,
@@ -112,6 +113,7 @@ CREATE TABLE rag_wiki_link_documents (
     lease_token VARCHAR2(64),
     lease_until TIMESTAMP WITH TIME ZONE,
     failure_code VARCHAR2(64),
+    build_started_at TIMESTAMP WITH TIME ZONE,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_wiki_link_doc_fk FOREIGN KEY (document_id)
         REFERENCES rag_documents(document_id) ON DELETE CASCADE,
@@ -460,7 +462,7 @@ class WikiStore:
                 _execute(
                     connection,
                     f"""UPDATE {table} SET status='QUEUED',failure_code=NULL,
-                    lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
+                    lease_token=NULL,lease_until=NULL,build_started_at=NULL,updated_at=SYSTIMESTAMP
                     WHERE status='FAILED' AND document_id IN (SELECT c.document_id
                     FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
                     WHERE {where})""",
@@ -485,7 +487,7 @@ class WikiStore:
             changed = _execute_count(
                 connection,
                 f"""UPDATE rag_wiki_documents w SET status='QUEUED',failure_code=NULL,
-                lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
+                lease_token=NULL,lease_until=NULL,build_started_at=NULL,updated_at=SYSTIMESTAMP
                 WHERE {target} AND w.revision_fingerprint=:revision""",
                 {**scoped, "revision": revision},
             )
@@ -617,7 +619,10 @@ class WikiStore:
                 """MERGE INTO rag_wiki_documents target
                 USING (SELECT :id document_id FROM dual) source
                 ON (target.document_id=source.document_id)
-                WHEN MATCHED THEN UPDATE SET source_fingerprint=:fingerprint,
+                WHEN MATCHED THEN UPDATE SET
+                    build_started_at=CASE WHEN target.source_fingerprint=:fingerprint
+                        AND target.failure_code='interrupted' THEN target.build_started_at END,
+                    source_fingerprint=:fingerprint,
                     compiler_fingerprint=:compiler,revision_fingerprint=:revision,
                     chunk_sets_json=:sets,owner_user_uuid=:actor,status='QUEUED',
                     lease_token=NULL,lease_until=NULL,failure_code=NULL,updated_at=SYSTIMESTAMP
@@ -659,11 +664,47 @@ class WikiStore:
             _execute(
                 connection,
                 """UPDATE rag_wiki_documents SET status='RUNNING',lease_token=:token,
-                lease_until=SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND'),updated_at=SYSTIMESTAMP
+                lease_until=SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND'),
+                build_started_at=NVL(build_started_at,SYSTIMESTAMP),updated_at=SYSTIMESTAMP
                 WHERE document_id=:id""",
                 {"token": token, "seconds": lease_seconds, "id": snapshot.document_id},
             )
             return token
+
+        return await self.oracle._run_transaction(operation)
+
+    async def build_elapsed_seconds(self, document_id: str, *, links: bool = False) -> float:
+        """実際に構築を始めてからの秒数（#5748）。始めていなければ 0。
+
+        開始は lease を取った時刻（待機に入った時ではない）。中断からの続きでは同じ開始を使う。
+        """
+        table = "rag_wiki_link_documents" if links else "rag_wiki_documents"
+        row = await self.oracle._fetch_one(
+            f"""SELECT EXTRACT(DAY FROM elapsed)*86400+EXTRACT(HOUR FROM elapsed)*3600
+                +EXTRACT(MINUTE FROM elapsed)*60+EXTRACT(SECOND FROM elapsed) AS seconds
+            FROM (SELECT SYSTIMESTAMP-build_started_at AS elapsed FROM {table}
+                  WHERE document_id=:id AND build_started_at IS NOT NULL)""",
+            {"id": document_id},
+        )
+        return max(0.0, float(str(row["seconds"]))) if row else 0.0
+
+    async def renew_lease(
+        self, document_id: str, token: str, *, lease_seconds: int, links: bool = False
+    ) -> bool:
+        """構築中の lease を延ばす（#5748）。所有権を失っていれば False。"""
+        table = "rag_wiki_link_documents" if links else "rag_wiki_documents"
+
+        def operation(connection: Any) -> bool:
+            return bool(
+                _execute_count(
+                    connection,
+                    f"""UPDATE {table}
+                    SET lease_until=SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND')
+                    WHERE document_id=:id AND lease_token=:token AND status='RUNNING'
+                      AND lease_until>SYSTIMESTAMP""",
+                    {"id": document_id, "token": token, "seconds": lease_seconds},
+                )
+            )
 
         return await self.oracle._run_transaction(operation)
 
@@ -764,6 +805,7 @@ class WikiStore:
                 """UPDATE rag_wiki_documents SET status=:status,
                 published_fingerprint=CASE WHEN :status='READY'
                     THEN source_fingerprint ELSE published_fingerprint END,
+                build_started_at=CASE WHEN :status='READY' THEN NULL ELSE build_started_at END,
                 failure_code=:failure,lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
                 WHERE document_id=:id""",
                 {
@@ -1046,15 +1088,19 @@ class WikiStore:
                 """MERGE INTO rag_wiki_link_documents target
                 USING (SELECT :id document_id FROM dual) source
                 ON (target.document_id=source.document_id)
-                WHEN MATCHED THEN UPDATE SET source_fingerprint=:fingerprint,
+                WHEN MATCHED THEN UPDATE SET
+                    build_started_at=CASE WHEN :same=1
+                        THEN NVL(target.build_started_at,SYSTIMESTAMP) ELSE SYSTIMESTAMP END,
+                    source_fingerprint=:fingerprint,
                     link_fingerprint=:links,done_json=:done,status='RUNNING',lease_token=:token,
                     lease_until=SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND'),
                     failure_code=NULL,updated_at=SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT (document_id,source_fingerprint,link_fingerprint,
-                    done_json,status,lease_token,lease_until)
+                    done_json,status,lease_token,lease_until,build_started_at)
                     VALUES (:id,:fingerprint,:links,:done,'RUNNING',:token,
-                    SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND'))""",
+                    SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND'),SYSTIMESTAMP)""",
                 {
+                    "same": 1 if same else 0,
                     "id": document_id,
                     "fingerprint": source_fingerprint,
                     "links": link_fingerprint,
@@ -1164,6 +1210,7 @@ class WikiStore:
                 connection,
                 """UPDATE rag_wiki_link_documents SET status=:status,failure_code=:failure,
                 done_json=CASE WHEN :status='READY' THEN NULL ELSE done_json END,
+                build_started_at=CASE WHEN :status='READY' THEN NULL ELSE build_started_at END,
                 lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
                 WHERE document_id=:id""",
                 {

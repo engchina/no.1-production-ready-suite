@@ -157,6 +157,17 @@ class Store:
         self.state: dict[str, Any] | None = None
         self.pages: list[Any] = []
         self.embedded: list[str] = []
+        # 実際に構築を始めてからの秒数と、延ばした lease の秒数（#5748）。
+        self.elapsed = 0.0
+        self.renewed: list[int] = []
+
+    async def build_elapsed_seconds(self, did: str, *, links: bool = False) -> float:
+        assert not links
+        return self.elapsed
+
+    async def renew_lease(self, did: str, token: str, *, lease_seconds: int, **kwargs: Any) -> bool:
+        self.renewed.append(lease_seconds)
+        return True
 
     async def enabled_knowledge_bases(self) -> Any:
         return [("kb-a", "owner-a")] if self.enabled else []
@@ -382,24 +393,28 @@ async def test_policy_change_during_generation_blocks_publication(setup: Any) ->
 
 
 @pytest.mark.asyncio
-async def test_timeout_after_progress_resumes_on_next_reconcile(
+async def test_interrupted_build_resumes_from_saved_pages_on_next_reconcile(
     setup: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """再起動などで止まった構築（interrupted）は、次の照合で保存済みの単位から続ける。"""
     jobs, store, _ = setup
-    settings = Settings(rag_wiki_build_batch_units=2).model_copy(
-        update={"rag_wiki_build_timeout_seconds": 0.2}
-    )
+    settings = Settings(rag_wiki_build_batch_units=2)
     monkeypatch.setattr(module, "get_settings", lambda: settings)
-    base, blocked = Model(), asyncio.Event()
+    base, blocked, waiting = Model(), asyncio.Event(), asyncio.Event()
 
     class SlowSecondBatch:
         async def generate(self, *args: Any, **kwargs: Any) -> str:
             if base.calls and not blocked.is_set():
+                waiting.set()
                 await asyncio.Event().wait()
             return await base.generate(*args, **kwargs)
 
     jobs.model_factory = lambda settings: SlowSecondBatch()
-    await jobs.build("document-a", "owner-a")
+    task = asyncio.create_task(jobs.build("document-a", "owner-a"))
+    await waiting.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert store.state["status"] == "FAILED" and store.state["failure_code"] == "interrupted"
     assert len(store.pages) == 2 and not store.embedded
 
@@ -413,12 +428,74 @@ async def test_timeout_after_progress_resumes_on_next_reconcile(
 
 
 @pytest.mark.asyncio
+async def test_build_past_the_deadline_from_its_actual_start_times_out(setup: Any) -> None:
+    """上限は実際に構築を始めた時から数え、超えていればモデルを呼ばずに止める（#5748）。"""
+    jobs, store, model = setup
+    store.elapsed = Settings().rag_wiki_build_timeout_seconds + 1
+    await jobs.build("document-a", "owner-a")
+    assert store.state["status"] == "FAILED" and store.state["failure_code"] == "timeout"
+    assert not model.calls
+    await jobs.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_progress_stops_until_retry(
+    setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """上限の内側では 1 回で続け、残りの時間を使い切ったら保存済みがあっても止める（#5748）。"""
+    jobs, store, _ = setup
+    settings = Settings(rag_wiki_build_batch_units=2).model_copy(
+        update={"rag_wiki_build_timeout_seconds": 10.0}
+    )
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    # 開始から 9.8 秒経っていれば、残りは 0.2 秒。
+    store.elapsed = 9.8
+    base = Model()
+
+    class SlowSecondBatch:
+        async def generate(self, *args: Any, **kwargs: Any) -> str:
+            if base.calls:
+                await asyncio.Event().wait()
+            return await base.generate(*args, **kwargs)
+
+    jobs.model_factory = lambda settings: SlowSecondBatch()
+    await jobs.build("document-a", "owner-a")
+    assert store.state["status"] == "FAILED" and store.state["failure_code"] == "timeout"
+    assert len(store.pages) == 2 and not store.embedded
+    await jobs.reconcile()
+    await asyncio.gather(*list(jobs.tasks.values()))
+    assert len(base.calls) == 1 and store.state["failure_code"] == "timeout"
+    await jobs.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_keep_lease_renews_until_the_build_ends() -> None:
+    """構築の間は lease を延ばし続け、終わったら延ばさない（#5748）。"""
+    renewed: list[tuple[str, str, int, bool]] = []
+
+    class LeaseStore:
+        async def renew_lease(
+            self, did: str, token: str, *, lease_seconds: int, links: bool = False
+        ) -> bool:
+            renewed.append((did, token, lease_seconds, links))
+            return True
+
+    async with module.keep_lease(LeaseStore(), "document-a", "lease-a", lease_seconds=3):
+        await asyncio.sleep(2.2)
+    count = len(renewed)
+    assert count == 2 and set(renewed) == {("document-a", "lease-a", 3, False)}
+    await asyncio.sleep(1.2)
+    assert len(renewed) == count
+
+
+@pytest.mark.asyncio
 async def test_timeout_without_progress_stops_until_retry(
     setup: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jobs, store, _ = setup
-    settings = Settings().model_copy(update={"rag_wiki_build_timeout_seconds": 0.2})
+    settings = Settings().model_copy(update={"rag_wiki_build_timeout_seconds": 10.0})
     monkeypatch.setattr(module, "get_settings", lambda: settings)
+    store.elapsed = 9.8
 
     calls: list[int] = []
 

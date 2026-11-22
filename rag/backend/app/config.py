@@ -1276,12 +1276,13 @@ class Settings(
         description="Wiki の構築の 1 回の出力の対象単位数。途切れた出力は対象を二分して取り直す。",
     )
     rag_wiki_build_timeout_seconds: float = Field(
-        default=600.0,
+        default=43200.0,
         ge=30.0,
-        le=7200.0,
+        le=172800.0,
         description=(
-            "Wiki の構築の 1 回の時間の上限（生成・埋め込み・保存を含む秒数）。"
-            "保存できた回は次の照合で続きから作る。"
+            "Wiki の構築の 1 文書の時間の上限（秒。生成・埋め込み・保存を含む。#5748）。"
+            "実際に構築を始めた時から数え、待機の時間は含めない。中断からの続きも同じ開始から数え、"
+            "超えたら失敗（timeout）にして再試行を待つ。案内と文書をまたぐ関連は別に数える。"
         ),
     )
     rag_wiki_build_workers: int = Field(
@@ -1291,7 +1292,10 @@ class Settings(
         default=900,
         ge=60,
         le=14400,
-        description="Wiki の構築の lease の秒数。時間の上限 + 60 秒より短い値は使わない。",
+        description=(
+            "Wiki の構築の lease の秒数。構築の間は 1/3 ごとに延ばし、process が止まったら"
+            "この秒数の後に次の照合が続きを拾う（#5748）。"
+        ),
     )
     rag_wiki_poll_seconds: float = Field(
         default=30.0,
