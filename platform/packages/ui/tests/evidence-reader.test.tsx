@@ -242,3 +242,20 @@ describe("EvidenceReader の区画（#5428）", () => {
     await act(async () => root.unmount()); host.remove();
   });
 });
+
+it("複数候補から選んだ位置を後文の読み取りにも使う", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const load = vi.fn().mockResolvedValueOnce({ ...windowData, occurrence_count: 2, anchor_status: "unresolved" })
+    .mockResolvedValue(windowData);
+  await act(async () => { root.render(<EvidenceReader readingKey="d:c" loadWindow={load} />); await settle(); });
+  host.querySelector("input")!.value = "2";
+  await act(async () => { host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await settle(); });
+  expect(load.mock.calls.at(-1)?.[0]).toEqual({ occurrence: "1" });
+  const after = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes("後文を読む"))!;
+  await act(async () => { after.click(); await settle(); });
+  expect(load.mock.calls.at(-1)?.[0]).toEqual({ occurrence: "1", cursor: "next", direction: "after" });
+  await act(async () => root.unmount());
+  host.remove();
+});
