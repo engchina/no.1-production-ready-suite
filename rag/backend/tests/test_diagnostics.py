@@ -128,6 +128,7 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_wiki_embedding_",
     # Wiki の文書をまたぐ関連の構築（#5492）。成果は関連の構築の条件の指紋と関連の行に残る。
     "rag_wiki_link_candidates",
+    "rag_wiki_link_model_id",
     "rag_wiki_link_batch_",
     "rag_wiki_link_source_",
     # 関連の構築の同時実行の枠（#5751）。構築の順序だけを変え、関連の結果を変えない。
