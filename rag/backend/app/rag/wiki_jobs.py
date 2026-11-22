@@ -157,6 +157,8 @@ class WikiJobs:
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.reconciliations: set[asyncio.Task[None]] = set()
         self.capacity: asyncio.Semaphore | None = None
+        # 文書をまたぐ関連の構築の枠（#5751）。案内の枠と分け、関連が長くても案内を待たせない。
+        self.link_capacity: asyncio.Semaphore | None = None
 
     def notify(self, kb_id: str | None = None) -> None:
         task = asyncio.create_task(self.reconcile(kb_id))
@@ -192,6 +194,11 @@ class WikiJobs:
         if self.capacity is None:
             self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
         return self.capacity
+
+    def _link_capacity(self, settings: Settings) -> asyncio.Semaphore:
+        if self.link_capacity is None:
+            self.link_capacity = asyncio.Semaphore(settings.rag_wiki_link_workers)
+        return self.link_capacity
 
     async def retry_document_pages(self, kb_id: str, document_id: str) -> None:
         """操作した利用者と既存の構築担当の両方から見える一文書の案内を再試行する。"""
@@ -282,8 +289,14 @@ class WikiJobs:
         """文書の案内を作り、公開できていれば文書をまたぐ関連を作る（関連の失敗は案内を止めない）。"""
         settings = get_settings()
         async with self._worker_capacity(settings):
-            if await self._build_pages(document_id, owner, settings):
-                await self._build_links(document_id, owner, get_settings())
+            ready = await self._build_pages(document_id, owner, settings)
+        if not ready:
+            return
+        # 案内の枠は手放してから関連の枠を取る（#5751）。関連が長くても、ほかの文書の案内を
+        # 待たせない。
+        settings = get_settings()
+        async with self._link_capacity(settings):
+            await self._build_links(document_id, owner, settings)
 
     async def _build_pages(self, document_id: str, owner: str | None, settings: Settings) -> bool:
         """文書の案内を作る。今の原文で公開済み（``READY``）なら True。"""
@@ -695,6 +708,7 @@ class WikiJobs:
         self.tasks.clear()
         self.reconciliations.clear()
         self.capacity = None
+        self.link_capacity = None
 
 
 wiki_jobs = WikiJobs()

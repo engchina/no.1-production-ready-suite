@@ -130,6 +130,8 @@ _FINGERPRINT_EXEMPT_PREFIXES = (
     "rag_wiki_link_candidates",
     "rag_wiki_link_batch_",
     "rag_wiki_link_source_",
+    # 関連の構築の同時実行の枠（#5751）。構築の順序だけを変え、関連の結果を変えない。
+    "rag_wiki_link_workers",
     "rag_field_extraction_",
     "rag_auto_",
     # 運用・実行の並行数・待ち時間・再試行・cache。結果の定義を変えない。
