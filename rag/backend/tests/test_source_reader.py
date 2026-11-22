@@ -227,3 +227,22 @@ def test_previous_paragraph_requires_unique_structured_target() -> None:
     del elements[35]["metadata"]["non_source_text_ranges"]
     elements[24]["metadata"] = elements[23]["metadata"].copy()
     assert "references" not in anchor_block()
+
+
+def test_quote_outside_extracted_elements_uses_text_of_same_revision() -> None:
+    payload = {"raw_text": "表題\r\n番号\r\n" + "本文。" * 3000, "elements": []}
+    window = reading_window(payload, revision="v1", anchor_ids=[], quote="表題\n番号")
+    assert window["anchor_status"] == "exact"
+    cited = [block for block in window["blocks"] if block["cited"]]
+    assert [(block["text"], block["highlights"]) for block in cited] == [("表題\n番号", [[0, 5]])]
+    assert window["next_cursor"]
+
+
+def test_repeated_raw_quote_requires_a_choice() -> None:
+    args = dict(revision="v1", anchor_ids=[], quote="同文")
+    payload = {"raw_text": "同文、見出し、同文。"}
+    result = reading_window(payload, **args)
+    assert result["anchor_status"] == "unresolved" and result["occurrence_count"] == 2
+    second = reading_window(payload, **args, occurrence=1)
+    assert second["anchor_status"] == "exact"
+    assert second["blocks"][0]["text"] == "同文、見出し、"

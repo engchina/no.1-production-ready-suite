@@ -4,6 +4,7 @@ import { ExcerptContent } from "../data/excerpt-content";
 import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
 import { Button, buttonVariants } from "../ui/button";
+import { TextField } from "../ui/text-field";
 import { Disclosure } from "../ui/disclosure";
 import { Skeleton } from "../ui/skeleton";
 import { CodepointHighlight } from "./codepoint-highlight";
@@ -13,6 +14,7 @@ import { isSourceVersionStale } from "../../lib/api-error";
 import { resolveContentLang } from "../../lib/content-lang";
 
 export interface EvidenceReadingInput {
+  occurrence?: string;
   cursor?: string;
   direction?: "before" | "after";
   scope?: "paragraph" | "section" | "parent";
@@ -20,6 +22,7 @@ export interface EvidenceReadingInput {
 }
 export interface EvidenceReadingWindow {
   revision: string;
+  occurrence_count?: number;
   anchor_status: "exact" | "element" | "unresolved";
   section_path: string[];
   blocks: { id: string; text: string; offset: number; highlights: [number, number][]; cited: boolean; kind?: string; heading?: string[]; references?: { start: number; end: number; cursor: string }[]; record?: SourceRecordViewData }[];
@@ -34,6 +37,7 @@ const labels = {
   loading: "引用の前後を読み込んでいます", before: "前文を読む", after: "後文を読む",
   anchor: "引用位置に戻る", section: "本節を読む", parent: "親章節を読む", outline: "目次",
   cited: "引用の元となる段落", context: "追加の参考文脈（この引用には含まれません）",
+  candidates: "同じ引用が複数あります。原文の出現順で位置を選んでください。",
   unresolved: "引用位置を確定できないため、保存された引用のみ表示します。",
   approximate: "原要素の位置を表示しています。文字単位の引用位置は未確定です。",
   table: "引用元の表", retry: "再試行", download: "原本をダウンロード", empty: "表示できる本文がありません。",
@@ -153,7 +157,7 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
   const read = (input: EvidenceReadingInput = {}, reference = false) => {
     focusBody.current = readingKey;
     if (input.section_id || input.scope) setOutline({ key: readingKey, open: false });
-    setRequest(old => ({ key: readingKey, input, reference, serial: old.serial + 1 }));
+    setRequest(old => ({ key: readingKey, input: { ...(old.key === readingKey && old.input.occurrence !== undefined && Object.keys(input).length ? { occurrence: old.input.occurrence } : {}), ...input }, reference, serial: old.serial + 1 }));
   };
   // 版の失効（#4092）: どの操作も同じ結果になるので、案内だけを出す（保存した抜粋はパネルの要約に残る）。
   if (state.key === readingKey && isSourceVersionStale(state.error)) return <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="evidence-reader"><SourceVersionStaleNotice /></div>;
@@ -167,7 +171,15 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
     </div>
     {blocks.some(block => block.record) ? <p className="text-xs text-fg-muted">原文の構造化表示</p> : null}
     {current?.section_path.length ? <p className="text-xs text-fg-muted">{current.section_path.join(" › ")}</p> : null}
-    {current && (current.anchor_status !== "exact" || !highlight) ? <p className="text-sm text-fg-muted" role="status">{current.anchor_status === "unresolved" || !highlight ? labels.unresolved : purpose === "selection" ? "保存された要素の範囲を表示しています。" : labels.approximate}</p> : null}
+    {current?.occurrence_count ? <form onSubmit={event => {
+      event.preventDefault();
+      const occurrence = Number(new FormData(event.currentTarget).get("occurrence")) - 1;
+      if (Number.isInteger(occurrence) && occurrence >= 0) read({ occurrence: String(occurrence) });
+    }}>
+      <TextField name="occurrence" label={labels.candidates} helper={`候補は ${current.occurrence_count} 件です。`} type="number" min={1} max={current.occurrence_count} defaultValue={1} />
+      <Button type="submit" variant="secondary" size="sm">選んだ位置を読む</Button>
+    </form> : null}
+    {current && !current.occurrence_count && (current.anchor_status !== "exact" || !highlight) ? <p className="text-sm text-fg-muted" role="status">{current.anchor_status === "unresolved" || !highlight ? labels.unresolved : purpose === "selection" ? "保存された要素の範囲を表示しています。" : labels.approximate}</p> : null}
     {current?.outline.length ? <Disclosure summary={labels.outline} className="shrink-0" open={outline.key === readingKey && outline.open} onOpenChange={open => setOutline({ key: readingKey, open })} summaryProps={{ "data-testid": "evidence-reader-outline-toggle" }} contentClassName="max-h-[min(12rem,20dvh)] overflow-y-auto overscroll-contain" data-testid="evidence-reader-outline">
       <nav aria-label={labels.outline} className="flex flex-col items-start gap-1">
         {current.outline.map(item => <Button key={item.id} variant="ghost" size="sm" className="max-w-full whitespace-normal text-left" disabled={state.pending} onClick={() => read({ scope: "section", section_id: item.id })}>{item.title}</Button>)}
