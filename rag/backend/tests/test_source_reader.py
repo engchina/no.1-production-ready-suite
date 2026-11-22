@@ -239,10 +239,9 @@ def test_quote_outside_extracted_elements_uses_text_of_same_revision() -> None:
 
 
 def test_repeated_raw_quote_requires_a_choice() -> None:
-    args = dict(revision="v1", anchor_ids=[], quote="同文")
     payload = {"raw_text": "同文、見出し、同文。"}
-    result = reading_window(payload, **args)
+    result = reading_window(payload, revision="v1", anchor_ids=[], quote="同文")
     assert result["anchor_status"] == "unresolved" and result["occurrence_count"] == 2
-    second = reading_window(payload, **args, occurrence=1)
+    second = reading_window(payload, revision="v1", anchor_ids=[], quote="同文", occurrence=1)
     assert second["anchor_status"] == "exact"
     assert second["blocks"][0]["text"] == "同文、見出し、"
