@@ -714,7 +714,7 @@ def test_import_ignores_removed_answer_process_column_like_other_unknown_columns
     古い Excel の列が上限を超える長さでも、読まない列は検査しない。
     """
     monkeypatch.setattr(evaluation_route, "OracleClient", _FakeOracle)
-    header = [*HEADERS, "回答の過程", "合成の備考"]
+    header: list[object] = [*HEADERS, "回答の過程", "合成の備考"]
     long_process = "合成の手順" * 2_000
     content = _workbook(
         [["合成の質問", "経費精算規程.pdf", "合成の標準回答", "合成の要点", long_process, "x"]],
