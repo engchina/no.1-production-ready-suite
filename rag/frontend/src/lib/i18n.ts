@@ -4420,6 +4420,7 @@ export const ja = {
   "evaluation.metric.condition_coverage.description":
     "回答が触れるべき条件（確かめる条件・適用の前提）のうち、触れた割合。",
   "evaluation.metric.needsStandardAnswer": "標準回答が必要",
+  "evaluation.metric.judgeIncomplete": "判定できなかった {count} 件",
   "evaluation.metric.notMeasured": "未評価（対象 0 件）",
   "evaluation.metric.caseCount": "対象 {count} 件",
   "evaluation.metric.belowThreshold": "閾値未達",

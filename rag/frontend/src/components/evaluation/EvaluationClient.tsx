@@ -1147,6 +1147,11 @@ function MetricGroup({
   failedMetrics: ReadonlySet<string>;
 }) {
   const titleId = `evaluation-perspective-${groupId}`;
+  // 標準回答はあるのに判定を完了できなかったケース（接続の誤り・時間切れなど。#5781）。
+  // 「標準回答が必要」と分けて出す。保存済みの結果もケースの結果から数える。
+  const judgeIncomplete = metrics.case_results.filter(
+    (item) => item.answer_evaluation != null && item.answer_evaluation.status !== "completed"
+  ).length;
   return (
     <section aria-labelledby={titleId} className="space-y-2" data-testid={titleId}>
       <div>
@@ -1178,11 +1183,17 @@ function MetricGroup({
                   ) : null}
                 </p>
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
-                  {value === null ? (
+                  {value === null &&
+                  !(STANDARD_ANSWER_METRICS.has(metric as EvaluationMetricName) && judgeIncomplete > 0) ? (
                     <span>
                       {STANDARD_ANSWER_METRICS.has(metric as EvaluationMetricName)
                         ? t("evaluation.metric.needsStandardAnswer")
                         : t("evaluation.metric.notMeasured")}
+                    </span>
+                  ) : null}
+                  {STANDARD_ANSWER_METRICS.has(metric as EvaluationMetricName) && judgeIncomplete > 0 ? (
+                    <span data-testid={`evaluation-judge-incomplete-${metric}`}>
+                      {t("evaluation.metric.judgeIncomplete", { count: judgeIncomplete })}
                     </span>
                   ) : null}
                   {count !== null ? (

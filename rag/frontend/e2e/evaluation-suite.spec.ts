@@ -776,6 +776,22 @@ function evaluationMetricsWithTimedOutCase() {
   };
 }
 
+test("標準回答があっても判定を完了できなければ「標準回答が必要」ではなく判定できなかった件数を出す (#5781)", async ({page}, testInfo)=>{
+  const base=evaluationMetrics("standard");
+  const failed={status:"error",message:"評価を完了できませんでした。回答は保存されています。",answer_correctness:null,answer_coverage:null,passed:null,claims:[],points:[]};
+  const metrics={...base,answer_correctness:null,metric_case_counts:{...base.metric_case_counts,answer_correctness:0},
+    case_results:base.case_results.map(item=>({...item,answer_evaluation:failed}))};
+  await mockEvaluationJobs(page,{runResult:()=>metrics,autoComplete:true});
+  await page.goto("/evaluation");await prepareEvaluationRun(page);
+  await page.getByRole("button",{name:"評価実行"}).click();
+  const card=page.getByTestId("evaluation-metric-answer_correctness");
+  await expect(card).toContainText("未評価");
+  await expect(card.getByTestId("evaluation-judge-incomplete-answer_correctness")).toHaveText(`判定できなかった ${base.case_results.length} 件`);
+  await expect(card).not.toContainText("標準回答が必要");
+  await page.getByTestId("evaluation-perspective-answer").scrollIntoViewIfNeeded();
+  await page.getByTestId("evaluation-result-card").screenshot({path:testInfo.outputPath("judge-incomplete.png")});
+});
+
 for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",width:375,height:812}]) {
  test(`三指標は検索二・回答一で結果とケースに表示する (${viewport.name})`, async ({page}, testInfo)=>{
   await page.setViewportSize({width:viewport.width,height:viewport.height});
