@@ -323,6 +323,11 @@ def _notify_observers(observers: tuple[SpanListener, ...], update: SpanUpdate) -
             logger.warning("trace_span_observer_failed", extra={"error_type": type(exc).__name__})
 
 
+def operation_trace_active() -> bool:
+    """今の文脈が実行の記録（`operation_trace`）の中か（中の span は記録に入る）。"""
+    return _CAPTURE.get() is not None
+
+
 @contextmanager
 def observe_spans(listener: SpanListener) -> Iterator[None]:
     """範囲の中の span の開始・表示用のデータの変更・終了を `listener` にも知らせる。
@@ -608,11 +613,13 @@ def observed_span(
     display: SpanDisplay | None = None,
     links: Sequence[trace.Link] = (),
     start_time_ns: int | None = None,
+    end_time_ns: int | None = None,
 ) -> Iterator[ObservedSpan]:
     """実際の呼出しの範囲に置く。例外の本文や stack trace は span に記録しない。
 
-    `start_time_ns` は、先に済んだ処理（送信の前の準備など）の結果を記録するときに、実際に
-    かかった時間の分だけ開始を戻すために渡す（終わりは閉じた時刻。未来の時刻は今にそろえる）。
+    `start_time_ns` / `end_time_ns` は、先に済んだ処理（送信の前の準備など）の結果を記録するときに、
+    実際に実行した時刻を渡す（`end_time_ns` が無ければ終わりは閉じた時刻。未来の時刻は今に
+    そろえる）。
     """
     provider, _ = _active_provider()
     tracer = provider.get_tracer("production-ready-suite")
@@ -679,7 +686,8 @@ def observed_span(
             return
         finished = True
         observed._ended = True
-        end = max(start, time_ns())
+        now = time_ns()
+        end = max(start, min(end_time_ns, now) if end_time_ns is not None else now)
         sdk_span.end(end_time=end)
         identity = sdk_span.get_span_context()
         if capture is not None and identity.is_valid:

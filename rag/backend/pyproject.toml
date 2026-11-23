@@ -14,6 +14,8 @@ dependencies = [
     "pydantic-settings>=2.7",
     "python-dotenv>=1.1",
     "httpx==0.28.1",
+    # 送信の前の準備のモデルの呼び出しの記録を、質問の token に暗号化して入れる（#5773）。
+    "cryptography>=46",
     "gunicorn>=26,<27",
     "oci>=2.168",
     "oracledb>=3.4",

@@ -379,6 +379,27 @@ def test_prior_operation_keeps_its_measured_duration_without_future_start() -> N
     assert 0 <= future.duration_ms < 60_000
 
 
+def test_prior_operation_keeps_its_recorded_end_and_operation_state() -> None:
+    """先に済んだ処理を、実行した開始・終了の時刻のまま残す（#5773）。"""
+    from time import time_ns
+
+    from pr_backend_core.observability.tracing import operation_trace_active
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    assert not operation_trace_active()
+    end = time_ns() - 5_000_000_000
+    with operation_trace("task", operation_id="synthetic") as summary:
+        assert operation_trace_active()
+        with observed_span("prepared", start_time_ns=end - 1_500_000_000, end_time_ns=end):
+            pass
+        with observed_span("future_end", end_time_ns=time_ns() + 60_000_000_000):
+            pass
+    prepared = next(span for span in summary.spans if span.operation_name == "prepared")
+    future = next(span for span in summary.spans if span.operation_name == "future_end")
+    assert 1499 <= prepared.duration_ms <= 1501
+    assert 0 <= future.duration_ms < 60_000
+
+
 def test_trace_schema_matches_published_contract() -> None:
     import json
     from pathlib import Path

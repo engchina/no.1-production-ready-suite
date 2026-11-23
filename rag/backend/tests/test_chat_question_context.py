@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
+from pr_backend_core.observability.tracing import observed_span
 from pr_system_settings.guardrails import GuardrailPolicy
 
 from app.api.routes import chat
@@ -64,6 +65,11 @@ def context_setup(monkeypatch: pytest.MonkeyPatch) -> tuple[ContextOracle, Setti
     async def rewrite(self: Any, query: str, history: Any) -> str:
         calls.append(query)
         assert history[0].role == "USER"
+        # 補完のモデルの呼び出し（記録の外。#5773 で token に入れて送信の側へ渡す）。
+        with observed_span(
+            "gen_ai.chat", kind="client", attributes={"pr.gen_ai.purpose": "query.rewrite"}
+        ):
+            pass
         return "対象 A の手順は？ 条件 B との違いは？"
 
     monkeypatch.setattr(chat, "load_runtime_knowledge_payload", empty)
@@ -243,8 +249,9 @@ async def test_send_without_token_rewrites_once_before_the_guide(
 async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     context_setup: Any, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
-    """準備で補った結果と所要時間を送信の側へ渡し、処理の経過に段を残す（#4794）。"""
-    from app.rag.chat_question_token import read_history_rewrite_elapsed
+    """準備で補った結果・時刻・モデルの呼び出しを送信の側へ渡し、処理の経過に段を残す
+    （#4794・#5773）。"""
+    from app.rag.chat_question_token import read_history_rewrite
     from app.schemas.chat import ChatMessageRequest
     from app.schemas.search_answer_profile_knowledge import GuideConditionAnswer
 
@@ -260,8 +267,11 @@ async def test_prepared_rewrite_reaches_send_side_for_progress_step(
     )
     assert token is not None
     secret = settings.app_service_token_secret
-    elapsed = read_history_rewrite_elapsed(secret, token)
-    assert (elapsed is None) is (case == "disabled")
+    prepared = read_history_rewrite(secret, token)
+    assert (prepared is None) is (case == "disabled")
+    if prepared is not None:
+        # モデルの呼び出しの記録は暗号化して渡す（system_admin だけが見る入力を平文で出さない）。
+        assert "query.rewrite" not in token
 
     async def resolve(request: Any, effective: Any, **kwargs: Any) -> Any:
         if (gate := kwargs.get("question_gate")) is not None:
@@ -303,7 +313,11 @@ async def test_prepared_rewrite_reaches_send_side_for_progress_step(
         assert not calls
         return
     assert turn.prepared_history_rewrite is not None
-    assert turn.prepared_history_rewrite.elapsed_seconds == elapsed
+    assert prepared is not None
+    assert turn.prepared_history_rewrite.window == prepared[0]
+    [call] = turn.prepared_history_rewrite.calls
+    assert call.operation_name == "gen_ai.chat"
+    assert call.attributes["pr.gen_ai.purpose"] == "query.rewrite"
     assert turn.request.query == "対象 A の手順は？ 条件 B との違いは？"
     assert calls == [query]
 
@@ -511,7 +525,7 @@ async def test_first_turn_preparation_runs_the_single_call_and_keeps_intent(
     context_setup: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """会話の 1 回目（保存済みの発話なし）の準備でも、同じ 1 回の呼び出しを通す（#4787）。"""
-    from app.rag.chat_question_token import read_history_intent, read_history_rewrite_elapsed
+    from app.rag.chat_question_token import read_history_intent, read_history_rewrite
 
     oracle, settings, _calls = context_setup
     oracle.messages = []
@@ -530,4 +544,4 @@ async def test_first_turn_preparation_runs_the_single_call_and_keeps_intent(
     assert question == "合成の挨拶" and token
     secret = settings.app_service_token_secret
     assert read_history_intent(secret, token) == "greeting"
-    assert read_history_rewrite_elapsed(secret, token) is not None
+    assert read_history_rewrite(secret, token) is not None

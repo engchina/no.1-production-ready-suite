@@ -269,7 +269,7 @@ async def test_chat_records_the_prepared_completion_before_the_faq_answer(
 ) -> None:
     """チャットは送信の前に済ませた補完の段を残し、補完を呼び直さずに FAQ の回答を返す。"""
     selected = {"id": "faq-1", "question": QUESTION, "answer": ANSWER}
-    prepared = PreparedHistoryRewrite(elapsed_seconds=0.1, confirmed_facts=(), intent="search")
+    prepared = PreparedHistoryRewrite(window=(0, 100_000_000), confirmed_facts=(), intent="search")
 
     response, summary, engine_queries, llm, _ = await _run(
         monkeypatch, selected, prepared=prepared, history=[]

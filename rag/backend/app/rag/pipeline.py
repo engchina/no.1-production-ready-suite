@@ -10,7 +10,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from time import perf_counter, time, time_ns
+from time import perf_counter, time
 from typing import Any, Literal, cast
 
 from pr_backend_core.chat_history import (
@@ -27,6 +27,7 @@ from pr_backend_core.observability.model_purpose import (
 from pr_backend_core.observability.tracing import (
     ObservedSpan,
     SpanDisplay,
+    SpanUpdate,
     finish_operation_trace,
     observed_span,
     operation_trace,
@@ -70,6 +71,7 @@ from app.rag.history_question import (
     HistoryRewrite,
 )
 from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
+from app.rag.model_call_record import record_deferred_model_calls, record_model_calls
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -177,11 +179,14 @@ class ChatTurn:
 class PreparedHistoryRewrite:
     """送信の前（確認の提案）に済ませた履歴による補完（#4794）。
 
-    送信の側は補完を呼び直さず、処理の経過に同じ段（所要時間・詳細）として残す。補った質問は
-    検索の request（``query`` / ``original_question``）が持つ。
+    送信の側は補完を呼び直さず、処理の経過に同じ段（実行した時刻・詳細・モデルの呼び出し。#5773）と
+    して残す。補った質問は検索の request（``query`` / ``original_question``）が持つ。
     """
 
-    elapsed_seconds: float
+    # 補完を実行した開始・終了の時刻（epoch のナノ秒）。
+    window: tuple[int, int]
+    # 補完の中のモデルの呼び出し（記録の外で呼んだ ``gen_ai.chat``。段の子として残し直す）。
+    calls: tuple[SpanUpdate, ...] = ()
     confirmed_facts: tuple[HistoryConfirmation, ...] = ()
     # 補完と同じ呼び出しで分けた最新の発話の種類（#4787）。
     intent: HistoryIntent = "search"
@@ -505,6 +510,8 @@ class RagPipeline:
             # 回答の経路の DB の呼出し 1 回の上限(#5381)。超えた SQL は DB の側でも止める。
             db_call_timeout(self._settings.rag_db_call_timeout_seconds),
         ):
+            # 送信の入口で記録の前に呼んだモデル（業務ガイドの条件の読み取り）を残す（#5773）。
+            record_deferred_model_calls()
             response = await self._run(
                 request,
                 trace_id,
@@ -677,12 +684,12 @@ class RagPipeline:
             rewritten_query = await _observe_stage(
                 trace_id,
                 "history_rewrite",
-                _completed(rewritten_query)
+                _recorded(rewritten_query, prepared_rewrite.calls)
                 if prepared_rewrite is not None
                 else self._safe_rewritten_query(
                     original_query, history, report_degraded=degraded.record_degraded
                 ),
-                prior_elapsed=prepared_rewrite.elapsed_seconds if prepared_rewrite else 0.0,
+                recorded_window=prepared_rewrite.window if prepared_rewrite else None,
                 progress_callback=stage_callback,
                 result_details=lambda rewritten: history_rewrite_details(
                     rewritten, history, intent=self._history_intent
@@ -1301,6 +1308,12 @@ async def _completed[T](value: T) -> T:
     return value
 
 
+async def _recorded[T](value: T, calls: Sequence[SpanUpdate]) -> T:
+    """済んだ処理の結果と、その中のモデルの呼び出し（工程の子として残す。#5773）。"""
+    record_model_calls(calls)
+    return value
+
+
 def withhold_generated_answer_copies(diagnostics: dict[str, Any], masked_answer: str) -> None:
     """生成の記録の生の応答を捨て、解析した回答の本文を伏せた後の本文に置き換える（#5065）。
 
@@ -1344,12 +1357,13 @@ async def _observe_stage[T](
     result_outcome: Callable[[T], Literal["success", "skipped", "error"]] | None = None,
     request_snapshot: Callable[[], object] | None = None,
     result_snapshot: Callable[[T], object] | None = None,
-    prior_elapsed: float = 0.0,
+    recorded_window: tuple[int, int] | None = None,
 ) -> T:
     """非同期 stage の処理時間を outcome 付きで記録する。
 
-    ``prior_elapsed`` は、この呼び出しの前に済ませた処理の時間（秒。送信の前に済ませた履歴による
-    補完など）。開始をその分だけ戻し、所要時間に含める。
+    ``recorded_window`` は、この呼び出しの前に済ませた処理（送信の前に済ませた履歴による補完など）を
+    実行した開始・終了の時刻（epoch のナノ秒）。span はその時刻で残し、所要時間もその長さにする
+    （#5773）。
 
     stage の中で実行した SQL の回数・行数・LOB の読み取りの回数・時間を span の属性に足す
     (``db_*``。SQL を実行しなかった stage には足さない。#1490)。
@@ -1358,12 +1372,15 @@ async def _observe_stage[T](
     失敗の要約)を付け、画面の処理の経過にする(#3226)。
     """
     kind = stage if stage in PIPELINE_STEP_KINDS else None
-    prior_elapsed = max(0.0, prior_elapsed)
+    prior_elapsed = (
+        max(0, recorded_window[1] - recorded_window[0]) / 1e9 if recorded_window else 0.0
+    )
     with observed_span(
         f"rag.{stage}",
         attributes={"pr.stage": stage},
         display=SpanDisplay(kind=kind) if kind is not None else None,
-        start_time_ns=time_ns() - int(prior_elapsed * 1e9) if prior_elapsed else None,
+        start_time_ns=recorded_window[0] if recorded_window else None,
+        end_time_ns=recorded_window[1] if recorded_window else None,
     ) as span:
         if request_snapshot is not None:
             try:

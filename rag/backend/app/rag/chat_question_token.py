@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -29,20 +28,26 @@ def issue_question_token(
     question: str,
     *,
     confirmed_fact_ids: tuple[str, ...] = (),
-    history_rewrite_elapsed_seconds: float | None = None,
+    history_rewrite_window: tuple[int, int] | None = None,
+    history_rewrite_calls: str | None = None,
     history_intent: str = "search",
 ) -> str:
-    """``history_rewrite_elapsed_seconds`` は、準備の中で履歴による補完を実行したときの所要時間。
+    """``history_rewrite_window`` は、準備の中で履歴による補完を実行した開始・終了の時刻
+    （epoch のナノ秒）。``history_rewrite_calls`` はその中のモデルの呼び出し
+    （``seal_model_calls`` で暗号化した値。#5773）。
 
-    送信の側は補完を呼び直さず、この時間で処理の経過に同じ段を残す（実行しなかったときは None）。
+    送信の側は補完を呼び直さず、この時刻と呼び出しで処理の経過に同じ段を残す（実行しなかったときは
+    None）。
     """
     claims: dict[str, Any] = {
         "binding": dict(binding),
         "question": question,
         "confirmed_fact_ids": list(confirmed_fact_ids),
     }
-    if history_rewrite_elapsed_seconds is not None:
-        claims["history_rewrite_elapsed_seconds"] = history_rewrite_elapsed_seconds
+    if history_rewrite_window is not None:
+        claims["history_rewrite_window"] = list(history_rewrite_window)
+    if history_rewrite_calls:
+        claims["history_rewrite_calls"] = history_rewrite_calls
     if history_intent != "search":
         # 補完と同じ呼び出しで分けた発話の種類（#4787。検索の要らない発話のときだけ）。
         claims["history_intent"] = history_intent
@@ -66,16 +71,20 @@ def read_question_token(secret: str, token: str, binding: Mapping[str, Any]) -> 
     return read_question_context(secret, token, binding)[0]
 
 
-def _elapsed(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value) if math.isfinite(value) and value >= 0 else None
-
-
-def read_history_rewrite_elapsed(secret: str, token: str) -> float | None:
-    """準備の中で履歴による補完を実行したときの所要時間（秒）。実行していなければ None。"""
+def read_history_rewrite(secret: str, token: str) -> tuple[tuple[int, int], str | None] | None:
+    """準備の中で履歴による補完を実行した時刻（開始・終了の epoch のナノ秒）と、暗号化した
+    モデルの呼び出し。実行していなければ None。"""
     payload = verify_signed_token(_key(secret), token, version=_VERSION)
-    return _elapsed(payload.get("history_rewrite_elapsed_seconds"))
+    window = payload.get("history_rewrite_window")
+    if (
+        not isinstance(window, list)
+        or len(window) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in window)
+        or not 0 <= window[0] <= window[1]
+    ):
+        return None
+    calls = payload.get("history_rewrite_calls")
+    return (window[0], window[1]), calls if isinstance(calls, str) else None
 
 
 def read_history_intent(secret: str, token: str) -> HistoryIntent:
