@@ -82,7 +82,6 @@ export function DraftEditor({ initial, onClose, onEvaluate, loadNotice }: { init
               <TextareaField width="full" id="testset-evidence" label={t("evaluation.testsets.evidence")} helper={t("evaluation.testsets.evidenceHelp")} rows={3} disabled={save.isPending} value={item.evidence.join("\n")} onChange={event => change({ evidence: event.target.value.split("\n") })} />
               <Disclosure summary={t("evaluation.testsets.advanced")}><FormGrid columns={1}>
                 <TextareaField width="full" id="testset-points" label={t("evaluation.testsets.points")} rows={3} disabled={save.isPending} value={item.required_answer_points.join("\n")} onChange={event => change({ required_answer_points: event.target.value.split("\n") })} />
-                <TextareaField width="full" id="testset-process" label={t("evaluation.testsets.process")} rows={4} maxLength={8000} disabled={save.isPending} value={item.answer_process} onChange={event => change({ answer_process: event.target.value })} />
               </FormGrid></Disclosure>
             </FormGrid> : null}
             <SaveErrorBanner testId="testset-save-error" message={save.isError ? apiErrorMessage(save.error, t("evaluation.testsets.saveError")) : null} attemptKey={save.submittedAt} />

@@ -93,7 +93,6 @@ def _fields(row: EvaluationExcelRow) -> TestSetFields:
         standard_answer=row.standard_answer or "",
         evidence=[value.line for value in row.evidence],
         required_answer_points=list(row.screen_lines),
-        answer_process=row.answer_process or "",
     )
 
 
@@ -225,7 +224,6 @@ def template_row(item: TestSetFields) -> EvaluationTemplateRow:
         evidence=item.evidence,
         standard_answer=item.standard_answer,
         required_answer_points=item.required_answer_points,
-        answer_process=item.answer_process,
     )
 
 
