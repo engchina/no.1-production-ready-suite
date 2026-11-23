@@ -191,6 +191,12 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
         "retrieval",
         (("system", "app.rag.reference_sections:OUTLINE_SECTION_PROMPT"),),
     ),
+    # 検索の要らない発話（挨拶・雑談）への根拠なしの短い応答（#5774）。
+    PromptStage(
+        "small_talk",
+        "generation",
+        (("system", "app.rag.small_talk:SMALL_TALK_SYSTEM_PROMPT"),),
+    ),
     PromptStage(
         "generation",
         "generation",
