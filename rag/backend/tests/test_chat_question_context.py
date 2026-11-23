@@ -442,7 +442,7 @@ async def test_clarification_puts_the_condition_reading_into_the_token(
         return []
 
     async def guide_query(*args: Any) -> str:
-        return args[4]
+        return str(args[4])
 
     async def read_conditions(selected: Any, query: str, settings: Any) -> Any:
         with observed_span(
