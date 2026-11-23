@@ -6,9 +6,10 @@ import functools
 import re
 import unicodedata
 from collections.abc import Sequence
-from typing import Any, ClassVar, Literal, cast
+from typing import Annotated, Any, ClassVar, Literal, cast
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -49,13 +50,26 @@ def _check_requested_phrase(phrase: str, question: str | None) -> None:
         raise ValueError("requested_phrase は原質問にある連続した語句をそのまま選んでください。対応する要求がない補足は掲載しません。")
 
 
+def _as_marker(label: str) -> str:
+    """出典のラベルを本文の印の形（``[E2.1]``）に揃える。括弧を外したラベル（``E2.1``）も同じ印にする（#5769）。
+
+    形式だけを揃え、ラベルの照合（今回の根拠にあるか）は本文の検査に任せる。
+    """
+    label = label.strip().strip("[]［］【】").strip()
+    return f"[{label}]" if label else ""
+
+
+# セルの出典は本文へそのまま連結するので、受けた時点で印の形にする。
+SourceLabel = Annotated[str, AfterValidator(_as_marker)]
+
+
 class AnswerFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(
         description="原質問の一要求に直接答える原文の事実。複数の値をまとめて尋ねられたときは、同じ対象・条件の項目と値を組にする。"
     )
-    sources: list[str] = Field(description="この事実を支える原文ラベル。")
+    sources: list[SourceLabel] = Field(description="この事実を支える原文ラベル。")
     answers_which_question: str = Field(
         description="この短句だけを答えとして読んだとき、それで解ける具体的な問いを一つ書く。対象名だけでなく何を判定する問いかを区別する。"
     )
@@ -86,7 +100,7 @@ class ComparisonValue(BaseModel):
     number: str = Field(
         min_length=1, description="比較表に載せる数値の表記。桁・小数部を保ち、単位は列名に置く。条件や範囲を伴う値は短句で記す。"
     )
-    sources: list[str] = Field(description="比較した対象のこの値を示す原文ラベル。")
+    sources: list[SourceLabel] = Field(description="比較した対象のこの値を示す原文ラベル。")
 
 
 class EvidenceGap(BaseModel):
@@ -94,7 +108,7 @@ class EvidenceGap(BaseModel):
 
     requested_phrase: str = Field(min_length=1, description="資料で確定できない具体的な属性を尋ねた原質問の語句。")
     missing_input: str = Field(min_length=1, description="その判断に必要で資料から得られない情報の名前。回答言語の名詞句にする。")
-    sources: list[str] = Field(description="その限界を示す原文ラベル。")
+    sources: list[SourceLabel] = Field(description="その限界を示す原文ラベル。")
 
 
 _ROW_NOTE = re.compile(r"(?:（([^（）]+)）|\(([^()]+)\))$")
