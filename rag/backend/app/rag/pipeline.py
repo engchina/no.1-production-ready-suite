@@ -84,6 +84,7 @@ from app.rag.observability import (
 )
 from app.rag.profile_language import profile_language_scope
 from app.rag.run_history import RunRecorder
+from app.rag.small_talk import SMALL_TALK_SYSTEM_PROMPT, SmallTalkReply, skips_retrieval
 from app.rag.span_display import (
     ANSWER_STEP_FAILED_STATUS,
     ANSWER_STEP_KIND,
@@ -97,6 +98,7 @@ from app.rag.step_details import (
     approved_faq_answer_details,
     history_rewrite_details,
     query_guardrail_details,
+    small_talk_details,
     step_details_model,
 )
 from app.rag.stored_answer import stored_citations, warn_if_large_answer_record
@@ -139,6 +141,8 @@ type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[Non
 
 # 回答の記録の保存の工程（#2342）。失敗しても回答は返し、処理の経過で失敗にする。
 ANSWER_RECORD_SAVE_STAGE: StorageFailureStep = "answer_record_save"
+# 検索の要らない発話（挨拶・雑談）に、検索せずに応じる工程（#4787・#5774）。
+SMALL_TALK_STAGE = "small_talk_reply"
 # 回答を作らない RAG 検索の全体の工程（質問の理解から根拠の検索まで。#3506）。レシピの検索比較の
 # 「retrieval」（回答フローを通らない検索だけ）とは分ける。
 EVIDENCE_STAGE = "evidence"
@@ -730,7 +734,34 @@ class RagPipeline:
                 request_snapshot=lambda: approved_faq_snapshot(selected_faq),
                 result_snapshot=lambda outcome: {"回答": outcome.answer},
             )
-        skips_search = faq_outcome is not None
+        # 挨拶・雑談と分けた発話は検索・根拠・回答の生成を通さず、回答のモデルが会話の流れを
+        # 踏まえて短く応じる（#5774）。応答を作れなければいつもの検索と回答に戻す（分からない
+        # ときは検索する）。
+        # 選んだ登録済みQ&A・今回の確認の回答（対象範囲）があるときは飛ばさない。
+        small_talk_outcome: AnswerOutcome | None = None
+        if (
+            faq_outcome is None
+            and history is not None
+            and request.generate_answer
+            and self._scope is None
+            and skips_retrieval(self._history_intent)
+        ):
+            intent = self._history_intent
+            small_talk_outcome = await _observe_stage(
+                trace_id,
+                SMALL_TALK_STAGE,
+                self._small_talk_reply(original_query, history, intent),
+                progress_callback=stage_callback,
+                result_details=lambda result: small_talk_details(
+                    intent, replied=result is not None
+                ),
+                result_outcome=lambda result: "success" if result is not None else "error",
+                request_snapshot=lambda: {"発話": original_query, "発話の種類": intent},
+                result_snapshot=lambda result: {
+                    "応答": result.answer if result is not None else None,
+                },
+            )
+        skips_search = faq_outcome is not None or small_talk_outcome is not None
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
         if not skips_search and self._attachment_conversation_id:
@@ -803,6 +834,8 @@ class RagPipeline:
         # 止め、全体の工程を「質問の理解から根拠の検索まで」（evidence）にする（#649・#3506）。
         if faq_outcome is not None:
             outcome = faq_outcome
+        elif small_talk_outcome is not None:
+            outcome = small_talk_outcome
         elif request.generate_answer and guide.get("short_answer"):
             # 業務ガイドの必要な条件が分からず、確かめるか人へ引き継ぐ（#1238）。
             # 回答（モデル）は作らない。
@@ -1301,6 +1334,39 @@ class RagPipeline:
             return ""
         self._history_intent = result.intent
         return "" if rewritten == " ".join(query.split()) else rewritten
+
+    async def _small_talk_reply(
+        self, utterance: str, history: Sequence[ChatTurn], intent: HistoryIntent
+    ) -> AnswerOutcome | None:
+        """検索の要らない発話へ、回答のモデルで根拠なしの短い応答を作る（#5774。引用なし）。
+
+        会話の履歴は質問の補完と同じ予算で渡す。失敗・空の応答は None（呼び出し側がいつもの検索と
+        回答に戻す）。
+        """
+        budget = ChatHistoryBudget.from_settings(self._settings)
+        history_text = _format_chat_history(history, budget)
+        try:
+            text = await async_call_with_model_purpose(
+                "answer.small_talk",
+                self._llm.generate,
+                utterance,
+                history_text or EMPTY_CONVERSATION_HISTORY,
+                system_prompt=SMALL_TALK_SYSTEM_PROMPT,
+                response_schema=SmallTalkReply.model_json_schema(),
+                response_schema_name="small_talk_reply",
+            )
+            reply = SmallTalkReply.model_validate_json(text).reply.strip()
+        except Exception as exc:  # 応答は補助。検索と回答に戻す。
+            logger.warning("small talk reply failed", extra={**safe_exception_fields(exc)})
+            return None
+        if not reply:
+            return None
+        return AnswerOutcome(
+            answer=reply,
+            citations=[],
+            context_text="",
+            diagnostics={"retrieval_skipped": {"intent": intent}},
+        )
 
 
 async def _completed[T](value: T) -> T:
