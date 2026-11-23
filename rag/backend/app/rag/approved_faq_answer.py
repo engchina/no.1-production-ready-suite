@@ -19,6 +19,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings
 from app.rag.answer_engine import AnswerOutcome
+from app.rag.chat_question_token import read_history_intent
 from app.rag.input_guardrail import check_question_text
 from app.rag.search_answer_profile_knowledge import (
     approved_faq_enabled,
@@ -26,6 +27,7 @@ from app.rag.search_answer_profile_knowledge import (
     load_approved_faq,
     suggest_approved_faq,
 )
+from app.rag.small_talk import skips_retrieval
 
 # 処理の経過の段（SSE の ``stage``）。
 APPROVED_FAQ_ANSWER_STAGE = "approved_faq_answer"
@@ -105,6 +107,13 @@ async def approved_faq_candidates(
     question, token = checked.sanitized_text, None
     if prepare is not None:
         question, token = await prepare(question, checked)
+        # 挨拶・雑談と分けた発話は、送信の側で検索を飛ばして短く応じるので候補を出さない（#5774）。
+        if (
+            token
+            and settings.app_service_token_secret
+            and skips_retrieval(read_history_intent(settings.app_service_token_secret, token))
+        ):
+            return [], token
     suggestions = await suggest_approved_faq(
         oracle,
         search_answer_profile_id,
