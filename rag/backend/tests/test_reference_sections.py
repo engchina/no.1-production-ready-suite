@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 
 from app.rag import section_map_service
 from app.rag.answer_engine import _SearchState
@@ -141,6 +142,8 @@ async def test_selected_sections_are_read_with_one_call_for_all_targets(
     """2 つの参照先の目次を 1 回の呼び出しで渡し、選んだ章節(操作の本文)を読む。"""
 
     def pick(context: str) -> list[str]:
+        # 章節選びは画像の読み取り(document.read)ではなく、専用の用途で記録する(#5771)。
+        assert model_purpose_attributes() == {"pr.gen_ai.purpose": "section.select"}
         # 2 つの文書の「操作の手順」は別の ID になる(文書をまたいで一意)。
         labels = [
             line.split("[", 1)[1].split("]", 1)[0]

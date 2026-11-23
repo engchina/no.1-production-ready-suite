@@ -3270,7 +3270,7 @@ class AnswerEngine:
             )
             text = await asyncio.wait_for(
                 async_call_with_model_purpose(
-                    "document.read",
+                    "section.select",
                     llm.generate,
                     request.query,
                     catalog.text,
