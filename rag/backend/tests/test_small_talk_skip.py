@@ -282,4 +282,4 @@ async def test_faq_candidates_are_not_offered_for_small_talk(
     if intent == "greeting":
         assert suggestions == [] and matched == []
     else:
-        assert suggestions == ["合成の候補"] and matched == ["合成の挨拶"]
+        assert cast(list[Any], suggestions) == ["合成の候補"] and matched == ["合成の挨拶"]
