@@ -81,7 +81,6 @@ def test_template_has_headers_guide_examples_and_document_sheets() -> None:
         "期待する根拠",
         "標準回答",
         "必須の回答要点",
-        "回答の過程",
     ]
     # 見出しのセルに意味・必須か任意か・書き方を注記する（形式ごとの位置の書き方も短く）。
     assert "必須" in cases["A1"].comment.text
@@ -707,6 +706,33 @@ def test_import_still_returns_cases_when_the_file_cannot_be_stored(
     assert data["source_workbook_id"] is None
 
 
+def test_import_ignores_removed_answer_process_column_like_other_unknown_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外した「回答の過程」の列（#5778）は、ほかの読まない列と同じく誤り・警告にせずに無視する。
+
+    古い Excel の列が上限を超える長さでも、読まない列は検査しない。
+    """
+    monkeypatch.setattr(evaluation_route, "OracleClient", _FakeOracle)
+    header = [*HEADERS, "回答の過程", "合成の備考"]
+    long_process = "合成の手順" * 2_000
+    content = _workbook(
+        [["合成の質問", "経費精算規程.pdf", "合成の標準回答", "合成の要点", long_process, "x"]],
+        header=header,
+    )
+
+    parsed = parse_evaluation_workbook(content)
+    assert parsed.issues == []
+    assert [row.question for row in parsed.rows] == ["合成の質問"]
+    data = _upload(content).json()["data"]
+
+    assert data["errors"] == [] and data["error_count"] == 0
+    assert data["warnings"] == [] and data["warning_count"] == 0
+    assert [case["id"] for case in data["cases"]] == ["row-2"]
+    assert data["cases"][0]["required_answer_points"] == ["合成の要点"]
+    assert "answer_process" not in data["rows"][0]
+
+
 def test_import_api_returns_cases_preview_and_document_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -875,12 +901,11 @@ def test_template_examples_keep_all_five_case_columns_and_round_trip() -> None:
         str(cell.value) for row in book[GUIDE_SHEET_TITLE] for cell in row if cell.value
     )
     assert "100% でも回答の完全性" in guide
-    assert "必須の回答要点・確認済みの下書きから追加した要点は参考の網羅率" in guide
+    assert "必須の回答要点は参考の網羅率" in guide
     examples = book[EXAMPLES_SHEET_TITLE]
     assert tuple(cell.value for cell in examples[1]) == (*HEADERS[:3], "この例の説明", *HEADERS[3:])
     rows = list(examples.iter_rows(min_row=2, values_only=True))
     assert any(row[4] for row in rows)
-    assert any(row[5] for row in rows)
     assert not any("別名:" in str(value) for row in rows for value in row if value)
     for row in rows:
         cases.append([*row[:3], *row[4:]])
@@ -892,7 +917,6 @@ def test_template_examples_keep_all_five_case_columns_and_round_trip() -> None:
     # 確認・保留の期待は標準回答の文で書く例がある。
     assert sum(bool(row.standard_answer) for row in parsed.rows) >= 3
     assert any(row.screen_lines for row in parsed.rows)
-    assert any(row.answer_process for row in parsed.rows)
     documents = [
         EvaluationDocumentRef(document_id=f"synthetic-{index}", file_name=name)
         for index, name in enumerate(
@@ -924,9 +948,10 @@ def test_template_guide_describes_current_metrics_and_unassessed_results() -> No
         "同じ指標・閾値",
         "所要時間は設定や処理状況",
         "表示用に丸める前",
-        "入力しただけでは評価の期待に追加されません",
     ]:
         assert phrase in text
+    # 外した「回答の過程」の列（#5778）はテンプレートの説明にも書かない。
+    assert "回答の過程" not in text
     assert "約 2 倍" not in text
     assert "閾値 90%" not in text
     assert "正確性を意味に基づいて採点" in book[CASES_SHEET_TITLE]["C1"].comment.text

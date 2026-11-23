@@ -357,12 +357,6 @@ function EvaluationImportPreview({ rows, cases }: { rows: EvaluationImportRow[];
           className: "min-w-[12rem] whitespace-pre-wrap break-words text-xs text-fg-muted",
           render: row => row.required_answer_points?.join("\n") || "—",
         },
-        {
-          key: "answer_process",
-          header: t("evaluation.import.column.process"),
-          className: "min-w-[16rem] whitespace-pre-wrap break-words text-xs text-fg-muted",
-          render: row => row.answer_process || "—",
-        },
       ]}
     />
   );

@@ -76,7 +76,6 @@ def workbook(standard: str = STANDARD) -> bytes:
                 evidence=EVIDENCE,
                 standard_answer=standard,
                 required_answer_points=["合成の要点"],
-                answer_process="合成の確認をしてから保存する。",
             )
         ]
     )
@@ -323,7 +322,6 @@ async def test_workbook_snapshot_preserves_six_columns_and_survives_source_delet
     assert first["evidence"] == EVIDENCE
     assert first["required_answer_points"] == ["合成の要点"]
     assert "response_decision" not in first
-    assert first["answer_process"] == "合成の確認をしてから保存する。"
     assert not first["confirmed"] and not second["confirmed"]
     assert first["reference_answer"] == "未確認の参考回答"
     assert first["original"]["standard_answer"] == STANDARD
@@ -345,7 +343,6 @@ async def test_workbook_snapshot_preserves_six_columns_and_survives_source_delet
     assert row.question == QUESTION and row.standard_answer == STANDARD
     assert [spec.line for spec in row.evidence] == EVIDENCE
     assert row.screen_lines == ("合成の要点",)
-    assert row.answer_process == "合成の確認をしてから保存する。"
 
 
 async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flow) -> None:
@@ -363,7 +360,6 @@ async def test_export_unmodified_import_and_real_runner_job_completion(flow: Flo
     assert case["required_evidence"][0]["page_end"] == 4
     assert case["required_evidence"][1]["sheet"] == "表A"
     assert case["required_evidence"][1]["row_end"] == 12
-    assert imported["rows"][0]["answer_process"] == "合成の確認をしてから保存する。"
     assert flow.pipeline.requests == []
     submitted = await flow.client.post(
         "/api/evaluation/jobs/run",

@@ -1965,44 +1965,6 @@ export interface EvaluationImportRow {
   has_standard_answer: boolean;
   /** 案内すべき画面（Excel に書いた元の行。#2402。古い作業状態には無い）。 */
   required_answer_points?: string[];
-  /** 回答の過程（#2402）。期待の下書きを作るときに下書きの API へ渡す。 */
-  answer_process?: string | null;
-}
-
-/** 期待の下書きを作る 1 行（#2402）。 */
-export interface EvaluationProcessRow {
-  case_id: string;
-  row: number;
-  question: string;
-  answer_process: string;
-  standard_answer?: string;
-}
-
-/** 回答の過程に書いた資料と、ナレッジベースの文書との対応（業務ガイドの取り込みと同じ形）。 */
-export interface EvaluationProcessReference {
-  name: string;
-  pages: string;
-  section: string;
-  status: "resolved" | "unresolved" | "ambiguous";
-  document_id: string | null;
-  file_name: string | null;
-  candidates: string[];
-}
-
-/**
- * 回答の過程から作った評価の期待の下書き（#2402。保存しない）。画面で確かめてから、ケースの期待に足す。
- * error があるときは期待は空。
- */
-export interface EvaluationProcessDraft {
-  case_id: string;
-  row: number;
-  required_answer_points: string[];
-  required_conditions: string[];
-  relevant_document_ids: string[];
-  required_evidence: EvaluationEvidence[];
-  references: EvaluationProcessReference[];
-  warnings: string[];
-  error: string | null;
 }
 
 /**
@@ -4388,12 +4350,6 @@ export const api = {
     body.append("search_answer_profile_id", searchAnswerProfileId);
     return request<EvaluationImportResult>("/api/evaluation/cases/import", { method: "POST", body });
   },
-  /** 回答の過程から評価の期待の下書きを作る（#2402。1 回 10 行まで。保存しない）。 */
-  draftEvaluationProcess: (body: { knowledge_base_ids: string[]; rows: EvaluationProcessRow[] }) =>
-    request<{ drafts: EvaluationProcessDraft[] }>(
-      "/api/evaluation/cases/process-drafts",
-      jsonBody(body)
-    ),
   downloadEvaluationResults: (jobId: string, body: {
     rows: EvaluationImportRow[]; cases: EvaluationCase[];
     profile_name: string | null; compare_profile_name: string | null;

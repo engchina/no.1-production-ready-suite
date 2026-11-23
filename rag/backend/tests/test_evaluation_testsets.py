@@ -1,5 +1,6 @@
-"""本人の下書き、明示確認、テンプレート六列往復（合成データ）。"""
+"""本人の下書き、明示確認、テンプレートの列の往復（合成データ）。"""
 
+import json
 from io import BytesIO
 from typing import Any
 
@@ -7,7 +8,7 @@ import pytest
 from openpyxl import load_workbook  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
-from app.clients.evaluation_testset_store import MemoryTestSetStore
+from app.clients.evaluation_testset_store import MemoryTestSetStore, OracleTestSetStore
 from app.rag.evaluation_excel import (
     HEADERS,
     EvaluationDocumentRef,
@@ -112,6 +113,33 @@ def test_stored_item_drops_removed_fields_and_unconfirms_incomplete_items() -> N
     assert "response_decision" not in loaded.original.model_dump()
 
 
+@pytest.mark.asyncio
+async def test_stored_draft_with_removed_answer_process_opens_and_saves() -> None:
+    """外した「回答の過程」（answer_process。#5778）を持つ保存済みの JSON も開けて、保存し直せる。
+
+    保存の読み込み（`OracleTestSetStore.get` の `TestSetDraft.model_validate`）で、項目と
+    `original` の両方から読み捨て、次の保存の JSON には残らない。
+    """
+    draft = new_draft("合成の下書き", [item()])
+    stored = draft.model_dump(mode="json")
+    stored["items"][0]["answer_process"] = "合成の手順"
+    stored["items"][0]["original"]["answer_process"] = "合成の手順"
+
+    class StoredOracle:
+        async def _fetch_one(self, sql: str, binds: dict[str, object]) -> dict[str, Any]:
+            return {"draft_json": json.dumps(stored, ensure_ascii=False)}
+
+    loaded = await OracleTestSetStore(StoredOracle()).get(draft.draft_id)  # type: ignore[arg-type]
+
+    assert loaded is not None
+    assert "answer_process" not in loaded.items[0].model_dump()
+    assert "answer_process" not in loaded.items[0].original.model_dump()
+    saved = edited_draft(loaded, body(loaded, standard_answer="修正した合成の回答"))
+    assert saved.revision == draft.revision + 1
+    assert saved.items[0].standard_answer == "修正した合成の回答"
+    assert "answer_process" not in json.dumps(saved.model_dump(mode="json"), ensure_ascii=False)
+
+
 def test_answer_requires_standard_and_unconfirmed_cannot_export() -> None:
     draft = new_draft("合成", [item()])
     with pytest.raises(ValidationError):
@@ -130,7 +158,6 @@ def test_all_columns_locations_and_literal_text_roundtrip() -> None:
                 evidence=[evidence, table],
                 standard_answer="=合成の回答",
                 required_answer_points=["合成の要点"],
-                answer_process="合成の手順",
             )
         ]
     )
@@ -142,7 +169,7 @@ def test_all_columns_locations_and_literal_text_roundtrip() -> None:
     parsed = parse_evaluation_workbook(content)
     assert not parsed.issues
     row = parsed.rows[0]
-    assert row.screen_lines == ("合成の要点",) and row.answer_process == "合成の手順"
+    assert row.screen_lines == ("合成の要点",)
     built = build_evaluation_cases(
         parsed.rows,
         [
@@ -338,7 +365,7 @@ def test_atomic_review_add_remove_and_edit_revokes_confirmation() -> None:
         )
 
 
-def test_import_is_pending_and_keeps_all_six_columns() -> None:
+def test_import_is_pending_and_keeps_all_columns() -> None:
     from app.rag.evaluation_testsets import imported_items
 
     content = evaluation_cases_xlsx(
@@ -348,7 +375,6 @@ def test_import_is_pending_and_keeps_all_six_columns() -> None:
                 standard_answer="合成の回答",
                 evidence=[],
                 required_answer_points=["合成の要点"],
-                answer_process="合成の手順",
             )
         ]
     )
@@ -357,5 +383,4 @@ def test_import_is_pending_and_keeps_all_six_columns() -> None:
     assert items[0].source_kind == "excel"
     assert items[0].question == "=合成の質問"
     assert items[0].required_answer_points == ["合成の要点"]
-    assert items[0].answer_process == "合成の手順"
     assert items[0].reference_answer == ""

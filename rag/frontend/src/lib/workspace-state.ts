@@ -52,8 +52,6 @@ export type WorkspaceField =
   | "evaluation.compareEnabled"
   | "evaluation.compareProfileId"
   | "evaluation.runCompareName"
-  | "evaluation.processDrafts"
-  | "evaluation.useProcessDrafts"
   | "feedback.search"
   | "history.view"
   | "language-releases.paging"
@@ -73,9 +71,7 @@ export type WorkspaceField =
   | "runtimeKnowledge.listPaging"
   | "approvedFaqs.listPaging"
   | "documentCategories.searchPaging"
-  | "knowledgeBases.wikiDocumentsPaging"
-  // 品質評価の期待の下書きの一覧（#4636）
-  | "evaluation.processDraftsPaging";
+  | "knowledgeBases.wikiDocumentsPaging";
 
 interface StoredRecord {
   value: unknown;
