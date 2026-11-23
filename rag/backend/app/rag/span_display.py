@@ -38,6 +38,8 @@ ANSWER_STEP_KIND = "answer_step"
 PIPELINE_STEP_KINDS: frozenset[str] = frozenset(
     {
         "history_rewrite",
+        "approved_faq_candidates",
+        "clarification_candidates",
         "small_talk_reply",
         "approved_faq_answer",
         "query_guardrail",
@@ -68,6 +70,8 @@ type DisplayParams = dict[str, str | int | float | bool]
 ANSWER_STAGE_LABELS: dict[str, str] = {
     "retrieval": "文書から根拠の候補を検索する",
     "history_rewrite": "質問を補い、検索が要るかを分ける",
+    "approved_faq_candidates": "登録済みQ&Aの候補を探す",
+    "clarification_candidates": "確認の候補を作る",
     "small_talk_reply": "検索せずに短く応じる",
     "approved_faq_answer": "選んだ登録済みQ&Aの回答を返す",
     "attachment_evidence": "会話の添付から根拠を選ぶ",

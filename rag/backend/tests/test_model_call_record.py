@@ -73,10 +73,15 @@ def test_sealed_calls_round_trip_and_hide_the_content() -> None:
 def test_oversized_calls_drop_details_but_keep_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
     with collect_model_calls() as calls:
         _call()
-    monkeypatch.setattr(model_call_record, "SEALED_CALLS_MAX", 10)
+    full = seal_model_calls(SECRET, calls)
+    assert full is not None
+    monkeypatch.setattr(model_call_record, "SEALED_CALLS_MAX", len(full) - 1)
     [opened] = open_model_calls(SECRET, seal_model_calls(SECRET, calls))
     assert opened.display is None
     assert opened.attributes["pr.gen_ai.purpose"] == "query.rewrite"
+    # 詳細を外しても入らなければ渡さない（token の上限を超えない。#5776）。
+    monkeypatch.setattr(model_call_record, "SEALED_CALLS_MAX", 10)
+    assert seal_model_calls(SECRET, calls) is None
 
 
 async def test_deferred_calls_are_recorded_under_the_answer_root() -> None:

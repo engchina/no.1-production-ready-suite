@@ -5,6 +5,7 @@ KB・文書レシピには持たせず、検索時は検索・回答プロファ
 """
 
 import asyncio
+from time import time_ns
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
@@ -19,7 +20,11 @@ from app.api.routes.search import (
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.rag.approved_faq_answer import PrepareQuestion, approved_faq_candidates
-from app.rag.chat_question_token import read_history_intent
+from app.rag.chat_question_token import (
+    CLARIFICATION_CANDIDATES_STAGE,
+    add_prepared_stage,
+    read_history_intent,
+)
 from app.rag.domain_keyword_import import (
     PREVIEW_ROWS,
     KeywordImportMode,
@@ -28,6 +33,7 @@ from app.rag.domain_keyword_import import (
 )
 from app.rag.evaluation_excel import XLSX_MEDIA_TYPE
 from app.rag.input_guardrail import check_question_text
+from app.rag.model_call_record import collect_model_calls
 from app.rag.profile_language import profile_language_scope
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
@@ -566,32 +572,46 @@ async def post_clarification_suggest(
         # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
         if not settings.rag_support_guide_enabled:
             return response(ClarificationSuggestionsData())
-        payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
-        guides = await _published_guides(oracle, search_answer_profile_id)
-        # 文面の補完を OFF にしても、ガイドの既存の利用者履歴の照合は維持する。
-        if request.conversation_id and not settings.rag_history_rewrite_enabled:
-            query = "\n".join(
-                [
-                    *_guide_user_context(await oracle.list_messages(request.conversation_id)),
-                    query,
-                ]
+        started = time_ns()
+        # 照合・条件の読み取りのモデルは回答の記録の前に呼ぶので、token で送信の記録へ渡す
+        # （#5776）。
+        with collect_model_calls() as calls:
+            payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
+            guides = await _published_guides(oracle, search_answer_profile_id)
+            # 文面の補完を OFF にしても、ガイドの既存の利用者履歴の照合は維持する。
+            if request.conversation_id and not settings.rag_history_rewrite_enabled:
+                query = "\n".join(
+                    [
+                        *_guide_user_context(await oracle.list_messages(request.conversation_id)),
+                        query,
+                    ]
+                )
+            # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
+            guide_query = await build_guide_query(
+                oracle, settings, search_answer_profile_id, guides, query, payload
             )
-        # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-        guide_query = await build_guide_query(
-            oracle, settings, search_answer_profile_id, guides, query, payload
-        )
-        selected = select_guide(
-            guides,
-            guide_query,
-            {},
-            context=await support_guide_context(oracle, guides, query, profile_scope_filters(view)),
-            close_margin=(
-                settings.rag_support_guide_close_match_margin
-                if settings.rag_support_guide_close_match_clarification_enabled
-                else None
-            ),
-        )
-        selected = await resolve_text_conditions(selected, query, settings)
+            selected = select_guide(
+                guides,
+                guide_query,
+                {},
+                context=await support_guide_context(
+                    oracle, guides, query, profile_scope_filters(view)
+                ),
+                close_margin=(
+                    settings.rag_support_guide_close_match_margin
+                    if settings.rag_support_guide_close_match_clarification_enabled
+                    else None
+                ),
+            )
+            selected = await resolve_text_conditions(selected, query, settings)
+        if context_token:
+            context_token = add_prepared_stage(
+                settings.app_service_token_secret,
+                context_token,
+                CLARIFICATION_CANDIDATES_STAGE,
+                (started, time_ns()),
+                calls,
+            )
         guide: tuple[str, str, Any] | None = None
         if isinstance(selected, GuideChoice):
             guide = guide_choice_clarification(selected)

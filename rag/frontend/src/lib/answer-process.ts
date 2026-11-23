@@ -20,6 +20,8 @@ export const ANSWER_STEP_STAGE_PREFIX = "answer_step:";
 /** 回答フローの外の工程のうち、行にするもの（工程の名前 → 名前の i18n）。 */
 export const PIPELINE_STEP_LABEL: Readonly<Record<string, I18nKey>> = {
   history_rewrite: "search.stage.historyRewrite",
+  approved_faq_candidates: "search.stage.approvedFaqCandidates",
+  clarification_candidates: "search.stage.clarificationCandidates",
   small_talk_reply: "search.stage.smallTalkReply",
   approved_faq_answer: "search.stage.approvedFaqAnswer",
   query_guardrail: "search.stage.queryGuardrail",

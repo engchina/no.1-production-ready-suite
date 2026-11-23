@@ -10,7 +10,12 @@
   残す）。
 - 別の要求（送信の前の準備 → 送信）: ``question_context_token`` に入れて渡す。入力の詳細は
   system_admin だけが見られる内容なので、token は署名だけでなく AES-GCM で暗号化する（画面へ平文で
-  出さない）。
+  出さない）。送信の前の登録済みQ&Aの候補・確認の候補は、工程ごと（``PreparedStage``）に入れ、
+  送信の入口が ``defer_prepared_stages`` で置き、``RagPipeline.run`` が記録の始めに工程として残す
+  （#5776）。
+
+集めるのは LLM の呼び出し（``gen_ai.chat``）と、埋め込み・並べ替え（``gen_ai.embeddings`` /
+``gen_ai.rerank``。登録済みQ&Aの候補の照合など）。
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -34,7 +40,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.rag.signed_url import signing_key
 
-MODEL_CALL_SPAN = "gen_ai.chat"
+MODEL_CALL_SPANS = frozenset({"gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank"})
 # token（要求の上限 300000 文字）に入れる暗号文の上限。超えたら入力と応答の詳細を外して
 # 時刻・属性だけ残す。
 SEALED_CALLS_MAX = 200_000
@@ -44,6 +50,24 @@ _CALLS = TypeAdapter(list[SpanUpdate])
 _DEFERRED: ContextVar[tuple[SpanUpdate, ...]] = ContextVar("rag_deferred_model_calls", default=())
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedStage:
+    """送信の前の別の要求で済ませた工程。
+
+    工程の名前・開始と終了の時刻（epoch のナノ秒）・中のモデルの呼び出しを持つ。
+    """
+
+    stage: str
+    window: tuple[int, int]
+    calls: tuple[SpanUpdate, ...] = ()
+
+
+# 送信の前に済ませた工程（token から読んだもの。要求ごと）。
+_DEFERRED_STAGES: ContextVar[tuple[PreparedStage, ...]] = ContextVar(
+    "rag_deferred_prepared_stages", default=()
+)
+
+
 @contextmanager
 def collect_model_calls() -> Iterator[list[SpanUpdate]]:
     """範囲の中で、実行の記録の外で終わったモデルの呼び出しを集める（記録の中のものは重ねない）。"""
@@ -51,7 +75,7 @@ def collect_model_calls() -> Iterator[list[SpanUpdate]]:
 
     def listen(update: SpanUpdate) -> None:
         if (
-            update.operation_name == MODEL_CALL_SPAN
+            update.operation_name in MODEL_CALL_SPANS
             and update.finished_at is not None
             and update.status != "running"
             and not operation_trace_active()
@@ -77,8 +101,18 @@ def record_model_calls(calls: Sequence[SpanUpdate]) -> None:
 
 
 def reset_deferred_model_calls() -> None:
-    """置いた呼び出しを空にする（質問の文脈を解き直す前。前の質問の呼び出しを持ち越さない）。"""
+    """置いた呼び出し・工程を空にする（質問の文脈を解き直す前。前の質問のものを持ち越さない）。"""
     _DEFERRED.set(())
+    _DEFERRED_STAGES.set(())
+
+
+def defer_prepared_stages(stages: Sequence[PreparedStage]) -> None:
+    """送信の前に済ませた工程を、この要求の後の回答の記録に残すように置く。"""
+    _DEFERRED_STAGES.set(tuple(stages))
+
+
+def deferred_prepared_stages() -> tuple[PreparedStage, ...]:
+    return _DEFERRED_STAGES.get()
 
 
 @contextmanager
@@ -105,10 +139,16 @@ def _key(secret: str) -> bytes:
     )
 
 
-def seal_model_calls(secret: str, calls: Sequence[SpanUpdate]) -> str | None:
-    """呼び出しを暗号化した文字列にする（無ければ None）。"""
+def seal_model_calls(
+    secret: str, calls: Sequence[SpanUpdate], *, limit: int | None = None
+) -> str | None:
+    """呼び出しを暗号化した文字列にする（無い・詳細を外しても ``limit`` を超えるなら None）。
+
+    ``limit`` の既定は ``SEALED_CALLS_MAX``。
+    """
     if not calls:
         return None
+    limit = SEALED_CALLS_MAX if limit is None else limit
     aead = AESGCM(_key(secret))
 
     def seal(items: Sequence[SpanUpdate]) -> str:
@@ -117,10 +157,11 @@ def seal_model_calls(secret: str, calls: Sequence[SpanUpdate]) -> str | None:
         return base64.urlsafe_b64encode(nonce + aead.encrypt(nonce, plain, None)).decode("ascii")
 
     sealed = seal(calls)
-    if len(sealed) <= SEALED_CALLS_MAX:
+    if len(sealed) <= limit:
         return sealed
     # ponytail: 大きすぎるときは詳細をまとめて外す。詳細の一部だけ残す調整は要るときに足す。
-    return seal([call.model_copy(update={"display": None}) for call in calls])
+    sealed = seal([call.model_copy(update={"display": None}) for call in calls])
+    return sealed if len(sealed) <= limit else None
 
 
 def open_model_calls(secret: str, sealed: object) -> tuple[SpanUpdate, ...]:
