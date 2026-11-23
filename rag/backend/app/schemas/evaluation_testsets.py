@@ -6,18 +6,16 @@ from pr_backend_core.timezones import UtcDatetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.evaluation import EVIDENCE_LABEL_MAX_CHARS, STANDARD_ANSWER_MAX_CHARS
-from app.schemas.support_guide import PROCESS_IMPORT_TEXT_MAX_CHARS
 
 
 class TestSetFields(BaseModel):
-    """既存テンプレートの五列を編集する。コードによる正解の推測はしない。"""
+    """既存テンプレートの四列を編集する。コードによる正解の推測はしない。"""
 
     model_config = ConfigDict(extra="forbid")
     question: str = Field(default="", max_length=2000)
     standard_answer: str = Field(default="", max_length=STANDARD_ANSWER_MAX_CHARS)
     evidence: list[str] = Field(default_factory=list, max_length=30)
     required_answer_points: list[str] = Field(default_factory=list, max_length=30)
-    answer_process: str = Field(default="", max_length=PROCESS_IMPORT_TEXT_MAX_CHARS)
 
     @field_validator("evidence")
     @classmethod
@@ -51,7 +49,11 @@ class TestSetEdit(TestSetFields):
 
 
 class TestSetItem(TestSetEdit):
-    """保存済みの項目。今の列に無い項目は読み捨て、確認の条件を満たさない項目は未確認で読む。"""
+    """保存済みの項目。今の列に無い項目は読み捨て、確認の条件を満たさない項目は未確認で読む。
+
+    外した列（「回答の過程」の ``answer_process``。#5778）を持つ保存済みの JSON も、項目と
+    ``original`` の両方で読み捨てる（DB の migration はせず、次の保存で消える）。
+    """
 
     model_config = ConfigDict(extra="ignore")
     source_kind: Literal["evaluation", "manual", "excel"] = "evaluation"

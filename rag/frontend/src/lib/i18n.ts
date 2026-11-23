@@ -3791,7 +3791,7 @@ export const ja = {
     "解析後の処理の「メタデータ/項目抽出」を有効にしたとき（本文を分けて送る部分ごと）",
   "settings.answerPrompts.stage.support_guide_draft": "回答の過程から業務ガイドの下書きを作る",
   "settings.answerPrompts.stage.support_guide_draft.condition":
-    "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るときと、品質評価で「回答の過程」から期待の下書きを作るとき（行ごと）",
+    "業務ガイドの取り込みで「回答の過程（Excel・テキスト）」から下書きを作るとき（行ごと）",
   "settings.answerPrompts.stage.navigation_summary": "章節の要約",
   "settings.answerPrompts.stage.navigation_summary.condition":
     "解析後の処理の「章節の要約」を有効にしたとき（対象数の上限は文書解析の設定に表示）",
@@ -4297,7 +4297,7 @@ export const ja = {
   "evaluation.suite.settingsLink": "設定で既定の基準を変更",
   "evaluation.suite.applied": "評価の基準",
   "evaluation.input.description":
-    "1 行に 1 つの質問を書いた Excel をアップロードします。列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「回答の過程」で、質問だけが必須です。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます。書き方はテンプレートの「記入の説明」、形式ごとの例は「記入例」のシートにあります。",
+    "1 行に 1 つの質問を書いた Excel をアップロードします。列は「質問」「期待する根拠」「標準回答」「必須の回答要点」で、質問だけが必須です。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます。書き方はテンプレートの「記入の説明」、形式ごとの例は「記入例」のシートにあります。",
   "evaluation.knowledgeBaseScope.required": "評価する検索・回答プロファイルを 1 つ選んでください。",
   "evaluation.knowledgeBaseScope.emptySelection": "未選択です。評価するナレッジベースを選んでください。",
   "evaluation.conditions.title": "評価の条件",
@@ -4309,7 +4309,7 @@ export const ja = {
   "evaluation.import.dropzoneHint": ".xlsx・{rows} 行・{size}MB まで",
   "evaluation.import.template": "テンプレートをダウンロード",
   "evaluation.import.templateHint":
-    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「回答の過程」の 5 つで、質問だけが必須です。標準回答には期待する答えの結論・数値・手順を書きます。「〜を提案できる」のような能力の説明は、回答と照らし合わせられません。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。標準回答が空欄の行は、回答の正確性が未評価になります。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧（ファイル名・文書 ID）が入ります。",
+    "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」の 4 つで、質問だけが必須です。標準回答には期待する答えの結論・数値・手順を書きます。「〜を提案できる」のような能力の説明は、回答と照らし合わせられません。保留・確認を期待する質問は、標準回答に期待する返し方を文で書きます（例：資料に記載がないため答えられないと示す）。標準回答が空欄の行は、回答の正確性が未評価になります。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧（ファイル名・文書 ID）が入ります。",
   "evaluation.import.templateDone": "テンプレートをダウンロードしました。",
   "evaluation.import.storedNotice": "検証した Excel は、結果を足してダウンロードするために保存します（見られるのはアップロードした本人だけ）。",
   "evaluation.import.templateError":
@@ -4486,24 +4486,6 @@ export const ja = {
   "evaluation.compare.tab.base": "主条件: {name}",
   "evaluation.compare.tab.compared": "検索・回答プロファイル: {name}",
   "evaluation.import.column.screens": "必須の回答要点",
-  "evaluation.import.column.process": "回答の過程",
-  "evaluation.process.title": "回答の過程から作る期待の下書き",
-  "evaluation.process.description":
-    "「回答の過程」のある {count} 行から、期待する手順・触れるべき条件・必要な根拠（資料と頁）の下書きを作ります。下書きは保存しません。行ごとに確かめてから評価に使います。",
-  "evaluation.process.build": "期待の下書きを作る",
-  "evaluation.process.rebuild": "下書きを作り直す",
-  "evaluation.process.building": "期待の下書きを作っています（{done} / {total} 行）",
-  "evaluation.process.error": "期待の下書きを作れませんでした。時間をおいて、もう一度作ってください。",
-  "evaluation.process.tableLabel": "期待の下書き。スクロールできます。",
-  "evaluation.process.column.steps": "期待する手順",
-  "evaluation.process.column.conditions": "触れるべき条件",
-  "evaluation.process.column.evidence": "必要な根拠",
-  "evaluation.process.column.warnings": "確認すること",
-  "evaluation.process.failed": "作れませんでした",
-  "evaluation.process.unresolved": "{name}（ナレッジベースに無い資料）",
-  "evaluation.process.confirm": "確かめた下書き {count} 行を評価に使う",
-  "evaluation.process.confirmHelp":
-    "オンにすると、下書きの手順・条件・根拠・対応を評価のケースに足して評価します。作れなかった行とナレッジベースに無い資料は足しません。",
 
   // 業務ガイド（SupportGuide。#1237）。下書きを検証して公開した版だけを回答に使う。
   "supportGuides.title": "業務ガイド",
@@ -5080,8 +5062,6 @@ export const ja = {
   "evaluation.testsets.advanced": "詳細設定",
   "evaluation.testsets.points": "必須の回答要点",
   "evaluation.testsets.pointsHelp": "回答に必要な内容を 1 行ずつ記入します。正確性には標準回答が必要です。要点は参考の網羅率に使い、空欄の場合は標準回答の文を要点にします。",
-  "evaluation.testsets.process": "回答の過程",
-  "evaluation.testsets.processHelp": "期待する確認や作業の流れです。テンプレートの同じ列に引き継ぎます。",
   "evaluation.testsets.confirmItem": "保存して確認し、次へ",
   "evaluation.testsets.isConfirmed": "確認済み",
   "evaluation.testsets.unconfirmed": "未確認",

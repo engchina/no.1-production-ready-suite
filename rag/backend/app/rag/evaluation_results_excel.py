@@ -217,7 +217,6 @@ def evaluation_results_xlsx(
                 "期待する根拠",
                 "標準回答",
                 "必須の回答要点",
-                "回答の過程",
                 *[label for _, _, label in METRICS],
                 "この問の合否",
                 "判定の理由",
@@ -246,7 +245,6 @@ def evaluation_results_xlsx(
                         if row
                         else []
                     ),
-                    row.answer_process or "" if row else "",
                     *[_metric_value(item, key) for _, key, _ in METRICS],
                     *_judgement_values(item),
                     CASE_STATUSES.get(item.status, item.status),

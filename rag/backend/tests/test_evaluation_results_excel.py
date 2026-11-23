@@ -52,7 +52,6 @@ def inputs() -> EvaluationResultExportRequest:
                     "evidence": ["資料 A.pdf"],
                     "standard_answer_preview": "短いプレビュー",
                     "required_answer_points": ["要点 A"],
-                    "answer_process": "手順 A",
                 }
             ],
             "cases": [
@@ -85,13 +84,14 @@ def test_export_keeps_full_inputs_scores_unassessed_and_comparison() -> None:
     assert sheet["B2"].value == "=2+2"
     assert sheet["B2"].data_type == "s"
     assert sheet["D2"].value == "合成の回答です。" * 100
-    assert sheet["F2"].value == "手順 A"
-    assert sheet["G2"].value == 0
-    assert sheet["H2"].value == 0.5
-    assert sheet["H2"].number_format == "0.0%"
-    assert sheet["I2"].value == "未評価"
-    assert sheet["Y2"].value == "trace-a"
+    assert sheet["F2"].value == 0
+    assert sheet["G2"].value == 0.5
+    assert sheet["G2"].number_format == "0.0%"
+    assert sheet["H2"].value == "未評価"
+    assert sheet["X2"].value == "trace-a"
     assert "期待する応答の判断" not in [cell.value for cell in sheet[1]]
+    # 外した「回答の過程」（#5778）の列は出さない。
+    assert "回答の過程" not in [cell.value for cell in sheet[1]]
     assert sheet.freeze_panes == "B2"
     assert book["概要"]["C1"].value == "比較対象: プロファイル B"
 
@@ -262,7 +262,7 @@ def test_export_api_uses_authorized_job_and_rejects_unavailable_results(
     assert response.status_code == code
     if code == 200:
         book = load_workbook(BytesIO(response.content))
-        assert book["主条件の結果"]["H2"].value == 0.5
+        assert book["主条件の結果"]["G2"].value == 0.5
         assert (
             book["主条件の結果"].cell(2, book["主条件の結果"].max_column).value
             == "合成資料.pdf | p.3"

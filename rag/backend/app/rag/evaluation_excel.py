@@ -1,4 +1,4 @@
-"""品質評価の Excel 入力。質問・根拠・標準回答・必須要点・回答の過程を読む。
+"""品質評価の Excel 入力。質問・根拠・標準回答・必須要点を読む。
 
 本文と位置を指定した根拠は取得率、文書だけの指定は MRR の評価入力にする。
 構造の検証とナレッジベース内の文書の解決を分ける。
@@ -32,7 +32,6 @@ from app.schemas.evaluation import (
     EvaluationImportIssue,
     EvaluationScreen,
 )
-from app.schemas.support_guide import PROCESS_IMPORT_TEXT_MAX_CHARS
 
 # アップロードの上限。評価は 1 行ごとに回答を生成するため、行数は job の時間の上限
 # （`evaluation_job_time_limit_seconds`）に収まる量にする。
@@ -59,13 +58,11 @@ QUESTION_HEADER = "質問"
 EVIDENCE_HEADER = "期待する根拠"
 STANDARD_ANSWER_HEADER = "標準回答"
 SCREENS_HEADER = "必須の回答要点"
-PROCESS_HEADER = "回答の過程"
 HEADERS = (
     QUESTION_HEADER,
     EVIDENCE_HEADER,
     STANDARD_ANSWER_HEADER,
     SCREENS_HEADER,
-    PROCESS_HEADER,
 )
 TEMPLATE_FILE_NAME = "evaluation_request_template.xlsx"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -92,14 +89,12 @@ _HEADER_ALIASES: dict[str, tuple[str, ...]] = {
         "standard_answer",
     ),
     "screens": (SCREENS_HEADER, "required_answer_points"),
-    "answer_process": (PROCESS_HEADER, "回答過程", "answer_process", "process"),
 }
 _COLUMN_LABELS = {
     "question": QUESTION_HEADER,
     "evidence": EVIDENCE_HEADER,
     "standard_answer": STANDARD_ANSWER_HEADER,
     "screens": SCREENS_HEADER,
-    "answer_process": PROCESS_HEADER,
 }
 # 画面の別名の接頭辞と、別名の区切り（読点・カンマ）。
 _ALIAS_PREFIXES = ("別名", "alias", "aliases")
@@ -217,8 +212,6 @@ class EvaluationExcelRow:
     # 案内すべき画面と、書いた元の行（#2402）。
     screens: tuple[EvaluationScreen, ...] = ()
     screen_lines: tuple[str, ...] = ()
-    # 回答の過程（#2402。ケースにはせず、期待の下書きに使う）。
-    answer_process: str | None = None
 
     @property
     def case_id(self) -> str:
@@ -439,13 +432,6 @@ def _parse_row(
             f"標準回答は {STANDARD_ANSWER_MAX_CHARS} 文字以内にしてください"
             f"（{len(standard_answer)} 文字）。",
         )
-    answer_process = cells.get("answer_process", "") or None
-    if answer_process is not None and len(answer_process) > PROCESS_IMPORT_TEXT_MAX_CHARS:
-        issue(
-            "answer_process",
-            f"回答の過程は {PROCESS_IMPORT_TEXT_MAX_CHARS} 文字以内にしてください"
-            f"（{len(answer_process)} 文字）。",
-        )
     screen_lines = [line.strip() for line in cells.get("screens", "").split("\n") if line.strip()]
     screens: list[EvaluationScreen] = []
     lines = [line.strip() for line in cells.get("evidence", "").split("\n") if line.strip()]
@@ -473,7 +459,6 @@ def _parse_row(
             standard_answer=standard_answer,
             screens=tuple(screens),
             screen_lines=tuple(screen_lines),
-            answer_process=answer_process,
         ),
         [],
     )
@@ -914,12 +899,8 @@ _HEADER_NOTES = {
         "任意。回答で説明すべき必須要点を 1 行に 1 つ書きます。"
         "標準回答がある行の参考の網羅率に使い、正確性の採点や合否には使いません。"
     ),
-    PROCESS_HEADER: (
-        "任意。回答の過程（回答の手順・確認事項・検索する資料と頁など）を書きます。"
-        "画面で期待（手順・条件・根拠）の下書きにし、確かめてから評価に使います。"
-    ),
 }
-_COLUMN_WIDTHS = (48, 56, 64, 48, 64)
+_COLUMN_WIDTHS = (48, 56, 64, 48)
 _GUIDE_HEADINGS = frozenset(
     {
         "指標と必要な入力",
@@ -966,13 +947,6 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
         "回答で説明すべき必須要点を 1 行に 1 つ書きます。条件・例外・手順も含められます。",
         "意味上の正確性の比較に使います。",
     ),
-    (
-        PROCESS_HEADER,
-        "任意",
-        "担当者が書いた回答の過程（回答の手順・必要な確認事項・検索する資料と頁・検索の語・補足）。",
-        f"{PROCESS_IMPORT_TEXT_MAX_CHARS} 文字まで。取り込んだ後、画面で期待の下書きを作り、"
-        "確かめてから評価に使います。入力しただけでは評価の期待に追加されません。",
-    ),
     (),
     ("指標と必要な入力",),
     ("分類", "指標", "必要な入力・根拠", "測る内容"),
@@ -991,7 +965,7 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
     (
         "回答",
         "回答の正確性",
-        "標準回答。必須の回答要点・確認済みの下書きから追加した要点は参考の網羅率に使います。",
+        "標準回答。必須の回答要点は参考の網羅率に使います。",
         "標準回答と意味上合うかを判定します。"
         "100% でも回答の完全性や標準回答にない補足の正しさは保証しません。",
     ),
@@ -1123,23 +1097,19 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "電源を入れ、画面の案内に従って言語と時刻を設定します。",
         "PDF の位置、標準回答と必須要点を指定する例。",
         "電源を入れる\n言語と時刻を設定する",
-        "",
     ),
     (
         "通知が表示されないときはどうすればよいですか？",
         "操作手順.docx | p.8",
         "",
-        "必須要点と回答の過程。過程は画面で下書きを確認し、適用してから評価します。",
+        "必須要点を指定する例。",
         "設定画面を開く\n通知を有効にする",
-        "【回答の手順】\n1. 設定画面を開く\n2. 通知を有効にする\n"
-        "【検索する資料】\n操作手順.docx p.8",
     ),
     (
         "操作対象を指定せずに変更を依頼した場合はどうしますか？",
         "",
         "どの対象を変更するかを利用者に確認してから案内します。",
         "先に確認すべき質問の例。確認を期待する返し方を標準回答に書きます。",
-        "",
         "",
     ),
     (
@@ -1148,14 +1118,12 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "",
         "Word（PDF にしたもの）のページと本文の抜粋。",
         "",
-        "",
     ),
     (
         "新しい機能の概要を教えてください。",
         "説明資料.pptx | スライド: 3",
         "",
         "PowerPoint のスライドの番号。",
-        "",
         "",
     ),
     (
@@ -1164,14 +1132,12 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "",
         "表計算のシートと行。",
         "",
-        "",
     ),
     (
         "対象となる方を教えてください。",
         "よくある質問.md | 章節: はじめに\nよくある質問.md | 抜粋: 対象となる方",
         "",
         "Markdown の章節と抜粋。セル内の改行で根拠を二つ指定します。",
-        "",
         "",
     ),
     (
@@ -1180,14 +1146,12 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "",
         "文書 ID で同じ名前の文書を区別します。実際の ID は文書一覧で確認してください。",
         "",
-        "",
     ),
     (
         "来月の天気を教えてください。",
         "",
         "資料に記載がないため答えられないと伝えます。",
         "保留を期待する例。答えられない旨の返し方を標準回答に書きます。",
-        "",
         "",
     ),
 )
@@ -1205,13 +1169,12 @@ def template_xlsx(documents: Sequence[EvaluationDocumentRef] = ()) -> bytes:
 
 @dataclass(frozen=True)
 class EvaluationTemplateRow:
-    """既存テンプレート五列。位置のある根拠は reader が受け付ける原文行のまま保持する。"""
+    """既存テンプレート四列。位置のある根拠は reader が受け付ける原文行のまま保持する。"""
 
     question: str
     evidence: Sequence[str] = ()
     standard_answer: str | None = None
     required_answer_points: Sequence[str] = ()
-    answer_process: str = ""
 
 
 def evaluation_cases_xlsx(
@@ -1233,7 +1196,6 @@ def evaluation_cases_xlsx(
                 "\n".join(row.evidence),
                 row.standard_answer or "",
                 "\n".join(row.required_answer_points),
-                row.answer_process,
             ],
         )
     _set_widths(sheet, _COLUMN_WIDTHS)

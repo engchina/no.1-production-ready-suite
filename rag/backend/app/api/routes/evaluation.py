@@ -5,7 +5,7 @@ import hashlib
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date
 from pathlib import PurePath
@@ -25,9 +25,6 @@ from fastapi import (
     status,
 )
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
-from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
-from rag_parser_core.language import current_pack
-from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 from starlette.concurrency import run_in_threadpool
 
 from app.api.routes.search import (
@@ -37,12 +34,9 @@ from app.api.routes.search import (
     ensure_search_answer_profile_not_archived,
     permitted_knowledge_base_ids,
 )
-from app.clients.ai_calls import make_ai_caller
-from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient, oracle_error_log_fields
 from app.config import (
     RAG_ANSWER_TIMEOUT_MAX_SECONDS,
-    Settings,
     fixed_today,
     get_settings,
     settings_today,
@@ -83,7 +77,6 @@ from app.rag.evaluation_jobs import (
 )
 from app.rag.evaluation_manifest import build_run_manifest, with_run_check
 from app.rag.evaluation_paired import compare_paired
-from app.rag.evaluation_process import guide_process_row, process_draft
 from app.rag.evaluation_result_storage import without_answer_diagnostics
 from app.rag.evaluation_results_excel import (
     evaluation_results_xlsx,
@@ -94,12 +87,6 @@ from app.rag.evaluation_source_workbooks import (
     get_evaluation_source_workbook_service,
 )
 from app.rag.rate_limit import enforce_rate_limit
-from app.rag.support_guide_process_import import (
-    GuideDraftLlm,
-    draft_guides,
-    list_knowledge_documents,
-    process_headings,
-)
 from app.schemas.common import ApiResponse, Page
 from app.schemas.evaluation import (
     EvaluationAnswerMode,
@@ -113,13 +100,10 @@ from app.schemas.evaluation import (
     EvaluationJobKind,
     EvaluationJobSummary,
     EvaluationMetrics,
-    EvaluationProcessDraftData,
-    EvaluationProcessDraftRequest,
     EvaluationResultExportRequest,
     EvaluationRunRequest,
 )
 from app.schemas.search import normalize_search_id_list
-from app.schemas.support_guide import SupportGuideProcessRow
 from app.security.user_names import user_display_names
 
 router = APIRouter()
@@ -377,65 +361,6 @@ async def import_evaluation_cases(
     return ApiResponse(data=result)
 
 
-def evaluation_process_llm(settings: Settings) -> GuideDraftLlm:
-    """回答の過程を構造化する LLM（業務ガイドの取り込みと同じ呼び出し。テストで差し替える）。"""
-    return OciEnterpriseAiClient(settings=settings)
-
-
-@router.post("/cases/process-drafts", response_model=ApiResponse[EvaluationProcessDraftData])
-async def draft_evaluation_process_expectations(
-    http_request: Request,
-    body: EvaluationProcessDraftRequest,
-) -> ApiResponse[EvaluationProcessDraftData]:
-    """評価のケースの回答の過程から、期待（手順・条件・根拠・対応）の下書きを作る（#2402。保存しない）。
-
-    構造化は業務ガイドの取り込み（#2397）と同じ部品で、1 行で OCI Enterprise AI を 1 回呼ぶ（上限
-    つき並行。``RAG_SUPPORT_GUIDE_IMPORT_CONCURRENCY``）。見出しの語は言語資源
-    （``guide_import_cues.process_headings``）、資料の名前は選んだナレッジベースの文書で解決する。
-    画面は行を ``EVALUATION_PROCESS_MAX_REQUEST_ROWS`` 行ずつに分けて送る。
-    """
-    enforce_rate_limit("evaluation", http_request)
-    settings = get_settings()
-    documents = await list_knowledge_documents(OracleClient(), body.knowledge_base_ids)
-    llm = evaluation_process_llm(settings)
-    caller = make_ai_caller(settings, "guide_import")
-    rows = [guide_process_row(row) for row in body.rows]
-
-    async def run(
-        targets: Sequence[SupportGuideProcessRow],
-        fn: Callable[[SupportGuideProcessRow, Attempt], Awaitable[str]],
-    ) -> list[tuple[str | None, str | None]]:
-        async def call(row: SupportGuideProcessRow, attempt: Attempt) -> str:
-            with sdk_retries_disabled():
-                return await fn(row, attempt)
-
-        outcomes = await caller.map(targets, call, labels=[f"row-{row.row}" for row in targets])
-        return [
-            (outcome.value, None)
-            if outcome.ok
-            else (None, f"下書きを作れませんでした（{outcome.error}）。")
-            for outcome in outcomes
-        ]
-
-    try:
-        items = await draft_guides(
-            rows,
-            documents,
-            llm=llm,
-            headings=process_headings(current_pack()),
-            run=run,
-        )
-    except BoundedCallAborted as exc:
-        raise HTTPException(
-            status_code=503, detail=f"回答の過程から期待の下書きを作れませんでした。{exc}"
-        ) from exc
-    return ApiResponse(
-        data=EvaluationProcessDraftData(
-            drafts=[process_draft(row, item) for row, item in zip(body.rows, items, strict=True)]
-        )
-    )
-
-
 def _with_issues(
     result: EvaluationImportResult, issues: Sequence[EvaluationImportIssue]
 ) -> EvaluationImportResult:
@@ -467,7 +392,6 @@ def _preview_row(row: EvaluationExcelRow) -> EvaluationImportRow:
         ),
         has_standard_answer=answer is not None,
         required_answer_points=list(row.screen_lines),
-        answer_process=row.answer_process,
     )
 
 
