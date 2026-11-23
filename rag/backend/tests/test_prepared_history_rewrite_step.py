@@ -1,13 +1,16 @@
-"""送信の前に済ませた履歴による補完も、処理の経過に同じ段として残す（#4794）。"""
+"""送信の前に済ませた履歴による補完も、処理の経過に同じ段として残す（#4794・#5773）。"""
 
 import json
-from time import perf_counter
+from datetime import UTC, datetime
+from time import perf_counter, time_ns
 from typing import Any, cast
 
 import pytest
 from pr_backend_core.config.tracing import TracingSettings
 from pr_backend_core.observability.call_policy import call_content_policy
 from pr_backend_core.observability.tracing import (
+    SpanDisplay,
+    SpanUpdate,
     TraceSummary,
     configure_tracing,
     operation_trace,
@@ -84,6 +87,11 @@ async def _run(
     return saved, progress, engine_queries
 
 
+def _window(seconds: float) -> tuple[int, int]:
+    finished = time_ns() - 3_000_000_000
+    return finished - int(seconds * 1e9), finished
+
+
 def _rewrite_span(summary: TraceSummary) -> Any:
     return next(
         item for item in summary.spans if item.attributes.get("pr.stage") == "history_rewrite"
@@ -103,13 +111,13 @@ async def test_prepared_rewrite_is_recorded_with_its_duration_and_details(
     summary, progress, engine_queries = await _run(
         monkeypatch,
         request,
-        PreparedHistoryRewrite(elapsed_seconds=1.5, confirmed_facts=(fact,)),
+        PreparedHistoryRewrite(window=_window(1.5), confirmed_facts=(fact,)),
         capture=capture,
     )
     assert engine_queries == ["合成の対象 A の手順は？"]
     span = _rewrite_span(summary)
     assert span.status == "done"
-    assert span.duration_ms >= 1500
+    assert 1500 <= span.duration_ms < 1600
     assert span.display is not None and span.display.kind == "history_rewrite"
     finished = [item for item in progress if item.stage == "history_rewrite"]
     assert [item.outcome for item in finished] == ["started", "success"]
@@ -136,7 +144,7 @@ async def test_prepared_rewrite_without_change_shows_original_kept(
 ) -> None:
     request = SearchRequest(query="合成の単独の質問は？", search_answer_profile_id="profile-a")
     summary, _progress, _queries = await _run(
-        monkeypatch, request, PreparedHistoryRewrite(elapsed_seconds=0.2)
+        monkeypatch, request, PreparedHistoryRewrite(window=_window(0.2))
     )
     span = _rewrite_span(summary)
     assert span.display is not None and span.display.details is not None
@@ -154,3 +162,34 @@ async def test_prepared_question_without_rewrite_has_no_rewrite_step(
         item for item in summary.spans if item.attributes.get("pr.stage") == "history_rewrite"
     ]
     assert not [item for item in progress if item.stage == "history_rewrite"]
+
+
+async def test_prepared_rewrite_keeps_its_model_call_at_the_real_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 準備の要求で呼んだモデル（記録の外の gen_ai.chat）を、補完の段の子として実際の時刻で残す。
+    window = _window(2.0)
+    call = SpanUpdate(
+        span_id="0123456789abcdef",
+        trace_id="0" * 31 + "1",
+        operation_name="gen_ai.chat",
+        status="done",
+        started_at=datetime.fromtimestamp((window[0] + 100_000_000) / 1e9, UTC),
+        finished_at=datetime.fromtimestamp((window[1] - 100_000_000) / 1e9, UTC),
+        span_kind="client",
+        attributes={"pr.gen_ai.purpose": "query.rewrite", "gen_ai.usage.input_tokens": 12},
+        display=SpanDisplay(),
+    )
+    request = SearchRequest(query="合成の質問は？", search_answer_profile_id="profile-a")
+    summary, _progress, _queries = await _run(
+        monkeypatch, request, PreparedHistoryRewrite(window=window, calls=(call,))
+    )
+    stage = _rewrite_span(summary)
+    child = next(item for item in summary.spans if item.operation_name == "gen_ai.chat")
+    assert child.parent_span_id == stage.span_id
+    assert child.span_id != call.span_id
+    assert child.kind == "client"
+    assert child.attributes["pr.gen_ai.purpose"] == "query.rewrite"
+    assert child.started_at == call.started_at
+    assert child.finished_at == call.finished_at
+    assert stage.started_at <= child.started_at <= child.finished_at <= stage.finished_at

@@ -57,6 +57,7 @@ from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.input_guardrail import check_search_question
+from app.rag.model_call_record import defer_model_calls, reset_deferred_model_calls
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -382,6 +383,8 @@ async def _resolve_query_context(
     ``flow``（回答の経路。#5332）が basic（画面の RAG 検索）なら、登録済みQ&Aと業務ガイドの照合を
     しない（登録済みQ&Aを選んだ要求は 422）。
     """
+    # 前の質問の記録の外のモデルの呼び出しを、この質問の回答に持ち越さない（#5773）。
+    reset_deferred_model_calls()
     # 明示した回答のモデルが未登録なら、DB・モデルを使う前に 422 にする（#4582）。
     if explicit_model := _answer_model_id(request):
         ensure_answer_models_registered([explicit_model], global_settings)
@@ -521,13 +524,15 @@ async def _resolve_query_context(
                 close_margin=close_margin,
             )
             # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
-            selected = await resolve_answered_conditions(
-                selected, request.conditions, settings, interactive=interactive
-            )
-            if request.generate_answer:
-                selected = await resolve_text_conditions(
-                    selected, guide_text, settings, interactive=interactive
+            # 条件の読み取りは回答の記録より前に LLM を呼ぶ。回答の記録の始めに残す（#5773）。
+            with defer_model_calls():
+                selected = await resolve_answered_conditions(
+                    selected, request.conditions, settings, interactive=interactive
                 )
+                if request.generate_answer:
+                    selected = await resolve_text_conditions(
+                        selected, guide_text, settings, interactive=interactive
+                    )
             if guides_failed:
                 # 読めなかったことを回答の診断に残す（ガイドを使わずに答える。#1278）。
                 settings = settings.model_copy(

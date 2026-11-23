@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
-from time import perf_counter
+from time import perf_counter, time_ns
 from typing import Annotated
 from uuid import uuid4
 
@@ -28,6 +28,7 @@ from pr_backend_core.chat_history_window import (
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.trace_bodies import BodyPage
 from pr_backend_core.observability.trace_body_reader import CallBodySlot
+from pr_backend_core.observability.tracing import SpanUpdate
 from pr_system_settings.auth.visibility import (
     OTHERS_CONTENT_FORBIDDEN_MESSAGE,
     OTHERS_CONTENT_FORBIDDEN_STATUS,
@@ -77,11 +78,12 @@ from app.rag.chat_question_token import (
     context_digest,
     issue_question_token,
     read_history_intent,
-    read_history_rewrite_elapsed,
+    read_history_rewrite,
     read_question_context,
 )
 from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.input_guardrail import combine_question_results
+from app.rag.model_call_record import collect_model_calls, open_model_calls, seal_model_calls
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (
     EXPANDED_FLOW,
@@ -772,11 +774,13 @@ async def prepare_chat_question(
                 ) from exc
             if confirmed_facts is not None:
                 confirmed_facts.extend(facts[identity] for identity in selected)
-            elapsed = read_history_rewrite_elapsed(settings.app_service_token_secret, token)
-            if prepared_rewrites is not None and elapsed is not None:
+            prepared = read_history_rewrite(settings.app_service_token_secret, token)
+            if prepared_rewrites is not None and prepared is not None:
+                window, sealed_calls = prepared
                 prepared_rewrites.append(
                     PreparedHistoryRewrite(
-                        elapsed_seconds=elapsed,
+                        window=window,
+                        calls=open_model_calls(settings.app_service_token_secret, sealed_calls),
                         confirmed_facts=tuple(facts[identity] for identity in selected),
                         intent=read_history_intent(settings.app_service_token_secret, token),
                     )
@@ -784,22 +788,27 @@ async def prepare_chat_question(
             return question, token
         question = checked.sanitized_text
         selected_facts: tuple[HistoryConfirmation, ...] = ()
-        rewrite_elapsed: float | None = None
+        rewrite_window: tuple[int, int] | None = None
+        rewrite_calls: tuple[SpanUpdate, ...] = ()
         history_intent: HistoryIntent = "search"
         # 履歴が無い 1 回目も、同じ 1 回の呼び出しで質問を整え、検索が要るかを分ける（#4787）。
         if settings.rag_history_rewrite_enabled:
             pipeline = RagPipeline(settings=settings, guardrails=guardrails)
-            rewrite_started = perf_counter()
-            question = await pipeline._safe_rewritten_query(question, history) or question
-            rewrite_elapsed = perf_counter() - rewrite_started
+            rewrite_started = time_ns()
+            # 回答の記録の前に呼ぶモデルの呼び出しを集め、回答の記録に残し直す（#5773）。
+            with collect_model_calls() as calls:
+                question = await pipeline._safe_rewritten_query(question, history) or question
+            rewrite_window = (rewrite_started, time_ns())
+            rewrite_calls = tuple(calls)
             selected_facts = pipeline._selected_history_facts
             history_intent = pipeline._history_intent
         if confirmed_facts is not None:
             confirmed_facts.extend(selected_facts)
-        if prepared_rewrites is not None and rewrite_elapsed is not None:
+        if prepared_rewrites is not None and rewrite_window is not None:
             prepared_rewrites.append(
                 PreparedHistoryRewrite(
-                    elapsed_seconds=rewrite_elapsed,
+                    window=rewrite_window,
+                    calls=rewrite_calls,
                     confirmed_facts=selected_facts,
                     intent=history_intent,
                 )
@@ -813,7 +822,10 @@ async def prepare_chat_question(
                 binding,
                 question,
                 confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
-                history_rewrite_elapsed_seconds=rewrite_elapsed,
+                history_rewrite_window=rewrite_window,
+                history_rewrite_calls=seal_model_calls(
+                    settings.app_service_token_secret, rewrite_calls
+                ),
                 history_intent=history_intent,
             )
         except SignedUrlUnavailableError:

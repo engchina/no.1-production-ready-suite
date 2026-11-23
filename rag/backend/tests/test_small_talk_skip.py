@@ -128,7 +128,9 @@ async def test_prepared_classification_keeps_retrieval_without_rewriting_again(
 ) -> None:
     llm = FakeLlm()
     response, summary, engine_queries = await _run(
-        monkeypatch, llm, prepared=PreparedHistoryRewrite(elapsed_seconds=0.5, intent="greeting")
+        monkeypatch,
+        llm,
+        prepared=PreparedHistoryRewrite(window=(0, 500_000_000), intent="greeting"),
     )
     assert llm.calls == []
     assert engine_queries == ["合成の挨拶"]

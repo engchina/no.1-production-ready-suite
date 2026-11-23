@@ -2356,6 +2356,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "charset-normalizer" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "gunicorn" },
     { name = "httpx" },
@@ -2414,6 +2415,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "charset-normalizer", specifier = ">=3.4,<4" },
+    { name = "cryptography", specifier = ">=46" },
     { name = "docling", marker = "extra == 'docling'", specifier = "==2.132.0" },
     { name = "fastapi", specifier = ">=0.121,<1.0" },
     { name = "gunicorn", specifier = ">=26,<27" },
