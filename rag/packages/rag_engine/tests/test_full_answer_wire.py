@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.full_answer_wire import canonical_full_answer, full_answer_model, render_full_answer
+from rag_engine.generation.full_answer_wire import canonical_full_answer, full_answer_model, lacks_citation, render_full_answer
 from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY
 
 # 再試行の後の最後の試行の検証（引用の印の欠落では不合格にしない。#5391）。
@@ -552,6 +552,30 @@ def test_structured_table_excludes_competing_prose_and_checks_its_labels():
         model.model_validate(payload)
     cells["rows"][0]["cells"] = []
     with pytest.raises(ValidationError, match="セル数"):
+        model.model_validate(payload)
+
+
+def test_structured_cell_sources_without_brackets_become_citation_marks():
+    # 入力ではラベルを「[E1.1] …」と示すので、括弧を外したラベルが返ることがある（#5769）。形式だけ揃えて印にする。
+    units, unit = catalog()
+    model = full_answer_model(units)
+    fact = {
+        "answers_which_question": "入力は？",
+        "requested_phrase": "入力",
+        "text": "12",
+        "short_answer": "12",
+        "sources": [unit, f" ［{unit}］ "],
+    }
+    payload = {
+        "answer_body": {"headers": ["項目", "答え"], "rows": [{"label": "入力", "cells": [[fact]]}]},
+        "response_kind": "answered",
+        "confidence": "high",
+    }
+    wire = model.model_validate(payload)
+    assert wire.answer_body.endswith(f"| 入力 | 12[{unit}] |")
+    assert not lacks_citation(wire.answer_body, "answered", units)
+    fact["sources"] = ["E1.99"]
+    with pytest.raises(ValidationError, match="今回の根拠に無い"):
         model.model_validate(payload)
 
 
