@@ -93,6 +93,27 @@ async def test_clarification_context_is_reused_without_second_rewrite(context_se
     assert calls == [query]
 
 
+async def test_send_side_defers_the_stages_prepared_before_sending(context_setup: Any) -> None:
+    """確認・登録済みQ&Aの候補で済ませた工程を、送信の入口が回答の記録へ置く（#5776）。"""
+    from app.rag.chat_question_token import CLARIFICATION_CANDIDATES_STAGE, add_prepared_stage
+    from app.rag.model_call_record import deferred_prepared_stages, reset_deferred_model_calls
+
+    oracle, settings, _calls = context_setup
+    query = "その手順は？ 条件 B との違いは？"
+    _, token = await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", query, settings
+    )
+    assert token
+    token = add_prepared_stage(
+        settings.app_service_token_secret, token, CLARIFICATION_CANDIDATES_STAGE, (1, 2), ()
+    )
+    reset_deferred_model_calls()
+    await chat.prepare_chat_question(
+        oracle, "conversation-a", "profile-a", query, settings, token=token
+    )
+    assert [stage.stage for stage in deferred_prepared_stages()] == [CLARIFICATION_CANDIDATES_STAGE]
+
+
 @pytest.mark.parametrize("change", ["history", "query", "settings", "profile", "tamper"])
 async def test_context_rejects_stale_or_tampered_preparation(
     context_setup: Any, change: str
@@ -397,6 +418,56 @@ async def test_clarification_reuses_the_token_of_the_faq_suggestion(
     assert again.data is not None
     assert again.data.question_context_token == first.data.question_context_token
     assert len(calls) == 1
+
+
+async def test_clarification_puts_the_condition_reading_into_the_token(
+    context_setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """確認の候補の条件の読み取りは、工程と呼び出しとして token に入れる（#5776）。"""
+    from app.api.routes import search_answer_profile_knowledge as route
+    from app.rag.chat_question_token import CLARIFICATION_CANDIDATES_STAGE, read_prepared_stages
+    from app.schemas.search_answer_profile_knowledge import ClarificationSuggestRequest
+
+    oracle, settings, _calls = context_setup
+    settings.rag_support_guide_enabled = True
+    oracle.view.config.query.support_guide_enabled = True
+    oracle.view.config.clarification_policy = "confirm"
+    monkeypatch.setattr(route, "OracleClient", lambda: oracle)
+    monkeypatch.setattr(route, "get_settings", lambda: settings)
+
+    async def empty(*args: Any, **kwargs: Any) -> Any:
+        return {}
+
+    async def guides(*args: Any) -> list[Any]:
+        return []
+
+    async def guide_query(*args: Any) -> str:
+        return str(args[4])
+
+    async def read_conditions(selected: Any, query: str, settings: Any) -> Any:
+        with observed_span(
+            "gen_ai.chat", kind="client", attributes={"pr.gen_ai.purpose": "query.conditions"}
+        ):
+            pass
+        return None
+
+    monkeypatch.setattr(route, "load_runtime_knowledge_payload", empty)
+    monkeypatch.setattr(route, "_published_guides", guides)
+    monkeypatch.setattr(route, "build_guide_query", guide_query)
+    monkeypatch.setattr(route, "support_guide_context", empty)
+    monkeypatch.setattr(route, "resolve_text_conditions", read_conditions)
+
+    result = await route.post_clarification_suggest(
+        "profile-a",
+        ClarificationSuggestRequest(query="その手順は？", conversation_id="conversation-a"),
+    )
+
+    assert result.data is not None and result.data.question_context_token
+    [stage] = read_prepared_stages(
+        settings.app_service_token_secret, result.data.question_context_token
+    )
+    assert stage.stage == CLARIFICATION_CANDIDATES_STAGE
+    assert [call.attributes["pr.gen_ai.purpose"] for call in stage.calls] == ["query.conditions"]
 
 
 async def test_blocked_confirmation_also_excludes_assistant_reply(

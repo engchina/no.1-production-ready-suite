@@ -79,11 +79,17 @@ from app.rag.chat_question_token import (
     issue_question_token,
     read_history_intent,
     read_history_rewrite,
+    read_prepared_stages,
     read_question_context,
 )
 from app.rag.history_question import HistoryConfirmation, HistoryIntent
 from app.rag.input_guardrail import combine_question_results
-from app.rag.model_call_record import collect_model_calls, open_model_calls, seal_model_calls
+from app.rag.model_call_record import (
+    collect_model_calls,
+    defer_prepared_stages,
+    open_model_calls,
+    seal_model_calls,
+)
 from app.rag.observability import elapsed_ms, new_trace_id
 from app.rag.pipeline import (
     EXPANDED_FLOW,
@@ -774,6 +780,8 @@ async def prepare_chat_question(
                 ) from exc
             if confirmed_facts is not None:
                 confirmed_facts.extend(facts[identity] for identity in selected)
+            # 送信の前に済ませた工程（登録済みQ&Aの候補・確認の候補）を回答の記録に残す（#5776）。
+            defer_prepared_stages(read_prepared_stages(settings.app_service_token_secret, token))
             prepared = read_history_rewrite(settings.app_service_token_secret, token)
             if prepared_rewrites is not None and prepared is not None:
                 window, sealed_calls = prepared

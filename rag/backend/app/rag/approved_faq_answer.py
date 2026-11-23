@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from time import time_ns
 from typing import Any
 
 from pr_system_settings.guardrails import GuardrailResult
@@ -19,8 +20,13 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings
 from app.rag.answer_engine import AnswerOutcome
-from app.rag.chat_question_token import read_history_intent
+from app.rag.chat_question_token import (
+    APPROVED_FAQ_CANDIDATES_STAGE,
+    add_prepared_stage,
+    read_history_intent,
+)
 from app.rag.input_guardrail import check_question_text
+from app.rag.model_call_record import collect_model_calls
 from app.rag.search_answer_profile_knowledge import (
     approved_faq_enabled,
     approved_faq_match_options,
@@ -114,11 +120,22 @@ async def approved_faq_candidates(
             and skips_retrieval(read_history_intent(settings.app_service_token_secret, token))
         ):
             return [], token
-    suggestions = await suggest_approved_faq(
-        oracle,
-        search_answer_profile_id,
-        question,
-        loaded=loaded,
-        **approved_faq_match_options(settings, lambda: OciGenAiClient(settings=settings)),
-    )
+    started = time_ns()
+    # 照合の埋め込み・並べ替えは回答の記録の前に呼ぶので、token で送信の記録へ渡す（#5776）。
+    with collect_model_calls() as calls:
+        suggestions = await suggest_approved_faq(
+            oracle,
+            search_answer_profile_id,
+            question,
+            loaded=loaded,
+            **approved_faq_match_options(settings, lambda: OciGenAiClient(settings=settings)),
+        )
+    if token and settings.app_service_token_secret:
+        token = add_prepared_stage(
+            settings.app_service_token_secret,
+            token,
+            APPROVED_FAQ_CANDIDATES_STAGE,
+            (started, time_ns()),
+            calls,
+        )
     return suggestions, token

@@ -4100,6 +4100,8 @@ export const ja = {
   // 工程の名前は backend の時間切れの文言（app/rag/span_display.py の ANSWER_STAGE_LABELS）と揃える（#375）。
   "search.stage.processing": "処理中",
   "search.stage.historyRewrite": "質問を補い、検索が要るかを分ける",
+  "search.stage.approvedFaqCandidates": "登録済みQ&Aの候補を探す",
+  "search.stage.clarificationCandidates": "確認の候補を作る",
   "search.stage.smallTalkReply": "検索せずに短く応じる",
   "search.stage.approvedFaqAnswer": "選んだ登録済みQ&Aの回答を返す",
   "search.stage.attachmentEvidence": "会話の添付から根拠を選ぶ",

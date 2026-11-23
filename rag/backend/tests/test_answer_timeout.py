@@ -129,6 +129,9 @@ def test_stage_labels_cover_answer_stages() -> None:
     assert set(ANSWER_STAGE_LABELS) == {
         "retrieval",
         "history_rewrite",
+        # 送信の前に済ませた登録済みQ&Aの候補・確認の候補（#5776）。
+        "approved_faq_candidates",
+        "clarification_candidates",
         "small_talk_reply",
         "approved_faq_answer",
         "attachment_evidence",

@@ -71,7 +71,12 @@ from app.rag.history_question import (
     HistoryRewrite,
 )
 from app.rag.history_question import HISTORY_REWRITE_SYSTEM_PROMPT as HISTORY_REWRITE_SYSTEM_PROMPT
-from app.rag.model_call_record import record_deferred_model_calls, record_model_calls
+from app.rag.model_call_record import (
+    PreparedStage,
+    deferred_prepared_stages,
+    record_deferred_model_calls,
+    record_model_calls,
+)
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
     elapsed_ms,
@@ -516,6 +521,9 @@ class RagPipeline:
         ):
             # 送信の入口で記録の前に呼んだモデル（業務ガイドの条件の読み取り）を残す（#5773）。
             record_deferred_model_calls()
+            # 送信の前の別の要求で済ませた工程（登録済みQ&Aの候補・確認の候補。#5776）。
+            for prepared in deferred_prepared_stages():
+                _record_prepared_stage(prepared)
             response = await self._run(
                 request,
                 trace_id,
@@ -1372,6 +1380,18 @@ class RagPipeline:
 async def _completed[T](value: T) -> T:
     """済んだ処理の結果を、工程の記録（``_observe_stage``）へ渡す awaitable にする。"""
     return value
+
+
+def _record_prepared_stage(prepared: PreparedStage) -> None:
+    """送信の前に済ませた工程を、実行した時刻のまま工程の span とその中の呼び出しとして残す。"""
+    with observed_span(
+        f"rag.{prepared.stage}",
+        attributes={"pr.stage": prepared.stage},
+        display=SpanDisplay(kind=prepared.stage),
+        start_time_ns=prepared.window[0],
+        end_time_ns=prepared.window[1],
+    ):
+        record_model_calls(prepared.calls)
 
 
 async def _recorded[T](value: T, calls: Sequence[SpanUpdate]) -> T:
