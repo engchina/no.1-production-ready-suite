@@ -1,6 +1,5 @@
 """合成の同じ本文を、引用と種別の違いで書き換えない。"""
 
-import json
 
 import pytest
 from pydantic import ValidationError
@@ -751,22 +750,20 @@ def test_only_a_repeated_row_note_is_removed_from_a_list_of_numeric_values(scope
 
 
 @pytest.mark.parametrize(
-    ("first", "drop_note", "expected", "calls_expected"),
+    ("first", "expected"),
     [
-        ("左12、右0（共通）", False, "左12、右0", 1),
-        ("左12、右0（転記した値）", True, "左12、右0", 2),
-        ("左12、右0（予備時のみ）", False, "左12、右0（予備時のみ）", 2),
+        ("左12、右0（共通）", "左12、右0"),
+        ("左12、右0（転記した値）", "左12、右0（転記した値）"),
+        ("左12、右0（予備時のみ）", "左12、右0（予備時のみ）"),
     ],
 )
-def test_number_list_uses_existing_retry_and_keeps_conditions_on_the_last_attempt(first, drop_note, expected, calls_expected):
+def test_number_list_is_generated_once_and_keeps_notes_other_than_the_row_note(first, expected):
+    """数値の注記の採否をモデルに確かめ直さない（#5693）。行名と同じ注記だけを形式で外し、ほかは残す。"""
     from test_answer_flow_single_generation import _run_traced, context, record
 
     source = "合成の表。左は12、右は予備時に限り0。"
-    attempts = 0
 
     def reply(units):
-        nonlocal attempts
-        attempts += 1
         fact = {
             "text": source,
             "answers_which_question": "左右の値は？",
@@ -774,21 +771,12 @@ def test_number_list_uses_existing_retry_and_keeps_conditions_on_the_last_attemp
             "short_answer": first,
             "sources": [f"[{units[source]}]"],
         }
-        if attempts == 1:
-            rows = [{"label": "表の数値（共通）", "cells": [[fact]]}]
-        else:
-            wrong = {**fact, "short_answer": "右99"}
-            rows = [{"label": "1.1.1", "cells": [[]] if drop_note else [[wrong]]}, {"label": "後から付けた条件", "cells": [[wrong]]}]
-        body = {"headers": ["項目", "値"], "rows": rows}
+        body = {"headers": ["項目", "値"], "rows": [{"label": "表の数値（共通）", "cells": [[fact]]}]}
         return {"answer_body": body, "response_kind": "answered", "confidence": "high"}
 
-    response, calls, prompts = _run_traced("左右の値は？", context(record(0, source, "合成表")), reply)
-    assert len(calls) == calls_expected
+    response, calls, _prompts = _run_traced("左右の値は？", context(record(0, source, "合成表")), reply)
+    assert len(calls) == 1
     assert expected in response.answer_text and response.generation_trace["citation_lines"]
-    assert "99" not in response.answer_text and "後から付けた条件" not in response.answer_text
-    if calls_expected == 2:
-        step = prompts[1].removeprefix(prompts[0])
-        assert "数値の注記の採否" in step and json.dumps(first, ensure_ascii=False) in step
 
 
 def test_unresolved_cell_contains_its_reason_and_rejects_unrelated_facts():
