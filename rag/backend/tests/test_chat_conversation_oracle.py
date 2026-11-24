@@ -107,3 +107,40 @@ async def test_assistant_answer_notice_round_trips_on_real_oracle() -> None:
     assert by_id[answer_id].content == "合成の回答"
     assert by_id[answer_id].answer_notice == "合成の注意書き\n2 行目"
     assert by_id[user_id].answer_notice is None
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_list_messages_puts_question_before_answer_at_same_time() -> None:
+    """同じ時刻の問いと回答は、ID の順によらず問いを先に返す（#5787）。"""
+    client = OracleClient()
+    profile = await client.ensure_default_search_answer_profile()
+    conversation = await client.create_conversation(search_answer_profile_id=profile.id)
+    now = datetime.now(UTC)
+    # 回答の ID を問いより小さくし、ID の順では回答が先になるようにする。
+    user_id, answer_id = "f" + uuid4().hex[1:], "0" + uuid4().hex[1:]
+    try:
+        await client.append_message(
+            StoredMessage(
+                id=user_id,
+                conversation_id=conversation.id,
+                role="USER",
+                content="合成の質問",
+                created_at=now,
+            )
+        )
+        await client.append_message(
+            StoredMessage(
+                id=answer_id,
+                conversation_id=conversation.id,
+                role="ASSISTANT",
+                content="合成の回答",
+                reply_to_message_id=user_id,
+                status="COMPLETE",
+                created_at=now,
+            )
+        )
+        messages = await client.list_messages(conversation.id)
+    finally:
+        await client.delete_conversation(conversation.id)
+
+    assert [message.id for message in messages] == [user_id, answer_id]

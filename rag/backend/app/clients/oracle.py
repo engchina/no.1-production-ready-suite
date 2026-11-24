@@ -5227,7 +5227,9 @@ class OracleClient:
              AND m.role = 'ASSISTANT'
             WHERE m.conversation_id = :conversation_id
               AND {access_sql}
-            ORDER BY m.created_at ASC, m.message_id ASC
+            -- 同じ往復の問いと回答は同じ時刻で作るので、問いを先に並べる（#5787）。
+            -- 回答が先に来ると、履歴の組み立てがその回答を捨てる。
+            ORDER BY m.created_at ASC, CASE m.role WHEN 'USER' THEN 0 ELSE 1 END, m.message_id ASC
             {paging_sql}
             """,
                 access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
