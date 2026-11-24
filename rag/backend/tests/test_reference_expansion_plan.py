@@ -291,8 +291,12 @@ async def test_many_document_name_references_are_all_added(monkeypatch: Any) -> 
     ]
     genai = FakeGenAi({"合成資料Dの本文2": 0.9})
     receipt: dict[str, Any] = {}
+    # 目次を渡す参照先の文書の数(既定 3。#5817)より多い参照先も全部を読めるよう、上限を広げる。
     engine, _sections, llm = _outline_engine(
-        monkeypatch, ReferenceOracle([anchor], contents), genai
+        monkeypatch,
+        ReferenceOracle([anchor], contents),
+        genai,
+        rag_reference_outline_selection_max_documents=10,
     )
 
     result = await engine._reference_expansion(

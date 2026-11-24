@@ -226,7 +226,7 @@ class ContextReferenceOracle(ReferenceOracle):
         document_id: str,
         section_path: str,
         chunk_set_id: str | None = None,
-        limit: int,
+        limit: int | None,
     ) -> list[RetrievedChunk]:
         self.contexts.append(current_audit_request_context())
         return await super().retrieval_reference_chunks(

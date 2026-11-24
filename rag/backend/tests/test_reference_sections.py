@@ -2,7 +2,8 @@
 
 文書名・ファイル名だけの参照は、参照先の文書の目次を回答のモデルに 1 回渡して章節を選ばせ、
 その章節だけを読む。選べない・読めない・設定が無効のときは何も読まず(文書の中の検索もしない)、
-理由を受領記録に残す。番号つきの参照は今どおり番号で定位し、節から読む chunk の上限は設定に従う。
+理由を受領記録に残す。番号つきの参照は今どおり番号で定位し、定位した節は節の大きさで読む
+(回答のモデルの入力の上限の 1/2 以下なら全体、超えれば子の節に縮める。#5817)。
 """
 
 from __future__ import annotations
@@ -23,13 +24,16 @@ from app.rag.reference_sections import (
     REFERENCE_SECTION_PROMPT,
     SKIP_NO_SELECTION,
     SKIP_NOT_PLANNED,
+    SKIP_OUTLINE_DOCUMENT_LIMIT,
     SKIP_OUTLINE_SELECTION_DISABLED,
+    SKIP_SECTION_OVER_LIMIT,
     SKIP_SECTIONS_EMPTY,
     SKIP_SELECTION_ERROR,
     SKIP_UNKNOWN_IDS,
     DocumentReadPlan,
     ReferenceSectionChoice,
     build_catalog,
+    fit_reference_section,
     normalized_section_label,
     resolve_choice,
     without_descendants,
@@ -184,6 +188,85 @@ async def test_selected_sections_are_read_with_one_call_for_all_targets(
     (selection,) = _selections(state)
     assert selection["outcome"] == "selected"
     assert selection["documents"] == 2
+
+
+@pytest.mark.parametrize("first", [DOC_A, DOC_B], ids=["a-first", "b-first"])
+async def test_outlines_go_to_documents_up_to_the_limit_in_evidence_order(
+    monkeypatch: pytest.MonkeyPatch, first: str
+) -> None:
+    """目次を渡す参照先の文書は上限まで、根拠の並びで先に出てくるものから(#5817)。
+
+    超えた参照先の文書は目次を渡さず、理由 ``outline_document_limit`` を受領記録に残す。
+    """
+    chunks = [*_doc_chunks(DOC_A, FILE_A, 3), *_doc_chunks(DOC_B, FILE_B, 3)]
+    second = DOC_B if first == DOC_A else DOC_A
+    by_document = {DOC_A: TARGET_A, DOC_B: TARGET_B}
+    # 根拠の並び(rerank の後の起点の順)で、先の起点が first を、後の起点が second を参照する。
+    anchors = [
+        _retrieved(
+            f"doc-index:{n}",
+            f"調査は次の資料に従う。{by_document[document].label}",
+            "索引",
+            document_id="doc-index",
+            file_name="index.md",
+            targets=[by_document[document]],
+        )
+        for n, document in enumerate([first, second])
+    ]
+    oracle = ReferenceOracle(anchors, chunks)
+    oracle.documents = [(DOC_A, FILE_A, ()), (DOC_B, FILE_B, ())]
+    sections = SectionMap(chunks, outlines={DOC_A, DOC_B})
+    monkeypatch.setattr(section_map_service, "section_outline", sections.outline)
+    monkeypatch.setattr(section_map_service, "read_section", sections.read)
+    engine = _engine(
+        oracle,
+        FakeGenAi(),
+        rag_reference_outline_selection_enabled=True,
+        rag_reference_outline_selection_max_documents=1,
+    )
+    llm = FakeLlm(lambda context: [_label(context, "操作の手順")])
+    engine._reference_llm = llm
+
+    result, state = await _search(engine)
+
+    # 目次は先の参照先の文書だけに渡す(後の文書は目次の読み込みもしない。読取も同じ代役を引く)。
+    assert set(sections.outline_calls) == {first}
+    (call,) = llm.calls
+    assert f'<document name="{FILE_A if first == DOC_A else FILE_B}">' in call["context"]
+    assert [child.chunk_uid for child in result.expansion_chunks] == [f"{first}:cs:body"]
+    reads = _reads(state)
+    assert reads[first]["skip_reason"] is None
+    assert reads[second]["skip_reason"] == SKIP_OUTLINE_DOCUMENT_LIMIT
+    assert reads[second]["read_chunk_count"] == 0
+    (record,) = state.reference_sources
+    assert record["outline_max_documents"] == 1
+    outcomes = [
+        outcome
+        for source in cast(list[dict[str, Any]], record["sources"])
+        for outcome in cast(list[str], source.get("target_outcomes", []))
+    ]
+    assert SKIP_OUTLINE_DOCUMENT_LIMIT in outcomes
+
+
+async def test_outline_document_limit_defaults_to_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目次を渡す参照先の文書の数は既定 3(#5817。起点の側と同じ)。2 つの参照先は両方に渡す。"""
+    from app.config import Settings
+
+    assert Settings(_env_file=None).rag_reference_outline_selection_max_documents == 3
+    engine, _oracle, sections, _llm = _setup(
+        monkeypatch,
+        outlines={DOC_A, DOC_B},
+        pick=lambda context: [
+            line.split("[", 1)[1].split("]", 1)[0]
+            for line in context.splitlines()
+            if line.strip().endswith("操作の手順")
+        ],
+    )
+
+    _result, state = await _search(engine)
+
+    assert set(sections.outline_calls) == {DOC_A, DOC_B}
+    assert {item["skip_reason"] for item in _reads(state).values()} == {None}
 
 
 async def test_ids_not_in_the_outline_are_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -345,29 +428,144 @@ async def test_numbered_reference_does_not_use_the_outline(
     assert state.reference_reads == {}
 
 
-@pytest.mark.parametrize("enabled", [True, False], ids=["outline-on", "outline-off"])
-async def test_numbered_reference_reads_up_to_the_section_chunk_limit(enabled: bool) -> None:
-    """番号つきの参照の節は、節の先頭から設定の上限(既定 8)まで読む(目次の設定に関わらない)。"""
-    anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
-
-    cases: list[tuple[dict[str, Any], int]] = [
-        ({}, 8),
-        ({"rag_reference_section_read_max_chunks": 3}, 3),
+def _numbered_section(*children: tuple[str, int], lead: int = 0) -> list[RetrievedChunk]:
+    """番号で定位する参照先の節(「第3章 承認」)の合成の chunk。``lead`` は節そのものの本文の
+    chunk の数、``children`` は (子の節の見出し, chunk の数)。本文は 1 chunk = 10 文字。"""
+    rows = [
+        _retrieved(f"doc-1:cs-1:lead{n}", f"第3章の前書き{n:03d}", "第3章 承認")
+        for n in range(lead)
     ]
-    for settings, expected in cases:
-        oracle = ReferenceOracle([anchor], _section_chunks(10))
-        engine = _engine(oracle, rag_reference_outline_selection_enabled=enabled, **settings)
-        state = _SearchState()
-
-        result = await search_with_expansions(
-            engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+    for title, count in children:
+        rows.extend(
+            _retrieved(
+                f"doc-1:cs-1:{title}:{n}",
+                f"本文{title[:3]}{n:03d}".ljust(10, "。"),
+                f"第3章 承認 > {title}",
+            )
+            for n in range(count)
         )
+    return rows
 
-        assert [child.chunk_uid for child in result.expansion_chunks] == [
-            f"doc-1:cs-1:s{n}" for n in range(expected)
-        ]
-        (record,) = state.reference_sources
-        assert record["section_read_max_chunks"] == expected
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["outline-on", "outline-off"])
+async def test_numbered_reference_reads_the_whole_section_within_the_limit(enabled: bool) -> None:
+    """番号つきの参照の節は、文字数が回答のモデルの入力の上限の 1/2 以下なら節の全体を読む(#5817)。
+
+    chunk の数では切らない(以前の既定の 8 chunk を超えても読む)。目次の設定に関わらない。
+    """
+    anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    oracle = ReferenceOracle([anchor], _section_chunks(30))
+    engine = _engine(oracle, rag_reference_outline_selection_enabled=enabled)
+    state = _SearchState()
+
+    result = await search_with_expansions(
+        engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
+
+    assert [child.chunk_uid for child in result.expansion_chunks] == [
+        f"doc-1:cs-1:s{n}" for n in range(30)
+    ]
+    # 節の全体を読む(読取の件数の上限を渡さない)。
+    assert [call.get("limit", "unset") for call in oracle.reference_calls] == [None]
+    (record,) = state.reference_sources
+    assert record["section_limit_chars"] == engine._outline_limit_chars()
+    (read,) = cast(list[dict[str, Any]], record["section_reads"])
+    assert read["label"] == "第3章"
+    assert read["section_path"] == "第3章 承認"
+    assert read["limit_chars"] == engine._outline_limit_chars()
+    assert read["chunk_count"] == read["read_chunk_count"] == 30
+    assert read["shrunk_sections"] == read["unread_sections"] == []
+
+
+async def test_numbered_reference_over_the_limit_reads_child_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """節が上限を超えれば子の節に縮め、子も超えればさらに下へ。超える葉の節は読まず診断に残す(#5817)。"""
+    anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    rows = _numbered_section(("3.1 申請", 3), ("3.2 決裁", 6), lead=1)
+    oracle = ReferenceOracle([anchor], rows)
+    engine = _engine(oracle)
+    # 上限 40 字: 節の全体(100 字)と「3.2 決裁」(60 字)は超え、「3.1 申請」(30 字)は入る。
+    monkeypatch.setattr(engine, "_outline_limit_chars", lambda: 40)
+    state = _SearchState()
+
+    result = await search_with_expansions(
+        engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
+
+    # 節そのものの前書きと、超える葉の節「3.2 決裁」は読まない。
+    assert [child.chunk_uid for child in result.expansion_chunks] == [
+        f"doc-1:cs-1:3.1 申請:{n}" for n in range(3)
+    ]
+    (record,) = state.reference_sources
+    (read,) = cast(list[dict[str, Any]], record["section_reads"])
+    assert read["chars"] == 100
+    assert read["read_chunk_count"] == 3
+    assert read["read_chars"] == 30
+    assert [item["section_id"] for item in read["shrunk_sections"]] == ["第3章 承認"]
+    assert read["unread_sections"] == [
+        {
+            "section_id": "第3章 承認 > 3.2 決裁",
+            "title": "3.2 決裁",
+            "chars": 60,
+            "reason": "over_limit",
+        }
+    ]
+
+
+async def test_numbered_reference_leaf_over_the_limit_is_not_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """子の節を持たずに上限を超える節は読まず、参照先の理由を section_over_limit にする(#5817)。"""
+    anchor = _retrieved("doc-1:a", "承認の条件は第3章を参照。", "第1章 総則", targets=[CHAPTER3])
+    oracle = ReferenceOracle([anchor], _numbered_section(lead=5))
+    engine = _engine(oracle)
+    monkeypatch.setattr(engine, "_outline_limit_chars", lambda: 40)
+    state = _SearchState()
+
+    result = await search_with_expansions(
+        engine, SearchRequest(query="q"), state, retrieval_queries=["q"]
+    )
+
+    assert result.expansion_chunks == []
+    (record,) = state.reference_sources
+    (read,) = cast(list[dict[str, Any]], record["section_reads"])
+    assert read["read_chunk_count"] == 0
+    assert [item["reason"] for item in read["unread_sections"]] == ["over_limit"]
+    outcomes = [
+        outcome
+        for source in cast(list[dict[str, Any]], record["sources"])
+        for outcome in cast(list[str], source.get("target_outcomes", []))
+    ]
+    assert outcomes == [SKIP_SECTION_OVER_LIMIT]
+
+
+def test_fit_reference_section_builds_the_tree_from_heading_paths() -> None:
+    """見出しの列から節の木を作り、選んだ章節と同じ規則(``fit_selected_sections``)で縮める(#5817)。"""
+    root = ("第3章",)
+    rows = [
+        (("第3章",), 5),
+        (("第3章", "3.1"), 10),
+        (("第3章", "3.1", "(1)"), 10),
+        (("第3章", "3.2"), 30),
+        (("第3章", "3.2", "(1)"), 20),
+        (("第3章", "3.2", "(2)"), 40),
+        (("第4章",), 99),
+    ]
+
+    whole = fit_reference_section(root, rows, 200)
+    assert whole.chars == 115
+    assert whole.indexes == [0, 1, 2, 3, 4, 5]
+    assert whole.fitted.section_ids == ["第3章"]
+
+    shrunk = fit_reference_section(root, rows, 30)
+    # 3.1(20 字)は全体、3.2(90 字)は子へ。3.2 の前書き(30 字)は読まず、(2)(40 字)は超える葉。
+    assert shrunk.fitted.section_ids == ["第3章 > 3.1", "第3章 > 3.2 > (1)"]
+    assert shrunk.indexes == [1, 2, 4]
+    assert [item["section_id"] for item in shrunk.fitted.shrunk] == ["第3章", "第3章 > 3.2"]
+    assert [item["section_id"] for item in shrunk.fitted.unread] == ["第3章 > 3.2 > (2)"]
+
+    assert fit_reference_section(("第9章",), rows, 30).indexes == []
 
 
 def test_resolve_choice_keeps_only_catalog_ids_once() -> None:
@@ -411,13 +609,13 @@ def test_limits_default_to_the_previous_constants(monkeypatch: pytest.MonkeyPatc
         "rag_reference_outline_selection_read_max_chunks",
         "rag_outline_selection_catalog_max_chars",
         "rag_outline_selection_read_max_chars",
+        # 番号つきの参照の節から読む chunk の上限(#5348)も削除した(節の大きさで読む。#5817)。
+        "rag_reference_section_read_max_chunks",
     )
     for name in removed:
         monkeypatch.setenv(name.upper(), "12")
     settings = Settings(_env_file=None)
     assert not any(hasattr(settings, name) for name in removed)
-    # 番号つきの参照の節から読む chunk の上限は、設定にする前の定数(8)と同じ(#5348)。
-    assert settings.rag_reference_section_read_max_chunks == 8
     # 目次の行の書き出しの字数も、設定にする前の定数と同じ(#5345)。
     assert settings.rag_outline_lead_chars == 60
 
@@ -425,8 +623,8 @@ def test_limits_default_to_the_previous_constants(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.parametrize(
     ("name", "low", "high"),
     [
-        ("rag_reference_section_read_max_chunks", 1, 50),
         ("rag_outline_lead_chars", 0, 200),
+        ("rag_reference_outline_selection_max_documents", 1, 10),
     ],
 )
 def test_limits_reject_values_out_of_range(name: str, low: int, high: int) -> None:

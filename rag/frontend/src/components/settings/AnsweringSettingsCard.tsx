@@ -39,21 +39,17 @@ const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200
   label: t("settings.answering.answerTimeoutOption", { seconds: String(seconds) }),
 }));
 
-// .env で選択肢の外の値を保存していれば、その値も選べるように足す。
-// 番号つきの参照の節から読むチャンクの上限（#5348。範囲は backend の rag_reference_section_read_max_chunks と同じ 1〜50）。
-const REFERENCE_SECTION_READ_CHUNK_CHOICES = [4, 8, 16, 32, 50];
-// 起点の文書の目次の選択で目次を渡す文書の数（#5324。範囲は backend の rag_outline_selection_max_documents と同じ）。
+// 目次を渡す文書の数（起点の文書 #5324・参照先の文書 #5817。範囲は backend の rag_outline_selection_max_documents・
+// rag_reference_outline_selection_max_documents と同じ）。
 // 目次の字数と読む章節の大きさは回答モデルの入力上限の 1/2 で決め、設定は無い（2 つの目次の選択で同じ。#5816）。
+// 番号で示した参照の節も同じ規則で読み、設定は無い（#5817）。
 const OUTLINE_DOCUMENT_CHOICES = Array.from({ length: 10 }, (_, n) => n + 1);
 
+// .env で選択肢の外の値を保存していれば、その値も選べるように足す。
 function countOptions(choices: number[], current: number, label: (value: number) => string): SelectFieldOption<string>[] {
   return [...new Set([...choices, current])]
     .sort((left, right) => left - right)
     .map((value) => ({ value: String(value), label: label(value) }));
-}
-
-function chunkOption(value: number): string {
-  return t("settings.answering.chunksOption", { count: value.toLocaleString("ja-JP") });
 }
 
 type AnsweringDraft = Omit<
@@ -73,8 +69,8 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     rerank_enabled: settings.rerank_enabled,
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
-    reference_section_read_max_chunks: settings.reference_section_read_max_chunks ?? 8,
     reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? true,
+    reference_outline_selection_max_documents: settings.reference_outline_selection_max_documents ?? 3,
     outline_selection_enabled: settings.outline_selection_enabled ?? true,
     outline_selection_max_documents: settings.outline_selection_max_documents ?? 3,
     section_expansion_enabled: settings.section_expansion_enabled,
@@ -271,21 +267,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         </div>
       </SettingsGroup>
       <SettingsGroup id="search-expansion-title" title={t("settings.answering.searchExpansionTitle")} flush>
-        <div className="p-3">
-        <FormGrid>
-        <SelectField
-          id="answering-reference-section-read-max-chunks"
-          className="min-w-0"
-          disabled={disabled}
-          label={t("settings.answering.referenceSectionReadMaxChunks")}
-          helper={t("settings.answering.referenceSectionReadMaxChunksHint")}
-          value={String(form.reference_section_read_max_chunks)}
-          options={countOptions(REFERENCE_SECTION_READ_CHUNK_CHOICES, form.reference_section_read_max_chunks, chunkOption)}
-          width="xs"
-          onValueChange={(value) => update({ reference_section_read_max_chunks: Number(value) })}
-        />
-        </FormGrid>
-        </div>
         <div>
           <SwitchRow
             id="answering-reference-outline-selection"
@@ -295,6 +276,12 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             disabled={disabled}
             onChange={(checked) => update({ reference_outline_selection_enabled: checked })}
           />
+          {form.reference_outline_selection_enabled ? <FormGrid className="px-3 pb-3">
+            <SelectField id="answering-reference_outline_selection_max_documents" label={t("settings.answering.reference_outline_selection_max_documents")} width="xs"
+              value={String(form.reference_outline_selection_max_documents)} disabled={disabled}
+              options={countOptions(OUTLINE_DOCUMENT_CHOICES, form.reference_outline_selection_max_documents, String)}
+              onValueChange={(value) => update({ reference_outline_selection_max_documents: Number(value) })} />
+          </FormGrid> : null}
         </div>
         <div>
           <SwitchRow id="answering-outline-selection" label={t("settings.answering.outlineSelection")}

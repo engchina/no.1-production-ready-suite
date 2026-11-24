@@ -10,7 +10,8 @@
  *   `FormGrid` の読みやすい最大幅（--form-max-width 60rem）まで。
  *   段の幅は入力欄・選択欄そのものに付け、ラベルと必須の印は段の幅で折り返さず 1 行で出す（#1746）。
  *   補足・エラーの文は欄の幅ではなく、欄を置いた枠（grid のセル・FormGrid の段・カード）の幅で折り返す（#2063）。
- *   横に並べる行（flex）の中では min(20rem, 親の幅) より狭くは折り返さない（#1891 段 5）。
+ *   1 行はフォームの最大幅（60rem）までで、FormGrid の 2 列で行に 1 つの欄だけは置き場所（カード）の行の幅まで
+ *   （#5817）。横に並べる行（flex）の中では min(20rem, 親の幅) より狭くは折り返さない（#1891 段 5）。
  *
  * Tailwind が dist からクラス名を拾えるように、クラスは文字列のまま書く（組み立てない）。
  */
@@ -95,9 +96,9 @@ export const FIELD_CONTROL_WIDTH_CLASS: Record<FieldWidth, string | undefined> =
 /**
  * 段の幅を持つ欄の補足・エラーなどの文（#1746）。外枠の幅を広げず（`contain: inline-size` で文の長さを外枠の幅の
  * 計算に入れない）、外枠の幅で折り返す。補足・エラーのある外枠は置いた枠の幅まで広がる（`FIELD_BOX_TEXT_WIDTH_CLASS`。
- * #2063）ので、文は枠の幅で折り返す。枠が広くても 1 行はフォームの読みやすい最大幅（`--form-max-width` 60rem）まで。
+ * #2063）ので、文は枠の幅で折り返す。1 行の上限は文ではなく外枠が持つ（`FIELD_BOX_TEXT_WIDTH_CLASS`。#5817）。
  */
-export const FIELD_TEXT_CONTAIN_CLASS = "sm:[contain:inline-size] sm:max-w-[var(--form-max-width)]";
+export const FIELD_TEXT_CONTAIN_CLASS = "sm:[contain:inline-size]";
 
 /** 補足・エラーの文を折り返す最小の幅（rem。`md` の段と同じ 20rem = 12px の文で約 23 文字）。#1891 段 5 */
 export const FIELD_TEXT_MIN_WIDTH_REM = FIELD_WIDTH_REM.md;
@@ -108,8 +109,42 @@ export const FIELD_TEXT_MIN_WIDTH_REM = FIELD_WIDTH_REM.md;
  * 欄の幅や 20rem で 2 行に折り返さない）。grid のセルの中に収まり、隣の欄にははみ出さない。入力欄の幅は段のまま。
  * 横に並べる行（flex）の中では `auto` は中身の幅（入力欄とラベル）になり、行の並びを変えない
  * （下の最小の幅 `FIELD_BOX_TEXT_MIN_WIDTH_CLASS` まで）。
+ *
+ * 外枠（= 文）の幅は、置いた枠が広くてもフォームの読みやすい最大幅（`--form-max-width` 60rem）まで。ただし
+ * `FormGrid` の 2 列で行に 1 つの欄（行の全体にまたがる項目）は、`--form-grid-row-extend`（置き場所の幅 − 60rem。
+ * `styles/structure/form-grid.css`）だけ右へ広がり、文は置き場所（カード）の行の幅で折り返す（同じカードの切り替えの
+ * 行の説明と同じ幅。#5817）。変数は継承しないので、行に 1 つの項目そのものである欄だけが広がる（ほかは 0）。
+ * 広げた幅は `--field-row-extend` として中へ渡す（継承する。`TextareaField` の文字数を入力欄の右端の下に残す）。
  */
-export const FIELD_BOX_TEXT_WIDTH_CLASS = "w-full sm:w-auto sm:max-w-full";
+export const FIELD_BOX_TEXT_WIDTH_CLASS =
+  "w-full sm:w-auto sm:max-w-[calc(min(100%,var(--form-max-width))_+_var(--form-grid-row-extend))] sm:-mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]";
+
+/**
+ * 補足・エラーの文を持つ、`full` の欄の外枠（#5817）。`FormGrid` の 2 列で行に 1 つの欄は、段の幅の欄と同じく
+ * `--form-grid-row-extend` だけ右へ広がり、文は置き場所（カード）の行の幅で折り返す。入力欄は広げない
+ * （`FIELD_CONTROL_FULL_TEXT_CLASS`。`FormGrid` の 60rem のまま）。ほかの置き場所（変数が 0）では `w-full` と同じ。
+ */
+export const FIELD_BOX_FULL_TEXT_CLASS =
+  "w-[calc(100%_+_var(--form-grid-row-extend))] -mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]";
+
+/**
+ * 補足・エラーの文を持つ、幅の段の無い欄の外枠（#5817）。幅は親に任せ（block・grid のセルでは置いた枠の幅いっぱい）、
+ * `FormGrid` の 2 列で行に 1 つの欄だけ `full` の欄と同じく右へ広げる。
+ */
+export const FIELD_BOX_AUTO_TEXT_CLASS =
+  "-mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]";
+
+/**
+ * 補足・エラーの文を持つ `full`・幅の段の無い欄の入力欄（#5817）。外枠を行の幅まで広げても、入力欄は広げる前の
+ * 幅（外枠の幅 − 広げた幅）のまま。広げない置き場所では外枠の幅いっぱい。
+ */
+export const FIELD_CONTROL_FULL_TEXT_CLASS = "max-w-[calc(100%_-_var(--field-row-extend,0px))]";
+
+/**
+ * 欄の外枠の中で、外枠を行の幅まで広げても広げる前の右端に残すもの（ラベルの行の右の状態・`TextareaField` の
+ * 文字数・`SecretField` の削除の選択の枠。#5817）。広げない置き場所では 0。補足・エラーの文には付けない。
+ */
+export const FIELD_ROW_UNEXTENDED_CLASS = "mr-[var(--field-row-extend,0px)]";
 
 /**
  * 補足・エラーの文を持つ、段の幅の欄の外枠の最小の幅（#1891 段 5）。sm 以上は `min(20rem, 親の幅)`。
@@ -156,17 +191,19 @@ export const FIELD_CONTROL_WIDTH_CONTAINER_CLASS: Record<FieldWidth, string | un
 };
 
 /** container の幅で切り替える補足の文（`FIELD_TEXT_CONTAIN_CLASS` の container 版）。 */
-export const FIELD_TEXT_CONTAIN_CONTAINER_CLASS = "@md:[contain:inline-size] @md:max-w-[var(--form-max-width)]";
+export const FIELD_TEXT_CONTAIN_CONTAINER_CLASS = "@md:[contain:inline-size]";
 
 /** container の幅で切り替える、補足・エラーのある外枠の幅（`FIELD_BOX_TEXT_WIDTH_CLASS` の container 版）。 */
-export const FIELD_BOX_TEXT_WIDTH_CONTAINER_CLASS = "w-full @md:w-auto @md:max-w-full";
+export const FIELD_BOX_TEXT_WIDTH_CONTAINER_CLASS =
+  "w-full @md:w-auto @md:max-w-[calc(min(100%,var(--form-max-width))_+_var(--form-grid-row-extend))] @md:-mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]";
 
 /** container の幅で切り替える、補足・エラーのある外枠の最小の幅（`FIELD_BOX_TEXT_MIN_WIDTH_CLASS` の container 版）。 */
 export const FIELD_BOX_TEXT_MIN_WIDTH_CONTAINER_CLASS = "@md:min-w-[min(var(--field-width-md),100%)]";
 
 /**
- * ラベルを持つ欄の幅のクラス（外枠・入力欄・補足の文）。`width` が無いか `full` なら何も付けない
- * （外枠は親の幅いっぱい、入力欄は外枠の幅いっぱい）。`scope` は幅を切り替える基準（既定 viewport。#1933）。
+ * ラベルを持つ欄の幅のクラス（外枠・入力欄・補足の文）。`width` が無いか `full` なら外枠は親の幅いっぱい、入力欄は
+ * 外枠の幅いっぱい（文があれば、`FormGrid` の 2 列で行に 1 つの欄だけ外枠を行の幅まで広げ、入力欄は広げない。
+ * #5817）。`scope` は幅を切り替える基準（既定 viewport。#1933）。
  * `hasText`（補足・エラーなどの文がある）なら、外枠を置いた枠の幅まで広げ（`width: auto`。#2063）、文を枠の幅で
  * 折り返す。横に並べる行（flex）の中では、外枠は中身の幅と読みやすい最小の幅（min(20rem, 親の幅)。#1891 段 5）の
  * 広いほう。
@@ -177,7 +214,12 @@ export function labeledFieldWidthClasses(
   hasText = false
 ) {
   if (!width || width === "full") {
-    return { box: fieldWidthClass(width, scope), control: undefined, text: undefined };
+    if (!hasText) return { box: fieldWidthClass(width, scope), control: undefined, text: undefined };
+    return {
+      box: width ? FIELD_BOX_FULL_TEXT_CLASS : FIELD_BOX_AUTO_TEXT_CLASS,
+      control: FIELD_CONTROL_FULL_TEXT_CLASS,
+      text: undefined,
+    };
   }
   if (scope === "container") {
     return {

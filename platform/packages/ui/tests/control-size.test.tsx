@@ -137,12 +137,12 @@ describe("幅の段（width）", () => {
     expect(classesOf(openingTag(plain, /class="relative /))).toContain("sm:w-[var(--field-width-xs)]");
     // 補足・エラーのある外枠は置いた枠の幅（auto）。入力欄の枠は段の幅のまま（#2063）。
     const text = textField({ width: "xs", required: true, helper: "1〜100000 の整数。", error: "範囲外です。" });
-    expect(rootClasses(text)).toEqual(expect.arrayContaining(["w-full", "sm:w-auto", "sm:max-w-full"]));
+    expect(rootClasses(text)).toEqual(expect.arrayContaining(FIELD_BOX_TEXT_WIDTH_CLASS.split(" ")));
     expect(rootClasses(text)).not.toContain("sm:w-fit");
     expect(classesOf(openingTag(text, /class="relative /))).toContain("sm:w-[var(--field-width-xs)]");
-    // 補足・エラーは外枠を広げない（外枠の幅で折り返し、1 行はフォームの最大幅まで）。
+    // 補足・エラーは外枠を広げない（外枠の幅で折り返す。1 行の上限は外枠が持つ。#5817）。
     const textClasses = FIELD_TEXT_CONTAIN_CLASS.split(" ");
-    expect(textClasses).toEqual(["sm:[contain:inline-size]", "sm:max-w-[var(--form-max-width)]"]);
+    expect(textClasses).toEqual(["sm:[contain:inline-size]"]);
     expect(classesOf(openingTag(text, /^<p\b[^>]*-hint"/))).toEqual(expect.arrayContaining(textClasses));
     expect(classesOf(openingTag(text, /role="alert"/))).toEqual(expect.arrayContaining(textClasses));
 
@@ -160,7 +160,11 @@ describe("幅の段（width）", () => {
   });
 
   it("補足・エラーのある段の欄は、外枠が置いた枠の幅（auto）で、横に並べる行でも min(20rem, 親の幅) 以上（#1891 段 5・#2063）", () => {
-    expect(FIELD_BOX_TEXT_WIDTH_CLASS).toBe("w-full sm:w-auto sm:max-w-full");
+    // 外枠は置いた枠の幅で、1 行はフォームの最大幅（60rem）まで。FormGrid の 2 列で行に 1 つの欄は、
+    // --form-grid-row-extend（置き場所の幅 − 60rem）だけ右へ広がる（#5817）。
+    expect(FIELD_BOX_TEXT_WIDTH_CLASS).toBe(
+      "w-full sm:w-auto sm:max-w-[calc(min(100%,var(--form-max-width))_+_var(--form-grid-row-extend))] sm:-mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]"
+    );
     expect(FIELD_BOX_TEXT_MIN_WIDTH_CLASS).toBe("sm:min-w-[min(var(--field-width-md),100%)]");
     // 補足・エラーの無い欄は外枠を広げない（ツールバーの xs / sm の欄の並びを変えない）。
     expect(labeledFieldWidthClasses("xs").box).not.toContain(FIELD_BOX_TEXT_MIN_WIDTH_CLASS);
@@ -170,10 +174,20 @@ describe("幅の段（width）", () => {
       `${FIELD_BOX_TEXT_WIDTH_CLASS} ${FIELD_BOX_TEXT_MIN_WIDTH_CLASS}`
     );
     expect(labeledFieldWidthClasses("sm", "container", true).box).toBe(
-      "w-full @md:w-auto @md:max-w-full @md:min-w-[min(var(--field-width-md),100%)]"
+      "w-full @md:w-auto @md:max-w-[calc(min(100%,var(--form-max-width))_+_var(--form-grid-row-extend))] @md:-mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)] @md:min-w-[min(var(--field-width-md),100%)]"
     );
-    expect(labeledFieldWidthClasses("full", "viewport", true).box).toBe("w-full");
-    expect(labeledFieldWidthClasses(undefined, "viewport", true).box).toBeUndefined();
+    // full・幅の段の無い欄は、FormGrid の 2 列で行に 1 つの欄だけ外枠を行の幅まで広げ、入力欄は広げない（#5817）。
+    // ほかの置き場所（--form-grid-row-extend が 0）では w-full・親の幅と同じ。文の無い欄は従来どおり。
+    expect(labeledFieldWidthClasses("full", "viewport", true)).toEqual({
+      box: "w-[calc(100%_+_var(--form-grid-row-extend))] -mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]",
+      control: "max-w-[calc(100%_-_var(--field-row-extend,0px))]",
+      text: undefined,
+    });
+    expect(labeledFieldWidthClasses(undefined, "viewport", true).box).toBe(
+      "-mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]"
+    );
+    expect(labeledFieldWidthClasses("full").box).toBe("w-full");
+    expect(labeledFieldWidthClasses(undefined).box).toBeUndefined();
 
     // 入力欄の幅は段のまま（外枠だけが文の幅まで広がる）。
     const helper = textField({ width: "xs", helper: "前後の子チャンクを何件まで加えるか。0 で加えない。" });
@@ -205,11 +219,29 @@ describe("幅の段（width）", () => {
   });
 
   it("full は外枠も入力欄も親の幅いっぱい（補足の文の扱いも変えない）", () => {
+    const plain = textField({ width: "full" });
+    expect(rootClasses(plain)).toContain("w-full");
+    expect(classesOf(openingTag(plain, /class="relative/))).toEqual(["relative"]);
+    // 補足のある full の欄は、FormGrid の 2 列で行に 1 つのときだけ外枠を行の幅まで広げ（ほかの置き場所では
+    // 100% + 0）、入力欄は広げる前の幅のまま（#5817）。
     const html = textField({ width: "full", helper: "補足" });
-    expect(rootClasses(html)).toContain("w-full");
+    expect(rootClasses(html)).toContain("w-[calc(100%_+_var(--form-grid-row-extend))]");
     expect(rootClasses(html)).not.toContain("sm:w-fit");
-    expect(classesOf(openingTag(html, /class="relative/))).toEqual(["relative"]);
+    expect(classesOf(openingTag(html, /class="relative/))).toEqual([
+      "relative",
+      "max-w-[calc(100%_-_var(--field-row-extend,0px))]",
+    ]);
     expect(html).not.toContain("[contain:inline-size]");
+  });
+
+  it("外枠を行の幅まで広げても、ラベルの行の状態・文字数は広げる前の右端に残す（#5817）", () => {
+    expect(secretField({ width: "lg", helper: "補足" })).toContain(
+      'class="flex min-h-5 flex-wrap items-center justify-between gap-2 mr-[var(--field-row-extend,0px)]"'
+    );
+    const textarea = renderToStaticMarkup(
+      <TextareaField id="t" label="メモ" value="" onChange={noop} width="full" helper="補足" maxLength={20} showCount />
+    );
+    expect(textarea).toContain("ml-auto shrink-0 text-xs leading-relaxed tabular-nums text-fg-muted mr-[var(--field-row-extend,0px)]");
   });
 
   it("指定しなければ幅のクラスを付けない（フォームの grid のセルいっぱい）", () => {

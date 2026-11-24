@@ -13,7 +13,8 @@ ID は捨てる）。文書が複数でも 1 回の呼び出しにまとめる�
   章節を選び、選んだ章節だけを読む。目次が無い・読めない、選択が失敗した・何も選ばない、返った ID が
   すべて目次に無い、選んだ章節を読めない、目次から選ぶ設定が無効のときは何も読まず（参照の記述の
   chunk はそのまま根拠に残る）、理由を受領記録に残す（#5348）。番号つきの参照（条・章・様式など）は
-  今どおり番号で定位し、この経路を通らない。
+  今どおり番号で定位し、この経路を通らない（定位した節の読み方は下と同じ規則。``fit_reference_section``。
+  #5817）。
 - 一般の質問（#5324）: 起点の文書のうち章節の木を持つ文書の目次から章節を選ぶ。
   検索の字面では関連が低く見えるが答えに要る章節は rerank の上位に入らないので、選んだ章節は検索拡張
   （#5162）と同じく rerank にかけず、context の枠の外で根拠に足す。選べないときは何も足さない
@@ -27,6 +28,10 @@ ID は捨てる）。文書が複数でも 1 回の呼び出しにまとめる�
 - 選んだ章節: 文字数がこの字数以下なら章節の全体を読み、超えれば子の章節に縮める（子も超えれば
   さらに下へ。``fit_selected_sections``）。超える葉の章節は読まずに受領記録に残す。読む章節の数・
   合計の字数の上限は無く、1 回の生成に入らない分は分割読取が読む。
+
+番号つきの参照（第 3 章・別紙 1 など）の、番号で定位した参照先の節も同じ規則で読む（#5817）。
+節の文字数がこの字数以下なら節の全体を読み、超えれば子の節に縮める（``fit_reference_section``。
+節の木は参照先の節の chunk の見出しの列から作り、``fit_selected_sections`` で縮める）。
 """
 
 from __future__ import annotations
@@ -93,6 +98,10 @@ SKIP_SECTIONS_OVER_LIMIT = "selected_sections_over_limit"
 # #5348）。ほかの理由（目次が無い・読めない・選択の失敗・何も選ばない・ID がすべて目次に無い・
 # 選んだ章節を読めない）は一般の質問の理由と同じ名前を使う。
 SKIP_OUTLINE_SELECTION_DISABLED = "outline_selection_disabled"
+# 目次を渡す参照先の文書の数（``rag_reference_outline_selection_max_documents``）を超えた参照先。
+# 根拠の並びで先に出てくる参照先の文書から上限まで目次を渡し、超えた文書の参照先は目次を渡さない
+# （#5817）。
+SKIP_OUTLINE_DOCUMENT_LIMIT = "outline_document_limit"
 SKIP_NOT_PLANNED = "not_planned"
 # 文書を対象にしなかった理由（受領記録の文書ごとの ``skip_reason``。2 つの経路で共有）。
 DOCUMENT_NO_OUTLINE = "no_outline"
@@ -102,6 +111,11 @@ READ_STOP_DEADLINE = "deadline"
 # 選んだ章節（を縮めた葉の章節）を読まなかった理由（受領記録の ``unread_sections`` の
 # ``reason``。#5816）。
 UNREAD_OVER_LIMIT = "over_limit"
+# 番号つきの参照の参照先の節が、子の節に縮めても回答のモデルの入力の上限の 1/2 を超え、読める節が
+# 無かった（参照先の受領記録の ``status``。#5817）。
+SKIP_SECTION_OVER_LIMIT = "section_over_limit"
+# 番号つきの参照の参照先の節の木の、節の ID の区切り（chunk の ``section_path`` と同じ）。
+_REFERENCE_PATH_SEPARATOR = " > "
 
 
 class ReferenceSectionChoice(BaseModel):
@@ -325,6 +339,75 @@ def fit_selected_sections(
         if (picked := by_id.get(section_id)) is not None:
             visit(picked)
     return FittedSections(section_ids=section_ids, shrunk=shrunk, unread=unread)
+
+
+@dataclass(frozen=True)
+class FittedReferenceSection:
+    """番号つきの参照の参照先の節を大きさの上限に合わせた結果（#5817）。
+
+    ``indexes`` は読む chunk（入力の ``rows`` の位置。読み順のまま）、``chars`` は参照先の節の全体の
+    文字数、``fitted`` は節の全体・縮めた子の節・読まない葉の節（``fit_selected_sections`` の結果。
+    節の ID は見出しの列を「 > 」でつないだもの）。
+    """
+
+    indexes: list[int]
+    chars: int
+    fitted: FittedSections
+
+
+def fit_reference_section(
+    root: Sequence[str], rows: Sequence[tuple[Sequence[str], int]], max_chars: int
+) -> FittedReferenceSection:
+    """番号で定位した参照先の節（見出しの列 ``root``）を、文字数（1 文字 = 1 token）が ``max_chars``
+    以下の節にする（#5817。選んだ章節と同じ規則。``fit_selected_sections``）。
+
+    ``rows`` は参照先の節とその下の節の chunk の (見出しの列, 文字数) を読み順に並べたもの。
+    見出しの列から節の木（参照先の節を根に、下の節は見出しの列の段ごと。文字数は下の節の分を
+    含む）を作る。節の全体が ``max_chars`` 以下なら全体を読み、超えれば子の節に縮める（子も
+    超えればさらに下へ）。子の節を持たずに超える節は読まない。縮めた節の、子の節より前の本文
+    （節そのものの見出しの列の chunk）は読まない。
+    """
+    base = tuple(root)
+    nodes: dict[tuple[str, ...], list[int]] = {}
+    paths: list[tuple[str, ...]] = []
+    for path, chars in rows:
+        current = tuple(path)
+        paths.append(current)
+        if current[: len(base)] != base:
+            continue
+        for depth in range(len(base), len(current) + 1):
+            stats = nodes.setdefault(current[:depth], [0, 0])
+            stats[0] += 1
+            stats[1] += max(0, int(chars))
+
+    def section_id(path: tuple[str, ...]) -> str:
+        return _REFERENCE_PATH_SEPARATOR.join(path)
+
+    sections = [
+        SectionNode(
+            section_id=section_id(path),
+            title=path[-1] if path else "",
+            level=len(path),
+            ordinal=ordinal,
+            parent_section_id=section_id(path[:-1]) if len(path) > len(base) else None,
+            page_start=None,
+            page_end=None,
+            chunk_count=count,
+            chars=chars,
+        )
+        for ordinal, (path, (count, chars)) in enumerate(nodes.items())
+    ]
+    if base not in nodes:
+        return FittedReferenceSection(indexes=[], chars=0, fitted=FittedSections([], [], []))
+    fitted = fit_selected_sections(sections, [section_id(base)], max_chars)
+    kept = set(fitted.section_ids)
+    indexes = [
+        index
+        for index, path in enumerate(paths)
+        if path[: len(base)] == base
+        and any(section_id(path[:depth]) in kept for depth in range(len(base), len(path) + 1))
+    ]
+    return FittedReferenceSection(indexes=indexes, chars=nodes[base][1], fitted=fitted)
 
 
 def fit_catalog(

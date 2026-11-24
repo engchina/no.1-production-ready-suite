@@ -1369,13 +1369,15 @@ class OracleClient:
         document_id: str,
         section_path: str,
         chunk_set_id: str | None = None,
-        limit: int,
+        limit: int | None,
     ) -> list[RetrievedChunk]:
         """交差参照の参照先の節(``section_path`` とその下の節)の chunk を読み順に返す(#1280)。
 
         見え方は検索と同じ条件(tenant・利用できるナレッジベース・有効な chunk_set)。
         ``chunk_set_id`` を渡すと、その版(参照元と同じレシピの出力)だけを読む。
         chunk_set ごとにまとめて並べるので、先頭の chunk_set の chunk から順に返る。
+        ``limit`` が None なら節の全体を読む(番号つきの参照の参照先は節の大きさで読む範囲を決める。
+        #5817)。
         """
         scoped = {**filters, "document_id": document_id}
         if chunk_set_id:
@@ -1402,10 +1404,11 @@ class OracleClient:
                 WHERE {where_sql}
                   AND ({section_sql})
                 ORDER BY c.chunk_set_id, c.chunk_index, c.chunk_id
-            ) WHERE ROWNUM <= :reference_limit
+            ){limit_sql}
             """,
                 where_sql=where_sql,
                 section_sql=_reference_section_sql(section_path, prefix),
+                limit_sql="" if limit is None else " WHERE ROWNUM <= :reference_limit",
             ),
             {
                 **binds,
@@ -1414,7 +1417,7 @@ class OracleClient:
                 "reference_prefix_length": len(prefix),
                 # CLOB の長さは UTF-16 の単位で数える(4 バイト文字は 2)。
                 "reference_prefix_lob_length": len(prefix.encode("utf-16-le")) // 2,
-                "reference_limit": max(1, int(limit)),
+                **({} if limit is None else {"reference_limit": max(1, int(limit))}),
             },
         )
         return [_retrieved_chunk_from_row(row) for row in rows]

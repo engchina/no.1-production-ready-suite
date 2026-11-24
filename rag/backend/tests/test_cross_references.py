@@ -773,7 +773,7 @@ class ReferenceOracle:
         document_id: str,
         section_path: str,
         chunk_set_id: str | None = None,
-        limit: int,
+        limit: int | None,
     ) -> list[RetrievedChunk]:
         self.reference_calls.append(
             {
@@ -781,6 +781,7 @@ class ReferenceOracle:
                 "document_id": document_id,
                 "section_path": section_path,
                 "chunk_set_id": chunk_set_id,
+                "limit": limit,
             }
         )
         if self.fail:

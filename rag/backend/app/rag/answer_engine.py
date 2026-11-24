@@ -135,7 +135,7 @@ from app.rag.entity_expansion import (
     expansion_metadata,
     plan_entity_expansion,
 )
-from app.rag.reference_sections import OUTLINE_SELECTION_KEY
+from app.rag.reference_sections import OUTLINE_SELECTION_KEY, SKIP_SECTION_OVER_LIMIT
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
@@ -321,6 +321,12 @@ class _SearchState:
     # #5263・#5348)と、章節を選ぶ呼び出しの記録。
     reference_reads: dict[tuple[str, ...], Any] = field(default_factory=dict)
     reference_section_selections: list[dict[str, object]] = field(default_factory=list)
+    # 目次を渡した参照先の文書((document_id, chunk_set_id)。根拠の並びで先に出てきた順)。
+    # ``rag_reference_outline_selection_max_documents`` まで(1 回の回答で数える。#5817)。
+    reference_outline_documents: list[tuple[str, str]] = field(default_factory=list)
+    # 番号つきの参照の参照先の節の読み方(参照先の鍵ごと。節の全体か、子の節に縮めたか、上限を超えて
+    # 読まなかった節。#5817)。
+    reference_section_reads: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
     # 起点の文書の目次から章節を選んだ記録(#5324。1 回の回答で 1 回だけ選ぶ。None は
     # 未実行)と、読んで足した chunk(以後の検索は同じ chunk を返す)。
     outline_selection: dict[str, object] | None = None
@@ -1575,8 +1581,9 @@ class AnswerEngine:
                             "参照先の独立読取上限": (
                                 self._settings.rag_reference_expansion_max_targets
                             ),
-                            "番号つきの参照の節あたりの読取 Chunk 数": (
-                                self._settings.rag_reference_section_read_max_chunks
+                            "番号つきの参照の節の大きさの上限(字)": (self._outline_limit_chars()),
+                            "目次を渡す参照先の文書の数": (
+                                self._settings.rag_reference_outline_selection_max_documents
                             ),
                             "文書全体への参照の読み方": (
                                 "目次から回答のモデルが選んだ章節だけを読みます。選べないときは"
@@ -2188,7 +2195,10 @@ class AnswerEngine:
             "checked_sources": min(len(anchors), limit),
             "outside_sources": max(0, len(anchors) - limit),
             "target_limit": target_budget,
-            "section_read_max_chunks": self._settings.rag_reference_section_read_max_chunks,
+            # 番号つきの参照の参照先の節 1 つの大きさの上限(回答のモデルの入力の上限の 1/2。#5817)。
+            "section_limit_chars": self._outline_limit_chars(),
+            # 目次を渡す参照先の文書の数(#5817)。
+            "outline_max_documents": self._settings.rag_reference_outline_selection_max_documents,
             "deadline_reserve_seconds": reserve,
             "added_count": 0,
             "sources": sources,
@@ -2288,12 +2298,16 @@ class AnswerEngine:
                     )
                     loaded[key] = chunks
                     plan = state.reference_reads.get(key)
+                    section_read = state.reference_section_reads.get(key)
                     statuses[key] = (
                         "available"
                         if chunks
                         # 文書全体への参照で読まなかった理由(目次から選べない・設定が無効。#5348)。
                         else plan.skip_reason
                         if plan is not None and plan.skip_reason
+                        # 番号つきの参照の節が、子の節に縮めても入力の上限の 1/2 を超えた(#5817)。
+                        else SKIP_SECTION_OVER_LIMIT
+                        if section_read is not None and section_read.get("chunk_count")
                         else _reference_document_outcome(scope, state, anchor, target)
                     )
                 except Exception as exc:  # noqa: BLE001 - この参照の未充足を記録して続ける。
@@ -2310,6 +2324,11 @@ class AnswerEngine:
                     **(
                         {"document_read": state.reference_reads[key].receipt()}
                         if key in state.reference_reads
+                        else {}
+                    ),
+                    **(
+                        {"section_read": state.reference_section_reads[key]}
+                        if key in state.reference_section_reads
                         else {}
                     ),
                 }
@@ -2469,6 +2488,16 @@ class AnswerEngine:
                     }
                     for key in targets
                     if key in state.reference_reads
+                ][:_REFERENCE_DIAGNOSTICS_LIMIT],
+                # 番号つきの参照の参照先の節の読み方(節の全体 / 子の節に縮めた / 上限を超えて
+                # 読まなかった節。#5817)。
+                "section_reads": [
+                    {
+                        "label": targets[key][1].label,
+                        **state.reference_section_reads[key],
+                    }
+                    for key in targets
+                    if key in state.reference_section_reads
                 ][:_REFERENCE_DIAGNOSTICS_LIMIT],
                 "section_selections": state.reference_section_selections[
                     -_REFERENCE_DIAGNOSTICS_SEARCHES:
@@ -2756,10 +2785,10 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """参照先の節の chunk(読み順)。同じ文書は参照元と同じ版(chunk_set)から読む。
 
-        番号つきの参照は番号で定位した節の先頭から ``rag_reference_section_read_max_chunks``
-        件まで。文書全体への参照(文書名だけ。#1400)は、目次から選んだ章節だけ(#5263・#5348)。
+        番号つきの参照は番号で定位した節を、節の大きさで読む(#5817。``_fit_reference_section``。
+        回答のモデルの入力の上限の 1/2 以下なら全体、超えれば子の節に縮める)。文書全体への参照
+        (文書名だけ。#1400)は、目次から選んだ章節だけ(#5263・#5348)。
         """
-        limit = self._settings.rag_reference_section_read_max_chunks
         key = _reference_target_cache_key(scope, anchor, target, request, question)
         if target.document_title is None:
             if target.section_path is None:
@@ -2771,14 +2800,21 @@ class AnswerEngine:
                     document_id=anchor.document_id,
                     section_path=target.section_path,
                     chunk_set_id=chunk_set_id or None,
-                    limit=limit,
+                    limit=None,
                 )
                 # 参照先の節の要約・項目の値(派生の chunk)は原文ではないので足さない(#2641)。
-                state.reference_chunks[key] = [
-                    row
-                    for row in original_chunks(rows)
-                    if section_path_within(row.metadata.get("section_path"), target.section_path)
-                ]
+                state.reference_chunks[key] = self._fit_reference_section(
+                    state,
+                    key,
+                    target.section_path,
+                    [
+                        row
+                        for row in original_chunks(rows)
+                        if section_path_within(
+                            row.metadata.get("section_path"), target.section_path
+                        )
+                    ],
+                )
             return state.reference_chunks[key]
         if target.kind == "document":
             if request is None or question is None:
@@ -2790,9 +2826,46 @@ class AnswerEngine:
             return state.reference_chunks[key]
         if key not in state.reference_chunks:
             state.reference_chunks[key] = await self._other_document_reference_chunks(
-                scope, state, anchor, target, limit=limit
+                scope, state, anchor, target, key=key
             )
         return state.reference_chunks[key]
+
+    def _fit_reference_section(
+        self,
+        state: _SearchState,
+        key: tuple[str, ...],
+        section_path: str,
+        rows: Sequence[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        """番号つきの参照の参照先の節(``rows`` は節とその下の節の原文の chunk。読み順)を、
+        節の大きさで読む(#5817)。
+
+        節の文字数(1 文字 = 1 token)が回答のモデルの入力の上限の 1/2(``_outline_limit_chars``。
+        目次から選んだ章節と同じ値)以下なら節の全体を読み、超えれば子の節に縮める(子も超えれば
+        さらに下へ。``fit_reference_section``)。子の節を持たずに超える節は読まず、読み方を
+        ``state.reference_section_reads`` に残す(回答の診断の ``section_reads``)。1 回の生成に
+        入らない分は分割読取が読む。
+        """
+        from app.rag.reference_sections import fit_reference_section
+
+        limit = self._outline_limit_chars()
+        result = fit_reference_section(
+            split_section_path(section_path),
+            [(split_section_path(row.metadata.get("section_path")), len(row.text)) for row in rows],
+            limit,
+        )
+        kept = [rows[index] for index in result.indexes]
+        state.reference_section_reads[key] = {
+            "section_path": section_path,
+            "limit_chars": limit,
+            "chars": result.chars,
+            "chunk_count": len(rows),
+            "read_chunk_count": len(kept),
+            "read_chars": sum(len(row.text) for row in kept),
+            "shrunk_sections": result.fitted.shrunk[:_REFERENCE_DIAGNOSTICS_LIMIT],
+            "unread_sections": result.fitted.unread[:_REFERENCE_DIAGNOSTICS_LIMIT],
+        }
+        return kept
 
     async def _other_document_reference_chunks(
         self,
@@ -2801,7 +2874,7 @@ class AnswerEngine:
         anchor: RetrievedChunk,
         target: ReferenceTarget,
         *,
-        limit: int,
+        key: tuple[str, ...],
     ) -> list[RetrievedChunk]:
         """他の文書への参照を検索範囲の文書から解決し、参照先の節の chunk を返す(#1280)。
 
@@ -2817,7 +2890,7 @@ class AnswerEngine:
         if section_path is None:
             return []
         rows = await self._oracle.retrieval_reference_chunks(
-            scope, document_id=document_id, section_path=section_path, limit=limit
+            scope, document_id=document_id, section_path=section_path, limit=None
         )
         rows = [
             row
@@ -2852,9 +2925,17 @@ class AnswerEngine:
         )
         if resolved.target is None:
             return []
-        return [
-            row for row in rows if row.metadata.get("chunk_set_id") == resolved.target.chunk_set_id
-        ]
+        # 参照先の節は、決めた版の中で節の大きさで読む(#5817)。
+        return self._fit_reference_section(
+            state,
+            key,
+            section_path,
+            [
+                row
+                for row in rows
+                if row.metadata.get("chunk_set_id") == resolved.target.chunk_set_id
+            ],
+        )
 
     async def _referenced_document_id(
         self,
@@ -3028,10 +3109,15 @@ class AnswerEngine:
         選択が失敗した・何も選ばない、返った ID がすべて目次に無い参照先は読まない
         (理由を ``state.reference_reads`` の計画に残す。#5348)。回答の期限の残りが生成の予約より
         少なければ計画しない(読取も同じ判定で止まる。#5252)。
+        目次を渡す参照先の文書は ``rag_reference_outline_selection_max_documents`` まで(#5817)。
+        ``targets`` は根拠の並び(rerank の後の起点の順)なので、先に出てくる参照先の文書から採り、
+        超えた文書の参照先は目次を渡さず ``outline_document_limit`` を計画に残す(1 回の回答の中で
+        数える。交差参照の安全の上限 ``target_budget`` は別)。
         """
         from app.rag.reference_sections import (
             DOCUMENT_NO_OUTLINE,
             DOCUMENT_OUTLINE_ERROR,
+            SKIP_OUTLINE_DOCUMENT_LIMIT,
             DocumentReadPlan,
         )
         from app.rag.section_chunk_map import ROOT_SECTION_ID
@@ -3062,6 +3148,12 @@ class AnswerEngine:
             version = state.reference_versions[(scope_key, document_id)][0]
             plan = DocumentReadPlan(document_id, version, target.document_title or "")
             state.reference_reads[key] = plan
+            outlined = state.reference_outline_documents
+            if (document_id, version) not in outlined:
+                if len(outlined) >= self._settings.rag_reference_outline_selection_max_documents:
+                    plan.skip(SKIP_OUTLINE_DOCUMENT_LIMIT)
+                    continue
+                outlined.append((document_id, version))
             try:
                 outline = await section_outline(
                     document_id, chunk_set_id=version, oracle=self._oracle

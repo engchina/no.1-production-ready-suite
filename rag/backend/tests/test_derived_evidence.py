@@ -102,7 +102,7 @@ class DerivedSourceStub:
         document_id: str,
         section_path: str,
         chunk_set_id: str | None = None,
-        limit: int,
+        limit: int | None,
     ) -> list[RetrievedChunk]:
         self.reference_calls.append(
             {
