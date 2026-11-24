@@ -430,7 +430,11 @@ async def test_parser_core_generate_text_and_usage_log(
     assert fields.llm_model == "claude-text"
     assert fields.llm_status == "completed"
     assert fields.input_tokens == 135
-    measured = complete_input_measurement({**anthropic_message_params(request), "stream": True})
+    # 実際の要求と同じ上限（モデルの上限と共通の上限の小さいほう。ログに残る）で測る（#5808）。
+    measured = complete_input_measurement(
+        {**anthropic_message_params(request), "stream": True},
+        limit_tokens=getattr(fields, "pr.input.limit_tokens"),
+    )
     assert getattr(fields, "pr.input.estimated_tokens") == measured.estimated_tokens
     assert getattr(fields, "pr.input.usage_status") == "within_limit"
     assert fields.cached_tokens == 30
