@@ -132,15 +132,16 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     # Wiki の構築を無効にしても、保存済みの案内は図で見られる。
     await store.set_enabled(kb.id, False)
     assert {doc["document_id"] for doc in (await graph.overview(kb.id))["documents"]} == {a, b}
-    # 文書を KB から外すと、図とその文書への関連が消える。
+    # 文書を KB から外すと図から消え、その文書への参照は開けない参照になる（#5784）。
     await oracle.remove_document_from_knowledge_base(kb.id, b)
     overview = await graph.overview(kb.id)
     assert [doc["document_id"] for doc in overview["documents"]] == [a]
     assert await graph.document_count(kb.id) == {"total": 1}
     assert not overview["has_more"]
     assert all(
-        r["scope"] == "same_document"
+        r["unit"] is None
         for r in (await graph.relations(kb.id, first_a, 0, 25))["items"]
+        if r["scope"] == "cross_document"
     )
     for did in (a, b, c):
         await oracle.delete_document(did)
