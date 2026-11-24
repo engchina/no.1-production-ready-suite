@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from budget_settings import with_evidence_budget
 from test_batched_evidence import block, config, span
 
 from rag_engine.generation.batch_extrema import BatchExtrema, BatchPlan, DocumentFormat, calculate
@@ -56,7 +57,7 @@ def test_numeric_fields_must_be_in_source_and_scope():
 def test_plan_runs_only_once_after_input_overflows(kind):
     head = {**piece(0, "R1 = 1;"), FIRST_CHUNK: True}
     chunks = [piece(i, f"R{i} = {i};\n" + "補足。" * 450) for i in range(2, 6)]
-    settings = replace(config(), evidence_budget_chars=10000 if kind == "fit" else 2700)
+    settings = with_evidence_budget(config(), 10000 if kind == "fit" else 2700)
     prompts = []
 
     def plan(system, prompt):
@@ -173,7 +174,7 @@ def test_stated_reason_selection_keeps_only_original_units():
     head = {**piece(1, "R1 = 1;"), FIRST_CHUNK: True}
     records = [piece(i, f"R{i} = {i};\n" + "記録。" * 450) for i in range(2, 6)]
     derived = {**piece(6, "原因を推測した要約。"), "source_context": {"evidence_kind": "document_summary"}}
-    settings = replace(config(), evidence_budget_chars=2700)
+    settings = with_evidence_budget(config(), 2700)
     extrema = BatchExtrema(QUESTION, settings, None, lambda *_: PLAN.model_copy(update={"remaining_request": "理由", "reason_only": True}))
 
     def read(system, prompt, schema):

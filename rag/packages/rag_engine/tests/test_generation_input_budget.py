@@ -55,7 +55,6 @@ def test_budget_notice_is_required_in_saved_language_pack():
 
 
 def test_large_capacity_keeps_input_room_for_online_generation():
-
     base = get_settings(environ={}, dotenv_path=None)
     providers = {key: replace(value, max_output_tokens=500_000) for key, value in base.llm_providers.items()}
     config = replace(base, llm_providers=providers, answer_max_input_tokens=500_000, online_max_output_tokens=16_384)
@@ -101,13 +100,16 @@ def test_planning_includes_final_language_contract_and_sdk_wrappers():
     )
 
 
-def test_japanese_body_and_template_are_jointly_limited():
-    from pr_backend_core.generation_input import GENERATION_INPUT_LIMIT
-
-    measured = model_input_measurement(settings(answer_max_input_tokens=500_000), "指示", "合成本文。" * 14_000, {"type": "object"})
-    assert measured["estimated_input_tokens"] < measured["available_input_tokens"]
-    assert measured["complete_input_estimated_tokens"] > measured["complete_input_limit_tokens"] == GENERATION_INPUT_LIMIT
-    assert not measured["fits"]
+def test_japanese_body_counts_characters_against_the_registered_limit():
+    """日本語の本文は 1 文字 1 token で数え、登録モデルの上限をそのまま使う（#5813）。"""
+    fits = model_input_measurement(settings(answer_max_input_tokens=200_000), "指示", "合成本文。" * 14_000, {"type": "object"})
+    # 70,000 文字（UTF-8 では 210,000 バイト）は上限 200,000 の 3/4 に収まる。
+    assert fits["complete_input_limit_tokens"] == 200_000
+    assert fits["complete_input_estimated_tokens"] < 200_000
+    assert fits["fits"]
+    over = model_input_measurement(settings(answer_max_input_tokens=200_000), "指示", "合成本文。" * 32_000, {"type": "object"})
+    assert over["complete_input_estimated_tokens"] > over["complete_input_limit_tokens"]
+    assert not over["fits"]
 
 
 def test_oversize_final_request_never_reaches_client_or_retry(monkeypatch):

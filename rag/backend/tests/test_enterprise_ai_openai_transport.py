@@ -7,7 +7,6 @@ import httpx
 import openai
 import pytest
 from pr_backend_core.generation_input import (
-    GENERATION_INPUT_LIMIT,
     GenerationInputLimitError,
     complete_input_measurement,
 )
@@ -19,6 +18,8 @@ from rag_parser_core.oci_enterprise_ai import (
 )
 
 ENDPOINT = "https://enterprise-ai.example/openai/v1"
+# 登録モデルの入力の上限（tokens）の既定。測定はこの値だけを使う（#5813）。
+LIMIT = OciEnterpriseAiConfig.text_max_input_tokens
 
 
 def _config(max_retries: int = 0) -> OciEnterpriseAiConfig:
@@ -114,8 +115,8 @@ async def test_timeout_maps_to_enterprise_ai_timeout(monkeypatch: pytest.MonkeyP
         (200, None, None, "unreported"),
         (
             200,
-            {"input_tokens": GENERATION_INPUT_LIMIT + 1},
-            GENERATION_INPUT_LIMIT + 1,
+            {"input_tokens": LIMIT + 1},
+            LIMIT + 1,
             "over_limit",
         ),
         (400, {"prompt_tokens": 32}, 32, "within_limit"),
@@ -156,8 +157,11 @@ async def test_text_request_measures_sdk_body_and_reported_usage(
     sent = json.loads(requests[0].content)
     assert sent["text"]["format"]["schema"]["properties"]["answer"]["type"] == "string"
     fields = vars(next(r for r in caplog.records if r.getMessage() == "llm_input_budget"))
-    assert fields["pr.input.estimated_tokens"] == complete_input_measurement(sent).estimated_tokens
-    assert fields["pr.input.limit_tokens"] == GENERATION_INPUT_LIMIT
+    assert (
+        fields["pr.input.estimated_tokens"]
+        == complete_input_measurement(sent, limit_tokens=LIMIT).estimated_tokens
+    )
+    assert fields["pr.input.limit_tokens"] == LIMIT
     assert fields["pr.input.usage_status"] == budget_status
     assert fields.get("gen_ai.usage.input_tokens") == actual
 
@@ -171,7 +175,7 @@ async def test_schema_can_exceed_limit_before_sdk_sends(monkeypatch: pytest.Monk
             "質問",
             "原文",
             system_prompt="合成の指示",
-            response_schema={"type": "string", "enum": ["x" * GENERATION_INPUT_LIMIT]},
+            response_schema={"type": "string", "enum": ["x" * LIMIT]},
         )
     assert caught.value.estimated_tokens > caught.value.limit_tokens
 

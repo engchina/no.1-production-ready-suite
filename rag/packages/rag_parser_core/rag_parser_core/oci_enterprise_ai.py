@@ -26,7 +26,6 @@ from typing import Any, Protocol
 import httpx
 import openai
 from pr_backend_core.generation_input import (
-    GENERATION_INPUT_LIMIT,
     CompleteInputMeasurement,
     GenerationInputLimitError,
     UnmeasuredGenerationInputError,
@@ -110,7 +109,9 @@ class OciEnterpriseAiConfig:
     vision_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     text_reasoning_effort: str = ""
     vision_reasoning_effort: str = ""
-    text_max_input_tokens: int = GENERATION_INPUT_LIMIT
+    # テキストのモデルの入力の上限（tokens）。backend が登録モデルの値を渡す。既定は platform の
+    # 登録モデルの既定（pr_system_settings の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS）と同じ。
+    text_max_input_tokens: int = 128_000
 
     def for_vision(self) -> OciEnterpriseAiConfig:
         """Vision の呼び出しに使う config(既定の Vision モデルの接続。#533)。"""

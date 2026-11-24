@@ -7,7 +7,6 @@ from itertools import islice
 from typing import Any
 
 from pr_backend_core.bounded_calls import BoundedCaller
-from pr_backend_core.generation_input import GENERATION_INPUT_LIMIT
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from rag_parser_core.oci_enterprise_ai import (
     OciEnterpriseAiConfig,
@@ -41,7 +40,7 @@ class WikiRequestBuilder:
         self.related = related
         self.max_source_chars = max_source_chars
         self.batch_size = batch_size
-        self.token_limit = min(GENERATION_INPUT_LIMIT, config.text_max_input_tokens)
+        self.token_limit = config.text_max_input_tokens
         self.scopes: dict[tuple[str, str], dict[str, WikiUnit]] = defaultdict(dict)
         self.indices: dict[str, int] = {}
         for unit in units:
@@ -62,7 +61,7 @@ class WikiRequestBuilder:
     def __call__(self, targets: Sequence[WikiUnit], include_optional: bool) -> WikiRequest:
         if self.current_config:
             self.config = self.current_config()
-            self.token_limit = min(GENERATION_INPUT_LIMIT, self.config.text_max_input_tokens)
+            self.token_limit = self.config.text_max_input_tokens
         first = targets[0]
         key = (first.document_id, first.chunk_set_id)
         scope = self.scopes[key]

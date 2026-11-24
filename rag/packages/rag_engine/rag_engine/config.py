@@ -52,11 +52,9 @@ DEFAULT_MAX_ANCHORS_PER_PARENT = 2
 # rerank の後、1 つの文書から起点に採る child の上限（#2167・#5170）。0 は上限なし。
 # backend の rag_max_anchors_per_document の既定と同じ値（一致は backend の tests/test_anchor_document_cap_settings.py で確認する）。
 DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
-# context に入れる parent 数と、生成に渡す原文の総予算（文字）の既定値 (#1054)。
-# answer_records.MAX_CONTEXT_RECORDS / evidence_selection.EVIDENCE_BUDGET_CHARS
-# と同じ値（循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
+# context に入れる parent 数の既定値 (#1054)。answer_records.MAX_CONTEXT_RECORDS と同じ値
+# （循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
 DEFAULT_MAX_CONTEXT_RECORDS = 12
-DEFAULT_EVIDENCE_BUDGET_CHARS = 40000
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
 DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.3
 # 下限以上が 0 件のとき、下限に掛けて 1 回だけ下げる比（0 は下げない。#5443）。
@@ -300,9 +298,9 @@ class Settings:
     auth_password: str = ""
     # 真のときだけ UI を認証なしで公開する。ローカル検証専用の逸脱で、既定は必ず False。
     auth_disabled: bool = False
-    # context に入れる parent 数と、生成の原文予算（文字）(#1054)。検索の起点 child 数は呼び出し側が引数で渡す。
+    # context に入れる parent 数 (#1054)。検索の起点 child 数は呼び出し側が引数で渡す。生成の原文予算（文字）は
+    # 回答のモデルの入力の上限から決める（``evidence_budget_chars``。#5813）。
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
-    evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
     # 分割読取の同じ pass の組を並行に読む上限（#4997。1 は順次）。
     batch_read_workers: int = 1
     request_coverage_max_queries: int = 2
@@ -367,6 +365,14 @@ class Settings:
     evidence_plans: tuple[tuple[tuple[tuple[str, str], ...], tuple[tuple[str, bool], ...], str, str], ...] = ()
     # 「今日」(検索の基準日の既定)を決める IANA の時間帯(#3249。`PLATFORM_TIMEZONE`)。OS の時間帯は使わない。
     timezone: str = DEFAULT_TIMEZONE
+
+    @property
+    def evidence_budget_chars(self) -> int:
+        """1 回の生成に渡す原文の予算（文字。#5813）。回答のモデルの入力の上限（tokens）の 1/2 で、1 文字 = 1 token と数える。
+
+        根拠がこれを超えれば分割読取に回し、分割読取の各組もこの大きさまでにする。
+        """
+        return max(1, self.answer_max_input_tokens // 2)
 
     @property
     def vision_model(self) -> str:
@@ -551,7 +557,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
         max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
-        evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),
         batch_read_workers=min(8, max(1, _env_int(env, "RAG_ENGINE_BATCH_READ_WORKERS", 1))),
         request_coverage_max_queries=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES", 2)),
         request_coverage_max_chunks=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS", 4)),

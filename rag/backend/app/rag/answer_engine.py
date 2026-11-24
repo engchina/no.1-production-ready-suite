@@ -560,8 +560,6 @@ def build_engine_settings(
         "RAG_ENGINE_ANSWER_GENERATION_MAX_OUTPUT_TOKENS": str(
             settings.rag_answer_generation_max_output_tokens
         ),
-        # 生成に渡す根拠の原文の文字予算(#3776。全体設定だけで決める)。
-        "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
         # 分割読取の同じ段の組を並行に読む上限(#4997。全体設定だけで決める)。
         "RAG_ENGINE_BATCH_READ_WORKERS": str(settings.rag_batch_read_workers),
         # rerank の後、1 つの文書から起点に採る chunk の上限(#2167・#5165。0 は上限なし。

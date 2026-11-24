@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import replace
 from typing import Any
 
 import pytest
+from budget_settings import with_evidence_budget
 from test_answer_flow_single_generation import _run_traced, context, record, retrying_parse
 
 from rag_engine.generation import grounded
@@ -153,7 +153,7 @@ def test_batched_reading_checks_only_the_final_generation(cited_from):
         result = answering.synthesize_grounded_answer(
             "合成の申請の承認者は？",
             answering.AnswerContext(records=records, text=""),
-            replace(config(), evidence_budget_chars=9000),
+            with_evidence_budget(config(), 9000),
             image_prompt_mode="text_only",
         ).response
 

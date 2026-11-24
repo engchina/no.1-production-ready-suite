@@ -1118,7 +1118,8 @@ async def test_registered_text_input_limit_and_external_reference() -> None:
     transport = FakeEnterpriseAiTransport({"output_text": "回答"})
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
     with pytest.raises(GenerationInputLimitError) as caught:
-        await client.generate("質問", "文" * 2_000, system_prompt="合成の指示")
+        # 1 文字 = 1 token と数え、上限 4096 の 3/4 を超える(#5813)。
+        await client.generate("質問", "文" * 4_000, system_prompt="合成の指示")
     assert caught.value.limit_tokens == 4096
 
     with pytest.raises(UnmeasuredGenerationInputError):

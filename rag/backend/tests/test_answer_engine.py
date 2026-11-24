@@ -257,12 +257,12 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
 async def test_answer_diagnostics_keep_the_evidence_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """全体設定の根拠の文字予算が回答の経路まで届き、使った予算と送った文字数を診断に残す(#3776)。"""
+    """根拠の文字予算(回答のモデルの入力の上限の 1/2。#5813)と送った文字数を診断に残す(#3776)。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
     engine = AnswerEngine(
-        Settings(rag_domain_keywords=["受注番号"], rag_evidence_budget_chars=64000),
+        Settings(rag_domain_keywords=["受注番号"]),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
@@ -272,9 +272,8 @@ async def test_answer_diagnostics_keep_the_evidence_budget(
     )
 
     budget = outcome.diagnostics["evidence_budget"]
-    assert budget["configured_chars"] == 64000
-    assert budget["effective_chars"] >= 1
-    assert budget["source"] in {"configured", "section_expansion"}
+    assert budget["configured_chars"] == budget["effective_chars"] >= 1
+    assert budget["source"] == "model_input_limit_half"
     assert budget["evidence_block_chars"] >= budget["evidence_text_chars"] > 0
     assert set(budget) == {
         "configured_chars",

@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import replace
 
 import pytest
+from budget_settings import with_evidence_budget
 from pydantic import ValidationError
 
 from rag_engine.adapters.oci import LlmStreamOutputMissing
@@ -18,7 +19,7 @@ from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
 def config(**kwargs):
     base = get_settings(environ={}, dotenv_path=None)
     providers = {key: replace(value, max_output_tokens=100) for key, value in base.llm_providers.items()}
-    return replace(base, llm_providers=providers, evidence_budget_chars=3500, **kwargs)
+    return with_evidence_budget(replace(base, llm_providers=providers, **kwargs), 3500)
 
 
 def block(spans):
@@ -241,7 +242,7 @@ def test_parent_larger_than_old_24000_gate_can_use_single_generation():
     inputs = [span(0, "合成AB。" * 5000)]
     selected, _, diagnostic = prepare_batched_evidence(
         inputs,
-        replace(config(), evidence_budget_chars=80000),
+        with_evidence_budget(config(), 80000),
         question="条件は？",
         render=block,
         evidence_text=block,
@@ -388,7 +389,7 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=12000)
+    settings = with_evidence_budget(config(), 12000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
@@ -436,7 +437,7 @@ def test_stream_output_missing_in_batch_read_falls_back_to_quotes_and_keeps_trac
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=12000)
+    settings = with_evidence_budget(config(), 12000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
@@ -574,7 +575,7 @@ def _synthesize(records, read_findings, *, budget=12000):
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=budget)
+    settings = with_evidence_budget(config(), budget)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "合成の申請の承認者は？", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
@@ -665,7 +666,7 @@ def test_over_limit_answer_cites_only_units_of_the_final_input():
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=9000)
+    settings = with_evidence_budget(config(), 9000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "合成の申請の承認者は？", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
@@ -985,7 +986,7 @@ def test_last_unfit_trial_keeps_the_citations_of_the_final_generation(monkeypatc
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
 
-    settings = replace(config(), evidence_budget_chars=30000)
+    settings = with_evidence_budget(config(), 30000)
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = answering.synthesize_grounded_answer(
             "合成の申請の承認者は？", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"

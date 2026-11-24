@@ -3825,7 +3825,6 @@ export const ja = {
   "settings.answerPrompts.part.contract": "出力形式と上限（読み取り専用）",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
-  "settings.answerPrompts.part.documentSystem": "文書を選ぶ システムプロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
   "settings.answerPrompts.part.batchReading": "根拠を分割して読み、引用付きの回答候補を作る指示（単回の容量を超える場合）",
   "settings.answerPrompts.part.statedReason": "比較結果の理由が明記された原文を選ぶ指示",

@@ -221,7 +221,8 @@ async def test_large_unit_skips_an_oversized_related_title_and_keeps_later_refer
             "source_hash": fingerprint(text),
         }
     )
-    long_title = long_title.model_copy(update={"title": "大" * 20000})
+    # 1 文字 = 1 token と数え、関連の題だけで上限 35000 の 3/4 を超える(#5813)。
+    long_title = long_title.model_copy(update={"title": "大" * 40000})
     data = StructuredExtraction(raw_text=text, elements=[DocumentElement(text=text)])
     sources = bind_paragraphs([unit], data, {unit.source_chunk_ids[0]: (0, len(text))})
     builder = WikiRequestBuilder(

@@ -56,7 +56,7 @@ def test_plan_writes_numbers_after_packing_complete_wire_requests() -> None:
     nominal = plan_field_extraction_units(source, text_budget_tokens=6_000)
     assert len(nominal) == 1 and not _fits(nominal[0].text)
     result = plan_field_extraction_units(source, text_budget_tokens=6_000, request_fits=_fits)
-    assert len(result) >= 10
+    assert len(result) > 1
     assert all(
         u.index == i and u.total == len(result) and _fits(u.text) for i, u in enumerate(result)
     )
@@ -76,7 +76,8 @@ def test_long_paragraph_and_retry_use_only_xml_sentence_boundaries() -> None:
 
 @pytest.mark.asyncio
 async def test_initial_wire_overflow_stops_before_model_or_checkpoint() -> None:
-    source = _sample(["合成の短文。"], ["漢" * 500 + "（説明。）"])
+    # 1 文字 = 1 token と数え、第 2 要素だけで上限 2000 の 3/4 を超える(#5813)。
+    source = _sample(["合成の短文。"], ["漢" * 2_000 + "（説明。）"])
     seen = []
 
     async def send(unit: FieldExtractionUnit) -> UnitExtraction:
@@ -164,7 +165,7 @@ async def test_ingestion_packs_the_actual_request_and_reuses_only_accepted_units
         object_storage=_MemoryStorage(),  # type: ignore[arg-type]
     )
     doc = StructuredExtraction(
-        elements=[DocumentElement(text=f"第{i}番" + "字" * 440 + "。") for i in range(6)]
+        elements=[DocumentElement(text=f"第{i}番" + "字" * 1_400 + "。") for i in range(6)]
     )
     first = await pipe._attach_extraction_fields("trace", doc, document_id="sample")
     count = len(sent)

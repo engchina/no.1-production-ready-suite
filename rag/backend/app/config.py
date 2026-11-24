@@ -1855,21 +1855,6 @@ class Settings(
         ),
     )
     rag_rerank_cache_max_entries: int = Field(default=1024, ge=0, le=100000)
-    rag_evidence_budget_chars: int = Field(
-        default=40000,
-        ge=1000,
-        le=500000,
-        description=(
-            "回答の生成に渡す根拠の原文の文字予算（文字。#3776）。"
-            "既定 40000 は rag_engine の既定と同じ。"
-            "1 回に渡す根拠の本文・前置き・出典情報・描画の書式の文字予算。"
-            "選択済みの根拠が超える場合は全文を分割して読み、原文引用付きの回答候補を統合する。"
-            "全体設定だけで決め、検索・回答プロファイル・KB・文書レシピでは上書きしない。"
-            "章節の拡張は 1 つの章節を回答のモデルの入力の上限の 1/2 で別に数え、"
-            "生成時はこの文字上限とモデルの入力予算の両方に収める。"
-            "使った予算と送った根拠の文字数は回答の診断の evidence_budget に残る。"
-        ),
-    )
     rag_batch_read_workers: int = Field(
         default=1,
         ge=1,

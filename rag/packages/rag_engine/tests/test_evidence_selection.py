@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from budget_settings import with_evidence_budget
 from test_batched_evidence import body
 
 from rag_engine.config import get_settings
@@ -22,7 +23,7 @@ def no_read(system, prompt, schema):
 def select(spans, *, chars=1000, tokens=10000, read=no_read, **kwargs):
     base = get_settings(environ={}, dotenv_path=None)
     providers = {key: replace(value, max_output_tokens=100) for key, value in base.llm_providers.items()}
-    settings = replace(base, llm_providers=providers, evidence_budget_chars=chars, answer_max_input_tokens=tokens)
+    settings = with_evidence_budget(replace(base, llm_providers=providers, answer_max_input_tokens=tokens), chars)
     return select_evidence(
         spans,
         settings,
@@ -84,7 +85,8 @@ def test_over_limit_splits_a_single_long_source_and_reads_all_of_it():
 
 def test_model_token_budget_is_checked_alongside_character_budget():
     calls: list[list[str]] = []
-    _, _, diagnostic = select([span(0, "合成の本文。" * 1000)], chars=100000, tokens=10_000, read=recording_reader(calls))
+    # 9,000 字は文字予算に入るが、上限 10,000 tokens の 3/4 を超える（1 文字 = 1 token。#5813）。
+    _, _, diagnostic = select([span(0, "合成の本文。" * 1500)], chars=100000, tokens=10_000, read=recording_reader(calls))
     assert diagnostic["batch_count"] >= 2
     assert diagnostic["fits"] is True
     assert diagnostic["estimated_input_tokens"] <= diagnostic["available_input_tokens"]
