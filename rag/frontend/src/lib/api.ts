@@ -2767,16 +2767,13 @@ export interface AnsweringSettingsData {
   reference_section_read_max_chunks: number;
   /** 文書全体への参照の参照先を、目次からモデルが選んだ章節で読む（#5263。既定 true。#5296）。 */
   reference_outline_selection_enabled: boolean;
-  /** 参照先の目次の字数・参照先 1 つで読む章節の数・読むチャンクの上限（#5335）。 */
-  reference_outline_selection_catalog_max_chars: number;
-  reference_outline_selection_max_sections: number;
-  reference_outline_selection_read_max_chunks: number;
-  /** 起点の文書の目次からモデルが選んだ章節を、Rerank の枠の外で根拠に加える（#5324。既定 false）。 */
+  /** 起点の文書の目次からモデルが選んだ章節を、Rerank の枠の外で根拠に加える（#5324。既定 true。#5362）。 */
   outline_selection_enabled: boolean;
-  /** 目次を渡す起点の文書の数・目次の字数・読む章節の字数の上限（#5324）。 */
+  /**
+   * 目次を渡す起点の文書の数（#5324）。2 つの目次の選択の目次の字数・読む章節の大きさは回答モデルの
+   * 入力上限の 1/2 で決め、設定は無い（#5816）。
+   */
   outline_selection_max_documents: number;
-  outline_selection_catalog_max_chars: number;
-  outline_selection_read_max_chars: number;
   section_expansion_enabled: boolean;
   section_expansion_max_levels: number;
   /** 回答生成の通しの上限（秒。#5280）。画面は 100 / 300 / 600 / 1200 から選ぶ（既定 600）。 */

@@ -68,7 +68,6 @@ def test_parent_context_does_not_use_operation_support_capacity():
             active_records=[primary, child, support],
             top_k=1,
             neighbor_child_count=1,
-            max_records=1,
             max_chars=2000,
             support_record_limit=1,
         )

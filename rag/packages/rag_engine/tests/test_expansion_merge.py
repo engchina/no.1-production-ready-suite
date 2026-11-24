@@ -73,7 +73,7 @@ def test_outline_selection_mark_is_an_expansion_kept_outside_the_window():
     a1, a2 = child("a1", 1, "A の 1", "A.txt", "pa1"), child("a2", 2, "A の 2", "A.txt", "pa2")
     tail = _marked(child("a9", 9, "A の 9", "A.txt", "pa9"), OUTLINE_SELECTION_KEY)
     parents = [parent(name, 1, f"{name} の親", "A.txt") for name in ("pa1", "pa2", "pa9")]
-    bundle = _bundle([a1, a2], [a1, a2, tail, *parents], [tail], top_k=1, max_records=1)
+    bundle = _bundle([a1, a2], [a1, a2, tail, *parents], [tail], top_k=1)
     assert "pa9" in _parents(bundle)
     added = [c.reason for item in bundle.evidence_tree for c in item.children if c.record.id == "a9"]
     assert added == [EXPANSION_EVIDENCE_REASON]
@@ -84,7 +84,7 @@ def _marked(record, key=ENTITY_EXPANSION_KEY):
     return record
 
 
-def _bundle(ranked, active, expansions, *, top_k=2, max_records=2, neighbors=0):
+def _bundle(ranked, active, expansions, *, top_k=2, neighbors=0):
     return build_chunk_context_bundle(
         ContextBuildRequest(
             question="合成の質問",
@@ -92,7 +92,6 @@ def _bundle(ranked, active, expansions, *, top_k=2, max_records=2, neighbors=0):
             active_records=active,
             top_k=top_k,
             neighbor_child_count=neighbors,
-            max_records=max_records,
             max_chars=100_000,
             expansion_children=expansions,
         )
@@ -112,8 +111,8 @@ def test_bundle_places_expansions_by_document_order_without_counting_them():
         parent(name, 1, f"{name} の親", source)
         for name, source in (("pa1", "A.txt"), ("pa2", "A.txt"), ("pa3", "A.txt"), ("pb1", "B.txt"), ("pc1", "C.txt"))
     ]
-    bundle = _bundle([a2, b1], [a2, b1, a1, a3, c1, *parents], [a1, a3, c1], top_k=2, max_records=2)
-    # top_k=2・max_records=2 でも拡張の根拠は消えず、数えない。
+    bundle = _bundle([a2, b1], [a2, b1, a1, a3, c1, *parents], [a1, a3, c1], top_k=2)
+    # top_k=2 でも拡張の根拠は消えず、数えない。
     assert _parents(bundle) == ["pa1", "pa2", "pa3", "pb1", "pc1"]
     added = [child.reason for item in bundle.evidence_tree for child in item.children if child.record.id in {"a1", "a3", "c1"}]
     assert added == [EXPANSION_EVIDENCE_REASON] * 3
@@ -139,11 +138,11 @@ def test_bundle_only_marks_an_expansion_inside_a_parent_in_the_result():
     assert roles == {"a2": "retrieved_anchor", "a3": "parent_context"}
 
 
-def test_bundle_keeps_expansion_when_its_parent_fell_outside_the_record_limit():
+def test_bundle_keeps_expansion_when_its_candidate_fell_outside_top_k():
     ranked = [child(f"a{i}", i, f"A の {i}", "A.txt", f"pa{i}") for i in range(1, 4)]
     expansion = _marked(child("a3", 3, "A の 3", "A.txt", "pa3"))
     parents = [parent(f"pa{i}", i, f"親 {i}", "A.txt") for i in range(1, 4)]
-    bundle = _bundle(ranked, [*ranked, *parents], [expansion], top_k=3, max_records=2)
+    bundle = _bundle(ranked, [*ranked, *parents], [expansion], top_k=2)
     assert _parents(bundle) == ["pa1", "pa2", "pa3"]
     anchors = [child for item in bundle.evidence_tree for child in item.children if child.record.id == "a3"]
     assert [child.reason for child in anchors] == [EXPANSION_EVIDENCE_REASON]
@@ -160,7 +159,7 @@ def test_bundle_reads_neighbors_of_a_flat_expansion_and_marks_covered_neighbors(
     b1, b2, b3 = (_flat(f"b{i}", i, "B.txt") for i in range(1, 4))
     covered = _marked(_flat("a2", 2, "A.txt"))
     added = _marked(_flat("b2", 2, "B.txt"))
-    bundle = _bundle([a1], [a1, a2, a3, b1, b2, b3], [covered, added], top_k=1, max_records=2, neighbors=1)
+    bundle = _bundle([a1], [a1, a2, a3, b1, b2, b3], [covered, added], top_k=1, neighbors=1)
     # a2 は a1 の前後の文脈にあるので印だけ。b2 は前後の文脈（b1・b3）と一緒に最後へ。
     assert _parents(bundle) == ["a1", "a2", "b1", "b2", "b3"]
     a2_child = next(child for item in bundle.evidence_tree for child in item.children if child.record.id == "a2")

@@ -106,7 +106,6 @@ from rag_engine.generation.answer_payload import (
     parse_answer_response,
 )
 from rag_engine.generation.answer_records import (
-    MAX_CONTEXT_RECORDS,
     MAX_RECORD_TEXT_CHARS,
     _bool_metadata_value,
     _chunk_answer_record,
@@ -564,17 +563,17 @@ def build_answer_context(
     question: str,
     records: Sequence[AnswerRecord],
     *,
-    max_records: int = MAX_CONTEXT_RECORDS,
+    max_records: int | None = None,
     max_chars: int = MAX_CONTEXT_CHARS,
     retrieval_queries: Sequence[str] | None = None,
     rerank_enabled: bool = True,
     settings: Settings | None = None,
 ) -> AnswerContext:
-    """record 候補から LLM に渡す context テキストと evidence を構築します。"""
+    """record 候補から LLM に渡す context テキストと evidence を構築します（``max_records`` が無ければすべての候補）。"""
     ranked = _ranked_records_with_neighbors(
         question,
         records,
-        max_records,
+        len(records) if max_records is None else max_records,
         retrieval_queries=retrieval_queries,
         rerank_enabled=rerank_enabled,
         settings=settings,
@@ -594,11 +593,6 @@ def build_answer_context(
     )
 
 
-def _max_context_records(settings: Settings | None) -> int:
-    """context に入れる parent 数（`RAG_ENGINE_MAX_CONTEXT_RECORDS`）。settings が無い呼び出しは既定値 (#1054)。"""
-    return max(1, int(getattr(settings, "max_context_records", MAX_CONTEXT_RECORDS) or MAX_CONTEXT_RECORDS))
-
-
 def _max_anchors_per_parent(settings: Settings | None) -> int:
     """同じ親から起点に採る child の上限。settings が無い呼び出し（テスト・SDK）は既定値 (#889)。"""
     return max(1, int(getattr(settings, "max_anchors_per_parent", MAX_ANCHORS_PER_PARENT) or MAX_ANCHORS_PER_PARENT))
@@ -610,7 +604,6 @@ def build_chunk_answer_context(
     *,
     top_k: int,
     neighbor_child_count: int = DEFAULT_NEIGHBOR_CHILD_COUNT,
-    max_records: int = MAX_CONTEXT_RECORDS,
     max_chars: int = MAX_CONTEXT_CHARS,
     retrieval_queries: Sequence[str] | None = None,
     rerank_enabled: bool = True,
@@ -641,7 +634,6 @@ def build_chunk_answer_context(
             neighbor_child_count=neighbor_child_count,
             support_record_limit=3,
             max_anchors_per_parent=_max_anchors_per_parent(settings),
-            max_records=max_records,
             max_chars=max_chars,
         )
     )
@@ -687,12 +679,11 @@ def record_document_cap(
     settings: Settings,
     *,
     top_k: int,
-    max_records: int,
     select_anchors: Callable[[Sequence[AnswerRecord]], Sequence[AnswerRecord]],
 ) -> None:
     """文書ごとの上限の結果（外した候補と、代わりに起点に入った候補）を工程の詳細に書く（#2341）。
 
-    起点は ``top_k`` に加えて親の枠（``max_records``）と同じ親の起点の上限でも切られる。代わりに起点に入った候補は、
+    起点は ``top_k`` に加えて同じ親の起点の上限でも切られる。代わりに起点に入った候補は、
     上限の前後の候補から実際の起点の選び方（select_anchors）で選んだ起点を比べて出し、上位 ``top_k`` 件に繰り上がった
     が起点に入らなかった候補は分けて書く（#5242）。
     """
@@ -713,7 +704,7 @@ def record_document_cap(
     if held:
         per_parent = _max_anchors_per_parent(settings)
         step.add(
-            f"上位 {top_k} 件に繰り上がったが起点に入らなかった候補（親の枠 {max_records} 件・同じ親の起点の上限 {per_parent} 件）:",
+            f"上位 {top_k} 件に繰り上がったが起点に入らなかった候補（同じ親の起点の上限 {per_parent} 件）:",
             *numbered([record_label(record) for record in held]),
         )
 
@@ -726,7 +717,6 @@ def _bundle_context(
     *,
     top_k: int,
     neighbor_child_count: int,
-    max_records: int,
     max_chars: int,
     expansions: Sequence[AnswerRecord] = (),
     supplements: Sequence[AnswerRecord] = (),
@@ -752,7 +742,6 @@ def _bundle_context(
         neighbor_child_count=neighbor_child_count,
         support_record_limit=3,
         max_anchors_per_parent=_max_anchors_per_parent(settings),
-        max_records=max_records,
         max_chars=max_chars,
         expansion_children=list(expansions),
         supplement_children=list(supplements),
@@ -799,7 +788,6 @@ def _bundle_context(
                 "起点根拠数": len(selected),
                 "起点根拠 ID": [retrieval_record_id(record) for record in selected],
                 "起点ごとの補い方": modes,
-                "文脈の最大レコード数": max_records,
             }
         )
         # 章節で補う起点は前後の chunk を読まない（親子分割の親・画像の原文は読む）。
@@ -895,7 +883,6 @@ def _bundle_context(
                 any(is_attachment_evidence(child.record) for child in parent.children) for parent in bundle.evidence_tree
             ),
             "anchor_limit": top_k,
-            "record_limit": max_records,
             "full_parent_text": True,
             "anchor_ids": [retrieval_record_id(record) for record in selected],
             "loaded_ids": [str(chunk.chunk_uid) for chunk in (*(loaded or ()), *(loaded_supplements or ()))],
@@ -1049,7 +1036,6 @@ def build_adb_hybrid_answer_context(
     *,
     top_k: int,
     neighbor_child_count: int = DEFAULT_NEIGHBOR_CHILD_COUNT,
-    max_records: int | None = None,
     max_chars: int = MAX_CONTEXT_CHARS,
     retrieval_queries: Sequence[str] | None = None,
     rerank_enabled: bool = True,
@@ -1094,7 +1080,6 @@ def build_adb_hybrid_answer_context(
     存在しない実行は AdbHybridSearchUnavailable とする。ADB と必要に応じ reranker に接続する。
     """
     started = monotonic()
-    max_records = _max_context_records(settings) if max_records is None else max_records
     scope = normalize_retrieval_scope(retrieval_scope)
     chunk_run_id = ""
     if scope == RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN:
@@ -1173,13 +1158,10 @@ def build_adb_hybrid_answer_context(
                 kept_children,
                 settings,
                 top_k=top_k,
-                max_records=max_records,
-                select_anchors=lambda records: _cut_anchors(
-                    question, records, active_records, settings, top_k=top_k, max_records=max_records
-                ),
+                select_anchors=lambda records: _cut_anchors(question, records, active_records, settings, top_k=top_k),
             )
             step.output({"処理後の候補": candidate_snapshot(kept_children)})
-    selected = _cut_anchors(question, kept_children, active_records, settings, top_k=top_k, max_records=max_records)
+    selected = _cut_anchors(question, kept_children, active_records, settings, top_k=top_k)
     # 検索拡張（参照の展開・目次からの章節の選択・実体・文書構造）は、rerank・下限・文書ごとの上限・top_k の切りの後に
     # 切った起点から集める（#5389）。rerank にかけず、context を作るときに最後の根拠の並びへ合わせる（#5162）。
     # 拡張を注入しない呼び出し（SDK・評価の注入・RAG 検索の経路）は拡張しない。
@@ -1204,7 +1186,6 @@ def build_adb_hybrid_answer_context(
             settings,
             top_k=top_k,
             neighbor_child_count=neighbor_child_count,
-            max_records=max_records,
             max_chars=max_chars,
             section_fill=section_fill,
         )
@@ -1223,7 +1204,6 @@ def build_adb_hybrid_answer_context(
                 settings,
                 top_k=count,
                 neighbor_child_count=neighbor_child_count,
-                max_records=max_records,
                 max_chars=max_chars,
                 retrieval_queries=retrieval_queries,
                 rerank_enabled=rerank_enabled,
@@ -1263,7 +1243,6 @@ def _cut_anchors(
     settings: Settings,
     *,
     top_k: int,
-    max_records: int,
 ) -> list[AnswerRecord]:
     """``top_k`` で切った起点（文脈の補完と同じ起点の選び方。rerank の後の順。#5173）。"""
     provisional = build_chunk_context_bundle(
@@ -1274,7 +1253,6 @@ def _cut_anchors(
             top_k=max(1, int(top_k)),
             neighbor_child_count=0,
             max_anchors_per_parent=_max_anchors_per_parent(settings),
-            max_records=max_records,
             max_chars=2**31 - 1,
             select_anchors_only=True,
         )
@@ -1410,7 +1388,6 @@ def fill_answer_context(
     *,
     top_k: int,
     neighbor_child_count: int,
-    max_records: int | None = None,
     max_chars: int = MAX_CONTEXT_CHARS,
     supplements: Sequence[AnswerRecord] = (),
     supplement_pool: Sequence[AnswerRecord] = (),
@@ -1424,7 +1401,6 @@ def fill_answer_context(
     主の検索の原文（``anchors.expansion_records``。文脈を補った後なら読んだ前後・親を含む）と補いの原文は分けて渡し、
     主の検索の根拠の前後の文脈は主の検索の原文だけから選ぶ（補いの有無で変えない。#5185）。
     """
-    max_records = _max_context_records(settings) if max_records is None else max_records
     # 文書ごとの上限（#5165）は主の検索の工程で記録済み。同じ規則で同じ候補を残す。
     kept_children = cap_anchors_per_document(list(anchors.ranked_candidates), settings)
     main_pool = {record_context_key(record): record for record in anchors.expansion_records}
@@ -1447,7 +1423,6 @@ def fill_answer_context(
         settings,
         top_k=top_k,
         neighbor_child_count=neighbor_child_count,
-        max_records=max_records,
         max_chars=max_chars,
         expansions=anchors.expansion_candidates,
         supplements=supplements,
@@ -4335,7 +4310,6 @@ def _fill_unread_section_anchors(
             top_k=len(targets),
             neighbor_child_count=neighbor_child_count,
             max_anchors_per_parent=len(targets),
-            max_records=len(targets) * (2 * max(1, neighbor_child_count) + 1),
             max_chars=2**31 - 1,
         )
     )
@@ -4417,7 +4391,6 @@ def _add_context_references(context: AnswerContext, state: dict[str, Any]) -> An
                     top_k=len(children),
                     neighbor_child_count=0,
                     max_anchors_per_parent=len(children),
-                    max_records=len(records),
                     max_chars=2**31 - 1,
                 )
             )

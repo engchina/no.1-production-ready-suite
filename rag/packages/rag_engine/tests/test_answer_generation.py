@@ -722,7 +722,6 @@ class AnswerGenerationTests(unittest.TestCase):
                 records,
                 top_k=1,
                 neighbor_child_count=0,
-                max_records=3,
                 rerank_enabled=True,
                 settings=_rerank_ready_settings(),
             )
@@ -745,7 +744,7 @@ class AnswerGenerationTests(unittest.TestCase):
             ),
         ]
 
-        context = build_chunk_answer_context("needle", records, top_k=1, neighbor_child_count=1, max_records=4)
+        context = build_chunk_answer_context("needle", records, top_k=1, neighbor_child_count=1)
 
         self.assertEqual([record.id for record in context.records], ["parent-1"])
         self.assertIn("ParentChunk", context.text)
@@ -760,7 +759,7 @@ class AnswerGenerationTests(unittest.TestCase):
             _chunk_record("active-parent", "parent", 2, "", "有効親チャンクです。", child_ids=["active-child"]),
         ]
 
-        context = build_chunk_answer_context("needle", records, top_k=1, neighbor_child_count=1, max_records=4)
+        context = build_chunk_answer_context("needle", records, top_k=1, neighbor_child_count=1)
 
         self.assertEqual([record.id for record in context.records], ["active-parent"])
         self.assertNotIn("無効チャンク", context.text)

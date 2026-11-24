@@ -14,10 +14,19 @@ ID は捨てる）。文書が複数でも 1 回の呼び出しにまとめる�
   すべて目次に無い、選んだ章節を読めない、目次から選ぶ設定が無効のときは何も読まず（参照の記述の
   chunk はそのまま根拠に残る）、理由を受領記録に残す（#5348）。番号つきの参照（条・章・様式など）は
   今どおり番号で定位し、この経路を通らない。
-- 一般の質問（#5324。既定は無効）: 起点の文書のうち章節の木を持つ文書の目次から章節を選ぶ。
+- 一般の質問（#5324）: 起点の文書のうち章節の木を持つ文書の目次から章節を選ぶ。
   検索の字面では関連が低く見えるが答えに要る章節は rerank の上位に入らないので、選んだ章節は検索拡張
   （#5162）と同じく rerank にかけず、context の枠の外で根拠に足す。選べないときは何も足さない
   （今の経路で回答する）。
+
+2 つの経路は、目次の渡し方と選んだ章節の読み方を同じ規則にする（#5816。設定は無く、回答のモデルの
+入力の上限（tokens）の 1/2 を 1 文字 = 1 token と数えた字数で決める）。
+
+- 目次: 対象の文書の合計をこの字数までにする（``fit_catalog``。入らなければ深い階層の章節から
+  載せない）。
+- 選んだ章節: 文字数がこの字数以下なら章節の全体を読み、超えれば子の章節に縮める（子も超えれば
+  さらに下へ。``fit_selected_sections``）。超える葉の章節は読まずに受領記録に残す。読む章節の数・
+  合計の字数の上限は無く、1 回の生成に入らない分は分割読取が読む。
 """
 
 from __future__ import annotations
@@ -49,8 +58,8 @@ REFERENCE_SECTION_PROMPT = (
     "question は利用者の質問です。documents は、質問の根拠の資料が名前だけで参照している文書の"
     "目次です。" + _CATALOG_FORMAT + "## Step 2: 読む章節を選ぶ\n" + _SECTION_CHOICE_RULES
 )
-# 一般の質問で、起点の文書の目次から章節を選ぶ指示（#5324）。読む文字数に上限があるので、
-# 返した順に読む（重要な順に並べさせる）。
+# 一般の質問で、起点の文書の目次から章節を選ぶ指示（#5324）。回答の期限の残りが足りなくなると
+# 読むのを止めるので、返した順に読む（重要な順に並べさせる）。
 OUTLINE_SECTION_PROMPT = (
     "## Step 1: 入力を読む\n"
     "question は利用者の質問です。documents は、質問の検索で上位に当たった文書の目次です。"
@@ -61,8 +70,8 @@ OUTLINE_SECTION_PROMPT = (
 )
 
 # 見出しの語の無い章節に添える本文の書き出しの文字数は設定 rag_outline_lead_chars（2 つの経路と
-# rag_outline の既定で共有。#5345）。目次の字数の上限・読む章節の数・読む量は設定（文書全体への
-# 参照は rag_reference_outline_selection_*、一般の質問は rag_outline_selection_*）。
+# rag_outline の既定で共有。#5345）。目次の字数と選んだ章節の大きさの上限は、回答のモデルの入力の
+# 上限の 1/2（#5816。呼び出し元が渡す）。
 
 # 読み方。
 READ_MODE_SECTIONS = "outline_selection"
@@ -78,6 +87,8 @@ SKIP_SELECTION_ERROR = "selection_error"
 SKIP_NO_SELECTION = "no_selection"
 SKIP_UNKNOWN_IDS = "unknown_ids"
 SKIP_SECTIONS_EMPTY = "selected_sections_empty"
+# 選んだ章節がすべて、子の章節に縮めても回答のモデルの入力の上限の 1/2 を超えた（#5816）。
+SKIP_SECTIONS_OVER_LIMIT = "selected_sections_over_limit"
 # 文書全体への参照の参照先を読まなかった理由（受領記録の ``document_read`` の ``skip_reason``。
 # #5348）。ほかの理由（目次が無い・読めない・選択の失敗・何も選ばない・ID がすべて目次に無い・
 # 選んだ章節を読めない）は一般の質問の理由と同じ名前を使う。
@@ -87,8 +98,10 @@ SKIP_NOT_PLANNED = "not_planned"
 DOCUMENT_NO_OUTLINE = "no_outline"
 DOCUMENT_OUTLINE_ERROR = "outline_error"
 # 選んだ章節の読取を途中で止めた理由。
-READ_STOP_CHAR_LIMIT = "read_char_limit"
 READ_STOP_DEADLINE = "deadline"
+# 選んだ章節（を縮めた葉の章節）を読まなかった理由（受領記録の ``unread_sections`` の
+# ``reason``。#5816）。
+UNREAD_OVER_LIMIT = "over_limit"
 
 
 class ReferenceSectionChoice(BaseModel):
@@ -112,8 +125,15 @@ class DocumentReadPlan:
     document_id: str
     chunk_set_id: str
     document_name: str
+    # 目次に載せた章節（字数の上限で深い階層を外した後）。
     sections: list[SectionNode] = field(default_factory=list)
+    # 文書の章節の全体（目次から外した章節を含む。選んだ章節を子の章節に縮めるときに使う。#5816）。
+    outline_sections: list[SectionNode] = field(default_factory=list)
     selected: list[str] = field(default_factory=list)
+    # 入力の上限の 1/2 を超えたため子の章節に縮めた章節と、超える葉の章節で読まなかった章節
+    # （#5816）。
+    shrunk: list[dict[str, object]] = field(default_factory=list)
+    unread: list[dict[str, object]] = field(default_factory=list)
     mode: str = ""
     skip_reason: str | None = None
     read_chunk_count: int = 0
@@ -126,19 +146,27 @@ class DocumentReadPlan:
         if self.skip_reason is None:
             self.skip_reason = reason
 
+    def set_outline(self, nodes: Sequence[SectionNode]) -> None:
+        """文書の章節（根を除き chunk を持つ章節）を、目次の候補と縮めるときの全体に入れる。"""
+        self.sections = list(nodes)
+        self.outline_sections = list(nodes)
+
     def receipt(self) -> dict[str, object]:
-        by_id = {node.section_id: node for node in self.sections}
+        by_id = {node.section_id: node for node in (*self.outline_sections, *self.sections)}
         return {
             "document_id": self.document_id,
             "chunk_set_id": self.chunk_set_id,
             "read_mode": self.mode or None,
             "skip_reason": self.skip_reason,
-            "outline_sections": len(self.sections),
+            "outline_sections": len(self.outline_sections or self.sections),
+            "catalog_sections": len(self.sections),
             "selected_sections": [
                 {"section_id": section_id, "title": by_id[section_id].title}
                 for section_id in self.selected
                 if section_id in by_id
             ],
+            "shrunk_sections": list(self.shrunk),
+            "unread_sections": list(self.unread),
             "read_chunk_count": self.read_chunk_count,
             "read_chars": self.read_chars,
         }
@@ -230,6 +258,97 @@ def without_descendants(sections: Sequence[SectionNode], chosen: Sequence[str]) 
         return False
 
     return [section_id for section_id in chosen if not under_picked(section_id)]
+
+
+@dataclass(frozen=True)
+class FittedSections:
+    """選んだ章節を大きさの上限に合わせた結果（#5816）。
+
+    ``section_ids`` は全体を読む章節（選んだ順。縮めた章節は子の章節の文書の順に置き換える）。
+    ``shrunk`` は子の章節に縮めた章節、``unread`` は上限を超える葉の章節（読まない）。
+    """
+
+    section_ids: list[str]
+    shrunk: list[dict[str, object]]
+    unread: list[dict[str, object]]
+
+
+def fit_selected_sections(
+    sections: Sequence[SectionNode], chosen: Sequence[str], max_chars: int
+) -> FittedSections:
+    """選んだ章節を、文字数（``SectionNode.chars``。子の章節の分を含む。1 文字 = 1 token）が
+    ``max_chars`` 以下の章節にする（#5816）。
+
+    章節の文字数が ``max_chars`` 以下なら章節の全体を読む。超えれば子の章節（chunk を持つ章節）に
+    縮め、子も超えればさらに下へ縮める。子の章節を持たずに超える章節は読まない。章節の数・合計の
+    字数では切らない。
+    """
+    by_id = {node.section_id: node for node in sections}
+    children: dict[str, list[SectionNode]] = {}
+    for node in sorted(sections, key=lambda item: item.ordinal):
+        if node.parent_section_id and node.chunk_count > 0:
+            children.setdefault(node.parent_section_id, []).append(node)
+    limit = max(1, int(max_chars))
+    section_ids: list[str] = []
+    shrunk: list[dict[str, object]] = []
+    unread: list[dict[str, object]] = []
+
+    def visit(node: SectionNode) -> None:
+        if node.section_id in section_ids:
+            return
+        if node.chars <= limit:
+            section_ids.append(node.section_id)
+            return
+        below = children.get(node.section_id, [])
+        if not below:
+            unread.append(
+                {
+                    "section_id": node.section_id,
+                    "title": node.title,
+                    "chars": node.chars,
+                    "reason": UNREAD_OVER_LIMIT,
+                }
+            )
+            return
+        shrunk.append(
+            {
+                "section_id": node.section_id,
+                "title": node.title,
+                "chars": node.chars,
+                "children": [child.section_id for child in below],
+            }
+        )
+        for child in below:
+            visit(child)
+
+    for section_id in chosen:
+        if (picked := by_id.get(section_id)) is not None:
+            visit(picked)
+    return FittedSections(section_ids=section_ids, shrunk=shrunk, unread=unread)
+
+
+def fit_catalog(
+    plans: Sequence[DocumentReadPlan], rows: Sequence[Sequence[str]], max_chars: int
+) -> tuple[list[list[str]], list[int]]:
+    """計画ごとの目次の全体の行（``plan.sections`` と同じ順）を、合計 ``max_chars`` 字の目次に
+    する（#5816）。
+
+    字数は文書に分け（``allot_catalog_chars``）、入らない文書は深い階層の行から外す
+    （``fit_catalog_lines``）。``plan.sections`` は目次に載せた章節にする（縮めるときの全体は
+    ``plan.outline_sections`` に残る）。
+    戻り値は (計画ごとの目次の行, 計画ごとの載せなかった章節の数)。
+    """
+    allotted = allot_catalog_chars(
+        [sum(len(row) + 1 for row in lines) for lines in rows], max_chars
+    )
+    fitted: list[list[str]] = []
+    omitted: list[int] = []
+    for plan, lines, limit in zip(plans, rows, allotted, strict=True):
+        kept = fit_catalog_lines(plan.sections, lines, limit)
+        omitted.append(len(plan.sections) - len(kept))
+        plan.sections = [plan.sections[index] for index in kept]
+        fitted.append([lines[index] for index in kept])
+    return fitted, omitted
 
 
 def allot_catalog_chars(lengths: Sequence[int], total: int) -> list[int]:

@@ -41,7 +41,6 @@ def test_low_scored_attachment_reaches_context(threshold):
         settings,
         top_k=2,
         neighbor_child_count=0,
-        max_records=2,
         max_chars=1000,
     )
     assert [r.id for r in bundle.records] == ["pa", "pb", "pc"]
@@ -76,9 +75,7 @@ def test_long_attachment_is_kept_for_batched_generation():
     records, parents = _candidates()
     parents[-1] = replace(parents[-1], text="添付の長い本文" * 100)
     ranked = _records_by_rerank_ranks(records, [RerankTextRank(0, 0.9), RerankTextRank(1, 0.8), RerankTextRank(2, 0.01)], settings)
-    bundle = a._bundle_context(
-        "添付", ranked, [*records, *parents], settings, top_k=2, neighbor_child_count=0, max_records=2, max_chars=100
-    )
+    bundle = a._bundle_context("添付", ranked, [*records, *parents], settings, top_k=2, neighbor_child_count=0, max_chars=100)
     assert [r.id for r in bundle.records] == ["pa", "pb", "pc"]
     assert bundle.records[-1].text == parents[-1].text
     assert not bundle.excluded_evidence
@@ -96,7 +93,7 @@ def test_retrieval_trace_records_long_attachment_retention(monkeypatch):
     assert output["attachment_candidate_count"] == output["attachment_selected_count"] == 1
     assert output["attachment_preserved_below_min_score_count"] == 1
     parents[-1] = replace(parents[-1], text="長い本文" * 100)
-    a._bundle_context("添付", ranked, [*records, *parents], settings, top_k=2, neighbor_child_count=0, max_records=2, max_chars=100)
+    a._bundle_context("添付", ranked, [*records, *parents], settings, top_k=2, neighbor_child_count=0, max_chars=100)
     context = next(stage for stage in stages if stage["stage"] == "answer_context")
     assert context["attachment_anchor_count"] == 1
     assert context["attachment_context_count"] == 1

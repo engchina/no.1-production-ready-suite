@@ -1650,12 +1650,7 @@ class AnswerEngine:
                             "対象の文書の数の上限": (
                                 self._settings.rag_outline_selection_max_documents
                             ),
-                            "目次の字数の上限": (
-                                self._settings.rag_outline_selection_catalog_max_chars
-                            ),
-                            "読む章節の字数の上限": (
-                                self._settings.rag_outline_selection_read_max_chars
-                            ),
+                            "目次の字数と章節の大きさの上限": self._outline_limit_chars(),
                             "同じ回答の選択の再利用": reused,
                         }
                     )
@@ -2989,25 +2984,20 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """目次から選んだ章節を、章節の中の順に読む(``rag_read_section`` と同じ読取。#5263)。
 
-        範囲は参照先を読む範囲(``_reference_scope``)。章節が重なる chunk は 1 回だけ、参照先 1 つで
-        ``rag_reference_outline_selection_read_max_chunks`` 件まで。読めない章節は記録して次の
-        章節へ進む。
+        範囲は参照先を読む範囲(``_reference_scope``)。選んだ章節(入力の上限の 1/2 に縮めた後。
+        #5816)はそれぞれ全体を読み、章節の数・chunk の数では切らない(1 回の生成に入らない分は
+        分割読取が読む)。章節が重なる chunk は 1 回だけ。読めない章節は記録して次の章節へ進む。
         """
         from app.rag.section_map_service import read_section
-
-        max_chunks = self._settings.rag_reference_outline_selection_read_max_chunks
 
         rows: list[RetrievedChunk] = []
         seen: set[str] = set()
         for section_id in plan.selected:
-            if len(rows) >= max_chunks:
-                break
             try:
                 text = await read_section(
                     plan.document_id,
                     section_id,
                     chunk_set_id=plan.chunk_set_id,
-                    limit=max_chunks - len(rows),
                     filters=scope,
                     oracle=self._oracle,
                 )
@@ -3089,7 +3079,7 @@ class AnswerEngine:
                 plan.skip(DOCUMENT_NO_OUTLINE)
                 continue
             plan.document_name = outline.chunk_set.file_name or plan.document_name
-            plan.sections = nodes
+            plan.set_outline(nodes)
             selectable.append((key, plan, outline))
         if selectable:
             await self._select_reference_sections(request, state, selectable, reserve)
@@ -3101,33 +3091,25 @@ class AnswerEngine:
         selectable: Sequence[tuple[tuple[str, ...], Any, Any]],
         reserve: float,
     ) -> None:
-        """回答のモデルに目次を渡して読む章節を選ばせ、目次にある ID だけを計画に入れる(#5263)。"""
+        """回答のモデルに目次を渡して読む章節を選ばせ、目次にある ID だけを計画に入れる(#5263)。
+
+        目次の字数と選んだ章節の読み方は、起点の文書の目次の選択と同じ(#5816。``_outline_limit_chars``)。
+        """
         from app.rag.reference_sections import (
             REFERENCE_SECTION_PROMPT,
             SKIP_NO_SELECTION,
+            SKIP_SECTIONS_OVER_LIMIT,
             SKIP_SELECTION_ERROR,
             SKIP_UNKNOWN_IDS,
+            fit_selected_sections,
             without_descendants,
         )
-        from app.rag.section_catalog import compact_section_lines
 
         plans = [plan for _key, plan, _outline in selectable]
-        settings = self._settings
-        per_document = max(
-            1, settings.rag_reference_outline_selection_catalog_max_chars // len(selectable)
+        limit = self._outline_limit_chars()
+        lines, omitted = await self._outline_catalog(
+            [(plan, outline) for _key, plan, outline in selectable], limit
         )
-        lines: list[list[str]] = []
-        omitted: list[int] = []
-        for _key, plan, outline in selectable:
-            rows, skipped = await compact_section_lines(
-                self._oracle,
-                outline,
-                plan.sections,
-                settings.rag_outline_lead_chars,
-                max_chars=per_document,
-            )
-            lines.append(rows)
-            omitted.append(skipped)
         call: dict[str, object] = {}
         state.reference_section_selections.append(call)
         result = await self._choose_sections(
@@ -3147,9 +3129,15 @@ class AnswerEngine:
                 plan.skip(SKIP_SELECTION_ERROR)
             return
         for index, plan in enumerate(plans):
-            chosen = without_descendants(plan.sections, result.selected.get(index, []))
-            if chosen:
-                plan.selected = chosen[: settings.rag_reference_outline_selection_max_sections]
+            chosen = result.selected.get(index, [])
+            fitted = fit_selected_sections(
+                plan.outline_sections, without_descendants(plan.outline_sections, chosen), limit
+            )
+            plan.shrunk, plan.unread = fitted.shrunk, fitted.unread
+            if fitted.section_ids:
+                plan.selected = fitted.section_ids
+            elif chosen:
+                plan.skip(SKIP_SECTIONS_OVER_LIMIT)
             elif result.returned and not result.selected:
                 plan.skip(SKIP_UNKNOWN_IDS)
             else:
@@ -3292,6 +3280,38 @@ class AnswerEngine:
         )
         return result
 
+    def _outline_limit_chars(self) -> int:
+        """目次の字数と選んだ章節 1 つの大きさの上限(#5816)。
+
+        回答のモデルの入力の上限(tokens。共通のモデル設定の登録値)の 1/2 を、1 文字 = 1 token と
+        数えた字数。2 つの目次の選択(起点の文書・参照先の文書)で同じ値を使う。
+        """
+        answer_model = self._answer_model_id or enterprise_ai_default_model_id(self._settings)
+        return max(1, enterprise_ai_max_input_tokens(self._settings, answer_model) // 2)
+
+    async def _outline_catalog(
+        self, outlines: Sequence[tuple[Any, Any]], limit: int
+    ) -> tuple[list[list[str]], list[int]]:
+        """計画ごとの目次の行を、合計 ``limit`` 字までにして作る(#5816。2 つの目次の選択で共有)。
+
+        ``outlines`` は (計画, 章節の一覧)。目次の全体の行(``rag_outline`` の compact と同じ目録)を
+        作り、入らなければ深い階層の章節から載せない(``fit_catalog``)。
+        """
+        from app.rag.reference_sections import fit_catalog
+        from app.rag.section_catalog import compact_section_lines
+
+        full: list[list[str]] = []
+        for plan, outline in outlines:
+            rows, _skipped = await compact_section_lines(
+                self._oracle,
+                outline,
+                plan.sections,
+                self._settings.rag_outline_lead_chars,
+                max_chars=2**31 - 1,
+            )
+            full.append(rows)
+        return fit_catalog([plan for plan, _outline in outlines], full, limit)
+
     async def _outline_selection(
         self, request: SearchRequest, state: _SearchState, anchors: Sequence[RetrievedChunk]
     ) -> list[RetrievedChunk]:
@@ -3299,14 +3319,17 @@ class AnswerEngine:
 
         切った起点(``anchors``。rerank の後の順。#5389)の文書を版ごとに順位の順で
         ``rag_outline_selection_max_documents`` 件まで採り、章節の木を持つ文書の目次
-        (``rag_outline`` の compact と同じ目録。合計 ``rag_outline_selection_catalog_max_chars``
-        字まで)を回答のモデルに 1 回だけ渡して章節を選ばせる(文書全体への参照の #5263 と同じ部品)。
-        目次にある ID の章節をモデルが返した順に ``read_section`` で読み、本文の合計が
-        ``rag_outline_selection_read_max_chars`` 字に達したら止める。範囲は実体の拡張と
-        同じ(``_expansion_scope``)。1 回の回答で 1 回だけ選び、以後の検索は同じ chunk を返す。
+        (``rag_outline`` の compact と同じ目録)を回答のモデルに 1 回だけ渡して章節を選ばせる
+        (文書全体への参照の #5263 と同じ部品)。目次の字数と選んだ章節の読み方は参照先と同じ
+        (#5816): 目次は回答のモデルの入力の上限の 1/2 の字数まで、選んだ章節は文字数が 1/2 以下なら
+        全体を読み、超えれば子の章節に縮める(超える葉の章節は読まない)。読む章節の数・合計の字数では
+        止めず、1 回の生成に入らない分は分割読取が読む。目次にある ID の章節をモデルが返した順に
+        ``read_section`` で読む。範囲は実体の拡張と同じ(``_expansion_scope``)。1 回の回答で 1 回だけ
+        選び、以後の検索は同じ chunk を返す。
 
         回答の期限の残りが選択と読取の予約(生成の 1 回の見積もりの 2 回分と確定の分)より少なければ
-        選ばない。選べない・何も選ばない・読めないときは何も足さない(今の経路で回答する)。記録は
+        選ばない。読取の途中で期限の残りが生成の予約より少なくなれば、残りの章節を読まない。選べない・
+        何も選ばない・読めないときは何も足さない(今の経路で回答する)。記録は
         ``state.outline_selection``(回答の診断の ``outline_selection``)に残す。
         """
         from app.rag.reference_sections import (
@@ -3315,21 +3338,19 @@ class AnswerEngine:
             OUTLINE_SECTION_PROMPT,
             OUTLINE_SELECTION_KEY,
             READ_MODE_SECTIONS,
-            READ_STOP_CHAR_LIMIT,
             READ_STOP_DEADLINE,
             SKIP_DEADLINE,
             SKIP_NO_CANDIDATES,
             SKIP_NO_OUTLINE,
             SKIP_NO_SELECTION,
             SKIP_SECTIONS_EMPTY,
+            SKIP_SECTIONS_OVER_LIMIT,
             SKIP_SELECTION_ERROR,
             SKIP_UNKNOWN_IDS,
             DocumentReadPlan,
-            allot_catalog_chars,
-            fit_catalog_lines,
+            fit_selected_sections,
             without_descendants,
         )
-        from app.rag.section_catalog import compact_section_lines
         from app.rag.section_chunk_map import ROOT_SECTION_ID
         from app.rag.section_map_service import READ_SECTION_BATCH, read_section, section_outline
 
@@ -3338,17 +3359,18 @@ class AnswerEngine:
         settings = self._settings
         generation_reserve = _reference_generation_reserve_seconds(settings)
         reserve = generation_reserve + float(settings.rag_answer_generation_round_estimate_seconds)
-        read_limit = settings.rag_outline_selection_read_max_chars
+        limit = self._outline_limit_chars()
         record: dict[str, object] = {
             "max_documents": settings.rag_outline_selection_max_documents,
-            "catalog_max_chars": settings.rag_outline_selection_catalog_max_chars,
-            "read_max_chars": read_limit,
+            # 目次の字数と選んだ章節 1 つの大きさの上限(回答のモデルの入力の上限の 1/2。#5816)。
+            "limit_chars": limit,
             "deadline_reserve_seconds": reserve,
             "skip_reason": None,
             "documents": [],
             "selection": None,
             "read_chars": 0,
             "read_stop_reason": None,
+            "shrunk_sections": [],
             "unread_sections": [],
             "added_count": 0,
         }
@@ -3398,35 +3420,15 @@ class AnswerEngine:
                 plan.skip(DOCUMENT_NO_OUTLINE)
                 continue
             plan.document_name = outline.chunk_set.file_name or ""
-            plan.sections = nodes
+            plan.set_outline(nodes)
             outlines.append((plan, outline))
         documents = cast(list[dict[str, object]], record["documents"])
         if not outlines:
             documents.extend(plan.receipt() for plan in plans)
             record["skip_reason"] = SKIP_NO_OUTLINE
             return []
-        full: list[list[str]] = []
-        for plan, outline in outlines:
-            rows, _skipped = await compact_section_lines(
-                self._oracle,
-                outline,
-                plan.sections,
-                settings.rag_outline_lead_chars,
-                max_chars=2**31 - 1,
-            )
-            full.append(rows)
-        allotted = allot_catalog_chars(
-            [sum(len(row) + 1 for row in rows) for rows in full],
-            settings.rag_outline_selection_catalog_max_chars,
-        )
         selectable = [plan for plan, _outline in outlines]
-        lines: list[list[str]] = []
-        omitted: list[int] = []
-        for plan, rows, limit in zip(selectable, full, allotted, strict=True):
-            kept = fit_catalog_lines(plan.sections, rows, limit)
-            omitted.append(len(plan.sections) - len(kept))
-            plan.sections = [plan.sections[index] for index in kept]
-            lines.append([rows[index] for index in kept])
+        lines, omitted = await self._outline_catalog(outlines, limit)
         call: dict[str, object] = {}
         record["selection"] = call
         result = await self._choose_sections(
@@ -3452,41 +3454,55 @@ class AnswerEngine:
             )
             documents.extend(plan.receipt() for plan in plans)
             return []
+        # 親の章節を選べば子の章節も読むので、選んだ章節の下の章節を除き、モデルが返した順に
+        # 入力の上限の 1/2 へ縮める(#5816)。
         kept_sections = {
-            index: set(without_descendants(plan.sections, result.selected.get(index, [])))
+            index: set(without_descendants(plan.outline_sections, result.selected.get(index, [])))
             for index, plan in enumerate(selectable)
         }
-        order = [
-            (index, section_id)
-            for index, section_id in result.ordered
-            if section_id in kept_sections[index]
-        ]
-        for index, section_id in order:
-            selectable[index].selected.append(section_id)
+        order: list[tuple[int, str]] = []
+        shrunk = cast(list[dict[str, object]], record["shrunk_sections"])
+        unread = cast(list[dict[str, object]], record["unread_sections"])
+        for index, section_id in result.ordered:
+            if section_id not in kept_sections[index]:
+                continue
+            plan = selectable[index]
+            fitted = fit_selected_sections(plan.outline_sections, [section_id], limit)
+            plan.shrunk.extend(fitted.shrunk)
+            plan.unread.extend(fitted.unread)
+            shrunk.extend({"document_id": plan.document_id, **item} for item in fitted.shrunk)
+            unread.extend({"document_id": plan.document_id, **item} for item in fitted.unread)
+            for fitted_id in fitted.section_ids:
+                if fitted_id not in plan.selected:
+                    plan.selected.append(fitted_id)
+                    order.append((index, fitted_id))
         scope = _expansion_scope(request.filters)
         added: list[RetrievedChunk] = []
         seen: set[str] = set()
-        used = 0
-        unread = cast(list[dict[str, object]], record["unread_sections"])
+        titles = {
+            (index, node.section_id): node.title
+            for index, plan in enumerate(selectable)
+            for node in plan.outline_sections
+        }
         for index, section_id in order:
             plan = selectable[index]
-            stop = (
-                READ_STOP_CHAR_LIMIT
-                if used >= read_limit
-                else READ_STOP_DEADLINE
-                if _reference_deadline_short(state, generation_reserve)
-                else None
-            )
-            if stop is not None:
-                record["read_stop_reason"] = record["read_stop_reason"] or stop
-                unread.append({"document_id": plan.document_id, "section_id": section_id})
+            if _reference_deadline_short(state, generation_reserve):
+                record["read_stop_reason"] = record["read_stop_reason"] or READ_STOP_DEADLINE
+                unread.append(
+                    {
+                        "document_id": plan.document_id,
+                        "section_id": section_id,
+                        "reason": READ_STOP_DEADLINE,
+                    }
+                )
                 continue
-            title = next(
-                (node.title for node in plan.sections if node.section_id == section_id), ""
-            )
-            mark = {"document_id": plan.document_id, "section_id": section_id, "title": title}
+            mark = {
+                "document_id": plan.document_id,
+                "section_id": section_id,
+                "title": titles.get((index, section_id), ""),
+            }
             start = 0
-            while used < read_limit:
+            while True:
                 try:
                     text = await read_section(
                         plan.document_id,
@@ -3504,20 +3520,7 @@ class AnswerEngine:
                     chunk = row.chunk
                     if chunk.chunk_id in seen or is_derived_chunk(chunk):
                         continue
-                    if used + len(chunk.text) > read_limit:
-                        # 上限に入らない chunk から先は読まない(この章節の残りと後の章節)。
-                        record["read_stop_reason"] = READ_STOP_CHAR_LIMIT
-                        unread.append(
-                            {
-                                "document_id": plan.document_id,
-                                "section_id": section_id,
-                                "partial": True,
-                            }
-                        )
-                        used = read_limit
-                        break
                     seen.add(chunk.chunk_id)
-                    used += len(chunk.text)
                     plan.read_chunk_count += 1
                     plan.read_chars += len(chunk.text)
                     current = state.chunks.get(chunk.chunk_id, chunk)
@@ -3536,7 +3539,7 @@ class AnswerEngine:
         record["read_chars"] = sum(plan.read_chars for plan in selectable)
         record["added_count"] = len(added)
         if not added:
-            record["skip_reason"] = SKIP_SECTIONS_EMPTY
+            record["skip_reason"] = SKIP_SECTIONS_EMPTY if order else SKIP_SECTIONS_OVER_LIMIT
         state.outline_selection_ids = [chunk.chunk_id for chunk in added]
         return added
 

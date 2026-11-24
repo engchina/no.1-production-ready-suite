@@ -76,7 +76,6 @@ def test_context_is_read_after_the_ranked_anchor_choice():
             SimpleNamespace(),
             top_k=1,
             neighbor_child_count=0,
-            max_records=5,
             max_chars=1000,
         )
     assert calls == [["last"]]
@@ -100,7 +99,6 @@ def test_parent_group_uses_one_anchor_slot_and_fills_the_next_original():
             active_records=records,
             top_k=2,
             neighbor_child_count=0,
-            max_records=3,
             max_chars=1000,
             select_anchors_only=True,
         )

@@ -1049,7 +1049,7 @@ class Settings(
         description=(
             "番号つきの参照(第 3 章・別紙 1 など)の参照先 1 つで、番号で定位した節の先頭から"
             "読み順に読む chunk の上限(#5348)。文書名・ファイル名だけの参照は目次から選んだ章節を"
-            "読み、rag_reference_outline_selection_read_max_chunks に従う。"
+            "読む(rag_reference_outline_selection_enabled)。"
         ),
     )
     rag_reference_outline_selection_enabled: bool = Field(
@@ -1058,18 +1058,11 @@ class Settings(
             "文書名・ファイル名だけで文書全体を指す参照の参照先を、目次から回答のモデルが選んだ章節で"
             "読む(#5263。全体設定だけで決め、検索・回答プロファイルでは上書きしない)。参照先が複数でも"
             "モデルの呼び出しは 1 回。選んだ章節だけを読み、目次が無い・選べない・選んだ章節を"
-            "読めないときは読まない(理由を回答の診断に残す。#5348)。既定は有効(#5296)。無効なら"
+            "読めないときは読まない(理由を回答の診断に残す。#5348)。目次の字数・選んだ章節の"
+            "読み方は起点の文書の目次の選択と同じ(#5816。回答のモデルの入力の上限の 1/2 で決め、"
+            "設定は無い)。"
+            "既定は有効(#5296)。無効なら"
             "文書名・ファイル名だけの参照の参照先は読まない(参照の記述の chunk は根拠に残る)。"
-        ),
-    )
-    rag_reference_outline_selection_catalog_max_chars: int = Field(
-        default=40000,
-        ge=2000,
-        le=80000,
-        description=(
-            "文書全体への参照の参照先の目次を回答のモデルに渡す字数の上限(#5263。参照先の合計を"
-            "参照先ごとに均等に割り、目次の順に入るところまで載せる)。範囲は一般の選択の"
-            "rag_outline_selection_catalog_max_chars と同じ。"
         ),
     )
     rag_outline_lead_chars: int = Field(
@@ -1083,24 +1076,6 @@ class Settings(
             "範囲は rag_outline の lead_chars と同じ。"
         ),
     )
-    rag_reference_outline_selection_max_sections: int = Field(
-        default=12,
-        ge=1,
-        le=50,
-        description=(
-            "文書全体への参照の参照先 1 つで、目次から選んだ章節を読む数の上限(#5263。モデルが"
-            "返した順に採る)。"
-        ),
-    )
-    rag_reference_outline_selection_read_max_chunks: int = Field(
-        default=400,
-        ge=10,
-        le=1000,
-        description=(
-            "文書全体への参照の参照先 1 つで、目次から選んだ章節から読む chunk の合計の上限"
-            "(#5263)。"
-        ),
-    )
     rag_outline_selection_enabled: bool = Field(
         default=True,
         description=(
@@ -1108,7 +1083,10 @@ class Settings(
             "条件)のうち章節の木を"
             "持つ文書の目次を回答のモデルに 1 回だけ渡し、質問に要る章節を選ばせ、選んだ章節を"
             "rerank にかけずに根拠に足す(#5324。全体設定だけで決め、検索・回答プロファイルでは"
-            "上書きしない)。context の枠に数えず、根拠の予算を超える分は分割読取へ渡す。回答の"
+            "上書きしない)。目次は回答のモデルの入力の上限の 1/2 の字数まで(入らなければ深い階層の"
+            "章節から載せない)。選んだ章節は文字数(1 文字 = 1 token)が入力の上限の 1/2 以下なら"
+            "全体を読み、超えれば子の章節に縮める(#5816。超える葉の章節は読まず診断に残す)。"
+            "context の枠に数えず、根拠の予算を超える分は分割読取へ渡す。回答の"
             "期限の残りが選択と読取の予約(生成の 1 回の見積もりの 2 回分と確定の分)より少なければ"
             "選ばない。既定は有効(#5362)。無効にすると LLM の呼び出しは増えない。"
         ),
@@ -1120,24 +1098,6 @@ class Settings(
         description=(
             "目次から章節を選ぶ対象にする、起点の文書の数(#5324。1〜10)。章節の木の無い文書は"
             "数に入れたまま対象にしない。"
-        ),
-    )
-    rag_outline_selection_catalog_max_chars: int = Field(
-        default=40000,
-        ge=2000,
-        le=80000,
-        description=(
-            "回答のモデルに渡す目次の字数の上限(#5324。対象の文書の合計)。入らなければ深い階層の"
-            "章節から目次に載せない。"
-        ),
-    )
-    rag_outline_selection_read_max_chars: int = Field(
-        default=20000,
-        ge=2000,
-        le=200000,
-        description=(
-            "目次から選んだ章節を読む本文の字数の上限(#5324。対象の文書の合計)。モデルが返した順に"
-            "読み、上限に達したら読むのを止める。"
         ),
     )
     rag_entity_index_enabled: bool = Field(

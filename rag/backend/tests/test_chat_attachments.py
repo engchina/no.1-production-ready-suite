@@ -266,7 +266,6 @@ def test_attachment_below_rerank_threshold_reaches_final_evidence(
         settings,
         top_k=1,
         neighbor_child_count=0,
-        max_records=1,
         max_chars=1000,
     )
     assert len(bundle.records) == 2

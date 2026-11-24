@@ -32,8 +32,6 @@ JAPANESE_STOP_PATTERN = re.compile(
     r"には|では|とは|から|まで|より|の|を|に|は|が|で|と|へ)"
 )
 
-MAX_CONTEXT_RECORDS = 12
-
 MAX_RECORD_TEXT_CHARS = 1200
 
 
@@ -78,8 +76,9 @@ def preferred_records(records: Sequence[AnswerRecord], preferred_engines: Iterab
     return selected or list(records)
 
 
-def rank_records(question: str, records: Sequence[AnswerRecord], limit: int = MAX_CONTEXT_RECORDS) -> list[AnswerRecord]:
-    """質問との lexical 類似度で record を順位付けします。"""
+def rank_records(question: str, records: Sequence[AnswerRecord], limit: int | None = None) -> list[AnswerRecord]:
+    """質問との lexical 類似度で record を順位付けします（``limit`` が無ければすべて）。"""
+    limit = len(records) if limit is None else limit
     if limit <= 0:
         return []
 
@@ -89,9 +88,10 @@ def rank_records(question: str, records: Sequence[AnswerRecord], limit: int = MA
 def rank_records_with_rrf(
     queries: Sequence[str],
     records: Sequence[AnswerRecord],
-    limit: int = MAX_CONTEXT_RECORDS,
+    limit: int | None = None,
 ) -> list[AnswerRecord]:
-    """複数 query の順位を RRF で融合して record を並べます。"""
+    """複数 query の順位を RRF で融合して record を並べます（``limit`` が無ければすべて）。"""
+    limit = len(records) if limit is None else limit
     if limit <= 0:
         return []
 

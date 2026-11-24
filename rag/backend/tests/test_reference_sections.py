@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -397,15 +398,25 @@ def test_prompt_uses_steps_and_schema_holds_the_field_meaning() -> None:
     assert schema.get("additionalProperties") is False
 
 
-def test_limits_default_to_the_previous_constants() -> None:
-    """目次の字数・読む章節の数・読む chunk の上限の既定は、設定にする前の定数と同じ(#5335)。"""
+def test_limits_default_to_the_previous_constants(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目次の字数・読む章節の数・読む chunk の上限の設定は無い(#5816。入力の上限の 1/2 で決める)。
+
+    配備済みの .env に残った削除した設定は読み捨てる(起動を止めない)。
+    """
     from app.config import Settings
 
+    removed = (
+        "rag_reference_outline_selection_catalog_max_chars",
+        "rag_reference_outline_selection_max_sections",
+        "rag_reference_outline_selection_read_max_chunks",
+        "rag_outline_selection_catalog_max_chars",
+        "rag_outline_selection_read_max_chars",
+    )
+    for name in removed:
+        monkeypatch.setenv(name.upper(), "12")
     settings = Settings(_env_file=None)
-    assert settings.rag_reference_outline_selection_catalog_max_chars == 40000
-    assert settings.rag_reference_outline_selection_max_sections == 12
-    assert settings.rag_reference_outline_selection_read_max_chunks == 400
-    # 番号つきの参照の節から読む chunk の上限も、設定にする前の定数(8)と同じ(#5348)。
+    assert not any(hasattr(settings, name) for name in removed)
+    # 番号つきの参照の節から読む chunk の上限は、設定にする前の定数(8)と同じ(#5348)。
     assert settings.rag_reference_section_read_max_chunks == 8
     # 目次の行の書き出しの字数も、設定にする前の定数と同じ(#5345)。
     assert settings.rag_outline_lead_chars == 60
@@ -414,9 +425,6 @@ def test_limits_default_to_the_previous_constants() -> None:
 @pytest.mark.parametrize(
     ("name", "low", "high"),
     [
-        ("rag_reference_outline_selection_catalog_max_chars", 2000, 80000),
-        ("rag_reference_outline_selection_max_sections", 1, 50),
-        ("rag_reference_outline_selection_read_max_chunks", 10, 1000),
         ("rag_reference_section_read_max_chunks", 1, 50),
         ("rag_outline_lead_chars", 0, 200),
     ],
@@ -437,8 +445,14 @@ def test_limits_reject_values_out_of_range(name: str, low: int, high: int) -> No
             build(invalid)
 
 
-async def test_catalog_limit_is_split_between_targets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """目次の字数の上限は設定の値で、参照先ごとに均等に割る(#5335)。"""
+async def test_catalog_limit_is_half_of_the_answer_model_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目次の字数の上限は回答のモデルの入力の上限の 1/2(#5816。起点の文書の選択と同じ)。
+
+    目次の全体の行を作ってから参照先に分け、入らない分は載せない(章節が 1 段なら先頭から入る分)。
+    """
+    from app.config import enterprise_ai_default_model_id, enterprise_ai_max_input_tokens
     from app.rag import section_catalog
 
     limits: list[int] = []
@@ -452,17 +466,30 @@ async def test_catalog_limit_is_split_between_targets(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(section_catalog, "compact_section_lines", recording)
     engine, _oracle, _sections, _llm = _setup(
-        monkeypatch,
-        outlines={DOC_A, DOC_B},
-        pick=lambda context: [],
-        rag_reference_outline_selection_catalog_max_chars=3000,
+        monkeypatch, outlines={DOC_A, DOC_B}, pick=lambda context: []
+    )
+    settings = engine._settings
+    assert engine._outline_limit_chars() == (
+        enterprise_ai_max_input_tokens(settings, enterprise_ai_default_model_id(settings)) // 2
     )
 
-    await _search(engine)
+    _result, state = await _search(engine)
 
-    assert limits == [1500, 1500]
+    # 目次の行は字数で切らずに作り、上限は 2 つの参照先の合計に掛ける。
+    assert limits == [2**31 - 1, 2**31 - 1]
     # 目次の行の書き出しの字数は既定の設定(設定にする前の定数と同じ 60。#5345)。
     assert leads == [60, 60]
+    (whole,) = _selections(state)
+    assert whole["catalog_omitted_sections"] == 0
+
+    engine, _oracle, _sections, _llm = _setup(
+        monkeypatch, outlines={DOC_A, DOC_B}, pick=lambda context: []
+    )
+    monkeypatch.setattr(engine, "_outline_limit_chars", lambda: 100)
+    _result, state = await _search(engine)
+    (small,) = _selections(state)
+    assert small["catalog_omitted_sections"] > 0
+    assert small["catalog_chars"] < whole["catalog_chars"]
 
 
 async def test_catalog_lead_chars_follow_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -490,10 +517,10 @@ async def test_catalog_lead_chars_follow_the_setting(monkeypatch: pytest.MonkeyP
     assert leads == [7]
 
 
-async def test_section_and_chunk_limits_follow_the_settings(
+async def test_every_selected_section_is_read_without_count_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """読む章節の数と、参照先 1 つから読む chunk の上限は設定の値(#5335)。"""
+    """選んだ章節は、章節の数・chunk の数で切らずにすべて読む(#5816。旧 12 章節・400 chunk)。"""
 
     def pick_all(context: str) -> list[str]:
         return [
@@ -501,28 +528,63 @@ async def test_section_and_chunk_limits_follow_the_settings(
         ]
 
     engine, _oracle, sections, _llm = _setup(
-        monkeypatch,
-        outlines={DOC_A},
-        targets=[TARGET_A],
-        pick=pick_all,
-        rag_reference_outline_selection_max_sections=3,
+        monkeypatch, outlines={DOC_A}, targets=[TARGET_A], pick=pick_all
     )
-    await _search(engine)
-    assert len(sections.read_calls) == 3
+    result, state = await _search(engine)
+    # 合成の文書は 31 章節(1 章節に 1 chunk)。
+    assert len(sections.read_calls) == 31
+    assert len(result.expansion_chunks) == 31
+    assert _reads(state)[DOC_A]["read_chunk_count"] == 31
 
+
+async def test_selected_section_over_the_limit_is_shrunk_to_its_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """入力の上限の 1/2 を超える章節は子の章節に縮め、超える葉の章節は読まない(#5816)。"""
     engine, _oracle, sections, _llm = _setup(
         monkeypatch,
         outlines={DOC_A},
         targets=[TARGET_A],
-        pick=pick_all,
-        rag_reference_outline_selection_max_sections=50,
-        rag_reference_outline_selection_read_max_chunks=10,
+        pick=lambda context: [_label(context, "手順の章")],
     )
+    original = sections.sections
+
+    def nested(document_id: str) -> list[Any]:
+        nodes = original(document_id)
+        parent = f"{document_id}#手順の章"
+        small, large = f"{document_id}#操作の手順", f"{document_id}#設定項目 0"
+        changed = [
+            replace(
+                node,
+                parent_section_id=parent,
+                level=2,
+                chars=40 if node.section_id == small else 500,
+            )
+            if node.section_id in (small, large)
+            else node
+            for node in nodes
+        ]
+        head = _node(parent, "手順の章")
+        return [changed[0], replace(head, chars=540, chunk_count=2), *changed[1:]]
+
+    monkeypatch.setattr(sections, "sections", nested)
+    monkeypatch.setattr(engine, "_outline_limit_chars", lambda: 100)
+
     result, state = await _search(engine)
-    # 章節は 1 つに 1 chunk の合成なので、10 件で読むのを止める。
-    assert len(sections.read_calls) == 10
-    assert len(result.expansion_chunks) == 10
-    assert _reads(state)[DOC_A]["read_chunk_count"] == 10
+
+    # 手順の章(540 字)は 1/2(100 字)を超えるので子の章節に縮め、操作の手順(40 字)だけを読む。
+    assert sections.read_calls == [(DOC_A, f"{DOC_A}#操作の手順")]
+    assert [child.chunk_uid for child in result.expansion_chunks] == [f"{DOC_A}:cs:body"]
+    read = _reads(state)[DOC_A]
+    assert [item["section_id"] for item in read["shrunk_sections"]] == [f"{DOC_A}#手順の章"]
+    assert read["unread_sections"] == [
+        {
+            "section_id": f"{DOC_A}#設定項目 0",
+            "title": "設定項目 0",
+            "chars": 500,
+            "reason": "over_limit",
+        }
+    ]
 
 
 async def test_disabled_setting_reads_nothing_for_document_name_references(

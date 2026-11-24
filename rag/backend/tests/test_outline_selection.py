@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -18,15 +19,17 @@ from app.rag.answer_engine import _SearchState
 from app.rag.reference_sections import (
     OUTLINE_SECTION_PROMPT,
     OUTLINE_SELECTION_KEY,
-    READ_STOP_CHAR_LIMIT,
     REFERENCE_SECTION_PROMPT,
     SKIP_DEADLINE,
     SKIP_NO_OUTLINE,
+    SKIP_SECTIONS_OVER_LIMIT,
     SKIP_SELECTION_ERROR,
     SKIP_UNKNOWN_IDS,
+    UNREAD_OVER_LIMIT,
     ReferenceSectionChoice,
     allot_catalog_chars,
     fit_catalog_lines,
+    fit_selected_sections,
 )
 from app.rag.section_chunk_map import ROOT_SECTION_ID, SectionNode
 from app.schemas.search import RetrievedChunk, SearchRequest
@@ -295,26 +298,126 @@ async def test_max_documents_limits_the_catalog(monkeypatch: pytest.MonkeyPatch)
     assert [d["document_id"] for d in _record(state)["documents"]] == ["doc-a", "doc-b"]
 
 
-async def test_read_char_limit_stops_reading(monkeypatch: pytest.MonkeyPatch) -> None:
-    """読む章節の字数の上限に達したら止め、読まなかった章節を記録する。"""
+async def test_selected_sections_are_read_without_a_total_char_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """選んだ章節は合計の字数で止めずにすべて読む(#5816。旧 20,000 字の上限)。
+
+    1 回の生成に入らない分は分割読取が読む。
+    """
 
     def pick(context: str) -> list[str]:
         return [_label(context, "本文 4"), _label(context, "本文 5"), _label(context, TAIL)]
 
-    engine, _oracle, _sections, _llm = _setup(
-        monkeypatch, pick=pick, body_chars=1500, rag_outline_selection_read_max_chars=2000
-    )
+    engine, _oracle, _sections, _llm = _setup(monkeypatch, pick=pick, body_chars=15000)
 
     result, state = await _search(engine)
 
-    # 本文 4(約 1500 字)だけが入り、本文 5 は上限を超えるので読まない。
-    assert [c.chunk_uid for c in result.expansion_chunks] == ["doc-a:cs:4"]
+    assert [c.chunk_uid for c in result.expansion_chunks] == [
+        "doc-a:cs:4",
+        "doc-a:cs:5",
+        "doc-a:cs:tail",
+    ]
     record = _record(state)
-    assert record["read_chars"] <= 2000
-    assert record["read_stop_reason"] == READ_STOP_CHAR_LIMIT
-    assert [item["section_id"] for item in record["unread_sections"]] == [
-        "doc-a#本文 5",
+    assert record["read_chars"] > 30000
+    assert record["read_stop_reason"] is None
+    assert record["unread_sections"] == [] and record["shrunk_sections"] == []
+    assert record["limit_chars"] == engine._outline_limit_chars()
+    assert "read_max_chars" not in record and "catalog_max_chars" not in record
+
+
+def _nested(sections: Any) -> None:
+    """合成の目次を 2 段にする: 「手順の章」の下に「本文 4」(40 字)と「本文 5」(500 字)。"""
+    original = sections.sections
+
+    def nested(document_id: str) -> list[SectionNode]:
+        parent = f"{document_id}#手順の章"
+        sizes = {f"{document_id}#本文 4": 40, f"{document_id}#本文 5": 500}
+        nodes = [
+            replace(node, parent_section_id=parent, level=2, chars=sizes[node.section_id])
+            if node.section_id in sizes
+            else node
+            for node in original(document_id)
+        ]
+        head = SectionNode(parent, "手順の章", 1, 1, ROOT_SECTION_ID, None, None, 2, 540)
+        return [nodes[0], head, *nodes[1:]]
+
+    sections.sections = nested
+
+
+async def test_selected_section_over_the_limit_is_shrunk_to_its_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """入力の上限の 1/2 を超える章節は子の章節に縮め、超える葉の章節は読まない(#5816)。"""
+    engine, _oracle, sections, _llm = _setup(
+        monkeypatch, pick=lambda context: [_label(context, "手順の章"), _label(context, TAIL)]
+    )
+    _nested(sections)
+    monkeypatch.setattr(engine, "_outline_limit_chars", lambda: 100)
+
+    result, state = await _search(engine)
+
+    # 手順の章(540 字)は子の章節に縮め、本文 4(40 字)は読み、本文 5(500 字)は読まない。
+    assert sections.read_calls == [("doc-a", "doc-a#本文 4"), ("doc-a", f"doc-a#{TAIL}")]
+    assert [c.chunk_uid for c in result.expansion_chunks] == ["doc-a:cs:4", "doc-a:cs:tail"]
+    record = _record(state)
+    assert [item["section_id"] for item in record["shrunk_sections"]] == ["doc-a#手順の章"]
+    assert record["unread_sections"] == [
+        {
+            "document_id": "doc-a",
+            "section_id": "doc-a#本文 5",
+            "title": "本文 5",
+            "chars": 500,
+            "reason": UNREAD_OVER_LIMIT,
+        }
+    ]
+    (document,) = record["documents"]
+    assert [item["section_id"] for item in document["selected_sections"]] == [
+        "doc-a#本文 4",
         f"doc-a#{TAIL}",
+    ]
+
+
+async def test_only_oversized_leaves_add_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """選んだ章節がすべて超える葉の章節なら、何も読まずに理由を残す(#5816)。"""
+    engine, _oracle, sections, _llm = _setup(
+        monkeypatch, pick=lambda context: [_label(context, "本文 5")]
+    )
+    _nested(sections)
+    monkeypatch.setattr(engine, "_outline_limit_chars", lambda: 100)
+
+    result, state = await _search(engine)
+
+    assert result.expansion_chunks == [] and sections.read_calls == []
+    assert _record(state)["skip_reason"] == SKIP_SECTIONS_OVER_LIMIT
+
+
+def test_fit_selected_sections_reads_whole_or_shrinks_recursively() -> None:
+    """1/2 以下なら全体、超えれば子へ(子も超えればさらに下へ)。数・合計では切らない(#5816)。"""
+
+    def node(section_id: str, parent: str, chars: int, ordinal: int) -> SectionNode:
+        return SectionNode(section_id, section_id, 1, ordinal, parent, None, None, 1, chars)
+
+    sections = [
+        node("a", ROOT_SECTION_ID, 300, 1),
+        node("a1", "a", 120, 2),
+        node("a1x", "a1", 60, 3),
+        node("a1y", "a1", 60, 4),
+        node("a2", "a", 80, 5),
+        node("b", ROOT_SECTION_ID, 90, 6),
+        node("c", ROOT_SECTION_ID, 200, 7),
+        *(node(f"d{n}", ROOT_SECTION_ID, 100, 8 + n) for n in range(20)),
+    ]
+
+    whole = fit_selected_sections(sections, ["b", *(f"d{n}" for n in range(20))], 100)
+    assert whole.section_ids == ["b", *(f"d{n}" for n in range(20))]
+    assert whole.shrunk == [] and whole.unread == []
+
+    fitted = fit_selected_sections(sections, ["a", "c"], 100)
+    assert fitted.section_ids == ["a1x", "a1y", "a2"]
+    assert [item["section_id"] for item in fitted.shrunk] == ["a", "a1"]
+    assert fitted.unread == [
+        {"section_id": "c", "title": "c", "chars": 200, "reason": UNREAD_OVER_LIMIT}
     ]
 
 
