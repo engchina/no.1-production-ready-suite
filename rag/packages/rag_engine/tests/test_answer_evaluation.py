@@ -89,7 +89,7 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
     }
     standard = "" if value == "not_in_standard" else "ログを確認して原因を特定する。"
     assert result == {
-        "rubric_version": 46,
+        "rubric_version": 47,
         "external_data_required": None,
         "external_data_items": [],
         "judge_diagnostics": {"judge_calls": 1, "judge_retries": 0, "retry_reasons": []},
