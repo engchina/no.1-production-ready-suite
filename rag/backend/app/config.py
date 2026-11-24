@@ -1195,19 +1195,12 @@ class Settings(
         ),
     )
     rag_section_expansion_max_levels: int = Field(
-        default=4,
+        default=1,
         ge=1,
-        le=8,
-        description="章節の拡張で上がる段の上限（#1436。既定 4。所有の章節を 1 段目に数える）。",
-    )
-    rag_section_expansion_input_token_percent: int = Field(
-        default=50,
-        ge=10,
-        le=90,
+        le=3,
         description=(
-            "章節の拡張で、1 回の回答の根拠の入力 token の上限にする、回答のモデルの入力の上限"
-            "（システム設定 › モデル の登録モデルの「入力の上限（tokens）」。#1437）に対する"
-            "割合（%。#1436。既定 50）。"
+            "章節の拡張で読む段の上限（#5812。1〜3、既定 1）。1 は当たった根拠を含む章節、"
+            "2 はその親の章節、3 はさらに 1 つ上の章節の全体。"
         ),
     )
     rag_max_anchors_per_document: int = Field(
@@ -1488,6 +1481,15 @@ class Settings(
         ),
     )
     rag_rrf_method_ratio: tuple[float, float] = (7.0, 3.0)
+
+    @field_validator("rag_section_expansion_max_levels", mode="before")
+    @classmethod
+    def _section_levels_in_range(cls, value: Any) -> Any:
+        """範囲（1〜3）の外の保存値（以前の既定 4 など）は既定の 1 にする（#5812）。"""
+        try:
+            return value if 1 <= int(value) <= 3 else 1
+        except (TypeError, ValueError):
+            return value
 
     @field_validator("rag_rrf_method_ratio")
     @classmethod
@@ -1863,8 +1865,8 @@ class Settings(
             "1 回に渡す根拠の本文・前置き・出典情報・描画の書式の文字予算。"
             "選択済みの根拠が超える場合は全文を分割して読み、原文引用付きの回答候補を統合する。"
             "全体設定だけで決め、検索・回答プロファイル・KB・文書レシピでは上書きしない。"
-            "章節の拡張（rag_section_expansion_input_token_percent）は読む章節を"
-            "入力 token の上限で別に数え、生成時はこの文字上限とモデルの入力予算の両方に収める。"
+            "章節の拡張は 1 つの章節を回答のモデルの入力の上限の 1/2 で別に数え、"
+            "生成時はこの文字上限とモデルの入力予算の両方に収める。"
             "使った予算と送った根拠の文字数は回答の診断の evidence_budget に残る。"
         ),
     )

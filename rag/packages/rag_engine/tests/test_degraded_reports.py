@@ -22,7 +22,6 @@ from test_answer_generation import _answer_context, _chunk_record, _chunk_run_st
 
 import rag_engine.generation.answering as answering
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answering import AnswerRecord, answer_question_result, rerank_records
 from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_context, load_runtime_knowledge
 from rag_engine.retrieval import text_search_tokenizer as tokenizer
@@ -233,26 +232,3 @@ def test_extra_query_rerank_failure_is_reported(monkeypatch: pytest.MonkeyPatch,
 
 
 # ---- 章節の子の章節の並べ替え ----
-
-
-def _outline() -> tuple[sections.SectionOutline, list[sections.SectionInfo]]:
-    children = [sections.SectionInfo(f"s{index}", f"第{index}節", 2, "s0") for index in range(1, 4)]
-    root = sections.SectionInfo("s0", "第1章", 1, None)
-    return sections.SectionOutline("doc", "set", "s1", (root, *children)), children
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-def test_section_child_rerank_failure_is_reported(fail: bool) -> None:
-    outline, children = _outline()
-
-    def rerank(question: str, documents: list[str], settings: Any, top_n: int | None = None) -> list[Any]:
-        if fail:
-            raise Boom(SECRET)
-        return []
-
-    with _recording() as reported:
-        ranked, ranking = sections._rank_children("第2節の内容", outline, children, rerank, None)
-
-    # どちらも語の重なりで並べる。記録で失敗と「rerank の結果が空」を分ける。
-    assert ranking == "lexical" and len(ranked) == 3
-    assert reported == ([("section_child_rerank", "Boom")] if fail else [])

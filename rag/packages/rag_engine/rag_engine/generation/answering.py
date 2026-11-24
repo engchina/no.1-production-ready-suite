@@ -3891,7 +3891,6 @@ def _expand_evidence(
         normalized_question,
         context,
         settings,
-        rerank_enabled=effective_rerank_enabled,
         started_at=answer_started_at,
         state=section_state,
         phase="main",
@@ -4092,7 +4091,6 @@ def _expand_context_by_sections(
     context: AnswerContext,
     settings: Settings,
     *,
-    rerank_enabled: bool,
     started_at: float,
     state: dict[str, Any] | None = None,
     phase: str = "main",
@@ -4152,27 +4150,7 @@ def _expand_context_by_sections(
         record_skip("読み取り済みの同じ文脈を再利用しました。")
         return context, state.get("result")
 
-    def section_rerank(query: str, documents: list[str], settings: Settings, top_n: int | None = None) -> list[RerankTextRank]:
-        started = monotonic()
-        status = "error"
-        try:
-            with bind_rerank_context(phase="section_expansion", batch_id=uuid4().hex, query_index=0, query_role="original") as receipt:
-                receipt.describe_inputs(query, documents, model=settings.rerank_model, top_n=top_n if top_n is not None else len(documents))
-                result = rerank_text_with_scores(query, documents, settings, top_n=top_n)
-                status = "completed"
-                return result
-        finally:
-            record_retrieval_stage(
-                {
-                    "stage": "rerank_query",
-                    **receipt.to_dict(),
-                    "logical_status": "cancelled" if receipt.status == "cancelled" else status,
-                    "logical_elapsed_seconds": monotonic() - started,
-                }
-            )
-
-    rerank = section_rerank if rerank_enabled and _rerank_configured(settings) else None
-    # 入らない章節は rerank の順で上限まで入れ、残りは未反映として示す。読了の記録は 1 回の回答の段で共有する。
+    # 読了の記録は 1 回の回答の段で共有する。
     if "reader" not in state:
         state["reader"] = sections.SectionReader(read_chunks=ports[1], known_ids=set())
         state["outlines"] = {}
@@ -4194,14 +4172,13 @@ def _expand_context_by_sections(
         if child.role == "neighbor_context"
     }
     related = capped_candidate_ids(context, settings, top_k=top_k) if top_k is not None else []
-    with _execution_step("章節の拡張", "当たった根拠の章節から親の章節へ段階的に広げ、原文を根拠に加えます。") as step:
+    with _execution_step("章節の拡張", "当たった根拠を含む章節の全体を、設定の段まで広げて根拠に加えます。") as step:
         result = sections.expand_sections(
             question,
             context,
             settings,
             section_outline=outline,
             section_chunks=ports[1],
-            rerank=rerank,
             started_at=started_at,
             deadline_remaining=remaining_seconds,
             clock=monotonic,
@@ -4249,8 +4226,7 @@ def _expand_context_by_sections(
             {
                 "有効": result.trace.get("enabled"),
                 "広げる段の上限": result.trace.get("max_levels"),
-                "根拠入力の上限 token": result.trace.get("input_token_limit"),
-                "根拠入力の上限（%）": getattr(settings, "section_expansion_input_token_percent", None),
+                "1 章節の上限（文字。入力上限の 1/2）": result.trace.get("input_token_limit"),
                 "予約 token": result.trace.get("reserved_tokens", 0),
                 "起点根拠数": len(sections.seed_chunk_ids(context)),
                 "準備した章節範囲": routes,
@@ -4494,7 +4470,7 @@ def consolidate_context(context: AnswerContext) -> AnswerContext:
 _SECTION_STOP_LABELS = {
     "document_read": "文書全体まで読んだ",
     "max_levels": "広げる段の上限",
-    "token_budget": "根拠の入力の上限",
+    "token_budget": "章節が入力上限の 1/2 を超えた（親・前後で補う）",
     "time_limit": "回答の時間の上限",
     "no_sections": "章節の対応なし",
     "not_configured": "章節の読み込み未設定",

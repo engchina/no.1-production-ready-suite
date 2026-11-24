@@ -325,8 +325,7 @@ class Settings:
     # 呼び出し元（`AnswerDependencies.section_outline` / `section_chunks`）でだけ動く。上限は、根拠の入力 token
     # （モデルの入力の上限に対する割合）・上がる段の数。期限は回答全体のものを使う。
     section_expansion_enabled: bool = True
-    section_expansion_max_levels: int = 4
-    section_expansion_input_token_percent: int = 50
+    section_expansion_max_levels: int = 1
     # 生成の 1 回の見積もり（秒。#5184）。章節の拡張は、次の段を読む前にこの値と回答の確定の分を生成に残す。
     # backend が .env の RAG_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS を RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS で渡す。
     answer_generation_round_estimate_seconds: float = DEFAULT_GENERATION_ROUND_SECONDS
@@ -565,8 +564,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         guide_step_chunks_per_step=max(1, _env_int(env, "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP", 2)),
         guide_step_deadline_seconds=max(0.0, _env_float(env, "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS", 60.0)),
         section_expansion_enabled=_env_bool(env, "RAG_ENGINE_SECTION_EXPANSION", True),
-        section_expansion_max_levels=max(0, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS", 4)),
-        section_expansion_input_token_percent=max(1, min(100, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT", 50))),
+        section_expansion_max_levels=max(1, min(3, _env_int(env, "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS", 1))),
         answer_generation_round_estimate_seconds=max(
             0.0, _env_float(env, "RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS", DEFAULT_GENERATION_ROUND_SECONDS)
         ),

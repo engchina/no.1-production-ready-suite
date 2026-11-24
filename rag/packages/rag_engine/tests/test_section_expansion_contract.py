@@ -119,28 +119,17 @@ def test_full_replacement_keeps_new_children_and_original_anchor_roles():
     assert merged.evidence_tree[0].children[0].role == "retrieved_anchor"
 
 
-@pytest.mark.parametrize("exhausted", ["tokens", "time"])
-def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
+def test_new_search_results_share_the_time_limit():
     stub = SectionStub()
     reader = sections.SectionReader(stub.chunks, set())
     settings = _settings(answer_max_input_tokens=2000)
     first = _expand(_seed_context("c31a"), settings, stub, reader=reader, started_at=0.0, clock=lambda: 0.0)
     context = sections._merge(first.context, _seed_context("c4a").evidence_tree)
-    second = _expand(
-        context,
-        settings,
-        stub,
-        reader=reader,
-        started_at=0.0,
-        clock=lambda: 500.0 if exhausted == "time" else 0.0,
-        deadline_remaining=lambda: 60.0 if exhausted == "time" else None,
-    )
+    second = _expand(context, settings, stub, reader=reader, started_at=0.0, clock=lambda: 500.0, deadline_remaining=lambda: 60.0)
     assert second.unread
     assert not second.trace["minimum_scope_complete"]
-    assert second.used_tokens <= second.trace["input_token_limit"]
     assert stub.read_calls.count("s3-1") == 1
-    if exhausted == "time":
-        assert second.stop_reason == sections.STOP_TIME_LIMIT
+    assert second.stop_reason == sections.STOP_TIME_LIMIT
 
 
 def test_section_without_stored_parent_keeps_every_chunk_text_as_evidence():

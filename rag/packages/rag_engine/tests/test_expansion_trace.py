@@ -119,7 +119,7 @@ def run_sections(ctx, stub, settings=None, state=None):
         ),
         recorded() as calls,
     ):
-        result = answering._expand_context_by_sections("合成の質問", ctx, settings, rerank_enabled=False, started_at=0, state=state)
+        result = answering._expand_context_by_sections("合成の質問", ctx, settings, started_at=0, state=state)
     return result, next(call for call in calls if call.name == "章節の拡張")
 
 
@@ -194,7 +194,7 @@ def test_section_budget_exclusion_keeps_actual_reason():
         answer_max_input_tokens=1,
     )
     (_, result), step = run_sections(_seed_context("c31a"), SectionStub(), settings)
-    assert result.stop_reason == "partial_read"
-    assert step.outputs["停止理由"] == "必要な範囲の一部が未読"
-    assert step.outputs["未読"][0]["reason"] == "token_budget"
-    assert step.outputs["未読"]
+    # 所有の章節も入力上限の 1/2 を超える: 読まず、回答に出さず、止めた理由に残す（#5812）。
+    assert result.stop_reason == "token_budget"
+    assert step.outputs["停止理由"] == "章節が入力上限の 1/2 を超えた（親・前後で補う）"
+    assert not result.unread

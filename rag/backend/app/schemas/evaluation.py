@@ -793,8 +793,7 @@ class EvaluationRagOverrides(BaseModel):
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
     # 章節の拡張(#1436)。拡張の有り / 無し・上限を比べる。
     section_expansion_enabled: bool | None = None
-    section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
-    section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
+    section_expansion_max_levels: int | None = Field(default=None, ge=1, le=3)
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)

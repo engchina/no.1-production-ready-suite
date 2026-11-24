@@ -92,7 +92,6 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     outline_selection_read_max_chars: settings.outline_selection_read_max_chars ?? 20000,
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
-    section_expansion_input_token_percent: settings.section_expansion_input_token_percent,
     answer_timeout_seconds: settings.answer_timeout_seconds,
   };
 }
@@ -376,11 +375,9 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             disabled={disabled} onChange={(checked) => update({ section_expansion_enabled: checked })} />
           {form.section_expansion_enabled ? <FormGrid className="px-3 pb-3">
             <SelectField id="answering-section_expansion_max_levels" label={t("settings.answering.section_expansion_max_levels")} width="xs"
-              value={String(form.section_expansion_max_levels)} disabled={disabled} options={Array.from({ length: 8 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
+              helper={t("settings.answering.section_expansion_max_levels_hint")}
+              value={String(form.section_expansion_max_levels)} disabled={disabled} options={Array.from({ length: 3 }, (_, n) => { const value = n + 1; return { value: String(value), label: String(value) }; })}
               onValueChange={(value) => update({ section_expansion_max_levels: Number(value) })} />
-            <SelectField id="answering-section_expansion_input_token_percent" label={t("settings.answering.section_expansion_input_token_percent")} width="xs"
-              value={String(form.section_expansion_input_token_percent)} disabled={disabled} options={Array.from({ length: 81 }, (_, n) => { const value = n + 10; return { value: String(value), label: String(value) }; })}
-              onValueChange={(value) => update({ section_expansion_input_token_percent: Number(value) })} />
           </FormGrid> : null}
         </div>
       </SettingsGroup>

@@ -549,12 +549,9 @@ def build_engine_settings(
         "RAG_ENGINE_GUIDE_STEP_MAX_QUERIES": str(settings.rag_guide_step_max_queries),
         "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP": str(settings.rag_guide_step_chunks_per_step),
         "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS": str(settings.rag_guide_step_deadline_seconds),
-        # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索方法の全体設定で選ぶ)。
+        # 当たった chunk を含む章節の全体を、設定の段まで広げる(#5812。検索方法の全体設定で選ぶ)。
         "RAG_ENGINE_SECTION_EXPANSION": "1" if settings.rag_section_expansion_enabled else "0",
         "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": str(settings.rag_section_expansion_max_levels),
-        "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
-            settings.rag_section_expansion_input_token_percent
-        ),
         # 生成の 1 回の見積もり(#5184)。章節の拡張が次の段を読む前に生成に残す分に使う。
         "RAG_ENGINE_ANSWER_GENERATION_ROUND_ESTIMATE_SECONDS": str(
             settings.rag_answer_generation_round_estimate_seconds
@@ -3636,7 +3633,7 @@ class AnswerEngine:
         読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、1 ページ目の本文・根拠画像は
         検索の候補と同じく付ける。読めなければ空(広げずに回答を続ける)。
         """
-        from rag_engine.generation.section_expansion import MAX_SECTION_CHUNKS, SectionRead
+        from rag_engine.generation.section_expansion import SectionRead
 
         from app.rag.section_map_service import read_section
 
@@ -3645,7 +3642,6 @@ class AnswerEngine:
                 document_id,
                 section_id,
                 chunk_set_id=chunk_set_id,
-                limit=MAX_SECTION_CHUNKS,
                 filters=(
                     _reference_scope(request.filters)
                     if (document_id, chunk_set_id, section_id) in state.reference_sections

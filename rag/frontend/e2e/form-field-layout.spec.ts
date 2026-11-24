@@ -69,8 +69,7 @@ async function mockRetrieval(page: Page) {
         reference_outline_selection_read_max_chunks: 400,
         outline_selection_enabled: true, outline_selection_max_documents: 3,
         outline_selection_catalog_max_chars: 40000, outline_selection_read_max_chars: 20000,
-        section_expansion_enabled: true, section_expansion_max_levels: 4,
-        section_expansion_input_token_percent: 50,
+        section_expansion_enabled: true, section_expansion_max_levels: 1,
         config_source: "runtime",
       },
     ],
@@ -689,7 +688,6 @@ const SCREENS: FormScreen[] = [
     mock: mockRetrieval,
     open: async (page) => {
       await expect(page.getByRole("combobox", { name: "広げる段の上限", exact: true })).toBeVisible();
-      await expect(page.getByRole("combobox", { name: "根拠の入力の上限（%）", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true })).toBeVisible();
       await expect(page.getByRole("textbox", { name: /保存・表示しない語/ })).toHaveCount(0);
     },

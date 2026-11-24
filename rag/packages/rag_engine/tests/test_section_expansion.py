@@ -175,8 +175,7 @@ def _seed_context(*chunk_ids: str) -> AnswerContext:
 def _settings(**overrides: object) -> SimpleNamespace:
     values = {
         "section_expansion_enabled": True,
-        "section_expansion_max_levels": 4,
-        "section_expansion_input_token_percent": 50,
+        "section_expansion_max_levels": 1,
         "evidence_budget_chars": 48000,
         "answer_max_input_tokens": 128_000,
     }
@@ -364,43 +363,28 @@ def test_unread_sections_make_the_answer_conditional():
     assert limited.response.needs_human_review is True
 
 
-@pytest.mark.parametrize(
-    "percent, model, expected",
-    [(50, 128_000, 64_000), (25, 128_000, 32_000), (90, 200_000, 180_000), (50, None, 64_000)],
-    ids=["50", "25", "90-large-model", "default-model"],
-)
-def test_input_token_limit_is_share_of_model_input(percent, model, expected):
-    """根拠の入力の上限は、回答のモデルの入力の上限（共通のモデル設定。#1437）に対する割合。"""
-    overrides = {"section_expansion_input_token_percent": percent}
-    if model is not None:
-        overrides["answer_max_input_tokens"] = model
-    settings = _settings(**overrides)
+@pytest.mark.parametrize("model, expected", [(128_000, 64_000), (500_000, 250_000), (None, 64_000)])
+def test_one_section_may_use_half_of_the_model_input(model, expected):
+    """1 つの章節の上限は、回答のモデルの入力の上限（共通のモデル設定。#1437）の 1/2（#5812）。"""
+    settings = _settings(**({"answer_max_input_tokens": model} if model else {}))
     if model is None:
         del settings.answer_max_input_tokens
-    limits = sections.SectionExpansionLimits.from_settings(settings)
-    assert limits.input_tokens == expected
-    # 根拠の文字数の予算（evidence_budget_chars）には依らない（#1436 の暫定の推定を置き換えた）。
-    assert sections.SectionExpansionLimits.from_settings(_settings(**overrides, evidence_budget_chars=1000)).input_tokens == (
-        expected if model else 64_000
-    )
+    assert sections.SectionExpansionLimits.from_settings(settings).input_tokens == expected
+
+
+@pytest.mark.parametrize("value, expected", [(1, 1), (3, 3), (4, 3), (0, 1)])
+def test_levels_are_one_to_three(value, expected):
+    assert sections.SectionExpansionLimits.from_settings(_settings(section_expansion_max_levels=value)).max_levels == expected
 
 
 def test_engine_settings_read_section_expansion_environment():
     settings = get_settings(
-        environ={
-            "RAG_ENGINE_SECTION_EXPANSION": "0",
-            "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": "2",
-            "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": "30",
-        },
+        environ={"RAG_ENGINE_SECTION_EXPANSION": "0", "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": "2"},
         dotenv_path=None,
     )
-    assert (
-        settings.section_expansion_enabled,
-        settings.section_expansion_max_levels,
-        settings.section_expansion_input_token_percent,
-    ) == (False, 2, 30)
+    assert (settings.section_expansion_enabled, settings.section_expansion_max_levels) == (False, 2)
     defaults = get_settings(environ={}, dotenv_path=None)
-    assert defaults.section_expansion_enabled and defaults.section_expansion_max_levels == 4
+    assert defaults.section_expansion_enabled and defaults.section_expansion_max_levels == 1
 
 
 def test_engine_settings_read_generation_round_estimate_environment():
@@ -580,7 +564,6 @@ def test_answer_section_phase_passes_the_guide_priority():
             QUESTION,
             _two_document_context("o1a", "c31a"),
             settings,
-            rerank_enabled=False,
             started_at=monotonic(),
             priority=((DOC, 5, 7),),
         )
@@ -589,30 +572,25 @@ def test_answer_section_phase_passes_the_guide_priority():
     assert stub.read_calls[0] == "s3-1"
 
 
-def test_section_over_the_input_budget_is_reported_as_unread():
-    from time import monotonic
-
-    from rag_engine.generation.answering import _expand_context_by_sections
-
+def test_owner_section_over_half_of_the_input_is_left_to_the_fallback():
+    """所有の章節も入力の上限の 1/2 を超える起点は読まず、回答に出さない（呼び出し元が親 → 前後で補う。#5812）。"""
     stub = SectionStub()
-    unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
-    settings = replace(
-        get_settings(environ={}, dotenv_path=None),
-        section_expansion_max_levels=4,
-        section_expansion_input_token_percent=50,
-        answer_max_input_tokens=800,
-    )
-    with bind_dependencies(
-        AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
-    ):
-        _, result = _expand_context_by_sections(
-            QUESTION,
-            _seed_context("c31a"),
-            settings,
-            rerank_enabled=False,
-            started_at=monotonic(),
-        )
-    assert result.unread or result.omitted
+    # 1 章節 600 字 > 800 の 1/2。上の段（第3章・文書全体）はもっと大きい。
+    result = _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=800, section_expansion_max_levels=3), stub)
+    assert stub.read_calls == []
+    assert not result.unread
+    assert result.trace["levels"][0]["sections"][0]["read"] == "over_limit"
+
+
+def test_level_is_shrunk_to_the_largest_section_within_half_of_the_input():
+    """上限の段の章節が 1/2 を超えるときは、1 段下の章節に縮める（#5812）。"""
+    stub = SectionStub()
+    # 第3章（1800 字）は 4000 の 1/2 以下、文書全体（3000 字）は超える。
+    result = _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=4000, section_expansion_max_levels=3), stub)
+    assert stub.read_calls == ["s3"]
+    entry = result.trace["levels"][0]["sections"][0]
+    assert (entry["level"], entry["shrunk_from_level"]) == (2, 3)
+    assert set(_members("s3")) <= set(_child_ids(result.context))
 
 
 def _reader_for(

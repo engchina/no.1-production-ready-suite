@@ -93,7 +93,7 @@ async function mockApi(page: Page) {
       return;
     }
 
-    // 検索方法の設定（81 件の選択肢を持つ「根拠の入力の上限（%）」を長い一覧の操作の確認に、5 件の
+    // 検索方法の設定（10 件の選択肢を持つ「1 回の検索で加える根拠の上限」を長い一覧の操作の確認に、5 件の
     // 「根拠の前後から加える数」を画面の下端で開く一覧の確認に使う）。
     const retrievalCards: Record<string, unknown> = {
       "/api/settings/answer-prompts": { prompts: [], stages: [] },
@@ -101,9 +101,10 @@ async function mockApi(page: Page) {
         neighbor_child_count: 3,
         answer_timeout_seconds: 600,
         rerank_enabled: true,
+        entity_expansion_enabled: true,
+        entity_expansion_max_chunks: 3,
         section_expansion_enabled: true,
-        section_expansion_max_levels: 4,
-        section_expansion_input_token_percent: 50,
+        section_expansion_max_levels: 1,
         config_source: "runtime",
       },
     };
@@ -252,36 +253,30 @@ test("画面の下端では一覧を上に開き、画面の外にはみ出さ�
 
 test("7 件以上の一覧でも、キーボードで強調した選択肢を表示範囲に入れる", { tag: "@responsive" }, async ({ page }) => {
   await page.goto("/settings/retrieval");
-  const percent = page.getByRole("combobox", { name: "根拠の入力の上限（%）" });
-  await percent.focus();
+  const field = page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限" });
+  await field.focus();
   await page.keyboard.press("ArrowDown");
-  const listbox = page.getByRole("listbox", { name: "根拠の入力の上限（%）" });
+  const listbox = page.getByRole("listbox", { name: "1 回の検索で加える根拠の上限" });
   await expect(listbox).toBeVisible();
 
   await page.keyboard.press("End");
-  await expectActiveOptionInView(percent, listbox, "90");
+  await expectActiveOptionInView(field, listbox, "10");
   await page.keyboard.press("Home");
-  await expectActiveOptionInView(percent, listbox, "10");
+  await expectActiveOptionInView(field, listbox, "1");
   for (let index = 0; index < 4; index += 1) await page.keyboard.press("ArrowDown");
-  await expectActiveOptionInView(percent, listbox, "14");
+  await expectActiveOptionInView(field, listbox, "5");
   // PageDown / PageUp は 10 件ずつ動き、端で止まる。
   await page.keyboard.press("PageDown");
-  await expectActiveOptionInView(percent, listbox, "24");
+  await expectActiveOptionInView(field, listbox, "10");
   await page.keyboard.press("PageUp");
-  await page.keyboard.press("PageUp");
-  await expectActiveOptionInView(percent, listbox, "10");
-  await page.keyboard.press("End");
-  await page.keyboard.press("PageDown");
-  await expectActiveOptionInView(percent, listbox, "90");
-  await page.keyboard.press("PageUp");
-  await expectActiveOptionInView(percent, listbox, "80");
+  await expectActiveOptionInView(field, listbox, "1");
   await page.keyboard.press("Home");
   for (let index = 0; index < 7; index += 1) await page.keyboard.press("ArrowDown");
-  await expectActiveOptionInView(percent, listbox, "17");
+  await expectActiveOptionInView(field, listbox, "8");
 
   await page.keyboard.press("Enter");
   await expect(listbox).toBeHidden();
-  await expect(percent).toContainText("17");
+  await expect(field).toContainText("8");
 });
 
 test("文字の入力で選択肢に飛ぶ（typeahead）", { tag: "@responsive" }, async ({ page }) => {
@@ -365,7 +360,7 @@ test("モーダルの層の中でも一覧を暗幕とモーダルの上に出�
 for (const kind of ["plain", "searchable"] as const) test(`単一選択はスクロール後も開いたままで Esc と Tab で閉じる (${kind})`, { tag: "@responsive" }, async ({ page }, info) => {
   if (kind === "searchable") await page.route("**/api/search-answer-profiles?**", route => route.fulfill({ json: { data: { items: Array.from({ length: 45 }, (_, i) => ({ id: `synthetic-${i}`, name: `合成設定 ${i}`, status: "ACTIVE", knowledge_base_count: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" })), total: 45, limit: 50, offset: 0, has_next: false }, error_messages: [], warning_messages: [] } }));
   await page.goto(kind === "plain" ? "/settings/retrieval" : "/search");
-  const trigger = kind === "plain" ? page.getByRole("combobox", { name: "根拠の入力の上限（%）", exact: true }) : page.getByRole("button", { name: /検索・回答プロファイル/ }).first();
+  const trigger = kind === "plain" ? page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true }) : page.getByRole("button", { name: /検索・回答プロファイル/ }).first();
   for (const key of ["Escape", "Tab"]) {
     await trigger.click();
     const list = page.getByRole("listbox");
