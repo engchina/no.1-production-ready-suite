@@ -75,14 +75,13 @@ def test_planning_includes_final_language_contract_and_sdk_wrappers():
     from rag_engine.generation.citation_unit_ids import SentUnitCatalog
     from rag_engine.generation.grounded import final_answer_model
     from rag_engine.generation.paragraph_repair import ParagraphRepair
-    from rag_engine.generation.request_row_repair import RequestRowRepair
 
     config = settings(answer_max_input_tokens=96_000)
     provider = config.llm_providers[config.default_answer_llm]
     question = "資料の記載を説明してください。"
     units = SentUnitCatalog(())
     schema = final_answer_model(question, guided=False, unit_catalog=units)
-    validated = RequestRowRepair(question).model(ParagraphRepair(units).model(schema))
+    validated = ParagraphRepair(units).model(schema)
     prompt = '資料の "引用" と改行\n'
     measured = model_input_measurement(config, "指示", prompt, schema.model_json_schema())
     actual = _response_wire_request(

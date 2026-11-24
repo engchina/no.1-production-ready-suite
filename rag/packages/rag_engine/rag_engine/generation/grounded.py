@@ -2649,13 +2649,10 @@ def run_round(
     generation_base = _generation_base_model(guided=bool(guide_step_contracts))
     generation_model = final_answer_model(question, guided=bool(guide_step_contracts), unit_catalog=unit_catalog)
     from rag_engine.generation.paragraph_repair import ParagraphRepair
-    from rag_engine.generation.request_row_repair import RequestRowRepair
 
     paragraph_repair = ParagraphRepair(unit_catalog)
-    row_repair = RequestRowRepair(question)
     if getattr(generation_model, "_uses_full_answer", False):
         generation_model = paragraph_repair.model(generation_model)
-        generation_model = row_repair.model(generation_model)
     input_snapshot = {
         "capture_scope": "verified_partial_answer_references" if partial_answer_synthesis else "application_evidence_blocks",
         "transport_capture": "not_recorded",
@@ -2752,8 +2749,6 @@ def run_round(
         if not will_retry:
             return None
         step = paragraph_repair.step() if paragraph_repair.pending else full_answer_repair_step(error)
-        if row_repair.original is not None:
-            step = row_repair.step()
         if step is None:
             sent_prompt = prompt
             return None
@@ -2785,23 +2780,18 @@ def run_round(
 
         check_cancelled()
         timed_out = bool(paragraph_repair.pending and (isinstance(exc, TimeoutError) or deadline_cut_short()))
-        if row_repair.validated is not None:
-            # 元の表は検証済み。追加の行の確認に失敗しても、既に得られた回答と出典を返す。
-            draft = row_repair.validated
-            sent_prompt = prompt
-        else:
-            if not timed_out and (invalid_output is None or not invalid_output(exc)):
-                raise
-            # 再実行の後も出力が構造化出力の契約を満たさず、草稿が無い（#3849）。
-            from rag_parser_core.language import current_pack
+        if not timed_out and (invalid_output is None or not invalid_output(exc)):
+            raise
+        # 再実行の後も出力が構造化出力の契約を満たさず、草稿が無い（#3849）。
+        from rag_parser_core.language import current_pack
 
-            draft = paragraph_repair.partial(current_pack().text("answer_labels", "paragraph_generation_failed"))
-            if draft is None:
-                if timed_out:
-                    raise
-                if paragraph_repair.pending:
-                    raise DraftGenerationInvalid("paragraph_generation_failed") from exc
-                raise DraftGenerationInvalid(type(exc).__name__) from exc
+        draft = paragraph_repair.partial(current_pack().text("answer_labels", "paragraph_generation_failed"))
+        if draft is None:
+            if timed_out:
+                raise
+            if paragraph_repair.pending:
+                raise DraftGenerationInvalid("paragraph_generation_failed") from exc
+            raise DraftGenerationInvalid(type(exc).__name__) from exc
     draft = canonicalize_output(draft, "answer.generate", sent_prompt)
     generation_calls = 1
     draft = draft.model_copy(update={"summary": _clean_evidence_labels(draft.summary, spans)})
@@ -2832,15 +2822,6 @@ def run_round(
         timing["paragraph_repair"] = {
             "requested": [i // 2 + 1 for i in paragraph_repair.requested],
             "unrecovered": [i // 2 + 1 for i in paragraph_repair.pending],
-        }
-    if row_repair.reviewed_body is not None:
-        citation_trace["request_row_review"] = {
-            "first_answer_body": row_repair.reviewed_body,
-            "candidate_rows": list(row_repair.candidates),
-            "removed_rows": row_repair.removed,
-            "candidate_notes": list(row_repair.notes),
-            "removed_notes": row_repair.removed_notes,
-            "received_review": row_repair.original is None,
         }
     if plan_rows_added:
         timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
