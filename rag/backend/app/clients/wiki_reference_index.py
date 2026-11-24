@@ -64,6 +64,21 @@ def _text_references(metadata: object) -> list[tuple[str, str, str]]:
     return found
 
 
+def model_references(value: object) -> list[tuple[str, str, str]]:
+    """案内の生成が返した参照（``navigation.references`` の JSON。文書名・章節の表記・関係）。"""
+    if hasattr(value, "read"):
+        value = value.read()
+    try:
+        items = json.loads(value) if isinstance(value, str | bytes) else value
+    except ValueError:
+        return []
+    return [
+        (item["document"], str(item.get("section") or ""), str(item.get("relation") or ""))
+        for item in (items if isinstance(items, list) else ())
+        if isinstance(item, dict) and isinstance(item.get("document"), str) and item.get("relation")
+    ]
+
+
 def index_references(connection: Any, document_id: str, version: str) -> None:
     """公開と同じ取引で、文書の参照を置き換える。"""
     _execute(
@@ -87,12 +102,7 @@ def index_references(connection: Any, document_id: str, version: str) -> None:
     }
     rows: list[dict[str, object]] = []
     for page in pages:
-        found: list[tuple[str, str, str]] = []
-        for item in _json_list(page["refs"]):
-            if isinstance(item, dict) and isinstance(item.get("document"), str):
-                found.append(
-                    (item["document"], str(item.get("section") or ""), str(item["relation"]))
-                )
+        found = model_references(page["refs"])
         for chunk_id in _json_list(page["chunks"]):
             found.extend(_text_references(metadata.get(str(chunk_id))))
         seen: set[tuple[str, str]] = set()

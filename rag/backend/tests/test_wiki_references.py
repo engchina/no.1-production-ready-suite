@@ -3,7 +3,12 @@
 import json
 from types import SimpleNamespace
 
-from app.clients.wiki_reference_index import DocumentNames, _text_references, section_pages
+from app.clients.wiki_reference_index import (
+    DocumentNames,
+    _text_references,
+    model_references,
+    section_pages,
+)
 from app.rag.cross_references import document_reference_keys, reference_name_key
 from app.rag.wiki_models import WikiContext, WikiPage, WikiReference, WikiUnit, fingerprint
 
@@ -107,3 +112,19 @@ def test_section_pages_prefer_the_exact_heading() -> None:
     # 当たる見出しが無い・表記が無いときは並びを変えない。
     assert [page.name for page in section_pages(pages, "第 9 章")] == ["a1", "a3", "b1"]
     assert [page.name for page in section_pages(pages, "")] == ["a1", "a3", "b1"]
+
+
+def test_model_references_read_the_saved_json_objects() -> None:
+    """保存した案内の参照（JSON の文字列）を、表に入れる形にする（項目は文字列にしない）。"""
+    saved = json.dumps(
+        [
+            {"document": "合成の承認規程", "section": "第 3 条", "relation": "prerequisite"},
+            {"document": "手順A.txt", "section": "", "relation": "exception"},
+            "壊れた項目",
+        ]
+    )
+    assert model_references(saved) == [
+        ("合成の承認規程", "第 3 条", "prerequisite"),
+        ("手順A.txt", "", "exception"),
+    ]
+    assert model_references(None) == [] and model_references("{") == []
