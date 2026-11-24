@@ -185,21 +185,15 @@ def test_compound_question_with_long_evidence_is_answered_without_a_generation_f
 
 def test_generation_failure_keeps_the_validator_message_but_not_the_model_output():
     """どの検証に通らなかったかを診断に残す。モデルの出力の文は残さない（#5693）。"""
-    from rag_engine.generation.full_answer_wire import FullAnswerWire
+    from test_full_answer_wire import catalog
 
-    model = type("Wire", (FullAnswerWire,), {})
-    model._original_question = "合成の質問の文"
-    fact = {
-        "text": "合成の原文ZZ",
-        "sources": ["E1.1"],
-        "answers_which_question": "合成の問いZZ",
-        "requested_phrase": "質問に無い語句ZZ",
-        "short_answer": "合成の短答ZZ",
-    }
-    body = {"headers": [], "rows": [{"label": "合成の行ZZ", "cells": [[fact]]}]}
+    from rag_engine.generation.full_answer_wire import full_answer_model
+
+    units, _unit = catalog()
+    body = "合成の本文ZZ[E1.9]"
     with pytest.raises(ValidationError) as raised:
-        model.model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
+        full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
     detail = grounded.generation_failure_detail(raised.value)
     assert detail["validation_error_types"] == {"value_error": 1}
-    assert len(detail["validation_messages"]) == 1 and "requested_phrase" in detail["validation_messages"][0]
+    assert len(detail["validation_messages"]) == 1 and "今回の根拠に無い" in detail["validation_messages"][0]
     assert "ZZ" not in json.dumps(detail, ensure_ascii=False)

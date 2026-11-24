@@ -44,11 +44,3 @@ def test_similar_names_keep_the_possibility_of_a_notation_variance() -> None:
     assert len(rule) == 1, body
     assert "表記の揺れの可能性" in rule[0] and "別の原因" in rule[0]
     assert sum("表記の揺れ" in line for line in grounded.generation_system_prompt().splitlines()) == 1
-
-
-def test_saved_role_keeps_fixed_insufficiency_and_citation_boundaries() -> None:
-    """役割を保存しても、不足の範囲と推論・引用の境界は固定部分で保つ。"""
-    with bind_prompt_overrides({"generation.role": "## Step 1: 保存済みの役割"}):
-        saved = _step(grounded.generation_system_prompt(), "本文を完成させて引用を選ぶ")
-    assert "どの要求の結論" in saved and "推論は直接の記載と区別" in saved
-    assert "複数の文書" in saved and "対応する事実の sources" in saved

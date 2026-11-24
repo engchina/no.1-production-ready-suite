@@ -6,10 +6,9 @@ import functools
 import re
 import unicodedata
 from collections.abc import Sequence
-from typing import Annotated, Any, ClassVar, Literal, cast
+from typing import Any, Literal, cast
 
 from pydantic import (
-    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -22,9 +21,8 @@ from pydantic import (
 )
 
 from rag_engine.generation.answer_envelope import AnswerOutcome
-from rag_engine.generation.answer_table import table_markdown
 from rag_engine.generation.citation_unit_ids import BoundUnitRange, SentUnitCatalog, unit_label
-from rag_engine.models.llm import AnswerTable, AnswerTableRow, GroundedCitation, GroundedDraft, GroundedItem, ResponseLanguage
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, ResponseLanguage
 from rag_engine.resources.structured_output_retry import FINAL_ATTEMPT_CONTEXT_KEY
 from rag_engine.retrieval.character_forms import format_characters
 
@@ -44,253 +42,6 @@ RESPONSE_KIND_DESCRIPTION = "本文が質問の要求にどう応じたかの種
 )
 
 
-def _check_requested_phrase(phrase: str, question: str | None) -> None:
-    phrase = phrase.strip()
-    if not phrase or (question is not None and phrase not in question):
-        raise ValueError("requested_phrase は原質問にある連続した語句をそのまま選んでください。対応する要求がない補足は掲載しません。")
-
-
-def _as_marker(label: str) -> str:
-    """出典のラベルを本文の印の形（``[E2.1]``）に揃える。括弧を外したラベル（``E2.1``）も同じ印にする（#5769）。
-
-    形式だけを揃え、ラベルの照合（今回の根拠にあるか）は本文の検査に任せる。
-    """
-    label = label.strip().strip("[]［］【】").strip()
-    return f"[{label}]" if label else ""
-
-
-# セルの出典は本文へそのまま連結するので、受けた時点で印の形にする。
-SourceLabel = Annotated[str, AfterValidator(_as_marker)]
-
-
-class AnswerFact(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(
-        description="原質問の一要求に直接答える原文の事実。複数の値をまとめて尋ねられたときは、同じ対象・条件の項目と値を組にする。"
-    )
-    sources: list[SourceLabel] = Field(description="この事実を支える原文ラベル。")
-    answers_which_question: str = Field(
-        description="この短句だけを答えとして読んだとき、それで解ける具体的な問いを一つ書く。対象名だけでなく何を判定する問いかを区別する。"
-    )
-    requested_phrase: str | None = Field(
-        description=(
-            "その事実を求めた原質問の連続した語句を選ぶ。項目のまとまりを尋ねていれば、それに属する各値は同じ要求に対応する。"
-            "値を選ぶのに必要な適用範囲や例外は、その値を尋ねた語句に対応する。共通する単語はあっても問われた量や判断が違うとき、"
-            "この短句を省いても別のセルに同じ答えが残るときは null。"
-        )
-    )
-
-    short_answer: str = Field(
-        description="問われた範囲を満たす短答。値の組を求められたら該当する項目名と値をそろえ、範囲外の情報を外す。"
-        "規則上の可否は判定、求められた理由は適用規則を一節だけ書く。数値欄に転記した値を理由に再掲しない。"
-        "複数の記載をつないで導いた値・判定は、つないだ記載の値と適用した規則を一節で添える。"
-        "条件・例外そのものに値や境界が必要なら保つ。対応する要求がなければ空文字。"
-    )
-
-    def requested_answer(self, question: str | None) -> str:
-        if self.requested_phrase is None:
-            return ""
-        _check_requested_phrase(self.requested_phrase, question)
-        return self.short_answer.strip()
-
-
-class ComparisonValue(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    number: str = Field(
-        min_length=1, description="比較表に載せる数値の表記。桁・小数部を保ち、単位は列名に置く。条件や範囲を伴う値は短句で記す。"
-    )
-    sources: list[SourceLabel] = Field(description="比較した対象のこの値を示す原文ラベル。")
-
-
-class EvidenceGap(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    requested_phrase: str = Field(min_length=1, description="資料で確定できない具体的な属性を尋ねた原質問の語句。")
-    missing_input: str = Field(min_length=1, description="その判断に必要で資料から得られない情報の名前。回答言語の名詞句にする。")
-    sources: list[SourceLabel] = Field(description="その限界を示す原文ラベル。")
-
-
-_ROW_NOTE = re.compile(r"(?:（([^（）]+)）|\(([^()]+)\))$")
-_LEADING_NOTE = re.compile(r"^([^:：]+)[:：]\s*(.+)$", re.DOTALL)
-_NOTE_PART = re.compile(r"\d+|[^\d\s・]+")
-_ITEM_SEPARATOR = re.compile(r"(?<=[\d）)])(?:\s*[、，,・；;/／]\s*|\s+)(?=[^\W\d_])")
-
-
-def _is_named_number(item: str) -> bool:
-    # 個々の値の注記は形式の確認時だけ除き、表示する値は書き換えない。
-    value = _ROW_NOTE.sub("", item.strip()).rstrip()
-    return value[-1:].isdecimal() and any(char.isalpha() for char in value)
-
-
-def _value_under_row_note(text: str, note: str) -> str:
-    """項目名と数値の列記にだけ適用し、行名に見えている独立した注記を一度にする。"""
-    tail = _ROW_NOTE.search(text)
-    if tail and (tail[1] or tail[2]).strip() == note:
-        values = text[: tail.start()].rstrip()
-    else:
-        heading = _LEADING_NOTE.match(text)
-        # 見出しの中点の有無で英字や数字のまとまりを結合しない（A・B と AB、1・2 と 12 は別）。
-        if not heading or _NOTE_PART.findall(heading[1]) != _NOTE_PART.findall(note):
-            return text
-        values = heading[2]
-    items = _ITEM_SEPARATOR.split(values)
-    if len(items) > 1 and all(_is_named_number(item) for item in items):
-        return values
-    return text
-
-
-def number_list_note(text: str) -> tuple[str, str] | None:
-    """数値の組の独立した注記と、注記だけを外した元の表記を返す。注記の意味は判定しない。"""
-    tail = _ROW_NOTE.search(text)
-    if tail:
-        note = (tail[1] or tail[2]).strip()
-    elif heading := _LEADING_NOTE.match(text):
-        note = heading[1].strip()
-    else:
-        return None
-    values = _value_under_row_note(text, note)
-    return (note, values) if note and values != text else None
-
-
-def _known_cell_text(cell: list[AnswerFact | ComparisonValue], question: str | None, row_note: str) -> str:
-    # 同じセルで一致する短答は一度だけ示し、その判断を支える出典はすべて残す。
-    sources_by_text: dict[str, list[str]] = {}
-    for fact in cell:
-        text = fact.number if isinstance(fact, ComparisonValue) else fact.requested_answer(question)
-        if row_note and isinstance(fact, AnswerFact):
-            text = _value_under_row_note(text, row_note)
-        if text:
-            sources_by_text.setdefault(text, []).extend(fact.sources)
-    return " ".join(text + "".join(dict.fromkeys(sources)) for text, sources in sources_by_text.items())
-
-
-class AnswerRow(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    label: str = Field(
-        description="質問で尋ねられた項目・対象の短い行名。根拠にある複数の規則から値を選んだ場合は、"
-        "選んだ版・区分などその値の適用範囲を該当する行名か見出しに一度明記する。範囲の説明文は添えない。"
-    )
-    cells: list[EvidenceGap | list[AnswerFact | ComparisonValue]] = Field(
-        description=(
-            "二列目から順に、その属性を資料で確定できるかに応じてセルの型を選ぶ。"
-            "未確定の属性は missing_input のセル一つで答え、その可否を別の行の事実にしない。"
-            "確定できる場合は根拠のある短句の配列、数値比較は number。"
-            "行名は label、段落と一列表は一セル。該当しない欄は空配列。"
-        )
-    )
-
-
-def _evidence_blocks(marks: list[str]) -> set[str]:
-    return {m[1] for mark in marks if (m := re.fullmatch(r"\[(E[1-9]\d*)(?:\.[1-9]\d*)?\]", mark))}
-
-
-def _scope_contains(row: AnswerRow, value: str, blocks: set[str]) -> bool:
-    note = _ROW_NOTE.search(row.label.rstrip())
-    if not note or len(row.cells) != 1 or not isinstance(facts := row.cells[0], list):
-        return False
-    scope = (note[1] or note[2]).strip()
-    if value not in (part.strip() for part in re.split(r"[・、，,／/]", scope)):
-        return False
-    shown = [fact for fact in facts if isinstance(fact, AnswerFact) and fact.requested_phrase]
-    items = [item for fact in shown for item in _ITEM_SEPARATOR.split(_value_under_row_note(fact.short_answer, scope))]
-    return (
-        len(items) > 1
-        and all(_is_named_number(item) for item in items)
-        and any(value in fact.text and blocks.intersection(_evidence_blocks(fact.sources)) for fact in shown)
-    )
-
-
-def _shared_scope_sources(rows: list[AnswerRow], question: str) -> tuple[set[int], dict[int, list[str]]]:
-    omitted: set[int] = set()
-    citations: dict[int, list[str]] = {}
-    for index, row in enumerate(rows):
-        if (
-            len(row.cells) != 1
-            or not isinstance(cell := row.cells[0], list)
-            or len(cell) != 1
-            or not isinstance(fact := cell[0], AnswerFact)
-        ):
-            continue
-        note = _ROW_NOTE.search(row.label.rstrip())
-        phrase = fact.requested_phrase
-        value = fact.short_answer.strip()
-        name = re.fullmatch(r"([^\W\d_]+)\s*\d+", value)
-        # 利用者が指定した前提から選んだ識別子に限る。その属性を別に尋ねていれば元の行を残す。
-        if not (phrase and phrase in question and note and (note[1] or note[2]) in phrase and name):
-            continue
-        if name[1] in question or phrase in row.label or phrase in fact.answers_which_question:
-            continue
-        blocks = _evidence_blocks(fact.sources)
-        targets = [i for i, other in enumerate(rows) if i != index and _scope_contains(other, value, blocks)]
-        if len(targets) == 1:
-            omitted.add(index)
-            citations.setdefault(targets[0], []).extend(fact.sources)
-    return omitted, citations
-
-
-class AnswerTableBody(BaseModel):
-    """回答ごとに一組のセルを受け、表または段落を組み立てる。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    gap_wording: str | None = Field(
-        default=None,
-        description="未確定のセルすべてに共通の、回答言語の短い一文。{missing} を一度だけ置き、"
-        "その情報を資料から得られず判断できないことを示す。個別の対象・理由・規則は含めない。未確定のセルがなければ null。",
-    )
-    headers: list[str] = Field(
-        description="複数の対象の値を比べる質問と、利用者が表を求めた質問だけ見出しを付ける。数値比較は適用の可否を尋ねられた対象も独立した一行にし、その対象の値を測定項目の各列に入れる。それ以外（手順・判断・確認事項・単独の説明）は空配列にして段落で答える。"
-    )
-    rows: list[AnswerRow] = Field(
-        min_length=1,
-        description=(
-            "行名は原質問で求められた具体的な属性。資料で何を確定できるかは属性ごとに一行で答え、全体の可否や不明点をまとめ直す行は作らない。見出しなしは一行一セル。"
-            "規則上の許可・禁止は「可」か「不可」で完結させ、同じ許可文・禁止文を添えない。条件付きならその条件を添える。資料が区分を分けていなければ対象名に『区分なし』に相当する短句だけを添える。"
-            "特定対象の可否・理由も尋ねられたら専用の列を設け、該当行だけに制約を書く。他の行は空欄。必要な条件・否定・例外を該当するセルに含める。"
-        ),
-    )
-
-    def shared_scope_sources(self, question: str | None) -> tuple[set[int], dict[int, list[str]]]:
-        return _shared_scope_sources(self.rows, question) if len(self.headers) == 2 and question else (set(), {})
-
-    def markdown(self, question: str | None) -> str:
-        rows = []
-        paragraphs: list[tuple[str, str]] = []
-        value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
-        omitted, scope_sources = self.shared_scope_sources(question)
-        for index, row in enumerate(self.rows):
-            if len(row.cells) != value_columns:
-                raise ValueError("行名は label に、残りの列の値だけを cells に書き、セル数を見出しの数に合わせてください。")
-            note = _ROW_NOTE.search(row.label.rstrip()) if len(self.headers) > 1 else None
-            row_note = (note[1] or note[2]).strip() if note else ""
-            values = [self._cell_text(cell, question, row_note) for cell in row.cells]
-            if not any(values) or index in omitted:
-                continue
-            label = row.label + "".join(dict.fromkeys(scope_sources.get(index, [])))
-            # 見出しが一つの表も行名の列を付け、どの行の値かを示す（#5800）。
-            cells = [label, *values] if self.headers else values
-            rows.append(AnswerTableRow(cells=cells))
-            if values[0].strip():
-                paragraphs.append((row.label.strip(), values[0].strip()))
-        if not self.headers:
-            # 見出しの無い段落は、行が複数のときだけ行名を添え、どの要求への答えかを示す（#5800）。
-            labeled = len(paragraphs) > 1
-            return "\n\n".join(f"**{label}** {text}" if labeled and label else text for label, text in paragraphs)
-        columns = ["", *self.headers] if len(self.headers) == 1 else self.headers
-        return table_markdown(AnswerTable(columns=columns, rows=rows)) if rows else ""
-
-    def _cell_text(self, cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None, row_note: str) -> str:
-        if not isinstance(cell, EvidenceGap):
-            return _known_cell_text(cell, question, row_note)
-        _check_requested_phrase(cell.requested_phrase, question)
-        if self.gap_wording is None or self.gap_wording.count("{missing}") != 1 or self.gap_wording.strip() == "{missing}":
-            raise ValueError("未確定のセルには、{missing} を一度含む回答言語の gap_wording が必要です。")
-        return self.gap_wording.replace("{missing}", cell.missing_input) + "".join(dict.fromkeys(cell.sources))
-
-
 class FullAnswerWire(BaseModel):
     """本文はモデルが完成させ、種別は同じ呼び出しの付帯情報にする。"""
 
@@ -298,26 +49,9 @@ class FullAnswerWire(BaseModel):
     _provider_output_text: str | None = PrivateAttr(default=None)
     _uses_unit_ids = True
     _uses_full_answer = True
-    _original_question: ClassVar[str | None] = None
 
     response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
-    answer_body: str = Field(
-        min_length=1,
-        description=(
-            "各要求に一度だけ答える。複数の対象の値を比べる質問と、利用者が表を求めた質問には表を選び、"
-            "可否の理由・適用範囲を該当行にまとめる。"
-            "それ以外は尋ねられた項目に絞る。必要な条件・否定・例外を残す。利用者の形式指定を優先する。"
-        ),
-    )
-
-    @field_validator("answer_body", mode="before", json_schema_input_type=AnswerTableBody)
-    @classmethod
-    def render_body(cls, value: Any) -> Any:
-        # モデルには構造化した入力を示し、保存済みの文字列や段落の再検証には従来の本文を使う。
-        if not isinstance(value, dict):
-            return value
-        return AnswerTableBody.model_validate(value).markdown(cls._original_question)
-
+    answer_body: str = Field(min_length=1, description="利用者へ返す完成した回答本文。必要に応じて Markdown を使う。")
     # 各値の定義はこの項目の説明だけに書き、生成の指示の Step では繰り返さない。adapter が説明を指示の最後の
     # Step にして全モデルに送る（#5230・#5238）。
     response_kind: AnswerOutcome = Field(description=RESPONSE_KIND_DESCRIPTION)
@@ -447,9 +181,9 @@ def full_answer_model(catalog: SentUnitCatalog, *, question: str | None = None) 
         "known_units": field_validator("answer_body")(known_units),
         "cites_evidence": model_validator(mode="after")(cites_evidence),
     }
-    model = create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
-    model._original_question = question
-    return model
+    # question は呼び出し側との互換のために受ける（本文はモデルが完成させる文章なので使わない。#5806）。
+    del question
+    return create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
 
 
 def canonical_full_answer(value: BaseModel, catalog: SentUnitCatalog) -> GroundedDraft:
