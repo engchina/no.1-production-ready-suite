@@ -59,7 +59,9 @@ const UNIT_A1 = {
   source_chunks: [{ chunk_id: "chunk-a1", chunk_index: 0 }],
   relations: [
     { direction: "outgoing", relation: "exception", scope: "same_document", unit: { id: UA2, label: "第 1 章", path: ["第 1 章"], document_id: "doc-a", document_name: "合成文書A.pdf" } },
-    { direction: "outgoing", relation: "prerequisite", scope: "cross_document", reason: "合成の判定の理由。", unit: { id: UB1, label: "付録", path: ["付録"], document_id: "doc-b", document_name: "合成文書B.pdf" } },
+    { direction: "outgoing", relation: "prerequisite", scope: "cross_document", target_name: "合成文書B.pdf", target_section: "付録", unit: { id: UB1, label: "付録", path: ["付録"], document_id: "doc-b", document_name: "合成文書B.pdf" } },
+    // 参照先の文書がこの KB に無い参照（#5784）。開けない。
+    { direction: "outgoing", relation: "reference", scope: "cross_document", target_name: "合成文書Z.pdf", target_section: "第 2 章", unit: null },
   ],
 };
 
@@ -93,7 +95,7 @@ for (let d = 1; d <= 6; d += 1) {
 const LARGE_UNIT = {
   ...UNIT_A1, id: largeUnit(1, 0), label: largeSectionLabel(0), path: [largeSectionLabel(0)], document_id: largeDoc(1), document_name: LARGE_OVERVIEW.documents[0].name,
   relations: LARGE_RELATIONS.map((relation, index) => ({
-    direction: index % 2 ? "incoming" : "outgoing", relation, scope: "cross_document", reason: `合成の判定の理由の長い説明の例 ${index + 1}。相手の単位を一緒に読む理由を書いた文。`,
+    direction: index % 2 ? "incoming" : "outgoing", relation, scope: "cross_document", target_name: LARGE_OVERVIEW.documents[1].name, target_section: `${largeSectionLabel(index)}の続きの長い見出し`,
     unit: { id: largeUnit(2, index), label: largeSectionLabel(index), path: ["合成の長い章の見出しの例", `${largeSectionLabel(index)}の続きの長い見出し`], document_id: largeDoc(2), document_name: LARGE_OVERVIEW.documents[1].name },
   })),
 };
@@ -363,6 +365,10 @@ test("単位を押すと案内と関係を横に出し、原文を開き、関�
   const relations = panel.getByRole("table", { name: "関係" });
   await expect(relations.getByText("別の文書：合成文書B.pdf")).toBeVisible();
   await expect(relations.locator('[data-relation="prerequisite"] svg')).toBeAttached();
+  // KB に無い文書への参照は理由を文字で示し、位置の確認のボタンを出さない（#5784）。
+  const dangling = relations.getByRole("row").filter({ hasText: "合成文書Z.pdf 第 2 章" });
+  await expect(dangling).toContainText("参照先の文書はこのナレッジベースにありません");
+  await expect(dangling.getByRole("button")).toHaveCount(0);
   const loading = await findLoadingStandardViolations(page);
   expect(loading).toEqual([]);
   // 広い画面では図の横、狭い画面（375px）では図の下に出す。

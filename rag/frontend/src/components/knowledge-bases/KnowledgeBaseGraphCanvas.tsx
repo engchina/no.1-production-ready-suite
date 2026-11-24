@@ -236,6 +236,8 @@ function WikiCanvas({ overview, knowledgeBaseId, pagination }: WikiCanvasProps) 
     setKnownEdges((old) => {
       const next = new Map(old);
       for (const item of items) {
+        // 参照先がこの KB に無い参照（#5784）は図の線にしない。
+        if (!item.unit) continue;
         const [source, target] = item.direction === "outgoing" ? [selectedId, item.unit.id] : [item.unit.id, selectedId];
         const id = `${item.scope}:${source}:${target}:${item.relation}`;
         next.set(id, { id, source, target, scope: item.scope, relation: item.relation });

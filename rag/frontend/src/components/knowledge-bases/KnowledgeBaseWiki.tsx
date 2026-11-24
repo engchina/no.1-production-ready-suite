@@ -61,10 +61,6 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
     },
     onError: () => setRetryStatus({ tone: "danger", message: t("wiki.retryError") }),
   });
-  const retryLinks = useMutation({
-    mutationFn: (documentId: string) => api.retryWikiLinks(id, documentId, offset, limit),
-    onSuccess: saved,
-  });
   const data = query.data;
   const counts = data?.counts ?? {};
   const failed = counts.FAILED ?? 0;
@@ -92,11 +88,6 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
           <div className="space-y-2 rounded-md border border-border bg-surface-sunken px-3 py-2" data-testid="knowledge-base-wiki-progress">
             <p aria-live="polite" className="tnum text-xs font-medium text-fg">{progressLabel}</p>
             <progress className="h-2 w-full" value={ready} max={total} aria-label={progressLabel} />
-            {data.link_counts ? <div className="space-y-1" aria-live="polite">
-              <p>{t("wiki.links.title")} · {t("wiki.links.count", { n: data.link_count ?? 0 })}</p>
-              <p>{Object.entries(data.link_counts).map(([state, count]) => `${linkState(state)} ${count}`).join(" / ")}</p>
-              {data.planned_count != null ? <p>{t("wiki.links.progress", { done: data.judged_count ?? 0, total: data.planned_count })}</p> : null}
-            </div> : null}
             <ul aria-label={t("wiki.legend")} className="flex flex-wrap gap-1.5">
               {WIKI_STATUSES.filter(({ status }) => (counts[status] ?? 0) > 0).map(({ status }) => <li key={status}><WikiStatusBadge status={status} count={counts[status]} /></li>)}
             </ul>
@@ -109,8 +100,7 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
           </div>
           {retryStatus ? <FormStatus tone={retryStatus.tone} message={retryStatus.message} /> : null}
         </div> : null}
-        {total > 0 && data.documents ? <WikiDocuments page={data.documents} paging={paging} retryLinks={editable && data.enabled && !blocked && !retryLinks.isPending ? retryLinks.mutate : undefined} expanded={failed > 0 || (data.link_counts?.FAILED ?? 0) > 0 || retryStatus != null} /> : null}
-        <SaveErrorBanner message={retryLinks.error ? t("wiki.retryError") : null} attemptKey={retryLinks.submittedAt} />
+        {total > 0 && data.documents ? <WikiDocuments page={data.documents} paging={paging} expanded={failed > 0 || retryStatus != null} /> : null}
         <SaveErrorBanner message={update.error ? t("wiki.saveError") : null} attemptKey={update.submittedAt} />
       </> : null}
       {/* Wiki の図はカードの最下部に常に置く。構築の状態の読み込みと別に、開いたときだけ読む（#5502）。 */}
@@ -123,13 +113,7 @@ export function KnowledgeBaseWiki({ id, editable }: { id: string; editable: bool
  * 文書ごとの構築状態。失敗があるとき・再試行の結果を出しているときは開いた状態で出す（再試行で失敗が待機に
  * 変わっても畳まず、変わった行を見せ続ける）。表は状態色の面に置かず、失敗は行の状態と理由・進捗の件数で示す。
  */
-function linkState(state: string) {
-  if (state === "DISABLED") return t("wiki.links.disabled");
-  if (state === "NOT_BUILT") return t("wiki.links.none");
-  return t(`wiki.status.${state}` as I18nKey);
-}
-
-function WikiDocuments({ page, paging, expanded, retryLinks }: { retryLinks?: (documentId: string) => void; page: Page<KnowledgeBaseWikiDocument>; paging: ReturnType<typeof useClientListPaging>; expanded: boolean }) {
+function WikiDocuments({ page, paging, expanded }: { page: Page<KnowledgeBaseWikiDocument>; paging: ReturnType<typeof useClientListPaging>; expanded: boolean }) {
   return <Disclosure
     key={expanded ? "expanded" : "collapsed"}
     defaultOpen={expanded}
@@ -150,15 +134,7 @@ function WikiDocuments({ page, paging, expanded, retryLinks }: { retryLinks?: (d
         rowProps={() => ({ "data-testid": "knowledge-base-wiki-document", className: INFORMATION_TABLE_ROW_CLASS })}
         columns={[
           { key: "file_name", header: t("wiki.documents.column.file"), rowHeader: true, className: "min-w-[10rem] break-all font-medium text-fg", render: (row) => row.file_name || row.document_id },
-          { key: "status", header: t("wiki.links.pages"), className: "whitespace-nowrap", render: (row) => <WikiStatusBadge status={row.status} /> },
-          { key: "links", header: t("wiki.links.title"), render: row => row.link_status ? <div className="space-y-1">
-            <p>{linkState(row.link_status)} · {t("wiki.links.count", { n: row.link_count ?? 0 })}</p>
-            {row.planned_count != null ? <p>{t("wiki.links.progress", { done: row.judged_count ?? 0, total: row.planned_count })}</p> : row.link_status === "RUNNING" ? <p>{t("wiki.links.checking")}</p> : null}
-            {row.link_status === "FAILED" ? <>
-              <p>{row.failure_phase ? t(row.failure_phase.includes("save") || row.failure_phase.includes("publish") ? "wiki.links.save" : row.failure_phase.includes("generate") ? "wiki.links.generate" : "wiki.links.prepare") + " · " : ""}{failureReason(row.link_failure_code)}</p>
-              <Button variant="secondary" size="sm" disabled={!retryLinks} onClick={() => retryLinks?.(row.document_id)}>{t("wiki.links.retry")}</Button>
-            </> : null}
-          </div> : "—" },
+          { key: "status", header: t("wiki.documents.column.status"), className: "whitespace-nowrap", render: (row) => <WikiStatusBadge status={row.status} /> },
           { key: "failure", header: t("wiki.documents.column.failure"), className: "min-w-[12rem] break-words text-xs text-fg-muted", render: (row) => failureReason(row.failure_code) },
           { key: "updated_at", header: t("wiki.documents.column.updated"), className: "tnum whitespace-nowrap text-xs text-fg-muted", render: (row) => (row.updated_at ? formatDateTime(row.updated_at) : "—") },
         ]}
