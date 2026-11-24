@@ -9,7 +9,8 @@ from typing import Any
 
 from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS, without_image_inputs
 
-GENERATION_INPUT_LIMIT = 96_000
+# 生成の要求の入力の見積もりの上限（呼び出し側のモデルの上限が小さければそちら。#5808）。
+GENERATION_INPUT_LIMIT = 256_000
 
 
 class GenerationInputLimitError(ValueError):
