@@ -39,7 +39,8 @@ const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200
   label: t("settings.answering.answerTimeoutOption", { seconds: String(seconds) }),
 }));
 
-// 起点の文書の目次の選択で目次を渡す文書の数（#5324。範囲は backend の rag_outline_selection_max_documents と同じ）。
+// 目次を渡す文書の数（起点の文書 #5324・参照先の文書 #5817。範囲は backend の rag_outline_selection_max_documents・
+// rag_reference_outline_selection_max_documents と同じ）。
 // 目次の字数と読む章節の大きさは回答モデルの入力上限の 1/2 で決め、設定は無い（2 つの目次の選択で同じ。#5816）。
 // 番号で示した参照の節も同じ規則で読み、設定は無い（#5817）。
 const OUTLINE_DOCUMENT_CHOICES = Array.from({ length: 10 }, (_, n) => n + 1);
@@ -69,6 +70,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     entity_expansion_enabled: settings.entity_expansion_enabled,
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
     reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? true,
+    reference_outline_selection_max_documents: settings.reference_outline_selection_max_documents ?? 3,
     outline_selection_enabled: settings.outline_selection_enabled ?? true,
     outline_selection_max_documents: settings.outline_selection_max_documents ?? 3,
     section_expansion_enabled: settings.section_expansion_enabled,
@@ -274,6 +276,12 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             disabled={disabled}
             onChange={(checked) => update({ reference_outline_selection_enabled: checked })}
           />
+          {form.reference_outline_selection_enabled ? <FormGrid className="px-3 pb-3">
+            <SelectField id="answering-reference_outline_selection_max_documents" label={t("settings.answering.reference_outline_selection_max_documents")} width="xs"
+              value={String(form.reference_outline_selection_max_documents)} disabled={disabled}
+              options={countOptions(OUTLINE_DOCUMENT_CHOICES, form.reference_outline_selection_max_documents, String)}
+              onValueChange={(value) => update({ reference_outline_selection_max_documents: Number(value) })} />
+          </FormGrid> : null}
         </div>
         <div>
           <SwitchRow id="answering-outline-selection" label={t("settings.answering.outlineSelection")}

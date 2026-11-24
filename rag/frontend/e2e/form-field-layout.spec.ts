@@ -62,7 +62,7 @@ async function mockRetrieval(page: Page) {
         rerank_enabled: true,
         entity_expansion_enabled: true, entity_expansion_max_chunks: 3,
         // 開閉の下の欄も幅と並びを確かめる（#5324。目次の字数・読む量の欄は #5816 で削除）。
-        reference_outline_selection_enabled: true,
+        reference_outline_selection_enabled: true, reference_outline_selection_max_documents: 3,
         outline_selection_enabled: true, outline_selection_max_documents: 3,
         section_expansion_enabled: true, section_expansion_max_levels: 1,
         config_source: "runtime",

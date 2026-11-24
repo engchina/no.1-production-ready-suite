@@ -77,6 +77,10 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "reference_outline_selection_enabled": (
             resolved_settings.rag_reference_outline_selection_enabled
         ),
+        # その目次を渡す参照先の文書の数(#5817)。
+        "reference_outline_selection_max_documents": (
+            resolved_settings.rag_reference_outline_selection_max_documents
+        ),
         # 起点の文書の目次から選んだ章節を rerank の枠の外で根拠に足す(#5324)。
         "outline_selection_enabled": resolved_settings.rag_outline_selection_enabled,
         "outline_selection_max_documents": resolved_settings.rag_outline_selection_max_documents,

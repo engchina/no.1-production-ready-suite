@@ -24,6 +24,7 @@ from app.rag.reference_sections import (
     REFERENCE_SECTION_PROMPT,
     SKIP_NO_SELECTION,
     SKIP_NOT_PLANNED,
+    SKIP_OUTLINE_DOCUMENT_LIMIT,
     SKIP_OUTLINE_SELECTION_DISABLED,
     SKIP_SECTION_OVER_LIMIT,
     SKIP_SECTIONS_EMPTY,
@@ -187,6 +188,85 @@ async def test_selected_sections_are_read_with_one_call_for_all_targets(
     (selection,) = _selections(state)
     assert selection["outcome"] == "selected"
     assert selection["documents"] == 2
+
+
+@pytest.mark.parametrize("first", [DOC_A, DOC_B], ids=["a-first", "b-first"])
+async def test_outlines_go_to_documents_up_to_the_limit_in_evidence_order(
+    monkeypatch: pytest.MonkeyPatch, first: str
+) -> None:
+    """目次を渡す参照先の文書は上限まで、根拠の並びで先に出てくるものから(#5817)。
+
+    超えた参照先の文書は目次を渡さず、理由 ``outline_document_limit`` を受領記録に残す。
+    """
+    chunks = [*_doc_chunks(DOC_A, FILE_A, 3), *_doc_chunks(DOC_B, FILE_B, 3)]
+    second = DOC_B if first == DOC_A else DOC_A
+    by_document = {DOC_A: TARGET_A, DOC_B: TARGET_B}
+    # 根拠の並び(rerank の後の起点の順)で、先の起点が first を、後の起点が second を参照する。
+    anchors = [
+        _retrieved(
+            f"doc-index:{n}",
+            f"調査は次の資料に従う。{by_document[document].label}",
+            "索引",
+            document_id="doc-index",
+            file_name="index.md",
+            targets=[by_document[document]],
+        )
+        for n, document in enumerate([first, second])
+    ]
+    oracle = ReferenceOracle(anchors, chunks)
+    oracle.documents = [(DOC_A, FILE_A, ()), (DOC_B, FILE_B, ())]
+    sections = SectionMap(chunks, outlines={DOC_A, DOC_B})
+    monkeypatch.setattr(section_map_service, "section_outline", sections.outline)
+    monkeypatch.setattr(section_map_service, "read_section", sections.read)
+    engine = _engine(
+        oracle,
+        FakeGenAi(),
+        rag_reference_outline_selection_enabled=True,
+        rag_reference_outline_selection_max_documents=1,
+    )
+    llm = FakeLlm(lambda context: [_label(context, "操作の手順")])
+    engine._reference_llm = llm
+
+    result, state = await _search(engine)
+
+    # 目次は先の参照先の文書だけに渡す(後の文書は目次の読み込みもしない。読取も同じ代役を引く)。
+    assert set(sections.outline_calls) == {first}
+    (call,) = llm.calls
+    assert f'<document name="{FILE_A if first == DOC_A else FILE_B}">' in call["context"]
+    assert [child.chunk_uid for child in result.expansion_chunks] == [f"{first}:cs:body"]
+    reads = _reads(state)
+    assert reads[first]["skip_reason"] is None
+    assert reads[second]["skip_reason"] == SKIP_OUTLINE_DOCUMENT_LIMIT
+    assert reads[second]["read_chunk_count"] == 0
+    (record,) = state.reference_sources
+    assert record["outline_max_documents"] == 1
+    outcomes = [
+        outcome
+        for source in cast(list[dict[str, Any]], record["sources"])
+        for outcome in cast(list[str], source.get("target_outcomes", []))
+    ]
+    assert SKIP_OUTLINE_DOCUMENT_LIMIT in outcomes
+
+
+async def test_outline_document_limit_defaults_to_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目次を渡す参照先の文書の数は既定 3(#5817。起点の側と同じ)。2 つの参照先は両方に渡す。"""
+    from app.config import Settings
+
+    assert Settings(_env_file=None).rag_reference_outline_selection_max_documents == 3
+    engine, _oracle, sections, _llm = _setup(
+        monkeypatch,
+        outlines={DOC_A, DOC_B},
+        pick=lambda context: [
+            line.split("[", 1)[1].split("]", 1)[0]
+            for line in context.splitlines()
+            if line.strip().endswith("操作の手順")
+        ],
+    )
+
+    _result, state = await _search(engine)
+
+    assert set(sections.outline_calls) == {DOC_A, DOC_B}
+    assert {item["skip_reason"] for item in _reads(state).values()} == {None}
 
 
 async def test_ids_not_in_the_outline_are_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -544,6 +624,7 @@ def test_limits_default_to_the_previous_constants(monkeypatch: pytest.MonkeyPatc
     ("name", "low", "high"),
     [
         ("rag_outline_lead_chars", 0, 200),
+        ("rag_reference_outline_selection_max_documents", 1, 10),
     ],
 )
 def test_limits_reject_values_out_of_range(name: str, low: int, high: int) -> None:

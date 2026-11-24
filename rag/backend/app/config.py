@@ -1055,6 +1055,17 @@ class Settings(
             "文書名・ファイル名だけの参照の参照先は読まない(参照の記述の chunk は根拠に残る)。"
         ),
     )
+    rag_reference_outline_selection_max_documents: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description=(
+            "目次から章節を選ぶ対象にする、文書全体への参照の参照先の文書の数(#5817。1〜10。"
+            "起点の側の rag_outline_selection_max_documents と対)。超えるときは根拠の並び"
+            "(rerank の後の順)で先に出てくる参照先から採り、超えた参照先は目次を渡さず理由を"
+            "回答の診断に残す。交差参照の安全の上限 rag_reference_expansion_max_targets は別。"
+        ),
+    )
     rag_outline_lead_chars: int = Field(
         default=60,
         ge=0,

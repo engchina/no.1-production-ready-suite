@@ -441,7 +441,10 @@ async def test_list_of_many_file_names_adds_every_document_in_relevance_order(
     )
     genai = FakeGenAi({"作業Cの操作": 0.9, "作業Aの操作": 0.5})
 
-    result, receipt, state, sections = await _expand(monkeypatch, oracle, [anchor], genai)
+    # 目次を渡す参照先の文書の数(既定 3。#5817)より多い一覧も全部を読めるよう、上限を広げる。
+    result, receipt, state, sections = await _expand(
+        monkeypatch, oracle, [anchor], genai, rag_reference_outline_selection_max_documents=10
+    )
 
     added = [row.chunk_id for row in result[anchor.chunk_id]]
     expected = [

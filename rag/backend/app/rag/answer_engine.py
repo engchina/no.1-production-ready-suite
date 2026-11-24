@@ -321,6 +321,9 @@ class _SearchState:
     # #5263・#5348)と、章節を選ぶ呼び出しの記録。
     reference_reads: dict[tuple[str, ...], Any] = field(default_factory=dict)
     reference_section_selections: list[dict[str, object]] = field(default_factory=list)
+    # 目次を渡した参照先の文書((document_id, chunk_set_id)。根拠の並びで先に出てきた順)。
+    # ``rag_reference_outline_selection_max_documents`` まで(1 回の回答で数える。#5817)。
+    reference_outline_documents: list[tuple[str, str]] = field(default_factory=list)
     # 番号つきの参照の参照先の節の読み方(参照先の鍵ごと。節の全体か、子の節に縮めたか、上限を超えて
     # 読まなかった節。#5817)。
     reference_section_reads: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
@@ -1579,6 +1582,9 @@ class AnswerEngine:
                                 self._settings.rag_reference_expansion_max_targets
                             ),
                             "番号つきの参照の節の大きさの上限(字)": (self._outline_limit_chars()),
+                            "目次を渡す参照先の文書の数": (
+                                self._settings.rag_reference_outline_selection_max_documents
+                            ),
                             "文書全体への参照の読み方": (
                                 "目次から回答のモデルが選んだ章節だけを読みます。選べないときは"
                                 "読みません。"
@@ -2191,6 +2197,8 @@ class AnswerEngine:
             "target_limit": target_budget,
             # 番号つきの参照の参照先の節 1 つの大きさの上限(回答のモデルの入力の上限の 1/2。#5817)。
             "section_limit_chars": self._outline_limit_chars(),
+            # 目次を渡す参照先の文書の数(#5817)。
+            "outline_max_documents": self._settings.rag_reference_outline_selection_max_documents,
             "deadline_reserve_seconds": reserve,
             "added_count": 0,
             "sources": sources,
@@ -3101,10 +3109,15 @@ class AnswerEngine:
         選択が失敗した・何も選ばない、返った ID がすべて目次に無い参照先は読まない
         (理由を ``state.reference_reads`` の計画に残す。#5348)。回答の期限の残りが生成の予約より
         少なければ計画しない(読取も同じ判定で止まる。#5252)。
+        目次を渡す参照先の文書は ``rag_reference_outline_selection_max_documents`` まで(#5817)。
+        ``targets`` は根拠の並び(rerank の後の起点の順)なので、先に出てくる参照先の文書から採り、
+        超えた文書の参照先は目次を渡さず ``outline_document_limit`` を計画に残す(1 回の回答の中で
+        数える。交差参照の安全の上限 ``target_budget`` は別)。
         """
         from app.rag.reference_sections import (
             DOCUMENT_NO_OUTLINE,
             DOCUMENT_OUTLINE_ERROR,
+            SKIP_OUTLINE_DOCUMENT_LIMIT,
             DocumentReadPlan,
         )
         from app.rag.section_chunk_map import ROOT_SECTION_ID
@@ -3135,6 +3148,12 @@ class AnswerEngine:
             version = state.reference_versions[(scope_key, document_id)][0]
             plan = DocumentReadPlan(document_id, version, target.document_title or "")
             state.reference_reads[key] = plan
+            outlined = state.reference_outline_documents
+            if (document_id, version) not in outlined:
+                if len(outlined) >= self._settings.rag_reference_outline_selection_max_documents:
+                    plan.skip(SKIP_OUTLINE_DOCUMENT_LIMIT)
+                    continue
+                outlined.append((document_id, version))
             try:
                 outline = await section_outline(
                     document_id, chunk_set_id=version, oracle=self._oracle

@@ -817,6 +817,8 @@ class AnsweringSettingsData(BaseModel):
     # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 ON。#5296)。
     # 目次の字数と選んだ章節の読み方は回答のモデルの入力の上限の 1/2 で決め、設定は無い(#5816)。
     reference_outline_selection_enabled: bool
+    # その対象の参照先の文書の数(起点の側と対。#5817)。
+    reference_outline_selection_max_documents: int = 3
     # 起点の文書の目次から回答のモデルが選んだ章節を、rerank の枠の外で根拠に足す(#5324。
     # 既定 ON。#5362)と、その対象の文書の数(目次の字数・読み方は参照先と同じ。#5816)。
     outline_selection_enabled: bool = True
@@ -855,6 +857,8 @@ class AnsweringSettingsUpdate(BaseModel):
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
     reference_outline_selection_enabled: bool | None = None
+    # 範囲は Settings の rag_reference_outline_selection_max_documents と同じ(#5817)。
+    reference_outline_selection_max_documents: int | None = Field(default=None, ge=1, le=10)
     # 範囲は Settings の rag_outline_selection_* と同じ(#5324)。
     outline_selection_enabled: bool | None = None
     outline_selection_max_documents: int | None = Field(default=None, ge=1, le=10)

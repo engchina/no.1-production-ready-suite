@@ -98,6 +98,10 @@ SKIP_SECTIONS_OVER_LIMIT = "selected_sections_over_limit"
 # #5348）。ほかの理由（目次が無い・読めない・選択の失敗・何も選ばない・ID がすべて目次に無い・
 # 選んだ章節を読めない）は一般の質問の理由と同じ名前を使う。
 SKIP_OUTLINE_SELECTION_DISABLED = "outline_selection_disabled"
+# 目次を渡す参照先の文書の数（``rag_reference_outline_selection_max_documents``）を超えた参照先。
+# 根拠の並びで先に出てくる参照先の文書から上限まで目次を渡し、超えた文書の参照先は目次を渡さない
+# （#5817）。
+SKIP_OUTLINE_DOCUMENT_LIMIT = "outline_document_limit"
 SKIP_NOT_PLANNED = "not_planned"
 # 文書を対象にしなかった理由（受領記録の文書ごとの ``skip_reason``。2 つの経路で共有）。
 DOCUMENT_NO_OUTLINE = "no_outline"

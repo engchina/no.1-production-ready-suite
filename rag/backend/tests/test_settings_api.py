@@ -3606,6 +3606,40 @@ def test_answering_settings_have_no_reference_section_read_max_chunks(
     assert "RAG_OUTLINE_SELECTION_MAX_DOCUMENTS=4" in text
 
 
+def test_answering_settings_save_reference_outline_selection_max_documents(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """参照先の文書の目次を渡す文書の数(#5817。既定 3・1〜10。起点の側と対)を .env と実行中の
+    設定へ反映する。範囲の外の数は保存しない。"""
+    from app.config import Settings
+
+    assert Settings(_env_file=None).rag_reference_outline_selection_max_documents == 3
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_reference_outline_selection_max_documents", 3)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    data = client.get("/api/settings/answering").json()["data"]
+    assert data["reference_outline_selection_max_documents"] == 3
+    response = client.patch(
+        "/api/settings/answering", json={"reference_outline_selection_max_documents": 6}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["reference_outline_selection_max_documents"] == 6
+    assert settings.rag_reference_outline_selection_max_documents == 6
+    # 起点の側の数は変えない。
+    assert response.json()["data"]["outline_selection_max_documents"] == (
+        settings.rag_outline_selection_max_documents
+    )
+    text = env_file.read_text(encoding="utf-8")
+    assert "RAG_REFERENCE_OUTLINE_SELECTION_MAX_DOCUMENTS=6" in text
+    for invalid in (0, 11):
+        response = client.patch(
+            "/api/settings/answering", json={"reference_outline_selection_max_documents": invalid}
+        )
+        assert response.status_code == 422
+
+
 def test_answering_settings_save_outline_selection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

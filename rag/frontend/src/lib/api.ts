@@ -2765,6 +2765,11 @@ export interface AnsweringSettingsData {
   entity_expansion_max_chunks: number;
   /** 文書全体への参照の参照先を、目次からモデルが選んだ章節で読む（#5263。既定 true。#5296）。 */
   reference_outline_selection_enabled: boolean;
+  /**
+   * 目次を渡す参照先の文書の数（#5817。既定 3。起点の側と対）。超えるときは根拠の並びで先に出てくる参照先から
+   * 渡し、超えた参照先は目次を渡さない。
+   */
+  reference_outline_selection_max_documents: number;
   /** 起点の文書の目次からモデルが選んだ章節を、Rerank の枠の外で根拠に加える（#5324。既定 true。#5362）。 */
   outline_selection_enabled: boolean;
   /**
