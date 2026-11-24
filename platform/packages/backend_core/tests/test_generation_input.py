@@ -5,6 +5,7 @@ import json
 import pytest
 
 from pr_backend_core.generation_input import (
+    GENERATION_INPUT_LIMIT,
     GenerationInputLimitError,
     UnmeasuredGenerationInputError,
     complete_input_measurement,
@@ -12,7 +13,14 @@ from pr_backend_core.generation_input import (
 )
 
 
-@pytest.mark.parametrize(("total", "fits"), [(95_999, True), (96_000, True), (96_001, False)])
+@pytest.mark.parametrize(
+    ("total", "fits"),
+    [
+        (GENERATION_INPUT_LIMIT - 1, True),
+        (GENERATION_INPUT_LIMIT, True),
+        (GENERATION_INPUT_LIMIT + 1, False),
+    ],
+)
 def test_limit_counts_instruction_schema_and_escaped_content(total, fits):
     request = {
         "model": "model-a",
@@ -30,7 +38,7 @@ def test_limit_counts_instruction_schema_and_escaped_content(total, fits):
     else:
         with pytest.raises(GenerationInputLimitError) as exc:
             m.validate()
-        assert exc.value.limit_tokens == 96_000
+        assert exc.value.limit_tokens == GENERATION_INPUT_LIMIT
     assert m.wire_bytes == len(
         json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode()
     )
@@ -75,7 +83,7 @@ def test_caller_executed_tool_definitions_are_in_the_input_budget():
 
 
 def test_schema_is_counted_even_when_it_describes_media():
-    schema = {"const": {"type": "image", "description": "x" * 80_000}}
+    schema = {"const": {"type": "image", "description": "x" * GENERATION_INPUT_LIMIT}}
     measured = complete_input_measurement({"input": "a", "text": {"format": {"schema": schema}}})
     assert measured.media_tokens == 0
     assert not measured.fits
@@ -89,8 +97,19 @@ def test_usage_distinguishes_cached_unknown_and_zero():
     assert (
         measured.usage_status(
             reported_input_tokens(
-                {"input_tokens": 96_001, "input_tokens_details": {"cached_tokens": 90_000}}
+                {
+                    "input_tokens": GENERATION_INPUT_LIMIT + 1,
+                    "input_tokens_details": {"cached_tokens": 90_000},
+                }
             )
         )
         == "over_limit"
     )
+
+
+def test_model_limit_below_the_shared_limit_is_used():
+    """モデルの上限が共通の上限より小さければ、モデルの上限で測る（#5808）。"""
+    assert GENERATION_INPUT_LIMIT == 256_000
+    assert complete_input_measurement({"input": "a"}, limit_tokens=96_000).limit_tokens == 96_000
+    wide = complete_input_measurement({"input": "a"}, limit_tokens=500_000)
+    assert wide.limit_tokens == GENERATION_INPUT_LIMIT

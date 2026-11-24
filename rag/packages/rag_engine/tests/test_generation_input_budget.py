@@ -95,13 +95,18 @@ def test_planning_includes_final_language_contract_and_sdk_wrappers():
         }
     )
     assert "BoundExplicitResponseLanguage" in actual["text"]["format"]["schema"]["$defs"]
-    assert measured["complete_input_estimated_tokens"] == complete_input_measurement({**actual, "stream": True}).estimated_tokens
+    assert (
+        measured["complete_input_estimated_tokens"]
+        == complete_input_measurement({**actual, "stream": True}, limit_tokens=96_000).estimated_tokens
+    )
 
 
 def test_japanese_body_and_template_are_jointly_limited():
-    measured = model_input_measurement(settings(answer_max_input_tokens=256_000), "指示", "合成本文。" * 5000, {"type": "object"})
+    from pr_backend_core.generation_input import GENERATION_INPUT_LIMIT
+
+    measured = model_input_measurement(settings(answer_max_input_tokens=500_000), "指示", "合成本文。" * 14_000, {"type": "object"})
     assert measured["estimated_input_tokens"] < measured["available_input_tokens"]
-    assert measured["complete_input_estimated_tokens"] > measured["complete_input_limit_tokens"] == 96_000
+    assert measured["complete_input_estimated_tokens"] > measured["complete_input_limit_tokens"] == GENERATION_INPUT_LIMIT
     assert not measured["fits"]
 
 
@@ -113,5 +118,5 @@ def test_oversize_final_request_never_reaches_client_or_retry(monkeypatch):
     provider = config.llm_providers[config.default_answer_llm]
     monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *_: pytest.fail("過大な要求の送信"))
     with pytest.raises(GenerationInputBudgetExceeded) as raised, oci.bind_output_cap(128):
-        oci._openai_parsed([{"role": "user", "content": "x" * 72_000}], config, TextOutput, provider)
-    assert raised.value.diagnostic["complete_input_limit_tokens"] == 96_000
+        oci._openai_parsed([{"role": "user", "content": "x" * 200_000}], config, TextOutput, provider)
+    assert raised.value.diagnostic["complete_input_limit_tokens"] == 256_000
