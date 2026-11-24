@@ -1,6 +1,6 @@
 """KB 詳細の Wiki の図の読み取り（#5502）。
 
-保存済みの案内（``rag_wiki_pages``）と文書をまたぐ関連（``rag_wiki_links``）を、
+保存済みの案内（``rag_wiki_pages``）と別の文書への参照（``rag_wiki_references``）を、
 文書 → 章節 → 原文単位の図の形で返す。範囲は Wiki の文書ごとの状態と同じ条件
 （今の利用者が読める、この KB に所属する文書）で、Wiki の構築の指定が無効でも保存済みの案内は出す。
 案内は今の原文の保存版で公開済みのものだけを出す。
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Any
 
 from app.clients.oracle import (
@@ -23,6 +24,7 @@ from app.clients.oracle import (
     _oracle_retrieval_where,
 )
 from app.clients.wiki_graph_index import section_id as section_id
+from app.clients.wiki_reference_index import DocumentNames, section_pages
 from app.clients.wiki_store import WIKI_PAGE_FROM, WIKI_PUBLISHED_SQL
 from app.rag.wiki_models import WikiPage
 
@@ -239,56 +241,166 @@ class WikiGraphStore:
         }
 
     async def relations(self, kb_id: str, unit_id: str, offset: int, limit: int) -> dict[str, Any]:
-        """現在の単位と相手の両方が見える関係を一画面だけ返す。"""
+        """現在の単位の関係を一画面だけ返す（同じ文書の依存と、別の文書への参照の両方の向き）。
+
+        別の文書への参照（#5784）は、参照先をこの KB の文書の名前で決める。決まった参照先は開ける
+        単位を返し、決まらない参照（KB に無い文書）は原文の表記だけを返す（開けない）。
+        """
+        found = await self._pages(kb_id, [unit_id])
+        if unit_id not in found:
+            return {"has_more": False, "items": []}
+        page: WikiPage = found[unit_id]["page"]
+        document_id = page.unit.document_id
         cte, binds = visible_pages_cte(kb_id)
         rows = await self.oracle._fetch_all(
             f"""WITH {cte},
-            selected_page AS (SELECT * FROM visible WHERE unit_id=:graph_unit),
-            neighbors AS (
-                SELECT 'outgoing' AS direction,'same_document' AS scope,e.relation,
-                       other.page_id,CAST(NULL AS VARCHAR2(800)) AS reason
-                FROM selected_page u JOIN rag_wiki_graph_deps e ON e.page_id=u.page_id
-                JOIN visible other ON other.document_id=u.document_id
-                    AND other.unit_id=e.target_unit_id
-                UNION ALL
-                SELECT 'incoming','same_document',e.relation,other.page_id,NULL
-                FROM selected_page u JOIN rag_wiki_graph_deps e ON e.target_unit_id=u.unit_id
-                JOIN visible other ON other.document_id=u.document_id AND other.page_id=e.page_id
-                UNION ALL
-                SELECT 'outgoing','cross_document',l.relation,other.page_id,l.reason
-                FROM selected_page u JOIN rag_wiki_links l ON l.source_page_id=u.page_id
-                JOIN visible other ON other.page_id=l.target_page_id
-                UNION ALL
-                SELECT 'incoming','cross_document',l.relation,other.page_id,l.reason
-                FROM selected_page u JOIN rag_wiki_links l ON l.target_page_id=u.page_id
-                JOIN visible other ON other.page_id=l.source_page_id)
-            SELECT n.direction,n.scope,n.relation,n.reason,p.unit_id,p.document_id,d.file_name,
-                   JSON_VALUE(p.page_json,'$.unit.title') AS title,
-                   JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS section_path
-            FROM neighbors n JOIN rag_wiki_pages p ON p.page_id=n.page_id
-            JOIN rag_documents d ON d.document_id=p.document_id
-            ORDER BY n.direction,n.scope,n.page_id,n.relation
-            OFFSET :graph_offset ROWS FETCH NEXT :graph_limit ROWS ONLY""",
-            {**binds, "graph_unit": unit_id, "graph_offset": offset, "graph_limit": limit + 1},
+            selected_page AS (SELECT * FROM visible WHERE unit_id=:graph_unit)
+            SELECT 'outgoing' AS direction,e.relation,other.page_id
+            FROM selected_page u JOIN rag_wiki_graph_deps e ON e.page_id=u.page_id
+            JOIN visible other ON other.document_id=u.document_id
+                AND other.unit_id=e.target_unit_id
+            UNION ALL
+            SELECT 'incoming',e.relation,other.page_id
+            FROM selected_page u JOIN rag_wiki_graph_deps e ON e.target_unit_id=u.unit_id
+            JOIN visible other ON other.document_id=u.document_id AND other.page_id=e.page_id""",
+            {**binds, "graph_unit": unit_id},
         )
+        items: list[dict[str, Any]] = [
+            {
+                "direction": row["direction"],
+                "scope": "same_document",
+                "relation": row["relation"],
+                "page_id": row["page_id"],
+            }
+            for row in rows
+        ]
+        names = await self._document_names(kb_id)
+        references = await self.oracle._fetch_all(
+            f"""WITH {cte}
+            SELECT r.target_name,r.target_section,r.relation FROM rag_wiki_references r
+            JOIN visible u ON u.page_id=r.page_id WHERE u.unit_id=:graph_unit ORDER BY r.ordinal""",
+            {**binds, "graph_unit": unit_id},
+        )
+        for row in references:
+            name, section = str(row["target_name"]), str(row.get("target_section") or "")
+            targets: list[str | None] = [*names.resolve(name, exclude=document_id)] or [None]
+            for target in targets:
+                items.append(
+                    {
+                        "direction": "outgoing",
+                        "scope": "cross_document",
+                        "relation": row["relation"],
+                        "page_id": (
+                            await self._reference_page(kb_id, target, section) if target else None
+                        ),
+                        "target_name": name,
+                        "target_section": section or None,
+                    }
+                )
+        keys = sorted(names.keys(document_id))
+        if keys:
+            clause, extra = _oracle_in_predicate("r.target_key", "graph_ref_key", keys)
+            for row in await self.oracle._fetch_all(
+                f"""WITH {cte}
+                SELECT r.relation,v.page_id FROM rag_wiki_references r
+                JOIN visible v ON v.page_id=r.page_id
+                WHERE {clause} AND v.document_id<>:graph_doc ORDER BY v.page_id,r.ordinal""",
+                {**binds, **extra, "graph_doc": document_id},
+            ):
+                items.append(
+                    {
+                        "direction": "incoming",
+                        "scope": "cross_document",
+                        "relation": row["relation"],
+                        "page_id": row["page_id"],
+                    }
+                )
+        units = await self._unit_refs([item["page_id"] for item in items if item["page_id"]])
+        ordered = sorted(
+            items,
+            key=lambda item: (
+                item["direction"],
+                item["scope"],
+                item["page_id"] or "",
+                item.get("target_name") or "",
+                item["relation"],
+            ),
+        )
+        page_items = ordered[offset : offset + limit]
         return {
-            "has_more": len(rows) > limit,
+            "has_more": len(ordered) > offset + limit,
             "items": [
                 {
-                    "direction": row["direction"],
-                    "scope": row["scope"],
-                    "relation": row["relation"],
-                    "reason": row.get("reason"),
-                    "unit": {
-                        "id": row["unit_id"],
-                        "document_id": row["document_id"],
-                        "document_name": row["file_name"],
-                        "label": row.get("title") or "",
-                        "path": _json_list(row["section_path"]),
-                    },
+                    "direction": item["direction"],
+                    "scope": item["scope"],
+                    "relation": item["relation"],
+                    "unit": units.get(item["page_id"]) if item["page_id"] else None,
+                    "target_name": item.get("target_name"),
+                    "target_section": item.get("target_section"),
                 }
-                for row in rows[:limit]
+                for item in page_items
             ],
+        }
+
+    async def _document_names(self, kb_id: str) -> DocumentNames:
+        """図の範囲の文書の名前の照合（ファイル名と先頭の見出し）。"""
+        where, binds = graph_scope(kb_id)
+        rows = await self.oracle._fetch_all(
+            f"""SELECT DISTINCT p.document_id,d.file_name,
+            JSON_VALUE(p.page_json,'$.unit.section_path[0]') AS heading
+            {WIKI_PAGE_FROM} WHERE {where}""",
+            binds,
+        )
+        catalog: dict[str, dict[str, str]] = {}
+        headings: dict[str, list[str]] = {}
+        for row in rows:
+            did = str(row["document_id"])
+            catalog[did] = {"document_id": did, "title": str(row.get("file_name") or "")}
+            if row.get("heading"):
+                headings.setdefault(did, []).append(str(row["heading"]))
+        return DocumentNames(list(catalog.values()), headings)
+
+    async def _reference_page(self, kb_id: str, document_id: str, section: str) -> str | None:
+        """参照先の文書の開く単位（章節の表記に当たる最初の単位、無ければ文書の最初の単位）。"""
+        where, binds = graph_scope(kb_id)
+        rows = await self.oracle._fetch_all(
+            f"""SELECT p.page_id,
+            JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS path
+            {WIKI_PAGE_FROM} WHERE {where} AND p.document_id=:graph_target
+            ORDER BY c.chunk_index,p.unit_id FETCH FIRST 500 ROWS ONLY""",
+            {**binds, "graph_target": document_id},
+        )
+        pages = [
+            SimpleNamespace(
+                page_id=str(row["page_id"]),
+                unit=SimpleNamespace(section_path=[str(part) for part in _json_list(row["path"])]),
+            )
+            for row in rows
+        ]
+        ranked = section_pages(pages, section)
+        return ranked[0].page_id if ranked else None
+
+    async def _unit_refs(self, page_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+        if not page_ids:
+            return {}
+        clause, binds = _oracle_in_predicate("p.page_id", "graph_pages", sorted(set(page_ids)))
+        rows = await self.oracle._fetch_all(
+            f"""SELECT p.page_id,p.unit_id,p.document_id,d.file_name,
+            JSON_VALUE(p.page_json,'$.unit.title') AS title,
+            JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS section_path
+            FROM rag_wiki_pages p JOIN rag_documents d ON d.document_id=p.document_id
+            WHERE {clause}""",
+            binds,
+        )
+        return {
+            str(row["page_id"]): {
+                "id": row["unit_id"],
+                "document_id": row["document_id"],
+                "document_name": row["file_name"],
+                "label": row.get("title") or "",
+                "path": _json_list(row["section_path"]),
+            }
+            for row in rows
         }
 
     async def _source_chunks(self, chunk_ids: Sequence[str]) -> list[dict[str, Any]]:

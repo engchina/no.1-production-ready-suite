@@ -1,6 +1,5 @@
 """Wiki の背景構築の指定。本文は返さず、KB の見え方で状態だけを返す。"""
 
-from collections import Counter
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
@@ -58,16 +57,8 @@ async def get_wiki_settings(
     filters = {"knowledge_base_id": knowledge_base_id}
     counts = await store.status_counts(filters)
     rows = await store.document_statuses(filters, limit=paging.limit, offset=paging.offset)
-    links = await store.link_progress(filters)
-    by_id = {r["document_id"]: r for r in links}
-    if get_settings().rag_wiki_link_candidates <= 0:
-        for link in links:
-            link["link_status"] = "DISABLED"
     documents = paginate(
-        [
-            KnowledgeBaseWikiDocument.model_validate({**row, **by_id.get(row["document_id"], {})})
-            for row in rows
-        ],
+        [KnowledgeBaseWikiDocument.model_validate(row) for row in rows],
         total=sum(counts.values()),
         limit=paging.limit,
         offset=paging.offset,
@@ -79,12 +70,6 @@ async def get_wiki_settings(
         data=KnowledgeBaseWikiData(
             enabled=enabled,
             counts=counts,
-            link_counts=dict(Counter(r["link_status"] for r in links)),
-            link_count=sum(r["link_count"] for r in links) // 2,
-            judged_count=sum(r["judged_count"] or 0 for r in links),
-            planned_count=sum(r["planned_count"] for r in links)
-            if all(r["planned_count"] is not None for r in links)
-            else None,
             documents=documents,
             blocked_reason="actor_unavailable"
             if enabled and await _actor_unavailable(store, knowledge_base_id)
@@ -143,20 +128,4 @@ async def retry_document_wiki_pages(
         raise HTTPException(status_code=404, detail="資料が見つかりません。") from error
     except (PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    return await get_wiki_settings(knowledge_base_id, paging)
-
-
-@router.post("/{knowledge_base_id}/wiki/documents/{document_id}/links/retry", status_code=202)
-async def retry_document_wiki_links(
-    knowledge_base_id: str,
-    document_id: Annotated[str, Path(pattern=DOCUMENT_ID_PATTERN.pattern)],
-    paging: Paging,
-) -> ApiResponse[KnowledgeBaseWikiData]:
-    current = await get_wiki_settings(knowledge_base_id, paging)
-    if not current.data or not current.data.enabled or current.data.blocked_reason:
-        raise HTTPException(409, "Wiki の構築設定と担当者の権限を確認してください。")
-    try:
-        await wiki_jobs.retry_document_links(knowledge_base_id, document_id)
-    except ValueError as error:
-        raise HTTPException(409, str(error)) from error
     return await get_wiki_settings(knowledge_base_id, paging)

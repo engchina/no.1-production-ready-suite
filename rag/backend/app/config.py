@@ -1312,43 +1312,6 @@ class Settings(
         le=12000,
         description="Wiki の埋め込みの入力に添える原文の文字数。引用に使う原文は切らない。",
     )
-    # 文書をまたぐ Wiki の関連（#5492）。文書の案内を作った後、各単位の案内で同じ KB のほかの文書の
-    # 案内を探し、上位の候補との関連だけをモデルで判定する（全組み合わせでは比べない）。
-    rag_wiki_link_model_id: str = Field(
-        default="", description="文書間リンク判定のモデル ID。空の場合は既定のテキストモデル。"
-    )
-    rag_wiki_link_candidates: int = Field(
-        default=10,
-        ge=0,
-        le=50,
-        description=(
-            "Wiki の文書をまたぐ関連の候補の数（単位ごと・ベクトルと全文の上位）。"
-            "0 は関連を作らない。"
-        ),
-    )
-    rag_wiki_link_workers: int = Field(
-        default=1,
-        ge=1,
-        le=16,
-        description=(
-            "Wiki の文書をまたぐ関連の構築を同時に行う文書数の上限（process ごと。#5751）。"
-            "案内の枠（RAG_WIKI_BUILD_WORKERS）とは別に数え、関連が長くても案内の構築を待たせない。"
-        ),
-    )
-    rag_wiki_link_batch_units: int = Field(
-        default=8,
-        ge=1,
-        le=32,
-        description=(
-            "Wiki の関連の判定の 1 回の起点の単位数。途切れた・不正な出力は二分して取り直す。"
-        ),
-    )
-    rag_wiki_link_source_chars: int = Field(
-        default=1200,
-        ge=100,
-        le=8000,
-        description="Wiki の関連の判定に渡す原文の単位ごとの文字数（先頭から。判定だけに使う）。",
-    )
     # チャットは公開済み Wiki の索引順位と関連から、現在の原文を取得する（#5733）。
     rag_wiki_search_enabled: bool = Field(
         default=False,
@@ -1388,7 +1351,7 @@ class Settings(
         ge=0,
         le=3,
         description=(
-            "Wiki の検索で、起点の単位から依存と文書をまたぐ関連を出る向きに辿る段数。"
+            "Wiki の検索で、起点の単位から依存と別の文書への参照（出る向きと入る向き）を辿る段数。"
             "0 は辿らない。"
         ),
     )
@@ -1396,7 +1359,7 @@ class Settings(
         default=999,
         ge=1,
         le=999,
-        description="Wiki の検索で、依存と関連を辿って足す原文単位の数の上限（全段の合計）。",
+        description="Wiki の検索で、依存と参照を辿って足す原文単位の数の上限（全段の合計）。",
     )
     rag_wiki_query_timeout_seconds: float = Field(
         default=180.0,

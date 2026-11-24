@@ -342,7 +342,6 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
             </h3>
             <p className="text-xs text-fg-muted">{t("settings.parserAdapters.postParse.wiki.hint")}</p>
             <FeaturePromptDisclosure promptKey="wiki_build" />
-            <FeaturePromptDisclosure promptKey="wiki_links" />
           </li>
         </ol>
         <FormActionBar

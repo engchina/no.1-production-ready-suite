@@ -4973,3 +4973,45 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261124_5784_retire_wiki_links
+BEGIN
+    FOR retired IN (
+        SELECT table_name FROM user_tables WHERE table_name IN ('RAG_WIKI_LINKS', 'RAG_WIKI_LINK_DOCUMENTS')
+    ) LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || retired.table_name || ' CASCADE CONSTRAINTS PURGE';
+    END LOOP;
+END;
+/
+
+-- migration: 20261124_5784_wiki_references
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_WIKI_REFERENCES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_wiki_references ( '
+            || 'page_id VARCHAR2(64) NOT NULL REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE, '
+            || 'ordinal NUMBER NOT NULL, '
+            || 'document_id VARCHAR2(64) NOT NULL, '
+            || 'unit_id VARCHAR2(64) NOT NULL, '
+            || 'target_name VARCHAR2(400) NOT NULL, '
+            || 'target_key VARCHAR2(400) NOT NULL, '
+            || 'target_section VARCHAR2(400), '
+            || 'relation VARCHAR2(32) NOT NULL, '
+            || 'CONSTRAINT rag_wiki_reference_pk PRIMARY KEY (page_id,ordinal) '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_REFERENCE_KEY_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_reference_key_idx ON rag_wiki_references(target_key)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_REFERENCE_DOC_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_wiki_reference_doc_idx ON rag_wiki_references(document_id)';
+    END IF;
+END;
+/

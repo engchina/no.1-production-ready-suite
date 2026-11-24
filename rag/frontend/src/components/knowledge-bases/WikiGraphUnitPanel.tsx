@@ -51,11 +51,16 @@ export function WikiGraphUnitPanel({ kbId, unitId, onClose, onLocate, onRelation
         <WikiRelationLabel relation={item.relation} />
         <span className="text-xs text-fg-muted">{t(item.direction === "outgoing" ? "wiki.graph.direction.outgoing" : "wiki.graph.direction.incoming")}</span>
       </span>
-      <span className="text-xs text-fg-muted">{item.scope === "cross_document" ? t("wiki.graph.otherDocument", { name: item.unit.document_name }) : t("wiki.graph.sameDocument")}</span>
-      <span>{item.unit.path.length ? item.unit.path.join(" > ") : item.unit.label}</span>
-      {item.reason ? <span className="text-xs text-fg-muted" lang={resolveContentLang(undefined, item.reason)}>{item.reason}</span> : null}
+      {item.unit ? <>
+        <span className="text-xs text-fg-muted">{item.scope === "cross_document" ? t("wiki.graph.otherDocument", { name: item.unit.document_name }) : t("wiki.graph.sameDocument")}</span>
+        <span>{item.unit.path.length ? item.unit.path.join(" > ") : item.unit.label}</span>
+      </> : <>
+        {/* 参照先の文書がこの KB に無い参照（#5784）。開けないので操作の部品にせず、理由を文字で示す。 */}
+        <span className="text-xs text-fg-muted">{t("wiki.graph.outsideKnowledgeBase")}</span>
+        <span lang={resolveContentLang(undefined, item.target_name ?? "")}>{[item.target_name, item.target_section].filter(Boolean).join(" ")}</span>
+      </>}
     </div> },
-    { key: "locate", header: <span className="sr-only">{t("wiki.graph.locate")}</span>, render: (item) => <Button icon={LocateFixed} size="sm" variant="ghost" aria-label={t("wiki.graph.locate")} tooltip={t("wiki.graph.locate")} onClick={() => onLocate(item.unit)} /> },
+    { key: "locate", header: <span className="sr-only">{t("wiki.graph.locate")}</span>, render: (item) => item.unit ? <Button icon={LocateFixed} size="sm" variant="ghost" aria-label={t("wiki.graph.locate")} tooltip={t("wiki.graph.locate")} onClick={() => onLocate(item.unit!)} /> : null },
   ];
   const detail = query.data;
   return <GraphSelectionDetails compactLabels
@@ -97,7 +102,7 @@ export function WikiGraphUnitPanel({ kbId, unitId, onClose, onLocate, onRelation
             {!showRelations ? <Button variant="secondary" onClick={() => setShowRelations(true)}>{t("wiki.graph.showRelations")}</Button> : <>
               {relations.data ? <DataTable ariaLabel={t("wiki.graph.relations")} columns={columns}
                 rows={relations.data.pages.flatMap((page) => page.items)}
-                getRowKey={(item) => `${item.direction}:${item.scope}:${item.unit.id}:${item.relation}`}
+                getRowKey={(item) => `${item.direction}:${item.scope}:${item.unit?.id ?? `${item.target_name}:${item.target_section ?? ""}`}:${item.relation}`}
                 stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} /> : null}
               {relations.isError ? <ApiErrorState error={relations.error} fallback={t("wiki.graph.expandError")}
                 onRetry={() => void (relations.isFetchNextPageError ? relations.fetchNextPage() : relations.refetch())} /> :

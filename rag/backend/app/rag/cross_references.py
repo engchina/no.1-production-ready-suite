@@ -666,6 +666,27 @@ def document_reference_rank(
     return document_name_rank(key, keys or document_name_keys(file_name, headings))
 
 
+def reference_name_key(name: str) -> str | None:
+    """参照の名前の比較形（Wiki の参照の表の ``target_key``。#5784）。
+
+    拡張子つきのファイル名の形なら ``file:`` とファイル名の比較形、それ以外は ``title_key``。
+    2 文字未満は None（照合に使わない）。
+    """
+    if (wanted := _file_name_form_key(name)) is not None:
+        return "file:" + wanted
+    key = title_key(name)
+    return key if len(key) >= 2 else None
+
+
+def document_reference_keys(file_name: str, headings: Iterable[str] = ()) -> frozenset[str]:
+    """文書を指す参照の比較形（参照元を逆に引く照合。別名とファイル名の完全一致だけ）。
+
+    ``document_reference_rank`` の順位 1（ファイル名が文書名を含む）は逆引きでは使わない。
+    """
+    aliases, _ = document_name_keys(file_name, headings)
+    return frozenset({*aliases, "file:" + _file_name_key(file_name)})
+
+
 # ---- 解決 ----
 
 

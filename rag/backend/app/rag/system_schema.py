@@ -56,6 +56,7 @@ from app.clients.oracle import (
 )
 from app.rag.oracle_schema import (
     RETIRED_STRUCTURE_INDEX_TABLES,
+    RETIRED_WIKI_LINK_TABLES,
     SCHEMA_VERSION,
     OracleSchemaSection,
     oracle_schema_migration_sections,
@@ -190,11 +191,10 @@ MANAGED_TABLES: tuple[str, ...] = (
     # Wiki の構築（#4941）。RAG_DOCUMENTS・RAG_CHUNK_SETS・RAG_CHUNKS を参照する。
     "RAG_WIKI_DOCUMENTS",
     "RAG_WIKI_PAGES",
-    # 文書をまたぐ Wiki の関連（#5492）。RAG_DOCUMENTS・RAG_WIKI_PAGES を参照する。
-    "RAG_WIKI_LINK_DOCUMENTS",
-    "RAG_WIKI_LINKS",
     "RAG_WIKI_GRAPH_NODES",
     "RAG_WIKI_GRAPH_DEPS",
+    # 案内の、別の文書への参照（#5784）。RAG_WIKI_PAGES を参照する。
+    "RAG_WIKI_REFERENCES",
     "RAG_CITATION_FEEDBACK",
     "RAG_FEEDBACK_DETAILS",
     "RAG_EVALUATION_RUNS",
@@ -229,13 +229,11 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_WIKI_PAGE_CHUNK_IDX",
     "RAG_WIKI_QUEUE_IDX",
     "RAG_WIKI_PAGE_TEXT_IDX",
-    "RAG_WIKI_LINK_TARGET_PAGE_IDX",
-    "RAG_WIKI_LINK_SOURCE_UNIT_IDX",
-    "RAG_WIKI_LINK_TARGET_UNIT_IDX",
-    "RAG_WIKI_LINK_QUEUE_IDX",
     "RAG_WIKI_GRAPH_PARENT_IDX",
     "RAG_WIKI_GRAPH_PAGE_IDX",
     "RAG_WIKI_GRAPH_TARGET_IDX",
+    "RAG_WIKI_REFERENCE_KEY_IDX",
+    "RAG_WIKI_REFERENCE_DOC_IDX",
     "RAG_CHUNKS_NATIVE_SCOPE_IDX",
     NATIVE_HYBRID_INDEX,
     "RAG_LANG_RELEASE_PREVIOUS_IDX",
@@ -377,6 +375,8 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     # 文書構造索引の表（#5511。Wiki に置き換えた）。更新では migration
     # `20261119_5511_retire_structure_index` が消す。全再作成のためにここにも載せる。
     *((name, "TABLE") for name in RETIRED_STRUCTURE_INDEX_TABLES),
+    # 文書をまたぐ関連の判定の表（#5784）。関連は文書の内容の参照（RAG_WIKI_REFERENCES）から取る。
+    *((name, "TABLE") for name in RETIRED_WIKI_LINK_TABLES),
 )
 
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}

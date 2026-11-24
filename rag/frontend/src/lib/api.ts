@@ -1232,12 +1232,6 @@ export interface KnowledgeBaseAdapterConfig {
 
 /** 所属文書ごとの Wiki の構築状態（#5466）。`failure_code` は再試行の要る失敗だけに付く。 */
 export interface KnowledgeBaseWikiDocument {
-  link_status?: string;
-  judged_count?: number | null;
-  planned_count?: number | null;
-  link_count?: number;
-  link_failure_code?: string | null;
-  failure_phase?: string | null;
   document_id: string;
   file_name: string;
   status: string;
@@ -1247,10 +1241,6 @@ export interface KnowledgeBaseWikiDocument {
 
 /** KB ごとの Wiki の背景構築の指定と、所属文書の構築状態（#4941・#5466）。 */
 export interface KnowledgeBaseWikiData {
-  link_counts?: Record<string, number>;
-  link_count?: number;
-  judged_count?: number;
-  planned_count?: number | null;
   enabled: boolean;
   /** 状態ごとの件数（KB 全体）。 */
   counts: Record<string, number>;
@@ -1270,7 +1260,7 @@ export const DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT";
 
 /** Wiki の図の関係の種類（終点が起点に対して持つ役割。#5492・#5502）。 */
 export type WikiGraphRelation = "prerequisite" | "continuation" | "warning" | "exception" | "reference" | "expected_result";
-/** 同じ文書の依存（`page_json.navigation.dependencies`）か、文書をまたぐ関連（`RAG_WIKI_LINKS`）か。 */
+/** 同じ文書の依存（`page_json.navigation.dependencies`）か、別の文書への参照（`RAG_WIKI_REFERENCES`。#5784）か。 */
 export type WikiGraphScope = "same_document" | "cross_document";
 
 /** 案内のある文書。関連の数は文書をまたぐ関連（起点 = outgoing / 終点 = incoming）。 */
@@ -1339,8 +1329,11 @@ export interface WikiGraphRelationItem {
   direction: "outgoing" | "incoming";
   relation: WikiGraphRelation;
   scope: WikiGraphScope;
-  unit: WikiGraphUnitRef;
-  reason?: string | null;
+  /** 開ける相手の単位。別の文書への参照で、参照先がこの KB に無ければ null（開けない。#5784）。 */
+  unit: WikiGraphUnitRef | null;
+  /** 別の文書への参照（出る向き）の、原文の表記（文書名と章節）。 */
+  target_name?: string | null;
+  target_section?: string | null;
 }
 /** 単位の案内（AI が作った検索用の文。回答の根拠ではない）と、原文の位置と関係。 */
 export interface WikiGraphUnitDetail {
@@ -1826,7 +1819,7 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
-export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "document_summary" | "wiki_build" | "wiki_links";
+export type AnswerPromptKey = `${string}.${string}` | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "document_summary" | "wiki_build";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
@@ -3846,11 +3839,6 @@ export const api = {
   retryKnowledgeBaseWikiDocument: (id: string, documentId: string, offset = 0, limit = 25) =>
     request<KnowledgeBaseWikiData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/wiki/documents/${encodeURIComponent(documentId)}/retry?offset=${offset}&limit=${limit}`,
-      { method: "POST" },
-    ),
-  retryWikiLinks: (id: string, documentId: string, offset = 0, limit = 25) =>
-    request<KnowledgeBaseWikiData>(
-      `/api/knowledge-bases/${encodeURIComponent(id)}/wiki/documents/${encodeURIComponent(documentId)}/links/retry?offset=${offset}&limit=${limit}`,
       { method: "POST" },
     ),
   getWikiGraphOverview: (id: string, offset = 0) =>

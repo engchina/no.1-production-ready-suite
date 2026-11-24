@@ -78,7 +78,8 @@ from app.clients.support_guide_store import (
     oracle_support_guide_schema_sql,
 )
 from app.clients.wiki_graph_index import GRAPH_SCHEMA, backfill_graph_index
-from app.clients.wiki_store import wiki_link_schema_sql, wiki_schema_sql
+from app.clients.wiki_reference_index import REFERENCE_SCHEMA, backfill_references
+from app.clients.wiki_store import wiki_schema_sql
 from app.rag.approved_faq_5107_migration import (
     removed_approved_faq_fields_sql,
     removed_faq_answer_prompt_sql,
@@ -108,6 +109,7 @@ from app.rag.search_answer_profile_retired_fields import (
     remove_retired_search_answer_profile_fields,
 )
 from app.rag.vector_index_adapter import default_vector_index_build
+from app.rag.wiki_models import WIKI_RELATION_PRIORITY
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "3"
@@ -403,14 +405,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
         OracleSchemaSection(
             name="document_wiki", table_name="rag_wiki_documents", sql=wiki_schema_sql()
         ),
-        # 文書をまたぐ Wiki の関連（#5492）。Wiki の案内を参照する。
-        OracleSchemaSection(
-            name="document_wiki_links",
-            table_name="rag_wiki_links",
-            sql=wiki_link_schema_sql(),
-        ),
         OracleSchemaSection(
             name="wiki_graph_nodes", table_name="rag_wiki_graph_nodes", sql=GRAPH_SCHEMA
+        ),
+        # 案内の、別の文書への参照（#5784）。Wiki の案内を参照する。
+        OracleSchemaSection(
+            name="wiki_references", table_name="rag_wiki_references", sql=REFERENCE_SCHEMA
         ),
         # 文書全体の要約（#4793）。文書を参照する。
         OracleSchemaSection(
@@ -1207,7 +1207,7 @@ END;
             name="20261119_5492_wiki_links",
             table_name="rag_wiki_links",
             sql=_create_missing_objects_sql(
-                wiki_link_schema_sql(include_progress=False), "Wiki の関連"
+                retired_wiki_link_schema_sql(include_progress=False), "Wiki の関連"
             ),
         )
     )
@@ -1276,6 +1276,35 @@ END;
             sql=wiki_link_progress_migration_sql(),
         )
     )
+    # 文書をまたぐ関連を文書の内容の参照から取る（#5784）。参照の表を作り、公開済みの文書の
+    # 決定論の参照を入れる。
+    sections.append(
+        OracleSchemaSection(
+            name="20261124_5784_retire_wiki_links",
+            table_name="rag_wiki_pages",
+            sql=retire_wiki_links_sql(),
+            destructive_note=(
+                "Wiki の文書をまたぐ関連を、文書の内容の参照（RAG_WIKI_REFERENCES）から取る方式に"
+                "変えたため、関連の判定の表（"
+                + "・".join(RETIRED_WIKI_LINK_TABLES)
+                + "）を行ごと削除します（判定した関連と、文書ごとの関連の構築の状態）。"
+                "Wiki の案内・同じ文書の依存・文書・chunk・埋め込みは変えません。"
+                "削除後は復元できません。"
+            ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261124_5784_wiki_references",
+            table_name="rag_wiki_references",
+            sql=_create_missing_objects_sql(REFERENCE_SCHEMA, "Wiki の参照"),
+            data_step=backfill_references,
+            destructive_note=(
+                "Wiki の参照の派生索引を文書単位で作り直します（取込で取り出した参照と、生成した"
+                "案内の参照から）。再生成元の公開済み案内と chunk は保持します。"
+            ),
+        )
+    )
     return sections
 
 
@@ -1288,6 +1317,79 @@ RETIRED_STRUCTURE_INDEX_TABLES: tuple[str, ...] = (
     "RAG_GRAPH_RELATIONSHIPS",
     "RAG_GRAPH_ENTITIES",
 )
+
+
+# 文書をまたぐ関連の判定の表（#5784 で廃止）。
+RETIRED_WIKI_LINK_TABLES: tuple[str, ...] = ("RAG_WIKI_LINKS", "RAG_WIKI_LINK_DOCUMENTS")
+
+
+def retire_wiki_links_sql() -> str:
+    """文書をまたぐ関連の判定の表を消す（#5784）。表が無い環境でも適用できる（冪等）。"""
+    names = ", ".join(f"'{name}'" for name in RETIRED_WIKI_LINK_TABLES)
+    return f"""BEGIN
+    FOR retired IN (
+        SELECT table_name FROM user_tables WHERE table_name IN ({names})
+    ) LOOP
+        EXECUTE IMMEDIATE 'DROP TABLE ' || retired.table_name || ' CASCADE CONSTRAINTS PURGE';
+    END LOOP;
+END;
+/"""
+
+
+def retired_wiki_link_schema_sql(*, include_progress: bool = True) -> str:
+    """文書をまたぐ関連と、文書ごとの関連の構築の状態（#5492）。
+
+    #5784 で廃止した。過去の migration だけが使う。
+
+    関連は起点と終点の案内（保存版の指紋を含む page_id）を外部キーで持ち、文書・案内の削除で消える。
+    """
+    relations = ",".join(f"'{relation}'" for relation in WIKI_RELATION_PRIORITY)
+    progress_columns = (
+        "\n    judged_count NUMBER,\n    planned_count NUMBER,\n    failure_phase VARCHAR2(64),"
+        if include_progress
+        else ""
+    )
+    return f"""
+CREATE TABLE rag_wiki_link_documents (
+    document_id VARCHAR2(64) PRIMARY KEY,
+    source_fingerprint CHAR(64) NOT NULL,
+    link_fingerprint CHAR(64) NOT NULL,
+    done_json JSON,{progress_columns}
+    status VARCHAR2(16) DEFAULT 'QUEUED' NOT NULL,
+    lease_token VARCHAR2(64),
+    lease_until TIMESTAMP WITH TIME ZONE,
+    failure_code VARCHAR2(64),
+    build_started_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_wiki_link_doc_fk FOREIGN KEY (document_id)
+        REFERENCES rag_documents(document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_link_status_ck
+        CHECK (status IN ('QUEUED','RUNNING','READY','FAILED'))
+);
+CREATE TABLE rag_wiki_links (
+    source_page_id VARCHAR2(64) NOT NULL,
+    target_page_id VARCHAR2(64) NOT NULL,
+    source_document_id VARCHAR2(64) NOT NULL,
+    source_unit_id VARCHAR2(64) NOT NULL,
+    source_fingerprint CHAR(64) NOT NULL,
+    target_document_id VARCHAR2(64) NOT NULL,
+    target_unit_id VARCHAR2(64) NOT NULL,
+    target_fingerprint CHAR(64) NOT NULL,
+    relation VARCHAR2(32) NOT NULL,
+    reason VARCHAR2(800),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_wiki_link_pk PRIMARY KEY (source_page_id,target_page_id),
+    CONSTRAINT rag_wiki_link_source_fk FOREIGN KEY (source_page_id)
+        REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_link_target_fk FOREIGN KEY (target_page_id)
+        REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
+    CONSTRAINT rag_wiki_link_relation_ck CHECK (relation IN ({relations}))
+);
+CREATE INDEX rag_wiki_link_target_page_idx ON rag_wiki_links(target_page_id);
+CREATE INDEX rag_wiki_link_source_unit_idx ON rag_wiki_links(source_unit_id);
+CREATE INDEX rag_wiki_link_target_unit_idx ON rag_wiki_links(target_unit_id);
+CREATE INDEX rag_wiki_link_queue_idx ON rag_wiki_link_documents(status,lease_until);
+""".strip()
 
 
 def retire_structure_index_sql() -> str:

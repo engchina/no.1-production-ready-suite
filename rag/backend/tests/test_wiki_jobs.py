@@ -161,8 +161,7 @@ class Store:
         self.elapsed = 0.0
         self.renewed: list[int] = []
 
-    async def build_elapsed_seconds(self, did: str, *, links: bool = False) -> float:
-        assert not links
+    async def build_elapsed_seconds(self, did: str) -> float:
         return self.elapsed
 
     async def renew_lease(self, did: str, token: str, *, lease_seconds: int, **kwargs: Any) -> bool:
@@ -214,10 +213,6 @@ class Store:
     async def finish(self, snapshot: Any, token: str, *, failure_code: str | None = None) -> None:
         assert self.state is not None
         self.state.update(status="FAILED" if failure_code else "READY", failure_code=failure_code)
-
-    async def link_knowledge_bases(self, did: str) -> list[str]:
-        # 文書をまたぐ関連（#5492）は test_wiki_links.py で確かめる。ここでは候補の範囲を空にする。
-        return []
 
 
 @pytest.fixture
@@ -314,8 +309,6 @@ async def test_document_retry_shares_capacity_and_only_builds_authorized_pages(
         return True
 
     monkeypatch.setattr(store, "requeue_failed_document_pages", requeue, raising=False)
-    links = AsyncMock()
-    monkeypatch.setattr(module.WikiJobs, "_build_links", links)
     jobs.capacity = asyncio.Semaphore(0)
     prior_finished = asyncio.Event()
     jobs._schedule("document-a", prior_finished.wait)
@@ -341,7 +334,6 @@ async def test_document_retry_shares_capacity_and_only_builds_authorized_pages(
         assert not store.pages and not model.calls
     else:
         assert store.state["status"] == "READY" and len(store.pages) == 4
-    links.assert_not_awaited()
     await jobs.shutdown()
 
 
@@ -471,19 +463,17 @@ async def test_timeout_after_progress_stops_until_retry(
 @pytest.mark.asyncio
 async def test_keep_lease_renews_until_the_build_ends() -> None:
     """構築の間は lease を延ばし続け、終わったら延ばさない（#5748）。"""
-    renewed: list[tuple[str, str, int, bool]] = []
+    renewed: list[tuple[str, str, int]] = []
 
     class LeaseStore:
-        async def renew_lease(
-            self, did: str, token: str, *, lease_seconds: int, links: bool = False
-        ) -> bool:
-            renewed.append((did, token, lease_seconds, links))
+        async def renew_lease(self, did: str, token: str, *, lease_seconds: int) -> bool:
+            renewed.append((did, token, lease_seconds))
             return True
 
     async with module.keep_lease(LeaseStore(), "document-a", "lease-a", lease_seconds=3):
         await asyncio.sleep(2.2)
     count = len(renewed)
-    assert count == 2 and set(renewed) == {("document-a", "lease-a", 3, False)}
+    assert count == 2 and set(renewed) == {("document-a", "lease-a", 3)}
     await asyncio.sleep(1.2)
     assert len(renewed) == count
 
@@ -545,73 +535,12 @@ async def test_transient_model_failure_is_retried_by_shared_caller(
 
 
 @pytest.mark.asyncio
-async def test_long_link_builds_do_not_hold_the_page_build_slots(
-    setup: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """関連は案内と別の枠で作り、関連が長くてもほかの文書の案内を待たせない（#5751）。"""
-    jobs, _, _ = setup
-    settings = Settings(rag_wiki_build_workers=1, rag_wiki_link_workers=1)
-    monkeypatch.setattr(module, "get_settings", lambda: settings)
-    release, link_started = asyncio.Event(), asyncio.Event()
-    pages: list[str] = []
-    links: list[str] = []
-    running_links = 0
-    peak_links = 0
-
-    async def build_pages(did: str, owner: Any, settings: Any) -> bool:
-        pages.append(did)
-        return True
-
-    async def build_links(did: str, owner: Any, settings: Any) -> None:
-        nonlocal running_links, peak_links
-        running_links += 1
-        peak_links = max(peak_links, running_links)
-        links.append(did)
-        link_started.set()
-        await release.wait()
-        running_links -= 1
-
-    monkeypatch.setattr(jobs, "_build_pages", build_pages)
-    monkeypatch.setattr(jobs, "_build_links", build_links)
-    first = asyncio.create_task(jobs.build("document-a", "owner-a"))
-    await link_started.wait()
-    # 文書 A の関連が枠を持っている間も、文書 B・C の案内は案内の枠（1）で作れる。
-    second = asyncio.create_task(jobs.build("document-b", "owner-a"))
-    third = asyncio.create_task(jobs.build("document-c", "owner-a"))
-    for _ in range(20):
-        if len(pages) == 3:
-            break
-        await asyncio.sleep(0)
-    assert pages == ["document-a", "document-b", "document-c"]
-    # 関連は関連の枠（1）を超えて同時に作らない。
-    assert links == ["document-a"] and peak_links == 1
-    release.set()
-    await asyncio.gather(first, second, third)
-    assert sorted(links) == ["document-a", "document-b", "document-c"] and peak_links == 1
-    await jobs.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_links_are_built_only_after_the_document_is_ready(
-    setup: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """文書をまたぐ関連（#5492）は案内を公開した後だけ作る。案内の失敗では作らない。"""
-    jobs, store, _ = setup
-    linked: list[str] = []
-
-    async def build_links(did: str, owner: Any, settings: Any) -> None:
-        linked.append(did)
-
-    monkeypatch.setattr(jobs, "_build_links", build_links)
-    store.enabled = False
+async def test_build_is_one_stage_per_document(setup: Any) -> None:
+    """構築は文書ごとの 1 段で、文書をまたぐ関連のための呼び出しは無い（#5784）。"""
+    jobs, store, model = setup
     await jobs.build("document-a", "owner-a")
-    assert linked == []
-    store.enabled = True
-    await jobs.build("document-a", "owner-a")
-    assert store.state["status"] == "READY" and linked == ["document-a"]
-    # 公開済みの文書も、照合のたびに関連の状態を確かめる（作るかは関連の状態で決める）。
-    await jobs.build("document-a", "owner-a")
-    assert linked == ["document-a", "document-a"]
+    assert store.state["status"] == "READY"
+    assert not hasattr(jobs, "_build_links") and len(model.calls) == 1
     await jobs.shutdown()
 
 
@@ -626,4 +555,4 @@ async def test_wiki_reads_default_for_each_model_call(monkeypatch: Any) -> None:
     monkeypatch.setattr(wiki_jobs, "get_settings", lambda: next(selected))
     client = wiki_jobs.WikiDefaultTextModel(lambda settings: settings)
     assert await client.generate("", "", response_schema_name="wiki_contexts") == "初回"
-    assert await client.generate("", "", response_schema_name="wiki_links") == "次回"
+    assert await client.generate("", "", response_schema_name="wiki_contexts") == "次回"

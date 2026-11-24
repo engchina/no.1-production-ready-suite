@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal, Self, get_args
 
@@ -69,6 +70,23 @@ class WikiDependency(WikiModel):
     relation: WikiRelation
 
 
+class WikiReference(WikiModel):
+    """原文が名前を挙げて参照する別の文書（#5784）。参照先は読むときに今の KB の中で決める。"""
+
+    document: str = Field(
+        max_length=120,
+        description="参照先の別の文書の名前。原文に書かれた表記のまま写す。",
+    )
+    section: str = Field(
+        max_length=120,
+        description="参照先の章・節・条・別紙の原文の表記。文書全体を指すときは空の文字列。",
+    )
+    relation: WikiRelation
+
+
+WIKI_REFERENCE_LIMIT = 4
+
+
 class WikiContext(WikiModel):
     """生成された検索用の語境。引用可能な原文の型にはしない。"""
 
@@ -77,6 +95,15 @@ class WikiContext(WikiModel):
     possible_questions: list[Annotated[str, Field(max_length=120)]] = Field(max_length=2)
     dependencies: list[WikiDependency] = Field(max_length=16)
     unresolved: list[Annotated[str, Field(max_length=180)]] = Field(max_length=4)
+    # 既存の保存済みの案内（#5784 より前）は持たないので既定は空。
+    references: list[WikiReference] = Field(
+        default_factory=list,
+        max_length=WIKI_REFERENCE_LIMIT,
+        description=(
+            "この単位の原文が名前を挙げて参照する別の文書（と章節）。同じ文書の中の参照は "
+            "dependencies に入れる。"
+        ),
+    )
 
 
 class WikiContexts(WikiModel):
@@ -97,6 +124,15 @@ def context_schema(targets: Sequence[str], all_units: Sequence[str]) -> type[Wik
         __base__=WikiContext,
         unit_id=(requested, ...),
         dependencies=(list[dependency], Field(max_length=16)),
+        # 参照の欄が無い応答も案内として使う（参照が無いのと同じ）。
+        references=(
+            list[WikiReference],
+            Field(
+                default_factory=list,
+                max_length=WIKI_REFERENCE_LIMIT,
+                description=WikiContext.model_fields["references"].description,
+            ),
+        ),
     )
     expected = set(targets)
 
@@ -115,55 +151,10 @@ def context_schema(targets: Sequence[str], all_units: Sequence[str]) -> type[Wik
     )
 
 
-class WikiLinkChoice(WikiModel):
-    unit_id: str
-    relation: WikiRelation
-    reason: str = Field(max_length=160)
-
-
-class WikiLinkJudgment(WikiModel):
-    unit_id: str
-    links: list[WikiLinkChoice]
-
-
-class WikiLinkJudgments(WikiModel):
-    items: list[WikiLinkJudgment]
-
-
-def link_schema(
-    sources: Sequence[str], candidates: Sequence[str], *, max_links: int
-) -> type[WikiLinkJudgments]:
-    """起点ごとの関連の出力 schema（#5492）。終点は候補の単位だけ・起点は全件を一意に返す。"""
-    if not sources or not candidates or set(sources) & set(candidates):
-        raise ValueError("Wiki の関連の起点と候補が不正です。")
-    allowed: Any = Literal.__getitem__(tuple(sorted(set(candidates))))
-    requested: Any = Literal.__getitem__(tuple(sorted(set(sources))))
-    choice = create_model("ScopedWikiLinkChoice", __base__=WikiLinkChoice, unit_id=(allowed, ...))
-    item = create_model(
-        "ScopedWikiLinkJudgment",
-        __base__=WikiLinkJudgment,
-        unit_id=(requested, ...),
-        links=(list[choice], Field(max_length=max_links)),
-    )
-    expected = set(sources)
-
-    def complete(value: Any) -> Any:
-        returned = [entry.unit_id for entry in value.items]
-        if len(returned) != len(set(returned)) or set(returned) != expected:
-            raise ValueError("Wiki の関連の出力に起点の重複または欠落があります。")
-        for entry in value.items:
-            targets = [link.unit_id for link in entry.links]
-            if len(targets) != len(set(targets)):
-                raise ValueError("Wiki の関連の出力で同じ候補が重複しています。")
-        return value
-
-    validators: dict[str, Any] = {"complete": model_validator(mode="after")(complete)}
-    return create_model(
-        "ScopedWikiLinkJudgments",
-        __base__=WikiLinkJudgments,
-        __validators__=validators,
-        items=(list[item], Field(min_length=len(sources), max_length=len(sources))),
-    )
+def _in_original(value: str, text: str) -> bool:
+    """表記が原文にあるか（NFKC・空白の違いは無視する。形式の照合だけで意味は判定しない）。"""
+    wanted = "".join(unicodedata.normalize("NFKC", value).split())
+    return len(wanted) >= 2 and wanted in "".join(unicodedata.normalize("NFKC", text).split())
 
 
 class WikiPage(WikiModel):
@@ -178,6 +169,15 @@ class WikiPage(WikiModel):
     def matching_unit(self) -> Self:
         if self.unit.unit_id != self.navigation.unit_id:
             raise ValueError("Wiki の案内と原文の単位が一致しません。")
+        # 参照は原文にある表記だけを残す（モデルが作った名前で結ばない。#5784）。
+        kept = [
+            reference
+            for reference in self.navigation.references
+            if _in_original(reference.document, self.unit.text)
+            and (not reference.section.strip() or _in_original(reference.section, self.unit.text))
+        ]
+        if len(kept) != len(self.navigation.references):
+            self.navigation = self.navigation.model_copy(update={"references": kept})
         return self
 
     def search_text(self, *, original_chars: int) -> str:

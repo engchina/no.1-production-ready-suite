@@ -97,9 +97,11 @@ class WikiGraphRelation(BaseModel):
     direction: Literal["outgoing", "incoming"]
     relation: WikiRelation
     scope: WikiGraphScope
-    unit: WikiGraphUnitRef
-    # 文書をまたぐ関連の判定の理由（AI が書いた短い説明）。
-    reason: str | None = None
+    # 開ける相手の単位。別の文書への参照で、参照先がこの KB に無ければ None（開けない。#5784）。
+    unit: WikiGraphUnitRef | None = None
+    # 別の文書への参照（出る向き）の、原文の表記（文書名と章節）。
+    target_name: str | None = None
+    target_section: str | None = None
 
 
 class WikiGraphRelations(BaseModel):

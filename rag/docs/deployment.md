@@ -260,6 +260,20 @@ KB 詳細の「文書構造索引の構築」のカードを外し、図を「Wi
   これらの API・表（`rag_graph_*`・`rag_structure_index_*`）・構築済みの索引は #5511 で削除した（上の手順）。
 - **見え方**: 図は保存済みの Wiki の案内だけを出す。案内の無い KB は「Wiki を構築すると、文書・章節・案内のつながりを図で見られます」を出す。
 
+## 既存環境の更新手順（#5784 Wiki の文書をまたぐ関連を文書の内容の参照から取る）
+
+Wiki の文書をまたぐ関連を、ほかの文書との組の判定（第 2 段）ではなく、文書の内容に書かれた参照から取るようにした。構築は文書ごとの 1 段になり、関連のための LLM の呼び出しは無くなる。
+
+- **migration**: `20261124_5784_retire_wiki_links` は `RAG_WIKI_LINKS`・`RAG_WIKI_LINK_DOCUMENTS` を行ごと削除する。`20261124_5784_wiki_references` は `RAG_WIKI_REFERENCES` を作り、公開済みの文書の取込の参照を入れる（案内・chunk は変えない）。どちらも破壊的の印があり、承認つきの更新（下の「既存環境の更新手順の共通の注意」）が要る。本番（OCI Compute）は `sudo platform/deploy/suite-update.sh` の後に次を実行し、もう一度 `suite-update.sh`（または `suite-restart.sh`）で確かめる。
+
+  ```bash
+  sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+  ```
+
+- **設定**: `RAG_WIKI_LINK_CANDIDATES`・`RAG_WIKI_LINK_WORKERS`・`RAG_WIKI_LINK_BATCH_UNITS`・`RAG_WIKI_LINK_SOURCE_CHARS`・`RAG_WIKI_LINK_MODEL_ID` は使わない（`backend/.env` に残っていても読み捨てる。消してよい）。`RAG_WIKI_LINK_DEPTH`・`RAG_WIKI_LINK_MAX_UNITS` は検索の辿りの設定として残る。
+- **指示**: 「解析後の処理」の文書をまたぐ関連の判定の指示（`wiki_links`）は無くなる。保存済みの上書きは読まない。
+- **既存の案内**: 作り直さない。取込の参照はすぐ使え、案内の生成の参照は作り直した文書から付く。
+
 ## 既存環境の更新手順（#5492 Wiki の文書をまたぐ関連）
 
 Wiki の構築で、文書の案内を作った後に、同じ KB のほかの文書の単位との関連（例外・前提・参照など）を作り、Wiki の検索で

@@ -18,10 +18,8 @@ from app.rag.wiki_models import (
     WikiContext,
     WikiContexts,
     WikiDependency,
-    WikiLinkChoice,
-    WikiLinkJudgment,
-    WikiLinkJudgments,
     WikiPage,
+    WikiReference,
     WikiUnit,
 )
 from app.rag.wiki_packet import WikiUnitValidationError
@@ -35,9 +33,7 @@ _MODELS = {
         WikiDependency,
         WikiContext,
         WikiContexts,
-        WikiLinkChoice,
-        WikiLinkJudgment,
-        WikiLinkJudgments,
+        WikiReference,
     )
 }
 

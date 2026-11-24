@@ -328,7 +328,6 @@ def _rag_response_schemas() -> dict[str, Mapping[str, Any]]:
         WikiFilePlan,
         WikiReadPlan,
         context_schema,
-        link_schema,
         scoped_plan,
     )
 
@@ -338,7 +337,6 @@ def _rag_response_schemas() -> dict[str, Mapping[str, Any]]:
         "document_summary": DOCUMENT_SUMMARY_RESPONSE_SCHEMA,
         "field_extraction": FIELD_EXTRACTION_RESPONSE_SCHEMA,
         "wiki_context": context_schema(["u1", "u2"], ["u1", "u2", "u3"]).model_json_schema(),
-        "wiki_links": link_schema(["u1"], ["u2", "u3"], max_links=2).model_json_schema(),
         "wiki_plan": scoped_plan(
             WikiFilePlan, {"document_ids": (["d1", "d2"], 2)}
         ).model_json_schema(),

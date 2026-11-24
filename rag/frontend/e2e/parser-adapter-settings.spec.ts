@@ -1769,15 +1769,13 @@ test("文書解析の各プロンプトは機能の位置で共通の編集操�
     ["navigation_summary", "章節の要約プロンプト"],
     ["document_summary", "文書の要約プロンプト"],
     ["wiki_build", "Wiki の案内を作るプロンプト"],
-    ["wiki_links", "Wiki の文書をまたぐ関連を判定するプロンプト"],
   ]) {
     await verifyFeaturePrompt(page, key, title);
   }
-  expect(requests.map((item) => item.method)).toEqual(Array.from({ length: 7 }, () => ["PUT", "DELETE"]).flat());
+  expect(requests.map((item) => item.method)).toEqual(Array.from({ length: 6 }, () => ["PUT", "DELETE"]).flat());
   await page.getByRole("region", { name: "通知", exact: true }).getByRole("button", { name: "閉じる", exact: true }).evaluateAll((buttons) => buttons.forEach((button) => (button as HTMLButtonElement).click()));
   const wiki = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "7. Wiki の構築", exact: true }) });
   await wiki.locator("summary").filter({ hasText: "Wiki の案内を作るプロンプト" }).click();
-  await wiki.locator("summary").filter({ hasText: "Wiki の文書をまたぐ関連を判定するプロンプト" }).click();
   await wiki.evaluate(element => element.scrollIntoView({ block: "center" }));
   await wiki.screenshot({ path: test.info().outputPath("wiki-prompts.png") });
   await page.screenshot({ path: test.info().outputPath("feature-prompts.png"), fullPage: true });
