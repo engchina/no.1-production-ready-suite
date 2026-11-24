@@ -6,6 +6,21 @@ const read = (path: string) => readFileSync(new URL(`../src/styles/${path}`, imp
 const colors = read("tokens/colors.css");
 
 describe("tokens CSS", () => {
+  it("FormGrid の行に 1 つの項目は行の全体にまたがり、段の幅の欄の外枠だけを置き場所の行の幅まで広げる（#5817）", () => {
+    const formGrid = read("structure/form-grid.css");
+    expect(read("tokens.css")).toMatch(/@import "\.\/structure\/form-grid\.css";/);
+    // 広げる幅は継承しない（項目の中の入れ子の欄・横に並べる行の欄は広げない）。
+    expect(formGrid).toMatch(/@property --form-grid-row-extend \{\s*syntax: "<length>";\s*inherits: false;\s*initial-value: 0px;\s*\}/);
+    // 2 列の境（FORM_GRID_TWO_COLUMN_MIN_REM）と同じ container の幅から。
+    expect(formGrid).toMatch(/@container \(min-width: 57\.5rem\)/);
+    // 最後の col-span-full の後の奇数番目の最後の項目（唯一の項目を含む）。
+    const lone = ":last-child:nth-child(odd of :not(.col-span-full):not(:has(~ .col-span-full)))";
+    expect(formGrid).toContain(`[data-form-grid-lone] > ${lone} {\n      grid-column: 1 / -1;`);
+    expect(formGrid).toContain(`> :is(.col-span-full, ${lone}) {\n      --form-grid-row-extend: max(0px, 100cqw - var(--form-max-width));`);
+    // width="full" の FormGrid は grid が外枠の全幅なので広げない。
+    expect(formGrid).toContain('[data-form-grid-width="form"]\n      > [data-form-grid-lone]');
+  });
+
   it("旧トークン名の互換層（compat.css / 旧名ユーティリティ）を持たない", () => {
     const entry = read("tokens.css");
     expect(entry).not.toMatch(/compat\.css/);

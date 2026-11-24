@@ -22,7 +22,16 @@ export function fieldActionRowWidthClasses(width: FieldWidth | undefined): {
   fit: boolean;
 } {
   if (!width || width === "full") return { row: undefined, footer: undefined, fit: false };
-  return { row: undefined, footer: labeledFieldWidthClasses(width).text, fit: true };
+  // 1 行はフォームの最大幅（60rem）まで。`FormGrid` の 2 列で行に 1 つの行は、`FieldActionRow` が広げた分
+  // （`--field-row-extend`）だけ置き場所の行の幅まで（#5817）。
+  return {
+    row: undefined,
+    footer: cn(
+      labeledFieldWidthClasses(width).text,
+      "sm:max-w-[calc(var(--form-max-width)_+_var(--field-row-extend,0px))]"
+    ),
+    fit: true,
+  };
 }
 
 export interface InputActionFieldAction {

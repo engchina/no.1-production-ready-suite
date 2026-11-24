@@ -1,0 +1,33 @@
+/* FormGrid の行に 1 つの項目（#5817）。
+
+   既定の 2 列（`data-form-grid-lone`。置き場所 57.5rem 以上）で行に 1 つしか無い項目は、行の全体にまたがる。
+   対象は奇数番目の最後の項目と唯一の項目。`col-span-full` の項目は行を占めて次の項目を次の行の左から置くので、
+   最後の `col-span-full` の後の項目だけを数える（`[A, B, 全幅, C]` の C は 1 つ、`[全幅, A, B]` の A と B は
+   同じ行のまま）。同じ行に 2 つ並ぶ項目は 2 列のまま。
+
+   行に 1 つの項目（`col-span-full` を含む）の補足・エラーの文は、置き場所（カード）の行の幅で折り返す（同じカードの
+   切り替えの行の説明と同じ幅。60rem で止めない）。grid は 60rem（`--form-max-width`）で止まるので、項目の外側の
+   置き場所の幅との差（`--form-grid-row-extend` = 外枠の幅 `100cqw` − 60rem。外枠が 60rem 以下なら 0）だけ、
+   補足・エラーを持つ欄の外枠（`control-size.ts` の `FIELD_BOX_TEXT_WIDTH_CLASS`・`FIELD_BOX_FULL_TEXT_CLASS`）を
+   右へ広げる。入力欄・選択欄は広げない（段の幅のまま。`full` の欄の入力欄は 60rem のまま）。欄でない中身は広げない。
+   変数は継承しない（`inherits: false`）ので、項目の中の入れ子の欄（横に並べる行の欄・入れ子の FormGrid）は広げない。
+   `width="full"` の FormGrid は grid が外枠の全幅なので広げない（またがるだけ）。 */
+@property --form-grid-row-extend {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@layer components {
+  @container (min-width: 57.5rem) {
+    [data-form-grid-lone] > :last-child:nth-child(odd of :not(.col-span-full):not(:has(~ .col-span-full))) {
+      grid-column: 1 / -1;
+    }
+
+    [data-form-grid-width="form"]
+      > [data-form-grid-lone]
+      > :is(.col-span-full, :last-child:nth-child(odd of :not(.col-span-full):not(:has(~ .col-span-full)))) {
+      --form-grid-row-extend: max(0px, 100cqw - var(--form-max-width));
+    }
+  }
+}

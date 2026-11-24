@@ -1042,16 +1042,6 @@ class Settings(
             "既読の cache は消費しない。"
         ),
     )
-    rag_reference_section_read_max_chunks: int = Field(
-        default=8,
-        ge=1,
-        le=50,
-        description=(
-            "番号つきの参照(第 3 章・別紙 1 など)の参照先 1 つで、番号で定位した節の先頭から"
-            "読み順に読む chunk の上限(#5348)。文書名・ファイル名だけの参照は目次から選んだ章節を"
-            "読む(rag_reference_outline_selection_enabled)。"
-        ),
-    )
     rag_reference_outline_selection_enabled: bool = Field(
         default=True,
         description=(

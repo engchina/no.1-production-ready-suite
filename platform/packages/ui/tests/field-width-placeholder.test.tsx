@@ -98,6 +98,25 @@ describe("幅の段（#1891）", () => {
     expect(renderToStaticMarkup(<FormGrid columns={1} />)).toContain("grid-cols-1");
   });
 
+  it("FormGrid は 60rem を中の grid に付け、外枠（@container）は置き場所の全幅。既定の 2 列だけ行に 1 つの項目の印を持つ（#5817）", () => {
+    const html = renderToStaticMarkup(
+      <FormGrid className="px-3">
+        <span>a</span>
+      </FormGrid>
+    );
+    // 外枠は置き場所の全幅（行に 1 つの欄の補足が、外枠の幅 100cqw まで広がる）。
+    expect(html).toMatch(/^<div class="@container w-full min-w-0" data-form-grid="2" data-form-grid-width="form">/);
+    // 60rem で止めるのは中の grid（className と同じ要素）。
+    expect(html).toMatch(/<div data-form-grid-lone="" class="[^"]*max-w-\[var\(--form-max-width\)\][^"]*px-3/);
+    // prompt 専用の区画（width="full"）は止めない。
+    expect(renderToStaticMarkup(<FormGrid width="full" />)).not.toContain("max-w-[var(--form-max-width)]");
+    // 行に 1 つの項目の規則（structure/form-grid.css）は既定の 2 列だけ。1 列・画面固有の列には付けない。
+    expect(renderToStaticMarkup(<FormGrid columns={1} />)).not.toContain("data-form-grid-lone");
+    expect(renderToStaticMarkup(<FormGrid className="@2xl:grid-cols-[minmax(0,1fr)_auto]" />)).not.toContain(
+      "data-form-grid-lone"
+    );
+  });
+
   it("FieldActionRow の fit は欄を段の幅のまま置き、操作を欄の直後に並べる（既定は欄が行の残りを埋める）", () => {
     const fill = renderToStaticMarkup(
       <FieldActionRow actions={<button type="button">取得</button>}>
@@ -112,6 +131,10 @@ describe("幅の段（#1891）", () => {
     );
     expect(fit).not.toContain("flex-1");
     expect(fit).toContain("max-w-full");
+    // FormGrid の 2 列で行に 1 つの行は外枠を置き場所の行の幅まで広げ（footer の補足がその幅で折り返す）、
+    // 入力欄と操作の行は広げない（#5817。ほかの置き場所では変数が 0）。
+    expect(fill).toMatch(/^<div class="min-w-0 space-y-1.5 -mr-\[var\(--form-grid-row-extend\)\] \[--field-row-extend:var\(--form-grid-row-extend\)\]"/);
+    expect(fill).toContain('class="flex min-w-0 max-w-[calc(100%_-_var(--field-row-extend,0px))] flex-col');
   });
 
   it("SelectField は未選択の placeholder に目印を付ける（e2e の切れの検査が見る）", () => {

@@ -283,7 +283,7 @@ export interface OffScaleField {
  *
  * - 欄の幅 = 入力欄の枠（TextField は後置のボタンを含む枠、SelectField はボタン、textarea はそのもの）。
  * - 置き場所 = 欄より広い最初の祖先。欄の幅がその内側の幅と同じなら `full`、`FormGrid`（`[data-form-grid]`）の幅と
- *   同じなら `full`（フォームの最大幅まで）。
+ *   同じなら `full`（フォームの最大幅まで。外枠は置き場所の全幅で、60rem で止まるのは中の grid。#5817）。
  * - 製品の画面固有の grid の列が `lg`（28rem）より狭く、欄がその列の幅いっぱいなら、段の幅が列で止められた
  *   （`max-w-full`）とみなして返さない（#1891 段 5）。`FormGrid` の列で止められた欄は返す（2 列は列が 28rem 以上の
  *   ときだけなので、止められたら `FormGrid` の誤り）。
@@ -366,7 +366,9 @@ export async function findFieldsOffWidthScale(
           continue;
         }
         if (steps.some((step) => near(width, step))) continue;
+        // `full` の欄は FormGrid の grid の幅（60rem まで）。外枠（@container）は置き場所の全幅（#5817）。
         if (formGrid && near(width, contentWidth(formGrid))) continue;
+        if (formGridInner && near(width, contentWidth(formGridInner))) continue;
         // 入力欄と操作の行（FieldActionRow）の `full` の欄は、行の幅から操作の幅を除いた残りに伸びる。
         // 行（の外枠）が置き場所の幅いっぱいなら `full` とみなす（#1891 段 4）。
         const actionRow = box.closest<HTMLElement>("[data-field-action-row]");
@@ -398,7 +400,7 @@ export interface NarrowFieldText {
   width: number;
   /**
    * 期待する最小の幅（px）。置き場所が横に並べる行（flex）なら min(20rem, 外枠の親の内側の幅)、それ以外（block・grid の
-   * セル）なら min(外枠の親の内側の幅, 60rem)。
+   * セル）なら min(外枠の親の内側の幅, 60rem)。`FormGrid` の 2 列で行に 1 つの欄は、置き場所の行の右端までの幅（#5817）。
    */
   expectedMin: number;
 }
@@ -412,6 +414,8 @@ export interface NarrowFieldText {
  * - 置き場所の幅 = 外枠の親の内側の幅（`FormGrid` のセルなら列の幅）。文はその幅（1 行はフォームの最大幅 60rem まで）で
  *   折り返す。置き場所が横に並べる行（flex・inline-flex）なら、外枠は中身の幅なので、読みやすい最小の幅
  *   `min(20rem, 置き場所の幅)` より狭くないことだけを見る。
+ * - `FormGrid` の 2 列（`width="form"`）で行に 1 つの欄（行の全体にまたがる項目）は、60rem で止めず、置き場所
+ *   （`FormGrid` の外枠 = カードの行）の右端まで折り返さないことを見る（同じカードの切り替えの行の説明と同じ幅。#5817）。
  * - 表の中・ページ送り・`[data-field-width-exempt]` の中は除く。sm（640px）未満は欄が全幅なので、どの幅でも使える。
  */
 export async function findNarrowFieldTexts(
@@ -473,7 +477,28 @@ export async function findNarrowFieldTexts(
           const placementStyle = getComputedStyle(placement);
           const inRow = placementStyle.display.includes("flex");
           const available = (gridAreaWidth(fieldBox, placement) ?? contentWidth(placement)) - boxChrome;
-          const expectedMin = inRow ? Math.min(readable, available) : Math.min(available, formMax);
+          // FormGrid の 2 列（60rem）で行に 1 つの欄（行の全体にまたがる項目）は、置き場所（FormGrid の外枠）の行の
+          // 右端（grid の右の余白の分を除く）まで（#5817）。
+          const formGridBox = placement.parentElement;
+          const loneRow =
+            placement.hasAttribute("data-form-grid-lone") &&
+            formGridBox?.getAttribute("data-form-grid-width") === "form" &&
+            getComputedStyle(fieldBox).gridColumnEnd === "-1";
+          const rowWidth =
+            loneRow && formGridBox
+              ? formGridBox.getBoundingClientRect().left +
+                formGridBox.clientLeft +
+                Number.parseFloat(getComputedStyle(formGridBox).paddingLeft) +
+                contentWidth(formGridBox) -
+                Number.parseFloat(placementStyle.paddingRight) -
+                fieldBox.getBoundingClientRect().left -
+                boxChrome
+              : null;
+          const expectedMin = inRow
+            ? Math.min(readable, available)
+            : rowWidth !== null
+              ? Math.max(rowWidth, Math.min(available, formMax))
+              : Math.min(available, formMax);
           if (width >= expectedMin - tolerance) continue;
           const name =
             field.getAttribute("aria-label") ||

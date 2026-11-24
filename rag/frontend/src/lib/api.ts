@@ -2763,8 +2763,6 @@ export interface AnsweringSettingsData {
   rerank_enabled: boolean;
   entity_expansion_enabled: boolean;
   entity_expansion_max_chunks: number;
-  /** 番号つきの参照の参照先 1 つで、番号で定位した節から読むチャンクの上限（#5348。既定 8）。 */
-  reference_section_read_max_chunks: number;
   /** 文書全体への参照の参照先を、目次からモデルが選んだ章節で読む（#5263。既定 true。#5296）。 */
   reference_outline_selection_enabled: boolean;
   /** 起点の文書の目次からモデルが選んだ章節を、Rerank の枠の外で根拠に加える（#5324。既定 true。#5362）。 */

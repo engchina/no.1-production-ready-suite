@@ -136,7 +136,6 @@ const ANSWERING_SETTINGS = {
   config_source: "runtime",
   entity_expansion_enabled: true,
   entity_expansion_max_chunks: 3,
-  reference_section_read_max_chunks: 8,
   reference_outline_selection_enabled: false,
   outline_selection_enabled: false,
   outline_selection_max_documents: 3,
@@ -766,25 +765,19 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`番号で参照する節から読む数は既定の 8 件を示し、変えて保存できる（${viewport.name}。#5348）`, { tag: "@responsive" }, async ({ page }) => {
+  test(`番号で参照する節から読む数の欄は無く、参照先の目次の設定の説明に節の読み方がある（${viewport.name}。#5817）`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockRetrievalCards(page);
-    const saved: unknown[] = [];
-    await mockAnsweringSettings(page, saved);
+    await mockAnsweringSettings(page, []);
 
     await page.goto("/settings/retrieval");
 
-    const chunks = page.getByRole("combobox", { name: "番号で参照する節から読む数", exact: true });
-    await expect(chunks).toContainText("8 件");
-    await chunks.click();
-    await page.getByRole("listbox", { name: "番号で参照する節から読む数", exact: true }).getByRole("option", { name: "16 件", exact: true }).click();
-    await expectNoPageOverflow(page);
-    await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
-
-    await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({ reference_section_read_max_chunks: 16 });
-    await expect(chunks).toContainText("16 件");
+    const expansion = page.getByRole("region", { name: "検索拡張", exact: true });
+    await expect(expansion.getByRole("switch", { name: "参照先の文書の目次から章節をモデルが選ぶ", exact: true })).toBeVisible();
+    // 参照先の節は節の大きさ（回答モデルの入力上限の 1/2）で読むので、読む数の設定は無い。
+    await expect(page.getByRole("combobox", { name: "番号で参照する節から読む数", exact: true })).toHaveCount(0);
+    await expect(expansion).toContainText("節の文字数が回答モデルの入力上限の 1/2 以下なら全体を、超えるときは子の節を読みます");
     await expectNoPageOverflow(page);
   });
 
@@ -821,3 +814,61 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 }
+
+test("行に 1 つの欄の補足は、同じカードの切り替えの行の説明と同じくカードの行の幅で折り返し、2 つ並ぶ欄は 2 列のまま（1920px。#5817）", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await mockRetrievalCards(page);
+  await mockAnsweringSettings(page, []);
+
+  await page.goto("/settings/retrieval");
+
+  const layout = (fieldId: string, switchDescriptionId: string) =>
+    page.evaluate(
+      ({ fieldId, switchDescriptionId }) => {
+        const field = document.getElementById(fieldId)!;
+        const control = field.closest(".relative") ?? field;
+        const hint = document.getElementById((field.getAttribute("aria-describedby") ?? "").split(/\s+/)[0])!;
+        const description = document.getElementById(switchDescriptionId)!;
+        // 切り替えの行（SwitchRow の外枠。左右に余白を持つ）。
+        const row = description.parentElement!.parentElement!;
+        const rect = (element: Element) => element.getBoundingClientRect();
+        const rootFont = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+        return {
+          control: rect(control).width,
+          hintLeft: rect(hint).left,
+          hintRight: rect(hint).right,
+          hintWidth: rect(hint).width,
+          descriptionWidth: rect(description).width,
+          rowLeft: rect(row).left + Number.parseFloat(getComputedStyle(row).paddingLeft),
+          rowRight: rect(row).right - Number.parseFloat(getComputedStyle(row).paddingRight),
+          formMax: 60 * rootFont,
+          sm: 12 * rootFont,
+          xs: 8 * rootFont,
+        };
+      },
+      { fieldId, switchDescriptionId }
+    );
+
+  // 「再ランキングの関連度スコア下限」（sm）は Rerank の群に 1 つだけの欄。
+  await expect(page.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true })).toBeVisible();
+  const rerank = await layout("answering-rerank-min-score", "answering-rerank-description");
+  // 欄は段の幅のまま。補足は 60rem で止めず、切り替えの行の説明と同じく行の端（左右の余白の内側）まで使う。
+  expect(Math.abs(rerank.control - rerank.sm)).toBeLessThanOrEqual(1);
+  expect(rerank.hintWidth).toBeGreaterThan(rerank.formMax);
+  expect(rerank.hintWidth).toBeGreaterThanOrEqual(rerank.descriptionWidth);
+  expect(Math.abs(rerank.hintLeft - rerank.rowLeft)).toBeLessThanOrEqual(1);
+  expect(Math.abs(rerank.hintRight - rerank.rowRight)).toBeLessThanOrEqual(1);
+
+  // 「根拠の文脈の補完」の「根拠の前後から加える数」（xs）も同じ。
+  const neighbor = await layout("answering-neighbor-child-count", "answering-section-expansion-description");
+  expect(Math.abs(neighbor.control - neighbor.xs)).toBeLessThanOrEqual(1);
+  expect(neighbor.hintWidth).toBeGreaterThan(neighbor.formMax);
+  expect(Math.abs(neighbor.hintRight - neighbor.rowRight)).toBeLessThanOrEqual(1);
+
+  // 同じ行に 2 つ並ぶ欄（RRF の比重）は 2 列のまま。
+  const vector = await page.getByRole("spinbutton", { name: "ベクトル検索の比重", exact: true }).boundingBox();
+  const keyword = await page.getByRole("spinbutton", { name: "全文検索の比重", exact: true }).boundingBox();
+  expect(Math.abs(vector!.y - keyword!.y)).toBeLessThanOrEqual(1);
+  expect(keyword!.x).toBeGreaterThan(vector!.x + vector!.width);
+  await expectNoPageOverflow(page);
+});

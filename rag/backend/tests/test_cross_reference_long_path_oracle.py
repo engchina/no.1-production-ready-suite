@@ -290,3 +290,9 @@ async def test_reference_chunks_compare_whole_path(paths: _ReferencePaths) -> No
         filters, document_id=document_id, section_path=paths.target, limit=1
     )
     assert [row.text for row in limited] == ["参照先の節"]
+
+    # 番号つきの参照の参照先は節の全体を読む(件数の上限なし。#5817)。
+    whole = await client.retrieval_reference_chunks(
+        filters, document_id=document_id, section_path=paths.target, limit=None
+    )
+    assert [row.text for row in whole] == ["参照先の節", "下の節"]

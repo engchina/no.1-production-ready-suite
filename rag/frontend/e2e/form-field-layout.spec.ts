@@ -61,7 +61,6 @@ async function mockRetrieval(page: Page) {
         answer_timeout_seconds: 600,
         rerank_enabled: true,
         entity_expansion_enabled: true, entity_expansion_max_chunks: 3,
-        reference_section_read_max_chunks: 8,
         // 開閉の下の欄も幅と並びを確かめる（#5324。目次の字数・読む量の欄は #5816 で削除）。
         reference_outline_selection_enabled: true,
         outline_selection_enabled: true, outline_selection_max_documents: 3,

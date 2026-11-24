@@ -29,11 +29,22 @@ export interface FieldActionRowProps {
  * - 高さは呼び出し側が入力欄と Button に**同じ `size`** を渡してそろえる（既定はどちらも md）。
  * - sm（640px）未満は縦に積み、操作は全幅にする（製品で `w-full sm:w-auto` を書かない）。
  * - 欄の `helper` / `error` は使わず `footer` に渡す（欄の下に文があると、下端でそろえた操作が文の下端に合ってしまう）。
+ * - `FormGrid` の 2 列で行に 1 つの項目なら、外枠を置き場所（カード）の行の幅まで広げ（`--form-grid-row-extend`。
+ *   `styles/structure/form-grid.css`）、`footer` の補足をその幅で折り返す。入力欄と操作の行は広げない（#5817）。
  */
 export function FieldActionRow({ children, actions, footer, fit = false, className, ...props }: FieldActionRowProps) {
   return (
-    <div className={cn("min-w-0 space-y-1.5", className)} data-testid={props["data-testid"]}>
-      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end" data-field-action-row="">
+    <div
+      className={cn(
+        "min-w-0 space-y-1.5 -mr-[var(--form-grid-row-extend)] [--field-row-extend:var(--form-grid-row-extend)]",
+        className
+      )}
+      data-testid={props["data-testid"]}
+    >
+      <div
+        className="flex min-w-0 max-w-[calc(100%_-_var(--field-row-extend,0px))] flex-col gap-2 sm:flex-row sm:items-end"
+        data-field-action-row=""
+      >
         <div className={fit ? "min-w-0 max-w-full" : "min-w-0 flex-1 [&>*]:w-full"}>{children}</div>
         {actions === null || actions === undefined || actions === false ? null : (
           <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-end [&>*]:w-full sm:[&>*]:w-auto">

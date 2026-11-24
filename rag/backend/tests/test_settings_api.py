@@ -3578,34 +3578,32 @@ def test_answering_settings_have_no_outline_selection_size_limits(
     assert not any(name.upper() in text for name in removed)
 
 
-def test_answering_settings_save_reference_section_read_max_chunks(
+def test_answering_settings_have_no_reference_section_read_max_chunks(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """番号つきの参照の節から読む chunk の上限(#5348)を .env と実行中の設定へ保存する。
+    """番号つきの参照の節から読む chunk の上限(#5348)は設定に無い(#5817)。
 
-    範囲(1〜50)の外の値は 422。
+    参照先の節は節の大きさ(回答のモデルの入力の上限の 1/2)で読むので、画面・API に出さず、送られても
+    保存しない(読み捨てる)。配備済みの .env に残った行は Settings が読み捨てる。
     """
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_reference_section_read_max_chunks", 8)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
+    env_file = _settings_env_file(
+        monkeypatch, tmp_path, "RAG_REFERENCE_SECTION_READ_MAX_CHUNKS=16\n"
+    )
 
     assert (
-        client.get("/api/settings/answering").json()["data"]["reference_section_read_max_chunks"]
-        == 8
+        "reference_section_read_max_chunks"
+        not in client.get("/api/settings/answering").json()["data"]
     )
     response = client.patch(
-        "/api/settings/answering", json={"reference_section_read_max_chunks": 16}
+        "/api/settings/answering",
+        json={"outline_selection_max_documents": 4, "reference_section_read_max_chunks": 16},
     )
 
     assert response.status_code == 200
-    assert response.json()["data"]["reference_section_read_max_chunks"] == 16
-    assert settings.rag_reference_section_read_max_chunks == 16
-    assert "RAG_REFERENCE_SECTION_READ_MAX_CHUNKS=16" in env_file.read_text(encoding="utf-8")
-    for invalid in (0, 51):
-        response = client.patch(
-            "/api/settings/answering", json={"reference_section_read_max_chunks": invalid}
-        )
-        assert response.status_code == 422
+    assert "reference_section_read_max_chunks" not in response.json()["data"]
+    assert not hasattr(get_settings(), "rag_reference_section_read_max_chunks")
+    text = env_file.read_text(encoding="utf-8")
+    assert "RAG_OUTLINE_SELECTION_MAX_DOCUMENTS=4" in text
 
 
 def test_answering_settings_save_outline_selection(

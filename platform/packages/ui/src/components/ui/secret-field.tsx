@@ -12,6 +12,7 @@ import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
 import {
   CONTROL_MIN_HEIGHT_CLASS,
   type ControlSize,
+  FIELD_ROW_UNEXTENDED_CLASS,
   type FieldWidth,
   fieldControlClass,
   labeledFieldWidthClasses,
@@ -141,7 +142,8 @@ export function SecretField({
     // 段の幅（width）は入力欄に付け、ラベルと必須の印は入力欄の幅で折り返さない（#1746）。
     <div className={cn("min-w-0 space-y-1.5", widthClasses.box, className)}>
       {/* 隣の TextField とラベル行の高さ（20px）をそろえ、2 列の入力欄の上端を一致させる。 */}
-      <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
+      {/* 外枠を行の幅まで広げた欄（FormGrid の行に 1 つの欄。#5817）でも、状態は広げる前の右端に残す。 */}
+      <div className={cn("flex min-h-5 flex-wrap items-center justify-between gap-2", FIELD_ROW_UNEXTENDED_CLASS)}>
         <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
           {label}
           {required && requiredLabel ? <RequiredBadge label={requiredLabel} aria-hidden /> : null}
@@ -202,6 +204,7 @@ export function SecretField({
           className={cn(
             "flex items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors",
             widthClasses.text,
+            FIELD_ROW_UNEXTENDED_CLASS,
             disabled ? "cursor-not-allowed text-fg-disabled" : "cursor-pointer text-fg hover:bg-info-subtle"
           )}
         >

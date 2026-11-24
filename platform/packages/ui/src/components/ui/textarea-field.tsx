@@ -5,7 +5,7 @@ import { cn } from "../../lib/utils";
 import { useFieldWidthScope } from "./field-width-scope";
 import { FieldError } from "./field-error";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
-import { type FieldWidth, fieldControlClass, labeledFieldWidthClasses } from "./control-size";
+import { FIELD_ROW_UNEXTENDED_CLASS, type FieldWidth, fieldControlClass, labeledFieldWidthClasses } from "./control-size";
 import { usePlaceholderFit } from "./placeholder-fit";
 
 /** 文字数の既定の表示。上限があれば「12 / 1,000」、無ければ「12 文字」。 */
@@ -154,7 +154,11 @@ export function TextareaField({
             </p>
           ) : null}
           {countText ? (
-            <p id={countId} className="ml-auto shrink-0 text-xs leading-relaxed tabular-nums text-fg-muted">
+            // 外枠を行の幅まで広げた欄（FormGrid の行に 1 つの欄。#5817）でも、文字数は広げる前の右端に残す。
+            <p
+              id={countId}
+              className={cn("ml-auto shrink-0 text-xs leading-relaxed tabular-nums text-fg-muted", FIELD_ROW_UNEXTENDED_CLASS)}
+            >
               {countText}
             </p>
           ) : null}

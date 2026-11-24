@@ -552,10 +552,6 @@ async def update_answering_settings(
             ("rag_entity_expansion_enabled", payload.entity_expansion_enabled),
             ("rag_entity_expansion_max_chunks", payload.entity_expansion_max_chunks),
             (
-                "rag_reference_section_read_max_chunks",
-                payload.reference_section_read_max_chunks,
-            ),
-            (
                 "rag_reference_outline_selection_enabled",
                 payload.reference_outline_selection_enabled,
             ),
@@ -581,9 +577,6 @@ async def update_answering_settings(
                     candidate.rag_entity_expansion_enabled
                 ),
                 "RAG_ENTITY_EXPANSION_MAX_CHUNKS": str(candidate.rag_entity_expansion_max_chunks),
-                "RAG_REFERENCE_SECTION_READ_MAX_CHUNKS": str(
-                    candidate.rag_reference_section_read_max_chunks
-                ),
                 "RAG_REFERENCE_OUTLINE_SELECTION_ENABLED": _format_env_bool(
                     candidate.rag_reference_outline_selection_enabled
                 ),
@@ -633,7 +626,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         rerank_enabled=settings.rag_rerank_enabled,
         entity_expansion_enabled=settings.rag_entity_expansion_enabled,
         entity_expansion_max_chunks=settings.rag_entity_expansion_max_chunks,
-        reference_section_read_max_chunks=settings.rag_reference_section_read_max_chunks,
         reference_outline_selection_enabled=settings.rag_reference_outline_selection_enabled,
         outline_selection_enabled=settings.rag_outline_selection_enabled,
         outline_selection_max_documents=settings.rag_outline_selection_max_documents,

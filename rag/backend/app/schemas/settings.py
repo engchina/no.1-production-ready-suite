@@ -814,8 +814,6 @@ class AnsweringSettingsData(BaseModel):
     # 実体・別名による検索拡張(#1362。全体設定だけで決める。既定 ON。#5187)。
     entity_expansion_enabled: bool
     entity_expansion_max_chunks: int
-    # 番号つきの参照の参照先 1 つで、番号で定位した節から読む chunk の上限(#5348)。
-    reference_section_read_max_chunks: int = 8
     # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 ON。#5296)。
     # 目次の字数と選んだ章節の読み方は回答のモデルの入力の上限の 1/2 で決め、設定は無い(#5816)。
     reference_outline_selection_enabled: bool
@@ -856,8 +854,6 @@ class AnsweringSettingsUpdate(BaseModel):
     rerank_enabled: bool | None = None
     entity_expansion_enabled: bool | None = None
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=10)
-    # 範囲は Settings の rag_reference_section_read_max_chunks と同じ(#5348)。
-    reference_section_read_max_chunks: int | None = Field(default=None, ge=1, le=50)
     reference_outline_selection_enabled: bool | None = None
     # 範囲は Settings の rag_outline_selection_* と同じ(#5324)。
     outline_selection_enabled: bool | None = None
