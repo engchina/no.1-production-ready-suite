@@ -146,8 +146,7 @@ const ANSWERING_SETTINGS = {
   outline_selection_catalog_max_chars: 40000,
   outline_selection_read_max_chars: 20000,
   section_expansion_enabled: true,
-  section_expansion_max_levels: 4,
-  section_expansion_input_token_percent: 50,
+  section_expansion_max_levels: 1,
   answer_timeout_seconds: 600,
 };
 

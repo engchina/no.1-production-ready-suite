@@ -1,41 +1,29 @@
-"""当たった chunk の章節から、親の章節へ段階的に広げて回答の文脈に入れる（#1436）。
+"""当たった chunk を含む章節の全体を、設定の段まで広げて回答の文脈に入れる（#1436・#5812）。
 
 章節の正本は文書の「章節ナビゲーション」で、章節と chunk の対応（#1438）は呼び出し元（backend）が持つ。この module は
-対応を ``AnswerDependencies.section_outline`` / ``section_chunks`` から読み、広げる順・予算・止める条件だけを決める
+対応を ``AnswerDependencies.section_outline`` / ``section_chunks`` から読み、読む章節と止める条件だけを決める
 （I/O は注入された関数を通す。決定論のテストはスタブで行う）。
 
-広げる順は、当たった chunk → 所有の章節（leaf）→ 親の章節 → … → 最上位の章節 → 文書全体（根の章節）。
-
-- 読む範囲（当たった章節 = leaf）までを読む。足りるかの判定はせず、上限（段・token・時間）で止める。
-- 上の段の章節は、予算に入れば全体を読む。入らなければ、子の章節の見出し（目次）を質問との関連度（rerank。使えなければ
-  語の重なり）で並べ、関連の高い子の章節から、予算に入る章節を全体で読む。入らない子の章節は読まない。
-- 章節が予算に入るかは、章節の chunk のうち、まだ文脈に無いものの token で決める（最初の根拠・前の段で読んだ
-  chunk は数えない。#1504）。章節の chunk がすべて文脈にあれば、読むものは無い（診断の ``read: "in_context"``）。
-- 子の章節が無い（または子の章節も入らない）章節は、見積もりで入るなら先頭から入る分だけ読み、入らなければ読まない。
-- 上限（入力 token・段の数・時間）で止めたときは、読めなかった章節を返し、呼び出し元は回答を条件つき
-  （``conditional``）にして「回答に未反映の関連章節」に出す。ただし、当たった章節より上の段で子の章節を読むときに、
-  関連度の順でより上の兄弟の章節を全体で読んだ後に予算で読めなかった章節のうち、どの起点の chunk も含まないものは、
-  回答に出さず、診断（``unread_omitted``）にだけ残す（#2816。質問に合わせて広げた参考の
-  範囲で、読めなくても当たった章節の読了は崩れない）。読取の失敗は、どの章節でも回答に出す。
-- 回答の流れは、補いの検索（要求別の補完・業務ガイドの手順）の根拠を主の検索の根拠に合わせた後に 1 回だけ広げる
-  （#5173）。所有の章節を読めなかった起点は、呼び出し元が次の補い方（親 → 前後）で補う。
-- 呼び出し元が先に読む範囲（``priority``。業務ガイドの手順の参照の文書と頁）を渡したら、参照の頁に重なる起点 →
-  参照の文書の起点 → その他の起点の順に広げる（#2828）。参照の文書の起点があれば、その他の文書の起点は段の外に
-  置き（親へ上がらない）、所有の章節だけを止めた後に残りの予算で読む。読めなくても回答に出さず、診断
-  （``unread_omitted``）にだけ残す（質問と関係の弱い別の文書の章節が予算と「回答に未反映の関連章節」を占めない）。
-- 呼び出し元が「文書ごとの上限」で起点から外した同じ文書の候補（``related``。#5209）を渡したら、所有の章節を読んだ後に、
-  その候補の所有の章節（子の章節を持たない章節だけ。文書全体・子を持つ章節は読まない）を、残りの予算に全体が入る
-  ものだけ候補の順に読む。読めなくても回答に出さず、診断（``unread_omitted``）にだけ残す（上位の候補でも起点では
-  ないため、当たった章節の読了は崩れない）。回答の生成に残す時間が無ければ読まない（時間の上限として残す）。
+- 段は、当たった chunk を含む章節（所有の章節）を 1 段目、その親の章節を 2 段目、さらに上を 3 段目と数える
+  （「広げる段の上限」1〜3、既定 1）。文書全体（根の章節）も段の 1 つで、上限の段に入れば読む候補になる。
+- 起点ごとに、上限の段から下へ見て、文字数（1 文字 = 1 token。``SectionInfo.chars``）が回答のモデルの入力の上限の
+  1/2 以下の最も上の章節の全体を読む。問題・プロンプト・ほかの根拠は数えない。合わせて入らない分は分割読取に任せる。
+- 所有の章節も 1/2 を超える起点は読まない。呼び出し元（``_fill_unread_section_anchors``）が親 → 前後の chunk で補う。
+  縮めた・読まなかったことは診断にだけ残し、回答の「回答に未反映の関連章節」には出さない。読取の失敗と時間の上限で
+  読めなかった章節は回答に出す。
+- 回答の流れは、補いの検索（要求別の補完・業務ガイドの手順）の根拠を主の検索の根拠に合わせた後に 1 回だけ広げる（#5173）。
+- 呼び出し元が先に読む範囲（``priority``。業務ガイドの手順の参照の文書と頁）を渡したら、参照の文書の起点を段で広げ、
+  その他の文書の起点は所有の章節だけを最後に読む（#2828）。読めなくても回答に出さず、診断（``unread_omitted``）にだけ残す。
+- 呼び出し元が「文書ごとの上限」で起点から外した同じ文書の候補（``related``。#5209）を渡したら、その候補の所有の章節
+  （子の章節を持たない章節だけ）を、1/2 以下なら読む。読めなくても回答に出さず、診断にだけ残す。回答の生成に残す
+  時間が無ければ読まない。
 - 「回答に未反映の関連章節」に出す行は、回答の生成の後に ``answer_unread_view`` で、回答が根拠にした文書と先に読む
   範囲の文書の章節に絞り、``MAX_UNREAD_LINES`` 行を超えた分は件数の 1 行にする（#2828）。
 
-入力 token の上限は、回答のモデルの入力の上限（共通のモデル設定の登録モデルの「入力の上限（tokens）」。#1437。
-backend が platform の ``enterprise_ai_max_input_tokens`` で決めて ``answer_max_input_tokens`` で渡す）に対する割合
-（既定 50%）。根拠の本文の token は ``estimate_tokens``（platform の ``estimate_input_tokens`` と同じ見積もり）で
-数える。この module は、もとの根拠（関連度の順）の後ろに広げた章節を章節の中の読み順で足し、回答の流れはその後に
-文脈の補完のまとめ（``rag_engine.retrieval.context_fill``。#5168）で章節の本文を最も近い根拠のかたまりへ置く。引用の ID は
-chunk のまま（章節の chunk は検索の chunk と同じ親子の record にする）。
+入力の上限は、回答のモデルの入力の上限（共通のモデル設定の登録モデルの「入力の上限（tokens）」。#1437。backend が
+platform の ``enterprise_ai_max_input_tokens`` で決めて ``answer_max_input_tokens`` で渡す）。この module は、もとの根拠の
+後ろに広げた章節を章節の中の読み順で足し、回答の流れはその後に文脈の補完のまとめ（``rag_engine.retrieval.context_fill``。
+#5168）で章節の本文を最も近い根拠のかたまりへ置く。引用の ID は chunk のまま。
 """
 
 from __future__ import annotations
@@ -49,7 +37,6 @@ from typing import Any
 
 from rag_parser_core.language import current_pack
 
-from rag_engine.dependencies import report_degraded
 from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
 from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS
@@ -64,10 +51,10 @@ ROOT_SECTION_ID = "document"
 # 広げた章節の根拠の役割（context の parent の理由と child の役割）。
 SECTION_EXPANSION_REASON = "section_expansion"
 SECTION_CONTEXT_ROLE = "section_context"
-# 1 つの章節で読む chunk の上限（文書全体でも、これより多い章節は予算に関係なく読まない）。
-MAX_SECTION_CHUNKS = 400
 # モデルの入力の上限の既定（tokens。platform の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS と同じ。#1437）。
 DEFAULT_MODEL_INPUT_TOKENS = 128_000
+# 広げる段の上限の最大（1 = 所有の章節。#5812）。
+MAX_LEVELS = 3
 # 次の段を読む処理の見積もりの秒数。
 DEFAULT_LEVEL_SECONDS = 20.0
 _ASCII = re.compile(r"[\x00-\x7f]")
@@ -83,7 +70,6 @@ STOP_PARTIAL = "partial_read"
 STOP_DISABLED = "disabled"
 # 読む範囲まで読んで止めた。
 STOP_SCOPE_READ = "scope_read"
-STOP_SECTION_CHUNKS = "section_chunks"
 LIMIT_STOPS = frozenset({STOP_MAX_LEVELS, STOP_TOKEN_BUDGET, STOP_TIME_LIMIT})
 # 「回答に未反映の関連章節」に出す行の上限（超えた分は件数の 1 行にする。#2828）。
 MAX_UNREAD_LINES = 10
@@ -277,13 +263,12 @@ class SectionExpansionLimits:
 
     @classmethod
     def from_settings(cls, settings: Any) -> SectionExpansionLimits:
-        percent = max(1, min(100, int(getattr(settings, "section_expansion_input_token_percent", 50) or 50)))
-        input_tokens = model_input_tokens(settings) * percent // 100
         round_seconds = getattr(settings, "answer_generation_round_estimate_seconds", None)
         round_seconds = DEFAULT_GENERATION_ROUND_SECONDS if round_seconds is None else max(0.0, float(round_seconds))
         return cls(
-            max_levels=max(0, int(getattr(settings, "section_expansion_max_levels", 4))),
-            input_tokens=input_tokens,
+            max_levels=max(1, min(MAX_LEVELS, int(getattr(settings, "section_expansion_max_levels", 1) or 1))),
+            # 1 つの章節が入ってよい大きさは、回答のモデルの入力の上限の 1/2（#5812）。
+            input_tokens=model_input_tokens(settings) // 2,
             generation_reserve_seconds=round_seconds + ANSWER_FINALIZE_RESERVE_SECONDS,
         )
 
@@ -401,16 +386,6 @@ class SectionReader:
     def section_key(self, outline: SectionOutline, section: SectionInfo) -> tuple[str, str, str]:
         return outline.document_id, outline.chunk_set_id, section.section_id
 
-    def unread_chars(self, outline: SectionOutline, section: SectionInfo) -> int:
-        """読む前の見積もり（章節の文字数から、読み終えた子孫の章節の分を引く）。"""
-        done = [
-            item
-            for item in outline.sections
-            if self.section_key(outline, item) in self.read_sections and _is_descendant(outline, item, section)
-        ]
-        top = [item for item in done if not any(other is not item and _is_descendant(outline, item, other) for other in done)]
-        return max(0, section.chars - sum(item.chars for item in top))
-
     def groups(self, outline: SectionOutline, section: SectionInfo) -> list[ContextParentEvidence]:
         """章節の chunk を読み、親ごとにまとめて章節の中の読み順で返す（文脈にある親も含む。child は章節の中の順。
         親の record が無い chunk は chunk ごとに返す）。"""
@@ -517,47 +492,6 @@ def _is_descendant(outline: SectionOutline, item: SectionInfo, ancestor: Section
     return False
 
 
-def _tree_tokens(tree: Sequence[ContextParentEvidence]) -> int:
-    return sum(estimate_tokens(str(getattr(item.record, "text", "") or "")) for item in tree)
-
-
-def _fit_tree(tree: Sequence[ContextParentEvidence], remaining: int) -> tuple[list[ContextParentEvidence], bool]:
-    """読み順の先頭から予算に入る親だけを残す（全部入れば True）。"""
-    kept: list[ContextParentEvidence] = []
-    used = 0
-    for item in tree:
-        cost = estimate_tokens(str(getattr(item.record, "text", "") or ""))
-        if used + cost > remaining:
-            return kept, False
-        kept.append(item)
-        used += cost
-    return kept, True
-
-
-def _rank_children(
-    question: str, outline: SectionOutline, children: Sequence[SectionInfo], rerank: Callable[..., Any] | None, settings: Any
-) -> tuple[list[SectionInfo], str]:
-    """子の章節を見出しと質問の関連度で並べる（rerank。使えなければ語の重なり）。"""
-    if len(children) <= 1:
-        return list(children), "single"
-    documents = [" > ".join(outline.path(child)) or child.title for child in children]
-    if rerank is not None:
-        try:
-            ranked = rerank(question, documents, settings, top_n=len(documents))
-            order = [int(getattr(item, "index", item)) for item in ranked or ()]
-            order = [index for index in dict.fromkeys(order) if 0 <= index < len(children)]
-            if order:
-                rest = [index for index in range(len(children)) if index not in order]
-                return [children[index] for index in [*order, *rest]], "rerank"
-        except Exception as exc:  # noqa: BLE001 - 並びは補助。語の重なりで並べる
-            # ``ranking: lexical`` は rerank が無いときと同じなので、失敗を呼び出し元の診断に残す（#3286）。
-            report_degraded("section_child_rerank", exc)
-    from rag_engine.retrieval.evidence_selection import evidence_relevance
-
-    scored = sorted(range(len(children)), key=lambda index: (-evidence_relevance(question, documents[index]), index))
-    return [children[index] for index in scored], "lexical"
-
-
 def _merge(context: AnswerContext, tree: Sequence[ContextParentEvidence]) -> AnswerContext:
     """もとの根拠の後ろに、章節の根拠を読み順で足す。"""
     if not tree:
@@ -628,7 +562,6 @@ def expand_sections(
     *,
     section_outline: Callable[..., Any],
     section_chunks: Callable[..., Sequence[Any]],
-    rerank: Callable[..., Any] | None = None,
     started_at: float | None = None,
     deadline_remaining: Callable[[], float | None] = lambda: None,
     clock: Callable[[], float] = monotonic,
@@ -644,7 +577,6 @@ def expand_sections(
     #5209）で、起点のある文書のものだけ、所有の章節を読んだ後に残りの予算で読む。
     """
     limits = SectionExpansionLimits.from_settings(settings)
-    budget = limits.input_tokens
     start = clock() if started_at is None else started_at
     trace: dict[str, Any] = {
         "enabled": True,
@@ -750,23 +682,53 @@ def expand_sections(
         )
     }
     level_seconds = DEFAULT_LEVEL_SECONDS
+    # 1 つの章節が入ってよい大きさ（文字数。1 文字 = 1 token。問題・プロンプト・ほかの根拠は数えない。#5812）。
+    section_limit = limits.input_tokens
 
     def scope_reached() -> bool:
-        """読む範囲（全起点の所有の章節）まで読んだか。"""
-        return all(reader.section_key(chain.outline, chain.sections[0]) in reader.read_sections for chain in chains)
+        """全起点で、起点から根までのどれかの章節を読んだか。"""
+        return all(any(reader.section_key(chain.outline, item) in reader.read_sections for item in chain.sections) for chain in chains)
 
-    def remaining_now(added: Sequence[ContextParentEvidence]) -> int:
-        return budget - context_tokens(current) - _tree_tokens(added)
+    def read_whole(outline: SectionOutline, section: SectionInfo, entry: dict[str, Any], added: list[ContextParentEvidence]) -> bool:
+        """章節の全体を読む（読めた・読むものが無ければ True。読取の失敗は ``failure`` に残す）。"""
+        tree = reader.read(outline, section)
+        failure = reader.failures.get(reader.section_key(outline, section))
+        if failure:
+            entry.update(read="partial" if tree else "failed", added_parents=0)
+            return False
+        reader.mark(outline, section, tree)
+        added.extend(tree)
+        entry.update(read="whole" if tree else "in_context", added_parents=len(tree))
+        return True
 
-    def read_deferred() -> None:
-        """範囲の外の文書の起点の所有の章節を、残りの予算に全体が入るものだけ読む（#2828）。
-
-        読めなかった章節は回答に出さず、診断（``unread_omitted``）にだけ残す。親の章節へは上がらない。
-        """
+    def read_owners(targets: Sequence[tuple[SectionOutline, SectionInfo, dict[str, Any]]]) -> None:
+        """所有の章節だけを、大きさが上限以下なら読む（読めなかったものは回答に出さず診断にだけ残す）。"""
         nonlocal current
         assert reader is not None
         added: list[ContextParentEvidence] = []
+        for outline, section, entry in targets:
+            failure = None
+            if section.chars <= section_limit and read_whole(outline, section, entry, added):
+                continue
+            failure = reader.failures.get(reader.section_key(outline, section))
+            if not failure:
+                entry["read"] = "over_limit"
+            result.omitted.append(
+                UnreadSection(
+                    outline.document_id,
+                    section.section_id,
+                    section_label(outline, section),
+                    failure or STOP_TOKEN_BUDGET,
+                    section.page_start,
+                )
+            )
+        if added:
+            current = _merge(current, added)
+
+    def read_deferred() -> None:
+        """範囲の外の文書の起点の所有の章節を読む（#2828。親の章節へは上がらない）。"""
         entries: list[dict[str, Any]] = []
+        targets = []
         for chain in deferred:
             section = chain.sections[0]
             key = reader.section_key(chain.outline, section)
@@ -774,35 +736,15 @@ def expand_sections(
                 continue
             entry: dict[str, Any] = {"key": key, "section_id": section.section_id, "title": section.title}
             entries.append(entry)
-            tree = reader.read(chain.outline, section) if section.chunk_count <= MAX_SECTION_CHUNKS else None
-            failure = reader.failures.get(key)
-            if tree is not None and not failure and _tree_tokens(tree) <= remaining_now(added):
-                reader.mark(chain.outline, section, tree)
-                added.extend(tree)
-                entry.update(read="whole" if tree else "in_context", added_parents=len(tree))
-                continue
-            entry["read"] = "failed" if failure else "skipped"
-            result.omitted.append(
-                UnreadSection(
-                    chain.outline.document_id,
-                    section.section_id,
-                    section_label(chain.outline, section),
-                    failure or STOP_TOKEN_BUDGET,
-                    section.page_start,
-                )
-            )
-        if added:
-            current = _merge(current, added)
+            targets.append((chain.outline, section, entry))
+        read_owners(targets)
         trace["deferred"] = [{k: v for k, v in entry.items() if k != "key"} for entry in entries]
 
     def read_related() -> None:
-        """文書ごとの上限で起点から外した同じ文書の候補の所有の章節を、残りの予算に全体が入るものだけ読む（#5209）。
+        """文書ごとの上限で起点から外した同じ文書の候補の所有の章節を読む（#5209）。
 
-        子の章節を持たない章節だけを読む（文書全体・子を持つ章節は読まない）。読めなかった章節は回答に出さず、
-        診断（``unread_omitted``）にだけ残す。回答の生成に残す時間が無ければ読まない。
+        子の章節を持たない章節だけを読む（文書全体・子を持つ章節は読まない）。回答の生成に残す時間が無ければ読まない。
         """
-        nonlocal current
-        assert reader is not None
         documents = {(chain.outline.document_id, chain.outline.chunk_set_id) for chain in [*chains, *deferred]}
         entries: list[dict[str, Any]] = []
         targets: list[tuple[SectionOutline, SectionInfo, dict[str, Any]]] = []
@@ -846,180 +788,58 @@ def expand_sections(
                     )
                 )
             return
-        added: list[ContextParentEvidence] = []
-        for outline, section, entry in targets:
-            tree = reader.read(outline, section) if section.chunk_count <= MAX_SECTION_CHUNKS else None
-            failure = reader.failures.get(reader.section_key(outline, section))
-            if tree is not None and not failure and _tree_tokens(tree) <= remaining_now(added):
-                reader.mark(outline, section, tree)
-                added.extend(tree)
-                entry.update(read="whole" if tree else "in_context", added_parents=len(tree))
-                continue
-            entry["read"] = "failed" if failure else "skipped"
-            result.omitted.append(
-                UnreadSection(
-                    outline.document_id,
-                    section.section_id,
-                    section_label(outline, section),
-                    failure or STOP_TOKEN_BUDGET,
-                    section.page_start,
-                )
-            )
-        if added:
-            current = _merge(current, added)
+        read_owners(targets)
 
-    def optional(chain: _Chain, section: SectionInfo, after_read: bool) -> bool:
-        """予算で読めなくても回答に出さない章節か（#2816）。
-
-        当たった章節（読む範囲が leaf のとき）より上の段で読む子の章節のうち、関連度の順でより上の兄弟の章節を
-        全体で読んだ後に読めなかったもので（``after_read``）、どの起点の chunk も含まず、読取に失敗していないもの。
-        """
-        if (
-            not after_read
-            or chain.position <= 0
-            or section.section_id == chain.sections[chain.position].section_id
-            or reader.section_key(chain.outline, section) in reader.failures
-        ):
-            return False
-        same = (chain.outline.document_id, chain.outline.chunk_set_id)
-        for other in chains:
-            if (other.outline.document_id, other.outline.chunk_set_id) != same:
-                continue
-            owner = other.outline.get(other.outline.owner_section_id)
-            if owner is not None and (owner.section_id == section.section_id or _is_descendant(other.outline, owner, section)):
-                return False
-        return True
-
-    def report(chain: _Chain, item: UnreadSection, section: SectionInfo, after_read: bool) -> None:
-        """予算で読めなかった章節を、回答に出すもの（``unread``）と診断だけのもの（``omitted``）に分ける。"""
-        (result.omitted if optional(chain, section, after_read) else result.unread).append(item)
-
-    def try_whole(chain: _Chain, section: SectionInfo, entry: dict[str, Any], added: list[ContextParentEvidence]) -> bool:
-        """章節の、まだ文脈に無い親が予算に入れば全体を読む（読んだ・読む必要が無ければ True）。
-
-        文脈にすでにある chunk（最初の根拠・前の段で読んだ章節）は数えない（#1504。二重に数えない）。章節の chunk が
-        すべて文脈にあれば、読むものが無い（``in_context``）。
-        """
-        if section.chunk_count > MAX_SECTION_CHUNKS:
-            return False
-        tree = reader.read(chain.outline, section)
-        failure = reader.failures.get(reader.section_key(chain.outline, section))
-        if failure:
-            result.unread.append(
-                UnreadSection(
-                    chain.outline.document_id, section.section_id, section_label(chain.outline, section), failure, section.page_start
-                )
-            )
-            entry.update(read="partial" if tree else "failed", added_parents=0)
-            return False
-        if _tree_tokens(tree) > remaining_now(added):
-            return False
-        if not tree:
-            reader.mark(chain.outline, section, ())
-            entry.update(read="in_context", added_parents=0)
-            return True
-        reader.mark(chain.outline, section, tree)
-        added.extend(tree)
-        entry.update(read="whole", added_parents=len(tree))
-        return True
-
-    def fit_or_skip(
-        chain: _Chain, section: SectionInfo, entry: dict[str, Any], added: list[ContextParentEvidence], after_read: bool = False
-    ) -> None:
-        """予算に入らない章節: 見積もりで入るなら先頭から入る分だけ読み、入らなければ読まない。"""
-        remaining = remaining_now(added)
-        label = section_label(chain.outline, section)
-        if section.chunk_count <= MAX_SECTION_CHUNKS and reader.unread_chars(chain.outline, section) <= remaining:
-            kept, _whole = _fit_tree(reader.read(chain.outline, section), remaining)
-            reader.known_ids.update(_record_key(item.record) for item in kept)
-            added.extend(kept)
-            entry.update(read="partial", added_parents=len(kept))
-            label += "の残り"
-        else:
-            entry["read"] = "skipped"
-        report(
-            chain,
-            UnreadSection(chain.outline.document_id, section.section_id, label, STOP_TOKEN_BUDGET, section.page_start),
-            section,
-            after_read,
+    # 起点ごとに、設定の段（1 = 所有の章節）までの章節のうち、大きさが上限以下の最も上の章節の全体を読む（#5812）。
+    # 文書全体（根）も上限以下のときだけ読む。所有の章節も上限を超える起点は読まず、呼び出し元が親 → 前後で補う。
+    level_trace: dict[str, Any] = {"level": limits.max_levels, "sections": []}
+    trace["levels"].append(level_trace)
+    added: list[ContextParentEvidence] = []
+    for chain in chains:
+        candidates = chain.sections[: limits.max_levels]
+        chosen = next((index for index in range(len(candidates) - 1, -1, -1) if candidates[index].chars <= section_limit), None)
+        entry: dict[str, Any] = {"seed_id": chain.seed_uid}
+        level_trace["sections"].append(entry)
+        if chosen is None:
+            owner = candidates[0]
+            entry.update(section_id=owner.section_id, title=owner.title, read="over_limit")
+            continue
+        section = candidates[chosen]
+        entry.update(
+            section_id=section.section_id, title=section.title, level=chosen + 1, is_document=section.section_id == ROOT_SECTION_ID
         )
-
-    for level in range(1, limits.max_levels + 1):
-        targets = [chain for chain in chains if chain.next_section is not None]
-        if not targets:
-            return finish(STOP_DOCUMENT)
-        # 時間: 回答全体の期限までに、この段と生成の分が残るか。
+        if chosen + 1 < len(candidates):
+            entry["shrunk_from_level"] = len(candidates)
+        if any(reader.section_key(chain.outline, item) in reader.read_sections for item in chain.sections[chosen:]):
+            entry["read"] = "in_context"
+            continue
         remaining_deadline = deadline_remaining()
         left = math.inf if remaining_deadline is None else remaining_deadline
         if left < level_seconds + limits.generation_reserve_seconds:
-            _mark_unread(result, reader, targets, STOP_TIME_LIMIT)
-            return finish(STOP_TIME_LIMIT)
-        level_trace: dict[str, Any] = {"level": level, "sections": []}
-        trace["levels"].append(level_trace)
-        added: list[ContextParentEvidence] = []
-        budget_hit = False
-        labels: list[str] = []
-        seen_targets: set[tuple[str, str, str]] = set()
-        for chain in targets:
-            section = chain.next_section
-            assert section is not None
-            chain.position += 1
-            key = reader.section_key(chain.outline, section)
-            if key in seen_targets or key in reader.read_sections:
-                continue
-            seen_targets.add(key)
-            labels.append(section_label(chain.outline, section))
-            entry: dict[str, Any] = {
-                "section_id": section.section_id,
-                "title": section.title,
-                "is_document": section.section_id == ROOT_SECTION_ID,
-            }
-            level_trace["sections"].append(entry)
-            if try_whole(chain, section, entry, added):
-                continue
-            if reader.section_key(chain.outline, section) in reader.failures:
-                budget_hit = True
-                continue
-            # 予算に入らない: 子の章節を関連度の順に、入るものから全体で読む。
-            done = chain.sections[chain.position - 1] if chain.position > 0 else None
-            children = [
-                child for child in chain.outline.children(section.section_id) if done is None or child.section_id != done.section_id
-            ]
-            if not children:
-                # 子の章節が無い章節（大きな leaf・子をすべて読んだ章節）。
-                fit_or_skip(chain, section, entry, added)
-                budget_hit = True
-                continue
-            ranked, method = _rank_children(question, chain.outline, children, rerank, settings)
-            entry.update(read="children", ranking=method, children=[])
-            read_above = False  # 関連度の順でより上の子の章節を全体で読んだ（#2816）
-            for child in ranked:
-                child_key = reader.section_key(chain.outline, child)
-                if child_key in reader.read_sections:
-                    continue
-                child_entry: dict[str, Any] = {"section_id": child.section_id, "title": child.title}
-                entry["children"].append(child_entry)
-                if try_whole(chain, child, child_entry, added):
-                    read_above = True
-                    continue
-                if child_key in reader.failures:
-                    # 読取に失敗した子の章節は、失敗として出す（予算で読めなかった章節にしない）。
-                    budget_hit = True
-                    continue
-                fit_or_skip(chain, child, child_entry, added, read_above)
-                budget_hit = True
-        result.levels = level
-        level_trace["labels"] = labels
-        if added:
-            current = _merge(current, added)
-            level_trace["added_parents"] = len(added)
-        if scope_reached() or budget_hit:
-            return finish(STOP_PARTIAL if result.unread else STOP_SCOPE_READ)
-    remaining_targets = [chain for chain in chains if chain.next_section is not None]
-    if not remaining_targets:
-        return finish(STOP_DOCUMENT)
-    _mark_unread(result, reader, remaining_targets, STOP_MAX_LEVELS)
-    return finish(STOP_MAX_LEVELS)
+            _mark_unread(result, reader, [replace(chain, position=chosen - 1)], STOP_TIME_LIMIT)
+            entry["read"] = "time_limit"
+            continue
+        if not read_whole(chain.outline, section, entry, added):
+            result.unread.append(
+                UnreadSection(
+                    chain.outline.document_id,
+                    section.section_id,
+                    section_label(chain.outline, section),
+                    reader.failures[reader.section_key(chain.outline, section)],
+                    section.page_start,
+                )
+            )
+        result.levels = max(result.levels, chosen + 1)
+    if added:
+        current = _merge(current, added)
+        level_trace["added_parents"] = len(added)
+    if any(item.reason == STOP_TIME_LIMIT for item in result.unread):
+        return finish(STOP_TIME_LIMIT)
+    if result.unread:
+        return finish(STOP_PARTIAL)
+    # 所有の章節も 1/2 を超えた起点は、章節ではなく親 → 前後で補う（回答に出さない）。
+    over = any(entry.get("read") == "over_limit" for entry in level_trace["sections"])
+    return finish(STOP_TOKEN_BUDGET if over else STOP_SCOPE_READ)
 
 
 def _mark_unread(result: SectionExpansionResult, reader: SectionReader, chains: Sequence[_Chain], reason: str) -> None:
@@ -1041,9 +861,8 @@ def _mark_unread(result: SectionExpansionResult, reader: SectionReader, chains: 
 __all__ = [
     "DEFAULT_MODEL_INPUT_TOKENS",
     "LIMIT_STOPS",
-    "MAX_SECTION_CHUNKS",
+    "MAX_LEVELS",
     "STOP_SCOPE_READ",
-    "STOP_SECTION_CHUNKS",
     "ROOT_SECTION_ID",
     "SECTION_CONTEXT_ROLE",
     "SECTION_EXPANSION_REASON",

@@ -2779,7 +2779,6 @@ export interface AnsweringSettingsData {
   outline_selection_read_max_chars: number;
   section_expansion_enabled: boolean;
   section_expansion_max_levels: number;
-  section_expansion_input_token_percent: number;
   /** 回答生成の通しの上限（秒。#5280）。画面は 100 / 300 / 600 / 1200 から選ぶ（既定 600）。 */
   answer_timeout_seconds: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */

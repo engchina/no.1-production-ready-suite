@@ -581,10 +581,6 @@ async def update_answering_settings(
             ("rag_section_expansion_enabled", payload.section_expansion_enabled),
             ("rag_section_expansion_max_levels", payload.section_expansion_max_levels),
             (
-                "rag_section_expansion_input_token_percent",
-                payload.section_expansion_input_token_percent,
-            ),
-            (
                 "rag_answer_timeout_seconds",
                 float(payload.answer_timeout_seconds)
                 if payload.answer_timeout_seconds is not None
@@ -633,9 +629,6 @@ async def update_answering_settings(
                     candidate.rag_section_expansion_enabled
                 ),
                 "RAG_SECTION_EXPANSION_MAX_LEVELS": str(candidate.rag_section_expansion_max_levels),
-                "RAG_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
-                    candidate.rag_section_expansion_input_token_percent
-                ),
                 "RAG_RUNTIME_TERMS_SEARCH_ENABLED": _format_env_bool(
                     candidate.rag_runtime_terms_search_enabled
                 ),
@@ -689,7 +682,6 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         outline_selection_read_max_chars=settings.rag_outline_selection_read_max_chars,
         section_expansion_enabled=settings.rag_section_expansion_enabled,
         section_expansion_max_levels=settings.rag_section_expansion_max_levels,
-        section_expansion_input_token_percent=settings.rag_section_expansion_input_token_percent,
         answer_timeout_seconds=round(settings.rag_answer_timeout_seconds),
     )
 

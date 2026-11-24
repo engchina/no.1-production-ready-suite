@@ -86,18 +86,16 @@ def test_capped_candidate_owned_by_a_parent_section_is_not_read():
     assert result.unread == [] and result.omitted == []
 
 
-def test_capped_candidate_over_the_budget_is_omitted_not_unread():
-    """残りの予算に入らない章節は読まず、回答に出さない診断（omitted）にだけ残す。"""
+def test_capped_candidate_over_half_of_the_input_is_omitted_not_unread():
+    """入力の上限の 1/2 を超える章節は読まず、回答に出さない診断（omitted）にだけ残す（#5812）。"""
     stub = SectionStub()
-    # 入力の上限 1,000 token（2,000 の 50%）。起点の章節（2 chunk = 600 token）の後の残りは 400 token。
-    settings = _settings(answer_max_input_tokens=2_000)
+    # 1 章節 600 字 > 1,000 の 1/2。
+    result = _expand(_seed_context("c31a"), _settings(answer_max_input_tokens=1_000), stub, related=("c4a",))
 
-    result = _expand(_seed_context("c31a"), settings, stub, related=("c4a",))
-
-    assert "s4" not in stub.read_calls or not set(_members("s4")) <= set(_child_ids(result.context))
+    assert "s4" not in stub.read_calls
     assert result.unread == []
     assert [(item.section_id, item.reason) for item in result.omitted] == [("s4", sections.STOP_TOKEN_BUDGET)]
-    assert [(item["section_id"], item["read"]) for item in result.trace["related"]] == [("s4", "skipped")]
+    assert [(item["section_id"], item["read"]) for item in result.trace["related"]] == [("s4", "over_limit")]
 
 
 def test_capped_candidate_is_not_read_without_time_for_generation():
@@ -155,7 +153,7 @@ def test_answer_section_phase_reads_sections_of_capped_candidates():
     with bind_dependencies(
         AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
     ):
-        expanded, result = _expand_context_by_sections(QUESTION, context, settings, rerank_enabled=False, started_at=monotonic(), top_k=8)
+        expanded, result = _expand_context_by_sections(QUESTION, context, settings, started_at=monotonic(), top_k=8)
 
     assert stub.read_calls == ["s3-1", "s4"]
     assert set(LEAVES["s4"]) <= set(_child_ids(expanded))

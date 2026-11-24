@@ -52,7 +52,6 @@ RETIRED_QUERY_FIELDS = {
     "entity_expansion_max_chunks": 3,
     "section_expansion_enabled": False,
     "section_expansion_max_levels": 2,
-    "section_expansion_input_token_percent": 40,
     "support_guide_semantic_match_enabled": True,
     "support_guide_close_match_clarification_enabled": True,
     "vector_index_profile": "accurate",

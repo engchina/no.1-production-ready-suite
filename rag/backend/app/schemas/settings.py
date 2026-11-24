@@ -830,7 +830,6 @@ class AnsweringSettingsData(BaseModel):
     outline_selection_read_max_chars: int = 20000
     section_expansion_enabled: bool
     section_expansion_max_levels: int
-    section_expansion_input_token_percent: int
     # 回答生成の通しの上限(秒。#5280)。画面は 150 / 300 / 600 / 1200 から選ぶ(.env は 150〜1200)。
     answer_timeout_seconds: int
     config_source: Literal["runtime"] = "runtime"
@@ -877,8 +876,7 @@ class AnsweringSettingsUpdate(BaseModel):
     outline_selection_catalog_max_chars: int | None = Field(default=None, ge=2000, le=80000)
     outline_selection_read_max_chars: int | None = Field(default=None, ge=2000, le=200000)
     section_expansion_enabled: bool | None = None
-    section_expansion_max_levels: int | None = Field(default=None, ge=1, le=8)
-    section_expansion_input_token_percent: int | None = Field(default=None, ge=10, le=90)
+    section_expansion_max_levels: int | None = Field(default=None, ge=1, le=3)
     # 回答生成の通しの上限(秒。#5280。画面の選択肢 RAG_ANSWER_TIMEOUT_CHOICES と同じ)。
     answer_timeout_seconds: Literal[150, 300, 600, 1200] | None = None
 

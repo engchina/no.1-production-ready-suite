@@ -169,9 +169,7 @@ def _build(stub: Sections, ranked, active, *, expansions=(), section_fill=True, 
 def _expand(stub: Sections, context: AnswerContext) -> AnswerContext:
     dependencies = AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.read)
     with bind_dependencies(dependencies), recorded():
-        expanded, _result = answering._expand_context_by_sections(
-            "合成の質問", context, _settings(), rerank_enabled=False, started_at=0, state={}
-        )
+        expanded, _result = answering._expand_context_by_sections("合成の質問", context, _settings(), started_at=0, state={})
     return expanded
 
 

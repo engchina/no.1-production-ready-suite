@@ -29,7 +29,6 @@ from tests.test_answer_engine import FakeGenAi, FakeOracle, _chunk, _fake_llm
 SECTION_FIELDS = {
     "rag_section_expansion_enabled",
     "rag_section_expansion_max_levels",
-    "rag_section_expansion_input_token_percent",
 }
 
 
@@ -247,7 +246,9 @@ def test_section_expansion_settings_are_global(
 
     assert settings.rag_section_expansion_enabled is False
     assert settings.rag_section_expansion_max_levels == 2
-    assert settings.rag_section_expansion_input_token_percent == 50
+    # 範囲の外の保存値（以前の既定 4）は既定の 1 として読む（#5812）。
+    env_file.write_text("RAG_SECTION_EXPANSION_MAX_LEVELS=4\n", encoding="utf-8")
+    assert Settings(_env_file=env_file).rag_section_expansion_max_levels == 1
 
 
 def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
@@ -256,16 +257,13 @@ def test_build_engine_settings_passes_section_expansion(tmp_path: Any) -> None:
         Settings(
             rag_section_expansion_enabled=False,
             rag_section_expansion_max_levels=2,
-            rag_section_expansion_input_token_percent=30,
             rag_answer_timeout_seconds=300,
         ),
         output_dir=tmp_path,
     )
 
-    assert (default.section_expansion_enabled, default.section_expansion_max_levels) == (True, 4)
-    assert default.section_expansion_input_token_percent == 50
+    assert (default.section_expansion_enabled, default.section_expansion_max_levels) == (True, 1)
     assert (custom.section_expansion_enabled, custom.section_expansion_max_levels) == (False, 2)
-    assert custom.section_expansion_input_token_percent == 30
     # 回答の通しの上限より長くしない。
 
 

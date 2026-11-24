@@ -106,9 +106,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         # 章節の拡張(#1436)。検索方法の全体設定で選ぶ。
         "section_expansion_enabled": resolved_settings.rag_section_expansion_enabled,
         "section_expansion_max_levels": resolved_settings.rag_section_expansion_max_levels,
-        "section_expansion_input_token_percent": (
-            resolved_settings.rag_section_expansion_input_token_percent
-        ),
         # 章節の拡張が次の段を読む前に生成に残す、生成の 1 回の見積もり(#5184。読む段の数が変わる)。
         "answer_generation_round_estimate_seconds": (
             resolved_settings.rag_answer_generation_round_estimate_seconds
