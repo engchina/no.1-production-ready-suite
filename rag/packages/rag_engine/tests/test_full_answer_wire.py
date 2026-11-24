@@ -1,6 +1,5 @@
 """合成の同じ本文を、引用と種別の違いで書き換えない。"""
 
-
 import pytest
 from pydantic import ValidationError
 
