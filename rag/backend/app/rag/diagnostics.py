@@ -114,8 +114,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "answer_generation_max_output_tokens": (
             resolved_settings.rag_answer_generation_max_output_tokens
         ),
-        # 生成に渡す根拠の原文の文字予算(#3776)。
-        "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
         # 分割読取の並行数(#4997)。
         "batch_read_workers": resolved_settings.rag_batch_read_workers,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。

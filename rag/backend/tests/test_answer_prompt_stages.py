@@ -213,9 +213,6 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         # 生成の system は役割の文（Step 4 まで）に固定の部分と未確定の前提を続けて足す（#4782）。
         ("generation", "fixed"): 5,
         ("generation", "assumptionSystem"): 9,
-        # 原文選択（Step 2）の後に、補読または補読先の選択を同じ呼出しで続ける。
-        ("generation", "rules"): 3,
-        ("generation", "documentSystem"): 3,
         # 回答生成の user の入力（既定は Step 6 まで）の後ろに足す作り直しの部品（#4586）。
         ("generation", "sourceOnlyDerivation"): 7,
         ("generation", "headerOnlySource"): 7,
@@ -292,15 +289,20 @@ def test_batch_reading_uses_the_fixed_instruction_not_a_saved_one() -> None:
 
     from app.rag.answer_prompts import prompt_overrides
 
-    config = replace(get_settings(environ={}, dotenv_path=None), evidence_budget_chars=500)
+    base = get_settings(environ={}, dotenv_path=None)
+    providers = {
+        key: replace(value, max_output_tokens=100) for key, value in base.llm_providers.items()
+    }
+    # 根拠の文字予算は入力の上限の 1/2（3000 字。#5813）。
+    config = replace(base, llm_providers=providers, answer_max_input_tokens=6000)
     custom = "## Step 1: 合成の保存済み読取指示\n完全な原質問と全文を読む。"
     inputs = [
         {
             "evidence_id": "E1",
             "source_id": "p1",
             "start": 0,
-            "end": 2000,
-            "text": "合成の原文。" * 400,
+            "end": 6000,
+            "text": "合成の原文。" * 1000,
         }
     ]
     calls = []
@@ -324,4 +326,4 @@ def test_batch_reading_uses_the_fixed_instruction_not_a_saved_one() -> None:
             unusable_output=lambda error: False,
         )
     assert diagnostic["batch_count"] > 1
-    assert sum(value["text"].count("合成の原文。") for value in calls) == 400
+    assert sum(value["text"].count("合成の原文。") for value in calls) == 1000

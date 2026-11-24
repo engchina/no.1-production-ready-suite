@@ -1,30 +1,35 @@
-"""context の parent 数・生成の原文予算を環境変数で変えられる (#1054)。既定値は据え置き。"""
+"""context の parent 数を環境変数で変えられる (#1054)。生成の原文予算は回答のモデルの入力の上限の 1/2 (#5813)。"""
 
 import unittest
 from types import SimpleNamespace
 
-from rag_engine.config import DEFAULT_EVIDENCE_BUDGET_CHARS, DEFAULT_MAX_CONTEXT_RECORDS, get_settings
+from rag_engine.config import DEFAULT_MAX_CONTEXT_RECORDS, get_settings
 from rag_engine.generation import answering
 from rag_engine.generation.answer_records import MAX_CONTEXT_RECORDS
-from rag_engine.retrieval.evidence_selection import EVIDENCE_BUDGET_CHARS
+
+# 既定の回答のモデルの入力の上限（128000 tokens）の 1/2。
+DEFAULT_BUDGET = 64000
 
 
 class RetrievalBudgetSettingsTest(unittest.TestCase):
     def test_defaults_match_the_code_constants(self):
         settings = get_settings(environ={}, dotenv_path=None)
-        self.assertEqual((settings.max_context_records, settings.evidence_budget_chars), (MAX_CONTEXT_RECORDS, EVIDENCE_BUDGET_CHARS))
+        self.assertEqual((settings.max_context_records, settings.evidence_budget_chars), (MAX_CONTEXT_RECORDS, DEFAULT_BUDGET))
+        self.assertEqual(settings.evidence_budget_chars, settings.answer_max_input_tokens // 2)
         # config.py は循環 import を避けて値を写しているので、元の常量とのずれをここで止める
-        self.assertEqual((DEFAULT_MAX_CONTEXT_RECORDS, DEFAULT_EVIDENCE_BUDGET_CHARS), (MAX_CONTEXT_RECORDS, EVIDENCE_BUDGET_CHARS))
+        self.assertEqual(DEFAULT_MAX_CONTEXT_RECORDS, MAX_CONTEXT_RECORDS)
 
     def test_environment_overrides_each_value(self):
         settings = get_settings(
             environ={
                 "RAG_ENGINE_MAX_CONTEXT_RECORDS": "16",
+                "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": "96000",
+                # 削除したキー。残っていても読まない。
                 "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": "72000",
             },
             dotenv_path=None,
         )
-        self.assertEqual((settings.max_context_records, settings.evidence_budget_chars), (16, 72000))
+        self.assertEqual((settings.max_context_records, settings.evidence_budget_chars), (16, 48000))
         self.assertEqual(get_settings(environ={"RAG_ENGINE_MAX_CONTEXT_RECORDS": "0"}, dotenv_path=None).max_context_records, 1)
 
     def test_context_record_limit_falls_back_without_settings(self):
@@ -78,9 +83,9 @@ class EvidenceBudgetTraceTest(unittest.TestCase):
 
     def test_configured_budget_and_sent_chars_are_recorded(self):
         trace = self._trace()
-        self.assertEqual(trace["configured_chars"], EVIDENCE_BUDGET_CHARS)
-        self.assertEqual(trace["effective_chars"], EVIDENCE_BUDGET_CHARS)
-        self.assertEqual(trace["source"], "configured")
+        self.assertEqual(trace["configured_chars"], DEFAULT_BUDGET)
+        self.assertEqual(trace["effective_chars"], DEFAULT_BUDGET)
+        self.assertEqual(trace["source"], "model_input_limit_half")
         self.assertFalse(trace["effective_exceeds_configured"])
         self.assertGreaterEqual(trace["span_count"], 1)
         # 根拠ブロックは本文に出典情報・書式を足したもの。token の見積もりは文字数を超えない。
@@ -92,15 +97,15 @@ class EvidenceBudgetTraceTest(unittest.TestCase):
 
     def test_section_expansion_budget_is_distinguished_from_the_setting(self):
         trace = self._trace(evidence_budget_chars=60000)
-        self.assertEqual((trace["configured_chars"], trace["effective_chars"]), (EVIDENCE_BUDGET_CHARS, EVIDENCE_BUDGET_CHARS))
-        self.assertEqual(trace["source"], "configured")
+        self.assertEqual((trace["configured_chars"], trace["effective_chars"]), (DEFAULT_BUDGET, DEFAULT_BUDGET))
+        self.assertEqual(trace["source"], "model_input_limit_half")
         self.assertEqual(trace["section_read_budget_chars"], 60000)
         self.assertFalse(trace["effective_exceeds_configured"])
 
     def test_configured_value_from_settings_is_used(self):
         from dataclasses import replace
 
-        settings = replace(get_settings(environ={}, dotenv_path=None), evidence_budget_chars=72000)
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_input_tokens=144000)
         trace = answering._evidence_budget_trace(settings, None, [])
         self.assertEqual((trace["configured_chars"], trace["effective_chars"], trace["span_count"]), (72000, 72000, 0))
         self.assertEqual(trace["evidence_block_chars"], 0)

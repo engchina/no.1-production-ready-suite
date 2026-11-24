@@ -9,9 +9,6 @@ from typing import Any
 
 from pr_backend_core.token_estimate import DEFAULT_IMAGE_INPUT_TOKENS, without_image_inputs
 
-# 生成の要求の入力の見積もりの上限（呼び出し側のモデルの上限が小さければそちら。#5808）。
-GENERATION_INPUT_LIMIT = 256_000
-
 
 class GenerationInputLimitError(ValueError):
     """完全な要求の見積もりが上限を超え、送信しなかった。"""
@@ -81,16 +78,16 @@ def reported_input_tokens(usage: object) -> int | None:
 
 @dataclass(frozen=True)
 class CompleteInputMeasurement:
-    """画像以外の JSON 全体、画像、呼び先による計数の差の余白を別々に記録する。"""
+    """画像以外の JSON 全体の文字数、画像、呼び先による計数の差の余白を別々に記録する。"""
 
-    wire_bytes: int
+    wire_chars: int
     media_tokens: int
     margin_tokens: int
     limit_tokens: int
 
     @property
     def estimated_tokens(self) -> int:
-        return self.wire_bytes + self.media_tokens + self.margin_tokens
+        return self.wire_chars + self.media_tokens + self.margin_tokens
 
     @property
     def fits(self) -> bool:
@@ -109,12 +106,14 @@ class CompleteInputMeasurement:
 def complete_input_measurement(
     payload: Mapping[str, Any],
     *,
-    limit_tokens: int = GENERATION_INPUT_LIMIT,
+    limit_tokens: int,
     image_tokens: int = DEFAULT_IMAGE_INPUT_TOKENS,
     external_tokens: int = 0,
 ) -> CompleteInputMeasurement:
-    """最終 JSON の UTF-8 を 1 バイト 1 token と見積もり、入力上限の 1/4 を余白にする。
+    """最終 JSON を 1 文字 1 token と見積もり、入力上限の 1/4 を余白にする。
 
+    上限は呼ぶモデルの登録値（`limit_tokens`）だけを使い、固定の上限は掛けない（#5813）。
+    画像以外の JSON の文字数・画像・参照先の合計が上限の 3/4 以下なら収まる。
     画像は呼ぶモデルの画像 1 枚分を使う。ファイルやサーバーに保存された会話を参照する
     呼び出しは、参照先の入力も `external_tokens` に含める。出力の予約はこの計数に含めない。
     """
@@ -122,14 +121,13 @@ def complete_input_measurement(
         raise ValueError("入力予算の設定が正しくありません。")
     if not external_tokens and _requires_external_budget(payload):
         raise UnmeasuredGenerationInputError("参照先を含めた生成入力の見積もりが必要です。")
-    limit = min(limit_tokens, GENERATION_INPUT_LIMIT)
     stripped = dict(payload)
     count = 0
     for key in ("input", "messages"):
         if key in stripped:
             stripped[key], found = without_image_inputs(stripped[key])
             count += found
-    body = json.dumps(stripped, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+    body = json.dumps(stripped, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     return CompleteInputMeasurement(
-        len(body), count * image_tokens + external_tokens, limit // 4, limit
+        len(body), count * image_tokens + external_tokens, limit_tokens // 4, limit_tokens
     )

@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from budget_settings import with_evidence_budget
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -14,7 +15,7 @@ from rag_engine.generation.batched_evidence import prepare_batched_evidence
 def config():
     base = get_settings(environ={}, dotenv_path=None)
     providers = {key: replace(value, max_output_tokens=100) for key, value in base.llm_providers.items()}
-    return replace(base, llm_providers=providers, evidence_budget_chars=3500)
+    return with_evidence_budget(replace(base, llm_providers=providers), 3500)
 
 
 def block(spans):

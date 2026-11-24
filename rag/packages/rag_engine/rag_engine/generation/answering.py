@@ -1488,7 +1488,7 @@ def _grounded_spans(
 ) -> list[dict[str, Any]]:
     """全出典へ本文予算を配分して原文を選び、機能キーとタグを付ける。
 
-    budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
+    budget は原文の総予算（文字。`Settings.evidence_budget_chars`）。None なら `evidence_spans` の既定値 (#1054)。
     whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
     preserve_records は選択済みの全文を保持する。呼出側が各モデル入力の容量内で分割読取する。
     """
@@ -1736,6 +1736,7 @@ def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None
     from rag_engine.generation.grounded import evidence_block_text, evidence_metadata_text
     from rag_engine.generation.section_expansion import estimate_tokens
 
+    # 予算は回答のモデルの入力の上限の 1/2（#5813）。
     configured = int(getattr(settings, "evidence_budget_chars", 0) or 0) or EVIDENCE_BUDGET_CHARS
     effective = configured
     block = evidence_block_text(spans)
@@ -1744,7 +1745,7 @@ def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None
     return {
         "configured_chars": configured,
         "effective_chars": effective,
-        "source": "configured",
+        "source": "model_input_limit_half",
         "section_read_budget_chars": int(evidence_budget_chars or 0),
         "effective_exceeds_configured": effective > configured,
         "span_count": len(spans),
