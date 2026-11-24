@@ -141,11 +141,20 @@ class FakeOracle:
             ]
         if "r.target_key" in statement:
             keys = {value for key, value in binds.items() if key.startswith("graph_ref_key")}
+            aliases = [value for key, value in binds.items() if key.startswith("graph_ref_alias")]
             return [
-                {"relation": relation, "page_id": source}
+                {
+                    "relation": relation,
+                    "page_id": source,
+                    "target_key": reference_name_key(name),
+                    "document_id": by_id[source].unit.document_id,
+                }
                 for source, name, _, relation in REFERENCES
-                if reference_name_key(name) in keys
-                and source in by_id
+                if source in by_id
+                and (
+                    reference_name_key(name) in keys
+                    or any(str(reference_name_key(name)) in alias for alias in aliases)
+                )
                 and by_id[source].unit.document_id != binds["graph_doc"]
             ]
         if "p.document_id=:graph_target" in statement:

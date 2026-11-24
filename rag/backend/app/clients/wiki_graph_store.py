@@ -298,15 +298,30 @@ class WikiGraphStore:
                     }
                 )
         keys = sorted(names.keys(document_id))
-        if keys:
-            clause, extra = _oracle_in_predicate("r.target_key", "graph_ref_key", keys)
+        aliases = sorted(names.aliases(document_id))
+        if keys or aliases:
+            # 種類の呼び名で書いた参照も拾い、当たる文書は出る向きと同じ照合で決める（#5795）。
+            clauses: list[str] = []
+            extra: dict[str, object] = {}
+            if keys:
+                clause, extra = _oracle_in_predicate("r.target_key", "graph_ref_key", keys)
+                clauses.append(clause)
+            for index, alias in enumerate(aliases):
+                clauses.append(f"INSTR(:graph_ref_alias{index},r.target_key)>0")
+                extra[f"graph_ref_alias{index}"] = alias
             for row in await self.oracle._fetch_all(
                 f"""WITH {cte}
-                SELECT r.relation,v.page_id FROM rag_wiki_references r
+                SELECT r.relation,r.target_key,v.page_id,v.document_id FROM rag_wiki_references r
                 JOIN visible v ON v.page_id=r.page_id
-                WHERE {clause} AND v.document_id<>:graph_doc ORDER BY v.page_id,r.ordinal""",
+                WHERE ({" OR ".join(clauses)}) AND v.document_id<>:graph_doc
+                ORDER BY v.page_id,r.ordinal""",
                 {**binds, **extra, "graph_doc": document_id},
             ):
+                source_document = str(row["document_id"])
+                if document_id not in names.resolve_key(
+                    str(row["target_key"]), exclude=source_document
+                ):
+                    continue
                 items.append(
                     {
                         "direction": "incoming",

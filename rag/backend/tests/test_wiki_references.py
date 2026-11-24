@@ -84,6 +84,35 @@ def test_reference_keys_match_titles_and_file_names_exactly() -> None:
     assert names.resolve("無い文書.txt", exclude="doc-a") == []
 
 
+def test_generic_names_resolve_to_titles_that_contain_them_in_the_scope() -> None:
+    """種類の呼び名・通称は、範囲の文書の題名が含むときだけ当てる（#5795）。"""
+    catalog = [{"document_id": f"doc-{i}", "title": f"t{i}.md"} for i in range(1, 8)]
+    headings = {
+        "doc-1": ["合成ラボ 区分表 1"],
+        "doc-2": ["合成ラボ 区分表 2"],
+        "doc-3": ["合成ラボ 共通規程 第2版"],
+        "doc-4": ["合成ラボ 用語集"],
+        "doc-5": ["合成ラボ 区分表"],
+        "doc-6": ["合成ラボ 手順書 A"],
+        "doc-7": ["合成ラボ 手順書 B"],
+    }
+    names = DocumentNames(catalog, headings)
+    # 完全一致があれば、部分一致の文書は足さない。
+    assert names.resolve("合成ラボ 区分表", exclude="doc-3") == ["doc-5"]
+    # 完全一致が無ければ、題名が名前を含む文書（自分を除く）。
+    assert names.resolve("共通規程", exclude="doc-1") == ["doc-3"]
+    assert names.resolve("区分表 1", exclude="doc-3") == ["doc-1"]
+    assert names.resolve("手順書", exclude="doc-3") == ["doc-6", "doc-7"]
+    # 上限を超える文書に当たる名前は広すぎるので解決しない。
+    assert names.resolve("合成ラボ", exclude="doc-3") == []
+    # 逆引きは同じ照合を比較形で使い、別名を候補の検索に渡す。
+    assert names.resolve_key("共通規程", exclude="doc-1") == ["doc-3"]
+    assert any("共通規程" in alias for alias in names.aliases("doc-3"))
+    # ファイル名の形はファイル名の完全一致だけ（部分一致にしない）。
+    assert names.resolve("t3.md", exclude="doc-1") == ["doc-3"]
+    assert names.resolve("t.md", exclude="doc-1") == []
+
+
 def test_text_references_take_only_other_documents_from_chunk_metadata() -> None:
     targets = [
         {"label": "第3章", "kind": "chapter", "key": "3", "document_title": None},

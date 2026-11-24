@@ -113,7 +113,8 @@ class Store:
         found = []
         for source, target, relation in self.link_rows:
             key = reference_name_key(self._reference(target)[0])
-            if source in self.by_id and key in keys:
+            contained = any(key and key in alias for alias in kwargs.get("contained_in", ()))
+            if source in self.by_id and (key in keys or contained):
                 found.append((source, self.by_id[source].unit.document_id, key, relation))
         return found
 
