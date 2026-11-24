@@ -23,8 +23,8 @@ from app.rag.cross_references import (
     REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     document_name_keys,
+    document_name_rank,
     document_reference_keys,
-    document_reference_rank,
     reference_name_key,
     title_key,
 )
@@ -157,8 +157,13 @@ def backfill_references(connection: Any) -> None:
         connection.commit()
 
 
+# 題名・見出しの部分一致（いちばん弱い当たり方）で当てる文書の上限。
+# 超える名前は広すぎるので解決しない（#5795）。
+GENERIC_NAME_LIMIT = 4
+
+
 class DocumentNames:
-    """範囲の文書の名前の照合（回答の参照の補充と同じ規則。別名・ファイル名の完全一致）。"""
+    """範囲の文書の名前の照合（回答の参照の補充の規則に、題名の部分一致を最後に足す。#5795）。"""
 
     def __init__(self, catalog: Sequence[Mapping[str, Any]], headings: Mapping[str, list[str]]):
         self.files = {str(row["document_id"]): str(row.get("title") or "") for row in catalog}
@@ -170,22 +175,46 @@ class DocumentNames:
 
     def resolve(self, name: str, *, exclude: str) -> list[str]:
         """名前が指す範囲の文書（いちばん確かな当たり方の文書。自分の文書は除く）。"""
+        key = reference_name_key(name)
+        return self.resolve_key(key, exclude=exclude) if key else []
+
+    def resolve_key(self, key: str, *, exclude: str) -> list[str]:
+        """比較形（``reference_name_key``）が指す範囲の文書。
+
+        ファイル名の形はファイル名の完全一致だけ。それ以外は、別名の完全一致 →
+        ファイル名が名前を含む → 題名・見出しの別名が名前を含む（文書の種類の呼び名・通称。
+        ``GENERIC_NAME_LIMIT`` 以下の文書に当たるときだけ）の順で、いちばん確かな当たり方の
+        文書を返す。形式の照合だけで、意味は判定しない。
+        """
+        others = [did for did in self.files if did != exclude]
+        if key.startswith("file:"):
+            return sorted(did for did in others if key in self.keys(did))
         ranks = {
             did: rank
-            for did, file_name in self.files.items()
-            if did != exclude
-            and (rank := document_reference_rank(name, file_name, keys=self.name_keys[did]))
-            is not None
+            for did in others
+            if (rank := document_name_rank(key, self.name_keys[did])) is not None
         }
-        best = min(ranks.values(), default=None)
-        return sorted(did for did, rank in ranks.items() if rank == best)
+        if ranks:
+            best = min(ranks.values())
+            return sorted(did for did, rank in ranks.items() if rank == best)
+        if len(key) < 2:
+            return []
+        hits = sorted(
+            did for did in others if any(key in alias for alias in self.name_keys[did][0])
+        )
+        return hits if len(hits) <= GENERIC_NAME_LIMIT else []
 
     def keys(self, document_id: str) -> frozenset[str]:
-        """この文書を指す参照の比較形（逆引き）。"""
+        """この文書を指す参照の比較形の完全一致の候補（逆引き）。"""
         file_name = self.files.get(document_id)
         if file_name is None:
             return frozenset()
         return document_reference_keys(file_name, self.headings[document_id])
+
+    def aliases(self, document_id: str) -> frozenset[str]:
+        """この文書の題名・見出しの別名（逆引きで、名前を含む別名を探す）。"""
+        keys = self.name_keys.get(document_id)
+        return keys[0] if keys else frozenset()
 
 
 def section_pages(pages: Sequence[Any], section: str) -> list[Any]:

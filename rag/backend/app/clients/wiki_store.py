@@ -995,16 +995,30 @@ class WikiStore:
         ]
 
     async def referencing(
-        self, keys: Sequence[str], scope: WikiScope, *, exclude_document_ids: Sequence[str] = ()
+        self,
+        keys: Sequence[str],
+        scope: WikiScope,
+        *,
+        exclude_document_ids: Sequence[str] = (),
+        contained_in: Sequence[str] = (),
     ) -> list[tuple[str, str, str, str]]:
-        """参照先の名前の比較形が ``keys`` に入る、範囲の中の参照（参照元の単位 ID・文書 ID・
-        比較形・関係）。参照元を逆に引く（#5784）。"""
-        if not keys or not scope.sources:
+        """参照先の名前の比較形が ``keys`` に入るか、``contained_in`` のどれかに含まれる、範囲の中の
+        参照（参照元の単位 ID・文書 ID・比較形・関係）。参照元を逆に引く（#5784・#5795）。
+
+        ``contained_in`` は文書の題名・見出しの別名で、種類の呼び名で書いた参照の候補を拾う。
+        どの文書に当たるかは呼び出し側が ``DocumentNames`` で確かめる。"""
+        if not (keys or contained_in) or not scope.sources:
             return []
         where, binds = _scoped_where(scope)
-        clause, added = _oracle_in_predicate("r.target_key", "wiki_ref_key", list(keys))
-        where += " AND " + clause
-        binds.update(added)
+        clauses = []
+        if keys:
+            clause, added = _oracle_in_predicate("r.target_key", "wiki_ref_key", list(keys))
+            clauses.append(clause)
+            binds.update(added)
+        for index, alias in enumerate(dict.fromkeys(contained_in)):
+            clauses.append(f"INSTR(:wiki_ref_alias{index},r.target_key)>0")
+            binds[f"wiki_ref_alias{index}"] = alias
+        where += " AND (" + " OR ".join(clauses) + ")"
         if exclude_document_ids:
             skip, skipped = _oracle_in_predicate(
                 "p.document_id", "wiki_ref_skip", exclude_document_ids

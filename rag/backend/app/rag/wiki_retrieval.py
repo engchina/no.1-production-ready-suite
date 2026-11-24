@@ -312,17 +312,16 @@ class WikiRetriever:
         first: dict[str, str] = {}
         for uid in frontier:
             first.setdefault(pages[uid].unit.document_id, uid)
-        wanted: dict[str, set[str]] = {}
-        for document_id in first:
-            for name_key in names.keys(document_id):
-                wanted.setdefault(name_key, set()).add(document_id)
+        # 種類の呼び名で書いた参照も拾い、当たる文書は出る向きと同じ照合で決める（#5795）。
+        keys = sorted({key for document_id in first for key in names.keys(document_id)})
+        aliases = sorted({alias for document_id in first for alias in names.aliases(document_id)})
         for source, document_id, name_key, relation in await store.referencing(
-            sorted(wanted), scope
+            keys, scope, contained_in=aliases
         ):
             found.extend(
                 (source, first[target], relation)
-                for target in sorted(wanted.get(name_key, set()))
-                if target != document_id
+                for target in names.resolve_key(name_key, exclude=document_id)
+                if target in first
             )
         return found
 
