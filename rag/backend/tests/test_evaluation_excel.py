@@ -81,6 +81,7 @@ def test_template_has_headers_guide_examples_and_document_sheets() -> None:
         "期待する根拠",
         "標準回答",
         "必須の回答要点",
+        "回答の過程",
     ]
     # 見出しのセルに意味・必須か任意か・書き方を注記する（形式ごとの位置の書き方も短く）。
     assert "必須" in cases["A1"].comment.text
@@ -706,15 +707,16 @@ def test_import_still_returns_cases_when_the_file_cannot_be_stored(
     assert data["source_workbook_id"] is None
 
 
-def test_import_ignores_removed_answer_process_column_like_other_unknown_columns(
+def test_import_ignores_answer_process_column_like_other_unknown_columns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """外した「回答の過程」の列（#5778）は、ほかの読まない列と同じく誤り・警告にせずに無視する。
+    """テンプレートの「回答の過程」の列（#5789）は記録用で、ほかの読まない列と同じく無視する。
 
-    古い Excel の列が上限を超える長さでも、読まない列は検査しない。
+    上限を超える長さでも、読まない列は検査しない（#5778 で取り込みから外した）。
     """
     monkeypatch.setattr(evaluation_route, "OracleClient", _FakeOracle)
-    header: list[object] = [*HEADERS, "回答の過程", "合成の備考"]
+    assert HEADERS[-1] == "回答の過程"
+    header: list[object] = [*HEADERS, "合成の備考"]
     long_process = "合成の手順" * 2_000
     content = _workbook(
         [["合成の質問", "経費精算規程.pdf", "合成の標準回答", "合成の要点", long_process, "x"]],
@@ -902,6 +904,8 @@ def test_template_examples_keep_all_five_case_columns_and_round_trip() -> None:
     )
     assert "100% でも回答の完全性" in guide
     assert "必須の回答要点は参考の網羅率" in guide
+    # 回答の過程は記録用の列として残し、評価には使わないと書く（#5789）。
+    assert "評価・取り込みでは読みません" in cases["E1"].comment.text
     examples = book[EXAMPLES_SHEET_TITLE]
     assert tuple(cell.value for cell in examples[1]) == (*HEADERS[:3], "この例の説明", *HEADERS[3:])
     rows = list(examples.iter_rows(min_row=2, values_only=True))
@@ -950,8 +954,9 @@ def test_template_guide_describes_current_metrics_and_unassessed_results() -> No
         "表示用に丸める前",
     ]:
         assert phrase in text
-    # 外した「回答の過程」の列（#5778）はテンプレートの説明にも書かない。
-    assert "回答の過程" not in text
+    # 「回答の過程」は記録用の列として説明し、下書き・評価に使う説明は戻さない（#5778・#5789）。
+    assert "担当者の記録用" in text
+    assert "下書き" not in text
     assert "約 2 倍" not in text
     assert "閾値 90%" not in text
     assert "正確性を意味に基づいて採点" in book[CASES_SHEET_TITLE]["C1"].comment.text

@@ -58,11 +58,14 @@ QUESTION_HEADER = "質問"
 EVIDENCE_HEADER = "期待する根拠"
 STANDARD_ANSWER_HEADER = "標準回答"
 SCREENS_HEADER = "必須の回答要点"
+# 担当者の記録用の列（#5789）。テンプレートには置くが、取り込みでは読まない。
+PROCESS_HEADER = "回答の過程"
 HEADERS = (
     QUESTION_HEADER,
     EVIDENCE_HEADER,
     STANDARD_ANSWER_HEADER,
     SCREENS_HEADER,
+    PROCESS_HEADER,
 )
 TEMPLATE_FILE_NAME = "evaluation_request_template.xlsx"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -899,8 +902,12 @@ _HEADER_NOTES = {
         "任意。回答で説明すべき必須要点を 1 行に 1 つ書きます。"
         "標準回答がある行の参考の網羅率に使い、正確性の採点や合否には使いません。"
     ),
+    PROCESS_HEADER: (
+        "任意。回答の過程（回答の手順・確認事項・検索する資料と頁など）を書きます。"
+        "担当者の記録用で、評価・取り込みでは読みません。"
+    ),
 }
-_COLUMN_WIDTHS = (48, 56, 64, 48)
+_COLUMN_WIDTHS = (48, 56, 64, 48, 64)
 _GUIDE_HEADINGS = frozenset(
     {
         "指標と必要な入力",
@@ -946,6 +953,12 @@ _GUIDE_ROWS: tuple[tuple[str, ...], ...] = (
         "任意",
         "回答で説明すべき必須要点を 1 行に 1 つ書きます。条件・例外・手順も含められます。",
         "意味上の正確性の比較に使います。",
+    ),
+    (
+        PROCESS_HEADER,
+        "任意",
+        "担当者が書いた回答の過程（回答の手順・必要な確認事項・検索する資料と頁・検索の語・補足）。",
+        "担当者の記録用です。評価・取り込みでは読まず、長さも検査しません。",
     ),
     (),
     ("指標と必要な入力",),
@@ -1102,8 +1115,10 @@ _EXAMPLE_ROWS: tuple[tuple[str, ...], ...] = (
         "通知が表示されないときはどうすればよいですか？",
         "操作手順.docx | p.8",
         "",
-        "必須要点を指定する例。",
+        "必須要点と回答の過程を書く例。回答の過程は記録用で、評価には使いません。",
         "設定画面を開く\n通知を有効にする",
+        "【回答の手順】\n1. 設定画面を開く\n2. 通知を有効にする\n"
+        "【検索する資料】\n操作手順.docx p.8",
     ),
     (
         "操作対象を指定せずに変更を依頼した場合はどうしますか？",
