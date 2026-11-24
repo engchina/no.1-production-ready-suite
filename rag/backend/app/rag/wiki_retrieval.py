@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from app.clients.ai_calls import rag_error_kind
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, _filter_id_values
+from app.clients.wiki_reference_index import DocumentNames, section_pages
 from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings
 from app.rag.span_display import ANSWER_STEP_KIND
@@ -150,6 +151,11 @@ def _relations(
     return result
 
 
+# 別の文書への参照から辿る単位の数（参照先の文書ごと）と、その中から章節を探す候補の数（#5784）。
+_REFERENCE_UNITS = 3
+_REFERENCE_CANDIDATES = 20
+
+
 @dataclass(frozen=True)
 class _WikiRoots:
     pages: dict[str, WikiPage]
@@ -203,9 +209,18 @@ class WikiRetriever:
         return chunks
 
     async def follow(
-        self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
+        self,
+        scope: WikiScope,
+        pages: dict[str, WikiPage],
+        selected: Sequence[str],
+        vector: Sequence[float] | None = None,
     ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]], dict[str, str]]:
-        """選んだ単位から、同じ文書の依存と文書をまたぐ関連を起点から出る向きに辿る（#5492）。
+        """選んだ単位から、同じ文書の依存と、別の文書への参照（両方の向き）を辿る（#5492・#5784）。
+
+        別の文書への参照は、文書の内容に書かれた参照（``rag_wiki_references``）を、今の範囲の文書の
+        名前と照合して決める（範囲に無い文書への参照は辿らない）。出る向きは単位が名前を挙げた
+        文書の単位、入る向きはその単位の文書を名前で参照するほかの文書の単位。参照先の単位は、
+        章節の表記に当たる単位、無ければ質問に近い単位（``vector``）を ``_REFERENCE_UNITS`` 件まで。
 
         ``RAG_WIKI_LINK_DEPTH`` 段まで、段ごとに関係の種類の順（例外・前提を先）で、まだ読んでいない
         単位を ``RAG_WIKI_LINK_MAX_UNITS`` まで足す。一度見た単位は辿り直さない（循環を止める）。
@@ -213,8 +228,8 @@ class WikiRetriever:
         モデルは呼ばない。
         返す値は（足した単位 ID・段ごとの数・読めなかった単位の数・辿りで見た関係・
         足した単位の由来）。関係は（起点, 終点, 関係の種類）で、終点が起点に対してその役割を持つ
-        （#5500）。由来は足した単位 ID ごとの ``dependency``（案内の依存）か ``link``（文書を
-        またぐ関連）で、段ごとの数と同じ値（#5518）。``pages`` に読んだ案内を足す。
+        （#5500）。由来は足した単位 ID ごとの ``dependency``（案内の依存）か ``link``（別の文書
+        への参照）で、段ごとの数と同じ値（#5518）。``pages`` に読んだ案内を足す。
         """
         opts, store = self.settings, self.store
         budget = opts.rag_wiki_link_max_units
@@ -225,6 +240,7 @@ class WikiRetriever:
         hops: list[dict[str, int]] = []
         missing = 0
         edges: set[tuple[str, str, str]] = set()
+        names: DocumentNames | None = None
         for depth in range(1, opts.rag_wiki_link_depth + 1):
             if not frontier or len(added) >= budget:
                 break
@@ -238,9 +254,12 @@ class WikiRetriever:
                 for uid in frontier
                 for dependency in pages[uid].navigation.dependencies
             )
-            for source, target, relation in await store.links(frontier, scope):
+            names = names or DocumentNames(scope.catalog, await store.document_headings(scope))
+            for source, target, relation in await self._references(
+                scope, pages, frontier, names, vector
+            ):
                 edges.add((source, target, relation))
-                offers.append((target, relation, "link"))
+                offers.append((source if target in frontier else target, relation, "link"))
             found: dict[str, tuple[int, str]] = {}
             for uid, relation, kind in offers:
                 rank = priority.get(relation, len(priority))
@@ -267,6 +286,65 @@ class WikiRetriever:
                 }
             )
         return added, hops, missing, edges, origins
+
+    async def _references(
+        self,
+        scope: WikiScope,
+        pages: dict[str, WikiPage],
+        frontier: Sequence[str],
+        names: DocumentNames,
+        vector: Sequence[float] | None,
+    ) -> list[tuple[str, str, str]]:
+        """起点の単位の、別の文書への参照の関係（起点, 終点, 関係）。両方の向き。"""
+        store = self.store
+        found: list[tuple[str, str, str]] = []
+        units: dict[tuple[str, str], list[str]] = {}
+        for source, name, section, relation in await store.references(frontier, scope):
+            own = pages[source].unit.document_id
+            for document_id in names.resolve(name, exclude=own):
+                key = (document_id, section)
+                if key not in units:
+                    units[key] = await self._reference_units(
+                        scope, pages, document_id, section, vector
+                    )
+                found.extend((source, target, relation) for target in units[key])
+        # 入る向き: 起点の文書を名前で参照する、範囲の中のほかの文書の単位（#5784）。
+        first: dict[str, str] = {}
+        for uid in frontier:
+            first.setdefault(pages[uid].unit.document_id, uid)
+        wanted: dict[str, set[str]] = {}
+        for document_id in first:
+            for name_key in names.keys(document_id):
+                wanted.setdefault(name_key, set()).add(document_id)
+        for source, document_id, name_key, relation in await store.referencing(
+            sorted(wanted), scope
+        ):
+            found.extend(
+                (source, first[target], relation)
+                for target in sorted(wanted.get(name_key, set()))
+                if target != document_id
+            )
+        return found
+
+    async def _reference_units(
+        self,
+        scope: WikiScope,
+        pages: dict[str, WikiPage],
+        document_id: str,
+        section: str,
+        vector: Sequence[float] | None,
+    ) -> list[str]:
+        """参照先の文書の、辿る単位（章節の表記に当たる単位、無ければ質問に近い単位）。"""
+        # ponytail: 質問に近い上位 _REFERENCE_CANDIDATES 件の中で章節を探す。上位に無い章節は
+        # 文書の先頭側の単位で代える。章節の索引で引く形は要るときに足す。
+        candidates = await self.store.pages(
+            scope,
+            document_ids=[document_id],
+            query_vector=vector,
+            limit=_REFERENCE_CANDIDATES if vector is not None else None,
+        )
+        pages.update((page.unit.unit_id, page) for page in candidates)
+        return [page.unit.unit_id for page in section_pages(candidates, section)[:_REFERENCE_UNITS]]
 
     async def search(
         self,
@@ -337,7 +415,9 @@ class WikiRetriever:
         selected = list(dict.fromkeys(selected))
         # 案内の依存（同じ文書）と文書をまたぐ関連（出る向き）を、予算の内で段ごとに辿る（#5492）。
         with _stage("Wiki: 依存と関連の辿り", seconds):
-            followed, hops, missing, edges, origins = await self.follow(wiki, pages, selected)
+            followed, hops, missing, edges, origins = await self.follow(
+                wiki, pages, selected, vector
+            )
         with _stage("Wiki: 原文の読み込み", seconds):
             required = [pages[uid] for uid in [*selected, *followed]]
             originals = await self.current_sources(profile_id, scope, required)

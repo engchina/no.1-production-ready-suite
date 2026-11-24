@@ -14,10 +14,9 @@ from app.clients.wiki_graph_store import WikiGraphStore, section_id
 from app.clients.wiki_store import WikiSnapshot, WikiStore
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, fingerprint
 from tests.test_document_summary_oracle import _EMBEDDING, _indexed_document
+from tests.test_wiki_store_oracle import annotate_references
 
 pytestmark = pytest.mark.usefixtures("oracle_db")
-
-LINKS = fingerprint("graph-links-1")
 
 
 async def _publish(
@@ -69,25 +68,12 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     assert (await graph.overview(kb.id))["status"] == "empty"
     await store.set_enabled(kb.id, True)
     await store.set_enabled(other.id, True)
-    source_a, pages_a = await _publish(store, a, "合成の案内 syntheticgraphalpha。", chain=True)
+    # a → b と、範囲の外の文書 c への参照（取込の参照。#5784）。
+    await annotate_references(oracle, a, [f"summary-{token}b.pdf", f"summary-{token}c.pdf"])
+    _, pages_a = await _publish(store, a, "合成の案内 syntheticgraphalpha。", chain=True)
     _, pages_b = await _publish(store, b, "合成の案内 syntheticgraphbeta。")
     _, pages_c = await _publish(store, c, "合成の案内 syntheticgraphgamma。")
     first_a, first_b, first_c = (pages[0].unit.unit_id for pages in (pages_a, pages_b, pages_c))
-    # a → b（b は a の例外）と、範囲の外への a → c。
-    claimed = await store.claim_links(a, source_a.source_fingerprint, LINKS, lease_seconds=300)
-    assert claimed is not None
-    await store.save_links(
-        a,
-        claimed[0],
-        sources=[first_a],
-        candidates=[first_b, first_c],
-        links=[
-            (first_a, first_b, "exception", "合成の理由"),
-            (first_a, first_c, "reference", "合成の理由"),
-        ],
-        done=[f"forward:{first_a}"],
-    )
-    await store.finish_links(a, claimed[0])
 
     # 既存の公開版の状態を再現し、移行を繰り返しても同じ章節と依存が読めることを確かめる。
     await oracle._run_transaction(
@@ -121,12 +107,19 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     assert [chunk["chunk_id"] for chunk in detail["source_chunks"]] == (
         pages_a[0].unit.source_chunk_ids
     )
+    relations = (await graph.relations(kb.id, first_a, 0, 25))["items"]
     assert {
-        (r["direction"], r["scope"], r["unit"]["id"])
-        for r in (await graph.relations(kb.id, first_a, 0, 25))["items"]
+        (r["direction"], r["scope"], r["unit"]["id"] if r["unit"] else None) for r in relations
     } == {
         ("outgoing", "same_document", pages_a[1].unit.unit_id),
+        # 参照先が範囲にある文書は開ける単位（文書の最初の単位）、範囲の外の文書は表記だけ。
         ("outgoing", "cross_document", first_b),
+        ("outgoing", "cross_document", None),
+    }
+    # 参照される側（文書 b）からは、入る向きの参照として見える。
+    assert ("incoming", "cross_document", first_a) in {
+        (r["direction"], r["scope"], r["unit"]["id"] if r["unit"] else None)
+        for r in (await graph.relations(kb.id, first_b, 0, 25))["items"]
     }
     found = await graph.search(kb.id, "SyntheticGraphBeta", offset=0, limit=25)
     assert found["total"] == len(pages_b) and {i["document_id"] for i in found["items"]} == {b}

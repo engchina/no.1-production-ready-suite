@@ -34,15 +34,7 @@ from app.rag.request_context import (
 )
 from app.rag.wiki_compiler import WIKI_CONTEXT_PROMPT
 from app.rag.wiki_diagnostics import failure_fields
-from app.rag.wiki_links import (
-    WIKI_LINK_PROMPT,
-    WikiLinkDecision,
-    WikiLinkItem,
-    judge_links,
-    link_query_text,
-)
 from app.rag.wiki_models import WIKI_SCHEMA_VERSION, WikiPage, fingerprint
-from app.rag.wiki_navigation import interleave
 from app.rag.wiki_paragraphs import SentenceTooLarge
 from app.rag.wiki_prepare import WikiRequestBuilder
 from app.rag.wiki_source_inputs import source_inputs
@@ -100,7 +92,7 @@ async def current_actor(user_uuid: str | None, settings: Settings) -> AuditReque
 
 @asynccontextmanager
 async def keep_lease(
-    store: Any, document_id: str, token: str, *, lease_seconds: int, links: bool = False
+    store: Any, document_id: str, token: str, *, lease_seconds: int
 ) -> AsyncIterator[None]:
     """構築の間、lease を ``lease_seconds`` の 1/3 ごとに延ばす（#5748）。
 
@@ -112,9 +104,7 @@ async def keep_lease(
         while True:
             await asyncio.sleep(max(1.0, lease_seconds / 3))
             try:
-                if not await store.renew_lease(
-                    document_id, token, lease_seconds=lease_seconds, links=links
-                ):
+                if not await store.renew_lease(document_id, token, lease_seconds=lease_seconds):
                     return
             except Exception as error:
                 logger.warning(
@@ -130,11 +120,9 @@ async def keep_lease(
             await task
 
 
-async def remaining_seconds(
-    store: Any, document_id: str, settings: Settings, *, links: bool = False
-) -> float:
+async def remaining_seconds(store: Any, document_id: str, settings: Settings) -> float:
     """実際に構築を始めてからの上限（``RAG_WIKI_BUILD_TIMEOUT_SECONDS``）の残りの秒数（#5748）。"""
-    elapsed = float(await store.build_elapsed_seconds(document_id, links=links))
+    elapsed = float(await store.build_elapsed_seconds(document_id))
     return settings.rag_wiki_build_timeout_seconds - elapsed
 
 
@@ -167,8 +155,6 @@ class WikiJobs:
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.reconciliations: set[asyncio.Task[None]] = set()
         self.capacity: asyncio.Semaphore | None = None
-        # 文書をまたぐ関連の構築の枠（#5751）。案内の枠と分け、関連が長くても案内を待たせない。
-        self.link_capacity: asyncio.Semaphore | None = None
 
     def notify(self, kb_id: str | None = None) -> None:
         task = asyncio.create_task(self.reconcile(kb_id))
@@ -204,16 +190,6 @@ class WikiJobs:
         if self.capacity is None:
             self.capacity = asyncio.Semaphore(settings.rag_wiki_build_workers)
         return self.capacity
-
-    def _link_model(self, settings: Settings) -> Any:
-        if model_id := settings.rag_wiki_link_model_id.strip():
-            return OciEnterpriseAiClient(settings=settings, model_id=model_id)
-        return self.model_factory(settings)
-
-    def _link_capacity(self, settings: Settings) -> asyncio.Semaphore:
-        if self.link_capacity is None:
-            self.link_capacity = asyncio.Semaphore(settings.rag_wiki_link_workers)
-        return self.link_capacity
 
     async def retry_document_pages(self, kb_id: str, document_id: str) -> None:
         """操作した利用者と既存の構築担当の両方から見える一文書の案内を再試行する。"""
@@ -267,20 +243,6 @@ class WikiJobs:
         # 先行する照合が FAILED を見て終了する途中でも、今回受理した再試行を失わない。
         self._schedule(document_id, run, after_running=True)
 
-    async def retry_document_links(self, kb_id: str, document_id: str) -> None:
-        store = self.store_factory()
-        owners = dict(await store.enabled_knowledge_bases())
-        if kb_id not in owners or not await store.retry_document_links(kb_id, document_id):
-            raise ValueError("再試行できる文書間リンクの構築がありません。")
-        owner = owners[kb_id]
-
-        async def run() -> None:
-            settings = get_settings()
-            async with self._link_capacity(settings):
-                await self._build_links(document_id, owner, settings)
-
-        self._schedule(document_id, run, after_running=True)
-
     async def reconcile(self, kb_id: str | None = None) -> None:
         if self.default_store and not get_settings().oracle_dsn.strip():
             return
@@ -315,17 +277,10 @@ class WikiJobs:
             logger.warning("wiki_reconcile_failed", extra={"error_type": type(error).__name__})
 
     async def build(self, document_id: str, owner: str | None) -> None:
-        """文書の案内を作り、公開できていれば文書をまたぐ関連を作る（関連の失敗は案内を止めない）。"""
+        """文書の案内を作る。別の文書への参照は案内と同じ処理で取る（文書ごとの 1 段。#5784）。"""
         settings = get_settings()
         async with self._worker_capacity(settings):
-            ready = await self._build_pages(document_id, owner, settings)
-        if not ready:
-            return
-        # 案内の枠は手放してから関連の枠を取る（#5751）。関連が長くても、ほかの文書の案内を
-        # 待たせない。
-        settings = get_settings()
-        async with self._link_capacity(settings):
-            await self._build_links(document_id, owner, settings)
+            await self._build_pages(document_id, owner, settings)
 
     async def _build_pages(self, document_id: str, owner: str | None, settings: Settings) -> bool:
         """文書の案内を作る。今の原文で公開済み（``READY``）なら True。"""
@@ -496,239 +451,6 @@ class WikiJobs:
                 reset_audit_request_context(context_token)
         return False
 
-    async def _build_links(self, document_id: str, owner: str | None, settings: Settings) -> None:
-        """文書をまたぐ関連を作る（#5492）。状態・lease・checkpoint は案内と別に持つ。
-
-        この文書から出る関連と、この文書の案内が候補に入るほかの文書の単位からこの文書への関連だけを
-        作り、KB 全体は作り直さない。失敗しても文書の案内は ``READY`` のまま使える。
-        """
-        if settings.rag_wiki_link_candidates <= 0:
-            return
-        store = self.store_factory()
-        token, context_token = None, None
-        phase = "prepare_links"
-        source = None
-        try:
-            context_token = set_audit_request_context(await self.actor(owner, settings))
-            state = await store.document_state(document_id)
-            if not state or state["status"] != "READY":
-                return
-            source = str(state["source_fingerprint"])
-            knowledge_bases = await store.link_knowledge_bases(document_id)
-            if not knowledge_bases:
-                return
-            links = fingerprint(sorted(knowledge_bases))
-            current = await store.link_state(document_id)
-            if (
-                current
-                and current["source_fingerprint"] == source
-                and current["link_fingerprint"] == links
-                and (
-                    current["status"] == "READY"
-                    or (current["status"] == "RUNNING" and current["leased"])
-                    # 失敗は再試行の API（`requeue_failed`）が待機へ戻すまで作り直さない。
-                    or (
-                        current["status"] == "FAILED"
-                        and current.get("failure_code") != "interrupted"
-                    )
-                )
-            ):
-                return
-            prompt = (await store.prompt_overrides()).get("wiki_links", WIKI_LINK_PROMPT)
-            claimed = await store.claim_links(
-                document_id,
-                source,
-                links,
-                prompt_version=fingerprint(prompt) if prompt != WIKI_LINK_PROMPT else None,
-                lease_seconds=settings.rag_wiki_lease_seconds,
-            )
-            if claimed is None:
-                return
-            lease, done = claimed
-            token = lease
-            remaining = await remaining_seconds(store, document_id, settings, links=True)
-            if remaining <= 0:
-                raise TimeoutError
-
-            async def authorize() -> None:
-                nonlocal phase
-                prior = phase
-                phase = "authorize"
-                latest = get_settings()
-                set_audit_request_context(await self.actor(owner, latest))
-                now = await store.document_state(document_id)
-                if (
-                    not now
-                    or now["status"] != "READY"
-                    or now["source_fingerprint"] != source
-                    or await store.link_knowledge_bases(document_id) != knowledge_bases
-                ):
-                    raise PermissionError("Wiki の案内・所属が変更されました。")
-                phase = prior
-
-            async def checkpoint(
-                batch: Sequence[WikiLinkItem],
-                candidates: Sequence[str],
-                decisions: Sequence[WikiLinkDecision],
-            ) -> None:
-                nonlocal phase
-                await authorize()
-                phase = "save_links"
-                await store.save_links(
-                    document_id,
-                    lease,
-                    sources=[item.source.unit.unit_id for item in batch],
-                    candidates=candidates,
-                    links=[
-                        (d.source_unit_id, d.target_unit_id, d.relation, d.reason)
-                        for d in decisions
-                    ],
-                    done=[item.key for item in batch],
-                )
-                phase = "generate_links"
-
-            async with (
-                keep_lease(
-                    store,
-                    document_id,
-                    lease,
-                    lease_seconds=settings.rag_wiki_lease_seconds,
-                    links=True,
-                ),
-                asyncio.timeout(remaining),
-            ):
-                phase = "load_link_candidates"
-                forward, reverse, names = await self._link_items(
-                    store, document_id, knowledge_bases, settings
-                )
-                skip = set(done)
-                planned = {item.key for group in (forward, reverse) for item in group}
-                await store.link_plan(document_id, lease, len(planned), len(planned & skip))
-                phase = "generate_links"
-                caller = make_ai_caller(settings, "wiki_build")
-                # 前向き（この文書 → ほか）と逆向き（ほか → この文書）は起点と候補が入れ替わるので、
-                # 同じ判定に混ぜない。
-                for group in (forward, reverse):
-                    await judge_links(
-                        [item for item in group if item.key not in skip],
-                        model=WikiDefaultTextModel(self._link_model),
-                        system_prompt=prompt,
-                        batch_size=settings.rag_wiki_link_batch_units,
-                        original_chars=settings.rag_wiki_link_source_chars,
-                        max_input_chars=settings.rag_wiki_build_input_chars,
-                        document_names=names,
-                        authorize=authorize,
-                        checkpoint=checkpoint,
-                        caller=caller,
-                        current_measure=lambda: getattr(
-                            self._link_model(get_settings()), "measure_text_input", None
-                        ),
-                    )
-                await authorize()
-                phase = "publish_links"
-                await store.finish_links(document_id, lease)
-        except asyncio.CancelledError:
-            if token:
-                with suppress(Exception):
-                    await store.finish_links(document_id, token, failure_code="interrupted")
-            raise
-        except Exception as error:
-            if token:
-                with suppress(Exception):
-                    await store.finish_links(
-                        document_id,
-                        token,
-                        failure_code="timeout"
-                        if isinstance(error, TimeoutError)
-                        else "authorization_changed"
-                        if isinstance(error, PermissionError)
-                        else "build_failed",
-                        failure_phase=phase,
-                    )
-            logger.warning(
-                "wiki_link_failed",
-                extra=failure_fields(error, document_id, phase, source),
-            )
-        finally:
-            if context_token is not None:
-                reset_audit_request_context(context_token)
-
-    async def _link_items(
-        self, store: Any, document_id: str, knowledge_bases: Sequence[str], settings: Settings
-    ) -> tuple[list[WikiLinkItem], list[WikiLinkItem], dict[str, str]]:
-        """前向きと逆向きの候補の組と、範囲の目録の文書名（文書 ID → 名前）を DB だけで作る。
-
-        モデルは呼ばない。起点の単位ごとに、属する KB ごとのほかの文書の案内をベクトル・全文で探し、
-        上位を候補にする。逆向きは、候補になったほかの文書の単位を起点に、その単位を見つけたこの
-        文書の単位を候補にする。文書名は関連の理由の見出しに使う（#5514）。
-        """
-        limit = settings.rag_wiki_link_candidates
-        own_scope = await store.resolve(
-            {
-                "knowledge_base_id": ",".join(knowledge_bases),
-                "document_id": document_id,
-                "include_superseded": "true",
-            },
-        )
-        own = await store.pages(own_scope)
-        own = [page for page in own if link_query_text(page)]
-        # KB ごとの範囲は 1 回だけ決め、起点の単位ごとの候補の検索で使い回す（#5499）。
-        scopes = [
-            await store.resolve({"knowledge_base_id": kb, "include_superseded": "true"})
-            for kb in (knowledge_bases if own else ())
-        ]
-        names = {
-            str(row["document_id"]): str(row.get("title") or "")
-            for scope in (own_scope, *scopes)
-            for row in scope.catalog
-        }
-        texts = [link_query_text(page) for page in own]
-        embedder = self.embedder_factory(settings)
-        vectors: list[Sequence[float]] = []
-        step = settings.rag_wiki_build_batch_units
-        for offset in range(0, len(texts), step):
-            vectors.extend(
-                await embedder.embed(texts[offset : offset + step], input_type="SEARCH_QUERY")
-            )
-        forward: list[WikiLinkItem] = []
-        found_by: dict[str, tuple[WikiPage, list[tuple[int, WikiPage]]]] = {}
-        for page, text, vector in zip(own, texts, vectors, strict=True):
-            groups: list[list[WikiPage]] = []
-            for scope in scopes:
-                near, ranking = await asyncio.gather(
-                    store.pages(
-                        scope,
-                        query_vector=vector,
-                        limit=limit,
-                        exclude_document_ids=[document_id],
-                    ),
-                    store.text_rankings(
-                        text, scope, limit=limit, exclude_document_ids=[document_id]
-                    ),
-                )
-                texts_found = await store.pages(scope, unit_ids=[uid for _, uid in ranking])
-                by_id = {found.unit.unit_id: found for found in texts_found}
-                groups.extend([near, [by_id[uid] for _, uid in ranking if uid in by_id]])
-            candidates = [
-                found
-                for found in interleave(groups, limit)
-                if found.unit.document_id != document_id
-            ]
-            if not candidates:
-                continue
-            forward.append(WikiLinkItem(f"forward:{page.unit.unit_id}", page, tuple(candidates)))
-            for rank, found in enumerate(candidates):
-                found_by.setdefault(found.unit.unit_id, (found, []))[1].append((rank, page))
-        reverse = [
-            WikiLinkItem(
-                f"reverse:{uid}",
-                found,
-                tuple(page for _, page in sorted(sources, key=lambda entry: entry[0])[:limit]),
-            )
-            for uid, (found, sources) in found_by.items()
-        ]
-        return forward, reverse, names
-
     async def run_forever(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             await self.reconcile()
@@ -743,7 +465,6 @@ class WikiJobs:
         self.tasks.clear()
         self.reconciliations.clear()
         self.capacity = None
-        self.link_capacity = None
 
 
 wiki_jobs = WikiJobs()

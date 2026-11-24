@@ -42,17 +42,6 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Any:
         def __init__(self, oracle: Any) -> None:
             pass
 
-        async def link_progress(self, filters: Any) -> Any:
-            return [
-                {
-                    "document_id": "doc-a",
-                    "link_status": "RUNNING",
-                    "judged_count": 2,
-                    "planned_count": 4,
-                    "link_count": 0,
-                }
-            ]
-
         async def status_counts(self, filters: Any) -> Any:
             assert filters == {"knowledge_base_id": "kb-a"}
             return {data["status"]: 1}

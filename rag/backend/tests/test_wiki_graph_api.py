@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from app.api.routes import wiki_graph as routes
 from app.clients.wiki_graph_store import WikiGraphStore, graph_scope, section_id
 from app.clients.wiki_store import WIKI_PUBLISHED_SQL
+from app.rag.cross_references import reference_name_key
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
 
 KB = "kb-a"
@@ -70,10 +71,12 @@ PAGES = {
 }
 VISIBLE = {"a1", "a2", "a3", "a4", "b1"}
 DOC_NAMES = {"doc-a": "synthetic-a.pdf", "doc-b": "synthetic-b.pdf", "doc-c": "synthetic-c.pdf"}
-# a1 → b1（b1 は a1 の例外）、b1 → a3（a3 は b1 の前提）、a2 → c1（c1 は範囲の外）。
-LINKS = [
-    (U["a1"], U["b1"], "doc-a", "doc-b", "exception", "合成の理由"),
-    (U["b1"], U["a3"], "doc-b", "doc-a", "prerequisite", ""),
+# 別の文書への参照（#5784。文書名と章節の表記）。a1 → 文書 B の「付録」（例外）、b1 → 文書 A の
+# 「第 1 章」（前提）、a2 → 範囲の外の文書 C（参照先が決まらない）。
+REFERENCES = [
+    (U["a1"], "synthetic-b.pdf", "付録", "exception"),
+    (U["b1"], "synthetic-a.pdf", "第 1 章", "prerequisite"),
+    (U["a2"], "synthetic-c.pdf", "", "reference"),
 ]
 
 
@@ -104,36 +107,67 @@ class FakeOracle:
                 {"document_id": did, "file_name": DOC_NAMES[did]}
                 for did in documents[start : start + binds["graph_limit"]]
             ]
-        if "neighbors AS" in statement:
+        by_id = {page.unit.unit_id: page for _, page in pages}
+        if "selected_page AS" in statement:
             uid = binds["graph_unit"]
-            by_id = {page.unit.unit_id: page for _, page in pages}
-            edges: list[tuple[str, str, str, str, str | None]] = [
-                (page.unit.unit_id, dep.unit_id, dep.relation, "same_document", None)
-                for page in by_id.values()
-                for dep in page.navigation.dependencies
-            ]
-            edges += [
-                (src, dst, rel, "cross_document", reason) for src, dst, _, _, rel, reason in LINKS
-            ]
             result = []
-            for src, dst, rel, scope, reason in edges:
-                if uid not in (src, dst) or src == dst or src not in by_id or dst not in by_id:
-                    continue
-                unit = by_id[dst if src == uid else src].unit
-                result.append(
-                    {
-                        "direction": "outgoing" if src == uid else "incoming",
-                        "scope": scope,
-                        "relation": rel,
-                        "reason": reason,
-                        "unit_id": unit.unit_id,
-                        "document_id": unit.document_id,
-                        "file_name": DOC_NAMES[unit.document_id],
-                        "title": unit.title,
-                        "section_path": json.dumps(unit.section_path),
-                    }
-                )
-            return result[binds["graph_offset"] :][: binds["graph_limit"]]
+            for page in by_id.values():
+                for dep in page.navigation.dependencies:
+                    src, dst = page.unit.unit_id, dep.unit_id
+                    if uid not in (src, dst) or src == dst or dst not in by_id:
+                        continue
+                    result.append(
+                        {
+                            "direction": "outgoing" if src == uid else "incoming",
+                            "relation": dep.relation,
+                            "page_id": dst if src == uid else src,
+                        }
+                    )
+            return result
+        if "SELECT DISTINCT p.document_id,d.file_name" in statement:
+            return [
+                {
+                    "document_id": page.unit.document_id,
+                    "file_name": DOC_NAMES[page.unit.document_id],
+                    "heading": None,
+                }
+                for page in by_id.values()
+            ]
+        if "u.unit_id=:graph_unit" in statement:
+            return [
+                {"target_name": name, "target_section": section, "relation": relation}
+                for source, name, section, relation in REFERENCES
+                if source == binds["graph_unit"] and source in by_id
+            ]
+        if "r.target_key" in statement:
+            keys = {value for key, value in binds.items() if key.startswith("graph_ref_key")}
+            return [
+                {"relation": relation, "page_id": source}
+                for source, name, _, relation in REFERENCES
+                if reference_name_key(name) in keys
+                and source in by_id
+                and by_id[source].unit.document_id != binds["graph_doc"]
+            ]
+        if "p.document_id=:graph_target" in statement:
+            return [
+                {"page_id": page.unit.unit_id, "path": json.dumps(page.unit.section_path)}
+                for page in by_id.values()
+                if page.unit.document_id == binds["graph_target"]
+            ]
+        if "p.page_id IN" in statement or "graph_pages" in "".join(binds):
+            wanted = {value for key, value in binds.items() if key.startswith("graph_pages")}
+            return [
+                {
+                    "page_id": page.unit.unit_id,
+                    "unit_id": page.unit.unit_id,
+                    "document_id": page.unit.document_id,
+                    "file_name": DOC_NAMES[page.unit.document_id],
+                    "title": page.unit.title,
+                    "section_path": json.dumps(page.unit.section_path),
+                }
+                for page in by_id.values()
+                if page.unit.unit_id in wanted
+            ]
         if "rag_wiki_graph_nodes" in statement:
             doc = binds["graph_doc"]
             children: dict[str, list[str]] = {}
@@ -277,30 +311,35 @@ async def test_unit_detail_separates_directions_and_hides_relations_outside_scop
     assert detail["possible_questions"] == ["合成の質問？"]
     assert detail["unresolved"] == ["合成の未確認の点。"]
     assert detail["source_chunks"] == [{"chunk_id": f"chunk-{U['a1'][:6]}", "chunk_index": 0}]
+    items = (await store.relations(KB, U["a1"], 0, 25))["items"]
     relations = {
-        (item["direction"], item["scope"], item["relation"], item["unit"]["id"])
-        for item in (await store.relations(KB, U["a1"], 0, 25))["items"]
+        (item["direction"], item["scope"], item["relation"], item["unit"]["id"]) for item in items
     }
     assert relations == {
         ("outgoing", "same_document", "exception", U["a2"]),
         ("incoming", "same_document", "prerequisite", U["a3"]),
+        # 別の文書への参照（#5784）: 出る向きは参照先の章節の単位、
+        # 入る向きは文書を名前で参照する単位。
         ("outgoing", "cross_document", "exception", U["b1"]),
+        ("incoming", "cross_document", "prerequisite", U["b1"]),
     }
     cross = next(
         item
-        for item in (await store.relations(KB, U["a1"], 0, 25))["items"]
-        if item["scope"] == "cross_document"
+        for item in items
+        if item["scope"] == "cross_document" and item["direction"] == "outgoing"
     )
-    assert cross["unit"]["document_name"] == "synthetic-b.pdf" and cross["reason"] == "合成の理由"
-    incoming = await store.relations(KB, U["a3"], 0, 25)
-    assert ("incoming", "cross_document", U["b1"]) in {
-        (item["direction"], item["scope"], item["unit"]["id"]) for item in incoming["items"]
-    }
-    # 終点が範囲の外の関連は出さない。範囲の外の単位は 404。
-    assert all(
-        item["unit"]["id"] != U["c1"]
+    assert cross["unit"]["document_name"] == "synthetic-b.pdf"
+    assert (cross["target_name"], cross["target_section"]) == ("synthetic-b.pdf", "付録")
+    # 章節の表記（第 1 章）は、見出しが完全に一致する単位（a3）に当たる。
+    outgoing = (await store.relations(KB, U["b1"], 0, 25))["items"]
+    assert [item["unit"]["id"] for item in outgoing if item["direction"] == "outgoing"] == [U["a3"]]
+    # 参照先が範囲に無い参照は、原文の表記だけを返す（開けない）。
+    dangling = [
+        item
         for item in (await store.relations(KB, U["a2"], 0, 25))["items"]
-    )
+        if item["scope"] == "cross_document" and item["direction"] == "outgoing"
+    ]
+    assert [(item["unit"], item["target_name"]) for item in dangling] == [(None, "synthetic-c.pdf")]
     with pytest.raises(KeyError):
         await store.unit(KB, U["c1"])
 

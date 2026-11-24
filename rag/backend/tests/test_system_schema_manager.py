@@ -762,7 +762,7 @@ def test_update_retires_structure_index_tables_with_approval() -> None:
     assert result["status"] == "ready"
     assert _RETIRE_STRUCTURE_INDEX_MIGRATION in database.migrations
     assert not any((name, "TABLE") in database.objects for name in RETIRED_STRUCTURE_INDEX_TABLES)
-    for name in ("RAG_WIKI_DOCUMENTS", "RAG_WIKI_LINKS", "RAG_ENTITIES"):
+    for name in ("RAG_WIKI_DOCUMENTS", "RAG_WIKI_REFERENCES", "RAG_ENTITIES"):
         assert (name, "TABLE") in database.objects
 
 
@@ -818,6 +818,8 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         _RETIRE_STRUCTURE_INDEX_MIGRATION,
         "20261119_5515_language_pack_retired_structure_labels",
         "20261120_5599_wiki_graph_nodes",
+        "20261124_5784_retire_wiki_links",
+        "20261124_5784_wiki_references",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

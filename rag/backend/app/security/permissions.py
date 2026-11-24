@@ -434,7 +434,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PUT", f"{_KB}/wiki"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/wiki/retry"): _any(MENU_KNOWLEDGE_BASES),
     ("POST", f"{_KB}/wiki/documents/{{document_id}}/retry"): _any(MENU_KNOWLEDGE_BASES),
-    ("POST", f"{_KB}/wiki/documents/{{document_id}}/links/retry"): _any(MENU_KNOWLEDGE_BASES),
     # KB 詳細の Wiki の図（#5502）。
     ("GET", f"{_KB}/wiki/graph"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/wiki/graph/document-count"): _any(MENU_KNOWLEDGE_BASES),
@@ -755,7 +754,6 @@ ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
     "field_extraction": MENU_SETTINGS_PARSER_ADAPTERS,
     "navigation_summary": MENU_SETTINGS_PARSER_ADAPTERS,
     "wiki_build": MENU_SETTINGS_PARSER_ADAPTERS,
-    "wiki_links": MENU_SETTINGS_PARSER_ADAPTERS,
     "document_summary": MENU_SETTINGS_PARSER_ADAPTERS,
 }
 

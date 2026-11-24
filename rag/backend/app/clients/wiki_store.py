@@ -23,7 +23,6 @@ from app.clients.oracle import (
     _int_value,
     _json_bind,
     _json_input_sizes,
-    _json_list,
     _json_loads,
     _oracle_in_predicate,
     _oracle_knowledge_base_access_predicate_sql,
@@ -36,11 +35,11 @@ from app.clients.oracle import (
     oracle_text_index_parameters_sql,
 )
 from app.clients.wiki_graph_index import index_document
+from app.clients.wiki_reference_index import index_references
 from app.rag.cross_references import REFERENCE_TARGETS_KEY
 from app.rag.request_context import current_audit_request_context
 from app.rag.wiki_models import (
     WIKI_BUILD_KEY,
-    WIKI_RELATION_PRIORITY,
     WikiPage,
     WikiUnit,
     fingerprint,
@@ -94,60 +93,6 @@ CREATE INDEX rag_wiki_page_chunk_idx ON rag_wiki_pages(source_chunk_id);
 CREATE INDEX rag_wiki_queue_idx ON rag_wiki_documents(status,lease_until);
 CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text)
     INDEXTYPE IS CTXSYS.CONTEXT {oracle_text_index_parameters_sql()};
-""".strip()
-
-
-def wiki_link_schema_sql(*, include_progress: bool = True) -> str:
-    """文書をまたぐ関連と、文書ごとの関連の構築の状態（#5492）。
-
-    関連は起点と終点の案内（保存版の指紋を含む page_id）を外部キーで持ち、文書・案内の削除で消える。
-    """
-    relations = ",".join(f"'{relation}'" for relation in WIKI_RELATION_PRIORITY)
-    progress_columns = (
-        "\n    judged_count NUMBER,\n    planned_count NUMBER,\n    failure_phase VARCHAR2(64),"
-        if include_progress
-        else ""
-    )
-    return f"""
-CREATE TABLE rag_wiki_link_documents (
-    document_id VARCHAR2(64) PRIMARY KEY,
-    source_fingerprint CHAR(64) NOT NULL,
-    link_fingerprint CHAR(64) NOT NULL,
-    done_json JSON,{progress_columns}
-    status VARCHAR2(16) DEFAULT 'QUEUED' NOT NULL,
-    lease_token VARCHAR2(64),
-    lease_until TIMESTAMP WITH TIME ZONE,
-    failure_code VARCHAR2(64),
-    build_started_at TIMESTAMP WITH TIME ZONE,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT rag_wiki_link_doc_fk FOREIGN KEY (document_id)
-        REFERENCES rag_documents(document_id) ON DELETE CASCADE,
-    CONSTRAINT rag_wiki_link_status_ck
-        CHECK (status IN ('QUEUED','RUNNING','READY','FAILED'))
-);
-CREATE TABLE rag_wiki_links (
-    source_page_id VARCHAR2(64) NOT NULL,
-    target_page_id VARCHAR2(64) NOT NULL,
-    source_document_id VARCHAR2(64) NOT NULL,
-    source_unit_id VARCHAR2(64) NOT NULL,
-    source_fingerprint CHAR(64) NOT NULL,
-    target_document_id VARCHAR2(64) NOT NULL,
-    target_unit_id VARCHAR2(64) NOT NULL,
-    target_fingerprint CHAR(64) NOT NULL,
-    relation VARCHAR2(32) NOT NULL,
-    reason VARCHAR2(800),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT rag_wiki_link_pk PRIMARY KEY (source_page_id,target_page_id),
-    CONSTRAINT rag_wiki_link_source_fk FOREIGN KEY (source_page_id)
-        REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
-    CONSTRAINT rag_wiki_link_target_fk FOREIGN KEY (target_page_id)
-        REFERENCES rag_wiki_pages(page_id) ON DELETE CASCADE,
-    CONSTRAINT rag_wiki_link_relation_ck CHECK (relation IN ({relations}))
-);
-CREATE INDEX rag_wiki_link_target_page_idx ON rag_wiki_links(target_page_id);
-CREATE INDEX rag_wiki_link_source_unit_idx ON rag_wiki_links(source_unit_id);
-CREATE INDEX rag_wiki_link_target_unit_idx ON rag_wiki_links(target_unit_id);
-CREATE INDEX rag_wiki_link_queue_idx ON rag_wiki_link_documents(status,lease_until);
 """.strip()
 
 
@@ -455,50 +400,6 @@ class WikiStore:
         )
         return {str(row["state"]): int(str(row["n"])) for row in rows}
 
-    async def link_progress(self, filters: dict[str, str]) -> list[dict[str, Any]]:
-        """KB で読める現行版の両端だけを関連の件数に数える。"""
-        states, binds = self._document_states_sql(filters)
-        return await self.oracle._fetch_all(
-            f"""WITH visible AS ({states}), published AS (
-                SELECT v.document_id,w.published_fingerprint fp FROM visible v
-                JOIN rag_wiki_documents w ON w.document_id=v.document_id WHERE v.state='READY'
-            ), edges AS (
-                SELECT l.source_document_id src,l.target_document_id dst FROM rag_wiki_links l
-                JOIN published s ON s.document_id=l.source_document_id AND s.fp=l.source_fingerprint
-                JOIN published t ON t.document_id=l.target_document_id AND t.fp=l.target_fingerprint
-            ), incident AS (
-                SELECT src doc FROM edges UNION ALL SELECT dst doc FROM edges
-            ), edge_counts AS (SELECT doc,COUNT(*) n FROM incident GROUP BY doc)
-            SELECT v.document_id,CASE
-                WHEN l.status='FAILED' AND l.failure_code='interrupted' THEN 'QUEUED'
-                ELSE NVL(l.status,'NOT_BUILT') END link_status,
-                l.judged_count,l.planned_count,l.failure_phase,l.failure_code link_failure_code,
-                NVL(e.n,0) link_count FROM visible v
-            LEFT JOIN published p ON p.document_id=v.document_id
-            LEFT JOIN rag_wiki_link_documents l ON l.document_id=p.document_id
-                AND l.source_fingerprint=p.fp
-            LEFT JOIN edge_counts e ON e.doc=v.document_id""",
-            binds,
-        )
-
-    async def retry_document_links(self, kb_id: str, document_id: str) -> bool:
-        where, binds = wiki_scope({"knowledge_base_id": kb_id, "document_id": document_id})
-        return bool(
-            await self.oracle._run_transaction(
-                lambda connection: _execute_count(
-                    connection,
-                    f"""UPDATE rag_wiki_link_documents l SET status='QUEUED', failure_code=NULL,
-            failure_phase=NULL,build_started_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
-            WHERE document_id=:target AND status='FAILED' AND EXISTS (
-                SELECT 1 FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
-                JOIN rag_wiki_documents w ON w.document_id=c.document_id
-                WHERE c.document_id=l.document_id AND w.status='READY'
-                AND w.published_fingerprint=l.source_fingerprint AND {where})""",
-                    {**binds, "target": document_id},
-                )
-            )
-        )
-
     async def requeue_failed(self, filters: dict[str, str]) -> None:
         """再試行の要る失敗を待機へ戻す。構築は次の照合が進める（#5466）。"""
         where, binds = _oracle_retrieval_where(
@@ -506,17 +407,15 @@ class WikiStore:
         )
 
         def operation(connection: Any) -> None:
-            # 文書をまたぐ関連の構築の失敗も同じ操作で戻す（#5492）。
-            for table in ("rag_wiki_documents", "rag_wiki_link_documents"):
-                _execute(
-                    connection,
-                    f"""UPDATE {table} SET status='QUEUED',failure_code=NULL,
-                    lease_token=NULL,lease_until=NULL,build_started_at=NULL,updated_at=SYSTIMESTAMP
-                    WHERE status='FAILED' AND document_id IN (SELECT c.document_id
-                    FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
-                    WHERE {where})""",
-                    binds,
-                )
+            _execute(
+                connection,
+                f"""UPDATE rag_wiki_documents SET status='QUEUED',failure_code=NULL,
+                lease_token=NULL,lease_until=NULL,build_started_at=NULL,updated_at=SYSTIMESTAMP
+                WHERE status='FAILED' AND document_id IN (SELECT c.document_id
+                FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
+                WHERE {where})""",
+                binds,
+            )
 
         await self.oracle._run_transaction(operation)
 
@@ -722,32 +621,28 @@ class WikiStore:
 
         return await self.oracle._run_transaction(operation)
 
-    async def build_elapsed_seconds(self, document_id: str, *, links: bool = False) -> float:
+    async def build_elapsed_seconds(self, document_id: str) -> float:
         """実際に構築を始めてからの秒数（#5748）。始めていなければ 0。
 
         開始は lease を取った時刻（待機に入った時ではない）。中断からの続きでは同じ開始を使う。
         """
-        table = "rag_wiki_link_documents" if links else "rag_wiki_documents"
         row = await self.oracle._fetch_one(
-            f"""SELECT EXTRACT(DAY FROM elapsed)*86400+EXTRACT(HOUR FROM elapsed)*3600
+            """SELECT EXTRACT(DAY FROM elapsed)*86400+EXTRACT(HOUR FROM elapsed)*3600
                 +EXTRACT(MINUTE FROM elapsed)*60+EXTRACT(SECOND FROM elapsed) AS seconds
-            FROM (SELECT SYSTIMESTAMP-build_started_at AS elapsed FROM {table}
+            FROM (SELECT SYSTIMESTAMP-build_started_at AS elapsed FROM rag_wiki_documents
                   WHERE document_id=:id AND build_started_at IS NOT NULL)""",
             {"id": document_id},
         )
         return max(0.0, float(str(row["seconds"]))) if row else 0.0
 
-    async def renew_lease(
-        self, document_id: str, token: str, *, lease_seconds: int, links: bool = False
-    ) -> bool:
+    async def renew_lease(self, document_id: str, token: str, *, lease_seconds: int) -> bool:
         """構築中の lease を延ばす（#5748）。所有権を失っていれば False。"""
-        table = "rag_wiki_link_documents" if links else "rag_wiki_documents"
 
         def operation(connection: Any) -> bool:
             return bool(
                 _execute_count(
                     connection,
-                    f"""UPDATE {table}
+                    """UPDATE rag_wiki_documents
                     SET lease_until=SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND')
                     WHERE document_id=:id AND lease_token=:token AND status='RUNNING'
                       AND lease_until>SYSTIMESTAMP""",
@@ -849,6 +744,7 @@ class WikiStore:
                 if not count or _int_value(count["total"]) != len(snapshot.units):
                     raise ValueError("Wiki の原文単位または埋め込みが未完了です。")
                 index_document(connection, snapshot.document_id, snapshot.source_fingerprint)
+                index_references(connection, snapshot.document_id, snapshot.source_fingerprint)
             _execute(
                 connection,
                 """UPDATE rag_wiki_documents SET status=:status,
@@ -1055,265 +951,78 @@ class WikiStore:
                 ranking.append((did, str(row["unit_id"])))
         return ranking
 
-    # ---- 文書をまたぐ関連（#5492） ----
+    # ---- 別の文書への参照（#5784） ----
 
-    async def link_knowledge_bases(self, document_id: str) -> list[str]:
-        """文書が属し、Wiki の構築を指定した、現在の利用者が見られる KB（関連の候補の範囲）。"""
+    async def document_headings(self, scope: WikiScope) -> dict[str, list[str]]:
+        """範囲の文書ごとの先頭の見出し（文書名の照合に使う。題名かどうかは照合の側が決める）。"""
+        if not scope.sources:
+            return {}
+        where, binds = _scoped_where(scope)
         rows = await self.oracle._fetch_all(
-            f"""SELECT DISTINCT kb.knowledge_base_id FROM rag_document_knowledge_bases wm
-            JOIN rag_knowledge_bases kb ON kb.knowledge_base_id=wm.knowledge_base_id
-            JOIN rag_documents member_doc ON member_doc.document_id=wm.document_id
-            WHERE (wm.document_id=:wiki_document
-                OR member_doc.duplicate_of_document_id=:wiki_document)
-              AND kb.status='ACTIVE' AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}
-              AND JSON_VALUE(kb.retrieval_config,'$.{WIKI_BUILD_KEY}')='true'
-            ORDER BY kb.knowledge_base_id""",
-            _with_tenant_bind({"wiki_document": document_id}),
+            f"""SELECT DISTINCT p.document_id,
+            JSON_VALUE(p.page_json,'$.unit.section_path[0]') AS heading
+            {WIKI_SCOPED_FROM} WHERE {where}""",
+            binds,
         )
-        return [str(row["knowledge_base_id"]) for row in rows]
+        found: dict[str, list[str]] = {}
+        for row in rows:
+            if row.get("heading"):
+                found.setdefault(str(row["document_id"]), []).append(str(row["heading"]))
+        return found
 
-    async def link_state(self, document_id: str) -> dict[str, object] | None:
-        return await self.oracle._fetch_one(
-            """SELECT source_fingerprint,link_fingerprint,status,failure_code,
-            CASE WHEN lease_until>SYSTIMESTAMP THEN 1 ELSE 0 END leased
-            FROM rag_wiki_link_documents WHERE document_id=:id""",
-            {"id": document_id},
-        )
-
-    async def claim_links(
-        self,
-        document_id: str,
-        source_fingerprint: str,
-        link_fingerprint: str,
-        *,
-        lease_seconds: int,
-        prompt_version: str | None = None,
-    ) -> tuple[str, list[str]] | None:
-        """関連の構築の lease を取る。条件が同じなら判定済みの鍵を返して続きから作る。
-
-        原文の保存版が変われば、この文書の古い保存版の関連を消してから始める。
-        """
-        token = uuid4().hex
-
-        def operation(connection: Any) -> tuple[str, list[str]] | None:
-            if not _fetch_one(
-                connection,
-                "SELECT document_id FROM rag_documents WHERE document_id=:id FOR UPDATE",
-                {"id": document_id},
-            ):
-                return None
-            row = _fetch_one(
-                connection,
-                """SELECT source_fingerprint,link_fingerprint,status,done_json,
-                CASE WHEN lease_until>SYSTIMESTAMP THEN 1 ELSE 0 END AS leased
-                FROM rag_wiki_link_documents WHERE document_id=:id FOR UPDATE""",
-                {"id": document_id},
-            )
-            same = bool(
-                row
-                and row["source_fingerprint"] == source_fingerprint
-                and row["link_fingerprint"] == link_fingerprint
-            )
-            if row and (
-                (row["status"] == "RUNNING" and row["leased"])
-                or (same and row["status"] == "READY")
-            ):
-                return None
-            done = _json_list(row.get("done_json")) if row and same else []
-            # 保存済みの関連を一斉に無効化せず、再開する途中の作業だけを指示の版で区別する。
-            marker = f"prompt:{prompt_version}" if prompt_version else None
-            if next((key for key in done if key.startswith("prompt:")), None) != marker:
-                done = [marker] if marker else []
-            if not same:
-                _execute(
-                    connection,
-                    """DELETE FROM rag_wiki_links WHERE
-                    (source_document_id=:id AND source_fingerprint<>:fingerprint)
-                    OR (target_document_id=:id AND target_fingerprint<>:fingerprint)""",
-                    {"id": document_id, "fingerprint": source_fingerprint},
-                )
-            _execute(
-                connection,
-                """MERGE INTO rag_wiki_link_documents target
-                USING (SELECT :id document_id FROM dual) source
-                ON (target.document_id=source.document_id)
-                WHEN MATCHED THEN UPDATE SET
-                    build_started_at=CASE WHEN :same=1
-                        THEN NVL(target.build_started_at,SYSTIMESTAMP) ELSE SYSTIMESTAMP END,
-                    source_fingerprint=:fingerprint,
-                    link_fingerprint=:links,done_json=:done,status='RUNNING',lease_token=:token,
-                    lease_until=SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND'),
-                    failure_code=NULL,updated_at=SYSTIMESTAMP
-                WHEN NOT MATCHED THEN INSERT (document_id,source_fingerprint,link_fingerprint,
-                    done_json,status,lease_token,lease_until,build_started_at)
-                    VALUES (:id,:fingerprint,:links,:done,'RUNNING',:token,
-                    SYSTIMESTAMP+NUMTODSINTERVAL(:seconds,'SECOND'),SYSTIMESTAMP)""",
-                {
-                    "same": 1 if same else 0,
-                    "id": document_id,
-                    "fingerprint": source_fingerprint,
-                    "links": link_fingerprint,
-                    "done": _json_bind(done),
-                    "token": token,
-                    "seconds": lease_seconds,
-                },
-                input_sizes=_json_input_sizes("done"),
-            )
-            return token, done
-
-        return await self.oracle._run_transaction(operation)
-
-    @staticmethod
-    def _require_link_lease(connection: Any, document_id: str, token: str) -> dict[str, Any]:
-        row = _fetch_one(
-            connection,
-            """SELECT done_json FROM rag_wiki_link_documents
-            WHERE document_id=:id AND lease_token=:token AND status='RUNNING'
-              AND lease_until>SYSTIMESTAMP FOR UPDATE""",
-            {"id": document_id, "token": token},
-        )
-        if not row:
-            raise ValueError("Wiki の関連の構築の所有権が変更されました。")
-        return row
-
-    async def save_links(
-        self,
-        document_id: str,
-        token: str,
-        *,
-        sources: Sequence[str],
-        candidates: Sequence[str],
-        links: Sequence[tuple[str, str, str, str]],
-        done: Sequence[str],
-    ) -> None:
-        """判定した起点と候補の組の関連を置き換え、判定済みの鍵を足す（checkpoint）。
-
-        ``links`` は（起点の単位 ID, 終点の単位 ID, 関係, 理由）。両方の案内が今の保存版で公開済みの
-        ときだけ保存し、別の文書の間の関連だけを持つ。
-        """
-        allowed_sources, allowed_targets = set(sources), set(candidates)
-        if any(
-            source not in allowed_sources or target not in allowed_targets
-            for source, target, *_ in links
-        ):
-            raise ValueError("Wiki の関連が判定した起点と候補の組にありません。")
-
-        def operation(connection: Any) -> None:
-            row = self._require_link_lease(connection, document_id, token)
-            if sources and candidates:
-                left, left_binds = _oracle_in_predicate("source_unit_id", "link_source", sources)
-                right, right_binds = _oracle_in_predicate(
-                    "target_unit_id", "link_target", candidates
-                )
-                _execute(
-                    connection,
-                    f"DELETE FROM rag_wiki_links WHERE {left} AND {right}",
-                    {**left_binds, **right_binds},
-                )
-            for source, target, relation, reason in links:
-                _execute(
-                    connection,
-                    """MERGE INTO rag_wiki_links target USING (
-                        SELECT sp.page_id source_page_id,tp.page_id target_page_id,
-                        sp.document_id source_document_id,sp.unit_id source_unit_id,
-                        sp.source_fingerprint source_fingerprint,
-                        tp.document_id target_document_id,tp.unit_id target_unit_id,
-                        tp.source_fingerprint target_fingerprint
-                        FROM rag_wiki_pages sp,rag_wiki_documents sw,
-                             rag_wiki_pages tp,rag_wiki_documents tw
-                        WHERE sp.unit_id=:source AND tp.unit_id=:target
-                          AND sw.document_id=sp.document_id AND sw.status='READY'
-                          AND sp.source_fingerprint=sw.published_fingerprint
-                          AND tw.document_id=tp.document_id AND tw.status='READY'
-                          AND tp.source_fingerprint=tw.published_fingerprint
-                          AND sp.document_id<>tp.document_id) found
-                    ON (target.source_page_id=found.source_page_id
-                        AND target.target_page_id=found.target_page_id)
-                    WHEN MATCHED THEN UPDATE SET relation=:relation,reason=:reason,
-                        updated_at=SYSTIMESTAMP
-                    WHEN NOT MATCHED THEN INSERT (source_page_id,target_page_id,
-                        source_document_id,source_unit_id,source_fingerprint,
-                        target_document_id,target_unit_id,target_fingerprint,relation,reason)
-                    VALUES (found.source_page_id,found.target_page_id,found.source_document_id,
-                        found.source_unit_id,found.source_fingerprint,found.target_document_id,
-                        found.target_unit_id,found.target_fingerprint,:relation,:reason)""",
-                    {"source": source, "target": target, "relation": relation, "reason": reason},
-                )
-            saved = _json_list(row.get("done_json"))
-            _execute(
-                connection,
-                """UPDATE rag_wiki_link_documents SET done_json=:done,
-                judged_count=LEAST(planned_count,judged_count+:judged_delta),updated_at=SYSTIMESTAMP
-                WHERE document_id=:id""",
-                {
-                    "id": document_id,
-                    "done": _json_bind(list(dict.fromkeys([*saved, *done]))),
-                    "judged_delta": len(set(done) - set(saved)),
-                },
-                input_sizes=_json_input_sizes("done"),
-            )
-
-        await self.oracle._run_transaction(operation)
-
-    async def link_plan(self, document_id: str, token: str, total: int, done: int) -> None:
-        await self.oracle._run_transaction(
-            lambda connection: _execute(
-                connection,
-                """UPDATE rag_wiki_link_documents SET planned_count=:total,judged_count=:done
-            WHERE document_id=:id AND lease_token=:token AND status='RUNNING'""",
-                {"id": document_id, "token": token, "total": total, "done": done},
-            )
-        )
-
-    async def finish_links(
-        self,
-        document_id: str,
-        token: str,
-        *,
-        failure_code: str | None = None,
-        failure_phase: str | None = None,
-    ) -> None:
-        def operation(connection: Any) -> None:
-            self._require_link_lease(connection, document_id, token)
-            _execute(
-                connection,
-                """UPDATE rag_wiki_link_documents SET status=:status,
-                failure_code=:failure,failure_phase=:phase,
-                done_json=CASE WHEN :status='READY' THEN NULL ELSE done_json END,
-                build_started_at=CASE WHEN :status='READY' THEN NULL ELSE build_started_at END,
-                lease_token=NULL,lease_until=NULL,updated_at=SYSTIMESTAMP
-                WHERE document_id=:id""",
-                {
-                    "id": document_id,
-                    "status": "FAILED" if failure_code else "READY",
-                    "failure": failure_code,
-                    "phase": failure_phase,
-                },
-            )
-
-        await self.oracle._run_transaction(operation)
-
-    async def links(self, unit_ids: Sequence[str], scope: WikiScope) -> list[tuple[str, str, str]]:
-        """回答の探索で単位から出る関連（起点の単位 ID, 終点の単位 ID, 関係）。
-
-        起点と終点の両方の案内が ``resolve`` で決めた範囲（今の検索範囲・公開済み・
-        今の原文の保存版）にある関連だけを返す。案内は KB をまたいで再利用されるので、所属は
-        読むときに範囲で照合する。
-        """
+    async def references(
+        self, unit_ids: Sequence[str], scope: WikiScope
+    ) -> list[tuple[str, str, str, str]]:
+        """単位の参照（単位 ID・参照先の名前・章節の表記・関係）。参照元が範囲の案内のものだけ。"""
         if not unit_ids or not scope.sources:
             return []
         where, binds = _scoped_where(scope)
-        outgoing, out_binds = _oracle_in_predicate("l.source_unit_id", "link_from", unit_ids)
-        current = f"SELECT 1 {WIKI_SCOPED_FROM} WHERE {where}"
+        clause, added = _oracle_in_predicate("p.unit_id", "wiki_ref_unit", unit_ids)
         rows = await self.oracle._fetch_all(
-            f"""SELECT l.source_unit_id,l.target_unit_id,l.relation FROM rag_wiki_links l
-            WHERE {outgoing}
-              AND EXISTS ({current} AND p.page_id=l.source_page_id)
-              AND EXISTS ({current} AND p.page_id=l.target_page_id)
-            ORDER BY l.source_unit_id,l.target_unit_id""",
-            {**binds, **out_binds},
+            f"""SELECT r.unit_id,r.target_name,r.target_section,r.relation
+            {WIKI_SCOPED_FROM} JOIN rag_wiki_references r ON r.page_id=p.page_id
+            WHERE {where} AND {clause} ORDER BY r.unit_id,r.ordinal""",
+            {**binds, **added},
         )
         return [
-            (str(row["source_unit_id"]), str(row["target_unit_id"]), str(row["relation"]))
+            (
+                str(row["unit_id"]),
+                str(row["target_name"]),
+                str(row.get("target_section") or ""),
+                str(row["relation"]),
+            )
+            for row in rows
+        ]
+
+    async def referencing(
+        self, keys: Sequence[str], scope: WikiScope, *, exclude_document_ids: Sequence[str] = ()
+    ) -> list[tuple[str, str, str, str]]:
+        """参照先の名前の比較形が ``keys`` に入る、範囲の中の参照（参照元の単位 ID・文書 ID・
+        比較形・関係）。参照元を逆に引く（#5784）。"""
+        if not keys or not scope.sources:
+            return []
+        where, binds = _scoped_where(scope)
+        clause, added = _oracle_in_predicate("r.target_key", "wiki_ref_key", list(keys))
+        where += " AND " + clause
+        binds.update(added)
+        if exclude_document_ids:
+            skip, skipped = _oracle_in_predicate(
+                "p.document_id", "wiki_ref_skip", exclude_document_ids
+            )
+            where += f" AND NOT ({skip})"
+            binds.update(skipped)
+        rows = await self.oracle._fetch_all(
+            f"""SELECT r.unit_id,r.document_id,r.target_key,r.relation
+            {WIKI_SCOPED_FROM} JOIN rag_wiki_references r ON r.page_id=p.page_id
+            WHERE {where} ORDER BY r.document_id,r.unit_id,r.ordinal""",
+            binds,
+        )
+        return [
+            (
+                str(row["unit_id"]),
+                str(row["document_id"]),
+                str(row["target_key"]),
+                str(row["relation"]),
+            )
             for row in rows
         ]

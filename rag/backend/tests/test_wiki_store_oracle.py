@@ -11,6 +11,7 @@ from pr_system_settings.auth.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 
 from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute, _fetch_one
 from app.clients.wiki_graph_store import WikiGraphStore
+from app.clients.wiki_reference_index import DocumentNames
 from app.clients.wiki_store import CURRENT_WIKI_SOURCE_SQL, WikiStore
 from app.rag.request_context import (
     AuditRequestContext,
@@ -236,10 +237,9 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
 
 
 # 構築の条件の指紋は CHAR(64)（実際の値と同じ長さにする。短い値は空白で埋まる）。
-LINKS = fingerprint("links-1")
 
 
-async def test_page_retry_only_requeues_one_failed_member_and_preserves_link_state() -> None:
+async def test_page_retry_only_requeues_one_failed_member() -> None:
     oracle, token = OracleClient(), uuid4().hex[:12]
     store = WikiStore(oracle)
     kb = await oracle.create_knowledge_base(name=f"synthetic-retry-{token}")
@@ -257,22 +257,15 @@ async def test_page_retry_only_requeues_one_failed_member_and_preserves_link_sta
         lease = await store.claim(snapshot, lease_seconds=300)
         assert lease
         await store.finish(snapshot, lease, failure_code="timeout")
-        claimed = await store.claim_links(
-            did, snapshot.source_fingerprint, LINKS, lease_seconds=300
-        )
-        assert claimed
-        await store.finish_links(did, claimed[0], failure_code="build_failed")
         documents.append((did, revision))
     (target, revision), (sibling, _) = documents
     before_sibling = await store.document_state(sibling)
-    before_links = [await store.link_state(did) for did, _ in documents]
     assert not await store.requeue_failed_document_pages("absent-kb", target, revision)
     assert await store.requeue_failed_document_pages(kb.id, target, revision)
     assert not await store.requeue_failed_document_pages(kb.id, target, revision)
     state = await store.document_state(target)
     assert state and state["status"] == "QUEUED"
     assert await store.document_state(sibling) == before_sibling
-    assert [await store.link_state(did) for did, _ in documents] == before_links
 
 
 async def test_build_start_is_recorded_on_claim_and_kept_only_for_interrupted_builds() -> None:
@@ -318,19 +311,6 @@ async def test_build_start_is_recorded_on_claim_and_kept_only_for_interrupted_bu
     lease = await store.claim(snapshot, lease_seconds=300)
     assert lease and await started("rag_wiki_documents") is not None
 
-    # 関連は案内と別に数える。
-    claimed = await store.claim_links(did, snapshot.source_fingerprint, LINKS, lease_seconds=300)
-    assert claimed
-    link_first = await started("rag_wiki_link_documents")
-    assert link_first is not None
-    assert await store.renew_lease(did, claimed[0], lease_seconds=300, links=True)
-    assert await store.build_elapsed_seconds(did, links=True) >= 0.0
-    await store.finish_links(did, claimed[0], failure_code="interrupted")
-    claimed = await store.claim_links(did, snapshot.source_fingerprint, LINKS, lease_seconds=300)
-    assert claimed and await started("rag_wiki_link_documents") == link_first
-    await store.finish_links(did, claimed[0])
-    assert await started("rag_wiki_link_documents") is None
-
 
 async def _published(store: WikiStore, did: str, context: str) -> tuple[Any, list[WikiPage]]:
     """合成の案内を作って公開した文書（保存版と案内）。"""
@@ -366,118 +346,63 @@ def _pages(units: Any, context: str) -> list[WikiPage]:
     ]
 
 
-async def test_cross_document_links_follow_current_versions_scope_and_cascade() -> None:
-    """文書をまたぐ関連（#5492）: 候補の除外・lease・checkpoint・出る向きの読取・所属・削除。"""
+async def annotate_references(oracle: OracleClient, did: str, names: list[str]) -> None:
+    """取込の決定論の参照（別の文書を名前で指す）を、文書の chunk の metadata に入れる。"""
+    targets = [
+        {"label": name, "kind": "document", "key": "", "document_title": name} for name in names
+    ]
+
+    def operation(connection: OracleConnectionProtocol) -> None:
+        _execute(
+            connection,
+            """UPDATE rag_chunks SET metadata_json=JSON_MERGEPATCH(metadata_json,:patch)
+            WHERE document_id=:id""",
+            {
+                "id": did,
+                "patch": json.dumps({"reference_targets_json": json.dumps(targets)}),
+            },
+        )
+
+    await oracle._run_transaction(operation)
+
+
+async def test_references_are_indexed_on_publish_and_resolved_by_name_in_scope() -> None:
+    """別の文書への参照（#5784）: 公開と同じ取引で取込の参照と生成の参照を保存し、名前の比較形で
+    逆に引ける。参照先は範囲の文書の名前で決まり、文書の削除で参照も消える。"""
     oracle, token = OracleClient(), uuid4().hex[:12]
     store = WikiStore(oracle)
-    kb = await oracle.create_knowledge_base(name=f"synthetic-links-{token}")
-    only_a = await oracle.create_knowledge_base(name=f"synthetic-links-only-a-{token}")
+    kb = await oracle.create_knowledge_base(name=f"synthetic-refs-{token}")
     a, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=f"{token}a")
     b, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=f"{token}b")
-    await oracle.assign_documents_to_knowledge_base(only_a.id, [a])
     await store.set_enabled(kb.id, True)
-    await store.set_enabled(only_a.id, True)
-    source_a, pages_a = await _published(store, a, "合成の原則 syntheticprinciple。")
-    _, pages_b = await _published(store, b, "合成の例外 syntheticexception。")
-    filters, narrow = {"knowledge_base_id": kb.id}, {"knowledge_base_id": only_a.id}
-    scope, narrow_scope = (
-        await store.resolve(filters),
-        await store.resolve(narrow),
-    )
-    assert await store.link_knowledge_bases(a) == sorted([kb.id, only_a.id])
-    assert await store.link_knowledge_bases(b) == [kb.id]
-    # 候補はほかの文書の案内だけ（ベクトル・全文の両方）。
-    near = await store.pages(scope, query_vector=_EMBEDDING, limit=50, exclude_document_ids=[a])
-    assert near and {p.unit.document_id for p in near} == {b}
-    ranking = await store.text_rankings(
-        "syntheticexception", scope, limit=50, exclude_document_ids=[a]
-    )
-    assert ranking and {did for did, _ in ranking} == {b}
+    name_b = f"summary-{token}b.pdf"
+    await annotate_references(oracle, a, [name_b, "synthetic-missing.pdf"])
+    _, pages_a = await _published(store, a, "合成の原則 syntheticrefa。")
+    await _published(store, b, "合成の例外 syntheticrefb。")
+    scope = await store.resolve({"knowledge_base_id": kb.id})
+    first_a = pages_a[0].unit.unit_id
 
-    first_a, first_b = pages_a[0].unit.unit_id, pages_b[0].unit.unit_id
-    fingerprint_a = source_a.source_fingerprint
-    claimed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
-    assert claimed is not None and claimed[1] == []
-    lease = claimed[0]
-    assert await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300) is None
-    with pytest.raises(ValueError, match="組"):
-        await store.save_links(
-            a,
-            lease,
-            sources=[first_a],
-            candidates=[],
-            links=[(first_a, first_b, "exception", "")],
-            done=[],
-        )
-    await store.save_links(
-        a,
-        lease,
-        sources=[first_a],
-        candidates=[first_b],
-        links=[(first_a, first_b, "exception", "合成の理由")],
-        done=[f"forward:{first_a}"],
-    )
-    # 出る向きだけを探索する。
-    expected = [(first_a, first_b, "exception")]
-    assert await store.links([first_a], scope) == expected
-    assert await store.links([first_b], scope) == []
-    # 終点の文書が今の KB に無ければ辿らない（案内は KB をまたいで再利用されるので読むときに照合）。
-    assert await store.links([first_a], narrow_scope) == []
-    # 中断の後は判定済みの鍵を返して続きから作る。
-    await store.finish_links(a, lease, failure_code="interrupted")
-    resumed = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
-    assert resumed is not None and resumed[1] == [f"forward:{first_a}"]
-    await store.finish_links(a, resumed[0], failure_code="interrupted")
-    edited = await store.claim_links(
-        a, fingerprint_a, LINKS, lease_seconds=300, prompt_version="v2"
-    )
-    assert edited is not None and f"forward:{first_a}" not in edited[1]
-    await store.finish_links(a, edited[0], failure_code="build_failed")
-    state = await store.link_state(a)
-    assert state and state["status"] == "FAILED" and state["failure_code"] == "build_failed"
-    # 再試行は関連の構築の失敗も待機へ戻す。
-    await store.requeue_failed(filters)
-    state = await store.link_state(a)
-    assert state and state["status"] == "QUEUED"
-    again = await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300)
-    assert again is not None
-    await store.finish_links(a, again[0])
-    assert await store.claim_links(a, fingerprint_a, LINKS, lease_seconds=300) is None
-    # 原文の保存版が変われば、古い保存版の関連を消して作り直す。
-    renewed = await store.claim_links(a, fingerprint("source-new"), LINKS, lease_seconds=300)
-    assert renewed is not None and renewed[1] == []
-    assert await store.links([first_a], scope) == []
-    await store.finish_links(a, renewed[0])
-    # 逆向き（B → A）の関連も同じ表に置き、文書の削除は外部キーで関連の行と状態を消す。
-    reverse = await store.claim_links(b, fingerprint("source-b"), LINKS, lease_seconds=300)
-    assert reverse is not None
-    await store.save_links(
-        b,
-        reverse[0],
-        sources=[first_b],
-        candidates=[first_a],
-        links=[(first_b, first_a, "prerequisite", "合成の理由")],
-        done=[f"reverse:{first_b}"],
-    )
-    assert await store.links([first_a], scope) == []
-    assert await store.links([first_b], scope) == [(first_b, first_a, "prerequisite")]
+    found = await store.references([first_a], scope)
+    assert (first_a, name_b, "", "reference") in found
+    assert (first_a, "synthetic-missing.pdf", "", "reference") in found
+    names = DocumentNames(scope.catalog, await store.document_headings(scope))
+    # 範囲の文書は名前で決まり、範囲に無い文書の参照は決まらない（辿れない）。
+    assert names.resolve(name_b, exclude=a) == [b]
+    assert names.resolve("synthetic-missing.pdf", exclude=a) == []
+    # 逆向き: 文書 B を名前で参照する単位を引く。
+    incoming = await store.referencing(sorted(names.keys(b)), scope)
+    assert {(unit, document) for unit, document, _, _ in incoming} >= {(first_a, a)}
 
     def count(connection: OracleConnectionProtocol) -> Any:
         return _fetch_one(
             connection,
-            """SELECT (SELECT COUNT(*) FROM rag_wiki_links
-                WHERE source_document_id IN (:a,:b) OR target_document_id IN (:a,:b)) AS links,
-            (SELECT COUNT(*) FROM rag_wiki_link_documents WHERE document_id IN (:a,:b)) AS states
-            FROM dual""",
-            {"a": a, "b": b},
+            "SELECT COUNT(*) AS total FROM rag_wiki_references WHERE document_id=:a",
+            {"a": a},
         )
 
     await oracle.delete_document(a)
     row = await oracle._run_transaction(count)
-    assert row is not None and int(str(row["links"])) == 0 and int(str(row["states"])) == 1
-    await oracle.delete_document(b)
-    row = await oracle._run_transaction(count)
-    assert row is not None and int(str(row["states"])) == 0
+    assert row is not None and int(str(row["total"])) == 0
 
 
 async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> None:

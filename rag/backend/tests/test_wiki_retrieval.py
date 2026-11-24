@@ -16,6 +16,7 @@ from app.clients import oci_enterprise_ai
 from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
+from app.rag.cross_references import reference_name_key
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
 from app.rag.wiki_navigation import section_frontier
 from app.rag.wiki_retrieval import ModelPlannedWikiRetriever, WikiRetriever, WikiSourceChanged
@@ -68,6 +69,8 @@ CATALOG: list[dict[str, Any]] = [
         ],
     },
     {"document_id": "doc-b", "title": "文書B", "source_identities": []},
+    {"document_id": "doc-c", "title": "文書C", "source_identities": []},
+    {"document_id": "doc-d", "title": "文書D", "source_identities": []},
 ]
 
 
@@ -85,14 +88,37 @@ class Store:
     def _scoped(self, scope: WikiScope) -> None:
         assert scope is self.scope, "範囲は resolve の結果だけで読む"
 
-    async def links(self, unit_ids: list[str], scope: WikiScope) -> list[tuple[str, str, str]]:
+    def _reference(self, target: str) -> tuple[str, str]:
+        """関連の終点を、文書の名前と章節の表記の参照にする（#5784。参照先は名前で決まる）。"""
+        unit = self.by_id[target].unit if target in self.by_id else None
+        document = target.rsplit("-", 1)[0] if unit is None else unit.document_id
+        title = next((row["title"] for row in CATALOG if row["document_id"] == document), document)
+        return title, unit.section_path[-1] if unit and unit.section_path else ""
+
+    async def references(
+        self, unit_ids: list[str], scope: WikiScope
+    ) -> list[tuple[str, str, str, str]]:
         self._scoped(scope)
         self.calls.append(("links", tuple(unit_ids)))
         return [
-            row
-            for row in self.link_rows
-            if row[0] in unit_ids and row[0] in self.by_id and row[1] in self.by_id
+            (source, *self._reference(target), relation)
+            for source, target, relation in self.link_rows
+            if source in unit_ids and source in self.by_id
         ]
+
+    async def referencing(
+        self, keys: list[str], scope: WikiScope, **kwargs: Any
+    ) -> list[tuple[str, str, str, str]]:
+        self._scoped(scope)
+        found = []
+        for source, target, relation in self.link_rows:
+            key = reference_name_key(self._reference(target)[0])
+            if source in self.by_id and key in keys:
+                found.append((source, self.by_id[source].unit.document_id, key, relation))
+        return found
+
+    async def document_headings(self, scope: WikiScope) -> dict[str, list[str]]:
+        return {}
 
     async def resolve(self, filters: dict[str, str]) -> WikiScope:
         self.calls.append(("resolve", filters["knowledge_base_id"]))
@@ -430,7 +456,8 @@ async def test_outgoing_links_are_followed_up_to_the_configured_depth(
             ["doc-a-a2", "doc-a-a3", "doc-a-a4", "doc-b-b1"],
             [("doc-a-a2", "doc-a-a3")],
         ),
-        (1, ["b1"], ["doc-b-b1"], [("doc-b-b1",)]),
+        # 入る向き（#5784）: b1 の文書（文書B）を名前で参照する a4・a3 も辿る。
+        (1, ["b1"], ["doc-b-b1", "doc-a-a4", "doc-a-a3"], [("doc-b-b1",)]),
         (1, [], [], []),
     ],
 )
@@ -518,16 +545,22 @@ async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_b
     """今の範囲で読めない終点（別の KB・未公開・古い保存版）は足さず、読めなかった数に残す。"""
 
     class OutOfScope(Store):
-        async def links(self, unit_ids: list[str], scope: WikiScope) -> list[tuple[str, str, str]]:
-            return [("doc-a-a2", "doc-z-z1", "exception"), ("doc-a-a2", "doc-c-c1", "reference")]
+        async def references(
+            self, unit_ids: list[str], scope: WikiScope
+        ) -> list[tuple[str, str, str, str]]:
+            # 今の範囲に無い文書（文書Z）への参照は、参照先が決まらず辿らない（#5784）。
+            return [
+                ("doc-a-a2", "文書Z", "", "exception"),
+                ("doc-a-a2", "文書C", "通知", "reference"),
+            ]
 
     store, llm = OutOfScope(LINKED), Llm(["文書A"], units=["a2"])
     result = await retriever(
         store, llm, settings=Settings(rag_wiki_link_depth=1, rag_wiki_link_max_units=2)
     ).search(QUESTION, profile_id="p", filters={}, timeout=None)
     units = _units(result)
-    assert "doc-z-z1" not in units and "doc-c-c1" in units
-    assert result.trace["missing_dependency_units"] == 1
+    assert not any(uid.startswith("doc-z") for uid in units) and "doc-c-c1" in units
+    assert result.trace["missing_dependency_units"] == 0
 
 
 # ---- 範囲の重い条件は 1 問に 1 回（#5499） ----
@@ -569,7 +602,7 @@ class SqlOracle:
                 }
                 for p in pages
             ]
-        if "rag_wiki_links" in sql:
+        if "rag_wiki_references" in sql:
             return []
         if "VECTOR_DISTANCE" in sql:
             return [{"unit_id": uid} for uid in self.by_id]
@@ -635,7 +668,7 @@ async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> N
     assert len(later) >= 6
     assert all("p.chunk_set_id IN" in sql and "p.source_fingerprint IN" in sql for sql in later)
     assert not any("rag_document_knowledge_bases" in sql for sql in later)
-    assert any("rag_wiki_links" in sql for sql in later)
+    assert any("rag_wiki_references" in sql for sql in later)
 
 
 def _relations(result: Any) -> dict[str, Any]:
@@ -662,7 +695,7 @@ async def test_followed_relations_reach_both_sources_with_the_other_location() -
         {
             "relation": "exception",
             "role_of": "other",
-            "document_name": "doc-c",
+            "document_name": "文書C",
             "section_path": ["通知"],
         },
     ]

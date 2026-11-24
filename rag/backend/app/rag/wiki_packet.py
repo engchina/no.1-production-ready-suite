@@ -184,6 +184,7 @@ class WikiRequest:
                         render(s, properties["unresolved"]["items"]["maxLength"])
                         for s in item.unresolved
                     ],
+                    references=item.references,
                 )
             )
         return result
