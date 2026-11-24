@@ -412,7 +412,8 @@ class SectionReader:
         return max(0, section.chars - sum(item.chars for item in top))
 
     def groups(self, outline: SectionOutline, section: SectionInfo) -> list[ContextParentEvidence]:
-        """章節の chunk を読み、親ごとにまとめて章節の中の読み順で返す（文脈にある親も含む。child は章節の中の順）。"""
+        """章節の chunk を読み、親ごとにまとめて章節の中の読み順で返す（文脈にある親も含む。child は章節の中の順。
+        親の record が無い chunk は chunk ごとに返す）。"""
         key = self.section_key(outline, section)
         if key in self._groups:
             self.read_events.append(
@@ -447,10 +448,11 @@ class SectionReader:
                 continue
             group_key = str(getattr(record, "parent_chunk_uid", "") or "") or _record_key(record)
             grouped.setdefault(group_key, []).append(record)
-        tree = [
-            ContextParentEvidence(
-                record=parents.get(group_key) or children[0],
-                role="synthesis_parent" if group_key in parents else "child_fallback",
+
+        def evidence(record: AnswerRecord, members: Sequence[AnswerRecord], role: str) -> ContextParentEvidence:
+            return ContextParentEvidence(
+                record=record,
+                role=role,
                 reason=SECTION_EXPANSION_REASON,
                 children=tuple(
                     ContextChildEvidence(
@@ -458,10 +460,20 @@ class SectionReader:
                         role=SECTION_CONTEXT_ROLE,  # type: ignore[arg-type]
                         reason=SECTION_EXPANSION_REASON,
                     )
-                    for child in children
+                    for child in members
                 ),
             )
+
+        # 親の record を読めなければ chunk ごとに根拠にする。先頭の chunk の本文で章節の残りを代表させると、
+        # 残りの本文が回答の入力から消える（#5810）。
+        tree = [
+            item
             for group_key, children in grouped.items()
+            for item in (
+                [evidence(parents[group_key], children, "synthesis_parent")]
+                if group_key in parents
+                else [evidence(child, [child], "child_fallback") for child in children]
+            )
         ]
         self.read_events.append(
             {

@@ -5,6 +5,9 @@ from dataclasses import replace
 import pytest
 
 from rag_engine.generation import section_expansion as sections
+from rag_engine.generation.answer_models import AnswerContext
+from rag_engine.generation.answer_records import _stored_chunk_answer_record
+from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence, context_bundle_from_parent_evidence
 from tests.test_section_expansion import (
     SectionStub,
     _child_ids,
@@ -138,3 +141,44 @@ def test_new_search_results_share_the_existing_input_and_time_budget(exhausted):
     assert stub.read_calls.count("s3-1") == 1
     if exhausted == "time":
         assert second.stop_reason == sections.STOP_TIME_LIMIT
+
+
+def test_section_without_stored_parent_keeps_every_chunk_text_as_evidence():
+    """親の record を読めない章節は、先頭の chunk の本文だけで章節を代表させない（#5810）。"""
+    from tests.test_section_expansion import _child
+
+    stub = SectionStub()
+    shared = "doc-1:missing-parent"
+    members = _members("s3-1")
+    stub.chunks = lambda **_: [replace(_child(chunk), parent_chunk_uid=shared, parent_chunk_id=shared) for chunk in members]
+    outline = stub.outline(chunk_uid=members[0])
+    section = next(item for item in outline.sections if item.section_id == "s3-1")
+    tree = sections.SectionReader(stub.chunks, set()).groups(outline, section)
+    texts = "".join(item.record.text for item in tree)
+    assert all(f"本文{chunk}" in texts for chunk in members)
+
+
+def test_anchor_inside_a_section_without_stored_parent_keeps_its_text_after_consolidation():
+    """当たった chunk が章節の先頭でなくても、章節の拡張とまとめの後に本文が根拠に残る（#5810）。"""
+    from rag_engine.retrieval.context_fill import consolidate_evidence_tree
+    from tests.test_section_expansion import _child
+
+    stub = SectionStub()
+    shared = "doc-1:missing-parent"
+    members = _members("s3-1")
+    stub.chunks = lambda **_: [replace(_child(chunk), parent_chunk_uid=shared, parent_chunk_id=shared) for chunk in members]
+    anchor = _stored_chunk_answer_record(replace(_child(members[-1]), parent_chunk_uid=shared, parent_chunk_id=shared))
+    tree = (
+        ContextParentEvidence(
+            record=anchor,
+            role="child_fallback",
+            reason="retrieved_chunk",
+            children=(ContextChildEvidence(record=anchor, role="retrieved_anchor", reason="retrieved", retrieval_rank=1),),
+        ),
+    )
+    bundle = context_bundle_from_parent_evidence(tree, max_chars=24000)
+    context = AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree)
+    expanded = _expand(context, _settings(), stub).context
+    merged = context_bundle_from_parent_evidence(consolidate_evidence_tree(expanded.evidence_tree), max_chars=24000)
+    texts = "".join(record.text for record in merged.records)
+    assert all(f"本文{chunk}" in texts for chunk in members)
