@@ -46,7 +46,7 @@ def verdict(value="supported"):
                 "claim": "ログを確認して原因を特定します。",
                 "answer_ids": ["A1"],
                 "states_source_gap": False,
-                "consistent": value != "contradicted",
+                "relation": "conflict" if value == "contradicted" else "same",
                 "standard_ids": [] if value == "not_in_standard" else ["S1"],
             }
         ]
@@ -89,7 +89,7 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
     }
     standard = "" if value == "not_in_standard" else "ログを確認して原因を特定する。"
     assert result == {
-        "rubric_version": 44,
+        "rubric_version": 46,
         "external_data_required": None,
         "external_data_items": [],
         "judge_diagnostics": {"judge_calls": 1, "judge_retries": 0, "retry_reasons": []},
@@ -107,7 +107,7 @@ def test_one_call_judges_claims_from_question_standard_and_answer_body(value, sc
                 "answer": "ログを確認して原因を特定します。",
                 "standard": standard,
                 "states_source_gap": False,
-                "consistent": value != "contradicted",
+                "relation": "conflict" if value == "contradicted" else "same",
             }
         ],
         "coverage_points": [{"point": "ログを確認して原因を特定する。", "covered": True}],
