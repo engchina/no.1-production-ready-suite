@@ -599,7 +599,8 @@ def test_headerless_body_renders_prose_and_explicit_single_column_stays_a_table(
     assert wire.answer_body == f"説明。[{unit}]"
     body["headers"] = ["本文"]
     wire = full_answer_model(units).model_validate({"answer_body": body, "response_kind": "answered", "confidence": "high"})
-    assert wire.answer_body.startswith("| 本文 |\n| --- |")
+    # 見出しが一つの表にも行名の列を付ける（#5800）。
+    assert wire.answer_body.startswith("|  | 本文 |\n| --- | --- |\n| 説明 |")
 
 
 def test_same_reference_is_displayed_once_per_passage_and_retained_in_next_passage():
@@ -745,7 +746,8 @@ def test_only_a_repeated_row_note_is_removed_from_a_list_of_numeric_values(scope
     marks = f"[{unit}][E1]"
     assert render(["項目", "答え"]).splitlines()[-1] == f"| 設定 ({scope}) | {expected}{marks} |"
     assert render([]) == short_answer + marks
-    assert render(["答え"]).splitlines()[-1] == f"| {short_answer}{marks} |"
+    # 見出しが一つでも行名の列を付ける（#5800）。
+    assert render(["答え"]).splitlines()[-1] == f"| 設定 ({scope}) | {short_answer}{marks} |"
 
 
 @pytest.mark.parametrize(
@@ -800,3 +802,24 @@ def test_unresolved_cell_contains_its_reason_and_rejects_unrelated_facts():
     for invalid_wording in (None, "情報が無い", " {missing} ", "{missing}が無く{missing}は不明"):
         with pytest.raises(ValidationError, match="gap_wording"):
             render([gap], invalid_wording)
+
+
+def test_paragraphs_without_headers_name_each_row_only_when_there_are_several():
+    """表を選ばない回答は段落にし、行が複数のときだけ行名で要求を示す（#5800）。"""
+    from rag_engine.generation.full_answer_wire import AnswerFact, AnswerTableBody
+
+    question = "合成機器の区分と、現在の累計時間は確定できますか。"
+
+    def row(label: str, phrase: str, answer: str) -> dict:
+        fact = AnswerFact(text="合成の原文。", sources=["E1.1"], answers_which_question=label, requested_phrase=phrase, short_answer=answer)
+        return {"label": label, "cells": [[fact.model_dump()]]}
+
+    two = AnswerTableBody.model_validate(
+        {"headers": [], "rows": [row("区分", "合成機器の区分", "確定できる（B）"), row("累計時間", "現在の累計時間", "確定できない")]}
+    )
+    assert two.markdown(question) == "**区分** 確定できる（B）[E1.1]\n\n**累計時間** 確定できない[E1.1]"
+    one = AnswerTableBody.model_validate({"headers": [], "rows": [row("区分", "合成機器の区分", "確定できる（B）")]})
+    assert one.markdown(question) == "確定できる（B）[E1.1]"
+    # 表は比較か、利用者が表を求めたときだけ選ばせる。
+    description = AnswerTableBody.model_fields["headers"].description or ""
+    assert "比べる質問" in description and "表を求めた" in description and "項目・答え" not in description
