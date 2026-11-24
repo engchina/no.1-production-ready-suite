@@ -70,8 +70,8 @@ def fixed(uid, seq):
     )
 
 
-@pytest.mark.parametrize("count,limit,expected", [(1, 10, 2), (1, 1, 0), (5, 10, 2)])
-def test_neighbors_separate_read_and_adoption(count, limit, expected):
+@pytest.mark.parametrize("count,expected", [(1, 2), (5, 2)])
+def test_neighbors_separate_read_and_adoption(count, expected):
     rows = [fixed("c1", 1), fixed("c2", 2), fixed("c3", 3)]
 
     def load(**kwargs):
@@ -98,7 +98,6 @@ def test_neighbors_separate_read_and_adoption(count, limit, expected):
             get_settings(environ={}, dotenv_path=None),
             top_k=1,
             neighbor_child_count=count,
-            max_records=limit,
             max_chars=10000,
         )
     step = next(call for call in calls if call.name == "文脈の補完")
@@ -106,8 +105,6 @@ def test_neighbors_separate_read_and_adoption(count, limit, expected):
     assert step.inputs["起点ごとの補い方"] == {"c2": "neighbors"}
     assert step.outputs["読取 Chunk 数"] == 3
     assert step.outputs["文脈への採用 Chunk 数"] == expected
-    if limit == 1:
-        assert any(item.get("reason") == "context_record_limit" for item in step.outputs["隣接候補の選択記録"])
     assert step.outputs["実行状態"] == "実行済み"
 
 
@@ -177,7 +174,6 @@ def test_neighbor_no_available_content_is_completed_zero():
             get_settings(environ={}, dotenv_path=None),
             top_k=1,
             neighbor_child_count=3,
-            max_records=10,
             max_chars=10000,
         )
     output = calls[0].outputs

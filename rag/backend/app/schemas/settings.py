@@ -816,18 +816,13 @@ class AnsweringSettingsData(BaseModel):
     entity_expansion_max_chunks: int
     # 番号つきの参照の参照先 1 つで、番号で定位した節から読む chunk の上限(#5348)。
     reference_section_read_max_chunks: int = 8
-    # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 ON。#5296)と、
-    # 目次の字数・読む章節の数・参照先 1 つから読む chunk の上限(#5335)。
+    # 文書全体への参照の参照先を、目次から回答のモデルが選んだ章節で読む(#5263。既定 ON。#5296)。
+    # 目次の字数と選んだ章節の読み方は回答のモデルの入力の上限の 1/2 で決め、設定は無い(#5816)。
     reference_outline_selection_enabled: bool
-    reference_outline_selection_catalog_max_chars: int = 40000
-    reference_outline_selection_max_sections: int = 12
-    reference_outline_selection_read_max_chunks: int = 400
     # 起点の文書の目次から回答のモデルが選んだ章節を、rerank の枠の外で根拠に足す(#5324。
-    # 既定 ON。#5362)と、その対象の文書の数・目次の字数・読む章節の字数の上限。
+    # 既定 ON。#5362)と、その対象の文書の数(目次の字数・読み方は参照先と同じ。#5816)。
     outline_selection_enabled: bool = True
     outline_selection_max_documents: int = 3
-    outline_selection_catalog_max_chars: int = 40000
-    outline_selection_read_max_chars: int = 20000
     section_expansion_enabled: bool
     section_expansion_max_levels: int
     # 回答生成の通しの上限(秒。#5280)。画面は 150 / 300 / 600 / 1200 から選ぶ(.env は 150〜1200)。
@@ -864,17 +859,9 @@ class AnsweringSettingsUpdate(BaseModel):
     # 範囲は Settings の rag_reference_section_read_max_chunks と同じ(#5348)。
     reference_section_read_max_chunks: int | None = Field(default=None, ge=1, le=50)
     reference_outline_selection_enabled: bool | None = None
-    # 範囲は Settings の rag_reference_outline_selection_* と同じ(#5335)。
-    reference_outline_selection_catalog_max_chars: int | None = Field(
-        default=None, ge=2000, le=80000
-    )
-    reference_outline_selection_max_sections: int | None = Field(default=None, ge=1, le=50)
-    reference_outline_selection_read_max_chunks: int | None = Field(default=None, ge=10, le=1000)
     # 範囲は Settings の rag_outline_selection_* と同じ(#5324)。
     outline_selection_enabled: bool | None = None
     outline_selection_max_documents: int | None = Field(default=None, ge=1, le=10)
-    outline_selection_catalog_max_chars: int | None = Field(default=None, ge=2000, le=80000)
-    outline_selection_read_max_chars: int | None = Field(default=None, ge=2000, le=200000)
     section_expansion_enabled: bool | None = None
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=3)
     # 回答生成の通しの上限(秒。#5280。画面の選択肢 RAG_ANSWER_TIMEOUT_CHOICES と同じ)。

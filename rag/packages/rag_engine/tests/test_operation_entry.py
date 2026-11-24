@@ -46,7 +46,6 @@ def test_parent_context_does_not_expand_by_matching_operation_labels(reverse):
             ranked_children=anchors,
             top_k=2,
             neighbor_child_count=3,
-            max_records=2,
             support_record_limit=3,
             max_chars=12000,
         )
@@ -94,7 +93,6 @@ def test_field_heading_does_not_implicitly_add_another_parent():
             top_k=1,
             neighbor_child_count=3,
             support_record_limit=3,
-            max_records=1,
             max_chars=12000,
         )
     )

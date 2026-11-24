@@ -35,8 +35,8 @@ class AnchorDocumentCapTest(unittest.TestCase):
         records = [child(f"a{i}", i, f"A の節 {i}", "A.pdf", f"pa{i}") for i in range(1, 5)]
         return [*records, child("b1", 5, "B の条", "B.json", "pb1"), child("a5", 6, "A の節 5", "A.pdf", "pa5")]
 
-    def record(self, ranked, limit, *, top_k, max_records):
-        """文書ごとの上限を掛け、実際の起点の選び方（``top_k``・親の枠）で診断を書く。"""
+    def record(self, ranked, limit, *, top_k):
+        """文書ごとの上限を掛け、実際の起点の選び方（``top_k``・同じ親の起点の上限）で診断を書く。"""
         step = Step()
         configured = settings(limit)
         capped = a.cap_anchors_per_document(ranked, configured)
@@ -46,13 +46,12 @@ class AnchorDocumentCapTest(unittest.TestCase):
             capped,
             configured,
             top_k=top_k,
-            max_records=max_records,
-            select_anchors=lambda records: a._cut_anchors("合成の質問", records, ranked, configured, top_k=top_k, max_records=max_records),
+            select_anchors=lambda records: a._cut_anchors("合成の質問", records, ranked, configured, top_k=top_k),
         )
         return capped, step
 
     def test_drops_children_over_the_limit(self):
-        capped, step = self.record(self.ranked(), 2, top_k=3, max_records=12)
+        capped, step = self.record(self.ranked(), 2, top_k=3)
         # 超えた child は後ろへ回さず外す（起点が足りなくても使い直さない）。
         self.assertEqual([r.id for r in capped], ["a1", "a2", "b1"])
         # 3 件を外し、上位 3 件のうち a3 が外れた。
@@ -68,25 +67,9 @@ class AnchorDocumentCapTest(unittest.TestCase):
             ],
         )
 
-    def test_candidate_cut_by_the_parent_limit_is_not_reported_as_raised(self):
-        # 親の枠が 2 件なら、上位 3 件に繰り上がった b1 は起点に入らない（#5242）。「代わりに起点に入った候補」に
-        # 出さず、起点に入らなかった候補として分けて書く。
-        capped, step = self.record(self.ranked(), 2, top_k=3, max_records=2)
-        self.assertEqual([r.id for r in capped], ["a1", "a2", "b1"])
-        self.assertEqual(step.results, ["文書ごとの上限 2 件: 3 件を外しました（上位 3 件のうち 1 件）"])
-        self.assertEqual(
-            step.lines,
-            [
-                "外した候補:",
-                "1. A.pdf › 管理-(1)登録（p.3）",
-                "上位 3 件に繰り上がったが起点に入らなかった候補（親の枠 2 件・同じ親の起点の上限 2 件）:",
-                "1. B.json › 管理-(1)登録（p.5）",
-            ],
-        )
-
     def test_answer_context_reports_only_candidates_that_became_anchors(self):
-        # 回答の検索の工程の記録でも、親の枠（max_records）で起点に入らなかった候補を「代わりに起点に入った候補」に
-        # 出さない。起点の選び方は変えない（#5242）。
+        # 回答の検索の工程の記録でも、上位 top_k 件に繰り上がった候補は起点に入り、「代わりに起点に入った候補」に
+        # 出す（親の数の枠は無い。#5242・#5816）。
         ranked = self.ranked()
         parents = [parent(f"pa{i}", i, f"A の節 {i}", "A.pdf") for i in range(1, 6)] + [parent("pb1", 5, "B の条", "B.json")]
         details = []
@@ -122,16 +105,15 @@ class AnchorDocumentCapTest(unittest.TestCase):
                 ["docling"],
                 settings(2),
                 top_k=3,
-                max_records=2,
                 neighbor_child_count=0,
                 retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
             )
         anchors = [item.record.id for p in result.evidence_tree for item in p.children if item.role == "retrieved_anchor"]
-        self.assertEqual(anchors, ["a1", "a2"])
+        self.assertEqual(anchors, ["a1", "a2", "b1"])
         self.assertEqual(len(details), 1)
         lines = details[0]["lines"]
-        self.assertNotIn("代わりに起点に入った候補:", lines)
-        self.assertIn("上位 3 件に繰り上がったが起点に入らなかった候補（親の枠 2 件・同じ親の起点の上限 2 件）:", lines)
+        self.assertIn("代わりに起点に入った候補:", lines)
+        self.assertFalse(any("起点に入らなかった候補" in line for line in lines))
 
     def test_zero_keeps_every_child_in_order(self):
         ranked = self.ranked()

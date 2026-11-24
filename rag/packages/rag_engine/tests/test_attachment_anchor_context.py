@@ -37,7 +37,7 @@ def _context_record(name, level):
     )
 
 
-def _bundle(children, *, top_k, max_records):
+def _bundle(children, *, top_k):
     from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 
     parents = [_context_record(r.id, "parent") for r in children]
@@ -48,7 +48,6 @@ def _bundle(children, *, top_k, max_records):
             active_records=[*children, *parents],
             top_k=top_k,
             neighbor_child_count=0,
-            max_records=max_records,
             max_chars=5000,
         )
     )
@@ -67,7 +66,7 @@ def test_attachment_below_the_anchor_limit_is_added_outside_it():
     children = [_context_record(f"m{index}", "child") for index in range(5)]
     attached = _attachment_context_record("att1")
 
-    bundle = _bundle([*children, attached], top_k=3, max_records=3)
+    bundle = _bundle([*children, attached], top_k=3)
 
     # ナレッジベースの起点・親は添付が無いときと同じ 3 つで、添付の親を後ろに足す。
     assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "att1-p"]
@@ -80,8 +79,8 @@ def test_attachment_inside_the_anchor_limit_does_not_take_a_knowledge_base_ancho
     children = [_context_record(f"m{index}", "child") for index in range(5)]
     attached = _attachment_context_record("att1")
 
-    bundle = _bundle([attached, *children], top_k=3, max_records=3)
-    plain = _bundle(children, top_k=3, max_records=3)
+    bundle = _bundle([attached, *children], top_k=3)
+    plain = _bundle(children, top_k=3)
 
     assert [r.id for r in plain.records] == ["m0-p", "m1-p", "m2-p"]
     assert [r.id for r in bundle.records] == ["m0-p", "m1-p", "m2-p", "att1-p"]

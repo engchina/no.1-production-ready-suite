@@ -49,7 +49,6 @@ class ContextBuilderTests(unittest.TestCase):
                     active_records=[child, anchor, candidate, unrelated],
                     top_k=1,
                     neighbor_child_count=1,
-                    max_records=1,
                     support_record_limit=limit,
                     max_chars=5000,
                 )
@@ -85,7 +84,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=[anchor, other],
                 top_k=1,
                 neighbor_child_count=3,
-                max_records=5,
                 max_chars=5000,
             )
         )
@@ -108,7 +106,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=records,
                 top_k=1,
                 neighbor_child_count=1,
-                max_records=4,
                 max_chars=3000,
             )
         )
@@ -138,7 +135,7 @@ class ContextBuilderTests(unittest.TestCase):
             for key in ("document_id", "recipe_id", "chunk_set_id")
         ]
 
-        def build(records, ranked, count=1, max_records=8):
+        def build(records, ranked, count=1):
             return build_chunk_context_bundle(
                 ContextBuildRequest(
                     question="命中",
@@ -146,7 +143,6 @@ class ContextBuilderTests(unittest.TestCase):
                     active_records=records,
                     top_k=4,
                     neighbor_child_count=count,
-                    max_records=max_records,
                     max_chars=1000,
                 )
             )
@@ -158,7 +154,6 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual([e.reason for e in bundle.evidence], ["adjacent_child", "retrieved_chunk", "adjacent_child"])
         self.assertEqual([r.id for r in build(records, [hit], count=0).records], ["hit"])
         self.assertEqual([r.id for r in build(records, [before]).records], ["before", "hit"])
-        self.assertEqual([r.id for r in build(records, [hit], max_records=1).records], ["hit"])
         self.assertEqual([r.id for r in build(records, [after, before], count=0).records], ["after", "before"])
         # 隣り合う起点は 1 つのかたまり（文書の順）にし、かたまりは最も上の起点の位置に置く（#5168）。
         self.assertEqual([r.id for r in build(records, [after, before, hit], count=0).records], ["before", "hit", "after"])
@@ -188,7 +183,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=records,
                 top_k=2,
                 neighbor_child_count=0,
-                max_records=2,
                 max_chars=2000,
             )
         )
@@ -214,13 +208,13 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=records,
                 top_k=3,
                 neighbor_child_count=0,
-                max_records=1,
                 max_chars=2000,
             )
         )
 
         self.assertTrue(bundle.ready)
-        self.assertEqual([record.id for record in bundle.records], ["parent-a"])
+        # 親の数では切らない（#5816）。起点の多い親が先に並ぶ。
+        self.assertEqual([record.id for record in bundle.records], ["parent-a", "parent-b"])
         self.assertEqual(bundle.evidence_tree[0].anchor_child_ids, ("child-a1", "child-a2"))
         self.assertGreater(bundle.evidence_tree[0].evidence_score, 1.0)
         self.assertEqual(
@@ -246,7 +240,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=records,
                 top_k=3,
                 neighbor_child_count=0,
-                max_records=2,
                 max_chars=4000,
             )
         )
@@ -264,7 +257,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=records,
                 top_k=3,
                 neighbor_child_count=0,
-                max_records=2,
                 max_chars=4000,
                 max_anchors_per_parent=1,
             )
@@ -315,7 +307,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=[child_a, parent_a, parent_b],
                 top_k=1,
                 neighbor_child_count=0,
-                max_records=3,
                 max_chars=2000,
             )
         )
@@ -340,7 +331,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=records,
                 top_k=1,
                 neighbor_child_count=0,
-                max_records=4,
                 max_chars=len(body),
             )
         )
@@ -364,7 +354,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=records,
                 top_k=2,
                 neighbor_child_count=0,
-                max_records=4,
                 max_chars=400,
             )
         )
@@ -394,7 +383,6 @@ class ContextBuilderTests(unittest.TestCase):
                 active_records=[inactive],
                 top_k=1,
                 neighbor_child_count=1,
-                max_records=3,
                 max_chars=1000,
             )
         )

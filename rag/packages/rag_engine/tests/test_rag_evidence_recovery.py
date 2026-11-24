@@ -105,14 +105,13 @@ def test_parent_context_does_not_add_another_parent_by_operation_name():
         active_records=[anchor, parent, support, child, *others],
         top_k=1,
         neighbor_child_count=2,
-        max_records=3,
         max_chars=3000,
     )
     bundle = build_chunk_context_bundle(request)
     assert [r.id for r in bundle.records] == ["p1"]
     assert "ボタンの操作全文" not in bundle.text
     assert build_chunk_context_bundle(replace(request, neighbor_child_count=0)).records == [parent]
-    assert len(build_chunk_context_bundle(replace(request, max_records=1)).records) == 1
+    assert len(build_chunk_context_bundle(replace(request)).records) == 1
 
 
 def test_generic_section_does_not_link_unrelated_screens():
@@ -129,7 +128,6 @@ def test_generic_section_does_not_link_unrelated_screens():
             active_records=records,
             top_k=1,
             neighbor_child_count=2,
-            max_records=3,
             max_chars=3000,
         )
     )
@@ -181,7 +179,6 @@ def test_operation_expansion_never_evicts_retrieved_evidence_at_budget():
             active_records=records,
             top_k=3,
             neighbor_child_count=3,
-            max_records=3,
             max_chars=3000,
         )
     )

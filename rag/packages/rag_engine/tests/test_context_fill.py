@@ -156,7 +156,6 @@ def _build(stub: Sections, ranked, active, *, expansions=(), section_fill=True, 
             _settings(),
             top_k=len(ranked),
             neighbor_child_count=neighbors,
-            max_records=20,
             max_chars=100_000,
             expansions=expansions,
             section_fill=section_fill,
@@ -334,13 +333,12 @@ def test_supplement_is_merged_after_expansions_with_the_same_rule():
             _settings(),
             top_k=1,
             neighbor_child_count=1,
-            max_records=3,
             max_chars=100_000,
             expansions=[expansion],
             supplements=[supplement, covered],
         )
     # 起点 C2 と前後の文脈はそのまま。拡張の根拠（E1）の後に補いの根拠（D4 と前後の D3）を最後に置く。
-    # C3 は起点の前後の文脈にあるので印だけ。拡張・補いの根拠は上限（max_records=3）に数えない。
+    # C3 は起点の前後の文脈にあるので印だけ。拡張・補いの根拠は top_k に数えない。
     assert [item.record.chunk_uid for item in bundle.evidence_tree] == ["C1", "C2", "C3", "E1", "E2", "D3", "D4"]
     c3 = next(child for item in bundle.evidence_tree for child in item.children if child.record.chunk_uid == "C3")
     assert c3.role == "neighbor_context" and QUERY_OVERFLOW_KEY in c3.record.metadata

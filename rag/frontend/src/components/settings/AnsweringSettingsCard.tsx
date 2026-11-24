@@ -39,25 +39,17 @@ const ANSWER_TIMEOUT_OPTIONS: SelectFieldOption<string>[] = [150, 300, 600, 1200
   label: t("settings.answering.answerTimeoutOption", { seconds: String(seconds) }),
 }));
 
-// 目次から章節を選ぶ設定の選択肢。文書全体への参照（#5335。範囲は backend の rag_reference_outline_selection_*
-// と同じ）と起点の文書（#5324。rag_outline_selection_* と同じ）。目次の字数の選択肢は両方で使う。
 // .env で選択肢の外の値を保存していれば、その値も選べるように足す。
-const REFERENCE_SECTION_CHOICES = [3, 6, 12, 24, 50];
 // 番号つきの参照の節から読むチャンクの上限（#5348。範囲は backend の rag_reference_section_read_max_chunks と同じ 1〜50）。
 const REFERENCE_SECTION_READ_CHUNK_CHOICES = [4, 8, 16, 32, 50];
-const REFERENCE_READ_CHUNK_CHOICES = [50, 100, 200, 400, 800, 1000];
+// 起点の文書の目次の選択で目次を渡す文書の数（#5324。範囲は backend の rag_outline_selection_max_documents と同じ）。
+// 目次の字数と読む章節の大きさは回答モデルの入力上限の 1/2 で決め、設定は無い（2 つの目次の選択で同じ。#5816）。
 const OUTLINE_DOCUMENT_CHOICES = Array.from({ length: 10 }, (_, n) => n + 1);
-const OUTLINE_CATALOG_CHAR_CHOICES = [10000, 20000, 40000, 80000];
-const OUTLINE_READ_CHAR_CHOICES = [5000, 10000, 20000, 40000, 80000, 200000];
 
 function countOptions(choices: number[], current: number, label: (value: number) => string): SelectFieldOption<string>[] {
   return [...new Set([...choices, current])]
     .sort((left, right) => left - right)
     .map((value) => ({ value: String(value), label: label(value) }));
-}
-
-function charOption(value: number): string {
-  return t("settings.answering.charsOption", { chars: value.toLocaleString("ja-JP") });
 }
 
 function chunkOption(value: number): string {
@@ -83,13 +75,8 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     entity_expansion_max_chunks: settings.entity_expansion_max_chunks,
     reference_section_read_max_chunks: settings.reference_section_read_max_chunks ?? 8,
     reference_outline_selection_enabled: settings.reference_outline_selection_enabled ?? true,
-    reference_outline_selection_catalog_max_chars: settings.reference_outline_selection_catalog_max_chars ?? 40000,
-    reference_outline_selection_max_sections: settings.reference_outline_selection_max_sections ?? 12,
-    reference_outline_selection_read_max_chunks: settings.reference_outline_selection_read_max_chunks ?? 400,
     outline_selection_enabled: settings.outline_selection_enabled ?? true,
     outline_selection_max_documents: settings.outline_selection_max_documents ?? 3,
-    outline_selection_catalog_max_chars: settings.outline_selection_catalog_max_chars ?? 40000,
-    outline_selection_read_max_chars: settings.outline_selection_read_max_chars ?? 20000,
     section_expansion_enabled: settings.section_expansion_enabled,
     section_expansion_max_levels: settings.section_expansion_max_levels,
     answer_timeout_seconds: settings.answer_timeout_seconds,
@@ -308,20 +295,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             disabled={disabled}
             onChange={(checked) => update({ reference_outline_selection_enabled: checked })}
           />
-          {form.reference_outline_selection_enabled ? <FormGrid className="px-3 pb-3">
-            <SelectField id="answering-reference_outline_selection_catalog_max_chars" label={t("settings.answering.reference_outline_selection_catalog_max_chars")} width="xs"
-              value={String(form.reference_outline_selection_catalog_max_chars)} disabled={disabled}
-              options={countOptions(OUTLINE_CATALOG_CHAR_CHOICES, form.reference_outline_selection_catalog_max_chars, charOption)}
-              onValueChange={(value) => update({ reference_outline_selection_catalog_max_chars: Number(value) })} />
-            <SelectField id="answering-reference_outline_selection_max_sections" label={t("settings.answering.reference_outline_selection_max_sections")} width="xs"
-              value={String(form.reference_outline_selection_max_sections)} disabled={disabled}
-              options={countOptions(REFERENCE_SECTION_CHOICES, form.reference_outline_selection_max_sections, String)}
-              onValueChange={(value) => update({ reference_outline_selection_max_sections: Number(value) })} />
-            <SelectField id="answering-reference_outline_selection_read_max_chunks" label={t("settings.answering.reference_outline_selection_read_max_chunks")} width="xs"
-              value={String(form.reference_outline_selection_read_max_chunks)} disabled={disabled}
-              options={countOptions(REFERENCE_READ_CHUNK_CHOICES, form.reference_outline_selection_read_max_chunks, chunkOption)}
-              onValueChange={(value) => update({ reference_outline_selection_read_max_chunks: Number(value) })} />
-          </FormGrid> : null}
         </div>
         <div>
           <SwitchRow id="answering-outline-selection" label={t("settings.answering.outlineSelection")}
@@ -332,14 +305,6 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               value={String(form.outline_selection_max_documents)} disabled={disabled}
               options={countOptions(OUTLINE_DOCUMENT_CHOICES, form.outline_selection_max_documents, String)}
               onValueChange={(value) => update({ outline_selection_max_documents: Number(value) })} />
-            <SelectField id="answering-outline_selection_catalog_max_chars" label={t("settings.answering.outline_selection_catalog_max_chars")} width="xs"
-              value={String(form.outline_selection_catalog_max_chars)} disabled={disabled}
-              options={countOptions(OUTLINE_CATALOG_CHAR_CHOICES, form.outline_selection_catalog_max_chars, charOption)}
-              onValueChange={(value) => update({ outline_selection_catalog_max_chars: Number(value) })} />
-            <SelectField id="answering-outline_selection_read_max_chars" label={t("settings.answering.outline_selection_read_max_chars")} width="xs"
-              value={String(form.outline_selection_read_max_chars)} disabled={disabled}
-              options={countOptions(OUTLINE_READ_CHAR_CHOICES, form.outline_selection_read_max_chars, charOption)}
-              onValueChange={(value) => update({ outline_selection_read_max_chars: Number(value) })} />
           </FormGrid> : null}
         </div>
         <div>

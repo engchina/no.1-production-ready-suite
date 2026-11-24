@@ -406,12 +406,11 @@ def test_supplement_records_do_not_change_main_neighbors(monkeypatch: pytest.Mon
 def test_summary_anchor_takes_no_neighbors_or_their_slots(monkeypatch: pytest.MonkeyPatch) -> None:
     """文書全体の要約の chunk が起点でも、読んだ chunk の並びの位置で前後の文脈を付けない（#5198）。
 
-    要約の chunk の番号は本文の後に振られるので、位置で選ぶと文書の末尾の本文 A6 が「前」になり、文脈の最大レコード数の
-    枠を取ってほかの起点 C2 の前後 C3 が入らなかった。
+    要約の chunk の番号は本文の後に振られるので、位置で選ぶと文書の末尾の本文 A6 が「前」になっていた。
     """
     harness = Harness({QUESTION: ["AS", "C2"]}, {"AS": 0.9, "C2": 0.7}, chunks=SUMMARY_CHUNKS)
 
-    result = _run(monkeypatch, harness, request=None, max_context_records=4)
+    result = _run(monkeypatch, harness, request=None)
 
     assert _evidence(result) == ["AS", "C1", "C2", "C3"]
 

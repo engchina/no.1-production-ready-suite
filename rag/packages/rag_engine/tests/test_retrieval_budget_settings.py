@@ -1,11 +1,10 @@
-"""context の parent 数を環境変数で変えられる (#1054)。生成の原文予算は回答のモデルの入力の上限の 1/2 (#5813)。"""
+"""生成の原文予算は回答のモデルの入力の上限の 1/2 (#5813)。context の親の数の上限は持たない (#5816)。"""
 
 import unittest
 from types import SimpleNamespace
 
-from rag_engine.config import DEFAULT_MAX_CONTEXT_RECORDS, get_settings
+from rag_engine.config import get_settings
 from rag_engine.generation import answering
-from rag_engine.generation.answer_records import MAX_CONTEXT_RECORDS
 
 # 既定の回答のモデルの入力の上限（128000 tokens）の 1/2。
 DEFAULT_BUDGET = 64000
@@ -14,27 +13,24 @@ DEFAULT_BUDGET = 64000
 class RetrievalBudgetSettingsTest(unittest.TestCase):
     def test_defaults_match_the_code_constants(self):
         settings = get_settings(environ={}, dotenv_path=None)
-        self.assertEqual((settings.max_context_records, settings.evidence_budget_chars), (MAX_CONTEXT_RECORDS, DEFAULT_BUDGET))
+        self.assertEqual(settings.evidence_budget_chars, DEFAULT_BUDGET)
         self.assertEqual(settings.evidence_budget_chars, settings.answer_max_input_tokens // 2)
-        # config.py は循環 import を避けて値を写しているので、元の常量とのずれをここで止める
-        self.assertEqual(DEFAULT_MAX_CONTEXT_RECORDS, MAX_CONTEXT_RECORDS)
+        # context の親の数の上限は削除した（#5816。数は top_k だけで決める）。
+        self.assertFalse(hasattr(settings, "max_context_records"))
+        self.assertFalse(hasattr(answering, "_max_context_records"))
 
     def test_environment_overrides_each_value(self):
         settings = get_settings(
             environ={
-                "RAG_ENGINE_MAX_CONTEXT_RECORDS": "16",
                 "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": "96000",
                 # 削除したキー。残っていても読まない。
                 "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": "72000",
+                "RAG_ENGINE_MAX_CONTEXT_RECORDS": "16",
             },
             dotenv_path=None,
         )
-        self.assertEqual((settings.max_context_records, settings.evidence_budget_chars), (16, 48000))
-        self.assertEqual(get_settings(environ={"RAG_ENGINE_MAX_CONTEXT_RECORDS": "0"}, dotenv_path=None).max_context_records, 1)
-
-    def test_context_record_limit_falls_back_without_settings(self):
-        self.assertEqual(answering._max_context_records(None), MAX_CONTEXT_RECORDS)
-        self.assertEqual(answering._max_context_records(SimpleNamespace(max_context_records=16)), 16)
+        self.assertEqual(settings.evidence_budget_chars, 48000)
+        self.assertFalse(hasattr(settings, "max_context_records"))
 
     def test_grounded_spans_pass_the_budget_to_evidence_selection(self):
         seen = {}

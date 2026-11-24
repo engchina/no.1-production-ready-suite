@@ -3548,48 +3548,34 @@ def test_answering_settings_toggle_reference_outline_selection(
     assert "RAG_REFERENCE_OUTLINE_SELECTION_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
-def test_answering_settings_save_reference_outline_selection_limits(
+def test_answering_settings_have_no_outline_selection_size_limits(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """参照先の目次の字数・読む章節の数・読む chunk の上限(#5335)を .env と実行中の設定へ保存する。
+    """2 つの目次の選択の字数・章節の数・chunk の数の上限は設定に無い(#5816)。
 
-    範囲外の値は 422。
+    入力の上限の 1/2 で決めるので、画面・API に出さず、送られても保存しない(読み捨てる)。
     """
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_reference_outline_selection_catalog_max_chars", 40000)
-    monkeypatch.setattr(settings, "rag_reference_outline_selection_max_sections", 12)
-    monkeypatch.setattr(settings, "rag_reference_outline_selection_read_max_chunks", 400)
     env_file = _settings_env_file(monkeypatch, tmp_path)
+    removed = (
+        "reference_outline_selection_catalog_max_chars",
+        "reference_outline_selection_max_sections",
+        "reference_outline_selection_read_max_chunks",
+        "outline_selection_catalog_max_chars",
+        "outline_selection_read_max_chars",
+    )
 
     data = client.get("/api/settings/answering").json()["data"]
-    assert data["reference_outline_selection_catalog_max_chars"] == 40000
-    assert data["reference_outline_selection_max_sections"] == 12
-    assert data["reference_outline_selection_read_max_chunks"] == 400
+    assert not set(removed) & set(data)
     response = client.patch(
         "/api/settings/answering",
-        json={
-            "reference_outline_selection_catalog_max_chars": 20000,
-            "reference_outline_selection_max_sections": 24,
-            "reference_outline_selection_read_max_chunks": 200,
-        },
+        json={"outline_selection_max_documents": 4, **dict.fromkeys(removed, 20000)},
     )
 
     assert response.status_code == 200
-    saved = response.json()["data"]
-    assert saved["reference_outline_selection_max_sections"] == 24
-    assert settings.rag_reference_outline_selection_catalog_max_chars == 20000
-    assert settings.rag_reference_outline_selection_max_sections == 24
-    assert settings.rag_reference_outline_selection_read_max_chunks == 200
+    assert not set(removed) & set(response.json()["data"])
     text = env_file.read_text(encoding="utf-8")
-    assert "RAG_REFERENCE_OUTLINE_SELECTION_CATALOG_MAX_CHARS=20000" in text
-    assert "RAG_REFERENCE_OUTLINE_SELECTION_MAX_SECTIONS=24" in text
-    assert "RAG_REFERENCE_OUTLINE_SELECTION_READ_MAX_CHUNKS=200" in text
-    for invalid in (
-        {"reference_outline_selection_catalog_max_chars": 1000},
-        {"reference_outline_selection_max_sections": 51},
-        {"reference_outline_selection_read_max_chunks": 5},
-    ):
-        assert client.patch("/api/settings/answering", json=invalid).status_code == 422
+    assert "RAG_OUTLINE_SELECTION_MAX_DOCUMENTS=4" in text
+    assert not any(name.upper() in text for name in removed)
 
 
 def test_answering_settings_save_reference_section_read_max_chunks(
@@ -3625,23 +3611,17 @@ def test_answering_settings_save_reference_section_read_max_chunks(
 def test_answering_settings_save_outline_selection(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """起点の文書の目次から章節を選ぶ設定(#5324)は既定 ON(#5362)で、開閉と上限を .env と
-    実行中の設定へ反映する。範囲の外の上限は保存しない。"""
+    """起点の文書の目次から章節を選ぶ設定(#5324)は既定 ON(#5362)で、開閉と対象の文書の数を
+    .env と実行中の設定へ反映する。範囲の外の数は保存しない。"""
     from app.config import Settings
 
     monkeypatch.delenv("RAG_OUTLINE_SELECTION_ENABLED", raising=False)
     defaults = Settings(_env_file=None)
     assert defaults.rag_outline_selection_enabled is True
-    assert (
-        defaults.rag_outline_selection_max_documents,
-        defaults.rag_outline_selection_catalog_max_chars,
-        defaults.rag_outline_selection_read_max_chars,
-    ) == (3, 40000, 20000)
+    assert defaults.rag_outline_selection_max_documents == 3
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_outline_selection_enabled", False)
     monkeypatch.setattr(settings, "rag_outline_selection_max_documents", 3)
-    monkeypatch.setattr(settings, "rag_outline_selection_catalog_max_chars", 40000)
-    monkeypatch.setattr(settings, "rag_outline_selection_read_max_chars", 20000)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     data = client.get("/api/settings/answering").json()["data"]
@@ -3652,27 +3632,21 @@ def test_answering_settings_save_outline_selection(
         json={
             "outline_selection_enabled": True,
             "outline_selection_max_documents": 5,
-            "outline_selection_catalog_max_chars": 20000,
-            "outline_selection_read_max_chars": 80000,
         },
     )
 
     assert response.status_code == 200
     saved = response.json()["data"]
     assert saved["outline_selection_enabled"] is True
-    assert saved["outline_selection_read_max_chars"] == 80000
+    assert saved["outline_selection_max_documents"] == 5
     assert settings.rag_outline_selection_enabled is True
     assert settings.rag_outline_selection_max_documents == 5
-    assert settings.rag_outline_selection_catalog_max_chars == 20000
     text = env_file.read_text(encoding="utf-8")
     assert "RAG_OUTLINE_SELECTION_ENABLED=true" in text
     assert "RAG_OUTLINE_SELECTION_MAX_DOCUMENTS=5" in text
-    assert "RAG_OUTLINE_SELECTION_CATALOG_MAX_CHARS=20000" in text
-    assert "RAG_OUTLINE_SELECTION_READ_MAX_CHARS=80000" in text
     for invalid in (
+        {"outline_selection_max_documents": 0},
         {"outline_selection_max_documents": 11},
-        {"outline_selection_catalog_max_chars": 1000},
-        {"outline_selection_read_max_chars": 300000},
     ):
         assert client.patch("/api/settings/answering", json=invalid).status_code == 422
 

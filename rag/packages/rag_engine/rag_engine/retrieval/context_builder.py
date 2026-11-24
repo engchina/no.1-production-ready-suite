@@ -208,7 +208,6 @@ class ContextBuildRequest:
     active_records: Sequence[Any]
     top_k: int
     neighbor_child_count: int
-    max_records: int
     max_chars: int
     metadata: dict[str, Any] = field(default_factory=dict)
     # 主検索枠を保持したまま追加できる同一操作の親数。0は既存の総数制限を維持する。
@@ -219,10 +218,10 @@ class ContextBuildRequest:
     # 原文の遅延取得のための起点選択専用。返した本文は回答に使わず、親参照で起点をまとめる。
     select_anchors_only: bool = False
     # 検索拡張（参照先・実体・目次から選んだ章節）の根拠（#5162）。起点・親・前後の文脈が決まった後に、
-    # ``expansion_merge`` の規則で 1 回だけ合わせる。``top_k``・``max_records`` に数えない。
+    # ``expansion_merge`` の規則で 1 回だけ合わせる。``top_k`` に数えない。
     expansion_children: Sequence[Any] = ()
     # 補いの検索（要求別の補完・業務ガイドの手順ごとの検索。#5173）で rerank・下限・``top_k`` の切りを通した根拠。
-    # 検索拡張の根拠の後に、同じ規則で合わせる。``top_k``・``max_records`` に数えず、並びの根拠を外さない。
+    # 検索拡張の根拠の後に、同じ規則で合わせる。``top_k`` に数えず、並びの根拠を外さない。
     supplement_children: Sequence[Any] = ()
     # 補いの検索の候補の原文と、補いの根拠のために読んだ前後・親の原文（#5185）。``active_records`` には主の検索の分だけを
     # 渡す。主の検索の根拠の前後の文脈は ``active_records`` だけから選び、補いの有無で変えない（補いの原文は補いの根拠の
@@ -235,14 +234,6 @@ class ContextBuildRequest:
 
 def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
     """検索済み child chunk から parent/neighbor を展開して context bundle を作ります。"""
-    if request.max_records <= 0:
-        return ContextBundle(
-            records=[],
-            text="",
-            status="insufficient",
-            insufficient_reason="context record budget is zero",
-        )
-
     active_records = [record for record in request.active_records if _record_active(record)]
     supplement_records = [record for record in request.supplement_records if _record_active(record)]
     active_ids = {record_context_key(record) for record in (*active_records, *supplement_records) if record_context_key(record)}
@@ -391,7 +382,9 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
         )
 
     # 起点は Rerank 順を保つ。親子分割では親本文だけを使い、隣接親・同一ページ・子全体を補完しない。
-    primary = sorted(groups, key=_parent_group_sort_key)[: request.max_records]
+    # 親の数では切らない（起点の数は ``top_k`` だけで決める。1 回の生成に入らない分は分割読取で読む。#5816）。
+    # 同じ親の起点の上限で外した child の親（起点の無いかたまり）は並びに入れない。
+    primary = sorted((group for group in groups if group.children), key=_parent_group_sort_key)
     selected = list(primary)
     selected_groups = {id(group) for group in selected}
     for retrieval_rank, child in attachment_children:
@@ -436,14 +429,7 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
                     neighbors.setdefault(key, neighbor)
                 elif receipt is not None:
                     receipt.selection.append({"chunk_id": key, "reason": "already_in_context"})
-    for neighbor_index, neighbor in enumerate(neighbors.values()):
-        if len(selected) >= request.max_records + len(attachment_children):
-            if receipt is not None:
-                receipt.selection.extend(
-                    {"chunk_id": record_context_key(item), "reason": "context_record_limit"}
-                    for item in list(neighbors.values())[neighbor_index:]
-                )
-            break
+    for neighbor in neighbors.values():
         group = group_for_child(neighbor)
         if group is None or id(group) in selected_groups:
             continue
@@ -738,7 +724,7 @@ def _finalize_parent_evidence(
 
 
 def _parent_group_sort_key(group: _ParentEvidenceBuilder) -> tuple[Any, ...]:
-    """親の並び（`max_records` の切り・根拠の予算の配分・評価器に渡す順が引き継ぐ）。
+    """親の並び（根拠の予算の配分・評価器に渡す順が引き継ぐ）。
 
     主キーは起点の最上位の順位（rerank の後の候補の並び。MaxP。#3504）。rerank の後の並びは rerank の工程が
     点数の順（#5165）と明示の配置（質問が名指しした画面の先頭寄せ・位置を保つ候補。

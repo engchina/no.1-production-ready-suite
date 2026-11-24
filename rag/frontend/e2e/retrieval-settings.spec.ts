@@ -138,13 +138,8 @@ const ANSWERING_SETTINGS = {
   entity_expansion_max_chunks: 3,
   reference_section_read_max_chunks: 8,
   reference_outline_selection_enabled: false,
-  reference_outline_selection_catalog_max_chars: 40000,
-  reference_outline_selection_max_sections: 12,
-  reference_outline_selection_read_max_chunks: 400,
   outline_selection_enabled: false,
   outline_selection_max_documents: 3,
-  outline_selection_catalog_max_chars: 40000,
-  outline_selection_read_max_chars: 20000,
   section_expansion_enabled: true,
   section_expansion_max_levels: 1,
   answer_timeout_seconds: 600,
@@ -739,7 +734,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`参照先の文書の目次から章節を選ぶ設定をオンにして、上限と一緒に保存できる（${viewport.name}。#5263・#5335）`, { tag: "@responsive" }, async ({ page }) => {
+  test(`参照先の文書の目次から章節を選ぶ設定をオンにして保存でき、字数・数の上限の欄は無い（${viewport.name}。#5263・#5816）`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockRetrievalCards(page);
@@ -750,29 +745,19 @@ for (const viewport of [
 
     const toggle = page.getByRole("switch", { name: "参照先の文書の目次から章節をモデルが選ぶ", exact: true });
     await expect(toggle).not.toBeChecked();
-    const sections = page.getByRole("combobox", { name: "参照先ごとに読む章節の数", exact: true });
-    await expect(sections).toHaveCount(0);
     await toggle.click();
-    await expect(page.getByRole("combobox", { name: "参照先の目次の字数の上限", exact: true })).toContainText("40,000 字");
-    await expect(sections).toContainText("12");
-    const chunks = page.getByRole("combobox", { name: "参照先ごとに読むチャンクの上限", exact: true });
-    await expect(chunks).toContainText("400 件");
-    await sections.click();
-    await page.getByRole("listbox", { name: "参照先ごとに読む章節の数", exact: true }).getByRole("option", { name: "24", exact: true }).click();
-    await chunks.click();
-    await page.getByRole("listbox", { name: "参照先ごとに読むチャンクの上限", exact: true }).getByRole("option", { name: "800 件", exact: true }).click();
+    // 目次の字数と読む章節の大きさは回答モデルの入力上限の 1/2 で決めるので、上限の欄は出さない（#5816）。
+    for (const name of ["参照先の目次の字数の上限", "参照先ごとに読む章節の数", "参照先ごとに読むチャンクの上限"]) {
+      await expect(page.getByRole("combobox", { name, exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByText(/参照先の文書の目次を回答のモデルに渡して.*入力上限の 1\/2 以下なら全体を読み、超えるときは子の章節に縮めます/)).toBeVisible();
     await expectNoPageOverflow(page);
     await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
 
     await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({
-      reference_outline_selection_enabled: true,
-      reference_outline_selection_catalog_max_chars: 40000,
-      reference_outline_selection_max_sections: 24,
-      reference_outline_selection_read_max_chunks: 800,
-    });
+    expect(saved[0]).toMatchObject({ reference_outline_selection_enabled: true });
+    expect(saved[0]).not.toHaveProperty("reference_outline_selection_max_sections");
     await expect(toggle).toBeChecked();
-    await expect(chunks).toContainText("800 件");
     await expectNoPageOverflow(page);
   });
 }
@@ -803,7 +788,7 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 
-  test(`起点の文書の目次から章節を選ぶ設定は既定でオフで、オンにして上限と一緒に保存できる（${viewport.name}。#5324）`, { tag: "@responsive" }, async ({ page }) => {
+  test(`起点の文書の目次から章節を選ぶ設定をオンにして、目次を渡す文書の数と一緒に保存できる（${viewport.name}。#5324・#5816）`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockRetrievalCards(page);
@@ -818,25 +803,21 @@ for (const viewport of [
     await expect(documents).toHaveCount(0);
     await toggle.click();
     await expect(documents).toContainText("3");
-    await expect(page.getByRole("combobox", { name: "目次の字数の上限", exact: true })).toContainText("40,000 字");
-    const readChars = page.getByRole("combobox", { name: "読む章節の字数の上限", exact: true });
-    await expect(readChars).toContainText("20,000 字");
+    // 目次の字数と読む章節の大きさは回答モデルの入力上限の 1/2 で決めるので、上限の欄は出さない（#5816）。
+    for (const name of ["目次の字数の上限", "読む章節の字数の上限"]) {
+      await expect(page.getByRole("combobox", { name, exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByText(/起点の文書のうち章節の構成を持つ文書の目次を.*入力上限の 1\/2 以下なら全体を読み、超えるときは子の章節に縮めます/)).toBeVisible();
     await documents.click();
     await page.getByRole("listbox", { name: "目次を渡す文書の数", exact: true }).getByRole("option", { name: "5", exact: true }).click();
-    await readChars.click();
-    await page.getByRole("listbox", { name: "読む章節の字数の上限", exact: true }).getByRole("option", { name: "40,000 字", exact: true }).click();
     await expectNoPageOverflow(page);
     await page.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
 
     await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({
-      outline_selection_enabled: true,
-      outline_selection_max_documents: 5,
-      outline_selection_catalog_max_chars: 40000,
-      outline_selection_read_max_chars: 40000,
-    });
+    expect(saved[0]).toMatchObject({ outline_selection_enabled: true, outline_selection_max_documents: 5 });
+    expect(saved[0]).not.toHaveProperty("outline_selection_read_max_chars");
     await expect(toggle).toBeChecked();
-    await expect(readChars).toContainText("40,000 字");
+    await expect(documents).toContainText("5");
     await expectNoPageOverflow(page);
   });
 }

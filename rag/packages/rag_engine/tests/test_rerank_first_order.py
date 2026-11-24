@@ -12,7 +12,7 @@ from rag_engine.retrieval.rerank_scores import best_rerank_score, question_reran
 from tests.record_fixtures import child, parent
 
 
-def _bundle(children, parents, *, top_k=20, max_records=12):
+def _bundle(children, parents, *, top_k=20):
     return build_chunk_context_bundle(
         ContextBuildRequest(
             question="質問",
@@ -22,7 +22,6 @@ def _bundle(children, parents, *, top_k=20, max_records=12):
             neighbor_child_count=0,
             support_record_limit=0,
             max_anchors_per_parent=2,
-            max_records=max_records,
             max_chars=100000,
         )
     )
@@ -48,11 +47,12 @@ def test_rerank_metadata_keeps_the_original_question_score():
     ]
 
 
-def test_parent_with_one_high_reranked_anchor_is_not_pushed_out_by_a_parent_with_more_anchors():
-    """起点 20 件が 12 を超える親に分かれても、親の枠（max_records）は起点の rerank の点数の順で切る。
+def test_every_anchor_within_top_k_reaches_the_context_beyond_twelve_parents():
+    """起点 20 件が 12 を超える親に分かれても、起点の親はすべて文脈に入り、起点の rerank の順に並ぶ（#5816）。
 
-    以前は起点の数の加点（+0.35/件）で、rerank 18・19 位の起点 2 件の親が 7 番目に上がり、rerank 12 位の
-    起点 1 件の親が枠の外に落ちていた。
+    以前は親の枠（12 件）で切り、rerank 13 位以下の起点の親は文脈から外れていた。数は ``top_k`` だけで決め、
+    1 回の生成に入らない分は分割読取で読む。起点の数の加点では並びを変えない（rerank 18・19 位の起点 2 件の親は
+    その位置のまま）。
     """
     children, parents = [], []
     for i in range(20):
@@ -66,7 +66,9 @@ def test_parent_with_one_high_reranked_anchor_is_not_pushed_out_by_a_parent_with
 
     bundle = _bundle(children, parents)
 
-    assert [r.id for r in bundle.records] == [f"p{i}" for i in range(12)]
+    assert [r.id for r in bundle.records] == [*(f"p{i}" for i in range(17)), "pz", "p19"]
+    # top_k の外の候補は入らない。
+    assert [r.id for r in _bundle(children, parents, top_k=14).records] == [f"p{i}" for i in range(14)]
 
 
 def test_parents_follow_the_best_anchor_in_the_rerank_order():
@@ -86,7 +88,7 @@ def test_parents_follow_the_best_anchor_in_the_rerank_order():
         parent(name, i, "本文", source)
         for i, (name, source) in enumerate(zip(["pu", "ps", "pt", "pv"], ["u.pdf", "s.pdf", "t.pdf", "v.pdf"], strict=True), start=1)
     ]
-    assert [r.id for r in _bundle(children, parents, max_records=3).records] == ["pu", "ps", "pt"]
+    assert [r.id for r in _bundle(children, parents).records] == ["pu", "ps", "pt", "pv"]
 
 
 def _context(records, children):

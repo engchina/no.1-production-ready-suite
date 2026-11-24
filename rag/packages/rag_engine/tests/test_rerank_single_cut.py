@@ -75,15 +75,32 @@ def test_top_k_is_the_only_cut_after_rerank(monkeypatch):
     ranked = rerank_records("合成の質問", records, settings, enabled=True)
     assert [r.id for r in ranked] == ["4", "3", "2", "1", "0"]
     bundle = answering._bundle_context(
-        "合成の質問", ranked, [*records, *parents], settings, top_k=3, neighbor_child_count=0, max_records=50, max_chars=5000
+        "合成の質問", ranked, [*records, *parents], settings, top_k=3, neighbor_child_count=0, max_chars=5000
     )
     # 起点は rerank の点数の上位 3 件だけ（下限未満の 5 は入らない）。
     assert [r.id for r in bundle.records] == ["p4", "p3", "p2"]
-    wide = answering._bundle_context(
-        "合成の質問", ranked, [*records, *parents], settings, top_k=50, neighbor_child_count=0, max_records=50, max_chars=5000
-    )
+    wide = answering._bundle_context("合成の質問", ranked, [*records, *parents], settings, top_k=50, neighbor_child_count=0, max_chars=5000)
     # top_k が広ければ、下限を通った候補はすべて起点になる（Top-N のような別の切りは無い）。
     assert [r.id for r in wide.records] == ["p4", "p3", "p2", "p1", "p0"]
+
+
+def test_candidate_ranked_beyond_twelve_reaches_the_context_within_top_k(monkeypatch):
+    """下限を通った rerank 34 位の候補も、top_k の中なら回答の文脈に入る（#5816。親の数の枠 12 は無い）。"""
+    count = 40
+    records = [context_child(str(i), i + 1, f"合成本文 {i}", f"sample-{i}.txt", f"p{i}") for i in range(count)]
+    parents = [parent(f"p{i}", i + 1, f"合成本文 {i}", f"sample-{i}.txt") for i in range(count)]
+    settings = replace(get_settings(environ={}, dotenv_path=None), rerank_min_relevance_score=0.3)
+    # 36 件が下限以上（検索の順に点数が下がる）、残りの 4 件は下限未満。
+    _scores(monkeypatch, [0.9 - i * 0.015 if i < 36 else 0.1 for i in range(count)])
+    ranked = rerank_records("合成の質問", records, settings, enabled=True)
+    assert len(ranked) == 36
+    bundle = answering._bundle_context(
+        "合成の質問", ranked, [*records, *parents], settings, top_k=64, neighbor_child_count=0, max_chars=5000
+    )
+    anchors = [child.record.id for item in bundle.evidence_tree for child in item.children if child.role == "retrieved_anchor"]
+    # 34 位（id "33"）を含め、下限を通った 36 件がすべて起点として文脈に入る。
+    assert anchors == [str(i) for i in range(36)]
+    assert [r.id for r in bundle.records] == [f"p{i}" for i in range(36)]
 
 
 def test_attachment_below_the_minimum_is_kept(monkeypatch):

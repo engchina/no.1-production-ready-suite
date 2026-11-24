@@ -52,9 +52,6 @@ DEFAULT_MAX_ANCHORS_PER_PARENT = 2
 # rerank の後、1 つの文書から起点に採る child の上限（#2167・#5170）。0 は上限なし。
 # backend の rag_max_anchors_per_document の既定と同じ値（一致は backend の tests/test_anchor_document_cap_settings.py で確認する）。
 DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
-# context に入れる parent 数の既定値 (#1054)。answer_records.MAX_CONTEXT_RECORDS と同じ値
-# （循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
-DEFAULT_MAX_CONTEXT_RECORDS = 12
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
 DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.3
 # 下限以上が 0 件のとき、下限に掛けて 1 回だけ下げる比（0 は下げない。#5443）。
@@ -298,9 +295,8 @@ class Settings:
     auth_password: str = ""
     # 真のときだけ UI を認証なしで公開する。ローカル検証専用の逸脱で、既定は必ず False。
     auth_disabled: bool = False
-    # context に入れる parent 数 (#1054)。検索の起点 child 数は呼び出し側が引数で渡す。生成の原文予算（文字）は
+    # context の親の数は数で切らない（起点の数 ``top_k`` は呼び出し側が引数で渡す。#5816）。生成の原文予算（文字）は
     # 回答のモデルの入力の上限から決める（``evidence_budget_chars``。#5813）。
-    max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     # 分割読取の同じ pass の組を並行に読む上限（#4997。1 は順次）。
     batch_read_workers: int = 1
     request_coverage_max_queries: int = 2
@@ -556,7 +552,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ),
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
         max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
-        max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         batch_read_workers=min(8, max(1, _env_int(env, "RAG_ENGINE_BATCH_READ_WORKERS", 1))),
         request_coverage_max_queries=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_QUERIES", 2)),
         request_coverage_max_chunks=max(0, _env_int(env, "RAG_ENGINE_REQUEST_COVERAGE_MAX_CHUNKS", 4)),
