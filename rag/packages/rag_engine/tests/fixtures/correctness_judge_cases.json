@@ -83,7 +83,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "ただし、この手順は版5以降の基盤にだけ適用できるため、お使いの基盤の版を確かめてください。",
@@ -94,7 +94,7 @@
             "S3"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "ただし、この手順は版5以降の基盤にだけ適用できるため、お使いの基盤の版を確かめてください。",
@@ -103,7 +103,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- 詳しい作業の一覧は別添Bに記載とされていますが、別添Bは資料に含まれていません。",
@@ -114,7 +114,7 @@
             "S4"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- 詳しい作業の一覧は別添Bに記載とされていますが、別添Bは資料に含まれていません。",
@@ -123,7 +123,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -273,7 +273,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "1. ログの設定画面で詳細レベルをDEBUGにします。",
@@ -284,7 +284,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "2. 接続の記録を開き、証明書の期限の警告を確かめます。",
@@ -295,7 +295,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- E2の原因と調べ方は、検索された資料からは確認できませんでした。",
@@ -304,7 +304,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "E2について必要な情報は提供できません。",
@@ -313,7 +313,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- 運用手引きC 第7章 キューの管理",
@@ -322,7 +322,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -458,7 +458,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。 - 診断ログを取得する画面と操作",
@@ -468,7 +468,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "本質問の条件への該当は確認できていません。",
@@ -477,7 +477,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -597,7 +597,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "診断ログを取得する操作は資料で確認できなかったため、取得の手順は提案できません。",
@@ -606,7 +606,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "本質問の条件への該当は確認できていません。",
@@ -615,7 +615,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- 「ログの表示画面では、表示する期間と種類を選んで［表示］を押す。」",
@@ -624,7 +624,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -711,7 +711,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "金額は担当窓口に確認してください。",
@@ -722,7 +722,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- 保守の料金",
@@ -733,7 +733,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -795,7 +795,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -896,7 +896,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- E1の原因と調べ方",
@@ -905,7 +905,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- E2の原因と調べ方",
@@ -914,7 +914,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1031,7 +1031,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- E1の原因",
@@ -1040,7 +1040,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- E2の原因",
@@ -1049,7 +1049,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1175,7 +1175,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": false
+          "relation": "conflict"
         },
         {
           "claim": "不要なファイルを消してください。",
@@ -1186,7 +1186,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": false
+          "relation": "conflict"
         },
         {
           "claim": "資料から確認できなかった事項 - E2の原因と調べ方",
@@ -1196,7 +1196,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1310,7 +1310,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "この手順は版4以前の基盤にだけ適用できます。",
@@ -1321,7 +1321,7 @@
             "S3"
           ],
           "states_source_gap": false,
-          "consistent": false
+          "relation": "conflict"
         },
         {
           "claim": "資料から確認できなかった事項 - 詳しい作業の一覧",
@@ -1331,7 +1331,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1415,7 +1415,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "次に検証用の1台に適用して動作を確かめ、問題が無ければ残りの機器へ数台ずつ広げます。",
@@ -1426,7 +1426,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1513,7 +1513,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": false
+          "relation": "conflict"
         },
         {
           "claim": "- 停止時間を短くするため、すべての機器へ一度に適用します。",
@@ -1522,7 +1522,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "- 影響範囲を確認する方法",
@@ -1531,7 +1531,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1607,7 +1607,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "原因と対処を記した本文が資料に含まれていないため、共通の解決策としては確定できません。",
@@ -1616,7 +1616,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1690,7 +1690,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "原因・対処の本文が資料に無く、共通の解決策として確定できないため、具体的な対処は提案できません。",
@@ -1699,7 +1699,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "原因・対処の本文が資料に無く、共通の解決策として確定できないため、具体的な対処は提案できません。",
@@ -1708,7 +1708,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1769,7 +1769,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1845,7 +1845,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": false
+          "relation": "conflict"
         },
         {
           "claim": "変更は通常の稼働中でもできます。",
@@ -1856,7 +1856,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": false
+          "relation": "conflict"
         },
         {
           "claim": "上限を超えたときの動作は資料では確認できませんでした。",
@@ -1865,7 +1865,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -1958,7 +1958,7 @@
             "S1"
           ],
           "states_source_gap": false,
-          "consistent": false
+          "relation": "conflict"
         },
         {
           "claim": "設定Bは7です。",
@@ -1969,7 +1969,7 @@
             "S2"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "手順は補足資料に記載されています。",
@@ -1980,7 +1980,7 @@
             "S3"
           ],
           "states_source_gap": false,
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "手順が記載された補足資料は提供されておらず、参照できません。",
@@ -1989,7 +1989,7 @@
           ],
           "standard_ids": [],
           "states_source_gap": true,
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [
@@ -2081,7 +2081,7 @@
           "standard_ids": [
             "S3"
           ],
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "項目Aの方法は資料から確認できなかった。",
@@ -2091,7 +2091,7 @@
           ],
           "states_source_gap": true,
           "standard_ids": [],
-          "consistent": true
+          "relation": "same"
         },
         {
           "claim": "項目Bの方法は資料から確認できなかった。",
@@ -2103,7 +2103,7 @@
           "standard_ids": [
             "S2"
           ],
-          "consistent": true
+          "relation": "same"
         }
       ],
       "points": [

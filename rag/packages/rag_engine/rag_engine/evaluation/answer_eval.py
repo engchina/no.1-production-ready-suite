@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 ClaimVerdict = Literal["supported", "contradicted", "not_in_standard"]
+# 主張と標準文の関係（#5652）。同じ・両立する・両立しないを分け、両立するだけの主張を支持にも矛盾にもしない。
+ClaimRelation = Literal["same", "compatible", "conflict"]
 
 
 class JudgedClaim(BaseModel):
@@ -42,16 +44,16 @@ class JudgedClaim(BaseModel):
     answer_ids: list[str] = Field(description="この主張を述べた本文の段落の id（A1 など）。")
     states_source_gap: bool
     standard_ids: list[str] = Field(description="Step 3 の standard_ids（標準回答の文の id。S1 など）。")
-    consistent: bool
+    relation: ClaimRelation
 
 
 def claim_verdict(claim: JudgedClaim) -> ClaimVerdict:
-    """照合の答えから印を決める。矛盾は、同じ点を述べる文があり、意味が合わず、資料の欠けだけを述べる主張でもないときだけ（#5408）。"""
+    """照合の答えから印を決める。矛盾は、同じ点を述べる文と両立せず、資料の欠けだけを述べる主張でもないときだけ（#5408・#5652）。"""
     if not claim.standard_ids:
         return "not_in_standard"
-    if claim.consistent:
+    if claim.relation == "same":
         return "supported"
-    return "not_in_standard" if claim.states_source_gap else "contradicted"
+    return "contradicted" if claim.relation == "conflict" and not claim.states_source_gap else "not_in_standard"
 
 
 class PointCoverage(BaseModel):
@@ -90,7 +92,10 @@ ID が付くのは、標準回答の各文、各要点、実際の回答の各�
 - states_source_gap: 実際の回答が「手元の資料に記載がない」「資料から確認できない」「確定できない」とだけ述べた主張は true。回答側の主張の種類は標準回答の結論から決めない。具体的な事実・結論を述べた主張は、留保を添えていても false。
 - standard_ids: 空配列から始める。具体的な主張には、同じ対象・条件・適用範囲について同じ問いに直接答える standard_answer[].id を加える。states_source_gap が true の主張には、標準文が「今回の資料で確認できる」または「今回の資料では確認できない」と明示したときだけ、その ID を加える。記載先・値・方針・手順しか書いていない標準文から、手元の資料にあるかどうかは判定できない。
   例として、標準文 S1 が「仕様は別紙に記載している」だけの場合、回答の主張「仕様の記載先は別紙」の standard_ids は ["S1"]、「今回の資料では仕様を確認できなかった」の standard_ids は []。後者と比較できるのは、今回提供した資料に仕様がある、または足りないと述べる文である。
-- consistent: 引いた標準文と同じ事実・結論を述べていれば true。両立するだけでは足りない。標準回答が確定した結論を複数の可能性の一つにとどめていれば false。明示した結論が逆なら false。双方が同じ点を確定できないと述べていれば true。standard_ids が空の場合も true。
+- relation: 引いた標準文との関係を次の一つにする。standard_ids が空の場合は same。
+  - same: 標準文と同じ事実・結論を述べている。標準文が述べる事実の一部だけを同じ内容で述べた主張も same。言い換え・表示形式・資料で定義された略称の違いは問わない。双方が同じ点を確定できないと述べていれば same。
+  - compatible: 標準文に無い条件・手段・補足を足しているが、標準文と矛盾せずに両方成り立つ。
+  - conflict: 明示した結論・値・可否が標準文と食い違い、両方は成り立たない。標準回答が確定した結論を複数の可能性の一つにとどめた主張も conflict。
 
 ## Step 4: 実際の回答が各要点をカバーしたかを確かめる
 各 points[].id を point_id に入れる。points[].text を独立した記入欄として読み、actual_responses[].answer[].text のどの言葉をその欄に記入できるかで covered を決める。同じ一節を複数の欄に使ってよい。
@@ -99,7 +104,7 @@ ID が付くのは、標準回答の各文、各要点、実際の回答の各�
 - 要点が特定の値・条件・操作・結論を要求すれば、指定どおりに答えたときだけ true。留保そのものを求める要点には、対象が一致する留保で答えられる。根拠の文書名・場所を尋ねる場合は、該当段落の actual_responses[].answer[].sources[] も読む。
 """
 # 判定の指示・入力・出力の契約の版。
-RUBRIC_VERSION = 44
+RUBRIC_VERSION = 46
 
 
 class InvalidJudgeReference(ValueError):
@@ -335,7 +340,7 @@ def score_judgement(inputs: dict[str, Any], output: AnswerCorrectnessOutput) -> 
                 answer=_reference_text(claim.answer_ids, answer),
                 standard=_reference_text(claim.standard_ids, standard),
                 states_source_gap=claim.states_source_gap,
-                consistent=claim.consistent,
+                relation=claim.relation,
             )
         )
     returned = [point.point_id for point in output.points]

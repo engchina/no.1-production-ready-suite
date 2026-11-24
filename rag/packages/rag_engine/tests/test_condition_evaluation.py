@@ -108,7 +108,7 @@ def test_both_complete_passages_are_shown_for_one_claim():
         answer_points=["項目Aの値"],
     )
     output = _output(
-        [{"claim": "項目Aの値は5。", "answer_ids": ["A1", "A3"], "standard_ids": ["S1"], "states_source_gap": False, "consistent": True}],
+        [{"claim": "項目Aの値は5。", "answer_ids": ["A1", "A3"], "standard_ids": ["S1"], "states_source_gap": False, "relation": "same"}],
         [{"point_id": "P1", "covered": True}],
     )
     with patch(PARSE, return_value=output):
@@ -132,7 +132,7 @@ def test_answering_whether_a_value_can_be_confirmed_counts_even_when_the_standar
                 "answer_ids": ["A1"],
                 "standard_ids": ["S1"],
                 "states_source_gap": True,
-                "consistent": False,
+                "relation": "conflict",
             }
         ],
         [{"point_id": "P1", "covered": True}],
@@ -140,7 +140,7 @@ def test_answering_whether_a_value_can_be_confirmed_counts_even_when_the_standar
     with patch(PARSE, return_value=output):
         result = evaluate_answer_payload(payload, object())
     (claim,) = result["correctness_claims"]
-    assert claim["states_source_gap"] is True and claim["consistent"] is False
+    assert claim["states_source_gap"] is True and claim["relation"] == "conflict"
     assert result["answer_correctness"] == 0 and result["answer_coverage"] == 1
 
 
@@ -207,7 +207,7 @@ def test_correctness_is_computed_from_claim_verdicts(verdicts, correctness):
             "answer_ids": [f"A{index}"],
             "standard_ids": [] if verdict == "not_in_standard" else [f"S{index}"],
             "states_source_gap": False,
-            "consistent": verdict != "contradicted",
+            "relation": "conflict" if verdict == "contradicted" else "same",
         }
         for index, verdict in enumerate(verdicts, 1)
     ]
@@ -220,8 +220,8 @@ def test_correctness_is_computed_from_claim_verdicts(verdicts, correctness):
 def test_reason_lists_each_contradiction_with_the_original_text():
     inputs = judge_inputs(_payload(answer_text="項目Aは3です。項目Bは8です。"))
     claims = [
-        {"claim": "項目Aは3です。", "answer_ids": ["A1"], "states_source_gap": False, "consistent": False, "standard_ids": ["S1"]},
-        {"claim": "項目Bは8です。", "answer_ids": ["A2"], "states_source_gap": False, "consistent": True, "standard_ids": ["S2"]},
+        {"claim": "項目Aは3です。", "answer_ids": ["A1"], "states_source_gap": False, "relation": "conflict", "standard_ids": ["S1"]},
+        {"claim": "項目Bは8です。", "answer_ids": ["A2"], "states_source_gap": False, "relation": "same", "standard_ids": ["S2"]},
     ]
     scores = score_judgement(inputs, _output(claims, [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": True}]))
     assert scores["correctness_reason"] == "回答の「項目Aは3です。」と標準回答の「項目Aは5。」が食い違う。"
@@ -231,7 +231,7 @@ def test_reason_lists_each_contradiction_with_the_original_text():
         "answer": "項目Aは3です。",
         "standard": "項目Aは5。",
         "states_source_gap": False,
-        "consistent": False,
+        "relation": "conflict",
     }
 
 
@@ -239,17 +239,17 @@ def test_reason_lists_each_contradiction_with_the_original_text():
     ("claims", "points"),
     [
         (
-            [{"claim": "合成の主張", "answer_ids": ["A9"], "states_source_gap": False, "consistent": True, "standard_ids": ["S1"]}],
+            [{"claim": "合成の主張", "answer_ids": ["A9"], "states_source_gap": False, "relation": "same", "standard_ids": ["S1"]}],
             ["P1", "P2"],
         ),
         (
-            [{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "consistent": False, "standard_ids": ["S9"]}],
+            [{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "relation": "conflict", "standard_ids": ["S9"]}],
             ["P1", "P2"],
         ),
-        ([{"claim": "合成の主張", "answer_ids": [], "states_source_gap": False, "consistent": True, "standard_ids": ["S1"]}], ["P1", "P2"]),
-        ([{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "consistent": True, "standard_ids": ["S1"]}], ["P1"]),
+        ([{"claim": "合成の主張", "answer_ids": [], "states_source_gap": False, "relation": "same", "standard_ids": ["S1"]}], ["P1", "P2"]),
+        ([{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "relation": "same", "standard_ids": ["S1"]}], ["P1"]),
         (
-            [{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "consistent": True, "standard_ids": ["S1"]}],
+            [{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "relation": "same", "standard_ids": ["S1"]}],
             ["P1", "P2", "P3"],
         ),
     ],
@@ -276,13 +276,18 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     assert "points[].text" in steps[4] and "actual_responses[].answer[].sources[]" in steps[4]
     step3 = CORRECTNESS_PROMPT.split("## Step 3:", 1)[1].split("## Step 4:", 1)[0]
     questions = {line.split(":", 1)[0].removeprefix("- "): line for line in step3.splitlines() if line.startswith("- ")}
-    assert tuple(questions) == ("states_source_gap", "standard_ids", "consistent")
+    assert tuple(questions) == ("states_source_gap", "standard_ids", "relation")
+    relation = step3.split("- relation:", 1)[1]
     # 照合する観点は、その主張が答えている問い。条件と観点の両方を照合に使う。
     assert all(term in questions["standard_ids"] for term in ("対象・条件・適用範囲", "同じ問い", "standard_answer[].id"))
     assert "確認できない" in questions["states_source_gap"] and "記載がない" in questions["states_source_gap"]
-    assert "同じ事実・結論" in questions["consistent"] and "可能性の一つ" in questions["consistent"]
+    # 同じ結論だけを same にし、両立するだけの主張は compatible、両立しない主張だけを conflict にする（#5652）。
+    for value in ("same:", "compatible:", "conflict:"):
+        assert f"  - {value}" in relation
+    assert "同じ事実・結論" in relation.split("compatible:", 1)[0]
+    assert "両方成り立つ" in relation.split("compatible:", 1)[1].split("conflict:", 1)[0]
+    assert "両方は成り立たない" in relation.split("conflict:", 1)[1] and "可能性の一つ" in relation.split("conflict:", 1)[1]
     assert "留保を添えていても false" in questions["states_source_gap"]
-    assert "同時に真になり得る" not in questions["consistent"]
     # 主張は条件ごと取り出して claim に書く。条件を主張の種類として別に取り出させない。
     step2 = CORRECTNESS_PROMPT.split("## Step 2:", 1)[1].split("## Step 3:", 1)[0]
     assert "条件と結論は一つの主張にまとめ" in step2 and "claim" in step2
@@ -290,7 +295,7 @@ def test_comparison_questions_live_only_in_the_comparison_step():
     claim_properties = schema["$defs"]["JudgedClaim"]["properties"]
     assert list(claim_properties) == ["claim", "answer_ids", *questions]
     assert "verdict" not in claim_properties
-    assert all("description" not in claim_properties[key] for key in ("states_source_gap", "consistent"))
+    assert all("description" not in claim_properties[key] for key in ("states_source_gap", "relation"))
     # 実際に送る指示（項目の説明の Step を足した文）でも、問いの答え方は 1 回だけ。
     guided, _stripped = with_schema_field_guide(CORRECTNESS_PROMPT, schema)
     assert all(guided.count(f"- {key}:") == 1 for key in questions)
@@ -299,24 +304,25 @@ def test_comparison_questions_live_only_in_the_comparison_step():
 
 
 @pytest.mark.parametrize(
-    ("standard_ids", "states_source_gap", "consistent", "verdict"),
+    ("standard_ids", "states_source_gap", "relation", "verdict"),
     [
-        (["S1"], False, True, "supported"),
-        (["S1"], True, True, "supported"),  # 標準回答も確定できないと述べる
-        (["S1"], False, False, "contradicted"),
-        (["S1"], True, False, "not_in_standard"),  # 資料の欠けを述べる主張は矛盾にしない（#5302）
-        ([], False, False, "not_in_standard"),  # 同じ点を述べる文が無い（条件・観点が違う。#5408）
-        ([], True, True, "not_in_standard"),
+        (["S1"], False, "same", "supported"),
+        (["S1"], True, "same", "supported"),  # 標準回答も確定できないと述べる
+        (["S1"], False, "conflict", "contradicted"),
+        (["S1"], False, "compatible", "not_in_standard"),  # 両立する補足は支持にも矛盾にもしない（#5652）
+        (["S1"], True, "conflict", "not_in_standard"),  # 資料の欠けを述べる主張は矛盾にしない（#5302）
+        ([], False, "conflict", "not_in_standard"),  # 同じ点を述べる文が無い（条件・観点が違う。#5408）
+        ([], True, "same", "not_in_standard"),
     ],
 )
-def test_verdict_is_decided_by_code_from_the_comparison_answers(standard_ids, states_source_gap, consistent, verdict):
+def test_verdict_is_decided_by_code_from_the_comparison_answers(standard_ids, states_source_gap, relation, verdict):
     """#5408: 印はモデルに選ばせず、同じ点の文・資料の欠け・両立の答えからコードが決める。"""
     claim = JudgedClaim(
         claim="合成の主張",
         answer_ids=["A1"],
         standard_ids=standard_ids,
         states_source_gap=states_source_gap,
-        consistent=consistent,
+        relation=relation,
     )
     assert claim_verdict(claim) == verdict
 
@@ -325,7 +331,7 @@ def test_reservation_only_answer_scores_zero_without_calling_it_a_contradiction(
     """本文がすべて留保（標準回答と合う主張が無い）なら 0。理由は矛盾ではなく、合う主張が無いこと。"""
     inputs = judge_inputs(_payload(answer_text="項目Aと項目Bは資料で確認できず、確定できません。"))
     output = _output(
-        [{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "consistent": True, "standard_ids": []}],
+        [{"claim": "合成の主張", "answer_ids": ["A1"], "states_source_gap": False, "relation": "same", "standard_ids": []}],
         [{"point_id": "P1", "covered": False}, {"point_id": "P2", "covered": False}],
     )
     scores = score_judgement(inputs, output)
@@ -361,7 +367,7 @@ def test_coverage_does_not_override_correctness(standard_answer, verdict, correc
                 "answer_ids": ["A1"],
                 "standard_ids": standard_ids,
                 "states_source_gap": False,
-                "consistent": verdict != "contradicted",
+                "relation": "conflict" if verdict == "contradicted" else "same",
             }
         ],
         [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": True}],
@@ -387,7 +393,7 @@ def test_contradiction_reason_quotes_the_claim_with_its_condition():
                 "answer_ids": ["A1", "A2"],
                 "standard_ids": ["S1"],
                 "states_source_gap": False,
-                "consistent": False,
+                "relation": "conflict",
             }
         ],
         [{"point_id": "P1", "covered": False}],
@@ -405,32 +411,40 @@ def test_contradiction_reason_quotes_the_claim_with_its_condition():
     [
         (
             "項目Aは5です。項目Bは8か9の可能性があります。",
-            [("項目Aは5。", "A1", ["S1"], False, True), ("項目Bは8か9。", "A2", ["S2"], False, False)],
+            [("項目Aは5。", "A1", ["S1"], False, "same"), ("項目Bは8か9。", "A2", ["S2"], False, "conflict")],
             0.0,
         ),
         (
             "項目Aは5です。資料が不足していますが、項目Bは9です。",
             [
-                ("項目Aは5。", "A1", ["S1"], False, True),
-                ("資料が不足している。", "A2", ["S2"], True, False),
-                ("項目Bは9。", "A2", ["S2"], False, False),
+                ("項目Aは5。", "A1", ["S1"], False, "same"),
+                ("資料が不足している。", "A2", ["S2"], True, "conflict"),
+                ("項目Bは9。", "A2", ["S2"], False, "conflict"),
             ],
             0.0,
         ),
         (
             "項目Aは5です。項目Cは追加の確認対象です。",
-            [("項目Aは5。", "A1", ["S1"], False, True), ("項目Cは追加の確認対象。", "A2", [], False, True)],
+            [("項目Aは5。", "A1", ["S1"], False, "same"), ("項目Cは追加の確認対象。", "A2", [], False, "same")],
+            1.0,
+        ),
+        (
+            "項目Aは5です。変更には条件Xと条件Yが要り、制限中でないことも必要です。",
+            [
+                ("項目Aは5。", "A1", ["S1"], False, "same"),
+                ("変更には条件X・条件Yと、制限中でないことが必要。", "A2", ["S2"], False, "compatible"),
+            ],
             1.0,
         ),
     ],
-    ids=["alternative_conclusion", "wrong_conclusion_with_reservation", "additional_uncompared_claim"],
+    ids=["alternative_conclusion", "wrong_conclusion_with_reservation", "additional_uncompared_claim", "compatible_extra_condition"],
 )
 def test_mixed_claims_preserve_correctness_boundaries(answer, comparisons, expected):
     """合成の照合結果を再生する。意味の分類は実モデルで別途検証する。"""
     output = _output(
         [
-            dict(claim=text, answer_ids=[answer_id], standard_ids=standard_ids, states_source_gap=gap, consistent=consistent)
-            for text, answer_id, standard_ids, gap, consistent in comparisons
+            dict(claim=text, answer_ids=[answer_id], standard_ids=standard_ids, states_source_gap=gap, relation=relation)
+            for text, answer_id, standard_ids, gap, relation in comparisons
         ],
         [{"point_id": "P1", "covered": True}, {"point_id": "P2", "covered": False}],
     )

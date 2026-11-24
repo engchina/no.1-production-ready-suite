@@ -1222,7 +1222,7 @@ def _fake_evaluation_llm(
                     "claim": "合成の主張",
                     "answer_ids": ["A1"],
                     "states_source_gap": False,
-                    "consistent": True,
+                    "relation": "same",
                     "standard_ids": ["S1"],
                 }
             ],
