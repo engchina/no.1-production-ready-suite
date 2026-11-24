@@ -242,7 +242,7 @@ class AnswerTableBody(BaseModel):
         "その情報を資料から得られず判断できないことを示す。個別の対象・理由・規則は含めない。未確定のセルがなければ null。",
     )
     headers: list[str] = Field(
-        description="数値比較は適用の可否を尋ねられた対象も独立した一行にし、その対象の値を測定項目の各列に入れる。異なる判断・操作・確認事項が並ぶ質問には「項目・答え」の二列を使う。単独の説明や指定形式は空配列。"
+        description="複数の対象の値を比べる質問と、利用者が表を求めた質問だけ見出しを付ける。数値比較は適用の可否を尋ねられた対象も独立した一行にし、その対象の値を測定項目の各列に入れる。それ以外（手順・判断・確認事項・単独の説明）は空配列にして段落で答える。"
     )
     rows: list[AnswerRow] = Field(
         min_length=1,
@@ -258,6 +258,7 @@ class AnswerTableBody(BaseModel):
 
     def markdown(self, question: str | None) -> str:
         rows = []
+        paragraphs: list[tuple[str, str]] = []
         value_columns = len(self.headers) - 1 if len(self.headers) > 1 else 1
         omitted, scope_sources = self.shared_scope_sources(question)
         for index, row in enumerate(self.rows):
@@ -269,11 +270,17 @@ class AnswerTableBody(BaseModel):
             if not any(values) or index in omitted:
                 continue
             label = row.label + "".join(dict.fromkeys(scope_sources.get(index, [])))
-            cells = [label, *values] if len(self.headers) > 1 else values
+            # 見出しが一つの表も行名の列を付け、どの行の値かを示す（#5800）。
+            cells = [label, *values] if self.headers else values
             rows.append(AnswerTableRow(cells=cells))
+            if values[0].strip():
+                paragraphs.append((row.label.strip(), values[0].strip()))
         if not self.headers:
-            return "\n\n".join(row.cells[0].strip() for row in rows if row.cells[0].strip())
-        return table_markdown(AnswerTable(columns=self.headers, rows=rows)) if rows else ""
+            # 見出しの無い段落は、行が複数のときだけ行名を添え、どの要求への答えかを示す（#5800）。
+            labeled = len(paragraphs) > 1
+            return "\n\n".join(f"**{label}** {text}" if labeled and label else text for label, text in paragraphs)
+        columns = ["", *self.headers] if len(self.headers) == 1 else self.headers
+        return table_markdown(AnswerTable(columns=columns, rows=rows)) if rows else ""
 
     def _cell_text(self, cell: EvidenceGap | list[AnswerFact | ComparisonValue], question: str | None, row_note: str) -> str:
         if not isinstance(cell, EvidenceGap):
@@ -297,7 +304,7 @@ class FullAnswerWire(BaseModel):
     answer_body: str = Field(
         min_length=1,
         description=(
-            "各要求に一度だけ答える。複数の対象の値や状態の判定を尋ねる質問には表を選び、"
+            "各要求に一度だけ答える。複数の対象の値を比べる質問と、利用者が表を求めた質問には表を選び、"
             "可否の理由・適用範囲を該当行にまとめる。"
             "それ以外は尋ねられた項目に絞る。必要な条件・否定・例外を残す。利用者の形式指定を優先する。"
         ),
