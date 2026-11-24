@@ -2896,6 +2896,11 @@ class DraftGenerationInvalid(RuntimeError):
         self.detail = dict(detail or {})
 
 
+# 生成の不合格の診断に残す、検証の指摘の文の数と長さの上限（#5693）。
+VALIDATION_MESSAGES = 3
+VALIDATION_MESSAGE_CHARS = 200
+
+
 def generation_failure_detail(exc: Exception) -> dict[str, Any]:
     """生成の不合格の類別と件数（#4091）。質問・原文・モデルの出力は持たない。
 
@@ -2911,6 +2916,14 @@ def generation_failure_detail(exc: Exception) -> dict[str, Any]:
     if isinstance(source, ValidationError):
         result["model"] = source.title
         result["validation_error_types"] = dict(Counter(row["type"] for row in details.get("validation_errors", ())))
+        # どの検証に通らなかったかを残す（#5693）。検証の関数が書いた指摘の文だけで、入力（モデルの出力）は含めない。
+        messages = [
+            str(error["ctx"]["error"])[:VALIDATION_MESSAGE_CHARS]
+            for error in source.errors(include_url=False, include_input=False)
+            if error["type"] == "value_error" and isinstance((error.get("ctx") or {}).get("error"), ValueError)
+        ]
+        if messages:
+            result["validation_messages"] = list(dict.fromkeys(messages))[:VALIDATION_MESSAGES]
     return {**result, **(invalid.detail if invalid is not None else {})}
 
 
