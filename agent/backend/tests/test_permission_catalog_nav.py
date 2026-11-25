@@ -8,6 +8,9 @@ group / label と説明（description）は backend のカタログのままな�
 frontend の nav-config.ts（セクションと項目の並び）・i18n.ts / rag-i18n.ts
 （サイドナビの表示名）・permissions.ts（MENU_PERMISSIONS）を読み、メニュー権限の
 group・label・並び順がサイドナビと一致することを確かめる。
+
+承認の画面（`menu.approvals`）はナビに出さない（#5834。URL で開く）。カタログには残し、
+グループはナビの「AI 活用」と同じ名前にする（権限管理の画面で同じグループに出る）。
 """
 
 from __future__ import annotations
@@ -15,9 +18,19 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from app.security.permissions import PERMISSION_CATALOG
+from app.security.permissions import MENU_APPROVALS, PERMISSION_CATALOG, PermissionDefinition
 
 FRONTEND_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
+
+# ナビに出さない画面のメニュー権限（#5834）。frontend は lib/route-permissions.ts の
+# HIDDEN_ROUTE_PERMISSIONS で route を守る。
+HIDDEN_MENU_CODES = frozenset({MENU_APPROVALS})
+
+
+def _nav_catalog() -> list[PermissionDefinition]:
+    """ナビに出さない画面のメニュー権限を除いたカタログ（並びはそのまま）。"""
+    return [item for item in PERMISSION_CATALOG if item.code not in HIDDEN_MENU_CODES]
+
 
 # platform の共有パッケージ（system-settings の paths.ts）が決める共通の項目の
 # （サイドナビの表示名の i18n key, MENU_PERMISSIONS の key）。
@@ -91,17 +104,28 @@ def test_menu_permissions_follow_sidebar_nav() -> None:
     """メニュー権限は、サイドナビと同じグループ・並び順・名前で先頭に並ぶ。"""
     nav = [(title, label, code) for title, items in _sidebar_nav() for label, code in items]
     assert len(nav) > 15
-    menus = PERMISSION_CATALOG[: len(nav)]
+    menus = _nav_catalog()[: len(nav)]
     assert [(item.group, item.label, item.code) for item in menus] == nav
 
 
 def test_permissions_outside_nav_follow_menus() -> None:
     """ナビに無い権限（capability）はメニュー権限の後ろに置く。"""
     nav_codes = {code for _, items in _sidebar_nav() for _, code in items}
-    rest = PERMISSION_CATALOG[len(nav_codes) :]
+    rest = _nav_catalog()[len(nav_codes) :]
     assert rest
     assert all(not item.code.startswith("menu.") for item in rest)
-    assert {item.code for item in PERMISSION_CATALOG if item.code.startswith("menu.")} == nav_codes
+    assert not nav_codes & HIDDEN_MENU_CODES
+    assert {
+        item.code for item in PERMISSION_CATALOG if item.code.startswith("menu.")
+    } == nav_codes | HIDDEN_MENU_CODES
+
+
+def test_hidden_menu_permissions_stay_in_nav_group() -> None:
+    """ナビに出さない画面のメニュー権限は、カタログに残り、ナビにあるグループの名前を使う。"""
+    nav_groups = {title for title, _ in _sidebar_nav()}
+    hidden = [item for item in PERMISSION_CATALOG if item.code in HIDDEN_MENU_CODES]
+    assert {item.code for item in hidden} == HIDDEN_MENU_CODES
+    assert all(item.group in nav_groups for item in hidden)
 
 
 def test_menu_descriptions_use_nav_label() -> None:
