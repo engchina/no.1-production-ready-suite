@@ -299,6 +299,29 @@ async def test_roots_are_the_reranked_originals_above_the_relevance_floor() -> N
 
 
 @pytest.mark.asyncio
+async def test_roots_follow_the_per_document_cap_before_the_root_count() -> None:
+    """起点は通常検索と同じく、下限 → 文書ごとの上限 → 起点数の順で決める（#5839）。"""
+    # rerank の順は a3 > b1 > a1 > a2 > a4。文書ごとに 1 件なら doc-a は a3 だけ。
+    scores = [0.5, 0.4, 0.9, 0.35, 0.7]
+    store = Store(PAGES)
+    wiki = retriever(
+        store,
+        settings=Settings(rag_wiki_link_depth=0, rag_max_anchors_per_document=1),
+        scores=scores,
+    )
+    wiki.top_k = 50  # type: ignore[attr-defined]
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
+    assert _root_ids(result) == ["doc-a-a3-chunk", "doc-b-b1-chunk"]
+    # 下限以上の数は上限の前の数。
+    assert result.trace["relevant_units"] == 5
+
+    wiki = retriever(store, settings=Settings(rag_wiki_link_depth=0), scores=scores)
+    wiki.top_k = 50  # type: ignore[attr-defined]
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
+    assert len(_root_ids(result)) == 5
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("scores", "expected"),
     [

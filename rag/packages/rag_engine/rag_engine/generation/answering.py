@@ -1050,8 +1050,11 @@ def build_adb_hybrid_answer_context(
     fill: bool = True,
     exclude: Callable[[AnswerRecord], str] | None = None,
     summary_research: SummaryHitResearch | None = None,
+    independent_anchors: bool = False,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
+
+    independent_anchors は、独立の経路（Wiki）の起点も検索拡張の起点にするか（チャットの主の検索だけ。#5839）。
 
     text_queries は検索文ごとの全文検索の文（主検索で、原質問に用語・同義語などの語を足した文。#5159）。
     ベクトル検索はその検索文で、全文検索はこの文で同じ 1 回の検索として行う。無い検索文はその文で両方を検索する。
@@ -1166,7 +1169,10 @@ def build_adb_hybrid_answer_context(
     # 切った起点から集める（#5389）。rerank にかけず、context を作るときに最後の根拠の並びへ合わせる（#5162）。
     # 拡張を注入しない呼び出し（SDK・評価の注入・RAG 検索の経路）は拡張しない。
     # 起点が 0 件（全部が下限未満）でも、質問の実体・見出しの語からの拡張は行う（検索の段で行っていたときと同じ）。
-    expanded = injected_search_expansions(anchors=[record.chunk_uid for record in selected], candidate_ids=candidate_ids, **search_options)
+    anchor_ids = [record.chunk_uid for record in selected]
+    if independent_anchors:
+        anchor_ids = _with_independent_anchors(anchor_ids)
+    expanded = injected_search_expansions(anchors=anchor_ids, candidate_ids=candidate_ids, **search_options)
     expansion_candidates = tuple(_stored_chunk_answer_record(chunk) for chunk in expanded)
     known_ids = {retrieval_record_id(record) for record in active_records}
     active_records.extend(record for record in expansion_candidates if retrieval_record_id(record) not in known_ids)
@@ -1537,6 +1543,24 @@ def _evidence_block_chars(question: str, context: AnswerContext, settings: Setti
         _, spans, _ = reader.append(question, context, list(spans))
         spans = tag_spans(with_first_chunks(spans, [span for span in spans if span.get(FIRST_CHUNK)]))
     return len(evidence_block_text(spans))
+
+
+def _with_independent_anchors(anchor_ids: Sequence[str]) -> list[str]:
+    """検索拡張の起点に、独立の経路（Wiki）の起点を足す（#5839）。
+
+    独立の経路の結果をここで待つ（先に終わった経路が他方を待つ）。足すのは rerank で選んだ起点
+    （``wiki_origin`` が ``root``）だけで、関係を辿った単位は検索拡張の結果と同じ扱いにする（そこからは広げない）。
+    通常検索の起点の順は変えず、まだ無い起点を独立の経路の順で後ろに足す。原文を根拠に足すのは
+    ``_with_independent_sources``。
+    """
+    from rag_engine.dependencies import injected_additional_sources
+
+    roots = [
+        str(chunk.chunk_uid)
+        for chunk in injected_additional_sources()
+        if (getattr(chunk, "metadata", None) or {}).get("wiki_origin") == "root"
+    ]
+    return list(dict.fromkeys([*anchor_ids, *roots]))
 
 
 def _with_independent_sources(context: AnswerContext) -> AnswerContext:
@@ -3495,6 +3519,8 @@ def answer_question_result(
                     retrieval_scope=selected_retrieval_scope,
                     classification_filter=selected_classification_filter,
                     section_fill=expand,
+                    # チャットの経路は、独立の経路（Wiki）の起点も検索拡張の起点にする（#5839）。
+                    independent_anchors=expand,
                 )
                 retrieval_step.field("全文検索の文", text_source)
                 _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
