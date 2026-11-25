@@ -4513,9 +4513,18 @@ def _stored_child(
     metadata["document_id"] = chunk.document_id
     # Wiki の経路の原文の印と、目録の文書の版の属性(#4941・#5044)、辿りで見た原文の間の関係
     # (#5500)。原文の本文・座標は変えない。
-    for key in ("wiki_source", "source_identities", "wiki_relations"):
+    for key in ("wiki_source", "wiki_origin", "wiki_rank", "source_identities", "wiki_relations"):
         if key in chunk.metadata:
             metadata[key] = chunk.metadata[key]
+    if (wiki_score := chunk.metadata.get("wiki_rerank_score")) is not None:
+        # Wiki の経路が原文で測った関連度(#5831)。順位は、通常検索の候補と合わせるときに
+        # rag_engine が点数で 1 つの順にして決める。
+        metadata["rerank"] = {
+            "relevance_score": wiki_score,
+            "question_relevance_score": wiki_score,
+            "question_score_explicit": True,
+            "filtered": False,
+        }
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
     for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
         metadata[key] = chunk.metadata.get(key, "")
