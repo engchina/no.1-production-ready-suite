@@ -227,6 +227,12 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert sorted(p.unit.unit_id for p in await store.pages(scope)) == unit_ids
     top = await store.pages(scope, query_vector=_EMBEDDING, limit=1)
     assert len(top) == 1 and top[0].unit.unit_id in unit_ids
+    # 類似度の下限（#5831）: 近い順に取った上位から、下限未満の単位だけを外す。
+    near = await store.pages(scope, query_vector=_EMBEDDING, limit=10, min_similarity=0.2)
+    assert sorted(p.unit.unit_id for p in near) == unit_ids
+    opposite = [-value for value in _EMBEDDING]
+    assert not await store.pages(scope, query_vector=opposite, limit=10, min_similarity=0.2)
+    assert len(await store.pages(scope, query_vector=opposite, limit=10)) == len(unit_ids)
     by_unit = await store.pages(scope, unit_ids=unit_ids[:1], document_ids=[did])
     assert [p.unit.unit_id for p in by_unit] == unit_ids[:1]
     changed = replace(source, compiler_fingerprint=fingerprint("compiler-b"))

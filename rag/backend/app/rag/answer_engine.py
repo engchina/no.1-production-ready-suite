@@ -3270,6 +3270,8 @@ class AnswerEngine:
                 filters=request.filters,
                 timeout=timeout,
                 stage_seconds=stage_seconds,
+                # 起点数は通常検索と同じ定義（要求の top_k。#5831）。
+                top_k=max(1, int(request.top_k)),
             )
         except Exception as exc:  # noqa: BLE001 - 独立の経路の失敗で通常検索を止めない。
             from app.rag.wiki_retrieval import failure_reason

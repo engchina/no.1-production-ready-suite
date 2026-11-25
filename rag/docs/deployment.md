@@ -260,13 +260,21 @@ KB 詳細の「文書構造索引の構築」のカードを外し、図を「Wi
   これらの API・表（`rag_graph_*`・`rag_structure_index_*`）・構築済みの索引は #5511 で削除した（上の手順）。
 - **見え方**: 図は保存済みの Wiki の案内だけを出す。案内の無い KB は「Wiki を構築すると、文書・章節・案内のつながりを図で見られます」を出す。
 
+## 既存環境の更新手順（#5831 Wiki の検索の起点を通常検索と同じ下限・rerank・件数で決める）
+
+Wiki の検索は、案内のベクトル検索の候補を通常検索と同じ設定で絞る: 候補数は `RAG_RETRIEVAL_QUERY_LIMIT`、コサイン類似度の下限は `RAG_MIN_SIMILARITY`、原文の rerank の関連度の下限は `RAG_RERANK_MIN_RELEVANCE_SCORE`（引き下げは `RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO`）、起点数は要求の `top_k`（省略時 `RAG_SEARCH_TOP_K_DEFAULT`）。
+
+- **設定**: `RAG_WIKI_CANDIDATES`・`RAG_WIKI_SELECTED_UNITS` は使わない（`backend/.env` に残っていても読み捨てる。消してよい）。`RAG_WIKI_LINK_DEPTH`・`RAG_WIKI_LINK_MAX_UNITS`・`RAG_WIKI_QUERY_TIMEOUT_SECONDS` は今までどおり。
+- **migration・DDL**: 変更なし。案内の作り直しも要らない。
+- **挙動**: Wiki の経路で rerank の呼び出しが回答ごとに 1 回増える（全体設定で rerank を無効にしていれば呼ばない）。起点の数の上限は 32 から起点数（既定 50）に変わる。
+
 ## 既存環境の更新手順（#5827 Wiki の案内の全文検索の索引を消す）
 
 Wiki の検索は案内のベクトル検索だけで起点を決める（#5825）。読む経路が無くなった Oracle Text の索引 `RAG_WIKI_PAGE_TEXT_IDX` を消す。
 
 - **migration**: `20261125_5827_drop_wiki_page_text_index` が索引を消す（索引が無ければ何もしない）。表・列・行は消さないので破壊的の印は無く、通常の更新（`sudo platform/deploy/suite-update.sh`）で当たる。
 - **データ**: `RAG_WIKI_PAGES` の案内・`SEARCH_TEXT`（埋め込みの入力）・埋め込み・公開の状態は変わらない。案内の作り直しは要らない。
-- **設定**: 変更なし（`RAG_WIKI_CANDIDATES` はベクトル検索で取る候補数）。
+- **設定**: 変更なし。
 
 ## 既存環境の更新手順（#5784 Wiki の文書をまたぐ関連を文書の内容の参照から取る）
 

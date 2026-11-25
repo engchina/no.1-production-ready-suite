@@ -307,16 +307,60 @@ class WikiRetriever:
         filters: Mapping[str, str],
         timeout: float | None,
         stage_seconds: dict[str, float] | None = None,
+        top_k: int | None = None,
     ) -> WikiSearchResult:
         """``stage_seconds`` には段（``_stage``）ごとの秒を書く（失敗・時間切れでも、それまでの
-        段）。"""
+        段）。``top_k`` は起点数（通常検索と同じ定義。省略時は ``RAG_SEARCH_TOP_K_DEFAULT``）。"""
         scoped = await self.scope(profile_id, filters)
         if scoped is None:
             return WikiSearchResult(trace={"status": "profile_disabled"})
         limit = self.settings.rag_wiki_query_timeout_seconds
         seconds = {} if stage_seconds is None else stage_seconds
+        roots = max(1, int(top_k or self.settings.rag_search_top_k_default))
         async with asyncio.timeout(limit if timeout is None else min(limit, timeout)):
-            return await self._search(question, profile_id, scoped, seconds)
+            return await self._search(question, profile_id, scoped, seconds, roots)
+
+    async def _roots(
+        self, question: str, candidates: Sequence[WikiPage], top_k: int
+    ) -> tuple[list[WikiPage], dict[str, float], dict[str, Any]]:
+        """候補を原文で rerank し、通常検索と同じ関連度の下限と起点数で起点を決める（#5831）。
+
+        下限は ``RAG_RERANK_MIN_RELEVANCE_SCORE``。1 件も届かないときだけ
+        ``RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO`` を掛けて 1 回下げる。rerank が無効・失敗の
+        ときは、通常検索と同じくベクトルの順のまま起点数で切る（Wiki の経路は止めない）。
+        返す値は（起点・起点の単位 ID ごとの rerank の点数・診断）。
+        """
+        opts = self.settings
+        if not candidates or not opts.rag_rerank_enabled:
+            return list(candidates[:top_k]), {}, {"rerank": "disabled"}
+        try:
+            ranked = await self.genai.rerank(
+                question, [page.unit.text for page in candidates], len(candidates)
+            )
+        except Exception as exc:  # noqa: BLE001 - rerank の失敗で Wiki の経路を止めない。
+            return (
+                list(candidates[:top_k]),
+                {},
+                {"rerank": "failed", "rerank_failure_code": type(exc).__name__},
+            )
+        floor = opts.rag_rerank_min_relevance_score
+        ratio = opts.rag_rerank_min_relevance_fallback_ratio
+        if floor > 0 and 0 < ratio < 1 and not any(score >= floor for _, score in ranked):
+            floor *= ratio
+        kept = sorted(
+            ((index, score) for index, score in ranked if score >= floor),
+            key=lambda item: (-item[1], item[0]),
+        )
+        return (
+            [candidates[index] for index, _ in kept[:top_k]],
+            {candidates[index].unit.unit_id: score for index, score in kept[:top_k]},
+            {
+                "rerank": "completed",
+                "rerank_min_relevance_score": floor,
+                "reranked_units": len(ranked),
+                "relevant_units": len(kept),
+            },
+        )
 
     async def _search(
         self,
@@ -324,6 +368,7 @@ class WikiRetriever:
         profile_id: str | None,
         scope: dict[str, str],
         seconds: dict[str, float],
+        top_k: int,
     ) -> WikiSearchResult:
         opts, store = self.settings, self.store
         # 範囲（有効な KB・権限・公開・今の保存版）を評価するのはここの 1 回だけ。後の読取は
@@ -336,12 +381,19 @@ class WikiRetriever:
         with _stage("Wiki: 質問のベクトル化", seconds):
             vector = (await self.genai.embed([question], input_type="SEARCH_QUERY"))[0]
         # 候補は案内のベクトル検索の順位だけ（全文検索は通常検索と重なるので使わない。#5825）。
+        # 件数と類似度の下限は通常検索のベクトル検索と同じ設定を使う（#5831）。
         with _stage("Wiki: 案内の候補の検索", seconds):
             candidates = await store.pages(
-                wiki, query_vector=vector, limit=opts.rag_wiki_candidates
+                wiki,
+                query_vector=vector,
+                limit=opts.rag_retrieval_query_limit,
+                min_similarity=opts.rag_min_similarity,
             )
-        # 公開された索引の上位の原文単位を辿りの起点にする（選択のモデルは呼ばない。#5731）。
-        roots = candidates[: opts.rag_wiki_selected_units]
+        # 原文の rerank と関連度の下限を通った単位を、点数の順に起点数まで辿りの起点にする
+        # （選択のモデルは呼ばない。#5731・#5831）。
+        with _stage("Wiki: 起点の再ランキング", seconds):
+            roots, scores, rerank_trace = await self._roots(question, candidates, top_k)
+        vector_ranks = {page.unit.unit_id: rank for rank, page in enumerate(candidates, 1)}
         pages = {page.unit.unit_id: page for page in candidates}
         selected = list(dict.fromkeys(page.unit.unit_id for page in roots))
         # 案内の依存（同じ文書）と文書をまたぐ関連（出る向き）を、予算の内で段ごとに辿る（#5492）。
@@ -356,12 +408,27 @@ class WikiRetriever:
         names = {row["document_id"]: row["title"] for row in catalog}
         relations = _relations(required, edges, names)
         units = {sid: page.unit.unit_id for page in required for sid in page.unit.source_chunk_ids}
+        # 起点（rerank の順）、辿った単位の順に並べる。起点には Wiki のベクトル検索の順位と
+        # rerank の点数を、辿った単位には由来（依存・関連）を付ける（合わせ込みの順と画面の
+        # バッジ。#5831）。
+        order = {page.unit.unit_id: index for index, page in enumerate(required)}
+
+        def origin(unit_id: str) -> dict[str, Any]:
+            if unit_id not in vector_ranks or unit_id in origins:
+                return {"wiki_origin": origins[unit_id]}
+            return {
+                "wiki_origin": "root",
+                "wiki_rank": vector_ranks[unit_id],
+                **({"wiki_rerank_score": scores[unit_id]} if unit_id in scores else {}),
+            }
+
         chunks = tuple(
             chunk.model_copy(
                 update={
                     "metadata": {
                         **chunk.metadata,
                         "wiki_source": True,
+                        **origin(units[chunk.chunk_id]),
                         "source_identities": identities.get(chunk.document_id, []),
                         **(
                             {"wiki_relations": found}
@@ -371,7 +438,7 @@ class WikiRetriever:
                     }
                 }
             )
-            for chunk in originals
+            for chunk in sorted(originals, key=lambda chunk: order[units[chunk.chunk_id]])
         )
 
         def source_ids(unit_ids: Sequence[str]) -> list[str]:
@@ -385,6 +452,7 @@ class WikiRetriever:
                 "status": "ready",
                 "catalog_documents": len(catalog),
                 "candidate_units": len(candidates),
+                **rerank_trace,
                 "selected_documents": len({page.unit.document_id for page in roots}),
                 "selected_units": len(selected),
                 "dependency_units": len(followed),

@@ -66,7 +66,7 @@ async def test_later_reads_use_the_resolved_set_and_keep_chunk_row_filters() -> 
     scope = await store.resolve(filters)
     assert scope.sources == (("doc-a", "set-a", "fp-a"),)
     assert [row["document_id"] for row in scope.catalog] == ["doc-a"]
-    await store.pages(scope, query_vector=[0.1], limit=3)
+    await store.pages(scope, query_vector=[0.1], limit=3, min_similarity=0.2)
     await store.references(["unit-a"], scope)
     await store.referencing(["synthetic-key"], scope)
     await store.document_headings(scope)

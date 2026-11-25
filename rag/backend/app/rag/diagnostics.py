@@ -151,13 +151,12 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
             resolved_settings.rag_support_guide_close_match_clarification_enabled
         ),
         "support_guide_close_match_margin": resolved_settings.rag_support_guide_close_match_margin,
-        # Wiki の検索の経路(#4941)。使用・候補と選択の上限・時間の上限。
+        # Wiki の検索の経路(#4941)。使用・辿りの上限・時間の上限。候補数・類似度と関連度の下限・
+        # 起点数は通常検索の設定を使う(#5831)。
         "wiki_search": {
             key.removeprefix("rag_wiki_"): getattr(resolved_settings, key)
             for key in (
                 "rag_wiki_search_enabled",
-                "rag_wiki_candidates",
-                "rag_wiki_selected_units",
                 # 依存と文書をまたぐ関連を辿る段数と足す数の上限（#5492）。
                 "rag_wiki_link_depth",
                 "rag_wiki_link_max_units",
