@@ -2,6 +2,7 @@
 
 - 形式・大きさ・ファイル名の検査と、合わないファイルを保存しないこと。
 - 中身（バイト列・base64）が Run の JSON・一覧・イベント・ツールの結果・MCP の結果に載らないこと。
+- MCP の Run の結果に、ファイルの一覧（名前・形式・大きさ）と受け取り方が載ること。
 - ダウンロードの API は Run を見られる利用者だけ（ほかの利用者は Run の詳細と同じ 404）。
 - Run の行を消すと、ファイルも消えること（Oracle は偽の表 `checkpoint_support`）。
 
@@ -36,6 +37,7 @@ from app.features.agent.artifact_file_store import (
     safe_file_name,
     save_tool_file,
 )
+from app.features.agent.mcp_server import FILES_DOWNLOAD_MESSAGE, run_output
 from app.features.agent.runtime import (
     AgentProfile,
     AgentRuntimeOracleCheckpointRepository,
@@ -504,8 +506,28 @@ def test_mcp_run_result_does_not_carry_the_file_content(people: People) -> None:
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["result"].get("isError") is not True, response.text
+    result = response.json()["result"]
+    assert result.get("isError") is not True, response.text
     assert not _leaks(response.text)
+    # ファイルの一覧（名前・形式・大きさ）と受け取り方は、モデルの回答の文に頼らずコードで載せる。
+    output = result["structuredContent"]
+    assert output["answer"] == "合成の回答"
+    assert output["files"] == [
+        {"file_name": "集計 表.xlsx", "mime_type": XLSX, "size_bytes": len(DATA)}
+    ]
+    assert output["message"].endswith(FILES_DOWNLOAD_MESSAGE)
+    assert "Agent の画面" in FILES_DOWNLOAD_MESSAGE and "ダウンロード" in FILES_DOWNLOAD_MESSAGE
+    # MCP の応答に、ダウンロードの URL・成果物の ID は出さない。
+    assert "/download" not in response.text and "artifact_" not in response.text
+
+
+def test_mcp_run_result_without_files_has_an_empty_list(people: People) -> None:
+    run_id = _running_run(runtime_repository, agent_id=people.agent_id, user=people.owner)
+
+    output = run_output(runtime_repository.get_run(run_id))
+
+    assert output.files == []
+    assert FILES_DOWNLOAD_MESSAGE not in output.message
 
 
 # ---- Oracle（偽の表） -----------------------------------------------------------------------

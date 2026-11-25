@@ -347,6 +347,7 @@ Copyright 2019 Kenneth Reitz
 | 場所 | ライセンス | 注記 |
 |---|---|---|
 | `nl2sql/backend/app/features/nl2sql/prompts/sql_assist/` | Apache-2.0 | 外部の repo のプロンプトの文を元にした部分。原文の `LICENSE` と、出典・変更点を書いた `NOTICE` を同じディレクトリに置く |
+| `skills/xlsx-create/` | Apache-2.0 | 組み込みのスキル「Excel 作成」（#5837）。`anthropics/skills` の `skills/xlsx/SKILL.md`（commit `e4bb5d960d87126ff3b3a8af1a104b7db67560ba`）の指針を元に、Agent のツール `xlsx_create` 向けに日本語で書き直した。スクリプト・コードの実行の記述は含まない。許諾の全文 `LICENSE.txt` と、出典・変更点を書いた `NOTICE` を同じディレクトリに置く（スキルの書き出しの zip と、Claude Code の plugin の配布にも入る） |
 
 ## 一覧の更新の手順
 

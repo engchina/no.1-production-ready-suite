@@ -355,6 +355,7 @@ from app.features.agent.tools import (
 )
 from app.features.agent.trace_bodies import capture_trace_bodies
 from app.features.agent.trace_spans import run_trace_owner, trace_spans
+from app.features.agent.xlsx_tool import xlsx_create_tool
 from app.observability import (
     CONTEXT_COMPACTIONS_TOTAL,
     TOOL_LOOP_STOPS_TOTAL,
@@ -370,6 +371,9 @@ BUILTIN_RUNTIME_ID = "builtin"
 SDK_PACKAGE = "openai-agents"
 # Skill の requirement のうち、Control Plane のツール（`tool_registry`）を指す server_id。
 CONTROL_PLANE_SERVER_ID = "control-plane"
+# スキルが `control-plane:<名前>` で宣言できるツール（#5837。宣言したスキルを選んだ業務 Agent の
+# Run にだけ渡る）。Run の成果物を読み書きするので、ツールの層（`tools.py`）ではなくここで登録する。
+tool_registry.register(*xlsx_create_tool())
 # 業務データを含む trace を外部（OpenAI）へ送らない。
 set_tracing_disabled(True)
 # モデルの入力の上限に収まらない失敗の code（#2383）。

@@ -104,7 +104,7 @@ def _run(
 ) -> dict[str, Any]:
     """`agent_chat` / `agent_get_run` / `agent_answer_confirmation` の出力（RunOutput）。"""
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "run_id": run_id,
         "agent_id": "agent-1",
         "thread_id": THREAD,
@@ -369,7 +369,7 @@ def test_multi_turn_case_follows_the_thread() -> None:
     turn = record.observations[0].turns[1]
     assert turn.payload["agent_get_run"]["run_id"] == "run-2"
     assert turn.output_versions == {
-        "agent_get_run": 5,
+        "agent_get_run": 6,
         "agent_get_run_observation": OBSERVATION_SCHEMA_VERSION,
     }
 

@@ -10,6 +10,8 @@ agentskills.io（frontmatter は `name`・`description`・`compatibility`・`met
   `production-ready-display-name`・`production-ready-mcp-tools`（`<接続>:<ツール>`）・
   `production-ready-tags`（読み込みの `skills_loader` と同じ key）。
 - `scripts/` などの実行するファイルは書き出さない（読み込みと同じく読まない）。
+- 元のフォルダの許諾のファイル（`LICENSE_FILE_NAMES`。第三者の資料を元にしたスキルの許諾の全文と
+  出典。#5837）は、SKILL.md と一緒に書き出す（スキルを配るときに許諾の表示を落とさない）。
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from app.features.agent.skills_loader import (
     METADATA_DISPLAY_NAME,
     METADATA_MCP_TOOLS,
     METADATA_TAGS,
+    REFERENCE_MAX_FILE_BYTES,
     SKILL_NAME_PATTERN,
     load_skill_references,
 )
@@ -40,6 +43,8 @@ _MAX_NAME_CHARS = 64
 _MAX_DESCRIPTION_CHARS = 1024
 _MAX_COMPATIBILITY_CHARS = 500
 _INVALID_NAME_CHARS = re.compile(r"[^a-z0-9]+")
+# スキルのフォルダの直下の許諾のファイル（許諾の全文と、出典・変更点）。
+LICENSE_FILE_NAMES = ("LICENSE.txt", "NOTICE")
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,12 +124,29 @@ def _generated_skill_md(skill: AgentSkillDefinition, name: str) -> str:
     return f"---\n{header}---\n{body}\n"
 
 
+def _license_files(folder: Path) -> list[ExportedFile]:
+    """元のフォルダの許諾のファイル（symlink・大きすぎるもの・UTF-8 で読めないものは出さない）。"""
+    files: list[ExportedFile] = []
+    for name in LICENSE_FILE_NAMES:
+        path = folder / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.stat().st_size > REFERENCE_MAX_FILE_BYTES:
+            continue
+        try:
+            files.append(ExportedFile(name, path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return files
+
+
 def export_skill(skill: AgentSkillDefinition) -> ExportedSkill:
     """スキルを Agent Skills の形のファイルの一覧にする。"""
     folder = _source_dir(skill)
     if folder is not None:
         # 元のフォルダ（組み込みは skills/ と同じ内容）。参照文書は読み込みと同じ規則で読む。
         files = [ExportedFile("SKILL.md", (folder / "SKILL.md").read_text(encoding="utf-8"))]
+        files.extend(_license_files(folder))
         files.extend(
             ExportedFile(item.path, item.content) for item in load_skill_references(folder)
         )

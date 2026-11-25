@@ -17,7 +17,7 @@ import skills_ref  # type: ignore[import-untyped]  # 型の情報（py.typed）�
 from security_support import client
 
 from app.features.agent.runtime import AgentProfile, runtime_repository
-from app.features.agent.skill_export import export_skill, skill_folder_name
+from app.features.agent.skill_export import LICENSE_FILE_NAMES, export_skill, skill_folder_name
 from app.features.agent.skills import (
     BUILTIN_SKILL_IDS,
     BUILTIN_SKILLS_DIR,
@@ -127,10 +127,42 @@ def test_builtin_skill_export_is_the_same_as_the_skills_folder(
     expected = sorted(
         path.relative_to(source)
         for path in source.rglob("*")
-        if path.is_file() and (path.name == "SKILL.md" or path.parts[-2:-1] == ("references",))
+        if path.is_file()
+        and (
+            path.name == "SKILL.md"
+            or path.parts[-2:-1] == ("references",)
+            # 許諾のファイル（スキルのフォルダの直下。#5837）。
+            or (path.parent == source and path.name in LICENSE_FILE_NAMES)
+        )
     )
     assert exported == expected
+    for name in LICENSE_FILE_NAMES:
+        if (source / name).is_file():
+            assert (folder / name).read_bytes() == (source / name).read_bytes()
     assert skills_ref.validate(folder) == []
+
+
+def test_third_party_based_skill_keeps_its_license_in_the_folder_and_the_export() -> None:
+    """第三者の資料を元にした組み込みのスキル（Excel 作成。#5837）は、許諾の全文と出典・変更点を
+    フォルダに持ち、frontmatter の `license` に書き、書き出しにも入れる（Apache License 2.0）。"""
+    source = BUILTIN_SKILLS_DIR / "xlsx-create"
+    license_text = (source / "LICENSE.txt").read_text(encoding="utf-8")
+    notice = (source / "NOTICE").read_text(encoding="utf-8")
+    assert "Apache License" in license_text and "Version 2.0, January 2004" in license_text
+    assert "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION" in license_text
+    # 出典（repo・path・commit）と、変えたこと。
+    for expected in (
+        "anthropics/skills",
+        "skills/xlsx/SKILL.md",
+        "e4bb5d960d87126ff3b3a8af1a104b7db67560ba",
+        "Changes made",
+    ):
+        assert expected in notice, expected
+    skill_md = (source / "SKILL.md").read_text(encoding="utf-8")
+    assert 'license: "Apache-2.0（全文は LICENSE.txt。出典と変更点は NOTICE）"' in skill_md
+    skill = skill_registry.get("xlsx-create")
+    assert skill is not None
+    assert {"SKILL.md", *LICENSE_FILE_NAMES} == {item.path for item in export_skill(skill).files}
 
 
 def test_export_api_returns_a_zip(runtime_skill: AgentSkillDefinition, tmp_path: Path) -> None:

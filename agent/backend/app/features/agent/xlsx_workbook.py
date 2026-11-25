@@ -1,0 +1,595 @@
+"""xlsx の生成の本体（#5837）。構造化した内容（シート・列・行・集計）から .xlsx のバイト列を作る。
+
+Run・DB・ツールの層に依らない純粋な関数（`build_workbook`）。表の値の出所（Run の表の参照か、
+モデルが書いた値か）は呼ぶ側（`xlsx_tool`）が解決し、ここには行の値として渡す。
+
+- 作るもの: 複数のシート、シートごとの題・説明の文と 1 つの表、列ごとの型（文字・数値・日付）と
+  書式、列の幅、表の見出しの固定とフィルター、集計の行。グラフ・画像・ピボット・マクロ・条件付き
+  書式・既存のファイルの編集は作らない。
+- 文字の cell は必ず文字型で書く（`=` `+` `-` `@` で始まる文字を数式として解釈させない）。数式として
+  書くのは、ここで組み立てる集計の行だけ（集計は値を埋めずに数式にする）。
+- 数値は数値、日付は日付として cell に入れる。数値・日付として読めない値、Excel の精度（15 桁）を
+  超える数値は、丸めたり文字にしたりせずに誤りにする（呼ぶ側が列の型を文字に直す）。
+- 上限（シート・列・行・cell の合計）を超える内容は、切り捨てずに誤りにする。
+- 誤りは値を含まない場所・種類・直し方（`XlsxSpecError.issues`）で返す。場所は `xlsx_tool` の引数の
+  path（`sheets.0.columns.1` など。引数の検証の誤りと同じ書き方）。
+"""
+
+from __future__ import annotations
+
+import io
+import math
+import re
+import unicodedata
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from datetime import date, datetime, time
+from decimal import Decimal
+from typing import Any, Literal
+
+from openpyxl import Workbook  # type: ignore[import-untyped]
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE, Cell  # type: ignore[import-untyped]
+from openpyxl.styles import (  # type: ignore[import-untyped]
+    Alignment,
+    Border,
+    Font,
+    PatternFill,
+    Side,
+)
+from openpyxl.styles.fonts import DEFAULT_FONT  # type: ignore[import-untyped]
+from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
+from openpyxl.worksheet.worksheet import Worksheet  # type: ignore[import-untyped]
+
+XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# 件数の上限（超えたら誤り）。行はシートごとのデータの行、cell は全シートのデータの cell の合計。
+MAX_SHEETS = 10
+MAX_COLUMNS = 50
+MAX_ROWS = 20_000
+MAX_CELLS = 200_000
+MAX_NOTES = 5
+MAX_SUMMARIES = 5
+# Excel の制約（シート名の文字数、1 つの cell の文字数、数値の精度〔15 桁〕、日付の始まりの年）。
+SHEET_NAME_MAX_CHARS = 31
+MAX_TEXT_CHARS = 32_767
+MAX_EXACT_INTEGER = 10**15 - 1
+MIN_DATE_YEAR = 1900
+# 列の幅（半角の文字数の目安）。指定できる範囲と、内容から決めるときの範囲。
+WIDTH_MIN = 4.0
+WIDTH_MAX = 100.0
+_AUTO_WIDTH_MIN = 8
+_AUTO_WIDTH_MAX = 60
+
+ColumnType = Literal["text", "number", "date"]
+SummaryFunction = Literal["sum", "average", "count", "min", "max"]
+
+# 書式の名前 → Excel の表示形式。
+NUMBER_FORMATS: dict[str, str] = {
+    "integer": "#,##0",
+    "decimal1": "#,##0.0",
+    "decimal2": "#,##0.00",
+    "percent": "0%",
+    "percent1": "0.0%",
+}
+DATE_FORMATS: dict[str, str] = {
+    "date": "yyyy-mm-dd",
+    "date_slash": "yyyy/mm/dd",
+    "datetime": "yyyy-mm-dd hh:mm",
+}
+_TEXT_FORMAT = "@"
+_GENERAL_FORMAT = "General"
+_COUNT_FORMAT = NUMBER_FORMATS["integer"]
+# 集計の種類ごとの、集計できる列の型。
+SUMMARY_COLUMN_TYPES: dict[str, frozenset[str]] = {
+    "sum": frozenset({"number"}),
+    "average": frozenset({"number"}),
+    "count": frozenset({"text", "number", "date"}),
+    "min": frozenset({"number", "date"}),
+    "max": frozenset({"number", "date"}),
+}
+_TYPE_LABELS: dict[str, str] = {"text": "文字", "number": "数値", "date": "日付"}
+
+_JSON_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\Z")
+_INTEGER = re.compile(r"-?[0-9]+\Z")
+_SHEET_NAME_FORBIDDEN = re.compile(r"[\[\]:*?/\\]")
+
+# 固定の書式（1 つ）: 題は太字の大きい字、表の見出しは太字・薄い塗り・下線、集計の行は太字・上線。
+# 字体はブックの既定（`DEFAULT_FONT`）と同じ名前にする（名前が無いと、表示する側の別の字体になる）。
+_HEADING_FONT = Font(name=DEFAULT_FONT.name, size=14, bold=True)
+_BOLD_FONT = Font(name=DEFAULT_FONT.name, size=DEFAULT_FONT.size, bold=True)
+_HEADER_FILL = PatternFill(fill_type="solid", start_color="E7E6E6", end_color="E7E6E6")
+_THIN = Side(style="thin", color="7F7F7F")
+_HEADER_BORDER = Border(bottom=_THIN)
+_SUMMARY_BORDER = Border(top=_THIN)
+_HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
+
+
+@dataclass(frozen=True, slots=True)
+class Column:
+    header: str
+    type: ColumnType
+    # 書式の名前（数値は `NUMBER_FORMATS`、日付は `DATE_FORMATS` の key）。None は既定。
+    format: str | None = None
+    # 列の幅。None は内容から決める。
+    width: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Summary:
+    function: SummaryFunction
+    # 集計する列（1 始まりの位置）。
+    columns: tuple[int, ...]
+    # 行の見出し（集計しない最初の列に置く）。
+    label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Sheet:
+    name: str
+    columns: Sequence[Column]
+    # 行ごとの値（列の順。None は空の cell）。
+    rows: Sequence[Sequence[Any]]
+    heading: str | None = None
+    notes: Sequence[str] = ()
+    summaries: Sequence[Summary] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SpecIssue:
+    """内容の 1 つの誤り（値を含まない）。"""
+
+    argument: str
+    code: str
+    message: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"argument": self.argument, "code": self.code, "message": self.message}
+
+
+class XlsxSpecError(ValueError):
+    """内容が作れる範囲に合わない（`issues` を直して作り直す）。"""
+
+    def __init__(self, issues: Sequence[SpecIssue]) -> None:
+        super().__init__("; ".join(f"{item.argument}: {item.message}" for item in issues))
+        self.issues = tuple(issues)
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltWorkbook:
+    data: bytes = field(repr=False)
+    # シートごとの要約（`name` は Excel の制約に合わせた後の名前）。
+    sheets: tuple[dict[str, Any], ...]
+
+
+_RETYPE_FIX = "列の type を text にするか、値を直してください。"
+
+
+class _ValueProblem(Exception):
+    """列の型の値として読めない値（`fix` は直し方）。"""
+
+    def __init__(self, code: str, message: str, fix: str = _RETYPE_FIX) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.fix = fix
+
+
+def clean_text(value: str) -> str:
+    """cell に書けない制御文字を除く（XML に入れられない文字）。"""
+    return str(ILLEGAL_CHARACTERS_RE.sub("", value))
+
+
+def sheet_titles(names: Sequence[str]) -> list[str]:
+    """シート名を Excel の制約に合わせる（禁止の文字は `_`、31 文字まで、重複は連番）。"""
+    titles: list[str] = []
+    used: set[str] = set()
+    for index, raw in enumerate(names, start=1):
+        text = " ".join(_SHEET_NAME_FORBIDDEN.sub("_", clean_text(raw)).split())
+        base = text.strip("'")[:SHEET_NAME_MAX_CHARS].strip().strip("'") or f"Sheet{index}"
+        title = base
+        number = 2
+        while title.casefold() in used:
+            suffix = f" ({number})"
+            title = base[: SHEET_NAME_MAX_CHARS - len(suffix)].rstrip() + suffix
+            number += 1
+        used.add(title.casefold())
+        titles.append(title)
+    return titles
+
+
+def _text_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        text = "true" if value else "false"
+    else:
+        text = clean_text(value if isinstance(value, str) else str(value))
+    if len(text) > MAX_TEXT_CHARS:
+        raise _ValueProblem(
+            "too_long",
+            f"文字が長すぎます（1 つの cell は {MAX_TEXT_CHARS} 文字まで）。",
+            "値を短くしてください。",
+        )
+    return text or None
+
+
+def _number_value(value: Any) -> int | float | None:
+    if value is None:
+        return None
+    number: Any = value
+    if isinstance(value, str):
+        text = value.strip()
+        if _JSON_NUMBER.fullmatch(text) is None:
+            raise _ValueProblem("not_number", "数値として読めません。")
+        if _INTEGER.fullmatch(text):
+            number = int(text)
+        else:
+            number = float(text)
+            if math.isfinite(number) and Decimal(repr(number)) != Decimal(text):
+                raise _ValueProblem("precision", "桁が多く、Excel の数値では値が変わります。")
+    if isinstance(number, bool) or not isinstance(number, int | float):
+        raise _ValueProblem("not_number", "数値として読めません。")
+    if isinstance(number, float) and not math.isfinite(number):
+        raise _ValueProblem("not_number", "数値として読めません。")
+    if isinstance(number, int) and abs(number) > MAX_EXACT_INTEGER:
+        raise _ValueProblem("precision", "桁が多く、Excel の数値では値が変わります。")
+    return number
+
+
+def _date_value(value: Any) -> date | datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise _ValueProblem("not_date", "日付（YYYY-MM-DD か ISO 8601 の日時）として読めません。")
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise _ValueProblem(
+            "not_date", "日付（YYYY-MM-DD か ISO 8601 の日時）として読めません。"
+        ) from exc
+    if parsed.year < MIN_DATE_YEAR:
+        raise _ValueProblem(
+            "not_date", f"{MIN_DATE_YEAR} 年より前の日付は Excel の日付にできません。"
+        )
+    # Excel の日時は時間帯を持たない。書かれた時刻のまま入れる。
+    parsed = parsed.replace(tzinfo=None)
+    return parsed.date() if parsed.time() == time.min else parsed
+
+
+_CONVERTERS = {"text": _text_value, "number": _number_value, "date": _date_value}
+
+
+def _display_width(text: str) -> int:
+    """表示の幅の目安（全角は 2）。複数行は最も長い行。"""
+    return max(
+        (
+            sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in line)
+            for line in text.splitlines()
+        ),
+        default=0,
+    )
+
+
+def _shown(value: Any, number_format: str) -> str:
+    """列の幅を決めるための、cell の表示の文字。"""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, date):
+        return number_format
+    decimals = {"#,##0": 0, "#,##0.0": 1, "#,##0.00": 2}.get(number_format)
+    if decimals is not None:
+        return f"{value:,.{decimals}f}"
+    if number_format.endswith("%"):
+        return f"{value * 100:.{1 if '.' in number_format else 0}f}%"
+    return str(value)
+
+
+def _structure_issues(sheets: Sequence[Sheet]) -> list[SpecIssue]:
+    issues: list[SpecIssue] = []
+    if not 1 <= len(sheets) <= MAX_SHEETS:
+        issues.append(SpecIssue("sheets", "count", f"シートは 1〜{MAX_SHEETS} 枚にしてください。"))
+    cells = 0
+    for index, sheet in enumerate(sheets):
+        at = f"sheets.{index}"
+        width = len(sheet.columns)
+        if not 1 <= width <= MAX_COLUMNS:
+            issues.append(
+                SpecIssue(f"{at}.columns", "count", f"列は 1〜{MAX_COLUMNS} 列にしてください。")
+            )
+        if len(sheet.rows) > MAX_ROWS:
+            issues.append(
+                SpecIssue(
+                    f"{at}.rows",
+                    "too_many",
+                    f"1 つのシートの行は {MAX_ROWS} 行までです。行を絞ってください。",
+                )
+            )
+        if len(sheet.notes) > MAX_NOTES:
+            issues.append(
+                SpecIssue(f"{at}.notes", "too_many", f"説明の文は {MAX_NOTES} 行までです。")
+            )
+        if len(sheet.summaries) > MAX_SUMMARIES:
+            issues.append(
+                SpecIssue(f"{at}.summaries", "too_many", f"集計の行は {MAX_SUMMARIES} 行までです。")
+            )
+        cells += width * len(sheet.rows)
+        for row_index, row in enumerate(sheet.rows):
+            if len(row) != width:
+                issues.append(
+                    SpecIssue(
+                        f"{at}.rows.{row_index}",
+                        "length",
+                        f"行の値の数を列の数（{width}）にそろえてください。",
+                    )
+                )
+                break
+        for column_index, column in enumerate(sheet.columns):
+            issues.extend(_column_issues(f"{at}.columns.{column_index}", column))
+        for summary_index, summary in enumerate(sheet.summaries):
+            issues.extend(_summary_issues(f"{at}.summaries.{summary_index}", sheet, summary))
+    if cells > MAX_CELLS:
+        issues.append(
+            SpecIssue(
+                "sheets",
+                "too_many_cells",
+                f"cell の合計（行 × 列）は {MAX_CELLS} までです。行・列を絞ってください。",
+            )
+        )
+    return issues
+
+
+def _column_issues(at: str, column: Column) -> list[SpecIssue]:
+    issues: list[SpecIssue] = []
+    allowed = {"number": NUMBER_FORMATS, "date": DATE_FORMATS}.get(column.type, {})
+    if column.format is not None and column.format not in allowed:
+        issues.append(
+            SpecIssue(
+                f"{at}.format",
+                "format",
+                f"{_TYPE_LABELS[column.type]}の列に使える書式は"
+                f"{' / '.join(allowed) if allowed else 'ありません'}（既定は null）。",
+            )
+        )
+    if column.width is not None and not WIDTH_MIN <= column.width <= WIDTH_MAX:
+        issues.append(
+            SpecIssue(f"{at}.width", "range", f"幅は {WIDTH_MIN:g}〜{WIDTH_MAX:g} にしてください。")
+        )
+    return issues
+
+
+def _summary_issues(at: str, sheet: Sheet, summary: Summary) -> list[SpecIssue]:
+    width = len(sheet.columns)
+    positions = summary.columns
+    if (
+        not positions
+        or len(set(positions)) != len(positions)
+        or any(not 1 <= position <= width for position in positions)
+    ):
+        return [
+            SpecIssue(
+                f"{at}.columns",
+                "range",
+                f"集計する列は、1〜{width} の列の番号を重複なく 1 つ以上書いてください。",
+            )
+        ]
+    issues: list[SpecIssue] = []
+    if not sheet.rows:
+        issues.append(
+            SpecIssue(
+                at, "no_rows", "行の無い表には集計の行を付けられません。集計を外してください。"
+            )
+        )
+    allowed = SUMMARY_COLUMN_TYPES[summary.function]
+    for position in positions:
+        column_type = sheet.columns[position - 1].type
+        if column_type not in allowed:
+            issues.append(
+                SpecIssue(
+                    f"{at}.columns",
+                    "type",
+                    f"{summary.function} は{_TYPE_LABELS[column_type]}の列（{position} 列目）に"
+                    "使えません。",
+                )
+            )
+    if summary.label and len(positions) == width:
+        issues.append(
+            SpecIssue(
+                f"{at}.label",
+                "no_room",
+                "すべての列を集計する行には見出しを置けません。label を null にしてください。",
+            )
+        )
+    return issues
+
+
+def _converted_rows(
+    index: int, sheet: Sheet, issues: list[SpecIssue]
+) -> list[list[str | int | float | date | datetime | None]]:
+    """行の値を列の型の値にする（読めない値は、列ごとに最初の 1 件を誤りにする）。"""
+    converters = [_CONVERTERS[column.type] for column in sheet.columns]
+    failed: set[int] = set()
+    converted: list[list[str | int | float | date | datetime | None]] = []
+    for row_index, row in enumerate(sheet.rows):
+        values: list[str | int | float | date | datetime | None] = []
+        for column_index, (convert, value) in enumerate(zip(converters, row, strict=True)):
+            if column_index in failed:
+                values.append(None)
+                continue
+            try:
+                values.append(convert(value))
+            except _ValueProblem as problem:
+                failed.add(column_index)
+                values.append(None)
+                issues.append(
+                    SpecIssue(
+                        f"sheets.{index}.columns.{column_index}.type",
+                        problem.code,
+                        f"この列の {row_index + 1} 行目の値は、{problem.message}{problem.fix}",
+                    )
+                )
+        converted.append(values)
+    return converted
+
+
+def _number_format(column: Column, values: Sequence[Any]) -> str:
+    if column.type == "text":
+        return _TEXT_FORMAT
+    if column.type == "number":
+        return NUMBER_FORMATS[column.format] if column.format else _GENERAL_FORMAT
+    if column.format:
+        return DATE_FORMATS[column.format]
+    # 既定は内容から決める（時刻のある値が 1 つでもあれば日時）。
+    has_time = any(isinstance(value, datetime) for value in values)
+    return DATE_FORMATS["datetime" if has_time else "date"]
+
+
+def _write_text(cell: Cell, text: str) -> None:
+    # 文字型を明示する（openpyxl は `=` で始まる文字を数式、`#N/A` などをエラー値の型にする）。
+    cell.value = text
+    cell.data_type = "s"
+
+
+def _summary_formula(function: str, cell_range: str) -> str:
+    if function == "sum":
+        return f"=SUM({cell_range})"
+    if function == "count":
+        return f"=COUNTA({cell_range})"
+    # 数値・日付の無い範囲では、エラー・0 を出さずに空にする。
+    name = {"average": "AVERAGE", "min": "MIN", "max": "MAX"}[function]
+    return f'=IF(COUNT({cell_range})=0,"",{name}({cell_range}))'
+
+
+def _write_sheet(
+    worksheet: Worksheet,
+    sheet: Sheet,
+    rows: Sequence[Sequence[str | int | float | date | datetime | None]],
+) -> None:
+    row_number = 1
+    if sheet.heading:
+        cell = worksheet.cell(row=row_number, column=1)
+        _write_text(cell, clean_text(sheet.heading))
+        cell.font = _HEADING_FONT
+        row_number += 1
+    for note in sheet.notes:
+        _write_text(worksheet.cell(row=row_number, column=1), clean_text(note))
+        row_number += 1
+    if row_number > 1:
+        row_number += 1
+    header_row = row_number
+    first_data_row = header_row + 1
+    last_data_row = header_row + len(rows)
+    formats = [
+        _number_format(column, [row[position] for row in rows])
+        for position, column in enumerate(sheet.columns)
+    ]
+    widths = [0] * len(sheet.columns)
+    for position, column in enumerate(sheet.columns):
+        header = clean_text(column.header)
+        cell = worksheet.cell(row=header_row, column=position + 1)
+        _write_text(cell, header)
+        cell.font = _BOLD_FONT
+        cell.fill = _HEADER_FILL
+        cell.border = _HEADER_BORDER
+        cell.alignment = _HEADER_ALIGNMENT
+        # フィルターのボタンの分を足す。
+        widths[position] = _display_width(header) + 2
+    for offset, row in enumerate(rows):
+        for position, value in enumerate(row):
+            if value is None:
+                continue
+            cell = worksheet.cell(row=first_data_row + offset, column=position + 1)
+            if isinstance(value, str):
+                _write_text(cell, value)
+            else:
+                cell.value = value
+            cell.number_format = formats[position]
+            widths[position] = max(
+                widths[position], _display_width(_shown(value, formats[position]))
+            )
+    for offset, summary in enumerate(sheet.summaries):
+        summary_row = last_data_row + 1 + offset
+        for position in range(len(sheet.columns)):
+            cell = worksheet.cell(row=summary_row, column=position + 1)
+            cell.font = _BOLD_FONT
+            cell.border = _SUMMARY_BORDER
+            if position + 1 in summary.columns:
+                letter = get_column_letter(position + 1)
+                cell.value = _summary_formula(
+                    summary.function, f"{letter}{first_data_row}:{letter}{last_data_row}"
+                )
+                cell.number_format = (
+                    _COUNT_FORMAT if summary.function == "count" else formats[position]
+                )
+        if summary.label:
+            label_position = next(
+                position
+                for position in range(len(sheet.columns))
+                if position + 1 not in summary.columns
+            )
+            label = clean_text(summary.label)
+            _write_text(worksheet.cell(row=summary_row, column=label_position + 1), label)
+            widths[label_position] = max(widths[label_position], _display_width(label))
+    for position, column in enumerate(sheet.columns):
+        worksheet.column_dimensions[get_column_letter(position + 1)].width = (
+            column.width
+            if column.width is not None
+            else min(max(widths[position] + 2, _AUTO_WIDTH_MIN), _AUTO_WIDTH_MAX)
+        )
+    # 表の見出しまでを固定し、見出しとデータの行（集計の行は含めない）にフィルターを付ける。
+    worksheet.freeze_panes = worksheet.cell(row=first_data_row, column=1)
+    last_column = get_column_letter(len(sheet.columns))
+    worksheet.auto_filter.ref = f"A{header_row}:{last_column}{max(last_data_row, header_row)}"
+
+
+def build_workbook(sheets: Sequence[Sheet]) -> BuiltWorkbook:
+    """内容から .xlsx を作る。作れない内容は `XlsxSpecError`（何も作らない）。"""
+    issues = _structure_issues(sheets)
+    if issues:
+        raise XlsxSpecError(issues)
+    converted = [_converted_rows(index, sheet, issues) for index, sheet in enumerate(sheets)]
+    if issues:
+        raise XlsxSpecError(issues)
+    titles = sheet_titles([sheet.name for sheet in sheets])
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for title, sheet, rows in zip(titles, sheets, converted, strict=True):
+        _write_sheet(workbook.create_sheet(title=title), sheet, rows)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return BuiltWorkbook(
+        data=buffer.getvalue(),
+        sheets=tuple(
+            {
+                "name": title,
+                "rows": len(sheet.rows),
+                "columns": len(sheet.columns),
+                "summary_rows": len(sheet.summaries),
+            }
+            for title, sheet in zip(titles, sheets, strict=True)
+        ),
+    )
+
+
+__all__ = [
+    "DATE_FORMATS",
+    "MAX_CELLS",
+    "MAX_COLUMNS",
+    "MAX_NOTES",
+    "MAX_ROWS",
+    "MAX_SHEETS",
+    "MAX_SUMMARIES",
+    "NUMBER_FORMATS",
+    "SHEET_NAME_MAX_CHARS",
+    "SUMMARY_COLUMN_TYPES",
+    "WIDTH_MAX",
+    "WIDTH_MIN",
+    "XLSX_MIME_TYPE",
+    "BuiltWorkbook",
+    "Column",
+    "Sheet",
+    "SpecIssue",
+    "Summary",
+    "XlsxSpecError",
+    "build_workbook",
+    "sheet_titles",
+]

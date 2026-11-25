@@ -1,6 +1,6 @@
 # 組み込みのスキル（Agent Skills）
 
-Production Ready RAG・NL2SQL の MCP を使って調べるスキル。組み込みの Agent が読み、Claude Code・Codex などの外部の Agent にも入れられる（形式は [Agent Skills](https://agentskills.io) の `<name>/SKILL.md`）。
+Production Ready RAG・NL2SQL の MCP を使って調べるスキルと、Agent の業務 Agent がファイルを作るスキル。組み込みの Agent が読み、MCP を使うスキルは Claude Code・Codex などの外部の Agent にも入れられる（形式は [Agent Skills](https://agentskills.io) の `<name>/SKILL.md`）。
 
 | スキル | 使う MCP サーバー | 使う場面 |
 |---|---|---|
@@ -9,8 +9,11 @@ Production Ready RAG・NL2SQL の MCP を使って調べるスキル。組み込
 | [`rag-chat-and-data`](./rag-chat-and-data/SKILL.md)（RAG チャット＋データ） | `rag`・`nl2sql` | 資料（`rag_chat`）と業務データの両方が要る調査。RAG の回答と業務データの値を合わせて答える |
 | [`rag-search-and-data`](./rag-search-and-data/SKILL.md)（RAG 検索＋データ） | `rag`・`nl2sql` | 資料（`rag_search`）と業務データの両方が要る調査 |
 | [`structured-data-query`](./structured-data-query/SKILL.md)（構造化データ照会） | `nl2sql` | 業務データの件数・金額・一覧を SQL で照会する |
+| [`xlsx-create`](./xlsx-create/SKILL.md)（Excel 作成） | なし（Agent の業務 Agent のツール `xlsx_create`） | 利用者の依頼に応じて Excel のファイル（.xlsx）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
 
 RAG だけのスキル（`rag-chat`・`rag-search`）は metadata の `production-ready-final-answer-tools` に回答のツールを宣言し、組み込みの Agent はそのツールの回答（登録済みQ&Aの候補・業務ガイドの確認を含む）をそのまま Run の回答にする（回答の書き方は RAG の検索・回答プロファイルで設定する）。
+
+`xlsx-create` が使うツール `xlsx_create` は Agent の中にだけあり、MCP サーバーでは提供しない。plugin で外部の Agent に入っても、そこでは使えない（`compatibility` に書いてある）。このスキルは [anthropics/skills](https://github.com/anthropics/skills) の `skills/xlsx`（Apache License 2.0）の指針を元にしており、許諾の全文（`LICENSE.txt`）と出典・変更点（`NOTICE`）を同じフォルダに置く。
 
 このディレクトリは Claude Code の plugin `production-ready-skills`（[`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json)）でもあり、repo 直下の [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json)（marketplace `production-ready-suite`）が配る。
 
@@ -147,4 +150,5 @@ codex mcp list
 ## スキルを変えるとき
 
 - 書き方は [docs/agents/prompts.md](../docs/agents/prompts.md)（プロンプト（LLM への指示・skill・ツールの説明）の書き方）と [agent/docs/agent-control-plane-design.md](../agent/docs/agent-control-plane-design.md)。検証は `agent/backend/tests/test_skill_md_spec.py`（`skills-ref` と、本文の識別子が MCP の契約にあること）。
+- Agent の業務 Agent のツール（`control-plane:<ツール>`）を使うスキルは、本文の識別子がそのツールの定義（引数・結果）にあることを同じテストが確かめる。第三者の資料を元にするスキルは、許諾の全文（`LICENSE.txt`）と出典・変更点（`NOTICE`）をスキルのフォルダに置き、[THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) の「repo の中の第三者の内容」に足す（書き出しの zip にも入る）。
 - 外部の Agent へ配った後に内容を変えたら、[`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json) の `version` を上げる（Claude Code は `version` ごとに plugin を cache するため、上げないと `claude plugin update` で新しい内容が入らない）。

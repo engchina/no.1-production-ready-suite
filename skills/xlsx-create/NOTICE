@@ -1,0 +1,19 @@
+This skill (skills/xlsx-create) is based on guidance from the "xlsx" skill of anthropics/skills:
+
+  Repository: https://github.com/anthropics/skills
+  Path:       skills/xlsx/SKILL.md
+  Revision:   e4bb5d960d87126ff3b3a8af1a104b7db67560ba
+  License:    Apache License 2.0 (the LICENSE.txt in that directory; a copy is in LICENSE.txt here)
+
+Changes made for this project:
+
+- SKILL.md is rewritten in Japanese for the xlsx_create tool of Production Ready Agent.
+  Only the guidance that applies to that tool is kept: write totals as formulas instead of
+  computed values, follow the sheet names and column headers the user specified, state the
+  source and assumptions of the values where the reader sees them, put units in the column
+  header, and keep non-calculated numbers (years, codes) as text. The rule that percentages
+  are stored as fractions is stated in the argument description of the xlsx_create tool
+  (agent/backend/app/features/agent/xlsx_tool.py).
+- Everything else is not included: the scripts, running code (Python, pandas, openpyxl),
+  LibreOffice recalculation, reading and editing existing files, charts, and the
+  financial-model conventions.
