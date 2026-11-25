@@ -1460,12 +1460,14 @@ def _grounded_spans(
     budget: int | None = None,
     whole_records: bool = False,
     preserve_records: bool = False,
+    record_stage: bool = True,
 ) -> list[dict[str, Any]]:
     """全出典へ本文予算を配分して原文を選び、機能キーとタグを付ける。
 
     budget は原文の総予算（文字。`Settings.evidence_budget_chars`）。None なら `evidence_spans` の既定値 (#1054)。
     whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
     preserve_records は選択済みの全文を保持する。呼出側が各モデル入力の容量内で分割読取する。
+    record_stage が偽なら診断の段を残さない（大きさを測るだけの呼び出し。#5820）。
     """
     budget_option: dict[str, Any] = {"budget": int(budget)} if budget else {}
     if whole_records:
@@ -1508,12 +1510,24 @@ def _grounded_spans(
     ]
     preparation: list[dict[str, Any]] = []
     spans = evidence_spans(selection_question, records, anchors=anchors, scope_records=children, diagnostics=preparation, **budget_option)
-    if preparation:
+    if preparation and record_stage:
         record_retrieval_stage(
             {"stage": "generation_evidence_preparation", "input_stage": "prepared_for_generation", "groups": preparation}
         )
     spans = form_field_kinds.with_field_kind_evidence(form_field_kinds.question_field_kinds(question, context), spans)
     return tag_spans(spans)
+
+
+def _evidence_block_chars(question: str, context: AnswerContext, settings: Settings) -> int:
+    """文脈の根拠を回答の入力の根拠ブロックにしたときの字数（#5820）。
+
+    ``select_evidence`` が 1 回の生成か分割読取かを決める字数（``evidence_block_text``）と同じ数え方。章節の拡張が、
+    足した後の根拠の全体を 1 回の生成の原文の予算に収めるのに使う。
+    """
+    from rag_engine.generation.grounded import evidence_block_text
+
+    spans = _grounded_spans(question, context, (), None, budget=settings.evidence_budget_chars, preserve_records=True, record_stage=False)
+    return len(evidence_block_text(spans))
 
 
 def _with_independent_sources(context: AnswerContext) -> AnswerContext:
@@ -4161,6 +4175,7 @@ def _expand_context_by_sections(
             reader=state["reader"],
             priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
             related=related,
+            block_chars=lambda candidate: _evidence_block_chars(question, candidate, settings),
         )
         if related:
             result.trace["related_seeds"] = related
@@ -4203,6 +4218,7 @@ def _expand_context_by_sections(
                 "有効": result.trace.get("enabled"),
                 "広げる段の上限": result.trace.get("max_levels"),
                 "1 章節の上限（文字。入力上限の 1/2）": result.trace.get("input_token_limit"),
+                "根拠の全体の上限（文字。1 回の生成の原文の予算）": result.trace.get("total_limit_chars"),
                 "予約 token": result.trace.get("reserved_tokens", 0),
                 "起点根拠数": len(sections.seed_chunk_ids(context)),
                 "準備した章節範囲": routes,
@@ -4242,6 +4258,12 @@ def _expand_context_by_sections(
         step.field("広げた段", f"{result.levels} 段")
         step.field("止めた理由", _SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason))
         step.field("回答の材料の根拠", evidence_summary(result.context.records))
+        over_total = [
+            entry for level in result.trace.get("levels", []) for entry in level.get("sections", []) if entry.get("read") == "over_total"
+        ]
+        if over_total:
+            # 足すと分割読取に回る章節は読まず、その起点は親 → 前後で補う（#5820）。
+            step.field("根拠の全体の上限で読まなかった章節", f"{len(over_total)} 件（起点は親・前後で補います）")
         if result.unread:
             step.field("読めなかった章節", f"{len(result.unread)} 件")
             step.impact("上限に達したため、読めなかった章節を「回答に未反映の関連章節」に示し、条件つきの回答にします。")
@@ -4444,7 +4466,7 @@ def consolidate_context(context: AnswerContext) -> AnswerContext:
 _SECTION_STOP_LABELS = {
     "document_read": "文書全体まで読んだ",
     "max_levels": "広げる段の上限",
-    "token_budget": "章節が入力上限の 1/2 を超えた（親・前後で補う）",
+    "token_budget": "章節が入力上限の 1/2 を超えた、または根拠の全体が 1 回の生成の原文の予算を超えた（親・前後で補う）",
     "time_limit": "回答の時間の上限",
     "no_sections": "章節の対応なし",
     "not_configured": "章節の読み込み未設定",

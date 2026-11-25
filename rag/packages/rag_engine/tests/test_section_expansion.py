@@ -593,6 +593,41 @@ def test_level_is_shrunk_to_the_largest_section_within_half_of_the_input():
     assert set(_members("s3")) <= set(_child_ids(result.context))
 
 
+def _record_chars(context: AnswerContext) -> int:
+    """合成の「回答の入力の形の字数」（根拠の本文の字数の和）。"""
+    return sum(len(record.text) for record in context.records)
+
+
+def test_sections_are_added_in_seed_order_while_the_whole_evidence_fits_one_generation():
+    """章節は起点の順に、足した後の根拠の全体が 1 回の生成の原文の予算に入るものだけを足す（#5820）。"""
+    stub = SectionStub()
+    # 当たった根拠 3 件（900 字）＋章節 2 つの残り（300 字ずつ）でちょうど予算。3 つ目の章節は入らない。
+    settings = _settings(evidence_budget_chars=1500)
+    result = _expand(_seed_context("c31a", "c2a", "c4a"), settings, stub, block_chars=_record_chars)
+
+    entries = result.trace["levels"][0]["sections"]
+    assert [(entry["section_id"], entry["read"]) for entry in entries] == [("s3-1", "whole"), ("s2", "whole"), ("s4", "over_total")]
+    assert {"c31b", "c2b"} <= set(_child_ids(result.context)) and "c4b" not in _child_ids(result.context)
+    # 読まなかった章節は読了にしない（起点は呼び出し元が親 → 前後で補う）。回答にも出さない。
+    assert (DOC, CHUNK_SET, "s4") not in {key for key in result.trace["completed_sections"] for key in [tuple(key.values())]}
+    assert not result.unread and result.stop_reason == sections.STOP_TOKEN_BUDGET
+    assert (result.trace["total_limit_chars"], result.trace["total_room_chars"]) == (1500, 0)
+
+
+def test_level_is_shrunk_until_the_whole_evidence_fits_one_generation():
+    """上の段の章節を足すと予算を超えるときは 1 段ずつ下げ、入る章節を読む（#5820）。"""
+    stub = SectionStub()
+    # 第3章の残り（5 chunk = 1500 字）は入らず、3.1 の残り（300 字）は入る。
+    settings = _settings(evidence_budget_chars=1799, section_expansion_max_levels=2)
+    result = _expand(_seed_context("c31a"), settings, stub, block_chars=_record_chars)
+
+    entry = result.trace["levels"][0]["sections"][0]
+    assert (entry["section_id"], entry["level"], entry["shrunk_from_level"], entry["read"]) == ("s3-1", 1, 2, "whole")
+    assert stub.read_calls == ["s3", "s3-1"]
+    assert "c31b" in _child_ids(result.context) and "c32a" not in _child_ids(result.context)
+    assert result.stop_reason == sections.STOP_SCOPE_READ
+
+
 def _reader_for(
     stub: SectionStub, empty: sections.SectionInfo, section: str = "s2"
 ) -> tuple[sections.SectionOutline, sections.SectionReader]:

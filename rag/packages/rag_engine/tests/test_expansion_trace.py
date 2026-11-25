@@ -21,6 +21,7 @@ class Observation:
     inputs: Any = None
     outputs: Any = None
     params: dict = field(default_factory=dict)
+    details: dict = field(default_factory=dict)
 
     def request(self, value, **kwargs):
         self.inputs = value
@@ -33,6 +34,7 @@ class Observation:
 
     def display(self, kind=None, params=None, details=None):
         self.params.update(params or {})
+        self.details.update(details or {})
 
 
 @contextmanager
@@ -192,5 +194,27 @@ def test_section_budget_exclusion_keeps_actual_reason():
     (_, result), step = run_sections(_seed_context("c31a"), SectionStub(), settings)
     # 所有の章節も入力上限の 1/2 を超える: 読まず、回答に出さず、止めた理由に残す（#5812）。
     assert result.stop_reason == "token_budget"
-    assert step.outputs["停止理由"] == "章節が入力上限の 1/2 を超えた（親・前後で補う）"
+    assert step.outputs["停止理由"] == "章節が入力上限の 1/2 を超えた、または根拠の全体が 1 回の生成の原文の予算を超えた（親・前後で補う）"
     assert not result.unread
+
+
+def test_sections_that_push_the_evidence_into_batched_reading_are_not_read():
+    """足すと根拠の全体が 1 回の生成の原文の予算を超える章節は読まず、回答に出さない（#5820）。"""
+    ctx = _seed_context("c31a", "c2a")
+    base = get_settings(environ={}, dotenv_path=None)
+    # 分割読取に回すかを決める字数（根拠ブロックの字数）と同じ数え方で、当たった根拠だけが入る予算にする。
+    block = answering._evidence_block_chars("合成の質問", ctx, base)
+    settings = replace(base, section_expansion_max_levels=1, answer_max_input_tokens=2 * (block + 1))
+    assert answering._evidence_block_chars("合成の質問", ctx, settings) == block <= settings.evidence_budget_chars
+
+    (after, result), step = run_sections(ctx, SectionStub(), settings)
+
+    assert [entry["read"] for entry in step.outputs["読取結果"][0]["sections"]] == ["over_total", "over_total"]
+    assert step.inputs["根拠の全体の上限（文字。1 回の生成の原文の予算）"] == block + 1
+    assert {"label": "根拠の全体の上限で読まなかった章節", "value": "2 件（起点は親・前後で補います）"} in step.details["fields"]
+    assert result.stop_reason == "token_budget" and not result.unread and not result.applied
+    assert after is ctx
+    # 入る予算なら、これまでどおり章節の全体を足す。
+    roomy = replace(base, section_expansion_max_levels=1)
+    (_, kept), _ = run_sections(_seed_context("c31a", "c2a"), SectionStub(), roomy)
+    assert kept.applied and kept.stop_reason == "scope_read"
