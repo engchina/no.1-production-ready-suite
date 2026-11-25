@@ -3921,6 +3921,9 @@ export const ja = {
   // 根拠の役割（回答エンジンの retrieval_role。英語の値は画面に出さない）。
   "search.citation.badge.vector": "Vector #{rank}",
   "search.citation.badge.keyword": "Keyword #{rank}",
+  // Wiki の検索の経路（#5831）。起点は Wiki のベクトル検索の順位、関係を辿った先は順位が無い。
+  "search.citation.badge.wiki": "Wiki #{rank}",
+  "search.citation.badge.wikiRelated": "Wiki 関連",
   "search.citation.supportNotRun": "内容の裏付け確認は未実施",
   "search.citation.supportError": "内容確認で実行エラー・裏付け未確定",
   "search.citation.supportTimeout": "内容確認が時間切れ・裏付け未確定",

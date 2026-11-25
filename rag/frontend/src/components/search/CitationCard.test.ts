@@ -57,6 +57,50 @@ describe("citationEvidenceItem", () => {
   });
 });
 
+describe("citationEvidenceItem の Wiki の検索の経路の印（issue 5831）", () => {
+  const badges = (metadata: RetrievedChunk["metadata"]) =>
+    citationEvidenceItem({
+      document_id: "d",
+      chunk_id: "c",
+      text: "原文",
+      score: 0,
+      rerank_score: null,
+      file_name: "合成.md",
+      category_name: null,
+      metadata,
+    }).routeBadges;
+
+  it("Wiki の起点は Wiki のベクトル検索の順位を出す", () => {
+    expect(badges({ wiki_source: true, wiki_origin: "root", wiki_rank: 2, rerank_rank: 1 })).toEqual([
+      "Wiki #2",
+      "Rerank #1",
+    ]);
+  });
+
+  it.each(["dependency", "link"])("関係を辿った先（%s）は順位の無い「Wiki 関連」を出す", (origin) => {
+    expect(badges({ wiki_source: true, wiki_origin: origin })).toEqual(["Wiki 関連"]);
+    // 辿った先に順位は無い（値があっても出さない）。
+    expect(badges({ wiki_origin: origin, wiki_rank: 4, rerank_rank: 3 })).toEqual(["Wiki 関連", "Rerank #3"]);
+  });
+
+  it("通常検索と Wiki の両方で見つけた原文は、ベクトル・全文・Wiki・Rerank の順に並べる", () => {
+    expect(
+      badges({ vector_rank: 3, keyword_rank: 1, wiki_source: true, wiki_origin: "root", wiki_rank: 2, rerank_rank: 1 })
+    ).toEqual(["Vector #3", "Keyword #1", "Wiki #2", "Rerank #1"]);
+    expect(badges({ vector_rank: 3, wiki_origin: "link", rerank_rank: 2 })).toEqual([
+      "Vector #3",
+      "Wiki 関連",
+      "Rerank #2",
+    ]);
+  });
+
+  it("Wiki の印が無い・順位の無い起点・知らない由来には出さない", () => {
+    expect(badges({ vector_rank: 1 })).toEqual(["Vector #1"]);
+    expect(badges({ wiki_origin: "root" })).toEqual([]);
+    expect(badges({ wiki_origin: "other", wiki_rank: 1 })).toEqual([]);
+  });
+});
+
 describe("citationEvidenceItem の章節・内容種別のチップ（issue 5303）", () => {
   const chunk = (metadata: RetrievedChunk["metadata"]): RetrievedChunk => ({
     document_id: "d",

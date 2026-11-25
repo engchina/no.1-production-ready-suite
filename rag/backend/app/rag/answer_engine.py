@@ -243,6 +243,10 @@ EVALUATION_INPUT_KEYS = (
 )
 
 
+# Wiki の経路の原文の印(#4941・#5044・#5500・#5831)。rag_engine へ渡す候補と引用に写す。
+_WIKI_MARK_KEYS = ("wiki_source", "wiki_origin", "wiki_rank", "source_identities", "wiki_relations")
+
+
 @dataclass
 class _SearchState:
     """検索で見つけた backend chunk を chunk_id で保持し、引用へ戻すために使う。
@@ -285,6 +289,11 @@ class _SearchState:
     # Wiki の検索の経路(#4941)。足した原文の案内(回答前の照合に使う)と記録。
     wiki_pages: tuple[Any, ...] = ()
     wiki_trace: dict[str, Any] = field(default_factory=dict)
+    # Wiki の経路の原文の印(chunk_id → ``_WIKI_MARK_KEYS`` の値)と、Wiki の経路だけが入れた
+    # chunk(#5831)。Wiki の検索は通常検索と並んで進み、同じ原文を先に入れた方が ``chunks`` に
+    # 残る。印を chunk と別に持ち、どちらが先でも引用に両方の経路の順位を出す。
+    wiki_marks: dict[str, dict[str, Any]] = field(default_factory=dict)
+    wiki_only_chunks: set[str] = field(default_factory=set)
     # 検索拡張(``entity_expansion``・``outline_selection``・``reference_expansion``)の秒の累計
     # (1 回の回答の中で何度呼んでも足す)。回答の診断の各項目の ``elapsed_seconds``(#5518)。
     expansion_seconds: dict[str, float] = field(default_factory=dict)
@@ -370,6 +379,30 @@ class _SearchState:
     def record_degraded(self, kind: str, exc: BaseException) -> None:
         """補助の処理 ``kind`` が ``exc`` で失敗し、空のまま続けたことを数える(#3259)。"""
         self.degraded.record_degraded(kind, exc)
+
+    def add_search_hit(self, hit: RetrievedChunk) -> None:
+        """通常検索で当たった chunk を入れる(#5831)。
+
+        Wiki の経路だけが先に入れていた chunk は、通常検索の結果(ベクトル・全文の順位を持つ)に
+        置き換える。それ以外は先に入れたものを残す。
+        """
+        if hit.chunk_id in self.wiki_only_chunks:
+            self.wiki_only_chunks.discard(hit.chunk_id)
+            self.chunks[hit.chunk_id] = hit
+        else:
+            self.chunks.setdefault(hit.chunk_id, hit)
+
+    def add_wiki_chunk(self, chunk: RetrievedChunk) -> None:
+        """Wiki の経路の原文を入れる(#5831)。
+
+        印は ``wiki_marks`` に持ち、通常検索などが先に入れた chunk は置き換えない。
+        """
+        self.wiki_marks[chunk.chunk_id] = {
+            key: chunk.metadata[key] for key in _WIKI_MARK_KEYS if key in chunk.metadata
+        }
+        if chunk.chunk_id not in self.chunks:
+            self.chunks[chunk.chunk_id] = chunk
+            self.wiki_only_chunks.add(chunk.chunk_id)
 
     def degraded_steps(self) -> list[dict[str, object]]:
         """失敗した補助の処理の記録(最初に失敗した順)。"""
@@ -1237,7 +1270,7 @@ class AnswerEngine:
                 )
             )
             for hit in hits:
-                state.chunks.setdefault(hit.chunk_id, hit)
+                state.add_search_hit(hit)
                 state.retrieval_channels.setdefault(hit.chunk_id, set()).update(
                     _hit_channels(hit, index)
                 )
@@ -3293,7 +3326,7 @@ class AnswerEngine:
             else {**result.trace, **timing()}
         )
         for chunk in result.chunks:
-            state.chunks.setdefault(chunk.chunk_id, chunk)
+            state.add_wiki_chunk(chunk)
         return [
             _stored_child(chunk, rrf_score=0.0, retrieval_channels={"wiki"})
             for chunk in result.chunks
@@ -4513,7 +4546,7 @@ def _stored_child(
     metadata["document_id"] = chunk.document_id
     # Wiki の経路の原文の印と、目録の文書の版の属性(#4941・#5044)、辿りで見た原文の間の関係
     # (#5500)。原文の本文・座標は変えない。
-    for key in ("wiki_source", "wiki_origin", "wiki_rank", "source_identities", "wiki_relations"):
+    for key in _WIKI_MARK_KEYS:
         if key in chunk.metadata:
             metadata[key] = chunk.metadata[key]
     if (wiki_score := chunk.metadata.get("wiki_rerank_score")) is not None:
@@ -5124,6 +5157,8 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         cited_children.add(id(evidence))
         metadata: dict[str, Any] = {
             **chunk.metadata,
+            # Wiki の経路の印(#5831)。通常検索が先に入れた chunk にも、Wiki の順位・由来を出す。
+            **state.wiki_marks.get(chunk_id, {}),
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
         }
