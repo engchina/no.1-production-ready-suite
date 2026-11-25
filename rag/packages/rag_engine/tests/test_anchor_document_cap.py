@@ -123,8 +123,10 @@ class AnchorDocumentCapTest(unittest.TestCase):
         capped = a.cap_anchors_per_document(self.ranked(), settings(1))
         self.assertEqual([r.id for r in capped], ["a1", "b1"])
 
-    def test_engine_default_is_unlimited_and_env_selects_the_limit(self):
-        self.assertEqual(get_settings(environ={}, dotenv_path=None).max_anchors_per_document, 0)
+    def test_engine_default_is_ten_and_env_selects_the_limit(self):
+        self.assertEqual(get_settings(environ={}, dotenv_path=None).max_anchors_per_document, 10)
+        environ = {"RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": "0"}
+        self.assertEqual(get_settings(environ=environ, dotenv_path=None).max_anchors_per_document, 0)
         environ = {"RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": "3"}
         self.assertEqual(get_settings(environ=environ, dotenv_path=None).max_anchors_per_document, 3)
 

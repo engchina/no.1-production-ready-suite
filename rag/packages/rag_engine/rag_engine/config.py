@@ -49,9 +49,9 @@ DEFAULT_EMBEDDING_OUTPUT_DIMENSIONS = 1536
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_IMAGE_EMBEDDING_RRF_WEIGHT = 0.75
 DEFAULT_MAX_ANCHORS_PER_PARENT = 2
-# rerank の後、1 つの文書から起点に採る child の上限（#2167・#5170）。0 は上限なし。
+# rerank の後、1 つの文書から起点に採る child の上限（#2167・#5170）。既定 10（#5845）。0 は上限なし。
 # backend の rag_max_anchors_per_document の既定と同じ値（一致は backend の tests/test_anchor_document_cap_settings.py で確認する）。
-DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
+DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 10
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
 DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.3
 # 下限以上が 0 件のとき、下限に掛けて 1 回だけ下げる比（0 は下げない。#5443）。

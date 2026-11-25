@@ -638,6 +638,21 @@ chain した chunk の行の全 piece を読まない。原生 hybrid 索引（`
    （残しても読まないが、意味の無い行を残さない）。
 2. backend を再起動する。
 
+## 既存環境の更新手順（#5845 1 つの文書から採る根拠の上限の既定を 10 にする）
+
+文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`）の既定を、#5443 の 0（上限なし）から **10** にした（backend の
+`rag_max_anchors_per_document` と engine の `DEFAULT_MAX_ANCHORS_PER_DOCUMENT` の両方）。この上限は通常検索の起点と Wiki の
+検索の起点の両方に掛かる。上限なしのまま Wiki の検索を使うと、起点が少数の文書から回答起点数の上限まで採られて根拠が
+増え、分割読取になりやすい。値の範囲（0〜20）・`.env` で設定できること・検索・回答プロファイルの
+`query.max_anchors_per_document` で上書きできること・超えた候補を外すことは変えていない。表・migration・API path は
+変えていない。
+
+1. `backend/.env` に `RAG_MAX_ANCHORS_PER_DOCUMENT` が無ければ、既定の 10 になる（`.env.example` は
+   `RAG_MAX_ANCHORS_PER_DOCUMENT=10`）。
+2. **既存の環境の `backend/.env` に値が書かれていれば、その値のまま扱う**（`0` と書かれていれば上限なしのまま）。既定の 10 に
+   したいときは、その行を `10` にするか消す。
+3. backend（と取込 worker）を再起動する。検索・回答プロファイルで値を保存していればその値が優先される。
+
 ## 既存環境の更新手順（#5170 1 つの文書から採る根拠の上限の既定を 5 に戻す）
 
 文書ごとの上限（`RAG_MAX_ANCHORS_PER_DOCUMENT`）の既定を、#5165 の 0（上限なし）から **5** に戻した（backend の
