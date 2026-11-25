@@ -155,6 +155,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 一般の利用者が毎日使う画面（NL2SQL の「AI 活用」と同じ名前。#791）。
     _menu_permission(MENU_CHAT, _GROUP_USE, "チャット"),
     # Run の一覧（NL2SQL の「実行履歴」と同じ名前。#791）。
+    # 承認の画面はナビに出さない（#5834。URL で開く）。権限はカタログに残し、
+    # グループはナビの「AI 活用」。
     _menu_permission(MENU_APPROVALS, _GROUP_USE, "承認"),
     _menu_permission(MENU_RUNS, _GROUP_USE, "実行履歴"),
     # 管理者が業務 Agent を作る画面（RAG「ナレッジ構築」・NL2SQL「データ準備」に当たる。#791）。

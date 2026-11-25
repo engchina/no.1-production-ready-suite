@@ -137,7 +137,7 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 
 ## 「AI 活用」の下の機能のデータの見え方（#1889・#1954・#3244）
 
-3 製品のサイドナビの「AI 活用」の下の機能（RAG: チャット・RAG 検索・実行履歴、NL2SQL: チャット・SQL 生成・SQL 直接実行・SQL から質問・実行履歴、Agent: チャット・承認・実行履歴）は、**system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**を、一覧・詳細・操作で扱う。判定は `pr_system_settings.auth.visibility` の関数に 1 つだけ置き、製品はそれを使う。
+3 製品のサイドナビの「AI 活用」の下の機能（RAG: チャット・RAG 検索・実行履歴、NL2SQL: チャット・SQL 生成・SQL 直接実行・SQL から質問・実行履歴、Agent: チャット・実行履歴と、ナビに出さない承認の画面）は、**system_admin は全員のデータ、それ以外の利用者は自分のデータだけ**を、一覧・詳細・操作で扱う。判定は `pr_system_settings.auth.visibility` の関数に 1 つだけ置き、製品はそれを使う。
 
 - system_admin は SYSTEM_ADMIN のロールを持つ利用者（構成管理者 `system_admin` と local のローカル利用者を含む）。`can_view_all_users_data(principal)` が判定する。製品の管理権限（`agent.admin`・`rag.feedback.manage` など）やメニュー権限は、全員を見る理由にしない。
 - 一覧は backend の SQL / store の条件で絞る（`owner_filter_user_uuid(principal)`。None は絞らない）。画面で隠すだけにしない。

@@ -52,11 +52,13 @@ test("権限管理の機能の一覧は、左のナビと同じグループ・�
     .reverse();
   const arranged = arrangeAgentPermissions(scrambled);
 
-  // メニュー権限はすべてナビの項目で、ナビと同じ見出し・並び・名前（sidebarLabelKey を優先）になる。
+  // メニュー権限は、ナビに出さない承認（#5834）を除いてすべてナビの項目で、ナビと同じ見出し・並び・名前
+  // （sidebarLabelKey を優先）になる。
   const navPermissions = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.permission));
-  expect([...navPermissions].sort()).toEqual([...menu].sort());
+  expect(navPermissions).not.toContain(MENU_PERMISSIONS.approvals);
+  expect([...navPermissions, MENU_PERMISSIONS.approvals].sort()).toEqual([...menu].sort());
   const groups = new Map<string, string[]>();
-  for (const permission of arranged.filter((item) => item.code.startsWith("menu."))) {
+  for (const permission of arranged.slice(0, navPermissions.length)) {
     groups.set(permission.group, [...(groups.get(permission.group) ?? []), permission.label]);
   }
   expect([...groups.entries()]).toEqual(
@@ -66,8 +68,16 @@ test("権限管理の機能の一覧は、左のナビと同じグループ・�
     ])
   );
 
-  // ナビに無い権限は capability だけで、ナビの後ろに置く。カタログの権限を落とさない。
-  expect(arranged.slice(menu.length).map((item) => item.code).sort()).toEqual([...capabilities].sort());
+  // ナビに無い権限は承認の画面と capability だけで、ナビの後ろに backend のグループ・名前のまま置く。
+  // カタログの権限を落とさない。
+  expect(arranged.slice(navPermissions.length).map((item) => item.code).sort()).toEqual(
+    [MENU_PERMISSIONS.approvals, ...capabilities].sort()
+  );
+  expect(arranged.find((item) => item.code === MENU_PERMISSIONS.approvals)?.group).toBe("backend のグループ");
+  // 承認の backend のグループはナビの「AI 活用」と同じ名前なので、権限管理の画面では同じグループに出る。
+  const source = readFileSync(BACKEND_PERMISSIONS, "utf-8");
+  expect(source).toContain(`_GROUP_USE = "${t("nav.section.use")}"`);
+  expect(source).toContain('_menu_permission(MENU_APPROVALS, _GROUP_USE, "承認")');
   expect(arranged.map((item) => item.description)).toEqual(arranged.map((item) => `${item.code} の説明`));
 });
 
