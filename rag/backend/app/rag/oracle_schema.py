@@ -1305,7 +1305,32 @@ END;
             ),
         )
     )
+    # Wiki の案内の全文検索の索引（#5827）。検索の経路が使わなくなった（#5825）。
+    # 表・列・行は消さない。
+    sections.append(
+        OracleSchemaSection(
+            name="20261125_5827_drop_wiki_page_text_index",
+            table_name="rag_wiki_pages",
+            sql=drop_wiki_page_text_index_sql(),
+        )
+    )
     return sections
+
+
+def drop_wiki_page_text_index_sql() -> str:
+    """Wiki の案内の全文検索の索引を消す（#5827）。索引が無い環境でも適用できる（冪等）。
+
+    Oracle Text の索引は作成の途中で失敗した状態でも消せるように ``FORCE`` を付ける。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_PAGE_TEXT_IDX';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP INDEX rag_wiki_page_text_idx FORCE';
+    END IF;
+END;
+/"""
 
 
 # 文書構造索引の表（#5511）。子の表を先に並べる（CASCADE CONSTRAINTS で消すので順は問わない）。

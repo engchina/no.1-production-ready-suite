@@ -1261,8 +1261,6 @@ CREATE INDEX rag_wiki_page_doc_idx ON rag_wiki_pages(document_id,source_fingerpr
 CREATE INDEX rag_wiki_page_set_idx ON rag_wiki_pages(chunk_set_id);
 CREATE INDEX rag_wiki_page_chunk_idx ON rag_wiki_pages(source_chunk_id);
 CREATE INDEX rag_wiki_queue_idx ON rag_wiki_documents(status,lease_until);
-CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text)
-    INDEXTYPE IS CTXSYS.CONTEXT PARAMETERS ('LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)');
 
 -- section: wiki_graph_nodes
 CREATE TABLE rag_wiki_graph_nodes (
