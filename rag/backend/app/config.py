@@ -1453,12 +1453,12 @@ class Settings(
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
     rag_retrieval_query_limit: int = Field(
-        default=50,
+        default=100,
         ge=5,
-        le=100,
+        le=200,
         description=(
             "検索経路(ベクトル・全文)ごとに取得する件数。取得した候補は重複を除いてすべて rerank に"
-            "渡す(rerank の入力は最大 100 × 2 = 200 件。#5443)。"
+            "渡す(rerank の入力は最大 200 × 2 = 400 件。#5443・#5829)。"
         ),
     )
     rag_rerank_max_documents_per_request: int = Field(
