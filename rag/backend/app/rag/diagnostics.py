@@ -157,7 +157,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
             key.removeprefix("rag_wiki_"): getattr(resolved_settings, key)
             for key in (
                 "rag_wiki_search_enabled",
-                # 依存と文書をまたぐ関連を辿る段数と足す数の上限（#5492）。
+                # 同じ文書の依存を辿る段数と足す数の上限（#5492）。
                 "rag_wiki_link_depth",
                 "rag_wiki_link_max_units",
                 "rag_wiki_query_timeout_seconds",

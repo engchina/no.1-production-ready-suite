@@ -1267,7 +1267,7 @@ class Settings(
         le=12000,
         description="Wiki の埋め込みの入力に添える原文の文字数。引用に使う原文は切らない。",
     )
-    # チャットは公開済み Wiki の索引順位と関連から、現在の原文を取得する（#5733）。
+    # チャットは公開済み Wiki の索引順位と同じ文書の依存から、現在の原文を取得する（#5733）。
     rag_wiki_search_enabled: bool = Field(
         default=False,
         description=(
@@ -1279,15 +1279,15 @@ class Settings(
         ge=0,
         le=3,
         description=(
-            "Wiki の検索で、起点の単位から依存と別の文書への参照（出る向きと入る向き）を辿る段数。"
-            "0 は辿らない。"
+            "Wiki の検索で、起点の単位から同じ文書の依存を辿る段数。0 は辿らない。"
+            "別の文書への参照は辿らない。"
         ),
     )
     rag_wiki_link_max_units: int = Field(
         default=999,
         ge=1,
         le=999,
-        description="Wiki の検索で、依存と参照を辿って足す原文単位の数の上限（全段の合計）。",
+        description="Wiki の検索で、同じ文書の依存を辿って足す原文単位の数の上限（全段の合計）。",
     )
     rag_wiki_query_timeout_seconds: float = Field(
         default=180.0,

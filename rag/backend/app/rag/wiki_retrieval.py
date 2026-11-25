@@ -20,7 +20,6 @@ from pydantic import ValidationError
 from app.clients.ai_calls import rag_error_kind
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, _filter_id_values
-from app.clients.wiki_reference_index import DocumentNames, section_pages
 from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings
 from app.rag.span_display import ANSWER_STEP_KIND
@@ -113,11 +112,6 @@ def _relations(
     return result
 
 
-# 別の文書への参照から辿る単位の数（参照先の文書ごと）と、その中から章節を探す候補の数（#5784）。
-_REFERENCE_UNITS = 3
-_REFERENCE_CANDIDATES = 20
-
-
 class WikiRetriever:
     def __init__(
         self,
@@ -163,63 +157,38 @@ class WikiRetriever:
         return chunks
 
     async def follow(
-        self,
-        scope: WikiScope,
-        pages: dict[str, WikiPage],
-        selected: Sequence[str],
-        vector: Sequence[float] | None = None,
-    ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]], dict[str, str]]:
-        """選んだ単位から、同じ文書の依存と、別の文書への参照（両方の向き）を辿る（#5492・#5784）。
-
-        別の文書への参照は、文書の内容に書かれた参照（``rag_wiki_references``）を、今の範囲の文書の
-        名前と照合して決める（範囲に無い文書への参照は辿らない）。出る向きは単位が名前を挙げた
-        文書の単位、入る向きはその単位の文書を名前で参照するほかの文書の単位。参照先の単位は、
-        章節の表記に当たる単位、無ければ質問に近い単位（``vector``）を ``_REFERENCE_UNITS`` 件まで。
+        self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
+    ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]]]:
+        """選んだ単位から、同じ文書の依存を辿る（#5492）。別の文書への参照は辿らない（#5841）。
 
         ``RAG_WIKI_LINK_DEPTH`` 段まで、段ごとに関係の種類の順（例外・前提を先）で、まだ読んでいない
         単位を ``RAG_WIKI_LINK_MAX_UNITS`` まで足す。一度見た単位は辿り直さない（循環を止める）。
         読めない単位（未公開・古い保存版・範囲の外）は数に入れない。辿るのは DB だけで、
         モデルは呼ばない。
-        返す値は（足した単位 ID・段ごとの数・読めなかった単位の数・辿りで見た関係・
-        足した単位の由来）。関係は（起点, 終点, 関係の種類）で、終点が起点に対してその役割を持つ
-        （#5500）。由来は足した単位 ID ごとの ``dependency``（案内の依存）か ``link``（別の文書
-        への参照）で、段ごとの数と同じ値（#5518）。``pages`` に読んだ案内を足す。
+        返す値は（足した単位 ID・段ごとの数・読めなかった単位の数・辿りで見た関係）。関係は
+        （起点, 終点, 関係の種類）で、終点が起点に対してその役割を持つ（#5500）。``pages`` に
+        読んだ案内を足す。
         """
         opts, store = self.settings, self.store
         budget = opts.rag_wiki_link_max_units
         priority = {relation: index for index, relation in enumerate(WIKI_RELATION_PRIORITY)}
         seen, frontier = set(selected), list(selected)
         added: list[str] = []
-        origins: dict[str, str] = {}
         hops: list[dict[str, int]] = []
         missing = 0
         edges: set[tuple[str, str, str]] = set()
-        names: DocumentNames | None = None
         for depth in range(1, opts.rag_wiki_link_depth + 1):
             if not frontier or len(added) >= budget:
                 break
-            offers: list[tuple[str, str, str]] = [
-                (dependency.unit_id, dependency.relation, "dependency")
-                for uid in frontier
-                for dependency in pages[uid].navigation.dependencies
-            ]
-            edges.update(
-                (uid, dependency.unit_id, dependency.relation)
-                for uid in frontier
-                for dependency in pages[uid].navigation.dependencies
-            )
-            names = names or DocumentNames(scope.catalog, await store.document_headings(scope))
-            for source, target, relation in await self._references(
-                scope, pages, frontier, names, vector
-            ):
-                edges.add((source, target, relation))
-                offers.append((source if target in frontier else target, relation, "link"))
-            found: dict[str, tuple[int, str]] = {}
-            for uid, relation, kind in offers:
-                rank = priority.get(relation, len(priority))
-                if uid not in seen and (uid not in found or rank < found[uid][0]):
-                    found[uid] = (rank, kind)
-            ordered = sorted(found, key=lambda uid: found[uid][0])
+            found: dict[str, int] = {}
+            for uid in frontier:
+                for dependency in pages[uid].navigation.dependencies:
+                    edges.add((uid, dependency.unit_id, dependency.relation))
+                    rank = priority.get(dependency.relation, len(priority))
+                    target = dependency.unit_id
+                    if target not in seen and (target not in found or rank < found[target]):
+                        found[target] = rank
+            ordered = sorted(found, key=lambda uid: found[uid])
             unknown = [uid for uid in ordered if uid not in pages]
             if unknown:
                 pages.update(
@@ -230,74 +199,9 @@ class WikiRetriever:
             chosen = readable[: budget - len(added)]
             seen.update(ordered)
             added.extend(chosen)
-            origins.update((uid, found[uid][1]) for uid in chosen)
             frontier = chosen
-            hops.append(
-                {
-                    "depth": depth,
-                    "dependency_units": sum(found[uid][1] == "dependency" for uid in chosen),
-                    "link_units": sum(found[uid][1] == "link" for uid in chosen),
-                }
-            )
-        return added, hops, missing, edges, origins
-
-    async def _references(
-        self,
-        scope: WikiScope,
-        pages: dict[str, WikiPage],
-        frontier: Sequence[str],
-        names: DocumentNames,
-        vector: Sequence[float] | None,
-    ) -> list[tuple[str, str, str]]:
-        """起点の単位の、別の文書への参照の関係（起点, 終点, 関係）。両方の向き。"""
-        store = self.store
-        found: list[tuple[str, str, str]] = []
-        units: dict[tuple[str, str], list[str]] = {}
-        for source, name, section, relation in await store.references(frontier, scope):
-            own = pages[source].unit.document_id
-            for document_id in names.resolve(name, exclude=own):
-                key = (document_id, section)
-                if key not in units:
-                    units[key] = await self._reference_units(
-                        scope, pages, document_id, section, vector
-                    )
-                found.extend((source, target, relation) for target in units[key])
-        # 入る向き: 起点の文書を名前で参照する、範囲の中のほかの文書の単位（#5784）。
-        first: dict[str, str] = {}
-        for uid in frontier:
-            first.setdefault(pages[uid].unit.document_id, uid)
-        # 種類の呼び名で書いた参照も拾い、当たる文書は出る向きと同じ照合で決める（#5795）。
-        keys = sorted({key for document_id in first for key in names.keys(document_id)})
-        aliases = sorted({alias for document_id in first for alias in names.aliases(document_id)})
-        for source, document_id, name_key, relation in await store.referencing(
-            keys, scope, contained_in=aliases
-        ):
-            found.extend(
-                (source, first[target], relation)
-                for target in names.resolve_key(name_key, exclude=document_id)
-                if target in first
-            )
-        return found
-
-    async def _reference_units(
-        self,
-        scope: WikiScope,
-        pages: dict[str, WikiPage],
-        document_id: str,
-        section: str,
-        vector: Sequence[float] | None,
-    ) -> list[str]:
-        """参照先の文書の、辿る単位（章節の表記に当たる単位、無ければ質問に近い単位）。"""
-        # ponytail: 質問に近い上位 _REFERENCE_CANDIDATES 件の中で章節を探す。上位に無い章節は
-        # 文書の先頭側の単位で代える。章節の索引で引く形は要るときに足す。
-        candidates = await self.store.pages(
-            scope,
-            document_ids=[document_id],
-            query_vector=vector,
-            limit=_REFERENCE_CANDIDATES if vector is not None else None,
-        )
-        pages.update((page.unit.unit_id, page) for page in candidates)
-        return [page.unit.unit_id for page in section_pages(candidates, section)[:_REFERENCE_UNITS]]
+            hops.append({"depth": depth, "dependency_units": len(chosen)})
+        return added, hops, missing, edges
 
     async def search(
         self,
@@ -411,11 +315,10 @@ class WikiRetriever:
         vector_ranks = {page.unit.unit_id: rank for rank, page in enumerate(candidates, 1)}
         pages = {page.unit.unit_id: page for page in candidates}
         selected = list(dict.fromkeys(page.unit.unit_id for page in roots))
-        # 案内の依存（同じ文書）と文書をまたぐ関連（出る向き）を、予算の内で段ごとに辿る（#5492）。
-        with _stage("Wiki: 依存と関連の辿り", seconds):
-            followed, hops, missing, edges, origins = await self.follow(
-                wiki, pages, selected, vector
-            )
+        # 案内の依存（同じ文書）を、予算の内で段ごとに辿る（#5492）。別の文書への参照は辿らない
+        # （#5841）。
+        with _stage("Wiki: 依存の辿り", seconds):
+            followed, hops, missing, edges = await self.follow(wiki, pages, selected)
         with _stage("Wiki: 原文の読み込み", seconds):
             required = [pages[uid] for uid in [*selected, *followed]]
             originals = await self.current_sources(profile_id, scope, required)
@@ -424,13 +327,14 @@ class WikiRetriever:
         relations = _relations(required, edges, names)
         units = {sid: page.unit.unit_id for page in required for sid in page.unit.source_chunk_ids}
         # 起点（rerank の順）、辿った単位の順に並べる。起点には Wiki のベクトル検索の順位と
-        # rerank の点数を、辿った単位には由来（依存・関連）を付ける（合わせ込みの順と画面の
-        # バッジ。#5831）。
+        # rerank の点数を、辿った単位には由来（依存）を付ける（合わせ込みの順と画面のバッジ。
+        # #5831）。
         order = {page.unit.unit_id: index for index, page in enumerate(required)}
+        dependencies = set(followed)
 
         def origin(unit_id: str) -> dict[str, Any]:
-            if unit_id not in vector_ranks or unit_id in origins:
-                return {"wiki_origin": origins[unit_id]}
+            if unit_id in dependencies:
+                return {"wiki_origin": "dependency"}
             return {
                 "wiki_origin": "root",
                 "wiki_rank": vector_ranks[unit_id],
@@ -475,16 +379,13 @@ class WikiRetriever:
                 "link_hops": hops,
                 "source_count": len(chunks),
                 # 回答の根拠に渡した原文の chunk ID（通常検索との重複を外す前）と、案内の単位の
-                # 由来（選んだ単位・依存・関連）ごとの chunk ID。記録から重複率を出す（#5518）。
+                # 由来（選んだ単位・依存）ごとの chunk ID。記録から重複率を出す（#5518）。
                 "source_chunk_ids": [chunk.chunk_id for chunk in chunks][
                     :_SOURCE_DIAGNOSTICS_LIMIT
                 ],
                 "source_chunk_ids_by_origin": {
                     "selected": source_ids(selected),
-                    "dependency": source_ids(
-                        [uid for uid in followed if origins[uid] == "dependency"]
-                    ),
-                    "link": source_ids([uid for uid in followed if origins[uid] == "link"]),
+                    "dependency": source_ids(followed),
                 },
             },
         )

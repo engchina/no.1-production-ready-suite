@@ -11,8 +11,8 @@ from pr_system_settings.auth.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 
 from app.clients.oracle import OracleClient, OracleConnectionProtocol, _execute, _fetch_one
 from app.clients.wiki_graph_store import WikiGraphStore
-from app.clients.wiki_reference_index import DocumentNames
 from app.clients.wiki_store import CURRENT_WIKI_SOURCE_SQL, WikiStore
+from app.rag.cross_references import reference_name_key
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
@@ -233,7 +233,7 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     opposite = [-value for value in _EMBEDDING]
     assert not await store.pages(scope, query_vector=opposite, limit=10, min_similarity=0.2)
     assert len(await store.pages(scope, query_vector=opposite, limit=10)) == len(unit_ids)
-    by_unit = await store.pages(scope, unit_ids=unit_ids[:1], document_ids=[did])
+    by_unit = await store.pages(scope, unit_ids=unit_ids[:1])
     assert [p.unit.unit_id for p in by_unit] == unit_ids[:1]
     changed = replace(source, compiler_fingerprint=fingerprint("compiler-b"))
     assert not await store.enqueue(changed)
@@ -407,9 +407,10 @@ async def annotate_references(oracle: OracleClient, did: str, names: list[str]) 
     await oracle._run_transaction(operation)
 
 
-async def test_references_are_indexed_on_publish_and_resolved_by_name_in_scope() -> None:
-    """別の文書への参照（#5784）: 公開と同じ取引で取込の参照と生成の参照を保存し、名前の比較形で
-    逆に引ける。参照先は範囲の文書の名前で決まり、文書の削除で参照も消える。"""
+async def test_references_are_indexed_on_publish_and_removed_with_the_document() -> None:
+    """別の文書への参照（#5784）: 公開と同じ取引で、取込の参照を参照先の名前の比較形つきで保存する
+    （範囲に無い文書への参照も残す）。文書の削除で参照も消える。参照先を範囲の文書の名前で決める
+    読み取りは Wiki の図（test_wiki_graph_store_oracle.py）。"""
     oracle, token = OracleClient(), uuid4().hex[:12]
     store = WikiStore(oracle)
     kb = await oracle.create_knowledge_base(name=f"synthetic-refs-{token}")
@@ -420,19 +421,19 @@ async def test_references_are_indexed_on_publish_and_resolved_by_name_in_scope()
     await annotate_references(oracle, a, [name_b, "synthetic-missing.pdf"])
     _, pages_a = await _published(store, a, "合成の原則 syntheticrefa。")
     await _published(store, b, "合成の例外 syntheticrefb。")
-    scope = await store.resolve({"knowledge_base_id": kb.id})
     first_a = pages_a[0].unit.unit_id
 
-    found = await store.references([first_a], scope)
-    assert (first_a, name_b, "", "reference") in found
-    assert (first_a, "synthetic-missing.pdf", "", "reference") in found
-    names = DocumentNames(scope.catalog, await store.document_headings(scope))
-    # 範囲の文書は名前で決まり、範囲に無い文書の参照は決まらない（辿れない）。
-    assert names.resolve(name_b, exclude=a) == [b]
-    assert names.resolve("synthetic-missing.pdf", exclude=a) == []
-    # 逆向き: 文書 B を名前で参照する単位を引く。
-    incoming = await store.referencing(sorted(names.keys(b)), scope)
-    assert {(unit, document) for unit, document, _, _ in incoming} >= {(first_a, a)}
+    saved = await oracle._fetch_all(
+        """SELECT unit_id,target_name,target_key,relation FROM rag_wiki_references
+        WHERE document_id=:a""",
+        {"a": a},
+    )
+    found = {
+        (str(row["unit_id"]), str(row["target_name"]), str(row["target_key"]), str(row["relation"]))
+        for row in saved
+    }
+    for name in (name_b, "synthetic-missing.pdf"):
+        assert (first_a, name, reference_name_key(name), "reference") in found
 
     def count(connection: OracleConnectionProtocol) -> Any:
         return _fetch_one(
@@ -459,7 +460,7 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
     await store.set_enabled(kb.id, True)
     await store.set_enabled(other.id, True)
     source_a, pages_a = await _published(store, a, "合成の案内 syntheticscope。")
-    await _published(store, outside, "合成の案内 syntheticscope。")
+    _, pages_outside = await _published(store, outside, "合成の案内 syntheticscope。")
     # 未公開: 案内と埋め込みは保存したが、公開（finish）していない文書。
     revision = await store.revision_fingerprint(unpublished)
     draft = await store.source_units(unpublished)
@@ -496,8 +497,9 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
     assert {did for did, _, _ in scope.sources} == {a}
     assert {value for _, _, value in scope.sources} == {source_a.source_fingerprint}
     assert await read(scope) == (units_a, units_a, old_context, [a])
-    # 別の KB・未公開の文書は、ID で指定しても読まない。
-    assert not await store.pages(scope, document_ids=[unpublished, outside])
+    # 別の KB・未公開の文書の案内は、単位の ID で指定しても読まない。
+    hidden = [page.unit.unit_id for page in [*draft_pages, *pages_outside]]
+    assert not await store.pages(scope, unit_ids=hidden)
 
     # 古い保存版: 同じ単位で新しい保存版の案内を作って公開すると、決め直した範囲は新しい保存版の
     # 案内だけを読み、古い保存版の案内（表に残る）を読まない。

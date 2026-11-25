@@ -260,6 +260,14 @@ KB 詳細の「文書構造索引の構築」のカードを外し、図を「Wi
   これらの API・表（`rag_graph_*`・`rag_structure_index_*`）・構築済みの索引は #5511 で削除した（上の手順）。
 - **見え方**: 図は保存済みの Wiki の案内だけを出す。案内の無い KB は「Wiki を構築すると、文書・章節・案内のつながりを図で見られます」を出す。
 
+## 既存環境の更新手順（#5841 Wiki の検索で別の文書への参照を辿らない）
+
+Wiki の検索（チャット）は、起点の単位から同じ文書の依存だけを辿る。別の文書への参照は、出る向きも入る向きも辿らない（[Wiki ナビゲーション](./wiki-navigation.md)）。
+
+- **migration・DDL・設定の変更は無い。** `RAG_WIKI_LINK_DEPTH`・`RAG_WIKI_LINK_MAX_UNITS` は同じ文書の依存の辿りの設定として残る。案内の作り直しも要らない。
+- **変えないもの**: Wiki の構築が記録する別の文書への参照（`RAG_WIKI_REFERENCES`）と、Wiki の図の文書をまたぐ関係の表示。
+- **回答の診断**: `wiki.link_hops` の段ごとの値は `depth`・`dependency_units` だけになる（`link_units` は無い）。`wiki.source_chunk_ids_by_origin` は `selected`・`dependency` だけになり、根拠の `wiki_origin` は `root`・`dependency` だけになる（保存済みの回答の `link` はそのまま読める）。段の名前は「Wiki: 依存の辿り」になる。
+
 ## 既存環境の更新手順（#5831 Wiki の検索の起点を通常検索と同じ下限・rerank・件数で決める）
 
 Wiki の検索は、案内のベクトル検索の候補を通常検索と同じ設定で絞る: 候補数は `RAG_RETRIEVAL_QUERY_LIMIT`、コサイン類似度の下限は `RAG_MIN_SIMILARITY`、原文の rerank の関連度の下限は `RAG_RERANK_MIN_RELEVANCE_SCORE`（引き下げは `RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO`）、起点数は要求の `top_k`（省略時 `RAG_SEARCH_TOP_K_DEFAULT`）。
