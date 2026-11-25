@@ -386,26 +386,29 @@ class WikiJobs:
                 )
                 phase = "prepare_embedding"
                 embedder = self.embedder_factory(settings)
-                for offset in range(0, len(pages), settings.rag_wiki_build_batch_units):
+                chars = settings.rag_wiki_embedding_source_chars
+                # 前の試行が保存したベクトルは、埋め込みの入力が今と同じ単位だけ使い直し、
+                # 残りの単位から続ける（#5734）。
+                embedded = await store.embedded_texts(snapshot)
+                pending = [
+                    (page, text)
+                    for page in pages
+                    if embedded.get(page.unit.unit_id)
+                    != (text := page.search_text(original_chars=chars))
+                ]
+                for offset in range(0, len(pending), settings.rag_wiki_build_batch_units):
                     phase = "embed_pages"
-                    batch = pages[offset : offset + settings.rag_wiki_build_batch_units]
+                    batch = pending[offset : offset + settings.rag_wiki_build_batch_units]
                     await authorize()
-                    vectors = await embedder.embed(
-                        [
-                            page.search_text(
-                                original_chars=settings.rag_wiki_embedding_source_chars
-                            )
-                            for page in batch
-                        ]
-                    )
+                    vectors = await embedder.embed([text for _, text in batch])
                     await authorize()
                     phase = "save_embeddings"
                     await store.checkpoint(
                         snapshot,
                         lease,
-                        batch,
+                        [page for page, _ in batch],
                         vectors=vectors,
-                        original_chars=settings.rag_wiki_embedding_source_chars,
+                        original_chars=chars,
                     )
                 await authorize()
                 phase = "publish_pages"

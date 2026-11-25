@@ -157,6 +157,8 @@ class Store:
         self.state: dict[str, Any] | None = None
         self.pages: list[Any] = []
         self.embedded: list[str] = []
+        # 今ベクトルがある単位（原文の版ごと）と、その埋め込みの入力（#5734）。
+        self.vectors: dict[tuple[str, str], str] = {}
         # 実際に構築を始めてからの秒数と、延ばした lease の秒数（#5748）。
         self.elapsed = 0.0
         self.renewed: list[int] = []
@@ -207,8 +209,21 @@ class Store:
     async def checkpoint(self, snapshot: Any, token: str, pages: Any, **kwargs: Any) -> None:
         assert self.enabled and snapshot.revision_fingerprint == self.revision
         self.pages = list({page.unit.unit_id: page for page in [*self.pages, *pages]}.values())
-        if kwargs.get("vectors"):
-            self.embedded.extend(page.unit.unit_id for page in pages)
+        for page in pages:
+            key = (snapshot.source_fingerprint, page.unit.unit_id)
+            if kwargs.get("vectors"):
+                self.embedded.append(page.unit.unit_id)
+                self.vectors[key] = page.search_text(original_chars=kwargs["original_chars"])
+            else:
+                # 案内を保存し直すと、その単位のベクトルは消える。
+                self.vectors.pop(key, None)
+
+    async def embedded_texts(self, snapshot: Any) -> dict[str, str]:
+        return {
+            unit: text
+            for (version, unit), text in self.vectors.items()
+            if version == snapshot.source_fingerprint
+        }
 
     async def finish(self, snapshot: Any, token: str, *, failure_code: str | None = None) -> None:
         assert self.state is not None
@@ -416,6 +431,58 @@ async def test_interrupted_build_resumes_from_saved_pages_on_next_reconcile(
     await asyncio.gather(*list(jobs.tasks.values()))
     assert store.state["status"] == "READY"
     assert len(base.calls) == 2 and len(store.embedded) == 4
+    await jobs.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("change", "resumed_inputs", "model_calls"),
+    [("none", 2, 2), ("embedding_input", 4, 2), ("pages", 4, 4)],
+    ids=["same-input", "changed-embedding-input", "regenerated-pages"],
+)
+@pytest.mark.asyncio
+async def test_interrupted_embedding_resumes_from_units_without_valid_vectors(
+    setup: Any, monkeypatch: pytest.MonkeyPatch, change: str, resumed_inputs: int, model_calls: int
+) -> None:
+    """埋め込みの途中で止まった構築は、有効なベクトルが無い単位から続ける（#5734）。
+
+    埋め込みの入力か案内が変わった単位は、保存済みのベクトルを使い直さずに作り直す。
+    """
+    jobs, store, model = setup
+    settings = Settings(rag_wiki_build_batch_units=2)
+    monkeypatch.setattr(module, "get_settings", lambda: settings)
+    inputs: list[list[str]] = []
+    blocked, waiting = asyncio.Event(), asyncio.Event()
+
+    class SlowSecondBatch:
+        async def embed(self, texts: Any) -> Any:
+            if inputs and not blocked.is_set():
+                waiting.set()
+                await asyncio.Event().wait()
+            inputs.append(list(texts))
+            return [[1.0, 0.0] for _ in texts]
+
+    jobs.embedder_factory = lambda settings: SlowSecondBatch()
+    task = asyncio.create_task(jobs.build("document-a", "owner-a"))
+    await waiting.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert store.state["failure_code"] == "interrupted"
+    assert len(store.pages) == 4 and store.embedded == ["unit-0", "unit-1"]
+
+    if change == "embedding_input":
+        settings = settings.model_copy(update={"rag_wiki_embedding_source_chars": 5})
+    elif change == "pages":
+        store.prompts["wiki_build"] = "合成の次回用指示"
+    blocked.set()
+    await jobs.reconcile()
+    await asyncio.gather(*list(jobs.tasks.values()))
+    assert store.state["status"] == "READY" and len(model.calls) == model_calls
+    resumed = [text for batch in inputs[1:] for text in batch]
+    assert len(resumed) == resumed_inputs and len(store.embedded) == 2 + resumed_inputs
+    if change == "none":
+        assert set(store.embedded[2:]) == {"unit-2", "unit-3"}
+    assert len(store.vectors) == 4
     await jobs.shutdown()
 
 
