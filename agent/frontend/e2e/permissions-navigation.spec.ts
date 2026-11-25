@@ -153,6 +153,23 @@ for (const viewport of VIEWPORTS) {
       });
     });
 
+    // #5834: 承認はナビに出さない。画面と route は残し、route はメニュー権限（menu.approvals）で守る。
+    test("承認はナビに出さず、URL で開く（menu.approvals が無ければ権限なしの画面へ移す）", async ({ page, mockApi }) => {
+      seedRun(mockApi, { status: "waiting_approval", approvals: [pendingApproval("approval-1")] });
+
+      signIn(mockApi, dbUser({ permissions: ["menu.approvals", "agent.runs.view"], allowed_agent_ids: ["default"] }));
+      await page.goto("/approvals");
+      await expect(page.getByRole("heading", { name: "承認", level: 1 })).toBeVisible();
+      await expect(page.locator('a[data-approval-id="approval-1"]')).toBeVisible();
+      expect(await sidebarHrefs(page)).toEqual(["/runs"]);
+      await expect(sidebar(page).getByRole("link", { name: "承認" })).toHaveCount(0);
+
+      signIn(mockApi, VIEWER);
+      await page.goto("/approvals");
+      await expect(page).toHaveURL(/\/forbidden$/);
+      await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+    });
+
     test("画面は開けても実データの閲覧権限がなければ、データを取らずに理由を示す", async ({ page, mockApi }) => {
       signIn(mockApi, dbUser({ permissions: ["menu.runs"], allowed_agent_ids: [] }));
 

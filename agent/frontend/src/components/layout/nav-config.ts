@@ -1,5 +1,4 @@
 import {
-  BadgeCheck,
   Blocks,
   Bot,
   ChartColumn,
@@ -81,7 +80,8 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       // 業務利用者の入口（#768。RAG のチャットと同じアイコン）。
       { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
-      { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
+      // 承認（`/approvals`）はナビに出さない（#5834）。画面と route は残し、URL で開く（権限は route-permissions の
+      // HIDDEN_ROUTE_PERMISSIONS）。承認 / 却下はチャットと実行の詳細でできる。
       // Run の一覧（URL・権限コードは変えない）。名前とアイコンは NL2SQL の「実行履歴」と同じ（#791）。
       { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: History, permission: MENU_PERMISSIONS.runs },
     ],
