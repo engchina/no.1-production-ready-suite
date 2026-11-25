@@ -69,6 +69,7 @@ from app.features.agent.answer_evidence import (
     answer_evidence,
 )
 from app.features.agent.answer_outcome import ANSWER_OUTCOMES
+from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND
 from app.features.agent.confirmation import (
     MAX_ITEMS,
     SOURCE_AGENT,
@@ -127,8 +128,9 @@ wait_poll_seconds = 0.5
 # RunOutput の形の版（#2738 で段落の印・外した段落・回答の警告を足して 2、#3240 で回答の対応・
 # 根拠の ID・引用の印・見られない根拠の数を足して 3、#3321 で根拠の本文を 400 文字の先頭から全文と
 # 応答の予算・境界での切り詰めにし、truncated・text_omitted・text_length・excerpt_range・
-# header_range・next_offset・sources_text_omitted を足して 4）。
-RUN_OUTPUT_SCHEMA_VERSION = 5
+# header_range・next_offset・sources_text_omitted を足して 4、#4714 で最終検証の項目を外して 5、
+# #5837 で Run が作ったファイルの一覧 files を足して 6）。
+RUN_OUTPUT_SCHEMA_VERSION = 6
 # agent_list・agent_skill_export の出力の形の版（3 製品の MCP の出力に版を持たせる。#3240）。
 LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
@@ -271,7 +273,7 @@ class SkillExportInput(BaseModel):
 
 
 class SkillFileOutput(BaseModel):
-    # スキルのフォルダからの相対パス（SKILL.md・references/…）。
+    # スキルのフォルダからの相対パス（SKILL.md・references/…・許諾の LICENSE.txt / NOTICE）。
     path: str
     content: str
 
@@ -424,6 +426,21 @@ AnswerOutcomeValue = Literal[
 ]
 
 
+class RunFileOutput(BaseModel):
+    """Run が作ったファイル（#5837。名前・形式・大きさだけ。中身は MCP では返さない）。"""
+
+    file_name: str
+    mime_type: str
+    size_bytes: int = Field(ge=0)
+
+
+# 作ったファイルの受け取り方（MCP では中身を返さない。#5837）。Run の応答の message に足す。
+FILES_DOWNLOAD_MESSAGE = (
+    "作成したファイル（files）は、Agent の画面でこの実行の詳細を開くとダウンロードできます"
+    "（MCP ではファイルの中身を返しません）。"
+)
+
+
 class RunOutput(BaseModel):
     schema_version: int = Field(
         default=RUN_OUTPUT_SCHEMA_VERSION, description="出力の形の版（変わったら上がる）。"
@@ -455,6 +472,13 @@ class RunOutput(BaseModel):
     )
     withheld_evidence_count: int = Field(
         default=0, ge=0, description="今の権限で見られないため sources に出さない根拠の数。"
+    )
+    files: list[RunFileOutput] = Field(
+        default_factory=list,
+        description=(
+            "この実行が作ったファイル（名前・形式・大きさ）。中身は返さない。Agent の画面で"
+            "この実行の詳細を開くとダウンロードできる。"
+        ),
     )
     # 使ったツールの名前（Agent の中の名前。例: rag__rag_search）。
     tools_used: list[str] = Field(default_factory=list)
@@ -990,6 +1014,24 @@ def _failure_message(run: RunState) -> str:
     return "業務 Agent の実行に失敗しました。"
 
 
+def _run_files(run: RunState) -> list[RunFileOutput]:
+    """Run が作ったファイルの一覧（成果物の記録から。中身は読まない）。"""
+    files: list[RunFileOutput] = []
+    for artifact in run.artifacts:
+        content = artifact.content
+        if artifact.kind != FILE_ARTIFACT_KIND:
+            continue
+        size = content.get("size_bytes")
+        files.append(
+            RunFileOutput(
+                file_name=str(content.get("file_name") or artifact.name),
+                mime_type=str(content.get("mime_type") or ""),
+                size_bytes=size if isinstance(size, int) and size >= 0 else 0,
+            )
+        )
+    return files
+
+
 def run_output(
     run: RunState, *, include_notice: bool = False, withheld_evidence_count: int = 0
 ) -> RunOutput:
@@ -1035,6 +1077,10 @@ def run_output(
             "実行しています。agent_get_run（wait_seconds）で続きを読んでください。"
             "止めるときは agent_cancel_run を使います。"
         )
+    files = _run_files(run)
+    if files:
+        # ファイルの受け取り方は、モデルの回答の文に頼らずここで足す（#5837）。
+        message = f"{message}{FILES_DOWNLOAD_MESSAGE}"
     output = RunOutput(
         run_id=run.id,
         agent_id=run.agent_id,
@@ -1044,6 +1090,7 @@ def run_output(
         in_progress=in_progress,
         answer=run_answer_text(run),
         confirmation=_confirmation_output(confirmation) if confirmation is not None else None,
+        files=files,
         withheld_evidence_count=withheld_evidence_count,
         tools_used=tools_used,
         skipped_approval_tools=skipped,

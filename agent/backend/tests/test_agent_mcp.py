@@ -565,7 +565,7 @@ def test_run_output_v3_returns_the_outcome_and_the_rag_ids_of_the_sources() -> N
         outcome={"schema_version": 1, "value": "conditional", "basis": "basis-canary"},
     )
     output = mcp_server.run_output(run).model_dump()
-    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION == 5
+    assert output["schema_version"] == mcp_server.RUN_OUTPUT_SCHEMA_VERSION == 6
     assert (output["outcome"], output["withheld_evidence_count"]) == ("conditional", 0)
     # 引用した根拠だけ。会話の添付の根拠は RAG の文書ではないので ID を出さない。
     assert [

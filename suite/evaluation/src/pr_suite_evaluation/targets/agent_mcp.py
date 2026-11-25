@@ -54,7 +54,8 @@ MAX_WAIT_SECONDS = 300
 OBSERVATION_PAGE_LIMIT = 100
 MAX_OBSERVATION_PAGES = 1000
 # 読める出力の版（契約 agent-tools.json の schema_version。知らない版は読まない）。
-RUN_OUTPUT_SCHEMA_VERSION = 5
+# 6: Run が作ったファイルの一覧 files を足した（#5837。評価では読まない）。
+RUN_OUTPUT_SCHEMA_VERSION = 6
 # 5: ツールの呼び出しに RAG の縮退（degraded_steps・guardrail_degraded・zero_evidence_stage）を、
 # 根拠に table_binding を足した（#3546）。
 # 7: 根拠の table_binding を削除した（#4668）。
