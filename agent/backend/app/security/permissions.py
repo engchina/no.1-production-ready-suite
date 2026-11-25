@@ -449,6 +449,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_RUN}/audit"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts/{{artifact_id}}"): _RUN_DETAIL,
+    # 成果物のファイルのダウンロード（#5837。Run の詳細と同じ判定）。
+    ("GET", f"{_RUN}/artifacts/{{artifact_id}}/download"): _RUN_DETAIL,
     # RAG の図の根拠を開く短命の URL（#1311。閲覧者として RAG に作らせる）。
     ("GET", f"{_RUN}/figure-url"): _RUN_DETAIL,
     # RAG の根拠の原文のプレビュー（#2389。閲覧者として RAG に作らせる）。

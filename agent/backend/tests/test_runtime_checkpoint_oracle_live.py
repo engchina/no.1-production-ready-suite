@@ -26,8 +26,12 @@ from uuid import uuid4
 import oracledb
 import pytest
 
-from app.features.agent import run_claim, runtime
+from app.features.agent import artifact_file_store, run_claim, runtime
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
+from app.features.agent.artifact_file_store import (
+    ARTIFACT_FILE_TABLE,
+    FILE_ARTIFACT_EXTENSIONS,
+)
 from app.features.agent.runtime import (
     RUNTIME_CHECKPOINT_TABLE,
     AgentProfile,
@@ -59,7 +63,7 @@ MIGRATION_016 = next(item for item in MIGRATIONS if item.name == "20261015_016_r
 
 def _delete_key(value: str) -> None:
     with connect_platform_oracle() as connection, connection.cursor() as cursor:
-        for table in (ENTITY_TABLE, RUNTIME_CHECKPOINT_TABLE):
+        for table in (ARTIFACT_FILE_TABLE, ENTITY_TABLE, RUNTIME_CHECKPOINT_TABLE):
             cursor.execute(
                 f"DELETE FROM {table} WHERE CHECKPOINT_KEY = :checkpoint_key",  # nosec B608
                 {"checkpoint_key": value},
@@ -204,6 +208,74 @@ def test_run_full_body_survives_thread_delete_and_follows_entity_tombstone(
                     {"body_id": content.body_reference.body_id},
                 )
             connection.commit()
+
+
+def _file_rows(checkpoint_key: str) -> list[tuple[str, str, int]]:
+    with connect_platform_oracle() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT RUN_ID, ARTIFACT_ID, SIZE_BYTES FROM {ARTIFACT_FILE_TABLE} "  # nosec B608
+            "WHERE CHECKPOINT_KEY = :checkpoint_key ORDER BY RUN_ID",
+            {"checkpoint_key": checkpoint_key},
+        )
+        return [(str(row[0]), str(row[1]), int(row[2])) for row in cursor.fetchall()]
+
+
+def test_artifact_file_is_stored_as_a_blob_and_deleted_with_the_run_row(
+    checkpoint_key: str,
+) -> None:
+    """成果物のファイル（#5837）は BLOB に持ち、別のプロセスが読め、Run の行と一緒に消える。"""
+    # 合成の中身（zip の署名で始まる。bind が RAW に収まらない大きさ）。
+    data = b"PK\x03\x04" + bytes(range(256)) * 1024
+    mime_type = next(iter(FILE_ARTIFACT_EXTENSIONS))
+    repository = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    runs = []
+    for _ in range(2):
+        run = repository.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id="default"))
+        assert repository.begin_builtin_run(run.id) is not None
+        runs.append(run.id)
+    removed, kept = sorted(runs)
+    artifacts = {
+        run_id: repository.save_file_artifact(
+            run_id, file_name="合成の表", mime_type=mime_type, data=data
+        )
+        for run_id in runs
+    }
+
+    assert _file_rows(checkpoint_key) == [
+        (removed, artifacts[removed].id, len(data)),
+        (kept, artifacts[kept].id, len(data)),
+    ]
+    # Run の行（ENTITY_JSON）は参照とメタデータだけ（中身の大きさを持たない）。
+    stored_run = _entities(checkpoint_key)[("run", removed)][0]
+    assert stored_run is not None and artifacts[removed].id in stored_run
+    assert len(stored_run) < len(data) // 4
+    # 別のプロセス（同じ保存先を読み込んだ repository）からも同じ中身を読める。
+    other = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    assert other.read_artifact_file(removed, artifacts[removed].id).data == data
+    # 別の CHECKPOINT_KEY の同じ ID は読めない。
+    with connect_platform_oracle() as connection, connection.cursor() as cursor:
+        assert (
+            artifact_file_store.read_file(
+                cursor, checkpoint_key + "-other", removed, artifacts[removed].id
+            )
+            is None
+        )
+        # Run の行を消す書き込み（削除の印）は、同じ transaction でその Run のファイルも消す。
+        head = checkpoint_store.read_head(
+            cursor, RUNTIME_CHECKPOINT_TABLE, checkpoint_key, for_update=True
+        )
+        assert head is not None
+        checkpoint_store.write_entities(
+            cursor,
+            checkpoint_key,
+            {(checkpoint_store.RUN, removed): None},
+            version=head.version + 1,
+        )
+        checkpoint_store.update_head(
+            cursor, RUNTIME_CHECKPOINT_TABLE, checkpoint_key, version=head.version + 1, text=None
+        )
+        connection.commit()
+    assert _file_rows(checkpoint_key) == [(kept, artifacts[kept].id, len(data))]
 
 
 def _entities(checkpoint_key: str) -> dict[tuple[str, str], tuple[str | None, int]]:

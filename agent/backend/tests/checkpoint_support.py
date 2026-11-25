@@ -6,6 +6,7 @@
 - 移す前の形（migration 016 の前）の head は `set_legacy`（全体の snapshot の JSON）。
 - 版の列が無い DB（migration 015 の前）は `versioned=False`（head の SELECT が ORA-00904）。
 - 行の表が無い DB は `entities_table=False`（行の SELECT が ORA-00942）。
+- 成果物のファイル（`AGENT_RUNTIME_ARTIFACT_FILES`。#5837）は `files` の dict で再現する。
 """
 
 from __future__ import annotations
@@ -52,8 +53,12 @@ class CheckpointTable:
     heads: dict[str, HeadRow] = field(default_factory=dict)
     # (CHECKPOINT_KEY, ENTITY_KIND, ENTITY_ID) → 行。
     entities: dict[tuple[str, str, str], EntityRow] = field(default_factory=dict)
+    # 成果物のファイル（#5837。(CHECKPOINT_KEY, RUN_ID, ARTIFACT_ID) → 中身）。
+    files: dict[tuple[str, str, str], bytes] = field(default_factory=dict)
     versioned: bool = True
     entities_table: bool = True
+    # 成果物のファイルの表が無い DB（migration 018 の前。SQL が ORA-00942）。
+    files_table: bool = True
     # 実行した SQL の種類（書き込みの量の確認。"head_update" / "entity_merge" など）。
     calls: list[str] = field(default_factory=list)
 
@@ -172,6 +177,27 @@ class CheckpointTable:
                 params.get("writer_id"),
             )
             return CheckpointResult(rowcount=1)
+        if "AGENT_RUNTIME_ARTIFACT_FILES" in normalized:
+            self.calls.append("file_" + normalized.split()[0].lower())
+            if not self.files_table:
+                raise RuntimeError("ORA-00942: table or view does not exist")
+            run_key = (key, str(params["run_id"]))
+            if normalized.startswith("INSERT"):
+                self.files[(*run_key, str(params["artifact_id"]))] = bytes(params["content"])
+                return CheckpointResult(rowcount=1)
+            matched = [
+                file_key
+                for file_key in self.files
+                if file_key[:2] == run_key
+                and ("artifact_id" not in params or file_key[2] == params["artifact_id"])
+            ]
+            if normalized.startswith("DELETE"):
+                for file_key in matched:
+                    del self.files[file_key]
+                return CheckpointResult(rowcount=len(matched))
+            return CheckpointResult(
+                row=(self.files[matched[0]],) if matched else None, rowcount=len(matched)
+            )
         return None
 
     def connect(self) -> CheckpointConnection:

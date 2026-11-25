@@ -15,7 +15,8 @@ Run・業務 Agent の行の `CHANGE_VERSION` は、その行を書いたとき�
 lock した後に、前回の同期の版より新しい行（別のプロセスが書いた Run・業務 Agent）を読み、自分が
 変えていないものは保存先の値にそろえ、変えたものは自分の値で書く（両方が同じ 1 件を変えていたときは
 このプロセスの値が勝ち、ログに残す。#1916 と同じ規則）。1 件の削除は行を消さずに `ENTITY_JSON` を
-NULL にする（別のプロセスが削除を知る）。
+NULL にする（別のプロセスが削除を知る）。Run の削除は、その Run の成果物のファイル
+（`AGENT_RUNTIME_ARTIFACT_FILES`。#5837）も同じ transaction で消す。
 
 migration 20261015_016 が、以前の 1 行の snapshot を行に移す（元の snapshot は
 `ENTITY_KIND = 'legacy_snapshot'` の行に残す）。移す前の形の checkpoint は読まない
@@ -33,6 +34,7 @@ from importlib import import_module
 from typing import Any
 from uuid import uuid4
 
+from app.features.agent.artifact_file_store import delete_run_files
 from app.features.agent.trace_bodies import register_run_bodies
 
 # このプロセスを表す ID（`WRITER_ID`。ホスト・pid・起動ごとの乱数）。
@@ -313,6 +315,9 @@ def write_entities(
     for (kind, entity_id), text in rows.items():
         if kind == RUN:
             register_run_bodies(cursor, checkpoint_key, entity_id, text)
+            if text is None:
+                # 消した Run の成果物のファイル（#5837）も同じ transaction で消す。
+                delete_run_files(cursor, checkpoint_key, entity_id)
 
 
 def entity_keys(kind: str, ids: Iterable[str]) -> list[EntityKey]:

@@ -253,6 +253,28 @@ RUNTIME_STATEMENTS: tuple[str, ...] = (
     "ON AGENT_RUNTIME_ARTIFACTS (RUN_ID, KIND, CREATED_AT)",
 )
 
+# Run の成果物のファイルの中身（ツールが作った .xlsx / .docx / .pptx。#5837。migration 018）。
+# Run の成果物（Run の JSON の `artifacts`）はファイル名・MIME・大きさ・sha256 だけを持ち、中身は
+# この表に Run・成果物の ID で持つ（`artifact_file_store`。名前は同 module の ARTIFACT_FILE_TABLE と
+# 同じ）。Run の行は消さずに ENTITY_JSON を NULL にするので FK は持たず、Run を消す書き込みが同じ
+# transaction でその Run の行を消す。RUNTIME_STATEMENTS には足さない（migration 006 の checksum に
+# 入るため）。
+RUNTIME_ARTIFACT_FILE_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE AGENT_RUNTIME_ARTIFACT_FILES (
+        CHECKPOINT_KEY VARCHAR2(128) NOT NULL,
+        RUN_ID VARCHAR2(200) NOT NULL,
+        ARTIFACT_ID VARCHAR2(128) NOT NULL,
+        SIZE_BYTES NUMBER(19) NOT NULL,
+        SHA256 VARCHAR2(64) NOT NULL,
+        CONTENT BLOB NOT NULL,
+        CREATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+        CONSTRAINT PK_AGENT_RUNTIME_ARTIFACT_FILES
+            PRIMARY KEY (CHECKPOINT_KEY, RUN_ID, ARTIFACT_ID)
+    )
+    """,
+)
+
 # migration 006 が作った Run の保存先の形（checksum に入るため固定する。行の表は 016 が作る）。
 _RUNTIME_STATEMENTS_006: tuple[str, ...] = (
     _RUNTIME_CHECKPOINTS_TABLE_006,
@@ -446,6 +468,7 @@ _RUN_FACTS_STATEMENTS_007: tuple[str, ...] = (
 DOMAIN_STATEMENTS: tuple[str, ...] = (
     *BASE_STATEMENTS,
     *RUNTIME_STATEMENTS,
+    *RUNTIME_ARTIFACT_FILE_STATEMENTS,
     *CONTROL_PLANE_STATEMENTS,
     *RUN_FACTS_STATEMENTS,
 )
@@ -700,6 +723,13 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_017)})",
         ),
     ),
+    MigrationArtifact(
+        "20261125_018_runtime_artifact_files",
+        "store the files that tools create as run artifacts (#5837)",
+        # 表を足すだけ（データは消さない）。適用の前は、ファイルを作るツールが「保存できません
+        # でした」のエラーになる（Run・ほかの成果物の保存は変わらない）。
+        RUNTIME_ARTIFACT_FILE_STATEMENTS,
+    ),
 )
 
 # ---- manifest -----------------------------------------------------------------
@@ -717,6 +747,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "AGENT_RUNTIME_STEPS",
     "AGENT_RUNTIME_APPROVALS",
     "AGENT_RUNTIME_ARTIFACTS",
+    "AGENT_RUNTIME_ARTIFACT_FILES",
     "AGENT_CONTROL_PLANE_ITEMS",
     "AGENT_RUN_FACTS",
 )
@@ -1168,6 +1199,7 @@ __all__ = [
     "CONTROL_PLANE_STATEMENTS",
     "CONTROL_STATEMENTS",
     "DOMAIN_STATEMENTS",
+    "RUNTIME_ARTIFACT_FILE_STATEMENTS",
     "RUNTIME_STATEMENTS",
     "RUN_FACTS_DATA_TOOL_STATEMENTS",
     "RUNTIME_CHECKPOINT_VERSION_STATEMENTS",
