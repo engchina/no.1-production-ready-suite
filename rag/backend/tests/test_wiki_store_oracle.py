@@ -104,6 +104,48 @@ async def test_virtual_parent_persists_all_original_bindings_and_rejects_changed
     assert not await store.read_sources(restored, filters)
 
 
+async def test_saved_vectors_are_valid_only_for_the_same_version_and_saved_page() -> None:
+    """保存済みのベクトルは、同じ原文の版で案内を保存し直していない単位だけ返す（#5734）。"""
+    oracle, token = OracleClient(), uuid4().hex[:12]
+    store = WikiStore(oracle)
+    kb = await oracle.create_knowledge_base(name=f"synthetic-resume-{token}")
+    did, _, _ = await _indexed_document(oracle, knowledge_base_id=kb.id, token=token)
+    await store.set_enabled(kb.id, True)
+    source = await store.source_units(did)
+    assert source is not None and len(source.units) > 1
+    source = replace(source, compiler_fingerprint=fingerprint("compiler-a"))
+    assert await store.enqueue(source)
+    lease = await store.claim(source, lease_seconds=300)
+    assert lease
+    pages = [
+        WikiPage(
+            unit=unit,
+            navigation=WikiContext(
+                unit_id=unit.unit_id,
+                context="合成の案内。",
+                possible_questions=[],
+                dependencies=[],
+                unresolved=[],
+            ),
+            input_fingerprint="input-a",
+        )
+        for unit in source.units
+    ]
+    await store.checkpoint(source, lease, pages)
+    assert await store.embedded_texts(source) == {}
+    first = pages[0]
+    await store.checkpoint(source, lease, [first], vectors=[_EMBEDDING], original_chars=5)
+    # 埋め込みの入力は保存した時の文字数のもの。今の入力と違えば呼び出し側が作り直す。
+    assert await store.embedded_texts(source) == {
+        first.unit.unit_id: first.search_text(original_chars=5)
+    }
+    other_version = replace(source, source_fingerprint=fingerprint("other-version"))
+    assert await store.embedded_texts(other_version) == {}
+    # 案内を保存し直した単位は、前の案内から作ったベクトルを残さない。
+    await store.checkpoint(source, lease, [first])
+    assert await store.embedded_texts(source) == {}
+
+
 async def test_shared_document_cache_requires_enabled_current_membership_and_cascades() -> None:
     oracle, token = OracleClient(), uuid4().hex[:12]
     store = WikiStore(oracle)

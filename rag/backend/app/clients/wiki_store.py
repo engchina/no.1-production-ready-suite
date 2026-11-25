@@ -687,7 +687,8 @@ class WikiStore:
                     connection,
                     """MERGE INTO rag_wiki_pages target USING (SELECT :id page_id FROM dual) source
                     ON (target.page_id=source.page_id) WHEN MATCHED THEN UPDATE SET page_json=:page,
-                    search_text=:text,updated_at=SYSTIMESTAMP WHEN NOT MATCHED THEN INSERT
+                    search_text=:text,embedding=NULL,updated_at=SYSTIMESTAMP
+                    WHEN NOT MATCHED THEN INSERT
                     (page_id,document_id,chunk_set_id,source_chunk_id,unit_id,
                      source_fingerprint,page_json,search_text)
                     VALUES (:id,:document_id,:chunk_set_id,:source_chunk_id,:unit_id,
@@ -695,6 +696,8 @@ class WikiStore:
                     values,
                     input_sizes=_json_input_sizes("page", "text"),
                 )
+                # 案内を保存し直した行は上で埋め込みを消す。前の案内から作ったベクトルを、
+                # 再開の時に今の案内のものとして使い直さないため（#5734）。
                 if vectors:
                     _execute(
                         connection,
@@ -727,6 +730,16 @@ class WikiStore:
             {"id": snapshot.document_id, "fingerprint": snapshot.source_fingerprint},
         )
         return [WikiPage.model_validate(_json_loads(row["page_json"])) for row in rows]
+
+    async def embedded_texts(self, snapshot: WikiSnapshot) -> dict[str, str]:
+        """この原文の版でベクトルを保存済みの単位と、その埋め込みの入力（#5734）。"""
+        rows = await self.oracle._fetch_all(
+            """SELECT unit_id,search_text FROM rag_wiki_pages
+            WHERE document_id=:id AND source_fingerprint=:fingerprint
+              AND embedding IS NOT NULL""",
+            {"id": snapshot.document_id, "fingerprint": snapshot.source_fingerprint},
+        )
+        return {str(row["unit_id"]): str(row["search_text"]) for row in rows}
 
     async def finish(
         self, snapshot: WikiSnapshot, token: str, *, failure_code: str | None = None
