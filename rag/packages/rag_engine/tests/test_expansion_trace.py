@@ -218,3 +218,42 @@ def test_sections_that_push_the_evidence_into_batched_reading_are_not_read():
     roomy = replace(base, section_expansion_max_levels=1)
     (_, kept), _ = run_sections(_seed_context("c31a", "c2a"), SectionStub(), roomy)
     assert kept.applied and kept.stop_reason == "scope_read"
+
+
+def test_document_first_chunks_count_toward_the_whole_evidence():
+    """生成の前に文書ごとに足す先頭の chunk も根拠の全体に数え、その分で予算を超える章節は読まない（#5820）。"""
+    from test_section_expansion import _child
+
+    from rag_engine.retrieval.metadata_context import document_context_key
+
+    question, text = "合成の質問", "合成の文書の題名と前提。" * 20
+    head = replace(_child("c2a"), chunk_uid="head", chunk_id="head", parent_chunk_uid="", parent_chunk_id="")
+    head = replace(head, text=text, retrieval_text=text)
+
+    def run(settings, *, background):
+        ctx = _seed_context("c31a")
+        rows = [{"document_scope": list(document_context_key(ctx.records[0])), "first_chunk": head}] if background else []
+        dependencies = AnswerDependencies(
+            unused,
+            unused,
+            unused,
+            unused,
+            unused,
+            section_outline=SectionStub().outline,
+            section_chunks=SectionStub().chunks,
+            document_background=lambda **kwargs: rows,
+        )
+        with bind_dependencies(dependencies), recorded() as calls:
+            sizes = [answering._evidence_block_chars(question, ctx, settings, first_chunks=flag) for flag in (False, True)]
+            answering._expand_context_by_sections(question, ctx, settings, started_at=0)
+        step = next(call for call in calls if call.name == "章節の拡張")
+        return sizes, step.outputs["読取結果"][0]["sections"][0]["read"]
+
+    base = replace(get_settings(environ={}, dotenv_path=None), section_expansion_max_levels=1)
+    (plain, counted), _ = run(base, background=True)
+    assert counted > plain
+    # 章節の残り（c31b）は当たった根拠（c31a）とほぼ同じ大きさ。先頭の chunk を数えなければ入り、数えると入らない予算にする。
+    budget = plain + plain + (counted - plain) // 2
+    settings = replace(base, answer_max_input_tokens=2 * budget)
+    assert run(settings, background=False)[1] == "whole"
+    assert run(settings, background=True)[1] == "over_total"

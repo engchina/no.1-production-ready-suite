@@ -1518,15 +1518,24 @@ def _grounded_spans(
     return tag_spans(spans)
 
 
-def _evidence_block_chars(question: str, context: AnswerContext, settings: Settings) -> int:
+def _evidence_block_chars(question: str, context: AnswerContext, settings: Settings, *, first_chunks: bool = False) -> int:
     """文脈の根拠を回答の入力の根拠ブロックにしたときの字数（#5820）。
 
     ``select_evidence`` が 1 回の生成か分割読取かを決める字数（``evidence_block_text``）と同じ数え方。章節の拡張が、
-    足した後の根拠の全体を 1 回の生成の原文の予算に収めるのに使う。
+    足した後の根拠の全体を 1 回の生成の原文の予算に収めるのに使う。``first_chunks`` が真なら、生成の前に文書ごとに足す
+    本文の先頭の chunk（#5240）も数える（数えないと、予算いっぱいまで章節を足した質問が先頭の chunk の分で分割読取に回る）。
     """
-    from rag_engine.generation.grounded import evidence_block_text
+    from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
+    from rag_engine.generation.document_inputs import FIRST_CHUNK, with_first_chunks
+    from rag_engine.generation.grounded import evidence_block_text, tag_spans
 
+    reader = DocumentBackgroundReader()
+    reader.remember(context)
+    context = without_embedded_background(context)
     spans = _grounded_spans(question, context, (), None, budget=settings.evidence_budget_chars, preserve_records=True, record_stage=False)
+    if first_chunks and spans:
+        _, spans, _ = reader.append(question, context, list(spans))
+        spans = tag_spans(with_first_chunks(spans, [span for span in spans if span.get(FIRST_CHUNK)]))
     return len(evidence_block_text(spans))
 
 
@@ -4175,7 +4184,8 @@ def _expand_context_by_sections(
             reader=state["reader"],
             priority=tuple(sections.PriorityRange(document_id, start, end) for document_id, start, end in priority),
             related=related,
-            block_chars=lambda candidate: _evidence_block_chars(question, candidate, settings),
+            # 起点の文脈（章節を足す前の根拠の全体）には、生成の前に文書ごとに足す先頭の chunk の分も数える。
+            block_chars=lambda candidate: _evidence_block_chars(question, candidate, settings, first_chunks=candidate is context),
         )
         if related:
             result.trace["related_seeds"] = related
