@@ -228,7 +228,6 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_WIKI_PAGE_SET_IDX",
     "RAG_WIKI_PAGE_CHUNK_IDX",
     "RAG_WIKI_QUEUE_IDX",
-    "RAG_WIKI_PAGE_TEXT_IDX",
     "RAG_WIKI_GRAPH_PARENT_IDX",
     "RAG_WIKI_GRAPH_PAGE_IDX",
     "RAG_WIKI_GRAPH_TARGET_IDX",
@@ -370,6 +369,9 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     # `20261110_4781_retire_evaluation_calibration` が消す。全再作成のためにここにも載せる。
     ("RAG_EVALUATION_LABEL_SETS", "TABLE"),
     ("RAG_EVALUATION_LABEL_ITEMS", "TABLE"),
+    # Wiki の案内の全文検索の索引（#5827。検索の経路が使わなくなった。#5825）。更新では migration
+    # `20261125_5827_drop_wiki_page_text_index` が消す。全再作成のためにここにも載せる。
+    ("RAG_WIKI_PAGE_TEXT_IDX", "INDEX"),
     ("RAG_EVALUATION_LABELS", "TABLE"),
     ("RAG_EVALUATION_CALIBRATIONS", "TABLE"),
     # 文書構造索引の表（#5511。Wiki に置き換えた）。更新では migration

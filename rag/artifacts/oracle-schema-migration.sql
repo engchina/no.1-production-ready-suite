@@ -4777,12 +4777,6 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_wiki_queue_idx ON rag_wiki_documents(status,lease_until)';
     END IF;
-    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_PAGE_TEXT_IDX';
-    IF v_count = 0 THEN
-        EXECUTE IMMEDIATE
-            'CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text) '
-            || 'INDEXTYPE IS CTXSYS.CONTEXT PARAMETERS (''LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)'')';
-    END IF;
 END;
 /
 
@@ -5012,6 +5006,17 @@ BEGIN
     IF v_count = 0 THEN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_wiki_reference_doc_idx ON rag_wiki_references(document_id)';
+    END IF;
+END;
+/
+
+-- migration: 20261125_5827_drop_wiki_page_text_index
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_WIKI_PAGE_TEXT_IDX';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP INDEX rag_wiki_page_text_idx FORCE';
     END IF;
 END;
 /

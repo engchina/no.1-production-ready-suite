@@ -831,7 +831,7 @@
     {
       "destructive": false,
       "name": "20261118_4941_document_wiki",
-      "sha256": "699587074a3a21bcd771443ed05707608c53bc6bec885d4510e64da6ff6ba2c7",
+      "sha256": "eca3bab9d894f5c968c2729d8092c43652de4612577000d58d275d805e094e8f",
       "statement_count": 2,
       "table_name": "rag_wiki_documents"
     },
@@ -890,10 +890,17 @@
       "sha256": "2350baa055afb23af1ad0af71576f73abfa3ed1caf08acc6cc2cbb0791bfe185",
       "statement_count": 1,
       "table_name": "rag_wiki_references"
+    },
+    {
+      "destructive": false,
+      "name": "20261125_5827_drop_wiki_page_text_index",
+      "sha256": "74893177c6da97cf9694704be23e814551cc278e072f26ebf00836ff386d1d81",
+      "statement_count": 1,
+      "table_name": "rag_wiki_pages"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "45dafb371c93c449917d023393694fb0afa2c8e929d8df206734dfac36821f47",
-  "statement_count": 191
+  "sha256": "3624b705e5af7737e7f74be8f4451263f4a08511a3a4405951ad8a53cc04ea85",
+  "statement_count": 192
 }

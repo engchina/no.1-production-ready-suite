@@ -517,7 +517,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 191
+    assert len(statements) == 192
     assert all(
         statement.startswith(
             (
@@ -690,6 +690,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261122_5760_wiki_link_progress",
         "20261124_5784_retire_wiki_links",
         "20261124_5784_wiki_references",
+        "20261125_5827_drop_wiki_page_text_index",
     ]
 
 

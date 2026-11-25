@@ -31,7 +31,6 @@ from app.clients.oracle import (
     _require_active_knowledge_base,
     _retrieved_chunk_from_row,
     _with_tenant_bind,
-    oracle_text_index_parameters_sql,
 )
 from app.clients.wiki_graph_index import index_document
 from app.clients.wiki_reference_index import index_references
@@ -49,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 def wiki_schema_sql() -> str:
-    return f"""
+    return """
 CREATE TABLE rag_wiki_documents (
     document_id VARCHAR2(64) PRIMARY KEY,
     source_fingerprint CHAR(64) NOT NULL,
@@ -90,8 +89,6 @@ CREATE INDEX rag_wiki_page_doc_idx ON rag_wiki_pages(document_id,source_fingerpr
 CREATE INDEX rag_wiki_page_set_idx ON rag_wiki_pages(chunk_set_id);
 CREATE INDEX rag_wiki_page_chunk_idx ON rag_wiki_pages(source_chunk_id);
 CREATE INDEX rag_wiki_queue_idx ON rag_wiki_documents(status,lease_until);
-CREATE INDEX rag_wiki_page_text_idx ON rag_wiki_pages(search_text)
-    INDEXTYPE IS CTXSYS.CONTEXT {oracle_text_index_parameters_sql()};
 """.strip()
 
 
