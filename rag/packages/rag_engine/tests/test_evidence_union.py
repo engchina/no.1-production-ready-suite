@@ -113,3 +113,99 @@ def test_sources_without_wiki_relations_are_left_unchanged():
     merged, _ = union_sources(context, [record("c1")])
     assert all("wiki_relations" not in r.metadata for r in merged.records)
     assert merged.evidence_tree[0] == context.evidence_tree[0]
+
+
+def ranked(chunk_id, score, rank=None):
+    """rerank の点数（と順位）を持つ合成の record。順位が無いのは独立の経路の起点（順位は合わせるときに決まる）。"""
+    base = record(chunk_id)
+    rerank = {"relevance_score": score, **({"rank": rank} if rank is not None else {})}
+    return AnswerRecord(**{**base.__dict__, "metadata": {**base.metadata, "rerank": rerank}})
+
+
+def test_rerank_ranks_are_one_order_across_normal_candidates_and_independent_roots():
+    """通常検索の候補と独立の経路の起点を、rerank の点数で 1 つの順位にする（#5831）。並びと件数は変えない。"""
+    first, second, cut = ranked("c1", 0.9, 1), ranked("c2", 0.6, 2), ranked("c5", 0.5, 3)
+    tree = tuple(
+        ContextParentEvidence(
+            record=r, role="child_fallback", reason="", children=(ContextChildEvidence(record=r, role="retrieved_anchor", reason=""),)
+        )
+        for r in (first, second)
+    )
+    # 起点数で切られた候補（c5）は根拠に無いが、順位には数える。
+    context = AnswerContext(records=[first, second], text="", evidence_tree=tree, ranked_candidates=(first, second, cut), candidate_count=3)
+    roots = [ranked("w1", 0.95), ranked("w2", 0.6), ranked("w3", 0.55)]
+    merged, added = union_sources(context, [*roots, record("f1")])
+
+    assert added == 4
+    assert [r.chunk_id for r in merged.records] == ["c1", "c2", "w1", "w2", "w3", "f1"]
+    ranks = {r.chunk_id: (r.metadata.get("rerank") or {}).get("rank") for r in merged.records}
+    # w1(0.95) > c1(0.9) > c2(0.6) = w2(0.6。同じ点数は通常検索が先) > w3(0.55) > c5(0.5)。辿った単位は順位なし。
+    assert ranks == {"c1": 2, "c2": 3, "w1": 1, "w2": 4, "w3": 5, "f1": None}
+    # 木の親・子の record も同じ順位にする。
+    assert [parent.children[0].record.metadata["rerank"]["rank"] for parent in merged.evidence_tree[:2]] == [2, 3]
+    # 点数は変えない。
+    assert [r.metadata["rerank"]["relevance_score"] for r in merged.records[:5]] == [0.9, 0.6, 0.95, 0.6, 0.55]
+
+
+def test_ranks_are_left_alone_when_no_independent_root_has_a_score():
+    first = ranked("c1", 0.9, 1)
+    context = AnswerContext(records=[first], text="", ranked_candidates=(first,), candidate_count=1)
+    merged, added = union_sources(context, [record("f1")])
+    assert added == 1 and merged.records[0] is first and "rerank" not in merged.records[1].metadata
+
+
+def test_independent_sources_join_after_the_supplement_merge_and_before_the_evidence_expansion(monkeypatch, tmp_path):
+    """独立の経路の原文は、補いの検索の合わせ込みの後・根拠の拡張（章節・親と前後・参照）の前に合わせる（#5831）。
+
+    補いの合わせ込みは主の検索の候補から文脈を作り直すので、その前に足した原文は外れる。後の拡張は、足した原文を
+    通常検索の根拠と同じ文脈として受け取る。
+    """
+    from dataclasses import replace
+    from pathlib import Path
+
+    from rag_engine.config import get_settings
+    from rag_engine.generation.answer_models import QuestionTextSearchInfo
+    from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+
+    order: list[tuple[str, list[str]]] = []
+
+    def step(name, result=lambda context: context):
+        def call(*args, **kwargs):
+            context = next(value for value in args if isinstance(value, AnswerContext))
+            order.append((name, [r.chunk_id for r in context.records]))
+            return result(context)
+
+        return call
+
+    joined = replace(native_context(), records=[*native_context().records, record("w1")])
+    monkeypatch.setattr(answering, "_with_independent_sources", step("union", lambda context: joined))
+    monkeypatch.setattr(answering, "_expand_context_by_sections", step("sections", lambda context: (context, None)))
+    monkeypatch.setattr(answering, "_fill_unread_section_anchors", step("unread"))
+    monkeypatch.setattr(answering, "_add_context_references", step("references"))
+    settings = replace(get_settings(environ={}, dotenv_path=None), output_dir=tmp_path)
+    expanded = answering._expand_evidence(
+        native_context(),
+        settings,
+        normalized_question="合成の質問",
+        request_text="合成の質問",
+        run_id=None,
+        preferred_engine_ids=[],
+        chunk_top_k=5,
+        chunk_neighbor_count=1,
+        effective_rerank_enabled=True,
+        selected_retrieval_scope="knowledge_base",
+        selected_classification_filter=None,
+        retrieval_queries=("合成の質問",),
+        text_queries={},
+        text_search_info=QuestionTextSearchInfo(),
+        runtime_knowledge=RuntimeKnowledgeContext(original_question="合成の質問", expanded_question="合成の質問", path=Path(tmp_path)),
+        guide_plan=None,
+        answer_started_at=0.0,
+    )
+    assert order == [
+        ("union", ["p1"]),
+        ("sections", ["p1", "w1"]),
+        ("unread", ["p1", "w1"]),
+        ("references", ["p1", "w1"]),
+    ]
+    assert [r.chunk_id for r in expanded.context.records] == ["p1", "w1"]

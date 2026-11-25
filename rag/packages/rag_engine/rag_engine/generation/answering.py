@@ -1540,7 +1540,11 @@ def _evidence_block_chars(question: str, context: AnswerContext, settings: Setti
 
 
 def _with_independent_sources(context: AnswerContext) -> AnswerContext:
-    """独立の経路（Wiki。#4941）の原文を根拠に集合として足す。同じ位置・保存版の原文は足さない。"""
+    """独立の経路（Wiki。#4941）の原文を根拠に集合として足す。同じ位置・保存版の原文は足さない。
+
+    独立の経路の結果をここで待つ（先に終わった経路が他方を待つ）。足す原文は起点（rerank の点数の順）、辿った
+    単位の順で、rerank の順位は通常検索の候補と 1 つの順にする（``union_sources``。#5831）。
+    """
     from rag_engine.dependencies import injected_additional_sources
     from rag_engine.generation.answer_records import _stored_chunk_answer_record
     from rag_engine.generation.evidence_union import union_sources
@@ -3557,7 +3561,9 @@ def answer_question_result(
         )
         if expanded is not None:
             context, runtime_knowledge = expanded.context, expanded.runtime_knowledge
-        context = _with_independent_sources(context)
+        else:
+            # 根拠の拡張をしない経路。拡張する経路は拡張の中（補いの検索の合わせ込みの後）で合わせる（#5831）。
+            context = _with_independent_sources(context)
         # 根拠の補いの記録（回答の generation_trace と同じ key）。
         evidence_trace: dict[str, Any] = dict(expanded.trace) if expanded is not None else {}
         if not context.records or not context.text.strip():
@@ -3886,6 +3892,10 @@ def _expand_evidence(
                 + (f"（主の検索の根拠が外れるため {rejected_count} 件を使いませんでした）" if rejected_count else "")
             )
     overflow_trace["added_chunk_ids"] = _supplement_owner_keys(context, added_chunks[QUERY_OVERFLOW_KEY])
+    # 独立の経路（Wiki）の原文は、検索（主の検索と補いの検索）の rerank と起点の切りが済んだここで合わせ、
+    # 以後の根拠の拡張（章節・親と前後・文脈からの参照）は通常検索の根拠と区別しない（#5831）。補いの検索の
+    # 合わせ込みは主の検索の候補から文脈を作り直すので、その前に足すと外れる。
+    context = _with_independent_sources(context)
     context, section_expansion = _expand_context_by_sections(
         normalized_question,
         context,

@@ -1,8 +1,12 @@
-"""独立の経路（Wiki。#4941）の原文を、通常検索の根拠に集合として足す。経路の間で採点・並べ替え・件数の削減をしない。"""
+"""独立の経路（Wiki。#4941）の原文を、通常検索の根拠に集合として足す。
+
+経路の間で採点のし直し・件数の削減をしない（通常検索の根拠は外さない）。rerank の順位だけは、通常検索の候補と
+独立の経路の起点を点数で 1 つの順にする（#5831）。
+"""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -55,22 +59,60 @@ def _identified(context: AnswerContext, additional: Sequence[AnswerRecord]) -> A
     }
     if not identities and not relations:
         return context
+    return _mapped(context, lambda record: _with_relations(_with_identities(record, identities), relations))
 
-    def attach(record: Any) -> Any:
-        return _with_relations(_with_identities(record, identities), relations)
 
+def _mapped(context: AnswerContext, change: Callable[[Any], Any]) -> AnswerContext:
+    """根拠の record（並びと木の親・子）を同じ規則で置き換えた context。"""
     return replace(
         context,
-        records=[attach(record) for record in context.records],
+        records=[change(record) for record in context.records],
         evidence_tree=tuple(
             replace(
                 parent,
-                record=attach(parent.record),
-                children=tuple(replace(child, record=attach(child.record)) for child in parent.children),
+                record=change(parent.record),
+                children=tuple(replace(child, record=change(child.record)) for child in parent.children),
             )
             for parent in context.evidence_tree
         ),
     )
+
+
+def _rerank_score(record: Any) -> float | None:
+    rerank = record.metadata.get("rerank")
+    score = rerank.get("relevance_score") if isinstance(rerank, dict) else None
+    return float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else None
+
+
+def _ranked_together(context: AnswerContext, added: list[AnswerRecord]) -> tuple[AnswerContext, list[AnswerRecord]]:
+    """通常検索の候補と独立の経路の起点を、rerank の点数で 1 つの順位にする（#5831）。
+
+    独立の経路の起点（原文で測った点数を持つ原文）の順位は、点数がそれ以上の通常検索の候補と、点数が上の起点の
+    数の次。通常検索の根拠の順位は、点数が上の起点の数だけ下げる（同じ点数は通常検索が先）。点数の無い原文
+    （辿った単位）は順位を持たない。点数・並び・件数は変えない。
+    """
+    roots = sorted(
+        ((score, index) for index, record in enumerate(added) if (score := _rerank_score(record)) is not None),
+        key=lambda item: (-item[0], item[1]),
+    )
+    if not roots:
+        return context, added
+    ordinary = [score for record in context.ranked_candidates if (score := _rerank_score(record)) is not None]
+    ranked = list(added)
+    for position, (score, index) in enumerate(roots):
+        rerank = dict(added[index].metadata["rerank"])
+        rerank["rank"] = 1 + sum(value >= score for value in ordinary) + position
+        ranked[index] = replace(added[index], metadata={**added[index].metadata, "rerank": rerank})
+
+    def lowered(record: Any) -> Any:
+        score = _rerank_score(record)
+        rank = record.metadata["rerank"].get("rank") if score is not None else None
+        ahead = sum(value > score for value, _ in roots) if isinstance(rank, int) and score is not None else 0
+        if not ahead:
+            return record
+        return replace(record, metadata={**record.metadata, "rerank": {**record.metadata["rerank"], "rank": rank + ahead}})
+
+    return _mapped(context, lowered), ranked
 
 
 def union_sources(context: AnswerContext, additional: Sequence[AnswerRecord]) -> tuple[AnswerContext, int]:
@@ -86,6 +128,7 @@ def union_sources(context: AnswerContext, additional: Sequence[AnswerRecord]) ->
             added.append(record)
     if not added:
         return context, 0
+    context, added = _ranked_together(context, added)
     records = [*context.records, *added]
     tree = context.evidence_tree + tuple(
         ContextParentEvidence(

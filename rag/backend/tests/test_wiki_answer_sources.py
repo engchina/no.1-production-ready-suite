@@ -54,6 +54,9 @@ class Retriever:
             metadata={
                 "chunk_set_id": "cs",
                 "wiki_source": True,
+                "wiki_origin": "root",
+                "wiki_rank": 3,
+                "wiki_rerank_score": 0.8,
                 "source_identities": [IDENTITY],
                 "wiki_relations": [RELATION],
             },
@@ -68,12 +71,19 @@ def request() -> SearchRequest:
 @pytest.mark.asyncio
 async def test_wiki_sources_keep_the_version_attributes_and_mark_the_channel() -> None:
     state = _SearchState()
-    stored = await engine(Retriever())._wiki_sources(request(), state)
+    retriever = Retriever()
+    stored = await engine(retriever)._wiki_sources(request(), state)
     assert [chunk.chunk_id for chunk in stored] == ["c1"]
+    # 起点数は通常検索と同じ定義（要求の top_k）。
+    assert retriever.calls[0]["top_k"] == request().top_k
     metadata = stored[0].metadata
     assert metadata["wiki_source"] is True and metadata["source_identities"] == [IDENTITY]
     assert metadata["wiki_relations"] == [RELATION]
     assert metadata["adb_hybrid"] == {"retrieval_channels": ["wiki"]}
+    # 起点の由来・Wiki のベクトル検索の順位と、原文で測った関連度を rag_engine へ渡す（#5831）。
+    # rerank の順位は、通常検索の候補と合わせるときに rag_engine が決める。
+    assert (metadata["wiki_origin"], metadata["wiki_rank"]) == ("root", 3)
+    assert metadata["rerank"]["relevance_score"] == 0.8 and "rank" not in metadata["rerank"]
     assert state.wiki_pages == ("page",) and "c1" in state.chunks
     # 検索の経路の記録に、全体の秒と段ごとの秒を足す（#5518）。
     elapsed = state.wiki_trace.pop("elapsed_seconds")
