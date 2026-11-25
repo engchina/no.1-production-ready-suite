@@ -28,6 +28,7 @@ from app.features.agent.xlsx_workbook import (
     Column,
     Sheet,
     Summary,
+    SummaryFunction,
     XlsxSpecError,
     build_workbook,
     sheet_titles,
@@ -405,8 +406,14 @@ def test_format_width_row_length_and_summary_rules() -> None:
         assert _issues([sheet(summaries=[Summary("sum", columns)])]) == [
             ("sheets.0.summaries.0.columns", "range")
         ]
-    for function, columns in (("sum", (1,)), ("average", (3,)), ("min", (1,)), ("max", (1,))):
-        assert _issues([sheet(summaries=[Summary(function, columns)])]) == [
+    wrong_types: tuple[tuple[SummaryFunction, tuple[int, ...]], ...] = (
+        ("sum", (1,)),
+        ("average", (3,)),
+        ("min", (1,)),
+        ("max", (1,)),
+    )
+    for function, positions in wrong_types:
+        assert _issues([sheet(summaries=[Summary(function, positions)])]) == [
             ("sheets.0.summaries.0.columns", "type")
         ]
     assert _issues([sheet(rows=[], summaries=[Summary("count", (1,))])]) == [
