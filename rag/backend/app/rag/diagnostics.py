@@ -157,10 +157,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
             for key in (
                 "rag_wiki_search_enabled",
                 "rag_wiki_candidates",
-                "rag_wiki_selected_documents",
                 "rag_wiki_selected_units",
-                "rag_wiki_selected_sections",
-                "rag_wiki_section_catalog_limit",
                 # 依存と文書をまたぐ関連を辿る段数と足す数の上限（#5492）。
                 "rag_wiki_link_depth",
                 "rag_wiki_link_max_units",

@@ -40,7 +40,7 @@ class Retriever:
     async def search(self, question: str, **kwargs: Any) -> WikiSearchResult:
         self.calls.append(kwargs)
         if self.disabled:
-            return WikiSearchResult(trace={"status": "profile_disabled", "model_calls": 0})
+            return WikiSearchResult(trace={"status": "profile_disabled"})
         # 検索の経路は段（span）ごとの秒を渡された記録に書く（#5518）。
         kwargs["stage_seconds"]["Wiki: 目録の読み込み"] = 0.25
         if self.error:
@@ -106,7 +106,7 @@ async def test_profile_without_wiki_keeps_the_trace_without_measurements() -> No
     state = _SearchState()
     stored = await engine(Retriever(disabled=True))._wiki_sources(request(), state)
     assert stored == []
-    assert state.wiki_trace == {"status": "profile_disabled", "model_calls": 0}
+    assert state.wiki_trace == {"status": "profile_disabled"}
 
 
 @pytest.mark.asyncio

@@ -1,16 +1,16 @@
-"""Wiki の検索の経路（#4941・#4986・#5036・#5044）を、合成の案内と決定論のスタブで確かめる。
+"""Wiki の検索の経路（#4941・#4986・#5044・#5731）を、合成の案内と決定論のスタブで確かめる。
 
 DB・外部モデルは使わない。
 """
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import BaseModel
 
 from app.clients import oci_enterprise_ai
 from app.clients.wiki_store import WikiScope, WikiStore
@@ -18,8 +18,7 @@ from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
 from app.rag.cross_references import reference_name_key
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
-from app.rag.wiki_navigation import section_frontier
-from app.rag.wiki_retrieval import ModelPlannedWikiRetriever, WikiRetriever, WikiSourceChanged
+from app.rag.wiki_retrieval import WikiRetriever, WikiSourceChanged
 from app.schemas.search import RetrievedChunk
 
 QUESTION = "合成の手続の条件を教えて"
@@ -84,6 +83,12 @@ class Store:
 
         # resolve で決めた範囲（後の読取がこれだけを受け取ることを確かめる。#5499）。
         self.scope: WikiScope | None = None
+        # 索引（ベクトル検索・全文検索）の順位の先頭に置く単位。無ければ登録の順。
+        self.roots: list[str] = []
+
+    def _ranked(self) -> list[WikiPage]:
+        first = [self.by_id[uid] for uid in self.roots]
+        return [*first, *(p for uid, p in self.by_id.items() if uid not in self.roots)]
 
     def _scoped(self, scope: WikiScope) -> None:
         assert scope is self.scope, "範囲は resolve の結果だけで読む"
@@ -137,7 +142,8 @@ class Store:
     async def pages(self, scope: WikiScope, **kwargs: Any) -> list[WikiPage]:
         self._scoped(scope)
         self.calls.append(("pages", {k: v for k, v in kwargs.items() if k != "query_vector"}))
-        values = list(self.by_id.values())
+        scoped = kwargs.get("document_ids") is not None or kwargs.get("unit_ids") is not None
+        values = list(self.by_id.values()) if scoped else self._ranked()
         if kwargs.get("document_ids") is not None:
             values = [p for p in values if p.unit.document_id in kwargs["document_ids"]]
         if kwargs.get("unit_ids") is not None:
@@ -149,8 +155,8 @@ class Store:
         self.calls.append(("text_rankings", (expression, tuple(kwargs.get("document_ids") or ()))))
         documents = kwargs.get("document_ids")
         return [
-            (p.unit.document_id, uid)
-            for uid, p in self.by_id.items()
+            (p.unit.document_id, p.unit.unit_id)
+            for p in self._ranked()
             if documents is None or p.unit.document_id in documents
         ]
 
@@ -172,37 +178,8 @@ class Store:
         ]
 
 
-class Llm:
-    def __init__(self, files: list[str], units: list[str] = (), sections: int = 0) -> None:  # type: ignore[assignment]
-        self.roots: list[str] | None = None
-        self.files, self.units, self.sections = files, list(units), sections
-        self.inputs: list[dict[str, Any]] = []
-
-    async def generate(self, prompt: str, data: str, **kwargs: Any) -> str:
-        payload = json.loads(data)
-        self.inputs.append(payload)
-        if "files" in payload:
-            handles = {row["title"]: row["document_id"] for row in payload["files"]}
-            return json.dumps(
-                {
-                    "document_ids": [handles[t] for t in self.files],
-                    "search_expressions": ["合成の表現"],
-                }
-            )
-        units = {u["context"]: u["unit_id"] for u in payload["units"]}
-        return json.dumps(
-            {
-                "root_unit_ids": None
-                if self.roots is None
-                else [units[f"{name} の案内"] for name in self.roots],
-                "unit_ids": [units[f"{name} の案内"] for name in self.units],
-                "section_ids": [s["section_id"] for s in payload["sections"][: self.sections]],
-            }
-        )
-
-
 def retriever(
-    store: Store, llm: Llm | None = None, *, enabled: bool = True, settings: Settings | None = None
+    store: Store, *, enabled: bool = True, settings: Settings | None = None
 ) -> WikiRetriever:
     profile = SimpleNamespace(
         status="ACTIVE",
@@ -221,9 +198,16 @@ def retriever(
         async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
             return [[0.1] * 4 for _ in texts]
 
-    if llm is None:
-        return WikiRetriever(settings or Settings(), Oracle(), GenAi(), store=store)  # type: ignore[arg-type]
-    return ModelPlannedWikiRetriever(settings or Settings(), Oracle(), GenAi(), llm, store=store)  # type: ignore[arg-type]
+    return WikiRetriever(settings or Settings(), Oracle(), GenAi(), store=store)  # type: ignore[arg-type]
+
+
+def rooted(store: Store, *roots: str, **settings: Any) -> WikiRetriever:
+    """``roots`` の単位だけを索引の上位（辿りの起点）にした検索の経路。"""
+    store.roots = list(roots)
+    return retriever(store, settings=Settings(rag_wiki_selected_units=len(roots), **settings))
+
+
+A1, A2 = "doc-a-a1", "doc-a-a2"
 
 
 @pytest.mark.asyncio
@@ -250,7 +234,6 @@ async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
         QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
     )
 
-    assert result.trace["model_calls"] == 0
     assert result.trace["selected_documents"] == 2
     assert result.trace["source_chunk_ids_by_origin"] == {
         "selected": ["doc-a-a2-chunk", "doc-b-b1-chunk"],
@@ -273,46 +256,40 @@ async def test_empty_rankings_do_not_reopen_documents_from_the_catalog(
     result = await retriever(store).search(QUESTION, profile_id="p", filters={}, timeout=None)
 
     assert result.trace["catalog_documents"] == 2 and result.trace["candidate_units"] == 0
-    assert result.chunks == () and result.trace["model_calls"] == 0
+    assert result.chunks == ()
     assert all("document_ids" not in call.kwargs for call in pages.await_args_list)
     rankings.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_profile_without_wiki_search_calls_nothing() -> None:
-    store, llm = Store(PAGES), Llm([])
-    result = await retriever(store, llm, enabled=False).search(
+    store = Store(PAGES)
+    result = await retriever(store, enabled=False).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
-    assert result.trace == {"status": "profile_disabled", "model_calls": 0}
-    assert store.calls == [] and llm.inputs == []
+    assert result.trace == {"status": "profile_disabled"}
+    assert store.calls == []
 
 
 @pytest.mark.asyncio
-async def test_no_ready_wiki_returns_not_ready_without_model_calls() -> None:
-    store, llm = Store([]), Llm([])
-    result = await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
-    assert result.trace["status"] == "not_ready" and llm.inputs == []
+async def test_no_ready_wiki_returns_not_ready() -> None:
+    result = await retriever(Store([])).search(QUESTION, profile_id="p", filters={}, timeout=None)
+    assert result.trace["status"] == "not_ready" and result.chunks == ()
 
 
 @pytest.mark.asyncio
-async def test_two_plans_read_units_sections_and_dependencies_with_version_attributes() -> None:
-    store, llm = Store(PAGES), Llm(["文書A"], units=["a2"])
-    result = await retriever(store, llm).search(
+async def test_ranked_roots_read_dependencies_with_version_attributes() -> None:
+    store = Store(PAGES)
+    result = await rooted(store, A1, A2).search(
         QUESTION, profile_id="p", filters={"knowledge_base_id": "kb-a,kb-x"}, timeout=None
     )
 
-    assert result.trace["status"] == "ready" and result.trace["model_calls"] == 2
+    assert result.trace["status"] == "ready"
     # 有効な KB だけで探す。
     assert store.calls[0] == ("resolve", "kb-a")
     # 範囲を決めるのは最初の 1 回だけ（#5499）。
     assert [name for name, _ in store.calls].count("resolve") == 1
-    # モデルへは要求内の短い ID だけを渡す。
-    sent = json.dumps(llm.inputs, ensure_ascii=False)
-    assert "doc-a" not in sent and "doc-a-a2" not in sent
-    # 2 回目の計画にも、選んだ文書の版の属性を渡す（#5044）。
-    assert llm.inputs[1]["documents"] == [{**CATALOG[0], "document_id": "D1"}]
-    # 選んだ単位・文書の最上位の単位・案内の依存（a2 → a4）の原文を、版の属性つきで返す。
+    # 起点の単位と案内の依存（a2 → a4）の原文を、版の属性つきで返す（#5044）。
     ids = {chunk.chunk_id for chunk in result.chunks}
     assert {"doc-a-a2-chunk", "doc-a-a4-chunk"} <= ids and not any(
         i.startswith("doc-b") for i in ids
@@ -322,81 +299,20 @@ async def test_two_plans_read_units_sections_and_dependencies_with_version_attri
         chunk.metadata["source_identities"] == CATALOG[0]["source_identities"]
         for chunk in result.chunks
     )
-    # 選択の出力は読む対象だけで、未確認の点は作らせない（#5533）。
     assert "navigation_unresolved" not in result.trace
 
 
 @pytest.mark.asyncio
-async def test_selected_documents_are_read_once_and_each_expression_is_ranked_once() -> None:
-    """選んだ文書の案内は 1 回で読み、検索表現ごとの順位は全文書を 1 回で取る（#4986）。"""
-    store, llm = Store(PAGES), Llm(["文書A", "文書B"], units=["a1"])
-    await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
-    rankings = [args for name, args in store.calls if name == "text_rankings"]
-    assert rankings == [
-        (QUESTION, ()),
-        (QUESTION, ("doc-a", "doc-b")),
-        ("合成の表現", ("doc-a", "doc-b")),
-    ]
-    assert [args for name, args in store.calls if name == "pages" and args.get("document_ids")] == [
-        {"document_ids": ["doc-a", "doc-b"]}
-    ]
-
-
-@pytest.mark.asyncio
-async def test_selected_section_reads_every_unit_of_the_section() -> None:
-    store, llm = Store(PAGES), Llm(["文書A"], sections=1)
-    result = await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
-    sections = llm.inputs[1]["sections"]
-    assert sum(s["original_units"] for s in sections) == 4  # 選んだ文書の全単位を覆う
-    assert all(s["original_chars"] > 0 for s in sections)
-    assert result.trace["selected_units"] >= sections[0]["original_units"]
-
-
-@pytest.mark.asyncio
 async def test_changed_source_is_not_returned() -> None:
-    store, llm = Store(PAGES, missing={"doc-a-a4-chunk"}), Llm(["文書A"], units=["a2"])
+    store = Store(PAGES, missing={"doc-a-a4-chunk"})
     with pytest.raises(WikiSourceChanged):
-        await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
-    with pytest.raises(WikiSourceChanged):
-        await retriever(store).search(QUESTION, profile_id="p", filters={}, timeout=None)
+        await rooted(store, A2).search(QUESTION, profile_id="p", filters={}, timeout=None)
 
 
 @pytest.mark.asyncio
 async def test_current_sources_fails_when_the_profile_turns_wiki_off() -> None:
     with pytest.raises(WikiSourceChanged):
-        await retriever(Store(PAGES), Llm([]), enabled=False).current_sources("p", {}, PAGES[:1])
-
-
-def test_section_candidates_keep_direct_parent_content_apart_from_children() -> None:
-    """親に直接属する原文は子の章節と別の候補になる（#5036）。"""
-    sections = section_frontier(PAGES[:4], limit=10, ranked_ids={})
-    groups = sorted(sorted(units) for _, units, _ in sections)
-    assert groups == [["doc-a-a1"], ["doc-a-a2"], ["doc-a-a3"], ["doc-a-a4"]]
-    assert {tuple(card["path"]) for _, _, card in sections} == {
-        ("章1",),
-        ("章1", "節1"),
-        ("章1", "節2"),
-        ("章2",),
-    }
-
-
-@pytest.mark.parametrize("limit", [1, 2, 3])
-def test_section_candidates_cover_every_unit_within_the_limit(limit: int) -> None:
-    sections = section_frontier(PAGES[:4], limit=limit, ranked_ids={})
-    assert len(sections) <= limit
-    members = [uid for _, units, _ in sections for uid in units]
-    assert sorted(members) == sorted(p.unit.unit_id for p in PAGES[:4])
-    assert all(card["original_units"] == len(units) for _, units, card in sections)
-
-
-def test_section_candidates_never_mix_versions_and_reject_a_too_small_limit() -> None:
-    pages = [page("doc-a", "a1", ["章1"]), page("doc-a", "a1n", ["章1"], version="cs2"), PAGES[4]]
-    sections = section_frontier(pages, limit=3, ranked_ids={})
-    versions = {p.unit.unit_id: p.unit.chunk_set_id for p in pages}
-    assert all(len({versions[uid] for uid in units}) == 1 for _, units, _ in sections)
-    assert len(sections) == 3
-    with pytest.raises(ValueError):
-        section_frontier(pages, limit=2, ranked_ids={})
+        await retriever(Store(PAGES), enabled=False).current_sources("p", {}, PAGES[:1])
 
 
 # ---- 依存と文書をまたぐ関連の辿り（#5492） ----
@@ -428,19 +344,18 @@ async def test_outgoing_links_are_followed_up_to_the_configured_depth(
     depth: int, expected: set[str], hops: list[dict[str, int]]
 ) -> None:
     """出る向きの関連（a2 → c1）を辿り、2 段のときだけ c1 → d1 を読む。"""
-    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store = Store(LINKED)
     store.link_rows = [
         ("doc-a-a2", "doc-c-c1", "exception"),
         ("doc-c-c1", "doc-d-d1", "reference"),
     ]
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=depth)).search(
+    result = await rooted(store, A1, A2, rag_wiki_link_depth=depth).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     followed = set(_units(result)) - {"doc-a-a1", "doc-a-a2"}
     assert followed == expected
     assert result.trace["link_hops"] == hops
     assert result.trace["dependency_units"] == len(expected)
-    assert result.trace["model_calls"] == 2  # 辿るのは DB だけ
     if depth == 0:
         assert not [call for call in store.calls if call[0] == "links"]
 
@@ -448,31 +363,38 @@ async def test_outgoing_links_are_followed_up_to_the_configured_depth(
 @pytest.mark.parametrize(
     ("depth", "roots", "expected", "links_read"),
     [
-        (0, ["a2"], ["doc-a-a2"], []),
-        (1, ["a2"], ["doc-a-a2", "doc-a-a4"], [("doc-a-a2",)]),
-        (2, ["a2"], ["doc-a-a2", "doc-a-a4", "doc-b-b1"], [("doc-a-a2",), ("doc-a-a4",)]),
-        (1, ["a2", "a4"], ["doc-a-a2", "doc-a-a4", "doc-b-b1"], [("doc-a-a2", "doc-a-a4")]),
+        (0, ["doc-a-a2"], ["doc-a-a2"], []),
+        (1, ["doc-a-a2"], ["doc-a-a2", "doc-a-a4"], [("doc-a-a2",)]),
+        (
+            2,
+            ["doc-a-a2"],
+            ["doc-a-a2", "doc-a-a4", "doc-b-b1"],
+            [("doc-a-a2",), ("doc-a-a4",)],
+        ),
         (
             1,
-            ["a2", "a3"],
+            ["doc-a-a2", "doc-a-a4"],
+            ["doc-a-a2", "doc-a-a4", "doc-b-b1"],
+            [("doc-a-a2", "doc-a-a4")],
+        ),
+        (
+            1,
+            ["doc-a-a2", "doc-a-a3"],
             ["doc-a-a2", "doc-a-a3", "doc-a-a4", "doc-b-b1"],
             [("doc-a-a2", "doc-a-a3")],
         ),
         # 入る向き（#5784）: b1 の文書（文書B）を名前で参照する a4・a3 も辿る。
-        (1, ["b1"], ["doc-b-b1", "doc-a-a4", "doc-a-a3"], [("doc-b-b1",)]),
-        (1, [], [], []),
+        (1, ["doc-b-b1"], ["doc-b-b1", "doc-a-a4", "doc-a-a3"], [("doc-b-b1",)]),
     ],
 )
 @pytest.mark.asyncio
-async def test_only_question_roots_start_at_depth_zero(
+async def test_only_ranked_roots_start_at_depth_zero(
     depth: int, roots: list[str], expected: list[str], links_read: list[tuple[str, ...]]
 ) -> None:
-    # 同文書の a2 → a4、別文書への a4 → b1。全単位・章節を選択候補に残す。
+    # 同文書の a2 → a4、別文書への a4 → b1。起点は索引の上位の単位だけ。
     store = Store(PAGES)
     store.link_rows = [("doc-a-a4", "doc-b-b1", "reference"), ("doc-a-a3", "doc-b-b1", "reference")]
-    llm = Llm(["文書A", "文書B"], units=["a2", "a4", "b1"], sections=2)
-    llm.roots = roots
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=depth)).search(
+    result = await rooted(store, *roots, rag_wiki_link_depth=depth).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     assert _units(result) == expected
@@ -485,7 +407,7 @@ async def test_only_question_roots_start_at_depth_zero(
     [(1, ["doc-b-b1-chunk"]), (2, ["doc-b-b1-chunk", "doc-c-c1-chunk"])],
 )
 @pytest.mark.asyncio
-async def test_reference_target_selected_by_both_plans_keeps_its_distance(
+async def test_reference_target_among_the_candidates_keeps_its_distance(
     depth: int, link_chunks: list[str]
 ) -> None:
     store = Store(LINKED)
@@ -493,9 +415,7 @@ async def test_reference_target_selected_by_both_plans_keeps_its_distance(
         ("doc-a-a1", "doc-b-b1", "reference"),
         ("doc-b-b1", "doc-c-c1", "reference"),
     ]
-    llm = Llm(["文書A", "文書B"], units=["a1", "b1"])
-    llm.roots = ["a1"]
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=depth)).search(
+    result = await rooted(store, A1, rag_wiki_link_depth=depth).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     assert result.trace["source_chunk_ids_by_origin"] == {
@@ -508,12 +428,12 @@ async def test_reference_target_selected_by_both_plans_keeps_its_distance(
 
 @pytest.mark.asyncio
 async def test_budget_keeps_exceptions_and_prerequisites_before_references() -> None:
-    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store = Store(LINKED)
     store.link_rows = [
         ("doc-a-a2", "doc-c-c1", "reference"),
         ("doc-a-a2", "doc-d-d1", "prerequisite"),
     ]
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_max_units=2)).search(
+    result = await rooted(store, A1, A2, rag_wiki_link_max_units=2).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     followed = [uid for uid in _units(result) if uid not in {"doc-a-a1", "doc-a-a2"}]
@@ -524,7 +444,7 @@ async def test_budget_keeps_exceptions_and_prerequisites_before_references() -> 
 
 @pytest.mark.asyncio
 async def test_cycles_stop_and_each_unit_is_read_once() -> None:
-    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store = Store(LINKED)
     store.link_rows = [
         ("doc-a-a2", "doc-c-c1", "prerequisite"),
         ("doc-c-c1", "doc-a-a2", "exception"),
@@ -532,7 +452,7 @@ async def test_cycles_stop_and_each_unit_is_read_once() -> None:
         ("doc-d-d1", "doc-c-c1", "warning"),
         ("doc-d-d1", "doc-a-a2", "reference"),
     ]
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=3)).search(
+    result = await rooted(store, A1, A2, rag_wiki_link_depth=3).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     units = _units(result)
@@ -556,10 +476,10 @@ async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_b
                 ("doc-a-a2", "文書C", "通知", "reference"),
             ]
 
-    store, llm = OutOfScope(LINKED), Llm(["文書A"], units=["a2"])
-    result = await retriever(
-        store, llm, settings=Settings(rag_wiki_link_depth=1, rag_wiki_link_max_units=2)
-    ).search(QUESTION, profile_id="p", filters={}, timeout=None)
+    store = OutOfScope(LINKED)
+    result = await rooted(store, A1, A2, rag_wiki_link_depth=1, rag_wiki_link_max_units=2).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
     units = _units(result)
     assert not any(uid.startswith("doc-z") for uid in units) and "doc-c-c1" in units
     assert result.trace["missing_dependency_units"] == 0
@@ -644,17 +564,15 @@ async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> N
     """範囲（所属・権限・公開・今の保存版）の重い条件は目録の 1 回だけで評価し、後の読取は決めた
     集合だけで絞る。回答に使う原文は read_sources が今の範囲で照合し直す。"""
     oracle = SqlOracle(LINKED)
-    llm = Llm(["文書A"], units=["a2"])
 
     class GenAi:
         async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
             return [[0.1] * 4 for _ in texts]
 
-    wiki = ModelPlannedWikiRetriever(
+    wiki = WikiRetriever(
         Settings(rag_wiki_link_depth=2),
         oracle,  # type: ignore[arg-type]
         GenAi(),  # type: ignore[arg-type]
-        llm,
         store=WikiStore(oracle),  # type: ignore[arg-type]
     )
     result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
@@ -680,9 +598,9 @@ def _relations(result: Any) -> dict[str, Any]:
 @pytest.mark.asyncio
 async def test_followed_relations_reach_both_sources_with_the_other_location() -> None:
     """辿りで見た関係（#5500）は、両端の原文に、役割を持つ側と相手の文書名・章節つきで付く。"""
-    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store = Store(LINKED)
     store.link_rows = [("doc-a-a2", "doc-c-c1", "exception"), ("doc-c-c1", "doc-d-d1", "reference")]
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=1)).search(
+    result = await rooted(store, A1, A2, rag_wiki_link_depth=1).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     relations = _relations(result)
@@ -711,14 +629,13 @@ async def test_followed_relations_reach_both_sources_with_the_other_location() -
     ]
     # 段数で辿らなかった d1 は原文に入らないので、c1 → d1 の関係は載せない。
     assert relations["doc-a-a1-chunk"] is None
-    assert result.trace["model_calls"] == 2
 
 
 @pytest.mark.asyncio
 async def test_no_relations_are_attached_when_links_are_not_followed() -> None:
-    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store = Store(LINKED)
     store.link_rows = [("doc-a-a2", "doc-c-c1", "exception")]
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=0)).search(
+    result = await rooted(store, A1, A2, rag_wiki_link_depth=0).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     assert all(value is None for value in _relations(result).values())
@@ -746,9 +663,6 @@ WIKI_STAGES = [
     "Wiki: 目録の読み込み",
     "Wiki: 質問のベクトル化",
     "Wiki: 案内の候補の検索",
-    "Wiki: 読むファイルの選択（1 回目のモデル）",
-    "Wiki: 選んだファイルの案内と順位の読み込み",
-    "Wiki: 読む単位と章節の選択（2 回目のモデル）",
     "Wiki: 依存と関連の辿り",
     "Wiki: 原文の読み込み",
 ]
@@ -757,10 +671,10 @@ WIKI_STAGES = [
 @pytest.mark.asyncio
 async def test_trace_lists_the_source_chunk_ids_by_origin_and_the_stage_seconds() -> None:
     """根拠に渡した原文の chunk ID と、選んだ単位・依存・関連ごとの chunk ID を記録に残す。"""
-    store, llm = Store(LINKED), Llm(["文書A"], units=["a2"])
+    store = Store(LINKED)
     store.link_rows = [("doc-a-a2", "doc-c-c1", "exception")]
     seconds: dict[str, float] = {}
-    result = await retriever(store, llm, settings=Settings(rag_wiki_link_depth=1)).search(
+    result = await rooted(store, A1, A2, rag_wiki_link_depth=1).search(
         QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
     )
 
@@ -788,8 +702,9 @@ async def test_source_chunk_ids_follow_the_diagnostics_limit(
     from app.rag import wiki_retrieval
 
     monkeypatch.setattr(wiki_retrieval, "_SOURCE_DIAGNOSTICS_LIMIT", 1)
-    store, llm = Store(PAGES), Llm(["文書A"], units=["a2"])
-    result = await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
+    result = await rooted(Store(PAGES), A1, A2).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
     trace = result.trace
     assert trace["source_count"] > 1 and len(trace["source_chunk_ids"]) == 1
     assert all(len(ids) <= 1 for ids in trace["source_chunk_ids_by_origin"].values())
@@ -805,10 +720,9 @@ async def test_stage_seconds_keep_the_stage_that_failed() -> None:
         ) -> list[RetrievedChunk]:
             raise RuntimeError("合成の失敗")
 
-    store, llm = Broken(PAGES), Llm(["文書A"], units=["a2"])
     seconds: dict[str, float] = {}
     with pytest.raises(RuntimeError):
-        await retriever(store, llm).search(
+        await rooted(Broken(PAGES), A1, A2).search(
             QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
         )
     assert list(seconds) == WIKI_STAGES
@@ -816,106 +730,23 @@ async def test_stage_seconds_keep_the_stage_that_failed() -> None:
 
 @pytest.mark.asyncio
 async def test_profile_without_wiki_search_records_no_measurement() -> None:
-    store, llm = Store(PAGES), Llm([])
     seconds: dict[str, float] = {}
-    result = await retriever(store, llm, enabled=False).search(
+    result = await retriever(Store(PAGES), enabled=False).search(
         QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
     )
-    assert result.trace == {"status": "profile_disabled", "model_calls": 0}
+    assert result.trace == {"status": "profile_disabled"}
     assert seconds == {}
-
-
-def empty_response() -> ValueError:
-    """Enterprise AI が HTTP 200 で text も usage も無い本文を返したときの例外（#5528）。"""
-    from rag_parser_core.oci_enterprise_ai import _parse_generated_text
-
-    with pytest.raises(ValueError) as caught:
-        _parse_generated_text({"object": "response", "status": "completed", "output": []})
-    return caught.value
-
-
-class FlakyLlm(Llm):
-    """1 回目の選択（目録）の最初の ``len(failures)`` 回だけ、決めた失敗を返す。"""
-
-    def __init__(self, failures: list[Exception | str], *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.failures = list(failures)
-
-    async def generate(self, prompt: str, data: str, **kwargs: Any) -> str:
-        if "files" in json.loads(data) and self.failures:
-            self.inputs.append(json.loads(data))
-            failure = self.failures.pop(0)
-            if isinstance(failure, Exception):
-                raise failure
-            return failure
-        return await super().generate(prompt, data, **kwargs)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure",
-    [
-        pytest.param("empty", id="empty-response"),
-        pytest.param(
-            json.dumps({"document_ids": ["D99"], "search_expressions": []}),
-            id="unknown-handle",
-        ),
-        pytest.param('{"document_ids": [', id="broken-json"),
-    ],
-)
-async def test_invalid_selection_output_is_retried_with_the_same_input(failure: str) -> None:
-    """空の応答・schema に合わない出力は、同じ入力で取り直して Wiki の原文を返す（#5528）。"""
-    store = Store(PAGES)
-    llm = FlakyLlm([empty_response() if failure == "empty" else failure], ["文書A"], units=["a2"])
-    result = await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
-
-    assert result.trace["status"] == "ready" and result.chunks
-    # 取り直しも呼び出しの数に入る（1 回目の選択 2 回・2 回目の選択 1 回）。
-    assert result.trace["model_calls"] == 3
-    assert llm.inputs[0] == llm.inputs[1] and "files" in llm.inputs[0]
-
-
-@pytest.mark.asyncio
-async def test_selection_fails_after_the_retry_budget_with_the_reason() -> None:
-    """取り直しは ``RAG_LLM_MAX_RETRIES`` 回まで。使い切ると例外にし、理由を区別できる。"""
-    from app.rag.wiki_retrieval import failure_reason
-
-    store = Store(PAGES)
-    llm = FlakyLlm([empty_response() for _ in range(5)], ["文書A"])
-    with pytest.raises(ValueError) as caught:
-        await retriever(store, llm, settings=Settings(rag_llm_max_retries=2)).search(
-            QUESTION, profile_id="p", filters={}, timeout=None
-        )
-    assert len(llm.inputs) == 3
-    assert failure_reason(caught.value) == "invalid_output"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "error",
-    [
-        pytest.param(RuntimeError("合成の失敗"), id="unknown"),
-        pytest.param(TimeoutError(), id="timeout"),
-        pytest.param(ValueError("OCI Enterprise AI response error: 合成"), id="response-error"),
-    ],
-)
-async def test_other_selection_failures_are_not_retried(error: Exception) -> None:
-    store, llm = Store(PAGES), FlakyLlm([error], ["文書A"])
-    with pytest.raises(type(error)):
-        await retriever(store, llm).search(QUESTION, profile_id="p", filters={}, timeout=None)
-    assert len(llm.inputs) == 1
 
 
 def test_failure_reason_keeps_only_the_kind_and_the_schema_location() -> None:
     """記録に残す理由は種類と、schema の誤りの種類・位置だけ（入力の値・本文を入れない）。"""
-    from app.rag.wiki_models import WikiFilePlan, scoped_plan
     from app.rag.wiki_retrieval import failure_reason
 
-    schema = scoped_plan(WikiFilePlan, {"document_ids": (["D1"], 8)})
+    class Choice(BaseModel):
+        document_ids: list[Literal["D1"]]
+
     with pytest.raises(ValueError) as caught:
-        schema.model_validate_json(
-            json.dumps({"document_ids": ["合成の値"], "search_expressions": []})
-        )
+        Choice.model_validate({"document_ids": ["合成の値"]})
     reason = failure_reason(caught.value)
     assert reason == "invalid_output:literal_error@document_ids.0"
     assert "合成" not in reason
