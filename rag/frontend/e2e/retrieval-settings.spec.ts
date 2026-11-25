@@ -640,7 +640,7 @@ for (const theme of ["light", "dark"] as const) {
     const score = card.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true });
     const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
     const reset = card.getByRole("button", { name: "変更を破棄", exact: true });
-    await expect(search).toHaveValue("50");
+    await expect(search).toHaveValue("100");
     await expect(min).toHaveValue("0.2");
     await expect(score).toHaveValue("0.3");
     // rerank の後は点数の順で並べ、件数は起点数で 1 回だけ切る（#5165）。並びの比率と Top-N の欄は無い。
