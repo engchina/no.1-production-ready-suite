@@ -82,6 +82,7 @@ import { chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useAgentChatAttachments } from "@/components/chat/useAgentChatAttachments";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
+import { RunFileArtifacts } from "@/components/chat/FileArtifacts";
 import { AnswerReviewPanel } from "@/components/chat/AnswerReview";
 import { ClarificationCancelActions, ClarificationCancelNote } from "@/components/chat/ClarificationCancel";
 import { ConfirmationRecordBubble, PendingConfirmationCard } from "@/components/chat/RunConfirmation";
@@ -92,7 +93,7 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { useCapabilities } from "@/lib/permissions";
-import { answerNoticeText } from "@/lib/run-artifacts";
+import { answerNoticeText, runFileArtifacts } from "@/lib/run-artifacts";
 import { toolProgressTable } from "@/components/chat/ToolProgressTable";
 import { runProgressSteps } from "@/lib/run-history";
 import { useRunTraceProgress } from "@/lib/run-trace-progress";
@@ -1042,6 +1043,8 @@ function RunChatTurn({
   const toolTables = runToolResultTables(run);
   // 業務 Agent が記録した出力の項目（#2549）。
   const outputTable = useMemo(() => runOutputTable(run), [run]);
+  // ツールが作ったファイル（#5837）。
+  const files = useMemo(() => runFileArtifacts(run.artifacts), [run.artifacts]);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   // 回答の確認事項（回答の対応のバッジと、確かめた条件・確認待ちの質問・業務ガイド。#1286・#2361）。作成中は出さない。
   const review = ACTIVE_STATUSES.has(run.status) ? null : answerReview(run.artifacts);
@@ -1179,6 +1182,7 @@ function RunChatTurn({
             )}
           </ChatAnswerBody>
         ) : null}
+        <RunFileArtifacts runId={run.id} files={files} testId={`chat-files-${run.id}`} />
         {outputTable ? (
           <OutputResultTable data={outputTable} testId={`chat-output-${run.id}`} />
         ) : outputMissing(run) ? (

@@ -63,6 +63,8 @@ const ARTIFACT_KIND: Record<string, StatusEntry> = {
   answer: { label: "status.artifact.answer", variant: "success" },
   rag_evidence: { label: "status.artifact.rag_evidence", variant: "info" },
   structured_table: { label: "status.artifact.structured_table", variant: "info" },
+  // ツールが作ったファイル（#5837）。
+  file: { label: "status.artifact.file", variant: "info" },
   // 支援タスクの状態（Run をまたいで引き継ぐ条件・確認・根拠の参照・予算の消費。#1243）。
   support_task: { label: "status.artifact.support_task", variant: "neutral" },
   // 回答の根拠（回答の確定のときに段落ごとの根拠を残す。#2328）。

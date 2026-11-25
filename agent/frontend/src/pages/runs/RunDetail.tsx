@@ -47,6 +47,7 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { toolProgressTable } from "@/components/chat/ToolProgressTable";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { OutcomeBadge } from "@/components/chat/AnswerReview";
+import { FileArtifactItem } from "@/components/chat/FileArtifacts";
 import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { ANSWER_KIND, answerOutcome } from "@/lib/answer-review";
@@ -55,7 +56,13 @@ import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
-import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
+import {
+  FILE_ARTIFACT_KIND,
+  answerNoticeText,
+  internalRecordArtifacts,
+  runFileArtifacts,
+  userOutputArtifacts,
+} from "@/lib/run-artifacts";
 import {
   answerStructureTitles,
   structureAnswer,
@@ -392,7 +399,7 @@ export function RunDetail({
               </RunDetailSection>
             ) : null}
             {run.approvals.length ? <ApprovalsSection run={run} /> : null}
-            {outputs.length ? <ArtifactsSection artifacts={outputs} /> : null}
+            {outputs.length ? <ArtifactsSection runId={run.id} artifacts={outputs} /> : null}
             {structured ? <StructuredResultCard key={run.id} run={run} table={structured} /> : null}
           </>
         }
@@ -638,14 +645,23 @@ function auditRecordItem(artifact: Artifact): RunEventLogItem {
 }
 
 /** 利用者が使う出力（表の結果など。種類は `USER_OUTPUT_ARTIFACT_KINDS`。#2403）。元の順序で並べる。 */
-function ArtifactsSection({ artifacts }: { artifacts: Artifact[] }) {
+function ArtifactsSection({ runId, artifacts }: { runId: string; artifacts: Artifact[] }) {
   // ツールの呼び出しの回数だけ増えるので、入れ子のスクロールにせず 10 件を超えたら畳む（#4636）。
   const collapsed = useCollapsedList(artifacts);
   const listId = useId();
   return (
     <RunDetailSection title={t("run.artifacts")} description={t("run.artifactsDescription")} testId="run-artifacts-section">
       <div id={listId} className="contents">
-      {collapsed.visible.map(({ item: artifact }) => (
+      {collapsed.visible.map(({ item: artifact }) =>
+        artifact.kind === FILE_ARTIFACT_KIND ? (
+          // ツールが作ったファイル（#5837）。チャットと同じ行（ファイル名・形式・大きさ・ダウンロード）。
+          <FileArtifactItem
+            key={artifact.id}
+            runId={runId}
+            file={runFileArtifacts([artifact])[0]}
+            testId={`run-artifact-${artifact.id}`}
+          />
+        ) : (
         <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3" data-testid={`run-artifact-${artifact.id}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -665,7 +681,8 @@ function ArtifactsSection({ artifacts }: { artifacts: Artifact[] }) {
             />
           )}
         </div>
-      ))}
+        )
+      )}
       </div>
       <CollapsedListToggle state={collapsed} controls={listId} labels={collapsedListLabels()} testId="run-artifacts-toggle" />
     </RunDetailSection>
