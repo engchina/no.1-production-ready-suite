@@ -36,7 +36,6 @@ interface Screen {
 /** サイドナビの全項目（nav-config.ts の並び）。 */
 const SCREENS: Screen[] = [
   { path: "/chat" },
-  { path: "/approvals" },
   { path: "/runs" },
   { path: "/agents" },
   { path: "/skills" },
@@ -69,6 +68,8 @@ const SCREENS: Screen[] = [
  * SCREENS と同じく axe と通知の置き場所を確かめ、「ナビの全項目」の比較には含めない。
  */
 const NON_NAV_SCREENS: Screen[] = [
+  // 承認はナビに出さず、URL で開く（#5834）。
+  { path: "/approvals" },
   { path: "/account", setup: seedApiKeys },
   { path: "/account?tab=password" },
   // 自動実行の詳細（一覧の行から開く。戻る操作・基本情報の「今すぐ実行」・業務 Agent と頻度の選択欄を持つ）。

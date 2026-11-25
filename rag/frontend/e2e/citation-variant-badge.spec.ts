@@ -222,6 +222,59 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   });
 });
 
+for (const item of [
+  // 通常検索と Wiki の両方で見つけた原文: 両方の経路の印を、ベクトル・全文・Wiki・Rerank の順に並べる。
+  {
+    name: "Wiki の起点（通常検索でも見つけた原文）",
+    metadata: { vector_rank: 3, keyword_rank: 1, wiki_source: true, wiki_origin: "root", wiki_rank: 2 },
+    badges: ["Vector #3", "Keyword #1", "Wiki #2", "Rerank #1"],
+  },
+  // Wiki だけが見つけた、関係を辿った先: 順位の無い「Wiki 関連」。
+  {
+    name: "Wiki の関係を辿った先",
+    metadata: {
+      vector_rank: undefined,
+      keyword_rank: undefined,
+      wiki_source: true,
+      wiki_origin: "link",
+      rerank_rank: 2,
+    },
+    badges: ["Wiki 関連", "Rerank #2"],
+  },
+]) {
+  test(`${item.name}の根拠には、引用カードに Wiki の検索の経路の印を出す（#5831）`, async ({ page }) => {
+    await mockDatabaseReady(page);
+    await mockLocalAuth(page);
+    await installTraceRecorder(page);
+    await page.route("**/api/search-answer-profiles**", (route) =>
+      route.fulfill({
+        json: {
+          data: { items: [searchAnswerProfile], total: 1, limit: 50, offset: 0, has_next: false },
+          error_messages: [],
+          warning_messages: [],
+        },
+      })
+    );
+    await page.route("**/api/search/stream", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: searchStreamBody("doc-1:cs_recipe1:1", item.metadata),
+      })
+    );
+
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    await page.keyboard.press("Escape");
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
+    await page.getByRole("button", { name: "検索", exact: true }).click();
+
+    // 印は 1 つの並びに、決まった順で出る（無い経路の印は出ない）。
+    await expect(page.getByTestId("evidence-route-badges").locator("span")).toHaveText(item.badges);
+    await expectNoPageOverflow(page);
+  });
+}
+
 test("旧版の文書の根拠には、引用カードに旧版の印を出す（#1248）", async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);

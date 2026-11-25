@@ -60,9 +60,15 @@ function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
   const vectorRank = integerMetadataValue(chunk.metadata.vector_rank);
   const keywordRank = integerMetadataValue(chunk.metadata.keyword_rank);
   const rerankRank = integerMetadataValue(chunk.metadata.rerank_rank);
+  // Wiki の検索の経路（#5831）: 起点は Wiki のベクトル検索の順位、関係を辿った先は順位が無い。
+  // 通常検索でも見つけた原文は、両方の経路の印を並べる。
+  const wikiOrigin = chunk.metadata.wiki_origin;
+  const wikiRank = integerMetadataValue(chunk.metadata.wiki_rank);
   const badges: string[] = [];
   if (vectorRank != null) badges.push(t("search.citation.badge.vector", { rank: vectorRank }));
   if (keywordRank != null) badges.push(t("search.citation.badge.keyword", { rank: keywordRank }));
+  if (wikiOrigin === "root" && wikiRank != null) badges.push(t("search.citation.badge.wiki", { rank: wikiRank }));
+  else if (wikiOrigin === "dependency" || wikiOrigin === "link") badges.push(t("search.citation.badge.wikiRelated"));
   if (rerankRank != null) badges.push(t("search.citation.badge.rerank", { rank: rerankRank }));
   return badges;
 }

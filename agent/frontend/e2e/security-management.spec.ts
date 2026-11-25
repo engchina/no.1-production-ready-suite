@@ -77,6 +77,13 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("heading", { name: "Agent 実行担当", level: 1 })).toBeVisible();
       await expect(page.getByTestId("security-permissions-editor")).toBeVisible();
 
+      // 承認の画面はナビに出さないが（#5834）、メニュー権限は「AI 活用」の末尾に残り、ロールに付けられる。
+      const useHeading = page.getByRole("heading", { name: "AI 活用", level: 3 });
+      await expect(useHeading).toHaveCount(1);
+      await expect(
+        useHeading.locator("xpath=ancestor::div[.//input[@type='checkbox']][1]").locator("label")
+      ).toContainText(["チャット", "実行履歴", "承認"]);
+
       const agents = page.getByTestId("security-roles-agent-access-list");
       await expect(agents).toHaveAccessibleName("利用できる業務 Agent");
       await expect(page.getByTestId("security-roles-search-answer-profile-access-list")).toHaveCount(0);

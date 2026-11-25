@@ -26,8 +26,9 @@ export const AGENT_ACCESS_KEY = "agent-access";
 
 /**
  * 権限管理の機能の一覧は、左のナビ（nav-config の NAV_SECTIONS）を正本にして、グループ・並び順・名前を
- * そろえる（#567）。ナビに無い権限（画面の中の操作を許可する capability の「参照権限 / 実行権限 / 管理権限」）は、
- * ナビの後ろに backend のカタログのまま置く。
+ * そろえる（#567）。ナビに無い権限（画面の中の操作を許可する capability の「参照権限 / 実行権限 / 管理権限」と、
+ * ナビに出さない承認の画面の `menu.approvals`。#5834）は、ナビの後ろに backend のカタログのまま置く
+ * （承認は backend のグループがナビと同じ「AI 活用」なので、画面では同じグループの末尾に出る）。
  */
 export function arrangeAgentPermissions(catalog: readonly PermissionDefinition[]): PermissionDefinition[] {
   return arrangePermissionsByNav(catalog, permissionNavSections(NAV_SECTIONS, t));

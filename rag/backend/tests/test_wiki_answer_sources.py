@@ -85,6 +85,8 @@ async def test_wiki_sources_keep_the_version_attributes_and_mark_the_channel() -
     assert (metadata["wiki_origin"], metadata["wiki_rank"]) == ("root", 3)
     assert metadata["rerank"]["relevance_score"] == 0.8 and "rank" not in metadata["rerank"]
     assert state.wiki_pages == ("page",) and "c1" in state.chunks
+    # Wiki だけが見つけた原文は chunk をそのまま入れ、印は別にも持つ（#5831）。
+    assert state.wiki_only_chunks == {"c1"} and state.wiki_marks == {"c1": WIKI_MARKS}
     # 検索の経路の記録に、全体の秒と段ごとの秒を足す（#5518）。
     elapsed = state.wiki_trace.pop("elapsed_seconds")
     assert isinstance(elapsed, float) and elapsed >= 0
@@ -92,6 +94,121 @@ async def test_wiki_sources_keep_the_version_attributes_and_mark_the_channel() -
         "status": "ready",
         "stage_seconds": {"Wiki: 目録の読み込み": 0.25},
     }
+
+
+def search_hit() -> RetrievedChunk:
+    """通常検索で当たった同じ原文（ベクトル・全文の順位を持ち、Wiki の印は無い）。"""
+    return RetrievedChunk(
+        chunk_id="c1",
+        document_id="doc",
+        file_name="合成.md",
+        text="合成の原文。",
+        score=0.5,
+        metadata={"chunk_set_id": "cs", "vector_rank": 3, "keyword_rank": 1},
+    )
+
+
+WIKI_MARKS = {
+    "wiki_source": True,
+    "wiki_origin": "root",
+    "wiki_rank": 3,
+    "source_identities": [IDENTITY],
+    "wiki_relations": [RELATION],
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wiki_first", [False, True], ids=["search_first", "wiki_first"])
+async def test_same_original_keeps_the_search_ranks_and_the_wiki_marks(wiki_first: bool) -> None:
+    """通常検索と Wiki が同じ原文を見つけたら、どちらが先でも両方の経路の値を残す（#5831）。"""
+    state = _SearchState()
+    hit = search_hit()
+    if wiki_first:
+        await engine(Retriever())._wiki_sources(request(), state)
+        assert state.wiki_only_chunks == {"c1"} and "vector_rank" not in state.chunks["c1"].metadata
+        state.add_search_hit(hit)
+    else:
+        state.add_search_hit(hit)
+        await engine(Retriever())._wiki_sources(request(), state)
+    # chunk は通常検索の結果（Wiki の印を持たない）。Wiki の印は別に持つ。
+    assert state.chunks["c1"] is hit and state.wiki_only_chunks == set()
+    assert state.wiki_marks == {"c1": WIKI_MARKS}
+    # 通常検索の結果に置き換えた後は、先に入れたものを残す（他の検索と同じ）。
+    state.add_search_hit(search_hit())
+    assert state.chunks["c1"] is hit
+
+
+class EngineResult:
+    """rag_engine の回答の結果（``_outcome_from_result`` が読む属性だけ）。"""
+
+    def __init__(self, children: list[dict[str, Any]]) -> None:
+        self.evidence_items = [{"chunk_id": "p", "children": children}]
+        self.generation_trace: dict[str, Any] = {}
+        self.execution_steps: list[Any] = []
+        self.generated_queries: list[str] = []
+        self.text_search_tokens: list[str] = []
+        self.crag_attempts: list[Any] = []
+        self.envelope: dict[str, Any] = {}
+        self.external_data_items: list[Any] = []
+        self.question_type: list[str] = []
+        self.answer_text = "回答"
+
+    def __getattr__(self, name: str) -> Any:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wiki_first", [False, True], ids=["search_first", "wiki_first"])
+async def test_citation_carries_the_ranks_of_both_routes(wiki_first: bool) -> None:
+    """引用の metadata に、通常検索の順位と Wiki の由来・順位、合わせた rerank の順位を出す。
+
+    保存の形（回答の記録・会話の回答）にも残す（#5831）。
+    """
+    from app.rag.answer_engine import _outcome_from_result
+    from app.rag.stored_answer import stored_citation_metadata
+
+    state = _SearchState()
+    if not wiki_first:
+        state.add_search_hit(search_hit())
+    await engine(Retriever())._wiki_sources(request(), state)
+    if wiki_first:
+        state.add_search_hit(search_hit())
+    # Wiki だけが見つけた原文（関係を辿った先。順位は無い）。
+    state.add_wiki_chunk(
+        RetrievedChunk(
+            chunk_id="c2",
+            document_id="doc",
+            text="合成の関連の原文。",
+            score=0.0,
+            metadata={"wiki_source": True, "wiki_origin": "link"},
+        )
+    )
+    outcome = _outcome_from_result(
+        EngineResult(
+            [
+                {"chunk_id": "c1", "is_model_used": True, "rerank_score": 0.8, "rerank_rank": 1},
+                {"chunk_id": "c2", "is_model_used": False},
+            ]
+        ),
+        state,
+    )
+    both, followed = outcome.citations
+    assert {
+        key: both.metadata.get(key)
+        for key in ("vector_rank", "keyword_rank", "wiki_origin", "wiki_rank", "rerank_rank")
+    } == {
+        "vector_rank": 3,
+        "keyword_rank": 1,
+        "wiki_origin": "root",
+        "wiki_rank": 3,
+        "rerank_rank": 1,
+    }
+    assert both.metadata["wiki_relations"] == [RELATION]
+    assert followed.metadata["wiki_origin"] == "link" and "wiki_rank" not in followed.metadata
+    assert "vector_rank" not in followed.metadata
+    stored = stored_citation_metadata(both.metadata)
+    assert (stored["wiki_origin"], stored["wiki_rank"]) == ("root", 3)
+    assert stored_citation_metadata(followed.metadata)["wiki_origin"] == "link"
 
 
 @pytest.mark.asyncio

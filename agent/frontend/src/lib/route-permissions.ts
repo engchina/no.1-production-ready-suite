@@ -5,7 +5,7 @@ import {
 } from "@production-ready/system-settings";
 
 import { NAV_ITEMS } from "@/components/layout/nav-config";
-import { CAPABILITY_PERMISSIONS } from "./permissions";
+import { CAPABILITY_PERMISSIONS, MENU_PERMISSIONS } from "./permissions";
 import { APP_ROUTES } from "./routes";
 
 /**
@@ -15,8 +15,10 @@ import { APP_ROUTES } from "./routes";
  */
 export const ROUTE_PERMISSIONS: Readonly<Record<string, string>> = routePermissionMap(NAV_ITEMS);
 
-/** ナビに出さない画面（URL を直接開く管理者向けの画面）。 */
+/** ナビに出さない画面（URL を直接開く画面）。 */
 const HIDDEN_ROUTE_PERMISSIONS: Readonly<Record<string, readonly string[]>> = {
+  // 承認はナビに出さず、メニュー権限（`menu.approvals`）はそのまま route を守る（#5834）。
+  [APP_ROUTES.approvals]: [MENU_PERMISSIONS.approvals],
   // ツール一覧・ツール権限はナビに出さない管理者だけの画面。
   [APP_ROUTES.tools]: [CAPABILITY_PERMISSIONS.admin],
   [APP_ROUTES.settingsToolPolicy]: [CAPABILITY_PERMISSIONS.admin],

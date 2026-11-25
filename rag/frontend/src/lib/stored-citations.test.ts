@@ -27,6 +27,8 @@ const DIRECT_KEYS = [
   "document_superseded",
   "vector_rank",
   "keyword_rank",
+  "wiki_origin",
+  "wiki_rank",
   "rerank_rank",
   "context_role",
   "sheet_name",
