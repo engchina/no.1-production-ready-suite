@@ -30,7 +30,7 @@ NEEDED_RANK = 96
 # 同じ文書の別の chunk の融合順位。
 SIBLING_RANKS = (5, 60, 70, 80, 90)
 TOTAL = 150
-# 検索経路ごとの取得件数（RAG_RETRIEVAL_QUERY_LIMIT の上限）。
+# 検索経路ごとの取得件数（RAG_RETRIEVAL_QUERY_LIMIT の既定）。
 QUERY_LIMIT = 100
 
 

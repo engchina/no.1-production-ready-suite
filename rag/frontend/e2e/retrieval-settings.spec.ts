@@ -25,7 +25,7 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
-    await expect(page.getByText("既定は 50 件です。5～100 件で指定します。検索経路（ベクトル・全文）ごとに取得する候補の数で、取得した候補は重複を除いてすべて再ランキングに渡します。回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
+    await expect(page.getByText("既定は 100 件です。5～200 件で指定します。検索経路（ベクトル・全文）ごとに取得する候補の数で、取得した候補は重複を除いてすべて再ランキングに渡します。回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
     await page.locator('[id^="answering-retrieval-query-limit-"][id$="-hint"]').screenshot({ path: testInfo.outputPath("retrieval-query-limit-hint.png") });
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "保存期間を保存" })).toHaveCount(0);
@@ -640,7 +640,7 @@ for (const theme of ["light", "dark"] as const) {
     const score = card.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true });
     const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
     const reset = card.getByRole("button", { name: "変更を破棄", exact: true });
-    await expect(search).toHaveValue("50");
+    await expect(search).toHaveValue("100");
     await expect(min).toHaveValue("0.2");
     await expect(score).toHaveValue("0.3");
     // rerank の後は点数の順で並べ、件数は起点数で 1 回だけ切る（#5165）。並びの比率と Top-N の欄は無い。
@@ -661,7 +661,7 @@ for (const theme of ["light", "dark"] as const) {
     const rerankGroup = card.getByTestId("answering-rerank-block");
     await rerankGroup.scrollIntoViewIfNeeded();
     await rerankGroup.screenshot({ path: testInfo.outputPath("rerank-block.png") });
-    for (const invalid of ["", "4", "1.5", "101"]) {
+    for (const invalid of ["", "4", "1.5", "201"]) {
       await search.fill(invalid);
       await expect(save).toBeDisabled();
     }
@@ -674,7 +674,7 @@ for (const theme of ["light", "dark"] as const) {
     // 保存後のフォームの再作成が終わってから次の編集を始める。
     await expect(search).toBeEnabled();
     await expect(reset).toBeDisabled();
-    await expect(search).toHaveAccessibleDescription(/5～100 件/);
+    await expect(search).toHaveAccessibleDescription(/5～200 件/);
     await search.fill("80");
     await save.click();
     await expect(save).toBeDisabled();

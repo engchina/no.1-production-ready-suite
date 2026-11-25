@@ -4030,7 +4030,7 @@ def test_retrieval_thresholds_reject_invalid_without_persisting(
     assert (env_file.read_text() if env_file.exists() else "") == before
 
 
-@pytest.mark.parametrize("value", [5, 50, 100])
+@pytest.mark.parametrize("value", [5, 100, 200])
 def test_retrieval_counts_save_reload_and_preserve_other_settings(
     value: int, monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4064,7 +4064,7 @@ def test_removed_rerank_order_and_top_n_settings_are_not_exposed(
     [
         ("retrieval_query_limit", 0),
         ("retrieval_query_limit", 4),
-        ("retrieval_query_limit", 101),
+        ("retrieval_query_limit", 201),
         ("retrieval_query_limit", True),
     ],
 )
@@ -4087,7 +4087,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
         settings.rag_min_similarity,
         settings.rag_retrieval_query_limit,
         settings.rag_rerank_min_relevance_score,
-    ) == (0.2, 50, 0.3)
+    ) == (0.2, 100, 0.3)
     fields = AnsweringSettingsData.model_fields
     assert tuple(
         fields[name].default
@@ -4096,7 +4096,7 @@ def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
             "retrieval_query_limit",
             "rerank_min_relevance_score",
         )
-    ) == (0.2, 50, 0.3)
+    ) == (0.2, 100, 0.3)
     custom = settings.model_copy(
         update={
             "rag_min_similarity": 0.35,

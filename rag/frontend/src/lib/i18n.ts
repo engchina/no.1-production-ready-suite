@@ -3832,8 +3832,8 @@ export const ja = {
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.retrievalQueryLimit": "検索候補数の上限",
-  "settings.answering.retrievalQueryLimitHint": "既定は 50 件です。5～100 件で指定します。検索経路（ベクトル・全文）ごとに取得する候補の数で、取得した候補は重複を除いてすべて再ランキングに渡します。回答に使う根拠数とは異なります。",
-  "settings.answering.retrievalQueryLimitInvalid": "5～100 の整数を入力してください。",
+  "settings.answering.retrievalQueryLimitHint": "既定は 100 件です。5～200 件で指定します。検索経路（ベクトル・全文）ごとに取得する候補の数で、取得した候補は重複を除いてすべて再ランキングに渡します。回答に使う根拠数とは異なります。",
+  "settings.answering.retrievalQueryLimitInvalid": "5～200 の整数を入力してください。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
     "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各処理は有効な設定・対象資料・呼び出し方に応じて実行され、省略や繰り返しがあります。",
