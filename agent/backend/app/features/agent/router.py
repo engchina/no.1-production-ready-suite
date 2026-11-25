@@ -119,6 +119,7 @@ from app.features.agent import (
     external_writes,
     run_facts_store,
 )
+from app.features.agent.artifact_file_store import attachment_disposition
 from app.features.agent.automations import (
     Automation,
     AutomationDetail,
@@ -3239,6 +3240,34 @@ async def get_run_artifact(
         item for item in withhold_artifacts(artifacts, unreadable) if item.id == artifact_id
     )
     return ApiResponse(data=checked)
+
+
+@router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
+async def download_run_artifact(
+    run_id: str,
+    artifact_id: str,
+    request: Request,
+    _: None = Depends(require_viewer),
+) -> Response:
+    """成果物のファイル（ツールが作った .xlsx / .docx / .pptx。#5837）のダウンロード。
+
+    Run の詳細・成果物と同じ判定（`_readable_run`）を通った利用者だけに返す。ファイルの成果物で
+    ない ID・無い ID・中身が無い（保存しない構成での再起動の後など）は 404。
+    """
+    _readable_run(request, run_id)
+    try:
+        file = await run_in_threadpool(runtime_repository.read_artifact_file, run_id, artifact_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
+    return Response(
+        file.data,
+        media_type=file.mime_type,
+        headers={
+            "Content-Disposition": attachment_disposition(file.file_name),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.get("/runs/{run_id}/figure-url", response_model=ApiResponse[RunFigureUrlData])

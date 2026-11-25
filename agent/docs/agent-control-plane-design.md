@@ -555,6 +555,7 @@ memory backend は process 間共有されないため production dispatcher に
 | 対象 | memory | file | oracle_checkpoint / oracle_normalized |
 |---|---|---|---|
 | Run・業務 Agent | プロセス内 | `AGENT_RUNTIME_SNAPSHOT_PATH` の JSON | `AGENT_RUNTIME_ENTITIES`（1 件 = 1 行の JSON）と head の `AGENT_RUNTIME_CHECKPOINTS`（版・header。#1939）。normalized は監査用の `AGENT_RUNTIME_RUNS/EVENTS/STEPS/APPROVALS/ARTIFACTS` も、書いた Run の分だけ書く |
+| 成果物のファイルの中身（ツールが作った .xlsx / .docx / .pptx。#5837） | プロセス内 | プロセス内（snapshot に書かない。再起動で消える） | `AGENT_RUNTIME_ARTIFACT_FILES`（Run・成果物の ID ごとの BLOB。Run の JSON には参照とメタデータだけ） |
 | 画面・API で変えた定義（Skill・MCP 接続・ツール権限） | 保存しない | snapshot の隣の `<名前>.control-plane.json` | `AGENT_CONTROL_PLANE_ITEMS`（`ITEM_KIND` × `ITEM_ID` の JSON） |
 | 利用状況・フィードバックの集計に使う Run の事実（#794） | 保存しない（メモリの Run をその場で集計） | 保存しない（同左） | `AGENT_RUN_FACTS`（1 Run = 1 行。SQL で集計） |
 

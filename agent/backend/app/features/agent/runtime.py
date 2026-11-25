@@ -53,6 +53,7 @@ from pydantic import (
 )
 
 from app.features.agent import (
+    artifact_file_store,
     call_abort,
     external_writes,
     run_claim,
@@ -61,6 +62,15 @@ from app.features.agent import (
 )
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
 from app.features.agent.answer_data import DataReferenceError, register_data_result
+from app.features.agent.artifact_file_store import (
+    FILE_ARTIFACT_KIND,
+    FILE_RUN_CLOSED,
+    FILE_STORE_FAILED,
+    ArtifactFile,
+    ArtifactFileError,
+    checked_file,
+    stored_file,
+)
 from app.features.agent.chat_progress import note_run_span
 from app.features.agent.clarification_cancel import (
     CANCEL_METADATA_KEY,
@@ -1605,6 +1615,10 @@ class AgentRuntimeRepositoryContract(Protocol):
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
     def get_artifact(self, run_id: str, artifact_id: str) -> Artifact: ...
+    def save_file_artifact(
+        self, run_id: str, *, file_name: str, mime_type: str, data: bytes
+    ) -> Artifact: ...
+    def read_artifact_file(self, run_id: str, artifact_id: str) -> ArtifactFile: ...
     def iter_events(
         self,
         run_id: str,
@@ -1796,6 +1810,9 @@ class AgentRuntimeRepository:
         self._span_persist_scheduled = False
         self._tracking_baseline: dict[EntityKey, str] = {}
         self._runs: dict[str, RunState] = {}
+        # 成果物のファイルの中身（#5837。(Run, 成果物) → バイト列）。Run の JSON と分けて持ち、
+        # snapshot に書かない（memory / file は再起動で消える。Oracle は表に持ち、ここは使わない）。
+        self._artifact_files: dict[tuple[str, str], bytes] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
         self._agents: dict[str, AgentProfile] = {
             agent.id: _ensure_versioned(agent) for agent in _builtin_agents()
@@ -2150,6 +2167,95 @@ class AgentRuntimeRepository:
                 if artifact.id == artifact_id:
                     return _hydrate_artifact_content(artifact)
             raise KeyError(artifact_id)
+
+    # ---- 成果物のファイル（#5837。規則は `artifact_file_store`） ----
+
+    def save_file_artifact(
+        self, run_id: str, *, file_name: str, mime_type: str, data: bytes
+    ) -> Artifact:
+        """ツールが作ったファイルを Run の成果物として残す（参照とメタデータの成果物を返す）。
+
+        形式・大きさ・名前を検査し、中身を保存先に書いてから、Run に成果物（中身は持たない）を
+        足す。検査に合わない・終わった Run・保存できないときは `ArtifactFileError`（成功にしない）。
+        """
+        file = checked_file(
+            file_name, mime_type, data, max_bytes=get_settings().agent_artifact_file_max_bytes
+        )
+        with self._lock:
+            if _is_terminal(self._require_run(run_id).status):
+                raise ArtifactFileError(
+                    FILE_RUN_CLOSED, "終わった実行にはファイルを保存できません。"
+                )
+        artifact = Artifact(name=file.file_name, kind=FILE_ARTIFACT_KIND, content=file.metadata())
+        # 中身の書き込み（I/O）は lock の外で行い、書けてから Run に成果物を足す（中身の無い成果物を
+        # 残さない）。
+        try:
+            self._store_artifact_file(run_id, artifact.id, file)
+        except Exception as exc:
+            logger.warning(
+                "agent_artifact_file_store_failed", extra={"run_id": run_id}, exc_info=True
+            )
+            raise ArtifactFileError(
+                FILE_STORE_FAILED,
+                "ファイルを保存できませんでした。"
+                + (
+                    "運用設定 > システムテーブルで更新を適用してください。"
+                    if artifact_file_store.is_missing_table_error(exc)
+                    else ""
+                ),
+            ) from exc
+        with self._lock:
+            run = self._runs.get(run_id)
+            saved = run is not None and not _is_terminal(run.status)
+            if run is not None and saved:
+                run.artifacts.append(artifact)
+                self._append_event(
+                    run,
+                    RunEventType.ARTIFACT_CREATED,
+                    "ファイルを保存しました。",
+                    {"artifact_id": artifact.id, "kind": artifact.kind},
+                )
+                run.updated_at = _now()
+                self._mark_run_changed(run)
+                self._persist_locked()
+        if not saved:
+            # 書いている間に Run が終わった（取消など）。中身を残さない。
+            with suppress(Exception):
+                self._discard_artifact_file(run_id, artifact.id)
+            raise ArtifactFileError(FILE_RUN_CLOSED, "終わった実行にはファイルを保存できません。")
+        return artifact.model_copy(deep=True)
+
+    def read_artifact_file(self, run_id: str, artifact_id: str) -> ArtifactFile:
+        """成果物のファイル（ダウンロード）。ファイルの成果物でない・中身が無い・合わないなら
+        KeyError。"""
+        with self._lock:
+            content = next(
+                (
+                    deepcopy(artifact.content)
+                    for artifact in self._require_run(run_id).artifacts
+                    if artifact.id == artifact_id and artifact.kind == FILE_ARTIFACT_KIND
+                ),
+                None,
+            )
+        if content is None:
+            raise KeyError(artifact_id)
+        file = stored_file(content, self._load_artifact_file(run_id, artifact_id))
+        if file is None:
+            logger.warning(
+                "agent_artifact_file_unreadable",
+                extra={"run_id": run_id, "artifact_id": artifact_id},
+            )
+            raise KeyError(artifact_id)
+        return file
+
+    def _store_artifact_file(self, run_id: str, artifact_id: str, file: ArtifactFile) -> None:
+        self._artifact_files[(run_id, artifact_id)] = file.data
+
+    def _load_artifact_file(self, run_id: str, artifact_id: str) -> bytes | None:
+        return self._artifact_files.get((run_id, artifact_id))
+
+    def _discard_artifact_file(self, run_id: str, artifact_id: str) -> None:
+        self._artifact_files.pop((run_id, artifact_id), None)
 
     def storage_health(self) -> RuntimeStorageHealth:
         with self._lock:
@@ -4322,6 +4428,10 @@ class AgentRuntimeRepository:
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
+        # 無くなった Run の成果物のファイルは一緒に消す（#5837）。
+        self._artifact_files = {
+            key: data for key, data in self._artifact_files.items() if key[0] in self._runs
+        }
         self._agents, migrated = _migrate_loaded_agents(snapshot.agents)
         # 保存済みの snapshot に無い組み込みの業務 Agent は足す（#1573・#5342）。
         for builtin in _builtin_agents():
@@ -4549,6 +4659,30 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
 
     def _stores_changes(self) -> bool:
         return True
+
+    # 成果物のファイルの中身（#5837）は `AGENT_RUNTIME_ARTIFACT_FILES` に持つ（書いたらすぐ commit。
+    # 別のプロセス（API・dispatcher）も Run・成果物の ID で読む）。Run の行を消すときに一緒に消す
+    # （`runtime_checkpoint_store.write_entities`）。
+
+    def _store_artifact_file(self, run_id: str, artifact_id: str, file: ArtifactFile) -> None:
+        with self._connect_oracle() as connection, connection.cursor() as cursor:
+            artifact_file_store.insert_file(
+                cursor, self._oracle_checkpoint_key, run_id, artifact_id, file
+            )
+            connection.commit()
+
+    def _load_artifact_file(self, run_id: str, artifact_id: str) -> bytes | None:
+        with self._connect_oracle() as connection, connection.cursor() as cursor:
+            return artifact_file_store.read_file(
+                cursor, self._oracle_checkpoint_key, run_id, artifact_id
+            )
+
+    def _discard_artifact_file(self, run_id: str, artifact_id: str) -> None:
+        with self._connect_oracle() as connection, connection.cursor() as cursor:
+            artifact_file_store.delete_file(
+                cursor, self._oracle_checkpoint_key, run_id, artifact_id
+            )
+            connection.commit()
 
     def trace_body_namespace(self) -> str | None:
         return self._oracle_checkpoint_key

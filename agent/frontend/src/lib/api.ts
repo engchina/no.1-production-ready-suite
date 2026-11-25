@@ -2235,6 +2235,9 @@ export const agentApi = {
     request<{ artifacts: Artifact[] }>(`/api/runs/${runId}/artifacts`),
   getRunArtifact: (runId: string, artifactId: string) =>
     request<Artifact>(`/api/runs/${runId}/artifacts/${artifactId}`),
+  /** 成果物のファイル（#5837）。Cookie セッションで取得する（リンクの直打ちにしない）。 */
+  downloadRunArtifactFile: (runId: string, artifactId: string) =>
+    requestBlob(`/api/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/download`),
   cancelRun: (runId: string) =>
     requestRun(`/api/runs/${runId}/cancel`, { method: "POST" }),
   resumeRun: (runId: string) =>

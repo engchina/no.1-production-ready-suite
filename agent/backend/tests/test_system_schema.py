@@ -27,6 +27,7 @@ from security_support import ProductionAuth, client, enable_production_auth, log
 
 import app.features.settings.system_tables as system_tables_api
 from app.cli import agent_system_schema
+from app.features.agent.artifact_file_store import ARTIFACT_FILE_TABLE
 from app.security.permissions import ALL_PERMISSION_CODES, permission_for_route
 from app.security.service import set_security_service
 from app.system_schema import (
@@ -34,6 +35,7 @@ from app.system_schema import (
     CONTROL_PLANE_STATEMENTS,
     CONTROL_STATEMENTS,
     CONTROL_TABLE,
+    DOMAIN_STATEMENTS,
     DOMAIN_TABLES,
     MANAGED_COLUMNS,
     MANAGED_FOREIGN_KEYS,
@@ -47,6 +49,7 @@ from app.system_schema import (
     RUN_FACTS_DATA_TOOL_STATEMENTS,
     RUN_FACTS_SIGNAL_STATEMENTS,
     RUN_FACTS_STATEMENTS,
+    RUNTIME_ARTIFACT_FILE_STATEMENTS,
     RUNTIME_CHECKPOINT_VERSION_STATEMENTS,
     RUNTIME_STATEMENTS,
     SystemSchemaError,
@@ -394,6 +397,8 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
         "AGENT_RUNTIME_STEPS",
         "AGENT_RUNTIME_APPROVALS",
         "AGENT_RUNTIME_ARTIFACTS",
+        # Run の成果物のファイルの中身（#5837）。
+        "AGENT_RUNTIME_ARTIFACT_FILES",
         "AGENT_CONTROL_PLANE_ITEMS",
         # 利用状況・フィードバックの集計に使う Run の事実（#794）。
         "AGENT_RUN_FACTS",
@@ -437,6 +442,18 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     for statement in (backup, move_runs, move_agents, header):
         # 移す前の形の行だけ（もう一度当てても変えない）。
         assert "JSON_VALUE(c.SNAPSHOT_JSON, '$.storage') IS NULL" in statement
+    # 成果物のファイルの中身（#5837）は表を足すだけ（データを消さない・保存済みのデータを書き換え
+    # ない）。006 の checksum を変えないよう RUNTIME_STATEMENTS とは別に持ち、未初期化の DB は
+    # 正本の DDL の同じ CREATE TABLE で作る。
+    migration_018 = next(item for item in MIGRATIONS if item.name.startswith("20261125_018"))
+    assert migration_018 is MIGRATIONS[-1]
+    assert migration_018.statements == RUNTIME_ARTIFACT_FILE_STATEMENTS
+    assert not migration_018.destructive and not migration_018.rewrites
+    [artifact_files] = migration_018.statements
+    assert artifact_files in DOMAIN_STATEMENTS and artifact_files not in RUNTIME_STATEMENTS
+    assert f"CREATE TABLE {ARTIFACT_FILE_TABLE}" in artifact_files
+    assert "CONTENT BLOB NOT NULL" in artifact_files
+    assert "PRIMARY KEY (CHECKPOINT_KEY, RUN_ID, ARTIFACT_ID)" in artifact_files
     # 既存の DB には migration 007 で Run の事実のテーブルと索引を足す（#794）。
     migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
     # 007 の DDL は適用済みの checksum を変えないよう、列を足す前の形で固定する（#1822）。

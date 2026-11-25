@@ -1,6 +1,9 @@
 import type { Artifact } from "@/lib/api";
 import { ANSWER_KIND } from "@/lib/answer-review";
 
+/** ファイルの成果物（#5837。backend の `artifact_file_store.FILE_ARTIFACT_KIND`）。 */
+export const FILE_ARTIFACT_KIND = "file";
+
 /**
  * 実行の成果物の分け方（#2403）。
  *
@@ -14,7 +17,44 @@ import { ANSWER_KIND } from "@/lib/answer-review";
 export const USER_OUTPUT_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
   // 表の結果（NL2SQL のツールの結果など。SQL と表・CSV のダウンロード）。
   "structured_table",
+  // ツールが作ったファイル（ダウンロードのボタン）。
+  FILE_ARTIFACT_KIND,
 ]);
+
+/** ファイルの形式（backend の `FILE_ARTIFACT_EXTENSIONS` と同じ 3 つ。それ以外は `other`）。 */
+export type FileArtifactType = "xlsx" | "docx" | "pptx" | "other";
+
+const FILE_ARTIFACT_TYPES: Record<string, FileArtifactType> = {
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+};
+
+/** ファイルの成果物の表示に使う値（中身は成果物に無い。ダウンロードの API で取る）。 */
+export interface RunFileArtifact {
+  id: string;
+  fileName: string;
+  type: FileArtifactType;
+  /** 大きさ（バイト。記録の無いものは null）。 */
+  sizeBytes: number | null;
+}
+
+/** Run が作ったファイルの成果物（元の順序）。 */
+export function runFileArtifacts(
+  artifacts: readonly Pick<Artifact, "id" | "kind" | "name" | "content">[]
+): RunFileArtifact[] {
+  return artifacts
+    .filter((artifact) => artifact.kind === FILE_ARTIFACT_KIND)
+    .map((artifact) => {
+      const { file_name: fileName, mime_type: mimeType, size_bytes: sizeBytes } = artifact.content;
+      return {
+        id: artifact.id,
+        fileName: typeof fileName === "string" && fileName ? fileName : artifact.name,
+        type: (typeof mimeType === "string" && FILE_ARTIFACT_TYPES[mimeType]) || "other",
+        sizeBytes: typeof sizeBytes === "number" && Number.isFinite(sizeBytes) ? sizeBytes : null,
+      };
+    });
+}
 
 /**
  * 最終回答に付けた回答の注意書き（#2405。`answer` の成果物の `notice`）。付けていない回答・古い Run は null。
