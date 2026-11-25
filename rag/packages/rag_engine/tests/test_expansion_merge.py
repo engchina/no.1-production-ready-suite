@@ -209,3 +209,52 @@ def test_answer_context_does_not_rerank_expansions_and_keeps_them_after_threshol
     assert context.expansion_candidates == (expansion,)
     # 検索拡張は rerank・下限・top_k の切りの後に、切った起点（rerank の後の順）から 1 回だけ集める（#5389）。
     assert calls == ["rerank", ("expand", ["run:c0"], ["run:c0", "run:c1", "run:c2"])]
+
+
+def test_independent_roots_join_the_expansion_anchors_only_for_the_chat_main_search(monkeypatch):
+    """独立の経路（Wiki）の起点は、チャットの主の検索の検索拡張の起点に入る（#5839）。
+
+    辿った単位は起点にしない。通常検索の起点と重なる起点は足さない。指定の無い検索（RAG 検索・補いの検索）は
+    独立の経路の結果を読まない。
+    """
+    from rag_engine import dependencies
+
+    records = [child(f"c{i}", i, f"合成本文 {i}", "C.txt", f"p{i}") for i in range(2)]
+    parents = [parent(f"p{i}", i, f"合成本文 {i}", "C.txt") for i in range(2)]
+    anchors_seen = []
+    waited = []
+
+    def sources():
+        waited.append(True)
+        return [
+            SimpleNamespace(chunk_uid="w-root", metadata={"wiki_origin": "root"}),
+            SimpleNamespace(chunk_uid="run:c0", metadata={"wiki_origin": "root"}),
+            SimpleNamespace(chunk_uid="w-followed", metadata={"wiki_origin": "dependency"}),
+        ]
+
+    monkeypatch.setattr(
+        a,
+        "search_adb_hybrid_chunks",
+        lambda **_: SimpleNamespace(child_chunks=records, all_chunks=[*records, *parents]),
+    )
+    monkeypatch.setattr(a, "injected_search_expansions", lambda *, anchors, **_: anchors_seen.append(list(anchors)) or [])
+    monkeypatch.setattr(dependencies, "injected_additional_sources", sources)
+    monkeypatch.setattr(a, "_stored_chunk_answer_record", lambda record: record)
+
+    def search(**options):
+        return a.build_adb_hybrid_answer_context(
+            "合成の質問",
+            "synthetic-run",
+            ["docling"],
+            get_settings(environ={}, dotenv_path=None),
+            top_k=1,
+            neighbor_child_count=0,
+            rerank_enabled=False,
+            retrieval_scope=a.RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
+            **options,
+        )
+
+    search()
+    assert anchors_seen == [["run:c0"]] and not waited
+    search(independent_anchors=True)
+    assert anchors_seen[-1] == ["run:c0", "w-root"] and waited == [True]

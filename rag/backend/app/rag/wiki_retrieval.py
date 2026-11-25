@@ -326,7 +326,9 @@ class WikiRetriever:
         """候補を原文で rerank し、通常検索と同じ関連度の下限と起点数で起点を決める（#5831）。
 
         下限は ``RAG_RERANK_MIN_RELEVANCE_SCORE``。1 件も届かないときだけ
-        ``RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO`` を掛けて 1 回下げる。rerank が無効・失敗の
+        ``RAG_RERANK_MIN_RELEVANCE_FALLBACK_RATIO`` を掛けて 1 回下げる。下限の後に文書ごとの
+        起点数の上限（``RAG_MAX_ANCHORS_PER_DOCUMENT``。プロファイルの上書きを含む）を掛け、
+        起点数で切る（#5839）。rerank が無効・失敗の
         ときは、通常検索と同じくベクトルの順のまま起点数で切る（Wiki の経路は止めない）。
         返す値は（起点・起点の単位 ID ごとの rerank の点数・診断）。
         """
@@ -351,6 +353,19 @@ class WikiRetriever:
             ((index, score) for index, score in ranked if score >= floor),
             key=lambda item: (-item[1], item[0]),
         )
+        relevant = len(kept)
+        # 通常検索の起点と同じく、下限の後・起点数の切りの前に文書ごとの上限を掛ける
+        # （#5839。0 は上限なし）。
+        per_document = opts.rag_max_anchors_per_document
+        if per_document > 0:
+            counts: dict[str, int] = {}
+            capped = []
+            for index, score in kept:
+                document_id = candidates[index].unit.document_id
+                if counts.get(document_id, 0) < per_document:
+                    counts[document_id] = counts.get(document_id, 0) + 1
+                    capped.append((index, score))
+            kept = capped
         return (
             [candidates[index] for index, _ in kept[:top_k]],
             {candidates[index].unit.unit_id: score for index, score in kept[:top_k]},
@@ -358,7 +373,7 @@ class WikiRetriever:
                 "rerank": "completed",
                 "rerank_min_relevance_score": floor,
                 "reranked_units": len(ranked),
-                "relevant_units": len(kept),
+                "relevant_units": relevant,
             },
         )
 
