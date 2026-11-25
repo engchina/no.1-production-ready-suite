@@ -568,6 +568,7 @@ def expand_sections(
     reader: SectionReader | None = None,
     priority: Sequence[PriorityRange] = (),
     related: Sequence[str] = (),
+    block_chars: Callable[[AnswerContext], int] | None = None,
 ) -> SectionExpansionResult:
     """当たった chunk の章節から段階的に広げ、読む範囲までの原文を文脈に足す。
 
@@ -575,6 +576,10 @@ def expand_sections(
     ``deadline_remaining`` は回答の期限までの残りの秒数（無ければ None）。``priority`` は先に読む範囲
     （業務ガイドの手順の参照。#2828）。``related`` は文書ごとの上限で起点から外した候補の chunk の ID（上位の順。
     #5209）で、起点のある文書のものだけ、所有の章節を読んだ後に残りの予算で読む。
+
+    ``block_chars`` は文脈の根拠を回答の入力の形にしたときの字数（分割読取に回すかの判定と同じ数え方。#5820）。
+    渡されたとき、章節は起点の順に、足した後の根拠の全体が 1 回の生成の原文の予算（``evidence_budget_chars``）に
+    入るものだけを足す。入らない章節は 1 段ずつ下げ、所有の章節も入らなければ読まない（回答に出さない）。
     """
     limits = SectionExpansionLimits.from_settings(settings)
     start = clock() if started_at is None else started_at
@@ -684,17 +689,45 @@ def expand_sections(
     level_seconds = DEFAULT_LEVEL_SECONDS
     # 1 つの章節が入ってよい大きさ（文字数。1 文字 = 1 token。問題・プロンプト・ほかの根拠は数えない。#5812）。
     section_limit = limits.input_tokens
+    # 根拠の全体（検索の根拠と足した章節）が入ってよい大きさ（回答の入力の形の字数。1 回の生成の原文の予算。#5820）。
+    # これを超えると分割読取に回り、同じ入力でも回答の要点が回ごとに変わる。
+    total_limit = int(getattr(settings, "evidence_budget_chars", 0) or 0) or limits.input_tokens
+    room: int | None = None  # 残り（最初に章節を足すときに測る）
+    over_total: set[tuple[str, str, str]] = set()  # 入らなかった章節（残りは減るだけなので測り直さない）
+    if block_chars is not None:
+        trace["total_limit_chars"] = total_limit
+
+    def admit(outline: SectionOutline, section: SectionInfo, tree: Sequence[ContextParentEvidence]) -> bool:
+        """章節の根拠を足しても、根拠の全体が 1 回の生成の原文の予算に入るか（入れば残りを減らす）。"""
+        nonlocal room
+        if block_chars is None or not tree:
+            return True
+        key = reader.section_key(outline, section)
+        if key in over_total:
+            return False
+        if room is None:
+            room = total_limit - block_chars(context)
+        size = block_chars(_merge(replace(context, records=[], text="", evidence=(), evidence_tree=()), tree))
+        if size > room:
+            over_total.add(key)
+            return False
+        room -= size
+        trace["total_room_chars"] = room
+        return True
 
     def scope_reached() -> bool:
         """全起点で、起点から根までのどれかの章節を読んだか。"""
         return all(any(reader.section_key(chain.outline, item) in reader.read_sections for item in chain.sections) for chain in chains)
 
     def read_whole(outline: SectionOutline, section: SectionInfo, entry: dict[str, Any], added: list[ContextParentEvidence]) -> bool:
-        """章節の全体を読む（読めた・読むものが無ければ True。読取の失敗は ``failure`` に残す）。"""
+        """章節の全体を読む（読めた・読むものが無ければ True。読取の失敗は ``failure`` に、合計の上限は ``entry`` に残す）。"""
         tree = reader.read(outline, section)
         failure = reader.failures.get(reader.section_key(outline, section))
         if failure:
             entry.update(read="partial" if tree else "failed", added_parents=0)
+            return False
+        if not admit(outline, section, tree):
+            entry.update(read="over_total", added_parents=0)
             return False
         reader.mark(outline, section, tree)
         added.extend(tree)
@@ -702,7 +735,7 @@ def expand_sections(
         return True
 
     def read_owners(targets: Sequence[tuple[SectionOutline, SectionInfo, dict[str, Any]]]) -> None:
-        """所有の章節だけを、大きさが上限以下なら読む（読めなかったものは回答に出さず診断にだけ残す）。"""
+        """所有の章節だけを、大きさが上限以下で合計にも入るなら読む（読めなかったものは回答に出さず診断にだけ残す）。"""
         nonlocal current
         assert reader is not None
         added: list[ContextParentEvidence] = []
@@ -712,7 +745,7 @@ def expand_sections(
                 continue
             failure = reader.failures.get(reader.section_key(outline, section))
             if not failure:
-                entry["read"] = "over_limit"
+                entry.setdefault("read", "over_limit")
             result.omitted.append(
                 UnreadSection(
                     outline.document_id,
@@ -792,34 +825,40 @@ def expand_sections(
 
     # 起点ごとに、設定の段（1 = 所有の章節）までの章節のうち、大きさが上限以下の最も上の章節の全体を読む（#5812）。
     # 文書全体（根）も上限以下のときだけ読む。所有の章節も上限を超える起点は読まず、呼び出し元が親 → 前後で補う。
+    # 足すと根拠の全体が 1 回の生成の原文の予算を超える章節は 1 段ずつ下げ、所有の章節も入らなければ同じく読まない（#5820）。
     level_trace: dict[str, Any] = {"level": limits.max_levels, "sections": []}
     trace["levels"].append(level_trace)
     added: list[ContextParentEvidence] = []
     for chain in chains:
         candidates = chain.sections[: limits.max_levels]
-        chosen = next((index for index in range(len(candidates) - 1, -1, -1) if candidates[index].chars <= section_limit), None)
+        within = [index for index in range(len(candidates) - 1, -1, -1) if candidates[index].chars <= section_limit]
         entry: dict[str, Any] = {"seed_id": chain.seed_uid}
         level_trace["sections"].append(entry)
-        if chosen is None:
+        if not within:
             owner = candidates[0]
             entry.update(section_id=owner.section_id, title=owner.title, read="over_limit")
             continue
-        section = candidates[chosen]
-        entry.update(
-            section_id=section.section_id, title=section.title, level=chosen + 1, is_document=section.section_id == ROOT_SECTION_ID
-        )
-        if chosen + 1 < len(candidates):
-            entry["shrunk_from_level"] = len(candidates)
-        if any(reader.section_key(chain.outline, item) in reader.read_sections for item in chain.sections[chosen:]):
-            entry["read"] = "in_context"
-            continue
-        remaining_deadline = deadline_remaining()
-        left = math.inf if remaining_deadline is None else remaining_deadline
-        if left < level_seconds + limits.generation_reserve_seconds:
-            _mark_unread(result, reader, [replace(chain, position=chosen - 1)], STOP_TIME_LIMIT)
-            entry["read"] = "time_limit"
-            continue
-        if not read_whole(chain.outline, section, entry, added):
+        for chosen in within:
+            section = candidates[chosen]
+            entry.update(
+                section_id=section.section_id, title=section.title, level=chosen + 1, is_document=section.section_id == ROOT_SECTION_ID
+            )
+            if chosen + 1 < len(candidates):
+                entry["shrunk_from_level"] = len(candidates)
+            if any(reader.section_key(chain.outline, item) in reader.read_sections for item in chain.sections[chosen:]):
+                entry["read"] = "in_context"
+                break
+            remaining_deadline = deadline_remaining()
+            left = math.inf if remaining_deadline is None else remaining_deadline
+            if left < level_seconds + limits.generation_reserve_seconds:
+                _mark_unread(result, reader, [replace(chain, position=chosen - 1)], STOP_TIME_LIMIT)
+                entry["read"] = "time_limit"
+                break
+            if read_whole(chain.outline, section, entry, added):
+                result.levels = max(result.levels, chosen + 1)
+                break
+            if entry["read"] == "over_total":
+                continue  # 1 段下の章節で確かめる
             result.unread.append(
                 UnreadSection(
                     chain.outline.document_id,
@@ -829,7 +868,8 @@ def expand_sections(
                     section.page_start,
                 )
             )
-        result.levels = max(result.levels, chosen + 1)
+            result.levels = max(result.levels, chosen + 1)
+            break
     if added:
         current = _merge(current, added)
         level_trace["added_parents"] = len(added)
@@ -837,8 +877,8 @@ def expand_sections(
         return finish(STOP_TIME_LIMIT)
     if result.unread:
         return finish(STOP_PARTIAL)
-    # 所有の章節も 1/2 を超えた起点は、章節ではなく親 → 前後で補う（回答に出さない）。
-    over = any(entry.get("read") == "over_limit" for entry in level_trace["sections"])
+    # 所有の章節も 1/2 を超えた起点・合計に入らなかった起点は、章節ではなく親 → 前後で補う（回答に出さない）。
+    over = any(entry.get("read") in {"over_limit", "over_total"} for entry in level_trace["sections"])
     return finish(STOP_TOKEN_BUDGET if over else STOP_SCOPE_READ)
 
 
