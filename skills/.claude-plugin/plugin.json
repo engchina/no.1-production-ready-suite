@@ -1,8 +1,8 @@
 {
   "name": "production-ready-skills",
   "displayName": "Production Ready Skills",
-  "version": "0.3.0",
-  "description": "RAG 検索・RAG チャット・RAG 検索＋データ・RAG チャット＋データ・構造化データ照会の 5 つのスキル。MCP サーバー rag（Production Ready RAG）と nl2sql（Production Ready NL2SQL）に接続して使う。Excel 作成（xlsx-create）は Production Ready Agent の業務 Agent 専用で、外部の Agent では使えない。",
+  "version": "0.4.0",
+  "description": "RAG 検索・RAG チャット・RAG 検索＋データ・RAG チャット＋データ・構造化データ照会の 5 つのスキル。MCP サーバー rag（Production Ready RAG）と nl2sql（Production Ready NL2SQL）に接続して使う。Excel 作成（xlsx-create）と Word 作成（docx-create）は Production Ready Agent の業務 Agent 専用で、外部の Agent では使えない。",
   "author": {
     "name": "engchina"
   },

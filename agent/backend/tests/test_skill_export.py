@@ -142,10 +142,18 @@ def test_builtin_skill_export_is_the_same_as_the_skills_folder(
     assert skills_ref.validate(folder) == []
 
 
-def test_third_party_based_skill_keeps_its_license_in_the_folder_and_the_export() -> None:
-    """第三者の資料を元にした組み込みのスキル（Excel 作成。#5837）は、許諾の全文と出典・変更点を
-    フォルダに持ち、frontmatter の `license` に書き、書き出しにも入れる（Apache License 2.0）。"""
-    source = BUILTIN_SKILLS_DIR / "xlsx-create"
+@pytest.mark.parametrize(
+    ("skill_id", "origin"),
+    [("xlsx-create", "skills/xlsx/SKILL.md"), ("docx-create", "skills/docx/SKILL.md")],
+    ids=["xlsx-create", "docx-create"],
+)
+def test_third_party_based_skill_keeps_its_license_in_the_folder_and_the_export(
+    skill_id: str, origin: str
+) -> None:
+    """第三者の資料を元にした組み込みのスキル（Excel 作成・Word 作成。#5837）は、許諾の全文と
+    出典・変更点をフォルダに持ち、frontmatter の `license` に書き、書き出しにも入れる
+    （Apache License 2.0）。"""
+    source = BUILTIN_SKILLS_DIR / skill_id
     license_text = (source / "LICENSE.txt").read_text(encoding="utf-8")
     notice = (source / "NOTICE").read_text(encoding="utf-8")
     assert "Apache License" in license_text and "Version 2.0, January 2004" in license_text
@@ -153,14 +161,14 @@ def test_third_party_based_skill_keeps_its_license_in_the_folder_and_the_export(
     # 出典（repo・path・commit）と、変えたこと。
     for expected in (
         "anthropics/skills",
-        "skills/xlsx/SKILL.md",
+        origin,
         "e4bb5d960d87126ff3b3a8af1a104b7db67560ba",
         "Changes made",
     ):
         assert expected in notice, expected
     skill_md = (source / "SKILL.md").read_text(encoding="utf-8")
     assert 'license: "Apache-2.0（全文は LICENSE.txt。出典と変更点は NOTICE）"' in skill_md
-    skill = skill_registry.get("xlsx-create")
+    skill = skill_registry.get(skill_id)
     assert skill is not None
     assert {"SKILL.md", *LICENSE_FILE_NAMES} == {item.path for item in export_skill(skill).files}
 
