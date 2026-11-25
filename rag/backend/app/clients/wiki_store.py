@@ -860,37 +860,26 @@ class WikiStore:
         self,
         scope: WikiScope,
         *,
-        document_ids: Sequence[str] | None = None,
         unit_ids: Sequence[str] | None = None,
         query_vector: Sequence[float] | None = None,
         limit: int | None = None,
         min_similarity: float | None = None,
-        exclude_document_ids: Sequence[str] = (),
     ) -> list[WikiPage]:
         """``resolve`` で決めた範囲の案内。
 
         ``query_vector`` と ``limit`` があれば近い順の上位だけを、ID の順位を決めてから読む。
         ``min_similarity`` があれば、近い順に取った上位からコサイン類似度がそれ未満の単位を外す
         （通常検索のベクトル検索と同じ順。近傍の検索の中には条件を置かない。#5831）。
-        ``exclude_document_ids`` の文書は除く（文書をまたぐ関連の候補。#5492）。
         """
         if not scope.sources:
             return []
         where, binds = _scoped_where(scope)
-        if exclude_document_ids:
-            clause, added = _oracle_in_predicate("c.document_id", "wiki_skip", exclude_document_ids)
-            where += f" AND NOT ({clause})"
+        if unit_ids is not None:
+            if not unit_ids:
+                return []
+            clause, added = _oracle_in_predicate("p.unit_id", "wiki_unit", unit_ids)
+            where += " AND " + clause
             binds.update(added)
-        for column, prefix, values in (
-            ("c.document_id", "wiki_doc", document_ids),
-            ("p.unit_id", "wiki_unit", unit_ids),
-        ):
-            if values is not None:
-                if not values:
-                    return []
-                clause, added = _oracle_in_predicate(column, prefix, values)
-                where += " AND " + clause
-                binds.update(added)
         if query_vector is not None and limit is not None:
             nearest = f"""SELECT p.unit_id,p.document_id,
                 VECTOR_DISTANCE(p.embedding,:wiki_vector,COSINE) AS wiki_distance
@@ -915,93 +904,3 @@ class WikiStore:
     async def _hydrate(self, ids: list[str], scope: WikiScope) -> list[WikiPage]:
         found = {page.unit.unit_id: page for page in await self.pages(scope, unit_ids=ids)}
         return [found[uid] for uid in ids if uid in found]
-
-    # ---- 別の文書への参照（#5784） ----
-
-    async def document_headings(self, scope: WikiScope) -> dict[str, list[str]]:
-        """範囲の文書ごとの先頭の見出し（文書名の照合に使う。題名かどうかは照合の側が決める）。"""
-        if not scope.sources:
-            return {}
-        where, binds = _scoped_where(scope)
-        rows = await self.oracle._fetch_all(
-            f"""SELECT DISTINCT p.document_id,
-            JSON_VALUE(p.page_json,'$.unit.section_path[0]') AS heading
-            {WIKI_SCOPED_FROM} WHERE {where}""",
-            binds,
-        )
-        found: dict[str, list[str]] = {}
-        for row in rows:
-            if row.get("heading"):
-                found.setdefault(str(row["document_id"]), []).append(str(row["heading"]))
-        return found
-
-    async def references(
-        self, unit_ids: Sequence[str], scope: WikiScope
-    ) -> list[tuple[str, str, str, str]]:
-        """単位の参照（単位 ID・参照先の名前・章節の表記・関係）。参照元が範囲の案内のものだけ。"""
-        if not unit_ids or not scope.sources:
-            return []
-        where, binds = _scoped_where(scope)
-        clause, added = _oracle_in_predicate("p.unit_id", "wiki_ref_unit", unit_ids)
-        rows = await self.oracle._fetch_all(
-            f"""SELECT r.unit_id,r.target_name,r.target_section,r.relation
-            {WIKI_SCOPED_FROM} JOIN rag_wiki_references r ON r.page_id=p.page_id
-            WHERE {where} AND {clause} ORDER BY r.unit_id,r.ordinal""",
-            {**binds, **added},
-        )
-        return [
-            (
-                str(row["unit_id"]),
-                str(row["target_name"]),
-                str(row.get("target_section") or ""),
-                str(row["relation"]),
-            )
-            for row in rows
-        ]
-
-    async def referencing(
-        self,
-        keys: Sequence[str],
-        scope: WikiScope,
-        *,
-        exclude_document_ids: Sequence[str] = (),
-        contained_in: Sequence[str] = (),
-    ) -> list[tuple[str, str, str, str]]:
-        """参照先の名前の比較形が ``keys`` に入るか、``contained_in`` のどれかに含まれる、範囲の中の
-        参照（参照元の単位 ID・文書 ID・比較形・関係）。参照元を逆に引く（#5784・#5795）。
-
-        ``contained_in`` は文書の題名・見出しの別名で、種類の呼び名で書いた参照の候補を拾う。
-        どの文書に当たるかは呼び出し側が ``DocumentNames`` で確かめる。"""
-        if not (keys or contained_in) or not scope.sources:
-            return []
-        where, binds = _scoped_where(scope)
-        clauses = []
-        if keys:
-            clause, added = _oracle_in_predicate("r.target_key", "wiki_ref_key", list(keys))
-            clauses.append(clause)
-            binds.update(added)
-        for index, alias in enumerate(dict.fromkeys(contained_in)):
-            clauses.append(f"INSTR(:wiki_ref_alias{index},r.target_key)>0")
-            binds[f"wiki_ref_alias{index}"] = alias
-        where += " AND (" + " OR ".join(clauses) + ")"
-        if exclude_document_ids:
-            skip, skipped = _oracle_in_predicate(
-                "p.document_id", "wiki_ref_skip", exclude_document_ids
-            )
-            where += f" AND NOT ({skip})"
-            binds.update(skipped)
-        rows = await self.oracle._fetch_all(
-            f"""SELECT r.unit_id,r.document_id,r.target_key,r.relation
-            {WIKI_SCOPED_FROM} JOIN rag_wiki_references r ON r.page_id=p.page_id
-            WHERE {where} ORDER BY r.document_id,r.unit_id,r.ordinal""",
-            binds,
-        )
-        return [
-            (
-                str(row["unit_id"]),
-                str(row["document_id"]),
-                str(row["target_key"]),
-                str(row["relation"]),
-            )
-            for row in rows
-        ]

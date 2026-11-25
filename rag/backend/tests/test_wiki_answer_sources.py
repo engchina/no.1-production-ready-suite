@@ -180,7 +180,7 @@ async def test_citation_carries_the_ranks_of_both_routes(wiki_first: bool) -> No
             document_id="doc",
             text="合成の関連の原文。",
             score=0.0,
-            metadata={"wiki_source": True, "wiki_origin": "link"},
+            metadata={"wiki_source": True, "wiki_origin": "dependency"},
         )
     )
     outcome = _outcome_from_result(
@@ -204,11 +204,12 @@ async def test_citation_carries_the_ranks_of_both_routes(wiki_first: bool) -> No
         "rerank_rank": 1,
     }
     assert both.metadata["wiki_relations"] == [RELATION]
-    assert followed.metadata["wiki_origin"] == "link" and "wiki_rank" not in followed.metadata
+    assert followed.metadata["wiki_origin"] == "dependency"
+    assert "wiki_rank" not in followed.metadata
     assert "vector_rank" not in followed.metadata
     stored = stored_citation_metadata(both.metadata)
     assert (stored["wiki_origin"], stored["wiki_rank"]) == ("root", 3)
-    assert stored_citation_metadata(followed.metadata)["wiki_origin"] == "link"
+    assert stored_citation_metadata(followed.metadata)["wiki_origin"] == "dependency"
 
 
 @pytest.mark.asyncio

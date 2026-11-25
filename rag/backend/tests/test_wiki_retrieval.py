@@ -16,8 +16,14 @@ from app.clients import oci_enterprise_ai
 from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
-from app.rag.cross_references import reference_name_key
-from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
+from app.rag.wiki_models import (
+    WikiContext,
+    WikiDependency,
+    WikiPage,
+    WikiReference,
+    WikiUnit,
+    fingerprint,
+)
 from app.rag.wiki_retrieval import WikiRetriever, WikiSourceChanged
 from app.schemas.search import RetrievedChunk
 
@@ -25,9 +31,18 @@ QUESTION = "合成の手続の条件を教えて"
 
 
 def page(
-    doc: str, name: str, path: list[str], *, deps: tuple[str, ...] = (), version: str = "cs"
+    doc: str,
+    name: str,
+    path: list[str],
+    *,
+    deps: tuple[str | tuple[str, str], ...] = (),
+    refs: tuple[tuple[str, str, str], ...] = (),
+    version: str = "cs",
 ) -> WikiPage:
-    text = f"{name} の合成の本文。"
+    """合成の案内。``deps`` は同じ文書の依存（単位 ID。関係を付けるなら（単位 ID, 関係））、
+    ``refs`` は別の文書への参照（文書名, 章節の表記, 関係）で、表記を原文にも書く。"""
+    mentions = "".join(f"「{document}」の「{section}」を参照。" for document, section, _ in refs)
+    text = f"{name} の合成の本文。{mentions}"
     unit = WikiUnit(
         unit_id=f"{doc}-{name}",
         document_id=doc,
@@ -39,14 +54,24 @@ def page(
         text=text,
         source_hash=fingerprint(text),
     )
+    dependencies = [(dep, "exception") if isinstance(dep, str) else dep for dep in deps]
     return WikiPage(
         unit=unit,
         navigation=WikiContext(
             unit_id=unit.unit_id,
             context=f"{name} の案内",
             possible_questions=[],
-            dependencies=[WikiDependency(unit_id=dep, relation="exception") for dep in deps],
+            dependencies=[
+                WikiDependency.model_validate({"unit_id": uid, "relation": relation})
+                for uid, relation in dependencies
+            ],
             unresolved=[],
+            references=[
+                WikiReference.model_validate(
+                    {"document": document, "section": section, "relation": relation}
+                )
+                for document, section, relation in refs
+            ],
         ),
         input_fingerprint="v",
     )
@@ -78,9 +103,6 @@ class Store:
         self.by_id = {p.unit.unit_id: p for p in pages}
         self.missing = missing
         self.calls: list[tuple[str, Any]] = []
-        # 文書をまたぐ関連（起点, 終点, 関係）。両端が今の範囲で読めるものだけを返す（#5492）。
-        self.link_rows: list[tuple[str, str, str]] = []
-
         # resolve で決めた範囲（後の読取がこれだけを受け取ることを確かめる。#5499）。
         self.scope: WikiScope | None = None
         # 索引（ベクトル検索）の順位の先頭に置く単位。無ければ登録の順。
@@ -92,40 +114,6 @@ class Store:
 
     def _scoped(self, scope: WikiScope) -> None:
         assert scope is self.scope, "範囲は resolve の結果だけで読む"
-
-    def _reference(self, target: str) -> tuple[str, str]:
-        """関連の終点を、文書の名前と章節の表記の参照にする（#5784。参照先は名前で決まる）。"""
-        unit = self.by_id[target].unit if target in self.by_id else None
-        document = target.rsplit("-", 1)[0] if unit is None else unit.document_id
-        title = next((row["title"] for row in CATALOG if row["document_id"] == document), document)
-        return title, unit.section_path[-1] if unit and unit.section_path else ""
-
-    async def references(
-        self, unit_ids: list[str], scope: WikiScope
-    ) -> list[tuple[str, str, str, str]]:
-        self._scoped(scope)
-        self.calls.append(("links", tuple(unit_ids)))
-        return [
-            (source, *self._reference(target), relation)
-            for source, target, relation in self.link_rows
-            if source in unit_ids and source in self.by_id
-        ]
-
-    async def referencing(
-        self, keys: list[str], scope: WikiScope, **kwargs: Any
-    ) -> list[tuple[str, str, str, str]]:
-        self._scoped(scope)
-        found = []
-        for source, target, relation in self.link_rows:
-            key = reference_name_key(self._reference(target)[0])
-            if key is None or source not in self.by_id:
-                continue
-            if key in keys or any(key in alias for alias in kwargs.get("contained_in", ())):
-                found.append((source, self.by_id[source].unit.document_id, key, relation))
-        return found
-
-    async def document_headings(self, scope: WikiScope) -> dict[str, list[str]]:
-        return {}
 
     async def resolve(self, filters: dict[str, str]) -> WikiScope:
         self.calls.append(("resolve", filters["knowledge_base_id"]))
@@ -142,10 +130,7 @@ class Store:
     async def pages(self, scope: WikiScope, **kwargs: Any) -> list[WikiPage]:
         self._scoped(scope)
         self.calls.append(("pages", {k: v for k, v in kwargs.items() if k != "query_vector"}))
-        scoped = kwargs.get("document_ids") is not None or kwargs.get("unit_ids") is not None
-        values = list(self.by_id.values()) if scoped else self._ranked()
-        if kwargs.get("document_ids") is not None:
-            values = [p for p in values if p.unit.document_id in kwargs["document_ids"]]
+        values = self._ranked()
         if kwargs.get("unit_ids") is not None:
             values = [self.by_id[uid] for uid in kwargs["unit_ids"] if uid in self.by_id]
         return values[: kwargs["limit"]] if kwargs.get("limit") else values
@@ -249,7 +234,6 @@ async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
     assert result.trace["source_chunk_ids_by_origin"] == {
         "selected": ["doc-a-a2-chunk", "doc-b-b1-chunk"],
         "dependency": ["doc-a-a4-chunk"],
-        "link": [],
     }
     # 候補はベクトル検索の順位の 1 回だけで決める（全文検索は呼ばない。#5825）。
     # 起点と辿った単位の由来を原文に付ける（合わせ込みの順と画面のバッジ。#5831）。
@@ -429,9 +413,17 @@ async def test_current_sources_fails_when_the_profile_turns_wiki_off() -> None:
         await retriever(Store(PAGES), enabled=False).current_sources("p", {}, PAGES[:1])
 
 
-# ---- 依存と文書をまたぐ関連の辿り（#5492） ----
+# ---- 同じ文書の依存の辿り（#5492）。別の文書への参照は辿らない（#5841） ----
 
-LINKED = [*PAGES, page("doc-c", "c1", ["通知"]), page("doc-d", "d1", ["別表"])]
+A4, A5, A6 = "doc-a-a4", "doc-a-a5", "doc-a-a6"
+# 同じ文書の依存の鎖: a2 → a4（例外）→ a5（前提）→ a6（参照）。
+CHAINED = [
+    page("doc-a", "a1", ["章1"]),
+    page("doc-a", "a2", ["章1", "節1"], deps=(A4,)),
+    page("doc-a", "a4", ["章2"], deps=((A5, "prerequisite"),)),
+    page("doc-a", "a5", ["章3"], deps=((A6, "reference"),)),
+    page("doc-a", "a6", ["章4"]),
+]
 
 
 def _units(result: Any) -> list[str]:
@@ -440,163 +432,97 @@ def _units(result: Any) -> list[str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("depth", "expected", "hops"),
-    [
-        (0, set(), []),
-        (1, {"doc-a-a4", "doc-c-c1"}, [{"depth": 1, "dependency_units": 1, "link_units": 1}]),
-        (
-            2,
-            {"doc-a-a4", "doc-c-c1", "doc-d-d1"},
-            [
-                {"depth": 1, "dependency_units": 1, "link_units": 1},
-                {"depth": 2, "dependency_units": 0, "link_units": 1},
-            ],
-        ),
-    ],
+    ("depth", "expected"),
+    [(0, []), (1, [A4]), (2, [A4, A5]), (3, [A4, A5, A6])],
+    ids=["depth0", "depth1", "depth2", "depth3"],
 )
-async def test_outgoing_links_are_followed_up_to_the_configured_depth(
-    depth: int, expected: set[str], hops: list[dict[str, int]]
+async def test_dependencies_are_followed_up_to_the_configured_depth(
+    depth: int, expected: list[str]
 ) -> None:
-    """出る向きの関連（a2 → c1）を辿り、2 段のときだけ c1 → d1 を読む。"""
-    store = Store(LINKED)
-    store.link_rows = [
-        ("doc-a-a2", "doc-c-c1", "exception"),
-        ("doc-c-c1", "doc-d-d1", "reference"),
-    ]
-    result = await rooted(store, A1, A2, rag_wiki_link_depth=depth).search(
+    """同じ文書の依存（a2 → a4 → a5 → a6）を、設定の段数まで 1 段ずつ辿る。"""
+    result = await rooted(Store(CHAINED), A1, A2, rag_wiki_link_depth=depth).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
-    followed = set(_units(result)) - {"doc-a-a1", "doc-a-a2"}
-    assert followed == expected
-    assert result.trace["link_hops"] == hops
+    assert _units(result) == [A1, A2, *expected]
+    assert [chunk.chunk_id for chunk in result.chunks] == [
+        f"{uid}-chunk" for uid in [A1, A2, *expected]
+    ]
+    assert result.trace["link_hops"] == [
+        {"depth": hop, "dependency_units": 1} for hop in range(1, depth + 1)
+    ]
     assert result.trace["dependency_units"] == len(expected)
-    if depth == 0:
-        assert not [call for call in store.calls if call[0] == "links"]
-
-
-@pytest.mark.parametrize(
-    ("depth", "roots", "expected", "links_read"),
-    [
-        (0, ["doc-a-a2"], ["doc-a-a2"], []),
-        (1, ["doc-a-a2"], ["doc-a-a2", "doc-a-a4"], [("doc-a-a2",)]),
-        (
-            2,
-            ["doc-a-a2"],
-            ["doc-a-a2", "doc-a-a4", "doc-b-b1"],
-            [("doc-a-a2",), ("doc-a-a4",)],
-        ),
-        (
-            1,
-            ["doc-a-a2", "doc-a-a4"],
-            ["doc-a-a2", "doc-a-a4", "doc-b-b1"],
-            [("doc-a-a2", "doc-a-a4")],
-        ),
-        (
-            1,
-            ["doc-a-a2", "doc-a-a3"],
-            ["doc-a-a2", "doc-a-a3", "doc-a-a4", "doc-b-b1"],
-            [("doc-a-a2", "doc-a-a3")],
-        ),
-        # 入る向き（#5784）: b1 の文書（文書B）を名前で参照する a4・a3 も辿る。
-        (1, ["doc-b-b1"], ["doc-b-b1", "doc-a-a4", "doc-a-a3"], [("doc-b-b1",)]),
-    ],
-)
-@pytest.mark.asyncio
-async def test_only_ranked_roots_start_at_depth_zero(
-    depth: int, roots: list[str], expected: list[str], links_read: list[tuple[str, ...]]
-) -> None:
-    # 同文書の a2 → a4、別文書への a4 → b1。起点は索引の上位の単位だけ。
-    store = Store(PAGES)
-    store.link_rows = [("doc-a-a4", "doc-b-b1", "reference"), ("doc-a-a3", "doc-b-b1", "reference")]
-    result = await rooted(store, *roots, rag_wiki_link_depth=depth).search(
-        QUESTION, profile_id="p", filters={}, timeout=None
-    )
-    assert _units(result) == expected
-    assert [chunk.chunk_id for chunk in result.chunks] == [f"{uid}-chunk" for uid in expected]
-    assert [value for name, value in store.calls if name == "links"] == links_read
-
-
-@pytest.mark.parametrize(
-    ("depth", "link_chunks"),
-    [(1, ["doc-b-b1-chunk"]), (2, ["doc-b-b1-chunk", "doc-c-c1-chunk"])],
-)
-@pytest.mark.asyncio
-async def test_reference_target_among_the_candidates_keeps_its_distance(
-    depth: int, link_chunks: list[str]
-) -> None:
-    store = Store(LINKED)
-    store.link_rows = [
-        ("doc-a-a1", "doc-b-b1", "reference"),
-        ("doc-b-b1", "doc-c-c1", "reference"),
-    ]
-    result = await rooted(store, A1, rag_wiki_link_depth=depth).search(
-        QUESTION, profile_id="p", filters={}, timeout=None
-    )
-    assert result.trace["source_chunk_ids_by_origin"] == {
-        "selected": ["doc-a-a1-chunk"],
-        "dependency": [],
-        "link": link_chunks,
+    assert {c.chunk_id: c.metadata["wiki_origin"] for c in result.chunks} == {
+        f"{A1}-chunk": "root",
+        f"{A2}-chunk": "root",
+        **{f"{uid}-chunk": "dependency" for uid in expected},
     }
-    assert result.trace["source_chunk_ids"] == ["doc-a-a1-chunk", *link_chunks]
+
+
+@pytest.mark.asyncio
+async def test_a_root_that_another_root_depends_on_stays_a_root() -> None:
+    """起点どうしの依存（a2 → a4）は足し直さない。起点は索引の上位の単位だけ。"""
+    result = await rooted(Store(CHAINED), A2, A4, rag_wiki_link_depth=1).search(
+        QUESTION, profile_id="p", filters={}, timeout=None
+    )
+    assert _units(result) == [A2, A4, A5]
+    assert _root_ids(result) == [f"{A2}-chunk", f"{A4}-chunk"]
 
 
 @pytest.mark.asyncio
 async def test_budget_keeps_exceptions_and_prerequisites_before_references() -> None:
-    store = Store(LINKED)
-    store.link_rows = [
-        ("doc-a-a2", "doc-c-c1", "reference"),
-        ("doc-a-a2", "doc-d-d1", "prerequisite"),
+    pages = [
+        page(
+            "doc-a",
+            "a1",
+            ["章1"],
+            deps=((A6, "reference"), (A5, "prerequisite"), (A4, "exception")),
+        ),
+        page("doc-a", "a4", ["章2"]),
+        page("doc-a", "a5", ["章3"]),
+        page("doc-a", "a6", ["章4"]),
     ]
-    result = await rooted(store, A1, A2, rag_wiki_link_max_units=2).search(
+    result = await rooted(Store(pages), A1, rag_wiki_link_max_units=2).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
-    followed = [uid for uid in _units(result) if uid not in {"doc-a-a1", "doc-a-a2"}]
-    # 例外（同じ文書の依存 a4）と前提（d1）を先に足し、参照（c1）は上限で外す。
-    assert followed == ["doc-a-a4", "doc-d-d1"]
+    # 例外（a4）と前提（a5）を先に足し、参照（a6）は上限で外す。
+    assert _units(result) == [A1, A4, A5]
     assert result.trace["dependency_units"] == 2
 
 
 @pytest.mark.asyncio
 async def test_cycles_stop_and_each_unit_is_read_once() -> None:
-    store = Store(LINKED)
-    store.link_rows = [
-        ("doc-a-a2", "doc-c-c1", "prerequisite"),
-        ("doc-c-c1", "doc-a-a2", "exception"),
-        ("doc-c-c1", "doc-d-d1", "warning"),
-        ("doc-d-d1", "doc-c-c1", "warning"),
-        ("doc-d-d1", "doc-a-a2", "reference"),
+    pages = [
+        page("doc-a", "a1", ["章1"], deps=((A4, "prerequisite"),)),
+        page("doc-a", "a4", ["章2"], deps=(A1, (A5, "warning"))),
+        page("doc-a", "a5", ["章3"], deps=((A4, "warning"), (A1, "reference"))),
     ]
-    result = await rooted(store, A1, A2, rag_wiki_link_depth=3).search(
+    result = await rooted(Store(pages), A1, rag_wiki_link_depth=3).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
-    units = _units(result)
-    assert len(units) == len(set(units))
-    assert {"doc-c-c1", "doc-d-d1", "doc-a-a4"} <= set(units)
-    # 3 段目は新しい単位が無いので、辿りはそこで止まる。
-    assert len([call for call in store.calls if call[0] == "links"]) <= 3
+    assert _units(result) == [A1, A4, A5]
+    # 3 段目は新しい単位が無いので、足さない。
+    assert result.trace["link_hops"] == [
+        {"depth": 1, "dependency_units": 1},
+        {"depth": 2, "dependency_units": 1},
+        {"depth": 3, "dependency_units": 0},
+    ]
 
 
 @pytest.mark.asyncio
-async def test_unreadable_link_targets_are_not_returned_or_counted_against_the_budget() -> None:
-    """今の範囲で読めない終点（別の KB・未公開・古い保存版）は足さず、読めなかった数に残す。"""
-
-    class OutOfScope(Store):
-        async def references(
-            self, unit_ids: list[str], scope: WikiScope
-        ) -> list[tuple[str, str, str, str]]:
-            # 今の範囲に無い文書（文書Z）への参照は、参照先が決まらず辿らない（#5784）。
-            return [
-                ("doc-a-a2", "文書Z", "", "exception"),
-                ("doc-a-a2", "文書C", "通知", "reference"),
-            ]
-
-    store = OutOfScope(LINKED)
-    result = await rooted(store, A1, A2, rag_wiki_link_depth=1, rag_wiki_link_max_units=2).search(
+async def test_unreadable_dependencies_are_not_returned_or_counted_against_the_budget() -> None:
+    """今の範囲で読めない依存（未公開・古い保存版・範囲の外）は足さず、読めなかった数に残す。"""
+    pages = [
+        page("doc-a", "a1", ["章1"], deps=("doc-a-gone", (A4, "reference"))),
+        page("doc-a", "a4", ["章2"]),
+    ]
+    store = Store(pages)
+    result = await rooted(store, A1, rag_wiki_link_depth=1, rag_wiki_link_max_units=1).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
-    units = _units(result)
-    assert not any(uid.startswith("doc-z") for uid in units) and "doc-c-c1" in units
-    assert result.trace["missing_dependency_units"] == 0
+    # 読めない依存は上限に数えないので、次の順の依存（a4）を足す。
+    assert _units(result) == [A1, A4]
+    assert result.trace["missing_dependency_units"] == 1
+    assert ("pages", {"unit_ids": ["doc-a-gone"]}) in store.calls
 
 
 # ---- 範囲の重い条件は 1 問に 1 回（#5499） ----
@@ -606,8 +532,14 @@ PUBLISHED_MARK = "w.chunk_sets_json"
 MEMBERSHIP_MARK = "rag_document_knowledge_bases wm"
 
 
+TITLES = {row["document_id"]: row["title"] for row in CATALOG}
+
+
 class SqlOracle:
-    """SQL を記録し、合成の行を返す Oracle の代役（実 SQL は test_wiki_store_oracle.py）。"""
+    """SQL を記録し、合成の行を返す Oracle の代役（実 SQL は test_wiki_store_oracle.py）。
+
+    知らない SQL（別の文書への参照の表の照会など）が来れば失敗にする。
+    """
 
     def __init__(self, pages: list[WikiPage]) -> None:
         self.by_id = {p.unit.unit_id: p for p in pages}
@@ -632,23 +564,20 @@ class SqlOracle:
             return [
                 {
                     "document_id": p.unit.document_id,
-                    "file_name": "文書A" if p.unit.document_id == "doc-a" else p.unit.document_id,
+                    "file_name": TITLES[p.unit.document_id],
                     "wiki_chunk_set_id": p.unit.chunk_set_id,
                     "wiki_fingerprint": "f",
                 }
                 for p in pages
             ]
-        if "rag_wiki_references" in sql:
-            return []
         if "VECTOR_DISTANCE" in sql:
             return [{"unit_id": uid} for uid in self.by_id]
         if "p.page_json" in sql:
-            units, documents = self._values(binds, "wiki_unit"), self._values(binds, "wiki_doc")
+            units = self._values(binds, "wiki_unit")
             return [
                 {"page_json": p.model_dump()}
                 for p in pages
-                if (units is None or p.unit.unit_id in units)
-                and (documents is None or p.unit.document_id in documents)
+                if units is None or p.unit.unit_id in units
             ]
         assert "c.chunk_text" in sql, sql
         wanted = set(self._values(binds, "wiki_source") or [])
@@ -670,7 +599,7 @@ class SqlOracle:
 async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> None:
     """範囲（所属・権限・公開・今の保存版）の重い条件は目録の 1 回だけで評価し、後の読取は決めた
     集合だけで絞る。回答に使う原文は read_sources が今の範囲で照合し直す。"""
-    oracle = SqlOracle(LINKED)
+    oracle = SqlOracle(CHAINED)
 
     wiki = WikiRetriever(
         Settings(rag_wiki_link_depth=2),
@@ -687,13 +616,58 @@ async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> N
     assert len(published) == 1 and "wiki_chunk_set_id" in published[0]
     assert len(membership) == 2 and "c.chunk_text" in membership[1]
     later = [sql for sql in oracle.sql if PUBLISHED_MARK not in sql and MEMBERSHIP_MARK not in sql]
-    # 候補・ID の読み込み・関連の辿りは、決めた集合の条件で読む。
-    assert len(later) >= 5
+    # 候補・ID の読み込みは、決めた集合の条件で読む。
+    assert len(later) >= 2
     # 全文検索の SQL は出さない（#5825）。
     assert not any("CONTAINS(" in sql for sql in oracle.sql)
     assert all("p.chunk_set_id IN" in sql and "p.source_fingerprint IN" in sql for sql in later)
     assert not any("rag_document_knowledge_bases" in sql for sql in later)
-    assert any("rag_wiki_references" in sql for sql in later)
+
+
+# 別の文書への参照（#5841）: 起点 a2 は同じ文書の a4 に依存する。
+# 出る向きは a2 が文書C を名前で挙げ、入る向きは文書C の c1 が a2 の文書（文書A）を名前で参照する。
+OUTGOING = [
+    page("doc-a", "a2", ["章1", "節1"], deps=(A4,), refs=(("文書C", "通知", "exception"),)),
+    page("doc-a", "a4", ["章2"]),
+    page("doc-c", "c1", ["通知"]),
+]
+INCOMING = [
+    page("doc-a", "a2", ["章1", "節1"], deps=(A4,)),
+    page("doc-a", "a4", ["章2"]),
+    page("doc-c", "c1", ["通知"], refs=(("文書A", "節1", "exception"),)),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pages", [OUTGOING, INCOMING], ids=["outgoing", "incoming"])
+async def test_references_to_other_documents_are_not_followed(pages: list[WikiPage]) -> None:
+    """別の文書への参照は、出る向き（起点が別の文書の名前を挙げる）も入る向き（ほかの文書が起点の
+    文書を名前で参照する）も辿らない（#5841）。同じ文書の依存だけを足し、参照の表を読まない。"""
+    assert any(p.navigation.references for p in pages), "参照は原文の表記と合って残る"
+    oracle = SqlOracle(pages)
+    wiki = WikiRetriever(
+        Settings(rag_wiki_link_depth=3),
+        oracle,  # type: ignore[arg-type]
+        GenAi(),  # type: ignore[arg-type]
+        store=WikiStore(oracle),  # type: ignore[arg-type]
+    )
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None, top_k=1)
+
+    assert _units(result) == [A2, A4]
+    assert {c.chunk_id: c.metadata["wiki_origin"] for c in result.chunks} == {
+        f"{A2}-chunk": "root",
+        f"{A4}-chunk": "dependency",
+    }
+    assert {chunk.document_id for chunk in result.chunks} == {"doc-a"}
+    assert result.trace["link_hops"] == [
+        {"depth": 1, "dependency_units": 1},
+        {"depth": 2, "dependency_units": 0},
+    ]
+    assert result.trace["source_chunk_ids_by_origin"] == {
+        "selected": [f"{A2}-chunk"],
+        "dependency": [f"{A4}-chunk"],
+    }
+    assert not any("rag_wiki_references" in sql for sql in oracle.sql)
 
 
 def _relations(result: Any) -> dict[str, Any]:
@@ -703,28 +677,21 @@ def _relations(result: Any) -> dict[str, Any]:
 @pytest.mark.asyncio
 async def test_followed_relations_reach_both_sources_with_the_other_location() -> None:
     """辿りで見た関係（#5500）は、両端の原文に、役割を持つ側と相手の文書名・章節つきで付く。"""
-    store = Store(LINKED)
-    store.link_rows = [("doc-a-a2", "doc-c-c1", "exception"), ("doc-c-c1", "doc-d-d1", "reference")]
-    result = await rooted(store, A1, A2, rag_wiki_link_depth=1).search(
+    result = await rooted(Store(CHAINED), A1, A2, rag_wiki_link_depth=1).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     relations = _relations(result)
-    # c1 は a2 の例外。a2 から見ると相手（c1）が役割を持つ。同じ文書の依存（a2 → a4）も載る。
+    # a4 は a2 の例外。a2 から見ると相手（a4）が役割を持つ。
     assert relations["doc-a-a2-chunk"] == [
         {
             "relation": "exception",
             "role_of": "other",
             "document_name": "文書A",
             "section_path": ["章2"],
-        },
-        {
-            "relation": "exception",
-            "role_of": "other",
-            "document_name": "文書C",
-            "section_path": ["通知"],
-        },
+        }
     ]
-    assert relations["doc-c-c1-chunk"] == [
+    # 段数で辿らなかった a5 は原文に入らないので、a4 → a5 の関係は載せない。
+    assert relations["doc-a-a4-chunk"] == [
         {
             "relation": "exception",
             "role_of": "this",
@@ -732,15 +699,12 @@ async def test_followed_relations_reach_both_sources_with_the_other_location() -
             "section_path": ["章1", "節1"],
         }
     ]
-    # 段数で辿らなかった d1 は原文に入らないので、c1 → d1 の関係は載せない。
     assert relations["doc-a-a1-chunk"] is None
 
 
 @pytest.mark.asyncio
-async def test_no_relations_are_attached_when_links_are_not_followed() -> None:
-    store = Store(LINKED)
-    store.link_rows = [("doc-a-a2", "doc-c-c1", "exception")]
-    result = await rooted(store, A1, A2, rag_wiki_link_depth=0).search(
+async def test_no_relations_are_attached_when_dependencies_are_not_followed() -> None:
+    result = await rooted(Store(CHAINED), A1, A2, rag_wiki_link_depth=0).search(
         QUESTION, profile_id="p", filters={}, timeout=None
     )
     assert all(value is None for value in _relations(result).values())
@@ -769,18 +733,16 @@ WIKI_STAGES = [
     "Wiki: 質問のベクトル化",
     "Wiki: 案内の候補の検索",
     "Wiki: 起点の再ランキング",
-    "Wiki: 依存と関連の辿り",
+    "Wiki: 依存の辿り",
     "Wiki: 原文の読み込み",
 ]
 
 
 @pytest.mark.asyncio
 async def test_trace_lists_the_source_chunk_ids_by_origin_and_the_stage_seconds() -> None:
-    """根拠に渡した原文の chunk ID と、選んだ単位・依存・関連ごとの chunk ID を記録に残す。"""
-    store = Store(LINKED)
-    store.link_rows = [("doc-a-a2", "doc-c-c1", "exception")]
+    """根拠に渡した原文の chunk ID と、選んだ単位・依存ごとの chunk ID を記録に残す。"""
     seconds: dict[str, float] = {}
-    result = await rooted(store, A1, A2, rag_wiki_link_depth=1).search(
+    result = await rooted(Store(PAGES), A1, A2, rag_wiki_link_depth=1).search(
         QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
     )
 
@@ -790,7 +752,6 @@ async def test_trace_lists_the_source_chunk_ids_by_origin_and_the_stage_seconds(
     assert trace["source_chunk_ids_by_origin"] == {
         "selected": ["doc-a-a1-chunk", "doc-a-a2-chunk"],
         "dependency": ["doc-a-a4-chunk"],
-        "link": ["doc-c-c1-chunk"],
     }
     # 由来ごとの chunk ID は根拠の chunk ID と同じ集合（DB を読み足さない）。
     by_origin = trace["source_chunk_ids_by_origin"]
