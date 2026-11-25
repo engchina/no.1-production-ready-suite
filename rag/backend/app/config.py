@@ -1278,7 +1278,7 @@ class Settings(
         default=100,
         ge=1,
         le=500,
-        description="Wiki のベクトル検索と全文検索の順位を合わせる候補数の上限。",
+        description="Wiki の案内のベクトル検索で取る候補数の上限。",
     )
     rag_wiki_selected_units: int = Field(
         default=32,

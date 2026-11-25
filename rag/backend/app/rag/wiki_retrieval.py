@@ -25,7 +25,6 @@ from app.clients.wiki_store import WikiScope, WikiStore
 from app.config import Settings
 from app.rag.span_display import ANSWER_STEP_KIND
 from app.rag.wiki_models import WIKI_RELATION_PRIORITY, WikiPage
-from app.rag.wiki_navigation import interleave
 from app.schemas.search import RetrievedChunk
 
 # 回答の診断に出す原文の chunk ID の数の上限（由来ごとの一覧も。#5518）。数は ``source_count``。
@@ -336,17 +335,11 @@ class WikiRetriever:
             return WikiSearchResult(trace={"status": "not_ready"})
         with _stage("Wiki: 質問のベクトル化", seconds):
             vector = (await self.genai.embed([question], input_type="SEARCH_QUERY"))[0]
+        # 候補は案内のベクトル検索の順位だけ（全文検索は通常検索と重なるので使わない。#5825）。
         with _stage("Wiki: 案内の候補の検索", seconds):
-            vector_pages, text_ranking = await asyncio.gather(
-                store.pages(wiki, query_vector=vector, limit=opts.rag_wiki_candidates),
-                store.text_rankings(question, wiki, limit=opts.rag_wiki_candidates),
+            candidates = await store.pages(
+                wiki, query_vector=vector, limit=opts.rag_wiki_candidates
             )
-            text_pages = await store.pages(wiki, unit_ids=[uid for _, uid in text_ranking])
-        by_id = {page.unit.unit_id: page for page in text_pages}
-        candidates = interleave(
-            [vector_pages, [by_id[uid] for _, uid in text_ranking if uid in by_id]],
-            opts.rag_wiki_candidates,
-        )
         # 公開された索引の上位の原文単位を辿りの起点にする（選択のモデルは呼ばない。#5731）。
         roots = candidates[: opts.rag_wiki_selected_units]
         pages = {page.unit.unit_id: page for page in candidates}
