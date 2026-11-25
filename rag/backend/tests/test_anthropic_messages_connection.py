@@ -324,12 +324,7 @@ def _rag_response_schemas() -> dict[str, Mapping[str, Any]]:
 
     from app.rag.document_summary import DOCUMENT_SUMMARY_RESPONSE_SCHEMA
     from app.rag.extraction_field_adapter import FIELD_EXTRACTION_RESPONSE_SCHEMA
-    from app.rag.wiki_models import (
-        WikiFilePlan,
-        WikiReadPlan,
-        context_schema,
-        scoped_plan,
-    )
+    from app.rag.wiki_models import context_schema
 
     schemas: dict[str, Mapping[str, Any]] = {
         "vlm_structured_extraction": _vlm_structured_extraction_schema(),
@@ -337,17 +332,6 @@ def _rag_response_schemas() -> dict[str, Mapping[str, Any]]:
         "document_summary": DOCUMENT_SUMMARY_RESPONSE_SCHEMA,
         "field_extraction": FIELD_EXTRACTION_RESPONSE_SCHEMA,
         "wiki_context": context_schema(["u1", "u2"], ["u1", "u2", "u3"]).model_json_schema(),
-        "wiki_plan": scoped_plan(
-            WikiFilePlan, {"document_ids": (["d1", "d2"], 2)}
-        ).model_json_schema(),
-        "wiki_read_plan": scoped_plan(
-            WikiReadPlan,
-            {
-                "root_unit_ids": (["u1", "u2"], 2),
-                "unit_ids": (["u1", "u2"], 2),
-                "section_ids": ([], 0),
-            },
-        ).model_json_schema(),
     }
     for model in (TextOutput, PictureDescriptionOutput, _table_answer_model(str)):
         # rag_engine は OpenAI SDK の strict な schema を送る（`_response_wire_request`）。

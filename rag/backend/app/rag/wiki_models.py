@@ -6,7 +6,7 @@ import hashlib
 import json
 import unicodedata
 from collections.abc import Sequence
-from typing import Annotated, Any, Literal, Self, get_args
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
@@ -190,35 +190,3 @@ class WikiPage(WikiModel):
                 self.unit.text[:original_chars],
             ]
         )
-
-
-class WikiFilePlan(WikiModel):
-    """読むファイルの選択。ID は要求内の短いハンドル。"""
-
-    document_ids: list[str]
-    search_expressions: list[Annotated[str, Field(max_length=200)]] = Field(max_length=8)
-
-
-class WikiReadPlan(WikiModel):
-    """質問で指定された起点と、広く検索するときの単位・章節の候補。"""
-
-    root_unit_ids: list[str] | None
-    unit_ids: list[str]
-    section_ids: list[str]
-
-
-def scoped_plan[T: WikiModel](
-    base: type[T], fields: dict[str, tuple[Sequence[str], int]]
-) -> type[T]:
-    """選べる ID を候補のハンドルだけ・件数を上限までに絞った schema。
-
-    候補が無い欄は空だけを許す。
-    """
-    definitions: dict[str, Any] = {}
-    for name, (values, limit) in fields.items():
-        allowed: Any = Literal.__getitem__(tuple(sorted(set(values)))) if values else str
-        choices: Any = Annotated[list[allowed], Field(max_length=limit if values else 0)]
-        if type(None) in get_args(base.model_fields[name].annotation):
-            choices = choices | None
-        definitions[name] = (choices, ...)
-    return create_model(base.__name__ + "Scoped", __base__=base, **definitions)
