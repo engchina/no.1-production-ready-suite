@@ -28,7 +28,6 @@ from app.clients.oracle import (
     _oracle_knowledge_base_access_predicate_sql,
     _oracle_retrieval_where,
     _oracle_retrieval_where_split,
-    _oracle_text_query,
     _require_active_knowledge_base,
     _retrieved_chunk_from_row,
     _with_tenant_bind,
@@ -910,59 +909,6 @@ class WikiStore:
     async def _hydrate(self, ids: list[str], scope: WikiScope) -> list[WikiPage]:
         found = {page.unit.unit_id: page for page in await self.pages(scope, unit_ids=ids)}
         return [found[uid] for uid in ids if uid in found]
-
-    async def text_rankings(
-        self,
-        expression: str,
-        scope: WikiScope,
-        *,
-        limit: int,
-        document_ids: Sequence[str] | None = None,
-        exclude_document_ids: Sequence[str] = (),
-    ) -> list[tuple[str, str]]:
-        """全文検索の順位（文書 ID, 単位 ID）を 1 回の SQL で取る（#4986）。本文は読まない。
-
-        ``document_ids`` が無ければ全体の上位 ``limit`` 件を点数の順に、
-        あれば文書ごとの上位 ``limit`` 件を文書ごとに点数の順に返す。
-        ``exclude_document_ids`` の文書は除く（#5492）。範囲は ``resolve`` で決めた集合。
-        """
-        text = _oracle_text_query(expression)
-        if (
-            not text
-            or limit <= 0
-            or not scope.sources
-            or (document_ids is not None and not document_ids)
-        ):
-            return []
-        where, binds = _scoped_where(scope)
-        if exclude_document_ids:
-            clause, added = _oracle_in_predicate(
-                "c.document_id", "wiki_text_skip", exclude_document_ids
-            )
-            where += f" AND NOT ({clause})"
-            binds.update(added)
-        order, tail = "text_score DESC,p.document_id,p.unit_id", "FETCH FIRST :wiki_limit ROWS ONLY"
-        if document_ids is not None:
-            clause, values = _oracle_in_predicate("c.document_id", "wiki_text_doc", document_ids)
-            where += " AND " + clause
-            binds.update(values)
-            order, tail = "p.document_id,text_score DESC,p.unit_id", ""
-        else:
-            binds["wiki_limit"] = limit
-        rows = await self.oracle._fetch_all(
-            f"""SELECT p.document_id,p.unit_id,SCORE(1) AS text_score {WIKI_SCOPED_FROM}
-            WHERE CONTAINS(p.search_text,:wiki_text,1)>0 AND {where}
-            ORDER BY {order} {tail}""",
-            {**binds, "wiki_text": text},
-        )
-        counts: dict[str, int] = {}
-        ranking = []
-        for row in rows:
-            did = str(row["document_id"])
-            counts[did] = counts.get(did, 0) + 1
-            if counts[did] <= limit:
-                ranking.append((did, str(row["unit_id"])))
-        return ranking
 
     # ---- 別の文書への参照（#5784） ----
 

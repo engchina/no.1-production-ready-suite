@@ -83,7 +83,7 @@ class Store:
 
         # resolve で決めた範囲（後の読取がこれだけを受け取ることを確かめる。#5499）。
         self.scope: WikiScope | None = None
-        # 索引（ベクトル検索・全文検索）の順位の先頭に置く単位。無ければ登録の順。
+        # 索引（ベクトル検索）の順位の先頭に置く単位。無ければ登録の順。
         self.roots: list[str] = []
 
     def _ranked(self) -> list[WikiPage]:
@@ -150,16 +150,6 @@ class Store:
             values = [self.by_id[uid] for uid in kwargs["unit_ids"] if uid in self.by_id]
         return values[: kwargs["limit"]] if kwargs.get("limit") else values
 
-    async def text_rankings(self, expression: str, scope: WikiScope, **kwargs: Any) -> Any:
-        self._scoped(scope)
-        self.calls.append(("text_rankings", (expression, tuple(kwargs.get("document_ids") or ()))))
-        documents = kwargs.get("document_ids")
-        return [
-            (p.unit.document_id, p.unit.unit_id)
-            for p in self._ranked()
-            if documents is None or p.unit.document_id in documents
-        ]
-
     async def read_sources(
         self, pages: list[WikiPage], filters: dict[str, str]
     ) -> list[RetrievedChunk]:
@@ -214,12 +204,8 @@ A1, A2 = "doc-a-a1", "doc-a-a2"
 async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class RankedStore(Store):
-        async def text_rankings(self, expression: str, scope: WikiScope, **kwargs: Any) -> Any:
-            await super().text_rankings(expression, scope, **kwargs)
-            return [("doc-b", "doc-b-b1")]
-
-    store = RankedStore([PAGES[1], PAGES[3], PAGES[-1]])
+    store = Store([PAGES[1], PAGES[3], PAGES[-1]])
+    store.roots = ["doc-a-a2", "doc-b-b1"]
     clients = retriever(store, settings=Settings(rag_wiki_selected_units=2))
     engine = AnswerEngine(clients.settings, oracle=clients.oracle, genai=clients.genai)
     monkeypatch.setattr(
@@ -240,7 +226,10 @@ async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
         "dependency": ["doc-a-a4-chunk"],
         "link": [],
     }
-    assert [args for name, args in store.calls if name == "text_rankings"] == [(QUESTION, ())]
+    # 候補はベクトル検索の順位の 1 回だけで決める（全文検索は呼ばない。#5825）。
+    assert [args for name, args in store.calls if name == "pages"][0] == {
+        "limit": clients.settings.rag_wiki_candidates
+    }
     assert all("document_ids" not in args for name, args in store.calls if name == "pages")
     assert all("モデル" not in stage for stage in seconds)
 
@@ -250,15 +239,13 @@ async def test_empty_rankings_do_not_reopen_documents_from_the_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = Store(PAGES)
-    pages, rankings = AsyncMock(return_value=[]), AsyncMock(return_value=[])
+    pages = AsyncMock(return_value=[])
     monkeypatch.setattr(store, "pages", pages)
-    monkeypatch.setattr(store, "text_rankings", rankings)
     result = await retriever(store).search(QUESTION, profile_id="p", filters={}, timeout=None)
 
     assert result.trace["catalog_documents"] == 2 and result.trace["candidate_units"] == 0
     assert result.chunks == ()
     assert all("document_ids" not in call.kwargs for call in pages.await_args_list)
-    rankings.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -528,13 +515,6 @@ class SqlOracle:
             return []
         if "VECTOR_DISTANCE" in sql:
             return [{"unit_id": uid} for uid in self.by_id]
-        if "CONTAINS(" in sql:
-            documents = self._values(binds, "wiki_text_doc")
-            return [
-                {"document_id": p.unit.document_id, "unit_id": p.unit.unit_id}
-                for p in pages
-                if documents is None or p.unit.document_id in documents
-            ]
         if "p.page_json" in sql:
             units, documents = self._values(binds, "wiki_unit"), self._values(binds, "wiki_doc")
             return [
@@ -584,8 +564,10 @@ async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> N
     assert len(published) == 1 and "wiki_chunk_set_id" in published[0]
     assert len(membership) == 2 and "c.chunk_text" in membership[1]
     later = [sql for sql in oracle.sql if PUBLISHED_MARK not in sql and MEMBERSHIP_MARK not in sql]
-    # 候補・全文の順位・ID の読み込み・関連の辿りは、決めた集合の条件で読む。
-    assert len(later) >= 6
+    # 候補・ID の読み込み・関連の辿りは、決めた集合の条件で読む。
+    assert len(later) >= 5
+    # 全文検索の SQL は出さない（#5825）。
+    assert not any("CONTAINS(" in sql for sql in oracle.sql)
     assert all("p.chunk_set_id IN" in sql and "p.source_fingerprint IN" in sql for sql in later)
     assert not any("rag_document_knowledge_bases" in sql for sql in later)
     assert any("rag_wiki_references" in sql for sql in later)

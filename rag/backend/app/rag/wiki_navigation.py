@@ -1,11 +1,9 @@
-"""Wiki の検索の計画に渡す短い ID と、選択したファイルの全原文を覆う章節の候補を作る。"""
+"""Wiki の構築の要求で、原文の ID の代わりにモデルへ渡す要求内だけの短い ID。"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-
-from app.rag.wiki_models import WikiPage
 
 
 def handle_pattern(handles: Iterable[str]) -> re.Pattern[str]:
@@ -39,17 +37,3 @@ class Handles:
 
     def real(self, handles: Sequence[str]) -> list[str]:
         return [self._real[handle] for handle in handles]
-
-
-def interleave(groups: Sequence[Sequence[WikiPage]], limit: int) -> list[WikiPage]:
-    """各経路の順位を保って交互に並べる。経路の点数を足さず、同じ単位は最初の 1 回だけ。"""
-    seen: set[str] = set()
-    result: list[WikiPage] = []
-    for index in range(max((len(group) for group in groups), default=0)):
-        for group in groups:
-            if index < len(group) and group[index].unit.unit_id not in seen:
-                seen.add(group[index].unit.unit_id)
-                result.append(group[index])
-                if len(result) == limit:
-                    return result
-    return result

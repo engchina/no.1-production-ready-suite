@@ -211,8 +211,7 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert [row["status"] for row in await store.document_statuses(filters)] == ["READY"]
     assert len(await store.saved_pages(source)) == len(pages)
     assert len(await store.read_sources(pages, filters)) == len(pages)
-    # 検索の経路（#4941）: 目録・案内・ベクトルの上位・全文検索の順位は、現在の原文の公開済みの
-    # 案内だけを返す。全文検索の順位は文書ごとに 1 回の SQL で取る（#4986）。
+    # 検索の経路（#4941）: 目録・案内・ベクトルの上位は、現在の原文の公開済みの案内だけを返す。
     scope = await store.resolve(filters)
     assert [row["document_id"] for row in scope.catalog] == [did]
     # 形式に関わらない版の属性（版の状態と分類の有効期間）を、どの文書にも渡す（#5446 の続き）。
@@ -230,12 +229,6 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert len(top) == 1 and top[0].unit.unit_id in unit_ids
     by_unit = await store.pages(scope, unit_ids=unit_ids[:1], document_ids=[did])
     assert [p.unit.unit_id for p in by_unit] == unit_ids[:1]
-    ranking = await store.text_rankings("syntheticnavigation", scope, limit=10)
-    assert sorted(uid for _, uid in ranking) == unit_ids
-    per_document = await store.text_rankings(
-        "syntheticnavigation", scope, limit=1, document_ids=[did]
-    )
-    assert len(per_document) == 1 and per_document[0][0] == did
     changed = replace(source, compiler_fingerprint=fingerprint("compiler-b"))
     assert not await store.enqueue(changed)
     assert await store.claim(changed, lease_seconds=300) is None
@@ -478,22 +471,25 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
     units_a = sorted(page.unit.unit_id for page in pages_a)
 
     async def read(scope: Any) -> tuple[list[str], list[str], list[str], list[str]]:
+        ranked = await store.pages(scope, query_vector=_EMBEDDING, limit=50)
         return (
             sorted(p.unit.unit_id for p in await store.pages(scope)),
-            sorted(
-                p.unit.unit_id for p in await store.pages(scope, query_vector=_EMBEDDING, limit=50)
-            ),
-            sorted(uid for _, uid in await store.text_rankings("syntheticscope", scope, limit=50)),
-            sorted(
-                {did for did, _ in await store.text_rankings("syntheticscope", scope, limit=50)}
-            ),
+            sorted(p.unit.unit_id for p in ranked),
+            # ベクトルの上位が読む案内の保存版（語境で見分ける）と文書。
+            sorted({p.navigation.context for p in ranked}),
+            sorted({p.unit.document_id for p in ranked}),
         )
+
+    old_context, new_context = (
+        ["合成の案内 syntheticscope。"],
+        ["合成の新しい案内 syntheticrenewed。"],
+    )
 
     scope = await store.resolve(filters)
     assert [row["document_id"] for row in scope.catalog] == [a]
     assert {did for did, _, _ in scope.sources} == {a}
     assert {value for _, _, value in scope.sources} == {source_a.source_fingerprint}
-    assert await read(scope) == (units_a, units_a, units_a, [a])
+    assert await read(scope) == (units_a, units_a, old_context, [a])
     # 別の KB・未公開の文書は、ID で指定しても読まない。
     assert not await store.pages(scope, document_ids=[unpublished, outside])
 
@@ -506,17 +502,11 @@ async def test_resolved_scope_reads_only_current_published_pages_in_scope() -> N
     renewed_pages = _pages(renewed.units, "合成の新しい案内 syntheticrenewed。")
     await store.checkpoint(renewed, lease, renewed_pages, vectors=[_EMBEDDING] * len(pages_a))
     # 公開の前に決めた範囲は、作り直し中の新しい保存版の案内を読まない。
-    assert await read(scope) == (units_a, units_a, units_a, [a])
-    assert not await store.text_rankings("syntheticrenewed", scope, limit=50)
+    assert await read(scope) == (units_a, units_a, old_context, [a])
     await store.finish(renewed, lease)
     current = await store.resolve(filters)
     assert {value for _, _, value in current.sources} == {renewed.source_fingerprint}
-    assert sorted(p.unit.unit_id for p in await store.pages(current)) == units_a
-    assert not await store.text_rankings("syntheticscope", current, limit=50)
-    assert (
-        sorted(uid for _, uid in await store.text_rankings("syntheticrenewed", current, limit=50))
-        == units_a
-    )
+    assert await read(current) == (units_a, units_a, new_context, [a])
 
 
 # 公開の条件の以前の形（JSON_TABLE の入れ子。#5533 で書き直した）。今の形と同じ判定かを見る。

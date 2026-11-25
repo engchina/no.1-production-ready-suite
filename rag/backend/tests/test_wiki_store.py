@@ -67,7 +67,6 @@ async def test_later_reads_use_the_resolved_set_and_keep_chunk_row_filters() -> 
     assert scope.sources == (("doc-a", "set-a", "fp-a"),)
     assert [row["document_id"] for row in scope.catalog] == ["doc-a"]
     await store.pages(scope, query_vector=[0.1], limit=3)
-    await store.text_rankings("合成", scope, limit=3)
     await store.references(["unit-a"], scope)
     await store.referencing(["synthetic-key"], scope)
     await store.document_headings(scope)
@@ -75,7 +74,7 @@ async def test_later_reads_use_the_resolved_set_and_keep_chunk_row_filters() -> 
     assert "w.chunk_sets_json" in first[0] and "kb-a" in first[1].values()
     # 公開の条件は JSON_TABLE を使わない（解析が重い。#5533）。
     assert "JSON_TABLE" not in first[0]
-    assert len(later) == 5
+    assert len(later) == 4
     for sql, binds in later:
         # 重い範囲の条件（公開・所属・権限）は評価し直さず、決めた集合で読む。
         assert "chunk_sets_json" not in sql and "rag_knowledge_bases" not in sql
@@ -88,8 +87,7 @@ async def test_later_reads_use_the_resolved_set_and_keep_chunk_row_filters() -> 
     assert not await store.pages(empty) and not await store.references(["unit-a"], empty)
     assert not await store.referencing(["synthetic-key"], empty)
     assert not await store.document_headings(empty)
-    assert not await store.text_rankings("合成", empty, limit=3)
-    assert len(statements) == 6
+    assert len(statements) == 5
 
 
 @pytest.mark.asyncio
