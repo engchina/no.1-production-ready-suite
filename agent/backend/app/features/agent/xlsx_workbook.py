@@ -20,10 +20,9 @@ from __future__ import annotations
 import io
 import math
 import re
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -39,6 +38,20 @@ from openpyxl.styles import (  # type: ignore[import-untyped]
 from openpyxl.styles.fonts import DEFAULT_FONT  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 from openpyxl.worksheet.worksheet import Worksheet  # type: ignore[import-untyped]
+
+# 列の型・書式の名前と、形式に依らない値の読み方は Word の生成（`docx_document`）と共通。
+from app.features.agent.table_columns import (
+    DATE_FORMATS,
+    JSON_NUMBER,
+    NUMBER_FORMATS,
+    TYPE_LABELS,
+    ColumnType,
+    SpecIssue,
+    ValueProblem,
+    display_width,
+    format_issue,
+    iso_date_value,
+)
 
 XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -60,22 +73,8 @@ WIDTH_MAX = 100.0
 _AUTO_WIDTH_MIN = 8
 _AUTO_WIDTH_MAX = 60
 
-ColumnType = Literal["text", "number", "date"]
 SummaryFunction = Literal["sum", "average", "count", "min", "max"]
 
-# 書式の名前 → Excel の表示形式。
-NUMBER_FORMATS: dict[str, str] = {
-    "integer": "#,##0",
-    "decimal1": "#,##0.0",
-    "decimal2": "#,##0.00",
-    "percent": "0%",
-    "percent1": "0.0%",
-}
-DATE_FORMATS: dict[str, str] = {
-    "date": "yyyy-mm-dd",
-    "date_slash": "yyyy/mm/dd",
-    "datetime": "yyyy-mm-dd hh:mm",
-}
 _TEXT_FORMAT = "@"
 _GENERAL_FORMAT = "General"
 _COUNT_FORMAT = NUMBER_FORMATS["integer"]
@@ -87,9 +86,7 @@ SUMMARY_COLUMN_TYPES: dict[str, frozenset[str]] = {
     "min": frozenset({"number", "date"}),
     "max": frozenset({"number", "date"}),
 }
-_TYPE_LABELS: dict[str, str] = {"text": "文字", "number": "数値", "date": "日付"}
 
-_JSON_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\Z")
 _INTEGER = re.compile(r"-?[0-9]+\Z")
 _SHEET_NAME_FORBIDDEN = re.compile(r"[\[\]:*?/\\]")
 
@@ -134,18 +131,6 @@ class Sheet:
     summaries: Sequence[Summary] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class SpecIssue:
-    """内容の 1 つの誤り（値を含まない）。"""
-
-    argument: str
-    code: str
-    message: str
-
-    def as_dict(self) -> dict[str, str]:
-        return {"argument": self.argument, "code": self.code, "message": self.message}
-
-
 class XlsxSpecError(ValueError):
     """内容が作れる範囲に合わない（`issues` を直して作り直す）。"""
 
@@ -159,19 +144,6 @@ class BuiltWorkbook:
     data: bytes = field(repr=False)
     # シートごとの要約（`name` は Excel の制約に合わせた後の名前）。
     sheets: tuple[dict[str, Any], ...]
-
-
-_RETYPE_FIX = "列の type を text にするか、値を直してください。"
-
-
-class _ValueProblem(Exception):
-    """列の型の値として読めない値（`fix` は直し方）。"""
-
-    def __init__(self, code: str, message: str, fix: str = _RETYPE_FIX) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.fix = fix
 
 
 def clean_text(value: str) -> str:
@@ -205,7 +177,7 @@ def _text_value(value: Any) -> str | None:
     else:
         text = clean_text(value if isinstance(value, str) else str(value))
     if len(text) > MAX_TEXT_CHARS:
-        raise _ValueProblem(
+        raise ValueProblem(
             "too_long",
             f"文字が長すぎます（1 つの cell は {MAX_TEXT_CHARS} 文字まで）。",
             "値を短くしてください。",
@@ -219,55 +191,33 @@ def _number_value(value: Any) -> int | float | None:
     number: Any = value
     if isinstance(value, str):
         text = value.strip()
-        if _JSON_NUMBER.fullmatch(text) is None:
-            raise _ValueProblem("not_number", "数値として読めません。")
+        if JSON_NUMBER.fullmatch(text) is None:
+            raise ValueProblem("not_number", "数値として読めません。")
         if _INTEGER.fullmatch(text):
             number = int(text)
         else:
             number = float(text)
             if math.isfinite(number) and Decimal(repr(number)) != Decimal(text):
-                raise _ValueProblem("precision", "桁が多く、Excel の数値では値が変わります。")
+                raise ValueProblem("precision", "桁が多く、Excel の数値では値が変わります。")
     if isinstance(number, bool) or not isinstance(number, int | float):
-        raise _ValueProblem("not_number", "数値として読めません。")
+        raise ValueProblem("not_number", "数値として読めません。")
     if isinstance(number, float) and not math.isfinite(number):
-        raise _ValueProblem("not_number", "数値として読めません。")
+        raise ValueProblem("not_number", "数値として読めません。")
     if isinstance(number, int) and abs(number) > MAX_EXACT_INTEGER:
-        raise _ValueProblem("precision", "桁が多く、Excel の数値では値が変わります。")
+        raise ValueProblem("precision", "桁が多く、Excel の数値では値が変わります。")
     return number
 
 
 def _date_value(value: Any) -> date | datetime | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise _ValueProblem("not_date", "日付（YYYY-MM-DD か ISO 8601 の日時）として読めません。")
-    try:
-        parsed = datetime.fromisoformat(value.strip())
-    except ValueError as exc:
-        raise _ValueProblem(
-            "not_date", "日付（YYYY-MM-DD か ISO 8601 の日時）として読めません。"
-        ) from exc
-    if parsed.year < MIN_DATE_YEAR:
-        raise _ValueProblem(
+    parsed = iso_date_value(value)
+    if parsed is not None and parsed.year < MIN_DATE_YEAR:
+        raise ValueProblem(
             "not_date", f"{MIN_DATE_YEAR} 年より前の日付は Excel の日付にできません。"
         )
-    # Excel の日時は時間帯を持たない。書かれた時刻のまま入れる。
-    parsed = parsed.replace(tzinfo=None)
-    return parsed.date() if parsed.time() == time.min else parsed
+    return parsed
 
 
 _CONVERTERS = {"text": _text_value, "number": _number_value, "date": _date_value}
-
-
-def _display_width(text: str) -> int:
-    """表示の幅の目安（全角は 2）。複数行は最も長い行。"""
-    return max(
-        (
-            sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in line)
-            for line in text.splitlines()
-        ),
-        default=0,
-    )
 
 
 def _shown(value: Any, number_format: str) -> str:
@@ -340,16 +290,9 @@ def _structure_issues(sheets: Sequence[Sheet]) -> list[SpecIssue]:
 
 def _column_issues(at: str, column: Column) -> list[SpecIssue]:
     issues: list[SpecIssue] = []
-    allowed = {"number": NUMBER_FORMATS, "date": DATE_FORMATS}.get(column.type, {})
-    if column.format is not None and column.format not in allowed:
-        issues.append(
-            SpecIssue(
-                f"{at}.format",
-                "format",
-                f"{_TYPE_LABELS[column.type]}の列に使える書式は"
-                f"{' / '.join(allowed) if allowed else 'ありません'}（既定は null）。",
-            )
-        )
+    issue = format_issue(at, column.type, column.format)
+    if issue is not None:
+        issues.append(issue)
     if column.width is not None and not WIDTH_MIN <= column.width <= WIDTH_MAX:
         issues.append(
             SpecIssue(f"{at}.width", "range", f"幅は {WIDTH_MIN:g}〜{WIDTH_MAX:g} にしてください。")
@@ -387,7 +330,7 @@ def _summary_issues(at: str, sheet: Sheet, summary: Summary) -> list[SpecIssue]:
                 SpecIssue(
                     f"{at}.columns",
                     "type",
-                    f"{summary.function} は{_TYPE_LABELS[column_type]}の列（{position} 列目）に"
+                    f"{summary.function} は{TYPE_LABELS[column_type]}の列（{position} 列目）に"
                     "使えません。",
                 )
             )
@@ -417,7 +360,7 @@ def _converted_rows(
                 continue
             try:
                 values.append(convert(value))
-            except _ValueProblem as problem:
+            except ValueProblem as problem:
                 failed.add(column_index)
                 values.append(None)
                 issues.append(
@@ -492,7 +435,7 @@ def _write_sheet(
         cell.border = _HEADER_BORDER
         cell.alignment = _HEADER_ALIGNMENT
         # フィルターのボタンの分を足す。
-        widths[position] = _display_width(header) + 2
+        widths[position] = display_width(header) + 2
     for offset, row in enumerate(rows):
         for position, value in enumerate(row):
             if value is None:
@@ -504,7 +447,7 @@ def _write_sheet(
                 cell.value = value
             cell.number_format = formats[position]
             widths[position] = max(
-                widths[position], _display_width(_shown(value, formats[position]))
+                widths[position], display_width(_shown(value, formats[position]))
             )
     for offset, summary in enumerate(sheet.summaries):
         summary_row = last_data_row + 1 + offset
@@ -528,7 +471,7 @@ def _write_sheet(
             )
             label = clean_text(summary.label)
             _write_text(worksheet.cell(row=summary_row, column=label_position + 1), label)
-            widths[label_position] = max(widths[label_position], _display_width(label))
+            widths[label_position] = max(widths[label_position], display_width(label))
     for position, column in enumerate(sheet.columns):
         worksheet.column_dimensions[get_column_letter(position + 1)].width = (
             column.width

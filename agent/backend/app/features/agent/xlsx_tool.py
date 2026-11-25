@@ -13,6 +13,8 @@
   `artifact_file_store.save_tool_file`（参照だけを返す。大きさ・形式の検査もそこ）。結果・イベント・
   ログにファイルの中身を載せない。
 - 上限: 1 つの Run で作れるファイルは `MAX_FILES_PER_RUN` 個。内容の上限は `xlsx_workbook`。
+- 表の参照の解決・ファイルの数の上限・内容の誤りの返し方は、Word のツール（`docx_tool`）と共通
+  （`file_tool_support`）。
 
 ツールの層（`tools.py`）からは import しない（Run の module を読むため）。`tool_registry` への登録は
 組み込み Runtime（`builtin_runtime`）がする。
@@ -20,24 +22,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from threading import Lock
+from collections.abc import Mapping
 from typing import Any
 
-from app.features.agent.answer_data import DataIndex, DataReferenceError, data_index
-from app.features.agent.answer_data_projection import TableProjectionError, selected_positions
-from app.features.agent.artifact_file_store import (
-    FILE_ARTIFACT_KIND,
-    FILE_RUN_CLOSED,
-    save_tool_file,
+from app.features.agent.file_tool_support import (
+    FILE_LIMIT_CODE,
+    FILE_OUTPUT_SCHEMA,
+    FORMAT_NAMES_HELP,
+    MAX_FILES_PER_RUN,
+    check_file_count,
+    column_header,
+    invalid_content,
+    run_data_index,
+    running_run,
+    save_run_file,
+    source_schema,
+    table_values,
 )
-from app.features.agent.tool_arguments import INVALID_ARGUMENTS_CODE
-from app.features.agent.tools import (
-    ExternalToolError,
-    ToolDefinition,
-    ToolHandler,
-    ToolInvocationContext,
-)
+from app.features.agent.tools import ToolDefinition, ToolHandler, ToolInvocationContext
 from app.features.agent.xlsx_workbook import (
     DATE_FORMATS,
     MAX_COLUMNS,
@@ -59,29 +61,17 @@ from app.features.agent.xlsx_workbook import (
 )
 
 XLSX_CREATE_TOOL = "xlsx_create"
-# 1 つの Run で作れるファイルの数（形式を問わず、その Run のファイルの成果物の数）。
-MAX_FILES_PER_RUN = 10
 # モデルが引数に書く表（`rows`）の行の数。大きい表は取得済みの表の参照（`source`）で渡す。
 MAX_WRITTEN_ROWS = 200
 TITLE_MAX_CHARS = 100
 HEADING_MAX_CHARS = 200
 NOTE_MAX_CHARS = 500
 HEADER_MAX_CHARS = 100
-FILE_LIMIT_CODE = "artifact.file_limit"
-INVALID_CONTENT_MESSAGE = (
-    "引数の内容に誤りがあるため、ファイルを作っていません。"
-    "argument_errors の場所と直し方に従って引数を直し、呼び直してください。"
-)
 
 _FORMAT_HELP = (
-    "数値の列は "
-    + " / ".join(f"{name}（{code}）" for name, code in NUMBER_FORMATS.items())
-    + "、日付の列は "
-    + " / ".join(f"{name}（{code}）" for name, code in DATE_FORMATS.items())
-    + "。percent・percent1 は値を 100 倍して表示する（0.15 が 15%）。null は、数値が Excel の"
-    "標準の表示、日付が date（時刻のある値を含む列は datetime）。文字の列は null"
+    FORMAT_NAMES_HELP + "。percent・percent1 は値を 100 倍して表示する（0.15 が 15%）。null は、"
+    "数値が Excel の標準の表示、日付が date（時刻のある値を含む列は datetime）。文字の列は null"
 )
-_SELECTOR_HELP = "* はすべて、1-8 は範囲、1,3,5 は列挙（書いた順に並ぶ）。番号は 1 始まり"
 
 _COLUMN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -115,35 +105,6 @@ _COLUMN_SCHEMA: dict[str, Any] = {
     },
     "required": ["type"],
     "additionalProperties": False,
-}
-_SOURCE_OBJECT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "table": {
-            "type": "string",
-            "description": "表の番号。取得した結果の answer_data.table が [[table:T1]] なら T1",
-        },
-        "rows": {
-            "type": "string",
-            "description": f"写す行。{_SELECTOR_HELP}",
-        },
-        "columns": {
-            "type": "string",
-            "description": (
-                f"写す列。{_SELECTOR_HELP}（answer_data.column_refs の番号）。"
-                "選んだ列の数と順が、シートの columns と対応する"
-            ),
-        },
-    },
-    "required": ["table", "rows", "columns"],
-    "additionalProperties": False,
-}
-_SOURCE_SCHEMA: dict[str, Any] = {
-    "anyOf": [_SOURCE_OBJECT_SCHEMA, {"type": "null"}],
-    "description": (
-        "この実行で取得済みの表の参照（値はこのツールが取得した結果から写す）。"
-        "参照しないシートは null"
-    ),
 }
 _SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -202,7 +163,7 @@ _SHEET_SCHEMA: dict[str, Any] = {
             "items": _COLUMN_SCHEMA,
             "description": "表の列（左から）",
         },
-        "source": _SOURCE_SCHEMA,
+        "source": source_schema("シート"),
         "rows": {
             "type": "array",
             "maxItems": MAX_WRITTEN_ROWS,
@@ -251,17 +212,7 @@ XLSX_CREATE_INPUT_SCHEMA: dict[str, Any] = {
 XLSX_CREATE_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "file": {
-            "type": "object",
-            "description": "作ったファイル（中身は含まない）",
-            "properties": {
-                "artifact_id": {"type": "string"},
-                "file_name": {"type": "string"},
-                "mime_type": {"type": "string"},
-                "size_bytes": {"type": "integer"},
-                "sha256": {"type": "string"},
-            },
-        },
+        "file": FILE_OUTPUT_SCHEMA,
         "sheets": {
             "type": "array",
             "items": {
@@ -300,108 +251,33 @@ XLSX_CREATE_DEFINITION = ToolDefinition(
     audit_tags=["output", "file"],
 )
 
-# ファイルの数の確認と保存を 1 つずつにする（並行の呼び出しで上限を超えない）。
-_SAVE_LOCK = Lock()
-
-
-def _invalid(issues: Sequence[SpecIssue]) -> ExternalToolError:
-    return ExternalToolError(
-        INVALID_ARGUMENTS_CODE,
-        INVALID_CONTENT_MESSAGE,
-        {"argument_errors": [item.as_dict() for item in issues]},
-    )
-
-
-def _source_table(
-    at: str, source: Mapping[str, Any], index: DataIndex, issues: list[SpecIssue]
-) -> tuple[list[str], list[list[Any]]] | None:
-    """参照した表の、選んだ列の名前と行の値（保存した結果の値のまま）。誤りなら None。"""
-    alias = str(source.get("table") or "").strip().removeprefix("[[table:").removesuffix("]]")
-    table = index.tables.get(index.aliases.get(alias, ""))
-    if table is None:
-        issues.append(
-            SpecIssue(
-                f"{at}.table",
-                "unknown_table",
-                "この実行に無い表の参照です。取得した結果の answer_data.table の番号（T1 など）を"
-                "書いてください。",
-            )
-        )
-        return None
-    names, rows = table
-    selected: dict[str, list[int]] = {}
-    for key, count in (("rows", len(rows)), ("columns", len(names))):
-        try:
-            selected[key] = selected_positions(str(source.get(key) or ""), count)
-        except TableProjectionError as exc:
-            issues.append(SpecIssue(f"{at}.{key}", "selection", str(exc)))
-    if len(selected) != 2:
-        return None
-    columns = [names[position] for position in selected["columns"]]
-    return columns, [
-        [rows[position].get(column) for column in columns] for position in selected["rows"]
-    ]
-
 
 def _sheets(arguments: Mapping[str, Any], run: Any) -> list[Sheet]:
     """引数を生成の内容にする（参照した表の値を写す）。誤りは `ExternalToolError`。"""
     issues: list[SpecIssue] = []
-    index: DataIndex | None = None
+    index = run_data_index(run, "xlsx.source_unavailable")
     sheets: list[Sheet] = []
     for sheet_index, raw in enumerate(arguments.get("sheets") or []):
         at = f"sheets.{sheet_index}"
-        raw_columns = list(raw.get("columns") or [])
-        source = raw.get("source")
-        rows: list[list[Any]] = [list(row) for row in raw.get("rows") or []]
-        names: list[str] | None = None
-        if source is not None:
-            if rows:
-                issues.append(
-                    SpecIssue(
-                        f"{at}.rows",
-                        "conflict",
-                        "source を使うシートでは rows を空の配列にしてください。",
-                    )
-                )
-            if index is None:
-                try:
-                    index = data_index(run.steps, run.metadata)
-                except DataReferenceError as exc:
-                    raise ExternalToolError("xlsx.source_unavailable", str(exc)) from exc
-            resolved = _source_table(f"{at}.source", source, index, issues)
-            if resolved is None:
-                continue
-            names, rows = resolved
-            if len(names) != len(raw_columns):
-                issues.append(
-                    SpecIssue(
-                        f"{at}.columns",
-                        "count",
-                        f"columns の数を、source.columns で選んだ列の数（{len(names)}）に"
-                        "そろえてください。",
-                    )
-                )
-                continue
-        columns: list[Column] = []
-        for column_index, column in enumerate(raw_columns):
-            header = column.get("header") or (names[column_index] if names else None)
-            if header is None:
-                issues.append(
-                    SpecIssue(
-                        f"{at}.columns.{column_index}.header",
-                        "required",
-                        "source を使わないシートでは、列の見出しを書いてください。",
-                    )
-                )
-                header = ""
-            columns.append(
-                Column(
-                    header=header,
-                    type=column["type"],
-                    format=column.get("format"),
-                    width=column.get("width"),
-                )
+        values = table_values(at, raw, index, "シート", issues)
+        if values is None:
+            continue
+        names, rows = values
+        columns = [
+            Column(
+                header=column_header(
+                    f"{at}.columns.{column_index}",
+                    column,
+                    names[column_index] if names else None,
+                    "シート",
+                    issues,
+                ),
+                type=column["type"],
+                format=column.get("format"),
+                width=column.get("width"),
             )
+            for column_index, column in enumerate(raw.get("columns") or [])
+        ]
         sheets.append(
             Sheet(
                 name=str(raw.get("name") or ""),
@@ -420,44 +296,26 @@ def _sheets(arguments: Mapping[str, Any], run: Any) -> list[Sheet]:
             )
         )
     if issues:
-        raise _invalid(issues)
+        raise invalid_content(issues)
     return sheets
 
 
-def _check_file_count(run: Any) -> None:
-    count = sum(1 for artifact in run.artifacts if artifact.kind == FILE_ARTIFACT_KIND)
-    if count >= MAX_FILES_PER_RUN:
-        raise ExternalToolError(
-            FILE_LIMIT_CODE,
-            f"1 回の実行で作れるファイルは {MAX_FILES_PER_RUN} 個までです。"
-            "これ以上は作らず、作ったファイルで回答してください。",
-        )
-
-
 def _create_xlsx(arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
-    from app.features.agent.runtime import runtime_repository
-
-    run_id = context.run_id
-    try:
-        run = runtime_repository.get_run(run_id) if run_id else None
-    except KeyError:
-        run = None
-    if run is None or not run_id:
-        raise ExternalToolError(FILE_RUN_CLOSED, "実行の外ではファイルを作れません。")
-    _check_file_count(run)
+    run = running_run(context.run_id)
+    # 上限はこの module の値を呼ぶたびに読む（形式をまたいで同じ値。`file_tool_support`）。
+    check_file_count(run, MAX_FILES_PER_RUN)
     sheets = _sheets(arguments, run)
     try:
         built = build_workbook(sheets)
     except XlsxSpecError as exc:
-        raise _invalid(exc.issues) from exc
-    with _SAVE_LOCK:
-        _check_file_count(runtime_repository.get_run(run_id))
-        reference = save_tool_file(
-            run_id,
-            file_name=str(arguments.get("title") or ""),
-            mime_type=XLSX_MIME_TYPE,
-            data=built.data,
-        )
+        raise invalid_content(exc.issues) from exc
+    reference = save_run_file(
+        run.id,
+        MAX_FILES_PER_RUN,
+        file_name=str(arguments.get("title") or ""),
+        mime_type=XLSX_MIME_TYPE,
+        data=built.data,
+    )
     return {"file": reference, "sheets": list(built.sheets)}
 
 
@@ -467,6 +325,7 @@ def xlsx_create_tool() -> tuple[ToolDefinition, ToolHandler]:
 
 
 __all__ = [
+    "FILE_LIMIT_CODE",
     "MAX_FILES_PER_RUN",
     "MAX_WRITTEN_ROWS",
     "XLSX_CREATE_DEFINITION",

@@ -1,0 +1,24 @@
+This skill (skills/docx-create) is based on guidance from the "docx" skill of anthropics/skills:
+
+  Repository: https://github.com/anthropics/skills
+  Path:       skills/docx/SKILL.md
+  Revision:   e4bb5d960d87126ff3b3a8af1a104b7db67560ba
+  License:    Apache License 2.0 (the LICENSE.txt in that directory; a copy is in LICENSE.txt here)
+
+Changes made for this project:
+
+- SKILL.md is rewritten in Japanese for the docx_create tool of Production Ready Agent.
+  Only the guidance that applies to that tool is kept: write lists as list items, and use a
+  table only for tabular values (not for layout or as a rule line). The rule that bullet
+  characters and numbers are not typed into the item text is stated in the argument
+  description of the docx_create tool (agent/backend/app/features/agent/docx_tool.py).
+- The following guidance is applied in the generator of the docx_create tool
+  (agent/backend/app/features/agent/docx_document.py) instead of in SKILL.md: an explicit
+  A4 page size, separate paragraphs instead of line breaks (a line break in the text of a
+  paragraph starts a new paragraph), table widths written in DXA on the table, the column
+  grid and every cell, table shading with the "clear" pattern, and heading levels that use
+  the built-in heading styles, each with its own font, spacing before and after, and
+  keep-with-next.
+- Everything else is not included: the scripts, running code (docx-js, Python, pandoc,
+  LibreOffice), reading and editing existing files, unpacking and validating the XML,
+  tracked changes, comments, images, tables of contents, and landscape pages.

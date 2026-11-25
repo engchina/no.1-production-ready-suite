@@ -16,6 +16,8 @@ OpenTelemetry のセキュリティ更新（#5049・#5050・#5051）では、`op
 
 Anthropic Claude の Messages API の呼び出しの部品（`platform/packages/anthropic_messages`。#5546）では、公式の Python SDK `anthropic` 2.8.0（Apache-2.0。`*.dist-info/licenses/` に NOTICE のファイルは無い）と、その実行時の依存 `httpx2` / `httpcore2` 2.16.2（BSD-3-Clause）・`jiter` 0.19.0（MIT）・`docstring-parser` 0.18.0（MIT）・`truststore` 0.10.5（MIT）を PyPI の配布 metadata で確認しました。SDK が同梱する `anthropic/_vendor/httpx_aiohttp`（BSD-3-Clause。出典の記録は同じディレクトリの `NOTICE.md` と `LICENSE`）は使っていません。新たな copyleft の部品は追加していません。再配布時は配布物のライセンス原文を保持してください。
 
+Agent の Word のファイルの生成（#5837）では、`agent/backend` に `python-docx` 1.2.0（MIT）と、その依存 `lxml` 6.1.3（BSD-3-Clause）を足し、PyPI の配布 metadata で確認しました（`typing-extensions` は既にある依存）。`nl2sql/backend`・`rag/backend` が既に使っている版と同じです。`lxml` の wheel が同梱する部品（libiconv の LGPL-2.1 を含む）は、下の「弱い copyleft の部品」に足しました。再配布時は配布物のライセンス原文を保持してください。
+
 ## 入手の経路と再配布
 
 この repo と、その release（`suite-v*` の Terraform stack の zip）は、自前のソースと配備のスクリプトだけを含み、下の表の第三者の binary を含みません。配備のスクリプトは、配備先の Compute で次のとおり第三者の部品を取得します。
@@ -48,6 +50,7 @@ Anthropic Claude の Messages API の呼び出しの部品（`platform/packages/
 | `shapely` | PyPI | BSD-3-Clause。wheel の `shapely.libs` に GEOS（`libgeos`・`libgeos_c`。LGPL-2.1）を同梱 | `rag/services/parsers/docling`（RapidOCR の依存）、`rag/backend` の extra `docling` | GEOS のライセンスは wheel の `LICENSE_GEOS` |
 | `numpy`・`scipy` | PyPI | BSD-3-Clause。wheel の `numpy.libs`・`scipy.libs` に OpenBLAS（BSD-3-Clause）、LAPACK（BSD-3-Clause-Open-MPI）、`libgfortran`（GPL-3.0-or-later WITH GCC-exception-3.1）、`libquadmath`（LGPL-2.1-or-later）を同梱 | `nl2sql/backend`・`rag/backend`・`rag/services/parsers/docling`・`rag/services/parsers/unstructured` ほか | 同梱の部品のライセンスは wheel の `LICENSE.txt`（`numpy-*.dist-info/licenses/`） |
 | `torch`・`torchvision` | PyPI | BSD-3-Clause。`torch/lib` に `libgomp`（GPL-3.0-or-later WITH GCC-exception-3.1）を同梱 | `rag/services/parsers/docling`・`rag/services/parsers/unstructured`（CPU 版） | GCC Runtime Library Exception により、利用する側のライセンスに GPL は及ばない |
+| `lxml` | PyPI | BSD-3-Clause。wheel の拡張（`lxml/etree` など）に zlib（Zlib）、libiconv（LGPL-2.1）、libxml2・libxslt・libexslt（MIT）を静的に同梱 | `agent/backend`・`nl2sql/backend`（`python-docx` の依存）、`rag/backend`・`rag/packages/rag_engine`・`rag/services/parsers/docling`・`rag/services/parsers/unstructured`・`rag/services/preprocess/word_to_jsonl` | XML（Word のファイルなど）の読み書きに使う。改変しない。同梱の部品のライセンスは wheel の `LICENSES.txt`（`lxml-*.dist-info/licenses/`） |
 | `pikepdf` | PyPI | MPL-2.0。wheel の `pikepdf.libs` に qpdf（Apache-2.0）と libjpeg（IJG）を同梱 | `rag/services/parsers/unstructured`、`rag/backend` の extra `unstructured` | MPL-2.0 はファイル単位の copyleft。改変しない |
 | `certifi` | PyPI | MPL-2.0 | すべての backend・サービス | Mozilla の CA の bundle。改変しない |
 | `tqdm` | PyPI | MPL-2.0 AND MIT | `rag/` のすべての venv | 改変しない |
@@ -348,6 +351,7 @@ Copyright 2019 Kenneth Reitz
 |---|---|---|
 | `nl2sql/backend/app/features/nl2sql/prompts/sql_assist/` | Apache-2.0 | 外部の repo のプロンプトの文を元にした部分。原文の `LICENSE` と、出典・変更点を書いた `NOTICE` を同じディレクトリに置く |
 | `skills/xlsx-create/` | Apache-2.0 | 組み込みのスキル「Excel 作成」（#5837）。`anthropics/skills` の `skills/xlsx/SKILL.md`（commit `e4bb5d960d87126ff3b3a8af1a104b7db67560ba`）の指針を元に、Agent のツール `xlsx_create` 向けに日本語で書き直した。スクリプト・コードの実行の記述は含まない。許諾の全文 `LICENSE.txt` と、出典・変更点を書いた `NOTICE` を同じディレクトリに置く（スキルの書き出しの zip と、Claude Code の plugin の配布にも入る） |
+| `skills/docx-create/` | Apache-2.0 | 組み込みのスキル「Word 作成」（#5837）。`anthropics/skills` の `skills/docx/SKILL.md`（commit `e4bb5d960d87126ff3b3a8af1a104b7db67560ba`）の指針を元に、Agent のツール `docx_create` 向けに日本語で書き直した。スクリプト・コードの実行・既存のファイルの編集の記述は含まない。許諾の全文 `LICENSE.txt` と、出典・変更点を書いた `NOTICE` を同じディレクトリに置く（スキルの書き出しの zip と、Claude Code の plugin の配布にも入る） |
 
 ## 一覧の更新の手順
 
