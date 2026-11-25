@@ -3,6 +3,8 @@
 - 仕様の検証は公式の `skills-ref`（anthropics/agentskills の参照実装）の `validate`。
 - 仕様・best practices の目安（本文 500 行以内、参照は本文から 1 段の深さ）と、本プロダクトの拡張
   （`metadata` の MCP ツールの宣言が RAG / NL2SQL の MCP の契約にあるツールか）を確かめる。
+- Control Plane のツールを宣言するスキル（`control-plane:<ツール>`。#5837）は、MCP の契約の代わりに
+  `tool_registry` のツールの定義（引数・結果の schema）と照らす。
 - Claude Code の plugin marketplace（`.claude-plugin/marketplace.json` と
   `skills/.claude-plugin/plugin.json`）の必須の項目と、plugin の置き場所。
 """
@@ -17,8 +19,10 @@ import pytest
 import skills_ref  # type: ignore[import-untyped]  # 型の情報（py.typed）が無い
 import yaml
 
+from app.features.agent.builtin_runtime import CONTROL_PLANE_SERVER_ID
 from app.features.agent.skills import BUILTIN_SKILL_IDS, BUILTIN_SKILLS_DIR, skill_registry
 from app.features.agent.skills_loader import METADATA_FINAL_ANSWER_TOOLS, METADATA_MCP_TOOLS
+from app.features.agent.tools import tool_registry
 
 REPO_ROOT = BUILTIN_SKILLS_DIR.parent
 CONTRACTS = REPO_ROOT / "platform/contracts/mcp"
@@ -36,9 +40,27 @@ def _frontmatter(skill_dir: Path) -> tuple[dict[str, object], str]:
     return data, body
 
 
-def _contract_tools(server: str) -> set[str]:
+def _tool_contracts(server: str) -> list[dict[str, object]]:
+    """接続のツールの定義（名前・引数と結果の schema）。
+
+    MCP 接続（`rag` / `nl2sql`）は公開の契約、`control-plane` は `tool_registry` のツールの定義。
+    """
+    if server == CONTROL_PLANE_SERVER_ID:
+        return [
+            {
+                "name": definition.name,
+                "inputSchema": definition.input_schema,
+                "outputSchema": definition.output_schema,
+            }
+            for definition in tool_registry.definitions()
+        ]
     contract = json.loads((CONTRACTS / f"{server}-tools.json").read_text(encoding="utf-8"))
-    return {str(tool["name"]) for tool in contract["tools"]}
+    tools: list[dict[str, object]] = contract["tools"]
+    return tools
+
+
+def _contract_tools(server: str) -> set[str]:
+    return {str(tool["name"]) for tool in _tool_contracts(server)}
 
 
 def test_builtin_skills_are_the_skill_folders() -> None:
@@ -58,7 +80,13 @@ def test_skill_md_follows_best_practices(skill_dir: Path) -> None:
     data, body = _frontmatter(skill_dir)
     description = str(data["description"])
     # 外部の Agent が選べるよう、何をするか＋いつ使うか（「使う」）と MCP サーバーを書く。
-    assert "使う" in description and "MCP サーバー" in description
+    assert "使う" in description
+    if _declared_servers(skill_dir) == {CONTROL_PLANE_SERVER_ID}:
+        # Agent の中のツールだけを使うスキルは、業務 Agent 専用（外部の Agent では使えない）と書く。
+        assert "業務 Agent" in description
+        assert "外部の Agent" in str(data["compatibility"])
+    else:
+        assert "MCP サーバー" in description
     # 本文は 500 行以内。長い参照は references/ に出し、本文から 1 段の深さで参照する。
     assert len(body.strip().splitlines()) <= 500
     linked = set(re.findall(r"\]\((references/[^)]+)\)", body))
@@ -84,11 +112,12 @@ def test_skill_mcp_tools_exist_in_the_mcp_contracts(skill_dir: Path) -> None:
     declared = str(metadata[METADATA_MCP_TOOLS]).split()
     for token in declared:
         server, _, tool = token.partition(":")
-        assert server in {"rag", "nl2sql"}
+        assert server in {"rag", "nl2sql", CONTROL_PLANE_SERVER_ID}
         assert tool in _contract_tools(server), token
         # 本文は MCP サーバー名と、宣言したツールの素の名前で書く（ツールの一覧の節は置かない。
-        # 一覧は metadata とモデルに渡すツールの定義にある）。
-        assert f"MCP サーバー `{server}`" in body
+        # 一覧は metadata とモデルに渡すツールの定義にある）。Control Plane のツールに接続は無い。
+        if server != CONTROL_PLANE_SERVER_ID:
+            assert f"MCP サーバー `{server}`" in body
         assert f"`{tool}`" in body
     skill = skill_registry.get(skill_dir.name)
     assert skill is not None
@@ -156,9 +185,9 @@ def _schema_vocabulary(node: object, found: set[str]) -> None:
 
 
 def _contract_vocabulary(server: str) -> set[str]:
-    contract = json.loads((CONTRACTS / f"{server}-tools.json").read_text(encoding="utf-8"))
-    found = {str(tool["name"]) for tool in contract["tools"]}
-    for tool in contract["tools"]:
+    tools = _tool_contracts(server)
+    found = {str(tool["name"]) for tool in tools}
+    for tool in tools:
         _schema_vocabulary(tool.get("inputSchema"), found)
         _schema_vocabulary(tool.get("outputSchema"), found)
     return found
@@ -187,6 +216,7 @@ def test_skill_body_fields_exist_in_the_mcp_contracts(skill_dir: Path) -> None:
 
     外部の Agent にも配るので、MCP が実際に返すものだけを書く。組み込み Runtime だけが足す
     フィールドは `RUNTIME_ONLY_FIELDS` に限り、「組み込みの Agent」の行にだけ書く。
+    Control Plane のツールを宣言するスキルは、そのツールの定義（引数・結果の schema）のものだけ。
     """
     _, body = _frontmatter(skill_dir)
     servers = _declared_servers(skill_dir)

@@ -142,6 +142,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 | `rag-chat-and-data` | RAG チャット＋データ | `rag_chat` と `nl2sql` の照会 |
 | `rag-search-and-data` | RAG 検索＋データ | `rag_search` と `nl2sql` の照会 |
 | `structured-data-query` | 構造化データ照会 | `nl2sql` の照会・ジョブ・業務プロファイル |
+| `xlsx-create` | Excel 作成 | Control Plane のツール `xlsx_create`（#5837。Excel のファイルを新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
 
 `business-rag-research`・`rag-and-structured-data`・`article-catalog-lookup` は #5342 で消した（互換なし。選んでいた
 業務 Agent は `unavailable_skill_ids` で画面が示し、下書き・常に最新の版の Run は `runtime.skill_unavailable` で失敗する）。
@@ -169,7 +170,11 @@ RAG だけのスキルは metadata `production-ready-final-answer-tools` で回�
   読ませる）。毎回の手順で要る短い内容は本文に置く（根拠の読み方を参照文書に出すと #1816 の評価の 120 Run で 1 度も
   読まれなかった。#1846）。
 - 仕様の検証は公式の `skills-ref`（`tests/test_skill_md_spec.py`）。`metadata` のツールが RAG / NL2SQL の MCP の契約
-  （`platform/contracts/mcp/`）にあることも確かめる。
+  （`platform/contracts/mcp/`）にあることも確かめる。Control Plane のツールを宣言するスキル（`control-plane:<ツール>`。
+  `xlsx-create`）は、ツールが `tool_registry` に登録済みで、本文の `code` の識別子がそのツールの定義（引数・結果の
+  schema）にあることを確かめる。`description` に MCP サーバーの名前は要らず、`compatibility` に業務 Agent 専用であることを
+  書く。第三者の資料を元にするスキルは、許諾の全文（`LICENSE.txt`）と出典・変更点（`NOTICE`）をフォルダに置く
+  （読み込みは無視し、書き出しの zip には入れる）。
 - 外部の Agent へ配る形: repo 直下の `.claude-plugin/marketplace.json`（marketplace `production-ready-suite`）が
   `skills/` を plugin `production-ready-skills`（`skills/.claude-plugin/plugin.json`）として載せる。入れ方・MCP の設定
   （名前は `rag` / `nl2sql`、API キー）・つまずく所は [skills/README.md](../../skills/README.md)（#1846 で通しで確かめた

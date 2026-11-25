@@ -48,6 +48,7 @@ def test_builtin_skill_ids_are_in_display_order() -> None:
         "rag-chat-and-data",
         "rag-search-and-data",
         "structured-data-query",
+        "xlsx-create",
     )
 
 
