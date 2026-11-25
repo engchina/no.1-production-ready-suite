@@ -83,6 +83,23 @@ def test_stored_citation_metadata_keeps_how_the_answer_used_the_evidence() -> No
     assert stored_citation_metadata(metadata) == metadata
 
 
+def test_stored_citation_metadata_keeps_the_route_ranks() -> None:
+    """検索の経路の印（ベクトル・全文・Wiki・rerank）を保存する（Wiki は #5831）。"""
+    metadata = {
+        "vector_rank": 3,
+        "keyword_rank": 1,
+        "wiki_origin": "root",
+        "wiki_rank": 2,
+        "rerank_rank": 1,
+    }
+
+    assert stored_citation_metadata(metadata) == metadata
+    # 関係を辿った先は由来だけ（順位は無い）。Wiki の経路の他の値は保存しない。
+    assert stored_citation_metadata(
+        {"wiki_source": True, "wiki_origin": "dependency", "wiki_rerank_score": 0.5}
+    ) == {"wiki_origin": "dependency"}
+
+
 def test_stored_citation_metadata_drops_null_and_unknown_keys() -> None:
     # 分割の版と統合の値は監査・調査のために残す（#1376）。
     assert stored_citation_metadata(

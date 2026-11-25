@@ -77,6 +77,9 @@ _EVIDENCE_KEYS = (
     "vector_rank",
     "keyword_rank",
     "rerank_rank",
+    # Wiki の経路の由来(起点 / 関係を辿った先)と、起点の Wiki のベクトル検索の順位(#5831)。
+    "wiki_origin",
+    "wiki_rank",
     # 文書の版（処理レシピ・古い版の印）。
     "recipe_id",
     "recipe_slot_no",

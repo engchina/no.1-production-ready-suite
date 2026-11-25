@@ -120,7 +120,7 @@ RAG 検索レスポンスには `trace_id` を含める。OCI Enterprise AI、Op
 
 検索レスポンスと評価ケース結果には `diagnostics` も含める。これは `retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps`・根拠の構成・信頼度など）、安全チェックの policy / backend / 縮退、filter key、ナレッジベースの件数、適用した KB / 検索・回答プロファイルの設定、RAG 設定 fingerprint だけで構成し、query 本文や secret は含めない。低召回や設定変更による品質回帰を trace id と合わせて調査するために使う。旧 standard の診断（`top_k`・`rerank_top_n`・query variant 件数・検索 / rerank / 去重 / context の加工の件数・context window・`stream_stage_timings` など）と、検索 UI の「適応展開」「依存昇格」の件数の表示は #595 で削除した。
 
-citation の `metadata` には `section_title`、`section_path`、`section_level`、`content_kind`、`chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count`、`text_sha256`、`text_chars` と、`retrieval_mode`、`vector_rank`、`keyword_rank`、`vector_score`、`keyword_score`、`rrf_score` を入れられる場合だけ含める。query 本文や OCR 原文は含めず、hybrid 検索で vector 側の召回漏れか keyword 側の語彙不一致か、また複雑文書のどの章節・親要素が根拠を拾ったかを per-case に確認する。
+citation の `metadata` には `section_title`、`section_path`、`section_level`、`content_kind`、`chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count`、`text_sha256`、`text_chars` と、`retrieval_mode`、`vector_rank`、`keyword_rank`、`wiki_origin`、`wiki_rank`（Wiki の検索の経路。#5831）、`vector_score`、`keyword_score`、`rrf_score` を入れられる場合だけ含める。query 本文や OCR 原文は含めず、hybrid 検索で vector 側の召回漏れか keyword 側の語彙不一致か、また複雑文書のどの章節・親要素が根拠を拾ったかを per-case に確認する。
 
 すべての HTTP レスポンスには `X-Request-ID` を付ける。未処理例外は `ApiResponse` の 500 に統一し、クライアントには内部詳細を返さず、`app.main` logger の `unhandled_api_error` に `request_id`、HTTP method、path、例外型を記録する。
 
