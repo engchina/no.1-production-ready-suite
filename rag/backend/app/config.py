@@ -1274,18 +1274,6 @@ class Settings(
             "Wiki の検索の経路を使う。検索・回答プロファイルの指定で決める（全体の既定は OFF）。"
         ),
     )
-    rag_wiki_candidates: int = Field(
-        default=100,
-        ge=1,
-        le=500,
-        description="Wiki の案内のベクトル検索で取る候補数の上限。",
-    )
-    rag_wiki_selected_units: int = Field(
-        default=32,
-        ge=1,
-        le=200,
-        description="Wiki の索引の上位から辿りの起点にする原文単位の数の上限。",
-    )
     rag_wiki_link_depth: int = Field(
         default=1,
         ge=0,

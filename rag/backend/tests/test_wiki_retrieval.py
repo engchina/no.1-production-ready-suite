@@ -169,7 +169,7 @@ class Store:
 
 
 def retriever(
-    store: Store, *, enabled: bool = True, settings: Settings | None = None
+    store: Store, *, enabled: bool = True, settings: Settings | None = None, scores: Any = None
 ) -> WikiRetriever:
     profile = SimpleNamespace(
         status="ACTIVE",
@@ -184,17 +184,42 @@ def retriever(
         async def get_search_answer_profile(self, profile_id: str) -> Any:
             return profile
 
-    class GenAi:
-        async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
-            return [[0.1] * 4 for _ in texts]
+    return FixedRetriever(settings or Settings(), Oracle(), GenAi(scores), store=store)  # type: ignore[arg-type]
 
-    return WikiRetriever(settings or Settings(), Oracle(), GenAi(), store=store)  # type: ignore[arg-type]
+
+class GenAi:
+    """質問の embedding と rerank のスタブ。rerank は指定が無ければ候補の順を保つ。"""
+
+    def __init__(self, scores: Any = None) -> None:
+        self.scores = scores
+        self.reranked: list[list[str]] = []
+
+    async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
+        return [[0.1] * 4 for _ in texts]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        self.reranked.append(list(documents))
+        if isinstance(self.scores, Exception):
+            raise self.scores
+        scores = self.scores or [0.9 - index * 0.001 for index in range(len(documents))]
+        return [(index, score) for index, score in enumerate(scores[: len(documents)])]
+
+
+class FixedRetriever(WikiRetriever):
+    """起点数（``top_k``）を決めておく検索の経路。指定が無ければ既定の起点数。"""
+
+    top_k: int | None = None
+
+    async def search(self, question: str, **kwargs: Any) -> Any:
+        return await super().search(question, **{"top_k": self.top_k, **kwargs})
 
 
 def rooted(store: Store, *roots: str, **settings: Any) -> WikiRetriever:
     """``roots`` の単位だけを索引の上位（辿りの起点）にした検索の経路。"""
     store.roots = list(roots)
-    return retriever(store, settings=Settings(rag_wiki_selected_units=len(roots), **settings))
+    wiki = retriever(store, settings=Settings(**settings))
+    wiki.top_k = len(roots)  # type: ignore[attr-defined]
+    return wiki
 
 
 A1, A2 = "doc-a-a1", "doc-a-a2"
@@ -206,7 +231,7 @@ async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
 ) -> None:
     store = Store([PAGES[1], PAGES[3], PAGES[-1]])
     store.roots = ["doc-a-a2", "doc-b-b1"]
-    clients = retriever(store, settings=Settings(rag_wiki_selected_units=2))
+    clients = retriever(store)
     engine = AnswerEngine(clients.settings, oracle=clients.oracle, genai=clients.genai)
     monkeypatch.setattr(
         oci_enterprise_ai,
@@ -217,7 +242,7 @@ async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
     wiki.store = store
     seconds: dict[str, float] = {}
     result = await wiki.search(
-        QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds
+        QUESTION, profile_id="p", filters={}, timeout=None, stage_seconds=seconds, top_k=2
     )
 
     assert result.trace["selected_documents"] == 2
@@ -227,11 +252,90 @@ async def test_chat_reads_ranked_wiki_roots_and_dependencies_without_a_planner(
         "link": [],
     }
     # 候補はベクトル検索の順位の 1 回だけで決める（全文検索は呼ばない。#5825）。
+    # 起点と辿った単位の由来を原文に付ける（合わせ込みの順と画面のバッジ。#5831）。
+    assert {c.chunk_id: c.metadata["wiki_origin"] for c in result.chunks} == {
+        "doc-a-a2-chunk": "root",
+        "doc-b-b1-chunk": "root",
+        "doc-a-a4-chunk": "dependency",
+    }
+    # 件数と類似度の下限は通常検索のベクトル検索と同じ設定（#5831）。
     assert [args for name, args in store.calls if name == "pages"][0] == {
-        "limit": clients.settings.rag_wiki_candidates
+        "limit": clients.settings.rag_retrieval_query_limit,
+        "min_similarity": clients.settings.rag_min_similarity,
     }
     assert all("document_ids" not in args for name, args in store.calls if name == "pages")
     assert all("モデル" not in stage for stage in seconds)
+
+
+def _root_ids(result: Any) -> list[str]:
+    return [c.chunk_id for c in result.chunks if c.metadata.get("wiki_origin") == "root"]
+
+
+@pytest.mark.asyncio
+async def test_roots_are_the_reranked_originals_above_the_relevance_floor() -> None:
+    """起点は、原文の rerank の点数の順で関連度の下限以上のものを、起点数まで（#5831）。"""
+    # ベクトルの順は a1, a2, a3, a4, b1。rerank は a3 > b1 > a1 > a2（下限未満）> a4（下限未満）。
+    store = Store(PAGES)
+    wiki = retriever(
+        store, settings=Settings(rag_wiki_link_depth=0), scores=[0.5, 0.29, 0.9, 0.1, 0.7]
+    )
+    wiki.top_k = 2  # type: ignore[attr-defined]
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
+
+    assert wiki.genai.reranked == [[page.unit.text for page in PAGES]]  # type: ignore[attr-defined]
+    assert _root_ids(result) == ["doc-a-a3-chunk", "doc-b-b1-chunk"]
+    assert [(c.metadata["wiki_rank"], c.metadata["wiki_rerank_score"]) for c in result.chunks] == [
+        (3, 0.9),
+        (5, 0.7),
+    ]
+    assert result.trace["rerank"] == "completed"
+    assert (result.trace["reranked_units"], result.trace["relevant_units"]) == (5, 3)
+    assert result.trace["selected_units"] == 2
+
+    # 起点数が候補より多ければ、下限以上の全部が点数の順に起点になる。
+    wiki.top_k = 50  # type: ignore[attr-defined]
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
+    assert _root_ids(result) == ["doc-a-a3-chunk", "doc-b-b1-chunk", "doc-a-a1-chunk"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scores", "expected"),
+    [
+        # 1 件も下限（0.3）に届かないときだけ、下限を比（0.5）で 1 回下げる。
+        ([0.2, 0.1, 0.16, 0.0, 0.14], ["doc-a-a1-chunk", "doc-a-a3-chunk"]),
+        # 下げた下限にも届かなければ起点なし。
+        ([0.1, 0.1, 0.1, 0.1, 0.1], []),
+    ],
+)
+async def test_relevance_floor_is_lowered_once_only_when_nothing_reaches_it(
+    scores: list[float], expected: list[str]
+) -> None:
+    wiki = retriever(Store(PAGES), settings=Settings(rag_wiki_link_depth=0), scores=scores)
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
+    assert _root_ids(result) == expected
+    assert result.trace["status"] == "ready"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("settings", "scores", "state", "calls"),
+    [
+        (Settings(rag_wiki_link_depth=0, rag_rerank_enabled=False), None, "disabled", 0),
+        (Settings(rag_wiki_link_depth=0), RuntimeError("rerank"), "failed", 1),
+    ],
+)
+async def test_roots_keep_the_vector_order_when_rerank_is_off_or_fails(
+    settings: Settings, scores: Any, state: str, calls: int
+) -> None:
+    """rerank が無効・失敗のときは、通常検索と同じくベクトルの順のまま起点数で切る（#5831）。"""
+    wiki = retriever(Store(PAGES), settings=settings, scores=scores)
+    wiki.top_k = 2  # type: ignore[attr-defined]
+    result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None)
+    assert _root_ids(result) == ["doc-a-a1-chunk", "doc-a-a2-chunk"]
+    assert result.trace["rerank"] == state
+    assert len(wiki.genai.reranked) == calls  # type: ignore[attr-defined]
+    assert all("wiki_rerank_score" not in c.metadata for c in result.chunks)
 
 
 @pytest.mark.asyncio
@@ -545,10 +649,6 @@ async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> N
     集合だけで絞る。回答に使う原文は read_sources が今の範囲で照合し直す。"""
     oracle = SqlOracle(LINKED)
 
-    class GenAi:
-        async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
-            return [[0.1] * 4 for _ in texts]
-
     wiki = WikiRetriever(
         Settings(rag_wiki_link_depth=2),
         oracle,  # type: ignore[arg-type]
@@ -645,6 +745,7 @@ WIKI_STAGES = [
     "Wiki: 目録の読み込み",
     "Wiki: 質問のベクトル化",
     "Wiki: 案内の候補の検索",
+    "Wiki: 起点の再ランキング",
     "Wiki: 依存と関連の辿り",
     "Wiki: 原文の読み込み",
 ]

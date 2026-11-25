@@ -864,11 +864,14 @@ class WikiStore:
         unit_ids: Sequence[str] | None = None,
         query_vector: Sequence[float] | None = None,
         limit: int | None = None,
+        min_similarity: float | None = None,
         exclude_document_ids: Sequence[str] = (),
     ) -> list[WikiPage]:
         """``resolve`` で決めた範囲の案内。
 
         ``query_vector`` と ``limit`` があれば近い順の上位だけを、ID の順位を決めてから読む。
+        ``min_similarity`` があれば、近い順に取った上位からコサイン類似度がそれ未満の単位を外す
+        （通常検索のベクトル検索と同じ順。近傍の検索の中には条件を置かない。#5831）。
         ``exclude_document_ids`` の文書は除く（文書をまたぐ関連の候補。#5492）。
         """
         if not scope.sources:
@@ -889,12 +892,18 @@ class WikiStore:
                 where += " AND " + clause
                 binds.update(added)
         if query_vector is not None and limit is not None:
-            rows = await self.oracle._fetch_all(
-                f"""SELECT p.unit_id {WIKI_SCOPED_FROM} WHERE {where}
+            nearest = f"""SELECT p.unit_id,p.document_id,
+                VECTOR_DISTANCE(p.embedding,:wiki_vector,COSINE) AS wiki_distance
+                {WIKI_SCOPED_FROM} WHERE {where}
                 ORDER BY VECTOR_DISTANCE(p.embedding,:wiki_vector,COSINE),p.document_id,p.unit_id
-                FETCH FIRST :wiki_limit ROWS ONLY""",
-                {**binds, "wiki_vector": array("f", query_vector), "wiki_limit": limit},
-            )
+                FETCH FIRST :wiki_limit ROWS ONLY"""
+            binds = {**binds, "wiki_vector": array("f", query_vector), "wiki_limit": limit}
+            if min_similarity is not None:
+                nearest = f"""SELECT unit_id FROM ({nearest})
+                WHERE 1 - wiki_distance >= :wiki_min_similarity
+                ORDER BY wiki_distance,document_id,unit_id"""
+                binds["wiki_min_similarity"] = min_similarity
+            rows = await self.oracle._fetch_all(nearest, binds)
             return await self._hydrate([str(row["unit_id"]) for row in rows], scope)
         rows = await self.oracle._fetch_all(
             f"""SELECT p.page_json {WIKI_SCOPED_FROM} WHERE {where}
