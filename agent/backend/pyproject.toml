@@ -28,6 +28,8 @@ dependencies = [
   "openpyxl>=3.1",
   # 業務 Agent のツール `docx_create` が Word のファイルを作る（#5837。NL2SQL と同じ package）。
   "python-docx>=1.2",
+  # 業務 Agent のツール `pptx_create` が PowerPoint のファイル（グラフを含む）を作る（#5837）。
+  "python-pptx>=1.0.2",
   # ツールの引数を input schema で検証する（#2630）。openai-agents → mcp が既に使う版を直接の依存に
   # する（新しい package は入れない）。
   "jsonschema>=4.26,<5",
@@ -83,6 +85,8 @@ line-ending = "auto"
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+# python-pptx は型の情報（py.typed）を持つが、色・グラフの API に型注釈が無い（#5837）。
+untyped_calls_exclude = ["pptx"]
 
 [[tool.mypy.overrides]]
 # jsonschema は型の stub を同梱しない（stub の package は入れない。#2630）。

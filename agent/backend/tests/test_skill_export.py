@@ -144,14 +144,18 @@ def test_builtin_skill_export_is_the_same_as_the_skills_folder(
 
 @pytest.mark.parametrize(
     ("skill_id", "origin"),
-    [("xlsx-create", "skills/xlsx/SKILL.md"), ("docx-create", "skills/docx/SKILL.md")],
-    ids=["xlsx-create", "docx-create"],
+    [
+        ("xlsx-create", "skills/xlsx/SKILL.md"),
+        ("docx-create", "skills/docx/SKILL.md"),
+        ("pptx-create", "skills/pptx/SKILL.md"),
+    ],
+    ids=["xlsx-create", "docx-create", "pptx-create"],
 )
 def test_third_party_based_skill_keeps_its_license_in_the_folder_and_the_export(
     skill_id: str, origin: str
 ) -> None:
-    """第三者の資料を元にした組み込みのスキル（Excel 作成・Word 作成。#5837）は、許諾の全文と
-    出典・変更点をフォルダに持ち、frontmatter の `license` に書き、書き出しにも入れる
+    """第三者の資料を元にした組み込みのスキル（Excel 作成・Word 作成・PowerPoint 作成。#5837）は、
+    許諾の全文と出典・変更点をフォルダに持ち、frontmatter の `license` に書き、書き出しにも入れる
     （Apache License 2.0）。"""
     source = BUILTIN_SKILLS_DIR / skill_id
     license_text = (source / "LICENSE.txt").read_text(encoding="utf-8")

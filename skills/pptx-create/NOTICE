@@ -1,0 +1,32 @@
+This skill (skills/pptx-create) is based on guidance from the "pptx" skill of anthropics/skills:
+
+  Repository: https://github.com/anthropics/skills
+  Path:       skills/pptx/SKILL.md
+  Revision:   e4bb5d960d87126ff3b3a8af1a104b7db67560ba
+  License:    Apache License 2.0 (the LICENSE.txt in that directory; a copy is in LICENSE.txt here)
+
+Changes made for this project:
+
+- SKILL.md is rewritten in Japanese for the pptx_create tool of Production Ready Agent.
+  Only the guidance that applies to that tool is kept: one message per slide, the main
+  message first and a conclusion with next steps last, a structure that matches the size
+  of the deck (no introduction and conclusion in a short deck, dividers between topics in
+  a long one), no period at the end of a slide title, speaker notes in the notes instead
+  of on the slide, and splitting a slide instead of shrinking or overflowing its text.
+  The rule that bullet characters are not typed into the item text is stated in the
+  argument description of the pptx_create tool
+  (agent/backend/app/features/agent/pptx_tool.py).
+- The following guidance is applied in the generator of the pptx_create tool
+  (agent/backend/app/features/agent/pptx_presentation.py and chart_drawing.py) instead of
+  in SKILL.md: an explicit 16:9 slide size, a white background, the title at the same
+  position, font and size on every slide of the same type, left-aligned body text, list
+  text of at least 14 pt that is never shrunk to fit (content that does not fit is
+  rejected), real list items instead of typed bullet characters, native charts instead of
+  rendered images, no legend for a single series, and the same label style on every
+  chart.
+- This project uses one fixed look that differs from the design ideas of the original:
+  one typeface for all text, a thin accent line under the slide title, and slides made
+  only of text, tables and charts.
+- Everything else is not included: the scripts, running code (pptxgenjs, Python,
+  LibreOffice), reading and editing existing files and templates, themes, layouts and
+  sections chosen per deck, color palettes, images and icons, and the QA procedures.
