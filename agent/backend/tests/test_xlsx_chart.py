@@ -6,8 +6,9 @@
 - グラフは、そのシートの表の cell を参照する（系列の名前は見出しの cell、項目と値はデータの行。
   集計の行は含めない）。XML に入る値の控えは、cell の値と同じ。
 - 種類（縦棒・横棒・折れ線・円）、置き場所（表の右）と大きさ。
-- Excel に合わせる所: 数値・日付の項目の参照、等間隔の項目の軸、白い塗りと角、負の値、凡例の位置、
-  字体と字の大きさ。
+- Excel に合わせる所: 数値・日付の項目の参照、等間隔の項目の軸、白い塗りと角、字体と字の大きさ。
+- 共通の描画（`chart_drawing`）の指定が、シートのグラフにも入る: 負の値（棒の色を反転しない・項目の
+  名前をグラフの端に置く）、凡例の位置の属性（#5858）。
 - 上限を超えた指定・種類に合わない指定は、切り詰めずに誤りにする。
 """
 
@@ -258,7 +259,7 @@ def test_chart_xml_is_adjusted_for_a_sheet(chart_type: str) -> None:
     assert _values(defaults, "a:ea/@typeface") == [FONT_NAME]
     label_sizes = set(_values(part, "//c:dLbls/c:txPr//a:defRPr/@sz"))
     assert label_sizes <= {str(int(SHEET_CHART_LABEL_PT * 100))}
-    # 凡例の位置は、既定の値でも属性に書く（省くと、openpyxl がブックを読めない）。
+    # 凡例の位置は、既定の値でも属性に書く（省くと openpyxl がブックを読めない。共通の描画の指定）。
     assert _values(part, "//c:legendPos/@val") == (["r"] if chart_type == "pie" else [])
     # 題は置かない。
     assert part.xpath("//c:title") == []
@@ -272,13 +273,34 @@ def test_chart_xml_is_adjusted_for_a_sheet(chart_type: str) -> None:
     axis_ids = _values(part, "//c:catAx/c:axId/@val | //c:valAx/c:axId/@val")
     assert sorted(axis_ids) == sorted(_values(part, "//c:plotArea/*/c:crossAx/@val"))
     assert len(set(axis_ids)) == 2 and all(0 < int(value) < 2**31 for value in axis_ids)
-    # 負の値があっても読める: 項目の名前はグラフの端、負の値の棒も系列の色。
+    # 負の値があっても読める: 項目の名前はグラフの端、負の値の棒も系列の色（共通の描画の指定）。
     assert _values(part, "//c:catAx/c:tickLblPos/@val") == ["low"]
     inverted = _values(part, "//c:ser/c:invertIfNegative/@val")
     assert inverted == ([] if chart_type == "line" else ["0"])
     # 横棒は、表の上の行から順に上から並べる。
     orientation = _values(part, "//c:catAx/c:scaling/c:orientation/@val")
     assert orientation == ["maxMin" if chart_type == "bar" else "minMax"]
+
+
+@pytest.mark.parametrize("chart_type", ["column", "bar", "line"])
+def test_chart_with_negative_values_stays_readable(chart_type: str) -> None:
+    """負の値の棒の色を反転せず、項目の名前をグラフの端に置く（#5858。体裁は共通の部品）。"""
+    rows: list[list[Any]] = [
+        ["品目 A", 120, -0.25, "2026-01-05", 2024],
+        ["品目 B", -80, None, "2026-02-10", 2025],
+        ["品目 C", 45, -0.5, "2026-03-15", 2026],
+    ]
+    workbook, [part], _ = _built(_sheet(ChartSpec(chart_type, 1, (2, 3)), rows=rows))
+
+    # 値の控えは、cell の値（負の値のまま）。
+    [chart] = workbook["明細"]._charts  # noqa: SLF001 - openpyxl に、読んだグラフの公開の API が無い
+    assert [
+        {point.idx: point.v for point in series.val.numRef.numCache.pt} for series in chart.series
+    ] == [{0: 120.0, 1: -80.0, 2: 45.0}, {0: -0.25, 2: -0.5}]
+    assert _values(part, "//c:catAx/c:tickLblPos/@val") == ["low"]
+    assert _values(part, "//c:ser/c:invertIfNegative/@val") == (
+        [] if chart_type == "line" else ["0", "0"]
+    )
 
 
 def test_names_starting_with_a_formula_sign_stay_text() -> None:
