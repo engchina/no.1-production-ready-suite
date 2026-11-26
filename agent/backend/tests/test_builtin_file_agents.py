@@ -213,3 +213,56 @@ def test_data_and_file_agents_make_a_file_from_the_looked_up_table(
     assert _file_rows(run) == [COLUMNS, *[[row["LABEL"], row["AMOUNT"]] for row in ROWS]]
     assert run_answer_text(run) == answer
     model.assert_complete()
+
+
+def test_data_and_file_agent_keeps_the_answer_when_it_only_made_a_file(
+    monkeypatch: MonkeyPatch, script: Any
+) -> None:
+    """根拠のツールを呼ばずにファイルだけを作った Run は、回答を拒答に置き換えない（#5853）。
+
+    利用者が会話に書いた内容をファイルにした Run。ファイルは成果物に残るので、回答も
+    モデルが返したまま出す（差し戻しもしない）。
+    """
+    fake_product_mcp(monkeypatch)
+    answer = "ファイル「合成の一覧.xlsx」を作りました。シート「合成の表」に 2 行あります。"
+
+    run, model = script(
+        RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
+        "次の 2 つの名前を Excel のファイルにして: record-1、record-2",
+        [
+            function_call(
+                XLSX_CREATE_TOOL,
+                {"title": "合成の一覧", "sheets": [_sheet(rows=[["record-1"], ["record-2"]])]},
+                call_id="call-xlsx",
+            )
+        ],
+        [assistant_message(answer)],
+    )
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].model_dump_json()
+    # 資料・業務データのツールは渡っているが、呼んでいない。
+    assert "nl2sql__nl2sql_query" in _tool_names(model)
+    assert _file_rows(run) == [["名前"], ["record-1"], ["record-2"]]
+    assert run_answer_text(run) == answer
+    assert [event for event in run.events if "tool_grounding" in event.model_dump_json()] == []
+    model.assert_complete()
+
+
+def test_data_and_file_agent_still_refuses_an_answer_without_tools_or_files(
+    monkeypatch: MonkeyPatch, script: Any
+) -> None:
+    """ファイルも作らず根拠のツールも呼ばない回答は、これまでどおり差し戻して拒答にする。"""
+    fake_product_mcp(monkeypatch)
+
+    run, model = script(
+        RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
+        "合成の規程の上限はいくつですか",
+        [assistant_message("上限は 10 です。")],
+        [assistant_message("上限は 10 です。")],
+    )
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].model_dump_json()
+    assert [item for item in run.artifacts if item.kind == FILE_ARTIFACT_KIND] == []
+    assert run_answer_text(run) != "上限は 10 です。"
+    assert any("refused" in event.model_dump_json() for event in run.events)
+    model.assert_complete()
