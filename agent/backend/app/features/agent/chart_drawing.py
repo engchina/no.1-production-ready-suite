@@ -11,7 +11,8 @@
 - 埋め込みのブック（利用者が「データの編集」で開く表）は、項目と系列の名前を文字型で書く。
   python-pptx が作るブックは、`=` で始まる文字を数式に、URL の形の文字をリンクにするので、使わない
   （表の値を、数式として評価される形でファイルに入れない）。
-- 体裁は種類ごとに決まっている（呼ぶ側が決めるのは字体だけ）。
+- 体裁は種類ごとに決まっている（呼ぶ側が決めるのは、字体と字の大きさだけ。字の大きさの既定は
+  スライド用の `CHART_PT`・`CHART_LABEL_PT` で、文書に置く側は本文に合う大きさを渡す）。
   - 題と、グラフの全体の枠の線は置かない（題は呼ぶ側が、スライドの題・文書の見出しで示す）。
   - 色は `CHART_COLORS` をこの順に使う（系列ごと。円は区分ごと）。
   - 凡例は、色で見分けるものが 2 つ以上のときだけ（複数の系列は下、円の区分は右）。
@@ -66,7 +67,7 @@ CHART_COLORS = tuple(
 )
 # 埋め込みのブックのシートの名前（python-pptx のグラフの XML が参照する名前）。
 _SHEET_NAME = "Sheet1"
-# 字の大きさ（軸・凡例と、値のラベル）。
+# 字の大きさ（軸・凡例と、値のラベル）の既定。スライドに置くグラフに合う値。
 CHART_PT = 12.0
 CHART_LABEL_PT = 10.5
 _TEXT = RGBColor(0x26, 0x26, 0x26)
@@ -138,15 +139,25 @@ def _write_text(cell: Any, text: str) -> None:
     cell.data_type = "s"
 
 
-def style_chart(chart: Any, data: ChartData, *, font_name: str) -> None:
-    """python-pptx のグラフ（`chart_values` の値で作ったもの）に、固定の体裁と手当てを当てる。"""
+def style_chart(
+    chart: Any,
+    data: ChartData,
+    *,
+    font_name: str,
+    text_pt: float = CHART_PT,
+    label_pt: float = CHART_LABEL_PT,
+) -> None:
+    """python-pptx のグラフ（`chart_values` の値で作ったもの）に、固定の体裁と手当てを当てる。
+
+    `text_pt` は軸・凡例の字の大きさ、`label_pt` は値のラベルの字の大きさ（pt）。
+    """
     axis_ids: dict[str, str] = {}
     for axis_id in chart.element.iter(qn("c:axId"), qn("c:crossAx")):
         # 雛形の ID（負の数を含む）を、同じ対応のまま 1 からの番号に振り直す。
         axis_id.set("val", axis_ids.setdefault(axis_id.get("val"), str(len(axis_ids) + 1)))
     chart.has_title = False
     _clear_frame(chart)
-    chart.font.size = Pt(CHART_PT)
+    chart.font.size = Pt(text_pt)
     chart.font.color.rgb = _TEXT
     apply_font(chart.font, font_name)
     plot = chart.plots[0]
@@ -157,7 +168,7 @@ def style_chart(chart: Any, data: ChartData, *, font_name: str) -> None:
         chart.legend.position = XL_LEGEND_POSITION.RIGHT if pie else XL_LEGEND_POSITION.BOTTOM
         chart.legend.include_in_layout = False
     if pie:
-        _style_pie(plot, data)
+        _style_pie(plot, data, label_pt)
         return
     plot.vary_by_categories = False
     _style_axes(chart, data)
@@ -183,7 +194,7 @@ def style_chart(chart: Any, data: ChartData, *, font_name: str) -> None:
             labels = plot.data_labels
             labels.show_value = True
             labels.position = XL_LABEL_POSITION.OUTSIDE_END
-            labels.font.size = Pt(CHART_LABEL_PT)
+            labels.font.size = Pt(label_pt)
 
 
 def _clear_frame(chart: Any) -> None:
@@ -223,8 +234,8 @@ def _style_axes(chart: Any, data: ChartData) -> None:
             crosses.set("val", "max")
 
 
-def _style_pie(plot: Any, data: ChartData) -> None:
-    """円: 区分ごとの色と白い境の線、割合のラベル。"""
+def _style_pie(plot: Any, data: ChartData, label_pt: float) -> None:
+    """円: 区分ごとの色と白い境の線、割合のラベル（字の大きさは `label_pt`）。"""
     [series] = plot.series
     for index, color in zip(range(len(data.categories)), CHART_COLORS, strict=False):
         point = series.points[index]
@@ -239,7 +250,7 @@ def _style_pie(plot: Any, data: ChartData) -> None:
     labels.number_format = PIE_LABEL_FORMAT
     labels.number_format_is_linked = False
     labels.position = XL_LABEL_POSITION.OUTSIDE_END
-    labels.font.size = Pt(CHART_LABEL_PT)
+    labels.font.size = Pt(label_pt)
     # 円を描く範囲を決めて、外側のラベルと凡例の場所を空ける（自動の配置では、ラベルがグラフの縁に
     # 重なることがある。python-pptx に、描く範囲の API が無い）。
     layout = OxmlElement("c:manualLayout")
@@ -260,14 +271,21 @@ def _style_pie(plot: Any, data: ChartData) -> None:
     plot_area.insert(0, container)
 
 
-def chart_parts(data: ChartData, *, font_name: str) -> tuple[bytes, bytes]:
+def chart_parts(
+    data: ChartData,
+    *,
+    font_name: str,
+    text_pt: float = CHART_PT,
+    label_pt: float = CHART_LABEL_PT,
+) -> tuple[bytes, bytes]:
     """グラフの XML（`c:chartSpace`。体裁と手当てを当てたもの）と、埋め込みのブック（.xlsx）。
 
     スライドを持たない形式が、自分のファイルにグラフの部品として入れる。XML はブックを参照しない
-    （ブックとの関連付けは、入れる側が自分のファイルの関連として足す）。
+    （ブックとの関連付けは、入れる側が自分のファイルの関連として足す）。字の大きさ（`text_pt`・
+    `label_pt`。`style_chart` と同じ）は、置く先の本文に合わせて渡す。
     """
     root = parse_xml(chart_values(data).xml_bytes(CHART_KINDS[data.type]))
-    style_chart(Chart(root, None), data, font_name=font_name)
+    style_chart(Chart(root, None), data, font_name=font_name, text_pt=text_pt, label_pt=label_pt)
     return serialize_part_xml(root), chart_workbook(data)
 
 

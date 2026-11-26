@@ -1,21 +1,28 @@
-"""docx の生成の本体（#5837）。構造化した内容（題・見出し・段落・リスト・表）から .docx を作る。
+"""docx の生成の本体（#5837）。構造化した内容（題・見出し・段落・リスト・表・グラフ）から .docx を
+作る。
 
 Run・DB・ツールの層に依らない純粋な関数（`build_document`）。表の値の出所（Run の表の参照か、
 モデルが書いた値か）は呼ぶ側（`docx_tool`）が解決し、ここには行の値として渡す。
 
 - 作るもの: 題と副題、見出し（3 段まで）、段落、箇条書きと番号付きのリスト（入れ子は 1 段）、表
-  （列ごとの型と書式・題）、改ページ。体裁は 1 つに決まっている（A4 縦・固定の余白・1 つの字体・
-  フッターの中央のページ番号・罫線つきの表）。画像・図・グラフ・目次・ヘッダーとフッターの内容・
-  脚注・コメント・変更履歴・段組み・横向き・文字の装飾・テンプレート・既存のファイルの編集は
-  作らない。
+  （列ごとの型と書式・題）、グラフ（4 種類・題）、改ページ。体裁は 1 つに決まっている（A4 縦・固定の
+  余白・1 つの字体・フッターの中央のページ番号・罫線つきの表・決まった大きさのグラフ）。画像・図・
+  4 つ以外のグラフ・目次・ヘッダーとフッターの内容・脚注・コメント・変更履歴・段組み・横向き・
+  文字の装飾・テンプレート・既存のファイルの編集は作らない。
 - 文は装飾の無い文字として入れる（Markdown・HTML を解釈しない）。段落の文の改行は段落の区切りに
   し、題・見出し・項目の改行は空白にする。表の cell の改行は cell の中の改行のまま。
 - 表の値は列の型で読み、書式を当てた文字にして入れる（数値・日付の列は右寄せ）。数値・日付として
   読めない値は、文字にしたり丸めたりせずに誤りにする（呼ぶ側が列の型を文字に直す）。列の型と
   書式の名前は Excel の生成（`xlsx_workbook`）と同じ（`table_columns`）。値の読み方と表示の文字の
   作り方は PowerPoint の生成（`pptx_presentation`）と共通（`table_text`）。
-- 上限（ブロック・表・行・列・cell の合計・文字数）を超える内容は、切り捨てずに誤りにする。Word の
-  表は大きい表に向かないので、表の上限は Excel より小さい。
+- グラフは Word のグラフ（利用者が開いて値・体裁を編集できる。画像にしない）。値は表と同じ形の
+  データ（列の定義と行の値）から取り、その表は文書に出さない（表も見せるときは、呼ぶ側が同じ値の
+  表のブロックを並べる）。指定（種類・項目の列・系列の列）の検証は `chart_spec`、描画（種類ごとに
+  決まっている色・凡例・値のラベル・軸の体裁）は `chart_drawing`（どちらも PowerPoint の生成と
+  共通）、文書のファイルへの埋め込みは `docx_chart`。大きさは 1 つ（本文の幅）で、行内の図として
+  置く（ページをまたがず、収まらなければ次のページへ送られる）。題は表と同じく上に置く。
+- 上限（ブロック・表・グラフ・行・列・cell の合計・文字数）を超える内容は、切り捨てずに誤りにする。
+  Word の表は大きい表に向かないので、表の上限は Excel より小さい。
 - 誤りは値を含まない場所・種類・直し方（`DocxSpecError.issues`）で返す。場所は `docx_tool` の引数の
   path（`blocks.2.table.columns.1` など。引数の検証の誤りと同じ書き方）。
 - python-docx に無い所（東アジアの字体の指定・ページ番号の field・リストの番号の定義・表の見出しの
@@ -41,6 +48,14 @@ from docx.shared import Emu, Mm, Pt, RGBColor, Twips
 from docx.table import _Cell
 from docx.text.paragraph import Paragraph
 
+from app.features.agent.chart_spec import (
+    ChartData,
+    ChartSpec,
+    chart_data,
+    chart_data_issues,
+    chart_issues,
+)
+from app.features.agent.docx_chart import add_inline_chart
 from app.features.agent.table_columns import SpecIssue, display_width, format_issue
 from app.features.agent.table_text import Column, clean_text, column_texts, column_values
 
@@ -55,6 +70,8 @@ MAX_TABLES = 20
 MAX_TABLE_COLUMNS = 10
 MAX_TABLE_ROWS = 500
 MAX_TABLE_CELLS = 5_000
+# 1 つの文書のグラフの数（グラフごとに、値のブックがファイルに入る）。
+MAX_CHARTS = 20
 # 文字数の上限（表の 1 つの cell と、文書の全体）。
 MAX_CELL_CHARS = 2_000
 MAX_DOCUMENT_CHARS = 200_000
@@ -69,6 +86,12 @@ FONT_NAME = "游ゴシック"
 _BODY_PT = 10.5
 _PARAGRAPH_AFTER_PT = 8.0
 _SMALL_PT = 9.0
+# グラフの大きさ（1 つ。幅は本文の幅）と、グラフの字の大きさ（軸・凡例は表の字と同じ。値のラベルは
+# それより小さい）。
+CHART_WIDTH_MM = PAGE_WIDTH_MM - 2 * MARGIN_LEFT_RIGHT_MM
+CHART_HEIGHT_MM = 100
+CHART_TEXT_PT = _SMALL_PT
+CHART_LABEL_PT = 8.0
 _SUBTITLE_COLOR = RGBColor(0x59, 0x59, 0x59)
 _HEADER_FILL = "E7E6E6"
 _TABLE_TEXT_STYLE = "Table Text"
@@ -122,13 +145,22 @@ class TableBlock:
 
 
 @dataclass(frozen=True, slots=True)
+class ChartBlock:
+    # グラフの値を取る表（文書には出ない。グラフのデータとしてファイルに入る）。
+    columns: Sequence[Column]
+    rows: Sequence[Sequence[Any]]
+    chart: ChartSpec
+    caption: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PageBreakBlock:
     pass
 
 
-Block = HeadingBlock | ParagraphBlock | ListBlock | TableBlock | PageBreakBlock
+Block = HeadingBlock | ParagraphBlock | ListBlock | TableBlock | ChartBlock | PageBreakBlock
 # ブロックの種類の名前（`docx_tool` の引数の `type` と、結果の要約の key）。
-BLOCK_TYPES = ("heading", "paragraph", "bullets", "numbered", "table", "page_break")
+BLOCK_TYPES = ("heading", "paragraph", "bullets", "numbered", "table", "chart", "page_break")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +185,8 @@ class BuiltDocument:
     blocks: dict[str, int]
     # 表ごとの要約（文書に出る順。データの行の数と列の数）。
     tables: tuple[dict[str, int], ...]
+    # グラフごとの要約（文書に出る順。種類・系列の数・項目の数）。
+    charts: tuple[dict[str, Any], ...]
 
 
 def _line(value: str) -> str:
@@ -174,6 +208,8 @@ def _block_type(block: Block) -> str:
         return "numbered" if block.ordered else "bullets"
     if isinstance(block, TableBlock):
         return "table"
+    if isinstance(block, ChartBlock):
+        return "chart"
     return "page_break"
 
 
@@ -215,6 +251,33 @@ def _table_texts(index: int, table: TableBlock, issues: list[SpecIssue]) -> list
     return [[column[row] for column in columns] for row in range(len(table.rows))]
 
 
+def _chart_values(index: int, block: ChartBlock, issues: list[SpecIssue]) -> ChartData | None:
+    """グラフに描く値を、表から取り出す（列の型で読む）。読めない値・描けない値は誤りで None。"""
+    columns_at = f"blocks.{index}.table.columns"
+    read = [
+        column_values(
+            f"{columns_at}.{position}", column, [row[position] for row in block.rows], issues
+        )
+        for position, column in enumerate(block.columns)
+    ]
+    values = [cells for cells in read if cells is not None]
+    if len(values) < len(read):
+        return None
+    data = chart_data(
+        block.chart,
+        [_line(column.header) for column in block.columns],
+        [column.format for column in block.columns],
+        [
+            [_line(text) for text in column_texts(column, cells)]
+            for column, cells in zip(block.columns, values, strict=True)
+        ],
+        values,
+    )
+    found = chart_data_issues(block.chart, data, columns_at=columns_at)
+    issues.extend(found)
+    return None if found else data
+
+
 # ---- 内容の検査 --------------------------------------------------------------------------------
 
 
@@ -242,7 +305,8 @@ def _list_issues(at: str, block: ListBlock, issues: list[SpecIssue]) -> None:
             _required(f"{at}.items.{item_index}.children.{child_index}", child, issues)
 
 
-def _table_issues(at: str, table: TableBlock, issues: list[SpecIssue]) -> None:
+def _columns_issues(at: str, table: TableBlock | ChartBlock, issues: list[SpecIssue]) -> None:
+    """表（表のブロックと、グラフの値を取る表）の列の定義と、行の値の数。"""
     width = len(table.columns)
     if not 1 <= width <= MAX_TABLE_COLUMNS:
         issues.append(
@@ -250,14 +314,6 @@ def _table_issues(at: str, table: TableBlock, issues: list[SpecIssue]) -> None:
                 f"{at}.columns",
                 "count",
                 f"1 つの表の列は 1〜{MAX_TABLE_COLUMNS} 列にしてください。{_TOO_LARGE_FIX}",
-            )
-        )
-    if len(table.rows) > MAX_TABLE_ROWS:
-        issues.append(
-            SpecIssue(
-                f"{at}.rows",
-                "too_many",
-                f"1 つの表の行は {MAX_TABLE_ROWS} 行までです。{_TOO_LARGE_FIX}",
             )
         )
     for row_index, row in enumerate(table.rows):
@@ -278,6 +334,32 @@ def _table_issues(at: str, table: TableBlock, issues: list[SpecIssue]) -> None:
             issues.append(issue)
 
 
+def _table_issues(at: str, table: TableBlock, issues: list[SpecIssue]) -> None:
+    if len(table.rows) > MAX_TABLE_ROWS:
+        issues.append(
+            SpecIssue(
+                f"{at}.rows",
+                "too_many",
+                f"1 つの表の行は {MAX_TABLE_ROWS} 行までです。{_TOO_LARGE_FIX}",
+            )
+        )
+    _columns_issues(at, table, issues)
+
+
+def _chart_issues(at: str, block: ChartBlock, issues: list[SpecIssue]) -> None:
+    """グラフのブロック（値を取る表の列の定義と、グラフの指定）。"""
+    _columns_issues(f"{at}.table", block, issues)
+    issues.extend(
+        chart_issues(
+            f"{at}.chart",
+            block.chart,
+            [column.type for column in block.columns],
+            len(block.rows),
+            rows_at=f"{at}.table.rows",
+        )
+    )
+
+
 def _structure_issues(content: DocumentContent) -> list[SpecIssue]:
     issues: list[SpecIssue] = []
     _required("title", content.title, issues)
@@ -287,6 +369,7 @@ def _structure_issues(content: DocumentContent) -> list[SpecIssue]:
         )
     tables = 0
     cells = 0
+    charts = 0
     for index, block in enumerate(content.blocks):
         at = f"blocks.{index}"
         if isinstance(block, HeadingBlock):
@@ -307,9 +390,20 @@ def _structure_issues(content: DocumentContent) -> list[SpecIssue]:
             tables += 1
             cells += len(block.columns) * len(block.rows)
             _table_issues(f"{at}.table", block, issues)
+        elif isinstance(block, ChartBlock):
+            charts += 1
+            _chart_issues(at, block, issues)
     if tables > MAX_TABLES:
         issues.append(
             SpecIssue("blocks", "too_many_tables", f"1 つの文書の表は {MAX_TABLES} 個までです。")
+        )
+    if charts > MAX_CHARTS:
+        issues.append(
+            SpecIssue(
+                "blocks",
+                "too_many_charts",
+                f"1 つの文書のグラフは {MAX_CHARTS} 個までです。グラフを絞ってください。",
+            )
         )
     if cells > MAX_TABLE_CELLS:
         issues.append(
@@ -323,8 +417,10 @@ def _structure_issues(content: DocumentContent) -> list[SpecIssue]:
     return issues
 
 
-def _characters(content: DocumentContent, tables: dict[int, list[list[str]]]) -> int:
-    """文書に入れる文字の数（題・本文・表）。"""
+def _characters(
+    content: DocumentContent, tables: dict[int, list[list[str]]], charts: dict[int, ChartData]
+) -> int:
+    """文書に入れる文字の数（題・本文・表・グラフの題と項目・系列の名前）。"""
     count = len(content.title) + len(content.subtitle or "")
     for index, block in enumerate(content.blocks):
         if isinstance(block, HeadingBlock | ParagraphBlock):
@@ -336,6 +432,10 @@ def _characters(content: DocumentContent, tables: dict[int, list[list[str]]]) ->
         elif isinstance(block, TableBlock):
             count += len(block.caption or "") + sum(len(column.header) for column in block.columns)
             count += sum(len(text) for row in tables[index] for text in row)
+        elif isinstance(block, ChartBlock):
+            data = charts[index]
+            count += len(block.caption or "") + sum(len(label) for label in data.categories)
+            count += sum(len(series.name) for series in data.series)
     return count
 
 
@@ -559,6 +659,7 @@ class _Writer:
         # 次に書く段落の前で改ページするか。
         self._break_pending = False
         self._table_text_style_id = self.document.styles[_TABLE_TEXT_STYLE].style_id
+        self._charts = 0
 
     def _paragraph(self, text: str, style: str) -> Any:
         paragraph = self.document.add_paragraph(text, style=style)
@@ -670,6 +771,27 @@ class _Writer:
         # 表の後に間隔を置く（続く表とつながらない。文書を表で終えない）。
         self._spacer()
 
+    def chart(self, block: ChartBlock, data: ChartData) -> None:
+        """グラフ（Word のグラフ。体裁は `chart_drawing` が決める）。題は表と同じく上に置く。"""
+        caption = _line(block.caption or "")
+        if caption:
+            self._paragraph(caption, "Caption")
+        # グラフだけの段落（行の高さは中の図に合わせて広がる）。
+        paragraph = self._paragraph("", "Normal")
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        self._charts += 1
+        add_inline_chart(
+            paragraph,
+            data,
+            font_name=FONT_NAME,
+            text_pt=CHART_TEXT_PT,
+            label_pt=CHART_LABEL_PT,
+            width=Mm(CHART_WIDTH_MM),
+            height=Mm(CHART_HEIGHT_MM),
+            name=f"グラフ {self._charts}",
+            description=caption,
+        )
+
     def page_break(self) -> None:
         if self._break_pending:
             self._spacer()
@@ -693,7 +815,13 @@ def build_document(content: DocumentContent) -> BuiltDocument:
         for index, block in enumerate(content.blocks)
         if isinstance(block, TableBlock)
     }
-    if not issues and _characters(content, tables) > MAX_DOCUMENT_CHARS:
+    charts: dict[int, ChartData] = {}
+    for index, block in enumerate(content.blocks):
+        if isinstance(block, ChartBlock):
+            data = _chart_values(index, block, issues)
+            if data is not None:
+                charts[index] = data
+    if not issues and _characters(content, tables, charts) > MAX_DOCUMENT_CHARS:
         issues.append(
             SpecIssue(
                 "blocks",
@@ -716,6 +844,8 @@ def build_document(content: DocumentContent) -> BuiltDocument:
             writer.items(block)
         elif isinstance(block, TableBlock):
             writer.table(block, tables[index])
+        elif isinstance(block, ChartBlock):
+            writer.chart(block, charts[index])
         else:
             writer.page_break()
     return BuiltDocument(
@@ -726,15 +856,24 @@ def build_document(content: DocumentContent) -> BuiltDocument:
             for block in content.blocks
             if isinstance(block, TableBlock)
         ),
+        charts=tuple(
+            {"type": data.type, "series": len(data.series), "categories": len(data.categories)}
+            for _, data in sorted(charts.items())
+        ),
     )
 
 
 __all__ = [
     "BLOCK_TYPES",
+    "CHART_HEIGHT_MM",
+    "CHART_LABEL_PT",
+    "CHART_TEXT_PT",
+    "CHART_WIDTH_MM",
     "DOCX_MIME_TYPE",
     "FONT_NAME",
     "MAX_BLOCKS",
     "MAX_CELL_CHARS",
+    "MAX_CHARTS",
     "MAX_DOCUMENT_CHARS",
     "MAX_HEADING_LEVEL",
     "MAX_LIST_ITEMS",
@@ -744,6 +883,8 @@ __all__ = [
     "MAX_TABLE_ROWS",
     "Block",
     "BuiltDocument",
+    "ChartBlock",
+    "ChartSpec",
     "Column",
     "DocumentContent",
     "DocxSpecError",
