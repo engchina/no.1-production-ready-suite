@@ -1,4 +1,4 @@
-import { ACCEPTED_UPLOAD_TYPES } from "../src/lib/upload-selection";
+import { mockUploadPolicy } from "./_upload-policy";
 import { expect, test, type Page, type Route } from "./fixtures/test";
 
 import {
@@ -75,7 +75,7 @@ async function mockUploadPage(
   {
     maxUploadBytes = 200 * 1024 * 1024,
     knowledgeBaseCount = 1,
-    allowedContentTypes = [...ACCEPTED_UPLOAD_TYPES.split(",").filter(type => !type.startsWith(".")), "application/octet-stream"],
+    allowedContentTypes,
     knowledgeBases,
     ingestionJobs,
   }: {
@@ -87,7 +87,7 @@ async function mockUploadPage(
   } = {}
 ) {
   await mockDatabaseReady(page);
-  await page.route("**/api/documents/upload-policy", route => route.fulfill({ json: apiEnvelope({ allowed_content_types: allowedContentTypes }) }));
+  await mockUploadPolicy(page, allowedContentTypes);
   await page.route("**/api/settings/upload-storage", (route) =>
     route.fulfill({
       json: apiEnvelope({
