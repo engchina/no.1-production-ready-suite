@@ -291,7 +291,7 @@ export function FeedbackClient() {
                 value={urlState.rating}
                 options={ratingOptions}
                 onValueChange={(value) => setParam("rating", value)}
-                // 「評価: 役に立たなかった」が切れない幅。
+                // 評価の選択肢を表示する幅。
                 width="md"
               />
               <FilterSelect

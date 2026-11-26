@@ -90,6 +90,28 @@ def _head(checkpoint_key: str) -> tuple[dict[str, Any], int, str]:
         return json.loads(row[0].read()), int(row[1]), str(row[2])
 
 
+def test_file_review_compares_revisions_across_connections(checkpoint_key: str) -> None:
+    from pr_backend_core.file_review import StaleReview
+
+    first = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    second = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    run_id = uuid4().hex
+    assert first.read_file_review(run_id) is None
+    try:
+        first.write_file_review(run_id, 0, '{"revision": 1}')
+        assert second.read_file_review(run_id) == '{"revision": 1}'
+        with pytest.raises(StaleReview):
+            second.write_file_review(run_id, 0, '{"revision": 1}')
+        second.write_file_review(run_id, 1, '{"revision": 2}')
+        assert first.read_file_review(run_id) == '{"revision": 2}'
+    finally:
+        with connect_platform_oracle() as conn, conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM agent_answer_reviews WHERE namespace=:ns", {"ns": checkpoint_key}
+            )
+            conn.commit()
+
+
 def test_run_full_body_survives_thread_delete_and_follows_entity_tombstone(
     checkpoint_key: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

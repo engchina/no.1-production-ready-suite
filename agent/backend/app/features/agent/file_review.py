@@ -20,7 +20,7 @@ from app.features.agent import builtin_runtime, data_scope
 from app.features.agent.answer_evidence import answer_evidence
 from app.features.agent.answer_references import evidence_items
 from app.features.agent.config import runtime_config_store
-from app.features.agent.evidence_access import unreadable_documents
+from app.features.agent.evidence_access import document_ids_in_content, unreadable_documents
 from app.features.agent.runtime import (
     FeedbackRating,
     RunFeedback,
@@ -31,6 +31,7 @@ from app.features.agent.runtime import (
     run_answer_text,
     runtime_repository,
 )
+from app.features.agent.tool_grounding import is_grounding_tool
 from app.features.agent.tools import ExternalToolError, McpConnectionClient, ToolInvocationContext
 
 RAG_TOOLS = {"rag__rag_chat": "rag_chat", "rag__rag_search": "rag_search"}
@@ -210,12 +211,16 @@ async def change_review(run: RunState, viewer: str, command: ReviewAction) -> Fi
             and s.tool_result
             and s.tool_result.success
             and s.tool_result.output
-            and s.tool_call.name.startswith("nl2sql__")
+            and not s.tool_call.name.startswith("rag__")
+            and is_grounding_tool(s.tool_call.name)
+            and not document_ids_in_content([s.tool_call.arguments, s.tool_result.output])
         ]
         if len(sources) == 1 and not other:
             source = next(iter(sources.values()))
             if source.title.strip() == run.goal.strip():
-                return builtin_runtime._guarded_answer(run.id, source.answer)
+                return await run_in_threadpool(
+                    builtin_runtime._guarded_answer, run.id, source.answer
+                )
         target = builtin_runtime.resolve_model_target(agent.model_id)
         writer = Agent(
             name="answer_revision",

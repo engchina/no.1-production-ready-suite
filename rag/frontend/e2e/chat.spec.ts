@@ -26,6 +26,8 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
+import { firstAnswer, nextAnswer, originalHits, reviewQuestion, reviewSnapshots } from "../../../platform/packages/ui/e2e/file-review-scenario";
+
 const searchAnswerProfile = {
   id: "bv-1",
   name: "経理アシスタント",
@@ -527,7 +529,7 @@ for (const viewport of [
     // 本文 → 注意書き → 根拠の一覧 → 評価 の順（注意書きは本文には混ぜない）。
     const body = page.getByText("経費の上限は 10 万円です。").first();
     const citations = page.locator("summary").filter({ hasText: "AI に渡した 1 件" }).first();
-    const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+    const feedback = page.getByRole("group", { name: "この回答で質問は解決しましたか？" });
     await expect(feedback).toBeVisible();
     const [bodyBox, noticeBox, citationsBox, feedbackBox] = await Promise.all([
       body.boundingBox(),
@@ -811,29 +813,54 @@ test("2モデルは広い画面で空き列なく横並びになる", async ({ p
   await expectNoPageOverflow(page);
 });
 
-test("未解決を直ちに保存し、資料を選ばずに戻っても判定を残す", async ({ page }, testInfo) => {
+test("未解決を直ちに保存し、戻った後に選んだ資料で再回答する", async ({ page }, testInfo) => {
+  const states = reviewSnapshots("t1", "question");
+  let state = states.initial;
   let feedbackPayload: Record<string, unknown> | null = null;
   page.on("request", (request) => {
     if (request.method() === "POST" && new URL(request.url()).pathname === "/api/feedback") {
       feedbackPayload = request.postDataJSON() as Record<string, unknown>;
+      if (feedbackPayload.trace_id === "t1") state = states.unresolved;
     }
   });
-  await openPersistedConversation(page, 1280, [userMessage, assistantMessage]);
-
-  await page.route("**/api/search/answers/t1/review", route => route.fulfill({json:{data:{
-    revision:0, kept:{}, pending:{}, excluded:{}, seen:[],
-    versions:[{id:"t1", answer:"回答", sources:{question:{title:"質問", citations:[]}}, rating:feedbackPayload ? "not_helpful":null}],
-  }}}));
-  const notHelpful = page.getByRole("button", { name: "未解決", exact:true });
-  await notHelpful.click();
+  await openPersistedConversation(page, 1280, [
+    { ...userMessage, content: reviewQuestion },
+    { ...assistantMessage, content: firstAnswer, citations: originalHits },
+  ]);
+  await page.route("**/api/search/answers/t1/review", (route) => {
+    if (route.request().method() === "POST") {
+      const command = route.request().postDataJSON();
+      expect(command.action).toBe("answer");
+      expect(command.selected).toEqual(["doc-a"]);
+      state = {
+        ...states.next,
+        versions: [states.unresolved.versions[0], {
+          ...states.next.versions[1], answer: nextAnswer, sources: {
+            question: { ...states.next.versions[1].sources.question, citations: originalHits.slice(0, 3) },
+          },
+        }],
+      };
+    }
+    return route.fulfill({json:{data:state,error_messages:[],warning_messages:[]}});
+  });
+  const bad = page.getByRole("button", { name: "未解決", exact:true });
+  await bad.click();
   await expect.poll(() => feedbackPayload).toMatchObject({
     trace_id:"t1", search_answer_profile_id:"bv-1", source_surface:"chat",
     message_id:"a1", target_type:"answer", rating:"not_helpful",
   });
-  await page.getByRole("button", {name:"戻る",exact:true}).click();
-  await expect(notHelpful).toHaveAttribute("aria-pressed", "true");
-  if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-vote-"+testInfo.project.name+".png"});
-
+  const drawer = page.getByRole("dialog");
+  await drawer.getByRole("button", { name:"戻る", exact:true }).click();
+  await expect(bad).toHaveAttribute("aria-pressed", "true");
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-vote-"+testInfo.project.name+".png" });
+  await bad.click();
+  await drawer.getByRole("radio", { name:"選んだ資料だけで答え直す" }).check();
+  await drawer.getByRole("checkbox", { name:"操作ガイド A.pdf" }).check();
+  await drawer.getByRole("button", { name:"選んだ資料だけで再回答" }).click();
+  await expect(page.getByText(nextAnswer, {exact:true})).toBeVisible();
+  await page.getByText("回答 1 · 未解決", {exact:true}).click();
+  await expect(page.getByText(firstAnswer, {exact:true})).toBeVisible();
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-history-"+testInfo.project.name+".png" });
 });
 
 test("3モデルはカード幅を維持して次の行へ折り返す", async ({ page }) => {
@@ -1269,7 +1296,7 @@ for (const theme of ["light", "dark"] as const) {
       page.getByText(assistantMessage.content).first().boundingBox(),
       page.locator("summary").filter({ hasText: "AI に渡した 1 件" }).boundingBox(),
       summary.boundingBox(),
-      page.getByRole("group", { name: "この回答は役に立ちましたか？" }).boundingBox(),
+      page.getByRole("group", { name: "この回答で質問は解決しましたか？" }).boundingBox(),
     ]);
     expect(processBox!.y).toBeLessThan(answerBox!.y);
     expect(answerBox!.y).toBeLessThan(citationBox!.y);
@@ -1577,7 +1604,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   const panel = await openAnswerProcessDetails(page, "chat-answer-progress");
   await expect(panel).toBeVisible();
   const citationSummary = page.locator("summary").filter({ hasText: "AI に渡した 1 件" });
-  const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+  const feedback = page.getByRole("group", { name: "この回答で質問は解決しましたか？" });
   await expect(citationSummary).toBeVisible();
   await expect(feedback).toBeVisible();
   const [citationBox, panelBox, feedbackBox] = await Promise.all([
@@ -2832,7 +2859,7 @@ for (const compare of [false, true]) {
     }
     const last = page.locator(`[id="message-${replies.at(-1)!.message_id}"]`);
     const evidence = last.locator("summary").filter({ hasText: "AI に渡した 118 件 ／ 回答で引用 1 件" });
-    const feedback = last.getByRole("group", { name: "この回答は役に立ちましたか？" });
+    const feedback = last.getByRole("group", { name: "この回答で質問は解決しましたか？" });
     // scrollTop の代入だけで済ませず、会話の欄の上でホイールを動かして末尾へ進む。
     await log.hover();
     await page.mouse.wheel(0, 20_000);

@@ -23,12 +23,13 @@ interface Props {
   rootId: string;
   t: ReviewText;
   readOnly?: boolean;
+  disabled?: boolean;
   load: () => Promise<FileReviewState>;
   original?: (task: string, documentId: string) => Promise<Record<string, string>>;
   change: (action: FileReviewAction) => Promise<FileReviewState>;
   vote: (id: string, value: AnswerRating) => Promise<void>;
   initialRating?: AnswerRating | null;
-  onHistory: (rootId:string) => void;
+  onHistory: (rootId: string) => void;
   renderVersion: (version: ReviewVersion) => ReactNode;
 }
 
@@ -36,6 +37,7 @@ export function AnswerFileReview({
   rootId,
   t,
   readOnly,
+  disabled,
   load,
   original,
   change,
@@ -61,6 +63,7 @@ export function AnswerFileReview({
   const opener = useRef<HTMLButtonElement | null>(null);
   const selectionId = useId();
   const loader = useRef(load);
+  const userAction = useRef(0);
   const active = useRef(true);
   useEffect(() => {
     loader.current = load;
@@ -68,10 +71,11 @@ export function AnswerFileReview({
   useEffect(() => {
     active.current = true;
     let cancelled = false;
+    const initialAction = userAction.current;
     void loader
       .current()
       .then((s) => {
-        if (!cancelled && Array.isArray(s?.versions)) setState(s);
+        if (!cancelled && initialAction === userAction.current && Array.isArray(s?.versions)) setState(s);
       })
       .catch(() => {});
     return () => {
@@ -80,7 +84,9 @@ export function AnswerFileReview({
     };
   }, [rootId]);
   const hasHistory = (state?.versions.length ?? 0) > 1;
-  useEffect(() => {if (hasHistory) onHistory(rootId);}, [rootId, hasHistory, onHistory]);
+  useEffect(() => {
+    if (hasHistory) onHistory(rootId);
+  }, [rootId, hasHistory, onHistory]);
   const latest = state?.versions.at(-1);
   const pending = state?.pending[task];
   const source = pending ?? latest?.sources[task];
@@ -121,6 +127,7 @@ export function AnswerFileReview({
   }
   function mark(value: AnswerRating) {
     void operation(async () => {
+      userAction.current += 1;
       const current = latest ? latest.rating : (rating ?? initialRating);
       const id = latest?.id ?? rootId;
       if (current !== value) await vote(id, value);
@@ -239,8 +246,10 @@ export function AnswerFileReview({
         </div>
       )}
       {!readOnly && (
-        <div className="space-y-1.5">
-          <p className="text-sm">{t("fileReview.question")}</p>
+        <div role="group" aria-labelledby={selectionId + "-question"} className="space-y-1.5">
+          <p id={selectionId + "-question"} className="text-sm">
+            {t("fileReview.question")}
+          </p>
           <div className="flex flex-wrap gap-2">
             {(["helpful", "not_helpful"] as const).map((value) => (
               <Button
@@ -248,11 +257,9 @@ export function AnswerFileReview({
                 size="sm"
                 variant="secondary"
                 icon={value === "helpful" ? ThumbsUp : ThumbsDown}
-                disabled={busy}
+                disabled={busy || disabled}
                 aria-pressed={currentRating === value}
-                className={
-                  currentRating === value ? "border-primary bg-primary-subtle ring-1 ring-primary" : undefined
-                }
+                className={currentRating === value ? "border-primary bg-primary-subtle ring-1 ring-primary" : undefined}
                 onClick={() => mark(value)}
               >
                 {t(value === "helpful" ? "fileReview.helpful" : "fileReview.notHelpful")}

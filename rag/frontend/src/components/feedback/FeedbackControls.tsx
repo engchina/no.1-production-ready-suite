@@ -7,6 +7,7 @@ import {
   type RetrievedChunk,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { useCurrentFeedback, useSubmitFeedback } from "@/lib/queries";
 import { AnswerCitations } from "@/components/search/CitationList";
 import { AnswerText } from "@/components/search/AnswerText";
@@ -18,7 +19,7 @@ interface FeedbackControlsProps {
   messageId?: string | null;
   contentSnapshot?: FeedbackContentSnapshot | null;
   readOnly?: boolean;
-  onHistory: (rootId:string) => void;
+  onHistory: (rootId: string) => void;
 }
 
 export function FeedbackControls({
@@ -33,49 +34,71 @@ export function FeedbackControls({
   const current = useCurrentFeedback(!readOnly && traceId ? traceId : null);
   const mutation = useSubmitFeedback();
   if (!traceId) return null;
+  if (!readOnly && current.isError && current.data === undefined) {
+    return (
+      <DataLoadFailure
+        error={current.error}
+        fallback={t("feedback.controls.loadError")}
+        onRetry={() => void current.refetch()}
+        retrying={current.isFetching}
+        testId="feedback-current-load-failed"
+      />
+    );
+  }
   const path = "/api/search/answers/" + encodeURIComponent(traceId) + "/review";
   const load = () => request<FileReviewState>(path);
   return (
-    <AnswerFileReview
-      key={traceId}
-      rootId={traceId}
-      onHistory={onHistory}
-      t={t}
-      readOnly={readOnly}
-      load={load}
-      initialRating={current.data?.find((item) => item.target_type === "answer")?.rating}
-      change={(action) =>
-        request<FileReviewState>(
-          path,
-          { method: "POST", body: JSON.stringify(action) },
-          { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
-        )
-      }
-      vote={async (id, rating) => {
-        await mutation.mutateAsync({
-          trace_id: id,
-          search_answer_profile_id: searchAnswerProfileId ?? null,
-          source_surface: sourceSurface,
-          target_type: "answer",
-          rating,
-          message_id: id === traceId ? messageId : undefined,
-          content_snapshot: id === traceId && sourceSurface === "search" ? contentSnapshot : undefined,
-        });
-      }}
-      renderVersion={(v) => {
-        const hits = (v.sources.question?.citations ?? []) as RetrievedChunk[];
-        return (
-          <>
-            <AnswerText text={v.answer} citations={hits} />
-            <AnswerFooter
-              notice={v.notice}
-              noticeLabel={t("answer.notice.label")}
-              evidence={<AnswerCitations citations={hits} idPrefix={"review-" + v.id} />}
-            />
-          </>
-        );
-      }}
-    />
+    <>
+      {!readOnly && current.isError ? (
+        <DataLoadStaleNotice
+          error={current.error}
+          dataUpdatedAt={current.dataUpdatedAt}
+          onRetry={() => void current.refetch()}
+          retrying={current.isFetching}
+        />
+      ) : null}
+      <AnswerFileReview
+        key={traceId}
+        rootId={traceId}
+        onHistory={onHistory}
+        t={t}
+        readOnly={readOnly}
+        disabled={current.isLoading || current.isError}
+        load={load}
+        initialRating={current.data?.find((item) => item.target_type === "answer")?.rating}
+        change={(action) =>
+          request<FileReviewState>(
+            path,
+            { method: "POST", body: JSON.stringify(action) },
+            { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
+          )
+        }
+        vote={async (id, rating) => {
+          await mutation.mutateAsync({
+            trace_id: id,
+            search_answer_profile_id: searchAnswerProfileId ?? null,
+            source_surface: sourceSurface,
+            target_type: "answer",
+            rating,
+            message_id: id === traceId ? messageId : undefined,
+            content_snapshot: id === traceId && sourceSurface === "search" ? contentSnapshot : undefined,
+          });
+        }}
+        renderVersion={(v) => {
+          const hits = (v.sources.question?.citations ?? []) as RetrievedChunk[];
+          return (
+            <>
+              <AnswerText text={v.answer} citations={hits} />
+              <AnswerFooter
+                notice={v.notice}
+                noticeLabel={t("answer.notice.label")}
+                evidence={<AnswerCitations citations={hits} idPrefix={"review-" + v.id} />}
+              />
+            </>
+          );
+        }}
+      />
+    </>
   );
 }
 

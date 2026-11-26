@@ -2256,7 +2256,7 @@ async def test_save_answer_record_binds_large_citations_as_clob_json_text() -> N
     assert json.loads(cast(str, call.parameters["diagnostics_json"])) == {"elapsed_ms": 10}
     assert call.parameters["evaluation_input_json"] is None
     assert call.input_sizes == oracle_module._json_input_sizes(
-        "citations_json", "diagnostics_json", "evaluation_input_json"
+        "citations_json", "diagnostics_json", "evaluation_input_json", "review_request"
     )
 
 

@@ -255,7 +255,7 @@ test("RAG 検索は登録済みQ&Aを提示せずに回答と根拠パネルを�
   await expect(process.getByText("トレース ID")).toHaveCount(0);
   await expect(page.getByText(/^処理時間:/)).toHaveCount(0);
   // 処理の経過 → 回答の本文 → AI に渡した箇所 → 評価 の順（処理の経過は回答の上。チャットと同じ。#2115 / #2097 / #1420）。
-  const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+  const feedback = page.getByRole("group", { name: "この回答で質問は解決しましたか？" });
   await expect(feedback).toBeVisible();
   const [answerBox, processBox, feedbackBox] = await Promise.all([
     page.getByText("受注一覧で取消を押します。").first().boundingBox(),

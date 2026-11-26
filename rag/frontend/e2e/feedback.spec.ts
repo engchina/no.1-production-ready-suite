@@ -393,7 +393,7 @@ test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の�
   await expect(ownNotice).toContainText("SYSTEM_ADMIN のロールの利用者だけが確認できます");
   await expect(page.getByText("すべての利用者のフィードバックを表示しています")).toHaveCount(0);
   const noticeBox = await ownNotice.boundingBox();
-  const summaryBox = await page.getByText("全体の有用率", { exact: true }).first().boundingBox();
+  const summaryBox = await page.getByText("質問の解決率", { exact: true }).first().boundingBox();
   expect(noticeBox !== null && summaryBox !== null && noticeBox.y < summaryBox.y).toBe(true);
   await expectNoPageOverflow(page);
 });
@@ -428,7 +428,7 @@ test("絞り込みの検索・回答プロファイルを読み取れないと�
   await expect(failure.getByText("検索・回答プロファイルを読み取れませんでした。")).toBeHidden();
   expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
   // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
-  await expect(page.getByText("全体の有用率", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("質問の解決率", { exact: true }).first()).toBeVisible();
   const toolbarBox = await page.getByTestId("feedback-filters-toolbar").boundingBox();
   const failureBox = await failure.boundingBox();
   expect(toolbarBox !== null && failureBox !== null && failureBox.y >= toolbarBox.y + toolbarBox.height).toBe(true);

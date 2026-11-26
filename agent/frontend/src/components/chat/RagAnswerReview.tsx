@@ -20,12 +20,13 @@ export function RagAnswerReview({
   run,
   readOnly,
   onSaved,
-  onHistory, originalBody,
+  onHistory,
+  originalBody,
 }: {
   run: RunState;
   readOnly: boolean;
   originalBody: ReactNode;
-  onHistory: (id:string) => void;
+  onHistory: (id: string) => void;
   onSaved: (run: RunState) => void;
 }) {
   const path = "/api/runs/" + encodeURIComponent(run.id) + "/review";
@@ -38,9 +39,7 @@ export function RagAnswerReview({
       initialRating={run.feedback?.rating}
       load={() => request<FileReviewState>(path)}
       original={(task, documentId) =>
-        request<Record<string, string>>(
-          path + "/original?" + new URLSearchParams({ task, document_id: documentId }),
-        )
+        request<Record<string, string>>(path + "/original?" + new URLSearchParams({ task, document_id: documentId }))
       }
       change={(action) => request<FileReviewState>(path, { method: "POST", body: JSON.stringify(action) })}
       vote={async (id, rating) => onSaved(await agentApi.putRunFeedback(run.id, { rating }, id))}

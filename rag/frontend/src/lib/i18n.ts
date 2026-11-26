@@ -4022,7 +4022,7 @@ export const ja = {
   "feedback.target.answer": "回答",
   "feedback.target.citation": "引用",
   "feedback.rating.helpful": "解決した",
-  "feedback.rating.notHelpful": "役に立たなかった",
+  "feedback.rating.notHelpful": "未解決",
   "feedback.summary.questionRate": "質問の解決率",
   "feedback.summary.unretried": "未解決・再回答なし",
   "feedback.summary.retryRate": "再回答した質問の解決率",

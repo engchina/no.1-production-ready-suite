@@ -340,7 +340,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await expect(page.getByText("第3条 経費の上限", { exact: true })).toBeVisible();
   await expect(page.getByText("Rerank #1", { exact: true })).toBeVisible();
   // 回答の評価は、根拠を確かめた後に答えられるよう「根拠 N 件」の後ろに出す（#1202）。
-  const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+  const feedback = page.getByRole("group", { name: "この回答で質問は解決しましたか？" });
   await expect(feedback).toBeVisible();
   const citationTop = (await citationSummary.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
   const feedbackTop = (await feedback.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;

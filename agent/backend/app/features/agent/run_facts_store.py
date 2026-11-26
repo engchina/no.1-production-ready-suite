@@ -738,7 +738,7 @@ class OracleRunFactsStore:
                         )
                     break
                 except Exception as exc:
-                    # システムテーブルの更新（migration 012 / 014 / 019）の前: 無い列を除いて
+                    # システムテーブルの更新（migration 012 / 014 / 019 / 020）の前: 無い列を除いて
                     # 書き直す。
                     if index == len(MERGE_FALLBACKS) - 1 or not _is_column_missing(exc):
                         raise
@@ -1138,6 +1138,7 @@ __all__ = [
     "MERGE_SQL",
     "MERGE_SQL_012",
     "MERGE_SQL_014",
+    "MERGE_SQL_019",
     "RUN_FACTS_TABLE",
     "USAGE_DIMENSIONS",
     "MemoryRunFactsStore",

@@ -211,7 +211,7 @@ test("回答の評価は検索したときの検索・回答プロファイル�
   await expect(page.getByText("上限は 5,000 円です。")).toBeVisible();
   await selectSearchAnswerProfile(page, /人事ビュー/);
 
-  await page.getByRole("button", { name: "この回答は役に立った" }).click();
+  await page.getByRole("button", { name: "解決した", exact: true }).click();
   await expect.poll(() => feedbackBody?.search_answer_profile_id).toBe("bv-1");
 });
 

@@ -59,7 +59,7 @@ def _document_id(value: object) -> str | None:
     return None if document_id.startswith(NON_RAG_DOCUMENT_PREFIXES) else document_id
 
 
-def _document_ids(value: object) -> set[str]:
+def document_ids_in_content(value: object) -> set[str]:
     found: set[str] = set()
     stack = [value]
     while stack:
@@ -109,12 +109,12 @@ def rag_document_ids(runs: Iterable[RunState], artifacts: Iterable[Artifact] = (
     for run in runs:
         for step in run.steps:
             if _is_rag_step(step) and step.tool_result is not None:
-                found |= _document_ids(step.tool_result.output)
-        found |= _document_ids(passed_evidence(run.steps))
-        found |= _document_ids(
+                found |= document_ids_in_content(step.tool_result.output)
+        found |= document_ids_in_content(passed_evidence(run.steps))
+        found |= document_ids_in_content(
             [item.content for item in run.artifacts if item.kind in EVIDENCE_ARTIFACT_KINDS]
         )
-    found |= _document_ids(
+    found |= document_ids_in_content(
         [item.content for item in artifacts if item.kind in EVIDENCE_ARTIFACT_KINDS]
     )
     return found
