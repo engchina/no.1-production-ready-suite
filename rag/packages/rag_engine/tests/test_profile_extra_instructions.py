@@ -26,7 +26,6 @@ from rag_engine.generation.answer_models import (
     extract_original_question,
     with_question_suffix,
 )
-from rag_engine.generation.response_language import render_language_placeholder
 from rag_engine.resources.runtime import bind_prompt_overrides
 from rag_engine.retrieval.guide_steps import GuidePlan, GuideStep, step_queries
 

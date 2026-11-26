@@ -83,8 +83,8 @@ from rag_engine.generation.answer_models import (
     RetrievalQueryPlan,
     _normalize_text,
     extract_original_question,
-    with_question_suffix,
     merge_answer_use,
+    with_question_suffix,
 )
 from rag_engine.generation.answer_payload import (
     _answer_record_identity_keys,
