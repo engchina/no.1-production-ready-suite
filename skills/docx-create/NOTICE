@@ -19,6 +19,9 @@ Changes made for this project:
   grid and every cell, table shading with the "clear" pattern, and heading levels that use
   the built-in heading styles, each with its own font, spacing before and after, and
   keep-with-next.
+- The guidance on charts (the chart block, and choosing a chart type and its columns) is
+  written for this project and is not taken from the original. It follows the wording of
+  skills/pptx-create in this repository, because both tools take the same chart argument.
 - Everything else is not included: the scripts, running code (docx-js, Python, pandoc,
   LibreOffice), reading and editing existing files, unpacking and validating the XML,
   tracked changes, comments, images, tables of contents, and landscape pages.

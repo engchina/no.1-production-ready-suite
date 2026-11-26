@@ -5,17 +5,19 @@
   Run の中に成果物を作るだけで外部へ書かないので、既定では承認が要らない（`xlsx_create` と同じく
   副作用なしの宣言。管理者はツール権限で承認・拒否に変えられる）。
 - 引数: モデルは構造化した内容（題・副題と、上から順のブロック）を渡す。ブロックは 1 つの形の
-  object で、`type`（見出し・段落・箇条書き・番号付きのリスト・表・改ページ）ごとに使う項目が決まる
-  （`_BLOCK_FIELDS`。使わない項目に値があれば、黙って捨てずに引数の誤りにする）。
-- 表の値は 2 つの出所のどちらか（`xlsx_create` と同じ。`file_tool_support`）。
+  object で、`type`（見出し・段落・箇条書き・番号付きのリスト・表・グラフ・改ページ）ごとに使う
+  項目が決まる（`_BLOCK_FIELDS`。使わない項目に値があれば、黙って捨てずに引数の誤りにする）。
+- 表とグラフの値は 2 つの出所のどちらか（`xlsx_create` と同じ。`file_tool_support`）。
   - `source`: その Run で取得済みの表（NL2SQL の結果）の参照。値は保存した step の結果からここで
     写す（モデルは値を書かない）。無い参照・範囲外は引数の誤りとして返す。
   - `rows`: モデルが書いた小さい表。
+  グラフの値は、必ずこの表から取る（どの列を項目・系列にするかだけを指定する。`chart_spec`。
+  `pptx_create` のグラフのスライドと同じ形）。
 - 生成の本体は `docx_document.build_document`（Run に依らない）。体裁は 1 つに決まっていて、引数で
   変えられない。保存は `artifact_file_store.save_tool_file`（参照だけを返す。大きさ・形式の検査も
   そこ）。結果・イベント・ログにファイルの中身を載せない。
 - 上限: 1 つの Run で作れるファイルは `MAX_FILES_PER_RUN` 個（形式を問わない）。内容の上限は
-  `docx_document`。
+  `docx_document` と `chart_spec`。
 
 ツールの層（`tools.py`）からは import しない（Run の module を読むため）。`tool_registry` への登録は
 組み込み Runtime（`builtin_runtime`）がする。
@@ -27,6 +29,12 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.features.agent.answer_data import DataIndex
+from app.features.agent.chart_spec import (
+    CHART_SCHEMA,
+    CHART_TYPES,
+    MAX_CHART_CATEGORIES,
+    ChartSpec,
+)
 from app.features.agent.docx_document import (
     BLOCK_TYPES,
     DOCX_MIME_TYPE,
@@ -35,6 +43,7 @@ from app.features.agent.docx_document import (
     MAX_LIST_ITEMS,
     MAX_TABLE_COLUMNS,
     Block,
+    ChartBlock,
     DocumentContent,
     DocxSpecError,
     HeadingBlock,
@@ -78,6 +87,7 @@ _BLOCK_FIELDS: dict[str, tuple[str, ...]] = {
     "bullets": ("items",),
     "numbered": ("items",),
     "table": ("table",),
+    "chart": ("table", "chart"),
     "page_break": (),
 }
 # 種類で分かれる項目と、使わないときの値の書き方。
@@ -86,6 +96,7 @@ _UNUSED_VALUES: dict[str, str] = {
     "level": "null",
     "items": "空の配列",
     "table": "null",
+    "chart": "null",
 }
 
 _TABLE_SCHEMA: dict[str, Any] = {
@@ -94,7 +105,7 @@ _TABLE_SCHEMA: dict[str, Any] = {
         "caption": {
             "type": ["string", "null"],
             "maxLength": CAPTION_MAX_CHARS,
-            "description": "表の上に置く題。置かないなら null",
+            "description": "表・グラフの上に置く題。置かないなら null",
         },
         "columns": {
             "type": "array",
@@ -114,7 +125,8 @@ _TABLE_SCHEMA: dict[str, Any] = {
             },
             "description": (
                 "source が null の表の行（1 行が columns と同じ数・順の値の配列。値の無い cell は "
-                "null）。source を使う表では空の配列"
+                f"null）。chart のブロックは {MAX_CHART_CATEGORIES} 行まで。source を使う表では"
+                "空の配列"
             ),
         },
     },
@@ -148,8 +160,8 @@ _BLOCK_SCHEMA: dict[str, Any] = {
             "enum": list(BLOCK_TYPES),
             "description": (
                 "ブロックの種類。heading=見出し / paragraph=段落 / bullets=箇条書き / "
-                "numbered=番号付きのリスト / table=表 / page_break=改ページ（次のブロックを新しい"
-                "ページから始める）"
+                "numbered=番号付きのリスト / table=表 / chart=グラフ / page_break=改ページ（次の"
+                "ブロックを新しいページから始める）"
             ),
         },
         "text": {
@@ -175,7 +187,17 @@ _BLOCK_SCHEMA: dict[str, Any] = {
         },
         "table": {
             "anyOf": [_TABLE_SCHEMA, {"type": "null"}],
-            "description": "table の表。ほかの種類では null",
+            "description": (
+                "table の表か、chart のグラフの値を取る表（グラフの表は文書に出ず、グラフのデータに"
+                "なる）。ほかの種類では null"
+            ),
+        },
+        "chart": {
+            "anyOf": [CHART_SCHEMA, {"type": "null"}],
+            "description": (
+                "chart のグラフの指定（種類と、table のどの列を項目・系列にするか）。大きさ・色・"
+                "凡例・値のラベル・軸の体裁は種類ごとに決まっている。ほかの種類では null"
+            ),
         },
     },
     "required": ["type"],
@@ -223,6 +245,18 @@ DOCX_CREATE_OUTPUT_SCHEMA: dict[str, Any] = {
                 "properties": {"rows": {"type": "integer"}, "columns": {"type": "integer"}},
             },
         },
+        "charts": {
+            "type": "array",
+            "description": "グラフごとの種類・系列の数・項目の数（文書に出る順）",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": list(CHART_TYPES)},
+                    "series": {"type": "integer"},
+                    "categories": {"type": "integer"},
+                },
+            },
+        },
     },
 }
 
@@ -233,10 +267,12 @@ DOCX_CREATE_DEFINITION = ToolDefinition(
         "Word のファイル（.docx）を新しく作る。利用者が Word・文書のファイルでの出力を求めた"
         "ときに使う。\n\n"
         "## Step 1: 内容を引数にまとめる\n"
-        "- 本文は、文書に出る順のブロック（blocks）で渡す。表の値は、取得済みの表の参照"
+        "- 本文は、文書に出る順のブロック（blocks）で渡す。表とグラフの値は、取得済みの表の参照"
         "（source）か、引数に書いた行（rows）のどちらかで渡す。\n"
-        "- 作れるのは、題と副題・見出し・段落・箇条書きと番号付きのリスト・表・改ページ。体裁"
-        "（A4 縦・余白・字体・ページ番号）は決まっていて、変えられない。画像・図・グラフ・目次・"
+        "- 作れるのは、題と副題・見出し・段落・箇条書きと番号付きのリスト・表・グラフ（"
+        + "・".join(CHART_TYPES.values())
+        + "）・改ページ。体裁（A4 縦・余白・字体・ページ番号・グラフの大きさ）は決まっていて、"
+        "変えられない。画像・図・ほかの種類のグラフ（積み上げ・2 軸・散布図など）・目次・"
         "ヘッダーとフッターの内容・脚注・コメント・変更履歴・段組み・横向き・文字の装飾（太字・"
         "色・リンクなど）・テンプレートと、既存のファイルの編集はできない。\n\n"
         "## Step 2: 結果を確かめる\n"
@@ -255,15 +291,31 @@ DOCX_CREATE_DEFINITION = ToolDefinition(
 def _table(
     at: str,
     raw: Mapping[str, Any],
+    chart: Mapping[str, Any] | None,
     index: Callable[[], DataIndex],
     issues: list[SpecIssue],
-) -> TableBlock | None:
-    """表の引数を生成の内容にする（参照した表の値を写す）。誤りなら None。"""
+) -> TableBlock | ChartBlock | None:
+    """表の引数を生成の内容にする（参照した表の値を写す）。誤りなら None。
+
+    `chart`（グラフの指定）があれば、その表から値を取るグラフのブロックにする。
+    """
     resolved = text_table(at, raw, index, "表", issues)
     if resolved is None:
         return None
     columns, rows = resolved
-    return TableBlock(columns=columns, rows=rows, caption=raw.get("caption"))
+    caption = raw.get("caption")
+    if chart is None:
+        return TableBlock(columns=columns, rows=rows, caption=caption)
+    return ChartBlock(
+        columns=columns,
+        rows=rows,
+        chart=ChartSpec(
+            type=chart["type"],
+            category_column=chart["category_column"],
+            series_columns=tuple(chart["series_columns"]),
+        ),
+        caption=caption,
+    )
 
 
 def _field_issues(at: str, raw: Mapping[str, Any]) -> list[SpecIssue]:
@@ -329,8 +381,9 @@ def _content(arguments: Mapping[str, Any], run: Any) -> DocumentContent:
                     ],
                 )
             )
-        elif kind == "table":
-            table = _table(f"{at}.table", raw["table"], index, issues)
+        elif kind in ("table", "chart"):
+            chart = raw["chart"] if kind == "chart" else None
+            table = _table(f"{at}.table", raw["table"], chart, index, issues)
             if table is not None:
                 blocks.append(table)
         else:
@@ -360,7 +413,12 @@ def _create_docx(arguments: dict[str, Any], context: ToolInvocationContext) -> d
         mime_type=DOCX_MIME_TYPE,
         data=built.data,
     )
-    return {"file": reference, "blocks": dict(built.blocks), "tables": list(built.tables)}
+    return {
+        "file": reference,
+        "blocks": dict(built.blocks),
+        "tables": list(built.tables),
+        "charts": list(built.charts),
+    }
 
 
 def docx_create_tool() -> tuple[ToolDefinition, ToolHandler]:

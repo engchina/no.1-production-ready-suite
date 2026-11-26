@@ -1,7 +1,8 @@
 """Word のファイルを作るツール `docx_create` と、組み込みのスキル「Word 作成」（#5837）。
 
 - 参照した表（その Run の NL2SQL の結果）の値は、モデルの引数に値が無くても、保存した結果のまま
-  表に入る。無い参照・範囲外・型に合わない値・種類に合わない項目は引数の誤りで、ファイルを作らない。
+  表とグラフに入る。無い参照・範囲外・型に合わない値・種類に合わない項目・描けないグラフの指定は
+  引数の誤りで、ファイルを作らない。
 - 結果・step・イベント・モデルへの入力に、ファイルの中身（バイト列・base64）が載らない。
 - 1 つの Run で作れるファイルの数の上限は、Excel のファイルと合わせて数える。
 - スキルを選んだ業務 Agent の Run にだけツールが渡り、既定では承認待ちにならない。
@@ -16,6 +17,7 @@ import base64
 import contextlib
 import io
 import json
+import zipfile
 from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
@@ -29,13 +31,22 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.table import Table
 from mcp_support import DEFAULT_OUTPUTS, fake_product_mcp
+from openpyxl import load_workbook  # type: ignore[import-untyped]
+from pptx.chart.chart import Chart
+from pptx.oxml import parse_xml
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime, docx_tool
 from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND, FILE_RUN_CLOSED
 from app.features.agent.builtin_runtime import UNDECLARED_CALL_NOT_DECLARED, ModelTarget
+from app.features.agent.chart_spec import (
+    CHART_SCHEMA,
+    CHART_TYPES,
+    MAX_CHART_CATEGORIES,
+    MAX_PIE_CATEGORIES,
+)
 from app.features.agent.config import runtime_config_store
-from app.features.agent.docx_document import DOCX_MIME_TYPE, MAX_TABLE_ROWS
+from app.features.agent.docx_document import BLOCK_TYPES, DOCX_MIME_TYPE, MAX_TABLE_ROWS
 from app.features.agent.docx_tool import (
     DOCX_CREATE_INPUT_SCHEMA,
     DOCX_CREATE_TOOL,
@@ -121,12 +132,30 @@ def _block(block_type: str, **changes: Any) -> dict[str, Any]:
         "level": None,
         "items": [],
         "table": None,
+        "chart": None,
     }
     return {**base, **changes}
 
 
 def _table_block(**changes: Any) -> dict[str, Any]:
     return _block("table", table=_table(**changes))
+
+
+def _chart(chart_type: str = "column", category: int = 1, *series: int) -> dict[str, Any]:
+    return {
+        "type": chart_type,
+        "category_column": category,
+        "series_columns": list(series or (2,)),
+    }
+
+
+def _chart_block(chart: dict[str, Any] | None = None, **table: Any) -> dict[str, Any]:
+    """グラフのブロック（既定は、名前と数値の 2 列を書いた表の、縦棒のグラフ）。"""
+    written = {
+        "columns": [_column("text", header="名前"), _column("number", header="数量")],
+        "rows": [["a", 1], ["b", 2]],
+    }
+    return _block("chart", table=_table(**(table or written)), chart=chart or _chart())
 
 
 PARAGRAPH = _block("paragraph", text="合成の段落。")
@@ -154,6 +183,14 @@ def _document(run_id: str, artifact_id: str) -> tuple[Any, bytes]:
 
 def _cell_texts(table: Table) -> list[list[str]]:
     return [[cell.text for cell in row.cells] for row in table.rows]
+
+
+def _chart_parts(data: bytes, number: int = 1) -> tuple[Any, Any]:
+    """文書の中のグラフ（python-pptx で読んだもの）と、その値のブックの sheet。"""
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        chart = Chart(parse_xml(package.read(f"word/charts/chart{number}.xml")), None)
+        workbook = package.read(f"word/embeddings/Microsoft_Excel_Sheet{number}.xlsx")
+    return chart, load_workbook(io.BytesIO(workbook)).active
 
 
 def _argument_errors(result: ToolResult) -> list[tuple[str, str]]:
@@ -266,10 +303,60 @@ def test_referenced_values_are_copied_from_the_stored_result(run_id: str) -> Non
             "bullets": 0,
             "numbered": 0,
             "table": 1,
+            "chart": 0,
             "page_break": 0,
         },
         "tables": [{"rows": 3, "columns": 5}],
+        "charts": [],
     }
+    encoded = base64.b64encode(data).decode("ascii")
+    recorded = result.model_dump_json() + runtime_repository.get_run(run_id).model_dump_json()
+    assert encoded[:64] not in recorded
+
+
+def test_chart_values_are_copied_from_the_stored_result(run_id: str) -> None:
+    arguments = _chart_block(
+        _chart("column", 1, 2, 3),
+        caption="合成の図",
+        columns=[
+            _column("text"),
+            _column("number", header="金額（円）", format="integer"),
+            _column("number", format="percent1"),
+        ],
+        source=_source(rows="2,1", columns="1-3"),
+    )
+    # モデルの引数に、グラフの値は 1 つも無い（どの列を項目・系列にするかだけ）。
+    assert all(str(value) not in json.dumps(arguments) for value in (1200, 0.25, "record-1"))
+
+    result = _invoke(run_id, arguments, title="合成の報告")
+
+    assert result.success, result.error
+    assert result.output is not None
+    assert result.output["blocks"]["chart"] == 1 and result.output["tables"] == []
+    assert result.output["charts"] == [{"type": "column", "series": 2, "categories": 2}]
+    document, data = _document(run_id, _files(run_id)[0].id)
+    # グラフの値を取る表は文書に出ない。グラフは、題の下に Word のグラフとして入る。
+    assert document.tables == []
+    assert [item.text for item in document.paragraphs if item.style.name == "Caption"] == [
+        "合成の図"
+    ]
+    chart, sheet = _chart_parts(data)
+    [plot] = chart.plots
+    # 項目・系列の名前と値は、保存した結果のまま（行は書いた順）。
+    stored = [ROWS[1], ROWS[0]]
+    assert list(plot.categories) == [row["LABEL"] for row in stored] == ["=1+1", "record-1"]
+    assert [item.name for item in plot.series] == ["金額（円）", "RATE"]
+    assert [list(item.values) for item in plot.series] == [
+        [float(row["AMOUNT"]) for row in stored],
+        [float(row["RATE"]) for row in stored],
+    ]
+    # 値のブック（利用者が「データの編集」で開く表）も同じ値。`=` で始まる名前は文字のまま。
+    assert [list(row) for row in sheet.iter_rows(values_only=True)] == [
+        [None, "金額（円）", "RATE"],
+        ["=1+1", 30, 0.5],
+        ["record-1", 1200, 0.25],
+    ]
+    assert sheet.cell(row=2, column=1).data_type == "s"
     encoded = base64.b64encode(data).decode("ascii")
     recorded = result.model_dump_json() + runtime_repository.get_run(run_id).model_dump_json()
     assert encoded[:64] not in recorded
@@ -304,6 +391,13 @@ def test_all_block_types_and_both_table_sources_work_together(run_id: str) -> No
                         columns=[_column("text", header="項目"), _column("number", header="値")],
                         rows=[["a", 1], ["b", 2.5], ["c", None]],
                     ),
+                    _chart_block(
+                        _chart("line"),
+                        caption="合成の図",
+                        columns=[_column("text"), _column("number")],
+                        source=_source(rows="1-2", columns="1-2"),
+                    ),
+                    _chart_block(_chart("pie")),
                 ],
             },
         ),
@@ -318,9 +412,14 @@ def test_all_block_types_and_both_table_sources_work_together(run_id: str) -> No
         "bullets": 1,
         "numbered": 1,
         "table": 2,
+        "chart": 2,
         "page_break": 1,
     }
     assert result.output["tables"] == [{"rows": 1, "columns": 2}, {"rows": 3, "columns": 2}]
+    assert result.output["charts"] == [
+        {"type": "line", "series": 1, "categories": 2},
+        {"type": "pie", "series": 1, "categories": 2},
+    ]
     document, _ = _document(run_id, _files(run_id)[0].id)
     texts = [(item.style.name, item.text) for item in document.paragraphs if item.text]
     assert texts == [
@@ -334,7 +433,9 @@ def test_all_block_types_and_both_table_sources_work_together(run_id: str) -> No
         ("List Paragraph", "手順 1"),
         ("Heading 2", "1.1 補足"),
         ("Caption", "合成の説明"),
+        ("Caption", "合成の図"),
     ]
+    # グラフの値を取る表は、文書の表にならない。
     referenced, written = document.tables
     assert _cell_texts(referenced) == [["LABEL", "AMOUNT"], ["record-1", "1200"]]
     assert _cell_texts(written) == [["項目", "値"], ["a", "1"], ["b", "2.5"], ["c", ""]]
@@ -418,6 +519,48 @@ def test_all_block_types_and_both_table_sources_work_together(run_id: str) -> No
             _block("bullets", items=[{"text": "項目", "children": [" "]}]),
             ("blocks.0.items.0.children.0", "required"),
         ),
+        # グラフ: 値を取る表とグラフの指定の両方が要る。ほかの種類では指定を書けない。
+        (_block("chart", table=_table(rows=[["a"]])), ("blocks.0.chart", "required")),
+        (_block("chart", chart=_chart()), ("blocks.0.table", "required")),
+        (
+            _block("table", table=_table(rows=[["a"]]), chart=_chart()),
+            ("blocks.0.chart", "conflict"),
+        ),
+        (_block("paragraph", text="文", chart=_chart()), ("blocks.0.chart", "conflict")),
+        (
+            _chart_block(columns=[_column("text"), _column("number")], source=_source(table="T9")),
+            ("blocks.0.table.source.table", "unknown_table"),
+        ),
+        (
+            # 系列にできるのは数値の列だけ（文字の列を系列にした）。
+            _chart_block(columns=[_column("text"), _column("text")], source=_source(columns="1,5")),
+            ("blocks.0.chart.series_columns.0", "not_number"),
+        ),
+        (_chart_block(_chart("column", 1, 3)), ("blocks.0.chart.series_columns.0", "range")),
+        (
+            # 参照した値に空の値がある表は、円のグラフにできない。
+            _chart_block(
+                _chart("pie"),
+                columns=[_column("text"), _column("number")],
+                source=_source(columns="1,2"),
+            ),
+            ("blocks.0.table.columns.1", "pie_values"),
+        ),
+        (
+            _chart_block(
+                columns=[_column("text", header="名前"), _column("number", header="数量")],
+                rows=[[f"item-{index}", index] for index in range(MAX_CHART_CATEGORIES + 1)],
+            ),
+            ("blocks.0.table.rows", "too_many"),
+        ),
+        (
+            _chart_block(
+                _chart("pie"),
+                columns=[_column("text", header="名前"), _column("number", header="数量")],
+                rows=[[f"item-{index}", index + 1] for index in range(MAX_PIE_CATEGORIES + 1)],
+            ),
+            ("blocks.0.table.rows", "too_many"),
+        ),
     ],
     ids=[
         "unknown-table",
@@ -442,6 +585,16 @@ def test_all_block_types_and_both_table_sources_work_together(run_id: str) -> No
         "list-with-table",
         "long-heading",
         "blank-child-item",
+        "chart-without-chart",
+        "chart-without-table",
+        "table-with-chart",
+        "paragraph-with-chart",
+        "chart-unknown-table",
+        "chart-text-series",
+        "chart-series-out-of-range",
+        "chart-pie-with-empty-value",
+        "chart-too-many-categories",
+        "chart-too-many-pie-categories",
     ],
 )
 def test_bad_references_values_and_block_fields_are_argument_errors(
@@ -503,6 +656,12 @@ def test_schema_violations_are_rejected_before_the_handler(run_id: str) -> None:
         _arguments(_table_block(rows=[["x"]] * (MAX_WRITTEN_ROWS + 1))),
         _arguments(_table_block(source={"table": "T1"})),
         _arguments(_table_block(image="a.png")),
+        _arguments(_chart_block(_chart("area"))),
+        _arguments(_chart_block({**_chart(), "category_column": 0})),
+        _arguments(_chart_block({**_chart(), "series_columns": ["2"]})),
+        # グラフ用の値を書く欄・体裁の指定は無い。
+        _arguments(_chart_block({**_chart(), "values": [[1, 2]]})),
+        _arguments(_chart_block({**_chart(), "title": "題", "colors": ["FF0000"]})),
     ):
         result = tool_registry.invoke(
             ToolCall(name=DOCX_CREATE_TOOL, arguments=arguments),
@@ -538,6 +697,21 @@ def test_input_schema_is_strict_for_the_model() -> None:
                 option == {"type": "null"} for option in schema.get("anyOf", [])
             )
             assert nullable or types == "array", name
+
+
+def test_chart_argument_is_the_shared_chart_schema() -> None:
+    """グラフの指定は `pptx_create` と同じ形・同じ上限（`chart_spec` の 1 つの schema）。"""
+    block = DOCX_CREATE_INPUT_SCHEMA["properties"]["blocks"]["items"]["properties"]
+    assert block["type"]["enum"] == list(BLOCK_TYPES)
+    assert block["chart"]["anyOf"] == [CHART_SCHEMA, {"type": "null"}]
+    assert CHART_SCHEMA["properties"]["type"]["enum"] == list(CHART_TYPES)
+    # グラフの値を書く欄は無い（値は table から取る）。
+    assert set(CHART_SCHEMA["properties"]) == {"type", "category_column", "series_columns"}
+    # 作れるグラフの種類の呼び名は、ツールの説明に正本から入る。
+    definition = tool_registry.get(DOCX_CREATE_TOOL)
+    assert definition is not None
+    assert all(label in definition.description for label in CHART_TYPES.values())
+    assert set(definition.output_schema["properties"]) == {"file", "blocks", "tables", "charts"}
 
 
 def test_files_per_run_are_limited_together_with_spreadsheets(
@@ -774,9 +948,16 @@ def test_agent_with_the_skill_creates_a_file_from_the_run_data_without_approval(
     # モデルには strict の schema で渡り、入れ子の object の項目もすべて必須になる。
     assert tool.strict_json_schema is True
     block_schema = tool.params_json_schema["properties"]["blocks"]["items"]
-    assert sorted(block_schema["required"]) == ["items", "level", "table", "text", "type"]
+    assert sorted(block_schema["required"]) == [
+        "chart",
+        "items",
+        "level",
+        "table",
+        "text",
+        "type",
+    ]
     # スキルの指示がモデルに渡る。
-    assert "## Step 3: 表の値の渡し方を選ぶ" in str(model.calls[0].system_instructions)
+    assert "## Step 3: 表とグラフの値の渡し方を選ぶ" in str(model.calls[0].system_instructions)
     [artifact] = [item for item in run.artifacts if item.kind == FILE_ARTIFACT_KIND]
     assert artifact.content["file_name"] == "合成の一覧.docx"
     document, data = _document(run.id, artifact.id)
@@ -793,7 +974,7 @@ def test_agent_with_the_skill_creates_a_file_from_the_run_data_without_approval(
         item for item in run.steps if item.tool_call and item.tool_call.name == DOCX_CREATE_TOOL
     ]
     assert step.tool_result is not None and step.tool_result.success
-    assert set(step.tool_result.output or {}) == {"file", "blocks", "tables"}
+    assert set(step.tool_result.output or {}) == {"file", "blocks", "tables", "charts"}
     encoded = base64.b64encode(data).decode("ascii")
     assert encoded[:64] not in run.model_dump_json()
     model_input = str(model.calls[2].input)
