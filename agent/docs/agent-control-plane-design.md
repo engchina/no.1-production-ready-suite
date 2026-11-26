@@ -133,7 +133,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 ツールを使う。組み込み Runtime は、Agent の選択 Skill が要求するツールの和集合だけをモデルに渡す（指示への列挙だけで
 権限を表現せず、渡すツールの一覧を実体として絞る）。
 
-組み込みの Skill と初期の業務 Agent（#1573・#5342）:
+組み込みの Skill と初期の業務 Agent（#1573・#5342・#5837）:
 
 | Skill の ID | 名前 | 使うツール |
 |---|---|---|
@@ -209,9 +209,22 @@ RAG だけのスキルは metadata `production-ready-final-answer-tools` で回�
 | `rag-search` | RAG 検索アシスタント | `rag-search` |
 | `rag-search-data` | RAG 検索＋データアシスタント | `rag-search-and-data` |
 | `data-query` | データ照会アシスタント | `structured-data-query` |
+| `doc-create` | 文書作成アシスタント | `xlsx-create`・`docx-create`・`pptx-create` |
+| `rag-search-data-doc-create` | RAG 検索＋データ＋文書作成アシスタント | `rag-search-and-data`・`xlsx-create`・`docx-create`・`pptx-create` |
+| `rag-chat-data-doc-create` | RAG チャット＋データ＋文書作成アシスタント | `rag-chat-and-data`・`xlsx-create`・`docx-create`・`pptx-create` |
 
-5 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
-状態）。保存済みの `default` が前の組み込みの内容（名前が「汎用業務 Agent」のまま、か #5342 より前の「資料・データ横断
+ファイルを作る 3 つ（#5837）は、既にあるスキルの組み合わせ（新しい RAG・NL2SQL のスキルは持たない）。
+
+- 文書作成アシスタントは MCP 接続（RAG・NL2SQL）を使わず、ファイルの内容を会話と添付だけから取る。
+- 「＋文書作成」の 2 つは、対応する業務 Agent（`rag-search-data`・`default`）と同じ資料・業務データのツールで内容を
+  確かめてから、求められた形式のファイルにする。指示は、対応する業務 Agent の Step 1 に、この順を書いた Step 2 を
+  足したもの（ファイルの作り方はスキル、いつ作るかはツールの説明が持つ）。
+- 8 つとも、モデルは既定（`model_id` は空）、データの範囲（`data_scopes`）は空（利用者が使えるすべての
+  プロファイルから選ぶ）。Agent 管理が変えた内容は残る。
+
+8 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
+状態。前の 5 つだけを保存した環境にも、足りない 3 つが入る。Oracle の保存先では、読み込みで足した業務 Agent の行は
+内容を変えたときに書く）。保存済みの `default` が前の組み込みの内容（名前が「汎用業務 Agent」のまま、か #5342 より前の「資料・データ横断
 アシスタント」の内容）のままなら、新しい内容を次の版として公開する（前の版は残す。冪等。利用者が変えた内容は残す）。
 廃止した `rag-research`（資料調査アシスタント。#5342）は、下書きとすべての版が前の組み込みの内容のままなら読み込みで
 外して削除の印を付け、変えていたら組織の業務 Agent（由来 `runtime`）として残す（`runtime._migrate_builtin_agent`）。
