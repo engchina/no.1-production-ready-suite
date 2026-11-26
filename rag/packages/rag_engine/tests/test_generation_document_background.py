@@ -74,6 +74,22 @@ def test_chunk_set_is_part_of_document_identity():
     assert document_context_key(original) != document_context_key(replace(original, metadata={**original.metadata, "chunk_set_id": "cs-b"}))
 
 
+def test_stored_summary_and_text_share_the_versioned_head_without_a_logical_name():
+    summary = record()
+    original = replace(summary, metadata={**summary.metadata, "document": {"source_document_id": "logical-a"}})
+    assert document_context_key(summary) == document_context_key(original)
+    with bind_dependencies(
+        deps(lambda **kw: [{"document_scope": list(document_context_key(summary)), "first_chunk": first_chunk(original)}])
+    ):
+        _, spans, _ = DocumentBackgroundReader().append("条件は？", AnswerContext([summary], summary.text), selected(summary))
+    assert any(value.get(FIRST_CHUNK) for value in spans)
+    assert document_context_key(replace(original, source_run_id="other")) != document_context_key(summary)
+    dated = replace(
+        original, metadata={**original.metadata, "document": {"source_document_id": "logical-a", "effective_from": "2030-01-01"}}
+    )
+    assert document_context_key(dated)[:2] == ("logical-a", "2030-01-01")
+
+
 def test_first_chunk_uses_raw_body_and_preserves_original_citation_tree():
     original = record()
     first = StoredChunk(
